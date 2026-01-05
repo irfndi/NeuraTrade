@@ -2,10 +2,7 @@ import "./test-setup";
 import { test, expect, beforeAll } from "bun:test";
 
 // Validate required environment variables before running tests
-const REQUIRED_ENV_VARS = [
-  "TELEGRAM_WEBHOOK_SECRET",
-  "ADMIN_API_KEY",
-] as const;
+const REQUIRED_ENV_VARS = ["TELEGRAM_WEBHOOK_SECRET", "ADMIN_API_KEY"] as const;
 
 beforeAll(() => {
   const missingVars = REQUIRED_ENV_VARS.filter((v) => !process.env[v]);
