@@ -227,6 +227,10 @@ const startBot = async () => {
     throw new Error("TELEGRAM_WEBHOOK_URL must be set for webhook mode");
   }
 
+  // Initialize bot before handling webhook updates
+  // This fetches bot info which is required for update handling
+  await bot.init();
+
   console.log(`Setting Telegram webhook to ${config.webhookUrl}`);
   if (isSentryEnabled) {
     trackBotMode("webhook");
