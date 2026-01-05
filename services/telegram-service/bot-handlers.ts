@@ -22,6 +22,7 @@ export const formatOpportunitiesMessage = (opps: any[]) => {
 };
 
 export const handleStart = (api: Api) => async (ctx: Context) => {
+  console.log("[Bot] Received /start command from:", ctx.from?.id);
   const chatId = ctx.chat?.id;
   const userId = ctx.from?.id;
 
