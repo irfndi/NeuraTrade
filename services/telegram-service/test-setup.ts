@@ -41,6 +41,10 @@ mock.module("grammy", () => {
       // Do nothing
     }
 
+    async init() {
+      // Mock initialization - do nothing
+    }
+
     command(cmd: string, handler: any) {
       // Do nothing
     }
