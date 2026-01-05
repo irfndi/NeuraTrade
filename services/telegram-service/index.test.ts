@@ -1,5 +1,21 @@
 import "./test-setup";
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
+
+// Validate required environment variables before running tests
+const REQUIRED_ENV_VARS = [
+  "TELEGRAM_WEBHOOK_SECRET",
+  "ADMIN_API_KEY",
+] as const;
+
+beforeAll(() => {
+  const missingVars = REQUIRED_ENV_VARS.filter((v) => !process.env[v]);
+  if (missingVars.length > 0) {
+    throw new Error(
+      `Missing required environment variables for tests: ${missingVars.join(", ")}. ` +
+        "Ensure these are set in test-setup.ts or your environment.",
+    );
+  }
+});
 
 // Cache the service instance
 let serviceInstance: {

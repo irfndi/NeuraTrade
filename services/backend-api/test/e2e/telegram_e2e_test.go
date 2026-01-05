@@ -144,7 +144,8 @@ func (s *TelegramE2ETestSuite) TestCompleteUserFlowE2E() {
 		err = json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 
-		userData := resp["user"].(map[string]interface{})
+		userData, ok := resp["user"].(map[string]interface{})
+		require.True(t, ok, "response should contain 'user' as a map")
 		assert.Equal(t, s.testUserID, userData["id"])
 		assert.Equal(t, "free", userData["subscription_tier"])
 	})
@@ -466,7 +467,8 @@ func (s *TelegramE2ETestSuite) TestMultipleUsersFlowE2E() {
 			err = json.Unmarshal(w.Body.Bytes(), &resp)
 			require.NoError(t, err)
 
-			userData := resp["user"].(map[string]interface{})
+			userData, ok := resp["user"].(map[string]interface{})
+			require.True(t, ok, "response should contain 'user' as a map")
 			assert.Equal(t, user.id, userData["id"])
 			assert.Equal(t, user.tier, userData["subscription_tier"])
 		}
@@ -612,7 +614,8 @@ func (s *TelegramE2ETestSuite) TestSubscriptionTierAccessE2E() {
 			err = json.Unmarshal(w.Body.Bytes(), &resp)
 			require.NoError(t, err)
 
-			userData := resp["user"].(map[string]interface{})
+			userData, ok := resp["user"].(map[string]interface{})
+			require.True(t, ok, "response should contain 'user' as a map")
 			assert.Equal(t, tier, userData["subscription_tier"])
 		})
 	}
@@ -667,7 +670,8 @@ func (s *TelegramE2ETestSuite) TestUserRegistrationFlowE2E() {
 		err = json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 
-		userData := resp["user"].(map[string]interface{})
+		userData, ok := resp["user"].(map[string]interface{})
+		require.True(t, ok, "response should contain 'user' as a map")
 		assert.Equal(t, newUserID, userData["id"])
 		assert.Equal(t, "free", userData["subscription_tier"]) // New users get free tier
 	})
@@ -738,14 +742,17 @@ func (s *TelegramE2ETestSuite) TestNotificationPreferencesPersistenceE2E() {
 	})
 }
 
-// TestRateLimitingE2E tests rate limiting behavior on endpoints
-func (s *TelegramE2ETestSuite) TestRateLimitingE2E() {
+// TestHighThroughputE2E tests that the API handles high request volumes correctly
+// Note: Rate limiting is not currently implemented. This test validates
+// that the system remains stable under rapid sequential requests.
+func (s *TelegramE2ETestSuite) TestHighThroughputE2E() {
 	t := s.T()
 
-	t.Run("RapidFireRequests", func(t *testing.T) {
-		// Send multiple rapid requests
+	t.Run("RapidSequentialRequests", func(t *testing.T) {
+		// Send multiple rapid requests to verify system stability
+		const requestCount = 20
 		successCount := 0
-		for i := 0; i < 20; i++ {
+		for i := 0; i < requestCount; i++ {
 			req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+s.testChatID, nil)
 			require.NoError(t, err)
 			req.Header.Set("X-API-Key", s.adminAPIKey)
@@ -756,8 +763,8 @@ func (s *TelegramE2ETestSuite) TestRateLimitingE2E() {
 				successCount++
 			}
 		}
-		// All requests should succeed (no rate limiting in current implementation)
-		assert.Equal(t, 20, successCount)
+		// All requests should succeed - validates system handles high throughput
+		assert.Equal(t, requestCount, successCount, "all rapid requests should succeed")
 	})
 }
 
