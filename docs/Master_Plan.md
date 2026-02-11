@@ -124,15 +124,68 @@ Step 4: Consensus. The execution command is signed and sent to the API.
 This adversarial loop prevents "impulsive" trading behaviors common in single-prompt LLM setups.   
 
 ### 3.3 Autonomous Quests
-To maintain agency over long timeframes, the system utilizes a Quest System. A "Quest" is a high-level directive with a specific duration and objective, managed by the system's scheduler.   
+To maintain agency over long timeframes, the system utilizes a **Quest System**. A "Quest" is a high-level directive with a specific duration, objective, and success criteria, managed by the system's scheduler and persisted in SQLite.
 
-Routine Quests: "Perform hourly portfolio health check." "Scan for arbitrage every 5 minutes."
+#### Quest Cadence Tiers
 
-Triggered Quests: "Volatility detected > 5% -> Initiate 'Safe Harbor' protocol."
+| Tier | Frequency | Examples |
+|---|---|---|
+| **Micro** | Every 1–5 minutes | Scan for arbitrage spreads, check open order fills, WebSocket health ping |
+| **Hourly** | Every hour | Portfolio health check, rebalance drift detection, sentiment snapshot |
+| **Daily** | Once per day | Daily PnL report to Telegram, strategy performance review, risk limit recalibration |
+| **Weekly** | Once per week | Full portfolio rebalance assessment, strategy rotation review, fee audit |
+| **Milestone** | Event-driven | "Grow fund from $100 → $5000", "Achieve 10% monthly return", "Complete 50 profitable trades" |
 
-Goal-Oriented Quests: "Accumulate 10 ETH over 48 hours using TWAP strategy."
+#### Quest Types
 
-The progress of each quest is tracked in the persistent database, ensuring that if the bot is restarted, it "remembers" its ongoing missions.
+**Routine Quests** (time-triggered): Scheduled on cron-like intervals. Examples: "Perform hourly portfolio health check." "Scan for Polymarket arbitrage every 5 minutes."
+
+**Triggered Quests** (event-driven): Activated by market conditions. Examples: "Volatility detected > 5% → Initiate 'Safe Harbor' protocol." "New Polymarket market with >$100k volume detected → Analyze and propose position."
+
+**Goal-Oriented Quests** (milestone-driven): Long-running objectives with measurable targets. Examples: "Accumulate 10 ETH over 48 hours using TWAP strategy." "Grow fund from $100 USDC to $500 USDC." These quests decompose into sub-quests automatically.
+
+**Fund Milestone System**: The AI tracks fund growth milestones and adapts strategy aggressiveness accordingly:
+- **Bootstrap** ($0–$100): Conservative, small position sizes, learning phase.
+- **Growth** ($100–$1,000): Moderate risk, diversified strategies.
+- **Scale** ($1,000–$10,000): Full strategy suite active, including scalping.
+- **Mature** ($10,000+): Capital preservation priority, yield-focused.
+
+The progress of each quest is tracked in SQLite with full state persistence, ensuring that if the bot is restarted, it "remembers" its ongoing missions and resumes exactly where it left off.
+
+### 3.4 AI Session Management
+The system manages **AI Sessions** as first-class entities. Each session represents a continuous reasoning context for the AI agent.
+
+**Session Lifecycle:**
+1. **Init**: A new session is created when the bot starts or when a new quest requires fresh context.
+2. **Active**: The session holds the current reasoning chain, loaded skills, and working memory.
+3. **Suspended**: When the AI switches to a higher-priority quest, the current session is serialized to SQLite.
+4. **Resumed**: On return, the session is deserialized with full context intact.
+5. **Archived**: Completed sessions are compressed and stored for post-game analysis.
+
+**Session State** (persisted in SQLite):
+- Current quest ID and progress
+- Loaded skill.md references
+- Conversation/reasoning chain (last N turns)
+- Active positions relevant to this session
+- Market snapshot at session start
+
+### 3.5 Parallel Job System
+The autonomous agent must handle **multiple concurrent activities** without conflict. The Job System manages this:
+
+**Job Queue** (Redis-backed):
+- Each quest spawns one or more **Jobs** (atomic units of work).
+- Jobs are categorized: `MARKET_SCAN`, `TRADE_EXECUTE`, `RISK_CHECK`, `REPORT`, `REBALANCE`.
+- Jobs have priority levels: `CRITICAL` (risk/kill-switch) > `HIGH` (trade execution) > `NORMAL` (scans) > `LOW` (reports).
+
+**Concurrency Control:**
+- Redis distributed locks prevent conflicting operations (e.g., two quests trading the same pair).
+- A **Job Scheduler** (Go goroutine pool) manages parallel execution with configurable concurrency limits.
+- **Asset-level locks**: Only one job can modify a position in a given asset at a time.
+
+**Persistence:**
+- Job state is checkpointed to SQLite every N seconds.
+- On restart, incomplete jobs are replayed from their last checkpoint.
+- Failed jobs are retried with exponential backoff (max 3 retries).
 
 ## 4. The Skill Paradigm: Standardizing Agent Capabilities
 A critical innovation in modern agent engineering is the standardization of tool definitions. The system adopts the skill.md open standard to manage its capabilities.
@@ -254,48 +307,49 @@ Textual Data: The system connects to RSS feeds, Twitter lists (via API), and gov
 Visual Data: Using the vision capabilities of models like GPT-5.3, the agent can analyze chart images. It can identify patterns (e.g., "Head and Shoulders") or support/resistance zones that are difficult to describe purely mathematically.   
 
 ## 6. System Architecture: The Technical Core
-The system is architected as a distributed microservices application, prioritizing modularity, concurrency, and persistence.
+The system is architected as a distributed microservices application, prioritizing modularity, concurrency, and persistence. The existing NeuraTrade codebase (Go + TypeScript/Bun) provides the foundation, which will be extended with AI agent capabilities.
 
 ### 6.1 High-Level Architecture
-The system consists of two primary services communicating via Redis:
+The system consists of three primary services communicating via Redis:
 
-The Agent Service (Python):
+**The Agent Service (Go — AI Core):**
+- Hosts the LLM orchestration logic (tool-calling loop).
+- Parses and loads skill.md files dynamically.
+- Manages AI sessions, quest scheduling, and the parallel job system.
+- Communicates with LLM APIs (OpenAI, Anthropic) via HTTP.
+- Runs the local MLX watchdog process for cost-efficient monitoring.
 
-Hosts the LLM logic (LangGraph/LangChain).
+**The Infrastructure Service (Go — existing backend-api):**
+- Manages high-performance networking and WebSocket connections to exchanges.
+- Hosts the Telegram Bot API server.
+- Handles cryptographic signing and transaction broadcasting.
+- Provides the CCXT normalization layer.
+- Go is chosen for its superior concurrency primitives (Goroutines), essential for handling hundreds of live data feeds simultaneously.
 
-Parses skill.md files.
+**The Exchange Bridge (TypeScript/Bun — existing ccxt-service):**
+- Wraps the CCXT library for unified exchange access.
+- Provides HTTP API for the Go services to interact with 100+ exchanges.
+- Handles exchange-specific quirks and rate limiting.
 
-Manages the decision-making loop.
-
-Uses Python's rich ecosystem for AI and data science (pandas, numpy, scikit-learn).
-
-The Infrastructure Service (Go):
-
-Manages high-performance networking.
-
-Maintains WebSocket connections to exchanges.
-
-Hosts the Telegram Bot API server.
-
-Handles cryptographic signing and transaction broadcasting.
-
-Go is chosen for its superior concurrency primitives (Goroutines), essential for handling hundreds of live data feeds simultaneously.   
+> **Note:** The current codebase uses PostgreSQL for persistence. The migration to **SQLite + Redis** will be implemented as part of Phase 1 to achieve a lighter, more portable deployment suitable for local-first autonomous operation.
 
 ### 6.2 Service Communication
-The two services are decoupled using a Redis Message Queue.
+The services are decoupled using a **Redis Message Queue**.
 
-Market Data: The Go service pushes normalized market ticks to Redis Pub/Sub channels (e.g., market:eth_usdc:ticker).
+**Market Data:** The Go infrastructure service pushes normalized market ticks to Redis Pub/Sub channels (e.g., `market:eth_usdc:ticker`).
 
-Agent Wake-up: The Python service subscribes to these channels. Upon receiving significant data (filtered by the local MLX model), it triggers the LLM reasoning loop.
+**Agent Wake-up:** The Agent service subscribes to these channels. Upon receiving significant data (filtered by the local MLX model), it triggers the LLM reasoning loop.
 
-Execution: When the Agent decides to trade, it pushes a JSON command payload to a Redis queue (orders:execute). The Go service pops this payload, signs it, and executes it via the exchange API.
+**Execution:** When the Agent decides to trade, it pushes a JSON command payload to a Redis queue (`orders:execute`). The infrastructure service pops this payload, signs it, and executes it via the exchange API.
+
+**Job Coordination:** Quest and Job state changes are published to Redis channels (`jobs:status`, `quests:progress`) enabling real-time Telegram streaming.
 
 ### 6.3 Local vs. Cloud Infrastructure
-Development: The entire stack (including local LLMs) runs on an Apple M3 Max MacBook Pro. This allows for zero-cost development and backtesting.
+**Development:** The entire stack (including local LLMs) runs on an Apple M3 Max MacBook Pro. SQLite file lives alongside the binary — zero external database dependencies for dev.
 
-Production: The system is containerized (Docker). The "Brain" (Python Agent) can remain on local hardware or move to a GPU cloud instance. The "Infrastructure" (Go Service) acts as a sidecar.
+**Production:** The system is containerized (Docker). The services can run on a single VPS with SQLite volume-mounted for persistence.
 
-VPS Strategy: For low-latency execution, the Go service executes on a QuantVPS instance located in close proximity to exchange servers (e.g., AWS Tokyo for Binance) or Polygon RPC nodes. This minimizes the "tick-to-trade" latency, crucial for arbitrage.   
+**VPS Strategy:** For low-latency execution, the Go service executes on a QuantVPS instance located in close proximity to exchange servers (e.g., AWS Tokyo for Binance) or Polygon RPC nodes. This minimizes the "tick-to-trade" latency, crucial for arbitrage and scalping.   
 
 ## 7. Memory Systems: The Cognitive Architecture
 A major limitation of raw LLMs is "statelessness"—they have no memory of past interactions. To create a continuous, learning agent, the system implements a Dual-Memory architecture.
@@ -325,39 +379,37 @@ quests: Tracks the state of long-running tasks.
 Vector Database (SQLite + Extension): The system uses a vector extension (like sqlite-vss or a separate Pinecone index) to store embeddings of past market conditions. This allows the agent to perform Semantic Search: "Find past instances where RSI was < 20 and news sentiment was negative." If the agent sees that such conditions previously led to a loss, it can adjust its current strategy—effectively "learning" from experience.   
 
 ## 8. Execution and Strategy Implementation
-The core value of the bot lies in its trading strategies. The system supports modular strategy definitions, swapped in and out by the "Analyst" based on market conditions.
+The core value of NeuraTrade lies in its trading strategies. The system supports modular strategy definitions as skill.md files, swapped in and out by the "Analyst" based on market conditions.
 
 ### 8.1 Polymarket Strategies
 Polymarket offers unique opportunities unrelated to broader crypto market beta.
 
-Sum-to-One Arbitrage:
+**Sum-to-One Arbitrage:**
+- **Concept:** In a binary market, Price(YES) + Price(NO) should equal 1.00.
+- **Trigger:** If P(YES)+P(NO)<0.98 (accounting for ~2% spread/fees).
+- **Action:** Buy equal amounts of YES and NO.
+- **Profit Math:** `Profit = 1.00 − (P_yes + P_no + Fees)`.
+- **Execution:** Requires "Fill-or-Kill" (FOK) orders to avoid execution risk (being filled on one side but not the other).
 
-Concept: In a binary market, Price(YES) + Price(NO) should equal 1.00.
+**Cross-Platform Arbitrage:**
+- **Concept:** Compare odds between Polymarket (Crypto/Polygon) and Kalshi (Regulated US/CFTC).
+- **Mechanism:** If Polymarket gives Trump 45% odds and Kalshi gives 50% odds, there is a theoretical arbitrage. However, capital controls make direct arbitrage difficult. The agent treats this as a "Relative Value" trade.
 
-Trigger: If P(YES)+P(NO)<0.98 (accounting for ~2% spread/fees).
-
-Action: Buy equal amounts of YES and NO.
-
-Profit Math: `Profit = 1.00 − (P_yes + P_no + Fees)`.
-
-Execution: Requires "Fill-or-Kill" (FOK) orders to avoid execution risk (being filled on one side but not the other).   
-
-Cross-Platform Arbitrage:
-
-Concept: Compare odds between Polymarket (Crypto/Polygon) and Kalshi (Regulated US/CFTC).
-
-Mechanism: If Polymarket gives Trump 45% odds and Kalshi gives 50% odds, there is a theoretical arbitrage. However, capital controls make direct arbitrage difficult. The agent treats this as a "Relative Value" trade.
-
-Endgame Arbitrage:
-
-Concept: Buying "certain" outcomes (99% odds) for a 1% yield.
-
-Risk: "Fat finger" risk or resolution disputes. The "Analyst" agent must read the specific resolution rules (Gamma API) to ensure no ambiguity exists.
+**Endgame Arbitrage:**
+- **Concept:** Buying "certain" outcomes (99% odds) for a 1% yield.
+- **Risk:** "Fat finger" risk or resolution disputes. The "Analyst" agent must read the specific resolution rules (Gamma API) to ensure no ambiguity exists.
 
 ### 8.2 Crypto Strategies
 The agent implements standard quantitative strategies enhanced by semantic understanding.
 
-Sentiment-Weighted Momentum:
+**Scalping (High-Frequency Short-Term):**
+- **Concept:** Exploit micro price movements on 1m–5m timeframes. The AI identifies high-probability setups using order book depth, volume spikes, and momentum indicators.
+- **Entry:** RSI divergence on 1m chart + volume confirmation + order book imbalance > 60%.
+- **Exit:** Fixed take-profit (0.1%–0.3%) or trailing stop. Maximum hold time: 15 minutes.
+- **Risk:** Tight stop-loss (0.05%–0.1%). Maximum 3 concurrent scalp positions. The Risk Manager enforces a "no scalping" rule during high-impact news events.
+- **Execution:** Requires the lowest-latency path. The Go service handles order placement directly, bypassing the full debate protocol for pre-approved scalp parameters.
+
+**Sentiment-Weighted Momentum:**
 
 Technicals: Agent monitors Moving Averages and RSI.
 
@@ -406,35 +458,66 @@ Wallet Security: The Polymarket integration uses a Proxy Wallet architecture. Th
 Logs: Logs are sanitized. The system regex-filters all output to ensure private keys or API secrets never appear in plain text in logs or Telegram messages.   
 
 ## 10. User Interface and Human-Agent Interaction
-The interface must provide transparency and control without requiring the user to SSH into a server. Telegram is selected as the ubiquitously accessible command center.
+The interface must provide transparency and control without requiring the user to SSH into a server. Telegram is the ubiquitously accessible command center — the single pane of glass for the human operator.
 
 ### 10.1 Command Structure
 The bot supports a rich command set, parsed by the Go service:
 
-Setup:
+**🔐 Authentication & Wallet Setup:**
 
-/connect_polymarket <Address> <Key> <Secret>: securely links accounts. The message is auto-deleted after processing.
+| Command | Description |
+|---|---|
+| `/connect_exchange <exchange> <key> <secret>` | Link a CEX account (Binance, Kraken, etc.). Message auto-deleted after processing. |
+| `/connect_polymarket <address> <key> <secret>` | Link Polymarket wallet. |
+| `/add_wallet <chain> <address>` | Add a watch-only wallet for portfolio tracking. |
+| `/set_ai_key <provider> <key>` | Configure API key for AI models (OpenAI, Anthropic). |
+| `/set_risk <level>` | Adjust risk thresholds: Low / Medium / High / Custom. |
+| `/keys` | List all connected exchanges and AI providers (keys masked). |
 
-/set_risk <Level>: (Low/Medium/High) adjusts the Risk Manager's internal thresholds.
+**📊 Monitoring & Portfolio:**
 
-Monitoring:
+| Command | Description |
+|---|---|
+| `/status` | System health, active quests, memory usage, and AI session state. |
+| `/portfolio` | Full PnL summary, open positions (crypto + Polymarket), and fund milestone progress. |
+| `/wallet` | Show connected wallets and balances across all chains/exchanges. |
+| `/performance` | Strategy-level performance breakdown (win rate, Sharpe ratio, drawdown). |
+| `/logs [N]` | Fetch the last N "thoughts" from the agent (default: 5). |
+| `/quests` | List all active, pending, and completed quests with progress. |
 
-/status: Shows system health, active quests, and memory usage.
+**🎮 Control:**
 
-/portfolio: Returns a PnL summary and current open positions.
+| Command | Description |
+|---|---|
+| `/pause` | Emergency stop — immediately suspends all trading. |
+| `/resume` | Resume trading after pause. |
+| `/liquidate <asset>` | Force an immediate exit from a position. |
+| `/quest <prompt>` | Manually assign a task (e.g., "Check the price of BTC and tell me if I should buy"). |
+| `/stream on/off` | Toggle the live transaction stream in the current chat. |
+| `/config` | Show current AI configuration, risk settings, and active strategies. |
 
-/logs: Fetches the last 5 "thoughts" from the agent.
+### 10.2 The Live Transaction Stream
+A dedicated Telegram channel (or inline toggle via `/stream on`) serves as the "Console." The agent pushes real-time updates for every action:
 
-Control:
+```
+🤖 ACTION: BUY
+Asset: ETH/USDC
+Price: $3,200
+Size: 0.5 ETH
+Strategy: Sentiment Momentum
+Reasoning: RSI oversold (28). News sentiment neutral/positive.
+  Support at $3,150 holding.
+Risk Check: ✅ PASSED. Exposure remains under 20%.
+Quest: "Accumulate 10 ETH" (Progress: 7.5/10 ETH)
+```
 
-/pause: Immediately suspends all trading (Emergency Stop).
+The stream also includes:
+- 📈 **Quest progress updates** (hourly/daily/weekly completion)
+- 💰 **Fund milestone alerts** ("Reached $500 — entering Growth phase")
+- ⚠️ **Risk events** (kill switch triggers, position liquidations)
+- 🧠 **AI reasoning summaries** (why the agent chose this strategy)
 
-/liquidate <Asset>: Forces an immediate exit.
-
-/quest <Prompt>: Manually assigns a task (e.g., "Check the price of BTC and tell me if I should buy").
-
-### 10.2 The Live Stream
-A dedicated Telegram channel serves as the "Console." The agent pushes real-time updates: 🤖 ACTION: BUY Asset: ETH/USDC Price: $3,200 Size: 0.5 ETH Strategy: Sentiment Momentum Reasoning: RSI is oversold (28). News sentiment is neutral/positive (No FUD detected). Support at $3,150 is holding. Risk Check: PASSED. Exposure remains under 20%. This transparency builds trust, allowing the human operator to understand the "why" behind every action.   
+This transparency builds trust, allowing the human operator to understand the "why" behind every action.   
 
 ## 11. Infrastructure and Deployment
 ### 11.1 Containerization
