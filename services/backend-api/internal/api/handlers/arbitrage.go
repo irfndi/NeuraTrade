@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/services"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
@@ -22,7 +21,7 @@ import (
 
 // ArbitrageHandler handles arbitrage-related API endpoints.
 type ArbitrageHandler struct {
-	db                  *database.PostgresDB
+	db                  DBQuerier
 	ccxtService         ccxt.CCXTService
 	notificationService *services.NotificationService
 	redisClient         *redis.Client
@@ -106,7 +105,7 @@ type ArbitrageHistoryResponse struct {
 // Returns:
 //
 //	*ArbitrageHandler: Initialized handler.
-func NewArbitrageHandler(db *database.PostgresDB, ccxtService ccxt.CCXTService, notificationService *services.NotificationService, redisClient *redis.Client) *ArbitrageHandler {
+func NewArbitrageHandler(db DBQuerier, ccxtService ccxt.CCXTService, notificationService *services.NotificationService, redisClient *redis.Client) *ArbitrageHandler {
 	return &ArbitrageHandler{
 		db:                  db,
 		ccxtService:         ccxtService,
@@ -481,7 +480,7 @@ func (h *ArbitrageHandler) findCrossExchangeOpportunities(ctx context.Context, m
 
 	query += " ORDER BY md.timestamp DESC"
 
-	rows, err := h.db.Pool.Query(ctx, query, args...)
+	rows, err := h.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query market data: %w", err)
 	}
@@ -631,7 +630,7 @@ func (h *ArbitrageHandler) findTechnicalAnalysisOpportunities(ctx context.Contex
 
 	query += " ORDER BY tp.symbol, e.name, md.timestamp DESC"
 
-	rows, err := h.db.Pool.Query(ctx, query, args...)
+	rows, err := h.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query market data for technical analysis: %w", err)
 	}
@@ -772,7 +771,7 @@ func (h *ArbitrageHandler) findVolatilityOpportunities(ctx context.Context, minP
 
 	query += " GROUP BY tp.symbol, e.name HAVING COUNT(*) >= 10"
 
-	rows, err := h.db.Pool.Query(ctx, query, args...)
+	rows, err := h.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query volatility data: %w", err)
 	}
@@ -854,7 +853,7 @@ func (h *ArbitrageHandler) findSpreadOpportunities(ctx context.Context, minProfi
 
 	query += " ORDER BY tp.symbol, md.timestamp DESC"
 
-	rows, err := h.db.Pool.Query(ctx, query, args...)
+	rows, err := h.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query spread data: %w", err)
 	}
@@ -1011,7 +1010,7 @@ func (h *ArbitrageHandler) getArbitrageHistory(ctx context.Context, limit, offse
 	query += " ORDER BY md.timestamp DESC LIMIT $" + strconv.Itoa(len(args)+1) + " OFFSET $" + strconv.Itoa(len(args)+2) // SAFE: using parameterized query
 	args = append(args, limit, offset)
 
-	rows, err := h.db.Pool.Query(ctx, query, args...)
+	rows, err := h.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query arbitrage history: %w", err)
 	}
