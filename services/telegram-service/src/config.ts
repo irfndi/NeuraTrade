@@ -51,7 +51,7 @@ export interface TelegramConfig {
  * Effect-based configuration loader for the Telegram service.
  *
  * Reads configuration from environment variables and validates:
- * - TELEGRAM_BOT_TOKEN: Required
+ * - TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN: Required
  * - ADMIN_API_KEY: Required in production, must be >= 32 chars
  * - TELEGRAM_API_BASE_URL: Backend API URL (default: http://localhost:8080)
  * - TELEGRAM_WEBHOOK_URL: Full webhook URL (enables webhook mode)
@@ -75,9 +75,11 @@ export interface TelegramConfig {
  * ```
  */
 export const loadConfig = Effect.try((): TelegramConfig => {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_TOKEN;
   if (!botToken) {
-    throw new Error("TELEGRAM_BOT_TOKEN environment variable must be set");
+    throw new Error(
+      "TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN environment variable must be set",
+    );
   }
 
   const adminApiKey = process.env.ADMIN_API_KEY || "";
@@ -168,6 +170,7 @@ export const config = Effect.runSync(loadConfig);
  */
 export const ENV_VARS = {
   TELEGRAM_BOT_TOKEN: "TELEGRAM_BOT_TOKEN",
+  TELEGRAM_TOKEN: "TELEGRAM_TOKEN",
   ADMIN_API_KEY: "ADMIN_API_KEY",
   TELEGRAM_API_BASE_URL: "TELEGRAM_API_BASE_URL",
   TELEGRAM_WEBHOOK_URL: "TELEGRAM_WEBHOOK_URL",
