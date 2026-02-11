@@ -2,7 +2,8 @@ name: Validation
 
 on:
   push:
-    branches: [ main, develop, development ]
+    branches:
+      - '**'
   pull_request:
     branches: [ main, develop, development ]
   workflow_dispatch:
@@ -28,7 +29,6 @@ jobs:
       - name: Install dependencies
         run: |
           make mod-download
-          # Retry bun install up to 3 times with exponential backoff
           for i in 1 2 3; do
             if make services-setup; then
               break
@@ -57,7 +57,16 @@ jobs:
           bash services/backend-api/scripts/check-legacy-paths.sh
           bash services/backend-api/scripts/check-canonical-naming.sh
 
-      - name: Run CI Checks
+      - name: Run CI Checks (Feature Branch - Lenient)
+        if: "!contains(fromJson('[\"main\", \"develop\", \"development\"]'), github.ref_name)"
+        run: |
+          export PATH="${GITHUB_WORKSPACE}/bin:$PATH"
+          export MIN_COVERAGE=50
+          export STRICT=false
+          make ci-check
+
+      - name: Run CI Checks (Main Branches - Strict)
+        if: "contains(fromJson('[\"main\", \"develop\", \"development\"]'), github.ref_name)"
         run: |
           export PATH="${GITHUB_WORKSPACE}/bin:$PATH"
           export MIN_COVERAGE=80
