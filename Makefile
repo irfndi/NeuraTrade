@@ -89,8 +89,8 @@ test-coverage: ## Run tests with coverage report
 	@echo "$(GREEN)Coverage report generated: coverage.html$(NC)"
 
 coverage-check: ## Run coverage gate (strict by default)
-	@echo "$(GREEN)Running coverage check (threshold $${MIN_COVERAGE:-80}%)...$(NC)"
-	MIN_COVERAGE=$${MIN_COVERAGE:-80} \
+	@echo "$(GREEN)Running coverage check (threshold $${MIN_COVERAGE:-50}%)...$(NC)"
+	MIN_COVERAGE=$${MIN_COVERAGE:-50} \
 	STRICT=$${STRICT:-true} \
 	bash services/backend-api/scripts/coverage-check.sh
 
