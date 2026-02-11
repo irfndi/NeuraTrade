@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
 	"github.com/irfandi/celebrum-ai-go/internal/api"
+	apiHandlers "github.com/irfandi/celebrum-ai-go/internal/api/handlers"
 	"github.com/irfandi/celebrum-ai-go/internal/cache"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
@@ -22,7 +24,7 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/irfandi/celebrum-ai-go/internal/services"
 	"github.com/redis/go-redis/v9"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
 
 // main serves as the entry point for the application.
@@ -68,11 +70,22 @@ func run() error {
 	slog.SetDefault(logger)
 
 	// Create logrus logger for services that require it (backward compatibility)
-	logrusLogger := logrus.New()
+	logrusLogger := zaplogrus.New()
 	logrusLogger.SetLevel(logging.ParseLogrusLevel(cfg.LogLevel))
-	logrusLogger.SetFormatter(&logrus.JSONFormatter{})
+	logrusLogger.SetFormatter(&zaplogrus.JSONFormatter{})
+
+	warnLegacyHandlersPath(logrusLogger)
 
 	// Initialize database
+	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+
+	if driver == "sqlite" {
+		return runSQLiteBootstrapMode(cfg, logger, logrusLogger)
+	}
+
 	db, err := database.NewPostgresConnection(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
@@ -297,4 +310,124 @@ func run() error {
 
 	logrusLogger.Info("Server exited gracefully")
 	return nil
+}
+
+func runSQLiteBootstrapMode(cfg *config.Config, logger *slog.Logger, logrusLogger *zaplogrus.Logger) error {
+	warnLegacyHandlersPath(logrusLogger)
+
+	sqliteDB, err := database.NewSQLiteConnectionWithExtension(cfg.Database.SQLitePath, cfg.Database.SQLiteVectorExtensionPath)
+	if err != nil {
+		return fmt.Errorf("failed to connect to sqlite database: %w", err)
+	}
+	defer func() {
+		_ = sqliteDB.Close()
+	}()
+
+	errorRecoveryManager := services.NewErrorRecoveryManager(logrusLogger)
+	retryPolicies := services.DefaultRetryPolicies()
+	for name, policy := range retryPolicies {
+		errorRecoveryManager.RegisterRetryPolicy(name, policy)
+	}
+
+	redisClient, err := database.NewRedisConnectionWithRetry(cfg.Redis, errorRecoveryManager)
+	if err != nil {
+		logrusLogger.WithError(err).Warn("Failed to connect to Redis in sqlite bootstrap mode - continuing without cache")
+		redisClient = nil
+	} else {
+		defer redisClient.Close()
+	}
+
+	getRedisClient := func() *redis.Client {
+		if redisClient != nil {
+			return redisClient.Client
+		}
+		return nil
+	}
+
+	cacheAnalyticsService := services.NewCacheAnalyticsService(getRedisClient())
+	cacheAnalyticsService.StartPeriodicReporting(context.Background(), 5*time.Minute)
+
+	router := gin.New()
+	router.Use(gin.Logger())
+	if cfg.Sentry.Enabled && cfg.Sentry.DSN != "" {
+		router.Use(sentrygin.New(sentrygin.Options{
+			Repanic:         true,
+			WaitForDelivery: false,
+			Timeout:         2 * time.Second,
+		}))
+	}
+	router.Use(gin.Recovery())
+
+	healthHandler := apiHandlers.NewHealthHandler(sqliteDB, redisClient, cfg.CCXT.ServiceURL, cacheAnalyticsService)
+	healthGroup := router.Group("/")
+	healthGroup.Use(middleware.HealthCheckTelemetryMiddleware())
+	{
+		healthGroup.GET("/health", gin.WrapF(healthHandler.HealthCheck))
+		healthGroup.HEAD("/health", gin.WrapF(healthHandler.HealthCheck))
+		healthGroup.GET("/ready", gin.WrapF(healthHandler.ReadinessCheck))
+		healthGroup.GET("/live", gin.WrapF(healthHandler.LivenessCheck))
+	}
+
+	router.GET("/api/v1/bootstrap/status", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ok",
+			"mode":   "sqlite-bootstrap",
+		})
+	})
+
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:           router,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       15 * time.Second,
+	}
+
+	go func() {
+		logger.Info("Application startup",
+			"service", "github.com/irfandi/celebrum-ai-go",
+			"version", "1.0.0",
+			"port", cfg.Server.Port,
+			"mode", "sqlite-bootstrap",
+			"event", "startup",
+		)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logrusLogger.WithError(err).Fatal("Failed to start sqlite bootstrap server")
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Info("Application shutdown",
+		"service", "github.com/irfandi/celebrum-ai-go",
+		"mode", "sqlite-bootstrap",
+		"event", "shutdown",
+		"reason", "signal received",
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logrusLogger.WithError(err).Fatal("SQLite bootstrap server forced to shutdown")
+	}
+
+	logrusLogger.Info("SQLite bootstrap server exited gracefully")
+	return nil
+}
+
+func warnLegacyHandlersPath(logger *zaplogrus.Logger) {
+	if logger == nil {
+		return
+	}
+
+	if _, err := os.Stat("internal/handlers"); err == nil {
+		logger.Warn("Legacy handlers path detected at internal/handlers; continuing with canonical internal/api/handlers")
+		return
+	} else if !os.IsNotExist(err) {
+		logger.WithError(err).Warn("Failed to inspect legacy handlers path")
+	}
 }

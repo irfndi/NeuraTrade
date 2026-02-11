@@ -15,10 +15,10 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/redis/go-redis/v9"
 	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -180,16 +180,17 @@ func TestDatabaseMock(t *testing.T) {
 // Test logger setup
 func TestLoggerSetup(t *testing.T) {
 	// Test logrus logger
-	logger := logrus.New()
+	logger := zaplogrus.New()
 	assert.NotNil(t, logger)
 
 	// Test log level setting
-	logger.SetLevel(logrus.InfoLevel)
-	assert.Equal(t, logrus.InfoLevel, logger.GetLevel())
+	logger.SetLevel(zaplogrus.InfoLevel)
+	assert.Equal(t, zaplogrus.InfoLevel, logger.GetLevel())
 
 	// Test JSON formatter
-	logger.SetFormatter(&logrus.JSONFormatter{})
-	assert.NotNil(t, logger.Formatter)
+	assert.NotPanics(t, func() {
+		logger.SetFormatter(&zaplogrus.JSONFormatter{})
+	})
 }
 
 // Test graceful shutdown
