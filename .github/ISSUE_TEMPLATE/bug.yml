@@ -1,0 +1,61 @@
+name: Bug
+description: Defect report with mandatory regression test plan
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken and why it matters?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs Actual
+      placeholder: |
+        Expected:
+        Actual:
+    validations:
+      required: true
+
+  - type: textarea
+    id: regression-tests
+    attributes:
+      label: Regression Test Plan (Required)
+      description: Required before close
+      placeholder: |
+        Unit:
+        - [ ] Add failing test first
+
+        Integration:
+        - [ ] Add scenario covering cross-component behavior
+
+        E2E/Smoke:
+        - [ ] Verify user-visible path or explain N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: coverage
+    attributes:
+      label: Coverage Notes
+      placeholder: |
+        - Global gate remains >= 80%
+        - Touched package target >= 85% or exception rationale
+    validations:
+      required: true

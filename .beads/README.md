@@ -30,6 +30,22 @@ bd update <issue-id> --status done
 bd sync
 ```
 
+### QA Gate Closure
+
+For this repository, close issues with QA evidence using:
+
+```bash
+ISSUE_ID=<bd-id> \
+UNIT_TESTS="..." \
+INTEGRATION_TESTS="..." \
+E2E_TESTS="..." \
+COVERAGE_RESULT="..." \
+EVIDENCE="..." \
+make bd-close-qa
+```
+
+This records QA evidence in issue notes and then closes the issue.
+
 ### Working with Issues
 
 Issues in Beads are:
