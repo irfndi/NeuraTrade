@@ -12,7 +12,6 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1674,7 +1673,7 @@ func TestPostgresDB_Exec_NilPool(t *testing.T) {
 
 	tag, err := db.Exec(ctx, "INSERT INTO test (col) VALUES ($1)", "value")
 	assert.Error(t, err)
-	assert.Equal(t, pgconn.CommandTag{}, tag)
+	assert.Nil(t, tag)
 	assert.Contains(t, err.Error(), "postgres pool is not initialized")
 }
 
@@ -1755,7 +1754,7 @@ func TestPostgresDB_Exec_ErrorPaths(t *testing.T) {
 	for _, stmt := range statements {
 		tag, err := db.Exec(ctx, stmt.query, stmt.args...)
 		assert.Error(t, err)
-		assert.Equal(t, pgconn.CommandTag{}, tag)
+		assert.Nil(t, tag)
 		assert.Contains(t, err.Error(), "postgres pool is not initialized")
 	}
 }
@@ -1790,7 +1789,7 @@ func TestPostgresDB_Methods_WithContextTimeout(t *testing.T) {
 
 	tag, err := db.Exec(ctx, "SELECT 1")
 	assert.Error(t, err)
-	assert.Equal(t, pgconn.CommandTag{}, tag)
+	assert.Nil(t, tag)
 
 	tx, err := db.Begin(ctx)
 	assert.Error(t, err)

@@ -10,9 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -89,12 +88,10 @@ func NewUserHandler(db DBQuerier, redisClient *redis.Client) *UserHandler {
 	}
 }
 
-// DBQuerier interface for database operations.
-// This allows mocking database calls for testing.
 type DBQuerier interface {
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...interface{}) (database.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...interface{}) database.Row
+	Exec(ctx context.Context, sql string, args ...interface{}) (database.Result, error)
 }
 
 // NewUserHandlerWithQuerier creates a UserHandler with a custom querier for testing.
@@ -107,11 +104,16 @@ type DBQuerier interface {
 // Returns:
 //
 //	*UserHandler: Initialized handler.
-func NewUserHandlerWithQuerier(querier DBQuerier, redisClient *redis.Client) *UserHandler {
+func NewUserHandlerWithQuerier(querier any, redisClient *redis.Client) *UserHandler {
+	resolvedQuerier, err := resolveDBQuerier(querier)
+	if err != nil {
+		panic(err)
+	}
+
 	return &UserHandler{
-		db:      querier,
+		db:      resolvedQuerier,
 		redis:   redisClient,
-		querier: querier,
+		querier: resolvedQuerier,
 	}
 }
 

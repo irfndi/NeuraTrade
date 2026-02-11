@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 )
@@ -13,19 +13,19 @@ type mockDBPool struct {
 	ready bool
 }
 
-func (m *mockDBPool) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+func (m *mockDBPool) Query(ctx context.Context, sql string, args ...any) (database.Rows, error) {
 	return nil, nil
 }
 
-func (m *mockDBPool) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+func (m *mockDBPool) QueryRow(ctx context.Context, sql string, args ...any) database.Row {
 	return nil
 }
 
-func (m *mockDBPool) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
+func (m *mockDBPool) Exec(ctx context.Context, sql string, args ...any) (database.Result, error) {
+	return database.PgxResult{CommandTag: pgconn.CommandTag{}}, nil
 }
 
-func (m *mockDBPool) Begin(ctx context.Context) (pgx.Tx, error) {
+func (m *mockDBPool) Begin(ctx context.Context) (database.Tx, error) {
 	return nil, nil
 }
 
@@ -64,19 +64,19 @@ func TestIsNilDBPool_NoIsReadyMethod(t *testing.T) {
 
 type simpleMockDBPool struct{}
 
-func (m *simpleMockDBPool) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+func (m *simpleMockDBPool) Query(ctx context.Context, sql string, args ...any) (database.Rows, error) {
 	return nil, nil
 }
 
-func (m *simpleMockDBPool) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+func (m *simpleMockDBPool) QueryRow(ctx context.Context, sql string, args ...any) database.Row {
 	return nil
 }
 
-func (m *simpleMockDBPool) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
+func (m *simpleMockDBPool) Exec(ctx context.Context, sql string, args ...any) (database.Result, error) {
+	return database.PgxResult{CommandTag: pgconn.CommandTag{}}, nil
 }
 
-func (m *simpleMockDBPool) Begin(ctx context.Context) (pgx.Tx, error) {
+func (m *simpleMockDBPool) Begin(ctx context.Context) (database.Tx, error) {
 	return nil, nil
 }
 

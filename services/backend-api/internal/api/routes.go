@@ -92,7 +92,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
-	tradingHandler := handlers.NewTradingHandler()
+	tradingHandler := handlers.NewTradingHandler(db)
 
 	// Initialize futures arbitrage handler with error handling
 	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler

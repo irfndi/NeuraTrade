@@ -120,7 +120,7 @@ func run() error {
 	}
 
 	// Initialize blacklist cache with database persistence
-	blacklistRepo := database.NewBlacklistRepository(db.Pool)
+	blacklistRepo := database.NewBlacklistRepository(db)
 	var blacklistCache cache.BlacklistCache
 	if redisClient != nil {
 		blacklistCache = cache.NewRedisBlacklistCache(redisClient.Client, blacklistRepo)
@@ -223,7 +223,7 @@ func run() error {
 
 	// Initialize signal processor
 	signalProcessor := services.NewSignalProcessor(
-		db.Pool,
+		db,
 		slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		signalAggregator,
 		signalQualityScorer,

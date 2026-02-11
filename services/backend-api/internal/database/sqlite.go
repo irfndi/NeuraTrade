@@ -7,11 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// SQLiteDB wraps a SQLite database connection.
 type SQLiteDB struct {
 	DB *sql.DB
 }
@@ -73,31 +71,35 @@ func (db *SQLiteDB) Close() error {
 	return db.DB.Close()
 }
 
-// Query implements the services.DBPool interface.
-func (db *SQLiteDB) Query(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
+func (db *SQLiteDB) Query(ctx context.Context, query string, args ...any) (Rows, error) {
 	if db == nil || db.DB == nil {
 		return nil, fmt.Errorf("sqlite database is not initialized")
 	}
-	return db.DB.QueryContext(ctx, sql, args...)
-}
-
-// QueryRow implements the services.DBPool interface.
-func (db *SQLiteDB) QueryRow(ctx context.Context, sql string, args ...any) *sql.Row {
-	if db == nil || db.DB == nil {
-		return nil
+	rows, err := db.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
-	return db.DB.QueryRowContext(ctx, sql, args...)
+	return SQLRows{Rows: rows}, nil
 }
 
-// Exec implements the services.DBPool interface.
-func (db *SQLiteDB) Exec(ctx context.Context, sql string, args ...any) (sql.Result, error) {
+func (db *SQLiteDB) QueryRow(ctx context.Context, query string, args ...any) Row {
+	if db == nil || db.DB == nil {
+		return SQLRow{}
+	}
+	return SQLRow{Row: db.DB.QueryRowContext(ctx, query, args...)}
+}
+
+func (db *SQLiteDB) Exec(ctx context.Context, query string, args ...any) (Result, error) {
 	if db == nil || db.DB == nil {
 		return nil, fmt.Errorf("sqlite database is not initialized")
 	}
-	return db.DB.ExecContext(ctx, sql, args...)
+	res, err := db.DB.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return SQLResult{Result: res}, nil
 }
 
-// BeginTx implements the services.DBPool interface.
 func (db *SQLiteDB) BeginTx(ctx context.Context) (*sql.Tx, error) {
 	if db == nil || db.DB == nil {
 		return nil, fmt.Errorf("sqlite database is not initialized")
@@ -105,12 +107,16 @@ func (db *SQLiteDB) BeginTx(ctx context.Context) (*sql.Tx, error) {
 	return db.DB.BeginTx(ctx, nil)
 }
 
-func (db *SQLiteDB) Begin(ctx context.Context) (pgx.Tx, error) {
+func (db *SQLiteDB) Begin(ctx context.Context) (Tx, error) {
 	if db == nil || db.DB == nil {
 		return nil, fmt.Errorf("sqlite database is not initialized")
 	}
 
-	return nil, fmt.Errorf("sqlite pgx transactions are not supported")
+	tx, err := db.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return SQLTx{Tx: tx}, nil
 }
 
 func (db *SQLiteDB) IsReady() bool {

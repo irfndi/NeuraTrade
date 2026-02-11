@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -28,7 +29,7 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 
 	// Create SignalProcessor
 	sp := NewSignalProcessor(
-		mockPool,
+		database.WrapLegacyDBPool(mockPool),
 		logger,
 		mockAggregator,
 		mockScorer,

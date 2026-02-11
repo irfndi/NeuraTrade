@@ -1,13 +1,21 @@
 syntax = "proto3";
 
 package telegram;
-option go_package = "github.com/irfandi/celebrum-ai-go/services/backend-api/pkg/pb/telegram";
+option go_package = "github.com/irfandi/neuratrade/services/backend-api/pkg/pb/telegram";
 
 service TelegramService {
+  // Existing RPCs
   rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // BD EPIC 3: New RPCs for live streaming and notifications
+  rpc SendActionAlert(SendActionAlertRequest) returns (SendActionAlertResponse);
+  rpc SendQuestProgress(SendQuestProgressRequest) returns (SendQuestProgressResponse);
+  rpc SendMilestoneAlert(SendMilestoneAlertRequest) returns (SendMilestoneAlertResponse);
+  rpc SendRiskEvent(SendRiskEventRequest) returns (SendRiskEventResponse);
 }
 
+// Existing messages
 message SendMessageRequest {
   string chat_id = 1;
   string text = 2;
@@ -21,8 +29,74 @@ message SendMessageResponse {
 }
 
 message HealthCheckRequest {}
+
 message HealthCheckResponse {
   string status = 1;
   string version = 2;
   string service = 3;
+}
+
+// Action Alert (Task 3.5.1) - for trade notifications
+message SendActionAlertRequest {
+  string chat_id = 1;
+  string action = 2;        // "BUY", "SELL", "LIQUIDATE"
+  string asset = 3;
+  string price = 4;
+  string size = 5;
+  string strategy = 6;
+  string reasoning = 7;
+  bool risk_check_passed = 8;
+  string quest_id = 9;
+}
+
+message SendActionAlertResponse {
+  bool ok = 1;
+  string message_id = 2;
+  string error = 3;
+}
+
+// Quest Progress (Task 3.5.2) - for quest updates
+message SendQuestProgressRequest {
+  string chat_id = 1;
+  string quest_id = 2;
+  string quest_name = 3;
+  int32 current = 4;
+  int32 target = 5;
+  int32 percent = 6;
+  string time_remaining = 7;
+}
+
+message SendQuestProgressResponse {
+  bool ok = 1;
+  string message_id = 2;
+  string error = 3;
+}
+
+// Milestone Alert (Task 3.5.3) - for fund milestones
+message SendMilestoneAlertRequest {
+  string chat_id = 1;
+  string amount = 2;
+  string phase = 3;
+  string next_target = 4;
+}
+
+message SendMilestoneAlertResponse {
+  bool ok = 1;
+  string message_id = 2;
+  string error = 3;
+}
+
+// Risk Event (Task 3.5.4) - for risk notifications
+message SendRiskEventRequest {
+  string chat_id = 1;
+  string event_type = 2;    // "kill_switch", "liquidation", "margin_call"
+  string severity = 3;      // "warning", "critical"
+  string message = 4;
+  map<string, string> details = 5;
+}
+
+message SendRiskEventResponse {
+  bool ok = 1;
+  string message_id = 2;
+  string error = 3;
 }

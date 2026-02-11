@@ -1,10 +1,10 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Check database mode
-DATABASE_MODE="${DATABASE_MODE:-postgres}"
+DATABASE_DRIVER="${DATABASE_DRIVER:-${DATABASE_MODE:-postgres}}"
+DATABASE_DRIVER="$(printf '%s' "$DATABASE_DRIVER" | tr '[:upper:]' '[:lower:]')"
 
-if [ "$DATABASE_MODE" = "sqlite" ]; then
+if [ "$DATABASE_DRIVER" = "sqlite" ]; then
   echo "Running in SQLite mode - skipping PostgreSQL migrations"
   # SQLite migrations are handled by the application at startup
 else
@@ -12,7 +12,7 @@ else
   # Fix DATABASE_URL if it has wrong hostname
   # When DATABASE_URL uses 'postgres' hostname but DATABASE_HOST is set to external host,
   # patch DATABASE_URL or unset it to let the app use individual components
-  if [ -n "$DATABASE_URL" ] && [ -n "$DATABASE_HOST" ]; then
+  if [ -n "${DATABASE_URL:-}" ] && [ -n "${DATABASE_HOST:-}" ]; then
     if [[ "$DATABASE_URL" == *"@postgres:"* ]] && [ "$DATABASE_HOST" != "postgres" ]; then
       echo "Patching DATABASE_URL: Replacing 'postgres' host with '${DATABASE_HOST}'..."
       export DATABASE_URL="${DATABASE_URL/@postgres:/@$DATABASE_HOST:}"

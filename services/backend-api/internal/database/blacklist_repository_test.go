@@ -8,14 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// MockPoolAdapter wraps pgxmock.PgxPoolIface to implement DatabasePool interface
 type MockPoolAdapter struct {
 	mock pgxmock.PgxPoolIface
 }
@@ -24,21 +21,24 @@ func NewMockPoolAdapter(mock pgxmock.PgxPoolIface) DatabasePool {
 	return &MockPoolAdapter{mock: mock}
 }
 
-func (m *MockPoolAdapter) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	return m.mock.QueryRow(ctx, sql, args...)
+func (m *MockPoolAdapter) QueryRow(ctx context.Context, sql string, args ...interface{}) Row {
+	return PgxRow{Row: m.mock.QueryRow(ctx, sql, args...)}
 }
 
-func (m *MockPoolAdapter) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+func (m *MockPoolAdapter) Exec(ctx context.Context, sql string, args ...interface{}) (Result, error) {
 	result, err := m.mock.Exec(ctx, sql, args...)
 	if err == nil {
-		rows := result.RowsAffected()
-		return pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", rows)), nil
+		return PgxResult{CommandTag: result}, nil
 	}
-	return pgconn.CommandTag{}, err
+	return nil, err
 }
 
-func (m *MockPoolAdapter) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
-	return m.mock.Query(ctx, sql, args...)
+func (m *MockPoolAdapter) Query(ctx context.Context, sql string, args ...interface{}) (Rows, error) {
+	rows, err := m.mock.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return PgxRows{Rows: rows}, nil
 }
 
 // TestBlacklistRepository_ExchangeBlacklistEntry tests the ExchangeBlacklistEntry struct

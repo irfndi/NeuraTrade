@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,55 +15,42 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/services"
 	"github.com/irfandi/celebrum-ai-go/internal/utils"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
-// FuturesArbitrageHandler handles futures arbitrage related endpoints.
 type FuturesArbitrageHandler struct {
 	db         DBQuerier
 	calculator *services.FuturesArbitrageCalculator
 	metrics    *metrics.MetricsCollector
 }
 
-// NewFuturesArbitrageHandler creates a new futures arbitrage handler.
-//
-// Parameters:
-//
-//	db: Database pool.
-//
-// Returns:
-//
-//	*FuturesArbitrageHandler: Initialized handler.
-func NewFuturesArbitrageHandler(db *pgxpool.Pool) *FuturesArbitrageHandler {
-	// Initialize logger and metrics collector
+func NewFuturesArbitrageHandler(db any) *FuturesArbitrageHandler {
+	resolvedQuerier, err := resolveDBQuerier(db)
+	if err != nil {
+		panic(err)
+	}
+
 	logger := logging.NewStandardLogger("info", "production")
 	metricsCollector := metrics.NewMetricsCollector(logger, "futures-arbitrage")
 
 	return &FuturesArbitrageHandler{
-		db:         db,
+		db:         resolvedQuerier,
 		calculator: services.NewFuturesArbitrageCalculator(),
 		metrics:    metricsCollector,
 	}
 }
 
-// NewFuturesArbitrageHandlerWithQuerier creates a new futures arbitrage handler with custom querier.
-// This is useful for testing.
-//
-// Parameters:
-//
-//	db: Database querier.
-//
-// Returns:
-//
-//	*FuturesArbitrageHandler: Initialized handler.
-func NewFuturesArbitrageHandlerWithQuerier(db DBQuerier) *FuturesArbitrageHandler {
-	// Initialize logger and metrics collector
+func NewFuturesArbitrageHandlerWithQuerier(db any) *FuturesArbitrageHandler {
+	resolvedQuerier, err := resolveDBQuerier(db)
+	if err != nil {
+		panic(err)
+	}
+
 	logger := logging.NewStandardLogger("info", "production")
 	metricsCollector := metrics.NewMetricsCollector(logger, "futures-arbitrage")
 
 	return &FuturesArbitrageHandler{
-		db:         db,
+		db:         resolvedQuerier,
 		calculator: services.NewFuturesArbitrageCalculator(),
 		metrics:    metricsCollector,
 	}
@@ -171,7 +160,7 @@ func (h *FuturesArbitrageHandler) GetFuturesArbitrageStrategy(c *gin.Context) {
 
 	strategy, err := h.getFuturesStrategyFromDB(strategyID)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Strategy not found"})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch strategy", "details": err.Error()})
@@ -597,8 +586,8 @@ func (h *FuturesArbitrageHandler) getFuturesStrategyFromDB(strategyID string) (*
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, pgx.ErrNoRows
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+			return nil, sql.ErrNoRows
 		}
 		return nil, err
 	}

@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
@@ -205,12 +203,16 @@ func (db *PostgresDB) HealthCheck(ctx context.Context) error {
 // Returns:
 //
 //	error: Error if query fails.
-func (db *PostgresDB) Query(ctx context.Context, query string, args ...interface{}) (pgx.Rows, error) {
+func (db *PostgresDB) Query(ctx context.Context, query string, args ...interface{}) (Rows, error) {
 	if db.Pool == nil {
 		return nil, fmt.Errorf("postgres pool is not initialized")
 	}
 
-	return db.Pool.Query(ctx, query, args...)
+	rows, err := db.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return PgxRows{Rows: rows}, nil
 }
 
 // QueryRow executes a query that returns a single row.
@@ -222,12 +224,12 @@ func (db *PostgresDB) Query(ctx context.Context, query string, args ...interface
 //	args: Query arguments.
 //
 // Returns:
-func (db *PostgresDB) QueryRow(ctx context.Context, query string, args ...interface{}) pgx.Row {
+func (db *PostgresDB) QueryRow(ctx context.Context, query string, args ...interface{}) Row {
 	if db.Pool == nil {
 		return nil
 	}
 
-	return db.Pool.QueryRow(ctx, query, args...)
+	return PgxRow{Row: db.Pool.QueryRow(ctx, query, args...)}
 }
 
 // Exec executes a query without returning rows.
@@ -241,20 +243,28 @@ func (db *PostgresDB) QueryRow(ctx context.Context, query string, args ...interf
 // Returns:
 //
 //	error: Error if execution fails.
-func (db *PostgresDB) Exec(ctx context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
-	if db.Pool == nil {
-		return pgconn.CommandTag{}, fmt.Errorf("postgres pool is not initialized")
-	}
-
-	return db.Pool.Exec(ctx, query, args...)
-}
-
-func (db *PostgresDB) Begin(ctx context.Context) (pgx.Tx, error) {
+func (db *PostgresDB) Exec(ctx context.Context, query string, args ...interface{}) (Result, error) {
 	if db.Pool == nil {
 		return nil, fmt.Errorf("postgres pool is not initialized")
 	}
 
-	return db.Pool.Begin(ctx)
+	tag, err := db.Pool.Exec(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return PgxResult{CommandTag: tag}, nil
+}
+
+func (db *PostgresDB) Begin(ctx context.Context) (Tx, error) {
+	if db.Pool == nil {
+		return nil, fmt.Errorf("postgres pool is not initialized")
+	}
+
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return PgxTx{Tx: tx}, nil
 }
 
 func (db *PostgresDB) IsReady() bool {

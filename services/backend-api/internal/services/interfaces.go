@@ -4,21 +4,11 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 )
 
-// DBPool defines the driver-agnostic interface for database operations.
-// This interface allows switching between PostgreSQL and SQLite without
-// changing service layer code.
-type DBPool interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
+type DBPool = database.DBPool
 
-// SignalAggregatorInterface defines the interface for signal aggregation
 type SignalAggregatorInterface interface {
 	AggregateArbitrageSignals(ctx context.Context, input ArbitrageSignalInput) ([]*AggregatedSignal, error)
 	AggregateTechnicalSignals(ctx context.Context, input TechnicalSignalInput) ([]*AggregatedSignal, error)

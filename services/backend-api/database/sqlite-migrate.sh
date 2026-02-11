@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-DB_PATH="${SQLITE_DB_PATH:-$(dirname "$0")/neuratrade.db}"
-MIGRATIONS_DIR="${SQLITE_MIGRATIONS_DIR:-$(dirname "$0")/sqlite_migrations}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DB_PATH="${SQLITE_PATH:-${SQLITE_DB_PATH:-${SCRIPT_DIR}/../data/neuratrade.db}}"
+MIGRATIONS_DIR="${SQLITE_MIGRATIONS_DIR:-${SCRIPT_DIR}/sqlite_migrations}"
 VEC_EXTENSION_PATH="${SQLITE_VEC_EXTENSION_PATH:-}"
 CMD="${1:-run}"
 

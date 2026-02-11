@@ -465,7 +465,11 @@ func (s *FuturesArbitrageService) cleanupExpiredOpportunities(ctx context.Contex
 		return fmt.Errorf("failed to cleanup expired opportunities: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		telemetry.Logger().Error("Failed to get rows affected", "error", err)
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	telemetry.Logger().Info("Cleanup completed successfully", "opportunities_cleaned", rowsAffected)
 
 	if rowsAffected > 0 {

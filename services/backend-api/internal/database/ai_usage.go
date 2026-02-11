@@ -6,15 +6,19 @@ import (
 	"time"
 
 	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
-type AIUsageRepository struct {
-	pool *pgxpool.Pool
+type aiUsageQuerier interface {
+	Query(ctx context.Context, query string, args ...interface{}) (Rows, error)
+	QueryRow(ctx context.Context, query string, args ...interface{}) Row
 }
 
-func NewAIUsageRepository(pool *pgxpool.Pool) *AIUsageRepository {
+type AIUsageRepository struct {
+	pool aiUsageQuerier
+}
+
+func NewAIUsageRepository(pool aiUsageQuerier) *AIUsageRepository {
 	return &AIUsageRepository{pool: pool}
 }
 
