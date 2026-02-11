@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 
 	"github.com/cinar/indicator/v2/asset"
@@ -16,16 +15,16 @@ import (
 	"github.com/cinar/indicator/v2/trend"
 	"github.com/cinar/indicator/v2/volatility"
 	"github.com/cinar/indicator/v2/volume"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
 )
 
 // TechnicalAnalysisService provides technical analysis capabilities, calculating various indicators
 // and interpreting them to generate trading signals.
 type TechnicalAnalysisService struct {
 	config               *config.Config
-	db                   *database.PostgresDB
-	logger               *logrus.Logger
+	db                   DBPool
+	logger               *zaplogrus.Logger
 	errorRecoveryManager *ErrorRecoveryManager
 	resourceManager      *ResourceManager
 	performanceMonitor   *PerformanceMonitor
@@ -103,8 +102,8 @@ type IndicatorConfig struct {
 //   - A pointer to the initialized TechnicalAnalysisService.
 func NewTechnicalAnalysisService(
 	cfg *config.Config,
-	db *database.PostgresDB,
-	logger *logrus.Logger,
+	db DBPool,
+	logger *zaplogrus.Logger,
 	errorRecoveryManager *ErrorRecoveryManager,
 	resourceManager *ResourceManager,
 	performanceMonitor *PerformanceMonitor,
@@ -151,7 +150,7 @@ func (tas *TechnicalAnalysisService) GetDefaultIndicatorConfig() *IndicatorConfi
 //   - A TechnicalAnalysisResult containing all calculated data, or an error if analysis fails.
 func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, exchange string, config *IndicatorConfig) (*TechnicalAnalysisResult, error) {
 	// Log analysis start with structured logging
-	tas.logger.WithFields(logrus.Fields{
+	tas.logger.WithFields(zaplogrus.Fields{
 		"symbol":    symbol,
 		"exchange":  exchange,
 		"operation": "technical_analysis_start",
@@ -164,7 +163,7 @@ func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, 
 	}, map[string]interface{}{"symbol": symbol, "exchange": exchange, "operation": "technical_analysis"})
 	defer func() {
 		if err := tas.resourceManager.CleanupResource(operationID); err != nil {
-			tas.logger.WithFields(logrus.Fields{"operation_id": operationID}).Warnf("Failed to cleanup resource: %v", err)
+			tas.logger.WithFields(zaplogrus.Fields{"operation_id": operationID}).Warnf("Failed to cleanup resource: %v", err)
 		}
 	}()
 
@@ -172,7 +171,7 @@ func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	tas.logger.WithFields(logrus.Fields{
+	tas.logger.WithFields(zaplogrus.Fields{
 		"symbol":   symbol,
 		"exchange": exchange,
 	}).Info("Starting technical analysis")
@@ -191,7 +190,7 @@ func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, 
 	if len(priceData.Close) < 50 {
 		dataErr := fmt.Errorf("insufficient price data: need at least 50 points, got %d", len(priceData.Close))
 		// Log insufficient data error with structured logging
-		tas.logger.WithFields(logrus.Fields{
+		tas.logger.WithFields(zaplogrus.Fields{
 			"symbol":          symbol,
 			"exchange":        exchange,
 			"data_points":     len(priceData.Close),
@@ -202,7 +201,7 @@ func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, 
 	}
 
 	// Log price data summary with structured logging
-	tas.logger.WithFields(logrus.Fields{
+	tas.logger.WithFields(zaplogrus.Fields{
 		"symbol":      symbol,
 		"exchange":    exchange,
 		"data_points": len(priceData.Close),
@@ -220,7 +219,7 @@ func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, 
 	})
 	if calcErr != nil {
 		// Log indicator calculation error with structured logging
-		tas.logger.WithFields(logrus.Fields{
+		tas.logger.WithFields(zaplogrus.Fields{
 			"symbol":    symbol,
 			"exchange":  exchange,
 			"error":     calcErr.Error(),
@@ -233,7 +232,7 @@ func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, 
 	overallSignal, confidence := tas.determineOverallSignal(indicators)
 
 	// Log analysis completion with structured logging
-	tas.logger.WithFields(logrus.Fields{
+	tas.logger.WithFields(zaplogrus.Fields{
 		"symbol":         symbol,
 		"exchange":       exchange,
 		"indicators":     len(indicators),
@@ -256,7 +255,7 @@ func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, 
 // calculateAllIndicators orchestrates the calculation of all enabled technical indicators.
 func (tas *TechnicalAnalysisService) calculateAllIndicators(snapshots []*asset.Snapshot, config *IndicatorConfig) []*IndicatorResult {
 	// Log indicator calculation start with structured logging
-	tas.logger.WithFields(logrus.Fields{
+	tas.logger.WithFields(zaplogrus.Fields{
 		"snapshots": len(snapshots),
 		"operation": "calculate_indicators",
 	}).Debug("Starting technical indicator calculations")
@@ -320,7 +319,7 @@ func (tas *TechnicalAnalysisService) calculateAllIndicators(snapshots []*asset.S
 	}
 
 	// Log indicator calculation completion with structured logging
-	tas.logger.WithFields(logrus.Fields{
+	tas.logger.WithFields(zaplogrus.Fields{
 		"indicators_count": len(indicators),
 		"operation":        "calculate_indicators",
 	}).Debug("Technical indicator calculations completed")
@@ -915,7 +914,7 @@ func (tas *TechnicalAnalysisService) fetchPriceData(ctx context.Context, symbol,
 			 WHERE trading_pair_id IN (SELECT id FROM trading_pairs WHERE symbol = $1) 
 			 AND exchange_id IN (SELECT id FROM exchanges WHERE name = $2) 
 			 ORDER BY timestamp DESC LIMIT 200`
-	rows, err := tas.db.Pool.Query(ctx, query, symbol, exchange)
+	rows, err := tas.db.Query(ctx, query, symbol, exchange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch market data: %w", err)
 	}

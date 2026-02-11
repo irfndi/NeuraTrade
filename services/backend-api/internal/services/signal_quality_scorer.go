@@ -6,18 +6,17 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
 )
 
 // SignalQualityScorer provides signal quality assessment capabilities, evaluating signals based on
 // exchange reliability, market conditions, and technical indicators.
 type SignalQualityScorer struct {
 	config *config.Config
-	db     *database.PostgresDB
-	logger *logrus.Logger
+	db     DBPool
+	logger *zaplogrus.Logger
 
 	// Cached exchange reliability scores
 	exchangeReliabilityCache map[string]*ExchangeReliability
@@ -110,7 +109,7 @@ type QualityThresholds struct {
 //
 // Returns:
 //   - A pointer to the initialized SignalQualityScorer.
-func NewSignalQualityScorer(cfg *config.Config, db *database.PostgresDB, logger *logrus.Logger) *SignalQualityScorer {
+func NewSignalQualityScorer(cfg *config.Config, db DBPool, logger *zaplogrus.Logger) *SignalQualityScorer {
 	return &SignalQualityScorer{
 		config:                   cfg,
 		db:                       db,
@@ -146,7 +145,7 @@ func (sqs *SignalQualityScorer) AssessSignalQuality(ctx context.Context, input *
 		input.SignalType, input.Symbol, input.Exchanges, input.Volume.InexactFloat64(),
 		input.ProfitPotential.InexactFloat64(), input.Confidence.InexactFloat64())
 
-	sqs.logger.WithFields(logrus.Fields{
+	sqs.logger.WithFields(zaplogrus.Fields{
 		"signal_type": input.SignalType,
 		"symbol":      input.Symbol,
 		"exchanges":   input.Exchanges,

@@ -30,7 +30,7 @@ import (
 
 // NotificationService handles sending notifications to users.
 type NotificationService struct {
-	db                 *database.PostgresDB
+	db                 DBPool
 	redis              *database.RedisClient
 	telegramServiceURL string
 	telegramGrpcAddr   string
@@ -124,7 +124,7 @@ type StopLoss struct {
 // Returns:
 //
 //	*NotificationService: Initialized service.
-func NewNotificationService(db *database.PostgresDB, redis *database.RedisClient, telegramServiceURL, telegramGrpcAddress, adminAPIKey string) *NotificationService {
+func NewNotificationService(db DBPool, redis *database.RedisClient, telegramServiceURL, telegramGrpcAddress, adminAPIKey string) *NotificationService {
 	ns := &NotificationService{
 		db:                 db,
 		redis:              redis,
@@ -645,7 +645,7 @@ func (ns *NotificationService) getEligibleUsers(ctx context.Context) ([]userMode
 		  )
 	`
 
-	rows, err := ns.db.Pool.Query(ctx, query)
+	rows, err := ns.db.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query eligible users: %w", err)
 	}
@@ -1080,7 +1080,7 @@ func (ns *NotificationService) logNotification(ctx context.Context, userID, noti
 	`
 
 	now := time.Now()
-	_, err := ns.db.Pool.Exec(ctx, query, userID, notificationType, content, now, now)
+	_, err := ns.db.Exec(ctx, query, userID, notificationType, content, now, now)
 	if err != nil {
 		return fmt.Errorf("failed to log notification: %w", err)
 	}
@@ -1126,7 +1126,7 @@ func (ns *NotificationService) CheckUserNotificationPreferences(ctx context.Cont
 	`
 
 	var count int
-	err := ns.db.Pool.QueryRow(ctx, query, userID).Scan(&count)
+	err := ns.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return true, fmt.Errorf("failed to check user preferences: %w", err) // Default to enabled on error
 	}

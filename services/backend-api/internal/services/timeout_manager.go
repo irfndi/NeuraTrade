@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
 
 // TimeoutConfig defines timeout durations for various types of operations.
@@ -24,7 +24,7 @@ type TimeoutConfig struct {
 // allowing for centralized configuration and monitoring of operation durations.
 type TimeoutManager struct {
 	config         *TimeoutConfig
-	logger         *logrus.Logger
+	logger         *zaplogrus.Logger
 	activeContexts map[string]context.CancelFunc
 	mu             sync.RWMutex
 	defaultTimeout time.Duration
@@ -47,7 +47,7 @@ type OperationContext struct {
 //
 // Returns:
 //   - A pointer to the initialized TimeoutManager.
-func NewTimeoutManager(config *TimeoutConfig, logger *logrus.Logger) *TimeoutManager {
+func NewTimeoutManager(config *TimeoutConfig, logger *zaplogrus.Logger) *TimeoutManager {
 	if config == nil {
 		config = DefaultTimeoutConfig()
 	}
@@ -281,7 +281,7 @@ func (tm *TimeoutManager) ExecuteWithTimeout(
 	select {
 	case result := <-resultChan:
 		duration := time.Since(opCtx.StartTime)
-		tm.logger.WithFields(logrus.Fields{
+		tm.logger.WithFields(zaplogrus.Fields{
 			"operation_type": operationType,
 			"operation_id":   operationID,
 			"duration":       duration,
@@ -291,7 +291,7 @@ func (tm *TimeoutManager) ExecuteWithTimeout(
 
 	case <-opCtx.Ctx.Done():
 		duration := time.Since(opCtx.StartTime)
-		tm.logger.WithFields(logrus.Fields{
+		tm.logger.WithFields(zaplogrus.Fields{
 			"operation_type": operationType,
 			"operation_id":   operationID,
 			"duration":       duration,
@@ -321,7 +321,7 @@ func (tm *TimeoutManager) ExecuteWithTimeoutAndFallback(
 ) (interface{}, error) {
 	result, err := tm.ExecuteWithTimeout(operationType, operationID, operation)
 	if err != nil && fallback != nil {
-		tm.logger.WithFields(logrus.Fields{
+		tm.logger.WithFields(zaplogrus.Fields{
 			"operation_type": operationType,
 			"operation_id":   operationID,
 			"error":          err.Error(),

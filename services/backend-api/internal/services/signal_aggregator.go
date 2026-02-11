@@ -15,11 +15,10 @@ import (
 	"github.com/cinar/indicator/v2/momentum"
 	"github.com/cinar/indicator/v2/trend"
 	"github.com/google/uuid"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 )
 
@@ -109,8 +108,8 @@ type SignalAggregatorConfig struct {
 // SignalAggregator handles the aggregation, processing, and deduplication of trading signals.
 type SignalAggregator struct {
 	config        *config.Config
-	db            *database.PostgresDB
-	logger        *logrus.Logger
+	db            DBPool
+	logger        *zaplogrus.Logger
 	sigConfig     SignalAggregatorConfig
 	qualityScorer SignalQualityScorerInterface
 	cache         map[string]*AggregatedSignal
@@ -125,7 +124,7 @@ type SignalAggregator struct {
 //
 // Returns:
 //   - A pointer to the initialized SignalAggregator.
-func NewSignalAggregator(cfg *config.Config, db *database.PostgresDB, logger *logrus.Logger) *SignalAggregator {
+func NewSignalAggregator(cfg *config.Config, db DBPool, logger *zaplogrus.Logger) *SignalAggregator {
 	return &SignalAggregator{
 		config: cfg,
 		db:     db,
@@ -154,7 +153,7 @@ func NewSignalAggregator(cfg *config.Config, db *database.PostgresDB, logger *lo
 //   - A slice of aggregated signals, or an error if aggregation fails.
 func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input ArbitrageSignalInput) ([]*AggregatedSignal, error) {
 	// Stub telemetry - log arbitrage signal aggregation
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"operation_type": "signal_aggregation",
 		"signal_type":    "arbitrage",
 		"input_count":    len(input.Opportunities),
@@ -192,7 +191,7 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 		if estimatedVolume.GreaterThanOrEqual(minVolume) {
 			symbolGroups[symbol] = append(symbolGroups[symbol], opp)
 		} else {
-			sa.logger.WithFields(logrus.Fields{
+			sa.logger.WithFields(zaplogrus.Fields{
 				"symbol":           symbol,
 				"estimated_volume": estimatedVolume,
 				"min_volume":       minVolume,
@@ -250,7 +249,7 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 	}
 
 	// Stub telemetry - log aggregation results
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"signals_generated": len(signals),
 		"symbols_processed": len(symbolGroups),
 		"operation_result":  "success",
@@ -270,7 +269,7 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 //   - A slice of aggregated signals based on technical indicators, or an error if processing fails.
 func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input TechnicalSignalInput) ([]*AggregatedSignal, error) {
 	// Stub telemetry - log technical signal aggregation
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"operation_type": "signal_aggregation",
 		"signal_type":    "technical",
 		"symbol":         input.Symbol,
@@ -283,7 +282,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 
 	if len(input.Prices) < 20 {
 		// Stub telemetry - log insufficient data error
-		sa.logger.WithFields(logrus.Fields{
+		sa.logger.WithFields(zaplogrus.Fields{
 			"required_points": 20,
 			"actual_points":   len(input.Prices),
 		}).Error("Insufficient price data for technical analysis")
@@ -373,7 +372,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 	}
 
 	// Stub telemetry - log technical signal results
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"signals_generated": len(qualitySignals),
 		"signals_raw_count": len(signals),
 		"operation_result":  "success",
@@ -393,7 +392,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 //   - A slice of unique signals, or an error if deduplication fails.
 func (sa *SignalAggregator) DeduplicateSignals(ctx context.Context, signals []*AggregatedSignal) ([]*AggregatedSignal, error) {
 	// Stub telemetry - log deduplication start
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"operation_type":      "signal_deduplication",
 		"signals_input_count": len(signals),
 	}).Info("Starting signal deduplication")
@@ -423,13 +422,13 @@ func (sa *SignalAggregator) DeduplicateSignals(ctx context.Context, signals []*A
 	}
 
 	// Stub telemetry - log deduplication results
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"signals_unique_count":       len(uniqueSignals),
 		"signals_duplicates_removed": len(signals) - len(uniqueSignals),
 		"operation_result":           "success",
 	}).Info("Signal deduplication completed")
 
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"original_count": len(signals),
 		"unique_count":   len(uniqueSignals),
 	}).Info("Signal deduplication completed")
@@ -881,7 +880,7 @@ func (sa *SignalAggregator) isHashRecent(ctx context.Context, hash string) bool 
 	cutoff := time.Now().Add(-sa.sigConfig.DeduplicationWindow)
 	var count int64
 	query := `SELECT COUNT(*) FROM signal_fingerprints WHERE hash = $1 AND created_at > $2`
-	err := sa.db.Pool.QueryRow(ctx, query, hash, cutoff).Scan(&count)
+	err := sa.db.QueryRow(ctx, query, hash, cutoff).Scan(&count)
 
 	if err != nil {
 		sa.logger.WithError(err).Error("Failed to check hash recency")
@@ -893,7 +892,7 @@ func (sa *SignalAggregator) isHashRecent(ctx context.Context, hash string) bool 
 
 func (sa *SignalAggregator) storeFingerprint(ctx context.Context, fingerprint *SignalFingerprint) {
 	query := `INSERT INTO signal_fingerprints (hash, signal_id, created_at) VALUES ($1, $2, $3)`
-	_, err := sa.db.Pool.Exec(ctx, query, fingerprint.Hash, fingerprint.SignalID, fingerprint.CreatedAt)
+	_, err := sa.db.Exec(ctx, query, fingerprint.Hash, fingerprint.SignalID, fingerprint.CreatedAt)
 	if err != nil {
 		sa.logger.WithError(err).Error("Failed to store signal fingerprint")
 	}
@@ -908,7 +907,7 @@ func (sa *SignalAggregator) storeFingerprint(ctx context.Context, fingerprint *S
 // Returns:
 //   - A slice of active aggregated signals, or an error if retrieval fails.
 func (sa *SignalAggregator) GetActiveAggregatedSignals(ctx context.Context, limit int) ([]*AggregatedSignal, error) {
-	if sa.db == nil {
+	if isNilDBPool(sa.db) {
 		return []*AggregatedSignal{}, nil
 	}
 
@@ -924,7 +923,7 @@ func (sa *SignalAggregator) GetActiveAggregatedSignals(ctx context.Context, limi
 		LIMIT $2
 	`
 
-	rows, err := sa.db.Pool.Query(ctx, query, sa.sigConfig.MinConfidence, limit)
+	rows, err := sa.db.Query(ctx, query, sa.sigConfig.MinConfidence, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query aggregated signals: %w", err)
 	}
@@ -976,7 +975,7 @@ func (sa *SignalAggregator) GetActiveAggregatedSignals(ctx context.Context, limi
 		return nil, fmt.Errorf("error iterating over aggregated signals: %w", err)
 	}
 
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"count": len(signals),
 		"limit": limit,
 	}).Info("Retrieved active aggregated signals")
@@ -994,7 +993,7 @@ func (sa *SignalAggregator) GetActiveAggregatedSignals(ctx context.Context, limi
 // Returns:
 //   - A slice of aggregated signals for the specified symbol, or an error if retrieval fails.
 func (sa *SignalAggregator) GetAggregatedSignalsBySymbol(ctx context.Context, symbol string, limit int) ([]*AggregatedSignal, error) {
-	if sa.db == nil {
+	if isNilDBPool(sa.db) {
 		return []*AggregatedSignal{}, nil
 	}
 
@@ -1011,7 +1010,7 @@ func (sa *SignalAggregator) GetAggregatedSignalsBySymbol(ctx context.Context, sy
 		LIMIT $3
 	`
 
-	rows, err := sa.db.Pool.Query(ctx, query, symbol, sa.sigConfig.MinConfidence, limit)
+	rows, err := sa.db.Query(ctx, query, symbol, sa.sigConfig.MinConfidence, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query aggregated signals for symbol %s: %w", symbol, err)
 	}
@@ -1063,7 +1062,7 @@ func (sa *SignalAggregator) GetAggregatedSignalsBySymbol(ctx context.Context, sy
 		return nil, fmt.Errorf("error iterating over aggregated signals for symbol %s: %w", symbol, err)
 	}
 
-	sa.logger.WithFields(logrus.Fields{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"symbol": symbol,
 		"count":  len(signals),
 		"limit":  limit,

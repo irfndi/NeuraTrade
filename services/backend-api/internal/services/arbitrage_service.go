@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 )
 
@@ -122,7 +121,7 @@ type ArbitrageServiceConfig struct {
 
 // ArbitrageService handles periodic calculation and storage of arbitrage opportunities.
 type ArbitrageService struct {
-	db                 *database.PostgresDB
+	db                 DBPool
 	config             *config.Config
 	arbitrageConfig    ArbitrageServiceConfig
 	calculator         ArbitrageCalculator
@@ -131,7 +130,7 @@ type ArbitrageService struct {
 	wg                 sync.WaitGroup
 	isRunning          bool
 	mu                 sync.RWMutex
-	logger             *logrus.Logger
+	logger             *zaplogrus.Logger
 	lastCalculation    time.Time
 	opportunitiesFound int
 }
@@ -147,7 +146,7 @@ type ArbitrageService struct {
 // Returns:
 //
 //	*ArbitrageService: Initialized service.
-func NewArbitrageService(db *database.PostgresDB, cfg *config.Config, calculator ArbitrageCalculator) *ArbitrageService {
+func NewArbitrageService(db DBPool, cfg *config.Config, calculator ArbitrageCalculator) *ArbitrageService {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Parse configuration with defaults
@@ -175,7 +174,7 @@ func NewArbitrageService(db *database.PostgresDB, cfg *config.Config, calculator
 	arbitrageConfig.Enabled = cfg.Arbitrage.Enabled
 
 	// Initialize logger
-	logger := logrus.New()
+	logger := zaplogrus.New()
 
 	return &ArbitrageService{
 		db:              db,
@@ -343,7 +342,7 @@ func (s *ArbitrageService) calculateAndStoreOpportunities() error {
 // getLatestMarketData retrieves the latest market data for all exchanges
 func (s *ArbitrageService) getLatestMarketData() (map[string][]models.MarketData, error) {
 	// Check if database pool is available
-	if s.db == nil || s.db.Pool == nil {
+	if isNilDBPool(s.db) {
 		return nil, fmt.Errorf("database pool is not available")
 	}
 
@@ -361,7 +360,7 @@ func (s *ArbitrageService) getLatestMarketData() (map[string][]models.MarketData
 		ORDER BY md.exchange_id, md.trading_pair_id, md.timestamp DESC
 	`
 
-	rows, err := s.db.Pool.Query(s.ctx, query)
+	rows, err := s.db.Query(s.ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query market data: %w", err)
 	}
@@ -453,11 +452,11 @@ func (s *ArbitrageService) storeOpportunities(opportunities []models.ArbitrageOp
 
 // storeOpportunityBatch stores a batch of arbitrage opportunities
 func (s *ArbitrageService) storeOpportunityBatch(opportunities []models.ArbitrageOpportunity) error {
-	if s.db == nil || s.db.Pool == nil {
+	if isNilDBPool(s.db) {
 		return fmt.Errorf("database pool is not available")
 	}
 
-	tx, err := s.db.Pool.Begin(s.ctx)
+	tx, err := s.db.Begin(s.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -516,7 +515,7 @@ func (s *ArbitrageService) storeOpportunityBatch(opportunities []models.Arbitrag
 // cleanupOldOpportunities removes expired arbitrage opportunities
 func (s *ArbitrageService) cleanupOldOpportunities() error {
 	// Check if database pool is available
-	if s.db == nil || s.db.Pool == nil {
+	if isNilDBPool(s.db) {
 		return fmt.Errorf("database pool is not available")
 	}
 
@@ -530,7 +529,7 @@ func (s *ArbitrageService) cleanupOldOpportunities() error {
 	`
 
 	var expiredCount int
-	err := s.db.Pool.QueryRow(s.ctx, query).Scan(&expiredCount)
+	err := s.db.QueryRow(s.ctx, query).Scan(&expiredCount)
 	if err != nil {
 		return fmt.Errorf("failed to count expired opportunities: %w", err)
 	}
@@ -554,7 +553,7 @@ func (s *ArbitrageService) countTotalTradingPairs(marketData map[string][]models
 // GetActiveOpportunities retrieves currently active arbitrage opportunities
 func (s *ArbitrageService) GetActiveOpportunities(ctx context.Context, limit int) ([]models.ArbitrageOpportunity, error) {
 	// Check if database pool is available
-	if s.db == nil || s.db.Pool == nil {
+	if isNilDBPool(s.db) {
 		return nil, fmt.Errorf("database pool is not available")
 	}
 
@@ -573,7 +572,7 @@ func (s *ArbitrageService) GetActiveOpportunities(ctx context.Context, limit int
 		LIMIT $1
 	`
 
-	rows, err := s.db.Pool.Query(ctx, query, limit)
+	rows, err := s.db.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active opportunities: %w", err)
 	}

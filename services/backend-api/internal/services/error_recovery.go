@@ -5,14 +5,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
 
 // Note: CircuitBreaker types are defined in circuit_breaker.go
 
 // ErrorRecoveryManager manages error recovery for concurrent operations.
 type ErrorRecoveryManager struct {
-	logger          *logrus.Logger
+	logger          *zaplogrus.Logger
 	circuitBreakers map[string]*CircuitBreaker
 	retryPolicies   map[string]*RetryPolicy
 	mu              sync.RWMutex
@@ -63,7 +63,7 @@ type OperationResult struct {
 // Returns:
 //
 //	*ErrorRecoveryManager: Initialized manager.
-func NewErrorRecoveryManager(logger *logrus.Logger) *ErrorRecoveryManager {
+func NewErrorRecoveryManager(logger *zaplogrus.Logger) *ErrorRecoveryManager {
 	return &ErrorRecoveryManager{
 		logger:          logger,
 		circuitBreakers: make(map[string]*CircuitBreaker),
@@ -370,7 +370,7 @@ func (erm *ErrorRecoveryManager) ExecuteWithRetry(
 		err := operation()
 		if err == nil {
 			if attempt > 0 {
-				erm.logger.WithFields(logrus.Fields{
+				erm.logger.WithFields(zaplogrus.Fields{
 					"operation": operationName,
 					"attempts":  attempt + 1,
 					"duration":  time.Since(start),
@@ -387,7 +387,7 @@ func (erm *ErrorRecoveryManager) ExecuteWithRetry(
 		}
 
 		// Log retry attempt
-		erm.logger.WithFields(logrus.Fields{
+		erm.logger.WithFields(zaplogrus.Fields{
 			"operation": operationName,
 			"attempt":   attempt + 1,
 			"error":     err.Error(),
@@ -403,7 +403,7 @@ func (erm *ErrorRecoveryManager) ExecuteWithRetry(
 	}
 
 	// All retries failed
-	erm.logger.WithFields(logrus.Fields{
+	erm.logger.WithFields(zaplogrus.Fields{
 		"operation": operationName,
 		"attempts":  retryPolicy.MaxRetries + 1,
 		"duration":  time.Since(start),
