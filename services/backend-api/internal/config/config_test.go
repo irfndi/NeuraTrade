@@ -17,17 +17,20 @@ func TestConfig_Struct(t *testing.T) {
 			AllowedOrigins: []string{"http://localhost:3000"},
 		},
 		Database: DatabaseConfig{
-			Host:            "localhost",
-			Port:            5432,
-			User:            "postgres",
-			Password:        "password",
-			DBName:          "test_db",
-			SSLMode:         "disable",
-			DatabaseURL:     "postgres://user:pass@localhost/db",
-			MaxOpenConns:    25,
-			MaxIdleConns:    5,
-			ConnMaxLifetime: "300s",
-			ConnMaxIdleTime: "60s",
+			Driver:                    "postgres",
+			Host:                      "localhost",
+			Port:                      5432,
+			User:                      "postgres",
+			Password:                  "password",
+			DBName:                    "test_db",
+			SSLMode:                   "disable",
+			DatabaseURL:               "postgres://user:pass@localhost/db",
+			MaxOpenConns:              25,
+			MaxIdleConns:              5,
+			ConnMaxLifetime:           "300s",
+			ConnMaxIdleTime:           "60s",
+			SQLitePath:                "data/test.db",
+			SQLiteVectorExtensionPath: "/usr/local/lib/sqlite_vec.dylib",
 		},
 		Redis: RedisConfig{
 			Host:     "localhost",
@@ -49,6 +52,7 @@ func TestConfig_Struct(t *testing.T) {
 	assert.Equal(t, "debug", config.LogLevel)
 	assert.Equal(t, 8080, config.Server.Port)
 	assert.Equal(t, []string{"http://localhost:3000"}, config.Server.AllowedOrigins)
+	assert.Equal(t, "postgres", config.Database.Driver)
 	assert.Equal(t, "localhost", config.Database.Host)
 	assert.Equal(t, 5432, config.Database.Port)
 	assert.Equal(t, "postgres", config.Database.User)
@@ -60,6 +64,8 @@ func TestConfig_Struct(t *testing.T) {
 	assert.Equal(t, 5, config.Database.MaxIdleConns)
 	assert.Equal(t, "300s", config.Database.ConnMaxLifetime)
 	assert.Equal(t, "60s", config.Database.ConnMaxIdleTime)
+	assert.Equal(t, "data/test.db", config.Database.SQLitePath)
+	assert.Equal(t, "/usr/local/lib/sqlite_vec.dylib", config.Database.SQLiteVectorExtensionPath)
 	assert.Equal(t, "localhost", config.Redis.Host)
 	assert.Equal(t, 6379, config.Redis.Port)
 	assert.Equal(t, "redis_pass", config.Redis.Password)
@@ -82,19 +88,23 @@ func TestServerConfig_Struct(t *testing.T) {
 
 func TestDatabaseConfig_Struct(t *testing.T) {
 	config := DatabaseConfig{
-		Host:            "db.example.com",
-		Port:            5433,
-		User:            "dbuser",
-		Password:        "dbpass",
-		DBName:          "production_db",
-		SSLMode:         "require",
-		DatabaseURL:     "postgres://user:pass@db.example.com/production_db",
-		MaxOpenConns:    50,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: "600s",
-		ConnMaxIdleTime: "120s",
+		Driver:                    "sqlite",
+		Host:                      "db.example.com",
+		Port:                      5433,
+		User:                      "dbuser",
+		Password:                  "dbpass",
+		DBName:                    "production_db",
+		SSLMode:                   "require",
+		DatabaseURL:               "postgres://user:pass@db.example.com/production_db",
+		MaxOpenConns:              50,
+		MaxIdleConns:              10,
+		ConnMaxLifetime:           "600s",
+		ConnMaxIdleTime:           "120s",
+		SQLitePath:                "data/prod.db",
+		SQLiteVectorExtensionPath: "/usr/local/lib/sqlite_vec.dylib",
 	}
 
+	assert.Equal(t, "sqlite", config.Driver)
 	assert.Equal(t, "db.example.com", config.Host)
 	assert.Equal(t, 5433, config.Port)
 	assert.Equal(t, "dbuser", config.User)
@@ -106,6 +116,8 @@ func TestDatabaseConfig_Struct(t *testing.T) {
 	assert.Equal(t, 10, config.MaxIdleConns)
 	assert.Equal(t, "600s", config.ConnMaxLifetime)
 	assert.Equal(t, "120s", config.ConnMaxIdleTime)
+	assert.Equal(t, "data/prod.db", config.SQLitePath)
+	assert.Equal(t, "/usr/local/lib/sqlite_vec.dylib", config.SQLiteVectorExtensionPath)
 }
 
 func TestRedisConfig_Struct(t *testing.T) {
@@ -156,6 +168,7 @@ func TestLoad_WithDefaults(t *testing.T) {
 	assert.Equal(t, 8080, config.Server.Port)
 	assert.Equal(t, []string{"http://localhost:3000"}, config.Server.AllowedOrigins)
 	assert.Equal(t, "localhost", config.Database.Host)
+	assert.Equal(t, "postgres", config.Database.Driver)
 	assert.Equal(t, 5432, config.Database.Port)
 	assert.Equal(t, "postgres", config.Database.User)
 	assert.Equal(t, "change-me-in-production", config.Database.Password)
@@ -166,6 +179,8 @@ func TestLoad_WithDefaults(t *testing.T) {
 	assert.Equal(t, 5, config.Database.MaxIdleConns)
 	assert.Equal(t, "300s", config.Database.ConnMaxLifetime)
 	assert.Equal(t, "60s", config.Database.ConnMaxIdleTime)
+	assert.Equal(t, "data/neuratrade.db", config.Database.SQLitePath)
+	assert.Equal(t, "", config.Database.SQLiteVectorExtensionPath)
 	assert.Equal(t, "localhost", config.Redis.Host)
 	assert.Equal(t, 6379, config.Redis.Port)
 	assert.Equal(t, "", config.Redis.Password)
@@ -190,6 +205,9 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	t.Setenv("DATABASE_PASSWORD", "prod_pass")
 	t.Setenv("DATABASE_DBNAME", "prod_db")
 	t.Setenv("DATABASE_SSLMODE", "require")
+	t.Setenv("DATABASE_DRIVER", "sqlite")
+	t.Setenv("SQLITE_PATH", "/tmp/neuratrade-test.db")
+	t.Setenv("SQLITE_VEC_EXTENSION_PATH", "/usr/local/lib/sqlite_vec.dylib")
 	t.Setenv("REDIS_HOST", "prod-redis.example.com")
 	t.Setenv("REDIS_PORT", "6380")
 	t.Setenv("REDIS_PASSWORD", "redis_prod_pass")
@@ -214,6 +232,9 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	assert.Equal(t, "prod_pass", config.Database.Password)
 	assert.Equal(t, "prod_db", config.Database.DBName)
 	assert.Equal(t, "require", config.Database.SSLMode)
+	assert.Equal(t, "sqlite", config.Database.Driver)
+	assert.Equal(t, "/tmp/neuratrade-test.db", config.Database.SQLitePath)
+	assert.Equal(t, "/usr/local/lib/sqlite_vec.dylib", config.Database.SQLiteVectorExtensionPath)
 	assert.Equal(t, "prod-redis.example.com", config.Redis.Host)
 	assert.Equal(t, 6380, config.Redis.Port)
 	assert.Equal(t, "redis_prod_pass", config.Redis.Password)
@@ -259,4 +280,23 @@ func TestCCXTConfig_GetTimeout_Zero(t *testing.T) {
 	}
 
 	assert.Equal(t, 0, config.GetTimeout())
+}
+
+func TestLoad_WithInvalidDatabaseDriver(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("DATABASE_DRIVER", "mysql")
+
+	config, err := Load()
+	assert.Nil(t, config)
+	assert.ErrorContains(t, err, "database.driver must be one of")
+}
+
+func TestLoad_SQLiteDriverRejectsWhitespacePath(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("DATABASE_DRIVER", "sqlite")
+	t.Setenv("SQLITE_PATH", "   ")
+
+	config, err := Load()
+	assert.Nil(t, config)
+	assert.ErrorContains(t, err, "database.sqlite_path is required")
 }

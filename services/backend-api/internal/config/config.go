@@ -51,6 +51,7 @@ type ServerConfig struct {
 
 // DatabaseConfig defines the PostgreSQL database connection settings.
 type DatabaseConfig struct {
+	Driver string `mapstructure:"driver"`
 	// Host is the database server hostname or IP.
 	Host string `mapstructure:"host"`
 	// Port is the database server port.
@@ -74,17 +75,19 @@ type DatabaseConfig struct {
 	// ConnMaxIdleTime is the maximum idle connection lifetime.
 	ConnMaxIdleTime string `mapstructure:"conn_max_idle_time"`
 	// PostgreSQL 18 specific optimizations
-	ApplicationName       string `mapstructure:"application_name"`
-	ConnectTimeout        int    `mapstructure:"connect_timeout"`
-	StatementTimeout      int    `mapstructure:"statement_timeout"`
-	QueryTimeout          int    `mapstructure:"query_timeout"` // Alias for StatementTimeout for compatibility
-	PoolTimeout           int    `mapstructure:"pool_timeout"`
-	PoolHealthCheckPeriod int    `mapstructure:"pool_health_check_period"`
-	PoolMaxLifetime       int    `mapstructure:"pool_max_lifetime"`
-	PoolIdleTimeout       int    `mapstructure:"pool_idle_timeout"`
-	EnableAsync           bool   `mapstructure:"enable_async"`
-	AsyncBatchSize        int    `mapstructure:"async_batch_size"`
-	AsyncConcurrency      int    `mapstructure:"async_concurrency"`
+	ApplicationName           string `mapstructure:"application_name"`
+	ConnectTimeout            int    `mapstructure:"connect_timeout"`
+	StatementTimeout          int    `mapstructure:"statement_timeout"`
+	QueryTimeout              int    `mapstructure:"query_timeout"` // Alias for StatementTimeout for compatibility
+	PoolTimeout               int    `mapstructure:"pool_timeout"`
+	PoolHealthCheckPeriod     int    `mapstructure:"pool_health_check_period"`
+	PoolMaxLifetime           int    `mapstructure:"pool_max_lifetime"`
+	PoolIdleTimeout           int    `mapstructure:"pool_idle_timeout"`
+	EnableAsync               bool   `mapstructure:"enable_async"`
+	AsyncBatchSize            int    `mapstructure:"async_batch_size"`
+	AsyncConcurrency          int    `mapstructure:"async_concurrency"`
+	SQLitePath                string `mapstructure:"sqlite_path"`
+	SQLiteVectorExtensionPath string `mapstructure:"sqlite_vector_extension_path"`
 }
 
 // RedisConfig defines the Redis connection settings.
@@ -279,6 +282,9 @@ func Load() (*Config, error) {
 
 	// Bind standard DATABASE_URL
 	_ = viper.BindEnv("database.database_url", "DATABASE_URL")
+	_ = viper.BindEnv("database.driver", "DATABASE_DRIVER")
+	_ = viper.BindEnv("database.sqlite_path", "SQLITE_PATH")
+	_ = viper.BindEnv("database.sqlite_vector_extension_path", "SQLITE_VEC_EXTENSION_PATH")
 
 	// Read config file
 	if err := viper.ReadInConfig(); err != nil {
@@ -325,6 +331,7 @@ func setDefaults() {
 	viper.SetDefault("server.allowed_origins", []string{"http://localhost:3000"})
 
 	// Set database defaults
+	viper.SetDefault("database.driver", "postgres")
 	viper.SetDefault("database.host", "localhost")
 	viper.SetDefault("database.port", 5432)
 	viper.SetDefault("database.user", "postgres")
@@ -337,6 +344,8 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("database.conn_max_lifetime", "300s")
 	viper.SetDefault("database.conn_max_idle_time", "60s")
+	viper.SetDefault("database.sqlite_path", "data/neuratrade.db")
+	viper.SetDefault("database.sqlite_vector_extension_path", "")
 
 	// Redis
 	viper.SetDefault("redis.host", "localhost")
@@ -438,6 +447,19 @@ func (c *CCXTConfig) GetTimeout() int {
 
 // validateConfig validates critical security and operational settings.
 func validateConfig(config *Config) error {
+	driver := strings.ToLower(strings.TrimSpace(config.Database.Driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+
+	if driver != "postgres" && driver != "sqlite" {
+		return fmt.Errorf("database.driver must be one of [postgres, sqlite], got %q", config.Database.Driver)
+	}
+
+	if driver == "sqlite" && strings.TrimSpace(config.Database.SQLitePath) == "" {
+		return fmt.Errorf("database.sqlite_path is required when database.driver=sqlite")
+	}
+
 	// Validate JWT secret for production environments
 	if config.Environment == "production" || config.Environment == "staging" {
 		if config.Auth.JWTSecret == "" {
