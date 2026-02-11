@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
 
 // Logger interface defines the common logging methods.
@@ -311,18 +311,18 @@ func getSlogLevel(level string) slog.Level {
 	}
 }
 
-// ParseLogrusLevel converts string level to logrus.Level.
+// ParseLogrusLevel converts string level to zaplogrus.Level.
 // This helper is useful for integrations that use Logrus.
-func ParseLogrusLevel(level string) logrus.Level {
+func ParseLogrusLevel(level string) zaplogrus.Level {
 	switch strings.ToLower(level) {
 	case "debug":
-		return logrus.DebugLevel
+		return zaplogrus.DebugLevel
 	case "warn", "warning":
-		return logrus.WarnLevel
+		return zaplogrus.WarnLevel
 	case "error":
-		return logrus.ErrorLevel
+		return zaplogrus.ErrorLevel
 	default:
-		return logrus.InfoLevel
+		return zaplogrus.InfoLevel
 	}
 }
 

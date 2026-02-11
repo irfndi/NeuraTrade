@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -424,17 +424,17 @@ func TestStandardLogger_SetLogger(t *testing.T) {
 func TestParseLogrusLevel(t *testing.T) {
 	tests := []struct {
 		levelStr string
-		expected logrus.Level
+		expected zaplogrus.Level
 	}{
-		{"debug", logrus.DebugLevel},
-		{"warn", logrus.WarnLevel},
-		{"warning", logrus.WarnLevel},
-		{"error", logrus.ErrorLevel},
-		{"info", logrus.InfoLevel},
-		{"INFO", logrus.InfoLevel},    // case insensitive
-		{"DEBUG", logrus.DebugLevel},  // case insensitive
-		{"invalid", logrus.InfoLevel}, // default to info
-		{"", logrus.InfoLevel},        // empty string defaults to info
+		{"debug", zaplogrus.DebugLevel},
+		{"warn", zaplogrus.WarnLevel},
+		{"warning", zaplogrus.WarnLevel},
+		{"error", zaplogrus.ErrorLevel},
+		{"info", zaplogrus.InfoLevel},
+		{"INFO", zaplogrus.InfoLevel},    // case insensitive
+		{"DEBUG", zaplogrus.DebugLevel},  // case insensitive
+		{"invalid", zaplogrus.InfoLevel}, // default to info
+		{"", zaplogrus.InfoLevel},        // empty string defaults to info
 	}
 
 	for _, tt := range tests {
