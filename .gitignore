@@ -167,3 +167,9 @@ mcp.json
 # Task files
 # tasks.json
 # tasks/ 
+
+# Agent working directories
+.sisyphus/
+
+# Built binaries
+services/backend-api/server
