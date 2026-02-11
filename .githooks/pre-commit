@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+bash services/backend-api/scripts/check-legacy-paths.sh
+bash services/backend-api/scripts/check-canonical-naming.sh

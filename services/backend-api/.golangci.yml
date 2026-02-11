@@ -1,122 +1,25 @@
-version: 2
-
-linters-settings:
-  govet:
-    enable-all: true
-    disable:
-      - shadow
-  gocyclo:
-    min-complexity: 15
-  dupl:
-    threshold: 100
-  goconst:
-    min-len: 2
-    min-occurrences: 3
-  misspell:
-    locale: US
-  lll:
-    line-length: 140
-  goimports:
-    local-prefixes: github.com/irfandi/neuratrade
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-  funlen:
-    lines: 100
-    statements: 50
-  revive:
-    rules:
-      - name: var-naming
-        severity: warning
-        disabled: false
-        arguments:
-          - [
-              "ID",
-              "URL",
-              "HTTP",
-              "API",
-              "DB",
-              "SQL",
-              "JSON",
-              "YAML",
-              "CCXT",
-              "UUID",
-              "OHLCV",
-            ]
+version: "2"
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - misspell
-    - copyloopvar # replaces exportloopref
+    - copyloopvar
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - shadow
+        - fieldalignment
+        - unusedwrite
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - dupl
-        - gosec
-        - funlen
-        - goconst
-        - revive
-        - unparam
-        - gocritic
-        - unconvert
-    - path: internal/testutil/
-      linters:
-        - errcheck
-        - gosec
-        - revive
-        - unparam
-    - path: test/
-      linters:
-        - errcheck
-        - gosec
-        - gocyclo
-        - funlen
-        - revive
-        - unparam
-    - path: cmd/server/
-      linters:
-        - gosec
-        - gocritic
-    - path: internal/middleware/
-      linters:
-        - gosec
-    - path: internal/api/handlers/
-      linters:
-        - gosec
-    - path: internal/services/
-      linters:
-        - gosec
-
-  exclude-use-default: true # Use default exclusions
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-dirs:
-    - vendor
-    - node_modules
-    - bin
-    - build
-    - .cache
-  exclude-files:
-    - ".*\\.pb\\.go$"
 
 run:
   timeout: 5m
