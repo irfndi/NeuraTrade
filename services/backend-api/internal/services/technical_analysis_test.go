@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -93,8 +93,8 @@ func generateTestPriceData(count int) *PriceData {
 
 func setupTestService() (*TechnicalAnalysisService, *MockTechnicalDatabase) {
 	cfg := &config.Config{}
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel) // Reduce noise in tests
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel) // Reduce noise in tests
 
 	mockDB := &MockTechnicalDatabase{
 		PostgresDB: &MockGormDB{},
@@ -114,7 +114,7 @@ func setupTestService() (*TechnicalAnalysisService, *MockTechnicalDatabase) {
 func TestNewTechnicalAnalysisService(t *testing.T) {
 	cfg := &config.Config{}
 	db := &database.PostgresDB{}
-	logger := logrus.New()
+	logger := zaplogrus.New()
 
 	// Create required dependencies
 	errorRecoveryManager := NewErrorRecoveryManager(logger)

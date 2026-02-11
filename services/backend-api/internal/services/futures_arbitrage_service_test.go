@@ -11,7 +11,7 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -398,7 +398,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_NoRates(t *testi
 
 	mockConfig := &config.Config{}
 	// Use real ErrorRecoveryManager since the function expects concrete type
-	errorRecoveryManager := NewErrorRecoveryManager(logrus.New())
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -424,7 +424,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_EmptyRates(t *te
 
 	mockConfig := &config.Config{}
 	// Use real ErrorRecoveryManager since the function expects concrete type
-	errorRecoveryManager := NewErrorRecoveryManager(logrus.New())
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -451,7 +451,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_CleanupError(t *
 
 	mockConfig := &config.Config{}
 	// Use real ErrorRecoveryManager since the function expects concrete type
-	errorRecoveryManager := NewErrorRecoveryManager(logrus.New())
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -477,7 +477,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_ContextCancellat
 
 	mockConfig := &config.Config{}
 	// Use real ErrorRecoveryManager since the function expects concrete type
-	errorRecoveryManager := NewErrorRecoveryManager(logrus.New())
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -503,8 +503,8 @@ func TestFuturesArbitrageService_Start_Success(t *testing.T) {
 	mockConfig := &config.Config{}
 
 	// Create a real resource manager for testing
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel) // Reduce noise in tests
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel) // Reduce noise in tests
 	resourceManager := NewResourceManager(logger)
 
 	service := NewFuturesArbitrageService(
@@ -535,8 +535,8 @@ func TestFuturesArbitrageService_Start_Success(t *testing.T) {
 
 func TestFuturesArbitrageService_Start_AlreadyRunning(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	resourceManager := NewResourceManager(logger)
 
 	service := NewFuturesArbitrageService(
@@ -565,8 +565,8 @@ func TestFuturesArbitrageService_Start_AlreadyRunning(t *testing.T) {
 
 func TestFuturesArbitrageService_Start_ContextManagement(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	resourceManager := NewResourceManager(logger)
 
 	service := NewFuturesArbitrageService(
@@ -604,8 +604,8 @@ func TestFuturesArbitrageService_Start_ContextManagement(t *testing.T) {
 
 func TestFuturesArbitrageService_Start_MultipleCycles(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	resourceManager := NewResourceManager(logger)
 
 	service := NewFuturesArbitrageService(
@@ -633,8 +633,8 @@ func TestFuturesArbitrageService_Start_MultipleCycles(t *testing.T) {
 
 func TestFuturesArbitrageService_runOpportunityCalculator_ContextCancellation(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	resourceManager := NewResourceManager(logger)
 	errorRecoveryManager := NewErrorRecoveryManager(logger)
 
@@ -666,8 +666,8 @@ func TestFuturesArbitrageService_runOpportunityCalculator_ContextCancellation(t 
 
 func TestFuturesArbitrageService_runOpportunityCalculator_ResourceManagement(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	resourceManager := NewResourceManager(logger)
 	errorRecoveryManager := NewErrorRecoveryManager(logger)
 

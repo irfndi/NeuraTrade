@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -33,7 +33,7 @@ func (m *TestMockSignalQualityScorer) GetDefaultQualityThresholds() *QualityThre
 
 // TestSignalAggregator_Interface tests the interface design
 func TestSignalAggregator_Interface(t *testing.T) {
-	logger := logrus.New()
+	logger := zaplogrus.New()
 
 	// Test that we can create a SignalAggregator with a mock quality scorer
 	sa := NewSignalAggregator(nil, nil, logger)
@@ -107,7 +107,7 @@ func TestSignalAggregator_Interface(t *testing.T) {
 
 // TestSignalAggregator_QualityAssessment tests quality assessment functionality
 func TestSignalAggregator_QualityAssessment(t *testing.T) {
-	logger := logrus.New()
+	logger := zaplogrus.New()
 
 	sa := NewSignalAggregator(nil, nil, logger)
 	mockScorer := &TestMockSignalQualityScorer{}

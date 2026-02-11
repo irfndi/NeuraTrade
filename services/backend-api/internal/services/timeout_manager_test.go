@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 )
 
 // TestTimeoutManager_NewTimeoutManager tests timeout manager creation
 func TestTimeoutManager_NewTimeoutManager(t *testing.T) {
-	logger := logrus.New()
+	logger := zaplogrus.New()
 
 	// Test with config
 	config := DefaultTimeoutConfig()
@@ -43,7 +43,7 @@ func TestTimeoutManager_DefaultTimeoutConfig(t *testing.T) {
 
 // TestTimeoutManager_CreateOperationContext tests operation context creation
 func TestTimeoutManager_CreateOperationContext(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	opCtx := tm.CreateOperationContext("test", "op1")
 
@@ -56,7 +56,7 @@ func TestTimeoutManager_CreateOperationContext(t *testing.T) {
 
 // TestTimeoutManager_CreateOperationContextWithParent tests operation context creation with parent
 func TestTimeoutManager_CreateOperationContextWithParent(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	parentCtx, parentCancel := context.WithCancel(context.Background())
 	defer parentCancel()
@@ -80,7 +80,7 @@ func TestTimeoutManager_CreateOperationContextWithParent(t *testing.T) {
 
 // TestTimeoutManager_CreateOperationContextWithCustomTimeout tests custom timeout creation
 func TestTimeoutManager_CreateOperationContextWithCustomTimeout(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	opCtx := tm.CreateOperationContextWithCustomTimeout("op1", 5*time.Second)
 
@@ -93,7 +93,7 @@ func TestTimeoutManager_CreateOperationContextWithCustomTimeout(t *testing.T) {
 
 // TestTimeoutManager_CompleteOperation tests operation completion
 func TestTimeoutManager_CompleteOperation(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	opCtx := tm.CreateOperationContext("test", "op1")
 
@@ -111,7 +111,7 @@ func TestTimeoutManager_CompleteOperation(t *testing.T) {
 
 // TestTimeoutManager_CancelOperation tests operation cancellation
 func TestTimeoutManager_CancelOperation(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	opCtx := tm.CreateOperationContext("test", "op1")
 
@@ -129,7 +129,7 @@ func TestTimeoutManager_CancelOperation(t *testing.T) {
 
 // TestTimeoutManager_CancelAllOperations tests cancelling all operations
 func TestTimeoutManager_CancelAllOperations(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	// Create multiple operations
 	opCtx1 := tm.CreateOperationContext("test", "op1")
@@ -156,7 +156,7 @@ func TestTimeoutManager_CancelAllOperations(t *testing.T) {
 
 // TestTimeoutManager_GetActiveOperationCount tests active operation counting
 func TestTimeoutManager_GetActiveOperationCount(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	// Initially no active operations
 	count := tm.GetActiveOperationCount()
@@ -173,7 +173,7 @@ func TestTimeoutManager_GetActiveOperationCount(t *testing.T) {
 
 // TestTimeoutManager_GetActiveOperations tests getting active operations
 func TestTimeoutManager_GetActiveOperations(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	// Create an operation
 	opCtx := tm.CreateOperationContext("test", "op1")
@@ -186,7 +186,7 @@ func TestTimeoutManager_GetActiveOperations(t *testing.T) {
 
 // TestTimeoutManager_ExecuteWithTimeout tests timeout execution
 func TestTimeoutManager_ExecuteWithTimeout(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	result, err := tm.ExecuteWithTimeout("test", "op1", func(ctx context.Context) (interface{}, error) {
 		return "success", nil
@@ -198,8 +198,8 @@ func TestTimeoutManager_ExecuteWithTimeout(t *testing.T) {
 
 // TestTimeoutManager_ExecuteWithTimeout_Success tests successful operation execution
 func TestTimeoutManager_ExecuteWithTimeout_Success(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	tm := NewTimeoutManager(nil, logger)
 
 	result, err := tm.ExecuteWithTimeout("api_call", "op1", func(ctx context.Context) (interface{}, error) {
@@ -215,8 +215,8 @@ func TestTimeoutManager_ExecuteWithTimeout_Success(t *testing.T) {
 
 // TestTimeoutManager_ExecuteWithTimeout_Timeout tests operation timeout
 func TestTimeoutManager_ExecuteWithTimeout_Timeout(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 
 	// Create config with short timeout for testing
 	config := &TimeoutConfig{
@@ -244,8 +244,8 @@ func TestTimeoutManager_ExecuteWithTimeout_Timeout(t *testing.T) {
 
 // TestTimeoutManager_ExecuteWithTimeout_OperationError tests operation returning error
 func TestTimeoutManager_ExecuteWithTimeout_OperationError(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	tm := NewTimeoutManager(nil, logger)
 
 	expectedErr := assert.AnError
@@ -263,8 +263,8 @@ func TestTimeoutManager_ExecuteWithTimeout_OperationError(t *testing.T) {
 
 // TestTimeoutManager_ExecuteWithTimeout_ContextCancellation tests context cancellation
 func TestTimeoutManager_ExecuteWithTimeout_ContextCancellation(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	tm := NewTimeoutManager(nil, logger)
 
 	result, err := tm.ExecuteWithTimeout("api_call", "op1", func(ctx context.Context) (interface{}, error) {
@@ -294,8 +294,8 @@ func TestTimeoutManager_ExecuteWithTimeout_ContextCancellation(t *testing.T) {
 
 // TestTimeoutManager_ExecuteWithTimeout_DifferentOperationTypes tests different operation types
 func TestTimeoutManager_ExecuteWithTimeout_DifferentOperationTypes(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	tm := NewTimeoutManager(nil, logger)
 
 	operationTypes := []string{
@@ -328,9 +328,9 @@ func TestTimeoutManager_ExecuteWithTimeout_DifferentOperationTypes(t *testing.T)
 
 // TestTimeoutManager_ExecuteWithTimeout_ConcurrentOperations tests concurrent execution
 func TestTimeoutManager_ExecuteWithTimeout_ConcurrentOperations(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
-	tm := NewTimeoutManager(nil, logrus.New())
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	var wg sync.WaitGroup
 	results := make([]string, 5)
@@ -367,7 +367,7 @@ func TestTimeoutManager_ExecuteWithTimeout_ConcurrentOperations(t *testing.T) {
 
 // TestTimeoutManager_ExecuteWithTimeoutAndFallback tests timeout execution with fallback
 func TestTimeoutManager_ExecuteWithTimeoutAndFallback(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	// Test successful execution
 	result, err := tm.ExecuteWithTimeoutAndFallback("test", "op1", func(ctx context.Context) (interface{}, error) {
@@ -382,7 +382,7 @@ func TestTimeoutManager_ExecuteWithTimeoutAndFallback(t *testing.T) {
 
 // TestTimeoutManager_MonitorOperationHealth tests operation health monitoring
 func TestTimeoutManager_MonitorOperationHealth(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	// Monitor operation health (this function starts a goroutine, so we just test it doesn't panic)
 	go tm.MonitorOperationHealth()
@@ -391,7 +391,7 @@ func TestTimeoutManager_MonitorOperationHealth(t *testing.T) {
 
 // TestTimeoutManager_UpdateTimeoutConfig tests timeout configuration updates
 func TestTimeoutManager_UpdateTimeoutConfig(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	newConfig := &TimeoutConfig{
 		APICall: 20 * time.Second,
@@ -406,7 +406,7 @@ func TestTimeoutManager_UpdateTimeoutConfig(t *testing.T) {
 
 // TestTimeoutManager_IsOperationActive tests operation active status
 func TestTimeoutManager_IsOperationActive(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	// Test with non-existent operation
 	isActive := tm.IsOperationActive("nonexistent")
@@ -423,7 +423,7 @@ func TestTimeoutManager_IsOperationActive(t *testing.T) {
 
 // TestTimeoutManager_GetOperationStats tests operation statistics
 func TestTimeoutManager_GetOperationStats(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	// Create an operation
 	opCtx := tm.CreateOperationContext("test", "op1")
@@ -438,7 +438,7 @@ func TestTimeoutManager_GetOperationStats(t *testing.T) {
 
 // TestTimeoutManager_Shutdown tests graceful shutdown
 func TestTimeoutManager_Shutdown(t *testing.T) {
-	tm := NewTimeoutManager(nil, logrus.New())
+	tm := NewTimeoutManager(nil, zaplogrus.New())
 
 	// Create an operation
 	opCtx := tm.CreateOperationContext("test", "op1")

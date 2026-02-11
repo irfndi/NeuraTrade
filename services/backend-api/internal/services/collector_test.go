@@ -18,7 +18,7 @@ import (
 	"github.com/irfandi/celebrum-ai-go/test/testmocks"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -35,8 +35,8 @@ func TestMain(m *testing.M) {
 	}
 
 	// Initialize a basic logger to prevent nil pointer dereference in tests
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 
 	// Initialize telemetry with disabled export to prevent nil pointer dereference
 	// This is needed because ExchangeCapabilityCache tries to log via telemetry.Logger()
@@ -752,8 +752,8 @@ func TestCollectorService_CollectTickerDataDirect_CCXErrorWithBlacklist(t *testi
 // Test collectFundingRates function (wrapper for collectFundingRatesBulk)
 func TestCollectorService_CollectFundingRates(t *testing.T) {
 	// Initialize a basic logger for testing to prevent nil pointer dereference
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel) // Reduce log noise in tests
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel) // Reduce log noise in tests
 
 	mockCCXT := &testmocks.MockCCXTService{}
 	config := &config.Config{}
