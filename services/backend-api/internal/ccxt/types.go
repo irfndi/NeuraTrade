@@ -8,9 +8,9 @@ import (
 
 	"github.com/irfandi/celebrum-ai-go/internal/cache"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/shopspring/decimal"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
 
 // Service provides high-level CCXT operations.

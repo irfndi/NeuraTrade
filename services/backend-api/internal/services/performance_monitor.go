@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/redis/go-redis/v9"
 )
 
 // PerformanceMonitor tracks system and application performance metrics.

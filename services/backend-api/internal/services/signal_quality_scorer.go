@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shopspring/decimal"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/shopspring/decimal"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 )

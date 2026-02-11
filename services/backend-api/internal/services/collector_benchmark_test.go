@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/irfandi/celebrum-ai-go/internal/testutil"

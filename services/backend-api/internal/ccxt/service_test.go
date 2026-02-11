@@ -7,8 +7,8 @@ import (
 
 	"github.com/irfandi/celebrum-ai-go/internal/cache"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -20,11 +20,11 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/irfandi/celebrum-ai-go/internal/middleware"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/irfandi/celebrum-ai-go/internal/services"
 	"github.com/redis/go-redis/v9"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
 
 // main serves as the entry point for the application.
