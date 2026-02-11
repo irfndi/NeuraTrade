@@ -2,6 +2,8 @@ import * as grpc from "@grpc/grpc-js";
 import {
   TelegramServiceService,
   TelegramServiceServer,
+  StreamEventsRequest,
+  TelegramEvent,
   SendMessageRequest,
   SendMessageResponse,
   HealthCheckRequest,
@@ -109,11 +111,20 @@ export class TelegramGrpcServer {
     call: grpc.ServerUnaryCall<HealthCheckRequest, HealthCheckResponse>,
     callback: grpc.sendUnaryData<HealthCheckResponse>,
   ): void => {
+    void call;
     callback(null, {
       status: "serving",
       version: "1.0.0",
       service: "telegram-service",
     });
+  };
+
+  streamEvents = (
+    call: grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
+  ): void => {
+    const { chatId } = call.request;
+    logger.info("StreamEvents subscribed", { chatId });
+    call.end();
   };
 
   sendActionAlert = (

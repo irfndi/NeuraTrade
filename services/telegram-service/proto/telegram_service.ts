@@ -11,7 +11,9 @@ import {
   type ChannelCredentials,
   Client,
   type ClientOptions,
+  type ClientReadableStream,
   type ClientUnaryCall,
+  type handleServerStreamingCall,
   type handleUnaryCall,
   makeGenericClientConstructor,
   type Metadata,
@@ -21,7 +23,6 @@ import {
 
 export const protobufPackage = "telegram";
 
-/** Existing messages */
 export interface SendMessageRequest {
   chatId: string;
   text: string;
@@ -43,10 +44,60 @@ export interface HealthCheckResponse {
   service: string;
 }
 
-/** Action Alert (Task 3.5.1) - for trade notifications */
+export interface StreamEventsRequest {
+  chatId: string;
+}
+
+export interface ActionAlertPayload {
+  action: string;
+  asset: string;
+  price: string;
+  size: string;
+  strategy: string;
+  reasoning: string;
+  riskCheckPassed: boolean;
+  questId: string;
+}
+
+export interface QuestProgressPayload {
+  questId: string;
+  questName: string;
+  current: number;
+  target: number;
+  percent: number;
+  timeRemaining: string;
+}
+
+export interface MilestonePayload {
+  amount: string;
+  phase: string;
+  nextTarget: string;
+}
+
+export interface RiskEventPayload {
+  eventType: string;
+  severity: string;
+  message: string;
+  details: { [key: string]: string };
+}
+
+export interface RiskEventPayload_DetailsEntry {
+  key: string;
+  value: string;
+}
+
+export interface TelegramEvent {
+  type: string;
+  chatId: string;
+  timestamp: number;
+  action?: ActionAlertPayload | undefined;
+  quest?: QuestProgressPayload | undefined;
+  milestone?: MilestonePayload | undefined;
+  risk?: RiskEventPayload | undefined;
+}
+
 export interface SendActionAlertRequest {
   chatId: string;
-  /** "BUY", "SELL", "LIQUIDATE" */
   action: string;
   asset: string;
   price: string;
@@ -63,7 +114,6 @@ export interface SendActionAlertResponse {
   error: string;
 }
 
-/** Quest Progress (Task 3.5.2) - for quest updates */
 export interface SendQuestProgressRequest {
   chatId: string;
   questId: string;
@@ -80,7 +130,6 @@ export interface SendQuestProgressResponse {
   error: string;
 }
 
-/** Milestone Alert (Task 3.5.3) - for fund milestones */
 export interface SendMilestoneAlertRequest {
   chatId: string;
   amount: string;
@@ -94,12 +143,9 @@ export interface SendMilestoneAlertResponse {
   error: string;
 }
 
-/** Risk Event (Task 3.5.4) - for risk notifications */
 export interface SendRiskEventRequest {
   chatId: string;
-  /** "kill_switch", "liquidation", "margin_call" */
   eventType: string;
-  /** "warning", "critical" */
   severity: string;
   message: string;
   details: { [key: string]: string };
@@ -443,6 +489,898 @@ export const HealthCheckResponse: MessageFns<HealthCheckResponse> = {
     message.status = object.status ?? "";
     message.version = object.version ?? "";
     message.service = object.service ?? "";
+    return message;
+  },
+};
+
+function createBaseStreamEventsRequest(): StreamEventsRequest {
+  return { chatId: "" };
+}
+
+export const StreamEventsRequest: MessageFns<StreamEventsRequest> = {
+  encode(message: StreamEventsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.chatId !== "") {
+      writer.uint32(10).string(message.chatId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StreamEventsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseStreamEventsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.chatId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): StreamEventsRequest {
+    return {
+      chatId: isSet(object.chatId)
+        ? globalThis.String(object.chatId)
+        : isSet(object.chat_id)
+        ? globalThis.String(object.chat_id)
+        : "",
+    };
+  },
+
+  toJSON(message: StreamEventsRequest): unknown {
+    const obj: any = {};
+    if (message.chatId !== "") {
+      obj.chatId = message.chatId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<StreamEventsRequest>, I>>(base?: I): StreamEventsRequest {
+    return StreamEventsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<StreamEventsRequest>, I>>(object: I): StreamEventsRequest {
+    const message = createBaseStreamEventsRequest();
+    message.chatId = object.chatId ?? "";
+    return message;
+  },
+};
+
+function createBaseActionAlertPayload(): ActionAlertPayload {
+  return {
+    action: "",
+    asset: "",
+    price: "",
+    size: "",
+    strategy: "",
+    reasoning: "",
+    riskCheckPassed: false,
+    questId: "",
+  };
+}
+
+export const ActionAlertPayload: MessageFns<ActionAlertPayload> = {
+  encode(message: ActionAlertPayload, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.action !== "") {
+      writer.uint32(10).string(message.action);
+    }
+    if (message.asset !== "") {
+      writer.uint32(18).string(message.asset);
+    }
+    if (message.price !== "") {
+      writer.uint32(26).string(message.price);
+    }
+    if (message.size !== "") {
+      writer.uint32(34).string(message.size);
+    }
+    if (message.strategy !== "") {
+      writer.uint32(42).string(message.strategy);
+    }
+    if (message.reasoning !== "") {
+      writer.uint32(50).string(message.reasoning);
+    }
+    if (message.riskCheckPassed !== false) {
+      writer.uint32(56).bool(message.riskCheckPassed);
+    }
+    if (message.questId !== "") {
+      writer.uint32(66).string(message.questId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ActionAlertPayload {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseActionAlertPayload();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.action = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.asset = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.price = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.size = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.strategy = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.reasoning = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.riskCheckPassed = reader.bool();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.questId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ActionAlertPayload {
+    return {
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+      asset: isSet(object.asset) ? globalThis.String(object.asset) : "",
+      price: isSet(object.price) ? globalThis.String(object.price) : "",
+      size: isSet(object.size) ? globalThis.String(object.size) : "",
+      strategy: isSet(object.strategy) ? globalThis.String(object.strategy) : "",
+      reasoning: isSet(object.reasoning) ? globalThis.String(object.reasoning) : "",
+      riskCheckPassed: isSet(object.riskCheckPassed)
+        ? globalThis.Boolean(object.riskCheckPassed)
+        : isSet(object.risk_check_passed)
+        ? globalThis.Boolean(object.risk_check_passed)
+        : false,
+      questId: isSet(object.questId)
+        ? globalThis.String(object.questId)
+        : isSet(object.quest_id)
+        ? globalThis.String(object.quest_id)
+        : "",
+    };
+  },
+
+  toJSON(message: ActionAlertPayload): unknown {
+    const obj: any = {};
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    if (message.asset !== "") {
+      obj.asset = message.asset;
+    }
+    if (message.price !== "") {
+      obj.price = message.price;
+    }
+    if (message.size !== "") {
+      obj.size = message.size;
+    }
+    if (message.strategy !== "") {
+      obj.strategy = message.strategy;
+    }
+    if (message.reasoning !== "") {
+      obj.reasoning = message.reasoning;
+    }
+    if (message.riskCheckPassed !== false) {
+      obj.riskCheckPassed = message.riskCheckPassed;
+    }
+    if (message.questId !== "") {
+      obj.questId = message.questId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ActionAlertPayload>, I>>(base?: I): ActionAlertPayload {
+    return ActionAlertPayload.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ActionAlertPayload>, I>>(object: I): ActionAlertPayload {
+    const message = createBaseActionAlertPayload();
+    message.action = object.action ?? "";
+    message.asset = object.asset ?? "";
+    message.price = object.price ?? "";
+    message.size = object.size ?? "";
+    message.strategy = object.strategy ?? "";
+    message.reasoning = object.reasoning ?? "";
+    message.riskCheckPassed = object.riskCheckPassed ?? false;
+    message.questId = object.questId ?? "";
+    return message;
+  },
+};
+
+function createBaseQuestProgressPayload(): QuestProgressPayload {
+  return { questId: "", questName: "", current: 0, target: 0, percent: 0, timeRemaining: "" };
+}
+
+export const QuestProgressPayload: MessageFns<QuestProgressPayload> = {
+  encode(message: QuestProgressPayload, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.questId !== "") {
+      writer.uint32(10).string(message.questId);
+    }
+    if (message.questName !== "") {
+      writer.uint32(18).string(message.questName);
+    }
+    if (message.current !== 0) {
+      writer.uint32(24).int32(message.current);
+    }
+    if (message.target !== 0) {
+      writer.uint32(32).int32(message.target);
+    }
+    if (message.percent !== 0) {
+      writer.uint32(40).int32(message.percent);
+    }
+    if (message.timeRemaining !== "") {
+      writer.uint32(50).string(message.timeRemaining);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QuestProgressPayload {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseQuestProgressPayload();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.questId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.questName = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.current = reader.int32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.target = reader.int32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.percent = reader.int32();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.timeRemaining = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): QuestProgressPayload {
+    return {
+      questId: isSet(object.questId)
+        ? globalThis.String(object.questId)
+        : isSet(object.quest_id)
+        ? globalThis.String(object.quest_id)
+        : "",
+      questName: isSet(object.questName)
+        ? globalThis.String(object.questName)
+        : isSet(object.quest_name)
+        ? globalThis.String(object.quest_name)
+        : "",
+      current: isSet(object.current) ? globalThis.Number(object.current) : 0,
+      target: isSet(object.target) ? globalThis.Number(object.target) : 0,
+      percent: isSet(object.percent) ? globalThis.Number(object.percent) : 0,
+      timeRemaining: isSet(object.timeRemaining)
+        ? globalThis.String(object.timeRemaining)
+        : isSet(object.time_remaining)
+        ? globalThis.String(object.time_remaining)
+        : "",
+    };
+  },
+
+  toJSON(message: QuestProgressPayload): unknown {
+    const obj: any = {};
+    if (message.questId !== "") {
+      obj.questId = message.questId;
+    }
+    if (message.questName !== "") {
+      obj.questName = message.questName;
+    }
+    if (message.current !== 0) {
+      obj.current = Math.round(message.current);
+    }
+    if (message.target !== 0) {
+      obj.target = Math.round(message.target);
+    }
+    if (message.percent !== 0) {
+      obj.percent = Math.round(message.percent);
+    }
+    if (message.timeRemaining !== "") {
+      obj.timeRemaining = message.timeRemaining;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<QuestProgressPayload>, I>>(base?: I): QuestProgressPayload {
+    return QuestProgressPayload.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QuestProgressPayload>, I>>(object: I): QuestProgressPayload {
+    const message = createBaseQuestProgressPayload();
+    message.questId = object.questId ?? "";
+    message.questName = object.questName ?? "";
+    message.current = object.current ?? 0;
+    message.target = object.target ?? 0;
+    message.percent = object.percent ?? 0;
+    message.timeRemaining = object.timeRemaining ?? "";
+    return message;
+  },
+};
+
+function createBaseMilestonePayload(): MilestonePayload {
+  return { amount: "", phase: "", nextTarget: "" };
+}
+
+export const MilestonePayload: MessageFns<MilestonePayload> = {
+  encode(message: MilestonePayload, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.amount !== "") {
+      writer.uint32(10).string(message.amount);
+    }
+    if (message.phase !== "") {
+      writer.uint32(18).string(message.phase);
+    }
+    if (message.nextTarget !== "") {
+      writer.uint32(26).string(message.nextTarget);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MilestonePayload {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMilestonePayload();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.amount = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.phase = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.nextTarget = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MilestonePayload {
+    return {
+      amount: isSet(object.amount) ? globalThis.String(object.amount) : "",
+      phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
+      nextTarget: isSet(object.nextTarget)
+        ? globalThis.String(object.nextTarget)
+        : isSet(object.next_target)
+        ? globalThis.String(object.next_target)
+        : "",
+    };
+  },
+
+  toJSON(message: MilestonePayload): unknown {
+    const obj: any = {};
+    if (message.amount !== "") {
+      obj.amount = message.amount;
+    }
+    if (message.phase !== "") {
+      obj.phase = message.phase;
+    }
+    if (message.nextTarget !== "") {
+      obj.nextTarget = message.nextTarget;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MilestonePayload>, I>>(base?: I): MilestonePayload {
+    return MilestonePayload.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MilestonePayload>, I>>(object: I): MilestonePayload {
+    const message = createBaseMilestonePayload();
+    message.amount = object.amount ?? "";
+    message.phase = object.phase ?? "";
+    message.nextTarget = object.nextTarget ?? "";
+    return message;
+  },
+};
+
+function createBaseRiskEventPayload(): RiskEventPayload {
+  return { eventType: "", severity: "", message: "", details: {} };
+}
+
+export const RiskEventPayload: MessageFns<RiskEventPayload> = {
+  encode(message: RiskEventPayload, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.eventType !== "") {
+      writer.uint32(10).string(message.eventType);
+    }
+    if (message.severity !== "") {
+      writer.uint32(18).string(message.severity);
+    }
+    if (message.message !== "") {
+      writer.uint32(26).string(message.message);
+    }
+    globalThis.Object.entries(message.details).forEach(([key, value]: [string, string]) => {
+      RiskEventPayload_DetailsEntry.encode({ key: key as any, value }, writer.uint32(34).fork()).join();
+    });
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RiskEventPayload {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRiskEventPayload();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.eventType = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.severity = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.message = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          const entry4 = RiskEventPayload_DetailsEntry.decode(reader, reader.uint32());
+          if (entry4.value !== undefined) {
+            message.details[entry4.key] = entry4.value;
+          }
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RiskEventPayload {
+    return {
+      eventType: isSet(object.eventType)
+        ? globalThis.String(object.eventType)
+        : isSet(object.event_type)
+        ? globalThis.String(object.event_type)
+        : "",
+      severity: isSet(object.severity) ? globalThis.String(object.severity) : "",
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      details: isObject(object.details)
+        ? (globalThis.Object.entries(object.details) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            acc[key] = globalThis.String(value);
+            return acc;
+          },
+          {},
+        )
+        : {},
+    };
+  },
+
+  toJSON(message: RiskEventPayload): unknown {
+    const obj: any = {};
+    if (message.eventType !== "") {
+      obj.eventType = message.eventType;
+    }
+    if (message.severity !== "") {
+      obj.severity = message.severity;
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.details) {
+      const entries = globalThis.Object.entries(message.details) as [string, string][];
+      if (entries.length > 0) {
+        obj.details = {};
+        entries.forEach(([k, v]) => {
+          obj.details[k] = v;
+        });
+      }
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RiskEventPayload>, I>>(base?: I): RiskEventPayload {
+    return RiskEventPayload.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RiskEventPayload>, I>>(object: I): RiskEventPayload {
+    const message = createBaseRiskEventPayload();
+    message.eventType = object.eventType ?? "";
+    message.severity = object.severity ?? "";
+    message.message = object.message ?? "";
+    message.details = (globalThis.Object.entries(object.details ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseRiskEventPayload_DetailsEntry(): RiskEventPayload_DetailsEntry {
+  return { key: "", value: "" };
+}
+
+export const RiskEventPayload_DetailsEntry: MessageFns<RiskEventPayload_DetailsEntry> = {
+  encode(message: RiskEventPayload_DetailsEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RiskEventPayload_DetailsEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRiskEventPayload_DetailsEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RiskEventPayload_DetailsEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: RiskEventPayload_DetailsEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RiskEventPayload_DetailsEntry>, I>>(base?: I): RiskEventPayload_DetailsEntry {
+    return RiskEventPayload_DetailsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RiskEventPayload_DetailsEntry>, I>>(
+    object: I,
+  ): RiskEventPayload_DetailsEntry {
+    const message = createBaseRiskEventPayload_DetailsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseTelegramEvent(): TelegramEvent {
+  return {
+    type: "",
+    chatId: "",
+    timestamp: 0,
+    action: undefined,
+    quest: undefined,
+    milestone: undefined,
+    risk: undefined,
+  };
+}
+
+export const TelegramEvent: MessageFns<TelegramEvent> = {
+  encode(message: TelegramEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.type !== "") {
+      writer.uint32(10).string(message.type);
+    }
+    if (message.chatId !== "") {
+      writer.uint32(18).string(message.chatId);
+    }
+    if (message.timestamp !== 0) {
+      writer.uint32(24).int64(message.timestamp);
+    }
+    if (message.action !== undefined) {
+      ActionAlertPayload.encode(message.action, writer.uint32(34).fork()).join();
+    }
+    if (message.quest !== undefined) {
+      QuestProgressPayload.encode(message.quest, writer.uint32(42).fork()).join();
+    }
+    if (message.milestone !== undefined) {
+      MilestonePayload.encode(message.milestone, writer.uint32(50).fork()).join();
+    }
+    if (message.risk !== undefined) {
+      RiskEventPayload.encode(message.risk, writer.uint32(58).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TelegramEvent {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseTelegramEvent();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.type = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.chatId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.timestamp = longToNumber(reader.int64());
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.action = ActionAlertPayload.decode(reader, reader.uint32());
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.quest = QuestProgressPayload.decode(reader, reader.uint32());
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.milestone = MilestonePayload.decode(reader, reader.uint32());
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.risk = RiskEventPayload.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): TelegramEvent {
+    return {
+      type: isSet(object.type) ? globalThis.String(object.type) : "",
+      chatId: isSet(object.chatId)
+        ? globalThis.String(object.chatId)
+        : isSet(object.chat_id)
+        ? globalThis.String(object.chat_id)
+        : "",
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      action: isSet(object.action) ? ActionAlertPayload.fromJSON(object.action) : undefined,
+      quest: isSet(object.quest) ? QuestProgressPayload.fromJSON(object.quest) : undefined,
+      milestone: isSet(object.milestone) ? MilestonePayload.fromJSON(object.milestone) : undefined,
+      risk: isSet(object.risk) ? RiskEventPayload.fromJSON(object.risk) : undefined,
+    };
+  },
+
+  toJSON(message: TelegramEvent): unknown {
+    const obj: any = {};
+    if (message.type !== "") {
+      obj.type = message.type;
+    }
+    if (message.chatId !== "") {
+      obj.chatId = message.chatId;
+    }
+    if (message.timestamp !== 0) {
+      obj.timestamp = Math.round(message.timestamp);
+    }
+    if (message.action !== undefined) {
+      obj.action = ActionAlertPayload.toJSON(message.action);
+    }
+    if (message.quest !== undefined) {
+      obj.quest = QuestProgressPayload.toJSON(message.quest);
+    }
+    if (message.milestone !== undefined) {
+      obj.milestone = MilestonePayload.toJSON(message.milestone);
+    }
+    if (message.risk !== undefined) {
+      obj.risk = RiskEventPayload.toJSON(message.risk);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TelegramEvent>, I>>(base?: I): TelegramEvent {
+    return TelegramEvent.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TelegramEvent>, I>>(object: I): TelegramEvent {
+    const message = createBaseTelegramEvent();
+    message.type = object.type ?? "";
+    message.chatId = object.chatId ?? "";
+    message.timestamp = object.timestamp ?? 0;
+    message.action = (object.action !== undefined && object.action !== null)
+      ? ActionAlertPayload.fromPartial(object.action)
+      : undefined;
+    message.quest = (object.quest !== undefined && object.quest !== null)
+      ? QuestProgressPayload.fromPartial(object.quest)
+      : undefined;
+    message.milestone = (object.milestone !== undefined && object.milestone !== null)
+      ? MilestonePayload.fromPartial(object.milestone)
+      : undefined;
+    message.risk = (object.risk !== undefined && object.risk !== null)
+      ? RiskEventPayload.fromPartial(object.risk)
+      : undefined;
     return message;
   },
 };
@@ -1568,7 +2506,6 @@ export const SendRiskEventResponse: MessageFns<SendRiskEventResponse> = {
 
 export type TelegramServiceService = typeof TelegramServiceService;
 export const TelegramServiceService = {
-  /** Existing RPCs */
   sendMessage: {
     path: "/telegram.TelegramService/SendMessage",
     requestStream: false,
@@ -1587,7 +2524,15 @@ export const TelegramServiceService = {
     responseSerialize: (value: HealthCheckResponse): Buffer => Buffer.from(HealthCheckResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): HealthCheckResponse => HealthCheckResponse.decode(value),
   },
-  /** BD EPIC 3: New RPCs for live streaming and notifications */
+  streamEvents: {
+    path: "/telegram.TelegramService/StreamEvents",
+    requestStream: false,
+    responseStream: true,
+    requestSerialize: (value: StreamEventsRequest): Buffer => Buffer.from(StreamEventsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): StreamEventsRequest => StreamEventsRequest.decode(value),
+    responseSerialize: (value: TelegramEvent): Buffer => Buffer.from(TelegramEvent.encode(value).finish()),
+    responseDeserialize: (value: Buffer): TelegramEvent => TelegramEvent.decode(value),
+  },
   sendActionAlert: {
     path: "/telegram.TelegramService/SendActionAlert",
     requestStream: false,
@@ -1634,10 +2579,9 @@ export const TelegramServiceService = {
 } as const;
 
 export interface TelegramServiceServer extends UntypedServiceImplementation {
-  /** Existing RPCs */
   sendMessage: handleUnaryCall<SendMessageRequest, SendMessageResponse>;
   healthCheck: handleUnaryCall<HealthCheckRequest, HealthCheckResponse>;
-  /** BD EPIC 3: New RPCs for live streaming and notifications */
+  streamEvents: handleServerStreamingCall<StreamEventsRequest, TelegramEvent>;
   sendActionAlert: handleUnaryCall<SendActionAlertRequest, SendActionAlertResponse>;
   sendQuestProgress: handleUnaryCall<SendQuestProgressRequest, SendQuestProgressResponse>;
   sendMilestoneAlert: handleUnaryCall<SendMilestoneAlertRequest, SendMilestoneAlertResponse>;
@@ -1645,7 +2589,6 @@ export interface TelegramServiceServer extends UntypedServiceImplementation {
 }
 
 export interface TelegramServiceClient extends Client {
-  /** Existing RPCs */
   sendMessage(
     request: SendMessageRequest,
     callback: (error: ServiceError | null, response: SendMessageResponse) => void,
@@ -1676,7 +2619,12 @@ export interface TelegramServiceClient extends Client {
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: HealthCheckResponse) => void,
   ): ClientUnaryCall;
-  /** BD EPIC 3: New RPCs for live streaming and notifications */
+  streamEvents(request: StreamEventsRequest, options?: Partial<CallOptions>): ClientReadableStream<TelegramEvent>;
+  streamEvents(
+    request: StreamEventsRequest,
+    metadata?: Metadata,
+    options?: Partial<CallOptions>,
+  ): ClientReadableStream<TelegramEvent>;
   sendActionAlert(
     request: SendActionAlertRequest,
     callback: (error: ServiceError | null, response: SendActionAlertResponse) => void,
@@ -1759,6 +2707,17 @@ export type DeepPartial<T> = T extends Builtin ? T
 type KeysOfUnion<T> = T extends T ? keyof T : never;
 export type Exact<P, I extends P> = P extends Builtin ? P
   : P & { [K in keyof P]: Exact<P[K], I[K]> } & { [K in Exclude<keyof I, KeysOfUnion<P>>]: never };
+
+function longToNumber(int64: { toString(): string }): number {
+  const num = globalThis.Number(int64.toString());
+  if (num > globalThis.Number.MAX_SAFE_INTEGER) {
+    throw new globalThis.Error("Value is larger than Number.MAX_SAFE_INTEGER");
+  }
+  if (num < globalThis.Number.MIN_SAFE_INTEGER) {
+    throw new globalThis.Error("Value is smaller than Number.MIN_SAFE_INTEGER");
+  }
+  return num;
+}
 
 function isObject(value: any): boolean {
   return typeof value === "object" && value !== null;

@@ -4,18 +4,16 @@ package telegram;
 option go_package = "github.com/irfandi/neuratrade/services/backend-api/pkg/pb/telegram";
 
 service TelegramService {
-  // Existing RPCs
   rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
-  
-  // BD EPIC 3: New RPCs for live streaming and notifications
+
+  rpc StreamEvents(StreamEventsRequest) returns (stream TelegramEvent);
   rpc SendActionAlert(SendActionAlertRequest) returns (SendActionAlertResponse);
   rpc SendQuestProgress(SendQuestProgressRequest) returns (SendQuestProgressResponse);
   rpc SendMilestoneAlert(SendMilestoneAlertRequest) returns (SendMilestoneAlertResponse);
   rpc SendRiskEvent(SendRiskEventRequest) returns (SendRiskEventResponse);
 }
 
-// Existing messages
 message SendMessageRequest {
   string chat_id = 1;
   string text = 2;
@@ -36,10 +34,58 @@ message HealthCheckResponse {
   string service = 3;
 }
 
-// Action Alert (Task 3.5.1) - for trade notifications
+message StreamEventsRequest {
+  string chat_id = 1;
+}
+
+message ActionAlertPayload {
+  string action = 1;
+  string asset = 2;
+  string price = 3;
+  string size = 4;
+  string strategy = 5;
+  string reasoning = 6;
+  bool risk_check_passed = 7;
+  string quest_id = 8;
+}
+
+message QuestProgressPayload {
+  string quest_id = 1;
+  string quest_name = 2;
+  int32 current = 3;
+  int32 target = 4;
+  int32 percent = 5;
+  string time_remaining = 6;
+}
+
+message MilestonePayload {
+  string amount = 1;
+  string phase = 2;
+  string next_target = 3;
+}
+
+message RiskEventPayload {
+  string event_type = 1;
+  string severity = 2;
+  string message = 3;
+  map<string, string> details = 4;
+}
+
+message TelegramEvent {
+  string type = 1;
+  string chat_id = 2;
+  int64 timestamp = 3;
+  oneof payload {
+    ActionAlertPayload action = 4;
+    QuestProgressPayload quest = 5;
+    MilestonePayload milestone = 6;
+    RiskEventPayload risk = 7;
+  }
+}
+
 message SendActionAlertRequest {
   string chat_id = 1;
-  string action = 2;        // "BUY", "SELL", "LIQUIDATE"
+  string action = 2;
   string asset = 3;
   string price = 4;
   string size = 5;
@@ -55,7 +101,6 @@ message SendActionAlertResponse {
   string error = 3;
 }
 
-// Quest Progress (Task 3.5.2) - for quest updates
 message SendQuestProgressRequest {
   string chat_id = 1;
   string quest_id = 2;
@@ -72,7 +117,6 @@ message SendQuestProgressResponse {
   string error = 3;
 }
 
-// Milestone Alert (Task 3.5.3) - for fund milestones
 message SendMilestoneAlertRequest {
   string chat_id = 1;
   string amount = 2;
@@ -86,11 +130,10 @@ message SendMilestoneAlertResponse {
   string error = 3;
 }
 
-// Risk Event (Task 3.5.4) - for risk notifications
 message SendRiskEventRequest {
   string chat_id = 1;
-  string event_type = 2;    // "kill_switch", "liquidation", "margin_call"
-  string severity = 3;      // "warning", "critical"
+  string event_type = 2;
+  string severity = 3;
   string message = 4;
   map<string, string> details = 5;
 }
