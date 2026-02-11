@@ -10,7 +10,7 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
 
 // Service provides high-level CCXT operations.
@@ -20,7 +20,7 @@ type Service struct {
 	blacklistCache     cache.BlacklistCache
 	mu                 sync.RWMutex
 	lastUpdate         time.Time
-	logger             *logrus.Logger
+	logger             *zaplogrus.Logger
 }
 
 // NewService creates a new CCXT service instance.
@@ -34,7 +34,7 @@ type Service struct {
 // Returns:
 //
 //	*Service: Initialized service.
-func NewService(cfg *config.CCXTConfig, logger *logrus.Logger, blacklistCache cache.BlacklistCache) *Service {
+func NewService(cfg *config.CCXTConfig, logger *zaplogrus.Logger, blacklistCache cache.BlacklistCache) *Service {
 	s := &Service{
 		client:             NewClient(cfg),
 		supportedExchanges: make(map[string]ExchangeInfo),
