@@ -5,10 +5,18 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/redis/go-redis/v9"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
+
+var releaseLockScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+return 0
+`)
 
 // ErrorRecoveryManager interface for dependency injection.
 // Allows injecting a mechanism to retry failed operations.
@@ -20,7 +28,7 @@ type ErrorRecoveryManager interface {
 // RedisClient wraps a Redis client with enhanced logging and error tracking.
 type RedisClient struct {
 	Client *redis.Client
-	logger *logrus.Logger
+	logger *zaplogrus.Logger
 }
 
 // NewRedisConnection creates a new Redis connection.
@@ -49,7 +57,7 @@ func NewRedisConnection(cfg config.RedisConfig) (*RedisClient, error) {
 //	*RedisClient: The initialized client.
 //	error: Error if connection fails.
 func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager ErrorRecoveryManager) (*RedisClient, error) {
-	logger := logrus.New()
+	logger := zaplogrus.New()
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
@@ -95,13 +103,13 @@ func (r *RedisClient) Close() {
 			if r.logger != nil {
 				r.logger.Errorf("Error closing Redis client: %v", err)
 			} else {
-				logrus.Errorf("Error closing Redis client: %v", err)
+				zaplogrus.Errorf("Error closing Redis client: %v", err)
 			}
 		}
 		if r.logger != nil {
 			r.logger.Info("Redis connection closed")
 		} else {
-			logrus.Info("Redis connection closed")
+			zaplogrus.Info("Redis connection closed")
 		}
 	}
 }
@@ -192,4 +200,74 @@ func (r *RedisClient) Exists(ctx context.Context, keys ...string) (int64, error)
 		return 0, fmt.Errorf("redis client is nil")
 	}
 	return r.Client.Exists(ctx, keys...).Result()
+}
+
+func (r *RedisClient) Publish(ctx context.Context, channel string, value interface{}) error {
+	if r.Client == nil {
+		return fmt.Errorf("redis client is nil")
+	}
+	if channel == "" {
+		return fmt.Errorf("channel cannot be empty")
+	}
+	return r.Client.Publish(ctx, channel, value).Err()
+}
+
+func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) (*redis.PubSub, error) {
+	if r.Client == nil {
+		return nil, fmt.Errorf("redis client is nil")
+	}
+	if len(channels) == 0 {
+		return nil, fmt.Errorf("at least one channel is required")
+	}
+
+	pubsub := r.Client.Subscribe(ctx, channels...)
+	if err := pubsub.Ping(ctx); err != nil {
+		_ = pubsub.Close()
+		return nil, err
+	}
+
+	return pubsub, nil
+}
+
+func (r *RedisClient) AcquireLock(ctx context.Context, key string, expiration time.Duration) (string, bool, error) {
+	if r.Client == nil {
+		return "", false, fmt.Errorf("redis client is nil")
+	}
+	if key == "" {
+		return "", false, fmt.Errorf("lock key cannot be empty")
+	}
+	if expiration <= 0 {
+		return "", false, fmt.Errorf("lock expiration must be positive")
+	}
+
+	token := uuid.NewString()
+	acquired, err := r.Client.SetNX(ctx, key, token, expiration).Result()
+	if err != nil {
+		return "", false, err
+	}
+
+	if !acquired {
+		return "", false, nil
+	}
+
+	return token, true, nil
+}
+
+func (r *RedisClient) ReleaseLock(ctx context.Context, key, token string) (bool, error) {
+	if r.Client == nil {
+		return false, fmt.Errorf("redis client is nil")
+	}
+	if key == "" {
+		return false, fmt.Errorf("lock key cannot be empty")
+	}
+	if token == "" {
+		return false, fmt.Errorf("lock token cannot be empty")
+	}
+
+	deleted, err := releaseLockScript.Run(ctx, r.Client, []string{key}, token).Int64()
+	if err != nil {
+		return false, err
+	}
+
+	return deleted == 1, nil
 }

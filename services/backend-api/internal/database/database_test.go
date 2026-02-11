@@ -11,7 +11,7 @@ import (
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/jackc/pgx/v5"
-	"github.com/sirupsen/logrus"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -338,7 +338,7 @@ func TestErrorHandling(t *testing.T) {
 
 // Test Redis Close method with logger
 func TestRedisClient_Close_WithLogger(t *testing.T) {
-	logger := logrus.New()
+	logger := zaplogrus.New()
 	client := &RedisClient{
 		Client: nil,
 		logger: logger,
@@ -409,7 +409,7 @@ func TestRedisClient_CacheOperations(t *testing.T) {
 	// Create a mock Redis client that succeeds
 	client := &RedisClient{
 		Client: nil, // Will remain nil for error testing
-		logger: logrus.New(),
+		logger: zaplogrus.New(),
 	}
 	ctx := context.Background()
 
@@ -446,7 +446,7 @@ func TestRedisClient_Close_Error(t *testing.T) {
 
 // Test Redis Close with logger only
 func TestRedisClient_Close_LoggerOnly(t *testing.T) {
-	logger := logrus.New()
+	logger := zaplogrus.New()
 	client := &RedisClient{
 		Client: nil,
 		logger: logger,
@@ -915,7 +915,7 @@ func TestRedisClient_Close_WithError(t *testing.T) {
 	// Since we can't create a real client without Redis, we'll test with nil
 	client := &RedisClient{
 		Client: nil,
-		logger: logrus.New(),
+		logger: zaplogrus.New(),
 	}
 
 	// Should not panic when closing nil client
@@ -936,8 +936,8 @@ func TestRedisClient_Close_LoggerScenarios(t *testing.T) {
 	})
 
 	// Test with custom logger
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 	client2 := &RedisClient{
 		Client: nil,
 		logger: logger,
@@ -1187,7 +1187,7 @@ func TestRedisClient_Close_WithRealClient(t *testing.T) {
 	// we'll test the Close method behavior with different scenarios
 	client := &RedisClient{
 		Client: nil, // Simulates a client that was never connected
-		logger: logrus.New(),
+		logger: zaplogrus.New(),
 	}
 
 	// Should not panic and should handle nil client gracefully
@@ -1271,8 +1271,8 @@ func TestPostgresDB_Close_Success(t *testing.T) {
 // Test PostgresDB Close with logging verification
 func TestPostgresDB_Close_Logging(t *testing.T) {
 	// Create a logger to capture log messages
-	logger := logrus.New()
-	logger.SetLevel(logrus.InfoLevel)
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.InfoLevel)
 
 	db := &PostgresDB{
 		Pool: nil,
@@ -1297,7 +1297,7 @@ func TestRedisClient_Close_ErrorScenarios(t *testing.T) {
 	})
 
 	// Test with nil client but with logger
-	logger := logrus.New()
+	logger := zaplogrus.New()
 	client2 := &RedisClient{
 		Client: nil,
 		logger: logger,

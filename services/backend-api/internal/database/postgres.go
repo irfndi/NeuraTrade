@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"os"
@@ -10,17 +11,17 @@ import (
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/jackc/pgx/v5"
-
-	// Package database provides PostgreSQL database connectivity and operations
-	// for the NeuraTrade application including connection pooling and health checks
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/stdlib"
+
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/sirupsen/logrus"
 )
 
 // PostgresDB wraps a PostgreSQL connection pool.
 type PostgresDB struct {
 	Pool *pgxpool.Pool
+	SQL  *sql.DB
 }
 
 const maxAllowedPoolConns int32 = 10000
@@ -71,7 +72,7 @@ func NewPostgresConnectionWithContext(ctx context.Context, cfg *config.DatabaseC
 		if err == nil {
 			break
 		}
-		logrus.Warnf("Database connection attempt %d failed: %v", attempts+1, err)
+		zaplogrus.Warnf("Database connection attempt %d failed: %v", attempts+1, err)
 		if attempts < 2 {
 			// Exponential backoff with jitter
 			backoffDuration := time.Duration(1<<uint(attempts)) * time.Second
@@ -89,9 +90,23 @@ func NewPostgresConnectionWithContext(ctx context.Context, cfg *config.DatabaseC
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	logrus.Info("Successfully connected to PostgreSQL")
+	sqlDB := stdlib.OpenDB(*poolConfig.ConnConfig)
+	if cfg.MaxOpenConns > 0 {
+		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	}
+	if cfg.MaxIdleConns > 0 {
+		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	}
 
-	return &PostgresDB{Pool: pool}, nil
+	if err := sqlDB.PingContext(ctx); err != nil {
+		pool.Close()
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("failed to ping sql compatibility connection: %w", err)
+	}
+
+	zaplogrus.Info("Successfully connected to PostgreSQL")
+
+	return &PostgresDB{Pool: pool, SQL: sqlDB}, nil
 }
 
 // isTestEnvironment detects if we're running in a test environment
@@ -127,15 +142,43 @@ func createTestDatabaseConnection(poolConfig *pgxpool.Config) (*PostgresDB, erro
 		return nil, fmt.Errorf("failed to ping test database: %w", err)
 	}
 
-	return &PostgresDB{Pool: pool}, nil
+	sqlDB := stdlib.OpenDB(*poolConfig.ConnConfig)
+	sqlDB.SetMaxOpenConns(int(poolConfig.MaxConns))
+	sqlDB.SetMaxIdleConns(int(poolConfig.MinConns))
+
+	if err := sqlDB.PingContext(ctx); err != nil {
+		pool.Close()
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("failed to ping test sql compatibility connection: %w", err)
+	}
+
+	return &PostgresDB{Pool: pool, SQL: sqlDB}, nil
 }
 
 // Close closes the database connection pool.
 func (db *PostgresDB) Close() {
+	if db.SQL != nil {
+		if err := db.SQL.Close(); err != nil {
+			zaplogrus.WithError(err).Warn("Failed to close PostgreSQL sql compatibility connection")
+		}
+	}
+
 	if db.Pool != nil {
 		db.Pool.Close()
-		logrus.Info("PostgreSQL connection closed")
+		zaplogrus.Info("PostgreSQL connection closed")
 	}
+}
+
+// BeginTx starts a transaction with context.
+func (db *PostgresDB) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	if db.SQL == nil {
+		return nil, fmt.Errorf("postgres sql connection is not initialized")
+	}
+	tx, err := db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin sql transaction: %w", err)
+	}
+	return tx, nil
 }
 
 // HealthCheck verifies the database connection.
@@ -161,10 +204,13 @@ func (db *PostgresDB) HealthCheck(ctx context.Context) error {
 //
 // Returns:
 //
-//	pgx.Rows: Result rows.
 //	error: Error if query fails.
-func (db *PostgresDB) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
-	return db.Pool.Query(ctx, sql, args...)
+func (db *PostgresDB) Query(ctx context.Context, query string, args ...interface{}) (pgx.Rows, error) {
+	if db.Pool == nil {
+		return nil, fmt.Errorf("postgres pool is not initialized")
+	}
+
+	return db.Pool.Query(ctx, query, args...)
 }
 
 // QueryRow executes a query that returns a single row.
@@ -176,10 +222,12 @@ func (db *PostgresDB) Query(ctx context.Context, sql string, args ...interface{}
 //	args: Query arguments.
 //
 // Returns:
-//
-//	pgx.Row: Result row.
-func (db *PostgresDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	return db.Pool.QueryRow(ctx, sql, args...)
+func (db *PostgresDB) QueryRow(ctx context.Context, query string, args ...interface{}) pgx.Row {
+	if db.Pool == nil {
+		return nil
+	}
+
+	return db.Pool.QueryRow(ctx, query, args...)
 }
 
 // Exec executes a query without returning rows.
@@ -192,10 +240,25 @@ func (db *PostgresDB) QueryRow(ctx context.Context, sql string, args ...interfac
 //
 // Returns:
 //
-//	pgconn.CommandTag: Command tag.
 //	error: Error if execution fails.
-func (db *PostgresDB) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
-	return db.Pool.Exec(ctx, sql, args...)
+func (db *PostgresDB) Exec(ctx context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
+	if db.Pool == nil {
+		return pgconn.CommandTag{}, fmt.Errorf("postgres pool is not initialized")
+	}
+
+	return db.Pool.Exec(ctx, query, args...)
+}
+
+func (db *PostgresDB) Begin(ctx context.Context) (pgx.Tx, error) {
+	if db.Pool == nil {
+		return nil, fmt.Errorf("postgres pool is not initialized")
+	}
+
+	return db.Pool.Begin(ctx)
+}
+
+func (db *PostgresDB) IsReady() bool {
+	return db != nil && db.Pool != nil
 }
 
 func buildPGXPoolConfig(cfg *config.DatabaseConfig) (*pgxpool.Config, error) {
@@ -292,12 +355,12 @@ func clampToSafePoolSize(value int) int32 {
 	}
 
 	if requested > int64(math.MaxInt32) {
-		logrus.Warnf("Configured pool size %d exceeds int32 limit; clamping to %d", value, maxAllowedPoolConns)
+		zaplogrus.Warnf("Configured pool size %d exceeds int32 limit; clamping to %d", value, maxAllowedPoolConns)
 		return maxAllowedPoolConns
 	}
 
 	if requested > int64(maxAllowedPoolConns) {
-		logrus.Warnf("Configured pool size %d exceeds safe limit %d; clamping", value, maxAllowedPoolConns)
+		zaplogrus.Warnf("Configured pool size %d exceeds safe limit %d; clamping", value, maxAllowedPoolConns)
 		return maxAllowedPoolConns
 	}
 
