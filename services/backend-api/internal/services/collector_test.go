@@ -13,12 +13,12 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/cache"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
 	"github.com/irfandi/celebrum-ai-go/test/testmocks"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -1388,4 +1388,130 @@ func (m *MockMarketPriceInterface) GetVolume() float64 {
 
 func (m *MockMarketPriceInterface) GetTimestamp() time.Time {
 	return m.timestamp
+}
+
+func TestCollectorService_IsInitialized(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	assert.False(t, collector.IsInitialized())
+
+	collector.readinessMu.Lock()
+	collector.isInitialized = true
+	collector.readinessMu.Unlock()
+
+	assert.True(t, collector.IsInitialized())
+}
+
+func TestCollectorService_IsReady(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	assert.False(t, collector.IsReady())
+
+	collector.readinessMu.Lock()
+	collector.isReady = true
+	collector.readinessMu.Unlock()
+
+	assert.True(t, collector.IsReady())
+}
+
+func TestCollectorService_GetReadinessStatus(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	init, ready := collector.GetReadinessStatus()
+	assert.False(t, init)
+	assert.False(t, ready)
+
+	collector.readinessMu.Lock()
+	collector.isInitialized = true
+	collector.isReady = true
+	collector.readinessMu.Unlock()
+
+	init, ready = collector.GetReadinessStatus()
+	assert.True(t, init)
+	assert.True(t, ready)
+
+	collector.readinessMu.Lock()
+	collector.isInitialized = true
+	collector.isReady = false
+	collector.readinessMu.Unlock()
+
+	init, ready = collector.GetReadinessStatus()
+	assert.True(t, init)
+	assert.False(t, ready)
+}
+
+func TestCollectorService_ReadinessConcurrent(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	done := make(chan bool, 100)
+
+	for i := 0; i < 50; i++ {
+		go func() {
+			_ = collector.IsInitialized()
+			done <- true
+		}()
+		go func() {
+			_ = collector.IsReady()
+			done <- true
+		}()
+		go func() {
+			_, _ = collector.GetReadinessStatus()
+			done <- true
+		}()
+	}
+
+	for i := 0; i < 150; i++ {
+		<-done
+	}
+
+	collector.readinessMu.Lock()
+	collector.isInitialized = true
+	collector.isReady = true
+	collector.readinessMu.Unlock()
+
+	for i := 0; i < 50; i++ {
+		go func() {
+			_ = collector.IsInitialized()
+			done <- true
+		}()
+		go func() {
+			_ = collector.IsReady()
+			done <- true
+		}()
+	}
+
+	for i := 0; i < 100; i++ {
+		<-done
+	}
+}
+
+func TestCollectorService_ReadinessInitialState(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	assert.False(t, collector.IsInitialized())
+	assert.False(t, collector.IsReady())
+
+	init, ready := collector.GetReadinessStatus()
+	assert.False(t, init)
+	assert.False(t, ready)
 }

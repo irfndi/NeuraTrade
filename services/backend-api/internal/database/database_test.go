@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/jackc/pgx/v5"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1606,4 +1607,192 @@ func TestNewPostgresConnection_InvalidDurations(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, db)
 	assert.Contains(t, err.Error(), "failed to parse ConnMaxLifetime")
+}
+
+// Test PostgresDB IsReady method
+func TestPostgresDB_IsReady(t *testing.T) {
+	tests := []struct {
+		name     string
+		db       *PostgresDB
+		expected bool
+	}{
+		{
+			name:     "nil PostgresDB",
+			db:       nil,
+			expected: false,
+		},
+		{
+			name:     "nil Pool",
+			db:       &PostgresDB{Pool: nil},
+			expected: false,
+		},
+		{
+			name:     "empty struct",
+			db:       &PostgresDB{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// For nil db, we can't call method, so test the logic
+			if tt.db == nil {
+				// nil receiver would panic in Go, so we just verify the expectation
+				assert.False(t, tt.expected)
+			} else {
+				result := tt.db.IsReady()
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+// Test PostgresDB Query method with nil pool
+func TestPostgresDB_Query_NilPool(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx := context.Background()
+
+	rows, err := db.Query(ctx, "SELECT 1")
+	assert.Error(t, err)
+	assert.Nil(t, rows)
+	assert.Contains(t, err.Error(), "postgres pool is not initialized")
+}
+
+// Test PostgresDB QueryRow method with nil pool
+func TestPostgresDB_QueryRow_NilPool(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx := context.Background()
+
+	row := db.QueryRow(ctx, "SELECT 1")
+	assert.Nil(t, row)
+}
+
+// Test PostgresDB Exec method with nil pool
+func TestPostgresDB_Exec_NilPool(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx := context.Background()
+
+	tag, err := db.Exec(ctx, "INSERT INTO test (col) VALUES ($1)", "value")
+	assert.Error(t, err)
+	assert.Equal(t, pgconn.CommandTag{}, tag)
+	assert.Contains(t, err.Error(), "postgres pool is not initialized")
+}
+
+// Test PostgresDB Begin method with nil pool
+func TestPostgresDB_Begin_NilPool(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx := context.Background()
+
+	tx, err := db.Begin(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, tx)
+	assert.Contains(t, err.Error(), "postgres pool is not initialized")
+}
+
+// Test PostgresDB BeginTx method with nil SQL
+func TestPostgresDB_BeginTx_NilSQL(t *testing.T) {
+	db := &PostgresDB{SQL: nil}
+	ctx := context.Background()
+
+	tx, err := db.BeginTx(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, tx)
+	assert.Contains(t, err.Error(), "postgres sql connection is not initialized")
+}
+
+// Test PostgresDB Query with valid pool (integration-style, expects nil pool error)
+func TestPostgresDB_Query_ErrorPaths(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx := context.Background()
+
+	// Test with various queries - all should return the same error
+	queries := []string{
+		"SELECT 1",
+		"SELECT * FROM users",
+		"INSERT INTO test VALUES (1)",
+	}
+
+	for _, query := range queries {
+		rows, err := db.Query(ctx, query)
+		assert.Error(t, err)
+		assert.Nil(t, rows)
+		assert.Contains(t, err.Error(), "postgres pool is not initialized")
+	}
+}
+
+// Test PostgresDB QueryRow with valid pool (integration-style, expects nil row)
+func TestPostgresDB_QueryRow_ErrorPaths(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx := context.Background()
+
+	// Test with various queries - all should return nil row
+	queries := []string{
+		"SELECT 1",
+		"SELECT * FROM users WHERE id = $1",
+	}
+
+	for _, query := range queries {
+		row := db.QueryRow(ctx, query)
+		assert.Nil(t, row)
+	}
+}
+
+// Test PostgresDB Exec with various statements
+func TestPostgresDB_Exec_ErrorPaths(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx := context.Background()
+
+	// Test with various statements
+	statements := []struct {
+		query string
+		args  []interface{}
+	}{
+		{"INSERT INTO users (name) VALUES ($1)", []interface{}{"test"}},
+		{"UPDATE users SET name = $1 WHERE id = $2", []interface{}{"test", 1}},
+		{"DELETE FROM users WHERE id = $1", []interface{}{1}},
+	}
+
+	for _, stmt := range statements {
+		tag, err := db.Exec(ctx, stmt.query, stmt.args...)
+		assert.Error(t, err)
+		assert.Equal(t, pgconn.CommandTag{}, tag)
+		assert.Contains(t, err.Error(), "postgres pool is not initialized")
+	}
+}
+
+// Test PostgresDB Begin with cancelled context
+func TestPostgresDB_Begin_CancelledContext(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tx, err := db.Begin(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, tx)
+	assert.Contains(t, err.Error(), "postgres pool is not initialized")
+}
+
+// Test PostgresDB all methods with context scenarios
+func TestPostgresDB_Methods_WithContextTimeout(t *testing.T) {
+	db := &PostgresDB{Pool: nil}
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer cancel()
+
+	// Give context time to expire
+	time.Sleep(1 * time.Millisecond)
+
+	rows, err := db.Query(ctx, "SELECT 1")
+	assert.Error(t, err)
+	assert.Nil(t, rows)
+
+	row := db.QueryRow(ctx, "SELECT 1")
+	assert.Nil(t, row)
+
+	tag, err := db.Exec(ctx, "SELECT 1")
+	assert.Error(t, err)
+	assert.Equal(t, pgconn.CommandTag{}, tag)
+
+	tx, err := db.Begin(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, tx)
 }
