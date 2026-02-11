@@ -11,7 +11,9 @@ export function registerAutonomousCommands(
   bot.command("begin", async (ctx) => {
     const chatId = getChatId(ctx);
     if (!chatId) {
-      await ctx.reply("Unable to start autonomous mode: missing chat information.");
+      await ctx.reply(
+        "Unable to start autonomous mode: missing chat information.",
+      );
       return;
     }
 
@@ -46,7 +48,9 @@ export function registerAutonomousCommands(
   bot.command("pause", async (ctx) => {
     const chatId = getChatId(ctx);
     if (!chatId) {
-      await ctx.reply("Unable to pause autonomous mode: missing chat information.");
+      await ctx.reply(
+        "Unable to pause autonomous mode: missing chat information.",
+      );
       return;
     }
 

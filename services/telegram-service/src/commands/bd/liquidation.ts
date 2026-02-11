@@ -8,7 +8,10 @@ function formatLiquidationResult(
   message?: string,
   liquidatedCount?: number,
 ): string {
-  const title = mode === "all" ? "🧯 Emergency Liquidation Complete" : "🧯 Liquidation Complete";
+  const title =
+    mode === "all"
+      ? "🧯 Emergency Liquidation Complete"
+      : "🧯 Liquidation Complete";
   const lines = [title];
 
   if (message) {
@@ -36,14 +39,20 @@ export function registerLiquidationCommands(
 
     const symbol = getCommandArgs(ctx);
     if (!symbol) {
-      await ctx.reply("Usage: /liquidate <symbol>\nExample: /liquidate BTC/USDT");
+      await ctx.reply(
+        "Usage: /liquidate <symbol>\nExample: /liquidate BTC/USDT",
+      );
       return;
     }
 
     try {
       const response = await api.liquidate(chatId, symbol);
       await ctx.reply(
-        formatLiquidationResult("symbol", response.message, response.liquidated_count),
+        formatLiquidationResult(
+          "symbol",
+          response.message,
+          response.liquidated_count,
+        ),
       );
     } catch (error) {
       await ctx.reply(
@@ -55,7 +64,9 @@ export function registerLiquidationCommands(
   bot.command("liquidate_all", async (ctx) => {
     const chatId = getChatId(ctx);
     if (!chatId) {
-      await ctx.reply("Unable to liquidate all positions: missing chat information.");
+      await ctx.reply(
+        "Unable to liquidate all positions: missing chat information.",
+      );
       return;
     }
 
@@ -75,7 +86,11 @@ export function registerLiquidationCommands(
       const response = await api.liquidateAll(chatId);
       sessions.clearSession(chatId);
       await ctx.reply(
-        formatLiquidationResult("all", response.message, response.liquidated_count),
+        formatLiquidationResult(
+          "all",
+          response.message,
+          response.liquidated_count,
+        ),
       );
     } catch (error) {
       await ctx.reply(

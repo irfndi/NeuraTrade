@@ -25,7 +25,9 @@ function toTemplateSummary(
   });
 }
 
-function formatStrategyRows(strategies: readonly StrategyPerformance[]): string {
+function formatStrategyRows(
+  strategies: readonly StrategyPerformance[],
+): string {
   if (strategies.length === 0) {
     return "No strategy breakdown available.";
   }
@@ -51,7 +53,9 @@ function formatStrategyRows(strategies: readonly StrategyPerformance[]): string 
   return lines.join("\n");
 }
 
-function toSummaryFromBreakdown(response: PerformanceBreakdownResponse): PerformanceSummaryResponse {
+function toSummaryFromBreakdown(
+  response: PerformanceBreakdownResponse,
+): PerformanceSummaryResponse {
   return {
     timeframe: response.overall.timeframe || response.timeframe,
     pnl: response.overall.pnl,
@@ -65,7 +69,10 @@ function toSummaryFromBreakdown(response: PerformanceBreakdownResponse): Perform
   };
 }
 
-export function registerPerformanceCommands(bot: Bot, api: BackendApiClient): void {
+export function registerPerformanceCommands(
+  bot: Bot,
+  api: BackendApiClient,
+): void {
   bot.command("summary", async (ctx) => {
     const chatId = getChatId(ctx);
     if (!chatId) {
@@ -92,7 +99,10 @@ export function registerPerformanceCommands(bot: Bot, api: BackendApiClient): vo
 
     try {
       const breakdown = await api.getPerformanceBreakdown(chatId, "24h");
-      const overall = toTemplateSummary(toSummaryFromBreakdown(breakdown), "24h");
+      const overall = toTemplateSummary(
+        toSummaryFromBreakdown(breakdown),
+        "24h",
+      );
       const strategyRows = formatStrategyRows(breakdown.strategies ?? []);
       const message = `${overall}\n\n📈 Strategy Breakdown\n${strategyRows}`;
       await ctx.reply(message);

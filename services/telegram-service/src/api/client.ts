@@ -152,7 +152,10 @@ export class BackendApiClient {
     );
   }
 
-  async liquidate(chatId: string, symbol: string): Promise<LiquidationResponse> {
+  async liquidate(
+    chatId: string,
+    symbol: string,
+  ): Promise<LiquidationResponse> {
     return this.fetch<LiquidationResponse>(API_ENDPOINTS.LIQUIDATE, {
       method: "POST",
       body: JSON.stringify({ chat_id: chatId, symbol }),

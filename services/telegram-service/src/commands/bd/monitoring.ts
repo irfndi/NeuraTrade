@@ -60,10 +60,7 @@ function formatPortfolioMessage(input: {
   updatedAt?: string;
   positions: readonly PortfolioPosition[];
 }): string {
-  const lines = [
-    "💼 Portfolio Snapshot",
-    `Total Equity: ${input.totalEquity}`,
-  ];
+  const lines = ["💼 Portfolio Snapshot", `Total Equity: ${input.totalEquity}`];
 
   if (input.availableBalance) {
     lines.push(`Available Balance: ${input.availableBalance}`);
@@ -145,7 +142,10 @@ function mapDoctorCheck(check: DoctorCheckResponse): {
   };
 }
 
-export function registerMonitoringCommands(bot: Bot, api: BackendApiClient): void {
+export function registerMonitoringCommands(
+  bot: Bot,
+  api: BackendApiClient,
+): void {
   bot.command("quests", async (ctx) => {
     const chatId = getChatId(ctx);
     if (!chatId) {
@@ -157,7 +157,9 @@ export function registerMonitoringCommands(bot: Bot, api: BackendApiClient): voi
       const response = await api.getQuests(chatId);
       await ctx.reply(formatQuestRows(response.quests ?? []));
     } catch (error) {
-      await ctx.reply(`❌ Failed to fetch quests (${(error as Error).message}).`);
+      await ctx.reply(
+        `❌ Failed to fetch quests (${(error as Error).message}).`,
+      );
     }
   });
 

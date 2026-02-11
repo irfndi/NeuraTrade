@@ -23,7 +23,10 @@ export function getCommandArgs(ctx: Context): string {
   return text.slice(firstSpace + 1).trim();
 }
 
-export function toNonEmptyString(value: string | undefined, fallback: string): string {
+export function toNonEmptyString(
+  value: string | undefined,
+  fallback: string,
+): string {
   if (!value) {
     return fallback;
   }

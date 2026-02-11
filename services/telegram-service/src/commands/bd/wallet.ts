@@ -43,7 +43,10 @@ export function registerWalletCommands(
 
     const args = getCommandArgs(ctx);
     if (!args) {
-      sessions.setSession(chatId, { step: "awaiting_exchange_selection", data: {} });
+      sessions.setSession(chatId, {
+        step: "awaiting_exchange_selection",
+        data: {},
+      });
       await ctx.reply(
         "Usage: /connect_exchange <exchange> [account_label]\nExample: /connect_exchange binance main",
       );
@@ -54,7 +57,11 @@ export function registerWalletCommands(
     const accountLabel = labelTokens.join(" ");
 
     try {
-      const response = await api.connectExchange(chatId, exchange, accountLabel || undefined);
+      const response = await api.connectExchange(
+        chatId,
+        exchange,
+        accountLabel || undefined,
+      );
       sessions.clearSession(chatId);
       await ctx.reply(response.message || `✅ Exchange connected: ${exchange}`);
     } catch (error) {
@@ -67,13 +74,18 @@ export function registerWalletCommands(
   bot.command("connect_polymarket", async (ctx) => {
     const chatId = getChatId(ctx);
     if (!chatId) {
-      await ctx.reply("Unable to connect Polymarket: missing chat information.");
+      await ctx.reply(
+        "Unable to connect Polymarket: missing chat information.",
+      );
       return;
     }
 
     const walletAddress = getCommandArgs(ctx);
     if (!walletAddress) {
-      sessions.setSession(chatId, { step: "awaiting_wallet_address", data: {} });
+      sessions.setSession(chatId, {
+        step: "awaiting_wallet_address",
+        data: {},
+      });
       await ctx.reply(
         "Usage: /connect_polymarket <wallet_address>\nExample: /connect_polymarket 0x1234...abcd",
       );
@@ -100,7 +112,10 @@ export function registerWalletCommands(
 
     const args = getCommandArgs(ctx);
     if (!args) {
-      sessions.setSession(chatId, { step: "awaiting_wallet_address", data: {} });
+      sessions.setSession(chatId, {
+        step: "awaiting_wallet_address",
+        data: {},
+      });
       await ctx.reply(
         "Usage: /add_wallet <wallet_address> [type]\nExample: /add_wallet 0x1234...abcd external",
       );
