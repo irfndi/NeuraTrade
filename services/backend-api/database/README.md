@@ -25,6 +25,24 @@ Migrations are numbered sequentially and organized by feature area:
 
 ## Usage
 
+### SQLite-first migrations
+
+Use the SQLite migration entrypoint for the new durable-store baseline:
+
+```bash
+# Apply all pending SQLite migrations
+./sqlite-migrate.sh run
+
+# Show applied/pending SQLite migrations
+./sqlite-migrate.sh status
+
+# List SQLite migration files
+./sqlite-migrate.sh list
+```
+
+Default database path is `database/neuratrade.db` and can be overridden with `SQLITE_DB_PATH`.
+If sqlite-vec extension is installed, set `SQLITE_VEC_EXTENSION_PATH` to load it during migration runs.
+
 ### Running Migrations
 
 Use the provided migration script:

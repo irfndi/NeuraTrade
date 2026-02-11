@@ -1214,6 +1214,29 @@ bd update <task-id> --status in_progress --json
 bd update <task-id> --status completed --json
 ```
 
+### Mandatory QA Gate Before Closing Any Task
+
+Every task closure must include explicit test evidence across layers:
+
+- Unit test evidence (new/updated tests + command)
+- Integration test evidence (command + scope)
+- E2E or smoke evidence (or explicit N/A with reason)
+- Coverage evidence (`make coverage-check` output)
+
+Use this command to enforce the gate:
+
+```bash
+ISSUE_ID=<bd-id> \
+UNIT_TESTS="go test ./... -run TestX" \
+INTEGRATION_TESTS="go test ./test/integration/..." \
+E2E_TESTS="scripts/test.sh health" \
+COVERAGE_RESULT="make coverage-check (>=80%)" \
+EVIDENCE="link/log summary" \
+make bd-close-qa
+```
+
+Do not close work with `bd close` directly unless QA evidence is already recorded in issue notes.
+
 ### Epic Progress Checklist
 
 - [ ] **Epic 1: FOUNDATION** (Weeks 1-2)

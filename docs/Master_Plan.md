@@ -11,7 +11,7 @@ The system is designed to operate across both centralized cryptocurrency exchang
 1. User installs NeuraTrade via one-line bootstrap script.
 2. User runs `NeuraTrade` in terminal, enters Telegram bot token, and receives a one-time auth code via Telegram.
 3. User pastes auth code back into CLI; CLI binds local operator identity to Telegram chat securely.
-4. User chooses providers/models for the agent. The CLI resolves currently available model options from a provider registry (for example, OpenAI + Anthropic first).
+4. User chooses providers/models for the agent. The CLI resolves currently available model options from a provider registry seeded by a models.dev-compatible catalog snapshot plus local safety overrides.
 5. User pastes provider API keys; the system stores them encrypted and masked in UI/log output.
 6. Telegram onboarding requires at least one Polymarket wallet, at least one exchange for scalping, and at least two exchanges for arbitrage.
 7. System performs readiness checks: API key permissions (trade-only, no-withdraw), connectivity, balances/funding, rate-limit health.
@@ -183,6 +183,11 @@ The system manages **AI Sessions** as first-class entities. Each session represe
 
 ### 3.5 Parallel Job System
 The autonomous agent must handle **multiple concurrent activities** without conflict. The Job System manages this:
+
+**Important Scope Clarification (QMD):**
+- `qmd` (Query Markup Documents) is a local document search/retrieval tool, **not** a job queue or scheduler.
+- NeuraTrade keeps execution scheduling on Redis + Go scheduler primitives; do not replace the execution queue with QMD.
+- If adopted, QMD is control-plane/knowledge-plane only (runbooks, docs, postmortems), never trade-execution critical path.
 
 **Job Queue** (Redis-backed):
 - Each quest spawns one or more **Jobs** (atomic units of work).
@@ -406,6 +411,8 @@ For local inference, MLX-LM runs as a separate process (`mlx_lm.server`) exposin
 ### 6.2 Service Communication
 The services are decoupled using a **Redis Message Queue**.
 
+This queue remains the canonical transport for execution and coordination. QMD is optional for retrieval workflows and does not participate in queue delivery semantics.
+
 **Market Data:** The Go infrastructure service pushes normalized market ticks to Redis Pub/Sub channels (e.g., `market:eth_usdc:ticker`).
 
 **Agent Wake-up:** The Agent service subscribes to these channels. Upon receiving significant data (filtered by the local MLX model), it triggers the LLM reasoning loop.
@@ -577,6 +584,22 @@ CREATE TABLE fund_milestones (
 
 **Vector Database:** The system uses `sqlite-vec` (SQLite-native vectors) to store embeddings of past market conditions. This allows the agent to perform semantic retrieval such as "Find past instances where RSI was < 20 and news sentiment was negative." If similar setups historically ended in losses, the risk gate can downgrade or reject the current action.
 
+### 7.3 Optional Knowledge Retrieval Layer (QMD)
+To improve operator/agent access to markdown-heavy knowledge (runbooks, incident notes, architecture docs), NeuraTrade may optionally add `qmd` as a local retrieval sidecar.
+
+**Allowed Scope:**
+- Index markdown documentation and operation notes for `/doctor`, troubleshooting, and operator assistance.
+- Provide fast keyword/semantic retrieval to AI prompts for diagnosis/reporting tasks.
+
+**Out of Scope:**
+- No scheduling, queueing, locking, or execution dispatch responsibilities.
+- No dependency for order execution, risk gate, or kill-switch pathways.
+
+**Adoption Rules:**
+- Treat as optional feature flag: platform must run safely without QMD enabled.
+- Prefer precomputed indexing outside latency-sensitive trading loops.
+- Keep durable strategy memory in SQLite/sqlite-vec; QMD augments doc retrieval only.
+
 ## 8. Execution and Strategy Implementation
 The core value of NeuraTrade lies in its trading strategies. The system supports modular strategy definitions as skill.md files, swapped in and out by the "Analyst" based on market conditions.
 
@@ -742,7 +765,7 @@ If the daily budget is exhausted, the agent falls back to the local MLX model fo
 
 **Model Routing Strategy:**
 
-If users connect multiple providers and models we can use models router to select the best model for the task, if not we use the default model that user connected.
+Model routing is registry-driven. If users connect multiple providers/models, the router selects by capability + budget + latency policy; otherwise it uses the user's explicit default model.
 
 | Task | Model | Cost |
 |---|---|---|
@@ -847,7 +870,7 @@ The bot supports a rich command set, parsed by the Go service:
 | `/add_wallet <chain> <address>` | Add a watch-only wallet for portfolio tracking. |
 | `/remove_wallet <wallet_id>` | Remove a wallet integration. |
 | `/remove_exchange <exchange>` | Remove a connected exchange account. |
-| `/set_ai_key <provider> <key>` | Configure API key for AI models (OpenAI, Anthropic or any models from models.dev). |
+| `/set_ai_key <provider> <key>` | Configure API key for a registered AI provider (registry supports models.dev-compatible model metadata). |
 | `/set_risk <level>` | Adjust risk thresholds: Low / Medium / High / Custom. |
 | `/keys` | List all connected exchanges and AI providers (keys masked). |
 
@@ -1194,6 +1217,65 @@ SQLite operations policy:
 - Keep all learning schema changes migration-only.
 - Add indexes for high-frequency lookups (`strategy_lane`, `regime`, `timestamp`) and vector retrieval join keys.
 - Run periodic compaction/cleanup to avoid unbounded growth of raw reasoning artifacts.
+
+### 13.12 Model/Provider Registry Governance (models.dev-Compatible)
+NeuraTrade should maintain a canonical provider/model registry used by CLI onboarding, runtime routing, and budget enforcement.
+
+Registry contract (minimum fields):
+- `provider_id`, `provider_label`, `model_id`, `display_name`, `aliases`.
+- Capability flags: `supports_tools`, `supports_vision`, `supports_reasoning`, `max_context_tokens`.
+- Cost/latency metadata: `tier`, `estimated_input_cost`, `estimated_output_cost`, `latency_class`.
+- Operational flags: `status` (`active`, `degraded`, `blocked`), `default_allowed`, `risk_level`.
+
+Source-of-truth policy:
+- External catalog ingestion may use models.dev-compatible metadata snapshots.
+- Runtime must support offline fallback to locally cached registry state.
+- Local override layer is mandatory for safety blocks and emergency disable.
+- Trading execution must not depend on live external catalog availability.
+
+Routing policy:
+- Router selection = capability match -> policy constraints (budget/risk) -> latency preference -> fallback chain.
+- If selected model/provider fails health checks, route to next eligible candidate.
+- All routing decisions are logged to `ai_usage` + decision journal for auditability.
+
+### 13.13 Repository Structure and Naming Refactor Governance
+Master_Plan alignment requires a staged structure cleanup, not a big-bang rename.
+
+Target governance rules:
+- Keep service-first boundaries under `services/*` as the primary development surface.
+- Canonical API handler path is `services/backend-api/internal/api/handlers/*`.
+- Legacy path usage (`internal/handlers/*`) must be phased out with compatibility checkpoints.
+- Folder/file names should be domain-explicit and avoid ambiguous generic buckets.
+
+Phased migration protocol:
+1. Define structure contract and migration map (legacy -> canonical paths).
+2. Refactor imports/routes in small batches with green tests per batch.
+3. Update scripts/tests/coverage references to canonical paths.
+4. Add CI guardrails that fail on banned legacy imports and naming drift.
+
+Safety constraints:
+- No cross-service filesystem churn in a single change set.
+- Preserve runtime behavior parity during path migrations.
+- Keep migration reversible until compatibility checks and CI gates are stable.
+
+### 13.14 Testing and QA Gate Governance (Mandatory)
+Master_Plan execution is not considered complete unless each delivered task includes test evidence across layers.
+
+Required verification policy per task:
+- Unit test evidence is mandatory.
+- Integration test evidence is mandatory.
+- E2E or smoke evidence is mandatory, or an explicit N/A rationale.
+- Coverage evidence is mandatory (`coverage-check` strict gate).
+
+Coverage policy:
+- Global CI coverage gate: >= 80% (strict fail when below threshold).
+- Touched package target: >= 85% unless exception rationale is documented.
+- Risk-critical pathways (risk engine, execution, auth, encryption, migrations) require both integration and smoke/e2e evidence regardless of unit coverage.
+
+Workflow policy:
+- PRs must include a structured test plan and command evidence for all required layers.
+- Beads issue closure must include QA evidence in issue notes before status is closed.
+- Production-ready status is only valid when P0/P1 scope passes test gates and CI quality gates.
 
 ## 14. Future Horizons
 The architecture described herein is foundational. Future iterations will expand into:
