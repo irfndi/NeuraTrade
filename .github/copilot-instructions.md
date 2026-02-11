@@ -1,10 +1,10 @@
-# GitHub Copilot Instructions for Celebrum AI Go
+# GitHub Copilot Instructions for NeuraTrade Go
 
 This document provides repository-specific guidelines for GitHub Copilot to follow when assisting with development in this cryptocurrency arbitrage trading system.
 
 ## Project Overview
 
-Celebrum AI is a comprehensive cryptocurrency arbitrage detection and technical analysis platform built with Go. It features real-time market data collection, arbitrage opportunity identification, and technical indicator calculations with support for 100+ cryptocurrency exchanges via CCXT.
+NeuraTrade is a comprehensive cryptocurrency arbitrage detection and technical analysis platform built with Go. It features real-time market data collection, arbitrage opportunity identification, and technical indicator calculations with support for 100+ cryptocurrency exchanges via CCXT.
 
 ## Project Structure & Module Organization
 
@@ -21,7 +21,7 @@ Celebrum AI is a comprehensive cryptocurrency arbitrage detection and technical 
 
 ```bash
 # Build and run
-make build          # Compile Go API to bin/celebrum-ai
+make build          # Compile Go API to bin/neuratrade
 make run            # Build then run locally
 make dev            # Hot reload via air; requires go install github.com/air-verse/air@latest
 

@@ -8,7 +8,7 @@
 - Tests live beside source as `*_test.go`; integration suites and mocks live in `test/`.
 
 ## Build, Test, and Development Commands
-- `make build` – compile the Go API to `bin/celebrum-ai`.
+- `make build` – compile the Go API to `bin/neuratrade`.
 - `make run` – build then run the API locally.
 - `make dev` – hot reload via `air`; requires `go install github.com/air-verse/air@latest`.
 - `make test` – run Go unit tests and Bun tests (if Bun is installed).

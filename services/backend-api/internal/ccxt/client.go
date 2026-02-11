@@ -505,7 +505,7 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Celebrum-AI-Go/1.0")
+	req.Header.Set("User-Agent", "NeuraTrade/1.0")
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {

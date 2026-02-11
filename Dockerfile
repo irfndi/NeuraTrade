@@ -1,5 +1,5 @@
 # ==========================================
-# Celebrum AI - Unified Monorepo Dockerfile
+# NeuraTrade - Unified Monorepo Dockerfile
 # ==========================================
 # This Dockerfile builds all services from the monorepo structure:
 # - services/backend-api (Go)

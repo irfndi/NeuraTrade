@@ -1,6 +1,6 @@
 # Database Migrations
 
-This directory contains organized database migrations for the Celebrum AI platform.
+This directory contains organized database migrations for the NeuraTrade platform.
 
 ## Migration Structure
 
@@ -53,8 +53,8 @@ Set the following environment variables for database connection:
 ```bash
 export DB_HOST=localhost
 export DB_PORT=5432
-export DB_NAME=celebrum_ai
-export DB_USER=celebrum_ai_user
+export DB_NAME=neuratrade
+export DB_USER=neuratrade_user
 export DB_PASSWORD=your_password
 ```
 
@@ -64,10 +64,10 @@ To run migrations in Docker environment:
 
 ```bash
 # Using docker-compose
-docker-compose exec postgres psql -U celebrum_ai -d celebrum_ai -f /database/migrations/004_enhanced_initial_schema.sql
+docker-compose exec postgres psql -U neuratrade_user -d neuratrade -f /database/migrations/004_enhanced_initial_schema.sql
 
 # Using direct docker
-docker exec celebrum-migrate psql -U celebrum_ai -d celebrum_ai -f /database/migrations/004_enhanced_initial_schema.sql
+docker exec neuratrade-migrate psql -U neuratrade_user -d neuratrade -f /database/migrations/004_enhanced_initial_schema.sql
 ```
 
 ## Creating New Migrations
@@ -137,13 +137,13 @@ Original SQL files in `/scripts/` are preserved for reference:
 
 ```bash
 # Check current schema version
-psql -h localhost -U celebrum_ai -d celebrum_ai -c "SELECT * FROM system_config WHERE config_key LIKE 'migration_%'"
+psql -h localhost -U neuratrade_user -d neuratrade -c "SELECT * FROM system_config WHERE config_key LIKE 'migration_%'"
 
 # List applied migrations
-psql -h localhost -U celebrum_ai -d celebrum_ai -c "SELECT * FROM migrations ORDER BY applied_at DESC"
+psql -h localhost -U neuratrade_user -d neuratrade -c "SELECT * FROM migrations ORDER BY applied_at DESC"
 
 # Check for missing migrations
-ls database/migrations/*.sql | xargs -I {} basename {} | grep -v $(psql -h localhost -U celebrum_ai -d celebrum_ai -c "SELECT filename FROM migrations" -t -A)
+ls database/migrations/*.sql | xargs -I {} basename {} | grep -v $(psql -h localhost -U neuratrade_user -d neuratrade -c "SELECT filename FROM migrations" -t -A)
 ```
 
 ## Integration with Makefile

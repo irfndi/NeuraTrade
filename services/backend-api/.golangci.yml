@@ -17,7 +17,7 @@ linters-settings:
   lll:
     line-length: 140
   goimports:
-    local-prefixes: github.com/irfandi/celebrum-ai-go
+    local-prefixes: github.com/irfandi/neuratrade
   gocritic:
     enabled-tags:
       - diagnostic

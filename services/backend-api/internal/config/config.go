@@ -330,7 +330,7 @@ func setDefaults() {
 	viper.SetDefault("database.user", "postgres")
 	// Set default password for testing (must be overridden in production)
 	viper.SetDefault("database.password", "change-me-in-production")
-	viper.SetDefault("database.dbname", "celebrum_ai")
+	viper.SetDefault("database.dbname", "neuratrade")
 	viper.SetDefault("database.sslmode", "disable")
 	viper.SetDefault("database.database_url", "")
 	viper.SetDefault("database.max_open_conns", 25)

@@ -168,7 +168,7 @@ const registerTelegramUser = (chatId: string, userId: number) =>
     {
       method: "POST",
       body: JSON.stringify({
-        email: `telegram_${userId}@celebrum.ai`,
+        email: `telegram_${userId}@neuratrade.ai`,
         password: `${globalThis.crypto.randomUUID()}${globalThis.crypto.randomUUID()}`,
         telegram_chat_id: chatId,
       }),
@@ -219,7 +219,7 @@ bot.command("start", async (ctx) => {
   }
 
   const welcomeMsg =
-    "🚀 Welcome to Celebrum AI!\n\n" +
+    "🚀 Welcome to NeuraTrade!\n\n" +
     "✅ You're now registered and ready to receive arbitrage alerts!\n\n" +
     "Use /opportunities to see current opportunities.\n" +
     "Use /help to see available commands.";
@@ -229,7 +229,7 @@ bot.command("start", async (ctx) => {
 
 bot.command("help", async (ctx) => {
   const msg =
-    "🤖 Celebrum AI Bot Commands:\n\n" +
+    "🤖 NeuraTrade Bot Commands:\n\n" +
     "/start - Register and get started\n" +
     "/opportunities - View current arbitrage opportunities\n" +
     "/settings - Configure your alert preferences\n" +

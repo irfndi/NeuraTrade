@@ -1,7 +1,7 @@
-# Celebrum AI - Makefile for development and deployment
+# NeuraTrade - Makefile for development and deployment
 
 # Variables
-APP_NAME=celebrum-ai
+APP_NAME=neuratrade
 GO_VERSION=1.25
 DOCKER_REGISTRY=ghcr.io/irfndi
 DOCKER_IMAGE_APP=$(DOCKER_REGISTRY)/app:latest

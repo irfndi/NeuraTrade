@@ -669,9 +669,9 @@ func (h *UserHandler) CreateTelegramUser(ctx context.Context, chatID string, use
 	now := time.Now()
 
 	// Create a temporary email based on Telegram username or chat ID
-	email := fmt.Sprintf("telegram_%s@celebrum.ai", chatID)
+	email := fmt.Sprintf("telegram_%s@neuratrade.ai", chatID)
 	if username != "" {
-		email = fmt.Sprintf("telegram_%s@celebrum.ai", username)
+		email = fmt.Sprintf("telegram_%s@neuratrade.ai", username)
 	}
 
 	query := `

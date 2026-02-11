@@ -1,6 +1,6 @@
-# Celebrum AI - Crypto Arbitrage & Technical Analysis Platform
+# NeuraTrade - Crypto Arbitrage & Technical Analysis Platform
 
-Celebrum AI is a high-performance, scalable platform designed for real-time cryptocurrency arbitrage detection and advanced technical analysis. Built with a robust Go backend and a specialized TypeScript/Bun service for exchange integration, it processes market data from over 100 exchanges to identify profitable trading opportunities.
+NeuraTrade is a high-performance, scalable platform designed for real-time cryptocurrency arbitrage detection and advanced technical analysis. Built with a robust Go backend and a specialized TypeScript/Bun service for exchange integration, it processes market data from over 100 exchanges to identify profitable trading opportunities.
 
 ## 🚀 Key Features
 
@@ -49,8 +49,8 @@ The system follows a microservices-like architecture:
 
 1.  **Clone the Repository**
     ```bash
-    git clone https://github.com/irfndi/celebrum-ai-go.git
-    cd celebrum-ai-go
+    git clone https://github.com/irfndi/neuratrade.git
+    cd neuratrade
     ```
 
 2.  **Configure Environment**
