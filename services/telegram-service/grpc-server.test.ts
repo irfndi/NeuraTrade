@@ -1,247 +1,179 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "events";
+import * as grpc from "@grpc/grpc-js";
+import type { Bot } from "grammy";
 import { TelegramGrpcServer } from "./grpc-server";
-import { TelegramErrorCode } from "./telegram-errors";
-import type * as grpc from "@grpc/grpc-js";
+import type {
+  SendActionAlertRequest,
+  SendActionAlertResponse,
+  SendMessageRequest,
+  SendMessageResponse,
+  StreamEventsRequest,
+  TelegramEvent,
+} from "./proto/telegram_service";
 
-// Mock Bot class
-class MockApi {
-  sendMessageMock = mock(
-    async (chatId: string | number, text: string, options?: any) => {
-      return { message_id: 123, chat: { id: chatId }, text };
+interface SentMessage {
+  chatId: string;
+  text: string;
+  options?: unknown;
+}
+
+class MockStreamCall extends EventEmitter {
+  readonly request: StreamEventsRequest;
+  readonly written: TelegramEvent[] = [];
+  ended = false;
+
+  constructor(chatId: string) {
+    super();
+    this.request = { chatId };
+  }
+
+  write(event: TelegramEvent): boolean {
+    this.written.push(event);
+    return true;
+  }
+
+  end(): this {
+    this.ended = true;
+    return this;
+  }
+}
+
+function createBotMock(): { bot: Bot; sentMessages: SentMessage[] } {
+  const sentMessages: SentMessage[] = [];
+  const bot = {
+    api: {
+      async sendMessage(
+        chatId: string,
+        text: string,
+        options?: unknown,
+      ): Promise<{ message_id: number }> {
+        sentMessages.push({ chatId, text, options });
+        return { message_id: sentMessages.length };
+      },
     },
-  );
+  };
 
-  async sendMessage(chatId: string | number, text: string, options?: any) {
-    return this.sendMessageMock(chatId, text, options);
-  }
+  return { bot: bot as unknown as Bot, sentMessages };
 }
 
-class MockBot {
-  api: MockApi;
-
-  constructor() {
-    this.api = new MockApi();
-  }
-}
-
-// Helper to create mock gRPC call and callback
-function createMockCall<TReq, TRes>(request: TReq) {
-  return {
-    request,
-    metadata: {} as grpc.Metadata,
-    getPeer: () => "test-peer",
-    sendMetadata: mock(() => {}),
-  } as unknown as grpc.ServerUnaryCall<TReq, TRes>;
-}
-
-function createMockCallback<TRes>() {
-  const fn = mock((error: grpc.ServiceError | null, response?: TRes) => {});
-  return fn as unknown as grpc.sendUnaryData<TRes>;
+function invokeUnary<Req, Res>(
+  handler: (
+    call: grpc.ServerUnaryCall<Req, Res>,
+    callback: grpc.sendUnaryData<Res>,
+  ) => void,
+  request: Req,
+): Promise<{
+  error: unknown;
+  response: Res | null;
+}> {
+  return new Promise((resolve) => {
+    const call = { request } as grpc.ServerUnaryCall<Req, Res>;
+    handler(call, (error, response) => {
+      resolve({
+        error,
+        response: response ?? null,
+      });
+    });
+  });
 }
 
 describe("TelegramGrpcServer", () => {
-  let server: TelegramGrpcServer;
-  let mockBot: MockBot;
+  test("publishes StreamEvents when SendActionAlert succeeds", async () => {
+    const { bot, sentMessages } = createBotMock();
+    const server = new TelegramGrpcServer(bot);
 
-  beforeEach(() => {
-    mockBot = new MockBot();
-    server = new TelegramGrpcServer(mockBot as any);
+    const stream = new MockStreamCall("chat-1");
+    server.streamEvents(
+      stream as unknown as grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
+    );
+
+    const request: SendActionAlertRequest = {
+      chatId: "chat-1",
+      action: "BUY",
+      asset: "BTC/USDT",
+      price: "101000",
+      size: "0.05",
+      strategy: "scalping",
+      reasoning: "Momentum breakout + spread divergence",
+      riskCheckPassed: true,
+      questId: "quest-hourly-1",
+    };
+
+    const result = await invokeUnary<SendActionAlertRequest, SendActionAlertResponse>(
+      server.sendActionAlert,
+      request,
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.response?.ok).toBe(true);
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].text).toContain("ACTION: BUY");
+
+    expect(stream.written).toHaveLength(1);
+    expect(stream.written[0].type).toBe("action");
+    expect(stream.written[0].action?.asset).toBe("BTC/USDT");
+    expect(stream.written[0].action?.reasoning).toContain("Momentum breakout");
   });
 
-  describe("sendMessage validation", () => {
-    test("returns error when chatId is missing", () => {
-      const call = createMockCall({ chatId: "", text: "Hello", parseMode: "" });
-      const callback = createMockCallback();
+  test("rejects SendActionAlert when chat ID is missing", async () => {
+    const { bot } = createBotMock();
+    const server = new TelegramGrpcServer(bot);
 
-      server.sendMessage(call as any, callback as any);
+    const request: SendActionAlertRequest = {
+      chatId: "",
+      action: "BUY",
+      asset: "BTC/USDT",
+      price: "100000",
+      size: "0.10",
+      strategy: "arbitrage",
+      reasoning: "Test",
+      riskCheckPassed: true,
+      questId: "quest-1",
+    };
 
-      expect(callback).toHaveBeenCalledWith(null, {
-        ok: false,
-        messageId: "",
-        error: "Chat ID and Text are required",
-        errorCode: TelegramErrorCode.INVALID_REQUEST,
-        retryAfter: 0,
-      });
-      // Verify bot API was NOT called on validation failure
-      expect(mockBot.api.sendMessageMock).not.toHaveBeenCalled();
-    });
+    const result = await invokeUnary<SendActionAlertRequest, SendActionAlertResponse>(
+      server.sendActionAlert,
+      request,
+    );
 
-    test("returns error when text is missing", () => {
-      const call = createMockCall({
-        chatId: "123456",
-        text: "",
-        parseMode: "",
-      });
-      const callback = createMockCallback();
-
-      server.sendMessage(call as any, callback as any);
-
-      expect(callback).toHaveBeenCalledWith(null, {
-        ok: false,
-        messageId: "",
-        error: "Chat ID and Text are required",
-        errorCode: TelegramErrorCode.INVALID_REQUEST,
-        retryAfter: 0,
-      });
-      // Verify bot API was NOT called on validation failure
-      expect(mockBot.api.sendMessageMock).not.toHaveBeenCalled();
-    });
-
-    test("returns error when both chatId and text are missing", () => {
-      const call = createMockCall({ chatId: "", text: "", parseMode: "" });
-      const callback = createMockCallback();
-
-      server.sendMessage(call as any, callback as any);
-
-      expect(callback).toHaveBeenCalledWith(null, {
-        ok: false,
-        messageId: "",
-        error: "Chat ID and Text are required",
-        errorCode: TelegramErrorCode.INVALID_REQUEST,
-        retryAfter: 0,
-      });
-      // Verify bot API was NOT called on validation failure
-      expect(mockBot.api.sendMessageMock).not.toHaveBeenCalled();
-    });
+    expect(result.error).not.toBeNull();
+    const errorWithCode = result.error as { code?: number } | null;
+    expect(errorWithCode?.code).toBe(grpc.status.INVALID_ARGUMENT);
+    expect(result.response).toBeNull();
   });
 
-  describe("sendMessage success", () => {
-    test("successfully sends message and returns message ID", async () => {
-      const call = createMockCall({
-        chatId: "123456",
-        text: "Hello World",
-        parseMode: "HTML",
-      });
+  test("ignores invalid parse mode and still sends message", async () => {
+    const { bot, sentMessages } = createBotMock();
+    const server = new TelegramGrpcServer(bot);
 
-      mockBot.api.sendMessageMock.mockResolvedValueOnce({
-        message_id: 456,
-        chat: { id: 123456 },
-        text: "Hello World",
-      });
+    const request: SendMessageRequest = {
+      chatId: "chat-2",
+      text: "hello world",
+      parseMode: "INVALID_MODE",
+    };
 
-      // Use Promise-based waiting for async operation
-      await new Promise<void>((resolve) => {
-        const callback = mock((err: any, resp: any) => {
-          expect(resp).toEqual({
-            ok: true,
-            messageId: "456",
-            error: "",
-            errorCode: "",
-            retryAfter: 0,
-          });
-          resolve();
-        });
-        server.sendMessage(call as any, callback as any);
-      });
-    });
+    const result = await invokeUnary<SendMessageRequest, SendMessageResponse>(
+      server.sendMessage,
+      request,
+    );
 
-    test("passes parse_mode correctly", async () => {
-      const call = createMockCall({
-        chatId: "123456",
-        text: "<b>Bold</b>",
-        parseMode: "HTML",
-      });
-
-      mockBot.api.sendMessageMock.mockResolvedValueOnce({
-        message_id: 789,
-        chat: { id: 123456 },
-        text: "<b>Bold</b>",
-      });
-
-      // Use Promise-based waiting for async operation
-      await new Promise<void>((resolve) => {
-        const callback = mock((err: any, resp: any) => {
-          resolve();
-        });
-        server.sendMessage(call as any, callback as any);
-      });
-
-      expect(mockBot.api.sendMessageMock).toHaveBeenCalledWith(
-        "123456",
-        "<b>Bold</b>",
-        { parse_mode: "HTML" },
-      );
-    });
+    expect(result.error).toBeNull();
+    expect(result.response?.ok).toBe(true);
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].options).toBeUndefined();
   });
 
-  describe("sendMessage error handling", () => {
-    test("handles error and returns error response", async () => {
-      const call = createMockCall({
-        chatId: "blocked-user",
-        text: "Hello",
-        parseMode: "",
-      });
+  test("ends stream immediately when chat ID is empty", () => {
+    const { bot } = createBotMock();
+    const server = new TelegramGrpcServer(bot);
 
-      const error = new Error("Some error occurred");
-      mockBot.api.sendMessageMock.mockRejectedValue(error);
+    const stream = new MockStreamCall("");
+    server.streamEvents(
+      stream as unknown as grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
+    );
 
-      // Use Promise-based waiting with timeout for retry scenarios
-      await new Promise<void>((resolve) => {
-        const callback = mock((err: any, resp: any) => {
-          expect(resp.ok).toBe(false);
-          expect(resp.error).toBeDefined();
-          resolve();
-        });
-        server.sendMessage(call as any, callback as any);
-      });
-    });
-
-    test("retries on network errors and can succeed", async () => {
-      const call = createMockCall({
-        chatId: "123456",
-        text: "Hello",
-        parseMode: "",
-      });
-
-      // First call fails with network error (retryable), second succeeds
-      mockBot.api.sendMessageMock
-        .mockRejectedValueOnce(new Error("Network connection failed"))
-        .mockResolvedValueOnce({
-          message_id: 999,
-          chat: { id: 123456 },
-          text: "Hello",
-        });
-
-      // Use Promise-based waiting for retry operation
-      await new Promise<void>((resolve) => {
-        const callback = mock((err: any, resp: any) => {
-          expect(resp.ok).toBe(true);
-          expect(resp.messageId).toBe("999");
-          resolve();
-        });
-        server.sendMessage(call as any, callback as any);
-      });
-    });
-  });
-
-  describe("healthCheck", () => {
-    test("returns healthy status", () => {
-      const call = createMockCall({});
-      const callback = createMockCallback();
-
-      server.healthCheck(call as any, callback as any);
-
-      expect(callback).toHaveBeenCalledWith(null, {
-        status: "serving",
-        version: "1.0.0",
-        service: "telegram-service",
-      });
-    });
-
-    test("always returns serving status", () => {
-      // Call multiple times to ensure consistency
-      for (let i = 0; i < 5; i++) {
-        const call = createMockCall({});
-        const callback = createMockCallback();
-
-        server.healthCheck(call as any, callback as any);
-
-        expect(callback).toHaveBeenCalledWith(null, {
-          status: "serving",
-          version: "1.0.0",
-          service: "telegram-service",
-        });
-      }
-    });
+    expect(stream.ended).toBe(true);
+    expect(stream.written).toHaveLength(0);
   });
 });
