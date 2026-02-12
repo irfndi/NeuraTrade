@@ -3,6 +3,7 @@ set -euo pipefail
 
 DATABASE_DRIVER="${DATABASE_DRIVER:-${DATABASE_MODE:-postgres}}"
 DATABASE_DRIVER="$(printf '%s' "$DATABASE_DRIVER" | tr '[:upper:]' '[:lower:]')"
+export DATABASE_DRIVER
 
 if [ "$DATABASE_DRIVER" = "sqlite" ]; then
   echo "Running in SQLite mode - skipping PostgreSQL migrations"

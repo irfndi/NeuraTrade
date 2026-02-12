@@ -10,6 +10,8 @@ RUN bun install --frozen-lockfile --production
 
 FROM oven/bun:1 AS production
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user
 RUN groupadd -g 1001 appgroup && \
     useradd -u 1001 -g appgroup -m -s /bin/bash appuser
