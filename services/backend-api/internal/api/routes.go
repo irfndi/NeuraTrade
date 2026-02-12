@@ -120,6 +120,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	tradingHandler := handlers.NewTradingHandler(db)
 
+	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
+	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
+
 	// Initialize futures arbitrage handler with error handling
 	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler
 	if db != nil {
@@ -195,6 +198,18 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegram.POST("/internal/wallets/remove", telegramInternalHandler.RemoveWallet)
 			telegram.GET("/internal/wallets", telegramInternalHandler.GetWallets)
 			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
+
+			telegramInternal := telegram.Group("/internal")
+			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
+			{
+				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
+				telegramInternal.GET("/portfolio", autonomousHandler.GetPortfolio)
+				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
+				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)
+				telegramInternal.GET("/performance", autonomousHandler.GetPerformanceBreakdown)
+				telegramInternal.POST("/liquidate", autonomousHandler.Liquidate)
+				telegramInternal.POST("/liquidate/all", autonomousHandler.LiquidateAll)
+			}
 		}
 
 		// User management
