@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +13,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/shopspring/decimal"
 )
 
 // HealthResponse represents the response structure for health check endpoints.
@@ -38,6 +40,13 @@ type Services struct {
 type routeDB interface {
 	services.DBPool
 	HealthCheck(ctx context.Context) error
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
 
 // SetupRoutes configures all the HTTP routes for the application.
@@ -119,6 +128,28 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	tradingHandler := handlers.NewTradingHandler(db)
+
+	// Budget handler - configurable via environment variables with defaults from migration 054
+	dailyBudgetStr := getEnvOrDefault("AI_DAILY_BUDGET", "10.00")
+	monthlyBudgetStr := getEnvOrDefault("AI_MONTHLY_BUDGET", "200.00")
+
+	dailyBudget, err := decimal.NewFromString(dailyBudgetStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid AI_DAILY_BUDGET value '%s', using default 10.00", dailyBudgetStr)
+		dailyBudget = decimal.NewFromFloat(10.00)
+	}
+
+	monthlyBudget, err := decimal.NewFromString(monthlyBudgetStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid AI_MONTHLY_BUDGET value '%s', using default 200.00", monthlyBudgetStr)
+		monthlyBudget = decimal.NewFromFloat(200.00)
+	}
+
+	budgetHandler := handlers.NewBudgetHandler(
+		database.NewAIUsageRepositoryFromDB(db),
+		dailyBudget,
+		monthlyBudget,
+	)
 
 	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
 	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
@@ -247,6 +278,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			trading.GET("/positions", tradingHandler.ListPositions)
 			trading.GET("/positions/snapshot", tradingHandler.GetPositionSnapshot)
 			trading.GET("/positions/:position_id", tradingHandler.GetPosition)
+		}
+
+		budget := v1.Group("/budget")
+		budget.Use(authMiddleware.RequireAuth())
+		{
+			budget.GET("/status", budgetHandler.GetBudgetStatus)
+			budget.GET("/check", budgetHandler.CheckBudget)
 		}
 
 		// Exchange management
