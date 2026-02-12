@@ -32,24 +32,26 @@
 - Validate both fresh-install and upgrade paths when adding schema changes.
 
 ## BACKLOG (bd CLI)
-Database layer roadmap tracked via `bd` (~10 items):
 
-### Schema Evolution
+**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+
+### Recently Completed (✓)
+- ✓ `neura-yus`: API keys encryption at rest (AES-256-GCM)
+- ✓ `neura-nh5`: Risk event notification log schema
+- ✓ `neura-px6`: Security audit data retention tables
+- ✓ `neura-9ai`: Intrusion detection audit log schema
+- ✓ `neura-2n4`: Quest state persistence schema (quests, checkpoints, progress tables)
+- ✓ `neura-32w`: Fund with minimal capital schema (USDC)
+
+### Schema Evolution (Blocked)
 - `neura-zn8c`: Replace in-memory trading handler state with persistent storage (new tables)
-- `neura-2n4`: Quest state persistence schema (quests, checkpoints, progress tables)
 - `neura-8de`: Virtual account tracking schema (paper trading accounts)
 - `neura-mm5`: Paper trade recording schema (paper_trades table)
 - `neura-u4w`: Paper execution simulation schema
 
-### Security & Encryption
-- `neura-yus`: API keys encryption at rest (AES-256-GCM)
+### Security & Encryption (Blocked)
 - `neura-5of`: Telegram profile binding schema (operator_identities table)
 - `neura-ydp`: Operator identity encryption (Argon2 + encrypted fields)
-
-### Audit & Logging
-- `neura-nh5`: Risk event notification log schema
-- `neura-9ai`: Intrusion detection audit log schema
-- `neura-px6`: Security audit data retention tables
 
 ## ANTI-PATTERNS
 - Renumbering existing migrations after they are shared.

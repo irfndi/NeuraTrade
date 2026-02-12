@@ -51,81 +51,95 @@ golangci-lint run
 - Coupling handler response shaping with repository SQL operations.
 
 ## BACKLOG (bd CLI)
-Complete backend roadmap tracked via `bd` (~80 items):
+
+**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
 
 ### Ready to Work (No Blockers)
-- `neura-4ms`: Extend CCXT wrapper for unified exchange access
-- `neura-wiz`: Gamma API wrapper (market discovery)
-- `neura-yus`: AES-256-GCM encryption for API keys
-- `neura-myb`: Wallet minimum balance checks
-- `neura-2iq`: Analyst agent role
-
-### Exchange Integration
-- `neura-4ms`: CCXT wrapper extension
-- `neura-xxy`: WebSocket market data subscription (depends on neura-4ms)
-- `neura-1b6`: Token bucket rate limit management (depends on neura-xxy)
-- `neura-wiz`: Gamma API wrapper (market discovery)
+- `neura-yzv`: CLI bootstrap command
+- `neura-aav`: Connectivity checks for all configured providers
+- `neura-xxy`: WebSocket market data subscription
 - `neura-qts`: CLOB API wrapper (order execution)
+- `neura-7et`: Build prompt builder from skill.md + context
+- `neura-r1d`: Progressive disclosure system
+
+### Recently Completed (✓)
+- ✓ `neura-myb`: Wallet minimum balance checks
+- ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
+- ✓ `neura-6tk`: Event-driven quest triggers
+- ✓ `neura-2iq`: Analyst agent role
+- ✓ `neura-fs8`: API key validation (permissions)
+- ✓ `neura-2n4`: Quest state persistence
+- ✓ `neura-e8u`: Daily loss cap
+- ✓ `neura-cha`: Sum-to-one arbitrage skill.md
+- ✓ `neura-2xe`: Position snapshot tool
+- ✓ `neura-lue`: Readiness endpoints
+- ✓ `neura-4eo`: Arbitrage primitives
+- ✓ `neura-1s5`: Risk primitives
+- ✓ `neura-47g`: AI provider registry with models.dev
+- ✓ `neura-yus`: AES-256-GCM encryption for API keys
+- ✓ `neura-za8`: Rate limit monitoring
+- ✓ `neura-px6`: Security audits (gosec, gitleaks)
+- ✓ `neura-1nz`: Cron-based quest scheduling
+- ✓ `neura-l70a`: Refactor talib wrapper to goflux
+- ✓ `neura-161`: Distributed locks (Redis)
+- ✓ `neura-byz`: Goroutine pool with concurrency limits
+- ✓ `neura-axx`: Action streaming format
+- ✓ `neura-nh5`: Risk event notifications
+- ✓ `neura-wiz`: Gamma API wrapper (Polymarket)
+- ✓ `neura-5z3`: Daily budget enforcement
+- ✓ `neura-7mj`: Monthly budget enforcement
+- ✓ `neura-94c`: /status budget display
+- ✓ `neura-l2z`: place_order tool endpoint
+- ✓ `neura-wz7`: cancel_order tool endpoint
+- ✓ `neura-9ai`: Intrusion detection
+- ✓ `neura-32w`: Fund with minimal capital (USDC)
+
+### Exchange Integration (Blocked)
+- `neura-4ms`: CCXT wrapper extension
+- `neura-xxy`: WebSocket market data (depends on neura-4ms)
+- `neura-1b6`: Rate limit management (depends on neura-xxy)
 - `neura-adu`: Data API wrapper (positions/balances)
 - `neura-4p6`: Exchange resilience monitoring
-- `neura-za8`: Rate limit monitoring
 
-### Security & Encryption
-- `neura-yus`: AES-256-GCM encryption for API keys
-- `neura-c7r`: Key masking in logs and Telegram output
-- `neura-px6`: Security audits (gosec, gitleaks)
-- `neura-9ai`: Intrusion detection
+### Security & Encryption (Blocked)
+- `neura-c7r`: Key masking in logs/Telegram
+- `neura-ydp`: Operator identity encryption (Argon2)
 
-### Trading Engine
+### Trading Engine (Blocked)
 - `neura-cd1`: Arbitrage trigger detection
-- `neura-cha`: Sum-to-one arbitrage skill.md codification
-- `neura-a7r`: Tight stop-loss execution
 - `neura-sa4`: Order book imbalance detection
 - `neura-we2`: Scalping skill.md codification
-- `neura-1wi`: FOK (Fill or Kill) order execution
-- `neura-l70a`: Refactor talib wrapper to goflux
+- `neura-a7r`: Tight stop-loss execution
+- `neura-1wi`: FOK order execution
 
-### Risk Management
-- `neura-myb`: Wallet minimum checks → `neura-fs8`: API key permissions
+### Risk Management (Blocked)
 - `neura-8y8`: Emergency rollbacks
 - `neura-kxq`: Kill switch monitoring
-- `neura-e8u`: Daily loss cap
 - `neura-bol`: Consecutive-loss pause
-- `neura-q4j`: Max drawdown halt
 - `neura-3ms`: Position-size throttle
 
-### Paper Trading
+### Paper Trading (Blocked)
 - `neura-u4w`: Paper execution simulation
 - `neura-8de`: Virtual account tracking
 - `neura-mm5`: Paper trade recording
-- `neura-32w`: Fund with minimal capital (USDC)
 
-### Budget & Reporting
-- `neura-5z3`: Daily budget enforcement
-- `neura-7mj`: Monthly budget enforcement
-- `neura-94c`: /status budget display
+### Budget & Reporting (Blocked)
 - `neura-fvk`: Fund milestone alerts
 
-### Order Management
-- `neura-l2z`: place_order tool endpoint
-- `neura-wz7`: cancel_order tool endpoint
-- `neura-2xe`: Position snapshot tool
-- `neura-txu`: Controlled liquidation tool
-
-### Notifications & Streaming
-- `neura-nh5`: Risk event notifications
-- `neura-im9`: Quest progress updates
-- `neura-axx`: Action streaming format
+### Notifications & Streaming (Blocked)
 - `neura-bri`: AI reasoning summaries
 
-### Technical Infrastructure
-- `neura-161`: Distributed locks
-- `neura-byz`: Goroutine pool with concurrency limits
+### Technical Infrastructure (Blocked)
 - `neura-zn8c`: Replace in-memory state with persistent storage
-- `neura-lue`: Expose readiness endpoints
-- `neura-1s5`: Expose risk primitives
-- `neura-4eo`: Expose arbitrage primitives
 - `neura-duw`: Expose cleanup endpoints
+
+### Order Management (Blocked)
+- `neura-txu`: Controlled liquidation tool
+- `neura-duw`: Expose cleanup endpoints
+
+### Order Management (Blocked)
+- `neura-2xe`: Position snapshot tool
+- `neura-txu`: Controlled liquidation tool
 
 ## SCOPED GUIDES
 - `internal/api/AGENTS.md`
