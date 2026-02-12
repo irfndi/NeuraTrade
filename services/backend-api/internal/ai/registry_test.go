@@ -65,7 +65,7 @@ func TestNewRegistry(t *testing.T) {
 func TestRegistryCacheOperations(t *testing.T) {
 	ctx := context.Background()
 	client := setupTestRedis(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	logger := zap.NewNop()
 	registry := NewRegistry(
@@ -152,7 +152,7 @@ func TestRegistryCacheOperations(t *testing.T) {
 func TestFindModel(t *testing.T) {
 	ctx := context.Background()
 	client := setupTestRedis(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	registry := NewRegistry(WithRedis(client))
 
@@ -200,7 +200,7 @@ func TestFindModel(t *testing.T) {
 func TestGetModelsByProvider(t *testing.T) {
 	ctx := context.Background()
 	client := setupTestRedis(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	registry := NewRegistry(WithRedis(client))
 
@@ -231,7 +231,7 @@ func TestGetModelsByProvider(t *testing.T) {
 func TestFindModelsByCapability(t *testing.T) {
 	ctx := context.Background()
 	client := setupTestRedis(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	registry := NewRegistry(WithRedis(client))
 

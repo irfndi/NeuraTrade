@@ -64,7 +64,7 @@ func TestRateLimiterMiddleware(t *testing.T) {
 	defer s.Close()
 
 	client := redis.NewClient(&redis.Options{Addr: s.Addr()})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	config := RateLimitConfig{
 		Requests:       2,
@@ -91,7 +91,7 @@ func TestRateLimiterMiddleware(t *testing.T) {
 
 	t.Run("allows requests within limit", func(t *testing.T) {
 		ctx := context.Background()
-		rl.Reset(ctx, "test-client")
+		_ = rl.Reset(ctx, "test-client")
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -104,7 +104,7 @@ func TestRateLimiterMiddleware(t *testing.T) {
 
 	t.Run("blocks requests exceeding limit", func(t *testing.T) {
 		ctx := context.Background()
-		rl.Reset(ctx, "test-client")
+		_ = rl.Reset(ctx, "test-client")
 
 		// Make requests up to limit
 		for i := 0; i < 2; i++ {
@@ -194,7 +194,7 @@ func TestGetStats(t *testing.T) {
 	defer s.Close()
 
 	client := redis.NewClient(&redis.Options{Addr: s.Addr()})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	config := RateLimitConfig{
 		Requests: 10,
@@ -227,15 +227,16 @@ func TestGetStats(t *testing.T) {
 	t.Run("get stats local mode", func(t *testing.T) {
 		localRl := NewRateLimiter(config, nil, zap.NewNop())
 		key := "local-stats-test"
+		ctx := context.Background()
 
-		stats, err := localRl.GetStats(nil, key)
+		stats, err := localRl.GetStats(ctx, key)
 		require.NoError(t, err)
 		assert.Equal(t, 10, stats.Remaining)
 
-		_, _, _, err = localRl.checkAndUpdate(nil, key)
+		_, _, _, err = localRl.checkAndUpdate(ctx, key)
 		require.NoError(t, err)
 
-		stats, err = localRl.GetStats(nil, key)
+		stats, err = localRl.GetStats(ctx, key)
 		require.NoError(t, err)
 		assert.Equal(t, 1, stats.Used)
 		assert.Equal(t, 9, stats.Remaining)

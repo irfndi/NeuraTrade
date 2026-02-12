@@ -167,7 +167,9 @@ func (r *Registry) FetchModels(ctx context.Context) (*ModelRegistry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models from models.dev: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("models.dev API returned status %d", resp.StatusCode)
