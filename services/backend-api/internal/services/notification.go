@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -285,6 +284,7 @@ func (ns *NotificationService) sendTelegramMessageWithResult(ctx context.Context
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
+	// #nosec G704 -- URL is an internal service endpoint configured by trusted env
 	resp, err := client.Do(req)
 	if err != nil {
 		observability.FinishSpan(httpSpan, err)
@@ -348,7 +348,7 @@ func (ns *NotificationService) sendTelegramMessageWithRetry(ctx context.Context,
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			// Calculate delay with exponential backoff and jitter
-			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+			delay := baseDelay * time.Duration(1<<(attempt-1))
 			if lastResult.RetryAfter > 0 {
 				delay = time.Duration(lastResult.RetryAfter) * time.Second
 			}
@@ -988,8 +988,7 @@ func (ns *NotificationService) generateOpportunityHash(opportunities []Arbitrage
 			opp.BuyPrice, opp.SellPrice, opp.ProfitPercent))
 	}
 
-	hash := md5.Sum([]byte(hashData.String()))
-	return hex.EncodeToString(hash[:])
+	return stableHash(hashData.String())
 }
 
 // generateTechnicalSignalsHash creates a consistent hash for technical signals
@@ -1000,8 +999,12 @@ func (ns *NotificationService) generateTechnicalSignalsHash(signals []TechnicalS
 			signal.Symbol, signal.SignalType, signal.Action, signal.CurrentPrice, signal.Confidence))
 	}
 
-	hash := md5.Sum([]byte(hashData.String()))
-	return hex.EncodeToString(hash[:])
+	return stableHash(hashData.String())
+}
+
+func stableHash(input string) string {
+	sum := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(sum[:])
 }
 
 // getCachedMessage retrieves a cached message from Redis
@@ -1115,7 +1118,7 @@ func (ns *NotificationService) sendEnhancedArbitrageAlert(ctx context.Context, u
 	}
 
 	// Generate hash for signal to check cache
-	signalHash := fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprintf("%s:%s:%.4f", signal.Symbol, signal.SignalType, signal.Confidence.InexactFloat64()))))
+	signalHash := stableHash(fmt.Sprintf("%s:%s:%.4f", signal.Symbol, signal.SignalType, signal.Confidence.InexactFloat64()))
 
 	// Try to get cached message first
 	var message string

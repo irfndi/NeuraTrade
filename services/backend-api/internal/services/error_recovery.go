@@ -2,8 +2,9 @@ package services
 
 import (
 	"context"
+	crand "crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"sync"
 	"time"
 
@@ -274,7 +275,11 @@ func (erm *ErrorRecoveryManager) calculateDelay(baseDelay time.Duration, policy 
 
 	// Add up to 25% jitter using proper random distribution
 	// jitterFactor ranges from -0.25 to +0.25
-	jitterFactor := (rand.Float64() - 0.5) * 0.5
+	jitterFactor := 0.0
+	randomValue, err := crand.Int(crand.Reader, big.NewInt(1000))
+	if err == nil {
+		jitterFactor = (float64(randomValue.Int64())/1000.0 - 0.5) * 0.5
+	}
 	jitter := time.Duration(float64(baseDelay) * jitterFactor)
 	return baseDelay + jitter
 }

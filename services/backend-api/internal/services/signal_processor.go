@@ -300,7 +300,7 @@ func (sp *SignalProcessor) processSignalBatchWithRetry(ctx context.Context, star
 			}).Info("Retrying signal batch processing")
 
 			// Wait before retry with exponential backoff
-			retryDelay := sp.config.RetryDelay * time.Duration(1<<uint(attempt-1))
+			retryDelay := sp.config.RetryDelay * time.Duration(1<<(attempt-1))
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

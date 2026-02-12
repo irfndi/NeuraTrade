@@ -2391,8 +2391,8 @@ func (c *CollectorService) tryGetSymbolsConcurrent(ctx context.Context, exchange
 	resultChan := make(chan exchangeResult, len(exchanges))
 
 	// Track failed exchanges for fallback decision
-	failedExchanges := int32(0)
-	maxFailures := int32(len(exchanges) / 2) // Allow up to 50% failures
+	failedExchanges := int64(0)
+	maxFailures := int64(len(exchanges) / 2) // Allow up to 50% failures
 
 	// Start goroutines for each exchange
 	for _, exchangeID := range exchanges {
@@ -2424,7 +2424,7 @@ func (c *CollectorService) tryGetSymbolsConcurrent(ctx context.Context, exchange
 			})
 
 			if err != nil {
-				atomic.AddInt32(&failedExchanges, 1)
+				atomic.AddInt64(&failedExchanges, 1)
 			}
 
 			resultChan <- exchangeResult{
@@ -2445,9 +2445,9 @@ func (c *CollectorService) tryGetSymbolsConcurrent(ctx context.Context, exchange
 	successfulExchanges := 0
 	for result := range resultChan {
 		// Check if we should abort due to too many failures
-		if atomic.LoadInt32(&failedExchanges) > maxFailures {
+		if atomic.LoadInt64(&failedExchanges) > maxFailures {
 			return nil, fmt.Errorf("too many exchange failures (%d/%d), aborting concurrent collection",
-				atomic.LoadInt32(&failedExchanges), len(exchanges))
+				atomic.LoadInt64(&failedExchanges), len(exchanges))
 		}
 
 		if result.err != nil {

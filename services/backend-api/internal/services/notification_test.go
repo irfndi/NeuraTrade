@@ -504,7 +504,7 @@ func TestNotificationService_generateOpportunityHash(t *testing.T) {
 
 	hash := ns.generateOpportunityHash(opportunities)
 	assert.NotEmpty(t, hash)
-	assert.Len(t, hash, 32) // MD5 hash length
+	assert.Len(t, hash, 64) // SHA-256 hash length
 
 	// Same opportunities should produce same hash
 	hash2 := ns.generateOpportunityHash(opportunities)
@@ -526,7 +526,7 @@ func TestNotificationService_generateTechnicalSignalsHash(t *testing.T) {
 
 	hash := ns.generateTechnicalSignalsHash(signals)
 	assert.NotEmpty(t, hash)
-	assert.Len(t, hash, 32) // MD5 hash length
+	assert.Len(t, hash, 64) // SHA-256 hash length
 
 	// Same signals should produce same hash
 	hash2 := ns.generateTechnicalSignalsHash(signals)

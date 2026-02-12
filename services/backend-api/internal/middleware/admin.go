@@ -59,6 +59,7 @@ func NewAdminMiddleware() *AdminMiddleware {
 	}
 
 	// Prevent use of default/example keys in any environment
+	// #nosec G101 -- these are explicit denylisted example values, not embedded credentials
 	if apiKey == "admin-dev-key-change-in-production" || apiKey == "admin-secret-key-change-me" {
 		if isProductionEnvironment() {
 			log.Fatal("ADMIN_API_KEY cannot use default/example values in production")
