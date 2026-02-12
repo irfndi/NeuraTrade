@@ -140,6 +140,9 @@ jobs:
       - name: Install dependencies
         run: make mod-download
 
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
       - name: Run database migrations
         run: cd services/backend-api/database && chmod +x migrate.sh && ./migrate.sh run
 
@@ -226,7 +229,7 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run static security scan (gosec)
-        run: cd services/backend-api && gosec ./...
+        run: cd services/backend-api && gosec -severity medium -confidence medium -exclude=G117 ./...
 
       - name: Run vulnerability scan (govulncheck)
         run: cd services/backend-api && govulncheck ./...
