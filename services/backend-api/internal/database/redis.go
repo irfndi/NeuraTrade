@@ -59,11 +59,34 @@ func NewRedisConnection(cfg config.RedisConfig) (*RedisClient, error) {
 func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager ErrorRecoveryManager) (*RedisClient, error) {
 	logger := zaplogrus.New()
 
-	rdb := redis.NewClient(&redis.Options{
+	// Build Redis client options with optimized defaults
+	opts := &redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Password: cfg.Password,
 		DB:       cfg.DB,
-	})
+	}
+
+	// Apply connection pool optimizations
+	if cfg.PoolSize > 0 {
+		opts.PoolSize = cfg.PoolSize
+	}
+	if cfg.MinIdleConns > 0 {
+		opts.MinIdleConns = cfg.MinIdleConns
+	}
+	if cfg.DialTimeout > 0 {
+		opts.DialTimeout = time.Duration(cfg.DialTimeout) * time.Second
+	}
+	if cfg.ReadTimeout > 0 {
+		opts.ReadTimeout = time.Duration(cfg.ReadTimeout) * time.Second
+	}
+	if cfg.WriteTimeout > 0 {
+		opts.WriteTimeout = time.Duration(cfg.WriteTimeout) * time.Second
+	}
+	if cfg.PoolTimeout > 0 {
+		opts.PoolTimeout = time.Duration(cfg.PoolTimeout) * time.Second
+	}
+
+	rdb := redis.NewClient(opts)
 
 	// Add Sentry hook for error tracking
 	rdb.AddHook(&RedisSentryHook{})
