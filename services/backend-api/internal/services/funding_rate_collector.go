@@ -282,7 +282,10 @@ func (c *FundingRateCollector) cleanupOldData(ctx context.Context) error {
 		return fmt.Errorf("failed to cleanup old data: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	if rowsAffected > 0 {
 		c.logger.WithFields(map[string]interface{}{
 			"rows_deleted":   rowsAffected,
