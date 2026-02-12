@@ -1,3 +1,5 @@
+name: Validation
+
 on:
   push:
     branches: [ main, develop, development ]
@@ -42,10 +44,10 @@ jobs:
       - name: Install dependencies
         run: make mod-download
 
-      - name: Check Formatting
+      - name: Check formatting
         run: make fmt-check
 
-      - name: Run Typecheck
+      - name: Run typecheck
         run: cd services/backend-api && go vet ./...
 
       - name: Run Go lint
@@ -82,24 +84,233 @@ jobs:
             ${{ runner.os }}-bun-${{ matrix.service }}-
 
       - name: Install dependencies
+        run: cd services/${{ matrix.service }} && bun install --frozen-lockfile
+
+      - name: Check formatting
+        run: cd services/${{ matrix.service }} && bunx prettier --check .
+
+      - name: Run lint
+        run: cd services/${{ matrix.service }} && bunx oxlint .
+
+      - name: Run typecheck
+        run: cd services/${{ matrix.service }} && bunx tsc --noEmit
+
+  backend-tests:
+    name: Backend Tests (unit/integration/e2e + coverage)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: celebrum_ai_user
+          POSTGRES_PASSWORD: celebrum_ai_password
+          POSTGRES_DB: celebrum_ai
+        options: >-
+          --health-cmd "pg_isready -U celebrum_ai_user -d celebrum_ai"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_HOST: localhost
+      DATABASE_PORT: '5432'
+      DATABASE_USER: celebrum_ai_user
+      DATABASE_PASSWORD: celebrum_ai_password
+      DATABASE_DBNAME: celebrum_ai
+      DATABASE_URL: postgres://celebrum_ai_user:celebrum_ai_password@localhost:5432/celebrum_ai?sslmode=disable
+      REDIS_ADDR: localhost:6379
+      REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: services/backend-api/go.sum
+
+      - name: Install dependencies
         run: make mod-download
 
-      - name: Check Formatting
-        run: |
-          cd services/${{ matrix.service }}
-          bun run format-check
+      - name: Run database migrations
+        run: cd services/backend-api/database && chmod +x migrate.sh && ./migrate.sh run
 
-      - name: Run Typecheck
-        run: |
-          cd services/${{ matrix.service }}
-          bun run typecheck
+      - name: Run unit tests
+        run: cd services/backend-api && go test -v -race ./cmd/... ./internal/... ./pkg/...
 
-      - name: Run Linter
-        run: |
-          cd services/${{ matrix.service }}
-          bun run lint
+      - name: Run integration tests
+        run: cd services/backend-api && go test -v ./test/integration/...
 
-      - name: Run Tests
+      - name: Run e2e tests
+        run: cd services/backend-api && go test -v ./test/e2e/...
+
+      - name: Run coverage report
+        run: cd services/backend-api && go test -v -covermode=atomic -coverprofile=../../coverage.out ./...
+
+      - name: Check coverage threshold
+        run: make coverage-check
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.out
+
+  frontend-tests:
+    name: Frontend Tests (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ccxt-service, telegram-service]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            services/${{ matrix.service }}/node_modules
+          key: ${{ runner.os }}-bun-${{ matrix.service }}-${{ hashFiles(format('services/{0}/bun.lock', matrix.service)) }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ matrix.service }}-
+
+      - name: Install dependencies
+        run: cd services/${{ matrix.service }} && bun install --frozen-lockfile
+
+      - name: Run tests
+        run: cd services/${{ matrix.service }} && bun test
+
+  backend-security:
+    name: Backend Security (strict)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: services/backend-api/go.sum
+
+      - name: Install dependencies
+        run: make mod-download
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install security tools
         run: |
-          cd services/${{ matrix.service }}
-          bun test --coverage
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run static security scan (gosec)
+        run: cd services/backend-api && gosec ./...
+
+      - name: Run vulnerability scan (govulncheck)
+        run: cd services/backend-api && govulncheck ./...
+
+  frontend-security:
+    name: Frontend Security (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ccxt-service, telegram-service]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            services/${{ matrix.service }}/node_modules
+          key: ${{ runner.os }}-bun-${{ matrix.service }}-${{ hashFiles(format('services/{0}/bun.lock', matrix.service)) }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ matrix.service }}-
+
+      - name: Install dependencies
+        run: cd services/${{ matrix.service }} && bun install --frozen-lockfile
+
+      - name: Run dependency audit (strict)
+        run: cd services/${{ matrix.service }} && bun audit
+
+  backend-build:
+    name: Backend Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: services/backend-api/go.sum
+
+      - name: Install dependencies
+        run: make mod-download
+
+      - name: Build backend
+        run: cd services/backend-api && CGO_ENABLED=0 go build -v ./cmd/server
+
+  frontend-build:
+    name: Frontend Build (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ccxt-service, telegram-service]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            services/${{ matrix.service }}/node_modules
+          key: ${{ runner.os }}-bun-${{ matrix.service }}-${{ hashFiles(format('services/{0}/bun.lock', matrix.service)) }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ matrix.service }}-
+
+      - name: Install dependencies
+        run: cd services/${{ matrix.service }} && bun install --frozen-lockfile
+
+      - name: Build frontend service
+        run: cd services/${{ matrix.service }} && bun run build
