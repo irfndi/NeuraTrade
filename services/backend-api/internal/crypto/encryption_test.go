@@ -36,8 +36,10 @@ func TestNewEncryptor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.key != nil && len(tt.key) == KeyLength {
-				rand.Read(tt.key)
+			if len(tt.key) == KeyLength {
+				if _, err := rand.Read(tt.key); err != nil {
+					t.Fatalf("rand.Read failed: %v", err)
+				}
 			}
 			enc, err := NewEncryptor(tt.key)
 			if err != tt.wantErr {
@@ -85,8 +87,10 @@ func TestNewEncryptorFromPassphrase(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.salt != nil && len(tt.salt) >= SaltSize {
-				rand.Read(tt.salt)
+			if len(tt.salt) >= SaltSize {
+				if _, err := rand.Read(tt.salt); err != nil {
+					t.Fatalf("rand.Read failed: %v", err)
+				}
 			}
 			enc, salt, err := NewEncryptorFromPassphrase(tt.passphrase, tt.salt)
 			if (err != nil) != tt.wantErr {
@@ -261,7 +265,9 @@ func TestDecryptInvalidCiphertext(t *testing.T) {
 func TestPassphraseDerivationConsistency(t *testing.T) {
 	passphrase := "my-secret-passphrase"
 	salt := make([]byte, SaltSize)
-	rand.Read(salt)
+	if _, err := rand.Read(salt); err != nil {
+		t.Fatalf("rand.Read failed: %v", err)
+	}
 
 	enc1, _, err := NewEncryptorFromPassphrase(passphrase, salt)
 	if err != nil {
@@ -387,28 +393,47 @@ func TestCloseClearsKey(t *testing.T) {
 }
 
 func BenchmarkEncrypt(b *testing.B) {
-	key, _ := GenerateKey()
-	enc, _ := NewEncryptor(key)
+	key, err := GenerateKey()
+	if err != nil {
+		b.Fatal(err)
+	}
+	enc, err := NewEncryptor(key)
+	if err != nil {
+		b.Fatal(err)
+	}
 	defer enc.Close()
 
 	plaintext := []byte("benchmark test data")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		enc.Encrypt(plaintext)
+		if _, err := enc.Encrypt(plaintext); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
 func BenchmarkDecrypt(b *testing.B) {
-	key, _ := GenerateKey()
-	enc, _ := NewEncryptor(key)
+	key, err := GenerateKey()
+	if err != nil {
+		b.Fatal(err)
+	}
+	enc, err := NewEncryptor(key)
+	if err != nil {
+		b.Fatal(err)
+	}
 	defer enc.Close()
 
 	plaintext := []byte("benchmark test data")
-	ciphertext, _ := enc.Encrypt(plaintext)
+	ciphertext, err := enc.Encrypt(plaintext)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		enc.Decrypt(ciphertext)
+		if _, err := enc.Decrypt(ciphertext); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

@@ -90,7 +90,9 @@ func TestGetMarkets(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockMarkets)
+		if err := json.NewEncoder(w).Encode(mockMarkets); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -124,7 +126,9 @@ func TestGetMarketsWithFilter(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]Market{})
+		if err := json.NewEncoder(w).Encode([]Market{}); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -157,7 +161,9 @@ func TestGetMarket(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockMarket)
+		if err := json.NewEncoder(w).Encode(mockMarket); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -184,7 +190,9 @@ func TestSearchMarkets(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]Market{})
+		if err := json.NewEncoder(w).Encode([]Market{}); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -239,7 +247,9 @@ func TestFindSumToOneArbitrage(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockMarkets)
+		if err := json.NewEncoder(w).Encode(mockMarkets); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -273,7 +283,9 @@ func TestFindSumToOneArbitrage(t *testing.T) {
 func TestHealthCheck(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]Market{})
+		if err := json.NewEncoder(w).Encode([]Market{}); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
