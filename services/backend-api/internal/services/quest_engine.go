@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // QuestType defines the type of quest
@@ -44,21 +45,23 @@ const (
 
 // Quest represents a schedulable task in the autonomous trading system
 type Quest struct {
-	ID           string                 `json:"id"`
-	Name         string                 `json:"name"`
-	Description  string                 `json:"description"`
-	Type         QuestType              `json:"type"`
-	Cadence      QuestCadence           `json:"cadence"`
-	Status       QuestStatus            `json:"status"`
-	Prompt       string                 `json:"prompt"`
-	TargetCount  int                    `json:"target_count"`
-	CurrentCount int                    `json:"current_count"`
-	Checkpoint   map[string]interface{} `json:"checkpoint"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
-	CompletedAt  *time.Time             `json:"completed_at,omitempty"`
-	LastError    string                 `json:"last_error,omitempty"`
-	Metadata     map[string]string      `json:"metadata,omitempty"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Description    string                 `json:"description"`
+	Type           QuestType              `json:"type"`
+	Cadence        QuestCadence           `json:"cadence"`
+	CronExpr       string                 `json:"cron_expr,omitempty"` // Optional cron expression for custom schedules
+	Status         QuestStatus            `json:"status"`
+	Prompt         string                 `json:"prompt"`
+	TargetCount    int                    `json:"target_count"`
+	CurrentCount   int                    `json:"current_count"`
+	Checkpoint     map[string]interface{} `json:"checkpoint"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	LastExecutedAt *time.Time             `json:"last_executed_at,omitempty"` // Tracks last execution to prevent double-runs
+	CompletedAt    *time.Time             `json:"completed_at,omitempty"`
+	LastError      string                 `json:"last_error,omitempty"`
+	Metadata       map[string]string      `json:"metadata,omitempty"`
 }
 
 // QuestProgress represents the progress of a quest for API responses
@@ -104,6 +107,7 @@ type QuestEngine struct {
 	definitions     map[string]*QuestDefinition
 	handlers        map[QuestType]QuestHandler
 	store           QuestStore
+	redis           *redis.Client
 	stopCh          chan struct{}
 	running         bool
 }
@@ -114,6 +118,7 @@ type QuestStore interface {
 	GetQuest(ctx context.Context, id string) (*Quest, error)
 	ListQuests(ctx context.Context, chatID string, status QuestStatus) ([]*Quest, error)
 	UpdateQuestProgress(ctx context.Context, id string, current int, checkpoint map[string]interface{}) error
+	UpdateLastExecuted(ctx context.Context, id string, executedAt time.Time) error
 	SaveAutonomousState(ctx context.Context, state *AutonomousState) error
 	GetAutonomousState(ctx context.Context, chatID string) (*AutonomousState, error)
 }
@@ -179,6 +184,19 @@ func (s *InMemoryQuestStore) UpdateQuestProgress(ctx context.Context, id string,
 	return nil
 }
 
+// UpdateLastExecuted updates the last execution time for a quest
+func (s *InMemoryQuestStore) UpdateLastExecuted(ctx context.Context, id string, executedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	quest, ok := s.quests[id]
+	if !ok {
+		return fmt.Errorf("quest not found: %s", id)
+	}
+	quest.LastExecutedAt = &executedAt
+	quest.UpdatedAt = time.Now()
+	return nil
+}
+
 // SaveAutonomousState saves autonomous state
 func (s *InMemoryQuestStore) SaveAutonomousState(ctx context.Context, state *AutonomousState) error {
 	s.mu.Lock()
@@ -200,16 +218,21 @@ func (s *InMemoryQuestStore) GetAutonomousState(ctx context.Context, chatID stri
 
 // NewQuestEngine creates a new quest engine
 func NewQuestEngine(store QuestStore) *QuestEngine {
+	return NewQuestEngineWithRedis(store, nil)
+}
+
+// NewQuestEngineWithRedis creates a new quest engine with Redis for distributed coordination
+func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *QuestEngine {
 	engine := &QuestEngine{
 		quests:          make(map[string]*Quest),
 		autonomousState: make(map[string]*AutonomousState),
 		definitions:     make(map[string]*QuestDefinition),
 		handlers:        make(map[QuestType]QuestHandler),
 		store:           store,
+		redis:           redisClient,
 		stopCh:          make(chan struct{}),
 	}
 
-	// Register default quest definitions
 	engine.registerDefaultDefinitions()
 
 	return engine
@@ -399,23 +422,47 @@ func (e *QuestEngine) tick() {
 	}
 }
 
-// shouldExecute determines if a quest should run based on its cadence
 func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
+	minInterval := 1 * time.Minute
+
+	if quest.LastExecutedAt != nil && now.Sub(*quest.LastExecutedAt) < minInterval {
+		return false
+	}
+
 	switch quest.Cadence {
 	case CadenceMicro:
-		// Every 5 minutes - check minute divisible by 5
-		return now.Minute()%5 == 0
+		if now.Minute()%5 != 0 {
+			return false
+		}
+		if quest.LastExecutedAt != nil {
+			return now.Sub(*quest.LastExecutedAt) >= 5*time.Minute
+		}
+		return true
 	case CadenceHourly:
-		// At the start of each hour
-		return now.Minute() == 0
+		if now.Minute() != 0 {
+			return false
+		}
+		if quest.LastExecutedAt != nil {
+			return now.Sub(*quest.LastExecutedAt) >= 1*time.Hour
+		}
+		return true
 	case CadenceDaily:
-		// Once per day at midnight UTC
-		return now.Hour() == 0 && now.Minute() == 0
+		if now.Hour() != 0 || now.Minute() != 0 {
+			return false
+		}
+		if quest.LastExecutedAt != nil {
+			return now.Sub(*quest.LastExecutedAt) >= 24*time.Hour
+		}
+		return true
 	case CadenceWeekly:
-		// Once per week on Sunday at midnight UTC
-		return now.Weekday() == time.Sunday && now.Hour() == 0 && now.Minute() == 0
+		if now.Weekday() != time.Sunday || now.Hour() != 0 || now.Minute() != 0 {
+			return false
+		}
+		if quest.LastExecutedAt != nil {
+			return now.Sub(*quest.LastExecutedAt) >= 7*24*time.Hour
+		}
+		return true
 	case CadenceOnetime:
-		// Goal/triggered quests execute when activated
 		return false
 	default:
 		return false
@@ -436,17 +483,61 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	lockKey := fmt.Sprintf("quest:lock:%s", quest.ID)
+	locked := e.acquireLock(ctx, lockKey, 5*time.Minute)
+	if !locked {
+		log.Printf("Quest %s skipped: could not acquire lock (another instance may be running)", quest.ID)
+		return
+	}
+	defer e.releaseLock(ctx, lockKey)
+
 	if err := handler(ctx, quest); err != nil {
 		log.Printf("Quest %s (%s) failed: %v", quest.ID, quest.Name, err)
 		e.updateQuestStatus(quest.ID, QuestStatusFailed)
 		quest.LastError = err.Error()
 	} else {
 		log.Printf("Quest %s (%s) completed successfully", quest.ID, quest.Name)
+		now := time.Now()
+		e.updateLastExecuted(quest.ID, now)
 		if quest.Type == QuestTypeRoutine {
-			// Routine quests stay active for next run
 			e.updateQuestStatus(quest.ID, QuestStatusActive)
 		} else {
 			e.updateQuestStatus(quest.ID, QuestStatusCompleted)
+		}
+	}
+}
+
+func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Duration) bool {
+	if e.redis == nil {
+		return true
+	}
+	ok, err := e.redis.SetNX(ctx, key, "locked", ttl).Result()
+	if err != nil {
+		log.Printf("Failed to acquire lock %s: %v", key, err)
+		return false
+	}
+	return ok
+}
+
+func (e *QuestEngine) releaseLock(ctx context.Context, key string) {
+	if e.redis == nil {
+		return
+	}
+	e.redis.Del(ctx, key)
+}
+
+func (e *QuestEngine) updateLastExecuted(questID string, executedAt time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if quest, ok := e.quests[questID]; ok {
+		quest.LastExecutedAt = &executedAt
+		quest.UpdatedAt = time.Now()
+
+		if e.store != nil {
+			if err := e.store.UpdateLastExecuted(context.Background(), questID, executedAt); err != nil {
+				log.Printf("Failed to persist last executed time: %v", err)
+			}
 		}
 	}
 }
