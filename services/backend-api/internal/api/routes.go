@@ -87,6 +87,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			internalTelegram.GET("/users/:id", telegramInternalHandler.GetUserByChatID)
 			internalTelegram.GET("/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
 			internalTelegram.POST("/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
+			internalTelegram.POST("/autonomous/begin", telegramInternalHandler.BeginAutonomous)
+			internalTelegram.POST("/autonomous/pause", telegramInternalHandler.PauseAutonomous)
+			internalTelegram.POST("/wallets/connect_exchange", telegramInternalHandler.ConnectExchange)
+			internalTelegram.POST("/wallets/connect_polymarket", telegramInternalHandler.ConnectPolymarket)
+			internalTelegram.POST("/wallets", telegramInternalHandler.AddWallet)
+			internalTelegram.POST("/wallets/remove", telegramInternalHandler.RemoveWallet)
+			internalTelegram.GET("/wallets", telegramInternalHandler.GetWallets)
+			internalTelegram.GET("/doctor", telegramInternalHandler.GetDoctor)
 		}
 	}
 
@@ -179,6 +187,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegram.GET("/internal/users/:id", telegramInternalHandler.GetUserByChatID)
 			telegram.GET("/internal/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
 			telegram.POST("/internal/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
+			telegram.POST("/internal/autonomous/begin", telegramInternalHandler.BeginAutonomous)
+			telegram.POST("/internal/autonomous/pause", telegramInternalHandler.PauseAutonomous)
+			telegram.POST("/internal/wallets/connect_exchange", telegramInternalHandler.ConnectExchange)
+			telegram.POST("/internal/wallets/connect_polymarket", telegramInternalHandler.ConnectPolymarket)
+			telegram.POST("/internal/wallets", telegramInternalHandler.AddWallet)
+			telegram.POST("/internal/wallets/remove", telegramInternalHandler.RemoveWallet)
+			telegram.GET("/internal/wallets", telegramInternalHandler.GetWallets)
+			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
 		}
 
 		// User management

@@ -492,3 +492,123 @@ func TestTelegramInternalHandler_SetNotificationPreferences_DeleteError(t *testi
 	assert.Equal(t, "Failed to update preferences", response["error"])
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
+
+func TestTelegramInternalHandler_ConnectPolymarket_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockDB, err := pgxmock.NewPool()
+	assert.NoError(t, err)
+	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
+
+	handler := NewTelegramInternalHandler(dbPool, nil)
+
+	requestBody := `{"chat_id":"777","wallet_address":"0x1234567890abcdef1234567890abcdef12345678"}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/telegram/internal/wallets/connect_polymarket", bytes.NewBufferString(requestBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mockDB.ExpectQuery("INSERT INTO telegram_operator_wallets").
+		WithArgs(
+			pgxmock.AnyArg(),
+			"777",
+			"polymarket",
+			"trading",
+			"0x1234567890abcdef1234567890abcdef12345678",
+			"",
+			pgxmock.AnyArg(),
+		).
+		WillReturnRows(pgxmock.NewRows([]string{"wallet_id"}).AddRow("wallet-1"))
+
+	handler.ConnectPolymarket(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, true, response["ok"])
+	assert.Equal(t, "Polymarket wallet connected", response["message"])
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestTelegramInternalHandler_BeginAutonomous_ReadinessBlocked(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockDB, err := pgxmock.NewPool()
+	assert.NoError(t, err)
+	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
+
+	handler := NewTelegramInternalHandler(dbPool, nil)
+
+	requestBody := `{"chat_id":"777"}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/telegram/internal/autonomous/begin", bytes.NewBufferString(requestBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = 'polymarket' AND status = 'connected'`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
+
+	handler.BeginAutonomous(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, false, response["ok"])
+	assert.Equal(t, false, response["readiness_passed"])
+
+	checks, ok := response["failed_checks"].([]interface{})
+	assert.True(t, ok)
+	assert.Len(t, checks, 2)
+	assert.Contains(t, checks, "wallet minimum")
+	assert.Contains(t, checks, "exchange minimum")
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockDB, err := pgxmock.NewPool()
+	assert.NoError(t, err)
+	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
+
+	handler := NewTelegramInternalHandler(dbPool, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/telegram/internal/doctor?chat_id=777", nil)
+
+	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mockDB.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = 'polymarket' AND status = 'connected'`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	mockDB.ExpectQuery(`SELECT COALESCE\(\(SELECT autonomous_enabled FROM telegram_operator_state WHERE chat_id = \$1 LIMIT 1\), false\)`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"autonomous_enabled"}).AddRow(true))
+
+	handler.GetDoctor(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "healthy", response["overall_status"])
+	checks, ok := response["checks"].([]interface{})
+	assert.True(t, ok)
+	assert.Len(t, checks, 4)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
