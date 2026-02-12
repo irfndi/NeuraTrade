@@ -50,8 +50,8 @@ func runSeeder() error {
 	if !exists {
 		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		_, err = db.Pool.Exec(ctx, `
-            INSERT INTO users (email, username, password_hash, role, created_at, updated_at)
-            VALUES ($1, $2, $3, 'user', $4, $4)
+            INSERT INTO users (email, username, password_hash, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $4)
         `, email, username, string(hashedPassword), time.Now())
 		if err != nil {
 			return fmt.Errorf("failed to insert user: %w", err)
