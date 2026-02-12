@@ -7,6 +7,7 @@ import (
 
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/logging"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/shopspring/decimal"
@@ -29,6 +30,7 @@ func TestFundingRateCollector_Integration_Collect(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
 	// Setup Mock CCXT
 	mockCCXT := &MockCCXTClient{}
@@ -38,7 +40,7 @@ func TestFundingRateCollector_Integration_Collect(t *testing.T) {
 	logger := logging.NewStandardLogger("debug", "testing")
 
 	// Create Collector with default config (binance, bybit)
-	collector := NewFundingRateCollector(mockDB, nil, mockCCXT, cfg, nil, logger)
+	collector := NewFundingRateCollector(dbPool, nil, mockCCXT, cfg, nil, logger)
 
 	// Define Test Data
 	now := time.Now().Truncate(time.Second) // Truncate for DB comparison matching
@@ -77,6 +79,7 @@ func TestFundingRateCollector_Integration_GetStats_MockDB(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
 	// Setup Config & Logger
 	cfg := &config.Config{}
@@ -85,7 +88,7 @@ func TestFundingRateCollector_Integration_GetStats_MockDB(t *testing.T) {
 	// We don't need CCXT for this test
 	mockCCXT := &MockCCXTClient{}
 
-	collector := NewFundingRateCollector(mockDB, nil, mockCCXT, cfg, nil, logger)
+	collector := NewFundingRateCollector(dbPool, nil, mockCCXT, cfg, nil, logger)
 
 	// Data for GetFundingRateStats
 	// 1. getCurrentFundingRate

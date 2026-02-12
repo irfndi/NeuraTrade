@@ -2,10 +2,13 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
+	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 )
@@ -14,13 +17,15 @@ func TestAnalyticsService_CalculateCorrelationMatrix(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
+	querier := analyticsQuerierFromDB{db: dbPool}
 
 	cfg := config.AnalyticsConfig{
 		EnableCorrelation:    true,
 		CorrelationWindow:    10,
 		CorrelationMinPoints: 5,
 	}
-	service := NewAnalyticsServiceWithQuerier(mockPool, cfg)
+	service := NewAnalyticsServiceWithQuerier(querier, cfg)
 
 	symbols := []string{"BTC/USDT", "ETH/USDT"}
 	exchange := "binance"
@@ -65,6 +70,8 @@ func TestAnalyticsService_DetectMarketRegime(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
+	querier := analyticsQuerierFromDB{db: dbPool}
 
 	cfg := config.AnalyticsConfig{
 		EnableRegimeDetection:   true,
@@ -73,7 +80,7 @@ func TestAnalyticsService_DetectMarketRegime(t *testing.T) {
 		VolatilityHighThreshold: 0.03,
 		VolatilityLowThreshold:  0.005,
 	}
-	service := NewAnalyticsServiceWithQuerier(mockPool, cfg)
+	service := NewAnalyticsServiceWithQuerier(querier, cfg)
 
 	symbol := "BTC/USDT"
 	exchange := "binance"
@@ -103,13 +110,15 @@ func TestAnalyticsService_ForecastSeries(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
+	querier := analyticsQuerierFromDB{db: dbPool}
 
 	cfg := config.AnalyticsConfig{
 		EnableForecasting: true,
 		ForecastLookback:  10,
 		ForecastHorizon:   3,
 	}
-	service := NewAnalyticsServiceWithQuerier(mockPool, cfg)
+	service := NewAnalyticsServiceWithQuerier(querier, cfg)
 
 	symbol := "BTC/USDT"
 	exchange := "binance"
@@ -130,4 +139,19 @@ func TestAnalyticsService_ForecastSeries(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, 3, len(result.Points))
 	assert.Equal(t, "AR(1)+GARCH(1,1)", result.Model)
+}
+
+type analyticsQuerierFromDB struct {
+	db database.DBPool
+}
+
+func (a analyticsQuerierFromDB) Query(ctx context.Context, query string, args ...interface{}) (pgx.Rows, error) {
+	rows, err := a.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	if pgxRows, ok := rows.(database.PgxRows); ok {
+		return pgxRows.Rows, nil
+	}
+	return nil, fmt.Errorf("unexpected rows type %T", rows)
 }

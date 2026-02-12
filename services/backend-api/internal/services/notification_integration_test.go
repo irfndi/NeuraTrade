@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,7 @@ func TestNotificationService_logNotification_QueryStructure(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -57,7 +59,7 @@ func TestNotificationService_logNotification_QueryStructure(t *testing.T) {
 				WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 			now := time.Now()
-			_, err := mockPool.Exec(ctx,
+			_, err := dbPool.Exec(ctx,
 				`INSERT INTO alert_notifications (user_id, notification_type, message, sent_at)
 				VALUES ($1, $2, $3, $4)`,
 				tc.userID, tc.notificationType, tc.message, now)
@@ -72,6 +74,7 @@ func TestNotificationService_CheckUserPreferences_QueryStructure(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -81,7 +84,7 @@ func TestNotificationService_CheckUserPreferences_QueryStructure(t *testing.T) {
 			WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
 
 		var count int
-		err := mockPool.QueryRow(ctx,
+		err := dbPool.QueryRow(ctx,
 			`SELECT COUNT(*)
 			FROM user_alerts
 			WHERE user_id = $1
@@ -102,7 +105,7 @@ func TestNotificationService_CheckUserPreferences_QueryStructure(t *testing.T) {
 			WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 
 		var count int
-		err := mockPool.QueryRow(ctx,
+		err := dbPool.QueryRow(ctx,
 			`SELECT COUNT(*)
 			FROM user_alerts
 			WHERE user_id = $1
@@ -123,6 +126,7 @@ func TestNotificationService_getEligibleUsers_QueryStructure(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -137,7 +141,7 @@ func TestNotificationService_getEligibleUsers_QueryStructure(t *testing.T) {
 		mockPool.ExpectQuery(`SELECT id, email, telegram_chat_id`).
 			WillReturnRows(rows)
 
-		queryRows, err := mockPool.Query(ctx,
+		queryRows, err := dbPool.Query(ctx,
 			`SELECT id, email, telegram_chat_id, subscription_tier, created_at, updated_at
 			FROM users
 			WHERE telegram_chat_id IS NOT NULL
@@ -175,6 +179,7 @@ func TestNotificationService_DeadLetterQueue_QueryStructures(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -189,7 +194,7 @@ func TestNotificationService_DeadLetterQueue_QueryStructures(t *testing.T) {
 			WithArgs(10).
 			WillReturnRows(rows)
 
-		queryRows, err := mockPool.Query(ctx,
+		queryRows, err := dbPool.Query(ctx,
 			`SELECT id, user_id, chat_id, message_type, message_content,
 			       COALESCE(error_code, ''), COALESCE(error_message, ''),
 			       attempts, status, created_at, last_attempt_at, next_retry_at
@@ -216,12 +221,14 @@ func TestNotificationService_DeadLetterQueue_QueryStructures(t *testing.T) {
 			WillReturnResult(pgxmock.NewResult("DELETE", 20))
 
 		cutoff := time.Now().Add(-24 * time.Hour)
-		result, err := mockPool.Exec(ctx,
+		result, err := dbPool.Exec(ctx,
 			`DELETE FROM notification_dead_letters
 			WHERE status IN ('success', 'failed')
 			  AND created_at < $1`, cutoff)
 		assert.NoError(t, err)
-		assert.Equal(t, int64(20), result.RowsAffected())
+		affectedRows, rowsErr := result.RowsAffected()
+		assert.NoError(t, rowsErr)
+		assert.Equal(t, int64(20), affectedRows)
 		assert.NoError(t, mockPool.ExpectationsWereMet())
 	})
 }
@@ -231,6 +238,7 @@ func TestNotificationService_AlertNotifications_ColumnCorrectness(t *testing.T) 
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -241,7 +249,7 @@ func TestNotificationService_AlertNotifications_ColumnCorrectness(t *testing.T) 
 			WithArgs("user-id", "telegram", "test message", pgxmock.AnyArg()).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-		_, err := mockPool.Exec(ctx,
+		_, err := dbPool.Exec(ctx,
 			`INSERT INTO alert_notifications (user_id, notification_type, message, sent_at)
 			VALUES ($1, $2, $3, $4)`,
 			"user-id", "telegram", "test message", time.Now())
@@ -256,7 +264,7 @@ func TestNotificationService_AlertNotifications_ColumnCorrectness(t *testing.T) 
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 		// Note: alert_id is not in the INSERT statement - it defaults to NULL
-		_, err := mockPool.Exec(ctx,
+		_, err := dbPool.Exec(ctx,
 			`INSERT INTO alert_notifications (user_id, notification_type, message, sent_at)
 			VALUES ($1, $2, $3, $4)`,
 			"user-id", "telegram", "test message", time.Now())
@@ -270,6 +278,7 @@ func TestNotificationService_Concurrency(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -285,7 +294,7 @@ func TestNotificationService_Concurrency(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		go func(userID string) {
 			var count int
-			err := mockPool.QueryRow(ctx,
+			err := dbPool.QueryRow(ctx,
 				`SELECT COUNT(*) FROM user_alerts WHERE user_id = $1`, userID).Scan(&count)
 			assert.NoError(t, err)
 			done <- true
@@ -305,6 +314,7 @@ func TestNotificationService_ErrorHandling(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -313,7 +323,7 @@ func TestNotificationService_ErrorHandling(t *testing.T) {
 			WithArgs("user-id", "telegram", "test", pgxmock.AnyArg()).
 			WillReturnError(assert.AnError)
 
-		_, err := mockPool.Exec(ctx,
+		_, err := dbPool.Exec(ctx,
 			`INSERT INTO alert_notifications (user_id, notification_type, message, sent_at)
 			VALUES ($1, $2, $3, $4)`,
 			"user-id", "telegram", "test", time.Now())
@@ -327,7 +337,7 @@ func TestNotificationService_ErrorHandling(t *testing.T) {
 			WillReturnError(assert.AnError)
 
 		var count int
-		err := mockPool.QueryRow(ctx,
+		err := dbPool.QueryRow(ctx,
 			`SELECT COUNT(*) FROM user_alerts WHERE user_id = $1`, "user-id").Scan(&count)
 		assert.Error(t, err)
 		assert.NoError(t, mockPool.ExpectationsWereMet())
