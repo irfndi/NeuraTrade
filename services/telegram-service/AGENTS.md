@@ -39,9 +39,11 @@ bun test
 **Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
 
 ### Ready to Work (No Blockers)
+
 - `neura-5of`: Bind local operator profile to Telegram chat
 
 ### Recently Completed (✓)
+
 - ✓ `neura-2iq`: Analyst agent role Telegram integration
 - ✓ `neura-6tk`: Event-driven quest trigger notifications
 - ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
@@ -55,11 +57,13 @@ bun test
 - ✓ `neura-axx`: Action streaming format messages
 
 ### Notifications & Alerts (Blocked)
+
 - `neura-im9`: Quest progress update notifications
 - `neura-fvk`: Fund milestone alert delivery
 - `neura-bri`: AI reasoning summary messages
 
 ### Security & Privacy (Blocked)
+
 - `neura-ydp`: Operator identity encryption (Argon2)
 - `neura-c7r`: API key masking in Telegram output
 
