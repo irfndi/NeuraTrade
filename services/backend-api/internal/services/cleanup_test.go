@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
 )
 
@@ -160,6 +161,7 @@ func TestCleanupService_GetDataStats_WithError(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	// Configure mock to return error for QueryRow calls
 	mockPool.ExpectQuery("SELECT COUNT\\(\\*\\) FROM market_data").WillReturnError(errors.New("connection failed"))
@@ -169,7 +171,7 @@ func TestCleanupService_GetDataStats_WithError(t *testing.T) {
 
 	// Create cleanup service with mock database
 	service := NewCleanupService(
-		mockPool,
+		dbPool,
 		errorRecoveryManager,
 		nil, // ResourceManager not used by CleanupService
 		nil, // PerformanceMonitor not used by CleanupService
@@ -312,13 +314,14 @@ func TestCleanupService_CleanupMarketData_WithRealDatabase(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	// Create real ErrorRecoveryManager for testing
 	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with mock database
 	service := NewCleanupService(
-		mockPool,
+		dbPool,
 		errorRecoveryManager,
 		nil, // ResourceManager not used by CleanupService
 		nil, // PerformanceMonitor not used by CleanupService
@@ -344,13 +347,14 @@ func TestCleanupService_CleanupFundingRates_WithRealDatabase(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	// Create real ErrorRecoveryManager for testing
 	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with mock database
 	service := NewCleanupService(
-		mockPool,
+		dbPool,
 		errorRecoveryManager,
 		nil, // ResourceManager not used by CleanupService
 		nil, // PerformanceMonitor not used by CleanupService
@@ -501,9 +505,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -526,9 +531,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -551,9 +557,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -578,9 +585,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -603,9 +611,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -628,9 +637,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -653,9 +663,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -683,9 +694,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,

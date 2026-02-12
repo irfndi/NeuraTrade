@@ -22,12 +22,10 @@ func TestSignalAggregationIntegration(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
-	dbPool := database.WrapLegacyDBPool(mockPool)
+	dbPool := database.NewMockDBPool(mockPool)
 
-	// Setup test logger
-	zapLogger := zaplogrus.New()
-	zapLogger.SetLevel(zaplogrus.DebugLevel)
-	serviceLogger := logging.NewStandardLogger("debug", "testing")
+	stdLogger := logging.NewStandardLogger("debug", "testing")
+	logrusLogger := zaplogrus.New()
 
 	// Setup configuration
 	cfg := &config.Config{
@@ -43,19 +41,19 @@ func TestSignalAggregationIntegration(t *testing.T) {
 		FailureThreshold: 5,
 		ResetTimeout:     10 * time.Second,
 	}
-	circuitBreaker := NewCircuitBreaker("test-cb", cbConfig, zapLogger)
+	circuitBreaker := NewCircuitBreaker("test-cb", cbConfig, logrusLogger)
 
 	// Quality Scorer
-	qualityScorer := NewSignalQualityScorer(cfg, dbPool, zapLogger)
+	qualityScorer := NewSignalQualityScorer(cfg, dbPool, logrusLogger)
 
 	// Tech Analysis - Use struct literal to avoid complex constructor dependencies
 	taService := &TechnicalAnalysisService{
 		config: cfg,
-		logger: zapLogger,
+		logger: logrusLogger,
 	}
 
 	// Signal Aggregator
-	signalAggregator := NewSignalAggregator(cfg, dbPool, zapLogger)
+	signalAggregator := NewSignalAggregator(cfg, dbPool, logrusLogger)
 
 	// Notification Service - Use struct literal
 	notificationService := &NotificationService{
@@ -68,7 +66,7 @@ func TestSignalAggregationIntegration(t *testing.T) {
 	// Signal Processor
 	signalProcessor := NewSignalProcessor(
 		dbPool,
-		serviceLogger,
+		stdLogger,
 		signalAggregator,
 		qualityScorer,
 		taService,
@@ -86,7 +84,7 @@ func TestSignalAggregationIntegration(t *testing.T) {
 	assert.NotNil(t, qualityScorer, "Quality scorer should be initialized")
 	assert.NotNil(t, notificationService, "Notification service should be initialized")
 	assert.NotNil(t, circuitBreaker, "Circuit breaker should be initialized")
-	assert.NotNil(t, zapLogger, "Logger should be initialized")
+	assert.NotNil(t, stdLogger, "Logger should be initialized")
 
 	// Test 1: Signal Processing Pipeline
 	t.Run("SignalProcessingPipeline", func(t *testing.T) {
@@ -228,7 +226,7 @@ func TestSignalAggregationIntegration(t *testing.T) {
 		// Initialize a fresh processor to avoid state issues from previous tests
 		cleanProcessor := NewSignalProcessor(
 			dbPool,
-			serviceLogger,
+			stdLogger,
 			signalAggregator,
 			qualityScorer,
 			taService,
