@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -52,6 +53,7 @@ type Example struct {
 type Loader struct {
 	skillsDir    string
 	loadedSkills map[string]*Skill
+	mu           sync.RWMutex
 }
 
 // NewLoader creates a new skill loader for the given directory.
@@ -116,11 +118,30 @@ func (l *Loader) LoadFile(path string) (*Skill, error) {
 
 // LoadByID loads a skill by its ID.
 func (l *Loader) LoadByID(id string) (*Skill, error) {
+	l.mu.RLock()
 	if skill, ok := l.loadedSkills[id]; ok {
+		l.mu.RUnlock()
 		return skill, nil
+	}
+	l.mu.RUnlock()
+
+	if strings.ContainsAny(id, `/\..`) {
+		return nil, fmt.Errorf("invalid skill ID: path characters not allowed")
 	}
 
 	path := filepath.Join(l.skillsDir, id+".md")
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
+	}
+	absDir, err := filepath.Abs(l.skillsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve skills directory: %w", err)
+	}
+	if !strings.HasPrefix(absPath, absDir+string(filepath.Separator)) {
+		return nil, fmt.Errorf("invalid skill ID: path traversal detected")
+	}
+
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("skill not found: %s", id)
 	}
@@ -130,12 +151,17 @@ func (l *Loader) LoadByID(id string) (*Skill, error) {
 		return nil, err
 	}
 
+	l.mu.Lock()
 	l.loadedSkills[id] = skill
+	l.mu.Unlock()
+
 	return skill, nil
 }
 
 // GetLoadedSkills returns all currently loaded skills.
 func (l *Loader) GetLoadedSkills() map[string]*Skill {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	result := make(map[string]*Skill, len(l.loadedSkills))
 	for k, v := range l.loadedSkills {
 		result[k] = v
@@ -235,6 +261,7 @@ func (s *Skill) Validate() error {
 type Registry struct {
 	skills map[string]*Skill
 	loader *Loader
+	mu     sync.RWMutex
 }
 
 // NewRegistry creates a new skill registry.
@@ -252,6 +279,8 @@ func (r *Registry) LoadAll() error {
 		return err
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, skill := range skills {
 		r.skills[skill.ID] = skill
 	}
@@ -261,12 +290,16 @@ func (r *Registry) LoadAll() error {
 
 // Get retrieves a skill by ID.
 func (r *Registry) Get(id string) (*Skill, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	skill, ok := r.skills[id]
 	return skill, ok
 }
 
 // GetAll returns all skills in the registry.
 func (r *Registry) GetAll() map[string]*Skill {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	result := make(map[string]*Skill, len(r.skills))
 	for k, v := range r.skills {
 		result[k] = v
@@ -276,6 +309,8 @@ func (r *Registry) GetAll() map[string]*Skill {
 
 // GetByCategory returns all skills in a specific category.
 func (r *Registry) GetByCategory(category string) []*Skill {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var result []*Skill
 	for _, skill := range r.skills {
 		if strings.EqualFold(skill.Category, category) {
@@ -287,6 +322,8 @@ func (r *Registry) GetByCategory(category string) []*Skill {
 
 // GetByTag returns all skills with a specific tag.
 func (r *Registry) GetByTag(tag string) []*Skill {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var result []*Skill
 	for _, skill := range r.skills {
 		if skill.HasTag(tag) {
@@ -298,6 +335,8 @@ func (r *Registry) GetByTag(tag string) []*Skill {
 
 // Find searches for skills matching a query string.
 func (r *Registry) Find(query string) []*Skill {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	query = strings.ToLower(query)
 	var result []*Skill
 	for _, skill := range r.skills {

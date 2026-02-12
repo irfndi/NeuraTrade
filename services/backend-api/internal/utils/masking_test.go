@@ -160,10 +160,10 @@ func TestMaskPassword(t *testing.T) {
 		{
 			name:     "short password",
 			input:    "pass",
-			expected: "****",
+			expected: "********",
 		},
 		{
-			name:     "long password capped at 8",
+			name:     "long password",
 			input:    "thisisaverylongpassword123",
 			expected: "********",
 		},

@@ -83,12 +83,12 @@ func MaskToken(token string) string {
 	return MaskString(token, DefaultMaskingConfig)
 }
 
-// MaskPassword fully masks a password.
+// MaskPassword fully masks a password with fixed length to avoid leaking info.
 func MaskPassword(password string) string {
 	if password == "" {
 		return ""
 	}
-	return strings.Repeat(string(DefaultMaskingConfig.MaskChar), min(len(password), 8))
+	return "********"
 }
 
 // MaskConnectionString masks sensitive data in database connection strings.
@@ -108,7 +108,6 @@ func MaskConnectionString(connStr string) string {
 // This is a simple implementation that masks common sensitive field patterns.
 func MaskJSON(jsonStr string, sensitiveFields []string) string {
 	if len(sensitiveFields) == 0 {
-		// Default sensitive fields
 		sensitiveFields = []string{
 			"password", "secret", "token", "key", "api_key", "apikey",
 			"private_key", "access_token", "refresh_token", "auth_token",
@@ -118,13 +117,23 @@ func MaskJSON(jsonStr string, sensitiveFields []string) string {
 
 	result := jsonStr
 	for _, field := range sensitiveFields {
-		// Match "field": "value" or 'field': 'value' patterns
 		pattern := regexp.MustCompile(`("` + field + `"\s*:\s*")([^"]*)"`)
-		result = pattern.ReplaceAllString(result, `"${1}`+MaskSecret("${2}")+`"`)
+		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
+			parts := pattern.FindStringSubmatch(match)
+			if len(parts) >= 3 {
+				return parts[1] + MaskSecret(parts[2]) + `"`
+			}
+			return match
+		})
 
-		// Match 'field': 'value' patterns
-		pattern = regexp.MustCompile(`'` + field + `'\s*:\s*'([^']*)'`)
-		result = pattern.ReplaceAllString(result, `'${1}'`+MaskSecret("${2}")+`'`)
+		singlePattern := regexp.MustCompile(`'` + field + `'\s*:\s*'([^']*)'`)
+		result = singlePattern.ReplaceAllStringFunc(result, func(match string) string {
+			parts := singlePattern.FindStringSubmatch(match)
+			if len(parts) >= 2 {
+				return `'` + field + `': '` + MaskSecret(parts[1]) + `'`
+			}
+			return match
+		})
 	}
 
 	return result
