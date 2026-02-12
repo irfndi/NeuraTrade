@@ -12,6 +12,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/shopspring/decimal"
 )
 
 // HealthResponse represents the response structure for health check endpoints.
@@ -119,6 +120,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	tradingHandler := handlers.NewTradingHandler(db)
+
+	// Budget handler - use defaults from migration 054
+	budgetHandler := handlers.NewBudgetHandler(
+		database.NewAIUsageRepositoryFromDB(db),
+		decimal.NewFromFloat(10.00),  // daily budget from migration
+		decimal.NewFromFloat(200.00), // monthly budget from migration
+	)
 
 	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
 	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
@@ -246,6 +254,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			trading.POST("/liquidate_all", tradingHandler.LiquidateAll)
 			trading.GET("/positions", tradingHandler.ListPositions)
 			trading.GET("/positions/:position_id", tradingHandler.GetPosition)
+		}
+
+		budget := v1.Group("/budget")
+		{
+			budget.GET("/status", budgetHandler.GetBudgetStatus)
+			budget.GET("/check", budgetHandler.CheckBudget)
 		}
 
 		// Exchange management

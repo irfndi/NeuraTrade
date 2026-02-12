@@ -9,16 +9,16 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type aiUsageQuerier interface {
-	Query(ctx context.Context, query string, args ...interface{}) (Rows, error)
-	QueryRow(ctx context.Context, query string, args ...interface{}) Row
+type AIUsageQuerier interface {
+	Query(ctx context.Context, query string, args ...any) (Rows, error)
+	QueryRow(ctx context.Context, query string, args ...any) Row
 }
 
 type AIUsageRepository struct {
-	pool aiUsageQuerier
+	pool AIUsageQuerier
 }
 
-func NewAIUsageRepository(pool aiUsageQuerier) *AIUsageRepository {
+func NewAIUsageRepository(pool AIUsageQuerier) *AIUsageRepository {
 	return &AIUsageRepository{pool: pool}
 }
 
@@ -207,4 +207,9 @@ func (r *AIUsageRepository) GetMonthlySummary(ctx context.Context, startDate, en
 	}
 
 	return summaries, rows.Err()
+}
+
+
+func NewAIUsageRepositoryFromDB(pool DBPool) *AIUsageRepository {
+	return &AIUsageRepository{pool: pool}
 }
