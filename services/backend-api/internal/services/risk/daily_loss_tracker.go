@@ -41,20 +41,29 @@ func (d *DailyLossTracker) RecordLoss(ctx context.Context, userID string, loss d
 func (d *DailyLossTracker) recordLoss(ctx context.Context, userID string, loss decimal.Decimal) error {
 	key := fmt.Sprintf(dailyLossCapKey, userID)
 
-	currentLoss, err := d.redis.Get(ctx, key).Float64()
+	currentLossStr, err := d.redis.Get(ctx, key).Result()
 	if err != nil && err != redis.Nil {
 		return err
 	}
 
-	newLoss := currentLoss + loss.InexactFloat64()
+	var newLoss decimal.Decimal
+	if err == redis.Nil {
+		newLoss = loss
+	} else {
+		currentLoss, parseErr := decimal.NewFromString(currentLossStr)
+		if parseErr != nil {
+			return parseErr
+		}
+		newLoss = currentLoss.Add(loss)
+	}
 
-	return d.redis.Set(ctx, key, newLoss, dailyLossCapTTL).Err()
+	return d.redis.Set(ctx, key, newLoss.String(), dailyLossCapTTL).Err()
 }
 
 func (d *DailyLossTracker) GetCurrentLoss(ctx context.Context, userID string) (decimal.Decimal, error) {
 	key := fmt.Sprintf(dailyLossCapKey, userID)
 
-	loss, err := d.redis.Get(ctx, key).Float64()
+	lossStr, err := d.redis.Get(ctx, key).Result()
 	if err == redis.Nil {
 		return decimal.Zero, nil
 	}
@@ -62,7 +71,7 @@ func (d *DailyLossTracker) GetCurrentLoss(ctx context.Context, userID string) (d
 		return decimal.Zero, err
 	}
 
-	return decimal.NewFromFloat(loss), nil
+	return decimal.NewFromString(lossStr)
 }
 
 func (d *DailyLossTracker) CheckLossLimit(ctx context.Context, userID string) (bool, decimal.Decimal, error) {
