@@ -316,6 +316,58 @@ func (h *TradingHandler) GetPosition(c *gin.Context) {
 	})
 }
 
+// PositionSnapshot represents a point-in-time snapshot of all positions with metadata.
+type PositionSnapshot struct {
+	SnapshotID      string           `json:"snapshot_id"`
+	Timestamp       time.Time        `json:"timestamp"`
+	TotalPositions  int              `json:"total_positions"`
+	OpenPositions   int              `json:"open_positions"`
+	ClosedPositions int              `json:"closed_positions"`
+	Positions       []PositionRecord `json:"positions"`
+}
+
+// GetPositionSnapshot returns a comprehensive snapshot of all positions at a point in time.
+// This endpoint captures the current state of all positions for auditing and analysis.
+func (h *TradingHandler) GetPositionSnapshot(c *gin.Context) {
+	// Get all positions (both open and closed)
+	allPositions, err := h.listPositionsPersistent(c.Request.Context(), "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"error":  "failed to get positions for snapshot",
+		})
+		return
+	}
+
+	// Count positions by status
+	openCount := 0
+	closedCount := 0
+	for _, p := range allPositions {
+		if p.Status == "OPEN" {
+			openCount++
+		} else {
+			closedCount++
+		}
+	}
+
+	// Generate snapshot ID
+	snapshotID := fmt.Sprintf("snap-%d", time.Now().UnixNano())
+
+	snapshot := PositionSnapshot{
+		SnapshotID:      snapshotID,
+		Timestamp:       time.Now().UTC(),
+		TotalPositions:  len(allPositions),
+		OpenPositions:   openCount,
+		ClosedPositions: closedCount,
+		Positions:       allPositions,
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data":   snapshot,
+	})
+}
+
 func (h *TradingHandler) generateIDs(now time.Time) (string, string) {
 	h.mu.Lock()
 	h.sequence++
