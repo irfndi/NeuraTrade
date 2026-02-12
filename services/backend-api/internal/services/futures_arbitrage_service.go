@@ -13,6 +13,7 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/logging"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/redis/go-redis/v9"
@@ -59,8 +60,17 @@ func NewFuturesArbitrageService(
 	errorRecoveryManager *ErrorRecoveryManager,
 	resourceManager *ResourceManager,
 	performanceMonitor *PerformanceMonitor,
-	logger logging.Logger,
+	logger any,
 ) *FuturesArbitrageService {
+	serviceLogger, ok := logger.(logging.Logger)
+	if !ok || serviceLogger == nil {
+		environment := "production"
+		if cfg != nil && cfg.Environment != "" {
+			environment = cfg.Environment
+		}
+		serviceLogger = logging.NewStandardLogger("info", environment)
+	}
+
 	return &FuturesArbitrageService{
 		db:                   db,
 		redisClient:          redisClient,
@@ -69,7 +79,7 @@ func NewFuturesArbitrageService(
 		errorRecoveryManager: errorRecoveryManager,
 		resourceManager:      resourceManager,
 		performanceMonitor:   performanceMonitor,
-		logger:               logger,
+		logger:               serviceLogger,
 	}
 }
 
@@ -499,10 +509,10 @@ func (s *FuturesArbitrageService) cleanupExpiredOpportunities(ctx context.Contex
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		telemetry.Logger().Error("Failed to get rows affected", "error", err)
+		s.logger.WithError(err).Error("Failed to get rows affected")
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
-	telemetry.Logger().Info("Cleanup completed successfully", "opportunities_cleaned", rowsAffected)
+	s.logger.WithFields(map[string]interface{}{"opportunities_cleaned": rowsAffected}).Info("Cleanup completed successfully")
 
 	if rowsAffected > 0 {
 		s.logger.WithFields(map[string]interface{}{"count": rowsAffected}).Info("Cleaned up expired arbitrage opportunities")

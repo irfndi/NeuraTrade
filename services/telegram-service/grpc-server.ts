@@ -19,6 +19,20 @@ import {
 } from "./proto/telegram_service";
 import { Bot } from "grammy";
 import { logger } from "./src/utils/logger";
+import { withRetry } from "./retry";
+import {
+  classifyError,
+  TelegramErrorCode,
+  TelegramErrorInfo,
+} from "./telegram-errors";
+
+const GRPC_RETRY_CONFIG = {
+  maxRetries: 3,
+  initialDelayMs: 1000,
+  maxDelayMs: 30000,
+  backoffFactor: 2,
+  jitter: true,
+};
 
 function formatActionAlert(req: SendActionAlertRequest): string {
   const riskIcon = req.riskCheckPassed ? "✅" : "❌";
@@ -89,11 +103,9 @@ export class TelegramGrpcServer {
     // Use retry logic for sending messages
     withRetry(
       () =>
-        sendWithTimeout(
-          this.bot.api.sendMessage(chatId, text, {
-            parse_mode: parseMode as any,
-          }),
-        ),
+        this.bot.api.sendMessage(chatId, text, {
+          parse_mode: parseMode as any,
+        }),
       classifyError,
       GRPC_RETRY_CONFIG,
     )
@@ -123,6 +135,7 @@ export class TelegramGrpcServer {
         }
       })
       .catch((error) => {
+        const errorInfo = classifyError(error);
         logger.error("Failed to send message via gRPC", error, { chatId });
         callback(null, {
           ok: false,

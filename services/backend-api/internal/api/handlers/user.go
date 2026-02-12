@@ -23,9 +23,10 @@ type TokenGenerator interface {
 
 // UserHandler manages user-related API endpoints.
 type UserHandler struct {
-	db      DBQuerier
-	redis   *redis.Client
-	querier DBQuerier // For testing with mocks
+	db       DBQuerier
+	redis    *redis.Client
+	querier  DBQuerier // For testing with mocks
+	tokenGen TokenGenerator
 }
 
 // RegisterRequest represents the user registration request body.
@@ -87,11 +88,16 @@ type UpdateProfileRequest struct {
 // Returns:
 //
 //	*UserHandler: Initialized handler.
-func NewUserHandler(db DBQuerier, redisClient *redis.Client) *UserHandler {
+func NewUserHandler(db DBQuerier, redisClient *redis.Client, tokenGen ...TokenGenerator) *UserHandler {
+	var resolvedTokenGen TokenGenerator
+	if len(tokenGen) > 0 {
+		resolvedTokenGen = tokenGen[0]
+	}
+
 	return &UserHandler{
 		db:       db,
 		redis:    redisClient,
-		tokenGen: tokenGen,
+		tokenGen: resolvedTokenGen,
 	}
 }
 
@@ -112,16 +118,22 @@ type DBQuerier interface {
 // Returns:
 //
 //	*UserHandler: Initialized handler.
-func NewUserHandlerWithQuerier(querier any, redisClient *redis.Client) *UserHandler {
+func NewUserHandlerWithQuerier(querier any, redisClient *redis.Client, tokenGen ...TokenGenerator) *UserHandler {
 	resolvedQuerier, err := resolveDBQuerier(querier)
 	if err != nil {
 		panic(err)
 	}
 
+	var resolvedTokenGen TokenGenerator
+	if len(tokenGen) > 0 {
+		resolvedTokenGen = tokenGen[0]
+	}
+
 	return &UserHandler{
-		db:      resolvedQuerier,
-		redis:   redisClient,
-		querier: resolvedQuerier,
+		db:       resolvedQuerier,
+		redis:    redisClient,
+		querier:  resolvedQuerier,
+		tokenGen: resolvedTokenGen,
 	}
 }
 
@@ -166,7 +178,7 @@ func (h *UserHandler) RegisterUser(c *gin.Context) {
 			if h.querier != nil {
 				_, updateErr = h.querier.Exec(c.Request.Context(), updateQuery, req.TelegramChatID, req.Email)
 			} else if h.db != nil {
-				_, updateErr = h.db.Pool.Exec(c.Request.Context(), updateQuery, req.TelegramChatID, req.Email)
+				_, updateErr = h.db.Exec(c.Request.Context(), updateQuery, req.TelegramChatID, req.Email)
 			}
 			if updateErr != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update telegram chat ID"})

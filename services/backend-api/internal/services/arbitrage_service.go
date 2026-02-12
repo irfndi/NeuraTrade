@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 )
@@ -138,6 +139,26 @@ type ArbitrageService struct {
 	multiLegCalculator *MultiLegArbitrageCalculator
 }
 
+type readOnlyDBPoolAdapter struct {
+	pool database.DatabasePool
+}
+
+func (r readOnlyDBPoolAdapter) Query(ctx context.Context, query string, args ...any) (database.Rows, error) {
+	return r.pool.Query(ctx, query, args...)
+}
+
+func (r readOnlyDBPoolAdapter) QueryRow(ctx context.Context, query string, args ...any) database.Row {
+	return r.pool.QueryRow(ctx, query, args...)
+}
+
+func (r readOnlyDBPoolAdapter) Exec(ctx context.Context, query string, args ...any) (database.Result, error) {
+	return r.pool.Exec(ctx, query, args...)
+}
+
+func (r readOnlyDBPoolAdapter) Begin(context.Context) (database.Tx, error) {
+	return nil, fmt.Errorf("begin transaction is not supported by this database adapter")
+}
+
 // NewArbitrageService creates a new arbitrage service instance.
 //
 // Parameters:
@@ -149,8 +170,22 @@ type ArbitrageService struct {
 // Returns:
 //
 //	*ArbitrageService: Initialized service.
-func NewArbitrageService(db DBPool, cfg *config.Config, calculator ArbitrageCalculator) *ArbitrageService {
+func NewArbitrageService(db any, cfg *config.Config, calculator ArbitrageCalculator, multiLegCalculator ...*MultiLegArbitrageCalculator) *ArbitrageService {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	var dbPool DBPool
+	switch typed := db.(type) {
+	case nil:
+		dbPool = nil
+	case DBPool:
+		dbPool = typed
+	case database.LegacyDBPool:
+		dbPool = database.WrapLegacyDBPool(typed)
+	case database.DatabasePool:
+		dbPool = readOnlyDBPoolAdapter{pool: typed}
+	default:
+		dbPool = nil
+	}
 
 	// Parse configuration with defaults
 	arbitrageConfig := ArbitrageServiceConfig{
@@ -178,13 +213,17 @@ func NewArbitrageService(db DBPool, cfg *config.Config, calculator ArbitrageCalc
 
 	// Initialize logger
 	logger := zaplogrus.New()
+	selectedMultiLegCalculator := NewMultiLegArbitrageCalculator(nil, decimal.NewFromFloat(0.001))
+	if len(multiLegCalculator) > 0 && multiLegCalculator[0] != nil {
+		selectedMultiLegCalculator = multiLegCalculator[0]
+	}
 
 	return &ArbitrageService{
-		db:                 db,
+		db:                 dbPool,
 		config:             cfg,
 		arbitrageConfig:    arbitrageConfig,
 		calculator:         calculator,
-		multiLegCalculator: multiLegCalculator,
+		multiLegCalculator: selectedMultiLegCalculator,
 		ctx:                ctx,
 		cancel:             cancel,
 		logger:             logger,

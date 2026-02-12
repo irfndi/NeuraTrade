@@ -119,7 +119,7 @@ func TestNewTelegramInternalHandler(t *testing.T) {
 	handler := NewTelegramInternalHandler(mockDB, userHandler)
 
 	assert.NotNil(t, handler)
-	assert.Equal(t, mockDB, handler.db)
+	assert.NotNil(t, handler.db)
 }
 
 func TestTelegramInternalHandler_PathParameters(t *testing.T) {

@@ -775,7 +775,7 @@ func TestCircuitBreaker_canExecute_ConcurrentAccess(t *testing.T) {
 
 func TestCircuitBreakerManager_PerExchangeCircuitBreakers(t *testing.T) {
 	// Test per-exchange circuit breakers don't affect each other
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	manager := NewCircuitBreakerManager(logger)
 
 	config := CircuitBreakerConfig{
@@ -824,7 +824,7 @@ func TestCircuitBreakerManager_PerExchangeCircuitBreakers(t *testing.T) {
 
 func TestCircuitBreakerManager_PerExchangeCircuitBreakers_Independence(t *testing.T) {
 	// Test that failures on one exchange don't count toward another
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	manager := NewCircuitBreakerManager(logger)
 
 	config := CircuitBreakerConfig{
@@ -873,7 +873,7 @@ func TestCircuitBreakerManager_PerExchangeCircuitBreakers_Independence(t *testin
 
 func TestCircuitBreakerManager_PerExchangeCircuitBreakers_StatsIsolation(t *testing.T) {
 	// Test that stats are isolated per exchange
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	manager := NewCircuitBreakerManager(logger)
 
 	config := CircuitBreakerConfig{
@@ -919,7 +919,7 @@ func TestCircuitBreakerManager_PerExchangeCircuitBreakers_StatsIsolation(t *test
 
 func TestCircuitBreakerManager_PerExchangeCircuitBreakers_ConcurrentExchanges(t *testing.T) {
 	// Test concurrent access to different per-exchange circuit breakers
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	manager := NewCircuitBreakerManager(logger)
 
 	config := CircuitBreakerConfig{

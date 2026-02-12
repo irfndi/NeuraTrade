@@ -2,25 +2,22 @@ package services
 
 import (
 	"context"
-	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
-	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
-
 	"github.com/cinar/indicator/v2/asset"
 	"github.com/cinar/indicator/v2/helper"
 	"github.com/cinar/indicator/v2/momentum"
 	"github.com/cinar/indicator/v2/trend"
+	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 )
@@ -637,8 +634,14 @@ func (sa *SignalAggregator) calculateTechnicalIndicators(prices []float64) map[s
 
 	// Calculate MACD
 	macdIndicator := trend.NewMacdWithPeriod[float64](12, 26, 9)
-	macdResult, _ := macdIndicator.Compute(helper.SliceToChan(prices))
-	macd := helper.ChanToSlice(macdResult)
+	macdLine, signalLine := macdIndicator.Compute(helper.SliceToChan(prices))
+	signalDone := make(chan struct{})
+	go func() {
+		_ = helper.ChanToSlice(signalLine)
+		close(signalDone)
+	}()
+	macd := helper.ChanToSlice(macdLine)
+	<-signalDone
 
 	indicators["sma_20"] = sma20
 	indicators["sma_50"] = sma50
@@ -818,49 +821,6 @@ func (sa *SignalAggregator) createAggregatedTechnicalSignal(symbol, exchange, ac
 		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(sa.sigConfig.SignalTTL),
 	}
-}
-
-// generateSignalHash creates a deterministic hash for deduplication
-func (sa *SignalAggregator) generateSignalHash(signal *AggregatedSignal) string {
-	// hash based on symbol, action, and indicators
-	data := fmt.Sprintf("%s-%s-%v-%s", signal.Symbol, signal.Action, signal.Indicators, signal.SignalType)
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(data)))
-}
-
-// isHashRecent checks if signature was seen recently
-func (sa *SignalAggregator) isHashRecent(_ context.Context, _ string) bool {
-	// This is a simplified in-memory check. In production this would check Redis/DB
-	// We'll trust the caller handles the mutex if needed, or rely on the single-threaded nature of the loop in deduplication
-	// But actually, we should check DB for fingerprints
-
-	// TODO: Implement DB query to check for recent fingerprints
-	// var count int64
-	// cutoff := time.Now().Add(-sa.sigConfig.DeduplicationWindow)
-
-	// We should use the DB connection to check
-	// However, for this implementation, we will assume if it's not in the batch we haven't seen it
-	// But we need to check persistent storage
-
-	// This query is a bit hypothetical as we don't have the exact schema for SignalFingerprint in DB visible
-	// But we defined the struct.
-
-	// Fallback to simple logic: always return false to allow signal if we can't check efficiently,
-	// or rely on the in-memory map in DeduplicateSignals scope (seenHashes).
-	// The DeduplicateSignals method maintains a 'seenHashes' map for the current batch.
-	// To check across batches, we'd need to query DB.
-
-	// For now, let's assume we proceed if not found in DB
-	return false
-}
-
-// storeFingerprint persists the fingerprint to prevent duplicates
-func (sa *SignalAggregator) storeFingerprint(ctx context.Context, fingerprint *SignalFingerprint) {
-	// In a real implementation: sa.db.Create(fingerprint)
-	// We'll log it for now
-	sa.logger.WithFields(map[string]interface{}{
-		"hash":      fingerprint.Hash,
-		"signal_id": fingerprint.SignalID,
-	}).Debug("Stored signal fingerprint")
 }
 
 // calculateArbitrageConfidence computes confidence score for arbitrage

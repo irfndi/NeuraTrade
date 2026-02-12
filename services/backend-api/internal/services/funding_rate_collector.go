@@ -10,6 +10,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/logging"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
@@ -17,11 +18,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type FundingRateClient interface {
+	GetFundingRates(ctx context.Context, exchange string, symbols []string) ([]ccxt.FundingRate, error)
+}
+
 // FundingRateCollector handles collection and storage of historical funding rate data.
 type FundingRateCollector struct {
 	db          DBPool
 	redisClient *redis.Client
-	ccxtClient  CCXTClient
+	ccxtClient  FundingRateClient
 	config      *config.Config
 	logger      logging.Logger
 
@@ -47,13 +52,29 @@ type FundingRateCollectorConfig struct {
 
 // NewFundingRateCollector creates a new funding rate collector.
 func NewFundingRateCollector(
-	db DBPool,
+	db any,
 	redisClient *redis.Client,
-	ccxtClient CCXTClient,
+	ccxtClient FundingRateClient,
 	cfg *config.Config,
 	collectorCfg *FundingRateCollectorConfig,
 	logger logging.Logger,
 ) *FundingRateCollector {
+	var dbPool DBPool
+	switch typed := db.(type) {
+	case nil:
+		dbPool = nil
+	case DBPool:
+		dbPool = typed
+	case database.LegacyDBPool:
+		dbPool = database.WrapLegacyDBPool(typed)
+	case database.DatabasePool:
+		dbPool = readOnlyDBPoolAdapter{pool: typed}
+	case database.LegacyQuerier:
+		dbPool = readOnlyDBPoolAdapter{pool: database.WrapLegacyQuerier(typed)}
+	default:
+		dbPool = nil
+	}
+
 	if collectorCfg == nil {
 		collectorCfg = &FundingRateCollectorConfig{
 			RetentionDays:      90,
@@ -63,7 +84,7 @@ func NewFundingRateCollector(
 	}
 
 	return &FundingRateCollector{
-		db:                 db,
+		db:                 dbPool,
 		redisClient:        redisClient,
 		ccxtClient:         ccxtClient,
 		config:             cfg,
@@ -282,7 +303,10 @@ func (c *FundingRateCollector) cleanupOldData(ctx context.Context) error {
 		return fmt.Errorf("failed to cleanup old data: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read cleanup result: %w", err)
+	}
 	if rowsAffected > 0 {
 		c.logger.WithFields(map[string]interface{}{
 			"rows_deleted":   rowsAffected,

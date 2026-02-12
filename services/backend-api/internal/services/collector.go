@@ -18,6 +18,7 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/cache"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/logging"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
@@ -518,11 +519,11 @@ func NewCollectorService(db DBPool, ccxtService ccxt.CCXTService, cfg *config.Co
 		SymbolFetch:    20 * time.Second,
 		MarketData:     8 * time.Second,
 	}
-	timeoutManager := NewTimeoutManager(timeoutConfig, logger)
-	resourceManager := NewResourceManager(logger)
+	timeoutManager := NewTimeoutManager(timeoutConfig, logrusLogger)
+	resourceManager := NewResourceManager(logrusLogger)
 	// Note: PerformanceMonitor expects go-redis/redis/v8 client, but we have redis/go-redis/v9
 	// For now, we'll pass nil and handle Redis operations separately
-	performanceMonitor := NewPerformanceMonitor(logger, nil, ctx)
+	performanceMonitor := NewPerformanceMonitor(logrusLogger, nil, ctx)
 
 	// Initialize resource optimizer
 	resourceOptimizerConfig := ResourceOptimizerConfig{
@@ -829,7 +830,7 @@ func (c *CollectorService) VerifyDatabaseSeeding() error {
 	var exchangeCount, tradingPairCount int
 
 	// Check exchanges with status='active'
-	err := c.db.Pool.QueryRow(c.ctx,
+	err := c.db.QueryRow(c.ctx,
 		"SELECT COUNT(*) FROM exchanges WHERE status = 'active'").Scan(&exchangeCount)
 	if err != nil {
 		c.logger.WithError(err).Error("Failed to query active exchanges")
@@ -842,7 +843,7 @@ func (c *CollectorService) VerifyDatabaseSeeding() error {
 	}
 
 	// Check trading_pairs with is_active=true
-	err = c.db.Pool.QueryRow(c.ctx,
+	err = c.db.QueryRow(c.ctx,
 		"SELECT COUNT(*) FROM trading_pairs WHERE is_active = true").Scan(&tradingPairCount)
 	if err != nil {
 		c.logger.WithError(err).Error("Failed to query active trading pairs")
@@ -1855,6 +1856,7 @@ func (c *CollectorService) storeFundingRate(exchange string, rate ccxt.FundingRa
 	}
 
 	// Save funding rate to database with upsert to handle duplicates
+	now := time.Now()
 	_, err = c.db.Exec(c.ctx,
 		`INSERT INTO funding_rates (exchange_id, trading_pair_id, funding_rate, funding_time, next_funding_time, mark_price, index_price, timestamp, created_at) 
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -1865,8 +1867,8 @@ func (c *CollectorService) storeFundingRate(exchange string, rate ccxt.FundingRa
 			mark_price = EXCLUDED.mark_price,
 			index_price = EXCLUDED.index_price,
 			timestamp = EXCLUDED.timestamp,
-			updated_at = EXCLUDED.updated_at`,
-		exchangeID, tradingPairID, rate.FundingRate, rate.FundingTimestamp.Time(), rate.NextFundingTime.Time(), markPrice, indexPrice, timestamp, now, now)
+			updated_at = NOW()`,
+		exchangeID, tradingPairID, rate.FundingRate, rate.FundingTimestamp.Time(), rate.NextFundingTime.Time(), markPrice, indexPrice, timestamp, now)
 	if err != nil {
 		return fmt.Errorf("failed to save funding rate: %w", err)
 	}
@@ -2645,11 +2647,9 @@ func (c *CollectorService) PerformBackfillIfNeeded() error {
 func (c *CollectorService) checkIfBackfillNeeded() (bool, error) {
 	thresholdTime := time.Now().Add(-time.Duration(c.backfillConfig.MinDataThresholdHours) * time.Hour)
 
-	// Check if we have recent market data within the threshold
-	var count int
+	var activeExchangeCount int
 	err := c.db.QueryRow(c.ctx,
-		"SELECT COUNT(*) FROM market_data WHERE timestamp >= $1",
-		thresholdTime).Scan(&count)
+		"SELECT COUNT(*) FROM exchanges WHERE status = 'active'").Scan(&activeExchangeCount)
 	if err != nil {
 		c.logger.WithError(err).Warn("Failed to count active exchanges, assuming backfill needed")
 		return true, nil // Assume backfill needed if we can't check
@@ -2663,7 +2663,7 @@ func (c *CollectorService) checkIfBackfillNeeded() (bool, error) {
 	// Check if ANY active exchange has data in the last hour
 	// This is more lenient than requiring ALL exchanges to have data
 	var exchangesWithRecentData int
-	err = c.db.Pool.QueryRow(c.ctx, `
+	err = c.db.QueryRow(c.ctx, `
 		SELECT COUNT(DISTINCT md.exchange_id)
 		FROM market_data md
 		JOIN exchanges e ON md.exchange_id = e.id
@@ -2676,9 +2676,8 @@ func (c *CollectorService) checkIfBackfillNeeded() (bool, error) {
 	}
 
 	// Also check total records in threshold period for context
-	thresholdTime := time.Now().Add(-time.Duration(c.backfillConfig.MinDataThresholdHours) * time.Hour)
 	var totalRecords int
-	err = c.db.Pool.QueryRow(c.ctx,
+	err = c.db.QueryRow(c.ctx,
 		"SELECT COUNT(*) FROM market_data WHERE timestamp >= $1",
 		thresholdTime).Scan(&totalRecords)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/cache"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/logging"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
@@ -69,6 +70,7 @@ func TestNewCollectorService(t *testing.T) {
 
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	collector := NewCollectorService(nil, mockCCXT, config, nil, blacklistCache)
+	defer collector.Stop()
 
 	assert.NotNil(t, collector)
 	assert.NotNil(t, collector.workers)
@@ -173,6 +175,7 @@ func TestCollectorService_RestartWorker(t *testing.T) {
 
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	collector := NewCollectorService(nil, mockCCXT, config, nil, blacklistCache)
+	defer collector.Stop()
 
 	// Test restarting non-existent worker
 	err := collector.RestartWorker("nonexistent")

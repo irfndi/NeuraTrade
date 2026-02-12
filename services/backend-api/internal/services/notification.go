@@ -128,6 +128,11 @@ type StopLoss struct {
 //
 //	*NotificationService: Initialized service.
 func NewNotificationService(db DBPool, redis *database.RedisClient, telegramServiceURL, telegramGrpcAddress, adminAPIKey string) *NotificationService {
+	var deadLetterService *DeadLetterService
+	if postgresDB, ok := db.(*database.PostgresDB); ok {
+		deadLetterService = NewDeadLetterService(postgresDB)
+	}
+
 	ns := &NotificationService{
 		db:                 db,
 		redis:              redis,
@@ -135,7 +140,7 @@ func NewNotificationService(db DBPool, redis *database.RedisClient, telegramServ
 		telegramGrpcAddr:   telegramGrpcAddress,
 		adminAPIKey:        adminAPIKey,
 		logger:             telemetry.Logger(),
-		deadLetterService:  NewDeadLetterService(db),
+		deadLetterService:  deadLetterService,
 	}
 
 	if telegramGrpcAddress != "" {
@@ -428,7 +433,7 @@ func (ns *NotificationService) handleBlockedUser(ctx context.Context, userID, re
 		    updated_at = NOW()
 		WHERE id = $1
 	`
-	_, err := ns.db.Pool.Exec(ctx, query, userID)
+	_, err := ns.db.Exec(ctx, query, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update user blocked status: %w", err)
 	}
@@ -1332,7 +1337,7 @@ func (ns *NotificationService) logNotification(ctx context.Context, userID, noti
 	`
 
 	now := time.Now()
-	_, err := ns.db.Exec(ctx, query, userID, notificationType, content, now, now)
+	_, err := ns.db.Exec(ctx, query, userID, notificationType, message, now)
 	if err != nil {
 		return fmt.Errorf("failed to log notification: %w", err)
 	}
