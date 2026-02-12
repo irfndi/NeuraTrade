@@ -245,6 +245,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			trading.POST("/liquidate", tradingHandler.Liquidate)
 			trading.POST("/liquidate_all", tradingHandler.LiquidateAll)
 			trading.GET("/positions", tradingHandler.ListPositions)
+			trading.GET("/positions/snapshot", tradingHandler.GetPositionSnapshot)
 			trading.GET("/positions/:position_id", tradingHandler.GetPosition)
 		}
 
