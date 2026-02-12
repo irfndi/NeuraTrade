@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -336,6 +335,7 @@ func getZapLevel(level string) zapcore.Level {
 }
 
 type sentryCore struct {
+<<<<<<< HEAD
 	zapcore.LevelEnabler
 }
 
@@ -358,6 +358,17 @@ func ParseLogrusLevel(level string) zaplogrus.Level {
 	default:
 		return zaplogrus.InfoLevel
 	}
+=======
+	level zapcore.LevelEnabler
+}
+
+func newSentryCore(level zapcore.LevelEnabler) zapcore.Core {
+	return &sentryCore{level: level}
+}
+
+func (s *sentryCore) Enabled(level zapcore.Level) bool {
+	return s.level.Enabled(level)
+>>>>>>> 26bca17 (fix(services): resolve duplicate imports and add missing dependencies)
 }
 
 func (s *sentryCore) With(fields []zapcore.Field) zapcore.Core {
