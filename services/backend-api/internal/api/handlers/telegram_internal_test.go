@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 )
 
 // TestTelegramInternalHandler_GetNotificationPreferences_Success tests success case
@@ -21,8 +23,9 @@ func TestTelegramInternalHandler_GetNotificationPreferences_Success(t *testing.T
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -55,8 +58,9 @@ func TestTelegramInternalHandler_SetNotificationPreferences_Success_Enable(t *te
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	req := map[string]bool{"enabled": true}
 	jsonBytes, _ := json.Marshal(req)
@@ -84,8 +88,9 @@ func TestTelegramInternalHandler_SetNotificationPreferences_Success_Disable(t *t
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	req := map[string]bool{"enabled": false}
 	jsonBytes, _ := json.Marshal(req)
@@ -115,8 +120,9 @@ func TestTelegramInternalHandler_SetNotificationPreferences_Success_Disable(t *t
 func TestNewTelegramInternalHandler(t *testing.T) {
 	mockDB, _ := pgxmock.NewPool()
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 	userHandler := &UserHandler{}
-	handler := NewTelegramInternalHandler(mockDB, userHandler)
+	handler := NewTelegramInternalHandler(dbPool, userHandler)
 
 	assert.NotNil(t, handler)
 	assert.NotNil(t, handler.db)
@@ -185,10 +191,11 @@ func TestTelegramInternalHandler_GetUserByChatID_Success(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
 	// Create UserHandler with querier for testing
-	userHandler := NewUserHandlerWithQuerier(mockDB, nil, nil)
-	handler := NewTelegramInternalHandler(mockDB, userHandler)
+	userHandler := NewUserHandlerWithQuerier(dbPool, nil, nil)
+	handler := NewTelegramInternalHandler(dbPool, userHandler)
 
 	chatID := "123456789"
 	now := time.Now()
@@ -225,9 +232,10 @@ func TestTelegramInternalHandler_GetUserByChatID_NotFound(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	userHandler := NewUserHandlerWithQuerier(mockDB, nil, nil)
-	handler := NewTelegramInternalHandler(mockDB, userHandler)
+	userHandler := NewUserHandlerWithQuerier(dbPool, nil, nil)
+	handler := NewTelegramInternalHandler(dbPool, userHandler)
 
 	chatID := "nonexistent123"
 
@@ -257,8 +265,9 @@ func TestTelegramInternalHandler_GetUserByChatID_EmptyID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mockDB, _ := pgxmock.NewPool()
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -281,9 +290,10 @@ func TestTelegramInternalHandler_GetUserByChatID_DatabaseError(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	userHandler := NewUserHandlerWithQuerier(mockDB, nil, nil)
-	handler := NewTelegramInternalHandler(mockDB, userHandler)
+	userHandler := NewUserHandlerWithQuerier(dbPool, nil, nil)
+	handler := NewTelegramInternalHandler(dbPool, userHandler)
 
 	chatID := "123456789"
 
@@ -310,8 +320,9 @@ func TestTelegramInternalHandler_GetNotificationPreferences_DatabaseError(t *tes
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -339,8 +350,9 @@ func TestTelegramInternalHandler_GetNotificationPreferences_EmptyUserID(t *testi
 	gin.SetMode(gin.TestMode)
 	mockDB, _ := pgxmock.NewPool()
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -362,8 +374,9 @@ func TestTelegramInternalHandler_SetNotificationPreferences_InvalidJSON(t *testi
 	gin.SetMode(gin.TestMode)
 	mockDB, _ := pgxmock.NewPool()
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -386,8 +399,9 @@ func TestTelegramInternalHandler_SetNotificationPreferences_EmptyUserID(t *testi
 	gin.SetMode(gin.TestMode)
 	mockDB, _ := pgxmock.NewPool()
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	req := map[string]bool{"enabled": true}
 	jsonBytes, _ := json.Marshal(req)
@@ -414,8 +428,9 @@ func TestTelegramInternalHandler_SetNotificationPreferences_TransactionBeginErro
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	req := map[string]bool{"enabled": true}
 	jsonBytes, _ := json.Marshal(req)
@@ -446,8 +461,9 @@ func TestTelegramInternalHandler_SetNotificationPreferences_DeleteError(t *testi
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(mockDB, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil)
 
 	req := map[string]bool{"enabled": true}
 	jsonBytes, _ := json.Marshal(req)

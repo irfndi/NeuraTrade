@@ -186,6 +186,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Mock userExists check - user doesn't exist
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).
@@ -197,7 +198,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 			WithArgs(pgxmock.AnyArg(), "test@example.com", pgxmock.AnyArg(), (*string)(nil), "free").
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := RegisterRequest{
 			Email:    "test@example.com",
@@ -232,13 +233,14 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Mock userExists check - user exists
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).
 			WithArgs("existing@example.com").
 			WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := RegisterRequest{
 			Email:    "existing@example.com",
@@ -269,13 +271,14 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Mock userExists check with error
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).
 			WithArgs("test@example.com").
 			WillReturnError(fmt.Errorf("database connection error"))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := RegisterRequest{
 			Email:    "test@example.com",
@@ -306,6 +309,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Mock userExists check - user doesn't exist
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).
@@ -317,7 +321,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 			WithArgs(pgxmock.AnyArg(), "test@example.com", pgxmock.AnyArg(), (*string)(nil), "free").
 			WillReturnError(fmt.Errorf("insertion failed"))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := RegisterRequest{
 			Email:    "test@example.com",
@@ -348,6 +352,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		telegramChatID := "123456789"
 
@@ -361,7 +366,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 			WithArgs(pgxmock.AnyArg(), "test@example.com", pgxmock.AnyArg(), &telegramChatID, "free").
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := RegisterRequest{
 			Email:          "test@example.com",
@@ -396,6 +401,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		newChatID := "123456789"
 		existingUserID := uuid.New().String()
@@ -417,7 +423,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 			WithArgs(&newChatID, "telegram_12345@celebrum.ai").
 			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := RegisterRequest{
 			Email:          "telegram_12345@celebrum.ai",
@@ -453,6 +459,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		oldChatID := "111111111"
 		newChatID := "222222222"
@@ -475,7 +482,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 			WithArgs(&newChatID, "telegram_12345@celebrum.ai").
 			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := RegisterRequest{
 			Email:          "telegram_12345@celebrum.ai",
@@ -510,6 +517,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		chatID := "123456789"
 		existingUserID := uuid.New().String()
@@ -528,7 +536,7 @@ func TestUserHandler_RegisterUser(t *testing.T) {
 
 		// No UPDATE expected since chat ID is the same
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := RegisterRequest{
 			Email:          "telegram_12345@celebrum.ai",
@@ -630,6 +638,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Mock getUserByEmail with error
 		mock.ExpectQuery(`
@@ -640,7 +649,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 			WithArgs("test@example.com").
 			WillReturnError(fmt.Errorf("database connection error"))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := LoginRequest{
 			Email:    "test@example.com",
@@ -719,6 +728,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Hash the password for comparison
 		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(TestValidPassword), bcrypt.DefaultCost)
@@ -734,7 +744,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 			WillReturnRows(pgxmock.NewRows([]string{"id", "email", "password_hash", "telegram_chat_id", "subscription_tier", "created_at", "updated_at"}).
 				AddRow(userID.String(), "test@example.com", string(hashedPassword), nil, "free", time.Now(), time.Now()))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := LoginRequest{
 			Email:    "test@example.com",
@@ -766,6 +776,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Mock getUserByEmail - user not found
 		mock.ExpectQuery(`
@@ -776,7 +787,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 			WithArgs("nonexistent@example.com").
 			WillReturnError(pgx.ErrNoRows)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := LoginRequest{
 			Email:    "nonexistent@example.com",
@@ -807,6 +818,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Hash a different password
 		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(TestDifferentPassword), bcrypt.DefaultCost)
@@ -822,7 +834,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 			WillReturnRows(pgxmock.NewRows([]string{"id", "email", "password_hash", "telegram_chat_id", "subscription_tier", "created_at", "updated_at"}).
 				AddRow(userID.String(), "test@example.com", string(hashedPassword), nil, "free", time.Now(), time.Now()))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := LoginRequest{
 			Email:    "test@example.com",
@@ -853,6 +865,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Mock getUserByEmail - database error
 		mock.ExpectQuery(`
@@ -863,7 +876,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 			WithArgs("test@example.com").
 			WillReturnError(fmt.Errorf("database connection error"))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := LoginRequest{
 			Email:    "test@example.com",
@@ -894,6 +907,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
 		// Hash the password for comparison
 		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(TestValidPassword), bcrypt.DefaultCost)
@@ -910,7 +924,7 @@ func TestUserHandler_LoginUser(t *testing.T) {
 			WillReturnRows(pgxmock.NewRows([]string{"id", "email", "password_hash", "telegram_chat_id", "subscription_tier", "created_at", "updated_at"}).
 				AddRow(userID.String(), "test@example.com", string(hashedPassword), &telegramChatID, "premium", time.Now(), time.Now()))
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		user := LoginRequest{
 			Email:    "test@example.com",
@@ -1215,8 +1229,9 @@ func TestUserHandler_RegisterUser_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock userExists query
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).WithArgs("test@example.com").WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
@@ -1245,8 +1260,9 @@ func TestUserHandler_RegisterUser_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock userExists query returning true
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).WithArgs("existing@example.com").WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
@@ -1272,8 +1288,9 @@ func TestUserHandler_RegisterUser_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock userExists query with error
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).WithArgs("test@example.com").WillReturnError(assert.AnError)
@@ -1299,8 +1316,9 @@ func TestUserHandler_RegisterUser_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock userExists query
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).WithArgs("test@example.com").WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
@@ -1358,8 +1376,9 @@ func TestUserHandler_LoginUser_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock getUserByEmail query
 		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(TestPassword123), bcrypt.DefaultCost)
@@ -1388,8 +1407,9 @@ func TestUserHandler_LoginUser_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock getUserByEmail query with no rows
 		mock.ExpectQuery(`SELECT id, email, password_hash, telegram_chat_id, subscription_tier, created_at, updated_at FROM users WHERE email = \$1`).WithArgs("nonexistent@example.com").WillReturnError(pgx.ErrNoRows)
@@ -1415,8 +1435,9 @@ func TestUserHandler_LoginUser_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock getUserByEmail query with different password
 		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(TestDifferentPassword), bcrypt.DefaultCost)
@@ -1499,8 +1520,9 @@ func TestUserHandler_UpdateUserProfile_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock update query
 		mock.ExpectExec(`UPDATE users SET telegram_chat_id = \$2, updated_at = \$3 WHERE id = \$1`).WithArgs("user-123", (*string)(nil), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -1531,8 +1553,9 @@ func TestUserHandler_UpdateUserProfile_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock update query with error
 		mock.ExpectExec(`UPDATE users SET telegram_chat_id = \$2, updated_at = \$3 WHERE id = \$1`).WithArgs("user-123", (*string)(nil), pgxmock.AnyArg()).WillReturnError(assert.AnError)
@@ -1558,8 +1581,9 @@ func TestUserHandler_UpdateUserProfile_WithMocks(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock successful update
 		mock.ExpectExec(`UPDATE users SET telegram_chat_id = \$2, updated_at = \$3 WHERE id = \$1`).WithArgs("user-123", (*string)(nil), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -1618,8 +1642,9 @@ func TestUserHandler_UpdateUserProfile_Comprehensive(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		chatID := "987654321"
 		// Mock update query
@@ -1659,8 +1684,9 @@ func TestUserHandler_UpdateUserProfile_Comprehensive(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock update query
 		mock.ExpectExec(`UPDATE users SET telegram_chat_id = \$2, updated_at = \$3 WHERE id = \$1`).
@@ -1743,8 +1769,9 @@ func TestUserHandler_UpdateUserProfile_Comprehensive(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock update query with nil telegram_chat_id
 		mock.ExpectExec(`UPDATE users SET telegram_chat_id = \$2, updated_at = \$3 WHERE id = \$1`).
@@ -1773,8 +1800,9 @@ func TestUserHandler_UpdateUserProfile_Comprehensive(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock update query that affects 0 rows (user not found)
 		mock.ExpectExec(`UPDATE users SET telegram_chat_id = \$2, updated_at = \$3 WHERE id = \$1`).
@@ -1804,8 +1832,9 @@ func TestUserHandler_UpdateUserProfile_Comprehensive(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock update query to return database error
 		mock.ExpectExec(`UPDATE users SET telegram_chat_id = \$2, updated_at = \$3 WHERE id = \$1`).
@@ -1839,8 +1868,9 @@ func TestUserHandler_UpdateUserProfile_Comprehensive(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		chatID := "987654321"
 		// Mock successful update query
@@ -1904,8 +1934,9 @@ func TestUserHandler_userExists(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).
 			WithArgs("test@example.com").
@@ -1921,8 +1952,9 @@ func TestUserHandler_userExists(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).
 			WithArgs("nonexistent@example.com").
@@ -1938,8 +1970,9 @@ func TestUserHandler_userExists(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM users WHERE email = \$1`).
 			WithArgs("error@example.com").
@@ -1965,8 +1998,9 @@ func TestUserHandler_getUserByEmail(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		userID := uuid.New().String()
 		now := time.Now()
@@ -1995,8 +2029,9 @@ func TestUserHandler_getUserByEmail(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock the query to return no rows
 		mock.ExpectQuery(`SELECT id, email, password_hash, telegram_chat_id, subscription_tier, created_at, updated_at FROM users WHERE email = \$1`).
@@ -2015,8 +2050,9 @@ func TestUserHandler_getUserByEmail(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		// Mock the query to return a database error
 		mock.ExpectQuery(`SELECT id, email, password_hash, telegram_chat_id, subscription_tier, created_at, updated_at FROM users WHERE email = \$1`).
@@ -2045,8 +2081,9 @@ func TestUserHandler_getUserByID(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{}) // No Redis for this test
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{}) // No Redis for this test
 
 		userID := uuid.New().String()
 		now := time.Now()
@@ -2112,8 +2149,9 @@ func TestUserHandler_getUserByID(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		userID := uuid.New().String()
 
@@ -2134,8 +2172,9 @@ func TestUserHandler_getUserByID(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		userID := uuid.New().String()
 
@@ -2167,8 +2206,9 @@ func TestUserHandler_GetUserByTelegramChatID(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		chatID := "123456789"
 		userID := uuid.New().String()
@@ -2235,8 +2275,9 @@ func TestUserHandler_GetUserByTelegramChatID(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		chatID := "123456789"
 
@@ -2257,8 +2298,9 @@ func TestUserHandler_GetUserByTelegramChatID(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		chatID := "123456789"
 
@@ -2290,8 +2332,9 @@ func TestUserHandler_CreateTelegramUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		chatID := "123456789"
 
@@ -2326,8 +2369,9 @@ func TestUserHandler_CreateTelegramUser(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+		dbPool := database.NewMockDBPool(mock)
 
-		handler := NewUserHandlerWithQuerier(mock, nil, &MockTokenGenerator{})
+		handler := NewUserHandlerWithQuerier(dbPool, nil, &MockTokenGenerator{})
 
 		chatID := "123456789"
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/shopspring/decimal"
@@ -255,9 +256,10 @@ type MockFuturesArbitrageResponse struct {
 func setupTestHandler(t *testing.T) (*FuturesArbitrageHandler, pgxmock.PgxPoolIface) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
+	dbPool := database.NewMockDBPool(mock)
 
 	// Use the NewFuturesArbitrageHandlerWithQuerier constructor
-	handler := NewFuturesArbitrageHandlerWithQuerier(mock)
+	handler := NewFuturesArbitrageHandlerWithQuerier(dbPool)
 	return handler, mock
 }
 
@@ -561,8 +563,9 @@ func TestNewFuturesArbitrageHandlerWithQuerier(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
+	dbPool := database.NewMockDBPool(mock)
 
-	handler := NewFuturesArbitrageHandlerWithQuerier(mock)
+	handler := NewFuturesArbitrageHandlerWithQuerier(dbPool)
 
 	// Verify handler is properly initialized
 	assert.NotNil(t, handler)
@@ -1078,8 +1081,9 @@ func TestGenerateStrategies(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
+	dbPool := database.NewMockDBPool(mock)
 
-	handler := NewFuturesArbitrageHandlerWithQuerier(mock)
+	handler := NewFuturesArbitrageHandlerWithQuerier(dbPool)
 
 	// Create test opportunities
 	mockOpportunities := []MockFuturesArbitrageOpportunity{
@@ -1165,8 +1169,9 @@ func TestGetFuturesMarketSummary(t *testing.T) {
 			mock, err := pgxmock.NewPool()
 			assert.NoError(t, err)
 			defer mock.Close()
+			dbPool := database.NewMockDBPool(mock)
 
-			handler := NewFuturesArbitrageHandlerWithQuerier(mock)
+			handler := NewFuturesArbitrageHandlerWithQuerier(dbPool)
 
 			tt.setupMock(mock)
 
@@ -1246,8 +1251,9 @@ func TestStoreFuturesOpportunity(t *testing.T) {
 			mock, err := pgxmock.NewPool()
 			assert.NoError(t, err)
 			defer mock.Close()
+			dbPool := database.NewMockDBPool(mock)
 
-			handler := NewFuturesArbitrageHandlerWithQuerier(mock)
+			handler := NewFuturesArbitrageHandlerWithQuerier(dbPool)
 
 			tt.setupMock(mock)
 

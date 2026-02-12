@@ -360,6 +360,10 @@ func ParseLogrusLevel(level string) zaplogrus.Level {
 	}
 }
 
+func (s *sentryCore) Enabled(level zapcore.Level) bool {
+	return s.LevelEnabler.Enabled(level)
+}
+
 func (s *sentryCore) With(fields []zapcore.Field) zapcore.Core {
 	return s // We don't need to accumulate fields here, we just intercept Check/Write
 }

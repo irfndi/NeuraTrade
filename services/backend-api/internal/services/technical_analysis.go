@@ -8,18 +8,13 @@ import (
 
 	"github.com/cinar/indicator/v2/asset"
 	"github.com/getsentry/sentry-go"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/irfandi/celebrum-ai-go/internal/talib"
+	"github.com/shopspring/decimal"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
-
-	"github.com/cinar/indicator/v2/helper"
-	"github.com/cinar/indicator/v2/momentum"
-	"github.com/cinar/indicator/v2/trend"
-	"github.com/cinar/indicator/v2/volatility"
-	"github.com/cinar/indicator/v2/volume"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
-	"github.com/shopspring/decimal"
 )
 
 // TechnicalAnalysisService provides technical analysis capabilities, calculating various indicators
@@ -275,8 +270,8 @@ func (tas *TechnicalAnalysisService) AnalyzeSymbol(ctx context.Context, symbol, 
 func (tas *TechnicalAnalysisService) calculateAllIndicators(open, high, low, close, volume []float64, config *IndicatorConfig) []*IndicatorResult {
 	// Log indicator calculation start with structured logging
 	tas.logger.WithFields(zaplogrus.Fields{
-		"candles":   len(close),
-		"operation": "calculate_indicators",
+		"data_points": len(close),
+		"operation":   "calculate_indicators",
 	}).Debug("Starting technical indicator calculations")
 
 	var indicators []*IndicatorResult
@@ -340,8 +335,7 @@ func (tas *TechnicalAnalysisService) calculateSMA(prices []float64, period int) 
 	}
 
 	// Calculate SMA
-	smaIndicator := trend.NewSmaWithPeriod[float64](period)
-	result := helper.ChanToSlice(smaIndicator.Compute(helper.SliceToChan(prices)))
+	result := talib.Sma(prices, period)
 
 	// Convert to decimal and determine signal
 	values := make([]decimal.Decimal, len(result))
@@ -367,8 +361,7 @@ func (tas *TechnicalAnalysisService) calculateEMA(prices []float64, period int) 
 	}
 
 	// Calculate EMA
-	emaIndicator := trend.NewEmaWithPeriod[float64](period)
-	result := helper.ChanToSlice(emaIndicator.Compute(helper.SliceToChan(prices)))
+	result := talib.Ema(prices, period)
 
 	values := make([]decimal.Decimal, len(result))
 	for i, val := range result {
@@ -393,8 +386,7 @@ func (tas *TechnicalAnalysisService) calculateRSI(prices []float64, period int) 
 	}
 
 	// Calculate RSI
-	rsiIndicator := momentum.NewRsiWithPeriod[float64](period)
-	result := helper.ChanToSlice(rsiIndicator.Compute(helper.SliceToChan(prices)))
+	result := talib.Rsi(prices, period)
 
 	values := make([]decimal.Decimal, len(result))
 	for i, val := range result {
@@ -419,16 +411,10 @@ func (tas *TechnicalAnalysisService) calculateMACD(prices []float64, fastPeriod,
 	}
 
 	// Calculate MACD with configurable periods
-	macdIndicator := trend.NewMacdWithPeriod[float64](fastPeriod, slowPeriod, signalPeriod)
-	macdLine, signalLine := macdIndicator.Compute(helper.SliceToChan(prices))
+	// Macd returns macd, signal, hist
+	macdLine, _, _ := talib.Macd(prices, fastPeriod, slowPeriod, signalPeriod)
 
-	signalDone := make(chan struct{})
-	go func() {
-		_ = helper.ChanToSlice(signalLine)
-		close(signalDone)
-	}()
-	result := helper.ChanToSlice(macdLine)
-	<-signalDone
+	result := macdLine
 
 	values := make([]decimal.Decimal, len(result))
 	for i, val := range result {
@@ -453,28 +439,17 @@ func (tas *TechnicalAnalysisService) calculateBollingerBands(prices []float64, p
 	}
 
 	// Bollinger Bands calculation with configurable standard deviation
-	smaIndicator := trend.NewSmaWithPeriod[float64](period)
-	smaValues := helper.ChanToSlice(smaIndicator.Compute(helper.SliceToChan(prices)))
+	// Bbands(inReal []float64, optInTimePeriod int, optInNbDevUp float64, optInNbDevDn float64, optInMatType int)
+	upperBand, middleBand, lowerBand := talib.BBands(prices, period, stdDev, stdDev, talib.SMA)
 
-	stdDevValues := make([]float64, len(smaValues))
-	for i := period - 1; i < len(prices); i++ {
-		window := prices[i-period+1 : i+1]
-		stdDevValues[i-period+1] = tas.calculateStandardDeviation(window, smaValues[i-period+1])
-	}
-
-	upperBand := make([]float64, len(smaValues))
-	lowerBand := make([]float64, len(smaValues))
-	for i := 0; i < len(smaValues); i++ {
-		upperBand[i] = smaValues[i] + (stdDev * stdDevValues[i])
-		lowerBand[i] = smaValues[i] - (stdDev * stdDevValues[i])
-	}
-
-	values := make([]decimal.Decimal, len(smaValues))
-	for i, val := range smaValues {
+	// Use middle band (SMA) as the primary value to return (as per original logic, though returning all 3 would be better in future)
+	// Original logic returned SMA values as "Values"
+	values := make([]decimal.Decimal, len(middleBand))
+	for i, val := range middleBand {
 		values[i] = decimal.NewFromFloat(val)
 	}
 
-	signal, strength := tas.analyzeBollingerBandsSignal(prices, smaValues, upperBand, lowerBand, period)
+	signal, strength := tas.analyzeBollingerBandsSignal(prices, middleBand, upperBand, lowerBand, period)
 
 	return &IndicatorResult{
 		Name:      "BB",
@@ -513,15 +488,7 @@ func (tas *TechnicalAnalysisService) calculateATR(high, low, close []float64, pe
 	}
 
 	// Calculate ATR
-	atrIndicator := volatility.NewAtr[float64]()
-	highChan := helper.SliceToChan(high)
-	lowChan := helper.SliceToChan(low)
-	closeChan := helper.SliceToChan(close)
-	result := helper.ChanToSlice(atrIndicator.Compute(highChan, lowChan, closeChan))
-
-	if len(result) > period {
-		result = result[len(result)-period:]
-	}
+	result := talib.Atr(high, low, close, period)
 
 	values := make([]decimal.Decimal, len(result))
 	for i, val := range result {
@@ -543,46 +510,22 @@ func (tas *TechnicalAnalysisService) calculateStochastic(high, low, close []floa
 		return nil
 	}
 
-	result := make([]float64, len(close))
-	for i := kPeriod - 1; i < len(close); i++ {
-		highestHigh := high[i-kPeriod+1]
-		lowestLow := low[i-kPeriod+1]
-		for j := i - kPeriod + 2; j <= i; j++ {
-			if high[j] > highestHigh {
-				highestHigh = high[j]
-			}
-			if low[j] < lowestLow {
-				lowestLow = low[j]
-			}
-		}
+	// StochF returns FastK and FastD. FastD is what we want (it's the smoothed K).
+	// Equivalently Stoch(..., kPeriod, dPeriod, SMA, dPeriod, SMA) returns SlowK and SlowD.
+	// Original code calc method:
+	// 1. Calc Fast %K.
+	// 2. Calc SMA of Fast %K (len dPeriod).
+	// This maps to talib.StochF returning the second value (FastD).
 
-		if highestHigh != lowestLow {
-			result[i] = ((close[i] - lowestLow) / (highestHigh - lowestLow)) * 100
-		} else {
-			result[i] = 50
-		}
-	}
+	_, fastD := talib.StochF(high, low, close, kPeriod, dPeriod, talib.SMA)
 
-	validResults := result[kPeriod-1:]
-	if len(validResults) < dPeriod {
-		return nil
-	}
-
-	dValues := make([]float64, len(validResults)-dPeriod+1)
-	for i := dPeriod - 1; i < len(validResults); i++ {
-		sum := 0.0
-		for j := i - dPeriod + 1; j <= i; j++ {
-			sum += validResults[j]
-		}
-		dValues[i-dPeriod+1] = sum / float64(dPeriod)
-	}
-
-	values := make([]decimal.Decimal, len(dValues))
-	for i, val := range dValues {
+	// Use FastD as the result
+	values := make([]decimal.Decimal, len(fastD))
+	for i, val := range fastD {
 		values[i] = decimal.NewFromFloat(val)
 	}
 
-	signal, strength := tas.analyzeStochasticSignal(dValues)
+	signal, strength := tas.analyzeStochasticSignal(fastD)
 
 	return &IndicatorResult{
 		Name:      "STOCH",
@@ -600,10 +543,7 @@ func (tas *TechnicalAnalysisService) calculateOBV(prices, volumes []float64) *In
 	}
 
 	// Calculate OBV
-	obvIndicator := volume.NewObv[float64]()
-	priceChan := helper.SliceToChan(prices)
-	volumeChan := helper.SliceToChan(volumes)
-	result := helper.ChanToSlice(obvIndicator.Compute(priceChan, volumeChan))
+	result := talib.Obv(prices, volumes)
 
 	values := make([]decimal.Decimal, len(result))
 	for i, val := range result {
