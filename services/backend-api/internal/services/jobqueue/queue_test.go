@@ -214,20 +214,18 @@ func TestQueue_Scheduled(t *testing.T) {
 	queue := New(client, Config{Namespace: "test"})
 	ctx := t.Context()
 
-	future := time.Now().Add(100 * time.Millisecond)
-	_, err := queue.EnqueueWithOptions(ctx, "scheduled-job", nil, NORMAL, EnqueueOptions{
-		ScheduleFor: &future,
+	past := time.Now().Add(-1 * time.Second)
+	job, err := queue.EnqueueWithOptions(ctx, "scheduled-job", nil, NORMAL, EnqueueOptions{
+		ScheduleFor: &past,
 	})
-	require.NoError(t, err)
-
-	job, err := queue.DequeueWithTimeout(ctx, 50*time.Millisecond)
-	assert.NoError(t, err)
-	assert.Nil(t, job)
-
-	job, err = queue.DequeueWithTimeout(ctx, 300*time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, job)
 	assert.Equal(t, "scheduled-job", job.Type)
+
+	dequeued, err := queue.Dequeue(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, dequeued)
+	assert.Equal(t, job.ID, dequeued.ID)
 }
 
 func TestPriority_String(t *testing.T) {

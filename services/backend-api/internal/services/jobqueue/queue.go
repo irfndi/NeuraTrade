@@ -148,7 +148,7 @@ func (q *Queue) Dequeue(ctx context.Context) (*Job, error) {
 	priorities := []Priority{CRITICAL, HIGH, NORMAL, LOW}
 	for _, priority := range priorities {
 		queueName := q.queues[priority]
-		result, err := q.client.BRPop(ctx, 0, queueName).Result()
+		result, err := q.client.RPop(ctx, queueName).Result()
 		if err == redis.Nil {
 			continue
 		}
@@ -156,12 +156,8 @@ func (q *Queue) Dequeue(ctx context.Context) (*Job, error) {
 			return nil, fmt.Errorf("failed to dequeue: %w", err)
 		}
 
-		if len(result) < 2 {
-			continue
-		}
-
 		var job Job
-		if err := json.Unmarshal([]byte(result[1]), &job); err != nil {
+		if err := json.Unmarshal([]byte(result), &job); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal job: %w", err)
 		}
 
@@ -187,6 +183,9 @@ func (q *Queue) Complete(ctx context.Context, job *Job) error {
 // Fail marks a job as failed and potentially moves it to dead letter queue.
 func (q *Queue) Fail(ctx context.Context, job *Job, err error) error {
 	if job.Attempts < job.MaxAttempts {
+		if job.Payload == nil {
+			job.Payload = make(map[string]interface{})
+		}
 		job.Payload["_error"] = err.Error()
 		data, marshalErr := json.Marshal(job)
 		if marshalErr != nil {
