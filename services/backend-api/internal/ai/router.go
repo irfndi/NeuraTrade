@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+
+	"github.com/shopspring/decimal"
 )
 
 // Router provides intelligent model selection based on requirements and constraints
@@ -34,8 +36,8 @@ type RoutingConstraints struct {
 	RequiredCaps ModelCapability
 
 	// Budget constraints (in USD per 1M tokens)
-	MaxInputCost  float64
-	MaxOutputCost float64
+	MaxInputCost  decimal.Decimal
+	MaxOutputCost decimal.Decimal
 
 	// Latency preference: "fast", "balanced", "accurate"
 	LatencyPreference string
@@ -156,10 +158,10 @@ func (r *Router) matchesConstraints(model ModelInfo, constraints RoutingConstrai
 	}
 
 	// Check cost constraints
-	if constraints.MaxInputCost > 0 && model.Cost.InputCost > constraints.MaxInputCost {
+	if constraints.MaxInputCost.GreaterThan(decimal.Zero) && model.Cost.InputCost.GreaterThan(constraints.MaxInputCost) {
 		return false
 	}
-	if constraints.MaxOutputCost > 0 && model.Cost.OutputCost > constraints.MaxOutputCost {
+	if constraints.MaxOutputCost.GreaterThan(decimal.Zero) && model.Cost.OutputCost.GreaterThan(constraints.MaxOutputCost) {
 		return false
 	}
 
@@ -210,11 +212,14 @@ func (r *Router) scoreModels(models []ModelInfo, constraints RoutingConstraints)
 		reasons := []string{}
 
 		// Cost efficiency (lower is better, inverse scoring)
-		totalCost := model.Cost.InputCost + model.Cost.OutputCost
-		if totalCost > 0 {
-			costScore := 100.0 / (1.0 + totalCost)
+		totalCost := model.Cost.InputCost.Add(model.Cost.OutputCost)
+		if totalCost.GreaterThan(decimal.Zero) {
+			one := decimal.NewFromFloat(1.0)
+			hundred := decimal.NewFromFloat(100.0)
+			decimalCostScore := hundred.Div(one.Add(totalCost))
+			costScore, _ := decimalCostScore.Float64()
 			score += costScore * 0.3 // 30% weight
-			reasons = append(reasons, fmt.Sprintf("cost-efficient ($%.2f/1M)", totalCost))
+			reasons = append(reasons, fmt.Sprintf("cost-efficient ($%s/1M)", totalCost.String()))
 		}
 
 		// Latency match
@@ -313,11 +318,15 @@ func joinReasons(reasons []string) string {
 }
 
 // CalculateCost estimates the cost for a given model and token usage
-func CalculateCost(model ModelInfo, inputTokens, outputTokens int) float64 {
-	inputCost := (float64(inputTokens) / 1e6) * model.Cost.InputCost
-	outputCost := (float64(outputTokens) / 1e6) * model.Cost.OutputCost
+func CalculateCost(model ModelInfo, inputTokens, outputTokens int) decimal.Decimal {
+	inputTokensDecimal := decimal.NewFromInt(int64(inputTokens))
+	outputTokensDecimal := decimal.NewFromInt(int64(outputTokens))
+	million := decimal.NewFromInt(1000000)
 
-	return inputCost + outputCost
+	inputCost := inputTokensDecimal.Div(million).Mul(model.Cost.InputCost)
+	outputCost := outputTokensDecimal.Div(million).Mul(model.Cost.OutputCost)
+
+	return inputCost.Add(outputCost)
 }
 
 // EstimateTokens provides a rough token estimate for text

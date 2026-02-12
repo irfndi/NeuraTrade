@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 )
 
@@ -34,13 +35,13 @@ type ModelCapability struct {
 
 // ModelCost represents cost metadata for a model
 type ModelCost struct {
-	InputCost       float64 `json:"input_cost"`
-	OutputCost      float64 `json:"output_cost"`
-	ReasoningCost   float64 `json:"reasoning_cost,omitempty"`
-	CacheReadCost   float64 `json:"cache_read_cost,omitempty"`
-	CacheWriteCost  float64 `json:"cache_write_cost,omitempty"`
-	AudioInputCost  float64 `json:"audio_input_cost,omitempty"`
-	AudioOutputCost float64 `json:"audio_output_cost,omitempty"`
+	InputCost       decimal.Decimal `json:"input_cost"`
+	OutputCost      decimal.Decimal `json:"output_cost"`
+	ReasoningCost   decimal.Decimal `json:"reasoning_cost,omitempty"`
+	CacheReadCost   decimal.Decimal `json:"cache_read_cost,omitempty"`
+	CacheWriteCost  decimal.Decimal `json:"cache_write_cost,omitempty"`
+	AudioInputCost  decimal.Decimal `json:"audio_input_cost,omitempty"`
+	AudioOutputCost decimal.Decimal `json:"audio_output_cost,omitempty"`
 }
 
 // ModelLimits represents token limits for a model
