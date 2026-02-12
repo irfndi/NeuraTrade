@@ -1159,10 +1159,12 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 	for rows.Next() {
 		var sym SymbolStats
 		var avgProf float64
-		if err := rows.Scan(&sym.Symbol, &sym.Count, &avgProf); err == nil {
-			sym.AvgProfit = decimal.NewFromFloat(avgProf)
-			stats.TopSymbols = append(stats.TopSymbols, sym)
+		if err := rows.Scan(&sym.Symbol, &sym.Count, &avgProf); err != nil {
+			log.Printf("Failed to scan symbol stats: %v", err)
+			continue
 		}
+		sym.AvgProfit = decimal.NewFromFloat(avgProf)
+		stats.TopSymbols = append(stats.TopSymbols, sym)
 	}
 
 	pairQuery := `
@@ -1181,10 +1183,12 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 	for rows.Next() {
 		var pair PairStats
 		var avgProf float64
-		if err := rows.Scan(&pair.BuyExchange, &pair.SellExchange, &pair.Count, &avgProf); err == nil {
-			pair.AvgProfit = decimal.NewFromFloat(avgProf)
-			stats.TopPairs = append(stats.TopPairs, pair)
+		if err := rows.Scan(&pair.BuyExchange, &pair.SellExchange, &pair.Count, &avgProf); err != nil {
+			log.Printf("Failed to scan pair stats: %v", err)
+			continue
 		}
+		pair.AvgProfit = decimal.NewFromFloat(avgProf)
+		stats.TopPairs = append(stats.TopPairs, pair)
 	}
 
 	return stats, nil

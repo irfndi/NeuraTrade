@@ -405,6 +405,8 @@ type RiskMetrics struct {
 }
 
 // GetRiskMetrics returns current risk metrics for the system.
+// Note: This is a placeholder implementation. Real risk metrics should be
+// calculated from ExchangeReliabilityTracker and other services in a follow-up.
 func (h *HealthHandler) GetRiskMetrics(w http.ResponseWriter, r *http.Request) {
 	span := sentry.StartSpan(r.Context(), "risk_metrics")
 	defer span.Finish()
