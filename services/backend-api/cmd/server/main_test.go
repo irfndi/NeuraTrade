@@ -22,6 +22,21 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestMain(m *testing.M) {
+	originalDatabaseURL := os.Getenv("DATABASE_URL")
+	if originalDatabaseURL != "" {
+		_ = os.Unsetenv("DATABASE_URL")
+	}
+
+	exitCode := m.Run()
+
+	if originalDatabaseURL != "" {
+		_ = os.Setenv("DATABASE_URL", originalDatabaseURL)
+	}
+
+	os.Exit(exitCode)
+}
+
 // Test server configuration
 func TestServerConfiguration(t *testing.T) {
 	// Test server address formatting
