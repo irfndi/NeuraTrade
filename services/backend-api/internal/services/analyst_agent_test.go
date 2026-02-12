@@ -29,9 +29,9 @@ func TestAnalystAgent_Analyze_Bullish(t *testing.T) {
 	agent := NewAnalystAgent(DefaultAnalystAgentConfig())
 
 	signals := []AnalystSignal{
-		{Name: "rsi", Value: 0.7, Weight: 1.0, Direction: "bullish"},
-		{Name: "macd", Value: 0.8, Weight: 1.0, Direction: "bullish"},
-		{Name: "trend", Value: 0.6, Weight: 0.5, Direction: "bullish"},
+		{Name: "rsi", Value: 0.7, Weight: 1.0, Direction: DirectionBullish},
+		{Name: "macd", Value: 0.8, Weight: 1.0, Direction: DirectionBullish},
+		{Name: "trend", Value: 0.6, Weight: 0.5, Direction: DirectionBullish},
 	}
 
 	analysis, err := agent.Analyze(context.Background(), "BTC/USDT", AnalystRoleTechnical, signals)
@@ -56,9 +56,9 @@ func TestAnalystAgent_Analyze_Bearish(t *testing.T) {
 	agent := NewAnalystAgent(DefaultAnalystAgentConfig())
 
 	signals := []AnalystSignal{
-		{Name: "rsi", Value: -0.7, Weight: 1.0, Direction: "bearish"},
-		{Name: "macd", Value: -0.8, Weight: 1.0, Direction: "bearish"},
-		{Name: "trend", Value: -0.6, Weight: 0.5, Direction: "bearish"},
+		{Name: "rsi", Value: -0.7, Weight: 1.0, Direction: DirectionBearish},
+		{Name: "macd", Value: -0.8, Weight: 1.0, Direction: DirectionBearish},
+		{Name: "trend", Value: -0.6, Weight: 0.5, Direction: DirectionBearish},
 	}
 
 	analysis, err := agent.Analyze(context.Background(), "ETH/USDT", AnalystRoleTechnical, signals)
@@ -75,9 +75,9 @@ func TestAnalystAgent_Analyze_Neutral(t *testing.T) {
 	agent := NewAnalystAgent(DefaultAnalystAgentConfig())
 
 	signals := []AnalystSignal{
-		{Name: "rsi", Value: 0.3, Weight: 1.0, Direction: "neutral"},
-		{Name: "macd", Value: 0.2, Weight: 1.0, Direction: "neutral"},
-		{Name: "trend", Value: 0.1, Weight: 0.5, Direction: "neutral"},
+		{Name: "rsi", Value: 0.3, Weight: 1.0, Direction: DirectionNeutral},
+		{Name: "macd", Value: 0.2, Weight: 1.0, Direction: DirectionNeutral},
+		{Name: "trend", Value: 0.1, Weight: 0.5, Direction: DirectionNeutral},
 	}
 
 	analysis, err := agent.Analyze(context.Background(), "BTC/USDT", AnalystRoleTechnical, signals)
@@ -94,7 +94,7 @@ func TestAnalystAgent_QuickAnalyze(t *testing.T) {
 	agent := NewAnalystAgent(DefaultAnalystAgentConfig())
 
 	signals := []AnalystSignal{
-		{Name: "rsi", Value: 0.8, Weight: 1.0, Direction: "bullish"},
+		{Name: "rsi", Value: 0.8, Weight: 1.0, Direction: DirectionBullish},
 	}
 
 	recommendation := agent.QuickAnalyze("BTC/USDT", signals)
@@ -142,18 +142,24 @@ func TestAnalystAgent_Metrics(t *testing.T) {
 	agent := NewAnalystAgent(DefaultAnalystAgentConfig())
 
 	bullishSignals := []AnalystSignal{
-		{Name: "rsi", Value: 0.7, Weight: 1.0, Direction: "bullish"},
+		{Name: "rsi", Value: 0.7, Weight: 1.0, Direction: DirectionBullish},
 	}
 	bearishSignals := []AnalystSignal{
-		{Name: "rsi", Value: -0.7, Weight: 1.0, Direction: "bearish"},
+		{Name: "rsi", Value: -0.7, Weight: 1.0, Direction: DirectionBearish},
 	}
 	neutralSignals := []AnalystSignal{
-		{Name: "rsi", Value: 0.1, Weight: 1.0, Direction: "neutral"},
+		{Name: "rsi", Value: 0.1, Weight: 1.0, Direction: DirectionNeutral},
 	}
 
-	agent.Analyze(context.Background(), "BTC/USDT", AnalystRoleTechnical, bullishSignals)
-	agent.Analyze(context.Background(), "ETH/USDT", AnalystRoleSentiment, bearishSignals)
-	agent.Analyze(context.Background(), "SOL/USDT", AnalystRoleTechnical, neutralSignals)
+	if _, err := agent.Analyze(context.Background(), "BTC/USDT", AnalystRoleTechnical, bullishSignals); err != nil {
+		t.Errorf("Analyze BTC failed: %v", err)
+	}
+	if _, err := agent.Analyze(context.Background(), "ETH/USDT", AnalystRoleSentiment, bearishSignals); err != nil {
+		t.Errorf("Analyze ETH failed: %v", err)
+	}
+	if _, err := agent.Analyze(context.Background(), "SOL/USDT", AnalystRoleTechnical, neutralSignals); err != nil {
+		t.Errorf("Analyze SOL failed: %v", err)
+	}
 
 	metrics := agent.GetMetrics()
 
@@ -194,8 +200,8 @@ func TestAnalystAgent_SetGetConfig(t *testing.T) {
 
 func TestCalculateConfidence(t *testing.T) {
 	signals := []AnalystSignal{
-		{Name: "rsi", Value: 0.7, Weight: 1.0, Direction: "bullish"},
-		{Name: "macd", Value: 0.8, Weight: 1.0, Direction: "bullish"},
+		{Name: "rsi", Value: 0.7, Weight: 1.0, Direction: DirectionBullish},
+		{Name: "macd", Value: 0.8, Weight: 1.0, Direction: DirectionBullish},
 	}
 
 	confidence := calculateConfidence(signals, 0.75)
@@ -228,18 +234,30 @@ func TestDetermineCondition(t *testing.T) {
 }
 
 func TestCalculateRiskLevel(t *testing.T) {
+	// volatility value 0.8 * 0.4 = 0.32, which is > 0.3 but < 0.6, so it's medium
 	highRiskSignals := []AnalystSignal{
-		{Name: "volatility", Value: 0.8, Weight: 1.0, Direction: "neutral"},
+		{Name: "volatility", Value: 0.8, Weight: 1.0, Direction: DirectionNeutral},
 	}
 
 	risk := calculateRiskLevel(highRiskSignals)
+	if risk != "medium" {
+		t.Errorf("expected medium risk for volatility 0.8, got %s", risk)
+	}
+
+	// Use higher volatility value to get high risk (> 0.6)
+	// volatility value 2.0 * 0.4 = 0.8 > 0.6
+	veryHighRiskSignals := []AnalystSignal{
+		{Name: "volatility", Value: 2.0, Weight: 1.0, Direction: DirectionNeutral},
+	}
+
+	risk = calculateRiskLevel(veryHighRiskSignals)
 	if risk != "high" {
-		t.Errorf("expected high risk, got %s", risk)
+		t.Errorf("expected high risk for volatility 1.0, got %s", risk)
 	}
 
 	lowRiskSignals := []AnalystSignal{
-		{Name: "volatility", Value: 0.1, Weight: 1.0, Direction: "neutral"},
-		{Name: "volume", Value: 0.8, Weight: 1.0, Direction: "neutral"},
+		{Name: "volatility", Value: 0.1, Weight: 1.0, Direction: DirectionNeutral},
+		{Name: "volume", Value: 0.8, Weight: 1.0, Direction: DirectionNeutral},
 	}
 
 	risk = calculateRiskLevel(lowRiskSignals)
