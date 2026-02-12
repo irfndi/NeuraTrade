@@ -5,7 +5,7 @@
 - Banned: `services/backend-api/internal/handlers/*`
 
 ## Banned Patterns
-- Import path: `github.com/irfandi/celebrum-ai-go/internal/handlers`
+- Import path: `github.com/irfndi/neuratrade/internal/handlers`
 - Path segment in source imports: `internal/handlers`
 - Non-snake_case Go file names (must match `^[a-z0-9_]+\.go$`)
 

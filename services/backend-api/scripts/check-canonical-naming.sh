@@ -24,9 +24,9 @@ done < <(git -C "$REPO_ROOT" ls-files '*.go')
 
 echo "[naming-check] validating banned legacy import paths"
 
-if git -C "$REPO_ROOT" grep -n 'github.com/irfandi/celebrum-ai-go/internal/handlers' -- 'services/backend-api/**/*.go' >/dev/null 2>&1; then
+if git -C "$REPO_ROOT" grep -n 'github.com/irfndi/neuratrade/internal/handlers' -- 'services/backend-api/**/*.go' >/dev/null 2>&1; then
   echo "[naming-check] ERROR: found banned legacy import path in Go sources"
-  git -C "$REPO_ROOT" grep -n 'github.com/irfandi/celebrum-ai-go/internal/handlers' -- 'services/backend-api/**/*.go' || true
+  git -C "$REPO_ROOT" grep -n 'github.com/irfndi/neuratrade/internal/handlers' -- 'services/backend-api/**/*.go' || true
   violations=1
 fi
 

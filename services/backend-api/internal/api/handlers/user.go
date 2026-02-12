@@ -10,8 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )

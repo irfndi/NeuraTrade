@@ -48,7 +48,7 @@ services/
 During migration only, use explicit temporary alias for legacy imports to keep diffs easy to detect:
 
 ```go
-legacyHandlers "github.com/irfandi/celebrum-ai-go/internal/handlers"
+legacyHandlers "github.com/irfndi/neuratrade/internal/handlers"
 ```
 
 Rules:
@@ -90,7 +90,7 @@ Coverage baseline policy:
 
 ## CI Guardrail Baseline (Banned Patterns)
 Block these patterns after Phase 4 completion:
-- Import path contains `"github.com/irfandi/celebrum-ai-go/internal/handlers"`.
+- Import path contains `"github.com/irfndi/neuratrade/internal/handlers"`.
 - Coverage package list includes `./internal/handlers`.
 - New files created under `services/backend-api/internal/handlers/`.
 

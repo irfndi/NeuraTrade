@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/shopspring/decimal"
 )
 

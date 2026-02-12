@@ -11,7 +11,7 @@ import (
 
 const (
 	// ServiceName is the identifier for the application service.
-	ServiceName = "github.com/irfandi/celebrum-ai-go"
+	ServiceName = "github.com/irfndi/neuratrade"
 	// ServiceVersion indicates the current version of the service.
 	ServiceVersion = "1.0.0"
 )

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	"github.com/irfndi/neuratrade/internal/logging"
 	"github.com/stretchr/testify/assert"
 )
 

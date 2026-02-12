@@ -9,10 +9,10 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/observability"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 	"github.com/shopspring/decimal"
 )
 

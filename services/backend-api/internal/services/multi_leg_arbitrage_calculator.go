@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/shopspring/decimal"
 )
 

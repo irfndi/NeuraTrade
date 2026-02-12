@@ -12,10 +12,10 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/logging"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )

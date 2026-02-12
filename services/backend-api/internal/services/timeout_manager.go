@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/observability"
 )
 
 // TimeoutConfig defines timeout durations for various types of operations.

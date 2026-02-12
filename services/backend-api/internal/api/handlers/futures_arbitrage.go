@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/metrics"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/services"
-	"github.com/irfandi/celebrum-ai-go/internal/utils"
+	"github.com/irfndi/neuratrade/internal/logging"
+	"github.com/irfndi/neuratrade/internal/metrics"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/irfndi/neuratrade/internal/utils"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 )

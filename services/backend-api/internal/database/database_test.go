@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/config"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

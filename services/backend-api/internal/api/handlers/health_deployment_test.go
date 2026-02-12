@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/irfandi/celebrum-ai-go/internal/services"
+	"github.com/irfndi/neuratrade/internal/services"
 )
 
 func TestHealthHandler_CurlHealthcheckCompatibility(t *testing.T) {

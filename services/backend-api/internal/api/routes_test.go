@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/api/handlers/testmocks"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/middleware"
+	"github.com/irfndi/neuratrade/internal/api/handlers/testmocks"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )

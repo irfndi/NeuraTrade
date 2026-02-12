@@ -12,7 +12,7 @@ if [[ -d "$ROOT_DIR/internal/handlers" ]]; then
 fi
 
 LEGACY_SEGMENT='internal/handlers'
-PATTERN="github.com/irfandi/celebrum-ai-go/${LEGACY_SEGMENT}|\\./${LEGACY_SEGMENT}|/${LEGACY_SEGMENT}/"
+PATTERN="github.com/irfndi/neuratrade/${LEGACY_SEGMENT}|\\./${LEGACY_SEGMENT}|/${LEGACY_SEGMENT}/"
 
 if rg -n "$PATTERN" "$ROOT_DIR" \
   --glob '*.go' \

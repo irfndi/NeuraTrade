@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )

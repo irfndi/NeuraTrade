@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 package ccxt;
-option go_package = "github.com/irfandi/celebrum-ai-go/services/backend-api/pkg/pb/ccxt";
+option go_package = "github.com/irfndi/neuratrade/services/backend-api/pkg/pb/ccxt";
 
 service CcxtService {
   rpc GetTicker(GetTickerRequest) returns (GetTickerResponse);

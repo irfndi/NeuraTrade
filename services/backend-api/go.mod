@@ -1,4 +1,4 @@
-module github.com/irfandi/celebrum-ai-go
+module github.com/irfndi/neuratrade
 
 go 1.25.5
 

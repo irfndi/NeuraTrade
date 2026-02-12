@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/services"
+	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/shopspring/decimal"
 )
 

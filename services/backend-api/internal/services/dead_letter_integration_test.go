@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/database"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

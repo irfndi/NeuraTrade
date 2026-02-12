@@ -11,9 +11,9 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/shopspring/decimal"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/logging"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/observability"
 )
 
 // SignalProcessorConfig holds configuration settings for the signal processor service.

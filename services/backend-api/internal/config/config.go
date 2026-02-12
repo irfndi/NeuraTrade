@@ -445,7 +445,7 @@ func setDefaults() {
 
 	// Telemetry
 	viper.SetDefault("telemetry.enabled", true)
-	viper.SetDefault("telemetry.service_name", "github.com/irfandi/celebrum-ai-go")
+	viper.SetDefault("telemetry.service_name", "github.com/irfndi/neuratrade")
 	viper.SetDefault("telemetry.service_version", "1.0.0")
 	viper.SetDefault("telemetry.log_level", "info")
 
