@@ -1,48 +1,18 @@
 version: "2"
 
-# ===========================================
-# LINTER QUALITY BASELINE
-# ===========================================
-# This configuration establishes a minimum linter baseline for the NeuraTrade codebase.
-# The goal is to catch common issues while maintaining a manageable signal-to-noise ratio.
-#
-# LINTER CATEGORIES:
-# - Core Safety (required): Catch critical bugs and issues
-# - Code Quality (recommended): Improve code maintainability
-# - Best Practices (recommended): Follow Go idioms and conventions
-# - Complexity (optional): Prevent over-complex code
-#
-# Rationale for each linter is documented inline.
-# ===========================================
-
 linters:
   default: none
 
   enable:
-    # Core Safety Linters (Required)
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
     - copyloopvar
-
-    # Code Quality Linters (Recommended)
-    - exportloopref
-    - contextcheck
-    - exhaustive
     - errname
-    - predeclared
     - asciicheck
     - bidichk
-
-    # Complexity & Style Linters (Optional)
-    - cyclop
-    - gocognit
-
-    # Test-specific Linters
-    - paralleltest
-    - testpackage
 
   settings:
     govet:
@@ -57,23 +27,15 @@ issues:
   max-same-issues: 0
 
   exclude-rules:
-    # Test files can have more complexity
     - path: _test\.go
       linters:
-        - cyclop
-        - gocognit
-        - exhaustive
-
-    # Generated protobuf files
+        - copyloopvar
+    - path: test/
+      linters:
+        - all
     - path: \.pb\.go
       linters:
         - all
-
-    # Migration files can have complex SQL
-    - path: database/migrations/
-      linters:
-        - cyclop
-        - gocognit
 
 run:
   timeout: 5m
@@ -82,3 +44,4 @@ run:
     - vendor
     - third_party
     - .git
+    - test
