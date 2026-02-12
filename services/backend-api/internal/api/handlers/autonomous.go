@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -668,9 +667,4 @@ func (r *ReadinessChecker) checkRiskLimits(c *gin.Context) *CheckResult {
 			"position_limit": "10%",
 		},
 	}
-}
-
-// parseInt helper for query parameter parsing
-func parseInt(s string) (int, error) {
-	return strconv.Atoi(s)
 }
