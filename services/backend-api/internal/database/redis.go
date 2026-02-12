@@ -27,8 +27,9 @@ type ErrorRecoveryManager interface {
 
 // RedisClient wraps a Redis client with enhanced logging and error tracking.
 type RedisClient struct {
-	Client *redis.Client
-	logger *zaplogrus.Logger
+	Client     *redis.Client
+	logger     *zaplogrus.Logger
+	DefaultTTL time.Duration
 }
 
 // NewRedisConnection creates a new Redis connection.
@@ -112,9 +113,16 @@ func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager Er
 
 	logger.Info("Successfully connected to Redis")
 
+	// Set default TTL from config (0 means no expiration)
+	defaultTTL := time.Duration(0)
+	if cfg.DefaultTTL > 0 {
+		defaultTTL = time.Duration(cfg.DefaultTTL) * time.Second
+	}
+
 	return &RedisClient{
-		Client: rdb,
-		logger: logger,
+		Client:     rdb,
+		logger:     logger,
+		DefaultTTL: defaultTTL,
 	}, nil
 }
 
@@ -168,6 +176,10 @@ func (r *RedisClient) HealthCheck(ctx context.Context) error {
 func (r *RedisClient) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	if r.Client == nil {
 		return fmt.Errorf("redis client is nil")
+	}
+	// Use default TTL if no expiration specified
+	if expiration == 0 && r.DefaultTTL > 0 {
+		expiration = r.DefaultTTL
 	}
 	return r.Client.Set(ctx, key, value, expiration).Err()
 }
