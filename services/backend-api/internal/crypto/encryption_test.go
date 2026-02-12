@@ -323,7 +323,7 @@ func TestMaskKey(t *testing.T) {
 		key  string
 		want string
 	}{
-		{
+		{ //gitleaks:allow
 			name: "standard key",
 			key:  "1234567890abcdefghij",
 			want: "1234****ghij",
