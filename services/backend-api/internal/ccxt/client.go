@@ -790,6 +790,7 @@ func toSafeInt32(value int) int32 {
 	if value > math.MaxInt32 {
 		return math.MaxInt32
 	}
+	// #nosec G115 -- Value is bounds-checked above to prevent overflow
 	return int32(value)
 }
 

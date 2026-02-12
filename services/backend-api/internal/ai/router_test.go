@@ -6,6 +6,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +26,7 @@ func setupTestRegistry(t *testing.T) (*Registry, *miniredis.Miniredis) {
 				ModelID:       "gpt-4",
 				DisplayName:   "GPT-4",
 				Capabilities:  ModelCapability{SupportsTools: true, SupportsReasoning: true},
-				Cost:          ModelCost{InputCost: 30.0, OutputCost: 60.0},
+				Cost:          ModelCost{InputCost: decimal.NewFromFloat(30.0), OutputCost: decimal.NewFromFloat(60.0)},
 				Limits:        ModelLimits{ContextLimit: 8192, OutputLimit: 4096},
 				Status:        "active",
 				LatencyClass:  "medium",
@@ -37,7 +38,7 @@ func setupTestRegistry(t *testing.T) (*Registry, *miniredis.Miniredis) {
 				ModelID:       "gpt-3.5-turbo",
 				DisplayName:   "GPT-3.5 Turbo",
 				Capabilities:  ModelCapability{SupportsTools: true},
-				Cost:          ModelCost{InputCost: 0.5, OutputCost: 1.5},
+				Cost:          ModelCost{InputCost: decimal.NewFromFloat(0.5), OutputCost: decimal.NewFromFloat(1.5)},
 				Limits:        ModelLimits{ContextLimit: 16384, OutputLimit: 4096},
 				Status:        "active",
 				LatencyClass:  "fast",
@@ -49,7 +50,7 @@ func setupTestRegistry(t *testing.T) (*Registry, *miniredis.Miniredis) {
 				ModelID:       "claude-3-opus",
 				DisplayName:   "Claude 3 Opus",
 				Capabilities:  ModelCapability{SupportsTools: true, SupportsVision: true, SupportsReasoning: true},
-				Cost:          ModelCost{InputCost: 15.0, OutputCost: 75.0},
+				Cost:          ModelCost{InputCost: decimal.NewFromFloat(15.0), OutputCost: decimal.NewFromFloat(75.0)},
 				Limits:        ModelLimits{ContextLimit: 200000, OutputLimit: 4096},
 				Status:        "active",
 				LatencyClass:  "slow",
@@ -61,7 +62,7 @@ func setupTestRegistry(t *testing.T) (*Registry, *miniredis.Miniredis) {
 				ModelID:       "claude-3-sonnet",
 				DisplayName:   "Claude 3 Sonnet",
 				Capabilities:  ModelCapability{SupportsTools: true, SupportsVision: true},
-				Cost:          ModelCost{InputCost: 3.0, OutputCost: 15.0},
+				Cost:          ModelCost{InputCost: decimal.NewFromFloat(3.0), OutputCost: decimal.NewFromFloat(15.0)},
 				Limits:        ModelLimits{ContextLimit: 200000, OutputLimit: 4096},
 				Status:        "active",
 				LatencyClass:  "medium",
@@ -72,7 +73,7 @@ func setupTestRegistry(t *testing.T) (*Registry, *miniredis.Miniredis) {
 				ModelID:      "gemini-pro",
 				DisplayName:  "Gemini Pro",
 				Capabilities: ModelCapability{SupportsTools: true},
-				Cost:         ModelCost{InputCost: 0.0, OutputCost: 0.0},
+				Cost:         ModelCost{InputCost: decimal.NewFromFloat(0.0), OutputCost: decimal.NewFromFloat(0.0)},
 				Limits:       ModelLimits{ContextLimit: 1000000, OutputLimit: 2048},
 				Status:       "degraded",
 				LatencyClass: "fast",
@@ -136,8 +137,8 @@ func TestRouterRoute(t *testing.T) {
 	t.Run("route with budget constraints", func(t *testing.T) {
 		result, err := router.Route(ctx, RoutingConstraints{
 			RequiredCaps:  ModelCapability{SupportsTools: true},
-			MaxInputCost:  1.0,
-			MaxOutputCost: 2.0,
+			MaxInputCost:  decimal.NewFromFloat(1.0),
+			MaxOutputCost: decimal.NewFromFloat(2.0),
 		})
 		require.NoError(t, err)
 		// Only GPT-3.5 fits budget
@@ -192,8 +193,8 @@ func TestRouterRoute(t *testing.T) {
 	t.Run("exceeds budget constraints", func(t *testing.T) {
 		_, err := router.Route(ctx, RoutingConstraints{
 			RequiredCaps:  ModelCapability{SupportsTools: true},
-			MaxInputCost:  0.1,
-			MaxOutputCost: 0.1,
+			MaxInputCost:  decimal.NewFromFloat(0.1),
+			MaxOutputCost: decimal.NewFromFloat(0.1),
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no models match")
@@ -207,7 +208,7 @@ func TestMatchesConstraints(t *testing.T) {
 		ProviderID: "openai",
 		ModelID:    "gpt-4",
 		Status:     "active",
-		Cost:       ModelCost{InputCost: 30.0, OutputCost: 60.0},
+		Cost:       ModelCost{InputCost: decimal.NewFromFloat(30.0), OutputCost: decimal.NewFromFloat(60.0)},
 		Limits:     ModelLimits{ContextLimit: 8192},
 		RiskLevel:  "low",
 	}
@@ -239,16 +240,16 @@ func TestMatchesConstraints(t *testing.T) {
 		{
 			name: "cost within budget",
 			constraints: RoutingConstraints{
-				MaxInputCost:  50.0,
-				MaxOutputCost: 100.0,
+				MaxInputCost:  decimal.NewFromFloat(50.0),
+				MaxOutputCost: decimal.NewFromFloat(100.0),
 			},
 			want: true,
 		},
 		{
 			name: "cost exceeds budget",
 			constraints: RoutingConstraints{
-				MaxInputCost:  10.0,
-				MaxOutputCost: 100.0,
+				MaxInputCost:  decimal.NewFromFloat(10.0),
+				MaxOutputCost: decimal.NewFromFloat(100.0),
 			},
 			want: false,
 		},
@@ -343,25 +344,25 @@ func TestScoreCapabilities(t *testing.T) {
 func TestCalculateCost(t *testing.T) {
 	model := ModelInfo{
 		Cost: ModelCost{
-			InputCost:  10.0,
-			OutputCost: 30.0,
+			InputCost:  decimal.NewFromFloat(10.0),
+			OutputCost: decimal.NewFromFloat(30.0),
 		},
 	}
 
 	tests := []struct {
 		inputTokens  int
 		outputTokens int
-		want         float64
+		want         decimal.Decimal
 	}{
-		{1000000, 0, 10.0},
-		{0, 1000000, 30.0},
-		{1000000, 1000000, 40.0},
-		{500000, 500000, 20.0},
+		{1000000, 0, decimal.NewFromFloat(10.0)},
+		{0, 1000000, decimal.NewFromFloat(30.0)},
+		{1000000, 1000000, decimal.NewFromFloat(40.0)},
+		{500000, 500000, decimal.NewFromFloat(20.0)},
 	}
 
 	for _, tt := range tests {
 		got := CalculateCost(model, tt.inputTokens, tt.outputTokens)
-		assert.InDelta(t, tt.want, got, 0.001)
+		assert.True(t, tt.want.Equal(got), "expected %s, got %s", tt.want.String(), got.String())
 	}
 }
 

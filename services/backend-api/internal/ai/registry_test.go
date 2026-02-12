@@ -8,6 +8,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -82,7 +83,7 @@ func TestRegistryCacheOperations(t *testing.T) {
 				ModelID:      "gpt-4",
 				DisplayName:  "GPT-4",
 				Capabilities: ModelCapability{SupportsTools: true},
-				Cost:         ModelCost{InputCost: 30.0, OutputCost: 60.0},
+				Cost:         ModelCost{InputCost: decimal.NewFromFloat(30.0), OutputCost: decimal.NewFromFloat(60.0)},
 				Limits:       ModelLimits{ContextLimit: 8192},
 				Status:       "active",
 				LatencyClass: "medium",
@@ -92,7 +93,7 @@ func TestRegistryCacheOperations(t *testing.T) {
 				ModelID:      "claude-3-opus",
 				DisplayName:  "Claude 3 Opus",
 				Capabilities: ModelCapability{SupportsTools: true, SupportsReasoning: true},
-				Cost:         ModelCost{InputCost: 15.0, OutputCost: 75.0},
+				Cost:         ModelCost{InputCost: decimal.NewFromFloat(15.0), OutputCost: decimal.NewFromFloat(75.0)},
 				Limits:       ModelLimits{ContextLimit: 200000},
 				Status:       "active",
 				LatencyClass: "slow",
@@ -291,7 +292,7 @@ func TestModelInfoJSON(t *testing.T) {
 		ModelID:      "gpt-4",
 		DisplayName:  "GPT-4",
 		Capabilities: ModelCapability{SupportsTools: true},
-		Cost:         ModelCost{InputCost: 30.0, OutputCost: 60.0},
+		Cost:         ModelCost{InputCost: decimal.NewFromFloat(30.0), OutputCost: decimal.NewFromFloat(60.0)},
 		Limits:       ModelLimits{ContextLimit: 8192, OutputLimit: 4096},
 		Status:       "active",
 	}
@@ -306,6 +307,6 @@ func TestModelInfoJSON(t *testing.T) {
 	assert.Equal(t, model.ProviderID, decoded.ProviderID)
 	assert.Equal(t, model.ModelID, decoded.ModelID)
 	assert.Equal(t, model.Capabilities.SupportsTools, decoded.Capabilities.SupportsTools)
-	assert.Equal(t, model.Cost.InputCost, decoded.Cost.InputCost)
+	assert.True(t, model.Cost.InputCost.Equal(decoded.Cost.InputCost))
 	assert.Equal(t, model.Limits.ContextLimit, decoded.Limits.ContextLimit)
 }

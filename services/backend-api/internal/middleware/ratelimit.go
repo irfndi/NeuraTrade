@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -179,10 +180,28 @@ func (rl *RateLimiter) checkAndUpdateRedis(ctx context.Context, key string) (boo
 		return false, 0, time.Time{}, err
 	}
 
-	values := result.([]interface{})
-	allowed := values[0].(int64) == 1
-	remaining := int(values[1].(int64))
-	ttl := int(values[2].(int64))
+	values, ok := result.([]interface{})
+	if !ok || len(values) != 3 {
+		return false, 0, time.Time{}, fmt.Errorf("unexpected Redis response format")
+	}
+
+	allowedVal, ok := values[0].(int64)
+	if !ok {
+		return false, 0, time.Time{}, fmt.Errorf("unexpected type for allowed value")
+	}
+	allowed := allowedVal == 1
+
+	remainingVal, ok := values[1].(int64)
+	if !ok {
+		return false, 0, time.Time{}, fmt.Errorf("unexpected type for remaining value")
+	}
+	remaining := int(remainingVal)
+
+	ttlVal, ok := values[2].(int64)
+	if !ok {
+		return false, 0, time.Time{}, fmt.Errorf("unexpected type for ttl value")
+	}
+	ttl := int(ttlVal)
 
 	resetTime := time.Now().Add(time.Duration(ttl) * time.Second)
 

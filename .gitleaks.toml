@@ -21,6 +21,7 @@ paths = [
     '''docs/old/''',
     '''\.gitguardian\.yaml$''',
     '''\.github/DEPLOYMENT-SECRETS\.md$''',
+    '''services/backend-api/internal/crypto/encryption_test\.go''',
 ]
 
 regexes = [
