@@ -218,3 +218,30 @@ func TestPoolManager_StopAll(t *testing.T) {
 	names := pm.GetPoolNames()
 	assert.Empty(t, names)
 }
+
+func TestPool_SubmitDuringShutdown(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Workers = 2
+	cfg.QueueSize = 10
+
+	pool := New(cfg)
+	err := pool.Start()
+	require.NoError(t, err)
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_ = pool.Stop()
+	}()
+
+	for i := 0; i < 100; i++ {
+		err := pool.Submit(Task{
+			ID:      string(rune('a' + i%26)),
+			Execute: func() error { return nil },
+		})
+		if err != nil {
+			assert.Contains(t, err.Error(), "not running")
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+}

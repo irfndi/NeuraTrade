@@ -17,6 +17,8 @@ type Pool struct {
 	mu         sync.RWMutex
 	running    bool
 	dropOnFull bool
+	closed     bool
+	closeOnce  sync.Once
 }
 
 // Task represents a unit of work to be executed by the pool.
@@ -89,20 +91,33 @@ func (p *Pool) Stop() error {
 	p.mu.Unlock()
 
 	p.cancel()
-	close(p.taskQueue)
+
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		p.mu.Unlock()
+		close(p.taskQueue)
+	})
+
 	p.wg.Wait()
 
 	return nil
 }
 
 // Submit adds a task to the pool for execution.
-func (p *Pool) Submit(task Task) error {
+func (p *Pool) Submit(task Task) (err error) {
 	p.mu.RLock()
 	if !p.running {
 		p.mu.RUnlock()
 		return fmt.Errorf("pool not running")
 	}
 	p.mu.RUnlock()
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("pool shutting down")
+		}
+	}()
 
 	if p.dropOnFull {
 		select {
