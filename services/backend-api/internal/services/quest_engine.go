@@ -50,10 +50,10 @@ type Quest struct {
 	Type         QuestType              `json:"type"`
 	Cadence      QuestCadence           `json:"cadence"`
 	Status       QuestStatus            `json:"status"`
-	Prompt       string                 `json:"prompt"`       // High-level objective
-	TargetValue  float64                `json:"target_value"` // For milestone quests
-	CurrentValue float64                `json:"current_value"`
-	Checkpoint   map[string]interface{} `json:"checkpoint"` // Serialized state for resume
+	Prompt       string                 `json:"prompt"`
+	TargetCount  int                    `json:"target_count"`
+	CurrentCount int                    `json:"current_count"`
+	Checkpoint   map[string]interface{} `json:"checkpoint"`
 	CreatedAt    time.Time              `json:"created_at"`
 	UpdatedAt    time.Time              `json:"updated_at"`
 	CompletedAt  *time.Time             `json:"completed_at,omitempty"`
@@ -89,7 +89,7 @@ type QuestDefinition struct {
 	Type        QuestType
 	Cadence     QuestCadence
 	Prompt      string
-	TargetValue float64
+	TargetCount int
 	Handler     QuestHandler
 }
 
@@ -113,7 +113,7 @@ type QuestStore interface {
 	SaveQuest(ctx context.Context, quest *Quest) error
 	GetQuest(ctx context.Context, id string) (*Quest, error)
 	ListQuests(ctx context.Context, chatID string, status QuestStatus) ([]*Quest, error)
-	UpdateQuestProgress(ctx context.Context, id string, current float64, checkpoint map[string]interface{}) error
+	UpdateQuestProgress(ctx context.Context, id string, current int, checkpoint map[string]interface{}) error
 	SaveAutonomousState(ctx context.Context, state *AutonomousState) error
 	GetAutonomousState(ctx context.Context, chatID string) (*AutonomousState, error)
 }
@@ -166,14 +166,14 @@ func (s *InMemoryQuestStore) ListQuests(ctx context.Context, chatID string, stat
 }
 
 // UpdateQuestProgress updates quest progress
-func (s *InMemoryQuestStore) UpdateQuestProgress(ctx context.Context, id string, current float64, checkpoint map[string]interface{}) error {
+func (s *InMemoryQuestStore) UpdateQuestProgress(ctx context.Context, id string, current int, checkpoint map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	quest, ok := s.quests[id]
 	if !ok {
 		return fmt.Errorf("quest not found: %s", id)
 	}
-	quest.CurrentValue = current
+	quest.CurrentCount = current
 	quest.Checkpoint = checkpoint
 	quest.UpdatedAt = time.Now()
 	return nil
@@ -275,7 +275,7 @@ func (e *QuestEngine) registerDefaultDefinitions() {
 		Type:        QuestTypeGoal,
 		Cadence:     CadenceOnetime,
 		Prompt:      "Grow trading fund to target value using diversified strategies",
-		TargetValue: 1000.0, // Default target, can be customized
+		TargetCount: 1000, // Default target, can be customized
 	})
 }
 
@@ -303,9 +303,9 @@ func (e *QuestEngine) CreateQuest(definitionID string, chatID string, customTarg
 	}
 	e.mu.RUnlock()
 
-	target := def.TargetValue
+	target := def.TargetCount
 	if len(customTarget) > 0 {
-		target = customTarget[0]
+		target = int(customTarget[0])
 	}
 
 	quest := &Quest{
@@ -316,8 +316,8 @@ func (e *QuestEngine) CreateQuest(definitionID string, chatID string, customTarg
 		Cadence:      def.Cadence,
 		Status:       QuestStatusPending,
 		Prompt:       def.Prompt,
-		TargetValue:  target,
-		CurrentValue: 0,
+		TargetCount:  target,
+		CurrentCount: 0,
 		Checkpoint:   make(map[string]interface{}),
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -568,13 +568,13 @@ func (e *QuestEngine) GetQuestProgress(chatID string) ([]QuestProgress, error) {
 		p := QuestProgress{
 			QuestID:   quest.ID,
 			QuestName: quest.Name,
-			Current:   int(quest.CurrentValue),
-			Target:    int(quest.TargetValue),
+			Current:   quest.CurrentCount,
+			Target:    quest.TargetCount,
 			Status:    string(quest.Status),
 		}
 
-		if quest.TargetValue > 0 {
-			p.Percent = int((quest.CurrentValue / quest.TargetValue) * 100)
+		if quest.TargetCount > 0 {
+			p.Percent = (quest.CurrentCount * 100) / quest.TargetCount
 			if p.Percent > 100 {
 				p.Percent = 100
 			}
@@ -601,8 +601,8 @@ func (e *QuestEngine) createQuestInternal(definitionID string, chatID string) (*
 		Cadence:      def.Cadence,
 		Status:       QuestStatusPending,
 		Prompt:       def.Prompt,
-		TargetValue:  def.TargetValue,
-		CurrentValue: 0,
+		TargetCount:  def.TargetCount,
+		CurrentCount: 0,
 		Checkpoint:   make(map[string]interface{}),
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -624,7 +624,7 @@ func (e *QuestEngine) createQuestInternal(definitionID string, chatID string) (*
 }
 
 // UpdateQuestProgress updates the progress of a quest
-func (e *QuestEngine) UpdateQuestProgress(questID string, current float64, checkpoint map[string]interface{}) error {
+func (e *QuestEngine) UpdateQuestProgress(questID string, current int, checkpoint map[string]interface{}) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -633,11 +633,11 @@ func (e *QuestEngine) UpdateQuestProgress(questID string, current float64, check
 		return fmt.Errorf("quest not found: %s", questID)
 	}
 
-	quest.CurrentValue = current
+	quest.CurrentCount = current
 	quest.Checkpoint = checkpoint
 	quest.UpdatedAt = time.Now()
 
-	if current >= quest.TargetValue && quest.TargetValue > 0 {
+	if current >= quest.TargetCount && quest.TargetCount > 0 {
 		now := time.Now()
 		quest.Status = QuestStatusCompleted
 		quest.CompletedAt = &now
