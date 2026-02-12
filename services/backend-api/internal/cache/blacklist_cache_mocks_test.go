@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/database"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/stretchr/testify/mock"
 )
 

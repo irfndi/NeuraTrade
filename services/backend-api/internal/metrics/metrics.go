@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	"github.com/irfndi/neuratrade/internal/logging"
 )
 
 // Package metrics provides collection and reporting functionality for application metrics

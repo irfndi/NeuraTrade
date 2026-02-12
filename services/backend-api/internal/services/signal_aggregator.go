@@ -14,12 +14,12 @@ import (
 	"github.com/cinar/indicator/v2/trend"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/observability"
 )
 
 // SignalType represents the type of trading signal

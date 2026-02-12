@@ -7,7 +7,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/models"
 )
 
 func TestFuturesArbitrageCalculator_calculateLiquidityScore(t *testing.T) {

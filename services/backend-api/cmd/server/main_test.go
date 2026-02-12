@@ -14,8 +14,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/config"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/redis/go-redis/v9"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -880,7 +880,7 @@ func TestMainConfigurationLoading(t *testing.T) {
 
 	// Test telemetry configuration
 	assert.NotNil(t, cfg.Telemetry)
-	assert.Equal(t, "github.com/irfandi/celebrum-ai-go", cfg.Telemetry.ServiceName)
+	assert.Equal(t, "github.com/irfndi/neuratrade", cfg.Telemetry.ServiceName)
 	assert.Equal(t, "1.0.0", cfg.Telemetry.ServiceVersion)
 }
 

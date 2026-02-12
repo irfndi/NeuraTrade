@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 )
 
 // TestNewCleanupService tests the NewCleanupService function

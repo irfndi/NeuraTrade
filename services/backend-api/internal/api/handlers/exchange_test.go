@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/api/handlers/testmocks"
-	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/api/handlers/testmocks"
+	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

@@ -14,17 +14,17 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
-	pb "github.com/irfandi/celebrum-ai-go/pkg/pb/telegram"
+	"github.com/irfndi/neuratrade/internal/observability"
+	"github.com/irfndi/neuratrade/internal/telemetry"
+	pb "github.com/irfndi/neuratrade/pkg/pb/telegram"
 
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	userModels "github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/database"
+	userModels "github.com/irfndi/neuratrade/internal/models"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )

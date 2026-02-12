@@ -18,8 +18,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	pb "github.com/irfandi/celebrum-ai-go/pkg/pb/ccxt"
+	"github.com/irfndi/neuratrade/internal/config"
+	pb "github.com/irfndi/neuratrade/pkg/pb/ccxt"
 	"github.com/shopspring/decimal"
 )
 

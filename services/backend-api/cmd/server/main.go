@@ -12,17 +12,17 @@ import (
 
 	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/api"
-	apiHandlers "github.com/irfandi/celebrum-ai-go/internal/api/handlers"
-	"github.com/irfandi/celebrum-ai-go/internal/cache"
-	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
-	"github.com/irfandi/celebrum-ai-go/internal/middleware"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
-	"github.com/irfandi/celebrum-ai-go/internal/services"
+	"github.com/irfndi/neuratrade/internal/api"
+	apiHandlers "github.com/irfndi/neuratrade/internal/api/handlers"
+	"github.com/irfndi/neuratrade/internal/cache"
+	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/middleware"
+	"github.com/irfndi/neuratrade/internal/observability"
+	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
@@ -410,7 +410,7 @@ func runSQLiteBootstrapMode(cfg *config.Config, logger logging.Logger, logrusLog
 
 	go func() {
 		logger.WithFields(map[string]interface{}{
-			"service": "github.com/irfandi/celebrum-ai-go",
+			"service": "github.com/irfndi/neuratrade",
 			"version": "1.0.0",
 			"port":    cfg.Server.Port,
 			"mode":    "sqlite-bootstrap",
@@ -426,7 +426,7 @@ func runSQLiteBootstrapMode(cfg *config.Config, logger logging.Logger, logrusLog
 	<-quit
 
 	logger.WithFields(map[string]interface{}{
-		"service": "github.com/irfandi/celebrum-ai-go",
+		"service": "github.com/irfndi/neuratrade",
 		"mode":    "sqlite-bootstrap",
 		"event":   "shutdown",
 		"reason":  "signal received",

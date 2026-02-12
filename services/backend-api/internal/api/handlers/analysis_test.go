@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/api/handlers/testmocks"
+	"github.com/irfndi/neuratrade/internal/api/handlers/testmocks"
 	"github.com/stretchr/testify/assert"
 )
 

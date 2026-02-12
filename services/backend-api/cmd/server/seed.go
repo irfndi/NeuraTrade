@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
 	"golang.org/x/crypto/bcrypt"
 )
 

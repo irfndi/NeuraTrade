@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/irfandi/celebrum-ai-go/internal/api/handlers/testmocks"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/services"
-	"github.com/irfandi/celebrum-ai-go/internal/testutil"
+	"github.com/irfndi/neuratrade/internal/api/handlers/testmocks"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/irfndi/neuratrade/internal/testutil"
 	"github.com/stretchr/testify/assert"
 )
 

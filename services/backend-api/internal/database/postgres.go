@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/jackc/pgx/v5/stdlib"
 
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

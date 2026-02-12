@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/redis/go-redis/v9"
 )
 

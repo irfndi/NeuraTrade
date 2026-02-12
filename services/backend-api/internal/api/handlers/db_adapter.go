@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/services"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/services"
 )
 
 type readOnlyDBAdapter struct {
