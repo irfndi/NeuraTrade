@@ -1830,6 +1830,9 @@ func TestRunFunctionPartialInitialization(t *testing.T) {
 			t.Setenv("SERVER_PORT", "8082")
 			t.Setenv("CCXT_SERVICE_URL", "http://localhost:3001")
 			t.Setenv("CCXT_TIMEOUT", "5")
+			t.Setenv("DATABASE_USER", "invalid-user")
+			t.Setenv("DATABASE_PASSWORD", "invalid-password")
+			t.Setenv("DATABASE_DBNAME", "invalid-db")
 
 			// Apply test-specific environment
 			for key, value := range tt.envVars {
