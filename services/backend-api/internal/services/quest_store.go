@@ -313,7 +313,7 @@ func (s *DBQuestStore) GetAutonomousState(ctx context.Context, chatID string) (*
 	}
 
 	if err := json.Unmarshal(activeQuestsJSON, &state.ActiveQuests); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal active quests: %w", err)
+		return &AutonomousState{ChatID: chatID, IsActive: false}, fmt.Errorf("failed to unmarshal active quests: %w", err)
 	}
 
 	return &state, nil
