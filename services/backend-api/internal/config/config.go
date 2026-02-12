@@ -41,6 +41,8 @@ type Config struct {
 	Blacklist BlacklistConfig `mapstructure:"blacklist"`
 	// Auth holds configuration for authentication.
 	Auth AuthConfig `mapstructure:"auth"`
+	// Security holds configuration for security features like encryption.
+	Security SecurityConfig `mapstructure:"security"`
 	// Fees holds configuration for exchange fee defaults.
 	Fees FeesConfig `mapstructure:"fees"`
 	// Analytics holds configuration for analytics features.
@@ -266,6 +268,13 @@ type AuthConfig struct {
 	JWTSecret string `mapstructure:"jwt_secret"`
 }
 
+// SecurityConfig defines security-related settings.
+type SecurityConfig struct {
+	// EncryptionKey is the base64-encoded 32-byte key for AES-256-GCM encryption.
+	// Used for encrypting sensitive data like exchange API keys.
+	EncryptionKey string `mapstructure:"encryption_key"`
+}
+
 // FeesConfig defines default fees used when exchange-specific data is missing.
 type FeesConfig struct {
 	// DefaultTakerFee is the fallback taker fee (decimal percent, e.g., 0.001 = 0.1%).
@@ -310,6 +319,9 @@ func Load() (*Config, error) {
 	// Map legacy environment variables for JWT secret
 	_ = viper.BindEnv("auth.jwt_secret", "JWT_SECRET")
 	_ = viper.BindEnv("security.jwt_secret", "JWT_SECRET")
+
+	// Bind encryption key for API key storage
+	_ = viper.BindEnv("security.encryption_key", "ENCRYPTION_KEY")
 
 	// Bind standard DATABASE_URL
 	_ = viper.BindEnv("database.database_url", "DATABASE_URL")
@@ -499,6 +511,9 @@ func setDefaults() {
 
 	// Auth
 	viper.SetDefault("auth.jwt_secret", "")
+
+	// Security
+	viper.SetDefault("security.encryption_key", "")
 
 	// Fees
 	viper.SetDefault("fees.default_taker_fee", 0.001)
