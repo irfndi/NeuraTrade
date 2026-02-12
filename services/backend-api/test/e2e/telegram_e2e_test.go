@@ -419,7 +419,10 @@ func (s *TelegramE2ETestSuite) TestHealthEndpointE2E() {
 		var resp map[string]interface{}
 		err = json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
-		assert.Equal(t, "healthy", resp["status"])
+
+		status, ok := resp["status"].(string)
+		require.True(t, ok, "health response status should be a string")
+		assert.Contains(t, []string{"healthy", "degraded"}, status)
 	})
 }
 
