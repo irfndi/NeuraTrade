@@ -85,7 +85,10 @@ describe("TelegramGrpcServer", () => {
 
     const stream = new MockStreamCall("chat-1");
     server.streamEvents(
-      stream as unknown as grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
+      stream as unknown as grpc.ServerWritableStream<
+        StreamEventsRequest,
+        TelegramEvent
+      >,
     );
 
     const request: SendActionAlertRequest = {
@@ -100,10 +103,10 @@ describe("TelegramGrpcServer", () => {
       questId: "quest-hourly-1",
     };
 
-    const result = await invokeUnary<SendActionAlertRequest, SendActionAlertResponse>(
-      server.sendActionAlert,
-      request,
-    );
+    const result = await invokeUnary<
+      SendActionAlertRequest,
+      SendActionAlertResponse
+    >(server.sendActionAlert, request);
 
     expect(result.error).toBeNull();
     expect(result.response?.ok).toBe(true);
@@ -132,10 +135,10 @@ describe("TelegramGrpcServer", () => {
       questId: "quest-1",
     };
 
-    const result = await invokeUnary<SendActionAlertRequest, SendActionAlertResponse>(
-      server.sendActionAlert,
-      request,
-    );
+    const result = await invokeUnary<
+      SendActionAlertRequest,
+      SendActionAlertResponse
+    >(server.sendActionAlert, request);
 
     expect(result.error).not.toBeNull();
     const errorWithCode = result.error as { code?: number } | null;
@@ -170,7 +173,10 @@ describe("TelegramGrpcServer", () => {
 
     const stream = new MockStreamCall("");
     server.streamEvents(
-      stream as unknown as grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
+      stream as unknown as grpc.ServerWritableStream<
+        StreamEventsRequest,
+        TelegramEvent
+      >,
     );
 
     expect(stream.ended).toBe(true);

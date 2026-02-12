@@ -45,10 +45,9 @@ function normalizeRiskSeverity(value: string): RiskSeverity {
   return value.toLowerCase() === "critical" ? "critical" : "warning";
 }
 
-function ensureChatId<TResponse extends { ok: boolean; messageId: string; error: string }>(
-  chatId: string,
-  callback: grpc.sendUnaryData<TResponse>,
-): chatId is string {
+function ensureChatId<
+  TResponse extends { ok: boolean; messageId: string; error: string },
+>(chatId: string, callback: grpc.sendUnaryData<TResponse>): chatId is string {
   if (chatId.length > 0) {
     return true;
   }
@@ -254,7 +253,10 @@ export class TelegramGrpcServer {
   };
 
   sendQuestProgress = (
-    call: grpc.ServerUnaryCall<SendQuestProgressRequest, SendQuestProgressResponse>,
+    call: grpc.ServerUnaryCall<
+      SendQuestProgressRequest,
+      SendQuestProgressResponse
+    >,
     callback: grpc.sendUnaryData<SendQuestProgressResponse>,
   ): void => {
     const { chatId } = call.request;
@@ -294,7 +296,9 @@ export class TelegramGrpcServer {
         });
       })
       .catch((error) => {
-        logger.error("Failed to send quest progress via gRPC", error, { chatId });
+        logger.error("Failed to send quest progress via gRPC", error, {
+          chatId,
+        });
         callback(null, {
           ok: false,
           messageId: "",
@@ -304,7 +308,10 @@ export class TelegramGrpcServer {
   };
 
   sendMilestoneAlert = (
-    call: grpc.ServerUnaryCall<SendMilestoneAlertRequest, SendMilestoneAlertResponse>,
+    call: grpc.ServerUnaryCall<
+      SendMilestoneAlertRequest,
+      SendMilestoneAlertResponse
+    >,
     callback: grpc.sendUnaryData<SendMilestoneAlertResponse>,
   ): void => {
     const { chatId } = call.request;
@@ -338,7 +345,9 @@ export class TelegramGrpcServer {
         });
       })
       .catch((error) => {
-        logger.error("Failed to send milestone alert via gRPC", error, { chatId });
+        logger.error("Failed to send milestone alert via gRPC", error, {
+          chatId,
+        });
         callback(null, {
           ok: false,
           messageId: "",

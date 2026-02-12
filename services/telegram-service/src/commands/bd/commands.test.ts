@@ -22,7 +22,10 @@ interface MockContext {
   reply(text: string): Promise<void>;
 }
 
-function createContext(text: string, chatId: number | string = 777): MockContext {
+function createContext(
+  text: string,
+  chatId: number | string = 777,
+): MockContext {
   return {
     chat: { id: chatId },
     message: { text },
@@ -33,7 +36,11 @@ function createContext(text: string, chatId: number | string = 777): MockContext
   };
 }
 
-async function runCommand(bot: MockBot, name: string, ctx: MockContext): Promise<void> {
+async function runCommand(
+  bot: MockBot,
+  name: string,
+  ctx: MockContext,
+): Promise<void> {
   const handler = bot.handlers.get(name);
   if (!handler) {
     throw new Error(`Missing command handler: ${name}`);
@@ -116,7 +123,11 @@ describe("BD command handlers", () => {
     const api = {
       async liquidateAll() {
         liquidateAllCalls += 1;
-        return { ok: true, message: "All positions closed", liquidated_count: 4 };
+        return {
+          ok: true,
+          message: "All positions closed",
+          liquidated_count: 4,
+        };
       },
       async liquidate() {
         return { ok: true };
