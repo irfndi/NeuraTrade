@@ -17,6 +17,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
+	"github.com/irfndi/neuratrade/test/testmocks"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -93,9 +94,11 @@ func (s *TelegramE2ETestSuite) SetupSuite() {
 
 	// Create required middlewares
 	authMiddleware := middleware.NewAuthMiddleware(jwtSecret)
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 
 	// Setup routes
-	api.SetupRoutes(s.router, s.db, s.redisClient, nil, nil, nil, nil, nil, nil, cfg, authMiddleware)
+	api.SetupRoutes(s.router, s.db, s.redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, authMiddleware)
 
 	// Create test user
 	s.testChatID = fmt.Sprintf("e2e_test_%d", time.Now().UnixNano())
