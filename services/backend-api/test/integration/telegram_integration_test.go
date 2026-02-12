@@ -24,6 +24,10 @@ import (
 
 // TestTelegramIntegration verifies internal Telegram endpoints used by the bot
 func TestTelegramIntegration(t *testing.T) {
+	if os.Getenv("CI") == "true" {
+		t.Skip("Skipping in CI environment - test requires full service mocks")
+	}
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

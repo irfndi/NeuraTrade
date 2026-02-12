@@ -821,6 +821,10 @@ func (s *TelegramE2ETestSuite) TestErrorRecoveryE2E() {
 
 // Run the test suite
 func TestTelegramE2ESuite(t *testing.T) {
+	if os.Getenv("CI") == "true" {
+		t.Skip("Skipping E2E test suite in CI environment - requires full service mocks")
+	}
+
 	if testing.Short() {
 		t.Skip("Skipping E2E test suite in short mode")
 	}

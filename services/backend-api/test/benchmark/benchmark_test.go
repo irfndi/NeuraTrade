@@ -344,7 +344,7 @@ func BenchmarkTimeOperations(b *testing.B) {
 		}
 
 		// Calculate duration
-		duration := parsed.Sub(now)
+		duration := now.Sub(parsed)
 		if duration < 0 {
 			b.Fatal("Duration should not be negative")
 		}

@@ -98,6 +98,7 @@ jobs:
   backend-tests:
     name: Backend Tests (unit/integration/e2e + coverage)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -151,16 +152,16 @@ jobs:
         run: cd services/backend-api/database && chmod +x migrate.sh && ./migrate.sh run
 
       - name: Run unit tests
-        run: cd services/backend-api && go test -v -race ./cmd/... ./internal/... ./pkg/...
+        run: cd services/backend-api && go test -v -race -timeout=8m ./cmd/... ./internal/... ./pkg/...
 
       - name: Run integration tests
-        run: cd services/backend-api && go test -v ./test/integration/...
+        run: cd services/backend-api && go test -v -timeout=5m ./test/integration/...
 
       - name: Run e2e tests
-        run: cd services/backend-api && go test -v ./test/e2e/...
+        run: cd services/backend-api && go test -v -timeout=5m ./test/e2e/...
 
       - name: Run coverage report
-        run: cd services/backend-api && go test -v -covermode=atomic -coverprofile=../../coverage.out ./...
+        run: cd services/backend-api && go test -v -covermode=atomic -coverprofile=../../coverage.out -timeout=8m ./...
 
       - name: Check coverage threshold
         run: make coverage-check
