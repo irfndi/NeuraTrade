@@ -89,9 +89,9 @@ if [[ -f "$BASELINE_FILE" ]]; then
   BASELINE_PCT=$(cat "$BASELINE_FILE")
   DELTA=$(awk -v c="$TOTAL_PCT" -v b="$BASELINE_PCT" 'BEGIN {printf "%.1f", c - b}')
   DELTA_ABS=$(echo "$DELTA" | awk '{if ($1 < 0) print -$1; else print $1}')
-  
+
   printf "[coverage] Baseline: %s%%, Current: %s%%, Delta: %s%%\n" "$BASELINE_PCT" "$TOTAL_PCT" "$DELTA" | tee -a "$ARTIFACTS_DIR/coverage.log"
-  
+
   # Check delta threshold
   EXCEEDS_DELTA=$(echo "$DELTA_ABS" | awk -v m="$MAX_DELTA" '{if ($1 + 0 > m + 0) print 1; else print 0}')
   if [[ "$EXCEEDS_DELTA" -eq 1 ]]; then
