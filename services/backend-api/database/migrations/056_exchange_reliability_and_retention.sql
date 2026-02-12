@@ -130,7 +130,7 @@ CREATE INDEX IF NOT EXISTS idx_exchange_api_call_log_called_at
 CREATE INDEX IF NOT EXISTS idx_exchange_api_call_log_success
     ON exchange_api_call_log(success);
 CREATE INDEX IF NOT EXISTS idx_exchange_api_call_log_cleanup
-    ON exchange_api_call_log(called_at) WHERE called_at < NOW() - INTERVAL '90 days';
+    ON exchange_api_call_log(called_at) WHERE called_at < CURRENT_DATE - INTERVAL '90 days';
 
 -- Order book snapshots indexes
 CREATE INDEX IF NOT EXISTS idx_order_book_snapshots_exchange_symbol
@@ -138,11 +138,11 @@ CREATE INDEX IF NOT EXISTS idx_order_book_snapshots_exchange_symbol
 CREATE INDEX IF NOT EXISTS idx_order_book_snapshots_snapshot_at
     ON order_book_snapshots(snapshot_at DESC);
 CREATE INDEX IF NOT EXISTS idx_order_book_snapshots_cleanup
-    ON order_book_snapshots(snapshot_at) WHERE snapshot_at < NOW() - INTERVAL '90 days';
+    ON order_book_snapshots(snapshot_at) WHERE snapshot_at < CURRENT_DATE - INTERVAL '90 days';
 
 -- Funding rate history cleanup index (if not exists)
 CREATE INDEX IF NOT EXISTS idx_funding_rate_history_cleanup
-    ON funding_rate_history(collected_at) WHERE collected_at < NOW() - INTERVAL '90 days';
+    ON funding_rate_history(collected_at) WHERE collected_at < CURRENT_DATE - INTERVAL '90 days';
 
 -- =====================================================
 -- Step 5: Create 90-Day Retention Cleanup Function
