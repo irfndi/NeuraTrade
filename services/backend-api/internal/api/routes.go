@@ -130,8 +130,21 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	tradingHandler := handlers.NewTradingHandler(db)
 
 	// Budget handler - configurable via environment variables with defaults from migration 054
-	dailyBudget, _ := decimal.NewFromString(getEnvOrDefault("AI_DAILY_BUDGET", "10.00"))
-	monthlyBudget, _ := decimal.NewFromString(getEnvOrDefault("AI_MONTHLY_BUDGET", "200.00"))
+	dailyBudgetStr := getEnvOrDefault("AI_DAILY_BUDGET", "10.00")
+	monthlyBudgetStr := getEnvOrDefault("AI_MONTHLY_BUDGET", "200.00")
+
+	dailyBudget, err := decimal.NewFromString(dailyBudgetStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid AI_DAILY_BUDGET value '%s', using default 10.00", dailyBudgetStr)
+		dailyBudget = decimal.NewFromFloat(10.00)
+	}
+
+	monthlyBudget, err := decimal.NewFromString(monthlyBudgetStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid AI_MONTHLY_BUDGET value '%s', using default 200.00", monthlyBudgetStr)
+		monthlyBudget = decimal.NewFromFloat(200.00)
+	}
+
 	budgetHandler := handlers.NewBudgetHandler(
 		database.NewAIUsageRepositoryFromDB(db),
 		dailyBudget,
