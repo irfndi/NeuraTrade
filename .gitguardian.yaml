@@ -13,6 +13,8 @@ paths:
       - "**/test-setup.ts"
       - "**/*_test.go"
       - "test/**"
+      - "**/internal/utils/*_test.go"
+      - "**/internal/skill/*_test.go"
 secrets:
   ignored-matches:
     - name: test-secret-key
@@ -64,6 +66,11 @@ secrets:
       match: "test-secret-key-12345"
     - name: test-api-key-pattern
       match: "api_key"
+    # Documentation example patterns
+    - name: your-jwt-token
+      match: "your-jwt-token"
+    - name: yourdomain-placeholder
+      match: "yourdomain"
   ignored-paths:
     # Test files commonly use fake credentials
     - "**/*_test.go"
@@ -73,3 +80,6 @@ secrets:
     # Docker compose uses environment variable defaults
     - "docker-compose*.yaml"
     - "docker-compose*.yml"
+    # Internal utils for masking (tests contain fake secrets)
+    - "**/internal/utils/*_test.go"
+    - "**/internal/skill/*_test.go"

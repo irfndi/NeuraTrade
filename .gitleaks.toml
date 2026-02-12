@@ -18,6 +18,7 @@ paths = [
     '''\.cache/''',
     '''bin/''',
     '''docs/security/''',
+    '''docs/old/''',
     '''\.gitguardian\.yaml$''',
     '''\.github/DEPLOYMENT-SECRETS\.md$''',
 ]
@@ -50,4 +51,5 @@ regexes = [
     '''thisisaverylongpassword123''',
     '''yourdomain''',
     '''Bearer your-''',
+    '''your-jwt-token''',
 ]
