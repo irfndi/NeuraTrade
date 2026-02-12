@@ -1,23 +1,30 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
 )
 
+type BudgetQuerier interface {
+	GetDailyCost(ctx context.Context, date time.Time, userID *string) (decimal.Decimal, error)
+	GetMonthlyCost(ctx context.Context, date time.Time, userID *string) (decimal.Decimal, error)
+	IsDailyBudgetExceeded(ctx context.Context, budget decimal.Decimal, userID *string) (bool, error)
+	IsMonthlyBudgetExceeded(ctx context.Context, budget decimal.Decimal, userID *string) (bool, error)
+}
+
 // BudgetHandler handles budget-related endpoints
 type BudgetHandler struct {
-	aiUsageRepo   *database.AIUsageRepository
+	aiUsageRepo   BudgetQuerier
 	dailyBudget   decimal.Decimal
 	monthlyBudget decimal.Decimal
 }
 
 // NewBudgetHandler creates a new budget handler
-func NewBudgetHandler(aiUsageRepo *database.AIUsageRepository, dailyBudget, monthlyBudget decimal.Decimal) *BudgetHandler {
+func NewBudgetHandler(aiUsageRepo BudgetQuerier, dailyBudget, monthlyBudget decimal.Decimal) *BudgetHandler {
 	return &BudgetHandler{
 		aiUsageRepo:   aiUsageRepo,
 		dailyBudget:   dailyBudget,
