@@ -79,7 +79,7 @@ func TestTelegramIntegration(t *testing.T) {
 	api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, authMiddleware)
 
 	// Test Data
-	testTelegramChatID := "123456789"
+	testTelegramChatID := fmt.Sprintf("telegram_integration_%s", uuid.New().String())
 	testEmail := fmt.Sprintf("test_integration_%s@celebrum.ai", uuid.New().String())
 
 	// 1. Create a user (simulate registration via other means or manually insert)
