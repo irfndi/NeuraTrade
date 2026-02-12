@@ -183,11 +183,16 @@ func (q *Queue) Complete(ctx context.Context, job *Job) error {
 // Fail marks a job as failed and potentially moves it to dead letter queue.
 func (q *Queue) Fail(ctx context.Context, job *Job, err error) error {
 	if job.Attempts < job.MaxAttempts {
-		if job.Payload == nil {
-			job.Payload = make(map[string]interface{})
+		retryPayload := make(map[string]interface{})
+		for k, v := range job.Payload {
+			retryPayload[k] = v
 		}
-		job.Payload["_error"] = err.Error()
-		data, marshalErr := json.Marshal(job)
+		retryPayload["_error"] = err.Error()
+
+		retryJob := *job
+		retryJob.Payload = retryPayload
+
+		data, marshalErr := json.Marshal(retryJob)
 		if marshalErr != nil {
 			return fmt.Errorf("failed to marshal job for retry: %w", marshalErr)
 		}

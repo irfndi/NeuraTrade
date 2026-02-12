@@ -25,6 +25,7 @@ type Lock struct {
 	token     string
 	expiresAt time.Time
 	renewalCh chan struct{}
+	once      sync.Once
 }
 
 // LockOptions configures lock behavior.
@@ -143,15 +144,14 @@ func (l *Locker) Unlock(ctx context.Context, lock *Lock) error {
 		return fmt.Errorf("lock is nil")
 	}
 
-	// Stop auto-renewal if running
-	close(lock.renewalCh)
+	lock.once.Do(func() {
+		close(lock.renewalCh)
+	})
 
-	// Remove from tracking
 	l.mu.Lock()
 	delete(l.locks, lock.key)
 	l.mu.Unlock()
 
-	// Release in Redis using Lua script for safety
 	result, err := l.client.Eval(ctx, releaseLockScript, []string{lock.key}, lock.token).Int64()
 	if err != nil {
 		return fmt.Errorf("failed to release lock: %w", err)
@@ -234,9 +234,10 @@ func (l *Locker) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Release all locks
 	for _, lock := range l.locks {
-		close(lock.renewalCh)
+		lock.once.Do(func() {
+			close(lock.renewalCh)
+		})
 		_, _ = l.client.Eval(ctx, releaseLockScript, []string{lock.key}, lock.token).Result()
 	}
 
