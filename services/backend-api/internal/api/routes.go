@@ -238,6 +238,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			data.POST("/cleanup", cleanupHandler.TriggerCleanup)
 		}
 
+		// Risk management
+		risk := v1.Group("/risk")
+		{
+			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
+		}
+
 		trading := v1.Group("/trading")
 		trading.Use(authMiddleware.RequireAuth())
 		{
