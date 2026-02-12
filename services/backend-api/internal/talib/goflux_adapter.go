@@ -13,6 +13,8 @@ const (
 	EMA = 1
 )
 
+var baseTimestamp = time.Unix(0, 0)
+
 func Sma(prices []float64, period int) []float64 {
 	if len(prices) < period {
 		return nil
@@ -139,10 +141,9 @@ func Obv(prices, volumes []float64) []float64 {
 
 func createSeriesFromPrices(prices []float64) *series.TimeSeries {
 	ts := series.NewTimeSeries()
-	baseTime := time.Now().Add(-time.Duration(len(prices)) * time.Hour)
 
 	for i, price := range prices {
-		period := series.NewTimePeriod(baseTime.Add(time.Duration(i)*time.Hour), time.Hour)
+		period := series.NewTimePeriod(baseTimestamp.Add(time.Duration(i)*time.Hour), time.Hour)
 		candle := series.NewCandle(period)
 		candle.OpenPrice = godecimal.New(price)
 		candle.ClosePrice = godecimal.New(price)
@@ -157,10 +158,9 @@ func createSeriesFromPrices(prices []float64) *series.TimeSeries {
 
 func createSeriesFromOHLC(high, low, close []float64) *series.TimeSeries {
 	ts := series.NewTimeSeries()
-	baseTime := time.Now().Add(-time.Duration(len(close)) * time.Hour)
 
 	for i := range close {
-		period := series.NewTimePeriod(baseTime.Add(time.Duration(i)*time.Hour), time.Hour)
+		period := series.NewTimePeriod(baseTimestamp.Add(time.Duration(i)*time.Hour), time.Hour)
 		candle := series.NewCandle(period)
 		candle.OpenPrice = godecimal.New(close[i])
 		candle.ClosePrice = godecimal.New(close[i])
@@ -175,10 +175,9 @@ func createSeriesFromOHLC(high, low, close []float64) *series.TimeSeries {
 
 func createSeriesFromPricesAndVolume(prices, volumes []float64) *series.TimeSeries {
 	ts := series.NewTimeSeries()
-	baseTime := time.Now().Add(-time.Duration(len(prices)) * time.Hour)
 
 	for i, price := range prices {
-		period := series.NewTimePeriod(baseTime.Add(time.Duration(i)*time.Hour), time.Hour)
+		period := series.NewTimePeriod(baseTimestamp.Add(time.Duration(i)*time.Hour), time.Hour)
 		candle := series.NewCandle(period)
 		candle.OpenPrice = godecimal.New(price)
 		candle.ClosePrice = godecimal.New(price)
@@ -196,7 +195,16 @@ func extractIndicatorValues(candles []*series.Candle, indicator indicators.Indic
 		return nil
 	}
 
-	values := make([]float64, 0, len(candles)-startOffset)
+	if startOffset >= len(candles) {
+		return nil
+	}
+
+	capacity := len(candles) - startOffset
+	if capacity < 0 {
+		capacity = 0
+	}
+
+	values := make([]float64, 0, capacity)
 	for i := startOffset; i < len(candles); i++ {
 		val := indicator.Calculate(i)
 		values = append(values, val.Float())
