@@ -6,6 +6,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { config } from "./src/config";
 import { BackendApiClient } from "./src/api/client";
 import { registerAllCommands } from "./src/commands";
+import { SessionManager } from "./src/session";
 import { logger } from "./src/utils/logger";
 import { startGrpcServer } from "./grpc-server";
 import {
@@ -35,8 +36,16 @@ const api = new BackendApiClient({
   baseUrl: config.apiBaseUrl,
   adminKey: config.adminApiKey,
 });
+const sessions = new SessionManager();
 
-registerAllCommands(bot, api);
+setInterval(() => {
+  const cleaned = sessions.cleanupExpired();
+  if (cleaned > 0) {
+    logger.info("Session cleanup completed", { cleanedCount: cleaned });
+  }
+}, 60_000);
+
+registerAllCommands(bot, api, sessions);
 
 bot.on("message:text", async (ctx) => {
   await ctx.reply("Thanks for your message! 👋\n\nTry /help for commands.");

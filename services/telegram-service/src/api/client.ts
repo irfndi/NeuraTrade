@@ -4,6 +4,17 @@ import type {
   SetNotificationPreferenceRequest,
   RegisterTelegramUserRequest,
   GetArbitrageOpportunitiesResponse,
+  BeginAutonomousResponse,
+  PauseAutonomousResponse,
+  PerformanceSummaryResponse,
+  PerformanceBreakdownResponse,
+  LiquidationResponse,
+  WalletCommandResponse,
+  PortfolioResponse,
+  QuestsResponse,
+  WalletsResponse,
+  LogsResponse,
+  DoctorResponse,
   ApiErrorResponse,
 } from "./types";
 import { API_ENDPOINTS } from "./types";
@@ -98,6 +109,155 @@ export class BackendApiClient {
     );
     return this.fetch<GetArbitrageOpportunitiesResponse>(endpoint, {
       requireAdmin: false,
+    });
+  }
+
+  async beginAutonomous(chatId: string): Promise<BeginAutonomousResponse> {
+    return this.fetch<BeginAutonomousResponse>(API_ENDPOINTS.BEGIN_AUTONOMOUS, {
+      method: "POST",
+      body: JSON.stringify({ chat_id: chatId }),
+      requireAdmin: true,
+    });
+  }
+
+  async pauseAutonomous(chatId: string): Promise<PauseAutonomousResponse> {
+    return this.fetch<PauseAutonomousResponse>(API_ENDPOINTS.PAUSE_AUTONOMOUS, {
+      method: "POST",
+      body: JSON.stringify({ chat_id: chatId }),
+      requireAdmin: true,
+    });
+  }
+
+  async getPerformanceSummary(
+    chatId: string,
+    timeframe = "24h",
+  ): Promise<PerformanceSummaryResponse> {
+    return this.fetch<PerformanceSummaryResponse>(
+      API_ENDPOINTS.GET_SUMMARY(chatId, timeframe),
+      {
+        requireAdmin: true,
+      },
+    );
+  }
+
+  async getPerformanceBreakdown(
+    chatId: string,
+    timeframe = "24h",
+  ): Promise<PerformanceBreakdownResponse> {
+    return this.fetch<PerformanceBreakdownResponse>(
+      API_ENDPOINTS.GET_PERFORMANCE(chatId, timeframe),
+      {
+        requireAdmin: true,
+      },
+    );
+  }
+
+  async liquidate(
+    chatId: string,
+    symbol: string,
+  ): Promise<LiquidationResponse> {
+    return this.fetch<LiquidationResponse>(API_ENDPOINTS.LIQUIDATE, {
+      method: "POST",
+      body: JSON.stringify({ chat_id: chatId, symbol }),
+      requireAdmin: true,
+    });
+  }
+
+  async liquidateAll(chatId: string): Promise<LiquidationResponse> {
+    return this.fetch<LiquidationResponse>(API_ENDPOINTS.LIQUIDATE_ALL, {
+      method: "POST",
+      body: JSON.stringify({ chat_id: chatId }),
+      requireAdmin: true,
+    });
+  }
+
+  async connectExchange(
+    chatId: string,
+    exchange: string,
+    accountLabel?: string,
+  ): Promise<WalletCommandResponse> {
+    return this.fetch<WalletCommandResponse>(API_ENDPOINTS.CONNECT_EXCHANGE, {
+      method: "POST",
+      body: JSON.stringify({
+        chat_id: chatId,
+        exchange,
+        account_label: accountLabel,
+      }),
+      requireAdmin: true,
+    });
+  }
+
+  async connectPolymarket(
+    chatId: string,
+    walletAddress: string,
+  ): Promise<WalletCommandResponse> {
+    return this.fetch<WalletCommandResponse>(API_ENDPOINTS.CONNECT_POLYMARKET, {
+      method: "POST",
+      body: JSON.stringify({
+        chat_id: chatId,
+        wallet_address: walletAddress,
+      }),
+      requireAdmin: true,
+    });
+  }
+
+  async addWallet(
+    chatId: string,
+    walletAddress: string,
+    walletType = "external",
+  ): Promise<WalletCommandResponse> {
+    return this.fetch<WalletCommandResponse>(API_ENDPOINTS.ADD_WALLET, {
+      method: "POST",
+      body: JSON.stringify({
+        chat_id: chatId,
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+      }),
+      requireAdmin: true,
+    });
+  }
+
+  async removeWallet(
+    chatId: string,
+    walletIdOrAddress: string,
+  ): Promise<WalletCommandResponse> {
+    return this.fetch<WalletCommandResponse>(API_ENDPOINTS.REMOVE_WALLET, {
+      method: "POST",
+      body: JSON.stringify({
+        chat_id: chatId,
+        wallet_id_or_address: walletIdOrAddress,
+      }),
+      requireAdmin: true,
+    });
+  }
+
+  async getQuests(chatId: string): Promise<QuestsResponse> {
+    return this.fetch<QuestsResponse>(API_ENDPOINTS.GET_QUESTS(chatId), {
+      requireAdmin: true,
+    });
+  }
+
+  async getPortfolio(chatId: string): Promise<PortfolioResponse> {
+    return this.fetch<PortfolioResponse>(API_ENDPOINTS.GET_PORTFOLIO(chatId), {
+      requireAdmin: true,
+    });
+  }
+
+  async getWallets(chatId: string): Promise<WalletsResponse> {
+    return this.fetch<WalletsResponse>(API_ENDPOINTS.GET_WALLETS(chatId), {
+      requireAdmin: true,
+    });
+  }
+
+  async getLogs(chatId: string, limit = 10): Promise<LogsResponse> {
+    return this.fetch<LogsResponse>(API_ENDPOINTS.GET_LOGS(chatId, limit), {
+      requireAdmin: true,
+    });
+  }
+
+  async getDoctor(chatId: string): Promise<DoctorResponse> {
+    return this.fetch<DoctorResponse>(API_ENDPOINTS.GET_DOCTOR(chatId), {
+      requireAdmin: true,
     });
   }
 

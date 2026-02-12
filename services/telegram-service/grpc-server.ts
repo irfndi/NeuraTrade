@@ -1,148 +1,168 @@
 import * as grpc from "@grpc/grpc-js";
 import {
   TelegramServiceService,
-  TelegramServiceServer,
-  StreamEventsRequest,
-  TelegramEvent,
-  SendMessageRequest,
-  SendMessageResponse,
-  HealthCheckRequest,
-  HealthCheckResponse,
-  SendActionAlertRequest,
-  SendActionAlertResponse,
-  SendQuestProgressRequest,
-  SendQuestProgressResponse,
-  SendMilestoneAlertRequest,
-  SendMilestoneAlertResponse,
-  SendRiskEventRequest,
-  SendRiskEventResponse,
+  type TelegramServiceServer,
+  type StreamEventsRequest,
+  type TelegramEvent,
+  type SendMessageRequest,
+  type SendMessageResponse,
+  type HealthCheckRequest,
+  type HealthCheckResponse,
+  type SendActionAlertRequest,
+  type SendActionAlertResponse,
+  type SendQuestProgressRequest,
+  type SendQuestProgressResponse,
+  type SendMilestoneAlertRequest,
+  type SendMilestoneAlertResponse,
+  type SendRiskEventRequest,
+  type SendRiskEventResponse,
 } from "./proto/telegram_service";
 import { Bot } from "grammy";
-import { logger } from "./src/utils/logger";
-import { withRetry } from "./retry";
 import {
-  classifyError,
-  TelegramErrorCode,
-  TelegramErrorInfo,
-} from "./telegram-errors";
+  formatActionAlertMessage,
+  formatQuestProgressMessage,
+  formatMilestoneAlertMessage,
+  formatRiskEventMessage,
+  type RiskSeverity,
+} from "./src/messages";
+import { logger } from "./src/utils/logger";
 
-const GRPC_RETRY_CONFIG = {
-  maxRetries: 3,
-  initialDelayMs: 1000,
-  maxDelayMs: 30000,
-  backoffFactor: 2,
-  jitter: true,
-};
+type ParseMode = "HTML" | "Markdown" | "MarkdownV2";
 
-function formatActionAlert(req: SendActionAlertRequest): string {
-  const riskIcon = req.riskCheckPassed ? "✅" : "❌";
-  return (
-    `🤖 ACTION: ${req.action}\n` +
-    `Asset: ${req.asset}\n` +
-    `Price: ${req.price}\n` +
-    `Size: ${req.size}\n` +
-    `Strategy: ${req.strategy}\n\n` +
-    `Reasoning: ${req.reasoning}\n` +
-    `Risk Check: ${riskIcon} ${req.riskCheckPassed ? "PASSED" : "FAILED"}\n` +
-    (req.questId ? `Quest: ${req.questId}` : "")
-  );
-}
-
-function formatQuestProgress(req: SendQuestProgressRequest): string {
-  return (
-    `📋 Quest: ${req.questName}\n` +
-    `Progress: ${req.current}/${req.target} (${req.percent}%)\n` +
-    `Time Remaining: ${req.timeRemaining}`
-  );
-}
-
-function formatMilestoneAlert(req: SendMilestoneAlertRequest): string {
-  return (
-    `🎯 Milestone Reached: $${req.amount}\n` +
-    `Phase: ${req.phase}\n` +
-    `Next Target: $${req.nextTarget}`
-  );
-}
-
-function formatRiskEvent(req: SendRiskEventRequest): string {
-  const severityIcon = req.severity === "critical" ? "🚨" : "⚠️";
-  let msg = `${severityIcon} ${req.severity.toUpperCase()}: ${req.eventType}\n\n${req.message}`;
-  if (req.details && Object.keys(req.details).length > 0) {
-    msg += "\n\nDetails:\n";
-    for (const [key, value] of Object.entries(req.details)) {
-      msg += `• ${key}: ${value}\n`;
-    }
+function toParseMode(parseMode: string): ParseMode | undefined {
+  if (
+    parseMode === "HTML" ||
+    parseMode === "Markdown" ||
+    parseMode === "MarkdownV2"
+  ) {
+    return parseMode;
   }
-  return msg;
+
+  return undefined;
+}
+
+function normalizeRiskSeverity(value: string): RiskSeverity {
+  return value.toLowerCase() === "critical" ? "critical" : "warning";
+}
+
+function ensureChatId<
+  TResponse extends { ok: boolean; messageId: string; error: string },
+>(chatId: string, callback: grpc.sendUnaryData<TResponse>): chatId is string {
+  if (chatId.length > 0) {
+    return true;
+  }
+
+  callback(
+    {
+      code: grpc.status.INVALID_ARGUMENT,
+      details: "Chat ID is required",
+    },
+    null,
+  );
+  return false;
 }
 
 export class TelegramGrpcServer {
-  private bot: Bot;
+  private readonly bot: Bot;
+  private readonly eventStreams = new Map<
+    string,
+    Set<grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>>
+  >();
 
   constructor(bot: Bot) {
     this.bot = bot;
+  }
+
+  private async sendBotMessage(
+    chatId: string,
+    text: string,
+    parseMode?: ParseMode,
+  ): Promise<string> {
+    const options = parseMode ? { parse_mode: parseMode } : undefined;
+    const sent = await this.bot.api.sendMessage(chatId, text, options);
+    return sent.message_id.toString();
+  }
+
+  private addEventStream(
+    chatId: string,
+    call: grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
+  ): void {
+    const current = this.eventStreams.get(chatId);
+    if (current) {
+      current.add(call);
+      return;
+    }
+
+    this.eventStreams.set(chatId, new Set([call]));
+  }
+
+  private removeEventStream(
+    chatId: string,
+    call: grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
+  ): void {
+    const current = this.eventStreams.get(chatId);
+    if (!current) {
+      return;
+    }
+
+    current.delete(call);
+    if (current.size === 0) {
+      this.eventStreams.delete(chatId);
+    }
+  }
+
+  private publishEvent(event: TelegramEvent): void {
+    const streams = this.eventStreams.get(event.chatId);
+    if (!streams || streams.size === 0) {
+      return;
+    }
+
+    for (const stream of streams) {
+      try {
+        stream.write(event);
+      } catch {
+        this.removeEventStream(event.chatId, stream);
+      }
+    }
   }
 
   sendMessage = (
     call: grpc.ServerUnaryCall<SendMessageRequest, SendMessageResponse>,
     callback: grpc.sendUnaryData<SendMessageResponse>,
   ): void => {
-    const { chatId, text, parseMode } = call.request;
+    const { chatId, text } = call.request;
 
     if (!chatId || !text) {
-      callback(null, {
-        ok: false,
-        messageId: "",
-        error: "Chat ID and Text are required",
-        errorCode: TelegramErrorCode.INVALID_REQUEST,
-        retryAfter: 0,
-      });
+      callback(
+        {
+          code: grpc.status.INVALID_ARGUMENT,
+          details: "Chat ID and text are required",
+        },
+        null,
+      );
       return;
     }
 
-    // Use retry logic for sending messages
-    withRetry(
-      () =>
-        this.bot.api.sendMessage(chatId, text, {
-          parse_mode: parseMode as any,
-        }),
-      classifyError,
-      GRPC_RETRY_CONFIG,
-    )
-      .then((result) => {
-        if (result.success && result.data) {
-          callback(null, {
-            ok: true,
-            messageId: result.data.message_id.toString(),
-            error: "",
-            errorCode: "",
-            retryAfter: 0,
-          });
-        } else {
-          const errorInfo = result.error as TelegramErrorInfo;
-          console.error(
-            `[gRPC] Failed to send message after ${result.attempts} attempts:`,
-            errorInfo?.code,
-            errorInfo?.message,
-          );
-          callback(null, {
-            ok: false,
-            messageId: "",
-            error: errorInfo?.message || "Unknown error",
-            errorCode: errorInfo?.code || TelegramErrorCode.UNKNOWN,
-            retryAfter: errorInfo?.retryAfter || 0,
-          });
-        }
+    const parseMode = toParseMode(call.request.parseMode);
+
+    this.sendBotMessage(chatId, text, parseMode)
+      .then((messageId) => {
+        callback(null, {
+          ok: true,
+          messageId,
+          error: "",
+          errorCode: "",
+          retryAfter: 0,
+        });
       })
       .catch((error) => {
-        const errorInfo = classifyError(error);
         logger.error("Failed to send message via gRPC", error, { chatId });
         callback(null, {
           ok: false,
           messageId: "",
-          error: errorInfo.message,
-          errorCode: errorInfo.code,
-          retryAfter: errorInfo.retryAfter || 0,
+          error: error instanceof Error ? error.message : "Unknown error",
+          errorCode: "INTERNAL_ERROR",
+          retryAfter: 0,
         });
       });
   };
@@ -163,8 +183,23 @@ export class TelegramGrpcServer {
     call: grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
   ): void => {
     const { chatId } = call.request;
+    if (!chatId) {
+      logger.warn("Rejected StreamEvents subscription with empty chat ID");
+      call.end();
+      return;
+    }
+
+    this.addEventStream(chatId, call);
     logger.info("StreamEvents subscribed", { chatId });
-    call.end();
+
+    const cleanup = () => {
+      this.removeEventStream(chatId, call);
+      logger.info("StreamEvents unsubscribed", { chatId });
+    };
+
+    call.on("cancelled", cleanup);
+    call.on("close", cleanup);
+    call.on("error", cleanup);
   };
 
   sendActionAlert = (
@@ -172,30 +207,42 @@ export class TelegramGrpcServer {
     callback: grpc.sendUnaryData<SendActionAlertResponse>,
   ): void => {
     const { chatId } = call.request;
-
-    if (!chatId) {
-      callback(
-        {
-          code: grpc.status.INVALID_ARGUMENT,
-          details: "Chat ID is required",
-        },
-        null,
-      );
+    if (!ensureChatId(chatId, callback)) {
       return;
     }
 
-    const text = formatActionAlert(call.request);
+    const text = formatActionAlertMessage({
+      action: call.request.action,
+      asset: call.request.asset,
+      price: call.request.price,
+      size: call.request.size,
+      strategy: call.request.strategy,
+      reasoning: call.request.reasoning,
+      riskCheckPassed: call.request.riskCheckPassed,
+      questId: call.request.questId,
+    });
 
-    this.bot.api
-      .sendMessage(chatId, text)
-      .then((sent) => {
-        logger.info("Action alert sent via gRPC", {
+    this.sendBotMessage(chatId, text)
+      .then((messageId) => {
+        this.publishEvent({
+          type: "action",
           chatId,
-          action: call.request.action,
+          timestamp: Date.now(),
+          action: {
+            action: call.request.action,
+            asset: call.request.asset,
+            price: call.request.price,
+            size: call.request.size,
+            strategy: call.request.strategy,
+            reasoning: call.request.reasoning,
+            riskCheckPassed: call.request.riskCheckPassed,
+            questId: call.request.questId,
+          },
         });
+
         callback(null, {
           ok: true,
-          messageId: sent.message_id.toString(),
+          messageId,
           error: "",
         });
       })
@@ -204,7 +251,7 @@ export class TelegramGrpcServer {
         callback(null, {
           ok: false,
           messageId: "",
-          error: error.message || "Unknown error",
+          error: error instanceof Error ? error.message : "Unknown error",
         });
       });
   };
@@ -217,30 +264,38 @@ export class TelegramGrpcServer {
     callback: grpc.sendUnaryData<SendQuestProgressResponse>,
   ): void => {
     const { chatId } = call.request;
-
-    if (!chatId) {
-      callback(
-        {
-          code: grpc.status.INVALID_ARGUMENT,
-          details: "Chat ID is required",
-        },
-        null,
-      );
+    if (!ensureChatId(chatId, callback)) {
       return;
     }
 
-    const text = formatQuestProgress(call.request);
+    const text = formatQuestProgressMessage({
+      questId: call.request.questId,
+      questName: call.request.questName,
+      current: call.request.current,
+      target: call.request.target,
+      percent: call.request.percent,
+      timeRemaining: call.request.timeRemaining,
+    });
 
-    this.bot.api
-      .sendMessage(chatId, text)
-      .then((sent) => {
-        logger.info("Quest progress sent via gRPC", {
+    this.sendBotMessage(chatId, text)
+      .then((messageId) => {
+        this.publishEvent({
+          type: "quest_progress",
           chatId,
-          questId: call.request.questId,
+          timestamp: Date.now(),
+          quest: {
+            questId: call.request.questId,
+            questName: call.request.questName,
+            current: call.request.current,
+            target: call.request.target,
+            percent: call.request.percent,
+            timeRemaining: call.request.timeRemaining,
+          },
         });
+
         callback(null, {
           ok: true,
-          messageId: sent.message_id.toString(),
+          messageId,
           error: "",
         });
       })
@@ -251,7 +306,7 @@ export class TelegramGrpcServer {
         callback(null, {
           ok: false,
           messageId: "",
-          error: error.message || "Unknown error",
+          error: error instanceof Error ? error.message : "Unknown error",
         });
       });
   };
@@ -264,30 +319,32 @@ export class TelegramGrpcServer {
     callback: grpc.sendUnaryData<SendMilestoneAlertResponse>,
   ): void => {
     const { chatId } = call.request;
-
-    if (!chatId) {
-      callback(
-        {
-          code: grpc.status.INVALID_ARGUMENT,
-          details: "Chat ID is required",
-        },
-        null,
-      );
+    if (!ensureChatId(chatId, callback)) {
       return;
     }
 
-    const text = formatMilestoneAlert(call.request);
+    const text = formatMilestoneAlertMessage({
+      amount: call.request.amount,
+      phase: call.request.phase,
+      nextTarget: call.request.nextTarget,
+    });
 
-    this.bot.api
-      .sendMessage(chatId, text)
-      .then((sent) => {
-        logger.info("Milestone alert sent via gRPC", {
+    this.sendBotMessage(chatId, text)
+      .then((messageId) => {
+        this.publishEvent({
+          type: "milestone",
           chatId,
-          amount: call.request.amount,
+          timestamp: Date.now(),
+          milestone: {
+            amount: call.request.amount,
+            phase: call.request.phase,
+            nextTarget: call.request.nextTarget,
+          },
         });
+
         callback(null, {
           ok: true,
-          messageId: sent.message_id.toString(),
+          messageId,
           error: "",
         });
       })
@@ -298,7 +355,7 @@ export class TelegramGrpcServer {
         callback(null, {
           ok: false,
           messageId: "",
-          error: error.message || "Unknown error",
+          error: error instanceof Error ? error.message : "Unknown error",
         });
       });
   };
@@ -308,31 +365,35 @@ export class TelegramGrpcServer {
     callback: grpc.sendUnaryData<SendRiskEventResponse>,
   ): void => {
     const { chatId } = call.request;
-
-    if (!chatId) {
-      callback(
-        {
-          code: grpc.status.INVALID_ARGUMENT,
-          details: "Chat ID is required",
-        },
-        null,
-      );
+    if (!ensureChatId(chatId, callback)) {
       return;
     }
 
-    const text = formatRiskEvent(call.request);
+    const severity = normalizeRiskSeverity(call.request.severity);
+    const text = formatRiskEventMessage({
+      eventType: call.request.eventType,
+      severity,
+      message: call.request.message,
+      details: call.request.details,
+    });
 
-    this.bot.api
-      .sendMessage(chatId, text)
-      .then((sent) => {
-        logger.warn("Risk event sent via gRPC", {
+    this.sendBotMessage(chatId, text)
+      .then((messageId) => {
+        this.publishEvent({
+          type: "risk_event",
           chatId,
-          eventType: call.request.eventType,
-          severity: call.request.severity,
+          timestamp: Date.now(),
+          risk: {
+            eventType: call.request.eventType,
+            severity: call.request.severity,
+            message: call.request.message,
+            details: call.request.details,
+          },
         });
+
         callback(null, {
           ok: true,
-          messageId: sent.message_id.toString(),
+          messageId,
           error: "",
         });
       })
@@ -341,7 +402,7 @@ export class TelegramGrpcServer {
         callback(null, {
           ok: false,
           messageId: "",
-          error: error.message || "Unknown error",
+          error: error instanceof Error ? error.message : "Unknown error",
         });
       });
   };
