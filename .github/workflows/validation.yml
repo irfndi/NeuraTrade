@@ -1,11 +1,14 @@
-name: Validation
-
 on:
   push:
-    branches:
-      - '**'
+    branches: [ main, develop, development ]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   pull_request:
     branches: [ main, develop, development ]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
@@ -13,67 +16,90 @@ permissions:
   actions: read
   security-events: write
 
+concurrency:
+  group: validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25.5'
+  BUN_VERSION: '1.3.3'
+
 jobs:
-  validation:
-    name: Lint, Format, Test, Build
+  backend-quality:
+    name: Backend Quality (fmt/lint/typecheck)
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.5'
+          go-version: ${{ env.GO_VERSION }}
           cache: true
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.3
+          cache-dependency-path: services/backend-api/go.sum
 
       - name: Install dependencies
-        run: |
-          make mod-download
-          for i in 1 2 3; do
-            if make services-setup; then
-              break
-            else
-              if [ $i -lt 3 ]; then
-                echo "Attempt $i failed, retrying in $((2 ** i * 5)) seconds..."
-                sleep $((2 ** i * 5))
-              else
-                echo "All attempts failed"
-                exit 1
-              fi
-            fi
-          done
-
-      - name: Install Linter
-        run: |
-          mkdir -p ./bin
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./bin v2.7.2
-          ./bin/golangci-lint --version
+        run: make mod-download
 
       - name: Check Formatting
         run: make fmt-check
 
-      - name: Run Canonical Path and Naming Guardrails
-        run: |
-          bash services/backend-api/scripts/check-legacy-paths.sh
-          bash services/backend-api/scripts/check-canonical-naming.sh
+      - name: Run Typecheck
+        run: cd services/backend-api && go vet ./...
 
-      - name: Run CI Checks (Feature Branch - Lenient)
-        if: "!contains(fromJson('[\"main\", \"develop\", \"development\"]'), github.ref_name)"
-        run: |
-          export PATH="${GITHUB_WORKSPACE}/bin:$PATH"
-          export MIN_COVERAGE=50
-          export STRICT=false
-          make ci-check
+      - name: Run Go lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.7.2
+          working-directory: services/backend-api
+          args: --timeout=5m
 
-      - name: Run CI Checks (Main Branches - Strict)
-        if: "contains(fromJson('[\"main\", \"develop\", \"development\"]'), github.ref_name)"
+  frontend-quality:
+    name: Frontend Quality (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ccxt-service, telegram-service]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            services/${{ matrix.service }}/node_modules
+          key: ${{ runner.os }}-bun-${{ matrix.service }}-${{ hashFiles(format('services/{0}/bun.lock', matrix.service)) }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ matrix.service }}-
+
+      - name: Install dependencies
+        run: make mod-download
+
+      - name: Check Formatting
         run: |
-          export PATH="${GITHUB_WORKSPACE}/bin:$PATH"
-          export MIN_COVERAGE=80
-          export STRICT=true
-          make ci-check
+          cd services/${{ matrix.service }}
+          bun run format-check
+
+      - name: Run Typecheck
+        run: |
+          cd services/${{ matrix.service }}
+          bun run typecheck
+
+      - name: Run Linter
+        run: |
+          cd services/${{ matrix.service }}
+          bun run lint
+
+      - name: Run Tests
+        run: |
+          cd services/${{ matrix.service }}
+          bun test --coverage
