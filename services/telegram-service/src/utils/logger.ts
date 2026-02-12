@@ -13,14 +13,19 @@ interface LogEntry {
 }
 
 function isProduction(): boolean {
-  return process.env.NODE_ENV === "production" || process.env.SENTRY_ENVIRONMENT === "production";
+  return (
+    process.env.NODE_ENV === "production" ||
+    process.env.SENTRY_ENVIRONMENT === "production"
+  );
 }
 
 function formatPretty(entry: LogEntry): string {
   const timestamp = entry.timestamp;
   const level = entry.level.toUpperCase().padEnd(5);
   const context = entry.context ? ` ${JSON.stringify(entry.context)}` : "";
-  const error = entry.error ? `\n  ${entry.error.name}: ${entry.error.message}${entry.error.stack ? `\n  ${entry.error.stack}` : ""}` : "";
+  const error = entry.error
+    ? `\n  ${entry.error.name}: ${entry.error.message}${entry.error.stack ? `\n  ${entry.error.stack}` : ""}`
+    : "";
   return `${timestamp} [${level}] ${entry.message}${context}${error}`;
 }
 
@@ -28,7 +33,12 @@ function formatJson(entry: LogEntry): string {
   return JSON.stringify(entry);
 }
 
-function log(level: LogLevel, message: string, error?: Error, context?: Record<string, unknown>): void {
+function log(
+  level: LogLevel,
+  message: string,
+  error?: Error,
+  context?: Record<string, unknown>,
+): void {
   const entry: LogEntry = {
     timestamp: new Date().toISOString(),
     level,
@@ -61,7 +71,11 @@ function log(level: LogLevel, message: string, error?: Error, context?: Record<s
 export interface Logger {
   info(message: string, context?: Record<string, unknown>): void;
   warn(message: string, context?: Record<string, unknown>): void;
-  error(message: string, error?: Error, context?: Record<string, unknown>): void;
+  error(
+    message: string,
+    error?: Error,
+    context?: Record<string, unknown>,
+  ): void;
 }
 
 export const logger: Logger = {
@@ -71,7 +85,11 @@ export const logger: Logger = {
   warn(message: string, context?: Record<string, unknown>): void {
     log("warn", message, undefined, context);
   },
-  error(message: string, error?: Error, context?: Record<string, unknown>): void {
+  error(
+    message: string,
+    error?: Error,
+    context?: Record<string, unknown>,
+  ): void {
     log("error", message, error, context);
   },
 };
@@ -84,7 +102,11 @@ export function createLogger(context: Record<string, unknown> = {}): Logger {
     warn(message: string, additionalContext?: Record<string, unknown>): void {
       log("warn", message, undefined, { ...context, ...additionalContext });
     },
-    error(message: string, error?: Error, additionalContext?: Record<string, unknown>): void {
+    error(
+      message: string,
+      error?: Error,
+      additionalContext?: Record<string, unknown>,
+    ): void {
       log("error", message, error, { ...context, ...additionalContext });
     },
   };

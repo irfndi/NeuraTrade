@@ -8,7 +8,10 @@ import { Effect } from "effect";
  * @param fallback - The default port to use if raw is invalid
  * @returns The resolved port number
  */
-export const resolvePort = (raw: string | undefined, fallback: number): number => {
+export const resolvePort = (
+  raw: string | undefined,
+  fallback: number,
+): number => {
   if (!raw) {
     return fallback;
   }
@@ -37,6 +40,8 @@ export const resolvePort = (raw: string | undefined, fallback: number): number =
  */
 export interface TelegramConfig {
   botToken: string;
+  botTokenMissing: boolean;
+  configError: string | null;
   webhookUrl: string | null;
   webhookPath: string;
   webhookSecret: string | null;
@@ -137,6 +142,8 @@ export const loadConfig = Effect.try((): TelegramConfig => {
 
   return {
     botToken,
+    botTokenMissing: false,
+    configError: null,
     webhookUrl,
     webhookPath: resolvedWebhookPath.startsWith("/")
       ? resolvedWebhookPath

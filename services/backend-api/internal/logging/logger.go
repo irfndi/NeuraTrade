@@ -5,7 +5,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // Logger interface defines the common logging methods.
@@ -329,6 +332,16 @@ func getZapLevel(level string) zapcore.Level {
 		return zapcore.ErrorLevel
 	default:
 		return zapcore.InfoLevel
+	}
+}
+
+type sentryCore struct {
+	zapcore.LevelEnabler
+}
+
+func newSentryCore(levelEnabler zapcore.LevelEnabler) *sentryCore {
+	return &sentryCore{
+		LevelEnabler: levelEnabler,
 	}
 }
 

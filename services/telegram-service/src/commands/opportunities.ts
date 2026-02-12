@@ -2,7 +2,9 @@ import type { Bot } from "grammy";
 import type { BackendApiClient } from "../api/client";
 import type { ArbitrageOpportunity } from "../api/types";
 
-function formatOpportunitiesMessage(opps: readonly ArbitrageOpportunity[]): string {
+function formatOpportunitiesMessage(
+  opps: readonly ArbitrageOpportunity[],
+): string {
   if (!opps || opps.length === 0) {
     return "📊 No arbitrage opportunities found right now.";
   }
@@ -21,7 +23,10 @@ function formatOpportunitiesMessage(opps: readonly ArbitrageOpportunity[]): stri
   return lines.join("\n");
 }
 
-export function registerOpportunitiesCommand(bot: Bot, api: BackendApiClient): void {
+export function registerOpportunitiesCommand(
+  bot: Bot,
+  api: BackendApiClient,
+): void {
   bot.command("opportunities", async (ctx) => {
     try {
       const response = await api.getArbitrageOpportunities(5, 0.5);

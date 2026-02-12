@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/irfandi/celebrum-ai-go/internal/observability"
 )
 
 // Note: CircuitBreaker types are defined in circuit_breaker.go

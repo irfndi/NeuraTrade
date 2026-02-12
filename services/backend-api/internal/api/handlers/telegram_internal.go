@@ -19,9 +19,9 @@ type TelegramInternalHandler struct {
 }
 
 // NewTelegramInternalHandler creates a new instance of TelegramInternalHandler.
-func NewTelegramInternalHandler(db services.DBPool, userHandler *UserHandler) *TelegramInternalHandler {
+func NewTelegramInternalHandler(db any, userHandler *UserHandler) *TelegramInternalHandler {
 	return &TelegramInternalHandler{
-		db:          db,
+		db:          normalizeDBPool(db),
 		userHandler: userHandler,
 	}
 }

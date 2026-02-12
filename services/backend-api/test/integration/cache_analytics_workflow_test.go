@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +34,7 @@ func TestIntegrationCacheAnalyticsReporting(t *testing.T) {
 		return err == nil && value != ""
 	}, 300*time.Millisecond, 10*time.Millisecond)
 
-	timeoutManager := services.NewTimeoutManager(nil, logging.NewStandardLogger("info", "test"))
+	timeoutManager := services.NewTimeoutManager(nil, zaplogrus.New())
 	result, err := timeoutManager.ExecuteWithTimeout("redis_operation", "cache_metrics", func(ctx context.Context) (interface{}, error) {
 		return analytics.GetMetrics(ctx)
 	})

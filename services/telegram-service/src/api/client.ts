@@ -78,7 +78,9 @@ export class BackendApiClient {
     });
   }
 
-  async registerTelegramUser(request: RegisterTelegramUserRequest): Promise<void> {
+  async registerTelegramUser(
+    request: RegisterTelegramUserRequest,
+  ): Promise<void> {
     await this.fetch(API_ENDPOINTS.REGISTER_USER, {
       method: "POST",
       body: JSON.stringify(request),
@@ -90,7 +92,10 @@ export class BackendApiClient {
     limit = 5,
     minProfit = 0.5,
   ): Promise<GetArbitrageOpportunitiesResponse> {
-    const endpoint = API_ENDPOINTS.GET_ARBITRAGE_OPPORTUNITIES(limit, minProfit);
+    const endpoint = API_ENDPOINTS.GET_ARBITRAGE_OPPORTUNITIES(
+      limit,
+      minProfit,
+    );
     return this.fetch<GetArbitrageOpportunitiesResponse>(endpoint, {
       requireAdmin: false,
     });
@@ -141,6 +146,10 @@ export class BackendApiClient {
   }
 }
 
-export function createApiClient(baseUrl: string, adminKey: string, rateLimit?: number): BackendApiClient {
+export function createApiClient(
+  baseUrl: string,
+  adminKey: string,
+  rateLimit?: number,
+): BackendApiClient {
   return new BackendApiClient({ baseUrl, adminKey, rateLimit });
 }

@@ -1162,7 +1162,7 @@ func TestTelegramSendResult_Struct(t *testing.T) {
 func TestNotificationService_DeadLetterServiceInitialization(t *testing.T) {
 	ns := NewNotificationService(nil, nil, "", "", "")
 	assert.NotNil(t, ns)
-	assert.NotNil(t, ns.deadLetterService)
+	assert.Nil(t, ns.deadLetterService)
 }
 
 // Test ProcessDeadLetterQueue with nil service

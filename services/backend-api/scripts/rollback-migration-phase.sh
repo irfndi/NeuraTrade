@@ -44,7 +44,7 @@ fi
 
 FILES=()
 case "$PHASE" in
-  phase1|1)
+  phase1 | 1)
     FILES=(
       "services/backend-api/internal/api/handlers/futures_arbitrage.go"
       "services/backend-api/internal/api/handlers/futures_arbitrage_test.go"
@@ -55,7 +55,7 @@ case "$PHASE" in
       "Makefile"
     )
     ;;
-  phase2|2)
+  phase2 | 2)
     FILES=(
       "services/backend-api/internal/api/handlers/trading.go"
       "services/backend-api/internal/api/handlers/trading_test.go"
@@ -64,13 +64,13 @@ case "$PHASE" in
       "services/backend-api/scripts/rollback-phase2-trading.sh"
     )
     ;;
-  phase3|3)
+  phase3 | 3)
     FILES=(
       "services/backend-api/cmd/server/main.go"
       "services/backend-api/internal/api/routes.go"
     )
     ;;
-  phase4|4)
+  phase4 | 4)
     FILES=(
       "services/backend-api/docs/migration/PHASE4_VALIDATION_CHECKLIST.md"
       "services/backend-api/docs/migration/PHASE5_VALIDATION_REPORT.md"

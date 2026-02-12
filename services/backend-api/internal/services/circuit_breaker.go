@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/irfandi/celebrum-ai-go/internal/observability"
 )
 
 // CircuitBreakerState represents the current state of the circuit breaker.

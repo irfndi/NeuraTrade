@@ -31,7 +31,9 @@ export class SessionManager {
 
   setSession(
     chatId: string,
-    partial: Partial<Omit<SessionState, "chatId" | "createdAt" | "updatedAt" | "expiresAt">>,
+    partial: Partial<
+      Omit<SessionState, "chatId" | "createdAt" | "updatedAt" | "expiresAt">
+    >,
   ): SessionState {
     const existing = this.sessions.get(chatId);
     const now = new Date();
@@ -74,7 +76,10 @@ export class SessionManager {
       return null;
     }
 
-    return this.setSession(chatId, { step: session.step, data: { ...session.data, ...data } });
+    return this.setSession(chatId, {
+      step: session.step,
+      data: { ...session.data, ...data },
+    });
   }
 
   clearSession(chatId: string): void {

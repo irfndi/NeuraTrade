@@ -12,15 +12,15 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlaceOrderRequest'
+              $ref: "#/components/schemas/PlaceOrderRequest"
       responses:
-        '201':
+        "201":
           description: Order accepted
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OrderPlacementResponse'
-        '400':
+                $ref: "#/components/schemas/OrderPlacementResponse"
+        "400":
           description: Validation error
   /api/v1/trading/cancel_order:
     post:
@@ -37,11 +37,11 @@ paths:
                 order_id:
                   type: string
       responses:
-        '200':
+        "200":
           description: Order canceled
-        '404':
+        "404":
           description: Order not found
-        '409':
+        "409":
           description: Order not open
   /api/v1/trading/liquidate:
     post:
@@ -58,15 +58,15 @@ paths:
                 symbol:
                   type: string
       responses:
-        '200':
+        "200":
           description: Position liquidated
-        '404':
+        "404":
           description: Open position not found
   /api/v1/trading/liquidate_all:
     post:
       summary: Liquidate all open positions
       responses:
-        '200':
+        "200":
           description: Liquidation completed
   /api/v1/trading/positions:
     get:
@@ -78,7 +78,7 @@ paths:
             type: string
             enum: [OPEN, CLOSED, LIQUIDATED]
       responses:
-        '200':
+        "200":
           description: Position list
           content:
             application/json:
@@ -95,7 +95,7 @@ paths:
                       positions:
                         type: array
                         items:
-                          $ref: '#/components/schemas/PositionRecord'
+                          $ref: "#/components/schemas/PositionRecord"
   /api/v1/trading/positions/{position_id}:
     get:
       summary: Get one position
@@ -106,7 +106,7 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: Position found
           content:
             application/json:
@@ -116,8 +116,8 @@ paths:
                   status:
                     type: string
                   data:
-                    $ref: '#/components/schemas/PositionRecord'
-        '404':
+                    $ref: "#/components/schemas/PositionRecord"
+        "404":
           description: Position not found
 components:
   schemas:
@@ -206,6 +206,6 @@ components:
           type: object
           properties:
             order:
-              $ref: '#/components/schemas/OrderRecord'
+              $ref: "#/components/schemas/OrderRecord"
             position:
-              $ref: '#/components/schemas/PositionRecord'
+              $ref: "#/components/schemas/PositionRecord"

@@ -17,9 +17,9 @@ type AlertHandler struct {
 }
 
 // NewAlertHandler creates a new instance of AlertHandler.
-func NewAlertHandler(db services.DBPool) *AlertHandler {
+func NewAlertHandler(db any) *AlertHandler {
 	return &AlertHandler{
-		db: db,
+		db: normalizeDBPool(db),
 	}
 }
 

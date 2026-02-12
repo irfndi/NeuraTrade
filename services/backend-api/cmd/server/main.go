@@ -24,6 +24,7 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/irfandi/celebrum-ai-go/internal/services"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 )
 
 // main serves as the entry point for the application.
@@ -65,8 +66,7 @@ func run() error {
 
 	// Initialize standard logger
 	stdLogger := logging.NewStandardLogger(cfg.Telemetry.LogLevel, cfg.Environment)
-	logger := stdLogger.Logger()
-	slog.SetDefault(logger)
+	logger := logging.Logger(stdLogger)
 
 	// Create logrus logger for services that require it (backward compatibility)
 	logrusLogger := zaplogrus.New()
@@ -92,7 +92,7 @@ func run() error {
 	defer db.Close()
 
 	// Initialize error recovery manager for Redis connection
-	errorRecoveryManager := services.NewErrorRecoveryManager(logger)
+	errorRecoveryManager := services.NewErrorRecoveryManager(logrusLogger)
 
 	// Register retry policies for Redis operations
 	retryPolicies := services.DefaultRetryPolicies()
@@ -119,8 +119,9 @@ func run() error {
 	}
 
 	// Helper to get Logger with component context
-	getLogger := func(component string) logging.Logger {
-		return logger.WithComponent(component)
+	getLogger := func(component string) *zaplogrus.Logger {
+		_ = component
+		return logrusLogger
 	}
 
 	// Initialize blacklist cache with database persistence
@@ -206,7 +207,7 @@ func run() error {
 	arbitrageCalculator.WithFeeProvider(feeProvider, decimal.NewFromFloat(cfg.Fees.DefaultTakerFee))
 
 	// Initialize regular arbitrage service
-	arbitrageService := services.NewArbitrageService(db, cfg, arbitrageCalculator, feeProvider)
+	arbitrageService := services.NewArbitrageService(db, cfg, arbitrageCalculator)
 	if err := arbitrageService.Start(); err != nil {
 		logger.WithError(err).Fatal("Failed to start arbitrage service")
 	}
@@ -257,7 +258,7 @@ func run() error {
 	// Initialize signal processor
 	signalProcessor := services.NewSignalProcessor(
 		db,
-		slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		logger.WithComponent("signal_processor"),
 		signalAggregator,
 		signalQualityScorer,
 		technicalAnalysisService,
@@ -335,7 +336,7 @@ func run() error {
 	return nil
 }
 
-func runSQLiteBootstrapMode(cfg *config.Config, logger *slog.Logger, logrusLogger *zaplogrus.Logger) error {
+func runSQLiteBootstrapMode(cfg *config.Config, logger logging.Logger, logrusLogger *zaplogrus.Logger) error {
 	warnLegacyHandlersPath(logrusLogger)
 
 	sqliteDB, err := database.NewSQLiteConnectionWithExtension(cfg.Database.SQLitePath, cfg.Database.SQLiteVectorExtensionPath)
@@ -408,13 +409,13 @@ func runSQLiteBootstrapMode(cfg *config.Config, logger *slog.Logger, logrusLogge
 	}
 
 	go func() {
-		logger.Info("Application startup",
-			"service", "github.com/irfandi/celebrum-ai-go",
-			"version", "1.0.0",
-			"port", cfg.Server.Port,
-			"mode", "sqlite-bootstrap",
-			"event", "startup",
-		)
+		logger.WithFields(map[string]interface{}{
+			"service": "github.com/irfandi/celebrum-ai-go",
+			"version": "1.0.0",
+			"port":    cfg.Server.Port,
+			"mode":    "sqlite-bootstrap",
+			"event":   "startup",
+		}).Info("Application startup")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logrusLogger.WithError(err).Fatal("Failed to start sqlite bootstrap server")
 		}
@@ -424,12 +425,12 @@ func runSQLiteBootstrapMode(cfg *config.Config, logger *slog.Logger, logrusLogge
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	logger.Info("Application shutdown",
-		"service", "github.com/irfandi/celebrum-ai-go",
-		"mode", "sqlite-bootstrap",
-		"event", "shutdown",
-		"reason", "signal received",
-	)
+	logger.WithFields(map[string]interface{}{
+		"service": "github.com/irfandi/celebrum-ai-go",
+		"mode":    "sqlite-bootstrap",
+		"event":   "shutdown",
+		"reason":  "signal received",
+	}).Info("Application shutdown")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

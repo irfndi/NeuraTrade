@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
@@ -56,7 +55,7 @@ type routeDB interface {
 //	signalAggregator: Service for aggregating trading signals.
 //	telegramConfig: Configuration for Telegram notifications.
 //	authMiddleware: Middleware for handling authentication.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware) {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware) {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 

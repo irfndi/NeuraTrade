@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/shopspring/decimal"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"

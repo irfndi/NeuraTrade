@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
+	"github.com/irfandi/celebrum-ai-go/internal/services"
 )
 
 // AnalysisHandler manages technical analysis and signal generation endpoints.
@@ -98,11 +99,16 @@ type OHLCV struct {
 // Returns:
 //
 //	*AnalysisHandler: The initialized handler.
-func NewAnalysisHandler(db DBQuerier, ccxtService ccxt.CCXTService) *AnalysisHandler {
+func NewAnalysisHandler(db DBQuerier, ccxtService ccxt.CCXTService, analytics ...*services.AnalyticsService) *AnalysisHandler {
+	var analyticsService *services.AnalyticsService
+	if len(analytics) > 0 {
+		analyticsService = analytics[0]
+	}
+
 	return &AnalysisHandler{
 		db:          db,
 		ccxtService: ccxtService,
-		analytics:   analytics,
+		analytics:   analyticsService,
 	}
 }
 

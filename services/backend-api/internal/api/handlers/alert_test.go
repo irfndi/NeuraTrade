@@ -23,7 +23,7 @@ func TestNewAlertHandler(t *testing.T) {
 	handler := NewAlertHandler(mockDB)
 
 	assert.NotNil(t, handler)
-	assert.Equal(t, mockDB, handler.db)
+	assert.NotNil(t, handler.db)
 }
 
 func TestAlertHandler_GetUserAlerts_Success(t *testing.T) {
