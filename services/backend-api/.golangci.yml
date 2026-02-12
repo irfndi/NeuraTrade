@@ -17,7 +17,7 @@ version: "2"
 
 linters:
   default: none
-  
+
   enable:
     # Core Safety Linters (Required)
     - errcheck
@@ -26,7 +26,7 @@ linters:
     - staticcheck
     - unused
     - copyloopvar
-    
+
     # Code Quality Linters (Recommended)
     - exportloopref
     - contextcheck
@@ -35,15 +35,15 @@ linters:
     - predeclared
     - asciicheck
     - bidichk
-    
+
     # Complexity & Style Linters (Optional)
     - cyclop
     - gocognit
-    
+
     # Test-specific Linters
     - paralleltest
     - testpackage
-  
+
   settings:
     govet:
       enable-all: true
@@ -55,7 +55,7 @@ linters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  
+
   exclude-rules:
     # Test files can have more complexity
     - path: _test\.go
@@ -63,12 +63,12 @@ issues:
         - cyclop
         - gocognit
         - exhaustive
-    
+
     # Generated protobuf files
     - path: \.pb\.go
       linters:
         - all
-    
+
     # Migration files can have complex SQL
     - path: database/migrations/
       linters:
