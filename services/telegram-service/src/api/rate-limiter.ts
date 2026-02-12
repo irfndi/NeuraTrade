@@ -58,7 +58,10 @@ export class RateLimiter {
   }
 }
 
-export function createRateLimiter(tokensPerSecond: number, maxTokens?: number): RateLimiter {
+export function createRateLimiter(
+  tokensPerSecond: number,
+  maxTokens?: number,
+): RateLimiter {
   return new RateLimiter({ tokensPerSecond, maxTokens });
 }
 

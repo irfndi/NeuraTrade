@@ -8,9 +8,12 @@ import type {
   RiskEventAlertTemplateInput,
 } from "./types";
 
-const hasValue = (value?: string): boolean => Boolean(value && value.trim().length > 0);
+const hasValue = (value?: string): boolean =>
+  Boolean(value && value.trim().length > 0);
 
-const formatSortedDetails = (details?: Readonly<Record<string, string>>): string[] => {
+const formatSortedDetails = (
+  details?: Readonly<Record<string, string>>,
+): string[] => {
   if (!details) {
     return [];
   }
@@ -47,7 +50,9 @@ const normalizePercent = (input: QuestProgressTemplateInput): number => {
 };
 
 const formatDoctorCheck = (check: DoctorCheck): string[] => {
-  const lines = [`${statusIcon(check.status)} ${check.name}: ${check.status.toUpperCase()}`];
+  const lines = [
+    `${statusIcon(check.status)} ${check.name}: ${check.status.toUpperCase()}`,
+  ];
 
   if (hasValue(check.message)) {
     lines.push(`   ${check.message}`);
@@ -65,7 +70,9 @@ const formatDoctorCheck = (check: DoctorCheck): string[] => {
   return lines;
 };
 
-export const formatActionAlertMessage = (input: ActionAlertTemplateInput): string => {
+export const formatActionAlertMessage = (
+  input: ActionAlertTemplateInput,
+): string => {
   const lines: string[] = [`🤖 ACTION: ${input.action}`];
 
   if (hasValue(input.timestamp)) {
@@ -88,7 +95,9 @@ export const formatActionAlertMessage = (input: ActionAlertTemplateInput): strin
   }
 
   lines.push("");
-  lines.push(`Risk Check: ${input.riskCheckPassed ? "✅ PASSED" : "❌ FAILED"}`);
+  lines.push(
+    `Risk Check: ${input.riskCheckPassed ? "✅ PASSED" : "❌ FAILED"}`,
+  );
 
   if (hasValue(input.questId)) {
     lines.push(`Quest: ${input.questId}`);
@@ -97,7 +106,9 @@ export const formatActionAlertMessage = (input: ActionAlertTemplateInput): strin
   return lines.join("\n");
 };
 
-export const formatQuestProgressMessage = (input: QuestProgressTemplateInput): string => {
+export const formatQuestProgressMessage = (
+  input: QuestProgressTemplateInput,
+): string => {
   const percent = normalizePercent(input);
   const lines = [
     `📋 Quest: ${input.questName}`,
@@ -116,8 +127,13 @@ export const formatQuestProgressMessage = (input: QuestProgressTemplateInput): s
   return lines.join("\n");
 };
 
-export const formatMilestoneAlertMessage = (input: MilestoneAlertTemplateInput): string => {
-  const lines = [`🎯 Milestone Reached: $${input.amount}`, `Phase: ${input.phase}`];
+export const formatMilestoneAlertMessage = (
+  input: MilestoneAlertTemplateInput,
+): string => {
+  const lines = [
+    `🎯 Milestone Reached: $${input.amount}`,
+    `Phase: ${input.phase}`,
+  ];
 
   if (hasValue(input.nextTarget)) {
     lines.push(`Next Target: $${input.nextTarget}`);
@@ -135,7 +151,9 @@ export const formatMilestoneAlertMessage = (input: MilestoneAlertTemplateInput):
   return lines.join("\n");
 };
 
-export const formatRiskEventMessage = (input: RiskEventAlertTemplateInput): string => {
+export const formatRiskEventMessage = (
+  input: RiskEventAlertTemplateInput,
+): string => {
   const lines = [
     `${riskIcon(input.severity)} ${input.severity.toUpperCase()}: ${input.eventType}`,
     "",

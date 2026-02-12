@@ -27,7 +27,7 @@ apply_file() {
     return 0
   fi
 
-  sqlite3 "$DB_PATH" < "$file"
+  sqlite3 "$DB_PATH" <"$file"
   sqlite3 "$DB_PATH" "INSERT INTO schema_migrations(filename) VALUES('$name');"
   printf "applied %s\n" "$name"
 }

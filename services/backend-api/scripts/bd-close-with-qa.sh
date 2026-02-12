@@ -79,8 +79,8 @@ bd update "$ISSUE_ID" --notes "$NOTE" >/dev/null
 bd close "$ISSUE_ID" --reason "QA gate passed: test evidence recorded" >/dev/null
 
 if ! bd show "$ISSUE_ID" --json | grep -q '"status": "closed"'; then
-	printf "Failed to close %s. Check blockers/dependencies and close manually after resolving them.\n" "$ISSUE_ID" >&2
-	exit 1
+  printf "Failed to close %s. Check blockers/dependencies and close manually after resolving them.\n" "$ISSUE_ID" >&2
+  exit 1
 fi
 
 printf "Closed %s with QA gate evidence.\n" "$ISSUE_ID"

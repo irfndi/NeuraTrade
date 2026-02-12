@@ -1,7 +1,10 @@
 import type { Bot } from "grammy";
 import type { BackendApiClient } from "../api/client";
 
-export function registerSettingsCommands(bot: Bot, api: BackendApiClient): void {
+export function registerSettingsCommands(
+  bot: Bot,
+  api: BackendApiClient,
+): void {
   bot.command("settings", async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) {

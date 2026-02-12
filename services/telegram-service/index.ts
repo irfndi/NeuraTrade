@@ -46,11 +46,18 @@ bot.catch((err) => {
   const ctx = err.ctx;
   const error = err.error;
   if (error instanceof GrammyError) {
-    logger.error("Telegram request error", error, { updateId: ctx.update.update_id, description: error.description });
+    logger.error("Telegram request error", error, {
+      updateId: ctx.update.update_id,
+      description: error.description,
+    });
   } else if (error instanceof HttpError) {
-    logger.error("Telegram connection error", error, { updateId: ctx.update.update_id });
+    logger.error("Telegram connection error", error, {
+      updateId: ctx.update.update_id,
+    });
   } else {
-    logger.error("Unknown bot error", error as Error, { updateId: ctx.update.update_id });
+    logger.error("Unknown bot error", error as Error, {
+      updateId: ctx.update.update_id,
+    });
   }
 });
 
@@ -151,7 +158,10 @@ const server = Bun.serve({
   reusePort: process.env.BUN_REUSE_PORT === "true",
 });
 
-logger.info("Telegram service started", { port: config.port, mode: config.usePolling ? "polling" : "webhook" });
+logger.info("Telegram service started", {
+  port: config.port,
+  mode: config.usePolling ? "polling" : "webhook",
+});
 
 const grpcServer = startGrpcServer(bot, config.grpcPort);
 

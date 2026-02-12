@@ -189,7 +189,10 @@ export class TelegramGrpcServer {
     this.bot.api
       .sendMessage(chatId, text)
       .then((sent) => {
-        logger.info("Action alert sent via gRPC", { chatId, action: call.request.action });
+        logger.info("Action alert sent via gRPC", {
+          chatId,
+          action: call.request.action,
+        });
         callback(null, {
           ok: true,
           messageId: sent.message_id.toString(),
@@ -207,7 +210,10 @@ export class TelegramGrpcServer {
   };
 
   sendQuestProgress = (
-    call: grpc.ServerUnaryCall<SendQuestProgressRequest, SendQuestProgressResponse>,
+    call: grpc.ServerUnaryCall<
+      SendQuestProgressRequest,
+      SendQuestProgressResponse
+    >,
     callback: grpc.sendUnaryData<SendQuestProgressResponse>,
   ): void => {
     const { chatId } = call.request;
@@ -228,7 +234,10 @@ export class TelegramGrpcServer {
     this.bot.api
       .sendMessage(chatId, text)
       .then((sent) => {
-        logger.info("Quest progress sent via gRPC", { chatId, questId: call.request.questId });
+        logger.info("Quest progress sent via gRPC", {
+          chatId,
+          questId: call.request.questId,
+        });
         callback(null, {
           ok: true,
           messageId: sent.message_id.toString(),
@@ -236,7 +245,9 @@ export class TelegramGrpcServer {
         });
       })
       .catch((error) => {
-        logger.error("Failed to send quest progress via gRPC", error, { chatId });
+        logger.error("Failed to send quest progress via gRPC", error, {
+          chatId,
+        });
         callback(null, {
           ok: false,
           messageId: "",
@@ -246,7 +257,10 @@ export class TelegramGrpcServer {
   };
 
   sendMilestoneAlert = (
-    call: grpc.ServerUnaryCall<SendMilestoneAlertRequest, SendMilestoneAlertResponse>,
+    call: grpc.ServerUnaryCall<
+      SendMilestoneAlertRequest,
+      SendMilestoneAlertResponse
+    >,
     callback: grpc.sendUnaryData<SendMilestoneAlertResponse>,
   ): void => {
     const { chatId } = call.request;
@@ -267,7 +281,10 @@ export class TelegramGrpcServer {
     this.bot.api
       .sendMessage(chatId, text)
       .then((sent) => {
-        logger.info("Milestone alert sent via gRPC", { chatId, amount: call.request.amount });
+        logger.info("Milestone alert sent via gRPC", {
+          chatId,
+          amount: call.request.amount,
+        });
         callback(null, {
           ok: true,
           messageId: sent.message_id.toString(),
@@ -275,7 +292,9 @@ export class TelegramGrpcServer {
         });
       })
       .catch((error) => {
-        logger.error("Failed to send milestone alert via gRPC", error, { chatId });
+        logger.error("Failed to send milestone alert via gRPC", error, {
+          chatId,
+        });
         callback(null, {
           ok: false,
           messageId: "",
@@ -306,10 +325,10 @@ export class TelegramGrpcServer {
     this.bot.api
       .sendMessage(chatId, text)
       .then((sent) => {
-        logger.warn("Risk event sent via gRPC", { 
-          chatId, 
-          eventType: call.request.eventType, 
-          severity: call.request.severity 
+        logger.warn("Risk event sent via gRPC", {
+          chatId,
+          eventType: call.request.eventType,
+          severity: call.request.severity,
         });
         callback(null, {
           ok: true,

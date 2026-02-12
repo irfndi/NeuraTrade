@@ -39,8 +39,7 @@ export interface SendMessageResponse {
   retryAfter: number;
 }
 
-export interface HealthCheckRequest {
-}
+export interface HealthCheckRequest {}
 
 export interface HealthCheckResponse {
   status: string;
@@ -171,7 +170,10 @@ function createBaseSendMessageRequest(): SendMessageRequest {
 }
 
 export const SendMessageRequest: MessageFns<SendMessageRequest> = {
-  encode(message: SendMessageRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: SendMessageRequest,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.chatId !== "") {
       writer.uint32(10).string(message.chatId);
     }
@@ -184,8 +186,12 @@ export const SendMessageRequest: MessageFns<SendMessageRequest> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): SendMessageRequest {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): SendMessageRequest {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseSendMessageRequest();
     while (reader.pos < end) {
@@ -229,14 +235,14 @@ export const SendMessageRequest: MessageFns<SendMessageRequest> = {
       chatId: isSet(object.chatId)
         ? globalThis.String(object.chatId)
         : isSet(object.chat_id)
-        ? globalThis.String(object.chat_id)
-        : "",
+          ? globalThis.String(object.chat_id)
+          : "",
       text: isSet(object.text) ? globalThis.String(object.text) : "",
       parseMode: isSet(object.parseMode)
         ? globalThis.String(object.parseMode)
         : isSet(object.parse_mode)
-        ? globalThis.String(object.parse_mode)
-        : "",
+          ? globalThis.String(object.parse_mode)
+          : "",
     };
   },
 
@@ -254,10 +260,14 @@ export const SendMessageRequest: MessageFns<SendMessageRequest> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SendMessageRequest>, I>>(base?: I): SendMessageRequest {
+  create<I extends Exact<DeepPartial<SendMessageRequest>, I>>(
+    base?: I,
+  ): SendMessageRequest {
     return SendMessageRequest.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SendMessageRequest>, I>>(object: I): SendMessageRequest {
+  fromPartial<I extends Exact<DeepPartial<SendMessageRequest>, I>>(
+    object: I,
+  ): SendMessageRequest {
     const message = createBaseSendMessageRequest();
     message.chatId = object.chatId ?? "";
     message.text = object.text ?? "";
@@ -271,7 +281,10 @@ function createBaseSendMessageResponse(): SendMessageResponse {
 }
 
 export const SendMessageResponse: MessageFns<SendMessageResponse> = {
-  encode(message: SendMessageResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: SendMessageResponse,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.ok !== false) {
       writer.uint32(8).bool(message.ok);
     }
@@ -290,8 +303,12 @@ export const SendMessageResponse: MessageFns<SendMessageResponse> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): SendMessageResponse {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): SendMessageResponse {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseSendMessageResponse();
     while (reader.pos < end) {
@@ -352,8 +369,8 @@ export const SendMessageResponse: MessageFns<SendMessageResponse> = {
       messageId: isSet(object.messageId)
         ? globalThis.String(object.messageId)
         : isSet(object.message_id)
-        ? globalThis.String(object.message_id)
-        : "",
+          ? globalThis.String(object.message_id)
+          : "",
       error: isSet(object.error) ? globalThis.String(object.error) : "",
       errorCode: isSet(object.errorCode)
         ? globalThis.String(object.errorCode)
@@ -384,10 +401,14 @@ export const SendMessageResponse: MessageFns<SendMessageResponse> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SendMessageResponse>, I>>(base?: I): SendMessageResponse {
+  create<I extends Exact<DeepPartial<SendMessageResponse>, I>>(
+    base?: I,
+  ): SendMessageResponse {
     return SendMessageResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SendMessageResponse>, I>>(object: I): SendMessageResponse {
+  fromPartial<I extends Exact<DeepPartial<SendMessageResponse>, I>>(
+    object: I,
+  ): SendMessageResponse {
     const message = createBaseSendMessageResponse();
     message.ok = object.ok ?? false;
     message.messageId = object.messageId ?? "";
@@ -403,12 +424,19 @@ function createBaseHealthCheckRequest(): HealthCheckRequest {
 }
 
 export const HealthCheckRequest: MessageFns<HealthCheckRequest> = {
-  encode(_: HealthCheckRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    _: HealthCheckRequest,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): HealthCheckRequest {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): HealthCheckRequest {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseHealthCheckRequest();
     while (reader.pos < end) {
@@ -432,10 +460,14 @@ export const HealthCheckRequest: MessageFns<HealthCheckRequest> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<HealthCheckRequest>, I>>(base?: I): HealthCheckRequest {
+  create<I extends Exact<DeepPartial<HealthCheckRequest>, I>>(
+    base?: I,
+  ): HealthCheckRequest {
     return HealthCheckRequest.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<HealthCheckRequest>, I>>(_: I): HealthCheckRequest {
+  fromPartial<I extends Exact<DeepPartial<HealthCheckRequest>, I>>(
+    _: I,
+  ): HealthCheckRequest {
     const message = createBaseHealthCheckRequest();
     return message;
   },
@@ -446,7 +478,10 @@ function createBaseHealthCheckResponse(): HealthCheckResponse {
 }
 
 export const HealthCheckResponse: MessageFns<HealthCheckResponse> = {
-  encode(message: HealthCheckResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: HealthCheckResponse,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.status !== "") {
       writer.uint32(10).string(message.status);
     }
@@ -459,8 +494,12 @@ export const HealthCheckResponse: MessageFns<HealthCheckResponse> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): HealthCheckResponse {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): HealthCheckResponse {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseHealthCheckResponse();
     while (reader.pos < end) {
@@ -521,10 +560,14 @@ export const HealthCheckResponse: MessageFns<HealthCheckResponse> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<HealthCheckResponse>, I>>(base?: I): HealthCheckResponse {
+  create<I extends Exact<DeepPartial<HealthCheckResponse>, I>>(
+    base?: I,
+  ): HealthCheckResponse {
     return HealthCheckResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<HealthCheckResponse>, I>>(object: I): HealthCheckResponse {
+  fromPartial<I extends Exact<DeepPartial<HealthCheckResponse>, I>>(
+    object: I,
+  ): HealthCheckResponse {
     const message = createBaseHealthCheckResponse();
     message.status = object.status ?? "";
     message.version = object.version ?? "";
@@ -538,15 +581,22 @@ function createBaseStreamEventsRequest(): StreamEventsRequest {
 }
 
 export const StreamEventsRequest: MessageFns<StreamEventsRequest> = {
-  encode(message: StreamEventsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: StreamEventsRequest,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.chatId !== "") {
       writer.uint32(10).string(message.chatId);
     }
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): StreamEventsRequest {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): StreamEventsRequest {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseStreamEventsRequest();
     while (reader.pos < end) {
@@ -574,8 +624,8 @@ export const StreamEventsRequest: MessageFns<StreamEventsRequest> = {
       chatId: isSet(object.chatId)
         ? globalThis.String(object.chatId)
         : isSet(object.chat_id)
-        ? globalThis.String(object.chat_id)
-        : "",
+          ? globalThis.String(object.chat_id)
+          : "",
     };
   },
 
@@ -587,10 +637,14 @@ export const StreamEventsRequest: MessageFns<StreamEventsRequest> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<StreamEventsRequest>, I>>(base?: I): StreamEventsRequest {
+  create<I extends Exact<DeepPartial<StreamEventsRequest>, I>>(
+    base?: I,
+  ): StreamEventsRequest {
     return StreamEventsRequest.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<StreamEventsRequest>, I>>(object: I): StreamEventsRequest {
+  fromPartial<I extends Exact<DeepPartial<StreamEventsRequest>, I>>(
+    object: I,
+  ): StreamEventsRequest {
     const message = createBaseStreamEventsRequest();
     message.chatId = object.chatId ?? "";
     return message;
@@ -611,7 +665,10 @@ function createBaseActionAlertPayload(): ActionAlertPayload {
 }
 
 export const ActionAlertPayload: MessageFns<ActionAlertPayload> = {
-  encode(message: ActionAlertPayload, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: ActionAlertPayload,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.action !== "") {
       writer.uint32(10).string(message.action);
     }
@@ -639,8 +696,12 @@ export const ActionAlertPayload: MessageFns<ActionAlertPayload> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): ActionAlertPayload {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): ActionAlertPayload {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseActionAlertPayload();
     while (reader.pos < end) {
@@ -725,18 +786,22 @@ export const ActionAlertPayload: MessageFns<ActionAlertPayload> = {
       asset: isSet(object.asset) ? globalThis.String(object.asset) : "",
       price: isSet(object.price) ? globalThis.String(object.price) : "",
       size: isSet(object.size) ? globalThis.String(object.size) : "",
-      strategy: isSet(object.strategy) ? globalThis.String(object.strategy) : "",
-      reasoning: isSet(object.reasoning) ? globalThis.String(object.reasoning) : "",
+      strategy: isSet(object.strategy)
+        ? globalThis.String(object.strategy)
+        : "",
+      reasoning: isSet(object.reasoning)
+        ? globalThis.String(object.reasoning)
+        : "",
       riskCheckPassed: isSet(object.riskCheckPassed)
         ? globalThis.Boolean(object.riskCheckPassed)
         : isSet(object.risk_check_passed)
-        ? globalThis.Boolean(object.risk_check_passed)
-        : false,
+          ? globalThis.Boolean(object.risk_check_passed)
+          : false,
       questId: isSet(object.questId)
         ? globalThis.String(object.questId)
         : isSet(object.quest_id)
-        ? globalThis.String(object.quest_id)
-        : "",
+          ? globalThis.String(object.quest_id)
+          : "",
     };
   },
 
@@ -769,10 +834,14 @@ export const ActionAlertPayload: MessageFns<ActionAlertPayload> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<ActionAlertPayload>, I>>(base?: I): ActionAlertPayload {
+  create<I extends Exact<DeepPartial<ActionAlertPayload>, I>>(
+    base?: I,
+  ): ActionAlertPayload {
     return ActionAlertPayload.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<ActionAlertPayload>, I>>(object: I): ActionAlertPayload {
+  fromPartial<I extends Exact<DeepPartial<ActionAlertPayload>, I>>(
+    object: I,
+  ): ActionAlertPayload {
     const message = createBaseActionAlertPayload();
     message.action = object.action ?? "";
     message.asset = object.asset ?? "";
@@ -787,11 +856,21 @@ export const ActionAlertPayload: MessageFns<ActionAlertPayload> = {
 };
 
 function createBaseQuestProgressPayload(): QuestProgressPayload {
-  return { questId: "", questName: "", current: 0, target: 0, percent: 0, timeRemaining: "" };
+  return {
+    questId: "",
+    questName: "",
+    current: 0,
+    target: 0,
+    percent: 0,
+    timeRemaining: "",
+  };
 }
 
 export const QuestProgressPayload: MessageFns<QuestProgressPayload> = {
-  encode(message: QuestProgressPayload, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: QuestProgressPayload,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.questId !== "") {
       writer.uint32(10).string(message.questId);
     }
@@ -813,8 +892,12 @@ export const QuestProgressPayload: MessageFns<QuestProgressPayload> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): QuestProgressPayload {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): QuestProgressPayload {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseQuestProgressPayload();
     while (reader.pos < end) {
@@ -882,21 +965,21 @@ export const QuestProgressPayload: MessageFns<QuestProgressPayload> = {
       questId: isSet(object.questId)
         ? globalThis.String(object.questId)
         : isSet(object.quest_id)
-        ? globalThis.String(object.quest_id)
-        : "",
+          ? globalThis.String(object.quest_id)
+          : "",
       questName: isSet(object.questName)
         ? globalThis.String(object.questName)
         : isSet(object.quest_name)
-        ? globalThis.String(object.quest_name)
-        : "",
+          ? globalThis.String(object.quest_name)
+          : "",
       current: isSet(object.current) ? globalThis.Number(object.current) : 0,
       target: isSet(object.target) ? globalThis.Number(object.target) : 0,
       percent: isSet(object.percent) ? globalThis.Number(object.percent) : 0,
       timeRemaining: isSet(object.timeRemaining)
         ? globalThis.String(object.timeRemaining)
         : isSet(object.time_remaining)
-        ? globalThis.String(object.time_remaining)
-        : "",
+          ? globalThis.String(object.time_remaining)
+          : "",
     };
   },
 
@@ -923,10 +1006,14 @@ export const QuestProgressPayload: MessageFns<QuestProgressPayload> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<QuestProgressPayload>, I>>(base?: I): QuestProgressPayload {
+  create<I extends Exact<DeepPartial<QuestProgressPayload>, I>>(
+    base?: I,
+  ): QuestProgressPayload {
     return QuestProgressPayload.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<QuestProgressPayload>, I>>(object: I): QuestProgressPayload {
+  fromPartial<I extends Exact<DeepPartial<QuestProgressPayload>, I>>(
+    object: I,
+  ): QuestProgressPayload {
     const message = createBaseQuestProgressPayload();
     message.questId = object.questId ?? "";
     message.questName = object.questName ?? "";
@@ -943,7 +1030,10 @@ function createBaseMilestonePayload(): MilestonePayload {
 }
 
 export const MilestonePayload: MessageFns<MilestonePayload> = {
-  encode(message: MilestonePayload, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: MilestonePayload,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.amount !== "") {
       writer.uint32(10).string(message.amount);
     }
@@ -957,7 +1047,8 @@ export const MilestonePayload: MessageFns<MilestonePayload> = {
   },
 
   decode(input: BinaryReader | Uint8Array, length?: number): MilestonePayload {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseMilestonePayload();
     while (reader.pos < end) {
@@ -1003,8 +1094,8 @@ export const MilestonePayload: MessageFns<MilestonePayload> = {
       nextTarget: isSet(object.nextTarget)
         ? globalThis.String(object.nextTarget)
         : isSet(object.next_target)
-        ? globalThis.String(object.next_target)
-        : "",
+          ? globalThis.String(object.next_target)
+          : "",
     };
   },
 
@@ -1022,10 +1113,14 @@ export const MilestonePayload: MessageFns<MilestonePayload> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<MilestonePayload>, I>>(base?: I): MilestonePayload {
+  create<I extends Exact<DeepPartial<MilestonePayload>, I>>(
+    base?: I,
+  ): MilestonePayload {
     return MilestonePayload.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MilestonePayload>, I>>(object: I): MilestonePayload {
+  fromPartial<I extends Exact<DeepPartial<MilestonePayload>, I>>(
+    object: I,
+  ): MilestonePayload {
     const message = createBaseMilestonePayload();
     message.amount = object.amount ?? "";
     message.phase = object.phase ?? "";
@@ -1039,7 +1134,10 @@ function createBaseRiskEventPayload(): RiskEventPayload {
 }
 
 export const RiskEventPayload: MessageFns<RiskEventPayload> = {
-  encode(message: RiskEventPayload, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: RiskEventPayload,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.eventType !== "") {
       writer.uint32(10).string(message.eventType);
     }
@@ -1049,14 +1147,20 @@ export const RiskEventPayload: MessageFns<RiskEventPayload> = {
     if (message.message !== "") {
       writer.uint32(26).string(message.message);
     }
-    globalThis.Object.entries(message.details).forEach(([key, value]: [string, string]) => {
-      RiskEventPayload_DetailsEntry.encode({ key: key as any, value }, writer.uint32(34).fork()).join();
-    });
+    globalThis.Object.entries(message.details).forEach(
+      ([key, value]: [string, string]) => {
+        RiskEventPayload_DetailsEntry.encode(
+          { key: key as any, value },
+          writer.uint32(34).fork(),
+        ).join();
+      },
+    );
     return writer;
   },
 
   decode(input: BinaryReader | Uint8Array, length?: number): RiskEventPayload {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseRiskEventPayload();
     while (reader.pos < end) {
@@ -1091,7 +1195,10 @@ export const RiskEventPayload: MessageFns<RiskEventPayload> = {
             break;
           }
 
-          const entry4 = RiskEventPayload_DetailsEntry.decode(reader, reader.uint32());
+          const entry4 = RiskEventPayload_DetailsEntry.decode(
+            reader,
+            reader.uint32(),
+          );
           if (entry4.value !== undefined) {
             message.details[entry4.key] = entry4.value;
           }
@@ -1111,18 +1218,20 @@ export const RiskEventPayload: MessageFns<RiskEventPayload> = {
       eventType: isSet(object.eventType)
         ? globalThis.String(object.eventType)
         : isSet(object.event_type)
-        ? globalThis.String(object.event_type)
+          ? globalThis.String(object.event_type)
+          : "",
+      severity: isSet(object.severity)
+        ? globalThis.String(object.severity)
         : "",
-      severity: isSet(object.severity) ? globalThis.String(object.severity) : "",
       message: isSet(object.message) ? globalThis.String(object.message) : "",
       details: isObject(object.details)
         ? (globalThis.Object.entries(object.details) as [string, any][]).reduce(
-          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
-            acc[key] = globalThis.String(value);
-            return acc;
-          },
-          {},
-        )
+            (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+              acc[key] = globalThis.String(value);
+              return acc;
+            },
+            {},
+          )
         : {},
     };
   },
@@ -1139,7 +1248,10 @@ export const RiskEventPayload: MessageFns<RiskEventPayload> = {
       obj.message = message.message;
     }
     if (message.details) {
-      const entries = globalThis.Object.entries(message.details) as [string, string][];
+      const entries = globalThis.Object.entries(message.details) as [
+        string,
+        string,
+      ][];
       if (entries.length > 0) {
         obj.details = {};
         entries.forEach(([k, v]) => {
@@ -1150,15 +1262,21 @@ export const RiskEventPayload: MessageFns<RiskEventPayload> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<RiskEventPayload>, I>>(base?: I): RiskEventPayload {
+  create<I extends Exact<DeepPartial<RiskEventPayload>, I>>(
+    base?: I,
+  ): RiskEventPayload {
     return RiskEventPayload.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<RiskEventPayload>, I>>(object: I): RiskEventPayload {
+  fromPartial<I extends Exact<DeepPartial<RiskEventPayload>, I>>(
+    object: I,
+  ): RiskEventPayload {
     const message = createBaseRiskEventPayload();
     message.eventType = object.eventType ?? "";
     message.severity = object.severity ?? "";
     message.message = object.message ?? "";
-    message.details = (globalThis.Object.entries(object.details ?? {}) as [string, string][]).reduce(
+    message.details = (
+      globalThis.Object.entries(object.details ?? {}) as [string, string][]
+    ).reduce(
       (acc: { [key: string]: string }, [key, value]: [string, string]) => {
         if (value !== undefined) {
           acc[key] = globalThis.String(value);
@@ -1175,79 +1293,89 @@ function createBaseRiskEventPayload_DetailsEntry(): RiskEventPayload_DetailsEntr
   return { key: "", value: "" };
 }
 
-export const RiskEventPayload_DetailsEntry: MessageFns<RiskEventPayload_DetailsEntry> = {
-  encode(message: RiskEventPayload_DetailsEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.key !== "") {
-      writer.uint32(10).string(message.key);
-    }
-    if (message.value !== "") {
-      writer.uint32(18).string(message.value);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): RiskEventPayload_DetailsEntry {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseRiskEventPayload_DetailsEntry();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.key = reader.string();
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.value = reader.string();
-          continue;
-        }
+export const RiskEventPayload_DetailsEntry: MessageFns<RiskEventPayload_DetailsEntry> =
+  {
+    encode(
+      message: RiskEventPayload_DetailsEntry,
+      writer: BinaryWriter = new BinaryWriter(),
+    ): BinaryWriter {
+      if (message.key !== "") {
+        writer.uint32(10).string(message.key);
       }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
+      if (message.value !== "") {
+        writer.uint32(18).string(message.value);
       }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
+      return writer;
+    },
 
-  fromJSON(object: any): RiskEventPayload_DetailsEntry {
-    return {
-      key: isSet(object.key) ? globalThis.String(object.key) : "",
-      value: isSet(object.value) ? globalThis.String(object.value) : "",
-    };
-  },
+    decode(
+      input: BinaryReader | Uint8Array,
+      length?: number,
+    ): RiskEventPayload_DetailsEntry {
+      const reader =
+        input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRiskEventPayload_DetailsEntry();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
 
-  toJSON(message: RiskEventPayload_DetailsEntry): unknown {
-    const obj: any = {};
-    if (message.key !== "") {
-      obj.key = message.key;
-    }
-    if (message.value !== "") {
-      obj.value = message.value;
-    }
-    return obj;
-  },
+            message.key = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
 
-  create<I extends Exact<DeepPartial<RiskEventPayload_DetailsEntry>, I>>(base?: I): RiskEventPayload_DetailsEntry {
-    return RiskEventPayload_DetailsEntry.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<RiskEventPayload_DetailsEntry>, I>>(
-    object: I,
-  ): RiskEventPayload_DetailsEntry {
-    const message = createBaseRiskEventPayload_DetailsEntry();
-    message.key = object.key ?? "";
-    message.value = object.value ?? "";
-    return message;
-  },
-};
+            message.value = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+
+    fromJSON(object: any): RiskEventPayload_DetailsEntry {
+      return {
+        key: isSet(object.key) ? globalThis.String(object.key) : "",
+        value: isSet(object.value) ? globalThis.String(object.value) : "",
+      };
+    },
+
+    toJSON(message: RiskEventPayload_DetailsEntry): unknown {
+      const obj: any = {};
+      if (message.key !== "") {
+        obj.key = message.key;
+      }
+      if (message.value !== "") {
+        obj.value = message.value;
+      }
+      return obj;
+    },
+
+    create<I extends Exact<DeepPartial<RiskEventPayload_DetailsEntry>, I>>(
+      base?: I,
+    ): RiskEventPayload_DetailsEntry {
+      return RiskEventPayload_DetailsEntry.fromPartial(base ?? ({} as any));
+    },
+    fromPartial<I extends Exact<DeepPartial<RiskEventPayload_DetailsEntry>, I>>(
+      object: I,
+    ): RiskEventPayload_DetailsEntry {
+      const message = createBaseRiskEventPayload_DetailsEntry();
+      message.key = object.key ?? "";
+      message.value = object.value ?? "";
+      return message;
+    },
+  };
 
 function createBaseTelegramEvent(): TelegramEvent {
   return {
@@ -1262,7 +1390,10 @@ function createBaseTelegramEvent(): TelegramEvent {
 }
 
 export const TelegramEvent: MessageFns<TelegramEvent> = {
-  encode(message: TelegramEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: TelegramEvent,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.type !== "") {
       writer.uint32(10).string(message.type);
     }
@@ -1273,13 +1404,22 @@ export const TelegramEvent: MessageFns<TelegramEvent> = {
       writer.uint32(24).int64(message.timestamp);
     }
     if (message.action !== undefined) {
-      ActionAlertPayload.encode(message.action, writer.uint32(34).fork()).join();
+      ActionAlertPayload.encode(
+        message.action,
+        writer.uint32(34).fork(),
+      ).join();
     }
     if (message.quest !== undefined) {
-      QuestProgressPayload.encode(message.quest, writer.uint32(42).fork()).join();
+      QuestProgressPayload.encode(
+        message.quest,
+        writer.uint32(42).fork(),
+      ).join();
     }
     if (message.milestone !== undefined) {
-      MilestonePayload.encode(message.milestone, writer.uint32(50).fork()).join();
+      MilestonePayload.encode(
+        message.milestone,
+        writer.uint32(50).fork(),
+      ).join();
     }
     if (message.risk !== undefined) {
       RiskEventPayload.encode(message.risk, writer.uint32(58).fork()).join();
@@ -1288,7 +1428,8 @@ export const TelegramEvent: MessageFns<TelegramEvent> = {
   },
 
   decode(input: BinaryReader | Uint8Array, length?: number): TelegramEvent {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseTelegramEvent();
     while (reader.pos < end) {
@@ -1365,13 +1506,23 @@ export const TelegramEvent: MessageFns<TelegramEvent> = {
       chatId: isSet(object.chatId)
         ? globalThis.String(object.chatId)
         : isSet(object.chat_id)
-        ? globalThis.String(object.chat_id)
-        : "",
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
-      action: isSet(object.action) ? ActionAlertPayload.fromJSON(object.action) : undefined,
-      quest: isSet(object.quest) ? QuestProgressPayload.fromJSON(object.quest) : undefined,
-      milestone: isSet(object.milestone) ? MilestonePayload.fromJSON(object.milestone) : undefined,
-      risk: isSet(object.risk) ? RiskEventPayload.fromJSON(object.risk) : undefined,
+          ? globalThis.String(object.chat_id)
+          : "",
+      timestamp: isSet(object.timestamp)
+        ? globalThis.Number(object.timestamp)
+        : 0,
+      action: isSet(object.action)
+        ? ActionAlertPayload.fromJSON(object.action)
+        : undefined,
+      quest: isSet(object.quest)
+        ? QuestProgressPayload.fromJSON(object.quest)
+        : undefined,
+      milestone: isSet(object.milestone)
+        ? MilestonePayload.fromJSON(object.milestone)
+        : undefined,
+      risk: isSet(object.risk)
+        ? RiskEventPayload.fromJSON(object.risk)
+        : undefined,
     };
   },
 
@@ -1401,26 +1552,34 @@ export const TelegramEvent: MessageFns<TelegramEvent> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<TelegramEvent>, I>>(base?: I): TelegramEvent {
+  create<I extends Exact<DeepPartial<TelegramEvent>, I>>(
+    base?: I,
+  ): TelegramEvent {
     return TelegramEvent.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<TelegramEvent>, I>>(object: I): TelegramEvent {
+  fromPartial<I extends Exact<DeepPartial<TelegramEvent>, I>>(
+    object: I,
+  ): TelegramEvent {
     const message = createBaseTelegramEvent();
     message.type = object.type ?? "";
     message.chatId = object.chatId ?? "";
     message.timestamp = object.timestamp ?? 0;
-    message.action = (object.action !== undefined && object.action !== null)
-      ? ActionAlertPayload.fromPartial(object.action)
-      : undefined;
-    message.quest = (object.quest !== undefined && object.quest !== null)
-      ? QuestProgressPayload.fromPartial(object.quest)
-      : undefined;
-    message.milestone = (object.milestone !== undefined && object.milestone !== null)
-      ? MilestonePayload.fromPartial(object.milestone)
-      : undefined;
-    message.risk = (object.risk !== undefined && object.risk !== null)
-      ? RiskEventPayload.fromPartial(object.risk)
-      : undefined;
+    message.action =
+      object.action !== undefined && object.action !== null
+        ? ActionAlertPayload.fromPartial(object.action)
+        : undefined;
+    message.quest =
+      object.quest !== undefined && object.quest !== null
+        ? QuestProgressPayload.fromPartial(object.quest)
+        : undefined;
+    message.milestone =
+      object.milestone !== undefined && object.milestone !== null
+        ? MilestonePayload.fromPartial(object.milestone)
+        : undefined;
+    message.risk =
+      object.risk !== undefined && object.risk !== null
+        ? RiskEventPayload.fromPartial(object.risk)
+        : undefined;
     return message;
   },
 };
@@ -1440,7 +1599,10 @@ function createBaseSendActionAlertRequest(): SendActionAlertRequest {
 }
 
 export const SendActionAlertRequest: MessageFns<SendActionAlertRequest> = {
-  encode(message: SendActionAlertRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: SendActionAlertRequest,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.chatId !== "") {
       writer.uint32(10).string(message.chatId);
     }
@@ -1471,8 +1633,12 @@ export const SendActionAlertRequest: MessageFns<SendActionAlertRequest> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): SendActionAlertRequest {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): SendActionAlertRequest {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseSendActionAlertRequest();
     while (reader.pos < end) {
@@ -1564,24 +1730,28 @@ export const SendActionAlertRequest: MessageFns<SendActionAlertRequest> = {
       chatId: isSet(object.chatId)
         ? globalThis.String(object.chatId)
         : isSet(object.chat_id)
-        ? globalThis.String(object.chat_id)
-        : "",
+          ? globalThis.String(object.chat_id)
+          : "",
       action: isSet(object.action) ? globalThis.String(object.action) : "",
       asset: isSet(object.asset) ? globalThis.String(object.asset) : "",
       price: isSet(object.price) ? globalThis.String(object.price) : "",
       size: isSet(object.size) ? globalThis.String(object.size) : "",
-      strategy: isSet(object.strategy) ? globalThis.String(object.strategy) : "",
-      reasoning: isSet(object.reasoning) ? globalThis.String(object.reasoning) : "",
+      strategy: isSet(object.strategy)
+        ? globalThis.String(object.strategy)
+        : "",
+      reasoning: isSet(object.reasoning)
+        ? globalThis.String(object.reasoning)
+        : "",
       riskCheckPassed: isSet(object.riskCheckPassed)
         ? globalThis.Boolean(object.riskCheckPassed)
         : isSet(object.risk_check_passed)
-        ? globalThis.Boolean(object.risk_check_passed)
-        : false,
+          ? globalThis.Boolean(object.risk_check_passed)
+          : false,
       questId: isSet(object.questId)
         ? globalThis.String(object.questId)
         : isSet(object.quest_id)
-        ? globalThis.String(object.quest_id)
-        : "",
+          ? globalThis.String(object.quest_id)
+          : "",
     };
   },
 
@@ -1617,10 +1787,14 @@ export const SendActionAlertRequest: MessageFns<SendActionAlertRequest> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SendActionAlertRequest>, I>>(base?: I): SendActionAlertRequest {
+  create<I extends Exact<DeepPartial<SendActionAlertRequest>, I>>(
+    base?: I,
+  ): SendActionAlertRequest {
     return SendActionAlertRequest.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SendActionAlertRequest>, I>>(object: I): SendActionAlertRequest {
+  fromPartial<I extends Exact<DeepPartial<SendActionAlertRequest>, I>>(
+    object: I,
+  ): SendActionAlertRequest {
     const message = createBaseSendActionAlertRequest();
     message.chatId = object.chatId ?? "";
     message.action = object.action ?? "";
@@ -1640,7 +1814,10 @@ function createBaseSendActionAlertResponse(): SendActionAlertResponse {
 }
 
 export const SendActionAlertResponse: MessageFns<SendActionAlertResponse> = {
-  encode(message: SendActionAlertResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: SendActionAlertResponse,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.ok !== false) {
       writer.uint32(8).bool(message.ok);
     }
@@ -1653,8 +1830,12 @@ export const SendActionAlertResponse: MessageFns<SendActionAlertResponse> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): SendActionAlertResponse {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): SendActionAlertResponse {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseSendActionAlertResponse();
     while (reader.pos < end) {
@@ -1699,8 +1880,8 @@ export const SendActionAlertResponse: MessageFns<SendActionAlertResponse> = {
       messageId: isSet(object.messageId)
         ? globalThis.String(object.messageId)
         : isSet(object.message_id)
-        ? globalThis.String(object.message_id)
-        : "",
+          ? globalThis.String(object.message_id)
+          : "",
       error: isSet(object.error) ? globalThis.String(object.error) : "",
     };
   },
@@ -1719,10 +1900,14 @@ export const SendActionAlertResponse: MessageFns<SendActionAlertResponse> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SendActionAlertResponse>, I>>(base?: I): SendActionAlertResponse {
+  create<I extends Exact<DeepPartial<SendActionAlertResponse>, I>>(
+    base?: I,
+  ): SendActionAlertResponse {
     return SendActionAlertResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SendActionAlertResponse>, I>>(object: I): SendActionAlertResponse {
+  fromPartial<I extends Exact<DeepPartial<SendActionAlertResponse>, I>>(
+    object: I,
+  ): SendActionAlertResponse {
     const message = createBaseSendActionAlertResponse();
     message.ok = object.ok ?? false;
     message.messageId = object.messageId ?? "";
@@ -1732,11 +1917,22 @@ export const SendActionAlertResponse: MessageFns<SendActionAlertResponse> = {
 };
 
 function createBaseSendQuestProgressRequest(): SendQuestProgressRequest {
-  return { chatId: "", questId: "", questName: "", current: 0, target: 0, percent: 0, timeRemaining: "" };
+  return {
+    chatId: "",
+    questId: "",
+    questName: "",
+    current: 0,
+    target: 0,
+    percent: 0,
+    timeRemaining: "",
+  };
 }
 
 export const SendQuestProgressRequest: MessageFns<SendQuestProgressRequest> = {
-  encode(message: SendQuestProgressRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: SendQuestProgressRequest,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.chatId !== "") {
       writer.uint32(10).string(message.chatId);
     }
@@ -1761,8 +1957,12 @@ export const SendQuestProgressRequest: MessageFns<SendQuestProgressRequest> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): SendQuestProgressRequest {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): SendQuestProgressRequest {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseSendQuestProgressRequest();
     while (reader.pos < end) {
@@ -1838,26 +2038,26 @@ export const SendQuestProgressRequest: MessageFns<SendQuestProgressRequest> = {
       chatId: isSet(object.chatId)
         ? globalThis.String(object.chatId)
         : isSet(object.chat_id)
-        ? globalThis.String(object.chat_id)
-        : "",
+          ? globalThis.String(object.chat_id)
+          : "",
       questId: isSet(object.questId)
         ? globalThis.String(object.questId)
         : isSet(object.quest_id)
-        ? globalThis.String(object.quest_id)
-        : "",
+          ? globalThis.String(object.quest_id)
+          : "",
       questName: isSet(object.questName)
         ? globalThis.String(object.questName)
         : isSet(object.quest_name)
-        ? globalThis.String(object.quest_name)
-        : "",
+          ? globalThis.String(object.quest_name)
+          : "",
       current: isSet(object.current) ? globalThis.Number(object.current) : 0,
       target: isSet(object.target) ? globalThis.Number(object.target) : 0,
       percent: isSet(object.percent) ? globalThis.Number(object.percent) : 0,
       timeRemaining: isSet(object.timeRemaining)
         ? globalThis.String(object.timeRemaining)
         : isSet(object.time_remaining)
-        ? globalThis.String(object.time_remaining)
-        : "",
+          ? globalThis.String(object.time_remaining)
+          : "",
     };
   },
 
@@ -1887,10 +2087,14 @@ export const SendQuestProgressRequest: MessageFns<SendQuestProgressRequest> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SendQuestProgressRequest>, I>>(base?: I): SendQuestProgressRequest {
+  create<I extends Exact<DeepPartial<SendQuestProgressRequest>, I>>(
+    base?: I,
+  ): SendQuestProgressRequest {
     return SendQuestProgressRequest.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SendQuestProgressRequest>, I>>(object: I): SendQuestProgressRequest {
+  fromPartial<I extends Exact<DeepPartial<SendQuestProgressRequest>, I>>(
+    object: I,
+  ): SendQuestProgressRequest {
     const message = createBaseSendQuestProgressRequest();
     message.chatId = object.chatId ?? "";
     message.questId = object.questId ?? "";
@@ -1907,316 +2111,355 @@ function createBaseSendQuestProgressResponse(): SendQuestProgressResponse {
   return { ok: false, messageId: "", error: "" };
 }
 
-export const SendQuestProgressResponse: MessageFns<SendQuestProgressResponse> = {
-  encode(message: SendQuestProgressResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.ok !== false) {
-      writer.uint32(8).bool(message.ok);
-    }
-    if (message.messageId !== "") {
-      writer.uint32(18).string(message.messageId);
-    }
-    if (message.error !== "") {
-      writer.uint32(26).string(message.error);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): SendQuestProgressResponse {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseSendQuestProgressResponse();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 8) {
-            break;
-          }
-
-          message.ok = reader.bool();
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.messageId = reader.string();
-          continue;
-        }
-        case 3: {
-          if (tag !== 26) {
-            break;
-          }
-
-          message.error = reader.string();
-          continue;
-        }
+export const SendQuestProgressResponse: MessageFns<SendQuestProgressResponse> =
+  {
+    encode(
+      message: SendQuestProgressResponse,
+      writer: BinaryWriter = new BinaryWriter(),
+    ): BinaryWriter {
+      if (message.ok !== false) {
+        writer.uint32(8).bool(message.ok);
       }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
+      if (message.messageId !== "") {
+        writer.uint32(18).string(message.messageId);
       }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
+      if (message.error !== "") {
+        writer.uint32(26).string(message.error);
+      }
+      return writer;
+    },
 
-  fromJSON(object: any): SendQuestProgressResponse {
-    return {
-      ok: isSet(object.ok) ? globalThis.Boolean(object.ok) : false,
-      messageId: isSet(object.messageId)
-        ? globalThis.String(object.messageId)
-        : isSet(object.message_id)
-        ? globalThis.String(object.message_id)
-        : "",
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
-    };
-  },
+    decode(
+      input: BinaryReader | Uint8Array,
+      length?: number,
+    ): SendQuestProgressResponse {
+      const reader =
+        input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSendQuestProgressResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
 
-  toJSON(message: SendQuestProgressResponse): unknown {
-    const obj: any = {};
-    if (message.ok !== false) {
-      obj.ok = message.ok;
-    }
-    if (message.messageId !== "") {
-      obj.messageId = message.messageId;
-    }
-    if (message.error !== "") {
-      obj.error = message.error;
-    }
-    return obj;
-  },
+            message.ok = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
 
-  create<I extends Exact<DeepPartial<SendQuestProgressResponse>, I>>(base?: I): SendQuestProgressResponse {
-    return SendQuestProgressResponse.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SendQuestProgressResponse>, I>>(object: I): SendQuestProgressResponse {
-    const message = createBaseSendQuestProgressResponse();
-    message.ok = object.ok ?? false;
-    message.messageId = object.messageId ?? "";
-    message.error = object.error ?? "";
-    return message;
-  },
-};
+            message.messageId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.error = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+
+    fromJSON(object: any): SendQuestProgressResponse {
+      return {
+        ok: isSet(object.ok) ? globalThis.Boolean(object.ok) : false,
+        messageId: isSet(object.messageId)
+          ? globalThis.String(object.messageId)
+          : isSet(object.message_id)
+            ? globalThis.String(object.message_id)
+            : "",
+        error: isSet(object.error) ? globalThis.String(object.error) : "",
+      };
+    },
+
+    toJSON(message: SendQuestProgressResponse): unknown {
+      const obj: any = {};
+      if (message.ok !== false) {
+        obj.ok = message.ok;
+      }
+      if (message.messageId !== "") {
+        obj.messageId = message.messageId;
+      }
+      if (message.error !== "") {
+        obj.error = message.error;
+      }
+      return obj;
+    },
+
+    create<I extends Exact<DeepPartial<SendQuestProgressResponse>, I>>(
+      base?: I,
+    ): SendQuestProgressResponse {
+      return SendQuestProgressResponse.fromPartial(base ?? ({} as any));
+    },
+    fromPartial<I extends Exact<DeepPartial<SendQuestProgressResponse>, I>>(
+      object: I,
+    ): SendQuestProgressResponse {
+      const message = createBaseSendQuestProgressResponse();
+      message.ok = object.ok ?? false;
+      message.messageId = object.messageId ?? "";
+      message.error = object.error ?? "";
+      return message;
+    },
+  };
 
 function createBaseSendMilestoneAlertRequest(): SendMilestoneAlertRequest {
   return { chatId: "", amount: "", phase: "", nextTarget: "" };
 }
 
-export const SendMilestoneAlertRequest: MessageFns<SendMilestoneAlertRequest> = {
-  encode(message: SendMilestoneAlertRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.chatId !== "") {
-      writer.uint32(10).string(message.chatId);
-    }
-    if (message.amount !== "") {
-      writer.uint32(18).string(message.amount);
-    }
-    if (message.phase !== "") {
-      writer.uint32(26).string(message.phase);
-    }
-    if (message.nextTarget !== "") {
-      writer.uint32(34).string(message.nextTarget);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): SendMilestoneAlertRequest {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseSendMilestoneAlertRequest();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.chatId = reader.string();
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.amount = reader.string();
-          continue;
-        }
-        case 3: {
-          if (tag !== 26) {
-            break;
-          }
-
-          message.phase = reader.string();
-          continue;
-        }
-        case 4: {
-          if (tag !== 34) {
-            break;
-          }
-
-          message.nextTarget = reader.string();
-          continue;
-        }
+export const SendMilestoneAlertRequest: MessageFns<SendMilestoneAlertRequest> =
+  {
+    encode(
+      message: SendMilestoneAlertRequest,
+      writer: BinaryWriter = new BinaryWriter(),
+    ): BinaryWriter {
+      if (message.chatId !== "") {
+        writer.uint32(10).string(message.chatId);
       }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
+      if (message.amount !== "") {
+        writer.uint32(18).string(message.amount);
       }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
+      if (message.phase !== "") {
+        writer.uint32(26).string(message.phase);
+      }
+      if (message.nextTarget !== "") {
+        writer.uint32(34).string(message.nextTarget);
+      }
+      return writer;
+    },
 
-  fromJSON(object: any): SendMilestoneAlertRequest {
-    return {
-      chatId: isSet(object.chatId)
-        ? globalThis.String(object.chatId)
-        : isSet(object.chat_id)
-        ? globalThis.String(object.chat_id)
-        : "",
-      amount: isSet(object.amount) ? globalThis.String(object.amount) : "",
-      phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
-      nextTarget: isSet(object.nextTarget)
-        ? globalThis.String(object.nextTarget)
-        : isSet(object.next_target)
-        ? globalThis.String(object.next_target)
-        : "",
-    };
-  },
+    decode(
+      input: BinaryReader | Uint8Array,
+      length?: number,
+    ): SendMilestoneAlertRequest {
+      const reader =
+        input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSendMilestoneAlertRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
 
-  toJSON(message: SendMilestoneAlertRequest): unknown {
-    const obj: any = {};
-    if (message.chatId !== "") {
-      obj.chatId = message.chatId;
-    }
-    if (message.amount !== "") {
-      obj.amount = message.amount;
-    }
-    if (message.phase !== "") {
-      obj.phase = message.phase;
-    }
-    if (message.nextTarget !== "") {
-      obj.nextTarget = message.nextTarget;
-    }
-    return obj;
-  },
+            message.chatId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
 
-  create<I extends Exact<DeepPartial<SendMilestoneAlertRequest>, I>>(base?: I): SendMilestoneAlertRequest {
-    return SendMilestoneAlertRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SendMilestoneAlertRequest>, I>>(object: I): SendMilestoneAlertRequest {
-    const message = createBaseSendMilestoneAlertRequest();
-    message.chatId = object.chatId ?? "";
-    message.amount = object.amount ?? "";
-    message.phase = object.phase ?? "";
-    message.nextTarget = object.nextTarget ?? "";
-    return message;
-  },
-};
+            message.amount = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.phase = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.nextTarget = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+
+    fromJSON(object: any): SendMilestoneAlertRequest {
+      return {
+        chatId: isSet(object.chatId)
+          ? globalThis.String(object.chatId)
+          : isSet(object.chat_id)
+            ? globalThis.String(object.chat_id)
+            : "",
+        amount: isSet(object.amount) ? globalThis.String(object.amount) : "",
+        phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
+        nextTarget: isSet(object.nextTarget)
+          ? globalThis.String(object.nextTarget)
+          : isSet(object.next_target)
+            ? globalThis.String(object.next_target)
+            : "",
+      };
+    },
+
+    toJSON(message: SendMilestoneAlertRequest): unknown {
+      const obj: any = {};
+      if (message.chatId !== "") {
+        obj.chatId = message.chatId;
+      }
+      if (message.amount !== "") {
+        obj.amount = message.amount;
+      }
+      if (message.phase !== "") {
+        obj.phase = message.phase;
+      }
+      if (message.nextTarget !== "") {
+        obj.nextTarget = message.nextTarget;
+      }
+      return obj;
+    },
+
+    create<I extends Exact<DeepPartial<SendMilestoneAlertRequest>, I>>(
+      base?: I,
+    ): SendMilestoneAlertRequest {
+      return SendMilestoneAlertRequest.fromPartial(base ?? ({} as any));
+    },
+    fromPartial<I extends Exact<DeepPartial<SendMilestoneAlertRequest>, I>>(
+      object: I,
+    ): SendMilestoneAlertRequest {
+      const message = createBaseSendMilestoneAlertRequest();
+      message.chatId = object.chatId ?? "";
+      message.amount = object.amount ?? "";
+      message.phase = object.phase ?? "";
+      message.nextTarget = object.nextTarget ?? "";
+      return message;
+    },
+  };
 
 function createBaseSendMilestoneAlertResponse(): SendMilestoneAlertResponse {
   return { ok: false, messageId: "", error: "" };
 }
 
-export const SendMilestoneAlertResponse: MessageFns<SendMilestoneAlertResponse> = {
-  encode(message: SendMilestoneAlertResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.ok !== false) {
-      writer.uint32(8).bool(message.ok);
-    }
-    if (message.messageId !== "") {
-      writer.uint32(18).string(message.messageId);
-    }
-    if (message.error !== "") {
-      writer.uint32(26).string(message.error);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): SendMilestoneAlertResponse {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseSendMilestoneAlertResponse();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 8) {
-            break;
-          }
-
-          message.ok = reader.bool();
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.messageId = reader.string();
-          continue;
-        }
-        case 3: {
-          if (tag !== 26) {
-            break;
-          }
-
-          message.error = reader.string();
-          continue;
-        }
+export const SendMilestoneAlertResponse: MessageFns<SendMilestoneAlertResponse> =
+  {
+    encode(
+      message: SendMilestoneAlertResponse,
+      writer: BinaryWriter = new BinaryWriter(),
+    ): BinaryWriter {
+      if (message.ok !== false) {
+        writer.uint32(8).bool(message.ok);
       }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
+      if (message.messageId !== "") {
+        writer.uint32(18).string(message.messageId);
       }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
+      if (message.error !== "") {
+        writer.uint32(26).string(message.error);
+      }
+      return writer;
+    },
 
-  fromJSON(object: any): SendMilestoneAlertResponse {
-    return {
-      ok: isSet(object.ok) ? globalThis.Boolean(object.ok) : false,
-      messageId: isSet(object.messageId)
-        ? globalThis.String(object.messageId)
-        : isSet(object.message_id)
-        ? globalThis.String(object.message_id)
-        : "",
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
-    };
-  },
+    decode(
+      input: BinaryReader | Uint8Array,
+      length?: number,
+    ): SendMilestoneAlertResponse {
+      const reader =
+        input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSendMilestoneAlertResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
 
-  toJSON(message: SendMilestoneAlertResponse): unknown {
-    const obj: any = {};
-    if (message.ok !== false) {
-      obj.ok = message.ok;
-    }
-    if (message.messageId !== "") {
-      obj.messageId = message.messageId;
-    }
-    if (message.error !== "") {
-      obj.error = message.error;
-    }
-    return obj;
-  },
+            message.ok = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
 
-  create<I extends Exact<DeepPartial<SendMilestoneAlertResponse>, I>>(base?: I): SendMilestoneAlertResponse {
-    return SendMilestoneAlertResponse.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SendMilestoneAlertResponse>, I>>(object: I): SendMilestoneAlertResponse {
-    const message = createBaseSendMilestoneAlertResponse();
-    message.ok = object.ok ?? false;
-    message.messageId = object.messageId ?? "";
-    message.error = object.error ?? "";
-    return message;
-  },
-};
+            message.messageId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.error = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+
+    fromJSON(object: any): SendMilestoneAlertResponse {
+      return {
+        ok: isSet(object.ok) ? globalThis.Boolean(object.ok) : false,
+        messageId: isSet(object.messageId)
+          ? globalThis.String(object.messageId)
+          : isSet(object.message_id)
+            ? globalThis.String(object.message_id)
+            : "",
+        error: isSet(object.error) ? globalThis.String(object.error) : "",
+      };
+    },
+
+    toJSON(message: SendMilestoneAlertResponse): unknown {
+      const obj: any = {};
+      if (message.ok !== false) {
+        obj.ok = message.ok;
+      }
+      if (message.messageId !== "") {
+        obj.messageId = message.messageId;
+      }
+      if (message.error !== "") {
+        obj.error = message.error;
+      }
+      return obj;
+    },
+
+    create<I extends Exact<DeepPartial<SendMilestoneAlertResponse>, I>>(
+      base?: I,
+    ): SendMilestoneAlertResponse {
+      return SendMilestoneAlertResponse.fromPartial(base ?? ({} as any));
+    },
+    fromPartial<I extends Exact<DeepPartial<SendMilestoneAlertResponse>, I>>(
+      object: I,
+    ): SendMilestoneAlertResponse {
+      const message = createBaseSendMilestoneAlertResponse();
+      message.ok = object.ok ?? false;
+      message.messageId = object.messageId ?? "";
+      message.error = object.error ?? "";
+      return message;
+    },
+  };
 
 function createBaseSendRiskEventRequest(): SendRiskEventRequest {
   return { chatId: "", eventType: "", severity: "", message: "", details: {} };
 }
 
 export const SendRiskEventRequest: MessageFns<SendRiskEventRequest> = {
-  encode(message: SendRiskEventRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: SendRiskEventRequest,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.chatId !== "") {
       writer.uint32(10).string(message.chatId);
     }
@@ -2229,14 +2472,23 @@ export const SendRiskEventRequest: MessageFns<SendRiskEventRequest> = {
     if (message.message !== "") {
       writer.uint32(34).string(message.message);
     }
-    globalThis.Object.entries(message.details).forEach(([key, value]: [string, string]) => {
-      SendRiskEventRequest_DetailsEntry.encode({ key: key as any, value }, writer.uint32(42).fork()).join();
-    });
+    globalThis.Object.entries(message.details).forEach(
+      ([key, value]: [string, string]) => {
+        SendRiskEventRequest_DetailsEntry.encode(
+          { key: key as any, value },
+          writer.uint32(42).fork(),
+        ).join();
+      },
+    );
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): SendRiskEventRequest {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): SendRiskEventRequest {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseSendRiskEventRequest();
     while (reader.pos < end) {
@@ -2279,7 +2531,10 @@ export const SendRiskEventRequest: MessageFns<SendRiskEventRequest> = {
             break;
           }
 
-          const entry5 = SendRiskEventRequest_DetailsEntry.decode(reader, reader.uint32());
+          const entry5 = SendRiskEventRequest_DetailsEntry.decode(
+            reader,
+            reader.uint32(),
+          );
           if (entry5.value !== undefined) {
             message.details[entry5.key] = entry5.value;
           }
@@ -2299,23 +2554,25 @@ export const SendRiskEventRequest: MessageFns<SendRiskEventRequest> = {
       chatId: isSet(object.chatId)
         ? globalThis.String(object.chatId)
         : isSet(object.chat_id)
-        ? globalThis.String(object.chat_id)
-        : "",
+          ? globalThis.String(object.chat_id)
+          : "",
       eventType: isSet(object.eventType)
         ? globalThis.String(object.eventType)
         : isSet(object.event_type)
-        ? globalThis.String(object.event_type)
+          ? globalThis.String(object.event_type)
+          : "",
+      severity: isSet(object.severity)
+        ? globalThis.String(object.severity)
         : "",
-      severity: isSet(object.severity) ? globalThis.String(object.severity) : "",
       message: isSet(object.message) ? globalThis.String(object.message) : "",
       details: isObject(object.details)
         ? (globalThis.Object.entries(object.details) as [string, any][]).reduce(
-          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
-            acc[key] = globalThis.String(value);
-            return acc;
-          },
-          {},
-        )
+            (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+              acc[key] = globalThis.String(value);
+              return acc;
+            },
+            {},
+          )
         : {},
     };
   },
@@ -2335,7 +2592,10 @@ export const SendRiskEventRequest: MessageFns<SendRiskEventRequest> = {
       obj.message = message.message;
     }
     if (message.details) {
-      const entries = globalThis.Object.entries(message.details) as [string, string][];
+      const entries = globalThis.Object.entries(message.details) as [
+        string,
+        string,
+      ][];
       if (entries.length > 0) {
         obj.details = {};
         entries.forEach(([k, v]) => {
@@ -2346,16 +2606,22 @@ export const SendRiskEventRequest: MessageFns<SendRiskEventRequest> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SendRiskEventRequest>, I>>(base?: I): SendRiskEventRequest {
+  create<I extends Exact<DeepPartial<SendRiskEventRequest>, I>>(
+    base?: I,
+  ): SendRiskEventRequest {
     return SendRiskEventRequest.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SendRiskEventRequest>, I>>(object: I): SendRiskEventRequest {
+  fromPartial<I extends Exact<DeepPartial<SendRiskEventRequest>, I>>(
+    object: I,
+  ): SendRiskEventRequest {
     const message = createBaseSendRiskEventRequest();
     message.chatId = object.chatId ?? "";
     message.eventType = object.eventType ?? "";
     message.severity = object.severity ?? "";
     message.message = object.message ?? "";
-    message.details = (globalThis.Object.entries(object.details ?? {}) as [string, string][]).reduce(
+    message.details = (
+      globalThis.Object.entries(object.details ?? {}) as [string, string][]
+    ).reduce(
       (acc: { [key: string]: string }, [key, value]: [string, string]) => {
         if (value !== undefined) {
           acc[key] = globalThis.String(value);
@@ -2372,88 +2638,99 @@ function createBaseSendRiskEventRequest_DetailsEntry(): SendRiskEventRequest_Det
   return { key: "", value: "" };
 }
 
-export const SendRiskEventRequest_DetailsEntry: MessageFns<SendRiskEventRequest_DetailsEntry> = {
-  encode(message: SendRiskEventRequest_DetailsEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.key !== "") {
-      writer.uint32(10).string(message.key);
-    }
-    if (message.value !== "") {
-      writer.uint32(18).string(message.value);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): SendRiskEventRequest_DetailsEntry {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseSendRiskEventRequest_DetailsEntry();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.key = reader.string();
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.value = reader.string();
-          continue;
-        }
+export const SendRiskEventRequest_DetailsEntry: MessageFns<SendRiskEventRequest_DetailsEntry> =
+  {
+    encode(
+      message: SendRiskEventRequest_DetailsEntry,
+      writer: BinaryWriter = new BinaryWriter(),
+    ): BinaryWriter {
+      if (message.key !== "") {
+        writer.uint32(10).string(message.key);
       }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
+      if (message.value !== "") {
+        writer.uint32(18).string(message.value);
       }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
+      return writer;
+    },
 
-  fromJSON(object: any): SendRiskEventRequest_DetailsEntry {
-    return {
-      key: isSet(object.key) ? globalThis.String(object.key) : "",
-      value: isSet(object.value) ? globalThis.String(object.value) : "",
-    };
-  },
+    decode(
+      input: BinaryReader | Uint8Array,
+      length?: number,
+    ): SendRiskEventRequest_DetailsEntry {
+      const reader =
+        input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSendRiskEventRequest_DetailsEntry();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
 
-  toJSON(message: SendRiskEventRequest_DetailsEntry): unknown {
-    const obj: any = {};
-    if (message.key !== "") {
-      obj.key = message.key;
-    }
-    if (message.value !== "") {
-      obj.value = message.value;
-    }
-    return obj;
-  },
+            message.key = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
 
-  create<I extends Exact<DeepPartial<SendRiskEventRequest_DetailsEntry>, I>>(
-    base?: I,
-  ): SendRiskEventRequest_DetailsEntry {
-    return SendRiskEventRequest_DetailsEntry.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SendRiskEventRequest_DetailsEntry>, I>>(
-    object: I,
-  ): SendRiskEventRequest_DetailsEntry {
-    const message = createBaseSendRiskEventRequest_DetailsEntry();
-    message.key = object.key ?? "";
-    message.value = object.value ?? "";
-    return message;
-  },
-};
+            message.value = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+
+    fromJSON(object: any): SendRiskEventRequest_DetailsEntry {
+      return {
+        key: isSet(object.key) ? globalThis.String(object.key) : "",
+        value: isSet(object.value) ? globalThis.String(object.value) : "",
+      };
+    },
+
+    toJSON(message: SendRiskEventRequest_DetailsEntry): unknown {
+      const obj: any = {};
+      if (message.key !== "") {
+        obj.key = message.key;
+      }
+      if (message.value !== "") {
+        obj.value = message.value;
+      }
+      return obj;
+    },
+
+    create<I extends Exact<DeepPartial<SendRiskEventRequest_DetailsEntry>, I>>(
+      base?: I,
+    ): SendRiskEventRequest_DetailsEntry {
+      return SendRiskEventRequest_DetailsEntry.fromPartial(base ?? ({} as any));
+    },
+    fromPartial<
+      I extends Exact<DeepPartial<SendRiskEventRequest_DetailsEntry>, I>,
+    >(object: I): SendRiskEventRequest_DetailsEntry {
+      const message = createBaseSendRiskEventRequest_DetailsEntry();
+      message.key = object.key ?? "";
+      message.value = object.value ?? "";
+      return message;
+    },
+  };
 
 function createBaseSendRiskEventResponse(): SendRiskEventResponse {
   return { ok: false, messageId: "", error: "" };
 }
 
 export const SendRiskEventResponse: MessageFns<SendRiskEventResponse> = {
-  encode(message: SendRiskEventResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(
+    message: SendRiskEventResponse,
+    writer: BinaryWriter = new BinaryWriter(),
+  ): BinaryWriter {
     if (message.ok !== false) {
       writer.uint32(8).bool(message.ok);
     }
@@ -2466,8 +2743,12 @@ export const SendRiskEventResponse: MessageFns<SendRiskEventResponse> = {
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): SendRiskEventResponse {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+  decode(
+    input: BinaryReader | Uint8Array,
+    length?: number,
+  ): SendRiskEventResponse {
+    const reader =
+      input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
     const message = createBaseSendRiskEventResponse();
     while (reader.pos < end) {
@@ -2512,8 +2793,8 @@ export const SendRiskEventResponse: MessageFns<SendRiskEventResponse> = {
       messageId: isSet(object.messageId)
         ? globalThis.String(object.messageId)
         : isSet(object.message_id)
-        ? globalThis.String(object.message_id)
-        : "",
+          ? globalThis.String(object.message_id)
+          : "",
       error: isSet(object.error) ? globalThis.String(object.error) : "",
     };
   },
@@ -2532,10 +2813,14 @@ export const SendRiskEventResponse: MessageFns<SendRiskEventResponse> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SendRiskEventResponse>, I>>(base?: I): SendRiskEventResponse {
+  create<I extends Exact<DeepPartial<SendRiskEventResponse>, I>>(
+    base?: I,
+  ): SendRiskEventResponse {
     return SendRiskEventResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SendRiskEventResponse>, I>>(object: I): SendRiskEventResponse {
+  fromPartial<I extends Exact<DeepPartial<SendRiskEventResponse>, I>>(
+    object: I,
+  ): SendRiskEventResponse {
     const message = createBaseSendRiskEventResponse();
     message.ok = object.ok ?? false;
     message.messageId = object.messageId ?? "";
@@ -2550,28 +2835,40 @@ export const TelegramServiceService = {
     path: "/telegram.TelegramService/SendMessage",
     requestStream: false,
     responseStream: false,
-    requestSerialize: (value: SendMessageRequest): Buffer => Buffer.from(SendMessageRequest.encode(value).finish()),
-    requestDeserialize: (value: Buffer): SendMessageRequest => SendMessageRequest.decode(value),
-    responseSerialize: (value: SendMessageResponse): Buffer => Buffer.from(SendMessageResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): SendMessageResponse => SendMessageResponse.decode(value),
+    requestSerialize: (value: SendMessageRequest): Buffer =>
+      Buffer.from(SendMessageRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SendMessageRequest =>
+      SendMessageRequest.decode(value),
+    responseSerialize: (value: SendMessageResponse): Buffer =>
+      Buffer.from(SendMessageResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SendMessageResponse =>
+      SendMessageResponse.decode(value),
   },
   healthCheck: {
     path: "/telegram.TelegramService/HealthCheck",
     requestStream: false,
     responseStream: false,
-    requestSerialize: (value: HealthCheckRequest): Buffer => Buffer.from(HealthCheckRequest.encode(value).finish()),
-    requestDeserialize: (value: Buffer): HealthCheckRequest => HealthCheckRequest.decode(value),
-    responseSerialize: (value: HealthCheckResponse): Buffer => Buffer.from(HealthCheckResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): HealthCheckResponse => HealthCheckResponse.decode(value),
+    requestSerialize: (value: HealthCheckRequest): Buffer =>
+      Buffer.from(HealthCheckRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): HealthCheckRequest =>
+      HealthCheckRequest.decode(value),
+    responseSerialize: (value: HealthCheckResponse): Buffer =>
+      Buffer.from(HealthCheckResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): HealthCheckResponse =>
+      HealthCheckResponse.decode(value),
   },
   streamEvents: {
     path: "/telegram.TelegramService/StreamEvents",
     requestStream: false,
     responseStream: true,
-    requestSerialize: (value: StreamEventsRequest): Buffer => Buffer.from(StreamEventsRequest.encode(value).finish()),
-    requestDeserialize: (value: Buffer): StreamEventsRequest => StreamEventsRequest.decode(value),
-    responseSerialize: (value: TelegramEvent): Buffer => Buffer.from(TelegramEvent.encode(value).finish()),
-    responseDeserialize: (value: Buffer): TelegramEvent => TelegramEvent.decode(value),
+    requestSerialize: (value: StreamEventsRequest): Buffer =>
+      Buffer.from(StreamEventsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): StreamEventsRequest =>
+      StreamEventsRequest.decode(value),
+    responseSerialize: (value: TelegramEvent): Buffer =>
+      Buffer.from(TelegramEvent.encode(value).finish()),
+    responseDeserialize: (value: Buffer): TelegramEvent =>
+      TelegramEvent.decode(value),
   },
   sendActionAlert: {
     path: "/telegram.TelegramService/SendActionAlert",
@@ -2579,10 +2876,12 @@ export const TelegramServiceService = {
     responseStream: false,
     requestSerialize: (value: SendActionAlertRequest): Buffer =>
       Buffer.from(SendActionAlertRequest.encode(value).finish()),
-    requestDeserialize: (value: Buffer): SendActionAlertRequest => SendActionAlertRequest.decode(value),
+    requestDeserialize: (value: Buffer): SendActionAlertRequest =>
+      SendActionAlertRequest.decode(value),
     responseSerialize: (value: SendActionAlertResponse): Buffer =>
       Buffer.from(SendActionAlertResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): SendActionAlertResponse => SendActionAlertResponse.decode(value),
+    responseDeserialize: (value: Buffer): SendActionAlertResponse =>
+      SendActionAlertResponse.decode(value),
   },
   sendQuestProgress: {
     path: "/telegram.TelegramService/SendQuestProgress",
@@ -2590,10 +2889,12 @@ export const TelegramServiceService = {
     responseStream: false,
     requestSerialize: (value: SendQuestProgressRequest): Buffer =>
       Buffer.from(SendQuestProgressRequest.encode(value).finish()),
-    requestDeserialize: (value: Buffer): SendQuestProgressRequest => SendQuestProgressRequest.decode(value),
+    requestDeserialize: (value: Buffer): SendQuestProgressRequest =>
+      SendQuestProgressRequest.decode(value),
     responseSerialize: (value: SendQuestProgressResponse): Buffer =>
       Buffer.from(SendQuestProgressResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): SendQuestProgressResponse => SendQuestProgressResponse.decode(value),
+    responseDeserialize: (value: Buffer): SendQuestProgressResponse =>
+      SendQuestProgressResponse.decode(value),
   },
   sendMilestoneAlert: {
     path: "/telegram.TelegramService/SendMilestoneAlert",
@@ -2601,20 +2902,25 @@ export const TelegramServiceService = {
     responseStream: false,
     requestSerialize: (value: SendMilestoneAlertRequest): Buffer =>
       Buffer.from(SendMilestoneAlertRequest.encode(value).finish()),
-    requestDeserialize: (value: Buffer): SendMilestoneAlertRequest => SendMilestoneAlertRequest.decode(value),
+    requestDeserialize: (value: Buffer): SendMilestoneAlertRequest =>
+      SendMilestoneAlertRequest.decode(value),
     responseSerialize: (value: SendMilestoneAlertResponse): Buffer =>
       Buffer.from(SendMilestoneAlertResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): SendMilestoneAlertResponse => SendMilestoneAlertResponse.decode(value),
+    responseDeserialize: (value: Buffer): SendMilestoneAlertResponse =>
+      SendMilestoneAlertResponse.decode(value),
   },
   sendRiskEvent: {
     path: "/telegram.TelegramService/SendRiskEvent",
     requestStream: false,
     responseStream: false,
-    requestSerialize: (value: SendRiskEventRequest): Buffer => Buffer.from(SendRiskEventRequest.encode(value).finish()),
-    requestDeserialize: (value: Buffer): SendRiskEventRequest => SendRiskEventRequest.decode(value),
+    requestSerialize: (value: SendRiskEventRequest): Buffer =>
+      Buffer.from(SendRiskEventRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SendRiskEventRequest =>
+      SendRiskEventRequest.decode(value),
     responseSerialize: (value: SendRiskEventResponse): Buffer =>
       Buffer.from(SendRiskEventResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): SendRiskEventResponse => SendRiskEventResponse.decode(value),
+    responseDeserialize: (value: Buffer): SendRiskEventResponse =>
+      SendRiskEventResponse.decode(value),
   },
 } as const;
 
@@ -2622,44 +2928,74 @@ export interface TelegramServiceServer extends UntypedServiceImplementation {
   sendMessage: handleUnaryCall<SendMessageRequest, SendMessageResponse>;
   healthCheck: handleUnaryCall<HealthCheckRequest, HealthCheckResponse>;
   streamEvents: handleServerStreamingCall<StreamEventsRequest, TelegramEvent>;
-  sendActionAlert: handleUnaryCall<SendActionAlertRequest, SendActionAlertResponse>;
-  sendQuestProgress: handleUnaryCall<SendQuestProgressRequest, SendQuestProgressResponse>;
-  sendMilestoneAlert: handleUnaryCall<SendMilestoneAlertRequest, SendMilestoneAlertResponse>;
+  sendActionAlert: handleUnaryCall<
+    SendActionAlertRequest,
+    SendActionAlertResponse
+  >;
+  sendQuestProgress: handleUnaryCall<
+    SendQuestProgressRequest,
+    SendQuestProgressResponse
+  >;
+  sendMilestoneAlert: handleUnaryCall<
+    SendMilestoneAlertRequest,
+    SendMilestoneAlertResponse
+  >;
   sendRiskEvent: handleUnaryCall<SendRiskEventRequest, SendRiskEventResponse>;
 }
 
 export interface TelegramServiceClient extends Client {
   sendMessage(
     request: SendMessageRequest,
-    callback: (error: ServiceError | null, response: SendMessageResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendMessageResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendMessage(
     request: SendMessageRequest,
     metadata: Metadata,
-    callback: (error: ServiceError | null, response: SendMessageResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendMessageResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendMessage(
     request: SendMessageRequest,
     metadata: Metadata,
     options: Partial<CallOptions>,
-    callback: (error: ServiceError | null, response: SendMessageResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendMessageResponse,
+    ) => void,
   ): ClientUnaryCall;
   healthCheck(
     request: HealthCheckRequest,
-    callback: (error: ServiceError | null, response: HealthCheckResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: HealthCheckResponse,
+    ) => void,
   ): ClientUnaryCall;
   healthCheck(
     request: HealthCheckRequest,
     metadata: Metadata,
-    callback: (error: ServiceError | null, response: HealthCheckResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: HealthCheckResponse,
+    ) => void,
   ): ClientUnaryCall;
   healthCheck(
     request: HealthCheckRequest,
     metadata: Metadata,
     options: Partial<CallOptions>,
-    callback: (error: ServiceError | null, response: HealthCheckResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: HealthCheckResponse,
+    ) => void,
   ): ClientUnaryCall;
-  streamEvents(request: StreamEventsRequest, options?: Partial<CallOptions>): ClientReadableStream<TelegramEvent>;
+  streamEvents(
+    request: StreamEventsRequest,
+    options?: Partial<CallOptions>,
+  ): ClientReadableStream<TelegramEvent>;
   streamEvents(
     request: StreamEventsRequest,
     metadata?: Metadata,
@@ -2667,63 +3003,99 @@ export interface TelegramServiceClient extends Client {
   ): ClientReadableStream<TelegramEvent>;
   sendActionAlert(
     request: SendActionAlertRequest,
-    callback: (error: ServiceError | null, response: SendActionAlertResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendActionAlertResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendActionAlert(
     request: SendActionAlertRequest,
     metadata: Metadata,
-    callback: (error: ServiceError | null, response: SendActionAlertResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendActionAlertResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendActionAlert(
     request: SendActionAlertRequest,
     metadata: Metadata,
     options: Partial<CallOptions>,
-    callback: (error: ServiceError | null, response: SendActionAlertResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendActionAlertResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendQuestProgress(
     request: SendQuestProgressRequest,
-    callback: (error: ServiceError | null, response: SendQuestProgressResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendQuestProgressResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendQuestProgress(
     request: SendQuestProgressRequest,
     metadata: Metadata,
-    callback: (error: ServiceError | null, response: SendQuestProgressResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendQuestProgressResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendQuestProgress(
     request: SendQuestProgressRequest,
     metadata: Metadata,
     options: Partial<CallOptions>,
-    callback: (error: ServiceError | null, response: SendQuestProgressResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendQuestProgressResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendMilestoneAlert(
     request: SendMilestoneAlertRequest,
-    callback: (error: ServiceError | null, response: SendMilestoneAlertResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendMilestoneAlertResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendMilestoneAlert(
     request: SendMilestoneAlertRequest,
     metadata: Metadata,
-    callback: (error: ServiceError | null, response: SendMilestoneAlertResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendMilestoneAlertResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendMilestoneAlert(
     request: SendMilestoneAlertRequest,
     metadata: Metadata,
     options: Partial<CallOptions>,
-    callback: (error: ServiceError | null, response: SendMilestoneAlertResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendMilestoneAlertResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendRiskEvent(
     request: SendRiskEventRequest,
-    callback: (error: ServiceError | null, response: SendRiskEventResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendRiskEventResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendRiskEvent(
     request: SendRiskEventRequest,
     metadata: Metadata,
-    callback: (error: ServiceError | null, response: SendRiskEventResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendRiskEventResponse,
+    ) => void,
   ): ClientUnaryCall;
   sendRiskEvent(
     request: SendRiskEventRequest,
     metadata: Metadata,
     options: Partial<CallOptions>,
-    callback: (error: ServiceError | null, response: SendRiskEventResponse) => void,
+    callback: (
+      error: ServiceError | null,
+      response: SendRiskEventResponse,
+    ) => void,
   ): ClientUnaryCall;
 }
 
@@ -2731,22 +3103,40 @@ export const TelegramServiceClient = makeGenericClientConstructor(
   TelegramServiceService,
   "telegram.TelegramService",
 ) as unknown as {
-  new (address: string, credentials: ChannelCredentials, options?: Partial<ClientOptions>): TelegramServiceClient;
+  new (
+    address: string,
+    credentials: ChannelCredentials,
+    options?: Partial<ClientOptions>,
+  ): TelegramServiceClient;
   service: typeof TelegramServiceService;
   serviceName: string;
 };
 
-type Builtin = Date | Function | Uint8Array | string | number | boolean | undefined;
+type Builtin =
+  | Date
+  | Function
+  | Uint8Array
+  | string
+  | number
+  | boolean
+  | undefined;
 
-export type DeepPartial<T> = T extends Builtin ? T
-  : T extends globalThis.Array<infer U> ? globalThis.Array<DeepPartial<U>>
-  : T extends ReadonlyArray<infer U> ? ReadonlyArray<DeepPartial<U>>
-  : T extends {} ? { [K in keyof T]?: DeepPartial<T[K]> }
-  : Partial<T>;
+export type DeepPartial<T> = T extends Builtin
+  ? T
+  : T extends globalThis.Array<infer U>
+    ? globalThis.Array<DeepPartial<U>>
+    : T extends ReadonlyArray<infer U>
+      ? ReadonlyArray<DeepPartial<U>>
+      : T extends {}
+        ? { [K in keyof T]?: DeepPartial<T[K]> }
+        : Partial<T>;
 
 type KeysOfUnion<T> = T extends T ? keyof T : never;
-export type Exact<P, I extends P> = P extends Builtin ? P
-  : P & { [K in keyof P]: Exact<P[K], I[K]> } & { [K in Exclude<keyof I, KeysOfUnion<P>>]: never };
+export type Exact<P, I extends P> = P extends Builtin
+  ? P
+  : P & { [K in keyof P]: Exact<P[K], I[K]> } & {
+      [K in Exclude<keyof I, KeysOfUnion<P>>]: never;
+    };
 
 function longToNumber(int64: { toString(): string }): number {
   const num = globalThis.Number(int64.toString());

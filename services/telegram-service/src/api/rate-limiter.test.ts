@@ -1,5 +1,9 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { RateLimiter, createRateLimiter, DEFAULT_RATE_LIMIT } from "./rate-limiter";
+import {
+  RateLimiter,
+  createRateLimiter,
+  DEFAULT_RATE_LIMIT,
+} from "./rate-limiter";
 
 describe("RateLimiter", () => {
   describe("constructor", () => {
@@ -45,21 +49,21 @@ describe("RateLimiter", () => {
     test("waits for token when none available", async () => {
       const limiter = new RateLimiter({ tokensPerSecond: 100, maxTokens: 1 });
       limiter.tryAcquireToken();
-      
+
       const start = Date.now();
       await limiter.acquireToken();
       const elapsed = Date.now() - start;
-      
+
       expect(elapsed).toBeGreaterThanOrEqual(8);
     });
 
     test("allows multiple sequential acquisitions", async () => {
       const limiter = new RateLimiter({ tokensPerSecond: 100 });
-      
+
       await limiter.acquireToken();
       await limiter.acquireToken();
       await limiter.acquireToken();
-      
+
       expect(true).toBe(true);
     });
   });
@@ -72,14 +76,14 @@ describe("RateLimiter", () => {
 
     test("refills tokens over time", async () => {
       const limiter = new RateLimiter({ tokensPerSecond: 100, maxTokens: 10 });
-      
+
       for (let i = 0; i < 10; i++) {
         limiter.tryAcquireToken();
       }
       expect(limiter.getAvailableTokens()).toBe(0);
-      
-      await new Promise(resolve => setTimeout(resolve, 110));
-      
+
+      await new Promise((resolve) => setTimeout(resolve, 110));
+
       expect(limiter.getAvailableTokens()).toBeGreaterThanOrEqual(10);
     });
   });
@@ -87,22 +91,22 @@ describe("RateLimiter", () => {
   describe("token bucket behavior", () => {
     test("tokens cap at maxTokens", async () => {
       const limiter = new RateLimiter({ tokensPerSecond: 1000, maxTokens: 5 });
-      
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
       expect(limiter.getAvailableTokens()).toBe(5);
     });
 
     test("tokens accumulate gradually", async () => {
       const limiter = new RateLimiter({ tokensPerSecond: 100, maxTokens: 10 });
-      
+
       for (let i = 0; i < 5; i++) {
         limiter.tryAcquireToken();
       }
       expect(limiter.getAvailableTokens()).toBe(5);
-      
-      await new Promise(resolve => setTimeout(resolve, 30));
-      
+
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
       const tokens = limiter.getAvailableTokens();
       expect(tokens).toBeGreaterThan(5);
     });

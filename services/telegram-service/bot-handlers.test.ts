@@ -82,7 +82,9 @@ describe("Bot Handlers", () => {
     const api = createMockApi();
     // Simulate user not found first
     (api.getUserByChatId as any).mockImplementationOnce(() =>
-      Effect.fail(new ApiException({ type: "not_found", message: "Not found" })),
+      Effect.fail(
+        new ApiException({ type: "not_found", message: "Not found" }),
+      ),
     );
 
     const ctx = createMockContext();
@@ -108,7 +110,9 @@ describe("Bot Handlers", () => {
     const api = createMockApi();
     // Simulate user not found first
     (api.getUserByChatId as any).mockImplementationOnce(() =>
-      Effect.fail(new ApiException({ type: "not_found", message: "Not found" })),
+      Effect.fail(
+        new ApiException({ type: "not_found", message: "Not found" }),
+      ),
     );
     // Simulate registration failure
     (api.registerTelegramUser as any).mockImplementationOnce(() =>
@@ -175,7 +179,9 @@ describe("Bot Handlers", () => {
   test("handleStatus asks to register if user not found", async () => {
     const api = createMockApi();
     (api.getUserByChatId as any).mockImplementation(() =>
-      Effect.fail(new ApiException({ type: "not_found", message: "Not found" })),
+      Effect.fail(
+        new ApiException({ type: "not_found", message: "Not found" }),
+      ),
     );
     const ctx = createMockContext();
     await handleStatus(api)(ctx);

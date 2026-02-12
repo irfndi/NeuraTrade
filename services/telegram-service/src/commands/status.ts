@@ -23,7 +23,9 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         ? await api.getNotificationPreference(String(userId))
         : { enabled: true };
 
-      const createdAt = new Date(userResult.user.created_at).toLocaleDateString();
+      const createdAt = new Date(
+        userResult.user.created_at,
+      ).toLocaleDateString();
       const tier = userResult.user.subscription_tier;
       const notificationStatus = preference.enabled ? "Active" : "Paused";
 

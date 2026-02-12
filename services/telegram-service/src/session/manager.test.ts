@@ -36,14 +36,21 @@ describe("SessionManager", () => {
 
     test("updates existing session", () => {
       manager.setSession("123", { step: "awaiting_auth_email" });
-      const updated = manager.setSession("123", { step: "awaiting_auth_password" });
+      const updated = manager.setSession("123", {
+        step: "awaiting_auth_password",
+      });
       expect(updated.step).toBe("awaiting_auth_password");
       expect(updated.createdAt).toBe(updated.createdAt);
     });
 
     test("preserves data when updating step", () => {
-      manager.setSession("123", { step: "awaiting_auth_email", data: { email: "test@example.com" } });
-      const updated = manager.setSession("123", { step: "awaiting_auth_password" });
+      manager.setSession("123", {
+        step: "awaiting_auth_email",
+        data: { email: "test@example.com" },
+      });
+      const updated = manager.setSession("123", {
+        step: "awaiting_auth_password",
+      });
       expect(updated.data.email).toBe("test@example.com");
     });
   });
@@ -62,7 +69,10 @@ describe("SessionManager", () => {
 
   describe("setData", () => {
     test("merges data into existing session", () => {
-      manager.setSession("123", { step: "awaiting_auth_email", data: { email: "test@example.com" } });
+      manager.setSession("123", {
+        step: "awaiting_auth_email",
+        data: { email: "test@example.com" },
+      });
       const updated = manager.setData("123", { password: "secret" });
       expect(updated?.data.email).toBe("test@example.com");
       expect(updated?.data.password).toBe("secret");
@@ -119,9 +129,9 @@ describe("SessionManager", () => {
     test("expired session returns null", async () => {
       const shortTtlManager = new SessionManager(1);
       shortTtlManager.setSession("123", { step: "awaiting_auth_email" });
-      
-      await new Promise(resolve => setTimeout(resolve, 10));
-      
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
       expect(shortTtlManager.getSession("123")).toBeNull();
     });
 
@@ -129,9 +139,9 @@ describe("SessionManager", () => {
       const shortTtlManager = new SessionManager(1);
       shortTtlManager.setSession("1", { step: "awaiting_auth_email" });
       shortTtlManager.setSession("2", { step: "awaiting_wallet_address" });
-      
-      await new Promise(resolve => setTimeout(resolve, 10));
-      
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
       const cleaned = shortTtlManager.cleanupExpired();
       expect(cleaned).toBe(2);
       expect(shortTtlManager.getActiveSessionCount()).toBe(0);
@@ -146,11 +156,15 @@ describe("createSessionState", () => {
     expect(session.step).toBe("idle");
     expect(session.data).toEqual({});
     expect(session.createdAt).toBeInstanceOf(Date);
-    expect(session.expiresAt.getTime()).toBeGreaterThan(session.createdAt.getTime());
+    expect(session.expiresAt.getTime()).toBeGreaterThan(
+      session.createdAt.getTime(),
+    );
   });
 
   test("creates session with custom values", () => {
-    const session = createSessionState("123", "awaiting_auth_email", { email: "test@example.com" });
+    const session = createSessionState("123", "awaiting_auth_email", {
+      email: "test@example.com",
+    });
     expect(session.step).toBe("awaiting_auth_email");
     expect(session.data.email).toBe("test@example.com");
   });

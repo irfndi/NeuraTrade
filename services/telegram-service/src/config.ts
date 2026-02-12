@@ -8,7 +8,10 @@ import { Effect } from "effect";
  * @param fallback - The default port to use if raw is invalid
  * @returns The resolved port number
  */
-export const resolvePort = (raw: string | undefined, fallback: number): number => {
+export const resolvePort = (
+  raw: string | undefined,
+  fallback: number,
+): number => {
   if (!raw) {
     return fallback;
   }
