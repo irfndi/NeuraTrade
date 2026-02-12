@@ -17,6 +17,9 @@ paths = [
     '''signoz/''',
     '''\.cache/''',
     '''bin/''',
+    '''docs/security/''',
+    '''\.gitguardian\.yaml$''',
+    '''\.github/DEPLOYMENT-SECRETS\.md$''',
 ]
 
 regexes = [
@@ -34,9 +37,17 @@ regexes = [
     '''localhost''',
     '''sk_live_test''',
     '''sk_test_''',
+    '''sk_live_abcdef''',
+    '''sk_live_abc123''',
     '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9''',
     '''supersecret''',
+    '''supersecret123''',
     '''pass123''',
     '''mypass''',
     '''abc123''',
+    '''secretpassword''',
+    '''my-super-secret-value-12345''',
+    '''thisisaverylongpassword123''',
+    '''yourdomain''',
+    '''Bearer your-''',
 ]
