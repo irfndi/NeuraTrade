@@ -1,0 +1,8 @@
+title = "NeuraTrade Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allow test data in encryption tests"
+paths = ['''services/backend-api/internal/crypto/encryption_test\.go''']
