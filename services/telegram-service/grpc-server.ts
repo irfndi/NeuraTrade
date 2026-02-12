@@ -151,6 +151,8 @@ export class TelegramGrpcServer {
           ok: true,
           messageId,
           error: "",
+          errorCode: "",
+          retryAfter: 0,
         });
       })
       .catch((error) => {
@@ -159,6 +161,8 @@ export class TelegramGrpcServer {
           ok: false,
           messageId: "",
           error: error instanceof Error ? error.message : "Unknown error",
+          errorCode: "INTERNAL_ERROR",
+          retryAfter: 0,
         });
       });
   };
