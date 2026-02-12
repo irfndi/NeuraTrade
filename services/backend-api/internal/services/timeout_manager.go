@@ -200,7 +200,10 @@ func (tm *TimeoutManager) CancelOperation(operationID string) {
 	if cancel, exists := tm.activeContexts[operationID]; exists {
 		cancel()
 		delete(tm.activeContexts, operationID)
-		tm.logger.WithField("operation_id", operationID).Info("Operation cancelled")
+		tm.logger.WithFields(map[string]interface{}{"operation_id": operationID}).Info("Operation cancelled")
+		observability.AddBreadcrumbWithData(context.Background(), "timeout_manager", "Operation cancelled", sentry.LevelInfo, map[string]interface{}{
+			"operation_id": operationID,
+		})
 	}
 }
 
@@ -211,7 +214,10 @@ func (tm *TimeoutManager) CancelAllOperations() {
 
 	for operationID, cancel := range tm.activeContexts {
 		cancel()
-		tm.logger.WithField("operation_id", operationID).Info("Operation cancelled during shutdown")
+		tm.logger.WithFields(map[string]interface{}{"operation_id": operationID}).Info("Operation cancelled during shutdown")
+		observability.AddBreadcrumbWithData(context.Background(), "timeout_manager", "Operation cancelled during shutdown", sentry.LevelInfo, map[string]interface{}{
+			"operation_id": operationID,
+		})
 	}
 
 	tm.activeContexts = make(map[string]context.CancelFunc)
@@ -262,6 +268,15 @@ func (tm *TimeoutManager) ExecuteWithTimeout(
 	opCtx := tm.CreateOperationContext(operationType, operationID)
 	defer tm.CompleteOperation(operationID)
 
+	spanCtx, span := observability.StartSpanWithTags(opCtx.Ctx, "timeout.execute", "TimeoutManager.ExecuteWithTimeout", map[string]string{
+		"operation_type": operationType,
+		"operation_id":   operationID,
+	})
+	var opErr error
+	defer func() {
+		observability.FinishSpan(span, opErr)
+	}()
+
 	// Create a channel to receive the result
 	resultChan := make(chan struct {
 		data interface{}
@@ -270,7 +285,7 @@ func (tm *TimeoutManager) ExecuteWithTimeout(
 
 	// Execute the operation in a goroutine
 	go func() {
-		data, err := operation(opCtx.Ctx)
+		data, err := operation(spanCtx)
 		resultChan <- struct {
 			data interface{}
 			err  error
@@ -287,6 +302,13 @@ func (tm *TimeoutManager) ExecuteWithTimeout(
 			"duration":       duration,
 			"success":        result.err == nil,
 		}).Debug("Operation completed")
+		if result.err != nil {
+			observability.CaptureExceptionWithContext(spanCtx, result.err, "timeout_operation_error", map[string]interface{}{
+				"operation_type": operationType,
+				"operation_id":   operationID,
+				"duration_ms":    duration.Milliseconds(),
+			})
+		}
 		return result.data, result.err
 
 	case <-opCtx.Ctx.Done():
@@ -297,6 +319,20 @@ func (tm *TimeoutManager) ExecuteWithTimeout(
 			"duration":       duration,
 			"timeout":        opCtx.Timeout,
 		}).Warn("Operation timed out")
+		span.SetTag("timeout", "true")
+		span.SetData("timeout", opCtx.Timeout.String())
+		observability.AddBreadcrumbWithData(spanCtx, "timeout_manager", "Operation timed out", sentry.LevelWarning, map[string]interface{}{
+			"operation_type": operationType,
+			"operation_id":   operationID,
+			"timeout":        opCtx.Timeout.String(),
+			"duration_ms":    duration.Milliseconds(),
+		})
+		observability.CaptureExceptionWithContext(spanCtx, opCtx.Ctx.Err(), "timeout_operation_timeout", map[string]interface{}{
+			"operation_type": operationType,
+			"operation_id":   operationID,
+			"timeout":        opCtx.Timeout.String(),
+			"duration_ms":    duration.Milliseconds(),
+		})
 		return nil, opCtx.Ctx.Err()
 	}
 }
@@ -326,6 +362,11 @@ func (tm *TimeoutManager) ExecuteWithTimeoutAndFallback(
 			"operation_id":   operationID,
 			"error":          err.Error(),
 		}).Info("Executing fallback operation")
+		observability.AddBreadcrumbWithData(context.Background(), "timeout_manager", "Executing fallback operation", sentry.LevelInfo, map[string]interface{}{
+			"operation_type": operationType,
+			"operation_id":   operationID,
+			"error":          err.Error(),
+		})
 
 		return fallback()
 	}
@@ -341,11 +382,14 @@ func (tm *TimeoutManager) MonitorOperationHealth() {
 
 	for range ticker.C {
 		activeCount := tm.GetActiveOperationCount()
-		tm.logger.WithField("active_operations", activeCount).Debug("Operation health check")
+		tm.logger.WithFields(map[string]interface{}{"active_operations": activeCount}).Debug("Operation health check")
 
 		// Log warning if too many operations are active
 		if activeCount > 100 {
-			tm.logger.WithField("active_operations", activeCount).Warn("High number of active operations detected")
+			tm.logger.WithFields(map[string]interface{}{"active_operations": activeCount}).Warn("High number of active operations detected")
+			observability.AddBreadcrumbWithData(context.Background(), "timeout_manager", "High number of active operations detected", sentry.LevelWarning, map[string]interface{}{
+				"active_operations": activeCount,
+			})
 		}
 	}
 }
@@ -359,6 +403,7 @@ func (tm *TimeoutManager) UpdateTimeoutConfig(config *TimeoutConfig) {
 	defer tm.mu.Unlock()
 	tm.config = config
 	tm.logger.Info("Timeout configuration updated")
+	observability.AddBreadcrumb(context.Background(), "timeout_manager", "Timeout configuration updated", sentry.LevelInfo)
 }
 
 // GetTimeoutConfig retrieves the current timeout configuration.
@@ -403,6 +448,8 @@ func (tm *TimeoutManager) GetOperationStats() map[string]interface{} {
 // Shutdown stops the timeout manager, cancelling all active operations.
 func (tm *TimeoutManager) Shutdown() {
 	tm.logger.Info("Shutting down timeout manager")
+	observability.AddBreadcrumb(context.Background(), "timeout_manager", "Shutting down timeout manager", sentry.LevelInfo)
 	tm.CancelAllOperations()
 	tm.logger.Info("Timeout manager shutdown complete")
+	observability.AddBreadcrumb(context.Background(), "timeout_manager", "Timeout manager shutdown complete", sentry.LevelInfo)
 }

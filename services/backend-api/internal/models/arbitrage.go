@@ -125,3 +125,31 @@ type ArbitrageOpportunitiesResponse struct {
 	Count         int                            `json:"count"`
 	Timestamp     time.Time                      `json:"timestamp"`
 }
+
+// MultiLegOpportunity represents a detected arbitrage opportunity across 3 or more legs (e.g., Triangular Arbitrage).
+type MultiLegOpportunity struct {
+	ID               string          `json:"id" db:"id"`
+	ExchangeID       int             `json:"exchange_id" db:"exchange_id"`
+	ExchangeName     string          `json:"exchange_name" db:"exchange_name"`
+	Legs             []ArbitrageLeg  `json:"legs"`
+	TotalProfit      decimal.Decimal `json:"total_profit" db:"total_profit"`
+	ProfitPercentage decimal.Decimal `json:"profit_percentage" db:"profit_percentage"`
+	DetectedAt       time.Time       `json:"detected_at" db:"detected_at"`
+	ExpiresAt        time.Time       `json:"expires_at" db:"expires_at"`
+}
+
+// ArbitrageLeg represents a single step in a multi-leg trade.
+type ArbitrageLeg struct {
+	Symbol   string          `json:"symbol"`
+	Side     string          `json:"side"` // "buy" or "sell"
+	Price    decimal.Decimal `json:"price"`
+	Volume   decimal.Decimal `json:"volume"`
+	QuoteFee decimal.Decimal `json:"quote_fee"`
+}
+
+// MultiLegOpportunitiesResponse is the API response for multiple multi-leg opportunities.
+type MultiLegOpportunitiesResponse struct {
+	Opportunities []MultiLegOpportunity `json:"opportunities"`
+	Count         int                   `json:"count"`
+	Timestamp     time.Time             `json:"timestamp"`
+}

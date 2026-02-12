@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -39,6 +41,10 @@ type Config struct {
 	Blacklist BlacklistConfig `mapstructure:"blacklist"`
 	// Auth holds configuration for authentication.
 	Auth AuthConfig `mapstructure:"auth"`
+	// Fees holds configuration for exchange fee defaults.
+	Fees FeesConfig `mapstructure:"fees"`
+	// Analytics holds configuration for analytics features.
+	Analytics AnalyticsConfig `mapstructure:"analytics"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -110,6 +116,8 @@ type CCXTConfig struct {
 	GrpcAddress string `mapstructure:"grpc_address"`
 	// Timeout is the request timeout in seconds.
 	Timeout int `mapstructure:"timeout"`
+	// AdminAPIKey is the API key for authenticating with admin endpoints.
+	AdminAPIKey string `mapstructure:"admin_api_key"`
 }
 
 // TelegramConfig defines settings for the Telegram notification bot.
@@ -258,6 +266,29 @@ type AuthConfig struct {
 	JWTSecret string `mapstructure:"jwt_secret"`
 }
 
+// FeesConfig defines default fees used when exchange-specific data is missing.
+type FeesConfig struct {
+	// DefaultTakerFee is the fallback taker fee (decimal percent, e.g., 0.001 = 0.1%).
+	DefaultTakerFee float64 `mapstructure:"default_taker_fee"`
+	// DefaultMakerFee is the fallback maker fee (decimal percent).
+	DefaultMakerFee float64 `mapstructure:"default_maker_fee"`
+}
+
+// AnalyticsConfig defines settings for analytics features.
+type AnalyticsConfig struct {
+	EnableForecasting       bool    `mapstructure:"enable_forecasting"`
+	EnableCorrelation       bool    `mapstructure:"enable_correlation"`
+	EnableRegimeDetection   bool    `mapstructure:"enable_regime_detection"`
+	ForecastLookback        int     `mapstructure:"forecast_lookback"`
+	ForecastHorizon         int     `mapstructure:"forecast_horizon"`
+	CorrelationWindow       int     `mapstructure:"correlation_window"`
+	CorrelationMinPoints    int     `mapstructure:"correlation_min_points"`
+	RegimeShortWindow       int     `mapstructure:"regime_short_window"`
+	RegimeLongWindow        int     `mapstructure:"regime_long_window"`
+	VolatilityHighThreshold float64 `mapstructure:"volatility_high_threshold"`
+	VolatilityLowThreshold  float64 `mapstructure:"volatility_low_threshold"`
+}
+
 // Load reads the configuration from the config file and environment variables.
 //
 // Returns:
@@ -285,6 +316,23 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("database.driver", "DATABASE_DRIVER")
 	_ = viper.BindEnv("database.sqlite_path", "SQLITE_PATH")
 	_ = viper.BindEnv("database.sqlite_vector_extension_path", "SQLITE_VEC_EXTENSION_PATH")
+
+	// Bind database environment variables explicitly
+	_ = viper.BindEnv("database.host", "DATABASE_HOST")
+	_ = viper.BindEnv("database.port", "DATABASE_PORT")
+	_ = viper.BindEnv("database.user", "DATABASE_USER")
+	_ = viper.BindEnv("database.password", "DATABASE_PASSWORD")
+	_ = viper.BindEnv("database.dbname", "DATABASE_DBNAME")
+	_ = viper.BindEnv("database.sslmode", "DATABASE_SSLMODE")
+
+	// Bind CCXT service environment variables
+	_ = viper.BindEnv("ccxt.service_url", "CCXT_SERVICE_URL")
+	_ = viper.BindEnv("ccxt.grpc_address", "CCXT_GRPC_ADDRESS")
+	_ = viper.BindEnv("ccxt.admin_api_key", "ADMIN_API_KEY")
+
+	// Bind Telegram service environment variables
+	_ = viper.BindEnv("telegram.service_url", "TELEGRAM_SERVICE_URL")
+	_ = viper.BindEnv("telegram.grpc_address", "TELEGRAM_GRPC_ADDRESS")
 
 	// Read config file
 	if err := viper.ReadInConfig(); err != nil {
@@ -353,14 +401,40 @@ func setDefaults() {
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
 
-	// CCXT
-	viper.SetDefault("ccxt.service_url", "http://localhost:3001")
-	viper.SetDefault("ccxt.grpc_address", "localhost:50051")
+	// CCXT - Use Docker service names when running in Docker/Coolify
+	// Note: These defaults can be overridden by explicit env vars (CCXT_SERVICE_URL, CCXT_GRPC_ADDRESS)
+	// which are bound via viper.BindEnv() in Load(). Viper prioritizes env vars over defaults.
+	//
+	// Detect Coolify environment by checking for COOLIFY_* variables
+	// Coolify sets COOLIFY_CONTAINER_NAME, COOLIFY_RESOURCE_UUID, etc., not just COOLIFY=true
+	isCoolify := os.Getenv("COOLIFY_CONTAINER_NAME") != "" ||
+		os.Getenv("COOLIFY_RESOURCE_UUID") != "" ||
+		os.Getenv("COOLIFY") == "true"
+	isDocker := os.Getenv("DOCKER_ENVIRONMENT") == "true" || isCoolify
+
+	// Log detection result for debugging (only if log package is available)
+	if isDocker {
+		log.Printf("INFO: Docker/Coolify environment detected (COOLIFY=%v, DOCKER_ENVIRONMENT=%s)",
+			isCoolify, os.Getenv("DOCKER_ENVIRONMENT"))
+		viper.SetDefault("ccxt.service_url", "http://ccxt-service:3001")
+		viper.SetDefault("ccxt.grpc_address", "ccxt-service:50051")
+	} else {
+		viper.SetDefault("ccxt.service_url", "http://localhost:3001")
+		// Use explicit IPv4 address to avoid IPv6 resolution issues on some systems
+		viper.SetDefault("ccxt.grpc_address", "127.0.0.1:50051")
+	}
 	viper.SetDefault("ccxt.timeout", 30)
 
-	// Telegram
-	viper.SetDefault("telegram.service_url", "http://localhost:3002")
-	viper.SetDefault("telegram.grpc_address", "localhost:50052")
+	// Telegram - Use Docker service names when running in Docker/Coolify
+	// Note: These defaults can be overridden by explicit env vars (TELEGRAM_SERVICE_URL, TELEGRAM_GRPC_ADDRESS)
+	if isDocker {
+		viper.SetDefault("telegram.service_url", "http://telegram-service:3002")
+		viper.SetDefault("telegram.grpc_address", "telegram-service:50052")
+	} else {
+		viper.SetDefault("telegram.service_url", "http://localhost:3002")
+		// Use explicit IPv4 address to avoid IPv6 resolution issues on some systems
+		viper.SetDefault("telegram.grpc_address", "127.0.0.1:50052")
+	}
 	viper.SetDefault("telegram.admin_api_key", "")
 	viper.SetDefault("telegram.bot_token", "")
 	viper.SetDefault("telegram.webhook_url", "")
@@ -425,6 +499,23 @@ func setDefaults() {
 
 	// Auth
 	viper.SetDefault("auth.jwt_secret", "")
+
+	// Fees
+	viper.SetDefault("fees.default_taker_fee", 0.001)
+	viper.SetDefault("fees.default_maker_fee", 0.001)
+
+	// Analytics
+	viper.SetDefault("analytics.enable_forecasting", true)
+	viper.SetDefault("analytics.enable_correlation", true)
+	viper.SetDefault("analytics.enable_regime_detection", true)
+	viper.SetDefault("analytics.forecast_lookback", 120)
+	viper.SetDefault("analytics.forecast_horizon", 8)
+	viper.SetDefault("analytics.correlation_window", 200)
+	viper.SetDefault("analytics.correlation_min_points", 30)
+	viper.SetDefault("analytics.regime_short_window", 20)
+	viper.SetDefault("analytics.regime_long_window", 60)
+	viper.SetDefault("analytics.volatility_high_threshold", 0.03)
+	viper.SetDefault("analytics.volatility_low_threshold", 0.005)
 }
 
 // GetServiceURL returns the CCXT service URL.
@@ -487,6 +578,21 @@ func validateConfig(config *Config) error {
 		for _, insecure := range insecureSecrets {
 			if config.Auth.JWTSecret == insecure {
 				return fmt.Errorf("JWT_SECRET '%s' is insecure and not allowed in %s environment. Please use a secure, randomly generated secret", insecure, config.Environment)
+			}
+		}
+
+		// Validate Service URLs for production/staging
+		// If running in a containerized environment (common for production/staging),
+		// localhost/127.0.0.1 is almost always wrong for service-to-service communication.
+		if config.CCXT.ServiceURL != "" {
+			if strings.Contains(config.CCXT.ServiceURL, "localhost") || strings.Contains(config.CCXT.ServiceURL, "127.0.0.1") {
+				log.Printf("WARNING: CCXT_SERVICE_URL '%s' contains localhost/127.0.0.1 in %s environment. This may cause connectivity issues between containers.", config.CCXT.ServiceURL, config.Environment)
+			}
+		}
+
+		if config.Telegram.ServiceURL != "" {
+			if strings.Contains(config.Telegram.ServiceURL, "localhost") || strings.Contains(config.Telegram.ServiceURL, "127.0.0.1") {
+				log.Printf("WARNING: TELEGRAM_SERVICE_URL '%s' contains localhost/127.0.0.1 in %s environment. This may cause connectivity issues between containers.", config.Telegram.ServiceURL, config.Environment)
 			}
 		}
 	}

@@ -75,7 +75,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 	}
 
 	s.lastUpdate = time.Now()
-	s.logger.Infof("Initialized CCXT service with %d supported exchanges", len(s.supportedExchanges))
+	s.logger.Info("Initialized CCXT service", "count", len(s.supportedExchanges))
 
 	// Load existing blacklist from database if blacklist cache is available
 	if s.blacklistCache != nil {
@@ -164,6 +164,14 @@ func (s *Service) FetchMarketData(ctx context.Context, exchanges []string, symbo
 	resp, err := s.client.GetTickers(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch tickers: %w", err)
+	}
+
+	// CRITICAL FIX: Validate response is not empty
+	// This helps detect API format mismatches or CCXT service issues
+	if len(resp.Tickers) == 0 {
+		s.logger.Warn("Empty tickers response from CCXT service",
+			"exchanges", exchanges,
+			"symbols_count", len(symbols))
 	}
 
 	marketData := make([]MarketPriceInterface, 0, len(resp.Tickers))

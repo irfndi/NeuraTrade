@@ -6,7 +6,10 @@ import (
 	"math"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	"github.com/google/uuid"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/shopspring/decimal"
 )
 
@@ -16,6 +19,8 @@ type FuturesArbitrageCalculator struct {
 	DefaultFundingInterval  int             // Hours between funding payments (usually 8)
 	RiskFreeRate            decimal.Decimal // Annual risk-free rate for calculations
 	DefaultVolatilityWindow int             // Days for volatility calculation
+	feeProvider             FeeProvider
+	defaultTakerFee         decimal.Decimal
 }
 
 // NewFuturesArbitrageCalculator creates a new calculator instance.
@@ -28,7 +33,17 @@ func NewFuturesArbitrageCalculator() *FuturesArbitrageCalculator {
 		DefaultFundingInterval:  8,
 		RiskFreeRate:            decimal.NewFromFloat(0.05), // 5% annual risk-free rate
 		DefaultVolatilityWindow: 30,
+		defaultTakerFee:         decimal.NewFromFloat(0.001),
 	}
+}
+
+// WithFeeProvider attaches a fee provider to the calculator.
+func (calc *FuturesArbitrageCalculator) WithFeeProvider(provider FeeProvider, defaultTakerFee decimal.Decimal) *FuturesArbitrageCalculator {
+	calc.feeProvider = provider
+	if !defaultTakerFee.IsZero() {
+		calc.defaultTakerFee = defaultTakerFee
+	}
+	return calc
 }
 
 // CalculateFuturesArbitrage calculates a complete futures arbitrage opportunity.
@@ -65,6 +80,13 @@ func (calc *FuturesArbitrageCalculator) CalculateFuturesArbitrage(
 	profitDaily := calc.calculatePeriodProfit(input.BaseAmount, hourlyRate, 24)
 	profitWeekly := calc.calculatePeriodProfit(input.BaseAmount, hourlyRate, 24*7)
 	profitMonthly := calc.calculatePeriodProfit(input.BaseAmount, hourlyRate, 24*30)
+
+	// Subtract estimated fees (entry + exit on both exchanges)
+	estimatedFees := calc.calculateFees(input.BaseAmount, input.LongExchange, input.ShortExchange, input.Symbol)
+	profit8h = profit8h.Sub(estimatedFees)
+	profitDaily = profitDaily.Sub(estimatedFees)
+	profitWeekly = profitWeekly.Sub(estimatedFees)
+	profitMonthly = profitMonthly.Sub(estimatedFees)
 
 	// Calculate risk metrics
 	riskScore := calc.CalculateRiskScore(input)
@@ -144,12 +166,34 @@ func (calc *FuturesArbitrageCalculator) CalculateAPY(hourlyRate decimal.Decimal)
 		return decimal.Zero
 	}
 
+	// Cap extreme rates to prevent float64 overflow
+	// 1% per hour max (which is already an extreme 8760% APY before compounding)
+	maxHourlyRate := decimal.NewFromFloat(0.01)
+	cappedRate := hourlyRate
+	if hourlyRate.Abs().GreaterThan(maxHourlyRate) {
+		if hourlyRate.IsPositive() {
+			cappedRate = maxHourlyRate
+		} else {
+			cappedRate = maxHourlyRate.Neg()
+		}
+	}
+
 	// Convert to float for power calculation
-	hourlyRateFloat, _ := hourlyRate.Float64()
+	hourlyRateFloat, _ := cappedRate.Float64()
 	hoursPerYear := 24.0 * 365.0
 
 	// Calculate compound growth
 	apyFloat := math.Pow(1+hourlyRateFloat, hoursPerYear) - 1
+
+	// Cap APY at 1000% (10.0 as decimal) to prevent unrealistic values
+	// and handle potential infinity from extreme compounding
+	if math.IsInf(apyFloat, 1) || apyFloat > 10.0 {
+		apyFloat = 10.0
+	} else if math.IsInf(apyFloat, -1) || apyFloat < -1.0 {
+		apyFloat = -1.0 // Can't lose more than 100%
+	} else if math.IsNaN(apyFloat) {
+		apyFloat = 0.0
+	}
 
 	// Convert back to decimal and express as percentage
 	return decimal.NewFromFloat(apyFloat * 100)
@@ -264,7 +308,8 @@ func (calc *FuturesArbitrageCalculator) calculateVolatilityScore(
 	return volatilityScore
 }
 
-// calculateLiquidityScore calculates liquidity-based score
+// calculateLiquidityScore calculates liquidity-based score using simplified estimation.
+// For more accurate liquidity scoring, use calculateLiquidityScoreWithOrderBook.
 func (calc *FuturesArbitrageCalculator) calculateLiquidityScore(
 	input models.FuturesArbitrageCalculationInput,
 ) decimal.Decimal {
@@ -309,6 +354,169 @@ func (calc *FuturesArbitrageCalculator) calculateLiquidityScore(
 	}
 
 	return liquidityScore
+}
+
+// OrderBookMetricsInput contains order book metrics for both exchanges.
+type OrderBookMetricsInput struct {
+	LongExchangeMetrics  *models.OrderBookMetrics
+	ShortExchangeMetrics *models.OrderBookMetrics
+}
+
+// calculateLiquidityScoreWithOrderBook calculates liquidity score using real order book data.
+// This provides more accurate liquidity assessment than the simplified estimation.
+func (calc *FuturesArbitrageCalculator) calculateLiquidityScoreWithOrderBook(
+	input models.FuturesArbitrageCalculationInput,
+	orderBookMetrics *OrderBookMetricsInput,
+) decimal.Decimal {
+	// If no order book metrics provided, fall back to simplified calculation
+	if orderBookMetrics == nil ||
+		orderBookMetrics.LongExchangeMetrics == nil ||
+		orderBookMetrics.ShortExchangeMetrics == nil {
+		return calc.calculateLiquidityScore(input)
+	}
+
+	longMetrics := orderBookMetrics.LongExchangeMetrics
+	shortMetrics := orderBookMetrics.ShortExchangeMetrics
+
+	// 1. Bid-Ask Spread Score (40% weight)
+	// Average spread across both exchanges
+	avgSpread := longMetrics.BidAskSpread.Add(shortMetrics.BidAskSpread).Div(decimal.NewFromInt(2))
+	// Lower spread = higher score. 0.01% = 100, 0.5% = 0
+	spreadScore := decimal.NewFromInt(100).Sub(avgSpread.Mul(decimal.NewFromInt(200)))
+	if spreadScore.LessThan(decimal.Zero) {
+		spreadScore = decimal.Zero
+	}
+
+	// 2. Depth Score (35% weight)
+	// Total depth within 1% of mid price on both exchanges
+	totalDepth := longMetrics.BidDepth1Pct.Add(longMetrics.AskDepth1Pct).
+		Add(shortMetrics.BidDepth1Pct).Add(shortMetrics.AskDepth1Pct)
+	// $2M total depth = 100, scale proportionally
+	depthScore := totalDepth.Div(decimal.NewFromInt(20000)).Mul(decimal.NewFromInt(10))
+	if depthScore.GreaterThan(decimal.NewFromInt(100)) {
+		depthScore = decimal.NewFromInt(100)
+	}
+
+	// 3. Slippage Score (25% weight)
+	// Check if position size is fillable with acceptable slippage
+	positionSizeKey := input.BaseAmount.Round(0).String()
+	slippageScore := decimal.NewFromInt(100) // Default high if no estimate
+
+	// Check long exchange slippage
+	if longEstimate, exists := longMetrics.SlippageEstimates[positionSizeKey]; exists {
+		if !longEstimate.IsFillable {
+			slippageScore = decimal.NewFromInt(20) // Heavy penalty for unfillable
+		} else {
+			// Score based on slippage percentage (0% = 100, 1% = 0)
+			longSlippageScore := decimal.NewFromInt(100).Sub(longEstimate.BuySlippage.Mul(decimal.NewFromInt(100)))
+			if longSlippageScore.LessThan(slippageScore) {
+				slippageScore = longSlippageScore
+			}
+		}
+	}
+
+	// Check short exchange slippage
+	if shortEstimate, exists := shortMetrics.SlippageEstimates[positionSizeKey]; exists {
+		if !shortEstimate.IsFillable {
+			slippageScore = decimal.NewFromInt(20)
+		} else {
+			shortSlippageScore := decimal.NewFromInt(100).Sub(shortEstimate.SellSlippage.Mul(decimal.NewFromInt(100)))
+			if shortSlippageScore.LessThan(slippageScore) {
+				slippageScore = shortSlippageScore
+			}
+		}
+	}
+
+	if slippageScore.LessThan(decimal.Zero) {
+		slippageScore = decimal.Zero
+	}
+
+	// Calculate weighted average
+	liquidityScore := spreadScore.Mul(decimal.NewFromFloat(0.40)).
+		Add(depthScore.Mul(decimal.NewFromFloat(0.35))).
+		Add(slippageScore.Mul(decimal.NewFromFloat(0.25)))
+
+	// Ensure score is within 0-100 range
+	if liquidityScore.GreaterThan(decimal.NewFromInt(100)) {
+		liquidityScore = decimal.NewFromInt(100)
+	} else if liquidityScore.LessThan(decimal.Zero) {
+		liquidityScore = decimal.Zero
+	}
+
+	return liquidityScore
+}
+
+// EstimateExecutionSlippage estimates total slippage for executing the arbitrage strategy.
+// Returns the combined slippage percentage for both legs of the trade.
+func (calc *FuturesArbitrageCalculator) EstimateExecutionSlippage(
+	positionSize decimal.Decimal,
+	orderBookMetrics *OrderBookMetricsInput,
+) decimal.Decimal {
+	if orderBookMetrics == nil ||
+		orderBookMetrics.LongExchangeMetrics == nil ||
+		orderBookMetrics.ShortExchangeMetrics == nil {
+		// Return default slippage estimate when no order book data available
+		if positionSize.GreaterThan(decimal.NewFromInt(100000)) {
+			return decimal.NewFromFloat(0.2) // 0.2% for large positions
+		} else if positionSize.GreaterThan(decimal.NewFromInt(50000)) {
+			return decimal.NewFromFloat(0.1) // 0.1% for medium positions
+		}
+		return decimal.NewFromFloat(0.05) // 0.05% for small positions
+	}
+
+	positionKey := positionSize.Round(0).String()
+	totalSlippage := decimal.Zero
+
+	// Add long position slippage (buying on long exchange)
+	if estimate, exists := orderBookMetrics.LongExchangeMetrics.SlippageEstimates[positionKey]; exists {
+		totalSlippage = totalSlippage.Add(estimate.BuySlippage)
+	}
+
+	// Add short position slippage (selling on short exchange)
+	if estimate, exists := orderBookMetrics.ShortExchangeMetrics.SlippageEstimates[positionKey]; exists {
+		totalSlippage = totalSlippage.Add(estimate.SellSlippage)
+	}
+
+	return totalSlippage
+}
+
+// CalculateFuturesArbitrageWithOrderBook calculates arbitrage opportunity with real order book data.
+// This provides more accurate profit estimates by accounting for actual slippage.
+func (calc *FuturesArbitrageCalculator) CalculateFuturesArbitrageWithOrderBook(
+	input models.FuturesArbitrageCalculationInput,
+	orderBookMetrics *OrderBookMetricsInput,
+) (*models.FuturesArbitrageOpportunity, error) {
+	// First calculate the base opportunity
+	opportunity, err := calc.CalculateFuturesArbitrage(input)
+	if err != nil {
+		return nil, err
+	}
+
+	// If order book metrics are available, enhance the calculation
+	if orderBookMetrics != nil &&
+		orderBookMetrics.LongExchangeMetrics != nil &&
+		orderBookMetrics.ShortExchangeMetrics != nil {
+
+		// Recalculate liquidity score with real data
+		opportunity.LiquidityScore = calc.calculateLiquidityScoreWithOrderBook(input, orderBookMetrics)
+
+		// Calculate execution slippage
+		slippage := calc.EstimateExecutionSlippage(input.BaseAmount, orderBookMetrics)
+
+		// Adjust profit estimates by slippage
+		slippageCost := input.BaseAmount.Mul(slippage).Div(decimal.NewFromInt(100))
+		opportunity.EstimatedProfit8h = opportunity.EstimatedProfit8h.Sub(slippageCost)
+		opportunity.EstimatedProfitDaily = opportunity.EstimatedProfitDaily.Sub(slippageCost)
+		opportunity.EstimatedProfitWeekly = opportunity.EstimatedProfitWeekly.Sub(slippageCost)
+		opportunity.EstimatedProfitMonthly = opportunity.EstimatedProfitMonthly.Sub(slippageCost)
+
+		// Mark opportunity as inactive if slippage makes it unprofitable
+		if opportunity.EstimatedProfitDaily.LessThanOrEqual(decimal.Zero) {
+			opportunity.IsActive = false
+		}
+	}
+
+	return opportunity, nil
 }
 
 // CalculatePositionSizing calculates recommended position sizes and leverage.
@@ -432,19 +640,29 @@ func (calc *FuturesArbitrageCalculator) calculateNextFundingTime(fundingInterval
 	}
 
 	currentHour := now.Hour()
-	var nextFundingHour int
+	currentMinute := now.Minute()
+	nextFundingHour := -1
 
 	for _, hour := range fundingHours {
-		if hour > currentHour {
+		// If we're past the current hour, or at the current hour but past minute 0,
+		// the next funding is at the next funding hour
+		if hour > currentHour || (hour == currentHour && currentMinute == 0) {
 			nextFundingHour = hour
 			break
 		}
 	}
 
-	// If no funding hour found today, use first hour of next day
-	if nextFundingHour == 0 && currentHour >= fundingHours[len(fundingHours)-1] {
+	// If no funding hour found today (we're past the last funding hour),
+	// use first hour of next day
+	if nextFundingHour == -1 {
 		nextFundingHour = fundingHours[0]
 		return time.Date(now.Year(), now.Month(), now.Day()+1, nextFundingHour, 0, 0, 0, time.UTC)
+	}
+
+	// If the next funding time is exactly now (currentMinute == 0 and hour matches),
+	// that means funding just happened, so return current time
+	if nextFundingHour == currentHour && currentMinute == 0 {
+		return time.Date(now.Year(), now.Month(), now.Day(), nextFundingHour, 0, 0, 0, time.UTC)
 	}
 
 	return time.Date(now.Year(), now.Month(), now.Day(), nextFundingHour, 0, 0, 0, time.UTC)
@@ -705,6 +923,12 @@ func (calc *FuturesArbitrageCalculator) CalculateArbitrageOpportunities(
 	ctx context.Context,
 	marketData map[string][]models.MarketData,
 ) ([]models.ArbitrageOpportunity, error) {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpArbitrage, "FuturesArbitrageCalculator.CalculateArbitrageOpportunities", map[string]string{
+		"exchange_count": fmt.Sprintf("%d", len(marketData)),
+	})
+	defer observability.FinishSpan(span, nil)
+
+	observability.AddBreadcrumb(spanCtx, "arbitrage_calculator", fmt.Sprintf("Calculating arbitrage opportunities across %d exchanges", len(marketData)), sentry.LevelInfo)
 
 	var opportunities []models.ArbitrageOpportunity
 
@@ -738,6 +962,8 @@ func (calc *FuturesArbitrageCalculator) CalculateArbitrageOpportunities(
 		symbolOpportunities := calc.calculateSymbolArbitrage(symbol, exchangeData)
 		opportunities = append(opportunities, symbolOpportunities...)
 	}
+
+	observability.AddBreadcrumb(spanCtx, "arbitrage_calculator", fmt.Sprintf("Found %d arbitrage opportunities", len(opportunities)), sentry.LevelInfo)
 
 	return opportunities, nil
 }
@@ -799,7 +1025,7 @@ func (calc *FuturesArbitrageCalculator) calculateSymbolArbitrage(
 		_ = estimatedAmount.Sub(baseAmount) // profitAmount for logging/debugging
 
 		opportunity := models.ArbitrageOpportunity{
-			ID:               fmt.Sprintf("%s_%s_%s_%d", symbol, lowestExchange, highestExchange, time.Now().Unix()),
+			ID:               uuid.New().String(),
 			TradingPairID:    lowestData.TradingPairID,
 			BuyExchangeID:    lowestData.ExchangeID,
 			SellExchangeID:   highestData.ExchangeID,
@@ -876,7 +1102,7 @@ func (calc *FuturesArbitrageCalculator) GenerateCompleteStrategy(
 			opportunity.NetFundingRate,
 		),
 		MarginRequired: chosenSize.Div(opportunity.RecommendedLeverage),
-		EstimatedFees:  calc.calculateFees(chosenSize),
+		EstimatedFees:  calc.calculateFees(chosenSize, opportunity.LongExchange, opportunity.ShortExchange, opportunity.Symbol),
 	}
 
 	// Generate SHORT position details
@@ -898,7 +1124,7 @@ func (calc *FuturesArbitrageCalculator) GenerateCompleteStrategy(
 			opportunity.NetFundingRate.Neg(),
 		),
 		MarginRequired: chosenSize.Div(opportunity.RecommendedLeverage),
-		EstimatedFees:  calc.calculateFees(chosenSize),
+		EstimatedFees:  calc.calculateFees(chosenSize, opportunity.LongExchange, opportunity.ShortExchange, opportunity.Symbol),
 	}
 
 	// Generate execution plan
@@ -967,9 +1193,22 @@ func (calc *FuturesArbitrageCalculator) calculateTakeProfitPrice(
 	return entryPrice.Mul(decimal.NewFromInt(1).Sub(targetProfit))
 }
 
-func (calc *FuturesArbitrageCalculator) calculateFees(positionSize decimal.Decimal) decimal.Decimal {
-	// Typical taker fee 0.05% * 2 (entry + exit)
-	return positionSize.Mul(decimal.NewFromFloat(0.001))
+func (calc *FuturesArbitrageCalculator) calculateFees(positionSize decimal.Decimal, longExchange string, shortExchange string, symbol string) decimal.Decimal {
+	// Typical taker fee 0.05% * 2 (entry + exit) on both legs
+	longFee := calc.defaultTakerFee
+	shortFee := calc.defaultTakerFee
+
+	if calc.feeProvider != nil {
+		if fee, err := calc.feeProvider.GetTakerFee(context.Background(), longExchange, symbol); err == nil && !fee.IsZero() {
+			longFee = fee
+		}
+		if fee, err := calc.feeProvider.GetTakerFee(context.Background(), shortExchange, symbol); err == nil && !fee.IsZero() {
+			shortFee = fee
+		}
+	}
+
+	totalFeeRate := longFee.Add(shortFee).Mul(decimal.NewFromInt(2))
+	return positionSize.Mul(totalFeeRate)
 }
 
 func (calc *FuturesArbitrageCalculator) generateExecutionOrder(

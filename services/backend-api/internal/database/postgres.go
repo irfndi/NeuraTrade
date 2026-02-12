@@ -271,6 +271,11 @@ func (db *PostgresDB) IsReady() bool {
 	return db != nil && db.Pool != nil
 }
 
+// Begin starts a new transaction.
+func (db *PostgresDB) Begin(ctx context.Context) (pgx.Tx, error) {
+	return db.Pool.Begin(ctx)
+}
+
 func buildPGXPoolConfig(cfg *config.DatabaseConfig) (*pgxpool.Config, error) {
 	var dsn string
 

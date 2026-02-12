@@ -20,6 +20,7 @@ Guides for deploying and managing the application in various environments.
 System design and architectural documentation.
 
 - [Architecture Recommendations](./architecture/ARCHITECTURE_RECOMMENDATIONS.md) - Architectural guidelines and recommendations
+- [Advanced Analytics Status](./architecture/ADVANCED_ANALYTICS.md) - Analytics/forecasting scope and deferrals
 - [Analytics Persistence Guide](./architecture/ANALYTICS_PERSISTENCE_GUIDE.md) - Guide for persisting analytics data
 - [Cache Analysis](./architecture/CACHE_ANALYSIS.md) - Redis cache architecture and analysis
 - [Storage Estimation](./architecture/STORAGE_ESTIMATION_HIGH_FREQUENCY.md) - Storage requirements for high-frequency trading

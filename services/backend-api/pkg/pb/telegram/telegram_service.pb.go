@@ -83,10 +83,15 @@ func (x *SendMessageRequest) GetParseMode() string {
 }
 
 type SendMessageResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	MessageId     string                 `protobuf:"bytes,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Ok        bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	MessageId string                 `protobuf:"bytes,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	Error     string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	// Structured error code for programmatic handling
+	// Values: USER_BLOCKED, CHAT_NOT_FOUND, RATE_LIMITED, INVALID_REQUEST, NETWORK_ERROR, TIMEOUT, INTERNAL_ERROR, UNKNOWN
+	ErrorCode string `protobuf:"bytes,4,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	// Seconds to wait before retrying (only set for RATE_LIMITED errors)
+	RetryAfter    int32 `protobuf:"varint,5,opt,name=retry_after,json=retryAfter,proto3" json:"retry_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -140,6 +145,20 @@ func (x *SendMessageResponse) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *SendMessageResponse) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *SendMessageResponse) GetRetryAfter() int32 {
+	if x != nil {
+		return x.RetryAfter
+	}
+	return 0
 }
 
 type HealthCheckRequest struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -519,6 +520,13 @@ func (h *MarketHandler) GetOrderBook(c *gin.Context) {
 	exchange := c.Param("exchange")
 	symbol := c.Param("symbol")
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+
+	// Bounds check for int32 conversion safety (prevents overflow)
+	if limit < 0 {
+		limit = 0
+	} else if limit > math.MaxInt32 {
+		limit = math.MaxInt32
+	}
 
 	if exchange == "" || symbol == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Exchange and symbol are required"})

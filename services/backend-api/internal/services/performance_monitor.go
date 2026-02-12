@@ -132,6 +132,12 @@ func NewPerformanceMonitor(logger *zaplogrus.Logger, redis *redis.Client, ctx co
 
 // Start begins performance monitoring.
 func (pm *PerformanceMonitor) Start() {
+	_, span := observability.StartSpanWithTags(pm.ctx, observability.SpanOpMarketData, "PerformanceMonitor.Start", map[string]string{
+		"metrics_interval": pm.metricsInterval.String(),
+	})
+	defer observability.FinishSpan(span, nil)
+
+	observability.AddBreadcrumb(pm.ctx, "performance_monitor", "Starting performance monitoring service", sentry.LevelInfo)
 	pm.logger.Info("Starting performance monitor")
 
 	ticker := time.NewTicker(pm.metricsInterval)
@@ -142,9 +148,11 @@ func (pm *PerformanceMonitor) Start() {
 		case <-ticker.C:
 			pm.collectMetrics()
 		case <-pm.stopChan:
+			observability.AddBreadcrumb(pm.ctx, "performance_monitor", "Performance monitor stopped", sentry.LevelInfo)
 			pm.logger.Info("Performance monitor stopped")
 			return
 		case <-pm.ctx.Done():
+			observability.AddBreadcrumb(pm.ctx, "performance_monitor", "Performance monitor context cancelled", sentry.LevelWarning)
 			pm.logger.Info("Performance monitor context cancelled")
 			return
 		}
@@ -163,6 +171,9 @@ func (pm *PerformanceMonitor) Stop() {
 
 // collectMetrics gathers all performance metrics
 func (pm *PerformanceMonitor) collectMetrics() {
+	ctx, span := observability.StartSpanWithTags(pm.ctx, observability.SpanOpMarketData, "PerformanceMonitor.collectMetrics", nil)
+	defer observability.FinishSpan(span, nil)
+
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -177,6 +188,8 @@ func (pm *PerformanceMonitor) collectMetrics() {
 
 	// Log performance summary
 	pm.logPerformanceSummary()
+
+	observability.AddBreadcrumb(ctx, "performance_monitor", "Metrics collection completed", sentry.LevelDebug)
 }
 
 // collectSystemMetrics gathers system-level metrics
@@ -222,7 +235,7 @@ func (pm *PerformanceMonitor) collectRedisMetrics() {
 	// Get Redis info
 	_, err := pm.redis.Info(pm.ctx, "stats", "memory").Result()
 	if err != nil {
-		pm.logger.WithError(err).Warn("Failed to get Redis info")
+		pm.logger.WithFields(map[string]interface{}{"error": err}).Warn("Failed to get Redis info")
 		return
 	}
 

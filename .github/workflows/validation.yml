@@ -8,6 +8,11 @@ on:
     branches: [ main, develop, development ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
 jobs:
   validation:
     name: Lint, Format, Test, Build

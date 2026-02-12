@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -114,6 +115,12 @@ func NewCircuitBreaker(name string, config CircuitBreakerConfig, logger *zaplogr
 //
 //	error: Error from function or circuit breaker.
 func (cb *CircuitBreaker) Execute(ctx context.Context, fn func(context.Context) error) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpHTTPClient, fmt.Sprintf("CircuitBreaker.Execute[%s]", cb.name), map[string]string{
+		"circuit_breaker": cb.name,
+		"state":           cb.getStateName(),
+	})
+	defer observability.FinishSpan(span, nil)
+
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
@@ -131,14 +138,16 @@ func (cb *CircuitBreaker) Execute(ctx context.Context, fn func(context.Context) 
 
 	// Execute the function
 	start := time.Now()
-	err := fn(ctx)
+	err := fn(spanCtx)
 	duration := time.Since(start)
 
 	// Record the result
 	if err != nil {
 		cb.onFailure(err, duration)
+		observability.AddBreadcrumb(spanCtx, "circuit_breaker", fmt.Sprintf("Circuit breaker %s: execution failed", cb.name), sentry.LevelError)
 	} else {
 		cb.onSuccess(duration)
+		observability.AddBreadcrumb(spanCtx, "circuit_breaker", fmt.Sprintf("Circuit breaker %s: execution succeeded", cb.name), sentry.LevelDebug)
 	}
 
 	return err
@@ -293,7 +302,9 @@ func (cb *CircuitBreaker) Reset() {
 	cb.successCount = 0
 	cb.requestCount = 0
 
-	cb.logger.WithField("circuit_breaker", cb.name).Info("Circuit breaker manually reset")
+	cb.logger.WithFields(map[string]interface{}{
+		"circuit_breaker": cb.name,
+	}).Info("Circuit breaker manually reset")
 }
 
 // getStateName returns the string representation of the current state

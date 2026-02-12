@@ -41,6 +41,10 @@ mock.module("grammy", () => {
       // Do nothing
     }
 
+    async init() {
+      // Mock initialization - do nothing
+    }
+
     command(cmd: string, handler: any) {
       // Do nothing
     }
@@ -54,9 +58,34 @@ mock.module("grammy", () => {
     }
   }
 
+  // GrammyError mock with proper properties matching the real class
+  class GrammyError extends Error {
+    error_code: number;
+    description: string;
+    parameters?: { retry_after?: number; migrate_to_chat_id?: number };
+
+    constructor(
+      message: string,
+      payload: {
+        ok: false;
+        error_code: number;
+        description: string;
+        parameters?: any;
+      },
+      method: string,
+      params: any,
+    ) {
+      super(message);
+      this.name = "GrammyError";
+      this.error_code = payload.error_code;
+      this.description = payload.description;
+      this.parameters = payload.parameters;
+    }
+  }
+
   return {
     Bot: MockBot,
-    GrammyError: class GrammyError extends Error {},
+    GrammyError,
     HttpError: class HttpError extends Error {},
   };
 });

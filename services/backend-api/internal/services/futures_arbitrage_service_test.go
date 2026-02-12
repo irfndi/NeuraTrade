@@ -99,6 +99,7 @@ func TestFuturesArbitrageService_New(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	assert.NotNil(t, service)
@@ -122,6 +123,7 @@ func TestFuturesArbitrageService_StartStop(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	// Test initial state
@@ -143,6 +145,7 @@ func TestFuturesArbitrageService_IsRunning(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	// Test when not running
@@ -182,6 +185,7 @@ func TestFuturesArbitrageService_getLatestFundingRates_CacheHit(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -202,6 +206,7 @@ func TestFuturesArbitrageService_getLatestFundingRates_CacheMiss(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -222,6 +227,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_NoFundingRates(t
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -245,6 +251,7 @@ func TestFuturesArbitrageService_storeOpportunity(t *testing.T) {
 		nil, // error recovery manager
 		nil, // resource manager
 		nil, // performance monitor
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -307,6 +314,7 @@ func TestFuturesArbitrageService_cleanupExpiredOpportunities(t *testing.T) {
 		nil, // error recovery manager
 		nil, // resource manager
 		nil, // performance monitor
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -331,6 +339,7 @@ func TestFuturesArbitrageService_Start(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	// Test initial state - service should not be running
@@ -353,6 +362,7 @@ func TestFuturesArbitrageService_Stop(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	// Test stopping when not running (should not panic)
@@ -380,6 +390,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_Success(t *testi
 		(*ErrorRecoveryManager)(nil),
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -407,6 +418,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_NoRates(t *testi
 		errorRecoveryManager,
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -433,6 +445,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_EmptyRates(t *te
 		errorRecoveryManager,
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -460,6 +473,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_CleanupError(t *
 		errorRecoveryManager,
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx := context.Background()
@@ -486,6 +500,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_ContextCancellat
 		errorRecoveryManager,
 		(*ResourceManager)(nil),
 		(*PerformanceMonitor)(nil),
+		logging.NewStandardLogger("info", "test"),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -514,6 +529,7 @@ func TestFuturesArbitrageService_Start_Success(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		resourceManager,
 		(*PerformanceMonitor)(nil),
+		logger,
 	)
 
 	// Test initial state
@@ -546,6 +562,7 @@ func TestFuturesArbitrageService_Start_AlreadyRunning(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		resourceManager,
 		(*PerformanceMonitor)(nil),
+		logger,
 	)
 
 	// Start the service first
@@ -576,6 +593,7 @@ func TestFuturesArbitrageService_Start_ContextManagement(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		resourceManager,
 		(*PerformanceMonitor)(nil),
+		logger,
 	)
 
 	// Test that context is properly created
@@ -615,6 +633,7 @@ func TestFuturesArbitrageService_Start_MultipleCycles(t *testing.T) {
 		(*ErrorRecoveryManager)(nil),
 		resourceManager,
 		(*PerformanceMonitor)(nil),
+		logger,
 	)
 
 	// Test multiple start/stop cycles
@@ -645,6 +664,7 @@ func TestFuturesArbitrageService_runOpportunityCalculator_ContextCancellation(t 
 		errorRecoveryManager,
 		resourceManager,
 		(*PerformanceMonitor)(nil),
+		logger,
 	)
 
 	// Start the service to launch the goroutine
@@ -678,6 +698,7 @@ func TestFuturesArbitrageService_runOpportunityCalculator_ResourceManagement(t *
 		errorRecoveryManager,
 		resourceManager,
 		(*PerformanceMonitor)(nil),
+		logger,
 	)
 
 	// Start the service

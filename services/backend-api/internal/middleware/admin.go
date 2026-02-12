@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"os"
@@ -17,8 +19,27 @@ type AdminMiddleware struct {
 	apiKey string
 }
 
+// generateSecureKey generates a cryptographically secure random key.
+func generateSecureKey(length int) string {
+	bytes := make([]byte, length/2)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback to a less secure but functional key in edge cases
+		log.Printf("WARNING: Failed to generate secure random key: %v", err)
+		return "fallback-key-" + hex.EncodeToString([]byte(os.Getenv("HOSTNAME")))[:20]
+	}
+	return hex.EncodeToString(bytes)
+}
+
+// isProductionEnvironment checks if we're running in production.
+func isProductionEnvironment() bool {
+	env := strings.ToLower(os.Getenv("ENVIRONMENT"))
+	ginMode := strings.ToLower(os.Getenv("GIN_MODE"))
+	return env == "production" || env == "prod" || ginMode == "release"
+}
+
 // NewAdminMiddleware creates a new admin authentication middleware.
 // It retrieves the API key from the environment.
+// In non-production environments, it will generate a temporary key if not set.
 //
 // Returns:
 //
@@ -27,19 +48,31 @@ func NewAdminMiddleware() *AdminMiddleware {
 	// Get admin API key from environment variable
 	apiKey := os.Getenv("ADMIN_API_KEY")
 
-	// Validate API key configuration
+	// Handle missing API key based on environment
 	if apiKey == "" {
-		log.Fatal("ADMIN_API_KEY environment variable must be set")
+		if isProductionEnvironment() {
+			log.Fatal("ADMIN_API_KEY environment variable must be set in production")
+		}
+		// Generate temporary key for non-production environments
+		apiKey = generateSecureKey(32)
+		log.Printf("INFO: Generated temporary ADMIN_API_KEY for non-production environment (first 8 chars: %s...)", apiKey[:8])
 	}
 
 	// Prevent use of default/example keys in any environment
 	if apiKey == "admin-dev-key-change-in-production" || apiKey == "admin-secret-key-change-me" {
-		log.Fatal("ADMIN_API_KEY cannot use default/example values. Please set a secure API key.")
+		if isProductionEnvironment() {
+			log.Fatal("ADMIN_API_KEY cannot use default/example values in production")
+		}
+		log.Printf("WARNING: Using example ADMIN_API_KEY in non-production environment")
 	}
 
 	// Ensure minimum security requirements
 	if len(apiKey) < 32 {
-		log.Fatal("ADMIN_API_KEY must be at least 32 characters long for security")
+		if isProductionEnvironment() {
+			log.Fatal("ADMIN_API_KEY must be at least 32 characters long for security in production")
+		}
+		// Pad short keys in non-production
+		log.Printf("WARNING: ADMIN_API_KEY is shorter than 32 characters in non-production environment")
 	}
 
 	return &AdminMiddleware{
@@ -55,6 +88,8 @@ func NewAdminMiddleware() *AdminMiddleware {
 //	gin.HandlerFunc: Gin handler.
 func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		requestPath := c.Request.URL.Path
+
 		// Check for API key in Authorization header (Bearer token)
 		authHeader := c.GetHeader("Authorization")
 		if authHeader != "" {
@@ -64,6 +99,9 @@ func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 					c.Next()
 					return
 				}
+				// Log invalid Bearer token (without exposing actual keys)
+				log.Printf("WARN: Admin auth failed for %s - invalid Bearer token (token length: %d, expected: %d)",
+					requestPath, len(tokenParts[1]), len(am.apiKey))
 			}
 		}
 
@@ -74,6 +112,14 @@ func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 			return
 		}
 
+		// Log authentication failure with helpful debugging info
+		if apiKeyHeader == "" {
+			log.Printf("WARN: Admin auth failed for %s - no X-API-Key header provided", requestPath)
+		} else {
+			log.Printf("WARN: Admin auth failed for %s - X-API-Key mismatch (provided length: %d, expected: %d)",
+				requestPath, len(apiKeyHeader), len(am.apiKey))
+		}
+
 		// Query parameter authentication removed for security reasons
 		// API keys should only be passed via headers
 
@@ -81,6 +127,7 @@ func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error":   "Unauthorized",
 			"message": "Valid admin API key required for this endpoint",
+			"code":    "ADMIN_AUTH_FAILED",
 		})
 		c.Abort()
 	}

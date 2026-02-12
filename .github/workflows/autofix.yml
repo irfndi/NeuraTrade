@@ -80,7 +80,8 @@ jobs:
       - name: Format shell scripts
         run: |
           # Exclude .github/workflows to avoid permission issues
-          shfmt -w -i 2 -ci -bn $(find . -name "*.sh" -not -path "./node_modules/*" -not -path "./.git/*" -not -path "./.github/*" -not -path "./bin/*" -not -path "./build/*") || true
+          # Use find -exec to handle filenames with spaces correctly
+          find . -name "*.sh" -not -path "./node_modules/*" -not -path "./.git/*" -not -path "./.github/*" -not -path "./bin/*" -not -path "./build/*" -exec shfmt -w -i 2 -ci -bn {} + || true
 
       - name: Format YAML files
         run: |

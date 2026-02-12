@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/jackc/pgx/v5"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfandi/celebrum-ai-go/internal/observability"
 )
 
 // ArbitrageCalculator defines the interface for calculating arbitrage opportunities.
@@ -133,6 +135,7 @@ type ArbitrageService struct {
 	logger             *zaplogrus.Logger
 	lastCalculation    time.Time
 	opportunitiesFound int
+	multiLegCalculator *MultiLegArbitrageCalculator
 }
 
 // NewArbitrageService creates a new arbitrage service instance.
@@ -177,13 +180,14 @@ func NewArbitrageService(db DBPool, cfg *config.Config, calculator ArbitrageCalc
 	logger := zaplogrus.New()
 
 	return &ArbitrageService{
-		db:              db,
-		config:          cfg,
-		arbitrageConfig: arbitrageConfig,
-		calculator:      calculator,
-		ctx:             ctx,
-		cancel:          cancel,
-		logger:          logger,
+		db:                 db,
+		config:             cfg,
+		arbitrageConfig:    arbitrageConfig,
+		calculator:         calculator,
+		multiLegCalculator: multiLegCalculator,
+		ctx:                ctx,
+		cancel:             cancel,
+		logger:             logger,
 	}
 }
 
@@ -206,11 +210,12 @@ func (s *ArbitrageService) Start() error {
 	s.isRunning = true
 	s.mu.Unlock()
 
-	s.logger.Info("Starting arbitrage service",
-		"interval_seconds", s.arbitrageConfig.IntervalSeconds,
-		"min_profit", s.arbitrageConfig.MinProfit,
-		"max_age_minutes", s.arbitrageConfig.MaxAgeMinutes,
-		"batch_size", s.arbitrageConfig.BatchSize)
+	s.logger.WithFields(map[string]interface{}{
+		"interval_seconds": s.arbitrageConfig.IntervalSeconds,
+		"min_profit":       s.arbitrageConfig.MinProfit,
+		"max_age_minutes":  s.arbitrageConfig.MaxAgeMinutes,
+		"batch_size":       s.arbitrageConfig.BatchSize,
+	}).Info("Starting arbitrage service")
 
 	// Start the main calculation loop
 	s.wg.Add(1)
@@ -291,37 +296,116 @@ func (s *ArbitrageService) calculateAndStoreOpportunities() error {
 	startTime := time.Now()
 	s.logger.Info("Starting arbitrage opportunity calculation")
 
+	// Start Sentry span for the entire calculation cycle
+	ctx, span := observability.StartSpan(s.ctx, observability.SpanOpArbitrage, "arbitrage_calculation_cycle")
+	defer observability.FinishSpan(span, nil)
+
+	span.SetTag("service", "arbitrage")
+	span.SetData("min_profit_threshold", s.arbitrageConfig.MinProfit)
+
+	// Add breadcrumb for tracking
+	observability.AddBreadcrumb(ctx, "arbitrage", "Starting arbitrage calculation cycle", sentry.LevelInfo)
+
 	// Step 1: Clean up old opportunities
+	_, cleanupSpan := observability.StartSpan(ctx, "arbitrage.cleanup", "cleanup_old_opportunities")
 	if err := s.cleanupOldOpportunities(); err != nil {
 		s.logger.WithError(err).Warn("Failed to cleanup old opportunities")
+		observability.AddBreadcrumb(ctx, "arbitrage", "Cleanup warning: "+err.Error(), sentry.LevelWarning)
 	}
+	observability.FinishSpan(cleanupSpan, nil)
 
 	// Step 2: Get latest market data for all exchanges
+	_, dataSpan := observability.StartSpan(ctx, observability.SpanOpMarketData, "get_market_data")
 	marketData, err := s.getLatestMarketData()
 	if err != nil {
+		observability.FinishSpan(dataSpan, err)
+		observability.CaptureExceptionWithContext(ctx, err, "get_market_data", map[string]interface{}{
+			"service": "arbitrage",
+		})
 		return fmt.Errorf("failed to get market data: %w", err)
 	}
+	dataSpan.SetData("exchanges_count", len(marketData))
+	dataSpan.SetData("total_pairs", s.countTotalTradingPairs(marketData))
+	observability.FinishSpan(dataSpan, nil)
 
 	if len(marketData) == 0 {
 		s.logger.Warn("No market data available for arbitrage calculation")
+		span.SetTag("result", "no_data")
+		observability.AddBreadcrumb(ctx, "arbitrage", "No market data available", sentry.LevelWarning)
 		return nil
 	}
 
-	s.logger.Info("Retrieved market data", "exchanges", len(marketData), "total_pairs", s.countTotalTradingPairs(marketData))
+	s.logger.WithFields(map[string]interface{}{
+		"exchanges":   len(marketData),
+		"total_pairs": s.countTotalTradingPairs(marketData),
+	}).Info("Retrieved market data")
 
 	// Step 3: Calculate arbitrage opportunities
+	_, calcSpan := observability.StartSpan(ctx, observability.SpanOpArbitrage, "calculate_opportunities")
 	opportunities, err := s.calculator.CalculateArbitrageOpportunities(s.ctx, marketData)
 	if err != nil {
+		observability.FinishSpan(calcSpan, err)
+		observability.CaptureExceptionWithContext(ctx, err, "calculate_opportunities", map[string]interface{}{
+			"exchanges_count": len(marketData),
+			"service":         "arbitrage",
+		})
 		return fmt.Errorf("failed to calculate arbitrage opportunities: %w", err)
 	}
+	calcSpan.SetData("opportunities_calculated", len(opportunities))
+	observability.FinishSpan(calcSpan, nil)
+
+	// Step 3b: Calculate multi-leg arbitrage opportunities (Triangular)
+	_, mlCalcSpan := observability.StartSpan(ctx, observability.SpanOpArbitrage, "calculate_multi_leg_opportunities")
+	var allMultiLegOps []models.MultiLegOpportunity
+	var multiLegErrors int
+	for exchangeName, tickers := range marketData {
+		tickerData := make([]TickerData, len(tickers))
+		for i, t := range tickers {
+			tickerData[i] = TickerData{
+				Symbol: t.TradingPair.Symbol,
+				Bid:    t.LastPrice, // Using LastPrice as proxy if Bid/Ask are missing
+				Ask:    t.LastPrice,
+			}
+		}
+		mlOps, err := s.multiLegCalculator.FindTriangularOpportunities(ctx, exchangeName, tickerData)
+		if err != nil {
+			multiLegErrors++
+			s.logger.WithFields(map[string]interface{}{"exchange": exchangeName}).WithError(err).Warn("Failed to calculate multi-leg opportunities")
+		} else {
+			allMultiLegOps = append(allMultiLegOps, mlOps...)
+		}
+	}
+	mlCalcSpan.SetData("multi_leg_calculated", len(allMultiLegOps))
+	mlCalcSpan.SetData("multi_leg_errors", multiLegErrors)
+	observability.FinishSpan(mlCalcSpan, nil)
 
 	// Step 4: Filter opportunities by minimum profit threshold
+	_, filterSpan := observability.StartSpan(ctx, "arbitrage.filter", "filter_opportunities")
 	validOpportunities := s.filterOpportunities(opportunities)
+	filterSpan.SetData("opportunities_before", len(opportunities))
+	filterSpan.SetData("opportunities_after", len(validOpportunities))
+	filterSpan.SetData("min_profit", s.arbitrageConfig.MinProfit)
+	observability.FinishSpan(filterSpan, nil)
 
 	// Step 5: Store valid opportunities in database
+	_, storeSpan := observability.StartSpan(ctx, "db.sql.batch", "store_opportunities")
 	if err := s.storeOpportunities(validOpportunities); err != nil {
+		observability.FinishSpan(storeSpan, err)
+		observability.CaptureExceptionWithContext(ctx, err, "store_opportunities", map[string]interface{}{
+			"opportunities_count": len(validOpportunities),
+			"service":             "arbitrage",
+		})
 		return fmt.Errorf("failed to store opportunities: %w", err)
 	}
+	storeSpan.SetData("opportunities_stored", len(validOpportunities))
+
+	// Step 5b: Store multi-leg opportunities
+	if len(allMultiLegOps) > 0 {
+		if err := s.storeMultiLegOpportunities(allMultiLegOps); err != nil {
+			s.logger.WithError(err).Warn("Failed to store multi-leg opportunities")
+		}
+	}
+	observability.FinishSpan(storeSpan, nil)
 
 	// Update status
 	s.mu.Lock()
@@ -330,11 +414,25 @@ func (s *ArbitrageService) calculateAndStoreOpportunities() error {
 	s.mu.Unlock()
 
 	duration := time.Since(startTime)
-	s.logger.Info("Arbitrage calculation completed",
-		"duration_ms", duration.Milliseconds(),
-		"opportunities_found", len(validOpportunities),
-		"total_calculated", len(opportunities),
-		"min_profit_threshold", s.arbitrageConfig.MinProfit)
+
+	// Update main span with final metrics
+	span.SetData("duration_ms", duration.Milliseconds())
+	span.SetData("opportunities_found", len(validOpportunities))
+	span.SetData("total_calculated", len(opportunities))
+	span.SetTag("result", "success")
+
+	// Add completion breadcrumb
+	observability.AddBreadcrumbWithData(ctx, "arbitrage", "Calculation completed", sentry.LevelInfo, map[string]interface{}{
+		"duration_ms":         duration.Milliseconds(),
+		"opportunities_found": len(validOpportunities),
+	})
+
+	s.logger.WithFields(map[string]interface{}{
+		"duration_ms":          duration.Milliseconds(),
+		"opportunities_found":  len(validOpportunities),
+		"total_calculated":     len(opportunities),
+		"min_profit_threshold": s.arbitrageConfig.MinProfit,
+	}).Info("Arbitrage calculation completed")
 
 	return nil
 }
@@ -393,12 +491,81 @@ func (s *ArbitrageService) getLatestMarketData() (map[string][]models.MarketData
 		return nil, fmt.Errorf("error iterating market data rows: %w", err)
 	}
 
-	s.logger.Info("Market data retrieved", "exchanges", len(marketData))
+	s.logger.WithFields(map[string]interface{}{"exchanges": len(marketData)}).Info("Market data retrieved")
+
+	// If no market data found, run diagnostics to understand why
+	if len(marketData) == 0 {
+		s.diagnoseNoMarketData()
+	}
+
 	for exchange, data := range marketData {
-		s.logger.Debug("Exchange data", "exchange", exchange, "pairs", len(data))
+		s.logger.WithFields(map[string]interface{}{
+			"exchange": exchange,
+			"pairs":    len(data),
+		}).Debug("Exchange data")
 	}
 
 	return marketData, nil
+}
+
+// diagnoseNoMarketData logs diagnostic information when no market data is available.
+// This helps identify the root cause: missing data, stale data, or database seeding issues.
+func (s *ArbitrageService) diagnoseNoMarketData() {
+	var totalRows, freshRows, activeExchanges, activePairs int
+
+	// Check total market_data rows
+	err := s.db.QueryRow(s.ctx, "SELECT COUNT(*) FROM market_data").Scan(&totalRows)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to count market_data rows")
+		totalRows = -1
+	}
+
+	// Check fresh market_data rows (within 10 minutes)
+	err = s.db.QueryRow(s.ctx, "SELECT COUNT(*) FROM market_data WHERE timestamp >= NOW() - INTERVAL '10 minutes'").Scan(&freshRows)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to count fresh market_data rows")
+		freshRows = -1
+	}
+
+	// Check active exchanges
+	err = s.db.QueryRow(s.ctx, "SELECT COUNT(*) FROM exchanges WHERE status = 'active'").Scan(&activeExchanges)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to count active exchanges")
+		activeExchanges = -1
+	}
+
+	// Check active trading pairs
+	err = s.db.QueryRow(s.ctx, "SELECT COUNT(*) FROM trading_pairs WHERE is_active = true").Scan(&activePairs)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to count active trading pairs")
+		activePairs = -1
+	}
+
+	// Log comprehensive diagnostic
+	s.logger.WithFields(map[string]interface{}{
+		"total_market_data_rows":    totalRows,
+		"fresh_rows_10min":          freshRows,
+		"active_exchanges":          activeExchanges,
+		"active_trading_pairs":      activePairs,
+		"diagnostic_recommendation": s.getDiagnosticRecommendation(totalRows, freshRows, activeExchanges, activePairs),
+	}).Warn("Market data diagnostic - no data available for arbitrage")
+}
+
+// getDiagnosticRecommendation returns a human-readable recommendation based on the counts.
+func (s *ArbitrageService) getDiagnosticRecommendation(totalRows, freshRows, activeExchanges, activePairs int) string {
+	if activeExchanges == 0 {
+		return "No active exchanges in database - check migrations and seeding"
+	}
+	if activePairs == 0 {
+		return "No active trading pairs - collector may not have created pairs yet"
+	}
+	if totalRows == 0 {
+		return "No market data at all - collector has not saved any data yet"
+	}
+	if freshRows == 0 {
+		return "Market data exists but is stale (>10min old) - collector may be failing"
+	}
+	return "Unknown issue - data exists but query returned nothing"
 }
 
 // filterOpportunities filters arbitrage opportunities based on configuration thresholds
@@ -421,7 +588,10 @@ func (s *ArbitrageService) filterOpportunities(opportunities []models.ArbitrageO
 		filtered = append(filtered, opp)
 	}
 
-	s.logger.Info("Filtered opportunities", "original", len(opportunities), "filtered", len(filtered))
+	s.logger.WithFields(map[string]interface{}{
+		"original": len(opportunities),
+		"filtered": len(filtered),
+	}).Info("Filtered opportunities")
 	return filtered
 }
 
@@ -446,7 +616,7 @@ func (s *ArbitrageService) storeOpportunities(opportunities []models.ArbitrageOp
 		}
 	}
 
-	s.logger.Info("Stored opportunities", "count", len(opportunities))
+	s.logger.WithFields(map[string]interface{}{"count": len(opportunities)}).Info("Stored opportunities")
 	return nil
 }
 
@@ -462,7 +632,7 @@ func (s *ArbitrageService) storeOpportunityBatch(opportunities []models.Arbitrag
 	}
 	defer func() {
 		if err := tx.Rollback(s.ctx); err != nil && err != pgx.ErrTxClosed {
-			s.logger.Error("Failed to rollback transaction", "error", err)
+			s.logger.WithError(err).Error("Failed to rollback transaction")
 		}
 	}()
 
@@ -497,10 +667,11 @@ func (s *ArbitrageService) storeOpportunityBatch(opportunities []models.Arbitrag
 		)
 
 		if err != nil {
-			s.logger.WithError(err).Error("Failed to insert opportunity",
-				"buy_exchange", opp.BuyExchangeID,
-				"sell_exchange", opp.SellExchangeID,
-				"symbol", opp.TradingPair != nil)
+			s.logger.WithFields(map[string]interface{}{
+				"buy_exchange":  opp.BuyExchangeID,
+				"sell_exchange": opp.SellExchangeID,
+				"symbol":        opp.TradingPair != nil,
+			}).WithError(err).Error("Failed to insert opportunity")
 			return fmt.Errorf("failed to insert opportunity: %w", err)
 		}
 	}
@@ -535,7 +706,7 @@ func (s *ArbitrageService) cleanupOldOpportunities() error {
 	}
 
 	if expiredCount > 0 {
-		s.logger.Info("Found expired opportunities", "count", expiredCount)
+		s.logger.WithFields(map[string]interface{}{"count": expiredCount}).Info("Found expired opportunities")
 	}
 
 	return nil
@@ -610,6 +781,103 @@ func (s *ArbitrageService) GetActiveOpportunities(ctx context.Context, limit int
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating opportunity rows: %w", err)
+	}
+
+	return opportunities, nil
+}
+
+// storeMultiLegOpportunities stores multi-leg opportunities in the database
+func (s *ArbitrageService) storeMultiLegOpportunities(opportunities []models.MultiLegOpportunity) error {
+	if len(opportunities) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin(s.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(s.ctx)
+	}()
+
+	for _, opp := range opportunities {
+		if opp.ID == "" {
+			opp.ID = uuid.New().String()
+		}
+
+		// Insert main opportunity
+		oppQuery := `
+			INSERT INTO multi_leg_opportunities (id, exchange_id, profit_percentage, detected_at, expires_at)
+			SELECT $1, e.id, $3, $4, $5
+			FROM exchanges e WHERE e.name = $2
+			ON CONFLICT (id) DO UPDATE SET
+				profit_percentage = EXCLUDED.profit_percentage,
+				expires_at = EXCLUDED.expires_at
+		`
+		_, err = tx.Exec(s.ctx, oppQuery, opp.ID, opp.ExchangeName, opp.ProfitPercentage, opp.DetectedAt, opp.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("failed to insert multi-leg opportunity: %w", err)
+		}
+
+		// Insert legs
+		for i, leg := range opp.Legs {
+			legQuery := `
+				INSERT INTO multi_leg_legs (opportunity_id, leg_index, symbol, side, price)
+				VALUES ($1, $2, $3, $4, $5)
+			`
+			_, err = tx.Exec(s.ctx, legQuery, opp.ID, i, leg.Symbol, leg.Side, leg.Price)
+			if err != nil {
+				return fmt.Errorf("failed to insert multi-leg leg: %w", err)
+			}
+		}
+	}
+
+	return tx.Commit(s.ctx)
+}
+
+// GetActiveMultiLegOpportunities retrieves currently active multi-leg arbitrage opportunities
+func (s *ArbitrageService) GetActiveMultiLegOpportunities(ctx context.Context, limit int) ([]models.MultiLegOpportunity, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database pool is not available")
+	}
+
+	query := `
+		SELECT 
+			mlo.id, e.name as exchange_name, mlo.profit_percentage, mlo.detected_at, mlo.expires_at
+		FROM multi_leg_opportunities mlo
+		JOIN exchanges e ON mlo.exchange_id = e.id
+		WHERE mlo.expires_at > NOW()
+		ORDER BY mlo.profit_percentage DESC
+		LIMIT $1
+	`
+
+	rows, err := s.db.Query(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var opportunities []models.MultiLegOpportunity
+	for rows.Next() {
+		var opp models.MultiLegOpportunity
+		if err := rows.Scan(&opp.ID, &opp.ExchangeName, &opp.ProfitPercentage, &opp.DetectedAt, &opp.ExpiresAt); err != nil {
+			continue
+		}
+
+		// Fetch legs for this opportunity
+		legsQuery := `SELECT symbol, side, price FROM multi_leg_legs WHERE opportunity_id = $1 ORDER BY leg_index`
+		legRows, err := s.db.Query(ctx, legsQuery, opp.ID)
+		if err == nil {
+			for legRows.Next() {
+				var leg models.ArbitrageLeg
+				if err := legRows.Scan(&leg.Symbol, &leg.Side, &leg.Price); err == nil {
+					opp.Legs = append(opp.Legs, leg)
+				}
+			}
+			legRows.Close()
+		}
+
+		opportunities = append(opportunities, opp)
 	}
 
 	return opportunities, nil

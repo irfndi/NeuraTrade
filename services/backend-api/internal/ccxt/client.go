@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,13 +22,102 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// SymbolNotFoundError represents an error when a symbol is not found on an exchange.
+// This error should not be retried as the symbol doesn't exist.
+type SymbolNotFoundError struct {
+	Exchange string
+	Symbol   string
+	Message  string
+}
+
+func (e *SymbolNotFoundError) Error() string {
+	return fmt.Sprintf("symbol %s not found on %s: %s", e.Symbol, e.Exchange, e.Message)
+}
+
+// IsSymbolNotFoundError returns true if the error is a symbol not found error.
+// Uses errors.As to correctly handle wrapped errors.
+func IsSymbolNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var symbolErr *SymbolNotFoundError
+	return errors.As(err, &symbolErr)
+}
+
+// ExchangeUnavailableError represents an error when an exchange is temporarily unavailable.
+// This error can potentially be retried.
+type ExchangeUnavailableError struct {
+	Exchange string
+	Message  string
+}
+
+func (e *ExchangeUnavailableError) Error() string {
+	return fmt.Sprintf("exchange %s unavailable: %s", e.Exchange, e.Message)
+}
+
+// IsExchangeUnavailableError returns true if the error is an exchange unavailable error.
+// Uses errors.As to correctly handle wrapped errors.
+func IsExchangeUnavailableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exchangeErr *ExchangeUnavailableError
+	return errors.As(err, &exchangeErr)
+}
+
+// UnsupportedOperationError represents an error when an exchange doesn't support a specific operation.
+// This error should not be retried as the operation is not supported.
+type UnsupportedOperationError struct {
+	Exchange  string
+	Operation string
+	Message   string
+}
+
+func (e *UnsupportedOperationError) Error() string {
+	return fmt.Sprintf("exchange %s does not support %s: %s", e.Exchange, e.Operation, e.Message)
+}
+
+// IsUnsupportedOperationError returns true if the error is an unsupported operation error.
+// Uses errors.As to correctly handle wrapped errors.
+func IsUnsupportedOperationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var opErr *UnsupportedOperationError
+	return errors.As(err, &opErr)
+}
+
+// GRPCConnectionError represents a gRPC connection failure.
+// This error indicates gRPC is unavailable but HTTP fallback should be attempted.
+type GRPCConnectionError struct {
+	Address string
+	Message string
+}
+
+func (e *GRPCConnectionError) Error() string {
+	return fmt.Sprintf("gRPC connection failed to %s: %s", e.Address, e.Message)
+}
+
+// IsGRPCConnectionError returns true if the error is a gRPC connection error.
+// Uses errors.As to correctly handle wrapped errors.
+func IsGRPCConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var grpcErr *GRPCConnectionError
+	return errors.As(err, &grpcErr)
+}
+
 // Client represents the CCXT HTTP client.
 type Client struct {
-	HTTPClient *http.Client
-	baseURL    string
-	grpcClient pb.CcxtServiceClient
-	grpcConn   *grpc.ClientConn
-	timeout    time.Duration
+	HTTPClient  *http.Client
+	baseURL     string
+	grpcClient  pb.CcxtServiceClient
+	grpcConn    *grpc.ClientConn
+	grpcAddress string
+	grpcEnabled bool
+	timeout     time.Duration
+	adminAPIKey string
 }
 
 // NewClient creates a new CCXT client instance.
@@ -52,24 +142,52 @@ func NewClient(cfg *config.CCXTConfig) *Client {
 		HTTPClient: &http.Client{
 			Timeout: timeout,
 		},
-		baseURL: strings.TrimSuffix(cfg.ServiceURL, "/"),
-		timeout: timeout,
+		baseURL:     strings.TrimSuffix(cfg.ServiceURL, "/"),
+		grpcAddress: cfg.GrpcAddress,
+		grpcEnabled: false,
+		timeout:     timeout,
+		adminAPIKey: cfg.AdminAPIKey,
 	}
 
 	if cfg.GrpcAddress != "" {
-		// Use insecure credentials for internal communication
-		conn, err := grpc.NewClient(cfg.GrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		// Use insecure credentials for internal communication with connection timeout
+		// Use non-blocking dial to avoid startup delays when gRPC service is unavailable
+		conn, err := grpc.NewClient(
+			cfg.GrpcAddress,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
 		if err != nil {
-			log.Printf("Failed to connect to CCXT gRPC service at %s: %v", cfg.GrpcAddress, err)
+			log.Printf("Failed to create CCXT gRPC client at %s: %v (HTTP fallback available)", cfg.GrpcAddress, err)
 		} else {
 			client.grpcClient = pb.NewCcxtServiceClient(conn)
 			client.grpcConn = conn
-			log.Printf("Connected to CCXT gRPC service at %s", cfg.GrpcAddress)
+			client.grpcEnabled = true
+			log.Printf("Created CCXT gRPC client for %s (connection will be established on first use)", cfg.GrpcAddress)
 		}
 	}
 
-	log.Printf("DEBUG: CCXT Client initialized with BaseURL: %s", client.BaseURL())
+	log.Printf("DEBUG: CCXT Client initialized with BaseURL: %s, gRPC: %v", client.BaseURL(), client.grpcEnabled)
 	return client
+}
+
+// IsGRPCEnabled returns whether the gRPC client is configured and enabled.
+func (c *Client) IsGRPCEnabled() bool {
+	return c.grpcEnabled && c.grpcClient != nil
+}
+
+// DisableGRPC disables gRPC and forces HTTP-only mode.
+// This is useful when gRPC is consistently failing.
+func (c *Client) DisableGRPC() {
+	c.grpcEnabled = false
+	log.Printf("CCXT gRPC disabled, using HTTP-only mode")
+}
+
+// EnableGRPC re-enables gRPC if the client was initialized with gRPC support.
+func (c *Client) EnableGRPC() {
+	if c.IsGRPCEnabled() {
+		c.grpcEnabled = true
+		log.Printf("CCXT gRPC re-enabled")
+	}
 }
 
 // HealthCheck checks if the CCXT service is healthy.
@@ -93,8 +211,8 @@ func (c *Client) HealthCheck(ctx context.Context) (*HealthResponse, error) {
 
 // GetExchanges retrieves all supported exchanges.
 func (c *Client) GetExchanges(ctx context.Context) (*ExchangesResponse, error) {
-	// Try gRPC first
-	if c.grpcClient != nil {
+	// Try gRPC first if enabled
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetExchanges(ctx, &pb.GetExchangesRequest{})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcExchangesResponse(resp), nil
@@ -113,8 +231,8 @@ func (c *Client) GetExchanges(ctx context.Context) (*ExchangesResponse, error) {
 
 // GetTicker retrieves ticker data for a specific exchange and symbol.
 func (c *Client) GetTicker(ctx context.Context, exchange, symbol string) (*TickerResponse, error) {
-	// Try gRPC first
-	if c.grpcClient != nil {
+	// Try gRPC first if enabled
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetTicker(ctx, &pb.GetTickerRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -139,8 +257,8 @@ func (c *Client) GetTicker(ctx context.Context, exchange, symbol string) (*Ticke
 
 // GetTickers retrieves multiple tickers in a single request.
 func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersResponse, error) {
-	// Try gRPC first
-	if c.grpcClient != nil {
+	// Try gRPC first if enabled
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetTickers(ctx, &pb.GetTickersRequest{
 			Symbols:   req.Symbols,
 			Exchanges: req.Exchanges,
@@ -163,7 +281,7 @@ func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersR
 // GetOrderBook retrieves order book data for a specific exchange and symbol.
 func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
 	// Try gRPC first
-	if c.grpcClient != nil {
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetOrderBook(ctx, &pb.GetOrderBookRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -193,7 +311,7 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 // GetTrades retrieves recent trades for a specific exchange and symbol.
 func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error) {
 	// Try gRPC first
-	if c.grpcClient != nil {
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetTrades(ctx, &pb.GetTradesRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -223,7 +341,7 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 // GetOHLCV retrieves OHLCV data for a specific exchange and symbol.
 func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
 	// Try gRPC first
-	if c.grpcClient != nil {
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetOHLCV(ctx, &pb.GetOHLCVRequest{
 			Exchange:  exchange,
 			Symbol:    symbol,
@@ -261,7 +379,7 @@ func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe strin
 // GetMarkets retrieves all trading pairs for a specific exchange.
 func (c *Client) GetMarkets(ctx context.Context, exchange string) (*MarketsResponse, error) {
 	// Try gRPC first
-	if c.grpcClient != nil {
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetMarkets(ctx, &pb.GetMarketsRequest{
 			Exchange: exchange,
 		})
@@ -284,7 +402,7 @@ func (c *Client) GetMarkets(ctx context.Context, exchange string) (*MarketsRespo
 // GetFundingRate retrieves funding rate for a specific symbol on an exchange.
 func (c *Client) GetFundingRate(ctx context.Context, exchange, symbol string) (*FundingRate, error) {
 	// Try gRPC first for multiple/single rates
-	if c.grpcClient != nil {
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetFundingRates(ctx, &pb.GetFundingRatesRequest{
 			Exchange: exchange,
 			Symbols:  []string{symbol},
@@ -309,7 +427,7 @@ func (c *Client) GetFundingRate(ctx context.Context, exchange, symbol string) (*
 // GetFundingRates retrieves funding rates for multiple symbols on an exchange.
 func (c *Client) GetFundingRates(ctx context.Context, exchange string, symbols []string) ([]FundingRate, error) {
 	// Try gRPC first
-	if c.grpcClient != nil {
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetFundingRates(ctx, &pb.GetFundingRatesRequest{
 			Exchange: exchange,
 			Symbols:  symbols,
@@ -353,7 +471,7 @@ func (c *Client) GetFundingRates(ctx context.Context, exchange string, symbols [
 // GetAllFundingRates retrieves all available funding rates for an exchange.
 func (c *Client) GetAllFundingRates(ctx context.Context, exchange string) ([]FundingRate, error) {
 	// Try gRPC first
-	if c.grpcClient != nil {
+	if c.IsGRPCEnabled() {
 		resp, err := c.grpcClient.GetFundingRates(ctx, &pb.GetFundingRatesRequest{
 			Exchange: exchange,
 		})
@@ -485,7 +603,7 @@ func (c *Client) formatSymbolForExchange(exchange, symbol string) string {
 
 // makeRequest is a helper method to make HTTP requests to the CCXT service
 func (c *Client) makeRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
-	url := c.baseURL + path
+	reqURL := c.baseURL + path
 
 	var reqBody io.Reader
 	if body != nil {
@@ -496,7 +614,7 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 		reqBody = bytes.NewBuffer(jsonData)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -506,6 +624,11 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "NeuraTrade/1.0")
+
+	// Add API key for admin endpoints
+	if strings.Contains(path, "/admin/") && c.adminAPIKey != "" {
+		req.Header.Set("X-API-Key", c.adminAPIKey)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -524,10 +647,56 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 
 	if resp.StatusCode >= 400 {
 		var errorResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errorResp); err == nil {
-			return fmt.Errorf("CCXT service error (%d): %s", resp.StatusCode, errorResp.Error)
+		errorMsg := string(respBody)
+		if jsonErr := json.Unmarshal(respBody, &errorResp); jsonErr == nil {
+			errorMsg = errorResp.Error
 		}
-		return fmt.Errorf("CCXT service error (%d): %s", resp.StatusCode, string(respBody))
+
+		// Extract exchange and symbol from path for typed errors
+		exchange, symbol := c.extractExchangeSymbolFromPath(path)
+
+		// Extract operation from path (e.g., "funding-rate", "ticker", "orderbook")
+		operation := c.extractOperationFromPath(path)
+
+		// Return typed errors based on HTTP status code
+		switch resp.StatusCode {
+		case http.StatusNotFound:
+			// Symbol not found - don't retry
+			return &SymbolNotFoundError{
+				Exchange: exchange,
+				Symbol:   symbol,
+				Message:  errorMsg,
+			}
+		case http.StatusNotImplemented:
+			// Operation not supported by this exchange - don't retry
+			return &UnsupportedOperationError{
+				Exchange:  exchange,
+				Operation: operation,
+				Message:   errorMsg,
+			}
+		case http.StatusBadRequest:
+			// Check if error message indicates unsupported operation
+			errLower := strings.ToLower(errorMsg)
+			if strings.Contains(errLower, "not supported") ||
+				strings.Contains(errLower, "not implemented") ||
+				strings.Contains(errLower, "not available") ||
+				strings.Contains(errLower, "does not support") {
+				return &UnsupportedOperationError{
+					Exchange:  exchange,
+					Operation: operation,
+					Message:   errorMsg,
+				}
+			}
+			return fmt.Errorf("CCXT service error (%d): %s", resp.StatusCode, errorMsg)
+		case http.StatusServiceUnavailable:
+			// Exchange temporarily unavailable - can retry
+			return &ExchangeUnavailableError{
+				Exchange: exchange,
+				Message:  errorMsg,
+			}
+		default:
+			return fmt.Errorf("CCXT service error (%d): %s", resp.StatusCode, errorMsg)
+		}
 	}
 
 	if result != nil {
@@ -537,6 +706,59 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 	}
 
 	return nil
+}
+
+// extractExchangeSymbolFromPath extracts exchange and symbol from API paths.
+//
+// Expected path formats:
+//   - /api/ticker/{exchange}/{symbol}     -> returns exchange, symbol
+//   - /api/orderbook/{exchange}/{symbol}  -> returns exchange, symbol
+//   - /api/ohlcv/{exchange}/{symbol}      -> returns exchange, symbol
+//   - /api/trades/{exchange}/{symbol}     -> returns exchange, symbol
+//   - /api/markets/{exchange}             -> returns exchange, ""
+//   - /api/exchanges                      -> returns "", ""
+//
+// For paths with slashes in the symbol (e.g., /api/ticker/binance/BTC/USDT),
+// the symbol parts are joined back together (BTC/USDT).
+//
+// Returns empty strings for paths that don't match the expected format.
+func (c *Client) extractExchangeSymbolFromPath(path string) (exchange, symbol string) {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) >= 3 {
+		exchange = parts[2]
+		if len(parts) >= 4 {
+			symbol = strings.Join(parts[3:], "/")
+		}
+	}
+	return
+}
+
+// ExtractExchangeSymbolFromPath is exported for testing purposes only.
+// It wraps the internal extractExchangeSymbolFromPath function.
+// Do not use in production code.
+func (c *Client) ExtractExchangeSymbolFromPath(path string) (exchange, symbol string) {
+	return c.extractExchangeSymbolFromPath(path)
+}
+
+// extractOperationFromPath extracts the operation type from API paths.
+//
+// Expected path formats:
+//   - /api/ticker/{exchange}/{symbol}       -> returns "ticker"
+//   - /api/orderbook/{exchange}/{symbol}    -> returns "orderbook"
+//   - /api/ohlcv/{exchange}/{symbol}        -> returns "ohlcv"
+//   - /api/trades/{exchange}/{symbol}       -> returns "trades"
+//   - /api/funding-rate/{exchange}/{symbol} -> returns "funding-rate"
+//   - /api/funding-rates/{exchange}         -> returns "funding-rates"
+//   - /api/markets/{exchange}               -> returns "markets"
+//   - /api/exchanges                        -> returns "exchanges"
+//
+// Returns "unknown" for paths that don't match the expected format.
+func (c *Client) extractOperationFromPath(path string) string {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) >= 2 && parts[0] == "api" {
+		return parts[1]
+	}
+	return "unknown"
 }
 
 // Close closes the HTTP client (if needed for cleanup).
@@ -782,4 +1004,229 @@ func (c *Client) convertGrpcFundingRate(r *pb.FundingRate) *FundingRate {
 		IndexPrice:       float64FromString(r.IndexPrice),
 		Timestamp:        UnixTimestamp(time.UnixMilli(r.Timestamp)),
 	}
+}
+
+// CalculateOrderBookMetrics computes liquidity metrics from raw order book data.
+// This provides bid-ask spread, depth analysis, and slippage estimates.
+func (c *Client) CalculateOrderBookMetrics(resp *OrderBookResponse) *OrderBookMetrics {
+	if resp == nil || len(resp.OrderBook.Bids) == 0 || len(resp.OrderBook.Asks) == 0 {
+		return nil
+	}
+
+	ob := resp.OrderBook
+	metrics := &OrderBookMetrics{
+		Exchange:          resp.Exchange,
+		Symbol:            resp.Symbol,
+		BidLevels:         len(ob.Bids),
+		AskLevels:         len(ob.Asks),
+		Timestamp:         ob.Timestamp,
+		SlippageEstimates: make(map[string]SlippageEstimate),
+	}
+
+	// Best bid and ask
+	metrics.BestBid = ob.Bids[0].Price
+	metrics.BestAsk = ob.Asks[0].Price
+
+	// Mid price
+	metrics.MidPrice = metrics.BestBid.Add(metrics.BestAsk).Div(decimal.NewFromInt(2))
+
+	// Bid-ask spread as percentage
+	if !metrics.MidPrice.IsZero() {
+		spread := metrics.BestAsk.Sub(metrics.BestBid)
+		metrics.BidAskSpread = spread.Div(metrics.MidPrice).Mul(decimal.NewFromInt(100))
+	}
+
+	// Calculate depth within 1% and 2% of mid price
+	onePercent := metrics.MidPrice.Mul(decimal.NewFromFloat(0.01))
+	twoPercent := metrics.MidPrice.Mul(decimal.NewFromFloat(0.02))
+
+	bidDepth1 := decimal.Zero
+	bidDepth2 := decimal.Zero
+	for _, bid := range ob.Bids {
+		priceDiff := metrics.MidPrice.Sub(bid.Price)
+		value := bid.Price.Mul(bid.Amount)
+		if priceDiff.LessThanOrEqual(onePercent) {
+			bidDepth1 = bidDepth1.Add(value)
+		}
+		if priceDiff.LessThanOrEqual(twoPercent) {
+			bidDepth2 = bidDepth2.Add(value)
+		}
+	}
+	metrics.BidDepth1Pct = bidDepth1
+	metrics.BidDepth2Pct = bidDepth2
+
+	askDepth1 := decimal.Zero
+	askDepth2 := decimal.Zero
+	for _, ask := range ob.Asks {
+		priceDiff := ask.Price.Sub(metrics.MidPrice)
+		value := ask.Price.Mul(ask.Amount)
+		if priceDiff.LessThanOrEqual(onePercent) {
+			askDepth1 = askDepth1.Add(value)
+		}
+		if priceDiff.LessThanOrEqual(twoPercent) {
+			askDepth2 = askDepth2.Add(value)
+		}
+	}
+	metrics.AskDepth1Pct = askDepth1
+	metrics.AskDepth2Pct = askDepth2
+
+	// Calculate imbalance
+	totalDepth1 := bidDepth1.Add(askDepth1)
+	if !totalDepth1.IsZero() {
+		metrics.Imbalance1Pct = bidDepth1.Sub(askDepth1).Div(totalDepth1)
+	}
+
+	totalDepth2 := bidDepth2.Add(askDepth2)
+	if !totalDepth2.IsZero() {
+		metrics.Imbalance2Pct = bidDepth2.Sub(askDepth2).Div(totalDepth2)
+	}
+
+	// Calculate slippage estimates for common position sizes
+	positionSizes := []decimal.Decimal{
+		decimal.NewFromInt(10000),  // $10k
+		decimal.NewFromInt(50000),  // $50k
+		decimal.NewFromInt(100000), // $100k
+	}
+
+	for _, size := range positionSizes {
+		buySlippage := c.calculateSlippage(ob.Asks, size, metrics.MidPrice)
+		sellSlippage := c.calculateSlippage(ob.Bids, size, metrics.MidPrice)
+
+		metrics.SlippageEstimates[size.String()] = SlippageEstimate{
+			PositionSize: size,
+			BuySlippage:  buySlippage.Slippage,
+			SellSlippage: sellSlippage.Slippage,
+			AvgBuyPrice:  buySlippage.AvgPrice,
+			AvgSellPrice: sellSlippage.AvgPrice,
+			IsFillable:   buySlippage.IsFillable && sellSlippage.IsFillable,
+		}
+	}
+
+	// Calculate liquidity score (0-100)
+	metrics.LiquidityScore = c.calculateLiquidityScore(metrics)
+
+	return metrics
+}
+
+// slippageResult holds the result of a slippage calculation.
+type slippageResult struct {
+	Slippage   decimal.Decimal
+	AvgPrice   decimal.Decimal
+	IsFillable bool
+}
+
+// calculateSlippage walks through order book levels to estimate slippage.
+func (c *Client) calculateSlippage(levels []OrderBookEntry, positionSize decimal.Decimal, midPrice decimal.Decimal) slippageResult {
+	if len(levels) == 0 || positionSize.IsZero() || midPrice.IsZero() {
+		return slippageResult{IsFillable: false}
+	}
+
+	remaining := positionSize
+	totalCost := decimal.Zero
+	totalQuantity := decimal.Zero
+
+	for _, level := range levels {
+		levelValue := level.Price.Mul(level.Amount)
+
+		if levelValue.GreaterThanOrEqual(remaining) {
+			// This level can fill the rest
+			quantity := remaining.Div(level.Price)
+			totalCost = totalCost.Add(remaining)
+			totalQuantity = totalQuantity.Add(quantity)
+			remaining = decimal.Zero
+			break
+		}
+
+		// Consume entire level
+		totalCost = totalCost.Add(levelValue)
+		totalQuantity = totalQuantity.Add(level.Amount)
+		remaining = remaining.Sub(levelValue)
+	}
+
+	if totalQuantity.IsZero() {
+		return slippageResult{IsFillable: false}
+	}
+
+	avgPrice := totalCost.Div(totalQuantity)
+	slippage := avgPrice.Sub(midPrice).Div(midPrice).Abs().Mul(decimal.NewFromInt(100))
+
+	return slippageResult{
+		Slippage:   slippage,
+		AvgPrice:   avgPrice,
+		IsFillable: remaining.IsZero(),
+	}
+}
+
+// calculateLiquidityScore computes an overall liquidity score (0-100).
+func (c *Client) calculateLiquidityScore(metrics *OrderBookMetrics) decimal.Decimal {
+	if metrics == nil {
+		return decimal.Zero
+	}
+
+	// Spread score: lower spread = higher score
+	// 0.01% spread = 100, 1% spread = 0
+	spreadScore := decimal.NewFromInt(100).Sub(metrics.BidAskSpread.Mul(decimal.NewFromInt(100)))
+	if spreadScore.LessThan(decimal.Zero) {
+		spreadScore = decimal.Zero
+	}
+
+	// Depth score: more depth = higher score
+	// $1M depth = 100, $10k depth = 10
+	totalDepth := metrics.BidDepth1Pct.Add(metrics.AskDepth1Pct)
+	depthScore := totalDepth.Div(decimal.NewFromInt(10000)).Mul(decimal.NewFromInt(10))
+	if depthScore.GreaterThan(decimal.NewFromInt(100)) {
+		depthScore = decimal.NewFromInt(100)
+	}
+
+	// Imbalance penalty: higher imbalance = lower score
+	imbalancePenalty := metrics.Imbalance1Pct.Abs().Mul(decimal.NewFromInt(20))
+
+	// Weighted average
+	score := spreadScore.Mul(decimal.NewFromFloat(0.4)).
+		Add(depthScore.Mul(decimal.NewFromFloat(0.5))).
+		Sub(imbalancePenalty.Mul(decimal.NewFromFloat(0.1)))
+
+	if score.LessThan(decimal.Zero) {
+		score = decimal.Zero
+	}
+	if score.GreaterThan(decimal.NewFromInt(100)) {
+		score = decimal.NewFromInt(100)
+	}
+
+	return score
+}
+
+// OrderBookMetrics contains calculated metrics derived from raw order book data.
+type OrderBookMetrics struct {
+	Exchange     string          `json:"exchange"`
+	Symbol       string          `json:"symbol"`
+	BidAskSpread decimal.Decimal `json:"bid_ask_spread"`
+	MidPrice     decimal.Decimal `json:"mid_price"`
+	BestBid      decimal.Decimal `json:"best_bid"`
+	BestAsk      decimal.Decimal `json:"best_ask"`
+
+	BidDepth1Pct decimal.Decimal `json:"bid_depth_1pct"`
+	AskDepth1Pct decimal.Decimal `json:"ask_depth_1pct"`
+	BidDepth2Pct decimal.Decimal `json:"bid_depth_2pct"`
+	AskDepth2Pct decimal.Decimal `json:"ask_depth_2pct"`
+
+	Imbalance1Pct decimal.Decimal `json:"imbalance_1pct"`
+	Imbalance2Pct decimal.Decimal `json:"imbalance_2pct"`
+
+	SlippageEstimates map[string]SlippageEstimate `json:"slippage_estimates"`
+	LiquidityScore    decimal.Decimal             `json:"liquidity_score"`
+
+	BidLevels int       `json:"bid_levels"`
+	AskLevels int       `json:"ask_levels"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// SlippageEstimate represents estimated slippage for a given position size.
+type SlippageEstimate struct {
+	PositionSize decimal.Decimal `json:"position_size"`
+	BuySlippage  decimal.Decimal `json:"buy_slippage"`
+	SellSlippage decimal.Decimal `json:"sell_slippage"`
+	AvgBuyPrice  decimal.Decimal `json:"avg_buy_price"`
+	AvgSellPrice decimal.Decimal `json:"avg_sell_price"`
+	IsFillable   bool            `json:"is_fillable"`
 }

@@ -161,16 +161,23 @@ dev: ## Run with hot reload (requires air)
 	cd services/backend-api && air
 
 ## Environment Setup
-dev-setup: ## Setup development environment
-	@echo "$(GREEN)Setting up development environment...$(NC)"
-	@if [ ! -f .env ]; then cp .env.example .env; echo "$(YELLOW)Created .env from .env.example$(NC)"; fi
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file .env up -d postgres
+dev-setup: dev-local ## Setup development environment (alias for dev-local)
 	@echo "$(GREEN)Development environment ready!$(NC)"
 
-dev-down: ## Stop development environment
-	@echo "$(YELLOW)Stopping development environment...$(NC)"
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file .env down
+dev-down: dev-local-down ## Stop development environment (alias for dev-local-down)
 	@echo "$(GREEN)Development environment stopped$(NC)"
+
+dev-local: ## Start local development services (PostgreSQL, Redis)
+	@echo "$(GREEN)Starting local development services (PostgreSQL, Redis)...$(NC)"
+	@if [ ! -f .env ]; then cp .env.example .env; echo "$(YELLOW)Created .env from .env.example$(NC)"; fi
+	cd dev && docker compose up -d
+	@echo "$(GREEN)Local services started!$(NC)"
+	@echo "$(YELLOW)Run 'DATABASE_HOST=localhost REDIS_HOST=localhost make run' to start the application$(NC)"
+
+dev-local-down: ## Stop local development services
+	@echo "$(YELLOW)Stopping local development services...$(NC)"
+	cd dev && docker compose down
+	@echo "$(GREEN)Local services stopped$(NC)"
 
 install-tools: ## Install development tools
 	@echo "$(GREEN)Installing development tools...$(NC)"
@@ -258,6 +265,12 @@ ci-build: ## Build for CI across all languages
 
 ci-check: ci-lint ci-structure-check ci-naming-check ci-test coverage-check ci-build security-check ## Run all CI checks
 	@echo "$(GREEN)All CI checks completed!$(NC)"
+
+validate-compose: ## Validate Docker Compose files
+	@echo "$(GREEN)Validating Docker Compose files...$(NC)"
+	@chmod +x scripts/validate-compose.sh 2>/dev/null || true
+	@./scripts/validate-compose.sh
+	@echo "$(GREEN)Docker Compose validation passed!$(NC)"
 
 ## Database Migration Targets
 migrate: ## Run all pending database migrations

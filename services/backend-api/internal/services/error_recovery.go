@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -268,8 +270,10 @@ func (erm *ErrorRecoveryManager) calculateDelay(baseDelay time.Duration, policy 
 		return baseDelay
 	}
 
-	// Add up to 25% jitter
-	jitter := time.Duration(float64(baseDelay) * 0.25 * (0.5 - float64(time.Now().UnixNano()%1000)/1000.0))
+	// Add up to 25% jitter using proper random distribution
+	// jitterFactor ranges from -0.25 to +0.25
+	jitterFactor := (rand.Float64() - 0.5) * 0.5
+	jitter := time.Duration(float64(baseDelay) * jitterFactor)
 	return baseDelay + jitter
 }
 
@@ -278,6 +282,7 @@ func (erm *ErrorRecoveryManager) EnableDegradationMode() {
 	erm.mu.Lock()
 	defer erm.mu.Unlock()
 	erm.degradationMode = true
+	observability.AddBreadcrumb(context.Background(), "error_recovery", "Error recovery manager entered degradation mode", sentry.LevelWarning)
 	erm.logger.Warn("Error recovery manager entered degradation mode")
 }
 
@@ -286,6 +291,7 @@ func (erm *ErrorRecoveryManager) DisableDegradationMode() {
 	erm.mu.Lock()
 	defer erm.mu.Unlock()
 	erm.degradationMode = false
+	observability.AddBreadcrumb(context.Background(), "error_recovery", "Error recovery manager exited degradation mode", sentry.LevelInfo)
 	erm.logger.Info("Error recovery manager exited degradation mode")
 }
 
@@ -337,6 +343,11 @@ func (erm *ErrorRecoveryManager) ExecuteWithRetry(
 	operationName string,
 	operation func() error,
 ) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpHTTPClient, fmt.Sprintf("ErrorRecoveryManager.ExecuteWithRetry[%s]", operationName), map[string]string{
+		"operation": operationName,
+	})
+	defer observability.FinishSpan(span, nil)
+
 	start := time.Now()
 
 	// Get retry policy
@@ -362,6 +373,7 @@ func (erm *ErrorRecoveryManager) ExecuteWithRetry(
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
+			observability.AddBreadcrumb(spanCtx, "error_recovery", fmt.Sprintf("Operation %s context cancelled", operationName), sentry.LevelWarning)
 			return ctx.Err()
 		default:
 		}

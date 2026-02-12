@@ -2,8 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -99,79 +97,6 @@ func TestHealthResponse_JSONMarshaling(t *testing.T) {
 	assert.Equal(t, response.Version, unmarshaled.Version)
 	assert.Equal(t, response.Services.Database, unmarshaled.Services.Database)
 	assert.Equal(t, response.Services.Redis, unmarshaled.Services.Redis)
-}
-
-// Test placeholder alert handlers
-func TestGetUserAlerts(t *testing.T) {
-	// Setup
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/alerts", getUserAlerts)
-
-	// Create request
-	req, _ := http.NewRequest("GET", "/alerts", nil)
-	w := httptest.NewRecorder()
-
-	// Perform request
-	router.ServeHTTP(w, req)
-
-	// Assertions
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "Alerts retrieval implemented (mock)")
-}
-
-func TestCreateAlert(t *testing.T) {
-	// Setup
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.POST("/alerts", createAlert)
-
-	// Create request
-	req, _ := http.NewRequest("POST", "/alerts", nil)
-	w := httptest.NewRecorder()
-
-	// Perform request
-	router.ServeHTTP(w, req)
-
-	// Assertions
-	assert.Equal(t, http.StatusCreated, w.Code)
-	assert.Contains(t, w.Body.String(), "Alert created successfully")
-}
-
-func TestUpdateAlert(t *testing.T) {
-	// Setup
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.PUT("/alerts/:id", updateAlert)
-
-	// Create request
-	req, _ := http.NewRequest("PUT", "/alerts/123", nil)
-	w := httptest.NewRecorder()
-
-	// Perform request
-	router.ServeHTTP(w, req)
-
-	// Assertions
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "updated successfully")
-}
-
-func TestDeleteAlert(t *testing.T) {
-	// Setup
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.DELETE("/alerts/:id", deleteAlert)
-
-	// Create request
-	req, _ := http.NewRequest("DELETE", "/alerts/123", nil)
-	w := httptest.NewRecorder()
-
-	// Perform request
-	router.ServeHTTP(w, req)
-
-	// Assertions
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "deleted successfully")
 }
 
 // Test time operations in health response
@@ -338,35 +263,6 @@ func TestHealthResponse_TimestampPrecision(t *testing.T) {
 	assert.Greater(t, unix, int64(0))
 }
 
-// Test HTTP status codes in placeholder handlers
-func TestPlaceholderHandlers_StatusCodes(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	// Test all placeholder handlers return 200 OK
-	handlers := map[string]gin.HandlerFunc{
-		"getUserAlerts": getUserAlerts,
-		"createAlert":   createAlert,
-		"updateAlert":   updateAlert,
-		"deleteAlert":   deleteAlert,
-	}
-
-	for name, handler := range handlers {
-		router := gin.New()
-		router.GET("/test", handler)
-
-		req, _ := http.NewRequest("GET", "/test", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		expectedCode := http.StatusOK
-		if name == "createAlert" {
-			expectedCode = http.StatusCreated
-		}
-		assert.Equal(t, expectedCode, w.Code, "Handler %s should return expected status", name)
-		assert.Contains(t, w.Body.String(), "success", "Handler %s should return success payload", name)
-	}
-}
-
 // Test SetupRoutes function with comprehensive coverage
 func TestSetupRoutes_Comprehensive(t *testing.T) {
 	// Set Gin to test mode
@@ -415,7 +311,7 @@ func TestSetupRoutes_PanicHandling(t *testing.T) {
 
 	// Test that SetupRoutes panics with nil dependencies (expected behavior)
 	assert.Panics(t, func() {
-		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should panic with nil dependencies")
 }
 
@@ -463,7 +359,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 
 	// Test the function by providing minimal dependencies to avoid panics
 	assert.NotPanics(t, func() {
-		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
 	}, "SetupRoutes should handle minimal dependencies gracefully")
 
 	// Verify routes were registered
@@ -520,7 +416,7 @@ func TestSetupRoutes_RouteGroups(t *testing.T) {
 	}
 	// Create a minimal auth middleware
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
 
 	// Get all routes
 	routes := router.Routes()
@@ -585,7 +481,7 @@ func TestSetupRoutes_HttpMethods(t *testing.T) {
 	}
 	// Create a minimal auth middleware
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
 
 	// Get all routes
 	routes := router.Routes()
@@ -653,7 +549,7 @@ func TestSetupRoutes_Middleware(t *testing.T) {
 	}
 	// Create a minimal auth middleware
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
 
 	// Test that router has middleware configured
 	// Gin router should have middleware registered
@@ -709,7 +605,7 @@ func TestSetupRoutes_MissingAdminKey(t *testing.T) {
 		}
 		// Create a minimal auth middleware
 		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
 	}, "SetupRoutes should handle missing admin key gracefully")
 }
 
@@ -753,7 +649,7 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 		}
 		// Create a minimal auth middleware
 		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
 	}, "SetupRoutes should not panic when telegram config is missing")
 
 	// Verify routes were still registered

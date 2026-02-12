@@ -15,6 +15,8 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/database"
 )
 
+// Force update
+
 // MockTechnicalDatabase is a mock implementation of the database for technical analysis
 type MockTechnicalDatabase struct {
 	mock.Mock
@@ -149,8 +151,6 @@ func TestGetDefaultIndicatorConfig(t *testing.T) {
 }
 
 func TestCalculateSMA(t *testing.T) {
-	t.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 
 	tests := []struct {
@@ -196,8 +196,6 @@ func TestCalculateSMA(t *testing.T) {
 }
 
 func TestCalculateEMA(t *testing.T) {
-	t.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 
 	prices := []float64{10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
@@ -212,8 +210,6 @@ func TestCalculateEMA(t *testing.T) {
 }
 
 func TestCalculateRSI(t *testing.T) {
-	t.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 
 	tests := []struct {
@@ -252,8 +248,6 @@ func TestCalculateRSI(t *testing.T) {
 }
 
 func TestCalculateMACD(t *testing.T) {
-	t.Skip("Skipping due to hangs in github.com/cinar/indicator/v2 MACD implementation")
-
 	service, _ := setupTestService()
 
 	prices := make([]float64, 200)
@@ -270,8 +264,6 @@ func TestCalculateMACD(t *testing.T) {
 }
 
 func TestCalculateBollingerBands(t *testing.T) {
-	t.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 
 	prices := make([]float64, 30)
@@ -288,8 +280,6 @@ func TestCalculateBollingerBands(t *testing.T) {
 }
 
 func TestCalculateATR(t *testing.T) {
-	t.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 
 	count := 30
@@ -313,8 +303,6 @@ func TestCalculateATR(t *testing.T) {
 }
 
 func TestCalculateStochastic(t *testing.T) {
-	t.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 
 	count := 30
@@ -338,8 +326,6 @@ func TestCalculateStochastic(t *testing.T) {
 }
 
 func TestCalculateOBV(t *testing.T) {
-	t.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 
 	prices := []float64{100, 101, 102, 101, 100, 99, 100, 101}
@@ -551,14 +537,12 @@ func TestConvertToSnapshots(t *testing.T) {
 // Integration-style tests
 
 func TestCalculateAllIndicators(t *testing.T) {
-	t.Skip("Skipping due to hangs in MACD calculation")
-
 	service, _ := setupTestService()
 	priceData := generateTestPriceData(100)
-	snapshots := service.convertToSnapshots(priceData)
+	open, high, low, close, volume := service.convertPriceDataToFloats(priceData)
 	config := service.GetDefaultIndicatorConfig()
 
-	indicators := service.calculateAllIndicators(snapshots, config)
+	indicators := service.calculateAllIndicators(open, high, low, close, volume, config)
 
 	assert.NotEmpty(t, indicators)
 
@@ -592,8 +576,6 @@ func TestCalculateAllIndicators(t *testing.T) {
 // Benchmark tests
 
 func BenchmarkCalculateSMA(b *testing.B) {
-	b.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 	prices := make([]float64, 1000)
 	for i := range prices {
@@ -607,8 +589,6 @@ func BenchmarkCalculateSMA(b *testing.B) {
 }
 
 func BenchmarkCalculateRSI(b *testing.B) {
-	b.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 	prices := make([]float64, 1000)
 	for i := range prices {
@@ -622,24 +602,20 @@ func BenchmarkCalculateRSI(b *testing.B) {
 }
 
 func BenchmarkCalculateAllIndicators(b *testing.B) {
-	b.Skip("Skipping due to hangs in MACD calculation")
-
 	service, _ := setupTestService()
 	priceData := generateTestPriceData(200)
-	snapshots := service.convertToSnapshots(priceData)
+	open, high, low, close, volume := service.convertPriceDataToFloats(priceData)
 	config := service.GetDefaultIndicatorConfig()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		service.calculateAllIndicators(snapshots, config)
+		service.calculateAllIndicators(open, high, low, close, volume, config)
 	}
 }
 
 // Error handling tests
 
 func TestCalculateIndicatorsWithInsufficientData(t *testing.T) {
-	t.Skip("Skipping due to goroutine leaks in github.com/cinar/indicator/v2 library")
-
 	service, _ := setupTestService()
 
 	// Test with very small dataset

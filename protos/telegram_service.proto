@@ -3,6 +3,8 @@ syntax = "proto3";
 package telegram;
 option go_package = "github.com/irfandi/neuratrade/services/backend-api/pkg/pb/telegram";
 
+// TelegramService - Hosted by telegram-service, called by backend
+// Used for sending messages to users via Telegram bot
 service TelegramService {
   rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
@@ -12,6 +14,16 @@ service TelegramService {
   rpc SendQuestProgress(SendQuestProgressRequest) returns (SendQuestProgressResponse);
   rpc SendMilestoneAlert(SendMilestoneAlertRequest) returns (SendMilestoneAlertResponse);
   rpc SendRiskEvent(SendRiskEventRequest) returns (SendRiskEventResponse);
+}
+
+// UserService - Hosted by backend, called by telegram-service
+// Used for user operations without ADMIN_API_KEY
+service UserService {
+  rpc RegisterUser(RegisterUserRequest) returns (RegisterUserResponse);
+  rpc GetUserStatus(GetUserStatusRequest) returns (GetUserStatusResponse);
+  rpc GetUserPreferences(GetUserPreferencesRequest) returns (GetUserPreferencesResponse);
+  rpc SetUserPreferences(SetUserPreferencesRequest) returns (SetUserPreferencesResponse);
+  rpc GetOpportunities(GetOpportunitiesRequest) returns (GetOpportunitiesResponse);
 }
 
 message SendMessageRequest {
@@ -24,6 +36,11 @@ message SendMessageResponse {
   bool ok = 1;
   string message_id = 2;
   string error = 3;
+  // Structured error code for programmatic handling
+  // Values: USER_BLOCKED, CHAT_NOT_FOUND, RATE_LIMITED, INVALID_REQUEST, NETWORK_ERROR, TIMEOUT, INTERNAL_ERROR, UNKNOWN
+  string error_code = 4;
+  // Seconds to wait before retrying (only set for RATE_LIMITED errors)
+  int32 retry_after = 5;
 }
 
 message HealthCheckRequest {}

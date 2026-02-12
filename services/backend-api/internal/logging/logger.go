@@ -1,9 +1,9 @@
 package logging
 
 import (
-	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
@@ -11,23 +11,37 @@ import (
 // Logger interface defines the common logging methods.
 type Logger interface {
 	// WithService adds service name to the log context.
-	WithService(serviceName string) *slog.Logger
+	WithService(serviceName string) Logger
 	// WithComponent adds component name to the log context.
-	WithComponent(componentName string) *slog.Logger
+	WithComponent(componentName string) Logger
 	// WithOperation adds operation name to the log context.
-	WithOperation(operationName string) *slog.Logger
+	WithOperation(operationName string) Logger
 	// WithRequestID adds request ID to the log context.
-	WithRequestID(requestID string) *slog.Logger
+	WithRequestID(requestID string) Logger
 	// WithUserID adds user ID to the log context.
-	WithUserID(userID string) *slog.Logger
+	WithUserID(userID string) Logger
 	// WithExchange adds exchange name to the log context.
-	WithExchange(exchange string) *slog.Logger
+	WithExchange(exchange string) Logger
 	// WithSymbol adds symbol to the log context.
-	WithSymbol(symbol string) *slog.Logger
+	WithSymbol(symbol string) Logger
 	// WithError adds error details to the log context.
-	WithError(err error) *slog.Logger
+	WithError(err error) Logger
 	// WithMetrics adds metrics map to the log context.
-	WithMetrics(metrics map[string]interface{}) *slog.Logger
+	WithMetrics(metrics map[string]interface{}) Logger
+	// WithFields adds multiple fields to the log context and returns a Logger for chaining.
+	WithFields(fields map[string]interface{}) Logger
+
+	// Info logs an info-level message with optional arguments.
+	Info(msg string, args ...interface{})
+	// Warn logs a warning-level message with optional arguments.
+	Warn(msg string, args ...interface{})
+	// Error logs an error-level message with optional arguments.
+	Error(msg string, args ...interface{})
+	// Debug logs a debug-level message with optional arguments.
+	Debug(msg string, args ...interface{})
+	// Fatal logs a fatal-level message and exits.
+	Fatal(msg string, args ...interface{})
+
 	// LogStartup logs application startup information.
 	LogStartup(serviceName string, version string, port int)
 	// LogShutdown logs application shutdown information.
@@ -44,13 +58,18 @@ type Logger interface {
 	LogAPIRequest(method string, path string, statusCode int, duration int64, userID string)
 	// LogBusinessEvent logs business events in a standardized format.
 	LogBusinessEvent(eventType string, details map[string]interface{})
-	// Logger returns the underlying *slog.Logger.
-	Logger() *slog.Logger
+
+	// Logger returns the underlying *zap.Logger.
+	Logger() *zap.Logger
+
+	// SetLevel sets the log level.
+	SetLevel(level string)
 }
 
 // StandardLogger provides a standardized logging interface.
 type StandardLogger struct {
-	logger Logger
+	logger      *zap.Logger
+	atomicLevel zap.AtomicLevel
 }
 
 // NewStandardLogger creates a new standardized logger based on configuration.
@@ -64,13 +83,35 @@ type StandardLogger struct {
 //
 //	*StandardLogger: The initialized logger.
 func NewStandardLogger(logLevel string, environment string) *StandardLogger {
-	// For now, return a basic logger - we'll integrate with Sentry in the main initialization
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: getSlogLevel(logLevel),
-	}))
+	// Use AtomicLevel for dynamic level changes without recreating the logger
+	atomicLevel := zap.NewAtomicLevelAt(getZapLevel(logLevel))
+
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.TimeKey = "timestamp"
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	var core zapcore.Core
+
+	if environment == "development" {
+		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		consoleEncoder := zapcore.NewConsoleEncoder(encoderConfig)
+		core = zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), atomicLevel)
+	} else {
+		jsonEncoder := zapcore.NewJSONEncoder(encoderConfig)
+		core = zapcore.NewCore(jsonEncoder, zapcore.AddSync(os.Stdout), atomicLevel)
+	}
+
+	// Sentry Integration
+	// We assume Sentry is initialized globally via observability.InitSentry
+	// We add a core that sends Error and Fatal logs to Sentry
+	sentryCore := newSentryCore(atomicLevel)
+	core = zapcore.NewTee(core, sentryCore)
+
+	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
 
 	return &StandardLogger{
-		logger: &fallbackLogger{logger: logger},
+		logger:      logger,
+		atomicLevel: atomicLevel,
 	}
 }
 
@@ -79,235 +120,215 @@ func NewStandardLogger(logLevel string, environment string) *StandardLogger {
 // Parameters:
 //
 //	logger: The logger implementation to use.
-func (l *StandardLogger) SetLogger(logger Logger) {
+func (l *StandardLogger) SetLogger(logger *zap.Logger) {
 	l.logger = logger
 }
 
+func (l *StandardLogger) Logger() *zap.Logger {
+	return l.logger
+}
+
+// SetLevel sets the log level for the logger dynamically.
+// This uses AtomicLevel for efficient level changes without recreating the logger.
+// Valid levels: "debug", "info", "warn", "error"
+func (l *StandardLogger) SetLevel(level string) {
+	l.atomicLevel.SetLevel(getZapLevel(level))
+}
+
 // WithService creates a logger with service context.
-//
-// Parameters:
-//
-//	serviceName: The service name.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithService(serviceName string) *slog.Logger {
-	return l.logger.WithService(serviceName)
+func (l *StandardLogger) WithService(serviceName string) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.String("service", serviceName)), atomicLevel: l.atomicLevel}
 }
 
 // WithComponent creates a logger with component context.
-//
-// Parameters:
-//
-//	componentName: The component name.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithComponent(componentName string) *slog.Logger {
-	return l.logger.WithComponent(componentName)
+func (l *StandardLogger) WithComponent(componentName string) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.String("component", componentName)), atomicLevel: l.atomicLevel}
 }
 
 // WithOperation creates a logger with operation context.
-//
-// Parameters:
-//
-//	operationName: The operation name.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithOperation(operationName string) *slog.Logger {
-	return l.logger.WithOperation(operationName)
+func (l *StandardLogger) WithOperation(operationName string) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.String("operation", operationName)), atomicLevel: l.atomicLevel}
 }
 
 // WithRequestID creates a logger with request ID context.
-//
-// Parameters:
-//
-//	requestID: The request identifier.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithRequestID(requestID string) *slog.Logger {
-	return l.logger.WithRequestID(requestID)
+func (l *StandardLogger) WithRequestID(requestID string) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.String("request_id", requestID)), atomicLevel: l.atomicLevel}
 }
 
 // WithUserID creates a logger with user ID context.
-//
-// Parameters:
-//
-//	userID: The user identifier.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithUserID(userID string) *slog.Logger {
-	return l.logger.WithUserID(userID)
+func (l *StandardLogger) WithUserID(userID string) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.String("user_id", userID)), atomicLevel: l.atomicLevel}
 }
 
 // WithExchange creates a logger with exchange context.
-//
-// Parameters:
-//
-//	exchange: The exchange name.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithExchange(exchange string) *slog.Logger {
-	return l.logger.WithExchange(exchange)
+func (l *StandardLogger) WithExchange(exchange string) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.String("exchange", exchange)), atomicLevel: l.atomicLevel}
 }
 
 // WithSymbol creates a logger with symbol context.
-//
-// Parameters:
-//
-//	symbol: The trading symbol.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithSymbol(symbol string) *slog.Logger {
-	return l.logger.WithSymbol(symbol)
+func (l *StandardLogger) WithSymbol(symbol string) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.String("symbol", symbol)), atomicLevel: l.atomicLevel}
 }
 
 // WithError creates a logger with error context.
-//
-// Parameters:
-//
-//	err: The error to log.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithError(err error) *slog.Logger {
-	return l.logger.WithError(err)
+func (l *StandardLogger) WithError(err error) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.Error(err)), atomicLevel: l.atomicLevel}
 }
 
 // WithMetrics creates a logger with metrics context.
-//
-// Parameters:
-//
-//	metrics: Map of metrics.
-//
-// Returns:
-//
-//	*slog.Logger: Logger with context.
-func (l *StandardLogger) WithMetrics(metrics map[string]interface{}) *slog.Logger {
-	return l.logger.WithMetrics(metrics)
+func (l *StandardLogger) WithMetrics(metrics map[string]interface{}) Logger {
+	return &StandardLogger{logger: l.logger.With(zap.Any("metrics", metrics)), atomicLevel: l.atomicLevel}
+}
+
+// WithFields adds multiple fields to the log context.
+func (l *StandardLogger) WithFields(fields map[string]interface{}) Logger {
+	if len(fields) == 0 {
+		return l
+	}
+	zapFields := make([]zap.Field, 0, len(fields))
+	for k, v := range fields {
+		zapFields = append(zapFields, zap.Any(k, v))
+	}
+	return &StandardLogger{logger: l.logger.With(zapFields...), atomicLevel: l.atomicLevel}
+}
+
+// Info logs an info-level message.
+func (l *StandardLogger) Info(msg string, args ...interface{}) {
+	if len(args) > 0 {
+		// Use Sugar for formatting if args are present, but we prefer structured fields
+		l.logger.Sugar().Infof(msg, args...)
+	} else {
+		l.logger.Info(msg)
+	}
+}
+
+// Warn logs a warning-level message.
+func (l *StandardLogger) Warn(msg string, args ...interface{}) {
+	if len(args) > 0 {
+		l.logger.Sugar().Warnf(msg, args...)
+	} else {
+		l.logger.Warn(msg)
+	}
+}
+
+// Error logs an error-level message.
+func (l *StandardLogger) Error(msg string, args ...interface{}) {
+	if len(args) > 0 {
+		l.logger.Sugar().Errorf(msg, args...)
+	} else {
+		l.logger.Error(msg)
+	}
+}
+
+// Debug logs a debug-level message.
+func (l *StandardLogger) Debug(msg string, args ...interface{}) {
+	if len(args) > 0 {
+		l.logger.Sugar().Debugf(msg, args...)
+	} else {
+		l.logger.Debug(msg)
+	}
+}
+
+// Fatal logs a fatal-level message.
+func (l *StandardLogger) Fatal(msg string, args ...interface{}) {
+	if len(args) > 0 {
+		l.logger.Sugar().Fatalf(msg, args...)
+	} else {
+		l.logger.Fatal(msg)
+	}
 }
 
 // LogStartup logs application startup information.
-//
-// Parameters:
-//
-//	serviceName: Name of the service.
-//	version: Service version.
-//	port: Port number.
 func (l *StandardLogger) LogStartup(serviceName string, version string, port int) {
-	l.logger.LogStartup(serviceName, version, port)
+	l.logger.Info("Service starting",
+		zap.String("service", serviceName),
+		zap.String("version", version),
+		zap.Int("port", port),
+		zap.String("event", "startup"),
+	)
 }
 
 // LogShutdown logs application shutdown information.
-//
-// Parameters:
-//
-//	serviceName: Name of the service.
-//	reason: Reason for shutdown.
 func (l *StandardLogger) LogShutdown(serviceName string, reason string) {
-	l.logger.LogShutdown(serviceName, reason)
+	l.logger.Info("Service shutting down",
+		zap.String("service", serviceName),
+		zap.String("reason", reason),
+		zap.String("event", "shutdown"),
+	)
 }
 
-// LogPerformanceMetrics logs performance metrics in a standardized format.
-//
-// Parameters:
-//
-//	serviceName: Name of the service.
-//	metrics: Map of performance metrics.
+// LogPerformanceMetrics logs performance metrics.
 func (l *StandardLogger) LogPerformanceMetrics(serviceName string, metrics map[string]interface{}) {
-	l.logger.LogPerformanceMetrics(serviceName, metrics)
+	l.logger.Info("Performance metrics",
+		zap.String("service", serviceName),
+		zap.Any("metrics", metrics),
+		zap.String("event", "performance_metrics"),
+	)
 }
 
-// LogResourceStats logs resource statistics in a standardized format.
-//
-// Parameters:
-//
-//	serviceName: Name of the service.
-//	stats: Map of resource statistics.
+// LogResourceStats logs resource statistics.
 func (l *StandardLogger) LogResourceStats(serviceName string, stats map[string]interface{}) {
-	l.logger.LogResourceStats(serviceName, stats)
+	l.logger.Info("Resource statistics",
+		zap.String("service", serviceName),
+		zap.Any("stats", stats),
+		zap.String("event", "resource_stats"),
+	)
 }
 
-// LogCacheOperation logs cache operations in a standardized format.
-//
-// Parameters:
-//
-//	operation: Cache operation (e.g., "get", "set").
-//	key: Cache key.
-//	hit: Whether it was a cache hit.
-//	duration: Duration in milliseconds.
+// LogCacheOperation logs cache operations.
 func (l *StandardLogger) LogCacheOperation(operation string, key string, hit bool, duration int64) {
-	l.logger.LogCacheOperation(operation, key, hit, duration)
+	l.logger.Info("Cache operation",
+		zap.String("operation", operation),
+		zap.String("key", key),
+		zap.Bool("hit", hit),
+		zap.Int64("duration_ms", duration),
+		zap.String("event", "cache_operation"),
+	)
 }
 
-// LogDatabaseOperation logs database operations in a standardized format.
-//
-// Parameters:
-//
-//	operation: DB operation (e.g., "select", "insert").
-//	table: Table name.
-//	duration: Duration in milliseconds.
-//	rowsAffected: Number of rows affected.
+// LogDatabaseOperation logs database operations.
 func (l *StandardLogger) LogDatabaseOperation(operation string, table string, duration int64, rowsAffected int64) {
-	l.logger.LogDatabaseOperation(operation, table, duration, rowsAffected)
+	l.logger.Info("Database operation",
+		zap.String("operation", operation),
+		zap.String("table", table),
+		zap.Int64("duration_ms", duration),
+		zap.Int64("rows_affected", rowsAffected),
+		zap.String("event", "database_operation"),
+	)
 }
 
-// LogAPIRequest logs API requests in a standardized format.
-//
-// Parameters:
-//
-//	method: HTTP method.
-//	path: Request path.
-//	statusCode: HTTP status code.
-//	duration: Duration in milliseconds.
-//	userID: User identifier (if authenticated).
+// LogAPIRequest logs API requests.
 func (l *StandardLogger) LogAPIRequest(method string, path string, statusCode int, duration int64, userID string) {
-	l.logger.LogAPIRequest(method, path, statusCode, duration, userID)
+	l.logger.Info("API request",
+		zap.String("method", method),
+		zap.String("path", path),
+		zap.Int("status_code", statusCode),
+		zap.Int64("duration_ms", duration),
+		zap.String("user_id", userID),
+		zap.String("event", "api_request"),
+	)
 }
 
-// LogBusinessEvent logs business events in a standardized format.
-//
-// Parameters:
-//
-//	eventType: Type of business event.
-//	details: Event details.
+// LogBusinessEvent logs business events.
 func (l *StandardLogger) LogBusinessEvent(eventType string, details map[string]interface{}) {
-	l.logger.LogBusinessEvent(eventType, details)
+	l.logger.Info("Business event",
+		zap.String("type", eventType),
+		zap.Any("details", details),
+		zap.String("event", "business_event"),
+	)
 }
 
-// Logger returns the underlying *slog.Logger.
-//
-// Returns:
-//
-//	*slog.Logger: The underlying logger.
-func (l *StandardLogger) Logger() *slog.Logger {
-	return l.logger.Logger()
-}
-
-// getSlogLevel converts string level to slog.Level.
-func getSlogLevel(level string) slog.Level {
+// getZapLevel converts string level to zapcore.Level.
+func getZapLevel(level string) zapcore.Level {
 	switch strings.ToLower(level) {
 	case "debug":
-		return slog.LevelDebug
+		return zapcore.DebugLevel
 	case "warn", "warning":
-		return slog.LevelWarn
+		return zapcore.WarnLevel
 	case "error":
-		return slog.LevelError
+		return zapcore.ErrorLevel
 	default:
-		return slog.LevelInfo
+		return zapcore.InfoLevel
 	}
 }
 
@@ -326,120 +347,34 @@ func ParseLogrusLevel(level string) zaplogrus.Level {
 	}
 }
 
-// fallbackLogger is a simple implementation that uses slog directly.
-// This is used as a fallback when telemetry is not configured.
-type fallbackLogger struct {
-	logger *slog.Logger
+func (s *sentryCore) With(fields []zapcore.Field) zapcore.Core {
+	return s // We don't need to accumulate fields here, we just intercept Check/Write
 }
 
-func (f *fallbackLogger) WithService(serviceName string) *slog.Logger {
-	return f.logger.With("service", serviceName)
+func (s *sentryCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	if s.Enabled(ent.Level) && (ent.Level == zapcore.ErrorLevel || ent.Level == zapcore.FatalLevel) {
+		return ce.AddCore(ent, s)
+	}
+	return ce
 }
 
-func (f *fallbackLogger) WithComponent(componentName string) *slog.Logger {
-	return f.logger.With("component", componentName)
+func (s *sentryCore) Write(ent zapcore.Entry, fields []zapcore.Field) error {
+	// Send to Sentry
+	// Capture message
+	sentry.CaptureMessage(ent.Message)
+
+	// If there are error fields, capture exception
+	for _, f := range fields {
+		if f.Type == zapcore.ErrorType && f.Interface != nil {
+			if err, ok := f.Interface.(error); ok {
+				sentry.CaptureException(err)
+			}
+		}
+	}
+	return nil
 }
 
-func (f *fallbackLogger) WithOperation(operationName string) *slog.Logger {
-	return f.logger.With("operation", operationName)
-}
-
-func (f *fallbackLogger) WithRequestID(requestID string) *slog.Logger {
-	return f.logger.With("request_id", requestID)
-}
-
-func (f *fallbackLogger) WithUserID(userID string) *slog.Logger {
-	return f.logger.With("user_id", userID)
-}
-
-func (f *fallbackLogger) WithExchange(exchange string) *slog.Logger {
-	return f.logger.With("exchange", exchange)
-}
-
-func (f *fallbackLogger) WithSymbol(symbol string) *slog.Logger {
-	return f.logger.With("symbol", symbol)
-}
-
-func (f *fallbackLogger) WithError(err error) *slog.Logger {
-	return f.logger.With("error", err.Error())
-}
-
-func (f *fallbackLogger) WithMetrics(metrics map[string]interface{}) *slog.Logger {
-	return f.logger.With("metrics", metrics)
-}
-
-func (f *fallbackLogger) LogStartup(serviceName string, version string, port int) {
-	f.logger.Info("Application startup",
-		"service", serviceName,
-		"version", version,
-		"port", port,
-		"event", "startup",
-	)
-}
-
-func (f *fallbackLogger) LogShutdown(serviceName string, reason string) {
-	f.logger.Info("Application shutdown",
-		"service", serviceName,
-		"reason", reason,
-		"event", "shutdown",
-	)
-}
-
-func (f *fallbackLogger) LogPerformanceMetrics(serviceName string, metrics map[string]interface{}) {
-	f.logger.Info("Performance metrics",
-		"service", serviceName,
-		"metrics", metrics,
-		"event", "performance",
-	)
-}
-
-func (f *fallbackLogger) LogResourceStats(serviceName string, stats map[string]interface{}) {
-	f.logger.Info("Resource statistics",
-		"service", serviceName,
-		"stats", stats,
-		"event", "resource",
-	)
-}
-
-func (f *fallbackLogger) LogCacheOperation(operation string, key string, hit bool, duration int64) {
-	f.logger.Info("Cache operation",
-		"operation", operation,
-		"key", key,
-		"hit", hit,
-		"duration_ms", duration,
-		"event", "cache",
-	)
-}
-
-func (f *fallbackLogger) LogDatabaseOperation(operation string, table string, duration int64, rowsAffected int64) {
-	f.logger.Info("Database operation",
-		"operation", operation,
-		"table", table,
-		"duration_ms", duration,
-		"rows_affected", rowsAffected,
-		"event", "database",
-	)
-}
-
-func (f *fallbackLogger) LogAPIRequest(method string, path string, statusCode int, duration int64, userID string) {
-	f.logger.Info("API request",
-		"method", method,
-		"path", path,
-		"status", statusCode,
-		"duration_ms", duration,
-		"user_id", userID,
-		"event", "api",
-	)
-}
-
-func (f *fallbackLogger) LogBusinessEvent(eventType string, details map[string]interface{}) {
-	f.logger.Info("Business event",
-		"event_type", eventType,
-		"details", details,
-		"event", "business",
-	)
-}
-
-func (f *fallbackLogger) Logger() *slog.Logger {
-	return f.logger
+func (s *sentryCore) Sync() error {
+	sentry.Flush(2 * time.Second) // Wait up to 2 seconds
+	return nil
 }

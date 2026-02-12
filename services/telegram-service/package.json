@@ -15,6 +15,7 @@
   "dependencies": {
     "@bufbuild/protobuf": "^2.10.2",
     "@grpc/grpc-js": "^1.14.3",
+    "@sentry/bun": "^8.29.0",
     "effect": "^3.19.13",
     "grammy": "^1.26.0",
     "hono": "^4.10.7"

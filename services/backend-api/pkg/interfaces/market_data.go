@@ -17,6 +17,10 @@ type MarketPrice struct {
 	Symbol string `json:"symbol"`
 	// Price is the current price of the asset.
 	Price decimal.Decimal `json:"price"`
+	// Bid is the best bid price.
+	Bid decimal.Decimal `json:"bid"`
+	// Ask is the best ask price.
+	Ask decimal.Decimal `json:"ask"`
 	// Volume is the 24-hour trading volume.
 	Volume decimal.Decimal `json:"volume"`
 	// Timestamp is the time at which this price data was recorded.
@@ -54,6 +58,18 @@ type MarketPriceInterface interface {
 	// Returns:
 	//   string: The symbol.
 	GetSymbol() string
+
+	// GetBid retrieves the best bid price as a float64.
+	//
+	// Returns:
+	//   float64: The bid price.
+	GetBid() float64
+
+	// GetAsk retrieves the best ask price as a float64.
+	//
+	// Returns:
+	//   float64: The ask price.
+	GetAsk() float64
 }
 
 // GetPrice returns the price of the asset as a float64.
@@ -101,4 +117,24 @@ func (mp *MarketPrice) GetExchangeName() string {
 //	string: The symbol (e.g., "BTC/USDT").
 func (mp *MarketPrice) GetSymbol() string {
 	return mp.Symbol
+}
+
+// GetBid returns the best bid price as a float64.
+// Note: This converts the underlying decimal.Decimal to a float64, which may involve precision loss.
+//
+// Returns:
+//
+//	float64: The bid price value.
+func (mp *MarketPrice) GetBid() float64 {
+	return mp.Bid.InexactFloat64()
+}
+
+// GetAsk returns the best ask price as a float64.
+// Note: This converts the underlying decimal.Decimal to a float64, which may involve precision loss.
+//
+// Returns:
+//
+//	float64: The ask price value.
+func (mp *MarketPrice) GetAsk() float64 {
+	return mp.Ask.InexactFloat64()
 }

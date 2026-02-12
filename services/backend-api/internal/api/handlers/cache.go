@@ -111,9 +111,10 @@ func (h *CacheHandler) GetCacheStatsByCategory(c *gin.Context) {
 func (h *CacheHandler) GetCacheMetrics(c *gin.Context) {
 	metrics, err := h.cacheAnalytics.GetMetrics(c.Request.Context())
 	if err != nil {
+		// Don't expose internal error details to clients
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"error":   "Failed to get cache metrics: " + err.Error(),
+			"error":   "Failed to get cache metrics",
 		})
 		return
 	}

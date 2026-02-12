@@ -33,15 +33,19 @@ type MarketData struct {
 }
 
 // MarketPrice represents a simplified view of the current market price for API responses.
+//
+// Note: BidVolume and AskVolume are set to zero when using ticker data from CCXT,
+// as the ticker endpoint does not provide bid/ask volume information.
+// Order book data would be required for accurate bid/ask volume values.
 type MarketPrice struct {
 	ExchangeID   int             `json:"exchange_id"`
 	ExchangeName string          `json:"exchange_name"`
 	Symbol       string          `json:"symbol"`
 	Bid          decimal.Decimal `json:"bid"`
-	BidVolume    decimal.Decimal `json:"bid_volume"`
+	BidVolume    decimal.Decimal `json:"bid_volume"` // May be zero when using ticker data
 	Ask          decimal.Decimal `json:"ask"`
-	AskVolume    decimal.Decimal `json:"ask_volume"`
-	Price        decimal.Decimal `json:"price"` // Last traded price
+	AskVolume    decimal.Decimal `json:"ask_volume"` // May be zero when using ticker data
+	Price        decimal.Decimal `json:"price"`      // Last traded price
 	Volume       decimal.Decimal `json:"volume"`
 	Timestamp    time.Time       `json:"timestamp"`
 }
@@ -69,6 +73,16 @@ func (mp *MarketPrice) GetExchangeName() string {
 // GetSymbol returns the trading pair symbol.
 func (mp *MarketPrice) GetSymbol() string {
 	return mp.Symbol
+}
+
+// GetBid returns the best bid price as a float64.
+func (mp *MarketPrice) GetBid() float64 {
+	return mp.Bid.InexactFloat64()
+}
+
+// GetAsk returns the best ask price as a float64.
+func (mp *MarketPrice) GetAsk() float64 {
+	return mp.Ask.InexactFloat64()
 }
 
 // TickerData represents real-time ticker information retrieved from the CCXT library.

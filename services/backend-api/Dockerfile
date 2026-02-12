@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o 
 # Final Stage
 FROM oven/bun:1 AS production
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata wget curl bash postgresql-client && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata curl bash postgresql-client && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN groupadd -g 1001 appgroup && \
@@ -42,6 +42,6 @@ USER appuser
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/health || exit 1
 
 CMD ["./entrypoint.sh"]

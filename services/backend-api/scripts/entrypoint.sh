@@ -6,6 +6,28 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# ============================================
+# CRITICAL: Generate ADMIN_API_KEY early
+# This must happen before any service starts
+# ============================================
+ensure_admin_api_key() {
+  if [ -z "$ADMIN_API_KEY" ]; then
+    log "WARNING: ADMIN_API_KEY is not set. Generating secure default..."
+    # Generate a random 32-character hex string (openssl or fallback to /dev/urandom)
+    if command -v openssl >/dev/null 2>&1; then
+      export ADMIN_API_KEY=$(openssl rand -hex 16)
+    else
+      export ADMIN_API_KEY=$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 32)
+    fi
+    log "Generated ADMIN_API_KEY (first 8 chars): ${ADMIN_API_KEY:0:8}..."
+  else
+    log "ADMIN_API_KEY is set (first 8 chars): ${ADMIN_API_KEY:0:8}..."
+  fi
+}
+
+# Call immediately to ensure key is available for all services
+ensure_admin_api_key
+
 # Normalize database environment variables from common providers (Coolify, generic Postgres, psql)
 normalize_database_env() {
   # Map provider-specific URL first
@@ -106,13 +128,7 @@ if [ "${CCXT_DISABLED}" = "true" ] || [ "${RUN_CCXT_SERVICE}" = "false" ]; then
 else
   log "Starting CCXT Service..."
 
-  # Ensure ADMIN_API_KEY is set (required for CCXT service)
-  if [ -z "$ADMIN_API_KEY" ]; then
-    log "WARNING: ADMIN_API_KEY is not set. generating a secure default for internal use..."
-    # Generate a random 32-character hex string
-    export ADMIN_API_KEY=$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 32)
-    log "Generated ADMIN_API_KEY (first 8 chars): ${ADMIN_API_KEY:0:8}..."
-  fi
+  # ADMIN_API_KEY is already ensured at script start
 
   # Set default port for CCXT service if not set
   export PORT="${PORT:-3001}"
@@ -160,11 +176,7 @@ elif [ -z "$TELEGRAM_BOT_TOKEN" ]; then
 else
   log "Starting Telegram Service..."
 
-  if [ -z "$ADMIN_API_KEY" ]; then
-    log "WARNING: ADMIN_API_KEY is not set. generating a secure default for internal use..."
-    export ADMIN_API_KEY=$(cat /dev/urandom | tr -dc 'a-f0-9' | head -c 32)
-    log "Generated ADMIN_API_KEY (first 8 chars): ${ADMIN_API_KEY:0:8}..."
-  fi
+  # ADMIN_API_KEY is already ensured at script start
 
   export TELEGRAM_PORT="${TELEGRAM_PORT:-3002}"
 

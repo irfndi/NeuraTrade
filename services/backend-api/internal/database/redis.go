@@ -101,7 +101,7 @@ func (r *RedisClient) Close() {
 		if err := r.Client.Close(); err != nil {
 			// Log error but don't return it since this is a cleanup function
 			if r.logger != nil {
-				r.logger.Errorf("Error closing Redis client: %v", err)
+				r.logger.WithError(err).Error("Error closing Redis client")
 			} else {
 				zaplogrus.Errorf("Error closing Redis client: %v", err)
 			}

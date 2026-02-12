@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -135,6 +137,9 @@ func NewResourceOptimizer(config ResourceOptimizerConfig) *ResourceOptimizer {
 		ro.memoryGB = float64(memInfo.Total) / (1024 * 1024 * 1024)
 	} else {
 		ro.logger.Warn("Could not get memory info, using default", "error", err)
+		observability.CaptureExceptionWithContext(context.Background(), err, "resource_optimizer.memory_info", map[string]interface{}{
+			"default_memory_gb": 8.0,
+		})
 		ro.memoryGB = 8.0 // Default to 8GB
 	}
 
@@ -154,6 +159,9 @@ func NewResourceOptimizer(config ResourceOptimizerConfig) *ResourceOptimizer {
 
 // calculateOptimalConcurrency calculates optimal concurrency limits based on system resources
 func (ro *ResourceOptimizer) calculateOptimalConcurrency(config ResourceOptimizerConfig) {
+	_, span := observability.StartSpan(context.Background(), "resource.optimize", "ResourceOptimizer.calculateOptimalConcurrency")
+	defer observability.FinishSpan(span, nil)
+
 	ro.mu.Lock()
 	defer ro.mu.Unlock()
 
@@ -210,6 +218,12 @@ func (ro *ResourceOptimizer) calculateOptimalConcurrency(config ResourceOptimize
 		CPUThreshold:           config.CPUThreshold,
 	}
 
+	span.SetData("max_workers", ro.optimalConcurrency.MaxWorkers)
+	span.SetData("max_concurrent_symbols", ro.optimalConcurrency.MaxConcurrentSymbols)
+	span.SetData("max_concurrent_backfill", ro.optimalConcurrency.MaxConcurrentBackfill)
+	span.SetData("max_concurrent_writes", ro.optimalConcurrency.MaxConcurrentWrites)
+	span.SetData("max_circuit_breaker_calls", ro.optimalConcurrency.MaxCircuitBreakerCalls)
+	span.SetData("adaptive_mode", ro.adaptiveMode)
 	ro.logger.Info("Calculated optimal concurrency",
 		"max_workers", ro.optimalConcurrency.MaxWorkers,
 		"max_concurrent_symbols", ro.optimalConcurrency.MaxConcurrentSymbols,
@@ -239,25 +253,39 @@ func (ro *ResourceOptimizer) GetOptimalConcurrency() OptimalConcurrency {
 //
 //	error: Error if metrics update fails.
 func (ro *ResourceOptimizer) UpdateSystemMetrics(ctx context.Context) error {
+	spanCtx, span := observability.StartSpan(ctx, "resource.metrics", "ResourceOptimizer.UpdateSystemMetrics")
+	var err error
+	defer func() {
+		observability.FinishSpan(span, err)
+	}()
+
 	// Get CPU usage
 	cpuPercent, err := cpu.PercentWithContext(ctx, time.Second, false)
 	if err != nil {
+		observability.CaptureExceptionWithContext(spanCtx, err, "resource_optimizer.cpu_usage", map[string]interface{}{
+			"cpu_cores": ro.cpuCores,
+		})
 		return fmt.Errorf("failed to get CPU usage: %w", err)
 	}
 	if len(cpuPercent) > 0 {
 		ro.mu.Lock()
 		ro.currentCPUUsage = cpuPercent[0]
 		ro.mu.Unlock()
+		span.SetData("cpu_usage", ro.currentCPUUsage)
 	}
 
 	// Get memory usage
 	memInfo, err := mem.VirtualMemoryWithContext(ctx)
 	if err != nil {
+		observability.CaptureExceptionWithContext(spanCtx, err, "resource_optimizer.memory_usage", map[string]interface{}{
+			"memory_gb": ro.memoryGB,
+		})
 		return fmt.Errorf("failed to get memory usage: %w", err)
 	}
 	ro.mu.Lock()
 	ro.currentMemoryUsage = memInfo.UsedPercent
 	ro.mu.Unlock()
+	span.SetData("memory_usage", ro.currentMemoryUsage)
 
 	return nil
 }
@@ -304,6 +332,9 @@ func (ro *ResourceOptimizer) RecordPerformanceSnapshot(activeOps int, throughput
 //
 //	bool: True if optimization was performed.
 func (ro *ResourceOptimizer) OptimizeIfNeeded(config ResourceOptimizerConfig) bool {
+	spanCtx, span := observability.StartSpan(context.Background(), "resource.optimize", "ResourceOptimizer.OptimizeIfNeeded")
+	defer observability.FinishSpan(span, nil)
+
 	ro.mu.RLock()
 	lastOpt := ro.lastOptimization
 	adaptive := ro.adaptiveMode
@@ -314,23 +345,30 @@ func (ro *ResourceOptimizer) OptimizeIfNeeded(config ResourceOptimizerConfig) bo
 	// Check if adaptive optimization is needed regardless of interval
 	if adaptive && ro.shouldOptimize() {
 		ro.logger.Info("Adaptive optimization triggered due to performance changes")
+		observability.AddBreadcrumb(spanCtx, "resource_optimizer", "Adaptive optimization triggered", sentry.LevelInfo)
 		ro.calculateOptimalConcurrency(config)
 		ro.mu.Lock()
 		ro.lastOptimization = time.Now()
 		ro.mu.Unlock()
+		span.SetData("trigger", "adaptive")
 		return true
 	}
 
 	// Respect the regular optimization interval
 	if elapsed < ro.optimizationInterval {
+		span.SetData("trigger", "skipped")
 		return false
 	}
 
 	ro.logger.Info("Regular optimization triggered", "interval", ro.optimizationInterval)
+	observability.AddBreadcrumbWithData(spanCtx, "resource_optimizer", "Regular optimization triggered", sentry.LevelInfo, map[string]interface{}{
+		"interval": ro.optimizationInterval.String(),
+	})
 	ro.calculateOptimalConcurrency(config)
 	ro.mu.Lock()
 	ro.lastOptimization = time.Now()
 	ro.mu.Unlock()
+	span.SetData("trigger", "interval")
 	return true
 }
 

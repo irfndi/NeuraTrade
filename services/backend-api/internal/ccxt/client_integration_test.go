@@ -754,6 +754,220 @@ func TestClient_Close(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestClient_SymbolNotFoundError(t *testing.T) {
+	server := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		if _, err := fmt.Fprint(w, `{"error":"hibachi does not have market symbol PUMP/USDT:USDT","timestamp":"2024-01-01T00:00:00Z"}`); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.CCXTConfig{
+		ServiceURL: server.URL,
+		Timeout:    30,
+	}
+	client := ccxt.NewClient(cfg)
+
+	ctx := context.Background()
+	_, err := client.GetTicker(ctx, "hibachi", "PUMP/USDT:USDT")
+
+	require.Error(t, err)
+	assert.True(t, ccxt.IsSymbolNotFoundError(err), "Expected SymbolNotFoundError, got: %T", err)
+
+	var symbolErr *ccxt.SymbolNotFoundError
+	assert.ErrorAs(t, err, &symbolErr)
+	assert.Equal(t, "hibachi", symbolErr.Exchange)
+	assert.Contains(t, symbolErr.Symbol, "PUMP")
+}
+
+func TestClient_ExchangeUnavailableError(t *testing.T) {
+	server := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if _, err := fmt.Fprint(w, `{"error":"Exchange temporarily unavailable","timestamp":"2024-01-01T00:00:00Z"}`); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.CCXTConfig{
+		ServiceURL: server.URL,
+		Timeout:    30,
+	}
+	client := ccxt.NewClient(cfg)
+
+	ctx := context.Background()
+	_, err := client.GetTicker(ctx, "binance", "BTC/USDT")
+
+	require.Error(t, err)
+	assert.True(t, ccxt.IsExchangeUnavailableError(err), "Expected ExchangeUnavailableError, got: %T", err)
+
+	var unavailableErr *ccxt.ExchangeUnavailableError
+	assert.ErrorAs(t, err, &unavailableErr)
+	assert.Equal(t, "binance", unavailableErr.Exchange)
+}
+
+func TestClient_GenericHTTPError(t *testing.T) {
+	server := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		if _, err := fmt.Fprint(w, `{"error":"Internal Server Error","timestamp":"2024-01-01T00:00:00Z"}`); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.CCXTConfig{
+		ServiceURL: server.URL,
+		Timeout:    30,
+	}
+	client := ccxt.NewClient(cfg)
+
+	ctx := context.Background()
+	_, err := client.GetTicker(ctx, "binance", "BTC/USDT")
+
+	require.Error(t, err)
+	// Should NOT be a SymbolNotFoundError or ExchangeUnavailableError
+	assert.False(t, ccxt.IsSymbolNotFoundError(err), "Should not be SymbolNotFoundError")
+	assert.False(t, ccxt.IsExchangeUnavailableError(err), "Should not be ExchangeUnavailableError")
+	assert.Contains(t, err.Error(), "500")
+}
+
+func TestClient_ExtractExchangeSymbolFromPath(t *testing.T) {
+	cfg := &config.CCXTConfig{
+		ServiceURL: "http://localhost:3001",
+		Timeout:    30,
+	}
+	client := ccxt.NewClient(cfg)
+
+	tests := []struct {
+		name             string
+		path             string
+		expectedExchange string
+		expectedSymbol   string
+	}{
+		{
+			name:             "ticker path",
+			path:             "/api/ticker/binance/BTCUSDT",
+			expectedExchange: "binance",
+			expectedSymbol:   "BTCUSDT",
+		},
+		{
+			name:             "ticker path with slash in symbol",
+			path:             "/api/ticker/binance/BTC/USDT",
+			expectedExchange: "binance",
+			expectedSymbol:   "BTC/USDT",
+		},
+		{
+			name:             "short path",
+			path:             "/api/exchanges",
+			expectedExchange: "",
+			expectedSymbol:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exchange, symbol := client.ExtractExchangeSymbolFromPath(tt.path)
+			assert.Equal(t, tt.expectedExchange, exchange)
+			assert.Equal(t, tt.expectedSymbol, symbol)
+		})
+	}
+}
+
+func TestClient_AdminAPIKeyHeader(t *testing.T) {
+	t.Run("admin endpoints include X-API-Key header when configured", func(t *testing.T) {
+		expectedAPIKey := "test-admin-api-key-12345"
+
+		server := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Verify X-API-Key header is present for admin endpoint
+			assert.Equal(t, expectedAPIKey, r.Header.Get("X-API-Key"), "X-API-Key header should be set for admin endpoints")
+			assert.Equal(t, "/api/admin/exchanges/config", r.URL.Path)
+			assert.Equal(t, "GET", r.Method)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if err := json.NewEncoder(w).Encode(ccxt.ExchangeConfigResponse{
+				ActiveExchanges: []string{"binance"},
+			}); err != nil {
+				t.Errorf("Failed to encode response: %v", err)
+			}
+		}))
+		defer server.Close()
+
+		cfg := &config.CCXTConfig{
+			ServiceURL:  server.URL,
+			Timeout:     30,
+			AdminAPIKey: expectedAPIKey,
+		}
+		client := ccxt.NewClient(cfg)
+		ctx := context.Background()
+
+		resp, err := client.GetExchangeConfig(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("non-admin endpoints do not include X-API-Key header", func(t *testing.T) {
+		server := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Verify X-API-Key header is NOT present for non-admin endpoint
+			assert.Empty(t, r.Header.Get("X-API-Key"), "X-API-Key header should not be set for non-admin endpoints")
+			assert.Equal(t, "/api/exchanges", r.URL.Path)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if err := json.NewEncoder(w).Encode(ccxt.ExchangesResponse{
+				Exchanges: []ccxt.ExchangeInfo{{ID: "binance"}},
+			}); err != nil {
+				t.Errorf("Failed to encode response: %v", err)
+			}
+		}))
+		defer server.Close()
+
+		cfg := &config.CCXTConfig{
+			ServiceURL:  server.URL,
+			Timeout:     30,
+			AdminAPIKey: "some-api-key",
+		}
+		client := ccxt.NewClient(cfg)
+		ctx := context.Background()
+
+		resp, err := client.GetExchanges(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("admin endpoints without API key configured", func(t *testing.T) {
+		server := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Verify X-API-Key header is NOT present when not configured
+			assert.Empty(t, r.Header.Get("X-API-Key"), "X-API-Key header should not be set when AdminAPIKey is empty")
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if err := json.NewEncoder(w).Encode(ccxt.ExchangeConfigResponse{
+				ActiveExchanges: []string{"binance"},
+			}); err != nil {
+				t.Errorf("Failed to encode response: %v", err)
+			}
+		}))
+		defer server.Close()
+
+		cfg := &config.CCXTConfig{
+			ServiceURL:  server.URL,
+			Timeout:     30,
+			AdminAPIKey: "", // No API key configured
+		}
+		client := ccxt.NewClient(cfg)
+		ctx := context.Background()
+
+		resp, err := client.GetExchangeConfig(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+}
+
 // newTestServerOrSkip starts a httptest.Server and skips the test if binding is not permitted.
 func newTestServerOrSkip(t *testing.T, h http.Handler) *httptest.Server {
 	t.Helper()

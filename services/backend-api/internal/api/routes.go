@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -74,6 +73,24 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		healthGroup.GET("/live", gin.WrapF(healthHandler.LivenessCheck))
 	}
 
+	// Initialize user and telegram internal handlers early for internal routes
+	userHandler := handlers.NewUserHandler(db, redis.Client, authMiddleware)
+	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler)
+
+	// Internal service-to-service routes (no auth, network-isolated via Docker)
+	// These endpoints are only accessible within the Docker network
+	// Security: Relies on Docker network isolation - only internal services can access
+	internal := router.Group("/internal")
+	{
+		// Telegram service endpoints - used by telegram-service for user operations
+		internalTelegram := internal.Group("/telegram")
+		{
+			internalTelegram.GET("/users/:id", telegramInternalHandler.GetUserByChatID)
+			internalTelegram.GET("/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
+			internalTelegram.POST("/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
+		}
+	}
+
 	// Initialize notification service with Redis caching
 	var notificationService *services.NotificationService
 	if telegramConfig != nil {
@@ -86,9 +103,11 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Initialize handlers
 	marketHandler := handlers.NewMarketHandler(db, ccxtService, collectorService, redis, cacheAnalyticsService)
 	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redis.Client)
+	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
-	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService)
-	userHandler := handlers.NewUserHandler(db, redis.Client)
+	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
+	// userHandler and telegramInternalHandler already initialized above for internal routes
+	alertHandler := handlers.NewAlertHandler(db)
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
@@ -148,9 +167,20 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			analysis.GET("/indicators", analysisHandler.GetTechnicalIndicators)
 			analysis.GET("/signals", analysisHandler.GetTradingSignals)
+			analysis.GET("/correlation", analysisHandler.GetCorrelationMatrix)
+			analysis.GET("/regime", analysisHandler.GetMarketRegime)
+			analysis.GET("/forecast", analysisHandler.GetForecast)
 		}
 
-		// Telegram routes have been moved to telegram-service
+		// Telegram internal routes - backward compatible (no auth for internal network)
+		// Both new (/internal/telegram/*) and legacy (/api/v1/telegram/internal/*) paths work
+		telegram := v1.Group("/telegram")
+		{
+			// Legacy paths kept for backward compatibility with older telegram-service versions
+			telegram.GET("/internal/users/:id", telegramInternalHandler.GetUserByChatID)
+			telegram.GET("/internal/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
+			telegram.POST("/internal/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
+		}
 
 		// User management
 		users := v1.Group("/users")
@@ -164,10 +194,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		alerts := v1.Group("/alerts")
 		alerts.Use(authMiddleware.RequireAuth())
 		{
-			alerts.GET("/", getUserAlerts)
-			alerts.POST("/", createAlert)
-			alerts.PUT("/:id", updateAlert)
-			alerts.DELETE("/:id", deleteAlert)
+			alerts.GET("/", alertHandler.GetUserAlerts)
+			alerts.POST("/", alertHandler.CreateAlert)
+			alerts.PUT("/:id", alertHandler.UpdateAlert)
+			alerts.DELETE("/:id", alertHandler.DeleteAlert)
 		}
 
 		// Data management
@@ -218,6 +248,19 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			cache.POST("/hit", cacheHandler.RecordCacheHit)
 			cache.POST("/miss", cacheHandler.RecordCacheMiss)
 		}
+
+		// Admin endpoints (require admin authentication)
+		admin := v1.Group("/admin")
+		admin.Use(adminMiddleware.RequireAdminAuth())
+		{
+			// Circuit breaker management
+			circuitBreakers := admin.Group("/circuit-breakers")
+			{
+				circuitBreakers.GET("", circuitBreakerHandler.GetCircuitBreakerStats)
+				circuitBreakers.POST("/:name/reset", circuitBreakerHandler.ResetCircuitBreaker)
+				circuitBreakers.POST("/reset-all", circuitBreakerHandler.ResetAllCircuitBreakers)
+			}
+		}
 	}
 }
 
@@ -225,38 +268,4 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 // Arbitrage handlers are now implemented in handlers/arbitrage.go
 // Technical analysis handlers are now implemented in handlers/analysis.go
-
-func getUserAlerts(c *gin.Context) {
-	// TODO: Implement actual database retrieval
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "success",
-		"data":    []string{}, // Return empty list for now
-		"message": "Alerts retrieval implemented (mock)",
-	})
-}
-
-func createAlert(c *gin.Context) {
-	// TODO: Implement actual database creation
-	c.JSON(http.StatusCreated, gin.H{
-		"status":  "success",
-		"message": "Alert created successfully (mock)",
-	})
-}
-
-func updateAlert(c *gin.Context) {
-	id := c.Param("id")
-	// TODO: Implement actual database update
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "success",
-		"message": fmt.Sprintf("Alert %s updated successfully (mock)", id),
-	})
-}
-
-func deleteAlert(c *gin.Context) {
-	id := c.Param("id")
-	// TODO: Implement actual database deletion
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "success",
-		"message": fmt.Sprintf("Alert %s deleted successfully (mock)", id),
-	})
-}
+// Alert handlers are now implemented in handlers/alert.go

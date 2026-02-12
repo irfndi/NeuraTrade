@@ -35,6 +35,12 @@ The system follows a microservices-like architecture:
 2.  **CCXT Service (Bun)**: A specialized sidecar service that provides a uniform HTTP API for interacting with cryptocurrency exchanges.
 3.  **Data Layer**: Postgres for persistence and Redis for hot data (tickers, cache).
 
+## 📊 Advanced Analytics Status
+
+Predictive forecasting (ARIMA/GARCH, regime detection, correlation analysis) is intentionally deferred.
+Current analytics are CPU-only and based on descriptive statistics, liquidity/risk scoring, and backtesting.
+See `docs/architecture/ADVANCED_ANALYTICS.md` for scope and future guidance.
+
 ## 🏁 Quick Start
 
 ### Prerequisites

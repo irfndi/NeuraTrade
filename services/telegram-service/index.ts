@@ -8,6 +8,27 @@ import { BackendApiClient } from "./src/api/client";
 import { registerAllCommands } from "./src/commands";
 import { logger } from "./src/utils/logger";
 import { startGrpcServer } from "./grpc-server";
+import {
+  isSentryEnabled,
+  sentryMiddleware,
+  initializeSentry,
+  captureException,
+  flush as sentryFlush,
+  trackBotMode,
+} from "./sentry";
+import { loadConfig } from "./config";
+import { createApi } from "./api";
+import {
+  handleStart,
+  handleHelp,
+  handleOpportunities,
+  handleStatus,
+  handleSettings,
+  handleStop,
+  handleResume,
+  handleUpgrade,
+  handleMessageText,
+} from "./bot-handlers";
 
 const bot = new Bot(config.botToken);
 const api = new BackendApiClient({
@@ -39,7 +60,35 @@ app.use("*", cors());
 app.use("*", honoLogger());
 
 app.get("/health", (c) => {
-  return c.json({ status: "healthy", service: "telegram-service" }, 200);
+  // Return degraded status if bot is not configured
+  if (config.botTokenMissing) {
+    return c.json(
+      {
+        status: "degraded",
+        service: "telegram-service",
+        error: "TELEGRAM_BOT_TOKEN not configured",
+        bot_active: false,
+      },
+      200, // Still return 200 so container doesn't restart in a loop
+    );
+  }
+
+  if (config.configError) {
+    return c.json(
+      {
+        status: "degraded",
+        service: "telegram-service",
+        error: config.configError,
+        bot_active: !!bot,
+      },
+      200,
+    );
+  }
+
+  return c.json(
+    { status: "healthy", service: "telegram-service", bot_active: true },
+    200,
+  );
 });
 
 app.post("/send-message", async (c) => {
@@ -74,8 +123,15 @@ app.post("/send-message", async (c) => {
   }
 });
 
-if (!config.usePolling) {
+if (!config.usePolling && bot) {
   app.post(config.webhookPath, async (c) => {
+    if (!bot) {
+      return c.json(
+        { error: "Bot not available (TELEGRAM_BOT_TOKEN not configured)" },
+        503,
+      );
+    }
+
     if (config.webhookSecret) {
       const provided = c.req.header("X-Telegram-Bot-Api-Secret-Token");
       if (!provided || provided !== config.webhookSecret) {
@@ -100,6 +156,13 @@ logger.info("Telegram service started", { port: config.port, mode: config.usePol
 const grpcServer = startGrpcServer(bot, config.grpcPort);
 
 const startBot = async () => {
+  // Skip bot startup if token is not configured
+  if (!bot) {
+    console.warn("⚠️ Bot startup skipped: TELEGRAM_BOT_TOKEN not configured");
+    console.warn("   Service running in degraded mode (health check only)");
+    return;
+  }
+
   if (config.usePolling) {
     logger.info("Starting bot in polling mode");
     await bot.api.deleteWebhook({ drop_pending_updates: true });
@@ -125,13 +188,17 @@ startBot().catch((error) => {
 process.on("SIGTERM", () => {
   logger.info("SIGTERM received, shutting down");
   server.stop();
-  grpcServer.forceShutdown();
+  if (grpcServer) {
+    grpcServer.forceShutdown();
+  }
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
   logger.info("SIGINT received, shutting down");
   server.stop();
-  grpcServer.forceShutdown();
+  if (grpcServer) {
+    grpcServer.forceShutdown();
+  }
   process.exit(0);
 });

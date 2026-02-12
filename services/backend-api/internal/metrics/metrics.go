@@ -167,10 +167,10 @@ func (mc *MetricsCollector) addServiceTag(tags map[string]string) map[string]str
 
 // logMetric logs the metric using the standardized logger
 func (mc *MetricsCollector) logMetric(metric Metric) {
-	mc.logger.Logger().Debug("Metric recorded",
-		"event", "metric",
-		"metric", metric,
-	)
+	mc.logger.WithFields(map[string]interface{}{
+		"event":  "metric",
+		"metric": metric,
+	}).Debug("Metric recorded")
 }
 
 // Performance metrics helpers

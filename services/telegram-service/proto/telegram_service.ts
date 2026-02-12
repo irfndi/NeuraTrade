@@ -33,6 +33,10 @@ export interface SendMessageResponse {
   ok: boolean;
   messageId: string;
   error: string;
+  /** Structured error code for programmatic handling */
+  errorCode: string;
+  /** Seconds to wait before retrying (only set for RATE_LIMITED errors) */
+  retryAfter: number;
 }
 
 export interface HealthCheckRequest {
@@ -263,7 +267,7 @@ export const SendMessageRequest: MessageFns<SendMessageRequest> = {
 };
 
 function createBaseSendMessageResponse(): SendMessageResponse {
-  return { ok: false, messageId: "", error: "" };
+  return { ok: false, messageId: "", error: "", errorCode: "", retryAfter: 0 };
 }
 
 export const SendMessageResponse: MessageFns<SendMessageResponse> = {
@@ -276,6 +280,12 @@ export const SendMessageResponse: MessageFns<SendMessageResponse> = {
     }
     if (message.error !== "") {
       writer.uint32(26).string(message.error);
+    }
+    if (message.errorCode !== "") {
+      writer.uint32(34).string(message.errorCode);
+    }
+    if (message.retryAfter !== 0) {
+      writer.uint32(40).int32(message.retryAfter);
     }
     return writer;
   },
@@ -311,6 +321,22 @@ export const SendMessageResponse: MessageFns<SendMessageResponse> = {
           message.error = reader.string();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.errorCode = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.retryAfter = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -329,6 +355,12 @@ export const SendMessageResponse: MessageFns<SendMessageResponse> = {
         ? globalThis.String(object.message_id)
         : "",
       error: isSet(object.error) ? globalThis.String(object.error) : "",
+      errorCode: isSet(object.errorCode)
+        ? globalThis.String(object.errorCode)
+        : "",
+      retryAfter: isSet(object.retryAfter)
+        ? globalThis.Number(object.retryAfter)
+        : 0,
     };
   },
 
@@ -343,6 +375,12 @@ export const SendMessageResponse: MessageFns<SendMessageResponse> = {
     if (message.error !== "") {
       obj.error = message.error;
     }
+    if (message.errorCode !== "") {
+      obj.errorCode = message.errorCode;
+    }
+    if (message.retryAfter !== 0) {
+      obj.retryAfter = message.retryAfter;
+    }
     return obj;
   },
 
@@ -354,6 +392,8 @@ export const SendMessageResponse: MessageFns<SendMessageResponse> = {
     message.ok = object.ok ?? false;
     message.messageId = object.messageId ?? "";
     message.error = object.error ?? "";
+    message.errorCode = object.errorCode ?? "";
+    message.retryAfter = object.retryAfter ?? 0;
     return message;
   },
 };

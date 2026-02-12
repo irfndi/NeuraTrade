@@ -20,6 +20,10 @@ type MarketPriceInterface interface {
 	GetExchangeName() string
 	// GetSymbol retrieves the trading pair symbol.
 	GetSymbol() string
+	// GetBid retrieves the best bid price.
+	GetBid() float64
+	// GetAsk retrieves the best ask price.
+	GetAsk() float64
 }
 
 // ArbitrageOpportunityInterface defines the interface for arbitrage opportunity data.

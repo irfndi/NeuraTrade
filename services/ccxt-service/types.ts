@@ -79,10 +79,19 @@ export interface MultiTickerRequest {
 }
 
 /**
+ * A ticker entry with exchange and symbol context.
+ */
+export interface TickerEntry extends Ticker {
+  exchange: string;
+  symbol: string;
+}
+
+/**
  * Response containing multiple tickers across exchanges.
+ * Returns a flat array of tickers for easier Go client parsing.
  */
 export interface MultiTickerResponse {
-  results: Record<string, Record<string, Ticker | { error: string }>>;
+  tickers: TickerEntry[];
   timestamp: string;
 }
 

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -165,6 +167,9 @@ func (c *CacheAnalyticsService) GetAllStats() map[string]CacheStats {
 //	*CacheMetrics: Detailed metrics.
 //	error: Error if retrieval fails.
 func (c *CacheAnalyticsService) GetMetrics(ctx context.Context) (*CacheMetrics, error) {
+	spanCtx, span := observability.StartSpan(ctx, "cache.metrics", "CacheAnalyticsService.GetMetrics")
+	defer observability.FinishSpan(span, nil)
+
 	c.mu.RLock()
 	allStats := make(map[string]CacheStats)
 	for category, stats := range c.stats {
@@ -172,6 +177,7 @@ func (c *CacheAnalyticsService) GetMetrics(ctx context.Context) (*CacheMetrics, 
 	}
 	c.mu.RUnlock()
 
+	span.SetData("category_count", len(allStats))
 	metrics := &CacheMetrics{
 		ByCategory: allStats,
 		RedisInfo:  make(map[string]string),
@@ -180,16 +186,26 @@ func (c *CacheAnalyticsService) GetMetrics(ctx context.Context) (*CacheMetrics, 
 	// Guard against nil Redis client
 	if c.redisClient == nil {
 		// Return metrics with default values when Redis is unavailable
+		span.SetData("redis_available", false)
+		observability.AddBreadcrumb(spanCtx, "cache_analytics", "Redis client unavailable, returning cached stats only", sentry.LevelWarning)
 		if overall, exists := allStats["overall"]; exists {
 			metrics.Overall = overall
 		}
 		return metrics, nil
 	}
+	span.SetData("redis_available", true)
 
 	// Get Redis info
-	redisInfo, err := c.redisClient.Info(ctx, "memory", "clients", "keyspace").Result()
+	redisInfo, err := c.redisClient.Info(spanCtx, "memory", "clients", "keyspace").Result()
 	if err != nil {
 		// Return metrics with available stats if Redis info fails
+		span.SetData("redis_info_error", err.Error())
+		observability.AddBreadcrumbWithData(spanCtx, "cache_analytics", "Failed to fetch Redis info", sentry.LevelWarning, map[string]interface{}{
+			"error": err.Error(),
+		})
+		observability.CaptureExceptionWithContext(spanCtx, err, "redis_info", map[string]interface{}{
+			"sections": []string{"memory", "clients", "keyspace"},
+		})
 		if overall, exists := allStats["overall"]; exists {
 			metrics.Overall = overall
 		}
@@ -201,16 +217,34 @@ func (c *CacheAnalyticsService) GetMetrics(ctx context.Context) (*CacheMetrics, 
 	metrics.RedisInfo = infoMap
 
 	// Get memory usage (ignore errors to provide partial metrics)
-	memoryUsage, _ := c.redisClient.MemoryUsage(ctx, "*").Result()
-	metrics.MemoryUsage = memoryUsage
+	memoryUsage, memErr := c.redisClient.MemoryUsage(spanCtx, "*").Result()
+	if memErr != nil {
+		observability.AddBreadcrumbWithData(spanCtx, "cache_analytics", "Failed to fetch Redis memory usage", sentry.LevelWarning, map[string]interface{}{
+			"error": memErr.Error(),
+		})
+	} else {
+		metrics.MemoryUsage = memoryUsage
+	}
 
 	// Get connected clients (ignore errors to provide partial metrics)
-	clientList, _ := c.redisClient.ClientList(ctx).Result()
-	metrics.ConnectedClients = int64(len(clientList))
+	clientList, clientErr := c.redisClient.ClientList(spanCtx).Result()
+	if clientErr != nil {
+		observability.AddBreadcrumbWithData(spanCtx, "cache_analytics", "Failed to fetch Redis client list", sentry.LevelWarning, map[string]interface{}{
+			"error": clientErr.Error(),
+		})
+	} else {
+		metrics.ConnectedClients = int64(len(clientList))
+	}
 
 	// Get key count (ignore errors to provide partial metrics)
-	keyCount, _ := c.redisClient.DBSize(ctx).Result()
-	metrics.KeyCount = keyCount
+	keyCount, keyErr := c.redisClient.DBSize(spanCtx).Result()
+	if keyErr != nil {
+		observability.AddBreadcrumbWithData(spanCtx, "cache_analytics", "Failed to fetch Redis key count", sentry.LevelWarning, map[string]interface{}{
+			"error": keyErr.Error(),
+		})
+	} else {
+		metrics.KeyCount = keyCount
+	}
 
 	// Set overall stats
 	if overall, exists := allStats["overall"]; exists {
@@ -260,12 +294,17 @@ func (c *CacheAnalyticsService) ResetStats() {
 //	ctx: Context for cancellation.
 //	interval: Reporting interval.
 func (c *CacheAnalyticsService) StartPeriodicReporting(ctx context.Context, interval time.Duration) {
+	observability.AddBreadcrumbWithData(ctx, "cache_analytics", "Starting cache analytics periodic reporting", sentry.LevelInfo, map[string]interface{}{
+		"interval": interval.String(),
+	})
 	ticker := time.NewTicker(interval)
 	go func() {
 		defer ticker.Stop()
+		defer observability.RecoverAndCapture(ctx, "CacheAnalyticsService.StartPeriodicReporting")
 		for {
 			select {
 			case <-ctx.Done():
+				observability.AddBreadcrumb(ctx, "cache_analytics", "Stopping cache analytics periodic reporting", sentry.LevelInfo)
 				return
 			case <-ticker.C:
 				c.reportStats(ctx)
@@ -276,17 +315,28 @@ func (c *CacheAnalyticsService) StartPeriodicReporting(ctx context.Context, inte
 
 // reportStats reports current stats to Redis for persistence
 func (c *CacheAnalyticsService) reportStats(ctx context.Context) {
+	spanCtx, span := observability.StartSpan(ctx, observability.SpanOpCacheSet, "CacheAnalyticsService.reportStats")
+	defer observability.FinishSpan(span, nil)
+
 	// Guard against nil Redis client
 	if c.redisClient == nil {
+		observability.AddBreadcrumb(spanCtx, "cache_analytics", "Skipping cache analytics report; Redis client unavailable", sentry.LevelWarning)
 		return
 	}
 
 	allStats := c.GetAllStats()
 	statsJSON, err := json.Marshal(allStats)
 	if err != nil {
+		observability.CaptureExceptionWithContext(spanCtx, err, "cache_analytics.marshal", map[string]interface{}{
+			"category_count": len(allStats),
+		})
 		return
 	}
 
 	// Store stats in Redis with 24 hour TTL (ignore errors)
-	c.redisClient.Set(ctx, "cache:analytics:stats", statsJSON, 24*time.Hour)
+	if setErr := c.redisClient.Set(spanCtx, "cache:analytics:stats", statsJSON, 24*time.Hour).Err(); setErr != nil {
+		observability.CaptureExceptionWithContext(spanCtx, setErr, "cache_analytics.store", map[string]interface{}{
+			"key": "cache:analytics:stats",
+		})
+	}
 }

@@ -31,13 +31,16 @@ COPY --from=go-builder /app/main .
 COPY --from=go-builder /app/config.yml .
 COPY --from=go-builder /app/scripts ./scripts
 COPY --from=go-builder /app/database ./database
+COPY --from=go-builder /app/entrypoint.sh . 2>/dev/null || true
 
 # Permissions
 RUN chown -R appuser:appgroup /app && \
-    chmod +x scripts/entrypoint.sh
+    chmod +x scripts/*.sh 2>/dev/null || true && \
+    chmod +x entrypoint.sh 2>/dev/null || true
 
 USER appuser
 
+# Default to disabled - enable explicitly if services are available
 ENV CCXT_DISABLED=true
 ENV TELEGRAM_DISABLED=true
 ENV TELEGRAM_EXTERNAL_SERVICE=true

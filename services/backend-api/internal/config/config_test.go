@@ -46,6 +46,23 @@ func TestConfig_Struct(t *testing.T) {
 			BotToken:   "test_token",
 			WebhookURL: "https://example.com/webhook",
 		},
+		Fees: FeesConfig{
+			DefaultTakerFee: 0.001,
+			DefaultMakerFee: 0.0008,
+		},
+		Analytics: AnalyticsConfig{
+			EnableForecasting:       true,
+			EnableCorrelation:       true,
+			EnableRegimeDetection:   true,
+			ForecastLookback:        120,
+			ForecastHorizon:         8,
+			CorrelationWindow:       200,
+			CorrelationMinPoints:    30,
+			RegimeShortWindow:       20,
+			RegimeLongWindow:        60,
+			VolatilityHighThreshold: 0.03,
+			VolatilityLowThreshold:  0.005,
+		},
 	}
 
 	assert.Equal(t, "test", config.Environment)
@@ -74,6 +91,10 @@ func TestConfig_Struct(t *testing.T) {
 	assert.Equal(t, 30, config.CCXT.Timeout)
 	assert.Equal(t, "test_token", config.Telegram.BotToken)
 	assert.Equal(t, "https://example.com/webhook", config.Telegram.WebhookURL)
+	assert.Equal(t, 0.001, config.Fees.DefaultTakerFee)
+	assert.Equal(t, 0.0008, config.Fees.DefaultMakerFee)
+	assert.True(t, config.Analytics.EnableForecasting)
+	assert.Equal(t, 120, config.Analytics.ForecastLookback)
 }
 
 func TestServerConfig_Struct(t *testing.T) {
@@ -189,6 +210,11 @@ func TestLoad_WithDefaults(t *testing.T) {
 	assert.Equal(t, 30, config.CCXT.Timeout)
 	assert.Equal(t, "", config.Telegram.BotToken)
 	assert.Equal(t, "", config.Telegram.WebhookURL)
+	assert.Equal(t, 0.001, config.Fees.DefaultTakerFee)
+	assert.Equal(t, 0.001, config.Fees.DefaultMakerFee)
+	assert.True(t, config.Analytics.EnableForecasting)
+	assert.True(t, config.Analytics.EnableCorrelation)
+	assert.True(t, config.Analytics.EnableRegimeDetection)
 }
 
 func TestLoad_WithEnvironmentVariables(t *testing.T) {

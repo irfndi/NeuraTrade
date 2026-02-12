@@ -1,5 +1,5 @@
 import * as grpc from "@grpc/grpc-js";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Duration, Cause } from "effect";
 import {
   CcxtServiceService,
   CcxtServiceServer,
@@ -51,7 +51,11 @@ export class CcxtGrpcServer {
       }
 
       const ticker = (yield* _(
-        Effect.tryPromise(() => self.exchanges[exchange].fetchTicker(symbol)),
+        Effect.tryPromise({
+          try: () => self.exchanges[exchange].fetchTicker(symbol),
+          catch: (error) =>
+            new Error(error instanceof Error ? error.message : String(error)),
+        }),
       )) as any;
 
       return {
@@ -77,10 +81,11 @@ export class CcxtGrpcServer {
           callback(null, exit.value);
         } else {
           const cause = Exit.causeOption(exit);
-          let msg = "Unknown error";
           if (cause._tag === "Some") {
-            const err = cause.value as any;
-            if (err.message === "Exchange not supported") {
+            const error = Cause.squash(cause.value);
+            const msg = error instanceof Error ? error.message : String(error);
+
+            if (msg === "Exchange not supported") {
               callback(
                 {
                   code: grpc.status.INVALID_ARGUMENT,
@@ -90,7 +95,14 @@ export class CcxtGrpcServer {
               );
               return;
             }
-            msg = err.message || "Error fetching ticker";
+            callback(null, {
+              exchange,
+              symbol,
+              ticker: undefined,
+              timestamp: Date.now(),
+              error: msg,
+            });
+            return;
           }
 
           callback(null, {
@@ -98,7 +110,7 @@ export class CcxtGrpcServer {
             symbol,
             ticker: undefined,
             timestamp: 0,
-            error: msg,
+            error: "Unknown error",
           });
         }
       },
@@ -154,10 +166,10 @@ export class CcxtGrpcServer {
                     }),
                   ),
                 ),
-              { concurrency: "unbounded" },
+              { concurrency: 10 }, // Limit concurrent fetches per exchange
             );
           },
-          { concurrency: "unbounded" },
+          { concurrency: 5 }, // Limit exchanges fetched in parallel
         ),
       );
 
@@ -316,7 +328,7 @@ export class CcxtGrpcServer {
             Effect.forEach(
               symbols,
               (s) => Effect.tryPromise(() => ex.fetchFundingRate(s)),
-              { concurrency: "unbounded" },
+              { concurrency: 10 }, // Limit concurrent requests
             ),
           )) as any[];
         }
@@ -538,7 +550,7 @@ export function startGrpcServer(exchanges: any, port: number) {
     (err, port) => {
       if (err) {
         console.error(`Failed to bind gRPC server: ${err}`);
-        return;
+        throw err; // Propagate error to caller
       }
       console.log(`🚀 CCXT gRPC Service listening on ${bindAddr}`);
     },

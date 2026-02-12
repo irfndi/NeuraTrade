@@ -25,6 +25,8 @@ services:
       dockerfile: Dockerfile
     restart: always
     environment:
+      # Database configuration - prefer individual vars over DATABASE_URL
+      # DATABASE_URL often has stale hostnames from Coolify's auto-generation
       - DATABASE_HOST=${DATABASE_HOST:-postgres}
       - DATABASE_PORT=${DATABASE_PORT:-5432}
       - DATABASE_USER=${DATABASE_USER:-postgres}
@@ -34,8 +36,11 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - PORT=8080
-      - CCXT_SERVICE_URL=http://ccxt-service:3001
-      - TELEGRAM_SERVICE_URL=http://telegram-service:3002
+      # Service URLs - use env vars for Coolify compatibility, fall back to docker-compose service names
+      - CCXT_SERVICE_URL=${CCXT_SERVICE_URL:-http://ccxt-service:3001}
+      - CCXT_GRPC_ADDRESS=${CCXT_GRPC_ADDRESS:-ccxt-service:50051}
+      - TELEGRAM_SERVICE_URL=${TELEGRAM_SERVICE_URL:-http://telegram-service:3002}
+      - TELEGRAM_GRPC_ADDRESS=${TELEGRAM_GRPC_ADDRESS:-telegram-service:50052}
       - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret}
       - EXTERNAL_CONNECTIONS_ENABLED=${EXTERNAL_CONNECTIONS_ENABLED:-false}
       - TELEGRAM_EXTERNAL_SERVICE=true
@@ -122,7 +127,10 @@ services:
     environment:
       - PORT=3002
       - TELEGRAM_PORT=3002
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # Support both TELEGRAM_BOT_TOKEN and TELEGRAM_TOKEN for compatibility
+      # Note: The service handles fallback internally; prefer TELEGRAM_BOT_TOKEN
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN:-}
       - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL:-}
       - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
       - TELEGRAM_USE_POLLING=${TELEGRAM_USE_POLLING:-true}
@@ -147,6 +155,3 @@ networks:
     external: true
     name: ${COOLIFY_SHARED_NETWORK:-coolify}
 
-volumes:
-  postgres_data:
-  redis_data:

@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +17,7 @@ import (
 type AnalysisHandler struct {
 	db          DBQuerier
 	ccxtService ccxt.CCXTService
+	analytics   *services.AnalyticsService
 }
 
 // TechnicalIndicator represents a set of calculated indicators for a trading pair.
@@ -100,6 +102,7 @@ func NewAnalysisHandler(db DBQuerier, ccxtService ccxt.CCXTService) *AnalysisHan
 	return &AnalysisHandler{
 		db:          db,
 		ccxtService: ccxtService,
+		analytics:   analytics,
 	}
 }
 
@@ -156,6 +159,104 @@ func (h *AnalysisHandler) GetTechnicalIndicators(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// GetCorrelationMatrix returns correlation results for multiple symbols.
+func (h *AnalysisHandler) GetCorrelationMatrix(c *gin.Context) {
+	if h.analytics == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Analytics service unavailable"})
+		return
+	}
+
+	exchange := c.Query("exchange")
+	symbolsParam := c.Query("symbols")
+	if exchange == "" || symbolsParam == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exchange and symbols parameters are required"})
+		return
+	}
+
+	symbols := strings.Split(symbolsParam, ",")
+	limit := parseIntQuery(c, "limit", 0)
+
+	result, err := h.analytics.CalculateCorrelationMatrix(c.Request.Context(), exchange, symbols, limit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// GetMarketRegime returns the current regime classification for a symbol.
+func (h *AnalysisHandler) GetMarketRegime(c *gin.Context) {
+	if h.analytics == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Analytics service unavailable"})
+		return
+	}
+
+	exchange := c.Query("exchange")
+	symbol := c.Query("symbol")
+	if exchange == "" || symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exchange and symbol parameters are required"})
+		return
+	}
+
+	limit := parseIntQuery(c, "limit", 0)
+	result, err := h.analytics.DetectMarketRegime(c.Request.Context(), exchange, symbol, limit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// GetForecast returns a short-term forecast for prices or funding rates.
+func (h *AnalysisHandler) GetForecast(c *gin.Context) {
+	if h.analytics == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Analytics service unavailable"})
+		return
+	}
+
+	exchange := c.Query("exchange")
+	symbol := c.Query("symbol")
+	seriesType := strings.ToLower(c.DefaultQuery("type", "price"))
+	if exchange == "" || symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exchange and symbol parameters are required"})
+		return
+	}
+
+	horizon := parseIntQuery(c, "horizon", 0)
+	limit := parseIntQuery(c, "limit", 0)
+
+	result, err := h.analytics.ForecastSeries(c.Request.Context(), exchange, symbol, seriesType, horizon, limit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func parseIntQuery(c *gin.Context, key string, fallback int) int {
+	valueStr := c.Query(key)
+	if valueStr == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return fallback
+	}
+	// Bounds check to prevent excessive memory allocation
+	// Negative values get fallback, and cap at reasonable maximum (10000)
+	const maxQueryInt = 10000
+	if value < 0 {
+		return fallback
+	}
+	if value > maxQueryInt {
+		return maxQueryInt
+	}
+	return value
 }
 
 // GetTradingSignals generates trading signals based on technical analysis.

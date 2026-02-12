@@ -1,9 +1,11 @@
 package services
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -308,4 +310,106 @@ func TestCalculateEstimatedProfits(t *testing.T) {
 	assert.True(t, profitDaily.GreaterThan(profit8h))
 	assert.True(t, profitWeekly.GreaterThan(profitDaily))
 	assert.True(t, profitMonthly.GreaterThan(profitWeekly))
+}
+
+func TestCalculateSymbolArbitrage_GeneratesValidUUID(t *testing.T) {
+	calc := NewFuturesArbitrageCalculator()
+
+	// Create market data with price differences to trigger arbitrage opportunity detection
+	exchangeData := map[string]models.MarketData{
+		"binance": {
+			ExchangeID:    1,
+			TradingPairID: 1,
+			LastPrice:     decimal.NewFromFloat(50000),
+			TradingPair:   &models.TradingPair{ID: 1, Symbol: "BTC/USDT"},
+		},
+		"okx": {
+			ExchangeID:    2,
+			TradingPairID: 1,
+			LastPrice:     decimal.NewFromFloat(50100), // Higher price - significant difference
+			TradingPair:   &models.TradingPair{ID: 1, Symbol: "BTC/USDT"},
+		},
+	}
+
+	opportunities := calc.calculateSymbolArbitrage("BTC/USDT", exchangeData)
+
+	// Should have found an opportunity due to price difference
+	require.NotEmpty(t, opportunities, "Should find arbitrage opportunity with price difference")
+
+	for _, opp := range opportunities {
+		// Verify that the ID is a valid UUID
+		assert.NotEmpty(t, opp.ID, "Opportunity ID should not be empty")
+
+		// Parse the ID as UUID to verify format
+		parsedUUID, err := uuid.Parse(opp.ID)
+		require.NoError(t, err, "ID should be a valid UUID format, got: %s", opp.ID)
+		assert.Equal(t, opp.ID, parsedUUID.String(), "Parsed UUID should match original")
+	}
+}
+
+func TestCalculateArbitrageOpportunities_GeneratesValidUUIDs(t *testing.T) {
+	calc := NewFuturesArbitrageCalculator()
+	ctx := context.Background()
+
+	// Create market data across exchanges with price differences
+	marketData := map[string][]models.MarketData{
+		"binance": {
+			{
+				ExchangeID:    1,
+				TradingPairID: 1,
+				LastPrice:     decimal.NewFromFloat(50000),
+				TradingPair:   &models.TradingPair{ID: 1, Symbol: "BTC/USDT"},
+			},
+		},
+		"okx": {
+			{
+				ExchangeID:    2,
+				TradingPairID: 1,
+				LastPrice:     decimal.NewFromFloat(50100), // Higher price
+				TradingPair:   &models.TradingPair{ID: 1, Symbol: "BTC/USDT"},
+			},
+		},
+	}
+
+	opportunities, err := calc.CalculateArbitrageOpportunities(ctx, marketData)
+	require.NoError(t, err)
+	require.NotEmpty(t, opportunities, "Should find arbitrage opportunities with price differences")
+
+	for _, opp := range opportunities {
+		// Verify that the ID is a valid UUID
+		assert.NotEmpty(t, opp.ID, "Opportunity ID should not be empty")
+
+		parsedUUID, err := uuid.Parse(opp.ID)
+		require.NoError(t, err, "ID should be a valid UUID format, got: %s", opp.ID)
+		assert.Equal(t, opp.ID, parsedUUID.String(), "Parsed UUID should match original")
+
+		// Also verify other fields are set correctly
+		assert.NotEmpty(t, opp.BuyExchange, "BuyExchange should be set")
+		assert.NotEmpty(t, opp.SellExchange, "SellExchange should be set")
+	}
+}
+
+func TestCalculateSymbolArbitrage_NoProfitOpportunity(t *testing.T) {
+	calc := NewFuturesArbitrageCalculator()
+
+	// Create market data with minimal price difference (below 0.1% threshold)
+	exchangeData := map[string]models.MarketData{
+		"binance": {
+			ExchangeID:    1,
+			TradingPairID: 1,
+			LastPrice:     decimal.NewFromFloat(50000),
+			TradingPair:   &models.TradingPair{ID: 1, Symbol: "BTC/USDT"},
+		},
+		"okx": {
+			ExchangeID:    2,
+			TradingPairID: 1,
+			LastPrice:     decimal.NewFromFloat(50000), // Same price - no opportunity
+			TradingPair:   &models.TradingPair{ID: 1, Symbol: "BTC/USDT"},
+		},
+	}
+
+	opportunities := calc.calculateSymbolArbitrage("BTC/USDT", exchangeData)
+
+	// Should not find any opportunities with same prices
+	assert.Empty(t, opportunities, "Should not find arbitrage opportunity with same prices")
 }

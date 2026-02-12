@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/getsentry/sentry-go"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
@@ -70,6 +71,31 @@ func TestCacheAnalyticsService_GetMetrics(t *testing.T) {
 		if err != nil {
 			assert.Contains(t, err.Error(), "wrong number of arguments") // Expect Redis-related error
 		}
+	})
+}
+
+func TestCacheAnalyticsService_GetMetrics_WithNilRedis(t *testing.T) {
+	service := NewCacheAnalyticsService(nil)
+
+	service.RecordHit("orders")
+	service.RecordMiss("orders")
+
+	hub := sentry.NewHub(nil, sentry.NewScope())
+	ctx := sentry.SetHubOnContext(context.Background(), hub)
+
+	metrics, err := service.GetMetrics(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, metrics)
+	assert.Equal(t, int64(1), metrics.Overall.Hits)
+	assert.Equal(t, int64(1), metrics.Overall.Misses)
+	assert.Equal(t, int64(2), metrics.Overall.TotalOps)
+}
+
+func TestCacheAnalyticsService_reportStats_WithNilRedis(t *testing.T) {
+	service := NewCacheAnalyticsService(nil)
+
+	assert.NotPanics(t, func() {
+		service.reportStats(context.Background())
 	})
 }
 

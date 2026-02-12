@@ -1,8 +1,6 @@
 package services
 
 import (
-	"log/slog"
-	"os"
 	"testing"
 	"time"
 
@@ -12,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/irfandi/celebrum-ai-go/internal/logging"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 )
 
@@ -25,7 +24,8 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 
 	mockAggregator := &MockSignalAggregator{}
 	mockScorer := &MockSignalQualityScorer{}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{}))
+	// Explicitly define type to verify compilation
+	var logger logging.Logger = logging.NewStandardLogger("info", "test")
 
 	// Create SignalProcessor
 	sp := NewSignalProcessor(
@@ -76,11 +76,6 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
 		WithArgs(1).
 		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
-
-	// 6. getExchangeName (called inside generateTechnicalSignals)
-	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
-		WithArgs(1).
-		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
 
 	// Mock Aggregator expectations
 	// Expect AggregateTechnicalSignals because we have no arbitrage opportunities

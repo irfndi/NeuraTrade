@@ -91,7 +91,10 @@ func NewResourceManager(logger *zaplogrus.Logger) *ResourceManager {
 	}
 
 	// Start monitoring
-	go rm.startMonitoring()
+	go func() {
+		defer observability.RecoverAndCapture(ctx, "ResourceManager.startMonitoring")
+		rm.startMonitoring()
+	}()
 
 	return rm
 }
@@ -105,14 +108,18 @@ func NewResourceManager(logger *zaplogrus.Logger) *ResourceManager {
 //	cleanupFunc: Function to clean up the resource.
 //	metadata: Additional metadata.
 func (rm *ResourceManager) RegisterResource(id string, resourceType ResourceType, cleanupFunc func() error, metadata map[string]interface{}) {
+	spanCtx, span := observability.StartSpan(context.Background(), "resource.register", "ResourceManager.RegisterResource")
+	defer observability.FinishSpan(span, nil)
+
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
+	now := time.Now()
 	resource := &Resource{
 		ID:          id,
 		Type:        resourceType,
-		CreatedAt:   time.Now(),
-		LastUsed:    time.Now(),
+		CreatedAt:   now,
+		LastUsed:    now,
 		CleanupFunc: cleanupFunc,
 		Metadata:    metadata,
 	}
@@ -129,7 +136,11 @@ func (rm *ResourceManager) RegisterResource(id string, resourceType ResourceType
 
 	// Check if we're approaching resource limits
 	if len(rm.resources) > rm.maxResources {
-		rm.logger.WithField("resource_count", len(rm.resources)).Warn("High resource count detected")
+		rm.logger.WithFields(map[string]interface{}{"resource_count": len(rm.resources)}).Warn("High resource count detected")
+		observability.AddBreadcrumbWithData(spanCtx, "resource_manager", "High resource count detected", sentry.LevelWarning, map[string]interface{}{
+			"resource_count": len(rm.resources),
+			"max_resources":  rm.maxResources,
+		})
 	}
 }
 
@@ -156,7 +167,13 @@ func (rm *ResourceManager) UpdateResourceUsage(id string) {
 // Returns:
 //
 //	error: Error if cleanup fails.
-func (rm *ResourceManager) CleanupResource(id string) error {
+func (rm *ResourceManager) CleanupResource(id string) (err error) {
+	spanCtx, span := observability.StartSpan(context.Background(), "resource.cleanup", "ResourceManager.CleanupResource")
+	span.SetTag("resource_id", id)
+	defer func() {
+		observability.FinishSpan(span, err)
+	}()
+
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -165,7 +182,6 @@ func (rm *ResourceManager) CleanupResource(id string) error {
 		return nil
 	}
 
-	var err error
 	if resource.CleanupFunc != nil {
 		err = resource.CleanupFunc()
 		if err != nil {
@@ -175,6 +191,10 @@ func (rm *ResourceManager) CleanupResource(id string) error {
 				"resource_type": resource.Type,
 				"error":         err.Error(),
 			}).Error("Resource cleanup failed")
+			observability.CaptureExceptionWithContext(spanCtx, err, "resource_cleanup", map[string]interface{}{
+				"resource_id":   id,
+				"resource_type": resource.Type,
+			})
 		}
 	}
 
@@ -194,11 +214,15 @@ func (rm *ResourceManager) CleanupResource(id string) error {
 
 // CleanupIdleResources cleans up resources that have been idle for too long.
 func (rm *ResourceManager) CleanupIdleResources() {
+	spanCtx, span := observability.StartSpan(rm.monitoringCtx, "resource.cleanup_idle", "ResourceManager.CleanupIdleResources")
+	defer observability.FinishSpan(span, nil)
+
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	now := time.Now()
 	var toCleanup []string
+	cleanupErrors := 0
 
 	for id, resource := range rm.resources {
 		if now.Sub(resource.LastUsed) > rm.maxIdleTime {
@@ -212,12 +236,17 @@ func (rm *ResourceManager) CleanupIdleResources() {
 		if resource.CleanupFunc != nil {
 			err = resource.CleanupFunc()
 			if err != nil {
+				cleanupErrors++
 				atomic.AddInt64(&rm.stats[resource.Type].CleanupErrors, 1)
 				rm.logger.WithFields(zaplogrus.Fields{
 					"resource_id":   id,
 					"resource_type": resource.Type,
 					"error":         err.Error(),
 				}).Error("Idle resource cleanup failed")
+				observability.CaptureExceptionWithContext(spanCtx, err, "resource_cleanup_idle", map[string]interface{}{
+					"resource_id":   id,
+					"resource_type": resource.Type,
+				})
 			}
 		}
 
@@ -234,17 +263,25 @@ func (rm *ResourceManager) CleanupIdleResources() {
 	}
 
 	if len(toCleanup) > 0 {
-		rm.logger.WithField("cleaned_count", len(toCleanup)).Info("Idle resource cleanup completed")
+		rm.logger.WithFields(map[string]interface{}{"cleaned_count": len(toCleanup)}).Info("Idle resource cleanup completed")
+		observability.AddBreadcrumbWithData(spanCtx, "resource_manager", "Idle resource cleanup completed", sentry.LevelInfo, map[string]interface{}{
+			"cleaned_count": len(toCleanup),
+			"error_count":   cleanupErrors,
+		})
 	}
 }
 
 // DetectLeaks detects potential resource leaks.
 func (rm *ResourceManager) DetectLeaks() {
+	spanCtx, span := observability.StartSpan(rm.monitoringCtx, "resource.leak_detection", "ResourceManager.DetectLeaks")
+	defer observability.FinishSpan(span, nil)
+
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
 	now := time.Now()
 	leakThreshold := 10 * time.Minute
+	leakCount := 0
 
 	for id, resource := range rm.resources {
 		age := now.Sub(resource.CreatedAt)
@@ -261,6 +298,12 @@ func (rm *ResourceManager) DetectLeaks() {
 				"metadata":      resource.Metadata,
 			}).Warn("Potential resource leak detected")
 		}
+	}
+
+	if leakCount > 0 {
+		observability.AddBreadcrumbWithData(spanCtx, "resource_manager", "Potential resource leaks detected", sentry.LevelWarning, map[string]interface{}{
+			"leak_count": leakCount,
+		})
 	}
 }
 
@@ -297,12 +340,17 @@ func (rm *ResourceManager) GetSystemStats() map[string]interface{} {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
+	// Safely access rm.resources with read lock to prevent data race
+	rm.mu.RLock()
+	resourceCount := len(rm.resources)
+	rm.mu.RUnlock()
+
 	return map[string]interface{}{
 		"goroutines":        runtime.NumGoroutine(),
 		"memory_alloc":      m.Alloc,
 		"memory_sys":        m.Sys,
 		"gc_cycles":         m.NumGC,
-		"managed_resources": len(rm.resources),
+		"managed_resources": resourceCount,
 	}
 }
 
@@ -344,6 +392,9 @@ func (rm *ResourceManager) logResourceStats() {
 
 // CleanupAll cleans up all managed resources.
 func (rm *ResourceManager) CleanupAll() {
+	spanCtx, span := observability.StartSpan(context.Background(), "resource.cleanup_all", "ResourceManager.CleanupAll")
+	defer observability.FinishSpan(span, nil)
+
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -358,6 +409,10 @@ func (rm *ResourceManager) CleanupAll() {
 					"resource_type": resource.Type,
 					"error":         err.Error(),
 				}).Error("Resource cleanup failed during shutdown")
+				observability.CaptureExceptionWithContext(spanCtx, err, "resource_cleanup_shutdown", map[string]interface{}{
+					"resource_id":   id,
+					"resource_type": resource.Type,
+				})
 			} else {
 				atomic.AddInt64(&rm.stats[resource.Type].TotalCleaned, 1)
 			}
@@ -367,12 +422,17 @@ func (rm *ResourceManager) CleanupAll() {
 
 	rm.resources = make(map[string]*Resource)
 	rm.logger.Info("All managed resources cleaned up")
+	observability.AddBreadcrumb(spanCtx, "resource_manager", "All managed resources cleaned up", sentry.LevelInfo)
 }
 
 // Shutdown gracefully shuts down the resource manager.
 func (rm *ResourceManager) Shutdown() {
 	rm.shutdownOnce.Do(func() {
+		spanCtx, span := observability.StartSpan(context.Background(), "resource.shutdown", "ResourceManager.Shutdown")
+		defer observability.FinishSpan(span, nil)
+
 		rm.logger.Info("Shutting down resource manager")
+		observability.AddBreadcrumb(spanCtx, "resource_manager", "Shutting down resource manager", sentry.LevelInfo)
 
 		// Stop monitoring
 		rm.monitoringCancel()
@@ -382,6 +442,7 @@ func (rm *ResourceManager) Shutdown() {
 		rm.CleanupAll()
 
 		rm.logger.Info("Resource manager shutdown complete")
+		observability.AddBreadcrumb(spanCtx, "resource_manager", "Resource manager shutdown complete", sentry.LevelInfo)
 	})
 }
 

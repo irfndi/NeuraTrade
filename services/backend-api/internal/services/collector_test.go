@@ -972,7 +972,8 @@ func TestCollectorService_CollectFundingRatesBulk_Concurrent(t *testing.T) {
 
 // Test SymbolCache Get method (currently 0% coverage)
 func TestSymbolCache_Get(t *testing.T) {
-	cache := NewSymbolCache(5 * time.Minute)
+	logger := logging.NewStandardLogger("info", "test")
+	cache := NewSymbolCache(5*time.Minute, logger)
 
 	// Test getting from empty cache
 	symbols, found := cache.Get("binance")
@@ -1000,7 +1001,8 @@ func TestSymbolCache_Get(t *testing.T) {
 
 // Test SymbolCache Set method (currently 0% coverage)
 func TestSymbolCache_Set(t *testing.T) {
-	cache := NewSymbolCache(5 * time.Minute)
+	logger := logging.NewStandardLogger("info", "test")
+	cache := NewSymbolCache(5*time.Minute, logger)
 
 	// Test setting new data
 	cache.Set("binance", []string{"BTC/USDT", "ETH/USDT"})
@@ -1045,7 +1047,8 @@ func TestSymbolCache_Set(t *testing.T) {
 
 // Test SymbolCache Stats methods (currently 0% coverage)
 func TestSymbolCache_GetStats(t *testing.T) {
-	cache := NewSymbolCache(5 * time.Minute)
+	logger := logging.NewStandardLogger("info", "test")
+	cache := NewSymbolCache(5*time.Minute, logger)
 
 	// Test initial stats
 	stats := cache.GetStats()
@@ -1068,7 +1071,8 @@ func TestSymbolCache_GetStats(t *testing.T) {
 
 // Test SymbolCache concurrent operations
 func TestSymbolCache_ConcurrentOperations(t *testing.T) {
-	cache := NewSymbolCache(5 * time.Minute)
+	logger := logging.NewStandardLogger("info", "test")
+	cache := NewSymbolCache(5*time.Minute, logger)
 
 	// Test concurrent Set operations
 	done := make(chan bool, 10)
@@ -1117,7 +1121,8 @@ func TestSymbolCache_ConcurrentOperations(t *testing.T) {
 
 // Test SymbolCache edge cases
 func TestSymbolCache_EdgeCases(t *testing.T) {
-	cache := NewSymbolCache(5 * time.Minute)
+	logger := logging.NewStandardLogger("info", "test")
+	cache := NewSymbolCache(5*time.Minute, logger)
 
 	// Test multiple updates to same key
 	cache.Set("binance", []string{"BTC/USDT"})
@@ -1161,7 +1166,8 @@ func TestSymbolCache_EdgeCases(t *testing.T) {
 
 // Test SymbolCache LogStats method (currently 0% coverage)
 func TestSymbolCache_LogStats(t *testing.T) {
-	cache := NewSymbolCache(5 * time.Minute)
+	logger := logging.NewStandardLogger("info", "test")
+	cache := NewSymbolCache(5*time.Minute, logger)
 
 	// Test LogStats doesn't panic and logs properly
 	// Since LogStats just logs to the logger, we just ensure it doesn't panic
@@ -1258,6 +1264,26 @@ func TestCollectorService_ConvertMarketPriceInterfacesToModels(t *testing.T) {
 	preciseResult := result[0]
 	assert.Equal(t, "50000.12345678", preciseResult.Price.String())
 	assert.Equal(t, "1000.98765432", preciseResult.Volume.String())
+
+	// Test bid/ask preservation - critical for arbitrage detection
+	bidAskItem := &MockMarketPriceInterface{
+		exchangeName: "binance",
+		symbol:       "BTC/USDT",
+		price:        50000.0,
+		bid:          49999.50,
+		ask:          50000.50,
+		volume:       1000.0,
+		timestamp:    time.Now(),
+	}
+
+	result = service.convertMarketPriceInterfacesToModels([]ccxt.MarketPriceInterface{bidAskItem})
+	assert.NotNil(t, result)
+	assert.Len(t, result, 1)
+
+	bidAskResult := result[0]
+	assert.Equal(t, "49999.5", bidAskResult.Bid.String(), "Bid should be preserved during conversion")
+	assert.Equal(t, "50000.5", bidAskResult.Ask.String(), "Ask should be preserved during conversion")
+	assert.Equal(t, "50000", bidAskResult.Price.String())
 }
 
 // TestCollectorService_ConvertMarketPriceInterfaceToModel tests the convertMarketPriceInterfaceToModel function
@@ -1333,6 +1359,23 @@ func TestCollectorService_ConvertMarketPriceInterfaceToModel(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, "999999999.999", result.Price.String())
 	assert.Equal(t, "888888888.888", result.Volume.String())
+
+	// Test bid/ask preservation - critical for arbitrage detection
+	bidAskInput := &MockMarketPriceInterface{
+		exchangeName: "binance",
+		symbol:       "BTC/USDT",
+		price:        50000.0,
+		bid:          49999.50,
+		ask:          50000.50,
+		volume:       1000.0,
+		timestamp:    time.Now(),
+	}
+
+	result = service.convertMarketPriceInterfaceToModel(bidAskInput)
+	assert.NotNil(t, result)
+	assert.Equal(t, "49999.5", result.Bid.String(), "Bid should be preserved during conversion")
+	assert.Equal(t, "50000.5", result.Ask.String(), "Ask should be preserved during conversion")
+	assert.Equal(t, "50000", result.Price.String())
 }
 
 // TestCollectorService_ConvertMarketPriceInterfaceToModel_FunctionalInterface tests with functional interface implementation
@@ -1366,6 +1409,8 @@ type MockMarketPriceInterface struct {
 	exchangeName string
 	symbol       string
 	price        float64
+	bid          float64
+	ask          float64
 	volume       float64
 	timestamp    time.Time
 }
@@ -1380,6 +1425,14 @@ func (m *MockMarketPriceInterface) GetSymbol() string {
 
 func (m *MockMarketPriceInterface) GetPrice() float64 {
 	return m.price
+}
+
+func (m *MockMarketPriceInterface) GetBid() float64 {
+	return m.bid
+}
+
+func (m *MockMarketPriceInterface) GetAsk() float64 {
+	return m.ask
 }
 
 func (m *MockMarketPriceInterface) GetVolume() float64 {

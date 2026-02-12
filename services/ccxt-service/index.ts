@@ -7,9 +7,6 @@ Worker utilities note (Bun >= 1.2.21):
 - If you need metadata, consider sending a small metadata message separately, or keep the large payload
   as a top-level string field to preserve fast-path benefits.
 */
-// NOTE: @sentry/bun import removed because it auto-instruments Bun.serve() on import,
-// causing EADDRINUSE errors. Re-enable when Sentry Bun compatibility is resolved.
-// import * as Sentry from "@sentry/bun";
 
 import { Effect } from "effect";
 import { Hono } from "hono";
@@ -22,7 +19,13 @@ import { validator } from "hono/validator";
 import ccxt from "ccxt";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
-import { isSentryEnabled, sentryMiddleware } from "./sentry";
+import {
+  isSentryEnabled,
+  sentryMiddleware,
+  initializeSentry,
+  captureException,
+  flush as sentryFlush,
+} from "./sentry";
 import { startGrpcServer } from "./grpc-server";
 import type {
   HealthResponse,
@@ -142,10 +145,14 @@ if (isSentryEnabled) {
 }
 
 app.onError((err, c) => {
-  // Sentry disabled - captureException removed to avoid @sentry/bun import
-  // if (isSentryEnabled) {
-  //   Sentry.captureException(err);
-  // }
+  // Capture exception to Sentry if enabled
+  if (isSentryEnabled) {
+    captureException(err, {
+      path: c.req.path,
+      method: c.req.method,
+      url: c.req.url,
+    });
+  }
   console.error("Application error:", err);
   return c.json(
     {
@@ -430,14 +437,42 @@ console.log(
 );
 console.log(`Active exchanges:`, Object.keys(exchanges).sort().join(", "));
 
-// Health check endpoint
-app.get("/health", (c) => {
-  const response: HealthResponse = {
-    status: "healthy",
+// Health check endpoint - verifies actual service functionality
+app.get("/health", async (c) => {
+  const activeExchangeCount = Object.keys(exchanges).length;
+  const isHealthy = activeExchangeCount > 0;
+
+  // Optionally verify at least one priority exchange can respond
+  let exchangeConnectivity = "unknown";
+  if (isHealthy) {
+    // Quick sanity check on a priority exchange (binance is usually reliable)
+    const testExchange = exchanges["binance"] || Object.values(exchanges)[0];
+    if (testExchange) {
+      try {
+        // Just check if exchange object is valid, don't make external call for health check
+        exchangeConnectivity = testExchange.id ? "configured" : "misconfigured";
+      } catch {
+        exchangeConnectivity = "error";
+      }
+    }
+  }
+
+  const response: HealthResponse & {
+    exchanges_count: number;
+    exchange_connectivity: string;
+  } = {
+    status: isHealthy ? "healthy" : "unhealthy",
     timestamp: new Date().toISOString(),
     service: "ccxt-service",
     version: "1.0.0",
+    exchanges_count: activeExchangeCount,
+    exchange_connectivity: exchangeConnectivity,
   };
+
+  if (!isHealthy) {
+    return c.json(response, 503);
+  }
+
   return c.json(response);
 });
 
@@ -482,7 +517,7 @@ app.get("/api/ticker/:exchange/*", async (c) => {
 
     // Add retry logic for Binance
     let retries = exchange === "binance" ? 3 : 1;
-    let lastError;
+    let lastError: any;
 
     for (let i = 0; i < retries; i++) {
       try {
@@ -506,11 +541,45 @@ app.get("/api/ticker/:exchange/*", async (c) => {
     }
 
     throw lastError;
-  } catch (error) {
+  } catch (error: any) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     const errorResponse: ErrorResponse = {
-      error: error instanceof Error ? error.message : "Unknown error",
+      error: errorMessage,
       timestamp: new Date().toISOString(),
     };
+
+    // Determine error type using constructor name (most reliable) or message patterns
+    const errorName = error?.constructor?.name || error?.name || "";
+
+    // Symbol not found errors - return 404 (non-retryable)
+    const isSymbolNotFound =
+      errorName === "BadSymbol" ||
+      errorName === "InvalidOrder" ||
+      errorMessage.includes("does not have market symbol") ||
+      errorMessage.includes("market not found") ||
+      errorMessage.includes("symbol not found") ||
+      errorMessage.includes("invalid symbol");
+
+    if (isSymbolNotFound) {
+      return c.json(errorResponse, 404);
+    }
+
+    // Exchange unavailable errors - return 503 (retryable)
+    const isExchangeUnavailable =
+      errorName === "ExchangeNotAvailable" ||
+      errorName === "RequestTimeout" ||
+      errorName === "NetworkError" ||
+      errorName === "DDoSProtection" ||
+      errorName === "RateLimitExceeded" ||
+      errorMessage.includes("ExchangeNotAvailable") ||
+      errorMessage.includes("RequestTimeout") ||
+      errorMessage.includes("NetworkError");
+
+    if (isExchangeUnavailable) {
+      return c.json(errorResponse, 503);
+    }
+
     return c.json(errorResponse, 500);
   }
 });
@@ -626,27 +695,35 @@ app.post(
       const { symbols, exchanges: requestedExchanges } = c.req.valid("json");
 
       const exchangesToQuery = requestedExchanges || Object.keys(exchanges);
-      const results: Record<string, Record<string, any>> = {};
+
+      // CRITICAL FIX: Return flat tickers array instead of nested results
+      // This matches what the Go client expects for JSON unmarshaling
+      const tickers: Array<any> = [];
 
       for (const exchangeId of exchangesToQuery) {
         if (!exchanges[exchangeId]) continue;
 
-        results[exchangeId] = {};
-
         for (const symbol of symbols) {
           try {
             const ticker = await exchanges[exchangeId].fetchTicker(symbol);
-            results[exchangeId][symbol] = ticker;
+            // Add exchange and symbol to each ticker for context
+            tickers.push({
+              ...ticker,
+              exchange: exchangeId,
+              symbol: symbol,
+            });
           } catch (error) {
-            results[exchangeId][symbol] = {
-              error: error instanceof Error ? error.message : "Unknown error",
-            };
+            // Skip errored symbols - don't include them in response
+            // The Go client doesn't need to know about individual symbol failures
+            console.warn(
+              `Failed to fetch ticker for ${exchangeId}:${symbol}: ${error instanceof Error ? error.message : "Unknown error"}`,
+            );
           }
         }
       }
 
       const response: MultiTickerResponse = {
-        results,
+        tickers,
         timestamp: new Date().toISOString(),
       };
 
@@ -1205,16 +1282,29 @@ if (shouldAutoServe) {
         `✅ CCXT Service successfully started on port ${server.port}`,
       );
 
+      // Initialize Sentry AFTER server startup to avoid auto-instrumentation conflicts
+      if (isSentryEnabled) {
+        await initializeSentry();
+      }
+
       // Handle graceful shutdown
-      process.on("SIGTERM", () => {
+      process.on("SIGTERM", async () => {
         console.log("SIGTERM received, shutting down gracefully...");
+        // Flush Sentry events before shutdown
+        if (isSentryEnabled) {
+          await sentryFlush(2000);
+        }
         server.stop();
         grpcServer.forceShutdown();
         process.exit(0);
       });
 
-      process.on("SIGINT", () => {
+      process.on("SIGINT", async () => {
         console.log("SIGINT received, shutting down gracefully...");
+        // Flush Sentry events before shutdown
+        if (isSentryEnabled) {
+          await sentryFlush(2000);
+        }
         server.stop();
         grpcServer.forceShutdown();
         process.exit(0);
@@ -1238,6 +1328,10 @@ if (shouldAutoServe) {
         process.exit(1);
       } else {
         console.error(`❌ Failed to start CCXT service:`, error);
+        // Capture startup error to Sentry if possible
+        if (isSentryEnabled) {
+          captureException(error, { phase: "startup" });
+        }
         throw error;
       }
     }

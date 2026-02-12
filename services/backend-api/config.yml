@@ -25,6 +25,7 @@ server:
     - "http://127.0.0.1:8080"
 
 # Database configuration
+# Note: Environment variables (DATABASE_HOST, etc.) override these via Viper's AutomaticEnv
 database:
   host: ${DATABASE_HOST:-postgres}
   port: ${DATABASE_PORT:-5432}
@@ -102,6 +103,11 @@ arbitrage:
   max_trade_amount: 1000.0
   check_interval: 10s
 
+# Fee configuration (fallback when exchange-specific fees are missing)
+fees:
+  default_taker_fee: 0.001
+  default_maker_fee: 0.001
+
 # Technical Analysis configuration
 technical_analysis:
   indicators:
@@ -118,6 +124,20 @@ technical_analysis:
     - 4h
     - 1d
   calculation_interval: 60s
+
+# Analytics configuration
+analytics:
+  enable_forecasting: true
+  enable_correlation: true
+  enable_regime_detection: true
+  forecast_lookback: 120
+  forecast_horizon: 8
+  correlation_window: 200
+  correlation_min_points: 30
+  regime_short_window: 20
+  regime_long_window: 60
+  volatility_high_threshold: 0.03
+  volatility_low_threshold: 0.005
 
 # Security configuration
 security:

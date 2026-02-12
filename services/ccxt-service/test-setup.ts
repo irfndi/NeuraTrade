@@ -27,6 +27,17 @@ mock.module("ccxt", () => {
     constructor(public config?: any) {}
 
     async fetchTicker(symbol: string) {
+      // Simulate invalid symbol error using a proper Error subclass pattern
+      // that mimics CCXT's BadSymbol error behavior
+      if (!this.markets[symbol]) {
+        class BadSymbol extends Error {
+          constructor(message: string) {
+            super(message);
+            this.name = "BadSymbol";
+          }
+        }
+        throw new BadSymbol(`binance does not have market symbol ${symbol}`);
+      }
       return { symbol, last: 50000, baseVolume: 1000, bid: 49990, ask: 50010 };
     }
 

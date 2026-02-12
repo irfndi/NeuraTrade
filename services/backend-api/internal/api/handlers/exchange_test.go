@@ -31,6 +31,14 @@ func (m *MockRedisClient) Set(ctx context.Context, key string, value interface{}
 	return args.Get(0).(*redis.StatusCmd)
 }
 
+func (m *MockRedisClient) Del(ctx context.Context, keys ...string) *redis.IntCmd {
+	args := m.Called(ctx, keys)
+	if args.Get(0) == nil {
+		return redis.NewIntResult(0, nil)
+	}
+	return args.Get(0).(*redis.IntCmd)
+}
+
 func TestNewExchangeHandler(t *testing.T) {
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCollector := &testmocks.MockCollectorService{}
@@ -111,6 +119,7 @@ func TestExchangeHandler_AddExchangeToBlacklist(t *testing.T) {
 	}
 	mockCCXT.On("AddExchangeToBlacklist", mock.Anything, "binance").Return(mockResponse, nil)
 	mockCollector.On("RestartWorker", "binance").Return(nil)
+	mockRedis.On("Del", mock.Anything, []string{"exchange:config", "exchange:supported"}).Return(nil)
 
 	handler := NewExchangeHandler(mockCCXT, mockCollector, mockRedis)
 
@@ -124,6 +133,7 @@ func TestExchangeHandler_AddExchangeToBlacklist(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	mockCCXT.AssertExpectations(t)
 	mockCollector.AssertExpectations(t)
+	mockRedis.AssertExpectations(t)
 }
 
 func TestExchangeHandler_RemoveExchangeFromBlacklist(t *testing.T) {
@@ -143,6 +153,7 @@ func TestExchangeHandler_RemoveExchangeFromBlacklist(t *testing.T) {
 	}
 	mockCCXT.On("RemoveExchangeFromBlacklist", mock.Anything, "binance").Return(mockResponse, nil)
 	mockCollector.On("RestartWorker", "binance").Return(nil)
+	mockRedis.On("Del", mock.Anything, []string{"exchange:config", "exchange:supported"}).Return(nil)
 
 	handler := NewExchangeHandler(mockCCXT, mockCollector, mockRedis)
 
@@ -156,6 +167,7 @@ func TestExchangeHandler_RemoveExchangeFromBlacklist(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	mockCCXT.AssertExpectations(t)
 	mockCollector.AssertExpectations(t)
+	mockRedis.AssertExpectations(t)
 }
 
 func TestExchangeHandler_RefreshExchanges(t *testing.T) {
@@ -174,6 +186,7 @@ func TestExchangeHandler_RefreshExchanges(t *testing.T) {
 	// Mock collector service methods
 	mockCollector.On("Stop").Return()
 	mockCollector.On("Start").Return(nil)
+	mockRedis.On("Del", mock.Anything, []string{"exchange:config", "exchange:supported"}).Return(nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -184,6 +197,7 @@ func TestExchangeHandler_RefreshExchanges(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	mockCCXT.AssertExpectations(t)
 	mockCollector.AssertExpectations(t)
+	mockRedis.AssertExpectations(t)
 }
 
 func TestExchangeHandler_AddExchange(t *testing.T) {
@@ -204,6 +218,7 @@ func TestExchangeHandler_AddExchange(t *testing.T) {
 	mockCCXT.On("AddExchange", mock.Anything, "binance").Return(mockResponse, nil)
 	mockCollector.On("Stop").Return()
 	mockCollector.On("Start").Return(nil)
+	mockRedis.On("Del", mock.Anything, []string{"exchange:config", "exchange:supported"}).Return(nil)
 
 	handler := NewExchangeHandler(mockCCXT, mockCollector, mockRedis)
 
@@ -217,6 +232,7 @@ func TestExchangeHandler_AddExchange(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	mockCCXT.AssertExpectations(t)
 	mockCollector.AssertExpectations(t)
+	mockRedis.AssertExpectations(t)
 }
 
 func TestExchangeHandler_GetSupportedExchanges(t *testing.T) {

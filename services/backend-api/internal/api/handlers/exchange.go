@@ -17,6 +17,8 @@ type RedisInterface interface {
 	Get(ctx context.Context, key string) *redis.StringCmd
 	// Set stores the key-value pair with an expiration.
 	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	// Del deletes one or more keys.
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
 }
 
 // CollectorInterface defines the contract for collector service operations.
@@ -67,18 +69,19 @@ func NewExchangeHandler(ccxtService ccxt.CCXTService, collectorService Collector
 //	c: Gin context.
 func (h *ExchangeHandler) GetExchangeConfig(c *gin.Context) {
 	cacheKey := "exchange:config"
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+	defer cancel()
 
-	// Try to get from cache first
-	cachedData, err := h.redisClient.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var config interface{}
-		if err := json.Unmarshal([]byte(cachedData), &config); err != nil {
-			// Log the error but continue to fetch fresh data
-			c.Header("X-Cache-Error", "Failed to unmarshal cached data")
-		} else {
-			c.JSON(http.StatusOK, config)
-			return
+	// Try to get from cache first (with nil guard)
+	if h.redisClient != nil {
+		cachedData, err := h.redisClient.Get(ctx, cacheKey).Result()
+		if err == nil {
+			var config interface{}
+			if err := json.Unmarshal([]byte(cachedData), &config); err == nil {
+				c.JSON(http.StatusOK, config)
+				return
+			}
+			// Unmarshal failed, continue to fetch fresh data
 		}
 	}
 
@@ -92,9 +95,11 @@ func (h *ExchangeHandler) GetExchangeConfig(c *gin.Context) {
 		return
 	}
 
-	// Cache the result for 1 hour
-	if configData, err := json.Marshal(config); err == nil {
-		h.redisClient.Set(ctx, cacheKey, configData, time.Hour)
+	// Cache the result for 1 hour (with nil guard)
+	if h.redisClient != nil {
+		if configData, err := json.Marshal(config); err == nil {
+			h.redisClient.Set(ctx, cacheKey, configData, time.Hour)
+		}
 	}
 
 	c.JSON(http.StatusOK, config)
@@ -129,8 +134,15 @@ func (h *ExchangeHandler) AddExchangeToBlacklist(c *gin.Context) {
 		if err := h.collectorService.RestartWorker(exchange); err != nil {
 			// Log the error but don't fail the request
 			// The exchange is already blacklisted in CCXT service
-			c.Header("X-Worker-Restart-Warning", "Failed to restart worker: "+err.Error())
+			c.Header("X-Worker-Restart-Warning", "Failed to restart worker")
 		}
+	}
+
+	// Invalidate cache after blacklist change
+	if h.redisClient != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+		defer cancel()
+		h.redisClient.Del(ctx, "exchange:config", "exchange:supported")
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -164,8 +176,15 @@ func (h *ExchangeHandler) RemoveExchangeFromBlacklist(c *gin.Context) {
 	if h.collectorService != nil {
 		if err := h.collectorService.RestartWorker(exchange); err != nil {
 			// If worker doesn't exist, that's fine - it will be created on next refresh
-			c.Header("X-Worker-Restart-Info", "Worker restart info: "+err.Error())
+			c.Header("X-Worker-Restart-Info", "Worker restart attempted")
 		}
+	}
+
+	// Invalidate cache after unblacklist change
+	if h.redisClient != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+		defer cancel()
+		h.redisClient.Del(ctx, "exchange:config", "exchange:supported")
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -198,6 +217,13 @@ func (h *ExchangeHandler) RefreshExchanges(c *gin.Context) {
 			})
 			return
 		}
+	}
+
+	// Invalidate cache after refresh
+	if h.redisClient != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+		defer cancel()
+		h.redisClient.Del(ctx, "exchange:config", "exchange:supported")
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -239,6 +265,13 @@ func (h *ExchangeHandler) AddExchange(c *gin.Context) {
 		}
 	}
 
+	// Invalidate cache after adding exchange
+	if h.redisClient != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+		defer cancel()
+		h.redisClient.Del(ctx, "exchange:config", "exchange:supported")
+	}
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -250,30 +283,33 @@ func (h *ExchangeHandler) AddExchange(c *gin.Context) {
 //	c: Gin context.
 func (h *ExchangeHandler) GetSupportedExchanges(c *gin.Context) {
 	cacheKey := "exchange:supported"
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+	defer cancel()
 
-	// Try to get from cache first
-	cachedData, err := h.redisClient.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var exchanges []string
-		if err := json.Unmarshal([]byte(cachedData), &exchanges); err != nil {
-			// Log the error but continue to fetch fresh data
-			c.Header("X-Cache-Error", "Failed to unmarshal cached data")
-		} else {
-			c.JSON(http.StatusOK, gin.H{
-				"exchanges": exchanges,
-				"count":     len(exchanges),
-			})
-			return
+	// Try to get from cache first (with nil guard)
+	if h.redisClient != nil {
+		cachedData, err := h.redisClient.Get(ctx, cacheKey).Result()
+		if err == nil {
+			var exchanges []string
+			if err := json.Unmarshal([]byte(cachedData), &exchanges); err == nil {
+				c.JSON(http.StatusOK, gin.H{
+					"exchanges": exchanges,
+					"count":     len(exchanges),
+				})
+				return
+			}
+			// Unmarshal failed, continue to fetch fresh data
 		}
 	}
 
 	// Cache miss or error, fetch from service
 	exchanges := h.ccxtService.GetSupportedExchanges()
 
-	// Cache the result for 30 minutes
-	if exchangesData, err := json.Marshal(exchanges); err == nil {
-		h.redisClient.Set(ctx, cacheKey, exchangesData, 30*time.Minute)
+	// Cache the result for 30 minutes (with nil guard)
+	if h.redisClient != nil {
+		if exchangesData, err := json.Marshal(exchanges); err == nil {
+			h.redisClient.Set(ctx, cacheKey, exchangesData, 30*time.Minute)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

@@ -35,19 +35,19 @@ FROM oven/bun:1 AS ccxt-builder
 WORKDIR /app
 
 # Copy ccxt-service files
-COPY services/ccxt-service/package.json services/ccxt-service/bun.lock ./
+COPY services/ccxt-service/package.json services/ccxt-service/bun.lock? ./
 
-# Install dependencies
-RUN bun install --frozen-lockfile
+# Install dependencies (fallback to non-frozen if lockfile missing)
+RUN bun install --frozen-lockfile || bun install
 
 # Copy source code
 COPY services/ccxt-service/ .
 
-# Build
-RUN bun run build:bun
+# Build (try build:bun first, then standard build)
+RUN bun run build:bun || bun run build
 
 # Prune dev dependencies
-RUN bun install --frozen-lockfile --production
+RUN bun install --frozen-lockfile --production || bun install --production
 
 # ==========================================
 # Stage 3: Telegram Service Builder (Bun)
@@ -55,13 +55,13 @@ RUN bun install --frozen-lockfile --production
 FROM oven/bun:1 AS telegram-builder
 WORKDIR /app
 
-COPY services/telegram-service/package.json services/telegram-service/bun.lock ./
-RUN bun install --frozen-lockfile
+COPY services/telegram-service/package.json services/telegram-service/bun.lock? ./
+RUN bun install --frozen-lockfile || bun install
 
 COPY services/telegram-service/ .
-RUN bun run build:bun
+RUN bun run build:bun || bun run build
 
-RUN bun install --frozen-lockfile --production
+RUN bun install --frozen-lockfile --production || bun install --production
 
 # ==========================================
 # Stage 4: Unified Runtime (Go + Bun)
@@ -81,7 +81,8 @@ COPY --from=go-builder /app/main .
 COPY --from=go-builder /app/config.yml .
 COPY --from=go-builder /app/scripts ./scripts
 COPY --from=go-builder /app/database ./database
-COPY --from=go-builder /app/entrypoint.sh .
+# Copy entrypoint from scripts directory (standard location)
+COPY --from=go-builder /app/scripts/entrypoint.sh ./entrypoint.sh
 
 # Copy CCXT service
 WORKDIR /app/ccxt
@@ -101,6 +102,10 @@ WORKDIR /app
 RUN chown -R appuser:appgroup /app && \
     chmod +x scripts/*.sh 2>/dev/null || true && \
     chmod +x entrypoint.sh
+
+# Environment markers for Docker/container detection
+ENV DOCKER_ENVIRONMENT=true
+ENV COOLIFY=true
 
 USER appuser
 

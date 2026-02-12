@@ -28,5 +28,9 @@ ENV PORT=3001
 
 EXPOSE 3001
 
+# Health check using curl
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3001/health || exit 1
+
 # Run the bundled file directly to avoid bun run overhead and potential duplicate server
 CMD ["bun", "dist/index.js"]

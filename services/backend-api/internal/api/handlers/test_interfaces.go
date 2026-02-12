@@ -14,6 +14,8 @@ type MarketPriceInterface interface {
 	GetTimestamp() time.Time
 	GetExchangeName() string
 	GetSymbol() string
+	GetBid() float64
+	GetAsk() float64
 }
 
 type ArbitrageOpportunityInterface interface {

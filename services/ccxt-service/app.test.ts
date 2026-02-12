@@ -137,3 +137,33 @@ test("/api/funding-rates with symbols filter", async () => {
   expect(body.count).toBe(1);
   expect(body.fundingRates[0].symbol).toBe("BTC/USDT");
 });
+
+test("health endpoint includes exchanges_count", async () => {
+  const svc = await getService();
+  const res = await svc.fetch(new Request("http://localhost/health"));
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.exchanges_count).toBeGreaterThan(0);
+  expect(body.exchange_connectivity).toBe("configured");
+});
+
+test("/api/ticker with invalid symbol returns 404", async () => {
+  const svc = await getService();
+  const res = await svc.fetch(
+    new Request("http://localhost/api/ticker/binance/INVALID/INVALID"),
+  );
+  // Should return 404 for symbol not found, not 500
+  expect(res.status).toBe(404);
+  const body = await res.json();
+  expect(body.error).toBeDefined();
+});
+
+test("/api/markets with unsupported exchange returns 400", async () => {
+  const svc = await getService();
+  const res = await svc.fetch(
+    new Request("http://localhost/api/markets/unknown_exchange"),
+  );
+  expect(res.status).toBe(400);
+  const body = await res.json();
+  expect(body.error).toBe("Exchange not supported");
+});

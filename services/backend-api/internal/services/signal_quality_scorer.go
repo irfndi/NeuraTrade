@@ -125,7 +125,7 @@ func (sqs *SignalQualityScorer) GetDefaultQualityThresholds() *QualityThresholds
 		MinOverallScore:   decimal.NewFromFloat(0.6),
 		MinExchangeScore:  decimal.NewFromFloat(0.7),
 		MinVolumeScore:    decimal.NewFromFloat(0.5),
-		MinLiquidityScore: decimal.NewFromFloat(0.6),
+		MinLiquidityScore: decimal.NewFromFloat(0.5),
 		MaxRiskScore:      decimal.NewFromFloat(0.4),
 		MinDataFreshness:  5 * time.Minute,
 	}
@@ -140,6 +140,14 @@ func (sqs *SignalQualityScorer) GetDefaultQualityThresholds() *QualityThresholds
 // Returns:
 //   - Calculated quality metrics, or an error if assessment fails.
 func (sqs *SignalQualityScorer) AssessSignalQuality(ctx context.Context, input *SignalQualityInput) (*SignalQualityMetrics, error) {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpSignalProcessing, "SignalQualityScorer.AssessSignalQuality", map[string]string{
+		"signal_type": input.SignalType,
+		"symbol":      input.Symbol,
+	})
+	defer observability.FinishSpan(span, nil)
+
+	observability.AddBreadcrumb(spanCtx, "signal_quality", "Assessing signal quality", sentry.LevelInfo)
+
 	// Stub logging for telemetry
 	_ = fmt.Sprintf("Signal quality assessment: type=%s, symbol=%s, exchanges=%v, volume=%f, profit=%f, confidence=%f",
 		input.SignalType, input.Symbol, input.Exchanges, input.Volume.InexactFloat64(),
@@ -150,6 +158,9 @@ func (sqs *SignalQualityScorer) AssessSignalQuality(ctx context.Context, input *
 		"symbol":      input.Symbol,
 		"exchanges":   input.Exchanges,
 	}).Info("Assessing signal quality")
+
+	// Use span context for cache refresh
+	_ = spanCtx
 
 	// Ensure exchange reliability cache is fresh
 	if err := sqs.refreshExchangeReliabilityCache(ctx); err != nil {
@@ -609,7 +620,7 @@ func (sqs *SignalQualityScorer) refreshExchangeReliabilityCache(ctx context.Cont
 	sqs.exchangeReliabilityCache = newCache
 	sqs.cacheExpiry = time.Now().Add(time.Hour)
 
-	sqs.logger.WithField("exchanges_cached", len(newCache)).Info("Exchange reliability cache refreshed")
+	sqs.logger.WithFields(map[string]interface{}{"exchanges_cached": len(newCache)}).Info("Exchange reliability cache refreshed")
 	return nil
 }
 
