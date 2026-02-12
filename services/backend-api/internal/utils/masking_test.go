@@ -128,8 +128,8 @@ func TestMaskToken(t *testing.T) {
 		},
 		{
 			name:     "JWT token",
-			input:    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
-			expected: "eyJhbG***.***.***sw5c",
+			input:    "header.payload.signature_abc123xyz",
+			expected: "header.***.***3xyz",
 		},
 		{
 			name:     "non-JWT token uses default masking",
@@ -333,8 +333,8 @@ func TestRedactMap(t *testing.T) {
 			name: "default sensitive keys",
 			input: map[string]string{
 				"username":      "johndoe",
-				"password":      "supersecret123",
-				"api_key":       "sk_live_abc123",
+				"password":      "fake_secret_value",
+				"api_key":       "test_key_abc123xyz",
 				"database_url":  "postgresql://user:pass@localhost/db",
 				"normal_config": "visible_value",
 			},
