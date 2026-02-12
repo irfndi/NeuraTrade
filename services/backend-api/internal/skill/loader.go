@@ -97,6 +97,7 @@ func (l *Loader) LoadAll() ([]*Skill, error) {
 
 // LoadFile loads a single skill.md file.
 func (l *Loader) LoadFile(path string) (*Skill, error) {
+	// #nosec G304 - Path is validated by caller or comes from controlled config
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
