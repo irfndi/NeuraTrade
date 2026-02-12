@@ -96,7 +96,7 @@ if [[ -f "$BASELINE_FILE" ]]; then
   BASELINE_PCT=$(cat "$BASELINE_FILE" | tr -d '%' | awk '{print $1}')
   DELTA=$(awk -v current="$TOTAL_PCT" -v baseline="$BASELINE_PCT" 'BEGIN {printf "%.1f", current - baseline}')
   delta_pass=$(awk -v d="$DELTA" -v max="$MAX_DELTA" 'BEGIN {print (d >= 0 || d >= -max) ? 1 : 0}')
-  
+
   if [[ "$delta_pass" -eq 0 ]]; then
     DROP_AMOUNT=$(echo "$DELTA" | awk '{printf "%.1f", -$1}')
     echo "[coverage] WARN: Coverage dropped by ${DROP_AMOUNT}% (max allowed: ${MAX_DELTA}%)" | tee -a "$ARTIFACTS_DIR/coverage.log"
@@ -108,7 +108,7 @@ if [[ -f "$BASELINE_FILE" ]]; then
     echo "[coverage] Delta check passed: ${DELTA}% change (baseline: ${BASELINE_PCT}%)" | tee -a "$ARTIFACTS_DIR/coverage.log"
   fi
 else
-  echo "$TOTAL_PCT" > "$BASELINE_FILE"
+  echo "$TOTAL_PCT" >"$BASELINE_FILE"
   echo "[coverage] Established baseline: ${TOTAL_PCT}%" | tee -a "$ARTIFACTS_DIR/coverage.log"
 fi
 
