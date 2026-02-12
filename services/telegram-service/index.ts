@@ -38,6 +38,13 @@ const api = new BackendApiClient({
 });
 const sessions = new SessionManager();
 
+setInterval(() => {
+  const cleaned = sessions.cleanupExpired();
+  if (cleaned > 0) {
+    logger.info("Session cleanup completed", { cleanedCount: cleaned });
+  }
+}, 60_000);
+
 registerAllCommands(bot, api, sessions);
 
 bot.on("message:text", async (ctx) => {

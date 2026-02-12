@@ -92,6 +92,13 @@ export function registerWalletCommands(
       return;
     }
 
+    if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+      await ctx.reply(
+        "Invalid wallet address format. Expected 42-character hex address starting with 0x.",
+      );
+      return;
+    }
+
     try {
       const response = await api.connectPolymarket(chatId, walletAddress);
       sessions.clearSession(chatId);
@@ -125,6 +132,13 @@ export function registerWalletCommands(
     const [walletAddress, walletType = "external"] = args
       .split(/\s+/)
       .filter(Boolean);
+
+    if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+      await ctx.reply(
+        "Invalid wallet address format. Expected 42-character hex address starting with 0x.",
+      );
+      return;
+    }
 
     try {
       const response = await api.addWallet(chatId, walletAddress, walletType);

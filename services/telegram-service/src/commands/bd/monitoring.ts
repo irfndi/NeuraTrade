@@ -11,6 +11,7 @@ import {
   formatQuestProgressMessage,
 } from "../../messages";
 import { getChatId } from "./helpers";
+import { logger } from "../../utils/logger";
 
 function formatQuestRows(quests: readonly QuestProgress[]): string {
   if (quests.length === 0) {
@@ -122,6 +123,11 @@ function normalizeDoctorStatus(
   }
   if (lowered === "warning") {
     return "warning";
+  }
+  if (lowered !== "critical") {
+    logger.warn("Unknown doctor status received, defaulting to critical", {
+      receivedStatus: status,
+    });
   }
   return "critical";
 }

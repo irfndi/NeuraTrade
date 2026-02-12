@@ -45,6 +45,14 @@ export function registerLiquidationCommands(
       return;
     }
 
+    // Validate symbol format (e.g., BTC/USDT, ETH-PERP/USDT)
+    if (!/^[A-Z0-9-]+\/[A-Z0-9-]+$/.test(symbol)) {
+      await ctx.reply(
+        "Invalid symbol format. Expected format: BASE/QUOTE (e.g., BTC/USDT)",
+      );
+      return;
+    }
+
     try {
       const response = await api.liquidate(chatId, symbol);
       await ctx.reply(
