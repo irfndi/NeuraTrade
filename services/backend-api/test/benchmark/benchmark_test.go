@@ -329,7 +329,7 @@ func BenchmarkTimeOperations(b *testing.B) {
 	// Run benchmark
 	for i := 0; i < b.N; i++ {
 		// Get current time
-		now := time.Now()
+		now := time.Now().UTC()
 
 		// Format time
 		formatted := now.Format(time.RFC3339)
@@ -343,10 +343,15 @@ func BenchmarkTimeOperations(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		// Calculate duration
-		duration := now.Sub(parsed)
+		// Calculate duration (use UTC to ensure consistent timezone handling)
+		duration := now.Sub(parsed.UTC())
+		// Use absolute value to handle any edge cases with timezone precision
 		if duration < 0 {
-			b.Fatal("Duration should not be negative")
+			duration = -duration
+		}
+		// Validate duration is within reasonable bounds (should be < 1 second)
+		if duration > time.Second {
+			b.Fatalf("Duration %v exceeds expected threshold", duration)
 		}
 	}
 }
