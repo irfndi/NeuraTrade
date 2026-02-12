@@ -33,6 +33,37 @@ secrets:
       match: admin-secret-key-change-me
     - name: admin-dev-key-change-in-production
       match: admin-dev-key-change-in-production
+    # Masking test patterns - these are fake/test values
+    - name: test-stripe-key
+      match: "sk_live_abcdef"
+    - name: test-stripe-key-short
+      match: "sk_live_abc123"
+    - name: test-password-placeholder
+      match: "secretpassword"
+    - name: test-super-secret
+      match: "supersecret123"
+    - name: test-secret-value
+      match: "my-super-secret-value-12345"
+    - name: test-password-long
+      match: "thisisaverylongpassword123"
+    - name: test-api-key
+      match: "sk_live_abcdef123456"
+    - name: test-jwt-token
+      match: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    - name: test-api-key-mask
+      match: "sk_live_test"
+    - name: test-password-placeholder-2
+      match: "secret123"
+    - name: test-password-short
+      match: "pass123"
+    - name: test-password-simple
+      match: "mypass"
+    - name: test-secret-generic
+      match: "hidden"
+    - name: test-secret-key-2
+      match: "test-secret-key-12345"
+    - name: test-api-key-pattern
+      match: "api_key"
   ignored-paths:
     # Test files commonly use fake credentials
     - "**/*_test.go"
