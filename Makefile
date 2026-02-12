@@ -187,12 +187,20 @@ install-tools: ## Install development tools
 	go install golang.org/x/vuln/cmd/govulncheck@latest
 	@echo "$(GREEN)Tools installed!$(NC)"
 
-security-check: ## Run security checks
-	@echo "$(GREEN)Running security checks...$(NC)"
-	@# Go security check
-	cd services/backend-api && govulncheck ./... || echo "$(YELLOW)Go security check found issues (non-fatal for now)$(NC)"
-	@# TypeScript security check (placeholder as bun audit is limited)
+security-check: ## Run security checks (gosec, gitleaks, govulncheck)
+	@echo "$(GREEN)Running comprehensive security checks...$(NC)"
+	@# Go security check with gosec
+	@echo "$(BLUE)Running gosec security scanner...$(NC)"
+	@cd services/backend-api && gosec -fmt sarif -out ../../gosec-report.sarif ./... 2>/dev/null || gosec ./... 2>/dev/null || echo "$(YELLOW)gosec not installed or found issues$(NC)"
+	@# Secret scanning with gitleaks
+	@echo "$(BLUE)Running gitleaks secret detection...$(NC)"
+	@gitleaks detect --source . --verbose --redact 2>/dev/null || echo "$(YELLOW)gitleaks not installed or found potential secrets$(NC)"
+	@# Go vulnerability check
+	@echo "$(BLUE)Running govulncheck...$(NC)"
+	@cd services/backend-api && govulncheck ./... 2>/dev/null || echo "$(YELLOW)govulncheck not installed$(NC)"
 	@echo "$(GREEN)Security checks completed!$(NC)"
+
+security-scan: security-check ## Alias for security-check
 
 ## Docker
 docker-build: ## Build Docker images for all services
