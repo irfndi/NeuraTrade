@@ -50,7 +50,7 @@ func Macd(prices []float64, fastPeriod, slowPeriod, signalPeriod int) ([]float64
 	return helper.ChanToSlice(macdLine), helper.ChanToSlice(signal), nil
 }
 
-func BBands(prices []float64, period int, stdDevUp, stdDevDn float64, maType int) ([]float64, []float64, []float64) {
+func BBands(prices []float64, period int, _, _ float64, _ int) ([]float64, []float64, []float64) {
 	if len(prices) < period {
 		return nil, nil, nil
 	}
@@ -71,7 +71,7 @@ func Atr(high, low, close []float64, period int) []float64 {
 	return helper.ChanToSlice(atr.Compute(h, l, c))
 }
 
-func StochF(high, low, close []float64, kPeriod, dPeriod, maType int) ([]float64, []float64) {
+func StochF(high, low, close []float64, kPeriod, _, _ int) ([]float64, []float64) {
 	if len(high) < kPeriod || len(low) < kPeriod || len(close) < kPeriod {
 		return nil, nil
 	}

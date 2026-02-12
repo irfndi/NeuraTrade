@@ -64,16 +64,21 @@ func (m *MockDBPool) PgxMock() pgxmock.PgxPoolIface {
 }
 
 type MockTxAdapter struct {
-	mock pgxmock.PgxPoolIface
-	tx   pgx.Tx
+	tx pgx.Tx
 }
 
-func NewMockTxAdapter(mock pgxmock.PgxPoolIface) Tx {
-	return &MockTxAdapter{mock: mock}
+// NewMockTxAdapter creates a transaction adapter by beginning a real transaction from the mock pool.
+// This ensures queries are executed in a transaction context for proper test behavior.
+func NewMockTxAdapter(ctx context.Context, mock pgxmock.PgxPoolIface) (Tx, error) {
+	tx, err := mock.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &MockTxAdapter{tx: tx}, nil
 }
 
 func (m *MockTxAdapter) Query(ctx context.Context, query string, args ...any) (Rows, error) {
-	rows, err := m.mock.Query(ctx, query, args...)
+	rows, err := m.tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,11 +86,11 @@ func (m *MockTxAdapter) Query(ctx context.Context, query string, args ...any) (R
 }
 
 func (m *MockTxAdapter) QueryRow(ctx context.Context, query string, args ...any) Row {
-	return PgxRow{Row: m.mock.QueryRow(ctx, query, args...)}
+	return PgxRow{Row: m.tx.QueryRow(ctx, query, args...)}
 }
 
 func (m *MockTxAdapter) Exec(ctx context.Context, query string, args ...any) (Result, error) {
-	tag, err := m.mock.Exec(ctx, query, args...)
+	tag, err := m.tx.Exec(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
