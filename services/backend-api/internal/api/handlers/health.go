@@ -263,6 +263,7 @@ var startTime = time.Now()
 
 // ReadinessCheck checks if the service is ready to accept traffic.
 // This is typically used by load balancers or Kubernetes.
+// It performs comprehensive checks on all critical dependencies.
 //
 // Parameters:
 //
@@ -277,36 +278,66 @@ func (h *HealthHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
 	span.SetTag("http.url", r.URL.String())
 	span.SetTag("handler.name", "ReadinessCheck")
 
-	// Similar to HealthCheck but more strict
+	// Comprehensive readiness checks for all services
 	servicesStatus := make(map[string]string)
+	allReady := true
 
-	// All services must be healthy for readiness
+	// Check database (critical)
 	if h.db != nil {
 		if err := h.db.HealthCheck(ctx); err == nil {
 			servicesStatus["database"] = "ready"
 			span.SetTag("database.readiness", "ready")
 		} else {
-			servicesStatus["database"] = "not ready"
+			servicesStatus["database"] = "not ready: " + err.Error()
 			span.SetTag("database.readiness", "not_ready")
 			sentry.CaptureException(err)
-			span.Status = sentry.SpanStatusInternalError
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if err := json.NewEncoder(w).Encode(map[string]interface{}{
-				"ready":    false,
-				"services": servicesStatus,
-			}); err != nil {
-				sentry.CaptureException(err)
-				http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-			}
-			return
+			allReady = false
 		}
+	} else {
+		servicesStatus["database"] = "not configured"
+		span.SetTag("database.readiness", "not_configured")
+		allReady = false
 	}
 
-	// All checks passed
-	span.Status = sentry.SpanStatusOK
-	w.WriteHeader(http.StatusOK)
+	// Check Redis (critical for caching)
+	if h.redis != nil {
+		if err := h.redis.HealthCheck(ctx); err == nil {
+			servicesStatus["redis"] = "ready"
+			span.SetTag("redis.readiness", "ready")
+		} else {
+			servicesStatus["redis"] = "not ready: " + err.Error()
+			span.SetTag("redis.readiness", "not_ready")
+			sentry.CaptureException(err)
+			allReady = false
+		}
+	} else {
+		servicesStatus["redis"] = "not configured"
+		span.SetTag("redis.readiness", "not_configured")
+		allReady = false
+	}
+
+	// Check CCXT service (important for market data)
+	// CCXT unavailability marks service as degraded, not unready
+	if err := h.checkCCXTService(); err != nil {
+		servicesStatus["ccxt"] = "degraded: " + err.Error()
+		span.SetTag("ccxt.readiness", "degraded")
+		sentry.CaptureException(err)
+	} else {
+		servicesStatus["ccxt"] = "ready"
+		span.SetTag("ccxt.readiness", "ready")
+	}
+
+	// Set appropriate status code
+	if !allReady {
+		span.Status = sentry.SpanStatusUnavailable
+		w.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		span.Status = sentry.SpanStatusOK
+		w.WriteHeader(http.StatusOK)
+	}
+
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"ready":    true,
+		"ready":    allReady,
 		"services": servicesStatus,
 	}); err != nil {
 		sentry.CaptureException(err)

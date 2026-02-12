@@ -152,6 +152,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			arbitrage.GET("/opportunities", arbitrageHandler.GetArbitrageOpportunities)
 			arbitrage.GET("/history", arbitrageHandler.GetArbitrageHistory)
+			arbitrage.GET("/stats", arbitrageHandler.GetArbitrageStats)
 			// Funding rate arbitrage
 			arbitrage.GET("/funding", arbitrageHandler.GetFundingRateArbitrage)
 			arbitrage.GET("/funding-rates/:exchange", arbitrageHandler.GetFundingRates)
