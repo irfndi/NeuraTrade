@@ -1,8 +1,8 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-11 18:04 Asia/Jakarta
-**Commit:** ea06294
-**Branch:** chore/neuratrade-rebrand-sync
+**Generated:** 2026-02-12 22:01 Asia/Jakarta
+**Commit:** d2efb34
+**Branch:** development
 
 ## OVERVIEW
 NeuraTrade is a multi-service trading platform: Go backend API + Bun TypeScript sidecar services for CCXT exchange access and Telegram delivery.
@@ -41,6 +41,7 @@ NeuraTrade/
 | `CollectorService` | struct | `services/backend-api/internal/services/collector.go` | market ingestion orchestrator |
 | `SignalProcessor` | struct | `services/backend-api/internal/services/signal_processor.go` | signal pipeline coordinator |
 | `FuturesArbitrageService` | struct | `services/backend-api/internal/services/futures_arbitrage_service.go` | funding-arb engine |
+| `QuestEngine` | struct | `services/backend-api/internal/services/quest_engine.go` | autonomous quest scheduling with Redis coordination |
 
 ## CONVENTIONS
 - Repository is service-first: contributors should edit under `services/*`; root-level `internal/` and `pkg/` are not primary development targets.
