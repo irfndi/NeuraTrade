@@ -33,6 +33,31 @@ bash scripts/startup-orchestrator.sh
 bash scripts/health-monitor-enhanced.sh check
 ```
 
+## BACKLOG (bd CLI)
+Scripts roadmap tracked via `bd` (~15 items):
+
+### Infrastructure & Deployment
+- `neura-lk1`: Create install.sh shell script (READY - bootstrap installation)
+- `neura-354`: CI/CD pipeline setup scripts
+- `neura-qfp`: Production Docker Compose configuration
+- `neura-wqa`: QuantVPS deployment scripts
+- `neura-q6o`: Containerize agent and infrastructure services
+
+### Security & Monitoring
+- `neura-px6`: Security audit scripts (gosec, gitleaks integration)
+- `neura-9ai`: Intrusion detection monitoring scripts
+- `neura-kxq`: Kill switch monitoring and activation scripts
+- `neura-8y8`: Emergency rollback procedures
+
+### Health & Operations
+- `neura-lue`: Enhanced readiness check scripts
+- `neura-4p6`: Exchange resilience monitoring scripts
+- `neura-za8`: Rate limit monitoring dashboard scripts
+- `neura-1p0`: /doctor diagnostic automation scripts
+
+### Installation
+- `neura-lk1` → `neura-yzv`: NeuraTrade CLI bootstrap command
+
 ## ANTI-PATTERNS
 - Running operational scripts without validating env inputs.
 - Hardcoding secrets in script invocations/history.

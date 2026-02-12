@@ -29,6 +29,63 @@ go test ./internal/services/... -run TestArbitrage
 - Tests are large and co-located; prefer adding focused test cases to existing suites unless splitting is needed.
 - Common patterns: table-driven tests, mock dependencies, setup helpers.
 
+## BACKLOG (bd CLI)
+Complete services layer roadmap tracked via `bd` (~40 items):
+
+### Quest & Agent System
+- `neura-1nz`: ✅ Cron-based quest scheduling (COMPLETED)
+- `neura-6tk`: Event-driven quest triggers (READY, no blockers)
+- `neura-2iq`: Analyst agent role implementation (READY)
+- `neura-9m3`: Trader agent role implementation
+- `neura-bxg`: One-time auth code generation (READY)
+- `neura-2n4`: Quest state persistence (blocked by neura-6tk)
+- `neura-4gk`: Quest and monitoring commands
+- `neura-im9`: Quest progress update notifications
+
+### Signal & Analysis
+- `neura-cd1`: Arbitrage trigger detection engine
+- `neura-sa4`: Order book imbalance detection
+- `neura-cha`: Sum-to-one arbitrage skill.md codification
+- `neura-we2`: Scalping skill.md codification
+- `neura-bri`: AI reasoning summaries for trades
+- `neura-l70a`: Refactor talib wrapper to goflux
+
+### Risk & Monitoring
+- `neura-8y8`: Emergency rollback system
+- `neura-kxq`: Kill switch monitoring
+- `neura-nh5`: Risk event notifications
+- `neura-fvk`: Fund milestone alerts
+- `neura-e8u`: Daily loss cap
+- `neura-bol`: Consecutive-loss pause
+- `neura-q4j`: Max drawdown halt
+- `neura-3ms`: Position-size throttle
+- `neura-9ai`: Intrusion detection
+
+### Execution & Orders
+- `neura-a7r`: Tight stop-loss execution
+- `neura-1wi`: FOK (Fill or Kill) order execution
+- `neura-l2z`: place_order tool endpoint
+- `neura-wz7`: cancel_order tool endpoint
+- `neura-txu`: Controlled liquidation tool
+- `neura-2xe`: Position snapshot tool
+
+### Paper Trading
+- `neura-u4w`: Paper execution simulation
+- `neura-8de`: Virtual account tracking
+- `neura-mm5`: Paper trade recording
+- `neura-32w`: Fund with minimal capital (USDC)
+
+### Budget & Reporting
+- `neura-5z3`: Daily budget enforcement
+- `neura-7mj`: Monthly budget enforcement
+- `neura-94c`: /status budget display
+
+### Infrastructure
+- `neura-161`: Distributed locks
+- `neura-byz`: Goroutine pool with concurrency limits
+- `neura-zn8c`: Replace in-memory state with persistent storage
+- `neura-axx`: Action streaming format
+
 ## ANTI-PATTERNS
 - Expanding already-large orchestrator files with unrelated concerns.
 - Introducing new direct DB queries in services that should use existing repository abstractions.

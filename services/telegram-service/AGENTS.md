@@ -34,6 +34,36 @@ bun test
 - Use Bun tests for health/admin/webhook behavior.
 - Preserve mock strategy from `test-setup.ts` when adding bot/API flows.
 
+## BACKLOG (bd CLI)
+Telegram service roadmap tracked via `bd` (~20 items):
+
+### Ready to Work
+- `neura-bxg`: One-time auth code generation command
+- `neura-2iq`: Analyst agent role Telegram integration
+
+### Bot Commands
+- `neura-hgk`: /begin and /pause autonomous mode handlers
+- `neura-ik7`: /summary and /performance report handlers
+- `neura-ilw`: /liquidate and /liquidate_all handlers
+- `neura-09y`: Wallet management commands (/wallet, /balance)
+- `neura-4gk`: Quest and monitoring commands (/quest, /monitor)
+- `neura-1p0`: /doctor diagnostic handler
+
+### Notifications & Alerts
+- `neura-nh5`: Risk event notification delivery
+- `neura-im9`: Quest progress update notifications
+- `neura-fvk`: Fund milestone alert delivery
+- `neura-axx`: Action streaming format messages
+- `neura-bri`: AI reasoning summary messages
+
+### Security & Privacy
+- `neura-bxg` → `neura-5of`: Bind local operator profile to Telegram chat
+- `neura-ydp`: Operator identity encryption (Argon2)
+- `neura-c7r`: API key masking in Telegram output
+
+### Integration
+- `neura-6tk`: Event-driven quest trigger notifications
+
 ## ANTI-PATTERNS
 
 - Editing generated `proto/*.ts` manually.

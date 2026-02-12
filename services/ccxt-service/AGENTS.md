@@ -35,6 +35,25 @@ bun test
 - Tests use Bun test runner with module mocking via `test-setup.ts`.
 - Prefer deterministic endpoint checks (health, auth boundaries, response shape).
 
+## BACKLOG (bd CLI)
+CCXT service roadmap tracked via `bd` (~8 items):
+
+### Ready to Work
+- `neura-4ms`: Extend CCXT wrapper functionality (backend-api integration)
+
+### WebSocket & Real-time Data
+- `neura-xxy`: WebSocket market data subscription (depends on neura-4ms)
+- `neura-wiz`: Gamma API wrapper for market discovery
+
+### Rate Limiting & Resilience
+- `neura-1b6`: Token bucket rate limit management (depends on neura-xxy)
+- `neura-za8`: Rate limit monitoring and alerting
+- `neura-4p6`: Exchange resilience monitoring
+
+### API Wrappers
+- `neura-qts`: CLOB API wrapper for order execution
+- `neura-adu`: Data API wrapper for positions/balances
+
 ## ANTI-PATTERNS
 
 - Editing generated `proto/*.ts` files directly.
