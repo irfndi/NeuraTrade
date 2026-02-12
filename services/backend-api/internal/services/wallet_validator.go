@@ -244,9 +244,12 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 		return nil, fmt.Errorf("failed to count wallets: %w", err)
 	}
 
-	if walletCount > 0 {
-		balances["USDC"] = wv.config.MinimumUSDCBalance
+	if walletCount == 0 {
+		return balances, nil
 	}
+
+	// TODO: Implement actual balance fetching via CCXT service (neura-adu)
+	// Returning empty balances will cause validation to fail until implemented
 
 	return balances, nil
 }
