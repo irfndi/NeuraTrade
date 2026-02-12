@@ -283,7 +283,7 @@ func TestKillSwitchMonitor_WithRedis(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379",
 	})
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	monitor := NewKillSwitchMonitor(redisClient, notifier, nil, logger)
 

@@ -79,7 +79,7 @@ func TestControlledLiquidationService_ValidateRiskLimits(t *testing.T) {
 
 	t.Run("rejects when kill switch is active", func(t *testing.T) {
 		killSwitch := NewKillSwitchMonitor(nil, nil, nil, logger)
-		killSwitch.Trigger(KillSwitchTriggerDrawdown, "test", "test trigger")
+		require.NoError(t, killSwitch.Trigger(KillSwitchTriggerDrawdown, "test", "test trigger"))
 
 		service := NewControlledLiquidationService(nil, nil, nil, killSwitch, nil, logger)
 
