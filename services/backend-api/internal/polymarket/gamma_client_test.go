@@ -243,6 +243,18 @@ func TestFindSumToOneArbitrage(t *testing.T) {
 			LiquidityNum:  50,
 			Active:        true,
 		},
+		{
+			ID:            "4",
+			ConditionID:   "0xzeroprice",
+			Question:      "Zero price edge case",
+			Outcomes:      []string{"Yes", "No"},
+			OutcomePrices: []string{"0.00", "0.00"},
+			Volume:        "100000",
+			VolumeNum:     100000,
+			Liquidity:     "50000",
+			LiquidityNum:  50000,
+			Active:        true,
+		},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -303,7 +303,7 @@ func (c *Client) FindSumToOneArbitrage(ctx context.Context, minVolume, minLiquid
 		}
 
 		totalPrice := yesPrice + noPrice
-		if totalPrice >= 1.0 {
+		if totalPrice >= 1.0 || totalPrice <= 0 {
 			continue
 		}
 
