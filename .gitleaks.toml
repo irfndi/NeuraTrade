@@ -1,0 +1,42 @@
+title = "NeuraTrade Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''_test\.go$''',
+    '''\.test\.ts$''',
+    '''\.spec\.ts$''',
+    '''test-setup\.ts$''',
+    '''test/''',
+    '''\.git/''',
+    '''coverage/''',
+    '''vendor/''',
+    '''node_modules/''',
+    '''signoz/''',
+    '''\.cache/''',
+    '''bin/''',
+]
+
+regexes = [
+    '''test-secret-key''',
+    '''test-admin-key''',
+    '''test-bot-token''',
+    '''test-webhook-secret''',
+    '''replace-with-secure-secret''',
+    '''dev-jwt-secret''',
+    '''admin-secret-key-change-me''',
+    '''admin-dev-key-change-in-production''',
+    '''password123''',
+    '''secret123''',
+    '''example\.com''',
+    '''localhost''',
+    '''sk_live_test''',
+    '''sk_test_''',
+    '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9''',
+    '''supersecret''',
+    '''pass123''',
+    '''mypass''',
+    '''abc123''',
+]
