@@ -19,14 +19,17 @@ var (
 	errTradingOrderNotFound    = errors.New("trading order not found")
 	errTradingOrderNotOpen     = errors.New("trading order is not open")
 	errTradingPositionNotFound = errors.New("trading position not found")
+	errTradingNoDatabase       = errors.New("trading handler requires database connection")
 )
 
+// TradingHandler manages trading orders and positions with persistent storage.
+// All state is persisted to the database; in-memory maps are only used for
+// sequence generation and are not authoritative storage.
 type TradingHandler struct {
-	db        DBQuerier
-	mu        sync.RWMutex
-	sequence  int64
-	orders    map[string]OrderRecord
-	positions map[string]PositionRecord
+	db       DBQuerier
+	mu       sync.Mutex
+	sequence int64
+	// In-memory caches removed - all data persisted to database
 }
 
 type PlaceOrderRequest struct {
@@ -75,20 +78,16 @@ type PositionRecord struct {
 }
 
 func NewTradingHandler(querier ...any) *TradingHandler {
-	h := &TradingHandler{
-		orders:    make(map[string]OrderRecord),
-		positions: make(map[string]PositionRecord),
-	}
-
 	if len(querier) == 0 || querier[0] == nil {
-		return h
+		panic(errTradingNoDatabase)
 	}
 
 	resolvedQuerier, err := resolveDBQuerier(querier[0])
 	if err != nil {
 		panic(err)
 	}
-	h.db = resolvedQuerier
+
+	h := &TradingHandler{db: resolvedQuerier}
 
 	if err := h.initializeTradingStore(); err != nil {
 		panic(err)
@@ -174,19 +173,12 @@ func (h *TradingHandler) PlaceOrder(c *gin.Context) {
 		UpdatedAt:  now,
 	}
 
-	if h.usesPersistentStore() {
-		if err := h.insertTradingRecords(c.Request.Context(), order, position); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"status": "error",
-				"error":  "failed to persist trading records",
-			})
-			return
-		}
-	} else {
-		h.mu.Lock()
-		h.orders[orderID] = order
-		h.positions[positionID] = position
-		h.mu.Unlock()
+	if err := h.insertTradingRecords(c.Request.Context(), order, position); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"error":  "failed to persist trading records",
+		})
+		return
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -208,56 +200,17 @@ func (h *TradingHandler) CancelOrder(c *gin.Context) {
 		return
 	}
 
-	if h.usesPersistentStore() {
-		order, err := h.cancelOrderPersistent(c.Request.Context(), req.OrderID)
-		if err != nil {
-			switch {
-			case errors.Is(err, errTradingOrderNotFound):
-				c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "order not found"})
-			case errors.Is(err, errTradingOrderNotOpen):
-				c.JSON(http.StatusConflict, gin.H{"status": "error", "error": "order is not open"})
-			default:
-				c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to cancel order"})
-			}
-			return
+	order, err := h.cancelOrderPersistent(c.Request.Context(), req.OrderID)
+	if err != nil {
+		switch {
+		case errors.Is(err, errTradingOrderNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "order not found"})
+		case errors.Is(err, errTradingOrderNotOpen):
+			c.JSON(http.StatusConflict, gin.H{"status": "error", "error": "order is not open"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to cancel order"})
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"status": "success",
-			"data":   order,
-		})
 		return
-	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	order, ok := h.orders[req.OrderID]
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{
-			"status": "error",
-			"error":  "order not found",
-		})
-		return
-	}
-
-	if order.Status != "OPEN" {
-		c.JSON(http.StatusConflict, gin.H{
-			"status": "error",
-			"error":  "order is not open",
-		})
-		return
-	}
-
-	now := time.Now().UTC()
-	order.Status = "CANCELED"
-	order.UpdatedAt = now
-	h.orders[req.OrderID] = order
-
-	if position, exists := h.positions[order.PositionID]; exists && position.Status == "OPEN" {
-		position.Status = "CLOSED"
-		position.UpdatedAt = now
-		h.positions[position.PositionID] = position
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -287,110 +240,34 @@ func (h *TradingHandler) Liquidate(c *gin.Context) {
 		return
 	}
 
-	if h.usesPersistentStore() {
-		position, err := h.liquidatePersistent(c.Request.Context(), positionID, symbol)
-		if err != nil {
-			if errors.Is(err, errTradingPositionNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "open position not found"})
-			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to liquidate position"})
-			}
-			return
+	position, err := h.liquidatePersistent(c.Request.Context(), positionID, symbol)
+	if err != nil {
+		if errors.Is(err, errTradingPositionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "open position not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to liquidate position"})
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"status": "success",
-			"data":   position,
-		})
 		return
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	now := time.Now().UTC()
-	for id, position := range h.positions {
-		if position.Status != "OPEN" {
-			continue
-		}
-
-		if positionID != "" && position.PositionID != positionID {
-			continue
-		}
-
-		if symbol != "" && !strings.EqualFold(position.Symbol, symbol) {
-			continue
-		}
-
-		position.Status = "LIQUIDATED"
-		position.UpdatedAt = now
-		h.positions[id] = position
-
-		if order, exists := h.orders[position.OrderID]; exists && order.Status == "OPEN" {
-			order.Status = "CLOSED"
-			order.UpdatedAt = now
-			h.orders[order.OrderID] = order
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"status": "success",
-			"data":   position,
-		})
-		return
-	}
-
-	c.JSON(http.StatusNotFound, gin.H{
-		"status": "error",
-		"error":  "open position not found",
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data":   position,
 	})
 }
 
 func (h *TradingHandler) LiquidateAll(c *gin.Context) {
-	if h.usesPersistentStore() {
-		positions, err := h.liquidateAllPersistent(c.Request.Context())
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to liquidate positions"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"status": "success",
-			"data": gin.H{
-				"count":     len(positions),
-				"positions": positions,
-			},
-		})
+	positions, err := h.liquidateAllPersistent(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to liquidate positions"})
 		return
-	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	now := time.Now().UTC()
-	liquidated := make([]PositionRecord, 0)
-
-	for id, position := range h.positions {
-		if position.Status != "OPEN" {
-			continue
-		}
-
-		position.Status = "LIQUIDATED"
-		position.UpdatedAt = now
-		h.positions[id] = position
-		liquidated = append(liquidated, position)
-
-		if order, exists := h.orders[position.OrderID]; exists && order.Status == "OPEN" {
-			order.Status = "CLOSED"
-			order.UpdatedAt = now
-			h.orders[order.OrderID] = order
-		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"status": "success",
 		"data": gin.H{
-			"count":     len(liquidated),
-			"positions": liquidated,
+			"count":     len(positions),
+			"positions": positions,
 		},
 	})
 }
@@ -398,32 +275,10 @@ func (h *TradingHandler) LiquidateAll(c *gin.Context) {
 func (h *TradingHandler) ListPositions(c *gin.Context) {
 	statusFilter := strings.ToUpper(strings.TrimSpace(c.Query("status")))
 
-	if h.usesPersistentStore() {
-		positions, err := h.listPositionsPersistent(c.Request.Context(), statusFilter)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to list positions"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"status": "success",
-			"data": gin.H{
-				"count":     len(positions),
-				"positions": positions,
-			},
-		})
+	positions, err := h.listPositionsPersistent(c.Request.Context(), statusFilter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to list positions"})
 		return
-	}
-
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	positions := make([]PositionRecord, 0, len(h.positions))
-	for _, position := range h.positions {
-		if statusFilter != "" && position.Status != statusFilter {
-			continue
-		}
-		positions = append(positions, position)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -445,33 +300,13 @@ func (h *TradingHandler) GetPosition(c *gin.Context) {
 		return
 	}
 
-	if h.usesPersistentStore() {
-		position, err := h.getPositionPersistent(c.Request.Context(), positionID)
-		if err != nil {
-			if errors.Is(err, errTradingPositionNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "position not found"})
-			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to get position"})
-			}
-			return
+	position, err := h.getPositionPersistent(c.Request.Context(), positionID)
+	if err != nil {
+		if errors.Is(err, errTradingPositionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "position not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to get position"})
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"status": "success",
-			"data":   position,
-		})
-		return
-	}
-
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	position, ok := h.positions[positionID]
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{
-			"status": "error",
-			"error":  "position not found",
-		})
 		return
 	}
 
@@ -479,10 +314,6 @@ func (h *TradingHandler) GetPosition(c *gin.Context) {
 		"status": "success",
 		"data":   position,
 	})
-}
-
-func (h *TradingHandler) usesPersistentStore() bool {
-	return h != nil && h.db != nil
 }
 
 func (h *TradingHandler) generateIDs(now time.Time) (string, string) {
