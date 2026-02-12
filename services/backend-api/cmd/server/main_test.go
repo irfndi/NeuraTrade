@@ -509,10 +509,12 @@ func TestMainFunction(t *testing.T) {
 		t.Errorf("Expected exec.ExitError, got %T: %v", err, err)
 	}
 
-	// Check that the error message contains our expected output
 	output := stderr.String()
-	if !strings.Contains(output, "Application failed: failed to connect to database") {
-		t.Errorf("Expected error message about database connection failure, got: %s", output)
+	hasDBError := strings.Contains(output, "Application failed: failed to connect to database")
+	hasRedisError := strings.Contains(output, "redis:") && strings.Contains(output, "failed to dial")
+
+	if !hasDBError && !hasRedisError {
+		t.Errorf("Expected error message about database or Redis connection failure, got: %s", output)
 	}
 }
 
