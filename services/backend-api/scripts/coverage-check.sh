@@ -4,16 +4,19 @@
 # - Runs Go tests with coverage across selected packages
 # - Computes total coverage and optionally enforces a minimum threshold
 # - Emits artifacts to ci-artifacts/coverage for CI visibility
+# - Supports baseline capture and delta enforcement
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 ARTIFACTS_DIR="$ROOT_DIR/ci-artifacts/coverage"
+BASELINE_FILE="$ARTIFACTS_DIR/coverage_baseline.txt"
 mkdir -p "$ARTIFACTS_DIR"
 cd "$ROOT_DIR"
 
 # Configurable via env
 MIN_COVERAGE="${MIN_COVERAGE:-50}"
+MAX_DELTA="${MAX_DELTA:-5}"
 COVERAGE_PACKAGES=(
   "./internal/api"
   "./internal/api/handlers"
@@ -37,6 +40,7 @@ if [[ -n "${COVERAGE_PACKAGES_OVERRIDE:-}" ]]; then
 fi
 
 STRICT="${STRICT:-true}"
+CAPTURE_BASELINE="${CAPTURE_BASELINE:-false}"
 
 COVERPROFILE="$ARTIFACTS_DIR/coverage.out"
 COVERHTML="$ARTIFACTS_DIR/coverage.html"
@@ -74,6 +78,30 @@ go tool cover -html="$COVERPROFILE" -o "$COVERHTML" 2>/dev/null || true
 
 printf "[coverage] Total coverage: %s%%\n" "$TOTAL_PCT" | tee -a "$ARTIFACTS_DIR/coverage.log"
 printf "total_coverage=%s\nthreshold=%s\n" "$TOTAL_PCT" "$MIN_COVERAGE" >"$SUMMARY"
+
+# Handle baseline capture and delta enforcement
+if [[ "$CAPTURE_BASELINE" == "true" ]]; then
+  echo "$TOTAL_PCT" >"$BASELINE_FILE"
+  printf "[coverage] Baseline captured: %s%%\n" "$TOTAL_PCT" | tee -a "$ARTIFACTS_DIR/coverage.log"
+fi
+
+if [[ -f "$BASELINE_FILE" ]]; then
+  BASELINE_PCT=$(cat "$BASELINE_FILE")
+  DELTA=$(awk -v c="$TOTAL_PCT" -v b="$BASELINE_PCT" 'BEGIN {printf "%.1f", c - b}')
+  DELTA_ABS=$(echo "$DELTA" | awk '{if ($1 < 0) print -$1; else print $1}')
+  
+  printf "[coverage] Baseline: %s%%, Current: %s%%, Delta: %s%%\n" "$BASELINE_PCT" "$TOTAL_PCT" "$DELTA" | tee -a "$ARTIFACTS_DIR/coverage.log"
+  
+  # Check delta threshold
+  EXCEEDS_DELTA=$(echo "$DELTA_ABS" | awk -v m="$MAX_DELTA" '{if ($1 + 0 > m + 0) print 1; else print 0}')
+  if [[ "$EXCEEDS_DELTA" -eq 1 ]]; then
+    echo "[coverage] ERROR: Coverage delta ${DELTA}% exceeds maximum allowed delta ${MAX_DELTA}%" | tee -a "$ARTIFACTS_DIR/coverage.log"
+    if [[ "$STRICT" == "true" ]]; then
+      echo "[coverage] Failing due to delta threshold breach in STRICT mode" | tee -a "$ARTIFACTS_DIR/coverage.log"
+      exit 1
+    fi
+  fi
+fi
 
 # Generate per-file breakdown for quick triage
 go tool cover -func="$COVERPROFILE" >"$ARTIFACTS_DIR/func_breakdown.txt" 2>/dev/null || true
