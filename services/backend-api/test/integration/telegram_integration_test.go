@@ -16,6 +16,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
+	"github.com/irfndi/neuratrade/test/testmocks"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,10 +71,12 @@ func TestTelegramIntegration(t *testing.T) {
 
 	// Create required middlewares
 	authMiddleware := middleware.NewAuthMiddleware("test-jwt-secret")
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 
 	// Call SetupRoutes
 	// We pass nil for services not involved in this test flow
-	api.SetupRoutes(router, db, redisClient, nil, nil, nil, nil, nil, nil, cfg, authMiddleware)
+	api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, authMiddleware)
 
 	// Test Data
 	testTelegramChatID := "123456789"
