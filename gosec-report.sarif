@@ -8,32 +8,6 @@
 						{
 							"physicalLocation": {
 								"artifactLocation": {
-									"uri": "internal/ai/registry.go"
-								},
-								"region": {
-									"endColumn": 26,
-									"endLine": 165,
-									"snippet": {
-										"text": "resp, err := r.client.Do(req)"
-									},
-									"sourceLanguage": "go",
-									"startColumn": 26,
-									"startLine": 165
-								}
-							}
-						}
-					],
-					"message": {
-						"text": "SSRF via taint analysis"
-					},
-					"ruleId": "G704"
-				},
-				{
-					"level": "error",
-					"locations": [
-						{
-							"physicalLocation": {
-								"artifactLocation": {
 									"uri": "internal/models/user.go"
 								},
 								"region": {
@@ -116,13 +90,13 @@
 								},
 								"region": {
 									"endColumn": 2,
-									"endLine": 106,
+									"endLine": 108,
 									"snippet": {
 										"text": "Password string `mapstructure:\"password\"`"
 									},
 									"sourceLanguage": "go",
 									"startColumn": 2,
-									"startLine": 106
+									"startLine": 108
 								}
 							}
 						}
@@ -142,13 +116,13 @@
 								},
 								"region": {
 									"endColumn": 2,
-									"endLine": 68,
+									"endLine": 70,
 									"snippet": {
 										"text": "Password string `mapstructure:\"password\"`"
 									},
 									"sourceLanguage": "go",
 									"startColumn": 2,
-									"startLine": 68
+									"startLine": 70
 								}
 							}
 						}
@@ -168,19 +142,71 @@
 								},
 								"region": {
 									"endColumn": 2,
-									"endLine": 266,
+									"endLine": 268,
 									"snippet": {
 										"text": "JWTSecret string `mapstructure:\"jwt_secret\"`"
 									},
 									"sourceLanguage": "go",
 									"startColumn": 2,
-									"startLine": 266
+									"startLine": 268
 								}
 							}
 						}
 					],
 					"message": {
 						"text": "Exported struct field \"JWTSecret\" (JSON key \"JWTSecret\") matches secret pattern"
+					},
+					"ruleId": "G117"
+				},
+				{
+					"level": "error",
+					"locations": [
+						{
+							"physicalLocation": {
+								"artifactLocation": {
+									"uri": "internal/models/exchange_api_key.go"
+								},
+								"region": {
+									"endColumn": 2,
+									"endLine": 24,
+									"snippet": {
+										"text": "APISecret    string   `json:\"api_secret\" binding:\"required\"`"
+									},
+									"sourceLanguage": "go",
+									"startColumn": 2,
+									"startLine": 24
+								}
+							}
+						}
+					],
+					"message": {
+						"text": "Exported struct field \"APISecret\" (JSON key \"api_secret\") matches secret pattern"
+					},
+					"ruleId": "G117"
+				},
+				{
+					"level": "error",
+					"locations": [
+						{
+							"physicalLocation": {
+								"artifactLocation": {
+									"uri": "internal/models/exchange_api_key.go"
+								},
+								"region": {
+									"endColumn": 2,
+									"endLine": 23,
+									"snippet": {
+										"text": "APIKey       string   `json:\"api_key\" binding:\"required\"`"
+									},
+									"sourceLanguage": "go",
+									"startColumn": 2,
+									"startLine": 23
+								}
+							}
+						}
+					],
+					"message": {
+						"text": "Exported struct field \"APIKey\" (JSON key \"api_key\") matches secret pattern"
 					},
 					"ruleId": "G117"
 				},
@@ -480,13 +506,13 @@
 								},
 								"region": {
 									"endColumn": 13,
-									"endLine": 417,
+									"endLine": 429,
 									"snippet": {
 										"text": "log.Printf(\"INFO: Docker/Coolify environment detected (COOLIFY=%v, DOCKER_ENVIRONMENT=%s)\","
 									},
 									"sourceLanguage": "go",
 									"startColumn": 13,
-									"startLine": 417
+									"startLine": 429
 								}
 							}
 						}
@@ -722,32 +748,6 @@
 							],
 							"shortDescription": {
 								"text": "Exported struct field \"Password\" (JSON key \"password\") matches secret pattern"
-							}
-						},
-						{
-							"defaultConfiguration": {
-								"level": "error"
-							},
-							"fullDescription": {
-								"text": "SSRF via taint analysis"
-							},
-							"help": {
-								"text": "SSRF via taint analysis\nSeverity: HIGH\nConfidence: HIGH\n"
-							},
-							"id": "G704",
-							"name": "G704",
-							"properties": {
-								"precision": "high",
-								"tags": [
-									"security",
-									"HIGH"
-								]
-							},
-							"relationships": [
-								null
-							],
-							"shortDescription": {
-								"text": "SSRF via taint analysis"
 							}
 						}
 					],
