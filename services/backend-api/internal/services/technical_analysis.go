@@ -7,19 +7,19 @@ import (
 	"time"
 
 	"github.com/cinar/indicator/v2/asset"
-	"github.com/getsentry/sentry-go"
-
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
-
 	"github.com/cinar/indicator/v2/helper"
 	"github.com/cinar/indicator/v2/momentum"
 	"github.com/cinar/indicator/v2/trend"
 	"github.com/cinar/indicator/v2/volatility"
 	"github.com/cinar/indicator/v2/volume"
+	"github.com/getsentry/sentry-go"
 	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
+	"github.com/irfandi/celebrum-ai-go/internal/talib"
 	"github.com/shopspring/decimal"
+
+	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfandi/celebrum-ai-go/internal/observability"
 )
 
 // TechnicalAnalysisService provides technical analysis capabilities, calculating various indicators

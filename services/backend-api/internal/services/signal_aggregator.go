@@ -14,10 +14,10 @@ import (
 	"github.com/cinar/indicator/v2/trend"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 )
@@ -823,7 +823,6 @@ func (sa *SignalAggregator) createAggregatedTechnicalSignal(symbol, exchange, ac
 	}
 }
 
-// calculateArbitrageConfidence computes confidence score for arbitrage
 func (sa *SignalAggregator) calculateArbitrageConfidence(opp models.ArbitrageOpportunity) decimal.Decimal {
 	// Basic confidence based on profit and spread
 	// Higher profit = higher confidence (up to a point, then it looks suspicious)
