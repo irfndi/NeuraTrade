@@ -93,6 +93,48 @@ type ArbitrageHistoryResponse struct {
 	Limit int `json:"limit"`
 }
 
+// ArbitrageStats represents arbitrage statistics.
+type ArbitrageStats struct {
+	// TotalOpportunities is the total count of opportunities in the time window.
+	TotalOpportunities int64 `json:"total_opportunities"`
+	// AvgProfitPercent is the average profit percentage across all opportunities.
+	AvgProfitPercent decimal.Decimal `json:"avg_profit_percent"`
+	// MaxProfitPercent is the maximum profit percentage found.
+	MaxProfitPercent decimal.Decimal `json:"max_profit_percent"`
+	// MinProfitPercent is the minimum profit percentage found.
+	MinProfitPercent decimal.Decimal `json:"min_profit_percent"`
+	// TotalVolume is the total volume across all opportunities.
+	TotalVolume decimal.Decimal `json:"total_volume"`
+	// TopSymbols is the top traded symbols.
+	TopSymbols []SymbolStats `json:"top_symbols"`
+	// TopPairs is the top exchange pairs.
+	TopPairs []PairStats `json:"top_pairs"`
+	// TimeWindow is the time window for the stats.
+	TimeWindow string `json:"time_window"`
+}
+
+// SymbolStats represents statistics for a symbol.
+type SymbolStats struct {
+	// Symbol is the trading pair.
+	Symbol string `json:"symbol"`
+	// Count is the number of opportunities for this symbol.
+	Count int64 `json:"count"`
+	// AvgProfit is the average profit for this symbol.
+	AvgProfit decimal.Decimal `json:"avg_profit"`
+}
+
+// PairStats represents statistics for an exchange pair.
+type PairStats struct {
+	// BuyExchange is the buying exchange.
+	BuyExchange string `json:"buy_exchange"`
+	// SellExchange is the selling exchange.
+	SellExchange string `json:"sell_exchange"`
+	// Count is the number of opportunities for this pair.
+	Count int64 `json:"count"`
+	// AvgProfit is the average profit for this pair.
+	AvgProfit decimal.Decimal `json:"avg_profit"`
+}
+
 // NewArbitrageHandler creates a new instance of ArbitrageHandler.
 //
 // Parameters:
@@ -1035,4 +1077,119 @@ func (h *ArbitrageHandler) getArbitrageHistory(ctx context.Context, limit, offse
 	}
 
 	return history, nil
+}
+
+// GetArbitrageStats returns arbitrage statistics for a given time window.
+func (h *ArbitrageHandler) GetArbitrageStats(c *gin.Context) {
+	timeWindow := c.DefaultQuery("window", "24h")
+
+	var interval string
+	switch timeWindow {
+	case "1h":
+		interval = "1 hour"
+	case "6h":
+		interval = "6 hours"
+	case "24h":
+		interval = "24 hours"
+	case "7d":
+		interval = "7 days"
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid time window (use: 1h, 6h, 24h, 7d)"})
+		return
+	}
+
+	stats, err := h.calculateArbitrageStats(c.Request.Context(), interval)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate arbitrage statistics"})
+		return
+	}
+
+	c.JSON(http.StatusOK, stats)
+}
+
+// calculateArbitrageStats calculates arbitrage statistics from the database.
+func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval string) (*ArbitrageStats, error) {
+	if h.db == nil {
+		return &ArbitrageStats{
+			TimeWindow: interval,
+		}, nil
+	}
+
+	stats := &ArbitrageStats{
+		TimeWindow: interval,
+	}
+
+	query := `
+		SELECT
+			COUNT(*) as total_opportunities,
+			COALESCE(AVG(profit_percent), 0) as avg_profit,
+			COALESCE(MAX(profit_percent), 0) as max_profit,
+			COALESCE(MIN(profit_percent), 0) as min_profit,
+			COALESCE(SUM(volume), 0) as total_volume
+		FROM arbitrage_opportunities
+		WHERE detected_at > NOW() - INTERVAL $1
+	`
+
+	var totalOpp int64
+	var avgProfit, maxProfit, minProfit, totalVol float64
+	err := h.db.QueryRow(ctx, query, interval).Scan(&totalOpp, &avgProfit, &maxProfit, &minProfit, &totalVol)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query arbitrage stats: %w", err)
+	}
+
+	stats.TotalOpportunities = totalOpp
+	stats.AvgProfitPercent = decimal.NewFromFloat(avgProfit)
+	stats.MaxProfitPercent = decimal.NewFromFloat(maxProfit)
+	stats.MinProfitPercent = decimal.NewFromFloat(minProfit)
+	stats.TotalVolume = decimal.NewFromFloat(totalVol)
+
+	symbolQuery := `
+		SELECT symbol, COUNT(*) as count, COALESCE(AVG(profit_percent), 0) as avg_profit
+		FROM arbitrage_opportunities
+		WHERE detected_at > NOW() - INTERVAL $1
+		GROUP BY symbol
+		ORDER BY count DESC
+		LIMIT 5
+	`
+	rows, err := h.db.Query(ctx, symbolQuery, interval)
+	if err != nil {
+		return stats, fmt.Errorf("failed to query symbol stats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sym SymbolStats
+		var avgProf float64
+		if err := rows.Scan(&sym.Symbol, &sym.Count, &avgProf); err != nil {
+			log.Printf("Failed to scan symbol stats: %v", err)
+			continue
+		}
+		sym.AvgProfit = decimal.NewFromFloat(avgProf)
+		stats.TopSymbols = append(stats.TopSymbols, sym)
+	}
+
+	pairQuery := `
+		SELECT buy_exchange, sell_exchange, COUNT(*) as count, COALESCE(AVG(profit_percent), 0) as avg_profit
+		FROM arbitrage_opportunities
+		WHERE detected_at > NOW() - INTERVAL $1
+		GROUP BY buy_exchange, sell_exchange
+		ORDER BY count DESC
+		LIMIT 5
+	`
+	rows, err = h.db.Query(ctx, pairQuery, interval)
+	if err != nil {
+		return stats, fmt.Errorf("failed to query pair stats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pair PairStats
+		var avgProf float64
+		if err := rows.Scan(&pair.BuyExchange, &pair.SellExchange, &pair.Count, &avgProf); err != nil {
+			log.Printf("Failed to scan pair stats: %v", err)
+			continue
+		}
+		pair.AvgProfit = decimal.NewFromFloat(avgProf)
+		stats.TopPairs = append(stats.TopPairs, pair)
+	}
+
+	return stats, nil
 }

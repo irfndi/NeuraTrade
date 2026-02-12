@@ -221,6 +221,7 @@ func TestHealthHandler_ReadinessWithDBError(t *testing.T) {
 	mockCacheAnalytics := NewMockCacheAnalyticsService()
 
 	mockDB.On("HealthCheck", mock.Anything).Return(assert.AnError)
+	mockRedis.On("HealthCheck", mock.Anything).Return(nil)
 
 	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics)
 

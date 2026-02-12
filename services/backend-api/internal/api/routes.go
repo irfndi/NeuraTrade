@@ -183,6 +183,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			arbitrage.GET("/opportunities", arbitrageHandler.GetArbitrageOpportunities)
 			arbitrage.GET("/history", arbitrageHandler.GetArbitrageHistory)
+			arbitrage.GET("/stats", arbitrageHandler.GetArbitrageStats)
 			// Funding rate arbitrage
 			arbitrage.GET("/funding", arbitrageHandler.GetFundingRateArbitrage)
 			arbitrage.GET("/funding-rates/:exchange", arbitrageHandler.GetFundingRates)
@@ -266,6 +267,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			data.GET("/stats", cleanupHandler.GetDataStats)
 			data.POST("/cleanup", cleanupHandler.TriggerCleanup)
+		}
+
+		// Risk management
+		risk := v1.Group("/risk")
+		{
+			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
 		}
 
 		trading := v1.Group("/trading")
