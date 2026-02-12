@@ -209,7 +209,6 @@ func (r *AIUsageRepository) GetMonthlySummary(ctx context.Context, startDate, en
 	return summaries, rows.Err()
 }
 
-
 func NewAIUsageRepositoryFromDB(pool DBPool) *AIUsageRepository {
 	return &AIUsageRepository{pool: pool}
 }
