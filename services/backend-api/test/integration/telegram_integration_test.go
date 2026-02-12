@@ -173,12 +173,11 @@ func TestTelegramIntegration(t *testing.T) {
 		assert.Equal(t, true, resp["enabled"])
 	})
 
-	t.Run("Unauthorized_NoKey", func(t *testing.T) {
+	t.Run("InternalRoute_AllowsNoKey", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+testTelegramChatID, nil)
-		// No api key
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
 }
