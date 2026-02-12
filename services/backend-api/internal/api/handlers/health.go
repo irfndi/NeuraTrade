@@ -288,7 +288,7 @@ func (h *HealthHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
 			servicesStatus["database"] = "ready"
 			span.SetTag("database.readiness", "ready")
 		} else {
-			servicesStatus["database"] = "not ready: " + err.Error()
+			servicesStatus["database"] = "not ready"
 			span.SetTag("database.readiness", "not_ready")
 			sentry.CaptureException(err)
 			allReady = false
@@ -305,7 +305,7 @@ func (h *HealthHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
 			servicesStatus["redis"] = "ready"
 			span.SetTag("redis.readiness", "ready")
 		} else {
-			servicesStatus["redis"] = "not ready: " + err.Error()
+			servicesStatus["redis"] = "not ready"
 			span.SetTag("redis.readiness", "not_ready")
 			sentry.CaptureException(err)
 			allReady = false
@@ -319,7 +319,7 @@ func (h *HealthHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
 	// Check CCXT service (important for market data)
 	// CCXT unavailability marks service as degraded, not unready
 	if err := h.checkCCXTService(); err != nil {
-		servicesStatus["ccxt"] = "degraded: " + err.Error()
+		servicesStatus["ccxt"] = "degraded"
 		span.SetTag("ccxt.readiness", "degraded")
 		sentry.CaptureException(err)
 	} else {

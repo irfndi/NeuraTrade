@@ -98,13 +98,13 @@ type ArbitrageStats struct {
 	// TotalOpportunities is the total count of opportunities in the time window.
 	TotalOpportunities int64 `json:"total_opportunities"`
 	// AvgProfitPercent is the average profit percentage across all opportunities.
-	AvgProfitPercent float64 `json:"avg_profit_percent"`
+	AvgProfitPercent decimal.Decimal `json:"avg_profit_percent"`
 	// MaxProfitPercent is the maximum profit percentage found.
-	MaxProfitPercent float64 `json:"max_profit_percent"`
+	MaxProfitPercent decimal.Decimal `json:"max_profit_percent"`
 	// MinProfitPercent is the minimum profit percentage found.
-	MinProfitPercent float64 `json:"min_profit_percent"`
+	MinProfitPercent decimal.Decimal `json:"min_profit_percent"`
 	// TotalVolume is the total volume across all opportunities.
-	TotalVolume float64 `json:"total_volume"`
+	TotalVolume decimal.Decimal `json:"total_volume"`
 	// TopSymbols is the top traded symbols.
 	TopSymbols []SymbolStats `json:"top_symbols"`
 	// TopPairs is the top exchange pairs.
@@ -120,7 +120,7 @@ type SymbolStats struct {
 	// Count is the number of opportunities for this symbol.
 	Count int64 `json:"count"`
 	// AvgProfit is the average profit for this symbol.
-	AvgProfit float64 `json:"avg_profit"`
+	AvgProfit decimal.Decimal `json:"avg_profit"`
 }
 
 // PairStats represents statistics for an exchange pair.
@@ -132,7 +132,7 @@ type PairStats struct {
 	// Count is the number of opportunities for this pair.
 	Count int64 `json:"count"`
 	// AvgProfit is the average profit for this pair.
-	AvgProfit float64 `json:"avg_profit"`
+	AvgProfit decimal.Decimal `json:"avg_profit"`
 }
 
 // NewArbitrageHandler creates a new instance of ArbitrageHandler.
@@ -1134,14 +1134,14 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 	var avgProfit, maxProfit, minProfit, totalVol float64
 	err := h.db.QueryRow(ctx, query, interval).Scan(&totalOpp, &avgProfit, &maxProfit, &minProfit, &totalVol)
 	if err != nil {
-		return stats, nil
+		return nil, fmt.Errorf("failed to query arbitrage stats: %w", err)
 	}
 
 	stats.TotalOpportunities = totalOpp
-	stats.AvgProfitPercent = avgProfit
-	stats.MaxProfitPercent = maxProfit
-	stats.MinProfitPercent = minProfit
-	stats.TotalVolume = totalVol
+	stats.AvgProfitPercent = decimal.NewFromFloat(avgProfit)
+	stats.MaxProfitPercent = decimal.NewFromFloat(maxProfit)
+	stats.MinProfitPercent = decimal.NewFromFloat(minProfit)
+	stats.TotalVolume = decimal.NewFromFloat(totalVol)
 
 	symbolQuery := `
 		SELECT symbol, COUNT(*) as count, COALESCE(AVG(profit_percent), 0) as avg_profit
@@ -1152,13 +1152,16 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 		LIMIT 5
 	`
 	rows, err := h.db.Query(ctx, symbolQuery, interval)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var sym SymbolStats
-			if err := rows.Scan(&sym.Symbol, &sym.Count, &sym.AvgProfit); err == nil {
-				stats.TopSymbols = append(stats.TopSymbols, sym)
-			}
+	if err != nil {
+		return stats, fmt.Errorf("failed to query symbol stats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sym SymbolStats
+		var avgProf float64
+		if err := rows.Scan(&sym.Symbol, &sym.Count, &avgProf); err == nil {
+			sym.AvgProfit = decimal.NewFromFloat(avgProf)
+			stats.TopSymbols = append(stats.TopSymbols, sym)
 		}
 	}
 
@@ -1171,13 +1174,16 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 		LIMIT 5
 	`
 	rows, err = h.db.Query(ctx, pairQuery, interval)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var pair PairStats
-			if err := rows.Scan(&pair.BuyExchange, &pair.SellExchange, &pair.Count, &pair.AvgProfit); err == nil {
-				stats.TopPairs = append(stats.TopPairs, pair)
-			}
+	if err != nil {
+		return stats, fmt.Errorf("failed to query pair stats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pair PairStats
+		var avgProf float64
+		if err := rows.Scan(&pair.BuyExchange, &pair.SellExchange, &pair.Count, &avgProf); err == nil {
+			pair.AvgProfit = decimal.NewFromFloat(avgProf)
+			stats.TopPairs = append(stats.TopPairs, pair)
 		}
 	}
 
