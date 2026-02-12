@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -214,8 +215,270 @@ func TestStandardLogger_LogAPIRequest(t *testing.T) {
 	assert.NotNil(t, fields["duration_ms"])
 }
 
-func TestStandardLogger_StandardOutputCapture(t *testing.T) {
-	// This test verifies output to stdout
-	// We can't misleadingly verify stdout easily here without redirecting os.Stdout
-	// So we'll skip detailed stdout capturing and rely on Observer for logic verification
+func TestStandardLogger_LogBusinessEvent(t *testing.T) {
+	logger, buf := setupTestLogger("info", "development")
+
+	details := map[string]interface{}{
+		"symbol":     "BTC/USD",
+		"exchange":   "binance",
+		"profit_pct": 2.5,
+	}
+
+	logger.LogBusinessEvent("arbitrage_opportunity", details)
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "event=business_event")
+	assert.Contains(t, logOutput, "type=arbitrage_opportunity")
+	assert.Contains(t, logOutput, "symbol=BTC/USD")
+	assert.Contains(t, logOutput, "exchange=binance")
+	assert.Contains(t, logOutput, "profit_pct=2.5")
+	assert.Contains(t, logOutput, "Business event")
+}
+
+// TestStandardLogger_SetLogger
+func TestStandardLogger_SetLogger(t *testing.T) {
+	logger := NewStandardLogger("info", "development")
+	assert.NotNil(t, logger)
+
+	// Create a mock logger to replace the default one
+	mockLogger := &testLogger{logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+
+	// Test SetLogger method
+	logger.SetLogger(mockLogger)
+
+	// Verify the logger was set by testing a method call
+	resultLogger := logger.WithService("test-service")
+	assert.NotNil(t, resultLogger)
+}
+
+func TestParseLogrusLevel(t *testing.T) {
+	tests := []struct {
+		levelStr string
+		expected zaplogrus.Level
+	}{
+		{"debug", zaplogrus.DebugLevel},
+		{"warn", zaplogrus.WarnLevel},
+		{"warning", zaplogrus.WarnLevel},
+		{"error", zaplogrus.ErrorLevel},
+		{"info", zaplogrus.InfoLevel},
+		{"INFO", zaplogrus.InfoLevel},    // case insensitive
+		{"DEBUG", zaplogrus.DebugLevel},  // case insensitive
+		{"invalid", zaplogrus.InfoLevel}, // default to info
+		{"", zaplogrus.InfoLevel},        // empty string defaults to info
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.levelStr, func(t *testing.T) {
+			result := ParseLogrusLevel(tt.levelStr)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// Tests for fallbackLogger methods
+func TestFallbackLogger_WithService(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	result := logger.WithService("test-service")
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_WithComponent(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	result := logger.WithComponent("test-component")
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_WithOperation(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	result := logger.WithOperation("test-operation")
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_WithRequestID(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	result := logger.WithRequestID("test-request-id")
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_WithUserID(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	result := logger.WithUserID("test-user-id")
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_WithExchange(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	result := logger.WithExchange("test-exchange")
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_WithSymbol(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	result := logger.WithSymbol("test-symbol")
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_WithError(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	testErr := fmt.Errorf("test error")
+	result := logger.WithError(testErr)
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_WithMetrics(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	metrics := map[string]interface{}{
+		"test": "value",
+		"num":  42,
+	}
+	result := logger.WithMetrics(metrics)
+	assert.NotNil(t, result)
+}
+
+func TestFallbackLogger_LogStartup(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	logger.LogStartup("test-service", "1.0.0", 8080)
+	assert.Contains(t, buf.String(), "test-service")
+	assert.Contains(t, buf.String(), "1.0.0")
+	assert.Contains(t, buf.String(), "8080")
+}
+
+func TestFallbackLogger_LogShutdown(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	logger.LogShutdown("test-service", "graceful")
+	assert.Contains(t, buf.String(), "test-service")
+	assert.Contains(t, buf.String(), "graceful")
+}
+
+func TestFallbackLogger_LogPerformanceMetrics(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	metrics := map[string]interface{}{
+		"cpu": 75.5,
+		"mem": 1024,
+	}
+	logger.LogPerformanceMetrics("test-service", metrics)
+	assert.Contains(t, buf.String(), "test-service")
+	assert.Contains(t, buf.String(), "75.5")
+	assert.Contains(t, buf.String(), "1024")
+}
+
+func TestFallbackLogger_LogResourceStats(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	stats := map[string]interface{}{
+		"goroutines": 100,
+		"heap_size":  2048,
+	}
+	logger.LogResourceStats("test-service", stats)
+	assert.Contains(t, buf.String(), "test-service")
+	assert.Contains(t, buf.String(), "100")
+	assert.Contains(t, buf.String(), "2048")
+}
+
+func TestFallbackLogger_LogCacheOperation(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	logger.LogCacheOperation("get", "test-key", true, 15)
+	assert.Contains(t, buf.String(), "get")
+	assert.Contains(t, buf.String(), "test-key")
+	assert.Contains(t, buf.String(), "true")
+	assert.Contains(t, buf.String(), "15")
+}
+
+func TestFallbackLogger_LogDatabaseOperation(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	logger.LogDatabaseOperation("insert", "users", 250, 1)
+	assert.Contains(t, buf.String(), "insert")
+	assert.Contains(t, buf.String(), "users")
+	assert.Contains(t, buf.String(), "250")
+	assert.Contains(t, buf.String(), "1")
+}
+
+func TestFallbackLogger_LogAPIRequest(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	logger.LogAPIRequest("GET", "/api/test", 200, 150, "test-user")
+	assert.Contains(t, buf.String(), "GET")
+	assert.Contains(t, buf.String(), "/api/test")
+	assert.Contains(t, buf.String(), "200")
+	assert.Contains(t, buf.String(), "150")
+	assert.Contains(t, buf.String(), "test-user")
+}
+
+func TestFallbackLogger_LogBusinessEvent(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	details := map[string]interface{}{
+		"symbol": "BTC/USD",
+		"action": "buy",
+	}
+	logger.LogBusinessEvent("test-event", details)
+	assert.Contains(t, buf.String(), "test-event")
+	assert.Contains(t, buf.String(), "BTC/USD")
+	assert.Contains(t, buf.String(), "buy")
+}
+
+func TestFallbackLogger_Logger(t *testing.T) {
+	logger := &fallbackLogger{
+		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	result := logger.Logger()
+	assert.NotNil(t, result)
+	assert.Equal(t, logger.logger, result)
 }

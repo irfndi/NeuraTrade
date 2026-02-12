@@ -7,9 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/getsentry/sentry-go"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 )
 
 // ResourceType represents different types of resources.
@@ -45,7 +43,7 @@ type ResourceStats struct {
 
 // ResourceManager manages system resources and prevents leaks.
 type ResourceManager struct {
-	logger    logging.Logger
+	logger    *zaplogrus.Logger
 	resources map[string]*Resource
 	stats     map[ResourceType]*ResourceStats
 	mu        sync.RWMutex
@@ -71,7 +69,7 @@ type ResourceManager struct {
 // Returns:
 //
 //	*ResourceManager: Initialized manager.
-func NewResourceManager(logger logging.Logger) *ResourceManager {
+func NewResourceManager(logger *zaplogrus.Logger) *ResourceManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	rm := &ResourceManager{
@@ -130,7 +128,7 @@ func (rm *ResourceManager) RegisterResource(id string, resourceType ResourceType
 	atomic.AddInt64(&rm.stats[resourceType].TotalCreated, 1)
 	atomic.AddInt64(&rm.stats[resourceType].CurrentActive, 1)
 
-	rm.logger.WithFields(map[string]interface{}{
+	rm.logger.WithFields(zaplogrus.Fields{
 		"resource_id":   id,
 		"resource_type": resourceType,
 		"metadata":      metadata,
@@ -188,7 +186,7 @@ func (rm *ResourceManager) CleanupResource(id string) (err error) {
 		err = resource.CleanupFunc()
 		if err != nil {
 			atomic.AddInt64(&rm.stats[resource.Type].CleanupErrors, 1)
-			rm.logger.WithFields(map[string]interface{}{
+			rm.logger.WithFields(zaplogrus.Fields{
 				"resource_id":   id,
 				"resource_type": resource.Type,
 				"error":         err.Error(),
@@ -205,7 +203,7 @@ func (rm *ResourceManager) CleanupResource(id string) (err error) {
 	atomic.AddInt64(&rm.stats[resource.Type].CurrentActive, -1)
 	rm.stats[resource.Type].LastCleanupTime = time.Now()
 
-	rm.logger.WithFields(map[string]interface{}{
+	rm.logger.WithFields(zaplogrus.Fields{
 		"resource_id":   id,
 		"resource_type": resource.Type,
 		"age":           time.Since(resource.CreatedAt),
@@ -240,7 +238,7 @@ func (rm *ResourceManager) CleanupIdleResources() {
 			if err != nil {
 				cleanupErrors++
 				atomic.AddInt64(&rm.stats[resource.Type].CleanupErrors, 1)
-				rm.logger.WithFields(map[string]interface{}{
+				rm.logger.WithFields(zaplogrus.Fields{
 					"resource_id":   id,
 					"resource_type": resource.Type,
 					"error":         err.Error(),
@@ -257,7 +255,7 @@ func (rm *ResourceManager) CleanupIdleResources() {
 		atomic.AddInt64(&rm.stats[resource.Type].CurrentActive, -1)
 		rm.stats[resource.Type].LastCleanupTime = now
 
-		rm.logger.WithFields(map[string]interface{}{
+		rm.logger.WithFields(zaplogrus.Fields{
 			"resource_id":   id,
 			"resource_type": resource.Type,
 			"idle_time":     now.Sub(resource.LastUsed),
@@ -292,8 +290,7 @@ func (rm *ResourceManager) DetectLeaks() {
 		// Consider it a leak if resource is very old and hasn't been used recently
 		if age > leakThreshold && idleTime > leakThreshold/2 {
 			atomic.AddInt64(&rm.stats[resource.Type].LeaksDetected, 1)
-			leakCount++
-			rm.logger.WithFields(map[string]interface{}{
+			rm.logger.WithFields(zaplogrus.Fields{
 				"resource_id":   id,
 				"resource_type": resource.Type,
 				"age":           age,
@@ -387,7 +384,7 @@ func (rm *ResourceManager) logResourceStats() {
 	stats := rm.GetResourceStats()
 	systemStats := rm.GetSystemStats()
 
-	rm.logger.WithFields(map[string]interface{}{
+	rm.logger.WithFields(zaplogrus.Fields{
 		"resource_stats": stats,
 		"system_stats":   systemStats,
 	}).Info("Resource manager statistics")
@@ -407,7 +404,7 @@ func (rm *ResourceManager) CleanupAll() {
 		if resource.CleanupFunc != nil {
 			if err := resource.CleanupFunc(); err != nil {
 				atomic.AddInt64(&rm.stats[resource.Type].CleanupErrors, 1)
-				rm.logger.WithFields(map[string]interface{}{
+				rm.logger.WithFields(zaplogrus.Fields{
 					"resource_id":   id,
 					"resource_type": resource.Type,
 					"error":         err.Error(),

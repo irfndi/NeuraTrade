@@ -18,8 +18,7 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/cache"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/shopspring/decimal"
@@ -369,7 +368,7 @@ func isFundingRateUnsupportedError(err error) bool {
 
 // CollectorService handles market data collection from exchanges.
 type CollectorService struct {
-	db              *database.PostgresDB
+	db              DBPool
 	ccxtService     ccxt.CCXTService
 	config          *config.Config
 	collectorConfig CollectorConfig
@@ -465,7 +464,7 @@ func (c *CollectorService) getExchangeCCXTCircuitBreaker(exchange string) *Circu
 // Returns:
 //
 //	*CollectorService: Initialized service.
-func NewCollectorService(db *database.PostgresDB, ccxtService ccxt.CCXTService, cfg *config.Config, redisClient *redis.Client, blacklistCache cache.BlacklistCache) *CollectorService {
+func NewCollectorService(db DBPool, ccxtService ccxt.CCXTService, cfg *config.Config, redisClient *redis.Client, blacklistCache cache.BlacklistCache) *CollectorService {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Parse collection interval from config
@@ -506,8 +505,9 @@ func NewCollectorService(db *database.PostgresDB, ccxtService ccxt.CCXTService, 
 	logger := logging.NewStandardLogger(logLevel, cfg.Environment)
 
 	// Initialize error recovery components
-	circuitBreakerManager := NewCircuitBreakerManager(logger)
-	errorRecoveryManager := NewErrorRecoveryManager(logger)
+	logrusLogger := zaplogrus.New()
+	circuitBreakerManager := NewCircuitBreakerManager(logrusLogger)
+	errorRecoveryManager := NewErrorRecoveryManager(logrusLogger)
 	timeoutConfig := &TimeoutConfig{
 		APICall:        10 * time.Second,
 		DatabaseQuery:  5 * time.Second,
@@ -634,7 +634,7 @@ func (c *CollectorService) getPrioritizedExchanges() []string {
 	allExchanges := c.ccxtService.GetSupportedExchanges()
 
 	// If database is not available, return all exchanges
-	if c.db == nil || c.db.Pool == nil {
+	if isNilDBPool(c.db) {
 		c.logger.Warn("Database not available, returning all exchanges")
 		return allExchanges
 	}
@@ -647,7 +647,7 @@ func (c *CollectorService) getPrioritizedExchanges() []string {
 		WHERE e.name = ANY($1) AND e.is_active = true 
 		ORDER BY e.priority ASC, e.name ASC`
 
-	rows, err := c.db.Pool.Query(c.ctx, query, allExchanges)
+	rows, err := c.db.Query(c.ctx, query, allExchanges)
 	if err != nil {
 		c.logger.WithError(err).Error("Failed to query prioritized exchanges")
 		return allExchanges // Fallback to all exchanges
@@ -1531,7 +1531,7 @@ func (c *CollectorService) saveBulkTickerData(ticker models.MarketPrice) error {
 	// does not provide these values. To get actual bid/ask volumes, the order book would need
 	// to be fetched separately, which would significantly increase API calls and rate limits.
 	// These fields are reserved for future implementation when order book data is integrated.
-	_, err = c.db.Pool.Exec(c.ctx,
+	_, err = c.db.Exec(c.ctx,
 		`INSERT INTO market_data (
 			exchange_id, trading_pair_id,
 			bid, bid_volume, ask, ask_volume,
@@ -1684,7 +1684,7 @@ func (c *CollectorService) collectTickerDataDirect(exchange, symbol string) erro
 	}
 
 	// Save market data to database with proper column mapping
-	_, err = c.db.Pool.Exec(c.ctx,
+	_, err = c.db.Exec(c.ctx,
 		`INSERT INTO market_data (exchange_id, trading_pair_id, last_price, volume_24h, timestamp, created_at) 
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		exchangeID, tradingPairID, ticker.Price, ticker.Volume, ticker.Timestamp, time.Now())
@@ -1855,12 +1855,11 @@ func (c *CollectorService) storeFundingRate(exchange string, rate ccxt.FundingRa
 	}
 
 	// Save funding rate to database with upsert to handle duplicates
-	now := time.Now()
-	_, err = c.db.Pool.Exec(c.ctx,
-		`INSERT INTO funding_rates (exchange_id, trading_pair_id, funding_rate, funding_time, next_funding_time, mark_price, index_price, timestamp, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		 ON CONFLICT (exchange_id, trading_pair_id, funding_time)
-		 DO UPDATE SET
+	_, err = c.db.Exec(c.ctx,
+		`INSERT INTO funding_rates (exchange_id, trading_pair_id, funding_rate, funding_time, next_funding_time, mark_price, index_price, timestamp, created_at) 
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT (exchange_id, trading_pair_id, funding_time) 
+		 DO UPDATE SET 
 			funding_rate = EXCLUDED.funding_rate,
 			next_funding_time = EXCLUDED.next_funding_time,
 			mark_price = EXCLUDED.mark_price,
@@ -2057,7 +2056,7 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 
 	// First try to get existing trading pair for this exchange and symbol
 	var tradingPairID int
-	err := c.db.Pool.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = $1 AND symbol = $2", exchangeID, symbol).Scan(&tradingPairID)
+	err := c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = $1 AND symbol = $2", exchangeID, symbol).Scan(&tradingPairID)
 	if err == nil {
 		// Cache the result if Redis is available
 		if c.redisClient != nil {
@@ -2074,7 +2073,7 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 	}
 
 	// Insert new trading pair with exchange_id and conflict resolution
-	err = c.db.Pool.QueryRow(c.ctx,
+	err = c.db.QueryRow(c.ctx,
 		"INSERT INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency, is_active) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (exchange_id, symbol) DO UPDATE SET base_currency = EXCLUDED.base_currency, quote_currency = EXCLUDED.quote_currency, is_active = EXCLUDED.is_active RETURNING id",
 		exchangeID, symbol, baseCurrency, quoteCurrency, true).Scan(&tradingPairID)
 	if err != nil {
@@ -2107,7 +2106,7 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// First try to get existing exchange by ccxt_id
 	var exchangeID int
-	err := c.db.Pool.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = $1", ccxtID).Scan(&exchangeID)
+	err := c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = $1", ccxtID).Scan(&exchangeID)
 	if err == nil {
 		// Cache the result
 		c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
@@ -2116,7 +2115,7 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// Also check by name in case exchange exists with different ccxt_id
 	name := strings.ToLower(ccxtID)
-	err = c.db.Pool.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE name = $1", name).Scan(&exchangeID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE name = $1", name).Scan(&exchangeID)
 	if err == nil {
 		c.logger.WithFields(map[string]interface{}{
 			"name":        name,
@@ -2134,7 +2133,7 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 	// Insert new exchange with conflict resolution
 	// Use a default API URL based on the exchange name since CCXT doesn't provide this directly
 	defaultAPIURL := fmt.Sprintf("https://api.%s.com", strings.ToLower(ccxtID))
-	err = c.db.Pool.QueryRow(c.ctx,
+	err = c.db.QueryRow(c.ctx,
 		"INSERT INTO exchanges (name, display_name, ccxt_id, api_url, status, has_spot, has_futures) VALUES ($1, $2, $3, $4, 'active', true, true) ON CONFLICT (name) DO UPDATE SET ccxt_id = EXCLUDED.ccxt_id, display_name = EXCLUDED.display_name, api_url = EXCLUDED.api_url RETURNING id",
 		name, displayName, ccxtID, defaultAPIURL).Scan(&exchangeID)
 	if err != nil {
@@ -2644,10 +2643,13 @@ func (c *CollectorService) PerformBackfillIfNeeded() error {
 // It checks if any active exchange has recent market data (within the last hour).
 // This is more robust than just counting total records - it ensures each exchange has coverage.
 func (c *CollectorService) checkIfBackfillNeeded() (bool, error) {
-	// First, check if we have any active exchanges at all
-	var activeExchangeCount int
-	err := c.db.Pool.QueryRow(c.ctx,
-		"SELECT COUNT(*) FROM exchanges WHERE status = 'active'").Scan(&activeExchangeCount)
+	thresholdTime := time.Now().Add(-time.Duration(c.backfillConfig.MinDataThresholdHours) * time.Hour)
+
+	// Check if we have recent market data within the threshold
+	var count int
+	err := c.db.QueryRow(c.ctx,
+		"SELECT COUNT(*) FROM market_data WHERE timestamp >= $1",
+		thresholdTime).Scan(&count)
 	if err != nil {
 		c.logger.WithError(err).Warn("Failed to count active exchanges, assuming backfill needed")
 		return true, nil // Assume backfill needed if we can't check
@@ -3201,7 +3203,7 @@ func (c *CollectorService) generateHistoricalDataPoints(ctx context.Context, exc
 
 		// Insert historical data point with error recovery
 		err := c.errorRecoveryManager.ExecuteWithRetry(ctx, "database_operation", func() error {
-			_, execErr := c.db.Pool.Exec(ctx,
+			_, execErr := c.db.Exec(ctx,
 				`INSERT INTO market_data (exchange_id, trading_pair_id, last_price, volume_24h, timestamp, created_at) 
 				 VALUES ($1, $2, $3, $4, $5, $6)`,
 				exchangeDBID, tradingPairID, historicalPrice, historicalVolume, currentTime, currentTime)

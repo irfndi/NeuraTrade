@@ -1,4 +1,4 @@
-# Celebrum AI - Docker Compose for Local Development and Production
+# NeuraTrade - Docker Compose for Local Development and Production
 # All services are built from the services/ directory
 #
 # Usage:
@@ -13,7 +13,7 @@
 #   - DATABASE_PORT: PostgreSQL port (default: 5432)
 #   - DATABASE_USER: PostgreSQL user (default: postgres)
 #   - DATABASE_PASSWORD: PostgreSQL password (required)
-#   - DATABASE_DBNAME: Database name (default: celebrum)
+#   - DATABASE_DBNAME: Database name (default: neuratrade)
 #   - REDIS_HOST: Redis host (required for production)
 #   - REDIS_PORT: Redis port (default: 6379)
 #   - ADMIN_API_KEY: API key for admin endpoints (required for production, 32+ chars)
@@ -30,10 +30,8 @@ services:
       - DATABASE_HOST=${DATABASE_HOST:-postgres}
       - DATABASE_PORT=${DATABASE_PORT:-5432}
       - DATABASE_USER=${DATABASE_USER:-postgres}
-      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-changeme}
-      - DATABASE_DBNAME=${DATABASE_DBNAME:-celebrum}
-      # Pass DATABASE_URL for compatibility, but entrypoint prefers individual vars
-      - DATABASE_URL=${DATABASE_URL:-}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_DBNAME=${DATABASE_DBNAME:-neuratrade}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
@@ -59,6 +57,46 @@ services:
         condition: service_started
       telegram-service:
         condition: service_started
+
+  # Local development database - only started with --profile local
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["local"]
+    restart: always
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      POSTGRES_DB: ${DATABASE_DBNAME:-neuratrade}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${DATABASE_PORT:-5432}:5432"
+    networks:
+      - default
+      - coolify
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Local development redis - only started with --profile local
+  redis:
+    image: redis:7-alpine
+    profiles: ["local"]
+    restart: always
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - default
+      - coolify
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   ccxt-service:
     build:

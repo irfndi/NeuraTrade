@@ -1,0 +1,64 @@
+name: Task
+description: Implementation task with mandatory testing scope
+title: "task: "
+labels:
+  - task
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What outcome should this task deliver?
+      placeholder: Implement X so that Y...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: Concrete completion checks
+      placeholder: |
+        - [ ] Behavior A is implemented
+        - [ ] API contract B is validated
+    validations:
+      required: true
+
+  - type: textarea
+    id: test-plan
+    attributes:
+      label: Test Plan (Required)
+      description: Define how this task is verified across test layers
+      placeholder: |
+        Unit:
+        - [ ] Cases to cover
+
+        Integration:
+        - [ ] Scenarios to cover
+
+        E2E/Smoke:
+        - [ ] Scenarios to cover
+        - [ ] N/A with reason (if not applicable)
+    validations:
+      required: true
+
+  - type: textarea
+    id: coverage-target
+    attributes:
+      label: Coverage Target
+      description: Expected coverage impact for touched packages
+      placeholder: |
+        - Global gate: >= 80%
+        - Touched package target: >= 85% (or justify exception)
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and Mitigations
+      placeholder: |
+        Risk:
+        Mitigation:
+    validations:
+      required: true

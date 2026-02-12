@@ -8,7 +8,7 @@ fi
 # Database connection parameters
 DB_HOST=${DB_HOST:-localhost}
 DB_PORT=${DB_PORT:-5432}
-DB_NAME=${DB_NAME:-celebrum}
+DB_NAME=${DB_NAME:-neuratrade}
 DB_USER=${DB_USER:-postgres}
 
 # Security: DB_PASSWORD must be provided via environment variable
@@ -19,7 +19,7 @@ if [ -z "$DB_PASSWORD" ]; then
   exit 1
 fi
 
-echo "🔍 Checking Celebrum Database Status..."
+echo "🔍 Checking NeuraTrade Database Status..."
 echo "=====================================\n"
 
 # Function to execute SQL and format output

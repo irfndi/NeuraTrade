@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -9,7 +11,6 @@ import (
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
 	"github.com/irfandi/celebrum-ai-go/internal/config"
 	"github.com/irfandi/celebrum-ai-go/internal/database"
-	futuresHandlers "github.com/irfandi/celebrum-ai-go/internal/handlers"
 	"github.com/irfandi/celebrum-ai-go/internal/middleware"
 	"github.com/irfandi/celebrum-ai-go/internal/services"
 )
@@ -35,6 +36,11 @@ type Services struct {
 	Redis string `json:"redis"`
 }
 
+type routeDB interface {
+	services.DBPool
+	HealthCheck(ctx context.Context) error
+}
+
 // SetupRoutes configures all the HTTP routes for the application.
 // It sets up middleware, health checks, and API endpoints (v1), and injects necessary dependencies into handlers.
 //
@@ -50,7 +56,7 @@ type Services struct {
 //	signalAggregator: Service for aggregating trading signals.
 //	telegramConfig: Configuration for Telegram notifications.
 //	authMiddleware: Middleware for handling authentication.
-func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware) {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware) {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -105,14 +111,13 @@ func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.Re
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
+	tradingHandler := handlers.NewTradingHandler(db)
 
 	// Initialize futures arbitrage handler with error handling
-	var futuresArbitrageHandler *futuresHandlers.FuturesArbitrageHandler
-	if db != nil && db.Pool != nil {
+	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler
+	if db != nil {
 		// Safely initialize the handler
-		// Note: NewFuturesArbitrageHandler doesn't return an error in its current signature,
-		// but we check for db.Pool to prevent panics inside it.
-		futuresArbitrageHandler = futuresHandlers.NewFuturesArbitrageHandler(db.Pool)
+		futuresArbitrageHandler = handlers.NewFuturesArbitrageHandlerWithQuerier(db)
 		log.Printf("Futures arbitrage handler initialized successfully")
 	} else {
 		log.Printf("Database not available for futures arbitrage handler initialization")
@@ -200,6 +205,17 @@ func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.Re
 		{
 			data.GET("/stats", cleanupHandler.GetDataStats)
 			data.POST("/cleanup", cleanupHandler.TriggerCleanup)
+		}
+
+		trading := v1.Group("/trading")
+		trading.Use(authMiddleware.RequireAuth())
+		{
+			trading.POST("/place_order", tradingHandler.PlaceOrder)
+			trading.POST("/cancel_order", tradingHandler.CancelOrder)
+			trading.POST("/liquidate", tradingHandler.Liquidate)
+			trading.POST("/liquidate_all", tradingHandler.LiquidateAll)
+			trading.GET("/positions", tradingHandler.ListPositions)
+			trading.GET("/positions/:position_id", tradingHandler.GetPosition)
 		}
 
 		// Exchange management

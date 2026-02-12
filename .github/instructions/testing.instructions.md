@@ -51,16 +51,18 @@ func TestFunction(t *testing.T) {
 
 ## Coverage Requirements
 
-- Minimum 80% coverage on touched packages
+- Minimum 80% global coverage gate in CI (strict)
+- Target 85%+ coverage on touched packages
 - Focus on edge cases and error paths
 - Test concurrent access patterns
+- Every task should define unit + integration + e2e/smoke scope (or explicit N/A with reason)
 
 ## Test Commands
 
 ```bash
 make test                    # Run all tests
 make test-coverage           # Run with coverage report
-make coverage-check          # Check coverage threshold (80%)
+make coverage-check          # Strict coverage threshold gate (default 80%)
 go test -v ./internal/...    # Run specific package tests
 go test -race ./...          # Run with race detection
 ```

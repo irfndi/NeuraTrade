@@ -1,6 +1,6 @@
-# Celebrum AI Deployment Scripts
+# NeuraTrade Deployment Scripts
 
-This directory contains the optimized deployment and operations scripts for Celebrum AI.
+This directory contains the optimized deployment and operations scripts for NeuraTrade.
 
 ## Core Scripts
 

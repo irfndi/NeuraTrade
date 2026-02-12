@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -35,7 +35,7 @@ func (m *MockSignalQualityScorer) GetDefaultQualityThresholds() *QualityThreshol
 
 // TestSignalAggregator_NewSignalAggregator tests the constructor
 func TestSignalAggregator_NewSignalAggregator(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	// Test with nil config and db - should still create instance
 	sa := NewSignalAggregator(nil, nil, logger)
@@ -49,7 +49,7 @@ func TestSignalAggregator_NewSignalAggregator(t *testing.T) {
 
 // TestSignalAggregator_AggregateArbitrageSignals_Basic tests basic signal aggregation
 func TestSignalAggregator_AggregateArbitrageSignals_Basic(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	sa := NewSignalAggregator(nil, nil, logger)
 
 	// Replace the QualityScorer with a mock for testing
@@ -136,7 +136,7 @@ func TestSignalAggregator_AggregateArbitrageSignals_Basic(t *testing.T) {
 
 // TestSignalAggregator_AggregateArbitrageSignals_EmptyInput tests empty input handling
 func TestSignalAggregator_AggregateArbitrageSignals_EmptyInput(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	sa := NewSignalAggregator(nil, nil, logger)
 
 	input := ArbitrageSignalInput{
@@ -153,7 +153,7 @@ func TestSignalAggregator_AggregateArbitrageSignals_EmptyInput(t *testing.T) {
 
 // TestSignalAggregator_AggregateArbitrageSignals_LowProfit tests low profit filtering
 func TestSignalAggregator_AggregateArbitrageSignals_LowProfit(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	sa := NewSignalAggregator(nil, nil, logger)
 
 	// Create test opportunities with low profit percentage
@@ -188,7 +188,7 @@ func TestSignalAggregator_AggregateArbitrageSignals_LowProfit(t *testing.T) {
 
 // TestSignalAggregator_AggregateArbitrageSignals_QualityFilter tests quality filtering
 func TestSignalAggregator_AggregateArbitrageSignals_QualityFilter(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	sa := NewSignalAggregator(nil, nil, logger)
 
 	// Create test opportunities with good profit but poor quality
@@ -223,7 +223,7 @@ func TestSignalAggregator_AggregateArbitrageSignals_QualityFilter(t *testing.T) 
 
 // TestSignalAggregator_AggregateArbitrageSignals_MultipleOpportunities tests multiple opportunity handling
 func TestSignalAggregator_AggregateArbitrageSignals_MultipleOpportunities(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	sa := NewSignalAggregator(nil, nil, logger)
 
 	// Replace the QualityScorer with a mock for testing

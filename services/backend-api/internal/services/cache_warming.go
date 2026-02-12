@@ -9,8 +9,6 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
 	"github.com/redis/go-redis/v9"
 )
@@ -19,7 +17,7 @@ import (
 type CacheWarmingService struct {
 	redisClient *redis.Client
 	ccxtService ccxt.CCXTService
-	db          *database.PostgresDB
+	db          DBPool
 	logger      *slog.Logger
 }
 
@@ -34,7 +32,7 @@ type CacheWarmingService struct {
 // Returns:
 //
 //	*CacheWarmingService: Initialized service.
-func NewCacheWarmingService(redisClient *redis.Client, ccxtService ccxt.CCXTService, db *database.PostgresDB) *CacheWarmingService {
+func NewCacheWarmingService(redisClient *redis.Client, ccxtService ccxt.CCXTService, db DBPool) *CacheWarmingService {
 	// Initialize logger with fallback for tests
 	logger := telemetry.Logger()
 
@@ -233,9 +231,8 @@ func (c *CacheWarmingService) warmTradingPairs(ctx context.Context) (err error) 
 	c.logger.Info("Warming trading pairs cache")
 
 	// Check for nil dependencies
-	if c.db == nil {
-		err = fmt.Errorf("database is nil")
-		return err
+	if isNilDBPool(c.db) {
+		return fmt.Errorf("database is nil")
 	}
 	if c.redisClient == nil {
 		err = fmt.Errorf("redis client is nil")
@@ -244,7 +241,7 @@ func (c *CacheWarmingService) warmTradingPairs(ctx context.Context) (err error) 
 
 	// Get all trading pairs from database
 	query := `SELECT id, symbol, base_currency, quote_currency FROM trading_pairs LIMIT 1000`
-	rows, err := c.db.Pool.Query(spanCtx, query)
+	rows, err := c.db.Query(ctx, query)
 	if err != nil {
 		return err
 	}
@@ -311,9 +308,8 @@ func (c *CacheWarmingService) warmExchanges(ctx context.Context) (err error) {
 	c.logger.Info("Warming exchanges cache")
 
 	// Check for nil dependencies
-	if c.db == nil {
-		err = fmt.Errorf("database is nil")
-		return err
+	if isNilDBPool(c.db) {
+		return fmt.Errorf("database is nil")
 	}
 	if c.redisClient == nil {
 		err = fmt.Errorf("redis client is nil")
@@ -322,7 +318,7 @@ func (c *CacheWarmingService) warmExchanges(ctx context.Context) (err error) {
 
 	// Get all exchanges from database
 	query := `SELECT id, name FROM exchanges LIMIT 100`
-	rows, err := c.db.Pool.Query(spanCtx, query)
+	rows, err := c.db.Query(ctx, query)
 	if err != nil {
 		return err
 	}
@@ -373,13 +369,8 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 	c.logger.Info("Warming funding rates cache")
 
 	// Check for nil dependencies
-	if c.db == nil {
-		err = fmt.Errorf("database is nil")
-		return err
-	}
-	if c.db.Pool == nil {
-		err = fmt.Errorf("database pool is not available")
-		return err
+	if isNilDBPool(c.db) {
+		return fmt.Errorf("database is nil")
 	}
 	if c.redisClient == nil {
 		err = fmt.Errorf("redis client is nil")
@@ -402,7 +393,7 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 		LIMIT 1000
 	`
 
-	rows, err := c.db.Pool.Query(spanCtx, query)
+	rows, err := c.db.Query(ctx, query)
 	if err != nil {
 		return err
 	}

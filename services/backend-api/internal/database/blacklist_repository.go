@@ -5,9 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ExchangeBlacklistEntry represents a blacklisted exchange in the database.
@@ -28,17 +25,10 @@ type ExchangeBlacklistEntry struct {
 	IsActive bool `json:"is_active" db:"is_active"`
 }
 
-// DatabasePool defines the interface for database pool operations.
-// This interface allows for both real pool and mock pool implementations.
 type DatabasePool interface {
-	// QueryRow executes a query that is expected to return at most one row.
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	// Exec executes a query without returning any rows.
-	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
-	// Query executes a query that returns rows.
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
-	// Begin starts a new transaction.
-	Begin(ctx context.Context) (pgx.Tx, error)
+	QueryRow(ctx context.Context, sql string, args ...interface{}) Row
+	Exec(ctx context.Context, sql string, args ...interface{}) (Result, error)
+	Query(ctx context.Context, sql string, args ...interface{}) (Rows, error)
 }
 
 // BlacklistRepository handles database operations for exchange blacklist.
@@ -125,7 +115,11 @@ func (r *BlacklistRepository) RemoveExchange(ctx context.Context, exchangeName s
 		return fmt.Errorf("failed to remove exchange from blacklist: %w", err)
 	}
 
-	if result.RowsAffected() == 0 {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
 		return fmt.Errorf("exchange %s not found in blacklist or already inactive", exchangeName)
 	}
 
@@ -239,7 +233,7 @@ func (r *BlacklistRepository) CleanupExpired(ctx context.Context) (int64, error)
 		return 0, fmt.Errorf("failed to cleanup expired blacklist entries: %w", err)
 	}
 
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 // GetBlacklistHistory returns the history of blacklist changes.
@@ -314,5 +308,5 @@ func (r *BlacklistRepository) ClearAll(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("failed to clear all blacklist entries: %w", err)
 	}
 
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }

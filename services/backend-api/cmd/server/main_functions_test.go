@@ -293,7 +293,7 @@ func TestTimeoutConfiguration(t *testing.T) {
 // TestEnvironmentVariableParsing tests environment variable handling
 func TestEnvironmentVariableParsing(t *testing.T) {
 	// Test that we can read environment variables
-	testKey := "TEST_CELEBRUM_AI_VAR"
+	testKey := "TEST_NEURATRADE_VAR"
 	testValue := "test_value"
 
 	// Set environment variable
@@ -305,7 +305,7 @@ func TestEnvironmentVariableParsing(t *testing.T) {
 	assert.Equal(t, testValue, retrieved)
 
 	// Test empty environment variable
-	emptyKey := "TEST_CELEBRUM_AI_EMPTY"
+	emptyKey := "TEST_NEURATRADE_EMPTY"
 	mustSetEnv(t, emptyKey, "")
 	defer mustUnsetEnv(t, emptyKey)
 

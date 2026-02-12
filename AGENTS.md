@@ -1,40 +1,86 @@
-# Repository Guidelines
+# PROJECT KNOWLEDGE BASE
 
-## Project Structure & Module Organization
-- `cmd/server/main.go` is the HTTP entrypoint; runtime wiring lives under `internal/` (API handlers, services, config, telemetry, cache, CCXT integration).
-- Shared packages live in `pkg/`; prefer `internal/` for app-specific logic and keep reusable abstractions in `pkg/`.
-- The Bun-based exchange service resides in `ccxt-service/`; treat it as a sibling project with its own tests and Docker build.
-- Configuration templates are in the root directory (`config.yml`); copy `.env.example` when bootstrapping environments.
-- Tests live beside source as `*_test.go`; integration suites and mocks live in `test/`.
+**Generated:** 2026-02-11 18:04 Asia/Jakarta
+**Commit:** ea06294
+**Branch:** chore/neuratrade-rebrand-sync
 
-## Build, Test, and Development Commands
-- `make build` – compile the Go API to `bin/celebrum-ai`.
-- `make run` – build then run the API locally.
-- `make dev` – hot reload via `air`; requires `go install github.com/air-verse/air@latest`.
-- `make test` – run Go unit tests and Bun tests (if Bun is installed).
-- `make lint` / `make typecheck` – run `golangci-lint` and `go vet`.
-- `make dev-setup` / `make dev-down` – start/stop Postgres + Redis via Docker Compose.
-- `make coverage-check` – run the non-blocking coverage gate (default threshold 80%).
+## OVERVIEW
+NeuraTrade is a multi-service trading platform: Go backend API + Bun TypeScript sidecar services for CCXT exchange access and Telegram delivery.
+Work is concentrated in `services/backend-api`; sibling Bun services are `services/ccxt-service` and `services/telegram-service`.
 
-## Coding Style & Naming Conventions
-- Target Go 1.25; format with `gofmt`/`goimports` (tabs, canonical imports).
-- Use idiomatic Go naming (exported identifiers in `CamelCase`, packages lowercase).
-- For Bun/TypeScript, rely on `bunx` formatters (`bun run format`) and keep strict lint output clean.
-- Prefer short, descriptive directory and file names; keep shared interfaces in `pkg/`.
+## STRUCTURE
+```text
+NeuraTrade/
+├── services/
+│   ├── backend-api/      # Go API, domain logic, DB migrations, ops scripts
+│   ├── ccxt-service/     # Bun + CCXT HTTP/gRPC exchange bridge
+│   └── telegram-service/ # Bun + grammY bot + delivery endpoints
+├── protos/               # Shared protobuf definitions
+├── docs/                 # Plans and legacy docs
+├── Makefile              # Canonical dev/test/build entrypoint
+└── docker-compose.yaml   # Local/prod orchestration
+```
 
-## Testing Guidelines
-- Use table-driven tests for Go packages; place mocks in `internal/testutil` or `test/testmocks`.
-- Run `make test` before pushing; for targeted Go packages use `go test ./internal/services`.
-- Coverage expectations: ≥80% on touched packages; upload artifacts via CI (`ci-artifacts/coverage`).
-- Name integration tests under `test/integration` and skip external dependencies unless orchestrated in CI.
+## WHERE TO LOOK
+| Task | Location | Notes |
+|------|----------|-------|
+| Backend runtime wiring | `services/backend-api/cmd/server/main.go` | Service construction order and startup lifecycle |
+| API routing and middleware | `services/backend-api/internal/api/routes.go` | Route groups, auth/admin/telemetry touchpoints |
+| Core trading logic | `services/backend-api/internal/services/` | Largest complexity hotspot |
+| DB schema and migrations | `services/backend-api/database/` | `migrate.sh` + ordered SQL migrations |
+| Operations scripts | `services/backend-api/scripts/` | Health, startup, env, webhook controls |
+| Exchange bridge behavior | `services/ccxt-service/index.ts` | CCXT init, admin endpoints, gRPC |
+| Telegram behavior | `services/telegram-service/index.ts` | Bot commands, webhook/polling, admin send |
 
-## Commit & Pull Request Guidelines
-- Follow Conventional Commits (`feat:`, `fix:`, `refactor:`, etc.); keep subjects imperative and ≤72 chars.
-- Reference issues in commit bodies or PR descriptions where applicable.
-- PRs must include: summary of changes, rationale, test evidence (`make test` output), and updated docs/config as needed.
-- Ensure CI (build, lint, tests, Trivy scan) passes before requesting review.
+## CODE MAP
+| Symbol | Type | Location | Role |
+|--------|------|----------|------|
+| `main` | function | `services/backend-api/cmd/server/main.go` | backend process entrypoint |
+| `run` | function | `services/backend-api/cmd/server/main.go` | full backend initialization flow |
+| `SetupRoutes` | function | `services/backend-api/internal/api/routes.go` | route registration root |
+| `CollectorService` | struct | `services/backend-api/internal/services/collector.go` | market ingestion orchestrator |
+| `SignalProcessor` | struct | `services/backend-api/internal/services/signal_processor.go` | signal pipeline coordinator |
+| `FuturesArbitrageService` | struct | `services/backend-api/internal/services/futures_arbitrage_service.go` | funding-arb engine |
 
-## Security & Configuration Tips
-- Never commit secrets; derive local env files from `.env.template`.
-- Use `make security` for gosec, gitleaks, and Docker checks prior to releases.
-- Gate external webhooks via the provided scripts (`scripts/setup-github-secrets.sh`, `webhook-control.sh`).
+## CONVENTIONS
+- Repository is service-first: contributors should edit under `services/*`; root-level `internal/` and `pkg/` are not primary development targets.
+- Main command surface is Makefile-driven (`make build`, `make test`, `make lint`, `make typecheck`, `make coverage-check`).
+- CI validation order is formatting -> lint/test/build/security (`.github/workflows/validation.yml`).
+- Go lint profile is intentionally strict but with test-heavy exclusions in `services/backend-api/.golangci.yml`.
+
+## ANTI-PATTERNS (THIS PROJECT)
+- Editing generated protobuf artifacts directly (`*.pb.go`, `services/*/proto/*.ts`) — regenerate instead.
+- Adding new API handlers under legacy `services/backend-api/internal/handlers/` when `internal/api/handlers/` is the active path.
+- Using float primitives for money math in backend domain logic.
+- Committing secrets or env files; test credentials should be generated dynamically.
+
+## UNIQUE STYLES
+- Backend wiring is explicit constructor injection in `cmd/server/main.go` (no DI container).
+- Bun services enforce production `ADMIN_API_KEY` validation and disable admin endpoints when unset.
+- Coverage gate is warning mode by default; set `STRICT=true` to enforce hard fail.
+
+## COMMANDS
+```bash
+make build
+make run
+make dev
+make test
+make lint
+make typecheck
+make coverage-check
+make dev-setup
+make dev-down
+```
+
+## SCOPED GUIDES
+- `services/backend-api/AGENTS.md`
+- `services/backend-api/internal/api/AGENTS.md`
+- `services/backend-api/internal/services/AGENTS.md`
+- `services/backend-api/database/AGENTS.md`
+- `services/backend-api/scripts/AGENTS.md`
+- `services/ccxt-service/AGENTS.md`
+- `services/telegram-service/AGENTS.md`
+
+## NOTES
+- LSP symbol tooling may be unavailable locally (`gopls` missing), so rely on grep/glob/read patterns for discovery.
+- Session completion policy in this repository requires push verification (`git status` up-to-date with origin).

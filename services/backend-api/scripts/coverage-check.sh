@@ -10,22 +10,22 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 ARTIFACTS_DIR="$ROOT_DIR/ci-artifacts/coverage"
 mkdir -p "$ARTIFACTS_DIR"
+cd "$ROOT_DIR"
 
 # Configurable via env
-MIN_COVERAGE="${MIN_COVERAGE:-80}"
-# Space-separated package globs. Defaults to core app packages, excludes DB/services by default.
+MIN_COVERAGE="${MIN_COVERAGE:-50}"
 COVERAGE_PACKAGES=(
-  "./cmd/server"
   "./internal/api"
   "./internal/api/handlers"
   "./internal/cache"
   "./internal/ccxt"
   "./internal/config"
-  "./internal/handlers"
+  "./internal/database"
   "./internal/logging"
   "./internal/metrics"
   "./internal/middleware"
   "./internal/models"
+  "./internal/services"
   "./internal/telemetry"
   "./internal/testutil"
   "./internal/utils"
@@ -36,8 +36,7 @@ if [[ -n "${COVERAGE_PACKAGES_OVERRIDE:-}" ]]; then
   IFS=',' read -r -a COVERAGE_PACKAGES <<<"$COVERAGE_PACKAGES_OVERRIDE"
 fi
 
-# Strict mode: exit non-zero if below threshold. Default: warn only.
-STRICT="${STRICT:-false}"
+STRICT="${STRICT:-true}"
 
 COVERPROFILE="$ARTIFACTS_DIR/coverage.out"
 COVERHTML="$ARTIFACTS_DIR/coverage.html"

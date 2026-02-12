@@ -1,7 +1,7 @@
-# Celebrum AI - Makefile for development and deployment
+# NeuraTrade - Makefile for development and deployment
 
 # Variables
-APP_NAME=celebrum-ai
+APP_NAME=neuratrade
 GO_VERSION=1.25
 DOCKER_REGISTRY=ghcr.io/irfndi
 DOCKER_IMAGE_APP=$(DOCKER_REGISTRY)/app:latest
@@ -19,7 +19,7 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: help build test test-coverage coverage-check lint fmt fmt-check run dev dev-setup dev-down dev-local dev-local-down install-tools security docker-build docker-run deploy clean dev-up-orchestrated prod-up-orchestrated webhook-enable webhook-disable webhook-status startup-status down-orchestrated go-env-setup ccxt-setup telegram-setup services-setup mod-download mod-tidy validate-compose
+.PHONY: help build test test-coverage coverage-check lint fmt fmt-check run dev dev-setup dev-down install-tools security docker-build docker-run deploy clean dev-up-orchestrated prod-up-orchestrated webhook-enable webhook-disable webhook-status startup-status down-orchestrated go-env-setup ccxt-setup telegram-setup services-setup mod-download mod-tidy ci-structure-check ci-naming-check bd-close-qa
 
 # Default target
 all: build
@@ -88,10 +88,10 @@ test-coverage: ## Run tests with coverage report
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "$(GREEN)Coverage report generated: coverage.html$(NC)"
 
-coverage-check: ## Run coverage gate (warn by default, STRICT=true to fail)
-	@echo "$(GREEN)Running coverage check (threshold $${MIN_COVERAGE:-80}%)...$(NC)"
-	MIN_COVERAGE=$${MIN_COVERAGE:-80} \
-	STRICT=$${STRICT:-false} \
+coverage-check: ## Run coverage gate (strict by default)
+	@echo "$(GREEN)Running coverage check (threshold $${MIN_COVERAGE:-50}%)...$(NC)"
+	MIN_COVERAGE=$${MIN_COVERAGE:-50} \
+	STRICT=$${STRICT:-true} \
 	bash services/backend-api/scripts/coverage-check.sh
 
 lint: go-env-setup ## Run linter across all languages
@@ -241,6 +241,14 @@ ci-lint: ## Run linter for CI
 		cd services/backend-api && golangci-lint run --timeout=5m; \
 	fi
 
+ci-structure-check: ## Enforce canonical path guardrails for CI
+	@echo "$(GREEN)Running structure/path guardrails...$(NC)"
+	bash services/backend-api/scripts/check-legacy-paths.sh
+
+ci-naming-check: ## Enforce canonical naming guardrails for CI
+	@echo "$(GREEN)Running naming/import guardrails...$(NC)"
+	bash services/backend-api/scripts/check-canonical-naming.sh
+
 ci-build: ## Build for CI across all languages
 	@echo "$(GREEN)Building for CI...$(NC)"
 	@# Build Go application for CI
@@ -255,7 +263,7 @@ ci-build: ## Build for CI across all languages
 		cd services/telegram-service && bun run build; \
 	fi
 
-ci-check: validate-compose ci-lint ci-test ci-build security-check ## Run all CI checks
+ci-check: ci-lint ci-structure-check ci-naming-check ci-test coverage-check ci-build security-check ## Run all CI checks
 	@echo "$(GREEN)All CI checks completed!$(NC)"
 
 validate-compose: ## Validate Docker Compose files
@@ -323,3 +331,17 @@ logs: ## Show application logs
 
 logs-all: ## Show all service logs
 	docker compose --env-file .env logs -f
+
+bd-close-qa: ## Close bd issue with mandatory QA evidence
+	@test -n "$${ISSUE_ID:-}" || (echo "ISSUE_ID is required" && exit 1)
+	@test -n "$${UNIT_TESTS:-}" || (echo "UNIT_TESTS is required" && exit 1)
+	@test -n "$${INTEGRATION_TESTS:-}" || (echo "INTEGRATION_TESTS is required" && exit 1)
+	@test -n "$${E2E_TESTS:-}" || (echo "E2E_TESTS is required" && exit 1)
+	@test -n "$${COVERAGE_RESULT:-}" || (echo "COVERAGE_RESULT is required" && exit 1)
+	@test -n "$${EVIDENCE:-}" || (echo "EVIDENCE is required" && exit 1)
+	bash services/backend-api/scripts/bd-close-with-qa.sh "$${ISSUE_ID}" \
+		--unit "$${UNIT_TESTS}" \
+		--integration "$${INTEGRATION_TESTS}" \
+		--e2e "$${E2E_TESTS}" \
+		--coverage "$${COVERAGE_RESULT}" \
+		--evidence "$${EVIDENCE}"

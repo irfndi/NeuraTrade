@@ -19,7 +19,7 @@ import (
 
 // MarketHandler handles market data API endpoints.
 type MarketHandler struct {
-	db               *database.PostgresDB
+	db               DBQuerier
 	ccxtService      ccxt.CCXTService
 	collectorService *services.CollectorService
 	redis            *database.RedisClient
@@ -45,7 +45,7 @@ type CacheStats struct {
 // Returns:
 //
 //	*MarketHandler: Initialized handler.
-func NewMarketHandler(db *database.PostgresDB, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, redis *database.RedisClient, cacheAnalytics *services.CacheAnalyticsService) *MarketHandler {
+func NewMarketHandler(db DBQuerier, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, redis *database.RedisClient, cacheAnalytics *services.CacheAnalyticsService) *MarketHandler {
 	return &MarketHandler{
 		db:               db,
 		ccxtService:      ccxtService,
@@ -363,7 +363,7 @@ func (h *MarketHandler) GetMarketPrices(c *gin.Context) {
 	// Get total count
 	countQuery := "SELECT COUNT(*) FROM (" + sqlQuery + ") as count_query"
 	var total int64
-	if err := h.db.Pool.QueryRow(context.Background(), countQuery, args...).Scan(&total); err != nil {
+	if err := h.db.QueryRow(context.Background(), countQuery, args...).Scan(&total); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count market data"})
 		return
 	}
@@ -373,7 +373,7 @@ func (h *MarketHandler) GetMarketPrices(c *gin.Context) {
 	args = append(args, limit, offset)
 
 	// Execute query
-	rows, err := h.db.Pool.Query(context.Background(), sqlQuery, args...)
+	rows, err := h.db.Query(context.Background(), sqlQuery, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve market data"})
 		return
@@ -493,7 +493,7 @@ func (h *MarketHandler) GetTicker(c *gin.Context) {
 		LIMIT 1
 	`
 
-	err := h.db.Pool.QueryRow(context.Background(), sqlQuery, exchange, symbol).Scan(
+	err := h.db.QueryRow(context.Background(), sqlQuery, exchange, symbol).Scan(
 		&result.Exchange, &result.Symbol, &result.Price, &result.Volume, &result.Timestamp)
 
 	if err != nil {

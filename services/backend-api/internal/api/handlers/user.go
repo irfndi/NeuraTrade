@@ -12,9 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/irfandi/celebrum-ai-go/internal/database"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -26,10 +23,9 @@ type TokenGenerator interface {
 
 // UserHandler manages user-related API endpoints.
 type UserHandler struct {
-	db       *database.PostgresDB
-	redis    *redis.Client
-	querier  DBQuerier // For testing with mocks
-	tokenGen TokenGenerator
+	db      DBQuerier
+	redis   *redis.Client
+	querier DBQuerier // For testing with mocks
 }
 
 // RegisterRequest represents the user registration request body.
@@ -91,7 +87,7 @@ type UpdateProfileRequest struct {
 // Returns:
 //
 //	*UserHandler: Initialized handler.
-func NewUserHandler(db *database.PostgresDB, redisClient *redis.Client, tokenGen TokenGenerator) *UserHandler {
+func NewUserHandler(db DBQuerier, redisClient *redis.Client) *UserHandler {
 	return &UserHandler{
 		db:       db,
 		redis:    redisClient,
@@ -99,12 +95,10 @@ func NewUserHandler(db *database.PostgresDB, redisClient *redis.Client, tokenGen
 	}
 }
 
-// DBQuerier interface for database operations.
-// This allows mocking database calls for testing.
 type DBQuerier interface {
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...interface{}) (database.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...interface{}) database.Row
+	Exec(ctx context.Context, sql string, args ...interface{}) (database.Result, error)
 }
 
 // NewUserHandlerWithQuerier creates a UserHandler with a custom querier for testing.
@@ -118,23 +112,16 @@ type DBQuerier interface {
 // Returns:
 //
 //	*UserHandler: Initialized handler.
-func NewUserHandlerWithQuerier(querier DBQuerier, redisClient *redis.Client, tokenGen TokenGenerator) *UserHandler {
-	// For testing, we create a special database wrapper that uses the querier directly
-	db := &database.PostgresDB{}
-	// We'll need to modify the methods to use the querier interface instead of Pool
-	// For now, let's try a different approach
-	if pool, ok := querier.(*pgxpool.Pool); ok {
-		db.Pool = pool
-	} else {
-		// For mock testing, we'll handle this differently
-		// We need to store the querier somewhere accessible
-		db = nil // This will force methods to handle nil database
+func NewUserHandlerWithQuerier(querier any, redisClient *redis.Client) *UserHandler {
+	resolvedQuerier, err := resolveDBQuerier(querier)
+	if err != nil {
+		panic(err)
 	}
+
 	return &UserHandler{
-		db:       db,
-		redis:    redisClient,
-		querier:  querier, // We need to add this field
-		tokenGen: tokenGen,
+		db:      resolvedQuerier,
+		redis:   redisClient,
+		querier: resolvedQuerier,
 	}
 }
 
@@ -234,7 +221,7 @@ func (h *UserHandler) RegisterUser(c *gin.Context) {
 		_, err2 = h.querier.Exec(c.Request.Context(), query,
 			userID, req.Email, string(hashedPassword), req.TelegramChatID, "free")
 	} else if h.db != nil {
-		_, err2 = h.db.Pool.Exec(c.Request.Context(), query,
+		_, err2 = h.db.Exec(c.Request.Context(), query,
 			userID, req.Email, string(hashedPassword), req.TelegramChatID, "free")
 	} else {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not available"})
@@ -393,8 +380,8 @@ func (h *UserHandler) UpdateUserProfile(c *gin.Context) {
 	if h.querier != nil {
 		_, execErr = h.querier.Exec(c.Request.Context(), query,
 			userID, req.TelegramChatID, time.Now())
-	} else if h.db != nil && h.db.Pool != nil {
-		_, execErr = h.db.Pool.Exec(c.Request.Context(), query,
+	} else if h.db != nil {
+		_, execErr = h.db.Exec(c.Request.Context(), query,
 			userID, req.TelegramChatID, time.Now())
 	} else {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not available"})
@@ -449,7 +436,7 @@ func (h *UserHandler) userExists(ctx context.Context, email string) (bool, error
 
 	var count int
 	query := "SELECT COUNT(*) FROM users WHERE email = $1"
-	err := h.db.Pool.QueryRow(ctx, query, email).Scan(&count)
+	err := h.db.QueryRow(ctx, query, email).Scan(&count)
 	if err != nil {
 		return false, err
 	}
@@ -490,7 +477,7 @@ func (h *UserHandler) getUserByEmail(ctx context.Context, email string) (*models
 		FROM users WHERE email = $1
 	`
 
-	err := h.db.Pool.QueryRow(ctx, query, email).Scan(
+	err := h.db.QueryRow(ctx, query, email).Scan(
 		&user.ID, &user.Email, &user.PasswordHash, &user.TelegramChatID,
 		&user.SubscriptionTier, &user.CreatedAt, &user.UpdatedAt,
 	)
@@ -543,7 +530,7 @@ func (h *UserHandler) getUserByID(ctx context.Context, userID string) (*models.U
 	}
 
 	// Cache miss or Redis unavailable, check database availability
-	if h.db == nil || h.db.Pool == nil {
+	if h.db == nil {
 		return nil, fmt.Errorf("database not available")
 	}
 
@@ -555,7 +542,7 @@ func (h *UserHandler) getUserByID(ctx context.Context, userID string) (*models.U
 		FROM users WHERE id = $1
 	`
 
-	err := h.db.Pool.QueryRow(ctx, query, userID).Scan(
+	err := h.db.QueryRow(ctx, query, userID).Scan(
 		&user.ID, &user.Email, &user.PasswordHash, &user.TelegramChatID,
 		&user.SubscriptionTier, &user.CreatedAt, &user.UpdatedAt,
 	)
@@ -666,7 +653,7 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 	}
 
 	// Cache miss or Redis unavailable, check database availability
-	if h.db == nil || h.db.Pool == nil {
+	if h.db == nil {
 		return nil, fmt.Errorf("database not available")
 	}
 
@@ -678,7 +665,7 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 		FROM users WHERE telegram_chat_id = $1
 	`
 
-	err := h.db.Pool.QueryRow(ctx, query, chatID).Scan(
+	err := h.db.QueryRow(ctx, query, chatID).Scan(
 		&user.ID, &user.Email, &user.PasswordHash, &user.TelegramChatID,
 		&user.SubscriptionTier, &user.CreatedAt, &user.UpdatedAt,
 	)
@@ -724,9 +711,9 @@ func (h *UserHandler) CreateTelegramUser(ctx context.Context, chatID string, use
 	now := time.Now()
 
 	// Create a temporary email based on Telegram username or chat ID
-	email := fmt.Sprintf("telegram_%s@celebrum.ai", chatID)
+	email := fmt.Sprintf("telegram_%s@neuratrade.ai", chatID)
 	if username != "" {
-		email = fmt.Sprintf("telegram_%s@celebrum.ai", username)
+		email = fmt.Sprintf("telegram_%s@neuratrade.ai", username)
 	}
 
 	query := `
@@ -742,11 +729,11 @@ func (h *UserHandler) CreateTelegramUser(ctx context.Context, chatID string, use
 		}
 	} else {
 		// Return error if database is not available
-		if h.db == nil || h.db.Pool == nil {
+		if h.db == nil {
 			return nil, fmt.Errorf("database not available")
 		}
 
-		_, err := h.db.Pool.Exec(ctx, query, userID, email, "", chatID, "free", now, now)
+		_, err := h.db.Exec(ctx, query, userID, email, "", chatID, "free", now, now)
 		if err != nil {
 			return nil, err
 		}

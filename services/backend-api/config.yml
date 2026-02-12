@@ -1,4 +1,4 @@
-# Celebrum AI Local Development Configuration
+# NeuraTrade Local Development Configuration
 # Copy from config.template.yml with local defaults
 
 # Application environment
@@ -27,18 +27,18 @@ server:
 # Database configuration
 # Note: Environment variables (DATABASE_HOST, etc.) override these via Viper's AutomaticEnv
 database:
-  host: localhost
-  port: 5432
-  user: postgres
-  password: ""
-  dbname: celebrum_ai
-  sslmode: disable
+  host: ${DATABASE_HOST:-postgres}
+  port: ${DATABASE_PORT:-5432}
+  user: ${DATABASE_USER:-postgres}
+  password: ${DATABASE_PASSWORD:?DATABASE_PASSWORD must be set in .env file}
+  dbname: ${DATABASE_DBNAME:-neuratrade}
+  sslmode: ${DATABASE_SSLMODE:-disable}
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 300s
   conn_max_idle_time: 60s
   # PostgreSQL 18 specific optimizations
-  application_name: celebrum-ai
+  application_name: ${DATABASE_APP_NAME:-neuratrade}
   connect_timeout: 30
   statement_timeout: 300000
   query_timeout: 300000

@@ -1,5 +1,4 @@
 [test]
 preload = ["./test-setup.ts"]
 coverageReporter = ["text", "lcov"]
-# 60% minimum coverage target; adjust as needed
-coverageThreshold = { lines = 0.6, functions = 0.6, statements = 0.6, branches = 0.5 }
+coverageThreshold = { lines = 0.8, functions = 0.8, statements = 0.8, branches = 0.7 }

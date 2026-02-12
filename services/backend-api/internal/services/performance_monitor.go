@@ -8,15 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/getsentry/sentry-go"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/redis/go-redis/v9"
 )
 
 // PerformanceMonitor tracks system and application performance metrics.
 type PerformanceMonitor struct {
-	logger logging.Logger
+	logger *zaplogrus.Logger
 	redis  *redis.Client
 	ctx    context.Context
 	mu     sync.RWMutex
@@ -122,7 +120,7 @@ type TelegramPerformanceMetrics struct {
 // Returns:
 //
 //	*PerformanceMonitor: Initialized monitor.
-func NewPerformanceMonitor(logger logging.Logger, redis *redis.Client, ctx context.Context) *PerformanceMonitor {
+func NewPerformanceMonitor(logger *zaplogrus.Logger, redis *redis.Client, ctx context.Context) *PerformanceMonitor {
 	return &PerformanceMonitor{
 		logger:          logger,
 		redis:           redis,
@@ -270,7 +268,7 @@ func (pm *PerformanceMonitor) cacheMetrics() {
 
 // logPerformanceSummary logs a summary of current performance
 func (pm *PerformanceMonitor) logPerformanceSummary() {
-	pm.logger.WithFields(map[string]interface{}{
+	pm.logger.WithFields(zaplogrus.Fields{
 		"memory_mb":  pm.systemMetrics.MemoryUsage / 1024 / 1024,
 		"goroutines": pm.systemMetrics.Goroutines,
 		"heap_alloc": pm.systemMetrics.HeapAlloc / 1024 / 1024,
@@ -372,7 +370,7 @@ func (pm *PerformanceMonitor) RecordWorkerHealth(exchange string, isRunning bool
 	}
 
 	// Log worker health status
-	pm.logger.WithFields(map[string]interface{}{
+	pm.logger.WithFields(zaplogrus.Fields{
 		"exchange":    exchange,
 		"is_running":  isRunning,
 		"error_count": errorCount,

@@ -1,7 +1,7 @@
 {
   "name": "telegram-service",
   "version": "1.0.0",
-  "description": "Telegram bot service for Celebrum AI",
+  "description": "Telegram bot service for NeuraTrade",
   "main": "./dist/index.js",
   "scripts": {
     "start": "node ./dist/index.js",
@@ -32,6 +32,6 @@
     "crypto",
     "notifications"
   ],
-  "author": "Celebrum AI",
+  "author": "NeuraTrade",
   "license": "MIT"
 }

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Celebrum AI is a comprehensive cryptocurrency arbitrage detection and technical analysis platform built with Go. It features real-time market data collection, arbitrage opportunity identification, and technical indicator calculations with support for 100+ cryptocurrency exchanges via CCXT.
+NeuraTrade is a comprehensive cryptocurrency arbitrage detection and technical analysis platform built with Go. It features real-time market data collection, arbitrage opportunity identification, and technical indicator calculations with support for 100+ cryptocurrency exchanges via CCXT.
 
 ## Development Commands
 
@@ -102,8 +102,8 @@ This is a **monorepo** with all services organized under the `services/` directo
 ### Quick Start
 ```bash
 # Clone and setup
-git clone https://github.com/irfndi/celebrum-ai-go.git
-cd celebrum-ai-go
+git clone https://github.com/irfndi/NeuraTrade.git
+cd NeuraTrade
 cp .env.example .env
 
 # Start development environment (PostgreSQL, Redis)

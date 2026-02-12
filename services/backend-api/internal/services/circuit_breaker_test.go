@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfandi/celebrum-ai-go/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCircuitBreaker_Basic(t *testing.T) {
 	// Test basic circuit breaker functionality
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -34,7 +34,7 @@ func TestCircuitBreaker_Basic(t *testing.T) {
 
 func TestCircuitBreaker_Execute(t *testing.T) {
 	// Test the Execute function with a simple callback
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -56,7 +56,7 @@ func TestCircuitBreaker_Execute(t *testing.T) {
 
 func TestCircuitBreaker_ExecuteWithError(t *testing.T) {
 	// Test the Execute function with a callback that returns an error
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -79,7 +79,7 @@ func TestCircuitBreaker_ExecuteWithError(t *testing.T) {
 
 func TestCircuitBreaker_GetState(t *testing.T) {
 	// Test getting the current state of the circuit breaker
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -98,7 +98,7 @@ func TestCircuitBreaker_GetState(t *testing.T) {
 
 func TestCircuitBreaker_GetStats(t *testing.T) {
 	// Test getting statistics from the circuit breaker
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -117,7 +117,7 @@ func TestCircuitBreaker_GetStats(t *testing.T) {
 
 func TestCircuitBreaker_IsOpen(t *testing.T) {
 	// Test checking if the circuit breaker is open
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -136,7 +136,7 @@ func TestCircuitBreaker_IsOpen(t *testing.T) {
 
 func TestCircuitBreaker_Reset(t *testing.T) {
 	// Test resetting the circuit breaker
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -157,7 +157,7 @@ func TestCircuitBreaker_Reset(t *testing.T) {
 
 func TestCircuitBreaker_ConcurrentAccess(t *testing.T) {
 	// Test concurrent access to the circuit breaker
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 10,
@@ -187,7 +187,7 @@ func TestCircuitBreaker_ConcurrentAccess(t *testing.T) {
 
 func TestCircuitBreaker_ConfigDefaults(t *testing.T) {
 	// Test circuit breaker with default configuration
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 0, // Should use default
@@ -210,7 +210,7 @@ func TestCircuitBreaker_ConfigDefaults(t *testing.T) {
 
 func TestCircuitBreaker_ContextCancellation(t *testing.T) {
 	// Test circuit breaker with cancelled context
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -234,7 +234,7 @@ func TestCircuitBreaker_ContextCancellation(t *testing.T) {
 
 func TestCircuitBreaker_StateManagement(t *testing.T) {
 	// Test state management functionality
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
@@ -265,7 +265,7 @@ func TestCircuitBreaker_StateManagement(t *testing.T) {
 
 func TestCircuitBreaker_ErrorScenarios(t *testing.T) {
 	// Test various error scenarios
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	config := CircuitBreakerConfig{
 		FailureThreshold: 2,
@@ -288,7 +288,7 @@ func TestCircuitBreaker_ErrorScenarios(t *testing.T) {
 
 func TestCircuitBreakerManager_GetAllStats_Empty(t *testing.T) {
 	// Test GetAllStats with empty manager
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	manager := NewCircuitBreakerManager(logger)
 
@@ -300,7 +300,7 @@ func TestCircuitBreakerManager_GetAllStats_Empty(t *testing.T) {
 
 func TestCircuitBreakerManager_GetAllStats_WithBreakers(t *testing.T) {
 	// Test GetAllStats with multiple circuit breakers
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	manager := NewCircuitBreakerManager(logger)
 
@@ -354,7 +354,7 @@ func TestCircuitBreakerManager_GetAllStats_WithBreakers(t *testing.T) {
 
 func TestCircuitBreakerManager_GetAllStats_ConcurrentAccess(t *testing.T) {
 	// Test concurrent access to GetAllStats
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	manager := NewCircuitBreakerManager(logger)
 
@@ -403,7 +403,7 @@ func TestCircuitBreakerManager_GetAllStats_ConcurrentAccess(t *testing.T) {
 
 func TestCircuitBreakerManager_ResetAll_Empty(t *testing.T) {
 	// Test ResetAll with empty manager
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	manager := NewCircuitBreakerManager(logger)
 
@@ -417,7 +417,7 @@ func TestCircuitBreakerManager_ResetAll_Empty(t *testing.T) {
 
 func TestCircuitBreakerManager_ResetAll_WithBreakers(t *testing.T) {
 	// Test ResetAll with multiple circuit breakers
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	manager := NewCircuitBreakerManager(logger)
 
@@ -467,7 +467,7 @@ func TestCircuitBreakerManager_ResetAll_WithBreakers(t *testing.T) {
 
 func TestCircuitBreakerManager_ResetAll_ConcurrentAccess(t *testing.T) {
 	// Test concurrent access to ResetAll
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	manager := NewCircuitBreakerManager(logger)
 
@@ -507,7 +507,7 @@ func TestCircuitBreakerManager_ResetAll_ConcurrentAccess(t *testing.T) {
 
 func TestCircuitBreakerManager_GetAllStats_AfterReset(t *testing.T) {
 	// Test GetAllStats after ResetAll
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	manager := NewCircuitBreakerManager(logger)
 
@@ -553,7 +553,7 @@ func TestCircuitBreakerManager_GetAllStats_AfterReset(t *testing.T) {
 }
 
 func TestCircuitBreaker_canExecute_ClosedState(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
 		SuccessThreshold: 2,
@@ -582,7 +582,7 @@ func TestCircuitBreaker_canExecute_ClosedState(t *testing.T) {
 }
 
 func TestCircuitBreaker_canExecute_OpenState(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
 		SuccessThreshold: 2,
@@ -614,7 +614,7 @@ func TestCircuitBreaker_canExecute_OpenState(t *testing.T) {
 }
 
 func TestCircuitBreaker_canExecute_HalfOpenState(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
 		SuccessThreshold: 2,
@@ -648,7 +648,7 @@ func TestCircuitBreaker_canExecute_HalfOpenState(t *testing.T) {
 }
 
 func TestCircuitBreaker_canExecute_ResetTimeout(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
 		SuccessThreshold: 2,
@@ -677,7 +677,7 @@ func TestCircuitBreaker_canExecute_ResetTimeout(t *testing.T) {
 }
 
 func TestCircuitBreaker_canExecute_UnknownState(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	config := CircuitBreakerConfig{
 		FailureThreshold: 3,
 		SuccessThreshold: 2,
@@ -696,7 +696,7 @@ func TestCircuitBreaker_canExecute_UnknownState(t *testing.T) {
 }
 
 func TestCircuitBreaker_canExecute_StateTransitions(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	config := CircuitBreakerConfig{
 		FailureThreshold: 2,
 		SuccessThreshold: 2,
@@ -734,8 +734,8 @@ func TestCircuitBreaker_canExecute_ConcurrentAccess(t *testing.T) {
 		Timeout:          5 * time.Millisecond,
 		MaxRequests:      1,
 	}
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 
 	breaker := NewCircuitBreaker("test-breaker", config, logger)
 	breaker.setState(HalfOpen)

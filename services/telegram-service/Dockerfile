@@ -10,7 +10,6 @@ RUN bun install --frozen-lockfile --production
 
 FROM oven/bun:1 AS production
 
-# Install curl for health checks
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

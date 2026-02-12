@@ -13,8 +13,6 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
 	"github.com/irfandi/celebrum-ai-go/internal/models"
 	"github.com/irfandi/celebrum-ai-go/internal/observability"
 	"github.com/redis/go-redis/v9"
@@ -23,7 +21,7 @@ import (
 
 // FuturesArbitrageService manages futures arbitrage opportunity calculation and storage.
 type FuturesArbitrageService struct {
-	db          *database.PostgresDB
+	db          DBPool
 	redisClient *redis.Client
 	calculator  *FuturesArbitrageCalculator
 	config      *config.Config
@@ -55,7 +53,7 @@ type FuturesArbitrageService struct {
 //
 //	*FuturesArbitrageService: Initialized service.
 func NewFuturesArbitrageService(
-	db *database.PostgresDB,
+	db DBPool,
 	redisClient *redis.Client,
 	cfg *config.Config,
 	errorRecoveryManager *ErrorRecoveryManager,
@@ -339,11 +337,11 @@ func (s *FuturesArbitrageService) getLatestFundingRates(ctx context.Context) (ma
 		ORDER BY e.name, tp.symbol, fr.timestamp DESC
 	`
 
-	if s.db == nil || s.db.Pool == nil {
+	if isNilDBPool(s.db) {
 		return nil, fmt.Errorf("database pool is not available")
 	}
 
-	rows, err := s.db.Pool.Query(ctx, query)
+	rows, err := s.db.Query(ctx, query)
 	if err != nil {
 		s.logger.WithError(err).Error("Database query failed")
 		return nil, fmt.Errorf("failed to query funding rates: %w", err)
@@ -396,7 +394,7 @@ func (s *FuturesArbitrageService) getLatestFundingRates(ctx context.Context) (ma
 
 // storeOpportunity stores a calculated opportunity in the database
 func (s *FuturesArbitrageService) storeOpportunity(ctx context.Context, opportunity *models.FuturesArbitrageOpportunity) error {
-	if s.db == nil || s.db.Pool == nil {
+	if isNilDBPool(s.db) {
 		return fmt.Errorf("database pool is not available")
 	}
 
@@ -459,7 +457,7 @@ func (s *FuturesArbitrageService) storeOpportunity(ctx context.Context, opportun
 			is_active = EXCLUDED.is_active
 	`
 
-	_, err := s.db.Pool.Exec(ctx, query,
+	_, err := s.db.Exec(ctx, query,
 		opportunity.Symbol, opportunity.BaseCurrency, opportunity.QuoteCurrency,
 		opportunity.LongExchange, opportunity.ShortExchange,
 		opportunity.LongFundingRate, opportunity.ShortFundingRate, opportunity.NetFundingRate, opportunity.FundingInterval,
@@ -483,7 +481,7 @@ func (s *FuturesArbitrageService) storeOpportunity(ctx context.Context, opportun
 
 // cleanupExpiredOpportunities removes expired opportunities from the database
 func (s *FuturesArbitrageService) cleanupExpiredOpportunities(ctx context.Context) error {
-	if s.db == nil || s.db.Pool == nil {
+	if isNilDBPool(s.db) {
 		return fmt.Errorf("database pool is not available")
 	}
 
@@ -493,14 +491,18 @@ func (s *FuturesArbitrageService) cleanupExpiredOpportunities(ctx context.Contex
 		WHERE expires_at < NOW() OR detected_at < NOW() - INTERVAL '1 hour'
 	`
 
-	result, err := s.db.Pool.Exec(ctx, query)
+	result, err := s.db.Exec(ctx, query)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to cleanup expired opportunities")
 		return fmt.Errorf("failed to cleanup expired opportunities: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
-	s.logger.WithFields(map[string]interface{}{"opportunities_cleaned": rowsAffected}).Info("Cleanup completed successfully")
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		telemetry.Logger().Error("Failed to get rows affected", "error", err)
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	telemetry.Logger().Info("Cleanup completed successfully", "opportunities_cleaned", rowsAffected)
 
 	if rowsAffected > 0 {
 		s.logger.WithFields(map[string]interface{}{"count": rowsAffected}).Info("Cleaned up expired arbitrage opportunities")

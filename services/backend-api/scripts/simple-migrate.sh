@@ -8,7 +8,7 @@ set -euo pipefail
 # Configuration
 DB_HOST="${DB_HOST:-postgres}"
 DB_PORT="${DB_PORT:-5432}"
-DB_NAME="${DB_NAME:-celebrum}"
+DB_NAME="${DB_NAME:-neuratrade}"
 DB_USER="${DB_USER:-postgres}"
 DB_PASSWORD="${DB_PASSWORD:-}"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/database/migrations}"
