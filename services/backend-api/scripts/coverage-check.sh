@@ -88,16 +88,18 @@ fi
 if [[ -f "$BASELINE_FILE" ]]; then
   BASELINE_PCT=$(cat "$BASELINE_FILE")
   DELTA=$(awk -v c="$TOTAL_PCT" -v b="$BASELINE_PCT" 'BEGIN {printf "%.1f", c - b}')
-  DELTA_ABS=$(echo "$DELTA" | awk '{if ($1 < 0) print -$1; else print $1}')
-
+  
   printf "[coverage] Baseline: %s%%, Current: %s%%, Delta: %s%%\n" "$BASELINE_PCT" "$TOTAL_PCT" "$DELTA" | tee -a "$ARTIFACTS_DIR/coverage.log"
-
-  # Check delta threshold
-  EXCEEDS_DELTA=$(echo "$DELTA_ABS" | awk -v m="$MAX_DELTA" '{if ($1 + 0 > m + 0) print 1; else print 0}')
-  if [[ "$EXCEEDS_DELTA" -eq 1 ]]; then
-    echo "[coverage] ERROR: Coverage delta ${DELTA}% exceeds maximum allowed delta ${MAX_DELTA}%" | tee -a "$ARTIFACTS_DIR/coverage.log"
+  
+  # Check if coverage has dropped more than the allowed delta.
+  # A positive delta (increase in coverage) is always accepted.
+  IS_DROP_EXCEEDED=$(awk -v d="$DELTA" -v m="$MAX_DELTA" 'BEGIN { if (d < 0 && -d > m) print 1; else print 0 }')
+  
+  if [[ "$IS_DROP_EXCEEDED" -eq 1 ]]; then
+    DROP_AMOUNT=$(echo "$DELTA" | awk '{printf "%.1f", -$1}')
+    echo "[coverage] ERROR: Coverage dropped by ${DROP_AMOUNT}%, which exceeds the maximum allowed delta of ${MAX_DELTA}%" | tee -a "$ARTIFACTS_DIR/coverage.log"
     if [[ "$STRICT" == "true" ]]; then
-      echo "[coverage] Failing due to delta threshold breach in STRICT mode" | tee -a "$ARTIFACTS_DIR/coverage.log"
+      echo "[coverage] Failing due to coverage drop threshold breach in STRICT mode" | tee -a "$ARTIFACTS_DIR/coverage.log"
       exit 1
     fi
   fi
