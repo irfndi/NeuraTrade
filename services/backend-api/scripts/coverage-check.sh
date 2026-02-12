@@ -88,13 +88,13 @@ fi
 if [[ -f "$BASELINE_FILE" ]]; then
   BASELINE_PCT=$(cat "$BASELINE_FILE")
   DELTA=$(awk -v c="$TOTAL_PCT" -v b="$BASELINE_PCT" 'BEGIN {printf "%.1f", c - b}')
-  
+
   printf "[coverage] Baseline: %s%%, Current: %s%%, Delta: %s%%\n" "$BASELINE_PCT" "$TOTAL_PCT" "$DELTA" | tee -a "$ARTIFACTS_DIR/coverage.log"
-  
+
   # Check if coverage has dropped more than the allowed delta.
   # A positive delta (increase in coverage) is always accepted.
   IS_DROP_EXCEEDED=$(awk -v d="$DELTA" -v m="$MAX_DELTA" 'BEGIN { if (d < 0 && -d > m) print 1; else print 0 }')
-  
+
   if [[ "$IS_DROP_EXCEEDED" -eq 1 ]]; then
     DROP_AMOUNT=$(echo "$DELTA" | awk '{printf "%.1f", -$1}')
     echo "[coverage] ERROR: Coverage dropped by ${DROP_AMOUNT}%, which exceeds the maximum allowed delta of ${MAX_DELTA}%" | tee -a "$ARTIFACTS_DIR/coverage.log"
