@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -39,6 +40,13 @@ type Services struct {
 type routeDB interface {
 	services.DBPool
 	HealthCheck(ctx context.Context) error
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
 
 // SetupRoutes configures all the HTTP routes for the application.
@@ -121,11 +129,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	tradingHandler := handlers.NewTradingHandler(db)
 
-	// Budget handler - use defaults from migration 054
+	// Budget handler - configurable via environment variables with defaults from migration 054
+	dailyBudget, _ := decimal.NewFromString(getEnvOrDefault("AI_DAILY_BUDGET", "10.00"))
+	monthlyBudget, _ := decimal.NewFromString(getEnvOrDefault("AI_MONTHLY_BUDGET", "200.00"))
 	budgetHandler := handlers.NewBudgetHandler(
 		database.NewAIUsageRepositoryFromDB(db),
-		decimal.NewFromFloat(10.00),  // daily budget from migration
-		decimal.NewFromFloat(200.00), // monthly budget from migration
+		dailyBudget,
+		monthlyBudget,
 	)
 
 	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
@@ -257,6 +267,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 
 		budget := v1.Group("/budget")
+		budget.Use(authMiddleware.RequireAuth())
 		{
 			budget.GET("/status", budgetHandler.GetBudgetStatus)
 			budget.GET("/check", budgetHandler.CheckBudget)
