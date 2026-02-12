@@ -28,8 +28,9 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 	var logger logging.Logger = logging.NewStandardLogger("info", "test")
 
 	// Create SignalProcessor
+	dbPool := database.NewMockDBPool(mockPool)
 	sp := NewSignalProcessor(
-		database.WrapLegacyDBPool(mockPool),
+		dbPool,
 		logger,
 		mockAggregator,
 		mockScorer,
