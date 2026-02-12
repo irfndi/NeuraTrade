@@ -69,7 +69,7 @@ type Market struct {
 	Active                bool      `json:"active"`
 	Closed                bool      `json:"closed"`
 	Archived              bool      `json:"archived"`
-	AcceptingOrders       bool      `json:"acceptingOrdersTimestamp"`
+	AcceptingOrders       bool      `json:"acceptingOrders"`
 	Enabled               bool      `json:"enabled"`
 	Featured              bool      `json:"featured"`
 	New                   bool      `json:"new"`

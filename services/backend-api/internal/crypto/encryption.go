@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -121,7 +122,7 @@ func NewEncryptorFromHexKey(hexKey string) (*Encryptor, error) {
 }
 
 // Encrypt encrypts plaintext using AES-256-GCM.
-// Returns a base64-encoded string containing salt + nonce + ciphertext.
+// Returns a base64-encoded string containing nonce + ciphertext.
 //
 // Parameters:
 //   - plaintext: The data to encrypt.
@@ -259,7 +260,7 @@ func GenerateKeyHex() (string, error) {
 //   - key: The key to hash.
 //
 // Returns:
-//   - string: Hex-encoded SHA-256 hash.
+//   - string: Base64-encoded SHA-256 hash.
 func HashKey(key string) string {
 	hash := sha256.Sum256([]byte(key))
 	return base64.StdEncoding.EncodeToString(hash[:])
@@ -282,19 +283,15 @@ func MaskKey(key string) string {
 
 // decodeKey decodes a base64 or hex-encoded key.
 func decodeKey(encodedKey string) ([]byte, error) {
-	// Try base64 first
 	if key, err := base64.StdEncoding.DecodeString(encodedKey); err == nil && len(key) == KeyLength {
 		return key, nil
 	}
 
-	// Try hex decoding
-	key := make([]byte, KeyLength)
-	_, err := fmt.Sscanf(encodedKey, "%x", &key)
-	if err != nil || len(key) != KeyLength {
-		return nil, ErrInvalidKey
+	if key, err := hex.DecodeString(encodedKey); err == nil && len(key) == KeyLength {
+		return key, nil
 	}
 
-	return key, nil
+	return nil, ErrInvalidKey
 }
 
 // encodeKey encodes a key as hex.
