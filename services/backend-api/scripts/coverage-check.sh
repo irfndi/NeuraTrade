@@ -39,6 +39,12 @@ if [[ -n "${COVERAGE_PACKAGES_OVERRIDE:-}" ]]; then
   IFS=',' read -r -a COVERAGE_PACKAGES <<<"$COVERAGE_PACKAGES_OVERRIDE"
 fi
 
+# Allow resetting baseline via env
+if [[ "${RESET_BASELINE:-false}" == "true" ]]; then
+  rm -f "$BASELINE_FILE"
+  echo "[coverage] Baseline reset" | tee -a "$ARTIFACTS_DIR/coverage.log"
+fi
+
 STRICT="${STRICT:-true}"
 CAPTURE_BASELINE="${CAPTURE_BASELINE:-false}"
 
@@ -85,24 +91,25 @@ if [[ "$CAPTURE_BASELINE" == "true" ]]; then
   printf "[coverage] Baseline captured: %s%%\n" "$TOTAL_PCT" | tee -a "$ARTIFACTS_DIR/coverage.log"
 fi
 
+# Baseline delta enforcement
 if [[ -f "$BASELINE_FILE" ]]; then
   BASELINE_PCT=$(cat "$BASELINE_FILE")
-  DELTA=$(awk -v c="$TOTAL_PCT" -v b="$BASELINE_PCT" 'BEGIN {printf "%.1f", c - b}')
+  DELTA=$(awk -v current="$TOTAL_PCT" -v baseline="$BASELINE_PCT" 'BEGIN {printf "%.1f", current - baseline}')
+  delta_pass=$(awk -v d="$DELTA" -v max="$MAX_DELTA" 'BEGIN {print (d >= 0 || d >= -max) ? 1 : 0}')
 
-  printf "[coverage] Baseline: %s%%, Current: %s%%, Delta: %s%%\n" "$BASELINE_PCT" "$TOTAL_PCT" "$DELTA" | tee -a "$ARTIFACTS_DIR/coverage.log"
-
-  # Check if coverage has dropped more than the allowed delta.
-  # A positive delta (increase in coverage) is always accepted.
-  IS_DROP_EXCEEDED=$(awk -v d="$DELTA" -v m="$MAX_DELTA" 'BEGIN { if (d < 0 && -d > m) print 1; else print 0 }')
-
-  if [[ "$IS_DROP_EXCEEDED" -eq 1 ]]; then
+  if [[ "$delta_pass" -eq 0 ]]; then
     DROP_AMOUNT=$(echo "$DELTA" | awk '{printf "%.1f", -$1}')
-    echo "[coverage] ERROR: Coverage dropped by ${DROP_AMOUNT}%, which exceeds the maximum allowed delta of ${MAX_DELTA}%" | tee -a "$ARTIFACTS_DIR/coverage.log"
+    echo "[coverage] WARN: Coverage dropped by ${DROP_AMOUNT}% (max allowed: ${MAX_DELTA}%)" | tee -a "$ARTIFACTS_DIR/coverage.log"
     if [[ "$STRICT" == "true" ]]; then
-      echo "[coverage] Failing due to coverage drop threshold breach in STRICT mode" | tee -a "$ARTIFACTS_DIR/coverage.log"
+      echo "[coverage] FAILING: Coverage regression exceeds delta threshold" | tee -a "$ARTIFACTS_DIR/coverage.log"
       exit 1
     fi
+  else
+    echo "[coverage] Delta check passed: ${DELTA}% change (baseline: ${BASELINE_PCT}%)" | tee -a "$ARTIFACTS_DIR/coverage.log"
   fi
+else
+  echo "$TOTAL_PCT" >"$BASELINE_FILE"
+  echo "[coverage] Established baseline: ${TOTAL_PCT}%" | tee -a "$ARTIFACTS_DIR/coverage.log"
 fi
 
 # Generate per-file breakdown for quick triage
