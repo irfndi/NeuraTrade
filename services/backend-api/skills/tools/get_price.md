@@ -81,7 +81,7 @@ This tool queries the CCXT service to fetch real-time market data from the speci
   "bid": "50122.00",
   "ask": "50125.00",
   "spread": "3.00",
-  "spread_pct": "0.006",
+  "spread_pct": "0.00006",
   "timestamp": "2024-01-15T10:30:00Z",
   "24h": {
     "high": "51200.00",
@@ -165,5 +165,4 @@ This skill works with:
 
 ## API Endpoint
 
-Internal: `GET /api/market/ticker?exchange={exchange}&symbol={symbol}`
-With order book: `GET /api/market/orderbook?exchange={exchange}&symbol={symbol}`
+Internal: `GET /api/market/ticker?exchange={exchange}&symbol={symbol}&include_orderbook={include_orderbook}`

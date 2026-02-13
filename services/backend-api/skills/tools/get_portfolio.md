@@ -18,6 +18,8 @@ parameters:
     required: false
   symbols:
     type: array
+    items:
+      type: string
     description: Specific symbols to include in the response
     required: false
 examples:

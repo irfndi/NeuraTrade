@@ -118,6 +118,11 @@ This tool validates order parameters, checks available balance, applies risk lim
     },
     "position": {
       "position_id": "pos-xyz789",
+      "exchange": "binance",
+      "symbol": "BTC/USDT",
+      "side": "long",
+      "size": "0.1",
+      "entry_price": "50000.00",
       "status": "OPEN"
     }
   }
