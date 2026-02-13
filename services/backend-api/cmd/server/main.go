@@ -30,22 +30,13 @@ import (
 // main serves as the entry point for the application.
 // It delegates execution to the run function and handles exit codes based on success or failure.
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "seed":
-			if err := runSeeder(); err != nil {
-				fmt.Fprintf(os.Stderr, "Seeding failed: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		case "bootstrap":
-			cmd := NewBootstrapCommand()
-			if err := cmd.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "Bootstrap failed: %v\n", err)
-				os.Exit(1)
-			}
-			return
+	// Check for CLI commands
+	if len(os.Args) > 1 && os.Args[1] == "seed" {
+		if err := runSeeder(); err != nil {
+			fmt.Fprintf(os.Stderr, "Seeding failed: %v\n", err)
+			os.Exit(1)
 		}
+		return
 	}
 
 	if err := run(); err != nil {

@@ -510,7 +510,6 @@ func TestTelegramInternalHandler_ConnectPolymarket_Success(t *testing.T) {
 
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_bindings").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectQuery("INSERT INTO telegram_operator_wallets").
 		WithArgs(
 			pgxmock.AnyArg(),
@@ -551,7 +550,6 @@ func TestTelegramInternalHandler_BeginAutonomous_ReadinessBlocked(t *testing.T) 
 
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_bindings").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = 'polymarket' AND status = 'connected'`).
 		WithArgs("777").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
@@ -591,7 +589,6 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_bindings").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
 	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = 'polymarket' AND status = 'connected'`).
 		WithArgs("777").

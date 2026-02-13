@@ -9,16 +9,11 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type AIUsageQuerier interface {
-	Query(ctx context.Context, query string, args ...any) (Rows, error)
-	QueryRow(ctx context.Context, query string, args ...any) Row
-}
-
 type AIUsageRepository struct {
-	pool AIUsageQuerier
+	pool DBPool
 }
 
-func NewAIUsageRepository(pool AIUsageQuerier) *AIUsageRepository {
+func NewAIUsageRepository(pool DBPool) *AIUsageRepository {
 	return &AIUsageRepository{pool: pool}
 }
 

@@ -146,7 +146,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	budgetHandler := handlers.NewBudgetHandler(
-		database.NewAIUsageRepositoryFromDB(db),
+		database.NewAIUsageRepository(db),
 		dailyBudget,
 		monthlyBudget,
 	)
@@ -230,8 +230,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegram.POST("/internal/wallets/remove", telegramInternalHandler.RemoveWallet)
 			telegram.GET("/internal/wallets", telegramInternalHandler.GetWallets)
 			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
-			telegram.POST("/internal/operators/bind", telegramInternalHandler.BindOperatorProfile)
-			telegram.POST("/internal/operators/unbind", telegramInternalHandler.UnbindOperatorProfile)
 
 			telegramInternal := telegram.Group("/internal")
 			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
