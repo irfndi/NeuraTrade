@@ -47,9 +47,12 @@ END $$;
 -- Fix 2: Increase column sizes in trading_pairs table
 -- =====================================================
 
--- Drop dependent views first
+-- Drop ALL dependent views first
 DROP VIEW IF EXISTS v_trading_pairs_debug;
 DROP VIEW IF EXISTS v_active_trading_pairs;
+DROP VIEW IF EXISTS v_trading_pairs;
+DROP VIEW IF EXISTS v_trading_pairs_summary;
+DROP VIEW IF EXISTS v_trading_pairs_extended;
 
 -- Check current column sizes and update if needed
 DO $$
