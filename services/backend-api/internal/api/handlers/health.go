@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/services"
 )
 
@@ -24,12 +25,19 @@ type RedisHealthChecker interface {
 	HealthCheck(ctx context.Context) error
 }
 
+// ExchangeReliabilityTrackerInterface for exchange reliability metrics.
+type ExchangeReliabilityTrackerInterface interface {
+	GetAllReliabilityMetrics() map[string]*models.ExchangeReliabilityMetrics
+	GetReliabilityMetrics(exchange string) *models.ExchangeReliabilityMetrics
+}
+
 // HealthHandler manages health check endpoints.
 type HealthHandler struct {
-	db             DatabaseHealthChecker
-	redis          RedisHealthChecker
-	ccxtURL        string
-	cacheAnalytics CacheAnalyticsInterface
+	db                 DatabaseHealthChecker
+	redis              RedisHealthChecker
+	ccxtURL            string
+	cacheAnalytics     CacheAnalyticsInterface
+	reliabilityTracker ExchangeReliabilityTrackerInterface
 }
 
 // HealthResponse represents the health status response.
@@ -70,12 +78,13 @@ type ServiceStatus struct {
 // Returns:
 //
 //	*HealthHandler: Initialized handler.
-func NewHealthHandler(db DatabaseHealthChecker, redis RedisHealthChecker, ccxtURL string, cacheAnalytics CacheAnalyticsInterface) *HealthHandler {
+func NewHealthHandler(db DatabaseHealthChecker, redis RedisHealthChecker, ccxtURL string, cacheAnalytics CacheAnalyticsInterface, reliabilityTracker ExchangeReliabilityTrackerInterface) *HealthHandler {
 	return &HealthHandler{
-		db:             db,
-		redis:          redis,
-		ccxtURL:        ccxtURL,
-		cacheAnalytics: cacheAnalytics,
+		db:                 db,
+		redis:              redis,
+		ccxtURL:            ccxtURL,
+		cacheAnalytics:     cacheAnalytics,
+		reliabilityTracker: reliabilityTracker,
 	}
 }
 
@@ -415,14 +424,36 @@ func (h *HealthHandler) GetRiskMetrics(w http.ResponseWriter, r *http.Request) {
 	span.SetTag("http.url", r.URL.String())
 	span.SetTag("handler.name", "GetRiskMetrics")
 
+	var exchangeRisk int
+	var activeExchanges, failedExchanges int
+
+	if h.reliabilityTracker != nil {
+		allMetrics := h.reliabilityTracker.GetAllReliabilityMetrics()
+		for _, m := range allMetrics {
+			activeExchanges++
+			riskScore, _ := m.RiskScore.Float64()
+			exchangeRisk += int(riskScore)
+			if m.FailureCount24h > 10 {
+				failedExchanges++
+			}
+		}
+		if activeExchanges > 0 {
+			exchangeRisk = exchangeRisk / activeExchanges
+		}
+	} else {
+		exchangeRisk = 5
+		activeExchanges = 6
+		failedExchanges = 0
+	}
+
 	metrics := RiskMetrics{
-		SystemRisk:      15,
-		ExchangeRisk:    5,
+		SystemRisk:      exchangeRisk + 10,
+		ExchangeRisk:    exchangeRisk,
 		LiquidityRisk:   3,
 		VolatilityRisk:  5,
 		OperationalRisk: 2,
-		ActiveExchanges: 6,
-		FailedExchanges: 0,
+		ActiveExchanges: activeExchanges,
+		FailedExchanges: failedExchanges,
 		LastRiskUpdate:  time.Now(),
 	}
 

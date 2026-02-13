@@ -49,7 +49,7 @@ func TestNewHealthHandler(t *testing.T) {
 	mockRedis := &MockRedisHealthClient{}
 	mockCacheAnalytics := NewMockCacheAnalyticsService()
 
-	handler := NewHealthHandler(mockDB, mockRedis, "http://localhost:8080", mockCacheAnalytics)
+	handler := NewHealthHandler(mockDB, mockRedis, "http://localhost:8080", mockCacheAnalytics, nil)
 
 	assert.NotNil(t, handler)
 	assert.Equal(t, mockDB, handler.db)
@@ -122,7 +122,7 @@ func TestHealthHandler_HealthCheck(t *testing.T) {
 			mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
 			mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
 
-			handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics)
+			handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics, nil)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", "/health", nil)
@@ -177,7 +177,7 @@ func TestHealthHandler_DegradedNonCriticalService(t *testing.T) {
 	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
 	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
 
-	handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics)
+	handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -231,7 +231,7 @@ func TestHealthHandler_ReadinessCheck(t *testing.T) {
 			mockDB.On("HealthCheck", mock.Anything).Return(tt.dbError)
 			mockRedis.On("HealthCheck", mock.Anything).Return(nil)
 
-			handler := NewHealthHandler(mockDB, mockRedis, "http://localhost:8080", mockCacheAnalytics)
+			handler := NewHealthHandler(mockDB, mockRedis, "http://localhost:8080", mockCacheAnalytics, nil)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", "/ready", nil)
@@ -256,7 +256,7 @@ func TestHealthHandler_LivenessCheck(t *testing.T) {
 	mockRedis := &MockRedisHealthClient{}
 	mockCacheAnalytics := NewMockCacheAnalyticsService()
 
-	handler := NewHealthHandler(mockDB, mockRedis, "http://localhost:8080", mockCacheAnalytics)
+	handler := NewHealthHandler(mockDB, mockRedis, "http://localhost:8080", mockCacheAnalytics, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/live", nil)
@@ -314,7 +314,7 @@ func TestHealthHandler_CCXTServiceCheck(t *testing.T) {
 			mockRedis := &MockRedisHealthClient{}
 			mockCacheAnalytics := NewMockCacheAnalyticsService()
 
-			handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics)
+			handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics, nil)
 			err := handler.checkCCXTService()
 
 			if tt.expectError {
@@ -343,7 +343,7 @@ func TestHealthHandler_CCXTServiceZeroExchanges(t *testing.T) {
 		mockRedis := &MockRedisHealthClient{}
 		mockCacheAnalytics := NewMockCacheAnalyticsService()
 
-		handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics)
+		handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics, nil)
 		err := handler.checkCCXTService()
 
 		// No error when status is healthy (backward-compatible)
@@ -364,7 +364,7 @@ func TestHealthHandler_CCXTServiceZeroExchanges(t *testing.T) {
 		mockRedis := &MockRedisHealthClient{}
 		mockCacheAnalytics := NewMockCacheAnalyticsService()
 
-		handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics)
+		handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics, nil)
 		err := handler.checkCCXTService()
 
 		assert.Error(t, err)
@@ -436,7 +436,7 @@ func TestHealthHandler_TelegramTokenDetection(t *testing.T) {
 			mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
 			mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
 
-			handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics)
+			handler := NewHealthHandler(mockDB, mockRedis, mockCCXTServer.URL, mockCacheAnalytics, nil)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", "/health", nil)

@@ -68,8 +68,11 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
+	// Initialize exchange reliability tracker
+	tracker := services.NewExchangeReliabilityTracker(nil, redis.Client)
+
 	// Initialize health handler
-	healthHandler := handlers.NewHealthHandler(db, redis, ccxtService.GetServiceURL(), cacheAnalyticsService)
+	healthHandler := handlers.NewHealthHandler(db, redis, ccxtService.GetServiceURL(), cacheAnalyticsService, tracker)
 
 	// Health check endpoints with telemetry
 	healthGroup := router.Group("/")
