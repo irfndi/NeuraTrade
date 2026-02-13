@@ -75,6 +75,10 @@ func (m *MockClient) GetOrderBook(ctx context.Context, exchange, symbol string, 
 	return &OrderBookResponse{}, nil
 }
 
+func (m *MockClient) CalculateOrderBookMetrics(resp *OrderBookResponse) *OrderBookMetrics {
+	return &OrderBookMetrics{}
+}
+
 func (m *MockClient) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
 	if m.GetOHLCVFunc != nil {
 		return m.GetOHLCVFunc(ctx, exchange, symbol, timeframe, limit)

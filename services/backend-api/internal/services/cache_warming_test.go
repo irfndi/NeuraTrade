@@ -90,6 +90,14 @@ func (m *MockCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol s
 	return args.Get(0).(*ccxt.OrderBookResponse), args.Error(1)
 }
 
+func (m *MockCCXTService) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*ccxt.OrderBookMetrics, error) {
+	args := m.Called(ctx, exchange, symbol, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.OrderBookMetrics), args.Error(1)
+}
+
 func (m *MockCCXTService) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*ccxt.OHLCVResponse, error) {
 	args := m.Called(ctx, exchange, symbol, timeframe, limit)
 	return args.Get(0).(*ccxt.OHLCVResponse), args.Error(1)

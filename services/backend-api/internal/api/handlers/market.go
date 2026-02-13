@@ -579,6 +579,39 @@ func (h *MarketHandler) GetOrderBook(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// GetOrderBookMetrics retrieves order book data with calculated metrics including imbalance.
+func (h *MarketHandler) GetOrderBookMetrics(c *gin.Context) {
+	exchange := c.Param("exchange")
+	symbol := c.Param("symbol")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+
+	if exchange == "" || symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Exchange and symbol are required"})
+		return
+	}
+
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+
+	if !h.ccxtService.IsHealthy(c.Request.Context()) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Market data service is currently unavailable"})
+		return
+	}
+
+	metrics, err := h.ccxtService.CalculateOrderBookMetrics(c.Request.Context(), exchange, symbol, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate order book metrics"})
+		return
+	}
+	if metrics == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid order book data received"})
+		return
+	}
+
+	c.JSON(http.StatusOK, metrics)
+}
+
 // GetBulkTickers retrieves all tickers for a specific exchange with caching.
 func (h *MarketHandler) GetBulkTickers(c *gin.Context) {
 	exchange := c.Param("exchange")
