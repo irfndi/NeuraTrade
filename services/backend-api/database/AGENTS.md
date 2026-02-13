@@ -33,7 +33,7 @@
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 185 total | 58 open | 8 in progress | 33 blocked | 119 closed | 28 ready
+**Stats:** 185 total | 58 open | 0 in progress | 28 blocked | 127 closed | 30 ready
 
 ### Recently Completed (✓)
 - ✓ `neura-5of`: Telegram profile binding schema (operator_identities table)
