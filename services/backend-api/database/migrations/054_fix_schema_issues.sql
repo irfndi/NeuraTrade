@@ -49,11 +49,14 @@ END $$;
 
 -- Drop ALL dependent views first
 DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
-DROP VIEW IF EXISTS v_trading_pairs_debug;
-DROP VIEW IF EXISTS v_active_trading_pairs;
-DROP VIEW IF EXISTS v_trading_pairs;
-DROP VIEW IF EXISTS v_trading_pairs_summary;
-DROP VIEW IF EXISTS v_trading_pairs_extended;
+DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
+DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
+DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
+DROP VIEW IF EXISTS v_trading_pairs CASCADE;
+DROP VIEW IF EXISTS v_trading_pairs_summary CASCADE;
+DROP VIEW IF EXISTS v_trading_pairs_extended CASCADE;
+DROP VIEW IF EXISTS v_funding_arbitrage_opportunities CASCADE;
+DROP VIEW IF EXISTS v_exchange_trading_pairs CASCADE;
 
 -- Check current column sizes and update if needed
 DO $$

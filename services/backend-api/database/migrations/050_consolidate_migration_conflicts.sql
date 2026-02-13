@@ -139,12 +139,14 @@ BEGIN
         -- Fix trading pairs column sizes
         IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'trading_pairs') THEN
             DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
-            DROP VIEW IF EXISTS v_trading_pairs_debug;
-            DROP VIEW IF EXISTS v_active_trading_pairs;
-            DROP VIEW IF EXISTS v_trading_pairs;
-            DROP VIEW IF EXISTS v_trading_pairs_summary;
-            DROP VIEW IF EXISTS v_funding_arbitrage_opportunities;
-            DROP VIEW IF EXISTS v_exchange_trading_pairs;
+            DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
+            DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
+            DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
+            DROP VIEW IF EXISTS v_trading_pairs CASCADE;
+            DROP VIEW IF EXISTS v_trading_pairs_summary CASCADE;
+            DROP VIEW IF EXISTS v_funding_arbitrage_opportunities CASCADE;
+            DROP VIEW IF EXISTS v_exchange_trading_pairs CASCADE;
+            DROP VIEW IF EXISTS v_trading_pairs_extended CASCADE;
             
             ALTER TABLE trading_pairs 
             ALTER COLUMN symbol TYPE VARCHAR(50),
