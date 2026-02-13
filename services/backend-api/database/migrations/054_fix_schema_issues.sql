@@ -7,8 +7,6 @@
 --   - "value too long for type character varying(10)" error
 --   - "value too long for type character varying(20)" error
 
-BEGIN;
-
 -- =====================================================
 -- Fix 1: Add priority column to exchanges table
 -- =====================================================
@@ -165,5 +163,3 @@ VALUES ('054_fix_schema_issues.sql', true, NOW())
 ON CONFLICT (filename) DO UPDATE SET
     applied = true,
     applied_at = NOW();
-
-COMMIT;
