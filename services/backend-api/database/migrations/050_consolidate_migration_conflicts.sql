@@ -133,21 +133,44 @@ BEGIN
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
 
-        -- Fix trading pairs column sizes
         IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'trading_pairs') THEN
-            DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
-            DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
-            DROP VIEW IF EXISTS v_funding_arbitrage_opportunities CASCADE;
-            DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
-            DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
-            
-            ALTER TABLE trading_pairs 
-            ALTER COLUMN symbol TYPE VARCHAR(50),
-            ALTER COLUMN base_currency TYPE VARCHAR(20),
-            ALTER COLUMN quote_currency TYPE VARCHAR(20);
-            
-            CREATE VIEW v_active_trading_pairs AS
-            SELECT * FROM trading_pairs WHERE is_active = true;
+            DO $$
+            DECLARE
+                current_symbol_size INTEGER;
+                current_base_size INTEGER;
+                current_quote_size INTEGER;
+            BEGIN
+                SELECT character_maximum_length INTO current_symbol_size
+                FROM information_schema.columns
+                WHERE table_name = 'trading_pairs' AND column_name = 'symbol';
+                
+                SELECT character_maximum_length INTO current_base_size
+                FROM information_schema.columns
+                WHERE table_name = 'trading_pairs' AND column_name = 'base_currency';
+                
+                SELECT character_maximum_length INTO current_quote_size
+                FROM information_schema.columns
+                WHERE table_name = 'trading_pairs' AND column_name = 'quote_currency';
+                
+                IF current_symbol_size < 50 OR current_base_size < 20 OR current_quote_size < 20 THEN
+                    DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
+                    DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
+                    DROP VIEW IF EXISTS v_funding_arbitrage_opportunities CASCADE;
+                    DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
+                    DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
+                    
+                    ALTER TABLE trading_pairs ALTER COLUMN symbol TYPE VARCHAR(50);
+                    ALTER TABLE trading_pairs ALTER COLUMN base_currency TYPE VARCHAR(20);
+                    ALTER TABLE trading_pairs ALTER COLUMN quote_currency TYPE VARCHAR(20);
+                    
+                    CREATE VIEW v_active_trading_pairs AS
+                    SELECT * FROM trading_pairs WHERE is_active = true;
+                    
+                    RAISE NOTICE 'Updated trading_pairs column sizes';
+                ELSE
+                    RAISE NOTICE 'trading_pairs columns already at required size, skipping';
+                END IF;
+            END $$;
         END IF;
 
         INSERT INTO migration_status (migration_number, migration_name, description, checksum) 

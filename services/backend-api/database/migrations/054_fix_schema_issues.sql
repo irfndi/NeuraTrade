@@ -45,14 +45,12 @@ END $$;
 -- Fix 2: Increase column sizes in trading_pairs table
 -- =====================================================
 
--- Check current column sizes and update if needed
 DO $$
 DECLARE
     symbol_size INTEGER;
     base_size INTEGER;
     quote_size INTEGER;
 BEGIN
-    -- Get current column sizes
     SELECT character_maximum_length INTO symbol_size
     FROM information_schema.columns
     WHERE table_name = 'trading_pairs' AND column_name = 'symbol';
@@ -65,14 +63,15 @@ BEGIN
     FROM information_schema.columns
     WHERE table_name = 'trading_pairs' AND column_name = 'quote_currency';
 
-    -- Log current sizes
     RAISE NOTICE 'Current column sizes: symbol=%, base_currency=%, quote_currency=%',
         symbol_size, base_size, quote_size;
 
-    DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
-    DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
-    DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
-    DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
+    IF symbol_size < 100 OR base_size < 50 OR quote_size < 50 THEN
+        DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
+        DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
+        DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
+        DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
+    END IF;
 
     IF symbol_size < 100 THEN
         ALTER TABLE trading_pairs ALTER COLUMN symbol TYPE VARCHAR(100);
