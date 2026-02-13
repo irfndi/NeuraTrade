@@ -87,7 +87,7 @@ BEGIN
     IF quote_size < 50 THEN
         ALTER TABLE trading_pairs ALTER COLUMN quote_currency TYPE VARCHAR(50) CASCADE;
         RAISE NOTICE 'Updated quote_currency column to VARCHAR(50)';
-    END IF
+    END IF;
 END $$;
 
 -- Also update exchange_trading_pairs table if it exists
