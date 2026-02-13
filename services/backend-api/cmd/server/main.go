@@ -382,7 +382,8 @@ func runSQLiteBootstrapMode(cfg *config.Config, logger logging.Logger, logrusLog
 	}
 	router.Use(gin.Recovery())
 
-	healthHandler := apiHandlers.NewHealthHandler(sqliteDB, redisClient, cfg.CCXT.ServiceURL, cacheAnalyticsService)
+	reliabilityTracker := services.NewExchangeReliabilityTracker(nil, redisClient.Client)
+	healthHandler := apiHandlers.NewHealthHandler(sqliteDB, redisClient, cfg.CCXT.ServiceURL, cacheAnalyticsService, reliabilityTracker)
 	healthGroup := router.Group("/")
 	healthGroup.Use(middleware.HealthCheckTelemetryMiddleware())
 	{
