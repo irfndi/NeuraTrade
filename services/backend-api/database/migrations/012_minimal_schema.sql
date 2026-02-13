@@ -43,14 +43,18 @@ EXCEPTION WHEN unique_violation THEN
     RAISE NOTICE 'Skipping ccxt_id update due to constraint conflict';
 END $$;
 
--- Make columns NOT NULL after ensuring values exist
+-- Make columns NOT NULL only if no NULL values exist
 DO $$
+DECLARE
+    null_count INTEGER;
 BEGIN
-    IF EXISTS (SELECT 1 FROM exchanges WHERE display_name IS NOT NULL LIMIT 1) THEN
+    SELECT COUNT(*) INTO null_count FROM exchanges WHERE display_name IS NULL LIMIT 1;
+    IF null_count = 0 THEN
         ALTER TABLE exchanges ALTER COLUMN display_name SET NOT NULL;
     END IF;
     
-    IF EXISTS (SELECT 1 FROM exchanges WHERE ccxt_id IS NOT NULL LIMIT 1) THEN
+    SELECT COUNT(*) INTO null_count FROM exchanges WHERE ccxt_id IS NULL LIMIT 1;
+    IF null_count = 0 THEN
         ALTER TABLE exchanges ALTER COLUMN ccxt_id SET NOT NULL;
     END IF;
 END $$;
