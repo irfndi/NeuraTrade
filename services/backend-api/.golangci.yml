@@ -1,6 +1,6 @@
 # golangci-lint configuration for NeuraTrade
 # This configuration establishes a quality baseline for the codebase.
-# 
+#
 # Baseline Rationale:
 # - errcheck: Critical for catching unchecked errors that could cause silent failures
 # - govet: Essential for catching common programming mistakes
