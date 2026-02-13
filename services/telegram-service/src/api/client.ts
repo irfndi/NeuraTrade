@@ -276,11 +276,14 @@ export class BackendApiClient {
     userId: string,
     modelId: string,
   ): Promise<AIModelSelectResponse> {
-    return this.fetch<AIModelSelectResponse>(API_ENDPOINTS.SELECT_AI_MODEL(userId), {
-      method: "POST",
-      body: JSON.stringify({ model_id: modelId }),
-      requireAdmin: true,
-    });
+    return this.fetch<AIModelSelectResponse>(
+      API_ENDPOINTS.SELECT_AI_MODEL(userId),
+      {
+        method: "POST",
+        body: JSON.stringify({ model_id: modelId }),
+        requireAdmin: true,
+      },
+    );
   }
 
   async getAIStatus(userId: string): Promise<AIStatusResponse> {

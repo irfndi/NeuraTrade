@@ -63,8 +63,8 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
     if (args.length === 0 || !args[0]) {
       await ctx.reply(
         "Usage: /ai_select <model_id>\n" +
-        "Example: /ai_select gpt-4-turbo\n\n" +
-        "Use /ai_models to see available models.",
+          "Example: /ai_select gpt-4-turbo\n\n" +
+          "Use /ai_models to see available models.",
       );
       return;
     }
@@ -77,15 +77,15 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       if (!result || !result.success) {
         await ctx.reply(
           `Failed to select model "${modelId}". ` +
-          "Make sure the model ID is correct.",
+            "Make sure the model ID is correct.",
         );
         return;
       }
 
       await ctx.reply(
         `✅ AI model selected: <b>${result.model?.display_name || modelId}</b>\n` +
-        `Provider: ${result.model?.provider || "Unknown"}\n` +
-        `Cost: $${result.model?.cost || "N/A"} per 1M tokens`,
+          `Provider: ${result.model?.provider || "Unknown"}\n` +
+          `Cost: $${result.model?.cost || "N/A"} per 1M tokens`,
         { parse_mode: "HTML" },
       );
     } catch {
@@ -107,7 +107,9 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       const result = await api.getAIStatus(String(userId));
 
       if (!result) {
-        await ctx.reply("No AI configuration found. Use /ai_models to select a model.");
+        await ctx.reply(
+          "No AI configuration found. Use /ai_models to select a model.",
+        );
         return;
       }
 
@@ -168,7 +170,9 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       });
 
       if (!result || !result.model) {
-        await ctx.reply("No suitable model found for the specified requirements.");
+        await ctx.reply(
+          "No suitable model found for the specified requirements.",
+        );
         return;
       }
 
