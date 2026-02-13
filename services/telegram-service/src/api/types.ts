@@ -223,43 +223,6 @@ export interface DoctorResponse {
 }
 
 /**
- * Request body for binding operator profile to Telegram chat.
- * Sent via POST /api/v1/telegram/internal/operators/bind
- */
-export interface BindOperatorProfileRequest {
-  readonly chatId: string;
-  readonly telegramUserId: string;
-  readonly telegramUsername: string | null;
-  readonly authCode: string;
-}
-
-/**
- * Response from operator profile binding endpoint.
- */
-export interface BindOperatorProfileResponse {
-  readonly success: boolean;
-  readonly operatorName?: string;
-  readonly error?: string;
-}
-
-/**
- * Request body for unbinding operator profile from Telegram chat.
- * Sent via POST /api/v1/telegram/internal/operators/unbind
- */
-export interface UnbindOperatorProfileRequest {
-  readonly chatId: string;
-  readonly telegramUserId: string;
-}
-
-/**
- * Response from operator profile unbinding endpoint.
- */
-export interface UnbindOperatorProfileResponse {
-  readonly success: boolean;
-  readonly error?: string;
-}
-
-/**
  * Webhook update response.
  */
 export interface WebhookUpdateResponse {
@@ -301,6 +264,4 @@ export const API_ENDPOINTS = {
     `/api/v1/telegram/internal/logs?chat_id=${encodeURIComponent(chatId)}&limit=${limit}`,
   GET_DOCTOR: (chatId: string) =>
     `/api/v1/telegram/internal/doctor?chat_id=${encodeURIComponent(chatId)}`,
-  BIND_OPERATOR: "/api/v1/telegram/internal/operators/bind",
-  UNBIND_OPERATOR: "/api/v1/telegram/internal/operators/unbind",
 } as const;

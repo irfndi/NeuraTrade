@@ -68,11 +68,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
-	// Initialize exchange reliability tracker
-	tracker := services.NewExchangeReliabilityTracker(nil, redis.Client)
-
 	// Initialize health handler
-	healthHandler := handlers.NewHealthHandler(db, redis, ccxtService.GetServiceURL(), cacheAnalyticsService, tracker)
+	healthHandler := handlers.NewHealthHandler(db, redis, ccxtService.GetServiceURL(), cacheAnalyticsService)
 
 	// Health check endpoints with telemetry
 	healthGroup := router.Group("/")
@@ -250,8 +247,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegram.POST("/internal/wallets/remove", telegramInternalHandler.RemoveWallet)
 			telegram.GET("/internal/wallets", telegramInternalHandler.GetWallets)
 			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
-			telegram.POST("/internal/operators/bind", telegramInternalHandler.BindOperatorProfile)
-			telegram.POST("/internal/operators/unbind", telegramInternalHandler.UnbindOperatorProfile)
 
 			telegramInternal := telegram.Group("/internal")
 			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
@@ -308,11 +303,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			trading.GET("/positions", tradingHandler.ListPositions)
 			trading.GET("/positions/snapshot", tradingHandler.GetPositionSnapshot)
 			trading.GET("/positions/:position_id", tradingHandler.GetPosition)
-
-			// Polymarket CLOB order execution (neura-qts, neura-1wi)
-			trading.POST("/polymarket/place_order", tradingHandler.PlacePolymarketOrder)
-			trading.DELETE("/polymarket/orders/:order_id", tradingHandler.CancelPolymarketOrder)
-			trading.GET("/polymarket/orderbook/:token_id", tradingHandler.GetPolymarketOrderBook)
 		}
 
 		budget := v1.Group("/budget")

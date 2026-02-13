@@ -31,21 +31,12 @@ import (
 // It delegates execution to the run function and handles exit codes based on success or failure.
 func main() {
 	// Check for CLI commands
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "seed":
-			if err := runSeeder(); err != nil {
-				fmt.Fprintf(os.Stderr, "Seeding failed: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		case "bootstrap":
-			if err := NewBootstrapCommand().Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "Bootstrap failed: %v\n", err)
-				os.Exit(1)
-			}
-			return
+	if len(os.Args) > 1 && os.Args[1] == "seed" {
+		if err := runSeeder(); err != nil {
+			fmt.Fprintf(os.Stderr, "Seeding failed: %v\n", err)
+			os.Exit(1)
 		}
+		return
 	}
 
 	if err := run(); err != nil {
@@ -399,8 +390,7 @@ func runSQLiteBootstrapMode(cfg *config.Config, logger logging.Logger, logrusLog
 	}
 	router.Use(gin.Recovery())
 
-	reliabilityTracker := services.NewExchangeReliabilityTracker(nil, redisClient.Client)
-	healthHandler := apiHandlers.NewHealthHandler(sqliteDB, redisClient, cfg.CCXT.ServiceURL, cacheAnalyticsService, reliabilityTracker)
+	healthHandler := apiHandlers.NewHealthHandler(sqliteDB, redisClient, cfg.CCXT.ServiceURL, cacheAnalyticsService)
 	healthGroup := router.Group("/")
 	healthGroup.Use(middleware.HealthCheckTelemetryMiddleware())
 	{

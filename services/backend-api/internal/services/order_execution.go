@@ -10,6 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// OrderExecutionConfig holds configuration for the order execution service.
 type OrderExecutionConfig struct {
 	BaseURL    string
 	APIKey     string
@@ -25,10 +26,12 @@ func DefaultOrderExecutionConfig() OrderExecutionConfig {
 	}
 }
 
+// OrderExecutionService handles order placement via Polymarket CLOB.
 type OrderExecutionService struct {
 	client *polymarket.CLOBClient
 }
 
+// NewOrderExecutionService creates a new order execution service.
 func NewOrderExecutionService(cfg OrderExecutionConfig) *OrderExecutionService {
 	opts := []polymarket.CLOBOption{
 		polymarket.WithCLOBTimeout(cfg.Timeout),

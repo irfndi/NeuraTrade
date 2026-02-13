@@ -15,11 +15,13 @@ const (
 	pauseKey           = "risk:paused:%s"
 )
 
+// ConsecutiveLossConfig holds configuration for the consecutive loss tracker.
 type ConsecutiveLossConfig struct {
 	MaxConsecutiveLosses int
 	PauseDuration        time.Duration
 }
 
+// DefaultConsecutiveLossConfig returns the default configuration for tracking consecutive losses.
 func DefaultConsecutiveLossConfig() ConsecutiveLossConfig {
 	return ConsecutiveLossConfig{
 		MaxConsecutiveLosses: 3,
@@ -27,6 +29,7 @@ func DefaultConsecutiveLossConfig() ConsecutiveLossConfig {
 	}
 }
 
+// ConsecutiveLossTracker tracks consecutive trading losses and enforces pause periods.
 type ConsecutiveLossTracker struct {
 	redis  *redis.Client
 	config ConsecutiveLossConfig
