@@ -130,7 +130,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
-	tradingHandler := handlers.NewTradingHandler(db)
+
+	// Initialize order execution service (Polymarket CLOB)
+	orderExecConfig := services.OrderExecutionConfig{
+		BaseURL:    getEnvOrDefault("POLYMARKET_CLOB_URL", "https://clob.polymarket.com"),
+		APIKey:     os.Getenv("POLYMARKET_API_KEY"),
+		APISecret:  os.Getenv("POLYMARKET_API_SECRET"),
+		WalletAddr: os.Getenv("POLYMARKET_WALLET_ADDRESS"),
+	}
+	orderExecutionService := services.NewOrderExecutionService(orderExecConfig)
+	tradingHandler := handlers.NewTradingHandler(db, orderExecutionService)
 
 	// Budget handler - configurable via environment variables with defaults from migration 054
 	dailyBudgetStr := getEnvOrDefault("AI_DAILY_BUDGET", "10.00")
@@ -292,6 +301,11 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			trading.GET("/positions", tradingHandler.ListPositions)
 			trading.GET("/positions/snapshot", tradingHandler.GetPositionSnapshot)
 			trading.GET("/positions/:position_id", tradingHandler.GetPosition)
+
+			// Polymarket CLOB order execution (neura-qts, neura-1wi)
+			trading.POST("/polymarket/place_order", tradingHandler.PlacePolymarketOrder)
+			trading.DELETE("/polymarket/orders/:order_id", tradingHandler.CancelPolymarketOrder)
+			trading.GET("/polymarket/orderbook/:token_id", tradingHandler.GetPolymarketOrderBook)
 		}
 
 		budget := v1.Group("/budget")
