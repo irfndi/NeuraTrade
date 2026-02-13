@@ -157,7 +157,6 @@ func (s *EventDrivenQuestSystem) processEvent(event *QuestEvent) {
 			continue
 		}
 
-		// Access control: verify event is for the correct user
 		if trigger.ChatID != "" && trigger.ChatID != event.ChatID {
 			continue
 		}
@@ -170,7 +169,30 @@ func (s *EventDrivenQuestSystem) processEvent(event *QuestEvent) {
 			continue
 		}
 
-		s.executeTriggerLocked(triggerID, trigger, event)
+		definitionID := trigger.DefinitionID
+		chatID := event.ChatID
+
+		trigger.TriggerCount++
+		now := time.Now().UTC()
+		trigger.LastTrigger = &now
+
+		s.mu.Unlock()
+
+		quest, err := s.engine.CreateQuest(definitionID, chatID)
+		if err != nil {
+			log.Printf("Failed to create quest from trigger %s: %v", triggerID, err)
+			s.mu.Lock()
+			continue
+		}
+
+		quest.Status = QuestStatusActive
+		quest.Metadata["event_id"] = event.ID
+		quest.Metadata["event_type"] = string(event.Type)
+		quest.Metadata["trigger_id"] = triggerID
+
+		log.Printf("Quest %s triggered by event %s (type: %s)", quest.ID, event.ID, event.Type)
+
+		s.mu.Lock()
 	}
 }
 
