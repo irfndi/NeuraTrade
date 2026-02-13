@@ -241,26 +241,6 @@ func (s *EventDrivenQuestSystem) evaluateCondition(condition *TriggerCondition, 
 	}
 }
 
-func (s *EventDrivenQuestSystem) executeTriggerLocked(triggerID string, trigger *QuestTrigger, event *QuestEvent) {
-	quest, err := s.engine.CreateQuest(trigger.DefinitionID, event.ChatID)
-	if err != nil {
-		log.Printf("Failed to create quest from trigger %s: %v", triggerID, err)
-		return
-	}
-
-	quest.Status = QuestStatusActive
-	quest.Metadata["event_id"] = event.ID
-	quest.Metadata["event_type"] = string(event.Type)
-	quest.Metadata["trigger_id"] = triggerID
-
-	// Lock is already held by processEvent caller
-	trigger.TriggerCount++
-	now := time.Now().UTC()
-	trigger.LastTrigger = &now
-
-	log.Printf("Quest %s triggered by event %s (type: %s)", quest.ID, event.ID, event.Type)
-}
-
 func (s *EventDrivenQuestSystem) CreatePriceMovementTrigger(chatID string, threshold float64) string {
 	triggerID := fmt.Sprintf("price_movement_%s_%d", chatID, time.Now().UnixNano())
 	trigger := &QuestTrigger{
