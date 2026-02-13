@@ -463,12 +463,16 @@ func (s *MultiIndicatorStack) analyzeBollingerBands(prices, upper, middle, lower
 		return SignalSell, decimal.NewFromFloat(0.75)
 	}
 
+	if bandWidth.IsZero() {
+		return SignalHold, decimal.NewFromFloat(0.5)
+	}
+
 	position := price.Sub(l).Div(bandWidth)
 	if position.GreaterThan(decimal.NewFromFloat(0.7)) {
-		return SignalBuy, decimal.NewFromFloat(0.55)
+		return SignalSell, decimal.NewFromFloat(0.55)
 	}
 	if position.LessThan(decimal.NewFromFloat(0.3)) {
-		return SignalSell, decimal.NewFromFloat(0.55)
+		return SignalBuy, decimal.NewFromFloat(0.55)
 	}
 
 	return SignalHold, decimal.NewFromFloat(0.5)
