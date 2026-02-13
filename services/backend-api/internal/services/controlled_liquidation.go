@@ -605,7 +605,9 @@ func randomString(n int) string {
 	rng := rand.Reader
 	for i := range b {
 		randByte := make([]byte, 1)
-		rng.Read(randByte)
+		if _, err := rng.Read(randByte); err != nil {
+			randByte[0] = byte(i)
+		}
 		b[i] = letters[int(randByte[0])%len(letters)]
 	}
 	return string(b)

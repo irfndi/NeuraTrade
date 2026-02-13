@@ -462,6 +462,8 @@ func (m *KillSwitchMonitor) checkConditions() {
 		}
 
 		if triggered {
+			// Must unlock before calling Trigger as it acquires the lock internally
+			m.mu.Unlock()
 			if err := m.Trigger(condition.Trigger, "system", fmt.Sprintf("Condition %s (%s) threshold exceeded", condition.ID, condition.Name)); err != nil {
 				m.logger.WithFields(map[string]interface{}{
 					"condition_id": condition.ID,
@@ -527,6 +529,8 @@ func (m *KillSwitchMonitor) checkAutoRecovery() {
 	}
 
 	if time.Now().After(*m.state.AutoRecoverAt) {
+		// Must unlock before calling Recover as it acquires the lock internally
+		m.mu.Unlock()
 		if err := m.Recover("auto_recovery"); err != nil {
 			m.logger.WithError(err).Error("Failed to auto-recover kill switch")
 		}
