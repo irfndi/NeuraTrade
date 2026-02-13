@@ -150,12 +150,12 @@ func (m *MockCCXTService) RefreshExchanges(ctx context.Context) (*ccxt.ExchangeM
 	return args.Get(0).(*ccxt.ExchangeManagementResponse), args.Error(1)
 }
 
-func (m *MockCCXTService) CalculateOrderBookMetrics(resp *ccxt.OrderBookResponse) *ccxt.OrderBookMetrics {
-	args := m.Called(resp)
+func (m *MockCCXTService) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*ccxt.OrderBookMetrics, error) {
+	args := m.Called(ctx, exchange, symbol, limit)
 	if args.Get(0) == nil {
-		return nil
+		return nil, args.Error(1)
 	}
-	return args.Get(0).(*ccxt.OrderBookMetrics)
+	return args.Get(0).(*ccxt.OrderBookMetrics), args.Error(1)
 }
 
 func (m *MockCCXTService) AddExchange(ctx context.Context, exchange string) (*ccxt.ExchangeManagementResponse, error) {
