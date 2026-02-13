@@ -1,9 +1,5 @@
 import { test, expect, describe, mock } from "bun:test";
-import {
-  withRetry,
-  RetryResult,
-  DEFAULT_RETRY_CONFIG,
-} from "./retry";
+import { withRetry, RetryResult, DEFAULT_RETRY_CONFIG } from "./retry";
 import { TelegramErrorCode, TelegramErrorInfo } from "./telegram-errors";
 
 // Mock error classifier for testing

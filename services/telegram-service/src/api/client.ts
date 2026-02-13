@@ -269,30 +269,36 @@ export class BackendApiClient {
     telegramUsername: string | null;
     authCode: string;
   }): Promise<BindOperatorProfileResponse> {
-    return this.fetch<BindOperatorProfileResponse>(API_ENDPOINTS.BIND_OPERATOR, {
-      method: "POST",
-      body: JSON.stringify({
-        chat_id: request.chatId,
-        telegram_user_id: request.telegramUserId,
-        telegram_username: request.telegramUsername,
-        auth_code: request.authCode,
-      }),
-      requireAdmin: true,
-    });
+    return this.fetch<BindOperatorProfileResponse>(
+      API_ENDPOINTS.BIND_OPERATOR,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          chat_id: request.chatId,
+          telegram_user_id: request.telegramUserId,
+          telegram_username: request.telegramUsername,
+          auth_code: request.authCode,
+        }),
+        requireAdmin: true,
+      },
+    );
   }
 
   async unbindOperatorProfile(request: {
     chatId: string;
     telegramUserId: string;
   }): Promise<UnbindOperatorProfileResponse> {
-    return this.fetch<UnbindOperatorProfileResponse>(API_ENDPOINTS.UNBIND_OPERATOR, {
-      method: "POST",
-      body: JSON.stringify({
-        chat_id: request.chatId,
-        telegram_user_id: request.telegramUserId,
-      }),
-      requireAdmin: true,
-    });
+    return this.fetch<UnbindOperatorProfileResponse>(
+      API_ENDPOINTS.UNBIND_OPERATOR,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          chat_id: request.chatId,
+          telegram_user_id: request.telegramUserId,
+        }),
+        requireAdmin: true,
+      },
+    );
   }
 
   private async fetch<T>(
