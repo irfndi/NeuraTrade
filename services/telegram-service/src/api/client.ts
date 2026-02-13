@@ -16,6 +16,11 @@ import type {
   LogsResponse,
   DoctorResponse,
   ApiErrorResponse,
+  AIModelsResponse,
+  AIModelSelectResponse,
+  AIStatusResponse,
+  AIRouteRequest,
+  AIRouteResponse,
 } from "./types";
 import { API_ENDPOINTS } from "./types";
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./rate-limiter";
@@ -257,6 +262,40 @@ export class BackendApiClient {
 
   async getDoctor(chatId: string): Promise<DoctorResponse> {
     return this.fetch<DoctorResponse>(API_ENDPOINTS.GET_DOCTOR(chatId), {
+      requireAdmin: true,
+    });
+  }
+
+  async getAIModels(): Promise<AIModelsResponse> {
+    return this.fetch<AIModelsResponse>(API_ENDPOINTS.GET_AI_MODELS, {
+      requireAdmin: true,
+    });
+  }
+
+  async selectAIModel(
+    userId: string,
+    modelId: string,
+  ): Promise<AIModelSelectResponse> {
+    return this.fetch<AIModelSelectResponse>(
+      API_ENDPOINTS.SELECT_AI_MODEL(userId),
+      {
+        method: "POST",
+        body: JSON.stringify({ model_id: modelId }),
+        requireAdmin: true,
+      },
+    );
+  }
+
+  async getAIStatus(userId: string): Promise<AIStatusResponse> {
+    return this.fetch<AIStatusResponse>(API_ENDPOINTS.GET_AI_STATUS(userId), {
+      requireAdmin: true,
+    });
+  }
+
+  async routeAIModel(request: AIRouteRequest): Promise<AIRouteResponse> {
+    return this.fetch<AIRouteResponse>(API_ENDPOINTS.ROUTE_AI_MODEL, {
+      method: "POST",
+      body: JSON.stringify(request),
       requireAdmin: true,
     });
   }

@@ -1,0 +1,238 @@
+package llm
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/irfndi/neuratrade/internal/skill"
+)
+
+func BuildToolDefinitions(skills []*skill.Skill) []ToolDefinition {
+	var tools []ToolDefinition
+
+	for _, s := range skills {
+		params := s.Parameters
+		if params == nil {
+			params = make(map[string]skill.Param)
+		}
+
+		properties := make(map[string]interface{})
+		required := []string{}
+
+		for name, param := range params {
+			prop := map[string]interface{}{
+				"type":        param.Type,
+				"description": param.Description,
+			}
+
+			if len(param.Enum) > 0 {
+				prop["enum"] = param.Enum
+			}
+
+			if param.Default != nil {
+				prop["default"] = param.Default
+			}
+
+			properties[name] = prop
+
+			if param.Required {
+				required = append(required, name)
+			}
+		}
+
+		schema := map[string]interface{}{
+			"type":       "object",
+			"properties": properties,
+		}
+
+		if len(required) > 0 {
+			schema["required"] = required
+		}
+
+		tools = append(tools, ToolDefinition{
+			Type: "function",
+			Function: FunctionDefinition{
+				Name:        s.ID,
+				Description: s.Description,
+				Parameters:  schema,
+			},
+		})
+	}
+
+	return tools
+}
+
+func BuildToolDefinition(name, description string, params map[string]FunctionParam, required []string) ToolDefinition {
+	properties := make(map[string]interface{})
+
+	for pname, param := range params {
+		prop := map[string]interface{}{
+			"type":        param.Type,
+			"description": param.Description,
+		}
+
+		if len(param.Enum) > 0 {
+			prop["enum"] = param.Enum
+		}
+
+		if param.Default != nil {
+			prop["default"] = param.Default
+		}
+
+		properties[pname] = prop
+	}
+
+	schema := map[string]interface{}{
+		"type":       "object",
+		"properties": properties,
+	}
+
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+
+	return ToolDefinition{
+		Type: "function",
+		Function: FunctionDefinition{
+			Name:        name,
+			Description: description,
+			Parameters:  schema,
+		},
+	}
+}
+
+type FunctionParam struct {
+	Type        string      `json:"type"`
+	Description string      `json:"description"`
+	Required    bool        `json:"required"`
+	Default     interface{} `json:"default,omitempty"`
+	Enum        []string    `json:"enum,omitempty"`
+}
+
+type JSONSchema struct {
+	Type       string                 `json:"type"`
+	Properties map[string]interface{} `json:"properties,omitempty"`
+	Required   []string               `json:"required,omitempty"`
+}
+
+func BuildJSONResponseFormat(schema *JSONSchema) *ResponseFormat {
+	if schema == nil {
+		return &ResponseFormat{Type: "json_object"}
+	}
+
+	return &ResponseFormat{
+		Type: "json_schema",
+		JSONSchema: map[string]interface{}{
+			"name":   "response",
+			"strict": true,
+			"schema": schema,
+		},
+	}
+}
+
+func ParseStructuredOutput[T any](resp *CompletionResponse) (T, error) {
+	var result T
+
+	if resp == nil || resp.Message.Content == "" {
+		return result, fmt.Errorf("empty response")
+	}
+
+	if err := json.Unmarshal([]byte(resp.Message.Content), &result); err != nil {
+		return result, fmt.Errorf("failed to parse structured output: %w", err)
+	}
+
+	return result, nil
+}
+
+func ParseToolCallArguments[T any](tc ToolCall) (T, error) {
+	var result T
+
+	if len(tc.Arguments) == 0 {
+		return result, fmt.Errorf("empty arguments")
+	}
+
+	if err := json.Unmarshal(tc.Arguments, &result); err != nil {
+		return result, fmt.Errorf("failed to parse tool call arguments: %w", err)
+	}
+
+	return result, nil
+}
+
+func BuildSystemPrompt(skills []*skill.Skill, context string) string {
+	prompt := "You are an AI trading assistant with access to the following tools:\n\n"
+
+	for _, s := range skills {
+		prompt += fmt.Sprintf("- **%s**: %s\n", s.ID, s.Description)
+	}
+
+	if context != "" {
+		prompt += "\n\n## Context\n\n" + context
+	}
+
+	prompt += "\n\nUse the available tools to accomplish the user's request. Always think step by step."
+
+	return prompt
+}
+
+func BuildConversationHistory(messages []Message, maxTokens int) []Message {
+	if len(messages) <= 10 {
+		return messages
+	}
+
+	result := messages[:1]
+	remaining := messages[1:]
+
+	tokenCount := estimateTokens(result[0].Content)
+
+	for i := len(remaining) - 1; i >= 0 && tokenCount < maxTokens-1000; i-- {
+		msg := remaining[i]
+		tokenCount += estimateTokens(msg.Content)
+		result = append([]Message{msg}, result...)
+	}
+
+	return result
+}
+
+func estimateTokens(text string) int {
+	return len(text) / 4
+}
+
+type ConversationBuilder struct {
+	messages []Message
+}
+
+func NewConversationBuilder(systemPrompt string) *ConversationBuilder {
+	return &ConversationBuilder{
+		messages: []Message{
+			{Role: RoleSystem, Content: systemPrompt},
+		},
+	}
+}
+
+func (b *ConversationBuilder) AddUser(content string) *ConversationBuilder {
+	b.messages = append(b.messages, Message{Role: RoleUser, Content: content})
+	return b
+}
+
+func (b *ConversationBuilder) AddAssistant(content string) *ConversationBuilder {
+	b.messages = append(b.messages, Message{Role: RoleAssistant, Content: content})
+	return b
+}
+
+func (b *ConversationBuilder) AddToolResult(toolID, content string) *ConversationBuilder {
+	b.messages = append(b.messages, Message{Role: RoleTool, Content: content, ToolID: toolID})
+	return b
+}
+
+func (b *ConversationBuilder) AddToolCall(toolCall ToolCall, content string) *ConversationBuilder {
+	b.messages = append(b.messages, Message{
+		Role:     RoleAssistant,
+		Content:  content,
+		ToolCall: &toolCall,
+	})
+	return b
+}
+
+func (b *ConversationBuilder) Build() []Message {
+	return b.messages
+}
