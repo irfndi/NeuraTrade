@@ -15,6 +15,7 @@ type User struct {
 	PasswordHash     string    `json:"-" db:"password_hash"`
 	TelegramChatID   *string   `json:"telegram_chat_id" db:"telegram_chat_id"`
 	SubscriptionTier string    `json:"subscription_tier" db:"subscription_tier"`
+	SelectedAIModel  *string   `json:"selected_ai_model" db:"selected_ai_model"`
 	CreatedAt        time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at" db:"updated_at"`
 }
@@ -48,6 +49,7 @@ type UserRequest struct {
 	Password         string `json:"password" binding:"required,min=8"`
 	TelegramChatID   string `json:"telegram_chat_id"`
 	SubscriptionTier string `json:"subscription_tier"`
+	SelectedAIModel  string `json:"selected_ai_model"`
 }
 
 // UserResponse represents the public user information returned by the API.
@@ -56,6 +58,7 @@ type UserResponse struct {
 	Email            string    `json:"email"`
 	TelegramChatID   string    `json:"telegram_chat_id"`
 	SubscriptionTier string    `json:"subscription_tier"`
+	SelectedAIModel  string    `json:"selected_ai_model"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 
@@ -66,4 +69,24 @@ type AlertConditions struct {
 	VolumeThreshold *decimal.Decimal `json:"volume_threshold,omitempty"`
 	Symbol          string           `json:"symbol,omitempty"`
 	Exchange        string           `json:"exchange,omitempty"`
+}
+
+// ToUserResponse converts a User to UserResponse
+func (u *User) ToUserResponse() UserResponse {
+	resp := UserResponse{
+		ID:               u.ID,
+		Email:            u.Email,
+		SubscriptionTier: u.SubscriptionTier,
+		CreatedAt:        u.CreatedAt,
+	}
+
+	if u.TelegramChatID != nil {
+		resp.TelegramChatID = *u.TelegramChatID
+	}
+
+	if u.SelectedAIModel != nil {
+		resp.SelectedAIModel = *u.SelectedAIModel
+	}
+
+	return resp
 }
