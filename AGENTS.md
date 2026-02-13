@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-13 09:04 Asia/Jakarta
-**Commit:** 98dc281
+**Generated:** 2026-02-13 10:35 Asia/Jakarta
+**Commit:** 3365e0c
 **Branch:** development
 
 ## OVERVIEW
@@ -84,11 +84,10 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Ready to Work (No Blockers)
-- `neura-ydp`: Operator identity encryption (Argon2)
-- `neura-l1l`: Balance/funding validation
+- `neura-06k`: Health checks for Redis, SQL storage, exchange bridges
 - `neura-xxy`: WebSocket market data subscription
 - `neura-qts`: CLOB API wrapper (order execution)
 - `neura-7et`: Build prompt builder from skill.md + context
@@ -97,8 +96,11 @@ make dev-down
 - `neura-bol`: Consecutive-loss pause
 - `neura-lue`: Expose readiness endpoints
 - `neura-we2`: Scalping skill.md codification
+- `neura-1wi`: FOK order execution
 
 ### Recently Completed (✓)
+- ✓ `neura-ydp`: Operator identity encryption (Argon2)
+- ✓ `neura-l1l`: Balance/funding validation
 - ✓ `neura-yzv`: CLI bootstrap command
 - ✓ `neura-5of`: Bind local operator profile to Telegram chat
 - ✓ `neura-aav`: Connectivity checks for all configured providers
@@ -132,14 +134,6 @@ make dev-down
 - ✓ `neura-94c`: /status budget display
 - ✓ `neura-l2z`: place_order tool endpoint
 - ✓ `neura-wz7`: cancel_order tool endpoint
-- ✓ `neura-hgk`: /begin and /pause handlers
-- ✓ `neura-ik7`: /summary and /performance handlers
-- ✓ `neura-ilw`: /liquidate and /liquidate_all handlers
-- ✓ `neura-09y`: Wallet management commands
-- ✓ `neura-4gk`: Quest and monitoring commands
-- ✓ `neura-1p0`: /doctor diagnostic handler
-- ✓ `neura-9ai`: Intrusion detection
-- ✓ `neura-32w`: Fund with minimal capital (USDC)
 
 ### Infrastructure & DevOps (Blocked)
 - `neura-354`: CI/CD pipeline setup
@@ -164,7 +158,6 @@ make dev-down
 - `neura-cd1`: Arbitrage trigger detection
 - `neura-sa4`: Order book imbalance detection
 - `neura-a7r`: Tight stop-loss execution
-- `neura-1wi`: FOK order execution
 
 ### Risk Management (Blocked)
 - `neura-8y8`: Emergency rollbacks

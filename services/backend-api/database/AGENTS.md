@@ -33,7 +33,7 @@
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Recently Completed (✓)
 - ✓ `neura-5of`: Telegram profile binding schema (operator_identities table)
@@ -44,6 +44,7 @@
 - ✓ `neura-9ai`: Intrusion detection audit log schema
 - ✓ `neura-2n4`: Quest state persistence schema (quests, checkpoints, progress tables)
 - ✓ `neura-32w`: Fund with minimal capital schema (USDC)
+- ✓ `neura-06k`: Health checks schema
 
 ### Schema Evolution (Blocked)
 - `neura-zn8c`: Replace in-memory trading handler state with persistent storage (new tables)

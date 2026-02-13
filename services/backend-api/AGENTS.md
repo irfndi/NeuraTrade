@@ -52,17 +52,18 @@ golangci-lint run
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Ready to Work (No Blockers)
-- `neura-ydp`: Operator identity encryption (Argon2)
-- `neura-l1l`: Balance/funding validation
+- `neura-06k`: Health checks for Redis, SQL storage, exchange bridges
 - `neura-xxy`: WebSocket market data subscription
 - `neura-qts`: CLOB API wrapper (order execution)
 - `neura-7et`: Build prompt builder from skill.md + context
 - `neura-r1d`: Progressive disclosure system
 
 ### Recently Completed (✓)
+- ✓ `neura-ydp`: Operator identity encryption (Argon2)
+- ✓ `neura-l1l`: Balance/funding validation
 - ✓ `neura-yzv`: CLI bootstrap command
 - ✓ `neura-5of`: Bind local operator profile to Telegram chat
 - ✓ `neura-aav`: Connectivity checks for all configured providers
