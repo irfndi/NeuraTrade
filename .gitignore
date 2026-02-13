@@ -174,3 +174,6 @@ mcp.json
 
 # Built binaries
 services/backend-api/server
+
+# Beads (issue tracking) runtime files
+.beads/daemon-error
