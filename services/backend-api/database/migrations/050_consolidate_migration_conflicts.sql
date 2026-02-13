@@ -62,22 +62,33 @@ BEGIN
         );
 
         -- Create view for funding arbitrage opportunities aligned with current table schema
-        CREATE OR REPLACE VIEW v_funding_arbitrage_opportunities AS
-        SELECT 
-            fao.id,
-            (fao.base_currency || '/' || fao.quote_currency) AS symbol,
-            fao.base_currency,
-            fao.quote_currency,
-            fao.long_exchange,
-            fao.short_exchange,
-            fao.long_funding_rate,
-            fao.short_funding_rate,
-            fao.net_funding_rate,
-            fao.detected_at,
-            fao.expires_at,
-            fao.is_active
-        FROM funding_arbitrage_opportunities fao
-        WHERE fao.is_active = true AND (fao.expires_at IS NULL OR fao.expires_at > NOW());
+        -- Only create if the required columns exist
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'funding_arbitrage_opportunities' AND column_name = 'base_currency'
+        ) AND EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'funding_arbitrage_opportunities' AND column_name = 'quote_currency'
+        ) THEN
+            CREATE OR REPLACE VIEW v_funding_arbitrage_opportunities AS
+            SELECT 
+                fao.id,
+                (fao.base_currency || '/' || fao.quote_currency) AS symbol,
+                fao.base_currency,
+                fao.quote_currency,
+                fao.long_exchange,
+                fao.short_exchange,
+                fao.long_funding_rate,
+                fao.short_funding_rate,
+                fao.net_funding_rate,
+                fao.detected_at,
+                fao.expires_at,
+                fao.is_active
+            FROM funding_arbitrage_opportunities fao
+            WHERE fao.is_active = true AND (fao.expires_at IS NULL OR fao.expires_at > NOW());
+        ELSE
+            RAISE NOTICE 'Skipped v_funding_arbitrage_opportunities view - required columns not present';
+        END IF;
 
         -- Remove symbol column from funding_rates if it exists
         IF EXISTS (
@@ -373,10 +384,9 @@ BEGIN
 END $$;
 
 -- Add table comments for documentation
-COMMENT ON TABLE migration_status IS 'Tracks applied database migrations to prevent conflicts and duplicates';
-COMMENT ON COLUMN migration_status.migration_number IS 'Sequential migration number for ordering';
-COMMENT ON COLUMN migration_status.migration_name IS 'Unique migration file name or identifier';
-COMMENT ON COLUMN migration_status.description IS 'Human-readable description of what the migration does';
-COMMENT ON COLUMN migration_status.applied_at IS 'Timestamp when the migration was applied';
-COMMENT ON COLUMN migration_status.checksum IS 'Migration checksum or version identifier';
-COMMENT ON COLUMN migration_status.status IS 'Current status of the migration (applied, failed, rolled_back)';
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'migration_status') THEN
+        EXECUTE 'COMMENT ON TABLE migration_status IS ''Tracks applied database migrations to prevent conflicts and duplicates''';
+    END IF;
+END $$;

@@ -55,7 +55,7 @@ WITH duplicate_cte AS (
     WHERE ccxt_id IS NOT NULL
 )
 UPDATE exchanges 
-SET ccxt_id = ccxt_id || '_dup' || (rn - 1)
+SET ccxt_id = duplicate_cte.ccxt_id || '_dup' || (rn - 1)
 FROM duplicate_cte
 WHERE exchanges.id = duplicate_cte.id AND rn > 1;
 
