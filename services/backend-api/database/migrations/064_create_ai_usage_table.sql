@@ -1,6 +1,6 @@
 -- Migration: Create AI Usage Table for Cost Tracking
 -- Description: Creates table for tracking AI API usage and costs for budget enforcement
--- Version: 054
+-- Version: 064
 -- Date: 2026-02-12
 
 -- Create ai_usage table for cost tracking
@@ -207,7 +207,7 @@ ON CONFLICT (config_key) DO UPDATE SET
     updated_at = NOW();
 
 -- Migration completion record
-INSERT INTO schema_migrations (filename, checksum, applied_at) VALUES ('054_create_ai_usage_table.sql', 'checksum_054', NOW())
+INSERT INTO schema_migrations (filename, checksum, applied_at) VALUES ('064_create_ai_usage_table.sql', 'checksum_064', NOW())
 ON CONFLICT (filename) DO UPDATE SET 
     checksum = EXCLUDED.checksum,
     applied_at = NOW();
