@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -269,13 +270,13 @@ func TestTokenBucketRateLimiter_Concurrent(t *testing.T) {
 
 	// Concurrent requests
 	done := make(chan bool, 10)
-	successCount := 0
+	var successCount atomic.Int64
 
 	for i := 0; i < 10; i++ {
 		go func() {
 			for j := 0; j < 10; j++ {
 				if tb.TryWait("test", "endpoint") {
-					successCount++
+					successCount.Add(1)
 				}
 			}
 			done <- true
@@ -288,7 +289,7 @@ func TestTokenBucketRateLimiter_Concurrent(t *testing.T) {
 	}
 
 	// Exactly 100 requests should succeed (burst capacity)
-	assert.Equal(t, 100, successCount)
+	assert.Equal(t, int64(100), successCount.Load())
 }
 
 func TestMin(t *testing.T) {
