@@ -93,8 +93,7 @@ UPDATE exchanges e1 SET ccxt_id =
         WHEN (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id) > 0 
         THEN '_' || (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id)::text
         ELSE ''
-    END
-WHERE ccxt_id IS NULL OR ccxt_id = name;
+    END;
 
 -- Make required columns NOT NULL after updating
 DO $$
