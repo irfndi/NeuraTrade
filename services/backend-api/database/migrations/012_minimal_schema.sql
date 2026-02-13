@@ -4,7 +4,7 @@
 
 BEGIN;
 
--- Add missing columns to exchanges table (safe to run multiple times)
+-- Add missing columns to exchanges table
 ALTER TABLE exchanges 
 ADD COLUMN IF NOT EXISTS display_name VARCHAR(100),
 ADD COLUMN IF NOT EXISTS ccxt_id VARCHAR(50),
@@ -13,19 +13,7 @@ ADD COLUMN IF NOT EXISTS has_spot BOOLEAN DEFAULT true,
 ADD COLUMN IF NOT EXISTS has_futures BOOLEAN DEFAULT false,
 ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
 
--- Fix duplicate ccxt_id values FIRST before any other operations
-WITH duplicates AS (
-    SELECT id, ccxt_id, 
-           ROW_NUMBER() OVER (PARTITION BY ccxt_id ORDER BY id) as rn
-    FROM exchanges
-    WHERE ccxt_id IS NOT NULL
-)
-UPDATE exchanges 
-SET ccxt_id = duplicates.ccxt_id || '_dup' || (duplicates.rn - 1)
-FROM duplicates
-WHERE exchanges.id = duplicates.id AND duplicates.rn > 1;
-
--- Update display_name for rows where it's NULL
+-- Update display_name where NULL
 UPDATE exchanges 
 SET display_name = CASE 
     WHEN name IN ('binance', 'binance_us') THEN 'Binance'
@@ -40,22 +28,10 @@ SET display_name = CASE
 END
 WHERE display_name IS NULL AND name IS NOT NULL;
 
--- Update ccxt_id for rows where it's NULL
+-- Update ccxt_id where NULL
 UPDATE exchanges 
 SET ccxt_id = LOWER(name)
 WHERE ccxt_id IS NULL AND name IS NOT NULL;
-
--- Fix any remaining duplicate ccxt_id after the updates
-WITH duplicates2 AS (
-    SELECT id, ccxt_id, 
-           ROW_NUMBER() OVER (PARTITION BY ccxt_id ORDER BY id) as rn
-    FROM exchanges
-    WHERE ccxt_id IS NOT NULL
-)
-UPDATE exchanges 
-SET ccxt_id = duplicates2.ccxt_id || '_dup' || (duplicates2.rn - 1)
-FROM duplicates2
-WHERE exchanges.id = duplicates2.id AND duplicates2.rn > 1;
 
 -- Make columns NOT NULL after ensuring values exist
 DO $$

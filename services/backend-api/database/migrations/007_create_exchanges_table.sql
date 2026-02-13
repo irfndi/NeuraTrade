@@ -21,37 +21,31 @@ CREATE TABLE IF NOT EXISTS exchanges (
 -- Add missing columns if they don't exist (for existing tables)
 DO $$
 BEGIN
-    -- Add display_name column if it doesn't exist
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                    WHERE table_name = 'exchanges' AND column_name = 'display_name') THEN
         ALTER TABLE exchanges ADD COLUMN display_name VARCHAR(100);
     END IF;
     
-    -- Add ccxt_id column if it doesn't exist
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                    WHERE table_name = 'exchanges' AND column_name = 'ccxt_id') THEN
         ALTER TABLE exchanges ADD COLUMN ccxt_id VARCHAR(50);
     END IF;
     
-    -- Add status column if it doesn't exist
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                    WHERE table_name = 'exchanges' AND column_name = 'status') THEN
         ALTER TABLE exchanges ADD COLUMN status VARCHAR(20) DEFAULT 'active';
     END IF;
     
-    -- Add has_spot column if it doesn't exist
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                    WHERE table_name = 'exchanges' AND column_name = 'has_spot') THEN
         ALTER TABLE exchanges ADD COLUMN has_spot BOOLEAN DEFAULT true;
     END IF;
     
-    -- Add has_futures column if it doesn't exist
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                    WHERE table_name = 'exchanges' AND column_name = 'has_futures') THEN
         ALTER TABLE exchanges ADD COLUMN has_futures BOOLEAN DEFAULT false;
     END IF;
     
-    -- Add updated_at column if it doesn't exist
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                    WHERE table_name = 'exchanges' AND column_name = 'updated_at') THEN
         ALTER TABLE exchanges ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
@@ -61,20 +55,7 @@ END $$;
 -- Make api_url nullable
 ALTER TABLE exchanges ALTER COLUMN api_url DROP NOT NULL;
 
--- Fix duplicate ccxt_id values FIRST before any other operations
--- Handle any duplicates that may exist from previous migrations
-WITH duplicates AS (
-    SELECT id, ccxt_id, 
-           ROW_NUMBER() OVER (PARTITION BY ccxt_id ORDER BY id) as rn
-    FROM exchanges
-    WHERE ccxt_id IS NOT NULL
-)
-UPDATE exchanges 
-SET ccxt_id = duplicates.ccxt_id || '_dup' || (duplicates.rn - 1)
-FROM duplicates
-WHERE exchanges.id = duplicates.id AND duplicates.rn > 1;
-
--- Update display_name for rows where it's NULL
+-- Update display_name where NULL
 UPDATE exchanges 
 SET display_name = CASE 
     WHEN name IN ('binance', 'binance_us') THEN 'Binance'
@@ -89,32 +70,18 @@ SET display_name = CASE
 END
 WHERE display_name IS NULL AND name IS NOT NULL;
 
--- Update ccxt_id for rows where it's NULL - use LOWER(name) to avoid duplicates
+-- Update ccxt_id where NULL - use LOWER(name)
 UPDATE exchanges 
 SET ccxt_id = LOWER(name)
 WHERE ccxt_id IS NULL AND name IS NOT NULL;
 
--- Fix any remaining duplicate ccxt_id after the updates
-WITH duplicates2 AS (
-    SELECT id, ccxt_id, 
-           ROW_NUMBER() OVER (PARTITION BY ccxt_id ORDER BY id) as rn
-    FROM exchanges
-    WHERE ccxt_id IS NOT NULL
-)
-UPDATE exchanges 
-SET ccxt_id = duplicates2.ccxt_id || '_dup' || (duplicates2.rn - 1)
-FROM duplicates2
-WHERE exchanges.id = duplicates2.id AND duplicates2.rn > 1;
-
 -- Make columns NOT NULL after ensuring values exist
 DO $$
 BEGIN
-    -- Make display_name NOT NULL if column has values
     IF EXISTS (SELECT 1 FROM exchanges WHERE display_name IS NOT NULL LIMIT 1) THEN
         ALTER TABLE exchanges ALTER COLUMN display_name SET NOT NULL;
     END IF;
     
-    -- Make ccxt_id NOT NULL if column has values
     IF EXISTS (SELECT 1 FROM exchanges WHERE ccxt_id IS NOT NULL LIMIT 1) THEN
         ALTER TABLE exchanges ALTER COLUMN ccxt_id SET NOT NULL;
     END IF;
@@ -133,7 +100,7 @@ BEGIN
     END IF;
 END $$;
 
--- Insert initial exchanges data with all required fields
+-- Insert initial exchanges data if not exists
 INSERT INTO exchanges (name, display_name, ccxt_id, has_spot, has_futures, status) 
 SELECT * FROM (VALUES
     ('binance', 'Binance', 'binance', true, true, 'active'),
