@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -368,6 +369,12 @@ func (d *ArbitrageTriggerDetector) matchesRule(opp *models.FuturesArbitrageOppor
 		return false
 	}
 
+	// Check confidence threshold
+	confidence := d.calculateConfidence(opp)
+	if confidence < rule.MinConfidence {
+		return false
+	}
+
 	pairKey := fmt.Sprintf("%s:%s", opp.LongExchange, opp.ShortExchange)
 	for _, excluded := range rule.ExcludedPairs {
 		if excluded == pairKey {
@@ -476,8 +483,9 @@ func (d *ArbitrageTriggerDetector) storeTrigger(ctx context.Context, trigger *Ar
 
 	metadataJSON := "{}"
 	if trigger.Metadata != nil {
-		metadataJSON = fmt.Sprintf(`{"rule_id":"%s","opportunity_id":"%s"}`,
-			trigger.Metadata["rule_id"], trigger.Metadata["opportunity_id"])
+		if metadataBytes, err := json.Marshal(trigger.Metadata); err == nil {
+			metadataJSON = string(metadataBytes)
+		}
 	}
 
 	_, err := d.db.Exec(ctx, query,

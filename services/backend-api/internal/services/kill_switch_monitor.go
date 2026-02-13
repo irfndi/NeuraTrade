@@ -259,10 +259,13 @@ func (m *KillSwitchMonitor) Trigger(trigger KillSwitchTrigger, triggeredBy, reas
 		m.logger.WithError(err).Error("Failed to save kill switch state")
 	}
 
+	// Copy state for notification to avoid data race
+	stateCopy := *m.state
+
 	// Notify
 	if m.notifier != nil {
 		go func() {
-			if err := m.notifier.NotifyKillSwitchTriggered(context.Background(), m.state); err != nil {
+			if err := m.notifier.NotifyKillSwitchTriggered(context.Background(), &stateCopy); err != nil {
 				m.logger.WithError(err).Error("Failed to send kill switch notification")
 			}
 		}()
@@ -306,10 +309,13 @@ func (m *KillSwitchMonitor) Recover(recoveredBy string) error {
 		m.logger.WithError(err).Error("Failed to save kill switch state")
 	}
 
+	// Copy state for notification to avoid data race
+	stateCopy := *m.state
+
 	// Notify
 	if m.notifier != nil {
 		go func() {
-			if err := m.notifier.NotifyKillSwitchRecovered(context.Background(), m.state); err != nil {
+			if err := m.notifier.NotifyKillSwitchRecovered(context.Background(), &stateCopy); err != nil {
 				m.logger.WithError(err).Error("Failed to send kill switch recovery notification")
 			}
 		}()
@@ -409,9 +415,6 @@ func (m *KillSwitchMonitor) CheckCondition(id string, currentValue float64) (boo
 	if !condition.IsActive {
 		return false, nil
 	}
-
-	now := time.Now()
-	condition.LastChecked = &now
 
 	return currentValue >= condition.Threshold, nil
 }
