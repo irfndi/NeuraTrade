@@ -35,7 +35,7 @@ bash scripts/health-monitor-enhanced.sh check
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 91 open | 57 blocked | 85 closed | 34 ready
+**Stats:** 179 total | 91 open | 57 blocked | 86 closed | 34 ready
 
 ### Recently Completed (✓)
 - ✓ `neura-yzv`: NeuraTrade CLI bootstrap command
