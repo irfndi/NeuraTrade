@@ -130,6 +130,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
+	webSocketHandler := handlers.NewWebSocketHandler(redis)
 
 	// Initialize order execution service (Polymarket CLOB)
 	orderExecConfig := services.OrderExecutionConfig{
@@ -191,6 +192,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			market.GET("/tickers/:exchange", marketHandler.GetBulkTickers)
 			market.GET("/orderbook/:exchange/:symbol", marketHandler.GetOrderBook)
 			market.GET("/workers/status", marketHandler.GetWorkerStatus)
+			market.GET("/ws", webSocketHandler.HandleWebSocket)
+			market.GET("/ws/stats", func(c *gin.Context) {
+				c.JSON(200, webSocketHandler.GetStats())
+			})
 		}
 
 		// Arbitrage routes
