@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-13 10:35 Asia/Jakarta
-**Commit:** 3365e0c
+**Generated:** 2026-02-13 11:14 Asia/Jakarta
+**Commit:** 5815144
 **Branch:** development
 
 ## OVERVIEW
@@ -84,7 +84,7 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
+**Stats:** 179 total | 91 open | 57 blocked | 85 closed | 34 ready
 
 ### Ready to Work (No Blockers)
 - `neura-06k`: Health checks for Redis, SQL storage, exchange bridges
@@ -95,10 +95,11 @@ make dev-down
 - `neura-kpu`: Risk Manager agent role
 - `neura-bol`: Consecutive-loss pause
 - `neura-lue`: Expose readiness endpoints
-- `neura-we2`: Scalping skill.md codification
+- `neura-sa4`: Order book imbalance detection
 - `neura-1wi`: FOK order execution
 
 ### Recently Completed (✓)
+- ✓ `neura-we2`: Scalping skill.md codification
 - ✓ `neura-ydp`: Operator identity encryption (Argon2)
 - ✓ `neura-l1l`: Balance/funding validation
 - ✓ `neura-yzv`: CLI bootstrap command
@@ -134,6 +135,7 @@ make dev-down
 - ✓ `neura-94c`: /status budget display
 - ✓ `neura-l2z`: place_order tool endpoint
 - ✓ `neura-wz7`: cancel_order tool endpoint
+- ✓ `neura-8y8`: Emergency rollbacks
 
 ### Infrastructure & DevOps (Blocked)
 - `neura-354`: CI/CD pipeline setup
@@ -156,7 +158,6 @@ make dev-down
 
 ### Trading Engine (Blocked)
 - `neura-cd1`: Arbitrage trigger detection
-- `neura-sa4`: Order book imbalance detection
 - `neura-a7r`: Tight stop-loss execution
 
 ### Risk Management (Blocked)
