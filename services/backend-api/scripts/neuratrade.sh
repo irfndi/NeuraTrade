@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # NeuraTrade CLI - Bootstrap and manage your trading platform
-# Usage: ./cli.sh [command] [options]
+# Usage: ./neuratrade.sh [command] [options]
 
 VERSION="1.0.0"
 COMMIT="${GIT_COMMIT:-unknown}"
@@ -22,11 +22,11 @@ print_help() {
   echo "  bootstrap    Initialize the application (database, services)"
   echo "  health       Check system health and dependencies"
   echo "  status       Show application status"
-  echo "  help        Show this help message"
+  echo "  help         Show this help message"
   echo ""
   echo "Examples:"
-  echo "  ./cli.sh bootstrap"
-  echo "  ./cli.sh health"
+  echo "  ./neuratrade.sh bootstrap"
+  echo "  ./neuratrade.sh health"
   echo ""
   echo "Options:"
   echo "  -h, --help     Show help for a command"
