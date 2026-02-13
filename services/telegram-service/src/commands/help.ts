@@ -5,6 +5,8 @@ export function registerHelpCommand(bot: Bot): void {
     const msg =
       "🤖 NeuraTrade Bot Commands:\n\n" +
       "/start - Register and get started\n" +
+      "/bind <auth_code> - Bind operator profile to this chat\n" +
+      "/unbind - Unbind operator profile from this chat\n" +
       "/begin - Start autonomous mode\n" +
       "/pause - Pause autonomous mode\n" +
       "/opportunities - View current arbitrage opportunities\n" +

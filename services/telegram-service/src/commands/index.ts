@@ -8,6 +8,7 @@ import { registerStatusCommand } from "./status";
 import { registerSettingsCommands } from "./settings";
 import { registerUpgradeCommand } from "./upgrade";
 import { registerBdCommands } from "./bd";
+import { registerBindCommand } from "./bind";
 
 export { registerStartCommand } from "./start";
 export { registerHelpCommand } from "./help";
@@ -16,6 +17,7 @@ export { registerStatusCommand } from "./status";
 export { registerSettingsCommands } from "./settings";
 export { registerUpgradeCommand } from "./upgrade";
 export { registerBdCommands } from "./bd";
+export { registerBindCommand } from "./bind";
 
 export function registerAllCommands(
   bot: Bot,
@@ -29,4 +31,5 @@ export function registerAllCommands(
   registerSettingsCommands(bot, api);
   registerUpgradeCommand(bot);
   registerBdCommands(bot, api, sessions);
+  registerBindCommand(bot, api);
 }

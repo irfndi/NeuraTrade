@@ -1,7 +1,6 @@
 import { test, expect, describe, mock } from "bun:test";
 import {
   withRetry,
-  RetryConfig,
   RetryResult,
   DEFAULT_RETRY_CONFIG,
 } from "./retry";

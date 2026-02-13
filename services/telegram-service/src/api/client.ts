@@ -16,6 +16,8 @@ import type {
   LogsResponse,
   DoctorResponse,
   ApiErrorResponse,
+  BindOperatorProfileResponse,
+  UnbindOperatorProfileResponse,
 } from "./types";
 import { API_ENDPOINTS } from "./types";
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./rate-limiter";
@@ -257,6 +259,38 @@ export class BackendApiClient {
 
   async getDoctor(chatId: string): Promise<DoctorResponse> {
     return this.fetch<DoctorResponse>(API_ENDPOINTS.GET_DOCTOR(chatId), {
+      requireAdmin: true,
+    });
+  }
+
+  async bindOperatorProfile(request: {
+    chatId: string;
+    telegramUserId: string;
+    telegramUsername: string | null;
+    authCode: string;
+  }): Promise<BindOperatorProfileResponse> {
+    return this.fetch<BindOperatorProfileResponse>(API_ENDPOINTS.BIND_OPERATOR, {
+      method: "POST",
+      body: JSON.stringify({
+        chat_id: request.chatId,
+        telegram_user_id: request.telegramUserId,
+        telegram_username: request.telegramUsername,
+        auth_code: request.authCode,
+      }),
+      requireAdmin: true,
+    });
+  }
+
+  async unbindOperatorProfile(request: {
+    chatId: string;
+    telegramUserId: string;
+  }): Promise<UnbindOperatorProfileResponse> {
+    return this.fetch<UnbindOperatorProfileResponse>(API_ENDPOINTS.UNBIND_OPERATOR, {
+      method: "POST",
+      body: JSON.stringify({
+        chat_id: request.chatId,
+        telegram_user_id: request.telegramUserId,
+      }),
       requireAdmin: true,
     });
   }
