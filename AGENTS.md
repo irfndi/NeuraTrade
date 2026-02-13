@@ -84,16 +84,19 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 185 total | 69 open | 5 in progress | 38 blocked | 111 closed | 33 ready
+**Stats:** 185 total | 58 open | 8 in progress | 33 blocked | 119 closed | 28 ready
 
-### In Progress (5)
-- `neura-1wi`: FOK order execution
+### In Progress (8)
+- `neura-1wi`: Implement FOK order execution
 - `neura-7et`: Build prompt builder from skill.md + context
 - `neura-8s4`: Execute Go functions for tool calls
-- `neura-qts`: CLOB API wrapper (order execution)
+- `neura-qts`: Implement CLOB API wrapper (order execution)
 - `neura-ur6`: Parse tool_calls from LLM responses
+- `neura-2lv0`: Implement LLM Inference Client - OpenAI/Anthropic/MLX API calls with structured output
+- `neura-acq`: Expose provider/model registry in CLI and Telegram
+- `neura-5nt`: Implement provider/model catalog source sync and cache
 
-### Ready to Work (72)
+### Ready to Work (28)
 - `neura-1b6`: Rate limit management with token bucket
 - `neura-354`: Set up CI/CD pipeline
 - `neura-4eo`: Expose arbitrage primitives
