@@ -209,7 +209,7 @@ func TestRiskManagerAgent_ShouldTrade(t *testing.T) {
 		{RiskActionApprove, true},
 		{RiskActionWarning, true},
 		{RiskActionBlock, false},
-		{RiskActionReduce, false},
+		{RiskActionReduce, true}, // Reduce allows trading at reduced size
 		{RiskActionEmergency, false},
 	}
 

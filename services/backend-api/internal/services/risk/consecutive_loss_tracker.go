@@ -56,10 +56,8 @@ func (c *ConsecutiveLossTracker) RecordLoss(ctx context.Context, userID string) 
 		return err
 	}
 
-	if count == 1 {
-		if err := c.redis.Expire(ctx, key, consecutiveLossTTL).Err(); err != nil {
-			return err
-		}
+	if err := c.redis.Expire(ctx, key, consecutiveLossTTL).Err(); err != nil {
+		return err
 	}
 
 	if int(count) >= c.config.MaxConsecutiveLosses {
@@ -103,9 +101,6 @@ func (c *ConsecutiveLossTracker) IsPaused(ctx context.Context, userID string) (b
 
 	elapsed := time.Since(pausedAt)
 	if elapsed >= c.config.PauseDuration {
-		if err := c.SetPaused(ctx, userID, false); err != nil {
-			return false, time.Time{}, err
-		}
 		return false, time.Time{}, nil
 	}
 

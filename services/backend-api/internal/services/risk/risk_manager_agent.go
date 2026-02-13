@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
@@ -160,21 +161,33 @@ func (m *RiskManagerMetrics) IncrementBySymbol(symbol string) {
 func (m *RiskManagerMetrics) GetMetrics() RiskManagerMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	rolesCopy := make(map[string]int64, len(m.AssessmentsByRole))
+	for k, v := range m.AssessmentsByRole {
+		rolesCopy[k] = v
+	}
+
+	symbolsCopy := make(map[string]int64, len(m.AssessmentsBySymbol))
+	for k, v := range m.AssessmentsBySymbol {
+		symbolsCopy[k] = v
+	}
+
 	return RiskManagerMetrics{
 		TotalAssessments:    m.TotalAssessments,
 		ApprovedTrades:      m.ApprovedTrades,
 		BlockedTrades:       m.BlockedTrades,
 		WarningsIssued:      m.WarningsIssued,
 		EmergencyTriggers:   m.EmergencyTriggers,
-		AssessmentsByRole:   m.AssessmentsByRole,
-		AssessmentsBySymbol: m.AssessmentsBySymbol,
+		AssessmentsByRole:   rolesCopy,
+		AssessmentsBySymbol: symbolsCopy,
 	}
 }
 
 // RiskManagerAgent evaluates trading risks and provides recommendations
 type RiskManagerAgent struct {
-	config  RiskManagerConfig
-	metrics RiskManagerMetrics
+	configMu sync.RWMutex
+	config   RiskManagerConfig
+	metrics  RiskManagerMetrics
 }
 
 func NewRiskManagerAgent(config RiskManagerConfig) *RiskManagerAgent {
@@ -185,7 +198,7 @@ func NewRiskManagerAgent(config RiskManagerConfig) *RiskManagerAgent {
 }
 
 // AssessPortfolioRisk evaluates overall portfolio risk
-func (a *RiskManagerAgent) AssessPortfolioRisk(ctx context.Context, signals []RiskSignal) (*RiskAssessment, error) {
+func (a *RiskManagerAgent) AssessPortfolioRisk(_ context.Context, signals []RiskSignal) (*RiskAssessment, error) {
 	assessment := &RiskAssessment{
 		ID:              generateRiskID(),
 		Role:            RiskManagerRolePortfolio,
@@ -199,7 +212,10 @@ func (a *RiskManagerAgent) AssessPortfolioRisk(ctx context.Context, signals []Ri
 	assessment.Score = score
 	assessment.Confidence = calculateRiskConfidence(signals)
 	assessment.RiskLevel = determineRiskLevel(score)
+
+	a.configMu.RLock()
 	assessment.Action = determineAction(assessment.RiskLevel, score, a.config)
+	a.configMu.RUnlock()
 
 	// Generate reasons
 	for _, signal := range signals {
@@ -227,7 +243,7 @@ func (a *RiskManagerAgent) AssessPortfolioRisk(ctx context.Context, signals []Ri
 }
 
 // AssessPositionRisk evaluates risk for a specific position
-func (a *RiskManagerAgent) AssessPositionRisk(ctx context.Context, symbol string, signals []RiskSignal, positionSize decimal.Decimal) (*RiskAssessment, error) {
+func (a *RiskManagerAgent) AssessPositionRisk(_ context.Context, symbol string, signals []RiskSignal, positionSize decimal.Decimal) (*RiskAssessment, error) {
 	assessment := &RiskAssessment{
 		ID:              generateRiskID(),
 		Role:            RiskManagerRolePosition,
@@ -242,18 +258,25 @@ func (a *RiskManagerAgent) AssessPositionRisk(ctx context.Context, symbol string
 	assessment.Score = score
 	assessment.Confidence = calculateRiskConfidence(signals)
 	assessment.RiskLevel = determineRiskLevel(score)
+
+	a.configMu.RLock()
 	assessment.Action = determineAction(assessment.RiskLevel, score, a.config)
 
+	positionSizeLimit := a.config.PositionSizeLimit
+	maxPositionRisk := a.config.MaxPositionRisk
+	minRiskRewardRatio := a.config.MinRiskRewardRatio
+	a.configMu.RUnlock()
+
 	// Check position size limits
-	if positionSize.GreaterThan(a.config.PositionSizeLimit) {
-		assessment.Reasons = append(assessment.Reasons, fmt.Sprintf("Position size %s exceeds limit %s", positionSize.String(), a.config.PositionSizeLimit.String()))
+	if positionSize.GreaterThan(positionSizeLimit) {
+		assessment.Reasons = append(assessment.Reasons, fmt.Sprintf("Position size %s exceeds limit %s", positionSize.String(), positionSizeLimit.String()))
 		assessment.Action = RiskActionReduce
-		assessment.MaxPositionSize = a.config.PositionSizeLimit
+		assessment.MaxPositionSize = positionSizeLimit
 	}
 
 	// Calculate recommended stop-loss and take-profit
-	assessment.StopLossPct = a.config.MaxPositionRisk * 100
-	assessment.TakeProfitPct = a.config.MinRiskRewardRatio * assessment.StopLossPct
+	assessment.StopLossPct = maxPositionRisk * 100
+	assessment.TakeProfitPct = minRiskRewardRatio * assessment.StopLossPct
 
 	// Generate reasons
 	for _, signal := range signals {
@@ -271,7 +294,7 @@ func (a *RiskManagerAgent) AssessPositionRisk(ctx context.Context, symbol string
 	case RiskActionBlock:
 		assessment.Recommendations = append(assessment.Recommendations, "Do not enter position")
 	case RiskActionReduce:
-		assessment.Recommendations = append(assessment.Recommendations, fmt.Sprintf("Reduce position to max %s", a.config.PositionSizeLimit.String()))
+		assessment.Recommendations = append(assessment.Recommendations, fmt.Sprintf("Reduce position to max %s", positionSizeLimit.String()))
 	}
 
 	a.metrics.IncrementTotal()
@@ -282,7 +305,7 @@ func (a *RiskManagerAgent) AssessPositionRisk(ctx context.Context, symbol string
 }
 
 // AssessTradingRisk evaluates risk for a trade signal
-func (a *RiskManagerAgent) AssessTradingRisk(ctx context.Context, symbol string, side string, signals []RiskSignal) (*RiskAssessment, error) {
+func (a *RiskManagerAgent) AssessTradingRisk(_ context.Context, symbol string, side string, signals []RiskSignal) (*RiskAssessment, error) {
 	assessment := &RiskAssessment{
 		ID:              generateRiskID(),
 		Role:            RiskManagerRoleTrading,
@@ -297,7 +320,11 @@ func (a *RiskManagerAgent) AssessTradingRisk(ctx context.Context, symbol string,
 	assessment.Score = score
 	assessment.Confidence = calculateRiskConfidence(signals)
 	assessment.RiskLevel = determineRiskLevel(score)
+
+	a.configMu.RLock()
 	assessment.Action = determineAction(assessment.RiskLevel, score, a.config)
+	minRiskRewardRatio := a.config.MinRiskRewardRatio
+	a.configMu.RUnlock()
 
 	// Generate reasons
 	for _, signal := range signals {
@@ -308,7 +335,7 @@ func (a *RiskManagerAgent) AssessTradingRisk(ctx context.Context, symbol string,
 
 	// Check risk:reward ratio
 	for _, signal := range signals {
-		if signal.Name == "risk_reward_ratio" && signal.Value < a.config.MinRiskRewardRatio {
+		if signal.Name == "risk_reward_ratio" && signal.Value < minRiskRewardRatio {
 			assessment.Reasons = append(assessment.Reasons, "Risk:reward ratio below minimum threshold")
 			if assessment.Action == RiskActionApprove {
 				assessment.Action = RiskActionWarning
@@ -340,7 +367,7 @@ func (a *RiskManagerAgent) AssessTradingRisk(ctx context.Context, symbol string,
 }
 
 // CheckEmergencyConditions checks if emergency conditions are met
-func (a *RiskManagerAgent) CheckEmergencyConditions(ctx context.Context, currentDrawdown float64, dailyLoss decimal.Decimal) (*RiskAssessment, error) {
+func (a *RiskManagerAgent) CheckEmergencyConditions(_ context.Context, currentDrawdown float64, dailyLoss decimal.Decimal) (*RiskAssessment, error) {
 	assessment := &RiskAssessment{
 		ID:              generateRiskID(),
 		Role:            RiskManagerRoleEmergency,
@@ -350,17 +377,22 @@ func (a *RiskManagerAgent) CheckEmergencyConditions(ctx context.Context, current
 		Metadata:        make(map[string]string),
 	}
 
+	a.configMu.RLock()
+	emergencyThreshold := a.config.EmergencyThreshold
+	maxDailyLoss := a.config.MaxDailyLoss
+	a.configMu.RUnlock()
+
 	isEmergency := false
 
 	// Check drawdown threshold
-	if currentDrawdown >= a.config.EmergencyThreshold {
-		assessment.Reasons = append(assessment.Reasons, fmt.Sprintf("Drawdown %.2f%% exceeds emergency threshold %.2f%%", currentDrawdown*100, a.config.EmergencyThreshold*100))
+	if currentDrawdown >= emergencyThreshold {
+		assessment.Reasons = append(assessment.Reasons, fmt.Sprintf("Drawdown %.2f%% exceeds emergency threshold %.2f%%", currentDrawdown*100, emergencyThreshold*100))
 		isEmergency = true
 	}
 
 	// Check daily loss
-	if dailyLoss.GreaterThanOrEqual(a.config.MaxDailyLoss) {
-		assessment.Reasons = append(assessment.Reasons, fmt.Sprintf("Daily loss %s exceeds maximum %s", dailyLoss.String(), a.config.MaxDailyLoss.String()))
+	if dailyLoss.GreaterThanOrEqual(maxDailyLoss) {
+		assessment.Reasons = append(assessment.Reasons, fmt.Sprintf("Daily loss %s exceeds maximum %s", dailyLoss.String(), maxDailyLoss.String()))
 		isEmergency = true
 	}
 
@@ -389,9 +421,11 @@ func (a *RiskManagerAgent) CheckEmergencyConditions(ctx context.Context, current
 }
 
 // ShouldTrade determines if a trade should be allowed based on risk assessment
+// Returns true for Approve, Warning, and Reduce actions
+// Reduce allows trading but at a reduced position size (caller should check MaxPositionSize)
 func (a *RiskManagerAgent) ShouldTrade(assessment *RiskAssessment) bool {
 	switch assessment.Action {
-	case RiskActionApprove, RiskActionWarning:
+	case RiskActionApprove, RiskActionWarning, RiskActionReduce:
 		return true
 	default:
 		return false
@@ -405,18 +439,22 @@ func (a *RiskManagerAgent) GetMetrics() RiskManagerMetrics {
 
 // SetConfig updates the agent configuration
 func (a *RiskManagerAgent) SetConfig(config RiskManagerConfig) {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	a.config = config
 }
 
 // GetConfig returns the current configuration
 func (a *RiskManagerAgent) GetConfig() RiskManagerConfig {
+	a.configMu.RLock()
+	defer a.configMu.RUnlock()
 	return a.config
 }
 
 // Helper functions
 
 func generateRiskID() string {
-	return fmt.Sprintf("risk_%d", time.Now().UnixNano())
+	return "risk_" + uuid.NewString()
 }
 
 func calculateRiskScore(signals []RiskSignal) float64 {
