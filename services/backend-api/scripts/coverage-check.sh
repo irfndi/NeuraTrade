@@ -93,7 +93,7 @@ fi
 
 # Baseline delta enforcement
 if [[ -f "$BASELINE_FILE" ]]; then
-  BASELINE_PCT=$(cat "$BASELINE_FILE" | tr -d '%' | awk '{print $1}')
+  BASELINE_PCT=$(cat "$BASELINE_FILE")
   DELTA=$(awk -v current="$TOTAL_PCT" -v baseline="$BASELINE_PCT" 'BEGIN {printf "%.1f", current - baseline}')
   delta_pass=$(awk -v d="$DELTA" -v max="$MAX_DELTA" 'BEGIN {print (d >= 0 || d >= -max) ? 1 : 0}')
 

@@ -196,9 +196,9 @@ func (a *AnalystAgent) Analyze(ctx context.Context, symbol string, role AnalystR
 		weightedScore += signal.Value * signal.Weight
 		totalWeight += signal.Weight
 		switch signal.Direction {
-		case "bullish":
+		case DirectionBullish:
 			bullishCount++
-		case "bearish":
+		case DirectionBearish:
 			bearishCount++
 		}
 	}

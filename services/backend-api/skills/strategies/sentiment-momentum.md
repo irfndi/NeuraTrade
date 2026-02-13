@@ -18,7 +18,7 @@ parameters:
     required: true
   sentiment_threshold:
     type: number
-    description: Minimum sentiment score to trigger signal (-1 to 1 scale)
+    description: Minimum absolute sentiment score magnitude to trigger signal (0 to 1 scale, always positive)
     required: false
     default: 0.3
   momentum_lookback:
@@ -51,10 +51,10 @@ examples:
       rsi_oversold: 30
     expected: "buy_signal"
   - name: Sentiment reversal trade
-    description: Enter short position when sentiment is negative and RSI is overbought
+    description: Enter short position when sentiment is negative (below -threshold) and RSI is overbought
     inputs:
       symbol: "ETH/USDT"
-      sentiment_threshold: -0.3
+      sentiment_threshold: 0.3
       momentum_lookback: 20
       rsi_overbought: 70
     expected: "sell_signal"
@@ -75,7 +75,7 @@ This strategy combines technical momentum indicators with social sentiment analy
 4. Volume is increasing or stable
 
 **Short (Sell) Signal:**
-1. Sentiment score < `-sentiment_threshold` (default: -0.3)
+1. Sentiment score < `-sentiment_threshold` (e.g., if threshold is 0.3, then score < -0.3)
 2. RSI > `rsi_overbought` (default: 70) - overbought condition
 3. Price momentum is negative
 4. Volume is increasing or stable
