@@ -56,7 +56,9 @@ func (s *EmergencyRollbackService) CreateSnapshot(ctx context.Context, skillID, 
 		if err != nil {
 			return fmt.Errorf("failed to marshal snapshot: %w", err)
 		}
-		s.redisClient.Set(ctx, key, data, 30*24*time.Hour)
+		if err := s.redisClient.Set(ctx, key, data, 30*24*time.Hour).Err(); err != nil {
+			return fmt.Errorf("failed to persist snapshot to Redis: %w", err)
+		}
 	}
 
 	return nil
