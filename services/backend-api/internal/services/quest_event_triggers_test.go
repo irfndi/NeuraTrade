@@ -111,14 +111,14 @@ func TestEventDrivenQuestSystem_CanTrigger_Cooldown(t *testing.T) {
 		TriggerCount: 0,
 	}
 
-	if !system.canTrigger(trigger) {
+	if !system.canTriggerLocked(trigger) {
 		t.Error("expected trigger to be allowed with no last trigger")
 	}
 
 	now := time.Now().UTC()
 	trigger.LastTrigger = &now
 
-	if system.canTrigger(trigger) {
+	if system.canTriggerLocked(trigger) {
 		t.Error("expected trigger to be blocked due to cooldown")
 	}
 }
@@ -135,7 +135,7 @@ func TestEventDrivenQuestSystem_CanTrigger_MaxTriggers(t *testing.T) {
 		TriggerCount: 2,
 	}
 
-	if system.canTrigger(trigger) {
+	if system.canTriggerLocked(trigger) {
 		t.Error("expected trigger to be blocked due to max triggers")
 	}
 }

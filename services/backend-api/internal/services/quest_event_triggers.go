@@ -31,6 +31,7 @@ type QuestEvent struct {
 
 type QuestTrigger struct {
 	DefinitionID string           `json:"definition_id"`
+	ChatID       string           `json:"chat_id"`
 	EventType    QuestEventType   `json:"event_type"`
 	Condition    TriggerCondition `json:"condition"`
 	Cooldown     time.Duration    `json:"cooldown"`
@@ -148,15 +149,19 @@ func (s *EventDrivenQuestSystem) eventLoop() {
 }
 
 func (s *EventDrivenQuestSystem) processEvent(event *QuestEvent) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	for triggerID, trigger := range s.triggers {
 		if trigger.EventType != event.Type {
 			continue
 		}
 
-		if !s.canTrigger(trigger) {
+		if trigger.ChatID != "" && trigger.ChatID != event.ChatID {
+			continue
+		}
+
+		if !s.canTriggerLocked(trigger) {
 			continue
 		}
 
@@ -164,11 +169,34 @@ func (s *EventDrivenQuestSystem) processEvent(event *QuestEvent) {
 			continue
 		}
 
-		go s.executeTrigger(triggerID, trigger, event)
+		definitionID := trigger.DefinitionID
+		chatID := event.ChatID
+
+		trigger.TriggerCount++
+		now := time.Now().UTC()
+		trigger.LastTrigger = &now
+
+		s.mu.Unlock()
+
+		quest, err := s.engine.CreateQuest(definitionID, chatID)
+		if err != nil {
+			log.Printf("Failed to create quest from trigger %s: %v", triggerID, err)
+			s.mu.Lock()
+			continue
+		}
+
+		quest.Status = QuestStatusActive
+		quest.Metadata["event_id"] = event.ID
+		quest.Metadata["event_type"] = string(event.Type)
+		quest.Metadata["trigger_id"] = triggerID
+
+		log.Printf("Quest %s triggered by event %s (type: %s)", quest.ID, event.ID, event.Type)
+
+		s.mu.Lock()
 	}
 }
 
-func (s *EventDrivenQuestSystem) canTrigger(trigger *QuestTrigger) bool {
+func (s *EventDrivenQuestSystem) canTriggerLocked(trigger *QuestTrigger) bool {
 	if trigger.MaxTriggers > 0 && trigger.TriggerCount >= trigger.MaxTriggers {
 		return false
 	}
@@ -213,31 +241,11 @@ func (s *EventDrivenQuestSystem) evaluateCondition(condition *TriggerCondition, 
 	}
 }
 
-func (s *EventDrivenQuestSystem) executeTrigger(triggerID string, trigger *QuestTrigger, event *QuestEvent) {
-	quest, err := s.engine.CreateQuest(trigger.DefinitionID, event.ChatID)
-	if err != nil {
-		log.Printf("Failed to create quest from trigger %s: %v", triggerID, err)
-		return
-	}
-
-	quest.Status = QuestStatusActive
-	quest.Metadata["event_id"] = event.ID
-	quest.Metadata["event_type"] = string(event.Type)
-	quest.Metadata["trigger_id"] = triggerID
-
-	s.mu.Lock()
-	trigger.TriggerCount++
-	now := time.Now().UTC()
-	trigger.LastTrigger = &now
-	s.mu.Unlock()
-
-	log.Printf("Quest %s triggered by event %s (type: %s)", quest.ID, event.ID, event.Type)
-}
-
 func (s *EventDrivenQuestSystem) CreatePriceMovementTrigger(chatID string, threshold float64) string {
 	triggerID := fmt.Sprintf("price_movement_%s_%d", chatID, time.Now().UnixNano())
 	trigger := &QuestTrigger{
 		DefinitionID: "volatility_watch",
+		ChatID:       chatID,
 		EventType:    QuestEventPriceMovement,
 		Condition: TriggerCondition{
 			Field:    "price_change_pct",
@@ -254,6 +262,7 @@ func (s *EventDrivenQuestSystem) CreateArbitrageTrigger(chatID string, minProfit
 	triggerID := fmt.Sprintf("arbitrage_%s_%d", chatID, time.Now().UnixNano())
 	trigger := &QuestTrigger{
 		DefinitionID: "market_scan",
+		ChatID:       chatID,
 		EventType:    QuestEventArbitrageFound,
 		Condition: TriggerCondition{
 			Field:    "profit_pct",
@@ -270,6 +279,7 @@ func (s *EventDrivenQuestSystem) CreateTradeCompletedTrigger(chatID string) stri
 	triggerID := fmt.Sprintf("trade_completed_%s_%d", chatID, time.Now().UnixNano())
 	trigger := &QuestTrigger{
 		DefinitionID: "portfolio_health",
+		ChatID:       chatID,
 		EventType:    QuestEventTradeCompleted,
 		Condition:    TriggerCondition{},
 		Cooldown:     30 * time.Second,
@@ -282,6 +292,7 @@ func (s *EventDrivenQuestSystem) CreateRiskThresholdTrigger(chatID string, maxDr
 	triggerID := fmt.Sprintf("risk_threshold_%s_%d", chatID, time.Now().UnixNano())
 	trigger := &QuestTrigger{
 		DefinitionID: "volatility_watch",
+		ChatID:       chatID,
 		EventType:    QuestEventRiskThreshold,
 		Condition: TriggerCondition{
 			Field:    "drawdown_pct",
