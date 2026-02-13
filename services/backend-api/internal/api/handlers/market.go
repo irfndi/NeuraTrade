@@ -585,12 +585,6 @@ func (h *MarketHandler) GetOrderBookMetrics(c *gin.Context) {
 	symbol := c.Param("symbol")
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	if limit < 0 {
-		limit = 0
-	} else if limit > math.MaxInt32 {
-		limit = math.MaxInt32
-	}
-
 	if exchange == "" || symbol == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Exchange and symbol are required"})
 		return
