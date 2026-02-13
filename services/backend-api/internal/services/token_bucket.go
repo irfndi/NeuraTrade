@@ -263,9 +263,14 @@ func (tb *TokenBucketRateLimiter) reserveRedis(key string, n int, rate float64, 
 
 		-- Check if we have enough tokens
 		if tokens < n then
-			-- Calculate wait time
+			-- Calculate wait time (handle rate=0 to avoid division by zero)
 			local deficit = n - tokens
-			local waitTime = deficit / rate
+			local waitTime
+			if rate <= 0 then
+				waitTime = 3153600000  -- 100 years in seconds (tokens will never be available)
+			else
+				waitTime = deficit / rate
+			end
 			return {tokens, waitTime}
 		end
 
