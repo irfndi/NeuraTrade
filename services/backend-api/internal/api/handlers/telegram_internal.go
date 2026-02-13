@@ -583,7 +583,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		})
 	}
 
-	polymarketCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "polymarket")
+	polymarketCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "provider = 'polymarket' AND status = 'connected'")
 	if err != nil {
 		checks = append(checks, gin.H{
 			"name":    "polymarket-wallet",
@@ -611,7 +611,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		})
 	}
 
-	exchangeCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "exchange")
+	exchangeCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
 	if err != nil {
 		checks = append(checks, gin.H{
 			"name":    "exchange-connection",
@@ -722,7 +722,7 @@ func (h *TelegramInternalHandler) ensureOperatorSchema(ctx context.Context) erro
 func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, chatID string) ([]string, error) {
 	failedChecks := make([]string, 0, 2)
 
-	polymarketCount, err := h.countConnectedWallets(ctx, chatID, "polymarket")
+	polymarketCount, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
 	if err != nil {
 		return nil, err
 	}
@@ -730,7 +730,7 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 		failedChecks = append(failedChecks, "wallet minimum")
 	}
 
-	exchangeCount, err := h.countConnectedWallets(ctx, chatID, "exchange")
+	exchangeCount, err := h.countConnectedWallets(ctx, chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
 	if err != nil {
 		return nil, err
 	}
@@ -741,19 +741,9 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 	return failedChecks, nil
 }
 
-func (h *TelegramInternalHandler) countConnectedWallets(ctx context.Context, chatID string, filterType string) (int, error) {
-	var query string
+func (h *TelegramInternalHandler) countConnectedWallets(ctx context.Context, chatID, filter string) (int, error) {
+	query := `SELECT COUNT(*) FROM telegram_operator_wallets WHERE chat_id = $1 AND ` + filter
 	var count int
-
-	switch filterType {
-	case "polymarket":
-		query = `SELECT COUNT(*) FROM telegram_operator_wallets WHERE chat_id = $1 AND provider = 'polymarket' AND status = 'connected'`
-	case "exchange":
-		query = `SELECT COUNT(*) FROM telegram_operator_wallets WHERE chat_id = $1 AND provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'`
-	default:
-		query = `SELECT COUNT(*) FROM telegram_operator_wallets WHERE chat_id = $1 AND status = 'connected'`
-	}
-
 	err := h.db.QueryRow(ctx, query, chatID).Scan(&count)
 	if err != nil {
 		return 0, err
@@ -820,109 +810,4 @@ func maskWalletAddress(raw string) string {
 	}
 
 	return trimmed
-}
-
-// BindOperatorProfile binds a Telegram chat to an operator profile using an auth code.
-func (h *TelegramInternalHandler) BindOperatorProfile(c *gin.Context) {
-	var req struct {
-		ChatID           string  `json:"chat_id" binding:"required"`
-		TelegramUserID   string  `json:"telegram_user_id" binding:"required"`
-		TelegramUsername *string `json:"telegram_username"`
-		AuthCode         string  `json:"auth_code" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid request: " + err.Error()})
-		return
-	}
-
-	if err := h.ensureOperatorSchema(c.Request.Context()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to initialize operator store"})
-		return
-	}
-
-	_, err := h.db.Exec(c.Request.Context(), `
-		CREATE TABLE IF NOT EXISTS telegram_operator_bindings (
-			binding_id TEXT PRIMARY KEY,
-			chat_id TEXT UNIQUE NOT NULL,
-			telegram_user_id TEXT NOT NULL,
-			telegram_username TEXT,
-			operator_name TEXT,
-			auth_code TEXT,
-			bound_at TIMESTAMP NOT NULL,
-			updated_at TIMESTAMP NOT NULL
-		)`)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to initialize bindings store"})
-		return
-	}
-
-	if len(req.AuthCode) < 6 || len(req.AuthCode) > 32 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid auth code format"})
-		return
-	}
-
-	var existingBindingID string
-	err = h.db.QueryRow(c.Request.Context(),
-		"SELECT binding_id FROM telegram_operator_bindings WHERE chat_id = $1",
-		req.ChatID).Scan(&existingBindingID)
-	if err == nil {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "Chat is already bound to an operator profile"})
-		return
-	}
-
-	bindingID := uuid.NewString()
-	now := time.Now().UTC()
-	operatorName := "Operator"
-	if req.TelegramUsername != nil && *req.TelegramUsername != "" {
-		operatorName = *req.TelegramUsername
-	}
-
-	_, err = h.db.Exec(c.Request.Context(), `
-		INSERT INTO telegram_operator_bindings (binding_id, chat_id, telegram_user_id, telegram_username, operator_name, auth_code, bound_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-		bindingID, req.ChatID, req.TelegramUserID, req.TelegramUsername, operatorName, req.AuthCode, now)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to create binding: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success":       true,
-		"operator_name": operatorName,
-	})
-}
-
-// UnbindOperatorProfile removes the binding between a Telegram chat and an operator profile.
-func (h *TelegramInternalHandler) UnbindOperatorProfile(c *gin.Context) {
-	var req struct {
-		ChatID         string `json:"chat_id" binding:"required"`
-		TelegramUserID string `json:"telegram_user_id" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid request: " + err.Error()})
-		return
-	}
-
-	if err := h.ensureOperatorSchema(c.Request.Context()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to initialize operator store"})
-		return
-	}
-
-	result, err := h.db.Exec(c.Request.Context(),
-		"DELETE FROM telegram_operator_bindings WHERE chat_id = $1 AND telegram_user_id = $2",
-		req.ChatID, req.TelegramUserID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to unbind: " + err.Error()})
-		return
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "No binding found for this chat"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"success": true})
 }

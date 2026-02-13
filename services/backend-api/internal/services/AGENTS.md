@@ -31,15 +31,13 @@ go test ./internal/services/... -run TestArbitrage
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 91 open | 57 blocked | 86 closed | 34 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Ready to Work (No Blockers)
 - `neura-7et`: Build prompt builder from skill.md + context
+- `neura-1wi`: FOK order execution
 
 ### Recently Completed (✓)
-- ✓ `neura-8y8`: Emergency rollbacks
-- ✓ `neura-sa4`: Order book imbalance detection
-- ✓ `neura-1wi`: FOK order execution
 - ✓ `neura-06k`: Health checks for Redis, SQL storage, exchange bridges
 - ✓ `neura-ydp`: Operator identity encryption (Argon2)
 - ✓ `neura-l1l`: Balance/funding validation
@@ -77,6 +75,7 @@ go test ./internal/services/... -run TestArbitrage
 
 ### Signal & Analysis (Blocked)
 - `neura-cd1`: Arbitrage trigger detection engine
+- `neura-sa4`: Order book imbalance detection
 - `neura-bri`: AI reasoning summaries for trades
 
 ### Risk & Monitoring (Blocked)

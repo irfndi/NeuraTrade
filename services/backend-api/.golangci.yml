@@ -41,6 +41,23 @@ linters:
         - unusedwrite
 
 issues:
+  exclude:
+    # Test files excluded from errcheck due to intentional void calls
+    - path: _test\.go
+      linters:
+        - errcheck
+    - path: internal/testutil/
+      linters:
+        - errcheck
+    - path: test/
+      linters:
+        - errcheck
+    # convertToSnapshots is used in tests (technical_analysis_test.go:519)
+    # but tests are excluded from linting (tests: false), so appears unused
+    - path: technical_analysis\.go
+      linters:
+        - unused
+
   max-issues-per-linter: 0
   max-same-issues: 0
 

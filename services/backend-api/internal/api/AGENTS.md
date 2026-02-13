@@ -36,16 +36,13 @@ go test ./internal/api/handlers/... -run TestArbitrage
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 91 open | 57 blocked | 86 closed | 34 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Ready to Work (No Blockers)
 - `neura-7et`: Build prompt builder from skill.md + context
 - `neura-r1d`: Progressive disclosure system
 
 ### Recently Completed (✓)
-- ✓ `neura-8y8`: Emergency rollbacks endpoint
-- ✓ `neura-sa4`: Order book imbalance detection endpoint
-- ✓ `neura-1wi`: FOK order execution endpoint
 - ✓ `neura-06k`: Health checks for Redis, SQL storage, exchange bridges
 - ✓ `neura-ydp`: Operator identity encryption (Argon2) endpoint
 - ✓ `neura-l1l`: Balance/funding validation endpoint
