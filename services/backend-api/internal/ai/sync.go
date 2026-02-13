@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -81,7 +80,6 @@ func (m *SyncMetrics) GetSnapshot() SyncMetricsSnapshot {
 // SyncService periodically syncs the AI model registry from remote sources.
 type SyncService struct {
 	registry *Registry
-	redis    *redis.Client
 	logger   *zap.Logger
 	config   SyncConfig
 	metrics  SyncMetrics
@@ -93,14 +91,16 @@ type SyncService struct {
 }
 
 // NewSyncService creates a new registry sync service.
-func NewSyncService(registry *Registry, redisClient *redis.Client, logger *zap.Logger, config SyncConfig) *SyncService {
+func NewSyncService(registry *Registry, logger *zap.Logger, config SyncConfig) *SyncService {
+	if registry == nil {
+		panic("NewSyncService: registry is nil")
+	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 
 	return &SyncService{
 		registry: registry,
-		redis:    redisClient,
 		logger:   logger,
 		config:   config,
 		stopCh:   make(chan struct{}),
@@ -161,11 +161,13 @@ func (s *SyncService) runBackgroundSync() {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if err := s.syncOnce(ctx); err != nil {
-				s.logger.Error("Background sync failed", zap.Error(err))
-			}
-			cancel()
+			func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := s.syncOnce(ctx); err != nil {
+					s.logger.Error("Background sync failed", zap.Error(err))
+				}
+			}()
 		}
 	}
 }
