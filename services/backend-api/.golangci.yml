@@ -26,22 +26,6 @@ issues:
   max-issues-per-linter: 0
   max-same-issues: 0
 
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - copyloopvar
-    - path: test/
-      linters:
-        - all
-    - path: \.pb\.go
-      linters:
-        - all
-
 run:
   timeout: 5m
   tests: true
-  skip-dirs:
-    - vendor
-    - third_party
-    - .git
-    - test
