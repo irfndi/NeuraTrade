@@ -341,7 +341,7 @@ func TestSetupRoutes_PanicHandling(t *testing.T) {
 
 	// Test that SetupRoutes panics with nil dependencies (expected behavior)
 	assert.Panics(t, func() {
-		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should panic with nil dependencies")
 }
 
@@ -384,7 +384,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
 
 	assert.NotPanics(t, func() {
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 	}, "SetupRoutes should handle minimal dependencies gracefully")
 
 	// Verify routes were registered
@@ -440,7 +440,7 @@ func TestSetupRoutes_RouteGroups(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -504,7 +504,7 @@ func TestSetupRoutes_HttpMethods(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -571,7 +571,7 @@ func TestSetupRoutes_Middleware(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Test that router has middleware configured
 	// Gin router should have middleware registered
@@ -626,7 +626,7 @@ func TestSetupRoutes_MissingAdminKey(t *testing.T) {
 			}),
 		}
 		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 	}, "SetupRoutes should handle missing admin key gracefully")
 }
 
@@ -669,7 +669,7 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 			}),
 		}
 		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 	}, "SetupRoutes should not panic when telegram config is missing")
 
 	// Verify routes were still registered

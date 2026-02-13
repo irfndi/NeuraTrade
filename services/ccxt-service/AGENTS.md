@@ -37,7 +37,7 @@ bun test
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Ready to Work (No Blockers)
 

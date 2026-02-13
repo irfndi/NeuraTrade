@@ -47,6 +47,8 @@ type Config struct {
 	Fees FeesConfig `mapstructure:"fees"`
 	// Analytics holds configuration for analytics features.
 	Analytics AnalyticsConfig `mapstructure:"analytics"`
+	// Wallet holds configuration for wallet validation.
+	Wallet WalletValidatorConfig `mapstructure:"wallet"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -108,6 +110,20 @@ type RedisConfig struct {
 	Password string `mapstructure:"password"`
 	// DB is the Redis database index to use.
 	DB int `mapstructure:"db"`
+	// PoolSize is the maximum number of connections in the connection pool.
+	PoolSize int `mapstructure:"pool_size"`
+	// MinIdleConns is the minimum number of idle connections.
+	MinIdleConns int `mapstructure:"min_idle_conns"`
+	// DialTimeout is the timeout for establishing new connections.
+	DialTimeout int `mapstructure:"dial_timeout"`
+	// ReadTimeout is the timeout for read operations.
+	ReadTimeout int `mapstructure:"read_timeout"`
+	// WriteTimeout is the timeout for write operations.
+	WriteTimeout int `mapstructure:"write_timeout"`
+	// PoolTimeout is the timeout for getting a connection from the pool.
+	PoolTimeout int `mapstructure:"pool_timeout"`
+	// DefaultTTL is the default TTL for cached items in seconds.
+	DefaultTTL int `mapstructure:"default_ttl"`
 }
 
 // CCXTConfig defines settings for interacting with the CCXT microservice.
@@ -296,6 +312,12 @@ type AnalyticsConfig struct {
 	RegimeLongWindow        int     `mapstructure:"regime_long_window"`
 	VolatilityHighThreshold float64 `mapstructure:"volatility_high_threshold"`
 	VolatilityLowThreshold  float64 `mapstructure:"volatility_low_threshold"`
+}
+
+type WalletValidatorConfig struct {
+	MinimumUSDCBalance         float64 `mapstructure:"minimum_usdc_balance"`
+	MinimumPortfolioValue      float64 `mapstructure:"minimum_portfolio_value"`
+	MinimumExchangeConnections int     `mapstructure:"minimum_exchange_connections"`
 }
 
 // Load reads the configuration from the config file and environment variables.
@@ -531,6 +553,11 @@ func setDefaults() {
 	viper.SetDefault("analytics.regime_long_window", 60)
 	viper.SetDefault("analytics.volatility_high_threshold", 0.03)
 	viper.SetDefault("analytics.volatility_low_threshold", 0.005)
+
+	// Wallet validation
+	viper.SetDefault("wallet.minimum_usdc_balance", 100.0)
+	viper.SetDefault("wallet.minimum_portfolio_value", 500.0)
+	viper.SetDefault("wallet.minimum_exchange_connections", 1)
 }
 
 // GetServiceURL returns the CCXT service URL.

@@ -52,17 +52,24 @@ golangci-lint run
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Ready to Work (No Blockers)
-- `neura-yzv`: CLI bootstrap command
-- `neura-aav`: Connectivity checks for all configured providers
+- `neura-06k`: Health checks for Redis, SQL storage, exchange bridges
 - `neura-xxy`: WebSocket market data subscription
 - `neura-qts`: CLOB API wrapper (order execution)
 - `neura-7et`: Build prompt builder from skill.md + context
 - `neura-r1d`: Progressive disclosure system
 
 ### Recently Completed (✓)
+- ✓ `neura-ydp`: Operator identity encryption (Argon2)
+- ✓ `neura-l1l`: Balance/funding validation
+- ✓ `neura-yzv`: CLI bootstrap command
+- ✓ `neura-5of`: Bind local operator profile to Telegram chat
+- ✓ `neura-aav`: Connectivity checks for all configured providers
+- ✓ `neura-kpu`: Risk Manager agent role
+- ✓ `neura-bol`: Consecutive-loss pause
+- ✓ `neura-we2`: Scalping skill.md
 - ✓ `neura-myb`: Wallet minimum balance checks
 - ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
 - ✓ `neura-6tk`: Event-driven quest triggers
@@ -91,31 +98,25 @@ golangci-lint run
 - ✓ `neura-94c`: /status budget display
 - ✓ `neura-l2z`: place_order tool endpoint
 - ✓ `neura-wz7`: cancel_order tool endpoint
-- ✓ `neura-9ai`: Intrusion detection
-- ✓ `neura-32w`: Fund with minimal capital (USDC)
 
 ### Exchange Integration (Blocked)
 - `neura-4ms`: CCXT wrapper extension
-- `neura-xxy`: WebSocket market data (depends on neura-4ms)
 - `neura-1b6`: Rate limit management (depends on neura-xxy)
 - `neura-adu`: Data API wrapper (positions/balances)
 - `neura-4p6`: Exchange resilience monitoring
 
 ### Security & Encryption (Blocked)
 - `neura-c7r`: Key masking in logs/Telegram
-- `neura-ydp`: Operator identity encryption (Argon2)
 
 ### Trading Engine (Blocked)
 - `neura-cd1`: Arbitrage trigger detection
 - `neura-sa4`: Order book imbalance detection
-- `neura-we2`: Scalping skill.md codification
 - `neura-a7r`: Tight stop-loss execution
 - `neura-1wi`: FOK order execution
 
 ### Risk Management (Blocked)
 - `neura-8y8`: Emergency rollbacks
 - `neura-kxq`: Kill switch monitoring
-- `neura-bol`: Consecutive-loss pause
 - `neura-3ms`: Position-size throttle
 
 ### Paper Trading (Blocked)

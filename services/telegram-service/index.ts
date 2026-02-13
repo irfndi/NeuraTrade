@@ -26,9 +26,6 @@ import {
   handleStatus,
   handleSettings,
   handleStop,
-  handleResume,
-  handleUpgrade,
-  handleMessageText,
 } from "./bot-handlers";
 
 const bot = new Bot(config.botToken);

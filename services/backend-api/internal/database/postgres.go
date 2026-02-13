@@ -88,12 +88,18 @@ func NewPostgresConnectionWithContext(ctx context.Context, cfg *config.DatabaseC
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	sqlDB := stdlib.OpenDB(*poolConfig.ConnConfig)
+	// Create sql.DB wrapper using the same pool config to avoid dual pool usage
+	// This ensures both pgxpool and sql.DB share the same underlying connections
+	sqlDB := stdlib.OpenDBFromPool(pool)
 	if cfg.MaxOpenConns > 0 {
 		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	} else if poolConfig.MaxConns > 0 {
+		sqlDB.SetMaxOpenConns(int(poolConfig.MaxConns))
 	}
 	if cfg.MaxIdleConns > 0 {
 		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	} else if poolConfig.MinConns > 0 {
+		sqlDB.SetMaxIdleConns(int(poolConfig.MinConns))
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
@@ -140,7 +146,8 @@ func createTestDatabaseConnection(poolConfig *pgxpool.Config) (*PostgresDB, erro
 		return nil, fmt.Errorf("failed to ping test database: %w", err)
 	}
 
-	sqlDB := stdlib.OpenDB(*poolConfig.ConnConfig)
+	// Use same pool to avoid dual pool usage in tests
+	sqlDB := stdlib.OpenDBFromPool(pool)
 	sqlDB.SetMaxOpenConns(int(poolConfig.MaxConns))
 	sqlDB.SetMaxIdleConns(int(poolConfig.MinConns))
 

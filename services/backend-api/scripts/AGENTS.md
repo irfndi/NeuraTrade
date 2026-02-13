@@ -35,17 +35,16 @@ bash scripts/health-monitor-enhanced.sh check
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
-
-### Ready to Work (No Blockers)
-- `neura-yzv`: NeuraTrade CLI bootstrap command
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Recently Completed (✓)
+- ✓ `neura-yzv`: NeuraTrade CLI bootstrap command
 - ✓ `neura-px6`: Security audit scripts (gosec, gitleaks integration)
 - ✓ `neura-za8`: Rate limit monitoring dashboard scripts
 - ✓ `neura-1p0`: /doctor diagnostic automation scripts
 - ✓ `neura-9ai`: Intrusion detection monitoring scripts
 - ✓ `neura-lue`: Enhanced readiness check scripts
+- ✓ `neura-06k`: Health checks scripts
 
 ### Infrastructure & Deployment (Blocked)
 - `neura-354`: CI/CD pipeline setup scripts

@@ -36,6 +36,14 @@ const (
 	ConditionTrending MarketCondition = "trending"
 )
 
+type SignalDirection string
+
+const (
+	DirectionBullish SignalDirection = "bullish"
+	DirectionBearish SignalDirection = "bearish"
+	DirectionNeutral SignalDirection = "neutral"
+)
+
 type AnalystAnalysis struct {
 	ID             string                `json:"id"`
 	Symbol         string                `json:"symbol"`
@@ -52,11 +60,11 @@ type AnalystAnalysis struct {
 }
 
 type AnalystSignal struct {
-	Name        string  `json:"name"`
-	Value       float64 `json:"value"`
-	Weight      float64 `json:"weight"`
-	Direction   string  `json:"direction"`
-	Description string  `json:"description"`
+	Name        string          `json:"name"`
+	Value       float64         `json:"value"`
+	Weight      float64         `json:"weight"`
+	Direction   SignalDirection `json:"direction"`
+	Description string          `json:"description"`
 }
 
 type AnalystAgentConfig struct {
@@ -269,11 +277,11 @@ func calculateConfidence(signals []AnalystSignal, score float64) float64 {
 	}
 
 	signalAgreement := 0.0
-	expectedDirection := "neutral"
+	expectedDirection := DirectionNeutral
 	if score > 0 {
-		expectedDirection = "bullish"
+		expectedDirection = DirectionBullish
 	} else if score < 0 {
-		expectedDirection = "bearish"
+		expectedDirection = DirectionBearish
 	}
 
 	for _, s := range signals {

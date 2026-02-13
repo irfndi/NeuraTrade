@@ -171,7 +171,7 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 	argIndex := 1
 
 	if chatID != "" {
-		query += fmt.Sprintf(" AND json_extract(metadata, '$.chat_id') = $%d", argIndex)
+		query += fmt.Sprintf(" AND metadata->>'chat_id' = $%d", argIndex)
 		args = append(args, chatID)
 		argIndex++
 	}

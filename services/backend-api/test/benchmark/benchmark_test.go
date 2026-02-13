@@ -323,30 +323,37 @@ func BenchmarkErrorHandling(b *testing.B) {
 
 // BenchmarkTimeOperations benchmarks time operations
 func BenchmarkTimeOperations(b *testing.B) {
+	timeFormat := time.RFC3339Nano
+
 	// Reset timer to exclude setup time
 	b.ResetTimer()
 
 	// Run benchmark
 	for i := 0; i < b.N; i++ {
 		// Get current time
-		now := time.Now()
+		now := time.Now().UTC()
 
 		// Format time
-		formatted := now.Format(time.RFC3339)
+		formatted := now.Format(timeFormat)
 		if formatted == "" {
 			b.Fatal("Formatted time should not be empty")
 		}
 
 		// Parse time
-		parsed, err := time.Parse(time.RFC3339, formatted)
+		parsed, err := time.Parse(timeFormat, formatted)
 		if err != nil {
 			b.Fatal(err)
 		}
 
-		// Calculate duration
-		duration := now.Sub(parsed)
+		// Calculate duration (use UTC to ensure consistent timezone handling)
+		duration := now.Sub(parsed.UTC())
+		// Use absolute value to handle any edge cases with timezone precision
 		if duration < 0 {
-			b.Fatal("Duration should not be negative")
+			duration = -duration
+		}
+		// Validate duration is within reasonable bounds (should be < 1 second)
+		if duration > time.Second {
+			b.Fatalf("Duration %v exceeds expected threshold", duration)
 		}
 	}
 }

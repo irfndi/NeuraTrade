@@ -9,17 +9,21 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type AIUsageQuerier interface {
-	Query(ctx context.Context, query string, args ...any) (Rows, error)
-	QueryRow(ctx context.Context, query string, args ...any) Row
-}
-
+// AIUsageRepository provides database access for AI usage tracking.
+// It uses the DBPool abstraction to support both PostgreSQL and SQLite.
 type AIUsageRepository struct {
-	pool AIUsageQuerier
+	pool DBPool
 }
 
-func NewAIUsageRepository(pool AIUsageQuerier) *AIUsageRepository {
+// NewAIUsageRepository creates a new AIUsageRepository using the driver-agnostic DBPool interface.
+func NewAIUsageRepository(pool DBPool) *AIUsageRepository {
 	return &AIUsageRepository{pool: pool}
+}
+
+// NewAIUsageRepositoryFromDB is an alias for NewAIUsageRepository for backward compatibility.
+// Deprecated: Use NewAIUsageRepository instead.
+func NewAIUsageRepositoryFromDB(pool DBPool) *AIUsageRepository {
+	return NewAIUsageRepository(pool)
 }
 
 func (r *AIUsageRepository) Create(ctx context.Context, usage *models.AIUsageCreate) (*models.AIUsage, error) {
@@ -207,8 +211,4 @@ func (r *AIUsageRepository) GetMonthlySummary(ctx context.Context, startDate, en
 	}
 
 	return summaries, rows.Err()
-}
-
-func NewAIUsageRepositoryFromDB(pool DBPool) *AIUsageRepository {
-	return &AIUsageRepository{pool: pool}
 }
