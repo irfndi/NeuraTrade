@@ -50,12 +50,16 @@ jobs:
       - name: Run typecheck
         run: cd services/backend-api && go vet ./...
 
+      - name: Install golangci-lint
+        run: |
+          mkdir -p ./bin
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./bin v2.7.2
+
       - name: Run Go lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.7.2
-          working-directory: services/backend-api
-          args: --timeout=5m
+        run: |
+          cd services/backend-api
+          ../bin/golangci-lint run --timeout=5m
+        working-directory: ${{ github.workspace }}
 
   frontend-quality:
     name: Frontend Quality (${{ matrix.service }})
