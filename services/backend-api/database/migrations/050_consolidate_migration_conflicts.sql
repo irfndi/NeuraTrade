@@ -29,6 +29,20 @@ BEGIN
         
         RAISE NOTICE 'Created migration_status table for tracking';
     END IF;
+            id BIGSERIAL PRIMARY KEY,
+            migration_number INTEGER NOT NULL UNIQUE,
+            migration_name VARCHAR(255) NOT NULL UNIQUE,
+            description TEXT,
+            applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            checksum VARCHAR(255),
+            status VARCHAR(20) DEFAULT 'applied' CHECK (status IN ('applied', 'failed', 'rolled_back'))
+        );
+        
+        CREATE INDEX idx_migration_status_number ON migration_status(migration_number);
+        CREATE INDEX idx_migration_status_applied_at ON migration_status(applied_at DESC);
+        
+        RAISE NOTICE 'Created migration_status table for tracking';
+    END IF;
 
     -- Record all previously applied migrations to prevent re-execution
     INSERT INTO migration_status (migration_number, migration_name, description, checksum) VALUES
