@@ -3,9 +3,12 @@ package services
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
@@ -130,7 +133,7 @@ func NewPaperExecutionSimulatorWithClock(config PaperExecutionConfig, clock Cloc
 func (s *PaperExecutionSimulator) randomFloat64() float64 {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
-	return float64(int64(b[0])<<56|int64(b[1])<<48|int64(b[2])<<40|int64(b[3])<<32|int64(b[4])<<24|int64(b[5])<<16|int64(b[6])<<8|int64(b[7])) / (1 << 64)
+	return float64(binary.BigEndian.Uint64(b)) / float64(math.MaxUint64)
 }
 
 func (s *PaperExecutionSimulator) randomFloat64Between(min, max float64) float64 {
@@ -317,7 +320,7 @@ func (s *PaperExecutionSimulator) CreateOrder(req PaperOrderRequest) (*PaperOrde
 
 	now := s.clock.Now()
 	order := &PaperOrder{
-		ID:         fmt.Sprintf("paper-%d-%d", now.UnixNano(), s.randomInt63()),
+		ID:         fmt.Sprintf("paper-%s", uuid.New().String()),
 		UserID:     req.UserID,
 		Exchange:   req.Exchange,
 		Symbol:     req.Symbol,

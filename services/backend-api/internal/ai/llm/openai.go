@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -234,11 +236,29 @@ func (c *OpenAIClient) processStream(reader io.ReadCloser, eventChan chan<- Stre
 	defer close(eventChan)
 	defer func() { _ = reader.Close() }()
 
-	decoder := json.NewDecoder(reader)
+	scanner := bufio.NewScanner(reader)
 	var currentToolCalls map[int]*ToolCall
 
-	for {
-		var line struct {
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Skip empty lines
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// Parse SSE format: "data: {...}"
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		jsonData := strings.TrimPrefix(line, "data: ")
+		if jsonData == "[DONE]" {
+			eventChan <- StreamEvent{Type: StreamEventDone, Done: true}
+			return
+		}
+
+		var chunk struct {
 			ID      string         `json:"id"`
 			Object  string         `json:"object"`
 			Created int64          `json:"created"`
@@ -247,31 +267,27 @@ func (c *OpenAIClient) processStream(reader io.ReadCloser, eventChan chan<- Stre
 			Usage   *openAIUsage   `json:"usage,omitempty"`
 		}
 
-		if err := decoder.Decode(&line); err != nil {
-			if err == io.EOF {
-				eventChan <- StreamEvent{Type: StreamEventDone, Done: true}
-				return
-			}
+		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			eventChan <- StreamEvent{Type: StreamEventError, Error: err}
-			return
-		}
-
-		if line.Object == "" || line.ID == "" {
 			continue
 		}
 
-		if line.Usage != nil {
+		if chunk.Object == "" || chunk.ID == "" {
+			continue
+		}
+
+		if chunk.Usage != nil {
 			eventChan <- StreamEvent{
 				Type: StreamEventUsage,
 				Usage: &UsageMetrics{
-					InputTokens:  line.Usage.PromptTokens,
-					OutputTokens: line.Usage.CompletionTokens,
-					TotalTokens:  line.Usage.TotalTokens,
+					InputTokens:  chunk.Usage.PromptTokens,
+					OutputTokens: chunk.Usage.CompletionTokens,
+					TotalTokens:  chunk.Usage.TotalTokens,
 				},
 			}
 		}
 
-		for _, choice := range line.Choices {
+		for _, choice := range chunk.Choices {
 			if choice.Delta == nil {
 				continue
 			}
@@ -308,6 +324,14 @@ func (c *OpenAIClient) processStream(reader io.ReadCloser, eventChan chan<- Stre
 			}
 		}
 	}
+
+	// Handle scanner errors
+	if err := scanner.Err(); err != nil {
+		eventChan <- StreamEvent{Type: StreamEventError, Error: err}
+	}
+
+	// If we exit the loop without seeing [DONE], send done event
+	eventChan <- StreamEvent{Type: StreamEventDone, Done: true}
 }
 
 func (c *OpenAIClient) convertRequest(req *CompletionRequest) *openAIRequest {
