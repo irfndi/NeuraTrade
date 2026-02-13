@@ -222,6 +222,55 @@ export interface DoctorResponse {
   readonly checks: readonly DoctorCheckResponse[];
 }
 
+export interface AIModelInfo {
+  readonly model_id: string;
+  readonly display_name: string;
+  readonly provider: string;
+  readonly supports_tools: boolean;
+  readonly supports_vision: boolean;
+  readonly supports_reasoning: boolean;
+  readonly cost: string;
+  readonly tier: string;
+  readonly latency_class: string;
+}
+
+export interface AIModelsResponse {
+  readonly models: readonly AIModelInfo[];
+  readonly providers: readonly string[];
+  readonly last_sync?: string;
+}
+
+export interface AIModelSelectResponse {
+  readonly success: boolean;
+  readonly model?: AIModelInfo;
+  readonly message?: string;
+}
+
+export interface AIStatusResponse {
+  readonly selected_model?: string;
+  readonly provider?: string;
+  readonly daily_spend?: string;
+  readonly monthly_spend?: string;
+  readonly budget_limit?: string;
+  readonly daily_budget_exceeded?: boolean;
+}
+
+export interface AIRouteRequest {
+  readonly latency_preference?: "fast" | "balanced" | "accurate";
+  readonly require_tools?: boolean;
+  readonly require_vision?: boolean;
+  readonly require_reasoning?: boolean;
+  readonly max_cost?: string;
+  readonly allowed_providers?: readonly string[];
+}
+
+export interface AIRouteResponse {
+  readonly model: AIModelInfo;
+  readonly score?: number;
+  readonly reason?: string;
+  readonly alternatives?: readonly AIModelInfo[];
+}
+
 /**
  * Webhook update response.
  */
@@ -264,4 +313,10 @@ export const API_ENDPOINTS = {
     `/api/v1/telegram/internal/logs?chat_id=${encodeURIComponent(chatId)}&limit=${limit}`,
   GET_DOCTOR: (chatId: string) =>
     `/api/v1/telegram/internal/doctor?chat_id=${encodeURIComponent(chatId)}`,
+  GET_AI_MODELS: "/api/v1/ai/models",
+  SELECT_AI_MODEL: (userId: string) =>
+    `/api/v1/ai/select/${encodeURIComponent(userId)}`,
+  GET_AI_STATUS: (userId: string) =>
+    `/api/v1/ai/status/${encodeURIComponent(userId)}`,
+  ROUTE_AI_MODEL: "/api/v1/ai/route",
 } as const;
