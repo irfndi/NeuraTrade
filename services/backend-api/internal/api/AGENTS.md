@@ -36,15 +36,19 @@ go test ./internal/api/handlers/... -run TestArbitrage
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Ready to Work (No Blockers)
 - `neura-7et`: Build prompt builder from skill.md + context
 - `neura-r1d`: Progressive disclosure system
 
 ### Recently Completed (✓)
+- ✓ `neura-06k`: Health checks for Redis, SQL storage, exchange bridges
 - ✓ `neura-ydp`: Operator identity encryption (Argon2) endpoint
 - ✓ `neura-l1l`: Balance/funding validation endpoint
+- ✓ `neura-yzv`: CLI bootstrap command endpoint
+- ✓ `neura-5of`: Bind local operator profile to Telegram chat endpoint
+- ✓ `neura-aav`: Connectivity checks endpoint
 - ✓ `neura-kpu`: Risk Manager agent role endpoint
 - ✓ `neura-bol`: Consecutive-loss pause endpoint
 - ✓ `neura-we2`: Scalping skill.md endpoint
@@ -67,7 +71,6 @@ go test ./internal/api/handlers/... -run TestArbitrage
 
 ### Order Management Endpoints (Blocked)
 - `neura-txu`: Controlled liquidation tool endpoint
-- `neura-1wi`: FOK order execution endpoint
 
 ### Risk & Monitoring Endpoints (Blocked)
 - `neura-duw`: Expose cleanup endpoints

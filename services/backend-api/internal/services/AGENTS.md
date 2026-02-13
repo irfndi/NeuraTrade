@@ -31,16 +31,19 @@ go test ./internal/services/... -run TestArbitrage
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
+**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
 
 ### Ready to Work (No Blockers)
 - `neura-7et`: Build prompt builder from skill.md + context
+- `neura-1wi`: FOK order execution
 
 ### Recently Completed (✓)
+- ✓ `neura-06k`: Health checks for Redis, SQL storage, exchange bridges
 - ✓ `neura-ydp`: Operator identity encryption (Argon2)
 - ✓ `neura-l1l`: Balance/funding validation
-- ✓ `neura-9m3`: Trader agent role
-- ✓ `neura-q4j`: Max drawdown halt
+- ✓ `neura-yzv`: CLI bootstrap command
+- ✓ `neura-5of`: Bind local operator profile to Telegram chat
+- ✓ `neura-aav`: Connectivity checks for all configured providers
 - ✓ `neura-kpu`: Risk Manager agent role
 - ✓ `neura-bol`: Consecutive-loss pause
 - ✓ `neura-we2`: Scalping skill.md

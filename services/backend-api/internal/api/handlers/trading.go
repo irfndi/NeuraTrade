@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/irfndi/neuratrade/pkg/interfaces"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 )
@@ -19,17 +20,16 @@ var (
 	errTradingOrderNotFound    = errors.New("trading order not found")
 	errTradingOrderNotOpen     = errors.New("trading order is not open")
 	errTradingPositionNotFound = errors.New("trading position not found")
-	errTradingNoDatabase       = errors.New("trading handler requires database connection")
 )
 
 // TradingHandler manages trading orders and positions with persistent storage.
 // All state is persisted to the database; in-memory maps are only used for
 // sequence generation and are not authoritative storage.
 type TradingHandler struct {
-	db       DBQuerier
-	mu       sync.Mutex
-	sequence int64
-	// In-memory caches removed - all data persisted to database
+	db             DBQuerier
+	mu             sync.Mutex
+	sequence       int64
+	orderExecution interfaces.OrderExecutionInterface
 }
 
 type PlaceOrderRequest struct {
@@ -78,19 +78,26 @@ type PositionRecord struct {
 }
 
 func NewTradingHandler(querier ...any) *TradingHandler {
-	if len(querier) == 0 || querier[0] == nil {
-		panic(errTradingNoDatabase)
+	h := &TradingHandler{}
+
+	if len(querier) > 0 && querier[0] != nil {
+		resolvedQuerier, err := resolveDBQuerier(querier[0])
+		if err != nil {
+			panic(err)
+		}
+		h.db = resolvedQuerier
 	}
 
-	resolvedQuerier, err := resolveDBQuerier(querier[0])
-	if err != nil {
-		panic(err)
+	if len(querier) > 1 && querier[1] != nil {
+		if oe, ok := querier[1].(interfaces.OrderExecutionInterface); ok {
+			h.orderExecution = oe
+		}
 	}
 
-	h := &TradingHandler{db: resolvedQuerier}
-
-	if err := h.initializeTradingStore(); err != nil {
-		panic(err)
+	if h.db != nil {
+		if err := h.initializeTradingStore(); err != nil {
+			panic(err)
+		}
 	}
 
 	return h
@@ -695,4 +702,181 @@ func isNoRowsError(err error) bool {
 
 func contextWithTimeout() context.Context {
 	return context.Background()
+}
+
+type PolymarketOrderRequest struct {
+	TokenID    string          `json:"token_id" binding:"required"`
+	Side       string          `json:"side" binding:"required"`
+	Size       decimal.Decimal `json:"size" binding:"required"`
+	Price      decimal.Decimal `json:"price"`
+	MaxPrice   decimal.Decimal `json:"max_price"`
+	OrderType  string          `json:"order_type"`
+	PostOnly   bool            `json:"post_only"`
+	Expiration int64           `json:"expiration"`
+}
+
+func (h *TradingHandler) PlacePolymarketOrder(c *gin.Context) {
+	if h.orderExecution == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "error",
+			"error":  "order execution service not configured",
+		})
+		return
+	}
+
+	var req PolymarketOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"error":  "invalid request payload",
+		})
+		return
+	}
+
+	if req.Size.LessThanOrEqual(decimal.Zero) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"error":  "size must be greater than zero",
+		})
+		return
+	}
+
+	side := strings.ToUpper(strings.TrimSpace(req.Side))
+	if side != "BUY" && side != "SELL" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"error":  "side must be BUY or SELL",
+		})
+		return
+	}
+
+	orderType := strings.ToUpper(strings.TrimSpace(req.OrderType))
+	if orderType == "" {
+		orderType = "MARKET"
+	}
+
+	validTypes := map[string]bool{
+		"MARKET": true,
+		"LIMIT":  true,
+		"FOK":    true,
+		"GTC":    true,
+		"GTD":    true,
+		"FAK":    true,
+	}
+	if !validTypes[orderType] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"error":  "order_type must be MARKET, LIMIT, FOK, GTC, GTD, or FAK",
+		})
+		return
+	}
+
+	execReq := interfaces.OrderExecutionRequest{
+		TokenID:    req.TokenID,
+		Side:       interfaces.OrderSide(side),
+		Size:       req.Size,
+		Price:      req.Price,
+		MaxPrice:   req.MaxPrice,
+		OrderType:  interfaces.OrderExecutionType(orderType),
+		PostOnly:   req.PostOnly,
+		Expiration: req.Expiration,
+	}
+
+	result, err := h.orderExecution.PlaceOrder(c.Request.Context(), execReq)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"error":  fmt.Sprintf("failed to place order: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"status": "success",
+		"data": gin.H{
+			"order_id":       result.OrderID,
+			"status":         result.Status,
+			"size":           result.Size,
+			"filled_size":    result.FilledSize,
+			"remaining_size": result.RemainingSize,
+			"price":          result.Price,
+			"token_id":       result.TokenID,
+			"side":           result.Side,
+			"created_at":     result.CreatedAt,
+		},
+	})
+}
+
+func (h *TradingHandler) GetPolymarketOrderBook(c *gin.Context) {
+	if h.orderExecution == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "error",
+			"error":  "order execution service not configured",
+		})
+		return
+	}
+
+	tokenID := c.Param("token_id")
+	if tokenID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"error":  "token_id is required",
+		})
+		return
+	}
+
+	ob, err := h.orderExecution.GetOrderBook(c.Request.Context(), tokenID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"error":  fmt.Sprintf("failed to get order book: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data": gin.H{
+			"token_id":  ob.TokenID,
+			"bids":      ob.Bids,
+			"asks":      ob.Asks,
+			"timestamp": ob.Timestamp,
+		},
+	})
+}
+
+func (h *TradingHandler) CancelPolymarketOrder(c *gin.Context) {
+	if h.orderExecution == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "error",
+			"error":  "order execution service not configured",
+		})
+		return
+	}
+
+	orderID := c.Param("order_id")
+	if orderID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"error":  "order_id is required",
+		})
+		return
+	}
+
+	err := h.orderExecution.CancelOrder(c.Request.Context(), orderID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"error":  fmt.Sprintf("failed to cancel order: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data": gin.H{
+			"order_id": orderID,
+			"message":  "order cancelled successfully",
+		},
+	})
 }
