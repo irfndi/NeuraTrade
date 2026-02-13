@@ -3,8 +3,6 @@
 -- Version: 056
 -- Date: 2025-01-21
 
-BEGIN;
-
 -- =====================================================
 -- Step 1: Create Exchange Reliability Metrics Table
 -- =====================================================
@@ -331,5 +329,3 @@ VALUES ('056_exchange_reliability_and_retention.sql', true, NOW())
 ON CONFLICT (filename) DO UPDATE SET
     applied = true,
     applied_at = NOW();
-
-COMMIT;
