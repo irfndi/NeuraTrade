@@ -188,6 +188,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			market.GET("/ticker/:exchange/:symbol", marketHandler.GetTicker)
 			market.GET("/tickers/:exchange", marketHandler.GetBulkTickers)
 			market.GET("/orderbook/:exchange/:symbol", marketHandler.GetOrderBook)
+			market.GET("/orderbook/:exchange/:symbol/metrics", marketHandler.GetOrderBookMetrics)
 			market.GET("/workers/status", marketHandler.GetWorkerStatus)
 			market.GET("/ws", webSocketHandler.HandleWebSocket)
 			market.GET("/ws/stats", func(c *gin.Context) {

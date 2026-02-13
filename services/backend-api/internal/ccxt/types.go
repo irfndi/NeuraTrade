@@ -241,6 +241,14 @@ func (s *Service) FetchOrderBook(ctx context.Context, exchange, symbol string, l
 	return resp, nil
 }
 
+func (s *Service) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*OrderBookMetrics, error) {
+	orderBook, err := s.client.GetOrderBook(ctx, exchange, symbol, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch order book for metrics: %w", err)
+	}
+	return s.client.CalculateOrderBookMetrics(orderBook), nil
+}
+
 // FetchOHLCV fetches OHLCV data for technical analysis.
 //
 // Parameters:
