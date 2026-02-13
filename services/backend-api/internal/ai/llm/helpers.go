@@ -179,18 +179,26 @@ func BuildConversationHistory(messages []Message, maxTokens int) []Message {
 		return messages
 	}
 
-	result := messages[:1]
+	systemMsg := messages[0]
 	remaining := messages[1:]
+	tokenBudget := maxTokens - 1000 - estimateTokens(systemMsg.Content)
 
-	tokenCount := estimateTokens(result[0].Content)
-
-	for i := len(remaining) - 1; i >= 0 && tokenCount < maxTokens-1000; i-- {
-		msg := remaining[i]
-		tokenCount += estimateTokens(msg.Content)
-		result = append([]Message{msg}, result...)
+	var recent []Message
+	tokenCount := 0
+	for i := len(remaining) - 1; i >= 0 && tokenCount < tokenBudget; i-- {
+		tokens := estimateTokens(remaining[i].Content)
+		if tokenCount+tokens > tokenBudget {
+			break
+		}
+		tokenCount += tokens
+		recent = append(recent, remaining[i])
 	}
 
-	return result
+	for i, j := 0, len(recent)-1; i < j; i, j = i+1, j-1 {
+		recent[i], recent[j] = recent[j], recent[i]
+	}
+
+	return append([]Message{systemMsg}, recent...)
 }
 
 func estimateTokens(text string) int {

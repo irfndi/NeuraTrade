@@ -87,6 +87,7 @@ type openAIMessage struct {
 }
 
 type openAIToolCall struct {
+	Index    int                `json:"index,omitempty"`
 	ID       string             `json:"id,omitempty"`
 	Type     string             `json:"type"`
 	Function openAIFunctionCall `json:"function"`
@@ -304,17 +305,15 @@ func (c *OpenAIClient) processStream(reader io.ReadCloser, eventChan chan<- Stre
 					currentToolCalls = make(map[int]*ToolCall)
 				}
 
-				idx := 0
+				idx := tc.Index
 				if tc.ID != "" {
-					if existing, ok := currentToolCalls[idx]; ok {
-						existing.Arguments = append(existing.Arguments, tc.Function.Arguments...)
-					} else {
-						currentToolCalls[idx] = &ToolCall{
-							ID:        tc.ID,
-							Name:      tc.Function.Name,
-							Arguments: json.RawMessage(tc.Function.Arguments),
-						}
+					currentToolCalls[idx] = &ToolCall{
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
+						Arguments: json.RawMessage(tc.Function.Arguments),
 					}
+				} else if existing, ok := currentToolCalls[idx]; ok {
+					existing.Arguments = append(existing.Arguments, tc.Function.Arguments...)
 				}
 			}
 
