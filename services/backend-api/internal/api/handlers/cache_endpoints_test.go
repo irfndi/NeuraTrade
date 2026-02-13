@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/irfandi/celebrum-ai-go/internal/services"
-	"github.com/irfandi/celebrum-ai-go/internal/testutil"
+	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/irfndi/neuratrade/internal/testutil"
 )
 
 // TestCacheEndpointsIntegration tests the cache endpoints with real CacheAnalyticsService

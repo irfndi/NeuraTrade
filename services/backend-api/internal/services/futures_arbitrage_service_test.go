@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -409,7 +410,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_NoRates(t *testi
 
 	mockConfig := &config.Config{}
 	// Use real ErrorRecoveryManager since the function expects concrete type
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -436,7 +437,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_EmptyRates(t *te
 
 	mockConfig := &config.Config{}
 	// Use real ErrorRecoveryManager since the function expects concrete type
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -464,7 +465,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_CleanupError(t *
 
 	mockConfig := &config.Config{}
 	// Use real ErrorRecoveryManager since the function expects concrete type
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -491,7 +492,7 @@ func TestFuturesArbitrageService_calculateAndStoreOpportunities_ContextCancellat
 
 	mockConfig := &config.Config{}
 	// Use real ErrorRecoveryManager since the function expects concrete type
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -518,9 +519,9 @@ func TestFuturesArbitrageService_Start_Success(t *testing.T) {
 	mockConfig := &config.Config{}
 
 	// Create a real resource manager for testing
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error") // Reduce noise in tests
-	resourceManager := NewResourceManager(logging.NewStandardLogger("info", "test"))
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel) // Reduce noise in tests
+	resourceManager := NewResourceManager(logger)
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -551,9 +552,9 @@ func TestFuturesArbitrageService_Start_Success(t *testing.T) {
 
 func TestFuturesArbitrageService_Start_AlreadyRunning(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
-	resourceManager := NewResourceManager(logging.NewStandardLogger("info", "test"))
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
+	resourceManager := NewResourceManager(logger)
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -582,9 +583,9 @@ func TestFuturesArbitrageService_Start_AlreadyRunning(t *testing.T) {
 
 func TestFuturesArbitrageService_Start_ContextManagement(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
-	resourceManager := NewResourceManager(logging.NewStandardLogger("info", "test"))
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
+	resourceManager := NewResourceManager(logger)
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -622,9 +623,9 @@ func TestFuturesArbitrageService_Start_ContextManagement(t *testing.T) {
 
 func TestFuturesArbitrageService_Start_MultipleCycles(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
-	resourceManager := NewResourceManager(logging.NewStandardLogger("info", "test"))
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
+	resourceManager := NewResourceManager(logger)
 
 	service := NewFuturesArbitrageService(
 		(*database.PostgresDB)(nil),
@@ -652,9 +653,9 @@ func TestFuturesArbitrageService_Start_MultipleCycles(t *testing.T) {
 
 func TestFuturesArbitrageService_runOpportunityCalculator_ContextCancellation(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
-	resourceManager := NewResourceManager(logging.NewStandardLogger("info", "test"))
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
+	resourceManager := NewResourceManager(logger)
 	errorRecoveryManager := NewErrorRecoveryManager(logger)
 
 	service := NewFuturesArbitrageService(
@@ -686,9 +687,9 @@ func TestFuturesArbitrageService_runOpportunityCalculator_ContextCancellation(t 
 
 func TestFuturesArbitrageService_runOpportunityCalculator_ResourceManagement(t *testing.T) {
 	mockConfig := &config.Config{}
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
-	resourceManager := NewResourceManager(logging.NewStandardLogger("info", "test"))
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
+	resourceManager := NewResourceManager(logger)
 	errorRecoveryManager := NewErrorRecoveryManager(logger)
 
 	service := NewFuturesArbitrageService(

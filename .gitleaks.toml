@@ -1,0 +1,56 @@
+title = "NeuraTrade Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''_test\.go$''',
+    '''\.test\.ts$''',
+    '''\.spec\.ts$''',
+    '''test-setup\.ts$''',
+    '''test/''',
+    '''\.git/''',
+    '''coverage/''',
+    '''vendor/''',
+    '''node_modules/''',
+    '''signoz/''',
+    '''\.cache/''',
+    '''bin/''',
+    '''docs/security/''',
+    '''docs/old/''',
+    '''\.gitguardian\.yaml$''',
+    '''\.github/DEPLOYMENT-SECRETS\.md$''',
+    '''services/backend-api/internal/crypto/encryption_test\.go''',
+]
+
+regexes = [
+    '''test-secret-key''',
+    '''test-admin-key''',
+    '''test-bot-token''',
+    '''test-webhook-secret''',
+    '''replace-with-secure-secret''',
+    '''dev-jwt-secret''',
+    '''admin-secret-key-change-me''',
+    '''admin-dev-key-change-in-production''',
+    '''password123''',
+    '''secret123''',
+    '''example\.com''',
+    '''localhost''',
+    '''sk_live_test''',
+    '''sk_test_''',
+    '''sk_live_abcdef''',
+    '''sk_live_abc123''',
+    '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9''',
+    '''supersecret''',
+    '''supersecret123''',
+    '''pass123''',
+    '''mypass''',
+    '''abc123''',
+    '''secretpassword''',
+    '''my-super-secret-value-12345''',
+    '''thisisaverylongpassword123''',
+    '''yourdomain''',
+    '''Bearer your-''',
+    '''your-jwt-token''',
+]

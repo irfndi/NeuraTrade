@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
 )
 
 // Force update
@@ -20,7 +20,7 @@ import (
 func TestNewSignalQualityScorer(t *testing.T) {
 	cfg := &config.Config{}
 	db := &database.PostgresDB{}
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	scorer := NewSignalQualityScorer(cfg, db, logger)
 
@@ -717,7 +717,8 @@ func BenchmarkCalculateExchangeScore(b *testing.B) {
 func createTestScorer() *SignalQualityScorer {
 	cfg := &config.Config{}
 	db := &database.PostgresDB{}
-	logger := logging.NewStandardLogger("warn", "test") // Reduce log noise in tests
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.WarnLevel) // Reduce log noise in tests
 
 	return NewSignalQualityScorer(cfg, db, logger)
 }

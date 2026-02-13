@@ -10,14 +10,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/services"
+	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/services"
 )
 
 // AnalysisHandler manages technical analysis and signal generation endpoints.
 type AnalysisHandler struct {
-	db          *database.PostgresDB
+	db          DBQuerier
 	ccxtService ccxt.CCXTService
 	analytics   *services.AnalyticsService
 }
@@ -100,11 +99,16 @@ type OHLCV struct {
 // Returns:
 //
 //	*AnalysisHandler: The initialized handler.
-func NewAnalysisHandler(db *database.PostgresDB, ccxtService ccxt.CCXTService, analytics *services.AnalyticsService) *AnalysisHandler {
+func NewAnalysisHandler(db DBQuerier, ccxtService ccxt.CCXTService, analytics ...*services.AnalyticsService) *AnalysisHandler {
+	var analyticsService *services.AnalyticsService
+	if len(analytics) > 0 {
+		analyticsService = analytics[0]
+	}
+
 	return &AnalysisHandler{
 		db:          db,
 		ccxtService: ccxtService,
-		analytics:   analytics,
+		analytics:   analyticsService,
 	}
 }
 
@@ -326,7 +330,7 @@ func (h *AnalysisHandler) getOHLCVData(ctx context.Context, symbol, exchange, ti
 		LIMIT $3
 	`
 
-	rows, err := h.db.Pool.Query(ctx, query, symbol, exchange, limit)
+	rows, err := h.db.Query(ctx, query, symbol, exchange, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query OHLCV data: %w", err)
 	}
@@ -366,7 +370,7 @@ func (h *AnalysisHandler) simulateOHLCVFromTickers(ctx context.Context, symbol, 
 		ORDER BY timestamp ASC
 	`
 
-	rows, err := h.db.Pool.Query(ctx, query, symbol, exchange)
+	rows, err := h.db.Query(ctx, query, symbol, exchange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query ticker data: %w", err)
 	}
@@ -697,7 +701,7 @@ func (h *AnalysisHandler) getAllTradingSignals(ctx context.Context, timeframe st
 		LIMIT 20
 	`
 
-	rows, err := h.db.Pool.Query(ctx, query)
+	rows, err := h.db.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active pairs: %w", err)
 	}

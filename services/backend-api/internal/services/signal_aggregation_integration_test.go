@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -20,9 +22,10 @@ func TestSignalAggregationIntegration(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
-	// Setup test logger
-	logger := logging.NewStandardLogger("debug", "testing")
+	stdLogger := logging.NewStandardLogger("debug", "testing")
+	logrusLogger := zaplogrus.New()
 
 	// Setup configuration
 	cfg := &config.Config{
@@ -38,19 +41,19 @@ func TestSignalAggregationIntegration(t *testing.T) {
 		FailureThreshold: 5,
 		ResetTimeout:     10 * time.Second,
 	}
-	circuitBreaker := NewCircuitBreaker("test-cb", cbConfig, logger)
+	circuitBreaker := NewCircuitBreaker("test-cb", cbConfig, logrusLogger)
 
 	// Quality Scorer
-	qualityScorer := NewSignalQualityScorer(cfg, mockPool, logger)
+	qualityScorer := NewSignalQualityScorer(cfg, dbPool, logrusLogger)
 
 	// Tech Analysis - Use struct literal to avoid complex constructor dependencies
 	taService := &TechnicalAnalysisService{
 		config: cfg,
-		logger: logger,
+		logger: logrusLogger,
 	}
 
 	// Signal Aggregator
-	signalAggregator := NewSignalAggregator(cfg, mockPool, logger)
+	signalAggregator := NewSignalAggregator(cfg, dbPool, logrusLogger)
 
 	// Notification Service - Use struct literal
 	notificationService := &NotificationService{
@@ -62,8 +65,8 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Signal Processor
 	signalProcessor := NewSignalProcessor(
-		mockPool,
-		logger,
+		dbPool,
+		stdLogger,
 		signalAggregator,
 		qualityScorer,
 		taService,
@@ -81,7 +84,7 @@ func TestSignalAggregationIntegration(t *testing.T) {
 	assert.NotNil(t, qualityScorer, "Quality scorer should be initialized")
 	assert.NotNil(t, notificationService, "Notification service should be initialized")
 	assert.NotNil(t, circuitBreaker, "Circuit breaker should be initialized")
-	assert.NotNil(t, logger, "Logger should be initialized")
+	assert.NotNil(t, stdLogger, "Logger should be initialized")
 
 	// Test 1: Signal Processing Pipeline
 	t.Run("SignalProcessingPipeline", func(t *testing.T) {
@@ -222,8 +225,8 @@ func TestSignalAggregationIntegration(t *testing.T) {
 	t.Run("EndToEndPipeline", func(t *testing.T) {
 		// Initialize a fresh processor to avoid state issues from previous tests
 		cleanProcessor := NewSignalProcessor(
-			mockPool,
-			logger,
+			dbPool,
+			stdLogger,
 			signalAggregator,
 			qualityScorer,
 			taService,

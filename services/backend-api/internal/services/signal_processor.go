@@ -11,9 +11,9 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/shopspring/decimal"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/logging"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/observability"
 )
 
 // SignalProcessorConfig holds configuration settings for the signal processor service.
@@ -300,7 +300,7 @@ func (sp *SignalProcessor) processSignalBatchWithRetry(ctx context.Context, star
 			}).Info("Retrying signal batch processing")
 
 			// Wait before retry with exponential backoff
-			retryDelay := sp.config.RetryDelay * time.Duration(1<<uint(attempt-1))
+			retryDelay := sp.config.RetryDelay * time.Duration(1<<(attempt-1))
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -855,23 +855,138 @@ func (sp *SignalProcessor) assessSignalQuality(signal *AggregatedSignal, data mo
 
 // extractExchanges helper (stub)
 func (sp *SignalProcessor) extractExchanges(signal *AggregatedSignal) []string {
-	// Extract unique exchange names from signal data or database
-	return []string{} // Placeholder
-}
+	if signal == nil {
+		return []string{}
+	}
 
-// handleProcessingResultsWithContext handles the results of signal processing (store in DB, notification, metrics)
-func (sp *SignalProcessor) handleProcessingResultsWithContext(_ context.Context, results []ProcessingResult) error {
-	// Implement result handling logic (save to DB, notify if high quality)
-	for _, result := range results {
-		if result.Processed && result.QualityScore > sp.config.QualityThreshold {
-			// TODO: Implement notification logic when notification service is ready
-			// For now, just log high-quality signals
-			if sp.config.NotificationEnabled && sp.notificationService != nil {
-				sp.logger.Debug("High quality signal detected, notification would be sent",
-					"signal_id", result.SignalID, "symbol", result.Symbol, "quality", result.QualityScore)
+	unique := make(map[string]struct{})
+	exchanges := make([]string, 0)
+
+	appendExchange := func(exchange string) {
+		trimmed := strings.TrimSpace(exchange)
+		if trimmed == "" {
+			return
+		}
+
+		key := strings.ToLower(trimmed)
+		if _, exists := unique[key]; exists {
+			return
+		}
+
+		unique[key] = struct{}{}
+		exchanges = append(exchanges, trimmed)
+	}
+
+	appendExchangeList := func(raw interface{}) {
+		switch typed := raw.(type) {
+		case []string:
+			for _, exchange := range typed {
+				appendExchange(exchange)
+			}
+		case []interface{}:
+			for _, item := range typed {
+				exchange, ok := item.(string)
+				if !ok {
+					continue
+				}
+				appendExchange(exchange)
+			}
+		case string:
+			for _, item := range strings.Split(typed, ",") {
+				appendExchange(item)
 			}
 		}
 	}
+
+	appendExchangeList(signal.Exchanges)
+
+	if signal.Metadata != nil {
+		appendExchangeList(signal.Metadata["buy_exchanges"])
+		appendExchangeList(signal.Metadata["sell_exchanges"])
+		appendExchangeList(signal.Metadata["exchanges"])
+	}
+
+	return exchanges
+}
+
+func (sp *SignalProcessor) collectNotifiableSignals(results []ProcessingResult) []*AggregatedSignal {
+	threshold := 0.0
+	if sp.config != nil {
+		threshold = sp.config.QualityThreshold
+	}
+
+	seen := make(map[string]struct{})
+	signals := make([]*AggregatedSignal, 0)
+
+	for _, result := range results {
+		if !result.Processed || result.QualityScore <= threshold || result.Metadata == nil {
+			continue
+		}
+
+		rawSignal, exists := result.Metadata["aggregated_signal"]
+		if !exists {
+			continue
+		}
+
+		var signal *AggregatedSignal
+		switch typed := rawSignal.(type) {
+		case *AggregatedSignal:
+			signal = typed
+		case AggregatedSignal:
+			copied := typed
+			signal = &copied
+		default:
+			continue
+		}
+
+		if signal == nil {
+			continue
+		}
+
+		signal.Exchanges = sp.extractExchanges(signal)
+
+		key := signal.ID
+		if key == "" {
+			key = fmt.Sprintf("%s|%s|%s|%d", signal.Symbol, signal.SignalType, signal.Action, signal.CreatedAt.UnixNano())
+		}
+
+		if _, exists := seen[key]; exists {
+			continue
+		}
+
+		seen[key] = struct{}{}
+		signals = append(signals, signal)
+	}
+
+	return signals
+}
+
+// handleProcessingResultsWithContext handles the results of signal processing (store in DB, notification, metrics)
+func (sp *SignalProcessor) handleProcessingResultsWithContext(ctx context.Context, results []ProcessingResult) error {
+	if sp.config == nil || !sp.config.NotificationEnabled || sp.notificationService == nil {
+		return nil
+	}
+
+	notifiableSignals := sp.collectNotifiableSignals(results)
+	if len(notifiableSignals) == 0 {
+		return nil
+	}
+
+	if err := sp.notificationService.NotifyAggregatedSignals(ctx, notifiableSignals); err != nil {
+		if sp.logger != nil {
+			sp.logger.WithError(err).WithFields(map[string]interface{}{
+				"signal_count": len(notifiableSignals),
+			}).Warn("Failed to send aggregated signal notifications")
+		}
+		return nil
+	}
+
+	if sp.logger != nil {
+		sp.logger.WithFields(map[string]interface{}{
+			"signal_count": len(notifiableSignals),
+		}).Info("Sent high-quality aggregated signal notifications")
+	}
+
 	return nil
 }
 

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/shopspring/decimal"
 )
 
@@ -34,7 +34,21 @@ type DBFeeProvider struct {
 }
 
 // NewDBFeeProvider creates a fee provider backed by the database.
-func NewDBFeeProvider(db database.DatabasePool, defaultTakerFee decimal.Decimal, defaultMakerFee decimal.Decimal) *DBFeeProvider {
+func NewDBFeeProvider(db any, defaultTakerFee decimal.Decimal, defaultMakerFee decimal.Decimal) *DBFeeProvider {
+	var dbPool database.DatabasePool
+	switch typed := db.(type) {
+	case nil:
+		dbPool = nil
+	case database.DatabasePool:
+		dbPool = typed
+	case database.LegacyDBPool:
+		dbPool = database.WrapLegacyDBPool(typed)
+	case database.LegacyQuerier:
+		dbPool = database.WrapLegacyQuerier(typed)
+	default:
+		dbPool = nil
+	}
+
 	if defaultTakerFee.IsZero() {
 		defaultTakerFee = decimal.NewFromFloat(0.001)
 	}
@@ -43,7 +57,7 @@ func NewDBFeeProvider(db database.DatabasePool, defaultTakerFee decimal.Decimal,
 	}
 
 	return &DBFeeProvider{
-		db:              db,
+		db:              dbPool,
 		defaultTakerFee: defaultTakerFee,
 		defaultMakerFee: defaultMakerFee,
 		cacheTTL:        30 * time.Minute,

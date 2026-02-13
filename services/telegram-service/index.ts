@@ -1,9 +1,13 @@
-import { Effect } from "effect";
 import { Bot, GrammyError, HttpError } from "grammy";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { logger } from "hono/logger";
+import { logger as honoLogger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
+import { config } from "./src/config";
+import { BackendApiClient } from "./src/api/client";
+import { registerAllCommands } from "./src/commands";
+import { SessionManager } from "./src/session";
+import { logger } from "./src/utils/logger";
 import { startGrpcServer } from "./grpc-server";
 import {
   isSentryEnabled,
@@ -27,62 +31,49 @@ import {
   handleMessageText,
 } from "./bot-handlers";
 
-const config = loadConfig();
-const api = createApi(config);
+const bot = new Bot(config.botToken);
+const api = new BackendApiClient({
+  baseUrl: config.apiBaseUrl,
+  adminKey: config.adminApiKey,
+});
+const sessions = new SessionManager();
 
-// Only create bot if token is available
-const bot = config.botTokenMissing ? null : new Bot(config.botToken);
+setInterval(() => {
+  const cleaned = sessions.cleanupExpired();
+  if (cleaned > 0) {
+    logger.info("Session cleanup completed", { cleanedCount: cleaned });
+  }
+}, 60_000);
 
-// Only register bot commands if bot is available
-if (bot) {
-  bot.command("start", handleStart(api));
-  bot.command("help", handleHelp());
-  bot.command("opportunities", handleOpportunities(api));
-  bot.command("status", handleStatus(api));
-  bot.command("settings", handleSettings(api));
-  bot.command("stop", handleStop(api));
-  bot.command("resume", handleResume(api));
-  bot.command("upgrade", handleUpgrade());
-  bot.on("message:text", handleMessageText());
+registerAllCommands(bot, api, sessions);
 
-  bot.catch((err) => {
-    const ctx = err.ctx;
-    console.error(`Error while handling update ${ctx.update.update_id}:`);
-    const error = err.error;
+bot.on("message:text", async (ctx) => {
+  await ctx.reply("Thanks for your message! 👋\n\nTry /help for commands.");
+});
 
-    // Capture error to Sentry with context
-    if (isSentryEnabled) {
-      captureException(error, {
-        update_id: ctx.update.update_id,
-        chat_id: ctx.chat?.id,
-        user_id: ctx.from?.id,
-        message_text: ctx.message?.text,
-        error_type:
-          error instanceof GrammyError
-            ? "GrammyError"
-            : error instanceof HttpError
-              ? "HttpError"
-              : "UnknownError",
-      });
-    }
-
-    if (error instanceof GrammyError) {
-      console.error("Error in request:", error.description);
-    } else if (error instanceof HttpError) {
-      console.error("Could not contact Telegram:", error);
-    } else {
-      console.error("Unknown error:", error);
-    }
-  });
-}
+bot.catch((err) => {
+  const ctx = err.ctx;
+  const error = err.error;
+  if (error instanceof GrammyError) {
+    logger.error("Telegram request error", error, {
+      updateId: ctx.update.update_id,
+      description: error.description,
+    });
+  } else if (error instanceof HttpError) {
+    logger.error("Telegram connection error", error, {
+      updateId: ctx.update.update_id,
+    });
+  } else {
+    logger.error("Unknown bot error", error as Error, {
+      updateId: ctx.update.update_id,
+    });
+  }
+});
 
 const app = new Hono();
 app.use("*", secureHeaders());
 app.use("*", cors());
-app.use("*", logger());
-if (isSentryEnabled) {
-  app.use("*", sentryMiddleware);
-}
+app.use("*", honoLogger());
 
 app.get("/health", (c) => {
   // Return degraded status if bot is not configured
@@ -117,15 +108,6 @@ app.get("/health", (c) => {
 });
 
 app.post("/send-message", async (c) => {
-  // If bot is not configured, return service unavailable
-  if (!bot) {
-    return c.json(
-      { error: "Bot not available (TELEGRAM_BOT_TOKEN not configured)" },
-      503,
-    );
-  }
-
-  // If ADMIN_API_KEY is not configured, disable admin endpoints
   if (!config.adminApiKey) {
     return c.json(
       { error: "Admin endpoints are disabled (ADMIN_API_KEY not set)" },
@@ -149,7 +131,7 @@ app.post("/send-message", async (c) => {
     await bot.api.sendMessage(chatId, text, { parse_mode: parseMode });
     return c.json({ ok: true });
   } catch (error) {
-    console.error("Failed to send message:", error);
+    logger.error("Failed to send message", error as Error, { chatId });
     return c.json(
       { error: "Failed to send message", details: String(error) },
       500,
@@ -182,28 +164,15 @@ if (!config.usePolling && bot) {
 const server = Bun.serve({
   fetch: app.fetch,
   port: config.port,
-  // reusePort can cause EADDRINUSE on some Linux configurations
-  // Only enable if explicitly requested via environment variable
   reusePort: process.env.BUN_REUSE_PORT === "true",
 });
 
-console.log(`🤖 Telegram service listening on port ${server.port}`);
+logger.info("Telegram service started", {
+  port: config.port,
+  mode: config.usePolling ? "polling" : "webhook",
+});
 
-// Initialize Sentry AFTER server startup to avoid auto-instrumentation conflicts
-if (isSentryEnabled) {
-  initializeSentry().then((initialized) => {
-    if (initialized) {
-      console.log("✓ Sentry initialized for telegram-service");
-    }
-  });
-}
-
-const grpcPort = process.env.TELEGRAM_GRPC_PORT
-  ? parseInt(process.env.TELEGRAM_GRPC_PORT)
-  : 50052;
-
-// Only start gRPC server if bot is available
-const grpcServer = bot ? startGrpcServer(bot, grpcPort) : null;
+const grpcServer = startGrpcServer(bot, config.grpcPort);
 
 const startBot = async () => {
   // Skip bot startup if token is not configured
@@ -214,10 +183,7 @@ const startBot = async () => {
   }
 
   if (config.usePolling) {
-    console.log("Starting Telegram bot in polling mode");
-    if (isSentryEnabled) {
-      trackBotMode("polling");
-    }
+    logger.info("Starting bot in polling mode");
     await bot.api.deleteWebhook({ drop_pending_updates: true });
     bot.start();
     return;
@@ -227,29 +193,19 @@ const startBot = async () => {
     throw new Error("TELEGRAM_WEBHOOK_URL must be set for webhook mode");
   }
 
-  console.log(`Setting Telegram webhook to ${config.webhookUrl}`);
-  if (isSentryEnabled) {
-    trackBotMode("webhook");
-  }
+  logger.info("Setting Telegram webhook", { webhookUrl: config.webhookUrl });
   await bot.api.setWebhook(config.webhookUrl, {
     secret_token: config.webhookSecret || undefined,
   });
 };
 
 startBot().catch((error) => {
-  console.error("Failed to start Telegram bot:", error);
-  // Don't exit if bot fails to start - keep health check running
-  if (bot) {
-    console.error("Bot failed to start but service will continue running");
-  }
+  logger.error("Failed to start bot", error);
+  process.exit(1);
 });
 
-process.on("SIGTERM", async () => {
-  console.log("SIGTERM received, shutting down...");
-  // Flush Sentry events before shutdown
-  if (isSentryEnabled) {
-    await sentryFlush(2000);
-  }
+process.on("SIGTERM", () => {
+  logger.info("SIGTERM received, shutting down");
   server.stop();
   if (grpcServer) {
     grpcServer.forceShutdown();
@@ -257,12 +213,8 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-process.on("SIGINT", async () => {
-  console.log("SIGINT received, shutting down...");
-  // Flush Sentry events before shutdown
-  if (isSentryEnabled) {
-    await sentryFlush(2000);
-  }
+process.on("SIGINT", () => {
+  logger.info("SIGINT received, shutting down");
   server.stop();
   if (grpcServer) {
     grpcServer.forceShutdown();

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,6 +16,7 @@ func TestDeadLetterService_AddToDeadLetter_QueryStructure(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -73,7 +75,7 @@ func TestDeadLetterService_AddToDeadLetter_QueryStructure(t *testing.T) {
 				nextRetryAt = &t
 			}
 
-			_, err := mockPool.Exec(ctx,
+			_, err := dbPool.Exec(ctx,
 				`INSERT INTO notification_dead_letters
 				(id, user_id, chat_id, message_type, message_content, error_code, error_message, attempts, status, next_retry_at)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 'pending', $8)`,
@@ -90,6 +92,7 @@ func TestDeadLetterService_GetPendingMessages_QueryStructure(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -115,7 +118,7 @@ func TestDeadLetterService_GetPendingMessages_QueryStructure(t *testing.T) {
 			WithArgs(10).
 			WillReturnRows(rows)
 
-		queryRows, err := mockPool.Query(ctx,
+		queryRows, err := dbPool.Query(ctx,
 			`SELECT id, user_id, chat_id, message_type, message_content,
 			       COALESCE(error_code, ''), COALESCE(error_message, ''),
 			       attempts, status, created_at, last_attempt_at, next_retry_at
@@ -152,6 +155,7 @@ func TestDeadLetterService_UpdateDeadLetter_Success(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -159,7 +163,7 @@ func TestDeadLetterService_UpdateDeadLetter_Success(t *testing.T) {
 		WithArgs("entry-123").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	_, err = mockPool.Exec(ctx,
+	_, err = dbPool.Exec(ctx,
 		`UPDATE notification_dead_letters
 		SET status = 'success',
 		    last_attempt_at = NOW(),
@@ -174,6 +178,7 @@ func TestDeadLetterService_UpdateDeadLetter_FailedWithRetry(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -196,7 +201,7 @@ func TestDeadLetterService_UpdateDeadLetter_FailedWithRetry(t *testing.T) {
 
 	// Get current attempts
 	var currentAttempts int
-	err = mockPool.QueryRow(ctx, "SELECT attempts FROM notification_dead_letters WHERE id = $1", "entry-456").Scan(&currentAttempts)
+	err = dbPool.QueryRow(ctx, "SELECT attempts FROM notification_dead_letters WHERE id = $1", "entry-456").Scan(&currentAttempts)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, currentAttempts)
 
@@ -205,7 +210,7 @@ func TestDeadLetterService_UpdateDeadLetter_FailedWithRetry(t *testing.T) {
 	nextRetryTime := time.Now().Add(15 * time.Minute) // 5 * 3^1 = 15 minutes
 
 	// Update
-	_, err = mockPool.Exec(ctx,
+	_, err = dbPool.Exec(ctx,
 		`UPDATE notification_dead_letters
 		SET status = $2,
 		    attempts = $3,
@@ -224,6 +229,7 @@ func TestDeadLetterService_MarkAsRetrying(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -231,7 +237,7 @@ func TestDeadLetterService_MarkAsRetrying(t *testing.T) {
 		WithArgs("entry-123").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	_, err = mockPool.Exec(ctx,
+	_, err = dbPool.Exec(ctx,
 		`UPDATE notification_dead_letters
 		SET status = 'retrying'
 		WHERE id = $1`, "entry-123")
@@ -244,6 +250,7 @@ func TestDeadLetterService_GetDeadLetterStats(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -257,7 +264,7 @@ func TestDeadLetterService_GetDeadLetterStats(t *testing.T) {
 	mockPool.ExpectQuery(`SELECT status, COUNT`).
 		WillReturnRows(statusRows)
 
-	rows, err := mockPool.Query(ctx, `SELECT status, COUNT(*) FROM notification_dead_letters GROUP BY status`)
+	rows, err := dbPool.Query(ctx, `SELECT status, COUNT(*) FROM notification_dead_letters GROUP BY status`)
 	assert.NoError(t, err)
 	defer rows.Close()
 
@@ -293,6 +300,7 @@ func TestDeadLetterService_CleanupOldEntries(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 
@@ -301,12 +309,14 @@ func TestDeadLetterService_CleanupOldEntries(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("DELETE", 15))
 
 	cutoff := time.Now().Add(-24 * time.Hour)
-	result, err := mockPool.Exec(ctx,
+	result, err := dbPool.Exec(ctx,
 		`DELETE FROM notification_dead_letters
 		WHERE status IN ('success', 'failed')
 		  AND created_at < $1`, cutoff)
 	assert.NoError(t, err)
-	assert.Equal(t, int64(15), result.RowsAffected())
+	affectedRows, rowsErr := result.RowsAffected()
+	assert.NoError(t, rowsErr)
+	assert.Equal(t, int64(15), affectedRows)
 	assert.NoError(t, mockPool.ExpectationsWereMet())
 }
 
@@ -315,6 +325,7 @@ func TestDeadLetterService_GetUserDeadLetters(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -334,7 +345,7 @@ func TestDeadLetterService_GetUserDeadLetters(t *testing.T) {
 		WithArgs("user-123", 10).
 		WillReturnRows(rows)
 
-	queryRows, err := mockPool.Query(ctx,
+	queryRows, err := dbPool.Query(ctx,
 		`SELECT id, user_id, chat_id, message_type, message_content,
 		       COALESCE(error_code, ''), COALESCE(error_message, ''),
 		       attempts, status, created_at, last_attempt_at, next_retry_at

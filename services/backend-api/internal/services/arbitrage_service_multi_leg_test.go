@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -16,17 +17,10 @@ func TestArbitrageService_StoreMultiLegOpportunities(t *testing.T) {
 	assert.NoError(t, err)
 	defer mockPool.Close()
 
-	// The original code created a database.PostgresDB struct to pass to NewArbitrageService.
-	// The instruction is to pass mockPool directly.
-	// This implies that NewArbitrageService's first argument should accept pgxmock.Pool directly,
-	// or an interface that pgxmock.Pool satisfies.
-	// For the purpose of this edit, we assume NewArbitrageService can accept pgxmock.Pool.
-	// If NewArbitrageService expects *database.PostgresDB, this change would cause a type error.
-	// However, following the instruction faithfully, we make the requested change at the call site.
-	// db := &database.PostgresDB{Pool: mockPool}
+	dbPool := database.NewMockDBPool(mockPool)
 	cfg := &config.Config{}
 
-	service := NewArbitrageService(mockPool, cfg, nil, nil)
+	service := NewArbitrageService(dbPool, cfg, nil)
 
 	opps := []models.MultiLegOpportunity{
 		{

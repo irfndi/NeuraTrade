@@ -1,19 +1,49 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/api/handlers/testmocks"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/middleware"
+	"github.com/irfndi/neuratrade/internal/api/handlers/testmocks"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/middleware"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// mockRouteDB wraps MockDBPool to add HealthCheck for routeDB interface
+type mockRouteDB struct {
+	database.DBPool
+}
+
+func (m mockRouteDB) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+// setupMockDB creates a mock database pool with all expected initialization queries
+func setupMockDB(t *testing.T) mockRouteDB {
+	t.Helper()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err, "Failed to create mock pool")
+
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_orders").
+		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_positions").
+		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+
+	return mockRouteDB{DBPool: database.NewMockDBPool(mock)}
+}
 
 // Helper functions for environment variable management with proper error handling
 func mustSetEnv(t *testing.T, key, value string) {
@@ -311,7 +341,7 @@ func TestSetupRoutes_PanicHandling(t *testing.T) {
 
 	// Test that SetupRoutes panics with nil dependencies (expected behavior)
 	assert.Panics(t, func() {
-		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should panic with nil dependencies")
 }
 
@@ -334,19 +364,16 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 	mustSetEnv(t, "TELEGRAM_BOT_TOKEN", "test-token")
 	mustSetEnv(t, "TELEGRAM_CHAT_ID", "test-chat-id")
 
-	// Use nil values for dependencies - SetupRoutes should handle this gracefully
-	// This provides coverage for the function signature and basic execution
+	// Use mock database for dependencies - SetupRoutes requires database for TradingHandler
 	router := gin.New()
 
-	// Test that SetupRoutes doesn't panic with valid dependencies
-	// For testing purposes, we'll create minimal working instances
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("test-url")
 
-	// Create a minimal Redis client that won't panic
+	mockDB := setupMockDB(t)
 	mockRedis := &database.RedisClient{
 		Client: redis.NewClient(&redis.Options{
-			Addr: "localhost:6379", // This won't actually connect in tests
+			Addr: "localhost:6379",
 		}),
 	}
 
@@ -354,12 +381,10 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 		BotToken: "test-token",
 	}
 
-	// Create a minimal auth middleware
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
 
-	// Test the function by providing minimal dependencies to avoid panics
 	assert.NotPanics(t, func() {
-		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 	}, "SetupRoutes should handle minimal dependencies gracefully")
 
 	// Verify routes were registered
@@ -406,17 +431,16 @@ func TestSetupRoutes_RouteGroups(t *testing.T) {
 		BotToken: "test-token",
 	}
 
-	// Create router and setup routes
+	// Create router and setup routes with mock database
 	router := gin.New()
-	// Create a minimal Redis client that won't panic
+	mockDB := setupMockDB(t)
 	mockRedis := &database.RedisClient{
 		Client: redis.NewClient(&redis.Options{
-			Addr: "localhost:6379", // This won't actually connect in tests
+			Addr: "localhost:6379",
 		}),
 	}
-	// Create a minimal auth middleware
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -471,17 +495,16 @@ func TestSetupRoutes_HttpMethods(t *testing.T) {
 		BotToken: "test-token",
 	}
 
-	// Create router and setup routes
+	// Create router and setup routes with mock database
 	router := gin.New()
-	// Create a minimal Redis client that won't panic
+	mockDB := setupMockDB(t)
 	mockRedis := &database.RedisClient{
 		Client: redis.NewClient(&redis.Options{
-			Addr: "localhost:6379", // This won't actually connect in tests
+			Addr: "localhost:6379",
 		}),
 	}
-	// Create a minimal auth middleware
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -539,17 +562,16 @@ func TestSetupRoutes_Middleware(t *testing.T) {
 		BotToken: "test-token",
 	}
 
-	// Create router and setup routes
+	// Create router and setup routes with mock database
 	router := gin.New()
-	// Create a minimal Redis client that won't panic
+	mockDB := setupMockDB(t)
 	mockRedis := &database.RedisClient{
 		Client: redis.NewClient(&redis.Options{
-			Addr: "localhost:6379", // This won't actually connect in tests
+			Addr: "localhost:6379",
 		}),
 	}
-	// Create a minimal auth middleware
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-	SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Test that router has middleware configured
 	// Gin router should have middleware registered
@@ -597,15 +619,14 @@ func TestSetupRoutes_MissingAdminKey(t *testing.T) {
 
 	// Test that SetupRoutes works with valid admin key
 	assert.NotPanics(t, func() {
-		// Create a minimal Redis client that won't panic
+		mockDB := setupMockDB(t)
 		mockRedis := &database.RedisClient{
 			Client: redis.NewClient(&redis.Options{
-				Addr: "localhost:6379", // This won't actually connect in tests
+				Addr: "localhost:6379",
 			}),
 		}
-		// Create a minimal auth middleware
 		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 	}, "SetupRoutes should handle missing admin key gracefully")
 }
 
@@ -641,15 +662,14 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 
 	// Test that SetupRoutes still works when telegram config is missing (but logs warning)
 	assert.NotPanics(t, func() {
-		// Create a minimal Redis client that won't panic
+		mockDB := setupMockDB(t)
 		mockRedis := &database.RedisClient{
 			Client: redis.NewClient(&redis.Options{
-				Addr: "localhost:6379", // This won't actually connect in tests
+				Addr: "localhost:6379",
 			}),
 		}
-		// Create a minimal auth middleware
 		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
-		SetupRoutes(router, nil, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 	}, "SetupRoutes should not panic when telegram config is missing")
 
 	// Verify routes were still registered

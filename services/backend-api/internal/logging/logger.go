@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -334,7 +335,6 @@ func getZapLevel(level string) zapcore.Level {
 	}
 }
 
-// sentryCore is a custom zapcore.Core that sends errors to Sentry.
 type sentryCore struct {
 	zapcore.LevelEnabler
 }
@@ -343,6 +343,25 @@ func newSentryCore(levelEnabler zapcore.LevelEnabler) *sentryCore {
 	return &sentryCore{
 		LevelEnabler: levelEnabler,
 	}
+}
+
+// ParseLogrusLevel converts string level to zaplogrus.Level.
+// This helper is useful for integrations that use Logrus.
+func ParseLogrusLevel(level string) zaplogrus.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return zaplogrus.DebugLevel
+	case "warn", "warning":
+		return zaplogrus.WarnLevel
+	case "error":
+		return zaplogrus.ErrorLevel
+	default:
+		return zaplogrus.InfoLevel
+	}
+}
+
+func (s *sentryCore) Enabled(level zapcore.Level) bool {
+	return s.LevelEnabler.Enabled(level)
 }
 
 func (s *sentryCore) With(fields []zapcore.Field) zapcore.Core {

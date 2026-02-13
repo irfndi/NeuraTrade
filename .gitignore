@@ -103,6 +103,8 @@ temp/
 
 # Database files
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 
@@ -166,3 +168,9 @@ mcp.json
 # Task files
 # tasks.json
 # tasks/ 
+
+# Agent working directories
+.sisyphus/
+
+# Built binaries
+services/backend-api/server

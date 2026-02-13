@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
+	"github.com/irfndi/neuratrade/internal/observability"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 )
@@ -455,12 +455,4 @@ func (ro *ResourceOptimizer) GetSystemInfo() map[string]interface{} {
 		"adaptive_mode":     ro.adaptiveMode,
 		"optimal_config":    ro.optimalConcurrency,
 	}
-}
-
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 )
 
 // TestNewCleanupService tests the NewCleanupService function
@@ -28,7 +29,7 @@ func TestNewCleanupService(t *testing.T) {
 	defer mockPool.Close()
 
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Test creating cleanup service (ResourceManager and PerformanceMonitor are not used)
 	service := NewCleanupService(
@@ -52,7 +53,7 @@ func TestNewCleanupService(t *testing.T) {
 // TestCleanupService_Start tests the Start method
 func TestCleanupService_Start(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -99,7 +100,7 @@ func TestCleanupService_Start(t *testing.T) {
 // TestCleanupService_RunCleanup tests the RunCleanup method
 func TestCleanupService_RunCleanup(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -136,7 +137,7 @@ func TestCleanupService_RunCleanup(t *testing.T) {
 // TestCleanupService_GetDataStats tests the GetDataStats method
 func TestCleanupService_GetDataStats(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -160,16 +161,17 @@ func TestCleanupService_GetDataStats_WithError(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	// Configure mock to return error for QueryRow calls
 	mockPool.ExpectQuery("SELECT COUNT\\(\\*\\) FROM market_data").WillReturnError(errors.New("connection failed"))
 
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with mock database
 	service := NewCleanupService(
-		mockPool,
+		dbPool,
 		errorRecoveryManager,
 		nil, // ResourceManager not used by CleanupService
 		nil, // PerformanceMonitor not used by CleanupService
@@ -189,7 +191,7 @@ func TestCleanupService_GetDataStats_WithError(t *testing.T) {
 // TestCleanupService_CleanupMarketDataSmart tests the cleanupMarketDataSmart method
 func TestCleanupService_CleanupMarketDataSmart(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -209,7 +211,7 @@ func TestCleanupService_CleanupMarketDataSmart(t *testing.T) {
 // TestCleanupService_CleanupFundingRatesSmart tests the cleanupFundingRatesSmart method
 func TestCleanupService_CleanupFundingRatesSmart(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -229,7 +231,7 @@ func TestCleanupService_CleanupFundingRatesSmart(t *testing.T) {
 // TestCleanupService_CleanupArbitrageOpportunities tests the cleanupArbitrageOpportunities method
 func TestCleanupService_CleanupArbitrageOpportunities(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -249,7 +251,7 @@ func TestCleanupService_CleanupArbitrageOpportunities(t *testing.T) {
 // TestCleanupService_CleanupFundingArbitrageOpportunities tests the cleanupFundingArbitrageOpportunities method
 func TestCleanupService_CleanupFundingArbitrageOpportunities(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -269,7 +271,7 @@ func TestCleanupService_CleanupFundingArbitrageOpportunities(t *testing.T) {
 // TestCleanupService_CleanupMarketData tests the cleanupMarketData method
 func TestCleanupService_CleanupMarketData(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -289,7 +291,7 @@ func TestCleanupService_CleanupMarketData(t *testing.T) {
 // TestCleanupService_CleanupFundingRates tests the cleanupFundingRates method
 func TestCleanupService_CleanupFundingRates(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -312,13 +314,14 @@ func TestCleanupService_CleanupMarketData_WithRealDatabase(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with mock database
 	service := NewCleanupService(
-		mockPool,
+		dbPool,
 		errorRecoveryManager,
 		nil, // ResourceManager not used by CleanupService
 		nil, // PerformanceMonitor not used by CleanupService
@@ -344,13 +347,14 @@ func TestCleanupService_CleanupFundingRates_WithRealDatabase(t *testing.T) {
 	mockPool, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
 
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with mock database
 	service := NewCleanupService(
-		mockPool,
+		dbPool,
 		errorRecoveryManager,
 		nil, // ResourceManager not used by CleanupService
 		nil, // PerformanceMonitor not used by CleanupService
@@ -373,7 +377,7 @@ func TestCleanupService_CleanupFundingRates_WithRealDatabase(t *testing.T) {
 // TestCleanupService_CleanupMarketData_ContextCancellation tests cleanupMarketData with context cancellation
 func TestCleanupService_CleanupMarketData_ContextCancellation(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -396,7 +400,7 @@ func TestCleanupService_CleanupMarketData_ContextCancellation(t *testing.T) {
 // TestCleanupService_CleanupFundingRates_ContextCancellation tests cleanupFundingRates with context cancellation
 func TestCleanupService_CleanupFundingRates_ContextCancellation(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -419,7 +423,7 @@ func TestCleanupService_CleanupFundingRates_ContextCancellation(t *testing.T) {
 // TestCleanupService_CleanupMarketData_NegativeRetention tests cleanupMarketData with negative retention hours
 func TestCleanupService_CleanupMarketData_NegativeRetention(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -439,7 +443,7 @@ func TestCleanupService_CleanupMarketData_NegativeRetention(t *testing.T) {
 // TestCleanupService_CleanupFundingRates_ZeroRetention tests cleanupFundingRates with zero retention hours
 func TestCleanupService_CleanupFundingRates_ZeroRetention(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -459,7 +463,7 @@ func TestCleanupService_CleanupFundingRates_ZeroRetention(t *testing.T) {
 // TestCleanupService_CleanupMarketDataSmart_WithError tests cleanupMarketDataSmart with database error
 func TestCleanupService_CleanupMarketDataSmart_WithError(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service with nil database (tests error handling paths)
 	service := NewCleanupService(
@@ -479,7 +483,7 @@ func TestCleanupService_CleanupMarketDataSmart_WithError(t *testing.T) {
 // TestCleanupService_CleanupMarketDataSmart_Comprehensive tests cleanupMarketDataSmart with various scenarios
 func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Test with nil database
 	t.Run("NilDatabase", func(t *testing.T) {
@@ -501,9 +505,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -526,9 +531,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -551,9 +557,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -578,9 +585,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -603,9 +611,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -628,9 +637,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -653,9 +663,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -683,9 +694,10 @@ func TestCleanupService_CleanupMarketDataSmart_Comprehensive(t *testing.T) {
 		mockPool, err := pgxmock.NewPool()
 		assert.NoError(t, err)
 		defer mockPool.Close()
+		dbPool := database.NewMockDBPool(mockPool)
 
 		service := NewCleanupService(
-			mockPool,
+			dbPool,
 			errorRecoveryManager,
 			nil,
 			nil,
@@ -716,7 +728,7 @@ func TestCleanupService_Stop(t *testing.T) {
 	defer mockPool.Close()
 
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service (ResourceManager and PerformanceMonitor are not used)
 	service := NewCleanupService(
@@ -740,7 +752,7 @@ func TestCleanupService_ContextCancellation(t *testing.T) {
 	defer mockPool.Close()
 
 	// Create real ErrorRecoveryManager for testing
-	errorRecoveryManager := NewErrorRecoveryManager(logging.NewStandardLogger("info", "test"))
+	errorRecoveryManager := NewErrorRecoveryManager(zaplogrus.New())
 
 	// Create cleanup service (ResourceManager and PerformanceMonitor are not used)
 	service := NewCleanupService(

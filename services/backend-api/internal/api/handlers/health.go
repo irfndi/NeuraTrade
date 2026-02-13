@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/irfandi/celebrum-ai-go/internal/services"
+	"github.com/irfndi/neuratrade/internal/services"
 )
 
 // DatabaseHealthChecker interface for database health checks.
@@ -263,6 +263,7 @@ var startTime = time.Now()
 
 // ReadinessCheck checks if the service is ready to accept traffic.
 // This is typically used by load balancers or Kubernetes.
+// It performs comprehensive checks on all critical dependencies.
 //
 // Parameters:
 //
@@ -277,10 +278,11 @@ func (h *HealthHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
 	span.SetTag("http.url", r.URL.String())
 	span.SetTag("handler.name", "ReadinessCheck")
 
-	// Similar to HealthCheck but more strict
+	// Comprehensive readiness checks for all services
 	servicesStatus := make(map[string]string)
+	allReady := true
 
-	// All services must be healthy for readiness
+	// Check database (critical)
 	if h.db != nil {
 		if err := h.db.HealthCheck(ctx); err == nil {
 			servicesStatus["database"] = "ready"
@@ -289,24 +291,53 @@ func (h *HealthHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
 			servicesStatus["database"] = "not ready"
 			span.SetTag("database.readiness", "not_ready")
 			sentry.CaptureException(err)
-			span.Status = sentry.SpanStatusInternalError
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if err := json.NewEncoder(w).Encode(map[string]interface{}{
-				"ready":    false,
-				"services": servicesStatus,
-			}); err != nil {
-				sentry.CaptureException(err)
-				http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-			}
-			return
+			allReady = false
 		}
+	} else {
+		servicesStatus["database"] = "not configured"
+		span.SetTag("database.readiness", "not_configured")
+		allReady = false
 	}
 
-	// All checks passed
-	span.Status = sentry.SpanStatusOK
-	w.WriteHeader(http.StatusOK)
+	// Check Redis (critical for caching)
+	if h.redis != nil {
+		if err := h.redis.HealthCheck(ctx); err == nil {
+			servicesStatus["redis"] = "ready"
+			span.SetTag("redis.readiness", "ready")
+		} else {
+			servicesStatus["redis"] = "not ready"
+			span.SetTag("redis.readiness", "not_ready")
+			sentry.CaptureException(err)
+			allReady = false
+		}
+	} else {
+		servicesStatus["redis"] = "not configured"
+		span.SetTag("redis.readiness", "not_configured")
+		allReady = false
+	}
+
+	// Check CCXT service (important for market data)
+	// CCXT unavailability marks service as degraded, not unready
+	if err := h.checkCCXTService(); err != nil {
+		servicesStatus["ccxt"] = "degraded"
+		span.SetTag("ccxt.readiness", "degraded")
+		sentry.CaptureException(err)
+	} else {
+		servicesStatus["ccxt"] = "ready"
+		span.SetTag("ccxt.readiness", "ready")
+	}
+
+	// Set appropriate status code
+	if !allReady {
+		span.Status = sentry.SpanStatusUnavailable
+		w.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		span.Status = sentry.SpanStatusOK
+		w.WriteHeader(http.StatusOK)
+	}
+
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"ready":    true,
+		"ready":    allReady,
 		"services": servicesStatus,
 	}); err != nil {
 		sentry.CaptureException(err)
@@ -340,5 +371,70 @@ func (h *HealthHandler) LivenessCheck(w http.ResponseWriter, r *http.Request) {
 		sentry.CaptureException(err)
 		span.Status = sentry.SpanStatusInternalError
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
+}
+
+// RiskMetricsResponse represents the risk metrics response.
+type RiskMetricsResponse struct {
+	// Status is the overall risk status.
+	Status string `json:"status"`
+	// Timestamp is the check time.
+	Timestamp time.Time `json:"timestamp"`
+	// Metrics contains detailed risk metrics.
+	Metrics RiskMetrics `json:"metrics"`
+}
+
+// RiskMetrics contains detailed risk information.
+type RiskMetrics struct {
+	// SystemRisk is the overall system risk score (0-100).
+	SystemRisk int `json:"system_risk"`
+	// ExchangeRisk is the exchange reliability risk score (0-20).
+	ExchangeRisk int `json:"exchange_risk"`
+	// LiquidityRisk is the liquidity risk score (0-20).
+	LiquidityRisk int `json:"liquidity_risk"`
+	// VolatilityRisk is the market volatility risk score (0-20).
+	VolatilityRisk int `json:"volatility_risk"`
+	// OperationalRisk is the operational risk score (0-20).
+	OperationalRisk int `json:"operational_risk"`
+	// ActiveExchanges is the count of active exchanges.
+	ActiveExchanges int `json:"active_exchanges"`
+	// FailedExchanges is the count of failed exchanges.
+	FailedExchanges int `json:"failed_exchanges"`
+	// LastRiskUpdate is the timestamp of last risk calculation.
+	LastRiskUpdate time.Time `json:"last_risk_update"`
+}
+
+// GetRiskMetrics returns current risk metrics for the system.
+// Note: This is a placeholder implementation. Real risk metrics should be
+// calculated from ExchangeReliabilityTracker and other services in a follow-up.
+func (h *HealthHandler) GetRiskMetrics(w http.ResponseWriter, r *http.Request) {
+	span := sentry.StartSpan(r.Context(), "risk_metrics")
+	defer span.Finish()
+
+	span.SetTag("http.method", r.Method)
+	span.SetTag("http.url", r.URL.String())
+	span.SetTag("handler.name", "GetRiskMetrics")
+
+	metrics := RiskMetrics{
+		SystemRisk:      15,
+		ExchangeRisk:    5,
+		LiquidityRisk:   3,
+		VolatilityRisk:  5,
+		OperationalRisk: 2,
+		ActiveExchanges: 6,
+		FailedExchanges: 0,
+		LastRiskUpdate:  time.Now(),
+	}
+
+	span.Status = sentry.SpanStatusOK
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(RiskMetricsResponse{
+		Status:    "healthy",
+		Timestamp: time.Now(),
+		Metrics:   metrics,
+	}); err != nil {
+		sentry.CaptureException(err)
+		span.Status = sentry.SpanStatusInternalError
 	}
 }

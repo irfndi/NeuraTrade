@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/shopspring/decimal"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/config"
 )
 
 // SignalQualityScorer provides signal quality assessment capabilities, evaluating signals based on
@@ -18,7 +18,7 @@ import (
 type SignalQualityScorer struct {
 	config *config.Config
 	db     DBPool
-	logger logging.Logger
+	logger *zaplogrus.Logger
 
 	// Cached exchange reliability scores
 	exchangeReliabilityCache map[string]*ExchangeReliability
@@ -111,7 +111,7 @@ type QualityThresholds struct {
 //
 // Returns:
 //   - A pointer to the initialized SignalQualityScorer.
-func NewSignalQualityScorer(cfg *config.Config, db DBPool, logger logging.Logger) *SignalQualityScorer {
+func NewSignalQualityScorer(cfg *config.Config, db DBPool, logger *zaplogrus.Logger) *SignalQualityScorer {
 	return &SignalQualityScorer{
 		config:                   cfg,
 		db:                       db,
@@ -155,7 +155,7 @@ func (sqs *SignalQualityScorer) AssessSignalQuality(ctx context.Context, input *
 		input.SignalType, input.Symbol, input.Exchanges, input.Volume.InexactFloat64(),
 		input.ProfitPotential.InexactFloat64(), input.Confidence.InexactFloat64())
 
-	sqs.logger.WithFields(map[string]interface{}{
+	sqs.logger.WithFields(zaplogrus.Fields{
 		"signal_type": input.SignalType,
 		"symbol":      input.Symbol,
 		"exchanges":   input.Exchanges,

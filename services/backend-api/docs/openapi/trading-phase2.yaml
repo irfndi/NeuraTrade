@@ -1,0 +1,211 @@
+openapi: 3.0.3
+info:
+  title: NeuraTrade Trading Execution API
+  version: 0.1.0
+  description: Phase-2 trading and stateful position endpoints.
+paths:
+  /api/v1/trading/place_order:
+    post:
+      summary: Place a trading order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceOrderRequest"
+      responses:
+        "201":
+          description: Order accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderPlacementResponse"
+        "400":
+          description: Validation error
+  /api/v1/trading/cancel_order:
+    post:
+      summary: Cancel an open order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - order_id
+              properties:
+                order_id:
+                  type: string
+      responses:
+        "200":
+          description: Order canceled
+        "404":
+          description: Order not found
+        "409":
+          description: Order not open
+  /api/v1/trading/liquidate:
+    post:
+      summary: Liquidate one open position by position_id or symbol
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                position_id:
+                  type: string
+                symbol:
+                  type: string
+      responses:
+        "200":
+          description: Position liquidated
+        "404":
+          description: Open position not found
+  /api/v1/trading/liquidate_all:
+    post:
+      summary: Liquidate all open positions
+      responses:
+        "200":
+          description: Liquidation completed
+  /api/v1/trading/positions:
+    get:
+      summary: List tracked positions
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [OPEN, CLOSED, LIQUIDATED]
+      responses:
+        "200":
+          description: Position list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      count:
+                        type: integer
+                      positions:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PositionRecord"
+  /api/v1/trading/positions/{position_id}:
+    get:
+      summary: Get one position
+      parameters:
+        - in: path
+          name: position_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Position found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/PositionRecord"
+        "404":
+          description: Position not found
+components:
+  schemas:
+    PlaceOrderRequest:
+      type: object
+      required:
+        - exchange
+        - symbol
+        - side
+        - amount
+      properties:
+        exchange:
+          type: string
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [BUY, SELL]
+        type:
+          type: string
+          enum: [MARKET, LIMIT]
+        amount:
+          type: string
+          description: Decimal string
+        price:
+          type: string
+          description: Decimal string
+    OrderRecord:
+      type: object
+      properties:
+        order_id:
+          type: string
+        position_id:
+          type: string
+        exchange:
+          type: string
+        symbol:
+          type: string
+        side:
+          type: string
+        type:
+          type: string
+        amount:
+          type: string
+        price:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PositionRecord:
+      type: object
+      properties:
+        position_id:
+          type: string
+        order_id:
+          type: string
+        exchange:
+          type: string
+        symbol:
+          type: string
+        side:
+          type: string
+        size:
+          type: string
+        entry_price:
+          type: string
+        status:
+          type: string
+        opened_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    OrderPlacementResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        data:
+          type: object
+          properties:
+            order:
+              $ref: "#/components/schemas/OrderRecord"
+            position:
+              $ref: "#/components/schemas/PositionRecord"

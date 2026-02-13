@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/observability"
 )
 
 // TimeoutConfig defines timeout durations for various types of operations.
@@ -26,7 +26,7 @@ type TimeoutConfig struct {
 // allowing for centralized configuration and monitoring of operation durations.
 type TimeoutManager struct {
 	config         *TimeoutConfig
-	logger         logging.Logger
+	logger         *zaplogrus.Logger
 	activeContexts map[string]context.CancelFunc
 	mu             sync.RWMutex
 	defaultTimeout time.Duration
@@ -49,7 +49,7 @@ type OperationContext struct {
 //
 // Returns:
 //   - A pointer to the initialized TimeoutManager.
-func NewTimeoutManager(config *TimeoutConfig, logger logging.Logger) *TimeoutManager {
+func NewTimeoutManager(config *TimeoutConfig, logger *zaplogrus.Logger) *TimeoutManager {
 	if config == nil {
 		config = DefaultTimeoutConfig()
 	}
@@ -298,8 +298,7 @@ func (tm *TimeoutManager) ExecuteWithTimeout(
 	select {
 	case result := <-resultChan:
 		duration := time.Since(opCtx.StartTime)
-		opErr = result.err
-		tm.logger.WithFields(map[string]interface{}{
+		tm.logger.WithFields(zaplogrus.Fields{
 			"operation_type": operationType,
 			"operation_id":   operationID,
 			"duration":       duration,
@@ -316,8 +315,7 @@ func (tm *TimeoutManager) ExecuteWithTimeout(
 
 	case <-opCtx.Ctx.Done():
 		duration := time.Since(opCtx.StartTime)
-		opErr = opCtx.Ctx.Err()
-		tm.logger.WithFields(map[string]interface{}{
+		tm.logger.WithFields(zaplogrus.Fields{
 			"operation_type": operationType,
 			"operation_id":   operationID,
 			"duration":       duration,
@@ -361,7 +359,7 @@ func (tm *TimeoutManager) ExecuteWithTimeoutAndFallback(
 ) (interface{}, error) {
 	result, err := tm.ExecuteWithTimeout(operationType, operationID, operation)
 	if err != nil && fallback != nil {
-		tm.logger.WithFields(map[string]interface{}{
+		tm.logger.WithFields(zaplogrus.Fields{
 			"operation_type": operationType,
 			"operation_id":   operationID,
 			"error":          err.Error(),

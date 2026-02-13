@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewResourceManager(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	rm := NewResourceManager(logger)
 
@@ -34,7 +34,7 @@ func TestNewResourceManager(t *testing.T) {
 }
 
 func TestResourceManager_RegisterResource(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	cleanupCalled := false
@@ -77,7 +77,7 @@ func TestResourceManager_RegisterResource(t *testing.T) {
 }
 
 func TestResourceManager_UpdateResourceUsage(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	rm.RegisterResource("test-resource", TimerResource, nil, nil)
@@ -101,7 +101,7 @@ func TestResourceManager_UpdateResourceUsage(t *testing.T) {
 }
 
 func TestResourceManager_CleanupResource(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	cleanupCalled := false
@@ -130,7 +130,7 @@ func TestResourceManager_CleanupResource(t *testing.T) {
 }
 
 func TestResourceManager_CleanupResourceWithError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	cleanupFunc := func() error {
@@ -152,7 +152,7 @@ func TestResourceManager_CleanupResourceWithError(t *testing.T) {
 }
 
 func TestResourceManager_CleanupResource_NonExistent(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Cleanup non-existent resource should not error
@@ -161,7 +161,7 @@ func TestResourceManager_CleanupResource_NonExistent(t *testing.T) {
 }
 
 func TestResourceManager_CleanupIdleResources(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Set short idle time for testing
@@ -191,7 +191,7 @@ func TestResourceManager_CleanupIdleResources(t *testing.T) {
 }
 
 func TestResourceManager_DetectLeaks(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Set short leak threshold for testing
@@ -215,7 +215,7 @@ func TestResourceManager_DetectLeaks(t *testing.T) {
 }
 
 func TestResourceManager_GetResourceStats(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Register some resources
@@ -244,7 +244,7 @@ func TestResourceManager_GetResourceStats(t *testing.T) {
 }
 
 func TestResourceManager_GetSystemStats(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Register some resources
@@ -265,7 +265,7 @@ func TestResourceManager_GetSystemStats(t *testing.T) {
 }
 
 func TestResourceManager_CleanupAll(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	cleanupCount := 0
@@ -300,7 +300,7 @@ func TestResourceManager_CleanupAll(t *testing.T) {
 }
 
 func TestResourceManager_Shutdown(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	cleanupCalled := false
@@ -328,7 +328,7 @@ func TestResourceManager_Shutdown(t *testing.T) {
 }
 
 func TestResourceManager_SetConfiguration(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Test setting max idle time - this should not panic
@@ -348,7 +348,7 @@ func TestResourceManager_SetConfiguration(t *testing.T) {
 }
 
 func TestResourceManager_GetResourceCount(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Initially empty
@@ -366,7 +366,7 @@ func TestResourceManager_GetResourceCount(t *testing.T) {
 }
 
 func TestResourceManager_IsResourceManaged(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Check non-existent resource
@@ -387,7 +387,7 @@ func TestResourceManager_IsResourceManaged(t *testing.T) {
 }
 
 func TestResourceManager_ConcurrentAccess(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	var wg sync.WaitGroup
@@ -442,7 +442,7 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 }
 
 func TestResourceManager_ResourceLimits(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	// Set low resource limit
@@ -461,7 +461,7 @@ func TestResourceManager_ResourceLimits(t *testing.T) {
 }
 
 func TestResourceManager_MetadataHandling(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	metadata := map[string]interface{}{
@@ -485,7 +485,7 @@ func TestResourceManager_MetadataHandling(t *testing.T) {
 }
 
 func TestResourceManager_ResourceAging(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	rm := NewResourceManager(logger)
 
 	startTime := time.Now()

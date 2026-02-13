@@ -41,10 +41,14 @@ type Config struct {
 	Blacklist BlacklistConfig `mapstructure:"blacklist"`
 	// Auth holds configuration for authentication.
 	Auth AuthConfig `mapstructure:"auth"`
+	// Security holds configuration for security features like encryption.
+	Security SecurityConfig `mapstructure:"security"`
 	// Fees holds configuration for exchange fee defaults.
 	Fees FeesConfig `mapstructure:"fees"`
 	// Analytics holds configuration for analytics features.
 	Analytics AnalyticsConfig `mapstructure:"analytics"`
+	// Wallet holds configuration for wallet validation.
+	Wallet WalletValidatorConfig `mapstructure:"wallet"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -57,6 +61,7 @@ type ServerConfig struct {
 
 // DatabaseConfig defines the PostgreSQL database connection settings.
 type DatabaseConfig struct {
+	Driver string `mapstructure:"driver"`
 	// Host is the database server hostname or IP.
 	Host string `mapstructure:"host"`
 	// Port is the database server port.
@@ -80,17 +85,19 @@ type DatabaseConfig struct {
 	// ConnMaxIdleTime is the maximum idle connection lifetime.
 	ConnMaxIdleTime string `mapstructure:"conn_max_idle_time"`
 	// PostgreSQL 18 specific optimizations
-	ApplicationName       string `mapstructure:"application_name"`
-	ConnectTimeout        int    `mapstructure:"connect_timeout"`
-	StatementTimeout      int    `mapstructure:"statement_timeout"`
-	QueryTimeout          int    `mapstructure:"query_timeout"` // Alias for StatementTimeout for compatibility
-	PoolTimeout           int    `mapstructure:"pool_timeout"`
-	PoolHealthCheckPeriod int    `mapstructure:"pool_health_check_period"`
-	PoolMaxLifetime       int    `mapstructure:"pool_max_lifetime"`
-	PoolIdleTimeout       int    `mapstructure:"pool_idle_timeout"`
-	EnableAsync           bool   `mapstructure:"enable_async"`
-	AsyncBatchSize        int    `mapstructure:"async_batch_size"`
-	AsyncConcurrency      int    `mapstructure:"async_concurrency"`
+	ApplicationName           string `mapstructure:"application_name"`
+	ConnectTimeout            int    `mapstructure:"connect_timeout"`
+	StatementTimeout          int    `mapstructure:"statement_timeout"`
+	QueryTimeout              int    `mapstructure:"query_timeout"` // Alias for StatementTimeout for compatibility
+	PoolTimeout               int    `mapstructure:"pool_timeout"`
+	PoolHealthCheckPeriod     int    `mapstructure:"pool_health_check_period"`
+	PoolMaxLifetime           int    `mapstructure:"pool_max_lifetime"`
+	PoolIdleTimeout           int    `mapstructure:"pool_idle_timeout"`
+	EnableAsync               bool   `mapstructure:"enable_async"`
+	AsyncBatchSize            int    `mapstructure:"async_batch_size"`
+	AsyncConcurrency          int    `mapstructure:"async_concurrency"`
+	SQLitePath                string `mapstructure:"sqlite_path"`
+	SQLiteVectorExtensionPath string `mapstructure:"sqlite_vector_extension_path"`
 }
 
 // RedisConfig defines the Redis connection settings.
@@ -103,6 +110,20 @@ type RedisConfig struct {
 	Password string `mapstructure:"password"`
 	// DB is the Redis database index to use.
 	DB int `mapstructure:"db"`
+	// PoolSize is the maximum number of connections in the connection pool.
+	PoolSize int `mapstructure:"pool_size"`
+	// MinIdleConns is the minimum number of idle connections.
+	MinIdleConns int `mapstructure:"min_idle_conns"`
+	// DialTimeout is the timeout for establishing new connections.
+	DialTimeout int `mapstructure:"dial_timeout"`
+	// ReadTimeout is the timeout for read operations.
+	ReadTimeout int `mapstructure:"read_timeout"`
+	// WriteTimeout is the timeout for write operations.
+	WriteTimeout int `mapstructure:"write_timeout"`
+	// PoolTimeout is the timeout for getting a connection from the pool.
+	PoolTimeout int `mapstructure:"pool_timeout"`
+	// DefaultTTL is the default TTL for cached items in seconds.
+	DefaultTTL int `mapstructure:"default_ttl"`
 }
 
 // CCXTConfig defines settings for interacting with the CCXT microservice.
@@ -263,6 +284,13 @@ type AuthConfig struct {
 	JWTSecret string `mapstructure:"jwt_secret"`
 }
 
+// SecurityConfig defines security-related settings.
+type SecurityConfig struct {
+	// EncryptionKey is the base64-encoded 32-byte key for AES-256-GCM encryption.
+	// Used for encrypting sensitive data like exchange API keys.
+	EncryptionKey string `mapstructure:"encryption_key"`
+}
+
 // FeesConfig defines default fees used when exchange-specific data is missing.
 type FeesConfig struct {
 	// DefaultTakerFee is the fallback taker fee (decimal percent, e.g., 0.001 = 0.1%).
@@ -284,6 +312,12 @@ type AnalyticsConfig struct {
 	RegimeLongWindow        int     `mapstructure:"regime_long_window"`
 	VolatilityHighThreshold float64 `mapstructure:"volatility_high_threshold"`
 	VolatilityLowThreshold  float64 `mapstructure:"volatility_low_threshold"`
+}
+
+type WalletValidatorConfig struct {
+	MinimumUSDCBalance         float64 `mapstructure:"minimum_usdc_balance"`
+	MinimumPortfolioValue      float64 `mapstructure:"minimum_portfolio_value"`
+	MinimumExchangeConnections int     `mapstructure:"minimum_exchange_connections"`
 }
 
 // Load reads the configuration from the config file and environment variables.
@@ -308,8 +342,14 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("auth.jwt_secret", "JWT_SECRET")
 	_ = viper.BindEnv("security.jwt_secret", "JWT_SECRET")
 
+	// Bind encryption key for API key storage
+	_ = viper.BindEnv("security.encryption_key", "ENCRYPTION_KEY")
+
 	// Bind standard DATABASE_URL
 	_ = viper.BindEnv("database.database_url", "DATABASE_URL")
+	_ = viper.BindEnv("database.driver", "DATABASE_DRIVER")
+	_ = viper.BindEnv("database.sqlite_path", "SQLITE_PATH")
+	_ = viper.BindEnv("database.sqlite_vector_extension_path", "SQLITE_VEC_EXTENSION_PATH")
 
 	// Bind database environment variables explicitly
 	_ = viper.BindEnv("database.host", "DATABASE_HOST")
@@ -373,18 +413,21 @@ func setDefaults() {
 	viper.SetDefault("server.allowed_origins", []string{"http://localhost:3000"})
 
 	// Set database defaults
+	viper.SetDefault("database.driver", "postgres")
 	viper.SetDefault("database.host", "localhost")
 	viper.SetDefault("database.port", 5432)
 	viper.SetDefault("database.user", "postgres")
 	// Set default password for testing (must be overridden in production)
 	viper.SetDefault("database.password", "change-me-in-production")
-	viper.SetDefault("database.dbname", "celebrum_ai")
+	viper.SetDefault("database.dbname", "neuratrade")
 	viper.SetDefault("database.sslmode", "disable")
 	viper.SetDefault("database.database_url", "")
 	viper.SetDefault("database.max_open_conns", 25)
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("database.conn_max_lifetime", "300s")
 	viper.SetDefault("database.conn_max_idle_time", "60s")
+	viper.SetDefault("database.sqlite_path", "data/neuratrade.db")
+	viper.SetDefault("database.sqlite_vector_extension_path", "")
 
 	// Redis
 	viper.SetDefault("redis.host", "localhost")
@@ -436,7 +479,7 @@ func setDefaults() {
 
 	// Telemetry
 	viper.SetDefault("telemetry.enabled", true)
-	viper.SetDefault("telemetry.service_name", "github.com/irfandi/celebrum-ai-go")
+	viper.SetDefault("telemetry.service_name", "github.com/irfndi/neuratrade")
 	viper.SetDefault("telemetry.service_version", "1.0.0")
 	viper.SetDefault("telemetry.log_level", "info")
 
@@ -491,6 +534,9 @@ func setDefaults() {
 	// Auth
 	viper.SetDefault("auth.jwt_secret", "")
 
+	// Security
+	viper.SetDefault("security.encryption_key", "")
+
 	// Fees
 	viper.SetDefault("fees.default_taker_fee", 0.001)
 	viper.SetDefault("fees.default_maker_fee", 0.001)
@@ -507,6 +553,11 @@ func setDefaults() {
 	viper.SetDefault("analytics.regime_long_window", 60)
 	viper.SetDefault("analytics.volatility_high_threshold", 0.03)
 	viper.SetDefault("analytics.volatility_low_threshold", 0.005)
+
+	// Wallet validation
+	viper.SetDefault("wallet.minimum_usdc_balance", 100.0)
+	viper.SetDefault("wallet.minimum_portfolio_value", 500.0)
+	viper.SetDefault("wallet.minimum_exchange_connections", 1)
 }
 
 // GetServiceURL returns the CCXT service URL.
@@ -529,6 +580,19 @@ func (c *CCXTConfig) GetTimeout() int {
 
 // validateConfig validates critical security and operational settings.
 func validateConfig(config *Config) error {
+	driver := strings.ToLower(strings.TrimSpace(config.Database.Driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+
+	if driver != "postgres" && driver != "sqlite" {
+		return fmt.Errorf("database.driver must be one of [postgres, sqlite], got %q", config.Database.Driver)
+	}
+
+	if driver == "sqlite" && strings.TrimSpace(config.Database.SQLitePath) == "" {
+		return fmt.Errorf("database.sqlite_path is required when database.driver=sqlite")
+	}
+
 	// Validate JWT secret for production environments
 	if config.Environment == "production" || config.Environment == "staging" {
 		if config.Auth.JWTSecret == "" {

@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewPerformanceMonitor(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -32,7 +32,7 @@ func TestNewPerformanceMonitor(t *testing.T) {
 }
 
 func TestPerformanceMonitor_Start(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -53,7 +53,7 @@ func TestPerformanceMonitor_Start(t *testing.T) {
 }
 
 func TestPerformanceMonitor_Stop(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -78,7 +78,7 @@ func TestPerformanceMonitor_Stop(t *testing.T) {
 }
 
 func TestPerformanceMonitor_GetSystemMetrics(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -104,7 +104,7 @@ func TestPerformanceMonitor_GetSystemMetrics(t *testing.T) {
 }
 
 func TestPerformanceMonitor_GetApplicationMetrics(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -123,7 +123,7 @@ func TestPerformanceMonitor_GetApplicationMetrics(t *testing.T) {
 }
 
 func TestPerformanceMonitor_UpdateCollectorMetrics(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -153,7 +153,7 @@ func TestPerformanceMonitor_UpdateCollectorMetrics(t *testing.T) {
 }
 
 func TestPerformanceMonitor_UpdateAPIMetrics(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -177,7 +177,7 @@ func TestPerformanceMonitor_UpdateAPIMetrics(t *testing.T) {
 }
 
 func TestPerformanceMonitor_UpdateTelegramMetrics(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -201,7 +201,7 @@ func TestPerformanceMonitor_UpdateTelegramMetrics(t *testing.T) {
 }
 
 func TestPerformanceMonitor_RecordWorkerHealth(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -224,7 +224,7 @@ func TestPerformanceMonitor_RecordWorkerHealth(t *testing.T) {
 }
 
 func TestPerformanceMonitor_GetPerformanceReport(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -249,7 +249,7 @@ func TestPerformanceMonitor_GetPerformanceReport(t *testing.T) {
 }
 
 func TestPerformanceMonitor_CalculateHealthScore(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -305,7 +305,7 @@ func TestPerformanceMonitor_CalculateHealthScore(t *testing.T) {
 }
 
 func TestPerformanceMonitor_ConcurrentAccess(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -348,7 +348,7 @@ func TestPerformanceMonitor_ConcurrentAccess(t *testing.T) {
 }
 
 func TestPerformanceMonitor_CacheMetrics(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -380,7 +380,7 @@ func TestPerformanceMonitor_CacheMetrics(t *testing.T) {
 }
 
 func TestPerformanceMonitor_CollectSystemMetrics(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -411,7 +411,7 @@ func TestPerformanceMonitor_CollectSystemMetrics(t *testing.T) {
 }
 
 func TestPerformanceMonitor_CollectRedisMetrics(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	redisClient := getTestRedisClient(t)
 	ctx := context.Background()
 
@@ -430,7 +430,7 @@ func TestPerformanceMonitor_CollectRedisMetrics(t *testing.T) {
 }
 
 func TestPerformanceMonitor_WithNilRedis(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	ctx := context.Background()
 
 	pm := NewPerformanceMonitor(logger, nil, ctx)

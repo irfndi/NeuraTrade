@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 )
@@ -19,11 +20,12 @@ func TestNewAlertHandler(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewAlertHandler(mockDB)
+	handler := NewAlertHandler(dbPool)
 
 	assert.NotNil(t, handler)
-	assert.Equal(t, mockDB, handler.db)
+	assert.NotNil(t, handler.db)
 }
 
 func TestAlertHandler_GetUserAlerts_Success(t *testing.T) {
@@ -31,8 +33,9 @@ func TestAlertHandler_GetUserAlerts_Success(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewAlertHandler(mockDB)
+	handler := NewAlertHandler(dbPool)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -56,8 +59,9 @@ func TestAlertHandler_CreateAlert_Success(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewAlertHandler(mockDB)
+	handler := NewAlertHandler(dbPool)
 
 	alert := models.UserAlert{
 		AlertType:  "arbitrage",
@@ -86,8 +90,9 @@ func TestAlertHandler_UpdateAlert_Success(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewAlertHandler(mockDB)
+	handler := NewAlertHandler(dbPool)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -117,8 +122,9 @@ func TestAlertHandler_DeleteAlert_Success(t *testing.T) {
 	mockDB, err := pgxmock.NewPool()
 	assert.NoError(t, err)
 	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewAlertHandler(mockDB)
+	handler := NewAlertHandler(dbPool)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

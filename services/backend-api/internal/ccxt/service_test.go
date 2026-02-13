@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/cache"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/cache"
+	"github.com/irfndi/neuratrade/internal/config"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +19,7 @@ func TestNewService(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 	require.NotNil(t, service)
@@ -36,7 +36,7 @@ func TestService_Initialize(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -55,7 +55,7 @@ func TestService_GetSupportedExchanges(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -73,7 +73,7 @@ func TestService_FetchSingleTicker(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -104,7 +104,7 @@ func TestService_FetchMarketData(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -139,7 +139,7 @@ func TestService_FetchMarketData_EmptyExchanges(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 	ctx := context.Background()
@@ -158,7 +158,7 @@ func TestService_FetchMarketData_EmptySymbols(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 	ctx := context.Background()
@@ -178,7 +178,7 @@ func TestService_GetExchangeInfo_Exists(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -208,7 +208,7 @@ func TestService_GetExchangeInfo_NotExists(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -226,7 +226,7 @@ func TestService_ConcurrentAccess(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -266,7 +266,7 @@ func TestService_LastUpdate(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -322,7 +322,7 @@ func TestService_DifferentConfigs(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			logger := logging.NewStandardLogger("info", "test")
+			logger := zaplogrus.New()
 			blacklistCache := cache.NewInMemoryBlacklistCache()
 			service := NewService(tc.config, logger, blacklistCache)
 			assert.NotNil(t, service)
@@ -339,7 +339,7 @@ func TestService_SupportedExchangesOperations(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -380,7 +380,7 @@ func TestService_EdgeCases(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -405,7 +405,7 @@ func TestService_InitializationState(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -433,7 +433,7 @@ func TestService_GetServiceURL(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -453,7 +453,7 @@ func TestService_Close(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 

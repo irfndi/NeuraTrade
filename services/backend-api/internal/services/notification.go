@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,24 +14,24 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
-	pb "github.com/irfandi/celebrum-ai-go/pkg/pb/telegram"
+	"github.com/irfndi/neuratrade/internal/observability"
+	"github.com/irfndi/neuratrade/internal/telemetry"
+	pb "github.com/irfndi/neuratrade/pkg/pb/telegram"
 
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	userModels "github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/database"
+	userModels "github.com/irfndi/neuratrade/internal/models"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
 // NotificationService handles sending notifications to users.
 type NotificationService struct {
-	db                 *database.PostgresDB
+	db                 DBPool
 	redis              *database.RedisClient
 	telegramServiceURL string
 	telegramGrpcAddr   string
@@ -127,7 +126,12 @@ type StopLoss struct {
 // Returns:
 //
 //	*NotificationService: Initialized service.
-func NewNotificationService(db *database.PostgresDB, redis *database.RedisClient, telegramServiceURL, telegramGrpcAddress, adminAPIKey string) *NotificationService {
+func NewNotificationService(db DBPool, redis *database.RedisClient, telegramServiceURL, telegramGrpcAddress, adminAPIKey string) *NotificationService {
+	var deadLetterService *DeadLetterService
+	if postgresDB, ok := db.(*database.PostgresDB); ok {
+		deadLetterService = NewDeadLetterService(postgresDB)
+	}
+
 	ns := &NotificationService{
 		db:                 db,
 		redis:              redis,
@@ -135,7 +139,7 @@ func NewNotificationService(db *database.PostgresDB, redis *database.RedisClient
 		telegramGrpcAddr:   telegramGrpcAddress,
 		adminAPIKey:        adminAPIKey,
 		logger:             telemetry.Logger(),
-		deadLetterService:  NewDeadLetterService(db),
+		deadLetterService:  deadLetterService,
 	}
 
 	if telegramGrpcAddress != "" {
@@ -280,6 +284,7 @@ func (ns *NotificationService) sendTelegramMessageWithResult(ctx context.Context
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
+	// #nosec G704 -- URL is an internal service endpoint configured by trusted env
 	resp, err := client.Do(req)
 	if err != nil {
 		observability.FinishSpan(httpSpan, err)
@@ -343,7 +348,7 @@ func (ns *NotificationService) sendTelegramMessageWithRetry(ctx context.Context,
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			// Calculate delay with exponential backoff and jitter
-			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+			delay := baseDelay * time.Duration(1<<(attempt-1))
 			if lastResult.RetryAfter > 0 {
 				delay = time.Duration(lastResult.RetryAfter) * time.Second
 			}
@@ -428,7 +433,7 @@ func (ns *NotificationService) handleBlockedUser(ctx context.Context, userID, re
 		    updated_at = NOW()
 		WHERE id = $1
 	`
-	_, err := ns.db.Pool.Exec(ctx, query, userID)
+	_, err := ns.db.Exec(ctx, query, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update user blocked status: %w", err)
 	}
@@ -893,7 +898,7 @@ func (ns *NotificationService) getEligibleUsers(ctx context.Context) ([]userMode
 		  )
 	`
 
-	rows, err := ns.db.Pool.Query(ctx, query)
+	rows, err := ns.db.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query eligible users: %w", err)
 	}
@@ -983,8 +988,7 @@ func (ns *NotificationService) generateOpportunityHash(opportunities []Arbitrage
 			opp.BuyPrice, opp.SellPrice, opp.ProfitPercent))
 	}
 
-	hash := md5.Sum([]byte(hashData.String()))
-	return hex.EncodeToString(hash[:])
+	return stableHash(hashData.String())
 }
 
 // generateTechnicalSignalsHash creates a consistent hash for technical signals
@@ -995,8 +999,12 @@ func (ns *NotificationService) generateTechnicalSignalsHash(signals []TechnicalS
 			signal.Symbol, signal.SignalType, signal.Action, signal.CurrentPrice, signal.Confidence))
 	}
 
-	hash := md5.Sum([]byte(hashData.String()))
-	return hex.EncodeToString(hash[:])
+	return stableHash(hashData.String())
+}
+
+func stableHash(input string) string {
+	sum := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(sum[:])
 }
 
 // getCachedMessage retrieves a cached message from Redis
@@ -1110,7 +1118,7 @@ func (ns *NotificationService) sendEnhancedArbitrageAlert(ctx context.Context, u
 	}
 
 	// Generate hash for signal to check cache
-	signalHash := fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprintf("%s:%s:%.4f", signal.Symbol, signal.SignalType, signal.Confidence.InexactFloat64()))))
+	signalHash := stableHash(fmt.Sprintf("%s:%s:%.4f", signal.Symbol, signal.SignalType, signal.Confidence.InexactFloat64()))
 
 	// Try to get cached message first
 	var message string
@@ -1332,7 +1340,7 @@ func (ns *NotificationService) logNotification(ctx context.Context, userID, noti
 	`
 
 	now := time.Now()
-	_, err := ns.db.Pool.Exec(ctx, query, userID, notificationType, message, now)
+	_, err := ns.db.Exec(ctx, query, userID, notificationType, message, now)
 	if err != nil {
 		return fmt.Errorf("failed to log notification: %w", err)
 	}
@@ -1378,7 +1386,7 @@ func (ns *NotificationService) CheckUserNotificationPreferences(ctx context.Cont
 	`
 
 	var count int
-	err := ns.db.Pool.QueryRow(ctx, query, userID).Scan(&count)
+	err := ns.db.QueryRow(ctx, query, userID).Scan(&count)
 	if err != nil {
 		return true, fmt.Errorf("failed to check user preferences: %w", err) // Default to enabled on error
 	}
@@ -1903,4 +1911,303 @@ func (ns *NotificationService) CleanupDeadLetters(ctx context.Context, olderThan
 		return 0, fmt.Errorf("dead letter service not initialized")
 	}
 	return ns.deadLetterService.CleanupOldEntries(ctx, olderThan)
+}
+
+type QuestProgressNotification struct {
+	QuestID       string
+	QuestName     string
+	Current       int
+	Target        int
+	Percent       int
+	Status        string
+	TimeRemaining string
+}
+
+func (ns *NotificationService) NotifyQuestProgress(ctx context.Context, chatID int64, progress QuestProgressNotification) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyQuestProgress", map[string]string{
+		"chat_id":  fmt.Sprintf("%d", chatID),
+		"quest_id": progress.QuestID,
+	})
+	defer observability.FinishSpan(span, nil)
+
+	message := ns.formatQuestProgressMessage(progress)
+
+	if err := ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
+		ns.logger.Error("Failed to send quest progress notification",
+			"chat_id", chatID,
+			"quest_id", progress.QuestID,
+			"error", err,
+		)
+		return err
+	}
+
+	ns.logger.Info("Sent quest progress notification",
+		"chat_id", chatID,
+		"quest_id", progress.QuestID,
+		"percent", progress.Percent,
+	)
+
+	return nil
+}
+
+func (ns *NotificationService) formatQuestProgressMessage(progress QuestProgressNotification) string {
+	var statusEmoji string
+	switch progress.Status {
+	case "completed":
+		statusEmoji = "✅"
+	case "failed":
+		statusEmoji = "❌"
+	case "expired":
+		statusEmoji = "⏰"
+	default:
+		statusEmoji = "🎯"
+	}
+
+	lines := []string{
+		fmt.Sprintf("%s **Quest Progress Update**", statusEmoji),
+		"",
+		fmt.Sprintf("**%s**", progress.QuestName),
+		fmt.Sprintf("Progress: %d/%d (%d%%)", progress.Current, progress.Target, progress.Percent),
+	}
+
+	if progress.Status == "completed" {
+		lines = append(lines, "", "🎉 Quest completed!")
+	} else if progress.TimeRemaining != "" {
+		lines = append(lines, fmt.Sprintf("Time remaining: %s", progress.TimeRemaining))
+	}
+
+	progressBar := ns.generateProgressBar(progress.Percent, 10)
+	lines = append(lines, "", progressBar)
+
+	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+}
+
+type RiskEventNotification struct {
+	EventType string
+	Severity  string
+	Message   string
+	Details   map[string]string
+}
+
+func (ns *NotificationService) NotifyRiskEvent(ctx context.Context, chatID int64, event RiskEventNotification) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyRiskEvent", map[string]string{
+		"chat_id":    fmt.Sprintf("%d", chatID),
+		"event_type": event.EventType,
+		"severity":   event.Severity,
+	})
+	defer observability.FinishSpan(span, nil)
+
+	message := ns.formatRiskEventMessage(event)
+
+	if err := ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
+		ns.logger.Error("Failed to send risk event notification",
+			"chat_id", chatID,
+			"event_type", event.EventType,
+			"error", err,
+		)
+		return err
+	}
+
+	ns.logger.Info("Sent risk event notification",
+		"chat_id", chatID,
+		"event_type", event.EventType,
+		"severity", event.Severity,
+	)
+
+	return nil
+}
+
+func (ns *NotificationService) formatRiskEventMessage(event RiskEventNotification) string {
+	var severityEmoji string
+	switch event.Severity {
+	case "critical":
+		severityEmoji = "🚨"
+	case "high":
+		severityEmoji = "⚠️"
+	case "medium":
+		severityEmoji = "⚡"
+	case "low":
+		severityEmoji = "ℹ️"
+	default:
+		severityEmoji = "⚠️"
+	}
+
+	lines := []string{
+		fmt.Sprintf("%s **Risk Event Alert**", severityEmoji),
+		"",
+		fmt.Sprintf("**Type:** %s", event.EventType),
+		fmt.Sprintf("**Severity:** %s", event.Severity),
+		"",
+		event.Message,
+	}
+
+	if len(event.Details) > 0 {
+		lines = append(lines, "", "**Details:**")
+		for key, value := range event.Details {
+			lines = append(lines, fmt.Sprintf("• %s: %s", key, value))
+		}
+	}
+
+	lines = append(lines, "", fmt.Sprintf("_Time: %s_", time.Now().UTC().Format(time.RFC3339)))
+
+	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+}
+
+type FundMilestoneNotification struct {
+	MilestoneType  string
+	CurrentValue   string
+	TargetValue    string
+	PercentReached int
+	Achievement    string
+}
+
+func (ns *NotificationService) NotifyFundMilestone(ctx context.Context, chatID int64, milestone FundMilestoneNotification) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyFundMilestone", map[string]string{
+		"chat_id":        fmt.Sprintf("%d", chatID),
+		"milestone_type": milestone.MilestoneType,
+	})
+	defer observability.FinishSpan(span, nil)
+
+	message := ns.formatFundMilestoneMessage(milestone)
+
+	if err := ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
+		ns.logger.Error("Failed to send fund milestone notification",
+			"chat_id", chatID,
+			"milestone_type", milestone.MilestoneType,
+			"error", err,
+		)
+		return err
+	}
+
+	ns.logger.Info("Sent fund milestone notification",
+		"chat_id", chatID,
+		"milestone_type", milestone.MilestoneType,
+		"percent", milestone.PercentReached,
+	)
+
+	return nil
+}
+
+func (ns *NotificationService) formatFundMilestoneMessage(milestone FundMilestoneNotification) string {
+	lines := []string{
+		"💰 **Fund Milestone Reached!**",
+		"",
+		fmt.Sprintf("**%s**", milestone.Achievement),
+		"",
+		fmt.Sprintf("Current: %s", milestone.CurrentValue),
+		fmt.Sprintf("Target: %s", milestone.TargetValue),
+		fmt.Sprintf("Progress: %d%%", milestone.PercentReached),
+	}
+
+	progressBar := ns.generateProgressBar(milestone.PercentReached, 20)
+	lines = append(lines, "", progressBar)
+
+	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+}
+
+type AIReasoningNotification struct {
+	DecisionType string
+	Summary      string
+	Confidence   float64
+	Reasons      []string
+	Action       string
+}
+
+func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int64, reasoning AIReasoningNotification) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyAIReasoning", map[string]string{
+		"chat_id":       fmt.Sprintf("%d", chatID),
+		"decision_type": reasoning.DecisionType,
+	})
+	defer observability.FinishSpan(span, nil)
+
+	message := ns.formatAIReasoningMessage(reasoning)
+
+	if err := ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
+		ns.logger.Error("Failed to send AI reasoning notification",
+			"chat_id", chatID,
+			"decision_type", reasoning.DecisionType,
+			"error", err,
+		)
+		return err
+	}
+
+	ns.logger.Info("Sent AI reasoning notification",
+		"chat_id", chatID,
+		"decision_type", reasoning.DecisionType,
+		"confidence", reasoning.Confidence,
+	)
+
+	return nil
+}
+
+func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNotification) string {
+	confidencePercent := int(reasoning.Confidence * 100)
+
+	var confidenceEmoji string
+	switch {
+	case reasoning.Confidence >= 0.8:
+		confidenceEmoji = "🟢"
+	case reasoning.Confidence >= 0.6:
+		confidenceEmoji = "🟡"
+	default:
+		confidenceEmoji = "🔴"
+	}
+
+	lines := []string{
+		"🤖 **AI Trading Decision**",
+		"",
+		fmt.Sprintf("**Type:** %s", reasoning.DecisionType),
+		fmt.Sprintf("**Confidence:** %s %d%%", confidenceEmoji, confidencePercent),
+		"",
+		fmt.Sprintf("**Summary:** %s", reasoning.Summary),
+	}
+
+	if len(reasoning.Reasons) > 0 {
+		lines = append(lines, "", "**Key Factors:**")
+		for i, reason := range reasoning.Reasons {
+			if i < 5 {
+				lines = append(lines, fmt.Sprintf("• %s", reason))
+			}
+		}
+		if len(reasoning.Reasons) > 5 {
+			lines = append(lines, fmt.Sprintf("• ... and %d more factors", len(reasoning.Reasons)-5))
+		}
+	}
+
+	if reasoning.Action != "" {
+		lines = append(lines, "", fmt.Sprintf("**Recommended Action:** %s", reasoning.Action))
+	}
+
+	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+}
+
+func (ns *NotificationService) generateProgressBar(percent, width int) string {
+	if percent > 100 {
+		percent = 100
+	}
+	if percent < 0 {
+		percent = 0
+	}
+
+	filled := (percent * width) / 100
+	bar := ""
+	for i := 0; i < width; i++ {
+		if i < filled {
+			bar += "█"
+		} else {
+			bar += "░"
+		}
+	}
+	return fmt.Sprintf("[%s] %d%%", bar, percent)
+}
+
+func joinNotificationLines(lines []string) string {
+	result := ""
+	for i, line := range lines {
+		if i > 0 {
+			result += "\n"
+		}
+		result += line
+	}
+	return result
 }

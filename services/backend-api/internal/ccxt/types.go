@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/cache"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/cache"
+	"github.com/irfndi/neuratrade/internal/config"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/shopspring/decimal"
 )
 
@@ -20,7 +20,7 @@ type Service struct {
 	blacklistCache     cache.BlacklistCache
 	mu                 sync.RWMutex
 	lastUpdate         time.Time
-	logger             logging.Logger
+	logger             *zaplogrus.Logger
 }
 
 // NewService creates a new CCXT service instance.
@@ -34,7 +34,7 @@ type Service struct {
 // Returns:
 //
 //	*Service: Initialized service.
-func NewService(cfg *config.CCXTConfig, logger logging.Logger, blacklistCache cache.BlacklistCache) *Service {
+func NewService(cfg *config.CCXTConfig, logger *zaplogrus.Logger, blacklistCache cache.BlacklistCache) *Service {
 	s := &Service{
 		client:             NewClient(cfg),
 		supportedExchanges: make(map[string]ExchangeInfo),

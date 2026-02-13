@@ -156,7 +156,7 @@ else
   DB_HOST="${DATABASE_HOST:-localhost}"
   DB_PORT="${DATABASE_PORT:-5432}"
   DB_USER="${DATABASE_USER:-postgres}"
-  DB_NAME="${DATABASE_DBNAME:-celebrum_ai}"
+  DB_NAME="${DATABASE_DBNAME:-neuratrade}"
   echo "Database: $DB_HOST:$DB_PORT/$DB_NAME as $DB_USER"
 fi
 

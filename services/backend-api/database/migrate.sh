@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Celebrum AI Database Migration Script
+# NeuraTrade Database Migration Script
 # Usage: ./migrate.sh [migration_number]
 # If no migration_number provided, runs all pending migrations
 
@@ -9,8 +9,8 @@ set -e
 # Configuration - Support both DB_* and DATABASE_* env var naming conventions
 DB_HOST="${DATABASE_HOST:-${DB_HOST:-localhost}}"
 DB_PORT="${DATABASE_PORT:-${DB_PORT:-5432}}"
-DB_NAME="${DATABASE_DBNAME:-${DB_NAME:-celebrum_ai}}"
-DB_USER="${DATABASE_USER:-${DB_USER:-celebrum_ai_user}}"
+DB_NAME="${DATABASE_DBNAME:-${DB_NAME:-neuratrade}}"
+DB_USER="${DATABASE_USER:-${DB_USER:-neuratrade_user}}"
 DB_PASSWORD="${DATABASE_PASSWORD:-${DB_PASSWORD:-}}"
 MIGRATIONS_DIR="$(dirname "$0")/migrations"
 

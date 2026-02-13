@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/logging"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
@@ -21,7 +21,7 @@ import (
 type FundingRateCollector struct {
 	db          DBPool
 	redisClient *redis.Client
-	ccxtClient  CCXTClient
+	ccxtClient  ccxt.CCXTClient
 	config      *config.Config
 	logger      logging.Logger
 
@@ -49,7 +49,7 @@ type FundingRateCollectorConfig struct {
 func NewFundingRateCollector(
 	db DBPool,
 	redisClient *redis.Client,
-	ccxtClient CCXTClient,
+	ccxtClient ccxt.CCXTClient,
 	cfg *config.Config,
 	collectorCfg *FundingRateCollectorConfig,
 	logger logging.Logger,
@@ -282,7 +282,10 @@ func (c *FundingRateCollector) cleanupOldData(ctx context.Context) error {
 		return fmt.Errorf("failed to cleanup old data: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	if rowsAffected > 0 {
 		c.logger.WithFields(map[string]interface{}{
 			"rows_deleted":   rowsAffected,

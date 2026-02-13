@@ -1,3 +1,4 @@
+import "./test-setup";
 import { test, expect, describe } from "bun:test";
 import { GrammyError } from "grammy";
 import {

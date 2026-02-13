@@ -1,20 +1,10 @@
-# GitHub Copilot Instructions for Celebrum AI Go
+# GitHub Copilot Instructions for NeuraTrade Go
 
 This document provides repository-specific guidelines for GitHub Copilot to follow when assisting with development in this cryptocurrency arbitrage trading system.
 
 ## Project Overview
 
-**Celebrum AI** is a cryptocurrency arbitrage detection and technical analysis platform built with Go 1.25+. It features real-time market data from 100+ exchanges via CCXT, using a microservices architecture with Go backend and TypeScript/Bun CCXT service.
-
-**Repository Size**: ~200 files | **Primary Language**: Go | **Secondary**: TypeScript (ccxt-service/)
-
-## Prerequisites & Versions
-
-- **Go 1.25.0+** (required - go.mod specifies 1.24.0 but 1.25+ recommended)
-- **Bun 1.2.21+** (required for CCXT service)
-- **Docker & Docker Compose** (required for local development)
-- **PostgreSQL 15+** and **Redis 7+** (via Docker or local installation)
-- **golangci-lint** (install via `make install-tools`)
+NeuraTrade is a comprehensive cryptocurrency arbitrage detection and technical analysis platform built with Go. It features real-time market data collection, arbitrage opportunity identification, and technical indicator calculations with support for 100+ cryptocurrency exchanges via CCXT.
 
 ## Project Structure & Module Organization
 
@@ -33,8 +23,10 @@ This document provides repository-specific guidelines for GitHub Copilot to foll
 **CRITICAL**: Always run these commands in this exact order for new development:
 
 ```bash
-# 1. Download dependencies FIRST (always required before build/test)
-go mod download
+# Build and run
+make build          # Compile Go API to bin/neuratrade
+make run            # Build then run locally
+make dev            # Hot reload via air; requires go install github.com/air-verse/air@latest
 
 # 2. Start required services (Postgres + Redis) before running tests
 make dev-setup

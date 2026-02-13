@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -214,8 +215,43 @@ func TestStandardLogger_LogAPIRequest(t *testing.T) {
 	assert.NotNil(t, fields["duration_ms"])
 }
 
-func TestStandardLogger_StandardOutputCapture(t *testing.T) {
-	// This test verifies output to stdout
-	// We can't misleadingly verify stdout easily here without redirecting os.Stdout
-	// So we'll skip detailed stdout capturing and rely on Observer for logic verification
+func TestStandardLogger_LogBusinessEvent(t *testing.T) {
+	logger, logs := setupTestLogger()
+
+	details := map[string]interface{}{
+		"symbol":     "BTC/USD",
+		"exchange":   "binance",
+		"profit_pct": 2.5,
+	}
+
+	logger.LogBusinessEvent("arbitrage_opportunity", details)
+
+	assert.Equal(t, 1, logs.Len())
+	fields := logs.All()[0].ContextMap()
+	assert.Equal(t, "arbitrage_opportunity", fields["type"])
+	assert.Equal(t, "business_event", fields["event"])
+}
+
+func TestParseLogrusLevel(t *testing.T) {
+	tests := []struct {
+		levelStr string
+		expected zaplogrus.Level
+	}{
+		{"debug", zaplogrus.DebugLevel},
+		{"warn", zaplogrus.WarnLevel},
+		{"warning", zaplogrus.WarnLevel},
+		{"error", zaplogrus.ErrorLevel},
+		{"info", zaplogrus.InfoLevel},
+		{"INFO", zaplogrus.InfoLevel},    // case insensitive
+		{"DEBUG", zaplogrus.DebugLevel},  // case insensitive
+		{"invalid", zaplogrus.InfoLevel}, // default to info
+		{"", zaplogrus.InfoLevel},        // empty string defaults to info
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.levelStr, func(t *testing.T) {
+			result := ParseLogrusLevel(tt.levelStr)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

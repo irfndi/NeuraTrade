@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/testutil"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/testutil"
 )
 
 // getRedisAddr returns the Redis address from environment or default
@@ -25,8 +25,8 @@ func getRedisAddr() string {
 // BenchmarkCollectorService_ConcurrentSymbolFetching benchmarks the concurrent symbol fetching optimization
 func BenchmarkCollectorService_ConcurrentSymbolFetching(b *testing.B) {
 	ctx := context.Background()
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error") // Reduce noise during benchmarks
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel) // Reduce noise during benchmarks
 
 	// Create mock Redis client
 	options := testutil.GetTestRedisOptions()
@@ -66,8 +66,8 @@ func BenchmarkCollectorService_ConcurrentSymbolFetching(b *testing.B) {
 // BenchmarkCollectorService_BulkTickerCollection benchmarks the bulk ticker collection optimization
 func BenchmarkCollectorService_BulkTickerCollection(b *testing.B) {
 	ctx := context.Background()
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 
 	options := testutil.GetTestRedisOptions()
 	options.DB = 1
@@ -106,8 +106,8 @@ func BenchmarkCollectorService_BulkTickerCollection(b *testing.B) {
 // BenchmarkCollectorService_ConcurrentBackfill benchmarks the concurrent backfill optimization
 func BenchmarkCollectorService_ConcurrentBackfill(b *testing.B) {
 	ctx := context.Background()
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 
 	options := testutil.GetTestRedisOptions()
 	options.DB = 1
@@ -195,8 +195,8 @@ func BenchmarkCollectorService_RedisOperations(b *testing.B) {
 // BenchmarkCollectorService_WorkerPoolPerformance benchmarks worker pool efficiency
 func BenchmarkCollectorService_WorkerPoolPerformance(b *testing.B) {
 	ctx := context.Background()
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 
 	cfg := &config.Config{}
 	collectorCfg := CollectorConfig{
@@ -267,8 +267,8 @@ func (c *CollectorService) ResetPerformanceMetrics() {
 // Memory usage benchmark
 func BenchmarkCollectorService_MemoryUsage(b *testing.B) {
 	ctx := context.Background()
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr: getRedisAddr(),

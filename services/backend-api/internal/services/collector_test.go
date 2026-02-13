@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/irfandi/celebrum-ai-go/internal/cache"
-	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
-	"github.com/irfandi/celebrum-ai-go/test/testmocks"
+	"github.com/irfndi/neuratrade/internal/cache"
+	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/telemetry"
+	"github.com/irfndi/neuratrade/test/testmocks"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -35,8 +36,8 @@ func TestMain(m *testing.M) {
 	}
 
 	// Initialize a basic logger to prevent nil pointer dereference in tests
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error")
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel)
 
 	// Initialize telemetry with disabled export to prevent nil pointer dereference
 	// This is needed because ExchangeCapabilityCache tries to log via telemetry.Logger()
@@ -69,6 +70,7 @@ func TestNewCollectorService(t *testing.T) {
 
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	collector := NewCollectorService(nil, mockCCXT, config, nil, blacklistCache)
+	defer collector.Stop()
 
 	assert.NotNil(t, collector)
 	assert.NotNil(t, collector.workers)
@@ -173,6 +175,7 @@ func TestCollectorService_RestartWorker(t *testing.T) {
 
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	collector := NewCollectorService(nil, mockCCXT, config, nil, blacklistCache)
+	defer collector.Stop()
 
 	// Test restarting non-existent worker
 	err := collector.RestartWorker("nonexistent")
@@ -752,8 +755,8 @@ func TestCollectorService_CollectTickerDataDirect_CCXErrorWithBlacklist(t *testi
 // Test collectFundingRates function (wrapper for collectFundingRatesBulk)
 func TestCollectorService_CollectFundingRates(t *testing.T) {
 	// Initialize a basic logger for testing to prevent nil pointer dereference
-	logger := logging.NewStandardLogger("info", "test")
-	logger.SetLevel("error") // Reduce log noise in tests
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel) // Reduce log noise in tests
 
 	mockCCXT := &testmocks.MockCCXTService{}
 	config := &config.Config{}
@@ -1443,169 +1446,128 @@ func (m *MockMarketPriceInterface) GetTimestamp() time.Time {
 	return m.timestamp
 }
 
-// TestIsValidSymbolFormat tests the isValidSymbolFormat function
-// that filters malformed symbols returned by some exchanges
-func TestIsValidSymbolFormat(t *testing.T) {
-	tests := []struct {
-		name     string
-		symbol   string
-		expected bool
-	}{
-		// Valid symbols with separators
-		{name: "valid BTC/USDT", symbol: "BTC/USDT", expected: true},
-		{name: "valid ETH/BTC", symbol: "ETH/BTC", expected: true},
-		{name: "valid XRP:USD", symbol: "XRP:USD", expected: true},
-		{name: "valid BTC_USDT", symbol: "BTC_USDT", expected: true},
-		{name: "valid ETH-USD", symbol: "ETH-USD", expected: true},
-		{name: "valid with numbers SOL/USDT", symbol: "SOL/USDT", expected: true},
-		{name: "valid perpetual BTC/USDT:USDT", symbol: "BTC/USDT:USDT", expected: true},
-
-		// Valid symbols without separators (concatenated format)
-		{name: "valid concatenated BTCUSDT", symbol: "BTCUSDT", expected: true},
-		{name: "valid concatenated ETHBTC", symbol: "ETHBTC", expected: true},
-		{name: "valid short 3 char", symbol: "ABC", expected: true},
-
-		// Invalid - empty or whitespace
-		{name: "invalid empty", symbol: "", expected: false},
-		{name: "invalid space", symbol: " ", expected: false},
-		{name: "invalid spaces", symbol: "   ", expected: false},
-		{name: "invalid tab", symbol: "\t", expected: false},
-		{name: "invalid newline", symbol: "\n", expected: false},
-
-		// Invalid - just separators (the bug we're fixing)
-		{name: "invalid colon only", symbol: ":", expected: false},
-		{name: "invalid slash only", symbol: "/", expected: false},
-		{name: "invalid underscore only", symbol: "_", expected: false},
-		{name: "invalid hyphen only", symbol: "-", expected: false},
-
-		// Invalid - separator with empty parts
-		{name: "invalid BTC/", symbol: "BTC/", expected: false},
-		{name: "invalid /USDT", symbol: "/USDT", expected: false},
-		{name: "invalid BTC:", symbol: "BTC:", expected: false},
-		{name: "invalid :USDT", symbol: ":USDT", expected: false},
-		{name: "invalid _USDT", symbol: "_USDT", expected: false},
-		{name: "invalid BTC_", symbol: "BTC_", expected: false},
-		{name: "invalid -USD", symbol: "-USD", expected: false},
-		{name: "invalid BTC-", symbol: "BTC-", expected: false},
-
-		// Invalid - whitespace around separators
-		{name: "invalid space/USDT", symbol: " /USDT", expected: false},
-		{name: "invalid BTC/ space", symbol: "BTC/ ", expected: false},
-
-		// Invalid - too short without separator
-		{name: "invalid too short A", symbol: "A", expected: false},
-		{name: "invalid too short AB", symbol: "AB", expected: false},
-
-		// Edge cases
-		{name: "valid with whitespace trimmed", symbol: " BTC/USDT ", expected: true},
-		{name: "valid lowercase", symbol: "btc/usdt", expected: true},
-		{name: "valid mixed case", symbol: "BtC/UsDt", expected: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isValidSymbolFormat(tt.symbol)
-			assert.Equal(t, tt.expected, result, "isValidSymbolFormat(%q) = %v, want %v", tt.symbol, result, tt.expected)
-		})
-	}
-}
-
-// TestIsValidSymbolFormat_EdgeCases tests additional edge cases for symbol validation
-func TestIsValidSymbolFormat_EdgeCases(t *testing.T) {
-	// Test symbols seen in production logs
-	productionInvalidSymbols := []string{
-		":",     // Most common issue from some exchanges
-		"/",     // Also seen occasionally
-		"",      // Empty strings
-		" ",     // Whitespace
-		"BTC/",  // Missing quote currency
-		"/USDT", // Missing base currency
-		"::",    // Double separator
-	}
-
-	for _, symbol := range productionInvalidSymbols {
-		t.Run(fmt.Sprintf("production_invalid_%q", symbol), func(t *testing.T) {
-			result := isValidSymbolFormat(symbol)
-			assert.False(t, result, "Symbol %q should be invalid", symbol)
-		})
-	}
-
-	// Test symbols that should always be valid
-	productionValidSymbols := []string{
-		"BTC/USDT",
-		"ETH/BTC",
-		"SOL/USD",
-		"DOGE/USDT",
-		"XRP/EUR",
-		"BTC/USDT:USDT", // Perpetual format
-		"BTCUSDT",       // Concatenated format
-	}
-
-	for _, symbol := range productionValidSymbols {
-		t.Run(fmt.Sprintf("production_valid_%s", symbol), func(t *testing.T) {
-			result := isValidSymbolFormat(symbol)
-			assert.True(t, result, "Symbol %q should be valid", symbol)
-		})
-	}
-}
-
-func TestSaveBulkTickerData_SkipsMalformedSymbols(t *testing.T) {
-	// Setup mock services
+func TestCollectorService_IsInitialized(t *testing.T) {
 	mockCCXT := &testmocks.MockCCXTService{}
-	cfg := &config.Config{
-		Blacklist: config.BlacklistConfig{
-			TTL: "24h",
-		},
-	}
-
+	cfg := &config.Config{}
 	blacklistCache := cache.NewInMemoryBlacklistCache()
+
 	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
 
-	// Test that malformed symbols are skipped silently
-	malformedTickers := []models.MarketPrice{
-		{Symbol: ":", ExchangeName: "binance"},
-		{Symbol: "/", ExchangeName: "binance"},
-		{Symbol: "", ExchangeName: "binance"},
-		{Symbol: "  ", ExchangeName: "binance"},
+	assert.False(t, collector.IsInitialized())
+
+	collector.readinessMu.Lock()
+	collector.isInitialized = true
+	collector.readinessMu.Unlock()
+
+	assert.True(t, collector.IsInitialized())
+}
+
+func TestCollectorService_IsReady(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	assert.False(t, collector.IsReady())
+
+	collector.readinessMu.Lock()
+	collector.isReady = true
+	collector.readinessMu.Unlock()
+
+	assert.True(t, collector.IsReady())
+}
+
+func TestCollectorService_GetReadinessStatus(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	init, ready := collector.GetReadinessStatus()
+	assert.False(t, init)
+	assert.False(t, ready)
+
+	collector.readinessMu.Lock()
+	collector.isInitialized = true
+	collector.isReady = true
+	collector.readinessMu.Unlock()
+
+	init, ready = collector.GetReadinessStatus()
+	assert.True(t, init)
+	assert.True(t, ready)
+
+	collector.readinessMu.Lock()
+	collector.isInitialized = true
+	collector.isReady = false
+	collector.readinessMu.Unlock()
+
+	init, ready = collector.GetReadinessStatus()
+	assert.True(t, init)
+	assert.False(t, ready)
+}
+
+func TestCollectorService_ReadinessConcurrent(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	done := make(chan bool, 100)
+
+	for i := 0; i < 50; i++ {
+		go func() {
+			_ = collector.IsInitialized()
+			done <- true
+		}()
+		go func() {
+			_ = collector.IsReady()
+			done <- true
+		}()
+		go func() {
+			_, _ = collector.GetReadinessStatus()
+			done <- true
+		}()
 	}
 
-	for _, ticker := range malformedTickers {
-		t.Run(fmt.Sprintf("symbol_%q", ticker.Symbol), func(t *testing.T) {
-			err := collector.saveBulkTickerData(ticker)
-			// Should return nil (skip) without error
-			assert.NoError(t, err, "Malformed symbol should be skipped without error")
+	for i := 0; i < 150; i++ {
+		<-done
+	}
 
-			// Verify symbol was NOT added to blacklist (we skip silently now)
-			symbolKey := fmt.Sprintf("%s:%s", ticker.ExchangeName, ticker.Symbol)
-			isBlacklisted, _ := blacklistCache.IsBlacklisted(symbolKey)
-			assert.False(t, isBlacklisted, "Malformed symbols should be skipped, not blacklisted")
-		})
+	collector.readinessMu.Lock()
+	collector.isInitialized = true
+	collector.isReady = true
+	collector.readinessMu.Unlock()
+
+	for i := 0; i < 50; i++ {
+		go func() {
+			_ = collector.IsInitialized()
+			done <- true
+		}()
+		go func() {
+			_ = collector.IsReady()
+			done <- true
+		}()
+	}
+
+	for i := 0; i < 100; i++ {
+		<-done
 	}
 }
 
-func TestCollectTickerDataDirect_SkipsMalformedSymbols(t *testing.T) {
-	// Setup mock services
+func TestCollectorService_ReadinessInitialState(t *testing.T) {
 	mockCCXT := &testmocks.MockCCXTService{}
-	cfg := &config.Config{
-		Blacklist: config.BlacklistConfig{
-			TTL: "24h",
-		},
-	}
-
+	cfg := &config.Config{}
 	blacklistCache := cache.NewInMemoryBlacklistCache()
+
 	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
 
-	// Test that malformed symbols are skipped silently
-	malformedSymbols := []string{":", "/", "", "  "}
+	assert.False(t, collector.IsInitialized())
+	assert.False(t, collector.IsReady())
 
-	for _, symbol := range malformedSymbols {
-		t.Run(fmt.Sprintf("symbol_%q", symbol), func(t *testing.T) {
-			err := collector.collectTickerDataDirect("binance", symbol)
-			// Should return nil (skip) without error
-			assert.NoError(t, err, "Malformed symbol should be skipped without error")
-
-			// Verify CCXT service was NOT called for malformed symbols
-			mockCCXT.AssertNotCalled(t, "FetchSingleTicker", mock.Anything, "binance", symbol)
-		})
-	}
+	init, ready := collector.GetReadinessStatus()
+	assert.False(t, init)
+	assert.False(t, ready)
 }

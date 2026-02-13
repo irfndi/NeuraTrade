@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/observability"
 )
 
 // CircuitBreakerState represents the current state of the circuit breaker.
@@ -58,7 +58,7 @@ type CircuitBreakerStats struct {
 type CircuitBreaker struct {
 	name            string
 	config          CircuitBreakerConfig
-	logger          logging.Logger
+	logger          *zaplogrus.Logger
 	mu              sync.RWMutex
 	state           CircuitBreakerState
 	failureCount    int
@@ -80,7 +80,7 @@ type CircuitBreaker struct {
 // Returns:
 //
 //	*CircuitBreaker: Initialized breaker.
-func NewCircuitBreaker(name string, config CircuitBreakerConfig, logger logging.Logger) *CircuitBreaker {
+func NewCircuitBreaker(name string, config CircuitBreakerConfig, logger *zaplogrus.Logger) *CircuitBreaker {
 	if config.FailureThreshold <= 0 {
 		config.FailureThreshold = 5
 	}
@@ -130,8 +130,7 @@ func (cb *CircuitBreaker) Execute(ctx context.Context, fn func(context.Context) 
 
 	// Check if circuit breaker should allow the request
 	if !cb.canExecute() {
-		observability.AddBreadcrumb(spanCtx, "circuit_breaker", fmt.Sprintf("Circuit breaker %s is open, rejecting request", cb.name), sentry.LevelWarning)
-		cb.logger.WithFields(map[string]interface{}{
+		cb.logger.WithFields(zaplogrus.Fields{
 			"circuit_breaker": cb.name,
 			"state":           cb.getStateName(),
 			"failure_count":   cb.failureCount,
@@ -207,7 +206,7 @@ func (cb *CircuitBreaker) onSuccess(duration time.Duration) {
 		}
 	}
 
-	cb.logger.WithFields(map[string]interface{}{
+	cb.logger.WithFields(zaplogrus.Fields{
 		"circuit_breaker": cb.name,
 		"state":           cb.getStateName(),
 		"duration_ms":     duration.Milliseconds(),
@@ -236,7 +235,7 @@ func (cb *CircuitBreaker) onFailure(err error, duration time.Duration) {
 		cb.requestCount = 0
 	}
 
-	cb.logger.WithFields(map[string]interface{}{
+	cb.logger.WithFields(zaplogrus.Fields{
 		"circuit_breaker": cb.name,
 		"state":           cb.getStateName(),
 		"error":           err.Error(),
@@ -253,12 +252,7 @@ func (cb *CircuitBreaker) setState(newState CircuitBreakerState) {
 		cb.lastStateChange = time.Now()
 		cb.stats.StateChanges++
 
-		// Capture state change in Sentry
-		observability.AddBreadcrumb(context.Background(), "circuit_breaker",
-			fmt.Sprintf("Circuit breaker %s state changed: %s -> %s", cb.name, cb.getStateNameForState(oldState), cb.getStateName()),
-			sentry.LevelInfo)
-
-		cb.logger.WithFields(map[string]interface{}{
+		cb.logger.WithFields(zaplogrus.Fields{
 			"circuit_breaker": cb.name,
 			"old_state":       cb.getStateNameForState(oldState),
 			"new_state":       cb.getStateName(),
@@ -337,7 +331,7 @@ func (cb *CircuitBreaker) getStateNameForState(state CircuitBreakerState) string
 // CircuitBreakerManager manages multiple circuit breakers.
 type CircuitBreakerManager struct {
 	breakers map[string]*CircuitBreaker
-	logger   logging.Logger
+	logger   *zaplogrus.Logger
 	mu       sync.RWMutex
 }
 
@@ -350,7 +344,7 @@ type CircuitBreakerManager struct {
 // Returns:
 //
 //	*CircuitBreakerManager: Initialized manager.
-func NewCircuitBreakerManager(logger logging.Logger) *CircuitBreakerManager {
+func NewCircuitBreakerManager(logger *zaplogrus.Logger) *CircuitBreakerManager {
 	return &CircuitBreakerManager{
 		breakers: make(map[string]*CircuitBreaker),
 		logger:   logger,

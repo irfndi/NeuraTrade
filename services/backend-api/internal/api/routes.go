@@ -1,17 +1,19 @@
 package api
 
 import (
+	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/api/handlers"
-	"github.com/irfandi/celebrum-ai-go/internal/ccxt"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	futuresHandlers "github.com/irfandi/celebrum-ai-go/internal/handlers"
-	"github.com/irfandi/celebrum-ai-go/internal/middleware"
-	"github.com/irfandi/celebrum-ai-go/internal/services"
+	"github.com/irfndi/neuratrade/internal/api/handlers"
+	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/middleware"
+	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/shopspring/decimal"
 )
 
 // HealthResponse represents the response structure for health check endpoints.
@@ -35,6 +37,18 @@ type Services struct {
 	Redis string `json:"redis"`
 }
 
+type routeDB interface {
+	services.DBPool
+	HealthCheck(ctx context.Context) error
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
 // SetupRoutes configures all the HTTP routes for the application.
 // It sets up middleware, health checks, and API endpoints (v1), and injects necessary dependencies into handlers.
 //
@@ -50,7 +64,7 @@ type Services struct {
 //	signalAggregator: Service for aggregating trading signals.
 //	telegramConfig: Configuration for Telegram notifications.
 //	authMiddleware: Middleware for handling authentication.
-func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware) {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator) {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -82,6 +96,14 @@ func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.Re
 			internalTelegram.GET("/users/:id", telegramInternalHandler.GetUserByChatID)
 			internalTelegram.GET("/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
 			internalTelegram.POST("/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
+			internalTelegram.POST("/autonomous/begin", telegramInternalHandler.BeginAutonomous)
+			internalTelegram.POST("/autonomous/pause", telegramInternalHandler.PauseAutonomous)
+			internalTelegram.POST("/wallets/connect_exchange", telegramInternalHandler.ConnectExchange)
+			internalTelegram.POST("/wallets/connect_polymarket", telegramInternalHandler.ConnectPolymarket)
+			internalTelegram.POST("/wallets", telegramInternalHandler.AddWallet)
+			internalTelegram.POST("/wallets/remove", telegramInternalHandler.RemoveWallet)
+			internalTelegram.GET("/wallets", telegramInternalHandler.GetWallets)
+			internalTelegram.GET("/doctor", telegramInternalHandler.GetDoctor)
 		}
 	}
 
@@ -105,14 +127,41 @@ func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.Re
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
+	tradingHandler := handlers.NewTradingHandler(db)
+
+	// Budget handler - configurable via environment variables with defaults from migration 054
+	dailyBudgetStr := getEnvOrDefault("AI_DAILY_BUDGET", "10.00")
+	monthlyBudgetStr := getEnvOrDefault("AI_MONTHLY_BUDGET", "200.00")
+
+	dailyBudget, err := decimal.NewFromString(dailyBudgetStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid AI_DAILY_BUDGET value '%s', using default 10.00", dailyBudgetStr)
+		dailyBudget = decimal.NewFromFloat(10.00)
+	}
+
+	monthlyBudget, err := decimal.NewFromString(monthlyBudgetStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid AI_MONTHLY_BUDGET value '%s', using default 200.00", monthlyBudgetStr)
+		monthlyBudget = decimal.NewFromFloat(200.00)
+	}
+
+	budgetHandler := handlers.NewBudgetHandler(
+		database.NewAIUsageRepository(db),
+		dailyBudget,
+		monthlyBudget,
+	)
+
+	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
+	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
+
+	// Initialize wallet handler
+	walletHandler := handlers.NewWalletHandler(walletValidator)
 
 	// Initialize futures arbitrage handler with error handling
-	var futuresArbitrageHandler *futuresHandlers.FuturesArbitrageHandler
-	if db != nil && db.Pool != nil {
+	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler
+	if db != nil {
 		// Safely initialize the handler
-		// Note: NewFuturesArbitrageHandler doesn't return an error in its current signature,
-		// but we check for db.Pool to prevent panics inside it.
-		futuresArbitrageHandler = futuresHandlers.NewFuturesArbitrageHandler(db.Pool)
+		futuresArbitrageHandler = handlers.NewFuturesArbitrageHandlerWithQuerier(db)
 		log.Printf("Futures arbitrage handler initialized successfully")
 	} else {
 		log.Printf("Database not available for futures arbitrage handler initialization")
@@ -137,6 +186,7 @@ func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.Re
 		{
 			arbitrage.GET("/opportunities", arbitrageHandler.GetArbitrageOpportunities)
 			arbitrage.GET("/history", arbitrageHandler.GetArbitrageHistory)
+			arbitrage.GET("/stats", arbitrageHandler.GetArbitrageStats)
 			// Funding rate arbitrage
 			arbitrage.GET("/funding", arbitrageHandler.GetFundingRateArbitrage)
 			arbitrage.GET("/funding-rates/:exchange", arbitrageHandler.GetFundingRates)
@@ -175,6 +225,26 @@ func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.Re
 			telegram.GET("/internal/users/:id", telegramInternalHandler.GetUserByChatID)
 			telegram.GET("/internal/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
 			telegram.POST("/internal/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
+			telegram.POST("/internal/autonomous/begin", telegramInternalHandler.BeginAutonomous)
+			telegram.POST("/internal/autonomous/pause", telegramInternalHandler.PauseAutonomous)
+			telegram.POST("/internal/wallets/connect_exchange", telegramInternalHandler.ConnectExchange)
+			telegram.POST("/internal/wallets/connect_polymarket", telegramInternalHandler.ConnectPolymarket)
+			telegram.POST("/internal/wallets", telegramInternalHandler.AddWallet)
+			telegram.POST("/internal/wallets/remove", telegramInternalHandler.RemoveWallet)
+			telegram.GET("/internal/wallets", telegramInternalHandler.GetWallets)
+			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
+
+			telegramInternal := telegram.Group("/internal")
+			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
+			{
+				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
+				telegramInternal.GET("/portfolio", autonomousHandler.GetPortfolio)
+				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
+				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)
+				telegramInternal.GET("/performance", autonomousHandler.GetPerformanceBreakdown)
+				telegramInternal.POST("/liquidate", autonomousHandler.Liquidate)
+				telegramInternal.POST("/liquidate/all", autonomousHandler.LiquidateAll)
+			}
 		}
 
 		// User management
@@ -200,6 +270,32 @@ func SetupRoutes(router *gin.Engine, db *database.PostgresDB, redis *database.Re
 		{
 			data.GET("/stats", cleanupHandler.GetDataStats)
 			data.POST("/cleanup", cleanupHandler.TriggerCleanup)
+		}
+
+		// Risk management
+		risk := v1.Group("/risk")
+		{
+			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
+			risk.POST("/validate_wallet", walletHandler.ValidateWallet)
+		}
+
+		trading := v1.Group("/trading")
+		trading.Use(authMiddleware.RequireAuth())
+		{
+			trading.POST("/place_order", tradingHandler.PlaceOrder)
+			trading.POST("/cancel_order", tradingHandler.CancelOrder)
+			trading.POST("/liquidate", tradingHandler.Liquidate)
+			trading.POST("/liquidate_all", tradingHandler.LiquidateAll)
+			trading.GET("/positions", tradingHandler.ListPositions)
+			trading.GET("/positions/snapshot", tradingHandler.GetPositionSnapshot)
+			trading.GET("/positions/:position_id", tradingHandler.GetPosition)
+		}
+
+		budget := v1.Group("/budget")
+		budget.Use(authMiddleware.RequireAuth())
+		{
+			budget.GET("/status", budgetHandler.GetBudgetStatus)
+			budget.GET("/check", budgetHandler.CheckBudget)
 		}
 
 		// Exchange management

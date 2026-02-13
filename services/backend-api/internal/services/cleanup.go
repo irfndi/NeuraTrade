@@ -8,10 +8,10 @@ import (
 	"log/slog"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
-	"github.com/irfandi/celebrum-ai-go/internal/telemetry"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/observability"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 )
 
 // CleanupService handles automatic cleanup of old data.
@@ -40,10 +40,22 @@ type CleanupConfig = config.CleanupConfig
 // Returns:
 //
 //	*CleanupService: Initialized service.
-func NewCleanupService(db database.DatabasePool, errorRecoveryManager *ErrorRecoveryManager, resourceManager *ResourceManager, performanceMonitor *PerformanceMonitor) *CleanupService {
+func NewCleanupService(db any, errorRecoveryManager *ErrorRecoveryManager, resourceManager *ResourceManager, performanceMonitor *PerformanceMonitor) *CleanupService {
+	var resolvedDB database.DatabasePool
+	switch v := db.(type) {
+	case nil:
+		resolvedDB = nil
+	case database.DatabasePool:
+		resolvedDB = v
+	case database.LegacyQuerier:
+		resolvedDB = database.WrapLegacyQuerier(v)
+	default:
+		resolvedDB = nil
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	return &CleanupService{
-		db:                   db,
+		db:                   resolvedDB,
 		ctx:                  ctx,
 		cancel:               cancel,
 		errorRecoveryManager: errorRecoveryManager,
@@ -323,7 +335,10 @@ func (c *CleanupService) cleanupMarketDataSmart(ctx context.Context, retentionHo
 		return fmt.Errorf("failed to delete old market data: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	if rowsAffected > 0 {
 		c.logger.Info("Smart cleanup: Removed market data records",
 			"records_deleted", rowsAffected,
@@ -364,7 +379,10 @@ func (c *CleanupService) cleanupFundingRatesSmart(ctx context.Context, retention
 		return fmt.Errorf("failed to delete old funding rates: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	if rowsAffected > 0 {
 		c.logger.Info("Smart cleanup: Removed funding rate records",
 			"records_deleted", rowsAffected,
@@ -398,7 +416,10 @@ func (c *CleanupService) cleanupArbitrageOpportunities(ctx context.Context, rete
 		return fmt.Errorf("failed to delete old arbitrage opportunities: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	if rowsAffected > 0 {
 		c.logger.Info("Cleaned up old arbitrage opportunity records",
 			"records_deleted", rowsAffected,
@@ -431,7 +452,10 @@ func (c *CleanupService) cleanupFundingArbitrageOpportunities(ctx context.Contex
 		return fmt.Errorf("failed to delete old funding arbitrage opportunities: %w", err)
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	if rowsAffected > 0 {
 		c.logger.Info("Cleaned up old funding arbitrage opportunity records",
 			"records_deleted", rowsAffected,

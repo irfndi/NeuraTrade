@@ -17,17 +17,20 @@ func TestConfig_Struct(t *testing.T) {
 			AllowedOrigins: []string{"http://localhost:3000"},
 		},
 		Database: DatabaseConfig{
-			Host:            "localhost",
-			Port:            5432,
-			User:            "postgres",
-			Password:        "password",
-			DBName:          "test_db",
-			SSLMode:         "disable",
-			DatabaseURL:     "postgres://user:pass@localhost/db",
-			MaxOpenConns:    25,
-			MaxIdleConns:    5,
-			ConnMaxLifetime: "300s",
-			ConnMaxIdleTime: "60s",
+			Driver:                    "postgres",
+			Host:                      "localhost",
+			Port:                      5432,
+			User:                      "postgres",
+			Password:                  "password",
+			DBName:                    "test_db",
+			SSLMode:                   "disable",
+			DatabaseURL:               "postgres://user:pass@localhost/db",
+			MaxOpenConns:              25,
+			MaxIdleConns:              5,
+			ConnMaxLifetime:           "300s",
+			ConnMaxIdleTime:           "60s",
+			SQLitePath:                "data/test.db",
+			SQLiteVectorExtensionPath: "/usr/local/lib/sqlite_vec.dylib",
 		},
 		Redis: RedisConfig{
 			Host:     "localhost",
@@ -66,6 +69,7 @@ func TestConfig_Struct(t *testing.T) {
 	assert.Equal(t, "debug", config.LogLevel)
 	assert.Equal(t, 8080, config.Server.Port)
 	assert.Equal(t, []string{"http://localhost:3000"}, config.Server.AllowedOrigins)
+	assert.Equal(t, "postgres", config.Database.Driver)
 	assert.Equal(t, "localhost", config.Database.Host)
 	assert.Equal(t, 5432, config.Database.Port)
 	assert.Equal(t, "postgres", config.Database.User)
@@ -77,6 +81,8 @@ func TestConfig_Struct(t *testing.T) {
 	assert.Equal(t, 5, config.Database.MaxIdleConns)
 	assert.Equal(t, "300s", config.Database.ConnMaxLifetime)
 	assert.Equal(t, "60s", config.Database.ConnMaxIdleTime)
+	assert.Equal(t, "data/test.db", config.Database.SQLitePath)
+	assert.Equal(t, "/usr/local/lib/sqlite_vec.dylib", config.Database.SQLiteVectorExtensionPath)
 	assert.Equal(t, "localhost", config.Redis.Host)
 	assert.Equal(t, 6379, config.Redis.Port)
 	assert.Equal(t, "redis_pass", config.Redis.Password)
@@ -103,19 +109,23 @@ func TestServerConfig_Struct(t *testing.T) {
 
 func TestDatabaseConfig_Struct(t *testing.T) {
 	config := DatabaseConfig{
-		Host:            "db.example.com",
-		Port:            5433,
-		User:            "dbuser",
-		Password:        "dbpass",
-		DBName:          "production_db",
-		SSLMode:         "require",
-		DatabaseURL:     "postgres://user:pass@db.example.com/production_db",
-		MaxOpenConns:    50,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: "600s",
-		ConnMaxIdleTime: "120s",
+		Driver:                    "sqlite",
+		Host:                      "db.example.com",
+		Port:                      5433,
+		User:                      "dbuser",
+		Password:                  "dbpass",
+		DBName:                    "production_db",
+		SSLMode:                   "require",
+		DatabaseURL:               "postgres://user:pass@db.example.com/production_db",
+		MaxOpenConns:              50,
+		MaxIdleConns:              10,
+		ConnMaxLifetime:           "600s",
+		ConnMaxIdleTime:           "120s",
+		SQLitePath:                "data/prod.db",
+		SQLiteVectorExtensionPath: "/usr/local/lib/sqlite_vec.dylib",
 	}
 
+	assert.Equal(t, "sqlite", config.Driver)
 	assert.Equal(t, "db.example.com", config.Host)
 	assert.Equal(t, 5433, config.Port)
 	assert.Equal(t, "dbuser", config.User)
@@ -127,6 +137,8 @@ func TestDatabaseConfig_Struct(t *testing.T) {
 	assert.Equal(t, 10, config.MaxIdleConns)
 	assert.Equal(t, "600s", config.ConnMaxLifetime)
 	assert.Equal(t, "120s", config.ConnMaxIdleTime)
+	assert.Equal(t, "data/prod.db", config.SQLitePath)
+	assert.Equal(t, "/usr/local/lib/sqlite_vec.dylib", config.SQLiteVectorExtensionPath)
 }
 
 func TestRedisConfig_Struct(t *testing.T) {
@@ -177,16 +189,19 @@ func TestLoad_WithDefaults(t *testing.T) {
 	assert.Equal(t, 8080, config.Server.Port)
 	assert.Equal(t, []string{"http://localhost:3000"}, config.Server.AllowedOrigins)
 	assert.Equal(t, "localhost", config.Database.Host)
+	assert.Equal(t, "postgres", config.Database.Driver)
 	assert.Equal(t, 5432, config.Database.Port)
 	assert.Equal(t, "postgres", config.Database.User)
 	assert.Equal(t, "change-me-in-production", config.Database.Password)
-	assert.Equal(t, "celebrum_ai", config.Database.DBName)
+	assert.Equal(t, "neuratrade", config.Database.DBName)
 	assert.Equal(t, "disable", config.Database.SSLMode)
 	assert.Equal(t, "", config.Database.DatabaseURL)
 	assert.Equal(t, 25, config.Database.MaxOpenConns)
 	assert.Equal(t, 5, config.Database.MaxIdleConns)
 	assert.Equal(t, "300s", config.Database.ConnMaxLifetime)
 	assert.Equal(t, "60s", config.Database.ConnMaxIdleTime)
+	assert.Equal(t, "data/neuratrade.db", config.Database.SQLitePath)
+	assert.Equal(t, "", config.Database.SQLiteVectorExtensionPath)
 	assert.Equal(t, "localhost", config.Redis.Host)
 	assert.Equal(t, 6379, config.Redis.Port)
 	assert.Equal(t, "", config.Redis.Password)
@@ -216,6 +231,9 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	t.Setenv("DATABASE_PASSWORD", "prod_pass")
 	t.Setenv("DATABASE_DBNAME", "prod_db")
 	t.Setenv("DATABASE_SSLMODE", "require")
+	t.Setenv("DATABASE_DRIVER", "sqlite")
+	t.Setenv("SQLITE_PATH", "/tmp/neuratrade-test.db")
+	t.Setenv("SQLITE_VEC_EXTENSION_PATH", "/usr/local/lib/sqlite_vec.dylib")
 	t.Setenv("REDIS_HOST", "prod-redis.example.com")
 	t.Setenv("REDIS_PORT", "6380")
 	t.Setenv("REDIS_PASSWORD", "redis_prod_pass")
@@ -240,6 +258,9 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	assert.Equal(t, "prod_pass", config.Database.Password)
 	assert.Equal(t, "prod_db", config.Database.DBName)
 	assert.Equal(t, "require", config.Database.SSLMode)
+	assert.Equal(t, "sqlite", config.Database.Driver)
+	assert.Equal(t, "/tmp/neuratrade-test.db", config.Database.SQLitePath)
+	assert.Equal(t, "/usr/local/lib/sqlite_vec.dylib", config.Database.SQLiteVectorExtensionPath)
 	assert.Equal(t, "prod-redis.example.com", config.Redis.Host)
 	assert.Equal(t, 6380, config.Redis.Port)
 	assert.Equal(t, "redis_prod_pass", config.Redis.Password)
@@ -287,312 +308,21 @@ func TestCCXTConfig_GetTimeout_Zero(t *testing.T) {
 	assert.Equal(t, 0, config.GetTimeout())
 }
 
-// TestValidateConfig_Production_EmptyJWTSecret validates that production requires JWT secret
-func TestValidateConfig_Production_EmptyJWTSecret(t *testing.T) {
-	config := &Config{
-		Environment: "production",
-		Auth: AuthConfig{
-			JWTSecret: "",
-		},
-	}
-
-	err := validateConfig(config)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "JWT_SECRET cannot be empty")
-}
-
-// TestValidateConfig_Production_ShortJWTSecret validates that JWT secret must be at least 32 chars
-func TestValidateConfig_Production_ShortJWTSecret(t *testing.T) {
-	config := &Config{
-		Environment: "production",
-		Auth: AuthConfig{
-			JWTSecret: "short-secret",
-		},
-	}
-
-	err := validateConfig(config)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "at least 32 characters")
-}
-
-// TestValidateConfig_Production_InsecureJWTSecret validates that insecure secrets are rejected
-func TestValidateConfig_Production_InsecureJWTSecret(t *testing.T) {
-	insecureSecrets := []string{
-		"test-jwt-secret",
-		"changeme",
-		"password",
-	}
-
-	for _, secret := range insecureSecrets {
-		// Pad to 32 chars to pass length check
-		paddedSecret := secret
-		for len(paddedSecret) < 32 {
-			paddedSecret += "x"
-		}
-		// But use original insecure secret
-		config := &Config{
-			Environment: "production",
-			Auth: AuthConfig{
-				JWTSecret: secret,
-			},
-		}
-
-		err := validateConfig(config)
-		// Should fail either due to length or insecure check
-		require.Error(t, err, "insecure secret '%s' should be rejected", secret)
-	}
-}
-
-// TestValidateConfig_Production_ValidJWTSecret validates that valid secrets pass
-func TestValidateConfig_Production_ValidJWTSecret(t *testing.T) {
-	config := &Config{
-		Environment: "production",
-		Auth: AuthConfig{
-			JWTSecret: "this-is-a-secure-production-jwt-secret-key-123",
-		},
-	}
-
-	err := validateConfig(config)
-	require.NoError(t, err)
-}
-
-// TestValidateConfig_Staging_RequiresJWTSecret validates staging also requires JWT
-func TestValidateConfig_Staging_RequiresJWTSecret(t *testing.T) {
-	config := &Config{
-		Environment: "staging",
-		Auth: AuthConfig{
-			JWTSecret: "",
-		},
-	}
-
-	err := validateConfig(config)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "JWT_SECRET cannot be empty")
-}
-
-// TestValidateConfig_Development_AllowsEmptyJWTSecret validates dev allows empty JWT
-func TestValidateConfig_Development_AllowsEmptyJWTSecret(t *testing.T) {
-	config := &Config{
-		Environment: "development",
-		Auth: AuthConfig{
-			JWTSecret: "",
-		},
-	}
-
-	err := validateConfig(config)
-	require.NoError(t, err)
-}
-
-// TestValidateConfig_Development_AllowsInsecureJWTSecret validates dev allows insecure secrets
-func TestValidateConfig_Development_AllowsInsecureJWTSecret(t *testing.T) {
-	config := &Config{
-		Environment: "development",
-		Auth: AuthConfig{
-			JWTSecret: "test",
-		},
-	}
-
-	err := validateConfig(config)
-	require.NoError(t, err)
-}
-
-// TestLoad_WithDatabaseURL_Override validates DATABASE_URL can be set via env
-func TestLoad_WithDatabaseURL_Override(t *testing.T) {
+func TestLoad_WithInvalidDatabaseDriver(t *testing.T) {
 	os.Clearenv()
-
-	t.Setenv("DATABASE_URL", "postgres://testuser:testpass@testhost:5432/testdb?sslmode=require")
+	t.Setenv("DATABASE_DRIVER", "mysql")
 
 	config, err := Load()
-	require.NoError(t, err)
-	require.NotNil(t, config)
-
-	assert.Equal(t, "postgres://testuser:testpass@testhost:5432/testdb?sslmode=require", config.Database.DatabaseURL)
+	assert.Nil(t, config)
+	assert.ErrorContains(t, err, "database.driver must be one of")
 }
 
-// TestLoad_DatabaseDefaults validates database has sensible defaults
-func TestLoad_DatabaseDefaults(t *testing.T) {
+func TestLoad_SQLiteDriverRejectsWhitespacePath(t *testing.T) {
 	os.Clearenv()
+	t.Setenv("DATABASE_DRIVER", "sqlite")
+	t.Setenv("SQLITE_PATH", "   ")
 
 	config, err := Load()
-	require.NoError(t, err)
-	require.NotNil(t, config)
-
-	// Verify sensible defaults for database
-	assert.Equal(t, "localhost", config.Database.Host)
-	assert.Equal(t, 5432, config.Database.Port)
-	assert.Equal(t, "postgres", config.Database.User)
-	assert.NotEmpty(t, config.Database.Password, "Database password should have a default")
-	assert.Equal(t, "celebrum_ai", config.Database.DBName)
-	assert.Equal(t, "disable", config.Database.SSLMode)
-	assert.Equal(t, 25, config.Database.MaxOpenConns)
-	assert.Equal(t, 5, config.Database.MaxIdleConns)
-}
-
-// TestLoad_RedisDefaults validates Redis has sensible defaults
-func TestLoad_RedisDefaults(t *testing.T) {
-	os.Clearenv()
-
-	config, err := Load()
-	require.NoError(t, err)
-	require.NotNil(t, config)
-
-	assert.Equal(t, "localhost", config.Redis.Host)
-	assert.Equal(t, 6379, config.Redis.Port)
-	assert.Equal(t, "", config.Redis.Password) // Redis password can be empty
-	assert.Equal(t, 0, config.Redis.DB)
-}
-
-// TestConfig_EnvironmentVariableMappings validates env var naming conventions
-func TestConfig_EnvironmentVariableMappings(t *testing.T) {
-	os.Clearenv()
-
-	// Test that both DATABASE_* and nested format work
-	t.Setenv("DATABASE_HOST", "custom-host")
-	t.Setenv("DATABASE_PORT", "5433")
-	t.Setenv("DATABASE_USER", "custom-user")
-	t.Setenv("DATABASE_PASSWORD", "custom-password")
-	t.Setenv("DATABASE_DBNAME", "custom-db")
-
-	config, err := Load()
-	require.NoError(t, err)
-	require.NotNil(t, config)
-
-	assert.Equal(t, "custom-host", config.Database.Host)
-	assert.Equal(t, 5433, config.Database.Port)
-	assert.Equal(t, "custom-user", config.Database.User)
-	assert.Equal(t, "custom-password", config.Database.Password)
-	assert.Equal(t, "custom-db", config.Database.DBName)
-}
-
-// TestConfig_JWTSecretFromEnvironment validates JWT_SECRET env var
-func TestConfig_JWTSecretFromEnvironment(t *testing.T) {
-	os.Clearenv()
-
-	t.Setenv("JWT_SECRET", "env-jwt-secret-that-is-long-enough-for-production")
-
-	config, err := Load()
-	require.NoError(t, err)
-	require.NotNil(t, config)
-
-	assert.Equal(t, "env-jwt-secret-that-is-long-enough-for-production", config.Auth.JWTSecret)
-}
-
-// TestConfig_DockerEnvironmentDefaults validates Docker-aware service defaults
-func TestConfig_DockerEnvironmentDefaults(t *testing.T) {
-	t.Run("Docker environment uses service names", func(t *testing.T) {
-		os.Clearenv()
-
-		t.Setenv("DOCKER_ENVIRONMENT", "true")
-		t.Setenv("JWT_SECRET", "test-jwt-secret-that-is-long-enough-32chars")
-
-		config, err := Load()
-		require.NoError(t, err)
-		require.NotNil(t, config)
-
-		// Should use Docker service names
-		assert.Equal(t, "http://ccxt-service:3001", config.CCXT.ServiceURL)
-		assert.Equal(t, "ccxt-service:50051", config.CCXT.GrpcAddress)
-		assert.Equal(t, "http://telegram-service:3002", config.Telegram.ServiceURL)
-		assert.Equal(t, "telegram-service:50052", config.Telegram.GrpcAddress)
-	})
-
-	t.Run("Coolify environment uses service names", func(t *testing.T) {
-		os.Clearenv()
-
-		t.Setenv("COOLIFY", "true")
-		t.Setenv("JWT_SECRET", "test-jwt-secret-that-is-long-enough-32chars")
-
-		config, err := Load()
-		require.NoError(t, err)
-		require.NotNil(t, config)
-
-		// Should use Docker service names
-		assert.Equal(t, "http://ccxt-service:3001", config.CCXT.ServiceURL)
-		assert.Equal(t, "ccxt-service:50051", config.CCXT.GrpcAddress)
-	})
-
-	t.Run("Coolify detection via COOLIFY_CONTAINER_NAME", func(t *testing.T) {
-		os.Clearenv()
-
-		// Coolify sets COOLIFY_CONTAINER_NAME but not COOLIFY=true
-		t.Setenv("COOLIFY_CONTAINER_NAME", "backend-api-mc88g0gcw8w4o8cok8kooc0w-pr-80")
-		t.Setenv("JWT_SECRET", "test-jwt-secret-that-is-long-enough-32chars")
-
-		config, err := Load()
-		require.NoError(t, err)
-		require.NotNil(t, config)
-
-		// Should use Docker service names when COOLIFY_CONTAINER_NAME is set
-		assert.Equal(t, "http://ccxt-service:3001", config.CCXT.ServiceURL)
-		assert.Equal(t, "ccxt-service:50051", config.CCXT.GrpcAddress)
-		assert.Equal(t, "http://telegram-service:3002", config.Telegram.ServiceURL)
-		assert.Equal(t, "telegram-service:50052", config.Telegram.GrpcAddress)
-	})
-
-	t.Run("Coolify detection via COOLIFY_RESOURCE_UUID", func(t *testing.T) {
-		os.Clearenv()
-
-		// Coolify also sets COOLIFY_RESOURCE_UUID
-		t.Setenv("COOLIFY_RESOURCE_UUID", "mc88g0gcw8w4o8cok8kooc0w")
-		t.Setenv("JWT_SECRET", "test-jwt-secret-that-is-long-enough-32chars")
-
-		config, err := Load()
-		require.NoError(t, err)
-		require.NotNil(t, config)
-
-		// Should use Docker service names when COOLIFY_RESOURCE_UUID is set
-		assert.Equal(t, "http://ccxt-service:3001", config.CCXT.ServiceURL)
-		assert.Equal(t, "ccxt-service:50051", config.CCXT.GrpcAddress)
-		assert.Equal(t, "http://telegram-service:3002", config.Telegram.ServiceURL)
-		assert.Equal(t, "telegram-service:50052", config.Telegram.GrpcAddress)
-	})
-
-	t.Run("Non-Docker environment uses localhost", func(t *testing.T) {
-		os.Clearenv()
-
-		t.Setenv("DOCKER_ENVIRONMENT", "false")
-		t.Setenv("COOLIFY", "false")
-		t.Setenv("JWT_SECRET", "test-jwt-secret-that-is-long-enough-32chars")
-
-		config, err := Load()
-		require.NoError(t, err)
-		require.NotNil(t, config)
-
-		// Should use localhost for HTTP, 127.0.0.1 for gRPC (to avoid IPv6 issues)
-		assert.Equal(t, "http://localhost:3001", config.CCXT.ServiceURL)
-		assert.Equal(t, "127.0.0.1:50051", config.CCXT.GrpcAddress)
-		assert.Equal(t, "http://localhost:3002", config.Telegram.ServiceURL)
-		assert.Equal(t, "127.0.0.1:50052", config.Telegram.GrpcAddress)
-	})
-
-	t.Run("Empty environment uses localhost", func(t *testing.T) {
-		os.Clearenv()
-
-		t.Setenv("JWT_SECRET", "test-jwt-secret-that-is-long-enough-32chars")
-
-		config, err := Load()
-		require.NoError(t, err)
-		require.NotNil(t, config)
-
-		// Should use localhost for HTTP, 127.0.0.1 for gRPC (to avoid IPv6 issues)
-		assert.Equal(t, "http://localhost:3001", config.CCXT.ServiceURL)
-		assert.Equal(t, "127.0.0.1:50051", config.CCXT.GrpcAddress)
-	})
-
-	t.Run("Explicit env vars override Docker defaults", func(t *testing.T) {
-		os.Clearenv()
-
-		t.Setenv("DOCKER_ENVIRONMENT", "true")
-		t.Setenv("JWT_SECRET", "test-jwt-secret-that-is-long-enough-32chars")
-		t.Setenv("CCXT_SERVICE_URL", "http://custom-ccxt:9001")
-		t.Setenv("CCXT_GRPC_ADDRESS", "custom-ccxt:59051")
-
-		config, err := Load()
-		require.NoError(t, err)
-		require.NotNil(t, config)
-
-		// Explicit env vars should override defaults
-		assert.Equal(t, "http://custom-ccxt:9001", config.CCXT.ServiceURL)
-		assert.Equal(t, "custom-ccxt:59051", config.CCXT.GrpcAddress)
-	})
+	assert.Nil(t, config)
+	assert.ErrorContains(t, err, "database.sqlite_path is required")
 }

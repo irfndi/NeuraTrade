@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/stretchr/testify/assert"
 )
 
 // TestErrorRecoveryManager_NewErrorRecoveryManager tests error recovery manager creation
 func TestErrorRecoveryManager_NewErrorRecoveryManager(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	erm := NewErrorRecoveryManager(logger)
 
@@ -27,7 +27,7 @@ func TestErrorRecoveryManager_NewErrorRecoveryManager(t *testing.T) {
 
 // TestErrorRecoveryManager_RegisterCircuitBreaker tests circuit breaker registration
 func TestErrorRecoveryManager_RegisterCircuitBreaker(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Register a circuit breaker
@@ -44,7 +44,7 @@ func TestErrorRecoveryManager_RegisterCircuitBreaker(t *testing.T) {
 
 // TestErrorRecoveryManager_RegisterRetryPolicy tests retry policy registration
 func TestErrorRecoveryManager_RegisterRetryPolicy(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	policy := &RetryPolicy{
@@ -69,7 +69,7 @@ func TestErrorRecoveryManager_RegisterRetryPolicy(t *testing.T) {
 
 // TestErrorRecoveryManager_ExecuteWithRecovery_Success tests successful operation execution
 func TestErrorRecoveryManager_ExecuteWithRecovery_Success(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	operation := func() (interface{}, error) {
@@ -88,7 +88,7 @@ func TestErrorRecoveryManager_ExecuteWithRecovery_Success(t *testing.T) {
 
 // TestErrorRecoveryManager_ExecuteWithRecovery_Failure tests failed operation execution
 func TestErrorRecoveryManager_ExecuteWithRecovery_Failure(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	operation := func() (interface{}, error) {
@@ -107,7 +107,7 @@ func TestErrorRecoveryManager_ExecuteWithRecovery_Failure(t *testing.T) {
 
 // TestErrorRecoveryManager_ExecuteWithRecovery_Fallback tests fallback execution
 func TestErrorRecoveryManager_ExecuteWithRecovery_Fallback(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	operation := func() (interface{}, error) {
@@ -127,7 +127,7 @@ func TestErrorRecoveryManager_ExecuteWithRecovery_Fallback(t *testing.T) {
 
 // TestErrorRecoveryManager_ExecuteWithRetry tests retry logic
 func TestErrorRecoveryManager_ExecuteWithRetry(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Register a retry policy
@@ -159,7 +159,7 @@ func TestErrorRecoveryManager_ExecuteWithRetry(t *testing.T) {
 
 // TestErrorRecoveryManager_ExecuteWithRetry_ContextCancellation tests context cancellation
 func TestErrorRecoveryManager_ExecuteWithRetry_ContextCancellation(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Register a retry policy
@@ -187,7 +187,7 @@ func TestErrorRecoveryManager_ExecuteWithRetry_ContextCancellation(t *testing.T)
 
 // TestErrorRecoveryManager_CalculateDelay tests delay calculation
 func TestErrorRecoveryManager_CalculateDelay(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	policy := &RetryPolicy{
@@ -209,7 +209,7 @@ func TestErrorRecoveryManager_CalculateDelay(t *testing.T) {
 
 // TestErrorRecoveryManager_DegradationMode tests degradation mode
 func TestErrorRecoveryManager_DegradationMode(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Initially not in degradation mode
@@ -226,7 +226,7 @@ func TestErrorRecoveryManager_DegradationMode(t *testing.T) {
 
 // TestErrorRecoveryManager_GetCircuitBreakerStatus tests circuit breaker status retrieval
 func TestErrorRecoveryManager_GetCircuitBreakerStatus(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Initially empty status
@@ -244,7 +244,7 @@ func TestErrorRecoveryManager_GetCircuitBreakerStatus(t *testing.T) {
 
 // TestErrorRecoveryManager_ExecuteWithRetry_ErrorOnly tests error-only retry execution
 func TestErrorRecoveryManager_ExecuteWithRetry_ErrorOnly(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	ctx := context.Background()
@@ -260,7 +260,7 @@ func TestErrorRecoveryManager_ExecuteWithRetry_ErrorOnly(t *testing.T) {
 
 // TestErrorRecoveryManager_ExecuteWithRetry_ErrorOnly_WithRetries tests error-only retry with failures
 func TestErrorRecoveryManager_ExecuteWithRetry_ErrorOnly_WithRetries(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Register a retry policy
@@ -308,7 +308,7 @@ func TestErrorRecoveryManager_DefaultRetryPolicies(t *testing.T) {
 
 // TestErrorRecoveryManager_ConcurrentOperations tests concurrent error recovery operations
 func TestErrorRecoveryManager_ConcurrentOperations(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Register retry policy
@@ -359,7 +359,7 @@ func TestErrorRecoveryManager_ConcurrentOperations(t *testing.T) {
 
 // TestErrorRecoveryManager_TimeHandling tests time handling in retry operations
 func TestErrorRecoveryManager_TimeHandling(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Register retry policy
@@ -385,7 +385,7 @@ func TestErrorRecoveryManager_TimeHandling(t *testing.T) {
 
 // TestErrorRecoveryManager_StateManagement tests state management
 func TestErrorRecoveryManager_StateManagement(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	erm := NewErrorRecoveryManager(logger)
 
 	// Test initial state

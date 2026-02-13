@@ -312,3 +312,90 @@ func TestSignalProcessor_ConcurrentSafety(t *testing.T) {
 	}
 	assert.Empty(t, expectedIDs, "All expected IDs should be received")
 }
+
+func TestSignalProcessor_ExtractExchanges(t *testing.T) {
+	sp := &SignalProcessor{}
+
+	t.Run("nil signal", func(t *testing.T) {
+		exchanges := sp.extractExchanges(nil)
+		assert.Empty(t, exchanges)
+	})
+
+	t.Run("combine and dedupe from fields and metadata", func(t *testing.T) {
+		signal := &AggregatedSignal{
+			Exchanges: []string{"binance", "Binance", "coinbase", " "},
+			Metadata: map[string]interface{}{
+				"buy_exchanges":  []string{"kraken", "binance"},
+				"sell_exchanges": []interface{}{"okx", "kraken", 123},
+				"exchanges":      "bitfinex, coinbase",
+			},
+		}
+
+		exchanges := sp.extractExchanges(signal)
+		assert.Equal(t, []string{"binance", "coinbase", "kraken", "okx", "bitfinex"}, exchanges)
+	})
+}
+
+func TestSignalProcessor_CollectNotifiableSignals(t *testing.T) {
+	sp := &SignalProcessor{config: &SignalProcessorConfig{QualityThreshold: 0.7}}
+	now := time.Now()
+
+	aggPtr := &AggregatedSignal{
+		ID:         "sig-1",
+		SignalType: SignalTypeArbitrage,
+		Symbol:     "BTC/USDT",
+		Action:     "buy",
+		Metadata: map[string]interface{}{
+			"buy_exchanges": []string{"binance"},
+		},
+		CreatedAt: now,
+	}
+
+	aggValue := AggregatedSignal{
+		ID:         "sig-2",
+		SignalType: SignalTypeTechnical,
+		Symbol:     "ETH/USDT",
+		Action:     "sell",
+		Exchanges:  []string{"coinbase", "coinbase"},
+		CreatedAt:  now.Add(time.Second),
+	}
+
+	results := []ProcessingResult{
+		{Processed: true, QualityScore: 0.9, Metadata: map[string]interface{}{"aggregated_signal": aggPtr}},
+		{Processed: true, QualityScore: 0.95, Metadata: map[string]interface{}{"aggregated_signal": aggValue}},
+		{Processed: true, QualityScore: 0.95, Metadata: map[string]interface{}{"aggregated_signal": aggPtr}},
+		{Processed: true, QualityScore: 0.6, Metadata: map[string]interface{}{"aggregated_signal": aggValue}},
+		{Processed: false, QualityScore: 0.99, Metadata: map[string]interface{}{"aggregated_signal": aggValue}},
+		{Processed: true, QualityScore: 0.99, Metadata: map[string]interface{}{"aggregated_signal": "invalid"}},
+	}
+
+	notifiable := sp.collectNotifiableSignals(results)
+	if assert.Len(t, notifiable, 2) {
+		assert.Equal(t, "sig-1", notifiable[0].ID)
+		assert.Equal(t, []string{"binance"}, notifiable[0].Exchanges)
+		assert.Equal(t, "sig-2", notifiable[1].ID)
+		assert.Equal(t, []string{"coinbase"}, notifiable[1].Exchanges)
+	}
+}
+
+func TestSignalProcessor_HandleProcessingResultsWithContext_SkipsWhenNotificationsUnavailable(t *testing.T) {
+	results := []ProcessingResult{{Processed: true, QualityScore: 0.9}}
+
+	t.Run("nil config", func(t *testing.T) {
+		sp := &SignalProcessor{}
+		err := sp.handleProcessingResultsWithContext(context.Background(), results)
+		assert.NoError(t, err)
+	})
+
+	t.Run("notifications disabled", func(t *testing.T) {
+		sp := &SignalProcessor{config: &SignalProcessorConfig{NotificationEnabled: false}}
+		err := sp.handleProcessingResultsWithContext(context.Background(), results)
+		assert.NoError(t, err)
+	})
+
+	t.Run("notification service nil", func(t *testing.T) {
+		sp := &SignalProcessor{config: &SignalProcessorConfig{NotificationEnabled: true}}
+		err := sp.handleProcessingResultsWithContext(context.Background(), results)
+		assert.NoError(t, err)
+	})
+}

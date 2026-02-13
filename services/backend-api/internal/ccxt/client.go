@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,8 +18,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	pb "github.com/irfandi/celebrum-ai-go/pkg/pb/ccxt"
+	"github.com/irfndi/neuratrade/internal/config"
+	pb "github.com/irfndi/neuratrade/pkg/pb/ccxt"
 	"github.com/shopspring/decimal"
 )
 
@@ -285,7 +286,7 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 		resp, err := c.grpcClient.GetOrderBook(ctx, &pb.GetOrderBookRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
-			Limit:    int32(limit),
+			Limit:    toSafeInt32(limit),
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcOrderBookResponse(resp), nil
@@ -315,7 +316,7 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 		resp, err := c.grpcClient.GetTrades(ctx, &pb.GetTradesRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
-			Limit:    int32(limit),
+			Limit:    toSafeInt32(limit),
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcTradesResponse(resp), nil
@@ -346,7 +347,7 @@ func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe strin
 			Exchange:  exchange,
 			Symbol:    symbol,
 			Timeframe: timeframe,
-			Limit:     int32(limit),
+			Limit:     toSafeInt32(limit),
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcOHLCVResponse(resp), nil
@@ -623,13 +624,14 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Celebrum-AI-Go/1.0")
+	req.Header.Set("User-Agent", "NeuraTrade/1.0")
 
 	// Add API key for admin endpoints
 	if strings.Contains(path, "/admin/") && c.adminAPIKey != "" {
 		req.Header.Set("X-API-Key", c.adminAPIKey)
 	}
 
+	// #nosec G704 -- URL is built from trusted service config and fixed API paths
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to make request: %w", err)
@@ -779,6 +781,17 @@ func (c *Client) Close() error {
 //	string: The base URL.
 func (c *Client) BaseURL() string {
 	return c.baseURL
+}
+
+func toSafeInt32(value int) int32 {
+	if value <= 0 {
+		return 0
+	}
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	// #nosec G115 -- Value is bounds-checked above to prevent overflow
+	return int32(value)
 }
 
 // decimalFromString safely converts a string to decimal.Decimal.

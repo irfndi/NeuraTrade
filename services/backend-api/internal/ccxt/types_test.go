@@ -6,12 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/cache"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
+	"github.com/irfndi/neuratrade/internal/cache"
+	"github.com/irfndi/neuratrade/internal/config"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/shopspring/decimal"
-
 	"github.com/stretchr/testify/assert"
 )
 
@@ -246,7 +245,7 @@ func TestService_Struct(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -264,7 +263,7 @@ func TestService_GetSupportedExchanges_Empty(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 	exchanges := service.GetSupportedExchanges()
@@ -280,7 +279,7 @@ func TestService_GetSupportedExchanges_Populated(t *testing.T) {
 		Timeout:    30,
 	}
 
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 
@@ -299,7 +298,7 @@ func TestService_GetSupportedExchanges_Populated(t *testing.T) {
 
 // Test Service Initialize function with successful response
 func TestService_Initialize_Success(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := &MockBlacklistCache{
 		LoadFromDatabaseFunc: func(ctx context.Context) error {
 			return nil // Successful load
@@ -333,7 +332,7 @@ func TestService_Initialize_Success(t *testing.T) {
 
 // Test Service Initialize function with client error
 func TestService_Initialize_ClientError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := &MockBlacklistCache{}
 
 	client := &MockClient{
@@ -356,7 +355,7 @@ func TestService_Initialize_ClientError(t *testing.T) {
 
 // Test Service Initialize function with blacklist cache error
 func TestService_Initialize_BlacklistCacheError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := &MockBlacklistCache{
 		LoadFromDatabaseFunc: func(ctx context.Context) error {
 			return assert.AnError
@@ -387,7 +386,7 @@ func TestService_Initialize_BlacklistCacheError(t *testing.T) {
 
 // Test Service IsHealthy function with healthy client
 func TestService_IsHealthy_Healthy(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -410,7 +409,7 @@ func TestService_IsHealthy_Healthy(t *testing.T) {
 
 // Test Service IsHealthy function with unhealthy client
 func TestService_IsHealthy_Unhealthy(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -433,7 +432,7 @@ func TestService_IsHealthy_Unhealthy(t *testing.T) {
 
 // Test Service FetchSingleTicker function with successful response
 func TestService_FetchSingleTicker_Success(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -470,7 +469,7 @@ func TestService_FetchSingleTicker_Success(t *testing.T) {
 
 // Test Service FetchSingleTicker function with client error
 func TestService_FetchSingleTicker_ClientError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -493,7 +492,7 @@ func TestService_FetchSingleTicker_ClientError(t *testing.T) {
 
 // Test Service FetchOrderBook function with successful response
 func TestService_FetchOrderBook_Success(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -530,7 +529,7 @@ func TestService_FetchOrderBook_Success(t *testing.T) {
 
 // Test Service FetchOrderBook function with client error
 func TestService_FetchOrderBook_ClientError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -553,7 +552,7 @@ func TestService_FetchOrderBook_ClientError(t *testing.T) {
 
 // Test Service FetchOHLCV function with successful response
 func TestService_FetchOHLCV_Success(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -597,7 +596,7 @@ func TestService_FetchOHLCV_Success(t *testing.T) {
 
 // Test Service FetchOHLCV function with client error
 func TestService_FetchOHLCV_ClientError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -620,7 +619,7 @@ func TestService_FetchOHLCV_ClientError(t *testing.T) {
 
 // Test Service FetchTrades function with successful response
 func TestService_FetchTrades_Success(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -663,7 +662,7 @@ func TestService_FetchTrades_Success(t *testing.T) {
 
 // Test Service FetchTrades function with client error
 func TestService_FetchTrades_ClientError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -686,7 +685,7 @@ func TestService_FetchTrades_ClientError(t *testing.T) {
 
 // Test Service FetchMarkets function with successful response
 func TestService_FetchMarkets_Success(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -717,7 +716,7 @@ func TestService_FetchMarkets_Success(t *testing.T) {
 
 // Test Service FetchMarkets function with client error
 func TestService_FetchMarkets_ClientError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -740,7 +739,7 @@ func TestService_FetchMarkets_ClientError(t *testing.T) {
 
 // Test Service CalculateArbitrageOpportunities function with successful arbitrage detection
 func TestService_CalculateArbitrageOpportunities_Success(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -790,7 +789,7 @@ func TestService_CalculateArbitrageOpportunities_Success(t *testing.T) {
 
 // Test Service CalculateArbitrageOpportunities function with insufficient profit
 func TestService_CalculateArbitrageOpportunities_InsufficientProfit(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -832,7 +831,7 @@ func TestService_CalculateArbitrageOpportunities_InsufficientProfit(t *testing.T
 
 // Test Service CalculateArbitrageOpportunities function with client error
 func TestService_CalculateArbitrageOpportunities_ClientError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -856,7 +855,7 @@ func TestService_CalculateArbitrageOpportunities_ClientError(t *testing.T) {
 
 // Test Service CalculateArbitrageOpportunities function with empty exchanges
 func TestService_CalculateArbitrageOpportunities_EmptyExchanges(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	service := &Service{
@@ -874,7 +873,7 @@ func TestService_CalculateArbitrageOpportunities_EmptyExchanges(t *testing.T) {
 
 // Test Service FetchFundingRate function
 func TestService_FetchFundingRate(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	expectedFundingRate := &FundingRate{
@@ -906,7 +905,7 @@ func TestService_FetchFundingRate(t *testing.T) {
 
 // Test Service FetchFundingRate function with error
 func TestService_FetchFundingRate_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -929,7 +928,7 @@ func TestService_FetchFundingRate_Error(t *testing.T) {
 
 // Test Service FetchFundingRates function
 func TestService_FetchFundingRates(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	expectedFundingRates := []FundingRate{
@@ -972,7 +971,7 @@ func TestService_FetchFundingRates(t *testing.T) {
 
 // Test Service FetchFundingRates function with empty symbols
 func TestService_FetchFundingRates_EmptySymbols(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -994,7 +993,7 @@ func TestService_FetchFundingRates_EmptySymbols(t *testing.T) {
 
 // Test Service FetchFundingRates function with error
 func TestService_FetchFundingRates_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -1017,7 +1016,7 @@ func TestService_FetchFundingRates_Error(t *testing.T) {
 
 // Test Service FetchAllFundingRates function
 func TestService_FetchAllFundingRates(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	expectedFundingRates := []FundingRate{
@@ -1060,7 +1059,7 @@ func TestService_FetchAllFundingRates(t *testing.T) {
 
 // Test Service FetchAllFundingRates function with error
 func TestService_FetchAllFundingRates_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -1083,7 +1082,7 @@ func TestService_FetchAllFundingRates_Error(t *testing.T) {
 
 // Test Service CalculateFundingRateArbitrage function
 func TestService_CalculateFundingRateArbitrage(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client with funding rate data that creates arbitrage opportunity
@@ -1141,7 +1140,7 @@ func TestService_CalculateFundingRateArbitrage(t *testing.T) {
 
 // Test Service CalculateFundingRateArbitrage function with insufficient profit
 func TestService_CalculateFundingRateArbitrage_InsufficientProfit(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client with funding rate data that has very small difference
@@ -1189,7 +1188,7 @@ func TestService_CalculateFundingRateArbitrage_InsufficientProfit(t *testing.T) 
 
 // Test Service CalculateFundingRateArbitrage function with price difference risk
 func TestService_CalculateFundingRateArbitrage_PriceDifferenceRisk(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client with funding rate data but different mark prices
@@ -1242,7 +1241,7 @@ func TestService_CalculateFundingRateArbitrage_PriceDifferenceRisk(t *testing.T)
 
 // Test Service CalculateFundingRateArbitrage function with insufficient exchanges
 func TestService_CalculateFundingRateArbitrage_InsufficientExchanges(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -1275,7 +1274,7 @@ func TestService_CalculateFundingRateArbitrage_InsufficientExchanges(t *testing.
 
 // Test Service CalculateFundingRateArbitrage function with client error
 func TestService_CalculateFundingRateArbitrage_ClientError(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	client := &MockClient{
@@ -1303,7 +1302,7 @@ func TestService_CalculateFundingRateArbitrage_ClientError(t *testing.T) {
 
 // Test Service GetExchangeConfig function
 func TestService_GetExchangeConfig(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client with exchange config response
@@ -1341,7 +1340,7 @@ func TestService_GetExchangeConfig(t *testing.T) {
 
 // Test Service GetExchangeConfig error
 func TestService_GetExchangeConfig_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client that returns error
@@ -1365,7 +1364,7 @@ func TestService_GetExchangeConfig_Error(t *testing.T) {
 
 // Test Service AddExchangeToBlacklist function
 func TestService_AddExchangeToBlacklist(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client
@@ -1403,7 +1402,7 @@ func TestService_AddExchangeToBlacklist(t *testing.T) {
 
 // Test Service AddExchangeToBlacklist error
 func TestService_AddExchangeToBlacklist_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client that returns error
@@ -1432,7 +1431,7 @@ func TestService_AddExchangeToBlacklist_Error(t *testing.T) {
 
 // Test Service RemoveExchangeFromBlacklist function
 func TestService_RemoveExchangeFromBlacklist(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Pre-add exchange to blacklist cache
@@ -1475,7 +1474,7 @@ func TestService_RemoveExchangeFromBlacklist(t *testing.T) {
 
 // Test Service RemoveExchangeFromBlacklist error
 func TestService_RemoveExchangeFromBlacklist_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client that returns error
@@ -1500,7 +1499,7 @@ func TestService_RemoveExchangeFromBlacklist_Error(t *testing.T) {
 
 // Test Service RefreshExchanges function
 func TestService_RefreshExchanges(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client
@@ -1533,7 +1532,7 @@ func TestService_RefreshExchanges(t *testing.T) {
 
 // Test Service RefreshExchanges error
 func TestService_RefreshExchanges_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client that returns error
@@ -1557,7 +1556,7 @@ func TestService_RefreshExchanges_Error(t *testing.T) {
 
 // Test Service AddExchange function
 func TestService_AddExchange(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client
@@ -1592,7 +1591,7 @@ func TestService_AddExchange(t *testing.T) {
 
 // Test Service FetchMarketData error
 func TestService_FetchMarketData_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client that returns error
@@ -1619,7 +1618,7 @@ func TestService_FetchMarketData_Error(t *testing.T) {
 
 // Test Service AddExchange error
 func TestService_AddExchange_Error(t *testing.T) {
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 
 	// Setup mock client that returns error

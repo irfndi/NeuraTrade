@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
 )
 
 // Force update
@@ -95,7 +95,8 @@ func generateTestPriceData(count int) *PriceData {
 
 func setupTestService() (*TechnicalAnalysisService, *MockTechnicalDatabase) {
 	cfg := &config.Config{}
-	logger := logging.NewStandardLogger("error", "test") // Reduce noise in tests
+	logger := zaplogrus.New()
+	logger.SetLevel(zaplogrus.ErrorLevel) // Reduce noise in tests
 
 	mockDB := &MockTechnicalDatabase{
 		PostgresDB: &MockGormDB{},
@@ -115,7 +116,7 @@ func setupTestService() (*TechnicalAnalysisService, *MockTechnicalDatabase) {
 func TestNewTechnicalAnalysisService(t *testing.T) {
 	cfg := &config.Config{}
 	db := &database.PostgresDB{}
-	logger := logging.NewStandardLogger("info", "test")
+	logger := zaplogrus.New()
 
 	// Create required dependencies
 	errorRecoveryManager := NewErrorRecoveryManager(logger)

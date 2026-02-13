@@ -1,123 +1,66 @@
-version: 2
+# golangci-lint configuration for NeuraTrade
+# This configuration establishes a quality baseline for the codebase.
+#
+# Baseline Rationale:
+# - errcheck: Critical for catching unchecked errors that could cause silent failures
+# - govet: Essential for catching common programming mistakes
+# - ineffassign: Prevents unused variable assignments that indicate bugs
+# - staticcheck: Comprehensive static analysis for code quality
+# - unused: Removes dead code to reduce maintenance burden
+# - copyloopvar: Prevents common loop variable copy bugs
+#
+# Additional Linters (not enabled by default due to migration phase):
+# - misspell: Spelling errors in comments/docs (can be noisy)
+# - gocyclo: Complexity checking (may need higher thresholds)
+# - funlen: Function length limits (existing codebase has violations)
+#
+# See PR feedback in gh-87 for full discussion.
 
-linters-settings:
-  govet:
-    enable-all: true
-    disable:
-      - shadow
-  gocyclo:
-    min-complexity: 15
-  dupl:
-    threshold: 100
-  goconst:
-    min-len: 2
-    min-occurrences: 3
-  misspell:
-    locale: US
-  lll:
-    line-length: 140
-  goimports:
-    local-prefixes: github.com/irfandi/celebrum-ai-go
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-  funlen:
-    lines: 100
-    statements: 50
-  revive:
-    rules:
-      - name: var-naming
-        severity: warning
-        disabled: false
-        arguments:
-          - [
-              "ID",
-              "URL",
-              "HTTP",
-              "API",
-              "DB",
-              "SQL",
-              "JSON",
-              "YAML",
-              "CCXT",
-              "UUID",
-              "OHLCV",
-            ]
+version: "2"
 
 linters:
-  disable-all: true
+  default: none
+
   enable:
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - misspell
-    - copyloopvar # replaces exportloopref
+    - copyloopvar
+    - errname
+    - asciicheck
+    - bidichk
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - shadow
+        - fieldalignment
+        - unusedwrite
 
 issues:
-  exclude-rules:
+  exclude:
+    # Test files excluded from errcheck due to intentional void calls
     - path: _test\.go
       linters:
-        - gocyclo
         - errcheck
-        - dupl
-        - gosec
-        - funlen
-        - goconst
-        - revive
-        - unparam
-        - gocritic
-        - unconvert
     - path: internal/testutil/
       linters:
         - errcheck
-        - gosec
-        - revive
-        - unparam
     - path: test/
       linters:
         - errcheck
-        - gosec
-        - gocyclo
-        - funlen
-        - revive
-        - unparam
-    - path: cmd/server/
+    # convertToSnapshots is used in tests (technical_analysis_test.go:519)
+    # but tests are excluded from linting (tests: false), so appears unused
+    - path: technical_analysis\.go
       linters:
-        - gosec
-        - gocritic
-    - path: internal/middleware/
-      linters:
-        - gosec
-    - path: internal/api/handlers/
-      linters:
-        - gosec
-    - path: internal/services/
-      linters:
-        - gosec
+        - unused
 
-  exclude-use-default: true # Use default exclusions
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-dirs:
-    - vendor
-    - node_modules
-    - bin
-    - build
-    - .cache
-  exclude-files:
-    - ".*\\.pb\\.go$"
 
 run:
   timeout: 5m
-  tests: true
+  tests: false

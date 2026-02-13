@@ -310,7 +310,7 @@ if [ "${RUN_MIGRATIONS}" = "true" ]; then
     # Export DB_ vars from DATABASE_ vars for migrate.sh
     export DB_HOST="${DATABASE_HOST:-localhost}"
     export DB_PORT="${DATABASE_PORT:-5432}"
-    export DB_NAME="${DATABASE_DBNAME:-celebrum_ai}"
+    export DB_NAME="${DATABASE_DBNAME:-neuratrade}"
     export DB_USER="${DATABASE_USER:-postgres}"
     export DB_PASSWORD="${DATABASE_PASSWORD:-postgres}"
 

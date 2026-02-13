@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/irfandi/celebrum-ai-go/internal/services"
+	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -229,6 +229,7 @@ func TestHealthHandler_ReadinessCheck(t *testing.T) {
 			mockCacheAnalytics := NewMockCacheAnalyticsService()
 
 			mockDB.On("HealthCheck", mock.Anything).Return(tt.dbError)
+			mockRedis.On("HealthCheck", mock.Anything).Return(nil)
 
 			handler := NewHealthHandler(mockDB, mockRedis, "http://localhost:8080", mockCacheAnalytics)
 

@@ -55,10 +55,12 @@ func NewAdminMiddleware() *AdminMiddleware {
 		}
 		// Generate temporary key for non-production environments
 		apiKey = generateSecureKey(32)
-		log.Printf("INFO: Generated temporary ADMIN_API_KEY for non-production environment (first 8 chars: %s...)", apiKey[:8])
+		// #nosec G101 -- Temporary key generated for non-production use only
+		log.Printf("INFO: Generated temporary ADMIN_API_KEY for non-production environment")
 	}
 
 	// Prevent use of default/example keys in any environment
+	// #nosec G101 -- these are explicit denylisted example values, not embedded credentials
 	if apiKey == "admin-dev-key-change-in-production" || apiKey == "admin-secret-key-change-me" {
 		if isProductionEnvironment() {
 			log.Fatal("ADMIN_API_KEY cannot use default/example values in production")

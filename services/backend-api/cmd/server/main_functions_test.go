@@ -11,7 +11,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/irfandi/celebrum-ai-go/internal/config"
+	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -208,7 +208,7 @@ func TestConfigurationLoadingDirect(t *testing.T) {
 	assert.NotNil(t, cfg)
 	assert.NotEmpty(t, cfg.Environment)
 	assert.NotZero(t, cfg.Server.Port)
-	assert.Equal(t, "github.com/irfandi/celebrum-ai-go", cfg.Telemetry.ServiceName)
+	assert.Equal(t, "github.com/irfndi/neuratrade", cfg.Telemetry.ServiceName)
 	assert.Equal(t, "1.0.0", cfg.Telemetry.ServiceVersion)
 }
 
@@ -293,7 +293,7 @@ func TestTimeoutConfiguration(t *testing.T) {
 // TestEnvironmentVariableParsing tests environment variable handling
 func TestEnvironmentVariableParsing(t *testing.T) {
 	// Test that we can read environment variables
-	testKey := "TEST_CELEBRUM_AI_VAR"
+	testKey := "TEST_NEURATRADE_VAR"
 	testValue := "test_value"
 
 	// Set environment variable
@@ -305,7 +305,7 @@ func TestEnvironmentVariableParsing(t *testing.T) {
 	assert.Equal(t, testValue, retrieved)
 
 	// Test empty environment variable
-	emptyKey := "TEST_CELEBRUM_AI_EMPTY"
+	emptyKey := "TEST_NEURATRADE_EMPTY"
 	mustSetEnv(t, emptyKey, "")
 	defer mustUnsetEnv(t, emptyKey)
 

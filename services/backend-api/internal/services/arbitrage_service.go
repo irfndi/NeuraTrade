@@ -8,14 +8,14 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/database"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/observability"
 )
 
 // ArbitrageCalculator defines the interface for calculating arbitrage opportunities.
@@ -124,7 +124,7 @@ type ArbitrageServiceConfig struct {
 
 // ArbitrageService handles periodic calculation and storage of arbitrage opportunities.
 type ArbitrageService struct {
-	db                 database.DatabasePool
+	db                 DBPool
 	config             *config.Config
 	arbitrageConfig    ArbitrageServiceConfig
 	calculator         ArbitrageCalculator
@@ -133,10 +133,30 @@ type ArbitrageService struct {
 	wg                 sync.WaitGroup
 	isRunning          bool
 	mu                 sync.RWMutex
-	logger             logging.Logger
+	logger             *zaplogrus.Logger
 	lastCalculation    time.Time
 	opportunitiesFound int
 	multiLegCalculator *MultiLegArbitrageCalculator
+}
+
+type readOnlyDBPoolAdapter struct {
+	pool database.DatabasePool
+}
+
+func (r readOnlyDBPoolAdapter) Query(ctx context.Context, query string, args ...any) (database.Rows, error) {
+	return r.pool.Query(ctx, query, args...)
+}
+
+func (r readOnlyDBPoolAdapter) QueryRow(ctx context.Context, query string, args ...any) database.Row {
+	return r.pool.QueryRow(ctx, query, args...)
+}
+
+func (r readOnlyDBPoolAdapter) Exec(ctx context.Context, query string, args ...any) (database.Result, error) {
+	return r.pool.Exec(ctx, query, args...)
+}
+
+func (r readOnlyDBPoolAdapter) Begin(context.Context) (database.Tx, error) {
+	return nil, fmt.Errorf("begin transaction is not supported by this database adapter")
 }
 
 // NewArbitrageService creates a new arbitrage service instance.
@@ -150,8 +170,22 @@ type ArbitrageService struct {
 // Returns:
 //
 //	*ArbitrageService: Initialized service.
-func NewArbitrageService(db database.DatabasePool, cfg *config.Config, calculator ArbitrageCalculator, feeProvider FeeProvider) *ArbitrageService {
+func NewArbitrageService(db any, cfg *config.Config, calculator ArbitrageCalculator, multiLegCalculator ...*MultiLegArbitrageCalculator) *ArbitrageService {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	var dbPool DBPool
+	switch typed := db.(type) {
+	case nil:
+		dbPool = nil
+	case DBPool:
+		dbPool = typed
+	case database.LegacyDBPool:
+		dbPool = database.WrapLegacyDBPool(typed)
+	case database.DatabasePool:
+		dbPool = readOnlyDBPoolAdapter{pool: typed}
+	default:
+		dbPool = nil
+	}
 
 	// Parse configuration with defaults
 	arbitrageConfig := ArbitrageServiceConfig{
@@ -177,25 +211,19 @@ func NewArbitrageService(db database.DatabasePool, cfg *config.Config, calculato
 	}
 	arbitrageConfig.Enabled = cfg.Arbitrage.Enabled
 
-	// Initialize logger with config-provided log level
-	logLevel := cfg.Telemetry.LogLevel
-	if logLevel == "" {
-		logLevel = cfg.LogLevel
+	// Initialize logger
+	logger := zaplogrus.New()
+	selectedMultiLegCalculator := NewMultiLegArbitrageCalculator(nil, decimal.NewFromFloat(0.001))
+	if len(multiLegCalculator) > 0 && multiLegCalculator[0] != nil {
+		selectedMultiLegCalculator = multiLegCalculator[0]
 	}
-	if logLevel == "" {
-		logLevel = "info" // fallback default
-	}
-	logger := logging.NewStandardLogger(logLevel, cfg.Environment)
-
-	// Initialize multi-leg calculator
-	multiLegCalculator := NewMultiLegArbitrageCalculator(feeProvider, decimal.NewFromFloat(cfg.Fees.DefaultTakerFee))
 
 	return &ArbitrageService{
-		db:                 db,
+		db:                 dbPool,
 		config:             cfg,
 		arbitrageConfig:    arbitrageConfig,
 		calculator:         calculator,
-		multiLegCalculator: multiLegCalculator,
+		multiLegCalculator: selectedMultiLegCalculator,
 		ctx:                ctx,
 		cancel:             cancel,
 		logger:             logger,
@@ -451,7 +479,7 @@ func (s *ArbitrageService) calculateAndStoreOpportunities() error {
 // getLatestMarketData retrieves the latest market data for all exchanges
 func (s *ArbitrageService) getLatestMarketData() (map[string][]models.MarketData, error) {
 	// Check if database pool is available
-	if s.db == nil {
+	if isNilDBPool(s.db) {
 		return nil, fmt.Errorf("database pool is not available")
 	}
 
@@ -633,7 +661,7 @@ func (s *ArbitrageService) storeOpportunities(opportunities []models.ArbitrageOp
 
 // storeOpportunityBatch stores a batch of arbitrage opportunities
 func (s *ArbitrageService) storeOpportunityBatch(opportunities []models.ArbitrageOpportunity) error {
-	if s.db == nil {
+	if isNilDBPool(s.db) {
 		return fmt.Errorf("database pool is not available")
 	}
 
@@ -697,7 +725,7 @@ func (s *ArbitrageService) storeOpportunityBatch(opportunities []models.Arbitrag
 // cleanupOldOpportunities removes expired arbitrage opportunities
 func (s *ArbitrageService) cleanupOldOpportunities() error {
 	// Check if database pool is available
-	if s.db == nil {
+	if isNilDBPool(s.db) {
 		return fmt.Errorf("database pool is not available")
 	}
 
@@ -735,7 +763,7 @@ func (s *ArbitrageService) countTotalTradingPairs(marketData map[string][]models
 // GetActiveOpportunities retrieves currently active arbitrage opportunities
 func (s *ArbitrageService) GetActiveOpportunities(ctx context.Context, limit int) ([]models.ArbitrageOpportunity, error) {
 	// Check if database pool is available
-	if s.db == nil {
+	if isNilDBPool(s.db) {
 		return nil, fmt.Errorf("database pool is not available")
 	}
 

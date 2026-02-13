@@ -2,25 +2,24 @@ package services
 
 import (
 	"context"
-	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
-	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
-
 	"github.com/cinar/indicator/v2/asset"
 	"github.com/cinar/indicator/v2/helper"
 	"github.com/cinar/indicator/v2/momentum"
 	"github.com/cinar/indicator/v2/trend"
+	"github.com/getsentry/sentry-go"
+	"github.com/google/uuid"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/shopspring/decimal"
 
-	"github.com/irfandi/celebrum-ai-go/internal/config"
-	"github.com/irfandi/celebrum-ai-go/internal/logging"
-	"github.com/irfandi/celebrum-ai-go/internal/models"
-	"github.com/irfandi/celebrum-ai-go/internal/observability"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/observability"
 )
 
 // SignalType represents the type of trading signal
@@ -110,7 +109,7 @@ type SignalAggregatorConfig struct {
 type SignalAggregator struct {
 	config        *config.Config
 	db            DBPool
-	logger        logging.Logger
+	logger        *zaplogrus.Logger
 	sigConfig     SignalAggregatorConfig
 	qualityScorer SignalQualityScorerInterface
 	cache         map[string]*AggregatedSignal
@@ -125,7 +124,7 @@ type SignalAggregator struct {
 //
 // Returns:
 //   - A pointer to the initialized SignalAggregator.
-func NewSignalAggregator(cfg *config.Config, db DBPool, logger logging.Logger) *SignalAggregator {
+func NewSignalAggregator(cfg *config.Config, db DBPool, logger *zaplogrus.Logger) *SignalAggregator {
 	return &SignalAggregator{
 		config: cfg,
 		db:     db,
@@ -164,7 +163,7 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 	observability.AddBreadcrumb(spanCtx, "signal_aggregator", "Starting arbitrage signal aggregation", sentry.LevelInfo)
 
 	// Stub telemetry - log arbitrage signal aggregation
-	sa.logger.WithFields(map[string]interface{}{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"operation_type": "signal_aggregation",
 		"signal_type":    "arbitrage",
 		"input_count":    len(input.Opportunities),
@@ -202,7 +201,7 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 		if estimatedVolume.GreaterThanOrEqual(minVolume) {
 			symbolGroups[symbol] = append(symbolGroups[symbol], opp)
 		} else {
-			sa.logger.WithFields(map[string]interface{}{
+			sa.logger.WithFields(zaplogrus.Fields{
 				"symbol":           symbol,
 				"estimated_volume": estimatedVolume,
 				"min_volume":       minVolume,
@@ -260,7 +259,7 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 	}
 
 	// Stub telemetry - log aggregation results
-	sa.logger.WithFields(map[string]interface{}{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"signals_generated": len(signals),
 		"symbols_processed": len(symbolGroups),
 		"operation_result":  "success",
@@ -291,7 +290,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 	observability.AddBreadcrumb(spanCtx, "signal_aggregator", "Starting technical signal aggregation", sentry.LevelInfo)
 
 	// Stub telemetry - log technical signal aggregation
-	sa.logger.WithFields(map[string]interface{}{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"operation_type": "signal_aggregation",
 		"signal_type":    "technical",
 		"symbol":         input.Symbol,
@@ -304,7 +303,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 
 	if len(input.Prices) < 20 {
 		// Stub telemetry - log insufficient data error
-		sa.logger.WithFields(map[string]interface{}{
+		sa.logger.WithFields(zaplogrus.Fields{
 			"required_points": 20,
 			"actual_points":   len(input.Prices),
 		}).Error("Insufficient price data for technical analysis")
@@ -396,7 +395,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 	}
 
 	// Stub telemetry - log technical signal results
-	sa.logger.WithFields(map[string]interface{}{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"signals_generated": len(qualitySignals),
 		"signals_raw_count": len(signals),
 		"operation_result":  "success",
@@ -416,7 +415,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 //   - A slice of unique signals, or an error if deduplication fails.
 func (sa *SignalAggregator) DeduplicateSignals(ctx context.Context, signals []*AggregatedSignal) ([]*AggregatedSignal, error) {
 	// Stub telemetry - log deduplication start
-	sa.logger.WithFields(map[string]interface{}{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"operation_type":      "signal_deduplication",
 		"signals_input_count": len(signals),
 	}).Info("Starting signal deduplication")
@@ -446,10 +445,15 @@ func (sa *SignalAggregator) DeduplicateSignals(ctx context.Context, signals []*A
 	}
 
 	// Stub telemetry - log deduplication results
-	sa.logger.WithFields(map[string]interface{}{
+	sa.logger.WithFields(zaplogrus.Fields{
 		"signals_unique_count":       len(uniqueSignals),
 		"signals_duplicates_removed": len(signals) - len(uniqueSignals),
 		"operation_result":           "success",
+	}).Info("Signal deduplication completed")
+
+	sa.logger.WithFields(zaplogrus.Fields{
+		"original_count": len(signals),
+		"unique_count":   len(uniqueSignals),
 	}).Info("Signal deduplication completed")
 
 	return uniqueSignals, nil
@@ -630,8 +634,14 @@ func (sa *SignalAggregator) calculateTechnicalIndicators(prices []float64) map[s
 
 	// Calculate MACD
 	macdIndicator := trend.NewMacdWithPeriod[float64](12, 26, 9)
-	macdResult, _ := macdIndicator.Compute(helper.SliceToChan(prices))
-	macd := helper.ChanToSlice(macdResult)
+	macdLine, signalLine := macdIndicator.Compute(helper.SliceToChan(prices))
+	signalDone := make(chan struct{})
+	go func() {
+		_ = helper.ChanToSlice(signalLine)
+		close(signalDone)
+	}()
+	macd := helper.ChanToSlice(macdLine)
+	<-signalDone
 
 	indicators["sma_20"] = sma20
 	indicators["sma_50"] = sma50
@@ -813,50 +823,6 @@ func (sa *SignalAggregator) createAggregatedTechnicalSignal(symbol, exchange, ac
 	}
 }
 
-// generateSignalHash creates a deterministic hash for deduplication
-func (sa *SignalAggregator) generateSignalHash(signal *AggregatedSignal) string {
-	// hash based on symbol, action, and indicators
-	data := fmt.Sprintf("%s-%s-%v-%s", signal.Symbol, signal.Action, signal.Indicators, signal.SignalType)
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(data)))
-}
-
-// isHashRecent checks if signature was seen recently
-func (sa *SignalAggregator) isHashRecent(_ context.Context, _ string) bool {
-	// This is a simplified in-memory check. In production this would check Redis/DB
-	// We'll trust the caller handles the mutex if needed, or rely on the single-threaded nature of the loop in deduplication
-	// But actually, we should check DB for fingerprints
-
-	// TODO: Implement DB query to check for recent fingerprints
-	// var count int64
-	// cutoff := time.Now().Add(-sa.sigConfig.DeduplicationWindow)
-
-	// We should use the DB connection to check
-	// However, for this implementation, we will assume if it's not in the batch we haven't seen it
-	// But we need to check persistent storage
-
-	// This query is a bit hypothetical as we don't have the exact schema for SignalFingerprint in DB visible
-	// But we defined the struct.
-
-	// Fallback to simple logic: always return false to allow signal if we can't check efficiently,
-	// or rely on the in-memory map in DeduplicateSignals scope (seenHashes).
-	// The DeduplicateSignals method maintains a 'seenHashes' map for the current batch.
-	// To check across batches, we'd need to query DB.
-
-	// For now, let's assume we proceed if not found in DB
-	return false
-}
-
-// storeFingerprint persists the fingerprint to prevent duplicates
-func (sa *SignalAggregator) storeFingerprint(ctx context.Context, fingerprint *SignalFingerprint) {
-	// In a real implementation: sa.db.Create(fingerprint)
-	// We'll log it for now
-	sa.logger.WithFields(map[string]interface{}{
-		"hash":      fingerprint.Hash,
-		"signal_id": fingerprint.SignalID,
-	}).Debug("Stored signal fingerprint")
-}
-
-// calculateArbitrageConfidence computes confidence score for arbitrage
 func (sa *SignalAggregator) calculateArbitrageConfidence(opp models.ArbitrageOpportunity) decimal.Decimal {
 	// Basic confidence based on profit and spread
 	// Higher profit = higher confidence (up to a point, then it looks suspicious)
@@ -897,4 +863,222 @@ func (sa *SignalAggregator) determineSignalStrengthWithProfit(confidence, profit
 		return SignalStrengthMedium
 	}
 	return SignalStrengthWeak
+}
+
+func (sa *SignalAggregator) generateSignalHash(signal *AggregatedSignal) string {
+	// Create a hash based on signal characteristics
+	// Sort exchanges to ensure consistent hashing regardless of order
+	sortedExchanges := make([]string, len(signal.Exchanges))
+	copy(sortedExchanges, signal.Exchanges)
+	sort.Strings(sortedExchanges)
+
+	// Sort indicators as well for consistency
+	sortedIndicators := make([]string, len(signal.Indicators))
+	copy(sortedIndicators, signal.Indicators)
+	sort.Strings(sortedIndicators)
+
+	hashInput := fmt.Sprintf("%s_%s_%s_%s_%s",
+		signal.SignalType,
+		signal.Symbol,
+		signal.Action,
+		strings.Join(sortedIndicators, ","),
+		strings.Join(sortedExchanges, ","),
+	)
+	return fmt.Sprintf("%x", []byte(hashInput))
+}
+
+func (sa *SignalAggregator) isHashRecent(ctx context.Context, hash string) bool {
+	// Check if hash exists in recent fingerprints
+	cutoff := time.Now().Add(-sa.sigConfig.DeduplicationWindow)
+	var count int64
+	query := `SELECT COUNT(*) FROM signal_fingerprints WHERE hash = $1 AND created_at > $2`
+	err := sa.db.QueryRow(ctx, query, hash, cutoff).Scan(&count)
+
+	if err != nil {
+		sa.logger.WithError(err).Error("Failed to check hash recency")
+		return false
+	}
+
+	return count > 0
+}
+
+func (sa *SignalAggregator) storeFingerprint(ctx context.Context, fingerprint *SignalFingerprint) {
+	query := `INSERT INTO signal_fingerprints (hash, signal_id, created_at) VALUES ($1, $2, $3)`
+	_, err := sa.db.Exec(ctx, query, fingerprint.Hash, fingerprint.SignalID, fingerprint.CreatedAt)
+	if err != nil {
+		sa.logger.WithError(err).Error("Failed to store signal fingerprint")
+	}
+}
+
+// GetActiveAggregatedSignals retrieves active aggregated signals from the database, filtered by confidence.
+//
+// Parameters:
+//   - ctx: The context for the operation.
+//   - limit: The maximum number of signals to retrieve.
+//
+// Returns:
+//   - A slice of active aggregated signals, or an error if retrieval fails.
+func (sa *SignalAggregator) GetActiveAggregatedSignals(ctx context.Context, limit int) ([]*AggregatedSignal, error) {
+	if isNilDBPool(sa.db) {
+		return []*AggregatedSignal{}, nil
+	}
+
+	query := `
+		SELECT 
+			id, signal_type, symbol, action, strength, confidence,
+			profit_potential, risk_level, exchanges, indicators,
+			metadata, created_at, expires_at
+		FROM aggregated_signals 
+		WHERE expires_at > NOW() 
+			AND confidence >= $1
+		ORDER BY confidence DESC, profit_potential DESC, created_at DESC
+		LIMIT $2
+	`
+
+	rows, err := sa.db.Query(ctx, query, sa.sigConfig.MinConfidence, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query aggregated signals: %w", err)
+	}
+	defer rows.Close()
+
+	var signals []*AggregatedSignal
+	for rows.Next() {
+		signal := &AggregatedSignal{}
+		var exchangesJSON, indicatorsJSON, metadataJSON []byte
+		var strengthStr string
+
+		err := rows.Scan(
+			&signal.ID, &signal.SignalType, &signal.Symbol, &signal.Action,
+			&strengthStr, &signal.Confidence, &signal.ProfitPotential,
+			&signal.RiskLevel, &exchangesJSON, &indicatorsJSON,
+			&metadataJSON, &signal.CreatedAt, &signal.ExpiresAt,
+		)
+		if err != nil {
+			sa.logger.WithError(err).Error("Failed to scan aggregated signal")
+			continue
+		}
+
+		// Parse strength
+		signal.Strength = SignalStrength(strengthStr)
+
+		// Parse JSON fields
+		if len(exchangesJSON) > 0 {
+			if err := json.Unmarshal(exchangesJSON, &signal.Exchanges); err != nil {
+				sa.logger.WithError(err).Error("Failed to unmarshal exchanges")
+			}
+		}
+
+		if len(indicatorsJSON) > 0 {
+			if err := json.Unmarshal(indicatorsJSON, &signal.Indicators); err != nil {
+				sa.logger.WithError(err).Error("Failed to unmarshal indicators")
+			}
+		}
+
+		if len(metadataJSON) > 0 {
+			if err := json.Unmarshal(metadataJSON, &signal.Metadata); err != nil {
+				sa.logger.WithError(err).Error("Failed to unmarshal metadata")
+			}
+		}
+
+		signals = append(signals, signal)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating over aggregated signals: %w", err)
+	}
+
+	sa.logger.WithFields(zaplogrus.Fields{
+		"count": len(signals),
+		"limit": limit,
+	}).Info("Retrieved active aggregated signals")
+
+	return signals, nil
+}
+
+// GetAggregatedSignalsBySymbol retrieves active aggregated signals for a specific symbol.
+//
+// Parameters:
+//   - ctx: The context for the operation.
+//   - symbol: The trading symbol to filter by.
+//   - limit: The maximum number of signals to retrieve.
+//
+// Returns:
+//   - A slice of aggregated signals for the specified symbol, or an error if retrieval fails.
+func (sa *SignalAggregator) GetAggregatedSignalsBySymbol(ctx context.Context, symbol string, limit int) ([]*AggregatedSignal, error) {
+	if isNilDBPool(sa.db) {
+		return []*AggregatedSignal{}, nil
+	}
+
+	query := `
+		SELECT 
+			id, signal_type, symbol, action, strength, confidence,
+			profit_potential, risk_level, exchanges, indicators,
+			metadata, created_at, expires_at
+		FROM aggregated_signals 
+		WHERE symbol = $1 
+			AND expires_at > NOW() 
+			AND confidence >= $2
+		ORDER BY confidence DESC, profit_potential DESC, created_at DESC
+		LIMIT $3
+	`
+
+	rows, err := sa.db.Query(ctx, query, symbol, sa.sigConfig.MinConfidence, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query aggregated signals for symbol %s: %w", symbol, err)
+	}
+	defer rows.Close()
+
+	var signals []*AggregatedSignal
+	for rows.Next() {
+		signal := &AggregatedSignal{}
+		var exchangesJSON, indicatorsJSON, metadataJSON []byte
+		var strengthStr string
+
+		err := rows.Scan(
+			&signal.ID, &signal.SignalType, &signal.Symbol, &signal.Action,
+			&strengthStr, &signal.Confidence, &signal.ProfitPotential,
+			&signal.RiskLevel, &exchangesJSON, &indicatorsJSON,
+			&metadataJSON, &signal.CreatedAt, &signal.ExpiresAt,
+		)
+		if err != nil {
+			sa.logger.WithError(err).Error("Failed to scan aggregated signal")
+			continue
+		}
+
+		// Parse strength
+		signal.Strength = SignalStrength(strengthStr)
+
+		// Parse JSON fields
+		if len(exchangesJSON) > 0 {
+			if err := json.Unmarshal(exchangesJSON, &signal.Exchanges); err != nil {
+				sa.logger.WithError(err).Error("Failed to unmarshal exchanges")
+			}
+		}
+
+		if len(indicatorsJSON) > 0 {
+			if err := json.Unmarshal(indicatorsJSON, &signal.Indicators); err != nil {
+				sa.logger.WithError(err).Error("Failed to unmarshal indicators")
+			}
+		}
+
+		if len(metadataJSON) > 0 {
+			if err := json.Unmarshal(metadataJSON, &signal.Metadata); err != nil {
+				sa.logger.WithError(err).Error("Failed to unmarshal metadata")
+			}
+		}
+
+		signals = append(signals, signal)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating over aggregated signals for symbol %s: %w", symbol, err)
+	}
+
+	sa.logger.WithFields(zaplogrus.Fields{
+		"symbol": symbol,
+		"count":  len(signals),
+		"limit":  limit,
+	}).Info("Retrieved aggregated signals for symbol")
+
+	return signals, nil
 }
