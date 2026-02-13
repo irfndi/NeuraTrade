@@ -35,6 +35,8 @@ UPDATE exchanges SET
 WHERE display_name IS NULL;
 
 -- Set ccxt_id with duplicate handling
+-- Drop unique index first if it exists, to allow updates
+DROP INDEX IF EXISTS idx_exchanges_ccxt_id_unique;
 UPDATE exchanges e1 SET ccxt_id = 
     CASE 
         WHEN e1.ccxt_id IS NOT NULL THEN e1.ccxt_id
