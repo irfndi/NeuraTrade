@@ -190,6 +190,7 @@ type RiskManagerAgent struct {
 	metrics  RiskManagerMetrics
 }
 
+// NewRiskManagerAgent creates a new risk manager agent with the given configuration.
 func NewRiskManagerAgent(config RiskManagerConfig) *RiskManagerAgent {
 	return &RiskManagerAgent{
 		config:  config,
