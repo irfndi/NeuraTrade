@@ -36,6 +36,30 @@ func (m *mockKillSwitchNotifier) NotifyKillSwitchRecovered(ctx context.Context, 
 	return nil
 }
 
+func (m *mockKillSwitchNotifier) GetTriggeredCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.triggeredCount
+}
+
+func (m *mockKillSwitchNotifier) GetRecoveredCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.recoveredCount
+}
+
+func (m *mockKillSwitchNotifier) GetLastTriggerState() *KillSwitchState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastTriggerState
+}
+
+func (m *mockKillSwitchNotifier) GetLastRecoverState() *KillSwitchState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastRecoverState
+}
+
 func TestNewKillSwitchMonitor(t *testing.T) {
 	logger := logging.NewStandardLogger("info", "test")
 	notifier := &mockKillSwitchNotifier{}
@@ -231,9 +255,9 @@ func TestKillSwitchMonitor_Notifications(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond) // Wait for async notification
 
-		assert.Equal(t, 1, notifier.triggeredCount)
-		assert.NotNil(t, notifier.lastTriggerState)
-		assert.Equal(t, KillSwitchStatusTriggered, notifier.lastTriggerState.Status)
+		assert.Equal(t, 1, notifier.GetTriggeredCount())
+		assert.NotNil(t, notifier.GetLastTriggerState())
+		assert.Equal(t, KillSwitchStatusTriggered, notifier.GetLastTriggerState().Status)
 	})
 
 	t.Run("sends notification on recover", func(t *testing.T) {
@@ -241,9 +265,9 @@ func TestKillSwitchMonitor_Notifications(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond) // Wait for async notification
 
-		assert.Equal(t, 1, notifier.recoveredCount)
-		assert.NotNil(t, notifier.lastRecoverState)
-		assert.Equal(t, KillSwitchStatusActive, notifier.lastRecoverState.Status)
+		assert.Equal(t, 1, notifier.GetRecoveredCount())
+		assert.NotNil(t, notifier.GetLastRecoverState())
+		assert.Equal(t, KillSwitchStatusActive, notifier.GetLastRecoverState().Status)
 	})
 }
 
