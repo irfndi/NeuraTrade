@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -23,10 +24,6 @@ func NewAIHandler(registry AIRegistryQuerier) *AIHandler {
 	return &AIHandler{
 		registry: registry,
 	}
-}
-
-type AIModelsResponse struct {
-	Models []AIModelInfo `json:"models"`
 }
 
 type AIModelInfo struct {
@@ -106,6 +103,16 @@ func (h *AIHandler) RouteModel(c *gin.Context) {
 		return
 	}
 
+	maxCost := 0.0
+	if req.MaxCost != "" {
+		fmt.Sscanf(req.MaxCost, "%f", &maxCost)
+	}
+
+	latencyPref := req.LatencyPreference
+	if latencyPref == "" {
+		latencyPref = "balanced"
+	}
+
 	var bestModel *ai.ModelInfo
 	bestScore := -1.0
 
@@ -125,15 +132,20 @@ func (h *AIHandler) RouteModel(c *gin.Context) {
 		}
 
 		score := 0.0
-		switch m.LatencyClass {
-		case "fast":
+
+		if m.LatencyClass == latencyPref {
 			score += 2
-		case "balanced":
-			score += 1
+		} else if latencyPref == "fast" && m.LatencyClass != "fast" {
+			score -= 1
+		} else if latencyPref == "accurate" && m.LatencyClass != "accurate" {
+			score -= 1
 		}
 
 		cost := m.Cost.InputCost.Add(m.Cost.OutputCost)
 		costFloat, _ := cost.Float64()
+		if maxCost > 0 && costFloat > maxCost {
+			continue
+		}
 		if costFloat < 5 {
 			score += 2
 		} else if costFloat < 20 {
