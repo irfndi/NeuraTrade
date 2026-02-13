@@ -35,6 +35,15 @@ type SyncMetrics struct {
 	ProvidersCount   int
 }
 
+type SyncMetricsSnapshot struct {
+	LastSyncTime     time.Time
+	LastSyncDuration time.Duration
+	TotalSyncs       int64
+	FailedSyncs      int64
+	ModelsCount      int
+	ProvidersCount   int
+}
+
 func (m *SyncMetrics) RecordSync(duration time.Duration, models, providers int, failed bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -49,10 +58,17 @@ func (m *SyncMetrics) RecordSync(duration time.Duration, models, providers int, 
 	m.ProvidersCount = providers
 }
 
-func (m *SyncMetrics) GetSnapshot() SyncMetrics {
+func (m *SyncMetrics) GetSnapshot() SyncMetricsSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return *m
+	return SyncMetricsSnapshot{
+		LastSyncTime:     m.LastSyncTime,
+		LastSyncDuration: m.LastSyncDuration,
+		TotalSyncs:       m.TotalSyncs,
+		FailedSyncs:      m.FailedSyncs,
+		ModelsCount:      m.ModelsCount,
+		ProvidersCount:   m.ProvidersCount,
+	}
 }
 
 type SyncService struct {
@@ -167,7 +183,7 @@ func (s *SyncService) ForceSync(ctx context.Context) error {
 	return s.syncOnce(ctx)
 }
 
-func (s *SyncService) GetMetrics() SyncMetrics {
+func (s *SyncService) GetMetrics() SyncMetricsSnapshot {
 	return s.metrics.GetSnapshot()
 }
 
