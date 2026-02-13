@@ -207,7 +207,8 @@ ON CONFLICT (config_key) DO UPDATE SET
     updated_at = NOW();
 
 -- Migration completion record
-INSERT INTO schema_migrations (filename, checksum, applied_at) VALUES ('064_create_ai_usage_table.sql', 'checksum_064', NOW())
-ON CONFLICT (filename) DO UPDATE SET 
-    checksum = EXCLUDED.checksum,
+INSERT INTO schema_migrations (version, filename, description, applied_at) 
+VALUES (64, '064_create_ai_usage_table.sql', 'Create AI usage table for cost tracking', NOW())
+ON CONFLICT (version) DO UPDATE SET 
+    filename = EXCLUDED.filename,
     applied_at = NOW();
