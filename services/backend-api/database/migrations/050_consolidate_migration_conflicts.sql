@@ -133,21 +133,6 @@ BEGIN
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
 
-        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'trading_pairs') THEN
-            DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
-            DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
-            DROP VIEW IF EXISTS v_funding_arbitrage_opportunities CASCADE;
-            DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
-            DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
-            
-            ALTER TABLE trading_pairs ALTER COLUMN symbol TYPE VARCHAR(50);
-            ALTER TABLE trading_pairs ALTER COLUMN base_currency TYPE VARCHAR(20);
-            ALTER TABLE trading_pairs ALTER COLUMN quote_currency TYPE VARCHAR(20);
-            
-            CREATE VIEW v_active_trading_pairs AS
-            SELECT * FROM trading_pairs WHERE is_active = true;
-        END IF;
-
         INSERT INTO migration_status (migration_number, migration_name, description, checksum) 
         VALUES (32, 'consolidated_032_signals_and_trading_pairs', 'Consolidated aggregated signals and trading pairs fixes', 'consolidated');
         
