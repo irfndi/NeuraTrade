@@ -26,19 +26,36 @@ UPDATE exchanges SET
         WHEN name = 'kucoin' THEN 'KuCoin'
         ELSE INITCAP(name)
     END,
-    ccxt_id = name,
     status = 'active',
     has_spot = true,
     has_futures = CASE 
         WHEN name IN ('binance', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin') THEN true
         ELSE false
     END
-WHERE display_name IS NULL OR ccxt_id IS NULL;
+WHERE display_name IS NULL;
 
--- Make columns NOT NULL after updating
-ALTER TABLE exchanges 
-ALTER COLUMN display_name SET NOT NULL,
-ALTER COLUMN ccxt_id SET NOT NULL;
+-- Set ccxt_id with duplicate handling
+UPDATE exchanges e1 SET ccxt_id = 
+    CASE 
+        WHEN e1.ccxt_id IS NOT NULL THEN e1.ccxt_id
+        ELSE e1.name || CASE 
+            WHEN (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id) > 0 
+            THEN '_' || (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id)::text
+            ELSE ''
+        END
+    END
+WHERE ccxt_id IS NULL;
+
+-- Make columns NOT NULL only if all rows have values
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM exchanges WHERE display_name IS NULL) THEN
+        ALTER TABLE exchanges ALTER COLUMN display_name SET NOT NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM exchanges WHERE ccxt_id IS NULL) THEN
+        ALTER TABLE exchanges ALTER COLUMN ccxt_id SET NOT NULL;
+    END IF;
+END $$;
 
 -- Make api_url nullable (application doesn't always provide it)
 ALTER TABLE exchanges ALTER COLUMN api_url DROP NOT NULL;
