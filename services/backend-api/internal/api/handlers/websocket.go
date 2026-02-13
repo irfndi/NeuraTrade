@@ -19,6 +19,10 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
 		return true
 	},
 }
@@ -102,6 +106,7 @@ func (h *WebSocketHandler) run() {
 
 		case message := <-h.broadcast:
 			h.mu.RLock()
+			var toRemove []*WebSocketClient
 			for client := range h.clients {
 				client.mu.Lock()
 				shouldSend := false
@@ -120,11 +125,19 @@ func (h *WebSocketHandler) run() {
 					case client.send <- message:
 					default:
 						close(client.send)
-						delete(h.clients, client)
+						toRemove = append(toRemove, client)
 					}
 				}
 			}
 			h.mu.RUnlock()
+
+			if len(toRemove) > 0 {
+				h.mu.Lock()
+				for _, client := range toRemove {
+					delete(h.clients, client)
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }
