@@ -419,7 +419,8 @@ ON CONFLICT (config_key) DO UPDATE SET
     updated_at = NOW();
 
 -- Migration completion
-INSERT INTO schema_migrations (filename, checksum, applied_at) VALUES ('035_create_futures_arbitrage_tables.sql', 'checksum_035', NOW())
-ON CONFLICT (filename) DO UPDATE SET 
-    checksum = EXCLUDED.checksum,
+INSERT INTO schema_migrations (version, filename, description, applied_at) 
+VALUES (35, '035_create_futures_arbitrage_tables.sql', 'Create futures arbitrage tables', NOW())
+ON CONFLICT (version) DO UPDATE SET 
+    filename = EXCLUDED.filename,
     applied_at = NOW();
