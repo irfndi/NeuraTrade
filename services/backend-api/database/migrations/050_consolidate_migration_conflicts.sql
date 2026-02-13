@@ -45,6 +45,9 @@ BEGIN
     -- CONSOLIDATION 009: Funding arbitrage opportunities + symbol column removal
     -- Combines: 009_create_funding_arbitrage_opportunities.sql + 009_remove_symbol_column.sql + 010_remove_symbol_column.sql
     IF NOT EXISTS (SELECT 1 FROM migration_status WHERE migration_number = 9) THEN
+        -- Drop old table if exists (from migration 011) to recreate with new schema
+        DROP TABLE IF EXISTS funding_arbitrage_opportunities;
+
         -- Create funding arbitrage opportunities table
         CREATE TABLE IF NOT EXISTS funding_arbitrage_opportunities (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
