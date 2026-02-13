@@ -195,10 +195,10 @@ ORDER BY fr.exchange_id, fr.trading_pair_id, fr.funding_time DESC;
 CREATE INDEX IF NOT EXISTS idx_exchange_trading_pairs_trading_pair_id ON exchange_trading_pairs(trading_pair_id);
 
 -- Migration completion
-INSERT INTO schema_migrations (version, filename, description, applied_at) 
-VALUES (40, '040_fix_trading_pairs_column_sizes.sql', 'Fix trading pairs column sizes', NOW())
-ON CONFLICT (version) DO UPDATE SET 
-    filename = EXCLUDED.filename,
+INSERT INTO schema_migrations (filename, applied, applied_at) 
+VALUES ('040_fix_trading_pairs_column_sizes.sql', true, NOW())
+ON CONFLICT (filename) DO UPDATE SET 
+    applied = true,
     applied_at = NOW();
 
 COMMIT;
