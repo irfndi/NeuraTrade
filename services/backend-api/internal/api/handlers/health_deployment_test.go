@@ -32,7 +32,7 @@ func TestHealthHandler_CurlHealthcheckCompatibility(t *testing.T) {
 	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
 	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
 
-	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics, nil)
+	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -93,7 +93,7 @@ func TestHealthHandler_CCXTServiceConnectivity(t *testing.T) {
 			mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
 			mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
 
-			handler := NewHealthHandler(mockDB, mockRedis, url, mockCacheAnalytics, nil)
+			handler := NewHealthHandler(mockDB, mockRedis, url, mockCacheAnalytics)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", "/health", nil)
@@ -152,7 +152,7 @@ func TestHealthHandler_MissingTelegramToken(t *testing.T) {
 
 			t.Setenv("TELEGRAM_BOT_TOKEN", tt.telegramToken)
 
-			handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics, nil)
+			handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", "/health", nil)
@@ -188,7 +188,7 @@ func TestHealthHandler_ServiceUnhealthyStatus(t *testing.T) {
 	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
 	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
 
-	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics, nil)
+	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -223,7 +223,7 @@ func TestHealthHandler_ReadinessWithDBError(t *testing.T) {
 	mockDB.On("HealthCheck", mock.Anything).Return(assert.AnError)
 	mockRedis.On("HealthCheck", mock.Anything).Return(nil)
 
-	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics, nil)
+	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/ready", nil)
@@ -256,7 +256,7 @@ func TestHealthHandler_ContextTimeout(t *testing.T) {
 	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
 	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
 
-	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics, nil)
+	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -298,7 +298,7 @@ func TestHealthHandler_AllServicesHealthy(t *testing.T) {
 	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
 	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
 
-	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics, nil)
+	handler := NewHealthHandler(mockDB, mockRedis, ts.URL, mockCacheAnalytics)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/health", nil)
