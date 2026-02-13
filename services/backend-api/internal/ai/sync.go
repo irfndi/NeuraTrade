@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -114,6 +115,7 @@ func (s *SyncService) Start(ctx context.Context) error {
 		return nil
 	}
 	s.running = true
+	s.stopCh = make(chan struct{})
 	s.mu.Unlock()
 
 	if s.config.RefreshOnStartup {
@@ -174,7 +176,7 @@ func (s *SyncService) syncOnce(ctx context.Context) error {
 	registry, err := s.registry.FetchModels(ctx)
 	if err != nil {
 		s.metrics.RecordSync(0, 0, 0, true)
-		return err
+		return fmt.Errorf("fetch models: %w", err)
 	}
 
 	duration := time.Since(startTime)
