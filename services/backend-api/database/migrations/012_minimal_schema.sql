@@ -4,6 +4,10 @@
 
 BEGIN;
 
+-- Ensure schema_migrations table has all required columns
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum VARCHAR(64);
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS description TEXT;
+
 -- Add missing columns to exchanges table
 ALTER TABLE exchanges 
 ADD COLUMN IF NOT EXISTS display_name VARCHAR(100),
@@ -234,18 +238,23 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
 
 -- Insert initial exchanges data with all required fields
 -- Only insert if exchanges table is empty or missing these records
-INSERT INTO exchanges (name, display_name, ccxt_id, has_spot, has_futures) 
-SELECT * FROM (VALUES
-    ('binance', 'Binance', 'binance', true, true),
-    ('coinbasepro', 'Coinbase Pro', 'coinbasepro', true, false),
-    ('kraken', 'Kraken', 'kraken', true, true),
-    ('okx', 'OKX', 'okx', true, true),
-    ('bybit', 'Bybit', 'bybit', true, true),
-    ('mexc', 'MEXC', 'mexc', true, true),
-    ('gateio', 'Gate.io', 'gateio', true, true),
-    ('kucoin', 'KuCoin', 'kucoin', true, true)
-) AS t(name, display_name, ccxt_id, has_spot, has_futures)
-WHERE NOT EXISTS (SELECT 1 FROM exchanges WHERE name = t.name);
+DO $$
+BEGIN
+    INSERT INTO exchanges (name, display_name, ccxt_id, has_spot, has_futures) 
+    SELECT * FROM (VALUES
+        ('binance', 'Binance', 'binance', true, true),
+        ('coinbasepro', 'Coinbase Pro', 'coinbasepro', true, false),
+        ('kraken', 'Kraken', 'kraken', true, true),
+        ('okx', 'OKX', 'okx', true, true),
+        ('bybit', 'Bybit', 'bybit', true, true),
+        ('mexc', 'MEXC', 'mexc', true, true),
+        ('gateio', 'Gate.io', 'gateio', true, true),
+        ('kucoin', 'KuCoin', 'kucoin', true, true)
+    ) AS t(name, display_name, ccxt_id, has_spot, has_futures)
+    WHERE NOT EXISTS (SELECT 1 FROM exchanges WHERE name = t.name);
+EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'Skipping exchanges insert due to constraint conflict';
+END $$;
 
 -- All migrations are already recorded in schema_migrations table
 -- No need to insert duplicates

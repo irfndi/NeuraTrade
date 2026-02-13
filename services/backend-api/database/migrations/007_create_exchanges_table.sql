@@ -2,6 +2,10 @@
 -- Description: Ensure exchanges table has all required columns and data
 -- This migration is idempotent - handles both fresh installs and upgrades
 
+-- Ensure schema_migrations table has all required columns (for later migrations)
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum VARCHAR(64);
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS description TEXT;
+
 -- Create exchanges table if it doesn't exist
 CREATE TABLE IF NOT EXISTS exchanges (
     id SERIAL PRIMARY KEY,
@@ -115,20 +119,25 @@ BEGIN
 END $$;
 
 -- Insert initial exchanges data if not exists
-INSERT INTO exchanges (name, display_name, ccxt_id, has_spot, has_futures, status) 
-SELECT * FROM (VALUES
-    ('binance', 'Binance', 'binance', true, true, 'active'),
-    ('coinbasepro', 'Coinbase Pro', 'coinbasepro', true, false, 'active'),
-    ('kraken', 'Kraken', 'kraken', true, true, 'active'),
-    ('okx', 'OKX', 'okx', true, true, 'active'),
-    ('bybit', 'Bybit', 'bybit', true, true, 'active'),
-    ('mexc', 'MEXC', 'mexc', true, true, 'active'),
-    ('gateio', 'Gate.io', 'gateio', true, true, 'active'),
-    ('kucoin', 'KuCoin', 'kucoin', true, true, 'active')
-) AS new_exchanges(name, display_name, ccxt_id, has_spot, has_futures, status)
-WHERE NOT EXISTS (
-    SELECT 1 FROM exchanges WHERE exchanges.ccxt_id = new_exchanges.ccxt_id
-);
+DO $$
+BEGIN
+    INSERT INTO exchanges (name, display_name, ccxt_id, has_spot, has_futures, status) 
+    SELECT * FROM (VALUES
+        ('binance', 'Binance', 'binance', true, true, 'active'),
+        ('coinbasepro', 'Coinbase Pro', 'coinbasepro', true, false, 'active'),
+        ('kraken', 'Kraken', 'kraken', true, true, 'active'),
+        ('okx', 'OKX', 'okx', true, true, 'active'),
+        ('bybit', 'Bybit', 'bybit', true, true, 'active'),
+        ('mexc', 'MEXC', 'mexc', true, true, 'active'),
+        ('gateio', 'Gate.io', 'gateio', true, true, 'active'),
+        ('kucoin', 'KuCoin', 'kucoin', true, true, 'active')
+    ) AS new_exchanges(name, display_name, ccxt_id, has_spot, has_futures, status)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM exchanges WHERE exchanges.ccxt_id = new_exchanges.ccxt_id
+    );
+EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'Skipping exchanges insert due to constraint conflict';
+END $$;
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_exchanges_ccxt_id ON exchanges(ccxt_id);
