@@ -133,7 +133,7 @@ func (c *CLOBClient) CreateOrder(ctx context.Context, req PostOrderRequest) (*Or
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("API error: status %d", resp.StatusCode)
@@ -176,7 +176,7 @@ func (c *CLOBClient) CreateOrderBatch(ctx context.Context, orders []PostOrderReq
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("API error: status %d", resp.StatusCode)
@@ -204,7 +204,7 @@ func (c *CLOBClient) GetOrderBook(ctx context.Context, tokenID string) (*OrderBo
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("API error: status %d", resp.StatusCode)
@@ -268,7 +268,7 @@ func (c *CLOBClient) CancelOrder(ctx context.Context, orderID string) error {
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("API error: status %d", resp.StatusCode)
@@ -295,7 +295,7 @@ func (c *CLOBClient) GetOpenOrders(ctx context.Context) ([]OrderResponse, error)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("API error: status %d", resp.StatusCode)
@@ -327,7 +327,7 @@ func (c *CLOBClient) GetOrder(ctx context.Context, orderID string) (*OrderRespon
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("API error: status %d", resp.StatusCode)

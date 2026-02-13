@@ -36,12 +36,12 @@ func TestDisclosureManager_CheckCompatibility(t *testing.T) {
 		t.Errorf("should be compatible: %s", msg)
 	}
 
-	ok, msg = dm.CheckCompatibility("skill1", "wrong_hash")
+	ok, _ = dm.CheckCompatibility("skill1", "wrong_hash")
 	if ok {
 		t.Error("should not be compatible with wrong hash")
 	}
 
-	ok, msg = dm.CheckCompatibility("nonexistent", hash)
+	ok, _ = dm.CheckCompatibility("nonexistent", hash)
 	if ok {
 		t.Error("should not be compatible with nonexistent skill")
 	}

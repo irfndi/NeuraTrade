@@ -7,7 +7,11 @@ import (
 	"text/template"
 
 	"github.com/irfndi/neuratrade/internal/skill"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
+
+var titleCaser = cases.Title(language.English)
 
 // Builder constructs prompts from skill definitions and context.
 type Builder struct {
@@ -27,7 +31,7 @@ func NewBuilder(skillRegistry *skill.Registry) *Builder {
 			"find":     skillRegistry.Find,
 			"upper":    strings.ToUpper,
 			"lower":    strings.ToLower,
-			"title":    strings.Title,
+			"title":    titleCaser.String,
 		},
 	}
 }

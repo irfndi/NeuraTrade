@@ -208,7 +208,7 @@ func (pd *ProgressiveDisclosure) Initialize(skills []string, contentGetter func(
 	for _, skillID := range skills {
 		content := contentGetter(skillID)
 
-		var level DisclosureLevel = LevelFull
+		level := LevelFull
 		if strings.Contains(content, "## Advanced") {
 			level = LevelDetailed
 		}
