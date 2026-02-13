@@ -13,53 +13,76 @@ ADD COLUMN IF NOT EXISTS has_spot BOOLEAN DEFAULT true,
 ADD COLUMN IF NOT EXISTS has_futures BOOLEAN DEFAULT false,
 ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
 
--- Update existing exchanges with proper values
--- Handle duplicate keys safely
-UPDATE exchanges SET 
-    display_name = CASE 
-        WHEN name = 'binance' THEN 'Binance'
-        WHEN name = 'coinbasepro' THEN 'Coinbase Pro'
-        WHEN name = 'kraken' THEN 'Kraken'
-        WHEN name = 'okx' THEN 'OKX'
-        WHEN name = 'bybit' THEN 'Bybit'
-        WHEN name = 'mexc' THEN 'MEXC'
-        WHEN name = 'gateio' THEN 'Gate.io'
-        WHEN name = 'kucoin' THEN 'KuCoin'
-        ELSE INITCAP(name)
-    END,
-    ccxt_id = COALESCE(ccxt_id, name),
-    status = 'active',
-    has_spot = true,
-    has_futures = CASE 
-        WHEN name IN ('binance', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin') THEN true
-        ELSE false
-    END
-WHERE (display_name IS NULL OR ccxt_id IS NULL)
-AND name IN ('binance', 'coinbasepro', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin')
-AND (
-    SELECT COUNT(*) FROM exchanges e2 
-    WHERE e2.ccxt_id = exchanges.name AND e2.id != exchanges.id
-) = 0;
+-- Fix duplicate ccxt_id values FIRST before any other operations
+WITH duplicates AS (
+    SELECT id, ccxt_id, 
+           ROW_NUMBER() OVER (PARTITION BY ccxt_id ORDER BY id) as rn
+    FROM exchanges
+    WHERE ccxt_id IS NOT NULL
+)
+UPDATE exchanges 
+SET ccxt_id = duplicates.ccxt_id || '_dup' || (duplicates.rn - 1)
+FROM duplicates
+WHERE exchanges.id = duplicates.id AND duplicates.rn > 1;
 
--- Make columns NOT NULL after updating
-ALTER TABLE exchanges 
-ALTER COLUMN display_name SET NOT NULL,
-ALTER COLUMN ccxt_id SET NOT NULL;
+-- Update display_name for rows where it's NULL
+UPDATE exchanges 
+SET display_name = CASE 
+    WHEN name IN ('binance', 'binance_us') THEN 'Binance'
+    WHEN name = 'coinbasepro' THEN 'Coinbase Pro'
+    WHEN name = 'kraken' THEN 'Kraken'
+    WHEN name = 'okx' THEN 'OKX'
+    WHEN name = 'bybit' THEN 'Bybit'
+    WHEN name = 'mexc' THEN 'MEXC'
+    WHEN name = 'gateio' THEN 'Gate.io'
+    WHEN name = 'kucoin' THEN 'KuCoin'
+    ELSE INITCAP(name)
+END
+WHERE display_name IS NULL AND name IS NOT NULL;
 
--- Make api_url nullable (application doesn't always provide it)
+-- Update ccxt_id for rows where it's NULL
+UPDATE exchanges 
+SET ccxt_id = LOWER(name)
+WHERE ccxt_id IS NULL AND name IS NOT NULL;
+
+-- Fix any remaining duplicate ccxt_id after the updates
+WITH duplicates2 AS (
+    SELECT id, ccxt_id, 
+           ROW_NUMBER() OVER (PARTITION BY ccxt_id ORDER BY id) as rn
+    FROM exchanges
+    WHERE ccxt_id IS NOT NULL
+)
+UPDATE exchanges 
+SET ccxt_id = duplicates2.ccxt_id || '_dup' || (duplicates2.rn - 1)
+FROM duplicates2
+WHERE exchanges.id = duplicates2.id AND duplicates2.rn > 1;
+
+-- Make columns NOT NULL after ensuring values exist
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM exchanges WHERE display_name IS NOT NULL LIMIT 1) THEN
+        ALTER TABLE exchanges ALTER COLUMN display_name SET NOT NULL;
+    END IF;
+    
+    IF EXISTS (SELECT 1 FROM exchanges WHERE ccxt_id IS NOT NULL LIMIT 1) THEN
+        ALTER TABLE exchanges ALTER COLUMN ccxt_id SET NOT NULL;
+    END IF;
+END $$;
+
+-- Make api_url nullable
 ALTER TABLE exchanges ALTER COLUMN api_url DROP NOT NULL;
 
--- Make market_data price and volume nullable (application may not always have these values)
+-- Make market_data price and volume nullable
 ALTER TABLE market_data ALTER COLUMN price DROP NOT NULL;
 ALTER TABLE market_data ALTER COLUMN volume DROP NOT NULL;
 
--- Add unique constraint on ccxt_id (safe to run multiple times)
+-- Add unique constraint on ccxt_id if it doesn't exist
 DO $$
 BEGIN
-    -- Check if any unique constraint exists on ccxt_id column
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint 
         WHERE conrelid = 'exchanges'::regclass
+        AND contype = 'u'
         AND conname LIKE '%ccxt_id%'
     ) THEN
         ALTER TABLE exchanges ADD CONSTRAINT exchanges_ccxt_id_key UNIQUE (ccxt_id);
