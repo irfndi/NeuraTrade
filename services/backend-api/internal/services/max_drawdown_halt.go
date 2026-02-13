@@ -114,6 +114,12 @@ func (m *MaxDrawdownMetrics) IncrementByChatID(chatID string) {
 func (m *MaxDrawdownMetrics) GetMetrics() MaxDrawdownMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	eventsCopy := make(map[string]int64, len(m.EventsByChatID))
+	for k, v := range m.EventsByChatID {
+		eventsCopy[k] = v
+	}
+
 	return MaxDrawdownMetrics{
 		TotalChecks:       m.TotalChecks,
 		WarningEvents:     m.WarningEvents,
@@ -121,7 +127,7 @@ func (m *MaxDrawdownMetrics) GetMetrics() MaxDrawdownMetrics {
 		HaltEvents:        m.HaltEvents,
 		RecoveryEvents:    m.RecoveryEvents,
 		MaxDrawdownRecord: m.MaxDrawdownRecord,
-		EventsByChatID:    m.EventsByChatID,
+		EventsByChatID:    eventsCopy,
 	}
 }
 
@@ -244,7 +250,7 @@ func (h *MaxDrawdownHalt) GetState(chatID string) (*DrawdownState, bool) {
 	return state, true
 }
 
-func (h *MaxDrawdownHalt) ForceHalt(ctx context.Context, chatID string, reason string) error {
+func (h *MaxDrawdownHalt) ForceHalt(ctx context.Context, chatID string, _ string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 

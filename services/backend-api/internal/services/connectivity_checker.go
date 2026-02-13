@@ -131,13 +131,24 @@ func (m *ConnectivityMetrics) SetProviderStatus(providerID string, status string
 func (m *ConnectivityMetrics) GetMetrics() ConnectivityMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	checksCopy := make(map[string]int64, len(m.ChecksByProvider))
+	for k, v := range m.ChecksByProvider {
+		checksCopy[k] = v
+	}
+
+	statusCopy := make(map[string]string, len(m.StatusByProvider))
+	for k, v := range m.StatusByProvider {
+		statusCopy[k] = v
+	}
+
 	return ConnectivityMetrics{
 		TotalChecks:      m.TotalChecks,
 		SuccessfulChecks: m.SuccessfulChecks,
 		FailedChecks:     m.FailedChecks,
 		AvgLatency:       m.AvgLatency,
-		ChecksByProvider: m.ChecksByProvider,
-		StatusByProvider: m.StatusByProvider,
+		ChecksByProvider: checksCopy,
+		StatusByProvider: statusCopy,
 	}
 }
 

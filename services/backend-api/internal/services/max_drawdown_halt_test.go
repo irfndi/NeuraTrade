@@ -47,7 +47,7 @@ func TestMaxDrawdownHalt_CheckDrawdown_Normal(t *testing.T) {
 func TestMaxDrawdownHalt_CheckDrawdown_Warning(t *testing.T) {
 	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
 
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
 	state, _ := halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(940))
 
 	if state.Status != DrawdownStatusWarning {
@@ -58,7 +58,7 @@ func TestMaxDrawdownHalt_CheckDrawdown_Warning(t *testing.T) {
 func TestMaxDrawdownHalt_CheckDrawdown_Halt(t *testing.T) {
 	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
 
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
 	state, _ := halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
 
 	if state.Status != DrawdownStatusHalted {
@@ -77,8 +77,8 @@ func TestMaxDrawdownHalt_IsTradingHalted(t *testing.T) {
 		t.Error("expected nonexistent chat to not be halted")
 	}
 
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
 
 	if !halt.IsTradingHalted("chat-1") {
 		t.Error("expected chat-1 to be halted after 20% drawdown")
@@ -92,8 +92,8 @@ func TestMaxDrawdownHalt_ShouldAllowTrade(t *testing.T) {
 		t.Error("expected to allow trade for nonexistent chat")
 	}
 
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
 
 	if halt.ShouldAllowTrade("chat-1") {
 		t.Error("expected to not allow trade for halted chat")
@@ -116,7 +116,7 @@ func TestMaxDrawdownHalt_ForceHalt(t *testing.T) {
 func TestMaxDrawdownHalt_ResumeTrading(t *testing.T) {
 	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
 
-	halt.ForceHalt(context.Background(), "chat-1", "test")
+	_ = halt.ForceHalt(context.Background(), "chat-1", "test")
 
 	err := halt.ResumeTrading(context.Background(), "chat-1")
 	if err != nil {
@@ -131,7 +131,7 @@ func TestMaxDrawdownHalt_ResumeTrading(t *testing.T) {
 func TestMaxDrawdownHalt_ResumeTrading_NotHalted(t *testing.T) {
 	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
 
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
 
 	err := halt.ResumeTrading(context.Background(), "chat-1")
 	if err == nil {
@@ -142,8 +142,8 @@ func TestMaxDrawdownHalt_ResumeTrading_NotHalted(t *testing.T) {
 func TestMaxDrawdownHalt_GetMetrics(t *testing.T) {
 	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
 
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
 
 	metrics := halt.GetMetrics()
 
@@ -155,10 +155,10 @@ func TestMaxDrawdownHalt_GetMetrics(t *testing.T) {
 func TestMaxDrawdownHalt_ResetPeak(t *testing.T) {
 	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
 
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
 
-	halt.ResetPeak(context.Background(), "chat-1", decimal.NewFromInt(900))
+	_ = halt.ResetPeak(context.Background(), "chat-1", decimal.NewFromInt(900))
 
 	state, _ := halt.GetState("chat-1")
 	if !state.PeakValue.Equal(decimal.NewFromInt(900)) {
@@ -190,9 +190,9 @@ func TestMaxDrawdownHalt_CalculateDrawdown(t *testing.T) {
 func TestMaxDrawdownHalt_GetStatusSummary(t *testing.T) {
 	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
 
-	halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
-	halt.CheckDrawdown(context.Background(), "chat-2", decimal.NewFromInt(1000))
-	halt.CheckDrawdown(context.Background(), "chat-2", decimal.NewFromInt(800))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-2", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-2", decimal.NewFromInt(800))
 
 	summary := halt.GetStatusSummary()
 

@@ -168,8 +168,8 @@ func TestTraderAgent_Metrics(t *testing.T) {
 		AvailableCash: 5000,
 	}
 
-	agent.MakeDecision(context.Background(), market, portfolio)
-	agent.MakeDecision(context.Background(), market, portfolio)
+	_, _ = agent.MakeDecision(context.Background(), market, portfolio)
+	_, _ = agent.MakeDecision(context.Background(), market, portfolio)
 
 	metrics := agent.GetMetrics()
 

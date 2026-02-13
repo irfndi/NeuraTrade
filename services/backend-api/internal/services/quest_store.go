@@ -148,8 +148,12 @@ func (s *DBQuestStore) GetQuest(ctx context.Context, id string) (*Quest, error) 
 		quest.LastError = lastError.String
 	}
 
-	json.Unmarshal(checkpointJSON, &quest.Checkpoint)
-	json.Unmarshal(metadataJSON, &quest.Metadata)
+	if err := json.Unmarshal(checkpointJSON, &quest.Checkpoint); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal checkpoint: %w", err)
+	}
+	if err := json.Unmarshal(metadataJSON, &quest.Metadata); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+	}
 
 	return &quest, nil
 }
@@ -215,8 +219,12 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 			quest.LastError = lastError.String
 		}
 
-		json.Unmarshal(checkpointJSON, &quest.Checkpoint)
-		json.Unmarshal(metadataJSON, &quest.Metadata)
+		if err := json.Unmarshal(checkpointJSON, &quest.Checkpoint); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal checkpoint: %w", err)
+		}
+		if err := json.Unmarshal(metadataJSON, &quest.Metadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		}
 
 		quests = append(quests, &quest)
 	}
@@ -304,7 +312,9 @@ func (s *DBQuestStore) GetAutonomousState(ctx context.Context, chatID string) (*
 		state.PausedAt = pausedAt.Time
 	}
 
-	json.Unmarshal(activeQuestsJSON, &state.ActiveQuests)
+	if err := json.Unmarshal(activeQuestsJSON, &state.ActiveQuests); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal active quests: %w", err)
+	}
 
 	return &state, nil
 }

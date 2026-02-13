@@ -95,7 +95,7 @@ func TestConnectivityChecker_IsHealthy(t *testing.T) {
 		return ProviderStatusConnected, 5 * time.Millisecond, nil
 	})
 
-	checker.CheckProvider(context.Background(), "healthy")
+	_, _ = checker.CheckProvider(context.Background(), "healthy")
 
 	if !checker.IsHealthy() {
 		t.Error("expected checker to be healthy")
@@ -109,7 +109,7 @@ func TestConnectivityChecker_Metrics(t *testing.T) {
 		return ProviderStatusConnected, 5 * time.Millisecond, nil
 	})
 
-	checker.CheckProvider(context.Background(), "test")
+	_, _ = checker.CheckProvider(context.Background(), "test")
 
 	metrics := checker.GetMetrics()
 

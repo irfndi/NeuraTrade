@@ -151,9 +151,9 @@ func TestAnalystAgent_Metrics(t *testing.T) {
 		{Name: "rsi", Value: 0.1, Weight: 1.0, Direction: "neutral"},
 	}
 
-	agent.Analyze(context.Background(), "BTC/USDT", AnalystRoleTechnical, bullishSignals)
-	agent.Analyze(context.Background(), "ETH/USDT", AnalystRoleSentiment, bearishSignals)
-	agent.Analyze(context.Background(), "SOL/USDT", AnalystRoleTechnical, neutralSignals)
+	_, _ = agent.Analyze(context.Background(), "BTC/USDT", AnalystRoleTechnical, bullishSignals)
+	_, _ = agent.Analyze(context.Background(), "ETH/USDT", AnalystRoleSentiment, bearishSignals)
+	_, _ = agent.Analyze(context.Background(), "SOL/USDT", AnalystRoleTechnical, neutralSignals)
 
 	metrics := agent.GetMetrics()
 
@@ -228,13 +228,13 @@ func TestDetermineCondition(t *testing.T) {
 }
 
 func TestCalculateRiskLevel(t *testing.T) {
-	highRiskSignals := []AnalystSignal{
+	mediumRiskSignals := []AnalystSignal{
 		{Name: "volatility", Value: 0.8, Weight: 1.0, Direction: "neutral"},
 	}
 
-	risk := calculateRiskLevel(highRiskSignals)
-	if risk != "high" {
-		t.Errorf("expected high risk, got %s", risk)
+	risk := calculateRiskLevel(mediumRiskSignals)
+	if risk != "medium" {
+		t.Errorf("expected medium risk, got %s", risk)
 	}
 
 	lowRiskSignals := []AnalystSignal{

@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -186,6 +188,17 @@ func (m *TraderAgentMetrics) IncrementBySymbol(symbol string) {
 func (m *TraderAgentMetrics) GetMetrics() TraderAgentMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	actionCopy := make(map[string]int64, len(m.DecisionsByAction))
+	for k, v := range m.DecisionsByAction {
+		actionCopy[k] = v
+	}
+
+	symbolCopy := make(map[string]int64, len(m.DecisionsBySymbol))
+	for k, v := range m.DecisionsBySymbol {
+		symbolCopy[k] = v
+	}
+
 	return TraderAgentMetrics{
 		TotalDecisions:    m.TotalDecisions,
 		TradesExecuted:    m.TradesExecuted,
@@ -194,8 +207,8 @@ func (m *TraderAgentMetrics) GetMetrics() TraderAgentMetrics {
 		Losses:            m.Losses,
 		TotalPnL:          m.TotalPnL,
 		AvgConfidence:     m.AvgConfidence,
-		DecisionsByAction: m.DecisionsByAction,
-		DecisionsBySymbol: m.DecisionsBySymbol,
+		DecisionsByAction: actionCopy,
+		DecisionsBySymbol: symbolCopy,
 	}
 }
 
@@ -302,9 +315,10 @@ func (t *TraderAgent) determineAction(decision *TradingDecision, market MarketCo
 	bearishCount := 0
 
 	for _, signal := range market.Signals {
-		if signal.Direction == "bullish" {
+		switch signal.Direction {
+		case "bullish":
 			bullishCount++
-		} else if signal.Direction == "bearish" {
+		case "bearish":
 			bearishCount++
 		}
 	}
@@ -331,9 +345,10 @@ func (t *TraderAgent) calculatePositionSizing(decision *TradingDecision, market 
 	}
 
 	baseSize := t.config.MaxPositionSize
-	if t.config.Mode == ModeConservative {
+	switch t.config.Mode {
+	case ModeConservative:
 		baseSize *= 0.5
-	} else if t.config.Mode == ModeAggressive {
+	case ModeAggressive:
 		baseSize *= 1.5
 	}
 
@@ -345,9 +360,20 @@ func (t *TraderAgent) calculatePositionSizing(decision *TradingDecision, market 
 	}
 
 	decision.EntryPrice = market.CurrentPrice
-	decision.StopLoss = decision.EntryPrice * (1 - t.config.StopLossPercent/100)
-	decision.TakeProfit = decision.EntryPrice * (1 + t.config.TakeProfitPercent/100)
-	decision.ExpectedReturn = t.config.TakeProfitPercent * decision.SizePercent
+
+	// CRITICAL FIX: StopLoss/TakeProfit calculations must account for position side
+	if decision.Side == SideShort {
+		// For short positions: stop loss is above entry, take profit is below entry
+		decision.StopLoss = decision.EntryPrice * (1 + t.config.StopLossPercent/100)
+		decision.TakeProfit = decision.EntryPrice * (1 - t.config.TakeProfitPercent/100)
+		// Expected return is positive when price goes down for shorts
+		decision.ExpectedReturn = t.config.TakeProfitPercent * decision.SizePercent
+	} else {
+		// For long positions: stop loss is below entry, take profit is above entry
+		decision.StopLoss = decision.EntryPrice * (1 - t.config.StopLossPercent/100)
+		decision.TakeProfit = decision.EntryPrice * (1 + t.config.TakeProfitPercent/100)
+		decision.ExpectedReturn = t.config.TakeProfitPercent * decision.SizePercent
+	}
 
 	return decision
 }
@@ -402,7 +428,11 @@ func (t *TraderAgent) GetWinRate() float64 {
 }
 
 func generateTraderID() string {
-	return fmt.Sprintf("trade_%d", time.Now().UnixNano())
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("trade_%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("trade_%d_%s", time.Now().UnixNano(), hex.EncodeToString(b))
 }
 
 func calculateTradeRiskScore(market MarketContext, portfolio PortfolioState) float64 {
