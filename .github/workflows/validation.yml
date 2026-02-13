@@ -51,9 +51,9 @@ jobs:
         run: cd services/backend-api && go vet ./...
 
       - name: Run Go lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v6
         with:
-          version: v2.7.2
+          version: latest
           working-directory: services/backend-api
           args: --timeout=5m
 
