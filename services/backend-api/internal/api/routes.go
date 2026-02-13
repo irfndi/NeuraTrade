@@ -146,7 +146,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	budgetHandler := handlers.NewBudgetHandler(
-		database.NewAIUsageRepositoryFromDB(db),
+		database.NewAIUsageRepository(db),
 		dailyBudget,
 		monthlyBudget,
 	)

@@ -108,6 +108,20 @@ type RedisConfig struct {
 	Password string `mapstructure:"password"`
 	// DB is the Redis database index to use.
 	DB int `mapstructure:"db"`
+	// PoolSize is the maximum number of connections in the connection pool.
+	PoolSize int `mapstructure:"pool_size"`
+	// MinIdleConns is the minimum number of idle connections.
+	MinIdleConns int `mapstructure:"min_idle_conns"`
+	// DialTimeout is the timeout for establishing new connections.
+	DialTimeout int `mapstructure:"dial_timeout"`
+	// ReadTimeout is the timeout for read operations.
+	ReadTimeout int `mapstructure:"read_timeout"`
+	// WriteTimeout is the timeout for write operations.
+	WriteTimeout int `mapstructure:"write_timeout"`
+	// PoolTimeout is the timeout for getting a connection from the pool.
+	PoolTimeout int `mapstructure:"pool_timeout"`
+	// DefaultTTL is the default TTL for cached items in seconds.
+	DefaultTTL int `mapstructure:"default_ttl"`
 }
 
 // CCXTConfig defines settings for interacting with the CCXT microservice.
