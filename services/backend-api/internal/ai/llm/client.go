@@ -5,6 +5,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai"
@@ -251,7 +252,7 @@ type ErrContextLengthExceeded struct {
 }
 
 func (e ErrContextLengthExceeded) Error() string {
-	return "context length exceeded: max " + string(rune(e.MaxTokens)) + ", input " + string(rune(e.InputTokens))
+	return fmt.Sprintf("context length exceeded: max %d, input %d", e.MaxTokens, e.InputTokens)
 }
 
 // ErrContentFiltered indicates content was filtered by the provider
