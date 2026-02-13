@@ -55,25 +55,35 @@ END $$;
 -- Make api_url nullable
 ALTER TABLE exchanges ALTER COLUMN api_url DROP NOT NULL;
 
--- Update display_name where NULL
-UPDATE exchanges 
-SET display_name = CASE 
-    WHEN name IN ('binance', 'binance_us') THEN 'Binance'
-    WHEN name = 'coinbasepro' THEN 'Coinbase Pro'
-    WHEN name = 'kraken' THEN 'Kraken'
-    WHEN name = 'okx' THEN 'OKX'
-    WHEN name = 'bybit' THEN 'Bybit'
-    WHEN name = 'mexc' THEN 'MEXC'
-    WHEN name = 'gateio' THEN 'Gate.io'
-    WHEN name = 'kucoin' THEN 'KuCoin'
-    ELSE INITCAP(name)
-END
-WHERE display_name IS NULL AND name IS NOT NULL;
+-- Update display_name where NULL - ignore if constraint prevents
+DO $$
+BEGIN
+    UPDATE exchanges 
+    SET display_name = CASE 
+        WHEN name IN ('binance', 'binance_us') THEN 'Binance'
+        WHEN name = 'coinbasepro' THEN 'Coinbase Pro'
+        WHEN name = 'kraken' THEN 'Kraken'
+        WHEN name = 'okx' THEN 'OKX'
+        WHEN name = 'bybit' THEN 'Bybit'
+        WHEN name = 'mexc' THEN 'MEXC'
+        WHEN name = 'gateio' THEN 'Gate.io'
+        WHEN name = 'kucoin' THEN 'KuCoin'
+        ELSE INITCAP(name)
+    END
+    WHERE display_name IS NULL AND name IS NOT NULL;
+EXCEPTION WHEN duplicate_key THEN
+    RAISE NOTICE 'Skipping display_name update due to constraint conflict';
+END $$;
 
--- Update ccxt_id where NULL - use LOWER(name)
-UPDATE exchanges 
-SET ccxt_id = LOWER(name)
-WHERE ccxt_id IS NULL AND name IS NOT NULL;
+-- Update ccxt_id where NULL - ignore if constraint prevents
+DO $$
+BEGIN
+    UPDATE exchanges 
+    SET ccxt_id = LOWER(name)
+    WHERE ccxt_id IS NULL AND name IS NOT NULL;
+EXCEPTION WHEN duplicate_key THEN
+    RAISE NOTICE 'Skipping ccxt_id update due to constraint conflict';
+END $$;
 
 -- Make columns NOT NULL after ensuring values exist
 DO $$
