@@ -293,15 +293,29 @@ func (tb *TokenBucketRateLimiter) reserveRedis(key string, n int, rate float64, 
 		return 0, false
 	}
 
-	tokens, _ := values[0].(int64)
-	waitTime, _ := values[1].(int64)
+	// Handle both int64 and float64 from Lua script
+	var tokensRemaining int64
+	var waitTimeSecs float64
 
-	if waitTime > 0 {
-		return time.Duration(waitTime) * time.Second, true
+	switch v := values[0].(type) {
+	case int64:
+		tokensRemaining = v
+	case float64:
+		tokensRemaining = int64(v)
 	}
 
-	// Success - tokens were consumed
-	_ = tokens // Remaining tokens (not used)
+	switch v := values[1].(type) {
+	case int64:
+		waitTimeSecs = float64(v)
+	case float64:
+		waitTimeSecs = v
+	}
+
+	if waitTimeSecs > 0 {
+		return time.Duration(waitTimeSecs * float64(time.Second)), true
+	}
+
+	_ = tokensRemaining
 	return 0, true
 }
 
