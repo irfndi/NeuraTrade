@@ -199,6 +199,47 @@ ORDER BY fr.exchange_id, fr.trading_pair_id, fr.funding_time DESC;
 -- Add index for exchange_trading_pairs(trading_pair_id)
 CREATE INDEX IF NOT EXISTS idx_exchange_trading_pairs_trading_pair_id ON exchange_trading_pairs(trading_pair_id);
 
+-- Recreate missing views that were dropped earlier in this migration
+CREATE OR REPLACE VIEW v_trading_pairs AS
+SELECT * FROM trading_pairs;
+
+CREATE OR REPLACE VIEW v_trading_pairs_summary AS
+SELECT 
+    id, symbol, base_currency, quote_currency, is_active, is_futures
+FROM trading_pairs;
+
+CREATE OR REPLACE VIEW v_active_trading_pairs AS
+SELECT * FROM trading_pairs WHERE is_active = true;
+
+CREATE OR REPLACE VIEW v_funding_arbitrage_opportunities AS
+SELECT 
+    fao.id,
+    (fao.base_currency || '/' || fao.quote_currency) AS symbol,
+    fao.base_currency,
+    fao.quote_currency,
+    fao.long_exchange,
+    fao.short_exchange,
+    fao.long_funding_rate,
+    fao.short_funding_rate,
+    fao.net_funding_rate,
+    fao.detected_at,
+    fao.expires_at,
+    fao.is_active
+FROM funding_arbitrage_opportunities fao
+WHERE fao.is_active = true AND (fao.expires_at IS NULL OR fao.expires_at > NOW());
+
+CREATE OR REPLACE VIEW v_exchange_trading_pairs AS
+SELECT 
+    etp.id,
+    e.name as exchange_name,
+    tp.symbol,
+    tp.base_currency,
+    tp.quote_currency,
+    etp.is_active
+FROM exchange_trading_pairs etp
+JOIN exchanges e ON etp.exchange_id = e.id
+JOIN trading_pairs tp ON etp.trading_pair_id = tp.id;
+
 -- Migration completion
 INSERT INTO schema_migrations (version, filename, description, applied_at) 
 VALUES (40, '040_fix_trading_pairs_column_sizes.sql', 'Fix trading pairs column sizes', NOW())
