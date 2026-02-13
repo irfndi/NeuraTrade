@@ -435,14 +435,15 @@ func TestTradingHandlerCancelOrderNotFound(t *testing.T) {
 func TestNewTradingHandler_RequiresDatabase(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// Test that NewTradingHandler panics without database
-	require.Panics(t, func() {
+	// Test that NewTradingHandler works without database (uses optional dependencies)
+	// Database is optional - order execution can work without it
+	require.NotPanics(t, func() {
 		NewTradingHandler()
-	}, "NewTradingHandler should panic when called without database")
+	}, "NewTradingHandler should not panic when called without database")
 
-	require.Panics(t, func() {
+	require.NotPanics(t, func() {
 		NewTradingHandler(nil)
-	}, "NewTradingHandler should panic when called with nil database")
+	}, "NewTradingHandler should not panic when called with nil database")
 }
 
 func TestTradingHandler_WithDBPool(t *testing.T) {
