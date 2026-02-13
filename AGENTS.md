@@ -84,93 +84,17 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 185 total | 58 open | 8 in progress | 33 blocked | 119 closed | 28 ready
-
-### In Progress (8)
-- `neura-1wi`: Implement FOK order execution
-- `neura-7et`: Build prompt builder from skill.md + context
-- `neura-8s4`: Execute Go functions for tool calls
-- `neura-qts`: Implement CLOB API wrapper (order execution)
-- `neura-ur6`: Parse tool_calls from LLM responses
-- `neura-2lv0`: Implement LLM Inference Client - OpenAI/Anthropic/MLX API calls with structured output
-- `neura-acq`: Expose provider/model registry in CLI and Telegram
-- `neura-5nt`: Implement provider/model catalog source sync and cache
-
-### Ready to Work (28)
-- `neura-1b6`: Rate limit management with token bucket
-- `neura-354`: Set up CI/CD pipeline
-- `neura-4eo`: Expose arbitrage primitives
-- `neura-a7r`: Implement tight stop-loss execution
-- `neura-adu`: Implement Data API wrapper (positions/balances)
-- `neura-fvk`: Implement fund milestone alerts
-- `neura-im9`: Implement quest progress updates
-- `neura-nh5`: Implement risk event notifications
-- `neura-ntk`: Implement round-robin debate loop
-- `neura-qfp`: Configure production Docker Compose
-- `neura-sa4`: Implement order book imbalance detection
-- `neura-wqa`: Set up QuantVPS deployment
-- `neura-117`: Optimize database query performance
-- `neura-1cf`: Optimize Redis caching strategy
-- `neura-1ol`: Implement historical OHLCV replay
-- `neura-2lv0`: Implement LLM Inference Client - OpenAI/Anthropic/MLX API calls with structured output
-- `neura-3y5`: Implement slow query logging
-- `neura-4g6`: Implement log aggregation
-- `neura-53k`: Implement signal explanation generation
-- `neura-5jj`: Implement automatic capital scaling
-- `neura-5ll`: Implement phase-specific strategy adaptation
-- `neura-5nt`: Implement provider/model catalog source sync and cache
-- `neura-6ws`: Simulate AI decision loop
-- `neura-8cv`: Implement watchdog filtering
-- `neura-8on`: Implement Redis message subscription
-- `neura-8sk`: Add provider selection config
-- `neura-8x7`: Implement Go ↔ mlx_lm.server HTTP communication
-- `neura-8xg`: Implement session lifecycle management
-- `neura-9i4`: Implement session resumption
-- `neura-acq`: Expose provider/model registry in CLI and Telegram
-- `neura-aod`: Set up alerts
-- `neura-bnv`: Implement bootstrap → growth → scale → mature transitions
-- `neura-d3r`: Add goflux as dependency
-- `neura-dem`: Create get_portfolio skill.md
-- `neura-do1`: Define IndicatorProvider interface
-- `neura-dtj`: Implement existing provider adapter
-- `neura-dvl`: Implement GoFlux adapter
-- `neura-dzq`: Output performance metrics
-- `neura-eb8`: Serialize AI session state
-- `neura-emr`: Implement multi-indicator stack
-- `neura-gbd`: Create place_order skill.md
-- `neura-h2p`: Store backtest results
-- `neura-i3d`: Implement quantized model loading
-- `neura-ir1`: Implement dashboards
-- `neura-jqj`: Implement cohort-level flow analysis
-- `neura-kq5`: Add parity tests between providers
-- `neura-mjy`: Create operator guide
-- `neura-n7l`: Define market data channels
-- `neura-ov0`: Create security documentation
-- `neura-sf3z`: Implement Agent Execution Loop - Wire AnalystAgent → LLM → Tool Calls → RiskManagerAgent → Execution
-- `neura-t7o`: Implement AI model router policy engine from registry
-- `neura-x02`: Create troubleshooting guide
-- `neura-xtc`: Implement anti-manipulation filters
-- `neura-xy2`: Implement shadow mode execution
-- `neura-yk2`: Create get_price skill.md
-- `neura-z5l`: Implement Redis message publishing
-- `neura-zov`: Implement Twitter sentiment analysis
-- `neura-0lu`: Progress Tracking
-- `neura-1t2`: EPIC 4: PRODUCTION (Week 7+)
-- `neura-6vm`: EPIC 2: AGENTIC CORE (Weeks 3-4)
-- `neura-87l`: Prototype optional QMD retrieval for /doctor runbooks
-- `neura-b52`: COMMAND-READY TASK CREATION
-- `neura-bdb`: Next Steps
-- `neura-cfo`: Architecture Constraints (LOCKED)
-- `neura-kxi`: EPIC 1: FOUNDATION (Weeks 1-2)
-- `neura-l0s`: TECHNICAL DEPENDENCY MATRIX
-- `neura-sbh`: EPIC 3: STRATEGY & UI (Weeks 5-6)
-- `neura-srd`: Add feature flag + fallback path for QMD integration
-- `neura-znk`: Increase test coverage to 80%
-- `neura-9zc2`: Implement News Sentiment Feed - Integrate CryptoPanic/news aggregator for sentiment scoring
-- `neura-wjr8`: Implement Reddit Sentiment Integration - Fetch r/CryptoCurrency, r/Bitcoin sentiment via Reddit API
-- `neura-y146`: Implement Performance Feedback Pipeline - Trade outcomes → metrics → strategy parameter adjustment
+**Stats:** 185 total | 58 open | 0 in progress | 28 blocked | 127 closed | 30 ready
 
 ### Recently Completed (✓)
+- ✓ `neura-1wi`: FOK order execution
+- ✓ `neura-7et`: Build prompt builder from skill.md + context
+- ✓ `neura-8s4`: Execute Go functions for tool calls
+- ✓ `neura-qts`: CLOB API wrapper (order execution)
+- ✓ `neura-ur6`: Parse tool_calls from LLM responses
+- ✓ `neura-2lv0`: LLM Inference Client - OpenAI/Anthropic/MLX API calls with structured output
+- ✓ `neura-acq`: Expose provider/model registry in CLI and Telegram
+- ✓ `neura-5nt`: Provider/model catalog source sync and cache
 - ✓ `neura-otc`: Codify sentiment momentum skill.md
 - ✓ `neura-lnm`: Redis job queue
 - ✓ `neura-1p0`: /doctor diagnostic handler
