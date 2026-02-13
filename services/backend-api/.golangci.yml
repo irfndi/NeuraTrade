@@ -20,6 +20,7 @@ version: "2"
 
 linters:
   default: none
+
   enable:
     - errcheck
     - govet
@@ -27,6 +28,10 @@ linters:
     - staticcheck
     - unused
     - copyloopvar
+    - errname
+    - asciicheck
+    - bidichk
+
   settings:
     govet:
       enable-all: true
