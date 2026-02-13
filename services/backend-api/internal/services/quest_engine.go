@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -110,6 +111,15 @@ type QuestEngine struct {
 	redis           *redis.Client
 	stopCh          chan struct{}
 	running         bool
+	// notificationService is used to send quest progress notifications
+	notificationService *NotificationService
+	// chatIDForQuest maps quest IDs to their owner's chat ID
+	chatIDForQuest map[string]int64
+}
+
+// QuestProgressNotifier defines the interface for sending quest progress notifications
+type QuestProgressNotifier interface {
+	NotifyQuestProgress(ctx context.Context, chatID int64, progress QuestProgressNotification) error
 }
 
 // QuestStore defines the interface for quest persistence
@@ -231,10 +241,18 @@ func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *Quest
 		store:           store,
 		redis:           redisClient,
 		stopCh:          make(chan struct{}),
+		chatIDForQuest:  make(map[string]int64),
 	}
 
 	engine.registerDefaultDefinitions()
 
+	return engine
+}
+
+// NewQuestEngineWithNotification creates a new quest engine with notification support
+func NewQuestEngineWithNotification(store QuestStore, redisClient *redis.Client, notifier *NotificationService) *QuestEngine {
+	engine := NewQuestEngineWithRedis(store, redisClient)
+	engine.notificationService = notifier
 	return engine
 }
 
@@ -352,6 +370,8 @@ func (e *QuestEngine) CreateQuest(definitionID string, chatID string, customTarg
 
 	e.mu.Lock()
 	e.quests[quest.ID] = quest
+	chatIDInt, _ := strconv.ParseInt(chatID, 10, 64)
+	e.chatIDForQuest[quest.ID] = chatIDInt
 	e.mu.Unlock()
 
 	if e.store != nil {
@@ -717,13 +737,14 @@ func (e *QuestEngine) createQuestInternal(definitionID string, chatID string) (*
 // UpdateQuestProgress updates the progress of a quest
 func (e *QuestEngine) UpdateQuestProgress(questID string, current int, checkpoint map[string]interface{}) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	quest, ok := e.quests[questID]
 	if !ok {
+		e.mu.Unlock()
 		return fmt.Errorf("quest not found: %s", questID)
 	}
 
+	previousCount := quest.CurrentCount
 	quest.CurrentCount = current
 	quest.Checkpoint = checkpoint
 	quest.UpdatedAt = time.Now()
@@ -734,8 +755,33 @@ func (e *QuestEngine) UpdateQuestProgress(questID string, current int, checkpoin
 		quest.CompletedAt = &now
 	}
 
+	chatID := e.chatIDForQuest[questID]
+	e.mu.Unlock()
+
 	if e.store != nil {
-		return e.store.SaveQuest(context.Background(), quest)
+		if err := e.store.SaveQuest(context.Background(), quest); err != nil {
+			log.Printf("Failed to persist quest %s: %v", quest.ID, err)
+		}
+	}
+
+	if e.notificationService != nil && chatID > 0 && current > previousCount {
+		percent := 0
+		if quest.TargetCount > 0 {
+			percent = (current * 100) / quest.TargetCount
+		}
+		progressNotif := QuestProgressNotification{
+			QuestID:   questID,
+			QuestName: quest.Name,
+			Current:   current,
+			Target:    quest.TargetCount,
+			Percent:   percent,
+			Status:    string(quest.Status),
+		}
+		go func() {
+			if err := e.notificationService.NotifyQuestProgress(context.Background(), chatID, progressNotif); err != nil {
+				log.Printf("Failed to send quest progress notification for %s: %v", questID, err)
+			}
+		}()
 	}
 
 	return nil
