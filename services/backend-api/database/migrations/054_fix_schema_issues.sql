@@ -57,6 +57,10 @@ DROP VIEW IF EXISTS v_trading_pairs_summary CASCADE;
 DROP VIEW IF EXISTS v_trading_pairs_extended CASCADE;
 DROP VIEW IF EXISTS v_funding_arbitrage_opportunities CASCADE;
 DROP VIEW IF EXISTS v_exchange_trading_pairs CASCADE;
+DROP VIEW IF EXISTS latest_funding_rates CASCADE;
+DROP VIEW IF EXISTS active_funding_arbitrage_opportunities CASCADE;
+DROP VIEW IF EXISTS active_futures_arbitrage_opportunities CASCADE;
+DROP VIEW IF EXISTS futures_arbitrage_market_summary CASCADE;
 
 -- Check current column sizes and update if needed
 DO $$
