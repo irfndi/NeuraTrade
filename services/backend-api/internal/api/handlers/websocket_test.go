@@ -323,11 +323,11 @@ func TestWebSocketHandler_Stop(t *testing.T) {
 	assert.Equal(t, 1, handler.GetClientCount())
 
 	handler.Stop()
-	server.Close()
+	time.Sleep(200 * time.Millisecond)
 
-	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, 0, handler.GetClientCount())
 	ws.Close()
+	server.Close()
 }
 
 func TestWebSocketHandler_InvalidJSON(t *testing.T) {

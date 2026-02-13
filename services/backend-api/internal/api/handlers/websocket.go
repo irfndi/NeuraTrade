@@ -66,6 +66,7 @@ type WebSocketHandler struct {
 	logger     *slog.Logger
 	ctx        context.Context
 	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 func NewWebSocketHandler(redis *database.RedisClient) *WebSocketHandler {
@@ -79,12 +80,14 @@ func NewWebSocketHandler(redis *database.RedisClient) *WebSocketHandler {
 		logger:     telemetry.Logger(),
 		ctx:        ctx,
 		cancel:     cancel,
+		done:       make(chan struct{}),
 	}
 	go h.run()
 	return h
 }
 
 func (h *WebSocketHandler) run() {
+	defer close(h.done)
 	for {
 		select {
 		case <-h.ctx.Done():
@@ -144,6 +147,10 @@ func (h *WebSocketHandler) run() {
 
 func (h *WebSocketHandler) Stop() {
 	h.cancel()
+	select {
+	case <-h.done:
+	case <-time.After(100 * time.Millisecond):
+	}
 	h.mu.Lock()
 	for client := range h.clients {
 		close(client.send)
