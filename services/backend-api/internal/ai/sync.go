@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// SyncConfig holds configuration for the registry sync service.
 type SyncConfig struct {
 	SyncInterval     time.Duration
 	RefreshOnStartup bool
@@ -16,6 +17,7 @@ type SyncConfig struct {
 	EnableMetrics    bool
 }
 
+// DefaultSyncConfig returns the default sync configuration.
 func DefaultSyncConfig() SyncConfig {
 	return SyncConfig{
 		SyncInterval:     6 * time.Hour,
@@ -25,6 +27,7 @@ func DefaultSyncConfig() SyncConfig {
 	}
 }
 
+// SyncMetrics tracks sync operation statistics.
 type SyncMetrics struct {
 	mu               sync.RWMutex
 	LastSyncTime     time.Time
@@ -35,6 +38,7 @@ type SyncMetrics struct {
 	ProvidersCount   int
 }
 
+// SyncMetricsSnapshot is a thread-safe snapshot of sync metrics.
 type SyncMetricsSnapshot struct {
 	LastSyncTime     time.Time
 	LastSyncDuration time.Duration
@@ -44,6 +48,7 @@ type SyncMetricsSnapshot struct {
 	ProvidersCount   int
 }
 
+// RecordSync records a sync operation result.
 func (m *SyncMetrics) RecordSync(duration time.Duration, models, providers int, failed bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -58,6 +63,7 @@ func (m *SyncMetrics) RecordSync(duration time.Duration, models, providers int, 
 	m.ProvidersCount = providers
 }
 
+// GetSnapshot returns a thread-safe copy of current metrics.
 func (m *SyncMetrics) GetSnapshot() SyncMetricsSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -71,6 +77,7 @@ func (m *SyncMetrics) GetSnapshot() SyncMetricsSnapshot {
 	}
 }
 
+// SyncService periodically syncs the AI model registry from remote sources.
 type SyncService struct {
 	registry *Registry
 	redis    *redis.Client
@@ -84,6 +91,7 @@ type SyncService struct {
 	wg      sync.WaitGroup
 }
 
+// NewSyncService creates a new registry sync service.
 func NewSyncService(registry *Registry, redisClient *redis.Client, logger *zap.Logger, config SyncConfig) *SyncService {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -98,6 +106,7 @@ func NewSyncService(registry *Registry, redisClient *redis.Client, logger *zap.L
 	}
 }
 
+// Start begins the background sync loop.
 func (s *SyncService) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.running {
@@ -123,6 +132,7 @@ func (s *SyncService) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop halts the background sync loop.
 func (s *SyncService) Stop() {
 	s.mu.Lock()
 	if !s.running {
@@ -179,20 +189,24 @@ func (s *SyncService) syncOnce(ctx context.Context) error {
 	return nil
 }
 
+// ForceSync triggers an immediate sync operation.
 func (s *SyncService) ForceSync(ctx context.Context) error {
 	return s.syncOnce(ctx)
 }
 
+// GetMetrics returns current sync metrics.
 func (s *SyncService) GetMetrics() SyncMetricsSnapshot {
 	return s.metrics.GetSnapshot()
 }
 
+// IsRunning returns whether the sync service is active.
 func (s *SyncService) IsRunning() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.running
 }
 
+// GetStatus returns detailed sync service status.
 func (s *SyncService) GetStatus() map[string]interface{} {
 	metrics := s.metrics.GetSnapshot()
 
