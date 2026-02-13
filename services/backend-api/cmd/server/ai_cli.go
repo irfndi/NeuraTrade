@@ -319,10 +319,11 @@ func routeModel(ctx context.Context, registry *ai.Registry, args []string) error
 			}
 		case "--max-cost":
 			if i+1 < len(args) {
-				var maxCost float64
-				if _, err := fmt.Sscanf(args[i+1], "%f", &maxCost); err == nil {
-					constraints.MaxInputCost = decimal.NewFromFloat(maxCost)
+				cost, err := decimal.NewFromString(args[i+1])
+				if err != nil {
+					return fmt.Errorf("invalid max-cost value: %w", err)
 				}
+				constraints.MaxInputCost = cost
 			}
 		}
 	}

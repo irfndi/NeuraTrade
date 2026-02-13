@@ -1,12 +1,14 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -204,17 +206,29 @@ func (c *MLXClient) processStream(reader io.ReadCloser, eventChan chan<- StreamE
 	defer close(eventChan)
 	defer func() { _ = reader.Close() }()
 
-	decoder := json.NewDecoder(reader)
+	scanner := bufio.NewScanner(reader)
 
-	for {
-		var event mlxResponse
-		if err := decoder.Decode(&event); err != nil {
-			if err == io.EOF {
-				eventChan <- StreamEvent{Type: StreamEventDone, Done: true}
-				return
-			}
-			eventChan <- StreamEvent{Type: StreamEventError, Error: err}
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		jsonData := strings.TrimPrefix(line, "data: ")
+		if jsonData == "[DONE]" {
+			eventChan <- StreamEvent{Type: StreamEventDone, Done: true}
 			return
+		}
+
+		var event mlxResponse
+		if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
+			eventChan <- StreamEvent{Type: StreamEventError, Error: err}
+			continue
 		}
 
 		for _, choice := range event.Choices {
@@ -242,6 +256,12 @@ func (c *MLXClient) processStream(reader io.ReadCloser, eventChan chan<- StreamE
 			}
 		}
 	}
+
+	if err := scanner.Err(); err != nil {
+		eventChan <- StreamEvent{Type: StreamEventError, Error: err}
+	}
+
+	eventChan <- StreamEvent{Type: StreamEventDone, Done: true}
 }
 
 func (c *MLXClient) convertRequest(req *CompletionRequest) *mlxRequest {

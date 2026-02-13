@@ -214,19 +214,21 @@ func (s *PaperExecutionSimulator) SimulateFill(ctx context.Context, order *Paper
 	case PaperOrderTypeFOK:
 		// Fill or Kill - must fill entire order
 		fillPrice = s.calculateMarketFillPrice(marketPrice, order.Side)
-		// FOK always fills full size
 	default:
 		return nil, fmt.Errorf("unknown order type: %s", order.Type)
 	}
 
-	// Apply partial fill if enabled
+	// Apply partial fill if enabled (skip for IOC/FOK which handle fill logic above)
 	var filledSize decimal.Decimal
-	if s.config.EnableRandomness && s.shouldPartialFill() {
+	if order.Type != PaperOrderTypeIOC && order.Type != PaperOrderTypeFOK &&
+		s.config.EnableRandomness && s.shouldPartialFill() {
 		filledSize = s.calculatePartialFill(order.Size)
 		order.Status = PaperOrderStatusPartial
 	} else {
 		filledSize = order.Size
-		order.Status = PaperOrderStatusFilled
+		if order.Status != PaperOrderStatusCancelled {
+			order.Status = PaperOrderStatusFilled
+		}
 	}
 
 	// Calculate slippage

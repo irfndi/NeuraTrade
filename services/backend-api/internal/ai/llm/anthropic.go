@@ -353,8 +353,13 @@ func (c *AnthropicClient) convertRequest(req *CompletionRequest) *anthropicReque
 			}}
 		}
 
+		role := string(msg.Role)
+		if msg.Role == RoleTool {
+			role = "user"
+		}
+
 		messages = append(messages, anthropicMessage{
-			Role:    string(msg.Role),
+			Role:    role,
 			Content: content,
 		})
 	}

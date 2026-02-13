@@ -22,9 +22,9 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX idx_paper_trades_user_id ON paper_trades(user_id);
-CREATE INDEX idx_paper_trades_status ON paper_trades(status);
-CREATE INDEX idx_paper_trades_opened_at ON paper_trades(opened_at DESC);
-CREATE INDEX idx_paper_trades_closed_at ON paper_trades(closed_at DESC);
-CREATE INDEX idx_paper_trades_quest_id ON paper_trades(quest_id);
-CREATE INDEX idx_paper_trades_symbol ON paper_trades(symbol);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_user_id ON paper_trades(user_id);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_status ON paper_trades(status);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_opened_at ON paper_trades(opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_closed_at ON paper_trades(closed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_quest_id ON paper_trades(quest_id);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol ON paper_trades(symbol);
