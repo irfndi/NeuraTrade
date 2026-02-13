@@ -583,7 +583,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		})
 	}
 
-	polymarketCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "provider = 'polymarket' AND status = 'connected'")
+	polymarketCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "polymarket")
 	if err != nil {
 		checks = append(checks, gin.H{
 			"name":    "polymarket-wallet",
@@ -611,7 +611,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		})
 	}
 
-	exchangeCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
+	exchangeCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "exchange")
 	if err != nil {
 		checks = append(checks, gin.H{
 			"name":    "exchange-connection",
@@ -722,7 +722,7 @@ func (h *TelegramInternalHandler) ensureOperatorSchema(ctx context.Context) erro
 func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, chatID string) ([]string, error) {
 	failedChecks := make([]string, 0, 2)
 
-	polymarketCount, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
+	polymarketCount, err := h.countConnectedWallets(ctx, chatID, "polymarket")
 	if err != nil {
 		return nil, err
 	}
@@ -730,7 +730,7 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 		failedChecks = append(failedChecks, "wallet minimum")
 	}
 
-	exchangeCount, err := h.countConnectedWallets(ctx, chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
+	exchangeCount, err := h.countConnectedWallets(ctx, chatID, "exchange")
 	if err != nil {
 		return nil, err
 	}
@@ -741,9 +741,19 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 	return failedChecks, nil
 }
 
-func (h *TelegramInternalHandler) countConnectedWallets(ctx context.Context, chatID, filter string) (int, error) {
-	query := `SELECT COUNT(*) FROM telegram_operator_wallets WHERE chat_id = $1 AND ` + filter
+func (h *TelegramInternalHandler) countConnectedWallets(ctx context.Context, chatID string, filterType string) (int, error) {
+	var query string
 	var count int
+
+	switch filterType {
+	case "polymarket":
+		query = `SELECT COUNT(*) FROM telegram_operator_wallets WHERE chat_id = $1 AND provider = 'polymarket' AND status = 'connected'`
+	case "exchange":
+		query = `SELECT COUNT(*) FROM telegram_operator_wallets WHERE chat_id = $1 AND provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'`
+	default:
+		query = `SELECT COUNT(*) FROM telegram_operator_wallets WHERE chat_id = $1 AND status = 'connected'`
+	}
+
 	err := h.db.QueryRow(ctx, query, chatID).Scan(&count)
 	if err != nil {
 		return 0, err
