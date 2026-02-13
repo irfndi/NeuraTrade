@@ -439,8 +439,8 @@ func (m *KillSwitchMonitor) monitorLoop() {
 
 // checkConditions evaluates all active conditions
 func (m *KillSwitchMonitor) checkConditions() {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// Skip if already triggered
 	if m.state.Status == KillSwitchStatusTriggered {
@@ -462,13 +462,11 @@ func (m *KillSwitchMonitor) checkConditions() {
 		}
 
 		if triggered {
-			m.mu.RUnlock()
 			if err := m.Trigger(condition.Trigger, "system", fmt.Sprintf("Condition %s (%s) threshold exceeded", condition.ID, condition.Name)); err != nil {
 				m.logger.WithFields(map[string]interface{}{
 					"condition_id": condition.ID,
 				}).WithError(err).Error("Failed to trigger kill switch")
 			}
-			m.mu.RLock()
 			return
 		}
 	}
@@ -517,8 +515,8 @@ func (m *KillSwitchMonitor) getMetricFromRedis(ctx context.Context, key string) 
 
 // checkAutoRecovery checks if auto-recovery should be triggered
 func (m *KillSwitchMonitor) checkAutoRecovery() {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if m.state.Status != KillSwitchStatusTriggered {
 		return
@@ -529,11 +527,9 @@ func (m *KillSwitchMonitor) checkAutoRecovery() {
 	}
 
 	if time.Now().After(*m.state.AutoRecoverAt) {
-		m.mu.RUnlock()
 		if err := m.Recover("auto_recovery"); err != nil {
 			m.logger.WithError(err).Error("Failed to auto-recover kill switch")
 		}
-		m.mu.RLock()
 	}
 }
 

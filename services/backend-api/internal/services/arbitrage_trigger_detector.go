@@ -88,7 +88,6 @@ type ArbitrageTriggerDetector struct {
 	running       bool
 	checkInterval time.Duration
 	triggerTTL    time.Duration
-	calculator    *FuturesArbitrageCalculator
 }
 
 // ArbitrageTriggerDetectorConfig holds configuration for the trigger detector
@@ -131,7 +130,6 @@ func NewArbitrageTriggerDetector(
 		logger:        serviceLogger,
 		checkInterval: checkInterval,
 		triggerTTL:    triggerTTL,
-		calculator:    NewFuturesArbitrageCalculator(),
 	}
 
 	detector.registerDefaultRules()

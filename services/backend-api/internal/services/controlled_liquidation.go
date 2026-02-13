@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"sync"
 	"time"
@@ -601,8 +602,11 @@ func generateLiquidationID() string {
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
+	rng := rand.Reader
 	for i := range b {
-		b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
+		randByte := make([]byte, 1)
+		rng.Read(randByte)
+		b[i] = letters[int(randByte[0])%len(letters)]
 	}
 	return string(b)
 }
