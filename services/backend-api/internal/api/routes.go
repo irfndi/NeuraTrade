@@ -161,7 +161,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		monthlyBudget,
 	)
 
-	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
+	questEngine := services.NewQuestEngineWithNotification(services.NewInMemoryQuestStore(), nil, notificationService)
 	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
 
 	// Initialize wallet handler

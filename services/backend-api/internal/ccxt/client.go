@@ -1094,6 +1094,15 @@ func (c *Client) CalculateOrderBookMetrics(resp *OrderBookResponse) *OrderBookMe
 		metrics.Imbalance2Pct = bidDepth2.Sub(askDepth2).Div(totalDepth2)
 	}
 
+	threshold := decimal.NewFromFloat(0.2)
+	if metrics.Imbalance1Pct.GreaterThan(threshold) {
+		metrics.ImbalanceSignal = "bullish"
+	} else if metrics.Imbalance1Pct.LessThan(threshold.Neg()) {
+		metrics.ImbalanceSignal = "bearish"
+	} else {
+		metrics.ImbalanceSignal = "neutral"
+	}
+
 	// Calculate slippage estimates for common position sizes
 	positionSizes := []decimal.Decimal{
 		decimal.NewFromInt(10000),  // $10k
@@ -1226,6 +1235,7 @@ type OrderBookMetrics struct {
 	Imbalance1Pct decimal.Decimal `json:"imbalance_1pct"`
 	Imbalance2Pct decimal.Decimal `json:"imbalance_2pct"`
 
+	ImbalanceSignal   string                      `json:"imbalance_signal"` // bullish/bearish/neutral based on imbalance
 	SlippageEstimates map[string]SlippageEstimate `json:"slippage_estimates"`
 	LiquidityScore    decimal.Decimal             `json:"liquidity_score"`
 
