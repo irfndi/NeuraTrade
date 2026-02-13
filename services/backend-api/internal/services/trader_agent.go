@@ -361,19 +361,15 @@ func (t *TraderAgent) calculatePositionSizing(decision *TradingDecision, market 
 
 	decision.EntryPrice = market.CurrentPrice
 
-	// CRITICAL FIX: StopLoss/TakeProfit calculations must account for position side
-	if decision.Side == SideShort {
-		// For short positions: stop loss is above entry, take profit is below entry
-		decision.StopLoss = decision.EntryPrice * (1 + t.config.StopLossPercent/100)
-		decision.TakeProfit = decision.EntryPrice * (1 - t.config.TakeProfitPercent/100)
-		// Expected return is positive when price goes down for shorts
-		decision.ExpectedReturn = t.config.TakeProfitPercent * decision.SizePercent
-	} else {
-		// For long positions: stop loss is below entry, take profit is above entry
+	switch decision.Side {
+	case SideLong:
 		decision.StopLoss = decision.EntryPrice * (1 - t.config.StopLossPercent/100)
 		decision.TakeProfit = decision.EntryPrice * (1 + t.config.TakeProfitPercent/100)
-		decision.ExpectedReturn = t.config.TakeProfitPercent * decision.SizePercent
+	case SideShort:
+		decision.StopLoss = decision.EntryPrice * (1 + t.config.StopLossPercent/100)
+		decision.TakeProfit = decision.EntryPrice * (1 - t.config.TakeProfitPercent/100)
 	}
+	decision.ExpectedReturn = t.config.TakeProfitPercent * decision.SizePercent
 
 	return decision
 }
