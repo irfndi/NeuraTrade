@@ -62,6 +62,7 @@ END $$;
 ALTER TABLE exchanges ALTER COLUMN api_url DROP NOT NULL;
 
 -- Update existing exchanges with proper values if they exist
+-- Only update rows where we can safely set values without violating unique constraints
 UPDATE exchanges SET 
     display_name = CASE 
         WHEN name = 'binance' THEN 'Binance'
@@ -74,14 +75,18 @@ UPDATE exchanges SET
         WHEN name = 'kucoin' THEN 'KuCoin'
         ELSE INITCAP(name)
     END,
-    ccxt_id = name,
     status = COALESCE(status, 'active'),
     has_spot = COALESCE(has_spot, true),
     has_futures = CASE 
         WHEN name IN ('binance', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin') THEN true
         ELSE COALESCE(has_futures, false)
     END
-WHERE display_name IS NULL OR ccxt_id IS NULL;
+WHERE display_name IS NULL AND ccxt_id IS NULL
+AND name IN ('binance', 'coinbasepro', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin')
+AND (
+    SELECT COUNT(*) FROM exchanges e2 
+    WHERE e2.ccxt_id = exchanges.name
+) <= 1;
 
 -- Make required columns NOT NULL after updating
 DO $$

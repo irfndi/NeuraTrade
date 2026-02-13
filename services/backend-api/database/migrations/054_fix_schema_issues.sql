@@ -73,21 +73,21 @@ BEGIN
 
     -- Increase symbol column if less than 100
     IF symbol_size < 100 THEN
-        ALTER TABLE trading_pairs ALTER COLUMN symbol TYPE VARCHAR(100);
+        ALTER TABLE trading_pairs ALTER COLUMN symbol TYPE VARCHAR(100) CASCADE;
         RAISE NOTICE 'Updated symbol column to VARCHAR(100)';
     END IF;
 
     -- Increase base_currency column if less than 50
     IF base_size < 50 THEN
-        ALTER TABLE trading_pairs ALTER COLUMN base_currency TYPE VARCHAR(50);
+        ALTER TABLE trading_pairs ALTER COLUMN base_currency TYPE VARCHAR(50) CASCADE;
         RAISE NOTICE 'Updated base_currency column to VARCHAR(50)';
     END IF;
 
     -- Increase quote_currency column if less than 50
     IF quote_size < 50 THEN
-        ALTER TABLE trading_pairs ALTER COLUMN quote_currency TYPE VARCHAR(50);
+        ALTER TABLE trading_pairs ALTER COLUMN quote_currency TYPE VARCHAR(50) CASCADE;
         RAISE NOTICE 'Updated quote_currency column to VARCHAR(50)';
-    END IF;
+    END IF
 END $$;
 
 -- Also update exchange_trading_pairs table if it exists
@@ -97,23 +97,43 @@ BEGIN
         -- Update symbol column
         IF EXISTS (SELECT 1 FROM information_schema.columns
                    WHERE table_name = 'exchange_trading_pairs' AND column_name = 'symbol') THEN
-            ALTER TABLE exchange_trading_pairs ALTER COLUMN symbol TYPE VARCHAR(100);
+            ALTER TABLE exchange_trading_pairs ALTER COLUMN symbol TYPE VARCHAR(100) CASCADE;
         END IF;
 
         -- Update base_currency column
         IF EXISTS (SELECT 1 FROM information_schema.columns
                    WHERE table_name = 'exchange_trading_pairs' AND column_name = 'base_currency') THEN
-            ALTER TABLE exchange_trading_pairs ALTER COLUMN base_currency TYPE VARCHAR(50);
+            ALTER TABLE exchange_trading_pairs ALTER COLUMN base_currency TYPE VARCHAR(50) CASCADE;
         END IF;
 
         -- Update quote_currency column
         IF EXISTS (SELECT 1 FROM information_schema.columns
                    WHERE table_name = 'exchange_trading_pairs' AND column_name = 'quote_currency') THEN
-            ALTER TABLE exchange_trading_pairs ALTER COLUMN quote_currency TYPE VARCHAR(50);
+            ALTER TABLE exchange_trading_pairs ALTER COLUMN quote_currency TYPE VARCHAR(50) CASCADE;
         END IF;
 
         RAISE NOTICE 'Updated exchange_trading_pairs table column sizes';
-    END IF;
+    END IF
+END $$;
+
+-- Also update market_data table symbol column if it exists
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'market_data' AND column_name = 'symbol') THEN
+        ALTER TABLE market_data ALTER COLUMN symbol TYPE VARCHAR(100) CASCADE;
+        RAISE NOTICE 'Updated market_data.symbol column to VARCHAR(100)';
+    END IF
+END $$;
+
+-- Also update funding_rates table symbol column if it exists
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'funding_rates' AND column_name = 'symbol') THEN
+        ALTER TABLE funding_rates ALTER COLUMN symbol TYPE VARCHAR(100) CASCADE;
+        RAISE NOTICE 'Updated funding_rates.symbol column to VARCHAR(100)';
+    END IF
 END $$;
 
 -- Also update market_data table symbol column if it exists

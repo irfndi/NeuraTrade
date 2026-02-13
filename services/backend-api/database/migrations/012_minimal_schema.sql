@@ -145,7 +145,8 @@ CREATE TABLE IF NOT EXISTS technical_indicators (
     UNIQUE(exchange_id, trading_pair_id, timeframe, indicator_type, timestamp)
 );
 
--- Create schema_migrations tracking table
+-- Create or update schema_migrations tracking table
+-- First create table if not exists, then add columns if they don't exist
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     filename VARCHAR(255),
@@ -153,6 +154,10 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     checksum VARCHAR(64),
     applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Add missing columns to existing schema_migrations table (from migrate.sh baseline)
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum VARCHAR(64);
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS description TEXT;
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_market_data_exchange_timestamp ON market_data(exchange_id, timestamp DESC);
