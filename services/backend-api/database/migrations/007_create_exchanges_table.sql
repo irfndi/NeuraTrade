@@ -62,6 +62,7 @@ END $$;
 ALTER TABLE exchanges ALTER COLUMN api_url DROP NOT NULL;
 
 -- Update existing exchanges with proper values if they exist
+-- Handle duplicates by making ccxt_id unique
 UPDATE exchanges SET 
     display_name = CASE 
         WHEN name = 'binance' THEN 'Binance'
@@ -74,25 +75,34 @@ UPDATE exchanges SET
         WHEN name = 'kucoin' THEN 'KuCoin'
         ELSE INITCAP(name)
     END,
-    ccxt_id = name,
     status = COALESCE(status, 'active'),
     has_spot = COALESCE(has_spot, true),
     has_futures = CASE 
         WHEN name IN ('binance', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin') THEN true
         ELSE COALESCE(has_futures, false)
     END
-WHERE display_name IS NULL OR ccxt_id IS NULL;
+WHERE display_name IS NULL;
+
+-- Set ccxt_id with duplicate handling
+UPDATE exchanges e1 SET ccxt_id = 
+    CASE 
+        WHEN e1.ccxt_id IS NOT NULL THEN e1.ccxt_id
+        ELSE e1.name || CASE 
+            WHEN (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id) > 0 
+            THEN '_' || (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id)::text
+            ELSE ''
+        END
+    END
+WHERE ccxt_id IS NULL;
 
 -- Make required columns NOT NULL after updating
 DO $$
 BEGIN
-    -- Make display_name NOT NULL if it has values
-    IF EXISTS (SELECT 1 FROM exchanges WHERE display_name IS NOT NULL) THEN
+    IF NOT EXISTS (SELECT 1 FROM exchanges WHERE display_name IS NULL) THEN
         ALTER TABLE exchanges ALTER COLUMN display_name SET NOT NULL;
     END IF;
     
-    -- Make ccxt_id NOT NULL if it has values
-    IF EXISTS (SELECT 1 FROM exchanges WHERE ccxt_id IS NOT NULL) THEN
+    IF NOT EXISTS (SELECT 1 FROM exchanges WHERE ccxt_id IS NULL) THEN
         ALTER TABLE exchanges ALTER COLUMN ccxt_id SET NOT NULL;
     END IF;
 END $$;
