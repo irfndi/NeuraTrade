@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"time"
@@ -336,9 +338,11 @@ type AIReasoningRequest struct {
 	LatencyMs     int
 }
 
-// randInt64 generates a random int64.
+// randInt63 generates a cryptographically random int64.
 func (s *AIReasoningService) randInt63() int64 {
-	return time.Now().UnixNano()
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return int64(binary.BigEndian.Uint64(b[:]) & 0x7fffffffffffffff)
 }
 
 // joinStrings joins a slice of strings with a separator.

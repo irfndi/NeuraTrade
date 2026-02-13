@@ -145,7 +145,7 @@ func (r *PaperTradeRecorder) RecordCloseTrade(ctx context.Context, tradeID int64
 	query := `
 		UPDATE paper_trades
 		SET exit_price = $1, fees = fees + $2, pnl = $3, status = 'closed', closed_at = $4, updated_at = NOW()
-		WHERE id = $5
+		WHERE id = $5 AND status = 'open'
 		RETURNING id, user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, exit_price, size, fees, pnl, cost_basis, status, opened_at, closed_at, created_at, updated_at
 	`
 
@@ -171,6 +171,9 @@ func (r *PaperTradeRecorder) RecordCloseTrade(ctx context.Context, tradeID int64
 		&result.UpdatedAt,
 	)
 
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("trade already closed or cancelled: %d", tradeID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to record close trade: %w", err)
 	}
