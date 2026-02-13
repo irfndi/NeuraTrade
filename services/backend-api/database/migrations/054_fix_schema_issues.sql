@@ -135,26 +135,6 @@ BEGIN
     END IF;
 END $$;
 
--- Also update market_data table symbol column if it exists
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_name = 'market_data' AND column_name = 'symbol') THEN
-        ALTER TABLE market_data ALTER COLUMN symbol TYPE VARCHAR(100);
-        RAISE NOTICE 'Updated market_data.symbol column to VARCHAR(100)';
-    END IF;
-END $$;
-
--- Also update funding_rates table symbol column if it exists
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_name = 'funding_rates' AND column_name = 'symbol') THEN
-        ALTER TABLE funding_rates ALTER COLUMN symbol TYPE VARCHAR(100);
-        RAISE NOTICE 'Updated funding_rates.symbol column to VARCHAR(100)';
-    END IF;
-END $$;
-
 -- =====================================================
 -- Record migration
 -- =====================================================
