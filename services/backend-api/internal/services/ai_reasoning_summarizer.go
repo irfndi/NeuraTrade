@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
@@ -91,7 +93,7 @@ func (s *AIReasoningService) GenerateSignalSummary(ctx context.Context, req *AIR
 	}
 
 	summary := &AIReasoningSummary{
-		ID:            fmt.Sprintf("reason-%d-%d", time.Now().UnixNano(), s.randInt63()),
+		ID:            fmt.Sprintf("reason-%s", uuid.New().String()),
 		UserID:        req.UserID,
 		QuestID:       req.QuestID,
 		TradeID:       req.TradeID,
@@ -341,12 +343,5 @@ func (s *AIReasoningService) randInt63() int64 {
 
 // joinStrings joins a slice of strings with a separator.
 func joinStrings(items []string, sep string) string {
-	result := ""
-	for i, item := range items {
-		if i > 0 {
-			result += sep
-		}
-		result += item
-	}
-	return result
+	return strings.Join(items, sep)
 }

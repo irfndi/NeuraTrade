@@ -16,6 +16,7 @@ import (
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 )
 
@@ -237,7 +238,7 @@ func showModel(ctx context.Context, registry *ai.Registry, args []string) error 
 	fmt.Println("Costs (per 1M tokens):")
 	fmt.Printf("  Input: $%s\n", model.Cost.InputCost.StringFixed(4))
 	fmt.Printf("  Output: $%s\n", model.Cost.OutputCost.StringFixed(4))
-	if model.Cost.ReasoningCost.GreaterThan(model.Cost.InputCost) {
+	if model.Cost.ReasoningCost.GreaterThan(decimal.Zero) {
 		fmt.Printf("  Reasoning: $%s\n", model.Cost.ReasoningCost.StringFixed(4))
 	}
 	fmt.Println()
@@ -318,7 +319,10 @@ func routeModel(ctx context.Context, registry *ai.Registry, args []string) error
 			}
 		case "--max-cost":
 			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%f", &constraints.MaxInputCost)
+				var maxCost float64
+				if _, err := fmt.Sscanf(args[i+1], "%f", &maxCost); err == nil {
+					constraints.MaxInputCost = decimal.NewFromFloat(maxCost)
+				}
 			}
 		}
 	}

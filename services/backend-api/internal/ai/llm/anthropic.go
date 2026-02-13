@@ -1,12 +1,14 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -219,9 +221,30 @@ func (c *AnthropicClient) processStream(reader io.ReadCloser, eventChan chan<- S
 	defer close(eventChan)
 	defer func() { _ = reader.Close() }()
 
-	decoder := json.NewDecoder(reader)
+	scanner := bufio.NewScanner(reader)
+	var currentEventType string
 
-	for {
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Skip empty lines
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// Parse event type line: "event: content_block_delta"
+		if strings.HasPrefix(line, "event: ") {
+			currentEventType = strings.TrimPrefix(line, "event: ")
+			continue
+		}
+
+		// Parse data line: "data: {...}"
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		jsonData := strings.TrimPrefix(line, "data: ")
+
 		var event struct {
 			Type         string             `json:"type"`
 			Index        int                `json:"index,omitempty"`
@@ -230,16 +253,18 @@ func (c *AnthropicClient) processStream(reader io.ReadCloser, eventChan chan<- S
 			ContentBlock *anthropicContent  `json:"content_block,omitempty"`
 		}
 
-		if err := decoder.Decode(&event); err != nil {
-			if err == io.EOF {
-				eventChan <- StreamEvent{Type: StreamEventDone, Done: true}
-				return
-			}
+		if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
 			eventChan <- StreamEvent{Type: StreamEventError, Error: err}
-			return
+			continue
 		}
 
-		switch event.Type {
+		// Use the event type from the SSE line if available, otherwise use the JSON type
+		eventType := event.Type
+		if currentEventType != "" {
+			eventType = currentEventType
+		}
+
+		switch eventType {
 		case "content_block_delta":
 			if event.Delta != nil && event.Delta.Text != "" {
 				eventChan <- StreamEvent{
@@ -276,6 +301,14 @@ func (c *AnthropicClient) processStream(reader io.ReadCloser, eventChan chan<- S
 			return
 		}
 	}
+
+	// Handle scanner errors
+	if err := scanner.Err(); err != nil {
+		eventChan <- StreamEvent{Type: StreamEventError, Error: err}
+	}
+
+	// If we exit the loop without seeing message_stop, send done event
+	eventChan <- StreamEvent{Type: StreamEventDone, Done: true}
 }
 
 type anthropicDelta struct {
