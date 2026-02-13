@@ -207,8 +207,7 @@ ON CONFLICT (config_key) DO UPDATE SET
     updated_at = NOW();
 
 -- Migration completion record
-INSERT INTO schema_migrations (filename, applied, applied_at) 
-VALUES ('064_create_ai_usage_table.sql', true, NOW())
-ON CONFLICT (filename) DO UPDATE SET 
-    applied = true,
+INSERT INTO schema_migrations (version, filename, description, applied_at) 
+VALUES (64, '064_create_ai_usage_table.sql', 'Create AI usage table', NOW())
+ON CONFLICT (version) DO UPDATE SET 
     applied_at = NOW();

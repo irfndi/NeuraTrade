@@ -217,10 +217,9 @@ FROM active_futures_arbitrage_opportunities;
 -- Step 5: Record migration
 -- =====================================================
 
-INSERT INTO schema_migrations (filename, applied, applied_at)
-VALUES ('055_fix_column_sizes.sql', true, NOW())
-ON CONFLICT (filename) DO UPDATE SET
-    applied = true,
+INSERT INTO schema_migrations (version, filename, description, applied_at)
+VALUES (55, '055_fix_column_sizes.sql', 'Fix column sizes', NOW())
+ON CONFLICT (version) DO UPDATE SET
     applied_at = NOW();
 
 COMMIT;
