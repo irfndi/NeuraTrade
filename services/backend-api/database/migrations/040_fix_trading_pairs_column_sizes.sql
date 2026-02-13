@@ -11,7 +11,12 @@ DROP VIEW IF EXISTS futures_arbitrage_market_summary CASCADE;
 DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
 DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
 DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
+DROP VIEW IF EXISTS v_trading_pairs CASCADE;
+DROP VIEW IF EXISTS v_trading_pairs_summary CASCADE;
+DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
 DROP VIEW IF EXISTS latest_funding_rates CASCADE;
+DROP VIEW IF EXISTS v_funding_arbitrage_opportunities CASCADE;
+DROP VIEW IF EXISTS v_exchange_trading_pairs CASCADE;
 
 -- Increase symbol column size from VARCHAR(20) to VARCHAR(50)
 ALTER TABLE trading_pairs ALTER COLUMN symbol TYPE VARCHAR(50);
