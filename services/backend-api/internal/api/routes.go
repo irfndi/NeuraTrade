@@ -127,7 +127,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
-	tradingHandler := handlers.NewTradingHandler(db)
+	webSocketHandler := handlers.NewWebSocketHandler(redis)
+
+	// Initialize order execution service (Polymarket CLOB)
+	orderExecConfig := services.OrderExecutionConfig{
+		BaseURL:    getEnvOrDefault("POLYMARKET_CLOB_URL", "https://clob.polymarket.com"),
+		APIKey:     os.Getenv("POLYMARKET_API_KEY"),
+		APISecret:  os.Getenv("POLYMARKET_API_SECRET"),
+		WalletAddr: os.Getenv("POLYMARKET_WALLET_ADDRESS"),
+	}
+	orderExecutionService := services.NewOrderExecutionService(orderExecConfig)
+	tradingHandler := handlers.NewTradingHandler(db, orderExecutionService)
 
 	// Budget handler - configurable via environment variables with defaults from migration 054
 	dailyBudgetStr := getEnvOrDefault("AI_DAILY_BUDGET", "10.00")
@@ -179,6 +189,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			market.GET("/tickers/:exchange", marketHandler.GetBulkTickers)
 			market.GET("/orderbook/:exchange/:symbol", marketHandler.GetOrderBook)
 			market.GET("/workers/status", marketHandler.GetWorkerStatus)
+			market.GET("/ws", webSocketHandler.HandleWebSocket)
+			market.GET("/ws/stats", func(c *gin.Context) {
+				c.JSON(200, webSocketHandler.GetStats())
+			})
 		}
 
 		// Arbitrage routes
