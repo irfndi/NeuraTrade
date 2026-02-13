@@ -251,11 +251,23 @@ func (e *Executor) convertParams(ctx context.Context, params map[string]interfac
 		paramType := tool.fnType.In(i)
 		paramName := ""
 
-		// Try to find parameter name from spec
 		if len(tool.Params) > 0 {
+			idx := 0
 			for name := range tool.Params {
-				paramName = name
-				break
+				if idx == i-1 {
+					paramName = name
+					break
+				}
+				idx++
+			}
+			if paramName == "" {
+				names := make([]string, 0, len(tool.Params))
+				for name := range tool.Params {
+					names = append(names, name)
+				}
+				if i-1 < len(names) {
+					paramName = names[i-1]
+				}
 			}
 		}
 
@@ -294,11 +306,15 @@ func convertValue(value interface{}, targetType reflect.Type) (reflect.Value, er
 			return reflect.ValueOf(str), nil
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			var i int64
-			fmt.Sscanf(str, "%d", &i)
+			if _, err := fmt.Sscanf(str, "%d", &i); err != nil {
+				return reflect.Zero(targetType), fmt.Errorf("failed to parse int: %w", err)
+			}
 			return reflect.ValueOf(int64(i)).Convert(targetType), nil
 		case reflect.Float32, reflect.Float64:
 			var f float64
-			fmt.Sscanf(str, "%f", &f)
+			if _, err := fmt.Sscanf(str, "%f", &f); err != nil {
+				return reflect.Zero(targetType), fmt.Errorf("failed to parse float: %w", err)
+			}
 			return reflect.ValueOf(f).Convert(targetType), nil
 		}
 	}
@@ -336,13 +352,15 @@ func convertValue(value interface{}, targetType reflect.Type) (reflect.Value, er
 		}
 		return slice, nil
 	case map[string]interface{}:
-		// Handle map
 		if targetType.Kind() == reflect.Map {
 			m := reflect.MakeMap(targetType)
 			keyType := targetType.Key()
 			elemType := targetType.Elem()
 			for k, v := range value.(map[string]interface{}) {
-				key, _ := convertValue(k, keyType)
+				key, err := convertValue(k, keyType)
+				if err != nil {
+					return reflect.Value{}, fmt.Errorf("failed to convert map key: %w", err)
+				}
 				elem, err := convertValue(v, elemType)
 				if err != nil {
 					return reflect.Value{}, err
@@ -355,7 +373,10 @@ func convertValue(value interface{}, targetType reflect.Type) (reflect.Value, er
 
 	// Handle JSON raw message
 	if targetType == reflect.TypeOf(json.RawMessage{}) {
-		b, _ := json.Marshal(value)
+		b, err := json.Marshal(value)
+		if err != nil {
+			return reflect.Value{}, fmt.Errorf("failed to marshal JSON: %w", err)
+		}
 		return reflect.ValueOf(json.RawMessage(b)), nil
 	}
 

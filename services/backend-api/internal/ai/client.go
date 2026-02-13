@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -85,7 +86,7 @@ func WithClientLogger(logger *zap.Logger) ClientOption {
 // NewClient creates a new AI client.
 func NewClient(aiRegistry *Registry, opts ...ClientOption) *Client {
 	c := &Client{
-		httpClient: &http.Client{Timeout: 60 * 1000000000}, // 60 seconds
+		httpClient: &http.Client{Timeout: 60 * time.Second},
 		registry:   aiRegistry,
 		logger:     zap.NewNop(),
 		tools:      make(map[string]*ToolDefinition),
