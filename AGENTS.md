@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-12 22:01 Asia/Jakarta
-**Commit:** d2efb34
+**Generated:** 2026-02-13 01:36 Asia/Jakarta
+**Commit:** 8ae6bef
 **Branch:** development
 
 ## OVERVIEW
@@ -83,109 +83,110 @@ make dev-down
 - `services/telegram-service/AGENTS.md`
 
 ## BACKLOG (bd CLI)
-Complete roadmap tracked via `bd` issue tracker (~150 items, 50+ active/open):
+
+**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
 
 ### Ready to Work (No Blockers)
-- `neura-lk1`: Create install.sh shell script
-- `neura-bxg`: One-time auth code generation
-- `neura-myb`: Wallet minimum checks
-- `neura-4ms`: CCXT wrapper extension
-- `neura-wiz`: Gamma API wrapper (market discovery)
-- `neura-yus`: AES-256-GCM encryption for API keys
-- `neura-47g`: AI provider registry with models.dev
-- `neura-20g`: skill.md file loader
-- `neura-2iq`: Analyst agent role
-- `neura-6tk`: Event-driven quest triggers
+- `neura-yzv`: CLI bootstrap command
+- `neura-5of`: Bind local operator profile to Telegram chat
+- `neura-aav`: Connectivity checks for all configured providers
+- `neura-xxy`: WebSocket market data subscription
+- `neura-qts`: CLOB API wrapper (order execution)
+- `neura-7et`: Build prompt builder from skill.md + context
+- `neura-r1d`: Progressive disclosure system
+- `neura-9m3`: Trader agent role
+- `neura-q4j`: Max drawdown halt
+- `neura-lue`: Expose readiness endpoints
 
-### Infrastructure & DevOps
-- `neura-lk1` → `neura-yzv`: CLI bootstrap command
+### Recently Completed (✓)
+- ✓ `neura-myb`: Wallet minimum checks
+- ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
+- ✓ `neura-6tk`: Event-driven quest triggers
+- ✓ `neura-2iq`: Analyst agent role
+- ✓ `neura-fs8`: API key validation (permissions)
+- ✓ `neura-2n4`: Quest state persistence
+- ✓ `neura-e8u`: Daily loss cap
+- ✓ `neura-cha`: Sum-to-one arbitrage skill.md
+- ✓ `neura-2xe`: Position snapshot tool
+- ✓ `neura-lue`: Readiness endpoints
+- ✓ `neura-4eo`: Arbitrage primitives
+- ✓ `neura-1s5`: Risk primitives
+- ✓ `neura-47g`: AI provider registry with models.dev
+- ✓ `neura-yus`: AES-256-GCM encryption for API keys
+- ✓ `neura-za8`: Rate limit monitoring
+- ✓ `neura-px6`: Security audits (gosec, gitleaks)
+- ✓ `neura-1nz`: Cron-based quest scheduling
+- ✓ `neura-l70a`: Refactor talib wrapper to goflux
+- ✓ `neura-161`: Distributed locks (Redis)
+- ✓ `neura-byz`: Goroutine pool with concurrency limits
+- ✓ `neura-axx`: Action streaming format
+- ✓ `neura-nh5`: Risk event notifications
+- ✓ `neura-wiz`: Gamma API wrapper (Polymarket)
+- ✓ `neura-5z3`: Daily budget enforcement
+- ✓ `neura-7mj`: Monthly budget enforcement
+- ✓ `neura-94c`: /status budget display
+- ✓ `neura-l2z`: place_order tool endpoint
+- ✓ `neura-wz7`: cancel_order tool endpoint
+- ✓ `neura-hgk`: /begin and /pause handlers
+- ✓ `neura-ik7`: /summary and /performance handlers
+- ✓ `neura-ilw`: /liquidate and /liquidate_all handlers
+- ✓ `neura-09y`: Wallet management commands
+- ✓ `neura-4gk`: Quest and monitoring commands
+- ✓ `neura-1p0`: /doctor diagnostic handler
+- ✓ `neura-9ai`: Intrusion detection
+- ✓ `neura-32w`: Fund with minimal capital (USDC)
+
+### Infrastructure & DevOps (Blocked)
 - `neura-354`: CI/CD pipeline setup
 - `neura-qfp`: Production Docker Compose
 - `neura-wqa`: QuantVPS deployment
 - `neura-q6o`: Containerize agent and infra services
 
-### Exchange Integration
+### Exchange Integration (Blocked)
 - `neura-4ms`: CCXT wrapper extension
 - `neura-xxy`: WebSocket market data (depends on neura-4ms)
 - `neura-1b6`: Rate limit management (depends on neura-xxy)
-- `neura-wiz`: Gamma API wrapper (market discovery)
-- `neura-qts`: CLOB API wrapper (order execution)
 - `neura-adu`: Data API wrapper (positions/balances)
 - `neura-4p6`: Exchange resilience monitoring
-- `neura-za8`: Rate limit monitoring
 
-### Security & Encryption
-- `neura-yus`: AES-256-GCM encryption
+### Security & Encryption (Blocked)
 - `neura-c7r`: Key masking in logs/Telegram
-- `neura-px6`: Security audits (gosec, gitleaks)
-- `neura-9ai`: Intrusion detection
+- `neura-ydp`: Operator identity encryption (Argon2)
 
-### Quest & Agent System
-- `neura-1nz`: ✅ Cron-based quest scheduling (COMPLETED)
-- `neura-6tk`: Event-driven quest triggers
-- `neura-2iq`: Analyst agent role
-- `neura-9m3`: Trader agent role
-- `neura-2n4`: Quest state persistence
+### Quest & Agent System (Blocked)
 - `neura-bxg`: One-time auth code → `neura-5of`: Telegram profile binding
+- `neura-im9`: Quest progress updates
 
-### Trading Engine
+### Trading Engine (Blocked)
 - `neura-cd1`: Arbitrage trigger detection
-- `neura-cha`: Sum-to-one arbitrage skill.md
 - `neura-sa4`: Order book imbalance detection
 - `neura-we2`: Scalping skill.md codification
 - `neura-a7r`: Tight stop-loss execution
 - `neura-1wi`: FOK order execution
-- `neura-l70a`: Refactor talib wrapper to goflux
 
-### Risk Management
-- `neura-myb`: Wallet minimum checks → `neura-fs8`: API key permissions
+### Risk Management (Blocked)
 - `neura-8y8`: Emergency rollbacks
 - `neura-kxq`: Kill switch monitoring
-- `neura-e8u`: Daily loss cap
 - `neura-bol`: Consecutive-loss pause
-- `neura-q4j`: Max drawdown halt
 - `neura-3ms`: Position-size throttle
 
-### Paper Trading
+### Paper Trading (Blocked)
 - `neura-u4w`: Paper execution simulation
 - `neura-8de`: Virtual account tracking
 - `neura-mm5`: Paper trade recording
-- `neura-32w`: Fund with minimal capital (USDC)
 
-### Budget & Reporting
-- `neura-5z3`: Daily budget enforcement
-- `neura-7mj`: Monthly budget enforcement
-- `neura-94c`: /status budget display
+### Budget & Reporting (Blocked)
 - `neura-fvk`: Fund milestone alerts
 
-### Telegram Bot Commands
-- `neura-hgk`: /begin and /pause handlers
-- `neura-ik7`: /summary and /performance handlers
-- `neura-ilw`: /liquidate and /liquidate_all handlers
-- `neura-09y`: Wallet management commands
-- `neura-4gk`: Quest and monitoring commands
-- `neura-1p0`: /doctor diagnostic handler
-
-### Order Management
-- `neura-l2z`: place_order tool endpoint
-- `neura-wz7`: cancel_order tool endpoint
-- `neura-2xe`: Position snapshot tool
-- `neura-txu`: Controlled liquidation tool
-
-### Notifications & Streaming
-- `neura-nh5`: Risk event notifications
-- `neura-im9`: Quest progress updates
-- `neura-axx`: Action streaming format
+### Notifications & Streaming (Blocked)
 - `neura-bri`: AI reasoning summaries
 
-### Technical Infrastructure
-- `neura-161`: Distributed locks
-- `neura-byz`: Goroutine pool with concurrency limits
+### Technical Infrastructure (Blocked)
 - `neura-zn8c`: Replace in-memory state with persistent storage
-- `neura-lue`: Expose readiness endpoints
-- `neura-1s5`: Expose risk primitives
-- `neura-4eo`: Expose arbitrage primitives
 - `neura-duw`: Expose cleanup endpoints
+
+### Order Management (Blocked)
+- `neura-txu`: Controlled liquidation tool
 
 ## NOTES
 - LSP symbol tooling may be unavailable locally (`gopls` missing), so rely on grep/glob/read patterns for discovery.

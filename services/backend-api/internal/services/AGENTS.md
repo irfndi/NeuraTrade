@@ -30,61 +30,67 @@ go test ./internal/services/... -run TestArbitrage
 - Common patterns: table-driven tests, mock dependencies, setup helpers.
 
 ## BACKLOG (bd CLI)
-Complete services layer roadmap tracked via `bd` (~40 items):
 
-### Quest & Agent System
-- `neura-1nz`: ✅ Cron-based quest scheduling (COMPLETED)
-- `neura-6tk`: Event-driven quest triggers (READY, no blockers)
-- `neura-2iq`: Analyst agent role implementation (READY)
-- `neura-9m3`: Trader agent role implementation
-- `neura-bxg`: One-time auth code generation (READY)
-- `neura-2n4`: Quest state persistence (blocked by neura-6tk)
-- `neura-4gk`: Quest and monitoring commands
+**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+
+### Ready to Work (No Blockers)
+- `neura-7et`: Build prompt builder from skill.md + context
+
+### Recently Completed (✓)
+- ✓ `neura-myb`: Wallet minimum checks
+- ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
+- ✓ `neura-6tk`: Event-driven quest triggers
+- ✓ `neura-2iq`: Analyst agent role
+- ✓ `neura-fs8`: API key validation (permissions)
+- ✓ `neura-2n4`: Quest state persistence
+- ✓ `neura-e8u`: Daily loss cap
+- ✓ `neura-cha`: Sum-to-one arbitrage skill.md
+- ✓ `neura-2xe`: Position snapshot tool
+- ✓ `neura-lue`: Readiness endpoints
+- ✓ `neura-1nz`: Cron-based quest scheduling
+- ✓ `neura-l70a`: Refactor talib wrapper to goflux
+- ✓ `neura-161`: Distributed locks (Redis)
+- ✓ `neura-byz`: Goroutine pool with concurrency limits
+- ✓ `neura-axx`: Action streaming format
+- ✓ `neura-nh5`: Risk event notifications
+- ✓ `neura-5z3`: Daily budget enforcement
+- ✓ `neura-7mj`: Monthly budget enforcement
+- ✓ `neura-94c`: /status budget display
+- ✓ `neura-l2z`: place_order tool endpoint
+- ✓ `neura-wz7`: cancel_order tool endpoint
+
+### Quest & Agent System (Blocked)
+- `neura-9m3`: Trader agent role
 - `neura-im9`: Quest progress update notifications
 
-### Signal & Analysis
+### Signal & Analysis (Blocked)
 - `neura-cd1`: Arbitrage trigger detection engine
 - `neura-sa4`: Order book imbalance detection
-- `neura-cha`: Sum-to-one arbitrage skill.md codification
 - `neura-we2`: Scalping skill.md codification
 - `neura-bri`: AI reasoning summaries for trades
-- `neura-l70a`: Refactor talib wrapper to goflux
 
-### Risk & Monitoring
+### Risk & Monitoring (Blocked)
 - `neura-8y8`: Emergency rollback system
 - `neura-kxq`: Kill switch monitoring
-- `neura-nh5`: Risk event notifications
 - `neura-fvk`: Fund milestone alerts
-- `neura-e8u`: Daily loss cap
 - `neura-bol`: Consecutive-loss pause
 - `neura-q4j`: Max drawdown halt
 - `neura-3ms`: Position-size throttle
 - `neura-9ai`: Intrusion detection
 
-### Execution & Orders
+### Execution & Orders (Blocked)
 - `neura-a7r`: Tight stop-loss execution
 - `neura-1wi`: FOK (Fill or Kill) order execution
-- `neura-l2z`: place_order tool endpoint
-- `neura-wz7`: cancel_order tool endpoint
 - `neura-txu`: Controlled liquidation tool
-- `neura-2xe`: Position snapshot tool
 
-### Paper Trading
+### Paper Trading (Blocked)
 - `neura-u4w`: Paper execution simulation
 - `neura-8de`: Virtual account tracking
 - `neura-mm5`: Paper trade recording
 - `neura-32w`: Fund with minimal capital (USDC)
 
-### Budget & Reporting
-- `neura-5z3`: Daily budget enforcement
-- `neura-7mj`: Monthly budget enforcement
-- `neura-94c`: /status budget display
-
-### Infrastructure
-- `neura-161`: Distributed locks
-- `neura-byz`: Goroutine pool with concurrency limits
+### Infrastructure (Blocked)
 - `neura-zn8c`: Replace in-memory state with persistent storage
-- `neura-axx`: Action streaming format
 
 ## ANTI-PATTERNS
 - Expanding already-large orchestrator files with unrelated concerns.

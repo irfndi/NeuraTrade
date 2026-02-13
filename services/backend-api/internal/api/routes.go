@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +13,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/shopspring/decimal"
 )
 
 // HealthResponse represents the response structure for health check endpoints.
@@ -38,6 +40,13 @@ type Services struct {
 type routeDB interface {
 	services.DBPool
 	HealthCheck(ctx context.Context) error
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
 
 // SetupRoutes configures all the HTTP routes for the application.
@@ -120,6 +129,28 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	tradingHandler := handlers.NewTradingHandler(db)
 
+	// Budget handler - configurable via environment variables with defaults from migration 054
+	dailyBudgetStr := getEnvOrDefault("AI_DAILY_BUDGET", "10.00")
+	monthlyBudgetStr := getEnvOrDefault("AI_MONTHLY_BUDGET", "200.00")
+
+	dailyBudget, err := decimal.NewFromString(dailyBudgetStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid AI_DAILY_BUDGET value '%s', using default 10.00", dailyBudgetStr)
+		dailyBudget = decimal.NewFromFloat(10.00)
+	}
+
+	monthlyBudget, err := decimal.NewFromString(monthlyBudgetStr)
+	if err != nil {
+		log.Printf("WARNING: Invalid AI_MONTHLY_BUDGET value '%s', using default 200.00", monthlyBudgetStr)
+		monthlyBudget = decimal.NewFromFloat(200.00)
+	}
+
+	budgetHandler := handlers.NewBudgetHandler(
+		database.NewAIUsageRepository(db),
+		dailyBudget,
+		monthlyBudget,
+	)
+
 	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
 	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
 
@@ -152,6 +183,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			arbitrage.GET("/opportunities", arbitrageHandler.GetArbitrageOpportunities)
 			arbitrage.GET("/history", arbitrageHandler.GetArbitrageHistory)
+			arbitrage.GET("/stats", arbitrageHandler.GetArbitrageStats)
 			// Funding rate arbitrage
 			arbitrage.GET("/funding", arbitrageHandler.GetFundingRateArbitrage)
 			arbitrage.GET("/funding-rates/:exchange", arbitrageHandler.GetFundingRates)
@@ -237,6 +269,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			data.POST("/cleanup", cleanupHandler.TriggerCleanup)
 		}
 
+		// Risk management
+		risk := v1.Group("/risk")
+		{
+			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
+		}
+
 		trading := v1.Group("/trading")
 		trading.Use(authMiddleware.RequireAuth())
 		{
@@ -245,7 +283,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			trading.POST("/liquidate", tradingHandler.Liquidate)
 			trading.POST("/liquidate_all", tradingHandler.LiquidateAll)
 			trading.GET("/positions", tradingHandler.ListPositions)
+			trading.GET("/positions/snapshot", tradingHandler.GetPositionSnapshot)
 			trading.GET("/positions/:position_id", tradingHandler.GetPosition)
+		}
+
+		budget := v1.Group("/budget")
+		budget.Use(authMiddleware.RequireAuth())
+		{
+			budget.GET("/status", budgetHandler.GetBudgetStatus)
+			budget.GET("/check", budgetHandler.CheckBudget)
 		}
 
 		// Exchange management

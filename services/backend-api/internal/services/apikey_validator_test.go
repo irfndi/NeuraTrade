@@ -100,8 +100,12 @@ func TestAPIKeyPermissionValidator_CalculateRiskScore(t *testing.T) {
 func TestAPIKeyPermissionValidator_Metrics(t *testing.T) {
 	validator := NewAPIKeyPermissionValidator(nil, DefaultAPIKeyPermissionConfig())
 
-	_ = validator.ValidateKey(context.Background(), "key1", "binance", []APIKeyPermission{PermissionTrade})
-	_ = validator.ValidateKey(context.Background(), "key2", "binance", []APIKeyPermission{PermissionWithdraw})
+	if _, err := validator.ValidateKey(context.Background(), "key1", "binance", []APIKeyPermission{PermissionTrade}); err != nil {
+		t.Errorf("ValidateKey key1 failed: %v", err)
+	}
+	if _, err := validator.ValidateKey(context.Background(), "key2", "binance", []APIKeyPermission{PermissionWithdraw}); err != nil {
+		t.Errorf("ValidateKey key2 failed: %v", err)
+	}
 
 	metrics := validator.GetMetrics()
 

@@ -37,26 +37,29 @@ bun test
 
 ## BACKLOG (bd CLI)
 
-CCXT service roadmap tracked via `bd` (~8 items):
+**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
 
-### Ready to Work
+### Ready to Work (No Blockers)
+
+- `neura-xxy`: WebSocket market data subscription
+- `neura-qts`: CLOB API wrapper for order execution
+
+### Recently Completed (✓)
+
+- ✓ `neura-wiz`: Gamma API wrapper for market discovery (Polymarket)
+- ✓ `neura-za8`: Rate limit monitoring and alerting
+
+### WebSocket & Real-time Data (Blocked)
 
 - `neura-4ms`: Extend CCXT wrapper functionality (backend-api integration)
 
-### WebSocket & Real-time Data
-
-- `neura-xxy`: WebSocket market data subscription (depends on neura-4ms)
-- `neura-wiz`: Gamma API wrapper for market discovery
-
-### Rate Limiting & Resilience
+### Rate Limiting & Resilience (Blocked)
 
 - `neura-1b6`: Token bucket rate limit management (depends on neura-xxy)
-- `neura-za8`: Rate limit monitoring and alerting
 - `neura-4p6`: Exchange resilience monitoring
 
-### API Wrappers
+### API Wrappers (Blocked)
 
-- `neura-qts`: CLOB API wrapper for order execution
 - `neura-adu`: Data API wrapper for positions/balances
 
 ## ANTI-PATTERNS

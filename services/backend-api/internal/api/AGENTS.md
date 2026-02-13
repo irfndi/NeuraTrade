@@ -35,44 +35,50 @@ go test ./internal/api/handlers/... -run TestArbitrage
 - Use `test_helpers.go` and `testmocks/` for shared setup/mocks.
 
 ## BACKLOG (bd CLI)
-API layer roadmap tracked via `bd` (~25 items):
 
-### Ready to Work
-- `neura-wiz`: Gamma API wrapper endpoints (market discovery)
-- `neura-2iq`: Analyst agent role API endpoints
+**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
 
-### Order Management Endpoints
-- `neura-l2z`: place_order tool endpoint
-- `neura-wz7`: cancel_order tool endpoint
-- `neura-2xe`: Position snapshot tool endpoint
+### Ready to Work (No Blockers)
+- `neura-7et`: Build prompt builder from skill.md + context
+- `neura-r1d`: Progressive disclosure system
+
+### Recently Completed (✓)
+- ✓ `neura-myb`: Wallet minimum checks endpoint
+- ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
+- ✓ `neura-6tk`: Event-driven quest trigger endpoints
+- ✓ `neura-2iq`: Analyst agent role API endpoints
+- ✓ `neura-fs8`: API key validation endpoint
+- ✓ `neura-2n4`: Quest state persistence endpoints
+- ✓ `neura-e8u`: Daily loss cap endpoint
+- ✓ `neura-cha`: Sum-to-one arbitrage skill.md endpoint
+- ✓ `neura-2xe`: Position snapshot tool endpoint
+- ✓ `neura-lue`: Readiness endpoints
+- ✓ `neura-4eo`: Arbitrage primitives endpoint
+- ✓ `neura-1s5`: Risk primitives endpoint
+- ✓ `neura-wiz`: Gamma API wrapper endpoints (Polymarket)
+- ✓ `neura-94c`: /status budget display endpoint
+- ✓ `neura-l2z`: place_order tool endpoint
+- ✓ `neura-wz7`: cancel_order tool endpoint
+- ✓ `neura-1p0`: /doctor diagnostic handler
+- ✓ `neura-4gk`: Quest and monitoring commands
+- ✓ `neura-09y`: Wallet management commands
+- ✓ `neura-ilw`: /liquidate and /liquidate_all handlers
+- ✓ `neura-ik7`: /summary and /performance handlers
+- ✓ `neura-hgk`: /begin and /pause handlers
+- ✓ `neura-axx`: Action streaming format endpoint
+
+### Order Management Endpoints (Blocked)
 - `neura-txu`: Controlled liquidation tool endpoint
 - `neura-1wi`: FOK order execution endpoint
 
-### Wallet & Account Endpoints
-- `neura-09y`: Wallet management commands
-- `neura-myb`: Wallet minimum checks endpoint
-- `neura-94c`: /status budget display endpoint
-
-### Risk & Monitoring Endpoints
-- `neura-nh5`: Risk event notification endpoints
-- `neura-1s5`: Expose risk primitives via API
-- `neura-4eo`: Expose arbitrage primitives via API
-- `neura-lue`: Expose readiness endpoints
+### Risk & Monitoring Endpoints (Blocked)
 - `neura-duw`: Expose cleanup endpoints
-- `neura-1p0`: /doctor diagnostic handler
 
-### Quest & Agent Endpoints
-- `neura-4gk`: Quest and monitoring commands
+### Quest & Agent Endpoints (Blocked)
 - `neura-im9`: Quest progress update endpoints
-- `neura-6tk`: Event-driven quest trigger endpoints
-- `neura-bxg`: One-time auth code generation endpoint
 
-### Reporting Endpoints
-- `neura-ik7`: /summary and /performance handlers
-- `neura-ilw`: /liquidate and /liquidate_all handlers
-- `neura-hgk`: /begin and /pause handlers
+### Reporting Endpoints (Blocked)
 - `neura-fvk`: Fund milestone alert endpoints
-- `neura-axx`: Action streaming format endpoint
 
 ## ANTI-PATTERNS
 - Writing DB queries directly in handlers instead of repositories/services.

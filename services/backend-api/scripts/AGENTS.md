@@ -34,29 +34,31 @@ bash scripts/health-monitor-enhanced.sh check
 ```
 
 ## BACKLOG (bd CLI)
-Scripts roadmap tracked via `bd` (~15 items):
 
-### Infrastructure & Deployment
-- `neura-lk1`: Create install.sh shell script (READY - bootstrap installation)
+**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+
+### Ready to Work (No Blockers)
+- `neura-yzv`: NeuraTrade CLI bootstrap command
+
+### Recently Completed (✓)
+- ✓ `neura-px6`: Security audit scripts (gosec, gitleaks integration)
+- ✓ `neura-za8`: Rate limit monitoring dashboard scripts
+- ✓ `neura-1p0`: /doctor diagnostic automation scripts
+- ✓ `neura-9ai`: Intrusion detection monitoring scripts
+- ✓ `neura-lue`: Enhanced readiness check scripts
+
+### Infrastructure & Deployment (Blocked)
 - `neura-354`: CI/CD pipeline setup scripts
 - `neura-qfp`: Production Docker Compose configuration
 - `neura-wqa`: QuantVPS deployment scripts
 - `neura-q6o`: Containerize agent and infrastructure services
 
-### Security & Monitoring
-- `neura-px6`: Security audit scripts (gosec, gitleaks integration)
-- `neura-9ai`: Intrusion detection monitoring scripts
+### Security & Monitoring (Blocked)
 - `neura-kxq`: Kill switch monitoring and activation scripts
 - `neura-8y8`: Emergency rollback procedures
 
-### Health & Operations
-- `neura-lue`: Enhanced readiness check scripts
+### Health & Operations (Blocked)
 - `neura-4p6`: Exchange resilience monitoring scripts
-- `neura-za8`: Rate limit monitoring dashboard scripts
-- `neura-1p0`: /doctor diagnostic automation scripts
-
-### Installation
-- `neura-lk1` → `neura-yzv`: NeuraTrade CLI bootstrap command
 
 ## ANTI-PATTERNS
 - Running operational scripts without validating env inputs.

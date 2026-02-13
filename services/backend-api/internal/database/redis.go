@@ -27,8 +27,9 @@ type ErrorRecoveryManager interface {
 
 // RedisClient wraps a Redis client with enhanced logging and error tracking.
 type RedisClient struct {
-	Client *redis.Client
-	logger *zaplogrus.Logger
+	Client     *redis.Client
+	logger     *zaplogrus.Logger
+	DefaultTTL time.Duration
 }
 
 // NewRedisConnection creates a new Redis connection.
@@ -59,11 +60,34 @@ func NewRedisConnection(cfg config.RedisConfig) (*RedisClient, error) {
 func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager ErrorRecoveryManager) (*RedisClient, error) {
 	logger := zaplogrus.New()
 
-	rdb := redis.NewClient(&redis.Options{
+	// Build Redis client options with optimized defaults
+	opts := &redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Password: cfg.Password,
 		DB:       cfg.DB,
-	})
+	}
+
+	// Apply connection pool optimizations
+	if cfg.PoolSize > 0 {
+		opts.PoolSize = cfg.PoolSize
+	}
+	if cfg.MinIdleConns > 0 {
+		opts.MinIdleConns = cfg.MinIdleConns
+	}
+	if cfg.DialTimeout > 0 {
+		opts.DialTimeout = time.Duration(cfg.DialTimeout) * time.Second
+	}
+	if cfg.ReadTimeout > 0 {
+		opts.ReadTimeout = time.Duration(cfg.ReadTimeout) * time.Second
+	}
+	if cfg.WriteTimeout > 0 {
+		opts.WriteTimeout = time.Duration(cfg.WriteTimeout) * time.Second
+	}
+	if cfg.PoolTimeout > 0 {
+		opts.PoolTimeout = time.Duration(cfg.PoolTimeout) * time.Second
+	}
+
+	rdb := redis.NewClient(opts)
 
 	// Add Sentry hook for error tracking
 	rdb.AddHook(&RedisSentryHook{})
@@ -89,9 +113,16 @@ func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager Er
 
 	logger.Info("Successfully connected to Redis")
 
+	// Set default TTL from config (0 means no expiration)
+	defaultTTL := time.Duration(0)
+	if cfg.DefaultTTL > 0 {
+		defaultTTL = time.Duration(cfg.DefaultTTL) * time.Second
+	}
+
 	return &RedisClient{
-		Client: rdb,
-		logger: logger,
+		Client:     rdb,
+		logger:     logger,
+		DefaultTTL: defaultTTL,
 	}, nil
 }
 
@@ -145,6 +176,10 @@ func (r *RedisClient) HealthCheck(ctx context.Context) error {
 func (r *RedisClient) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	if r.Client == nil {
 		return fmt.Errorf("redis client is nil")
+	}
+	// Use default TTL if no expiration specified
+	if expiration == 0 && r.DefaultTTL > 0 {
+		expiration = r.DefaultTTL
 	}
 	return r.Client.Set(ctx, key, value, expiration).Err()
 }
