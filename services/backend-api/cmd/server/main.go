@@ -242,6 +242,14 @@ func run() error {
 	// Initialize notification service
 	notificationService := services.NewNotificationService(db, redisClient, cfg.Telegram.ServiceURL, cfg.Telegram.GrpcAddress, cfg.Telegram.AdminAPIKey)
 
+	// Initialize wallet validator
+	walletValidatorConfig := services.WalletValidatorConfig{
+		MinimumUSDCBalance:         decimal.NewFromFloat(cfg.Wallet.MinimumUSDCBalance),
+		MinimumPortfolioValue:      decimal.NewFromFloat(cfg.Wallet.MinimumPortfolioValue),
+		MinimumExchangeConnections: cfg.Wallet.MinimumExchangeConnections,
+	}
+	walletValidator := services.NewWalletValidator(db, walletValidatorConfig)
+
 	// Initialize circuit breaker for signal processing
 	signalProcessorCircuitBreaker := services.NewCircuitBreaker(
 		"signal_processor",
@@ -298,7 +306,7 @@ func run() error {
 	router.Use(gin.Recovery())
 
 	// Setup routes
-	api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, authMiddleware)
+	api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, authMiddleware, walletValidator)
 
 	// Create HTTP server with security timeouts
 	srv := &http.Server{

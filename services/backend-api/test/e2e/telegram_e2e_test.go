@@ -100,7 +100,7 @@ func (s *TelegramE2ETestSuite) SetupSuite() {
 	cacheAnalyticsService := services.NewCacheAnalyticsService(nil)
 
 	// Setup routes
-	api.SetupRoutes(s.router, s.db, s.redisClient, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, cfg, authMiddleware)
+	api.SetupRoutes(s.router, s.db, s.redisClient, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, cfg, authMiddleware, nil)
 
 	// Create test user
 	s.testChatID = fmt.Sprintf("e2e_test_%d", time.Now().UnixNano())
