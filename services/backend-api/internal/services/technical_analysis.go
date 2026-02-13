@@ -6,7 +6,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/cinar/indicator/v2/asset"
 	"github.com/getsentry/sentry-go"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/irfndi/neuratrade/internal/talib"
@@ -911,29 +910,4 @@ func (tas *TechnicalAnalysisService) fetchPriceData(ctx context.Context, symbol,
 	}
 
 	return priceData, nil
-}
-
-// convertToSnapshots adapts the internal PriceData format to the format required by the indicator library.
-// nolint:unused // used in tests (technical_analysis_test.go:519), but tests excluded from linting
-func (tas *TechnicalAnalysisService) convertToSnapshots(priceData *PriceData) []*asset.Snapshot {
-	snapshots := make([]*asset.Snapshot, len(priceData.Close))
-
-	for i := range priceData.Close {
-		open, _ := priceData.Open[i].Float64()
-		high, _ := priceData.High[i].Float64()
-		low, _ := priceData.Low[i].Float64()
-		close, _ := priceData.Close[i].Float64()
-		volume, _ := priceData.Volume[i].Float64()
-
-		snapshots[i] = &asset.Snapshot{
-			Date:   priceData.Timestamps[i],
-			Open:   open,
-			High:   high,
-			Low:    low,
-			Close:  close,
-			Volume: volume,
-		}
-	}
-
-	return snapshots
 }

@@ -510,30 +510,6 @@ func TestDetermineOverallSignal(t *testing.T) {
 	}
 }
 
-// Helper function tests
-
-func TestConvertToSnapshots(t *testing.T) {
-	service, _ := setupTestService()
-	priceData := generateTestPriceData(10)
-
-	snapshots := service.convertToSnapshots(priceData)
-
-	assert.Len(t, snapshots, 10)
-	for i, snapshot := range snapshots {
-		assert.Equal(t, priceData.Timestamps[i], snapshot.Date)
-		open, _ := priceData.Open[i].Float64()
-		assert.Equal(t, open, snapshot.Open)
-		high, _ := priceData.High[i].Float64()
-		assert.Equal(t, high, snapshot.High)
-		low, _ := priceData.Low[i].Float64()
-		assert.Equal(t, low, snapshot.Low)
-		close, _ := priceData.Close[i].Float64()
-		assert.Equal(t, close, snapshot.Close)
-		volume, _ := priceData.Volume[i].Float64()
-		assert.Equal(t, volume, snapshot.Volume)
-	}
-}
-
 // Integration-style tests
 
 func TestCalculateAllIndicators(t *testing.T) {

@@ -8,13 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cinar/indicator/v2/asset"
-	"github.com/cinar/indicator/v2/helper"
-	"github.com/cinar/indicator/v2/momentum"
-	"github.com/cinar/indicator/v2/trend"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/talib"
 	"github.com/shopspring/decimal"
 
 	"github.com/irfndi/neuratrade/internal/config"
@@ -312,7 +309,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 		return nil, err
 	}
 
-	// Convert decimal prices to float64 for cinar/indicator
+	// Convert decimal prices to float64 for talib (goflux)
 	prices := make([]float64, len(input.Prices))
 	volumes := make([]float64, len(input.Volumes))
 	for i, price := range input.Prices {
@@ -320,25 +317,6 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 		if i < len(input.Volumes) {
 			volumes[i], _ = input.Volumes[i].Float64()
 		}
-	}
-
-	// Create asset snapshots for cinar/indicator
-	snapshots := make([]*asset.Snapshot, len(prices))
-	for i := range prices {
-		snapshots[i] = &asset.Snapshot{
-			Date:   input.Timestamps[i],
-			Open:   prices[i],
-			High:   prices[i],
-			Low:    prices[i],
-			Close:  prices[i],
-			Volume: volumes[i],
-		}
-	}
-
-	// Extract prices from snapshots
-	prices = make([]float64, len(snapshots))
-	for i, snapshot := range snapshots {
-		prices[i] = snapshot.Close
 	}
 
 	// Calculate technical indicators
@@ -618,36 +596,25 @@ func (sa *SignalAggregator) calculateTechnicalIndicators(prices []float64) map[s
 		return indicators
 	}
 
-	// Calculate SMA 20 and 50
-	sma20Indicator := trend.NewSmaWithPeriod[float64](20)
-	sma50Indicator := trend.NewSmaWithPeriod[float64](50)
-	sma20 := helper.ChanToSlice(sma20Indicator.Compute(helper.SliceToChan(prices)))
-	sma50 := helper.ChanToSlice(sma50Indicator.Compute(helper.SliceToChan(prices)))
+	// Calculate SMA 20 and 50 using goflux
+	sma20 := talib.Sma(prices, 20)
+	sma50 := talib.Sma(prices, 50)
 
-	// Calculate EMA 12
-	ema12Indicator := trend.NewEmaWithPeriod[float64](12)
-	ema12 := helper.ChanToSlice(ema12Indicator.Compute(helper.SliceToChan(prices)))
+	// Calculate EMA 12 using goflux
+	ema12 := talib.Ema(prices, 12)
 
-	// Calculate RSI 14
-	rsiIndicator := momentum.NewRsiWithPeriod[float64](14)
-	rsi := helper.ChanToSlice(rsiIndicator.Compute(helper.SliceToChan(prices)))
+	// Calculate RSI 14 using goflux
+	rsi := talib.Rsi(prices, 14)
 
-	// Calculate MACD
-	macdIndicator := trend.NewMacdWithPeriod[float64](12, 26, 9)
-	macdLine, signalLine := macdIndicator.Compute(helper.SliceToChan(prices))
-	signalDone := make(chan struct{})
-	go func() {
-		_ = helper.ChanToSlice(signalLine)
-		close(signalDone)
-	}()
-	macd := helper.ChanToSlice(macdLine)
-	<-signalDone
+	// Calculate MACD using goflux
+	macdLine, macdSignal, _ := talib.Macd(prices, 12, 26, 9)
 
 	indicators["sma_20"] = sma20
 	indicators["sma_50"] = sma50
 	indicators["ema_12"] = ema12
 	indicators["rsi_14"] = rsi
-	indicators["macd_line"] = macd
+	indicators["macd_line"] = macdLine
+	indicators["macd_signal"] = macdSignal
 
 	return indicators
 }
