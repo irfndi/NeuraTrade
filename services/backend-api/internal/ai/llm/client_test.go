@@ -30,10 +30,9 @@ func TestNewOpenAIClient(t *testing.T) {
 }
 
 func TestOpenAIClientComplete(t *testing.T) {
+	var authHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-key" {
-			t.Error("Expected Authorization header to be set")
-		}
+		authHeader = r.Header.Get("Authorization")
 
 		resp := openAIResponse{
 			ID:      "test-id",
@@ -76,6 +75,13 @@ func TestOpenAIClientComplete(t *testing.T) {
 	}
 
 	resp, err := client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+
+	if authHeader != "Bearer test-key" {
+		t.Error("Expected Authorization header to be set")
+	}
 	if err != nil {
 		t.Fatalf("Complete failed: %v", err)
 	}
@@ -189,10 +195,9 @@ func TestNewAnthropicClient(t *testing.T) {
 }
 
 func TestAnthropicClientComplete(t *testing.T) {
+	var apiKeyHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("x-api-key") != "test-key" {
-			t.Error("Expected x-api-key header to be set")
-		}
+		apiKeyHeader = r.Header.Get("x-api-key")
 
 		resp := anthropicResponse{
 			ID:    "msg-123",
@@ -233,6 +238,10 @@ func TestAnthropicClientComplete(t *testing.T) {
 	resp, err := client.Complete(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Complete failed: %v", err)
+	}
+
+	if apiKeyHeader != "test-key" {
+		t.Error("Expected x-api-key header to be set")
 	}
 
 	if resp.Message.Content != "Hello from Claude!" {

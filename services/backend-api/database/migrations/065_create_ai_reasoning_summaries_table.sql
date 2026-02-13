@@ -20,9 +20,9 @@ CREATE TABLE IF NOT EXISTS ai_reasoning_summaries (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX idx_ai_reasoning_user_id ON ai_reasoning_summaries(user_id);
-CREATE INDEX idx_ai_reasoning_quest_id ON ai_reasoning_summaries(quest_id);
-CREATE INDEX idx_ai_reasoning_trade_id ON ai_reasoning_summaries(trade_id);
-CREATE INDEX idx_ai_reasoning_session_id ON ai_reasoning_summaries(session_id);
-CREATE INDEX idx_ai_reasoning_category ON ai_reasoning_summaries(category);
-CREATE INDEX idx_ai_reasoning_created_at ON ai_reasoning_summaries(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_reasoning_user_id ON ai_reasoning_summaries(user_id);
+CREATE INDEX IF NOT EXISTS idx_ai_reasoning_quest_id ON ai_reasoning_summaries(quest_id);
+CREATE INDEX IF NOT EXISTS idx_ai_reasoning_trade_id ON ai_reasoning_summaries(trade_id);
+CREATE INDEX IF NOT EXISTS idx_ai_reasoning_session_id ON ai_reasoning_summaries(session_id);
+CREATE INDEX IF NOT EXISTS idx_ai_reasoning_category ON ai_reasoning_summaries(category);
+CREATE INDEX IF NOT EXISTS idx_ai_reasoning_created_at ON ai_reasoning_summaries(created_at DESC);
