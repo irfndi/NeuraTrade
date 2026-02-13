@@ -607,13 +607,14 @@ func (sa *SignalAggregator) calculateTechnicalIndicators(prices []float64) map[s
 	rsi := talib.Rsi(prices, 14)
 
 	// Calculate MACD using goflux
-	macdLine, _, _ := talib.Macd(prices, 12, 26, 9)
+	macdLine, macdSignal, _ := talib.Macd(prices, 12, 26, 9)
 
 	indicators["sma_20"] = sma20
 	indicators["sma_50"] = sma50
 	indicators["ema_12"] = ema12
 	indicators["rsi_14"] = rsi
 	indicators["macd_line"] = macdLine
+	indicators["macd_signal"] = macdSignal
 
 	return indicators
 }
