@@ -2,8 +2,6 @@
 -- Description: Increase column sizes for trading_pairs (symbol, base_currency, quote_currency)
 -- This migration drops dependent views, alters columns, then recreates views
 
-BEGIN;
-
 -- =====================================================
 -- Step 1: Drop all dependent views
 -- =====================================================
@@ -222,5 +220,3 @@ VALUES ('055_fix_column_sizes.sql', true, NOW())
 ON CONFLICT (filename) DO UPDATE SET
     applied = true,
     applied_at = NOW();
-
-COMMIT;

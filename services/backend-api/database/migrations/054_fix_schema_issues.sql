@@ -49,6 +49,9 @@ END $$;
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'exchange_trading_pairs') THEN
+        DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
+        DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
+        
         -- Update symbol column
         IF EXISTS (SELECT 1 FROM information_schema.columns
                    WHERE table_name = 'exchange_trading_pairs' AND column_name = 'symbol') THEN
