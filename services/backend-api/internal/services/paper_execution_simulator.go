@@ -2,8 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -95,7 +95,6 @@ type PaperOrder struct {
 // PaperExecutionSimulator simulates order execution for paper trading.
 type PaperExecutionSimulator struct {
 	config PaperExecutionConfig
-	rand   *rand.Rand
 	clock  Clock
 }
 
@@ -115,19 +114,33 @@ func (RealClock) Now() time.Time {
 func NewPaperExecutionSimulator(config PaperExecutionConfig) *PaperExecutionSimulator {
 	return &PaperExecutionSimulator{
 		config: config,
-		rand:   rand.New(rand.NewSource(time.Now().UnixNano())),
 		clock:  RealClock{},
 	}
 }
 
 // NewPaperExecutionSimulatorWithClock creates a new paper execution simulator with custom clock.
 func NewPaperExecutionSimulatorWithClock(config PaperExecutionConfig, clock Clock) *PaperExecutionSimulator {
-	r := rand.New(rand.NewSource(clock.Now().UnixNano()))
 	return &PaperExecutionSimulator{
 		config: config,
-		rand:   r,
 		clock:  clock,
 	}
+}
+
+// Helper functions for crypto-secure random numbers
+func (s *PaperExecutionSimulator) randomFloat64() float64 {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return float64(int64(b[0])<<56|int64(b[1])<<48|int64(b[2])<<40|int64(b[3])<<32|int64(b[4])<<24|int64(b[5])<<16|int64(b[6])<<8|int64(b[7])) / (1 << 64)
+}
+
+func (s *PaperExecutionSimulator) randomFloat64Between(min, max float64) float64 {
+	return min + s.randomFloat64()*(max-min)
+}
+
+func (s *PaperExecutionSimulator) randomInt63() int64 {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return int64(b[0])<<56 | int64(b[1])<<48 | int64(b[2])<<40 | int64(b[3])<<32 | int64(b[4])<<24 | int64(b[5])<<16 | int64(b[6])<<8 | int64(b[7])
 }
 
 // SimulateFill simulates filling a paper order at the given market price.
@@ -236,7 +249,7 @@ func (s *PaperExecutionSimulator) calculateMarketFillPrice(marketPrice decimal.D
 
 	// Random slippage up to configured maximum
 	maxSlippage := s.config.SlippagePercentage
-	randomSlippage := decimal.NewFromFloat(s.rand.Float64()).Mul(maxSlippage)
+	randomSlippage := decimal.NewFromFloat(s.randomFloat64()).Mul(maxSlippage)
 
 	if side == PaperOrderSideBuy {
 		// Buy orders execute at higher price
@@ -248,12 +261,12 @@ func (s *PaperExecutionSimulator) calculateMarketFillPrice(marketPrice decimal.D
 
 // shouldReject determines if an order should be rejected.
 func (s *PaperExecutionSimulator) shouldReject() bool {
-	return s.rand.Float64() < s.config.RejectionProbability.InexactFloat64()
+	return s.randomFloat64() < s.config.RejectionProbability.InexactFloat64()
 }
 
 // shouldPartialFill determines if an order should be partially filled.
 func (s *PaperExecutionSimulator) shouldPartialFill() bool {
-	return s.rand.Float64() < s.config.PartialFillProbability.InexactFloat64()
+	return s.randomFloat64() < s.config.PartialFillProbability.InexactFloat64()
 }
 
 // calculatePartialFill calculates a random partial fill amount.
@@ -263,7 +276,7 @@ func (s *PaperExecutionSimulator) calculatePartialFill(size decimal.Decimal) dec
 
 	// Random percentage between min and max
 	randomPct := minPct.Add(
-		decimal.NewFromFloat(s.rand.Float64()).Mul(maxPct.Sub(minPct)),
+		decimal.NewFromFloat(s.randomFloat64()).Mul(maxPct.Sub(minPct)),
 	)
 
 	return size.Mul(randomPct)
@@ -303,7 +316,7 @@ func (s *PaperExecutionSimulator) CreateOrder(req PaperOrderRequest) (*PaperOrde
 
 	now := s.clock.Now()
 	order := &PaperOrder{
-		ID:         fmt.Sprintf("paper-%d-%d", now.UnixNano(), s.rand.Int63()),
+		ID:         fmt.Sprintf("paper-%d-%d", now.UnixNano(), s.randomInt63()),
 		UserID:     req.UserID,
 		Exchange:   req.Exchange,
 		Symbol:     req.Symbol,
