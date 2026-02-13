@@ -35,18 +35,17 @@ UPDATE exchanges SET
 WHERE display_name IS NULL;
 
 -- Set ccxt_id with duplicate handling
--- Drop unique index first if it exists, to allow updates
+-- Drop unique constraint/index first to allow updates
 DROP INDEX IF EXISTS idx_exchanges_ccxt_id_unique;
+ALTER TABLE exchanges DROP CONSTRAINT IF EXISTS exchanges_ccxt_id_key;
+
 UPDATE exchanges e1 SET ccxt_id = 
-    CASE 
-        WHEN e1.ccxt_id IS NOT NULL THEN e1.ccxt_id
-        ELSE e1.name || CASE 
-            WHEN (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id) > 0 
-            THEN '_' || (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id)::text
-            ELSE ''
-        END
+    e1.name || CASE 
+        WHEN (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id) > 0 
+        THEN '_' || (SELECT COUNT(*) FROM exchanges e2 WHERE e2.name = e1.name AND e2.id < e1.id)::text
+        ELSE ''
     END
-WHERE ccxt_id IS NULL;
+WHERE ccxt_id IS NULL OR ccxt_id = name;
 
 -- Make columns NOT NULL only if all rows have values
 DO $$
