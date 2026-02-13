@@ -117,15 +117,16 @@ func (s *AIReasoningService) GenerateSignalSummary(ctx context.Context, req *AIR
 func (s *AIReasoningService) storeSummary(ctx context.Context, summary *AIReasoningSummary) (*AIReasoningSummary, error) {
 	query := `
 		INSERT INTO ai_reasoning_summaries 
-			(user_id, quest_id, trade_id, session_id, category, decision, reasoning, confidence, 
+			(id, user_id, quest_id, trade_id, session_id, category, decision, reasoning, confidence, 
 			 factors, market_context, risk_level, model_used, tokens_used, latency_ms)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id, user_id, quest_id, trade_id, session_id, category, decision, reasoning, 
 			confidence, factors, market_context, risk_level, model_used, tokens_used, latency_ms, created_at
 	`
 
 	var factors []string
 	err := s.db.QueryRow(ctx, query,
+		summary.ID,
 		summary.UserID,
 		summary.QuestID,
 		summary.TradeID,

@@ -305,10 +305,11 @@ func (s *PaperExecutionSimulator) CreateOrder(req PaperOrderRequest) (*PaperOrde
 	}
 
 	// Validate limit order has price
-	if (req.Type == PaperOrderTypeLimit || req.Type == PaperOrderTypeIOC || req.Type == PaperOrderTypeFOK) && req.Price.IsZero() {
+	if req.Type == PaperOrderTypeLimit && req.Price.IsZero() {
 		return nil, fmt.Errorf("limit orders require a price")
 	}
 
+	// IOC and FOK are time-in-force modifiers - they don't require a price
 	// Validate stop order has stop price
 	if req.Type == PaperOrderTypeStop && req.StopPrice.IsZero() {
 		return nil, fmt.Errorf("stop orders require a stop price")
