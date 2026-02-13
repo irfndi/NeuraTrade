@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/irfndi/neuratrade/internal/ai"
 	"github.com/irfndi/neuratrade/internal/api/handlers"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
@@ -128,6 +129,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	webSocketHandler := handlers.NewWebSocketHandler(redis)
+
+	// AI handler - uses registry from ai package
+	aiRegistry := ai.NewRegistry(
+		ai.WithRedis(redis.Client),
+	)
+	aiHandler := handlers.NewAIHandler(aiRegistry)
 
 	// Initialize order execution service (Polymarket CLOB)
 	orderExecConfig := services.OrderExecutionConfig{
@@ -311,6 +318,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			budget.GET("/status", budgetHandler.GetBudgetStatus)
 			budget.GET("/check", budgetHandler.CheckBudget)
+		}
+
+		// AI model routes
+		ai := v1.Group("/ai")
+		{
+			ai.GET("/models", aiHandler.GetModels)
+			ai.POST("/route", aiHandler.RouteModel)
 		}
 
 		// Exchange management
