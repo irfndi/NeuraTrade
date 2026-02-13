@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -132,11 +133,17 @@ func (m *MaxDrawdownMetrics) GetMetrics() MaxDrawdownMetrics {
 }
 
 type MaxDrawdownHalt struct {
-	config  MaxDrawdownConfig
-	db      DBPool
-	states  map[string]*DrawdownState
-	metrics MaxDrawdownMetrics
-	mu      sync.RWMutex
+	config             MaxDrawdownConfig
+	db                 DBPool
+	states             map[string]*DrawdownState
+	metrics            MaxDrawdownMetrics
+	mu                 sync.RWMutex
+	notificationSvc    *NotificationService
+	fundMilestoneCheck FundMilestoneChecker
+}
+
+type FundMilestoneChecker interface {
+	CheckAndNotifyMilestone(ctx context.Context, chatID int64, currentValue decimal.Decimal) error
 }
 
 func NewMaxDrawdownHalt(db DBPool, config MaxDrawdownConfig) *MaxDrawdownHalt {
@@ -145,6 +152,16 @@ func NewMaxDrawdownHalt(db DBPool, config MaxDrawdownConfig) *MaxDrawdownHalt {
 		db:      db,
 		states:  make(map[string]*DrawdownState),
 		metrics: MaxDrawdownMetrics{EventsByChatID: make(map[string]int64)},
+	}
+}
+
+func NewMaxDrawdownHaltWithNotification(db DBPool, config MaxDrawdownConfig, notificationSvc *NotificationService) *MaxDrawdownHalt {
+	return &MaxDrawdownHalt{
+		config:          config,
+		db:              db,
+		states:          make(map[string]*DrawdownState),
+		metrics:         MaxDrawdownMetrics{EventsByChatID: make(map[string]int64)},
+		notificationSvc: notificationSvc,
 	}
 }
 
@@ -201,15 +218,20 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 			state.HaltCount++
 			h.metrics.IncrementHalt()
 			h.metrics.IncrementByChatID(state.ChatID)
+			h.notifyRiskEvent(state, "halt", "critical")
 		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.CriticalThreshold) {
 		state.Status = DrawdownStatusCritical
 		h.metrics.IncrementCritical()
+		if previousStatus != DrawdownStatusCritical {
+			h.notifyRiskEvent(state, "critical_drawdown", "high")
+		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.WarningThreshold) {
 		state.Status = DrawdownStatusWarning
 		state.WarningCount++
 		if previousStatus != DrawdownStatusWarning {
 			h.metrics.IncrementWarning()
+			h.notifyRiskEvent(state, "warning_drawdown", "medium")
 		}
 	} else {
 		if state.TradingHalted && state.CurrentDrawdown.LessThanOrEqual(h.config.RecoveryThreshold) {
@@ -219,6 +241,7 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 				now := time.Now().UTC()
 				state.RecoveredAt = &now
 				h.metrics.IncrementRecovery()
+				h.notifyRiskEvent(state, "recovery", "low")
 			} else {
 				state.Status = DrawdownStatusNormal
 			}
@@ -226,6 +249,44 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 			state.Status = DrawdownStatusNormal
 		}
 	}
+}
+
+func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, severity string) {
+	if h.notificationSvc == nil {
+		return
+	}
+
+	chatIDInt, err := strconv.ParseInt(state.ChatID, 10, 64)
+	if err != nil {
+		return
+	}
+
+	drawdownPct := state.CurrentDrawdown.Mul(decimal.NewFromInt(100))
+	event := RiskEventNotification{
+		EventType: eventType,
+		Severity:  severity,
+		Message:   fmt.Sprintf("Drawdown status changed to %s", state.Status),
+		Details: map[string]string{
+			"current_drawdown": fmt.Sprintf("%.2f%%", drawdownPct.InexactFloat64()),
+			"peak_value":       state.PeakValue.String(),
+			"current_value":    state.CurrentValue.String(),
+			"status":           string(state.Status),
+		},
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.notificationSvc.NotifyRiskEvent(ctx, chatIDInt, event); err != nil {
+			fmt.Printf("Failed to send risk event notification: %v\n", err)
+		}
+	}()
+}
+
+func (h *MaxDrawdownHalt) SetNotificationService(svc *NotificationService) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.notificationSvc = svc
 }
 
 func (h *MaxDrawdownHalt) IsTradingHalted(chatID string) bool {
