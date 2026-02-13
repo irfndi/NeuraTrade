@@ -92,7 +92,7 @@ func (s *OrderExecutionService) PlaceOrder(ctx context.Context, req interfaces.O
 		return nil, fmt.Errorf("failed to place order: %w", err)
 	}
 
-	return s.convertToResult(resp, req.TokenID), nil
+	return s.convertToResult(resp, req.TokenID, req.Side), nil
 }
 
 func (s *OrderExecutionService) GetOrder(ctx context.Context, orderID string) (*interfaces.OrderExecutionResult, error) {
@@ -105,7 +105,7 @@ func (s *OrderExecutionService) GetOrder(ctx context.Context, orderID string) (*
 		return nil, fmt.Errorf("failed to get order: %w", err)
 	}
 
-	return s.convertToResult(resp, resp.Order.TokenID), nil
+	return s.convertToResult(resp, resp.Order.TokenID, ""), nil
 }
 
 func (s *OrderExecutionService) CancelOrder(ctx context.Context, orderID string) error {
@@ -124,7 +124,7 @@ func (s *OrderExecutionService) GetOpenOrders(ctx context.Context) ([]*interface
 
 	results := make([]*interfaces.OrderExecutionResult, len(orders))
 	for i, order := range orders {
-		results[i] = s.convertToResult(&order, order.Order.TokenID)
+		results[i] = s.convertToResult(&order, order.Order.TokenID, "")
 	}
 
 	return results, nil
@@ -177,7 +177,7 @@ func (s *OrderExecutionService) GetBestPrice(ctx context.Context, tokenID string
 	return s.client.GetBestPrice(ctx, tokenID, clobSide)
 }
 
-func (s *OrderExecutionService) convertToResult(resp *polymarket.OrderResponse, tokenID string) *interfaces.OrderExecutionResult {
+func (s *OrderExecutionService) convertToResult(resp *polymarket.OrderResponse, tokenID string, side interfaces.OrderSide) *interfaces.OrderExecutionResult {
 	status := interfaces.OrderStatus(resp.Status)
 	if status == "" {
 		status = interfaces.OrderStatusOpen
@@ -192,6 +192,6 @@ func (s *OrderExecutionService) convertToResult(resp *polymarket.OrderResponse, 
 		Price:         resp.Price,
 		CreatedAt:     resp.CreatedAt,
 		TokenID:       tokenID,
-		Side:          interfaces.OrderSide(resp.Order.TakerAmount),
+		Side:          side,
 	}
 }
