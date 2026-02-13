@@ -7,6 +7,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/skill"
 )
 
+// BuildToolDefinitions converts skill definitions into LLM tool definitions
+// for function calling.
 func BuildToolDefinitions(skills []*skill.Skill) []ToolDefinition {
 	var tools []ToolDefinition
 
@@ -62,6 +64,7 @@ func BuildToolDefinitions(skills []*skill.Skill) []ToolDefinition {
 	return tools
 }
 
+// BuildToolDefinition creates a single tool definition from parameters.
 func BuildToolDefinition(name, description string, params map[string]FunctionParam, required []string) ToolDefinition {
 	properties := make(map[string]interface{})
 
@@ -115,6 +118,7 @@ type JSONSchema struct {
 	Required   []string               `json:"required,omitempty"`
 }
 
+// BuildJSONResponseFormat creates a ResponseFormat for structured JSON output.
 func BuildJSONResponseFormat(schema *JSONSchema) *ResponseFormat {
 	if schema == nil {
 		return &ResponseFormat{Type: "json_object"}
@@ -130,6 +134,7 @@ func BuildJSONResponseFormat(schema *JSONSchema) *ResponseFormat {
 	}
 }
 
+// ParseStructuredOutput parses a structured JSON response into type T.
 func ParseStructuredOutput[T any](resp *CompletionResponse) (T, error) {
 	var result T
 
@@ -144,6 +149,7 @@ func ParseStructuredOutput[T any](resp *CompletionResponse) (T, error) {
 	return result, nil
 }
 
+// ParseToolCallArguments parses tool call JSON arguments into type T.
 func ParseToolCallArguments[T any](tc ToolCall) (T, error) {
 	var result T
 
@@ -158,6 +164,7 @@ func ParseToolCallArguments[T any](tc ToolCall) (T, error) {
 	return result, nil
 }
 
+// BuildSystemPrompt constructs a system prompt with tool descriptions.
 func BuildSystemPrompt(skills []*skill.Skill, context string) string {
 	prompt := "You are an AI trading assistant with access to the following tools:\n\n"
 
@@ -174,6 +181,7 @@ func BuildSystemPrompt(skills []*skill.Skill, context string) string {
 	return prompt
 }
 
+// BuildConversationHistory trims history to fit within token budget.
 func BuildConversationHistory(messages []Message, maxTokens int) []Message {
 	if len(messages) <= 10 {
 		return messages
@@ -201,6 +209,7 @@ func BuildConversationHistory(messages []Message, maxTokens int) []Message {
 	return append([]Message{systemMsg}, recent...)
 }
 
+// estimateTokens estimates token count using 4 chars per token heuristic.
 func estimateTokens(text string) int {
 	return len(text) / 4
 }
@@ -209,6 +218,7 @@ type ConversationBuilder struct {
 	messages []Message
 }
 
+// NewConversationBuilder creates a builder initialized with a system prompt.
 func NewConversationBuilder(systemPrompt string) *ConversationBuilder {
 	return &ConversationBuilder{
 		messages: []Message{
@@ -217,21 +227,25 @@ func NewConversationBuilder(systemPrompt string) *ConversationBuilder {
 	}
 }
 
+// AddUser appends a user message.
 func (b *ConversationBuilder) AddUser(content string) *ConversationBuilder {
 	b.messages = append(b.messages, Message{Role: RoleUser, Content: content})
 	return b
 }
 
+// AddAssistant appends an assistant message.
 func (b *ConversationBuilder) AddAssistant(content string) *ConversationBuilder {
 	b.messages = append(b.messages, Message{Role: RoleAssistant, Content: content})
 	return b
 }
 
+// AddToolResult appends a tool result message.
 func (b *ConversationBuilder) AddToolResult(toolID, content string) *ConversationBuilder {
 	b.messages = append(b.messages, Message{Role: RoleTool, Content: content, ToolID: toolID})
 	return b
 }
 
+// AddToolCall appends an assistant message with a tool call.
 func (b *ConversationBuilder) AddToolCall(toolCall ToolCall, content string) *ConversationBuilder {
 	b.messages = append(b.messages, Message{
 		Role:     RoleAssistant,
@@ -241,6 +255,7 @@ func (b *ConversationBuilder) AddToolCall(toolCall ToolCall, content string) *Co
 	return b
 }
 
+// Build returns the constructed message slice.
 func (b *ConversationBuilder) Build() []Message {
 	return b.messages
 }
