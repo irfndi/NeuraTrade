@@ -4,10 +4,13 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // BootstrapCommand handles the bootstrap/setup process for NeuraTrade.
@@ -196,7 +199,7 @@ SENTRY_ENVIRONMENT=%s
 MINIMUM_PROFIT_THRESHOLD=0.1
 MAX_TRADE_AMOUNT_USD=1000
 ENABLE_PAPER_TRADING=true
-`, timeNow(), config.Environment, config.DatabaseHost, config.DatabasePort,
+`, config.Environment, timeNow(), config.DatabaseHost, config.DatabasePort,
 		config.DatabaseName, config.DatabaseUser, config.DatabasePassword,
 		config.RedisHost, config.RedisPort, config.JWTSecret,
 		config.TelegramBotToken, config.SentryDSN, config.Environment)
@@ -221,20 +224,14 @@ func (b *BootstrapCommand) createDirectories() error {
 	return nil
 }
 
-// timeNow returns current time string for documentation.
 func timeNow() string {
-	return "2026-02-13"
+	return time.Now().UTC().Format("2006-01-02")
 }
 
-// generateRandomSecret creates a random secret for JWT.
 func generateRandomSecret() string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	const length = 32
-
-	// Simple random generation for bootstrap
-	result := make([]byte, length)
-	for i := range result {
-		result[i] = charset[i%len(charset)]
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return ""
 	}
-	return string(result) + "-bootstrap-generated-change-in-production"
+	return hex.EncodeToString(bytes)
 }

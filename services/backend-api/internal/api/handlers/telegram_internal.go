@@ -714,6 +714,20 @@ func (h *TelegramInternalHandler) ensureOperatorSchema(ctx context.Context) erro
 			autonomous_enabled BOOLEAN NOT NULL,
 			updated_at TIMESTAMP NOT NULL
 		)`)
+		if h.schemaErr != nil {
+			return
+		}
+
+		_, h.schemaErr = h.db.Exec(ctx, `CREATE TABLE IF NOT EXISTS telegram_operator_bindings (
+			binding_id TEXT PRIMARY KEY,
+			chat_id TEXT UNIQUE NOT NULL,
+			telegram_user_id TEXT NOT NULL,
+			telegram_username TEXT,
+			operator_name TEXT,
+			auth_code TEXT,
+			bound_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL
+		)`)
 	})
 
 	return h.schemaErr
@@ -831,29 +845,13 @@ func (h *TelegramInternalHandler) BindOperatorProfile(c *gin.Context) {
 		return
 	}
 
-	_, err := h.db.Exec(c.Request.Context(), `
-		CREATE TABLE IF NOT EXISTS telegram_operator_bindings (
-			binding_id TEXT PRIMARY KEY,
-			chat_id TEXT UNIQUE NOT NULL,
-			telegram_user_id TEXT NOT NULL,
-			telegram_username TEXT,
-			operator_name TEXT,
-			auth_code TEXT,
-			bound_at TIMESTAMP NOT NULL,
-			updated_at TIMESTAMP NOT NULL
-		)`)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to initialize bindings store"})
-		return
-	}
-
 	if len(req.AuthCode) < 6 || len(req.AuthCode) > 32 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid auth code format"})
 		return
 	}
 
 	var existingBindingID string
-	err = h.db.QueryRow(c.Request.Context(),
+	err := h.db.QueryRow(c.Request.Context(),
 		"SELECT binding_id FROM telegram_operator_bindings WHERE chat_id = $1",
 		req.ChatID).Scan(&existingBindingID)
 	if err == nil {
