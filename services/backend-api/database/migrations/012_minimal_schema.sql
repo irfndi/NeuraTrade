@@ -29,7 +29,7 @@ BEGIN
         ELSE INITCAP(name)
     END
     WHERE display_name IS NULL AND name IS NOT NULL;
-EXCEPTION WHEN duplicate_key THEN
+EXCEPTION WHEN unique_violation THEN
     RAISE NOTICE 'Skipping display_name update due to constraint conflict';
 END $$;
 
@@ -39,7 +39,7 @@ BEGIN
     UPDATE exchanges 
     SET ccxt_id = LOWER(name)
     WHERE ccxt_id IS NULL AND name IS NOT NULL;
-EXCEPTION WHEN duplicate_key THEN
+EXCEPTION WHEN unique_violation THEN
     RAISE NOTICE 'Skipping ccxt_id update due to constraint conflict';
 END $$;
 
