@@ -145,10 +145,9 @@ END $$;
 -- Record migration
 -- =====================================================
 
-INSERT INTO schema_migrations (filename, applied, applied_at)
-VALUES ('054_fix_schema_issues.sql', true, NOW())
-ON CONFLICT (filename) DO UPDATE SET
-    applied = true,
+INSERT INTO schema_migrations (version, filename, description, applied_at)
+VALUES (54, '054_fix_schema_issues.sql', 'Fix schema issues', NOW())
+ON CONFLICT (version) DO UPDATE SET
     applied_at = NOW();
 
 COMMIT;

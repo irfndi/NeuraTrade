@@ -322,10 +322,9 @@ COMMENT ON VIEW exchange_reliability_summary IS
 -- Step 12: Record Migration
 -- =====================================================
 
-INSERT INTO schema_migrations (filename, applied, applied_at)
-VALUES ('056_exchange_reliability_and_retention.sql', true, NOW())
-ON CONFLICT (filename) DO UPDATE SET
-    applied = true,
+INSERT INTO schema_migrations (version, filename, description, applied_at)
+VALUES (56, '056_exchange_reliability_and_retention.sql', 'Exchange reliability and retention', NOW())
+ON CONFLICT (version) DO UPDATE SET
     applied_at = NOW();
 
 COMMIT;
