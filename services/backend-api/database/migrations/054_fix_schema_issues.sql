@@ -69,19 +69,21 @@ BEGIN
     RAISE NOTICE 'Current column sizes: symbol=%, base_currency=%, quote_currency=%',
         symbol_size, base_size, quote_size;
 
-    -- Increase symbol column if less than 100
+    DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
+    DROP VIEW IF EXISTS v_active_trading_pairs CASCADE;
+    DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
+    DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
+
     IF symbol_size < 100 THEN
         ALTER TABLE trading_pairs ALTER COLUMN symbol TYPE VARCHAR(100);
         RAISE NOTICE 'Updated symbol column to VARCHAR(100)';
     END IF;
 
-    -- Increase base_currency column if less than 50
     IF base_size < 50 THEN
         ALTER TABLE trading_pairs ALTER COLUMN base_currency TYPE VARCHAR(50);
         RAISE NOTICE 'Updated base_currency column to VARCHAR(50)';
     END IF;
 
-    -- Increase quote_currency column if less than 50
     IF quote_size < 50 THEN
         ALTER TABLE trading_pairs ALTER COLUMN quote_currency TYPE VARCHAR(50);
         RAISE NOTICE 'Updated quote_currency column to VARCHAR(50)';
