@@ -914,6 +914,7 @@ func (tas *TechnicalAnalysisService) fetchPriceData(ctx context.Context, symbol,
 }
 
 // convertToSnapshots adapts the internal PriceData format to the format required by the indicator library.
+// nolint:unused // used in tests (technical_analysis_test.go:519), but tests excluded from linting
 func (tas *TechnicalAnalysisService) convertToSnapshots(priceData *PriceData) []*asset.Snapshot {
 	snapshots := make([]*asset.Snapshot, len(priceData.Close))
 
