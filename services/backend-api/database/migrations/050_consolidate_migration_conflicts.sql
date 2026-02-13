@@ -138,6 +138,7 @@ BEGIN
 
         -- Fix trading pairs column sizes
         IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'trading_pairs') THEN
+            -- Drop all views that depend on trading_pairs columns
             DROP VIEW IF EXISTS active_exchange_trading_pairs CASCADE;
             DROP VIEW IF EXISTS blacklisted_exchange_trading_pairs CASCADE;
             DROP VIEW IF EXISTS v_trading_pairs_debug CASCADE;
@@ -147,6 +148,10 @@ BEGIN
             DROP VIEW IF EXISTS v_funding_arbitrage_opportunities CASCADE;
             DROP VIEW IF EXISTS v_exchange_trading_pairs CASCADE;
             DROP VIEW IF EXISTS v_trading_pairs_extended CASCADE;
+            DROP VIEW IF EXISTS latest_funding_rates CASCADE;
+            DROP VIEW IF EXISTS active_funding_arbitrage_opportunities CASCADE;
+            DROP VIEW IF EXISTS active_futures_arbitrage_opportunities CASCADE;
+            DROP VIEW IF EXISTS futures_arbitrage_market_summary CASCADE;
             
             ALTER TABLE trading_pairs 
             ALTER COLUMN symbol TYPE VARCHAR(50),
