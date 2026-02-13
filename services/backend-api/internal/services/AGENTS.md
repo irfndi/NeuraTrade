@@ -31,12 +31,19 @@ go test ./internal/services/... -run TestArbitrage
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
 
 ### Ready to Work (No Blockers)
 - `neura-7et`: Build prompt builder from skill.md + context
 
 ### Recently Completed (✓)
+- ✓ `neura-ydp`: Operator identity encryption (Argon2)
+- ✓ `neura-l1l`: Balance/funding validation
+- ✓ `neura-9m3`: Trader agent role
+- ✓ `neura-q4j`: Max drawdown halt
+- ✓ `neura-kpu`: Risk Manager agent role
+- ✓ `neura-bol`: Consecutive-loss pause
+- ✓ `neura-we2`: Scalping skill.md
 - ✓ `neura-myb`: Wallet minimum checks
 - ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
 - ✓ `neura-6tk`: Event-driven quest triggers
@@ -47,6 +54,7 @@ go test ./internal/services/... -run TestArbitrage
 - ✓ `neura-cha`: Sum-to-one arbitrage skill.md
 - ✓ `neura-2xe`: Position snapshot tool
 - ✓ `neura-lue`: Readiness endpoints
+- ✓ `neura-4eo`: Arbitrage primitives
 - ✓ `neura-1nz`: Cron-based quest scheduling
 - ✓ `neura-l70a`: Refactor talib wrapper to goflux
 - ✓ `neura-161`: Distributed locks (Redis)
@@ -60,21 +68,17 @@ go test ./internal/services/... -run TestArbitrage
 - ✓ `neura-wz7`: cancel_order tool endpoint
 
 ### Quest & Agent System (Blocked)
-- `neura-9m3`: Trader agent role
 - `neura-im9`: Quest progress update notifications
 
 ### Signal & Analysis (Blocked)
 - `neura-cd1`: Arbitrage trigger detection engine
 - `neura-sa4`: Order book imbalance detection
-- `neura-we2`: Scalping skill.md codification
 - `neura-bri`: AI reasoning summaries for trades
 
 ### Risk & Monitoring (Blocked)
 - `neura-8y8`: Emergency rollback system
 - `neura-kxq`: Kill switch monitoring
 - `neura-fvk`: Fund milestone alerts
-- `neura-bol`: Consecutive-loss pause
-- `neura-q4j`: Max drawdown halt
 - `neura-3ms`: Position-size throttle
 - `neura-9ai`: Intrusion detection
 

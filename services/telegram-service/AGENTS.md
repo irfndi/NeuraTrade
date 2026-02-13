@@ -36,7 +36,7 @@ bun test
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
 
 ### Ready to Work (No Blockers)
 
@@ -44,6 +44,7 @@ bun test
 
 ### Recently Completed (✓)
 
+- ✓ `neura-ydp`: Operator identity encryption (Argon2)
 - ✓ `neura-2iq`: Analyst agent role Telegram integration
 - ✓ `neura-6tk`: Event-driven quest trigger notifications
 - ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
@@ -64,7 +65,6 @@ bun test
 
 ### Security & Privacy (Blocked)
 
-- `neura-ydp`: Operator identity encryption (Argon2)
 - `neura-c7r`: API key masking in Telegram output
 
 ## ANTI-PATTERNS

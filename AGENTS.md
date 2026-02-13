@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-13 01:36 Asia/Jakarta
-**Commit:** 8ae6bef
+**Generated:** 2026-02-13 09:04 Asia/Jakarta
+**Commit:** 98dc281
 **Branch:** development
 
 ## OVERVIEW
@@ -84,21 +84,26 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
 
 ### Ready to Work (No Blockers)
-- `neura-yzv`: CLI bootstrap command
-- `neura-5of`: Bind local operator profile to Telegram chat
-- `neura-aav`: Connectivity checks for all configured providers
+- `neura-ydp`: Operator identity encryption (Argon2)
+- `neura-l1l`: Balance/funding validation
 - `neura-xxy`: WebSocket market data subscription
 - `neura-qts`: CLOB API wrapper (order execution)
 - `neura-7et`: Build prompt builder from skill.md + context
 - `neura-r1d`: Progressive disclosure system
-- `neura-9m3`: Trader agent role
-- `neura-q4j`: Max drawdown halt
+- `neura-kpu`: Risk Manager agent role
+- `neura-bol`: Consecutive-loss pause
 - `neura-lue`: Expose readiness endpoints
+- `neura-we2`: Scalping skill.md codification
 
 ### Recently Completed (✓)
+- ✓ `neura-yzv`: CLI bootstrap command
+- ✓ `neura-5of`: Bind local operator profile to Telegram chat
+- ✓ `neura-aav`: Connectivity checks for all configured providers
+- ✓ `neura-9m3`: Trader agent role
+- ✓ `neura-q4j`: Max drawdown halt
 - ✓ `neura-myb`: Wallet minimum checks
 - ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
 - ✓ `neura-6tk`: Event-driven quest triggers
@@ -144,30 +149,26 @@ make dev-down
 
 ### Exchange Integration (Blocked)
 - `neura-4ms`: CCXT wrapper extension
-- `neura-xxy`: WebSocket market data (depends on neura-4ms)
 - `neura-1b6`: Rate limit management (depends on neura-xxy)
 - `neura-adu`: Data API wrapper (positions/balances)
 - `neura-4p6`: Exchange resilience monitoring
 
 ### Security & Encryption (Blocked)
 - `neura-c7r`: Key masking in logs/Telegram
-- `neura-ydp`: Operator identity encryption (Argon2)
 
 ### Quest & Agent System (Blocked)
-- `neura-bxg`: One-time auth code → `neura-5of`: Telegram profile binding
+- `neura-bxg`: One-time auth code generation
 - `neura-im9`: Quest progress updates
 
 ### Trading Engine (Blocked)
 - `neura-cd1`: Arbitrage trigger detection
 - `neura-sa4`: Order book imbalance detection
-- `neura-we2`: Scalping skill.md codification
 - `neura-a7r`: Tight stop-loss execution
 - `neura-1wi`: FOK order execution
 
 ### Risk Management (Blocked)
 - `neura-8y8`: Emergency rollbacks
 - `neura-kxq`: Kill switch monitoring
-- `neura-bol`: Consecutive-loss pause
 - `neura-3ms`: Position-size throttle
 
 ### Paper Trading (Blocked)

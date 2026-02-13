@@ -36,15 +36,20 @@ go test ./internal/api/handlers/... -run TestArbitrage
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
 
 ### Ready to Work (No Blockers)
 - `neura-7et`: Build prompt builder from skill.md + context
 - `neura-r1d`: Progressive disclosure system
 
 ### Recently Completed (✓)
+- ✓ `neura-ydp`: Operator identity encryption (Argon2) endpoint
+- ✓ `neura-l1l`: Balance/funding validation endpoint
+- ✓ `neura-kpu`: Risk Manager agent role endpoint
+- ✓ `neura-bol`: Consecutive-loss pause endpoint
+- ✓ `neura-we2`: Scalping skill.md endpoint
 - ✓ `neura-myb`: Wallet minimum checks endpoint
-- ✓ `neura-3b9`: Priority levels (CRITICAL > HIGH > NORMAL > LOW)
+- ✓ `neura-3b9`: Priority levels endpoint
 - ✓ `neura-6tk`: Event-driven quest trigger endpoints
 - ✓ `neura-2iq`: Analyst agent role API endpoints
 - ✓ `neura-fs8`: API key validation endpoint
@@ -59,13 +64,6 @@ go test ./internal/api/handlers/... -run TestArbitrage
 - ✓ `neura-94c`: /status budget display endpoint
 - ✓ `neura-l2z`: place_order tool endpoint
 - ✓ `neura-wz7`: cancel_order tool endpoint
-- ✓ `neura-1p0`: /doctor diagnostic handler
-- ✓ `neura-4gk`: Quest and monitoring commands
-- ✓ `neura-09y`: Wallet management commands
-- ✓ `neura-ilw`: /liquidate and /liquidate_all handlers
-- ✓ `neura-ik7`: /summary and /performance handlers
-- ✓ `neura-hgk`: /begin and /pause handlers
-- ✓ `neura-axx`: Action streaming format endpoint
 
 ### Order Management Endpoints (Blocked)
 - `neura-txu`: Controlled liquidation tool endpoint
