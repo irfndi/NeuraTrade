@@ -323,6 +323,8 @@ func BenchmarkErrorHandling(b *testing.B) {
 
 // BenchmarkTimeOperations benchmarks time operations
 func BenchmarkTimeOperations(b *testing.B) {
+	timeFormat := time.RFC3339Nano
+
 	// Reset timer to exclude setup time
 	b.ResetTimer()
 
@@ -332,13 +334,13 @@ func BenchmarkTimeOperations(b *testing.B) {
 		now := time.Now().UTC()
 
 		// Format time
-		formatted := now.Format(time.RFC3339)
+		formatted := now.Format(timeFormat)
 		if formatted == "" {
 			b.Fatal("Formatted time should not be empty")
 		}
 
 		// Parse time
-		parsed, err := time.Parse(time.RFC3339, formatted)
+		parsed, err := time.Parse(timeFormat, formatted)
 		if err != nil {
 			b.Fatal(err)
 		}
