@@ -52,7 +52,7 @@ golangci-lint run
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 179 total | 98 open | 58 blocked | 81 closed | 40 ready
+**Stats:** 185 total | 69 open | 5 in progress | 38 blocked | 111 closed | 33 ready
 
 ### Ready to Work (No Blockers)
 - `neura-06k`: Health checks for Redis, SQL storage, exchange bridges

@@ -84,7 +84,7 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 184 total | 9 open | 5 in progress | 0 blocked | 107 closed | 72 ready
+**Stats:** 185 total | 69 open | 5 in progress | 38 blocked | 111 closed | 33 ready
 
 ### In Progress (5)
 - `neura-1wi`: FOK order execution
