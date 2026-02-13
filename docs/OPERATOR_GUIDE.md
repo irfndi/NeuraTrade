@@ -361,7 +361,7 @@ GROUP BY DATE(created_at);
 docker compose exec postgres pg_dump -U postgres neuratrade > backup_$(date +%Y%m%d).sql
 
 # Restore from backup
-cat backup_20260213.sql | docker compose exec -T postgres psql -U postgres neuratride
+cat backup_20260213.sql | docker compose exec -T postgres psql -U postgres neuratrade
 ```
 
 ---
