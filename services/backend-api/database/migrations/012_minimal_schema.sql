@@ -14,6 +14,7 @@ ADD COLUMN IF NOT EXISTS has_futures BOOLEAN DEFAULT false,
 ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
 
 -- Update existing exchanges with proper values
+-- Handle duplicate keys safely
 UPDATE exchanges SET 
     display_name = CASE 
         WHEN name = 'binance' THEN 'Binance'
@@ -26,14 +27,19 @@ UPDATE exchanges SET
         WHEN name = 'kucoin' THEN 'KuCoin'
         ELSE INITCAP(name)
     END,
-    ccxt_id = name,
+    ccxt_id = COALESCE(ccxt_id, name),
     status = 'active',
     has_spot = true,
     has_futures = CASE 
         WHEN name IN ('binance', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin') THEN true
         ELSE false
     END
-WHERE display_name IS NULL OR ccxt_id IS NULL;
+WHERE (display_name IS NULL OR ccxt_id IS NULL)
+AND name IN ('binance', 'coinbasepro', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin')
+AND (
+    SELECT COUNT(*) FROM exchanges e2 
+    WHERE e2.ccxt_id = exchanges.name AND e2.id != exchanges.id
+) = 0;
 
 -- Make columns NOT NULL after updating
 ALTER TABLE exchanges 
@@ -50,9 +56,11 @@ ALTER TABLE market_data ALTER COLUMN volume DROP NOT NULL;
 -- Add unique constraint on ccxt_id (safe to run multiple times)
 DO $$
 BEGIN
+    -- Check if any unique constraint exists on ccxt_id column
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint 
-        WHERE conname = 'exchanges_ccxt_id_key'
+        WHERE conrelid = 'exchanges'::regclass
+        AND conname LIKE '%ccxt_id%'
     ) THEN
         ALTER TABLE exchanges ADD CONSTRAINT exchanges_ccxt_id_key UNIQUE (ccxt_id);
     END IF;

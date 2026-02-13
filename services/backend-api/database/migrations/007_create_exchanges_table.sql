@@ -75,18 +75,19 @@ UPDATE exchanges SET
         WHEN name = 'kucoin' THEN 'KuCoin'
         ELSE INITCAP(name)
     END,
+    ccxt_id = COALESCE(ccxt_id, name),
     status = COALESCE(status, 'active'),
     has_spot = COALESCE(has_spot, true),
     has_futures = CASE 
         WHEN name IN ('binance', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin') THEN true
         ELSE COALESCE(has_futures, false)
     END
-WHERE display_name IS NULL AND ccxt_id IS NULL
+WHERE display_name IS NULL OR ccxt_id IS NULL
 AND name IN ('binance', 'coinbasepro', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin')
 AND (
     SELECT COUNT(*) FROM exchanges e2 
-    WHERE e2.ccxt_id = exchanges.name
-) <= 1;
+    WHERE e2.ccxt_id = exchanges.name AND e2.id != exchanges.id
+) = 0;
 
 -- Make required columns NOT NULL after updating
 DO $$
@@ -105,9 +106,11 @@ END $$;
 -- Add unique constraint on ccxt_id (safe to run multiple times)
 DO $$
 BEGIN
+    -- Check if any unique constraint exists on ccxt_id column
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint 
-        WHERE conname = 'exchanges_ccxt_id_key'
+        WHERE conrelid = 'exchanges'::regclass
+        AND conname LIKE '%ccxt_id%'
     ) THEN
         ALTER TABLE exchanges ADD CONSTRAINT exchanges_ccxt_id_key UNIQUE (ccxt_id);
     END IF;
