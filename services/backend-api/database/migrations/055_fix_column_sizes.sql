@@ -147,20 +147,8 @@ WHERE tp.is_futures = true
 ORDER BY fr.exchange_id, fr.trading_pair_id, fr.funding_time DESC;
 
 -- Recreate active_funding_arbitrage_opportunities view
-CREATE OR REPLACE VIEW active_funding_arbitrage_opportunities AS
-SELECT
-    *,
-    CASE
-        WHEN estimated_profit_percentage >= 20 AND risk_score <= 30 THEN 'excellent'
-        WHEN estimated_profit_percentage >= 15 AND risk_score <= 50 THEN 'good'
-        WHEN estimated_profit_percentage >= 10 AND risk_score <= 70 THEN 'moderate'
-        ELSE 'poor'
-    END as opportunity_quality
-FROM funding_arbitrage_opportunities
-WHERE is_active = true
-  AND (expires_at IS NULL OR expires_at > NOW())
-  AND estimated_profit_percentage > 0
-ORDER BY estimated_profit_percentage DESC, risk_score ASC;
+DROP VIEW IF EXISTS active_funding_arbitrage_opportunities;
+DROP VIEW IF EXISTS active_futures_arbitrage_opportunities;
 
 -- Recreate active_futures_arbitrage_opportunities view
 CREATE OR REPLACE VIEW active_futures_arbitrage_opportunities AS
