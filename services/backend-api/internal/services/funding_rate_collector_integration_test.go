@@ -108,6 +108,10 @@ func (m *MockCCXTClient) GetOrderBook(ctx context.Context, exchange, symbol stri
 	return args.Get(0).(*ccxt.OrderBookResponse), args.Error(1)
 }
 
+func (m *MockCCXTClient) CalculateOrderBookMetrics(resp *ccxt.OrderBookResponse) *ccxt.OrderBookMetrics {
+	return &ccxt.OrderBookMetrics{}
+}
+
 func (m *MockCCXTClient) GetTrades(ctx context.Context, exchange, symbol string, limit int) (*ccxt.TradesResponse, error) {
 	args := m.Called(ctx, exchange, symbol, limit)
 	if args.Get(0) == nil {

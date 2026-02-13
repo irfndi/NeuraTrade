@@ -87,6 +87,8 @@ type CCXTService interface {
 	FetchSingleTicker(ctx context.Context, exchange, symbol string) (MarketPriceInterface, error)
 	// FetchOrderBook retrieves order book depth data.
 	FetchOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error)
+	// CalculateOrderBookMetrics computes liquidity metrics from order book data.
+	CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*OrderBookMetrics, error)
 	// FetchOHLCV retrieves candlestick data.
 	FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error)
 	// FetchTrades retrieves recent trade history.
@@ -144,6 +146,8 @@ type CCXTClient interface {
 	GetTickers(ctx context.Context, req *TickersRequest) (*TickersResponse, error)
 	// GetOrderBook gets order book.
 	GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error)
+	// CalculateOrderBookMetrics computes liquidity metrics from order book data.
+	CalculateOrderBookMetrics(resp *OrderBookResponse) *OrderBookMetrics
 	// GetTrades gets trades.
 	GetTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error)
 	// GetOHLCV gets candlesticks.

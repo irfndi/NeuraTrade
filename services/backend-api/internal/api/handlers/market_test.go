@@ -243,6 +243,109 @@ func TestMarketHandler_GetOrderBook_ServiceUnavailable(t *testing.T) {
 	mockCCXT.AssertExpectations(t)
 }
 
+func TestMarketHandler_GetOrderBookMetrics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	handler := NewMarketHandler(nil, mockCCXT, nil, nil, nil)
+
+	router.GET("/orderbook/:exchange/:symbol/metrics", handler.GetOrderBookMetrics)
+
+	expectedMetrics := &ccxt.OrderBookMetrics{
+		Exchange:       "binance",
+		Symbol:         "BTCUSDT",
+		BidAskSpread:   decimal.NewFromFloat(0.04),
+		MidPrice:       decimal.NewFromFloat(50000),
+		BestBid:        decimal.NewFromFloat(49999),
+		BestAsk:        decimal.NewFromFloat(50001),
+		BidDepth1Pct:   decimal.NewFromFloat(100000),
+		AskDepth1Pct:   decimal.NewFromFloat(80000),
+		Imbalance1Pct:  decimal.NewFromFloat(0.11),
+		Imbalance2Pct:  decimal.NewFromFloat(0.09),
+		LiquidityScore: decimal.NewFromFloat(85),
+	}
+
+	mockCCXT.On("IsHealthy", mock.Anything).Return(true)
+	mockCCXT.On("CalculateOrderBookMetrics", mock.Anything, "binance", "BTCUSDT", 20).Return(expectedMetrics, nil)
+
+	req, _ := http.NewRequest("GET", "/orderbook/binance/BTCUSDT/metrics", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response ccxt.OrderBookMetrics
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "binance", response.Exchange)
+	assert.Equal(t, "BTCUSDT", response.Symbol)
+	assert.Equal(t, decimal.NewFromFloat(0.11), response.Imbalance1Pct)
+
+	mockCCXT.AssertExpectations(t)
+}
+
+func TestMarketHandler_GetOrderBookMetrics_FetchError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	handler := NewMarketHandler(nil, mockCCXT, nil, nil, nil)
+
+	router.GET("/orderbook/:exchange/:symbol/metrics", handler.GetOrderBookMetrics)
+
+	mockCCXT.On("IsHealthy", mock.Anything).Return(true)
+	mockCCXT.On("CalculateOrderBookMetrics", mock.Anything, "binance", "BTCUSDT", 20).Return(nil, assert.AnError)
+
+	req, _ := http.NewRequest("GET", "/orderbook/binance/BTCUSDT/metrics", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+
+	mockCCXT.AssertExpectations(t)
+}
+
+func TestMarketHandler_GetOrderBookMetrics_MissingParams(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	handler := NewMarketHandler(nil, mockCCXT, nil, nil, nil)
+
+	router.GET("/orderbook/:exchange/:symbol/metrics", handler.GetOrderBookMetrics)
+
+	req, _ := http.NewRequest("GET", "/orderbook//BTCUSDT/metrics", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestMarketHandler_GetOrderBookMetrics_ServiceUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	handler := NewMarketHandler(nil, mockCCXT, nil, nil, nil)
+
+	router.GET("/orderbook/:exchange/:symbol/metrics", handler.GetOrderBookMetrics)
+
+	mockCCXT.On("IsHealthy", mock.Anything).Return(false)
+
+	req, _ := http.NewRequest("GET", "/orderbook/binance/BTCUSDT/metrics", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+
+	mockCCXT.AssertExpectations(t)
+}
+
 // Test struct validation
 func TestMarketPricesResponse_Struct(t *testing.T) {
 	response := MarketPricesResponse{
