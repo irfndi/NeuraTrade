@@ -51,11 +51,10 @@ jobs:
         run: cd services/backend-api && go vet ./...
 
       - name: Run Go lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: latest
-          working-directory: services/backend-api
-          args: --timeout=5m
+        run: |
+          cd services/backend-api
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          $(go env GOPATH)/bin/golangci-lint run --timeout=5m
 
   frontend-quality:
     name: Frontend Quality (${{ matrix.service }})
