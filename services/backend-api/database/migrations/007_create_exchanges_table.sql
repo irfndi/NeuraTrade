@@ -1,13 +1,13 @@
 -- Migration: 007_create_exchanges_table.sql
--- Description: Create exchanges table if it doesn't exist and ensure all required columns
--- This fixes the "relation exchanges does not exist" error
+-- Description: Ensure exchanges table has all required columns and data
+-- This migration is idempotent - handles both fresh installs and upgrades
 
 -- Create exchanges table if it doesn't exist
 CREATE TABLE IF NOT EXISTS exchanges (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) UNIQUE NOT NULL,
-    display_name VARCHAR(100) NOT NULL,
-    ccxt_id VARCHAR(50) UNIQUE NOT NULL,
+    display_name VARCHAR(100),
+    ccxt_id VARCHAR(50),
     api_url VARCHAR(255),
     status VARCHAR(20) DEFAULT 'active',
     has_spot BOOLEAN DEFAULT true,
@@ -58,58 +58,75 @@ BEGIN
     END IF;
 END $$;
 
--- Make api_url nullable (application doesn't always provide it)
+-- Make api_url nullable
 ALTER TABLE exchanges ALTER COLUMN api_url DROP NOT NULL;
 
--- Update existing exchanges with proper values if they exist
--- Only update rows where we can safely set values without violating unique constraints
-UPDATE exchanges SET 
-    display_name = CASE 
-        WHEN name = 'binance' THEN 'Binance'
-        WHEN name = 'coinbasepro' THEN 'Coinbase Pro'
-        WHEN name = 'kraken' THEN 'Kraken'
-        WHEN name = 'okx' THEN 'OKX'
-        WHEN name = 'bybit' THEN 'Bybit'
-        WHEN name = 'mexc' THEN 'MEXC'
-        WHEN name = 'gateio' THEN 'Gate.io'
-        WHEN name = 'kucoin' THEN 'KuCoin'
-        ELSE INITCAP(name)
-    END,
-    ccxt_id = COALESCE(ccxt_id, name),
-    status = COALESCE(status, 'active'),
-    has_spot = COALESCE(has_spot, true),
-    has_futures = CASE 
-        WHEN name IN ('binance', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin') THEN true
-        ELSE COALESCE(has_futures, false)
-    END
-WHERE display_name IS NULL OR ccxt_id IS NULL
-AND name IN ('binance', 'coinbasepro', 'kraken', 'okx', 'bybit', 'mexc', 'gateio', 'kucoin')
-AND (
-    SELECT COUNT(*) FROM exchanges e2 
-    WHERE e2.ccxt_id = exchanges.name AND e2.id != exchanges.id
-) = 0;
+-- Fix duplicate ccxt_id values FIRST before any other operations
+-- Handle any duplicates that may exist from previous migrations
+WITH duplicates AS (
+    SELECT id, ccxt_id, 
+           ROW_NUMBER() OVER (PARTITION BY ccxt_id ORDER BY id) as rn
+    FROM exchanges
+    WHERE ccxt_id IS NOT NULL
+)
+UPDATE exchanges 
+SET ccxt_id = duplicates.ccxt_id || '_dup' || (duplicates.rn - 1)
+FROM duplicates
+WHERE exchanges.id = duplicates.id AND duplicates.rn > 1;
 
--- Make required columns NOT NULL after updating
+-- Update display_name for rows where it's NULL
+UPDATE exchanges 
+SET display_name = CASE 
+    WHEN name IN ('binance', 'binance_us') THEN 'Binance'
+    WHEN name = 'coinbasepro' THEN 'Coinbase Pro'
+    WHEN name = 'kraken' THEN 'Kraken'
+    WHEN name = 'okx' THEN 'OKX'
+    WHEN name = 'bybit' THEN 'Bybit'
+    WHEN name = 'mexc' THEN 'MEXC'
+    WHEN name = 'gateio' THEN 'Gate.io'
+    WHEN name = 'kucoin' THEN 'KuCoin'
+    ELSE INITCAP(name)
+END
+WHERE display_name IS NULL AND name IS NOT NULL;
+
+-- Update ccxt_id for rows where it's NULL - use LOWER(name) to avoid duplicates
+UPDATE exchanges 
+SET ccxt_id = LOWER(name)
+WHERE ccxt_id IS NULL AND name IS NOT NULL;
+
+-- Fix any remaining duplicate ccxt_id after the updates
+WITH duplicates2 AS (
+    SELECT id, ccxt_id, 
+           ROW_NUMBER() OVER (PARTITION BY ccxt_id ORDER BY id) as rn
+    FROM exchanges
+    WHERE ccxt_id IS NOT NULL
+)
+UPDATE exchanges 
+SET ccxt_id = duplicates2.ccxt_id || '_dup' || (duplicates2.rn - 1)
+FROM duplicates2
+WHERE exchanges.id = duplicates2.id AND duplicates2.rn > 1;
+
+-- Make columns NOT NULL after ensuring values exist
 DO $$
 BEGIN
-    -- Make display_name NOT NULL if it has values
-    IF EXISTS (SELECT 1 FROM exchanges WHERE display_name IS NOT NULL) THEN
+    -- Make display_name NOT NULL if column has values
+    IF EXISTS (SELECT 1 FROM exchanges WHERE display_name IS NOT NULL LIMIT 1) THEN
         ALTER TABLE exchanges ALTER COLUMN display_name SET NOT NULL;
     END IF;
     
-    -- Make ccxt_id NOT NULL if it has values
-    IF EXISTS (SELECT 1 FROM exchanges WHERE ccxt_id IS NOT NULL) THEN
+    -- Make ccxt_id NOT NULL if column has values
+    IF EXISTS (SELECT 1 FROM exchanges WHERE ccxt_id IS NOT NULL LIMIT 1) THEN
         ALTER TABLE exchanges ALTER COLUMN ccxt_id SET NOT NULL;
     END IF;
 END $$;
 
--- Add unique constraint on ccxt_id (safe to run multiple times)
+-- Add unique constraint on ccxt_id if it doesn't exist
 DO $$
 BEGIN
-    -- Check if any unique constraint exists on ccxt_id column
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint 
         WHERE conrelid = 'exchanges'::regclass
+        AND contype = 'u'
         AND conname LIKE '%ccxt_id%'
     ) THEN
         ALTER TABLE exchanges ADD CONSTRAINT exchanges_ccxt_id_key UNIQUE (ccxt_id);
@@ -117,7 +134,6 @@ BEGIN
 END $$;
 
 -- Insert initial exchanges data with all required fields
--- Only insert if exchanges table is empty or missing these records
 INSERT INTO exchanges (name, display_name, ccxt_id, has_spot, has_futures, status) 
 SELECT * FROM (VALUES
     ('binance', 'Binance', 'binance', true, true, 'active'),
