@@ -30,20 +30,13 @@ type SkillVersion struct {
 }
 
 type DisclosureManager struct {
-	versions        map[string]SkillVersion
-	mu              sync.RWMutex
-	levelThresholds map[DisclosureLevel]int
+	versions map[string]SkillVersion
+	mu       sync.RWMutex
 }
 
 func NewDisclosureManager() *DisclosureManager {
 	return &DisclosureManager{
 		versions: make(map[string]SkillVersion),
-		levelThresholds: map[DisclosureLevel]int{
-			LevelMinimal:  25,
-			LevelBasic:    50,
-			LevelDetailed: 75,
-			LevelFull:     100,
-		},
 	}
 }
 

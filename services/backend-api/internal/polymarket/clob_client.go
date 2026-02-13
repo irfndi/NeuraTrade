@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"net/http"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -50,19 +52,19 @@ type PostOrderRequest struct {
 }
 
 type OrderResponse struct {
-	OrderID       string    `json:"orderID"`
-	Order         Order     `json:"order"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"createdAt"`
-	Price         float64   `json:"price"`
-	Size          float64   `json:"size"`
-	RemainingSize float64   `json:"remainingSize"`
-	FilledSize    float64   `json:"filledSize"`
+	OrderID       string          `json:"orderID"`
+	Order         Order           `json:"order"`
+	Status        string          `json:"status"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	Price         decimal.Decimal `json:"price"`
+	Size          decimal.Decimal `json:"size"`
+	RemainingSize decimal.Decimal `json:"remainingSize"`
+	FilledSize    decimal.Decimal `json:"filledSize"`
 }
 
 type OrderBookEntry struct {
-	Price float64 `json:"price"`
-	Size  float64 `json:"size"`
+	Price decimal.Decimal `json:"price"`
+	Size  decimal.Decimal `json:"size"`
 }
 
 type OrderBook struct {
@@ -71,10 +73,11 @@ type OrderBook struct {
 }
 
 type CLOBClient struct {
-	httpClient *http.Client
-	baseURL    string
-	apiKey     string
-	apiSecret  string
+	httpClient    *http.Client
+	baseURL       string
+	apiKey        string
+	apiSecret     string
+	walletAddress string
 }
 
 type CLOBOption func(*CLOBClient)
@@ -95,6 +98,12 @@ func WithCLOBCredentials(apiKey, apiSecret string) CLOBOption {
 	return func(c *CLOBClient) {
 		c.apiKey = apiKey
 		c.apiSecret = apiSecret
+	}
+}
+
+func WithWalletAddress(address string) CLOBOption {
+	return func(c *CLOBClient) {
+		c.walletAddress = address
 	}
 }
 
@@ -218,25 +227,25 @@ func (c *CLOBClient) GetOrderBook(ctx context.Context, tokenID string) (*OrderBo
 	return &orderBook, nil
 }
 
-func (c *CLOBClient) GetBestPrice(ctx context.Context, tokenID string, side Side) (float64, error) {
+func (c *CLOBClient) GetBestPrice(ctx context.Context, tokenID string, side Side) (decimal.Decimal, error) {
 	orderBook, err := c.GetOrderBook(ctx, tokenID)
 	if err != nil {
-		return 0, err
+		return decimal.Zero, err
 	}
 
 	switch side {
 	case SideBuy:
 		if len(orderBook.Asks) == 0 {
-			return 0, fmt.Errorf("no asks available")
+			return decimal.Zero, fmt.Errorf("no asks available")
 		}
 		return orderBook.Asks[0].Price, nil
 	case SideSell:
 		if len(orderBook.Bids) == 0 {
-			return 0, fmt.Errorf("no bids available")
+			return decimal.Zero, fmt.Errorf("no bids available")
 		}
 		return orderBook.Bids[0].Price, nil
 	default:
-		return 0, fmt.Errorf("invalid side: %s", side)
+		return decimal.Zero, fmt.Errorf("invalid side: %s", side)
 	}
 }
 
@@ -341,13 +350,13 @@ func (c *CLOBClient) GetOrder(ctx context.Context, orderID string) (*OrderRespon
 	return &order, nil
 }
 
-func CalculateMakerAmount(size, price float64) string {
-	makerAmount := size * price
-	return fmt.Sprintf("%d", int(makerAmount*1000))
+func CalculateMakerAmount(size, price decimal.Decimal) string {
+	makerAmount := size.Mul(price)
+	return makerAmount.Mul(decimal.NewFromInt(1000)).String()
 }
 
-func CalculateTakerAmount(size float64) string {
-	return fmt.Sprintf("%d", int(size*1000))
+func CalculateTakerAmount(size decimal.Decimal) string {
+	return size.Mul(decimal.NewFromInt(1000)).String()
 }
 
 func PriceToFloat(price *big.Int) float64 {
@@ -394,20 +403,20 @@ func CreatePostOrderRequest(
 }
 
 type PlaceMarketOrderRequest struct {
-	TokenID  string  `json:"tokenId"`
-	Side     Side    `json:"side"`
-	Size     float64 `json:"size"`
-	MaxPrice float64 `json:"maxPrice,omitempty"`
+	TokenID  string          `json:"tokenId"`
+	Side     Side            `json:"side"`
+	Size     decimal.Decimal `json:"size"`
+	MaxPrice decimal.Decimal `json:"maxPrice,omitempty"`
 }
 
 type PlaceLimitOrderRequest struct {
-	TokenID    string    `json:"tokenId"`
-	Side       Side      `json:"side"`
-	Size       float64   `json:"size"`
-	Price      float64   `json:"price"`
-	OrderType  OrderType `json:"orderType"`
-	PostOnly   bool      `json:"postOnly,omitempty"`
-	Expiration int64     `json:"expiration,omitempty"`
+	TokenID    string          `json:"tokenId"`
+	Side       Side            `json:"side"`
+	Size       decimal.Decimal `json:"size"`
+	Price      decimal.Decimal `json:"price"`
+	OrderType  OrderType       `json:"orderType"`
+	PostOnly   bool            `json:"postOnly,omitempty"`
+	Expiration int64           `json:"expiration,omitempty"`
 }
 
 func (c *CLOBClient) PlaceMarketOrder(ctx context.Context, req PlaceMarketOrderRequest) (*OrderResponse, error) {
@@ -416,8 +425,8 @@ func (c *CLOBClient) PlaceMarketOrder(ctx context.Context, req PlaceMarketOrderR
 		return nil, fmt.Errorf("failed to get best price: %w", err)
 	}
 
-	if req.MaxPrice > 0 && bestPrice > req.MaxPrice {
-		return nil, fmt.Errorf("best price %.4f exceeds max price %.4f", bestPrice, req.MaxPrice)
+	if req.MaxPrice.GreaterThan(decimal.Zero) && bestPrice.GreaterThan(req.MaxPrice) {
+		return nil, fmt.Errorf("best price %s exceeds max price %s", bestPrice.String(), req.MaxPrice.String())
 	}
 
 	return c.PlaceLimitOrder(ctx, PlaceLimitOrderRequest{
@@ -441,8 +450,8 @@ func (c *CLOBClient) PlaceLimitOrder(ctx context.Context, req PlaceLimitOrderReq
 
 	order := BuildOrder(
 		salt,
-		c.apiKey,
-		c.apiKey,
+		c.walletAddress,
+		c.walletAddress,
 		"0x0000000000000000000000000000000000000000",
 		req.TokenID,
 		makerAmount,
