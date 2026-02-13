@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/models"
@@ -14,6 +14,7 @@ import (
 type TelegramBindingHandler struct {
 	userHandler *UserHandler
 	otpService  *services.OTPService
+	db          DBQuerier
 }
 
 // BindingRequest represents the Telegram binding request.
@@ -32,15 +33,15 @@ type BindingResponse struct {
 }
 
 // NewTelegramBindingHandler creates a new TelegramBindingHandler.
-func NewTelegramBindingHandler(userHandler *UserHandler, otpService *services.OTPService) *TelegramBindingHandler {
+func NewTelegramBindingHandler(db DBQuerier, userHandler *UserHandler, otpService *services.OTPService) *TelegramBindingHandler {
 	return &TelegramBindingHandler{
 		userHandler: userHandler,
 		otpService:  otpService,
+		db:          db,
 	}
 }
 
 // InitiateBinding initiates the Telegram profile binding process.
-// It generates a one-time code for the user to verify their identity.
 func (h *TelegramBindingHandler) InitiateBinding(c *gin.Context) {
 	var req struct {
 		UserID string `json:"user_id" binding:"required"`
@@ -51,7 +52,6 @@ func (h *TelegramBindingHandler) InitiateBinding(c *gin.Context) {
 		return
 	}
 
-	// Generate OTP code for telegram binding
 	otp, err := h.otpService.GenerateCode(c.Request.Context(), req.UserID, models.OTPPurposeTelegramBinding)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to generate binding code: %v", err)})
@@ -62,12 +62,11 @@ func (h *TelegramBindingHandler) InitiateBinding(c *gin.Context) {
 		Success:   true,
 		Message:   "Binding code generated. Please verify with the code sent to your Telegram.",
 		UserID:    req.UserID,
-		ExpiresAt: otp.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
+		ExpiresAt: otp.ExpiresAt.Format(time.RFC3339),
 	})
 }
 
 // CompleteBinding completes the Telegram profile binding process.
-// It verifies the OTP code and binds the Telegram chat ID to the user profile.
 func (h *TelegramBindingHandler) CompleteBinding(c *gin.Context) {
 	var req BindingRequest
 
@@ -76,7 +75,6 @@ func (h *TelegramBindingHandler) CompleteBinding(c *gin.Context) {
 		return
 	}
 
-	// Verify the OTP code
 	if _, err := h.otpService.VerifyCode(c.Request.Context(), req.UserID, req.Code, models.OTPPurposeTelegramBinding); err != nil {
 		switch err {
 		case services.ErrOTPNotFound:
@@ -86,39 +84,30 @@ func (h *TelegramBindingHandler) CompleteBinding(c *gin.Context) {
 		case services.ErrOTPAlreadyUsed:
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Code has already been used"})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("verification failed: %v", err)})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "verification failed"})
 		}
 		return
 	}
 
-	// Get user by ID
 	user, err := h.userHandler.getUserByID(c.Request.Context(), req.UserID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
 
-	// Update user's Telegram chat ID
-	chatID := req.ChatID
-	user.TelegramChatID = &chatID
-
-	// Update user profile
 	query := `
 		UPDATE users
 		SET telegram_chat_id = $2, updated_at = $3
 		WHERE id = $1
 	`
-	_, err = c.Request.Context().Value("db").(interface {
-		Exec(ctx context.Context, sql string, args ...interface{}) (interface{}, error)
-	}).Exec(c.Request.Context(), query, req.UserID, chatID)
+	_, err = h.db.Exec(c.Request.Context(), query, req.UserID, req.ChatID, time.Now())
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update Telegram binding"})
 		return
 	}
 
-	// Invalidate cache
-	h.userHandler.invalidateUserCache(c.Request.Context(), req.UserID, user, &chatID)
+	h.userHandler.invalidateUserCache(c.Request.Context(), req.UserID, user, &req.ChatID)
 
 	c.JSON(http.StatusOK, BindingResponse{
 		Success: true,
@@ -128,13 +117,11 @@ func (h *TelegramBindingHandler) CompleteBinding(c *gin.Context) {
 }
 
 // GenerateBindingCode generates a one-time code for Telegram binding.
-// This is an alias for InitiateBinding to match API naming conventions.
 func (h *TelegramBindingHandler) GenerateBindingCode(c *gin.Context) {
 	h.InitiateBinding(c)
 }
 
 // VerifyBindingCode verifies the one-time code and binds Telegram chat ID.
-// This is an alias for CompleteBinding to match API naming conventions.
 func (h *TelegramBindingHandler) VerifyBindingCode(c *gin.Context) {
 	h.CompleteBinding(c)
 }
