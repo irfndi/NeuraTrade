@@ -456,11 +456,3 @@ func (ro *ResourceOptimizer) GetSystemInfo() map[string]interface{} {
 		"optimal_config":    ro.optimalConcurrency,
 	}
 }
-
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

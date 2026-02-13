@@ -148,8 +148,8 @@ func (s *DBQuestStore) GetQuest(ctx context.Context, id string) (*Quest, error) 
 		quest.LastError = lastError.String
 	}
 
-	json.Unmarshal(checkpointJSON, &quest.Checkpoint)
-	json.Unmarshal(metadataJSON, &quest.Metadata)
+	_ = json.Unmarshal(checkpointJSON, &quest.Checkpoint)
+	_ = json.Unmarshal(metadataJSON, &quest.Metadata)
 
 	return &quest, nil
 }
@@ -215,8 +215,8 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 			quest.LastError = lastError.String
 		}
 
-		json.Unmarshal(checkpointJSON, &quest.Checkpoint)
-		json.Unmarshal(metadataJSON, &quest.Metadata)
+		_ = json.Unmarshal(checkpointJSON, &quest.Checkpoint)
+		_ = json.Unmarshal(metadataJSON, &quest.Metadata)
 
 		quests = append(quests, &quest)
 	}
@@ -304,7 +304,7 @@ func (s *DBQuestStore) GetAutonomousState(ctx context.Context, chatID string) (*
 		state.PausedAt = pausedAt.Time
 	}
 
-	json.Unmarshal(activeQuestsJSON, &state.ActiveQuests)
+	_ = json.Unmarshal(activeQuestsJSON, &state.ActiveQuests)
 
 	return &state, nil
 }
