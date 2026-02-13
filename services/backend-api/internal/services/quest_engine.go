@@ -769,13 +769,15 @@ func (e *QuestEngine) UpdateQuestProgress(questID string, current int, checkpoin
 		if quest.TargetCount > 0 {
 			percent = (current * 100) / quest.TargetCount
 		}
+		timeRemaining := calculateTimeRemaining(quest)
 		progressNotif := QuestProgressNotification{
-			QuestID:   questID,
-			QuestName: quest.Name,
-			Current:   current,
-			Target:    quest.TargetCount,
-			Percent:   percent,
-			Status:    string(quest.Status),
+			QuestID:       questID,
+			QuestName:     quest.Name,
+			Current:       current,
+			Target:        quest.TargetCount,
+			Percent:       percent,
+			Status:        string(quest.Status),
+			TimeRemaining: timeRemaining,
 		}
 		go func() {
 			if err := e.notificationService.NotifyQuestProgress(context.Background(), chatID, progressNotif); err != nil {
@@ -830,4 +832,56 @@ func UnmarshalCheckpoint(data []byte) (map[string]interface{}, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func calculateTimeRemaining(quest *Quest) string {
+	if quest.Status == QuestStatusCompleted {
+		return "completed"
+	}
+	if quest.Status == QuestStatusFailed {
+		return "failed"
+	}
+
+	lastExec := time.Now()
+	if quest.LastExecutedAt != nil {
+		lastExec = *quest.LastExecutedAt
+	}
+
+	var duration time.Duration
+	switch quest.Cadence {
+	case CadenceMicro:
+		duration = 5 * time.Minute
+	case CadenceHourly:
+		duration = time.Hour
+	case CadenceDaily:
+		duration = 24 * time.Hour
+	case CadenceWeekly:
+		duration = 7 * 24 * time.Hour
+	case CadenceOnetime:
+		return "one-time"
+	}
+
+	nextRun := lastExec.Add(duration)
+	remaining := nextRun.Sub(time.Now())
+	if remaining <= 0 {
+		return "due now"
+	}
+
+	if remaining < time.Minute {
+		return "<1m"
+	}
+	if remaining < time.Hour {
+		mins := int(remaining.Minutes())
+		return fmt.Sprintf("%dm", mins)
+	}
+	if remaining < 24*time.Hour {
+		hours := int(remaining.Hours())
+		mins := int(remaining.Minutes()) % 60
+		if mins > 0 {
+			return fmt.Sprintf("%dh %dm", hours, mins)
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	days := int(remaining.Hours() / 24)
+	return fmt.Sprintf("%dd", days)
 }
