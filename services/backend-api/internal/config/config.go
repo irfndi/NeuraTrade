@@ -47,6 +47,8 @@ type Config struct {
 	Fees FeesConfig `mapstructure:"fees"`
 	// Analytics holds configuration for analytics features.
 	Analytics AnalyticsConfig `mapstructure:"analytics"`
+	// Wallet holds configuration for wallet validation.
+	Wallet WalletValidatorConfig `mapstructure:"wallet"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -312,6 +314,12 @@ type AnalyticsConfig struct {
 	VolatilityLowThreshold  float64 `mapstructure:"volatility_low_threshold"`
 }
 
+type WalletValidatorConfig struct {
+	MinimumUSDCBalance         float64 `mapstructure:"minimum_usdc_balance"`
+	MinimumPortfolioValue      float64 `mapstructure:"minimum_portfolio_value"`
+	MinimumExchangeConnections int     `mapstructure:"minimum_exchange_connections"`
+}
+
 // Load reads the configuration from the config file and environment variables.
 //
 // Returns:
@@ -545,6 +553,11 @@ func setDefaults() {
 	viper.SetDefault("analytics.regime_long_window", 60)
 	viper.SetDefault("analytics.volatility_high_threshold", 0.03)
 	viper.SetDefault("analytics.volatility_low_threshold", 0.005)
+
+	// Wallet validation
+	viper.SetDefault("wallet.minimum_usdc_balance", 100.0)
+	viper.SetDefault("wallet.minimum_portfolio_value", 500.0)
+	viper.SetDefault("wallet.minimum_exchange_connections", 1)
 }
 
 // GetServiceURL returns the CCXT service URL.

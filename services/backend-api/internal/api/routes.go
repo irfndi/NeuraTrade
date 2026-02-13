@@ -64,7 +64,7 @@ func getEnvOrDefault(key, defaultValue string) string {
 //	signalAggregator: Service for aggregating trading signals.
 //	telegramConfig: Configuration for Telegram notifications.
 //	authMiddleware: Middleware for handling authentication.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware) {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator) {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -153,6 +153,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
 	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
+
+	// Initialize wallet handler
+	walletHandler := handlers.NewWalletHandler(walletValidator)
 
 	// Initialize futures arbitrage handler with error handling
 	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler
@@ -273,6 +276,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		risk := v1.Group("/risk")
 		{
 			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
+			risk.POST("/validate_wallet", walletHandler.ValidateWallet)
 		}
 
 		trading := v1.Group("/trading")
