@@ -33,9 +33,11 @@
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
 
 ### Recently Completed (✓)
+- ✓ `neura-5of`: Telegram profile binding schema (operator_identities table)
+- ✓ `neura-ydp`: Operator identity encryption (Argon2 + encrypted fields)
 - ✓ `neura-yus`: API keys encryption at rest (AES-256-GCM)
 - ✓ `neura-nh5`: Risk event notification log schema
 - ✓ `neura-px6`: Security audit data retention tables
@@ -48,10 +50,6 @@
 - `neura-8de`: Virtual account tracking schema (paper trading accounts)
 - `neura-mm5`: Paper trade recording schema (paper_trades table)
 - `neura-u4w`: Paper execution simulation schema
-
-### Security & Encryption (Blocked)
-- `neura-5of`: Telegram profile binding schema (operator_identities table)
-- `neura-ydp`: Operator identity encryption (Argon2 + encrypted fields)
 
 ## ANTI-PATTERNS
 - Renumbering existing migrations after they are shared.

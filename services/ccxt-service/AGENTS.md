@@ -37,29 +37,24 @@ bun test
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 173 total | 117 open | 67 blocked | 56 closed | 50 ready
+**Stats:** 179 total | 101 open | 59 blocked | 78 closed | 42 ready
 
 ### Ready to Work (No Blockers)
-
 - `neura-xxy`: WebSocket market data subscription
 - `neura-qts`: CLOB API wrapper for order execution
 
 ### Recently Completed (✓)
-
 - ✓ `neura-wiz`: Gamma API wrapper for market discovery (Polymarket)
 - ✓ `neura-za8`: Rate limit monitoring and alerting
 
 ### WebSocket & Real-time Data (Blocked)
-
 - `neura-4ms`: Extend CCXT wrapper functionality (backend-api integration)
 
 ### Rate Limiting & Resilience (Blocked)
-
 - `neura-1b6`: Token bucket rate limit management (depends on neura-xxy)
 - `neura-4p6`: Exchange resilience monitoring
 
 ### API Wrappers (Blocked)
-
 - `neura-adu`: Data API wrapper for positions/balances
 
 ## ANTI-PATTERNS
