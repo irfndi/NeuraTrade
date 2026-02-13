@@ -197,11 +197,6 @@ func (wcs *WalletConvictionScorer) calculateBalanceStability(ctx context.Context
 		return decimal.Zero, fmt.Errorf("database connection is nil")
 	}
 
-	// Check for stable balance history
-	// Score based on:
-	// - Consistent balance above minimum (15 points)
-	// - Low variance in balance (10 points)
-
 	var avgBalance decimal.Decimal
 	var balanceVariance decimal.Decimal
 	var daysWithData int
@@ -217,28 +212,24 @@ func (wcs *WalletConvictionScorer) calculateBalanceStability(ctx context.Context
 	`, chatID).Scan(&avgBalance, &balanceVariance, &daysWithData)
 
 	if err != nil {
-		// If no history, give partial credit if wallet exists
 		return decimal.NewFromInt(10), nil
 	}
 
 	score := decimal.Zero
 
-	// Consistent balance above minimum (up to 15 points)
 	if avgBalance.GreaterThanOrEqual(wcs.config.MinBalanceForHigh) {
 		score = score.Add(decimal.NewFromInt(15))
 	} else if avgBalance.GreaterThan(decimal.Zero) {
-		// Partial credit for lower balance
 		ratio := avgBalance.Div(wcs.config.MinBalanceForHigh)
 		score = score.Add(decimal.NewFromInt(15).Mul(ratio))
 	}
 
-	// Low variance bonus (up to 10 points)
-	if daysWithData >= 7 {
+	if daysWithData >= 7 && avgBalance.GreaterThan(decimal.Zero) {
 		if balanceVariance.IsZero() {
 			score = score.Add(decimal.NewFromInt(10))
 		} else {
-			// Lower variance = higher score
-			varianceScore := decimal.NewFromInt(10).Sub(balanceVariance.Div(avgBalance.Mul(decimal.NewFromInt(10))))
+			varianceRatio := balanceVariance.Div(avgBalance)
+			varianceScore := decimal.NewFromInt(10).Sub(varianceRatio)
 			if varianceScore.GreaterThan(decimal.Zero) {
 				score = score.Add(varianceScore)
 			}
@@ -301,16 +292,17 @@ func (wcs *WalletConvictionScorer) calculateTradingActivity(ctx context.Context,
 		return decimal.Zero, fmt.Errorf("database connection is nil")
 	}
 
-	// Count recent trades/signals
 	var tradeCount int
 	var signalCount int
+
+	intervalExpr := fmt.Sprintf("INTERVAL '%d days'", wcs.config.ActivityLookbackDays)
 
 	err := wcs.db.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM trades
 		WHERE chat_id = $1
-		  AND created_at >= NOW() - INTERVAL '%d days'
-	`, chatID, wcs.config.ActivityLookbackDays).Scan(&tradeCount)
+		  AND created_at >= NOW() - `+intervalExpr+`
+	`, chatID).Scan(&tradeCount)
 	if err != nil {
 		tradeCount = 0
 	}
@@ -319,21 +311,17 @@ func (wcs *WalletConvictionScorer) calculateTradingActivity(ctx context.Context,
 		SELECT COUNT(*)
 		FROM signals_processed
 		WHERE chat_id = $1
-		  AND created_at >= NOW() - INTERVAL '%d days'
-	`, chatID, wcs.config.ActivityLookbackDays).Scan(&signalCount)
+		  AND created_at >= NOW() - `+intervalExpr+`
+	`, chatID).Scan(&signalCount)
 	if err != nil {
 		signalCount = 0
 	}
 
 	score := decimal.Zero
-
-	// Trading activity (up to 20 points)
-	// More trades = higher score, with diminishing returns
 	totalActivity := tradeCount + signalCount
 	if totalActivity >= 50 {
 		score = decimal.NewFromInt(20)
 	} else if totalActivity > 0 {
-		// Logarithmic scaling for activity
 		activityScore := decimal.NewFromFloat(float64(totalActivity) / 50.0 * 20.0)
 		score = activityScore
 	}
@@ -441,14 +429,17 @@ func (wcs *WalletConvictionScorer) calculateTrend(score *WalletConvictionScore) 
 		return ScoreTrendStable
 	}
 
-	// Compare current score to average of historical scores
 	var total decimal.Decimal
 	for _, s := range score.HistoricalScores {
 		total = total.Add(s)
 	}
 	avg := total.Div(decimal.NewFromInt(int64(len(score.HistoricalScores))))
 
-	threshold := decimal.NewFromFloat(5.0) // 5% threshold for significance
+	if avg.IsZero() {
+		return ScoreTrendStable
+	}
+
+	threshold := decimal.NewFromFloat(5.0)
 	changePercent := score.Score.Sub(avg).Div(avg).Mul(decimal.NewFromInt(100))
 
 	if changePercent.GreaterThan(threshold) {
