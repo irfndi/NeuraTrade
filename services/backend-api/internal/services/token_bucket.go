@@ -404,6 +404,10 @@ func (tb *TokenBucketRateLimiter) reserveLocal(key string, n int, rate float64, 
 
 	// Calculate wait time
 	deficit := float64(n) - bucket.tokens
+	if rate <= 0 {
+		// No refill - return max duration to indicate tokens will never be available
+		return time.Duration(1<<63 - 1)
+	}
 	return time.Duration(deficit/rate) * time.Second
 }
 
@@ -468,12 +472,4 @@ func DefaultExchangeRateLimits() []ExchangeRateLimit {
 		// Default for unknown exchanges
 		{Exchange: "*", Endpoint: "*", Rate: 10, Burst: 30, Enabled: true},
 	}
-}
-
-// min returns the smaller of two floats.
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
 }
