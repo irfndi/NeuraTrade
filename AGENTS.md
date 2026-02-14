@@ -1,6 +1,6 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-13 13:41 Asia/Jakarta
+**Generated:** 2026-02-14 13:51 Asia/Jakarta
 **Commit:** c3dc227
 **Branch:** development
 
@@ -84,7 +84,7 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 185 total | 58 open | 0 in progress | 28 blocked | 127 closed | 30 ready
+**Stats:** 193 total | 36 open | 0 in progress | 15 blocked | 157 closed | 10 ready
 
 ### Recently Completed (✓)
 - ✓ `neura-1wi`: FOK order execution

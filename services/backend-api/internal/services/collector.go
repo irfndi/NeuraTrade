@@ -388,6 +388,9 @@ type CollectorService struct {
 	lastFundingCollection   map[string]time.Time
 	symbolRefreshMu         sync.RWMutex
 	fundingCollectionMu     sync.RWMutex
+	// Anti-manipulation filters
+	lastPrice   sync.Map // map[string]priceCacheEntry
+	volumeStats sync.Map // map[string]volumeStatsEntry
 	// Separate intervals
 	tickerInterval        time.Duration
 	symbolRefreshInterval time.Duration
@@ -2603,7 +2606,148 @@ func (c *CollectorService) validateMarketData(ticker *models.MarketPrice, exchan
 		return fmt.Errorf("old timestamp: %s for %s on %s", timestamp, symbol, exchange)
 	}
 
+	// Anti-manipulation: Check for price outliers (>50% move in 1 minute)
+	if err := c.checkPriceOutlier(ticker, exchange, symbol); err != nil {
+		return err
+	}
+
+	// Anti-manipulation: Check for volume anomalies (potential wash trading)
+	if err := c.checkVolumeAnomaly(ticker, exchange, symbol); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// checkPriceOutlier checks if price moved more than 50% in 1 minute (potential manipulation)
+func (c *CollectorService) checkPriceOutlier(ticker *models.MarketPrice, exchange, symbol string) error {
+	key := fmt.Sprintf("%s:%s", exchange, symbol)
+
+	var prevPrice decimal.Decimal
+	var prevTime time.Time
+
+	if cached, ok := c.lastPrice.Load(key); ok {
+		entry := cached.(priceCacheEntry)
+		prevPrice = entry.price
+		prevTime = entry.timestamp
+	}
+
+	if prevPrice.IsZero() {
+		c.lastPrice.Store(key, priceCacheEntry{
+			price:     ticker.Price,
+			timestamp: ticker.Timestamp,
+		})
+		return nil
+	}
+
+	timeDiff := ticker.Timestamp.Sub(prevTime)
+	if timeDiff < 30*time.Second {
+		c.lastPrice.Store(key, priceCacheEntry{
+			price:     ticker.Price,
+			timestamp: ticker.Timestamp,
+		})
+		return nil
+	}
+
+	priceChange := ticker.Price.Sub(prevPrice).Abs().Div(prevPrice).Mul(decimal.NewFromInt(100))
+
+	maxAllowedChange := decimal.NewFromFloat(50.0)
+	if priceChange.GreaterThan(maxAllowedChange) {
+		c.logger.WithFields(map[string]interface{}{
+			"exchange":       exchange,
+			"symbol":         symbol,
+			"previous_price": prevPrice,
+			"current_price":  ticker.Price,
+			"price_change":   priceChange,
+			"time_diff_sec":  timeDiff.Seconds(),
+		}).Warn("Price outlier detected - potential manipulation")
+
+		c.blacklistCache.Add(
+			key,
+			fmt.Sprintf("Price moved %.1f%% in %.0fs", priceChange.InexactFloat64(), timeDiff.Seconds()),
+			5*time.Minute,
+		)
+
+		return fmt.Errorf("price outlier detected: %.1f%% change in %.0fs (max 50%% allowed)", priceChange.InexactFloat64(), timeDiff.Seconds())
+	}
+
+	c.lastPrice.Store(key, priceCacheEntry{
+		price:     ticker.Price,
+		timestamp: ticker.Timestamp,
+	})
+
+	return nil
+}
+
+// checkVolumeAnomaly checks for suspicious volume patterns (potential wash trading)
+func (c *CollectorService) checkVolumeAnomaly(ticker *models.MarketPrice, exchange, symbol string) error {
+	// Skip if volume is zero (no trading)
+	if ticker.Volume.IsZero() {
+		return nil
+	}
+
+	key := fmt.Sprintf("%s:%s", exchange, symbol)
+
+	var avgVolume decimal.Decimal
+	var sampleCount int
+
+	if cached, ok := c.volumeStats.Load(key); ok {
+		entry := cached.(volumeStatsEntry)
+		avgVolume = entry.avgVolume
+		sampleCount = entry.sampleCount
+	}
+
+	if sampleCount < 5 {
+		newAvg := avgVolume.Mul(decimal.NewFromInt(int64(sampleCount))).Add(ticker.Volume).
+			Div(decimal.NewFromInt(int64(sampleCount + 1)))
+
+		c.volumeStats.Store(key, volumeStatsEntry{
+			avgVolume:   newAvg,
+			sampleCount: sampleCount + 1,
+		})
+		return nil
+	}
+
+	volumeRatio := ticker.Volume.Div(avgVolume)
+	maxVolumeRatio := decimal.NewFromFloat(10.0)
+
+	if volumeRatio.GreaterThan(maxVolumeRatio) {
+		c.logger.WithFields(map[string]interface{}{
+			"exchange":       exchange,
+			"symbol":         symbol,
+			"current_volume": ticker.Volume,
+			"avg_volume":     avgVolume,
+			"volume_ratio":   volumeRatio,
+		}).Debug("High volume detected - possible wash trading")
+
+		newAvg := avgVolume.Mul(decimal.NewFromFloat(0.7)).Add(ticker.Volume.Mul(decimal.NewFromFloat(0.3)))
+		c.volumeStats.Store(key, volumeStatsEntry{
+			avgVolume:   newAvg,
+			sampleCount: sampleCount + 1,
+		})
+
+		return nil
+	}
+
+	newAvg := avgVolume.Mul(decimal.NewFromFloat(0.9)).Add(ticker.Volume.Mul(decimal.NewFromFloat(0.1)))
+	c.volumeStats.Store(key, volumeStatsEntry{
+		avgVolume:   newAvg,
+		sampleCount: sampleCount + 1,
+	})
+
+	return nil
+}
+
+// priceCacheEntry stores last price for outlier detection
+type priceCacheEntry struct {
+	price     decimal.Decimal
+	timestamp time.Time
+}
+
+// volumeStatsEntry stores volume statistics for anomaly detection
+type volumeStatsEntry struct {
+	avgVolume   decimal.Decimal
+	sampleCount int
 }
 
 // PerformBackfillIfNeeded checks if backfill is needed and performs it
