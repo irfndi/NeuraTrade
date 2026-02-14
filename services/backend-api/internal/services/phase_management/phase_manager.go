@@ -92,11 +92,15 @@ func (pm *PhaseManager) run(ctx context.Context) {
 }
 
 func (pm *PhaseManager) checkPhaseTransition(ctx context.Context) {
-	if pm.portfolioGetter == nil {
+	pm.mu.RLock()
+	getter := pm.portfolioGetter
+	pm.mu.RUnlock()
+
+	if getter == nil {
 		return
 	}
 
-	portfolioValue, err := pm.portfolioGetter()
+	portfolioValue, err := getter()
 	if err != nil {
 		pm.logger.WithError(err).Error("Failed to get portfolio value for phase check")
 		return
@@ -107,10 +111,11 @@ func (pm *PhaseManager) checkPhaseTransition(ctx context.Context) {
 		pm.mu.Lock()
 		pm.currentStrategy = pm.adapter.SelectStrategy(event.ToPhase)
 		pm.currentRisk = pm.adapter.GetRiskParams(event.ToPhase)
+		strategyName := pm.currentStrategy.Name
 		pm.mu.Unlock()
 
 		pm.logger.WithField("phase", event.ToPhase.String()).
-			WithField("strategy", pm.currentStrategy.Name).
+			WithField("strategy", strategyName).
 			WithField("portfolio_value", portfolioValue.String()).
 			Info("Phase auto-transitioned during periodic check")
 	}
@@ -129,10 +134,11 @@ func (pm *PhaseManager) OnPortfolioValueUpdate(portfolioValue decimal.Decimal, r
 		pm.mu.Lock()
 		pm.currentStrategy = pm.adapter.SelectStrategy(event.ToPhase)
 		pm.currentRisk = pm.adapter.GetRiskParams(event.ToPhase)
+		strategyName := pm.currentStrategy.Name
 		pm.mu.Unlock()
 
 		pm.logger.WithField("phase", event.ToPhase.String()).
-			WithField("strategy", pm.currentStrategy.Name).
+			WithField("strategy", strategyName).
 			Info("Phase transitioned - strategy updated")
 	}
 

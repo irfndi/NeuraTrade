@@ -262,10 +262,9 @@ func (pm *QuestProgressManager) sendMilestoneNotification(update *QuestProgressU
 		TimeRemaining: fmt.Sprintf("Milestone: %s", update.ReachedMilestone.Name),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		if err := pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif); err != nil {
 			// Log error but don't fail the update
 		}
@@ -293,10 +292,9 @@ func (pm *QuestProgressManager) sendProgressUpdate(update *QuestProgressUpdate) 
 		TimeRemaining: pm.formatTimeRemaining(update),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		if err := pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif); err != nil {
 			// Log error but don't fail the update
 		}
@@ -324,10 +322,9 @@ func (pm *QuestProgressManager) sendCompletionNotification(update *QuestProgress
 		TimeRemaining: "completed",
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		if err := pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif); err != nil {
 			// Log error but don't fail the update
 		}
@@ -391,6 +388,10 @@ func (pm *QuestProgressManager) GetQuestProgressSummary(questID string) (*QuestP
 		percentComplete = (quest.CurrentCount * 100) / quest.TargetCount
 	}
 
+	pm.mu.RLock()
+	milestones := pm.milestones[questID]
+	pm.mu.RUnlock()
+
 	summary := &QuestProgressUpdate{
 		QuestID:         questID,
 		QuestName:       quest.Name,
@@ -398,7 +399,7 @@ func (pm *QuestProgressManager) GetQuestProgressSummary(questID string) (*QuestP
 		TargetCount:     quest.TargetCount,
 		PercentComplete: percentComplete,
 		Status:          string(quest.Status),
-		Milestones:      pm.milestones[questID],
+		Milestones:      milestones,
 		Timestamp:       time.Now(),
 	}
 
@@ -408,11 +409,15 @@ func (pm *QuestProgressManager) GetQuestProgressSummary(questID string) (*QuestP
 // ListAllProgress returns progress for all active quests
 func (pm *QuestProgressManager) ListAllProgress() ([]*QuestProgressUpdate, error) {
 	pm.mu.RLock()
-	defer pm.mu.RUnlock()
+	questIDs := make([]string, 0, len(pm.milestones))
+	for questID := range pm.milestones {
+		questIDs = append(questIDs, questID)
+	}
+	pm.mu.RUnlock()
 
 	updates := make([]*QuestProgressUpdate, 0)
 
-	for questID := range pm.milestones {
+	for _, questID := range questIDs {
 		summary, err := pm.GetQuestProgressSummary(questID)
 		if err != nil {
 			continue

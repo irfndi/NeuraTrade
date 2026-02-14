@@ -268,15 +268,19 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 }
 
 func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, severity string) {
-	if h.notificationSvc == nil {
+	h.mu.RLock()
+	svc := h.notificationSvc
+	h.mu.RUnlock()
+
+	if svc == nil {
 		return
 	}
 
 	chatIDInt, err := strconv.ParseInt(state.ChatID, 10, 64)
 	if err != nil {
 		// Log the error - use notification service logger if available
-		if h.notificationSvc != nil && h.notificationSvc.logger != nil {
-			h.notificationSvc.logger.Error("Failed to parse chat ID for risk notification",
+		if svc != nil && svc.logger != nil {
+			svc.logger.Error("Failed to parse chat ID for risk notification",
 				"chat_id_str", state.ChatID,
 				"error", err)
 		}
@@ -299,9 +303,9 @@ func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, sever
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := h.notificationSvc.NotifyRiskEvent(ctx, chatIDInt, event); err != nil {
-			if h.notificationSvc.logger != nil {
-				h.notificationSvc.logger.Error("Failed to send risk event notification",
+		if err := svc.NotifyRiskEvent(ctx, chatIDInt, event); err != nil {
+			if svc.logger != nil {
+				svc.logger.Error("Failed to send risk event notification",
 					"chat_id", chatIDInt,
 					"event_type", eventType,
 					"error", err)

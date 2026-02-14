@@ -272,6 +272,10 @@ func (r *PaperTradeRecorder) GetOpenTrades(ctx context.Context, userID string) (
 		trades = append(trades, &trade)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
 	return trades, nil
 }
 
@@ -317,6 +321,10 @@ func (r *PaperTradeRecorder) GetTradeHistory(ctx context.Context, userID string,
 			return nil, fmt.Errorf("failed to scan trade: %w", err)
 		}
 		trades = append(trades, &trade)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
 	return trades, nil

@@ -72,6 +72,32 @@ type RoundRobinDebateResult struct {
 	PortfolioState  PortfolioState           `json:"portfolio_state"`
 }
 
+// Clone creates a deep copy of the debate result
+func (r *RoundRobinDebateResult) Clone() *RoundRobinDebateResult {
+	if r == nil {
+		return nil
+	}
+	clonedRounds := make([]*RoundRobinDebateRound, len(r.Rounds))
+	for i, round := range r.Rounds {
+		if round != nil {
+			clonedRound := *round
+			clonedRounds[i] = &clonedRound
+		}
+	}
+	return &RoundRobinDebateResult{
+		DebateID:        r.DebateID,
+		StartedAt:       r.StartedAt,
+		EndedAt:         r.EndedAt,
+		Rounds:          clonedRounds,
+		FinalConsensus:  r.FinalConsensus,
+		FinalDecision:   r.FinalDecision,
+		FinalConfidence: r.FinalConfidence,
+		TotalRounds:     r.TotalRounds,
+		MarketContext:   r.MarketContext,
+		PortfolioState:  r.PortfolioState,
+	}
+}
+
 // DebateCoordinator manages round-robin debates between agents
 type DebateCoordinator struct {
 	config        RoundRobinDebateConfig
@@ -290,7 +316,7 @@ func (dc *DebateCoordinator) GetActiveDebates() []*RoundRobinDebateResult {
 
 	debates := make([]*RoundRobinDebateResult, 0, len(dc.activeDebates))
 	for _, debate := range dc.activeDebates {
-		debates = append(debates, debate)
+		debates = append(debates, debate.Clone())
 	}
 	return debates
 }

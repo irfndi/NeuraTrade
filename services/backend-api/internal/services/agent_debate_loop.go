@@ -85,6 +85,10 @@ func (d *AgentDebateLoop) RunDebate(ctx context.Context, market MarketContext, p
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.config.MaxRounds <= 0 {
+		return nil, fmt.Errorf("invalid MaxRounds: must be greater than 0, got %d", d.config.MaxRounds)
+	}
+
 	rounds := make([]*DebateRound, 0, d.config.MaxRounds)
 
 	for round := 1; round <= d.config.MaxRounds; round++ {
@@ -132,6 +136,10 @@ func (d *AgentDebateLoop) RunDebate(ctx context.Context, market MarketContext, p
 		if debateRound.Consensus == "approved" || round == d.config.MaxRounds {
 			break
 		}
+	}
+
+	if len(rounds) == 0 {
+		return nil, fmt.Errorf("no debate rounds were executed")
 	}
 
 	return rounds[len(rounds)-1], nil

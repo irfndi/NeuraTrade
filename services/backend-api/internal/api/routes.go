@@ -14,6 +14,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
@@ -69,6 +70,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
+	// Extract Redis client with nil guard
+	var rClient *goredis.Client
+	if redis != nil {
+		rClient = redis.Client
+	}
+
 	// Initialize health handler
 	healthHandler := handlers.NewHealthHandler(db, redis, ccxtService.GetServiceURL(), cacheAnalyticsService)
 
@@ -83,7 +90,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Initialize user and telegram internal handlers early for internal routes
-	userHandler := handlers.NewUserHandler(db, redis.Client, authMiddleware)
+	userHandler := handlers.NewUserHandler(db, rClient, authMiddleware)
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler)
 
 	// Internal service-to-service routes (no auth, network-isolated via Docker)
@@ -119,21 +126,25 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Initialize handlers
 	marketHandler := handlers.NewMarketHandler(db, ccxtService, collectorService, redis, cacheAnalyticsService)
-	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redis.Client)
+
+	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, rClient)
 	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
 	// userHandler and telegramInternalHandler already initialized above for internal routes
 	alertHandler := handlers.NewAlertHandler(db)
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
-	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
+
+	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, rClient)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	webSocketHandler := handlers.NewWebSocketHandler(redis)
 
 	// AI handler - uses registry from ai package
-	aiRegistry := ai.NewRegistry(
-		ai.WithRedis(redis.Client),
-	)
+	aiOpts := []ai.RegistryOption{}
+	if rClient != nil {
+		aiOpts = append(aiOpts, ai.WithRedis(rClient))
+	}
+	aiRegistry := ai.NewRegistry(aiOpts...)
 	aiHandler := handlers.NewAIHandler(aiRegistry)
 
 	// Session handler - for session resumption and lifecycle management (neura-9i4, neura-8xg)
