@@ -26,8 +26,7 @@ func NewProvider(config *ProviderConfig) (IndicatorProvider, error) {
 	case ProviderTypeTalib:
 		return NewTalibAdapter(), nil
 	case ProviderTypeGoFlux:
-		// GoFlux adapter will be implemented in neura-dvl
-		return nil, NewIndicatorError("GoFlux", "provider not yet implemented", nil)
+		return NewGoFluxAdapter(), nil
 	default:
 		return nil, NewIndicatorError(string(config.Type), "unknown provider type", nil)
 	}

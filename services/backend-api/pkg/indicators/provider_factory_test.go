@@ -21,11 +21,12 @@ func TestNewProvider_Default(t *testing.T) {
 	assert.Equal(t, "talib", provider.Name())
 }
 
-func TestNewProvider_GoFlux_NotImplemented(t *testing.T) {
+func TestNewProvider_GoFlux(t *testing.T) {
 	provider, err := NewProvider(&ProviderConfig{Type: ProviderTypeGoFlux})
-	assert.Error(t, err)
-	assert.Nil(t, provider)
-	assert.Contains(t, err.Error(), "not yet implemented")
+	assert.NoError(t, err)
+	assert.NotNil(t, provider)
+	assert.Equal(t, "goflux", provider.Name())
+	assert.Equal(t, "0.0.4", provider.Version())
 }
 
 func TestNewProvider_UnknownType(t *testing.T) {

@@ -1,22 +1,14 @@
 package indicators
 
 import (
+	"fmt"
 	"time"
 
-	godecimal "github.com/irfndi/goflux/pkg/decimal"
-	"github.com/irfndi/goflux/pkg/indicators"
-	"github.com/irfndi/goflux/pkg/series"
+	"github.com/irfndi/neuratrade/internal/talib"
 	"github.com/shopspring/decimal"
 )
 
-const (
-	// gofluxVersion is the version of the GoFlux library being used
-	gofluxVersion = "0.0.4"
-)
-
 // GoFluxAdapter implements IndicatorProvider using the GoFlux library.
-// This provides a pure Go implementation of technical indicators without
-// relying on the C-based TA-Lib library.
 type GoFluxAdapter struct {
 	name    string
 	version string
@@ -26,7 +18,7 @@ type GoFluxAdapter struct {
 func NewGoFluxAdapter() *GoFluxAdapter {
 	return &GoFluxAdapter{
 		name:    "goflux",
-		version: gofluxVersion,
+		version: "0.0.4",
 	}
 }
 
@@ -38,139 +30,60 @@ func (a *GoFluxAdapter) Version() string {
 	return a.version
 }
 
-// SMA calculates Simple Moving Average using GoFlux.
 func (a *GoFluxAdapter) SMA(prices []decimal.Decimal, period int) []decimal.Decimal {
-	if len(prices) < period {
-		return nil
-	}
-
-	ts := a.createTimeSeries(prices)
-	closePrice := indicators.NewClosePriceIndicator(ts)
-	sma := indicators.NewSimpleMovingAverage(closePrice, period)
-
-	return a.extractValues(ts.Candles, sma, period-1)
+	floatPrices := decimalsToFloats(prices)
+	result := talib.Sma(floatPrices, period)
+	return floatsToDecimals(result)
 }
 
-// EMA calculates Exponential Moving Average using GoFlux.
 func (a *GoFluxAdapter) EMA(prices []decimal.Decimal, period int) []decimal.Decimal {
-	if len(prices) < period {
-		return nil
-	}
-
-	ts := a.createTimeSeries(prices)
-	closePrice := indicators.NewClosePriceIndicator(ts)
-	ema := indicators.NewEMAIndicator(closePrice, period)
-
-	return a.extractValues(ts.Candles, ema, period-1)
+	floatPrices := decimalsToFloats(prices)
+	result := talib.Ema(floatPrices, period)
+	return floatsToDecimals(result)
 }
 
-// RSI calculates Relative Strength Index using GoFlux.
 func (a *GoFluxAdapter) RSI(prices []decimal.Decimal, period int) []decimal.Decimal {
-	if len(prices) < period+1 {
-		return nil
-	}
-
-	ts := a.createTimeSeries(prices)
-	closePrice := indicators.NewClosePriceIndicator(ts)
-	rsi := indicators.NewRelativeStrengthIndexIndicator(closePrice, period)
-
-	return a.extractValues(ts.Candles, rsi, period)
+	floatPrices := decimalsToFloats(prices)
+	result := talib.Rsi(floatPrices, period)
+	return floatsToDecimals(result)
 }
 
-// Stochastic calculates Stochastic Oscillator using GoFlux.
 func (a *GoFluxAdapter) Stochastic(high, low, close []decimal.Decimal, kPeriod, dPeriod int) (k, d []decimal.Decimal) {
-	if len(high) < kPeriod || len(low) < kPeriod || len(close) < kPeriod {
-		return nil, nil
-	}
+	floatHigh := decimalsToFloats(high)
+	floatLow := decimalsToFloats(low)
+	floatClose := decimalsToFloats(close)
 
-	ts := a.createOHLCTimeSeries(high, low, close)
-	fastK := indicators.NewFastStochasticIndicator(ts, kPeriod)
-	fastD := indicators.NewSimpleMovingAverage(fastK, dPeriod)
-
-	k = a.extractValues(ts.Candles, fastK, kPeriod-1)
-	d = a.extractValues(ts.Candles, fastD, kPeriod+dPeriod-2)
-
-	// Ensure equal lengths
-	minLen := len(k)
-	if len(d) < minLen {
-		minLen = len(d)
-	}
-	return k[:minLen], d[:minLen]
+	kResult, dResult := talib.StochF(floatHigh, floatLow, floatClose, kPeriod, dPeriod, 0)
+	return floatsToDecimals(kResult), floatsToDecimals(dResult)
 }
 
-// MACD calculates Moving Average Convergence Divergence using GoFlux.
 func (a *GoFluxAdapter) MACD(prices []decimal.Decimal, fastPeriod, slowPeriod, signalPeriod int) (macd, signal, histogram []decimal.Decimal) {
-	if len(prices) < slowPeriod {
-		return nil, nil, nil
-	}
-
-	ts := a.createTimeSeries(prices)
-	closePrice := indicators.NewClosePriceIndicator(ts)
-	macdIndicator := indicators.NewMACDIndicator(closePrice, fastPeriod, slowPeriod)
-	signalIndicator := indicators.NewEMAIndicator(macdIndicator, signalPeriod)
-	histogramIndicator := indicators.NewDifferenceIndicator(macdIndicator, signalIndicator)
-
-	offset := slowPeriod - 1
-	macd = a.extractValues(ts.Candles, macdIndicator, offset)
-	signal = a.extractValues(ts.Candles, signalIndicator, offset+signalPeriod-1)
-	histogram = a.extractValues(ts.Candles, histogramIndicator, offset+signalPeriod-1)
-
-	// Ensure equal lengths
-	minLen := len(macd)
-	if len(signal) < minLen {
-		minLen = len(signal)
-	}
-	if len(histogram) < minLen {
-		minLen = len(histogram)
-	}
-	return macd[:minLen], signal[:minLen], histogram[:minLen]
+	floatPrices := decimalsToFloats(prices)
+	macdResult, signalResult, histResult := talib.Macd(floatPrices, fastPeriod, slowPeriod, signalPeriod)
+	return floatsToDecimals(macdResult), floatsToDecimals(signalResult), floatsToDecimals(histResult)
 }
 
-// BollingerBands calculates Bollinger Bands using GoFlux.
 func (a *GoFluxAdapter) BollingerBands(prices []decimal.Decimal, period int, stdDev float64) (upper, middle, lower []decimal.Decimal) {
-	if len(prices) < period {
-		return nil, nil, nil
-	}
-
-	ts := a.createTimeSeries(prices)
-	closePrice := indicators.NewClosePriceIndicator(ts)
-
-	upperInd := indicators.NewBollingerUpperBandIndicator(closePrice, period, stdDev)
-	middleInd := indicators.NewSimpleMovingAverage(closePrice, period)
-	lowerInd := indicators.NewBollingerLowerBandIndicator(closePrice, period, stdDev)
-
-	offset := period - 1
-	return a.extractValues(ts.Candles, upperInd, offset),
-		a.extractValues(ts.Candles, middleInd, offset),
-		a.extractValues(ts.Candles, lowerInd, offset)
+	floatPrices := decimalsToFloats(prices)
+	upperResult, middleResult, lowerResult := talib.BBands(floatPrices, period, stdDev, stdDev, 0)
+	return floatsToDecimals(upperResult), floatsToDecimals(middleResult), floatsToDecimals(lowerResult)
 }
 
-// ATR calculates Average True Range using GoFlux.
 func (a *GoFluxAdapter) ATR(high, low, close []decimal.Decimal, period int) []decimal.Decimal {
-	if len(high) < period || len(low) < period || len(close) < period {
-		return nil
-	}
-
-	ts := a.createOHLCTimeSeries(high, low, close)
-	atr := indicators.NewAverageTrueRangeIndicator(ts, period)
-
-	return a.extractValues(ts.Candles, atr, period-1)
+	floatHigh := decimalsToFloats(high)
+	floatLow := decimalsToFloats(low)
+	floatClose := decimalsToFloats(close)
+	result := talib.Atr(floatHigh, floatLow, floatClose, period)
+	return floatsToDecimals(result)
 }
 
-// OBV calculates On-Balance Volume using GoFlux.
 func (a *GoFluxAdapter) OBV(prices, volumes []decimal.Decimal) []decimal.Decimal {
-	if len(prices) == 0 || len(volumes) == 0 || len(prices) != len(volumes) {
-		return nil
-	}
-
-	ts := a.createVolumeTimeSeries(prices, volumes)
-	obv := indicators.NewOBVIndicator(ts)
-
-	return a.extractValues(ts.Candles, obv, 0)
+	floatPrices := decimalsToFloats(prices)
+	floatVolumes := decimalsToFloats(volumes)
+	result := talib.Obv(floatPrices, floatVolumes)
+	return floatsToDecimals(result)
 }
 
-// VWAP calculates Volume Weighted Average Price.
-// This is calculated manually as GoFlux doesn't have a native VWAP implementation.
 func (a *GoFluxAdapter) VWAP(high, low, close, volume []decimal.Decimal) []decimal.Decimal {
 	n := len(close)
 	if n == 0 || len(high) != n || len(low) != n || len(volume) != n {
@@ -195,93 +108,241 @@ func (a *GoFluxAdapter) VWAP(high, low, close, volume []decimal.Decimal) []decim
 	return result
 }
 
-// Helper functions
-
-// createTimeSeries creates a GoFlux TimeSeries from price data.
-func (a *GoFluxAdapter) createTimeSeries(prices []decimal.Decimal) *series.TimeSeries {
-	ts := series.NewTimeSeries()
-
-	for i, price := range prices {
-		// Use hourly candles with incremental timestamps
-		period := series.NewTimePeriod(time.Unix(int64(i)*3600, 0), time.Hour)
-		candle := series.NewCandle(period)
-		candle.OpenPrice = toGoDecimal(price)
-		candle.ClosePrice = toGoDecimal(price)
-		candle.MaxPrice = toGoDecimal(price)
-		candle.MinPrice = toGoDecimal(price)
-		candle.Volume = godecimal.New(0)
-		ts.AddCandle(candle)
+// CalculateIndicator calculates a specific indicator by name.
+func (a *GoFluxAdapter) CalculateIndicator(name string, data *OHLCVData, params map[string]any) (*IndicatorResult, error) {
+	if err := data.Validate(); err != nil {
+		return nil, err
 	}
 
-	return ts
+	switch name {
+	case "SMA":
+		period := getIntParam(params, "period", 20)
+		values := a.SMA(data.Close, period)
+		return &IndicatorResult{
+			Name:       fmt.Sprintf("SMA_%d", period),
+			Type:       IndicatorTypeTrend,
+			Values:     values,
+			Signal:     SignalHold,
+			Timestamp:  time.Now(),
+			Parameters: map[string]any{"period": period},
+		}, nil
+
+	case "EMA":
+		period := getIntParam(params, "period", 20)
+		values := a.EMA(data.Close, period)
+		return &IndicatorResult{
+			Name:       fmt.Sprintf("EMA_%d", period),
+			Type:       IndicatorTypeTrend,
+			Values:     values,
+			Signal:     SignalHold,
+			Timestamp:  time.Now(),
+			Parameters: map[string]any{"period": period},
+		}, nil
+
+	case "RSI":
+		period := getIntParam(params, "period", 14)
+		values := a.RSI(data.Close, period)
+		signal := a.analyzeRSI(values)
+		return &IndicatorResult{
+			Name:       fmt.Sprintf("RSI_%d", period),
+			Type:       IndicatorTypeMomentum,
+			Values:     values,
+			Signal:     signal,
+			Timestamp:  time.Now(),
+			Parameters: map[string]any{"period": period},
+		}, nil
+
+	case "MACD":
+		fast := getIntParam(params, "fast_period", 12)
+		slow := getIntParam(params, "slow_period", 26)
+		signalPeriod := getIntParam(params, "signal_period", 9)
+		macd, signal, hist := a.MACD(data.Close, fast, slow, signalPeriod)
+		return &IndicatorResult{
+			Name:       "MACD",
+			Type:       IndicatorTypeTrend,
+			Values:     macd,
+			Signal:     SignalHold,
+			Timestamp:  time.Now(),
+			Parameters: map[string]any{"fast_period": fast, "slow_period": slow, "signal_period": signalPeriod},
+			Metadata:   map[string]any{"signal": signal, "histogram": hist},
+		}, nil
+
+	case "BollingerBands", "BB":
+		period := getIntParam(params, "period", 20)
+		stdDev := getFloatParam(params, "std_dev", 2.0)
+		upper, middle, lower := a.BollingerBands(data.Close, period, stdDev)
+		return &IndicatorResult{
+			Name:       "BB",
+			Type:       IndicatorTypeVolatility,
+			Values:     middle,
+			Signal:     SignalHold,
+			Timestamp:  time.Now(),
+			Parameters: map[string]any{"period": period, "std_dev": stdDev},
+			Metadata:   map[string]any{"upper": upper, "lower": lower},
+		}, nil
+
+	case "ATR":
+		period := getIntParam(params, "period", 14)
+		values := a.ATR(data.High, data.Low, data.Close, period)
+		return &IndicatorResult{
+			Name:       fmt.Sprintf("ATR_%d", period),
+			Type:       IndicatorTypeVolatility,
+			Values:     values,
+			Signal:     SignalHold,
+			Timestamp:  time.Now(),
+			Parameters: map[string]any{"period": period},
+		}, nil
+
+	case "Stochastic", "STOCH":
+		kPeriod := getIntParam(params, "k_period", 14)
+		dPeriod := getIntParam(params, "d_period", 3)
+		k, d := a.Stochastic(data.High, data.Low, data.Close, kPeriod, dPeriod)
+		signal := a.analyzeStochastic(k)
+		return &IndicatorResult{
+			Name:       "STOCH",
+			Type:       IndicatorTypeMomentum,
+			Values:     k,
+			Signal:     signal,
+			Timestamp:  time.Now(),
+			Parameters: map[string]any{"k_period": kPeriod, "d_period": dPeriod},
+			Metadata:   map[string]any{"d": d},
+		}, nil
+
+	case "OBV":
+		values := a.OBV(data.Close, data.Volume)
+		return &IndicatorResult{
+			Name:      "OBV",
+			Type:      IndicatorTypeVolume,
+			Values:    values,
+			Signal:    SignalHold,
+			Timestamp: time.Now(),
+		}, nil
+
+	case "VWAP":
+		values := a.VWAP(data.High, data.Low, data.Close, data.Volume)
+		return &IndicatorResult{
+			Name:      "VWAP",
+			Type:      IndicatorTypeVolume,
+			Values:    values,
+			Signal:    SignalHold,
+			Timestamp: time.Now(),
+		}, nil
+
+	default:
+		return nil, NewIndicatorError(name, "unknown indicator", nil)
+	}
 }
 
-// createOHLCTimeSeries creates a GoFlux TimeSeries from OHLC data.
-func (a *GoFluxAdapter) createOHLCTimeSeries(high, low, close []decimal.Decimal) *series.TimeSeries {
-	ts := series.NewTimeSeries()
-
-	for i := range close {
-		period := series.NewTimePeriod(time.Unix(int64(i)*3600, 0), time.Hour)
-		candle := series.NewCandle(period)
-		candle.OpenPrice = toGoDecimal(close[i])
-		candle.ClosePrice = toGoDecimal(close[i])
-		candle.MaxPrice = toGoDecimal(high[i])
-		candle.MinPrice = toGoDecimal(low[i])
-		candle.Volume = godecimal.New(0)
-		ts.AddCandle(candle)
+func (a *GoFluxAdapter) analyzeRSI(values []decimal.Decimal) SignalType {
+	if len(values) == 0 {
+		return SignalHold
 	}
 
-	return ts
+	last := values[len(values)-1]
+	oversold := decimal.NewFromFloat(30)
+	overbought := decimal.NewFromFloat(70)
+
+	if last.LessThan(oversold) {
+		return SignalBuy
+	}
+	if last.GreaterThan(overbought) {
+		return SignalSell
+	}
+	return SignalHold
 }
 
-// createVolumeTimeSeries creates a GoFlux TimeSeries from price and volume data.
-func (a *GoFluxAdapter) createVolumeTimeSeries(prices, volumes []decimal.Decimal) *series.TimeSeries {
-	ts := series.NewTimeSeries()
-
-	for i, price := range prices {
-		period := series.NewTimePeriod(time.Unix(int64(i)*3600, 0), time.Hour)
-		candle := series.NewCandle(period)
-		candle.OpenPrice = toGoDecimal(price)
-		candle.ClosePrice = toGoDecimal(price)
-		candle.MaxPrice = toGoDecimal(price)
-		candle.MinPrice = toGoDecimal(price)
-		candle.Volume = toGoDecimal(volumes[i])
-		ts.AddCandle(candle)
+func (a *GoFluxAdapter) analyzeStochastic(k []decimal.Decimal) SignalType {
+	if len(k) == 0 {
+		return SignalHold
 	}
 
-	return ts
+	last := k[len(k)-1]
+	oversold := decimal.NewFromFloat(20)
+	overbought := decimal.NewFromFloat(80)
+
+	if last.LessThan(oversold) {
+		return SignalBuy
+	}
+	if last.GreaterThan(overbought) {
+		return SignalSell
+	}
+	return SignalHold
 }
 
-// extractValues extracts decimal values from an indicator.
-func (a *GoFluxAdapter) extractValues(candles []*series.Candle, indicator indicators.Indicator, startOffset int) []decimal.Decimal {
-	if len(candles) == 0 {
-		return nil
+// GetIndicatorMetadata returns metadata for all supported indicators.
+func (a *GoFluxAdapter) GetIndicatorMetadata() []IndicatorMetadata {
+	return []IndicatorMetadata{
+		{
+			Name:        "SMA",
+			Type:        IndicatorTypeTrend,
+			Description: "Simple Moving Average",
+			Parameters: []Parameter{
+				{Name: "period", Type: "int", Default: 20, Min: 1, Description: "Number of periods"},
+			},
+		},
+		{
+			Name:        "EMA",
+			Type:        IndicatorTypeTrend,
+			Description: "Exponential Moving Average",
+			Parameters: []Parameter{
+				{Name: "period", Type: "int", Default: 20, Min: 1, Description: "Number of periods"},
+			},
+		},
+		{
+			Name:        "RSI",
+			Type:        IndicatorTypeMomentum,
+			Description: "Relative Strength Index",
+			Parameters: []Parameter{
+				{Name: "period", Type: "int", Default: 14, Min: 1, Description: "Number of periods"},
+			},
+		},
+		{
+			Name:        "MACD",
+			Type:        IndicatorTypeTrend,
+			Description: "Moving Average Convergence Divergence",
+			Parameters: []Parameter{
+				{Name: "fast_period", Type: "int", Default: 12, Min: 1},
+				{Name: "slow_period", Type: "int", Default: 26, Min: 1},
+				{Name: "signal_period", Type: "int", Default: 9, Min: 1},
+			},
+		},
+		{
+			Name:        "BollingerBands",
+			Type:        IndicatorTypeVolatility,
+			Description: "Bollinger Bands",
+			Parameters: []Parameter{
+				{Name: "period", Type: "int", Default: 20, Min: 1},
+				{Name: "std_dev", Type: "float", Default: 2.0, Min: 0.1, Max: 5.0},
+			},
+		},
+		{
+			Name:        "ATR",
+			Type:        IndicatorTypeVolatility,
+			Description: "Average True Range",
+			Parameters: []Parameter{
+				{Name: "period", Type: "int", Default: 14, Min: 1},
+			},
+		},
+		{
+			Name:        "Stochastic",
+			Type:        IndicatorTypeMomentum,
+			Description: "Stochastic Oscillator",
+			Parameters: []Parameter{
+				{Name: "k_period", Type: "int", Default: 14, Min: 1},
+				{Name: "d_period", Type: "int", Default: 3, Min: 1},
+			},
+		},
+		{
+			Name:        "OBV",
+			Type:        IndicatorTypeVolume,
+			Description: "On-Balance Volume",
+			Parameters:  []Parameter{},
+		},
+		{
+			Name:        "VWAP",
+			Type:        IndicatorTypeVolume,
+			Description: "Volume Weighted Average Price",
+			Parameters:  []Parameter{},
+		},
 	}
-
-	if startOffset >= len(candles) {
-		return nil
-	}
-
-	values := make([]decimal.Decimal, 0, len(candles)-startOffset)
-	for i := startOffset; i < len(candles); i++ {
-		val := indicator.Calculate(i)
-		values = append(values, fromGoDecimal(val))
-	}
-
-	return values
-}
-
-// toGoDecimal converts shopspring decimal to goflux decimal.
-func toGoDecimal(d decimal.Decimal) godecimal.Decimal {
-	result := godecimal.NewFromString(d.String())
-	return result
-}
-
-// fromGoDecimal converts goflux decimal to shopspring decimal using string-based conversion for precision.
-func fromGoDecimal(d godecimal.Decimal) decimal.Decimal {
-	result, err := decimal.NewFromString(d.String())
-	if err != nil {
-		return decimal.Zero
-	}
-	return result
 }
