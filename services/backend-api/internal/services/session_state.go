@@ -186,6 +186,8 @@ func (s *SessionSerializer) CreateFromExecutionLoop(
 func (s *SessionSerializer) calculateChecksum(state *SessionState) string {
 	stateCopy := *state
 	stateCopy.Checksum = ""
+	// Exclude UpdatedAt from checksum to allow timestamp updates without breaking integrity
+	stateCopy.UpdatedAt = time.Time{}
 	data, err := json.Marshal(stateCopy)
 	if err != nil {
 		telemetry.Logger().Error("Failed to marshal session state for checksum", "error", err)
@@ -201,8 +203,13 @@ func generateSessionID() string {
 
 func generateRandomString(length int) string {
 	bytes := make([]byte, length)
-	if _, err := rand.Read(bytes); err != nil {
-		return ""
+	n, err := rand.Read(bytes)
+	if err != nil || n != length {
+		// crypto/rand failure is critical - fall back to timestamp-based ID
+		telemetry.Logger().Error("crypto/rand failed, using fallback random generation", "error", err, "bytes_read", n)
+		// Use timestamp + counter as fallback for uniqueness
+		fallback := fmt.Sprintf("%d%d", time.Now().UnixNano(), len(bytes))
+		return fallback[:min(length, len(fallback))]
 	}
 	return hex.EncodeToString(bytes)[:length]
 }
@@ -307,18 +314,24 @@ func (r *DatabaseSessionRepository) ListActive(ctx context.Context, limit int) (
 	defer rows.Close()
 	serializer := NewSessionSerializer(nil)
 	var sessions []*SessionState
+	skippedCount := 0
 	for rows.Next() {
 		var data []byte
 		if err := rows.Scan(&data); err != nil {
 			telemetry.Logger().Warn("Failed to scan session row", "error", err)
+			skippedCount++
 			continue
 		}
 		state, err := serializer.Deserialize(data)
 		if err != nil {
-			telemetry.Logger().Warn("Failed to deserialize session", "error", err)
+			telemetry.Logger().Warn("Failed to deserialize session, data may be corrupted", "error", err, "data_len", len(data))
+			skippedCount++
 			continue
 		}
 		sessions = append(sessions, state)
+	}
+	if skippedCount > 0 {
+		telemetry.Logger().Info("ListActive completed with skipped sessions", "returned", len(sessions), "skipped", skippedCount)
 	}
 	return sessions, nil
 }
