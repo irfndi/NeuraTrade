@@ -71,7 +71,7 @@ func TestMaskAPIKey(t *testing.T) {
 		},
 		{
 			name:     "normal API key",
-			input:    "test_key_abcdef123456789",
+			input:    "sk_live_abcdef123456789",
 			expected: "sk_l***************6789",
 		},
 	}
@@ -387,15 +387,15 @@ func TestSafeLog(t *testing.T) {
 	}{
 		{
 			name:        "masks API key",
-			input:       "Request with api_key=test_key_abcdef123456",
+			input:       "Request with api_key=sk_live_abcdef123456",
 			expected:    []string{"api_key", "***"},
-			notExpected: []string{"test_key_abcdef123456"},
+			notExpected: []string{"sk_live_abcdef123456"},
 		},
 		{
 			name:        "masks password",
-			input:       "User login with password=testpass123",
+			input:       "User login with password=secret123",
 			expected:    []string{"password", "*"},
-			notExpected: []string{"testpass123"},
+			notExpected: []string{"secret123"},
 		},
 		{
 			name:        "masks connection string",
@@ -437,13 +437,13 @@ func TestMaskJSON(t *testing.T) {
 	}{
 		{
 			name:              "masks password field",
-			input:             `{"username": "john", "password": "testpass123"}`,
+			input:             `{"username": "john", "password": "test_value_for_masking"}`,
 			sensitiveFields:   nil,
 			expectedContained: `"password"`,
 		},
 		{
 			name:              "masks token field",
-			input:             `{"api_key": "test_key_abc123", "action": "test"}`,
+			input:             `{"api_key": "sk_live_abc123", "action": "test"}`,
 			sensitiveFields:   nil,
 			expectedContained: `"api_key"`,
 		},
@@ -499,7 +499,7 @@ func BenchmarkMaskString(b *testing.B) {
 }
 
 func BenchmarkSafeLog(b *testing.B) {
-	testString := "Request to postgresql://user:secret@localhost/db with api_key=test_key_abc123 and password=mypass"
+	testString := "Request to postgresql://user:secret@localhost/db with api_key=sk_live_abc123 and password=mypass"
 	for i := 0; i < b.N; i++ {
 		_ = SafeLog(testString)
 	}
