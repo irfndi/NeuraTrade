@@ -183,11 +183,15 @@ func (pm *QuestProgressManager) UpdateQuestProgress(ctx context.Context, questID
 
 // shouldSendUpdate checks if enough time has passed since last update
 func (pm *QuestProgressManager) shouldSendUpdate(questID string) bool {
+	pm.mu.RLock()
 	lastUpdate, exists := pm.lastUpdate[questID]
+	interval := pm.config.ProgressUpdateInterval
+	pm.mu.RUnlock()
+
 	if !exists {
 		return true
 	}
-	return time.Since(lastUpdate) >= pm.config.ProgressUpdateInterval
+	return time.Since(lastUpdate) >= interval
 }
 
 // checkMilestones checks if any milestones were reached

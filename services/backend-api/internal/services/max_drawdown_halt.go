@@ -239,8 +239,8 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.WarningThreshold) {
 		state.Status = DrawdownStatusWarning
-		state.WarningCount++
 		if previousStatus != DrawdownStatusWarning {
+			state.WarningCount++
 			h.metrics.IncrementWarning()
 			h.notifyRiskEvent(state, RiskEventWarning, SeverityMedium)
 		}
