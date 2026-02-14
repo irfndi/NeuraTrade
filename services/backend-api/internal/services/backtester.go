@@ -807,7 +807,7 @@ func (b *Backtester) SaveBacktestResult(ctx context.Context, userID string, resu
 	`
 
 	_, err = b.db.Exec(ctx, query,
-		nil, // user_id - NULL for now (can be added later)
+		userID, // user_id - use the parameter instead of hardcoded nil
 		configJSON,
 		result.TotalReturn,
 		result.TotalPnL,
