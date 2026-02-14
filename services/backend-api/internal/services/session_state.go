@@ -195,6 +195,14 @@ func (s *SessionSerializer) LoadByQuest(ctx context.Context, questID string) (*S
 	return s.repo.LoadByQuest(ctx, questID)
 }
 
+func (s *SessionSerializer) ListActive(ctx context.Context, limit int) ([]*SessionState, error) {
+	return s.repo.ListActive(ctx, limit)
+}
+
+func (s *SessionSerializer) Delete(ctx context.Context, id string) error {
+	return s.repo.Delete(ctx, id)
+}
+
 // CreateFromExecutionLoop creates a session state from an execution loop result
 func (s *SessionSerializer) CreateFromExecutionLoop(
 	loopID string,

@@ -136,6 +136,18 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	)
 	aiHandler := handlers.NewAIHandler(aiRegistry)
 
+	// Session handler - for session resumption and lifecycle management (neura-9i4, neura-8xg)
+	var sessionHandler *handlers.SessionHandler
+	if pgDB, ok := db.(*database.PostgresDB); ok {
+		sessionRepo := services.NewSessionStateRepositoryFromPostgres(pgDB)
+		if sessionRepo != nil {
+			sessionSerializer := services.NewSessionSerializer(sessionRepo)
+			sessionHandler = handlers.NewSessionHandler(sessionSerializer, sessionRepo)
+		}
+	} else {
+		log.Printf("[SESSION] WARNING: session repository not available, session endpoints disabled")
+	}
+
 	// Initialize order execution service (Polymarket CLOB)
 	orderExecConfig := services.OrderExecutionConfig{
 		BaseURL:    getEnvOrDefault("POLYMARKET_CLOB_URL", "https://clob.polymarket.com"),
@@ -325,6 +337,21 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			ai.GET("/models", aiHandler.GetModels)
 			ai.POST("/route", aiHandler.RouteModel)
+		}
+
+		// Session management routes (neura-9i4, neura-8xg)
+		if sessionHandler != nil {
+			sessions := v1.Group("/sessions")
+			{
+				sessions.GET("", sessionHandler.ListActiveSessions)
+				sessions.GET("/:id", sessionHandler.GetSession)
+				sessions.GET("/:id/history", sessionHandler.GetSessionHistory)
+				sessions.GET("/quest", sessionHandler.GetSessionByQuest)
+				sessions.PUT("/:id/status", sessionHandler.UpdateSessionStatus)
+				sessions.POST("/:id/pause", sessionHandler.PauseSession)
+				sessions.POST("/:id/resume", sessionHandler.ResumeSession)
+				sessions.DELETE("/:id", sessionHandler.DeleteSession)
+			}
 		}
 
 		// Exchange management
