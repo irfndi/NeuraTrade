@@ -67,6 +67,24 @@ func TestTruncateEdgeCases(t *testing.T) {
 		expected string
 	}{
 		{
+			name:     "maxLen 0 returns ellipsis only",
+			input:    "test",
+			maxLen:   0,
+			expected: "...",
+		},
+		{
+			name:     "maxLen 1 returns ellipsis only",
+			input:    "test",
+			maxLen:   1,
+			expected: "...",
+		},
+		{
+			name:     "maxLen 2 returns ellipsis only",
+			input:    "test",
+			maxLen:   2,
+			expected: "...",
+		},
+		{
 			name:     "unicode string truncates by bytes",
 			input:    "こんにちは",
 			maxLen:   5,
@@ -78,12 +96,18 @@ func TestTruncateEdgeCases(t *testing.T) {
 			maxLen:   6,
 			expected: "Hello",
 		},
+		{
+			name:     "short string with maxLen 3",
+			input:    "Hi",
+			maxLen:   3,
+			expected: "Hi",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := truncate(tt.input, tt.maxLen)
-			if tt.maxLen >= 3 && result != tt.expected {
+			if result != tt.expected {
 				t.Errorf("truncate(%q, %d) = %q; want %q", tt.input, tt.maxLen, result, tt.expected)
 			}
 		})
