@@ -21,6 +21,9 @@ import type {
   AIStatusResponse,
   AIRouteRequest,
   AIRouteResponse,
+  GetAlertsResponse,
+  CreateAlertRequest,
+  CreateAlertResponse,
 } from "./types";
 import { API_ENDPOINTS } from "./types";
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./rate-limiter";
@@ -342,6 +345,58 @@ export class BackendApiClient {
     }
 
     return payload as T;
+  }
+
+  async getUserAlerts(userId: string): Promise<GetAlertsResponse> {
+    const endpoint = API_ENDPOINTS.GET_ALERTS(userId);
+    return this.fetch<GetAlertsResponse>(endpoint, { requireAdmin: true });
+  }
+
+  async createAlert(
+    userId: string,
+    alertType: string,
+    conditions: Record<string, unknown>,
+  ): Promise<CreateAlertResponse> {
+    const endpoint = API_ENDPOINTS.CREATE_ALERT;
+    const body: CreateAlertRequest & { user_id: string } = {
+      user_id: userId,
+      alert_type: alertType,
+      conditions,
+    };
+    return this.fetch<CreateAlertResponse>(endpoint, {
+      method: "POST",
+      body: JSON.stringify(body),
+      requireAdmin: true,
+    });
+  }
+
+  async updateAlert(
+    alertId: string,
+    isActive: boolean,
+    conditions?: Record<string, unknown>,
+  ): Promise<{ status: string; message: string }> {
+    const endpoint = API_ENDPOINTS.UPDATE_ALERT(alertId);
+    const body: { is_active: boolean; conditions?: Record<string, unknown> } = {
+      is_active: isActive,
+    };
+    if (conditions) {
+      body.conditions = conditions;
+    }
+    return this.fetch(endpoint, {
+      method: "PUT",
+      body: JSON.stringify(body),
+      requireAdmin: true,
+    });
+  }
+
+  async deleteAlert(
+    alertId: string,
+  ): Promise<{ status: string; message: string }> {
+    const endpoint = API_ENDPOINTS.DELETE_ALERT(alertId);
+    return this.fetch(endpoint, {
+      method: "DELETE",
+      requireAdmin: true,
+    });
   }
 }
 
