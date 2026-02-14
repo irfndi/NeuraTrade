@@ -203,6 +203,7 @@ func TestOHLCVReplayEngine_GetSummary(t *testing.T) {
 		{Open: decimal.NewFromFloat(102), High: decimal.NewFromFloat(110), Low: decimal.NewFromFloat(100), Close: decimal.NewFromFloat(108), Volume: decimal.NewFromFloat(1500)},
 	}
 	engine.currentIndex = 1
+	engine.summary = engine.calculateSummary(engine.candles)
 
 	summary = engine.GetSummary()
 	assert.Equal(t, 2, summary.TotalCandles)
@@ -226,7 +227,8 @@ func TestOHLCVReplayEngine_TimeframeToDuration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.timeframe, func(t *testing.T) {
-			result := engine.timeframeToDuration(tt.timeframe)
+			result, err := engine.timeframeToDuration(tt.timeframe)
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

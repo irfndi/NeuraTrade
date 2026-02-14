@@ -318,8 +318,7 @@ func NewDatabaseSessionRepository(db *pgxpool.Pool) *DatabaseSessionRepository {
 
 // Save persists a session state to the database
 func (r *DatabaseSessionRepository) Save(ctx context.Context, state *SessionState) error {
-	serializer := NewSessionSerializer(nil)
-	data, err := serializer.Serialize(state)
+	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to serialize session: %w", err)
 	}
