@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -105,14 +106,9 @@ func (r *OHLCVReplayEngine) LoadBars(bars []OHLCVBar) error {
 	sortedBars := make([]OHLCVBar, len(bars))
 	copy(sortedBars, bars)
 
-	// Simple bubble sort (for small datasets)
-	for i := 0; i < len(sortedBars); i++ {
-		for j := i + 1; j < len(sortedBars); j++ {
-			if sortedBars[i].Timestamp.After(sortedBars[j].Timestamp) {
-				sortedBars[i], sortedBars[j] = sortedBars[j], sortedBars[i]
-			}
-		}
-	}
+	sort.Slice(sortedBars, func(i, j int) bool {
+		return sortedBars[i].Timestamp.Before(sortedBars[j].Timestamp)
+	})
 
 	r.bars = sortedBars
 	r.stats.TotalBars = len(sortedBars)

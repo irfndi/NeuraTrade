@@ -20,8 +20,20 @@ usermod -aG docker neuratrade
 mkdir -p /opt/neuratrade/{data,logs,backups}
 chown -R neuratrade:neuratrade /opt/neuratrade
 
-# Install monitoring
-wget -q https://github.com/prometheus/node_exporter/releases/download/v1.6.1/node_exporter-1.6.1.linux-amd64.tar.gz
+# Install monitoring with checksum verification
+NODE_EXPORTER_SHA256="a03966c504e7f66b02fd7ec4c4e78a4f847e8c33bf339c73c563468eb6e2dc9f"
+NODE_EXPORTER_URL="https://github.com/prometheus/node_exporter/releases/download/v1.6.1/node_exporter-1.6.1.linux-amd64.tar.gz"
+
+wget -q "$NODE_EXPORTER_URL"
+DOWNLOADED_SHA256=$(sha256sum node_exporter-1.6.1.linux-amd64.tar.gz | cut -d' ' -f1)
+if [[ "$DOWNLOADED_SHA256" != "$NODE_EXPORTER_SHA256" ]]; then
+    echo "[ERROR] Checksum verification failed for node_exporter"
+    echo "Expected: $NODE_EXPORTER_SHA256"
+    echo "Got: $DOWNLOADED_SHA256"
+    exit 1
+fi
+echo "[INFO] node_exporter checksum verified"
+
 tar xzf node_exporter-1.6.1.linux-amd64.tar.gz
 mv node_exporter-1.6.1.linux-amd64/node_exporter /usr/local/bin/
 rm -rf node_exporter-1.6.1.linux-amd64*

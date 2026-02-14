@@ -47,6 +47,11 @@ check_requirements() {
     exit 1
   fi
 
+  if ! command -v jq &>/dev/null; then
+    log_error "jq is required but not installed. Install with: apt-get install jq or brew install jq"
+    exit 1
+  fi
+
   if [[ ! -f "$SSH_KEY_PATH" ]]; then
     log_error "SSH key not found at $SSH_KEY_PATH"
     log_info "Generate one with: ssh-keygen -t rsa -b 4096"
@@ -76,7 +81,7 @@ provision_server() {
         }" 2>/dev/null || echo "{}")
 
   local server_id
-  server_id=$(echo "$response" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+  server_id=$(echo "$response" | jq -r '.id // empty')
 
   if [[ -z "$server_id" ]]; then
     log_error "Failed to provision server. Response: $response"
@@ -99,7 +104,7 @@ wait_for_server() {
       -H "Authorization: Bearer $QUANTVPS_API_KEY" 2>/dev/null || echo "{}")
 
     local status
-    status=$(echo "$response" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+    status=$(echo "$response" | jq -r '.status // empty')
 
     if [[ "$status" == "active" ]]; then
       log_info "Server is ready!"
@@ -123,7 +128,7 @@ get_server_ip() {
     -H "Authorization: Bearer $QUANTVPS_API_KEY" 2>/dev/null || echo "{}")
 
   local ip
-  ip=$(echo "$response" | grep -o '"ip":"[^"]*"' | cut -d'"' -f4)
+  ip=$(echo "$response" | jq -r '.ip // empty')
 
   echo "$ip"
 }
