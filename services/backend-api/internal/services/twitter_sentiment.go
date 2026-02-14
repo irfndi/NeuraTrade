@@ -33,28 +33,7 @@ func DefaultSentimentConfig() SentimentConfig {
 	}
 }
 
-type SentimentScore int
-
-const (
-	SentimentBearish SentimentScore = iota - 1
-	SentimentNeutral
-	SentimentBullish
-)
-
-func (s SentimentScore) String() string {
-	switch s {
-	case SentimentBearish:
-		return "bearish"
-	case SentimentNeutral:
-		return "neutral"
-	case SentimentBullish:
-		return "bullish"
-	default:
-		return "unknown"
-	}
-}
-
-type SentimentResult struct {
+type TwitterSentimentResult struct {
 	Symbol       string         `json:"symbol"`
 	Score        SentimentScore `json:"score"`
 	ScoreLabel   string         `json:"score_label"`
@@ -103,11 +82,11 @@ type TwitterClient struct {
 	logger  *zap.Logger
 	client  *http.Client
 	cacheMu sync.RWMutex
-	cache   map[string]CacheEntry
+	cache   map[string]TwitterCacheEntry
 }
 
-type CacheEntry struct {
-	Result *SentimentResult
+type TwitterCacheEntry struct {
+	Result *TwitterSentimentResult
 	Expiry time.Time
 }
 
@@ -122,11 +101,11 @@ func NewTwitterClient(config SentimentConfig, logger *zap.Logger) *TwitterClient
 		client: &http.Client{
 			Timeout: config.RequestTimeout,
 		},
-		cache: make(map[string]CacheEntry),
+		cache: make(map[string]TwitterCacheEntry),
 	}
 }
 
-func (c *TwitterClient) GetSentiment(ctx context.Context, symbol string, keywords []string) (*SentimentResult, error) {
+func (c *TwitterClient) GetSentiment(ctx context.Context, symbol string, keywords []string) (*TwitterSentimentResult, error) {
 	cacheKey := strings.ToUpper(symbol)
 
 	if cached, ok := c.getFromCache(cacheKey); ok {
@@ -149,7 +128,7 @@ func (c *TwitterClient) buildSearchQuery(symbol string, keywords []string) strin
 	return strings.Join(parts, " OR ")
 }
 
-func (c *TwitterClient) fetchAndAnalyzeSentiment(ctx context.Context, query, symbol string) (*SentimentResult, error) {
+func (c *TwitterClient) fetchAndAnalyzeSentiment(ctx context.Context, query, symbol string) (*TwitterSentimentResult, error) {
 	encodedQuery := url.QueryEscape(query)
 	apiURL := fmt.Sprintf("%s/tweets/search/recent?query=%s&tweet.fields=created_at,public_metrics&max_results=100",
 		c.config.BaseURL, encodedQuery)
@@ -181,10 +160,10 @@ func (c *TwitterClient) fetchAndAnalyzeSentiment(ctx context.Context, query, sym
 
 	score, confidence := c.analyzeTweets(twitterResp.Data)
 
-	return &SentimentResult{
+	return &TwitterSentimentResult{
 		Symbol:      symbol,
 		Score:       score,
-		ScoreLabel:  score.String(),
+		ScoreLabel:  sentimentToLabel(score),
 		Confidence:  confidence,
 		TweetCount:  len(twitterResp.Data),
 		LastUpdated: time.Now(),
@@ -250,7 +229,20 @@ func (c *TwitterClient) analyzeTweets(tweets []TweetData) (SentimentScore, float
 	return sentiment, confidence
 }
 
-func (c *TwitterClient) getFromCache(key string) (*SentimentResult, bool) {
+func sentimentToLabel(s SentimentScore) string {
+	switch s {
+	case SentimentBearish:
+		return "bearish"
+	case SentimentNeutral:
+		return "neutral"
+	case SentimentBullish:
+		return "bullish"
+	default:
+		return "unknown"
+	}
+}
+
+func (c *TwitterClient) getFromCache(key string) (*TwitterSentimentResult, bool) {
 	c.cacheMu.RLock()
 	defer c.cacheMu.RUnlock()
 	entry, ok := c.cache[key]
@@ -260,10 +252,10 @@ func (c *TwitterClient) getFromCache(key string) (*SentimentResult, bool) {
 	return entry.Result, true
 }
 
-func (c *TwitterClient) setCache(key string, result *SentimentResult) {
+func (c *TwitterClient) setCache(key string, result *TwitterSentimentResult) {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
-	c.cache[key] = CacheEntry{
+	c.cache[key] = TwitterCacheEntry{
 		Result: result,
 		Expiry: time.Now().Add(c.config.CacheTTL),
 	}
@@ -272,7 +264,7 @@ func (c *TwitterClient) setCache(key string, result *SentimentResult) {
 func (c *TwitterClient) ClearCache() {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
-	c.cache = make(map[string]CacheEntry)
+	c.cache = make(map[string]TwitterCacheEntry)
 }
 
 func minFloat(a, b float64) float64 {

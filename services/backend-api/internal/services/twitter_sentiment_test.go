@@ -15,7 +15,7 @@ func TestTwitterClient_GetSentiment_CacheHit(t *testing.T) {
 
 	client := NewTwitterClient(config, logger)
 
-	result := &SentimentResult{
+	result := &TwitterSentimentResult{
 		Symbol:      "BTC",
 		Score:       SentimentNeutral,
 		ScoreLabel:  "neutral",
@@ -89,7 +89,7 @@ func TestTwitterClient_Cache(t *testing.T) {
 
 	client := NewTwitterClient(config, logger)
 
-	result := &SentimentResult{
+	result := &TwitterSentimentResult{
 		Symbol:      "BTC",
 		Score:       SentimentBullish,
 		ScoreLabel:  "bullish",
@@ -111,7 +111,7 @@ func TestTwitterClient_ClearCache(t *testing.T) {
 
 	client := NewTwitterClient(config, logger)
 
-	result := &SentimentResult{
+	result := &TwitterSentimentResult{
 		Symbol:      "BTC",
 		Score:       SentimentBullish,
 		ScoreLabel:  "bullish",
@@ -127,8 +127,8 @@ func TestTwitterClient_ClearCache(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestSentimentScore_String(t *testing.T) {
-	assert.Equal(t, "bearish", SentimentBearish.String())
-	assert.Equal(t, "neutral", SentimentNeutral.String())
-	assert.Equal(t, "bullish", SentimentBullish.String())
+func TestSentimentToLabel(t *testing.T) {
+	assert.Equal(t, "bearish", sentimentToLabel(SentimentBearish))
+	assert.Equal(t, "neutral", sentimentToLabel(SentimentNeutral))
+	assert.Equal(t, "bullish", sentimentToLabel(SentimentBullish))
 }
