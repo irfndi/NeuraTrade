@@ -45,8 +45,8 @@ func NewQueryResultCache(redisClient *redis.Client, ttl time.Duration) *QueryRes
 	}
 }
 
-func (c *QueryResultCache) Get(ctx context.Context, queryHash string) (*QueryResultCacheEntry, bool) {
-	cacheKey := c.prefix + queryHash
+func (c *QueryResultCache) Get(ctx context.Context, queryHash, tableName string) (*QueryResultCacheEntry, bool) {
+	cacheKey := c.prefix + tableName + ":" + queryHash
 
 	data, err := c.redis.Get(ctx, cacheKey).Result()
 	if err == redis.Nil {
@@ -76,6 +76,16 @@ func (c *QueryResultCache) Get(ctx context.Context, queryHash string) (*QueryRes
 		return nil, false
 	}
 
+	if time.Now().After(entry.ExpiresAt) {
+		if c.enableLog {
+			log.Printf("QueryResultCache entry expired for %s", tableName)
+		}
+		c.stats.mu.Lock()
+		c.stats.Misses++
+		c.stats.mu.Unlock()
+		return nil, false
+	}
+
 	c.stats.mu.Lock()
 	c.stats.Hits++
 	c.stats.mu.Unlock()
@@ -84,7 +94,7 @@ func (c *QueryResultCache) Get(ctx context.Context, queryHash string) (*QueryRes
 }
 
 func (c *QueryResultCache) Set(ctx context.Context, queryHash, tableName string, data interface{}, rowCount int) error {
-	cacheKey := c.prefix + queryHash
+	cacheKey := c.prefix + tableName + ":" + queryHash
 
 	now := time.Now()
 	entry := QueryResultCacheEntry{
@@ -122,7 +132,7 @@ func (c *QueryResultCache) Set(ctx context.Context, queryHash, tableName string,
 }
 
 func (c *QueryResultCache) Invalidate(ctx context.Context, tableName string) error {
-	pattern := c.prefix + "*" + tableName + "*"
+	pattern := c.prefix + tableName + ":*"
 
 	iter := c.redis.Scan(ctx, 0, pattern, 0).Iterator()
 	var keys []string

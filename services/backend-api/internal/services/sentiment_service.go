@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -199,6 +200,7 @@ func (s *SentimentService) fetchSubredditPosts(ctx context.Context, accessToken,
 					ID          string  `json:"id"`
 					Title       string  `json:"title"`
 					URL         string  `json:"url"`
+					Permalink   string  `json:"permalink"`
 					Author      string  `json:"author"`
 					Score       int     `json:"score"`
 					NumComments int     `json:"num_comments"`
@@ -219,11 +221,17 @@ func (s *SentimentService) fetchSubredditPosts(ctx context.Context, accessToken,
 		sentimentLabel := getSentimentLabel(sentimentScore)
 		symbols := extractCryptoSymbols(post.Title)
 
+		// Use permalink if available, otherwise use URL
+		postURL := post.URL
+		if post.Permalink != "" {
+			postURL = "https://reddit.com" + post.Permalink
+		}
+
 		results = append(results, RedditSentiment{
 			PostID:         post.ID,
 			Subreddit:      subreddit,
 			Title:          post.Title,
-			URL:            "https://reddit.com" + post.URL,
+			URL:            postURL,
 			Author:         post.Author,
 			Score:          post.Score,
 			NumComments:    post.NumComments,
@@ -381,8 +389,10 @@ func (s *SentimentService) storeNewsSentiment(ctx context.Context, articles []Ne
 
 // GetAggregatedSentiment retrieves aggregated sentiment for a symbol
 func (s *SentimentService) GetAggregatedSentiment(ctx context.Context, symbol string) (*AggregatedSentiment, error) {
+	upperSymbol := strings.ToUpper(symbol)
+
 	// Check cache first
-	cacheKey := fmt.Sprintf("sentiment:%s", symbol)
+	cacheKey := fmt.Sprintf("sentiment:%s", upperSymbol)
 	if entry, ok := s.getCached(cacheKey); ok {
 		if agg, ok := entry.(*AggregatedSentiment); ok {
 			return agg, nil
@@ -397,14 +407,14 @@ func (s *SentimentService) GetAggregatedSentiment(ctx context.Context, symbol st
 		WHERE symbol = $1 AND computed_at > NOW() - INTERVAL '1 hour'
 		ORDER BY computed_at DESC
 		LIMIT 1
-	`, strings.ToUpper(symbol)).Scan(
+	`, upperSymbol).Scan(
 		&result.Symbol, &result.SentimentScore, &result.BullishRatio,
 		&result.TotalMentions, &result.SampleSize, &result.ComputedAt,
 	)
 
 	if err != nil {
 		// If no aggregated data, compute from raw data
-		return s.computeAggregatedSentiment(ctx, symbol)
+		return s.computeAggregatedSentiment(ctx, upperSymbol)
 	}
 
 	s.setCache(cacheKey, &result)
@@ -552,7 +562,6 @@ func getSentimentLabel(score float64) string {
 
 // extractCryptoSymbols extracts cryptocurrency symbols from text
 func extractCryptoSymbols(text string) []string {
-	// Common crypto symbols to look for
 	knownSymbols := []string{
 		"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "MATIC", "LINK",
 		"UNI", "ATOM", "LTC", "BCH", "XLM", "ALGO", "VET", "FIL", "THETA", "AAVE",
@@ -563,14 +572,15 @@ func extractCryptoSymbols(text string) []string {
 	var found []string
 
 	for _, symbol := range knownSymbols {
-		// Match whole word only
-		if strings.Contains(text, " "+symbol+" ") || strings.Contains(text, symbol+",") || strings.Contains(text, " "+symbol+".") {
-			found = append(found, symbol)
+		pattern := `\b` + symbol + `\b`
+		re := regexp.MustCompile(pattern)
+		if re.MatchString(text) {
+			found = appendUnique(found, symbol)
 		}
 	}
 
 	// Always include BTC if Bitcoin is mentioned
-	if strings.Contains(text, "bitcoin") || strings.Contains(text, "btc") {
+	if strings.Contains(text, "BITCOIN") || strings.Contains(text, "BTC") {
 		found = appendUnique(found, "BTC")
 	}
 
