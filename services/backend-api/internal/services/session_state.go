@@ -96,7 +96,11 @@ func NewSessionSerializer(repo SessionStateRepository) *SessionSerializer {
 
 func (s *SessionSerializer) Serialize(state *SessionState) ([]byte, error) {
 	state.UpdatedAt = time.Now()
-	state.Checksum = s.calculateChecksum(state)
+	checksum, err := s.calculateChecksum(state)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate checksum: %w", err)
+	}
+	state.Checksum = checksum
 	return json.Marshal(state)
 }
 
@@ -105,7 +109,10 @@ func (s *SessionSerializer) Deserialize(data []byte) (*SessionState, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("failed to deserialize session state: %w", err)
 	}
-	expectedChecksum := s.calculateChecksum(&state)
+	expectedChecksum, err := s.calculateChecksum(&state)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate expected checksum: %w", err)
+	}
 	if state.Checksum != expectedChecksum {
 		return nil, fmt.Errorf("checksum mismatch: session data may be corrupted")
 	}
@@ -120,7 +127,11 @@ func (s *SessionSerializer) Save(ctx context.Context, state *SessionState) error
 		state.CreatedAt = time.Now()
 	}
 	state.UpdatedAt = time.Now()
-	state.Checksum = s.calculateChecksum(state)
+	checksum, err := s.calculateChecksum(state)
+	if err != nil {
+		return fmt.Errorf("failed to calculate checksum: %w", err)
+	}
+	state.Checksum = checksum
 	return s.repo.Save(ctx, state)
 }
 
@@ -179,22 +190,26 @@ func (s *SessionSerializer) CreateFromExecutionLoop(
 		IterationCount:      iterationCount,
 		Metadata:            metadata,
 	}
-	state.Checksum = s.calculateChecksum(state)
+	checksum, err := s.calculateChecksum(state)
+	if err != nil {
+		telemetry.Logger().Warn("Failed to calculate checksum for new session state", "error", err, "session_id", loopID)
+		// Continue with empty checksum - will be recalculated on save
+	}
+	state.Checksum = checksum
 	return state
 }
 
-func (s *SessionSerializer) calculateChecksum(state *SessionState) string {
+func (s *SessionSerializer) calculateChecksum(state *SessionState) (string, error) {
 	stateCopy := *state
 	stateCopy.Checksum = ""
 	// Exclude UpdatedAt from checksum to allow timestamp updates without breaking integrity
 	stateCopy.UpdatedAt = time.Time{}
 	data, err := json.Marshal(stateCopy)
 	if err != nil {
-		telemetry.Logger().Error("Failed to marshal session state for checksum", "error", err)
-		return ""
+		return "", fmt.Errorf("failed to marshal session state for checksum: %w", err)
 	}
 	hash := sha256.Sum256(data)
-	return hex.EncodeToString(hash[:])
+	return hex.EncodeToString(hash[:]), nil
 }
 
 func generateSessionID() string {
@@ -217,7 +232,10 @@ func generateRandomString(length int) string {
 func convertMarketContext(ctx MarketContext) *MarketContextSnapshot {
 	var signalsJSON string
 	if len(ctx.Signals) > 0 {
-		if data, err := json.Marshal(ctx.Signals); err == nil {
+		data, err := json.Marshal(ctx.Signals)
+		if err != nil {
+			telemetry.Logger().Warn("Failed to marshal market context signals", "error", err, "symbol", ctx.Symbol)
+		} else {
 			signalsJSON = string(data)
 		}
 	}
