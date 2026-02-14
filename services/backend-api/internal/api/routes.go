@@ -125,12 +125,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
 
 	// Sentiment handler - initialize with config from environment
-	sentimentConfig := services.SentimentServiceConfig{
-		RedditClientID:     os.Getenv("REDDIT_CLIENT_ID"),
-		RedditClientSecret: os.Getenv("REDDIT_CLIENT_SECRET"),
-		RedditUserAgent:    "NeuraTrade/1.0",
-		CryptoPanicToken:   os.Getenv("CRYPTOPANIC_TOKEN"),
-	}
+	sentimentConfig := services.DefaultSentimentServiceConfig()
+	sentimentConfig.RedditClientID = os.Getenv("REDDIT_CLIENT_ID")
+	sentimentConfig.RedditClientSecret = os.Getenv("REDDIT_CLIENT_SECRET")
+	sentimentConfig.CryptoPanicToken = os.Getenv("CRYPTOPANIC_TOKEN")
 	sentimentService := services.NewSentimentService(sentimentConfig, db)
 	sentimentHandler := handlers.NewSentimentHandler(sentimentService)
 
