@@ -54,6 +54,7 @@ type PositionTracker struct {
 	// Callbacks
 	onFillCallback        func(ctx context.Context, positionID string, fill FillData) error
 	onPriceUpdateCallback func(ctx context.Context, positionID string, newPrice decimal.Decimal) error
+	callbacksMu           sync.RWMutex
 
 	// Goroutine control
 	ctx    context.Context
@@ -204,9 +205,14 @@ func (pt *PositionTracker) SyncWithExchange(ctx context.Context) error {
 		}
 		pt.positionsMu.Unlock()
 
+		// Copy callback reference with proper locking
+		pt.callbacksMu.RLock()
+		onPriceUpdateCb := pt.onPriceUpdateCallback
+		pt.callbacksMu.RUnlock()
+
 		// Trigger price update callback
-		if pt.onPriceUpdateCallback != nil {
-			if err := pt.onPriceUpdateCallback(ctx, positionID, currentPrice); err != nil {
+		if onPriceUpdateCb != nil {
+			if err := onPriceUpdateCb(ctx, positionID, currentPrice); err != nil {
 				pt.logger.WithError(err).Error("Price update callback failed",
 					"position_id", positionID)
 			}
@@ -275,9 +281,16 @@ func (pt *PositionTracker) OnFill(ctx context.Context, fill FillData) error {
 			"new_entry_price", fill.FillPrice)
 	}
 
-	// Trigger fill callback
-	if pt.onFillCallback != nil {
-		if err := pt.onFillCallback(ctx, fill.PositionID, fill); err != nil {
+	// Copy callback reference and release lock before invoking
+	pt.callbacksMu.RLock()
+	onFillCb := pt.onFillCallback
+	pt.callbacksMu.RUnlock()
+
+	pt.positionsMu.Unlock()
+
+	// Trigger fill callback outside of lock to avoid deadlock
+	if onFillCb != nil {
+		if err := onFillCb(ctx, fill.PositionID, fill); err != nil {
 			pt.logger.WithError(err).Error("Fill callback failed",
 				"position_id", fill.PositionID)
 		}
@@ -340,16 +353,16 @@ func (pt *PositionTracker) calculateUnrealizedPL(tracked *TrackedPosition) {
 }
 
 // GetPosition returns a tracked position by ID.
-func (pt *PositionTracker) GetPosition(positionID string) (*interfaces.Position, bool) {
+func (pt *PositionTracker) GetPosition(positionID string) (interfaces.Position, bool) {
 	pt.positionsMu.RLock()
 	defer pt.positionsMu.RUnlock()
 
 	tracked, exists := pt.positions[positionID]
 	if !exists {
-		return nil, false
+		return interfaces.Position{}, false
 	}
 
-	return &tracked.Position, true
+	return tracked.Position, true
 }
 
 // GetAllPositions returns all tracked positions.
@@ -422,11 +435,15 @@ func (pt *PositionTracker) LiquidatePosition(ctx context.Context, positionID str
 
 // SetOnFillCallback sets the callback for fill events.
 func (pt *PositionTracker) SetOnFillCallback(callback func(ctx context.Context, positionID string, fill FillData) error) {
+	pt.callbacksMu.Lock()
+	defer pt.callbacksMu.Unlock()
 	pt.onFillCallback = callback
 }
 
 // SetOnPriceUpdateCallback sets the callback for price update events.
 func (pt *PositionTracker) SetOnPriceUpdateCallback(callback func(ctx context.Context, positionID string, newPrice decimal.Decimal) error) {
+	pt.callbacksMu.Lock()
+	defer pt.callbacksMu.Unlock()
 	pt.onPriceUpdateCallback = callback
 }
 
@@ -438,8 +455,8 @@ func (pt *PositionTracker) loadPositionsFromRedis(ctx context.Context) error {
 
 	pattern := fmt.Sprintf("%s:*", pt.config.RedisKeyPrefix)
 
-	pt.positionsMu.Lock()
-	defer pt.positionsMu.Unlock()
+	// Load data from Redis without holding lock
+	newPositions := make(map[string]*TrackedPosition)
 
 	// Use SCAN instead of KEYS for non-blocking iteration
 	var cursor uint64
@@ -461,7 +478,7 @@ func (pt *PositionTracker) loadPositionsFromRedis(ctx context.Context) error {
 				continue
 			}
 
-			pt.positions[tracked.Position.PositionID] = &tracked
+			newPositions[tracked.Position.PositionID] = &tracked
 		}
 
 		cursor = nextCursor
@@ -470,7 +487,14 @@ func (pt *PositionTracker) loadPositionsFromRedis(ctx context.Context) error {
 		}
 	}
 
-	pt.logger.Info("Loaded positions from Redis", "count", len(pt.positions))
+	// Now acquire lock and merge
+	pt.positionsMu.Lock()
+	for id, tracked := range newPositions {
+		pt.positions[id] = tracked
+	}
+	pt.positionsMu.Unlock()
+
+	pt.logger.Info("Loaded positions from Redis", "count", len(newPositions))
 	return nil
 }
 
