@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/skill"
 )
 
@@ -258,4 +259,26 @@ func (b *ConversationBuilder) AddToolCall(toolCall ToolCall, content string) *Co
 // Build returns the constructed message slice.
 func (b *ConversationBuilder) Build() []Message {
 	return b.messages
+}
+
+// FormatMarketRegime formats a MarketRegime into a human-readable string for LLM context.
+func FormatMarketRegime(regime *models.MarketRegime) string {
+	if regime == nil {
+		return "Market regime: Unknown (not available)"
+	}
+
+	return fmt.Sprintf(`Market Regime Analysis:
+- Symbol: %s on %s
+- Trend: %s (strength: %.1f%%)
+- Volatility: %s (score: %.1f%%)
+- Confidence: %.0f%%
+- Window: %d candles`,
+		regime.Symbol,
+		regime.Exchange,
+		regime.Trend,
+		regime.TrendStrength*100,
+		regime.Volatility,
+		regime.VolatilityScore*100,
+		regime.Confidence*100,
+		regime.WindowSize)
 }
