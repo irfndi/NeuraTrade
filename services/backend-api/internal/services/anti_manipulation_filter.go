@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -10,6 +12,7 @@ import (
 type AntiManipulationFilterConfig struct {
 	WashTradeThreshold   decimal.Decimal
 	SpoofingOrderSize    decimal.Decimal
+	SpoofingMinOrders    int
 	SpoofingCancelWindow time.Duration
 	LayeringMinLevels    int
 	MinDataPoints        int
@@ -32,6 +35,7 @@ type AntiManipulationFilter struct {
 	config *AntiManipulationFilterConfig
 	db     DBPool
 	logger Logger
+	mu     sync.RWMutex
 }
 
 func NewAntiManipulationFilter(db DBPool, logger Logger, config *AntiManipulationFilterConfig) *AntiManipulationFilter {
@@ -39,6 +43,7 @@ func NewAntiManipulationFilter(db DBPool, logger Logger, config *AntiManipulatio
 		config = &AntiManipulationFilterConfig{
 			WashTradeThreshold:   decimal.NewFromFloat(5.0),
 			SpoofingOrderSize:    decimal.NewFromFloat(10000),
+			SpoofingMinOrders:    3,
 			SpoofingCancelWindow: 5 * time.Minute,
 			LayeringMinLevels:    3,
 			MinDataPoints:        10,
@@ -214,7 +219,7 @@ func (amf *AntiManipulationFilter) detectSpoofing(orderBookData map[string]inter
 	result.LargeOrders = largeOrders
 	result.OrderCount = len(largeOrders)
 
-	if len(largeOrders) >= amf.config.LayeringMinLevels {
+	if len(largeOrders) >= amf.config.SpoofingMinOrders {
 		result.IsDetected = true
 		ratio := decimal.NewFromInt(int64(len(largeOrders))).Div(decimal.NewFromInt(10))
 		if ratio.GreaterThan(decimal.NewFromFloat(1.0)) {
@@ -294,7 +299,7 @@ func (amf *AntiManipulationFilter) getAverageVolume(ctx context.Context, symbol,
 	since := time.Now().Add(-duration)
 
 	query := `
-		SELECT AVG(md.volume_24h) as avg_volume
+		SELECT CAST(AVG(md.volume_24h) AS VARCHAR) as avg_volume
 		FROM market_data md
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
 		JOIN exchanges e ON md.exchange_id = e.id
@@ -302,19 +307,26 @@ func (amf *AntiManipulationFilter) getAverageVolume(ctx context.Context, symbol,
 		LIMIT 1
 	`
 
-	var avgVolume *float64
-	err := amf.db.QueryRow(ctx, query, symbol, exchange, since).Scan(&avgVolume)
-	if err != nil || avgVolume == nil {
-		return decimal.Zero, err
+	var avgVolumeStr *string
+	err := amf.db.QueryRow(ctx, query, symbol, exchange, since).Scan(&avgVolumeStr)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("get average volume for %s/%s: %w", symbol, exchange, err)
+	}
+	if avgVolumeStr == nil || *avgVolumeStr == "" {
+		return decimal.Zero, nil
 	}
 
-	return decimal.NewFromFloat(*avgVolume), nil
+	return decimal.NewFromString(*avgVolumeStr)
 }
 
 func (amf *AntiManipulationFilter) GetConfig() *AntiManipulationFilterConfig {
+	amf.mu.RLock()
+	defer amf.mu.RUnlock()
 	return amf.config
 }
 
 func (amf *AntiManipulationFilter) UpdateConfig(config *AntiManipulationFilterConfig) {
+	amf.mu.Lock()
+	defer amf.mu.Unlock()
 	amf.config = config
 }

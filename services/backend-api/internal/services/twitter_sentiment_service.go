@@ -26,7 +26,7 @@ type TwitterSentimentConfig struct {
 	}
 }
 
-type SentimentScore struct {
+type TwitterSentimentScore struct {
 	Overall     decimal.Decimal `json:"overall"`      // -1 to 1
 	PositivePct decimal.Decimal `json:"positive_pct"` // 0 to 1
 	NegativePct decimal.Decimal `json:"negative_pct"` // 0 to 1
@@ -52,7 +52,6 @@ type TwitterSentimentService struct {
 	httpClient *http.Client
 	redis      *redis.Client
 	logger     Logger
-	cache      map[string]*SentimentScore
 }
 
 func NewTwitterSentimentService(config *TwitterSentimentConfig, redisClient *redis.Client, logger Logger) *TwitterSentimentService {
@@ -69,17 +68,16 @@ func NewTwitterSentimentService(config *TwitterSentimentConfig, redisClient *red
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		redis:      redisClient,
 		logger:     logger,
-		cache:      make(map[string]*SentimentScore),
 	}
 }
 
-func (tss *TwitterSentimentService) GetSentiment(ctx context.Context, symbol string) (*SentimentScore, error) {
+func (tss *TwitterSentimentService) GetSentiment(ctx context.Context, symbol string) (*TwitterSentimentScore, error) {
 	cacheKey := fmt.Sprintf("sentiment:twitter:%s", strings.ToUpper(symbol))
 
 	if tss.redis != nil {
 		cached, err := tss.redis.Get(ctx, cacheKey).Result()
 		if err == nil {
-			var score SentimentScore
+			var score TwitterSentimentScore
 			if json.Unmarshal([]byte(cached), &score) == nil {
 				return &score, nil
 			}
@@ -99,7 +97,7 @@ func (tss *TwitterSentimentService) GetSentiment(ctx context.Context, symbol str
 	return score, nil
 }
 
-func (tss *TwitterSentimentService) fetchAndAnalyzeSentiment(ctx context.Context, symbol string) (*SentimentScore, error) {
+func (tss *TwitterSentimentService) fetchAndAnalyzeSentiment(ctx context.Context, symbol string) (*TwitterSentimentScore, error) {
 	tweets, err := tss.fetchTweets(ctx, symbol)
 	if err != nil {
 		tss.logger.WithFields(map[string]interface{}{"symbol": symbol}).Warn("Failed to fetch tweets")
@@ -163,7 +161,7 @@ func (tss *TwitterSentimentService) fetchTweets(ctx context.Context, symbol stri
 	return tweets, nil
 }
 
-func (tss *TwitterSentimentService) analyzeTweets(tweets []Tweet) *SentimentScore {
+func (tss *TwitterSentimentService) analyzeTweets(tweets []Tweet) *TwitterSentimentScore {
 	positive := 0
 	negative := 0
 	neutral := 0
@@ -223,7 +221,7 @@ func (tss *TwitterSentimentService) analyzeTweets(tweets []Tweet) *SentimentScor
 		return tss.getDefaultSentiment()
 	}
 
-	result := &SentimentScore{
+	result := &TwitterSentimentScore{
 		Volume:      total,
 		PositivePct: decimal.NewFromInt(int64(positive)).Div(decimal.NewFromInt(int64(total))),
 		NegativePct: decimal.NewFromInt(int64(negative)).Div(decimal.NewFromInt(int64(total))),
@@ -242,8 +240,8 @@ func (tss *TwitterSentimentService) analyzeTweets(tweets []Tweet) *SentimentScor
 	return result
 }
 
-func (tss *TwitterSentimentService) getDefaultSentiment() *SentimentScore {
-	return &SentimentScore{
+func (tss *TwitterSentimentService) getDefaultSentiment() *TwitterSentimentScore {
+	return &TwitterSentimentScore{
 		Overall:     decimal.Zero,
 		PositivePct: decimal.NewFromFloat(0.33),
 		NegativePct: decimal.NewFromFloat(0.33),
