@@ -319,4 +319,36 @@ export const API_ENDPOINTS = {
   GET_AI_STATUS: (userId: string) =>
     `/api/v1/ai/status/${encodeURIComponent(userId)}`,
   ROUTE_AI_MODEL: "/api/v1/ai/route",
+  GET_ALERTS: (userId: string) =>
+    `/api/v1/alerts?user_id=${encodeURIComponent(userId)}`,
+  CREATE_ALERT: "/api/v1/alerts",
+  UPDATE_ALERT: (alertId: string) =>
+    `/api/v1/alerts/${encodeURIComponent(alertId)}`,
+  DELETE_ALERT: (alertId: string) =>
+    `/api/v1/alerts/${encodeURIComponent(alertId)}`,
 } as const;
+
+export interface UserAlert {
+  readonly id: string;
+  readonly user_id: string;
+  readonly alert_type: string;
+  readonly conditions: Record<string, unknown>;
+  readonly is_active: boolean;
+  readonly created_at: string;
+}
+
+export interface GetAlertsResponse {
+  readonly status: string;
+  readonly data: readonly UserAlert[];
+}
+
+export interface CreateAlertRequest {
+  readonly alert_type: string;
+  readonly conditions: Record<string, unknown>;
+}
+
+export interface CreateAlertResponse {
+  readonly status: string;
+  readonly message: string;
+  readonly data: UserAlert;
+}
