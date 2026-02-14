@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1570,4 +1571,205 @@ func TestCollectorService_ReadinessInitialState(t *testing.T) {
 	init, ready := collector.GetReadinessStatus()
 	assert.False(t, init)
 	assert.False(t, ready)
+}
+
+func TestCollectorService_CheckPriceOutlier(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	tests := []struct {
+		name        string
+		ticker      *models.MarketPrice
+		exchange    string
+		symbol      string
+		setupCache  func()
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "first price - no comparison available",
+			ticker: &models.MarketPrice{
+				Price:     decimal.NewFromFloat(50000.0),
+				Volume:    decimal.NewFromFloat(1000.0),
+				Timestamp: time.Now(),
+			},
+			exchange: "binance",
+			symbol:   "BTC/USDT",
+			setupCache: func() {
+				collector.lastPrice.Delete("binance:BTC/USDT")
+			},
+			wantErr: false,
+		},
+		{
+			name: "normal price movement",
+			ticker: &models.MarketPrice{
+				Price:     decimal.NewFromFloat(50100.0),
+				Volume:    decimal.NewFromFloat(1000.0),
+				Timestamp: time.Now().Add(45 * time.Second),
+			},
+			exchange: "binance",
+			symbol:   "BTC/USDT",
+			setupCache: func() {
+				collector.lastPrice.Store("binance:BTC/USDT", priceCacheEntry{
+					price:     decimal.NewFromFloat(50000.0),
+					timestamp: time.Now(),
+				})
+			},
+			wantErr: false,
+		},
+		{
+			name: "price outlier - 60% move",
+			ticker: &models.MarketPrice{
+				Price:     decimal.NewFromFloat(80000.0),
+				Volume:    decimal.NewFromFloat(1000.0),
+				Timestamp: time.Now().Add(45 * time.Second),
+			},
+			exchange: "binance",
+			symbol:   "BTC/USDT",
+			setupCache: func() {
+				collector.lastPrice.Store("binance:BTC/USDT", priceCacheEntry{
+					price:     decimal.NewFromFloat(50000.0),
+					timestamp: time.Now(),
+				})
+			},
+			wantErr:     true,
+			errContains: "price outlier detected",
+		},
+		{
+			name: "price outlier - 80% drop",
+			ticker: &models.MarketPrice{
+				Price:     decimal.NewFromFloat(10000.0),
+				Volume:    decimal.NewFromFloat(1000.0),
+				Timestamp: time.Now().Add(45 * time.Second),
+			},
+			exchange: "binance",
+			symbol:   "BTC/USDT",
+			setupCache: func() {
+				collector.lastPrice.Store("binance:BTC/USDT", priceCacheEntry{
+					price:     decimal.NewFromFloat(50000.0),
+					timestamp: time.Now(),
+				})
+			},
+			wantErr:     true,
+			errContains: "price outlier detected",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector.lastPrice = sync.Map{}
+			if tt.setupCache != nil {
+				tt.setupCache()
+			}
+
+			err := collector.checkPriceOutlier(tt.ticker, tt.exchange, tt.symbol)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestCollectorService_CheckVolumeAnomaly(t *testing.T) {
+	mockCCXT := &testmocks.MockCCXTService{}
+	cfg := &config.Config{}
+	blacklistCache := cache.NewInMemoryBlacklistCache()
+
+	collector := NewCollectorService(nil, mockCCXT, cfg, nil, blacklistCache)
+
+	tests := []struct {
+		name       string
+		ticker     *models.MarketPrice
+		exchange   string
+		symbol     string
+		setupCache func()
+		wantErr    bool
+	}{
+		{
+			name: "zero volume - skip check",
+			ticker: &models.MarketPrice{
+				Price:     decimal.NewFromFloat(50000.0),
+				Volume:    decimal.Zero,
+				Timestamp: time.Now(),
+			},
+			exchange: "binance",
+			symbol:   "BTC/USDT",
+			setupCache: func() {
+				collector.volumeStats.Delete("binance:BTC/USDT")
+			},
+			wantErr: false,
+		},
+		{
+			name: "first 5 samples - accumulate",
+			ticker: &models.MarketPrice{
+				Price:     decimal.NewFromFloat(50000.0),
+				Volume:    decimal.NewFromFloat(1000.0),
+				Timestamp: time.Now(),
+			},
+			exchange: "binance",
+			symbol:   "BTC/USDT",
+			setupCache: func() {
+				collector.volumeStats.Delete("binance:BTC/USDT")
+			},
+			wantErr: false,
+		},
+		{
+			name: "normal volume after warmup",
+			ticker: &models.MarketPrice{
+				Price:     decimal.NewFromFloat(50000.0),
+				Volume:    decimal.NewFromFloat(1050.0),
+				Timestamp: time.Now(),
+			},
+			exchange: "binance",
+			symbol:   "BTC/USDT",
+			setupCache: func() {
+				collector.volumeStats.Store("binance:BTC/USDT", volumeStatsEntry{
+					avgVolume:   decimal.NewFromFloat(1000.0),
+					sampleCount: 10,
+				})
+			},
+			wantErr: false,
+		},
+		{
+			name: "high volume anomaly - 15x average",
+			ticker: &models.MarketPrice{
+				Price:     decimal.NewFromFloat(50000.0),
+				Volume:    decimal.NewFromFloat(15000.0),
+				Timestamp: time.Now(),
+			},
+			exchange: "binance",
+			symbol:   "BTC/USDT",
+			setupCache: func() {
+				collector.volumeStats.Store("binance:BTC/USDT", volumeStatsEntry{
+					avgVolume:   decimal.NewFromFloat(1000.0),
+					sampleCount: 10,
+				})
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector.volumeStats = sync.Map{}
+			if tt.setupCache != nil {
+				tt.setupCache()
+			}
+
+			err := collector.checkVolumeAnomaly(tt.ticker, tt.exchange, tt.symbol)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
