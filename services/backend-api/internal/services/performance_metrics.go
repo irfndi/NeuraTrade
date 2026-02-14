@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 )
@@ -257,7 +258,7 @@ func CalculateBacktestMetrics(returns []float64) *BacktestMetrics {
 		diff := r - m.AverageReturn
 		varianceSum += diff * diff
 	}
-	m.Volatility = varianceSum / float64(len(returns))
+	m.Volatility = math.Sqrt(varianceSum / float64(len(returns)))
 
 	// Sharpe ratio (simplified, assuming risk-free rate of 0)
 	if m.Volatility > 0 {

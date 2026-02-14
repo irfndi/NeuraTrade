@@ -242,7 +242,7 @@ func (pm *QuestProgressManager) sendStartNotification(questID string, targetCoun
 
 // sendMilestoneNotification sends notification when milestone is reached
 func (pm *QuestProgressManager) sendMilestoneNotification(update *QuestProgressUpdate) {
-	if update.ReachedMilestone == nil || pm.engine.notificationService == nil {
+	if update.ReachedMilestone == nil || pm.engine == nil || pm.engine.notificationService == nil {
 		return
 	}
 
@@ -274,7 +274,7 @@ func (pm *QuestProgressManager) sendMilestoneNotification(update *QuestProgressU
 
 // sendProgressUpdate sends regular progress update notification
 func (pm *QuestProgressManager) sendProgressUpdate(update *QuestProgressUpdate) {
-	if pm.engine.notificationService == nil {
+	if pm.engine == nil || pm.engine.notificationService == nil {
 		return
 	}
 
@@ -305,7 +305,7 @@ func (pm *QuestProgressManager) sendProgressUpdate(update *QuestProgressUpdate) 
 
 // sendCompletionNotification sends notification when quest completes
 func (pm *QuestProgressManager) sendCompletionNotification(update *QuestProgressUpdate) {
-	if pm.engine.notificationService == nil {
+	if pm.engine == nil || pm.engine.notificationService == nil {
 		return
 	}
 
