@@ -192,6 +192,11 @@ func (amf *AntiManipulationFilter) detectSpoofing(orderBookData map[string]inter
 		return result
 	}
 
+	minOrders := amf.config.SpoofingMinOrders
+	if minOrders <= 0 {
+		minOrders = 3
+	}
+
 	var largeOrders []decimal.Decimal
 
 	for _, bid := range bids {
@@ -219,7 +224,7 @@ func (amf *AntiManipulationFilter) detectSpoofing(orderBookData map[string]inter
 	result.LargeOrders = largeOrders
 	result.OrderCount = len(largeOrders)
 
-	if len(largeOrders) >= amf.config.SpoofingMinOrders {
+	if len(largeOrders) >= minOrders {
 		result.IsDetected = true
 		ratio := decimal.NewFromInt(int64(len(largeOrders))).Div(decimal.NewFromInt(10))
 		if ratio.GreaterThan(decimal.NewFromFloat(1.0)) {

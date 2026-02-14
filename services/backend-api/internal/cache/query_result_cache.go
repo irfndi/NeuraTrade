@@ -36,6 +36,9 @@ type QueryResultCache struct {
 }
 
 func NewQueryResultCache(redisClient *redis.Client, ttl time.Duration) *QueryResultCache {
+	if redisClient == nil {
+		return nil
+	}
 	return &QueryResultCache{
 		redis:     redisClient,
 		ttl:       ttl,
@@ -171,7 +174,9 @@ func (c *QueryResultCache) InvalidateByPattern(ctx context.Context, pattern stri
 		if err := c.redis.Del(ctx, keys...).Err(); err != nil {
 			return fmt.Errorf("failed to invalidate cache: %w", err)
 		}
-		log.Printf("Invalidated %d cache entries matching pattern %s", len(keys), pattern)
+		if c.enableLog {
+			log.Printf("Invalidated %d cache entries matching pattern %s", len(keys), pattern)
+		}
 	}
 
 	return nil
