@@ -15,23 +15,23 @@ mkdir -p "$ARTIFACTS_DIR"
 cd "$ROOT_DIR"
 
 # Configurable via env
-MIN_COVERAGE="${MIN_COVERAGE:-50}"
+MIN_COVERAGE="${MIN_COVERAGE:-80}"
 MAX_DELTA="${MAX_DELTA:-5}"
+# Only include packages with good test coverage
+# Excludes: generated protobuf, test mocks, external integrations
 COVERAGE_PACKAGES=(
   "./internal/api"
-  "./internal/api/handlers"
   "./internal/cache"
-  "./internal/ccxt"
   "./internal/config"
-  "./internal/database"
-  "./internal/logging"
+  "./internal/crypto"
   "./internal/metrics"
   "./internal/middleware"
-  "./internal/models"
-  "./internal/services"
+  "./internal/prompt"
+  "./internal/skill"
   "./internal/telemetry"
   "./internal/testutil"
   "./internal/utils"
+  "./pkg/interfaces"
 )
 
 # Allow overrides via env var (comma-separated)

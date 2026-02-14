@@ -1181,6 +1181,8 @@ func TestMarketPrice_Getters(t *testing.T) {
 		Symbol:       "BTC/USDT",
 		Price:        decimal.NewFromFloat(50000.00),
 		Volume:       decimal.NewFromFloat(10.5),
+		Bid:          decimal.NewFromFloat(49999.50),
+		Ask:          decimal.NewFromFloat(50000.50),
 		Timestamp:    now,
 	}
 
@@ -1189,4 +1191,6 @@ func TestMarketPrice_Getters(t *testing.T) {
 	assert.Equal(t, now, marketPrice.GetTimestamp())
 	assert.Equal(t, "Binance", marketPrice.GetExchangeName())
 	assert.Equal(t, "BTC/USDT", marketPrice.GetSymbol())
+	assert.Equal(t, 49999.50, marketPrice.GetBid())
+	assert.Equal(t, 50000.50, marketPrice.GetAsk())
 }

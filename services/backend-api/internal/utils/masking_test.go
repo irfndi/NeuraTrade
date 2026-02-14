@@ -71,8 +71,8 @@ func TestMaskAPIKey(t *testing.T) {
 		},
 		{
 			name:     "normal API key",
-			input:    "sk_live_abcdef123456789",
-			expected: "sk_l***************6789",
+			input:    "test_key_abcdef123456789",
+			expected: "test****************6789",
 		},
 	}
 
@@ -185,13 +185,13 @@ func TestMaskConnectionString(t *testing.T) {
 	}{
 		{
 			name:     "PostgreSQL connection string",
-			input:    "postgresql://user:secretpassword@localhost:5432/mydb",
-			expected: "postgresql://user:***@localhost:5432/mydb",
+			input:    "postgresql://testuser:testpass@localhost:5432/mydb",
+			expected: "postgresql://testuser:***@localhost:5432/mydb",
 		},
 		{
 			name:     "Redis connection string with user",
-			input:    "redis://user:secretpassword@localhost:6379/0",
-			expected: "redis://user:***@localhost:6379/0",
+			input:    "redis://testuser:testpass@localhost:6379/0",
+			expected: "redis://testuser:***@localhost:6379/0",
 		},
 		{
 			name:     "plain string unchanged",
@@ -332,10 +332,10 @@ func TestRedactMap(t *testing.T) {
 		{
 			name: "default sensitive keys",
 			input: map[string]string{
-				"username":      "johndoe",
-				"password":      "fake_secret_value",
-				"api_key":       "test_key_abc123xyz",
-				"database_url":  "postgresql://user:pass@localhost/db",
+				"username":      "testuser",
+				"password":      "testpass123",
+				"api_key":       "test_key_example",
+				"database_url":  "postgresql://testuser:testpass@localhost/db",
 				"normal_config": "visible_value",
 			},
 			sensitiveKeys:   nil,
@@ -382,26 +382,26 @@ func TestSafeLog(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		expected    []string // Substrings that should be in result
-		notExpected []string // Substrings that should NOT be in result
+		expected    []string
+		notExpected []string
 	}{
 		{
 			name:        "masks API key",
-			input:       "Request with api_key=sk_live_abcdef123456",
+			input:       "Request with api_key=test_key_abcdef123456",
 			expected:    []string{"api_key", "***"},
-			notExpected: []string{"sk_live_abcdef123456"},
+			notExpected: []string{"test_key_abcdef123456"},
 		},
 		{
 			name:        "masks password",
-			input:       "User login with password=secret123",
+			input:       "User login with password=testpass123",
 			expected:    []string{"password", "*"},
-			notExpected: []string{"secret123"},
+			notExpected: []string{"testpass123"},
 		},
 		{
 			name:        "masks connection string",
-			input:       "Connecting to postgresql://admin:pass123@localhost/mydb",
-			expected:    []string{"postgresql://admin:***@localhost/mydb"},
-			notExpected: []string{"pass123"},
+			input:       "Connecting to postgresql://testuser:testpass@localhost/mydb",
+			expected:    []string{"postgresql://testuser:***@localhost/mydb"},
+			notExpected: []string{"testpass"},
 		},
 	}
 
@@ -428,6 +428,69 @@ func TestMaskStringDoesNotModifyOriginal(t *testing.T) {
 	assert.Equal(t, "test-secret-key-12345", original) // Original unchanged
 }
 
+func TestMaskJSON(t *testing.T) {
+	tests := []struct {
+		name              string
+		input             string
+		sensitiveFields   []string
+		expectedContained string
+	}{
+		{
+			name:              "masks password field",
+			input:             `{"username": "john", "password": "test_value_for_masking"}`,
+			sensitiveFields:   nil,
+			expectedContained: `"password"`,
+		},
+		{
+			name:              "masks token field",
+			input:             `{"api_key": "test_key_abc123", "action": "test"}`,
+			sensitiveFields:   nil,
+			expectedContained: `"api_key"`,
+		},
+		{
+			name:              "masks multiple fields",
+			input:             `{"password": "pass1", "token": "abc123", "data": "visible"}`,
+			sensitiveFields:   nil,
+			expectedContained: `"data": "visible"`,
+		},
+		{
+			name:              "custom sensitive fields",
+			input:             `{"custom_field": "secret", "normal": "visible"}`,
+			sensitiveFields:   []string{"custom_field"},
+			expectedContained: `"custom_field"`,
+		},
+		{
+			name:              "empty string returns empty",
+			input:             "",
+			sensitiveFields:   nil,
+			expectedContained: "",
+		},
+		{
+			name:              "no matching fields returns unchanged",
+			input:             `{"name": "test", "value": "123"}`,
+			sensitiveFields:   nil,
+			expectedContained: `"name": "test"`,
+		},
+		{
+			name:              "single quotes style",
+			input:             "{'password': 'secret'}",
+			sensitiveFields:   nil,
+			expectedContained: "'password'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MaskJSON(tt.input, tt.sensitiveFields)
+			if tt.expectedContained == "" {
+				assert.Equal(t, "", result)
+			} else {
+				assert.Contains(t, result, tt.expectedContained)
+			}
+		})
+	}
+}
+
 func BenchmarkMaskString(b *testing.B) {
 	testString := "this-is-a-long-secret-api-key-that-needs-masking"
 	for i := 0; i < b.N; i++ {
@@ -436,7 +499,7 @@ func BenchmarkMaskString(b *testing.B) {
 }
 
 func BenchmarkSafeLog(b *testing.B) {
-	testString := "Request to postgresql://user:secret@localhost/db with api_key=sk_live_abc123 and password=mypass"
+	testString := "Request to postgresql://testuser:testpass@localhost/db with api_key=test_key_abc123 and password=testpass"
 	for i := 0; i < b.N; i++ {
 		_ = SafeLog(testString)
 	}

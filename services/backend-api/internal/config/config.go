@@ -48,7 +48,8 @@ type Config struct {
 	// Analytics holds configuration for analytics features.
 	Analytics AnalyticsConfig `mapstructure:"analytics"`
 	// Wallet holds configuration for wallet validation.
-	Wallet WalletValidatorConfig `mapstructure:"wallet"`
+	Wallet     WalletValidatorConfig `mapstructure:"wallet"`
+	Indicators IndicatorsConfig      `mapstructure:"indicators"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -320,6 +321,10 @@ type WalletValidatorConfig struct {
 	MinimumExchangeConnections int     `mapstructure:"minimum_exchange_connections"`
 }
 
+type IndicatorsConfig struct {
+	Provider string `mapstructure:"provider"`
+}
+
 // Load reads the configuration from the config file and environment variables.
 //
 // Returns:
@@ -558,6 +563,8 @@ func setDefaults() {
 	viper.SetDefault("wallet.minimum_usdc_balance", 100.0)
 	viper.SetDefault("wallet.minimum_portfolio_value", 500.0)
 	viper.SetDefault("wallet.minimum_exchange_connections", 1)
+
+	viper.SetDefault("indicators.provider", "talib")
 }
 
 // GetServiceURL returns the CCXT service URL.

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -1653,4 +1654,614 @@ func TestNotificationService_AggregatedSignalsHash_Ordering(t *testing.T) {
 	// Hashes should be equal because signals are sorted internally
 	assert.Equal(t, hash1, hash2, "Hash should be consistent regardless of input order")
 	assert.Len(t, hash1, 64, "SHA256 hash should be 64 characters")
+}
+
+// neura-im9: Quest Progress Notification Tests
+// neura-nh5: Risk Event Notification Tests
+// neura-fvk: Fund Milestone Notification Tests
+// AI Reasoning Notification Tests
+// neura-im9/neura-fvk/neura-nh5: Integration Tests
+
+func TestQuestProgressNotification_Struct(t *testing.T) {
+	progress := QuestProgressNotification{
+		QuestID:       "quest-123",
+		QuestName:     "Market Scanner",
+		Current:       5,
+		Target:        10,
+		Percent:       50,
+		Status:        "active",
+		TimeRemaining: "2h 30m",
+	}
+
+	assert.Equal(t, "quest-123", progress.QuestID)
+	assert.Equal(t, "Market Scanner", progress.QuestName)
+	assert.Equal(t, 5, progress.Current)
+	assert.Equal(t, 10, progress.Target)
+	assert.Equal(t, 50, progress.Percent)
+	assert.Equal(t, "active", progress.Status)
+	assert.Equal(t, "2h 30m", progress.TimeRemaining)
+}
+
+func TestNotificationService_formatQuestProgressMessage(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	tests := []struct {
+		name     string
+		progress QuestProgressNotification
+		contains []string
+	}{
+		{
+			name: "active quest with progress",
+			progress: QuestProgressNotification{
+				QuestID:       "quest-1",
+				QuestName:     "Market Scanner",
+				Current:       5,
+				Target:        10,
+				Percent:       50,
+				Status:        "active",
+				TimeRemaining: "5m",
+			},
+			contains: []string{
+				"🎯",
+				"Quest Progress Update",
+				"Market Scanner",
+				"5/10 (50%)",
+				"5m",
+				"50%",
+			},
+		},
+		{
+			name: "completed quest",
+			progress: QuestProgressNotification{
+				QuestID:       "quest-2",
+				QuestName:     "Daily Report",
+				Current:       10,
+				Target:        10,
+				Percent:       100,
+				Status:        "completed",
+				TimeRemaining: "",
+			},
+			contains: []string{
+				"✅",
+				"Quest Progress Update",
+				"Daily Report",
+				"10/10 (100%)",
+				"🎉 Quest completed!",
+			},
+		},
+		{
+			name: "failed quest",
+			progress: QuestProgressNotification{
+				QuestID:       "quest-3",
+				QuestName:     "Failed Quest",
+				Current:       3,
+				Target:        10,
+				Percent:       30,
+				Status:        "failed",
+				TimeRemaining: "",
+			},
+			contains: []string{
+				"❌",
+				"Failed Quest",
+				"3/10 (30%)",
+			},
+		},
+		{
+			name: "expired quest",
+			progress: QuestProgressNotification{
+				QuestID:       "quest-4",
+				QuestName:     "Expired Quest",
+				Current:       7,
+				Target:        10,
+				Percent:       70,
+				Status:        "expired",
+				TimeRemaining: "",
+			},
+			contains: []string{
+				"⏰",
+				"Expired Quest",
+				"7/10 (70%)",
+			},
+		},
+		{
+			name: "zero progress",
+			progress: QuestProgressNotification{
+				QuestID:       "quest-5",
+				QuestName:     "New Quest",
+				Current:       0,
+				Target:        100,
+				Percent:       0,
+				Status:        "active",
+				TimeRemaining: "1d",
+			},
+			contains: []string{
+				"New Quest",
+				"0/100 (0%)",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message := ns.formatQuestProgressMessage(tt.progress)
+			for _, expected := range tt.contains {
+				assert.Contains(t, message, expected, "Message should contain %s", expected)
+			}
+		})
+	}
+}
+
+func TestNotificationService_generateProgressBar(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	tests := []struct {
+		name     string
+		percent  int
+		width    int
+		expected string
+	}{
+		{
+			name:     "0% progress",
+			percent:  0,
+			width:    10,
+			expected: "[░░░░░░░░░░] 0%",
+		},
+		{
+			name:     "50% progress",
+			percent:  50,
+			width:    10,
+			expected: "[█████░░░░░] 50%",
+		},
+		{
+			name:     "100% progress",
+			percent:  100,
+			width:    10,
+			expected: "[██████████] 100%",
+		},
+		{
+			name:     "25% progress width 4",
+			percent:  25,
+			width:    4,
+			expected: "[█░░░] 25%",
+		},
+		{
+			name:     "75% progress width 8",
+			percent:  75,
+			width:    8,
+			expected: "[██████░░] 75%",
+		},
+		{
+			name:     "over 100% clamped",
+			percent:  150,
+			width:    10,
+			expected: "[██████████] 100%",
+		},
+		{
+			name:     "negative clamped to 0",
+			percent:  -10,
+			width:    10,
+			expected: "[░░░░░░░░░░] 0%",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ns.generateProgressBar(tt.percent, tt.width)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// =============================================================================
+// Risk Event Notification Tests (neura-nh5)
+// =============================================================================
+
+func TestRiskEventNotification_Struct(t *testing.T) {
+	event := RiskEventNotification{
+		EventType: "drawdown_exceeded",
+		Severity:  "critical",
+		Message:   "Portfolio drawdown has exceeded 15% threshold",
+		Details: map[string]string{
+			"current_drawdown": "18.5%",
+			"threshold":        "15%",
+			"peak_value":       "$10,000",
+			"current_value":    "$8,150",
+		},
+	}
+
+	assert.Equal(t, "drawdown_exceeded", event.EventType)
+	assert.Equal(t, "critical", event.Severity)
+	assert.Equal(t, "Portfolio drawdown has exceeded 15% threshold", event.Message)
+	assert.Equal(t, "18.5%", event.Details["current_drawdown"])
+	assert.Equal(t, "15%", event.Details["threshold"])
+}
+
+func TestNotificationService_formatRiskEventMessage(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	tests := []struct {
+		name     string
+		event    RiskEventNotification
+		contains []string
+	}{
+		{
+			name: "critical severity event",
+			event: RiskEventNotification{
+				EventType: "drawdown_exceeded",
+				Severity:  "critical",
+				Message:   "Portfolio drawdown exceeded threshold",
+				Details: map[string]string{
+					"drawdown": "20%",
+				},
+			},
+			contains: []string{
+				"🚨",
+				"Risk Event Alert",
+				"drawdown_exceeded",
+				"critical",
+				"Portfolio drawdown exceeded threshold",
+				"drawdown: 20%",
+			},
+		},
+		{
+			name: "high severity event",
+			event: RiskEventNotification{
+				EventType: "daily_loss_limit",
+				Severity:  "high",
+				Message:   "Daily loss limit reached",
+				Details: map[string]string{
+					"loss":  "$150",
+					"limit": "$100",
+				},
+			},
+			contains: []string{
+				"⚠️",
+				"daily_loss_limit",
+				"high",
+				"Daily loss limit reached",
+			},
+		},
+		{
+			name: "medium severity event",
+			event: RiskEventNotification{
+				EventType: "position_warning",
+				Severity:  "medium",
+				Message:   "Position size approaching limit",
+				Details:   map[string]string{},
+			},
+			contains: []string{
+				"⚡",
+				"position_warning",
+				"medium",
+			},
+		},
+		{
+			name: "low severity event",
+			event: RiskEventNotification{
+				EventType: "info",
+				Severity:  "low",
+				Message:   "Risk parameters updated",
+				Details:   nil,
+			},
+			contains: []string{
+				"ℹ️",
+				"info",
+				"low",
+				"Risk parameters updated",
+			},
+		},
+		{
+			name: "unknown severity defaults to warning",
+			event: RiskEventNotification{
+				EventType: "unknown_event",
+				Severity:  "unknown",
+				Message:   "Something happened",
+			},
+			contains: []string{
+				"⚠️",
+				"unknown_event",
+			},
+		},
+		{
+			name: "event with multiple details",
+			event: RiskEventNotification{
+				EventType: "consecutive_losses",
+				Severity:  "high",
+				Message:   "Multiple consecutive losses detected",
+				Details: map[string]string{
+					"count":    "3",
+					"total":    "$75",
+					"pause":    "15m",
+					"strategy": "scalping",
+				},
+			},
+			contains: []string{
+				"count: 3",
+				"total: $75",
+				"pause: 15m",
+				"strategy: scalping",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message := ns.formatRiskEventMessage(tt.event)
+			for _, expected := range tt.contains {
+				assert.Contains(t, message, expected, "Message should contain %s", expected)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Fund Milestone Notification Tests (neura-fvk)
+// =============================================================================
+
+func TestFundMilestoneNotification_Struct(t *testing.T) {
+	milestone := FundMilestoneNotification{
+		MilestoneType:  "fund_growth",
+		CurrentValue:   "$2,500",
+		TargetValue:    "$5,000",
+		PercentReached: 50,
+		Achievement:    "50% of fund growth target reached",
+	}
+
+	assert.Equal(t, "fund_growth", milestone.MilestoneType)
+	assert.Equal(t, "$2,500", milestone.CurrentValue)
+	assert.Equal(t, "$5,000", milestone.TargetValue)
+	assert.Equal(t, 50, milestone.PercentReached)
+	assert.Equal(t, "50% of fund growth target reached", milestone.Achievement)
+}
+
+func TestNotificationService_formatFundMilestoneMessage(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	tests := []struct {
+		name      string
+		milestone FundMilestoneNotification
+		contains  []string
+	}{
+		{
+			name: "25% milestone",
+			milestone: FundMilestoneNotification{
+				MilestoneType:  "fund_growth",
+				CurrentValue:   "$1,250",
+				TargetValue:    "$5,000",
+				PercentReached: 25,
+				Achievement:    "Quarter milestone reached",
+			},
+			contains: []string{
+				"💰",
+				"Fund Milestone Reached!",
+				"Quarter milestone reached",
+				"$1,250",
+				"$5,000",
+				"25%",
+			},
+		},
+		{
+			name: "50% milestone",
+			milestone: FundMilestoneNotification{
+				MilestoneType:  "fund_growth",
+				CurrentValue:   "$2,500",
+				TargetValue:    "$5,000",
+				PercentReached: 50,
+				Achievement:    "Halfway to target!",
+			},
+			contains: []string{
+				"Fund Milestone Reached!",
+				"Halfway to target!",
+				"50%",
+			},
+		},
+		{
+			name: "100% milestone - target achieved",
+			milestone: FundMilestoneNotification{
+				MilestoneType:  "fund_growth",
+				CurrentValue:   "$5,000",
+				TargetValue:    "$5,000",
+				PercentReached: 100,
+				Achievement:    "Target achieved!",
+			},
+			contains: []string{
+				"Target achieved!",
+				"100%",
+				"████████████████████",
+			},
+		},
+		{
+			name: "profit milestone",
+			milestone: FundMilestoneNotification{
+				MilestoneType:  "profit_target",
+				CurrentValue:   "$500 profit",
+				TargetValue:    "$1,000 profit",
+				PercentReached: 50,
+				Achievement:    "Halfway to profit target",
+			},
+			contains: []string{
+				"$500 profit",
+				"$1,000 profit",
+				"50%",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message := ns.formatFundMilestoneMessage(tt.milestone)
+			for _, expected := range tt.contains {
+				assert.Contains(t, message, expected, "Message should contain %s", expected)
+			}
+			assert.Contains(t, message, "█", "Should contain progress bar filled chars")
+		})
+	}
+}
+
+// =============================================================================
+// AI Reasoning Notification Tests (for completeness)
+// =============================================================================
+
+func TestAIReasoningNotification_Struct(t *testing.T) {
+	reasoning := AIReasoningNotification{
+		DecisionType: "trade_entry",
+		Summary:      "Entering BTC long position based on momentum",
+		Confidence:   0.85,
+		Reasons: []string{
+			"RSI oversold",
+			"MACD bullish crossover",
+			"Support level tested",
+		},
+		Action: "Buy 0.1 BTC at market",
+	}
+
+	assert.Equal(t, "trade_entry", reasoning.DecisionType)
+	assert.Equal(t, "Entering BTC long position based on momentum", reasoning.Summary)
+	assert.Equal(t, 0.85, reasoning.Confidence)
+	assert.Len(t, reasoning.Reasons, 3)
+	assert.Equal(t, "Buy 0.1 BTC at market", reasoning.Action)
+}
+
+func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	tests := []struct {
+		name      string
+		reasoning AIReasoningNotification
+		contains  []string
+	}{
+		{
+			name: "high confidence decision",
+			reasoning: AIReasoningNotification{
+				DecisionType: "trade_entry",
+				Summary:      "High probability setup detected",
+				Confidence:   0.92,
+				Reasons:      []string{"Strong trend", "Volume confirmation"},
+				Action:       "Enter long position",
+			},
+			contains: []string{
+				"🤖",
+				"AI Trading Decision",
+				"trade_entry",
+				"🟢",
+				"92%",
+				"High probability setup detected",
+				"Strong trend",
+				"Enter long position",
+			},
+		},
+		{
+			name: "medium confidence decision",
+			reasoning: AIReasoningNotification{
+				DecisionType: "position_management",
+				Summary:      "Consider reducing position",
+				Confidence:   0.65,
+				Reasons:      []string{"Volatility increasing"},
+				Action:       "Reduce position by 50%",
+			},
+			contains: []string{
+				"🟡",
+				"65%",
+				"Consider reducing position",
+			},
+		},
+		{
+			name: "low confidence decision",
+			reasoning: AIReasoningNotification{
+				DecisionType: "market_analysis",
+				Summary:      "Uncertain market conditions",
+				Confidence:   0.35,
+				Reasons:      []string{"Mixed signals", "Low volume"},
+				Action:       "",
+			},
+			contains: []string{
+				"🔴",
+				"35%",
+				"Uncertain market conditions",
+			},
+		},
+		{
+			name: "many reasons truncated to 5",
+			reasoning: AIReasoningNotification{
+				DecisionType: "complex_decision",
+				Summary:      "Multi-factor analysis",
+				Confidence:   0.78,
+				Reasons: []string{
+					"Reason 1",
+					"Reason 2",
+					"Reason 3",
+					"Reason 4",
+					"Reason 5",
+					"Reason 6",
+					"Reason 7",
+				},
+			},
+			contains: []string{
+				"Reason 5",
+				"and 2 more factors",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message := ns.formatAIReasoningMessage(tt.reasoning)
+			for _, expected := range tt.contains {
+				assert.Contains(t, message, expected, "Message should contain %s", expected)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Integration Tests for Notification Triggers
+// =============================================================================
+
+func TestRiskEventNotification_Integration(t *testing.T) {
+	severityLevels := []string{"low", "medium", "high", "critical"}
+	for _, severity := range severityLevels {
+		event := RiskEventNotification{
+			EventType: "test_event",
+			Severity:  severity,
+			Message:   "Test message",
+			Details:   map[string]string{"key": "value"},
+		}
+
+		assert.NotEmpty(t, event.EventType)
+		assert.NotEmpty(t, event.Severity)
+		assert.NotEmpty(t, event.Message)
+	}
+}
+
+func TestFundMilestoneNotification_Integration(t *testing.T) {
+	percentages := []int{10, 25, 50, 75, 90, 100}
+
+	for _, pct := range percentages {
+		milestone := FundMilestoneNotification{
+			MilestoneType:  "fund_growth",
+			CurrentValue:   fmt.Sprintf("$%d", pct*50),
+			TargetValue:    "$5,000",
+			PercentReached: pct,
+			Achievement:    fmt.Sprintf("%d%% milestone reached", pct),
+		}
+
+		assert.Equal(t, pct, milestone.PercentReached)
+		assert.NotEmpty(t, milestone.Achievement)
+	}
+}
+
+func TestQuestProgressNotification_Integration(t *testing.T) {
+	for current := 0; current <= 10; current++ {
+		progress := QuestProgressNotification{
+			QuestID:       "test-quest",
+			QuestName:     "Test Quest",
+			Current:       current,
+			Target:        10,
+			Percent:       current * 10,
+			Status:        "active",
+			TimeRemaining: "5m",
+		}
+
+		assert.Equal(t, current*10, progress.Percent)
+	}
 }

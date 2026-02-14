@@ -199,7 +199,7 @@ SENTRY_ENVIRONMENT=%s
 MINIMUM_PROFIT_THRESHOLD=0.1
 MAX_TRADE_AMOUNT_USD=1000
 ENABLE_PAPER_TRADING=true
-`, config.Environment, timeNow(), config.DatabaseHost, config.DatabasePort,
+`, timeNow(), config.Environment, config.DatabaseHost, config.DatabasePort,
 		config.DatabaseName, config.DatabaseUser, config.DatabasePassword,
 		config.RedisHost, config.RedisPort, config.JWTSecret,
 		config.TelegramBotToken, config.SentryDSN, config.Environment)
