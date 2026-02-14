@@ -256,23 +256,22 @@ func (s *StopLossService) CreateTightStopLoss(ctx context.Context, params StopLo
 	// Use tight stop-loss percentage
 	params.StopLossPct = s.config.TightStopLossPct
 
-	// Check order book imbalance for signal confirmation
-	imbalance, err := s.imbalanceDetector.Detect(ctx, params.Exchange, params.Symbol)
-	if err != nil {
-		s.logger.WithError(err).Warn("Failed to check order book imbalance, proceeding with standard stop-loss")
-	}
+	if s.imbalanceDetector != nil {
+		imbalance, err := s.imbalanceDetector.Detect(ctx, params.Exchange, params.Symbol)
+		if err != nil {
+			s.logger.WithError(err).Warn("Failed to check order book imbalance, proceeding with standard stop-loss")
+		}
 
-	// If strong imbalance against our position, tighten stop further
-	if imbalance != nil {
-		if (params.Side == "long" && imbalance.Direction == "bearish" && imbalance.Strength == "strong") ||
-			(params.Side == "short" && imbalance.Direction == "bullish" && imbalance.Strength == "strong") {
-			// Tighten stop by 20%
-			params.StopLossPct = params.StopLossPct.Mul(decimal.NewFromFloat(0.8))
-			s.logger.Info("Tightening stop-loss due to adverse order book imbalance",
-				"symbol", params.Symbol,
-				"original_pct", s.config.TightStopLossPct,
-				"adjusted_pct", params.StopLossPct,
-				"imbalance_signal", imbalance.Direction)
+		if imbalance != nil {
+			if (params.Side == "long" && imbalance.Direction == "bearish" && imbalance.Strength == "strong") ||
+				(params.Side == "short" && imbalance.Direction == "bullish" && imbalance.Strength == "strong") {
+				params.StopLossPct = params.StopLossPct.Mul(decimal.NewFromFloat(0.8))
+				s.logger.Info("Tightening stop-loss due to adverse order book imbalance",
+					"symbol", params.Symbol,
+					"original_pct", s.config.TightStopLossPct,
+					"adjusted_pct", params.StopLossPct,
+					"imbalance_signal", imbalance.Direction)
+			}
 		}
 	}
 
