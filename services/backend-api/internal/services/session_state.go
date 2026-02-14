@@ -264,7 +264,12 @@ func generateSessionID() string {
 
 func generateRandomString(length int) string {
 	bytes := make([]byte, length)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback to time-based seed if crypto rand fails
+		for i := range bytes {
+			bytes[i] = byte(time.Now().UnixNano() % 256)
+		}
+	}
 	return hex.EncodeToString(bytes)[:length]
 }
 
@@ -398,12 +403,12 @@ func (r *DatabaseSessionRepository) ListActive(ctx context.Context, limit int) (
 	for rows.Next() {
 		var data []byte
 		if err := rows.Scan(&data); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to scan session row: %w", err)
 		}
 
 		state, err := serializer.Deserialize(data)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("failed to deserialize session: %w", err)
 		}
 
 		sessions = append(sessions, state)
