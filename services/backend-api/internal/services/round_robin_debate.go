@@ -143,8 +143,6 @@ type RoundRobinDebateLoop struct {
 	// Debate history
 	history   map[string]*RoundRobinDebateResult
 	historyMu sync.RWMutex
-
-	mu sync.RWMutex
 }
 
 // NewRoundRobinDebateLoop creates a new round-robin debate loop.
