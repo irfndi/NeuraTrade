@@ -251,7 +251,11 @@ func run() error {
 	notificationService := services.NewNotificationService(db, redisClient, cfg.Telegram.ServiceURL, cfg.Telegram.GrpcAddress, cfg.Telegram.AdminAPIKey)
 
 	positionTrackerConfig := services.DefaultPositionTrackerConfig()
-	positionTracker := services.NewPositionTracker(positionTrackerConfig, ccxtService, redisClient.Client, logrusLogger)
+	var redisClientHandle *redis.Client
+	if redisClient != nil {
+		redisClientHandle = redisClient.Client
+	}
+	positionTracker := services.NewPositionTracker(positionTrackerConfig, ccxtService, redisClientHandle, logrusLogger)
 	positionTracker.Start()
 	defer positionTracker.Stop()
 
