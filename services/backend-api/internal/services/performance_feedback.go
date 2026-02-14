@@ -146,11 +146,9 @@ func (s *PerformanceFeedbackService) RecordOutcome(ctx context.Context, outcome 
 	}
 
 	if s.config.EnablePatternDetection {
-		go func() {
-			if err := s.detectFailurePattern(context.Background(), &record); err != nil {
-				observability.CaptureException(context.Background(), err)
-			}
-		}()
+		if err := s.detectFailurePattern(spanCtx, &record); err != nil {
+			observability.CaptureException(spanCtx, err)
+		}
 	}
 
 	return nil
@@ -207,7 +205,7 @@ func (s *PerformanceFeedbackService) detectFailurePattern(ctx context.Context, o
 	query := `
 		INSERT INTO failure_patterns (id, skill_id, pattern_type, description, occurrence_count, first_observed, last_observed, total_pnl_impact, enabled, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, 1, $5, $5, $6, true, $5, $5)
-		ON CONFLICT (id) DO UPDATE SET
+		ON CONFLICT (skill_id, pattern_type) DO UPDATE SET
 			occurrence_count = failure_patterns.occurrence_count + 1,
 			last_observed = $5,
 			total_pnl_impact = failure_patterns.total_pnl_impact + $6`
@@ -296,7 +294,9 @@ type OutcomeRecord struct {
 
 func generateID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("failed to generate ID: %v", err))
+	}
 	return hex.EncodeToString(b)
 }
 

@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS failure_patterns (
     suggested_fix TEXT,
     enabled BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
-    updated_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    updated_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+    UNIQUE(skill_id, pattern_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_failure_patterns_skill ON failure_patterns(skill_id);
