@@ -256,12 +256,52 @@ func (pe *PolicyEngine) executeFallback(
 		return nil, fmt.Errorf("fallback not available")
 	}
 
-	for range policy.Fallback.AlternativeModels {
-		result, err := pe.router.Route(ctx, originalConstraints)
-		if err == nil {
-			pe.metrics.FallbackTriggers++
-			return result, nil
+	registry, err := pe.router.registry.GetRegistry(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get registry for fallback: %w", err)
+	}
+
+	for _, modelID := range policy.Fallback.AlternativeModels {
+		var model *ModelInfo
+		for i := range registry.Models {
+			if registry.Models[i].ModelID == modelID {
+				model = &registry.Models[i]
+				break
+			}
+			for _, alias := range registry.Models[i].Aliases {
+				if alias == modelID {
+					model = &registry.Models[i]
+					break
+				}
+			}
 		}
+
+		if model == nil {
+			continue
+		}
+
+		var provider *ProviderInfo
+		for i := range registry.Providers {
+			if registry.Providers[i].ID == model.ProviderID {
+				provider = &registry.Providers[i]
+				break
+			}
+		}
+
+		if provider == nil {
+			continue
+		}
+
+		pe.mu.Lock()
+		pe.metrics.FallbackTriggers++
+		pe.mu.Unlock()
+
+		return &RoutingResult{
+			Model:    *model,
+			Provider: *provider,
+			Score:    0.5,
+			Reason:   fmt.Sprintf("Fallback to alternative model %s", modelID),
+		}, nil
 	}
 
 	return nil, fmt.Errorf("fallback routing failed")

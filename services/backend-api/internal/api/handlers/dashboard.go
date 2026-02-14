@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -296,7 +297,7 @@ func (h *DashboardHandler) checkCCXTHealth(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return err
+		return fmt.Errorf("CCXT health check returned status %d", resp.StatusCode)
 	}
 
 	return nil

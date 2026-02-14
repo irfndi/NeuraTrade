@@ -342,6 +342,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		// Session management routes (neura-9i4, neura-8xg)
 		if sessionHandler != nil {
 			sessions := v1.Group("/sessions")
+			sessions.Use(authMiddleware.RequireAuth())
 			{
 				sessions.GET("", sessionHandler.ListActiveSessions)
 				sessions.GET("/:id", sessionHandler.GetSession)

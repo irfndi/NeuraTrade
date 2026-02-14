@@ -71,11 +71,6 @@ secrets:
       match: "your-jwt-token"
     - name: yourdomain-placeholder
       match: "yourdomain"
-    # Old test patterns from PR history - kept for backwards compatibility
-    - name: old-password-in-test
-      match: "secretpassword"
-    - name: old-api-key-in-test
-      match: "sk_live_"
     # Specific patterns from old commits in this PR
     - name: old-secret-123
       match: "secret123"

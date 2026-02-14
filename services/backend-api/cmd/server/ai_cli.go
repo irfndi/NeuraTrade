@@ -463,11 +463,12 @@ func showStatus(ctx context.Context, registry *ai.Registry, args []string) error
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
 	if maxLen <= 3 {
 		return "..."
 	}
-	return s[:maxLen-3] + "..."
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-3]) + "..."
 }
