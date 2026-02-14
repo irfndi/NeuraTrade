@@ -156,9 +156,14 @@ func (s *StopLossAutoExecution) sendNotification(ctx context.Context, result *St
 		return
 	}
 
+	orderIDDisplay := result.OrderID
+	if len(orderIDDisplay) > 8 {
+		orderIDDisplay = orderIDDisplay[:8]
+	}
+
 	message := fmt.Sprintf(
 		"🔴 Stop-Loss Executed\n\nOrder: %s\nPrice: $%s\nPnL: $%s\nSlippage: %s%%",
-		result.OrderID[:8],
+		orderIDDisplay,
 		result.ExecutionPrice.StringFixed(2),
 		result.RealizedPnL.StringFixed(2),
 		result.SlippagePct.StringFixed(2),

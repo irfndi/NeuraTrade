@@ -119,8 +119,10 @@ func (pt *PositionTracker) Stop() {
 	pt.cancel()
 	pt.wg.Wait()
 
-	// Save positions to Redis before stopping
-	if err := pt.savePositionsToRedis(pt.ctx); err != nil {
+	// Save positions to Redis before stopping - use fresh context
+	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pt.savePositionsToRedis(saveCtx); err != nil {
 		pt.logger.WithError(err).Error("Failed to save positions to Redis")
 	}
 
@@ -164,13 +166,15 @@ func (pt *PositionTracker) SyncWithExchange(ctx context.Context) error {
 	for _, positionID := range positionIDs {
 		pt.positionsMu.RLock()
 		tracked, exists := pt.positions[positionID]
-		pt.positionsMu.RUnlock()
-
 		if !exists {
+			pt.positionsMu.RUnlock()
 			continue
 		}
 
-		position := &tracked.Position
+		// Make a copy to avoid holding lock during I/O
+		position := tracked.Position
+		pt.positionsMu.RUnlock()
+
 		if position.Exchange == "" || position.Symbol == "" {
 			continue
 		}
@@ -188,13 +192,17 @@ func (pt *PositionTracker) SyncWithExchange(ctx context.Context) error {
 		currentPrice := decimal.NewFromFloat(ticker.GetPrice())
 
 		// Update position with current price
-		tracked.Position.CurrentPrice = currentPrice
-		tracked.Position.UpdatedAt = time.Now().UTC()
-		tracked.LastSyncAt = time.Now().UTC()
-		tracked.PriceUpdated = true
+		pt.positionsMu.Lock()
+		if tracked, exists := pt.positions[positionID]; exists {
+			tracked.Position.CurrentPrice = currentPrice
+			tracked.Position.UpdatedAt = time.Now().UTC()
+			tracked.LastSyncAt = time.Now().UTC()
+			tracked.PriceUpdated = true
 
-		// Calculate unrealized PnL
-		pt.calculateUnrealizedPL(tracked)
+			// Calculate unrealized PnL
+			pt.calculateUnrealizedPL(tracked)
+		}
+		pt.positionsMu.Unlock()
 
 		// Trigger price update callback
 		if pt.onPriceUpdateCallback != nil {
@@ -429,27 +437,37 @@ func (pt *PositionTracker) loadPositionsFromRedis(ctx context.Context) error {
 	}
 
 	pattern := fmt.Sprintf("%s:*", pt.config.RedisKeyPrefix)
-	keys, err := pt.redisClient.Keys(ctx, pattern).Result()
-	if err != nil {
-		return err
-	}
 
 	pt.positionsMu.Lock()
 	defer pt.positionsMu.Unlock()
 
-	for _, key := range keys {
-		data, err := pt.redisClient.Get(ctx, key).Result()
+	// Use SCAN instead of KEYS for non-blocking iteration
+	var cursor uint64
+	for {
+		keys, nextCursor, err := pt.redisClient.Scan(ctx, cursor, pattern, 100).Result()
 		if err != nil {
-			continue
+			return err
 		}
 
-		var tracked TrackedPosition
-		if err := json.Unmarshal([]byte(data), &tracked); err != nil {
-			pt.logger.WithError(err).Warn("Failed to unmarshal position from Redis", "key", key)
-			continue
+		for _, key := range keys {
+			data, err := pt.redisClient.Get(ctx, key).Result()
+			if err != nil {
+				continue
+			}
+
+			var tracked TrackedPosition
+			if err := json.Unmarshal([]byte(data), &tracked); err != nil {
+				pt.logger.WithError(err).Warn("Failed to unmarshal position from Redis", "key", key)
+				continue
+			}
+
+			pt.positions[tracked.Position.PositionID] = &tracked
 		}
 
-		pt.positions[tracked.Position.PositionID] = &tracked
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
 	}
 
 	pt.logger.Info("Loaded positions from Redis", "count", len(pt.positions))
