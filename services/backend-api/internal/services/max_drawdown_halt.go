@@ -146,6 +146,22 @@ type FundMilestoneChecker interface {
 	CheckAndNotifyMilestone(ctx context.Context, chatID int64, currentValue decimal.Decimal) error
 }
 
+// Risk event types
+const (
+	RiskEventHalt     = "halt"
+	RiskEventCritical = "critical_drawdown"
+	RiskEventWarning  = "warning_drawdown"
+	RiskEventRecovery = "recovery"
+)
+
+// Risk event severities
+const (
+	SeverityCritical = "critical"
+	SeverityHigh     = "high"
+	SeverityMedium   = "medium"
+	SeverityLow      = "low"
+)
+
 func NewMaxDrawdownHalt(db DBPool, config MaxDrawdownConfig) *MaxDrawdownHalt {
 	return &MaxDrawdownHalt{
 		config:  config,
@@ -218,20 +234,20 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 			state.HaltCount++
 			h.metrics.IncrementHalt()
 			h.metrics.IncrementByChatID(state.ChatID)
-			h.notifyRiskEvent(state, "halt", "critical")
+			h.notifyRiskEvent(state, RiskEventHalt, SeverityCritical)
 		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.CriticalThreshold) {
 		state.Status = DrawdownStatusCritical
 		h.metrics.IncrementCritical()
 		if previousStatus != DrawdownStatusCritical {
-			h.notifyRiskEvent(state, "critical_drawdown", "high")
+			h.notifyRiskEvent(state, RiskEventCritical, SeverityHigh)
 		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.WarningThreshold) {
 		state.Status = DrawdownStatusWarning
 		state.WarningCount++
 		if previousStatus != DrawdownStatusWarning {
 			h.metrics.IncrementWarning()
-			h.notifyRiskEvent(state, "warning_drawdown", "medium")
+			h.notifyRiskEvent(state, RiskEventWarning, SeverityMedium)
 		}
 	} else {
 		if state.TradingHalted && state.CurrentDrawdown.LessThanOrEqual(h.config.RecoveryThreshold) {
@@ -241,7 +257,7 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 				now := time.Now().UTC()
 				state.RecoveredAt = &now
 				h.metrics.IncrementRecovery()
-				h.notifyRiskEvent(state, "recovery", "low")
+				h.notifyRiskEvent(state, RiskEventRecovery, SeverityLow)
 			} else {
 				state.Status = DrawdownStatusNormal
 			}
@@ -258,6 +274,12 @@ func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, sever
 
 	chatIDInt, err := strconv.ParseInt(state.ChatID, 10, 64)
 	if err != nil {
+		// Log the error - use notification service logger if available
+		if h.notificationSvc != nil && h.notificationSvc.logger != nil {
+			h.notificationSvc.logger.Error("Failed to parse chat ID for risk notification",
+				"chat_id_str", state.ChatID,
+				"error", err)
+		}
 		return
 	}
 
@@ -278,7 +300,12 @@ func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, sever
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := h.notificationSvc.NotifyRiskEvent(ctx, chatIDInt, event); err != nil {
-			fmt.Printf("Failed to send risk event notification: %v\n", err)
+			if h.notificationSvc.logger != nil {
+				h.notificationSvc.logger.Error("Failed to send risk event notification",
+					"chat_id", chatIDInt,
+					"event_type", eventType,
+					"error", err)
+			}
 		}
 	}()
 }
