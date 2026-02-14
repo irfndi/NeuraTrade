@@ -81,6 +81,7 @@ type DashboardHandler struct {
 	uptime         time.Time
 	requestCounter int64
 	errorCounter   int64
+	httpClient     *http.Client
 }
 
 func NewDashboardHandler(
@@ -95,6 +96,7 @@ func NewDashboardHandler(
 		ccxtURL:        ccxtURL,
 		cacheAnalytics: cacheAnalytics,
 		uptime:         time.Now(),
+		httpClient:     &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
@@ -267,7 +269,35 @@ func (h *DashboardHandler) getHealthStatus(ctx context.Context) HealthStatus {
 		health.Services["redis"] = "unknown"
 	}
 
-	health.Services["ccxt"] = "healthy"
+	if h.ccxtURL != "" {
+		if err := h.checkCCXTHealth(ctx); err != nil {
+			health.Services["ccxt"] = "unhealthy"
+			health.Overall = "degraded"
+		} else {
+			health.Services["ccxt"] = "healthy"
+		}
+	} else {
+		health.Services["ccxt"] = "unknown"
+	}
 
 	return health
+}
+
+func (h *DashboardHandler) checkCCXTHealth(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.ccxtURL+"/health", nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return err
+	}
+
+	return nil
 }
