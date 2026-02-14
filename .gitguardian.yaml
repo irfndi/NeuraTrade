@@ -71,6 +71,11 @@ secrets:
       match: "your-jwt-token"
     - name: yourdomain-placeholder
       match: "yourdomain"
+    # Old test patterns from PR history - kept for backwards compatibility
+    - name: old-password-in-test
+      match: "secretpassword"
+    - name: old-api-key-in-test
+      match: "sk_live_"
   ignored-paths:
     # Test files commonly use fake credentials
     - "**/*_test.go"
