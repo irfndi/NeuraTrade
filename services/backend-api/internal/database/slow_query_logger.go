@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/shopspring/decimal"
 )
 
 // SlowQueryLog represents a slow query log entry.
@@ -77,6 +77,18 @@ func (l *SlowQueryLogger) LogSlowQuery(ctx context.Context, query string, durati
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`)
 
+	// Serialize context to JSON for JSONB column
+	var contextJSON []byte
+	if logEntry.Context != nil {
+		var err error
+		contextJSON, err = json.Marshal(logEntry.Context)
+		if err != nil {
+			contextJSON = []byte("{}")
+		}
+	} else {
+		contextJSON = []byte("{}")
+	}
+
 	_, err := l.db.Exec(ctx, queryBuilder.String(),
 		logEntry.QueryText,
 		logEntry.QueryHash,
@@ -85,7 +97,7 @@ func (l *SlowQueryLogger) LogSlowQuery(ctx context.Context, query string, durati
 		logEntry.DurationMs,
 		logEntry.RowsAffected,
 		logEntry.ServiceName,
-		decimal.NewFromInt(0), // Placeholder for JSONB context
+		contextJSON,
 		logEntry.CreatedAt,
 	)
 
