@@ -9,10 +9,7 @@ const ALERT_TYPES = [
   { type: "risk", label: "Risk Events", emoji: "⚠️" },
 ];
 
-export function registerAlertsCommands(
-  bot: Bot,
-  api: BackendApiClient,
-): void {
+export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
   bot.command("alerts", async (ctx) => {
     const userId = String(ctx.from?.id);
     if (!userId) {
@@ -104,7 +101,9 @@ export function registerAlertsCommands(
     const alertId = args[0];
 
     if (!alertId) {
-      await ctx.reply("Usage: /alert_toggle [alert_id]\n\nUse /alerts to see IDs.");
+      await ctx.reply(
+        "Usage: /alert_toggle [alert_id]\n\nUse /alerts to see IDs.",
+      );
       return;
     }
 
@@ -131,7 +130,9 @@ export function registerAlertsCommands(
     const alertId = args[0];
 
     if (!alertId) {
-      await ctx.reply("Usage: /alert_del [alert_id]\n\nUse /alerts to see IDs.");
+      await ctx.reply(
+        "Usage: /alert_del [alert_id]\n\nUse /alerts to see IDs.",
+      );
       return;
     }
 
