@@ -16,6 +16,7 @@ type PhaseManager struct {
 	scaler          *CapitalScaler
 	currentStrategy StrategyConfig
 	currentRisk     RiskParameters
+	portfolioGetter func() (decimal.Decimal, error)
 	mu              sync.RWMutex
 	logger          *zaplogrus.Logger
 	stopCh          chan struct{}
@@ -91,8 +92,34 @@ func (pm *PhaseManager) run(ctx context.Context) {
 }
 
 func (pm *PhaseManager) checkPhaseTransition(ctx context.Context) {
-	pm.mu.RLock()
-	pm.mu.RUnlock()
+	if pm.portfolioGetter == nil {
+		return
+	}
+
+	portfolioValue, err := pm.portfolioGetter()
+	if err != nil {
+		pm.logger.WithError(err).Error("Failed to get portfolio value for phase check")
+		return
+	}
+
+	event, transitioned := pm.detector.AttemptTransition(portfolioValue, "periodic check")
+	if transitioned {
+		pm.mu.Lock()
+		pm.currentStrategy = pm.adapter.SelectStrategy(event.ToPhase)
+		pm.currentRisk = pm.adapter.GetRiskParams(event.ToPhase)
+		pm.mu.Unlock()
+
+		pm.logger.WithField("phase", event.ToPhase.String()).
+			WithField("strategy", pm.currentStrategy.Name).
+			WithField("portfolio_value", portfolioValue.String()).
+			Info("Phase auto-transitioned during periodic check")
+	}
+}
+
+func (pm *PhaseManager) SetPortfolioGetter(getter func() (decimal.Decimal, error)) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.portfolioGetter = getter
 }
 
 func (pm *PhaseManager) OnPortfolioValueUpdate(portfolioValue decimal.Decimal, reason string) PhaseTransitionEvent {
