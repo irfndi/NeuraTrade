@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -529,4 +530,29 @@ func TestBacktestResultCalculations(t *testing.T) {
 	assert.NotNil(t, result.WorstTrade)
 	assert.Equal(t, "SOL/USDT", result.BestTrade.Symbol)
 	assert.Equal(t, "ETH/USDT", result.WorstTrade.Symbol)
+}
+
+func TestBacktester_SaveBacktestResult(t *testing.T) {
+	backtester := NewBacktester(nil)
+
+	result := &BacktestResult{
+		Config:        DefaultBacktestConfig(),
+		TotalReturn:   decimal.NewFromFloat(15.5),
+		TotalPnL:      decimal.NewFromFloat(1550),
+		SharpeRatio:   decimal.NewFromFloat(1.85),
+		SortinoRatio:  decimal.NewFromFloat(2.1),
+		MaxDrawdown:   decimal.NewFromFloat(8.5),
+		WinRate:       decimal.NewFromFloat(65.0),
+		TotalTrades:   20,
+		WinningTrades: 13,
+		LosingTrades:  7,
+		AvgWin:        decimal.NewFromFloat(150),
+		AvgLoss:       decimal.NewFromFloat(50),
+		StartedAt:     time.Now().Add(-24 * time.Hour),
+		CompletedAt:   time.Now(),
+		Duration:      24 * time.Hour,
+	}
+
+	err := backtester.SaveBacktestResult(context.Background(), "test-user", result)
+	assert.NoError(t, err)
 }
