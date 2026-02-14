@@ -76,13 +76,6 @@ func (c *QueryResultCache) Get(ctx context.Context, queryHash string) (*QueryRes
 		return nil, false
 	}
 
-	if time.Now().After(entry.ExpiresAt) {
-		c.stats.mu.Lock()
-		c.stats.Misses++
-		c.stats.mu.Unlock()
-		return nil, false
-	}
-
 	c.stats.mu.Lock()
 	c.stats.Hits++
 	c.stats.mu.Unlock()
@@ -117,8 +110,12 @@ func (c *QueryResultCache) Set(ctx context.Context, queryHash, tableName string,
 	c.stats.mu.Unlock()
 
 	if c.enableLog {
+		hashPreview := queryHash
+		if len(hashPreview) > 8 {
+			hashPreview = hashPreview[:8]
+		}
 		log.Printf("Cached query result for %s (hash: %s, rows: %d, TTL: %v)",
-			tableName, queryHash[:8], rowCount, c.ttl)
+			tableName, hashPreview, rowCount, c.ttl)
 	}
 
 	return nil

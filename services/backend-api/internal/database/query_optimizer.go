@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -180,7 +181,14 @@ func (o *QueryOptimizer) GetSlowQueriesByTable(tableName string) []SlowQuery {
 
 func (o *QueryOptimizer) GetSlowQueriesJSON() string {
 	queries := o.GetSlowQueries()
-	return fmt.Sprintf("{\"slow_queries\": %d, \"queries\": %v}", len(queries), queries)
+	data, err := json.Marshal(map[string]interface{}{
+		"slow_queries": len(queries),
+		"queries":      queries,
+	})
+	if err != nil {
+		return fmt.Sprintf("{\"slow_queries\": 0, \"error\": \"%s\"}", err.Error())
+	}
+	return string(data)
 }
 
 func (o *QueryOptimizer) ClearSlowQueries() {

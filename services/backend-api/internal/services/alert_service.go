@@ -131,6 +131,8 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 
 	if ns != nil && (level == AlertLevelError || level == AlertLevelCritical) {
 		go func() {
+			// TODO: Implement actual notification dispatch via NotificationService
+			// Currently logs only - integrate with Telegram or other notification channels
 			s.logger.Info(fmt.Sprintf("[%s] %s: %s", level, source, message))
 		}()
 	}
@@ -158,16 +160,25 @@ func (s *AlertService) GetActiveAlerts(ctx context.Context) ([]SystemAlert, erro
 	}
 
 	pattern := "alerts:*"
-	keys, err := s.redis.Exists(ctx, pattern)
-	if err != nil {
-		return nil, err
+	iter := s.redis.Client.Scan(ctx, 0, pattern, 100).Iterator()
+
+	var alerts []SystemAlert
+	for iter.Next(ctx) {
+		key := iter.Val()
+		data, err := s.redis.Get(ctx, key)
+		if err != nil {
+			continue
+		}
+		var alert SystemAlert
+		if err := json.Unmarshal([]byte(data), &alert); err != nil {
+			continue
+		}
+		if !alert.Resolved {
+			alerts = append(alerts, alert)
+		}
 	}
 
-	if keys == 0 {
-		return nil, nil
-	}
-
-	return nil, nil
+	return alerts, nil
 }
 
 func (s *AlertService) ResolveAlert(ctx context.Context, alertID string) error {
