@@ -167,7 +167,8 @@ func (e *ShadowModeEngine) ExecuteTrade(ctx context.Context, symbol, side string
 				return nil, fmt.Errorf("insufficient position: have %s, need %s", pos.Quantity.String(), quantity.String())
 			}
 
-			e.portfolio.Cash = e.portfolio.Cash.Sub(totalValue).Add(price.Mul(quantity))
+			grossProceeds := price.Mul(quantity)
+			e.portfolio.Cash = e.portfolio.Cash.Add(grossProceeds).Sub(commission).Sub(slippage)
 
 			pnl := price.Sub(pos.EntryPrice).Mul(quantity)
 			e.portfolio.RealizedPNL = e.portfolio.RealizedPNL.Add(pnl)
@@ -184,7 +185,6 @@ func (e *ShadowModeEngine) ExecuteTrade(ctx context.Context, symbol, side string
 	}
 
 	e.trades = append(e.trades, trade)
-	e.updatePortfolioMetrics(price)
 
 	return &trade, nil
 }
@@ -270,19 +270,6 @@ func (e *ShadowModeEngine) RecordSnapshot() {
 	if len(e.history) > 1000 {
 		e.history = e.history[len(e.history)-1000:]
 	}
-}
-
-func (e *ShadowModeEngine) updatePortfolioMetrics(currentPrice decimal.Decimal) {
-	var totalUnrealized decimal.Decimal
-
-	for _, pos := range e.portfolio.Positions {
-		pos.UnrealizedPNL = currentPrice.Sub(pos.EntryPrice).Mul(pos.Quantity)
-		totalUnrealized = totalUnrealized.Add(pos.UnrealizedPNL)
-	}
-
-	e.portfolio.UnrealizedPNL = totalUnrealized
-	e.portfolio.TotalValue = e.portfolio.Cash.Add(totalUnrealized)
-	e.portfolio.LastUpdated = time.Now()
 }
 
 func (e *ShadowModeEngine) GetStats() map[string]interface{} {

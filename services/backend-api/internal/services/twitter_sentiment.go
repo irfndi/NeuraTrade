@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -97,10 +99,11 @@ type User struct {
 }
 
 type TwitterClient struct {
-	config SentimentConfig
-	logger *zap.Logger
-	client *http.Client
-	cache  map[string]CacheEntry
+	config  SentimentConfig
+	logger  *zap.Logger
+	client  *http.Client
+	cacheMu sync.RWMutex
+	cache   map[string]CacheEntry
 }
 
 type CacheEntry struct {
@@ -147,10 +150,11 @@ func (c *TwitterClient) buildSearchQuery(symbol string, keywords []string) strin
 }
 
 func (c *TwitterClient) fetchAndAnalyzeSentiment(ctx context.Context, query, symbol string) (*SentimentResult, error) {
-	url := fmt.Sprintf("%s/tweets/search/recent?query=%s&tweet.fields=created_at,public_metrics&max_results=100",
-		c.config.BaseURL, strings.ReplaceAll(query, " ", "%20"))
+	encodedQuery := url.QueryEscape(query)
+	apiURL := fmt.Sprintf("%s/tweets/search/recent?query=%s&tweet.fields=created_at,public_metrics&max_results=100",
+		c.config.BaseURL, encodedQuery)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -234,19 +238,21 @@ func (c *TwitterClient) analyzeTweets(tweets []TweetData) (SentimentScore, float
 
 	if avgScore > 0.5 {
 		sentiment = SentimentBullish
-		confidence = min(1.0, avgScore/2.0)
+		confidence = minFloat(1.0, avgScore/2.0)
 	} else if avgScore < -0.5 {
 		sentiment = SentimentBearish
-		confidence = min(1.0, -avgScore/2.0)
+		confidence = minFloat(1.0, -avgScore/2.0)
 	} else {
 		sentiment = SentimentNeutral
-		confidence = 1.0 - min(1.0, abs(avgScore)/2.0)
+		confidence = 1.0 - minFloat(1.0, abs(avgScore)/2.0)
 	}
 
 	return sentiment, confidence
 }
 
 func (c *TwitterClient) getFromCache(key string) (*SentimentResult, bool) {
+	c.cacheMu.RLock()
+	defer c.cacheMu.RUnlock()
 	entry, ok := c.cache[key]
 	if !ok || time.Now().After(entry.Expiry) {
 		return nil, false
@@ -255,6 +261,8 @@ func (c *TwitterClient) getFromCache(key string) (*SentimentResult, bool) {
 }
 
 func (c *TwitterClient) setCache(key string, result *SentimentResult) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
 	c.cache[key] = CacheEntry{
 		Result: result,
 		Expiry: time.Now().Add(c.config.CacheTTL),
@@ -262,10 +270,12 @@ func (c *TwitterClient) setCache(key string, result *SentimentResult) {
 }
 
 func (c *TwitterClient) ClearCache() {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
 	c.cache = make(map[string]CacheEntry)
 }
 
-func min(a, b float64) float64 {
+func minFloat(a, b float64) float64 {
 	if a < b {
 		return a
 	}

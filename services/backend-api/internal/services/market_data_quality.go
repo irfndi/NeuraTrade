@@ -154,7 +154,7 @@ func (f *MarketDataQualityFilter) CheckQuality(
 	}
 
 	// Check for price outliers
-	if priceChange := f.checkPriceOutlier(symbol, price, timestamp); priceChange != nil {
+	if priceChange := f.checkPriceOutlier(symbol, exchange, price, timestamp); priceChange != nil {
 		result.PriceChange = priceChange
 		result.Flags = append(result.Flags, QualityFlagPriceOutlier)
 		if result.Message == "" {
@@ -172,7 +172,7 @@ func (f *MarketDataQualityFilter) CheckQuality(
 	}
 
 	// Update tracking state
-	f.updatePriceHistory(symbol, price, timestamp)
+	f.updatePriceHistory(symbol, exchange, price, timestamp)
 	f.updateVolumeStats(symbol, volume, timestamp)
 	f.updateLastTick(symbol, timestamp)
 
@@ -215,11 +215,12 @@ func (f *MarketDataQualityFilter) checkStaleData(timestamp time.Time) bool {
 }
 
 // checkPriceOutlier checks for suspicious price movements
-func (f *MarketDataQualityFilter) checkPriceOutlier(symbol string, price decimal.Decimal, timestamp time.Time) *decimal.Decimal {
+func (f *MarketDataQualityFilter) checkPriceOutlier(symbol, exchange string, price decimal.Decimal, timestamp time.Time) *decimal.Decimal {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	history, exists := f.priceHistory[symbol]
+	key := fmt.Sprintf("%s:%s", symbol, exchange)
+	history, exists := f.priceHistory[key]
 	if !exists || len(history) < 1 {
 		return nil
 	}
@@ -250,7 +251,9 @@ func (f *MarketDataQualityFilter) checkPriceOutlier(symbol string, price decimal
 
 // checkVolumeAnomaly checks for suspicious volume
 func (f *MarketDataQualityFilter) checkVolumeAnomaly(symbol string, volume decimal.Decimal, timestamp time.Time) *decimal.Decimal {
+	f.mu.RLock()
 	stats, exists := f.volumeStats[symbol]
+	f.mu.RUnlock()
 	if !exists {
 		return nil
 	}
@@ -285,14 +288,15 @@ func (f *MarketDataQualityFilter) checkVolumeAnomaly(symbol string, volume decim
 }
 
 // updatePriceHistory adds a new price point to history
-func (f *MarketDataQualityFilter) updatePriceHistory(symbol string, price decimal.Decimal, timestamp time.Time) {
+func (f *MarketDataQualityFilter) updatePriceHistory(symbol, exchange string, price decimal.Decimal, timestamp time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	key := fmt.Sprintf("%s:%s", symbol, exchange)
 	window := time.Duration(f.config.PriceMoveWindowMinutes) * time.Minute
 	cutoff := timestamp.Add(-window)
 
-	history := f.priceHistory[symbol]
+	history := f.priceHistory[key]
 	var newHistory []PricePoint
 
 	for _, pp := range history {
@@ -311,7 +315,7 @@ func (f *MarketDataQualityFilter) updatePriceHistory(symbol string, price decima
 		newHistory = newHistory[len(newHistory)-1000:]
 	}
 
-	f.priceHistory[symbol] = newHistory
+	f.priceHistory[key] = newHistory
 }
 
 // updateVolumeStats adds a new volume sample
