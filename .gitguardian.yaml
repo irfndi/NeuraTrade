@@ -76,6 +76,11 @@ secrets:
       match: "secretpassword"
     - name: old-api-key-in-test
       match: "sk_live_"
+    # Specific patterns from old commits in this PR
+    - name: old-secret-123
+      match: "secret123"
+    - name: old-sk-live
+      match: "sk_live_abc123"
   ignored-paths:
     # Test files commonly use fake credentials
     - "**/*_test.go"
