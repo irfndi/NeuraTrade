@@ -27,10 +27,10 @@ NODE_EXPORTER_URL="https://github.com/prometheus/node_exporter/releases/download
 wget -q "$NODE_EXPORTER_URL"
 DOWNLOADED_SHA256=$(sha256sum node_exporter-1.6.1.linux-amd64.tar.gz | cut -d' ' -f1)
 if [[ "$DOWNLOADED_SHA256" != "$NODE_EXPORTER_SHA256" ]]; then
-    echo "[ERROR] Checksum verification failed for node_exporter"
-    echo "Expected: $NODE_EXPORTER_SHA256"
-    echo "Got: $DOWNLOADED_SHA256"
-    exit 1
+  echo "[ERROR] Checksum verification failed for node_exporter"
+  echo "Expected: $NODE_EXPORTER_SHA256"
+  echo "Got: $DOWNLOADED_SHA256"
+  exit 1
 fi
 echo "[INFO] node_exporter checksum verified"
 
