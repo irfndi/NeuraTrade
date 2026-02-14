@@ -123,6 +123,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
+
+	// Sentiment handler - initialize with config from environment
+	sentimentConfig := services.SentimentServiceConfig{
+		RedditClientID:     os.Getenv("REDDIT_CLIENT_ID"),
+		RedditClientSecret: os.Getenv("REDDIT_CLIENT_SECRET"),
+		RedditUserAgent:    "NeuraTrade/1.0",
+		CryptoPanicToken:   os.Getenv("CRYPTOPANIC_TOKEN"),
+	}
+	sentimentService := services.NewSentimentService(sentimentConfig, db)
+	sentimentHandler := handlers.NewSentimentHandler(sentimentService)
+
 	// userHandler and telegramInternalHandler already initialized above for internal routes
 	alertHandler := handlers.NewAlertHandler(db)
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
@@ -237,6 +248,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			analysis.GET("/correlation", analysisHandler.GetCorrelationMatrix)
 			analysis.GET("/regime", analysisHandler.GetMarketRegime)
 			analysis.GET("/forecast", analysisHandler.GetForecast)
+		}
+
+		// Sentiment routes - news and reddit sentiment analysis
+		sentiment := v1.Group("/sentiment")
+		{
+			sentiment.GET("/:symbol", sentimentHandler.GetSentiment)
+			sentiment.POST("/refresh", sentimentHandler.RefreshSentiment)
+			sentiment.GET("/sources", sentimentHandler.GetSentimentSources)
 		}
 
 		// Telegram internal routes - backward compatible (no auth for internal network)
