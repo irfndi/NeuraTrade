@@ -138,15 +138,18 @@ func TestPhaseDetector_RegisterTransitionHandler(t *testing.T) {
 	config.MinPhaseDuration = 0
 	detector := NewPhaseDetector(config, nil)
 
-	handlerCalled := false
+	handlerCalled := make(chan bool, 1)
 	detector.RegisterTransitionHandler(func(event PhaseTransitionEvent) {
-		handlerCalled = true
+		handlerCalled <- true
 	})
 
 	detector.AttemptTransition(decimal.NewFromFloat(10500), "test")
 
-	time.Sleep(100 * time.Millisecond)
-	assert.True(t, handlerCalled)
+	select {
+	case <-handlerCalled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("handler was not called")
+	}
 }
 
 func TestPhaseDetector_CurrentPhase(t *testing.T) {

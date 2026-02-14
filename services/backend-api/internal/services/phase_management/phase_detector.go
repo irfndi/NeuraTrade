@@ -70,7 +70,10 @@ func (pd *PhaseDetector) DetectPhase(portfolioValue decimal.Decimal) Phase {
 func (pd *PhaseDetector) ShouldTransition(currentPhase, newPhase Phase, portfolioValue decimal.Decimal) bool {
 	pd.mu.RLock()
 	defer pd.mu.RUnlock()
+	return pd.shouldTransitionLocked(currentPhase, newPhase, portfolioValue)
+}
 
+func (pd *PhaseDetector) shouldTransitionLocked(currentPhase, newPhase Phase, portfolioValue decimal.Decimal) bool {
 	if currentPhase == newPhase {
 		return false
 	}
@@ -134,7 +137,7 @@ func (pd *PhaseDetector) AttemptTransition(portfolioValue decimal.Decimal, reaso
 
 	newPhase := pd.DetectPhase(portfolioValue)
 
-	if !pd.ShouldTransition(pd.currentPhase, newPhase, portfolioValue) {
+	if !pd.shouldTransitionLocked(pd.currentPhase, newPhase, portfolioValue) {
 		return PhaseTransitionEvent{}, false
 	}
 
