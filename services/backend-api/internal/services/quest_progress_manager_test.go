@@ -136,7 +136,11 @@ func TestQuestProgressManager_checkMilestones(t *testing.T) {
 			// Reset milestones for each test
 			manager.InitializeQuestProgress(questID, tt.targetCount)
 
-			result := manager.checkMilestones(questID, tt.previousCount, tt.currentCount, tt.targetCount)
+			manager.mu.RLock()
+			milestones := manager.milestones[questID]
+			manager.mu.RUnlock()
+
+			result := manager.checkMilestones(questID, tt.previousCount, tt.currentCount, tt.targetCount, milestones)
 			if tt.expectedResult {
 				assert.NotNil(t, result)
 				assert.Equal(t, tt.expectedPercent, result.Percent)
