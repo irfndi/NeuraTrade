@@ -193,18 +193,19 @@ func (e *ShadowModeEngine) UpdatePrices(prices map[string]decimal.Decimal) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	var totalUnrealized decimal.Decimal
+	var totalUnrealized, sumMarketValue decimal.Decimal
 
 	for symbol, pos := range e.portfolio.Positions {
 		if price, exists := prices[symbol]; exists {
 			pos.CurrentPrice = price
 			pos.UnrealizedPNL = price.Sub(pos.EntryPrice).Mul(pos.Quantity)
 			totalUnrealized = totalUnrealized.Add(pos.UnrealizedPNL)
+			sumMarketValue = sumMarketValue.Add(price.Mul(pos.Quantity))
 		}
 	}
 
 	e.portfolio.UnrealizedPNL = totalUnrealized
-	e.portfolio.TotalValue = e.portfolio.Cash.Add(totalUnrealized)
+	e.portfolio.TotalValue = e.portfolio.Cash.Add(sumMarketValue)
 	e.portfolio.LastUpdated = time.Now()
 }
 
@@ -264,7 +265,14 @@ func (e *ShadowModeEngine) RecordSnapshot() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Deep copy the portfolio to avoid retaining pointers to live positions
 	snapshot := e.portfolio
+	snapshot.Positions = make(map[string]*ShadowPosition, len(e.portfolio.Positions))
+	for k, v := range e.portfolio.Positions {
+		posCopy := *v
+		snapshot.Positions[k] = &posCopy
+	}
+
 	e.history = append(e.history, snapshot)
 
 	if len(e.history) > 1000 {
