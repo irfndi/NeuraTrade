@@ -255,6 +255,7 @@ func (pt *PositionTracker) OnFill(ctx context.Context, fill FillData) error {
 			"entry_price", fill.FillPrice)
 	} else {
 		// Existing position - update
+		tracked.Position.OrderID = fill.OrderID
 		tracked.Position.Size = fill.FillSize
 		tracked.Position.EntryPrice = fill.FillPrice
 		tracked.Position.UpdatedAt = fill.Timestamp
