@@ -254,11 +254,6 @@ func NewAgentExecutionLoop(
 func (l *AgentExecutionLoop) Execute(ctx context.Context, symbol string, marketContext MarketContext, portfolio PortfolioState) (*ExecutionLoopResult, error) {
 	startTime := time.Now()
 
-	// Copy config under read lock to avoid data race
-	l.mu.RLock()
-	cfg := l.config
-	l.mu.RUnlock()
-
 	result := &ExecutionLoopResult{
 		LoopID:        generateLoopID(),
 		Symbol:        symbol,
@@ -277,9 +272,9 @@ func (l *AgentExecutionLoop) Execute(ctx context.Context, symbol string, marketC
 	}()
 
 	// Set timeout context
-	if cfg.Timeout > 0 {
+	if l.config.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, l.config.Timeout)
 		defer cancel()
 	}
 
@@ -294,7 +289,7 @@ func (l *AgentExecutionLoop) Execute(ctx context.Context, symbol string, marketC
 	result.Analysis = analysis
 
 	// Step 2: If LLM is configured, run LLM with tool calling
-	if l.llmClient != nil && cfg.EnableToolCalls {
+	if l.llmClient != nil && l.config.EnableToolCalls {
 		toolCalls, toolResults, err := l.runLLMWithTools(ctx, symbol, analysis, marketContext)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("llm tool calling failed: %v", err))
@@ -326,7 +321,7 @@ func (l *AgentExecutionLoop) Execute(ctx context.Context, symbol string, marketC
 	}
 
 	// Step 4: Run risk assessment
-	if cfg.RequireRiskApproval && l.riskManager != nil {
+	if l.config.RequireRiskApproval && l.riskManager != nil {
 		riskSignals := l.convertToRiskSignals(analysis, marketContext, portfolio)
 		riskAssessment, err := l.riskManager.AssessTradingRisk(ctx, symbol, string(tradingDecision.Side), riskSignals)
 		if err != nil {
@@ -362,9 +357,9 @@ func (l *AgentExecutionLoop) Execute(ctx context.Context, symbol string, marketC
 	}
 
 	// Step 5: Final confidence check
-	if result.Confidence < cfg.MinConfidence {
+	if result.Confidence < l.config.MinConfidence {
 		result.Decision = ExecutionDecisionReject
-		result.Reasoning = fmt.Sprintf("confidence %.2f below minimum %.2f", result.Confidence, cfg.MinConfidence)
+		result.Reasoning = fmt.Sprintf("confidence %.2f below minimum %.2f", result.Confidence, l.config.MinConfidence)
 		l.metrics.IncrementRejected()
 		return result, nil
 	}
@@ -376,7 +371,7 @@ func (l *AgentExecutionLoop) Execute(ctx context.Context, symbol string, marketC
 	l.metrics.IncrementByAction(result.Decision)
 
 	// Step 7: Execute if auto-execute is enabled
-	if cfg.AutoExecute && l.orderExecutor != nil {
+	if l.config.AutoExecute && l.orderExecutor != nil {
 		if err := l.orderExecutor.ExecuteOrder(ctx, tradingDecision); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("order execution failed: %v", err))
 			// Don't change decision - it was approved, just execution failed
@@ -437,35 +432,28 @@ func (l *AgentExecutionLoop) runLLMWithTools(ctx context.Context, symbol string,
 				Arguments: tc.Arguments,
 			}
 
-			var output json.RawMessage
-			var err error
-			resultContent := ""
+			toolStart := time.Now()
+			output, err := l.toolExecutor.Execute(ctx, tc.Name, tc.Arguments)
+			result.Duration = time.Since(toolStart)
 
-			if l.toolExecutor == nil {
-				result.Error = "tool executor unavailable"
-				result.Duration = 0
+			if err != nil {
+				result.Error = err.Error()
 				l.metrics.RecordToolCall(true)
-				resultContent = "Error: tool executor unavailable"
 			} else {
-				toolStart := time.Now()
-				output, err = l.toolExecutor.Execute(ctx, tc.Name, tc.Arguments)
-				result.Duration = time.Since(toolStart)
-
-				if err != nil {
-					result.Error = err.Error()
-					l.metrics.RecordToolCall(true)
-					resultContent = fmt.Sprintf("Error: %s", err.Error())
-				} else {
-					result.Result = output
-					l.metrics.RecordToolCall(false)
-					resultContent = string(output)
-				}
+				result.Result = output
+				l.metrics.RecordToolCall(false)
 			}
 
 			allToolCalls = append(allToolCalls, tc)
 			allResults = append(allResults, result)
 
 			// Add tool result to conversation
+			var resultContent string
+			if err != nil {
+				resultContent = fmt.Sprintf("Error: %s", err.Error())
+			} else {
+				resultContent = string(output)
+			}
 			conversation.AddToolResult(tc.ID, resultContent)
 		}
 

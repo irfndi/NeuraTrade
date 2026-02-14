@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-14 10:16 Asia/Jakarta
-**Commit:** 4e9d4b7
+**Generated:** 2026-02-13 13:41 Asia/Jakarta
+**Commit:** c3dc227
 **Branch:** development
 
 ## OVERVIEW
@@ -84,48 +84,47 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 185 total | 28 open | 2 in progress | 10 blocked | 155 closed | 19 ready
+**Stats:** 185 total | 58 open | 0 in progress | 28 blocked | 127 closed | 30 ready
 
 ### Recently Completed (✓)
+- ✓ `neura-1wi`: FOK order execution
+- ✓ `neura-7et`: Build prompt builder from skill.md + context
+- ✓ `neura-8s4`: Execute Go functions for tool calls
+- ✓ `neura-qts`: CLOB API wrapper (order execution)
+- ✓ `neura-ur6`: Parse tool_calls from LLM responses
+- ✓ `neura-2lv0`: LLM Inference Client - OpenAI/Anthropic/MLX API calls with structured output
+- ✓ `neura-acq`: Expose provider/model registry in CLI and Telegram
+- ✓ `neura-5nt`: Provider/model catalog source sync and cache
+- ✓ `neura-otc`: Codify sentiment momentum skill.md
+- ✓ `neura-lnm`: Redis job queue
+- ✓ `neura-1p0`: /doctor diagnostic handler
+- ✓ `neura-4gk`: Quest and monitoring commands
+- ✓ `neura-09y`: Wallet management commands
+- ✓ `neura-ilw`: /liquidate and /liquidate_all handlers
+- ✓ `neura-ik7`: /summary and /performance handlers
+- ✓ `neura-hgk`: /begin and /pause handlers
+- ✓ `neura-tm8`: Store skill hashes for version tracking
+- ✓ `neura-20g`: Implement skill.md file loader
+- ✓ `neura-6md`: Cost tracking in ai_usage table
+- ✓ `neura-32w`: Fund with minimal capital (USDC)
+- ✓ `neura-9ai`: Intrusion detection
+- ✓ `neura-nqxe`: Fix undefined talib and snapshots in technical_analysis.go
+- ✓ `neura-hrs3`: Fix undefined CCXTClient in services package
 - ✓ `neura-q82t`: Fix CI/CD failures on PR#102
 - ✓ `neura-aunx`: Add RiskHandler test coverage
 - ✓ `neura-thu1`: Add AutonomousHandler test coverage
 - ✓ `neura-0ty7`: Add DailyLossTracker test coverage
 - ✓ `neura-m1gv`: Add OTPService test coverage
 - ✓ `neura-nq9l`: Add APIKeyService test coverage
-- ✓ `neura-9ai`: Implement intrusion detection
-- ✓ `neura-kxq`: Implement kill switch monitoring
-- ✓ `neura-32w`: Fund with minimal capital ($100 USDC)
-- ✓ `neura-im9`: Implement quest progress updates
-- ✓ `neura-nh5`: Implement risk event notifications
-- ✓ `neura-fvk`: Implement fund milestone alerts
-- ✓ `neura-a7r`: Implement tight stop-loss execution
-- ✓ `neura-sa4`: Implement order book imbalance detection
-- ✓ `neura-4eo`: Expose arbitrage primitives
-- ✓ `neura-6md`: Cost tracking in ai_usage table
-- ✓ `neura-hrs3`: Fix undefined CCXTClient in services package
-- ✓ `neura-nqxe`: Fix undefined talib and snapshots in technical_analysis.go
-- ✓ `neura-px6`: Security audits (gosec, gitleaks)
-- ✓ `neura-za8`: Rate limit monitoring
-- ✓ `neura-hgk`: /begin and /pause handlers
-- ✓ `neura-ik7`: /summary and /performance handlers
-- ✓ `neura-ilw`: /liquidate and /liquidate_all handlers
-- ✓ `neura-cha`: Sum-to-one arbitrage skill.md
-- ✓ `neura-we2`: Scalping skill.md codification
-- ✓ `neura-4p6`: Exchange resilience monitoring
-- ✓ `neura-8y8`: Emergency rollbacks
-- ✓ `neura-zn8c`: Replace in-memory state with persistent storage
 - ✓ `neura-l70a`: Refactor talib wrapper to goflux
-- ✓ `neura-axx`: Action streaming format
-- ✓ `neura-8de`: Virtual account tracking
+- ✓ `neura-zn8c`: Replace in-memory state with persistent storage
+- ✓ `neura-8y8`: Emergency rollbacks
+- ✓ `neura-za8`: Rate limit monitoring
+- ✓ `neura-px6`: Security audits (gosec, gitleaks)
+- ✓ `neura-4p6`: Exchange resilience monitoring
+- ✓ `neura-kxq`: Kill switch monitoring
 - ✓ `neura-q6o`: Containerize agent and infra services
-- ✓ `neura-u4w`: Implement paper execution simulation
-- ✓ `neura-mm5`: Implement paper trade recording
-- ✓ `neura-bri`: Implement AI reasoning summaries
-- ✓ `neura-1wi`: FOK order execution
-- ✓ `neura-qfp`: Configure production Docker Compose
-- ✓ `neura-354`: Set up CI/CD pipeline
-- ✓ `neura-wqa`: Set up QuantVPS deployment
+- ✓ `neura-8de`: Virtual account tracking
 - ✓ `neura-94c`: /status budget display
 - ✓ `neura-7mj`: Monthly budget enforcement
 - ✓ `neura-5z3`: Daily budget enforcement
@@ -133,6 +132,9 @@ make dev-down
 - ✓ `neura-2xe`: Position snapshot tool
 - ✓ `neura-wz7`: cancel_order tool endpoint
 - ✓ `neura-l2z`: place_order tool endpoint
+- ✓ `neura-axx`: Action streaming format
+- ✓ `neura-cha`: Sum-to-one arbitrage skill.md
+- ✓ `neura-we2`: Scalping skill.md codification
 - ✓ `neura-duw`: Expose cleanup endpoints
 - ✓ `neura-1s5`: Risk primitives
 - ✓ `neura-lue`: Readiness endpoints
@@ -163,6 +165,9 @@ make dev-down
 - ✓ `neura-aav`: Connectivity checks for all configured providers
 - ✓ `neura-fs8`: API key validation (permissions)
 - ✓ `neura-myb`: Wallet minimum checks
+- ✓ `neura-bri`: Implement AI reasoning summaries
+- ✓ `neura-mm5`: Implement paper trade recording
+- ✓ `neura-u4w`: Implement paper execution simulation
 - ✓ `neura-bxg`: One-time auth code generation
 - ✓ `neura-cd1`: Arbitrage trigger detection
 - ✓ `neura-lk1`: Create install.sh shell script

@@ -178,7 +178,6 @@ func (s *PaperExecutionSimulator) SimulateFill(ctx context.Context, order *Paper
 
 	// Calculate fill price based on order type
 	var fillPrice decimal.Decimal
-	var filledSize decimal.Decimal
 	switch order.Type {
 	case PaperOrderTypeMarket:
 		fillPrice = s.calculateMarketFillPrice(marketPrice, order.Side)
@@ -205,15 +204,13 @@ func (s *PaperExecutionSimulator) SimulateFill(ctx context.Context, order *Paper
 	case PaperOrderTypeIOC:
 		// Immediate or Cancel - fill what's available now
 		fillPrice = s.calculateMarketFillPrice(marketPrice, order.Side)
-		partialFill := s.calculatePartialFill(order.Size)
-		if partialFill.IsZero() {
+		order.Size = s.calculatePartialFill(order.Size)
+		if order.Size.IsZero() {
 			order.Status = PaperOrderStatusCancelled
 			order.RejectReason = "IOC could not fill any quantity"
 			order.UpdatedAt = s.clock.Now()
 			return order, nil
 		}
-		// For IOC, filledSize will be set to partialFill below
-		filledSize = partialFill
 	case PaperOrderTypeFOK:
 		// Fill or Kill - must fill entire order
 		fillPrice = s.calculateMarketFillPrice(marketPrice, order.Side)
@@ -222,6 +219,7 @@ func (s *PaperExecutionSimulator) SimulateFill(ctx context.Context, order *Paper
 	}
 
 	// Apply partial fill if enabled (skip for IOC/FOK which handle fill logic above)
+	var filledSize decimal.Decimal
 	if order.Type != PaperOrderTypeIOC && order.Type != PaperOrderTypeFOK &&
 		s.config.EnableRandomness && s.shouldPartialFill() {
 		filledSize = s.calculatePartialFill(order.Size)

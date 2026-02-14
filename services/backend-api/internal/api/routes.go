@@ -14,7 +14,6 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
@@ -70,12 +69,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
-	// Extract Redis client with nil guard
-	var rClient *goredis.Client
-	if redis != nil {
-		rClient = redis.Client
-	}
-
 	// Initialize health handler
 	healthHandler := handlers.NewHealthHandler(db, redis, ccxtService.GetServiceURL(), cacheAnalyticsService)
 
@@ -90,7 +83,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Initialize user and telegram internal handlers early for internal routes
-	userHandler := handlers.NewUserHandler(db, rClient, authMiddleware)
+	userHandler := handlers.NewUserHandler(db, redis.Client, authMiddleware)
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler)
 
 	// Internal service-to-service routes (no auth, network-isolated via Docker)
@@ -126,38 +119,22 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Initialize handlers
 	marketHandler := handlers.NewMarketHandler(db, ccxtService, collectorService, redis, cacheAnalyticsService)
-
-	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, rClient)
+	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redis.Client)
 	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
 	// userHandler and telegramInternalHandler already initialized above for internal routes
 	alertHandler := handlers.NewAlertHandler(db)
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
-
-	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, rClient)
+	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	webSocketHandler := handlers.NewWebSocketHandler(redis)
 
 	// AI handler - uses registry from ai package
-	aiOpts := []ai.RegistryOption{}
-	if rClient != nil {
-		aiOpts = append(aiOpts, ai.WithRedis(rClient))
-	}
-	aiRegistry := ai.NewRegistry(aiOpts...)
+	aiRegistry := ai.NewRegistry(
+		ai.WithRedis(redis.Client),
+	)
 	aiHandler := handlers.NewAIHandler(aiRegistry)
-
-	// Session handler - for session resumption and lifecycle management (neura-9i4, neura-8xg)
-	var sessionHandler *handlers.SessionHandler
-	if pgDB, ok := db.(*database.PostgresDB); ok {
-		sessionRepo := services.NewSessionStateRepositoryFromPostgres(pgDB)
-		if sessionRepo != nil {
-			sessionSerializer := services.NewSessionSerializer(sessionRepo)
-			sessionHandler = handlers.NewSessionHandler(sessionSerializer, sessionRepo)
-		}
-	} else {
-		log.Printf("[SESSION] WARNING: session repository not available, session endpoints disabled")
-	}
 
 	// Initialize order execution service (Polymarket CLOB)
 	orderExecConfig := services.OrderExecutionConfig{
@@ -348,22 +325,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			ai.GET("/models", aiHandler.GetModels)
 			ai.POST("/route", aiHandler.RouteModel)
-		}
-
-		// Session management routes (neura-9i4, neura-8xg)
-		if sessionHandler != nil {
-			sessions := v1.Group("/sessions")
-			sessions.Use(authMiddleware.RequireAuth())
-			{
-				sessions.GET("", sessionHandler.ListActiveSessions)
-				sessions.GET("/:id", sessionHandler.GetSession)
-				sessions.GET("/:id/history", sessionHandler.GetSessionHistory)
-				sessions.GET("/quest", sessionHandler.GetSessionByQuest)
-				sessions.PUT("/:id/status", sessionHandler.UpdateSessionStatus)
-				sessions.POST("/:id/pause", sessionHandler.PauseSession)
-				sessions.POST("/:id/resume", sessionHandler.ResumeSession)
-				sessions.DELETE("/:id", sessionHandler.DeleteSession)
-			}
 		}
 
 		// Exchange management
