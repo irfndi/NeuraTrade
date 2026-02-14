@@ -85,16 +85,16 @@ func TestTruncateEdgeCases(t *testing.T) {
 			expected: "...",
 		},
 		{
-			name:     "unicode string returns full string (rune-based)",
+			name:     "unicode string truncates by bytes not runes",
 			input:    "こんにちは",
 			maxLen:   5,
-			expected: "こんにちは",
+			expected: "\xe3\x81...",
 		},
 		{
-			name:     "unicode string longer than maxLen returns full",
+			name:     "unicode string truncates correctly at 10 bytes",
 			input:    "こんにちは",
 			maxLen:   10,
-			expected: "こんにちは",
+			expected: "こん\xe3...",
 		},
 		{
 			name:     "ascii string truncates correctly",

@@ -463,6 +463,9 @@ func showStatus(ctx context.Context, registry *ai.Registry, args []string) error
 }
 
 func truncate(s string, maxLen int) string {
+	if maxLen <= 3 {
+		return "..."
+	}
 	if len(s) <= maxLen {
 		return s
 	}
