@@ -755,3 +755,174 @@ func DefaultBacktestConfig() BacktestConfig {
 		ReinvestProfits: true,
 	}
 }
+
+type BacktestResultFilter struct {
+	StrategyName string
+	Symbol       string
+	Exchange     string
+	Timeframe    string
+	Limit        int
+	Offset       int
+}
+
+func (b *Backtester) SaveResult(ctx context.Context, result *BacktestResult, strategyName, symbol, exchange, timeframe string) error {
+	query := `
+		INSERT INTO backtest_results (
+			strategy_name, symbol, exchange, timeframe,
+			start_date, end_date, initial_capital, final_capital,
+			total_return, total_return_pct,
+			sharpe_ratio, max_drawdown, win_rate, profit_factor,
+			total_trades, winning_trades, losing_trades,
+			avg_win, avg_loss, largest_win, largest_loss,
+			params, trades, equity_curve
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+		RETURNING id, created_at, updated_at
+	`
+
+	finalCapital := result.Config.InitialCapital.Add(result.TotalPnL)
+
+	tradesData := make([]map[string]interface{}, len(result.DailyReturns))
+	for i, tr := range result.DailyReturns {
+		tradesData[i] = map[string]interface{}{
+			"date":        tr.Date,
+			"return":      tr.Return.String(),
+			"pnl":         tr.PnL.String(),
+			"equity":      tr.Equity.String(),
+			"trade_count": tr.TradeCount,
+		}
+	}
+
+	equityData := make([]map[string]interface{}, len(result.EquityCurve))
+	for i, ep := range result.EquityCurve {
+		equityData[i] = map[string]interface{}{
+			"timestamp": ep.Timestamp,
+			"equity":    ep.Equity.String(),
+		}
+	}
+
+	var id int
+	var createdAt, updatedAt time.Time
+
+	err := b.db.QueryRow(ctx, query,
+		strategyName, symbol, exchange, timeframe,
+		result.Config.StartDate, result.Config.EndDate, result.Config.InitialCapital, finalCapital,
+		result.TotalReturn.String(), result.TotalReturn.String(),
+		result.SharpeRatio.String(), result.MaxDrawdown.String(), result.WinRate.String(), result.ProfitFactor.String(),
+		result.TotalTrades, result.WinningTrades, result.LosingTrades,
+		result.AvgWin.String(), result.AvgLoss.String(),
+		result.BestTrade.NetPnL.String(), result.WorstTrade.NetPnL.String(),
+		result.Config, tradesData, equityData,
+	).Scan(&id, &createdAt, &updatedAt)
+
+	if err != nil {
+		return err
+	}
+
+	_ = id
+	_ = createdAt
+	_ = updatedAt
+
+	return nil
+}
+
+func (b *Backtester) GetResult(ctx context.Context, id int) (*BacktestResult, error) {
+	query := `
+		SELECT id, strategy_name, symbol, exchange, timeframe,
+			start_date, end_date, initial_capital, final_capital,
+			total_return, total_return_pct,
+			sharpe_ratio, max_drawdown, win_rate, profit_factor,
+			total_trades, winning_trades, losing_trades,
+			avg_win, avg_loss, largest_win, largest_loss,
+			params, trades, equity_curve,
+			created_at, updated_at
+		FROM backtest_results
+		WHERE id = $1
+	`
+
+	result := &BacktestResult{}
+	var configBytes, tradesBytes, equityBytes []byte
+
+	err := b.db.QueryRow(ctx, query, id).Scan(
+		&result.Config.StartDate, &result.Config.EndDate, &result.Config.InitialCapital,
+		&result.TotalReturn, &result.TotalReturn,
+		&result.SharpeRatio, &result.MaxDrawdown, &result.WinRate, &result.ProfitFactor,
+		&result.TotalTrades, &result.WinningTrades, &result.LosingTrades,
+		&result.AvgWin, &result.AvgLoss,
+		&configBytes, &tradesBytes, &equityBytes,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (b *Backtester) ListResults(ctx context.Context, filter *BacktestResultFilter) ([]map[string]interface{}, error) {
+	query := `
+		SELECT id, strategy_name, symbol, exchange, timeframe,
+			total_return_pct, win_rate, total_trades, created_at
+		FROM backtest_results
+		WHERE 1=1
+	`
+
+	args := []interface{}{}
+	argIdx := 1
+
+	if filter.StrategyName != "" {
+		query += fmt.Sprintf(" AND strategy_name = $%d", argIdx)
+		args = append(args, filter.StrategyName)
+		argIdx++
+	}
+	if filter.Symbol != "" {
+		query += fmt.Sprintf(" AND symbol = $%d", argIdx)
+		args = append(args, filter.Symbol)
+		argIdx++
+	}
+	if filter.Exchange != "" {
+		query += fmt.Sprintf(" AND exchange = $%d", argIdx)
+		args = append(args, filter.Exchange)
+		argIdx++
+	}
+
+	query += " ORDER BY created_at DESC"
+
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argIdx)
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := b.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var strategyName, symbol, exchange, timeframe string
+		var totalReturnPct, winRate string
+		var totalTrades int
+		var createdAt time.Time
+
+		err := rows.Scan(&id, &strategyName, &symbol, &exchange, &timeframe, &totalReturnPct, &winRate, &totalTrades, &createdAt)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, map[string]interface{}{
+			"id":               id,
+			"strategy_name":    strategyName,
+			"symbol":           symbol,
+			"exchange":         exchange,
+			"timeframe":        timeframe,
+			"total_return_pct": totalReturnPct,
+			"win_rate":         winRate,
+			"total_trades":     totalTrades,
+			"created_at":       createdAt,
+		})
+	}
+
+	return results, nil
+}
