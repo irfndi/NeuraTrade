@@ -26,7 +26,7 @@ tar xzf node_exporter-1.6.1.linux-amd64.tar.gz
 mv node_exporter-1.6.1.linux-amd64/node_exporter /usr/local/bin/
 rm -rf node_exporter-1.6.1.linux-amd64*
 
-cat > /etc/systemd/system/node_exporter.service << 'EOF'
+cat >/etc/systemd/system/node_exporter.service <<'EOF'
 [Unit]
 Description=Node Exporter
 After=network.target
@@ -43,7 +43,7 @@ systemctl enable node_exporter
 systemctl start node_exporter
 
 # Setup log rotation
-cat > /etc/logrotate.d/neuratrade << 'EOF'
+cat >/etc/logrotate.d/neuratrade <<'EOF'
 /opt/neuratrade/logs/*.log {
     daily
     rotate 7
@@ -59,8 +59,8 @@ EOF
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow ssh
-ufw allow 8080/tcp  # API port
-ufw allow 9090/tcp  # Prometheus
+ufw allow 8080/tcp # API port
+ufw allow 9090/tcp # Prometheus
 ufw --force enable
 
 echo "[INFO] QuantVPS setup complete"
