@@ -86,9 +86,22 @@ func (cs *CapitalScaler) CalculateScaledPositionSize(phase Phase, totalCapital d
 	alloc := cs.adapter.GetAllocationConfig(phase)
 	rules := cs.adapter.GetPositionSizingRules(phase)
 
+	if alloc.MaxConcurrentPositions <= 0 {
+		cs.logger.WithField("phase", phase.String()).
+			Warn("MaxConcurrentPositions is 0, returning 0 size")
+		return decimal.Zero
+	}
+
 	availableCapital := totalCapital.Mul(alloc.PrimaryStrategyPercent.Div(decimal.NewFromInt(100)))
 
 	maxSinglePosition := availableCapital.Div(decimal.NewFromInt(int64(alloc.MaxConcurrentPositions)))
+
+	if confidence < 0 {
+		confidence = 0
+	}
+	if confidence > 1 {
+		confidence = 1
+	}
 
 	confidenceFactor := decimal.NewFromFloat(confidence)
 	size := maxSinglePosition.Mul(confidenceFactor).Mul(rules.BaseSizeMultiplier)

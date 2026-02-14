@@ -88,32 +88,28 @@ func (pd *PhaseDetector) shouldTransitionLocked(currentPhase, newPhase Phase, po
 	thresholds := pd.config.Thresholds
 	hysteresis := pd.config.HysteresisPercent.Div(decimal.NewFromInt(100))
 
-	var threshold decimal.Decimal
-	var isUpward bool
+	isUpward := newPhase > currentPhase
 
-	switch currentPhase {
-	case PhaseBootstrap:
-		threshold = thresholds.BootstrapMax
-		isUpward = newPhase == PhaseGrowth
-	case PhaseGrowth:
-		if newPhase == PhaseBootstrap {
+	var threshold decimal.Decimal
+	switch {
+	case isUpward:
+		switch currentPhase {
+		case PhaseBootstrap:
 			threshold = thresholds.BootstrapMax
-			isUpward = false
-		} else {
+		case PhaseGrowth:
 			threshold = thresholds.GrowthMax
-			isUpward = true
-		}
-	case PhaseScale:
-		if newPhase == PhaseGrowth {
-			threshold = thresholds.GrowthMax
-			isUpward = false
-		} else {
+		case PhaseScale:
 			threshold = thresholds.ScaleMax
-			isUpward = true
 		}
-	case PhaseMature:
-		threshold = thresholds.ScaleMax
-		isUpward = false
+	default:
+		switch currentPhase {
+		case PhaseGrowth:
+			threshold = thresholds.BootstrapMax
+		case PhaseScale:
+			threshold = thresholds.GrowthMax
+		case PhaseMature:
+			threshold = thresholds.ScaleMax
+		}
 	}
 
 	if isUpward {
