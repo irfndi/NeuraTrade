@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -754,4 +755,87 @@ func DefaultBacktestConfig() BacktestConfig {
 		HoldingPeriod:   8 * time.Hour,
 		ReinvestProfits: true,
 	}
+}
+
+// SaveBacktestResult persists a backtest result to the database.
+func (b *Backtester) SaveBacktestResult(ctx context.Context, userID string, result *BacktestResult) error {
+	if b.db == nil {
+		return nil
+	}
+
+	configJSON, err := json.Marshal(result.Config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	tradesBySymbol, err := json.Marshal(result.TradesBySymbol)
+	if err != nil {
+		return fmt.Errorf("failed to marshal trades_by_symbol: %w", err)
+	}
+
+	tradesByExchange, err := json.Marshal(result.TradesByExchange)
+	if err != nil {
+		return fmt.Errorf("failed to marshal trades_by_exchange: %w", err)
+	}
+
+	equityCurveJSON, err := json.Marshal(result.EquityCurve)
+	if err != nil {
+		return fmt.Errorf("failed to marshal equity_curve: %w", err)
+	}
+
+	dailyReturnsJSON, err := json.Marshal(result.DailyReturns)
+	if err != nil {
+		return fmt.Errorf("failed to marshal daily_returns: %w", err)
+	}
+
+	var avgHoldingSeconds int
+	if result.AvgHoldingTime > 0 {
+		avgHoldingSeconds = int(result.AvgHoldingTime.Seconds())
+	}
+
+	query := `
+		INSERT INTO backtest_results (
+			user_id, config, total_return, total_pnl, sharpe_ratio, sortino_ratio,
+			max_drawdown, max_drawdown_date, win_rate, loss_rate, profit_factor,
+			total_trades, winning_trades, losing_trades, avg_win, avg_loss,
+			avg_holding_time_seconds, trades_by_symbol, trades_by_exchange,
+			equity_curve, daily_returns, started_at, completed_at, duration_seconds
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+			$17, $18, $19, $20, $21, $22, $23, $24
+		)
+	`
+
+	_, err = b.db.Exec(ctx, query,
+		nil, // user_id - NULL for now (can be added later)
+		configJSON,
+		result.TotalReturn,
+		result.TotalPnL,
+		result.SharpeRatio,
+		result.SortinoRatio,
+		result.MaxDrawdown,
+		result.MaxDrawdownDate,
+		result.WinRate,
+		result.LossRate,
+		result.ProfitFactor,
+		result.TotalTrades,
+		result.WinningTrades,
+		result.LosingTrades,
+		result.AvgWin,
+		result.AvgLoss,
+		avgHoldingSeconds,
+		tradesBySymbol,
+		tradesByExchange,
+		equityCurveJSON,
+		dailyReturnsJSON,
+		result.StartedAt,
+		result.CompletedAt,
+		int(result.Duration.Seconds()),
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to save backtest result: %w", err)
+	}
+
+	return nil
 }
