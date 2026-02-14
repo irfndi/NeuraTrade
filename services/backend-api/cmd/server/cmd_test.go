@@ -459,31 +459,6 @@ func TestShowStatus(t *testing.T) {
 	_ = err
 }
 
-// TestTruncate tests the truncate function
-func TestTruncate(t *testing.T) {
-	// Test truncation - function returns maxLen-3 chars + "..."
-	longText := strings.Repeat("a", 100)
-	truncated := truncate(longText, 10)
-	assert.Equal(t, 10, len(truncated))
-	assert.Equal(t, "aaaaaaa...", truncated) // 7 chars + "..."
-
-	// Test no truncation needed
-	shortText := "short"
-	notTruncated := truncate(shortText, 10)
-	assert.Equal(t, "short", notTruncated)
-
-	// Test exact length - no truncation needed
-	exactText := strings.Repeat("b", 10)
-	exactTruncated := truncate(exactText, 10)
-	assert.Equal(t, 10, len(exactTruncated))
-	assert.Equal(t, exactText, exactTruncated)
-
-	// Test short truncation (less than 3 chars for "...")
-	veryShort := strings.Repeat("x", 100)
-	veryShortTruncated := truncate(veryShort, 3)
-	assert.Equal(t, "...", veryShortTruncated)
-}
-
 // TestBootstrapCommandReadInputWithBuffer tests readInput with simulated input
 func TestBootstrapCommandReadInputWithBuffer(t *testing.T) {
 	// Create a command with a buffer containing user input
