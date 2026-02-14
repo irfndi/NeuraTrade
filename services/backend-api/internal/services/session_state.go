@@ -243,13 +243,11 @@ func (s *SessionSerializer) CreateFromExecutionLoop(
 	return state
 }
 
-// calculateChecksum generates a SHA-256 checksum of the session state
 func (s *SessionSerializer) calculateChecksum(state *SessionState) string {
-	// Create a copy without the checksum for hashing
-	copy := *state
-	copy.Checksum = ""
+	stateCopy := *state
+	stateCopy.Checksum = ""
 
-	data, err := json.Marshal(copy)
+	data, err := json.Marshal(stateCopy)
 	if err != nil {
 		return ""
 	}

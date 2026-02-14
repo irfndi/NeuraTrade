@@ -8,6 +8,7 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 	"github.com/shopspring/decimal"
 )
 
@@ -391,6 +392,7 @@ func (e *OHLCVReplayEngine) fetchFromDatabase(ctx context.Context, config Replay
 		var timestamp time.Time
 
 		if err := rows.Scan(&timestamp, &open, &high, &low, &close, &volume); err != nil {
+			telemetry.Logger().Warn("Failed to scan OHLCV row", "error", err)
 			continue
 		}
 
