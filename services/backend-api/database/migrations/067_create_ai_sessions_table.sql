@@ -1,3 +1,8 @@
+-- Migration 067: Create ai_sessions table for serializing AI agent session state
+-- Created: 2026-02-14
+
+BEGIN;
+
 -- Create ai_sessions table for serializing AI agent session state
 CREATE TABLE IF NOT EXISTS ai_sessions (
     id VARCHAR(100) PRIMARY KEY,
@@ -14,8 +19,11 @@ CREATE INDEX IF NOT EXISTS idx_ai_sessions_symbol ON ai_sessions(symbol);
 CREATE INDEX IF NOT EXISTS idx_ai_sessions_status ON ai_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_ai_sessions_updated_at ON ai_sessions(updated_at DESC);
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON ai_sessions TO authenticated;
+-- Migration completion marker
+INSERT INTO system_config (config_key, config_value, description) VALUES
+    ('migration_067_completed', 'true', 'Migration 067: Create ai_sessions table')
+ON CONFLICT (config_key) DO UPDATE SET
+    config_value = EXCLUDED.config_value,
+    updated_at = CURRENT_TIMESTAMP;
 
-INSERT INTO system_config (config_key, config_value, description)
-VALUES ('migration_067_completed', 'true', 'Migration 067: Create ai_sessions table')
-ON CONFLICT (config_key) DO NOTHING;
+COMMIT;
