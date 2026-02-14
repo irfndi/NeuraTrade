@@ -53,6 +53,7 @@ type RoundRobinDebateLoopConfig struct {
 	TraderConfig  TraderAgentConfig
 }
 
+// DefaultRoundRobinDebateLoopConfig returns default round-robin debate configuration.
 func DefaultRoundRobinDebateLoopConfig() RoundRobinDebateLoopConfig {
 	return RoundRobinDebateLoopConfig{
 		MaxRounds:              3,
@@ -155,8 +156,8 @@ type RoundRobinDebateLoop struct {
 	historyMu sync.RWMutex
 }
 
-// NewRoundRobinDebateLoopService creates a new round-robin debate loop.
-func NewRoundRobinDebateLoopService(config RoundRobinDebateLoopConfig, logger *zaplogrus.Logger) *RoundRobinDebateLoop {
+// NewRoundRobinDebateLoop creates a new round-robin debate loop.
+func NewRoundRobinDebateLoop(config RoundRobinDebateLoopConfig, logger *zaplogrus.Logger) *RoundRobinDebateLoop {
 	return &RoundRobinDebateLoop{
 		config:       config,
 		analystAgent: NewAnalystAgent(config.AnalystConfig),
