@@ -62,3 +62,30 @@ Scalping exploits small price inefficiencies through high-frequency trading. Key
 - Require minimum 0.3% potential profit before entry (spread + target)
 - Halt all scalping if 3 consecutive losses occur (consecutive-loss pause)
 - Only trade on exchanges with <100ms latency
+
+## Market Regime Adaptation
+
+The current market regime is provided in the trading context. Adjust your strategy based on regime:
+
+### Bullish Regime
+- **Trend**: Price is in an uptrend (short MA > long MA)
+- **Strategy**: Favor long positions, use tighter stops on shorts
+- **Parameters**: Reduce stop_loss_pct to 0.05%, increase take_profit_pct to 0.3%
+
+### Bearish Regime
+- **Trend**: Price is in a downtrend (short MA < long MA)
+- **Strategy**: Favor short positions, use tighter stops on longs
+- **Parameters**: Reduce stop_loss_pct to 0.05%, increase take_profit_pct to 0.3%
+
+### Sideways Regime
+- **Trend**: Price is consolidating (no clear trend)
+- **Strategy**: Focus on mean-reversion plays at Bollinger Band extremes
+- **Parameters**: Use default stop_loss_pct (0.1%), reduce take_profit_pct to 0.15%
+
+### High Volatility
+- **Volatility Score > 0.7**: Reduce position sizes by 50%, widen stops to 0.15%
+- **Action**: Consider pausing scalping if volatility > 0.9
+
+### Low Volatility
+- **Volatility Score < 0.3**: Tighten spreads, smaller profit targets (0.1%)
+- **Action**: May indicate upcoming breakout - stay alert

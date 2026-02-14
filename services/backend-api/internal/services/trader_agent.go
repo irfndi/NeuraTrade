@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/irfndi/neuratrade/internal/models"
 )
 
 type TradingAction string
@@ -48,15 +50,16 @@ type TradingSignal struct {
 }
 
 type MarketContext struct {
-	Symbol       string          `json:"symbol"`
-	CurrentPrice float64         `json:"current_price"`
-	Volatility   float64         `json:"volatility"`
-	Trend        string          `json:"trend"`
-	Liquidity    float64         `json:"liquidity"`
-	FundingRate  float64         `json:"funding_rate"`
-	OpenInterest float64         `json:"open_interest"`
-	Volume24h    float64         `json:"volume_24h"`
-	Signals      []TradingSignal `json:"signals"`
+	Symbol       string               `json:"symbol"`
+	CurrentPrice float64              `json:"current_price"`
+	Volatility   float64              `json:"volatility"`
+	Trend        string               `json:"trend"`
+	Liquidity    float64              `json:"liquidity"`
+	FundingRate  float64              `json:"funding_rate"`
+	OpenInterest float64              `json:"open_interest"`
+	Volume24h    float64              `json:"volume_24h"`
+	Signals      []TradingSignal      `json:"signals"`
+	Regime       *models.MarketRegime `json:"regime,omitempty"`
 }
 
 type PortfolioState struct {
