@@ -391,7 +391,7 @@ func (e *OHLCVReplayEngine) fetchFromDatabase(ctx context.Context, config Replay
 		var timestamp time.Time
 
 		if err := rows.Scan(&timestamp, &open, &high, &low, &close, &volume); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to scan OHLCV row: %w", err)
 		}
 
 		c.Timestamp = timestamp
