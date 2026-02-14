@@ -609,4 +609,3 @@ func (r *RoundRobinDebateLoop) GetDebateHistory(symbol string, limit int) []*Rou
 
 	return results
 }
-
