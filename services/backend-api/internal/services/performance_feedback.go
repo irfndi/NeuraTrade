@@ -11,6 +11,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/observability"
+	"github.com/shopspring/decimal"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -41,8 +42,13 @@ func (s *PerformanceFeedbackService) RecordDecision(ctx context.Context, decisio
 	spanCtx, span := observability.StartSpan(ctx, observability.SpanOpDBQuery, "PerformanceFeedback.RecordDecision")
 	defer observability.FinishSpan(span, nil)
 
+	decisionID, genErr := generateID()
+	if genErr != nil {
+		return fmt.Errorf("failed to generate decision ID: %w", genErr)
+	}
+
 	record := models.DecisionJournal{
-		ID:               generateID(),
+		ID:               decisionID,
 		SessionID:        decision.SessionID,
 		Symbol:           decision.Symbol,
 		Exchange:         decision.Exchange,
@@ -99,8 +105,13 @@ func (s *PerformanceFeedbackService) RecordOutcome(ctx context.Context, outcome 
 	spanCtx, span := observability.StartSpan(ctx, observability.SpanOpDBQuery, "PerformanceFeedback.RecordOutcome")
 	defer observability.FinishSpan(span, nil)
 
+	outcomeID, genErr := generateID()
+	if genErr != nil {
+		return fmt.Errorf("failed to generate outcome ID: %w", genErr)
+	}
+
 	record := models.TradeOutcome{
-		ID:                  generateID(),
+		ID:                  outcomeID,
 		DecisionJournalID:   outcome.DecisionJournalID,
 		Symbol:              outcome.Symbol,
 		Exchange:            outcome.Exchange,
@@ -202,6 +213,11 @@ func (s *PerformanceFeedbackService) detectFailurePattern(ctx context.Context, o
 		description = fmt.Sprintf("Regime changed during trade: %s -> %s", outcome.RegimeAtEntry, outcome.RegimeAtExit)
 	}
 
+	patternID, genErr := generateID()
+	if genErr != nil {
+		return fmt.Errorf("failed to generate pattern ID: %w", genErr)
+	}
+
 	query := `
 		INSERT INTO failure_patterns (id, skill_id, pattern_type, description, occurrence_count, first_observed, last_observed, total_pnl_impact, enabled, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, 1, $5, $5, $6, true, $5, $5)
@@ -211,7 +227,7 @@ func (s *PerformanceFeedbackService) detectFailurePattern(ctx context.Context, o
 			total_pnl_impact = failure_patterns.total_pnl_impact + $6`
 
 	_, err := s.db.Pool.Exec(ctx, query,
-		generateID(),
+		patternID,
 		outcome.SkillID,
 		patternType,
 		description,
@@ -258,11 +274,11 @@ type DecisionRecord struct {
 	DecisionType     string
 	Action           string
 	Side             PositionSide
-	SizePercent      float64
-	EntryPrice       float64
-	StopLoss         float64
-	TakeProfit       float64
-	Confidence       float64
+	SizePercent      decimal.Decimal
+	EntryPrice       decimal.Decimal
+	StopLoss         decimal.Decimal
+	TakeProfit       decimal.Decimal
+	Confidence       decimal.Decimal
 	Reasoning        string
 	RegimeTrend      string
 	RegimeVolatility string
@@ -277,27 +293,27 @@ type OutcomeRecord struct {
 	Exchange            string
 	SkillID             string
 	Side                string
-	EntryPrice          float64
-	ExitPrice           float64
-	Size                float64
-	PnL                 float64
-	PnLPercent          float64
-	Fees                float64
+	EntryPrice          decimal.Decimal
+	ExitPrice           decimal.Decimal
+	Size                decimal.Decimal
+	PnL                 decimal.Decimal
+	PnLPercent          decimal.Decimal
+	Fees                decimal.Decimal
 	HoldDurationSeconds int
 	Outcome             string
 	ExitReason          string
 	RegimeAtEntry       string
 	RegimeAtExit        string
-	VolatilityAtEntry   float64
-	VolatilityAtExit    float64
+	VolatilityAtEntry   decimal.Decimal
+	VolatilityAtExit    decimal.Decimal
 }
 
-func generateID() string {
+func generateID() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("failed to generate ID: %v", err))
+		return "", fmt.Errorf("failed to generate ID: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 type PerformanceFeedbackRunner struct {
@@ -339,7 +355,7 @@ func (r *PerformanceFeedbackRunner) RunParameterTuning(ctx context.Context, skil
 
 func (r *PerformanceFeedbackRunner) tuneStopLoss(ctx context.Context, skillID, symbol string) error {
 	query := `
-		SELECT AVG(pnl_percent) as avg_pnl, COUNT(*) as count
+		SELECT COALESCE(AVG(pnl_percent), 0) as avg_pnl, COUNT(*) as count
 		FROM trade_outcomes
 		WHERE skill_id = $1 AND symbol = $2 AND outcome = 'loss' AND exit_reason = 'stop_loss'`
 
@@ -358,7 +374,7 @@ func (r *PerformanceFeedbackRunner) tuneStopLoss(ctx context.Context, skillID, s
 
 func (r *PerformanceFeedbackRunner) tuneTakeProfit(ctx context.Context, skillID, symbol string) error {
 	query := `
-		SELECT AVG(pnl_percent) as avg_pnl, COUNT(*) as count
+		SELECT COALESCE(AVG(pnl_percent), 0) as avg_pnl, COUNT(*) as count
 		FROM trade_outcomes
 		WHERE skill_id = $1 AND symbol = $2 AND outcome = 'win' AND exit_reason = 'take_profit'`
 
