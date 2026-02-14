@@ -1,5 +1,5 @@
 // Package llm provides a unified interface for LLM inference across multiple providers.
-// It supports OpenAI, Anthropic, and MLX local inference with structured output and tool calling.
+// It supports OpenAI, Anthropic, Google, Mistral, and MLX local inference with structured output and tool calling.
 package llm
 
 import (
@@ -18,6 +18,8 @@ type Provider string
 const (
 	ProviderOpenAI    Provider = "openai"
 	ProviderAnthropic Provider = "anthropic"
+	ProviderGoogle    Provider = "google"
+	ProviderMistral   Provider = "mistral"
 	ProviderMLX       Provider = "mlx"
 )
 
@@ -193,6 +195,10 @@ func (f *ClientFactory) Create(ctx context.Context, provider Provider) (Client, 
 		return NewAnthropicClient(config), nil
 	case ProviderMLX:
 		return NewMLXClient(config), nil
+	case ProviderGoogle:
+		return nil, ErrUnsupportedProvider{Provider: provider}
+	case ProviderMistral:
+		return nil, ErrUnsupportedProvider{Provider: provider}
 	default:
 		return nil, ErrUnsupportedProvider{Provider: provider}
 	}

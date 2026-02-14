@@ -84,9 +84,11 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 193 total | 36 open | 0 in progress | 15 blocked | 157 closed | 10 ready
+**Stats:** 193 total | 20 open | 0 in progress | 6 blocked | 173 closed | 14 ready
 
 ### Recently Completed (✓)
+- ✓ `neura-s9zx`: Stop-Loss Auto-Execution Loop
+- ✓ `neura-ve52`: Position Tracker (Real-Time Sync)
 - ✓ `neura-1wi`: FOK order execution
 - ✓ `neura-7et`: Build prompt builder from skill.md + context
 - ✓ `neura-8s4`: Execute Go functions for tool calls

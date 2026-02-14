@@ -248,8 +248,25 @@ func run() error {
 	// Initialize signal quality scorer
 	signalQualityScorer := services.NewSignalQualityScorer(cfg, db, getLogger("signal_quality_scorer"))
 
-	// Initialize notification service
 	notificationService := services.NewNotificationService(db, redisClient, cfg.Telegram.ServiceURL, cfg.Telegram.GrpcAddress, cfg.Telegram.AdminAPIKey)
+
+	positionTrackerConfig := services.DefaultPositionTrackerConfig()
+	var redisClientHandle *redis.Client
+	if redisClient != nil {
+		redisClientHandle = redisClient.Client
+	}
+	positionTracker := services.NewPositionTracker(positionTrackerConfig, ccxtService, redisClientHandle, logrusLogger)
+	positionTracker.Start()
+	defer positionTracker.Stop()
+
+	stopLossConfig := services.DefaultStopLossConfig()
+	stopLossService := services.NewStopLossService(stopLossConfig, ccxtService, logrusLogger, nil)
+
+	stopLossAutoExecConfig := services.DefaultStopLossAutoExecutionConfig()
+	stopLossAutoExecConfig.EnableNotifications = cfg.Telegram.BotToken != ""
+	stopLossAutoExec := services.NewStopLossAutoExecution(stopLossAutoExecConfig, stopLossService, notificationService, logrusLogger)
+	stopLossAutoExec.Start()
+	defer stopLossAutoExec.Stop()
 
 	// Initialize wallet validator
 	walletValidatorConfig := services.WalletValidatorConfig{
