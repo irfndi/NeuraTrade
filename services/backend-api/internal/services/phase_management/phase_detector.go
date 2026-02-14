@@ -133,11 +133,11 @@ func (pd *PhaseDetector) shouldTransitionLocked(currentPhase, newPhase Phase, po
 
 func (pd *PhaseDetector) AttemptTransition(portfolioValue decimal.Decimal, reason string) (PhaseTransitionEvent, bool) {
 	pd.mu.Lock()
-	defer pd.mu.Unlock()
 
 	newPhase := pd.DetectPhase(portfolioValue)
 
 	if !pd.shouldTransitionLocked(pd.currentPhase, newPhase, portfolioValue) {
+		pd.mu.Unlock()
 		return PhaseTransitionEvent{}, false
 	}
 
@@ -160,15 +160,21 @@ func (pd *PhaseDetector) AttemptTransition(portfolioValue decimal.Decimal, reaso
 		WithField("reason", reason).
 		Info("Phase transition occurred")
 
+	handlers := pd.getHandlersCopy()
 	pd.mu.Unlock()
-	pd.notifyHandlers(event)
-	pd.mu.Lock()
+	pd.notifyHandlers(event, handlers)
 
 	return event, true
 }
 
-func (pd *PhaseDetector) notifyHandlers(event PhaseTransitionEvent) {
-	for _, handler := range pd.transitionHandlers {
+func (pd *PhaseDetector) getHandlersCopy() []PhaseTransitionHandler {
+	handlers := make([]PhaseTransitionHandler, len(pd.transitionHandlers))
+	copy(handlers, pd.transitionHandlers)
+	return handlers
+}
+
+func (pd *PhaseDetector) notifyHandlers(event PhaseTransitionEvent, handlers []PhaseTransitionHandler) {
+	for _, handler := range handlers {
 		go func(h PhaseTransitionHandler) {
 			defer func() {
 				if r := recover(); r != nil {

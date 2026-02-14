@@ -1,6 +1,7 @@
 package phase_management
 
 import (
+	"sync"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -11,6 +12,7 @@ type StrategyAdapter struct {
 	riskParams      map[Phase]RiskParameters
 	sizingRules     map[Phase]PositionSizingRules
 	allocations     map[Phase]AllocationConfig
+	mu              sync.RWMutex
 }
 
 type StrategyAdapterConfig struct {
@@ -187,6 +189,8 @@ func NewStrategyAdapter(config StrategyAdapterConfig) *StrategyAdapter {
 }
 
 func (sa *StrategyAdapter) SelectStrategy(phase Phase) StrategyConfig {
+	sa.mu.RLock()
+	defer sa.mu.RUnlock()
 	if config, ok := sa.strategyConfigs[phase]; ok {
 		return config
 	}
@@ -194,6 +198,8 @@ func (sa *StrategyAdapter) SelectStrategy(phase Phase) StrategyConfig {
 }
 
 func (sa *StrategyAdapter) GetRiskParams(phase Phase) RiskParameters {
+	sa.mu.RLock()
+	defer sa.mu.RUnlock()
 	if params, ok := sa.riskParams[phase]; ok {
 		return params
 	}
@@ -201,6 +207,8 @@ func (sa *StrategyAdapter) GetRiskParams(phase Phase) RiskParameters {
 }
 
 func (sa *StrategyAdapter) GetPositionSizingRules(phase Phase) PositionSizingRules {
+	sa.mu.RLock()
+	defer sa.mu.RUnlock()
 	if rules, ok := sa.sizingRules[phase]; ok {
 		return rules
 	}
@@ -208,6 +216,8 @@ func (sa *StrategyAdapter) GetPositionSizingRules(phase Phase) PositionSizingRul
 }
 
 func (sa *StrategyAdapter) GetAllocationConfig(phase Phase) AllocationConfig {
+	sa.mu.RLock()
+	defer sa.mu.RUnlock()
 	if alloc, ok := sa.allocations[phase]; ok {
 		return alloc
 	}
@@ -215,14 +225,20 @@ func (sa *StrategyAdapter) GetAllocationConfig(phase Phase) AllocationConfig {
 }
 
 func (sa *StrategyAdapter) UpdateStrategyConfig(phase Phase, config StrategyConfig) {
+	sa.mu.Lock()
+	defer sa.mu.Unlock()
 	sa.strategyConfigs[phase] = config
 }
 
 func (sa *StrategyAdapter) UpdateRiskParams(phase Phase, params RiskParameters) {
+	sa.mu.Lock()
+	defer sa.mu.Unlock()
 	sa.riskParams[phase] = params
 }
 
 func (sa *StrategyAdapter) GetAllStrategies() map[Phase]StrategyConfig {
+	sa.mu.RLock()
+	defer sa.mu.RUnlock()
 	result := make(map[Phase]StrategyConfig, len(sa.strategyConfigs))
 	for k, v := range sa.strategyConfigs {
 		result[k] = v
