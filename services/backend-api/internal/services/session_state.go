@@ -346,12 +346,14 @@ func (r *DatabaseSessionRepository) Delete(ctx context.Context, id string) error
 }
 
 func (r *DatabaseSessionRepository) UpdateStatus(ctx context.Context, id string, status SessionStatus) error {
-	query := `UPDATE ai_sessions SET status = $1, updated_at = $2 WHERE id = $3`
-	_, err := r.db.Exec(ctx, query, string(status), time.Now(), id)
+	state, err := r.Load(ctx, id)
 	if err != nil {
-		return fmt.Errorf("failed to update session status: %w", err)
+		return fmt.Errorf("failed to load session for status update: %w", err)
 	}
-	return nil
+	state.Status = status
+	state.UpdatedAt = time.Now()
+	state.Checksum = ""
+	return r.Save(ctx, state)
 }
 
 func nullString(s string) *string {
