@@ -80,6 +80,7 @@ type OHLCVReplayEngine struct {
 	startTime    time.Time
 	mu           sync.RWMutex
 	cancel       context.CancelFunc
+	summary      *ReplaySummary
 }
 
 func NewOHLCVReplayEngine(db *database.PostgresDB, ccxtService ccxt.CCXTService) *OHLCVReplayEngine {
@@ -97,28 +98,77 @@ func (e *OHLCVReplayEngine) Configure(config ReplayConfig) {
 }
 
 func (e *OHLCVReplayEngine) Load(ctx context.Context) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	candles, err := e.fetchHistoricalCandles(ctx, e.config)
 	if err != nil {
+		e.mu.Lock()
 		e.status = ReplayStatusError
+		e.mu.Unlock()
 		return fmt.Errorf("failed to load historical candles: %w", err)
 	}
 
 	if len(candles) == 0 {
+		e.mu.Lock()
 		e.status = ReplayStatusError
+		e.mu.Unlock()
 		return fmt.Errorf("no candles found for %s %s from %s to %s",
 			e.config.Exchange, e.config.Symbol,
 			e.config.StartTime.Format(time.RFC3339),
 			e.config.EndTime.Format(time.RFC3339))
 	}
 
+	summary := e.calculateSummary(candles)
+
+	e.mu.Lock()
 	e.candles = candles
 	e.currentIndex = 0
 	e.status = ReplayStatusIdle
+	e.summary = summary
+	e.mu.Unlock()
 
 	return nil
+}
+
+func (e *OHLCVReplayEngine) calculateSummary(candles []ReplayCandle) *ReplaySummary {
+	summary := &ReplaySummary{
+		Symbol:       e.config.Symbol,
+		Exchange:     e.config.Exchange,
+		Timeframe:    e.config.Timeframe,
+		StartTime:    e.config.StartTime,
+		EndTime:      e.config.EndTime,
+		TotalCandles: len(candles),
+	}
+
+	if len(candles) == 0 {
+		return summary
+	}
+
+	summary.FirstPrice = candles[0].Open
+	summary.LastPrice = candles[len(candles)-1].Close
+	summary.PriceChange = summary.LastPrice.Sub(summary.FirstPrice)
+	if !summary.FirstPrice.IsZero() {
+		summary.PriceChangePct = summary.PriceChange.Div(summary.FirstPrice).Mul(decimal.NewFromInt(100))
+	}
+
+	totalVolume := decimal.Zero
+	highest := candles[0].High
+	lowest := candles[0].Low
+
+	for _, c := range candles {
+		totalVolume = totalVolume.Add(c.Volume)
+		if c.High.GreaterThan(highest) {
+			highest = c.High
+		}
+		if c.Low.LessThan(lowest) {
+			lowest = c.Low
+		}
+	}
+
+	summary.HighestPrice = highest
+	summary.LowestPrice = lowest
+	summary.TotalVolume = totalVolume
+	summary.AvgVolume = totalVolume.Div(decimal.NewFromInt(int64(len(candles))))
+
+	return summary
 }
 
 func (e *OHLCVReplayEngine) Play(ctx context.Context) error {
@@ -142,7 +192,9 @@ func (e *OHLCVReplayEngine) Play(ctx context.Context) error {
 
 	defer func() {
 		e.mu.Lock()
-		e.status = ReplayStatusComplete
+		if e.status != ReplayStatusError {
+			e.status = ReplayStatusComplete
+		}
 		e.mu.Unlock()
 		if e.config.OnComplete != nil {
 			e.config.OnComplete(e.GetSummary())
@@ -276,62 +328,33 @@ func (e *OHLCVReplayEngine) GetCurrentCandle() *ReplayCandle {
 	if e.currentIndex >= len(e.candles) {
 		return nil
 	}
-	candle := e.candles[e.currentIndex]
-	return &candle
+	return &e.candles[e.currentIndex]
 }
 
 func (e *OHLCVReplayEngine) GetSummary() *ReplaySummary {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	summary := &ReplaySummary{
-		Symbol:        e.config.Symbol,
-		Exchange:      e.config.Exchange,
-		Timeframe:     e.config.Timeframe,
-		StartTime:     e.config.StartTime,
-		EndTime:       e.config.EndTime,
-		TotalCandles:  len(e.candles),
-		CandlesPlayed: e.currentIndex,
-		Status:        e.status,
-	}
-
-	if len(e.candles) == 0 {
-		return summary
-	}
-
-	summary.FirstPrice = e.candles[0].Open
-	summary.LastPrice = e.candles[len(e.candles)-1].Close
-	summary.PriceChange = summary.LastPrice.Sub(summary.FirstPrice)
-	if !summary.FirstPrice.IsZero() {
-		summary.PriceChangePct = summary.PriceChange.Div(summary.FirstPrice).Mul(decimal.NewFromInt(100))
-	}
-
-	totalVolume := decimal.Zero
-	highest := e.candles[0].High
-	lowest := e.candles[0].Low
-
-	for _, c := range e.candles {
-		totalVolume = totalVolume.Add(c.Volume)
-		if c.High.GreaterThan(highest) {
-			highest = c.High
-		}
-		if c.Low.LessThan(lowest) {
-			lowest = c.Low
+	if e.summary == nil {
+		return &ReplaySummary{
+			Symbol:    e.config.Symbol,
+			Exchange:  e.config.Exchange,
+			Timeframe: e.config.Timeframe,
+			StartTime: e.config.StartTime,
+			EndTime:   e.config.EndTime,
+			Status:    e.status,
 		}
 	}
 
-	summary.HighestPrice = highest
-	summary.LowestPrice = lowest
-	summary.TotalVolume = totalVolume
-	if len(e.candles) > 0 {
-		summary.AvgVolume = totalVolume.Div(decimal.NewFromInt(int64(len(e.candles))))
-	}
+	summary := *e.summary
+	summary.CandlesPlayed = e.currentIndex
+	summary.Status = e.status
 
 	if !e.startTime.IsZero() {
 		summary.Duration = time.Since(e.startTime)
 	}
 
-	return summary
+	return &summary
 }
 
 func (e *OHLCVReplayEngine) SetSpeed(speed float64) {
@@ -416,7 +439,12 @@ func (e *OHLCVReplayEngine) fetchFromAPI(ctx context.Context, config ReplayConfi
 		return nil, fmt.Errorf("CCXT service not configured")
 	}
 
-	limit := int(config.EndTime.Sub(config.StartTime).Hours() / e.timeframeToHours(config.Timeframe))
+	hoursPerCandle, err := e.timeframeToHours(config.Timeframe)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timeframe: %w", err)
+	}
+
+	limit := int(config.EndTime.Sub(config.StartTime).Hours() / hoursPerCandle)
 	if limit > 1000 {
 		limit = 1000
 	}
@@ -457,7 +485,10 @@ func (e *OHLCVReplayEngine) calculateDelay() time.Duration {
 		return 0
 	}
 
-	interval := e.timeframeToDuration(e.config.Timeframe)
+	interval, err := e.timeframeToDuration(e.config.Timeframe)
+	if err != nil {
+		return 0
+	}
 	delay := time.Duration(float64(interval) / e.config.Speed)
 
 	if delay > 5*time.Second {
@@ -470,29 +501,33 @@ func (e *OHLCVReplayEngine) calculateDelay() time.Duration {
 	return delay
 }
 
-func (e *OHLCVReplayEngine) timeframeToDuration(timeframe string) time.Duration {
+func (e *OHLCVReplayEngine) timeframeToDuration(timeframe string) (time.Duration, error) {
 	switch timeframe {
 	case "1m":
-		return time.Minute
+		return time.Minute, nil
 	case "5m":
-		return 5 * time.Minute
+		return 5 * time.Minute, nil
 	case "15m":
-		return 15 * time.Minute
+		return 15 * time.Minute, nil
 	case "30m":
-		return 30 * time.Minute
+		return 30 * time.Minute, nil
 	case "1h":
-		return time.Hour
+		return time.Hour, nil
 	case "4h":
-		return 4 * time.Hour
+		return 4 * time.Hour, nil
 	case "1d":
-		return 24 * time.Hour
+		return 24 * time.Hour, nil
 	case "1w":
-		return 7 * 24 * time.Hour
+		return 7 * 24 * time.Hour, nil
 	default:
-		return time.Hour
+		return 0, fmt.Errorf("unknown timeframe: %s", timeframe)
 	}
 }
 
-func (e *OHLCVReplayEngine) timeframeToHours(timeframe string) float64 {
-	return float64(e.timeframeToDuration(timeframe).Hours())
+func (e *OHLCVReplayEngine) timeframeToHours(timeframe string) (float64, error) {
+	d, err := e.timeframeToDuration(timeframe)
+	if err != nil {
+		return 0, err
+	}
+	return d.Hours(), nil
 }
