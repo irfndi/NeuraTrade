@@ -10,6 +10,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/irfndi/neuratrade/internal/talib"
+	"github.com/irfndi/neuratrade/pkg/indicators"
 	"github.com/shopspring/decimal"
 
 	"github.com/irfndi/neuratrade/internal/config"
@@ -26,6 +27,7 @@ type TechnicalAnalysisService struct {
 	errorRecoveryManager *ErrorRecoveryManager
 	resourceManager      *ResourceManager
 	performanceMonitor   *PerformanceMonitor
+	indicatorProvider    indicators.IndicatorProvider
 }
 
 // IndicatorResult represents the result of a single technical indicator calculation.
@@ -106,6 +108,16 @@ func NewTechnicalAnalysisService(
 	resourceManager *ResourceManager,
 	performanceMonitor *PerformanceMonitor,
 ) *TechnicalAnalysisService {
+	providerType := indicators.ProviderType(cfg.Indicators.Provider)
+	if providerType == "" {
+		providerType = indicators.ProviderTypeTalib
+	}
+	provider, err := indicators.NewProvider(&indicators.ProviderConfig{Type: providerType})
+	if err != nil {
+		logger.Warnf("failed to create indicator provider, using default: %v", err)
+		provider = indicators.NewDefaultProvider()
+	}
+
 	return &TechnicalAnalysisService{
 		config:               cfg,
 		db:                   db,
@@ -113,6 +125,7 @@ func NewTechnicalAnalysisService(
 		errorRecoveryManager: errorRecoveryManager,
 		resourceManager:      resourceManager,
 		performanceMonitor:   performanceMonitor,
+		indicatorProvider:    provider,
 	}
 }
 
