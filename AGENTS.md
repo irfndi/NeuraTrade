@@ -84,9 +84,18 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 185 total | 30 open | 0 in progress | 10 blocked | 155 closed | 20 ready
+**Stats:** 185 total | 28 open | 2 in progress | 10 blocked | 155 closed | 19 ready
 
 ### Recently Completed (✓)
+- ✓ `neura-q82t`: Fix CI/CD failures on PR#102
+- ✓ `neura-aunx`: Add RiskHandler test coverage
+- ✓ `neura-thu1`: Add AutonomousHandler test coverage
+- ✓ `neura-0ty7`: Add DailyLossTracker test coverage
+- ✓ `neura-m1gv`: Add OTPService test coverage
+- ✓ `neura-nq9l`: Add APIKeyService test coverage
+- ✓ `neura-9ai`: Implement intrusion detection
+- ✓ `neura-kxq`: Implement kill switch monitoring
+- ✓ `neura-32w`: Fund with minimal capital ($100 USDC)
 - ✓ `neura-im9`: Implement quest progress updates
 - ✓ `neura-nh5`: Implement risk event notifications
 - ✓ `neura-fvk`: Implement fund milestone alerts
