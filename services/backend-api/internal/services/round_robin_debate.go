@@ -22,39 +22,46 @@ const (
 	DebatePhaseComplete    RoundRobinDebatePhase = "complete"
 )
 
-// RoundRobinDebateConfig extends DebateConfig with round-robin specific settings.
-type RoundRobinDebateConfig struct {
-	DebateConfig
+// RoundRobinDebateLoopConfig holds configuration for round-robin debate.
+type RoundRobinDebateLoopConfig struct {
+	// Base debate settings
+	MaxRounds          int
+	ConsensusThreshold float64
+	DebateTimeout      time.Duration
 
 	// Round-robin settings
-	RequireAllAgents       bool          // All agents must participate before consensus
-	AllowAgentRebuttal     bool          // Agents can respond to each other's analysis
-	MaxRebuttalRounds      int           // Maximum rebuttal rounds
-	MinConsensusConfidence float64       // Minimum confidence for consensus
-	DebateTimeout          time.Duration // Overall debate timeout
-	AgentResponseTimeout   time.Duration // Timeout for individual agent responses
+	RequireAllAgents       bool    // All agents must participate before consensus
+	AllowAgentRebuttal     bool    // Agents can respond to each other's points
+	MaxRebuttalRounds      int     // Maximum rebuttal rounds per phase
+	MinConsensusConfidence float64 // Minimum confidence for consensus (0-1)
 
-	// Consensus settings
-	ConsensusStrategy string  // "unanimous", "majority", "weighted"
-	AnalystWeight     float64 // Weight for analyst votes
-	RiskManagerWeight float64 // Weight for risk manager votes
-	TraderWeight      float64 // Weight for trader votes
+	// Agent timeout
+	AgentResponseTimeout time.Duration
 
-	// Advanced features
-	EnableConfidenceVoting bool // Agents vote with confidence scores
-	EnableJustification    bool // Require agents to justify decisions
-	EnableChallengeMode    bool // Agents can challenge each other's conclusions
+	// Strategy settings
+	ConsensusStrategy      string
+	AnalystWeight          float64
+	RiskManagerWeight      float64
+	TraderWeight           float64
+	EnableConfidenceVoting bool
+	EnableJustification    bool
+	EnableChallengeMode    bool
+
+	// Agent configs
+	AnalystConfig AnalystAgentConfig
+	RiskConfig    risk.RiskManagerConfig
+	TraderConfig  TraderAgentConfig
 }
 
-// DefaultRoundRobinDebateConfig returns default round-robin debate configuration.
-func DefaultRoundRobinDebateConfig() RoundRobinDebateConfig {
-	return RoundRobinDebateConfig{
-		DebateConfig:           DefaultDebateConfig(),
+func DefaultRoundRobinDebateLoopConfig() RoundRobinDebateLoopConfig {
+	return RoundRobinDebateLoopConfig{
+		MaxRounds:              3,
+		ConsensusThreshold:     0.7,
+		DebateTimeout:          5 * time.Minute,
 		RequireAllAgents:       true,
 		AllowAgentRebuttal:     true,
 		MaxRebuttalRounds:      2,
 		MinConsensusConfidence: 0.65,
-		DebateTimeout:          5 * time.Minute,
 		AgentResponseTimeout:   30 * time.Second,
 		ConsensusStrategy:      "weighted",
 		AnalystWeight:          0.35,
@@ -63,6 +70,9 @@ func DefaultRoundRobinDebateConfig() RoundRobinDebateConfig {
 		EnableConfidenceVoting: true,
 		EnableJustification:    true,
 		EnableChallengeMode:    true,
+		AnalystConfig:          DefaultAnalystAgentConfig(),
+		RiskConfig:             risk.DefaultRiskManagerConfig(),
+		TraderConfig:           DefaultTraderAgentConfig(),
 	}
 }
 
@@ -85,8 +95,8 @@ type AgentVote struct {
 	Round         int       `json:"round"`
 }
 
-// RoundRobinDebateRound represents a single round in the round-robin debate.
-type RoundRobinDebateRound struct {
+// RoundRobinDebateLoopRound represents a single round in the round-robin debate.
+type RoundRobinDebateLoopRound struct {
 	RoundNumber int                   `json:"round_number"`
 	Phase       RoundRobinDebatePhase `json:"phase"`
 	StartedAt   time.Time             `json:"started_at"`
@@ -116,57 +126,57 @@ type AgentRebuttal struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// RoundRobinDebateResult represents the complete result of a round-robin debate.
-type RoundRobinDebateResult struct {
-	ID             string                   `json:"id"`
-	Symbol         string                   `json:"symbol"`
-	MarketContext  MarketContext            `json:"market_context"`
-	PortfolioState PortfolioState           `json:"portfolio_state"`
-	Rounds         []*RoundRobinDebateRound `json:"rounds"`
-	FinalRound     *RoundRobinDebateRound   `json:"final_round"`
-	TotalRounds    int                      `json:"total_rounds"`
-	DurationMs     int64                    `json:"duration_ms"`
-	StartedAt      time.Time                `json:"started_at"`
-	CompletedAt    time.Time                `json:"completed_at"`
-	Success        bool                     `json:"success"`
-	Error          string                   `json:"error,omitempty"`
+// RoundRobinDebateLoopResult represents the complete result of a round-robin debate.
+type RoundRobinDebateLoopResult struct {
+	ID             string                       `json:"id"`
+	Symbol         string                       `json:"symbol"`
+	MarketContext  MarketContext                `json:"market_context"`
+	PortfolioState PortfolioState               `json:"portfolio_state"`
+	Rounds         []*RoundRobinDebateLoopRound `json:"rounds"`
+	FinalRound     *RoundRobinDebateLoopRound   `json:"final_round"`
+	TotalRounds    int                          `json:"total_rounds"`
+	DurationMs     int64                        `json:"duration_ms"`
+	StartedAt      time.Time                    `json:"started_at"`
+	CompletedAt    time.Time                    `json:"completed_at"`
+	Success        bool                         `json:"success"`
+	Error          string                       `json:"error,omitempty"`
 }
 
 // RoundRobinDebateLoop implements a sophisticated round-robin debate system.
 type RoundRobinDebateLoop struct {
-	config       RoundRobinDebateConfig
+	config       RoundRobinDebateLoopConfig
 	analystAgent *AnalystAgent
 	riskAgent    *risk.RiskManagerAgent
 	traderAgent  *TraderAgent
 	logger       *zaplogrus.Logger
 
 	// Debate history
-	history   map[string]*RoundRobinDebateResult
+	history   map[string]*RoundRobinDebateLoopResult
 	historyMu sync.RWMutex
 }
 
-// NewRoundRobinDebateLoop creates a new round-robin debate loop.
-func NewRoundRobinDebateLoop(config RoundRobinDebateConfig, logger *zaplogrus.Logger) *RoundRobinDebateLoop {
+// NewRoundRobinDebateLoopService creates a new round-robin debate loop.
+func NewRoundRobinDebateLoopService(config RoundRobinDebateLoopConfig, logger *zaplogrus.Logger) *RoundRobinDebateLoop {
 	return &RoundRobinDebateLoop{
 		config:       config,
 		analystAgent: NewAnalystAgent(config.AnalystConfig),
 		riskAgent:    risk.NewRiskManagerAgent(config.RiskConfig),
 		traderAgent:  NewTraderAgent(config.TraderConfig),
 		logger:       logger,
-		history:      make(map[string]*RoundRobinDebateResult),
+		history:      make(map[string]*RoundRobinDebateLoopResult),
 	}
 }
 
 // RunDebate executes a complete round-robin debate.
-func (r *RoundRobinDebateLoop) RunDebate(ctx context.Context, market MarketContext, portfolio PortfolioState) (*RoundRobinDebateResult, error) {
+func (r *RoundRobinDebateLoop) RunDebate(ctx context.Context, market MarketContext, portfolio PortfolioState) (*RoundRobinDebateLoopResult, error) {
 	startTime := time.Now().UTC()
 
-	result := &RoundRobinDebateResult{
+	result := &RoundRobinDebateLoopResult{
 		ID:             uuid.New().String(),
 		Symbol:         market.Symbol,
 		MarketContext:  market,
 		PortfolioState: portfolio,
-		Rounds:         make([]*RoundRobinDebateRound, 0),
+		Rounds:         make([]*RoundRobinDebateLoopRound, 0),
 		StartedAt:      startTime,
 		Success:        false,
 	}
@@ -244,10 +254,10 @@ func (r *RoundRobinDebateLoop) executeDebateRound(
 	market MarketContext,
 	portfolio PortfolioState,
 	roundNum int,
-	previousRounds []*RoundRobinDebateRound,
-) (*RoundRobinDebateRound, error) {
+	previousRounds []*RoundRobinDebateLoopRound,
+) (*RoundRobinDebateLoopRound, error) {
 
-	round := &RoundRobinDebateRound{
+	round := &RoundRobinDebateLoopRound{
 		RoundNumber: roundNum,
 		Phase:       DebatePhaseAnalyst,
 		StartedAt:   time.Now().UTC(),
@@ -307,7 +317,7 @@ func (r *RoundRobinDebateLoop) executeDebateRound(
 }
 
 // runAnalystPhase executes the analyst agent phase.
-func (r *RoundRobinDebateLoop) runAnalystPhase(ctx context.Context, market MarketContext, previousRounds []*RoundRobinDebateRound) (*AgentVote, error) {
+func (r *RoundRobinDebateLoop) runAnalystPhase(ctx context.Context, market MarketContext, previousRounds []*RoundRobinDebateLoopRound) (*AgentVote, error) {
 	// Build signals based on market context
 	signals := r.buildAnalystSignals(market)
 
@@ -352,7 +362,7 @@ func (r *RoundRobinDebateLoop) runRiskManagerPhase(
 	ctx context.Context,
 	market MarketContext,
 	analystVote *AgentVote,
-	previousRounds []*RoundRobinDebateRound,
+	previousRounds []*RoundRobinDebateLoopRound,
 ) (*AgentVote, error) {
 
 	signals := r.buildRiskSignals(analystVote, market)
@@ -393,7 +403,7 @@ func (r *RoundRobinDebateLoop) runTraderPhase(
 	portfolio PortfolioState,
 	analystVote *AgentVote,
 	riskVote *AgentVote,
-	previousRounds []*RoundRobinDebateRound,
+	previousRounds []*RoundRobinDebateLoopRound,
 ) (*AgentVote, error) {
 
 	// Don't trade if risk manager rejected
@@ -572,11 +582,11 @@ func (r *RoundRobinDebateLoop) buildRiskSignals(analystVote *AgentVote, market M
 }
 
 // GetDebateHistory returns debate history for a specific symbol.
-func (r *RoundRobinDebateLoop) GetDebateHistory(symbol string, limit int) []*RoundRobinDebateResult {
+func (r *RoundRobinDebateLoop) GetDebateHistory(symbol string, limit int) []*RoundRobinDebateLoopResult {
 	r.historyMu.RLock()
 	defer r.historyMu.RUnlock()
 
-	results := make([]*RoundRobinDebateResult, 0)
+	results := make([]*RoundRobinDebateLoopResult, 0)
 	for _, result := range r.history {
 		if result.Symbol == symbol {
 			results = append(results, result)
