@@ -113,10 +113,6 @@ func (pm *QuestProgressManager) InitializeQuestProgress(questID string, targetCo
 
 // UpdateQuestProgress updates quest progress and triggers milestone notifications
 func (pm *QuestProgressManager) UpdateQuestProgress(ctx context.Context, questID string, currentCount int, checkpoint map[string]interface{}) (*QuestProgressUpdate, error) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
-	// Get quest from engine
 	quest, err := pm.engine.GetQuest(questID)
 	if err != nil {
 		return nil, fmt.Errorf("quest not found: %w", err)
@@ -125,7 +121,6 @@ func (pm *QuestProgressManager) UpdateQuestProgress(ctx context.Context, questID
 	previousCount := quest.CurrentCount
 	targetCount := quest.TargetCount
 
-	// Calculate percent complete
 	percentComplete := 0
 	if targetCount > 0 {
 		percentComplete = (currentCount * 100) / targetCount
@@ -134,16 +129,22 @@ func (pm *QuestProgressManager) UpdateQuestProgress(ctx context.Context, questID
 		}
 	}
 
-	// Check if we should send an update (throttling)
 	shouldUpdate := pm.shouldSendUpdate(questID)
 
-	// Check for reached milestones
+	pm.mu.RLock()
+	milestones := pm.milestones[questID]
+	milestonesCopy := make([]QuestMilestone, len(milestones))
+	copy(milestonesCopy, milestones)
+	enableMilestones := pm.config.EnableMilestones
+	notifyOnMilestone := pm.config.NotifyOnMilestone
+	notifyOnCompletion := pm.config.NotifyOnCompletion
+	pm.mu.RUnlock()
+
 	var reachedMilestone *QuestMilestone
-	if pm.config.EnableMilestones {
-		reachedMilestone = pm.checkMilestones(questID, previousCount, currentCount, targetCount)
+	if enableMilestones {
+		reachedMilestone = pm.checkMilestones(questID, previousCount, currentCount, targetCount, milestonesCopy)
 	}
 
-	// Create progress update
 	update := &QuestProgressUpdate{
 		QuestID:          questID,
 		QuestName:        quest.Name,
@@ -152,32 +153,30 @@ func (pm *QuestProgressManager) UpdateQuestProgress(ctx context.Context, questID
 		TargetCount:      targetCount,
 		PercentComplete:  percentComplete,
 		Status:           string(quest.Status),
-		Milestones:       pm.milestones[questID],
+		Milestones:       milestonesCopy,
 		ReachedMilestone: reachedMilestone,
 		Checkpoint:       checkpoint,
 		Timestamp:        time.Now(),
 	}
 
-	// Calculate ETA if we have progress
 	if currentCount > previousCount && currentCount < targetCount {
 		eta := pm.calculateETA(previousCount, currentCount, targetCount)
 		update.ETA = eta
 	}
 
-	// Send notification if milestone reached or throttling allows
-	if reachedMilestone != nil && pm.config.NotifyOnMilestone {
+	if reachedMilestone != nil && notifyOnMilestone {
 		pm.sendMilestoneNotification(update)
 	} else if shouldUpdate {
 		pm.sendProgressUpdate(update)
 	}
 
-	// Send completion notification
-	if currentCount >= targetCount && pm.config.NotifyOnCompletion {
+	if previousCount < targetCount && currentCount >= targetCount && notifyOnCompletion {
 		pm.sendCompletionNotification(update)
 	}
 
-	// Update last update time
+	pm.mu.Lock()
 	pm.lastUpdate[questID] = time.Now()
+	pm.mu.Unlock()
 
 	return update, nil
 }
@@ -192,9 +191,8 @@ func (pm *QuestProgressManager) shouldSendUpdate(questID string) bool {
 }
 
 // checkMilestones checks if any milestones were reached
-func (pm *QuestProgressManager) checkMilestones(questID string, previousCount, currentCount, targetCount int) *QuestMilestone {
-	milestones, exists := pm.milestones[questID]
-	if !exists || targetCount == 0 {
+func (pm *QuestProgressManager) checkMilestones(questID string, previousCount, currentCount, targetCount int, milestones []QuestMilestone) *QuestMilestone {
+	if len(milestones) == 0 || targetCount == 0 {
 		return nil
 	}
 
@@ -203,7 +201,6 @@ func (pm *QuestProgressManager) checkMilestones(questID string, previousCount, c
 
 	for i := range milestones {
 		milestone := &milestones[i]
-		// Check if we crossed this milestone
 		if previousPercent < milestone.Percent && currentPercent >= milestone.Percent {
 			now := time.Now()
 			milestone.ReachedAt = &now
@@ -392,6 +389,9 @@ func (pm *QuestProgressManager) GetQuestProgressSummary(questID string) (*QuestP
 	milestones := pm.milestones[questID]
 	pm.mu.RUnlock()
 
+	milestonesCopy := make([]QuestMilestone, len(milestones))
+	copy(milestonesCopy, milestones)
+
 	summary := &QuestProgressUpdate{
 		QuestID:         questID,
 		QuestName:       quest.Name,
@@ -399,7 +399,7 @@ func (pm *QuestProgressManager) GetQuestProgressSummary(questID string) (*QuestP
 		TargetCount:     quest.TargetCount,
 		PercentComplete: percentComplete,
 		Status:          string(quest.Status),
-		Milestones:      milestones,
+		Milestones:      milestonesCopy,
 		Timestamp:       time.Now(),
 	}
 

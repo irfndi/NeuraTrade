@@ -88,7 +88,7 @@ func (a *GoFluxAdapter) Stochastic(high, low, close []decimal.Decimal, kPeriod, 
 	fastD := indicators.NewSimpleMovingAverage(fastK, dPeriod)
 
 	k = a.extractValues(ts.Candles, fastK, kPeriod-1)
-Values(ts.Cand	d = a.extractles, fastD, kPeriod+dPeriod-2)
+	d = a.extractValues(ts.Candles, fastD, kPeriod+dPeriod-2)
 
 	// Ensure equal lengths
 	minLen := len(k)
@@ -135,14 +135,14 @@ func (a *GoFluxAdapter) BollingerBands(prices []decimal.Decimal, period int, std
 	ts := a.createTimeSeries(prices)
 	closePrice := indicators.NewClosePriceIndicator(ts)
 
-	upper = indicators.NewBollingerUpperBandIndicator(closePrice, period, stdDev)
-	middle = indicators.NewSimpleMovingAverage(closePrice, period)
-	lower = indicators.NewBollingerLowerBandIndicator(closePrice, period, stdDev)
+	upperInd := indicators.NewBollingerUpperBandIndicator(closePrice, period, stdDev)
+	middleInd := indicators.NewSimpleMovingAverage(closePrice, period)
+	lowerInd := indicators.NewBollingerLowerBandIndicator(closePrice, period, stdDev)
 
 	offset := period - 1
-	return a.extractValues(ts.Candles, upper, offset),
-		a.extractValues(ts.Candles, middle, offset),
-		a.extractValues(ts.Candles, lower, offset)
+	return a.extractValues(ts.Candles, upperInd, offset),
+		a.extractValues(ts.Candles, middleInd, offset),
+		a.extractValues(ts.Candles, lowerInd, offset)
 }
 
 // ATR calculates Average True Range using GoFlux.
@@ -273,10 +273,15 @@ func (a *GoFluxAdapter) extractValues(candles []*series.Candle, indicator indica
 
 // toGoDecimal converts shopspring decimal to goflux decimal.
 func toGoDecimal(d decimal.Decimal) godecimal.Decimal {
-	return godecimal.NewFromFloatWrapper(d)
+	result := godecimal.NewFromString(d.String())
+	return result
 }
 
-// fromGoDecimal converts goflux decimal to shopspring decimal.
+// fromGoDecimal converts goflux decimal to shopspring decimal using string-based conversion for precision.
 func fromGoDecimal(d godecimal.Decimal) decimal.Decimal {
-	return decimal.NewFromFloat(d.Float())
+	result, err := decimal.NewFromString(d.String())
+	if err != nil {
+		return decimal.Zero
+	}
+	return result
 }

@@ -2,6 +2,7 @@ package phase_management
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ type PhaseManager struct {
 	mu              sync.RWMutex
 	logger          *zaplogrus.Logger
 	stopCh          chan struct{}
+	stopOnce        sync.Once
 	wg              sync.WaitGroup
 }
 
@@ -69,7 +71,7 @@ func (pm *PhaseManager) Start(ctx context.Context) error {
 
 func (pm *PhaseManager) Stop() {
 	pm.logger.Info("Stopping phase manager")
-	close(pm.stopCh)
+	pm.stopOnce.Do(func() { close(pm.stopCh) })
 	pm.wg.Wait()
 }
 
@@ -192,7 +194,7 @@ func (pm *PhaseManager) ForcePhase(phase Phase, reason string) error {
 	defer pm.mu.Unlock()
 
 	if err := pm.detector.SetPhase(phase, reason); err != nil {
-		return err
+		return fmt.Errorf("failed to set phase %v: %w", phase, err)
 	}
 
 	pm.currentStrategy = pm.adapter.SelectStrategy(phase)

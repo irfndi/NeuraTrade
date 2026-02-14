@@ -133,17 +133,12 @@ func (m *MaxDrawdownMetrics) GetMetrics() MaxDrawdownMetrics {
 }
 
 type MaxDrawdownHalt struct {
-	config             MaxDrawdownConfig
-	db                 DBPool
-	states             map[string]*DrawdownState
-	metrics            MaxDrawdownMetrics
-	mu                 sync.RWMutex
-	notificationSvc    *NotificationService
-	fundMilestoneCheck FundMilestoneChecker
-}
-
-type FundMilestoneChecker interface {
-	CheckAndNotifyMilestone(ctx context.Context, chatID int64, currentValue decimal.Decimal) error
+	config          MaxDrawdownConfig
+	db              DBPool
+	states          map[string]*DrawdownState
+	metrics         MaxDrawdownMetrics
+	mu              sync.RWMutex
+	notificationSvc *NotificationService
 }
 
 // Risk event types
@@ -238,8 +233,8 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.CriticalThreshold) {
 		state.Status = DrawdownStatusCritical
-		h.metrics.IncrementCritical()
 		if previousStatus != DrawdownStatusCritical {
+			h.metrics.IncrementCritical()
 			h.notifyRiskEvent(state, RiskEventCritical, SeverityHigh)
 		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.WarningThreshold) {
@@ -267,23 +262,15 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 	}
 }
 
+// notifyRiskEvent sends a risk event notification.
+// PRECONDITION: Caller must hold h.mu (write lock) before calling this method.
 func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, severity string) {
-	h.mu.RLock()
-	svc := h.notificationSvc
-	h.mu.RUnlock()
-
-	if svc == nil {
+	if h.notificationSvc == nil {
 		return
 	}
 
 	chatIDInt, err := strconv.ParseInt(state.ChatID, 10, 64)
 	if err != nil {
-		// Log the error - use notification service logger if available
-		if svc != nil && svc.logger != nil {
-			svc.logger.Error("Failed to parse chat ID for risk notification",
-				"chat_id_str", state.ChatID,
-				"error", err)
-		}
 		return
 	}
 
@@ -303,9 +290,9 @@ func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, sever
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := svc.NotifyRiskEvent(ctx, chatIDInt, event); err != nil {
-			if svc.logger != nil {
-				svc.logger.Error("Failed to send risk event notification",
+		if err := h.notificationSvc.NotifyRiskEvent(ctx, chatIDInt, event); err != nil {
+			if h.notificationSvc.logger != nil {
+				h.notificationSvc.logger.Error("Failed to send risk event notification",
 					"chat_id", chatIDInt,
 					"event_type", eventType,
 					"error", err)
