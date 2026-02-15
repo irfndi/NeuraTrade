@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,11 +19,11 @@ func TestDecisionJournal_JSONSerialization(t *testing.T) {
 		DecisionType:     "entry",
 		Action:           "open_long",
 		Side:             "long",
-		SizePercent:      10.0,
-		EntryPrice:       50000.0,
-		StopLoss:         49500.0,
-		TakeProfit:       51000.0,
-		Confidence:       0.85,
+		SizePercent:      decimal.NewFromFloat(10.0),
+		EntryPrice:       decimal.NewFromFloat(50000.0),
+		StopLoss:         decimal.NewFromFloat(49500.0),
+		TakeProfit:       decimal.NewFromFloat(51000.0),
+		Confidence:       decimal.NewFromFloat(0.85),
 		Reasoning:        "Bullish regime detected",
 		RegimeTrend:      "bullish",
 		RegimeVolatility: "normal",
@@ -41,12 +42,12 @@ func TestTradeOutcome_Fields(t *testing.T) {
 		ID:                  "outcome-123",
 		Symbol:              "ETH/USDT",
 		Side:                "long",
-		EntryPrice:          3000.0,
-		ExitPrice:           3105.0,
-		Size:                1000.0,
-		PnL:                 104998.0,
-		PnLPercent:          3.5,
-		Fees:                2.0,
+		EntryPrice:          decimal.NewFromFloat(3000.0),
+		ExitPrice:           decimal.NewFromFloat(3105.0),
+		Size:                decimal.NewFromFloat(1000.0),
+		PnL:                 decimal.NewFromFloat(104998.0),
+		PnLPercent:          decimal.NewFromFloat(3.5),
+		Fees:                decimal.NewFromFloat(2.0),
 		HoldDurationSeconds: 120,
 		Outcome:             "win",
 		ExitReason:          "take_profit",
@@ -54,8 +55,8 @@ func TestTradeOutcome_Fields(t *testing.T) {
 
 	assert.Equal(t, "win", outcome.Outcome)
 	assert.Equal(t, "take_profit", outcome.ExitReason)
-	assert.Equal(t, 104998.0, outcome.PnL)
-	assert.Greater(t, outcome.PnLPercent, 3.0)
+	assert.Equal(t, decimal.NewFromFloat(104998.0), outcome.PnL)
+	assert.True(t, outcome.PnLPercent.GreaterThan(decimal.NewFromFloat(3.0)))
 }
 
 func TestFailurePattern_EnableDisable(t *testing.T) {
@@ -79,15 +80,15 @@ func TestStrategyParameter_ActiveState(t *testing.T) {
 		SkillID:        "scalping",
 		Symbol:         "BTC/USDT",
 		ParameterName:  "stop_loss_pct",
-		ParameterValue: 0.001,
-		MinValue:       0.0005,
-		MaxValue:       0.002,
+		ParameterValue: decimal.NewFromFloat(0.001),
+		MinValue:       decimal.NewFromFloat(0.0005),
+		MaxValue:       decimal.NewFromFloat(0.002),
 		IsActive:       true,
-		Confidence:     0.8,
+		Confidence:     decimal.NewFromFloat(0.8),
 		SampleSize:     50,
 	}
 
 	assert.True(t, param.IsActive)
-	assert.Greater(t, param.Confidence, 0.5)
+	assert.True(t, param.Confidence.GreaterThan(decimal.NewFromFloat(0.5)))
 	assert.Greater(t, param.SampleSize, 10)
 }
