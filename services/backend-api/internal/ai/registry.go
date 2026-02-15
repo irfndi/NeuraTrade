@@ -85,9 +85,11 @@ type ProviderInfo struct {
 
 // ModelRegistry represents the full models.dev registry
 type ModelRegistry struct {
-	Providers []ProviderInfo `json:"providers"`
-	Models    []ModelInfo    `json:"models"`
-	FetchedAt time.Time      `json:"fetched_at"`
+	Providers []ProviderInfo `json:"-"`
+	Models    []ModelInfo    `json:"-"`
+	FetchedAt time.Time      `json:"-"`
+	// Raw data for compatibility
+	RawProviders map[string]ProviderInfo `json:"-"`
 }
 
 // Registry provides AI provider and model registry functionality
@@ -105,11 +107,20 @@ type Registry struct {
 // RegistryOption configures the Registry
 type RegistryOption func(*Registry)
 
-// WithHTTPClient sets a custom HTTP client
-func WithHTTPClient(client *http.Client) RegistryOption {
-	return func(r *Registry) {
-		r.client = client
+// NewRegistry creates a new AI model registry
+func NewRegistry(opts ...RegistryOption) *Registry {
+	r := &Registry{
+		client:       &http.Client{},
+		modelsDevURL: ModelsDevAPIURL,
+		cacheTTL:     CacheTTL,
+		logger:       zap.NewNop(),
 	}
+
+	for _, opt := range opts {
+		opt(r)
+	}
+
+	return r
 }
 
 // WithRedis sets the Redis client for caching
@@ -119,43 +130,31 @@ func WithRedis(client *redis.Client) RegistryOption {
 	}
 }
 
-// WithLogger sets the logger
+// WithLogger sets the logger for the registry
 func WithLogger(logger *zap.Logger) RegistryOption {
 	return func(r *Registry) {
 		r.logger = logger
 	}
 }
 
-// WithCacheTTL sets the cache TTL
+// WithCacheTTL sets the cache TTL for the registry
 func WithCacheTTL(ttl time.Duration) RegistryOption {
 	return func(r *Registry) {
 		r.cacheTTL = ttl
 	}
 }
 
-// NewRegistry creates a new AI provider registry
-func NewRegistry(opts ...RegistryOption) *Registry {
-	r := &Registry{
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		modelsDevURL: ModelsDevAPIURL,
-		cacheTTL:     CacheTTL,
+// WithModelsDevURL sets the models.dev API URL
+func WithModelsDevURL(url string) RegistryOption {
+	return func(r *Registry) {
+		r.modelsDevURL = url
 	}
-
-	for _, opt := range opts {
-		opt(r)
-	}
-
-	if r.logger == nil {
-		r.logger = zap.NewNop()
-	}
-
-	return r
 }
 
 // FetchModels fetches the model registry from models.dev API
 func (r *Registry) FetchModels(ctx context.Context) (*ModelRegistry, error) {
+	r.logger.Info("Fetching models from models.dev API", zap.String("url", r.modelsDevURL))
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.modelsDevURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -176,53 +175,186 @@ func (r *Registry) FetchModels(ctx context.Context) (*ModelRegistry, error) {
 		return nil, fmt.Errorf("models.dev API returned status %d", resp.StatusCode)
 	}
 
-	var registry ModelRegistry
-	if err := json.NewDecoder(resp.Body).Decode(&registry); err != nil {
+	// The new models.dev API format uses provider IDs as keys
+	// e.g., { "openai": { "models": {...}}, "anthropic": {...} }
+	var rawData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&rawData); err != nil {
 		return nil, fmt.Errorf("failed to decode models.dev response: %w", err)
+	}
+
+	registry := &ModelRegistry{
+		RawProviders: make(map[string]ProviderInfo),
+		Providers:    []ProviderInfo{},
+		Models:       []ModelInfo{},
+	}
+
+	// Parse each provider
+	r.logger.Info("Starting to parse providers", zap.Int("provider_count", len(rawData)))
+	for providerID, providerData := range rawData {
+		r.logger.Debug("Processing provider", zap.String("provider", providerID))
+		pd, ok := providerData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Extract provider info
+		provider := ProviderInfo{
+			ID: providerID,
+		}
+
+		if name, ok := pd["name"].(string); ok {
+			provider.Name = name
+		}
+		if npm, ok := pd["npm"].(string); ok {
+			provider.NPM = npm
+		}
+		if envVars, ok := pd["env"].([]interface{}); ok {
+			provider.EnvVars = make([]string, len(envVars))
+			for i, v := range envVars {
+				if s, ok := v.(string); ok {
+					provider.EnvVars[i] = s
+				}
+			}
+		}
+
+		// Extract models
+		if modelsData, ok := pd["models"].(map[string]interface{}); ok {
+			for modelID, modelData := range modelsData {
+				md, ok := modelData.(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				model := ModelInfo{
+					ProviderID:    providerID,
+					ProviderLabel: provider.Name,
+					ModelID:       modelID,
+				}
+
+				// Parse model fields
+				if name, ok := md["name"].(string); ok {
+					model.DisplayName = name
+				}
+				if family, ok := md["family"].(string); ok {
+					model.Family = family
+				}
+				if releaseDate, ok := md["release_date"].(string); ok {
+					model.ReleaseDate = releaseDate
+				}
+				if lastUpdated, ok := md["last_updated"].(string); ok {
+					model.LastUpdated = lastUpdated
+				}
+
+				// Capabilities
+				if toolCall, ok := md["tool_call"].(bool); ok {
+					model.Capabilities.SupportsTools = toolCall
+				}
+				if reasoning, ok := md["reasoning"].(bool); ok {
+					model.Capabilities.SupportsReasoning = reasoning
+				}
+
+				// Status - default to active if not specified
+				model.Status = "active"
+				if status, ok := md["status"].(string); ok {
+					model.Status = status
+				}
+
+				// Cost parsing
+				if costData, ok := md["cost"].(map[string]interface{}); ok {
+					if input, ok := costData["input"].(float64); ok {
+						model.Cost.InputCost = decimal.NewFromFloat(input)
+					}
+					if output, ok := costData["output"].(float64); ok {
+						model.Cost.OutputCost = decimal.NewFromFloat(output)
+					}
+					if reasoning, ok := costData["reasoning"].(float64); ok {
+						model.Cost.ReasoningCost = decimal.NewFromFloat(reasoning)
+					}
+					if cacheRead, ok := costData["cache_read"].(float64); ok {
+						model.Cost.CacheReadCost = decimal.NewFromFloat(cacheRead)
+					}
+				}
+
+				// Limits
+				if limitData, ok := md["limit"].(map[string]interface{}); ok {
+					if context, ok := limitData["context"].(float64); ok {
+						model.Limits.ContextLimit = int(context)
+					}
+					if input, ok := limitData["input"].(float64); ok {
+						model.Limits.InputLimit = int(input)
+					}
+					if output, ok := limitData["output"].(float64); ok {
+						model.Limits.OutputLimit = int(output)
+					}
+				}
+
+				// Latency class (infer from provider)
+				model.LatencyClass = inferLatencyClass(providerID)
+
+				registry.Models = append(registry.Models, model)
+			}
+		}
+
+		registry.Providers = append(registry.Providers, provider)
+		registry.RawProviders[providerID] = provider
 	}
 
 	registry.FetchedAt = time.Now().UTC()
 
+	r.logger.Info("Fetched models", zap.Int("providers", len(registry.Providers)), zap.Int("models", len(registry.Models)))
+
 	// Update local cache
 	r.mu.Lock()
-	r.localCache = &registry
+	r.localCache = registry
 	r.mu.Unlock()
 
 	// Cache to Redis if available
 	if r.redis != nil {
-		if err := r.cacheToRedis(ctx, &registry); err != nil {
+		if err := r.cacheToRedis(ctx, registry); err != nil {
 			r.logger.Warn("Failed to cache models to Redis", zap.Error(err))
 		}
 	}
 
-	return &registry, nil
+	return registry, nil
 }
 
 // GetRegistry returns the current model registry, using cache if available
 func (r *Registry) GetRegistry(ctx context.Context) (*ModelRegistry, error) {
+	fmt.Printf("[Registry] GetRegistry called, checking cache...\n")
+
 	// Try local cache first
 	r.mu.RLock()
 	if r.localCache != nil && time.Since(r.localCache.FetchedAt) < r.cacheTTL {
 		cache := r.localCache
 		r.mu.RUnlock()
+		fmt.Printf("[Registry] Returning local cache with %d models\n", len(cache.Models))
 		return cache, nil
 	}
 	r.mu.RUnlock()
 
 	// Try Redis cache
 	if r.redis != nil {
+		fmt.Printf("[Registry] Checking Redis cache...\n")
 		cached, err := r.getFromRedis(ctx)
 		if err == nil && cached != nil {
 			// Update local cache
 			r.mu.Lock()
 			r.localCache = cached
 			r.mu.Unlock()
+			fmt.Printf("[Registry] Returning Redis cache with %d models\n", len(cached.Models))
 			return cached, nil
 		}
 	}
 
 	// Fetch from API
-	return r.FetchModels(ctx)
+	fmt.Printf("[Registry] Fetching from models.dev API...\n")
+	registry, err := r.FetchModels(ctx)
+	if err != nil {
+		r.logger.Error("Failed to fetch models", zap.Error(err))
+		return nil, err
+	}
+	r.logger.Info("Fetched from API", zap.Int("models", len(registry.Models)))
+	return registry, nil
 }
 
 // cacheToRedis caches the registry to Redis
@@ -349,4 +481,33 @@ func (r *Registry) Refresh(ctx context.Context) (*ModelRegistry, error) {
 	}
 
 	return r.FetchModels(ctx)
+}
+
+func inferLatencyClass(providerID string) string {
+	fastProviders := map[string]bool{
+		"openai":       true,
+		"anthropic":    true,
+		"google":       true,
+		"xai":          true,
+		"cohere":       true,
+		"mistral":      true,
+		"fireworks-ai": true,
+		"togetherai":   true,
+		"groq":         true,
+		"deepseek":     true,
+	}
+
+	accurateProviders := map[string]bool{
+		"anthropic":     true,
+		"openai":        true,
+		"google-vertex": true,
+	}
+
+	if fastProviders[providerID] {
+		return "fast"
+	}
+	if accurateProviders[providerID] {
+		return "accurate"
+	}
+	return "balanced"
 }

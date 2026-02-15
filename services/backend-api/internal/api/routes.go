@@ -143,7 +143,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	aiRegistry := ai.NewRegistry(
 		ai.WithRedis(redis.Client),
 	)
-	aiHandler := handlers.NewAIHandler(aiRegistry)
+	aiHandler := handlers.NewAIHandler(aiRegistry, db)
 
 	// Initialize order execution service (Polymarket CLOB)
 	orderExecConfig := services.OrderExecutionConfig{
@@ -342,6 +342,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			ai.GET("/models", aiHandler.GetModels)
 			ai.POST("/route", aiHandler.RouteModel)
+			ai.POST("/select/:userId", aiHandler.SelectModel)
+			ai.GET("/status/:userId", aiHandler.GetModelStatus)
 		}
 
 		// Exchange management

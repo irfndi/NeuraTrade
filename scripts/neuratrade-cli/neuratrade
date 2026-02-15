@@ -43,6 +43,7 @@ Commands:
     onboard          Initialize NeuraTrade (first-time setup)
     onboarding       Alias for onboard
     init             Deprecated: use 'onboard' instead
+    start            Start NeuraTrade server
     config           Show/edit configuration (JSON format)
     context          Manage AI context files
     workspace        Show workspace directory
@@ -51,6 +52,7 @@ Commands:
     doctor           Diagnose configuration issues
     path             Show neuratrade directory path
     version          Show version
+    logs             View/manage logs
 
 Examples:
     neuratrade onboard              # First-time setup
@@ -326,6 +328,184 @@ EOF
     fi
 }
 
+# Start command - runs the NeuraTrade server with log management
+cmd_start() {
+    local service="${1:-all}"
+    local log_dir="${NEURATRADE_DIR}/logs"
+    
+    # Ensure log directory exists
+    mkdir -p "$log_dir"
+    
+    # Rotate logs if they get too big (keep last 5, max 10MB each)
+    rotate_logs() {
+        local max_size=10485760  # 10MB
+        local max_files=5
+        
+        for logfile in "$log_dir"/*.log; do
+            [[ -f "$logfile" ]] || continue
+            local size=$(stat -f%z "$logfile" 2>/dev/null || stat -c%s "$logfile" 2>/dev/null || echo 0)
+            if [[ $size -gt $max_size ]]; then
+                mv "$logfile" "${logfile}.old"
+                print_info "Rotated: $(basename "$logfile")"
+            fi
+        done
+        
+        # Clean old rotated logs
+        ls -t "$log_dir"/*.old 2>/dev/null | tail -n +$((max_files + 1)) | xargs rm -f 2>/dev/null || true
+    }
+    
+    # Check if already running
+    if pgrep -f "bin/server" > /dev/null 2>&1; then
+        print_warn "NeuraTrade server is already running!"
+        print_info "Use 'neuratrade stop' to stop it first"
+        exit 1
+    fi
+    
+    print_step "Starting NeuraTrade server..."
+    echo "Log file: ${log_dir}/server.log"
+    echo ""
+    
+    # Load config if exists
+    local config_file="${NEURATRADE_DIR}/config.json"
+    if [[ -f "$config_file" ]]; then
+        # Extract values from JSON using grep/sed (simple parser)
+        local db_driver=$(grep -o '"driver"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" | sed 's/.*"driver"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')
+        local db_path=$(grep -o '"path"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+        
+        if [[ -n "$db_driver" ]]; then
+            export DATABASE_DRIVER="$db_driver"
+        fi
+        if [[ -n "$db_path" ]]; then
+            # Expand ~ if present
+            db_path="${db_path/#\~/$HOME}"
+            export SQLITE_PATH="$db_path"
+        fi
+    fi
+    
+    # Always run in full mode with SQLite for local dev
+    export FULL_MODE=true
+    
+    # Rotate old logs before starting
+    rotate_logs
+    
+    # Start the server
+    cd "${NEURATRADE_DIR}" 2>/dev/null || cd "$(dirname "$NEURATRADE_DIR")"
+    
+    # Find the backend binary
+    local binary=""
+    for dir in "$(pwd)/services/backend-api/bin" "$HOME/neuratrade/bin" "./bin"; do
+        if [[ -x "$dir/server" ]]; then
+            binary="$dir/server"
+            break
+        fi
+    done
+    
+    if [[ -z "$binary" ]]; then
+        # Try to build if not found
+        print_info "Building NeuraTrade server..."
+        if [[ -d "services/backend-api" ]]; then
+            cd services/backend-api
+            if command -v go &> /dev/null; then
+                go build -o bin/server ./cmd/server
+                binary="bin/server"
+                cd ../..
+            fi
+        fi
+    fi
+    
+    if [[ -z "$binary" ]] || [[ ! -x "$binary" ]]; then
+        print_error "Server binary not found!"
+        print_info "Run 'make build' in services/backend-api first"
+        exit 1
+    fi
+    
+    # Start server with logging
+    print_success "Starting server from: $binary"
+    "$binary" >> "${log_dir}/server.log" 2>&1 &
+    local server_pid=$!
+    
+    sleep 2
+    
+    # Check if started successfully
+    if curl -s http://localhost:8080/health > /dev/null 2>&1; then
+        print_success "Server started successfully (PID: $server_pid)"
+        echo ""
+        echo "Logs: ${log_dir}/server.log"
+        echo "View logs: neuratrade logs"
+        echo "Stop: neuratrade stop"
+    else
+        print_error "Server failed to start!"
+        print_info "Check logs: ${log_dir}/server.log"
+        tail -20 "${log_dir}/server.log"
+        exit 1
+    fi
+}
+
+# Stop command
+cmd_stop() {
+    print_step "Stopping NeuraTrade server..."
+    
+    if pgrep -f "bin/server" > /dev/null 2>&1; then
+        pkill -f "bin/server"
+        sleep 1
+        print_success "Server stopped"
+    else
+        print_warn "Server is not running"
+    fi
+}
+
+# Logs command - view and manage logs
+cmd_logs() {
+    local action="${1:-tail}"
+    local log_dir="${NEURATRADE_DIR}/logs"
+    local lines="${2:-50}"
+    
+    mkdir -p "$log_dir"
+    
+    case "$action" in
+        tail)
+            if [[ -f "${log_dir}/server.log" ]]; then
+                tail -n "$lines" "${log_dir}/server.log"
+            else
+                print_warn "No logs found at: ${log_dir}/server.log"
+                print_info "Start server first: neuratrade start"
+            fi
+            ;;
+        head)
+            if [[ -f "${log_dir}/server.log" ]]; then
+                head -n "$lines" "${log_dir}/server.log"
+            else
+                print_warn "No logs found"
+            fi
+            ;;
+        watch)
+            if command -v tail &> /dev/null; then
+                tail -f "${log_dir}/server.log"
+            else
+                print_error "tail command not found"
+            fi
+            ;;
+        clean|cleanup)
+            print_step "Cleaning old logs..."
+            find "$log_dir" -name "*.log" -mtime +7 -delete 2>/dev/null || true
+            find "$log_dir" -name "*.old" -mtime +1 -delete 2>/dev/null || true
+            print_success "Old logs cleaned up"
+            ;;
+        list|ls)
+            print_info "Log files in ${log_dir}:"
+            ls -lah "$log_dir" 2>/dev/null || print_warn "No logs directory"
+            ;;
+        path)
+            echo "$log_dir"
+            ;;
+        *)
+            print_error "Unknown log action: $action"
+            echo "Usage: neuratrade logs [tail|head|watch|clean|list|path] [lines]"
+            exit 1
+            ;;
+    esac
+}
+
 # Initialize command (like picoclaw's onboard)
 cmd_onboard() {
     echo ""
@@ -510,6 +690,15 @@ main() {
     case "$cmd" in
         onboard|onboarding|init)
             cmd_onboard
+            ;;
+        start)
+            cmd_start "$@"
+            ;;
+        stop)
+            cmd_stop
+            ;;
+        logs)
+            cmd_logs "$@"
             ;;
         config)
             cmd_config "$@"

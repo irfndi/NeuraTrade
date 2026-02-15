@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/ai"
+	"github.com/irfndi/neuratrade/internal/database"
 )
 
 type AIRegistryQuerier interface {
@@ -18,11 +19,19 @@ type AIRegistryQuerier interface {
 
 type AIHandler struct {
 	registry AIRegistryQuerier
+	db       any
 }
 
-func NewAIHandler(registry AIRegistryQuerier) *AIHandler {
+type dbQuerier interface {
+	Query(ctx context.Context, sql string, args ...interface{}) (database.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...interface{}) database.Row
+	Exec(ctx context.Context, sql string, args ...interface{}) (database.Result, error)
+}
+
+func NewAIHandler(registry AIRegistryQuerier, db any) *AIHandler {
 	return &AIHandler{
 		registry: registry,
+		db:       db,
 	}
 }
 
@@ -39,12 +48,16 @@ type AIModelInfo struct {
 
 func (h *AIHandler) GetModels(c *gin.Context) {
 	ctx := c.Request.Context()
+	fmt.Println("[AIHandler] GetModels called")
 
 	registry, err := h.registry.GetRegistry(ctx)
 	if err != nil {
+		fmt.Printf("[AIHandler] Failed to get registry: %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get models"})
 		return
 	}
+
+	fmt.Printf("[AIHandler] Got registry with %d models\n", len(registry.Models))
 
 	providerFilter := c.Query("provider")
 
@@ -181,4 +194,152 @@ func (h *AIHandler) RouteModel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// SelectModelRequest represents a request to select an AI model
+type SelectModelRequest struct {
+	ModelID string `json:"model_id"`
+}
+
+// SelectModelResponse represents the response after selecting a model
+type SelectModelResponse struct {
+	Success bool         `json:"success"`
+	Model   *AIModelInfo `json:"model,omitempty"`
+	Message string       `json:"message,omitempty"`
+}
+
+// SelectModel selects an AI model for a user
+func (h *AIHandler) SelectModel(c *gin.Context) {
+	userID := c.Param("userId")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user ID is required"})
+		return
+	}
+
+	var req SelectModelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.ModelID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "model_id is required"})
+		return
+	}
+
+	// Verify the model exists in the registry
+	ctx := c.Request.Context()
+	_, err := h.registry.FindModel(ctx, req.ModelID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "model not found: " + req.ModelID})
+		return
+	}
+
+	// Update the user's selected model
+	if h.db != nil {
+		querier, ok := h.db.(dbQuerier)
+		if ok {
+			_, err = querier.Exec(ctx,
+				"UPDATE users SET selected_ai_model = $1, updated_at = NOW() WHERE telegram_id = $2",
+				req.ModelID, userID,
+			)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user model"})
+				return
+			}
+		}
+	}
+
+	// Get the model info for response
+	modelInfo, _ := h.registry.FindModel(ctx, req.ModelID)
+	var modelResp *AIModelInfo
+	if modelInfo != nil {
+		cost := modelInfo.Cost.InputCost.Add(modelInfo.Cost.OutputCost)
+		modelResp = &AIModelInfo{
+			ModelID:        modelInfo.ModelID,
+			Provider:       modelInfo.ProviderID,
+			DisplayName:    modelInfo.DisplayName,
+			SupportsTools:  modelInfo.Capabilities.SupportsTools,
+			SupportsVision: modelInfo.Capabilities.SupportsVision,
+			Cost:           cost.StringFixed(2),
+			LatencyClass:   modelInfo.LatencyClass,
+			ContextLimit:   modelInfo.Limits.ContextLimit,
+		}
+	}
+
+	c.JSON(http.StatusOK, SelectModelResponse{
+		Success: true,
+		Model:   modelResp,
+		Message: "Model selected successfully",
+	})
+}
+
+// GetModelStatus returns the user's current AI model selection and usage
+func (h *AIHandler) GetModelStatus(c *gin.Context) {
+	userID := c.Param("userId")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user ID is required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Get user's selected model
+	var selectedModel string
+	if h.db != nil {
+		querier, ok := h.db.(dbQuerier)
+		if ok {
+			err := querier.QueryRow(ctx,
+				"SELECT selected_ai_model FROM users WHERE telegram_id = $1",
+				userID,
+			).Scan(&selectedModel)
+
+			if err != nil {
+				// User not found or no model selected
+				c.JSON(http.StatusOK, gin.H{
+					"selected_model": "",
+					"provider":       "",
+					"daily_spend":    "0.00",
+					"monthly_spend":  "0.00",
+					"budget_limit":   "Unlimited",
+				})
+				return
+			}
+		}
+	}
+
+	if selectedModel == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"selected_model":        "",
+			"provider":              "",
+			"daily_spend":           "0.00",
+			"monthly_spend":         "0.00",
+			"budget_limit":          "Unlimited",
+			"daily_budget_exceeded": false,
+		})
+		return
+	}
+
+	// Get model info from registry
+	modelInfo, err := h.registry.FindModel(ctx, selectedModel)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"selected_model":        selectedModel,
+			"provider":              "unknown",
+			"daily_spend":           "0.00",
+			"monthly_spend":         "0.00",
+			"budget_limit":          "Unlimited",
+			"daily_budget_exceeded": false,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"selected_model":        modelInfo.ModelID,
+		"provider":              modelInfo.ProviderID,
+		"daily_spend":           "0.00",
+		"monthly_spend":         "0.00",
+		"budget_limit":          "Unlimited",
+		"daily_budget_exceeded": false,
+	})
 }

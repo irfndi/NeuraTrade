@@ -1,0 +1,63 @@
+{
+  "version": "1.0.0",
+  "name": "NeuraTrade",
+  "environment": "development",
+  
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  
+  "database": {
+    "driver": "sqlite",
+    "path": "./data/neuratrade.db"
+  },
+  
+  "redis": {
+    "host": "localhost",
+    "port": 6379
+  },
+  
+  "services": {
+    "ccxt": {
+      "url": "http://localhost:3001",
+      "grpc_address": "localhost:50051"
+    },
+    "telegram": {
+      "enabled": true,
+      "bot_token": "8352568061:AAFsr3Q9pGeGldHI5TmmYmF03gdep3y4BQc",
+      "use_polling": false,
+      "webhook_url": "https://fairy-belong-magazines-appeals.trycloudflare.com/telegram/webhook",
+      "external_service": true,
+      "api_base_url": "http://localhost:8080",
+      "service_url": "http://localhost:3002",
+      "grpc_address": "localhost:50052"
+    }
+  },
+  
+  "ai": {
+    "provider": "minimax",
+    "api_key": "sk-api-6FzeevpEi1VdxrPIF2IF3ZImrZM-vrHzpI5uD85pxV-ZJibnUvwGj_ZwSA85JBOC9rTN7EIwVJhRMtbHwHNSHF8RRQPvwKAWTO8czGrrwp2uSU3FzEEvB6c",
+    "daily_budget": "10.00"
+  },
+  
+  "security": {
+    "jwt_secret": "wgAaXCgrDdwjocYfpQQPMhVGNSfuu1T+eCpCQ0xk3KM=",
+    "admin_api_key": "d98403e22c0a9f300fc54e4a5a3ab98a1f0f93ab65a26b2530949caae8ed7a36"
+  },
+  
+  "features": {
+    "external_connections_enabled": false,
+    "telegram_bot": true,
+    "funding_rate_collection": true,
+    "arbitrage_detection": true,
+    "signal_generation": true,
+    "full_mode": true,
+    "run_migrations": true
+  },
+  
+  "logging": {
+    "level": "info",
+    "environment": "development"
+  }
+}

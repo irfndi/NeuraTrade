@@ -12,6 +12,7 @@ import (
 
 	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
+	"github.com/irfndi/neuratrade/internal/ai"
 	"github.com/irfndi/neuratrade/internal/api"
 	apiHandlers "github.com/irfndi/neuratrade/internal/api/handlers"
 	"github.com/irfndi/neuratrade/internal/cache"
@@ -432,6 +433,18 @@ func runSQLiteBootstrapMode(cfg *config.Config, logger logging.Logger, logrusLog
 			"mode":   "sqlite-bootstrap",
 		})
 	})
+
+	aiRegistry := ai.NewRegistry(
+		ai.WithRedis(redisClient.Client),
+	)
+	aiHandler := apiHandlers.NewAIHandler(aiRegistry, sqliteDB)
+	v1 := router.Group("/api/v1")
+	{
+		v1.GET("/ai/models", aiHandler.GetModels)
+		v1.POST("/ai/route", aiHandler.RouteModel)
+		v1.POST("/ai/select/:userId", aiHandler.SelectModel)
+		v1.GET("/ai/status/:userId", aiHandler.GetModelStatus)
+	}
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
