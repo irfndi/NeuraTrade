@@ -18,58 +18,58 @@ PASSED=0
 FAILED=0
 
 test_status() {
-    local test_name="$1"
-    local result
-    
-    if result=$("$SCRIPT" status 2>&1); then
-        if echo "$result" | grep -q "QMD Retrieval Status"; then
-            echo -e "${GREEN}✓ PASSED${NC}: $test_name"
-            PASSED=$((PASSED + 1))
-        else
-            echo -e "${RED}✗ FAILED${NC}: $test_name - unexpected output"
-            FAILED=$((FAILED + 1))
-        fi
+  local test_name="$1"
+  local result
+
+  if result=$("$SCRIPT" status 2>&1); then
+    if echo "$result" | grep -q "QMD Retrieval Status"; then
+      echo -e "${GREEN}✓ PASSED${NC}: $test_name"
+      PASSED=$((PASSED + 1))
     else
-        echo -e "${RED}✗ FAILED${NC}: $test_name - command failed"
-        FAILED=$((FAILED + 1))
+      echo -e "${RED}✗ FAILED${NC}: $test_name - unexpected output"
+      FAILED=$((FAILED + 1))
     fi
+  else
+    echo -e "${RED}✗ FAILED${NC}: $test_name - command failed"
+    FAILED=$((FAILED + 1))
+  fi
 }
 
 test_search() {
-    local test_name="$1"
-    local query="$2"
-    local result
-    
-    if result=$("$SCRIPT" search "$query" 2>&1); then
-        if echo "$result" | grep -q "search time:"; then
-            echo -e "${GREEN}✓ PASSED${NC}: $test_name"
-            PASSED=$((PASSED + 1))
-        else
-            echo -e "${RED}✗ FAILED${NC}: $test_name - no timing info"
-            FAILED=$((FAILED + 1))
-        fi
+  local test_name="$1"
+  local query="$2"
+  local result
+
+  if result=$("$SCRIPT" search "$query" 2>&1); then
+    if echo "$result" | grep -q "search time:"; then
+      echo -e "${GREEN}✓ PASSED${NC}: $test_name"
+      PASSED=$((PASSED + 1))
     else
-        echo -e "${RED}✗ FAILED${NC}: $test_name - command failed"
-        FAILED=$((FAILED + 1))
+      echo -e "${RED}✗ FAILED${NC}: $test_name - no timing info"
+      FAILED=$((FAILED + 1))
     fi
+  else
+    echo -e "${RED}✗ FAILED${NC}: $test_name - command failed"
+    FAILED=$((FAILED + 1))
+  fi
 }
 
 test_help() {
-    local test_name="$1"
-    local result
-    
-    if result=$("$SCRIPT" help 2>&1); then
-        if echo "$result" | grep -q "Usage:"; then
-            echo -e "${GREEN}✓ PASSED${NC}: $test_name"
-            PASSED=$((PASSED + 1))
-        else
-            echo -e "${RED}✗ FAILED${NC}: $test_name - no help output"
-            FAILED=$((FAILED + 1))
-        fi
+  local test_name="$1"
+  local result
+
+  if result=$("$SCRIPT" help 2>&1); then
+    if echo "$result" | grep -q "Usage:"; then
+      echo -e "${GREEN}✓ PASSED${NC}: $test_name"
+      PASSED=$((PASSED + 1))
     else
-        echo -e "${RED}✗ FAILED${NC}: $test_name - command failed"
-        FAILED=$((FAILED + 1))
+      echo -e "${RED}✗ FAILED${NC}: $test_name - no help output"
+      FAILED=$((FAILED + 1))
     fi
+  else
+    echo -e "${RED}✗ FAILED${NC}: $test_name - command failed"
+    FAILED=$((FAILED + 1))
+  fi
 }
 
 # Run tests
@@ -88,7 +88,7 @@ echo "Results: $PASSED passed, $FAILED failed"
 echo "========================================"
 
 if [[ $FAILED -gt 0 ]]; then
-    exit 1
+  exit 1
 fi
 
 exit 0
