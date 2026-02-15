@@ -276,13 +276,14 @@ func (s *SubagentSpawner) mergeOptions(opts []SubagentOptions) SubagentOptions {
 }
 
 func (s *SubagentSpawner) acquireSlot() bool {
-	maxConcurrent := int32(s.maxConcurrent)
+	maxConcurrent := s.maxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
 	}
+	currentMax := int32(maxConcurrent)
 	for {
 		current := s.currentRunning.Load()
-		if current >= maxConcurrent {
+		if current >= currentMax {
 			return false
 		}
 		if s.currentRunning.CompareAndSwap(current, current+1) {
