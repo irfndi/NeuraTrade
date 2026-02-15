@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -126,7 +127,9 @@ func (s *SentimentService) FetchRedditSentiment(ctx context.Context, subreddits 
 
 	// Store in database
 	if len(results) > 0 {
-		s.storeRedditSentiment(ctx, results)
+		if err := s.storeRedditSentiment(ctx, results); err != nil {
+			return nil, fmt.Errorf("failed to store Reddit sentiment: %w", err)
+		}
 	}
 
 	return results, nil
@@ -135,26 +138,29 @@ func (s *SentimentService) FetchRedditSentiment(ctx context.Context, subreddits 
 // getRedditAccessToken obtains Reddit OAuth access token
 func (s *SentimentService) getRedditAccessToken(ctx context.Context) (string, error) {
 	if s.config.RedditClientID == "" || s.config.RedditClientSecret == "" {
-		return "", fmt.Errorf("Reddit credentials not configured")
+		return "", fmt.Errorf("reddit credentials not configured")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://www.reddit.com/api/v1/access_token",
 		strings.NewReader("grant_type=client_credentials"))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create reddit auth request: %w", err)
 	}
 
 	req.SetBasicAuth(s.config.RedditClientID, s.config.RedditClientSecret)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", s.config.RedditUserAgent)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reddit auth request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Reddit auth failed with status %d", resp.StatusCode)
+		return "", fmt.Errorf("reddit auth failed with status %d: %w", resp.StatusCode, ctx.Err())
 	}
 
 	var authResp struct {
@@ -164,7 +170,7 @@ func (s *SentimentService) getRedditAccessToken(ctx context.Context) (string, er
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
-		return "", err
+		return "", fmt.Errorf("decode reddit auth response: %w", err)
 	}
 
 	return authResp.AccessToken, nil
@@ -186,10 +192,12 @@ func (s *SentimentService) fetchSubredditPosts(ctx context.Context, accessToken,
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Reddit API returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("reddit API returned status %d", resp.StatusCode)
 	}
 
 	var redditResp struct {
@@ -199,6 +207,7 @@ func (s *SentimentService) fetchSubredditPosts(ctx context.Context, accessToken,
 					ID          string  `json:"id"`
 					Title       string  `json:"title"`
 					URL         string  `json:"url"`
+					Permalink   string  `json:"permalink"`
 					Author      string  `json:"author"`
 					Score       int     `json:"score"`
 					NumComments int     `json:"num_comments"`
@@ -219,11 +228,17 @@ func (s *SentimentService) fetchSubredditPosts(ctx context.Context, accessToken,
 		sentimentLabel := getSentimentLabel(sentimentScore)
 		symbols := extractCryptoSymbols(post.Title)
 
+		// Use permalink if available, otherwise use URL
+		postURL := post.URL
+		if post.Permalink != "" {
+			postURL = "https://reddit.com" + post.Permalink
+		}
+
 		results = append(results, RedditSentiment{
 			PostID:         post.ID,
 			Subreddit:      subreddit,
 			Title:          post.Title,
-			URL:            "https://reddit.com" + post.URL,
+			URL:            postURL,
 			Author:         post.Author,
 			Score:          post.Score,
 			NumComments:    post.NumComments,
@@ -239,18 +254,37 @@ func (s *SentimentService) fetchSubredditPosts(ctx context.Context, accessToken,
 
 // storeRedditSentiment stores reddit sentiment data to database
 func (s *SentimentService) storeRedditSentiment(ctx context.Context, posts []RedditSentiment) error {
-	// Get source ID for subreddit
-	var sourceID int
+	if len(posts) == 0 {
+		return nil
+	}
+
+	// Collect unique subreddits
+	subreddits := make(map[string]bool)
 	for _, post := range posts {
+		subreddits[post.Subreddit] = true
+	}
+
+	// Batch query source IDs for all subreddits
+	sourceIDMap := make(map[string]int)
+	for subreddit := range subreddits {
+		var sourceID int
 		err := s.db.QueryRow(ctx, `
 			SELECT id FROM reddit_sentiment_sources WHERE subreddit = $1
-		`, post.Subreddit).Scan(&sourceID)
-
+		`, subreddit).Scan(&sourceID)
 		if err != nil {
+			return fmt.Errorf("storeRedditSentiment: failed to get source ID for subreddit %s: %w", subreddit, err)
+		}
+		sourceIDMap[subreddit] = sourceID
+	}
+
+	// Insert posts using cached source IDs
+	for _, post := range posts {
+		sourceID, ok := sourceIDMap[post.Subreddit]
+		if !ok {
 			continue
 		}
 
-		_, err = s.db.Exec(ctx, `
+		_, err := s.db.Exec(ctx, `
 			INSERT INTO reddit_sentiment (source_id, post_id, title, url, author, score, num_comments, 
 				sentiment_score, sentiment_label, symbols, fetched_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -263,7 +297,7 @@ func (s *SentimentService) storeRedditSentiment(ctx context.Context, posts []Red
 			post.SentimentScore, post.SentimentLabel, post.Symbols, post.FetchedAt)
 
 		if err != nil {
-			continue
+			return fmt.Errorf("storeRedditSentiment: failed to insert post %s: %w", post.PostID, err)
 		}
 	}
 
@@ -273,7 +307,7 @@ func (s *SentimentService) storeRedditSentiment(ctx context.Context, posts []Red
 // FetchNewsSentiment fetches sentiment from news sources
 func (s *SentimentService) FetchNewsSentiment(ctx context.Context, kind string) ([]NewsSentiment, error) {
 	if s.config.CryptoPanicToken == "" {
-		return nil, fmt.Errorf("CryptoPanic token not configured")
+		return nil, fmt.Errorf("cryptopanic token not configured")
 	}
 
 	url := fmt.Sprintf("https://cryptopanic.com/api/v1/posts/?auth_token=%s&kind=%s", s.config.CryptoPanicToken, kind)
@@ -287,10 +321,12 @@ func (s *SentimentService) FetchNewsSentiment(ctx context.Context, kind string) 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("CryptoPanic API returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("cryptopanic API returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -342,7 +378,9 @@ func (s *SentimentService) FetchNewsSentiment(ctx context.Context, kind string) 
 
 	// Store in database
 	if len(results) > 0 {
-		s.storeNewsSentiment(ctx, results)
+		if err := s.storeNewsSentiment(ctx, results); err != nil {
+			return nil, fmt.Errorf("failed to store news sentiment: %w", err)
+		}
 	}
 
 	return results, nil
@@ -381,8 +419,10 @@ func (s *SentimentService) storeNewsSentiment(ctx context.Context, articles []Ne
 
 // GetAggregatedSentiment retrieves aggregated sentiment for a symbol
 func (s *SentimentService) GetAggregatedSentiment(ctx context.Context, symbol string) (*AggregatedSentiment, error) {
+	upperSymbol := strings.ToUpper(symbol)
+
 	// Check cache first
-	cacheKey := fmt.Sprintf("sentiment:%s", symbol)
+	cacheKey := fmt.Sprintf("sentiment:%s", upperSymbol)
 	if entry, ok := s.getCached(cacheKey); ok {
 		if agg, ok := entry.(*AggregatedSentiment); ok {
 			return agg, nil
@@ -397,14 +437,14 @@ func (s *SentimentService) GetAggregatedSentiment(ctx context.Context, symbol st
 		WHERE symbol = $1 AND computed_at > NOW() - INTERVAL '1 hour'
 		ORDER BY computed_at DESC
 		LIMIT 1
-	`, strings.ToUpper(symbol)).Scan(
+	`, upperSymbol).Scan(
 		&result.Symbol, &result.SentimentScore, &result.BullishRatio,
 		&result.TotalMentions, &result.SampleSize, &result.ComputedAt,
 	)
 
 	if err != nil {
 		// If no aggregated data, compute from raw data
-		return s.computeAggregatedSentiment(ctx, symbol)
+		return s.computeAggregatedSentiment(ctx, upperSymbol)
 	}
 
 	s.setCache(cacheKey, &result)
@@ -418,20 +458,26 @@ func (s *SentimentService) computeAggregatedSentiment(ctx context.Context, symbo
 	// Get recent news sentiment for symbol
 	var newsScore float64
 	var newsCount int
-	s.db.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		SELECT COALESCE(AVG(sentiment_score), 0), COUNT(*)
 		FROM news_sentiment
 		WHERE $1 = ANY(symbols) AND fetched_at > NOW() - INTERVAL '24 hours'
 	`, symbolUpper).Scan(&newsScore, &newsCount)
+	if err != nil {
+		return nil, fmt.Errorf("computeAggregatedSentiment: failed to query news sentiment: %w", err)
+	}
 
 	// Get recent reddit sentiment for symbol
 	var redditScore float64
 	var redditCount int
-	s.db.QueryRow(ctx, `
+	err = s.db.QueryRow(ctx, `
 		SELECT COALESCE(AVG(sentiment_score), 0), COUNT(*)
 		FROM reddit_sentiment
 		WHERE $1 = ANY(symbols) AND fetched_at > NOW() - INTERVAL '24 hours'
 	`, symbolUpper).Scan(&redditScore, &redditCount)
+	if err != nil {
+		return nil, fmt.Errorf("computeAggregatedSentiment: failed to query reddit sentiment: %w", err)
+	}
 
 	totalCount := newsCount + redditCount
 	if totalCount == 0 {
@@ -445,18 +491,21 @@ func (s *SentimentService) computeAggregatedSentiment(ctx context.Context, symbo
 		}, nil
 	}
 
-	// Weighted average (news: 60%, reddit: 40%)
+	// Combined score: count-weighted average of news and reddit
 	combinedScore := (newsScore*float64(newsCount) + redditScore*float64(redditCount)) / float64(totalCount)
 
 	// Calculate bullish ratio
 	var bullishCount int
-	s.db.QueryRow(ctx, `
+	err = s.db.QueryRow(ctx, `
 		SELECT COUNT(*) FROM (
 			SELECT sentiment_score FROM news_sentiment WHERE $1 = ANY(symbols) AND fetched_at > NOW() - INTERVAL '24 hours' AND sentiment_score > 0
 			UNION ALL
 			SELECT sentiment_score FROM reddit_sentiment WHERE $1 = ANY(symbols) AND fetched_at > NOW() - INTERVAL '24 hours' AND sentiment_score > 0
 		) combined
 	`, symbolUpper).Scan(&bullishCount)
+	if err != nil {
+		return nil, fmt.Errorf("computeAggregatedSentiment: failed to query bullish count: %w", err)
+	}
 
 	bullishRatio := float64(bullishCount) / float64(totalCount)
 
@@ -470,7 +519,7 @@ func (s *SentimentService) computeAggregatedSentiment(ctx context.Context, symbo
 	}
 
 	// Store aggregated result
-	s.db.Exec(ctx, `
+	_, err = s.db.Exec(ctx, `
 		INSERT INTO aggregated_sentiment (symbol, sentiment_source, sentiment_score, bullish_ratio, total_mentions, sample_size, computed_at)
 		VALUES ($1, 'combined', $2, $3, $4, $5, $6)
 		ON CONFLICT (symbol, sentiment_source) DO UPDATE SET
@@ -480,6 +529,9 @@ func (s *SentimentService) computeAggregatedSentiment(ctx context.Context, symbo
 			sample_size = EXCLUDED.sample_size,
 			computed_at = EXCLUDED.computed_at
 	`, symbolUpper, combinedScore, bullishRatio, totalCount, totalCount, result.ComputedAt)
+	if err != nil {
+		return nil, fmt.Errorf("computeAggregatedSentiment: failed to store aggregated sentiment: %w", err)
+	}
 
 	s.setCache(fmt.Sprintf("sentiment:%s", symbolUpper), result)
 
@@ -550,9 +602,24 @@ func getSentimentLabel(score float64) string {
 	return "neutral"
 }
 
+// Precompiled regex patterns for crypto symbol extraction
+var cryptoSymbolPatterns map[string]*regexp.Regexp
+
+func init() {
+	cryptoSymbolPatterns = make(map[string]*regexp.Regexp)
+	knownSymbols := []string{
+		"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "MATIC", "LINK",
+		"UNI", "ATOM", "LTC", "BCH", "XLM", "ALGO", "VET", "FIL", "THETA", "AAVE",
+		"BNB", "XMR", "ETC", "XEM", "HBAR", "MKR", "SNX", "COMP", "SUSHI", "CRV",
+	}
+	for _, symbol := range knownSymbols {
+		pattern := `\b` + symbol + `\b`
+		cryptoSymbolPatterns[symbol] = regexp.MustCompile(pattern)
+	}
+}
+
 // extractCryptoSymbols extracts cryptocurrency symbols from text
 func extractCryptoSymbols(text string) []string {
-	// Common crypto symbols to look for
 	knownSymbols := []string{
 		"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "MATIC", "LINK",
 		"UNI", "ATOM", "LTC", "BCH", "XLM", "ALGO", "VET", "FIL", "THETA", "AAVE",
@@ -563,14 +630,13 @@ func extractCryptoSymbols(text string) []string {
 	var found []string
 
 	for _, symbol := range knownSymbols {
-		// Match whole word only
-		if strings.Contains(text, " "+symbol+" ") || strings.Contains(text, symbol+",") || strings.Contains(text, " "+symbol+".") {
-			found = append(found, symbol)
+		if cryptoSymbolPatterns[symbol].MatchString(text) {
+			found = appendUnique(found, symbol)
 		}
 	}
 
 	// Always include BTC if Bitcoin is mentioned
-	if strings.Contains(text, "bitcoin") || strings.Contains(text, "btc") {
+	if strings.Contains(text, "BITCOIN") || strings.Contains(text, "BTC") {
 		found = appendUnique(found, "BTC")
 	}
 

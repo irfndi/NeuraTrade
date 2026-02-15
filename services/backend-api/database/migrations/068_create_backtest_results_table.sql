@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Indexes for efficient querying
+-- Indexes for efficient querying (idempotent)
 CREATE INDEX IF NOT EXISTS idx_backtest_results_user_id ON backtest_results(user_id);
 CREATE INDEX IF NOT EXISTS idx_backtest_results_created_at ON backtest_results(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_backtest_results_sharpe_ratio ON backtest_results(sharpe_ratio DESC) WHERE sharpe_ratio IS NOT NULL;
@@ -64,7 +64,8 @@ COMMENT ON COLUMN backtest_results.trades_by_exchange IS 'Map of exchange -> tra
 COMMENT ON COLUMN backtest_results.equity_curve IS 'Array of {timestamp, equity} points';
 COMMENT ON COLUMN backtest_results.daily_returns IS 'Array of {date, return, pnl, equity, trade_count} objects';
 
--- Trigger for updated_at
+-- Trigger for updated_at (idempotent)
+DROP TRIGGER IF EXISTS update_backtest_results_updated_at ON backtest_results;
 CREATE TRIGGER update_backtest_results_updated_at 
     BEFORE UPDATE ON backtest_results 
     FOR EACH ROW 
