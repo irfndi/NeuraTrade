@@ -40,6 +40,13 @@ import type {
   ExchangeManager,
   FundingRate,
   FundingRateResponse,
+  PlaceOrderRequest,
+  PlaceOrderResponse,
+  CancelOrderResponse,
+  GetOrderResponse,
+  GetOpenOrdersResponse,
+  GetClosedOrdersResponse,
+  GetOrderTradesResponse,
 } from "./types";
 
 // Load environment variables
@@ -1030,6 +1037,340 @@ app.get("/api/funding-rate/:exchange/*", async (c) => {
       timestamp: new Date().toISOString(),
     };
     return c.json(errorResponse, 500);
+  }
+});
+
+// Order Execution Endpoints
+
+// Place an order
+app.post(
+  "/api/order",
+  adminAuth,
+  validator("json", (value, c) => {
+    const req = value as PlaceOrderRequest;
+    if (!req.exchange || !req.symbol || !req.side || !req.type || !req.amount) {
+      return c.text(
+        "Missing required fields: exchange, symbol, side, type, amount",
+        400,
+      );
+    }
+    if (req.side !== "buy" && req.side !== "sell") {
+      return c.text("side must be 'buy' or 'sell'", 400);
+    }
+    if (
+      req.type !== "market" &&
+      req.type !== "limit" &&
+      req.type !== "stop" &&
+      req.type !== "stop_limit"
+    ) {
+      return c.text(
+        "type must be 'market', 'limit', 'stop', or 'stop_limit'",
+        400,
+      );
+    }
+    if (req.amount <= 0) {
+      return c.text("amount must be greater than 0", 400);
+    }
+    return req;
+  }),
+  async (c) => {
+    try {
+      const req = c.req.valid("json") as PlaceOrderRequest;
+
+      if (!exchanges[req.exchange]) {
+        return c.json(
+          {
+            error: "Exchange not supported",
+            timestamp: new Date().toISOString(),
+          } as ErrorResponse,
+          400,
+        );
+      }
+
+      const ex = exchanges[req.exchange];
+
+      if (!ex.has["createOrder"]) {
+        return c.json(
+          {
+            error: "Exchange does not support order creation",
+            timestamp: new Date().toISOString(),
+          } as ErrorResponse,
+          400,
+        );
+      }
+
+      const order = await ex.createOrder(
+        req.symbol,
+        req.type,
+        req.side,
+        req.amount,
+        req.price,
+        req.params,
+      );
+
+      const response: PlaceOrderResponse = {
+        order,
+        timestamp: new Date().toISOString(),
+      };
+
+      return c.json(response);
+    } catch (error) {
+      return c.json(
+        {
+          error: error instanceof Error ? error.message : "Unknown error",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        500,
+      );
+    }
+  },
+);
+
+// Cancel an order
+app.delete("/api/order/:exchange/:orderId", adminAuth, async (c) => {
+  try {
+    const exchange = c.req.param("exchange");
+    const orderId = c.req.param("orderId");
+    const symbol = c.req.query("symbol") || undefined;
+
+    if (!exchanges[exchange]) {
+      return c.json(
+        {
+          error: "Exchange not supported",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const ex = exchanges[exchange];
+
+    if (!ex.has["cancelOrder"]) {
+      return c.json(
+        {
+          error: "Exchange does not support order cancellation",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    await ex.cancelOrder(orderId, symbol);
+
+    const response: CancelOrderResponse = {
+      success: true,
+      orderId,
+      timestamp: new Date().toISOString(),
+    };
+
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Unknown error",
+        timestamp: new Date().toISOString(),
+      } as ErrorResponse,
+      500,
+    );
+  }
+});
+
+// Get order status
+app.get("/api/order/:exchange/:orderId", adminAuth, async (c) => {
+  try {
+    const exchange = c.req.param("exchange");
+    const orderId = c.req.param("orderId");
+    const symbol = c.req.query("symbol") || undefined;
+
+    if (!exchanges[exchange]) {
+      return c.json(
+        {
+          error: "Exchange not supported",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const ex = exchanges[exchange];
+
+    if (!ex.has["fetchOrder"]) {
+      return c.json(
+        {
+          error: "Exchange does not support fetching order",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const order = await ex.fetchOrder(orderId, symbol);
+
+    const response: GetOrderResponse = {
+      order,
+      timestamp: new Date().toISOString(),
+    };
+
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Unknown error",
+        timestamp: new Date().toISOString(),
+      } as ErrorResponse,
+      500,
+    );
+  }
+});
+
+// Get open orders
+app.get("/api/orders/:exchange", adminAuth, async (c) => {
+  try {
+    const exchange = c.req.param("exchange");
+    const symbol = c.req.query("symbol") || undefined;
+
+    if (!exchanges[exchange]) {
+      return c.json(
+        {
+          error: "Exchange not supported",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const ex = exchanges[exchange];
+
+    if (!ex.has["fetchOpenOrders"]) {
+      return c.json(
+        {
+          error: "Exchange does not support fetching open orders",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const orders = await ex.fetchOpenOrders(
+      symbol ? ([symbol] as unknown as string) : undefined,
+    );
+
+    const response: GetOpenOrdersResponse = {
+      orders,
+      timestamp: new Date().toISOString(),
+    };
+
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Unknown error",
+        timestamp: new Date().toISOString(),
+      } as ErrorResponse,
+      500,
+    );
+  }
+});
+
+// Get closed orders
+app.get("/api/orders/:exchange/closed", adminAuth, async (c) => {
+  try {
+    const exchange = c.req.param("exchange");
+    const symbol = c.req.query("symbol") || undefined;
+    const limit = c.req.query("limit")
+      ? parseInt(c.req.query("limit") as string)
+      : undefined;
+
+    if (!exchanges[exchange]) {
+      return c.json(
+        {
+          error: "Exchange not supported",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const ex = exchanges[exchange];
+
+    if (!ex.has["fetchClosedOrders"]) {
+      return c.json(
+        {
+          error: "Exchange does not support fetching closed orders",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const orders = await ex.fetchClosedOrders(
+      symbol ? ([symbol] as unknown as string) : undefined,
+      undefined,
+      limit,
+    );
+
+    const response: GetClosedOrdersResponse = {
+      orders,
+      timestamp: new Date().toISOString(),
+    };
+
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Unknown error",
+        timestamp: new Date().toISOString(),
+      } as ErrorResponse,
+      500,
+    );
+  }
+});
+
+// Get order trades/fills
+app.get("/api/order/:exchange/:orderId/trades", adminAuth, async (c) => {
+  try {
+    const exchange = c.req.param("exchange");
+    const orderId = c.req.param("orderId");
+    const symbol = c.req.query("symbol") || undefined;
+
+    if (!exchanges[exchange]) {
+      return c.json(
+        {
+          error: "Exchange not supported",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const ex = exchanges[exchange];
+
+    if (!ex.has["fetchOrderTrades"]) {
+      return c.json(
+        {
+          error: "Exchange does not support fetching order trades",
+          timestamp: new Date().toISOString(),
+        } as ErrorResponse,
+        400,
+      );
+    }
+
+    const trades = await ex.fetchOrderTrades(orderId, symbol);
+
+    const response: GetOrderTradesResponse = {
+      trades,
+      timestamp: new Date().toISOString(),
+    };
+
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Unknown error",
+        timestamp: new Date().toISOString(),
+      } as ErrorResponse,
+      500,
+    );
   }
 });
 
