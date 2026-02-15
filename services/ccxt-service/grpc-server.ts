@@ -547,7 +547,7 @@ export function startGrpcServer(exchanges: any, port: number) {
   server.bindAsync(
     bindAddr,
     grpc.ServerCredentials.createInsecure(),
-    (err, port) => {
+    (err, assignedPort) => {
       if (err) {
         console.error(`Failed to bind gRPC server: ${err}`);
         throw err; // Propagate error to caller
