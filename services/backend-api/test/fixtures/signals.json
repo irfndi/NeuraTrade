@@ -1,0 +1,97 @@
+{
+  "signals": [
+    {
+      "id": "sig-tech-001",
+      "symbol": "BTC/USDT",
+      "exchange": "binance",
+      "signal_type": "technical",
+      "direction": "long",
+      "strength": 0.85,
+      "entry_price": "67500.00",
+      "stop_loss": "66800.00",
+      "take_profit": "69000.00",
+      "confidence": 0.78,
+      "indicators": {
+        "rsi": 58.5,
+        "macd_histogram": 12.5,
+        "bb_position": 0.65,
+        "volume_ratio": 1.25
+      },
+      "reasoning": "RSI approaching oversold territory, MACD bullish crossover, volume increasing",
+      "timestamp": "2026-02-15T09:45:00Z",
+      "expires_at": "2026-02-15T10:15:00Z"
+    },
+    {
+      "id": "sig-arbitrage-001",
+      "symbol": "ETH/USDT",
+      "exchange": "binance",
+      "signal_type": "arbitrage",
+      "direction": "long",
+      "strength": 0.92,
+      "entry_price": "3450.50",
+      "stop_loss": "3420.00",
+      "take_profit": "3500.00",
+      "confidence": 0.95,
+      "indicators": {
+        "spread_percent": 0.45,
+        "volume_ratio": 1.8,
+        "depth_imbalance": 0.72
+      },
+      "reasoning": "Significant bid-ask spread detected across order books with high volume",
+      "timestamp": "2026-02-15T09:50:00Z",
+      "expires_at": "2026-02-15T10:05:00Z"
+    },
+    {
+      "id": "sig-funding-001",
+      "symbol": "BTC/USDT:USDT",
+      "exchange": "binance",
+      "signal_type": "funding_arbitrage",
+      "direction": "long",
+      "strength": 0.88,
+      "entry_price": "67500.00",
+      "stop_loss": "67000.00",
+      "take_profit": "68000.00",
+      "confidence": 0.90,
+      "indicators": {
+        "funding_rate": 0.0001,
+        "next_funding": 3600,
+        "borrow_rate": 0.00005
+      },
+      "reasoning": "Positive funding rate with low borrow cost indicates profitable funding arbitrage opportunity",
+      "timestamp": "2026-02-15T09:55:00Z",
+      "expires_at": "2026-02-15T11:55:00Z"
+    },
+    {
+      "id": "sig-scalping-001",
+      "symbol": "SOL/USDT",
+      "exchange": "binance",
+      "signal_type": "scalping",
+      "direction": "short",
+      "strength": 0.75,
+      "entry_price": "185.35",
+      "stop_loss": "186.00",
+      "take_profit": "184.50",
+      "confidence": 0.82,
+      "indicators": {
+        "bb_position": 0.85,
+        "rsi": 72.3,
+        "volume_spike": 2.1,
+        "order_book_imbalance": 0.68
+      },
+      "reasoning": "Overbought conditions with selling pressure and high volume",
+      "timestamp": "2026-02-15T09:58:00Z",
+      "expires_at": "2026-02-15T10:08:00Z"
+    }
+  ],
+  "aggregated_signals": [
+    {
+      "id": "agg-sig-001",
+      "symbols": ["BTC/USDT", "ETH/USDT"],
+      "signal_type": "multi_signal",
+      "primary_direction": "long",
+      "combined_strength": 0.87,
+      "risk_score": 0.35,
+      "timestamp": "2026-02-15T10:00:00Z"
+    }
+  ]
+}
