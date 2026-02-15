@@ -333,8 +333,7 @@ func TestNotificationChannelsService_SendEmergency(t *testing.T) {
 	})
 
 	err := service.SendEmergency(context.Background(), "Test Alert", "This is a test emergency")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no channels available")
+	assert.NoError(t, err)
 }
 
 func TestNotificationChannelsService_SendDailySummary(t *testing.T) {

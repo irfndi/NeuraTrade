@@ -60,8 +60,8 @@ type NotificationChannel interface {
 	Name() string
 	// IsEnabled returns whether the channel is enabled.
 	IsEnabled() bool
-	// Priority returns the priority level this channel handles.
-	Priority() NotificationPriority
+	// Priorities returns the priority levels this channel handles.
+	Priorities() []NotificationPriority
 }
 
 // ChannelRegistry manages notification channels and routing.
@@ -79,17 +79,18 @@ func NewChannelRegistry() *ChannelRegistry {
 	}
 }
 
-// Register adds a channel to the registry for a specific priority.
+// Register adds a channel to the registry for all its priorities.
 func (r *ChannelRegistry) Register(channel NotificationChannel) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	priority := channel.Priority()
-	if r.channels[priority] == nil {
-		r.channels[priority] = make(map[string]NotificationChannel)
+	for _, priority := range channel.Priorities() {
+		if r.channels[priority] == nil {
+			r.channels[priority] = make(map[string]NotificationChannel)
+		}
+		r.channels[priority][channel.Name()] = channel
+		r.logger.Info("Registered notification channel", "channel", channel.Name(), "priority", priority)
 	}
-	r.channels[priority][channel.Name()] = channel
-	r.logger.Info("Registered notification channel", "channel", channel.Name(), "priority", priority)
 }
 
 // GetChannels returns all enabled channels for a given priority.
@@ -165,10 +166,9 @@ func (c *DiscordChannel) IsEnabled() bool {
 	return c.config.Enabled && c.config.WebhookURL != ""
 }
 
-// Priority returns the priority level this channel handles.
-func (c *DiscordChannel) Priority() NotificationPriority {
-	// Discord handles HIGH and EMERGENCY
-	return PriorityNotificationHigh
+// Priorities returns the priority levels this channel handles.
+func (c *DiscordChannel) Priorities() []NotificationPriority {
+	return []NotificationPriority{PriorityNotificationHigh, PriorityNotificationEmergency}
 }
 
 // Send sends a notification to Discord.
@@ -273,10 +273,9 @@ func (c *EmailChannel) IsEnabled() bool {
 		c.config.FromAddress != ""
 }
 
-// Priority returns the priority level this channel handles.
-func (c *EmailChannel) Priority() NotificationPriority {
-	// Email handles LOW priority (dailies) and EMERGENCY
-	return PriorityNotificationLow
+// Priorities returns the priority levels this channel handles.
+func (c *EmailChannel) Priorities() []NotificationPriority {
+	return []NotificationPriority{PriorityNotificationLow, PriorityNotificationEmergency}
 }
 
 // Send sends a notification via email.
@@ -387,10 +386,9 @@ func (c *WebhookChannel) IsEnabled() bool {
 	return c.config.Enabled && c.config.URL != ""
 }
 
-// Priority returns the priority level this channel handles.
-func (c *WebhookChannel) Priority() NotificationPriority {
-	// Custom webhook handles all priorities
-	return PriorityNotificationHigh
+// Priorities returns the priority levels this channel handles.
+func (c *WebhookChannel) Priorities() []NotificationPriority {
+	return []NotificationPriority{PriorityNotificationHigh, PriorityNotificationNormal, PriorityNotificationLow, PriorityNotificationEmergency}
 }
 
 // Send sends a notification to a custom webhook.
