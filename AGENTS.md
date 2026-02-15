@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-14 13:51 Asia/Jakarta
-**Commit:** c3dc227
+**Generated:** 2026-02-15 09:40 Asia/Jakarta
+**Commit:** 7b63460d
 **Branch:** development
 
 ## OVERVIEW
@@ -84,44 +84,24 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 193 total | 20 open | 0 in progress | 6 blocked | 173 closed | 14 ready
+**Stats:** 214 total | 41 open | 0 in progress | 7 blocked | 173 closed | 34 ready
 
 ### Recently Completed (✓)
 - ✓ `neura-s9zx`: Stop-Loss Auto-Execution Loop
 - ✓ `neura-ve52`: Position Tracker (Real-Time Sync)
-- ✓ `neura-1wi`: FOK order execution
-- ✓ `neura-7et`: Build prompt builder from skill.md + context
-- ✓ `neura-8s4`: Execute Go functions for tool calls
-- ✓ `neura-qts`: CLOB API wrapper (order execution)
-- ✓ `neura-ur6`: Parse tool_calls from LLM responses
-- ✓ `neura-2lv0`: LLM Inference Client - OpenAI/Anthropic/MLX API calls with structured output
-- ✓ `neura-acq`: Expose provider/model registry in CLI and Telegram
-- ✓ `neura-5nt`: Provider/model catalog source sync and cache
-- ✓ `neura-otc`: Codify sentiment momentum skill.md
-- ✓ `neura-lnm`: Redis job queue
-- ✓ `neura-1p0`: /doctor diagnostic handler
-- ✓ `neura-4gk`: Quest and monitoring commands
-- ✓ `neura-09y`: Wallet management commands
-- ✓ `neura-ilw`: /liquidate and /liquidate_all handlers
-- ✓ `neura-ik7`: /summary and /performance handlers
-- ✓ `neura-hgk`: /begin and /pause handlers
-- ✓ `neura-tm8`: Store skill hashes for version tracking
-- ✓ `neura-20g`: Implement skill.md file loader
-- ✓ `neura-6md`: Cost tracking in ai_usage table
-- ✓ `neura-32w`: Fund with minimal capital (USDC)
+- ✓ `neura-za8`: Rate limit monitoring
+- ✓ `neura-zn8c`: Replace in-memory state with persistent storage
+- ✓ `neura-8y8`: Emergency rollbacks
 - ✓ `neura-9ai`: Intrusion detection
-- ✓ `neura-nqxe`: Fix undefined talib and snapshots in technical_analysis.go
-- ✓ `neura-hrs3`: Fix undefined CCXTClient in services package
-- ✓ `neura-q82t`: Fix CI/CD failures on PR#102
 - ✓ `neura-aunx`: Add RiskHandler test coverage
 - ✓ `neura-thu1`: Add AutonomousHandler test coverage
 - ✓ `neura-0ty7`: Add DailyLossTracker test coverage
 - ✓ `neura-m1gv`: Add OTPService test coverage
 - ✓ `neura-nq9l`: Add APIKeyService test coverage
 - ✓ `neura-l70a`: Refactor talib wrapper to goflux
-- ✓ `neura-zn8c`: Replace in-memory state with persistent storage
-- ✓ `neura-8y8`: Emergency rollbacks
-- ✓ `neura-za8`: Rate limit monitoring
+- ✓ `neura-nqxe`: Fix undefined talib and snapshots in technical_analysis.go
+- ✓ `neura-hrs3`: Fix undefined CCXTClient in services package
+- ✓ `neura-q82t`: Fix CI/CD failures on PR#102
 - ✓ `neura-px6`: Security audits (gosec, gitleaks)
 - ✓ `neura-4p6`: Exchange resilience monitoring
 - ✓ `neura-kxq`: Kill switch monitoring
@@ -174,7 +154,6 @@ make dev-down
 - ✓ `neura-cd1`: Arbitrage trigger detection
 - ✓ `neura-lk1`: Create install.sh shell script
 - ✓ `neura-uxq`: Add .env template generation
-- ✓ `neura-wiz`: Implement Gamma API wrapper (Polymarket)
 - ✓ `neura-ydp`: Add operator identity encryption (Argon2)
 - ✓ `neura-yns`: Create SQLite schema with all core tables
 
