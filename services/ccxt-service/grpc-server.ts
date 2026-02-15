@@ -139,7 +139,7 @@ export class CcxtGrpcServer {
               symbols,
               (symbol) =>
                 Effect.tryPromise({
-          try: () => self.exchanges[exchange].fetchTicker(symbol),
+                  try: () => self.exchanges[exchange].fetchTicker(symbol),
                   catch: (err: any) =>
                     new Error(err.message || "Unknown error"),
                 }).pipe(

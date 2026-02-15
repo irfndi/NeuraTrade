@@ -1251,9 +1251,7 @@ app.get("/api/orders/:exchange", adminAuth, async (c) => {
       );
     }
 
-    const orders = await ex.fetchOpenOrders(
-      symbol || undefined,
-    );
+    const orders = await ex.fetchOpenOrders(symbol || undefined);
 
     const response: GetOpenOrdersResponse = {
       orders,

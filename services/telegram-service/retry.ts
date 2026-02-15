@@ -1,7 +1,4 @@
-import {
-  TelegramErrorInfo,
-  isRetryableError,
-} from "./telegram-errors";
+import { TelegramErrorInfo, isRetryableError } from "./telegram-errors";
 
 /**
  * Configuration for retry behavior
