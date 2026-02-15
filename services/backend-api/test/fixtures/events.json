@@ -21,11 +21,11 @@
       "exchange": "binance",
       "signal_id": "sig-arbitrage-001",
       "signal_type": "arbitrage",
-      "confidence": 0.95,
+      "confidence": "0.95",
       "timestamp": "2026-02-15T09:50:00Z",
       "metadata": {
-        "spread_percent": 0.45,
-        "volume_ratio": 1.8
+        "spread_percent": "0.45",
+        "volume_ratio": "1.8"
       }
     },
     {
@@ -69,8 +69,8 @@
       "event_type": "risk_alert",
       "alert_type": "drawdown",
       "severity": "high",
-      "current_drawdown": 8.5,
-      "max_drawdown": 10.0,
+      "current_drawdown": "8.5",
+      "max_drawdown": "10.0",
       "message": "Drawdown approaching maximum threshold",
       "timestamp": "2026-02-15T09:45:00Z"
     },
@@ -87,7 +87,7 @@
       "event_type": "arbitrage_found",
       "symbols": ["BTC/USDT", "ETH/USDT"],
       "exchanges": ["binance", "kraken"],
-      "profit_percent": 0.35,
+      "profit_percent": "0.35",
       "notional_value": "50000.00",
       "estimated_profit": "175.00",
       "timestamp": "2026-02-15T09:55:00Z"

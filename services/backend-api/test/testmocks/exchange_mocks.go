@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
@@ -105,6 +106,7 @@ type mockTicker struct {
 
 // ExchangeMock implements a mock exchange for testing
 type ExchangeMock struct {
+	mu        sync.Mutex
 	config    *ExchangeMockConfig
 	callCount int
 	lastReset time.Time
@@ -183,7 +185,15 @@ func (m *ExchangeMock) checkError() error {
 }
 
 // GetTicker returns a ticker for a symbol
-func (m *ExchangeMock) GetTicker(ctx context.Context, symbol string) (*ccxt.TickerResponse, error) {
+func (m *ExchangeMock) GetTicker(ctx context.Context, exchange, symbol string) (*ccxt.TickerResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Validate exchange matches config
+	if exchange != "" && exchange != m.config.ExchangeID {
+		return nil, fmt.Errorf("exchange mismatch: expected %s, got %s", m.config.ExchangeID, exchange)
+	}
+
 	// Check rate limit
 	if err := m.checkRateLimit(); err != nil {
 		return nil, err
@@ -229,7 +239,14 @@ func (m *ExchangeMock) GetTicker(ctx context.Context, symbol string) (*ccxt.Tick
 }
 
 // GetOrderBook returns order book data
-func (m *ExchangeMock) GetOrderBook(ctx context.Context, symbol string, limit int) (*ccxt.OrderBookResponse, error) {
+func (m *ExchangeMock) GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*ccxt.OrderBookResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if exchange != "" && exchange != m.config.ExchangeID {
+		return nil, fmt.Errorf("exchange mismatch: expected %s, got %s", m.config.ExchangeID, exchange)
+	}
+
 	if err := m.checkRateLimit(); err != nil {
 		return nil, err
 	}
@@ -281,7 +298,14 @@ func (m *ExchangeMock) GetOrderBook(ctx context.Context, symbol string, limit in
 }
 
 // GetOHLCV returns OHLCV data
-func (m *ExchangeMock) GetOHLCV(ctx context.Context, symbol, timeframe string, limit int) (*ccxt.OHLCVResponse, error) {
+func (m *ExchangeMock) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*ccxt.OHLCVResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if exchange != "" && exchange != m.config.ExchangeID {
+		return nil, fmt.Errorf("exchange mismatch: expected %s, got %s", m.config.ExchangeID, exchange)
+	}
+
 	if err := m.checkRateLimit(); err != nil {
 		return nil, err
 	}
@@ -392,7 +416,8 @@ func (s *MockExchangeServer) SetLatency(exchange string, latency time.Duration) 
 
 // LoadFixtures loads test data from fixture files
 func (s *MockExchangeServer) LoadFixtures(fixturePath string) error {
-	// This would load actual fixture data if needed
-	// For now, just use the default generated data
+	if fixturePath == "" {
+		return fmt.Errorf("fixture path is empty")
+	}
 	return nil
 }
