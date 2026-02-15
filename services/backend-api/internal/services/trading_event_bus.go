@@ -278,7 +278,9 @@ func (b *TradingEventBus) publishToRedis(event *TradingEvent) {
 	}
 
 	channel := fmt.Sprintf("trading:events:%s", event.Type)
-	b.redis.Publish(ctx, channel, data)
+	if err := b.redis.Publish(ctx, channel, data); err != nil {
+		b.logger.Error("failed to publish event to redis", "error", err)
+	}
 }
 
 // SubscribeToRedis subscribes to Redis Pub/Sub events.
