@@ -9,24 +9,6 @@ import { registerAllCommands } from "./src/commands";
 import { SessionManager } from "./src/session";
 import { logger } from "./src/utils/logger";
 import { startGrpcServer } from "./grpc-server";
-import {
-  isSentryEnabled,
-  sentryMiddleware,
-  initializeSentry,
-  captureException,
-  flush as sentryFlush,
-  trackBotMode,
-} from "./sentry";
-import { loadConfig } from "./config";
-import { createApi } from "./api";
-import {
-  handleStart,
-  handleHelp,
-  handleOpportunities,
-  handleStatus,
-  handleSettings,
-  handleStop,
-} from "./bot-handlers";
 
 const bot = new Bot(config.botToken);
 const api = new BackendApiClient({

@@ -1,5 +1,5 @@
 import * as grpc from "@grpc/grpc-js";
-import { Effect, Exit, Duration, Cause } from "effect";
+import { Effect, Exit, Cause } from "effect";
 import {
   CcxtServiceService,
   CcxtServiceServer,
@@ -45,6 +45,7 @@ export class CcxtGrpcServer {
     const { exchange, symbol } = call.request;
     const self = this;
 
+    // eslint-disable-next-line require-yield
     const program = Effect.gen(function* (_) {
       if (!self.exchanges[exchange]) {
         yield* _(Effect.fail(new Error("Exchange not supported")));
@@ -126,6 +127,7 @@ export class CcxtGrpcServer {
     const exchangesToQuery =
       exchanges.length > 0 ? exchanges : Object.keys(self.exchanges);
 
+    // eslint-disable-next-line require-yield
     const program = Effect.gen(function* (_) {
       const results = yield* _(
         Effect.forEach(
@@ -207,6 +209,7 @@ export class CcxtGrpcServer {
       return;
     }
 
+    // eslint-disable-next-line require-yield
     const program = Effect.gen(function* (_) {
       const trades = (yield* _(
         Effect.tryPromise(() =>
@@ -266,6 +269,7 @@ export class CcxtGrpcServer {
       return;
     }
 
+    // eslint-disable-next-line require-yield
     const program = Effect.gen(function* (_) {
       const markets = (yield* _(
         Effect.tryPromise(() => self.exchanges[exchange].loadMarkets()),
@@ -313,6 +317,7 @@ export class CcxtGrpcServer {
       return;
     }
 
+    // eslint-disable-next-line require-yield
     const program = Effect.gen(function* (_) {
       const ex = self.exchanges[exchange];
       let rates: any[] = [];
@@ -391,6 +396,7 @@ export class CcxtGrpcServer {
       return;
     }
 
+    // eslint-disable-next-line require-yield
     const program = Effect.gen(function* (_) {
       const orderbook = (yield* _(
         Effect.tryPromise(() =>
@@ -451,6 +457,7 @@ export class CcxtGrpcServer {
       return;
     }
 
+    // eslint-disable-next-line require-yield
     const program = Effect.gen(function* (_) {
       const ohlcv = (yield* _(
         Effect.tryPromise(() =>
@@ -502,6 +509,7 @@ export class CcxtGrpcServer {
     callback: grpc.sendUnaryData<GetExchangesResponse>,
   ): void => {
     const self = this;
+    // eslint-disable-next-line require-yield
     const program = Effect.gen(function* (_) {
       const exchangeList = Object.keys(self.exchanges).map((id) => ({
         id,

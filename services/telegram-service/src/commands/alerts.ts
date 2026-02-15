@@ -91,7 +91,7 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
         `Use /alerts to view all your alerts.`;
 
       await ctx.reply(msg, { parse_mode: "Markdown" });
-    } catch (e) {
+    } catch {
       await ctx.reply("Failed to create alert. Please try again.");
     }
   });

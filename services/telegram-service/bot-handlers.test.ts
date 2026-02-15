@@ -132,7 +132,7 @@ describe("Bot Handlers", () => {
   });
 
   test("handleHelp sends help message", async () => {
-    const api = createMockApi(); // Not used but needed for consistent setup if we change help signature
+    const _api = createMockApi(); // Not used but needed for consistent setup if we change help signature
     const ctx = createMockContext();
     await handleHelp()(ctx);
     expect(ctx.reply).toHaveBeenCalled();

@@ -12,16 +12,16 @@ process.env.TELEGRAM_WEBHOOK_URL = "https://example.com/webhook";
 // Mock Grammy
 mock.module("grammy", () => {
   class MockApi {
-    async sendMessage(chatId: string | number, text: string, options?: any) {
+    async sendMessage(chatId: string | number, text: string, _options?: any) {
       // Mock implementation
       return { message_id: 123, chat: { id: chatId }, text };
     }
 
-    async deleteWebhook(options?: any) {
+    async deleteWebhook(_options?: any) {
       return true;
     }
 
-    async setWebhook(url: string, options?: any) {
+    async setWebhook(_url: string, _options?: any) {
       return true;
     }
   }
@@ -29,11 +29,11 @@ mock.module("grammy", () => {
   class MockBot {
     api: MockApi;
 
-    constructor(token: string) {
+    constructor(_token: string) {
       this.api = new MockApi();
     }
 
-    async handleUpdate(update: any) {
+    async handleUpdate(_update: any) {
       return true;
     }
 
@@ -45,15 +45,15 @@ mock.module("grammy", () => {
       // Mock initialization - do nothing
     }
 
-    command(cmd: string, handler: any) {
+    command(_cmd: string, _handler: any) {
       // Do nothing
     }
 
-    on(event: string, handler: any) {
+    on(_event: string, _handler: any) {
       // Do nothing
     }
 
-    catch(handler: any) {
+    catch(_handler: any) {
       // Do nothing
     }
   }
@@ -72,8 +72,8 @@ mock.module("grammy", () => {
         description: string;
         parameters?: any;
       },
-      method: string,
-      params: any,
+      _method: string,
+      _params: any,
     ) {
       super(message);
       this.name = "GrammyError";

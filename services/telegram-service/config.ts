@@ -1,5 +1,3 @@
-import { Effect } from "effect";
-
 export type TelegramConfig = {
   botToken: string;
   webhookUrl: string | null;

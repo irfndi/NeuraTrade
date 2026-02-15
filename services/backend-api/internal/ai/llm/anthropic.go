@@ -459,7 +459,7 @@ func (c *AnthropicClient) handleErrorResponse(statusCode int, body []byte) error
 
 	switch statusCode {
 	case http.StatusTooManyRequests:
-		return ErrRateLimited{Provider: ProviderAnthropic, RetryAfter: 30 * time.Second}
+		return RateLimitedError{Provider: ProviderAnthropic, RetryAfter: 30 * time.Second}
 	case http.StatusBadRequest:
 		if apiErr.Error.Type == "invalid_request_error" {
 			return fmt.Errorf("anthropic API error: %s", apiErr.Error.Message)

@@ -113,7 +113,7 @@ func listModels(ctx context.Context, registry *ai.Registry, args []string) error
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tMODEL\tDISPLAY NAME\tTIER\tLATENCY\tTOOLS\tCOST/1M")
+	_, _ = fmt.Fprintln(w, "PROVIDER\tMODEL\tDISPLAY NAME\tTIER\tLATENCY\tTOOLS\tCOST/1M")
 
 	for _, m := range models.Models {
 		if providerFilter != "" && m.ProviderID != providerFilter {
@@ -129,7 +129,7 @@ func listModels(ctx context.Context, registry *ai.Registry, args []string) error
 		}
 
 		cost := m.Cost.InputCost.Add(m.Cost.OutputCost)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t$%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t$%s\n",
 			m.ProviderID,
 			m.ModelID,
 			truncate(m.DisplayName, 30),
@@ -150,10 +150,10 @@ func listProviders(ctx context.Context, registry *ai.Registry, args []string) er
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tMODELS\tENV VARS")
+	_, _ = fmt.Fprintln(w, "ID\tNAME\tMODELS\tENV VARS")
 
 	for _, p := range providers {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%s\n",
 			p.ID,
 			p.Name,
 			len(p.Models),
@@ -194,10 +194,10 @@ func searchModels(ctx context.Context, registry *ai.Registry, args []string) err
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tMODEL\tDISPLAY NAME")
+	_, _ = fmt.Fprintln(w, "PROVIDER\tMODEL\tDISPLAY NAME")
 
 	for _, m := range matches {
-		fmt.Fprintf(w, "%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n",
 			m.ProviderID,
 			m.ModelID,
 			m.DisplayName,
@@ -378,11 +378,11 @@ func listByCapabilities(ctx context.Context, registry *ai.Registry, args []strin
 	})
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tMODEL\tTIER\tCOST/1M")
+	_, _ = fmt.Fprintln(w, "PROVIDER\tMODEL\tTIER\tCOST/1M")
 
 	for _, m := range models {
 		cost := m.Cost.InputCost.Add(m.Cost.OutputCost)
-		fmt.Fprintf(w, "%s\t%s\t%s\t$%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t$%s\n",
 			m.ProviderID,
 			m.ModelID,
 			m.Tier,

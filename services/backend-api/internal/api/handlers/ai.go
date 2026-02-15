@@ -105,7 +105,7 @@ func (h *AIHandler) RouteModel(c *gin.Context) {
 
 	maxCost := 0.0
 	if req.MaxCost != "" {
-		fmt.Sscanf(req.MaxCost, "%f", &maxCost)
+		_, _ = fmt.Sscanf(req.MaxCost, "%f", &maxCost)
 	}
 
 	latencyPref := req.LatencyPreference
