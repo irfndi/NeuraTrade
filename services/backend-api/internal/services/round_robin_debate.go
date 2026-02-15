@@ -302,11 +302,12 @@ func (r *RoundRobinDebateLoop) executeDebateRound(
 	round.Confidence = confidence
 
 	// Determine final decision
-	if consensus == "approved" {
+	switch consensus {
+	case "approved":
 		round.FinalDecision = traderVote.Decision
-	} else if consensus == "rejected" {
+	case "rejected":
 		round.FinalDecision = "rejected"
-	} else {
+	default:
 		round.FinalDecision = "hold"
 	}
 
@@ -342,9 +343,10 @@ func (r *RoundRobinDebateLoop) runAnalystPhase(ctx context.Context, market Marke
 	}
 
 	decision := "hold"
-	if analysis.Recommendation == RecommendationBuy {
+	switch analysis.Recommendation {
+	case RecommendationBuy:
 		decision = "buy"
-	} else if analysis.Recommendation == RecommendationSell {
+	case RecommendationSell:
 		decision = "sell"
 	}
 
@@ -383,7 +385,7 @@ func (r *RoundRobinDebateLoop) runRiskManagerPhase(
 	}
 
 	justification := getReasonsSummary(assessment.Reasons)
-	if assessment.Recommendations != nil && len(assessment.Recommendations) > 0 {
+	if len(assessment.Recommendations) > 0 {
 		justification = assessment.Recommendations[0]
 	}
 

@@ -1252,7 +1252,7 @@ app.get("/api/orders/:exchange", adminAuth, async (c) => {
     }
 
     const orders = await ex.fetchOpenOrders(
-      symbol ? ([symbol] as unknown as string) : undefined,
+      symbol || undefined,
     );
 
     const response: GetOpenOrdersResponse = {
@@ -1304,7 +1304,7 @@ app.get("/api/orders/:exchange/closed", adminAuth, async (c) => {
     }
 
     const orders = await ex.fetchClosedOrders(
-      symbol ? ([symbol] as unknown as string) : undefined,
+      symbol || undefined,
       undefined,
       limit,
     );

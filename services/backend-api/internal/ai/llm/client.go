@@ -185,7 +185,7 @@ func (f *ClientFactory) Configure(provider Provider, config ClientConfig) {
 func (f *ClientFactory) Create(ctx context.Context, provider Provider) (Client, error) {
 	config, ok := f.configs[provider]
 	if !ok {
-		return nil, ErrProviderNotConfigured{Provider: provider}
+		return nil, ProviderNotConfiguredError{Provider: provider}
 	}
 
 	switch provider {
@@ -196,11 +196,11 @@ func (f *ClientFactory) Create(ctx context.Context, provider Provider) (Client, 
 	case ProviderMLX:
 		return NewMLXClient(config), nil
 	case ProviderGoogle:
-		return nil, ErrUnsupportedProvider{Provider: provider}
+		return nil, UnsupportedProviderError{Provider: provider}
 	case ProviderMistral:
-		return nil, ErrUnsupportedProvider{Provider: provider}
+		return nil, UnsupportedProviderError{Provider: provider}
 	default:
-		return nil, ErrUnsupportedProvider{Provider: provider}
+		return nil, UnsupportedProviderError{Provider: provider}
 	}
 }
 
@@ -222,52 +222,52 @@ func (f *ClientFactory) CreateForModel(ctx context.Context, modelID string) (Cli
 
 // Error types
 
-// ErrProviderNotConfigured indicates a provider is not configured
-type ErrProviderNotConfigured struct {
+// ProviderNotConfiguredError indicates a provider is not configured
+type ProviderNotConfiguredError struct {
 	Provider Provider
 }
 
-func (e ErrProviderNotConfigured) Error() string {
+func (e ProviderNotConfiguredError) Error() string {
 	return "provider not configured: " + string(e.Provider)
 }
 
-// ErrUnsupportedProvider indicates an unsupported provider
-type ErrUnsupportedProvider struct {
+// UnsupportedProviderError indicates an unsupported provider
+type UnsupportedProviderError struct {
 	Provider Provider
 }
 
-func (e ErrUnsupportedProvider) Error() string {
+func (e UnsupportedProviderError) Error() string {
 	return "unsupported provider: " + string(e.Provider)
 }
 
-// ErrRateLimited indicates rate limiting from the provider
-type ErrRateLimited struct {
+// RateLimitedError indicates rate limiting from the provider
+type RateLimitedError struct {
 	Provider   Provider
 	RetryAfter time.Duration
 }
 
-func (e ErrRateLimited) Error() string {
+func (e RateLimitedError) Error() string {
 	return "rate limited by " + string(e.Provider) + ", retry after " + e.RetryAfter.String()
 }
 
-// ErrContextLengthExceeded indicates the context length was exceeded
-type ErrContextLengthExceeded struct {
+// ContextLengthExceededError indicates the context length was exceeded
+type ContextLengthExceededError struct {
 	Provider    Provider
 	MaxTokens   int
 	InputTokens int
 }
 
-func (e ErrContextLengthExceeded) Error() string {
+func (e ContextLengthExceededError) Error() string {
 	return fmt.Sprintf("context length exceeded: max %d, input %d", e.MaxTokens, e.InputTokens)
 }
 
-// ErrContentFiltered indicates content was filtered by the provider
-type ErrContentFiltered struct {
+// ContentFilteredError indicates content was filtered by the provider
+type ContentFilteredError struct {
 	Provider Provider
 	Reason   string
 	Category string
 }
 
-func (e ErrContentFiltered) Error() string {
+func (e ContentFilteredError) Error() string {
 	return "content filtered by " + string(e.Provider) + ": " + e.Reason
 }

@@ -1,5 +1,4 @@
 import {
-  TelegramErrorCode,
   TelegramErrorInfo,
   isRetryableError,
 } from "./telegram-errors";

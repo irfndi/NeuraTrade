@@ -136,16 +136,6 @@ func (s *PaperExecutionSimulator) randomFloat64() float64 {
 	return float64(binary.BigEndian.Uint64(b)) / float64(math.MaxUint64)
 }
 
-func (s *PaperExecutionSimulator) randomFloat64Between(min, max float64) float64 {
-	return min + s.randomFloat64()*(max-min)
-}
-
-func (s *PaperExecutionSimulator) randomInt63() int64 {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return int64(b[0])<<56 | int64(b[1])<<48 | int64(b[2])<<40 | int64(b[3])<<32 | int64(b[4])<<24 | int64(b[5])<<16 | int64(b[6])<<8 | int64(b[7])
-}
-
 // SimulateFill simulates filling a paper order at the given market price.
 func (s *PaperExecutionSimulator) SimulateFill(ctx context.Context, order *PaperOrder, marketPrice decimal.Decimal) (*PaperOrder, error) {
 	if order.Status != PaperOrderStatusPending {
