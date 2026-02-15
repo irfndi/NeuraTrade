@@ -226,7 +226,7 @@ func (c *DiscordChannel) Send(ctx context.Context, notification *Notification) e
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("discord webhook returned status %d", resp.StatusCode)
@@ -434,7 +434,7 @@ func (c *WebhookChannel) Send(ctx context.Context, notification *Notification) e
 			lastErr = err
 			continue
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			c.logger.Info("Sent notification to webhook", "notification_id", notification.ID)
