@@ -17,7 +17,7 @@ type SubagentResult struct {
 	AgentID   string
 	AgentType string
 	Success   bool
-	Data      interface{}
+	Data      any
 	Error     error
 	Duration  time.Duration
 }
@@ -42,6 +42,8 @@ type SubagentSpawner struct {
 	maxConcurrent  int
 	currentRunning atomic.Int32
 	wg             sync.WaitGroup
+	closeOnce      sync.Once
+	closed         atomic.Bool
 }
 
 // NewSubagentSpawner creates a new subagent spawner.
@@ -246,9 +248,12 @@ func (s *SubagentSpawner) Wait() {
 
 // Close closes the spawner and waits for all agents to complete.
 func (s *SubagentSpawner) Close() {
-	s.CancelAll()
-	s.wg.Wait()
-	close(s.resultCh)
+	s.closeOnce.Do(func() {
+		s.closed.Store(true)
+		s.CancelAll()
+		s.wg.Wait()
+		close(s.resultCh)
+	})
 }
 
 func (s *SubagentSpawner) mergeOptions(opts []SubagentOptions) SubagentOptions {
@@ -271,9 +276,13 @@ func (s *SubagentSpawner) mergeOptions(opts []SubagentOptions) SubagentOptions {
 }
 
 func (s *SubagentSpawner) acquireSlot() bool {
+	maxConcurrent := int32(s.maxConcurrent)
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
 	for {
 		current := s.currentRunning.Load()
-		if current >= int32(s.maxConcurrent) {
+		if current >= maxConcurrent {
 			return false
 		}
 		if s.currentRunning.CompareAndSwap(current, current+1) {

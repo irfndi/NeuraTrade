@@ -159,15 +159,19 @@ func TestWebhookChannel_Retry(t *testing.T) {
 func TestNotificationPriorityRouting(t *testing.T) {
 	registry := NewChannelRegistry()
 
-	// Register Discord for HIGH priority
 	discord := NewDiscordChannel(DiscordChannelConfig{
-		Enabled: true,
+		WebhookURL: "https://discord.com/api/webhooks/test",
+		Enabled:    true,
 	})
 	registry.Register(discord)
 
-	// Register Email for LOW priority
 	email := NewEmailChannel(EmailChannelConfig{
-		Enabled: true,
+		Enabled:     true,
+		SMTPHost:    "smtp.example.com",
+		SMTPPort:    587,
+		FromAddress: "alerts@neuratrade.com",
+		Username:    "user",
+		Password:    "pass",
 	})
 	registry.Register(email)
 
@@ -181,13 +185,13 @@ func TestNotificationPriorityRouting(t *testing.T) {
 	assert.Len(t, lowChannels, 1)
 	assert.Equal(t, "email", lowChannels[0].Name())
 
-	// Test EMERGENCY - Discord handles HIGH which includes EMERGENCY
+	// Test EMERGENCY - both Discord and Email handle critical priority
 	emergencyChannels := registry.GetChannels(PriorityCritical)
-	assert.Len(t, emergencyChannels, 1)
+	assert.Len(t, emergencyChannels, 2)
 }
 
 func TestNotificationChannelsService(t *testing.T) {
-	service := NewNotificationChannelsService()
+	service := NewNotificationChannelsService(nil)
 
 	// Configure Discord
 	service.ConfigureDiscord(DiscordChannelConfig{
