@@ -143,7 +143,8 @@ func (e *ShadowModeEngine) ExecuteTrade(ctx context.Context, symbol, side string
 	}
 	e.nextTradeID++
 
-	if side == "buy" {
+	switch side {
+	case "buy":
 		if e.portfolio.Cash.LessThan(totalValue) {
 			return nil, fmt.Errorf("insufficient funds: have %s, need %s", e.portfolio.Cash.String(), totalValue.String())
 		}
@@ -167,7 +168,7 @@ func (e *ShadowModeEngine) ExecuteTrade(ctx context.Context, symbol, side string
 				OpenedAt:      time.Now(),
 			}
 		}
-	} else if side == "sell" {
+	case "sell":
 		if pos, exists := e.portfolio.Positions[symbol]; exists {
 			if pos.Quantity.LessThan(quantity) {
 				return nil, fmt.Errorf("insufficient position: have %s, need %s", pos.Quantity.String(), quantity.String())
@@ -188,6 +189,8 @@ func (e *ShadowModeEngine) ExecuteTrade(ctx context.Context, symbol, side string
 		} else {
 			return nil, fmt.Errorf("no position to sell for %s", symbol)
 		}
+	default:
+		return nil, fmt.Errorf("unknown side: %s", side)
 	}
 
 	e.trades = append(e.trades, trade)
