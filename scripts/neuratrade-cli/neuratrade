@@ -1,0 +1,551 @@
+#!/bin/bash
+#
+# NeuraTrade CLI - Local configuration and onboarding tool
+# Usage: neuratrade <command>
+#
+# This CLI manages ~/.neuratrade/ folder for:
+# - Configuration files (env, yaml)
+# - AI context files (skills, agents)
+# - Local database
+# - Channel configurations
+#
+# Similar to picoclaw approach: https://github.com/sipeed/picoclaw
+
+set -euo pipefail
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Constants
+NEURATRADE_DIR="${NEURATRADE_DIR:-$HOME/.neuratrade}"
+NEURATRADE_VERSION="1.0.0"
+
+# Print functions
+print_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+print_success() { echo -e "${GREEN}[OK]${NC} $*"; }
+print_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+print_step() { echo -e "${CYAN}[STEP]${NC} $*"; }
+
+# Show help
+show_help() {
+    cat <<EOF
+NeuraTrade CLI v${NEURATRADE_VERSION}
+
+Usage: neuratrade <command> [options]
+
+Commands:
+    onboard          Initialize ~/.neuratrade/ folder (first-time setup)
+    init             Alias for onboard
+    config           Show/edit configuration (JSON format)
+    context          Manage AI context files
+    workspace        Show workspace directory
+    db               Database operations
+    channel          Manage notification channels
+    doctor           Diagnose configuration issues
+    path             Show neuratrade directory path
+    version          Show version
+
+Examples:
+    neuratrade onboard              # First-time setup
+    neuratrade config show         # Display current config
+    neuratrade context list        # List AI context files
+    neuratrade doctor              # Check for issues
+
+For more info: https://github.com/irfndi/neuratrade
+EOF
+}
+
+# Create directory structure (matching picoclaw's workspace pattern)
+create_directories() {
+    print_step "Creating directory structure..."
+    
+    local dirs=(
+        "${NEURATRADE_DIR}"
+        "${NEURATRADE_DIR}/workspace"       # Main workspace (like picoclaw)
+        "${NEURATRADE_DIR}/workspace/skills"    # Trading strategies
+        "${NEURATRADE_DIR}/workspace/agents"    # Agent definitions
+        "${NEURATRADE_DIR}/workspace/memory"     # Long-term memory
+        "${NEURATRADE_DIR}/workspace/sessions"  # Conversation sessions
+        "${NEURATRADE_DIR}/workspace/cron"      # Scheduled jobs
+        "${NEURATRADE_DIR}/data"                 # Local database
+        "${NEURATRADE_DIR}/logs"                 # Log files
+    )
+    
+    for dir in "${dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            print_success "Exists: ${dir#$HOME/}"
+        else
+            mkdir -p "$dir"
+            print_success "Created: ${dir#$HOME/}"
+        fi
+    done
+}
+
+# Generate default config (JSON format like picoclaw)
+generate_config() {
+    print_step "Generating default configuration..."
+    
+    # Main config.json (like picoclaw)
+    if [[ ! -f "${NEURATRADE_DIR}/config.json" ]]; then
+        cat > "${NEURATRADE_DIR}/config.json" <<'EOF'
+{
+  "version": "1.0.0",
+  "database": {
+    "url": "postgres://neuratrade:password@localhost:5432/neuratrade",
+    "max_conns": 10,
+    "max_idle_conns": 2,
+    "sqlite_path": "~/.neuratrade/data/neuratrade.db"
+  },
+  "redis": {
+    "url": "redis://localhost:6379"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "environment": "development"
+  },
+  "services": {
+    "ccxt": {
+      "url": "http://localhost:3001"
+    },
+    "telegram": {
+      "enabled": false,
+      "bot_token": "",
+      "api_base_url": "http://localhost:8080",
+      "use_polling": true,
+      "port": 3002
+    }
+  },
+  "security": {
+    "admin_api_key": "change-me-in-production"
+  },
+  "logging": {
+    "level": "info",
+    "file": "~/.neuratrade/logs/neuratrade.log"
+  }
+}
+EOF
+        print_success "Created: config.json"
+    else
+        print_warn "Skipping config.json (already exists)"
+    fi
+    
+    # Workspace AI context files (like picoclaw's AGENTS.md, IDENTITY.md, etc.)
+    
+    # AGENTS.md - Agent behavior guide
+    if [[ ! -f "${NEURATRADE_DIR}/workspace/AGENTS.md" ]]; then
+        cat > "${NEURATRADE_DIR}/workspace/AGENTS.md" <<'EOF'
+# NeuraTrade Agent Guide
+
+You are NeuraTrade, an autonomous cryptocurrency trading system.
+
+## Your Role
+
+- Analyze market data from multiple exchanges
+- Detect arbitrage opportunities (spot & futures)
+- Execute trades based on signals
+- Manage risk and portfolio
+
+## Available Skills
+
+See `skills/` directory for trading strategies.
+EOF
+        print_success "Created: workspace/AGENTS.md"
+    fi
+    
+    # IDENTITY.md - Agent identity
+    if [[ ! -f "${NEURATRADE_DIR}/workspace/IDENTITY.md" ]]; then
+        cat > "${NEURATRADE_DIR}/workspace/IDENTITY.md" <<'EOF'
+# NeuraTrade Identity
+
+## Name
+NeuraTrade
+
+## Type
+Autonomous Cryptocurrency Trading System
+
+## Capabilities
+- Real-time market data analysis
+- Arbitrage detection (spot & funding)
+- Technical analysis (RSI, MACD, Bollinger Bands)
+- Risk management
+- Portfolio optimization
+EOF
+        print_success "Created: workspace/IDENTITY.md"
+    fi
+    
+    # SOUL.md - Agent personality
+    if [[ ! -f "${NEURATRADE_DIR}/workspace/SOUL.md" ]]; then
+        cat > "${NEURATRADE_DIR}/workspace/SOUL.md" <<'EOF'
+# NeuraTrade Soul
+
+## Principles
+- Prioritize risk management over profits
+- Always verify signals before execution
+- Stay within configured limits
+- Learn from losses
+
+## Behavior
+- Conservative in uncertain markets
+- Transparent about errors
+- Continuous monitoring
+EOF
+        print_success "Created: workspace/SOUL.md"
+    fi
+    
+    # TOOLS.md - Tool descriptions
+    if [[ ! -f "${NEURATRADE_DIR}/workspace/TOOLS.md" ]]; then
+        cat > "${NEURATRADE_DIR}/workspace/TOOLS.md" <<'EOF'
+# NeuraTrade Tools
+
+## Trading Tools
+- `place_order` - Execute a trade
+- `cancel_order` - Cancel pending order
+- `get_balance` - Check account balance
+- `get_positions` - List open positions
+
+## Analysis Tools
+- `get_ticker` - Fetch price data
+- `get_orderbook` - Fetch order book
+- `calculate_indicators` - Technical analysis
+
+## Risk Tools
+- `check_risk_limits` - Verify within limits
+- `get_portfolio_value` - Total portfolio value
+EOF
+        print_success "Created: workspace/TOOLS.md"
+    fi
+    
+    # USER.md - User preferences
+    if [[ ! -f "${NEURATRADE_DIR}/workspace/USER.md" ]]; then
+        cat > "${NEURATRADE_DIR}/workspace/USER.md" <<'EOF'
+# User Preferences
+
+## Trading Parameters
+- Max position size: [TO BE CONFIGURED]
+- Risk tolerance: moderate
+- Preferred exchanges: [TO BE CONFIGURED]
+
+## Notifications
+- Telegram enabled: false
+- Alert on: arbitrage opportunities, risk events
+EOF
+        print_success "Created: workspace/USER.md"
+    fi
+}
+
+# Setup context files (symlinks to project - like picoclaw's workspace approach)
+setup_context() {
+    print_step "Setting up AI context files..."
+    
+    local project_root
+    project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    
+    # Link AGENTS.md files from services
+    local context_sources=(
+        "services/backend-api/AGENTS.md:workspace/services/backend-api.md"
+        "services/ccxt-service/AGENTS.md:workspace/services/ccxt-service.md"
+        "services/telegram-service/AGENTS.md:workspace/services/telegram-service.md"
+    )
+    
+    for item in "${context_sources[@]}"; do
+        local src="${item%%:*}"
+        local dest="${item##*:}"
+        local full_src="${project_root}/${src}"
+        local full_dest="${NEURATRADE_DIR}/${dest}"
+        
+        if [[ -f "$full_src" ]]; then
+            # Create parent dir
+            mkdir -p "$(dirname "$full_dest")"
+            
+            if [[ -L "$full_dest" ]]; then
+                rm "$full_dest"
+            fi
+            
+            ln -sf "$full_src" "$full_dest"
+            print_success "Linked: ${dest} -> ${src}"
+        else
+            print_warn "Not found: ${full_src}"
+        fi
+    done
+    
+    # Link skills directory (trading strategies)
+    local skills_src="${project_root}/services/backend-api/skills"
+    local skills_dest="${NEURATRADE_DIR}/workspace/skills"
+    
+    if [[ -d "$skills_src" ]]; then
+        mkdir -p "$(dirname "$skills_dest")"
+        # Remove empty directory first, then link
+        if [[ -d "$skills_dest" ]] && [[ -z "$(ls -A "$skills_dest")" ]]; then
+            rmdir "$skills_dest"
+        fi
+        if [[ -L "$skills_dest" ]]; then
+            rm "$skills_dest"
+        fi
+        if [[ -d "$skills_dest" ]]; then
+            print_warn "Skills directory already has content, skipping link"
+        else
+            ln -sf "$skills_src" "$skills_dest"
+            print_success "Linked: workspace/skills -> services/backend-api/skills"
+        fi
+    fi
+    
+    # Create workspace index
+    if [[ ! -f "${NEURATRADE_DIR}/workspace/README.md" ]]; then
+        cat > "${NEURATRADE_DIR}/workspace/README.md" <<EOF
+# NeuraTrade Workspace
+
+This directory contains AI context files and working data.
+
+## Structure
+
+- \`agents/\` - Agent behavior guides
+- \`skills/\` - Trading strategies (symlinked to project)
+- \`memory/\` - Long-term memory
+- \`sessions/\` - Conversation history
+- \`cron/\` - Scheduled tasks
+- \`services/\` - Service-specific context (symlinked)
+
+## Quick Links
+
+EOF
+        for svc in backend-api ccxt-service telegram-service; do
+            if [[ -f "${NEURATRADE_DIR}/workspace/services/${svc}.md" ]]; then
+                echo "- [${svc}](./services/${svc}.md)" >> "${NEURATRADE_DIR}/workspace/README.md"
+            fi
+        done
+        
+        print_success "Created: workspace/README.md"
+    fi
+}
+
+# Initialize command (like picoclaw's onboard)
+cmd_onboard() {
+    echo ""
+    echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║     NeuraTrade Initialization         ║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
+    echo ""
+    echo "Installing to: ${NEURATRADE_DIR}"
+    echo ""
+    
+    if [[ -d "${NEURATRADE_DIR}" && -f "${NEURATRADE_DIR}/config.json" ]]; then
+        print_warn "NeuraTrade is already initialized!"
+        read -p "Re-initialize? [y/N] " -n 1 -r reply
+        echo
+        if [[ ! $reply =~ ^[Yy]$ ]]; then
+            print_info "Aborted."
+            exit 0
+        fi
+    fi
+    
+    create_directories
+    generate_config
+    setup_context
+    
+    echo ""
+    echo -e "${GREEN}════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Initialization complete!${NC}"
+    echo -e "${GREEN}════════════════════════════════════════${NC}"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Edit config: ${NEURATRADE_DIR}/config.json"
+    echo "  2. Configure Telegram bot token"
+    echo "  3. Run: neuratrade doctor"
+    echo ""
+    echo "Quick commands:"
+    echo "  neuratrade config show    # View config"
+    echo "  neuratrade workspace      # Show workspace"
+    echo "  neuratrade doctor        # Check for issues"
+    echo ""
+}
+
+# Show config command (JSON like picoclaw)
+cmd_config() {
+    local action="${1:-show}"
+    
+    case "$action" in
+        show)
+            if [[ -f "${NEURATRADE_DIR}/config.json" ]]; then
+                cat "${NEURATRADE_DIR}/config.json"
+            else
+                print_error "Config not found. Run 'neuratrade onboard' first."
+                exit 1
+            fi
+            ;;
+        edit)
+            ${EDITOR:-vim} "${NEURATRADE_DIR}/config.json"
+            ;;
+        path)
+            echo "${NEURATRADE_DIR}/config.json"
+            ;;
+        *)
+            print_error "Unknown config action: $action"
+            echo "Usage: neuratrade config [show|edit|path]"
+            exit 1
+            ;;
+    esac
+}
+
+# Workspace command
+cmd_workspace() {
+    echo "${NEURATRADE_DIR}/workspace"
+}
+
+# Context command - list AI context files
+cmd_context() {
+    local action="${1:-list}"
+    
+    case "$action" in
+        list|ls)
+            print_info "AI Context files in workspace:"
+            echo ""
+            ls -la "${NEURATRADE_DIR}/workspace/" 2>/dev/null || print_warn "Workspace not initialized"
+            echo ""
+            print_info "Services context:"
+            ls -la "${NEURATRADE_DIR}/workspace/services/" 2>/dev/null || print_warn "No service context linked"
+            echo ""
+            print_info "Skills:"
+            ls -la "${NEURATRADE_DIR}/workspace/skills/" 2>/dev/null || print_warn "No skills linked"
+            ;;
+        path)
+            echo "${NEURATRADE_DIR}/workspace"
+            ;;
+        *)
+            print_error "Unknown context action: $action"
+            echo "Usage: neuratrade context [list|path]"
+            exit 1
+            ;;
+    esac
+}
+
+# Doctor command - diagnose issues
+cmd_doctor() {
+    print_info "Running diagnostics..."
+    echo ""
+    
+    local issues=0
+    
+    # Check directory
+    if [[ -d "${NEURATRADE_DIR}" ]]; then
+        print_success "NeuraTrade directory exists: ${NEURATRADE_DIR}"
+    else
+        print_error "NeuraTrade directory not found: ${NEURATRADE_DIR}"
+        print_info "Run 'neuratrade onboard' to set up"
+        ((issues++))
+    fi
+    
+    # Check config.json
+    if [[ -f "${NEURATRADE_DIR}/config.json" ]]; then
+        print_success "Config file exists (config.json)"
+        
+        # Check for default values
+        if grep -q '"admin_api_key": "change-me' "${NEURATRADE_DIR}/config.json" 2>/dev/null; then
+            print_warn "admin_api_key is still set to default value"
+            ((issues++))
+        fi
+        
+        # Check Telegram config
+        if grep -q '"bot_token": ""' "${NEURATRADE_DIR}/config.json" 2>/dev/null; then
+            print_warn "Telegram bot_token not configured"
+        fi
+    else
+        print_error "Config file not found (config.json)"
+        ((issues++))
+    fi
+    
+    # Check workspace
+    if [[ -d "${NEURATRADE_DIR}/workspace" ]]; then
+        print_success "Workspace directory exists"
+        
+        # Check for key context files
+        for file in AGENTS.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
+            if [[ -f "${NEURATRADE_DIR}/workspace/$file" ]]; then
+                print_success "  - $file exists"
+            else
+                print_warn "  - $file missing"
+            fi
+        done
+    else
+        print_warn "Workspace directory not found"
+    fi
+    
+    # Check data directory
+    if [[ -d "${NEURATRADE_DIR}/data" ]]; then
+        print_success "Data directory exists"
+    else
+        print_warn "Data directory not found"
+    fi
+    
+    echo ""
+    if [[ $issues -eq 0 ]]; then
+        print_success "All checks passed!"
+    else
+        print_warn "Found $issues issue(s)"
+    fi
+}
+
+# Path command
+cmd_path() {
+    echo "${NEURATRADE_DIR}"
+}
+
+# Version command
+cmd_version() {
+    echo "NeuraTrade CLI v${NEURATRADE_VERSION}"
+}
+
+# Main dispatcher
+main() {
+    local cmd="${1:-help}"
+    shift 2>/dev/null || true
+    
+    case "$cmd" in
+        onboard|init)
+            cmd_onboard
+            ;;
+        config)
+            cmd_config "$@"
+            ;;
+        context)
+            cmd_context "$@"
+            ;;
+        workspace)
+            cmd_workspace
+            ;;
+        db)
+            # TODO: implement db commands
+            print_info "Database is at: ${NEURATRADE_DIR}/data/neuratrade.db"
+            ;;
+        channel)
+            # TODO: implement channel commands
+            print_info "Channel config is in: ${NEURATRADE_DIR}/config.json"
+            ;;
+        doctor)
+            cmd_doctor
+            ;;
+        path)
+            cmd_path
+            ;;
+        version|--version|-v)
+            cmd_version
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            print_error "Unknown command: $cmd"
+            echo
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

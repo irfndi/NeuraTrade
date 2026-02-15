@@ -1,0 +1,9 @@
+[submodule "picoclaw"]
+	path = picoclaw
+	url = https://github.com/sipeed/picoclaw
+[submodule "opencode"]
+	path = opencode
+	url = https://github.com/anomalyco/opencode
+[submodule "openclaw"]
+	path = openclaw
+	url = https://github.com/openclaw/openclaw
