@@ -357,9 +357,11 @@ func (s *TradingStateStore) ListPendingOrders(ctx context.Context) ([]*OrderReco
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	orders := make([]*OrderRecord, 0, len(s.pendingOrders))
+	orders := make([]*OrderRecord, 0)
 	for _, order := range s.pendingOrders {
-		orders = append(orders, order)
+		if order.Status == "PENDING" {
+			orders = append(orders, order)
+		}
 	}
 
 	return orders, nil
