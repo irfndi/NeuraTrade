@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,9 +91,9 @@ func TestDiscordChannel_Disabled(t *testing.T) {
 }
 
 func TestWebhookChannel_Send(t *testing.T) {
-	received := false
+	var received atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = true
+		received.Store(true)
 		assert.Equal(t, "POST", r.Method)
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		assert.Equal(t, "test-token", r.Header.Get("X-Auth-Token"))
@@ -122,14 +123,14 @@ func TestWebhookChannel_Send(t *testing.T) {
 
 	err := channel.Send(context.Background(), notification)
 	assert.NoError(t, err)
-	assert.True(t, received)
+	assert.True(t, received.Load())
 }
 
 func TestWebhookChannel_Retry(t *testing.T) {
-	attemptCount := 0
+	var attemptCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attemptCount++
-		if attemptCount < 2 {
+		attemptCount.Add(1)
+		if attemptCount.Load() < 2 {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -153,7 +154,7 @@ func TestWebhookChannel_Retry(t *testing.T) {
 
 	err := channel.Send(context.Background(), notification)
 	assert.NoError(t, err)
-	assert.Equal(t, 2, attemptCount)
+	assert.Equal(t, int32(2), attemptCount.Load())
 }
 
 func TestNotificationPriorityRouting(t *testing.T) {
@@ -193,25 +194,25 @@ func TestNotificationPriorityRouting(t *testing.T) {
 func TestNotificationChannelsService(t *testing.T) {
 	service := NewNotificationChannelsService(nil)
 
-	// Configure Discord
 	service.ConfigureDiscord(DiscordChannelConfig{
-		Enabled: true,
+		WebhookURL: "https://discord.com/api/webhooks/test",
+		Enabled:    true,
 	})
 
-	// Configure Email
 	service.ConfigureEmail(EmailChannelConfig{
 		Enabled:     true,
 		SMTPHost:    "smtp.example.com",
 		SMTPPort:    587,
 		FromAddress: "alerts@neuratrade.com",
+		Username:    "user",
+		Password:    "pass",
 	})
 
-	// Configure Webhook
 	service.ConfigureWebhook(WebhookChannelConfig{
+		URL:     "https://example.com/webhook",
 		Enabled: true,
 	})
 
-	// Verify registry has channels
 	registry := service.Registry()
 	assert.NotNil(t, registry)
 }

@@ -291,7 +291,12 @@ func (c *EmailChannel) Send(ctx context.Context, notification *Notification) err
 	}
 
 	// Build email headers
-	from := fmt.Sprintf("%s <%s>", c.config.FromName, c.config.FromAddress)
+	var from string
+	if c.config.FromName != "" {
+		from = fmt.Sprintf("%s <%s>", c.config.FromName, c.config.FromAddress)
+	} else {
+		from = c.config.FromAddress
+	}
 	to := strings.Join(notification.Recipients, ",")
 
 	// Build email body
@@ -420,7 +425,11 @@ func (c *WebhookChannel) Send(ctx context.Context, notification *Notification) e
 	for attempt := 0; attempt <= c.config.RetryCount; attempt++ {
 		if attempt > 0 {
 			c.logger.Info("Retrying webhook delivery", "attempt", attempt, "notification_id", notification.ID)
-			time.Sleep(time.Duration(attempt) * time.Second)
+			select {
+			case <-time.After(time.Duration(attempt) * time.Second):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 
 		// Create fresh request for each attempt

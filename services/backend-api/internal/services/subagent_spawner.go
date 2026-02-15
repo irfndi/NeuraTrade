@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/telemetry"
+	"github.com/shopspring/decimal"
 )
 
 // SubagentResult represents the result of a subagent execution.
@@ -124,9 +125,9 @@ func (s *SubagentSpawner) SpawnRiskCheck(ctx context.Context, decision *TradingD
 		ID:       agentID,
 		Decision: decision,
 		Config: RiskAgentConfig{
-			MaxPositionSize:      0.1,
-			MaxRiskPerTrade:      0.02,
-			MaxDailyLoss:         0.05,
+			MaxPositionSize:      decimal.NewFromFloat(0.1),
+			MaxRiskPerTrade:      decimal.NewFromFloat(0.02),
+			MaxDailyLoss:         decimal.NewFromFloat(0.05),
 			EnableCircuitBreaker: true,
 		},
 	}
@@ -177,7 +178,7 @@ func (s *SubagentSpawner) SpawnExecutor(ctx context.Context, decision *TradingDe
 		Config: ExecutorAgentConfig{
 			RetryCount:        3,
 			RetryDelay:        time.Second,
-			SlippageTolerance: 0.001,
+			SlippageTolerance: decimal.NewFromFloat(0.001),
 		},
 	}
 
@@ -309,6 +310,7 @@ func (s *SubagentSpawner) unregisterAgent(agentID string) {
 }
 
 // runAnalystAgent runs the analyst agent logic.
+// TODO: Replace hardcoded AnalystSignal values with live market data
 func (s *SubagentSpawner) runAnalystAgent(ctx context.Context, agent *AnalystAgent, symbol string) SubagentResult {
 	// Use the existing AnalystAgent.Analyze method
 	// Create some sample signals for the analysis
@@ -376,7 +378,7 @@ func (s *SubagentSpawner) runRiskAgent(ctx context.Context, agent *RiskAgent) Su
 		}
 	default:
 		// Perform risk checks
-		riskAssessment := map[string]interface{}{
+		riskAssessment := map[string]any{
 			"decision":     agent.Decision,
 			"approved":     true,
 			"risk_score":   agent.Decision.RiskScore,
@@ -385,12 +387,12 @@ func (s *SubagentSpawner) runRiskAgent(ctx context.Context, agent *RiskAgent) Su
 		}
 
 		// Basic risk validations
-		if agent.Decision.SizePercent > agent.Config.MaxPositionSize {
+		if decimal.NewFromFloat(agent.Decision.SizePercent).GreaterThan(agent.Config.MaxPositionSize) {
 			riskAssessment["approved"] = false
 			riskAssessment["warnings"] = append(riskAssessment["warnings"].([]string), "position size exceeds max")
 		}
 
-		if agent.Decision.RiskScore > agent.Config.MaxRiskPerTrade {
+		if decimal.NewFromFloat(agent.Decision.RiskScore).GreaterThan(agent.Config.MaxRiskPerTrade) {
 			riskAssessment["approved"] = false
 			riskAssessment["warnings"] = append(riskAssessment["warnings"].([]string), "risk score exceeds threshold")
 		}
@@ -403,6 +405,7 @@ func (s *SubagentSpawner) runRiskAgent(ctx context.Context, agent *RiskAgent) Su
 }
 
 // runExecutorAgent runs the executor agent logic.
+// TODO: This is simulation scaffolding - replace with real order placement before production
 func (s *SubagentSpawner) runExecutorAgent(ctx context.Context, agent *ExecutorAgent) SubagentResult {
 	select {
 	case <-ctx.Done():
@@ -437,9 +440,9 @@ type RiskAgent struct {
 
 // RiskAgentConfig contains configuration for risk agent.
 type RiskAgentConfig struct {
-	MaxPositionSize      float64
-	MaxRiskPerTrade      float64
-	MaxDailyLoss         float64
+	MaxPositionSize      decimal.Decimal
+	MaxRiskPerTrade      decimal.Decimal
+	MaxDailyLoss         decimal.Decimal
 	EnableCircuitBreaker bool
 }
 
@@ -454,7 +457,7 @@ type ExecutorAgent struct {
 type ExecutorAgentConfig struct {
 	RetryCount        int
 	RetryDelay        time.Duration
-	SlippageTolerance float64
+	SlippageTolerance decimal.Decimal
 }
 
 // SubagentAggregator collects and aggregates results from multiple subagents.
@@ -517,18 +520,26 @@ func (a *SubagentAggregator) Failed() []SubagentResult {
 }
 
 // CollectWithTimeout collects results from a channel with a timeout.
-func (a *SubagentAggregator) CollectWithTimeout(ctx context.Context, resultCh <-chan SubagentResult, expectedCount int) error {
-	timeout := time.After(30 * time.Second)
+// timeout parameter controls the wait time between results.
+func (a *SubagentAggregator) CollectWithTimeout(ctx context.Context, resultCh <-chan SubagentResult, expectedCount int, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	timer := time.After(timeout)
 
 	for i := 0; i < expectedCount; i++ {
 		select {
-		case result := <-resultCh:
+		case result, ok := <-resultCh:
+			if !ok {
+				return fmt.Errorf("channel closed (got %d of %d)", i, expectedCount)
+			}
 			a.Add(result)
-		case <-timeout:
+		case <-timer:
 			return fmt.Errorf("timeout waiting for results (got %d of %d)", i, expectedCount)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+		timer = time.After(timeout)
 	}
 
 	return nil
