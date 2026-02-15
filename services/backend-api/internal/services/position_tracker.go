@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -203,6 +204,11 @@ func (pt *PositionTracker) SyncWithExchange(ctx context.Context) error {
 			// Calculate unrealized PnL
 			pt.calculateUnrealizedPL(tracked)
 		}
+
+		// Copy needed values before releasing lock
+		unrealizedPL := tracked.Position.UnrealizedPL
+		symbol := position.Symbol
+
 		pt.positionsMu.Unlock()
 
 		// Copy callback reference with proper locking
@@ -220,9 +226,9 @@ func (pt *PositionTracker) SyncWithExchange(ctx context.Context) error {
 
 		pt.logger.Debug("Position synced",
 			"position_id", positionID,
-			"symbol", position.Symbol,
+			"symbol", symbol,
 			"current_price", currentPrice,
-			"unrealized_pl", tracked.Position.UnrealizedPL)
+			"unrealized_pl", unrealizedPL)
 	}
 
 	// Save to Redis after sync
@@ -236,7 +242,6 @@ func (pt *PositionTracker) SyncWithExchange(ctx context.Context) error {
 // OnFill handles fill events to update positions.
 func (pt *PositionTracker) OnFill(ctx context.Context, fill FillData) error {
 	pt.positionsMu.Lock()
-	defer pt.positionsMu.Unlock()
 
 	tracked, exists := pt.positions[fill.PositionID]
 	if !exists {
@@ -343,12 +348,12 @@ func (pt *PositionTracker) calculateUnrealizedPL(tracked *TrackedPosition) {
 
 	priceDiff := position.CurrentPrice.Sub(position.EntryPrice)
 
-	if position.Side == "BUY" || position.Side == "long" {
-		// Long position: profit when price goes up
+	if strings.EqualFold(position.Side, "BUY") || strings.EqualFold(position.Side, "long") {
 		position.UnrealizedPL = priceDiff.Mul(position.Size)
-	} else {
-		// Short position: profit when price goes down
+	} else if strings.EqualFold(position.Side, "SELL") || strings.EqualFold(position.Side, "short") {
 		position.UnrealizedPL = priceDiff.Mul(position.Size).Neg()
+	} else {
+		position.UnrealizedPL = decimal.Zero
 	}
 }
 
@@ -396,19 +401,24 @@ func (pt *PositionTracker) GetOpenPositions() []interfaces.Position {
 // ClosePosition marks a position as closed.
 func (pt *PositionTracker) ClosePosition(ctx context.Context, positionID string) error {
 	pt.positionsMu.Lock()
-	defer pt.positionsMu.Unlock()
 
 	tracked, exists := pt.positions[positionID]
 	if !exists {
+		pt.positionsMu.Unlock()
 		return fmt.Errorf("position not found: %s", positionID)
 	}
 
 	tracked.Position.Status = interfaces.PositionStatusClosed
 	tracked.Position.UpdatedAt = time.Now().UTC()
 
+	// Copy needed values before releasing lock
+	unrealizedPL := tracked.Position.UnrealizedPL
+
+	pt.positionsMu.Unlock()
+
 	pt.logger.Info("Position closed",
 		"position_id", positionID,
-		"realized_pl", tracked.Position.UnrealizedPL)
+		"realized_pl", unrealizedPL)
 
 	return pt.savePositionsToRedis(ctx)
 }
@@ -416,19 +426,24 @@ func (pt *PositionTracker) ClosePosition(ctx context.Context, positionID string)
 // LiquidatePosition marks a position as liquidated.
 func (pt *PositionTracker) LiquidatePosition(ctx context.Context, positionID string) error {
 	pt.positionsMu.Lock()
-	defer pt.positionsMu.Unlock()
 
 	tracked, exists := pt.positions[positionID]
 	if !exists {
+		pt.positionsMu.Unlock()
 		return fmt.Errorf("position not found: %s", positionID)
 	}
 
 	tracked.Position.Status = interfaces.PositionStatusLiquidated
 	tracked.Position.UpdatedAt = time.Now().UTC()
 
+	// Copy needed values before releasing lock
+	unrealizedPL := tracked.Position.UnrealizedPL
+
+	pt.positionsMu.Unlock()
+
 	pt.logger.Warn("Position liquidated",
 		"position_id", positionID,
-		"unrealized_pl", tracked.Position.UnrealizedPL)
+		"unrealized_pl", unrealizedPL)
 
 	return pt.savePositionsToRedis(ctx)
 }
