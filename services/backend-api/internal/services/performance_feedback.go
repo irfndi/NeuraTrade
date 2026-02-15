@@ -69,13 +69,25 @@ func (s *PerformanceFeedbackService) RecordDecision(ctx context.Context, decisio
 	}
 
 	if decision.MarketConditions != nil {
-		record.MarketConditions, _ = json.Marshal(decision.MarketConditions)
+		data, err := json.Marshal(decision.MarketConditions)
+		if err != nil {
+			return fmt.Errorf("marshal MarketConditions: %w", err)
+		}
+		record.MarketConditions = data
 	}
 	if decision.SignalsUsed != nil {
-		record.SignalsUsed, _ = json.Marshal(decision.SignalsUsed)
+		data, err := json.Marshal(decision.SignalsUsed)
+		if err != nil {
+			return fmt.Errorf("marshal SignalsUsed: %w", err)
+		}
+		record.SignalsUsed = data
 	}
 	if decision.RiskAssessment != nil {
-		record.RiskAssessment, _ = json.Marshal(decision.RiskAssessment)
+		data, err := json.Marshal(decision.RiskAssessment)
+		if err != nil {
+			return fmt.Errorf("marshal RiskAssessment: %w", err)
+		}
+		record.RiskAssessment = data
 	}
 
 	query := `
@@ -95,7 +107,10 @@ func (s *PerformanceFeedbackService) RecordDecision(ctx context.Context, decisio
 		record.MarketConditions, record.SignalsUsed, record.RiskAssessment,
 		record.CreatedAt, record.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("insert decision journal for record ID %v: %w", record.ID, err)
+	}
+	return nil
 }
 
 func (s *PerformanceFeedbackService) RecordOutcome(ctx context.Context, outcome *OutcomeRecord) error {
@@ -153,7 +168,7 @@ func (s *PerformanceFeedbackService) RecordOutcome(ctx context.Context, outcome 
 		record.VolatilityAtExit, record.CreatedAt, record.UpdatedAt,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("insert trade outcome for record ID %v: %w", record.ID, err)
 	}
 
 	if s.config.EnablePatternDetection {
@@ -186,12 +201,17 @@ func (s *PerformanceFeedbackService) GetStrategyParameters(ctx context.Context, 
 	var params []models.StrategyParameter
 	for rows.Next() {
 		var p models.StrategyParameter
+		var paramValueStr, minValueStr, maxValueStr, confidenceStr string
 		if err := rows.Scan(&p.ID, &p.SkillID, &p.Symbol, &p.ParameterName,
-			&p.ParameterValue, &p.MinValue, &p.MaxValue, &p.TuningReason,
-			&p.BasedOnOutcomeID, &p.RegimeContext, &p.Confidence, &p.SampleSize,
+			&paramValueStr, &minValueStr, &maxValueStr, &p.TuningReason,
+			&p.BasedOnOutcomeID, &p.RegimeContext, &confidenceStr, &p.SampleSize,
 			&p.IsActive, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
+		p.ParameterValue, _ = decimal.NewFromString(paramValueStr)
+		p.MinValue, _ = decimal.NewFromString(minValueStr)
+		p.MaxValue, _ = decimal.NewFromString(maxValueStr)
+		p.Confidence, _ = decimal.NewFromString(confidenceStr)
 		params = append(params, p)
 	}
 	return params, rows.Err()
@@ -203,7 +223,7 @@ func (s *PerformanceFeedbackService) detectFailurePattern(ctx context.Context, o
 	}
 
 	patternType := "wrong_direction"
-	var description string
+	description := fmt.Sprintf("Wrong direction on %s %s", outcome.Symbol, outcome.Side)
 
 	if outcome.ExitReason == "stop_loss" {
 		patternType = "stop_loss_hit"
@@ -255,12 +275,14 @@ func (s *PerformanceFeedbackService) GetFailurePatterns(ctx context.Context, ski
 	var patterns []models.FailurePattern
 	for rows.Next() {
 		var p models.FailurePattern
+		var totalPnLStr string
 		if err := rows.Scan(&p.ID, &p.SkillID, &p.PatternType, &p.Description,
 			&p.OccurrenceCount, &p.FirstObserved, &p.LastObserved,
-			&p.TotalPnLImpact, &p.AffectedSymbols, &p.SuggestedFix,
+			&totalPnLStr, &p.AffectedSymbols, &p.SuggestedFix,
 			&p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
+		p.TotalPnLImpact, _ = decimal.NewFromString(totalPnLStr)
 		patterns = append(patterns, p)
 	}
 	return patterns, rows.Err()
@@ -359,15 +381,34 @@ func (r *PerformanceFeedbackRunner) tuneStopLoss(ctx context.Context, skillID, s
 		FROM trade_outcomes
 		WHERE skill_id = $1 AND symbol = $2 AND outcome = 'loss' AND exit_reason = 'stop_loss'`
 
-	var avgPnL float64
+	var avgPnL decimal.Decimal
 	var count int
 	err := r.feedback.db.Pool.QueryRow(ctx, query, skillID, symbol).Scan(&avgPnL, &count)
 	if err != nil || count < 5 {
 		return err
 	}
 
-	if avgPnL < -2.0 {
-		observability.CaptureException(ctx, fmt.Errorf("high stop loss hit rate: %.2f%%", avgPnL))
+	threshold := decimal.NewFromFloat(-2.0)
+	if avgPnL.LessThan(threshold) {
+		observability.CaptureException(ctx, fmt.Errorf("high stop loss hit rate: %s%%", avgPnL.String()))
+
+		paramID, genErr := generateID()
+		if genErr != nil {
+			return fmt.Errorf("failed to generate parameter ID: %w", genErr)
+		}
+
+		insertQuery := `
+			INSERT INTO strategy_parameters (id, skill_id, symbol, parameter_name, parameter_value, tuning_reason, confidence, sample_size, is_active, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $9)
+			ON CONFLICT DO NOTHING`
+		_, err := r.feedback.db.Pool.Exec(ctx, insertQuery,
+			paramID, skillID, symbol, "stop_loss_threshold",
+			avgPnL.String(), fmt.Sprintf("High stop loss hit rate detected: %s%%", avgPnL.String()),
+			decimal.NewFromFloat(0.5), count, time.Now(),
+		)
+		if err != nil {
+			return fmt.Errorf("persist stop_loss_threshold: %w", err)
+		}
 	}
 	return nil
 }
@@ -378,15 +419,34 @@ func (r *PerformanceFeedbackRunner) tuneTakeProfit(ctx context.Context, skillID,
 		FROM trade_outcomes
 		WHERE skill_id = $1 AND symbol = $2 AND outcome = 'win' AND exit_reason = 'take_profit'`
 
-	var avgPnL float64
+	var avgPnL decimal.Decimal
 	var count int
 	err := r.feedback.db.Pool.QueryRow(ctx, query, skillID, symbol).Scan(&avgPnL, &count)
 	if err != nil || count < 5 {
 		return err
 	}
 
-	if avgPnL > 1.0 {
-		observability.CaptureException(ctx, fmt.Errorf("high take profit margin: %.2f%%", avgPnL))
+	threshold := decimal.NewFromFloat(1.0)
+	if avgPnL.GreaterThan(threshold) {
+		observability.CaptureException(ctx, fmt.Errorf("high take profit margin: %s%%", avgPnL.String()))
+
+		paramID, genErr := generateID()
+		if genErr != nil {
+			return fmt.Errorf("failed to generate parameter ID: %w", genErr)
+		}
+
+		insertQuery := `
+			INSERT INTO strategy_parameters (id, skill_id, symbol, parameter_name, parameter_value, tuning_reason, confidence, sample_size, is_active, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $9)
+			ON CONFLICT DO NOTHING`
+		_, err := r.feedback.db.Pool.Exec(ctx, insertQuery,
+			paramID, skillID, symbol, "take_profit_threshold",
+			avgPnL.String(), fmt.Sprintf("High take profit margin detected: %s%%", avgPnL.String()),
+			decimal.NewFromFloat(0.5), count, time.Now(),
+		)
+		if err != nil {
+			return fmt.Errorf("persist take_profit_threshold: %w", err)
+		}
 	}
 	return nil
 }

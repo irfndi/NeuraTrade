@@ -68,14 +68,19 @@ type ShadowModeEngine struct {
 	mu      sync.RWMutex
 	enabled bool
 
-	portfolio ShadowPortfolio
-	trades    []ShadowTrade
-	history   []ShadowPortfolio
+	portfolio   ShadowPortfolio
+	trades      []ShadowTrade
+	history     []ShadowPortfolio
+	nextTradeID uint64
 }
 
 func NewShadowModeEngine(config ShadowModeConfig, logger *zap.Logger) *ShadowModeEngine {
 	if config.InitialCapital.IsZero() {
 		config.InitialCapital = decimal.NewFromInt(10000)
+	}
+
+	if logger == nil {
+		logger = zap.NewNop()
 	}
 
 	return &ShadowModeEngine{
@@ -125,7 +130,7 @@ func (e *ShadowModeEngine) ExecuteTrade(ctx context.Context, symbol, side string
 	totalValue := price.Mul(quantity).Add(commission).Add(slippage)
 
 	trade := ShadowTrade{
-		ID:         fmt.Sprintf("shadow_%d", len(e.trades)),
+		ID:         fmt.Sprintf("shadow_%d", e.nextTradeID),
 		Symbol:     symbol,
 		Side:       side,
 		Quantity:   quantity,
@@ -136,6 +141,7 @@ func (e *ShadowModeEngine) ExecuteTrade(ctx context.Context, symbol, side string
 		ExecutedAt: time.Now(),
 		RealTrade:  false,
 	}
+	e.nextTradeID++
 
 	if side == "buy" {
 		if e.portfolio.Cash.LessThan(totalValue) {
@@ -199,9 +205,10 @@ func (e *ShadowModeEngine) UpdatePrices(prices map[string]decimal.Decimal) {
 		if price, exists := prices[symbol]; exists {
 			pos.CurrentPrice = price
 			pos.UnrealizedPNL = price.Sub(pos.EntryPrice).Mul(pos.Quantity)
-			totalUnrealized = totalUnrealized.Add(pos.UnrealizedPNL)
-			sumMarketValue = sumMarketValue.Add(price.Mul(pos.Quantity))
 		}
+		// Always add market value for all positions (use current price)
+		sumMarketValue = sumMarketValue.Add(pos.CurrentPrice.Mul(pos.Quantity))
+		totalUnrealized = totalUnrealized.Add(pos.UnrealizedPNL)
 	}
 
 	e.portfolio.UnrealizedPNL = totalUnrealized
