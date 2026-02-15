@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
@@ -144,6 +145,7 @@ type TradingEventBus struct {
 	logger        *slog.Logger
 	bufferSize    int
 	stopCh        chan struct{}
+	redispubs     map[string]*redis.PubSub
 }
 
 // NewTradingEventBus creates a new TradingEventBus.
@@ -155,6 +157,7 @@ func NewTradingEventBus(redisClient *database.RedisClient, bufferSize int, logge
 		logger:        logger,
 		bufferSize:    bufferSize,
 		stopCh:        make(chan struct{}),
+		redispubs:     make(map[string]*redis.PubSub),
 	}
 }
 
@@ -227,6 +230,7 @@ func (b *TradingEventBus) SubscribeToChannel(eventType TradingEventType) (<-chan
 	if _, ok := b.subscriptions[eventType]; !ok {
 		b.subscriptions[eventType] = make(map[string]*Subscription)
 		b.channels[eventType] = make(chan *TradingEvent, b.bufferSize)
+		go b.startEventDispatcher(eventType)
 	}
 
 	return b.channels[eventType], nil
@@ -249,16 +253,16 @@ func (b *TradingEventBus) startEventDispatcher(eventType TradingEventType) {
 			b.mu.RUnlock()
 
 			for _, sub := range subs {
-				func() {
+				go func(handler EventHandler, evt *TradingEvent, subID string) {
 					defer func() {
 						if r := recover(); r != nil {
 							b.logger.Error("handler panicked",
-								"subscription", sub.ID,
+								"subscription", subID,
 								"error", r)
 						}
 					}()
-					sub.Handler(event)
-				}()
+					handler(evt)
+				}(sub.Handler, event, sub.ID)
 			}
 		case <-b.stopCh:
 			return
@@ -295,25 +299,37 @@ func (b *TradingEventBus) SubscribeToRedis(ctx context.Context, eventType Tradin
 		return fmt.Errorf("failed to subscribe to redis channel %s: %w", channel, err)
 	}
 
+	b.mu.Lock()
+	b.redispubs[channel] = pubsub
+	b.mu.Unlock()
+
 	go func() {
 		ch := pubsub.Channel()
-		for msg := range ch {
-			var event TradingEvent
-			if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
-				b.logger.Error("failed to unmarshal redis event", "error", err)
-				continue
-			}
-
-			b.mu.RLock()
-			ch, ok := b.channels[event.Type]
-			b.mu.RUnlock()
-
-			if ok {
-				select {
-				case ch <- &event:
-				case <-time.After(100 * time.Millisecond):
-					b.logger.Warn("redis event channel full", "type", event.Type)
+		for {
+			select {
+			case msg, ok := <-ch:
+				if !ok {
+					return
 				}
+				var event TradingEvent
+				if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
+					b.logger.Error("failed to unmarshal redis event", "error", err)
+					continue
+				}
+
+				b.mu.RLock()
+				ch, ok := b.channels[event.Type]
+				b.mu.RUnlock()
+
+				if ok {
+					select {
+					case ch <- &event:
+					case <-time.After(100 * time.Millisecond):
+						b.logger.Warn("redis event channel full", "type", event.Type)
+					}
+				}
+			case <-b.stopCh:
+				return
 			}
 		}
 	}()
@@ -332,8 +348,15 @@ func (b *TradingEventBus) Close() error {
 		close(ch)
 	}
 
+	for _, ps := range b.redispubs {
+		if err := ps.Close(); err != nil {
+			b.logger.Error("failed to close redis pubsub", "error", err)
+		}
+	}
+
 	b.subscriptions = make(map[TradingEventType]map[string]*Subscription)
 	b.channels = make(map[TradingEventType]chan *TradingEvent)
+	b.redispubs = make(map[string]*redis.PubSub)
 
 	return nil
 }

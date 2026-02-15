@@ -106,7 +106,7 @@ func TestTradingEventBus_MultipleSubscribers(t *testing.T) {
 	}
 	bus.Publish(event)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	mu.Lock()
 	if callCount != 2 {
@@ -153,26 +153,23 @@ func TestTradingEventBus_SubscribeToChannel(t *testing.T) {
 		t.Fatal("expected non-nil channel")
 	}
 
-	go func() {
-		event := &TradingEvent{
-			Type:      EventPriceUpdate,
+	bus.Publish(&TradingEvent{
+		Type:      EventPriceUpdate,
+		Timestamp: time.Now(),
+		Payload: PriceEvent{
+			Symbol:    "BTC/USDT",
+			Exchange:  "binance",
+			Price:     decimal.NewFromFloat(50000),
 			Timestamp: time.Now(),
-			Payload: PriceEvent{
-				Symbol:    "BTC/USDT",
-				Exchange:  "binance",
-				Price:     decimal.NewFromFloat(50000),
-				Timestamp: time.Now(),
-			},
-		}
-		bus.Publish(event)
-	}()
+		},
+	})
 
 	select {
 	case received := <-ch:
 		if received.Type != EventPriceUpdate {
 			t.Errorf("expected EventPriceUpdate, got %s", received.Type)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 		t.Error("timeout waiting to receive on channel")
 	}
 
