@@ -862,7 +862,7 @@ func calculateTimeRemaining(quest *Quest) string {
 	}
 
 	nextRun := lastExec.Add(duration)
-	remaining := nextRun.Sub(time.Now())
+	remaining := time.Until(nextRun)
 	if remaining <= 0 {
 		return "due now"
 	}

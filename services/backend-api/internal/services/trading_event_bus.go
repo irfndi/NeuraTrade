@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
@@ -138,14 +139,16 @@ type Subscription struct {
 
 // TradingEventBus manages event subscriptions and dispatching.
 type TradingEventBus struct {
-	mu            sync.RWMutex
-	subscriptions map[TradingEventType]map[string]*Subscription
-	channels      map[TradingEventType]chan *TradingEvent
-	redis         *database.RedisClient
-	logger        *slog.Logger
-	bufferSize    int
-	stopCh        chan struct{}
-	redispubs     map[string]*redis.PubSub
+	mu                  sync.RWMutex
+	subscriptionCounter uint64
+	closeOnce           sync.Once
+	subscriptions       map[TradingEventType]map[string]*Subscription
+	channels            map[TradingEventType]chan *TradingEvent
+	redis               *database.RedisClient
+	logger              *slog.Logger
+	bufferSize          int
+	stopCh              chan struct{}
+	redispubs           map[string]*redis.PubSub
 }
 
 // NewTradingEventBus creates a new TradingEventBus.
@@ -167,7 +170,7 @@ func (b *TradingEventBus) Subscribe(eventType TradingEventType, handler EventHan
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	subID := fmt.Sprintf("%s_%d", eventType, time.Now().UnixNano())
+	subID := fmt.Sprintf("%s_%d", eventType, atomic.AddUint64(&b.subscriptionCounter, 1))
 
 	if _, ok := b.subscriptions[eventType]; !ok {
 		b.subscriptions[eventType] = make(map[string]*Subscription)
@@ -213,7 +216,9 @@ func (b *TradingEventBus) Publish(event *TradingEvent) {
 	select {
 	case ch <- event:
 	case <-time.After(100 * time.Millisecond):
-		b.logger.Warn("event channel full, dropping event", "type", event.Type)
+		if b.logger != nil {
+			b.logger.Warn("event channel full, dropping event", "type", event.Type)
+		}
 	}
 
 	// Also publish to Redis if available
@@ -263,9 +268,11 @@ func (b *TradingEventBus) startEventDispatcher(eventType TradingEventType) {
 				go func(handler EventHandler, evt *TradingEvent, subID string) {
 					defer func() {
 						if r := recover(); r != nil {
-							b.logger.Error("handler panicked",
-								"subscription", subID,
-								"error", r)
+							if b.logger != nil {
+								b.logger.Error("handler panicked",
+									"subscription", subID,
+									"error", r)
+							}
 						}
 					}()
 					handler(evt)
@@ -284,13 +291,17 @@ func (b *TradingEventBus) publishToRedis(event *TradingEvent) {
 
 	data, err := json.Marshal(event)
 	if err != nil {
-		b.logger.Error("failed to marshal event", "error", err)
+		if b.logger != nil {
+			b.logger.Error("failed to marshal event", "error", err)
+		}
 		return
 	}
 
 	channel := fmt.Sprintf("trading:events:%s", event.Type)
 	if err := b.redis.Publish(ctx, channel, data); err != nil {
-		b.logger.Error("failed to publish event to redis", "error", err)
+		if b.logger != nil {
+			b.logger.Error("failed to publish event to redis", "error", err)
+		}
 	}
 }
 
@@ -346,26 +357,31 @@ func (b *TradingEventBus) SubscribeToRedis(ctx context.Context, eventType Tradin
 
 // Close shuts down the event bus.
 func (b *TradingEventBus) Close() error {
-	close(b.stopCh)
+	var closeErr error
+	b.closeOnce.Do(func() {
+		close(b.stopCh)
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
+		b.mu.Lock()
+		defer b.mu.Unlock()
 
-	for _, ch := range b.channels {
-		close(ch)
-	}
-
-	for _, ps := range b.redispubs {
-		if err := ps.Close(); err != nil {
-			b.logger.Error("failed to close redis pubsub", "error", err)
+		for _, ch := range b.channels {
+			close(ch)
 		}
-	}
 
-	b.subscriptions = make(map[TradingEventType]map[string]*Subscription)
-	b.channels = make(map[TradingEventType]chan *TradingEvent)
-	b.redispubs = make(map[string]*redis.PubSub)
+		for _, ps := range b.redispubs {
+			if err := ps.Close(); err != nil {
+				if b.logger != nil {
+					b.logger.Error("failed to close redis pubsub", "error", err)
+				}
+				closeErr = err
+			}
+		}
 
-	return nil
+		b.subscriptions = make(map[TradingEventType]map[string]*Subscription)
+		b.channels = make(map[TradingEventType]chan *TradingEvent)
+		b.redispubs = make(map[string]*redis.PubSub)
+	})
+	return closeErr
 }
 
 // GetSubscriptionCount returns the number of active subscriptions for an event type.

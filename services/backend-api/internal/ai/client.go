@@ -369,7 +369,7 @@ func (c *Client) chatOpenAI(ctx context.Context, provider *ProviderInfo, req *Ch
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
@@ -490,7 +490,7 @@ func (c *Client) chatAnthropic(ctx context.Context, provider *ProviderInfo, req 
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
@@ -514,9 +514,10 @@ func (c *Client) chatAnthropic(ctx context.Context, provider *ProviderInfo, req 
 	var content string
 	toolCalls := make([]ToolCall, 0)
 	for _, c := range response.Content {
-		if c.Type == "text" {
+		switch c.Type {
+		case "text":
 			content += c.Text
-		} else if c.Type == "tool_use" {
+		case "tool_use":
 			toolCalls = append(toolCalls, ToolCall{
 				ID:     c.ID,
 				Name:   c.Name,

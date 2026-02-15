@@ -441,7 +441,7 @@ func (c *WebhookChannel) Send(ctx context.Context, notification *Notification) e
 			lastErr = err
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			c.logger.Info("Sent notification to webhook", "notification_id", notification.ID)

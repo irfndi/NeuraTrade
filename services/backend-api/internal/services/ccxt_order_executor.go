@@ -73,7 +73,7 @@ func (e *CCXTOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, si
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("order placement failed with status: %d", resp.StatusCode)
@@ -106,7 +106,7 @@ func (e *CCXTOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID s
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("order cancellation failed with status: %d", resp.StatusCode)
@@ -129,7 +129,7 @@ func (e *CCXTOrderExecutor) GetOrder(ctx context.Context, exchange, orderID stri
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get order failed with status: %d", resp.StatusCode)
@@ -166,7 +166,7 @@ func (e *CCXTOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbol 
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get open orders failed with status: %d", resp.StatusCode)
@@ -214,7 +214,7 @@ func (e *CCXTOrderExecutor) GetClosedOrders(ctx context.Context, exchange, symbo
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get closed orders failed with status: %d", resp.StatusCode)
@@ -245,7 +245,7 @@ func (e *CCXTOrderExecutor) GetOrderTrades(ctx context.Context, exchange, orderI
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get order trades failed with status: %d", resp.StatusCode)

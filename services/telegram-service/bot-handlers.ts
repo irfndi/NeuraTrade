@@ -1,6 +1,6 @@
 import { Context } from "grammy";
 import { Effect } from "effect";
-import { Api, isApiError, extractApiError, ApiException } from "./api";
+import { Api, isApiError, extractApiError } from "./api";
 
 export const formatOpportunitiesMessage = (opps: any[]) => {
   if (!opps || opps.length === 0) {

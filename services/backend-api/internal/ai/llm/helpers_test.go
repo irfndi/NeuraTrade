@@ -67,5 +67,5 @@ func TestClientFactory_Create_UnsupportedProvider(t *testing.T) {
 
 	_, err := factory.Create(nil, Provider("unknown"))
 	assert.Error(t, err)
-	assert.True(t, err == ErrUnsupportedProvider{Provider: "unknown"} || err == ErrProviderNotConfigured{Provider: "unknown"})
+	assert.True(t, err == UnsupportedProviderError{Provider: "unknown"} || err == ProviderNotConfiguredError{Provider: "unknown"})
 }

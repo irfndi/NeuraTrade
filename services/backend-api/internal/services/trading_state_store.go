@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/irfndi/neuratrade/internal/database"
+	_ "github.com/irfndi/neuratrade/internal/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
@@ -302,7 +302,8 @@ func (s *TradingStateStore) GetPosition(ctx context.Context, positionID string) 
 		return nil, fmt.Errorf("position not found: %s", positionID)
 	}
 
-	return pos, nil
+	copy := *pos
+	return &copy, nil
 }
 
 // ListOpenPositions returns all open positions
@@ -371,7 +372,8 @@ func (s *TradingStateStore) GetOrder(ctx context.Context, orderID string) (*Orde
 		return nil, fmt.Errorf("order not found: %s", orderID)
 	}
 
-	return order, nil
+	copy := *order
+	return &copy, nil
 }
 
 // ListPendingOrders returns all pending orders
@@ -438,8 +440,3 @@ func (s *TradingStateStore) GetEmergencyMode(ctx context.Context) bool {
 
 // Ensure TradingStateStore implements TradingStateStoreInterface
 var _ TradingStateStoreInterface = (*TradingStateStore)(nil)
-
-// DBPool interface compatibility - ensure database package is used
-func init() {
-	_ = database.DBPool(nil)
-}

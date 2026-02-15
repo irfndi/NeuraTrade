@@ -347,8 +347,8 @@ func (tb *TokenBucketRateLimiter) getTokensRedis(ctx context.Context, key string
 	// Parse and calculate current tokens
 	var currentTokens float64
 	var lastUpdateSec float64
-	fmt.Sscanf(tokens, "%f", &currentTokens)
-	fmt.Sscanf(lastUpdate, "%f", &lastUpdateSec)
+	_, _ = fmt.Sscanf(tokens, "%f", &currentTokens)
+	_, _ = fmt.Sscanf(lastUpdate, "%f", &lastUpdateSec)
 
 	now := float64(time.Now().UnixNano()) / 1e9
 	elapsed := now - lastUpdateSec
