@@ -132,6 +132,7 @@ func NewExchangeMock(config *ExchangeMockConfig) *ExchangeMock {
 
 // generateTickerData generates realistic ticker data for a symbol
 func (m *ExchangeMock) generateTickerData(symbol string, basePrice decimal.Decimal) *mockTicker {
+	//nolint:gosec
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	// Add some randomness to price (±2%)
@@ -178,6 +179,7 @@ func (m *ExchangeMock) checkRateLimit() error {
 
 // checkError randomly returns an error based on error rate
 func (m *ExchangeMock) checkError() error {
+	//nolint:gosec
 	if m.config.ErrorRate > 0 && rand.Float64() < m.config.ErrorRate {
 		return fmt.Errorf("simulated exchange error")
 	}
@@ -217,6 +219,7 @@ func (m *ExchangeMock) GetTicker(ctx context.Context, exchange, symbol string) (
 	}
 
 	// Update with new random data occasionally
+	//nolint:gosec
 	if rand.Float64() > 0.7 {
 		tickerData = m.generateTickerData(symbol, tickerData.last)
 		m.data[symbol] = tickerData
@@ -270,6 +273,7 @@ func (m *ExchangeMock) GetOrderBook(ctx context.Context, exchange, symbol string
 	bids := make([]ccxt.OrderBookEntry, 0, limit)
 	asks := make([]ccxt.OrderBookEntry, 0, limit)
 
+	//nolint:gosec
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for i := 0; i < limit; i++ {
 		// Bids (price descending)
@@ -321,6 +325,7 @@ func (m *ExchangeMock) GetOHLCV(ctx context.Context, exchange, symbol, timeframe
 	}
 
 	// Generate fake OHLCV candles
+	//nolint:gosec
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	candles := make([]ccxt.OHLCV, 0, limit)
 
