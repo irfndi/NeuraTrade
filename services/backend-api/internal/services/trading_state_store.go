@@ -3,19 +3,23 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
 // TradingStateStore manages persistent trading state for crash recovery
 type TradingStateStore struct {
-	mu sync.RWMutex
-	db *pgxpool.Pool
+	mu     sync.RWMutex
+	db     *pgxpool.Pool
+	logger *log.Logger
 	// In-memory cache for fast access
 	openPositions     map[string]*PositionRecord
 	pendingOrders     map[string]*OrderRecord
@@ -91,6 +95,7 @@ type TradingStateStoreInterface interface {
 func NewTradingStateStore(db *pgxpool.Pool) *TradingStateStore {
 	return &TradingStateStore{
 		db:                db,
+		logger:            log.Default(),
 		openPositions:     make(map[string]*PositionRecord),
 		pendingOrders:     make(map[string]*OrderRecord),
 		dailyPnL:          decimal.Zero,
@@ -131,8 +136,7 @@ func (s *TradingStateStore) Restore(ctx context.Context) error {
 	var stateJSON []byte
 	err := s.db.QueryRow(ctx, "SELECT value FROM kv_store WHERE key = 'trading_state'").Scan(&stateJSON)
 	if err != nil {
-		// No state to restore - this is fine for first run
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		return fmt.Errorf("failed to restore state: %w", err)
@@ -143,26 +147,44 @@ func (s *TradingStateStore) Restore(ctx context.Context) error {
 		return fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 
+	var restoreErrors []string
+
 	// Restore positions
 	if positions, ok := state["open_positions"].(map[string]interface{}); ok {
 		for id, v := range positions {
-			data, _ := json.Marshal(v)
-			var pos PositionRecord
-			if err := json.Unmarshal(data, &pos); err == nil {
-				s.openPositions[id] = &pos
+			data, err := json.Marshal(v)
+			if err != nil {
+				restoreErrors = append(restoreErrors, fmt.Sprintf("position %s: marshal error", id))
+				continue
 			}
+			var pos PositionRecord
+			if err := json.Unmarshal(data, &pos); err != nil {
+				restoreErrors = append(restoreErrors, fmt.Sprintf("position %s: %v", id, err))
+				continue
+			}
+			s.openPositions[id] = &pos
 		}
 	}
 
 	// Restore orders
 	if orders, ok := state["pending_orders"].(map[string]interface{}); ok {
 		for id, v := range orders {
-			data, _ := json.Marshal(v)
-			var order OrderRecord
-			if err := json.Unmarshal(data, &order); err == nil {
-				s.pendingOrders[id] = &order
+			data, err := json.Marshal(v)
+			if err != nil {
+				restoreErrors = append(restoreErrors, fmt.Sprintf("order %s: marshal error", id))
+				continue
 			}
+			var order OrderRecord
+			if err := json.Unmarshal(data, &order); err != nil {
+				restoreErrors = append(restoreErrors, fmt.Sprintf("order %s: %v", id, err))
+				continue
+			}
+			s.pendingOrders[id] = &order
 		}
+	}
+
+	if len(restoreErrors) > 0 {
+		s.logger.Printf("State restoration warnings: %v", restoreErrors)
 	}
 
 	// Restore daily PnL

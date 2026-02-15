@@ -58,12 +58,13 @@ type HeartbeatTask struct {
 
 // TradingHeartbeat manages periodic trading tasks
 type TradingHeartbeat struct {
-	mu      sync.RWMutex
-	config  HeartbeatConfig
-	tasks   map[string]*HeartbeatTask
-	stopCh  chan struct{}
-	running bool
-	logger  *log.Logger
+	mu       sync.RWMutex
+	stopOnce sync.Once
+	config   HeartbeatConfig
+	tasks    map[string]*HeartbeatTask
+	stopCh   chan struct{}
+	running  bool
+	logger   *log.Logger
 
 	// Dependencies
 	positionTracker interface {
@@ -199,7 +200,9 @@ func (h *TradingHeartbeat) Stop() {
 		return
 	}
 
-	close(h.stopCh)
+	h.stopOnce.Do(func() {
+		close(h.stopCh)
+	})
 	h.running = false
 }
 
@@ -228,6 +231,7 @@ func (h *TradingHeartbeat) runLoop(ctx context.Context) {
 
 // executeTasks runs all enabled tasks that are due
 func (h *TradingHeartbeat) executeTasks(ctx context.Context) {
+	h.mu.RLock()
 	now := time.Now()
 
 	for name, task := range h.tasks {
@@ -236,16 +240,27 @@ func (h *TradingHeartbeat) executeTasks(ctx context.Context) {
 		}
 
 		if now.Sub(task.LastRun) >= task.Interval {
+			task := task
+			name := name
+			h.mu.RUnlock()
 			go h.runTask(ctx, name, task)
+			h.mu.RLock()
 		}
 	}
+	h.mu.RUnlock()
 }
 
 // runTask executes a single heartbeat task
 func (h *TradingHeartbeat) runTask(ctx context.Context, name string, task *HeartbeatTask) {
+	h.mu.Lock()
 	task.LastRun = time.Now()
+	h.mu.Unlock()
 
 	err := task.Handler(ctx)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	if err != nil {
 		task.ErrorCount++
 		task.LastError = err
