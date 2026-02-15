@@ -238,11 +238,18 @@ func (b *TradingEventBus) SubscribeToChannel(eventType TradingEventType) (<-chan
 
 // startEventDispatcher runs a goroutine to dispatch events to handlers.
 func (b *TradingEventBus) startEventDispatcher(eventType TradingEventType) {
-	ch := b.channels[eventType]
 	for {
+		b.mu.RLock()
+		ch, ok := b.channels[eventType]
+		b.mu.RUnlock()
+
+		if !ok {
+			return
+		}
+
 		select {
-		case event, ok := <-ch:
-			if !ok {
+		case event, channelOk := <-ch:
+			if !channelOk {
 				return
 			}
 			b.mu.RLock()
