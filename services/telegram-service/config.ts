@@ -35,25 +35,36 @@ type NeuratradeConfig = {
   };
 };
 
+let cachedConfig: NeuratradeConfig | null = null;
+
+export const resetNeuratradeConfigCache = () => {
+  cachedConfig = null;
+};
+
 const loadNeuratradeConfig = (): NeuratradeConfig | null => {
+  if (cachedConfig !== null) {
+    return cachedConfig;
+  }
   const configPath = join(homedir(), ".neuratrade", "config.json");
   if (!existsSync(configPath)) {
+    cachedConfig = null;
     return null;
   }
   try {
     const content = readFileSync(configPath, "utf-8");
-    return JSON.parse(content);
+    cachedConfig = JSON.parse(content);
+    return cachedConfig;
   } catch {
+    cachedConfig = null;
     return null;
   }
 };
 
-const neuratradeConfig = loadNeuratradeConfig();
-
-const getEnvWithNeuratradeFallback = (key: string): string | undefined => {
+export const getEnvWithNeuratradeFallback = (key: string): string | undefined => {
   if (process.env[key]) {
     return process.env[key];
   }
+  const neuratradeConfig = loadNeuratradeConfig();
   if (!neuratradeConfig) {
     return undefined;
   }

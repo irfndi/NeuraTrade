@@ -326,3 +326,91 @@ func TestLoad_SQLiteDriverRejectsWhitespacePath(t *testing.T) {
 	assert.Nil(t, config)
 	assert.ErrorContains(t, err, "database.sqlite_path is required")
 }
+
+func TestLoad_UserHomeDirConfig(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("DATABASE_HOST", "test-host")
+
+	_, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("Cannot determine home directory")
+	}
+
+	config, err := Load()
+	require.NotNil(t, config)
+	assert.NoError(t, err)
+	assert.Equal(t, "test-host", config.Database.Host)
+}
+
+func TestLoad_NeuratradeConfigJSON(t *testing.T) {
+	os.Clearenv()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("Cannot determine home directory")
+	}
+
+	neuratradeDir := homeDir + "/.neuratrade"
+	err = os.MkdirAll(neuratradeDir, 0755)
+	if err != nil {
+		t.Skip("Cannot create .neuratrade directory")
+	}
+	defer os.RemoveAll(neuratradeDir)
+
+	configFile := neuratradeDir + "/config.json"
+	configContent := `{
+		"database": {
+			"host": "neuratrade-host",
+			"port": 5433
+		},
+		"server": {
+			"port": 9999
+		}
+	}`
+	err = os.WriteFile(configFile, []byte(configContent), 0644)
+	if err != nil {
+		t.Skip("Cannot write test config file")
+	}
+	defer os.Remove(configFile)
+
+	config, err := Load()
+	require.NotNil(t, config)
+	assert.NoError(t, err)
+	assert.Equal(t, "neuratrade-host", config.Database.Host)
+	assert.Equal(t, 5433, config.Database.Port)
+}
+
+func TestLoad_NeuratradeConfigEnvTakesPrecedence(t *testing.T) {
+	os.Clearenv()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("Cannot determine home directory")
+	}
+
+	neuratradeDir := homeDir + "/.neuratrade"
+	err = os.MkdirAll(neuratradeDir, 0755)
+	if err != nil {
+		t.Skip("Cannot create .neuratrade directory")
+	}
+	defer os.RemoveAll(neuratradeDir)
+
+	configFile := neuratradeDir + "/config.json"
+	configContent := `{
+		"database": {
+			"host": "neuratrade-host"
+		}
+	}`
+	err = os.WriteFile(configFile, []byte(configContent), 0644)
+	if err != nil {
+		t.Skip("Cannot write test config file")
+	}
+	defer os.Remove(configFile)
+
+	t.Setenv("DATABASE_HOST", "env-host")
+	config, err := Load()
+	require.NotNil(t, config)
+	assert.NoError(t, err)
+	assert.Equal(t, "env-host", config.Database.Host)
+}

@@ -18,8 +18,7 @@ import { validator } from "hono/validator";
 // Use ESM import so test mocks can intercept ccxt module
 import ccxt from "ccxt";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
-import { homedir } from "os";
+import { join } from "path";
 import {
   isSentryEnabled,
   sentryMiddleware,
@@ -50,48 +49,7 @@ import type {
   GetOrderTradesResponse,
 } from "./types";
 
-type NeuratradeConfig = {
-  services?: {
-    ccxt?: {
-      url?: string;
-    };
-  };
-  security?: {
-    admin_api_key?: string;
-  };
-};
-
-const loadNeuratradeConfig = (): NeuratradeConfig | null => {
-  const configPath = join(homedir(), ".neuratrade", "config.json");
-  if (!existsSync(configPath)) {
-    return null;
-  }
-  try {
-    const content = readFileSync(configPath, "utf-8");
-    return JSON.parse(content);
-  } catch {
-    return null;
-  }
-};
-
-const neuratradeConfig = loadNeuratradeConfig();
-
-const getEnvWithNeuratradeFallback = (key: string): string | undefined => {
-  if (process.env[key]) {
-    return process.env[key];
-  }
-  if (!neuratradeConfig) {
-    return undefined;
-  }
-  const keyLower = key.toLowerCase();
-  if (keyLower === "admin_api_key") {
-    return neuratradeConfig.security?.admin_api_key;
-  }
-  if (keyLower === "ccxt_service_url" || keyLower === "ccxt_url") {
-    return neuratradeConfig.services?.ccxt?.url;
-  }
-  return undefined;
-};
+import { getEnvWithNeuratradeFallback } from "./config";
 
 // Load environment variables
 const resolvePort = () => {
