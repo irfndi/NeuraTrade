@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/telemetry"
 )
 
@@ -79,7 +80,7 @@ func NewChannelRegistry() *ChannelRegistry {
 	}
 }
 
-// Register adds a channel to the registry for all its priorities.
+// Register adds a channel to the registry for all supported priorities.
 func (r *ChannelRegistry) Register(channel NotificationChannel) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -199,9 +200,9 @@ func (c *DiscordChannel) Send(ctx context.Context, notification *Notification) e
 
 	// Add fields for metadata if present
 	if len(notification.Metadata) > 0 {
-		var fields []map[string]string
+		var fields []map[string]interface{}
 		for k, v := range notification.Metadata {
-			fields = append(fields, map[string]string{"name": k, "value": v, "inline": "true"})
+			fields = append(fields, map[string]interface{}{"name": k, "value": v, "inline": true})
 		}
 		embed["fields"] = fields
 	}
@@ -226,7 +227,7 @@ func (c *DiscordChannel) Send(ctx context.Context, notification *Notification) e
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("discord webhook returned status %d", resp.StatusCode)
@@ -284,12 +285,18 @@ func (c *EmailChannel) Send(ctx context.Context, notification *Notification) err
 		return fmt.Errorf("email channel not enabled")
 	}
 
+	// Validate recipients
 	if len(notification.Recipients) == 0 {
-		return fmt.Errorf("no recipients specified")
+		return fmt.Errorf("no email recipients provided")
 	}
 
 	// Build email headers
-	from := fmt.Sprintf("%s <%s>", c.config.FromName, c.config.FromAddress)
+	var from string
+	if c.config.FromName != "" {
+		from = fmt.Sprintf("%s <%s>", c.config.FromName, c.config.FromAddress)
+	} else {
+		from = c.config.FromAddress
+	}
 	to := strings.Join(notification.Recipients, ",")
 
 	// Build email body
@@ -388,7 +395,7 @@ func (c *WebhookChannel) IsEnabled() bool {
 
 // Priorities returns the priority levels this channel handles.
 func (c *WebhookChannel) Priorities() []NotificationPriority {
-	return []NotificationPriority{PriorityNotificationHigh, PriorityNotificationNormal, PriorityNotificationLow, PriorityNotificationEmergency}
+	return []NotificationPriority{PriorityNotificationHigh, PriorityNotificationEmergency}
 }
 
 // Send sends a notification to a custom webhook.
@@ -413,20 +420,20 @@ func (c *WebhookChannel) Send(ctx context.Context, notification *Notification) e
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	// Retry logic
+	// Retry logic - create new request for each attempt
 	var lastErr error
 	for attempt := 0; attempt <= c.config.RetryCount; attempt++ {
 		if attempt > 0 {
 			c.logger.Info("Retrying webhook delivery", "attempt", attempt, "notification_id", notification.ID)
-			backoff := time.Duration(1<<attempt) * time.Second
-			if backoff > 30*time.Second {
-				backoff = 30 * time.Second
+			select {
+			case <-time.After(time.Duration(attempt) * time.Second):
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-			time.Sleep(backoff)
 		}
 
-		body := bytes.NewBuffer(jsonData)
-		req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, body)
+		// Create fresh request for each attempt
+		req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewReader(jsonData))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
@@ -461,9 +468,13 @@ type NotificationChannelsService struct {
 }
 
 // NewNotificationChannelsService creates a new notification channels service.
-func NewNotificationChannelsService() *NotificationChannelsService {
+// Accepts an optional ChannelRegistry for dependency injection and testability.
+func NewNotificationChannelsService(registry *ChannelRegistry) *NotificationChannelsService {
+	if registry == nil {
+		registry = NewChannelRegistry()
+	}
 	return &NotificationChannelsService{
-		registry: NewChannelRegistry(),
+		registry: registry,
 		logger:   telemetry.Logger(),
 	}
 }
@@ -499,7 +510,7 @@ func (s *NotificationChannelsService) SendNotification(ctx context.Context, noti
 // SendTradeExecuted sends a trade executed notification.
 func (s *NotificationChannelsService) SendTradeExecuted(ctx context.Context, symbol, side, price, pnl string) error {
 	notification := &Notification{
-		ID:       fmt.Sprintf("trade-%d", time.Now().UnixNano()),
+		ID:       fmt.Sprintf("trade-%s", uuid.New().String()),
 		Type:     NotificationTypeTradeExecuted,
 		Priority: PriorityNotificationHigh,
 		Title:    fmt.Sprintf("Trade Executed: %s", symbol),
@@ -518,7 +529,7 @@ func (s *NotificationChannelsService) SendTradeExecuted(ctx context.Context, sym
 // SendEmergency sends an emergency notification to all channels.
 func (s *NotificationChannelsService) SendEmergency(ctx context.Context, title, message string) error {
 	notification := &Notification{
-		ID:       fmt.Sprintf("emergency-%d", time.Now().UnixNano()),
+		ID:       fmt.Sprintf("emergency-%s", uuid.New().String()),
 		Type:     NotificationTypeEmergency,
 		Priority: PriorityNotificationEmergency,
 		Title:    "🚨 EMERGENCY: " + title,
@@ -534,7 +545,7 @@ func (s *NotificationChannelsService) SendEmergency(ctx context.Context, title, 
 // SendDailySummary sends a daily summary notification.
 func (s *NotificationChannelsService) SendDailySummary(ctx context.Context, summary string, recipients []string) error {
 	notification := &Notification{
-		ID:         fmt.Sprintf("summary-%d", time.Now().UnixNano()),
+		ID:         fmt.Sprintf("daily-%s", uuid.New().String()),
 		Type:       NotificationTypeDailySummary,
 		Priority:   PriorityNotificationLow,
 		Title:      "Daily Trading Summary",
