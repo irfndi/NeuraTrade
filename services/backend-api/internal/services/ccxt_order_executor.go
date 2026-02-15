@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -143,12 +144,16 @@ func (e *CCXTOrderExecutor) GetOrder(ctx context.Context, exchange, orderID stri
 }
 
 func (e *CCXTOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error) {
-	url := fmt.Sprintf("%s/api/orders/%s", e.serviceURL, exchange)
+	baseURL := fmt.Sprintf("%s/api/orders/%s", e.serviceURL, exchange)
+
+	var requestURL string
 	if symbol != "" {
-		url += "?symbol=" + symbol
+		requestURL = baseURL + "?symbol=" + url.QueryEscape(symbol)
+	} else {
+		requestURL = baseURL
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -179,22 +184,24 @@ func (e *CCXTOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbol 
 }
 
 func (e *CCXTOrderExecutor) GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error) {
-	url := fmt.Sprintf("%s/api/orders/%s/closed", e.serviceURL, exchange)
-	query := ""
+	baseURL := fmt.Sprintf("%s/api/orders/%s/closed", e.serviceURL, exchange)
+
+	params := url.Values{}
 	if symbol != "" {
-		query += "symbol=" + symbol
+		params.Add("symbol", symbol)
 	}
 	if limit > 0 {
-		if query != "" {
-			query += "&"
-		}
-		query += fmt.Sprintf("limit=%d", limit)
-	}
-	if query != "" {
-		url += "?" + query
+		params.Add("limit", fmt.Sprintf("%d", limit))
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	var requestURL string
+	if params.Encode() != "" {
+		requestURL = baseURL + "?" + params.Encode()
+	} else {
+		requestURL = baseURL
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

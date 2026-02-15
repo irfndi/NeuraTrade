@@ -1045,6 +1045,7 @@ app.get("/api/funding-rate/:exchange/*", async (c) => {
 // Place an order
 app.post(
   "/api/order",
+  adminAuth,
   validator("json", (value, c) => {
     const req = value as PlaceOrderRequest;
     if (!req.exchange || !req.symbol || !req.side || !req.type || !req.amount) {
@@ -1126,7 +1127,7 @@ app.post(
 );
 
 // Cancel an order
-app.delete("/api/order/:exchange/:orderId", async (c) => {
+app.delete("/api/order/:exchange/:orderId", adminAuth, async (c) => {
   try {
     const exchange = c.req.param("exchange");
     const orderId = c.req.param("orderId");
@@ -1175,7 +1176,7 @@ app.delete("/api/order/:exchange/:orderId", async (c) => {
 });
 
 // Get order status
-app.get("/api/order/:exchange/:orderId", async (c) => {
+app.get("/api/order/:exchange/:orderId", adminAuth, async (c) => {
   try {
     const exchange = c.req.param("exchange");
     const orderId = c.req.param("orderId");
@@ -1223,7 +1224,7 @@ app.get("/api/order/:exchange/:orderId", async (c) => {
 });
 
 // Get open orders
-app.get("/api/orders/:exchange", async (c) => {
+app.get("/api/orders/:exchange", adminAuth, async (c) => {
   try {
     const exchange = c.req.param("exchange");
     const symbol = c.req.query("symbol") || undefined;
@@ -1272,7 +1273,7 @@ app.get("/api/orders/:exchange", async (c) => {
 });
 
 // Get closed orders
-app.get("/api/orders/:exchange/closed", async (c) => {
+app.get("/api/orders/:exchange/closed", adminAuth, async (c) => {
   try {
     const exchange = c.req.param("exchange");
     const symbol = c.req.query("symbol") || undefined;
@@ -1326,7 +1327,7 @@ app.get("/api/orders/:exchange/closed", async (c) => {
 });
 
 // Get order trades/fills
-app.get("/api/order/:exchange/:orderId/trades", async (c) => {
+app.get("/api/order/:exchange/:orderId/trades", adminAuth, async (c) => {
   try {
     const exchange = c.req.param("exchange");
     const orderId = c.req.param("orderId");

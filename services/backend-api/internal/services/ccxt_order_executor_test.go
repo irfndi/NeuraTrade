@@ -157,3 +157,59 @@ func TestCCXTOrderExecutor_PlaceOrderWithPrice(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "order-limit-123", orderID)
 }
+
+func TestCCXTOrderExecutor_GetClosedOrders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/orders/binance/closed", r.URL.Path)
+		assert.Equal(t, "symbol=BTC%2FUSDT", r.URL.RawQuery)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"orders": []map[string]interface{}{
+				{"id": "order-1", "status": "closed"},
+				{"id": "order-2", "status": "closed"},
+			},
+			"timestamp": "2026-02-15T12:00:00Z",
+		})
+	}))
+	defer server.Close()
+
+	executor := NewCCXTOrderExecutor(CCXTOrderExecutorConfig{
+		ServiceURL: server.URL,
+		Timeout:    30 * time.Second,
+	})
+
+	orders, err := executor.GetClosedOrders(context.Background(), "binance", "BTC/USDT", 0)
+
+	require.NoError(t, err)
+	assert.Len(t, orders, 2)
+}
+
+func TestCCXTOrderExecutor_GetOrderTrades(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/order/binance/order-12345/trades", r.URL.Path)
+		assert.Equal(t, "GET", r.Method)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"trades": []map[string]interface{}{
+				{"id": "trade-1", "amount": 0.5, "price": 50000},
+				{"id": "trade-2", "amount": 0.3, "price": 50001},
+			},
+			"timestamp": "2026-02-15T12:00:00Z",
+		})
+	}))
+	defer server.Close()
+
+	executor := NewCCXTOrderExecutor(CCXTOrderExecutorConfig{
+		ServiceURL: server.URL,
+		Timeout:    30 * time.Second,
+	})
+
+	trades, err := executor.GetOrderTrades(context.Background(), "binance", "order-12345")
+
+	require.NoError(t, err)
+	assert.Len(t, trades, 2)
+}
