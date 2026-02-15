@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -327,14 +328,31 @@ type IndicatorsConfig struct {
 
 // Load reads the configuration from the config file and environment variables.
 //
+// The config is loaded from the following locations (in order of precedence):
+//  1. ~/.neuratrade/config.json (local user config - highest priority for user overrides)
+//  2. ./config.yml (project config)
+//  3. Environment variables (highest priority)
+//
 // Returns:
 //
 //	*Config: The loaded configuration structure.
 //	error: An error if the configuration could not be parsed.
 func Load() (*Config, error) {
+	// First: Add ~/.neuratrade/ config path (user local config)
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
+	}
+
+	// Second: Add project config path
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
+
+	// Also support JSON config from ~/.neuratrade/
+	viper.SetConfigName("config")
+	viper.SetConfigType("json")
+	viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
 
 	// Set default values
 	setDefaults()

@@ -40,8 +40,9 @@ NeuraTrade CLI v${NEURATRADE_VERSION}
 Usage: neuratrade <command> [options]
 
 Commands:
-    onboard          Initialize ~/.neuratrade/ folder (first-time setup)
-    init             Alias for onboard
+    onboard          Initialize NeuraTrade (first-time setup)
+    onboarding       Alias for onboard
+    init             Deprecated: use 'onboard' instead
     config           Show/edit configuration (JSON format)
     context          Manage AI context files
     workspace        Show workspace directory
@@ -507,7 +508,7 @@ main() {
     shift 2>/dev/null || true
     
     case "$cmd" in
-        onboard|init)
+        onboard|onboarding|init)
             cmd_onboard
             ;;
         config)
