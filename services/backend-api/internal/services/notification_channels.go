@@ -285,6 +285,10 @@ func (c *EmailChannel) Send(ctx context.Context, notification *Notification) err
 		return fmt.Errorf("email channel not enabled")
 	}
 
+	if len(notification.Recipients) == 0 {
+		return fmt.Errorf("no recipients specified")
+	}
+
 	// Build email headers
 	from := fmt.Sprintf("%s <%s>", c.config.FromName, c.config.FromAddress)
 	to := strings.Join(notification.Recipients, ",")
@@ -411,22 +415,27 @@ func (c *WebhookChannel) Send(ctx context.Context, notification *Notification) e
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range c.config.Headers {
-		req.Header.Set(k, v)
-	}
-
 	// Retry logic
 	var lastErr error
 	for attempt := 0; attempt <= c.config.RetryCount; attempt++ {
 		if attempt > 0 {
 			c.logger.Info("Retrying webhook delivery", "attempt", attempt, "notification_id", notification.ID)
-			time.Sleep(time.Duration(attempt) * time.Second)
+			backoff := time.Duration(1<<attempt) * time.Second
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+			time.Sleep(backoff)
+		}
+
+		body := bytes.NewBuffer(jsonData)
+		req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, body)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range c.config.Headers {
+			req.Header.Set(k, v)
 		}
 
 		resp, err := c.client.Do(req)
@@ -434,7 +443,7 @@ func (c *WebhookChannel) Send(ctx context.Context, notification *Notification) e
 			lastErr = err
 			continue
 		}
-		defer func() { _ = resp.Body.Close() }()
+		resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			c.logger.Info("Sent notification to webhook", "notification_id", notification.ID)
@@ -492,7 +501,7 @@ func (s *NotificationChannelsService) SendNotification(ctx context.Context, noti
 // SendTradeExecuted sends a trade executed notification.
 func (s *NotificationChannelsService) SendTradeExecuted(ctx context.Context, symbol, side, price, pnl string) error {
 	notification := &Notification{
-		ID:       fmt.Sprintf("trade-%d", time.Now().Unix()),
+		ID:       fmt.Sprintf("trade-%d", time.Now().UnixNano()),
 		Type:     NotificationTypeTradeExecuted,
 		Priority: PriorityNotificationHigh,
 		Title:    fmt.Sprintf("Trade Executed: %s", symbol),
@@ -511,7 +520,7 @@ func (s *NotificationChannelsService) SendTradeExecuted(ctx context.Context, sym
 // SendEmergency sends an emergency notification to all channels.
 func (s *NotificationChannelsService) SendEmergency(ctx context.Context, title, message string) error {
 	notification := &Notification{
-		ID:       fmt.Sprintf("emergency-%d", time.Now().Unix()),
+		ID:       fmt.Sprintf("emergency-%d", time.Now().UnixNano()),
 		Type:     NotificationTypeEmergency,
 		Priority: PriorityNotificationEmergency,
 		Title:    "🚨 EMERGENCY: " + title,
@@ -527,7 +536,7 @@ func (s *NotificationChannelsService) SendEmergency(ctx context.Context, title, 
 // SendDailySummary sends a daily summary notification.
 func (s *NotificationChannelsService) SendDailySummary(ctx context.Context, summary string, recipients []string) error {
 	notification := &Notification{
-		ID:         fmt.Sprintf("summary-%d", time.Now().Unix()),
+		ID:         fmt.Sprintf("summary-%d", time.Now().UnixNano()),
 		Type:       NotificationTypeDailySummary,
 		Priority:   PriorityNotificationLow,
 		Title:      "Daily Trading Summary",
