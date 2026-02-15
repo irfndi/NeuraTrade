@@ -54,6 +54,7 @@ type AISessionStore interface {
 func NewAISessionSerializer(store AISessionStore) *AISessionSerializer {
 	return &AISessionSerializer{
 		store: store,
+		mu:    sync.RWMutex{},
 	}
 }
 

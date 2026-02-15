@@ -356,10 +356,7 @@ func (c *OpenAIClient) convertRequest(req *CompletionRequest) *openAIRequest {
 
 	tools := make([]openAITool, len(req.Tools))
 	for i, tool := range req.Tools {
-		tools[i] = openAITool{
-			Type:     tool.Type,
-			Function: tool.Function,
-		}
+		tools[i] = openAITool(tool)
 	}
 
 	var responseFormat *openAIResponseFormat
@@ -466,14 +463,14 @@ func (c *OpenAIClient) handleErrorResponse(statusCode int, body []byte) error {
 				retryAfter = time.Duration(secs) * time.Second
 			}
 		}
-		return ErrRateLimited{Provider: ProviderOpenAI, RetryAfter: retryAfter}
+		return RateLimitedError{Provider: ProviderOpenAI, RetryAfter: retryAfter}
 	case http.StatusBadRequest:
 		if apiErr.Error.Code == "context_length_exceeded" {
-			return ErrContextLengthExceeded{Provider: ProviderOpenAI}
+			return ContextLengthExceededError{Provider: ProviderOpenAI}
 		}
 	case http.StatusForbidden:
 		if apiErr.Error.Type == "content_filter" {
-			return ErrContentFiltered{Provider: ProviderOpenAI, Reason: apiErr.Error.Message}
+			return ContentFilteredError{Provider: ProviderOpenAI, Reason: apiErr.Error.Message}
 		}
 	}
 

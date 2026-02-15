@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-15 09:40 Asia/Jakarta
-**Commit:** 7b63460d
+**Generated:** 2026-02-15 09:50 Asia/Jakarta
+**Commit:** d4ec47c8
 **Branch:** development
 
 ## OVERVIEW
@@ -84,7 +84,7 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 214 total | 41 open | 0 in progress | 7 blocked | 173 closed | 34 ready
+**Stats:** 214 total | 31 open | 4 in progress | 7 blocked | 179 closed | 24 ready
 
 ### Recently Completed (✓)
 - ✓ `neura-s9zx`: Stop-Loss Auto-Execution Loop
@@ -102,6 +102,10 @@ make dev-down
 - ✓ `neura-nqxe`: Fix undefined talib and snapshots in technical_analysis.go
 - ✓ `neura-hrs3`: Fix undefined CCXTClient in services package
 - ✓ `neura-q82t`: Fix CI/CD failures on PR#102
+- ✓ `neura-envk`: CCXT Order Execution Support
+- ✓ `neura-nrqj`: Heartbeat System for Autonomous Operation
+- ✓ `neura-qnky`: Unified Trading State Store
+- ✓ `neura-8ve6`: Exchange API Mocks
 - ✓ `neura-px6`: Security audits (gosec, gitleaks)
 - ✓ `neura-4p6`: Exchange resilience monitoring
 - ✓ `neura-kxq`: Kill switch monitoring
