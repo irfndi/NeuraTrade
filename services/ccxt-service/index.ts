@@ -42,15 +42,10 @@ import type {
   FundingRateResponse,
   PlaceOrderRequest,
   PlaceOrderResponse,
-  CancelOrderRequest,
   CancelOrderResponse,
-  GetOrderRequest,
   GetOrderResponse,
-  GetOpenOrdersRequest,
   GetOpenOrdersResponse,
-  GetClosedOrdersRequest,
   GetClosedOrdersResponse,
-  GetOrderTradesRequest,
   GetOrderTradesResponse,
 } from "./types";
 
@@ -1255,7 +1250,9 @@ app.get("/api/orders/:exchange", async (c) => {
       );
     }
 
-    const orders = await ex.fetchOpenOrders(symbol ? [symbol] : undefined);
+    const orders = await ex.fetchOpenOrders(
+      symbol ? ([symbol] as unknown as string) : undefined,
+    );
 
     const response: GetOpenOrdersResponse = {
       orders,
@@ -1306,7 +1303,7 @@ app.get("/api/orders/:exchange/closed", async (c) => {
     }
 
     const orders = await ex.fetchClosedOrders(
-      symbol ? [symbol] : undefined,
+      symbol ? ([symbol] as unknown as string) : undefined,
       undefined,
       limit,
     );
