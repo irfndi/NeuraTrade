@@ -43,7 +43,7 @@ proto-gen: ## Generate gRPC code
 	@echo "$(GREEN)gRPC code generated!$(NC)"
 
 
-build: ## Build the application across all languages
+build: services-setup ## Build the application across all languages
 	@echo "$(GREEN)Building $(APP_NAME)...$(NC)"
 	@# Build Go application
 	cd services/backend-api && go build -o ../../bin/$(APP_NAME) ./cmd/server
@@ -63,7 +63,7 @@ build: ## Build the application across all languages
 	fi
 	@echo "$(GREEN)Build complete!$(NC)"
 
-test: ## Run tests across all languages
+test: services-setup ## Run tests across all languages
 	@echo "$(GREEN)Running tests across all languages...$(NC)"
 	@# Run Go tests
 	cd services/backend-api && go test -v ./...
@@ -113,7 +113,7 @@ lint: go-env-setup ## Run linter across all languages
 		echo "$(YELLOW)Skipping Telegram service linting$(NC)"; \
 	fi
 
-typecheck: ## Run type checking across all languages
+typecheck: services-setup ## Run type checking across all languages
 	@echo "$(GREEN)Running type checking across all languages...$(NC)"
 	@# Type check Go code
 	cd services/backend-api && go vet ./...
@@ -228,7 +228,7 @@ db-seed: ## Seed database with sample data
 	./bin/$(APP_NAME) seed
 
 ## CI/CD
-ci-test: ## Run CI tests with proper environment
+ci-test: services-setup ## Run CI tests with proper environment
 	@echo "$(GREEN)Running CI tests...$(NC)"
 	cd services/backend-api && go test -v -race -coverprofile=../../coverage.out $$(go list ./... | grep -v -E '(internal/api/handlers/testmocks|internal/observability)')
 	@if [ -d "services/ccxt-service" ] && command -v bun >/dev/null 2>&1; then \
@@ -257,7 +257,7 @@ ci-naming-check: ## Enforce canonical naming guardrails for CI
 	@echo "$(GREEN)Running naming/import guardrails...$(NC)"
 	bash services/backend-api/scripts/check-canonical-naming.sh
 
-ci-build: ## Build for CI across all languages
+ci-build: services-setup ## Build for CI across all languages
 	@echo "$(GREEN)Building for CI...$(NC)"
 	@# Build Go application for CI
 	cd services/backend-api && CGO_ENABLED=0 go build -v -ldflags "-X main.version=$(shell git describe --tags --always --dirty) -X main.buildTime=$(shell date -u '+%Y-%m-%d_%H:%M:%S')" -o ../../bin/$(APP_NAME) ./cmd/server

@@ -224,7 +224,7 @@ func (s *AlertService) CheckRedisHealth(ctx context.Context) error {
 
 	err := s.redis.HealthCheck(ctx)
 	if err != nil {
-		s.SendAlert(ctx, AlertLevelCritical, "redis", "Redis connection failed",
+		_ = s.SendAlert(ctx, AlertLevelCritical, "redis", "Redis connection failed",
 			map[string]any{"error": err.Error()})
 		return err
 	}
@@ -246,7 +246,7 @@ func (s *AlertService) RunHealthCheck(ctx context.Context, config HealthAlertCon
 	}
 
 	if err := s.CheckDatabaseHealth(ctx); err != nil && config.DatabaseDown {
-		s.SendAlert(ctx, AlertLevelCritical, "database", "Database connection failed",
+		_ = s.SendAlert(ctx, AlertLevelCritical, "database", "Database connection failed",
 			map[string]any{"error": err.Error()})
 		s.logger.Error("Database health check failed", "error", err)
 	}

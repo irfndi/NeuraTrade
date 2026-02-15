@@ -128,7 +128,7 @@ func (tss *TwitterSentimentService) fetchTweets(ctx context.Context, symbol stri
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return tss.getMockTweets(symbol), nil
@@ -273,9 +273,10 @@ func (tss *TwitterSentimentService) getMockTweets(symbol string) []Tweet {
 	for i := 0; i < 20; i++ {
 		sentiment := sentiments[i%3]
 		score := 0.0
-		if sentiment == "positive" {
+		switch sentiment {
+		case "positive":
 			score = 0.5
-		} else if sentiment == "negative" {
+		case "negative":
 			score = -0.5
 		}
 

@@ -266,9 +266,7 @@ func (pm *QuestProgressManager) sendMilestoneNotification(update *QuestProgressU
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif); err != nil {
-			// Log error but don't fail the update
-		}
+		_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
 	}()
 }
 
@@ -296,9 +294,7 @@ func (pm *QuestProgressManager) sendProgressUpdate(update *QuestProgressUpdate) 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif); err != nil {
-			// Log error but don't fail the update
-		}
+		_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
 	}()
 }
 
@@ -326,9 +322,7 @@ func (pm *QuestProgressManager) sendCompletionNotification(update *QuestProgress
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif); err != nil {
-			// Log error but don't fail the update
-		}
+		_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
 	}()
 }
 

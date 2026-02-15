@@ -320,9 +320,9 @@ func convertValue(value interface{}, targetType reflect.Type) (reflect.Value, er
 	}
 
 	// Handle numeric types
-	switch value.(type) {
+	switch v := value.(type) {
 	case float64:
-		val := value.(float64)
+		val := v
 		switch targetType.Kind() {
 		case reflect.Float32, reflect.Float64:
 			return reflect.ValueOf(val).Convert(targetType), nil
@@ -330,7 +330,7 @@ func convertValue(value interface{}, targetType reflect.Type) (reflect.Value, er
 			return reflect.ValueOf(int64(val)).Convert(targetType), nil
 		}
 	case int, int8, int16, int32, int64:
-		val := reflect.ValueOf(value).Int()
+		val := reflect.ValueOf(v).Int()
 		switch targetType.Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			return reflect.ValueOf(val).Convert(targetType), nil
@@ -338,11 +338,11 @@ func convertValue(value interface{}, targetType reflect.Type) (reflect.Value, er
 			return reflect.ValueOf(float64(val)).Convert(targetType), nil
 		}
 	case bool:
-		return reflect.ValueOf(value.(bool)).Convert(targetType), nil
+		return reflect.ValueOf(v).Convert(targetType), nil
 	case []interface{}:
 		// Handle array/slice
-		slice := reflect.MakeSlice(targetType, 0, len(value.([]interface{})))
-		for _, item := range value.([]interface{}) {
+		slice := reflect.MakeSlice(targetType, 0, len(v))
+		for _, item := range v {
 			elemType := targetType.Elem()
 			elem, err := convertValue(item, elemType)
 			if err != nil {
@@ -356,12 +356,12 @@ func convertValue(value interface{}, targetType reflect.Type) (reflect.Value, er
 			m := reflect.MakeMap(targetType)
 			keyType := targetType.Key()
 			elemType := targetType.Elem()
-			for k, v := range value.(map[string]interface{}) {
+			for k, val := range v {
 				key, err := convertValue(k, keyType)
 				if err != nil {
 					return reflect.Value{}, fmt.Errorf("failed to convert map key: %w", err)
 				}
-				elem, err := convertValue(v, elemType)
+				elem, err := convertValue(val, elemType)
 				if err != nil {
 					return reflect.Value{}, err
 				}
@@ -456,11 +456,7 @@ func ParseToolCalls(content string) ([]ToolCall, error) {
 	var directCalls []DirectToolCall
 	if err := json.Unmarshal([]byte(content), &directCalls); err == nil && len(directCalls) > 0 {
 		for _, tc := range directCalls {
-			toolCalls = append(toolCalls, ToolCall{
-				ID:     tc.ID,
-				Name:   tc.Name,
-				Params: tc.Params,
-			})
+			toolCalls = append(toolCalls, ToolCall(tc))
 		}
 		return toolCalls, nil
 	}

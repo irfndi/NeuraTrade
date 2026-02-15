@@ -146,11 +146,11 @@ func (c *TwitterClient) fetchAndAnalyzeSentiment(ctx context.Context, query, sym
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Twitter API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("twitter API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var twitterResp TwitterSearchResponse

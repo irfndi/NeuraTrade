@@ -45,7 +45,7 @@ async function getService() {
             if (healthRes.status === 200) {
               return { port, fetch: fetch };
             }
-          } catch (error) {
+          } catch {
             // Service not ready yet
           }
           await new Promise((resolve) => setTimeout(resolve, interval));

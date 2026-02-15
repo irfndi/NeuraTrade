@@ -41,7 +41,7 @@ class MockExchange {
     };
   }
 
-  async fetchFundingRates(symbols?: string[]) {
+  async fetchFundingRates(_symbols?: string[]) {
     return {
       "BTC/USDT": {
         symbol: "BTC/USDT",
@@ -81,14 +81,14 @@ describe("CcxtGrpcServer", () => {
       },
     };
 
-    server.getTicker(call, (err, response) => {
-      expect(err).toBeNull();
-      expect(response).toBeDefined();
-      expect(response!.exchange).toBe("binance");
-      expect(response!.symbol).toBe("BTC/USDT");
-      expect(response!.ticker).toBeDefined();
-      expect(response!.ticker!.last).toBe("50000");
-      expect(response!.error).toBe("");
+    server.getTicker(call, (_err, _response) => {
+      expect(_err).toBeNull();
+      expect(_response).toBeDefined();
+      expect(_response!.exchange).toBe("binance");
+      expect(_response!.symbol).toBe("BTC/USDT");
+      expect(_response!.ticker).toBeDefined();
+      expect(_response!.ticker!.last).toBe("50000");
+      expect(_response!.error).toBe("");
       done();
     });
   });
@@ -101,10 +101,10 @@ describe("CcxtGrpcServer", () => {
       },
     };
 
-    server.getTicker(call, (err: any, response: any) => {
+    server.getTicker(call, (_err: any, _response: any) => {
       // The implementation calls callback with (error_obj, null) for unsupported exchange
-      expect(err).not.toBeNull();
-      expect(err.code).toBe(grpc.status.INVALID_ARGUMENT);
+      expect(_err).not.toBeNull();
+      expect(_err.code).toBe(grpc.status.INVALID_ARGUMENT);
       done();
     });
   });
@@ -117,11 +117,11 @@ describe("CcxtGrpcServer", () => {
       },
     };
 
-    server.getTicker(call, (err, response) => {
-      expect(err).toBeNull();
-      expect(response).toBeDefined();
-      expect(response!.ticker).toBeUndefined();
-      expect(response!.error).toContain("Symbol not found");
+    server.getTicker(call, (_err, _response) => {
+      expect(_err).toBeNull();
+      expect(_response).toBeDefined();
+      expect(_response!.ticker).toBeUndefined();
+      expect(_response!.error).toContain("Symbol not found");
       done();
     });
   });
