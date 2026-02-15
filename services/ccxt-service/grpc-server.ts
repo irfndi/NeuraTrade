@@ -544,7 +544,7 @@ export class CcxtGrpcServer {
   };
 }
 
-export function startGrpcServer(exchanges: any, _port: number) {
+export function startGrpcServer(exchanges: any, port: number) {
   const server = new grpc.Server();
   const service = new CcxtGrpcServer(exchanges);
   server.addService(
@@ -555,7 +555,7 @@ export function startGrpcServer(exchanges: any, _port: number) {
   server.bindAsync(
     bindAddr,
     grpc.ServerCredentials.createInsecure(),
-    (err, _port) => {
+    (err, assignedPort) => {
       if (err) {
         console.error(`Failed to bind gRPC server: ${err}`);
         throw err; // Propagate error to caller
