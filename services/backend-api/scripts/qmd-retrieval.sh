@@ -68,9 +68,11 @@ search_with_qmd() {
   [[ "$QMD_ENABLED" != "1" ]] && return 1
   start_time=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null) || start_time=$(date +%s000)
   [[ ! -d "$QMD_INDEX_PATH" ]] && return 1
-  qmd search "$query" --max-results="$MAX_RESULTS" 2>/dev/null || true
+  qmd search "$query" --max-results="$MAX_RESULTS" 2>/dev/null
+  local qmd_exit=$?
   end_time=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null) || end_time=$(date +%s000)
   echo "QMD search time: $((end_time - start_time))ms"
+  return $qmd_exit
 }
 
 search_unified() {
@@ -101,10 +103,12 @@ index_docs() {
 
 run_benchmark() {
   local test_queries=("database connection" "redis error" "telegram bot" "exchange API" "health check")
+  local doc_count
+  doc_count=$(count_docs)
   echo "QMD Retrieval Benchmark Report"
-  echo "Docs path: $DOCS_PATH, Total docs: $(count_docs), QMD enabled: $QMD_ENABLED"
+  echo "Docs path: $DOCS_PATH, Total docs: $doc_count, QMD enabled: $QMD_ENABLED"
 
-  [[ $(count_docs) -eq 0 ]] && {
+  [[ $doc_count -eq 0 ]] && {
     log_error "No docs found"
     return 1
   }
@@ -139,7 +143,8 @@ check_resource_overhead() {
   echo "Resource Overhead Report"
   local doc_count total_size
   doc_count=$(count_docs)
-  total_size=$(find_markdown_docs | xargs du -ch 2>/dev/null | tail -1 | cut -f1 || echo "unknown")
+  total_size=$(find_markdown_docs | xargs --no-run-if-empty du -ch 2>/dev/null | tail -1 | cut -f1)
+  total_size="${total_size:-unknown}"
   echo "Files: $doc_count, Size: $total_size"
   [[ -d "$QMD_INDEX_PATH" ]] && echo "QMD Index: $(du -sh "$QMD_INDEX_PATH" 2>/dev/null | cut -f1)" || echo "QMD Index: not created"
 }
