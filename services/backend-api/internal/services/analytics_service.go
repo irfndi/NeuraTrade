@@ -11,12 +11,11 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/observability"
-	"github.com/jackc/pgx/v5"
 )
 
 // AnalyticsQuerier defines the database operations needed for analytics.
 type AnalyticsQuerier interface {
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
+	Query(ctx context.Context, sql string, args ...interface{}) (database.Rows, error)
 }
 
 // AnalyticsService provides correlation, regime detection, and forecasting utilities.
@@ -26,10 +25,10 @@ type AnalyticsService struct {
 }
 
 // NewAnalyticsService creates a new analytics service.
-func NewAnalyticsService(db *database.PostgresDB, cfg config.AnalyticsConfig) *AnalyticsService {
+func NewAnalyticsService(db database.Database, cfg config.AnalyticsConfig) *AnalyticsService {
 	var querier AnalyticsQuerier
 	if db != nil {
-		querier = db.Pool
+		querier = db
 	}
 
 	return &AnalyticsService{

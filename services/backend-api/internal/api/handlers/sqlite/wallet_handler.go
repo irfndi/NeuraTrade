@@ -3,7 +3,6 @@
 package sqlite
 
 import (
-	"encoding/base64"
 	"net/http"
 	"time"
 
@@ -283,29 +282,25 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 		return
 	}
 
-	// Encrypt API key
+	// Encrypt API key (returns base64-encoded string)
 	encryptedKey, err := encryptor.Encrypt([]byte(req.APIKey))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt API key"})
 		return
 	}
 
-	// Encrypt API secret
+	// Encrypt API secret (returns base64-encoded string)
 	encryptedSecret, err := encryptor.Encrypt([]byte(req.APISecret))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt API secret"})
 		return
 	}
 
-	// Encode to base64 for storage
-	encodedKey := base64.StdEncoding.EncodeToString(encryptedKey)
-	encodedSecret := base64.StdEncoding.EncodeToString(encryptedSecret)
-
-	// Insert encrypted API keys
+	// Insert encrypted API keys (already base64-encoded by encryptor.Encrypt)
 	_, err = h.db.DB.Exec(
 		`INSERT INTO exchange_api_keys (user_id, exchange, api_key_encrypted, api_secret_encrypted, testnet, created_at)
 		 VALUES (?, ?, ?, ?, 0, ?)`,
-		userID, req.Exchange, encodedKey, encodedSecret, time.Now().Format("2006-01-02 15:04:05"),
+		userID, req.Exchange, encryptedKey, encryptedSecret, time.Now().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to store API keys"})
@@ -326,7 +321,8 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 func getEncryptionKey() []byte {
 	// Default key for development (MUST be changed in production!)
 	// In production, use: os.Getenv("ENCRYPTION_KEY")
-	key := "change-me-in-production-use-env-var-encryption-key-32-bytes-min!"
+	// This is exactly 32 bytes for AES-256-GCM
+	key := "0123456789abcdef0123456789abcdef" // 32 bytes
 	return []byte(key)
 }
 

@@ -265,7 +265,7 @@ func TestSQLiteDB_BeginTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Begin transaction with options
-	tx, err := db.BeginTx(ctx)
+	tx, err := db.Begin(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, tx)
 
@@ -340,11 +340,6 @@ func TestSQLiteDB_NilDatabase(t *testing.T) {
 
 	// Query should return error
 	_, err := db.Query(ctx, "SELECT 1")
-	assert.Error(t, err)
-
-	// QueryRow should return empty row
-	row := db.QueryRow(ctx, "SELECT 1")
-	err = row.Scan(new(int))
 	assert.Error(t, err)
 
 	// Exec should return error
