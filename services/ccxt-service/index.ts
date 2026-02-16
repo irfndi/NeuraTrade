@@ -19,6 +19,7 @@ import { validator } from "hono/validator";
 import ccxt from "ccxt";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
+import os from "os";
 import {
   isSentryEnabled,
   sentryMiddleware,
@@ -319,23 +320,32 @@ const exchangeConfig = loadExchangeConfig();
 // Convert to Set for faster lookups during initialization
 const blacklistedExchanges = new Set(exchangeConfig.blacklistedExchanges);
 
-// Priority exchanges (will be initialized first)
-const priorityExchanges = [
-  "binance",
-  "bybit",
-  "okx",
-  "coinbasepro",
-  "kraken",
-  "kucoin",
-  "huobi",
-  "gateio",
-  "mexc",
-  "bitget",
-  "coinbase",
-  "bingx",
-  "cryptocom",
-  "htx",
-];
+// Load exchange config from ~/.neuratrade/config.json
+function loadUserExchangeConfig() {
+  try {
+    const configPath = join(os.homedir(), ".neuratrade", "config.json");
+    if (existsSync(configPath)) {
+      const configData = readFileSync(configPath, "utf-8");
+      const config = JSON.parse(configData);
+      return {
+        enabled: config.exchanges?.enabled || [],
+        apiKeys: config.exchanges?.api_keys || {},
+        devMode: config.server?.dev_mode || false,
+        marketData: config.market_data || {},
+      };
+    }
+  } catch (e) {
+    console.log("No user config found, using defaults");
+  }
+  return { enabled: [], apiKeys: {}, devMode: false, marketData: {} };
+}
+
+const userConfig = loadUserExchangeConfig();
+
+// Priority exchanges - use config or fallback to defaults
+const priorityExchanges = userConfig.enabled.length > 0 
+  ? userConfig.enabled 
+  : ["binance", "bybit", "okx", "kraken", "kucoin", "gateio", "mexc", "bitget", "coinbase", "bingx", "cryptocom"];
 
 // Initialize supported exchanges dynamically
 const exchanges: ExchangeManager = {};
@@ -445,6 +455,38 @@ console.log(
   failedCount > 10 ? `... and ${failedCount - 10} more` : "",
 );
 console.log(`Active exchanges:`, Object.keys(exchanges).sort().join(", "));
+
+// Market data cache with cleanup
+interface MarketDataCache {
+  ticker: Record<string, any>;
+  orderbook: Record<string, any>;
+  lastUpdate: number;
+}
+
+const marketDataCache: Map<string, MarketDataCache> = new Map();
+
+// Cleanup old market data
+function cleanupMarketData() {
+  const maxAgeMs = (userConfig.marketData?.max_age_minutes || 10) * 60 * 1000;
+  const now = Date.now();
+  let cleaned = 0;
+
+  for (const [key, data] of marketDataCache.entries()) {
+    if (now - data.lastUpdate > maxAgeMs) {
+      marketDataCache.delete(key);
+      cleaned++;
+    }
+  }
+
+  if (cleaned > 0) {
+    console.log(`🧹 Cleaned ${cleaned} old market data entries`);
+  }
+}
+
+// Start cleanup interval
+const cleanupIntervalMs = (userConfig.marketData?.cleanup_interval_minutes || 5) * 60 * 1000;
+setInterval(cleanupMarketData, cleanupIntervalMs);
+console.log(`🧹 Market data cleanup scheduled every ${userConfig.marketData?.cleanup_interval_minutes || 5} minutes`);
 
 // Health check endpoint - verifies actual service functionality
 app.get("/health", async (c) => {
@@ -1567,6 +1609,35 @@ app.post("/api/admin/exchanges/add/:exchange", adminAuth, async (c) => {
     return c.json(errorResponse, 500);
   }
 });
+
+// Get balance for an exchange (requires API keys)
+app.get("/api/balance/:exchange", async (c) => {
+  const exchange = c.req.param("exchange").toLowerCase();
+
+  try {
+    if (!ccxt.exchanges.includes(exchange)) {
+      return c.json({ error: "Exchange not supported", timestamp: new Date().toISOString() }, 400);
+    }
+
+    if (exchanges[exchange] && exchanges[exchange].apiKey) {
+      const balance = await exchanges[exchange].fetchBalance();
+      return c.json({ exchange, balance, timestamp: new Date().toISOString() });
+    }
+
+    return c.json({ error: "Exchange not initialized with API keys. Use POST /api/balance/:exchange with API keys.", timestamp: new Date().toISOString() }, 400);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Unknown error", timestamp: new Date().toISOString() }, 500);
+  }
+});
+
+// Create exchange with API keys and get balance
+interface BalanceRequest {
+  apiKey: string;
+  apiSecret: string;
+  testnet?: boolean;
+}
+
+// Placeholder for balance - use existing order endpoint for now
 
 // Global error handler
 app.onError((error, c) => {

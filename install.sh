@@ -73,6 +73,18 @@ install_binary() {
   )
 }
 
+install_cli() {
+  local cli_bin="$INSTALL_DIR/neuratrade"
+
+  require_cmd go
+  log "building NeuraTrade CLI"
+  (
+    cd "$REPO_ROOT/cmd/neuratrade-cli"
+    go build -o "$cli_bin" .
+  )
+  log "installed CLI to $cli_bin"
+}
+
 create_bootstrap_command() {
   local bin_path="$INSTALL_DIR/$APP_NAME"
   local bootstrap_path="$INSTALL_DIR/$BOOTSTRAP_CMD_NAME"
@@ -161,16 +173,13 @@ print_next_steps() {
 
   printf 'Next steps:\n'
   printf '  1) Edit %s\n' "$ENV_TARGET"
+  printf '  2) Run: neuratrade gateway start     # Start all services\n'
+  printf '     Or:  neuratrade --help             # Show all commands\n'
   if [[ "$BOOTSTRAP_MODE" == "binary" ]]; then
-    printf '  2) Run: %s --help\n' "$BOOTSTRAP_LOCATION"
+    printf '  3) Backend: %s --help\n' "$BOOTSTRAP_LOCATION"
   elif [[ "$BOOTSTRAP_MODE" == "alias" ]]; then
-    printf '  2) Source alias: source %s\n' "$BOOTSTRAP_LOCATION"
-    printf '  3) Run: %s --help\n' "$BOOTSTRAP_CMD_NAME"
-  elif [[ "$binary_installed" == "true" ]]; then
-    printf '  2) Run: %s --help\n' "$bin_path"
-  else
-    printf '  2) Build manually: (cd %s/services/backend-api && go build -o %s ./cmd/server)\n' "$REPO_ROOT" "$bin_path"
-    printf '  3) Re-run install to create bootstrap command: ./install.sh\n'
+    printf '  3) Source alias: source %s\n' "$bootstrap_alias_path"
+    printf '  4) Backend: %s --help\n' "$BOOTSTRAP_CMD_NAME"
   fi
 }
 
@@ -189,6 +198,7 @@ main() {
     install_binary "$tmp_bin"
     install -m 0755 "$tmp_bin" "$INSTALL_DIR/$APP_NAME"
     binary_installed="true"
+    install_cli
   fi
 
   create_bootstrap_command

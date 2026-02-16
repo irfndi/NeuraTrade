@@ -19,7 +19,7 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: help build test test-coverage coverage-check lint fmt fmt-check run dev dev-setup dev-down install-tools security docker-build docker-run deploy clean dev-up-orchestrated prod-up-orchestrated webhook-enable webhook-disable webhook-status startup-status down-orchestrated go-env-setup ccxt-setup telegram-setup services-setup mod-download mod-tidy ci-structure-check ci-naming-check bd-close-qa
+.PHONY: help build build-cli build-all test test-coverage coverage-check lint fmt fmt-check run dev dev-setup dev-down install-tools install-cli security docker-build docker-run deploy clean dev-up-orchestrated prod-up-orchestrated webhook-enable webhook-disable webhook-status startup-status down-orchestrated go-env-setup ccxt-setup telegram-setup services-setup mod-download mod-tidy ci-structure-check ci-naming-check bd-close-qa
 
 # Default target
 all: build
@@ -62,6 +62,20 @@ build: services-setup ## Build the application across all languages
 		echo "$(YELLOW)Skipping Telegram service build - directory or bun not found$(NC)"; \
 	fi
 	@echo "$(GREEN)Build complete!$(NC)"
+
+build-cli: ## Build the NeuraTrade CLI
+	@echo "$(GREEN)Building NeuraTrade CLI...$(NC)"
+	@mkdir -p bin
+	cd cmd/neuratrade-cli && go build -ldflags "-X main.version=$(VERSION) -X main.buildTime=$(shell date -u '+%Y-%m-%d_%H:%M:%S')" -o ../../bin/neuratrade .
+	@echo "$(GREEN)CLI built at bin/neuratrade$(NC)"
+
+install-cli: build-cli ## Install the NeuraTrade CLI to /usr/local/bin
+	@echo "$(GREEN)Installing NeuraTrade CLI...$(NC)"
+	@cp bin/neuratrade /usr/local/bin/neuratrade || (echo "$(RED)Failed to install. Try: sudo make install-cli$(NC)" && exit 1)
+	@echo "$(GREEN)CLI installed to /usr/local/bin/neuratrade$(NC)"
+	@echo "$(BLUE)Run 'neuratrade gateway start' to start all services$(NC)"
+
+build-all: build build-cli ## Build all components including CLI
 
 test: services-setup ## Run tests across all languages
 	@echo "$(GREEN)Running tests across all languages...$(NC)"
