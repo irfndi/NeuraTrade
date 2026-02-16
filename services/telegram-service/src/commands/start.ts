@@ -61,10 +61,14 @@ export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
     } catch (error) {
       // Log registration errors for debugging
       const errorMsg = error instanceof Error ? error.message : String(error);
+<<<<<<< HEAD
+      logger.error("[Start] User registration failed", new Error(`User ${userId}: ${errorMsg}`));
+=======
       logger.error(
         "[Start] User registration failed",
         new Error(`User ${userId}: ${errorMsg}`),
       );
+>>>>>>> development
       // Don't expose internal errors to users
       await ctx.reply(
         "⚠️ Unable to complete registration. Please try again or contact support.",
