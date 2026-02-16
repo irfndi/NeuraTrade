@@ -124,7 +124,7 @@ func (h *WalletHandler) AddWallet(c *gin.Context) {
 	})
 }
 
-// RemoveWallet removes a wallet
+// RemoveWallet removes a wallet (requires user authorization)
 type RemoveWalletRequest struct {
 	Name string `json:"name" binding:"required"`
 }
@@ -136,9 +136,32 @@ func (h *WalletHandler) RemoveWallet(c *gin.Context) {
 		return
 	}
 
-	_, err := h.db.DB.Exec("DELETE FROM wallets WHERE name = ?", req.Name)
+	// Get user ID from query for authorization
+	chatID := c.Query("chat_id")
+	if chatID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
+	}
+
+	// Find user to verify ownership
+	var userID int
+	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_id = ?", chatID).Scan(&userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	// Delete wallet only if it belongs to this user
+	result, err := h.db.DB.Exec("DELETE FROM wallets WHERE name = ? AND user_id = ?", req.Name, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove wallet"})
+		return
+	}
+
+	// Check if any row was affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil || rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Wallet not found or not owned by user"})
 		return
 	}
 

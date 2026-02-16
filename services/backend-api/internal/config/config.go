@@ -349,10 +349,12 @@ func Load() (*Config, error) {
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
 
-	// Also support JSON config from ~/.neuratrade/
+	// Also support JSON config from ~/.neuratrade/ (only if homeDir is available)
 	viper.SetConfigName("config")
 	viper.SetConfigType("json")
-	viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
+	if err == nil {
+		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
+	}
 
 	// Set default values
 	setDefaults()

@@ -1,4 +1,4 @@
-module github.com/irfndi/NeuraTrade/cmd/neuratrade-cli
+module github.com/irfndi/neuratrade/cmd/neuratrade-cli
 
 go 1.25
 
