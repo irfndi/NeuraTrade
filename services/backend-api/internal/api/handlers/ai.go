@@ -235,12 +235,13 @@ func (h *AIHandler) SelectModel(c *gin.Context) {
 		return
 	}
 
-	// Update the user's selected model
+	// Update the user's selected model (SQLite-compatible syntax)
 	if h.db != nil {
 		querier, ok := h.db.(dbQuerier)
 		if ok {
+			// Use datetime('now') for SQLite compatibility instead of NOW()
 			_, err = querier.Exec(ctx,
-				"UPDATE users SET selected_ai_model = $1, updated_at = NOW() WHERE telegram_id = $2",
+				"UPDATE users SET selected_ai_model = ?, updated_at = datetime('now') WHERE telegram_id = ?",
 				req.ModelID, userID,
 			)
 			if err != nil {
@@ -284,13 +285,14 @@ func (h *AIHandler) GetModelStatus(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Get user's selected model
+	// Get user's selected model (SQLite-compatible syntax)
 	var selectedModel string
 	if h.db != nil {
 		querier, ok := h.db.(dbQuerier)
 		if ok {
+			// Use ? placeholder for SQLite compatibility instead of $1
 			err := querier.QueryRow(ctx,
-				"SELECT selected_ai_model FROM users WHERE telegram_id = $1",
+				"SELECT selected_ai_model FROM users WHERE telegram_id = ?",
 				userID,
 			).Scan(&selectedModel)
 
