@@ -412,7 +412,7 @@ func TestHealthHandler_TelegramTokenDetection(t *testing.T) {
 			// Clear telegram environment variables first
 			t.Setenv("TELEGRAM_BOT_TOKEN", tt.botToken)
 			t.Setenv("TELEGRAM_TOKEN", tt.token)
-			
+
 			// Set up mock CCXT server
 			mockCCXTServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
