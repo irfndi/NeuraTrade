@@ -8,6 +8,7 @@ useDefault = true
 commits = [
     "e88c8f3691ca2d99c6aaa71ca9c863524d13dd12", # test-api.ts hardcoded secret
     "bbbac84171877ea29858b45cfe0b3c9f75cfcccd", # neuratrade.json secrets
+    "fceccc8d", # QWEN.md and workflow files added
 ]
 
 paths = [
@@ -28,6 +29,7 @@ paths = [
     '''\.gitguardian\.yaml$''',
     '''\.github/DEPLOYMENT-SECRETS\.md$''',
     '''services/backend-api/internal/crypto/encryption_test\.go''',
+    '''services/telegram-service/scripts/.*-test.*\.sh$''',
 ]
 
 regexes = [

@@ -5,8 +5,17 @@
 
 set -e
 
-BOT_TOKEN="8537577635:AAH3VaChQxuLNR4gqeUP3F_JzZ3dz7lDpBQ"
-CHAT_ID="1082762347"
+# SECURITY: Use environment variable for bot token
+# Export before running: export TELEGRAM_BOT_TOKEN="your-bot-token"
+BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+if [ -z "$BOT_TOKEN" ]; then
+  echo "❌ ERROR: TELEGRAM_BOT_TOKEN environment variable is not set"
+  echo "   Set it with: export TELEGRAM_BOT_TOKEN=\"your-bot-token\""
+  exit 1
+fi
+
+# Use environment variable for chat ID or default
+CHAT_ID="${TELEGRAM_CHAT_ID:-1082762347}"
 LOG_FILE="${1:-/tmp/telegram_cmd.log}"
 
 echo "🧪 NeuraTrade Bot Response Test"

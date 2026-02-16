@@ -3,8 +3,17 @@
 # NeuraTrade Full Telegram Command Test Suite
 # Tests ALL available bot commands
 
-BOT_TOKEN="8537577635:AAH3VaChQxuLNR4gqeUP3F_JzZ3dz7lDpBQ"
-CHAT_ID="1082762347"
+# SECURITY: Use environment variable for bot token
+# Export before running: export TELEGRAM_BOT_TOKEN="your-bot-token"
+BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+if [ -z "$BOT_TOKEN" ]; then
+  echo "❌ ERROR: TELEGRAM_BOT_TOKEN environment variable is not set"
+  echo "   Set it with: export TELEGRAM_BOT_TOKEN=\"your-bot-token\""
+  exit 1
+fi
+
+# Use environment variable for chat ID or default
+CHAT_ID="${TELEGRAM_CHAT_ID:-1082762347}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

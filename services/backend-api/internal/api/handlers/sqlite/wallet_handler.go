@@ -18,13 +18,13 @@ func NewWalletHandler(db *database.SQLiteDB) *WalletHandler {
 	return &WalletHandler{db: db}
 }
 
-// Wallet represents a wallet in the system
+// Wallet represents a wallet in the system (matches sqlite_schema.sql)
 type Wallet struct {
 	ID        int       `json:"id"`
-	Chain     string    `json:"chain"`
-	Address   string    `json:"address"`
-	Type      string    `json:"type"`
-	Label     string    `json:"label"`
+	UserID    int       `json:"user_id"`
+	Name      string    `json:"name"`
+	Exchange  string    `json:"exchange"`
+	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -45,9 +45,9 @@ func (h *WalletHandler) GetWallets(c *gin.Context) {
 		return
 	}
 
-	// Query wallets
+	// Query wallets (matches sqlite_schema.sql: id, user_id, name, exchange, is_active, created_at)
 	rows, err := h.db.DB.Query(
-		"SELECT id, chain, address, wallet_type, label, created_at FROM wallets WHERE user_id = ?",
+		"SELECT id, user_id, name, exchange, is_active, created_at FROM wallets WHERE user_id = ?",
 		userID,
 	)
 	if err != nil {
@@ -59,7 +59,7 @@ func (h *WalletHandler) GetWallets(c *gin.Context) {
 	var wallets []Wallet
 	for rows.Next() {
 		var w Wallet
-		err := rows.Scan(&w.ID, &w.Chain, &w.Address, &w.Type, &w.Label, &w.CreatedAt)
+		err := rows.Scan(&w.ID, &w.UserID, &w.Name, &w.Exchange, &w.IsActive, &w.CreatedAt)
 		if err != nil {
 			continue
 		}
@@ -71,10 +71,8 @@ func (h *WalletHandler) GetWallets(c *gin.Context) {
 
 // AddWalletRequest represents a request to add a wallet
 type AddWalletRequest struct {
-	Chain   string `json:"chain" binding:"required"`
-	Address string `json:"address" binding:"required"`
-	Type    string `json:"type"`
-	Label   string `json:"label"`
+	Name     string `json:"name" binding:"required"`
+	Exchange string `json:"exchange" binding:"required"`
 }
 
 // AddWallet adds a new wallet
@@ -97,7 +95,7 @@ func (h *WalletHandler) AddWallet(c *gin.Context) {
 		// Create user if not exists
 		result, err := h.db.DB.Exec(
 			"INSERT INTO users (telegram_id, risk_level, created_at) VALUES (?, 'medium', ?)",
-			chatID, time.Now(),
+			chatID, time.Now().Format("2006-01-02 15:04:05"),
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
@@ -107,10 +105,10 @@ func (h *WalletHandler) AddWallet(c *gin.Context) {
 		userID = int(userID64)
 	}
 
-	// Insert wallet
+	// Insert wallet (matches sqlite_schema.sql)
 	_, err = h.db.DB.Exec(
-		"INSERT INTO wallets (user_id, chain, address, wallet_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		userID, req.Chain, req.Address, req.Type, req.Label, time.Now(),
+		"INSERT INTO wallets (user_id, name, exchange, is_active, created_at) VALUES (?, ?, ?, 1, ?)",
+		userID, req.Name, req.Exchange, time.Now().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add wallet"})
@@ -120,17 +118,15 @@ func (h *WalletHandler) AddWallet(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Wallet added successfully",
 		"wallet": gin.H{
-			"chain":   req.Chain,
-			"address": req.Address,
-			"type":    req.Type,
-			"label":   req.Label,
+			"name":     req.Name,
+			"exchange": req.Exchange,
 		},
 	})
 }
 
 // RemoveWallet removes a wallet
 type RemoveWalletRequest struct {
-	Address string `json:"address" binding:"required"`
+	Name string `json:"name" binding:"required"`
 }
 
 func (h *WalletHandler) RemoveWallet(c *gin.Context) {
@@ -140,7 +136,7 @@ func (h *WalletHandler) RemoveWallet(c *gin.Context) {
 		return
 	}
 
-	_, err := h.db.DB.Exec("DELETE FROM wallets WHERE address = ?", req.Address)
+	_, err := h.db.DB.Exec("DELETE FROM wallets WHERE name = ?", req.Name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove wallet"})
 		return
@@ -178,11 +174,13 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 		return
 	}
 
-	// Store API key (in production, this should be encrypted)
+	// SECURITY NOTE: In production, API keys should be encrypted before storage
+	// Use the crypto package: internal/crypto/encryption.go
+	// For now, storing plaintext (not recommended for production)
 	_, err = h.db.DB.Exec(
-		`INSERT INTO api_keys (user_id, provider, provider_type, encrypted_key, encrypted_secret, created_at) 
-		 VALUES (?, ?, 'exchange', ?, ?, ?)`,
-		userID, req.Exchange, req.APIKey, req.APISecret, time.Now(),
+		`INSERT INTO exchange_api_keys (user_id, exchange, api_key_encrypted, api_secret_encrypted, testnet, created_at)
+		 VALUES (?, ?, ?, ?, 0, ?)`,
+		userID, req.Exchange, req.APIKey, req.APISecret, time.Now().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to store API keys"})

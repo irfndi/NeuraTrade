@@ -27,26 +27,7 @@ setInterval(() => {
 
 registerAllCommands(bot, api, sessions);
 
-// Debug middleware - log ALL updates
-bot.use(async (ctx, next) => {
-  console.log(
-    ">>>> RECEIVED UPDATE:",
-    JSON.stringify(ctx.update.update_id, null, 2),
-  );
-  try {
-    await next();
-    console.log(">>>> UPDATE PROCESSED OK");
-  } catch (e) {
-    console.log(">>>> ERROR PROCESSING UPDATE:", e);
-  }
-});
-
-// Catch-all for text messages
-bot.on("message:text", async (ctx) => {
-  console.log(">>>> TEXT MESSAGE:", ctx.message.text);
-  await ctx.reply("Echo: " + ctx.message.text);
-});
-
+// Error handling and bot lifecycle
 bot.catch((err) => {
   const ctx = err.ctx;
   const error = err.error;

@@ -283,12 +283,15 @@ func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersR
 func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		// Safe int to int32 conversion with bounds checking
+		var safeLimit int32
 		if limit <= 0 {
-			limit = 0
-		} else if limit > math.MaxInt32 {
-			limit = math.MaxInt32
+			safeLimit = 0
+		} else if limit >= math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		} else {
+			safeLimit = int32(limit)
 		}
-		safeLimit := int32(limit)
 		resp, err := c.grpcClient.GetOrderBook(ctx, &pb.GetOrderBookRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -319,12 +322,15 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		// Safe int to int32 conversion with bounds checking
+		var safeLimit int32
 		if limit <= 0 {
-			limit = 0
-		} else if limit > math.MaxInt32 {
-			limit = math.MaxInt32
+			safeLimit = 0
+		} else if limit >= math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		} else {
+			safeLimit = int32(limit)
 		}
-		safeLimit := int32(limit)
 		resp, err := c.grpcClient.GetTrades(ctx, &pb.GetTradesRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -355,12 +361,15 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		// Safe int to int32 conversion with bounds checking
+		var safeLimit int32
 		if limit <= 0 {
-			limit = 0
-		} else if limit > math.MaxInt32 {
-			limit = math.MaxInt32
+			safeLimit = 0
+		} else if limit >= math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		} else {
+			safeLimit = int32(limit)
 		}
-		safeLimit := int32(limit)
 		resp, err := c.grpcClient.GetOHLCV(ctx, &pb.GetOHLCVRequest{
 			Exchange:  exchange,
 			Symbol:    symbol,

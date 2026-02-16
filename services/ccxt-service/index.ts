@@ -1626,8 +1626,8 @@ app.post("/api/admin/exchanges/add/:exchange", adminAuth, async (c) => {
   }
 });
 
-// Get balance for an exchange (requires API keys)
-app.get("/api/balance/:exchange", async (c) => {
+// Get balance for an exchange (requires API keys and admin auth)
+app.get("/api/balance/:exchange", adminAuth, async (c) => {
   const exchange = c.req.param("exchange").toLowerCase();
 
   try {
