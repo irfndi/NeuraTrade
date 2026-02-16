@@ -888,7 +888,87 @@ func (c *APIClient) GetAIModels() (*AIModelsResponse, error) {
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
+	return &response, nil
+}
+
+// AIProvider represents an AI provider
+type AIProvider struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	IsActive bool   `json:"is_active"`
+}
+
+// AIProvidersResponse represents the response from the AI providers endpoint
+type AIProvidersResponse struct {
+	Providers []AIProvider `json:"providers"`
+}
+
+// GetAIProviders retrieves available AI providers from the API
+func (c *APIClient) GetAIProviders() (*AIProvidersResponse, error) {
+	respBody, err := c.makeRequest("GET", "/api/v1/ai/providers", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response AIProvidersResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// PortfolioResponse represents the portfolio response
+type PortfolioResponse struct {
+	TotalValue string  `json:"total_value"`
+	Cash       string  `json:"cash"`
+	Assets     []Asset `json:"assets"`
+	PnL24h     string  `json:"pnl_24h"`
+}
+
+// Asset represents a portfolio asset
+type Asset struct {
+	Symbol string `json:"symbol"`
+	Amount string `json:"amount"`
+	Value  string `json:"value"`
+}
+
+// GetPortfolio retrieves portfolio data from the API
+func (c *APIClient) GetPortfolio() (*PortfolioResponse, error) {
+	respBody, err := c.makeRequest("GET", "/api/v1/trading/portfolio", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response PortfolioResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// BalanceResponse represents the balance response
+type BalanceResponse struct {
+	TotalBalance string `json:"total_balance"`
+	Available    string `json:"available"`
+	Locked       string `json:"locked"`
+	Currency     string `json:"currency"`
+}
+
+// GetBalance retrieves account balance from the API
+func (c *APIClient) GetBalance() (*BalanceResponse, error) {
+	respBody, err := c.makeRequest("GET", "/api/v1/trading/balance", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response BalanceResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
 	return &response, nil
 }
 
