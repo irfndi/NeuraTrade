@@ -715,20 +715,45 @@ func getAutonomousStatus(cCtx *cli.Context) error {
 	}
 	
 	fmt.Printf("📊 Autonomous Mode Status for Chat ID: %s\n", chatID)
-	fmt.Printf("Overall Status: %s\n", response["overall_status"])
-	fmt.Printf("Summary: %s\n", response["summary"])
-	fmt.Printf("Checked At: %s\n", response["checked_at"])
 	
-	if checks, ok := response["checks"].([]interface{}); ok {
+	overallStatus := "unknown"
+	if v, ok := response["overall_status"].(string); ok {
+		overallStatus = v
+	}
+	summary := "No summary available"
+	if v, ok := response["summary"].(string); ok {
+		summary = v
+	}
+	checkedAt := "unknown"
+	if v, ok := response["checked_at"].(string); ok {
+		checkedAt = v
+	}
+	
+	fmt.Printf("Overall Status: %s\n", overallStatus)
+	fmt.Printf("Summary: %s\n", summary)
+	fmt.Printf("Checked At: %s\n", checkedAt)
+
+	if checks, ok := response["checks"].([]interface{}); ok && len(checks) > 0 {
 		fmt.Println("\nDetailed Checks:")
 		for _, check := range checks {
 			if checkMap, ok := check.(map[string]interface{}); ok {
-				name := checkMap["name"]
-				status := checkMap["status"]
-				message := checkMap["message"]
+				name := "unknown"
+				if v, ok := checkMap["name"].(string); ok {
+					name = v
+				}
+				status := "unknown"
+				if v, ok := checkMap["status"].(string); ok {
+					status = v
+				}
+				message := ""
+				if v, ok := checkMap["message"].(string); ok {
+					message = v
+				}
 				fmt.Printf("  • %s: %s - %s\n", name, status, message)
 			}
 		}
+	} else {
+		fmt.Println("\nNo detailed checks available")
 	}
 	
 	return nil
