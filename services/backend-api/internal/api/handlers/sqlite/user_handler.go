@@ -1,3 +1,4 @@
+// Package sqlite provides SQLite-specific API handlers for NeuraTrade.
 package sqlite
 
 import (
@@ -9,24 +10,47 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 )
 
-// UserHandler handles user management for SQLite
+// UserHandler handles user management for SQLite mode.
+// Manages user registration, authentication, and profile operations.
 type UserHandler struct {
 	db *database.SQLiteDB
 }
 
-// NewUserHandler creates a new SQLite user handler
+// NewUserHandler creates a new SQLite user handler.
+//
+// Parameters:
+//   - db: SQLite database connection.
+//
+// Returns:
+//   - *UserHandler: Initialized handler instance.
 func NewUserHandler(db *database.SQLiteDB) *UserHandler {
 	return &UserHandler{db: db}
 }
 
-// RegisterRequest represents a user registration request
+// RegisterRequest represents a user registration request.
+// Contains user credentials and optional Telegram linkage.
 type RegisterRequest struct {
 	Email          string `json:"email" binding:"required,email"`
 	Password       string `json:"password" binding:"required,min=8"`
 	TelegramChatID string `json:"telegram_chat_id"`
 }
 
-// RegisterUser handles user registration
+// RegisterUser handles user registration.
+// Creates a new user account with email/password authentication.
+//
+// Parameters:
+//   - c: Gin context with JSON request body.
+//
+// Request Body:
+//   - email: User email address (must be valid format).
+//   - password: User password (minimum 8 characters).
+//   - telegram_chat_id: Optional Telegram chat ID for notifications.
+//
+// Response:
+//   - 201: User created successfully.
+//   - 400: Invalid request body.
+//   - 409: User already exists.
+//   - 500: Database error.
 func (h *UserHandler) RegisterUser(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

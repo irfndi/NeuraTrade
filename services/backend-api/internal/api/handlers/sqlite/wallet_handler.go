@@ -1,3 +1,5 @@
+// Package sqlite provides SQLite-specific API handlers for NeuraTrade.
+// This includes wallet, user, market, and portfolio management endpoints.
 package sqlite
 
 import (
@@ -8,17 +10,25 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 )
 
-// WalletHandler handles wallet operations for SQLite
+// WalletHandler handles wallet operations for SQLite mode.
+// Manages exchange connections and wallet configurations stored in SQLite.
 type WalletHandler struct {
 	db *database.SQLiteDB
 }
 
-// NewWalletHandler creates a new SQLite wallet handler
+// NewWalletHandler creates a new SQLite wallet handler.
+//
+// Parameters:
+//   - db: SQLite database connection.
+//
+// Returns:
+//   - *WalletHandler: Initialized handler instance.
 func NewWalletHandler(db *database.SQLiteDB) *WalletHandler {
 	return &WalletHandler{db: db}
 }
 
-// Wallet represents a wallet in the system (matches sqlite_schema.sql)
+// Wallet represents a wallet in the system (matches sqlite_schema.sql).
+// Stores exchange connection information for autonomous trading.
 type Wallet struct {
 	ID        int       `json:"id"`
 	UserID    int       `json:"user_id"`
@@ -28,7 +38,13 @@ type Wallet struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// GetWallets returns all wallets for a user
+// GetWallets returns all wallets for a user.
+//
+// Parameters:
+//   - c: Gin context containing chat_id query parameter.
+//
+// Response:
+//   - 200: List of wallets (may be empty).
 func (h *WalletHandler) GetWallets(c *gin.Context) {
 	// Get user ID from query or use default
 	chatID := c.Query("chat_id")
@@ -69,13 +85,27 @@ func (h *WalletHandler) GetWallets(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"wallets": wallets})
 }
 
-// AddWalletRequest represents a request to add a wallet
+// AddWalletRequest represents a request to add a wallet.
+// Contains the wallet name and exchange identifier.
 type AddWalletRequest struct {
 	Name     string `json:"name" binding:"required"`
 	Exchange string `json:"exchange" binding:"required"`
 }
 
-// AddWallet adds a new wallet
+// AddWallet adds a new wallet for a user.
+// Creates the user if they don't exist.
+//
+// Parameters:
+//   - c: Gin context with chat_id and JSON body.
+//
+// Request Body:
+//   - name: Wallet name identifier.
+//   - exchange: Exchange name (e.g., "binance", "bybit").
+//
+// Response:
+//   - 201: Wallet created successfully.
+//   - 400: Invalid request body.
+//   - 500: Database error.
 func (h *WalletHandler) AddWallet(c *gin.Context) {
 	var req AddWalletRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -124,11 +154,26 @@ func (h *WalletHandler) AddWallet(c *gin.Context) {
 	})
 }
 
-// RemoveWallet removes a wallet (requires user authorization)
+// RemoveWalletRequest represents a request to remove a wallet.
+// Requires wallet name for identification.
 type RemoveWalletRequest struct {
 	Name string `json:"name" binding:"required"`
 }
 
+// RemoveWallet removes a wallet (requires user authorization).
+// Verifies wallet ownership before deletion.
+//
+// Parameters:
+//   - c: Gin context with chat_id query parameter.
+//
+// Request Body:
+//   - name: Wallet name to delete.
+//
+// Response:
+//   - 200: Wallet removed successfully.
+//   - 400: Missing chat_id or invalid request.
+//   - 404: User not found or wallet not owned by user.
+//   - 500: Database error.
 func (h *WalletHandler) RemoveWallet(c *gin.Context) {
 	var req RemoveWalletRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -168,15 +213,35 @@ func (h *WalletHandler) RemoveWallet(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Wallet removed successfully"})
 }
 
-// ConnectExchangeRequest represents a request to connect an exchange
+// ConnectExchangeRequest represents a request to connect an exchange.
+// Contains API credentials for exchange authentication.
 type ConnectExchangeRequest struct {
 	Exchange   string `json:"exchange" binding:"required"`
 	APIKey     string `json:"api_key" binding:"required"`
 	APISecret  string `json:"api_secret" binding:"required"`
-	Passphrase string `json:"passphrase"`
+	Passphrase string `json:"passphrase"` // Optional, required for some exchanges like OKX
 }
 
-// ConnectExchange connects an exchange API
+// ConnectExchange connects an exchange API for autonomous trading.
+// Stores API credentials encrypted in the database.
+//
+// Parameters:
+//   - c: Gin context with chat_id query parameter.
+//
+// Request Body:
+//   - exchange: Exchange name (e.g., "binance", "bybit").
+//   - api_key: Exchange API key.
+//   - api_secret: Exchange API secret.
+//   - passphrase: Optional exchange passphrase.
+//
+// Response:
+//   - 201: Exchange connected successfully.
+//   - 400: Invalid request body.
+//   - 404: User not found.
+//   - 500: Database error.
+//
+// Security Note:
+//   API keys should be encrypted before storage in production.
 func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 	var req ConnectExchangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
