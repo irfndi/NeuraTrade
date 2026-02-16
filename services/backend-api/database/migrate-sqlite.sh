@@ -39,12 +39,12 @@ run_sqlite() {
 # migration_applied checks whether a given migration filename is recorded as applied in the database's schema_migrations table.
 migration_applied() {
   local migration_name="$1"
-  
+
   # Check if schema_migrations table exists
   if ! run_sqlite ".schema schema_migrations" 2>/dev/null | grep -q "CREATE TABLE"; then
     return 1
   fi
-  
+
   # Check if migration has been applied
   result=$(run_sqlite "SELECT 1 FROM schema_migrations WHERE filename = '$migration_name' AND applied = 1 LIMIT 1;" 2>/dev/null)
   if [ "$result" = "1" ]; then
@@ -58,18 +58,18 @@ apply_migration() {
   local migration_file="$1"
   local migration_name
   migration_name=$(basename "$migration_file")
-  
+
   if migration_applied "$migration_name"; then
     log_warn "Migration $migration_name already applied, skipping"
     return 0
   fi
-  
+
   log "Applying migration: $migration_name"
-  
+
   # Apply the migration
   if run_sqlite ".read $migration_file"; then
     log "Successfully applied migration: $migration_name"
-    
+
     # Record migration in schema_migrations table
     run_sqlite "INSERT OR REPLACE INTO schema_migrations (filename, applied, applied_at) VALUES ('$migration_name', 1, datetime('now'));"
   else
@@ -112,7 +112,7 @@ show_status() {
     list_migrations
     return
   fi
-  
+
   run_sqlite -header -column "SELECT filename, applied, applied_at FROM schema_migrations ORDER BY applied_at DESC, filename;"
 }
 
@@ -120,25 +120,25 @@ show_status() {
 run_specific_migration() {
   local migration_number="$1"
   local migration_files=()
-  
+
   for file in "$MIGRATIONS_DIR"/${migration_number}_*.sql; do
     if [ -f "$file" ]; then
       migration_files+=("$file")
     fi
   done
-  
+
   if [ ${#migration_files[@]} -eq 0 ]; then
     log_error "Migration file not found for number: $migration_number"
     exit 1
   fi
-  
+
   if [ ${#migration_files[@]} -gt 1 ]; then
     log_error "Multiple migration files found for number: $migration_number"
     exit 1
   fi
-  
+
   local migration_file="${migration_files[0]}"
-  
+
   create_migrations_table
   apply_migration "$migration_file"
 }
@@ -147,13 +147,13 @@ run_specific_migration() {
 run_all_migrations() {
   log "Running all pending migrations..."
   create_migrations_table
-  
+
   for file in $(ls -1 "$MIGRATIONS_DIR"/*.sql 2>/dev/null | sort -V); do
     if [ -f "$file" ]; then
       apply_migration "$file"
     fi
   done
-  
+
   log "All migrations completed successfully!"
 }
 

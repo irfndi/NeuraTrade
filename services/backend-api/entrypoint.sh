@@ -18,7 +18,7 @@ else
       export DATABASE_URL="${DATABASE_URL/@postgres:/@$DATABASE_HOST:}"
     fi
   fi
-  
+
   # Run migrations
   echo "Running database migrations..."
   if [ -f "database/migrate.sh" ]; then

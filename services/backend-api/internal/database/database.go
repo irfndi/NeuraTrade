@@ -25,8 +25,8 @@ type Database interface {
 type DBType string
 
 const (
-	DBTypeSQLite    DBType = "sqlite"
-	DBTypePostgres  DBType = "postgres"
+	DBTypeSQLite     DBType = "sqlite"
+	DBTypePostgres   DBType = "postgres"
 	DBTypePostgreSQL DBType = "postgresql"
 )
 
@@ -34,11 +34,13 @@ const (
 // It supports both SQLite and PostgreSQL drivers.
 //
 // Parameters:
-//   cfg: Database configuration containing driver type and connection parameters.
+//
+//	cfg: Database configuration containing driver type and connection parameters.
 //
 // Returns:
-//   Database: The initialized database connection.
-//   error: Error if connection fails.
+//
+//	Database: The initialized database connection.
+//	error: Error if connection fails.
 func NewDatabaseConnection(cfg *config.DatabaseConfig) (Database, error) {
 	return NewDatabaseConnectionWithContext(context.Background(), cfg)
 }
@@ -46,12 +48,14 @@ func NewDatabaseConnection(cfg *config.DatabaseConfig) (Database, error) {
 // NewDatabaseConnectionWithContext creates a database connection with a specified context.
 //
 // Parameters:
-//   ctx: Context for the connection establishment.
-//   cfg: Database configuration containing driver type and connection parameters.
+//
+//	ctx: Context for the connection establishment.
+//	cfg: Database configuration containing driver type and connection parameters.
 //
 // Returns:
-//   Database: The initialized database connection.
-//   error: Error if connection fails.
+//
+//	Database: The initialized database connection.
+//	error: Error if connection fails.
 func NewDatabaseConnectionWithContext(ctx context.Context, cfg *config.DatabaseConfig) (Database, error) {
 	driver := strings.ToLower(strings.TrimSpace(cfg.Driver))
 	if driver == "" {
@@ -66,11 +70,11 @@ func NewDatabaseConnectionWithContext(ctx context.Context, cfg *config.DatabaseC
 		}
 		zaplogrus.Infof("Connecting to SQLite database: %s", path)
 		return NewSQLiteConnectionWithExtension(path, cfg.SQLiteVectorExtensionPath)
-	
+
 	case "postgres", "postgresql":
 		zaplogrus.Infof("Connecting to PostgreSQL database: %s@%s:%d/%s", cfg.User, cfg.Host, cfg.Port, cfg.DBName)
 		return NewPostgresConnectionWithContext(ctx, cfg)
-	
+
 	default:
 		return nil, fmt.Errorf("unsupported database driver: %s (supported: sqlite, postgres)", driver)
 	}
