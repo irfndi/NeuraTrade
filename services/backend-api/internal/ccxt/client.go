@@ -801,7 +801,6 @@ func (c *Client) BaseURL() string {
 	return c.baseURL
 }
 
-
 // decimalFromString safely converts a string to decimal.Decimal.
 // Returns decimal.Zero if the string is empty or invalid.
 func decimalFromString(s string) decimal.Decimal {
