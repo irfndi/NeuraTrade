@@ -10,7 +10,11 @@ import { SessionManager } from "./src/session";
 import { logger } from "./src/utils/logger";
 import { startGrpcServer } from "./grpc-server";
 
-const bot = new Bot(config.botToken);
+const bot = new Bot(config.botToken, {
+  // Enable Grammy debug mode
+  debug: true,
+});
+
 const api = new BackendApiClient({
   baseUrl: config.apiBaseUrl,
   adminKey: config.adminApiKey,
@@ -26,8 +30,21 @@ setInterval(() => {
 
 registerAllCommands(bot, api, sessions);
 
+// Debug middleware - log ALL updates
+bot.use(async (ctx, next) => {
+  console.log(">>>> RECEIVED UPDATE:", JSON.stringify(ctx.update.update_id, null, 2));
+  try {
+    await next();
+    console.log(">>>> UPDATE PROCESSED OK");
+  } catch (e) {
+    console.log(">>>> ERROR PROCESSING UPDATE:", e);
+  }
+});
+
+// Catch-all for text messages
 bot.on("message:text", async (ctx) => {
-  await ctx.reply("Thanks for your message! 👋\n\nTry /help for commands.");
+  console.log(">>>> TEXT MESSAGE:", ctx.message.text);
+  await ctx.reply("Echo: " + ctx.message.text);
 });
 
 bot.catch((err) => {
@@ -163,8 +180,38 @@ const startBot = async () => {
 
   if (config.usePolling) {
     logger.info("Starting bot in polling mode");
-    await bot.api.deleteWebhook({ drop_pending_updates: true });
-    bot.start();
+    
+    // Enable verbose polling debug
+    bot.use(async (ctx, next) => {
+      const start = Date.now();
+      try {
+        await next();
+        logger.debug("Update processed", { 
+          updateId: ctx.update.update_id, 
+          timeMs: Date.now() - start 
+        });
+      } catch (e) {
+        logger.error("Update processing failed", e, { updateId: ctx.update.update_id });
+      }
+    });
+    
+    try {
+      await bot.api.deleteWebhook({ drop_pending_updates: true });
+      logger.info("Webhook deleted successfully");
+    } catch (e) {
+      logger.warn("Failed to delete webhook", { error: String(e) });
+    }
+    
+    logger.info("Starting polling...");
+    // Start polling - this is blocking
+    await bot.start({
+      onStart: (botInfo) => {
+        logger.info("Bot polling started successfully", { 
+          botId: botInfo.id, 
+          username: botInfo.username 
+        });
+      },
+    });
     return;
   }
 

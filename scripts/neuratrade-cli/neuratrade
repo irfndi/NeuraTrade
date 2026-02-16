@@ -56,8 +56,10 @@ Commands:
 
 Examples:
     neuratrade onboard              # First-time setup
-    neuratrade config show         # Display current config
-    neuratrade context list        # List AI context files
+    neuratrade start               # Start backend only
+    neuratrade gateway             # Start all services (CCXT + Telegram + Backend)
+    neuratrade stop                # Stop all services
+    neuratrade logs                # View logs
     neuratrade doctor              # Check for issues
 
 For more info: https://github.com/irfndi/neuratrade
@@ -333,8 +335,9 @@ cmd_start() {
     local service="${1:-all}"
     local log_dir="${NEURATRADE_DIR}/logs"
     
-    # Ensure log directory exists
-    mkdir -p "$log_dir"
+    # Ensure directories exist
+    mkdir -p "${NEURATRADE_DIR}/data"
+    mkdir -p "${log_dir}"
     
     # Rotate logs if they get too big (keep last 5, max 10MB each)
     rotate_logs() {
@@ -365,24 +368,27 @@ cmd_start() {
     echo "Log file: ${log_dir}/server.log"
     echo ""
     
-    # Load config if exists
+    # Ensure data directory exists
+    mkdir -p "${NEURATRADE_DIR}/data"
+    
+    # Extract config values
+    local db_driver="sqlite"
+    local db_path="${NEURATRADE_DIR}/data/neuratrade.db"
+    
+    # Load from config.json if exists
     local config_file="${NEURATRADE_DIR}/config.json"
     if [[ -f "$config_file" ]]; then
-        # Extract values from JSON using grep/sed (simple parser)
-        local db_driver=$(grep -o '"driver"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" | sed 's/.*"driver"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')
-        local db_path=$(grep -o '"path"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+        # Simple JSON parsing with grep/sed
+        db_driver=$(grep -o '"driver"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" | head -1 | sed 's/.*"driver"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')
+        db_path=$(grep -o '"path"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" | head -1 | sed 's/.*"\([^"]*\)"/\1/')
         
-        if [[ -n "$db_driver" ]]; then
-            export DATABASE_DRIVER="$db_driver"
-        fi
-        if [[ -n "$db_path" ]]; then
-            # Expand ~ if present
-            db_path="${db_path/#\~/$HOME}"
-            export SQLITE_PATH="$db_path"
-        fi
+        # Expand ~ if present
+        db_path="${db_path/#\~/$HOME}"
     fi
     
-    # Always run in full mode with SQLite for local dev
+    # Set environment variables
+    export DATABASE_DRIVER="$db_driver"
+    export SQLITE_PATH="$db_path"
     export FULL_MODE=true
     
     # Rotate old logs before starting
@@ -419,18 +425,67 @@ cmd_start() {
         exit 1
     fi
     
-    # Start server with logging
-    print_success "Starting server from: $binary"
-    "$binary" >> "${log_dir}/server.log" 2>&1 &
+    # Load Telegram token from config
+    local telegram_token=""
+    local telegram_polling="true"
+    local config_file="${NEURATRADE_DIR}/config.json"
+    if [[ -f "$config_file" ]]; then
+        telegram_token=$(grep -o '"bot_token"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" | sed 's/.*"bot_token"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')
+        telegram_polling=$(grep -o '"use_polling"[[:space:]]*:[[:space:]]*[^,}]*' "$config_file" | sed 's/.*:\s*\(true\|false\)/\1/')
+    fi
+    
+    # Start services based on mode
+    if [[ "$service" == "all" ]]; then
+        print_step "Starting all services (gateway mode)..."
+        
+        # Start CCXT service
+        print_info "Starting CCXT service..."
+        if command -v bun &> /dev/null && [[ -d "services/ccxt-service" ]]; then
+            cd services/ccxt-service
+            nohup bun run index.ts >> "${log_dir}/ccxt.log" 2>&1 &
+            cd ../..
+            print_success "CCXT service started"
+        else
+            print_warn "Bun or CCXT service not found, skipping..."
+        fi
+        
+        # Start Telegram service
+        if [[ -n "$telegram_token" ]]; then
+            print_info "Starting Telegram service..."
+            cd services/telegram-service
+            TELEGRAM_BOT_TOKEN="$telegram_token" \
+            TELEGRAM_USE_POLLING="$telegram_polling" \
+            nohup bun run index.ts >> "${log_dir}/telegram.log" 2>&1 &
+            cd ../..
+            print_success "Telegram service started"
+        else
+            print_warn "Telegram bot_token not configured, skipping..."
+        fi
+        
+        sleep 2
+    fi
+    
+    # Start backend server
+    print_success "Starting backend server..."
+    if [[ -n "$telegram_token" ]]; then
+        TELEGRAM_BOT_TOKEN="$telegram_token" "$binary" >> "${log_dir}/server.log" 2>&1 &
+    else
+        "$binary" >> "${log_dir}/server.log" 2>&1 &
+    fi
     local server_pid=$!
     
-    sleep 2
+    sleep 3
     
     # Check if started successfully
     if curl -s http://localhost:8080/health > /dev/null 2>&1; then
-        print_success "Server started successfully (PID: $server_pid)"
+        print_success "All services started successfully!"
         echo ""
-        echo "Logs: ${log_dir}/server.log"
+        echo "Services:"
+        echo "  - Backend API: http://localhost:8080"
+        [[ "$service" == "all" ]] && echo "  - CCXT Service: http://localhost:3001"
+        [[ "$service" == "all" ]] && echo "  - Telegram: http://localhost:3002"
+        echo ""
+        echo "Logs: ${log_dir}/"
         echo "View logs: neuratrade logs"
         echo "Stop: neuratrade stop"
     else
@@ -443,15 +498,26 @@ cmd_start() {
 
 # Stop command
 cmd_stop() {
-    print_step "Stopping NeuraTrade server..."
+    print_step "Stopping NeuraTrade services..."
     
+    # Stop backend
     if pgrep -f "bin/server" > /dev/null 2>&1; then
         pkill -f "bin/server"
-        sleep 1
-        print_success "Server stopped"
+        print_success "Backend stopped"
     else
-        print_warn "Server is not running"
+        print_warn "Backend is not running"
     fi
+    
+    # Stop bun services (CCXT, Telegram)
+    if pgrep -f "bun" > /dev/null 2>&1; then
+        pkill -f "bun"
+        print_success "Bun services stopped"
+    else
+        print_warn "No bun services running"
+    fi
+    
+    sleep 1
+    print_success "All services stopped"
 }
 
 # Logs command - view and manage logs
@@ -692,7 +758,10 @@ main() {
             cmd_onboard
             ;;
         start)
-            cmd_start "$@"
+            cmd_start "backend"
+            ;;
+        gateway)
+            cmd_start "all"
             ;;
         stop)
             cmd_stop

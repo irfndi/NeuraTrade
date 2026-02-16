@@ -15,6 +15,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/ai"
 	"github.com/irfndi/neuratrade/internal/api"
 	apiHandlers "github.com/irfndi/neuratrade/internal/api/handlers"
+	sqliteHandlers "github.com/irfndi/neuratrade/internal/api/handlers/sqlite"
 	"github.com/irfndi/neuratrade/internal/cache"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
@@ -438,12 +439,58 @@ func runSQLiteBootstrapMode(cfg *config.Config, logger logging.Logger, logrusLog
 		ai.WithRedis(redisClient.Client),
 	)
 	aiHandler := apiHandlers.NewAIHandler(aiRegistry, sqliteDB)
+
+	// Initialize SQLite handlers
+	sqliteUserHandler := sqliteHandlers.NewUserHandler(sqliteDB)
+	sqliteWalletHandler := sqliteHandlers.NewWalletHandler(sqliteDB)
+	sqlitePortfolioHandler := sqliteHandlers.NewPortfolioHandler(sqliteDB)
+	sqliteMarketHandler := sqliteHandlers.NewMarketHandler(sqliteDB, cfg.CCXT.ServiceURL)
+
 	v1 := router.Group("/api/v1")
 	{
+		// AI endpoints
 		v1.GET("/ai/models", aiHandler.GetModels)
 		v1.POST("/ai/route", aiHandler.RouteModel)
 		v1.POST("/ai/select/:userId", aiHandler.SelectModel)
 		v1.GET("/ai/status/:userId", aiHandler.GetModelStatus)
+
+		// User management
+		v1.POST("/users/register", sqliteUserHandler.RegisterUser)
+		v1.POST("/users/login", sqliteUserHandler.LoginUser)
+		v1.GET("/users/profile", sqliteUserHandler.GetUserProfile)
+
+		// Wallet endpoints
+		v1.GET("/wallets", sqliteWalletHandler.GetWallets)
+		v1.POST("/wallets", sqliteWalletHandler.AddWallet)
+		v1.POST("/wallets/remove", sqliteWalletHandler.RemoveWallet)
+		v1.POST("/wallets/connect_exchange", sqliteWalletHandler.ConnectExchange)
+		v1.GET("/wallets/balance", sqliteWalletHandler.GetWalletBalance)
+
+		// Portfolio endpoints
+		v1.GET("/portfolio", sqlitePortfolioHandler.GetPortfolio)
+		v1.GET("/performance", sqlitePortfolioHandler.GetPerformance)
+		v1.GET("/summary", sqlitePortfolioHandler.GetSummary)
+		v1.GET("/doctor", sqlitePortfolioHandler.GetDoctor)
+
+		// Market data endpoints
+		v1.GET("/market/prices", sqliteMarketHandler.GetMarketPrices)
+		v1.GET("/market/ticker/:exchange/:symbol", sqliteMarketHandler.GetTicker)
+		v1.GET("/market/tickers/:exchange", sqliteMarketHandler.GetBulkTickers)
+		v1.GET("/market/orderbook/:exchange/:symbol", sqliteMarketHandler.GetOrderBook)
+		v1.GET("/market/workers/status", sqliteMarketHandler.GetWorkerStatus)
+
+		// Telegram internal endpoints
+		telegram := v1.Group("/telegram/internal")
+		{
+			telegram.GET("/users/:id", sqliteUserHandler.GetUserByChatID)
+			telegram.GET("/wallets", sqliteWalletHandler.GetWallets)
+			telegram.POST("/wallets", sqliteWalletHandler.AddWallet)
+			telegram.POST("/wallets/remove", sqliteWalletHandler.RemoveWallet)
+			telegram.POST("/wallets/connect_exchange", sqliteWalletHandler.ConnectExchange)
+			telegram.GET("/doctor", sqlitePortfolioHandler.GetDoctor)
+			telegram.GET("/portfolio", sqlitePortfolioHandler.GetPortfolio)
+			telegram.GET("/performance/summary", sqlitePortfolioHandler.GetPerformance)
+		}
 	}
 
 	srv := &http.Server{

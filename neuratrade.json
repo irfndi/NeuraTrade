@@ -10,7 +10,7 @@
   
   "database": {
     "driver": "sqlite",
-    "path": "./data/neuratrade.db"
+    "path": "~/.neuratrade/data/neuratrade.db"
   },
   
   "redis": {
@@ -25,7 +25,7 @@
     },
     "telegram": {
       "enabled": true,
-      "bot_token": "8352568061:AAFsr3Q9pGeGldHI5TmmYmF03gdep3y4BQc",
+      "bot_token": "8537577635:AAH3VaChQxuLNR4gqeUP3F_JzZ3dz7lDpBQ",
       "use_polling": false,
       "webhook_url": "https://fairy-belong-magazines-appeals.trycloudflare.com/telegram/webhook",
       "external_service": true,
