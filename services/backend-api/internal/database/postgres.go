@@ -166,7 +166,7 @@ func createTestDatabaseConnection(poolConfig *pgxpool.Config) (*PostgresDB, erro
 // Close closes the database connection pool.
 func (db *PostgresDB) Close() error {
 	var closeErr error
-	
+
 	if db.SQL != nil {
 		if err := db.SQL.Close(); err != nil {
 			zaplogrus.WithError(err).Warn("Failed to close PostgreSQL sql compatibility connection")
@@ -178,7 +178,7 @@ func (db *PostgresDB) Close() error {
 		db.Pool.Close()
 		zaplogrus.Info("PostgreSQL connection closed")
 	}
-	
+
 	return closeErr
 }
 

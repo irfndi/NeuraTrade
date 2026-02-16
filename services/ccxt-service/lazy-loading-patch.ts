@@ -1,13 +1,13 @@
 /**
  * LAZY LOADING IMPLEMENTATION FOR CCXT SERVICE
- * 
+ *
  * This patch implements lazy loading for exchanges to prevent resource exhaustion:
- * 
+ *
  * 1. Only initialize exchanges with API keys at startup
  * 2. Defer initialization of public-data-only exchanges until first request
  * 3. Track initialized exchanges to avoid duplicate initialization
  * 4. Provide on-demand initialization when specific exchanges are requested
- * 
+ *
  * BENEFITS:
  * - Reduced memory footprint (only load what's needed)
  * - Faster startup time (skip unused exchanges)
@@ -29,7 +29,10 @@ function hasApiKeyConfigured(exchangeId: string): boolean {
 }
 
 // Replace initializeExchange function with this lazy-loading version:
-function initializeExchange(exchangeId: string, forceInitialize = false): boolean {
+function initializeExchange(
+  exchangeId: string,
+  forceInitialize = false,
+): boolean {
   try {
     if (blacklistedExchanges.has(exchangeId)) {
       console.log(`Skipping blacklisted exchange: ${exchangeId}`);
@@ -46,7 +49,9 @@ function initializeExchange(exchangeId: string, forceInitialize = false): boolea
     if (!forceInitialize && !hasKeys) {
       // Mark as pending API key configuration, don't initialize yet
       pendingApiKeyExchanges.add(exchangeId);
-      console.log(`⏳ Deferred initialization for ${exchangeId} (waiting for API keys)`);
+      console.log(
+        `⏳ Deferred initialization for ${exchangeId} (waiting for API keys)`,
+      );
       return false;
     }
 
@@ -82,7 +87,7 @@ function initializeExchange(exchangeId: string, forceInitialize = false): boolea
 
     exchanges[exchangeId] = exchange;
     initializedExchanges.add(exchangeId);
-    
+
     const keyStatus = hasKeys ? "🔑 with API keys" : "📡 public data only";
     console.log(
       `✓ Successfully initialized exchange: ${exchangeId} (${exchange.name}) ${keyStatus}`,

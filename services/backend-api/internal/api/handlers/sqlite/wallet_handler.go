@@ -242,8 +242,9 @@ type ConnectExchangeRequest struct {
 //   - 500: Database error.
 //
 // Security:
-//   API keys are encrypted with AES-256-GCM before storage.
-//   The encryption key is read from ENCRYPTION_KEY environment variable.
+//
+//	API keys are encrypted with AES-256-GCM before storage.
+//	The encryption key is read from ENCRYPTION_KEY environment variable.
 func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 	var req ConnectExchangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
