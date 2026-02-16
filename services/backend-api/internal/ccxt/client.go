@@ -790,8 +790,8 @@ func toSafeInt32(value int) int32 {
 	if value > math.MaxInt32 {
 		return math.MaxInt32
 	}
-	// #nosec G115 -- Value is bounds-checked above to prevent overflow
-	return int32(value)
+	// Explicit cast after bounds check - safe because value <= math.MaxInt32
+	return int32(value) //#nosec G115
 }
 
 // decimalFromString safely converts a string to decimal.Decimal.

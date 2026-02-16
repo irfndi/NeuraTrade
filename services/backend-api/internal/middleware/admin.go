@@ -55,8 +55,7 @@ func NewAdminMiddleware() *AdminMiddleware {
 		}
 		// Generate temporary key for non-production environments
 		apiKey = generateSecureKey(32)
-		// #nosec G101 -- Temporary key generated for non-production use only
-		log.Printf("INFO: Generated temporary ADMIN_API_KEY for non-production environment")
+		log.Println("INFO: Generated temporary ADMIN_API_KEY for non-production environment")
 	}
 
 	// Prevent use of default/example keys in any environment
