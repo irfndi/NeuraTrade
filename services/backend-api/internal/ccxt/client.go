@@ -283,10 +283,16 @@ func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersR
 func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		safeLimit := int32(limit)
+		if limit <= 0 {
+			safeLimit = 0
+		} else if limit > math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		}
 		resp, err := c.grpcClient.GetOrderBook(ctx, &pb.GetOrderBookRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
-			Limit:    toSafeInt32(limit),
+			Limit:    safeLimit,
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcOrderBookResponse(resp), nil
@@ -313,10 +319,16 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		safeLimit := int32(limit)
+		if limit <= 0 {
+			safeLimit = 0
+		} else if limit > math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		}
 		resp, err := c.grpcClient.GetTrades(ctx, &pb.GetTradesRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
-			Limit:    toSafeInt32(limit),
+			Limit:    safeLimit,
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcTradesResponse(resp), nil
@@ -343,11 +355,17 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		safeLimit := int32(limit)
+		if limit <= 0 {
+			safeLimit = 0
+		} else if limit > math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		}
 		resp, err := c.grpcClient.GetOHLCV(ctx, &pb.GetOHLCVRequest{
 			Exchange:  exchange,
 			Symbol:    symbol,
 			Timeframe: timeframe,
-			Limit:     toSafeInt32(limit),
+			Limit:     safeLimit,
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcOHLCVResponse(resp), nil
