@@ -241,7 +241,8 @@ type ConnectExchangeRequest struct {
 //   - 500: Database error.
 //
 // Security Note:
-//   API keys should be encrypted before storage in production.
+//
+//	API keys should be encrypted before storage in production.
 func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 	var req ConnectExchangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
