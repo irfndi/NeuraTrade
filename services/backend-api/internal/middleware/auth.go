@@ -34,10 +34,22 @@ type AuthMiddleware struct {
 //
 // Parameters:
 //   - secretKey: Secret key for signing and verifying tokens.
+//     Must be non-empty and at least 32 characters for security.
 //
 // Returns:
 //   - *AuthMiddleware: Initialized middleware instance.
+//
+// Panics:
+//   - If secretKey is empty or too short (security requirement).
 func NewAuthMiddleware(secretKey string) *AuthMiddleware {
+	// Validate secret key for security
+	if secretKey == "" {
+		panic("JWT secret key cannot be empty. Set JWT_SECRET environment variable.")
+	}
+	if len(secretKey) < 32 {
+		panic("JWT secret key must be at least 32 characters. Use a secure random value.")
+	}
+
 	return &AuthMiddleware{
 		secretKey: []byte(secretKey),
 	}
