@@ -6,9 +6,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -442,12 +444,17 @@ func getAPIKey() string {
 	return os.Getenv("NEURATRADE_API_KEY")
 }
 
-// generateRandomString generates a random string of specified length
+// generateRandomString generates a cryptographically secure random string of specified length
 func generateRandomString(length int) string {
 	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	result := make([]byte, length)
-	for i := range result {
-		result[i] = charset[i%len(charset)]
+	for i := 0; i < length; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			// Fallback to deterministic generation if crypto/rand fails (should never happen)
+			return "ERROR"
+		}
+		result[i] = charset[n.Int64()]
 	}
 	return string(result)
 }

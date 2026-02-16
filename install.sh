@@ -83,7 +83,6 @@ install_cli_binary() {
     go build -o "$output_bin" .
   )
 }
-}
 
 create_bootstrap_command() {
   local bin_path="$INSTALL_DIR/$APP_NAME"
