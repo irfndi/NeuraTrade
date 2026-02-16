@@ -867,7 +867,7 @@ type AIModel struct {
 	ID          string   `json:"id"`
 	DisplayName string   `json:"display_name"`
 	Provider    string   `json:"provider"`
-	Cost        float64  `json:"cost"`
+	Cost        string   `json:"cost"`
 	SupportsTools bool   `json:"supports_tools"`
 	SupportsVision bool  `json:"supports_vision"`
 }
@@ -896,38 +896,28 @@ func (c *APIClient) GetAIModels() (*AIModelsResponse, error) {
 func listAIModels(cCtx *cli.Context) error {
 	fmt.Println("Available AI Models")
 	fmt.Println("==================")
-	
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
-	
+
 	client := NewAPIClient(baseURL, apiKey)
-	
+
 	response, err := client.GetAIModels()
 	if err != nil {
-		// If API call fails, show simulated data
-		fmt.Printf("Warning: Could not reach API: %v\n", err)
-		fmt.Println("Showing simulated model data for demonstration purposes...")
-		fmt.Println()
-		
-		// Simulated model list - in reality, this would come from the backend API
-		models := []map[string]interface{}{
-			{"id": "gpt-4-turbo", "provider": "openai", "capabilities": []string{"tools", "vision"}},
-			{"id": "claude-3-opus", "provider": "anthropic", "capabilities": []string{"tools", "reasoning"}},
-			{"id": "gemini-pro", "provider": "google", "capabilities": []string{"tools", "vision"}},
-			{"id": "llama-3-70b", "provider": "together", "capabilities": []string{"tools"}},
-		}
-		
-		for _, model := range models {
-			id := model["id"].(string)
-			provider := model["provider"].(string)
-			caps := model["capabilities"].([]string)
-			
-			fmt.Printf("- %s (%s): %s\n", id, provider, strings.Join(caps, ", "))
-		}
-		
+		// API call failed - show error and exit
+		fmt.Printf("Error: Could not reach API: %v\n", err)
+		fmt.Println("\nMake sure the NeuraTrade backend is running:")
+		fmt.Println("  neuratrade gateway start")
+		fmt.Println("\nOr check your configuration:")
+		fmt.Println("  neuratrade config status")
+		return err
+	}
+
+	if len(response.Models) == 0 {
+		fmt.Println("No AI models available.")
 		return nil
 	}
-	
+
 	for _, model := range response.Models {
 		caps := []string{}
 		if model.SupportsTools {
@@ -936,10 +926,10 @@ func listAIModels(cCtx *cli.Context) error {
 		if model.SupportsVision {
 			caps = append(caps, "vision")
 		}
-		
+
 		fmt.Printf("- %s (%s): %s\n", model.ID, model.Provider, strings.Join(caps, ", "))
 	}
-	
+
 	return nil
 }
 
@@ -947,14 +937,33 @@ func listAIModels(cCtx *cli.Context) error {
 func listAIProviders(cCtx *cli.Context) error {
 	fmt.Println("Available AI Providers")
 	fmt.Println("=====================")
-	
-	// Simulated provider list
-	providers := []string{"OpenAI", "Anthropic", "Google", "Together", "Mistral", "Hugging Face"}
-	
-	for _, provider := range providers {
-		fmt.Printf("- %s\n", provider)
+
+	baseURL := getBaseURL()
+	apiKey := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKey)
+
+	response, err := client.GetAIProviders()
+	if err != nil {
+		fmt.Printf("Error: Could not reach API: %v\n", err)
+		fmt.Println("\nMake sure the NeuraTrade backend is running:")
+		fmt.Println("  neuratrade gateway start")
+		return err
 	}
-	
+
+	if len(response.Providers) == 0 {
+		fmt.Println("No AI providers available.")
+		return nil
+	}
+
+	for _, provider := range response.Providers {
+		status := "active"
+		if !provider.IsActive {
+			status = "inactive"
+		}
+		fmt.Printf("- %s (%s) [%s]\n", provider.Name, provider.ID, status)
+	}
+
 	return nil
 }
 
@@ -962,21 +971,21 @@ func listAIProviders(cCtx *cli.Context) error {
 func viewPortfolio(cCtx *cli.Context) error {
 	fmt.Println("Portfolio Overview")
 	fmt.Println("==================")
-	
-	// Simulated portfolio data
-	portfolio := map[string]interface{}{
-		"total_value": 12543.67,
-		"cash":        3210.45,
-		"assets": []map[string]interface{}{
-			{"symbol": "BTC", "amount": 0.25, "value": 13250.00},
-			{"symbol": "ETH", "amount": 5.3, "value": 15230.50},
-			{"symbol": "AAPL", "amount": 10, "value": 185.32},
-		},
-		"pnl_24h": 245.67,
+
+	baseURL := getBaseURL()
+	apiKey := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKey)
+
+	response, err := client.GetPortfolio()
+	if err != nil {
+		fmt.Printf("Error: Could not reach API: %v\n", err)
+		fmt.Println("\nMake sure the NeuraTrade backend is running:")
+		fmt.Println("  neuratrade gateway start")
+		return err
 	}
-	
-	prettyPrint(portfolio)
-	
+
+	prettyPrint(response)
 	return nil
 }
 
@@ -984,16 +993,21 @@ func viewPortfolio(cCtx *cli.Context) error {
 func checkBalance(cCtx *cli.Context) error {
 	fmt.Println("Account Balance")
 	fmt.Println("===============")
-	
-	balance := map[string]interface{}{
-		"total_balance": 15754.23,
-		"available":     12543.67,
-		"locked":        3210.56,
-		"currency":      "USD",
+
+	baseURL := getBaseURL()
+	apiKey := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKey)
+
+	response, err := client.GetBalance()
+	if err != nil {
+		fmt.Printf("Error: Could not reach API: %v\n", err)
+		fmt.Println("\nMake sure the NeuraTrade backend is running:")
+		fmt.Println("  neuratrade gateway start")
+		return err
 	}
-	
-	prettyPrint(balance)
-	
+
+	prettyPrint(response)
 	return nil
 }
 
