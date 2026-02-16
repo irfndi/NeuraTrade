@@ -1,3 +1,6 @@
+// Package services provides business logic services for NeuraTrade.
+// Includes arbitrage detection, technical analysis, signal processing,
+// quest management, and other trading-related services.
 package services
 
 import (
@@ -25,13 +28,13 @@ type ArbitrageCalculator interface {
 }
 
 // SpotArbitrageCalculator implements arbitrage calculations for spot markets.
+// Compares prices across exchanges to identify profitable trades.
 type SpotArbitrageCalculator struct{}
 
 // NewSpotArbitrageCalculator creates a new spot arbitrage calculator.
 //
 // Returns:
-//
-//	*SpotArbitrageCalculator: Initialized calculator.
+//   - *SpotArbitrageCalculator: Initialized calculator instance.
 func NewSpotArbitrageCalculator() *SpotArbitrageCalculator {
 	return &SpotArbitrageCalculator{}
 }
