@@ -85,9 +85,9 @@ type ProviderInfo struct {
 
 // ModelRegistry represents the full models.dev registry
 type ModelRegistry struct {
-	Providers []ProviderInfo `json:"-"`
-	Models    []ModelInfo    `json:"-"`
-	FetchedAt time.Time      `json:"-"`
+	Providers []ProviderInfo `json:"providers"`
+	Models    []ModelInfo    `json:"models"`
+	FetchedAt time.Time      `json:"fetched_at"`
 	// Raw data for compatibility
 	RawProviders map[string]ProviderInfo `json:"-"`
 }

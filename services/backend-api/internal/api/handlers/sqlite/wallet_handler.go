@@ -54,7 +54,7 @@ func (h *WalletHandler) GetWallets(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"wallets": []interface{}{}})
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var wallets []Wallet
 	for rows.Next() {

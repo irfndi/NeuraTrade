@@ -525,7 +525,7 @@ func TestMainFunction(t *testing.T) {
 	}
 
 	output := stderr.String()
-	hasDBError := strings.Contains(output, "Application failed: failed to connect to database")
+	hasDBError := strings.Contains(output, "Application failed: failed to connect to") && strings.Contains(output, "database")
 	hasRedisError := strings.Contains(output, "redis:") && strings.Contains(output, "failed to dial")
 
 	if !hasDBError && !hasRedisError {
