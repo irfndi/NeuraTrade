@@ -86,14 +86,18 @@ func run() error {
 	// Initialize database
 	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
 	if driver == "" {
-		driver = "sqlite" // Default to SQLite
+		_ = "sqlite" // Default to SQLite (used for logging/debugging)
 	}
 
 	db, err := database.NewDatabaseConnection(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			logrusLogger.WithError(err).Error("Failed to close database connection")
+		}
+	}()
 
 	// Initialize error recovery manager for Redis connection
 	errorRecoveryManager := services.NewErrorRecoveryManager(logrusLogger)
