@@ -39,11 +39,54 @@ CREATE TABLE IF NOT EXISTS exchange_api_keys (
     UNIQUE(user_id, exchange, testnet)
 );
 
+-- Trades table
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    exchange TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    price REAL NOT NULL,
+    status TEXT DEFAULT 'open',
+    filled REAL DEFAULT 0,
+    remaining REAL DEFAULT 0,
+    fee REAL DEFAULT 0,
+    fee_currency TEXT,
+    profit_loss REAL DEFAULT 0,
+    opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    closed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Quests table
+CREATE TABLE IF NOT EXISTS quests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    progress REAL DEFAULT 0,
+    target REAL DEFAULT 0,
+    reward REAL DEFAULT 0,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets(user_id);
 CREATE INDEX IF NOT EXISTS idx_wallets_exchange ON wallets(exchange);
 CREATE INDEX IF NOT EXISTS idx_exchange_api_keys_user_id ON exchange_api_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id);
+CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
+CREATE INDEX IF NOT EXISTS idx_quests_user_id ON quests(user_id);
+CREATE INDEX IF NOT EXISTS idx_quests_status ON quests(status);
 
 CREATE TRIGGER IF NOT EXISTS users_updated_at AFTER UPDATE ON users
 BEGIN

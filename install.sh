@@ -87,7 +87,6 @@ install_cli_binary() {
 create_bootstrap_command() {
   local bin_path="$INSTALL_DIR/$APP_NAME"
   local bootstrap_path="$INSTALL_DIR/$BOOTSTRAP_CMD_NAME"
-  local bootstrap_alias_path="$CONFIG_DIR/bootstrap-command.sh"
   local app_name_lower
   local bootstrap_name_lower
 
@@ -100,6 +99,7 @@ create_bootstrap_command() {
   fi
 
   if [[ "$app_name_lower" == "$bootstrap_name_lower" ]]; then
+    local bootstrap_alias_path="$CONFIG_DIR/bootstrap-command.sh"
     cat >"$bootstrap_alias_path" <<EOF
 alias $BOOTSTRAP_CMD_NAME="$bin_path"
 EOF
@@ -185,7 +185,7 @@ EOF
   if [[ "$BOOTSTRAP_MODE" == "binary" ]]; then
     printf '  3) Backend: %s --help\n' "$BOOTSTRAP_LOCATION"
   elif [[ "$BOOTSTRAP_MODE" == "alias" ]]; then
-    printf '  3) Source alias: source %s\n' "$bootstrap_alias_path"
+    printf '  3) Source alias: source %s\n' "$BOOTSTRAP_LOCATION"
     printf '  4) Backend: %s --help\n' "$BOOTSTRAP_CMD_NAME"
   fi
 }

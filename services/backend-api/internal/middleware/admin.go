@@ -26,7 +26,16 @@ func generateSecureKey(length int) string {
 	if _, err := rand.Read(bytes); err != nil {
 		// Fallback to a less secure but functional key in edge cases
 		log.Printf("WARNING: Failed to generate secure random key: %v", err)
-		return "fallback-key-" + hex.EncodeToString([]byte(os.Getenv("HOSTNAME")))[:20]
+		hostname := os.Getenv("HOSTNAME")
+		if hostname == "" {
+			hostname = "unknown-host"
+		}
+		encoded := hex.EncodeToString([]byte(hostname))
+		// Ensure we don't panic if hostname is too short
+		if len(encoded) < 20 {
+			return "fallback-key-" + encoded
+		}
+		return "fallback-key-" + encoded[:20]
 	}
 	return hex.EncodeToString(bytes)
 }
