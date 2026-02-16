@@ -47,6 +47,8 @@ build: ## Build the application across all languages
 	@echo "$(GREEN)Building $(APP_NAME)...$(NC)"
 	@# Build Go application
 	cd services/backend-api && go build -o ../../bin/$(APP_NAME) ./cmd/server
+	@# Build CLI
+	cd cmd/neuratrade-cli && go build -o ../../bin/neuratrade-cli
 	@# Build TypeScript/CCXT service
 	@if [ -d "services/ccxt-service" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Building CCXT service...$(NC)"; \
