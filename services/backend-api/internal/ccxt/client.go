@@ -283,12 +283,12 @@ func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersR
 func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		safeLimit := int32(limit)
 		if limit <= 0 {
-			safeLimit = 0
+			limit = 0
 		} else if limit > math.MaxInt32 {
-			safeLimit = math.MaxInt32
+			limit = math.MaxInt32
 		}
+		safeLimit := int32(limit)
 		resp, err := c.grpcClient.GetOrderBook(ctx, &pb.GetOrderBookRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -319,12 +319,12 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		safeLimit := int32(limit)
 		if limit <= 0 {
-			safeLimit = 0
+			limit = 0
 		} else if limit > math.MaxInt32 {
-			safeLimit = math.MaxInt32
+			limit = math.MaxInt32
 		}
+		safeLimit := int32(limit)
 		resp, err := c.grpcClient.GetTrades(ctx, &pb.GetTradesRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -355,12 +355,12 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		safeLimit := int32(limit)
 		if limit <= 0 {
-			safeLimit = 0
+			limit = 0
 		} else if limit > math.MaxInt32 {
-			safeLimit = math.MaxInt32
+			limit = math.MaxInt32
 		}
+		safeLimit := int32(limit)
 		resp, err := c.grpcClient.GetOHLCV(ctx, &pb.GetOHLCVRequest{
 			Exchange:  exchange,
 			Symbol:    symbol,
@@ -799,17 +799,6 @@ func (c *Client) Close() error {
 //	string: The base URL.
 func (c *Client) BaseURL() string {
 	return c.baseURL
-}
-
-func toSafeInt32(value int) int32 {
-	if value <= 0 {
-		return 0
-	}
-	if value > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	// Explicit cast after bounds check - safe because value <= math.MaxInt32
-	return int32(value) //#nosec G115
 }
 
 // decimalFromString safely converts a string to decimal.Decimal.
