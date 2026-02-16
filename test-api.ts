@@ -1,7 +1,13 @@
 export {};
 
-const ADMIN_API_KEY = "d98403e22c0a9f300fc54e4a5a3ab98a1f0f93ab65a26b2530949caae8ed7a36";
-const BASE_URL = "http://localhost:8080";
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || "";
+const BASE_URL = process.env.BASE_URL || "http://localhost:8080";
+
+if (!ADMIN_API_KEY) {
+  console.error("Error: ADMIN_API_KEY environment variable is required");
+  console.error("Set it with: export ADMIN_API_KEY=your_key_here");
+  process.exit(1);
+}
 
 async function testEndpoint(path: string) {
   console.log(`\nTesting: ${path}`);
