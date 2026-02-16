@@ -12,10 +12,7 @@ import (
 
 	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
-	"github.com/irfndi/neuratrade/internal/ai"
 	"github.com/irfndi/neuratrade/internal/api"
-	apiHandlers "github.com/irfndi/neuratrade/internal/api/handlers"
-	sqliteHandlers "github.com/irfndi/neuratrade/internal/api/handlers/sqlite"
 	"github.com/irfndi/neuratrade/internal/cache"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
