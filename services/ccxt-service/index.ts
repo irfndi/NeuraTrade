@@ -343,9 +343,22 @@ function loadUserExchangeConfig() {
 const userConfig = loadUserExchangeConfig();
 
 // Priority exchanges - use config or fallback to defaults
-const priorityExchanges = userConfig.enabled.length > 0 
-  ? userConfig.enabled 
-  : ["binance", "bybit", "okx", "kraken", "kucoin", "gateio", "mexc", "bitget", "coinbase", "bingx", "cryptocom"];
+const priorityExchanges =
+  userConfig.enabled.length > 0
+    ? userConfig.enabled
+    : [
+        "binance",
+        "bybit",
+        "okx",
+        "kraken",
+        "kucoin",
+        "gateio",
+        "mexc",
+        "bitget",
+        "coinbase",
+        "bingx",
+        "cryptocom",
+      ];
 
 // Initialize supported exchanges dynamically
 const exchanges: ExchangeManager = {};
@@ -484,9 +497,12 @@ function cleanupMarketData() {
 }
 
 // Start cleanup interval
-const cleanupIntervalMs = (userConfig.marketData?.cleanup_interval_minutes || 5) * 60 * 1000;
+const cleanupIntervalMs =
+  (userConfig.marketData?.cleanup_interval_minutes || 5) * 60 * 1000;
 setInterval(cleanupMarketData, cleanupIntervalMs);
-console.log(`🧹 Market data cleanup scheduled every ${userConfig.marketData?.cleanup_interval_minutes || 5} minutes`);
+console.log(
+  `🧹 Market data cleanup scheduled every ${userConfig.marketData?.cleanup_interval_minutes || 5} minutes`,
+);
 
 // Health check endpoint - verifies actual service functionality
 app.get("/health", async (c) => {
@@ -1616,7 +1632,13 @@ app.get("/api/balance/:exchange", async (c) => {
 
   try {
     if (!ccxt.exchanges.includes(exchange)) {
-      return c.json({ error: "Exchange not supported", timestamp: new Date().toISOString() }, 400);
+      return c.json(
+        {
+          error: "Exchange not supported",
+          timestamp: new Date().toISOString(),
+        },
+        400,
+      );
     }
 
     if (exchanges[exchange] && exchanges[exchange].apiKey) {
@@ -1624,9 +1646,22 @@ app.get("/api/balance/:exchange", async (c) => {
       return c.json({ exchange, balance, timestamp: new Date().toISOString() });
     }
 
-    return c.json({ error: "Exchange not initialized with API keys. Use POST /api/balance/:exchange with API keys.", timestamp: new Date().toISOString() }, 400);
+    return c.json(
+      {
+        error:
+          "Exchange not initialized with API keys. Use POST /api/balance/:exchange with API keys.",
+        timestamp: new Date().toISOString(),
+      },
+      400,
+    );
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : "Unknown error", timestamp: new Date().toISOString() }, 500);
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Unknown error",
+        timestamp: new Date().toISOString(),
+      },
+      500,
+    );
   }
 });
 

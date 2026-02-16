@@ -1,8 +1,18 @@
-import { test, expect, beforeAll, afterAll, describe, beforeEach } from "bun:test";
+import {
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  describe,
+  beforeEach,
+} from "bun:test";
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { getEnvWithNeuratradeFallback, resetNeuratradeConfigCache } from "./config";
+import {
+  getEnvWithNeuratradeFallback,
+  resetNeuratradeConfigCache,
+} from "./config";
 
 describe("Neuratrade config fallback", () => {
   const realConfigPath = join(homedir(), ".neuratrade", "config.json");

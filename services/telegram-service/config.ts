@@ -60,7 +60,9 @@ const loadNeuratradeConfig = (): NeuratradeConfig | null => {
   }
 };
 
-export const getEnvWithNeuratradeFallback = (key: string): string | undefined => {
+export const getEnvWithNeuratradeFallback = (
+  key: string,
+): string | undefined => {
   if (process.env[key]) {
     return process.env[key];
   }
@@ -163,7 +165,8 @@ export const loadConfig = (): TelegramConfigPartial => {
     webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || null,
     usePolling,
     port: resolvePort(
-      getEnvWithNeuratradeFallback("TELEGRAM_PORT") || process.env.TELEGRAM_PORT,
+      getEnvWithNeuratradeFallback("TELEGRAM_PORT") ||
+        process.env.TELEGRAM_PORT,
       3002,
     ),
     apiBaseUrl,
