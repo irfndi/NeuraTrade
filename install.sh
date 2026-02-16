@@ -73,16 +73,16 @@ install_binary() {
   )
 }
 
-install_cli() {
-  local cli_bin="$INSTALL_DIR/neuratrade"
+install_cli_binary() {
+  local output_bin="$1"
 
   require_cmd go
-  log "building NeuraTrade CLI"
+  log "building $APP_NAME-cli binary"
   (
     cd "$REPO_ROOT/cmd/neuratrade-cli"
-    go build -o "$cli_bin" .
+    go build -o "$output_bin" .
   )
-  log "installed CLI to $cli_bin"
+}
 }
 
 create_bootstrap_command() {
@@ -160,6 +160,14 @@ print_next_steps() {
   elif [[ "$BOOTSTRAP_MODE" == "alias" ]]; then
     printf 'Bootstrap alias file: %s\n' "$BOOTSTRAP_LOCATION"
   fi
+  
+  # Create a shorter alias for the CLI
+  local cli_shortcut_path="$CONFIG_DIR/cli-shortcut.sh"
+  cat >"$cli_shortcut_path" <<EOF
+alias nt="$INSTALL_DIR/${APP_NAME}-cli"
+EOF
+  log "installed CLI shortcut alias at $cli_shortcut_path"
+  printf 'CLI shortcut: nt (alias for neuratrade-cli)\n'
   printf 'Config directory:  %s\n' "$CONFIG_DIR"
   printf 'Env template:      %s\n' "$ENV_TARGET"
   printf '\n'
@@ -198,7 +206,12 @@ main() {
     install_binary "$tmp_bin"
     install -m 0755 "$tmp_bin" "$INSTALL_DIR/$APP_NAME"
     binary_installed="true"
-    install_cli
+    
+    # Also install the CLI binary
+    local tmp_cli_bin="$TMP_DIR/${APP_NAME}-cli"
+    install_cli_binary "$tmp_cli_bin"
+    install -m 0755 "$tmp_cli_bin" "$INSTALL_DIR/${APP_NAME}-cli"
+    log "installed ${APP_NAME}-cli binary to $INSTALL_DIR/${APP_NAME}-cli"
   fi
 
   create_bootstrap_command
