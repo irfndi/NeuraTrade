@@ -19,35 +19,35 @@ failed=0
 
 # Function to send command and check response
 send_command() {
-    local command="$1"
-    local description="$2"
-    
-    echo "Testing: $description"
-    echo "  Command: $command"
-    
-    # Send command via Telegram API
-    response=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${CHAT_ID}" \
-        -d "text=${command}" \
-        -d "parse_mode=HTML")
-    
-    # Check if message was sent successfully
-    if echo "$response" | grep -q '"ok":true'; then
-        echo "  ✅ Message sent successfully"
-        ((passed++))
-        return 0
-    else
-        echo "  ❌ Failed to send message"
-        echo "  Response: $response"
-        ((failed++))
-        return 1
-    fi
+  local command="$1"
+  local description="$2"
+
+  echo "Testing: $description"
+  echo "  Command: $command"
+
+  # Send command via Telegram API
+  response=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${CHAT_ID}" \
+    -d "text=${command}" \
+    -d "parse_mode=HTML")
+
+  # Check if message was sent successfully
+  if echo "$response" | grep -q '"ok":true'; then
+    echo "  ✅ Message sent successfully"
+    ((passed++))
+    return 0
+  else
+    echo "  ❌ Failed to send message"
+    echo "  Response: $response"
+    ((failed++))
+    return 1
+  fi
 }
 
 # Wait for bot to process
 wait_for_bot() {
-    echo "  Waiting for bot to process..."
-    sleep 1
+  echo "  Waiting for bot to process..."
+  sleep 1
 }
 
 echo "================================"

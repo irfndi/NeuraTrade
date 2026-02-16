@@ -19,46 +19,46 @@ echo "to allow bot processing time."
 echo ""
 
 # Create fresh log
-echo "Test started at $(date)" > "$LOG_FILE"
+echo "Test started at $(date)" >"$LOG_FILE"
 
 # Function to send command and show result
 send_command() {
-    local cmd="$1"
-    local desc="$2"
-    
-    echo ""
-    echo "─────────────────────────────────────────"
-    echo "Command: $cmd"
-    echo "Description: $desc"
-    echo "─────────────────────────────────────────"
-    
-    # Get line count before sending
-    local start_line=$(wc -l < "$LOG_FILE" 2>/dev/null || echo "0")
-    
-    # Send command
-    local response=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${CHAT_ID}" \
-        -d "text=${cmd}")
-    
-    if echo "$response" | grep -q '"ok":true'; then
-        echo "✅ Sent: $cmd"
-        
-        # Wait for bot response
-        sleep 3
-        
-        # Check for bot activity in logs
-        local new_content=$(tail -n +$((start_line + 1)) "$LOG_FILE" 2>/dev/null)
-        
-        if echo "$new_content" | grep -q "\[BOT\]"; then
-            echo "🤖 Bot responded:"
-            echo "$new_content" | grep "\[BOT\]" | sed 's/^/   /'
-        else
-            echo "⏳ No bot response captured in logs (may need more time)"
-        fi
+  local cmd="$1"
+  local desc="$2"
+
+  echo ""
+  echo "─────────────────────────────────────────"
+  echo "Command: $cmd"
+  echo "Description: $desc"
+  echo "─────────────────────────────────────────"
+
+  # Get line count before sending
+  local start_line=$(wc -l <"$LOG_FILE" 2>/dev/null || echo "0")
+
+  # Send command
+  local response=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${CHAT_ID}" \
+    -d "text=${cmd}")
+
+  if echo "$response" | grep -q '"ok":true'; then
+    echo "✅ Sent: $cmd"
+
+    # Wait for bot response
+    sleep 3
+
+    # Check for bot activity in logs
+    local new_content=$(tail -n +$((start_line + 1)) "$LOG_FILE" 2>/dev/null)
+
+    if echo "$new_content" | grep -q "\[BOT\]"; then
+      echo "🤖 Bot responded:"
+      echo "$new_content" | grep "\[BOT\]" | sed 's/^/   /'
     else
-        echo "❌ Failed to send: $cmd"
-        echo "   Error: $(echo "$response" | grep -o '"description":"[^"]*"' || echo "Unknown")"
+      echo "⏳ No bot response captured in logs (may need more time)"
     fi
+  else
+    echo "❌ Failed to send: $cmd"
+    echo "   Error: $(echo "$response" | grep -o '"description":"[^"]*"' || echo "Unknown")"
+  fi
 }
 
 echo "═══════════════════════════════════════════════════════════"

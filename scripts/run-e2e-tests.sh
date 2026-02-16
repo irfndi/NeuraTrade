@@ -13,26 +13,26 @@ echo ""
 echo "Checking services..."
 
 # Check backend
-if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then
-    echo "❌ Backend not running on port 8080"
-    echo "   Run: cd services/backend-api && go run ./cmd/server"
-    exit 1
+if ! curl -s http://localhost:8080/health >/dev/null 2>&1; then
+  echo "❌ Backend not running on port 8080"
+  echo "   Run: cd services/backend-api && go run ./cmd/server"
+  exit 1
 fi
 echo "✅ Backend: OK"
 
 # Check CCXT
-if ! curl -s http://localhost:3001/health > /dev/null 2>&1; then
-    echo "❌ CCXT service not running on port 3001"
-    echo "   Run: cd services/ccxt-service && bun run index.ts"
-    exit 1
+if ! curl -s http://localhost:3001/health >/dev/null 2>&1; then
+  echo "❌ CCXT service not running on port 3001"
+  echo "   Run: cd services/ccxt-service && bun run index.ts"
+  exit 1
 fi
 echo "✅ CCXT: OK"
 
 # Check Telegram
-if ! curl -s http://localhost:3002/health > /dev/null 2>&1; then
-    echo "❌ Telegram service not running on port 3002"
-    echo "   Run: cd services/telegram-service && bun run index.ts"
-    exit 1
+if ! curl -s http://localhost:3002/health >/dev/null 2>&1; then
+  echo "❌ Telegram service not running on port 3002"
+  echo "   Run: cd services/telegram-service && bun run index.ts"
+  exit 1
 fi
 echo "✅ Telegram: OK"
 

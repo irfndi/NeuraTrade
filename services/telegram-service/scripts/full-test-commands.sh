@@ -15,30 +15,30 @@ passed=0
 failed=0
 
 send_cmd() {
-    local cmd="$1"
-    local desc="$2"
-    
-    echo -n "Testing $desc... "
-    
-    response=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${CHAT_ID}" \
-        -d "text=${cmd}" \
-        -d "parse_mode=HTML")
-    
-    if echo "$response" | grep -q '"ok":true'; then
-        echo -e "${GREEN}✅${NC}"
-        ((passed++))
-        return 0
-    else
-        echo -e "${RED}❌${NC}"
-        echo "   Response: $response"
-        ((failed++))
-        return 1
-    fi
+  local cmd="$1"
+  local desc="$2"
+
+  echo -n "Testing $desc... "
+
+  response=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${CHAT_ID}" \
+    -d "text=${cmd}" \
+    -d "parse_mode=HTML")
+
+  if echo "$response" | grep -q '"ok":true'; then
+    echo -e "${GREEN}✅${NC}"
+    ((passed++))
+    return 0
+  else
+    echo -e "${RED}❌${NC}"
+    echo "   Response: $response"
+    ((failed++))
+    return 1
+  fi
 }
 
 wait_bot() {
-    sleep 3
+  sleep 3
 }
 
 echo "🧪 NeuraTrade Telegram Full Test Suite"
@@ -149,7 +149,7 @@ echo -e "${RED}Failed: $failed${NC}"
 echo "======================================"
 
 if [ $failed -gt 0 ]; then
-    exit 1
+  exit 1
 fi
 
 echo -e "${GREEN}✅ All Telegram command tests passed!${NC}"

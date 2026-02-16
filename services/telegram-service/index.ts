@@ -32,7 +32,10 @@ registerAllCommands(bot, api, sessions);
 
 // Debug middleware - log ALL updates
 bot.use(async (ctx, next) => {
-  console.log(">>>> RECEIVED UPDATE:", JSON.stringify(ctx.update.update_id, null, 2));
+  console.log(
+    ">>>> RECEIVED UPDATE:",
+    JSON.stringify(ctx.update.update_id, null, 2),
+  );
   try {
     await next();
     console.log(">>>> UPDATE PROCESSED OK");
@@ -180,35 +183,37 @@ const startBot = async () => {
 
   if (config.usePolling) {
     logger.info("Starting bot in polling mode");
-    
+
     // Enable verbose polling debug
     bot.use(async (ctx, next) => {
       const start = Date.now();
       try {
         await next();
-        logger.debug("Update processed", { 
-          updateId: ctx.update.update_id, 
-          timeMs: Date.now() - start 
+        logger.debug("Update processed", {
+          updateId: ctx.update.update_id,
+          timeMs: Date.now() - start,
         });
       } catch (e) {
-        logger.error("Update processing failed", e, { updateId: ctx.update.update_id });
+        logger.error("Update processing failed", e, {
+          updateId: ctx.update.update_id,
+        });
       }
     });
-    
+
     try {
       await bot.api.deleteWebhook({ drop_pending_updates: true });
       logger.info("Webhook deleted successfully");
     } catch (e) {
       logger.warn("Failed to delete webhook", { error: String(e) });
     }
-    
+
     logger.info("Starting polling...");
     // Start polling - this is blocking
     await bot.start({
       onStart: (botInfo) => {
-        logger.info("Bot polling started successfully", { 
-          botId: botInfo.id, 
-          username: botInfo.username 
+        logger.info("Bot polling started successfully", {
+          botId: botInfo.id,
+          username: botInfo.username,
         });
       },
     });
