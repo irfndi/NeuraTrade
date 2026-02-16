@@ -122,8 +122,9 @@ func TestWalletHandler_GetWallets_RequiresChatID(t *testing.T) {
 
 	handler.GetWallets(c)
 
-	// Should return empty list, not error (has fallback)
-	assert.Equal(t, http.StatusOK, w.Code)
+	// Should return 400 error when chat_id is missing
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "chat_id is required")
 }
 
 func TestWalletHandler_AddWallet(t *testing.T) {
