@@ -186,3 +186,6 @@ cmd/neuratrade-cli/neuratrade-cli
 
 # Temporary development directories
 _temporary/
+
+.qwen/
+gha-creds-*.json
