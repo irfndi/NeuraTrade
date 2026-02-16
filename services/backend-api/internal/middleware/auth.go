@@ -1,3 +1,6 @@
+// Package middleware provides HTTP middleware components for authentication,
+// authorization, rate limiting, telemetry, and other cross-cutting concerns.
+// These components are used throughout the NeuraTrade API for request processing.
 package middleware
 
 import (
@@ -8,13 +11,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	// Package middleware provides HTTP middleware components for authentication,
-	// authorization, telemetry, and other cross-cutting concerns.
 	"github.com/golang-jwt/jwt/v5"
 )
 
 // JWTClaims represents the JWT token claims.
+// Contains user identification and authentication information.
 type JWTClaims struct {
 	// UserID is the user identifier.
 	UserID string `json:"user_id"`
@@ -24,19 +25,18 @@ type JWTClaims struct {
 }
 
 // AuthMiddleware provides JWT authentication middleware.
+// Validates Bearer tokens in the Authorization header.
 type AuthMiddleware struct {
 	secretKey []byte
 }
 
-// NewAuthMiddleware creates a new authentication middleware.
+// NewAuthMiddleware creates a new JWT authentication middleware.
 //
 // Parameters:
-//
-//	secretKey: Secret key for signing tokens.
+//   - secretKey: Secret key for signing and verifying tokens.
 //
 // Returns:
-//
-//	*AuthMiddleware: Initialized middleware.
+//   - *AuthMiddleware: Initialized middleware instance.
 func NewAuthMiddleware(secretKey string) *AuthMiddleware {
 	return &AuthMiddleware{
 		secretKey: []byte(secretKey),
@@ -44,11 +44,14 @@ func NewAuthMiddleware(secretKey string) *AuthMiddleware {
 }
 
 // RequireAuth middleware validates JWT tokens.
-// It requires a valid Bearer token in the Authorization header.
+// Requires a valid Bearer token in the Authorization header.
 //
 // Returns:
+//   - gin.HandlerFunc: Gin middleware handler.
 //
-//	gin.HandlerFunc: Gin handler.
+// Response on failure:
+//   - 401: Missing or invalid authorization header.
+//   - 401: Invalid or expired token.
 func (am *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Extract token from Authorization header
