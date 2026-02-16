@@ -68,7 +68,7 @@ RUN bun install --frozen-lockfile --production || bun install --production
 # ==========================================
 FROM oven/bun:1 AS production
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata wget curl bash postgresql-client && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata wget curl bash sqlite3 && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN groupadd -g 1001 appgroup && \

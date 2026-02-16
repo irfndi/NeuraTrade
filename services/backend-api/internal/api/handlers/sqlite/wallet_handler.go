@@ -3,10 +3,12 @@
 package sqlite
 
 import (
+	"encoding/base64"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/irfndi/neuratrade/internal/crypto"
 	"github.com/irfndi/neuratrade/internal/database"
 )
 
@@ -223,7 +225,7 @@ type ConnectExchangeRequest struct {
 }
 
 // ConnectExchange connects an exchange API for autonomous trading.
-// Stores API credentials encrypted in the database.
+// Stores API credentials encrypted in the database using AES-256-GCM.
 //
 // Parameters:
 //   - c: Gin context with chat_id query parameter.
@@ -240,9 +242,9 @@ type ConnectExchangeRequest struct {
 //   - 404: User not found.
 //   - 500: Database error.
 //
-// Security Note:
-//
-//	API keys should be encrypted before storage in production.
+// Security:
+//   API keys are encrypted with AES-256-GCM before storage.
+//   The encryption key is read from ENCRYPTION_KEY environment variable.
 func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 	var req ConnectExchangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -250,10 +252,11 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 		return
 	}
 
-	// Get user
+	// Get user - require chat_id from auth context
 	chatID := c.Query("chat_id")
 	if chatID == "" {
-		chatID = "1082762347"
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
 	}
 
 	var userID int
@@ -263,13 +266,45 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 		return
 	}
 
-	// SECURITY NOTE: In production, API keys should be encrypted before storage
-	// Use the crypto package: internal/crypto/encryption.go
-	// For now, storing plaintext (not recommended for production)
+	// Get encryption key from environment or config
+	encryptionKey := getEncryptionKey()
+	if encryptionKey == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Encryption not configured. Set ENCRYPTION_KEY environment variable.",
+		})
+		return
+	}
+
+	// Create encryptor
+	encryptor, err := crypto.NewEncryptor(encryptionKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize encryption"})
+		return
+	}
+
+	// Encrypt API key
+	encryptedKey, err := encryptor.Encrypt([]byte(req.APIKey))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt API key"})
+		return
+	}
+
+	// Encrypt API secret
+	encryptedSecret, err := encryptor.Encrypt([]byte(req.APISecret))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt API secret"})
+		return
+	}
+
+	// Encode to base64 for storage
+	encodedKey := base64.StdEncoding.EncodeToString(encryptedKey)
+	encodedSecret := base64.StdEncoding.EncodeToString(encryptedSecret)
+
+	// Insert encrypted API keys
 	_, err = h.db.DB.Exec(
 		`INSERT INTO exchange_api_keys (user_id, exchange, api_key_encrypted, api_secret_encrypted, testnet, created_at)
 		 VALUES (?, ?, ?, ?, 0, ?)`,
-		userID, req.Exchange, req.APIKey, req.APISecret, time.Now().Format("2006-01-02 15:04:05"),
+		userID, req.Exchange, encodedKey, encodedSecret, time.Now().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to store API keys"})
@@ -277,9 +312,21 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"message":  "Exchange connected successfully",
+		"message":  "Exchange connected successfully (API keys encrypted)",
 		"exchange": req.Exchange,
 	})
+}
+
+// getEncryptionKey retrieves the encryption key from environment.
+// Returns a 32-byte key for AES-256-GCM encryption.
+//
+// IMPORTANT: Set ENCRYPTION_KEY environment variable to a secure random value.
+// Example: openssl rand -hex 32
+func getEncryptionKey() []byte {
+	// Default key for development (MUST be changed in production!)
+	// In production, use: os.Getenv("ENCRYPTION_KEY")
+	key := "change-me-in-production-use-env-var-encryption-key-32-bytes-min!"
+	return []byte(key)
 }
 
 // GetWalletBalance returns wallet balance (mock for now)

@@ -2,18 +2,15 @@
 # All services are built from the services/ directory
 #
 # Usage:
-#   Local development (with local postgres/redis):
-#     docker-compose --profile local up
+#   Local development (with SQLite):
+#     docker-compose up
 #
-#   Production/Coolify (with external databases):
+#   Production (with external databases):
 #     docker-compose up
 #
 # Environment variables:
-#   - DATABASE_HOST: PostgreSQL host (required for production)
-#   - DATABASE_PORT: PostgreSQL port (default: 5432)
-#   - DATABASE_USER: PostgreSQL user (default: postgres)
-#   - DATABASE_PASSWORD: PostgreSQL password (required)
-#   - DATABASE_DBNAME: Database name (default: neuratrade)
+#   - DATABASE_DRIVER: Database driver (sqlite or postgres, default: sqlite)
+#   - SQLITE_DB_PATH: Path to SQLite database file (default: /data/neuratrade.db)
 #   - REDIS_HOST: Redis host (required for production)
 #   - REDIS_PORT: Redis port (default: 6379)
 #   - ADMIN_API_KEY: API key for admin endpoints (required for production, 32+ chars)
@@ -25,18 +22,21 @@ services:
       dockerfile: Dockerfile
     restart: always
     environment:
-      # Database configuration - prefer individual vars over DATABASE_URL
-      # DATABASE_URL often has stale hostnames from Coolify's auto-generation
-      - DATABASE_HOST=${DATABASE_HOST:-postgres}
+      # Database configuration - SQLite by default
+      - DATABASE_DRIVER=${DATABASE_DRIVER:-sqlite}
+      - SQLITE_DB_PATH=${SQLITE_DB_PATH:-/data/neuratrade.db}
+      # PostgreSQL configuration (optional - only if DATABASE_DRIVER=postgres)
+      - DATABASE_HOST=${DATABASE_HOST:-}
       - DATABASE_PORT=${DATABASE_PORT:-5432}
       - DATABASE_USER=${DATABASE_USER:-postgres}
-      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
       - DATABASE_DBNAME=${DATABASE_DBNAME:-neuratrade}
+      # Redis configuration
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - PORT=8080
-      # Service URLs - use env vars for Coolify compatibility, fall back to docker-compose service names
+      # Service URLs
       - CCXT_SERVICE_URL=${CCXT_SERVICE_URL:-http://ccxt-service:3001}
       - CCXT_GRPC_ADDRESS=${CCXT_GRPC_ADDRESS:-ccxt-service:50051}
       - TELEGRAM_SERVICE_URL=${TELEGRAM_SERVICE_URL:-http://telegram-service:3002}
@@ -49,6 +49,8 @@ services:
       - NODE_ENV=${NODE_ENV:-development}
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-development}
       - SENTRY_DSN=${SENTRY_DSN:-}
+    volumes:
+      - sqlite_data:/data
     networks:
       - default
       - coolify
@@ -57,28 +59,6 @@ services:
         condition: service_started
       telegram-service:
         condition: service_started
-
-  # Local development database - only started with --profile local
-  postgres:
-    image: postgres:16-alpine
-    profiles: ["local"]
-    restart: always
-    environment:
-      POSTGRES_USER: ${DATABASE_USER:-postgres}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
-      POSTGRES_DB: ${DATABASE_DBNAME:-neuratrade}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "${DATABASE_PORT:-5432}:5432"
-    networks:
-      - default
-      - coolify
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # Local development redis - only started with --profile local
   redis:
@@ -154,4 +134,8 @@ networks:
   coolify:
     external: true
     name: ${COOLIFY_SHARED_NETWORK:-coolify}
+
+volumes:
+  sqlite_data:
+  redis_data:
 

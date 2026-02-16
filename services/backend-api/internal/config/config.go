@@ -436,8 +436,8 @@ func setDefaults() {
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.allowed_origins", []string{"http://localhost:3000"})
 
-	// Set database defaults
-	viper.SetDefault("database.driver", "postgres")
+	// Set database defaults - SQLite by default
+	viper.SetDefault("database.driver", "sqlite")
 	viper.SetDefault("database.host", "localhost")
 	viper.SetDefault("database.port", 5432)
 	viper.SetDefault("database.user", "postgres")
@@ -450,7 +450,7 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("database.conn_max_lifetime", "300s")
 	viper.SetDefault("database.conn_max_idle_time", "60s")
-	viper.SetDefault("database.sqlite_path", "data/neuratrade.db")
+	viper.SetDefault("database.sqlite_path", "neuratrade.db")
 	viper.SetDefault("database.sqlite_vector_extension_path", "")
 
 	// Redis
