@@ -10,10 +10,7 @@ import { SessionManager } from "./src/session";
 import { logger } from "./src/utils/logger";
 import { startGrpcServer } from "./grpc-server";
 
-const bot = new Bot(config.botToken, {
-  // Enable Grammy debug mode
-  debug: true,
-});
+const bot = new Bot(config.botToken);
 
 const api = new BackendApiClient({
   baseUrl: config.apiBaseUrl,
@@ -189,12 +186,13 @@ const startBot = async () => {
       const start = Date.now();
       try {
         await next();
-        logger.debug("Update processed", {
+        logger.info("Update processed", {
           updateId: ctx.update.update_id,
           timeMs: Date.now() - start,
         });
       } catch (e) {
-        logger.error("Update processing failed", e, {
+        const err = e instanceof Error ? e : new Error(String(e));
+        logger.error("Update processing failed", err, {
           updateId: ctx.update.update_id,
         });
       }

@@ -1,3 +1,6 @@
+//go:build e2e_sqlite
+// +build e2e_sqlite
+
 package main
 
 import (
