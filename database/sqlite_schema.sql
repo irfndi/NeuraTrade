@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
     telegram_id TEXT UNIQUE,
     email TEXT UNIQUE,
     username TEXT,
+    password_hash TEXT,
     risk_level TEXT DEFAULT 'medium',
     mode TEXT DEFAULT 'live',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

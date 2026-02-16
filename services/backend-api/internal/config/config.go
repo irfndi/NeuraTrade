@@ -346,12 +346,11 @@ func Load() (*Config, error) {
 
 	// Second: Add project config path
 	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
+	// Don't set explicit config type - let viper auto-detect from file extension
 	viper.AddConfigPath(".")
 
 	// Also support JSON config from ~/.neuratrade/ (only if homeDir is available)
-	viper.SetConfigName("config")
-	viper.SetConfigType("json")
+	// Note: viper.AddConfigPath is cumulative, so this adds to the search paths
 	if err == nil {
 		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
 	}
