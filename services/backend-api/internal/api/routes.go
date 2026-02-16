@@ -315,7 +315,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		risk := v1.Group("/risk")
 		{
 			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
-			risk.POST("/validate_wallet", walletHandler.ValidateWallet)
+		}
+
+		adminRisk := v1.Group("/admin/risk")
+		adminRisk.Use(adminMiddleware.RequireAdminAuth())
+		{
+			adminRisk.POST("/validate_wallet", walletHandler.ValidateWallet)
 		}
 
 		trading := v1.Group("/trading")
