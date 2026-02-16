@@ -47,10 +47,11 @@ type Wallet struct {
 // Response:
 //   - 200: List of wallets (may be empty).
 func (h *WalletHandler) GetWallets(c *gin.Context) {
-	// Get user ID from query or use default
+	// Get user ID from query - require chat_id for authentication
 	chatID := c.Query("chat_id")
 	if chatID == "" {
-		chatID = "1082762347"
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
 	}
 
 	// Find user
@@ -120,10 +121,11 @@ func (h *WalletHandler) AddWallet(c *gin.Context) {
 		return
 	}
 
-	// Get user
+	// Get user - require chat_id for authentication
 	chatID := c.Query("chat_id")
 	if chatID == "" {
-		chatID = "1082762347"
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
 	}
 
 	var userID int

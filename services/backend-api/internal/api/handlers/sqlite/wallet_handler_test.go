@@ -212,6 +212,9 @@ func TestWalletHandler_ConnectExchange_EncryptsAPIKeys(t *testing.T) {
 
 	handler := NewWalletHandler(db)
 
+	// Set encryption key for this test
+	t.Setenv("ENCRYPTION_KEY", "test-encryption-key-32-bytes!!")
+
 	// Create test user
 	_, err := db.DB.Exec("INSERT INTO users (telegram_id) VALUES (?)", "test_chat_exchange")
 	assert.NoError(t, err)
