@@ -801,16 +801,6 @@ func (c *Client) BaseURL() string {
 	return c.baseURL
 }
 
-func toSafeInt32(value int) int32 {
-	if value <= 0 {
-		return 0
-	}
-	if value > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	// Explicit cast after bounds check - safe because value <= math.MaxInt32
-	return int32(value) //#nosec G115
-}
 
 // decimalFromString safely converts a string to decimal.Decimal.
 // Returns decimal.Zero if the string is empty or invalid.
