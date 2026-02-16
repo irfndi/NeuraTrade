@@ -83,6 +83,12 @@ func (h *WalletHandler) GetWallets(c *gin.Context) {
 		wallets = append(wallets, w)
 	}
 
+	// Check for errors during iteration
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error during wallet retrieval"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"wallets": wallets})
 }
 
@@ -296,11 +302,21 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 		return
 	}
 
+	// Encrypt passphrase if provided (returns base64-encoded string)
+	var encryptedPassphrase string
+	if req.Passphrase != "" {
+		encryptedPassphrase, err = encryptor.Encrypt([]byte(req.Passphrase))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt passphrase"})
+			return
+		}
+	}
+
 	// Insert encrypted API keys (already base64-encoded by encryptor.Encrypt)
 	_, err = h.db.DB.Exec(
-		`INSERT INTO exchange_api_keys (user_id, exchange, api_key_encrypted, api_secret_encrypted, testnet, created_at)
-		 VALUES (?, ?, ?, ?, 0, ?)`,
-		userID, req.Exchange, encryptedKey, encryptedSecret, time.Now().Format("2006-01-02 15:04:05"),
+		`INSERT INTO exchange_api_keys (user_id, exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, testnet, created_at)
+		 VALUES (?, ?, ?, ?, ?, 0, ?)`,
+		userID, req.Exchange, encryptedKey, encryptedSecret, encryptedPassphrase, time.Now().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to store API keys"})

@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS exchange_api_keys (
     exchange TEXT NOT NULL,
     api_key_encrypted TEXT,
     api_secret_encrypted TEXT,
+    passphrase_encrypted TEXT,
     testnet INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
