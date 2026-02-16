@@ -8,7 +8,10 @@ export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
     const userId = ctx.from?.id;
 
     if (!chatId || !userId) {
-      logger.error("[Start] Missing chat information", new Error(`User: ${ctx.from?.username || "unknown"}`));
+      logger.error(
+        "[Start] Missing chat information",
+        new Error(`User: ${ctx.from?.username || "unknown"}`),
+      );
       await ctx.reply("Unable to start: missing chat information.");
       return;
     }
@@ -58,7 +61,10 @@ export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
     } catch (error) {
       // Log registration errors for debugging
       const errorMsg = error instanceof Error ? error.message : String(error);
-      logger.error("[Start] User registration failed", new Error(`User ${userId}: ${errorMsg}`));
+      logger.error(
+        "[Start] User registration failed",
+        new Error(`User ${userId}: ${errorMsg}`),
+      );
       // Don't expose internal errors to users
       await ctx.reply(
         "⚠️ Unable to complete registration. Please try again or contact support.",
