@@ -110,7 +110,9 @@ type RegistryOption func(*Registry)
 // NewRegistry creates a new AI model registry
 func NewRegistry(opts ...RegistryOption) *Registry {
 	r := &Registry{
-		client:       &http.Client{},
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 		modelsDevURL: ModelsDevAPIURL,
 		cacheTTL:     CacheTTL,
 		logger:       zap.NewNop(),
@@ -320,34 +322,28 @@ func (r *Registry) FetchModels(ctx context.Context) (*ModelRegistry, error) {
 
 // GetRegistry returns the current model registry, using cache if available
 func (r *Registry) GetRegistry(ctx context.Context) (*ModelRegistry, error) {
-	fmt.Printf("[Registry] GetRegistry called, checking cache...\n")
-
 	// Try local cache first
 	r.mu.RLock()
 	if r.localCache != nil && time.Since(r.localCache.FetchedAt) < r.cacheTTL {
 		cache := r.localCache
 		r.mu.RUnlock()
-		fmt.Printf("[Registry] Returning local cache with %d models\n", len(cache.Models))
 		return cache, nil
 	}
 	r.mu.RUnlock()
 
 	// Try Redis cache
 	if r.redis != nil {
-		fmt.Printf("[Registry] Checking Redis cache...\n")
 		cached, err := r.getFromRedis(ctx)
 		if err == nil && cached != nil {
 			// Update local cache
 			r.mu.Lock()
 			r.localCache = cached
 			r.mu.Unlock()
-			fmt.Printf("[Registry] Returning Redis cache with %d models\n", len(cached.Models))
 			return cached, nil
 		}
 	}
 
 	// Fetch from API
-	fmt.Printf("[Registry] Fetching from models.dev API...\n")
 	registry, err := r.FetchModels(ctx)
 	if err != nil {
 		r.logger.Error("Failed to fetch models", zap.Error(err))

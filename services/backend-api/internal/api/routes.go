@@ -342,8 +342,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			ai.GET("/models", aiHandler.GetModels)
 			ai.POST("/route", aiHandler.RouteModel)
-			ai.POST("/select/:userId", aiHandler.SelectModel)
-			ai.GET("/status/:userId", aiHandler.GetModelStatus)
+			aiAuth := ai.Group("")
+			aiAuth.Use(authMiddleware.RequireAuth())
+			{
+				aiAuth.POST("/select/:userId", aiHandler.SelectModel)
+				aiAuth.GET("/status/:userId", aiHandler.GetModelStatus)
+			}
 		}
 
 		// Exchange management

@@ -175,5 +175,14 @@ mcp.json
 # Built binaries
 services/backend-api/server
 
+# CLI binary
+cmd/neuratrade-cli/neuratrade-cli
+
 # Beads (issue tracking) runtime files
 .beads/daemon-error
+
+# NeuraTrade user data directory
+~/.neuratrade/
+
+# Temporary development directories
+_temporary/

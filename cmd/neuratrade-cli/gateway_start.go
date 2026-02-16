@@ -83,7 +83,10 @@ func startDocker(opts StartOptions) {
 		exampleFile := filepath.Join(projectRoot, ".env.example")
 		if _, err := os.Stat(exampleFile); err == nil {
 			fmt.Println("Creating .env from .env.example...")
-			copyFile(exampleFile, envFile)
+			if err := copyFile(exampleFile, envFile); err != nil {
+				fmt.Printf("Error copying file: %v\n", err)
+				os.Exit(1)
+			}
 			fmt.Println("Please edit .env file with your configuration before running again")
 			os.Exit(1)
 		}
