@@ -1,12 +1,11 @@
 import {
   test,
   expect,
-  beforeAll,
   afterAll,
   describe,
   beforeEach,
 } from "bun:test";
-import { writeFileSync, readFileSync, existsSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import {
@@ -15,24 +14,17 @@ import {
 } from "./config";
 
 describe("Neuratrade config fallback", () => {
-  const realConfigPath = join(homedir(), ".neuratrade", "config.json");
+  const neuratradeDir = join(homedir(), ".neuratrade");
+  const realConfigPath = join(neuratradeDir, "config.json");
   let backupContent: string | null = null;
-
-  beforeAll(() => {
-    if (existsSync(realConfigPath)) {
-      backupContent = readFileSync(realConfigPath, "utf-8");
-    }
-  });
-
-  afterAll(() => {
-    if (backupContent !== null) {
-      writeFileSync(realConfigPath, backupContent, "utf-8");
-    }
-  });
 
   beforeEach(() => {
     resetNeuratradeConfigCache();
     delete process.env.ADMIN_API_KEY;
+
+    if (!existsSync(neuratradeDir)) {
+      mkdirSync(neuratradeDir, { recursive: true });
+    }
   });
 
   test("getEnvWithNeuratradeFallback returns env var when set", () => {

@@ -15,10 +15,14 @@ import {
 } from "./config";
 
 describe("Neuratrade config fallback", () => {
-  const realConfigPath = join(homedir(), ".neuratrade", "config.json");
+  const neuratradeDir = join(homedir(), ".neuratrade");
+  const realConfigPath = join(neuratradeDir, "config.json");
   let backupContent: string | null = null;
 
   beforeAll(() => {
+    if (!existsSync(neuratradeDir)) {
+      mkdirSync(neuratradeDir, { recursive: true });
+    }
     if (existsSync(realConfigPath)) {
       backupContent = readFileSync(realConfigPath, "utf-8");
     }
