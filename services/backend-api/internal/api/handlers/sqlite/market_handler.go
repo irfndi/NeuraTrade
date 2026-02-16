@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -261,12 +262,13 @@ func (h *MarketHandler) GetMarketPrices(c *gin.Context) {
 		limit = 50
 	}
 
-	// Build request path
+	// Build request path with URL-encoded parameters
 	path := "/api/tickers"
 	if exchange != "" {
-		path = fmt.Sprintf("/api/tickers?exchange=%s", exchange)
+		// URL-encode parameters to handle special characters
+		path = fmt.Sprintf("/api/tickers?exchange=%s", url.QueryEscape(exchange))
 		if symbol != "" {
-			path += fmt.Sprintf("&symbol=%s", symbol)
+			path += fmt.Sprintf("&symbol=%s", url.QueryEscape(symbol))
 		}
 	}
 
@@ -281,9 +283,11 @@ func (h *MarketHandler) GetMarketPrices(c *gin.Context) {
 	}
 
 	if err := h.makeCCXTRequest(ctx, "GET", path, nil, &ccxtResponse); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error:   "Failed to fetch market prices",
-			Message: err.Error(),
+		// Log internal error details for debugging
+		log.Printf("[MarketHandler] Failed to fetch tickers: %v", err)
+		// Return sanitized error to client (don't leak internal details)
+		c.JSON(http.StatusBadGateway, ErrorResponse{
+			Error: "Failed to fetch market data from exchange",
 		})
 		return
 	}
