@@ -1,10 +1,4 @@
-import {
-  test,
-  expect,
-  afterAll,
-  describe,
-  beforeEach,
-} from "bun:test";
+import { test, expect, afterAll, describe, beforeEach } from "bun:test";
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
