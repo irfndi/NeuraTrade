@@ -26,30 +26,36 @@ export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
       const userResult = await api.getUserByChatId(chatIdStr);
 
       if (!userResult) {
-        logger.info("[Start] Registering new user", { userId, chatId: chatIdStr });
+        logger.info("[Start] Registering new user", {
+          userId,
+          chatId: chatIdStr,
+        });
         const password = `${globalThis.crypto.randomUUID()}${globalThis.crypto.randomUUID()}`;
         await api.registerTelegramUser({
           email: `telegram_${userId}@neuratrade.ai`,
           password: password,
           telegram_chat_id: chatIdStr,
         });
-        logger.info("[Start] User registered successfully", { userId, chatId: chatIdStr });
-        
+        logger.info("[Start] User registered successfully", {
+          userId,
+          chatId: chatIdStr,
+        });
+
         // Send credentials securely (in production, use secure channel)
         await ctx.reply(
           "🚀 Welcome to NeuraTrade!\n\n" +
-          "✅ Your account has been created.\n\n" +
-          "⚠️ IMPORTANT: Save your temporary password:\n" +
-          `\`${password}\`\n\n` +
-          "Use /settings to change your password.\n\n" +
-          "Get started:\n" +
-          "• /ai_models - View available AI models\n" +
-          "• /ai_select <model> - Select your AI\n" +
-          "• /help - See all commands"
+            "✅ Your account has been created.\n\n" +
+            "⚠️ IMPORTANT: Save your temporary password:\n" +
+            `\`${password}\`\n\n` +
+            "Use /settings to change your password.\n\n" +
+            "Get started:\n" +
+            "• /ai_models - View available AI models\n" +
+            "• /ai_select <model> - Select your AI\n" +
+            "• /help - See all commands",
         );
         return;
       }
-      
+
       logger.info("[Start] User already exists", { userId, chatId: chatIdStr });
     } catch (error) {
       // Log registration errors for debugging
@@ -60,7 +66,7 @@ export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
       });
       // Don't expose internal errors to users
       await ctx.reply(
-        "⚠️ Unable to complete registration. Please try again or contact support."
+        "⚠️ Unable to complete registration. Please try again or contact support.",
       );
       return;
     }
