@@ -629,7 +629,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 	}
 
 	// Also check config file for exchange API keys (fallback for CLI config)
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // nolint:gosec // Fixed config path, not user input
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
@@ -755,18 +755,17 @@ func (h *TelegramInternalHandler) ensureOperatorSchema(ctx context.Context) erro
 func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, chatID string) ([]string, error) {
 	failedChecks := make([]string, 0, 2)
 
-	// Check for Polymarket wallet (optional for scalping mode)
-	_, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
-	_ = err // Polymarket wallet is optional
+	pmWalletCount, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
+	if err != nil {
+		pmWalletCount = 0
+	}
 
-	// Check for exchange API keys (from database or config file)
 	exchangeCount, err := h.countConnectedWallets(ctx, chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
 	if err != nil {
 		exchangeCount = 0
 	}
 
-	// Also check config file for exchange API keys (fallback for CLI config)
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // nolint:gosec // Fixed config path, not user input
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
@@ -789,7 +788,11 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 		}
 	}
 
-	// For scalping mode: exchange configured is sufficient (Polymarket wallet optional)
+	totalWallets := pmWalletCount + exchangeCount
+	if totalWallets < 1 {
+		failedChecks = append(failedChecks, "wallet minimum")
+	}
+
 	if exchangeCount < 1 {
 		failedChecks = append(failedChecks, "exchange minimum")
 	}

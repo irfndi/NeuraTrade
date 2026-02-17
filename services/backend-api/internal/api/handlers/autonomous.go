@@ -747,7 +747,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 
 	// Check config file for Binance API keys as fallback
 	configHasBinance := false
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // nolint:gosec // Fixed config path, not user input
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
