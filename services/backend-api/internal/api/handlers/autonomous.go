@@ -638,9 +638,7 @@ func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 		}
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			logrusLogger.WithError(err).Warn("Failed to close response body")
-		}
+		_ = resp.Body.Close()
 	}()
 
 	var result map[string]interface{}

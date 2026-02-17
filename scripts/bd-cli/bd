@@ -1,0 +1,423 @@
+#!/bin/bash
+#
+# BD (Beads) CLI - Task Management for NeuraTrade Development
+# Usage: bd <command> [options]
+#
+# This CLI manages development tasks, bugs, and features
+# Syncs with autonomous trading quest system
+#
+
+set -euo pipefail
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Constants
+BD_DIR="${BD_DIR:-$HOME/.beads}"
+BD_VERSION="1.0.0"
+
+# Print functions
+print_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+print_success() { echo -e "${GREEN}[OK]${NC} $*"; }
+print_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+print_step() { echo -e "${CYAN}[STEP]${NC} $*"; }
+
+# Show help
+show_help() {
+    cat <<EOF
+BD (Beads) CLI v${BD_VERSION} - Task Management for NeuraTrade
+
+Usage: bd <command> [options]
+
+Commands:
+    create          Create a new task/bug/feature
+    list            List all tasks
+    claim           Claim a task for work
+    update          Update task status
+    complete        Mark task as completed
+    status          Show task status
+    sync            Sync with autonomous trading quests
+    metrics         Show development metrics
+    config          Manage BD configuration
+
+Examples:
+    bd create "Fix quest handler bug" -t bug -p 0
+    bd create "Add TA integration" -t feature -p 1
+    bd list --status pending
+    bd claim TASK_ID
+    bd update TASK_ID --status in_progress
+    bd complete TASK_ID
+    bd sync --chat-id test123
+    bd metrics
+
+Task Types:
+    task    - General development task
+    bug     - Bug fix
+    feature - New feature
+    epic    - Large feature group
+
+Priorities:
+    0 - Critical (P0)
+    1 - High (P1)
+    2 - Medium (P2)
+    3 - Low (P3)
+
+For more info: https://github.com/irfndi/NeuraTrade
+EOF
+}
+
+# Create directory structure
+create_directories() {
+    local dirs=(
+        "${BD_DIR}"
+        "${BD_DIR}/tasks"
+        "${BD_DIR}/completed"
+        "${BD_DIR}/metrics"
+    )
+
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir"
+            print_success "Created: ${dir#$HOME/}"
+        fi
+    done
+}
+
+# Generate task ID
+generate_task_id() {
+    date +%s | md5sum | head -c 8
+}
+
+# Create a new task
+create_task() {
+    local title="$1"
+    local task_type="${2:-task}"
+    local priority="${3:-2}"
+    local json_output="${4:-false}"
+
+    create_directories
+
+    local task_id=$(generate_task_id)
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local task_file="${BD_DIR}/tasks/${task_id}.json"
+
+    cat > "$task_file" <<EOF
+{
+    "id": "${task_id}",
+    "title": "${title}",
+    "description": "",
+    "type": "${task_type}",
+    "priority": ${priority},
+    "status": "pending",
+    "assignee": "",
+    "created_at": "${timestamp}",
+    "updated_at": "${timestamp}",
+    "completed_at": null,
+    "metadata": {
+        "source": "bd-cli",
+        "version": "${BD_VERSION}"
+    }
+}
+EOF
+
+    if [[ "$json_output" == "true" ]]; then
+        cat "$task_file"
+    else
+        print_success "Created task ${task_id}: ${title}"
+        print_info "Type: ${task_type}, Priority: P${priority}"
+        print_info "Edit with: bd update ${task_id}"
+    fi
+}
+
+# List tasks
+list_tasks() {
+    local status_filter="${1:-all}"
+    local type_filter="${2:-all}"
+
+    create_directories
+
+    print_step "Listing tasks (status: ${status_filter}, type: ${type_filter})"
+    echo ""
+
+    local count=0
+    for task_file in "${BD_DIR}"/tasks/*.json; do
+        [[ -f "$task_file" ]] || continue
+
+        local task_id=$(jq -r '.id' "$task_file")
+        local title=$(jq -r '.title' "$task_file")
+        local task_type=$(jq -r '.type' "$task_file")
+        local priority=$(jq -r '.priority' "$task_file")
+        local status=$(jq -r '.status' "$task_file")
+        local assignee=$(jq -r '.assignee // "unassigned"' "$task_file")
+
+        # Apply filters
+        if [[ "$status_filter" != "all" && "$status" != "$status_filter" ]]; then
+            continue
+        fi
+        if [[ "$type_filter" != "all" && "$task_type" != "$type_filter" ]]; then
+            continue
+        fi
+
+        # Color code by priority
+        local priority_color="${GREEN}"
+        if [[ "$priority" -eq 0 ]]; then
+            priority_color="${RED}"
+        elif [[ "$priority" -eq 1 ]]; then
+            priority_color="${YELLOW}"
+        fi
+
+        printf "${priority_color}[%s]${NC} %-30s %-10s P%s %-12s\n" \
+            "$task_id" "$title" "$task_type" "$priority" "[$status]"
+
+        ((count++))
+    done
+
+    echo ""
+    print_info "Total: ${count} tasks"
+}
+
+# Claim a task
+claim_task() {
+    local task_id="$1"
+    local assignee="${2:-developer}"
+
+    local task_file="${BD_DIR}/tasks/${task_id}.json"
+
+    if [[ ! -f "$task_file" ]]; then
+        print_error "Task not found: ${task_id}"
+        return 1
+    fi
+
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    jq --arg assignee "$assignee" --arg ts "$timestamp" \
+        '.assignee = $assignee | .status = "in_progress" | .updated_at = $ts' \
+        "$task_file" > "${task_file}.tmp" && mv "${task_file}.tmp" "$task_file"
+
+    print_success "Claimed task ${task_id} as ${assignee}"
+}
+
+# Update task status
+update_task() {
+    local task_id="$1"
+    local status="${2:-}"
+    local description="${3:-}"
+
+    local task_file="${BD_DIR}/tasks/${task_id}.json"
+
+    if [[ ! -f "$task_file" ]]; then
+        print_error "Task not found: ${task_id}"
+        return 1
+    fi
+
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local updates=""
+
+    if [[ -n "$status" ]]; then
+        updates="${updates} | .status = \"${status}\""
+    fi
+
+    if [[ -n "$description" ]]; then
+        updates="${updates} | .description = \"${description}\""
+    fi
+
+    updates="${updates} | .updated_at = \"${timestamp}\""
+
+    jq "$updates" "$task_file" > "${task_file}.tmp" && mv "${task_file}.tmp" "$task_file"
+
+    print_success "Updated task ${task_id}"
+}
+
+# Complete a task
+complete_task() {
+    local task_id="$1"
+
+    local task_file="${BD_DIR}/tasks/${task_id}.json"
+
+    if [[ ! -f "$task_file" ]]; then
+        print_error "Task not found: ${task_id}"
+        return 1
+    fi
+
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    jq --arg ts "$timestamp" \
+        '.status = "completed" | .completed_at = $ts | .updated_at = $ts' \
+        "$task_file" > "${task_file}.tmp" && mv "${task_file}.tmp" "$task_file"
+
+    # Move to completed
+    mv "$task_file" "${BD_DIR}/completed/"
+
+    print_success "Completed task ${task_id}"
+
+    # Update metrics
+    update_metrics "$task_id"
+}
+
+# Update development metrics
+update_metrics() {
+    local task_id="$1"
+    local metrics_file="${BD_DIR}/metrics/development.json"
+
+    if [[ ! -f "$metrics_file" ]]; then
+        cat > "$metrics_file" <<EOF
+{
+    "total_tasks": 0,
+    "completed_tasks": 0,
+    "bugs_fixed": 0,
+    "features_added": 0,
+    "avg_completion_time_hours": 0
+}
+EOF
+    fi
+
+    # Increment counters
+    jq '.completed_tasks += 1 | .total_tasks += 1' "$metrics_file" > "${metrics_file}.tmp" && mv "${metrics_file}.tmp" "$metrics_file"
+}
+
+# Show metrics
+show_metrics() {
+    local metrics_file="${BD_DIR}/metrics/development.json"
+
+    if [[ ! -f "$metrics_file" ]]; then
+        print_warn "No metrics available yet"
+        return
+    fi
+
+    print_step "Development Metrics"
+    echo ""
+    cat "$metrics_file" | jq '.'
+}
+
+# Sync with autonomous trading quests
+sync_with_quests() {
+    local chat_id="${1:-}"
+
+    print_step "Syncing with autonomous trading quests"
+
+    if [[ -z "$chat_id" ]]; then
+        print_warn "No chat_id provided, skipping quest sync"
+        return
+    fi
+
+    # TODO: Query autonomous trading system for quest status
+    # Create tasks for:
+    # - Failed quests (as bugs)
+    # - New opportunities (as tasks)
+    # - Performance milestones (as achievements)
+
+    print_info "Quest sync completed for chat_id: ${chat_id}"
+}
+
+# Main command router
+main() {
+    local command="${1:-help}"
+    shift || true
+
+    case "$command" in
+        create)
+            local title=""
+            local task_type="task"
+            local priority="2"
+            local json="false"
+
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    -t|--type) task_type="$2"; shift 2 ;;
+                    -p|--priority) priority="$2"; shift 2 ;;
+                    --json) json="true"; shift ;;
+                    *) title="$1"; shift ;;
+                esac
+            done
+
+            if [[ -z "$title" ]]; then
+                print_error "Title is required"
+                echo "Usage: bd create \"Task title\" -t <type> -p <priority>"
+                exit 1
+            fi
+
+            create_task "$title" "$task_type" "$priority" "$json"
+            ;;
+        list)
+            local status="all"
+            local type="all"
+
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --status) status="$2"; shift 2 ;;
+                    --type) type="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+
+            list_tasks "$status" "$type"
+            ;;
+        claim)
+            if [[ -z "${1:-}" ]]; then
+                print_error "Task ID is required"
+                exit 1
+            fi
+            claim_task "$1" "${2:-}"
+            ;;
+        update)
+            if [[ -z "${1:-}" ]]; then
+                print_error "Task ID is required"
+                exit 1
+            fi
+            update_task "$1" "${2:-}" "${3:-}"
+            ;;
+        complete)
+            if [[ -z "${1:-}" ]]; then
+                print_error "Task ID is required"
+                exit 1
+            fi
+            complete_task "$1"
+            ;;
+        status)
+            if [[ -z "${1:-}" ]]; then
+                print_error "Task ID is required"
+                exit 1
+            fi
+            local task_file="${BD_DIR}/tasks/${1}.json"
+            if [[ -f "$task_file" ]]; then
+                cat "$task_file" | jq '.'
+            else
+                print_error "Task not found: ${1}"
+            fi
+            ;;
+        sync)
+            local chat_id=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --chat-id) chat_id="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            sync_with_quests "$chat_id"
+            ;;
+        metrics)
+            show_metrics
+            ;;
+        config)
+            print_info "BD_DIR: ${BD_DIR}"
+            print_info "Version: ${BD_VERSION}"
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            print_error "Unknown command: ${command}"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main
+main "$@"

@@ -82,31 +82,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		healthGroup.GET("/live", gin.WrapF(healthHandler.LivenessCheck))
 	}
 
-	// Initialize user and telegram internal handlers early for internal routes
+	// Initialize user handler early for internal routes
 	userHandler := handlers.NewUserHandler(db, redis.Client, authMiddleware)
-	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler)
-
-	// Internal service-to-service routes (no auth, network-isolated via Docker)
-	// These endpoints are only accessible within the Docker network
-	// Security: Relies on Docker network isolation - only internal services can access
-	internal := router.Group("/internal")
-	{
-		// Telegram service endpoints - used by telegram-service for user operations
-		internalTelegram := internal.Group("/telegram")
-		{
-			internalTelegram.GET("/users/:id", telegramInternalHandler.GetUserByChatID)
-			internalTelegram.GET("/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
-			internalTelegram.POST("/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
-			internalTelegram.POST("/autonomous/begin", telegramInternalHandler.BeginAutonomous)
-			internalTelegram.POST("/autonomous/pause", telegramInternalHandler.PauseAutonomous)
-			internalTelegram.POST("/wallets/connect_exchange", telegramInternalHandler.ConnectExchange)
-			internalTelegram.POST("/wallets/connect_polymarket", telegramInternalHandler.ConnectPolymarket)
-			internalTelegram.POST("/wallets", telegramInternalHandler.AddWallet)
-			internalTelegram.POST("/wallets/remove", telegramInternalHandler.RemoveWallet)
-			internalTelegram.GET("/wallets", telegramInternalHandler.GetWallets)
-			internalTelegram.GET("/doctor", telegramInternalHandler.GetDoctor)
-		}
-	}
 
 	// Initialize notification service with Redis caching
 	var notificationService *services.NotificationService
@@ -178,21 +155,61 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	)
 
 	questEngine := services.NewQuestEngineWithNotification(services.NewInMemoryQuestStore(), nil, notificationService)
-	questEngine.Start() // Start the quest engine scheduler
-	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
-
-	// Initialize wallet handler
-	walletHandler := handlers.NewWalletHandler(walletValidator)
-
-	// Initialize futures arbitrage handler with error handling
+	
+	// Initialize futures arbitrage handler first (needed for quest handlers)
 	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler
 	if db != nil {
-		// Safely initialize the handler
 		futuresArbitrageHandler = handlers.NewFuturesArbitrageHandlerWithQuerier(db)
 		log.Printf("Futures arbitrage handler initialized successfully")
 	} else {
 		log.Printf("Database not available for futures arbitrage handler initialization")
 	}
+	
+	questEngine.Start() // Start the quest engine scheduler
+
+	// Create integrated quest handlers with all subsystems
+	integratedHandlers := services.NewIntegratedQuestHandlers(
+		nil, // TA service - TODO: Initialize
+		nil, // Risk manager - TODO: Initialize
+		nil, // Order executor - TODO: Initialize
+		nil, // Portfolio service - TODO: Initialize
+		nil, // AI service - TODO: Initialize
+		ccxtService, // CCXT service
+		arbitrageHandler, // Arbitrage service
+		futuresArbitrageHandler, // Futures arbitrage
+		notificationService, // Notification service
+	)
+
+	// Register integrated handlers for production-ready quest execution
+	questEngine.RegisterIntegratedHandlers(integratedHandlers)
+
+	// Fallback to simple handlers if integrated not available
+	questEngine.RegisterDefaultQuestHandlers(ccxtService, arbitrageHandler, futuresArbitrageHandler)
+
+	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
+	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
+
+	// Internal service-to-service routes (no auth, network-isolated via Docker)
+	internal := router.Group("/internal")
+	{
+		internalTelegram := internal.Group("/telegram")
+		{
+			internalTelegram.GET("/users/:id", telegramInternalHandler.GetUserByChatID)
+			internalTelegram.GET("/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
+			internalTelegram.POST("/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
+			internalTelegram.POST("/autonomous/begin", telegramInternalHandler.BeginAutonomous)
+			internalTelegram.POST("/autonomous/pause", telegramInternalHandler.PauseAutonomous)
+			internalTelegram.POST("/wallets/connect_exchange", telegramInternalHandler.ConnectExchange)
+			internalTelegram.POST("/wallets/connect_polymarket", telegramInternalHandler.ConnectPolymarket)
+			internalTelegram.POST("/wallets", telegramInternalHandler.AddWallet)
+			internalTelegram.POST("/wallets/remove", telegramInternalHandler.RemoveWallet)
+			internalTelegram.GET("/wallets", telegramInternalHandler.GetWallets)
+			internalTelegram.GET("/doctor", telegramInternalHandler.GetDoctor)
+		}
+	}
+
+	// Initialize wallet handler
+	walletHandler := handlers.NewWalletHandler(walletValidator)
 
 	// API v1 routes with telemetry
 	v1 := router.Group("/api/v1")

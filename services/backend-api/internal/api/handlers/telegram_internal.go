@@ -273,6 +273,15 @@ func (h *TelegramInternalHandler) BeginAutonomous(c *gin.Context) {
 		return
 	}
 
+	// Start quest engine for this user
+	if h.questEngine != nil {
+		_, err := h.questEngine.BeginAutonomous(chatID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start quest engine: " + err.Error()})
+			return
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"ok":               true,
 		"status":           "active",
