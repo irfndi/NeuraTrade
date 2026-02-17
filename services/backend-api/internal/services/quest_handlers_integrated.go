@@ -151,7 +151,7 @@ func (h *IntegratedQuestHandlers) handleFundingRateScan(ctx context.Context, que
 		// }
 		// ratesCollected += len(rates)
 
-		_ = exchange // Use exchange to avoid unused warning
+		_ = exchange     // Use exchange to avoid unused warning
 		ratesCollected++ // Placeholder
 	}
 

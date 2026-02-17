@@ -11,30 +11,30 @@ import (
 
 // AutonomousMonitoring provides monitoring and alerting for autonomous trading
 type AutonomousMonitoring struct {
-	mu                sync.RWMutex
-	chatID            string
-	startTime         time.Time
-	lastQuestUpdate   time.Time
-	totalQuests       int
-	successfulQuests  int
-	failedQuests      int
-	totalTrades       int
-	profitableTrades  int
-	totalPnL          decimal.Decimal
-	maxDrawdown       decimal.Decimal
-	currentDrawdown   decimal.Decimal
-	alertsEnabled     bool
-	alertThresholds   MonitoringThresholds
+	mu                  sync.RWMutex
+	chatID              string
+	startTime           time.Time
+	lastQuestUpdate     time.Time
+	totalQuests         int
+	successfulQuests    int
+	failedQuests        int
+	totalTrades         int
+	profitableTrades    int
+	totalPnL            decimal.Decimal
+	maxDrawdown         decimal.Decimal
+	currentDrawdown     decimal.Decimal
+	alertsEnabled       bool
+	alertThresholds     MonitoringThresholds
 	notificationService *NotificationService
 }
 
 // MonitoringThresholds defines alert thresholds
 type MonitoringThresholds struct {
-	MaxDrawdownPercent    float64 `json:"max_drawdown_percent"`
-	MinWinRate            float64 `json:"min_win_rate"`
-	MaxConsecutiveLosses  int     `json:"max_consecutive_losses"`
-	MinProfitPerQuest     float64 `json:"min_profit_per_quest"`
-	AlertCooldownMinutes  int     `json:"alert_cooldown_minutes"`
+	MaxDrawdownPercent   float64 `json:"max_drawdown_percent"`
+	MinWinRate           float64 `json:"min_win_rate"`
+	MaxConsecutiveLosses int     `json:"max_consecutive_losses"`
+	MinProfitPerQuest    float64 `json:"min_profit_per_quest"`
+	AlertCooldownMinutes int     `json:"alert_cooldown_minutes"`
 }
 
 // DefaultMonitoringThresholds returns default thresholds
@@ -50,18 +50,18 @@ func DefaultMonitoringThresholds() MonitoringThresholds {
 
 // MonitoringSnapshot represents current monitoring state
 type MonitoringSnapshot struct {
-	ChatID              string            `json:"chat_id"`
-	Uptime              time.Duration     `json:"uptime"`
-	TotalQuests         int               `json:"total_quests"`
-	SuccessRate         float64           `json:"success_rate"`
-	TotalTrades         int               `json:"total_trades"`
-	WinRate             float64           `json:"win_rate"`
-	TotalPnL            decimal.Decimal   `json:"total_pnl"`
-	CurrentDrawdown     decimal.Decimal   `json:"current_drawdown"`
-	MaxDrawdown         decimal.Decimal   `json:"max_drawdown"`
-	LastQuestUpdate     time.Time         `json:"last_quest_update"`
-	HealthStatus        string            `json:"health_status"`
-	ActiveAlerts        []string          `json:"active_alerts,omitempty"`
+	ChatID          string          `json:"chat_id"`
+	Uptime          time.Duration   `json:"uptime"`
+	TotalQuests     int             `json:"total_quests"`
+	SuccessRate     float64         `json:"success_rate"`
+	TotalTrades     int             `json:"total_trades"`
+	WinRate         float64         `json:"win_rate"`
+	TotalPnL        decimal.Decimal `json:"total_pnl"`
+	CurrentDrawdown decimal.Decimal `json:"current_drawdown"`
+	MaxDrawdown     decimal.Decimal `json:"max_drawdown"`
+	LastQuestUpdate time.Time       `json:"last_quest_update"`
+	HealthStatus    string          `json:"health_status"`
+	ActiveAlerts    []string        `json:"active_alerts,omitempty"`
 }
 
 // NewAutonomousMonitoring creates a new monitoring instance
@@ -91,7 +91,7 @@ func (m *AutonomousMonitoring) RecordQuestExecution(success bool, pnl decimal.De
 
 	if !pnl.IsZero() {
 		m.totalPnL = m.totalPnL.Add(pnl)
-		
+
 		// Update drawdown
 		if pnl.LessThan(decimal.Zero) {
 			m.currentDrawdown = m.currentDrawdown.Add(pnl.Abs())
@@ -248,8 +248,8 @@ func (m *AutonomousMonitoring) GetPerformanceMetrics() map[string]interface{} {
 
 // AutonomousMonitorManager manages monitoring for multiple users
 type AutonomousMonitorManager struct {
-	mu        sync.RWMutex
-	monitors  map[string]*AutonomousMonitoring
+	mu           sync.RWMutex
+	monitors     map[string]*AutonomousMonitoring
 	notifService *NotificationService
 }
 
