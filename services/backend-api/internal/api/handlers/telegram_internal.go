@@ -629,7 +629,8 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 	}
 
 	// Also check config file for exchange API keys (fallback for CLI config)
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // nolint:gosec // Fixed config path, not user input
+	// nolint:gosec // Fixed config path, not user input
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
@@ -765,7 +766,8 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 		exchangeCount = 0
 	}
 
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // nolint:gosec // Fixed config path, not user input
+	// nolint:gosec // Fixed config path, not user input
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // Fixed config path, not user input
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
