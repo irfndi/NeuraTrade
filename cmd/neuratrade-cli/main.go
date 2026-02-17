@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -240,6 +241,54 @@ func main() {
 								Usage: "Telegram chat ID",
 							},
 						},
+					},
+				},
+			},
+			{
+				Name:    "exchanges",
+				Usage:   "Manage exchange connections",
+				Subcommands: []*cli.Command{
+					{
+						Name:   "list",
+						Usage:  "List configured exchanges",
+						Action: listExchanges,
+					},
+					{
+						Name:   "add",
+						Usage:  "Add a new exchange",
+						Action: addExchange,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "name",
+								Usage:    "Exchange name (e.g., binance, bybit)",
+								Required: true,
+							},
+							&cli.StringFlag{
+								Name:  "api-key",
+								Usage: "API key (optional, for private data)",
+							},
+							&cli.StringFlag{
+								Name:  "secret",
+								Usage: "API secret (optional, for private data)",
+							},
+						},
+					},
+					{
+						Name:   "remove",
+						Usage:  "Remove an exchange",
+						Action: removeExchange,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "name",
+								Usage:    "Exchange name to remove",
+								Required: true,
+							},
+						},
+					},
+					{
+						Name:   "reload",
+						Usage:  "Reload CCXT service with current configuration",
+						Action: reloadExchanges,
 					},
 				},
 			},
@@ -1203,6 +1252,362 @@ func checkBalance(cCtx *cli.Context) error {
 	}
 
 	prettyPrint(response)
+	return nil
+}
+
+// ExchangeConfig represents an exchange configuration
+type ExchangeConfig struct {
+	Name       string `json:"name"`
+	Enabled    bool   `json:"enabled"`
+	HasAuth    bool   `json:"has_auth"`
+	AddedAt    string `json:"added_at"`
+}
+
+// ExchangesListResponse represents the response for listing exchanges
+type ExchangesListResponse struct {
+	Exchanges []ExchangeConfig `json:"exchanges"`
+	Count     int              `json:"count"`
+}
+
+// ExchangeAddRequest represents the request to add an exchange
+type ExchangeAddRequest struct {
+	Name    string `json:"name"`
+	APIKey  string `json:"api_key,omitempty"`
+	Secret  string `json:"secret,omitempty"`
+}
+
+// ExchangeAddResponse represents the response for adding an exchange
+type ExchangeAddResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Name    string `json:"name,omitempty"`
+}
+
+// ExchangeRemoveRequest represents the request to remove an exchange
+type ExchangeRemoveRequest struct {
+	Name string `json:"name"`
+}
+
+// ExchangeRemoveResponse represents the response for removing an exchange
+type ExchangeRemoveResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// listExchanges lists all configured exchanges
+func listExchanges(cCtx *cli.Context) error {
+	fmt.Println("Configured Exchanges")
+	fmt.Println("====================")
+
+	baseURL := getBaseURL()
+	apiKey := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKey)
+
+	// Get exchanges from backend API
+	respBody, err := client.makeRequest("GET", "/api/v1/exchanges", nil)
+	if err != nil {
+		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
+		fmt.Println("\nFalling back to local configuration...")
+		
+		// Fallback: read from config file
+		configPath := path.Join(os.Getenv("HOME"), ".neuratrade", "config.json")
+		if _, err := os.Stat(configPath); err == nil {
+			data, err := os.ReadFile(configPath)
+			if err == nil {
+				var config map[string]interface{}
+				if err := json.Unmarshal(data, &config); err == nil {
+					if exchanges, ok := config["exchanges"].([]interface{}); ok {
+						fmt.Printf("\nFound %d configured exchanges:\n", len(exchanges))
+						for _, ex := range exchanges {
+							if exMap, ok := ex.(map[string]interface{}); ok {
+								if name, ok := exMap["name"].(string); ok {
+									hasAuth := exMap["api_key"] != nil && exMap["api_key"] != ""
+									fmt.Printf("  - %s%s\n", name, map[bool]string{true: " 🔑", false: ""}[hasAuth])
+								}
+							}
+						}
+						return nil
+					}
+				}
+			}
+		}
+		
+		fmt.Println("No exchanges configured.")
+		fmt.Println("\nAdd an exchange with:")
+		fmt.Println("  neuratrade exchanges add --name binance")
+		fmt.Println("  neuratrade exchanges add --name bybit --api-key YOUR_KEY --secret YOUR_SECRET")
+		return nil
+	}
+
+	var response ExchangesListResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	fmt.Printf("\nFound %d configured exchanges:\n\n", response.Count)
+	for _, ex := range response.Exchanges {
+		authIcon := "  "
+		if ex.HasAuth {
+			authIcon = "🔑 "
+		}
+		statusIcon := "✓"
+		if !ex.Enabled {
+			statusIcon = "⚠️"
+		}
+		fmt.Printf("  %s%s %s [%s]\n", authIcon, statusIcon, ex.Name, map[bool]string{true: "active", false: "inactive"}[ex.Enabled])
+	}
+
+	fmt.Println("\nLegend:")
+	fmt.Println("  🔑 = Has API credentials (private data access)")
+	fmt.Println("  ✓  = Active and loading market data")
+	fmt.Println("  ⚠️  = Configured but disabled")
+
+	return nil
+}
+
+// addExchange adds a new exchange
+func addExchange(cCtx *cli.Context) error {
+	name := cCtx.String("name")
+	apiKey := cCtx.String("api-key")
+	secret := cCtx.String("secret")
+
+	if name == "" {
+		return cli.Exit("Error: exchange name is required", 1)
+	}
+
+	fmt.Printf("Adding exchange: %s\n", name)
+	if apiKey != "" {
+		fmt.Println("  - API key: configured ✓")
+	}
+	if secret != "" {
+		fmt.Println("  - API secret: configured ✓")
+	}
+
+	baseURL := getBaseURL()
+	apiKeyGlobal := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKeyGlobal)
+
+	request := ExchangeAddRequest{
+		Name:   name,
+		APIKey: apiKey,
+		Secret: secret,
+	}
+
+	respBody, err := client.makeRequest("POST", "/api/v1/exchanges", request)
+	if err != nil {
+		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
+		fmt.Println("\nFalling back to local configuration...")
+		
+		// Fallback: update config file directly
+		configDir := path.Join(os.Getenv("HOME"), ".neuratrade")
+		configPath := path.Join(configDir, "config.json")
+		
+		// Create directory if it doesn't exist
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
+		
+		// Load existing config or create new
+		var config map[string]interface{}
+		if data, err := os.ReadFile(configPath); err == nil {
+			if err := json.Unmarshal(data, &config); err != nil {
+				return fmt.Errorf("failed to parse config: %w", err)
+			}
+		} else {
+			config = make(map[string]interface{})
+		}
+		
+		// Initialize exchanges array if needed
+		if _, ok := config["exchanges"]; !ok {
+			config["exchanges"] = []interface{}{}
+		}
+		
+		exchanges := config["exchanges"].([]interface{})
+		
+		// Check if exchange already exists
+		for _, ex := range exchanges {
+			if exMap, ok := ex.(map[string]interface{}); ok {
+				if exMap["name"] == name {
+					return cli.Exit(fmt.Sprintf("Error: exchange %s already configured", name), 1)
+				}
+			}
+		}
+		
+		// Add new exchange
+		newExchange := map[string]interface{}{
+			"name":    name,
+			"enabled": true,
+			"added_at": time.Now().Format(time.RFC3339),
+		}
+		if apiKey != "" {
+			newExchange["api_key"] = apiKey
+		}
+		if secret != "" {
+			newExchange["secret"] = secret
+		}
+		
+		exchanges = append(exchanges, newExchange)
+		config["exchanges"] = exchanges
+		
+		// Save config
+		data, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal config: %w", err)
+		}
+		
+		if err := os.WriteFile(configPath, data, 0600); err != nil {
+			return fmt.Errorf("failed to write config: %w", err)
+		}
+		
+		fmt.Printf("\n✅ Exchange %s added successfully!\n", name)
+		fmt.Println("\nNote: Configuration saved locally.")
+		fmt.Println("To apply changes, restart the CCXT service:")
+		fmt.Println("  neuratrade gateway restart")
+		fmt.Println("\nOr reload exchanges:")
+		fmt.Println("  neuratrade exchanges reload")
+		return nil
+	}
+
+	var response ExchangeAddResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if response.Success {
+		fmt.Printf("\n✅ Exchange %s added successfully!\n", response.Name)
+		fmt.Println(response.Message)
+		fmt.Println("\nMarket data will be available shortly.")
+	} else {
+		fmt.Printf("❌ Failed to add exchange: %s\n", response.Message)
+	}
+
+	return nil
+}
+
+// removeExchange removes an exchange
+func removeExchange(cCtx *cli.Context) error {
+	name := cCtx.String("name")
+
+	if name == "" {
+		return cli.Exit("Error: exchange name is required", 1)
+	}
+
+	fmt.Printf("Removing exchange: %s\n", name)
+
+	baseURL := getBaseURL()
+	apiKeyGlobal := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKeyGlobal)
+
+	request := ExchangeRemoveRequest{
+		Name: name,
+	}
+
+	respBody, err := client.makeRequest("DELETE", "/api/v1/exchanges", request)
+	if err != nil {
+		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
+		fmt.Println("\nFalling back to local configuration...")
+		
+		// Fallback: update config file directly
+		configPath := path.Join(os.Getenv("HOME"), ".neuratrade", "config.json")
+		
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			return fmt.Errorf("failed to read config: %w", err)
+		}
+		
+		var config map[string]interface{}
+		if err := json.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("failed to parse config: %w", err)
+		}
+		
+		exchanges, ok := config["exchanges"].([]interface{})
+		if !ok {
+			return fmt.Errorf("no exchanges configured")
+		}
+		
+		found := false
+		newExchanges := make([]interface{}, 0, len(exchanges))
+		for _, ex := range exchanges {
+			if exMap, ok := ex.(map[string]interface{}); ok {
+				if exMap["name"] == name {
+					found = true
+					continue
+				}
+				newExchanges = append(newExchanges, ex)
+			}
+		}
+		
+		if !found {
+			return cli.Exit(fmt.Sprintf("Error: exchange %s not found", name), 1)
+		}
+		
+		config["exchanges"] = newExchanges
+		
+		data, err = json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal config: %w", err)
+		}
+		
+		if err := os.WriteFile(configPath, data, 0600); err != nil {
+			return fmt.Errorf("failed to write config: %w", err)
+		}
+		
+		fmt.Printf("\n✅ Exchange %s removed successfully!\n", name)
+		fmt.Println("\nNote: Configuration saved locally.")
+		fmt.Println("To apply changes, restart the CCXT service:")
+		fmt.Println("  neuratrade gateway restart")
+		return nil
+	}
+
+	var response ExchangeRemoveResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if response.Success {
+		fmt.Printf("\n✅ Exchange %s removed successfully!\n", name)
+		fmt.Println(response.Message)
+	} else {
+		fmt.Printf("❌ Failed to remove exchange: %s\n", response.Message)
+	}
+
+	return nil
+}
+
+// reloadExchanges reloads the CCXT service configuration
+func reloadExchanges(cCtx *cli.Context) error {
+	fmt.Println("Reloading exchange configuration...")
+
+	baseURL := getBaseURL()
+	apiKeyGlobal := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKeyGlobal)
+
+	// Send reload request to CCXT service
+	respBody, err := client.makeRequest("POST", "/api/v1/exchanges/reload", nil)
+	if err != nil {
+		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
+		fmt.Println("\nManual reload required:")
+		fmt.Println("  1. Stop CCXT service: docker compose restart ccxt-service")
+		fmt.Println("  2. Or restart all services: neuratrade gateway restart")
+		return nil
+	}
+
+	var response ExchangeAddResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if response.Success {
+		fmt.Printf("\n✅ Exchange configuration reloaded!\n")
+		fmt.Println(response.Message)
+	} else {
+		fmt.Printf("❌ Failed to reload configuration: %s\n", response.Message)
+	}
+
 	return nil
 }
 
