@@ -25,7 +25,7 @@ func TestTelegramInternalHandler_GetNotificationPreferences_Success(t *testing.T
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -60,7 +60,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_Success_Enable(t *te
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	req := map[string]bool{"enabled": true}
 	jsonBytes, _ := json.Marshal(req)
@@ -90,7 +90,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_Success_Disable(t *t
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	req := map[string]bool{"enabled": false}
 	jsonBytes, _ := json.Marshal(req)
@@ -122,7 +122,7 @@ func TestNewTelegramInternalHandler(t *testing.T) {
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 	userHandler := &UserHandler{}
-	handler := NewTelegramInternalHandler(dbPool, userHandler)
+	handler := NewTelegramInternalHandler(dbPool, userHandler, nil)
 
 	assert.NotNil(t, handler)
 	assert.NotNil(t, handler.db)
@@ -195,7 +195,7 @@ func TestTelegramInternalHandler_GetUserByChatID_Success(t *testing.T) {
 
 	// Create UserHandler with querier for testing
 	userHandler := NewUserHandlerWithQuerier(dbPool, nil, nil)
-	handler := NewTelegramInternalHandler(dbPool, userHandler)
+	handler := NewTelegramInternalHandler(dbPool, userHandler, nil)
 
 	chatID := "123456789"
 	now := time.Now()
@@ -235,7 +235,7 @@ func TestTelegramInternalHandler_GetUserByChatID_NotFound(t *testing.T) {
 	dbPool := database.NewMockDBPool(mockDB)
 
 	userHandler := NewUserHandlerWithQuerier(dbPool, nil, nil)
-	handler := NewTelegramInternalHandler(dbPool, userHandler)
+	handler := NewTelegramInternalHandler(dbPool, userHandler, nil)
 
 	chatID := "nonexistent123"
 
@@ -267,7 +267,7 @@ func TestTelegramInternalHandler_GetUserByChatID_EmptyID(t *testing.T) {
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -293,7 +293,7 @@ func TestTelegramInternalHandler_GetUserByChatID_DatabaseError(t *testing.T) {
 	dbPool := database.NewMockDBPool(mockDB)
 
 	userHandler := NewUserHandlerWithQuerier(dbPool, nil, nil)
-	handler := NewTelegramInternalHandler(dbPool, userHandler)
+	handler := NewTelegramInternalHandler(dbPool, userHandler, nil)
 
 	chatID := "123456789"
 
@@ -322,7 +322,7 @@ func TestTelegramInternalHandler_GetNotificationPreferences_DatabaseError(t *tes
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -352,7 +352,7 @@ func TestTelegramInternalHandler_GetNotificationPreferences_EmptyUserID(t *testi
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -376,7 +376,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_InvalidJSON(t *testi
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -401,7 +401,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_EmptyUserID(t *testi
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	req := map[string]bool{"enabled": true}
 	jsonBytes, _ := json.Marshal(req)
@@ -430,7 +430,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_TransactionBeginErro
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	req := map[string]bool{"enabled": true}
 	jsonBytes, _ := json.Marshal(req)
@@ -463,7 +463,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_DeleteError(t *testi
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	req := map[string]bool{"enabled": true}
 	jsonBytes, _ := json.Marshal(req)
@@ -500,7 +500,7 @@ func TestTelegramInternalHandler_ConnectPolymarket_Success(t *testing.T) {
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	requestBody := `{"chat_id":"777","wallet_address":"0x1234567890abcdef1234567890abcdef12345678"}`
 	w := httptest.NewRecorder()
@@ -540,7 +540,7 @@ func TestTelegramInternalHandler_BeginAutonomous_ReadinessBlocked(t *testing.T) 
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	requestBody := `{"chat_id":"777"}`
 	w := httptest.NewRecorder()
@@ -581,7 +581,7 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
 
-	handler := NewTelegramInternalHandler(dbPool, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
