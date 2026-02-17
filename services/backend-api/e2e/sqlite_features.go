@@ -36,10 +36,8 @@ func main() {
 		// Wallet endpoints
 		{"GET /api/v1/wallets", "GET", "/api/v1/wallets?chat_id=123456789", nil},
 		{"POST /api/v1/wallets", "POST", "/api/v1/wallets", map[string]interface{}{
-			"chain":   "ethereum",
-			"address": "0x1234567890abcdef",
-			"type":    "metamask",
-			"label":   "Main Wallet",
+			"name":     "main-wallet",
+			"exchange": "binance",
 		}},
 		{"POST /api/v1/wallets/connect_exchange", "POST", "/api/v1/wallets/connect_exchange", map[string]interface{}{
 			"exchange":   "binance",

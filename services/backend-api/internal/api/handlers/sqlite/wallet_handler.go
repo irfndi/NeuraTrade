@@ -328,9 +328,13 @@ func getEncryptionKey() []byte {
 	return []byte(key)
 }
 
-// GetWalletBalance returns wallet balance (mock for now)
+// GetWalletBalance returns wallet balance.
+// NOTE: This is a mock implementation for SQLite mode.
+// In production, this would fetch real balances from connected exchanges.
 func (h *WalletHandler) GetWalletBalance(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
+		"mock": true,
+		"note": "SQLite mode - simulated balance data",
 		"balances": []gin.H{
 			{"asset": "BTC", "free": "0.5", "locked": "0.0", "total": "0.5"},
 			{"asset": "ETH", "free": "5.0", "locked": "0.0", "total": "5.0"},
