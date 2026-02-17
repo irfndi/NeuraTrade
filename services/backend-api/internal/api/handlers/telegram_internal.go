@@ -616,7 +616,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 	if err != nil {
 		exchangeCount = 0
 	}
-	
+
 	// Also check config file for exchange API keys (fallback for CLI config)
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
 	if content, err := os.ReadFile(configPath); err == nil {
@@ -640,7 +640,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			}
 		}
 	}
-	
+
 	if exchangeCount == 0 {
 		if overall != "critical" {
 			overall = "warning"
@@ -747,13 +747,13 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 	// Check for Polymarket wallet (optional for scalping mode)
 	_, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
 	_ = err // Polymarket wallet is optional
-	
+
 	// Check for exchange API keys (from database or config file)
 	exchangeCount, err := h.countConnectedWallets(ctx, chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
 	if err != nil {
 		exchangeCount = 0
 	}
-	
+
 	// Also check config file for exchange API keys (fallback for CLI config)
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
 	if content, err := os.ReadFile(configPath); err == nil {
@@ -777,7 +777,7 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 			}
 		}
 	}
-	
+
 	// For scalping mode: exchange configured is sufficient (Polymarket wallet optional)
 	if exchangeCount < 1 {
 		failedChecks = append(failedChecks, "exchange minimum")

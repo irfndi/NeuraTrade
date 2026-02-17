@@ -625,11 +625,11 @@ func (r *ReadinessChecker) checkRedis(c *gin.Context) *CheckResult {
 
 func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 	start := time.Now()
-	
+
 	// Check configured exchanges from CCXT service
 	resp, err := http.Get("http://localhost:3001/api/exchanges")
 	latency := time.Since(start).Milliseconds()
-	
+
 	if err != nil {
 		return &CheckResult{
 			Status:    "warning",
@@ -638,7 +638,7 @@ func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 		}
 	}
 	defer resp.Body.Close()
-	
+
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return &CheckResult{
@@ -647,7 +647,7 @@ func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 			LatencyMs: latency,
 		}
 	}
-	
+
 	// Check if any exchanges are configured
 	exchanges, ok := result["exchanges"].([]interface{})
 	if !ok || len(exchanges) == 0 {
@@ -660,7 +660,7 @@ func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 			},
 		}
 	}
-	
+
 	// Check for Binance specifically (for scalping mode)
 	hasBinance := false
 	for _, ex := range exchanges {
@@ -671,7 +671,7 @@ func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 			}
 		}
 	}
-	
+
 	if hasBinance {
 		return &CheckResult{
 			Status:    "healthy",
@@ -683,7 +683,7 @@ func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 			},
 		}
 	}
-	
+
 	return &CheckResult{
 		Status:    "healthy",
 		Message:   fmt.Sprintf("%d exchanges configured", len(exchanges)),
@@ -697,11 +697,11 @@ func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 
 func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckResult {
 	start := time.Now()
-	
+
 	// Check for exchange API keys in database
 	db, ok := c.Get("database")
 	latency := time.Since(start).Milliseconds()
-	
+
 	if !ok {
 		return &CheckResult{
 			Status:    "warning",
@@ -709,7 +709,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 			LatencyMs: latency,
 		}
 	}
-	
+
 	sqlDB, ok := db.(*database.SQLiteDB)
 	if !ok {
 		return &CheckResult{
@@ -718,13 +718,13 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 			LatencyMs: latency,
 		}
 	}
-	
+
 	// Check for configured exchange API keys
 	var exchangeCount int
 	err := sqlDB.DB.QueryRow(
 		"SELECT COUNT(DISTINCT exchange) FROM exchange_api_keys",
 	).Scan(&exchangeCount)
-	
+
 	if err != nil {
 		return &CheckResult{
 			Status:    "warning",
@@ -732,17 +732,17 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 			LatencyMs: latency,
 		}
 	}
-	
+
 	// Check for Polymarket wallets
 	var polymarketCount int
 	err = sqlDB.DB.QueryRow(
 		"SELECT COUNT(*) FROM wallets WHERE provider = 'polymarket'",
 	).Scan(&polymarketCount)
-	
+
 	if err != nil {
 		polymarketCount = 0
 	}
-	
+
 	// Check config file for Binance API keys as fallback
 	configHasBinance := false
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
@@ -762,14 +762,14 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 			}
 		}
 	}
-	
+
 	// Determine status based on what's configured
 	if exchangeCount > 0 || configHasBinance {
 		mode := "scalping"
 		if exchangeCount >= 2 {
 			mode = "arbitrage"
 		}
-		
+
 		return &CheckResult{
 			Status:    "healthy",
 			Message:   fmt.Sprintf("Exchange API keys configured (%s mode)", mode),
@@ -781,7 +781,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 			},
 		}
 	}
-	
+
 	if polymarketCount > 0 {
 		return &CheckResult{
 			Status:    "healthy",
@@ -793,7 +793,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 			},
 		}
 	}
-	
+
 	// Nothing configured - return warning with helpful message
 	return &CheckResult{
 		Status:    "warning",
