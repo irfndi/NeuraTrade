@@ -107,7 +107,7 @@ func TestIntegratedQuestHandlers_AIDecisionQuest(t *testing.T) {
 	}
 
 	ctx := context.Background()
-// 	err := handlers.handleAIDecisionQuest(ctx, quest)
+	// 	err := handlers.handleAIDecisionQuest(ctx, quest)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, quest.CurrentCount)
