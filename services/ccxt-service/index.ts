@@ -634,7 +634,7 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
     if (api_key || secret) {
       userConfig.apiKeys = userConfig.apiKeys || {};
       userConfig.apiKeys[name] = { apiKey: api_key, secret };
-      
+
       // Persist to config file
       const configPath = join(os.homedir(), ".neuratrade", "config.json");
       const existingConfig = loadUserExchangeConfig();
@@ -1742,21 +1742,22 @@ app.post("/api/admin/exchanges/refresh", adminAuth, async (c) => {
 
     // Re-initialize user-configured exchanges
     const newConfig = loadUserExchangeConfig();
-    const exchangesToInit = newConfig.enabled.length > 0
-      ? newConfig.enabled
-      : [
-          "binance",
-          "bybit",
-          "okx",
-          "kraken",
-          "kucoin",
-          "gateio",
-          "mexc",
-          "bitget",
-          "coinbase",
-          "bingx",
-          "cryptocom",
-        ];
+    const exchangesToInit =
+      newConfig.enabled.length > 0
+        ? newConfig.enabled
+        : [
+            "binance",
+            "bybit",
+            "okx",
+            "kraken",
+            "kucoin",
+            "gateio",
+            "mexc",
+            "bitget",
+            "coinbase",
+            "bingx",
+            "cryptocom",
+          ];
 
     let initializedCount = 0;
     let failedCount = 0;
