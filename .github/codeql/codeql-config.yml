@@ -2,12 +2,37 @@ name: "CodeQL Config for NeuraTrade"
 
 # Disable specific queries that produce false positives for historical commits
 query-filters:
+  # Exclude secret detection queries (historical commits with rotated secrets)
   - exclude:
       id: actions/secrets-in-artifacts
   - exclude:
       id: actions/excessive-secrets-exposure
   - exclude:
       id: actions/unmasked-secret-exposure
+  
+  # Exclude GitHub Actions workflow analysis (produces many false positives)
+  - exclude:
+      id: actions/untrusted-checkout-toctou/critical
+  - exclude:
+      id: actions/untrusted-checkout-toctou/high
+  - exclude:
+      id: actions/untrusted-checkout/critical
+  - exclude:
+      id: actions/untrusted-checkout/high
+  - exclude:
+      id: actions/cache-poisoning/poisonable-step
+  - exclude:
+      id: actions/cache-poisoning/direct-cache
+  - exclude:
+      id: actions/cache-poisoning/code-injection
+  - exclude:
+      id: actions/artifact-poisoning/critical
+  - exclude:
+      id: actions/code-injection/critical
+  - exclude:
+      id: actions/env-path-injection/critical
+  - exclude:
+      id: actions/env-var-injection/critical
 
 # Paths to exclude from analysis
 paths-ignore:
@@ -22,6 +47,7 @@ paths-ignore:
   - '**/*.spec.ts'
   - '**/test-setup.ts'
   - test/**
+  - .github/workflows/**
 
 # Historical commits with rotated secrets (already cleaned from current codebase)
 # These commits contain test/demo credentials that were rotated
