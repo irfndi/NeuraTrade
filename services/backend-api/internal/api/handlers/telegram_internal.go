@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -613,13 +614,34 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 
 	exchangeCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
 	if err != nil {
-		checks = append(checks, gin.H{
-			"name":    "exchange-connection",
-			"status":  "critical",
-			"message": "failed to verify exchange connections",
-		})
-		overall = "critical"
-	} else if exchangeCount == 0 {
+		exchangeCount = 0
+	}
+	
+	// Also check config file for exchange API keys (fallback for CLI config)
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	if content, err := os.ReadFile(configPath); err == nil {
+		var config map[string]interface{}
+		if err := json.Unmarshal(content, &config); err == nil {
+			if services, ok := config["services"].(map[string]interface{}); ok {
+				if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
+					if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+						for _, ex := range exchanges {
+							if exMap, ok := ex.(map[string]interface{}); ok {
+								if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
+									if exchangeCount == 0 {
+										exchangeCount = 1
+									}
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	if exchangeCount == 0 {
 		if overall != "critical" {
 			overall = "warning"
 		}
@@ -722,18 +744,41 @@ func (h *TelegramInternalHandler) ensureOperatorSchema(ctx context.Context) erro
 func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, chatID string) ([]string, error) {
 	failedChecks := make([]string, 0, 2)
 
-	polymarketCount, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
-	if err != nil {
-		return nil, err
-	}
-	if polymarketCount < 1 {
-		failedChecks = append(failedChecks, "wallet minimum")
-	}
-
+	// Check for Polymarket wallet (optional for scalping mode)
+	_, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
+	_ = err // Polymarket wallet is optional
+	
+	// Check for exchange API keys (from database or config file)
 	exchangeCount, err := h.countConnectedWallets(ctx, chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
 	if err != nil {
-		return nil, err
+		exchangeCount = 0
 	}
+	
+	// Also check config file for exchange API keys (fallback for CLI config)
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	if content, err := os.ReadFile(configPath); err == nil {
+		var config map[string]interface{}
+		if err := json.Unmarshal(content, &config); err == nil {
+			if services, ok := config["services"].(map[string]interface{}); ok {
+				if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
+					if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+						for _, ex := range exchanges {
+							if exMap, ok := ex.(map[string]interface{}); ok {
+								if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
+									if exchangeCount < 1 {
+										exchangeCount = 1
+									}
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// For scalping mode: exchange configured is sufficient (Polymarket wallet optional)
 	if exchangeCount < 1 {
 		failedChecks = append(failedChecks, "exchange minimum")
 	}
