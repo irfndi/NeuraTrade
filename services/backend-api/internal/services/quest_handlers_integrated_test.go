@@ -23,6 +23,7 @@ func TestIntegratedQuestHandlers_MarketScanWithTA(t *testing.T) {
 		Type:         QuestTypeRoutine,
 		Status:       QuestStatusActive,
 		CurrentCount: 0,
+		Checkpoint:   make(map[string]interface{}),
 		Metadata:     map[string]string{"chat_id": "test123"},
 	}
 
@@ -51,6 +52,7 @@ func TestIntegratedQuestHandlers_FundingRateScan(t *testing.T) {
 		Type:         QuestTypeRoutine,
 		Status:       QuestStatusActive,
 		CurrentCount: 0,
+		Checkpoint:   make(map[string]interface{}),
 		Metadata:     map[string]string{"chat_id": "test123"},
 	}
 
@@ -78,6 +80,7 @@ func TestIntegratedQuestHandlers_PortfolioHealthWithRisk(t *testing.T) {
 		Type:         QuestTypeRoutine,
 		Status:       QuestStatusActive,
 		CurrentCount: 0,
+		Checkpoint:   make(map[string]interface{}),
 		Metadata:     map[string]string{"chat_id": "test123"},
 	}
 
@@ -161,11 +164,12 @@ func TestQuestEngine_QuestExecutionWithCheckpoint(t *testing.T) {
 	engine.RegisterHandler(QuestTypeRoutine, testHandler)
 
 	quest := &Quest{
-		ID:       "test-quest",
-		Name:     "Test Quest",
-		Type:     QuestTypeRoutine,
-		Status:   QuestStatusActive,
-		Metadata: map[string]string{"chat_id": "test123"},
+		ID:         "test-quest",
+		Name:       "Test Quest",
+		Type:       QuestTypeRoutine,
+		Status:     QuestStatusActive,
+		Checkpoint: make(map[string]interface{}),
+		Metadata:   map[string]string{"chat_id": "test123"},
 	}
 
 	ctx := context.Background()
@@ -217,10 +221,11 @@ func TestQuestEngine_MetadataPropagation(t *testing.T) {
 	engine.RegisterHandler(QuestTypeRoutine, metadataHandler)
 
 	quest := &Quest{
-		ID:     "metadata-quest",
-		Name:   "Metadata Quest",
-		Type:   QuestTypeRoutine,
-		Status: QuestStatusActive,
+		ID:         "metadata-quest",
+		Name:       "Metadata Quest",
+		Type:       QuestTypeRoutine,
+		Status:     QuestStatusActive,
+		Checkpoint: make(map[string]interface{}),
 		Metadata: map[string]string{
 			"chat_id": "test-chat-123",
 			"user":    "test-user",
@@ -285,4 +290,14 @@ func TestHasExchange(t *testing.T) {
 	assert.False(t, hasExchange(exchanges, "kraken"))
 	assert.False(t, hasExchange(exchanges, ""))
 	assert.False(t, hasExchange([]string{}, "binance"))
+}
+
+// hasExchange checks if a specific exchange exists in the list
+func hasExchange(exchanges []string, exchangeName string) bool {
+	for _, ex := range exchanges {
+		if ex == exchangeName {
+			return true
+		}
+	}
+	return false
 }

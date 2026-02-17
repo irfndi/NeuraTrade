@@ -197,11 +197,12 @@ func (m *AutonomousMonitoring) checkAlerts() {
 func (m *AutonomousMonitoring) sendAlert(message string) {
 	log.Printf("🚨 ALERT [%s]: %s", m.chatID, message)
 
-	if m.notificationService != nil {
-		// TODO: Send actual notification
-		// ctx := context.Background()
-		// m.notificationService.SendAlert(ctx, m.chatID, message)
+	if m.notificationService == nil {
+		return
 	}
+	// TODO: Send actual notification
+	// ctx := context.Background()
+	// m.notificationService.SendAlert(ctx, m.chatID, message)
 }
 
 // EnableAlerts enables alert notifications
