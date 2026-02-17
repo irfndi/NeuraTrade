@@ -267,11 +267,64 @@ func main() {
 						Name:   "portfolio",
 						Usage:  "View portfolio status",
 						Action: viewPortfolio,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "chat-id",
+								Usage:    "Telegram chat ID",
+								Required: true,
+							},
+						},
 					},
 					{
 						Name:   "balance",
 						Usage:  "Check account balance",
 						Action: checkBalance,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "chat-id",
+								Usage:    "Telegram chat ID",
+								Required: true,
+							},
+						},
+					},
+				},
+			},
+			{
+				Name:    "config",
+				Usage:   "Manage NeuraTrade configuration",
+				Subcommands: []*cli.Command{
+					{
+						Name:   "init",
+						Usage:  "Initialize configuration with defaults",
+						Action: configInit,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:  "binance-key",
+								Usage: "Binance API key",
+							},
+							&cli.StringFlag{
+								Name:  "binance-secret",
+								Usage: "Binance API secret",
+							},
+							&cli.StringFlag{
+								Name:  "telegram-token",
+								Usage: "Telegram bot token",
+							},
+							&cli.StringFlag{
+								Name:  "ai-key",
+								Usage: "AI provider API key",
+							},
+						},
+					},
+					{
+						Name:   "status",
+						Usage:  "Show current configuration status",
+						Action: configStatus,
+					},
+					{
+						Name:   "show",
+						Usage:  "Show full configuration (mask secrets)",
+						Action: configShow,
 					},
 				},
 			},
@@ -1051,7 +1104,7 @@ type Asset struct {
 
 // GetPortfolio retrieves portfolio data from the API
 func (c *APIClient) GetPortfolio() (*PortfolioResponse, error) {
-	respBody, err := c.makeRequest("GET", "/api/v1/trading/portfolio", nil)
+	respBody, err := c.makeRequest("GET", "/api/v1/telegram/internal/portfolio", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1074,7 +1127,7 @@ type BalanceResponse struct {
 
 // GetBalance retrieves account balance from the API
 func (c *APIClient) GetBalance() (*BalanceResponse, error) {
-	respBody, err := c.makeRequest("GET", "/api/v1/trading/balance", nil)
+	respBody, err := c.makeRequest("GET", "/api/v1/telegram/internal/wallets", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1167,17 +1220,27 @@ func viewPortfolio(cCtx *cli.Context) error {
 	fmt.Println("Portfolio Overview")
 	fmt.Println("==================")
 
+	chatID := cCtx.String("chat-id")
+	if chatID == "" {
+		return cli.Exit("Error: chat-id is required", 1)
+	}
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	response, err := client.GetPortfolio()
+	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/portfolio?chat_id=%s", chatID), nil)
 	if err != nil {
 		fmt.Printf("Error: Could not reach API: %v\n", err)
 		fmt.Println("\nMake sure the NeuraTrade backend is running:")
 		fmt.Println("  neuratrade gateway start")
 		return err
+	}
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	prettyPrint(response)
@@ -1214,4 +1277,287 @@ func prettyPrint(data interface{}) {
 		return
 	}
 	fmt.Println(string(prettyJSON))
+}
+
+// configInit initializes the configuration file with defaults
+func configInit(cCtx *cli.Context) error {
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	
+	// Check if config already exists
+	if _, err := os.Stat(configPath); err == nil {
+		content, _ := os.ReadFile(configPath)
+		if string(content) != "{}" && len(content) > 5 {
+			fmt.Printf("Configuration file already exists: %s\n", configPath)
+			fmt.Println("Use 'neuratrade config show' to view current configuration.")
+			fmt.Println("Use 'neuratrade config init --force' to overwrite.")
+			return nil
+		}
+	}
+	
+	// Get flag values
+	binanceKey := cCtx.String("binance-key")
+	binanceSecret := cCtx.String("binance-secret")
+	telegramToken := cCtx.String("telegram-token")
+	aiKey := cCtx.String("ai-key")
+	
+	// Create default config
+	config := map[string]interface{}{
+		"version": "1.0.0",
+		"server": map[string]interface{}{
+			"host":        "0.0.0.0",
+			"port":        8080,
+			"environment": "development",
+		},
+		"database": map[string]interface{}{
+			"driver":      "sqlite",
+			"path":        os.ExpandEnv("$HOME/.neuratrade/data/neuratrade.db"),
+		},
+		"redis": map[string]interface{}{
+			"host": "localhost",
+			"port": 6379,
+			"url":  "redis://localhost:6379",
+		},
+		"services": map[string]interface{}{
+			"ccxt": map[string]interface{}{
+				"url":          "http://localhost:3001",
+				"grpc_address": "localhost:50051",
+				"exchanges": map[string]interface{}{
+					"binance": map[string]interface{}{
+						"enabled":    true,
+						"api_key":    binanceKey,
+						"api_secret": binanceSecret,
+						"testnet":    false,
+					},
+				},
+			},
+			"telegram": map[string]interface{}{
+				"enabled":          true,
+				"bot_token":        telegramToken,
+				"service_url":      "http://localhost:3002",
+				"grpc_address":     "localhost:50052",
+				"use_polling":      true,
+				"external_service": true,
+				"api_base_url":     "http://localhost:8080",
+			},
+		},
+		"ai": map[string]interface{}{
+			"provider":     "minimax",
+			"api_key":      aiKey,
+			"base_url":     "https://api.minimax.chat/v1",
+			"daily_budget": "10.00",
+		},
+		"security": map[string]interface{}{
+			"jwt_secret":    "change-me-in-production-use-random-32-chars",
+			"admin_api_key": generateRandomKey(32),
+		},
+		"features": map[string]interface{}{
+			"external_connections_enabled": true,
+			"telegram_bot":                 true,
+			"funding_rate_collection":      true,
+			"arbitrage_detection":          true,
+			"signal_generation":            true,
+			"full_mode":                    true,
+			"run_migrations":               true,
+			"enable_binance":               binanceKey != "",
+			"enable_minimax":               aiKey != "",
+		},
+		"logging": map[string]interface{}{
+			"level":       "info",
+			"environment": "development",
+		},
+	}
+	
+	// Ensure directory exists
+	configDir := os.ExpandEnv("$HOME/.neuratrade")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+	
+	// Write config
+	configData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	
+	if err := os.WriteFile(configPath, configData, 0600); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	
+	fmt.Println("✓ Configuration initialized successfully!")
+	fmt.Printf("  Config file: %s\n", configPath)
+	fmt.Println("")
+	fmt.Println("Next steps:")
+	fmt.Println("  1. Review configuration: neuratrade config show")
+	fmt.Println("  2. Start services: neuratrade gateway start")
+	fmt.Println("  3. Test Telegram bot: Send /start to your bot")
+	fmt.Println("")
+	
+	if binanceKey == "" {
+		fmt.Println("NOTE: Binance API keys not provided.")
+		fmt.Println("      Use /connect_exchange binance via Telegram to add them.")
+	}
+	if telegramToken == "" {
+		fmt.Println("NOTE: Telegram bot token not provided.")
+		fmt.Println("      Get one from @BotFather and run: neuratrade config init --telegram-token <token>")
+	}
+	if aiKey == "" {
+		fmt.Println("NOTE: AI API key not provided.")
+		fmt.Println("      Run: neuratrade config init --ai-key <key>")
+	}
+	
+	return nil
+}
+
+// configStatus shows the configuration status
+func configStatus(cCtx *cli.Context) error {
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	
+	fmt.Println("NeuraTrade Configuration Status")
+	fmt.Println("================================")
+	
+	// Check config file
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		fmt.Println("✗ Configuration file not found")
+		fmt.Printf("  Run: neuratrade config init\n")
+		return nil
+	}
+	
+	fmt.Println("✓ Configuration file exists")
+	
+	// Read and parse config
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		fmt.Printf("✗ Cannot read config: %v\n", err)
+		return err
+	}
+	
+	if string(content) == "{}" || len(content) < 5 {
+		fmt.Println("✗ Configuration file is empty")
+		fmt.Printf("  Run: neuratrade config init\n")
+		return nil
+	}
+	
+	fmt.Println("✓ Configuration file has content")
+	
+	var config map[string]interface{}
+	if err := json.Unmarshal(content, &config); err != nil {
+		fmt.Printf("✗ Invalid JSON: %v\n", err)
+		return err
+	}
+	
+	// Check sections
+	checkSection := func(path string, required bool) bool {
+		parts := strings.Split(path, ".")
+		current := config
+		for _, part := range parts {
+			if v, ok := current[part]; ok {
+				if m, ok := v.(map[string]interface{}); ok {
+					current = m
+				} else {
+					return required
+				}
+			} else {
+				return false
+			}
+		}
+		return true
+	}
+	
+	fmt.Println("")
+	fmt.Println("Configuration Sections:")
+	
+	if checkSection("services.ccxt", true) {
+		fmt.Println("  ✓ CCXT service configured")
+	} else {
+		fmt.Println("  ✗ CCXT service missing")
+	}
+	
+	if checkSection("services.telegram", true) {
+		fmt.Println("  ✓ Telegram service configured")
+	} else {
+		fmt.Println("  ✗ Telegram service missing")
+	}
+	
+	if checkSection("ai", true) {
+		fmt.Println("  ✓ AI service configured")
+	} else {
+		fmt.Println("  ✗ AI service missing")
+	}
+	
+	if checkSection("security", true) {
+		fmt.Println("  ✓ Security configured")
+	} else {
+		fmt.Println("  ✗ Security missing")
+	}
+	
+	// Check Binance keys
+	if checkSection("services.ccxt.exchanges.binance.api_key", false) {
+		fmt.Println("  ✓ Binance API keys configured")
+	} else {
+		fmt.Println("  ⚠ Binance API keys not configured (use /connect_exchange binance)")
+	}
+	
+	fmt.Println("")
+	fmt.Println("Use 'neuratrade config show' to view full configuration.")
+	
+	return nil
+}
+
+// configShow displays the full configuration with masked secrets
+func configShow(cCtx *cli.Context) error {
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("Configuration file not found.")
+			fmt.Println("Run: neuratrade config init")
+			return nil
+		}
+		return err
+	}
+	
+	if string(content) == "{}" || len(content) < 5 {
+		fmt.Println("Configuration file is empty.")
+		fmt.Println("Run: neuratrade config init")
+		return nil
+	}
+	
+	var config map[string]interface{}
+	if err := json.Unmarshal(content, &config); err != nil {
+		return err
+	}
+	
+	// Mask sensitive values
+	maskSecretsInConfig(config)
+	
+	prettyPrint(config)
+	return nil
+}
+
+// maskSecretsInConfig masks sensitive values in a config map
+func maskSecretsInConfig(m map[string]interface{}) {
+	secretKeys := []string{"api_key", "api_secret", "secret", "token", "password", "jwt_secret", "admin_api_key"}
+	for key, value := range m {
+		keyLower := strings.ToLower(key)
+		for _, secret := range secretKeys {
+			if strings.Contains(keyLower, secret) {
+				if str, ok := value.(string); ok && str != "" {
+					m[key] = "***REDACTED***"
+				}
+			}
+		}
+		if nested, ok := value.(map[string]interface{}); ok {
+			maskSecretsInConfig(nested)
+		}
+	}
+}
+
+// generateRandomKey generates a random hex string of specified length
+func generateRandomKey(length int) string {
+	bytes := make([]byte, length/2+1)
+	if _, err := rand.Read(bytes); err != nil {
+		return "change-me-in-production"
+	}
+	return fmt.Sprintf("%x", bytes)[:length]
 }
