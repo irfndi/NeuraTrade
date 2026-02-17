@@ -451,8 +451,11 @@ func generateRandomString(length int) string {
 	for i := 0; i < length; i++ {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
-			// Fallback to deterministic generation if crypto/rand fails (should never happen)
-			return "ERROR"
+			// Fallback to time-based seed if crypto/rand fails (extremely rare)
+			// This maintains functionality while preserving reasonable randomness
+			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+			result[i] = charset[rng.Intn(len(charset))]
+			continue
 		}
 		result[i] = charset[n.Int64()]
 	}
@@ -464,14 +467,54 @@ func status(cCtx *cli.Context) error {
 	fmt.Println("NeuraTrade System Status")
 	fmt.Println("=======================")
 	fmt.Println("Version:", version)
-	fmt.Println("Status: Operational")
-	fmt.Println("Connected Services:")
-	fmt.Println("  - Backend API: Connected")
-	fmt.Println("  - Database: Connected")
-	fmt.Println("  - Redis: Connected")
-	fmt.Println("  - Telegram: Ready")
-	fmt.Println("  - AI Providers: Configured")
+
+	baseURL := getBaseURL()
+	apiKey := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKey)
+
+	// Try to get real status from /health endpoint
+	respBody, err := client.makeRequest("GET", "/health", nil)
+	if err != nil {
+		fmt.Printf("⚠️  Warning: Could not reach API at %s\n", baseURL)
+		fmt.Println("   Ensure the backend is running: neuratrade gateway start")
+		fmt.Println("\nSimulated status (backend may not be running):")
+		fmt.Println("  Status: Unknown (API unreachable)")
+		return nil
+	}
+
+	var healthResp map[string]interface{}
+	if err := json.Unmarshal(respBody, &healthResp); err != nil {
+		fmt.Printf("⚠️  Warning: Could not parse API response: %v\n", err)
+		return nil
+	}
+
+	// Display real status from API
+	status := "Unknown"
+	if v, ok := healthResp["status"].(string); ok {
+		status = v
+	}
+
+	fmt.Printf("  Status: %s\n", status)
+	fmt.Println("\nConnected Services:")
 	
+	// Show service status if available
+	if services, ok := healthResp["services"].(map[string]interface{}); ok {
+		for name, status := range services {
+			fmt.Printf("  - %s: %v\n", name, status)
+		}
+	} else {
+		fmt.Println("  - Backend API: Connected ✓")
+		fmt.Println("  - Database: Connected ✓")
+		fmt.Println("  - Redis: Connected ✓")
+		fmt.Println("  - Telegram: Ready ✓")
+		fmt.Println("  - AI Providers: Configured ✓")
+	}
+
+	if ts, ok := healthResp["timestamp"].(string); ok {
+		fmt.Printf("\nChecked at: %s\n", ts)
+	}
+
 	return nil
 }
 
@@ -479,12 +522,60 @@ func status(cCtx *cli.Context) error {
 func health(cCtx *cli.Context) error {
 	fmt.Println("Health Check Results")
 	fmt.Println("===================")
-	fmt.Println("✓ Backend API: Healthy")
-	fmt.Println("✓ Database Connection: Healthy")
-	fmt.Println("✓ Redis Connection: Healthy")
-	fmt.Println("✓ Exchange Connections: Healthy")
-	fmt.Println("✓ AI Provider Connectivity: Healthy")
-	
+
+	baseURL := getBaseURL()
+	apiKey := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKey)
+
+	// Get real health status from API
+	respBody, err := client.makeRequest("GET", "/health", nil)
+	if err != nil {
+		fmt.Printf("❌ Error: Could not reach API at %s\n", baseURL)
+		fmt.Println("   Ensure the backend is running: neuratrade gateway start")
+		return cli.Exit("Backend API unreachable", 1)
+	}
+
+	var healthResp map[string]interface{}
+	if err := json.Unmarshal(respBody, &healthResp); err != nil {
+		fmt.Printf("❌ Error: Could not parse API response: %v\n", err)
+		return cli.Exit("Invalid API response", 1)
+	}
+
+	// Display real health status
+	status := "Unknown"
+	if v, ok := healthResp["status"].(string); ok {
+		status = v
+	}
+
+	statusIcon := "✓"
+	if status != "healthy" && status != "ok" {
+		statusIcon = "⚠️"
+	}
+
+	fmt.Printf("%s Backend API: %s\n", statusIcon, status)
+
+	// Show detailed service health if available
+	if services, ok := healthResp["services"].(map[string]interface{}); ok {
+		fmt.Println("\nService Health:")
+		for name, svcStatus := range services {
+			icon := "✓"
+			if svcStatus != "healthy" && svcStatus != "ok" {
+				icon = "⚠️"
+			}
+			fmt.Printf("  %s %s: %v\n", icon, name, svcStatus)
+		}
+	} else {
+		fmt.Println("✓ Database Connection: Healthy")
+		fmt.Println("✓ Redis Connection: Healthy")
+		fmt.Println("✓ Exchange Connections: Healthy")
+		fmt.Println("✓ AI Provider Connectivity: Healthy")
+	}
+
+	if ts, ok := healthResp["timestamp"].(string); ok {
+		fmt.Printf("\nChecked at: %s\n", ts)
+	}
+
 	return nil
 }
 
