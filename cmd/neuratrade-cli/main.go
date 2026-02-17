@@ -1309,30 +1309,38 @@ func listExchanges(cCtx *cli.Context) error {
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
 		fmt.Println("\nFalling back to local configuration...")
-		
+
 		// Fallback: read from config file
-		configPath := path.Join(os.Getenv("HOME"), ".neuratrade", "config.json")
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("failed to get home directory: %w", err)
+		}
+		configPath := path.Join(homeDir, ".neuratrade", "config.json")
 		if _, err := os.Stat(configPath); err == nil {
 			data, err := os.ReadFile(configPath)
 			if err == nil {
 				var config map[string]interface{}
 				if err := json.Unmarshal(data, &config); err == nil {
-					if exchanges, ok := config["exchanges"].([]interface{}); ok {
-						fmt.Printf("\nFound %d configured exchanges:\n", len(exchanges))
-						for _, ex := range exchanges {
-							if exMap, ok := ex.(map[string]interface{}); ok {
-								if name, ok := exMap["name"].(string); ok {
-									hasAuth := exMap["api_key"] != nil && exMap["api_key"] != ""
+					if exchangesObj, ok := config["exchanges"].(map[string]interface{}); ok {
+						if enabled, ok := exchangesObj["enabled"].([]interface{}); ok {
+							apiKeys := make(map[string]interface{})
+							if apiKeysObj, ok := exchangesObj["api_keys"].(map[string]interface{}); ok {
+								apiKeys = apiKeysObj
+							}
+							fmt.Printf("\nFound %d configured exchanges:\n", len(enabled))
+							for _, ex := range enabled {
+								if name, ok := ex.(string); ok {
+									hasAuth := apiKeys[name] != nil
 									fmt.Printf("  - %s%s\n", name, map[bool]string{true: " 🔑", false: ""}[hasAuth])
 								}
 							}
+							return nil
 						}
-						return nil
 					}
 				}
 			}
 		}
-		
+
 		fmt.Println("No exchanges configured.")
 		fmt.Println("\nAdd an exchange with:")
 		fmt.Println("  neuratrade exchanges add --name binance")
@@ -1401,11 +1409,15 @@ func addExchange(cCtx *cli.Context) error {
 		fmt.Println("\nFalling back to local configuration...")
 		
 		// Fallback: update config file directly
-		configDir := path.Join(os.Getenv("HOME"), ".neuratrade")
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("failed to get home directory: %w", err)
+		}
+		configDir := path.Join(homeDir, ".neuratrade")
 		configPath := path.Join(configDir, "config.json")
 		
 		// Create directory if it doesn't exist
-		if err := os.MkdirAll(configDir, 0755); err != nil {
+		if err := os.MkdirAll(configDir, 0700); err != nil {
 			return fmt.Errorf("failed to create config directory: %w", err)
 		}
 		

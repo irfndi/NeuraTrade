@@ -390,8 +390,18 @@ function initializeExchange(exchangeId: string): boolean {
     // Get configuration for this exchange
     const config = exchangeConfigs[exchangeId] || exchangeConfigs.default;
 
+    // Merge API credentials if available
+    const credentials = userConfig.apiKeys?.[exchangeId];
+    const configWithAuth = credentials?.apiKey
+      ? {
+          ...config,
+          apiKey: credentials.apiKey,
+          secret: credentials.secret,
+        }
+      : config;
+
     // Initialize the exchange
-    const exchange = new ExchangeClass(config);
+    const exchange = new ExchangeClass(configWithAuth);
 
     // Basic validation - check if exchange has required methods
     if (!exchange.fetchTicker) {
@@ -412,7 +422,7 @@ function initializeExchange(exchangeId: string): boolean {
 
     exchanges[exchangeId] = exchange;
     console.log(
-      `✓ Successfully initialized exchange: ${exchangeId} (${exchange.name})`,
+      `✓ Successfully initialized exchange: ${exchangeId} (${exchange.name})${credentials?.apiKey ? " with API credentials" : ""}`,
     );
     return true;
   } catch (error) {
@@ -570,7 +580,7 @@ app.get("/api/v1/exchanges", (c) => {
       name: id,
       enabled: true,
       has_auth: !!userConfig.apiKeys?.[id]?.apiKey,
-      added_at: new Date().toISOString(),
+      added_at: new Date().toISOString(), // TODO: persist and retrieve from config
     }));
 
     const response: ExchangesListResponse = {
@@ -636,7 +646,15 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
       userConfig.apiKeys[name] = { apiKey: api_key, secret };
 
       // Persist to config file
-      const configPath = join(os.homedir(), ".neuratrade", "config.json");
+      const configDir = join(os.homedir(), ".neuratrade");
+      const configPath = join(configDir, "config.json");
+
+      // Ensure directory exists with secure permissions
+      if (!existsSync(configDir)) {
+        const { mkdirSync } = require("fs");
+        mkdirSync(configDir, { recursive: true, mode: 0o700 });
+      }
+
       const existingConfig = loadUserExchangeConfig();
       const newConfig = {
         ...existingConfig,
@@ -648,7 +666,7 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
           },
         },
       };
-      writeFileSync(configPath, JSON.stringify(newConfig, null, 2), "utf-8");
+      writeFileSync(configPath, JSON.stringify(newConfig, null, 2), { mode: 0o600 });
     }
 
     return c.json({
@@ -700,7 +718,15 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
     }
 
     // Update config file
-    const configPath = join(os.homedir(), ".neuratrade", "config.json");
+    const configDir = join(os.homedir(), ".neuratrade");
+    const configPath = join(configDir, "config.json");
+
+    // Ensure directory exists with secure permissions
+    if (!existsSync(configDir)) {
+      const { mkdirSync } = require("fs");
+      mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    }
+
     const existingConfig = loadUserExchangeConfig();
     const newConfig = {
       ...existingConfig,
@@ -715,7 +741,7 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
         ),
       },
     };
-    writeFileSync(configPath, JSON.stringify(newConfig, null, 2), "utf-8");
+    writeFileSync(configPath, JSON.stringify(newConfig, null, 2), { mode: 0o600 });
 
     return c.json({
       success: true,
@@ -733,18 +759,22 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
 // Reload exchanges configuration
 app.post("/api/v1/exchanges/reload", adminAuth, async (c) => {
   try {
-    // Reload user config
+    // Reload user config and update module-level variable
     const newConfig = loadUserExchangeConfig();
+    userConfig.enabled = newConfig.enabled;
+    userConfig.apiKeys = newConfig.apiKeys;
+    userConfig.devMode = newConfig.devMode;
+    userConfig.marketData = newConfig.marketData;
 
     // Disable exchanges not in new config
     for (const exchangeId of Object.keys(exchanges)) {
-      if (!newConfig.enabled.includes(exchangeId)) {
+      if (!userConfig.enabled.includes(exchangeId)) {
         delete exchanges[exchangeId];
       }
     }
 
     // Enable new exchanges
-    for (const exchangeId of newConfig.enabled) {
+    for (const exchangeId of userConfig.enabled) {
       if (!exchanges[exchangeId]) {
         initializeExchange(exchangeId);
       }
