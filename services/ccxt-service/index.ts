@@ -48,6 +48,7 @@ import type {
   GetOpenOrdersResponse,
   GetClosedOrdersResponse,
   GetOrderTradesResponse,
+  ExchangesListResponse,
 } from "./types";
 
 import { getEnvWithNeuratradeFallback } from "./config";
@@ -342,11 +343,12 @@ function loadUserExchangeConfig() {
 
 const userConfig = loadUserExchangeConfig();
 
-// Priority exchanges - use config or fallback to defaults
-const priorityExchanges =
+// Get exchanges to load - ONLY user-configured ones (no automatic loading of all CCXT)
+const exchangesToLoad =
   userConfig.enabled.length > 0
     ? userConfig.enabled
     : [
+        // Default set for first-time users (no config yet)
         "binance",
         "bybit",
         "okx",
@@ -388,8 +390,18 @@ function initializeExchange(exchangeId: string): boolean {
     // Get configuration for this exchange
     const config = exchangeConfigs[exchangeId] || exchangeConfigs.default;
 
+    // Merge API credentials if available
+    const credentials = userConfig.apiKeys?.[exchangeId];
+    const configWithAuth = credentials?.apiKey
+      ? {
+          ...config,
+          apiKey: credentials.apiKey,
+          secret: credentials.secret,
+        }
+      : config;
+
     // Initialize the exchange
-    const exchange = new ExchangeClass(config);
+    const exchange = new ExchangeClass(configWithAuth);
 
     // Basic validation - check if exchange has required methods
     if (!exchange.fetchTicker) {
@@ -410,7 +422,7 @@ function initializeExchange(exchangeId: string): boolean {
 
     exchanges[exchangeId] = exchange;
     console.log(
-      `✓ Successfully initialized exchange: ${exchangeId} (${exchange.name})`,
+      `✓ Successfully initialized exchange: ${exchangeId} (${exchange.name})${credentials?.apiKey ? " with API credentials" : ""}`,
     );
     return true;
   } catch (error) {
@@ -422,19 +434,23 @@ function initializeExchange(exchangeId: string): boolean {
   }
 }
 
-// Get all available exchanges from CCXT
-const allExchanges = ccxt.exchanges; // ccxt.exchanges is an array of exchange names
+// Get all available exchanges from CCXT (for reference only)
+const allExchanges = ccxt.exchanges;
 console.log(`Total CCXT exchanges available: ${allExchanges.length}`);
 console.log(
   `Blacklisted exchanges: ${Array.from(blacklistedExchanges).join(", ")}`,
 );
+console.log(
+  `User-configured exchanges to load: ${exchangesToLoad.length}`,
+  exchangesToLoad.length > 0 ? `(${exchangesToLoad.join(", ")})` : "(none)",
+);
 
-// Initialize priority exchanges first
+// Initialize ONLY user-configured exchanges (efficient, non-bloated approach)
 let initializedCount = 0;
 let failedCount = 0;
 const failedExchanges: string[] = [];
 
-for (const exchangeId of priorityExchanges) {
+for (const exchangeId of exchangesToLoad) {
   if (initializeExchange(exchangeId)) {
     initializedCount++;
   } else {
@@ -444,30 +460,20 @@ for (const exchangeId of priorityExchanges) {
 }
 
 console.log(
-  `Priority exchanges initialized: ${initializedCount}/${priorityExchanges.length}`,
+  `Exchange initialization complete: ${initializedCount}/${exchangesToLoad.length}`,
 );
 
-// Initialize remaining exchanges
-for (const exchangeId of allExchanges) {
-  if (!exchanges[exchangeId] && !priorityExchanges.includes(exchangeId)) {
-    if (initializeExchange(exchangeId)) {
-      initializedCount++;
-    } else {
-      failedCount++;
-      failedExchanges.push(exchangeId);
-    }
-  }
+if (failedCount > 0) {
+  console.warn(
+    `Failed to initialize ${failedCount} exchanges:`,
+    failedExchanges.join(", "),
+  );
 }
 
-console.log(
-  `Successfully initialized ${Object.keys(exchanges).length} out of ${allExchanges.length} total exchanges`,
-);
-console.log(
-  `Failed to initialize ${failedCount} exchanges:`,
-  failedExchanges.slice(0, 10).join(", "),
-  failedCount > 10 ? `... and ${failedCount - 10} more` : "",
-);
 console.log(`Active exchanges:`, Object.keys(exchanges).sort().join(", "));
+console.log(
+  `💡 Tip: Use 'neuratrade exchanges add --name <exchange>' to add more exchanges dynamically`,
+);
 
 // Market data cache with cleanup
 interface MarketDataCache {
@@ -558,6 +564,230 @@ app.get("/api/exchanges", (c) => {
 
     const response: ExchangesResponse = { exchanges: exchangeList };
     return c.json(response);
+  } catch (error) {
+    const errorResponse: ErrorResponse = {
+      error: error instanceof Error ? error.message : "Unknown error",
+      timestamp: new Date().toISOString(),
+    };
+    return c.json(errorResponse, 500);
+  }
+});
+
+// Get configured exchanges (user-configured only)
+app.get("/api/v1/exchanges", (c) => {
+  try {
+    const configuredExchanges = Object.keys(exchanges).map((id) => ({
+      name: id,
+      enabled: true,
+      has_auth: !!userConfig.apiKeys?.[id]?.apiKey,
+      added_at: new Date().toISOString(), // TODO: persist and retrieve from config
+    }));
+
+    const response: ExchangesListResponse = {
+      exchanges: configuredExchanges,
+      count: configuredExchanges.length,
+    };
+    return c.json(response);
+  } catch (error) {
+    const errorResponse: ErrorResponse = {
+      error: error instanceof Error ? error.message : "Unknown error",
+      timestamp: new Date().toISOString(),
+    };
+    return c.json(errorResponse, 500);
+  }
+});
+
+// Add a new exchange
+app.post("/api/v1/exchanges", adminAuth, async (c) => {
+  try {
+    const body = await c.req.json();
+    const { name, api_key, secret } = body as {
+      name: string;
+      api_key?: string;
+      secret?: string;
+    };
+
+    if (!name) {
+      return c.json(
+        {
+          success: false,
+          message: "Exchange name is required",
+        },
+        400,
+      );
+    }
+
+    // Check if exchange already exists
+    if (exchanges[name]) {
+      return c.json(
+        {
+          success: false,
+          message: `Exchange ${name} is already configured`,
+        },
+        400,
+      );
+    }
+
+    // Try to initialize the exchange
+    const success = initializeExchange(name);
+    if (!success) {
+      return c.json(
+        {
+          success: false,
+          message: `Failed to initialize exchange ${name}. It may be unsupported or temporarily unavailable.`,
+        },
+        400,
+      );
+    }
+
+    // Save API keys if provided
+    if (api_key || secret) {
+      userConfig.apiKeys = userConfig.apiKeys || {};
+      userConfig.apiKeys[name] = { apiKey: api_key, secret };
+
+      // Persist to config file
+      const configDir = join(os.homedir(), ".neuratrade");
+      const configPath = join(configDir, "config.json");
+
+      // Ensure directory exists with secure permissions
+      if (!existsSync(configDir)) {
+        const { mkdirSync } = require("fs");
+        mkdirSync(configDir, { recursive: true, mode: 0o700 });
+      }
+
+      const existingConfig = loadUserExchangeConfig();
+      const newConfig = {
+        ...existingConfig,
+        exchanges: {
+          enabled: [...new Set([...(existingConfig.enabled || []), name])],
+          api_keys: {
+            ...existingConfig.apiKeys,
+            [name]: { apiKey: api_key, secret },
+          },
+        },
+      };
+      writeFileSync(configPath, JSON.stringify(newConfig, null, 2), {
+        mode: 0o600,
+      });
+    }
+
+    return c.json({
+      success: true,
+      message: `Exchange ${name} added successfully. Market data will be available shortly.`,
+      name,
+    });
+  } catch (error) {
+    const errorResponse: ErrorResponse = {
+      error: error instanceof Error ? error.message : "Unknown error",
+      timestamp: new Date().toISOString(),
+    };
+    return c.json(errorResponse, 500);
+  }
+});
+
+// Remove an exchange
+app.delete("/api/v1/exchanges", adminAuth, async (c) => {
+  try {
+    const body = await c.req.json();
+    const { name } = body as { name: string };
+
+    if (!name) {
+      return c.json(
+        {
+          success: false,
+          message: "Exchange name is required",
+        },
+        400,
+      );
+    }
+
+    if (!exchanges[name]) {
+      return c.json(
+        {
+          success: false,
+          message: `Exchange ${name} is not configured`,
+        },
+        404,
+      );
+    }
+
+    // Remove from active exchanges
+    delete exchanges[name];
+
+    // Remove API keys if present
+    if (userConfig.apiKeys?.[name]) {
+      delete userConfig.apiKeys[name];
+    }
+
+    // Update config file
+    const configDir = join(os.homedir(), ".neuratrade");
+    const configPath = join(configDir, "config.json");
+
+    // Ensure directory exists with secure permissions
+    if (!existsSync(configDir)) {
+      const { mkdirSync } = require("fs");
+      mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    }
+
+    const existingConfig = loadUserExchangeConfig();
+    const newConfig = {
+      ...existingConfig,
+      exchanges: {
+        enabled: (existingConfig.enabled || []).filter(
+          (e: string) => e !== name,
+        ),
+        api_keys: Object.fromEntries(
+          Object.entries(existingConfig.apiKeys || {}).filter(
+            ([k]) => k !== name,
+          ),
+        ),
+      },
+    };
+    writeFileSync(configPath, JSON.stringify(newConfig, null, 2), {
+      mode: 0o600,
+    });
+
+    return c.json({
+      success: true,
+      message: `Exchange ${name} removed successfully`,
+    });
+  } catch (error) {
+    const errorResponse: ErrorResponse = {
+      error: error instanceof Error ? error.message : "Unknown error",
+      timestamp: new Date().toISOString(),
+    };
+    return c.json(errorResponse, 500);
+  }
+});
+
+// Reload exchanges configuration
+app.post("/api/v1/exchanges/reload", adminAuth, async (c) => {
+  try {
+    // Reload user config and update module-level variable
+    const newConfig = loadUserExchangeConfig();
+    userConfig.enabled = newConfig.enabled;
+    userConfig.apiKeys = newConfig.apiKeys;
+    userConfig.devMode = newConfig.devMode;
+    userConfig.marketData = newConfig.marketData;
+
+    // Disable exchanges not in new config
+    for (const exchangeId of Object.keys(exchanges)) {
+      if (!userConfig.enabled.includes(exchangeId)) {
+        delete exchanges[exchangeId];
+      }
+    }
+
+    // Enable new exchanges
+    for (const exchangeId of userConfig.enabled) {
+      if (!exchanges[exchangeId]) {
+        initializeExchange(exchangeId);
+      }
+    }
+
+    return c.json({
+      success: true,
+      message: `Exchange configuration reloaded. ${Object.keys(exchanges).length} exchanges active.`,
+    });
   } catch (error) {
     const errorResponse: ErrorResponse = {
       error: error instanceof Error ? error.message : "Unknown error",
@@ -1538,31 +1768,54 @@ app.get("/api/admin/exchanges/config", adminAuth, async (c) => {
   });
 });
 
-// Refresh exchanges (re-initialize all non-blacklisted exchanges)
+// Refresh exchanges (re-initialize user-configured exchanges)
 app.post("/api/admin/exchanges/refresh", adminAuth, async (c) => {
   try {
     // Clear current exchanges
     Object.keys(exchanges).forEach((key) => delete exchanges[key]);
 
-    // Re-initialize priority exchanges first
+    // Re-initialize user-configured exchanges
+    const newConfig = loadUserExchangeConfig();
+    const exchangesToInit =
+      newConfig.enabled.length > 0
+        ? newConfig.enabled
+        : [
+            "binance",
+            "bybit",
+            "okx",
+            "kraken",
+            "kucoin",
+            "gateio",
+            "mexc",
+            "bitget",
+            "coinbase",
+            "bingx",
+            "cryptocom",
+          ];
+
     let initializedCount = 0;
-    for (const exchangeId of priorityExchanges) {
+    let failedCount = 0;
+    const failedExchanges: string[] = [];
+
+    for (const exchangeId of exchangesToInit) {
       if (initializeExchange(exchangeId)) {
         initializedCount++;
+      } else {
+        failedCount++;
+        failedExchanges.push(exchangeId);
       }
     }
 
-    // Re-initialize remaining exchanges
-    const allExchanges = ccxt.exchanges;
-    for (const exchangeId of allExchanges) {
-      if (!exchanges[exchangeId] && !priorityExchanges.includes(exchangeId)) {
-        if (initializeExchange(exchangeId)) {
-          initializedCount++;
-        }
-      }
-    }
+    console.log(
+      `Refreshed and initialized ${initializedCount}/${exchangesToInit.length} exchanges`,
+    );
 
-    console.log(`Refreshed and initialized ${initializedCount} exchanges`);
+    if (failedCount > 0) {
+      console.warn(
+        `Failed to initialize ${failedCount} exchanges:`,
+        failedExchanges.join(", "),
+      );
+    }
 
     return c.json({
       message: "Exchanges refreshed successfully",
