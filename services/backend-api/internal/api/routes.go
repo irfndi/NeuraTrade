@@ -178,6 +178,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	)
 
 	questEngine := services.NewQuestEngineWithNotification(services.NewInMemoryQuestStore(), nil, notificationService)
+	questEngine.Start() // Start the quest engine scheduler
 	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
 
 	// Initialize wallet handler

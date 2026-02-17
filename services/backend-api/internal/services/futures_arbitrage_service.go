@@ -330,8 +330,9 @@ func (s *FuturesArbitrageService) getLatestFundingRates(ctx context.Context) (ma
 		s.logger.Debug("Cache miss - querying database")
 	}
 
+	// Use SQLite-compatible query (works with both SQLite and PostgreSQL)
 	query := `
-		SELECT DISTINCT ON (e.name, tp.symbol) 
+		SELECT 
 			e.name as exchange,
 			tp.symbol,
 			fr.funding_rate,
@@ -340,7 +341,7 @@ func (s *FuturesArbitrageService) getLatestFundingRates(ctx context.Context) (ma
 		FROM funding_rates fr
 		JOIN exchanges e ON fr.exchange_id = e.id
 		JOIN trading_pairs tp ON fr.trading_pair_id = tp.id
-		WHERE fr.timestamp > NOW() - INTERVAL '1 hour'
+		WHERE fr.timestamp > datetime('now', '-1 hour')
 		  AND fr.funding_rate IS NOT NULL
 		  AND fr.mark_price IS NOT NULL
 		  AND fr.mark_price > 0
@@ -372,7 +373,22 @@ func (s *FuturesArbitrageService) getLatestFundingRates(ctx context.Context) (ma
 			return nil, fmt.Errorf("failed to scan funding rate: %w", err)
 		}
 
-		fundingRateMap[data.Symbol] = append(fundingRateMap[data.Symbol], data)
+		// Only keep the first (latest) entry per symbol+exchange combination
+		if _, exists := fundingRateMap[data.Symbol]; !exists {
+			fundingRateMap[data.Symbol] = []FundingRateData{data}
+		} else {
+			// Check if we already have this exchange for this symbol
+			hasExchange := false
+			for _, existing := range fundingRateMap[data.Symbol] {
+				if existing.Exchange == data.Exchange {
+					hasExchange = true
+					break
+				}
+			}
+			if !hasExchange {
+				fundingRateMap[data.Symbol] = append(fundingRateMap[data.Symbol], data)
+			}
+		}
 	}
 
 	if err := rows.Err(); err != nil {

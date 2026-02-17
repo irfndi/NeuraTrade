@@ -637,7 +637,11 @@ func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 			LatencyMs: latency,
 		}
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logrusLogger.WithError(err).Warn("Failed to close response body")
+		}
+	}()
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

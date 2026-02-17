@@ -20,15 +20,17 @@ import (
 type TelegramInternalHandler struct {
 	db          services.DBPool
 	userHandler *UserHandler
+	questEngine *services.QuestEngine
 	schemaOnce  sync.Once
 	schemaErr   error
 }
 
 // NewTelegramInternalHandler creates a new instance of TelegramInternalHandler.
-func NewTelegramInternalHandler(db any, userHandler *UserHandler) *TelegramInternalHandler {
+func NewTelegramInternalHandler(db any, userHandler *UserHandler, questEngine *services.QuestEngine) *TelegramInternalHandler {
 	return &TelegramInternalHandler{
 		db:          normalizeDBPool(db),
 		userHandler: userHandler,
+		questEngine: questEngine,
 	}
 }
 
