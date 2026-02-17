@@ -155,7 +155,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	)
 
 	questEngine := services.NewQuestEngineWithNotification(services.NewInMemoryQuestStore(), nil, notificationService)
-	
+
 	// Initialize futures arbitrage handler first (needed for quest handlers)
 	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler
 	if db != nil {
@@ -164,20 +164,20 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	} else {
 		log.Printf("Database not available for futures arbitrage handler initialization")
 	}
-	
+
 	// Create autonomous monitoring for tracking quest execution
 	autonomousMonitoring := services.NewAutonomousMonitorManager(notificationService)
-	
+
 	// Create integrated quest handlers with actual implementations
 	integratedHandlers := services.NewIntegratedQuestHandlers(
-		nil, // TA service - TODO: Initialize when ready
-		ccxtService, // CCXT service
-		arbitrageHandler, // Arbitrage service
+		nil,                     // TA service - TODO: Initialize when ready
+		ccxtService,             // CCXT service
+		arbitrageHandler,        // Arbitrage service
 		futuresArbitrageHandler, // Futures arbitrage
-		notificationService, // Notification service
-		autonomousMonitoring, // Monitoring service
+		notificationService,     // Notification service
+		autonomousMonitoring,    // Monitoring service
 	)
-	
+
 	questEngine.Start() // Start the quest engine scheduler
 
 	// Register integrated handlers for production-ready quest execution

@@ -93,7 +93,7 @@ func (h *IntegratedQuestHandlers) handleMarketScanWithTA(ctx context.Context, qu
 		if h.technicalAnalysis != nil {
 			// For now, just count symbols - actual TA integration needs real implementation
 			symbolsScanned++
-			
+
 			// TODO: Implement actual TA call when service is ready
 			// result, err := h.technicalAnalysis.AnalyzeSymbol(ctx, symbol, "binance", nil)
 			// if err == nil && result.Confidence.GreaterThan(decimal.NewFromFloat(0.7)) {
@@ -133,7 +133,7 @@ func (h *IntegratedQuestHandlers) handleFundingRateScan(ctx context.Context, que
 		// TODO: Implement actual funding rate collection
 		// For now, track that we attempted collection
 		ratesCollected++
-		
+
 		// Simulate rate distribution for monitoring
 		// In production, this would come from actual exchange API
 		positiveRates++ // Placeholder
@@ -247,10 +247,10 @@ func NewProductionQuestExecutor(
 	monitoring := NewAutonomousMonitorManager(notif)
 	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring)
 	engine := NewQuestEngineWithNotification(NewInMemoryQuestStore(), nil, notif)
-	
+
 	// Register integrated handlers
 	engine.RegisterIntegratedHandlers(handlers)
-	
+
 	return &ProductionQuestExecutor{
 		handlers:   handlers,
 		engine:     engine,
