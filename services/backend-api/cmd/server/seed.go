@@ -32,7 +32,7 @@ func runSeeder() error {
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
-			logrusLogger.WithError(err).Error("Failed to close database connection")
+			fmt.Printf("Warning: Failed to close database connection: %v\n", err)
 		}
 	}()
 
