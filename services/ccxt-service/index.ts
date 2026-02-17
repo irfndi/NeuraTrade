@@ -666,7 +666,9 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
           },
         },
       };
-      writeFileSync(configPath, JSON.stringify(newConfig, null, 2), { mode: 0o600 });
+      writeFileSync(configPath, JSON.stringify(newConfig, null, 2), {
+        mode: 0o600,
+      });
     }
 
     return c.json({
@@ -741,7 +743,9 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
         ),
       },
     };
-    writeFileSync(configPath, JSON.stringify(newConfig, null, 2), { mode: 0o600 });
+    writeFileSync(configPath, JSON.stringify(newConfig, null, 2), {
+      mode: 0o600,
+    });
 
     return c.json({
       success: true,
