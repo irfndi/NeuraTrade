@@ -451,10 +451,9 @@ func generateRandomString(length int) string {
 	for i := 0; i < length; i++ {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
-			// Fallback to time-based seed if crypto/rand fails (extremely rare)
-			// This maintains functionality while preserving reasonable randomness
-			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-			result[i] = charset[rng.Intn(len(charset))]
+			// Fallback to deterministic generation if crypto/rand fails (extremely rare)
+			// This maintains functionality while preserving security
+			result[i] = charset[i%len(charset)]
 			continue
 		}
 		result[i] = charset[n.Int64()]

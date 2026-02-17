@@ -74,7 +74,7 @@ func TestTelegramIntegration(t *testing.T) {
 	// We need actual user handler functioning, so we need DB.
 
 	// Create required middlewares
-	authMiddleware := middleware.NewAuthMiddleware("test-jwt-secret")
+	authMiddleware := middleware.NewAuthMiddleware("test-jwt-secret-key-32-chars-min!")
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 

@@ -381,7 +381,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 		BotToken: "test-token",
 	}
 
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	assert.NotPanics(t, func() {
 		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
@@ -439,7 +439,7 @@ func TestSetupRoutes_RouteGroups(t *testing.T) {
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Get all routes
@@ -503,7 +503,7 @@ func TestSetupRoutes_HttpMethods(t *testing.T) {
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Get all routes
@@ -570,7 +570,7 @@ func TestSetupRoutes_Middleware(t *testing.T) {
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 
 	// Test that router has middleware configured
@@ -625,7 +625,7 @@ func TestSetupRoutes_MissingAdminKey(t *testing.T) {
 				Addr: "localhost:6379",
 			}),
 		}
-		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
+		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 	}, "SetupRoutes should handle missing admin key gracefully")
 }
@@ -668,7 +668,7 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 				Addr: "localhost:6379",
 			}),
 		}
-		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key")
+		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, mockAuthMiddleware, nil)
 	}, "SetupRoutes should not panic when telegram config is missing")
 
