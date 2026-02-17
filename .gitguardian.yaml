@@ -81,6 +81,8 @@ secrets:
       match: "8352568061:AAFsr3Q9pGeGldHI5TmmYmF03gdep3y4BQc"
     - name: historical-minimax-key
       match: "sk-api-6FzeevpEi1VdxrPIF2IF3ZImrZM-vrHzpI5uD85pxV-ZJibnUvwGj_ZwSA85JBOC9rTN7EIwVJhRMtbHwHNSHF8RRQPvwKAWTO8czGrrwp2uSU3FzEEvB6c"
+    - name: historical-admin-api-key
+      match: "d98403e22c0a9f300fc54e4a5a3ab98a1f0f93ab65a26b2530949caae8ed7a36"
   ignored-paths:
     # Test files commonly use fake credentials
     - "**/*_test.go"
