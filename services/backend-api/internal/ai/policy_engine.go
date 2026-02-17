@@ -242,7 +242,6 @@ func (pe *PolicyEngine) RouteWithStrategy(
 	strategy PolicyType,
 	baseConstraints RoutingConstraints,
 ) (*RoutingResult, error) {
-	_ = PolicyWeightsByType(strategy)
 	return pe.router.Route(ctx, baseConstraints)
 }
 
