@@ -19,7 +19,7 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: help build build-cli build-all test test-coverage coverage-check lint fmt fmt-check run dev dev-setup dev-down install-tools install-cli security docker-build docker-run deploy clean dev-up-orchestrated prod-up-orchestrated webhook-enable webhook-disable webhook-status startup-status down-orchestrated go-env-setup ccxt-setup telegram-setup services-setup mod-download mod-tidy ci-structure-check ci-naming-check bd-close-qa
+.PHONY: help build build-cli build-all test test-coverage coverage-check lint fmt fmt-check run dev dev-setup dev-down install-tools install-cli security docker-build docker-run deploy clean dev-up-orchestrated prod-up-orchestrated webhook-enable webhook-disable webhook-status startup-status down-orchestrated go-env-setup ccxt-setup telegram-setup services-setup mod-download mod-tidy ci-structure-check ci-naming-check bd-close-qa gateway gateway-start gateway-stop
 
 # Default target
 all: build
@@ -221,16 +221,20 @@ security-scan: security-check ## Alias for security-check
 ## Docker
 docker-build: ## Build Docker images for all services
 	@echo "$(GREEN)Building Docker images...$(NC)"
+	@# Ensure NEURATRADE_HOME is set
+	@if [ -z "$$NEURATRADE_HOME" ]; then \
+		echo "$(YELLOW)Warning: NEURATRADE_HOME not set. Using ~/.neuratrade$(NC)"; \
+	fi
 	docker compose -f $(DOCKER_COMPOSE_FILE) build
 	@echo "$(GREEN)Docker images built!$(NC)"
 
 docker-run: docker-build ## Run with Docker
 	@echo "$(GREEN)Running with Docker...$(NC)"
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file .env up --build
+docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env up --build
 
 docker-prod: ## Run production Docker setup
 	@echo "$(GREEN)Running production Docker setup...$(NC)"
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file .env up -d --build
+docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env up -d --build
 	@echo "$(GREEN)Production environment started!$(NC)"
 
 ## Database
@@ -351,10 +355,34 @@ fmt-check: ## Check if code is formatted (for CI)
 
 ## Logs
 logs: ## Show application logs
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file .env logs -f
+	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env logs -f
 
 logs-all: ## Show all service logs
-	docker compose --env-file .env logs -f
+	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env logs -f
+
+## Quick Start (One Command)
+gateway: gateway-start ## Alias for gateway-start
+gateway-start: ## Start NeuraTrade with one command (Docker)
+	@echo "$(GREEN)Starting NeuraTrade...$(NC)"
+	@echo "$(YELLOW)Make sure ~/.neuratrade/.env exists with NEURATRADE_HOME and BACKEND_HOST_PORT set$(NC)"
+	@if [ ! -f ~/.neuratrade/.env ]; then \
+		echo "$(RED)Error: ~/.neuratrade/.env not found!$(NC)"; \
+		echo "$(YELLOW)Copy .env.example to ~/.neuratrade/.env and configure it$(NC)"; \
+		exit 1; \
+	fi
+	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env --profile local up -d --build
+	@echo ""
+	@echo "$(GREEN)NeuraTrade started!$(NC)"
+	@echo "$(YELLOW)Backend API: http://localhost:$$(grep BACKEND_HOST_PORT ~/.neuratrade/.env | cut -d= -f2 || echo 58080)$(NC)"
+	@echo "$(YELLOW)CCXT Service: internal only (port 3001)$(NC)"
+	@echo "$(YELLOW)Telegram Service: internal only (port 3002)$(NC)"
+	@echo ""
+	@echo "Health check: curl http://localhost:$$(grep BACKEND_HOST_PORT ~/.neuratrade/.env | cut -d= -f2 || echo 58080)/health"
+
+gateway-stop: ## Stop NeuraTrade
+	@echo "$(GREEN)Stopping NeuraTrade...$(NC)"
+	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env down
+	@echo "$(GREEN)NeuraTrade stopped!$(NC)"
 
 bd-close-qa: ## Close bd issue with mandatory QA evidence
 	@test -n "$${ISSUE_ID:-}" || (echo "ISSUE_ID is required" && exit 1)

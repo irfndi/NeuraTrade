@@ -1,19 +1,17 @@
 # NeuraTrade - Docker Compose for Local Development and Production
 # All services are built from the services/ directory
 #
-# Usage:
-#   Local development (with SQLite):
-#     docker-compose up
+# Usage (one command to start):
+#   docker compose --env-file ~/.neuratrade/.env --profile local up -d --build
 #
-#   Production (with external databases):
-#     docker-compose up
+# Stop:
+#   docker compose --env-file ~/.neuratrade/.env down
 #
-# Environment variables:
-#   - DATABASE_DRIVER: Database driver (sqlite or postgres, default: sqlite)
-#   - SQLITE_DB_PATH: Path to SQLite database file (default: /data/neuratrade.db)
-#   - REDIS_HOST: Redis host (required for production)
-#   - REDIS_PORT: Redis port (default: 6379)
-#   - ADMIN_API_KEY: API key for admin endpoints (required for production, 32+ chars)
+# Environment variables (set in ~/.neuratrade/.env):
+#   - NEURATRADE_HOME: Absolute path to config+data directory (default: ~/.neuratrade)
+#   - BACKEND_HOST_PORT: Host port for backend API (default: 58080)
+#   - DATABASE_DRIVER: sqlite or postgres (default: sqlite)
+#   - SQLITE_DB_PATH: Path inside container (default: /data/neuratrade.db)
 
 services:
   backend-api:
@@ -21,6 +19,8 @@ services:
       context: services/backend-api
       dockerfile: Dockerfile
     restart: always
+    ports:
+      - "${BACKEND_HOST_PORT:-58080}:8080"
     environment:
       # Database configuration - SQLite by default
       - DATABASE_DRIVER=${DATABASE_DRIVER:-sqlite}
@@ -36,7 +36,7 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - PORT=8080
-      # Service URLs
+      # Service URLs (internal Docker network)
       - CCXT_SERVICE_URL=${CCXT_SERVICE_URL:-http://ccxt-service:3001}
       - CCXT_GRPC_ADDRESS=${CCXT_GRPC_ADDRESS:-ccxt-service:50051}
       - TELEGRAM_SERVICE_URL=${TELEGRAM_SERVICE_URL:-http://telegram-service:3002}
@@ -50,7 +50,7 @@ services:
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-development}
       - SENTRY_DSN=${SENTRY_DSN:-}
     volumes:
-      - sqlite_data:/data
+      - ${NEURATRADE_HOME:-${HOME}/.neuratrade}/data:/data
     networks:
       - default
       - coolify
@@ -59,16 +59,20 @@ services:
         condition: service_started
       telegram-service:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Local development redis - only started with --profile local
   redis:
     image: redis:7-alpine
     profiles: ["local"]
     restart: always
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - redis_data:/data
+      - ${NEURATRADE_HOME:-${HOME}/.neuratrade}/redis-data:/data
     networks:
       - default
       - coolify
@@ -134,8 +138,4 @@ networks:
   coolify:
     external: true
     name: ${COOLIFY_SHARED_NETWORK:-coolify}
-
-volumes:
-  sqlite_data:
-  redis_data:
 
