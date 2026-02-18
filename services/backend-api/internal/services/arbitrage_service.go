@@ -486,19 +486,35 @@ func (s *ArbitrageService) getLatestMarketData() (map[string][]models.MarketData
 		return nil, fmt.Errorf("database pool is not available")
 	}
 
-	// Query to get the latest market data for each trading pair on each exchange
-	query := `
-		SELECT DISTINCT ON (md.exchange_id, md.trading_pair_id)
-			md.id, md.exchange_id, md.trading_pair_id, md.last_price, md.volume_24h, 
-			md.timestamp, md.created_at, e.name as exchange_name, tp.symbol
-		FROM market_data md
-		JOIN exchanges e ON md.exchange_id = e.id
-		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
-		WHERE md.timestamp >= NOW() - INTERVAL '10 minutes'
-			AND e.status = 'active'
-			AND tp.is_active = true
-		ORDER BY md.exchange_id, md.trading_pair_id, md.timestamp DESC
-	`
+	dbType := database.DetectDBType(s.config.Database.Driver)
+
+	var query string
+	if dbType == database.DBTypeSQLite {
+		query = `
+			SELECT md.id, md.exchange_id, md.trading_pair_id, md.last_price, md.volume_24h, 
+				md.timestamp, md.created_at, e.name as exchange_name, tp.symbol
+			FROM market_data md
+			JOIN exchanges e ON md.exchange_id = e.id
+			JOIN trading_pairs tp ON md.trading_pair_id = tp.id
+			WHERE md.timestamp >= datetime('now', '-10 minutes')
+				AND e.status = 'active'
+				AND tp.is_active = true
+			ORDER BY md.exchange_id, md.trading_pair_id, md.timestamp DESC
+		`
+	} else {
+		query = `
+			SELECT DISTINCT ON (md.exchange_id, md.trading_pair_id)
+				md.id, md.exchange_id, md.trading_pair_id, md.last_price, md.volume_24h, 
+				md.timestamp, md.created_at, e.name as exchange_name, tp.symbol
+			FROM market_data md
+			JOIN exchanges e ON md.exchange_id = e.id
+			JOIN trading_pairs tp ON md.trading_pair_id = tp.id
+			WHERE md.timestamp >= NOW() - INTERVAL '10 minutes'
+				AND e.status = 'active'
+				AND tp.is_active = true
+			ORDER BY md.exchange_id, md.trading_pair_id, md.timestamp DESC
+		`
+	}
 
 	rows, err := s.db.Query(s.ctx, query)
 	if err != nil {
@@ -732,14 +748,22 @@ func (s *ArbitrageService) cleanupOldOpportunities() error {
 		return fmt.Errorf("database pool is not available")
 	}
 
-	// Since the table uses expires_at instead of is_active, we can just delete expired opportunities
-	// or we can leave them for historical analysis. For now, let's just log expired ones.
+	dbType := database.DetectDBType(s.config.Database.Driver)
 
-	query := `
-		SELECT COUNT(*) 
-		FROM arbitrage_opportunities 
-		WHERE expires_at <= NOW()
-	`
+	var query string
+	if dbType == database.DBTypeSQLite {
+		query = `
+			SELECT COUNT(*) 
+			FROM arbitrage_opportunities 
+			WHERE expires_at <= datetime('now')
+		`
+	} else {
+		query = `
+			SELECT COUNT(*) 
+			FROM arbitrage_opportunities 
+			WHERE expires_at <= NOW()
+		`
+	}
 
 	var expiredCount int
 	err := s.db.QueryRow(s.ctx, query).Scan(&expiredCount)

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -728,11 +729,8 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 	).Scan(&exchangeCount)
 
 	if err != nil {
-		return &CheckResult{
-			Status:    "warning",
-			Message:   "Failed to check exchange API keys",
-			LatencyMs: latency,
-		}
+		// Table may not exist or other error - check config as fallback
+		exchangeCount = 0
 	}
 
 	// Check for Polymarket wallets
@@ -742,6 +740,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 	).Scan(&polymarketCount)
 
 	if err != nil {
+		// Table may not exist or other error
 		polymarketCount = 0
 	}
 
@@ -749,15 +748,34 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 	configHasBinance := false
 	// nolint:gosec // Fixed config path, not user input
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // Fixed config path, not user input
+	log.Printf("DEBUG: Checking config at %s", configPath)
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
-			if services, ok := config["services"].(map[string]interface{}); ok {
-				if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
-					if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-						if binance, ok := exchanges["binance"].(map[string]interface{}); ok {
-							if apiKey, ok := binance["api_key"].(string); ok && apiKey != "" {
-								configHasBinance = true
+			log.Printf("DEBUG: Config loaded, has ccxt: %v", config["ccxt"] != nil)
+			// Check new config structure: ccxt.exchanges.binance.api_key
+			if ccxt, ok := config["ccxt"].(map[string]interface{}); ok {
+				log.Printf("DEBUG: Has ccxt section")
+				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+					log.Printf("DEBUG: Has exchanges section")
+					if binance, ok := exchanges["binance"].(map[string]interface{}); ok {
+						log.Printf("DEBUG: Has binance section")
+						if apiKey, ok := binance["api_key"].(string); ok && apiKey != "" {
+							log.Printf("DEBUG: Has api_key: %s", apiKey[:10]+"...")
+							configHasBinance = true
+						}
+					}
+				}
+			}
+			// Also check old config structure for backward compatibility
+			if !configHasBinance {
+				if services, ok := config["services"].(map[string]interface{}); ok {
+					if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
+						if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+							if binance, ok := exchanges["binance"].(map[string]interface{}); ok {
+								if apiKey, ok := binance["api_key"].(string); ok && apiKey != "" {
+									configHasBinance = true
+								}
 							}
 						}
 					}

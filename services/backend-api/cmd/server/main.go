@@ -267,6 +267,27 @@ func run() error {
 	stopLossAutoExec.Start()
 	defer stopLossAutoExec.Stop()
 
+	// Initialize heartbeat for continuous monitoring
+	heartbeatConfig := services.DefaultHeartbeatConfig()
+	heartbeatConfig.Enabled = true
+	heartbeat := services.NewTradingHeartbeat(
+		heartbeatConfig,
+		nil, // positionTracker - interface{SyncPositions(ctx context.Context) error}
+		nil, // stopLossService - interface{UpdateAllStopLosses(ctx context.Context) error}
+		nil, // signalProcessor - interface{ScanForSignals(ctx context.Context) error}
+		nil, // fundingCollector - interface{CheckFundingRates(ctx context.Context) error}
+		nil, // connectivityChecker - interface{CheckConnectivity(ctx context.Context) error}
+		nil, // tradingStateStore - services.TradingStateStoreInterface
+		nil, // riskManager - interface{CheckRiskLimits(ctx context.Context) interface{}}
+		notificationService,
+	)
+	if err := heartbeat.Start(ctx); err != nil {
+		logger.WithError(err).Warn("Failed to start heartbeat - continuing without it")
+	} else {
+		defer heartbeat.Stop()
+		logger.Info("Trading heartbeat started")
+	}
+
 	// Initialize wallet validator
 	walletValidatorConfig := services.WalletValidatorConfig{
 		MinimumUSDCBalance:         decimal.NewFromFloat(cfg.Wallet.MinimumUSDCBalance),

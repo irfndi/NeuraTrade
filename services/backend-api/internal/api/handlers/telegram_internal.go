@@ -771,20 +771,40 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
-			if services, ok := config["services"].(map[string]interface{}); ok {
-				if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
-					if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-						for _, ex := range exchanges {
-							if exMap, ok := ex.(map[string]interface{}); ok {
-								if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
-									if exchangeCount < 1 {
-										exchangeCount = 1
+			// Check new config structure: ccxt.exchanges.binance.api_key
+			hasExchangeInConfig := false
+			if ccxt, ok := config["ccxt"].(map[string]interface{}); ok {
+				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+					for _, ex := range exchanges {
+						if exMap, ok := ex.(map[string]interface{}); ok {
+							if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
+								hasExchangeInConfig = true
+								break
+							}
+						}
+					}
+				}
+			}
+			// Also check old config structure for backward compatibility
+			if !hasExchangeInConfig {
+				if services, ok := config["services"].(map[string]interface{}); ok {
+					if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
+						if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+							for _, ex := range exchanges {
+								if exMap, ok := ex.(map[string]interface{}); ok {
+									if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
+										hasExchangeInConfig = true
+										break
 									}
-									break
 								}
 							}
 						}
 					}
+				}
+			}
+			if hasExchangeInConfig {
+				if exchangeCount < 1 {
+					exchangeCount = 1
 				}
 			}
 		}

@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { getEnvWithNeuratradeFallback } from "../config";
 
 /**
  * Resolves a port number from a string environment variable.
@@ -80,14 +81,14 @@ export interface TelegramConfig {
  * ```
  */
 export const loadConfig = Effect.try((): TelegramConfig => {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_TOKEN;
+  const botToken = getEnvWithNeuratradeFallback("TELEGRAM_BOT_TOKEN") || getEnvWithNeuratradeFallback("TELEGRAM_TOKEN") || "";
   if (!botToken) {
     throw new Error(
       "TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN environment variable must be set",
     );
   }
 
-  const adminApiKey = process.env.ADMIN_API_KEY || "";
+  const adminApiKey = getEnvWithNeuratradeFallback("ADMIN_API_KEY") || "";
   const isProduction =
     process.env.NODE_ENV === "production" ||
     process.env.SENTRY_ENVIRONMENT === "production";

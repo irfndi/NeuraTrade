@@ -178,13 +178,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		autonomousMonitoring,    // Monitoring service
 	)
 
+	// Wire order executor to integrated handlers for scalping execution
+	ccxtOrderExec := services.NewCCXTOrderExecutor(services.DefaultCCXTOrderExecutorConfig())
+	integratedHandlers.SetOrderExecutor(ccxtOrderExec)
+
 	questEngine.Start() // Start the quest engine scheduler
 
 	// Register integrated handlers for production-ready quest execution
 	questEngine.RegisterIntegratedHandlers(integratedHandlers)
-
-	// Fallback to simple handlers if integrated not available
-	questEngine.RegisterDefaultQuestHandlers(ccxtService, arbitrageHandler, futuresArbitrageHandler)
 
 	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)

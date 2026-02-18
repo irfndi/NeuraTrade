@@ -18,6 +18,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/cache"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/logging"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/irfndi/neuratrade/internal/models"
@@ -634,24 +635,65 @@ func (c *CollectorService) Start() error {
 
 // getPrioritizedExchanges returns exchanges ordered by priority field from database
 func (c *CollectorService) getPrioritizedExchanges() []string {
-	// Get all supported exchanges from CCXT
 	allExchanges := c.ccxtService.GetSupportedExchanges()
 
-	// If database is not available, return all exchanges
+	if len(c.config.MarketData.Exchanges) > 0 {
+		c.logger.WithFields(map[string]interface{}{
+			"enabled_exchanges": c.config.MarketData.Exchanges,
+		}).Info("Filtering exchanges by config")
+
+		filtered := make([]string, 0)
+		for _, ex := range allExchanges {
+			for _, enabled := range c.config.MarketData.Exchanges {
+				if ex == enabled {
+					filtered = append(filtered, ex)
+					break
+				}
+			}
+		}
+		if len(filtered) > 0 {
+			allExchanges = filtered
+		} else {
+			c.logger.Warn("No enabled exchanges found in CCXT, using all exchanges")
+		}
+	}
+
 	if isNilDBPool(c.db) {
-		c.logger.Warn("Database not available, returning all exchanges")
+		c.logger.Warn("Database not available, returning filtered exchanges")
 		return allExchanges
 	}
 
 	// Query database to get exchanges with their priorities
-	query := `
-		SELECT e.name, e.priority, e.is_active, ce.ccxt_id 
-		FROM exchanges e 
-		LEFT JOIN ccxt_exchanges ce ON e.id = ce.exchange_id 
-		WHERE e.name = ANY($1) AND e.is_active = true 
-		ORDER BY e.priority ASC, e.name ASC`
+	// Use database-specific syntax for array parameter
+	var query string
+	var args []interface{}
 
-	rows, err := c.db.Query(c.ctx, query, allExchanges)
+	if database.DetectDBType(c.config.Database.Driver) == database.DBTypeSQLite {
+		// For SQLite, build dynamic IN clause since SQLite doesn't support ANY(array)
+		placeholders := make([]string, len(allExchanges))
+		args = make([]interface{}, len(allExchanges))
+		for i, ex := range allExchanges {
+			placeholders[i] = "?"
+			args[i] = ex
+		}
+		query = fmt.Sprintf(`
+			SELECT e.name, e.priority, e.is_active, ce.ccxt_id 
+			FROM exchanges e 
+			LEFT JOIN ccxt_exchanges ce ON e.id = ce.exchange_id 
+			WHERE e.name IN (%s) AND e.is_active = true 
+			ORDER BY e.priority ASC, e.name ASC`, strings.Join(placeholders, ","))
+	} else {
+		// For PostgreSQL, use the original ANY syntax
+		query = `
+			SELECT e.name, e.priority, e.is_active, ce.ccxt_id 
+			FROM exchanges e 
+			LEFT JOIN ccxt_exchanges ce ON e.id = ce.exchange_id 
+			WHERE e.name = ANY($1) AND e.is_active = true 
+			ORDER BY e.priority ASC, e.name ASC`
+		args = []interface{}{allExchanges}
+	}
+
+	rows, err := c.db.Query(c.ctx, query, args...)
 	if err != nil {
 		c.logger.WithError(err).Error("Failed to query prioritized exchanges")
 		return allExchanges // Fallback to all exchanges
@@ -1541,7 +1583,7 @@ func (c *CollectorService) saveBulkTickerData(ticker models.MarketPrice) error {
 			bid, bid_volume, ask, ask_volume,
 			last_price, volume_24h,
 			timestamp, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		exchangeID, tradingPairID,
 		ticker.Bid, ticker.BidVolume, ticker.Ask, ticker.AskVolume,
 		ticker.Price, ticker.Volume,
@@ -1690,7 +1732,7 @@ func (c *CollectorService) collectTickerDataDirect(exchange, symbol string) erro
 	// Save market data to database with proper column mapping
 	_, err = c.db.Exec(c.ctx,
 		`INSERT INTO market_data (exchange_id, trading_pair_id, last_price, volume_24h, timestamp, created_at) 
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		 VALUES (?, ?, ?, ?, ?, ?)`,
 		exchangeID, tradingPairID, ticker.Price, ticker.Volume, ticker.Timestamp, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to save market data: %w", err)
@@ -1862,7 +1904,7 @@ func (c *CollectorService) storeFundingRate(exchange string, rate ccxt.FundingRa
 	now := time.Now()
 	_, err = c.db.Exec(c.ctx,
 		`INSERT INTO funding_rates (exchange_id, trading_pair_id, funding_rate, funding_time, next_funding_time, mark_price, index_price, timestamp, created_at) 
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (exchange_id, trading_pair_id, funding_time) 
 		 DO UPDATE SET 
 			funding_rate = EXCLUDED.funding_rate,
@@ -1870,7 +1912,7 @@ func (c *CollectorService) storeFundingRate(exchange string, rate ccxt.FundingRa
 			mark_price = EXCLUDED.mark_price,
 			index_price = EXCLUDED.index_price,
 			timestamp = EXCLUDED.timestamp,
-			updated_at = NOW()`,
+			updated_at = CURRENT_TIMESTAMP`,
 		exchangeID, tradingPairID, rate.FundingRate, rate.FundingTimestamp.Time(), rate.NextFundingTime.Time(), markPrice, indexPrice, timestamp, now)
 	if err != nil {
 		return fmt.Errorf("failed to save funding rate: %w", err)
@@ -2061,12 +2103,12 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 
 	// First try to get existing trading pair for this exchange and symbol
 	var tradingPairID int
-	err := c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = $1 AND symbol = $2", exchangeID, symbol).Scan(&tradingPairID)
+	err := c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = ? AND symbol = ?", exchangeID, symbol).Scan(&tradingPairID)
 	if err == nil {
 		// Cache the result if Redis is available
 		if c.redisClient != nil {
 			cacheKey := fmt.Sprintf("trading_pair:%d:%s", exchangeID, symbol)
-			c.redisClient.Set(c.ctx, cacheKey, tradingPairID, 24*time.Hour) // Cache for 24 hours
+			c.redisClient.Set(c.ctx, cacheKey, tradingPairID, 24*time.Hour)
 		}
 		return tradingPairID, nil
 	}
@@ -2077,18 +2119,24 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 		return 0, fmt.Errorf("failed to parse symbol: %s", symbol)
 	}
 
-	// Insert new trading pair with exchange_id and conflict resolution
-	err = c.db.QueryRow(c.ctx,
-		"INSERT INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency, is_active) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (exchange_id, symbol) DO UPDATE SET base_currency = EXCLUDED.base_currency, quote_currency = EXCLUDED.quote_currency, is_active = EXCLUDED.is_active RETURNING id",
-		exchangeID, symbol, baseCurrency, quoteCurrency, true).Scan(&tradingPairID)
+	// Insert new trading pair - SQLite compatible
+	_, err = c.db.Exec(c.ctx,
+		"INSERT OR IGNORE INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency, is_active) VALUES (?, ?, ?, ?, 1)",
+		exchangeID, symbol, baseCurrency, quoteCurrency)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create or update trading pair: %w", err)
+		return 0, fmt.Errorf("failed to create trading pair: %w", err)
+	}
+
+	// Get the trading pair ID
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = ? AND symbol = ?", exchangeID, symbol).Scan(&tradingPairID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get trading pair after insert: %w", err)
 	}
 
 	// Cache the newly created trading pair if Redis is available
 	if c.redisClient != nil {
 		cacheKey := fmt.Sprintf("trading_pair:%d:%s", exchangeID, symbol)
-		c.redisClient.Set(c.ctx, cacheKey, tradingPairID, 24*time.Hour) // Cache for 24 hours
+		c.redisClient.Set(c.ctx, cacheKey, tradingPairID, 24*time.Hour)
 	}
 
 	c.logger.WithFields(map[string]interface{}{
@@ -2111,7 +2159,7 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// First try to get existing exchange by ccxt_id
 	var exchangeID int
-	err := c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = $1", ccxtID).Scan(&exchangeID)
+	err := c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = ?", ccxtID).Scan(&exchangeID)
 	if err == nil {
 		// Cache the result
 		c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
@@ -2120,7 +2168,7 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// Also check by name in case exchange exists with different ccxt_id
 	name := strings.ToLower(ccxtID)
-	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE name = $1", name).Scan(&exchangeID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE name = ?", name).Scan(&exchangeID)
 	if err == nil {
 		c.logger.WithFields(map[string]interface{}{
 			"name":        name,
@@ -2135,14 +2183,18 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 	caser := cases.Title(language.English)
 	displayName := caser.String(ccxtID)
 
-	// Insert new exchange with conflict resolution
-	// Use a default API URL based on the exchange name since CCXT doesn't provide this directly
-	defaultAPIURL := fmt.Sprintf("https://api.%s.com", strings.ToLower(ccxtID))
-	err = c.db.QueryRow(c.ctx,
-		"INSERT INTO exchanges (name, display_name, ccxt_id, api_url, status, has_spot, has_futures) VALUES ($1, $2, $3, $4, 'active', true, true) ON CONFLICT (name) DO UPDATE SET ccxt_id = EXCLUDED.ccxt_id, display_name = EXCLUDED.display_name, api_url = EXCLUDED.api_url RETURNING id",
-		name, displayName, ccxtID, defaultAPIURL).Scan(&exchangeID)
+	// Insert new exchange - SQLite compatible (use INSERT OR IGNORE)
+	_, err = c.db.Exec(c.ctx,
+		"INSERT OR IGNORE INTO exchanges (name, display_name, ccxt_id, api_url, status, has_spot, has_futures) VALUES (?, ?, ?, ?, 'active', 1, 1)",
+		name, displayName, ccxtID, fmt.Sprintf("https://api.%s.com", strings.ToLower(ccxtID)))
 	if err != nil {
-		return 0, fmt.Errorf("failed to create or update exchange: %w", err)
+		return 0, fmt.Errorf("failed to create exchange: %w", err)
+	}
+
+	// Get the exchange ID
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = ?", ccxtID).Scan(&exchangeID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get exchange after insert: %w", err)
 	}
 
 	// Cache the newly created/updated exchange
@@ -2807,13 +2859,26 @@ func (c *CollectorService) checkIfBackfillNeeded() (bool, error) {
 	// Check if ANY active exchange has data in the last hour
 	// This is more lenient than requiring ALL exchanges to have data
 	var exchangesWithRecentData int
-	err = c.db.QueryRow(c.ctx, `
-		SELECT COUNT(DISTINCT md.exchange_id)
-		FROM market_data md
-		JOIN exchanges e ON md.exchange_id = e.id
-		WHERE md.timestamp >= NOW() - INTERVAL '1 hour'
-		  AND e.status = 'active'
-	`).Scan(&exchangesWithRecentData)
+	dbType := database.DetectDBType(c.config.Database.Driver)
+	var query string
+	if dbType == database.DBTypeSQLite {
+		query = `
+			SELECT COUNT(DISTINCT md.exchange_id)
+			FROM market_data md
+			JOIN exchanges e ON md.exchange_id = e.id
+			WHERE md.timestamp >= datetime('now', '-1 hour')
+			  AND e.status = 'active'
+		`
+	} else {
+		query = `
+			SELECT COUNT(DISTINCT md.exchange_id)
+			FROM market_data md
+			JOIN exchanges e ON md.exchange_id = e.id
+			WHERE md.timestamp >= NOW() - INTERVAL '1 hour'
+			  AND e.status = 'active'
+		`
+	}
+	err = c.db.QueryRow(c.ctx, query).Scan(&exchangesWithRecentData)
 	if err != nil {
 		c.logger.WithError(err).Warn("Failed to check exchanges with recent data, assuming backfill needed")
 		return true, nil
@@ -2822,7 +2887,7 @@ func (c *CollectorService) checkIfBackfillNeeded() (bool, error) {
 	// Also check total records in threshold period for context
 	var totalRecords int
 	err = c.db.QueryRow(c.ctx,
-		"SELECT COUNT(*) FROM market_data WHERE timestamp >= $1",
+		"SELECT COUNT(*) FROM market_data WHERE timestamp >= ?",
 		thresholdTime).Scan(&totalRecords)
 	if err != nil {
 		c.logger.WithError(err).Warn("Failed to count market data records")
@@ -3348,7 +3413,7 @@ func (c *CollectorService) generateHistoricalDataPoints(ctx context.Context, exc
 		err := c.errorRecoveryManager.ExecuteWithRetry(ctx, "database_operation", func() error {
 			_, execErr := c.db.Exec(ctx,
 				`INSERT INTO market_data (exchange_id, trading_pair_id, last_price, volume_24h, timestamp, created_at) 
-				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				 VALUES (?, ?, ?, ?, ?, ?)`,
 				exchangeDBID, tradingPairID, historicalPrice, historicalVolume, currentTime, currentTime)
 			return execErr
 		})

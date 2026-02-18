@@ -5,8 +5,15 @@ import (
 	"log"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"
 )
+
+// ScalpingOrderExecutor interface for executing orders
+type ScalpingOrderExecutor interface {
+	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
+	GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error)
+}
 
 // IntegratedQuestHandlers provides production-ready quest handlers
 // that integrate all subsystems: TA, Risk, Portfolio, Order Execution, AI
@@ -17,6 +24,7 @@ type IntegratedQuestHandlers struct {
 	futuresArbService   interface{}
 	notificationService *NotificationService
 	monitoring          *AutonomousMonitorManager
+	orderExecutor       ScalpingOrderExecutor
 }
 
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
@@ -38,6 +46,11 @@ func NewIntegratedQuestHandlers(
 	}
 }
 
+// SetOrderExecutor sets the order executor for scalping
+func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecutor) {
+	h.orderExecutor = executor
+}
+
 // RegisterIntegratedHandlers registers production-ready quest handlers
 func (e *QuestEngine) RegisterIntegratedHandlers(handlers *IntegratedQuestHandlers) {
 	// Market Scanner with TA integration
@@ -57,6 +70,13 @@ func (e *QuestEngine) RegisterIntegratedHandlers(handlers *IntegratedQuestHandle
 	// Portfolio Health Check with risk management
 	e.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
 		err := handlers.handlePortfolioHealthWithRisk(ctx, quest)
+		handlers.recordQuestResult(quest, err == nil, decimal.Zero)
+		return err
+	})
+
+	// Scalping Execution - execute scalping trades when opportunities found
+	e.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
+		err := handlers.handleScalpingExecution(ctx, quest)
 		handlers.recordQuestResult(quest, err == nil, decimal.Zero)
 		return err
 	})
@@ -203,6 +223,114 @@ func (h *IntegratedQuestHandlers) handlePortfolioHealthWithRisk(ctx context.Cont
 
 	log.Printf("Portfolio health check complete: status=%s, checks=%d/%d passed", healthStatus, checksPassed, checksPassed+checksFailed)
 	return nil
+}
+
+// handleScalpingExecution executes scalping trades using integrated services
+func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, quest *Quest) error {
+	log.Printf("Executing scalping with integrated services: %s", quest.Name)
+
+	if h.ccxtService == nil {
+		log.Printf("CCXT service not available for scalping")
+		quest.Checkpoint["status"] = "ccxt_unavailable"
+		quest.CurrentCount++
+		return nil
+	}
+
+	// Get self-adjusted parameters based on performance
+	cfg := GetScalpingPerformance().GetAdjustedParameters()
+	chatID := quest.Metadata["chat_id"]
+
+	// Use CCXT service directly if it implements the required methods
+	cc, ok := h.ccxtService.(interface {
+		FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
+	})
+	if !ok {
+		log.Printf("CCXT service does not implement FetchSingleTicker")
+		quest.Checkpoint["status"] = "ccxt_unavailable"
+		quest.CurrentCount++
+		return nil
+	}
+
+	// Scan for opportunities
+	for _, symbol := range cfg.TradingPairs {
+		ticker, err := cc.FetchSingleTicker(ctx, cfg.Exchange, symbol)
+		if err != nil {
+			continue
+		}
+
+		lastPrice := ticker.GetPrice()
+		volume := ticker.GetVolume()
+		bidPrice := ticker.GetBid()
+		askPrice := ticker.GetAsk()
+
+		if lastPrice == 0 {
+			continue
+		}
+
+		spread := askPrice - bidPrice
+		spreadPercent := (spread / lastPrice) * 100
+
+		if spreadPercent < cfg.MinProfitPercent {
+			quest.Checkpoint["status"] = "spread_too_tight"
+			continue
+		}
+
+		if volume < 10000 {
+			continue
+		}
+
+		var side string
+		if spreadPercent > cfg.MinProfitPercent*1.5 {
+			side = "buy"
+		} else {
+			side = "sell"
+		}
+
+		quest.Checkpoint["status"] = "opportunity_found"
+		quest.Checkpoint["symbol"] = symbol
+		quest.Checkpoint["side"] = side
+		quest.Checkpoint["spread_percent"] = spreadPercent
+		quest.Checkpoint["volume"] = volume
+
+		// Execute the trade if order executor is available
+		if h.orderExecutor != nil {
+			amount := decimal.NewFromFloat(10)
+			orderID, err := h.orderExecutor.PlaceOrder(ctx, cfg.Exchange, symbol, side, "limit", amount, nil)
+			if err != nil {
+				log.Printf("Failed to execute scalp trade: %v", err)
+				quest.Checkpoint["execution_error"] = err.Error()
+				quest.Checkpoint["execution_status"] = "failed"
+			} else {
+				log.Printf("Scalp trade executed: %s %s %s, orderID: %s", side, cfg.Exchange, symbol, orderID)
+				quest.Checkpoint["order_id"] = orderID
+				quest.Checkpoint["execution_status"] = "executed"
+				quest.Checkpoint["amount"] = amount.String()
+			}
+		} else {
+			log.Printf("Order executor not configured - opportunity identified but not executed")
+			quest.Checkpoint["execution_status"] = "no_executor"
+		}
+		break
+	}
+
+	if quest.Checkpoint["status"] == nil {
+		quest.Checkpoint["status"] = "no_opportunity"
+	}
+
+	quest.CurrentCount++
+	quest.Checkpoint["last_scalp_check"] = time.Now().UTC().Format(time.RFC3339)
+	quest.Checkpoint["chat_id"] = chatID
+
+	// Add performance stats to checkpoint
+	perf := GetScalpingPerformance().GetPerformance()
+	quest.Checkpoint["performance"] = perf
+
+	return nil
+}
+
+// GetScalpingPerformanceStats returns current scalping performance
+func (h *IntegratedQuestHandlers) GetScalpingPerformanceStats() map[string]interface{} {
+	return GetScalpingPerformance().GetPerformance()
 }
 
 // GetMonitoringSnapshot returns current monitoring snapshot for a chat ID

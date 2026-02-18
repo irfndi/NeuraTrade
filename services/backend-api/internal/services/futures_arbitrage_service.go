@@ -13,6 +13,7 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/logging"
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/observability"
@@ -512,10 +513,20 @@ func (s *FuturesArbitrageService) cleanupExpiredOpportunities(ctx context.Contex
 	}
 
 	s.logger.Info("Starting cleanup of expired opportunities")
-	query := `
-		DELETE FROM futures_arbitrage_opportunities 
-		WHERE expires_at < NOW() OR detected_at < NOW() - INTERVAL '1 hour'
-	`
+
+	var query string
+	dbType := database.DetectDBType(s.config.Database.Driver)
+	if dbType == database.DBTypeSQLite {
+		query = `
+			DELETE FROM futures_arbitrage_opportunities 
+			WHERE expires_at < datetime('now') OR detected_at < datetime('now', '-1 hour')
+		`
+	} else {
+		query = `
+			DELETE FROM futures_arbitrage_opportunities 
+			WHERE expires_at < NOW() OR detected_at < NOW() - INTERVAL '1 hour'
+		`
+	}
 
 	result, err := s.db.Exec(ctx, query)
 	if err != nil {

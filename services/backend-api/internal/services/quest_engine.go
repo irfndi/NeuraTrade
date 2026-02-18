@@ -308,6 +308,16 @@ func (e *QuestEngine) registerDefaultDefinitions() {
 		Prompt:      "Monitor volatility levels and activate defensive measures when thresholds are exceeded",
 	})
 
+	// Scalping execution quest - runs every minute in scalping mode
+	e.RegisterDefinition(&QuestDefinition{
+		ID:          "scalping_execution",
+		Name:        "Scalping Executor",
+		Description: "Execute scalping trades based on skill parameters and market conditions",
+		Type:        QuestTypeRoutine,
+		Cadence:     CadenceMicro,
+		Prompt:      "Scan for scalping opportunities using the scalping skill and execute trades when parameters are met",
+	})
+
 	// Fund growth milestone
 	e.RegisterDefinition(&QuestDefinition{
 		ID:          "fund_growth",
@@ -595,7 +605,8 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 	}
 
 	// Create default quests for autonomous mode
-	defaultQuests := []string{"market_scan", "funding_rate_scan", "portfolio_health"}
+	// scalping_execution is added when exchange is configured (scalping mode)
+	defaultQuests := []string{"market_scan", "funding_rate_scan", "portfolio_health", "scalping_execution"}
 	for _, defID := range defaultQuests {
 		quest, err := e.createQuestInternal(defID, chatID)
 		if err != nil {

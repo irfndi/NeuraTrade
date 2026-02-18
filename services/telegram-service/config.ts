@@ -21,6 +21,13 @@ import { join } from "path";
 import { homedir } from "os";
 
 type NeuratradeConfig = {
+  telegram?: {
+    enabled?: boolean;
+    bot_token?: string;
+    api_base_url?: string;
+    use_polling?: boolean;
+    port?: number;
+  };
   services?: {
     telegram?: {
       enabled?: boolean;
@@ -72,15 +79,27 @@ export const getEnvWithNeuratradeFallback = (
   }
   const keyLower = key.toLowerCase();
   if (keyLower === "telegram_bot_token") {
+    if (neuratradeConfig.telegram?.bot_token) {
+      return neuratradeConfig.telegram.bot_token;
+    }
     return neuratradeConfig.services?.telegram?.bot_token;
   }
   if (keyLower === "telegram_api_base_url") {
+    if (neuratradeConfig.telegram?.api_base_url) {
+      return neuratradeConfig.telegram.api_base_url;
+    }
     return neuratradeConfig.services?.telegram?.api_base_url;
   }
   if (keyLower === "telegram_use_polling") {
+    if (neuratradeConfig.telegram?.use_polling !== undefined) {
+      return neuratradeConfig.telegram.use_polling.toString();
+    }
     return neuratradeConfig.services?.telegram?.use_polling?.toString();
   }
   if (keyLower === "telegram_port") {
+    if (neuratradeConfig.telegram?.port !== undefined) {
+      return neuratradeConfig.telegram.port.toString();
+    }
     return neuratradeConfig.services?.telegram?.port?.toString();
   }
   if (keyLower === "admin_api_key") {

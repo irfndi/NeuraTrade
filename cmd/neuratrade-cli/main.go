@@ -77,23 +77,23 @@ type BindOperatorResponse struct {
 
 // VerifyBindingCodeRequest represents the request for verifying a binding code
 type VerifyBindingCodeRequest struct {
-	ChatID   string `json:"chat_id"`
-	UserID   string `json:"user_id"`
-	Code     string `json:"code"`
+	ChatID string `json:"chat_id"`
+	UserID string `json:"user_id"`
+	Code   string `json:"code"`
 }
 
 // VerifyBindingCodeResponse represents the response for verifying a binding code
 type VerifyBindingCodeResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message"`
-	UserID    string `json:"user_id,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	UserID  string `json:"user_id,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // makeRequest makes an HTTP request to the API
 func (c *APIClient) makeRequest(method, endpoint string, body interface{}) ([]byte, error) {
 	url := fmt.Sprintf("%s%s", c.BaseURL, endpoint)
-	
+
 	var reqBody []byte
 	if body != nil {
 		var err error
@@ -102,49 +102,49 @@ func (c *APIClient) makeRequest(method, endpoint string, body interface{}) ([]by
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
 	}
-	
+
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Content-Type", "application/json")
 	if c.APIKey != "" {
 		req.Header.Set("X-API-Key", c.APIKey)
 	}
-	
+
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-	
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(respBody))
 	}
-	
+
 	return respBody, nil
 }
 
 // GenerateAuthCode generates an auth code for Telegram binding
 func (c *APIClient) GenerateAuthCode(userID string) (*GenerateAuthCodeResponse, error) {
 	req := GenerateAuthCodeRequest{UserID: userID}
-	
+
 	respBody, err := c.makeRequest("POST", "/api/v1/telegram/generate-binding-code", req)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var response GenerateAuthCodeResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	return &response, nil
 }
 
@@ -154,12 +154,12 @@ func (c *APIClient) VerifyBindingCode(req *VerifyBindingCodeRequest) (*VerifyBin
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var response VerifyBindingCodeResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	return &response, nil
 }
 
@@ -169,12 +169,12 @@ func (c *APIClient) BindOperatorProfile(req *BindOperatorRequest) (*BindOperator
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var response BindOperatorResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	return &response, nil
 }
 
@@ -191,14 +191,14 @@ func main() {
 				Action:  generateAuthCode,
 			},
 			{
-				Name:    "status",
-				Usage:   "Show NeuraTrade system status",
-				Action:  status,
+				Name:   "status",
+				Usage:  "Show NeuraTrade system status",
+				Action: status,
 			},
 			{
-				Name:    "health",
-				Usage:   "Check system health",
-				Action:  health,
+				Name:   "health",
+				Usage:  "Check system health",
+				Action: health,
 			},
 			{
 				Name:  "prompt",
@@ -223,8 +223,8 @@ func main() {
 				},
 			},
 			{
-				Name:    "operator",
-				Usage:   "Manage operator profiles",
+				Name:  "operator",
+				Usage: "Manage operator profiles",
 				Subcommands: []*cli.Command{
 					{
 						Name:   "bind",
@@ -245,8 +245,8 @@ func main() {
 				},
 			},
 			{
-				Name:    "exchanges",
-				Usage:   "Manage exchange connections",
+				Name:  "exchanges",
+				Usage: "Manage exchange connections",
 				Subcommands: []*cli.Command{
 					{
 						Name:   "list",
@@ -293,8 +293,8 @@ func main() {
 				},
 			},
 			{
-				Name:    "ai",
-				Usage:   "AI model and provider management",
+				Name:  "ai",
+				Usage: "AI model and provider management",
 				Subcommands: []*cli.Command{
 					{
 						Name:   "models",
@@ -309,8 +309,8 @@ func main() {
 				},
 			},
 			{
-				Name:    "trading",
-				Usage:   "Trading related commands",
+				Name:  "trading",
+				Usage: "Trading related commands",
 				Subcommands: []*cli.Command{
 					{
 						Name:   "portfolio",
@@ -339,8 +339,8 @@ func main() {
 				},
 			},
 			{
-				Name:    "config",
-				Usage:   "Manage NeuraTrade configuration",
+				Name:  "config",
+				Usage: "Manage NeuraTrade configuration",
 				Subcommands: []*cli.Command{
 					{
 						Name:   "init",
@@ -383,21 +383,21 @@ func main() {
 			// Set up signal handling for graceful shutdown
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-			
+
 			go func() {
 				<-sigChan
 				fmt.Println("\nReceived interrupt signal. Exiting...")
 				os.Exit(0)
 			}()
-			
+
 			return nil
 		},
 	}
-	
+
 	// Add autonomous command separately to avoid struct literal error
 	app.Commands = append(app.Commands, &cli.Command{
-		Name:    "autonomous",
-		Usage:   "Manage autonomous trading mode",
+		Name:  "autonomous",
+		Usage: "Manage autonomous trading mode",
 		Subcommands: []*cli.Command{
 			{
 				Name:   "begin",
@@ -484,17 +484,17 @@ type GenerateBindingCodeResponse struct {
 // GenerateBindingCode generates a one-time code for Telegram binding
 func (c *APIClient) GenerateBindingCode(userID string) (*GenerateBindingCodeResponse, error) {
 	req := GenerateBindingCodeRequest{UserID: userID}
-	
+
 	respBody, err := c.makeRequest("POST", "/api/v1/telegram/internal/generate-binding-code", req)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var response GenerateBindingCodeResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	return &response, nil
 }
 
@@ -502,13 +502,13 @@ func (c *APIClient) GenerateBindingCode(userID string) (*GenerateBindingCodeResp
 func generateAuthCode(cCtx *cli.Context) error {
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
-	
+
 	client := NewAPIClient(baseURL, apiKey)
-	
+
 	// For now, we'll use a placeholder user ID
 	// In a real scenario, this would be retrieved from the user's profile
 	userID := "cli-generated-user"
-	
+
 	response, err := client.GenerateBindingCode(userID)
 	if err != nil {
 		// If API call fails, fall back to generating a local code
@@ -519,7 +519,7 @@ func generateAuthCode(cCtx *cli.Context) error {
 		fmt.Println("Use this code with /bind command in Telegram to link your account.")
 		return nil
 	}
-	
+
 	if response.Success {
 		fmt.Printf("Generated Auth Code for user %s\n", response.UserID)
 		fmt.Printf("Expires at: %s\n", response.ExpiresAt)
@@ -527,7 +527,7 @@ func generateAuthCode(cCtx *cli.Context) error {
 	} else {
 		fmt.Printf("Failed to generate auth code: %s\n", response.Message)
 	}
-	
+
 	return nil
 }
 
@@ -598,7 +598,7 @@ func status(cCtx *cli.Context) error {
 
 	fmt.Printf("  Status: %s\n", status)
 	fmt.Println("\nConnected Services:")
-	
+
 	// Show service status if available
 	if services, ok := healthResp["services"].(map[string]interface{}); ok {
 		for name, status := range services {
@@ -684,22 +684,22 @@ func health(cCtx *cli.Context) error {
 func buildPrompt(cCtx *cli.Context) error {
 	skill := cCtx.String("skill")
 	context := cCtx.String("context")
-	
+
 	if skill == "" {
 		return cli.Exit("Error: skill name is required", 1)
 	}
-	
+
 	fmt.Printf("Building prompt for skill: %s\n", skill)
 	if context != "" {
 		fmt.Printf("With context: %s\n", context)
 	}
-	
+
 	// In a real implementation, this would read the skill.md file
 	// and build a prompt based on the skill definition and provided context
 	prompt := fmt.Sprintf("You are an expert trading assistant. Skill: %s. Context: %s", skill, context)
-	
+
 	fmt.Printf("\nBuilt Prompt:\n%s\n", prompt)
-	
+
 	return nil
 }
 
@@ -707,24 +707,24 @@ func buildPrompt(cCtx *cli.Context) error {
 func bindOperator(cCtx *cli.Context) error {
 	authCode := cCtx.String("auth-code")
 	chatID := cCtx.String("chat-id")
-	
+
 	if authCode == "" {
 		return cli.Exit("Error: auth-code is required", 1)
 	}
-	
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
-	
+
 	client := NewAPIClient(baseURL, apiKey)
-	
+
 	// For now, we'll use placeholder values
 	// In a real scenario, the user ID would be retrieved from the user's session
 	request := &VerifyBindingCodeRequest{
 		ChatID: chatID,
-		UserID: "cli-user-id",  // Placeholder - in real usage, this would come from user session
+		UserID: "cli-user-id", // Placeholder - in real usage, this would come from user session
 		Code:   authCode,
 	}
-	
+
 	response, err := client.VerifyBindingCode(request)
 	if err != nil {
 		// If API call fails, inform the user
@@ -736,14 +736,14 @@ func bindOperator(cCtx *cli.Context) error {
 		}
 		return nil
 	}
-	
+
 	if response.Success {
 		fmt.Printf("✅ Operator binding successful!\n")
 		fmt.Println(response.Message)
 	} else {
 		fmt.Printf("❌ Operator binding failed: %s\n", response.Error)
 	}
-	
+
 	return nil
 }
 
@@ -765,20 +765,20 @@ type BeginAutonomousResponse struct {
 // beginAutonomous starts autonomous trading mode
 func beginAutonomous(cCtx *cli.Context) error {
 	chatID := cCtx.String("chat-id")
-	
+
 	if chatID == "" {
 		return cli.Exit("Error: chat-id is required", 1)
 	}
-	
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
-	
+
 	client := NewAPIClient(baseURL, apiKey)
-	
+
 	request := BeginAutonomousRequest{
 		ChatID: chatID,
 	}
-	
+
 	respBody, err := client.makeRequest("POST", "/api/v1/telegram/internal/autonomous/begin", request)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
@@ -786,12 +786,12 @@ func beginAutonomous(cCtx *cli.Context) error {
 		fmt.Printf("Would start autonomous mode for chat ID: %s\n", chatID)
 		return nil
 	}
-	
+
 	var response BeginAutonomousResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	if response.Ok {
 		fmt.Printf("✅ Autonomous mode started successfully!\n")
 		fmt.Printf("Status: %s\n", response.Status)
@@ -805,7 +805,7 @@ func beginAutonomous(cCtx *cli.Context) error {
 		}
 		fmt.Println(response.Message)
 	}
-	
+
 	return nil
 }
 
@@ -824,20 +824,20 @@ type PauseAutonomousResponse struct {
 // pauseAutonomous pauses autonomous trading mode
 func pauseAutonomous(cCtx *cli.Context) error {
 	chatID := cCtx.String("chat-id")
-	
+
 	if chatID == "" {
 		return cli.Exit("Error: chat-id is required", 1)
 	}
-	
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
-	
+
 	client := NewAPIClient(baseURL, apiKey)
-	
+
 	request := PauseAutonomousRequest{
 		ChatID: chatID,
 	}
-	
+
 	respBody, err := client.makeRequest("POST", "/api/v1/telegram/internal/autonomous/pause", request)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
@@ -845,12 +845,12 @@ func pauseAutonomous(cCtx *cli.Context) error {
 		fmt.Printf("Would pause autonomous mode for chat ID: %s\n", chatID)
 		return nil
 	}
-	
+
 	var response PauseAutonomousResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	if response.Ok {
 		fmt.Printf("✅ Autonomous mode paused successfully!\n")
 		fmt.Printf("Status: %s\n", response.Status)
@@ -860,7 +860,7 @@ func pauseAutonomous(cCtx *cli.Context) error {
 		fmt.Printf("Status: %s\n", response.Status)
 		fmt.Println(response.Message)
 	}
-	
+
 	return nil
 }
 
@@ -882,16 +882,16 @@ type GetAutonomousStatusResponse struct {
 // getAutonomousStatus gets the autonomous trading status
 func getAutonomousStatus(cCtx *cli.Context) error {
 	chatID := cCtx.String("chat-id")
-	
+
 	if chatID == "" {
 		return cli.Exit("Error: chat-id is required", 1)
 	}
-	
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
-	
+
 	client := NewAPIClient(baseURL, apiKey)
-	
+
 	// For status, we'll use the doctor endpoint which gives us the status
 	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/doctor?chat_id=%s", chatID), nil)
 	if err != nil {
@@ -900,14 +900,14 @@ func getAutonomousStatus(cCtx *cli.Context) error {
 		fmt.Printf("Would get status for chat ID: %s\n", chatID)
 		return nil
 	}
-	
+
 	var response map[string]interface{}
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	fmt.Printf("📊 Autonomous Mode Status for Chat ID: %s\n", chatID)
-	
+
 	overallStatus := "unknown"
 	if v, ok := response["overall_status"].(string); ok {
 		overallStatus = v
@@ -920,7 +920,7 @@ func getAutonomousStatus(cCtx *cli.Context) error {
 	if v, ok := response["checked_at"].(string); ok {
 		checkedAt = v
 	}
-	
+
 	fmt.Printf("Overall Status: %s\n", overallStatus)
 	fmt.Printf("Summary: %s\n", summary)
 	fmt.Printf("Checked At: %s\n", checkedAt)
@@ -947,7 +947,7 @@ func getAutonomousStatus(cCtx *cli.Context) error {
 	} else {
 		fmt.Println("\nNo detailed checks available")
 	}
-	
+
 	return nil
 }
 
@@ -973,16 +973,16 @@ type PortfolioPosition struct {
 // getPortfolio gets the portfolio status
 func getPortfolio(cCtx *cli.Context) error {
 	chatID := cCtx.String("chat-id")
-	
+
 	if chatID == "" {
 		return cli.Exit("Error: chat-id is required", 1)
 	}
-	
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
-	
+
 	client := NewAPIClient(baseURL, apiKey)
-	
+
 	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/portfolio?chat_id=%s", chatID), nil)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
@@ -990,18 +990,18 @@ func getPortfolio(cCtx *cli.Context) error {
 		fmt.Printf("Would get portfolio for chat ID: %s\n", chatID)
 		return nil
 	}
-	
+
 	var response GetPortfolioResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	fmt.Printf("💼 Portfolio Status for Chat ID: %s\n", chatID)
 	fmt.Printf("Total Equity: %s\n", response.TotalEquity)
 	fmt.Printf("Available Balance: %s\n", response.AvailableBalance)
 	fmt.Printf("Exposure: %s\n", response.Exposure)
 	fmt.Printf("Last Updated: %s\n", response.UpdatedAt)
-	
+
 	if len(response.Positions) > 0 {
 		fmt.Println("\nPositions:")
 		for _, pos := range response.Positions {
@@ -1011,7 +1011,7 @@ func getPortfolio(cCtx *cli.Context) error {
 	} else {
 		fmt.Println("\nNo active positions")
 	}
-	
+
 	return nil
 }
 
@@ -1035,16 +1035,16 @@ type GetQuestsResponse struct {
 // getQuests gets the quest progress
 func getQuests(cCtx *cli.Context) error {
 	chatID := cCtx.String("chat-id")
-	
+
 	if chatID == "" {
 		return cli.Exit("Error: chat-id is required", 1)
 	}
-	
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
-	
+
 	client := NewAPIClient(baseURL, apiKey)
-	
+
 	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/quests?chat_id=%s", chatID), nil)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
@@ -1052,15 +1052,15 @@ func getQuests(cCtx *cli.Context) error {
 		fmt.Printf("Would get quests for chat ID: %s\n", chatID)
 		return nil
 	}
-	
+
 	var response GetQuestsResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	
+
 	fmt.Printf("🎯 Quest Progress for Chat ID: %s\n", chatID)
 	fmt.Printf("Last Updated: %s\n", response.UpdatedAt)
-	
+
 	if len(response.Quests) > 0 {
 		for _, quest := range response.Quests {
 			progressPercent := 0
@@ -1075,18 +1075,18 @@ func getQuests(cCtx *cli.Context) error {
 	} else {
 		fmt.Println("No active quests")
 	}
-	
+
 	return nil
 }
 
 // AIModel represents an AI model
 type AIModel struct {
-	ID          string   `json:"id"`
-	DisplayName string   `json:"display_name"`
-	Provider    string   `json:"provider"`
-	Cost        string   `json:"cost"`
-	SupportsTools bool   `json:"supports_tools"`
-	SupportsVision bool  `json:"supports_vision"`
+	ID             string `json:"id"`
+	DisplayName    string `json:"display_name"`
+	Provider       string `json:"provider"`
+	Cost           string `json:"cost"`
+	SupportsTools  bool   `json:"supports_tools"`
+	SupportsVision bool   `json:"supports_vision"`
 }
 
 // AIModelsResponse represents the response from the AI models endpoint
@@ -1100,7 +1100,7 @@ func (c *APIClient) GetAIModels() (*AIModelsResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var response AIModelsResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
@@ -1320,10 +1320,10 @@ func checkBalance(cCtx *cli.Context) error {
 
 // ExchangeConfig represents an exchange configuration
 type ExchangeConfig struct {
-	Name       string `json:"name"`
-	Enabled    bool   `json:"enabled"`
-	HasAuth    bool   `json:"has_auth"`
-	AddedAt    string `json:"added_at"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	HasAuth bool   `json:"has_auth"`
+	AddedAt string `json:"added_at"`
 }
 
 // ExchangesListResponse represents the response for listing exchanges
@@ -1334,9 +1334,9 @@ type ExchangesListResponse struct {
 
 // ExchangeAddRequest represents the request to add an exchange
 type ExchangeAddRequest struct {
-	Name    string `json:"name"`
-	APIKey  string `json:"api_key,omitempty"`
-	Secret  string `json:"secret,omitempty"`
+	Name   string `json:"name"`
+	APIKey string `json:"api_key,omitempty"`
+	Secret string `json:"secret,omitempty"`
 }
 
 // ExchangeAddResponse represents the response for adding an exchange
@@ -1470,7 +1470,7 @@ func addExchange(cCtx *cli.Context) error {
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
 		fmt.Println("\nFalling back to local configuration...")
-		
+
 		// Fallback: update config file directly
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -1478,12 +1478,12 @@ func addExchange(cCtx *cli.Context) error {
 		}
 		configDir := path.Join(homeDir, ".neuratrade")
 		configPath := path.Join(configDir, "config.json")
-		
+
 		// Create directory if it doesn't exist
 		if err := os.MkdirAll(configDir, 0700); err != nil {
 			return fmt.Errorf("failed to create config directory: %w", err)
 		}
-		
+
 		// Load existing config or create new
 		var config map[string]interface{}
 		if data, err := os.ReadFile(configPath); err == nil {
@@ -1493,14 +1493,14 @@ func addExchange(cCtx *cli.Context) error {
 		} else {
 			config = make(map[string]interface{})
 		}
-		
+
 		// Initialize exchanges array if needed
 		if _, ok := config["exchanges"]; !ok {
 			config["exchanges"] = []interface{}{}
 		}
-		
+
 		exchanges := config["exchanges"].([]interface{})
-		
+
 		// Check if exchange already exists
 		for _, ex := range exchanges {
 			if exMap, ok := ex.(map[string]interface{}); ok {
@@ -1509,11 +1509,11 @@ func addExchange(cCtx *cli.Context) error {
 				}
 			}
 		}
-		
+
 		// Add new exchange
 		newExchange := map[string]interface{}{
-			"name":    name,
-			"enabled": true,
+			"name":     name,
+			"enabled":  true,
 			"added_at": time.Now().Format(time.RFC3339),
 		}
 		if apiKey != "" {
@@ -1522,20 +1522,20 @@ func addExchange(cCtx *cli.Context) error {
 		if secret != "" {
 			newExchange["secret"] = secret
 		}
-		
+
 		exchanges = append(exchanges, newExchange)
 		config["exchanges"] = exchanges
-		
+
 		// Save config
 		data, err := json.MarshalIndent(config, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal config: %w", err)
 		}
-		
+
 		if err := os.WriteFile(configPath, data, 0600); err != nil {
 			return fmt.Errorf("failed to write config: %w", err)
 		}
-		
+
 		fmt.Printf("\n✅ Exchange %s added successfully!\n", name)
 		fmt.Println("\nNote: Configuration saved locally.")
 		fmt.Println("To apply changes, restart the CCXT service:")
@@ -1584,25 +1584,25 @@ func removeExchange(cCtx *cli.Context) error {
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
 		fmt.Println("\nFalling back to local configuration...")
-		
+
 		// Fallback: update config file directly
 		configPath := path.Join(os.Getenv("HOME"), ".neuratrade", "config.json")
-		
+
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			return fmt.Errorf("failed to read config: %w", err)
 		}
-		
+
 		var config map[string]interface{}
 		if err := json.Unmarshal(data, &config); err != nil {
 			return fmt.Errorf("failed to parse config: %w", err)
 		}
-		
+
 		exchanges, ok := config["exchanges"].([]interface{})
 		if !ok {
 			return fmt.Errorf("no exchanges configured")
 		}
-		
+
 		found := false
 		newExchanges := make([]interface{}, 0, len(exchanges))
 		for _, ex := range exchanges {
@@ -1614,22 +1614,22 @@ func removeExchange(cCtx *cli.Context) error {
 				newExchanges = append(newExchanges, ex)
 			}
 		}
-		
+
 		if !found {
 			return cli.Exit(fmt.Sprintf("Error: exchange %s not found", name), 1)
 		}
-		
+
 		config["exchanges"] = newExchanges
-		
+
 		data, err = json.MarshalIndent(config, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal config: %w", err)
 		}
-		
+
 		if err := os.WriteFile(configPath, data, 0600); err != nil {
 			return fmt.Errorf("failed to write config: %w", err)
 		}
-		
+
 		fmt.Printf("\n✅ Exchange %s removed successfully!\n", name)
 		fmt.Println("\nNote: Configuration saved locally.")
 		fmt.Println("To apply changes, restart the CCXT service:")
@@ -1699,7 +1699,7 @@ func prettyPrint(data interface{}) {
 // configInit initializes the configuration file with defaults
 func configInit(cCtx *cli.Context) error {
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
-	
+
 	// Check if config already exists
 	if _, err := os.Stat(configPath); err == nil {
 		content, _ := os.ReadFile(configPath)
@@ -1710,13 +1710,13 @@ func configInit(cCtx *cli.Context) error {
 			return nil
 		}
 	}
-	
+
 	// Get flag values
 	binanceKey := cCtx.String("binance-key")
 	binanceSecret := cCtx.String("binance-secret")
 	telegramToken := cCtx.String("telegram-token")
 	aiKey := cCtx.String("ai-key")
-	
+
 	// Create default config
 	config := map[string]interface{}{
 		"version": "1.0.0",
@@ -1727,35 +1727,36 @@ func configInit(cCtx *cli.Context) error {
 		},
 		"database": map[string]interface{}{
 			"driver":      "sqlite",
-			"path":        os.ExpandEnv("$HOME/.neuratrade/data/neuratrade.db"),
+			"sqlite_path": os.ExpandEnv("$HOME/.neuratrade/data/neuratrade.db"),
 		},
 		"redis": map[string]interface{}{
 			"host": "localhost",
 			"port": 6379,
 			"url":  "redis://localhost:6379",
 		},
-		"services": map[string]interface{}{
-			"ccxt": map[string]interface{}{
-				"url":          "http://localhost:3001",
-				"grpc_address": "localhost:50051",
-				"exchanges": map[string]interface{}{
-					"binance": map[string]interface{}{
-						"enabled":    true,
-						"api_key":    binanceKey,
-						"api_secret": binanceSecret,
-						"testnet":    false,
-					},
+		// CCXT at root level (not nested under services)
+		"ccxt": map[string]interface{}{
+			"service_url":   "http://localhost:3001",
+			"grpc_address":  "localhost:50051",
+			"admin_api_key": generateRandomKey(32),
+			"exchanges": map[string]interface{}{
+				"binance": map[string]interface{}{
+					"enabled":    true,
+					"api_key":    binanceKey,
+					"api_secret": binanceSecret,
+					"testnet":    false,
 				},
 			},
-			"telegram": map[string]interface{}{
-				"enabled":          true,
-				"bot_token":        telegramToken,
-				"service_url":      "http://localhost:3002",
-				"grpc_address":     "localhost:50052",
-				"use_polling":      true,
-				"external_service": true,
-				"api_base_url":     "http://localhost:8080",
-			},
+		},
+		// Telegram at root level (not nested under services)
+		"telegram": map[string]interface{}{
+			"enabled":          true,
+			"bot_token":        telegramToken,
+			"service_url":      "http://localhost:3002",
+			"grpc_address":     "localhost:50052",
+			"use_polling":      true,
+			"external_service": true,
+			"api_base_url":     "http://localhost:8080",
 		},
 		"ai": map[string]interface{}{
 			"provider":     "minimax",
@@ -1783,23 +1784,23 @@ func configInit(cCtx *cli.Context) error {
 			"environment": "development",
 		},
 	}
-	
+
 	// Ensure directory exists
 	configDir := os.ExpandEnv("$HOME/.neuratrade")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
-	
+
 	// Write config
 	configData, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-	
+
 	if err := os.WriteFile(configPath, configData, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
-	
+
 	fmt.Println("✓ Configuration initialized successfully!")
 	fmt.Printf("  Config file: %s\n", configPath)
 	fmt.Println("")
@@ -1808,7 +1809,7 @@ func configInit(cCtx *cli.Context) error {
 	fmt.Println("  2. Start services: neuratrade gateway start")
 	fmt.Println("  3. Test Telegram bot: Send /start to your bot")
 	fmt.Println("")
-	
+
 	if binanceKey == "" {
 		fmt.Println("NOTE: Binance API keys not provided.")
 		fmt.Println("      Use /connect_exchange binance via Telegram to add them.")
@@ -1821,47 +1822,47 @@ func configInit(cCtx *cli.Context) error {
 		fmt.Println("NOTE: AI API key not provided.")
 		fmt.Println("      Run: neuratrade config init --ai-key <key>")
 	}
-	
+
 	return nil
 }
 
 // configStatus shows the configuration status
 func configStatus(cCtx *cli.Context) error {
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
-	
+
 	fmt.Println("NeuraTrade Configuration Status")
 	fmt.Println("================================")
-	
+
 	// Check config file
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		fmt.Println("✗ Configuration file not found")
 		fmt.Printf("  Run: neuratrade config init\n")
 		return nil
 	}
-	
+
 	fmt.Println("✓ Configuration file exists")
-	
+
 	// Read and parse config
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		fmt.Printf("✗ Cannot read config: %v\n", err)
 		return err
 	}
-	
+
 	if string(content) == "{}" || len(content) < 5 {
 		fmt.Println("✗ Configuration file is empty")
 		fmt.Printf("  Run: neuratrade config init\n")
 		return nil
 	}
-	
+
 	fmt.Println("✓ Configuration file has content")
-	
+
 	var config map[string]interface{}
 	if err := json.Unmarshal(content, &config); err != nil {
 		fmt.Printf("✗ Invalid JSON: %v\n", err)
 		return err
 	}
-	
+
 	// Check sections
 	checkSection := func(path string, required bool) bool {
 		parts := strings.Split(path, ".")
@@ -1879,51 +1880,51 @@ func configStatus(cCtx *cli.Context) error {
 		}
 		return true
 	}
-	
+
 	fmt.Println("")
 	fmt.Println("Configuration Sections:")
-	
+
 	if checkSection("services.ccxt", true) {
 		fmt.Println("  ✓ CCXT service configured")
 	} else {
 		fmt.Println("  ✗ CCXT service missing")
 	}
-	
+
 	if checkSection("services.telegram", true) {
 		fmt.Println("  ✓ Telegram service configured")
 	} else {
 		fmt.Println("  ✗ Telegram service missing")
 	}
-	
+
 	if checkSection("ai", true) {
 		fmt.Println("  ✓ AI service configured")
 	} else {
 		fmt.Println("  ✗ AI service missing")
 	}
-	
+
 	if checkSection("security", true) {
 		fmt.Println("  ✓ Security configured")
 	} else {
 		fmt.Println("  ✗ Security missing")
 	}
-	
+
 	// Check Binance keys
 	if checkSection("services.ccxt.exchanges.binance.api_key", false) {
 		fmt.Println("  ✓ Binance API keys configured")
 	} else {
 		fmt.Println("  ⚠ Binance API keys not configured (use /connect_exchange binance)")
 	}
-	
+
 	fmt.Println("")
 	fmt.Println("Use 'neuratrade config show' to view full configuration.")
-	
+
 	return nil
 }
 
 // configShow displays the full configuration with masked secrets
 func configShow(cCtx *cli.Context) error {
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
-	
+
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1933,21 +1934,21 @@ func configShow(cCtx *cli.Context) error {
 		}
 		return err
 	}
-	
+
 	if string(content) == "{}" || len(content) < 5 {
 		fmt.Println("Configuration file is empty.")
 		fmt.Println("Run: neuratrade config init")
 		return nil
 	}
-	
+
 	var config map[string]interface{}
 	if err := json.Unmarshal(content, &config); err != nil {
 		return err
 	}
-	
+
 	// Mask sensitive values
 	maskSecretsInConfig(config)
-	
+
 	prettyPrint(config)
 	return nil
 }
