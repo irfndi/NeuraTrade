@@ -181,8 +181,9 @@ cmd/neuratrade-cli/neuratrade-cli
 # Beads (issue tracking) runtime files
 .beads/daemon-error
 
-# NeuraTrade user data directory
-~/.neuratrade/
+# NeuraTrade user data directory (macOS/Linux)
+.neuratrade/
+*/.neuratrade/
 
 # Temporary development directories
 _temporary/

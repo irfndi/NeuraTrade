@@ -283,7 +283,7 @@ func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersR
 func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		// Safe int to int32 conversion with bounds checking
+		// Safe int to int32 conversion with bounds checking - nolint:gosec
 		var safeLimit int32
 		if limit <= 0 {
 			safeLimit = 0
@@ -322,7 +322,7 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		// Safe int to int32 conversion with bounds checking
+		// Safe int to int32 conversion with bounds checking - nolint:gosec
 		var safeLimit int32
 		if limit <= 0 {
 			safeLimit = 0
@@ -361,7 +361,7 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		// Safe int to int32 conversion with bounds checking
+		// Safe int to int32 conversion with bounds checking - nolint:gosec
 		var safeLimit int32
 		if limit <= 0 {
 			safeLimit = 0

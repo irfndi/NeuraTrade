@@ -118,7 +118,7 @@ You need:
 Run this to test all working commands:
 
 ```bash
-cd /Users/irfandi/Coding/2025/NeuraTrade/services/telegram-service
+cd services/telegram-service
 bash scripts/test-commands-live.sh
 ```
 
