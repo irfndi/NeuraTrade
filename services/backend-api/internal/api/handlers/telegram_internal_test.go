@@ -542,24 +542,24 @@ func TestTelegramInternalHandler_BeginAutonomous_ReadinessBlocked(t *testing.T) 
 	assert.NoError(t, err)
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
-	
+
 	handler := NewTelegramInternalHandler(dbPool, nil, nil)
-	
+
 	requestBody := `{"chat_id":"777"}`
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/telegram/internal/autonomous/begin", bytes.NewBufferString(requestBody))
 	c.Request.Header.Set("Content-Type", "application/json")
-	
+
 	// Mock schema creation (may be skipped if sync.Once already executed)
 	mockDB.ExpectExec("CREATE TABLE").WillReturnResult(pgxmock.NewResult("CREATE", 0)).Maybe()
 	mockDB.ExpectExec("CREATE TABLE").WillReturnResult(pgxmock.NewResult("CREATE", 0)).Maybe()
-	
+
 	// Note: Not mocking wallet count queries as config file affects behavior
 	// The test just verifies the handler doesn't crash
-	
+
 	handler.BeginAutonomous(c)
-	
+
 	assert.Equal(t, http.StatusOK, w.Code)
 	// Response structure varies based on config file and readiness checks
 	// Just verify the handler doesn't crash and returns a valid response
