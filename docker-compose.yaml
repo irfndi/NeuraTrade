@@ -16,7 +16,7 @@
 services:
   backend-api:
     build:
-      context: services/backend-api
+      context: .
       dockerfile: Dockerfile
     restart: always
     ports:
@@ -53,7 +53,6 @@ services:
       - ${NEURATRADE_HOME:-${HOME}/.neuratrade}/data:/data
     networks:
       - default
-      - coolify
     depends_on:
       ccxt-service:
         condition: service_started
@@ -75,7 +74,6 @@ services:
       - ${NEURATRADE_HOME:-${HOME}/.neuratrade}/redis-data:/data
     networks:
       - default
-      - coolify
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -95,7 +93,6 @@ services:
       - SENTRY_DSN=${SENTRY_DSN:-}
     networks:
       - default
-      - coolify
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 30s
@@ -126,7 +123,6 @@ services:
       - SENTRY_DSN=${SENTRY_DSN:-}
     networks:
       - default
-      - coolify
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
       interval: 30s
@@ -135,7 +131,6 @@ services:
       start_period: 10s
 
 networks:
-  coolify:
-    external: true
-    name: ${COOLIFY_SHARED_NETWORK:-coolify}
+  default:
+    driver: bridge
 

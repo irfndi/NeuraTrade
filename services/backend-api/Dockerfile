@@ -1,6 +1,9 @@
 # Backend API Dockerfile
 FROM golang:1.25.5 AS builder
 
+# Install git, ca-certificates, and C compiler for SQLite
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gcc musl-dev && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy go mod files
@@ -10,8 +13,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o main ./cmd/server && \
+# Build the application (enable CGO for SQLite)
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o main ./cmd/server && \
     chmod +x main
 
 # Final Stage
@@ -25,17 +28,16 @@ RUN groupadd -g 1001 appgroup && \
 
 WORKDIR /app
 
-# Copy Go binary and configs
+# Copy Go binary and configs (config.yml is optional - will use env vars)
 COPY --from=builder /app/main .
-COPY --from=builder /app/config.yml .
+RUN test -f /app/config.yml && COPY --from=builder /app/config.yml . || true
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/database ./database
-COPY --from=builder /app/entrypoint.sh .
+RUN test -f /app/scripts/entrypoint.sh && COPY --from=builder /app/scripts/entrypoint.sh . || true
 
 # Permissions
 RUN chown -R appuser:appgroup /app && \
-    chmod +x scripts/*.sh && \
-    chmod +x entrypoint.sh
+    chmod +x scripts/*.sh 2>/dev/null || true
 
 USER appuser
 

@@ -12,8 +12,8 @@
 # ==========================================
 FROM golang:1.25.5 AS go-builder
 
-# Install git and ca-certificates
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+# Install git, ca-certificates, and C compiler for SQLite
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gcc musl-dev && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -24,8 +24,8 @@ RUN go mod download
 # Copy backend-api source code
 COPY services/backend-api/ .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o main ./cmd/server && \
+# Build the application (enable CGO for SQLite)
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o main ./cmd/server && \
     chmod +x main
 
 # ==========================================
