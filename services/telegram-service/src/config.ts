@@ -81,7 +81,10 @@ export interface TelegramConfig {
  * ```
  */
 export const loadConfig = Effect.try((): TelegramConfig => {
-  const botToken = getEnvWithNeuratradeFallback("TELEGRAM_BOT_TOKEN") || getEnvWithNeuratradeFallback("TELEGRAM_TOKEN") || "";
+  const botToken =
+    getEnvWithNeuratradeFallback("TELEGRAM_BOT_TOKEN") ||
+    getEnvWithNeuratradeFallback("TELEGRAM_TOKEN") ||
+    "";
   if (!botToken) {
     throw new Error(
       "TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN environment variable must be set",
