@@ -542,7 +542,7 @@ function cleanupMarketData() {
 // Start cleanup interval
 const cleanupIntervalMs =
   (userConfig.marketData?.cleanup_interval_minutes || 5) * 60 * 1000;
-setInterval(cleanupMarketData, cleanupIntervalMs);
+const cleanupIntervalId: NodeJS.Timeout = setInterval(cleanupMarketData, cleanupIntervalMs);
 console.log(
   `🧹 Market data cleanup scheduled every ${userConfig.marketData?.cleanup_interval_minutes || 5} minutes`,
 );
@@ -2046,6 +2046,8 @@ if (shouldAutoServe) {
         if (isSentryEnabled) {
           await sentryFlush(2000);
         }
+        // Clear intervals to prevent memory leaks
+        clearInterval(cleanupIntervalId);
         server.stop();
         grpcServer.forceShutdown();
         process.exit(0);
@@ -2057,6 +2059,8 @@ if (shouldAutoServe) {
         if (isSentryEnabled) {
           await sentryFlush(2000);
         }
+        // Clear intervals to prevent memory leaks
+        clearInterval(cleanupIntervalId);
         server.stop();
         grpcServer.forceShutdown();
         process.exit(0);

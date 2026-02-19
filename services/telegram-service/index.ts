@@ -18,7 +18,7 @@ const api = new BackendApiClient({
 });
 const sessions = new SessionManager();
 
-setInterval(() => {
+const sessionCleanupIntervalId = setInterval(() => {
   const cleaned = sessions.cleanupExpired();
   if (cleaned > 0) {
     logger.info("Session cleanup completed", { cleanedCount: cleaned });
@@ -217,6 +217,7 @@ startBot().catch((error) => {
 
 process.on("SIGTERM", () => {
   logger.info("SIGTERM received, shutting down");
+  clearInterval(sessionCleanupIntervalId);
   server.stop();
   if (grpcServer) {
     grpcServer.forceShutdown();
@@ -226,6 +227,7 @@ process.on("SIGTERM", () => {
 
 process.on("SIGINT", () => {
   logger.info("SIGINT received, shutting down");
+  clearInterval(sessionCleanupIntervalId);
   server.stop();
   if (grpcServer) {
     grpcServer.forceShutdown();

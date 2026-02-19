@@ -519,16 +519,31 @@ func (sp *SignalProcessor) processSignalsConcurrently(marketData []models.Market
 	}
 	close(jobs)
 
-	// Wait for workers to complete
+	// Wait for workers to complete in a separate goroutine
+	// This prevents blocking if context is cancelled
 	go func() {
 		workerWg.Wait()
 		close(results)
 	}()
 
-	// Collect results
+	// Collect results with context awareness
 	var allResults []ProcessingResult
-	for result := range results {
-		allResults = append(allResults, result)
+	collectDone := make(chan struct{})
+	go func() {
+		for result := range results {
+			allResults = append(allResults, result)
+		}
+		close(collectDone)
+	}()
+
+	// Wait for collection to complete or context to be cancelled
+	select {
+	case <-collectDone:
+		// Collection completed successfully
+	case <-sp.ctx.Done():
+		// Context cancelled, log and return partial results
+		sp.logger.Warn("Context cancelled during result collection, returning partial results")
+		return allResults
 	}
 
 	// Add result tracking

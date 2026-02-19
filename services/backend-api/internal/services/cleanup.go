@@ -158,6 +158,8 @@ func (c *CleanupService) Stop() {
 	c.logger.Info("Stopping cleanup service")
 	observability.AddBreadcrumb(c.ctx, "cleanup", "Stopping cleanup service", sentry.LevelInfo)
 	c.cancel()
+	// Give goroutines time to finish
+	time.Sleep(100 * time.Millisecond)
 }
 
 // RunCleanup performs a manual cleanup operation.

@@ -340,7 +340,7 @@ func TestSetupRoutes_PanicHandling(t *testing.T) {
 	assert.NotNil(t, router)
 
 	assert.Panics(t, func() {
-		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should panic with nil dependencies")
 }
 

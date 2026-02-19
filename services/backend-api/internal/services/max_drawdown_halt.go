@@ -287,18 +287,17 @@ func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, sever
 		},
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := h.notificationSvc.NotifyRiskEvent(ctx, chatIDInt, event); err != nil {
-			if h.notificationSvc.logger != nil {
-				h.notificationSvc.logger.Error("Failed to send risk event notification",
-					"chat_id", chatIDInt,
-					"event_type", eventType,
-					"error", err)
-			}
+	// Send notification synchronously with timeout to prevent goroutine leaks
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.notificationSvc.NotifyRiskEvent(ctx, chatIDInt, event); err != nil {
+		if h.notificationSvc.logger != nil {
+			h.notificationSvc.logger.Error("Failed to send risk event notification",
+				"chat_id", chatIDInt,
+				"event_type", eventType,
+				"error", err)
 		}
-	}()
+	}
 }
 
 func (h *MaxDrawdownHalt) SetNotificationService(svc *NotificationService) {
