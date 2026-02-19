@@ -327,7 +327,8 @@ REQUIREMENTS:
 
 	switch strategy {
 	case "scalping":
-		return fmt.Sprintf(basePrompt, "high-frequency scalping") + ` //nolint:staticcheck
+		//nolint:staticcheck
+		return fmt.Sprintf(basePrompt, "high-frequency scalping") + `
 
 SCALPING SPECIFICS:
 - Target small, quick profits (0.1% to 0.5%)
@@ -344,7 +345,8 @@ SCALPING SIGNALS TO LOOK FOR:
 - Price bouncing off support/resistance
 - Momentum in order flow`
 	case "arbitrage":
-		return fmt.Sprintf(basePrompt, "cross-exchange arbitrage") + ` //nolint:staticcheck
+		//nolint:staticcheck
+		return fmt.Sprintf(basePrompt, "cross-exchange arbitrage") + `
 
 ARBITRAGE SPECIFICS:
 - Identify price discrepancies between exchanges
@@ -353,7 +355,8 @@ ARBITRAGE SPECIFICS:
 - Consider execution speed and reliability
 - Monitor for delayed settlements`
 	default:
-		return fmt.Sprintf(basePrompt, strategy) //nolint:staticcheck
+		//nolint:staticcheck
+		return fmt.Sprintf(basePrompt, strategy)
 	}
 }
 
