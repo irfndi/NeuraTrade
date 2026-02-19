@@ -60,16 +60,16 @@ nt_test_result() {
   case "$result" in
     pass)
       nt_success "$name"
-      ((TESTS_PASSED++))
+      TESTS_PASSED=$((TESTS_PASSED + 1))
       ;;
     skip)
       nt_warn "$name (skipped: $message)"
-      ((TESTS_SKIPPED++))
+      TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
       ;;
     *)
       nt_error "$name"
       [[ -n "$message" ]] && echo "   Details: $message"
-      ((TESTS_FAILED++))
+      TESTS_FAILED=$((TESTS_FAILED + 1))
       ;;
   esac
 }
@@ -285,7 +285,7 @@ nt_validate_json_field() {
       jq -e "${field} | type == \"boolean\"" <<<"$json" &>/dev/null
       ;;
     *)
-      jq -e "has(\"${field}\")" <<<"$json" &>/dev/null
+      jq -e "getpath(path(.${field}))" <<<"$json" &>/dev/null
       ;;
   esac
 }
@@ -320,7 +320,7 @@ nt_init() {
 
   nt_header "$title"
   echo "Version: 1.0.0"
-  echo "Date: $(date)"
+  echo "Date: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   echo ""
 
   # Reset counters

@@ -11,6 +11,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/services/risk"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
+	"golang.org/x/sync/singleflight"
 )
 
 type PortfolioSafetyConfig struct {
@@ -34,7 +35,6 @@ type ExchangeExposure struct {
 	TotalBalance     decimal.Decimal `json:"total_balance"`
 	AvailableBalance decimal.Decimal `json:"available_balance"`
 	UsedBalance      decimal.Decimal `json:"used_balance"`
-	PositionValue    decimal.Decimal `json:"position_value"`
 	ExposurePct      float64         `json:"exposure_pct"`
 }
 
@@ -88,6 +88,7 @@ type PortfolioSafetyService struct {
 	lastSnapshot     *SafetyPortfolioSnapshot
 	lastSnapshotTime time.Time
 	mu               sync.RWMutex
+	requestGroup     singleflight.Group
 }
 
 func NewPortfolioSafetyService(
@@ -123,17 +124,26 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 	}
 	s.mu.RUnlock()
 
-	snapshot, err := s.calculateSnapshot(ctx, chatID, exchanges)
+	key := "snapshot_" + chatID
+	result, err, _ := s.requestGroup.Do(key, func() (interface{}, error) {
+		snap, err := s.calculateSnapshot(ctx, chatID, exchanges)
+		if err != nil {
+			return nil, err
+		}
+
+		s.mu.Lock()
+		s.lastSnapshot = snap
+		s.lastSnapshotTime = time.Now()
+		s.mu.Unlock()
+
+		return snap, nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
 
-	s.mu.Lock()
-	s.lastSnapshot = snapshot
-	s.lastSnapshotTime = time.Now()
-	s.mu.Unlock()
-
-	return snapshot, nil
+	return result.(*SafetyPortfolioSnapshot), nil
 }
 
 func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID string, exchanges []string) (*SafetyPortfolioSnapshot, error) {

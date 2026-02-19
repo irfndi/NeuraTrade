@@ -33,13 +33,13 @@ func GenerateTestSecret() string {
 	// Generate 32 random bytes (64 hex chars)
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
-		// Fallback: use environment variable or panic
+		// Fallback to environment variable if crypto/rand fails
 		if envSecret := os.Getenv("TEST_JWT_SECRET"); envSecret != "" && len(envSecret) >= 32 {
 			return envSecret
 		}
-		// Last resort: generate a deterministic secret from timestamp
-		// This should only happen in test environments
-		return "test-secret-32-characters-min-required"
+		// A failure to read from rand.Read is a critical problem in the environment.
+		// Panicking is better than using a hardcoded, insecure secret.
+		panic("failed to generate random bytes for test secret and TEST_JWT_SECRET is not set")
 	}
 	return hex.EncodeToString(bytes)
 }
