@@ -35,6 +35,19 @@ print_header "NeuraTrade Autonomous Trading Test Suite"
 echo "Date: $(date)"
 echo ""
 
+check_config_section() {
+  local key="$1"
+  local label="$2"
+
+  if jq -e "$key" "$CONFIG_FILE" >/dev/null 2>&1; then
+    print_success "$label"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    print_warn "$label missing"
+    TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+  fi
+}
+
 # ============================================================================
 # 1. CONFIGURATION CHECKS
 # ============================================================================
@@ -57,30 +70,10 @@ if [ -f "$CONFIG_FILE" ]; then
 
     # Check with jq if available
     if command -v jq &>/dev/null; then
-      # Check for key sections
-      if jq -e '.services.ccxt' "$CONFIG_FILE" >/dev/null 2>&1; then
-        print_success "CCXT config present"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-      else
-        print_warn "CCXT config missing"
-        TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
-      fi
-
-      if jq -e '.services.telegram' "$CONFIG_FILE" >/dev/null 2>&1; then
-        print_success "Telegram config present"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-      else
-        print_warn "Telegram config missing"
-        TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
-      fi
-
-      if jq -e '.ai' "$CONFIG_FILE" >/dev/null 2>&1; then
-        print_success "AI config present"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-      else
-        print_warn "AI config missing"
-        TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
-      fi
+      # Check for key sections.
+      check_config_section '.services.ccxt' "CCXT config present"
+      check_config_section '.services.telegram' "Telegram config present"
+      check_config_section '.ai' "AI config present"
 
       # Check for Binance keys
       if jq -e '.services.ccxt.exchanges.binance.api_key' "$CONFIG_FILE" >/dev/null 2>&1; then

@@ -123,7 +123,17 @@ func testAIEndpoints() {
 
 	// AI Select model
 	postBody = `{"model_id": "openai/gpt-4o-mini"}`
-	testEndpoint("POST /api/v1/ai/select/:userId", fmt.Sprintf("/api/v1/ai/select/%s", testUserID), 500, &postBody)
+	selectStatus, selectBody := post(fmt.Sprintf("/api/v1/ai/select/%s", testUserID), postBody)
+	switch {
+	case selectStatus == 200:
+		results = append(results, TestResult{Name: "POST /api/v1/ai/select/:userId", Passed: true, Message: "OK"})
+	case selectStatus == 400 || selectStatus == 404:
+		results = append(results, TestResult{Name: "POST /api/v1/ai/select/:userId", Passed: true, Message: fmt.Sprintf("Client error handled (status %d)", selectStatus)})
+	case selectStatus >= 500:
+		results = append(results, TestResult{Name: "POST /api/v1/ai/select/:userId", Passed: false, Message: fmt.Sprintf("Unexpected server error (status %d)", selectStatus), Response: string(selectBody)})
+	default:
+		results = append(results, TestResult{Name: "POST /api/v1/ai/select/:userId", Passed: false, Message: fmt.Sprintf("Unexpected status: %d", selectStatus), Response: string(selectBody)})
+	}
 }
 
 func testBootstrapEndpoints() {
@@ -173,12 +183,20 @@ func testCCXTService() {
 		results = append(results, TestResult{Name: "GET CCXT /health", Passed: false, Message: fmt.Sprintf("Status: %d", resp.StatusCode)})
 	}
 
-	// Test CCXT exchanges
-	resp2, _ := http.Get(CCXTURL + "/exchanges")
-	if resp2 != nil {
+	// Test CCXT exchanges.
+	resp2, err := http.Get(CCXTURL + "/exchanges")
+	if err != nil {
+		results = append(results, TestResult{Name: "GET CCXT /exchanges", Passed: false, Message: err.Error()})
+	} else {
 		defer resp2.Body.Close()
-		if resp2.StatusCode == 200 {
+		body2, _ := io.ReadAll(resp2.Body)
+
+		if resp2.StatusCode != 200 {
+			results = append(results, TestResult{Name: "GET CCXT /exchanges", Passed: false, Message: fmt.Sprintf("Status: %d", resp2.StatusCode), Response: string(body2)})
+		} else if hasExchangeEntries(body2) {
 			results = append(results, TestResult{Name: "GET CCXT /exchanges", Passed: true, Message: "OK"})
+		} else {
+			results = append(results, TestResult{Name: "GET CCXT /exchanges", Passed: false, Message: "No exchanges returned in body", Response: string(body2)})
 		}
 	}
 
@@ -339,6 +357,40 @@ func post(endpoint, body string) (int, []byte) {
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, respBody
+}
+
+func hasExchangeEntries(body []byte) bool {
+	var payload interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+
+	switch v := payload.(type) {
+	case []interface{}:
+		return len(v) > 0
+	case map[string]interface{}:
+		if arr, ok := v["exchanges"].([]interface{}); ok && len(arr) > 0 {
+			return true
+		}
+		if arr, ok := v["data"].([]interface{}); ok && len(arr) > 0 {
+			return true
+		}
+		if arr, ok := v["result"].([]interface{}); ok && len(arr) > 0 {
+			return true
+		}
+
+		// Some implementations return an object keyed by exchange ids.
+		if len(v) > 0 {
+			if len(v) == 1 {
+				if _, ok := v["status"]; ok {
+					return false
+				}
+			}
+			return true
+		}
+	}
+
+	return false
 }
 
 func printResults() {

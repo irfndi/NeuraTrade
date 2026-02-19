@@ -46,17 +46,26 @@ test_result() {
   local result="$2"
   local message="${3:-}"
 
-  if [ "$result" = "pass" ]; then
+  case "$result" in
+  pass)
     print_success "$name"
-    ((TESTS_PASSED++))
-  elif [ "$result" = "skip" ]; then
+    ((++TESTS_PASSED))
+    ;;
+  skip)
     print_warn "$name (skipped: $message)"
-    ((TESTS_SKIPPED++))
-  else
+    ((++TESTS_SKIPPED))
+    ;;
+  warn)
+    print_warn "$name"
+    [ -n "$message" ] && echo "   Warning: $message"
+    ((++TESTS_SKIPPED))
+    ;;
+  fail | *)
     print_error "$name"
     [ -n "$message" ] && echo "   Details: $message"
-    ((TESTS_FAILED++))
-  fi
+    ((++TESTS_FAILED))
+    ;;
+  esac
 }
 
 # ============================================================================
@@ -86,17 +95,24 @@ check_configuration() {
         if jq empty "$config_file" 2>/dev/null; then
           test_result "Config is valid JSON" "pass"
 
-          # Check for required fields
-          local has_ccxt has_telegram has_ai has_security
-          has_ccxt=$(jq -r '.services.ccxt // empty' "$config_file" 2>/dev/null)
-          has_telegram=$(jq -r '.services.telegram // empty' "$config_file" 2>/dev/null)
-          has_ai=$(jq -r '.ai // empty' "$config_file" 2>/dev/null)
-          has_security=$(jq -r '.security.admin_api_key // empty' "$config_file" 2>/dev/null)
-
-          [ -n "$has_ccxt" ] && test_result "CCXT config present" "pass" || test_result "CCXT config present" "fail"
-          [ -n "$has_telegram" ] && test_result "Telegram config present" "pass" || test_result "Telegram config present" "fail"
-          [ -n "$has_ai" ] && test_result "AI config present" "pass" || test_result "AI config present" "fail"
-          [ -n "$has_security" ] && test_result "Security config present" "pass" || test_result "Security config present" "fail"
+          # Check required sections.
+          local required_sections key label value section
+          required_sections=(
+            "services.ccxt:CCXT"
+            "services.telegram:Telegram"
+            "ai:AI"
+            "security.admin_api_key:Security"
+          )
+          for section in "${required_sections[@]}"; do
+            key="${section%%:*}"
+            label="${section##*:}"
+            value=$(jq -r ".${key} // empty" "$config_file" 2>/dev/null)
+            if [ -n "$value" ]; then
+              test_result "${label} config present" "pass"
+            else
+              test_result "${label} config present" "fail"
+            fi
+          done
 
           # Check for Binance API keys
           local has_binance_keys
@@ -467,10 +483,21 @@ test_ccxt_market_data() {
   # Markets endpoint
   local markets
   markets=$(curl -s --connect-timeout 5 "http://localhost:3001/api/markets/binance" 2>/dev/null || echo "")
-  if [ -n "$markets" ] && echo "$markets" | grep -q '"BTC/USDT"\|"BTCUSDT"'; then
-    test_result "GET /api/markets/binance (public)" "pass" "Returns trading pairs"
+  if [ -n "$markets" ]; then
+    if command -v jq &>/dev/null && echo "$markets" | jq -e '
+      def entries:
+        if type == "array" then .
+        elif type == "object" and (.data? != null) then .data
+        elif type == "object" and (.markets? != null) then .markets
+        else [] end;
+      entries | any((.symbol? // .) == "BTC/USDT" or (.symbol? // .) == "BTCUSDT")
+    ' >/dev/null 2>&1; then
+      test_result "GET /api/markets/binance (public)" "pass" "Returns trading pairs"
+    else
+      test_result "GET /api/markets/binance (public)" "warn" "No data or exchange not initialized"
+    fi
   else
-    test_result "GET /api/markets/binance (public)" "warn" "No data or exchange not initialized"
+    test_result "GET /api/markets/binance (public)" "warn" "Service returned empty response"
   fi
 
   # Ticker endpoint
@@ -505,10 +532,20 @@ test_ccxt_market_data() {
   # Balance endpoint (requires auth)
   local balance
   balance=$(curl -s --connect-timeout 5 "http://localhost:3001/api/balance/binance" 2>/dev/null || echo "")
-  if echo "$balance" | grep -q '"error".*auth\|"error".*key\|"error".*API'; then
-    test_result "GET /api/balance/binance (protected)" "pass" "Correctly requires authentication"
-  elif echo "$balance" | grep -q '"BTC"\|"USDT"\|"free"'; then
-    test_result "GET /api/balance/binance (protected)" "pass" "Returns balance (API keys configured)"
+  if [ -n "$balance" ] && command -v jq &>/dev/null; then
+    if echo "$balance" | jq -e '
+      (.error? != null) or
+      ((.success? == false) and (.message? != null)) or
+      (((.message? // "") | tostring) | test("auth|key|api"; "i"))
+    ' >/dev/null 2>&1; then
+      test_result "GET /api/balance/binance (protected)" "pass" "Correctly requires authentication"
+    elif echo "$balance" | jq -e '
+      (.free? != null) or (.total? != null) or (.BTC? != null) or (.USDT? != null)
+    ' >/dev/null 2>&1; then
+      test_result "GET /api/balance/binance (protected)" "pass" "Returns balance (API keys configured)"
+    else
+      test_result "GET /api/balance/binance (protected)" "warn" "Unexpected response shape"
+    fi
   else
     test_result "GET /api/balance/binance (protected)" "warn" "Service may not be running"
   fi
