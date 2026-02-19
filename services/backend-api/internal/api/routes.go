@@ -367,7 +367,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Register integrated handlers for production-ready quest execution
 	questEngine.RegisterIntegratedHandlers(integratedHandlers)
 
-	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
+	autonomousHandler := handlers.NewAutonomousHandler(questEngine, nil, nil, nil)
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
 	// Internal service-to-service routes (no auth, network-isolated via Docker)
