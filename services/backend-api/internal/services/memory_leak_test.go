@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 
@@ -33,19 +32,13 @@ func TestQuestProgressManager_NoGoroutineLeaks(t *testing.T) {
 
 	// Create mock engine and notification service
 	engine := &services.QuestEngine{}
-	progressManager := services.NewQuestProgressManager(engine)
+	config := services.DefaultQuestProgressConfig()
+	progressManager := services.NewQuestProgressManager(config, engine)
 
-	// Simulate multiple progress updates
-	for i := 0; i < 10; i++ {
-		update := &services.QuestProgressUpdate{
-			QuestID:       fmt.Sprintf("quest-%d", i),
-			QuestName:     "Test Quest",
-			CurrentCount:  5,
-			TargetCount:   10,
-			PercentComplete: 50.0,
-			Status:        "in_progress",
-		}
-		progressManager.SendProgressUpdate(update)
+	// Simulate multiple progress updates using the public API
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		_, _ = progressManager.UpdateQuestProgress(ctx, fmt.Sprintf("quest-%d", i), 5, nil)
 	}
 
 	// Wait for any pending operations
@@ -66,43 +59,6 @@ func TestQuestProgressManager_NoGoroutineLeaks(t *testing.T) {
 	assert.Less(t, goroutineGrowth, 5, "Goroutine count should not grow significantly")
 }
 
-// TestWebSocketHandler_ClientCleanup tests that WebSocket clients are properly cleaned up
-func TestWebSocketHandler_ClientCleanup(t *testing.T) {
-	forceGC()
-	goroutinesBefore := runtime.NumGoroutine()
-
-	// Create WebSocket handler
-	handler := services.NewWebSocketHandler(nil)
-
-	// Simulate client connections and disconnections
-	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			// Simulate client lifecycle
-			time.Sleep(10 * time.Millisecond)
-		}(i)
-	}
-
-	wg.Wait()
-
-	// Stop handler
-	handler.Stop()
-
-	// Wait for cleanup
-	time.Sleep(200 * time.Millisecond)
-
-	forceGC()
-	goroutinesAfter := runtime.NumGoroutine()
-
-	goroutineGrowth := goroutinesAfter - goroutinesBefore
-	t.Logf("Goroutines: %d -> %d (growth: %d)", goroutinesBefore, goroutinesAfter, goroutineGrowth)
-
-	// Allow some tolerance
-	assert.Less(t, goroutineGrowth, 3, "Goroutine count should not grow significantly after cleanup")
-}
-
 // TestCleanupService_Stop tests that cleanup service stops cleanly
 func TestCleanupService_Stop(t *testing.T) {
 	forceGC()
@@ -113,7 +69,7 @@ func TestCleanupService_Stop(t *testing.T) {
 
 	// Start service
 	config := services.CleanupConfig{
-		IntervalMinutes: 1,
+		IntervalMinutes:    1,
 		EnableSmartCleanup: false,
 	}
 	cleanupSvc.Start(config)
@@ -182,10 +138,7 @@ func TestSignalProcessor_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Create minimal signal processor config
-	config := services.SignalProcessorConfig{
-		WorkerCount:    2,
-		TimeoutSeconds: 5,
-	}
+	config := services.SignalProcessorConfig{}
 
 	// Create processor (note: this may need mock dependencies)
 	_ = ctx

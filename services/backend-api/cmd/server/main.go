@@ -323,27 +323,31 @@ func run() error {
 		getLogger("circuit_breaker"),
 	)
 
-	// Initialize signal processor
-	signalProcessor := services.NewSignalProcessor(
-		db,
-		logger.WithComponent("signal_processor"),
-		signalAggregator,
-		signalQualityScorer,
-		technicalAnalysisService,
-		notificationService,
-		collectorService,
-		signalProcessorCircuitBreaker,
-	)
+	// Initialize signal processor only when AI signals mode is enabled.
+	if cfg.Features.EnableAISignals {
+		signalProcessor := services.NewSignalProcessor(
+			db,
+			logger.WithComponent("signal_processor"),
+			signalAggregator,
+			signalQualityScorer,
+			technicalAnalysisService,
+			notificationService,
+			collectorService,
+			signalProcessorCircuitBreaker,
+		)
 
-	// Start signal processor
-	if err := signalProcessor.Start(); err != nil {
-		logger.WithError(err).Fatal("Failed to start signal processor")
-	}
-	defer func() {
-		if err := signalProcessor.Stop(); err != nil {
-			logger.WithError(err).Error("Failed to stop signal processor")
+		if err := signalProcessor.Start(); err != nil {
+			logger.WithError(err).Fatal("Failed to start signal processor")
 		}
-	}()
+		defer func() {
+			if err := signalProcessor.Stop(); err != nil {
+				logger.WithError(err).Error("Failed to stop signal processor")
+			}
+		}()
+		logger.Info("Signal processor enabled")
+	} else {
+		logger.Info("Signal processor disabled in scalping-first mode")
+	}
 
 	logger.Info("AI trading components ready for integration")
 

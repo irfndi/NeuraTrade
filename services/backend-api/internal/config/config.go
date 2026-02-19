@@ -416,6 +416,10 @@ func Load() (*Config, error) {
 	// Bind Telegram service environment variables
 	_ = viper.BindEnv("telegram.service_url", "TELEGRAM_SERVICE_URL")
 	_ = viper.BindEnv("telegram.grpc_address", "TELEGRAM_GRPC_ADDRESS")
+	_ = viper.BindEnv("backfill.enabled", "BACKFILL_ENABLED")
+	_ = viper.BindEnv("arbitrage.enabled", "ARBITRAGE_ENABLED")
+	_ = viper.BindEnv("features.enable_ai_arbitrage", "ENABLE_AI_ARBITRAGE")
+	_ = viper.BindEnv("features.enable_ai_signals", "ENABLE_AI_SIGNALS")
 
 	// Read config file
 	if err := viper.ReadInConfig(); err != nil {
@@ -626,7 +630,7 @@ func setDefaults() {
 	// Features config defaults
 	viper.SetDefault("features.enable_ai", true)
 	viper.SetDefault("features.enable_ai_scalping", true)
-	viper.SetDefault("features.enable_ai_signals", true)
+	viper.SetDefault("features.enable_ai_signals", false)
 	viper.SetDefault("features.enable_ai_arbitrage", false)
 }
 

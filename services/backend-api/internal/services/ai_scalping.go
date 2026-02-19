@@ -25,6 +25,7 @@ type AIScalpingConfig struct {
 	Timeout           time.Duration
 	AutoExecute       bool
 	MaxPairsToAnalyze int
+	MaxCandidatePairs int
 }
 
 func DefaultAIScalpingConfig() AIScalpingConfig {
@@ -37,6 +38,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		Timeout:           180 * time.Second,
 		AutoExecute:       true,
 		MaxPairsToAnalyze: 10,
+		MaxCandidatePairs: 200,
 	}
 }
 
@@ -174,6 +176,16 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no USDT pairs discovered")
+	}
+
+	// Bound the scoring universe to keep the AI loop responsive on exchanges with
+	// thousands of pairs.
+	maxCandidates := s.config.MaxCandidatePairs
+	if maxCandidates <= 0 {
+		maxCandidates = 200
+	}
+	if len(candidates) > maxCandidates {
+		candidates = candidates[:maxCandidates]
 	}
 
 	// Dynamically rank discovered symbols by liquidity + spread + intraday movement.

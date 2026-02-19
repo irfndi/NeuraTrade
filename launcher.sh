@@ -124,6 +124,14 @@ start_services() {
     ai_provider="${AI_PROVIDER:-$(config_get '.ai.provider' 'minimax')}"
     local ai_model
     ai_model="${AI_MODEL:-$(config_get '.ai.model' '')}"
+    local enable_backfill
+    enable_backfill="${BACKFILL_ENABLED:-$(config_get '.backfill.enabled' 'false')}"
+    local enable_arbitrage
+    enable_arbitrage="${ARBITRAGE_ENABLED:-$(config_get '.arbitrage.enabled' 'false')}"
+    local enable_ai_arbitrage
+    enable_ai_arbitrage="${ENABLE_AI_ARBITRAGE:-$(config_get '.features.enable_ai_arbitrage' 'false')}"
+    local enable_ai_signals
+    enable_ai_signals="${ENABLE_AI_SIGNALS:-$(config_get '.features.enable_ai_signals' 'false')}"
     
     # Start CCXT Service (bind to localhost only)
     ensure_port_available "$CCXT_PORT" "CCXT"
@@ -189,6 +197,10 @@ start_services() {
     export AI_BASE_URL="$ai_base_url"
     export AI_PROVIDER="$ai_provider"
     export AI_MODEL="$ai_model"
+    export BACKFILL_ENABLED="$enable_backfill"
+    export ARBITRAGE_ENABLED="$enable_arbitrage"
+    export ENABLE_AI_ARBITRAGE="$enable_ai_arbitrage"
+    export ENABLE_AI_SIGNALS="$enable_ai_signals"
 
     PORT="$BACKEND_PORT" ./bin/neuratrade-server > "$LOG_DIR/backend.log" 2>&1 &
     echo $! > "$PID_DIR/backend.pid"
