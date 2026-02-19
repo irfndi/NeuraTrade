@@ -542,7 +542,10 @@ function cleanupMarketData() {
 // Start cleanup interval
 const cleanupIntervalMs =
   (userConfig.marketData?.cleanup_interval_minutes || 5) * 60 * 1000;
-const cleanupIntervalId: NodeJS.Timeout = setInterval(cleanupMarketData, cleanupIntervalMs);
+const cleanupIntervalId: NodeJS.Timeout = setInterval(
+  cleanupMarketData,
+  cleanupIntervalMs,
+);
 console.log(
   `🧹 Market data cleanup scheduled every ${userConfig.marketData?.cleanup_interval_minutes || 5} minutes`,
 );

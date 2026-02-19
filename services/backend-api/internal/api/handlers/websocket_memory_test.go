@@ -1,7 +1,6 @@
 package handlers_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/irfndi/neuratrade/internal/api/handlers"
-	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/stretchr/testify/assert"
 )
 
