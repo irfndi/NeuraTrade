@@ -101,11 +101,11 @@ func (b *Builder) buildFromSkill(skl *skill.Skill, ctx Context) (string, error) 
 	var sb strings.Builder
 
 	// Add skill metadata header
-	sb.WriteString(fmt.Sprintf("# Skill: %s\n", skl.Name))
-	sb.WriteString(fmt.Sprintf("## ID: %s\n", skl.ID))
-	sb.WriteString(fmt.Sprintf("## Version: %s\n", skl.Version))
+	fmt.Fprintf(&sb, "# Skill: %s\n", skl.Name)
+	fmt.Fprintf(&sb, "## ID: %s\n", skl.ID)
+	fmt.Fprintf(&sb, "## Version: %s\n", skl.Version)
 	if skl.Description != "" {
-		sb.WriteString(fmt.Sprintf("## Description: %s\n", skl.Description))
+		fmt.Fprintf(&sb, "## Description: %s\n", skl.Description)
 	}
 	sb.WriteString("\n")
 
@@ -122,12 +122,12 @@ func (b *Builder) buildFromSkill(skl *skill.Skill, ctx Context) (string, error) 
 			if param.Required {
 				required = " (required)"
 			}
-			sb.WriteString(fmt.Sprintf("- `%s`%s: %s\n", name, required, param.Description))
+			fmt.Fprintf(&sb, "- `%s`%s: %s\n", name, required, param.Description)
 			if param.Default != nil {
-				sb.WriteString(fmt.Sprintf("  - Default: %v\n", param.Default))
+				fmt.Fprintf(&sb, "  - Default: %v\n", param.Default)
 			}
 			if len(param.Enum) > 0 {
-				sb.WriteString(fmt.Sprintf("  - Options: %s\n", strings.Join(param.Enum, ", ")))
+				fmt.Fprintf(&sb, "  - Options: %s\n", strings.Join(param.Enum, ", "))
 			}
 		}
 	}
@@ -136,36 +136,36 @@ func (b *Builder) buildFromSkill(skl *skill.Skill, ctx Context) (string, error) 
 	if len(skl.Examples) > 0 && ctx.DisclosureLevel >= 75 {
 		sb.WriteString("\n## Examples:\n")
 		for _, ex := range skl.Examples {
-			sb.WriteString(fmt.Sprintf("### %s\n", ex.Name))
-			sb.WriteString(fmt.Sprintf("%s\n", ex.Description))
+			fmt.Fprintf(&sb, "### %s\n", ex.Name)
+			fmt.Fprintf(&sb, "%s\n", ex.Description)
 			if len(ex.Inputs) > 0 {
 				sb.WriteString("Inputs:\n")
 				for k, v := range ex.Inputs {
-					sb.WriteString(fmt.Sprintf("  - %s: %v\n", k, v))
+					fmt.Fprintf(&sb, "  - %s: %v\n", k, v)
 				}
 			}
 			if ex.Expected != nil {
-				sb.WriteString(fmt.Sprintf("Expected: %v\n", ex.Expected))
+				fmt.Fprintf(&sb, "Expected: %v\n", ex.Expected)
 			}
 		}
 	}
 
 	// Add user query if provided
 	if ctx.UserQuery != "" {
-		sb.WriteString(fmt.Sprintf("\n## User Request:\n%s\n", ctx.UserQuery))
+		fmt.Fprintf(&sb, "\n## User Request:\n%s\n", ctx.UserQuery)
 	}
 
 	// Add additional context if provided
 	if len(ctx.AdditionalContext) > 0 && ctx.DisclosureLevel >= 50 {
 		sb.WriteString("\n## Additional Context:\n")
 		for k, v := range ctx.AdditionalContext {
-			sb.WriteString(fmt.Sprintf("- %s: %v\n", k, v))
+			fmt.Fprintf(&sb, "- %s: %v\n", k, v)
 		}
 	}
 
 	// Add task type context
 	if ctx.TaskType != "" {
-		sb.WriteString(fmt.Sprintf("\n## Task Type: %s\n", ctx.TaskType))
+		fmt.Fprintf(&sb, "\n## Task Type: %s\n", ctx.TaskType)
 	}
 
 	return sb.String(), nil
@@ -266,7 +266,7 @@ func (b *Builder) BuildSystemPrompt(ctx Context) (string, error) {
 		for _, id := range ctx.AvailableSkills {
 			skl, ok := b.skillRegistry.Get(id)
 			if ok {
-				sb.WriteString(fmt.Sprintf("- **%s**: %s\n", skl.Name, skl.Description))
+				fmt.Fprintf(&sb, "- **%s**: %s\n", skl.Name, skl.Description)
 			}
 		}
 		sb.WriteString("\n")
@@ -274,13 +274,13 @@ func (b *Builder) BuildSystemPrompt(ctx Context) (string, error) {
 
 	// Add disclosure level guidance
 	if ctx.DisclosureLevel > 0 {
-		sb.WriteString(fmt.Sprintf("## Disclosure Level: %d%%\n", ctx.DisclosureLevel))
+		fmt.Fprintf(&sb, "## Disclosure Level: %d%%\n", ctx.DisclosureLevel)
 		sb.WriteString("Provide responses appropriate to this disclosure level.\n\n")
 	}
 
 	// Add task type context
 	if ctx.TaskType != "" {
-		sb.WriteString(fmt.Sprintf("## Current Task: %s\n", ctx.TaskType))
+		fmt.Fprintf(&sb, "## Current Task: %s\n", ctx.TaskType)
 	}
 
 	return sb.String(), nil
