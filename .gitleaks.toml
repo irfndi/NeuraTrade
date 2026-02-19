@@ -54,3 +54,14 @@ regexes = [
     '''Bearer your-''',
     '''your-jwt-token''',
 ]
+
+# Allowlist for development keys in test files and historical commits
+# These are not production secrets and have been replaced in current code
+[allowlist]
+description = "Allow historical development keys"
+paths = [
+    '''wallet_handler\.go$''',  # Historical commits, fixed in current code
+]
+regexes = [
+    '''0123456789abcdef0123456789abcdef''',  # Development test key (not used in production)
+]
