@@ -138,6 +138,14 @@ func (m *MockCCXTService) CalculateFundingRateArbitrage(ctx context.Context, sym
 	return args.Get(0).([]ccxt.FundingArbitrageOpportunity), args.Error(1)
 }
 
+func (m *MockCCXTService) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	args := m.Called(ctx, exchange)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.BalanceResponse), args.Error(1)
+}
+
 // TestCacheWarmingService_NewCacheWarmingService tests service creation
 func TestCacheWarmingService_NewCacheWarmingService(t *testing.T) {
 	// Setup mock dependencies

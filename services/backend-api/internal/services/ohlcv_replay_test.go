@@ -73,6 +73,9 @@ func (m *mockCCXTServiceForReplay) CalculateArbitrageOpportunities(ctx context.C
 func (m *mockCCXTServiceForReplay) CalculateFundingRateArbitrage(ctx context.Context, syms []string, ex []string, min float64) ([]ccxt.FundingArbitrageOpportunity, error) {
 	return nil, nil
 }
+func (m *mockCCXTServiceForReplay) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	return nil, nil
+}
 func (m *mockCCXTServiceForReplay) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*ccxt.OHLCVResponse, error) {
 	if m.err != nil {
 		return nil, m.err
