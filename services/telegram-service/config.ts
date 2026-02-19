@@ -16,6 +16,98 @@ export type TelegramConfigPartial = TelegramConfig & {
   adminApiKeyMissing: boolean;
 };
 
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+
+type NeuratradeConfig = {
+  telegram?: {
+    enabled?: boolean;
+    bot_token?: string;
+    api_base_url?: string;
+    use_polling?: boolean;
+    port?: number;
+  };
+  services?: {
+    telegram?: {
+      enabled?: boolean;
+      bot_token?: string;
+      api_base_url?: string;
+      use_polling?: boolean;
+      port?: number;
+    };
+  };
+  security?: {
+    admin_api_key?: string;
+  };
+};
+
+let cachedConfig: NeuratradeConfig | null = null;
+
+export const resetNeuratradeConfigCache = () => {
+  cachedConfig = null;
+};
+
+const loadNeuratradeConfig = (): NeuratradeConfig | null => {
+  if (cachedConfig !== null) {
+    return cachedConfig;
+  }
+  const configPath = join(homedir(), ".neuratrade", "config.json");
+  if (!existsSync(configPath)) {
+    cachedConfig = null;
+    return null;
+  }
+  try {
+    const content = readFileSync(configPath, "utf-8");
+    cachedConfig = JSON.parse(content);
+    return cachedConfig;
+  } catch {
+    cachedConfig = null;
+    return null;
+  }
+};
+
+export const getEnvWithNeuratradeFallback = (
+  key: string,
+): string | undefined => {
+  if (process.env[key]) {
+    return process.env[key];
+  }
+  const neuratradeConfig = loadNeuratradeConfig();
+  if (!neuratradeConfig) {
+    return undefined;
+  }
+  const keyLower = key.toLowerCase();
+  if (keyLower === "telegram_bot_token") {
+    if (neuratradeConfig.telegram?.bot_token) {
+      return neuratradeConfig.telegram.bot_token;
+    }
+    return neuratradeConfig.services?.telegram?.bot_token;
+  }
+  if (keyLower === "telegram_api_base_url") {
+    if (neuratradeConfig.telegram?.api_base_url) {
+      return neuratradeConfig.telegram.api_base_url;
+    }
+    return neuratradeConfig.services?.telegram?.api_base_url;
+  }
+  if (keyLower === "telegram_use_polling") {
+    if (neuratradeConfig.telegram?.use_polling !== undefined) {
+      return neuratradeConfig.telegram.use_polling.toString();
+    }
+    return neuratradeConfig.services?.telegram?.use_polling?.toString();
+  }
+  if (keyLower === "telegram_port") {
+    if (neuratradeConfig.telegram?.port !== undefined) {
+      return neuratradeConfig.telegram.port.toString();
+    }
+    return neuratradeConfig.services?.telegram?.port?.toString();
+  }
+  if (keyLower === "admin_api_key") {
+    return neuratradeConfig.security?.admin_api_key;
+  }
+  return undefined;
+};
+
 const resolvePort = (raw: string | undefined, fallback: number) => {
   if (!raw) {
     return fallback;
@@ -33,12 +125,14 @@ const resolvePort = (raw: string | undefined, fallback: number) => {
 export const loadConfig = (): TelegramConfigPartial => {
   // Support both TELEGRAM_BOT_TOKEN and TELEGRAM_TOKEN for compatibility with different platforms
   const botToken =
-    process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_TOKEN || "";
+    getEnvWithNeuratradeFallback("TELEGRAM_BOT_TOKEN") ||
+    process.env.TELEGRAM_TOKEN ||
+    "";
   const botTokenMissing = !botToken;
 
   // ADMIN_API_KEY is no longer required - internal endpoints use network isolation
   // Keeping the field for backwards compatibility but it's not validated or used
-  const adminApiKey = process.env.ADMIN_API_KEY || "";
+  const adminApiKey = getEnvWithNeuratradeFallback("ADMIN_API_KEY") || "";
   const adminApiKeyMissing = !adminApiKey; // Deprecated, always false effectively
 
   let configError: string | null = null;
@@ -58,7 +152,9 @@ export const loadConfig = (): TelegramConfigPartial => {
   }
 
   const apiBaseUrl = (
-    process.env.TELEGRAM_API_BASE_URL || "http://localhost:8080"
+    getEnvWithNeuratradeFallback("TELEGRAM_API_BASE_URL") ||
+    process.env.TELEGRAM_API_BASE_URL ||
+    "http://localhost:8080"
   ).replace(/\/$/, "");
 
   const webhookUrlRaw = (process.env.TELEGRAM_WEBHOOK_URL || "").trim();
@@ -70,7 +166,9 @@ export const loadConfig = (): TelegramConfigPartial => {
       ? new URL(webhookUrl).pathname
       : "/telegram/webhook";
 
-  const usePollingEnv = (process.env.TELEGRAM_USE_POLLING || "").toLowerCase();
+  const usePollingEnv = (
+    getEnvWithNeuratradeFallback("TELEGRAM_USE_POLLING") || ""
+  ).toLowerCase();
   const usePolling =
     usePollingEnv === "true" || usePollingEnv === "1" || webhookUrl === null;
 
@@ -85,7 +183,11 @@ export const loadConfig = (): TelegramConfigPartial => {
       : `/${resolvedWebhookPath}`,
     webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || null,
     usePolling,
-    port: resolvePort(process.env.TELEGRAM_PORT, 3002),
+    port: resolvePort(
+      getEnvWithNeuratradeFallback("TELEGRAM_PORT") ||
+        process.env.TELEGRAM_PORT,
+      3002,
+    ),
     apiBaseUrl,
     adminApiKey,
   };
