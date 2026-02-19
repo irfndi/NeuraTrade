@@ -89,7 +89,8 @@ func TestSubagentSpawner_Close(t *testing.T) {
 	goroutinesBefore := runtime.NumGoroutine()
 
 	// Create spawner
-	spawner := services.NewSubagentSpawner(30*time.Second, 10)
+	config := services.DefaultSubagentSpawnerConfig()
+	spawner := services.NewSubagentSpawner(30*time.Second, 10, config, nil, nil, nil)
 
 	// Spawn some agents
 	ctx := context.Background()
