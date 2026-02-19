@@ -293,21 +293,13 @@ func TestWarnLegacyHandlersPath_NilLogger(t *testing.T) {
 
 // TestRunSeeder_ConfigLoadError tests runSeeder when config fails to load
 func TestRunSeeder_ConfigLoadError(t *testing.T) {
-	if os.Getenv("CI") == "true" {
-		t.Skip("Skipping in CI environment - database may be available")
-	}
-	oldEnv := os.Getenv("ENVIRONMENT")
-	defer os.Setenv("ENVIRONMENT", oldEnv)
-
-	os.Unsetenv("ENVIRONMENT")
-	os.Unsetenv("DATABASE_HOST")
-	os.Unsetenv("DATABASE_URL")
+	// Force a deterministic config validation failure.
+	t.Setenv("DATABASE_DRIVER", "sqlite")
+	t.Setenv("SQLITE_PATH", "   ")
 
 	err := runSeeder()
-	assert.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "failed to load config") ||
-		strings.Contains(err.Error(), "database") ||
-		strings.Contains(err.Error(), "connect"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load config")
 }
 
 // TestRunSeeder_DatabaseConnectionError tests runSeeder when database connection fails
