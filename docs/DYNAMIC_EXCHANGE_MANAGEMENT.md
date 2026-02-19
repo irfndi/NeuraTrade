@@ -171,13 +171,13 @@ Authorization: Bearer <ADMIN_API_KEY>
       "name": "binance",
       "enabled": true,
       "has_auth": false,
-      "added_at": "2026-02-17T10:30:00Z"
+      "added_at": "2024-02-17T10:30:00Z"
     },
     {
       "name": "bybit",
       "enabled": true,
       "has_auth": true,
-      "added_at": "2026-02-17T10:35:00Z"
+      "added_at": "2024-02-17T10:35:00Z"
     }
   ],
   "count": 2

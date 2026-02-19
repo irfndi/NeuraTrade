@@ -321,8 +321,16 @@ const exchangeConfig = loadExchangeConfig();
 // Convert to Set for faster lookups during initialization
 const blacklistedExchanges = new Set(exchangeConfig.blacklistedExchanges);
 
+interface UserExchangeConfig {
+  enabled: string[];
+  apiKeys: Record<string, { apiKey: string; secret: string }>;
+  addedAt: Record<string, string>;
+  devMode: boolean;
+  marketData: Record<string, unknown>;
+}
+
 // Load exchange config from ~/.neuratrade/config.json
-function loadUserExchangeConfig() {
+function loadUserExchangeConfig(): UserExchangeConfig {
   try {
     const configPath = join(os.homedir(), ".neuratrade", "config.json");
     if (existsSync(configPath)) {
@@ -332,10 +340,18 @@ function loadUserExchangeConfig() {
       // Check ccxt.exchanges path (new config format)
       const ccxtExchanges = config.ccxt?.exchanges || {};
       const apiKeys: Record<string, { apiKey: string; secret: string }> = {};
+      const addedAt: Record<string, string> = {};
 
       for (const [exchangeName, exchangeConfig] of Object.entries(
         ccxtExchanges,
       ) as [string, any][]) {
+        if (
+          typeof exchangeConfig?.added_at === "string" &&
+          exchangeConfig.added_at.length > 0
+        ) {
+          addedAt[exchangeName] = exchangeConfig.added_at;
+        }
+
         if (exchangeConfig?.api_key && exchangeConfig?.api_secret) {
           apiKeys[exchangeName] = {
             apiKey: exchangeConfig.api_key,
@@ -368,6 +384,7 @@ function loadUserExchangeConfig() {
             ? enabledFromConfig
             : config.exchanges?.enabled || [],
         apiKeys,
+        addedAt,
         devMode: config.server?.dev_mode || false,
         marketData: config.market_data || {},
       };
@@ -375,7 +392,7 @@ function loadUserExchangeConfig() {
   } catch (e) {
     console.log("No user config found, using defaults");
   }
-  return { enabled: [], apiKeys: {}, devMode: false, marketData: {} };
+  return { enabled: [], apiKeys: {}, addedAt: {}, devMode: false, marketData: {} };
 }
 
 const userConfig = loadUserExchangeConfig();
@@ -620,7 +637,7 @@ app.get("/api/v1/exchanges", (c) => {
       name: id,
       enabled: true,
       has_auth: !!userConfig.apiKeys?.[id]?.apiKey,
-      added_at: new Date().toISOString(), // TODO: persist and retrieve from config
+      added_at: userConfig.addedAt?.[id] || new Date().toISOString(),
     }));
 
     const response: ExchangesListResponse = {
@@ -682,6 +699,8 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
 
     // Update in-memory config
     userConfig.enabled = [...new Set([...(userConfig.enabled || []), name])];
+    userConfig.addedAt = userConfig.addedAt || {};
+    userConfig.addedAt[name] = userConfig.addedAt[name] || new Date().toISOString();
     if (api_key || secret) {
       userConfig.apiKeys = userConfig.apiKeys || {};
       userConfig.apiKeys[name] = {
@@ -719,6 +738,7 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
       ...ccxtExchanges,
       [name]: {
         enabled: true,
+        added_at: userConfig.addedAt[name],
         ...(api_key && { api_key, api_secret: secret }),
       },
     };
@@ -795,6 +815,9 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
     if (userConfig.apiKeys?.[name]) {
       delete userConfig.apiKeys[name];
     }
+    if (userConfig.addedAt?.[name]) {
+      delete userConfig.addedAt[name];
+    }
 
     // Update config file
     const configDir = join(os.homedir(), ".neuratrade");
@@ -864,6 +887,7 @@ app.post("/api/v1/exchanges/reload", adminAuth, async (c) => {
     const newConfig = loadUserExchangeConfig();
     userConfig.enabled = newConfig.enabled;
     userConfig.apiKeys = newConfig.apiKeys;
+    userConfig.addedAt = newConfig.addedAt;
     userConfig.devMode = newConfig.devMode;
     userConfig.marketData = newConfig.marketData;
 
