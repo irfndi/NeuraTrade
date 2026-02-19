@@ -364,11 +364,12 @@ func (s *PortfolioSafetyService) CheckSafety(ctx context.Context, chatID string,
 			status.Details["risk_level"] = string(assessment.RiskLevel)
 			status.Details["risk_score"] = fmt.Sprintf("%.2f", assessment.Score)
 
-			if assessment.Action == risk.RiskActionBlock {
+			switch assessment.Action {
+			case risk.RiskActionBlock:
 				status.TradingAllowed = false
 				status.IsSafe = false
 				status.Reasons = append(status.Reasons, assessment.Recommendations...)
-			} else if assessment.Action == risk.RiskActionWarning {
+			case risk.RiskActionWarning:
 				status.Warnings = append(status.Warnings, assessment.Recommendations...)
 			}
 

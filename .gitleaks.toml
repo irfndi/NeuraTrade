@@ -19,6 +19,7 @@ paths = [
     '''signoz/''',
     '''\.cache/''',
     '''bin/''',
+    '''dist/''',
     '''docs/security/''',
     '''docs/old/''',
     '''\.gitguardian\.yaml$''',
