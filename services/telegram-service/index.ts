@@ -11,13 +11,14 @@ import { logger } from "./src/utils/logger";
 import { startGrpcServer } from "./grpc-server";
 
 const bot = new Bot(config.botToken);
+
 const api = new BackendApiClient({
   baseUrl: config.apiBaseUrl,
   adminKey: config.adminApiKey,
 });
 const sessions = new SessionManager();
 
-setInterval(() => {
+const sessionCleanupIntervalId = setInterval(() => {
   const cleaned = sessions.cleanupExpired();
   if (cleaned > 0) {
     logger.info("Session cleanup completed", { cleanedCount: cleaned });
@@ -26,10 +27,7 @@ setInterval(() => {
 
 registerAllCommands(bot, api, sessions);
 
-bot.on("message:text", async (ctx) => {
-  await ctx.reply("Thanks for your message! 👋\n\nTry /help for commands.");
-});
-
+// Error handling and bot lifecycle
 bot.catch((err) => {
   const ctx = err.ctx;
   const error = err.error;
@@ -143,11 +141,12 @@ if (!config.usePolling && bot) {
 const server = Bun.serve({
   fetch: app.fetch,
   port: config.port,
-  reusePort: process.env.BUN_REUSE_PORT === "true",
+  hostname: process.env.BIND_HOST || "127.0.0.1",
 });
 
 logger.info("Telegram service started", {
   port: config.port,
+  hostname: process.env.BIND_HOST || "127.0.0.1",
   mode: config.usePolling ? "polling" : "webhook",
 });
 
@@ -163,8 +162,41 @@ const startBot = async () => {
 
   if (config.usePolling) {
     logger.info("Starting bot in polling mode");
-    await bot.api.deleteWebhook({ drop_pending_updates: true });
-    bot.start();
+
+    // Enable verbose polling debug
+    bot.use(async (ctx, next) => {
+      const start = Date.now();
+      try {
+        await next();
+        logger.info("Update processed", {
+          updateId: ctx.update.update_id,
+          timeMs: Date.now() - start,
+        });
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        logger.error("Update processing failed", err, {
+          updateId: ctx.update.update_id,
+        });
+      }
+    });
+
+    try {
+      await bot.api.deleteWebhook({ drop_pending_updates: true });
+      logger.info("Webhook deleted successfully");
+    } catch (e) {
+      logger.warn("Failed to delete webhook", { error: String(e) });
+    }
+
+    logger.info("Starting polling...");
+    // Start polling - this is blocking
+    await bot.start({
+      onStart: (botInfo) => {
+        logger.info("Bot polling started successfully", {
+          botId: botInfo.id,
+          username: botInfo.username,
+        });
+      },
+    });
     return;
   }
 
@@ -185,6 +217,7 @@ startBot().catch((error) => {
 
 process.on("SIGTERM", () => {
   logger.info("SIGTERM received, shutting down");
+  clearInterval(sessionCleanupIntervalId);
   server.stop();
   if (grpcServer) {
     grpcServer.forceShutdown();
@@ -194,6 +227,7 @@ process.on("SIGTERM", () => {
 
 process.on("SIGINT", () => {
   logger.info("SIGINT received, shutting down");
+  clearInterval(sessionCleanupIntervalId);
   server.stop();
   if (grpcServer) {
     grpcServer.forceShutdown();
