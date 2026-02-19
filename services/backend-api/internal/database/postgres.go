@@ -22,6 +22,9 @@ type PostgresDB struct {
 	SQL  *sql.DB
 }
 
+// Ensure PostgresDB implements Database interface.
+var _ Database = (*PostgresDB)(nil)
+
 const maxAllowedPoolConns int32 = 10000
 
 // NewPostgresConnection creates a new PostgreSQL connection with the default context.
@@ -161,10 +164,13 @@ func createTestDatabaseConnection(poolConfig *pgxpool.Config) (*PostgresDB, erro
 }
 
 // Close closes the database connection pool.
-func (db *PostgresDB) Close() {
+func (db *PostgresDB) Close() error {
+	var closeErr error
+
 	if db.SQL != nil {
 		if err := db.SQL.Close(); err != nil {
 			zaplogrus.WithError(err).Warn("Failed to close PostgreSQL sql compatibility connection")
+			closeErr = err
 		}
 	}
 
@@ -172,6 +178,8 @@ func (db *PostgresDB) Close() {
 		db.Pool.Close()
 		zaplogrus.Info("PostgreSQL connection closed")
 	}
+
+	return closeErr
 }
 
 // BeginTx starts a transaction with context.
