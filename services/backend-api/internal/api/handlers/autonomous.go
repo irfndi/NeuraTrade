@@ -46,12 +46,7 @@ type PositionData struct {
 }
 
 // DBPool interface for database operations
-type DBPool interface {
-	QueryRow(ctx context.Context, query string, args ...interface{}) interface {
-		Scan(dest ...interface{}) error
-	}
-	Query(ctx context.Context, query string, args ...interface{}) (interface{}, error)
-}
+type DBPool = database.DBPool
 
 // AutonomousHandler handles autonomous mode endpoints
 type AutonomousHandler struct {
