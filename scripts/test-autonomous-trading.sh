@@ -47,24 +47,24 @@ test_result() {
   local message="${3:-}"
 
   case "$result" in
-  pass)
-    print_success "$name"
-    ((++TESTS_PASSED))
-    ;;
-  skip)
-    print_warn "$name (skipped: $message)"
-    ((++TESTS_SKIPPED))
-    ;;
-  warn)
-    print_warn "$name"
-    [ -n "$message" ] && echo "   Warning: $message"
-    ((++TESTS_SKIPPED))
-    ;;
-  fail | *)
-    print_error "$name"
-    [ -n "$message" ] && echo "   Details: $message"
-    ((++TESTS_FAILED))
-    ;;
+    pass)
+      print_success "$name"
+      ((++TESTS_PASSED))
+      ;;
+    skip)
+      print_warn "$name (skipped: $message)"
+      ((++TESTS_SKIPPED))
+      ;;
+    warn)
+      print_warn "$name"
+      [ -n "$message" ] && echo "   Warning: $message"
+      ((++TESTS_SKIPPED))
+      ;;
+    fail | *)
+      print_error "$name"
+      [ -n "$message" ] && echo "   Details: $message"
+      ((++TESTS_FAILED))
+      ;;
   esac
 }
 
