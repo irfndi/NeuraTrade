@@ -983,9 +983,9 @@ func (ns *NotificationService) generateOpportunityHash(opportunities []Arbitrage
 	// Create a consistent string representation of opportunities
 	var hashData strings.Builder
 	for _, opp := range opportunities {
-		hashData.WriteString(fmt.Sprintf("%s:%s:%s:%.4f:%.4f:%.2f",
+		fmt.Fprintf(&hashData, "%s:%s:%s:%.4f:%.4f:%.2f",
 			opp.Symbol, opp.BuyExchange, opp.SellExchange,
-			opp.BuyPrice, opp.SellPrice, opp.ProfitPercent))
+			opp.BuyPrice, opp.SellPrice, opp.ProfitPercent)
 	}
 
 	return stableHash(hashData.String())
@@ -995,8 +995,8 @@ func (ns *NotificationService) generateOpportunityHash(opportunities []Arbitrage
 func (ns *NotificationService) generateTechnicalSignalsHash(signals []TechnicalSignalNotification) string {
 	var hashData strings.Builder
 	for _, signal := range signals {
-		hashData.WriteString(fmt.Sprintf("%s:%s:%s:%.4f:%.2f",
-			signal.Symbol, signal.SignalType, signal.Action, signal.CurrentPrice, signal.Confidence))
+		fmt.Fprintf(&hashData, "%s:%s:%s:%.4f:%.2f",
+			signal.Symbol, signal.SignalType, signal.Action, signal.CurrentPrice, signal.Confidence)
 	}
 
 	return stableHash(hashData.String())
@@ -1616,19 +1616,19 @@ func (ns *NotificationService) formatAggregatedArbitrageMessage(signals []*Aggre
 	}
 
 	for i, signal := range signals[:maxSignals] {
-		message.WriteString(fmt.Sprintf("*%d. %s*\n", i+1, signal.Symbol))
-		message.WriteString(fmt.Sprintf("💰 Profit: %.2f%%\n", signal.ProfitPotential.InexactFloat64()))
-		message.WriteString(fmt.Sprintf("🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64()))
-		message.WriteString(fmt.Sprintf("⚡ Action: %s\n", strings.ToUpper(signal.Action)))
-		message.WriteString(fmt.Sprintf("🏪 Exchanges: %s\n", strings.Join(signal.Exchanges, ", ")))
+		fmt.Fprintf(&message, "*%d. %s*\n", i+1, signal.Symbol)
+		fmt.Fprintf(&message, "💰 Profit: %.2f%%\n", signal.ProfitPotential.InexactFloat64())
+		fmt.Fprintf(&message, "🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64())
+		fmt.Fprintf(&message, "⚡ Action: %s\n", strings.ToUpper(signal.Action))
+		fmt.Fprintf(&message, "🏪 Exchanges: %s\n", strings.Join(signal.Exchanges, ", "))
 
 		// Add metadata if available
 		if signal.Metadata != nil {
 			if buyPrice, ok := signal.Metadata["buy_price"]; ok {
-				message.WriteString(fmt.Sprintf("📈 Buy Price: %v\n", buyPrice))
+				fmt.Fprintf(&message, "📈 Buy Price: %v\n", buyPrice)
 			}
 			if sellPrice, ok := signal.Metadata["sell_price"]; ok {
-				message.WriteString(fmt.Sprintf("📉 Sell Price: %v\n", sellPrice))
+				fmt.Fprintf(&message, "📉 Sell Price: %v\n", sellPrice)
 			}
 		}
 
@@ -1636,7 +1636,7 @@ func (ns *NotificationService) formatAggregatedArbitrageMessage(signals []*Aggre
 	}
 
 	if len(signals) > maxSignals {
-		message.WriteString(fmt.Sprintf("... and %d more opportunities\n\n", len(signals)-maxSignals))
+		fmt.Fprintf(&message, "... and %d more opportunities\n\n", len(signals)-maxSignals)
 	}
 
 	message.WriteString("⏰ Generated: ")
@@ -1667,11 +1667,11 @@ func (ns *NotificationService) formatAggregatedTechnicalMessage(signals []*Aggre
 	}
 
 	for i, signal := range signals[:maxSignals] {
-		message.WriteString(fmt.Sprintf("*%d. %s*\n", i+1, signal.Symbol))
-		message.WriteString(fmt.Sprintf("📈 Signal: %s\n", strings.ToUpper(signal.Action)))
-		message.WriteString(fmt.Sprintf("💪 Strength: %s\n", signal.Strength))
-		message.WriteString(fmt.Sprintf("🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64()))
-		message.WriteString(fmt.Sprintf("⚠️ Risk: %.2f%%\n", signal.RiskLevel.InexactFloat64()))
+		fmt.Fprintf(&message, "*%d. %s*\n", i+1, signal.Symbol)
+		fmt.Fprintf(&message, "📈 Signal: %s\n", strings.ToUpper(signal.Action))
+		fmt.Fprintf(&message, "💪 Strength: %s\n", signal.Strength)
+		fmt.Fprintf(&message, "🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64())
+		fmt.Fprintf(&message, "⚠️ Risk: %.2f%%\n", signal.RiskLevel.InexactFloat64())
 
 		// Add indicators if available
 		if len(signal.Indicators) > 0 {
@@ -1683,13 +1683,13 @@ func (ns *NotificationService) formatAggregatedTechnicalMessage(signals []*Aggre
 		// Add metadata if available
 		if signal.Metadata != nil {
 			if entryPrice, ok := signal.Metadata["entry_price"]; ok {
-				message.WriteString(fmt.Sprintf("🎯 Entry: %v\n", entryPrice))
+				fmt.Fprintf(&message, "🎯 Entry: %v\n", entryPrice)
 			}
 			if stopLoss, ok := signal.Metadata["stop_loss"]; ok {
-				message.WriteString(fmt.Sprintf("🛑 Stop Loss: %v\n", stopLoss))
+				fmt.Fprintf(&message, "🛑 Stop Loss: %v\n", stopLoss)
 			}
 			if target, ok := signal.Metadata["target"]; ok {
-				message.WriteString(fmt.Sprintf("🎯 Target: %v\n", target))
+				fmt.Fprintf(&message, "🎯 Target: %v\n", target)
 			}
 		}
 
@@ -1697,7 +1697,7 @@ func (ns *NotificationService) formatAggregatedTechnicalMessage(signals []*Aggre
 	}
 
 	if len(signals) > maxSignals {
-		message.WriteString(fmt.Sprintf("... and %d more signals\n\n", len(signals)-maxSignals))
+		fmt.Fprintf(&message, "... and %d more signals\n\n", len(signals)-maxSignals)
 	}
 
 	message.WriteString("⏰ Generated: ")

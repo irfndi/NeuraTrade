@@ -48,7 +48,7 @@ jobs:
         run: make fmt-check
 
       - name: Install golangci-lint
-        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(pwd)/bin v2.7.2
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(pwd)/bin v2.10.1
 
       - name: Run Go lint
         run: cd services/backend-api && ../../bin/golangci-lint run
@@ -119,6 +119,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
+      DATABASE_DRIVER: postgres
       DATABASE_HOST: localhost
       DATABASE_PORT: '5432'
       DATABASE_USER: celebrum_ai_user
