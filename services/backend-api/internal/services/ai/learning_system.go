@@ -183,9 +183,10 @@ func (ls *InMemoryLearningSystem) GenerateInsights(symbol string) *AIInsights {
 
 	for _, d := range ls.decisions {
 		if d.MarketState.Symbol == symbol && d.Outcome != "" {
-			if d.Outcome == "win" {
+			switch d.Outcome {
+			case "win":
 				wins++
-			} else if d.Outcome == "loss" {
+			case "loss":
 				losses++
 			}
 			totalPnL += d.PnL
