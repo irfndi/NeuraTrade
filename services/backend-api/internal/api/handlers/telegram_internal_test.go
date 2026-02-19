@@ -561,9 +561,6 @@ func TestTelegramInternalHandler_BeginAutonomous_ReadinessBlocked(t *testing.T) 
 	handler.BeginAutonomous(c)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	// Response structure varies based on config file and readiness checks
-	// Just verify the handler doesn't crash and returns a valid response
-	assert.NotEqual(t, 0, w.Code)
 }
 
 func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {

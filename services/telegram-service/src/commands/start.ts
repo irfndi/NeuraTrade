@@ -44,13 +44,10 @@ export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
           chatId: chatIdStr,
         });
 
-        // Send credentials securely (in production, use secure channel)
         await ctx.reply(
           "🚀 Welcome to NeuraTrade!\n\n" +
             "✅ Your account has been created.\n\n" +
-            "⚠️ IMPORTANT: Save your temporary password:\n" +
-            `\`${password}\`\n\n` +
-            "Use /settings to change your password.\n\n" +
+            "Please follow the instructions sent to your registration channel to set your password.\n\n" +
             "Get started:\n" +
             "• /ai_models - View available AI models\n" +
             "• /ai_select <model> - Select your AI\n" +
