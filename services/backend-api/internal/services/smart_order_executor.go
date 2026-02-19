@@ -430,8 +430,12 @@ func (e *SmartOrderExecutor) waitForFill(ctx context.Context, req SmartOrderRequ
 				}
 			}
 
+			if !filled.IsZero() && filled.LessThan(req.Amount) {
+				continue
+			}
+
 			if filled.IsZero() {
-				closed, err := e.config.BaseExecutor.GetOpenOrders(ctx, req.Exchange, req.Symbol)
+				closed, err := e.config.BaseExecutor.GetClosedOrders(ctx, req.Exchange, req.Symbol, 10)
 				if err == nil && len(closed) > 0 {
 					for _, order := range closed {
 						if order["id"] == orderID {
@@ -509,6 +513,10 @@ func (e *SmartOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID 
 
 func (e *SmartOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error) {
 	return e.config.BaseExecutor.GetOpenOrders(ctx, exchange, symbol)
+}
+
+func (e *SmartOrderExecutor) GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error) {
+	return e.config.BaseExecutor.GetClosedOrders(ctx, exchange, symbol, limit)
 }
 
 var _ ScalpingOrderExecutor = (*SmartOrderExecutor)(nil)

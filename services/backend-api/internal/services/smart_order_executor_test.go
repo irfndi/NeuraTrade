@@ -43,6 +43,23 @@ func (m *mockExecutor) GetOpenOrders(ctx context.Context, exchange, symbol strin
 	}, nil
 }
 
+func (m *mockExecutor) GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error) {
+	if m.filledAmt.IsZero() {
+		return nil, nil
+	}
+	return []map[string]interface{}{
+		{
+			"id":       m.orderID,
+			"filled":   m.filledAmt.InexactFloat64(),
+			"average":  m.fillPrice.InexactFloat64(),
+			"price":    m.fillPrice.InexactFloat64(),
+			"status":   "closed",
+			"symbol":   symbol,
+			"exchange": exchange,
+		},
+	}, nil
+}
+
 func (m *mockExecutor) CancelOrder(ctx context.Context, exchange, orderID string) error {
 	return nil
 }
