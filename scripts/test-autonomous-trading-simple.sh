@@ -15,8 +15,6 @@ nt_init "NeuraTrade Autonomous Trading Test Suite"
 # ============================================================================
 nt_header "1. Configuration Checks"
 
-
-
 if [ -f "$CONFIG_FILE" ]; then
   nt_test_result "Config file exists" "pass" "$CONFIG_FILE"
 
