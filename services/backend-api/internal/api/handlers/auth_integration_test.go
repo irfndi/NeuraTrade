@@ -17,7 +17,7 @@ import (
 // TestAuthIntegration_RequireAuth tests authentication middleware integration with handlers
 func TestAuthIntegration_RequireAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	auth := middleware.NewAuthMiddleware("test-secret-key")
+	auth := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	// Create a test router with auth middleware
 	createProtectedRouter := func() *gin.Engine {
@@ -147,7 +147,7 @@ func TestAuthIntegration_RequireAuth(t *testing.T) {
 // TestAuthIntegration_OptionalAuth tests optional authentication middleware integration
 func TestAuthIntegration_OptionalAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	auth := middleware.NewAuthMiddleware("test-secret-key")
+	auth := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	// Create a test router with optional auth middleware
 	createOptionalAuthRouter := func() *gin.Engine {
@@ -263,7 +263,7 @@ func TestAuthIntegration_OptionalAuth(t *testing.T) {
 // TestAuthIntegration_MiddlewareChain tests middleware chain execution with auth
 func TestAuthIntegration_MiddlewareChain(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	auth := middleware.NewAuthMiddleware("test-secret-key")
+	auth := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	t.Run("middleware execution order with auth", func(t *testing.T) {
 		var executionOrder []string

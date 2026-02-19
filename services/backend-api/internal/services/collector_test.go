@@ -1416,6 +1416,8 @@ type MockMarketPriceInterface struct {
 	bid          float64
 	ask          float64
 	volume       float64
+	high         float64
+	low          float64
 	timestamp    time.Time
 }
 
@@ -1441,6 +1443,14 @@ func (m *MockMarketPriceInterface) GetAsk() float64 {
 
 func (m *MockMarketPriceInterface) GetVolume() float64 {
 	return m.volume
+}
+
+func (m *MockMarketPriceInterface) GetHigh() float64 {
+	return m.high
+}
+
+func (m *MockMarketPriceInterface) GetLow() float64 {
+	return m.low
 }
 
 func (m *MockMarketPriceInterface) GetTimestamp() time.Time {

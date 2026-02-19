@@ -263,11 +263,11 @@ func (pm *QuestProgressManager) sendMilestoneNotification(update *QuestProgressU
 		TimeRemaining: fmt.Sprintf("Milestone: %s", update.ReachedMilestone.Name),
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Send notification synchronously with timeout to prevent goroutine leaks
+	_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
 }
 
 // sendProgressUpdate sends regular progress update notification
@@ -291,11 +291,11 @@ func (pm *QuestProgressManager) sendProgressUpdate(update *QuestProgressUpdate) 
 		TimeRemaining: pm.formatTimeRemaining(update),
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Send notification synchronously with timeout to prevent goroutine leaks
+	_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
 }
 
 // sendCompletionNotification sends notification when quest completes
@@ -319,11 +319,11 @@ func (pm *QuestProgressManager) sendCompletionNotification(update *QuestProgress
 		TimeRemaining: "completed",
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Send notification synchronously with timeout to prevent goroutine leaks
+	_ = pm.engine.notificationService.NotifyQuestProgress(ctx, chatID, progressNotif)
 }
 
 // getChatIDForQuest retrieves chatID for a quest

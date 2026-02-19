@@ -13,7 +13,6 @@ import (
 	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/api"
-	apiHandlers "github.com/irfndi/neuratrade/internal/api/handlers"
 	"github.com/irfndi/neuratrade/internal/cache"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
@@ -87,18 +86,18 @@ func run() error {
 	// Initialize database
 	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
 	if driver == "" {
-		driver = "postgres"
+		_ = "sqlite" // Default to SQLite (used for logging/debugging)
 	}
 
-	if driver == "sqlite" {
-		return runSQLiteBootstrapMode(cfg, logger, logrusLogger)
-	}
-
-	db, err := database.NewPostgresConnection(&cfg.Database)
+	db, err := database.NewDatabaseConnection(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			logrusLogger.WithError(err).Error("Failed to close database connection")
+		}
+	}()
 
 	// Initialize error recovery manager for Redis connection
 	errorRecoveryManager := services.NewErrorRecoveryManager(logrusLogger)
@@ -152,8 +151,11 @@ func run() error {
 	// Initialize cache analytics service
 	cacheAnalyticsService := services.NewCacheAnalyticsService(getRedisClient())
 
+	// Create cancellable context for service lifecycle management
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled on exit
+
 	// Start periodic reporting of cache stats
-	ctx := context.Background()
 	cacheAnalyticsService.StartPeriodicReporting(ctx, 5*time.Minute)
 
 	// Initialize and perform cache warming
@@ -193,41 +195,52 @@ func run() error {
 	performanceMonitor := services.NewPerformanceMonitor(getLogger("performance_monitor"), getRedisClient(), ctx)
 	defer performanceMonitor.Stop()
 
-	// Start historical data backfill in background if needed
-	go func() {
-		logger.Info("Checking for historical data backfill requirements")
-		if err := collectorService.PerformBackfillIfNeeded(); err != nil {
-			logger.WithError(err).Warn("Backfill failed")
-		} else {
-			logger.Info("Historical data backfill check completed successfully")
+	// Start historical data backfill in background only when explicitly enabled.
+	if cfg.Backfill.Enabled {
+		go func() {
+			logger.Info("Checking for historical data backfill requirements")
+			if err := collectorService.PerformBackfillIfNeeded(); err != nil {
+				logger.WithError(err).Warn("Backfill failed")
+			} else {
+				logger.Info("Historical data backfill check completed successfully")
+			}
+		}()
+	} else {
+		logger.Info("Historical data backfill disabled")
+	}
+
+	// Scalping-first mode: keep arbitrage engines off unless explicitly enabled.
+	enableArbitrageEngines := cfg.Features.EnableAIArbitrage && cfg.Arbitrage.Enabled
+	if enableArbitrageEngines {
+		// Initialize futures arbitrage calculator
+		arbitrageCalculator := services.NewFuturesArbitrageCalculator()
+
+		// Initialize fee provider for exchange-specific fees
+		feeProvider := services.NewDBFeeProvider(
+			db,
+			decimal.NewFromFloat(cfg.Fees.DefaultTakerFee),
+			decimal.NewFromFloat(cfg.Fees.DefaultMakerFee),
+		)
+
+		arbitrageCalculator.WithFeeProvider(feeProvider, decimal.NewFromFloat(cfg.Fees.DefaultTakerFee))
+
+		// Initialize regular arbitrage service
+		arbitrageService := services.NewArbitrageService(db, cfg, arbitrageCalculator)
+		if err := arbitrageService.Start(); err != nil {
+			logger.WithError(err).Fatal("Failed to start arbitrage service")
 		}
-	}()
+		defer arbitrageService.Stop()
 
-	// Initialize futures arbitrage calculator
-	arbitrageCalculator := services.NewFuturesArbitrageCalculator()
-
-	// Initialize fee provider for exchange-specific fees
-	feeProvider := services.NewDBFeeProvider(
-		db,
-		decimal.NewFromFloat(cfg.Fees.DefaultTakerFee),
-		decimal.NewFromFloat(cfg.Fees.DefaultMakerFee),
-	)
-
-	arbitrageCalculator.WithFeeProvider(feeProvider, decimal.NewFromFloat(cfg.Fees.DefaultTakerFee))
-
-	// Initialize regular arbitrage service
-	arbitrageService := services.NewArbitrageService(db, cfg, arbitrageCalculator)
-	if err := arbitrageService.Start(); err != nil {
-		logger.WithError(err).Fatal("Failed to start arbitrage service")
+		// Initialize futures arbitrage service
+		futuresArbitrageService := services.NewFuturesArbitrageService(db, getRedisClient(), cfg, errorRecoveryManager, resourceManager, performanceMonitor, getLogger("futures_arbitrage_service"))
+		if err := futuresArbitrageService.Start(); err != nil {
+			logger.WithError(err).Fatal("Failed to start futures arbitrage service")
+		}
+		defer futuresArbitrageService.Stop()
+		logger.Info("Arbitrage engines enabled")
+	} else {
+		logger.Info("Arbitrage engines disabled in scalping-first mode")
 	}
-	defer arbitrageService.Stop()
-
-	// Initialize futures arbitrage service
-	futuresArbitrageService := services.NewFuturesArbitrageService(db, getRedisClient(), cfg, errorRecoveryManager, resourceManager, performanceMonitor, getLogger("futures_arbitrage_service"))
-	if err := futuresArbitrageService.Start(); err != nil {
-		logger.WithError(err).Fatal("Failed to start futures arbitrage service")
-	}
-	defer futuresArbitrageService.Stop()
 
 	// Initialize signal aggregator service
 	signalAggregator := services.NewSignalAggregator(cfg, db, getLogger("signal_aggregator"))
@@ -268,6 +281,27 @@ func run() error {
 	stopLossAutoExec.Start()
 	defer stopLossAutoExec.Stop()
 
+	// Initialize heartbeat for continuous monitoring
+	heartbeatConfig := services.DefaultHeartbeatConfig()
+	heartbeatConfig.Enabled = true
+	heartbeat := services.NewTradingHeartbeat(
+		heartbeatConfig,
+		nil, // positionTracker - interface{SyncPositions(ctx context.Context) error}
+		nil, // stopLossService - interface{UpdateAllStopLosses(ctx context.Context) error}
+		nil, // signalProcessor - interface{ScanForSignals(ctx context.Context) error}
+		nil, // fundingCollector - interface{CheckFundingRates(ctx context.Context) error}
+		nil, // connectivityChecker - interface{CheckConnectivity(ctx context.Context) error}
+		nil, // tradingStateStore - services.TradingStateStoreInterface
+		nil, // riskManager - interface{CheckRiskLimits(ctx context.Context) interface{}}
+		notificationService,
+	)
+	if err := heartbeat.Start(ctx); err != nil {
+		logger.WithError(err).Warn("Failed to start heartbeat - continuing without it")
+	} else {
+		defer heartbeat.Stop()
+		logger.Info("Trading heartbeat started")
+	}
+
 	// Initialize wallet validator
 	walletValidatorConfig := services.WalletValidatorConfig{
 		MinimumUSDCBalance:         decimal.NewFromFloat(cfg.Wallet.MinimumUSDCBalance),
@@ -289,27 +323,33 @@ func run() error {
 		getLogger("circuit_breaker"),
 	)
 
-	// Initialize signal processor
-	signalProcessor := services.NewSignalProcessor(
-		db,
-		logger.WithComponent("signal_processor"),
-		signalAggregator,
-		signalQualityScorer,
-		technicalAnalysisService,
-		notificationService,
-		collectorService,
-		signalProcessorCircuitBreaker,
-	)
+	// Initialize signal processor only when AI signals mode is enabled.
+	if cfg.Features.EnableAISignals {
+		signalProcessor := services.NewSignalProcessor(
+			db,
+			logger.WithComponent("signal_processor"),
+			signalAggregator,
+			signalQualityScorer,
+			technicalAnalysisService,
+			notificationService,
+			collectorService,
+			signalProcessorCircuitBreaker,
+		)
 
-	// Start signal processor
-	if err := signalProcessor.Start(); err != nil {
-		logger.WithError(err).Fatal("Failed to start signal processor")
-	}
-	defer func() {
-		if err := signalProcessor.Stop(); err != nil {
-			logger.WithError(err).Error("Failed to stop signal processor")
+		if err := signalProcessor.Start(); err != nil {
+			logger.WithError(err).Fatal("Failed to start signal processor")
 		}
-	}()
+		defer func() {
+			if err := signalProcessor.Stop(); err != nil {
+				logger.WithError(err).Error("Failed to stop signal processor")
+			}
+		}()
+		logger.Info("Signal processor enabled")
+	} else {
+		logger.Info("Signal processor disabled in scalping-first mode")
+	}
+
+	logger.Info("AI trading components ready for integration")
 
 	// Initialize cleanup service
 	cleanupService := services.NewCleanupService(db, errorRecoveryManager, resourceManager, performanceMonitor)
@@ -331,8 +371,9 @@ func run() error {
 	}
 	router.Use(gin.Recovery())
 
-	// Setup routes
-	api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, authMiddleware, walletValidator)
+	// Setup routes and get cleanup function
+	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator)
+	defer cleanupRoutes()
 
 	// Create HTTP server with security timeouts
 	srv := &http.Server{
@@ -346,8 +387,12 @@ func run() error {
 
 	// Start server in a goroutine
 	go func() {
+		fmt.Printf("DEBUG: Starting server on address :%d\n", cfg.Server.Port)
 		logger.LogStartup("celebrum-backend-api", "1.0.0", cfg.Server.Port)
+		addr := fmt.Sprintf(":%d", cfg.Server.Port)
+		fmt.Printf("DEBUG: Full address: %s\n", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("DEBUG: Server error on address %s: %v\n", addr, err)
 			logger.WithError(err).Fatal("Failed to start server")
 		}
 	}()
@@ -358,122 +403,18 @@ func run() error {
 	<-quit
 	logger.LogShutdown("celebrum-backend-api", "signal received")
 
-	// Give outstanding requests a deadline for completion
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Cancel all service contexts to trigger graceful shutdown
+	cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	// Give outstanding requests a deadline for completion
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.WithError(err).Fatal("Server forced to shutdown")
 	}
 
 	logger.Info("Server exited gracefully")
-	return nil
-}
-
-func runSQLiteBootstrapMode(cfg *config.Config, logger logging.Logger, logrusLogger *zaplogrus.Logger) error {
-	warnLegacyHandlersPath(logrusLogger)
-
-	sqliteDB, err := database.NewSQLiteConnectionWithExtension(cfg.Database.SQLitePath, cfg.Database.SQLiteVectorExtensionPath)
-	if err != nil {
-		return fmt.Errorf("failed to connect to sqlite database: %w", err)
-	}
-	defer func() {
-		_ = sqliteDB.Close()
-	}()
-
-	errorRecoveryManager := services.NewErrorRecoveryManager(logrusLogger)
-	retryPolicies := services.DefaultRetryPolicies()
-	for name, policy := range retryPolicies {
-		errorRecoveryManager.RegisterRetryPolicy(name, policy)
-	}
-
-	redisClient, err := database.NewRedisConnectionWithRetry(cfg.Redis, errorRecoveryManager)
-	if err != nil {
-		logrusLogger.WithError(err).Warn("Failed to connect to Redis in sqlite bootstrap mode - continuing without cache")
-		redisClient = nil
-	} else {
-		defer redisClient.Close()
-	}
-
-	getRedisClient := func() *redis.Client {
-		if redisClient != nil {
-			return redisClient.Client
-		}
-		return nil
-	}
-
-	cacheAnalyticsService := services.NewCacheAnalyticsService(getRedisClient())
-	cacheAnalyticsService.StartPeriodicReporting(context.Background(), 5*time.Minute)
-
-	router := gin.New()
-	router.Use(gin.Logger())
-	if cfg.Sentry.Enabled && cfg.Sentry.DSN != "" {
-		router.Use(sentrygin.New(sentrygin.Options{
-			Repanic:         true,
-			WaitForDelivery: false,
-			Timeout:         2 * time.Second,
-		}))
-	}
-	router.Use(gin.Recovery())
-
-	healthHandler := apiHandlers.NewHealthHandler(sqliteDB, redisClient, cfg.CCXT.ServiceURL, cacheAnalyticsService)
-	healthGroup := router.Group("/")
-	healthGroup.Use(middleware.HealthCheckTelemetryMiddleware())
-	{
-		healthGroup.GET("/health", gin.WrapF(healthHandler.HealthCheck))
-		healthGroup.HEAD("/health", gin.WrapF(healthHandler.HealthCheck))
-		healthGroup.GET("/ready", gin.WrapF(healthHandler.ReadinessCheck))
-		healthGroup.GET("/live", gin.WrapF(healthHandler.LivenessCheck))
-	}
-
-	router.GET("/api/v1/bootstrap/status", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-			"mode":   "sqlite-bootstrap",
-		})
-	})
-
-	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:           router,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       15 * time.Second,
-	}
-
-	go func() {
-		logger.WithFields(map[string]interface{}{
-			"service": "github.com/irfndi/neuratrade",
-			"version": "1.0.0",
-			"port":    cfg.Server.Port,
-			"mode":    "sqlite-bootstrap",
-			"event":   "startup",
-		}).Info("Application startup")
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logrusLogger.WithError(err).Fatal("Failed to start sqlite bootstrap server")
-		}
-	}()
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.WithFields(map[string]interface{}{
-		"service": "github.com/irfndi/neuratrade",
-		"mode":    "sqlite-bootstrap",
-		"event":   "shutdown",
-		"reason":  "signal received",
-	}).Info("Application shutdown")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		logrusLogger.WithError(err).Fatal("SQLite bootstrap server forced to shutdown")
-	}
-
-	logrusLogger.Info("SQLite bootstrap server exited gracefully")
 	return nil
 }
 

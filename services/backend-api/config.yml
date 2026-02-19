@@ -13,7 +13,7 @@ logging:
 
 # Server configuration
 server:
-  port: 8080
+  port: 58080
   host: 0.0.0.0
   read_timeout: 30s
   write_timeout: 30s
@@ -25,29 +25,28 @@ server:
     - "http://127.0.0.1:8080"
 
 # Database configuration
-# Note: Environment variables (DATABASE_HOST, etc.) override these via Viper's AutomaticEnv
 database:
-  host: ${DATABASE_HOST:-postgres}
+  driver: sqlite
+  sqlite_path: neuratrade.db
+  sqlite_vector_extension_path: ""
+  host: ${DATABASE_HOST:-localhost}
   port: ${DATABASE_PORT:-5432}
   user: ${DATABASE_USER:-postgres}
-  password: ${DATABASE_PASSWORD:?DATABASE_PASSWORD must be set in .env file}
+  password: ${DATABASE_PASSWORD:-""}
   dbname: ${DATABASE_DBNAME:-neuratrade}
   sslmode: ${DATABASE_SSLMODE:-disable}
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 300s
   conn_max_idle_time: 60s
-  # PostgreSQL 18 specific optimizations
   application_name: ${DATABASE_APP_NAME:-neuratrade}
   connect_timeout: 30
   statement_timeout: 300000
   query_timeout: 300000
-  # Connection pool tuning for async operations
   pool_timeout: 10
   pool_health_check_period: 30
   pool_max_lifetime: 3600
   pool_idle_timeout: 600
-  # Enable PostgreSQL 18 async features
   enable_async: true
   async_batch_size: 1000
   async_concurrency: 10
@@ -69,9 +68,11 @@ redis:
 # CCXT Service configuration
 ccxt:
   service_url: ${CCXT_SERVICE_URL:-http://localhost:3001}
+  grpc_address: ${CCXT_GRPC_ADDRESS:-localhost:50051}
   timeout: 30
   retry_attempts: 3
   retry_delay: 1s
+  admin_api_key: "37c6151f7da4ed66170688a3add5c0c5"
   rate_limit:
     requests_per_second: 10
     burst: 20
@@ -171,8 +172,17 @@ features:
   telegram_bot: true
   web_interface: true
   api_v1: true
-  real_trading: false
-  paper_trading: true
+  real_trading: true
+  paper_trading: false
+
+# Wallet configuration (override defaults to allow trading with current account)
+wallet:
+  minimum_usdc_balance: 0.0
+  minimum_portfolio_value: 0.0
+  minimum_exchange_connections: 1
+  max_position_size: 1000.0
+  risk_limit_daily_drawdown: 0.05
+  risk_limit_max_position: 0.1
 
 # External APIs
 external_apis:

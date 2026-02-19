@@ -1,3 +1,6 @@
+// Package services provides business logic services for NeuraTrade.
+// Includes arbitrage detection, technical analysis, signal processing,
+// quest management, and other trading-related services.
 package services
 
 import (
@@ -25,13 +28,13 @@ type ArbitrageCalculator interface {
 }
 
 // SpotArbitrageCalculator implements arbitrage calculations for spot markets.
+// Compares prices across exchanges to identify profitable trades.
 type SpotArbitrageCalculator struct{}
 
 // NewSpotArbitrageCalculator creates a new spot arbitrage calculator.
 //
 // Returns:
-//
-//	*SpotArbitrageCalculator: Initialized calculator.
+//   - *SpotArbitrageCalculator: Initialized calculator instance.
 func NewSpotArbitrageCalculator() *SpotArbitrageCalculator {
 	return &SpotArbitrageCalculator{}
 }
@@ -483,19 +486,35 @@ func (s *ArbitrageService) getLatestMarketData() (map[string][]models.MarketData
 		return nil, fmt.Errorf("database pool is not available")
 	}
 
-	// Query to get the latest market data for each trading pair on each exchange
-	query := `
-		SELECT DISTINCT ON (md.exchange_id, md.trading_pair_id)
-			md.id, md.exchange_id, md.trading_pair_id, md.last_price, md.volume_24h, 
-			md.timestamp, md.created_at, e.name as exchange_name, tp.symbol
-		FROM market_data md
-		JOIN exchanges e ON md.exchange_id = e.id
-		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
-		WHERE md.timestamp >= NOW() - INTERVAL '10 minutes'
-			AND e.status = 'active'
-			AND tp.is_active = true
-		ORDER BY md.exchange_id, md.trading_pair_id, md.timestamp DESC
-	`
+	dbType := database.DetectDBType(s.config.Database.Driver)
+
+	var query string
+	if dbType == database.DBTypeSQLite {
+		query = `
+			SELECT md.id, md.exchange_id, md.trading_pair_id, md.last_price, md.volume_24h,
+				md.timestamp, md.created_at, e.name as exchange_name, tp.symbol
+			FROM market_data md
+			JOIN exchanges e ON md.exchange_id = e.id
+			JOIN trading_pairs tp ON md.trading_pair_id = tp.id
+			WHERE md.timestamp >= datetime('now', '-10 minutes')
+				AND e.status = 'active'
+				AND tp.is_active = true
+			ORDER BY md.exchange_id, md.trading_pair_id, md.timestamp DESC
+		`
+	} else {
+		query = `
+			SELECT DISTINCT ON (md.exchange_id, md.trading_pair_id)
+				md.id, md.exchange_id, md.trading_pair_id, md.last_price, md.volume_24h,
+				md.timestamp, md.created_at, e.name as exchange_name, tp.symbol
+			FROM market_data md
+			JOIN exchanges e ON md.exchange_id = e.id
+			JOIN trading_pairs tp ON md.trading_pair_id = tp.id
+			WHERE md.timestamp >= NOW() - INTERVAL '10 minutes'
+				AND e.status = 'active'
+				AND tp.is_active = true
+			ORDER BY md.exchange_id, md.trading_pair_id, md.timestamp DESC
+		`
+	}
 
 	rows, err := s.db.Query(s.ctx, query)
 	if err != nil {
@@ -684,7 +703,7 @@ func (s *ArbitrageService) storeOpportunityBatch(opportunities []models.Arbitrag
 		// Insert the arbitrage opportunity
 		query := `
 			INSERT INTO arbitrage_opportunities (
-				id, buy_exchange_id, sell_exchange_id, trading_pair_id, 
+				id, buy_exchange_id, sell_exchange_id, trading_pair_id,
 				buy_price, sell_price, profit_percentage, detected_at, expires_at
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT (id) DO UPDATE SET
@@ -729,14 +748,22 @@ func (s *ArbitrageService) cleanupOldOpportunities() error {
 		return fmt.Errorf("database pool is not available")
 	}
 
-	// Since the table uses expires_at instead of is_active, we can just delete expired opportunities
-	// or we can leave them for historical analysis. For now, let's just log expired ones.
+	dbType := database.DetectDBType(s.config.Database.Driver)
 
-	query := `
-		SELECT COUNT(*) 
-		FROM arbitrage_opportunities 
-		WHERE expires_at <= NOW()
-	`
+	var query string
+	if dbType == database.DBTypeSQLite {
+		query = `
+			SELECT COUNT(*)
+			FROM arbitrage_opportunities
+			WHERE expires_at <= datetime('now')
+		`
+	} else {
+		query = `
+			SELECT COUNT(*)
+			FROM arbitrage_opportunities
+			WHERE expires_at <= NOW()
+		`
+	}
 
 	var expiredCount int
 	err := s.db.QueryRow(s.ctx, query).Scan(&expiredCount)
@@ -768,7 +795,7 @@ func (s *ArbitrageService) GetActiveOpportunities(ctx context.Context, limit int
 	}
 
 	query := `
-		SELECT 
+		SELECT
 			ao.id, ao.buy_exchange_id, ao.sell_exchange_id, ao.trading_pair_id,
 			ao.buy_price, ao.sell_price, ao.profit_percentage, ao.detected_at, ao.expires_at,
 			be.name as buy_exchange_name, se.name as sell_exchange_name,
@@ -777,12 +804,12 @@ func (s *ArbitrageService) GetActiveOpportunities(ctx context.Context, limit int
 		JOIN exchanges be ON ao.buy_exchange_id = be.id
 		JOIN exchanges se ON ao.sell_exchange_id = se.id
 		JOIN trading_pairs tp ON ao.trading_pair_id = tp.id
-		WHERE ao.expires_at > NOW()
+		WHERE ao.expires_at > $2
 		ORDER BY ao.profit_percentage DESC, ao.detected_at DESC
 		LIMIT $1
 	`
 
-	rows, err := s.db.Query(ctx, query, limit)
+	rows, err := s.db.Query(ctx, query, limit, time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active opportunities: %w", err)
 	}
@@ -881,7 +908,7 @@ func (s *ArbitrageService) GetActiveMultiLegOpportunities(ctx context.Context, l
 	}
 
 	query := `
-		SELECT 
+		SELECT
 			mlo.id, e.name as exchange_name, mlo.profit_percentage, mlo.detected_at, mlo.expires_at
 		FROM multi_leg_opportunities mlo
 		JOIN exchanges e ON mlo.exchange_id = e.id

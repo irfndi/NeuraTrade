@@ -30,7 +30,11 @@ func runSeeder() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to db: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			fmt.Printf("Warning: Failed to close database connection: %v\n", err)
+		}
+	}()
 
 	ctx := context.Background()
 
