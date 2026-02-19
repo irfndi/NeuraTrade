@@ -214,22 +214,25 @@ fi
 # Normalize env vars early so migrations and app boot see the correct values
 normalize_database_env
 
-# Auto-Run Migrations if enabled
-if [ "${RUN_MIGRATIONS}" = "true" ]; then
-  log "Running database migrations..."
+# Default no-op for SQLite or environments where migrations are intentionally skipped.
+run_migrations() {
+  return 0
+}
 
-  # Use absolute path for migrate script
-  MIGRATE_SCRIPT="/app/database/migrate.sh"
+# Skip database wait for SQLite (no external database to wait for)
+if [ "${DATABASE_DRIVER:-sqlite}" = "sqlite" ]; then
+  log "Using SQLite - skipping PostgreSQL wait..."
+else
+  run_migrations() {
+    log "Running database migrations..."
+    if [ ! -x "/app/database/migrate.sh" ]; then
+      log "ERROR: /app/database/migrate.sh not found or not executable."
+      return 1
+    fi
+    (cd /app/database && ./migrate.sh run)
+  }
 
-  # Ensure migrate.sh is executable
-  if [ -f "$MIGRATE_SCRIPT" ]; then
-    chmod +x "$MIGRATE_SCRIPT"
-  else
-    log "Error: Migration script not found at $MIGRATE_SCRIPT"
-    exit 1
-  fi
-
-  # Check for connection string in DATABASE_HOST
+  # PostgreSQL connection code continues below...
   if echo "${DATABASE_HOST}" | grep -qE "^postgres(ql)?://"; then
     export DATABASE_URL="${DATABASE_HOST}"
   fi
@@ -334,7 +337,7 @@ if [ "${RUN_MIGRATIONS}" = "true" ]; then
   fi
   log "Database is ready and authenticated."
 
-  if "$MIGRATE_SCRIPT"; then
+  if run_migrations; then
     log "Migrations completed successfully."
   else
     log "Migration failed. Exiting."

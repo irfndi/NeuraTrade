@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -19,6 +20,7 @@ type CleanupService struct {
 	db                   database.DatabasePool
 	ctx                  context.Context
 	cancel               context.CancelFunc
+	wg                   sync.WaitGroup
 	errorRecoveryManager *ErrorRecoveryManager
 	resourceManager      *ResourceManager
 	performanceMonitor   *PerformanceMonitor
@@ -95,7 +97,9 @@ func (c *CleanupService) Start(config CleanupConfig) {
 	// Note: Resource manager registration not needed for cleanup service
 
 	// Run initial cleanup
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		// Create timeout context for initial cleanup
 		ctx, cancel := context.WithTimeout(c.ctx, 30*time.Minute)
 		defer cancel()
@@ -106,7 +110,7 @@ func (c *CleanupService) Start(config CleanupConfig) {
 			observability.FinishSpan(span, err)
 		}()
 
-		err = c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "initial_cleanup", func() error {
+		err = c.executeWithRetry(spanCtx, "initial_cleanup", func() error {
 			return c.runCleanup(spanCtx, config)
 		})
 		if err != nil {
@@ -120,26 +124,23 @@ func (c *CleanupService) Start(config CleanupConfig) {
 
 	// Start periodic cleanup
 	ticker := time.NewTicker(time.Duration(config.IntervalMinutes) * time.Minute)
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		defer ticker.Stop()
 		for {
 			select {
 			case <-c.ctx.Done():
-				ticker.Stop() // Explicitly stop ticker on context cancellation
 				return
 			case <-ticker.C:
 				// Create timeout context for periodic cleanup
 				ctx, cancel := context.WithTimeout(c.ctx, 30*time.Minute)
 
-				var err error
 				spanCtx, span := observability.StartSpan(ctx, "maintenance.cleanup", "CleanupService.periodicCleanup")
-				defer func() {
-					observability.FinishSpan(span, err)
-				}()
-
-				err = c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "periodic_cleanup", func() error {
+				err := c.executeWithRetry(spanCtx, "periodic_cleanup", func() error {
 					return c.runCleanup(spanCtx, config)
 				})
+				observability.FinishSpan(span, err)
 				if err != nil {
 					c.logger.Error("Cleanup failed", "error", err)
 					observability.AddBreadcrumbWithData(spanCtx, "cleanup", "Periodic cleanup failed", sentry.LevelError, map[string]interface{}{
@@ -158,6 +159,18 @@ func (c *CleanupService) Stop() {
 	c.logger.Info("Stopping cleanup service")
 	observability.AddBreadcrumb(c.ctx, "cleanup", "Stopping cleanup service", sentry.LevelInfo)
 	c.cancel()
+
+	waitCh := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(waitCh)
+	}()
+
+	select {
+	case <-waitCh:
+	case <-time.After(2 * time.Second):
+		c.logger.Warn("Cleanup service goroutines did not stop within timeout")
+	}
 }
 
 // RunCleanup performs a manual cleanup operation.
@@ -190,7 +203,7 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 
 	// Get data statistics before cleanup with error recovery
 	var statsBefore map[string]int64
-	err = c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "get_stats_before", func() error {
+	err = c.executeWithRetry(spanCtx, "get_stats_before", func() error {
 		var err error
 		statsBefore, err = c.GetDataStats(spanCtx)
 		return err
@@ -215,13 +228,13 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 			"market_data_deletion_hours", config.MarketData.DeletionHours,
 			"funding_rates_retention_hours", config.FundingRates.RetentionHours,
 			"funding_rates_deletion_hours", config.FundingRates.DeletionHours)
-		cleanupErr := c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "cleanup_market_data_smart", func() error {
+		cleanupErr := c.executeWithRetry(spanCtx, "cleanup_market_data_smart", func() error {
 			return c.cleanupMarketDataSmart(spanCtx, config.MarketData.RetentionHours, config.MarketData.DeletionHours)
 		})
 		if cleanupErr != nil {
 			return fmt.Errorf("failed to cleanup market data: %w", cleanupErr)
 		}
-		fundingCleanupErr := c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "cleanup_funding_rates_smart", func() error {
+		fundingCleanupErr := c.executeWithRetry(spanCtx, "cleanup_funding_rates_smart", func() error {
 			return c.cleanupFundingRatesSmart(spanCtx, config.FundingRates.RetentionHours, config.FundingRates.DeletionHours)
 		})
 		if fundingCleanupErr != nil {
@@ -232,13 +245,13 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 		c.logger.Info("Using traditional cleanup strategy",
 			"market_data_retention_hours", config.MarketData.RetentionHours,
 			"funding_rates_retention_hours", config.FundingRates.RetentionHours)
-		cleanupErr := c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "cleanup_market_data", func() error {
+		cleanupErr := c.executeWithRetry(spanCtx, "cleanup_market_data", func() error {
 			return c.cleanupMarketData(spanCtx, config.MarketData.RetentionHours)
 		})
 		if cleanupErr != nil {
 			return fmt.Errorf("failed to cleanup market data: %w", cleanupErr)
 		}
-		err = c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "cleanup_funding_rates", func() error {
+		err = c.executeWithRetry(spanCtx, "cleanup_funding_rates", func() error {
 			return c.cleanupFundingRates(spanCtx, config.FundingRates.RetentionHours)
 		})
 		if err != nil {
@@ -248,7 +261,7 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 
 	// Clean up old arbitrage opportunities with error recovery
 	c.logger.Info("Cleaning up arbitrage opportunities", "retention_hours", config.ArbitrageOpportunities.RetentionHours)
-	err = c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "cleanup_arbitrage_opportunities", func() error {
+	err = c.executeWithRetry(spanCtx, "cleanup_arbitrage_opportunities", func() error {
 		return c.cleanupArbitrageOpportunities(spanCtx, config.ArbitrageOpportunities.RetentionHours)
 	})
 	if err != nil {
@@ -256,7 +269,7 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 	}
 
 	// Clean up old funding arbitrage opportunities with error recovery
-	err = c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "cleanup_funding_arbitrage_opportunities", func() error {
+	err = c.executeWithRetry(spanCtx, "cleanup_funding_arbitrage_opportunities", func() error {
 		return c.cleanupFundingArbitrageOpportunities(spanCtx, config.ArbitrageOpportunities.RetentionHours)
 	})
 	if err != nil {
@@ -265,7 +278,7 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 
 	// Get data statistics after cleanup with error recovery
 	var statsAfter map[string]int64
-	err = c.errorRecoveryManager.ExecuteWithRetry(spanCtx, "get_stats_after", func() error {
+	err = c.executeWithRetry(spanCtx, "get_stats_after", func() error {
 		var getStatsErr error
 		statsAfter, getStatsErr = c.GetDataStats(spanCtx)
 		return getStatsErr
@@ -304,6 +317,13 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 	c.logger.Info("Cleanup process completed successfully")
 	observability.AddBreadcrumb(spanCtx, "cleanup", "Cleanup process completed successfully", sentry.LevelInfo)
 	return nil
+}
+
+func (c *CleanupService) executeWithRetry(ctx context.Context, operationName string, operation func() error) error {
+	if c.errorRecoveryManager == nil {
+		return operation()
+	}
+	return c.errorRecoveryManager.ExecuteWithRetry(ctx, operationName, operation)
 }
 
 // cleanupMarketData removes market data using smart cleanup strategy

@@ -152,6 +152,14 @@ func (m *MockCCXTClient) GetAllFundingRates(ctx context.Context, exchange string
 	return args.Get(0).([]ccxt.FundingRate), args.Error(1)
 }
 
+func (m *MockCCXTClient) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	args := m.Called(ctx, exchange)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.BalanceResponse), args.Error(1)
+}
+
 func (m *MockCCXTClient) GetFundingRateHistory(ctx context.Context, exchange, symbol string, since time.Time) ([]ccxt.FundingRate, error) {
 	args := m.Called(ctx, exchange, symbol, since)
 	if args.Get(0) == nil {

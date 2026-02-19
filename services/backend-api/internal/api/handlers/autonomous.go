@@ -1,12 +1,17 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/services"
 )
 
@@ -519,7 +524,9 @@ func generateRequestID() string {
 }
 
 // ReadinessChecker checks system readiness for autonomous mode
-type ReadinessChecker struct{}
+type ReadinessChecker struct {
+	ccxtServiceURL string
+}
 
 // CheckResult represents the result of a single check
 type CheckResult struct {
@@ -539,7 +546,14 @@ type ReadinessResult struct {
 
 // NewReadinessChecker creates a new readiness checker
 func NewReadinessChecker() *ReadinessChecker {
-	return &ReadinessChecker{}
+	ccxtServiceURL := strings.TrimSpace(os.Getenv("CCXT_SERVICE_URL"))
+	if ccxtServiceURL == "" {
+		ccxtServiceURL = "http://ccxt-service:3001"
+	}
+
+	return &ReadinessChecker{
+		ccxtServiceURL: ccxtServiceURL,
+	}
 }
 
 // Check runs all readiness checks
@@ -622,34 +636,228 @@ func (r *ReadinessChecker) checkRedis(c *gin.Context) *CheckResult {
 
 func (r *ReadinessChecker) checkExchanges(c *gin.Context) *CheckResult {
 	start := time.Now()
-	// TODO: Actual exchange connectivity check
+
+	// Check configured exchanges from CCXT service
+	ccxtEndpoint := strings.TrimRight(r.ccxtServiceURL, "/") + "/api/exchanges"
+	resp, err := http.Get(ccxtEndpoint)
 	latency := time.Since(start).Milliseconds()
+
+	if err != nil {
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "CCXT service not reachable",
+			LatencyMs: latency,
+		}
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "Failed to parse exchange config",
+			LatencyMs: latency,
+		}
+	}
+
+	// Check if any exchanges are configured
+	exchanges, ok := result["exchanges"].([]interface{})
+	if !ok || len(exchanges) == 0 {
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "No exchanges configured in CCXT service",
+			LatencyMs: latency,
+			Details: map[string]string{
+				"configured_exchanges": "0",
+			},
+		}
+	}
+
+	// Check for Binance specifically (for scalping mode)
+	hasBinance := false
+	for _, ex := range exchanges {
+		if exMap, ok := ex.(map[string]interface{}); ok {
+			if name, ok := exMap["id"].(string); ok && name == "binance" {
+				hasBinance = true
+				break
+			}
+		}
+	}
+
+	if hasBinance {
+		return &CheckResult{
+			Status:    "healthy",
+			Message:   "Binance exchange configured (scalping mode ready)",
+			LatencyMs: latency,
+			Details: map[string]string{
+				"configured_exchanges": fmt.Sprintf("%d", len(exchanges)),
+				"mode":                 "scalping (AI + 1 exchange)",
+			},
+		}
+	}
 
 	return &CheckResult{
 		Status:    "healthy",
-		Message:   "Exchange APIs reachable",
+		Message:   fmt.Sprintf("%d exchanges configured", len(exchanges)),
 		LatencyMs: latency,
 		Details: map[string]string{
-			"configured_exchanges": "0",
+			"configured_exchanges": fmt.Sprintf("%d", len(exchanges)),
+			"mode":                 "arbitrage (2+ exchanges)",
 		},
 	}
 }
 
 func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckResult {
 	start := time.Now()
-	// TODO: Actual wallet check
+
+	// Check for exchange API keys in database
+	db, ok := c.Get("database")
 	latency := time.Since(start).Milliseconds()
 
-	// For initial setup, return warning if no wallets configured
+	if !ok {
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "Database connection not available",
+			LatencyMs: latency,
+		}
+	}
+
+	dbPool, ok := db.(database.DBPool)
+	if !ok {
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "Invalid database connection",
+			LatencyMs: latency,
+		}
+	}
+
+	isSQLite := false
+	switch db.(type) {
+	case *database.SQLiteDB:
+		isSQLite = true
+	}
+
+	// Check for configured exchange API keys
+	var exchangeCount int
+	err := dbPool.QueryRow(c.Request.Context(),
+		"SELECT COUNT(DISTINCT exchange) FROM exchange_api_keys",
+	).Scan(&exchangeCount)
+
+	if err != nil {
+		// Table may not exist or other error - check config as fallback
+		exchangeCount = 0
+	}
+
+	// Check for Polymarket wallets
+	var polymarketCount int
+	walletQuery := "SELECT COUNT(*) FROM wallets WHERE provider = $1"
+	if isSQLite {
+		walletQuery = "SELECT COUNT(*) FROM wallets WHERE provider = ?"
+	}
+	err = dbPool.QueryRow(c.Request.Context(), walletQuery, "polymarket").Scan(&polymarketCount)
+
+	if err != nil {
+		// Table may not exist or other error
+		polymarketCount = 0
+	}
+
+	// Check config file for Binance API keys as fallback.
+	configHasBinance := false
+	configPath := resolveRuntimeConfigPath()
+	if content, err := os.ReadFile(configPath); err == nil {
+		var cfg map[string]interface{}
+		if err := json.Unmarshal(content, &cfg); err == nil {
+			configHasBinance = hasExchangeAPIKeyInConfig(cfg, "binance")
+		}
+	}
+
+	// Determine status based on what's configured
+	if exchangeCount > 0 || configHasBinance {
+		mode := "scalping"
+		if exchangeCount >= 2 {
+			mode = "arbitrage"
+		}
+
+		return &CheckResult{
+			Status:    "healthy",
+			Message:   fmt.Sprintf("Exchange API keys configured (%s mode)", mode),
+			LatencyMs: latency,
+			Details: map[string]string{
+				"exchange_accounts":  fmt.Sprintf("%d", exchangeCount),
+				"polymarket_wallets": fmt.Sprintf("%d", polymarketCount),
+				"trading_mode":       mode,
+			},
+		}
+	}
+
+	if polymarketCount > 0 {
+		return &CheckResult{
+			Status:    "healthy",
+			Message:   "Polymarket wallet configured",
+			LatencyMs: latency,
+			Details: map[string]string{
+				"polymarket_wallets": fmt.Sprintf("%d", polymarketCount),
+				"exchange_accounts":  "0",
+			},
+		}
+	}
+
+	// Nothing configured - return warning with helpful message
 	return &CheckResult{
 		Status:    "warning",
-		Message:   "No wallets configured. Use /connect_exchange or /connect_polymarket to add wallets.",
+		Message:   "No wallets configured. Use /connect_exchange or CLI config init to add exchange API keys.",
 		LatencyMs: latency,
 		Details: map[string]string{
 			"polymarket_wallets": "0",
 			"exchange_accounts":  "0",
+			"config_path":        configPath,
 		},
 	}
+}
+
+func resolveRuntimeConfigPath() string {
+	if explicitPath := strings.TrimSpace(os.Getenv("NEURATRADE_CONFIG_PATH")); explicitPath != "" {
+		return explicitPath
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return ".neuratrade/config.json"
+	}
+
+	return filepath.Join(homeDir, ".neuratrade", "config.json")
+}
+
+func hasExchangeAPIKeyInConfig(cfg map[string]interface{}, exchange string) bool {
+	if key := nestedString(cfg, "ccxt", "exchanges", exchange, "api_key"); key != "" {
+		return true
+	}
+	if key := nestedString(cfg, "services", "ccxt", "exchanges", exchange, "api_key"); key != "" {
+		return true
+	}
+	return false
+}
+
+func nestedString(root map[string]interface{}, keys ...string) string {
+	var current interface{} = root
+	for _, key := range keys {
+		asMap, ok := current.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		current, ok = asMap[key]
+		if !ok {
+			return ""
+		}
+	}
+
+	value, ok := current.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 func (r *ReadinessChecker) checkRiskLimits(c *gin.Context) *CheckResult {

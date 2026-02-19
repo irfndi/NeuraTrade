@@ -18,7 +18,7 @@ import (
 // TestUserAuthFlow_CompleteFlow tests the complete authentication flow
 func TestUserAuthFlow_CompleteFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	auth := middleware.NewAuthMiddleware("test-secret-key")
+	auth := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	// Create a router that simulates the complete auth flow
 	createAuthFlowRouter := func() *gin.Engine {
@@ -289,7 +289,7 @@ func TestUserAuthFlow_CompleteFlow(t *testing.T) {
 // TestUserAuthFlow_TokenValidation tests various token validation scenarios
 func TestUserAuthFlow_TokenValidation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	auth := middleware.NewAuthMiddleware("test-secret-key")
+	auth := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	// Create a simple protected endpoint
 	createProtectedEndpoint := func() *gin.Engine {
