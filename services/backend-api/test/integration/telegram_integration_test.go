@@ -74,13 +74,13 @@ func TestTelegramIntegration(t *testing.T) {
 	// We need actual user handler functioning, so we need DB.
 
 	// Create required middlewares
-	authMiddleware := middleware.NewAuthMiddleware("test-jwt-secret")
+	authMiddleware := middleware.NewAuthMiddleware("test-jwt-secret-key-32-chars-min!")
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 
 	// Call SetupRoutes
 	// We pass nil for services not involved in this test flow
-	api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, authMiddleware, nil)
+	api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil)
 
 	// Test Data
 	testTelegramChatID := fmt.Sprintf("tg_int_%s", uuid.New().String())
