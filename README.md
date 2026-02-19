@@ -51,7 +51,44 @@ See `docs/architecture/ADVANCED_ANALYTICS.md` for scope and future guidance.
 *   **PostgreSQL**: Version 15+
 *   **Redis**: Version 7+
 
-### Local Setup
+### Option 1: Using NeuraTrade CLI (Recommended)
+
+The NeuraTrade CLI provides a simple interface to manage all services:
+
+1.  **Clone the Repository**
+    ```bash
+    git clone https://github.com/irfndi/neuratrade.git
+    cd neuratrade
+    ```
+
+2.  **Install the CLI**
+    ```bash
+    make install-cli
+    # Or: ./install.sh
+    ```
+
+3.  **Start All Services**
+    ```bash
+    neuratrade gateway start          # Start with Docker (recommended)
+    # Or: neuratrade gateway start --native  # Start natively for development
+    ```
+
+4.  **Check Status**
+    ```bash
+    neuratrade gateway status
+    ```
+
+5.  **View Logs**
+    ```bash
+    neuratrade gateway logs -f        # Follow logs
+    ```
+
+6.  **Stop Services**
+    ```bash
+    neuratrade gateway stop
+    ```
+
+### Option 2: Using Make Commands
 
 1.  **Clone the Repository**
     ```bash

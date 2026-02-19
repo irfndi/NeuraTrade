@@ -189,7 +189,7 @@ func TestLoad_WithDefaults(t *testing.T) {
 	assert.Equal(t, 8080, config.Server.Port)
 	assert.Equal(t, []string{"http://localhost:3000"}, config.Server.AllowedOrigins)
 	assert.Equal(t, "localhost", config.Database.Host)
-	assert.Equal(t, "postgres", config.Database.Driver)
+	assert.Equal(t, "sqlite", config.Database.Driver)
 	assert.Equal(t, 5432, config.Database.Port)
 	assert.Equal(t, "postgres", config.Database.User)
 	assert.Equal(t, "change-me-in-production", config.Database.Password)
@@ -200,7 +200,7 @@ func TestLoad_WithDefaults(t *testing.T) {
 	assert.Equal(t, 5, config.Database.MaxIdleConns)
 	assert.Equal(t, "300s", config.Database.ConnMaxLifetime)
 	assert.Equal(t, "60s", config.Database.ConnMaxIdleTime)
-	assert.Equal(t, "data/neuratrade.db", config.Database.SQLitePath)
+	assert.Equal(t, "neuratrade.db", config.Database.SQLitePath)
 	assert.Equal(t, "", config.Database.SQLiteVectorExtensionPath)
 	assert.Equal(t, "localhost", config.Redis.Host)
 	assert.Equal(t, 6379, config.Redis.Port)
@@ -325,4 +325,88 @@ func TestLoad_SQLiteDriverRejectsWhitespacePath(t *testing.T) {
 	config, err := Load()
 	assert.Nil(t, config)
 	assert.ErrorContains(t, err, "database.sqlite_path is required")
+}
+
+func TestLoad_UserHomeDirConfig(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("DATABASE_HOST", "test-host")
+
+	_, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("Cannot determine home directory")
+	}
+
+	config, err := Load()
+	require.NotNil(t, config)
+	assert.NoError(t, err)
+	assert.Equal(t, "test-host", config.Database.Host)
+}
+
+func TestLoad_NeuratradeConfigJSON(t *testing.T) {
+	os.Clearenv()
+
+	// Create a temporary directory to act as home directory
+	// This prevents accidentally deleting the user's real ~/.neuratrade directory
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	neuratradeDir := tempDir + "/.neuratrade"
+	err := os.MkdirAll(neuratradeDir, 0755)
+	if err != nil {
+		t.Skip("Cannot create .neuratrade directory")
+	}
+
+	configFile := neuratradeDir + "/config.json"
+	configContent := `{
+		"database": {
+			"host": "neuratrade-host",
+			"port": 5433
+		},
+		"server": {
+			"port": 9999
+		}
+	}`
+	err = os.WriteFile(configFile, []byte(configContent), 0644)
+	if err != nil {
+		t.Skip("Cannot write test config file")
+	}
+
+	config, err := Load()
+	require.NotNil(t, config)
+	assert.NoError(t, err)
+	assert.Equal(t, "neuratrade-host", config.Database.Host)
+	assert.Equal(t, 5433, config.Database.Port)
+}
+
+func TestLoad_NeuratradeConfigEnvTakesPrecedence(t *testing.T) {
+	os.Clearenv()
+
+	// Create a temporary directory to act as home directory
+	// This prevents accidentally deleting the user's real ~/.neuratrade directory
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	neuratradeDir := tempDir + "/.neuratrade"
+	err := os.MkdirAll(neuratradeDir, 0755)
+	if err != nil {
+		t.Skip("Cannot create .neuratrade directory")
+	}
+
+	configFile := neuratradeDir + "/config.json"
+	configContent := `{
+		"database": {
+			"host": "neuratrade-host"
+		}
+	}`
+	err = os.WriteFile(configFile, []byte(configContent), 0644)
+	if err != nil {
+		t.Skip("Cannot write test config file")
+	}
+
+	t.Setenv("DATABASE_HOST", "env-host")
+	config, err := Load()
+	require.NotNil(t, config)
+	assert.NoError(t, err)
+	assert.Equal(t, "env-host", config.Database.Host)
 }

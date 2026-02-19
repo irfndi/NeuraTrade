@@ -175,6 +175,9 @@ jobs:
       fail-fast: false
       matrix:
         service: [ccxt-service, telegram-service]
+    env:
+      ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY || 'test-admin-api-key-for-ci' }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET || 'test-webhook-secret-for-ci' }}
 
     steps:
       - uses: actions/checkout@v4
