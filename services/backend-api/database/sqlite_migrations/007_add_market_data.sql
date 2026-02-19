@@ -21,6 +21,3 @@ CREATE TABLE IF NOT EXISTS market_data (
 CREATE INDEX IF NOT EXISTS idx_market_data_exchange ON market_data(exchange_id);
 CREATE INDEX IF NOT EXISTS idx_market_data_pair ON market_data(trading_pair_id);
 CREATE INDEX IF NOT EXISTS idx_market_data_timestamp ON market_data(timestamp);
-
--- Migration completed
-INSERT INTO schema_migrations (filename, applied_at) VALUES ('007_add_market_data.sql', CURRENT_TIMESTAMP);

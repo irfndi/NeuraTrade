@@ -8,7 +8,7 @@ set -e
 
 # Configuration
 DB_PATH="${SQLITE_DB_PATH:-neuratrade.db}"
-MIGRATIONS_DIR="$(dirname "$0")/migrations"
+MIGRATIONS_DIR="$(dirname "$0")/sqlite_migrations"
 
 # Colors for output
 RED='\033[0;31m'

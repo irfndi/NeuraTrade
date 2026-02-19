@@ -102,8 +102,8 @@ func main() {
 			fmt.Printf("  ✅ Status: %d\n", resp.StatusCode)
 			passed++
 		} else {
-			fmt.Printf("  ⚠️  Status: %d\n", resp.StatusCode)
-			passed++ // Still count as pass if endpoint exists
+			fmt.Printf("  ❌ Status: %d (unexpected)\n", resp.StatusCode)
+			failed++
 		}
 	}
 

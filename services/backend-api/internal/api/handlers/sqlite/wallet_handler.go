@@ -4,6 +4,7 @@ package sqlite
 
 import (
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -56,7 +57,7 @@ func (h *WalletHandler) GetWallets(c *gin.Context) {
 
 	// Find user
 	var userID int
-	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_id = ?", chatID).Scan(&userID)
+	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_chat_id = ?", chatID).Scan(&userID)
 	if err != nil {
 		// Return empty list if user not found
 		c.JSON(http.StatusOK, gin.H{"wallets": []interface{}{}})
@@ -129,11 +130,11 @@ func (h *WalletHandler) AddWallet(c *gin.Context) {
 	}
 
 	var userID int
-	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_id = ?", chatID).Scan(&userID)
+	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_chat_id = ?", chatID).Scan(&userID)
 	if err != nil {
 		// Create user if not exists
 		result, err := h.db.DB.Exec(
-			"INSERT INTO users (telegram_id, risk_level, created_at) VALUES (?, 'medium', ?)",
+			"INSERT INTO users (telegram_chat_id, created_at) VALUES (?, ?)",
 			chatID, time.Now().Format("2006-01-02 15:04:05"),
 		)
 		if err != nil {
@@ -199,7 +200,7 @@ func (h *WalletHandler) RemoveWallet(c *gin.Context) {
 
 	// Find user to verify ownership
 	var userID int
-	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_id = ?", chatID).Scan(&userID)
+	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_chat_id = ?", chatID).Scan(&userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
@@ -268,7 +269,7 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 	}
 
 	var userID int
-	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_id = ?", chatID).Scan(&userID)
+	err := h.db.DB.QueryRow("SELECT id FROM users WHERE telegram_chat_id = ?", chatID).Scan(&userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
@@ -333,14 +334,11 @@ func (h *WalletHandler) ConnectExchange(c *gin.Context) {
 
 // getEncryptionKey retrieves the encryption key from environment.
 // Returns a 32-byte key for AES-256-GCM encryption.
-//
-// IMPORTANT: Set ENCRYPTION_KEY environment variable to a secure random value.
-// Example: openssl rand -hex 32
 func getEncryptionKey() []byte {
-	// Default key for development (MUST be changed in production!)
-	// In production, use: os.Getenv("ENCRYPTION_KEY")
-	// This is exactly 32 bytes for AES-256-GCM
-	key := "0123456789abcdef0123456789abcdef" // 32 bytes
+	key := os.Getenv("ENCRYPTION_KEY")
+	if key == "" {
+		return nil
+	}
 	return []byte(key)
 }
 
