@@ -235,9 +235,12 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 	var signals []aiMarketSignal
 
 	pairs, err := s.discoverTradingPairs(ctx)
-	if err != nil || len(pairs) == 0 {
-		log.Printf("[AI-SCALPING] Failed to discover pairs: %v, using emergency popular pairs", err)
-		pairs = []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "MATIC/USDT"}
+	if err != nil {
+		log.Printf("[AI-SCALPING] Failed dynamic pair discovery: %v", err)
+		return nil, fmt.Errorf("dynamic pair discovery unavailable: %w", err)
+	}
+	if len(pairs) == 0 {
+		return nil, fmt.Errorf("dynamic pair discovery returned no symbols")
 	}
 
 	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), s.config.Exchange)

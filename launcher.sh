@@ -227,7 +227,9 @@ start_services() {
 
 stop_services() {
     log_info "Stopping NeuraTrade services..."
-    
+
+    local pids_to_wait=()
+
     for pidfile in "$PID_DIR"/*.pid; do
         if [ -f "$pidfile" ]; then
             pid=$(cat "$pidfile")
@@ -235,15 +237,32 @@ stop_services() {
             if kill -0 "$pid" 2>/dev/null; then
                 log_info "Stopping $name (PID: $pid)..."
                 kill "$pid" 2>/dev/null || true
+                pids_to_wait+=("$pid")
             fi
             rm -f "$pidfile"
         fi
     done
-    
-    # Also kill any remaining processes
-    pkill -f "bun.*ccxt-service" 2>/dev/null || true
-    pkill -f "bun.*telegram-service" 2>/dev/null || true
-    pkill -f "neuratrade-server" 2>/dev/null || true
+
+    # Wait for graceful shutdown first
+    if [ "${#pids_to_wait[@]}" -gt 0 ]; then
+        local wait_sec=0
+        while [ $wait_sec -lt 12 ]; do
+            local alive=0
+            for pid in "${pids_to_wait[@]}"; do
+                if kill -0 "$pid" 2>/dev/null; then
+                    alive=1
+                    break
+                fi
+            done
+            [ $alive -eq 0 ] && break
+            sleep 1
+            wait_sec=$((wait_sec + 1))
+        done
+    fi
+
+    # Force-kill any remaining matching processes to prevent buildup across restarts
+    pkill -9 -f "bun.*index.ts" 2>/dev/null || true
+    pkill -9 -f "neuratrade-server" 2>/dev/null || true
     
     log_info "All services stopped."
 }

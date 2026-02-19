@@ -553,7 +553,7 @@ func setDefaults() {
 	viper.SetDefault("cleanup.enable_smart_cleanup", true)
 
 	// Backfill
-	viper.SetDefault("backfill.enabled", true)
+	viper.SetDefault("backfill.enabled", false)
 	viper.SetDefault("backfill.backfill_hours", 6)
 	viper.SetDefault("backfill.min_data_threshold_hours", 4)
 	viper.SetDefault("backfill.batch_size", 5)

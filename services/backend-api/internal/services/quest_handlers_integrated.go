@@ -280,19 +280,30 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		return err
 	}
 
-	usdtBalance := 100.0 // Safe fallback for decisioning when balance endpoint is temporarily unavailable
+	usdtBalance := 0.0
 
 	balanceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	balance, err := balanceFetcher.FetchBalance(balanceCtx, "binance")
 	if err != nil {
-		log.Printf("[SCALPING] Failed to fetch balance, using fallback %.2f USDT: %v", usdtBalance, err)
+		log.Printf("[SCALPING] Failed to fetch balance, skipping cycle: %v", err)
+		quest.Checkpoint["status"] = "balance_unavailable_hold"
 		quest.Checkpoint["balance_warning"] = err.Error()
-	} else if balance.Total != nil {
+		quest.Checkpoint["chat_id"] = chatID
+		return nil
+	}
+
+	if balance.Total != nil {
 		if v := balance.Total["USDT"]; v > 0 {
 			usdtBalance = v
 		}
+	}
+	if usdtBalance <= 0 {
+		log.Printf("[SCALPING] USDT balance is zero/unavailable, skipping cycle")
+		quest.Checkpoint["status"] = "balance_zero_hold"
+		quest.Checkpoint["chat_id"] = chatID
+		return nil
 	}
 
 	portfolio := TradingPortfolio{

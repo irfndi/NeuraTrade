@@ -151,8 +151,11 @@ func run() error {
 	// Initialize cache analytics service
 	cacheAnalyticsService := services.NewCacheAnalyticsService(getRedisClient())
 
+	// Create cancellable context for service lifecycle management
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled on exit
+
 	// Start periodic reporting of cache stats
-	ctx := context.Background()
 	cacheAnalyticsService.StartPeriodicReporting(ctx, 5*time.Minute)
 
 	// Initialize and perform cache warming
@@ -192,41 +195,52 @@ func run() error {
 	performanceMonitor := services.NewPerformanceMonitor(getLogger("performance_monitor"), getRedisClient(), ctx)
 	defer performanceMonitor.Stop()
 
-	// Start historical data backfill in background if needed
-	go func() {
-		logger.Info("Checking for historical data backfill requirements")
-		if err := collectorService.PerformBackfillIfNeeded(); err != nil {
-			logger.WithError(err).Warn("Backfill failed")
-		} else {
-			logger.Info("Historical data backfill check completed successfully")
+	// Start historical data backfill in background only when explicitly enabled.
+	if cfg.Backfill.Enabled {
+		go func() {
+			logger.Info("Checking for historical data backfill requirements")
+			if err := collectorService.PerformBackfillIfNeeded(); err != nil {
+				logger.WithError(err).Warn("Backfill failed")
+			} else {
+				logger.Info("Historical data backfill check completed successfully")
+			}
+		}()
+	} else {
+		logger.Info("Historical data backfill disabled")
+	}
+
+	// Scalping-first mode: keep arbitrage engines off unless explicitly enabled.
+	enableArbitrageEngines := cfg.Features.EnableAIArbitrage && cfg.Arbitrage.Enabled
+	if enableArbitrageEngines {
+		// Initialize futures arbitrage calculator
+		arbitrageCalculator := services.NewFuturesArbitrageCalculator()
+
+		// Initialize fee provider for exchange-specific fees
+		feeProvider := services.NewDBFeeProvider(
+			db,
+			decimal.NewFromFloat(cfg.Fees.DefaultTakerFee),
+			decimal.NewFromFloat(cfg.Fees.DefaultMakerFee),
+		)
+
+		arbitrageCalculator.WithFeeProvider(feeProvider, decimal.NewFromFloat(cfg.Fees.DefaultTakerFee))
+
+		// Initialize regular arbitrage service
+		arbitrageService := services.NewArbitrageService(db, cfg, arbitrageCalculator)
+		if err := arbitrageService.Start(); err != nil {
+			logger.WithError(err).Fatal("Failed to start arbitrage service")
 		}
-	}()
+		defer arbitrageService.Stop()
 
-	// Initialize futures arbitrage calculator
-	arbitrageCalculator := services.NewFuturesArbitrageCalculator()
-
-	// Initialize fee provider for exchange-specific fees
-	feeProvider := services.NewDBFeeProvider(
-		db,
-		decimal.NewFromFloat(cfg.Fees.DefaultTakerFee),
-		decimal.NewFromFloat(cfg.Fees.DefaultMakerFee),
-	)
-
-	arbitrageCalculator.WithFeeProvider(feeProvider, decimal.NewFromFloat(cfg.Fees.DefaultTakerFee))
-
-	// Initialize regular arbitrage service
-	arbitrageService := services.NewArbitrageService(db, cfg, arbitrageCalculator)
-	if err := arbitrageService.Start(); err != nil {
-		logger.WithError(err).Fatal("Failed to start arbitrage service")
+		// Initialize futures arbitrage service
+		futuresArbitrageService := services.NewFuturesArbitrageService(db, getRedisClient(), cfg, errorRecoveryManager, resourceManager, performanceMonitor, getLogger("futures_arbitrage_service"))
+		if err := futuresArbitrageService.Start(); err != nil {
+			logger.WithError(err).Fatal("Failed to start futures arbitrage service")
+		}
+		defer futuresArbitrageService.Stop()
+		logger.Info("Arbitrage engines enabled")
+	} else {
+		logger.Info("Arbitrage engines disabled in scalping-first mode")
 	}
-	defer arbitrageService.Stop()
-
-	// Initialize futures arbitrage service
-	futuresArbitrageService := services.NewFuturesArbitrageService(db, getRedisClient(), cfg, errorRecoveryManager, resourceManager, performanceMonitor, getLogger("futures_arbitrage_service"))
-	if err := futuresArbitrageService.Start(); err != nil {
-		logger.WithError(err).Fatal("Failed to start futures arbitrage service")
-	}
-	defer futuresArbitrageService.Stop()
 
 	// Initialize signal aggregator service
 	signalAggregator := services.NewSignalAggregator(cfg, db, getLogger("signal_aggregator"))
@@ -384,11 +398,14 @@ func run() error {
 	<-quit
 	logger.LogShutdown("celebrum-backend-api", "signal received")
 
-	// Give outstanding requests a deadline for completion
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Cancel all service contexts to trigger graceful shutdown
+	cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	// Give outstanding requests a deadline for completion
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.WithError(err).Fatal("Server forced to shutdown")
 	}
 

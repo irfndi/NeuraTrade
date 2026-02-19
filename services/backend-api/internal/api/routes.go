@@ -348,15 +348,19 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 	}
 
-	// Create and start arbitrage execution bridge to connect detected opportunities to QuestEngine
-	arbitrageBridge := services.NewArbitrageExecutionBridge(db, questEngine, signalAggregator, nil)
-
-	// Start the arbitrage execution bridge in a goroutine
-	go func() {
-		if err := arbitrageBridge.Start(context.Background()); err != nil {
-			log.Printf("Arbitrage execution bridge error: %v", err)
-		}
-	}()
+	// Scalping-first mode: keep arbitrage execution bridge disabled by default.
+	// It can be re-enabled only when AI arbitrage mode is explicitly turned on.
+	if featuresConfig != nil && featuresConfig.EnableAIArbitrage {
+		arbitrageBridge := services.NewArbitrageExecutionBridge(db, questEngine, signalAggregator, nil)
+		go func() {
+			if err := arbitrageBridge.Start(context.Background()); err != nil {
+				log.Printf("Arbitrage execution bridge error: %v", err)
+			}
+		}()
+		log.Printf("Arbitrage execution bridge enabled (features.enable_ai_arbitrage=true)")
+	} else {
+		log.Printf("Arbitrage execution bridge disabled in scalping-first mode")
+	}
 
 	// Register integrated handlers for production-ready quest execution
 	questEngine.RegisterIntegratedHandlers(integratedHandlers)

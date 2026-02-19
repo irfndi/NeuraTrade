@@ -340,7 +340,7 @@ func TestSetupRoutes_PanicHandling(t *testing.T) {
 	assert.NotNil(t, router)
 
 	assert.Panics(t, func() {
-		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should panic with nil dependencies")
 }
 
@@ -383,7 +383,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	assert.NotPanics(t, func() {
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, nil, mockAuthMiddleware, nil)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil)
 	}, "SetupRoutes should handle minimal dependencies gracefully")
 
 	// Verify routes were registered
