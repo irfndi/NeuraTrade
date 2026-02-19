@@ -88,8 +88,9 @@ func TestSubagentSpawner_Close(t *testing.T) {
 	forceGC()
 	goroutinesBefore := runtime.NumGoroutine()
 
-	// Create spawner
+	// Create spawner with paper trading mode enabled (for testing without real executor)
 	config := services.DefaultSubagentSpawnerConfig()
+	config.PaperTrading = true // Required when no orderExecutor is provided
 	spawner := services.NewSubagentSpawner(30*time.Second, 10, config, nil, nil, nil)
 
 	// Spawn some agents
@@ -169,4 +170,38 @@ func BenchmarkMemoryAllocation(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = make([]byte, 1024)
 	}
+}
+
+func TestSubagentSpawner_ProductionModeRequiresExecutor(t *testing.T) {
+	config := services.DefaultSubagentSpawnerConfig()
+	config.PaperTrading = false
+
+	defer func() {
+		r := recover()
+		assert.NotNil(t, r, "Expected panic when orderExecutor is nil in production mode")
+		assert.Contains(t, fmt.Sprint(r), "orderExecutor is required", "Panic message should mention orderExecutor requirement")
+	}()
+
+	services.NewSubagentSpawner(30*time.Second, 10, config, nil, nil, nil)
+	t.Error("Should have panicked before reaching here")
+}
+
+func TestSubagentSpawner_PaperModeWithNilExecutor(t *testing.T) {
+	forceGC()
+	goroutinesBefore := runtime.NumGoroutine()
+
+	config := services.DefaultSubagentSpawnerConfig()
+	config.PaperTrading = true
+
+	spawner := services.NewSubagentSpawner(30*time.Second, 10, config, nil, nil, nil)
+	assert.NotNil(t, spawner, "Spawner should be created in paper mode with nil executor")
+
+	spawner.Close()
+
+	time.Sleep(100 * time.Millisecond)
+	forceGC()
+
+	goroutinesAfter := runtime.NumGoroutine()
+	goroutineGrowth := goroutinesAfter - goroutinesBefore
+	assert.Less(t, goroutineGrowth, 2, "Paper mode spawner should clean up properly")
 }
