@@ -167,6 +167,19 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	questStore := services.NewInMemoryQuestStore()
 	questEngine := services.NewQuestEngineWithNotification(questStore, nil, notificationService)
 
+	portfolioSafetyConfig := services.DefaultPortfolioSafetyConfig()
+	portfolioSafety := services.NewPortfolioSafetyService(
+		portfolioSafetyConfig,
+		ccxtService,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		redis.Client,
+		nil,
+	)
+
 	// Legacy quest preload is opt-in only.
 	// In scalping-first mode we avoid restoring old active rows without metadata/chat ownership.
 	loadLegacyQuests := os.Getenv("NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS") == "1" ||
@@ -369,7 +382,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Register integrated handlers for production-ready quest execution
 	questEngine.RegisterIntegratedHandlers(integratedHandlers)
 
-	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
+	autonomousHandler := handlers.NewAutonomousHandler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges())
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
 	// Internal service-to-service routes (no auth, network-isolated via Docker)

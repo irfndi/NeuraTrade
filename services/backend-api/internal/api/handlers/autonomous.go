@@ -16,15 +16,19 @@ import (
 
 // AutonomousHandler handles autonomous mode endpoints
 type AutonomousHandler struct {
-	questEngine *services.QuestEngine
-	readiness   *ReadinessChecker
+	questEngine         *services.QuestEngine
+	readiness           *ReadinessChecker
+	portfolioSafety     *services.PortfolioSafetyService
+	configuredExchanges []string
 }
 
 // NewAutonomousHandler creates a new autonomous handler
-func NewAutonomousHandler(questEngine *services.QuestEngine) *AutonomousHandler {
+func NewAutonomousHandler(questEngine *services.QuestEngine, portfolioSafety *services.PortfolioSafetyService, exchanges []string) *AutonomousHandler {
 	return &AutonomousHandler{
-		questEngine: questEngine,
-		readiness:   NewReadinessChecker(),
+		questEngine:         questEngine,
+		readiness:           NewReadinessChecker(),
+		portfolioSafety:     portfolioSafety,
+		configuredExchanges: exchanges,
 	}
 }
 
@@ -73,11 +77,24 @@ type PortfolioPosition struct {
 
 // PortfolioResponse represents the response for /portfolio
 type PortfolioResponse struct {
-	TotalEquity      string              `json:"total_equity"`
-	AvailableBalance string              `json:"available_balance,omitempty"`
-	Exposure         string              `json:"exposure,omitempty"`
-	Positions        []PortfolioPosition `json:"positions"`
-	UpdatedAt        string              `json:"updated_at,omitempty"`
+	TotalEquity      string                `json:"total_equity"`
+	AvailableBalance string                `json:"available_balance,omitempty"`
+	Exposure         string                `json:"exposure,omitempty"`
+	ExposurePct      string                `json:"exposure_pct,omitempty"`
+	UnrealizedPnL    string                `json:"unrealized_pnl,omitempty"`
+	Positions        []PortfolioPosition   `json:"positions"`
+	SafetyStatus     *SafetyStatusResponse `json:"safety_status,omitempty"`
+	UpdatedAt        string                `json:"updated_at,omitempty"`
+}
+
+// SafetyStatusResponse represents safety status in portfolio response
+type SafetyStatusResponse struct {
+	IsSafe           bool     `json:"is_safe"`
+	TradingAllowed   bool     `json:"trading_allowed"`
+	MaxPositionSize  string   `json:"max_position_size"`
+	CurrentDrawdown  string   `json:"current_drawdown"`
+	PositionThrottle string   `json:"position_throttle"`
+	Warnings         []string `json:"warnings,omitempty"`
 }
 
 // OperatorLogEntry represents a log entry
@@ -261,15 +278,64 @@ func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual portfolio retrieval from exchange connectors
-	// For now, return placeholder data
-	c.JSON(http.StatusOK, PortfolioResponse{
-		TotalEquity:      "0.00",
-		AvailableBalance: "0.00",
-		Exposure:         "0%",
-		Positions:        []PortfolioPosition{},
-		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
-	})
+	if h.portfolioSafety == nil {
+		c.JSON(http.StatusOK, PortfolioResponse{
+			TotalEquity:      "0.00",
+			AvailableBalance: "0.00",
+			Exposure:         "0%",
+			Positions:        []PortfolioPosition{},
+			UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	snapshot, err := h.portfolioSafety.GetPortfolioSnapshot(ctx, chatID, h.configuredExchanges)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get portfolio snapshot: " + err.Error()})
+		return
+	}
+
+	safety, err := h.portfolioSafety.CheckSafety(ctx, chatID, snapshot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check safety: " + err.Error()})
+		return
+	}
+
+	positions := make([]PortfolioPosition, 0, len(snapshot.Positions))
+	for _, p := range snapshot.Positions {
+		positions = append(positions, PortfolioPosition{
+			Symbol:        p.Symbol,
+			Side:          p.Side,
+			Size:          p.Size,
+			EntryPrice:    p.EntryPrice,
+			MarkPrice:     p.MarkPrice,
+			UnrealizedPnL: p.UnrealizedPnL,
+		})
+	}
+
+	response := PortfolioResponse{
+		TotalEquity:      snapshot.TotalEquity.StringFixed(2),
+		AvailableBalance: snapshot.AvailableFunds.StringFixed(2),
+		Exposure:         snapshot.TotalExposure.StringFixed(2),
+		ExposurePct:      fmt.Sprintf("%.2f%%", snapshot.ExposurePct*100),
+		UnrealizedPnL:    snapshot.UnrealizedPnL.StringFixed(2),
+		Positions:        positions,
+		UpdatedAt:        snapshot.CalculatedAt.Format(time.RFC3339),
+	}
+
+	if safety != nil {
+		response.SafetyStatus = &SafetyStatusResponse{
+			IsSafe:           safety.IsSafe,
+			TradingAllowed:   safety.TradingAllowed,
+			MaxPositionSize:  safety.MaxPositionSize.StringFixed(2),
+			CurrentDrawdown:  fmt.Sprintf("%.2f%%", safety.CurrentDrawdown*100),
+			PositionThrottle: fmt.Sprintf("%.0f%%", safety.PositionThrottle*100),
+			Warnings:         safety.Warnings,
+		}
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // GetLogs returns recent operator logs for a user
@@ -326,6 +392,62 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 			overallStatus = "critical"
 		} else {
 			overallStatus = "warning"
+		}
+	}
+
+	if h.portfolioSafety != nil {
+		ctx := c.Request.Context()
+		diagnostics, err := h.portfolioSafety.GetSafetyDiagnostics(ctx, chatID, h.configuredExchanges)
+		if err == nil {
+			if safetyMap, ok := diagnostics["safety"].(map[string]interface{}); ok {
+				isSafe, _ := safetyMap["is_safe"].(bool)
+				tradingAllowed, _ := safetyMap["trading_allowed"].(bool)
+
+				status := "healthy"
+				if !tradingAllowed {
+					status = "critical"
+					if overallStatus != "critical" {
+						overallStatus = "critical"
+					}
+				} else if !isSafe {
+					status = "warning"
+					if overallStatus == "healthy" {
+						overallStatus = "warning"
+					}
+				}
+
+				check := DoctorCheck{
+					Name:    "portfolio_safety",
+					Status:  status,
+					Message: fmt.Sprintf("Safe: %v, Trading: %v", isSafe, tradingAllowed),
+					Details: map[string]string{
+						"max_position_size": fmt.Sprintf("%v", safetyMap["max_position_size"]),
+						"current_drawdown":  fmt.Sprintf("%v", safetyMap["current_drawdown"]),
+						"position_throttle": fmt.Sprintf("%v", safetyMap["position_throttle"]),
+					},
+				}
+
+				if reasons, ok := safetyMap["reasons"].([]string); ok && len(reasons) > 0 {
+					check.Details["blocked_reasons"] = fmt.Sprintf("%v", reasons)
+				}
+
+				checks = append(checks, check)
+			}
+
+			if portfolioMap, ok := diagnostics["portfolio"].(map[string]interface{}); ok {
+				check := DoctorCheck{
+					Name:    "portfolio_status",
+					Status:  "healthy",
+					Message: fmt.Sprintf("Equity: %v, Positions: %v", portfolioMap["total_equity"], portfolioMap["open_positions"]),
+					Details: map[string]string{
+						"total_equity":    fmt.Sprintf("%v", portfolioMap["total_equity"]),
+						"available_funds": fmt.Sprintf("%v", portfolioMap["available_funds"]),
+						"exposure_pct":    fmt.Sprintf("%v", portfolioMap["exposure_pct"]),
+						"unrealized_pnl":  fmt.Sprintf("%v", portfolioMap["unrealized_pnl"]),
+					},
+				}
+				checks = append(checks, check)
+			}
 		}
 	}
 
