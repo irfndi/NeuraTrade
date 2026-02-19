@@ -502,6 +502,19 @@ func (e *QuestEngine) tick() {
 
 	now := time.Now()
 	log.Printf("Quest scheduler tick: checking %d quests", len(e.quests))
+
+	// Cleanup old completed/failed quests (older than 24 hours)
+	cleanupThreshold := 24 * time.Hour
+	for id, quest := range e.quests {
+		if quest.Status == QuestStatusCompleted || quest.Status == QuestStatusFailed {
+			if quest.UpdatedAt.Before(now.Add(-cleanupThreshold)) {
+				delete(e.quests, id)
+				delete(e.chatIDForQuest, id)
+				log.Printf("Cleaned up old quest: %s (status: %s)", id, quest.Status)
+			}
+		}
+	}
+
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
 			continue

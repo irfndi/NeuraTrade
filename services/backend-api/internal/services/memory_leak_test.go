@@ -64,8 +64,13 @@ func TestCleanupService_Stop(t *testing.T) {
 	forceGC()
 	goroutinesBefore := runtime.NumGoroutine()
 
+	// Create required dependencies
+	errorRecoveryManager := services.NewErrorRecoveryManager(nil)
+	resourceManager := services.NewResourceManager(nil)
+	performanceMonitor := services.NewPerformanceMonitor(nil, nil, context.Background())
+
 	// Create cleanup service
-	cleanupSvc := services.NewCleanupService(nil, nil, nil, nil)
+	cleanupSvc := services.NewCleanupService(nil, errorRecoveryManager, resourceManager, performanceMonitor)
 
 	// Start service
 	config := services.CleanupConfig{
