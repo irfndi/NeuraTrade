@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,7 +40,9 @@ type OptimalStrategy struct {
 // NewInMemoryLearningSystem creates a new learning system
 func NewInMemoryLearningSystem() *InMemoryLearningSystem {
 	dataDir := filepath.Join("data", "ai_learning")
-	os.MkdirAll(dataDir, 0755)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Printf("Failed to create AI learning data directory: %v", err)
+	}
 
 	return &InMemoryLearningSystem{
 		decisions: make(map[string]*DecisionRecord),

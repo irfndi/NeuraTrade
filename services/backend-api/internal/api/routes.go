@@ -204,7 +204,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 						quest.Checkpoint = cp
 					}
 				}
-				questStore.SaveQuest(context.Background(), quest)
+				if err := questStore.SaveQuest(context.Background(), quest); err != nil {
+					log.Printf("Failed to save quest %s: %v", id, err)
+				}
 				log.Printf("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
 				loadedCount++
 			}

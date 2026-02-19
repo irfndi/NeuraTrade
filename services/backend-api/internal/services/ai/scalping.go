@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/pkg/interfaces"
-	"github.com/shopspring/decimal"
 )
 
 // AIScalpingService provides AI-driven scalping functionality
@@ -18,7 +17,6 @@ type AIScalpingService struct {
 	config        ScalpingConfig
 
 	activePositions map[string]*ScalpPosition
-	dailyPnL        decimal.Decimal
 	mu              sync.RWMutex
 	logger          *log.Logger
 

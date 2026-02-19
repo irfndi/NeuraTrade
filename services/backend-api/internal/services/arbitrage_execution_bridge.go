@@ -83,7 +83,7 @@ func (aeb *ArbitrageExecutionBridge) processNewArbitrageOpportunities(ctx contex
 	log.Printf("Found %d potential arbitrage opportunities", len(opportunities))
 
 	for _, opportunity := range opportunities {
-		shouldExecute := true
+		shouldExecute := true // Default to execution unless AI says otherwise
 		var reasoning string
 
 		if aeb.aiEvaluator != nil {

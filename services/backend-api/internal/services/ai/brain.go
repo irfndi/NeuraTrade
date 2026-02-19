@@ -251,7 +251,7 @@ func (brain *AITradingBrain) Reason(ctx context.Context, req *ReasoningRequest) 
 	// Record decision for learning
 	if brain.config.EnableLearning {
 		go func() {
-			brain.learningSystem.RecordDecision(context.Background(), &DecisionRecord{
+			if err := brain.learningSystem.RecordDecision(context.Background(), &DecisionRecord{
 				ID:          decision.ID,
 				Timestamp:   time.Now(),
 				Strategy:    req.Strategy,
@@ -261,7 +261,9 @@ func (brain *AITradingBrain) Reason(ctx context.Context, req *ReasoningRequest) 
 				Confidence:  decision.Confidence,
 				ModelUsed:   brain.config.Model,
 				TokensUsed:  llmResp.Usage.TotalTokens,
-			})
+			}); err != nil {
+				log.Printf("Failed to record decision for learning: %v", err)
+			}
 		}()
 	}
 
