@@ -175,6 +175,18 @@ func (e *SmartOrderExecutor) executeFOK(ctx context.Context, req SmartOrderReque
 
 	filled, fillPrice, err := e.waitForFill(ctx, req, orderID, req.Timeout)
 	if err != nil {
+		if filled.GreaterThanOrEqual(req.Amount) {
+			return &SmartOrderResult{
+				OrderID:         orderID,
+				Status:          "filled",
+				FilledAmount:    filled,
+				RemainingAmount: decimal.Zero,
+				FillPrice:       fillPrice,
+				SlippagePercent: e.calcSlippage(req, fillPrice),
+				Attempts:        1,
+				ExecutionTime:   time.Since(startTime),
+			}, nil
+		}
 		_ = e.config.BaseExecutor.CancelOrder(ctx, req.Exchange, orderID)
 		return &SmartOrderResult{
 			OrderID:       orderID,
@@ -230,6 +242,19 @@ func (e *SmartOrderExecutor) executeIOC(ctx context.Context, req SmartOrderReque
 
 	filled, fillPrice, err := e.waitForFill(ctx, req, orderID, iocTimeout)
 	if err != nil {
+		if filled.GreaterThanOrEqual(req.Amount) {
+			_ = e.config.BaseExecutor.CancelOrder(ctx, req.Exchange, orderID)
+			return &SmartOrderResult{
+				OrderID:         orderID,
+				Status:          "filled",
+				FilledAmount:    filled,
+				RemainingAmount: decimal.Zero,
+				FillPrice:       fillPrice,
+				SlippagePercent: e.calcSlippage(req, fillPrice),
+				Attempts:        1,
+				ExecutionTime:   time.Since(startTime),
+			}, nil
+		}
 		_ = e.config.BaseExecutor.CancelOrder(ctx, req.Exchange, orderID)
 		return &SmartOrderResult{
 			OrderID:       orderID,
@@ -311,7 +336,7 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 		if req.OrderType == OrderTypeMarket {
 			filled, fillPrice, fillErr := e.waitForFill(ctx, req, orderID, req.Timeout)
 			if fillErr != nil {
-				if filled.GreaterThan(decimal.Zero) {
+				if filled.GreaterThanOrEqual(req.Amount) {
 					slippage := e.calcSlippage(req, fillPrice)
 					if slippage > req.MaxSlippage {
 						_ = e.config.BaseExecutor.CancelOrder(ctx, req.Exchange, orderID)
@@ -323,6 +348,16 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 						}
 						break
 					}
+					return &SmartOrderResult{
+						OrderID:         orderID,
+						Status:          "filled",
+						FilledAmount:    filled,
+						RemainingAmount: decimal.Zero,
+						FillPrice:       fillPrice,
+						SlippagePercent: slippage,
+						Attempts:        attempt,
+						ExecutionTime:   time.Since(startTime),
+					}, nil
 				}
 
 				lastErr = fillErr
