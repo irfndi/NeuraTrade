@@ -252,6 +252,10 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 
 	snapshot.TotalEquity = totalBalance.Add(snapshot.UnrealizedPnL)
 	snapshot.AvailableFunds = totalAvailable
+	// Fallback to used-balance exposure when position tracker data is unavailable.
+	if snapshot.TotalExposure.IsZero() {
+		snapshot.TotalExposure = totalUsed
+	}
 
 	if snapshot.TotalEquity.GreaterThan(decimal.Zero) {
 		snapshot.ExposurePct, _ = snapshot.TotalExposure.Div(snapshot.TotalEquity).Float64()

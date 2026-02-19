@@ -176,6 +176,8 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_WithBalance(t *testing.T) {
 	assert.NotNil(t, snapshot)
 	assert.True(t, snapshot.TotalEquity.Equal(decimal.NewFromFloat(10000.0)))
 	assert.True(t, snapshot.AvailableFunds.Equal(decimal.NewFromFloat(8000.0)))
+	assert.True(t, snapshot.TotalExposure.Equal(decimal.NewFromFloat(2000.0)))
+	assert.InDelta(t, 0.2, snapshot.ExposurePct, 0.00001)
 	assert.Len(t, snapshot.ExchangeExposures, 1)
 	assert.Equal(t, "binance", snapshot.ExchangeExposures[0].Exchange)
 }
