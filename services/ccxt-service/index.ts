@@ -392,7 +392,13 @@ function loadUserExchangeConfig(): UserExchangeConfig {
   } catch (e) {
     console.log("No user config found, using defaults");
   }
-  return { enabled: [], apiKeys: {}, addedAt: {}, devMode: false, marketData: {} };
+  return {
+    enabled: [],
+    apiKeys: {},
+    addedAt: {},
+    devMode: false,
+    marketData: {},
+  };
 }
 
 const userConfig = loadUserExchangeConfig();
@@ -700,7 +706,8 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
     // Update in-memory config
     userConfig.enabled = [...new Set([...(userConfig.enabled || []), name])];
     userConfig.addedAt = userConfig.addedAt || {};
-    userConfig.addedAt[name] = userConfig.addedAt[name] || new Date().toISOString();
+    userConfig.addedAt[name] =
+      userConfig.addedAt[name] || new Date().toISOString();
     if (api_key || secret) {
       userConfig.apiKeys = userConfig.apiKeys || {};
       userConfig.apiKeys[name] = {
