@@ -46,6 +46,8 @@ type MarketPrice struct {
 	Ask          decimal.Decimal `json:"ask"`
 	AskVolume    decimal.Decimal `json:"ask_volume"` // May be zero when using ticker data
 	Price        decimal.Decimal `json:"price"`      // Last traded price
+	High24h      decimal.Decimal `json:"high_24h"`   // 24h high price
+	Low24h       decimal.Decimal `json:"low_24h"`    // 24h low price
 	Volume       decimal.Decimal `json:"volume"`
 	Timestamp    time.Time       `json:"timestamp"`
 }
@@ -83,6 +85,16 @@ func (mp *MarketPrice) GetBid() float64 {
 // GetAsk returns the best ask price as a float64.
 func (mp *MarketPrice) GetAsk() float64 {
 	return mp.Ask.InexactFloat64()
+}
+
+// GetHigh returns the 24h high price as a float64.
+func (mp *MarketPrice) GetHigh() float64 {
+	return mp.High24h.InexactFloat64()
+}
+
+// GetLow returns the 24h low price as a float64.
+func (mp *MarketPrice) GetLow() float64 {
+	return mp.Low24h.InexactFloat64()
 }
 
 // TickerData represents real-time ticker information retrieved from the CCXT library.

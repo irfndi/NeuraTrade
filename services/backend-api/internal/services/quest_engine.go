@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ const (
 	QuestTypeRoutine   QuestType = "routine"   // Time-triggered quests
 	QuestTypeTriggered QuestType = "triggered" // Event-driven quests
 	QuestTypeGoal      QuestType = "goal"      // Milestone-driven quests
+	QuestTypeArbitrage QuestType = "arbitrage" // Arbitrage execution quests
 )
 
 // QuestCadence defines the frequency of routine quests
@@ -403,8 +405,65 @@ func (e *QuestEngine) Start() {
 	e.running = true
 	e.mu.Unlock()
 
+	// Load active quests from database
+	e.loadActiveQuests()
+
 	go e.schedulerLoop()
 	log.Println("Quest engine started")
+}
+
+// loadActiveQuests loads active quests from the database into memory
+func (e *QuestEngine) loadActiveQuests() {
+	if e.store == nil {
+		return
+	}
+
+	ctx := context.Background()
+	quests, err := e.store.ListQuests(ctx, "", QuestStatusActive)
+	if err != nil {
+		log.Printf("Failed to load active quests: %v", err)
+		return
+	}
+
+	selectedByChat := make(map[string]*Quest)
+	pausedCount := 0
+	now := time.Now()
+
+	for _, quest := range quests {
+		chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+		defID := strings.TrimSpace(quest.Metadata["definition_id"])
+
+		// Scalping-first mode: only restore active scalping quests that have a valid chat owner.
+		if chatID == "" || defID != "scalping_execution" {
+			quest.Status = QuestStatusPaused
+			quest.UpdatedAt = now
+			pausedCount++
+			if err := e.store.SaveQuest(ctx, quest); err != nil {
+				log.Printf("Failed to pause legacy active quest %s: %v", quest.ID, err)
+			}
+			continue
+		}
+
+		// Keep only one active scalping quest per chat to prevent duplicate schedulers.
+		if _, exists := selectedByChat[chatID]; exists {
+			quest.Status = QuestStatusPaused
+			quest.UpdatedAt = now
+			pausedCount++
+			if err := e.store.SaveQuest(ctx, quest); err != nil {
+				log.Printf("Failed to pause duplicate active quest %s: %v", quest.ID, err)
+			}
+			continue
+		}
+		selectedByChat[chatID] = quest
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, quest := range selectedByChat {
+		e.quests[quest.ID] = quest
+		log.Printf("Loaded active scalping quest: %s (chat: %s)", quest.ID, quest.Metadata["chat_id"])
+	}
+	log.Printf("Loaded %d active scalping quests, paused %d stale active quests", len(selectedByChat), pausedCount)
 }
 
 // Stop stops the quest engine
@@ -421,6 +480,7 @@ func (e *QuestEngine) Stop() {
 
 // schedulerLoop runs the periodic quest scheduling
 func (e *QuestEngine) schedulerLoop() {
+	log.Println("Quest scheduler loop started")
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
@@ -429,6 +489,7 @@ func (e *QuestEngine) schedulerLoop() {
 		case <-e.stopCh:
 			return
 		case <-ticker.C:
+			log.Println("Quest scheduler ticker triggered")
 			e.tick()
 		}
 	}
@@ -440,6 +501,7 @@ func (e *QuestEngine) tick() {
 	defer e.mu.RUnlock()
 
 	now := time.Now()
+	log.Printf("Quest scheduler tick: checking %d quests", len(e.quests))
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
 			continue
@@ -447,7 +509,10 @@ func (e *QuestEngine) tick() {
 
 		// Check if quest should execute based on cadence
 		if e.shouldExecute(quest, now) {
+			log.Printf("Executing quest: %s (type: %s)", quest.ID, quest.Type)
 			go e.executeQuest(quest)
+		} else {
+			log.Printf("Quest %s not ready (cadence: %s)", quest.ID, quest.Cadence)
 		}
 	}
 }
@@ -461,33 +526,21 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 
 	switch quest.Cadence {
 	case CadenceMicro:
-		if now.Minute()%5 != 0 {
-			return false
-		}
 		if quest.LastExecutedAt != nil {
-			return now.Sub(*quest.LastExecutedAt) >= 5*time.Minute
+			return now.Sub(*quest.LastExecutedAt) >= 1*time.Minute
 		}
 		return true
 	case CadenceHourly:
-		if now.Minute() != 0 {
-			return false
-		}
 		if quest.LastExecutedAt != nil {
 			return now.Sub(*quest.LastExecutedAt) >= 1*time.Hour
 		}
 		return true
 	case CadenceDaily:
-		if now.Hour() != 0 || now.Minute() != 0 {
-			return false
-		}
 		if quest.LastExecutedAt != nil {
 			return now.Sub(*quest.LastExecutedAt) >= 24*time.Hour
 		}
 		return true
 	case CadenceWeekly:
-		if now.Weekday() != time.Sunday || now.Hour() != 0 || now.Minute() != 0 {
-			return false
-		}
 		if quest.LastExecutedAt != nil {
 			return now.Sub(*quest.LastExecutedAt) >= 7*24*time.Hour
 		}
@@ -598,15 +651,29 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Pause existing active quests for this chat, and any unowned legacy active quests.
+	for _, q := range e.quests {
+		questChatID := strings.TrimSpace(q.Metadata["chat_id"])
+		if q.Status == QuestStatusActive && (questChatID == chatID || questChatID == "") {
+			q.Status = QuestStatusPaused
+			q.UpdatedAt = time.Now()
+			if e.store != nil {
+				if err := e.store.SaveQuest(context.Background(), q); err != nil {
+					log.Printf("Failed to persist paused quest %s: %v", q.ID, err)
+				}
+			}
+		}
+	}
+
 	state := &AutonomousState{
 		ChatID:    chatID,
 		IsActive:  true,
 		StartedAt: time.Now(),
 	}
 
-	// Create default quests for autonomous mode
-	// scalping_execution is added when exchange is configured (scalping mode)
-	defaultQuests := []string{"market_scan", "funding_rate_scan", "portfolio_health", "scalping_execution"}
+	// Create default quests for autonomous mode.
+	// Current operating mode is scalping-first, so only enable scalping execution.
+	defaultQuests := []string{"scalping_execution"}
 	for _, defID := range defaultQuests {
 		quest, err := e.createQuestInternal(defID, chatID)
 		if err != nil {

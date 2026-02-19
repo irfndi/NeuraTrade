@@ -654,7 +654,7 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 	req.Header.Set("User-Agent", "NeuraTrade/1.0")
 
 	// Add API key for admin endpoints
-	if strings.Contains(path, "/admin/") && c.adminAPIKey != "" {
+	if (strings.Contains(path, "/admin/") || strings.Contains(path, "/balance/") || strings.Contains(path, "/order")) && c.adminAPIKey != "" {
 		req.Header.Set("X-API-Key", c.adminAPIKey)
 	}
 
@@ -1268,4 +1268,23 @@ type SlippageEstimate struct {
 	AvgBuyPrice  decimal.Decimal `json:"avg_buy_price"`
 	AvgSellPrice decimal.Decimal `json:"avg_sell_price"`
 	IsFillable   bool            `json:"is_fillable"`
+}
+
+type BalanceResponse struct {
+	Exchange  string                 `json:"exchange"`
+	Timestamp time.Time              `json:"timestamp"`
+	Total     map[string]float64     `json:"total"`
+	Free      map[string]float64     `json:"free"`
+	Used      map[string]float64     `json:"used"`
+	Raw       map[string]interface{} `json:"raw,omitempty"`
+}
+
+func (c *Client) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
+	path := fmt.Sprintf("/api/balance/%s", exchange)
+	var response BalanceResponse
+	err := c.makeRequest(ctx, "GET", path, nil, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch balance: %w", err)
+	}
+	return &response, nil
 }

@@ -117,7 +117,6 @@ secrets.yaml
 tmp/
 
 # Build artifacts
-dist/
 build/
 
 # Certificates
@@ -190,3 +189,4 @@ _temporary/
 
 .qwen/
 gha-creds-*.json
+/dist

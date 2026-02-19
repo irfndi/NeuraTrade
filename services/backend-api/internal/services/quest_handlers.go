@@ -20,19 +20,23 @@ type ScalpingConfig struct {
 	StopLossPercent        float64       // Stop loss % (default: 0.1%)
 	TakeProfitPercent      float64       // Take profit % (default: 0.2%)
 	CheckInterval          time.Duration // How often to check for opportunities
-	TradingPairs           []string      // Pairs to trade
+	TradingPairs           []string      // Pairs to trade (futures format: BTC/USDT:USDT)
 	Exchange               string        // Exchange to trade on
+	Leverage               int           // Leverage for futures (default: 5)
+	TradeSizeUsd           float64       // Trade size in USDT (default: 15)
 }
 
 var DefaultScalpingConfig = ScalpingConfig{
 	MaxConcurrentPositions: 3,
 	MaxCapitalPercent:      5.0,
-	MinProfitPercent:       0.3,
+	MinProfitPercent:       0.1,
 	StopLossPercent:        0.1,
 	TakeProfitPercent:      0.2,
 	CheckInterval:          1 * time.Minute,
-	TradingPairs:           []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"},
+	TradingPairs:           []string{"BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"},
 	Exchange:               "binance",
+	Leverage:               5,
+	TradeSizeUsd:           15.0,
 }
 
 // scalpingExecutor is an interface for executing scalping trades
@@ -327,22 +331,57 @@ func (e *QuestEngine) analyzeScalpOpportunity(
 	return side, lastPrice, nil
 }
 
-// executeScalpTrade executes a scalping trade
+// executeScalpTrade executes a scalping trade on futures with leverage
 func (e *QuestEngine) executeScalpTrade(
 	ctx context.Context,
 	ccxt interface{},
 	exchange, symbol, side string,
 	cfg ScalpingConfig,
 ) (string, error) {
-	executor, ok := ccxt.(interface {
+	type orderExecutor interface {
 		PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
-	})
+	}
+
+	type walletFetcher interface {
+		FetchBalance(ctx context.Context, exchange string) (map[string]interface{}, error)
+	}
+
+	executor, ok := ccxt.(orderExecutor)
 	if !ok {
 		return "", fmt.Errorf("CCXT service does not support order execution")
 	}
 
-	amount := decimal.NewFromFloat(10)
-	orderID, err := executor.PlaceOrder(ctx, exchange, symbol, side, "limit", amount, nil)
+	wallet, ok := ccxt.(walletFetcher)
+	if !ok {
+		return "", fmt.Errorf("CCXT service does not support balance fetching")
+	}
+
+	balance, err := wallet.FetchBalance(ctx, exchange)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch balance: %w", err)
+	}
+
+	usdtBalance := decimal.Zero
+	if total, ok := balance["total"].(map[string]interface{}); ok {
+		if usdt, ok := total["USDT"].(float64); ok {
+			usdtBalance = decimal.NewFromFloat(usdt)
+		}
+	}
+
+	if usdtBalance.LessThan(decimal.NewFromFloat(10)) {
+		return "", fmt.Errorf("insufficient USDT balance: %s (minimum 10 USDT required)", usdtBalance.String())
+	}
+
+	tradeSizeUsd := usdtBalance.Mul(decimal.NewFromFloat(cfg.MaxCapitalPercent / 100.0))
+	minSize := decimal.NewFromFloat(10)
+	if tradeSizeUsd.LessThan(minSize) {
+		tradeSizeUsd = minSize
+	}
+
+	log.Printf("[SCALPING] Wallet USDT: %s, Trade size: %s USDT (%.1f%% of balance)",
+		usdtBalance.String(), tradeSizeUsd.String(), cfg.MaxCapitalPercent)
+
+	orderID, err := executor.PlaceOrder(ctx, exchange, symbol, side, "market", tradeSizeUsd, nil)
 	if err != nil {
 		return "", err
 	}

@@ -26,6 +26,71 @@ var (
 	version = "dev"
 )
 
+func defaultChatID() string {
+	return configChatID(getConfigValue(defaultNeuraTradeHome()))
+}
+
+func persistChatIDToConfig(chatID string) error {
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return nil
+	}
+
+	configPath := path.Join(defaultNeuraTradeHome(), "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	telegramCfg, ok := config["telegram"].(map[string]interface{})
+	if !ok {
+		telegramCfg = make(map[string]interface{})
+	}
+	telegramCfg["chat_id"] = chatID
+	config["telegram"] = telegramCfg
+
+	servicesCfg, ok := config["services"].(map[string]interface{})
+	if !ok {
+		servicesCfg = make(map[string]interface{})
+	}
+	servicesTelegramCfg, ok := servicesCfg["telegram"].(map[string]interface{})
+	if !ok {
+		servicesTelegramCfg = make(map[string]interface{})
+	}
+	servicesTelegramCfg["chat_id"] = chatID
+	servicesCfg["telegram"] = servicesTelegramCfg
+	config["services"] = servicesCfg
+
+	updated, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	mode := os.FileMode(0600)
+	if st, statErr := os.Stat(configPath); statErr == nil {
+		mode = st.Mode().Perm()
+	}
+	if err := os.WriteFile(configPath, updated, mode); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+
+	return nil
+}
+
+func chatIDFlag(required bool) *cli.StringFlag {
+	return &cli.StringFlag{
+		Name:     "chat-id",
+		Usage:    "Telegram chat ID (auto from config if set)",
+		Required: required,
+		Value:    defaultChatID(),
+	}
+}
+
 // APIClient handles communication with the NeuraTrade backend API
 type APIClient struct {
 	BaseURL    string
@@ -201,6 +266,27 @@ func main() {
 				Action: health,
 			},
 			{
+				Name:  "gateway",
+				Usage: "Manage NeuraTrade gateway (start/stop/status)",
+				Subcommands: []*cli.Command{
+					{
+						Name:   "start",
+						Usage:  "Start all NeuraTrade services",
+						Action: gatewayStart,
+					},
+					{
+						Name:   "stop",
+						Usage:  "Stop all NeuraTrade services",
+						Action: gatewayStop,
+					},
+					{
+						Name:   "status",
+						Usage:  "Show service status",
+						Action: gatewayStatus,
+					},
+				},
+			},
+			{
 				Name:  "prompt",
 				Usage: "Build prompts from skill.md files and context",
 				Subcommands: []*cli.Command{
@@ -236,10 +322,7 @@ func main() {
 								Usage:    "Authentication code for binding",
 								Required: true,
 							},
-							&cli.StringFlag{
-								Name:  "chat-id",
-								Usage: "Telegram chat ID",
-							},
+							chatIDFlag(false),
 						},
 					},
 				},
@@ -317,11 +400,7 @@ func main() {
 						Usage:  "View portfolio status",
 						Action: viewPortfolio,
 						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "chat-id",
-								Usage:    "Telegram chat ID",
-								Required: true,
-							},
+							chatIDFlag(true),
 						},
 					},
 					{
@@ -329,11 +408,7 @@ func main() {
 						Usage:  "Check account balance",
 						Action: checkBalance,
 						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "chat-id",
-								Usage:    "Telegram chat ID",
-								Required: true,
-							},
+							chatIDFlag(true),
 						},
 					},
 				},
@@ -404,11 +479,7 @@ func main() {
 				Usage:  "Start autonomous trading mode",
 				Action: beginAutonomous,
 				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "chat-id",
-						Usage:    "Telegram chat ID",
-						Required: true,
-					},
+					chatIDFlag(true),
 				},
 			},
 			{
@@ -416,11 +487,7 @@ func main() {
 				Usage:  "Pause autonomous trading mode",
 				Action: pauseAutonomous,
 				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "chat-id",
-						Usage:    "Telegram chat ID",
-						Required: true,
-					},
+					chatIDFlag(true),
 				},
 			},
 			{
@@ -428,11 +495,7 @@ func main() {
 				Usage:  "Get autonomous trading status",
 				Action: getAutonomousStatus,
 				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "chat-id",
-						Usage:    "Telegram chat ID",
-						Required: true,
-					},
+					chatIDFlag(true),
 				},
 			},
 			{
@@ -440,11 +503,7 @@ func main() {
 				Usage:  "Get portfolio status",
 				Action: getPortfolio,
 				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "chat-id",
-						Usage:    "Telegram chat ID",
-						Required: true,
-					},
+					chatIDFlag(true),
 				},
 			},
 			{
@@ -452,11 +511,7 @@ func main() {
 				Usage:  "Get quest progress",
 				Action: getQuests,
 				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "chat-id",
-						Usage:    "Telegram chat ID",
-						Required: true,
-					},
+					chatIDFlag(true),
 				},
 			},
 		},
@@ -535,15 +590,25 @@ func generateAuthCode(cCtx *cli.Context) error {
 func getBaseURL() string {
 	baseURL := os.Getenv("NEURATRADE_API_BASE_URL")
 	if baseURL == "" {
-		// Default to localhost for development
-		baseURL = "http://localhost:8080"
+		cfg := getConfigValue(defaultNeuraTradeHome())
+		if cfg != nil && cfg.Telegram.ApiBaseURL != "" {
+			baseURL = cfg.Telegram.ApiBaseURL
+		} else if cfg != nil && cfg.Server.Port > 0 {
+			baseURL = fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
+		} else {
+			// Default to localhost for development
+			baseURL = "http://localhost:8080"
+		}
 	}
 	return baseURL
 }
 
 // getAPIKey gets the API key from environment variable
 func getAPIKey() string {
-	return os.Getenv("NEURATRADE_API_KEY")
+	if v := os.Getenv("NEURATRADE_API_KEY"); v != "" {
+		return v
+	}
+	return configAdminAPIKey(getConfigValue(defaultNeuraTradeHome()))
 }
 
 // generateRandomString generates a cryptographically secure random string of specified length
@@ -740,6 +805,13 @@ func bindOperator(cCtx *cli.Context) error {
 	if response.Success {
 		fmt.Printf("✅ Operator binding successful!\n")
 		fmt.Println(response.Message)
+		if chatID != "" {
+			if err := persistChatIDToConfig(chatID); err != nil {
+				fmt.Printf("⚠️  Warning: failed to persist chat ID to config: %v\n", err)
+			} else {
+				fmt.Printf("Saved chat ID to %s\n", path.Join(defaultNeuraTradeHome(), "config.json"))
+			}
+		}
 	} else {
 		fmt.Printf("❌ Operator binding failed: %s\n", response.Error)
 	}
@@ -797,6 +869,9 @@ func beginAutonomous(cCtx *cli.Context) error {
 		fmt.Printf("Status: %s\n", response.Status)
 		fmt.Printf("Mode: %s\n", response.Mode)
 		fmt.Println(response.Message)
+		if err := persistChatIDToConfig(chatID); err != nil {
+			fmt.Printf("⚠️  Warning: failed to persist chat ID to config: %v\n", err)
+		}
 	} else {
 		fmt.Printf("❌ Autonomous mode start failed\n")
 		fmt.Printf("Status: %s\n", response.Status)

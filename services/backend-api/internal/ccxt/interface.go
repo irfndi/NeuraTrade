@@ -24,6 +24,10 @@ type MarketPriceInterface interface {
 	GetBid() float64
 	// GetAsk retrieves the best ask price.
 	GetAsk() float64
+	// GetHigh retrieves the 24h high price.
+	GetHigh() float64
+	// GetLow retrieves the 24h low price.
+	GetLow() float64
 }
 
 // ArbitrageOpportunityInterface defines the interface for arbitrage opportunity data.
@@ -163,6 +167,9 @@ type CCXTClient interface {
 	GetFundingRates(ctx context.Context, exchange string, symbols []string) ([]FundingRate, error)
 	// GetAllFundingRates gets all funding rates.
 	GetAllFundingRates(ctx context.Context, exchange string) ([]FundingRate, error)
+
+	// Balance operations
+	FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error)
 
 	// Lifecycle
 

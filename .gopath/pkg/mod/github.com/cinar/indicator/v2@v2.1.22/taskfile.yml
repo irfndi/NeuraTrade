@@ -1,0 +1,41 @@
+version: '3'
+output: 'prefixed'
+
+env:
+  INDICATOR_BASE: './asset/... ./backtest/... ./cmd/... ./helper/... ./momentum/... ./strategy/... ./trend/... ./volatility/... ./volume/...'
+  INDICATOR_MCP: './mcp/...'
+
+tasks:
+  default:
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+      - task: docs
+
+  action:
+    deps: [lint, test]
+
+  fmt:
+    cmds:
+      - go fix ./...
+
+  lint:
+    cmds:
+      - go vet $INDICATOR_BASE
+      - go run github.com/securego/gosec/v2/cmd/gosec@v2.20.0 $INDICATOR_BASE
+      - go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 $INDICATOR_BASE
+      - go run github.com/mgechev/revive@v1.3.4 -config=revive.toml $INDICATOR_BASE
+
+  test:
+    cmds:
+      - go test -cover -coverprofile=coverage.out $INDICATOR_BASE
+
+  docs:
+    cmds:
+      - go run github.com/princjef/gomarkdoc/cmd/gomarkdoc@v1.1.0 ./...
+
+  build-tools:
+    cmds:
+      - go build -o indicator-backtest cmd/indicator-backtest/main.go
+      - go build -o indicator-sync cmd/indicator-sync/main.go

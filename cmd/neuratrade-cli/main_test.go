@@ -15,8 +15,16 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	tmpHome, err := os.MkdirTemp("", "neuratrade-cli-test-*")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmpHome)
+
+	os.Setenv("NEURATRADE_HOME", tmpHome)
 	// Set environment variables for testing
 	os.Setenv("NEURATRADE_API_BASE_URL", "http://localhost:8080")
+	os.Unsetenv("NEURATRADE_API_KEY")
 	exitCode := m.Run()
 	os.Exit(exitCode)
 }
@@ -197,19 +205,19 @@ func TestListAIModels(t *testing.T) {
 		response := AIModelsResponse{
 			Models: []AIModel{
 				{
-					ID:            "gpt-4-turbo",
-					DisplayName:   "GPT-4 Turbo",
-					Provider:      "openai",
-					Cost:          "0.01",
-					SupportsTools: true,
+					ID:             "gpt-4-turbo",
+					DisplayName:    "GPT-4 Turbo",
+					Provider:       "openai",
+					Cost:           "0.01",
+					SupportsTools:  true,
 					SupportsVision: true,
 				},
 				{
-					ID:            "claude-3-opus",
-					DisplayName:   "Claude 3 Opus",
-					Provider:      "anthropic",
-					Cost:          "0.015",
-					SupportsTools: true,
+					ID:             "claude-3-opus",
+					DisplayName:    "Claude 3 Opus",
+					Provider:       "anthropic",
+					Cost:           "0.015",
+					SupportsTools:  true,
 					SupportsVision: false,
 				},
 			},

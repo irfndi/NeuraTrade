@@ -1,0 +1,9 @@
+vendor
+.DS_Store
+.idea/*
+bin/*
+*.out
+*.prof
+*.test
+coverage.txt
+/basic_example

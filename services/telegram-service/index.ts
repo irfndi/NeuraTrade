@@ -141,11 +141,12 @@ if (!config.usePolling && bot) {
 const server = Bun.serve({
   fetch: app.fetch,
   port: config.port,
-  reusePort: process.env.BUN_REUSE_PORT === "true",
+  hostname: process.env.BIND_HOST || "127.0.0.1",
 });
 
 logger.info("Telegram service started", {
   port: config.port,
+  hostname: process.env.BIND_HOST || "127.0.0.1",
   mode: config.usePolling ? "polling" : "webhook",
 });
 

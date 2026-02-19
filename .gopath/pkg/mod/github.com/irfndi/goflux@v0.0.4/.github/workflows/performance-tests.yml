@@ -1,0 +1,83 @@
+name: Performance Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.21'
+
+      - name: Run benchmarks
+        run: |
+          go test -bench=. -benchmem ./pkg/indicators/... | tee benchmark_results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark_results.txt
+
+  compare:
+    name: Compare Performance
+    runs-on: ubuntu-latest
+    needs: benchmark
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Checkout baseline
+        uses: actions/checkout@v6
+        with:
+          repository: 'irfndi/goflux'
+          ref: 'main'
+          path: 'baseline'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.21'
+
+      - name: Run current benchmarks
+        run: |
+          cd $GITHUB_WORKSPACE/goflux
+          go test -bench=. -benchmem ./pkg/indicators/... > current_results.txt
+
+      - name: Run baseline benchmarks
+        run: |
+          cd $GITHUB_WORKSPACE/baseline
+          go test -bench=. -benchmem ./pkg/indicators/... > baseline_results.txt
+
+      - name: Compare results
+        run: |
+          python3 scripts/compare_benchmarks.py current_results.txt baseline_results.txt
+
+      - name: Fail on regression
+        run: |
+          python3 scripts/check_regression.py current_results.txt baseline_results.txt 1.1  # 10% threshold
+
+      - name: Comment on PR
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '⚠️ Performance regression detected!\n\nBenchmark results show performance degradation > 10%.\n\nSee detailed comparison in workflow logs.'
+            })

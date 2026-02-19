@@ -328,9 +328,46 @@ function loadUserExchangeConfig() {
     if (existsSync(configPath)) {
       const configData = readFileSync(configPath, "utf-8");
       const config = JSON.parse(configData);
+
+      // Check ccxt.exchanges path (new config format)
+      const ccxtExchanges = config.ccxt?.exchanges || {};
+      const apiKeys: Record<string, { apiKey: string; secret: string }> = {};
+
+      for (const [exchangeName, exchangeConfig] of Object.entries(
+        ccxtExchanges,
+      ) as [string, any][]) {
+        if (exchangeConfig?.api_key && exchangeConfig?.api_secret) {
+          apiKeys[exchangeName] = {
+            apiKey: exchangeConfig.api_key,
+            secret: exchangeConfig.api_secret,
+          };
+        }
+      }
+
+      // Also check exchanges.api_keys path (legacy format)
+      const legacyApiKeys = config.exchanges?.api_keys || {};
+      for (const [exchangeName, exchangeConfig] of Object.entries(
+        legacyApiKeys,
+      ) as [string, any][]) {
+        if (!apiKeys[exchangeName] && exchangeConfig?.apiKey) {
+          apiKeys[exchangeName] = {
+            apiKey: exchangeConfig.apiKey,
+            secret: exchangeConfig.secret,
+          };
+        }
+      }
+
+      // Get enabled exchanges from ccxt.exchanges or default
+      const enabledFromConfig = Object.keys(ccxtExchanges).filter(
+        (name) => ccxtExchanges[name]?.enabled !== false,
+      );
+
       return {
-        enabled: config.exchanges?.enabled || [],
-        apiKeys: config.exchanges?.api_keys || {},
+        enabled:
+          enabledFromConfig.length > 0
+            ? enabledFromConfig
+            : config.exchanges?.enabled || [],
+        apiKeys,
         devMode: config.server?.dev_mode || false,
         marketData: config.market_data || {},
       };
@@ -643,7 +680,10 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
     // Save API keys if provided
     if (api_key || secret) {
       userConfig.apiKeys = userConfig.apiKeys || {};
-      userConfig.apiKeys[name] = { apiKey: api_key, secret };
+      userConfig.apiKeys[name] = {
+        apiKey: api_key || "",
+        secret: secret || "",
+      };
 
       // Persist to config file
       const configDir = join(os.homedir(), ".neuratrade");
@@ -801,7 +841,7 @@ app.post("/api/v1/exchanges/reload", adminAuth, async (c) => {
 app.get("/api/ticker/:exchange/*", async (c) => {
   const exchange = c.req.param("exchange");
   const pathParts = c.req.path.split("/");
-  const symbol = pathParts.slice(4).join("/"); // Extract everything after /api/ticker/{exchange}/
+  const symbol = pathParts.slice(4).join("/");
 
   try {
     if (!exchanges[exchange]) {
@@ -812,13 +852,26 @@ app.get("/api/ticker/:exchange/*", async (c) => {
       return c.json(errorResponse, 400);
     }
 
-    // Add retry logic for Binance
     let retries = exchange === "binance" ? 3 : 1;
     let lastError: any;
 
     for (let i = 0; i < retries; i++) {
       try {
-        const ticker = await exchanges[exchange].fetchTicker(symbol);
+        // Fetch ticker and orderbook in parallel for speed
+        const [ticker, orderbook] = await Promise.all([
+          exchanges[exchange].fetchTicker(symbol),
+          exchanges[exchange].fetchOrderBook(symbol, 5).catch(() => null),
+        ]);
+
+        // Add bid/ask from orderbook if not in ticker
+        if (orderbook) {
+          if (!ticker.bid && orderbook.bids?.length > 0) {
+            ticker.bid = orderbook.bids[0][0];
+          }
+          if (!ticker.ask && orderbook.asks?.length > 0) {
+            ticker.ask = orderbook.asks[0][0];
+          }
+        }
 
         const response: TickerResponse = {
           exchange,
@@ -830,9 +883,8 @@ app.get("/api/ticker/:exchange/*", async (c) => {
         return c.json(response);
       } catch (error) {
         lastError = error;
-
         if (i < retries - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+          await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
         }
       }
     }

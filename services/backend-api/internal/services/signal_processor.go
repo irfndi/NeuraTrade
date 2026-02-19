@@ -758,19 +758,20 @@ func (sp *SignalProcessor) generateArbitrageSignals(data models.MarketData) ([]A
 
 // getArbitrageOpportunities queries the database for active arbitrage opportunities for a symbol.
 func (sp *SignalProcessor) getArbitrageOpportunities(symbol string) ([]models.ArbitrageOpportunity, error) {
+	now := time.Now().UTC()
+
 	// Query the database for arbitrage opportunities
 	query := `
 		SELECT ao.id, ao.trading_pair_id, ao.buy_exchange_id, ao.sell_exchange_id, 
 		       ao.buy_price, ao.sell_price, ao.profit_percentage, ao.detected_at, ao.expires_at
 		FROM arbitrage_opportunities ao
 		JOIN trading_pairs tp ON ao.trading_pair_id = tp.id
-		JOIN exchanges e ON ao.buy_exchange_id = e.id
-		WHERE tp.symbol = $1 AND ao.expires_at > NOW()
+		WHERE tp.symbol = $1 AND ao.expires_at > $2
 		ORDER BY ao.profit_percentage DESC
 		LIMIT 10
 	`
 
-	rows, err := sp.db.Query(context.Background(), query, symbol)
+	rows, err := sp.db.Query(context.Background(), query, symbol, now)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query arbitrage opportunities: %w", err)
 	}

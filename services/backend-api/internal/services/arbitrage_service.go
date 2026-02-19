@@ -804,12 +804,12 @@ func (s *ArbitrageService) GetActiveOpportunities(ctx context.Context, limit int
 		JOIN exchanges be ON ao.buy_exchange_id = be.id
 		JOIN exchanges se ON ao.sell_exchange_id = se.id
 		JOIN trading_pairs tp ON ao.trading_pair_id = tp.id
-		WHERE ao.expires_at > NOW()
+		WHERE ao.expires_at > $2
 		ORDER BY ao.profit_percentage DESC, ao.detected_at DESC
 		LIMIT $1
 	`
 
-	rows, err := s.db.Query(ctx, query, limit)
+	rows, err := s.db.Query(ctx, query, limit, time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active opportunities: %w", err)
 	}

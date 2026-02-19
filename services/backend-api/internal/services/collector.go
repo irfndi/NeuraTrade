@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -788,6 +789,29 @@ func (c *CollectorService) initializeWorkersAsync() {
 	observability.AddBreadcrumbWithData(ctx, "collector", "Background initialization complete", sentry.LevelInfo, map[string]interface{}{
 		"workers_started": len(c.workers),
 	})
+
+	// Trigger immediate initial data collection to unblock dependent services
+	// Only fetch a few symbols initially to quickly unblock the channel
+	go func() {
+		log.Printf("Triggering immediate initial data collection for %d workers", len(c.workers))
+		for _, worker := range c.workers {
+			// Fetch only first 10 symbols to quickly unblock dependent services
+			initialSymbols := worker.Symbols
+			if len(initialSymbols) > 10 {
+				initialSymbols = initialSymbols[:10]
+			}
+			// Create a temporary worker with reduced symbol list
+			tempWorker := &Worker{
+				Exchange: worker.Exchange,
+				Symbols:  initialSymbols,
+			}
+			if err := c.collectTickerDataBulk(tempWorker); err != nil {
+				log.Printf("Initial collection failed for %s: %v", worker.Exchange, err)
+			} else {
+				log.Printf("Initial collection succeeded for %s (%d symbols)", worker.Exchange, len(initialSymbols))
+			}
+		}
+	}()
 }
 
 // Stop gracefully stops all collection workers.
@@ -1333,9 +1357,17 @@ func (c *CollectorService) collectTickerDataBulk(worker *Worker) error {
 	errorChan := make(chan error, len(marketData))
 	successCount := 0
 
+	// Check if we need to signal first data collected
+	needSignalFirstData := false
+	c.readinessMu.RLock()
+	if !c.hasCollectedData {
+		needSignalFirstData = true
+	}
+	c.readinessMu.RUnlock()
+
 	// Use goroutines for concurrent processing of ticker data
-	for _, ticker := range marketData {
-		go func(t models.MarketPrice) {
+	for i, ticker := range marketData {
+		go func(idx int, t models.MarketPrice) {
 			select {
 			case <-c.ctx.Done():
 				errorChan <- c.ctx.Err()
@@ -1351,9 +1383,23 @@ func (c *CollectorService) collectTickerDataBulk(worker *Worker) error {
 				}).WithError(err).Error("Failed to save ticker data")
 				errorChan <- err
 			} else {
+				// Signal first data collected (only once, first goroutine wins)
+				if needSignalFirstData {
+					c.readinessMu.Lock()
+					if !c.hasCollectedData {
+						c.hasCollectedData = true
+						close(c.dataReadyChan)
+						c.logger.WithFields(map[string]interface{}{
+							"exchange": t.ExchangeName,
+							"symbol":   t.Symbol,
+							"price":    t.Price,
+						}).Info("First market data saved successfully (bulk)")
+					}
+					c.readinessMu.Unlock()
+				}
 				successChan <- true
 			}
-		}(ticker)
+		}(i, ticker)
 	}
 
 	// Wait for all goroutines to complete
@@ -2149,11 +2195,13 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 
 // getOrCreateExchange gets or creates an exchange and returns its ID
 func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
-	// Check Redis cache first
+	// Check Redis cache first (if redis client is available)
 	cacheKey := fmt.Sprintf("exchange:ccxt_id:%s", ccxtID)
-	if cachedID, err := c.redisClient.Get(c.ctx, cacheKey).Result(); err == nil {
-		if exchangeID, err := strconv.Atoi(cachedID); err == nil {
-			return exchangeID, nil
+	if c.redisClient != nil {
+		if cachedID, err := c.redisClient.Get(c.ctx, cacheKey).Result(); err == nil {
+			if exchangeID, err := strconv.Atoi(cachedID); err == nil {
+				return exchangeID, nil
+			}
 		}
 	}
 
@@ -2162,7 +2210,9 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 	err := c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = ?", ccxtID).Scan(&exchangeID)
 	if err == nil {
 		// Cache the result
-		c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+		if c.redisClient != nil {
+			c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+		}
 		return exchangeID, nil
 	}
 

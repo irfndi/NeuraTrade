@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { BackendApiClient } from "../api/client";
+import { persistChatIdToLocalConfig } from "./bd/helpers";
 import { logger } from "../utils/logger";
 
 export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
@@ -17,6 +18,7 @@ export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
     }
 
     const chatIdStr = String(chatId);
+    await persistChatIdToLocalConfig(chatIdStr);
     logger.info("[Start] Processing command", {
       userId,
       chatId: chatIdStr,

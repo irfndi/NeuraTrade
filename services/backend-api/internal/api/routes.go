@@ -2,18 +2,24 @@ package api
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/ai"
+	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/api/handlers"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/irfndi/neuratrade/internal/skill"
 	"github.com/shopspring/decimal"
 )
 
@@ -64,8 +70,10 @@ func getEnvOrDefault(key, defaultValue string) string {
 //	cacheAnalyticsService: Service for cache metrics and analytics.
 //	signalAggregator: Service for aggregating trading signals.
 //	telegramConfig: Configuration for Telegram notifications.
+//	aiConfig: Configuration for AI-driven trading.
+//	featuresConfig: Feature flags for enabling/disabling features.
 //	authMiddleware: Middleware for handling authentication.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator) {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator) {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -154,7 +162,55 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		monthlyBudget,
 	)
 
-	questEngine := services.NewQuestEngineWithNotification(services.NewInMemoryQuestStore(), nil, notificationService)
+	questStore := services.NewInMemoryQuestStore()
+	questEngine := services.NewQuestEngineWithNotification(questStore, nil, notificationService)
+
+	// Legacy quest preload is opt-in only.
+	// In scalping-first mode we avoid restoring old active rows without metadata/chat ownership.
+	loadLegacyQuests := os.Getenv("NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS") == "1" ||
+		os.Getenv("NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS") == "true"
+	log.Printf("DEBUG: db is nil: %v", db == nil)
+	if db != nil && loadLegacyQuests {
+		log.Println("Loading legacy active quests from database into memory...")
+		rows, err := db.Query(context.Background(), "SELECT id, type, cadence, status, target_value, checkpoint, created_at FROM quests WHERE status = 'active'")
+		if err != nil {
+			log.Printf("Failed to load quests from database: %v", err)
+		} else {
+			defer rows.Close()
+			loadedCount := 0
+			for rows.Next() {
+				var id, questType, cadence, status string
+				var targetValue float64
+				var checkpoint []byte
+				var createdAt time.Time
+				if err := rows.Scan(&id, &questType, &cadence, &status, &targetValue, &checkpoint, &createdAt); err != nil {
+					log.Printf("Failed to scan quest row: %v", err)
+					continue
+				}
+				quest := &services.Quest{
+					ID:          id,
+					Type:        services.QuestType(questType),
+					Cadence:     services.QuestCadence(cadence),
+					Status:      services.QuestStatus(status),
+					TargetCount: int(targetValue),
+					CreatedAt:   createdAt,
+					UpdatedAt:   time.Now(),
+				}
+				if len(checkpoint) > 0 {
+					var cp map[string]interface{}
+					if err := json.Unmarshal(checkpoint, &cp); err == nil {
+						quest.Checkpoint = cp
+					}
+				}
+				questStore.SaveQuest(context.Background(), quest)
+				log.Printf("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
+				loadedCount++
+			}
+			log.Printf("Loaded %d quests from database", loadedCount)
+		}
+	} else if db != nil {
+		log.Println("Skipping legacy active quest preload (set NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS=1 to enable)")
+	}
 
 	// Initialize futures arbitrage handler first (needed for quest handlers)
 	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler
@@ -179,10 +235,128 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	)
 
 	// Wire order executor to integrated handlers for scalping execution
-	ccxtOrderExec := services.NewCCXTOrderExecutor(services.DefaultCCXTOrderExecutorConfig())
+	adminAPIKey := os.Getenv("ADMIN_API_KEY")
+	if adminAPIKey == "" {
+		adminAPIKey = "37c6151f7da4ed66170688a3add5c0c5"
+	}
+	ccxtServiceURL := os.Getenv("CCXT_SERVICE_URL")
+	if ccxtServiceURL == "" {
+		ccxtServiceURL = "http://localhost:3001"
+	}
+	log.Printf("CCXT Order Executor configured with URL: %s", ccxtServiceURL)
+	ccxtOrderExec := services.NewCCXTOrderExecutor(services.CCXTOrderExecutorConfig{
+		ServiceURL: ccxtServiceURL,
+		APIKey:     adminAPIKey,
+		Timeout:    30 * time.Second,
+	})
 	integratedHandlers.SetOrderExecutor(ccxtOrderExec)
 
+	var sqlDB *sql.DB
+	switch concreteDB := db.(type) {
+	case *database.SQLiteDB:
+		sqlDB = concreteDB.DB
+	case *database.PostgresDB:
+		sqlDB = concreteDB.SQL
+	default:
+		log.Printf("Warning: Unknown database type, AI learning disabled")
+	}
+
+	if sqlDB != nil {
+		tradeMemory, err := services.NewTradeMemory(sqlDB)
+		if err != nil {
+			log.Printf("Warning: Failed to create trade memory: %v", err)
+		} else {
+			integratedHandlers.SetTradeMemory(tradeMemory)
+			log.Printf("Trade memory initialized for AI learning")
+		}
+	}
+
+	var aiAPIKey, aiBaseURL, aiProvider string
+	if aiConfig != nil && aiConfig.APIKey != "" {
+		aiAPIKey = aiConfig.APIKey
+		aiBaseURL = aiConfig.BaseURL
+		if aiBaseURL == "" {
+			aiBaseURL = "https://api.minimax.chat/v1"
+		}
+		aiProvider = aiConfig.Provider
+		if aiProvider == "" {
+			aiProvider = "minimax"
+		}
+	}
+
+	if aiAPIKey != "" {
+		log.Printf("Initializing AI Scalping with provider: %s (base_url: %s)", aiProvider, aiBaseURL)
+
+		llmConfig := llm.ClientConfig{
+			APIKey:      aiAPIKey,
+			BaseURL:     aiBaseURL,
+			HTTPTimeout: 120,
+		}
+
+		var llmClient llm.Client
+		switch aiProvider {
+		case "openai":
+			llmClient = llm.NewOpenAIClient(llmConfig)
+		case "anthropic":
+			llmClient = llm.NewAnthropicClient(llmConfig)
+		case "mlx":
+			llmClient = llm.NewMLXClient(llmConfig)
+		default:
+			llmClient = llm.NewOpenAIClient(llmConfig)
+		}
+
+		skillRegistry := skill.NewRegistry(filepath.Join(filepath.Dir(""), "skills"))
+		if err := skillRegistry.LoadAll(); err != nil {
+			log.Printf("Warning: Failed to load skills: %v", err)
+		}
+		integratedHandlers.SetAIScalping(llmClient, skillRegistry)
+		log.Printf("AI Scalping service initialized successfully")
+	} else {
+		log.Printf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
+	}
+
 	questEngine.Start() // Start the quest engine scheduler
+
+	// Restore autonomous scalping for operator chats that were enabled via Telegram /begin.
+	if db != nil {
+		rows, err := db.Query(
+			context.Background(),
+			"SELECT chat_id FROM telegram_operator_state WHERE autonomous_enabled = TRUE ORDER BY updated_at DESC LIMIT 1",
+		)
+		if err != nil {
+			log.Printf("Failed to restore autonomous-enabled chats: %v", err)
+		} else {
+			defer rows.Close()
+			restored := 0
+			for rows.Next() {
+				var chatID string
+				if err := rows.Scan(&chatID); err != nil {
+					log.Printf("Failed to scan autonomous chat row: %v", err)
+					continue
+				}
+				chatID = strings.TrimSpace(chatID)
+				if chatID == "" {
+					continue
+				}
+				if _, err := questEngine.BeginAutonomous(chatID); err != nil {
+					log.Printf("Failed to restore autonomous mode for chat %s: %v", chatID, err)
+					continue
+				}
+				restored++
+			}
+			log.Printf("Restored autonomous scalping for %d chat(s) from telegram_operator_state (latest enabled chat only)", restored)
+		}
+	}
+
+	// Create and start arbitrage execution bridge to connect detected opportunities to QuestEngine
+	arbitrageBridge := services.NewArbitrageExecutionBridge(db, questEngine, signalAggregator, nil)
+
+	// Start the arbitrage execution bridge in a goroutine
+	go func() {
+		if err := arbitrageBridge.Start(context.Background()); err != nil {
+			log.Printf("Arbitrage execution bridge error: %v", err)
+		}
+	}()
 
 	// Register integrated handlers for production-ready quest execution
 	questEngine.RegisterIntegratedHandlers(integratedHandlers)

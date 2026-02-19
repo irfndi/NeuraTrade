@@ -331,6 +331,8 @@ func run() error {
 		}
 	}()
 
+	logger.Info("AI trading components ready for integration")
+
 	// Initialize cleanup service
 	cleanupService := services.NewCleanupService(db, errorRecoveryManager, resourceManager, performanceMonitor)
 
@@ -352,7 +354,7 @@ func run() error {
 	router.Use(gin.Recovery())
 
 	// Setup routes
-	api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, authMiddleware, walletValidator)
+	api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator)
 
 	// Create HTTP server with security timeouts
 	srv := &http.Server{
@@ -366,8 +368,12 @@ func run() error {
 
 	// Start server in a goroutine
 	go func() {
+		fmt.Printf("DEBUG: Starting server on address :%d\n", cfg.Server.Port)
 		logger.LogStartup("celebrum-backend-api", "1.0.0", cfg.Server.Port)
+		addr := fmt.Sprintf(":%d", cfg.Server.Port)
+		fmt.Printf("DEBUG: Full address: %s\n", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("DEBUG: Server error on address %s: %v\n", addr, err)
 			logger.WithError(err).Fatal("Failed to start server")
 		}
 	}()

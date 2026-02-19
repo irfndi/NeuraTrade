@@ -2,21 +2,21 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/skill"
 	"github.com/shopspring/decimal"
 )
 
-// ScalpingOrderExecutor interface for executing orders
 type ScalpingOrderExecutor interface {
 	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
 	GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error)
 }
 
-// IntegratedQuestHandlers provides production-ready quest handlers
-// that integrate all subsystems: TA, Risk, Portfolio, Order Execution, AI
 type IntegratedQuestHandlers struct {
 	technicalAnalysis   *TechnicalAnalysisService
 	ccxtService         interface{}
@@ -25,6 +25,8 @@ type IntegratedQuestHandlers struct {
 	notificationService *NotificationService
 	monitoring          *AutonomousMonitorManager
 	orderExecutor       ScalpingOrderExecutor
+	aiScalpingService   *AIScalpingService
+	tradeMemory         *TradeMemory
 }
 
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
@@ -51,32 +53,55 @@ func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecuto
 	h.orderExecutor = executor
 }
 
+// SetTradeMemory sets the trade memory for AI learning
+func (h *IntegratedQuestHandlers) SetTradeMemory(memory *TradeMemory) {
+	h.tradeMemory = memory
+}
+
+func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
+	ccxtSvc, ok := h.ccxtService.(ccxt.CCXTService)
+	if !ok {
+		log.Printf("[SCALPING] Warning: CCXT service does not support CCXTService interface for AI scalping")
+		return
+	}
+
+	h.aiScalpingService = NewAIScalpingService(
+		DefaultAIScalpingConfig(),
+		llmClient,
+		skillRegistry,
+		ccxtSvc,
+		h.orderExecutor,
+		h.tradeMemory,
+	)
+	log.Printf("[SCALPING] AI-driven scalping service initialized")
+}
+
 // RegisterIntegratedHandlers registers production-ready quest handlers
 func (e *QuestEngine) RegisterIntegratedHandlers(handlers *IntegratedQuestHandlers) {
-	// Market Scanner with TA integration
+	// Register a single routine handler and dispatch by quest definition_id.
+	// RegisterHandler stores one handler per QuestType, so multiple registrations
+	// for QuestTypeRoutine were previously overwriting each other.
 	e.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
-		err := handlers.handleMarketScanWithTA(ctx, quest)
+		var err error
+		switch quest.Metadata["definition_id"] {
+		case "market_scan":
+			err = handlers.handleMarketScanWithTA(ctx, quest)
+		case "funding_rate_scan":
+			err = handlers.handleFundingRateScan(ctx, quest)
+		case "portfolio_health":
+			err = handlers.handlePortfolioHealthWithRisk(ctx, quest)
+		case "scalping_execution":
+			err = handlers.handleScalpingExecution(ctx, quest)
+		default:
+			err = fmt.Errorf("unknown routine quest definition: %s", quest.Metadata["definition_id"])
+		}
 		handlers.recordQuestResult(quest, err == nil, decimal.Zero)
 		return err
 	})
 
-	// Funding Rate Scanner with futures arbitrage
-	e.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
-		err := handlers.handleFundingRateScan(ctx, quest)
-		handlers.recordQuestResult(quest, err == nil, decimal.Zero)
-		return err
-	})
-
-	// Portfolio Health Check with risk management
-	e.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
-		err := handlers.handlePortfolioHealthWithRisk(ctx, quest)
-		handlers.recordQuestResult(quest, err == nil, decimal.Zero)
-		return err
-	})
-
-	// Scalping Execution - execute scalping trades when opportunities found
-	e.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
-		err := handlers.handleScalpingExecution(ctx, quest)
+	// Arbitrage Execution - execute arbitrage opportunities when detected
+	e.RegisterHandler(QuestTypeArbitrage, func(ctx context.Context, quest *Quest) error {
+		err := handlers.handleArbitrageExecution(ctx, quest)
 		handlers.recordQuestResult(quest, err == nil, decimal.Zero)
 		return err
 	})
@@ -227,103 +252,256 @@ func (h *IntegratedQuestHandlers) handlePortfolioHealthWithRisk(ctx context.Cont
 
 // handleScalpingExecution executes scalping trades using integrated services
 func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, quest *Quest) error {
-	log.Printf("Executing scalping with integrated services: %s", quest.Name)
+	log.Printf("[SCALPING] === START AI-DRIVEN SCALPING QUEST ===")
 
-	if h.ccxtService == nil {
-		log.Printf("CCXT service not available for scalping")
-		quest.Checkpoint["status"] = "ccxt_unavailable"
-		quest.CurrentCount++
-		return nil
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
 	}
 
-	// Get self-adjusted parameters based on performance
-	cfg := GetScalpingPerformance().GetAdjustedParameters()
 	chatID := quest.Metadata["chat_id"]
 
-	// Use CCXT service directly if it implements the required methods
-	cc, ok := h.ccxtService.(interface {
-		FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
+	if h.aiScalpingService != nil {
+		return h.executeAIScalping(ctx, quest, chatID)
+	}
+
+	log.Printf("[SCALPING] AI scalping service not available, using fallback")
+	return h.executeFallbackScalping(ctx, quest, chatID)
+}
+
+func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *Quest, chatID string) error {
+	balanceFetcher, ok := h.ccxtService.(interface {
+		FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error)
 	})
 	if !ok {
-		log.Printf("CCXT service does not implement FetchSingleTicker")
-		quest.Checkpoint["status"] = "ccxt_unavailable"
-		quest.CurrentCount++
+		err := fmt.Errorf("CCXT service does not implement FetchBalance")
+		log.Printf("[SCALPING] ERROR: %v", err)
+		quest.Checkpoint["status"] = "balance_unavailable"
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	usdtBalance := 100.0 // Safe fallback for decisioning when balance endpoint is temporarily unavailable
+
+	balanceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	balance, err := balanceFetcher.FetchBalance(balanceCtx, "binance")
+	if err != nil {
+		log.Printf("[SCALPING] Failed to fetch balance, using fallback %.2f USDT: %v", usdtBalance, err)
+		quest.Checkpoint["balance_warning"] = err.Error()
+	} else if balance.Total != nil {
+		if v := balance.Total["USDT"]; v > 0 {
+			usdtBalance = v
+		}
+	}
+
+	portfolio := TradingPortfolio{
+		USDTBalance:   usdtBalance,
+		TotalValue:    usdtBalance,
+		OpenPositions: 0,
+	}
+
+	log.Printf("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
+
+	decision, err := h.aiScalpingService.ExecuteTradingCycle(ctx, portfolio)
+	if err != nil {
+		log.Printf("[SCALPING] AI decision error: %v", err)
+		quest.Checkpoint["status"] = "ai_error"
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	quest.Checkpoint["ai_action"] = decision.Action
+	quest.Checkpoint["ai_symbol"] = decision.Symbol
+	quest.Checkpoint["ai_confidence"] = decision.Confidence
+	quest.Checkpoint["ai_reasoning"] = decision.Reasoning
+	quest.Checkpoint["ai_size_pct"] = decision.SizePercent
+
+	if decision.Action == "hold" {
+		log.Printf("[SCALPING] AI decided to hold: %s", decision.Reasoning)
+		quest.Checkpoint["status"] = "hold"
 		return nil
 	}
 
-	// Scan for opportunities
-	for _, symbol := range cfg.TradingPairs {
-		ticker, err := cc.FetchSingleTicker(ctx, cfg.Exchange, symbol)
-		if err != nil {
-			continue
-		}
+	quest.Checkpoint["status"] = "ai_executed"
+	quest.CurrentCount++
+	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
+	quest.Checkpoint["chat_id"] = chatID
 
-		lastPrice := ticker.GetPrice()
-		volume := ticker.GetVolume()
-		bidPrice := ticker.GetBid()
-		askPrice := ticker.GetAsk()
+	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
+		decision.Action, decision.Symbol, decision.Confidence*100)
 
-		if lastPrice == 0 {
-			continue
-		}
+	return nil
+}
 
-		spread := askPrice - bidPrice
-		spreadPercent := (spread / lastPrice) * 100
-
-		if spreadPercent < cfg.MinProfitPercent {
-			quest.Checkpoint["status"] = "spread_too_tight"
-			continue
-		}
-
-		if volume < 10000 {
-			continue
-		}
-
-		var side string
-		if spreadPercent > cfg.MinProfitPercent*1.5 {
-			side = "buy"
-		} else {
-			side = "sell"
-		}
-
-		quest.Checkpoint["status"] = "opportunity_found"
-		quest.Checkpoint["symbol"] = symbol
-		quest.Checkpoint["side"] = side
-		quest.Checkpoint["spread_percent"] = spreadPercent
-		quest.Checkpoint["volume"] = volume
-
-		// Execute the trade if order executor is available
-		if h.orderExecutor != nil {
-			amount := decimal.NewFromFloat(10)
-			orderID, err := h.orderExecutor.PlaceOrder(ctx, cfg.Exchange, symbol, side, "limit", amount, nil)
-			if err != nil {
-				log.Printf("Failed to execute scalp trade: %v", err)
-				quest.Checkpoint["execution_error"] = err.Error()
-				quest.Checkpoint["execution_status"] = "failed"
-			} else {
-				log.Printf("Scalp trade executed: %s %s %s, orderID: %s", side, cfg.Exchange, symbol, orderID)
-				quest.Checkpoint["order_id"] = orderID
-				quest.Checkpoint["execution_status"] = "executed"
-				quest.Checkpoint["amount"] = amount.String()
-			}
-		} else {
-			log.Printf("Order executor not configured - opportunity identified but not executed")
-			quest.Checkpoint["execution_status"] = "no_executor"
-		}
-		break
-	}
-
-	if quest.Checkpoint["status"] == nil {
-		quest.Checkpoint["status"] = "no_opportunity"
-	}
-
+func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, quest *Quest, chatID string) error {
+	_ = ctx
+	log.Printf("[SCALPING] AI scalping service unavailable; static fallback execution disabled")
+	quest.Checkpoint["status"] = "ai_unavailable_hold"
+	quest.Checkpoint["fallback_mode"] = "observe_only"
+	quest.Checkpoint["note"] = "No rule-based orders are placed when AI service is unavailable"
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_check"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
 
-	// Add performance stats to checkpoint
-	perf := GetScalpingPerformance().GetPerformance()
-	quest.Checkpoint["performance"] = perf
+	return nil
+}
+
+func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, quest *Quest) error {
+	log.Printf("[ARBITRAGE] Executing arbitrage quest: %s", quest.Name)
+
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+
+	if h.ccxtService == nil {
+		err := fmt.Errorf("CCXT service not available for arbitrage")
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["status"] = "ccxt_unavailable"
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	// Get arbitrage parameters from quest checkpoint
+	arbType, ok := quest.Checkpoint["type"].(string)
+	if !ok {
+		arbType = "spot_arbitrage"
+	}
+
+	symbol, ok := quest.Checkpoint["symbol"].(string)
+	if !ok {
+		err := fmt.Errorf("symbol not found in arbitrage quest checkpoint")
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	buyExchange, ok := quest.Checkpoint["buy_exchange"].(string)
+	if !ok {
+		err := fmt.Errorf("buy exchange not found in arbitrage quest checkpoint")
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	sellExchange, ok := quest.Checkpoint["sell_exchange"].(string)
+	if !ok {
+		err := fmt.Errorf("sell exchange not found in arbitrage quest checkpoint")
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	buyPriceStr, ok := quest.Checkpoint["buy_price"].(string)
+	if !ok {
+		err := fmt.Errorf("buy price not found in arbitrage quest checkpoint")
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	sellPriceStr, ok := quest.Checkpoint["sell_price"].(string)
+	if !ok {
+		err := fmt.Errorf("sell price not found in arbitrage quest checkpoint")
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	buyPrice, err := decimal.NewFromString(buyPriceStr)
+	if err != nil {
+		err := fmt.Errorf("invalid buy price format: %v", err)
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	sellPrice, err := decimal.NewFromString(sellPriceStr)
+	if err != nil {
+		err := fmt.Errorf("invalid sell price format: %v", err)
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	// Calculate profit percentage
+	profitPctStr, ok := quest.Checkpoint["profit_pct"].(string)
+	if !ok {
+		err := fmt.Errorf("profit percentage not found in arbitrage quest checkpoint")
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+	profitPct, err := decimal.NewFromString(profitPctStr)
+	if err != nil {
+		err := fmt.Errorf("invalid profit percentage format: %v", err)
+		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		quest.Checkpoint["error"] = err.Error()
+		return err
+	}
+
+	log.Printf("[ARBITRAGE] Opportunity: %s - Buy on %s at %.4f, Sell on %s at %.4f, Profit: %.2f%%",
+		symbol, buyExchange, buyPrice.InexactFloat64(), sellExchange, sellPrice.InexactFloat64(), profitPct.InexactFloat64())
+
+	// Check if we have an order executor for arbitrage trades
+	if h.orderExecutor != nil {
+		// For arbitrage, we typically want to execute both legs quickly but in sequence
+		// First, buy on the cheaper exchange
+		amount := decimal.NewFromFloat(10.0) // Use a conservative amount for testing
+
+		log.Printf("[ARBITRAGE] Placing BUY order: %s on %s at %.4f, amount: %.2f",
+			symbol, buyExchange, buyPrice.InexactFloat64(), amount.InexactFloat64())
+
+		// Place buy order
+		buyOrderID, err := h.orderExecutor.PlaceOrder(ctx, buyExchange, symbol, "buy", "market", amount, &buyPrice)
+		if err != nil {
+			log.Printf("[ARBITRAGE] BUY ORDER FAILED: %v", err)
+			quest.Checkpoint["buy_execution_error"] = err.Error()
+			quest.Checkpoint["buy_execution_status"] = "failed"
+			return fmt.Errorf("buy order execution failed: %w", err)
+		}
+
+		log.Printf("[ARBITRAGE] BUY ORDER PLACED: %s %s %s, orderID: %s", "buy", buyExchange, symbol, buyOrderID)
+		quest.Checkpoint["buy_order_id"] = buyOrderID
+		quest.Checkpoint["buy_execution_status"] = "placed"
+
+		// Then, sell on the more expensive exchange
+		log.Printf("[ARBITRAGE] Placing SELL order: %s on %s at %.4f, amount: %.2f",
+			symbol, sellExchange, sellPrice.InexactFloat64(), amount.InexactFloat64())
+
+		sellOrderID, err := h.orderExecutor.PlaceOrder(ctx, sellExchange, symbol, "sell", "market", amount, &sellPrice)
+		if err != nil {
+			log.Printf("[ARBITRAGE] SELL ORDER FAILED: %v", err)
+			quest.Checkpoint["sell_execution_error"] = err.Error()
+			quest.Checkpoint["sell_execution_status"] = "failed"
+			return fmt.Errorf("sell order execution failed: %w", err)
+		}
+
+		log.Printf("[ARBITRAGE] SELL ORDER PLACED: %s %s %s, orderID: %s", "sell", sellExchange, symbol, sellOrderID)
+		quest.Checkpoint["sell_order_id"] = sellOrderID
+		quest.Checkpoint["sell_execution_status"] = "placed"
+
+		log.Printf("[ARBITRAGE] ARBITRAGE EXECUTED: Buy %s on %s, Sell %s on %s, Expected profit: %s%%",
+			symbol, buyExchange, symbol, sellExchange, profitPct.String())
+
+		quest.Checkpoint["status"] = "executed_both_legs"
+		quest.Checkpoint["arbitrage_type"] = arbType
+		quest.Checkpoint["symbol"] = symbol
+		quest.Checkpoint["buy_exchange"] = buyExchange
+		quest.Checkpoint["sell_exchange"] = sellExchange
+		quest.Checkpoint["buy_price"] = buyPrice.String()
+		quest.Checkpoint["sell_price"] = sellPrice.String()
+		quest.Checkpoint["profit_percentage"] = profitPct.String()
+		quest.Checkpoint["amount"] = amount.String()
+	} else {
+		log.Printf("[ARBITRAGE] WARNING: Order executor not configured - arbitrage opportunity not executed")
+		quest.Checkpoint["execution_status"] = "no_executor"
+		return fmt.Errorf("order executor not configured for arbitrage")
+	}
+
+	quest.CurrentCount++
+	quest.Checkpoint["last_arbitrage_execution"] = time.Now().UTC().Format(time.RFC3339)
+	quest.Checkpoint["chat_id"] = quest.Metadata["chat_id"]
 
 	return nil
 }

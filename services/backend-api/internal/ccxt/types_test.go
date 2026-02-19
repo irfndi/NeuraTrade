@@ -163,6 +163,10 @@ func (m *MockClient) Close() error {
 	return nil
 }
 
+func (m *MockClient) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
+	return &BalanceResponse{Exchange: exchange, Total: map[string]float64{"USDT": 1000.0}}, nil
+}
+
 func (m *MockClient) BaseURL() string {
 	if m.BaseURLFunc != nil {
 		return m.BaseURLFunc()

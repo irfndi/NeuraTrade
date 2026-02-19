@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -146,6 +147,22 @@ func (h *HealthHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 
 	// Check Telegram bot configuration - support both TELEGRAM_BOT_TOKEN and TELEGRAM_TOKEN
 	telegramToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	// Also check config.json for Telegram token
+	if telegramToken == "" {
+		if configPath, err := os.UserHomeDir(); err == nil {
+			configPath = filepath.Join(configPath, ".neuratrade", "config.json")
+			if data, err := os.ReadFile(configPath); err == nil {
+				var config map[string]interface{}
+				if json.Unmarshal(data, &config) == nil {
+					if telegram, ok := config["telegram"].(map[string]interface{}); ok {
+						if token, ok := telegram["bot_token"].(string); ok && token != "" {
+							telegramToken = token
+						}
+					}
+				}
+			}
+		}
+	}
 	if telegramToken == "" {
 		telegramToken = os.Getenv("TELEGRAM_TOKEN")
 	}

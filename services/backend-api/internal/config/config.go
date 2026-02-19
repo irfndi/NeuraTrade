@@ -51,6 +51,10 @@ type Config struct {
 	// Wallet holds configuration for wallet validation.
 	Wallet     WalletValidatorConfig `mapstructure:"wallet"`
 	Indicators IndicatorsConfig      `mapstructure:"indicators"`
+	// AI holds configuration for AI-driven trading.
+	AI AIConfig `mapstructure:"ai"`
+	// Features holds feature flags.
+	Features FeaturesConfig `mapstructure:"features"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -337,6 +341,27 @@ type IndicatorsConfig struct {
 //
 //	*Config: The loaded configuration structure.
 //	error: An error if the configuration could not be parsed.
+
+// AIConfig holds AI-driven trading configuration.
+type AIConfig struct {
+	Provider      string  `mapstructure:"provider"`
+	Model         string  `mapstructure:"model"`
+	APIKey        string  `mapstructure:"api_key"`
+	BaseURL       string  `mapstructure:"base_url"`
+	Temperature   float64 `mapstructure:"temperature"`
+	MaxTokens     int     `mapstructure:"max_tokens"`
+	MinConfidence float64 `mapstructure:"min_confidence"`
+	DailyBudget   float64 `mapstructure:"daily_budget"`
+}
+
+// FeaturesConfig holds feature flags.
+type FeaturesConfig struct {
+	EnableAI          bool `mapstructure:"enable_ai"`
+	EnableAIScalping  bool `mapstructure:"enable_ai_scalping"`
+	EnableAISignals   bool `mapstructure:"enable_ai_signals"`
+	EnableAIArbitrage bool `mapstructure:"enable_ai_arbitrage"`
+}
+
 func Load() (*Config, error) {
 	// First: Add ~/.neuratrade/ config path (user local config)
 	homeDir, err := os.UserHomeDir()
@@ -435,6 +460,9 @@ func setDefaults() {
 	// Server
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.allowed_origins", []string{"http://localhost:3000"})
+
+	// Bind PORT env to server.port
+	_ = viper.BindEnv("server.port", "PORT")
 
 	// Set database defaults - SQLite by default
 	viper.SetDefault("database.driver", "sqlite")
@@ -584,6 +612,22 @@ func setDefaults() {
 	viper.SetDefault("wallet.minimum_exchange_connections", 1)
 
 	viper.SetDefault("indicators.provider", "talib")
+
+	// AI config defaults
+	viper.SetDefault("ai.provider", "minimax")
+	viper.SetDefault("ai.model", "")
+	viper.SetDefault("ai.api_key", "")
+	viper.SetDefault("ai.base_url", "https://api.minimax.chat/v1")
+	viper.SetDefault("ai.temperature", 0.7)
+	viper.SetDefault("ai.max_tokens", 4096)
+	viper.SetDefault("ai.min_confidence", 0.7)
+	viper.SetDefault("ai.daily_budget", 10.0)
+
+	// Features config defaults
+	viper.SetDefault("features.enable_ai", true)
+	viper.SetDefault("features.enable_ai_scalping", true)
+	viper.SetDefault("features.enable_ai_signals", true)
+	viper.SetDefault("features.enable_ai_arbitrage", false)
 }
 
 // GetServiceURL returns the CCXT service URL.

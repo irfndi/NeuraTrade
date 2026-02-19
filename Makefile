@@ -3,10 +3,6 @@
 # Variables
 APP_NAME=neuratrade
 GO_VERSION=1.25
-DOCKER_REGISTRY=ghcr.io/irfndi
-DOCKER_IMAGE_APP=$(DOCKER_REGISTRY)/app:latest
-DOCKER_COMPOSE_FILE?=docker-compose.yaml
-DOCKER_COMPOSE_ENV_FILE=.env
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GO_CACHE_DIR=$(PWD)/.cache/go-build
 GO_MOD_CACHE_DIR=$(PWD)/.cache/go-mod
@@ -19,7 +15,7 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: help build build-cli build-all test test-coverage coverage-check lint fmt fmt-check run dev dev-setup dev-down install-tools install-cli security docker-build docker-run deploy clean dev-up-orchestrated prod-up-orchestrated webhook-enable webhook-disable webhook-status startup-status down-orchestrated go-env-setup ccxt-setup telegram-setup services-setup mod-download mod-tidy ci-structure-check ci-naming-check bd-close-qa gateway gateway-start gateway-stop
+.PHONY: help build build-cli build-all test test-coverage coverage-check lint fmt fmt-check run dev install-tools install-cli security clean mod-tidy ci-structure-check ci-naming-check bd-close-qa gateway gateway-start gateway-stop
 
 # Default target
 all: build
@@ -35,14 +31,6 @@ go-env-setup:
 	@mkdir -p $(GO_CACHE_DIR) $(GO_MOD_CACHE_DIR)
 
 ## Development
-proto-gen: ## Generate gRPC code
-	@echo "$(GREEN)Generating gRPC code...$(NC)"
-	@docker build -t proto-builder -f tools/proto-builder/Dockerfile .
-	@chmod +x scripts/gen-proto.sh
-	@docker run --rm -v $(PWD):/workspace proto-builder ./scripts/gen-proto.sh
-	@echo "$(GREEN)gRPC code generated!$(NC)"
-
-
 build: services-setup ## Build the application across all languages
 	@echo "$(GREEN)Building $(APP_NAME)...$(NC)"
 	@# Build Go application
@@ -177,23 +165,14 @@ dev: ## Run with hot reload (requires air)
 	cd services/backend-api && air
 
 ## Environment Setup
-dev-setup: dev-local ## Setup development environment (alias for dev-local)
-	@echo "$(GREEN)Development environment ready!$(NC)"
+dev-setup: ## Setup development environment (no longer needed - uses launcher.sh)
+	@echo "$(GREEN)Use './launcher.sh start' to start all services$(NC)"
+	@echo "$(YELLOW)Development environment no longer requires separate setup$(NC)"
 
-dev-down: dev-local-down ## Stop development environment (alias for dev-local-down)
-	@echo "$(GREEN)Development environment stopped$(NC)"
-
-dev-local: ## Start local development services (PostgreSQL, Redis)
-	@echo "$(GREEN)Starting local development services (PostgreSQL, Redis)...$(NC)"
-	@if [ ! -f .env ]; then cp .env.example .env; echo "$(YELLOW)Created .env from .env.example$(NC)"; fi
-	cd dev && docker compose up -d
-	@echo "$(GREEN)Local services started!$(NC)"
-	@echo "$(YELLOW)Run 'DATABASE_HOST=localhost REDIS_HOST=localhost make run' to start the application$(NC)"
-
-dev-local-down: ## Stop local development services
-	@echo "$(YELLOW)Stopping local development services...$(NC)"
-	cd dev && docker compose down
-	@echo "$(GREEN)Local services stopped$(NC)"
+dev-down: ## Stop all services
+	@echo "$(GREEN)Stopping all services...$(NC)"
+	@./launcher.sh stop
+	@echo "$(GREEN)All services stopped$(NC)"
 
 install-tools: ## Install development tools
 	@echo "$(GREEN)Installing development tools...$(NC)"
@@ -217,25 +196,6 @@ security-check: ## Run security checks (gosec, gitleaks, govulncheck)
 	@echo "$(GREEN)Security checks completed!$(NC)"
 
 security-scan: security-check ## Alias for security-check
-
-## Docker
-docker-build: ## Build Docker images for all services
-	@echo "$(GREEN)Building Docker images...$(NC)"
-	@# Ensure NEURATRADE_HOME is set
-	@if [ -z "$$NEURATRADE_HOME" ]; then \
-		echo "$(YELLOW)Warning: NEURATRADE_HOME not set. Using ~/.neuratrade$(NC)"; \
-	fi
-	docker compose -f $(DOCKER_COMPOSE_FILE) build
-	@echo "$(GREEN)Docker images built!$(NC)"
-
-docker-run: docker-build ## Run with Docker
-	@echo "$(GREEN)Running with Docker...$(NC)"
-docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env up --build
-
-docker-prod: ## Run production Docker setup
-	@echo "$(GREEN)Running production Docker setup...$(NC)"
-docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env up -d --build
-	@echo "$(GREEN)Production environment started!$(NC)"
 
 ## Database
 db-migrate: ## Run database migrations
@@ -277,29 +237,6 @@ ci-naming-check: ## Enforce canonical naming guardrails for CI
 	@echo "$(GREEN)Running naming/import guardrails...$(NC)"
 	bash services/backend-api/scripts/check-canonical-naming.sh
 
-ci-build: services-setup ## Build for CI across all languages
-	@echo "$(GREEN)Building for CI...$(NC)"
-	@# Build Go application for CI
-	cd services/backend-api && CGO_ENABLED=0 go build -v -ldflags "-X main.version=$(shell git describe --tags --always --dirty) -X main.buildTime=$(shell date -u '+%Y-%m-%d_%H:%M:%S')" -o ../../bin/$(APP_NAME) ./cmd/server
-	@# Build TypeScript/CCXT service for CI
-	@if [ -d "services/ccxt-service" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Building CCXT service for CI...$(NC)"; \
-		cd services/ccxt-service && bun run build; \
-	fi
-	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Building Telegram service for CI...$(NC)"; \
-		cd services/telegram-service && bun run build; \
-	fi
-
-ci-check: ci-lint ci-structure-check ci-naming-check ci-test coverage-check ci-build security-check ## Run all CI checks
-	@echo "$(GREEN)All CI checks completed!$(NC)"
-
-validate-compose: ## Validate Docker Compose files
-	@echo "$(GREEN)Validating Docker Compose files...$(NC)"
-	@chmod +x scripts/validate-compose.sh 2>/dev/null || true
-	@./scripts/validate-compose.sh
-	@echo "$(GREEN)Docker Compose validation passed!$(NC)"
-
 ## Database Migration Targets
 migrate: ## Run all pending database migrations
 	@echo "$(GREEN)Running database migrations...$(NC)"
@@ -318,7 +255,6 @@ clean: ## Clean build artifacts
 	@echo "$(YELLOW)Cleaning build artifacts...$(NC)"
 	rm -rf bin/
 	rm -f coverage.out coverage.html
-	docker system prune -f
 	@echo "$(GREEN)Clean complete!$(NC)"
 
 mod-tidy: ## Tidy Go modules
@@ -355,33 +291,41 @@ fmt-check: ## Check if code is formatted (for CI)
 
 ## Logs
 logs: ## Show application logs
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env logs -f
+	@echo "$(GREEN)Following service logs...$(NC)"
+	@./launcher.sh status
+	@tail -f ~/.neuratrade/logs/*.log 2>/dev/null || echo "$(YELLOW)No logs found. Services may not be running.$(NC)"
 
-logs-all: ## Show all service logs
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env logs -f
+logs-backend: ## Show backend logs
+	@tail -f ~/.neuratrade/logs/backend.log 2>/dev/null || echo "$(YELLOW)No backend log found$(NC)"
+
+logs-ccxt: ## Show CCXT service logs
+	@tail -f ~/.neuratrade/logs/ccxt.log 2>/dev/null || echo "$(YELLOW)No CCXT log found$(NC)"
+
+logs-telegram: ## Show Telegram service logs
+	@tail -f ~/.neuratrade/logs/telegram.log 2>/dev/null || echo "$(YELLOW)No Telegram log found$(NC)"
 
 ## Quick Start (One Command)
 gateway: gateway-start ## Alias for gateway-start
-gateway-start: ## Start NeuraTrade with one command (Docker)
+gateway-start: ## Start NeuraTrade with one command (uses launcher.sh)
 	@echo "$(GREEN)Starting NeuraTrade...$(NC)"
-	@echo "$(YELLOW)Make sure ~/.neuratrade/.env exists with NEURATRADE_HOME and BACKEND_HOST_PORT set$(NC)"
+	@echo "$(YELLOW)Make sure ~/.neuratrade/.env exists with required configuration$(NC)"
 	@if [ ! -f ~/.neuratrade/.env ]; then \
 		echo "$(RED)Error: ~/.neuratrade/.env not found!$(NC)"; \
 		echo "$(YELLOW)Copy .env.example to ~/.neuratrade/.env and configure it$(NC)"; \
 		exit 1; \
 	fi
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env --profile local up -d --build
+	@./launcher.sh start
 	@echo ""
 	@echo "$(GREEN)NeuraTrade started!$(NC)"
-	@echo "$(YELLOW)Backend API: http://localhost:$$(grep BACKEND_HOST_PORT ~/.neuratrade/.env | cut -d= -f2 || echo 58080)$(NC)"
+	@echo "$(YELLOW)Backend API: http://localhost:8080$(NC)"
 	@echo "$(YELLOW)CCXT Service: internal only (port 3001)$(NC)"
 	@echo "$(YELLOW)Telegram Service: internal only (port 3002)$(NC)"
 	@echo ""
-	@echo "Health check: curl http://localhost:$$(grep BACKEND_HOST_PORT ~/.neuratrade/.env | cut -d= -f2 || echo 58080)/health"
+	@echo "Health check: curl http://localhost:8080/health"
 
 gateway-stop: ## Stop NeuraTrade
 	@echo "$(GREEN)Stopping NeuraTrade...$(NC)"
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file ~/.neuratrade/.env down
+	@./launcher.sh stop
 	@echo "$(GREEN)NeuraTrade stopped!$(NC)"
 
 bd-close-qa: ## Close bd issue with mandatory QA evidence
