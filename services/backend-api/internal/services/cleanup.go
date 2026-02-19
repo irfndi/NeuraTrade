@@ -137,9 +137,9 @@ func (c *CleanupService) Start(config CleanupConfig) {
 				ctx, cancel := context.WithTimeout(c.ctx, 30*time.Minute)
 
 				spanCtx, span := observability.StartSpan(ctx, "maintenance.cleanup", "CleanupService.periodicCleanup")
-					err := c.executeWithRetry(spanCtx, "periodic_cleanup", func() error {
-						return c.runCleanup(spanCtx, config)
-					})
+				err := c.executeWithRetry(spanCtx, "periodic_cleanup", func() error {
+					return c.runCleanup(spanCtx, config)
+				})
 				observability.FinishSpan(span, err)
 				if err != nil {
 					c.logger.Error("Cleanup failed", "error", err)
