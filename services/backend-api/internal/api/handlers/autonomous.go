@@ -788,6 +788,7 @@ func (r *ReadinessChecker) checkRedis(c *gin.Context) *CheckResult {
 		status = "warning"
 		message = "Redis client creation failed: " + err.Error()
 	} else {
+		defer client.Close()
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()
 		_, err = client.Ping(ctx).Result()
