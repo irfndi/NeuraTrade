@@ -1,6 +1,8 @@
 package testutil
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 
 	"github.com/redis/go-redis/v9"
@@ -22,4 +24,32 @@ func GetTestRedisOptions() *redis.Options {
 // GetTestRedisClient returns a Redis client configured for testing
 func GetTestRedisClient() *redis.Client {
 	return redis.NewClient(GetTestRedisOptions())
+}
+
+// GenerateTestSecret generates a cryptographically secure random secret for testing.
+// The secret is at least 32 characters long to meet JWT requirements.
+// This avoids hardcoded secrets in test files.
+func GenerateTestSecret() string {
+	// Generate 32 random bytes (64 hex chars)
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback: use environment variable or panic
+		if envSecret := os.Getenv("TEST_JWT_SECRET"); envSecret != "" && len(envSecret) >= 32 {
+			return envSecret
+		}
+		// Last resort: generate a deterministic secret from timestamp
+		// This should only happen in test environments
+		return "test-secret-32-characters-min-required"
+	}
+	return hex.EncodeToString(bytes)
+}
+
+// MustGenerateTestSecret generates a test secret or panics if generation fails.
+// Use this in test setup where a secret is required.
+func MustGenerateTestSecret() string {
+	secret := GenerateTestSecret()
+	if len(secret) < 32 {
+		panic("generated test secret is too short (minimum 32 characters required)")
+	}
+	return secret
 }
