@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -713,8 +714,13 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 		}
 	}
 
-	sqlDB, ok := db.(*database.SQLiteDB)
-	if !ok {
+	var sqlDB *sql.DB
+	switch concreteDB := db.(type) {
+	case *database.SQLiteDB:
+		sqlDB = concreteDB.DB
+	case *database.PostgresDB:
+		sqlDB = concreteDB.SQL
+	default:
 		return &CheckResult{
 			Status:    "warning",
 			Message:   "Invalid database connection",
@@ -724,7 +730,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 
 	// Check for configured exchange API keys
 	var exchangeCount int
-	err := sqlDB.DB.QueryRow(
+	err := sqlDB.QueryRow(
 		"SELECT COUNT(DISTINCT exchange) FROM exchange_api_keys",
 	).Scan(&exchangeCount)
 
@@ -735,7 +741,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 
 	// Check for Polymarket wallets
 	var polymarketCount int
-	err = sqlDB.DB.QueryRow(
+	err = sqlDB.QueryRow(
 		"SELECT COUNT(*) FROM wallets WHERE provider = 'polymarket'",
 	).Scan(&polymarketCount)
 
@@ -761,7 +767,11 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 					if binance, ok := exchanges["binance"].(map[string]interface{}); ok {
 						log.Printf("DEBUG: Has binance section")
 						if apiKey, ok := binance["api_key"].(string); ok && apiKey != "" {
-							log.Printf("DEBUG: Has api_key: %s", apiKey[:10]+"...")
+							masked := apiKey
+							if len(apiKey) > 10 {
+								masked = apiKey[:10] + "..."
+							}
+							log.Printf("DEBUG: Has api_key: %s", masked)
 							configHasBinance = true
 						}
 					}

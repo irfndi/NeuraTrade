@@ -72,7 +72,7 @@ ccxt:
   timeout: 30
   retry_attempts: 3
   retry_delay: 1s
-  admin_api_key: "37c6151f7da4ed66170688a3add5c0c5"
+  admin_api_key: ${ADMIN_API_KEY:-}
   rate_limit:
     requests_per_second: 10
     burst: 20
