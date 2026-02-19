@@ -52,6 +52,10 @@ type OrderExecutorAdapter interface {
 	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
 }
 
+var _ OrderExecutorAdapter = (*PaperExecutorAdapter)(nil)
+
+var _ OrderExecutorAdapter = (*CCXTOrderExecutor)(nil)
+
 // PaperExecutorAdapter simulates order execution for paper trading mode.
 type PaperExecutorAdapter struct{}
 
@@ -112,7 +116,9 @@ func NewSubagentSpawner(
 		if config.PaperTrading {
 			orderExecutor = &PaperExecutorAdapter{}
 		} else {
-			orderExecutor = &PaperExecutorAdapter{}
+			// Production mode requires explicit orderExecutor - fail fast
+			panic("NewSubagentSpawner: orderExecutor is required for production mode (config.PaperTrading=false). " +
+				"Either pass a valid OrderExecutorAdapter or enable PaperTrading mode.")
 		}
 	}
 	return &SubagentSpawner{
@@ -513,30 +519,31 @@ func (s *SubagentSpawner) calculateLiveSignals(ctx context.Context, ohlcv *indic
 				Description: fmt.Sprintf("Volume ratio: %.2fx", volRatio),
 			})
 		}
-	}
 
-	if len(ohlcv.Close) >= 20 {
-		emaFast := s.indicatorProvider.EMA(ohlcv.Close, 12)
-		emaSlow := s.indicatorProvider.EMA(ohlcv.Close, 26)
-		if len(emaFast) > 0 && len(emaSlow) > 0 {
-			current := emaFast[len(emaFast)-1]
-			slow := emaSlow[len(emaSlow)-1]
-			trendVal, _ := current.Div(slow).Float64()
-			var direction SignalDirection
-			if trendVal > 1.0 {
-				direction = DirectionBullish
-			} else if trendVal < 1.0 {
-				direction = DirectionBearish
-			} else {
-				direction = DirectionNeutral
+		// EMA trend calculation - also inside indicatorProvider nil check
+		if len(ohlcv.Close) >= 20 {
+			emaFast := s.indicatorProvider.EMA(ohlcv.Close, 12)
+			emaSlow := s.indicatorProvider.EMA(ohlcv.Close, 26)
+			if len(emaFast) > 0 && len(emaSlow) > 0 {
+				current := emaFast[len(emaFast)-1]
+				slow := emaSlow[len(emaSlow)-1]
+				trendVal, _ := current.Div(slow).Float64()
+				var direction SignalDirection
+				if trendVal > 1.0 {
+					direction = DirectionBullish
+				} else if trendVal < 1.0 {
+					direction = DirectionBearish
+				} else {
+					direction = DirectionNeutral
+				}
+				signals = append(signals, AnalystSignal{
+					Name:        "trend",
+					Value:       trendVal,
+					Weight:      0.2,
+					Direction:   direction,
+					Description: fmt.Sprintf("EMA trend: %.4f", trendVal),
+				})
 			}
-			signals = append(signals, AnalystSignal{
-				Name:        "trend",
-				Value:       trendVal,
-				Weight:      0.2,
-				Direction:   direction,
-				Description: fmt.Sprintf("EMA trend: %.4f", trendVal),
-			})
 		}
 	}
 
@@ -598,28 +605,31 @@ func (s *SubagentSpawner) runRiskAgent(ctx context.Context, agent *RiskAgent) Su
 			Error:   ctx.Err(),
 		}
 	default:
-		// Perform risk checks
-		riskAssessment := map[string]any{
-			"decision":     agent.Decision,
-			"approved":     true,
-			"risk_score":   agent.Decision.RiskScore,
-			"max_position": agent.Config.MaxPositionSize,
-			"warnings":     []string{},
-		}
+		// Perform risk checks with properly typed variables
+		approved := true
+		warnings := []string{}
 
 		// Basic risk validations
 		if decimal.NewFromFloat(agent.Decision.SizePercent).GreaterThan(agent.Config.MaxPositionSize) {
-			riskAssessment["approved"] = false
-			riskAssessment["warnings"] = append(riskAssessment["warnings"].([]string), "position size exceeds max")
+			approved = false
+			warnings = append(warnings, "position size exceeds max")
 		}
 
 		if decimal.NewFromFloat(agent.Decision.RiskScore).GreaterThan(agent.Config.MaxRiskPerTrade) {
-			riskAssessment["approved"] = false
-			riskAssessment["warnings"] = append(riskAssessment["warnings"].([]string), "risk score exceeds threshold")
+			approved = false
+			warnings = append(warnings, "risk score exceeds threshold")
+		}
+
+		riskAssessment := map[string]any{
+			"decision":     agent.Decision,
+			"approved":     approved,
+			"risk_score":   agent.Decision.RiskScore,
+			"max_position": agent.Config.MaxPositionSize,
+			"warnings":     warnings,
 		}
 
 		return SubagentResult{
-			Success: riskAssessment["approved"].(bool),
+			Success: approved,
 			Data:    riskAssessment,
 		}
 	}
