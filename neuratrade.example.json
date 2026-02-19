@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "name": "NeuraTrade",
+  "environment": "development",
+
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+
+  "database": {
+    "driver": "sqlite",
+    "path": "~/.neuratrade/data/neuratrade.db"
+  },
+
+  "redis": {
+    "host": "localhost",
+    "port": 6379
+  },
+
+  "ccxt": {
+    "service_url": "http://localhost:3001",
+    "grpc_address": "localhost:50051",
+    "admin_api_key": "YOUR_ADMIN_API_KEY_HERE"
+  },
+
+  "telegram": {
+    "enabled": true,
+    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+    "use_polling": false,
+    "webhook_url": "https://your-domain.trycloudflare.com/telegram/webhook",
+    "api_base_url": "http://localhost:8080",
+    "service_url": "http://localhost:3002",
+    "grpc_address": "localhost:50052"
+  },
+
+  "ai": {
+    "provider": "minimax",
+    "api_key": "YOUR_AI_API_KEY_HERE",
+    "daily_budget": "10.00"
+  },
+
+  "security": {
+    "jwt_secret": "YOUR_JWT_SECRET_HERE",
+    "admin_api_key": "YOUR_ADMIN_API_KEY_HERE"
+  },
+
+  "features": {
+    "external_connections_enabled": false,
+    "telegram_bot": true,
+    "funding_rate_collection": true,
+    "arbitrage_detection": true,
+    "signal_generation": true,
+    "full_mode": true,
+    "run_migrations": true
+  },
+
+  "logging": {
+    "level": "info",
+    "environment": "development"
+  }
+}

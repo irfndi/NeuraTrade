@@ -22,6 +22,7 @@ paths = [
     '''\.gitguardian\.yaml$''',
     '''\.github/DEPLOYMENT-SECRETS\.md$''',
     '''services/backend-api/internal/crypto/encryption_test\.go''',
+    '''services/telegram-service/scripts/.*-test.*\.sh$''',
 ]
 
 regexes = [

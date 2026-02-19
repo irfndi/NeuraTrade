@@ -32,7 +32,7 @@ secrets:
     - name: dev-jwt-secret
       match: dev-jwt-secret
     - name: admin-secret-key-change-me
-      match: admin-secret-key-change-me
+      match: admin-secret-key-change-in-production
     - name: admin-dev-key-change-in-production
       match: admin-dev-key-change-in-production
     # Masking test patterns - these are fake/test values
@@ -76,6 +76,9 @@ secrets:
       match: "secret123"
     - name: old-sk-live
       match: "sk_live_abc123"
+    # Historical secrets from PR #184 have been rotated.
+    # Suppress any remaining alerts via GitGuardian dashboard using occurrence IDs
+    # rather than committing secret patterns to source files.
   ignored-paths:
     # Test files commonly use fake credentials
     - "**/*_test.go"
