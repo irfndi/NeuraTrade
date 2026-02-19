@@ -15,6 +15,7 @@ import (
 type ScalpingOrderExecutor interface {
 	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
 	GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error)
+	CancelOrder(ctx context.Context, exchange, orderID string) error
 }
 
 type IntegratedQuestHandlers struct {
