@@ -279,19 +279,24 @@ func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersR
 	return &response, err
 }
 
+// toSafeInt32 safely converts an int to int32 with bounds checking.
+// Returns 0 for non-positive values, math.MaxInt32 for values >= MaxInt32,
+// otherwise returns the int32 value.
+func toSafeInt32(value int) int32 {
+	if value <= 0 {
+		return 0
+	}
+	if value >= math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(value)
+}
+
 // GetOrderBook retrieves order book data for a specific exchange and symbol.
 func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		// Safe int to int32 conversion with bounds checking - nolint:gosec
-		var safeLimit int32
-		if limit <= 0 {
-			safeLimit = 0
-		} else if limit >= math.MaxInt32 {
-			safeLimit = math.MaxInt32
-		} else {
-			safeLimit = int32(limit)
-		}
+		safeLimit := toSafeInt32(limit)
 		resp, err := c.grpcClient.GetOrderBook(ctx, &pb.GetOrderBookRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -322,15 +327,7 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		// Safe int to int32 conversion with bounds checking - nolint:gosec
-		var safeLimit int32
-		if limit <= 0 {
-			safeLimit = 0
-		} else if limit >= math.MaxInt32 {
-			safeLimit = math.MaxInt32
-		} else {
-			safeLimit = int32(limit)
-		}
+		safeLimit := toSafeInt32(limit)
 		resp, err := c.grpcClient.GetTrades(ctx, &pb.GetTradesRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
@@ -361,15 +358,7 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
-		// Safe int to int32 conversion with bounds checking - nolint:gosec
-		var safeLimit int32
-		if limit <= 0 {
-			safeLimit = 0
-		} else if limit >= math.MaxInt32 {
-			safeLimit = math.MaxInt32
-		} else {
-			safeLimit = int32(limit)
-		}
+		safeLimit := toSafeInt32(limit)
 		resp, err := c.grpcClient.GetOHLCV(ctx, &pb.GetOHLCVRequest{
 			Exchange:  exchange,
 			Symbol:    symbol,

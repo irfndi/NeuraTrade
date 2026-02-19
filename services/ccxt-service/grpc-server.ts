@@ -544,14 +544,18 @@ export class CcxtGrpcServer {
   };
 }
 
-export function startGrpcServer(exchanges: any, port: number) {
+export function startGrpcServer(
+  exchanges: any,
+  port: number,
+  host: string = "0.0.0.0",
+) {
   const server = new grpc.Server();
   const service = new CcxtGrpcServer(exchanges);
   server.addService(
     CcxtServiceService,
     service as unknown as CcxtServiceServer,
   );
-  const bindAddr = `0.0.0.0:${port}`;
+  const bindAddr = `${host}:${port}`;
   server.bindAsync(
     bindAddr,
     grpc.ServerCredentials.createInsecure(),
