@@ -95,7 +95,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Initialize user handler early for internal routes
-	userHandler := handlers.NewUserHandler(db, redis.Client, authMiddleware)
+	var redisClientRaw *redisv9.Client
+	if redis != nil {
+		redisClientRaw = redis.Client
+	}
+
+	userHandler := handlers.NewUserHandler(db, redisClientRaw, authMiddleware)
 
 	// Initialize notification service with Redis caching
 	var notificationService *services.NotificationService
@@ -108,7 +113,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Initialize handlers
 	marketHandler := handlers.NewMarketHandler(db, ccxtService, collectorService, redis, cacheAnalyticsService)
-	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redis.Client)
+	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redisClientRaw)
 	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
@@ -124,13 +129,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// userHandler and telegramInternalHandler already initialized above for internal routes
 	alertHandler := handlers.NewAlertHandler(db)
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
-	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
+	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redisClientRaw)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	webSocketHandler := handlers.NewWebSocketHandler(redis)
 
 	// AI handler - uses registry from ai package
 	aiRegistry := ai.NewRegistry(
-		ai.WithRedis(redis.Client),
+		ai.WithRedis(redisClientRaw),
 	)
 	aiHandler := handlers.NewAIHandler(aiRegistry, db)
 
@@ -172,11 +177,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	riskConfig := risk.DefaultRiskManagerConfig()
 	riskManager := risk.NewRiskManagerAgent(riskConfig)
 	drawdownHalt := services.NewMaxDrawdownHalt(db, services.DefaultMaxDrawdownConfig())
-
-	var redisClientRaw *redisv9.Client
-	if redis != nil {
-		redisClientRaw = redis.Client
-	}
 
 	var dailyLossTracker *risk.DailyLossTracker
 	var positionThrottle *risk.PositionSizeThrottle
