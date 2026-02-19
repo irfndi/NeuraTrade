@@ -3,6 +3,7 @@ import {
   expect,
   beforeAll,
   afterAll,
+  afterEach,
   describe,
   beforeEach,
 } from "bun:test";
@@ -18,6 +19,7 @@ describe("Neuratrade config fallback", () => {
   const neuratradeDir = join(homedir(), ".neuratrade");
   const realConfigPath = join(neuratradeDir, "config.json");
   let backupContent: string | null = null;
+  let originalEnv: Record<string, string | undefined>;
 
   beforeAll(() => {
     if (!existsSync(neuratradeDir)) {
@@ -35,10 +37,25 @@ describe("Neuratrade config fallback", () => {
   });
 
   beforeEach(() => {
+    originalEnv = {
+      TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+      TELEGRAM_API_BASE_URL: process.env.TELEGRAM_API_BASE_URL,
+      ADMIN_API_KEY: process.env.ADMIN_API_KEY,
+    };
     resetNeuratradeConfigCache();
     delete process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_API_BASE_URL;
     delete process.env.ADMIN_API_KEY;
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   });
 
   test("getEnvWithNeuratradeFallback returns env var when set", () => {
