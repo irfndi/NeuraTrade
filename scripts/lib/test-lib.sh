@@ -119,7 +119,7 @@ nt_check_service_http() {
   local name="$1"
   local url="$2"
   local timeout="${3:-5}"
-  
+
   if curl -s --connect-timeout "$timeout" "$url" &>/dev/null; then
     nt_test_result "$name HTTP" "pass"
     return 0
@@ -156,20 +156,20 @@ nt_check_database_exists() {
 
 nt_check_database_table() {
   local table="$1"
-  
+
   if ! command -v sqlite3 &>/dev/null; then
     nt_test_result "Table '$table' exists" "skip" "sqlite3 not installed"
     return 1
   fi
-  
+
   if [[ ! -f "$DB_PATH" ]]; then
     nt_test_result "Table '$table' exists" "fail" "Database not found"
     return 1
   fi
-  
+
   local tables
   tables=$(sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table';" 2>/dev/null || echo "")
-  
+
   if echo "$tables" | grep -q "^${table}$"; then
     nt_test_result "Table '$table' exists" "pass"
     return 0
@@ -184,7 +184,7 @@ nt_check_redis() {
     nt_test_result "Redis connection" "skip" "redis-cli not installed"
     return 1
   fi
-  
+
   if redis-cli ping &>/dev/null; then
     nt_test_result "Redis connection" "pass"
     return 0
@@ -204,7 +204,7 @@ nt_get_bot_token() {
 nt_check_bot_token_configured() {
   local token
   token=$(nt_get_bot_token)
-  
+
   if [[ -n "$token" && "$token" != "null" && "$token" != "YOUR_TELEGRAM_BOT_TOKEN_HERE" ]]; then
     nt_test_result "Telegram bot token" "pass" "Token configured (masked)"
     return 0
@@ -216,15 +216,15 @@ nt_check_bot_token_configured() {
 
 nt_check_bot_reachable() {
   local token="$1"
-  
+
   if [[ -z "$token" ]]; then
     nt_test_result "Telegram bot reachable" "skip" "No bot token provided"
     return 1
   fi
-  
+
   local bot_info
   bot_info=$(curl -s "https://api.telegram.org/bot${token}/getMe" 2>/dev/null || echo "")
-  
+
   if echo "$bot_info" | grep -q '"ok":true'; then
     local bot_name
     bot_name=$(echo "$bot_info" | jq -r '.result.username' 2>/dev/null || echo "unknown")
@@ -242,20 +242,20 @@ nt_check_bot_reachable() {
 nt_fetch_ccxt_ticker() {
   local exchange="${1:-binance}"
   local symbol="${2:-BTC/USDT}"
-  
+
   curl -s --connect-timeout 5 "$CCXT_URL/api/ticker/$exchange/$symbol" 2>/dev/null || echo ""
 }
 
 nt_fetch_ccxt_orderbook() {
   local exchange="${1:-binance}"
   local symbol="${2:-BTC/USDT}"
-  
+
   curl -s --connect-timeout 5 "$CCXT_URL/api/orderbook/$exchange/$symbol" 2>/dev/null || echo ""
 }
 
 nt_fetch_ccxt_markets() {
   local exchange="${1:-binance}"
-  
+
   curl -s --connect-timeout 5 "$CCXT_URL/api/markets/$exchange" 2>/dev/null || echo ""
 }
 
@@ -263,29 +263,29 @@ nt_validate_json_field() {
   local json="$1"
   local field="$2"
   local expected_type="${3:-string}"
-  
+
   if [[ -z "$json" ]]; then
     return 1
   fi
-  
+
   if ! command -v jq &>/dev/null; then
     # Fallback to grep if jq not available
     echo "$json" | grep -q "\"$field\""
     return $?
   fi
-  
+
   case "$expected_type" in
     array)
-      jq -e "${field} | type == \"array\"" <<< "$json" &>/dev/null
+      jq -e "${field} | type == \"array\"" <<<"$json" &>/dev/null
       ;;
     number)
-      jq -e "${field} | type == \"number\"" <<< "$json" &>/dev/null
+      jq -e "${field} | type == \"number\"" <<<"$json" &>/dev/null
       ;;
     boolean)
-      jq -e "${field} | type == \"boolean\"" <<< "$json" &>/dev/null
+      jq -e "${field} | type == \"boolean\"" <<<"$json" &>/dev/null
       ;;
     *)
-      jq -e "has(\"${field}\")" <<< "$json" &>/dev/null
+      jq -e "has(\"${field}\")" <<<"$json" &>/dev/null
       ;;
   esac
 }
@@ -295,12 +295,12 @@ nt_validate_json_field() {
 # ============================================================================
 nt_print_summary() {
   nt_header "Test Summary"
-  
+
   echo "Tests Passed:  $TESTS_PASSED"
   echo "Tests Failed:  $TESTS_FAILED"
   echo "Tests Skipped: $TESTS_SKIPPED"
   echo ""
-  
+
   if [[ $TESTS_FAILED -eq 0 ]]; then
     nt_success "All critical tests passed!"
   else
@@ -317,12 +317,12 @@ nt_is_system_ready() {
 # ============================================================================
 nt_init() {
   local title="${1:-NeuraTrade Test Suite}"
-  
+
   nt_header "$title"
   echo "Version: 1.0.0"
   echo "Date: $(date)"
   echo ""
-  
+
   # Reset counters
   TESTS_PASSED=0
   TESTS_FAILED=0
