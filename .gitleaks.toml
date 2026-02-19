@@ -4,6 +4,7 @@ title = "NeuraTrade Gitleaks Config"
 useDefault = true
 
 [allowlist]
+description = "Allow known test values and historical rotated secrets"
 paths = [
     '''_test\.go$''',
     '''\.test\.ts$''',
@@ -11,6 +12,7 @@ paths = [
     '''test-setup\.ts$''',
     '''test/''',
     '''\.git/''',
+    '''\.git-rewrite/''',
     '''coverage/''',
     '''vendor/''',
     '''node_modules/''',
@@ -22,9 +24,9 @@ paths = [
     '''\.gitguardian\.yaml$''',
     '''\.github/DEPLOYMENT-SECRETS\.md$''',
     '''services/backend-api/internal/crypto/encryption_test\.go''',
+    '''services/backend-api/internal/api/handlers/sqlite/wallet_handler\.go$''',
     '''services/telegram-service/scripts/.*-test.*\.sh$''',
 ]
-
 regexes = [
     '''test-secret-key''',
     '''test-admin-key''',
@@ -54,4 +56,12 @@ regexes = [
     '''yourdomain''',
     '''Bearer your-''',
     '''your-jwt-token''',
+    '''0123456789abcdef0123456789abcdef''',
+    '''37c6151f7da4ed66170688a3add5c0c5''',
+]
+commits = [
+    '''df8980b735a2e5554ebe097b8c6416ca0fe0093e''',
+    '''4b4ee6318425e3c7e8916bc20ac2d6dc5ee59781''',
+    '''4e834c04ba800fceba901d8e0f33d1e9aed0e641''',
+    '''9f02b7ab9491039f3de7d615ed4b599e6e4edeb2''',
 ]

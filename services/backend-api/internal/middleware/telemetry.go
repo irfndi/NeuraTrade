@@ -1,3 +1,4 @@
+// Package middleware provides HTTP middleware components for NeuraTrade.
 package middleware
 
 import (
@@ -8,24 +9,22 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TelemetryMiddleware creates a Gin middleware for Sentry tracing.
-// It initializes the Sentry hub for each request.
+// TelemetryMiddleware creates Gin middleware for Sentry tracing.
+// Initializes Sentry hub for each request to enable error tracking.
 //
 // Returns:
-//
-//	gin.HandlerFunc: Gin handler.
+//   - gin.HandlerFunc: Gin middleware handler.
 func TelemetryMiddleware() gin.HandlerFunc {
 	return sentrygin.New(sentrygin.Options{
 		Repanic: true,
 	})
 }
 
-// HealthCheckTelemetryMiddleware creates a Gin middleware for health check endpoints.
-// It tags the transaction as a health check.
+// HealthCheckTelemetryMiddleware creates Gin middleware for health check endpoints.
+// Tags transactions as health checks for monitoring purposes.
 //
 // Returns:
-//
-//	gin.HandlerFunc: Gin handler.
+//   - gin.HandlerFunc: Gin middleware handler.
 func HealthCheckTelemetryMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// For now, we just pass through as we want to monitor health checks too
@@ -37,13 +36,13 @@ func HealthCheckTelemetryMiddleware() gin.HandlerFunc {
 	}
 }
 
-// RecordError records an error on the current span/hub.
+// RecordError records an error on the current Sentry span/hub.
+// Captures the error for tracking and sets span status to error.
 //
 // Parameters:
-//
-//	c: Gin context.
-//	err: Error to record.
-//	description: Description of the error.
+//   - c: Gin context.
+//   - err: Error to record.
+//   - description: Description of the error context.
 func RecordError(c *gin.Context, err error, description string) {
 	if hub := sentrygin.GetHubFromContext(c); hub != nil {
 		hub.CaptureException(err)
@@ -53,13 +52,12 @@ func RecordError(c *gin.Context, err error, description string) {
 	}
 }
 
-// StartSpan starts a new span or adds a breadcrumb.
-// This is a wrapper to maintain compatibility with existing code but using Sentry.
+// StartSpan starts a new span or adds a breadcrumb for tracing.
+// Wrapper for Sentry span management with backward compatibility.
 //
 // Parameters:
-//
-//	c: Gin context.
-//	name: Span name.
+//   - c: Gin context.
+//   - name: Span name or operation description.
 func StartSpan(c *gin.Context, name string) {
 	if hub := sentrygin.GetHubFromContext(c); hub != nil {
 		// Sentry Gin middleware starts the transaction automatically.
@@ -73,13 +71,13 @@ func StartSpan(c *gin.Context, name string) {
 	}
 }
 
-// AddSpanAttribute adds an attribute to the current span.
+// AddSpanAttribute adds an attribute to the current Sentry span.
+// Sets a tag on the scope for filtering and searching in Sentry.
 //
 // Parameters:
-//
-//	c: Gin context.
-//	key: Attribute key.
-//	value: Attribute value.
+//   - c: Gin context.
+//   - key: Attribute key name.
+//   - value: Attribute value (converted to string).
 func AddSpanAttribute(c *gin.Context, key string, value interface{}) {
 	if hub := sentrygin.GetHubFromContext(c); hub != nil {
 		hub.Scope().SetTag(key, fmt.Sprint(value))

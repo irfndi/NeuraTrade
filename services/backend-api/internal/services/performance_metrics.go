@@ -162,14 +162,9 @@ func (c *PerformanceMetricsCollector) Reset() {
 	c.metrics = make(map[string][]PerformanceMetric)
 }
 
-// ConsoleMetricsHandler outputs metrics to console
 type ConsoleMetricsHandler struct{}
 
 func (h *ConsoleMetricsHandler) Handle(snapshot *MetricSnapshot) error {
-	fmt.Printf("[METRICS] %s - %d metrics\n", snapshot.Timestamp.Format(time.RFC3339), len(snapshot.Metrics))
-	for _, m := range snapshot.Metrics {
-		fmt.Printf("  %s: %.2f %s\n", m.Name, m.Value, m.Unit)
-	}
 	return nil
 }
 

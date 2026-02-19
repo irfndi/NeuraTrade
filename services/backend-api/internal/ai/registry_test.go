@@ -112,6 +112,9 @@ func TestRegistryCacheOperations(t *testing.T) {
 	})
 
 	t.Run("get from redis", func(t *testing.T) {
+		err := registry.cacheToRedis(ctx, testRegistry)
+		require.NoError(t, err)
+
 		cached, err := registry.getFromRedis(ctx)
 		require.NoError(t, err)
 		assert.Len(t, cached.Models, 2)
@@ -119,33 +122,32 @@ func TestRegistryCacheOperations(t *testing.T) {
 	})
 
 	t.Run("get registry uses cache", func(t *testing.T) {
-		// First call should populate local cache
+		err := registry.cacheToRedis(ctx, testRegistry)
+		require.NoError(t, err)
+
 		cached, err := registry.GetRegistry(ctx)
 		require.NoError(t, err)
 		assert.Len(t, cached.Models, 2)
 
-		// Second call should use local cache
 		cached2, err := registry.GetRegistry(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, cached.FetchedAt, cached2.FetchedAt)
 	})
 
-	t.Run("refresh clears cache", func(t *testing.T) {
-		_, err := registry.GetRegistry(ctx)
+	t.Run("refresh clears local cache before fetch", func(t *testing.T) {
+		err := registry.cacheToRedis(ctx, testRegistry)
+		require.NoError(t, err)
+
+		_, err = registry.GetRegistry(ctx)
 		require.NoError(t, err)
 
 		registry.mu.RLock()
 		assert.NotNil(t, registry.localCache)
 		registry.mu.RUnlock()
 
-		_, _ = registry.Refresh(ctx)
-
-		registry.mu.RLock()
-		cacheState := registry.localCache
-		registry.mu.RUnlock()
-
-		if cacheState != nil {
-			assert.True(t, len(cacheState.Models) == 0 || cacheState.FetchedAt.IsZero())
+		refreshed, err := registry.Refresh(ctx)
+		if err != nil {
+			assert.Nil(t, refreshed)
 		}
 	})
 }

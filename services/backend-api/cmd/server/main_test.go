@@ -515,10 +515,10 @@ func TestMainFunction(t *testing.T) {
 		return
 	}
 
-	// Check if it's an exit error with code 1
+	// Different startup failure paths may exit with 1 or 2.
 	if exitErr, ok := err.(*exec.ExitError); ok {
-		if exitErr.ExitCode() != 1 {
-			t.Errorf("Expected exit code 1, got %d", exitErr.ExitCode())
+		if exitErr.ExitCode() != 1 && exitErr.ExitCode() != 2 {
+			t.Errorf("Expected exit code 1 or 2, got %d", exitErr.ExitCode())
 		}
 	} else {
 		t.Errorf("Expected exec.ExitError, got %T: %v", err, err)

@@ -226,7 +226,13 @@ func (h *WebSocketHandler) SubscribeToRedisChannels(channels ...string) error {
 
 func (c *WebSocketClient) readPump() {
 	defer func() {
-		c.handler.unregister <- c
+		// Ensure cleanup on exit
+		select {
+		case c.handler.unregister <- c:
+		default:
+			// Channel full or closed, log but don't block
+			c.handler.logger.Warn("Failed to send client to unregister channel")
+		}
 		_ = c.conn.Close()
 	}()
 
@@ -295,6 +301,10 @@ func (c *WebSocketClient) writePump() {
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
+
+		case <-c.handler.ctx.Done():
+			// Handler is shutting down, exit gracefully
+			return
 		}
 	}
 }

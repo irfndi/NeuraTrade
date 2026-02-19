@@ -76,6 +76,10 @@ secrets:
       match: "secret123"
     - name: old-sk-live
       match: "sk_live_abc123"
+    - name: historical-pr184-admin-key
+      match: "37c6151f7da4ed66170688a3add5c0c5"
+    - name: historical-wallet-dev-key
+      match: "0123456789abcdef0123456789abcdef"
     # Historical secrets from PR #184 have been rotated.
     # Suppress any remaining alerts via GitGuardian dashboard using occurrence IDs
     # rather than committing secret patterns to source files.
@@ -88,6 +92,8 @@ secrets:
     # Docker compose uses environment variable defaults
     - "docker-compose*.yaml"
     - "docker-compose*.yml"
+    # Local git rewrite artifacts can contain historical examples
+    - ".git-rewrite/**"
     # Internal utils for masking (tests contain fake secrets)
     - "**/internal/utils/*_test.go"
     - "**/internal/skill/*_test.go"

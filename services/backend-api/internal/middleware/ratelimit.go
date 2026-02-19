@@ -1,3 +1,4 @@
+// Package middleware provides HTTP middleware components for NeuraTrade.
 package middleware
 
 import (
@@ -14,33 +15,38 @@ import (
 )
 
 const (
-	// RateLimitHeader is the header name for rate limit info
+	// RateLimitHeader is the header name for rate limit info.
 	RateLimitHeader = "X-RateLimit-Limit"
-	// RateLimitRemainingHeader is the header name for remaining requests
+	// RateLimitRemainingHeader is the header name for remaining requests.
 	RateLimitRemainingHeader = "X-RateLimit-Remaining"
-	// RateLimitResetHeader is the header name for reset timestamp
+	// RateLimitResetHeader is the header name for reset timestamp.
 	RateLimitResetHeader = "X-RateLimit-Reset"
-	// RateLimitPolicyHeader is the header name for policy identifier
+	// RateLimitPolicyHeader is the header name for policy identifier.
 	RateLimitPolicyHeader = "X-RateLimit-Policy"
 )
 
-// RateLimitConfig defines rate limit configuration
+// RateLimitConfig defines rate limit configuration.
+// Controls request throttling behavior for API endpoints.
 type RateLimitConfig struct {
-	// Requests per window
+	// Requests per window (maximum allowed requests).
 	Requests int
-	// Window duration
+	// Window duration for rate limiting.
 	Window time.Duration
-	// Key function to extract rate limit key from context
+	// Key function to extract rate limit key from context.
 	KeyFunc func(*gin.Context) string
-	// Skip function to bypass rate limiting for certain requests
+	// Skip function to bypass rate limiting for certain requests.
 	SkipFunc func(*gin.Context) bool
-	// Alert threshold (percentage of limit)
+	// Alert threshold (percentage of limit) for warnings.
 	AlertThreshold float64
-	// Alert callback when threshold exceeded
+	// Alert callback when threshold exceeded.
 	OnAlert func(clientID string, usage float64)
 }
 
-// DefaultRateLimitConfig returns default configuration
+// DefaultRateLimitConfig returns default rate limit configuration.
+// Sets 100 requests per minute with IP-based key extraction.
+//
+// Returns:
+//   - RateLimitConfig: Default configuration.
 func DefaultRateLimitConfig() RateLimitConfig {
 	return RateLimitConfig{
 		Requests:       100,
@@ -57,13 +63,14 @@ func DefaultRateLimitConfig() RateLimitConfig {
 	}
 }
 
-// RateLimiter provides rate limiting middleware
+// RateLimiter provides rate limiting middleware.
+// Tracks request counts using Redis (with local fallback).
 type RateLimiter struct {
 	config RateLimitConfig
 	redis  *redis.Client
 	logger *zap.Logger
 
-	// Local tracking for non-Redis fallback
+	// Local tracking for non-Redis fallback.
 	mu       sync.RWMutex
 	localMap map[string]*rateLimitEntry
 }
@@ -73,7 +80,15 @@ type rateLimitEntry struct {
 	resetTime time.Time
 }
 
-// NewRateLimiter creates a new rate limiter
+// NewRateLimiter creates a new rate limiter.
+//
+// Parameters:
+//   - config: Rate limit configuration.
+//   - redisClient: Redis client for distributed rate limiting (optional).
+//   - logger: Logger for rate limit events.
+//
+// Returns:
+//   - *RateLimiter: Initialized rate limiter instance.
 func NewRateLimiter(config RateLimitConfig, redisClient *redis.Client, logger *zap.Logger) *RateLimiter {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -153,24 +168,24 @@ func (rl *RateLimiter) checkAndUpdateRedis(ctx context.Context, key string) (boo
 		local key = KEYS[1]
 		local limit = tonumber(ARGV[1])
 		local window = tonumber(ARGV[2])
-		
+
 		local current = redis.call("GET", key)
 		if current == false then
 			current = 0
 		else
 			current = tonumber(current)
 		end
-		
+
 		if current >= limit then
 			local ttl = redis.call("TTL", key)
 			return {0, limit - current, ttl}
 		end
-		
+
 		current = redis.call("INCR", key)
 		if current == 1 then
 			redis.call("EXPIRE", key, window)
 		end
-		
+
 		local ttl = redis.call("TTL", key)
 		return {1, limit - current, ttl}
 	`
@@ -214,6 +229,16 @@ func (rl *RateLimiter) checkAndUpdateLocal(key string) (bool, int, time.Time, er
 	defer rl.mu.Unlock()
 
 	now := time.Now()
+
+	// Periodic cleanup of expired entries (every 100 requests)
+	if len(rl.localMap) > 100 {
+		for k, entry := range rl.localMap {
+			if now.After(entry.resetTime) {
+				delete(rl.localMap, k)
+			}
+		}
+	}
+
 	entry, exists := rl.localMap[key]
 
 	if !exists || now.After(entry.resetTime) {

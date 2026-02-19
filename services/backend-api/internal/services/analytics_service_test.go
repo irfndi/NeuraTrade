@@ -2,13 +2,11 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
-	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 )
@@ -145,13 +143,6 @@ type analyticsQuerierFromDB struct {
 	db database.DBPool
 }
 
-func (a analyticsQuerierFromDB) Query(ctx context.Context, query string, args ...interface{}) (pgx.Rows, error) {
-	rows, err := a.db.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	if pgxRows, ok := rows.(database.PgxRows); ok {
-		return pgxRows.Rows, nil
-	}
-	return nil, fmt.Errorf("unexpected rows type %T", rows)
+func (a analyticsQuerierFromDB) Query(ctx context.Context, query string, args ...interface{}) (database.Rows, error) {
+	return a.db.Query(ctx, query, args...)
 }
