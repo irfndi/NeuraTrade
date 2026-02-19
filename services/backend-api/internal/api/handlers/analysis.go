@@ -320,17 +320,18 @@ func (h *AnalysisHandler) getOHLCVData(ctx context.Context, symbol, exchange, ti
 	}
 
 	// Try to get data from database first (market_data table)
+	twentyFourHoursAgo := time.Now().Add(-24 * time.Hour)
 	query := `
 		SELECT timestamp, bid as close, ask as open,
 		       GREATEST(bid, ask) as high, LEAST(bid, ask) as low, volume
 		FROM market_data
-		WHERE symbol = $1 AND exchange = $2
-		  AND timestamp > NOW() - INTERVAL '24 hours'
+		WHERE symbol = ? AND exchange = ?
+		  AND timestamp > ?
 		ORDER BY timestamp ASC
-		LIMIT $3
+		LIMIT ?
 	`
 
-	rows, err := h.db.Query(ctx, query, symbol, exchange, limit)
+	rows, err := h.db.Query(ctx, query, symbol, exchange, twentyFourHoursAgo, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query OHLCV data: %w", err)
 	}
@@ -362,15 +363,16 @@ func (h *AnalysisHandler) simulateOHLCVFromTickers(ctx context.Context, symbol, 
 		return nil, fmt.Errorf("failed to query ticker data: database connection is nil")
 	}
 
+	sixHoursAgo := time.Now().Add(-6 * time.Hour)
 	query := `
 		SELECT timestamp, bid, ask, volume
 		FROM market_data
-		WHERE symbol = $1 AND exchange = $2
-		  AND timestamp > NOW() - INTERVAL '6 hours'
+		WHERE symbol = ? AND exchange = ?
+		  AND timestamp > ?
 		ORDER BY timestamp ASC
 	`
 
-	rows, err := h.db.Query(ctx, query, symbol, exchange)
+	rows, err := h.db.Query(ctx, query, symbol, exchange, sixHoursAgo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query ticker data: %w", err)
 	}
@@ -694,14 +696,15 @@ func (h *AnalysisHandler) getAllTradingSignals(ctx context.Context, timeframe st
 	}
 
 	// Get active trading pairs from recent market data
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
 	query := `
 		SELECT DISTINCT symbol, exchange
 		FROM market_data
-		WHERE timestamp > NOW() - INTERVAL '1 hour'
+		WHERE timestamp > ?
 		LIMIT 20
 	`
 
-	rows, err := h.db.Query(ctx, query)
+	rows, err := h.db.Query(ctx, query, oneHourAgo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active pairs: %w", err)
 	}

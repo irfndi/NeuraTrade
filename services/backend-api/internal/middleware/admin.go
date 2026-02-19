@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"log"
 	"net/http"
@@ -25,7 +26,16 @@ func generateSecureKey(length int) string {
 	if _, err := rand.Read(bytes); err != nil {
 		// Fallback to a less secure but functional key in edge cases
 		log.Printf("WARNING: Failed to generate secure random key: %v", err)
-		return "fallback-key-" + hex.EncodeToString([]byte(os.Getenv("HOSTNAME")))[:20]
+		hostname := os.Getenv("HOSTNAME")
+		if hostname == "" {
+			hostname = "unknown-host"
+		}
+		encoded := hex.EncodeToString([]byte(hostname))
+		// Ensure we don't panic if hostname is too short
+		if len(encoded) < 20 {
+			return "fallback-key-" + encoded
+		}
+		return "fallback-key-" + encoded[:20]
 	}
 	return hex.EncodeToString(bytes)
 }
@@ -55,8 +65,7 @@ func NewAdminMiddleware() *AdminMiddleware {
 		}
 		// Generate temporary key for non-production environments
 		apiKey = generateSecureKey(32)
-		// #nosec G101 -- Temporary key generated for non-production use only
-		log.Printf("INFO: Generated temporary ADMIN_API_KEY for non-production environment")
+		log.Println("INFO: Generated temporary admin key for non-production environment")
 	}
 
 	// Prevent use of default/example keys in any environment
@@ -84,6 +93,7 @@ func NewAdminMiddleware() *AdminMiddleware {
 
 // RequireAdminAuth middleware validates admin API keys.
 // It checks Authorization and X-API-Key headers.
+// Uses constant-time comparison to prevent timing attacks.
 //
 // Returns:
 //
@@ -97,19 +107,20 @@ func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 		if authHeader != "" {
 			tokenParts := strings.Split(authHeader, " ")
 			if len(tokenParts) == 2 && tokenParts[0] == "Bearer" {
-				if tokenParts[1] == am.apiKey {
+				// Use constant-time comparison to prevent timing attacks
+				if subtle.ConstantTimeCompare([]byte(tokenParts[1]), []byte(am.apiKey)) == 1 {
 					c.Next()
 					return
 				}
 				// Log invalid Bearer token (without exposing actual keys)
-				log.Printf("WARN: Admin auth failed for %s - invalid Bearer token (token length: %d, expected: %d)",
-					requestPath, len(tokenParts[1]), len(am.apiKey))
+				log.Printf("WARN: Admin auth failed for %s - invalid Bearer token", requestPath)
 			}
 		}
 
 		// Check for API key in X-API-Key header
 		apiKeyHeader := c.GetHeader("X-API-Key")
-		if apiKeyHeader == am.apiKey {
+		// Use constant-time comparison to prevent timing attacks
+		if subtle.ConstantTimeCompare([]byte(apiKeyHeader), []byte(am.apiKey)) == 1 {
 			c.Next()
 			return
 		}
@@ -118,8 +129,7 @@ func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 		if apiKeyHeader == "" {
 			log.Printf("WARN: Admin auth failed for %s - no X-API-Key header provided", requestPath)
 		} else {
-			log.Printf("WARN: Admin auth failed for %s - X-API-Key mismatch (provided length: %d, expected: %d)",
-				requestPath, len(apiKeyHeader), len(am.apiKey))
+			log.Printf("WARN: Admin auth failed for %s - X-API-Key mismatch", requestPath)
 		}
 
 		// Query parameter authentication removed for security reasons

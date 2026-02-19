@@ -241,7 +241,8 @@ func TestAuthMiddleware_RequireAuth(t *testing.T) {
 
 func TestAuthMiddleware_OptionalAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	am := NewAuthMiddleware("test-secret")
+	// Use valid 32+ character secret for tests
+	am := NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	// Helper function to create test router
 	createTestRouter := func() *gin.Engine {
@@ -343,7 +344,7 @@ func TestAuthMiddleware_OptionalAuth(t *testing.T) {
 
 func TestAuthMiddleware_MiddlewareChain(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	am := NewAuthMiddleware("test-secret")
+	am := NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	// Test middleware chain execution order
 	t.Run("middleware chain execution", func(t *testing.T) {

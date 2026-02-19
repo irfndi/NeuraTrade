@@ -379,8 +379,9 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 	}
 
 	// Get latest funding rates from database for each exchange-symbol combination
+	// Note: funding_rates table may not exist in all database setups, so we handle errors gracefully
 	query := `
-		SELECT DISTINCT ON (e.name, tp.symbol) 
+		SELECT DISTINCT ON (e.name, tp.symbol)
 			e.name as exchange_name,
 			tp.symbol,
 			fr.funding_rate,
@@ -396,7 +397,8 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 
 	rows, err := c.db.Query(ctx, query)
 	if err != nil {
-		return err
+		c.logger.Warn("Failed to warm funding rates cache - table may not exist", "error", err)
+		return nil
 	}
 	defer rows.Close()
 

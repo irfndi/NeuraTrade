@@ -123,13 +123,13 @@ func setupAIHandlerTest() (*AIHandler, *mockAIRegistry) {
 			{ID: "anthropic", Name: "Anthropic"},
 		},
 	}
-	handler := NewAIHandler(mock)
+	handler := NewAIHandler(mock, nil)
 	return handler, mock
 }
 
 func TestNewAIHandler(t *testing.T) {
 	mock := &mockAIRegistry{}
-	handler := NewAIHandler(mock)
+	handler := NewAIHandler(mock, nil)
 	assert.NotNil(t, handler)
 	assert.NotNil(t, handler.registry)
 }
@@ -167,7 +167,7 @@ func TestAIHandler_GetModels_WithProviderFilter(t *testing.T) {
 func TestAIHandler_GetModels_RegistryError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mock := &mockAIRegistry{err: assert.AnError}
-	handler := NewAIHandler(mock)
+	handler := NewAIHandler(mock, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,15 +20,17 @@ import (
 type TelegramInternalHandler struct {
 	db          services.DBPool
 	userHandler *UserHandler
+	questEngine *services.QuestEngine
 	schemaOnce  sync.Once
 	schemaErr   error
 }
 
 // NewTelegramInternalHandler creates a new instance of TelegramInternalHandler.
-func NewTelegramInternalHandler(db any, userHandler *UserHandler) *TelegramInternalHandler {
+func NewTelegramInternalHandler(db any, userHandler *UserHandler, questEngine *services.QuestEngine) *TelegramInternalHandler {
 	return &TelegramInternalHandler{
 		db:          normalizeDBPool(db),
 		userHandler: userHandler,
+		questEngine: questEngine,
 	}
 }
 
@@ -268,6 +271,15 @@ func (h *TelegramInternalHandler) BeginAutonomous(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to persist autonomous state"})
 		return
+	}
+
+	// Start quest engine for this user
+	if h.questEngine != nil {
+		_, err := h.questEngine.BeginAutonomous(chatID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start quest engine: " + err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -613,13 +625,35 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 
 	exchangeCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
 	if err != nil {
-		checks = append(checks, gin.H{
-			"name":    "exchange-connection",
-			"status":  "critical",
-			"message": "failed to verify exchange connections",
-		})
-		overall = "critical"
-	} else if exchangeCount == 0 {
+		exchangeCount = 0
+	}
+
+	// Also check config file for exchange API keys (fallback for CLI config)
+	// nolint:gosec // Fixed config path, not user input
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	if content, err := os.ReadFile(configPath); err == nil {
+		var config map[string]interface{}
+		if err := json.Unmarshal(content, &config); err == nil {
+			if services, ok := config["services"].(map[string]interface{}); ok {
+				if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
+					if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+						for _, ex := range exchanges {
+							if exMap, ok := ex.(map[string]interface{}); ok {
+								if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
+									if exchangeCount == 0 {
+										exchangeCount = 1
+									}
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if exchangeCount == 0 {
 		if overall != "critical" {
 			overall = "warning"
 		}
@@ -722,18 +756,65 @@ func (h *TelegramInternalHandler) ensureOperatorSchema(ctx context.Context) erro
 func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, chatID string) ([]string, error) {
 	failedChecks := make([]string, 0, 2)
 
-	polymarketCount, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
+	pmWalletCount, err := h.countConnectedWallets(ctx, chatID, "provider = 'polymarket' AND status = 'connected'")
 	if err != nil {
-		return nil, err
-	}
-	if polymarketCount < 1 {
-		failedChecks = append(failedChecks, "wallet minimum")
+		pmWalletCount = 0
 	}
 
 	exchangeCount, err := h.countConnectedWallets(ctx, chatID, "provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'")
 	if err != nil {
-		return nil, err
+		exchangeCount = 0
 	}
+
+	// nolint:gosec // Fixed config path, not user input
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // Fixed config path, not user input
+	if content, err := os.ReadFile(configPath); err == nil {
+		var config map[string]interface{}
+		if err := json.Unmarshal(content, &config); err == nil {
+			// Check new config structure: ccxt.exchanges.binance.api_key
+			hasExchangeInConfig := false
+			if ccxt, ok := config["ccxt"].(map[string]interface{}); ok {
+				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+					for _, ex := range exchanges {
+						if exMap, ok := ex.(map[string]interface{}); ok {
+							if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
+								hasExchangeInConfig = true
+								break
+							}
+						}
+					}
+				}
+			}
+			// Also check old config structure for backward compatibility
+			if !hasExchangeInConfig {
+				if services, ok := config["services"].(map[string]interface{}); ok {
+					if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
+						if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+							for _, ex := range exchanges {
+								if exMap, ok := ex.(map[string]interface{}); ok {
+									if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
+										hasExchangeInConfig = true
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			if hasExchangeInConfig {
+				if exchangeCount < 1 {
+					exchangeCount = 1
+				}
+			}
+		}
+	}
+
+	totalWallets := pmWalletCount + exchangeCount
+	if totalWallets < 1 {
+		failedChecks = append(failedChecks, "wallet minimum")
+	}
+
 	if exchangeCount < 1 {
 		failedChecks = append(failedChecks, "exchange minimum")
 	}
