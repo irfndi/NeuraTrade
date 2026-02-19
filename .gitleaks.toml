@@ -4,14 +4,6 @@ title = "NeuraTrade Gitleaks Config"
 useDefault = true
 
 [allowlist]
-# Allowlist specific commits that introduced secrets (now fixed)
-commits = [
-    "e88c8f3691ca2d99c6aaa71ca9c863524d13dd12", # test-api.ts hardcoded secret
-    "bbbac84171877ea29858b45cfe0b3c9f75cfcccd", # neuratrade.json secrets
-    "fceccc8df0bbc57f20aa51a2a4b36978b098394c", # QWEN.md and workflow files added
-    "1f146ad72b004338f2144d335eeeb36c9a3833a1", # Latest critical fixes (install.sh, admin.go, sqlite_schema.sql)
-]
-
 paths = [
     '''_test\.go$''',
     '''\.test\.ts$''',

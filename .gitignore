@@ -189,4 +189,4 @@ _temporary/
 
 .qwen/
 gha-creds-*.json
-/dist
+dist/
