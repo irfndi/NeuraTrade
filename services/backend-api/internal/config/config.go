@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -50,6 +51,10 @@ type Config struct {
 	// Wallet holds configuration for wallet validation.
 	Wallet     WalletValidatorConfig `mapstructure:"wallet"`
 	Indicators IndicatorsConfig      `mapstructure:"indicators"`
+	// AI holds configuration for AI-driven trading.
+	AI AIConfig `mapstructure:"ai"`
+	// Features holds feature flags.
+	Features FeaturesConfig `mapstructure:"features"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -327,14 +332,53 @@ type IndicatorsConfig struct {
 
 // Load reads the configuration from the config file and environment variables.
 //
+// The config is loaded from the following locations (in order of precedence):
+//  1. ~/.neuratrade/config.json (local user config - highest priority for user overrides)
+//  2. ./config.yml (project config)
+//  3. Environment variables (highest priority)
+//
 // Returns:
 //
 //	*Config: The loaded configuration structure.
 //	error: An error if the configuration could not be parsed.
+
+// AIConfig holds AI-driven trading configuration.
+type AIConfig struct {
+	Provider      string  `mapstructure:"provider"`
+	Model         string  `mapstructure:"model"`
+	APIKey        string  `mapstructure:"api_key"`
+	BaseURL       string  `mapstructure:"base_url"`
+	Temperature   float64 `mapstructure:"temperature"`
+	MaxTokens     int     `mapstructure:"max_tokens"`
+	MinConfidence float64 `mapstructure:"min_confidence"`
+	DailyBudget   float64 `mapstructure:"daily_budget"`
+}
+
+// FeaturesConfig holds feature flags.
+type FeaturesConfig struct {
+	EnableAI          bool `mapstructure:"enable_ai"`
+	EnableAIScalping  bool `mapstructure:"enable_ai_scalping"`
+	EnableAISignals   bool `mapstructure:"enable_ai_signals"`
+	EnableAIArbitrage bool `mapstructure:"enable_ai_arbitrage"`
+}
+
 func Load() (*Config, error) {
+	// First: Add ~/.neuratrade/ config path (user local config)
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
+	}
+
+	// Second: Add project config path
 	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
+	// Don't set explicit config type - let viper auto-detect from file extension
 	viper.AddConfigPath(".")
+
+	// Also support JSON config from ~/.neuratrade/ (only if homeDir is available)
+	// Note: viper.AddConfigPath is cumulative, so this adds to the search paths
+	if err == nil {
+		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
+	}
 
 	// Set default values
 	setDefaults()
@@ -372,6 +416,10 @@ func Load() (*Config, error) {
 	// Bind Telegram service environment variables
 	_ = viper.BindEnv("telegram.service_url", "TELEGRAM_SERVICE_URL")
 	_ = viper.BindEnv("telegram.grpc_address", "TELEGRAM_GRPC_ADDRESS")
+	_ = viper.BindEnv("backfill.enabled", "BACKFILL_ENABLED")
+	_ = viper.BindEnv("arbitrage.enabled", "ARBITRAGE_ENABLED")
+	_ = viper.BindEnv("features.enable_ai_arbitrage", "ENABLE_AI_ARBITRAGE")
+	_ = viper.BindEnv("features.enable_ai_signals", "ENABLE_AI_SIGNALS")
 
 	// Read config file
 	if err := viper.ReadInConfig(); err != nil {
@@ -417,8 +465,11 @@ func setDefaults() {
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.allowed_origins", []string{"http://localhost:3000"})
 
-	// Set database defaults
-	viper.SetDefault("database.driver", "postgres")
+	// Bind PORT env to server.port
+	_ = viper.BindEnv("server.port", "PORT")
+
+	// Set database defaults - SQLite by default
+	viper.SetDefault("database.driver", "sqlite")
 	viper.SetDefault("database.host", "localhost")
 	viper.SetDefault("database.port", 5432)
 	viper.SetDefault("database.user", "postgres")
@@ -431,7 +482,7 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("database.conn_max_lifetime", "300s")
 	viper.SetDefault("database.conn_max_idle_time", "60s")
-	viper.SetDefault("database.sqlite_path", "data/neuratrade.db")
+	viper.SetDefault("database.sqlite_path", "neuratrade.db")
 	viper.SetDefault("database.sqlite_vector_extension_path", "")
 
 	// Redis
@@ -506,7 +557,7 @@ func setDefaults() {
 	viper.SetDefault("cleanup.enable_smart_cleanup", true)
 
 	// Backfill
-	viper.SetDefault("backfill.enabled", true)
+	viper.SetDefault("backfill.enabled", false)
 	viper.SetDefault("backfill.backfill_hours", 6)
 	viper.SetDefault("backfill.min_data_threshold_hours", 4)
 	viper.SetDefault("backfill.batch_size", 5)
@@ -565,6 +616,22 @@ func setDefaults() {
 	viper.SetDefault("wallet.minimum_exchange_connections", 1)
 
 	viper.SetDefault("indicators.provider", "talib")
+
+	// AI config defaults
+	viper.SetDefault("ai.provider", "minimax")
+	viper.SetDefault("ai.model", "")
+	viper.SetDefault("ai.api_key", "")
+	viper.SetDefault("ai.base_url", "https://api.minimax.chat/v1")
+	viper.SetDefault("ai.temperature", 0.7)
+	viper.SetDefault("ai.max_tokens", 4096)
+	viper.SetDefault("ai.min_confidence", 0.7)
+	viper.SetDefault("ai.daily_budget", 10.0)
+
+	// Features config defaults
+	viper.SetDefault("features.enable_ai", true)
+	viper.SetDefault("features.enable_ai_scalping", true)
+	viper.SetDefault("features.enable_ai_signals", false)
+	viper.SetDefault("features.enable_ai_arbitrage", false)
 }
 
 // GetServiceURL returns the CCXT service URL.

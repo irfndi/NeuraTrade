@@ -184,6 +184,8 @@ func (s *Service) FetchMarketData(ctx context.Context, exchanges []string, symbo
 			Ask:          tickerData.Ticker.Ask,
 			AskVolume:    decimal.Zero, // CCXT doesn't provide ask volume in ticker, would need order book
 			Price:        tickerData.Ticker.Last,
+			High24h:      tickerData.Ticker.High,
+			Low24h:       tickerData.Ticker.Low,
 			Volume:       tickerData.Ticker.Volume,
 			Timestamp:    tickerData.Ticker.Timestamp.Time(),
 		}
@@ -215,6 +217,10 @@ func (s *Service) FetchSingleTicker(ctx context.Context, exchange, symbol string
 		ExchangeName: resp.Exchange,
 		Symbol:       resp.Ticker.Symbol,
 		Price:        resp.Ticker.Last,
+		Bid:          resp.Ticker.Bid,
+		Ask:          resp.Ticker.Ask,
+		High24h:      resp.Ticker.High,
+		Low24h:       resp.Ticker.Low,
 		Volume:       resp.Ticker.Volume,
 		Timestamp:    resp.Ticker.Timestamp.Time(),
 	}, nil
@@ -697,4 +703,8 @@ func (s *Service) RefreshExchanges(ctx context.Context) (*ExchangeManagementResp
 //	error: Error if operation fails.
 func (s *Service) AddExchange(ctx context.Context, exchange string) (*ExchangeManagementResponse, error) {
 	return s.client.AddExchange(ctx, exchange)
+}
+
+func (s *Service) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
+	return s.client.FetchBalance(ctx, exchange)
 }

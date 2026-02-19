@@ -283,10 +283,19 @@ func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersR
 func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		// Safe int to int32 conversion with bounds checking - nolint:gosec
+		var safeLimit int32
+		if limit <= 0 {
+			safeLimit = 0
+		} else if limit >= math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		} else {
+			safeLimit = int32(limit)
+		}
 		resp, err := c.grpcClient.GetOrderBook(ctx, &pb.GetOrderBookRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
-			Limit:    toSafeInt32(limit),
+			Limit:    safeLimit,
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcOrderBookResponse(resp), nil
@@ -313,10 +322,19 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		// Safe int to int32 conversion with bounds checking - nolint:gosec
+		var safeLimit int32
+		if limit <= 0 {
+			safeLimit = 0
+		} else if limit >= math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		} else {
+			safeLimit = int32(limit)
+		}
 		resp, err := c.grpcClient.GetTrades(ctx, &pb.GetTradesRequest{
 			Exchange: exchange,
 			Symbol:   symbol,
-			Limit:    toSafeInt32(limit),
+			Limit:    safeLimit,
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcTradesResponse(resp), nil
@@ -343,11 +361,20 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
 	// Try gRPC first
 	if c.IsGRPCEnabled() {
+		// Safe int to int32 conversion with bounds checking - nolint:gosec
+		var safeLimit int32
+		if limit <= 0 {
+			safeLimit = 0
+		} else if limit >= math.MaxInt32 {
+			safeLimit = math.MaxInt32
+		} else {
+			safeLimit = int32(limit)
+		}
 		resp, err := c.grpcClient.GetOHLCV(ctx, &pb.GetOHLCVRequest{
 			Exchange:  exchange,
 			Symbol:    symbol,
 			Timeframe: timeframe,
-			Limit:     toSafeInt32(limit),
+			Limit:     safeLimit,
 		})
 		if err == nil && resp.Error == "" {
 			return c.convertGrpcOHLCVResponse(resp), nil
@@ -627,7 +654,7 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 	req.Header.Set("User-Agent", "NeuraTrade/1.0")
 
 	// Add API key for admin endpoints
-	if strings.Contains(path, "/admin/") && c.adminAPIKey != "" {
+	if (strings.Contains(path, "/admin/") || strings.Contains(path, "/balance/") || strings.Contains(path, "/order")) && c.adminAPIKey != "" {
 		req.Header.Set("X-API-Key", c.adminAPIKey)
 	}
 
@@ -781,17 +808,6 @@ func (c *Client) Close() error {
 //	string: The base URL.
 func (c *Client) BaseURL() string {
 	return c.baseURL
-}
-
-func toSafeInt32(value int) int32 {
-	if value <= 0 {
-		return 0
-	}
-	if value > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	// #nosec G115 -- Value is bounds-checked above to prevent overflow
-	return int32(value)
 }
 
 // decimalFromString safely converts a string to decimal.Decimal.
@@ -1252,4 +1268,23 @@ type SlippageEstimate struct {
 	AvgBuyPrice  decimal.Decimal `json:"avg_buy_price"`
 	AvgSellPrice decimal.Decimal `json:"avg_sell_price"`
 	IsFillable   bool            `json:"is_fillable"`
+}
+
+type BalanceResponse struct {
+	Exchange  string                 `json:"exchange"`
+	Timestamp time.Time              `json:"timestamp"`
+	Total     map[string]float64     `json:"total"`
+	Free      map[string]float64     `json:"free"`
+	Used      map[string]float64     `json:"used"`
+	Raw       map[string]interface{} `json:"raw,omitempty"`
+}
+
+func (c *Client) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
+	path := fmt.Sprintf("/api/balance/%s", exchange)
+	var response BalanceResponse
+	err := c.makeRequest(ctx, "GET", path, nil, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch balance: %w", err)
+	}
+	return &response, nil
 }
