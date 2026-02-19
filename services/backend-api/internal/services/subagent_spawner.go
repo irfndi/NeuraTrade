@@ -9,9 +9,57 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/telemetry"
+	"github.com/irfndi/neuratrade/pkg/indicators"
 	"github.com/shopspring/decimal"
 )
+
+// SubagentSpawnerConfig holds configuration for the subagent spawner.
+type SubagentSpawnerConfig struct {
+	// DefaultExchange is the default exchange to use for market data
+	DefaultExchange string
+	// DefaultTimeframe is the default timeframe for analysis
+	DefaultTimeframe string
+	// DefaultSymbol is the default symbol for analysis
+	DefaultSymbol string
+	// IndicatorConfig is the configuration for indicator calculations
+	IndicatorConfig *indicators.IndicatorConfig
+	// PaperTrading enables paper trading mode (simulated execution)
+	PaperTrading bool
+}
+
+// DefaultSubagentSpawnerConfig returns sensible defaults.
+func DefaultSubagentSpawnerConfig() SubagentSpawnerConfig {
+	return SubagentSpawnerConfig{
+		DefaultExchange:  "binance",
+		DefaultTimeframe: "1h",
+		DefaultSymbol:    "BTC/USDT",
+		IndicatorConfig:  indicators.DefaultIndicatorConfig(),
+		PaperTrading:     false,
+	}
+}
+
+// MarketDataProvider defines the interface for fetching market data.
+type MarketDataProvider interface {
+	// FetchOHLCV retrieves OHLCV data for analysis
+	FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*ccxt.OHLCVResponse, error)
+}
+
+// OrderExecutorAdapter defines the interface for executing orders.
+type OrderExecutorAdapter interface {
+	// PlaceOrder places an order and returns the order ID
+	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
+}
+
+// PaperExecutorAdapter simulates order execution for paper trading mode.
+type PaperExecutorAdapter struct{}
+
+// PlaceOrder simulates order placement for paper trading.
+func (p *PaperExecutorAdapter) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
+	// Generate a simulated order ID (paper trading mode)
+	return fmt.Sprintf("paper-%s", uuid.New().String()[:8]), nil
+}
 
 // SubagentResult represents the result of a subagent execution.
 type SubagentResult struct {
@@ -35,26 +83,48 @@ type SubagentOptions struct {
 
 // SubagentSpawner manages spawning and lifecycle of subagents.
 type SubagentSpawner struct {
-	mu             sync.RWMutex
-	activeAgents   map[string]context.CancelFunc
-	resultCh       chan SubagentResult
-	logger         *slog.Logger
-	defaultTimeout time.Duration
-	maxConcurrent  int
-	currentRunning atomic.Int32
-	wg             sync.WaitGroup
-	closeOnce      sync.Once
-	closed         atomic.Bool
+	mu                sync.RWMutex
+	activeAgents      map[string]context.CancelFunc
+	resultCh          chan SubagentResult
+	logger            *slog.Logger
+	defaultTimeout    time.Duration
+	maxConcurrent     int
+	currentRunning    atomic.Int32
+	wg                sync.WaitGroup
+	closeOnce         sync.Once
+	closed            atomic.Bool
+	config            SubagentSpawnerConfig
+	marketData        MarketDataProvider
+	indicatorProvider indicators.IndicatorProvider
+	orderExecutor     OrderExecutorAdapter
 }
 
-// NewSubagentSpawner creates a new subagent spawner.
-func NewSubagentSpawner(defaultTimeout time.Duration, maxConcurrent int) *SubagentSpawner {
+// NewSubagentSpawner creates a new subagent spawner with dependencies.
+func NewSubagentSpawner(
+	defaultTimeout time.Duration,
+	maxConcurrent int,
+	config SubagentSpawnerConfig,
+	marketData MarketDataProvider,
+	indicatorProvider indicators.IndicatorProvider,
+	orderExecutor OrderExecutorAdapter,
+) *SubagentSpawner {
+	if orderExecutor == nil {
+		if config.PaperTrading {
+			orderExecutor = &PaperExecutorAdapter{}
+		} else {
+			orderExecutor = &PaperExecutorAdapter{}
+		}
+	}
 	return &SubagentSpawner{
-		activeAgents:   make(map[string]context.CancelFunc),
-		resultCh:       make(chan SubagentResult, 100),
-		logger:         telemetry.Logger().With("component", "subagent_spawner"),
-		defaultTimeout: defaultTimeout,
-		maxConcurrent:  maxConcurrent,
+		activeAgents:      make(map[string]context.CancelFunc),
+		resultCh:          make(chan SubagentResult, 100),
+		logger:            telemetry.Logger().With("component", "subagent_spawner"),
+		defaultTimeout:    defaultTimeout,
+		maxConcurrent:     maxConcurrent,
+		config:            config,
+		marketData:        marketData,
+		indicatorProvider: indicatorProvider,
+		orderExecutor:     orderExecutor,
 	}
 }
 
@@ -309,42 +379,8 @@ func (s *SubagentSpawner) unregisterAgent(agentID string) {
 	delete(s.activeAgents, agentID)
 }
 
-// runAnalystAgent runs the analyst agent logic.
-// TODO: Replace hardcoded AnalystSignal values with live market data
+// runAnalystAgent runs the analyst agent logic with live market data.
 func (s *SubagentSpawner) runAnalystAgent(ctx context.Context, agent *AnalystAgent, symbol string) SubagentResult {
-	// Use the existing AnalystAgent.Analyze method
-	// Create some sample signals for the analysis
-	signals := []AnalystSignal{
-		{
-			Name:        "rsi",
-			Value:       0.65,
-			Weight:      0.3,
-			Direction:   DirectionBullish,
-			Description: "RSI showing oversold conditions",
-		},
-		{
-			Name:        "macd",
-			Value:       0.5,
-			Weight:      0.3,
-			Direction:   DirectionBullish,
-			Description: "MACD crossing above signal line",
-		},
-		{
-			Name:        "volume",
-			Value:       0.7,
-			Weight:      0.2,
-			Direction:   DirectionNeutral,
-			Description: "Volume spike detected",
-		},
-		{
-			Name:        "trend",
-			Value:       0.6,
-			Weight:      0.2,
-			Direction:   DirectionBullish,
-			Description: "Uptrend detected",
-		},
-	}
-
 	select {
 	case <-ctx.Done():
 		return SubagentResult{
@@ -352,19 +388,204 @@ func (s *SubagentSpawner) runAnalystAgent(ctx context.Context, agent *AnalystAge
 			Error:   ctx.Err(),
 		}
 	default:
-		// Perform analysis using the actual AnalystAgent
-		analysis, err := agent.Analyze(ctx, symbol, AnalystRoleTechnical, signals)
-		if err != nil {
-			return SubagentResult{
-				Success: false,
-				Error:   err,
+	}
+
+	exchange := s.config.DefaultExchange
+	timeframe := s.config.DefaultTimeframe
+
+	ohlcv, err := s.fetchLiveMarketData(ctx, exchange, symbol, timeframe, 100)
+	if err != nil {
+		s.logger.Warn("Failed to fetch live market data, using fallback", "error", err)
+		return s.runAnalystAgentFallback(ctx, agent, symbol)
+	}
+
+	signals := s.calculateLiveSignals(ctx, ohlcv)
+	analysis, err := agent.Analyze(ctx, symbol, AnalystRoleTechnical, signals)
+	if err != nil {
+		return SubagentResult{
+			Success: false,
+			Error:   err,
+		}
+	}
+
+	return SubagentResult{
+		Success: true,
+		Data:    analysis,
+	}
+}
+
+func (s *SubagentSpawner) fetchLiveMarketData(ctx context.Context, exchange, symbol, timeframe string, limit int) (*indicators.OHLCVData, error) {
+	if s.marketData == nil {
+		return nil, fmt.Errorf("market data provider not configured")
+	}
+
+	resp, err := s.marketData.FetchOHLCV(ctx, exchange, symbol, timeframe, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OHLCV: %w", err)
+	}
+
+	if len(resp.OHLCV) == 0 {
+		return nil, fmt.Errorf("no OHLCV data returned")
+	}
+
+	ohlcvData := &indicators.OHLCVData{
+		Symbol:    symbol,
+		Exchange:  exchange,
+		Timeframe: timeframe,
+	}
+
+	for _, ohlcv := range resp.OHLCV {
+		ohlcvData.Timestamps = append(ohlcvData.Timestamps, ohlcv.Timestamp)
+		ohlcvData.Open = append(ohlcvData.Open, ohlcv.Open)
+		ohlcvData.High = append(ohlcvData.High, ohlcv.High)
+		ohlcvData.Low = append(ohlcvData.Low, ohlcv.Low)
+		ohlcvData.Close = append(ohlcvData.Close, ohlcv.Close)
+		ohlcvData.Volume = append(ohlcvData.Volume, ohlcv.Volume)
+	}
+
+	return ohlcvData, nil
+}
+
+func (s *SubagentSpawner) calculateLiveSignals(ctx context.Context, ohlcv *indicators.OHLCVData) []AnalystSignal {
+	var signals []AnalystSignal
+
+	if s.indicatorProvider != nil && len(ohlcv.Close) >= 14 {
+		rsiValues := s.indicatorProvider.RSI(ohlcv.Close, 14)
+		if len(rsiValues) > 0 {
+			rsi := rsiValues[len(rsiValues)-1]
+			rsiFloat, _ := rsi.Float64()
+			var direction SignalDirection
+			if rsiFloat < 30 {
+				direction = DirectionBullish
+			} else if rsiFloat > 70 {
+				direction = DirectionBearish
+			} else {
+				direction = DirectionNeutral
 			}
+			signals = append(signals, AnalystSignal{
+				Name:        "rsi",
+				Value:       rsiFloat,
+				Weight:      0.3,
+				Direction:   direction,
+				Description: fmt.Sprintf("RSI: %.2f", rsiFloat),
+			})
 		}
 
-		return SubagentResult{
-			Success: true,
-			Data:    analysis,
+		macd, signal, _ := s.indicatorProvider.MACD(ohlcv.Close, 12, 26, 9)
+		if len(macd) > 0 && len(signal) > 0 {
+			macdVal := macd[len(macd)-1]
+			sigVal := signal[len(signal)-1]
+			macdFloat, _ := macdVal.Sub(sigVal).Float64()
+			var direction SignalDirection
+			if macdFloat > 0 {
+				direction = DirectionBullish
+			} else if macdFloat < 0 {
+				direction = DirectionBearish
+			} else {
+				direction = DirectionNeutral
+			}
+			signals = append(signals, AnalystSignal{
+				Name:        "macd",
+				Value:       macdFloat,
+				Weight:      0.3,
+				Direction:   direction,
+				Description: fmt.Sprintf("MACD histogram: %.2f", macdFloat),
+			})
 		}
+
+		if len(ohlcv.Volume) >= 2 {
+			volCurrent := ohlcv.Volume[len(ohlcv.Volume)-1]
+			volPrev := ohlcv.Volume[len(ohlcv.Volume)-2]
+			volRatio, _ := volCurrent.Div(volPrev).Float64()
+			var direction SignalDirection
+			if volRatio > 1.5 {
+				direction = DirectionBullish
+			} else if volRatio < 0.5 {
+				direction = DirectionBearish
+			} else {
+				direction = DirectionNeutral
+			}
+			signals = append(signals, AnalystSignal{
+				Name:        "volume",
+				Value:       volRatio,
+				Weight:      0.2,
+				Direction:   direction,
+				Description: fmt.Sprintf("Volume ratio: %.2fx", volRatio),
+			})
+		}
+	}
+
+	if len(ohlcv.Close) >= 20 {
+		emaFast := s.indicatorProvider.EMA(ohlcv.Close, 12)
+		emaSlow := s.indicatorProvider.EMA(ohlcv.Close, 26)
+		if len(emaFast) > 0 && len(emaSlow) > 0 {
+			current := emaFast[len(emaFast)-1]
+			slow := emaSlow[len(emaSlow)-1]
+			trendVal, _ := current.Div(slow).Float64()
+			var direction SignalDirection
+			if trendVal > 1.0 {
+				direction = DirectionBullish
+			} else if trendVal < 1.0 {
+				direction = DirectionBearish
+			} else {
+				direction = DirectionNeutral
+			}
+			signals = append(signals, AnalystSignal{
+				Name:        "trend",
+				Value:       trendVal,
+				Weight:      0.2,
+				Direction:   direction,
+				Description: fmt.Sprintf("EMA trend: %.4f", trendVal),
+			})
+		}
+	}
+
+	return signals
+}
+
+func (s *SubagentSpawner) runAnalystAgentFallback(ctx context.Context, agent *AnalystAgent, symbol string) SubagentResult {
+	signals := []AnalystSignal{
+		{
+			Name:        "rsi",
+			Value:       0.5,
+			Weight:      0.3,
+			Direction:   DirectionNeutral,
+			Description: "RSI unavailable",
+		},
+		{
+			Name:        "macd",
+			Value:       0.0,
+			Weight:      0.3,
+			Direction:   DirectionNeutral,
+			Description: "MACD unavailable",
+		},
+		{
+			Name:        "volume",
+			Value:       1.0,
+			Weight:      0.2,
+			Direction:   DirectionNeutral,
+			Description: "Volume unavailable",
+		},
+		{
+			Name:        "trend",
+			Value:       1.0,
+			Weight:      0.2,
+			Direction:   DirectionNeutral,
+			Description: "Trend unavailable",
+		},
+	}
+
+	analysis, err := agent.Analyze(ctx, symbol, AnalystRoleTechnical, signals)
+	if err != nil {
+		return SubagentResult{
+			Success: false,
+			Error:   err,
+		}
+	}
+
+	return SubagentResult{
+		Success: true,
+		Data:    analysis,
 	}
 }
 
@@ -404,8 +625,7 @@ func (s *SubagentSpawner) runRiskAgent(ctx context.Context, agent *RiskAgent) Su
 	}
 }
 
-// runExecutorAgent runs the executor agent logic.
-// TODO: This is simulation scaffolding - replace with real order placement before production
+// runExecutorAgent runs the executor agent logic with real order execution.
 func (s *SubagentSpawner) runExecutorAgent(ctx context.Context, agent *ExecutorAgent) SubagentResult {
 	select {
 	case <-ctx.Done():
@@ -414,20 +634,50 @@ func (s *SubagentSpawner) runExecutorAgent(ctx context.Context, agent *ExecutorA
 			Error:   ctx.Err(),
 		}
 	default:
-		// Simulate order execution
-		execution := map[string]interface{}{
-			"decision":      agent.Decision,
-			"order_id":      fmt.Sprintf("order-%s", uuid.New().String()[:8]),
-			"status":        "filled",
-			"filled_price":  agent.Decision.EntryPrice,
-			"filled_amount": agent.Decision.SizePercent,
-			"fees":          0.001,
-		}
+	}
 
+	if s.orderExecutor == nil {
 		return SubagentResult{
-			Success: true,
-			Data:    execution,
+			Success: false,
+			Error:   fmt.Errorf("order executor not configured"),
 		}
+	}
+
+	exchange := s.config.DefaultExchange
+	side := string(agent.Decision.Action)
+	orderType := "market"
+	amount := decimal.NewFromFloat(agent.Decision.SizePercent)
+	var price *decimal.Decimal
+
+	if agent.Decision.EntryPrice > 0 {
+		orderType = "limit"
+		priceVal := decimal.NewFromFloat(agent.Decision.EntryPrice)
+		price = &priceVal
+	}
+
+	orderID, err := s.orderExecutor.PlaceOrder(ctx, exchange, agent.Decision.Symbol, side, orderType, amount, price)
+	if err != nil {
+		return SubagentResult{
+			Success: false,
+			Error:   fmt.Errorf("order placement failed: %w", err),
+		}
+	}
+
+	execution := map[string]interface{}{
+		"decision":      agent.Decision,
+		"order_id":      orderID,
+		"exchange":      exchange,
+		"status":        "submitted",
+		"side":          side,
+		"order_type":    orderType,
+		"amount":        amount.String(),
+		"price":         price,
+		"paper_trading": s.config.PaperTrading,
+	}
+
+	return SubagentResult{
+		Success: true,
+		Data:    execution,
 	}
 }
 
