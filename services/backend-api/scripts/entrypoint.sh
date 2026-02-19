@@ -323,11 +323,16 @@ else
   fi
   log "Database is ready and authenticated."
 
-  if "$MIGRATE_SCRIPT"; then
-    log "Migrations completed successfully."
+  if [ -f "./database/migrate.sh" ]; then
+    ./database/migrate.sh run
+    if [ $? -eq 0 ]; then
+      log "Migrations completed successfully."
+    else
+      log "Migration failed. Exiting."
+      exit 1
+    fi
   else
-    log "Migration failed. Exiting."
-    exit 1
+    log "WARNING: Migration script not found, skipping..."
   fi
 fi
 

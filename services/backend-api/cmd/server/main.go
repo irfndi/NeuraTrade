@@ -86,7 +86,7 @@ func run() error {
 	// Initialize database
 	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
 	if driver == "" {
-		_ = "sqlite" // Default to SQLite (used for logging/debugging)
+		driver = "sqlite"
 	}
 
 	db, err := database.NewDatabaseConnection(&cfg.Database)
