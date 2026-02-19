@@ -17,7 +17,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { validator } from "hono/validator";
 // Use ESM import so test mocks can intercept ccxt module
 import ccxt from "ccxt";
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import os from "os";
 import {
@@ -680,39 +680,70 @@ app.post("/api/v1/exchanges", adminAuth, async (c) => {
       );
     }
 
-    // Save API keys if provided
+    // Update in-memory config
+    userConfig.enabled = [...new Set([...(userConfig.enabled || []), name])];
     if (api_key || secret) {
       userConfig.apiKeys = userConfig.apiKeys || {};
       userConfig.apiKeys[name] = {
         apiKey: api_key || "",
         secret: secret || "",
       };
-
-      // Persist to config file
-      const configDir = join(os.homedir(), ".neuratrade");
-      const configPath = join(configDir, "config.json");
-
-      // Ensure directory exists with secure permissions
-      if (!existsSync(configDir)) {
-        const { mkdirSync } = require("fs");
-        mkdirSync(configDir, { recursive: true, mode: 0o700 });
+      if (exchanges[name]) {
+        delete exchanges[name];
+        initializeExchange(name);
       }
-
-      const existingConfig = loadUserExchangeConfig();
-      const newConfig = {
-        ...existingConfig,
-        exchanges: {
-          enabled: [...new Set([...(existingConfig.enabled || []), name])],
-          api_keys: {
-            ...existingConfig.apiKeys,
-            [name]: { apiKey: api_key, secret },
-          },
-        },
-      };
-      writeFileSync(configPath, JSON.stringify(newConfig, null, 2), {
-        mode: 0o600,
-      });
     }
+
+    // Persist to config file
+    const configDir = join(os.homedir(), ".neuratrade");
+    const configPath = join(configDir, "config.json");
+
+    // Ensure directory exists with secure permissions
+    if (!existsSync(configDir)) {
+      mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    }
+
+    // Read existing full config to preserve unrelated sections
+    let existingFullConfig: any = {};
+    if (existsSync(configPath)) {
+      try {
+        existingFullConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+      } catch {
+        // Start fresh if parse fails
+      }
+    }
+
+    // Build ccxt.exchanges structure
+    const ccxtExchanges = existingFullConfig.ccxt?.exchanges || {};
+    const updatedCcxtExchanges = {
+      ...ccxtExchanges,
+      [name]: {
+        enabled: true,
+        ...(api_key && { api_key, api_secret: secret }),
+      },
+    };
+
+    const newConfig = {
+      ...existingFullConfig,
+      ccxt: {
+        ...existingFullConfig.ccxt,
+        exchanges: updatedCcxtExchanges,
+      },
+      // Maintain legacy format for backward compatibility
+      exchanges: {
+        enabled: userConfig.enabled,
+        api_keys: Object.fromEntries(
+          Object.entries(userConfig.apiKeys || {}).map(([k, v]) => [
+            k,
+            { apiKey: v.apiKey, secret: v.secret },
+          ]),
+        ),
+      },
+    };
+
+    writeFileSync(configPath, JSON.stringify(newConfig, null, 2), {
+      mode: 0o600,
+    });
 
     return c.json({
       success: true,
@@ -757,7 +788,8 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
     // Remove from active exchanges
     delete exchanges[name];
 
-    // Remove API keys if present
+    // Update in-memory config
+    userConfig.enabled = (userConfig.enabled || []).filter((e: string) => e !== name);
     if (userConfig.apiKeys?.[name]) {
       delete userConfig.apiKeys[name];
     }
@@ -768,22 +800,40 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
 
     // Ensure directory exists with secure permissions
     if (!existsSync(configDir)) {
-      const { mkdirSync } = require("fs");
       mkdirSync(configDir, { recursive: true, mode: 0o700 });
     }
 
-    const existingConfig = loadUserExchangeConfig();
+    // Read existing full config to preserve unrelated sections
+    let existingFullConfig: any = {};
+    if (existsSync(configPath)) {
+      try {
+        existingFullConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+      } catch {
+        // Continue with empty config if parse fails
+      }
+    }
+
+    // Remove from ccxt.exchanges
+    const ccxtExchanges = existingFullConfig.ccxt?.exchanges || {};
+    const { [name]: _, ...remainingCcxtExchanges } = ccxtExchanges;
+
+    // Remove from legacy exchanges.enabled
+    const legacyEnabled = existingFullConfig.exchanges?.enabled || [];
+    const updatedLegacyEnabled = legacyEnabled.filter((e: string) => e !== name);
+
+    // Remove from legacy exchanges.api_keys
+    const legacyApiKeys = existingFullConfig.exchanges?.api_keys || {};
+    const { [name]: __, ...remainingLegacyApiKeys } = legacyApiKeys;
+
     const newConfig = {
-      ...existingConfig,
+      ...existingFullConfig,
+      ccxt: {
+        ...existingFullConfig.ccxt,
+        exchanges: remainingCcxtExchanges,
+      },
       exchanges: {
-        enabled: (existingConfig.enabled || []).filter(
-          (e: string) => e !== name,
-        ),
-        api_keys: Object.fromEntries(
-          Object.entries(existingConfig.apiKeys || {}).filter(
-            ([k]) => k !== name,
-          ),
-        ),
+        enabled: updatedLegacyEnabled,
+        api_keys: remainingLegacyApiKeys,
       },
     };
     writeFileSync(configPath, JSON.stringify(newConfig, null, 2), {
@@ -860,10 +910,11 @@ app.get("/api/ticker/:exchange/*", async (c) => {
 
     for (let i = 0; i < retries; i++) {
       try {
-        // Fetch ticker and orderbook in parallel for speed
         const [ticker, orderbook] = await Promise.all([
           exchanges[exchange].fetchTicker(symbol),
-          exchanges[exchange].fetchOrderBook(symbol, 5).catch(() => null),
+          exchanges[exchange].fetchOrderBook(symbol, 5).catch(() =>
+            exchanges[exchange].fetchOrderBook(symbol).catch(() => null),
+          ),
         ]);
 
         // Add bid/ask from orderbook if not in ticker
@@ -1951,7 +2002,14 @@ app.get("/api/balance/:exchange", adminAuth, async (c) => {
 
     if (exchanges[exchange] && exchanges[exchange].apiKey) {
       const balance = await exchanges[exchange].fetchBalance();
-      return c.json({ exchange, balance, timestamp: new Date().toISOString() });
+      return c.json({
+        exchange,
+        total: balance.total || {},
+        free: balance.free || {},
+        used: balance.used || {},
+        raw: balance,
+        timestamp: new Date().toISOString(),
+      });
     }
 
     return c.json(
