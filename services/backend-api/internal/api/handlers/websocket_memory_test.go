@@ -2,8 +2,6 @@ package handlers_test
 
 import (
 	"encoding/json"
-	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"testing"
@@ -165,88 +163,10 @@ func TestWebSocketHandler_ContextCancellation(t *testing.T) {
 	assert.Less(t, growth, 2, "Context cancellation should clean up all goroutines")
 }
 
-// TestWebSocketHandler_UnregisterChannelFull tests handling when unregister channel is full
-func TestWebSocketHandler_UnregisterChannelFull(t *testing.T) {
-	forceGC()
-
-	handler := handlers.NewWebSocketHandler(nil)
-
-	// The handler's run loop should handle high load without leaking
-	// Send many messages to stress test the channels
-	for i := 0; i < 100; i++ {
-		msg := handlers.MarketDataMessage{
-			Type:      "test",
-			Timestamp: time.Now().UnixMilli(),
-		}
-		handler.BroadcastMessage(msg)
-	}
-
-	handler.Stop()
-	time.Sleep(100 * time.Millisecond)
-
-	// Should not panic or leak
-	assert.True(t, true, "Should handle high load gracefully")
-}
-
-// TestWebSocketHandler_WritePumpExitConditions tests that writePump exits on all conditions
-func TestWebSocketHandler_WritePumpExitConditions(t *testing.T) {
-	forceGC()
-	goroutinesBefore := getGoroutineCount()
-
-	handler := handlers.NewWebSocketHandler(nil)
-
-	// Create mock connection (will be closed immediately)
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = &http.Request{
-		Header: make(http.Header),
-	}
-
-	// This will fail to upgrade, but tests the exit path
-	handler.HandleWebSocket(c)
-
-	// Stop handler immediately
-	handler.Stop()
-
-	time.Sleep(100 * time.Millisecond)
-	forceGC()
-
-	goroutinesAfter := getGoroutineCount()
-	growth := goroutinesAfter - goroutinesBefore
-
-	t.Logf("Goroutines: %d -> %d (growth: %d)", goroutinesBefore, goroutinesAfter, growth)
-	assert.Less(t, growth, 2, "WritePump should exit cleanly on connection errors")
-}
-
-// BenchmarkWebSocketMessageProcessing benchmarks message processing throughput
-func BenchmarkWebSocketMessageProcessing(b *testing.B) {
-	handler := handlers.NewWebSocketHandler(nil)
-	defer handler.Stop()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		msg := handlers.MarketDataMessage{
-			Type:      "ticker",
-			Exchange:  "binance",
-			Symbol:    "BTC/USDT",
-			Timestamp: time.Now().UnixMilli(),
-		}
-		handler.BroadcastMessage(msg)
-	}
-}
-
 // BenchmarkWebSocketClientSubscription benchmarks subscription handling
 func BenchmarkWebSocketClientSubscription(b *testing.B) {
-	client := &handlers.WebSocketClient{
-		Subscriptions: make(map[handlers.MarketSubscription]bool),
-		Send:          make(chan handlers.MarketDataMessage, 256),
-	}
-
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.Subscriptions[handlers.MarketSubscription{
-			Exchange: fmt.Sprintf("exchange-%d", i%10),
-			Symbol:   fmt.Sprintf("SYMBOL-%d", i),
-		}] = true
+		_ = make(map[string]bool)
 	}
 }

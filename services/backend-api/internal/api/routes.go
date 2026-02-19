@@ -73,7 +73,9 @@ func getEnvOrDefault(key, defaultValue string) string {
 //	aiConfig: Configuration for AI-driven trading.
 //	featuresConfig: Feature flags for enabling/disabling features.
 //	authMiddleware: Middleware for handling authentication.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator) {
+//
+// Returns a cleanup function that should be called on shutdown.
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator) func() {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -594,6 +596,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				circuitBreakers.POST("/:name/reset", circuitBreakerHandler.ResetCircuitBreaker)
 				circuitBreakers.POST("/reset-all", circuitBreakerHandler.ResetAllCircuitBreakers)
 			}
+		}
+	}
+
+	// Return cleanup function for WebSocket handler and other resources
+	return func() {
+		if webSocketHandler != nil {
+			webSocketHandler.Stop()
 		}
 	}
 }

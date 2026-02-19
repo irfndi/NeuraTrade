@@ -371,8 +371,9 @@ func run() error {
 	}
 	router.Use(gin.Recovery())
 
-	// Setup routes
-	api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator)
+	// Setup routes and get cleanup function
+	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator)
+	defer cleanupRoutes()
 
 	// Create HTTP server with security timeouts
 	srv := &http.Server{

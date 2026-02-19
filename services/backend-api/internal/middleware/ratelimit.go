@@ -229,6 +229,16 @@ func (rl *RateLimiter) checkAndUpdateLocal(key string) (bool, int, time.Time, er
 	defer rl.mu.Unlock()
 
 	now := time.Now()
+
+	// Periodic cleanup of expired entries (every 100 requests)
+	if len(rl.localMap) > 100 {
+		for k, entry := range rl.localMap {
+			if now.After(entry.resetTime) {
+				delete(rl.localMap, k)
+			}
+		}
+	}
+
 	entry, exists := rl.localMap[key]
 
 	if !exists || now.After(entry.resetTime) {

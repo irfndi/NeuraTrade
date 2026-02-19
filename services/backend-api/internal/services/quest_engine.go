@@ -497,13 +497,10 @@ func (e *QuestEngine) schedulerLoop() {
 
 // tick processes scheduled quests
 func (e *QuestEngine) tick() {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
 	now := time.Now()
-	log.Printf("Quest scheduler tick: checking %d quests", len(e.quests))
 
-	// Cleanup old completed/failed quests (older than 24 hours)
+	// First, cleanup old completed/failed quests (need write lock)
+	e.mu.Lock()
 	cleanupThreshold := 24 * time.Hour
 	for id, quest := range e.quests {
 		if quest.Status == QuestStatusCompleted || quest.Status == QuestStatusFailed {
@@ -514,7 +511,11 @@ func (e *QuestEngine) tick() {
 			}
 		}
 	}
+	e.mu.Unlock()
 
+	// Then, check quests for execution (read lock)
+	e.mu.RLock()
+	log.Printf("Quest scheduler tick: checking %d quests", len(e.quests))
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
 			continue
@@ -528,6 +529,7 @@ func (e *QuestEngine) tick() {
 			log.Printf("Quest %s not ready (cadence: %s)", quest.ID, quest.Cadence)
 		}
 	}
+	e.mu.RUnlock()
 }
 
 func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
