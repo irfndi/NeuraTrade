@@ -628,51 +628,9 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		exchangeCount = 0
 	}
 
-	// Also check config file for exchange API keys (fallback for CLI config)
-	// nolint:gosec // Fixed config path, not user input
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
-	// #nosec G304 -- fixed operator config path under $HOME/.neuratrade
-	if content, err := os.ReadFile(configPath); err == nil {
-		var config map[string]interface{}
-		if err := json.Unmarshal(content, &config); err == nil {
-			hasExchangeInConfig := false
-
-			// Check new config structure: ccxt.exchanges.binance.api_key
-			if ccxt, ok := config["ccxt"].(map[string]interface{}); ok {
-				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-					for _, ex := range exchanges {
-						if exMap, ok := ex.(map[string]interface{}); ok {
-							if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
-								hasExchangeInConfig = true
-								break
-							}
-						}
-					}
-				}
-			}
-
-			// Also check old config structure for backward compatibility
-			if !hasExchangeInConfig {
-				if services, ok := config["services"].(map[string]interface{}); ok {
-					if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
-						if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-							for _, ex := range exchanges {
-								if exMap, ok := ex.(map[string]interface{}); ok {
-									if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
-										hasExchangeInConfig = true
-										break
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			if hasExchangeInConfig && exchangeCount == 0 {
-				exchangeCount = 1
-			}
-		}
+	// Also check config file for exchange API keys (fallback for CLI config).
+	if config, err := loadOperatorConfigFile(); err == nil && hasConfiguredExchangeAPIKey(config) && exchangeCount == 0 {
+		exchangeCount = 1
 	}
 
 	if exchangeCount == 0 {
@@ -788,49 +746,8 @@ func (h *TelegramInternalHandler) collectReadinessFailures(ctx context.Context, 
 		exchangeCount = 0
 	}
 
-	// nolint:gosec // Fixed config path, not user input
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // Fixed config path, not user input
-	// #nosec G304 -- fixed operator config path under $HOME/.neuratrade
-	if content, err := os.ReadFile(configPath); err == nil {
-		var config map[string]interface{}
-		if err := json.Unmarshal(content, &config); err == nil {
-			// Check new config structure: ccxt.exchanges.binance.api_key
-			hasExchangeInConfig := false
-			if ccxt, ok := config["ccxt"].(map[string]interface{}); ok {
-				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-					for _, ex := range exchanges {
-						if exMap, ok := ex.(map[string]interface{}); ok {
-							if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
-								hasExchangeInConfig = true
-								break
-							}
-						}
-					}
-				}
-			}
-			// Also check old config structure for backward compatibility
-			if !hasExchangeInConfig {
-				if services, ok := config["services"].(map[string]interface{}); ok {
-					if ccxt, ok := services["ccxt"].(map[string]interface{}); ok {
-						if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-							for _, ex := range exchanges {
-								if exMap, ok := ex.(map[string]interface{}); ok {
-									if apiKey, ok := exMap["api_key"].(string); ok && apiKey != "" {
-										hasExchangeInConfig = true
-										break
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			if hasExchangeInConfig {
-				if exchangeCount < 1 {
-					exchangeCount = 1
-				}
-			}
-		}
+	if config, err := loadOperatorConfigFile(); err == nil && hasConfiguredExchangeAPIKey(config) && exchangeCount < 1 {
+		exchangeCount = 1
 	}
 
 	totalWallets := pmWalletCount + exchangeCount
@@ -853,6 +770,61 @@ func (h *TelegramInternalHandler) countConnectedWallets(ctx context.Context, cha
 		return 0, err
 	}
 	return count, nil
+}
+
+func loadOperatorConfigFile() (map[string]interface{}, error) {
+	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	// #nosec G304 -- fixed operator config path under $HOME/.neuratrade
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(content, &config); err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func hasConfiguredExchangeAPIKey(config map[string]interface{}) bool {
+	if ccxt, ok := config["ccxt"].(map[string]interface{}); ok {
+		if hasExchangeAPIKeyInMap(ccxt["exchanges"]) {
+			return true
+		}
+	}
+
+	if serviceConfig, ok := config["services"].(map[string]interface{}); ok {
+		if ccxt, ok := serviceConfig["ccxt"].(map[string]interface{}); ok {
+			if hasExchangeAPIKeyInMap(ccxt["exchanges"]) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func hasExchangeAPIKeyInMap(rawExchanges interface{}) bool {
+	exchanges, ok := rawExchanges.(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	for _, rawExchange := range exchanges {
+		exchangeConfig, ok := rawExchange.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		apiKey, ok := exchangeConfig["api_key"].(string)
+		if ok && strings.TrimSpace(apiKey) != "" {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (h *TelegramInternalHandler) upsertWallet(ctx context.Context, input walletRecordInput) (string, error) {
