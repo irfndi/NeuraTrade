@@ -10,9 +10,12 @@ describe("persistChatIdToLocalConfig", () => {
   beforeEach(async () => {
     tempHome = path.join(process.cwd(), ".tmp-test-neuratrade-home");
     await Bun.$`mkdir -p ${tempHome}`.quiet();
-    await Bun.write(path.join(tempHome, "config.json"), JSON.stringify({
-      telegram: {},
-    }));
+    await Bun.write(
+      path.join(tempHome, "config.json"),
+      JSON.stringify({
+        telegram: {},
+      }),
+    );
     process.env.NEURATRADE_HOME = tempHome;
   });
 

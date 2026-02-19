@@ -48,13 +48,16 @@ function asObject(value: unknown): JsonObject | null {
   return value as JsonObject;
 }
 
-export async function persistChatIdToLocalConfig(chatId: string): Promise<void> {
+export async function persistChatIdToLocalConfig(
+  chatId: string,
+): Promise<void> {
   const trimmedChatId = chatId.trim();
   if (!trimmedChatId) {
     return;
   }
 
-  const neuratradeHome = process.env.NEURATRADE_HOME || path.join(homedir(), ".neuratrade");
+  const neuratradeHome =
+    process.env.NEURATRADE_HOME || path.join(homedir(), ".neuratrade");
   const configPath = path.join(neuratradeHome, "config.json");
   const configFile = Bun.file(configPath);
 
@@ -66,10 +69,13 @@ export async function persistChatIdToLocalConfig(chatId: string): Promise<void> 
   try {
     parsed = await configFile.json();
   } catch (error) {
-    logger.warn("Failed to parse NeuraTrade config while persisting Telegram chat ID", {
-      configPath,
-      error: String(error),
-    });
+    logger.warn(
+      "Failed to parse NeuraTrade config while persisting Telegram chat ID",
+      {
+        configPath,
+        error: String(error),
+      },
+    );
     return;
   }
 
@@ -82,10 +88,16 @@ export async function persistChatIdToLocalConfig(chatId: string): Promise<void> 
   const services = asObject(root.services) ?? {};
   const servicesTelegram = asObject(services.telegram) ?? {};
 
-  const currentChatId = typeof telegram.chat_id === "string" ? telegram.chat_id : "";
+  const currentChatId =
+    typeof telegram.chat_id === "string" ? telegram.chat_id : "";
   const currentServicesChatId =
-    typeof servicesTelegram.chat_id === "string" ? servicesTelegram.chat_id : "";
-  if (currentChatId === trimmedChatId && currentServicesChatId === trimmedChatId) {
+    typeof servicesTelegram.chat_id === "string"
+      ? servicesTelegram.chat_id
+      : "";
+  if (
+    currentChatId === trimmedChatId &&
+    currentServicesChatId === trimmedChatId
+  ) {
     return;
   }
 
