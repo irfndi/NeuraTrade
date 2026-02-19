@@ -418,3 +418,11 @@ func (m *MockCacheAnalyticsService) RecordCacheHit(category string) {
 func (m *MockCacheAnalyticsService) RecordCacheMiss(category string) {
 	m.Called(category)
 }
+
+func (m *MockCCXTClient) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	args := m.Called(ctx, exchange)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.BalanceResponse), args.Error(1)
+}

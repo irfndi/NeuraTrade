@@ -13,6 +13,7 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/logging"
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/observability"
@@ -330,8 +331,9 @@ func (s *FuturesArbitrageService) getLatestFundingRates(ctx context.Context) (ma
 		s.logger.Debug("Cache miss - querying database")
 	}
 
+	// Use SQLite-compatible query (works with both SQLite and PostgreSQL)
 	query := `
-		SELECT DISTINCT ON (e.name, tp.symbol) 
+		SELECT
 			e.name as exchange,
 			tp.symbol,
 			fr.funding_rate,
@@ -340,7 +342,7 @@ func (s *FuturesArbitrageService) getLatestFundingRates(ctx context.Context) (ma
 		FROM funding_rates fr
 		JOIN exchanges e ON fr.exchange_id = e.id
 		JOIN trading_pairs tp ON fr.trading_pair_id = tp.id
-		WHERE fr.timestamp > NOW() - INTERVAL '1 hour'
+		WHERE fr.timestamp > datetime('now', '-1 hour')
 		  AND fr.funding_rate IS NOT NULL
 		  AND fr.mark_price IS NOT NULL
 		  AND fr.mark_price > 0
@@ -372,7 +374,22 @@ func (s *FuturesArbitrageService) getLatestFundingRates(ctx context.Context) (ma
 			return nil, fmt.Errorf("failed to scan funding rate: %w", err)
 		}
 
-		fundingRateMap[data.Symbol] = append(fundingRateMap[data.Symbol], data)
+		// Only keep the first (latest) entry per symbol+exchange combination
+		if _, exists := fundingRateMap[data.Symbol]; !exists {
+			fundingRateMap[data.Symbol] = []FundingRateData{data}
+		} else {
+			// Check if we already have this exchange for this symbol
+			hasExchange := false
+			for _, existing := range fundingRateMap[data.Symbol] {
+				if existing.Exchange == data.Exchange {
+					hasExchange = true
+					break
+				}
+			}
+			if !hasExchange {
+				fundingRateMap[data.Symbol] = append(fundingRateMap[data.Symbol], data)
+			}
+		}
 	}
 
 	if err := rows.Err(); err != nil {
@@ -434,7 +451,7 @@ func (s *FuturesArbitrageService) storeOpportunity(ctx context.Context, opportun
 			$21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
 			$31, $32, $33, $34, $35
 		)
-		ON CONFLICT (symbol, long_exchange, short_exchange) 
+		ON CONFLICT (symbol, long_exchange, short_exchange)
 		DO UPDATE SET
 			long_funding_rate = EXCLUDED.long_funding_rate,
 			short_funding_rate = EXCLUDED.short_funding_rate,
@@ -496,10 +513,20 @@ func (s *FuturesArbitrageService) cleanupExpiredOpportunities(ctx context.Contex
 	}
 
 	s.logger.Info("Starting cleanup of expired opportunities")
-	query := `
-		DELETE FROM futures_arbitrage_opportunities 
-		WHERE expires_at < NOW() OR detected_at < NOW() - INTERVAL '1 hour'
-	`
+
+	var query string
+	dbType := database.DetectDBType(s.config.Database.Driver)
+	if dbType == database.DBTypeSQLite {
+		query = `
+			DELETE FROM futures_arbitrage_opportunities
+			WHERE expires_at < datetime('now') OR detected_at < datetime('now', '-1 hour')
+		`
+	} else {
+		query = `
+			DELETE FROM futures_arbitrage_opportunities
+			WHERE expires_at < NOW() OR detected_at < NOW() - INTERVAL '1 hour'
+		`
+	}
 
 	result, err := s.db.Exec(ctx, query)
 	if err != nil {

@@ -504,19 +504,20 @@ func (h *ArbitrageHandler) findCrossExchangeOpportunities(ctx context.Context, m
 
 	var opportunities []ArbitrageOpportunity
 
-	// Get recent market data from multiple exchanges
+	// Get recent market data from multiple exchanges - use Go time for DB-agnostic query
+	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 	query := `
 		SELECT tp.symbol, e.name as exchange, md.last_price, md.volume_24h, md.timestamp
 		FROM market_data md
 		JOIN exchanges e ON md.exchange_id = e.id
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
-		WHERE md.timestamp > NOW() - INTERVAL '5 minutes'
+		WHERE md.timestamp > ?
 		  AND md.last_price > 0
 	`
-	args := []interface{}{}
+	args := []interface{}{fiveMinutesAgo}
 
 	if symbolFilter != "" {
-		query += " AND tp.symbol = $1"
+		query += " AND tp.symbol = ?"
 		args = append(args, symbolFilter)
 	}
 
@@ -655,15 +656,16 @@ func (h *ArbitrageHandler) findTechnicalAnalysisOpportunities(ctx context.Contex
 	var opportunities []ArbitrageOpportunity
 
 	// Get recent market data for technical analysis
+	thirtyMinutesAgo := time.Now().Add(-30 * time.Minute)
 	query := `
 		SELECT tp.symbol, e.name as exchange, md.last_price, md.volume_24h, md.timestamp
 		FROM market_data md
 		JOIN exchanges e ON md.exchange_id = e.id
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
-		WHERE md.timestamp > NOW() - INTERVAL '30 minutes'
+		WHERE md.timestamp > ?
 		  AND md.last_price > 0
 	`
-	args := []interface{}{}
+	args := []interface{}{thirtyMinutesAgo}
 
 	if symbolFilter != "" {
 		query += " AND tp.symbol = $1"
@@ -801,10 +803,11 @@ func (h *ArbitrageHandler) findVolatilityOpportunities(ctx context.Context, minP
 		FROM market_data md
 		JOIN exchanges e ON md.exchange_id = e.id
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
-		WHERE md.timestamp > NOW() - INTERVAL '1 hour'
+		WHERE md.timestamp > ?
 		  AND md.last_price > 0
 	`
-	args := []interface{}{}
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	args := []interface{}{oneHourAgo}
 
 	if symbolFilter != "" {
 		query += " AND tp.symbol = $1"
@@ -876,17 +879,18 @@ func (h *ArbitrageHandler) findSpreadOpportunities(ctx context.Context, minProfi
 	var opportunities []ArbitrageOpportunity
 
 	// Get market data with bid/ask prices for spread analysis
+	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 	query := `
-		SELECT tp.symbol, e.name as exchange, 
+		SELECT tp.symbol, e.name as exchange,
 			md.bid, md.ask, md.last_price, md.volume_24h, md.timestamp
 		FROM market_data md
 		JOIN exchanges e ON md.exchange_id = e.id
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
-		WHERE md.timestamp > NOW() - INTERVAL '5 minutes'
+		WHERE md.timestamp > ?
 		  AND md.bid > 0 AND md.ask > 0
 		  AND md.last_price > 0 AND md.volume_24h > 0
 	`
-	args := []interface{}{}
+	args := []interface{}{fiveMinutesAgo}
 
 	if symbolFilter != "" {
 		query += " AND tp.symbol = $1"
@@ -1039,10 +1043,11 @@ func (h *ArbitrageHandler) getArbitrageHistory(ctx context.Context, limit, offse
 		FROM market_data md
 		JOIN exchanges e ON md.exchange_id = e.id
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
-		WHERE md.timestamp > NOW() - INTERVAL '24 hours'
+		WHERE md.timestamp > ?
 		  AND md.last_price > 0
 	`
-	args := []interface{}{}
+	twentyFourHoursAgo := time.Now().Add(-24 * time.Hour)
+	args := []interface{}{twentyFourHoursAgo}
 
 	if symbolFilter != "" {
 		query += " AND tp.symbol = $1"
@@ -1119,6 +1124,13 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 		TimeWindow: interval,
 	}
 
+	// Parse interval string like "24h", "1h", "30m" to time.Duration
+	intervalDur, err := time.ParseDuration(interval)
+	if err != nil {
+		intervalDur = 24 * time.Hour // default to 24 hours
+	}
+	intervalTime := time.Now().Add(-intervalDur)
+
 	query := `
 		SELECT
 			COUNT(*) as total_opportunities,
@@ -1127,12 +1139,11 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 			COALESCE(MIN(profit_percent), 0) as min_profit,
 			COALESCE(SUM(volume), 0) as total_volume
 		FROM arbitrage_opportunities
-		WHERE detected_at > NOW() - INTERVAL $1
+		WHERE detected_at > ?
 	`
-
 	var totalOpp int64
 	var avgProfit, maxProfit, minProfit, totalVol float64
-	err := h.db.QueryRow(ctx, query, interval).Scan(&totalOpp, &avgProfit, &maxProfit, &minProfit, &totalVol)
+	err = h.db.QueryRow(ctx, query, intervalTime).Scan(&totalOpp, &avgProfit, &maxProfit, &minProfit, &totalVol)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query arbitrage stats: %w", err)
 	}
@@ -1146,12 +1157,12 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 	symbolQuery := `
 		SELECT symbol, COUNT(*) as count, COALESCE(AVG(profit_percent), 0) as avg_profit
 		FROM arbitrage_opportunities
-		WHERE detected_at > NOW() - INTERVAL $1
+		WHERE detected_at > ?
 		GROUP BY symbol
 		ORDER BY count DESC
 		LIMIT 5
 	`
-	rows, err := h.db.Query(ctx, symbolQuery, interval)
+	rows, err := h.db.Query(ctx, symbolQuery, intervalTime)
 	if err != nil {
 		return stats, fmt.Errorf("failed to query symbol stats: %w", err)
 	}
@@ -1170,12 +1181,12 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 	pairQuery := `
 		SELECT buy_exchange, sell_exchange, COUNT(*) as count, COALESCE(AVG(profit_percent), 0) as avg_profit
 		FROM arbitrage_opportunities
-		WHERE detected_at > NOW() - INTERVAL $1
+		WHERE detected_at > ?
 		GROUP BY buy_exchange, sell_exchange
 		ORDER BY count DESC
 		LIMIT 5
 	`
-	rows, err = h.db.Query(ctx, pairQuery, interval)
+	rows, err = h.db.Query(ctx, pairQuery, intervalTime)
 	if err != nil {
 		return stats, fmt.Errorf("failed to query pair stats: %w", err)
 	}

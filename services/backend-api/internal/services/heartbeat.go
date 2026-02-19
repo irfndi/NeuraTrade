@@ -52,6 +52,7 @@ type HeartbeatTask struct {
 	LastRun    time.Time
 	Handler    func(ctx context.Context) error
 	Enabled    bool
+	Running    bool
 	ErrorCount int
 	LastError  error
 }
@@ -60,6 +61,7 @@ type HeartbeatTask struct {
 type TradingHeartbeat struct {
 	mu       sync.RWMutex
 	stopOnce sync.Once
+	wg       sync.WaitGroup
 	config   HeartbeatConfig
 	tasks    map[string]*HeartbeatTask
 	stopCh   chan struct{}
@@ -194,9 +196,8 @@ func (h *TradingHeartbeat) Start(ctx context.Context) error {
 // Stop halts the heartbeat loop
 func (h *TradingHeartbeat) Stop() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	if !h.running {
+		h.mu.Unlock()
 		return
 	}
 
@@ -204,6 +205,19 @@ func (h *TradingHeartbeat) Stop() {
 		close(h.stopCh)
 	})
 	h.running = false
+	h.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		h.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		h.logger.Println("Heartbeat stop timeout waiting for running tasks")
+	}
 }
 
 // IsRunning returns whether the heartbeat is currently running
@@ -223,6 +237,9 @@ func (h *TradingHeartbeat) runLoop(ctx context.Context) {
 		case <-h.stopCh:
 			h.logger.Println("Heartbeat stopped")
 			return
+		case <-ctx.Done():
+			h.logger.Println("Heartbeat context cancelled")
+			return
 		case <-ticker.C:
 			h.executeTasks(ctx)
 		}
@@ -231,35 +248,42 @@ func (h *TradingHeartbeat) runLoop(ctx context.Context) {
 
 // executeTasks runs all enabled tasks that are due
 func (h *TradingHeartbeat) executeTasks(ctx context.Context) {
-	h.mu.RLock()
 	now := time.Now()
+	type scheduledTask struct {
+		name string
+		task *HeartbeatTask
+	}
+	var toRun []scheduledTask
 
+	h.mu.Lock()
 	for name, task := range h.tasks {
-		if !task.Enabled {
+		if !task.Enabled || task.Running {
 			continue
 		}
-
 		if now.Sub(task.LastRun) >= task.Interval {
-			task := task
-			name := name
-			h.mu.RUnlock()
-			go h.runTask(ctx, name, task)
-			h.mu.RLock()
+			task.LastRun = now
+			task.Running = true
+			toRun = append(toRun, scheduledTask{name: name, task: task})
 		}
 	}
-	h.mu.RUnlock()
+	h.mu.Unlock()
+
+	for _, scheduled := range toRun {
+		h.wg.Add(1)
+		go func(name string, task *HeartbeatTask) {
+			defer h.wg.Done()
+			h.runTask(ctx, name, task)
+		}(scheduled.name, scheduled.task)
+	}
 }
 
 // runTask executes a single heartbeat task
 func (h *TradingHeartbeat) runTask(ctx context.Context, name string, task *HeartbeatTask) {
-	h.mu.Lock()
-	task.LastRun = time.Now()
-	h.mu.Unlock()
-
 	err := task.Handler(ctx)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	task.Running = false
 
 	if err != nil {
 		task.ErrorCount++
