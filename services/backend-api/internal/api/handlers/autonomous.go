@@ -749,6 +749,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 	// nolint:gosec // Fixed config path, not user input
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // Fixed config path, not user input
 	log.Printf("DEBUG: Checking config at %s", configPath)
+	// #nosec G304 -- fixed operator config path under $HOME/.neuratrade
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {

@@ -40,7 +40,7 @@ type OptimalStrategy struct {
 // NewInMemoryLearningSystem creates a new learning system
 func NewInMemoryLearningSystem() *InMemoryLearningSystem {
 	dataDir := filepath.Join("data", "ai_learning")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		log.Printf("Failed to create AI learning data directory: %v", err)
 	}
 
@@ -71,7 +71,7 @@ func (ls *InMemoryLearningSystem) persistDecision(record *DecisionRecord) error 
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filename, data, 0644)
+	return os.WriteFile(filename, data, 0600)
 }
 
 // GetSimilarDecisions retrieves similar past decisions

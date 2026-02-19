@@ -151,6 +151,7 @@ func (h *HealthHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	if telegramToken == "" {
 		if configPath, err := os.UserHomeDir(); err == nil {
 			configPath = filepath.Join(configPath, ".neuratrade", "config.json")
+			// #nosec G304 -- fixed operator config path under user home directory
 			if data, err := os.ReadFile(configPath); err == nil {
 				var config map[string]interface{}
 				if json.Unmarshal(data, &config) == nil {
