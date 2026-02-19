@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -244,10 +245,10 @@ func TestQuestEngine_MetadataPropagation(t *testing.T) {
 func TestQuestEngine_ConcurrentExecution(t *testing.T) {
 	engine := NewQuestEngineWithNotification(NewInMemoryQuestStore(), nil, nil)
 
-	executionCount := 0
+	var executionCount atomic.Int32
 	slowHandler := func(ctx context.Context, quest *Quest) error {
 		time.Sleep(10 * time.Millisecond)
-		executionCount++
+		executionCount.Add(1)
 		quest.CurrentCount++
 		return nil
 	}
@@ -277,7 +278,7 @@ func TestQuestEngine_ConcurrentExecution(t *testing.T) {
 		<-done
 	}
 
-	assert.Equal(t, 5, executionCount)
+	assert.Equal(t, int32(5), executionCount.Load())
 }
 
 // TestHasExchange tests the hasExchange helper function

@@ -371,11 +371,11 @@ func (tm *TradeMemory) BuildMemoryContext(ctx context.Context, symbol string, cu
 			if i >= 5 {
 				break
 			}
-			contextBuilder.WriteString(fmt.Sprintf("- %s: %s %s (confidence: %.2f) → %s (PnL: %.2f%%)\n",
+			fmt.Fprintf(&contextBuilder, "- %s: %s %s (confidence: %.2f) → %s (PnL: %.2f%%)\n",
 				s.Timestamp.Format("2006-01-02 15:04"),
-				s.Action, s.Symbol, s.Confidence, s.Outcome, s.PnLPercent))
+				s.Action, s.Symbol, s.Confidence, s.Outcome, s.PnLPercent)
 			if s.LessonsLearned != "" {
-				contextBuilder.WriteString(fmt.Sprintf("  Lesson: %s\n", s.LessonsLearned))
+				fmt.Fprintf(&contextBuilder, "  Lesson: %s\n", s.LessonsLearned)
 			}
 		}
 		contextBuilder.WriteString("\n")

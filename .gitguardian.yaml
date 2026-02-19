@@ -76,6 +76,8 @@ secrets:
       match: "secret123"
     - name: old-sk-live
       match: "sk_live_abc123"
+    - name: historical-pr184-admin-key
+      match: "37c6151f7da4ed66170688a3add5c0c5"
     # Historical secrets from PR #184 have been rotated.
     # Suppress any remaining alerts via GitGuardian dashboard using occurrence IDs
     # rather than committing secret patterns to source files.

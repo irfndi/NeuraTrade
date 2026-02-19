@@ -241,7 +241,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Wire order executor to integrated handlers for scalping execution
 	adminAPIKey := os.Getenv("ADMIN_API_KEY")
 	if adminAPIKey == "" {
-		adminAPIKey = "37c6151f7da4ed66170688a3add5c0c5"
+		log.Printf("WARNING: ADMIN_API_KEY is not set; CCXT order executor requests will be unauthenticated")
 	}
 	ccxtServiceURL := os.Getenv("CCXT_SERVICE_URL")
 	if ccxtServiceURL == "" {

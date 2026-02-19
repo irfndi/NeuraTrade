@@ -440,8 +440,8 @@ func (brain *AITradingBrain) formatSimilarDecisions(decisions []*DecisionRecord)
 		if i >= 3 { // Limit to 3 examples
 			break
 		}
-		sb.WriteString(fmt.Sprintf("- Decision: %s, Outcome: %s, PnL: %.2f\n",
-			d.Decision.Action, d.Outcome, d.PnL))
+		fmt.Fprintf(&sb, "- Decision: %s, Outcome: %s, PnL: %.2f\n",
+			d.Decision.Action, d.Outcome, d.PnL)
 	}
 	return sb.String()
 }

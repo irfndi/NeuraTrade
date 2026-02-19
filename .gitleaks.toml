@@ -3,7 +3,7 @@ title = "NeuraTrade Gitleaks Config"
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 paths = [
     '''_test\.go$''',
     '''\.test\.ts$''',
@@ -58,11 +58,24 @@ regexes = [
 
 # Allowlist for development keys in test files and historical commits
 # These are not production secrets and have been replaced in current code
-[allowlist]
+[[allowlists]]
 description = "Allow historical development keys"
 paths = [
-    '''wallet_handler\.go$''',  # Historical commits, fixed in current code
+    '''services/backend-api/internal/api/handlers/sqlite/wallet_handler\.go$''',  # Historical commits, fixed in current code
 ]
 regexes = [
     '''0123456789abcdef0123456789abcdef''',  # Development test key (not used in production)
+]
+
+[[allowlists]]
+description = "Allow historical PR #184 split admin key after rotation"
+commits = [
+    '''9f02b7ab9491039f3de7d615ed4b599e6e4edeb2''',
+]
+paths = [
+    '''services/backend-api/config\.yml$''',
+    '''services/backend-api/internal/api/routes\.go$''',
+]
+regexes = [
+    '''37c6151f7da4ed66170688a3add5c0c5''',
 ]

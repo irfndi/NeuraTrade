@@ -761,7 +761,7 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 					if binance, ok := exchanges["binance"].(map[string]interface{}); ok {
 						log.Printf("DEBUG: Has binance section")
 						if apiKey, ok := binance["api_key"].(string); ok && apiKey != "" {
-							log.Printf("DEBUG: Has api_key: %s", apiKey[:10]+"...")
+							log.Printf("DEBUG: Binance API key is configured")
 							configHasBinance = true
 						}
 					}
