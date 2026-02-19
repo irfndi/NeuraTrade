@@ -789,7 +789,9 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
     delete exchanges[name];
 
     // Update in-memory config
-    userConfig.enabled = (userConfig.enabled || []).filter((e: string) => e !== name);
+    userConfig.enabled = (userConfig.enabled || []).filter(
+      (e: string) => e !== name,
+    );
     if (userConfig.apiKeys?.[name]) {
       delete userConfig.apiKeys[name];
     }
@@ -819,7 +821,9 @@ app.delete("/api/v1/exchanges", adminAuth, async (c) => {
 
     // Remove from legacy exchanges.enabled
     const legacyEnabled = existingFullConfig.exchanges?.enabled || [];
-    const updatedLegacyEnabled = legacyEnabled.filter((e: string) => e !== name);
+    const updatedLegacyEnabled = legacyEnabled.filter(
+      (e: string) => e !== name,
+    );
 
     // Remove from legacy exchanges.api_keys
     const legacyApiKeys = existingFullConfig.exchanges?.api_keys || {};
@@ -912,9 +916,11 @@ app.get("/api/ticker/:exchange/*", async (c) => {
       try {
         const [ticker, orderbook] = await Promise.all([
           exchanges[exchange].fetchTicker(symbol),
-          exchanges[exchange].fetchOrderBook(symbol, 5).catch(() =>
-            exchanges[exchange].fetchOrderBook(symbol).catch(() => null),
-          ),
+          exchanges[exchange]
+            .fetchOrderBook(symbol, 5)
+            .catch(() =>
+              exchanges[exchange].fetchOrderBook(symbol).catch(() => null),
+            ),
         ]);
 
         // Add bid/ask from orderbook if not in ticker
