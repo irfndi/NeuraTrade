@@ -16,6 +16,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
+	"github.com/irfndi/neuratrade/internal/testutil"
 	"github.com/irfndi/neuratrade/test/testmocks"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -73,8 +74,7 @@ func TestTelegramIntegration(t *testing.T) {
 	// ... (We can reuse nil or simple mocks as SetupRoutes handles them)
 	// We need actual user handler functioning, so we need DB.
 
-	// Create required middlewares
-	authMiddleware := middleware.NewAuthMiddleware("test-jwt-secret-key-32-chars-min!")
+	authMiddleware := middleware.NewAuthMiddleware(testutil.MustGenerateTestSecret())
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 
