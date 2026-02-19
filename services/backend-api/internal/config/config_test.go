@@ -346,17 +346,16 @@ func TestLoad_UserHomeDirConfig(t *testing.T) {
 func TestLoad_NeuratradeConfigJSON(t *testing.T) {
 	os.Clearenv()
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("Cannot determine home directory")
-	}
+	// Create a temporary directory to act as home directory
+	// This prevents accidentally deleting the user's real ~/.neuratrade directory
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
 
-	neuratradeDir := homeDir + "/.neuratrade"
-	err = os.MkdirAll(neuratradeDir, 0755)
+	neuratradeDir := tempDir + "/.neuratrade"
+	err := os.MkdirAll(neuratradeDir, 0755)
 	if err != nil {
 		t.Skip("Cannot create .neuratrade directory")
 	}
-	defer os.RemoveAll(neuratradeDir)
 
 	configFile := neuratradeDir + "/config.json"
 	configContent := `{
@@ -372,7 +371,6 @@ func TestLoad_NeuratradeConfigJSON(t *testing.T) {
 	if err != nil {
 		t.Skip("Cannot write test config file")
 	}
-	defer os.Remove(configFile)
 
 	config, err := Load()
 	require.NotNil(t, config)
@@ -384,17 +382,16 @@ func TestLoad_NeuratradeConfigJSON(t *testing.T) {
 func TestLoad_NeuratradeConfigEnvTakesPrecedence(t *testing.T) {
 	os.Clearenv()
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("Cannot determine home directory")
-	}
+	// Create a temporary directory to act as home directory
+	// This prevents accidentally deleting the user's real ~/.neuratrade directory
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
 
-	neuratradeDir := homeDir + "/.neuratrade"
-	err = os.MkdirAll(neuratradeDir, 0755)
+	neuratradeDir := tempDir + "/.neuratrade"
+	err := os.MkdirAll(neuratradeDir, 0755)
 	if err != nil {
 		t.Skip("Cannot create .neuratrade directory")
 	}
-	defer os.RemoveAll(neuratradeDir)
 
 	configFile := neuratradeDir + "/config.json"
 	configContent := `{
@@ -406,7 +403,6 @@ func TestLoad_NeuratradeConfigEnvTakesPrecedence(t *testing.T) {
 	if err != nil {
 		t.Skip("Cannot write test config file")
 	}
-	defer os.Remove(configFile)
 
 	t.Setenv("DATABASE_HOST", "env-host")
 	config, err := Load()

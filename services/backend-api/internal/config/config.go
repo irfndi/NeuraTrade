@@ -374,12 +374,6 @@ func Load() (*Config, error) {
 	// Don't set explicit config type - let viper auto-detect from file extension
 	viper.AddConfigPath(".")
 
-	// Also support JSON config from ~/.neuratrade/ (only if homeDir is available)
-	// Note: viper.AddConfigPath is cumulative, so this adds to the search paths
-	if err == nil {
-		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
-	}
-
 	// Set default values
 	setDefaults()
 
@@ -482,7 +476,13 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("database.conn_max_lifetime", "300s")
 	viper.SetDefault("database.conn_max_idle_time", "60s")
-	viper.SetDefault("database.sqlite_path", "neuratrade.db")
+	// Use absolute path for SQLite database to ensure consistent location
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		viper.SetDefault("database.sqlite_path", filepath.Join(homeDir, ".neuratrade", "data", "neuratrade.db"))
+	} else {
+		viper.SetDefault("database.sqlite_path", "neuratrade.db")
+	}
 	viper.SetDefault("database.sqlite_vector_extension_path", "")
 
 	// Redis

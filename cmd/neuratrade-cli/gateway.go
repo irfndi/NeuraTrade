@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -86,6 +87,9 @@ func gatewayStart(cCtx *cli.Context) error {
 	if err := os.MkdirAll(filepath.Join(home, "logs"), 0755); err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
+	if err := os.MkdirAll(filepath.Join(home, "pids"), 0755); err != nil {
+		return fmt.Errorf("failed to create pids directory: %w", err)
+	}
 
 	// Get executable directory
 	execDir, err := os.Executable()
@@ -106,6 +110,7 @@ func gatewayStart(cCtx *cli.Context) error {
 			"NODE_ENV":      "production",
 			"ADMIN_API_KEY": adminAPIKey,
 		},
+		filepath.Join(home, "pids", "ccxt.pid"),
 	)
 	if ccxtCmd == nil {
 		return fmt.Errorf("failed to start CCXT service")
@@ -127,6 +132,7 @@ func gatewayStart(cCtx *cli.Context) error {
 			"NODE_ENV":              "production",
 			"ADMIN_API_KEY":         adminAPIKey,
 		},
+		filepath.Join(home, "pids", "telegram.pid"),
 	)
 	if telegramCmd == nil {
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
@@ -161,6 +167,7 @@ func gatewayStart(cCtx *cli.Context) error {
 			"AI_PROVIDER":           aiProvider,
 			"AI_MODEL":              aiModel,
 		},
+		filepath.Join(home, "pids", "backend.pid"),
 	)
 	if backendCmd == nil {
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
@@ -198,8 +205,8 @@ func gatewayStart(cCtx *cli.Context) error {
 	return nil
 }
 
-// startService starts a service process
-func startService(binary, name, logFile string, env map[string]string) *exec.Cmd {
+// startService starts a service process and writes its PID to a file
+func startService(binary, name, logFile string, env map[string]string, pidFile string) *exec.Cmd {
 	cmd := exec.Command(binary)
 
 	// Set environment
@@ -227,20 +234,87 @@ func startService(binary, name, logFile string, env map[string]string) *exec.Cmd
 		return nil
 	}
 
+	// Write PID file for later cleanup
+	if pidFile != "" {
+		if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
+			fmt.Printf("⚠️  Warning: Could not write PID file for %s: %v\n", name, err)
+		}
+	}
+
 	return cmd
 }
 
-// gatewayStop stops all NeuraTrade services
+// gatewayStop stops all NeuraTrade services by reading PID files and sending SIGTERM
 func gatewayStop(cCtx *cli.Context) error {
 	fmt.Println("🛑 Stopping NeuraTrade services...")
 	fmt.Println()
-	fmt.Println("Note: Manual stop not yet implemented.")
-	fmt.Println("Please use Ctrl+C if services were started via 'neuratrade gateway start'")
+
+	home := defaultNeuraTradeHome()
+	pidsDir := filepath.Join(home, "pids")
+
+	services := []struct {
+		name    string
+		pidFile string
+	}{
+		{"Backend API", "backend.pid"},
+		{"CCXT Service", "ccxt.pid"},
+		{"Telegram Service", "telegram.pid"},
+	}
+
+	stoppedCount := 0
+	for _, svc := range services {
+		pidFile := filepath.Join(pidsDir, svc.pidFile)
+		if err := stopServiceByPIDFile(svc.name, pidFile); err != nil {
+			fmt.Printf("⚠️  %s: %v\n", svc.name, err)
+		} else {
+			stoppedCount++
+		}
+	}
+
+	if stoppedCount == 0 {
+		fmt.Println()
+		fmt.Println("No running services found.")
+		fmt.Println("Services may have been stopped already, or were not started via 'gateway start'.")
+		fmt.Println()
+		fmt.Println("To force stop, you can manually kill the processes:")
+		fmt.Println("  pkill -f neuratrade-server")
+		fmt.Println("  pkill -f ccxt-service")
+		fmt.Println("  pkill -f telegram-service")
+		return fmt.Errorf("no services stopped")
+	}
+
 	fmt.Println()
-	fmt.Println("Alternatively, find and kill the processes:")
-	fmt.Println("  pkill -f neuratrade-server")
-	fmt.Println("  pkill -f ccxt-service")
-	fmt.Println("  pkill -f telegram-service")
+	fmt.Printf("✅ Stopped %d service(s)\n", stoppedCount)
+	return nil
+}
+
+// stopServiceByPIDFile reads a PID file and sends SIGTERM to the process
+func stopServiceByPIDFile(name, pidFile string) error {
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("not running (PID file not found)")
+		}
+		return fmt.Errorf("could not read PID file: %w", err)
+	}
+
+	pid, err := strconv.Atoi(string(bytes.TrimSpace(data)))
+	if err != nil {
+		return fmt.Errorf("invalid PID in file: %w", err)
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		os.Remove(pidFile)
+		return fmt.Errorf("process not found (removing stale PID file)")
+	}
+
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("failed to send SIGTERM: %w", err)
+	}
+
+	fmt.Printf("✅ %s: Stopped (PID: %d)\n", name, pid)
+	os.Remove(pidFile)
 	return nil
 }
 

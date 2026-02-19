@@ -18,21 +18,20 @@
     "port": 6379
   },
 
-  "services": {
-    "ccxt": {
-      "url": "http://localhost:3001",
-      "grpc_address": "localhost:50051"
-    },
-    "telegram": {
-      "enabled": true,
-      "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
-      "use_polling": false,
-      "webhook_url": "https://your-domain.trycloudflare.com/telegram/webhook",
-      "external_service": true,
-      "api_base_url": "http://localhost:8080",
-      "service_url": "http://localhost:3002",
-      "grpc_address": "localhost:50052"
-    }
+  "ccxt": {
+    "service_url": "http://localhost:3001",
+    "grpc_address": "localhost:50051",
+    "admin_api_key": "YOUR_ADMIN_API_KEY_HERE"
+  },
+
+  "telegram": {
+    "enabled": true,
+    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+    "use_polling": false,
+    "webhook_url": "https://your-domain.trycloudflare.com/telegram/webhook",
+    "api_base_url": "http://localhost:8080",
+    "service_url": "http://localhost:3002",
+    "grpc_address": "localhost:50052"
   },
 
   "ai": {
