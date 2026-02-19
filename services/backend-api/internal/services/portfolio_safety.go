@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,6 +87,7 @@ type PortfolioSafetyService struct {
 	redis            *redis.Client
 	logger           *zaplogrus.Logger
 
+	lastSnapshotKey  string
 	lastSnapshot     *SafetyPortfolioSnapshot
 	lastSnapshotTime time.Time
 	mu               sync.RWMutex
@@ -116,15 +119,18 @@ func NewPortfolioSafetyService(
 }
 
 func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatID string, exchanges []string) (*SafetyPortfolioSnapshot, error) {
+	key := buildSnapshotCacheKey(chatID, exchanges)
+
 	s.mu.RLock()
-	if s.lastSnapshot != nil && time.Since(s.lastSnapshotTime) < s.config.CacheTTL {
+	if s.lastSnapshot != nil &&
+		s.lastSnapshotKey == key &&
+		time.Since(s.lastSnapshotTime) < s.config.CacheTTL {
 		snapshot := *s.lastSnapshot
 		s.mu.RUnlock()
 		return &snapshot, nil
 	}
 	s.mu.RUnlock()
 
-	key := "snapshot_" + chatID
 	result, err, _ := s.requestGroup.Do(key, func() (interface{}, error) {
 		snap, err := s.calculateSnapshot(ctx, chatID, exchanges)
 		if err != nil {
@@ -132,6 +138,7 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 		}
 
 		s.mu.Lock()
+		s.lastSnapshotKey = key
 		s.lastSnapshot = snap
 		s.lastSnapshotTime = time.Now()
 		s.mu.Unlock()
@@ -144,6 +151,16 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 	}
 
 	return result.(*SafetyPortfolioSnapshot), nil
+}
+
+func buildSnapshotCacheKey(chatID string, exchanges []string) string {
+	if len(exchanges) == 0 {
+		return "snapshot_" + chatID
+	}
+
+	exchangesCopy := append([]string(nil), exchanges...)
+	sort.Strings(exchangesCopy)
+	return "snapshot_" + chatID + "_" + strings.Join(exchangesCopy, ",")
 }
 
 func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID string, exchanges []string) (*SafetyPortfolioSnapshot, error) {
@@ -453,6 +470,7 @@ func (s *PortfolioSafetyService) GetSafetyDiagnostics(ctx context.Context, chatI
 func (s *PortfolioSafetyService) InvalidateCache() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.lastSnapshotKey = ""
 	s.lastSnapshot = nil
 	s.lastSnapshotTime = time.Time{}
 }

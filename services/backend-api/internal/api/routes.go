@@ -19,7 +19,9 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/irfndi/neuratrade/internal/services/risk"
 	"github.com/irfndi/neuratrade/internal/skill"
+	redisv9 "github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
@@ -167,16 +169,34 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	questStore := services.NewInMemoryQuestStore()
 	questEngine := services.NewQuestEngineWithNotification(questStore, nil, notificationService)
 
+	riskConfig := risk.DefaultRiskManagerConfig()
+	riskManager := risk.NewRiskManagerAgent(riskConfig)
+	drawdownHalt := services.NewMaxDrawdownHalt(db, services.DefaultMaxDrawdownConfig())
+
+	var redisClientRaw *redisv9.Client
+	if redis != nil {
+		redisClientRaw = redis.Client
+	}
+
+	var dailyLossTracker *risk.DailyLossTracker
+	var positionThrottle *risk.PositionSizeThrottle
+	if redisClientRaw != nil {
+		dailyLossTracker = risk.NewDailyLossTracker(redisClientRaw, risk.DailyLossCapConfig{
+			MaxDailyLoss: riskConfig.MaxDailyLoss,
+		})
+		positionThrottle = risk.NewPositionSizeThrottle(redisClientRaw, risk.DefaultPositionSizeThrottleConfig())
+	}
+
 	portfolioSafetyConfig := services.DefaultPortfolioSafetyConfig()
 	portfolioSafety := services.NewPortfolioSafetyService(
 		portfolioSafetyConfig,
 		ccxtService,
 		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		redis.Client,
+		riskManager,
+		drawdownHalt,
+		dailyLossTracker,
+		positionThrottle,
+		redisClientRaw,
 		nil,
 	)
 

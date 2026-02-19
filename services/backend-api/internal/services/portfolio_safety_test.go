@@ -14,7 +14,9 @@ import (
 
 type mockCCXTForPortfolioSafety struct {
 	balanceResponse *ccxt.BalanceResponse
+	balanceByExch   map[string]*ccxt.BalanceResponse
 	err             error
+	fetchCalls      int
 }
 
 func (m *mockCCXTForPortfolioSafety) Initialize(ctx context.Context) error { return nil }
@@ -77,8 +79,14 @@ func (m *mockCCXTForPortfolioSafety) CalculateFundingRateArbitrage(ctx context.C
 	return nil, nil
 }
 func (m *mockCCXTForPortfolioSafety) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	m.fetchCalls++
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.balanceByExch != nil {
+		if response, ok := m.balanceByExch[exchange]; ok {
+			return response, nil
+		}
 	}
 	return m.balanceResponse, nil
 }
@@ -343,4 +351,102 @@ func TestPortfolioSafetyService_SetConfig(t *testing.T) {
 
 	service.SetConfig(newConfig)
 	assert.Equal(t, newConfig, service.GetConfig())
+}
+
+func TestPortfolioSafetyService_GetPortfolioSnapshot_CacheKeyIncludesChatAndExchanges(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.CacheTTL = time.Hour
+
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceByExch: map[string]*ccxt.BalanceResponse{
+			"binance": {
+				Exchange:  "binance",
+				Timestamp: time.Now(),
+				Total:     map[string]float64{"USDT": 10000.0},
+				Free:      map[string]float64{"USDT": 8000.0},
+				Used:      map[string]float64{"USDT": 2000.0},
+			},
+			"bybit": {
+				Exchange:  "bybit",
+				Timestamp: time.Now(),
+				Total:     map[string]float64{"USDT": 5000.0},
+				Free:      map[string]float64{"USDT": 4000.0},
+				Used:      map[string]float64{"USDT": 1000.0},
+			},
+		},
+	}
+
+	service := NewPortfolioSafetyService(
+		config,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	ctx := context.Background()
+
+	snapshotA, err := service.GetPortfolioSnapshot(ctx, "chat-a", []string{"binance"})
+	require.NoError(t, err)
+	assert.True(t, snapshotA.TotalEquity.Equal(decimal.NewFromFloat(10000.0)))
+	assert.Len(t, snapshotA.ExchangeExposures, 1)
+	assert.Equal(t, "binance", snapshotA.ExchangeExposures[0].Exchange)
+
+	snapshotB, err := service.GetPortfolioSnapshot(ctx, "chat-b", []string{"bybit"})
+	require.NoError(t, err)
+	assert.True(t, snapshotB.TotalEquity.Equal(decimal.NewFromFloat(5000.0)))
+	assert.Len(t, snapshotB.ExchangeExposures, 1)
+	assert.Equal(t, "bybit", snapshotB.ExchangeExposures[0].Exchange)
+}
+
+func TestPortfolioSafetyService_GetPortfolioSnapshot_CacheKeyNormalizesExchangeOrder(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.CacheTTL = time.Hour
+
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceByExch: map[string]*ccxt.BalanceResponse{
+			"binance": {
+				Exchange:  "binance",
+				Timestamp: time.Now(),
+				Total:     map[string]float64{"USDT": 10000.0},
+				Free:      map[string]float64{"USDT": 9000.0},
+				Used:      map[string]float64{"USDT": 1000.0},
+			},
+			"bybit": {
+				Exchange:  "bybit",
+				Timestamp: time.Now(),
+				Total:     map[string]float64{"USDT": 3000.0},
+				Free:      map[string]float64{"USDT": 2000.0},
+				Used:      map[string]float64{"USDT": 1000.0},
+			},
+		},
+	}
+
+	service := NewPortfolioSafetyService(
+		config,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	ctx := context.Background()
+
+	snapshot1, err := service.GetPortfolioSnapshot(ctx, "chat-a", []string{"binance", "bybit"})
+	require.NoError(t, err)
+	assert.True(t, snapshot1.TotalEquity.Equal(decimal.NewFromFloat(13000.0)))
+	assert.Equal(t, 2, mockCCXT.fetchCalls)
+
+	snapshot2, err := service.GetPortfolioSnapshot(ctx, "chat-a", []string{"bybit", "binance"})
+	require.NoError(t, err)
+	assert.True(t, snapshot2.TotalEquity.Equal(decimal.NewFromFloat(13000.0)))
+	assert.Equal(t, 2, mockCCXT.fetchCalls)
 }
