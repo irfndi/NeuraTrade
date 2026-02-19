@@ -32,7 +32,7 @@ secrets:
     - name: dev-jwt-secret
       match: dev-jwt-secret
     - name: admin-secret-key-change-me
-      match: admin-secret-key-change-me
+      match: admin-secret-key-change-in-production
     - name: admin-dev-key-change-in-production
       match: admin-dev-key-change-in-production
     # Masking test patterns - these are fake/test values
@@ -76,6 +76,15 @@ secrets:
       match: "secret123"
     - name: old-sk-live
       match: "sk_live_abc123"
+    # Historical secrets from PR #184 (already rotated)
+    - name: historical-telegram-token
+      match: "8352568061:AAFsr3Q9pGeGldHI5TmmYmF03gdep3y4BQc"
+    - name: historical-minimax-key
+      match: "sk-api-6FzeevpEi1VdxrPIF2IF3ZImrZM-vrHzpI5uD85pxV-ZJibnUvwGj_ZwSA85JBOC9rTN7EIwVJhRMtbHwHNSHF8RRQPvwKAWTO8czGrrwp2uSU3FzEEvB6c"
+    - name: historical-admin-api-key
+      match: "d98403e22c0a9f300fc54e4a5a3ab98a1f0f93ab65a26b2530949caae8ed7a36"
+    - name: historical-admin-key-test-api
+      match: "d98403e22c0a9f300fc54e4a5a3ab98a1f0f93ab65a26b2530949caae8ed7a36"
   ignored-paths:
     # Test files commonly use fake credentials
     - "**/*_test.go"
