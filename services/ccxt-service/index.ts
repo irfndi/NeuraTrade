@@ -326,7 +326,11 @@ interface UserExchangeConfig {
   apiKeys: Record<string, { apiKey: string; secret: string }>;
   addedAt: Record<string, string>;
   devMode: boolean;
-  marketData: Record<string, unknown>;
+  marketData: {
+    max_age_minutes?: number;
+    cleanup_interval_minutes?: number;
+    [key: string]: unknown;
+  };
 }
 
 // Load exchange config from ~/.neuratrade/config.json
