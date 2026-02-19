@@ -116,7 +116,9 @@ const resolvePort = (raw: string | undefined, fallback: number) => {
   if (!Number.isNaN(numericPort) && numericPort > 0 && numericPort < 65536) {
     return numericPort;
   }
-  console.warn(`Invalid port value provided. Falling back to default (${fallback}).`);
+  console.warn(
+    `Invalid port value provided. Falling back to default (${fallback}).`,
+  );
   return fallback;
 };
 
