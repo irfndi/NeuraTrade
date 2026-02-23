@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/irfndi/neuratrade/internal/database"
 )
 
 // SentimentScore represents a sentiment score from -1.0 (bearish) to 1.0 (bullish)
@@ -69,6 +71,7 @@ type SentimentServiceConfig struct {
 	CryptoPanicToken   string
 	FetchTimeout       time.Duration
 	CacheDuration      time.Duration
+	DBDriver           string // Database driver type for query compatibility
 }
 
 // DefaultSentimentServiceConfig returns default configuration
@@ -87,6 +90,7 @@ func DefaultSentimentServiceConfig() SentimentServiceConfig {
 type SentimentService struct {
 	config     SentimentServiceConfig
 	db         DBPool
+	dbDriver   string // Database driver for query compatibility
 	httpClient *http.Client
 	mu         sync.RWMutex
 	cache      map[string]cacheEntry
@@ -99,9 +103,14 @@ type cacheEntry struct {
 
 // NewSentimentService creates a new sentiment service
 func NewSentimentService(config SentimentServiceConfig, db DBPool) *SentimentService {
+	dbDriver := config.DBDriver
+	if dbDriver == "" {
+		dbDriver = "sqlite" // Default to SQLite for compatibility
+	}
 	return &SentimentService{
 		config:     config,
 		db:         db,
+		dbDriver:   dbDriver,
 		httpClient: &http.Client{Timeout: config.FetchTimeout},
 		cache:      make(map[string]cacheEntry),
 	}
@@ -429,7 +438,19 @@ func (s *SentimentService) GetAggregatedSentiment(ctx context.Context, symbol st
 		}
 	}
 
-	// Query aggregated sentiment from database
+	// SQLite doesn't have the sentiment tables, return neutral sentiment
+	if database.DetectDBType(s.dbDriver) == database.DBTypeSQLite {
+		return &AggregatedSentiment{
+			Symbol:         upperSymbol,
+			SentimentScore: 0,
+			BullishRatio:   0.5,
+			TotalMentions:  0,
+			SampleSize:     0,
+			ComputedAt:     time.Now().UTC(),
+		}, nil
+	}
+
+	// Query aggregated sentiment from database (PostgreSQL)
 	var result AggregatedSentiment
 	err := s.db.QueryRow(ctx, `
 		SELECT symbol, sentiment_score, bullish_ratio, total_mentions, sample_size, computed_at
@@ -455,7 +476,19 @@ func (s *SentimentService) GetAggregatedSentiment(ctx context.Context, symbol st
 func (s *SentimentService) computeAggregatedSentiment(ctx context.Context, symbol string) (*AggregatedSentiment, error) {
 	symbolUpper := strings.ToUpper(symbol)
 
-	// Get recent news sentiment for symbol
+	// SQLite doesn't have the sentiment tables, return neutral sentiment
+	if database.DetectDBType(s.dbDriver) == database.DBTypeSQLite {
+		return &AggregatedSentiment{
+			Symbol:         symbolUpper,
+			SentimentScore: 0,
+			BullishRatio:   0.5,
+			TotalMentions:  0,
+			SampleSize:     0,
+			ComputedAt:     time.Now().UTC(),
+		}, nil
+	}
+
+	// Get recent news sentiment for symbol (PostgreSQL with JSONB)
 	var newsScore float64
 	var newsCount int
 	err := s.db.QueryRow(ctx, `
@@ -467,7 +500,7 @@ func (s *SentimentService) computeAggregatedSentiment(ctx context.Context, symbo
 		return nil, fmt.Errorf("computeAggregatedSentiment: failed to query news sentiment: %w", err)
 	}
 
-	// Get recent reddit sentiment for symbol
+	// Get recent reddit sentiment for symbol (PostgreSQL with JSONB)
 	var redditScore float64
 	var redditCount int
 	err = s.db.QueryRow(ctx, `

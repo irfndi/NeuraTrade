@@ -123,6 +123,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	sentimentConfig.RedditClientID = os.Getenv("REDDIT_CLIENT_ID")
 	sentimentConfig.RedditClientSecret = os.Getenv("REDDIT_CLIENT_SECRET")
 	sentimentConfig.CryptoPanicToken = os.Getenv("CRYPTOPANIC_TOKEN")
+	sentimentConfig.DBDriver = os.Getenv("DATABASE_DRIVER")
+	if sentimentConfig.DBDriver == "" {
+		sentimentConfig.DBDriver = "sqlite" // Default to SQLite
+	}
 	sentimentService := services.NewSentimentService(sentimentConfig, db)
 	sentimentHandler := handlers.NewSentimentHandler(sentimentService)
 
