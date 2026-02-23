@@ -1,0 +1,208 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+// MockScalpingOrderExecutor is a mock implementation of ScalpingOrderExecutor
+type MockScalpingOrderExecutor struct {
+	mock.Mock
+}
+
+func (m *MockScalpingOrderExecutor) PlaceOrder(
+	ctx context.Context,
+	exchange, symbol, side, orderType string,
+	amount decimal.Decimal,
+	price *decimal.Decimal,
+) (string, error) {
+	args := m.Called(ctx, exchange, symbol, side, orderType, amount, price)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockScalpingOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error) {
+	args := m.Called(ctx, exchange, symbol)
+	return args.Get(0).([]map[string]interface{}), args.Error(1)
+}
+
+func (m *MockScalpingOrderExecutor) GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error) {
+	args := m.Called(ctx, exchange, symbol, limit)
+	return args.Get(0).([]map[string]interface{}), args.Error(1)
+}
+
+func (m *MockScalpingOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID string) error {
+	args := m.Called(ctx, exchange, orderID)
+	return args.Error(0)
+}
+
+// mockSafetyChecker implements PortfolioSafetyChecker for testing
+type mockSafetyChecker struct {
+	mock.Mock
+}
+
+func (m *mockSafetyChecker) CanExecuteTrade(ctx context.Context, chatID, exchange, symbol string, size decimal.Decimal) (bool, string, error) {
+	args := m.Called(ctx, chatID, exchange, symbol, size)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
+func TestSafeOrderExecutor_AllowsWhenNoSafetyService(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	safeExec := NewSafeOrderExecutor(mockExecutor, nil, "test-chat")
+
+	mockExecutor.On("PlaceOrder", mock.Anything, "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), (*decimal.Decimal)(nil)).Return("order-123", nil)
+
+	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "order-123", orderID)
+	mockExecutor.AssertExpectations(t)
+}
+
+func TestSafeOrderExecutor_BlocksWhenSafetyCheckFails(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+		Return(false, "Trading halted due to max drawdown", nil)
+
+	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "portfolio safety blocked")
+	assert.Contains(t, err.Error(), "Trading halted due to max drawdown")
+	assert.Equal(t, "", orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrder")
+}
+
+func TestSafeOrderExecutor_BlocksOnDailyLossLimit(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+		Return(false, "Daily loss limit exceeded: 150.00/100.00", nil)
+
+	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Daily loss limit exceeded")
+	assert.Equal(t, "", orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrder")
+}
+
+func TestSafeOrderExecutor_BlocksOnOversizedPosition(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(1000)).
+		Return(false, "Position size 1000.00 exceeds maximum allowed 500.00 (throttled to 50%)", nil)
+
+	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(1000), nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum allowed")
+	assert.Equal(t, "", orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrder")
+}
+
+func TestSafeOrderExecutor_AllowsWhenSafetyPasses(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+		Return(true, "", nil)
+
+	mockExecutor.On("PlaceOrder", mock.Anything, "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), (*decimal.Decimal)(nil)).Return("order-456", nil)
+
+	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "order-456", orderID)
+	mockExecutor.AssertExpectations(t)
+	mockSafety.AssertExpectations(t)
+}
+
+func TestSafeOrderExecutor_FailsClosedOnError(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+		Return(false, "", errors.New("safety service unavailable"))
+
+	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "safety check failed")
+	assert.Equal(t, "", orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrder")
+}
+
+func TestSafeOrderExecutor_CheckSafety(t *testing.T) {
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(nil, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(50)).
+		Return(false, "Drawdown halt active", nil)
+
+	allowed, reason, err := safeExec.CheckSafety(context.Background(), "binance", "BTC/USDT", decimal.NewFromFloat(50))
+
+	assert.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Equal(t, "Drawdown halt active", reason)
+}
+
+func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+		Return(false, "Trading not allowed", nil)
+
+	orderID, result, err := safeExec.PlaceOrderWithSafetyCheck(
+		context.Background(),
+		"binance", "BTC/USDT", "buy", "market",
+		decimal.NewFromFloat(100), nil,
+	)
+
+	assert.NoError(t, err)
+	assert.Empty(t, orderID)
+	assert.NotNil(t, result)
+	assert.False(t, result.Allowed)
+	assert.Equal(t, "Trading not allowed", result.Reason)
+}
+
+func TestSafeOrderExecutor_SetChatID(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	safeExec := NewSafeOrderExecutor(mockExecutor, nil, "original-chat")
+
+	safeExec.SetChatID("new-chat")
+
+	assert.Equal(t, "new-chat", safeExec.GetChatID())
+}
+
+func TestSafetyCheckResult_String(t *testing.T) {
+	result := &SafetyCheckResult{
+		Allowed: false,
+		Reason:  "Daily loss limit exceeded",
+	}
+
+	assert.False(t, result.Allowed)
+	assert.Equal(t, "Daily loss limit exceeded", result.Reason)
+}
