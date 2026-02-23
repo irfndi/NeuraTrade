@@ -123,6 +123,12 @@ func (c *CleanupService) Start(config CleanupConfig) {
 	}()
 
 	// Start periodic cleanup
+	// Validate interval to prevent panic from time.NewTicker
+	if config.IntervalMinutes <= 0 {
+		c.logger.Warn("Cleanup interval is non-positive; periodic cleanup disabled", "interval_minutes", config.IntervalMinutes)
+		return
+	}
+
 	ticker := time.NewTicker(time.Duration(config.IntervalMinutes) * time.Minute)
 	c.wg.Add(1)
 	go func() {
@@ -133,22 +139,24 @@ func (c *CleanupService) Start(config CleanupConfig) {
 			case <-c.ctx.Done():
 				return
 			case <-ticker.C:
-				// Create timeout context for periodic cleanup
-				ctx, cancel := context.WithTimeout(c.ctx, 30*time.Minute)
+				// Wrap in IIFE to ensure cancel() runs even on panic
+				func() {
+					ctx, cancel := context.WithTimeout(c.ctx, 30*time.Minute)
+					defer cancel()
 
-				spanCtx, span := observability.StartSpan(ctx, "maintenance.cleanup", "CleanupService.periodicCleanup")
-				err := c.executeWithRetry(spanCtx, "periodic_cleanup", func() error {
-					return c.runCleanup(spanCtx, config)
-				})
-				observability.FinishSpan(span, err)
-				if err != nil {
-					c.logger.Error("Cleanup failed", "error", err)
-					observability.AddBreadcrumbWithData(spanCtx, "cleanup", "Periodic cleanup failed", sentry.LevelError, map[string]interface{}{
-						"error": err.Error(),
+					spanCtx, span := observability.StartSpan(ctx, "maintenance.cleanup", "CleanupService.periodicCleanup")
+					err := c.executeWithRetry(spanCtx, "periodic_cleanup", func() error {
+						return c.runCleanup(spanCtx, config)
 					})
-					// Note: Performance monitor doesn't have RecordFailure method
-				}
-				cancel()
+					observability.FinishSpan(span, err)
+					if err != nil {
+						c.logger.Error("Cleanup failed", "error", err)
+						observability.AddBreadcrumbWithData(spanCtx, "cleanup", "Periodic cleanup failed", sentry.LevelError, map[string]interface{}{
+							"error": err.Error(),
+						})
+						// Note: Performance monitor doesn't have RecordFailure method
+					}
+				}()
 			}
 		}
 	}()
