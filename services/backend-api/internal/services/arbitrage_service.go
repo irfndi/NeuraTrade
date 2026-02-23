@@ -580,7 +580,11 @@ func (s *ArbitrageService) diagnoseNoMarketData() {
 
 	// Check fresh market_data rows (within 10 minutes)
 	// Use database-specific syntax for time comparison
-	dbType := database.DetectDBType(s.config.Database.Driver)
+	var dbDriver string
+	if s.config != nil {
+		dbDriver = s.config.Database.Driver
+	}
+	dbType := database.DetectDBType(dbDriver)
 	var freshDataQuery string
 	if dbType == database.DBTypeSQLite {
 		freshDataQuery = "SELECT COUNT(*) FROM market_data WHERE timestamp >= datetime('now', '-10 minutes')"
