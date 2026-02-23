@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -100,16 +101,28 @@ type EquityPoint struct {
 }
 
 // Backtester provides functionality to backtest arbitrage strategies.
+// Note: This service supports both PostgreSQL and SQLite databases.
 type Backtester struct {
-	db         *database.PostgresDB
+	db         DBPool
+	dbDriver   string
 	calculator *FuturesArbitrageCalculator
 	mu         sync.Mutex
 }
 
 // NewBacktester creates a new backtester instance.
-func NewBacktester(db *database.PostgresDB) *Backtester {
+func NewBacktester(db DBPool) *Backtester {
 	return &Backtester{
 		db:         db,
+		dbDriver:   "postgres", // Default to PostgreSQL for backward compatibility
+		calculator: NewFuturesArbitrageCalculator(),
+	}
+}
+
+// NewBacktesterWithDriver creates a new backtester instance with explicit driver type.
+func NewBacktesterWithDriver(db DBPool, driver string) *Backtester {
+	return &Backtester{
+		db:         db,
+		dbDriver:   driver,
 		calculator: NewFuturesArbitrageCalculator(),
 	}
 }
@@ -229,8 +242,13 @@ func (b *Backtester) fetchHistoricalOpportunities(
 		return nil, fmt.Errorf("database connection is nil")
 	}
 
-	query := `
-		SELECT id, symbol, base_currency, quote_currency,
+	// Build query based on database type
+	var query string
+	var args []interface{}
+	argIdx := 1
+
+	// Base SELECT and FROM
+	selectClause := `SELECT id, symbol, base_currency, quote_currency,
 			   long_exchange, short_exchange,
 			   long_funding_rate, short_funding_rate, net_funding_rate,
 			   funding_interval, long_mark_price, short_mark_price,
@@ -244,31 +262,67 @@ func (b *Backtester) fetchHistoricalOpportunities(
 			   optimal_position_size, detected_at, expires_at,
 			   next_funding_time, time_to_next_funding, is_active,
 			   market_trend, volume_24h, open_interest
-		FROM futures_arbitrage_opportunities
-		WHERE detected_at >= $1 AND detected_at <= $2
-		  AND ($3::text[] IS NULL OR symbol = ANY($3))
-		  AND ($4::text[] IS NULL OR long_exchange = ANY($4) OR short_exchange = ANY($4))
-		  AND apy >= $5
-		  AND risk_score <= $6
-		ORDER BY detected_at ASC
-	`
+		FROM futures_arbitrage_opportunities`
 
-	var symbols, exchanges interface{}
-	if len(config.Symbols) > 0 {
-		symbols = config.Symbols
-	}
-	if len(config.Exchanges) > 0 {
-		exchanges = config.Exchanges
+	// Build WHERE clause
+	whereConditions := []string{"detected_at >= $" + fmt.Sprintf("%d", argIdx), "detected_at <= $" + fmt.Sprintf("%d", argIdx+1)}
+	args = append(args, config.StartDate, config.EndDate)
+	argIdx += 2
+
+	// Handle symbols filter
+	if database.DetectDBType(b.dbDriver) == database.DBTypeSQLite {
+		// SQLite: use IN clause for symbols
+		if len(config.Symbols) > 0 {
+			placeholders := make([]string, len(config.Symbols))
+			for i, s := range config.Symbols {
+				placeholders[i] = "$" + fmt.Sprintf("%d", argIdx)
+				args = append(args, s)
+				argIdx++
+			}
+			whereConditions = append(whereConditions, "symbol IN ("+strings.Join(placeholders, ", ")+")")
+		}
+		// SQLite: use IN clause for exchanges
+		if len(config.Exchanges) > 0 {
+			placeholders := make([]string, len(config.Exchanges))
+			for i, e := range config.Exchanges {
+				placeholders[i] = "$" + fmt.Sprintf("%d", argIdx)
+				args = append(args, e)
+				argIdx++
+			}
+			whereConditions = append(whereConditions, "(long_exchange IN ("+strings.Join(placeholders, ", ")+") OR short_exchange IN ("+strings.Join(placeholders, ", ")+"))")
+		}
+	} else {
+		// PostgreSQL: use ANY() for arrays
+		if len(config.Symbols) > 0 {
+			whereConditions = append(whereConditions, "$"+fmt.Sprintf("%d", argIdx)+"::text[] IS NULL OR symbol = ANY($"+fmt.Sprintf("%d", argIdx)+")")
+			args = append(args, config.Symbols)
+			argIdx++
+		} else {
+			whereConditions = append(whereConditions, "$"+fmt.Sprintf("%d", argIdx)+"::text[] IS NULL OR symbol = ANY($"+fmt.Sprintf("%d", argIdx)+")")
+			args = append(args, nil)
+			argIdx++
+		}
+		if len(config.Exchanges) > 0 {
+			whereConditions = append(whereConditions, "$"+fmt.Sprintf("%d", argIdx)+"::text[] IS NULL OR long_exchange = ANY($"+fmt.Sprintf("%d", argIdx)+") OR short_exchange = ANY($"+fmt.Sprintf("%d", argIdx)+")")
+			args = append(args, config.Exchanges)
+			argIdx++
+		} else {
+			whereConditions = append(whereConditions, "$"+fmt.Sprintf("%d", argIdx)+"::text[] IS NULL OR long_exchange = ANY($"+fmt.Sprintf("%d", argIdx)+") OR short_exchange = ANY($"+fmt.Sprintf("%d", argIdx)+")")
+			args = append(args, nil)
+			argIdx++
+		}
 	}
 
-	rows, err := b.db.Pool.Query(ctx, query,
-		config.StartDate,
-		config.EndDate,
-		symbols,
-		exchanges,
-		config.MinAPY,
-		config.MaxRiskScore,
-	)
+	// Add APY and risk score conditions
+	whereConditions = append(whereConditions, "apy >= $"+fmt.Sprintf("%d", argIdx))
+	args = append(args, config.MinAPY)
+	argIdx++
+	whereConditions = append(whereConditions, "risk_score <= $"+fmt.Sprintf("%d", argIdx))
+	args = append(args, config.MaxRiskScore)
+
+	query = selectClause + " WHERE " + strings.Join(whereConditions, " AND ") + " ORDER BY detected_at ASC"
+
+	rows, err := b.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}

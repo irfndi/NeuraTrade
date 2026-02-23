@@ -10,6 +10,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/logging"
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/observability"
@@ -271,13 +272,24 @@ func (c *FundingRateCollector) cleanupOldData(ctx context.Context) error {
 		return fmt.Errorf("database pool is not available")
 	}
 
-	query := `
-		DELETE FROM funding_rate_history
-		WHERE collected_at < NOW() - $1::INTERVAL
-	`
-
+	// Use database-specific syntax for time comparison
+	var query string
+	var result database.Result
+	var err error
 	interval := fmt.Sprintf("%d days", c.retentionDays)
-	result, err := c.db.Exec(ctx, query, interval)
+
+	// Note: c.config may be nil in some test scenarios
+	var dbDriver string
+	if c.config != nil {
+		dbDriver = c.config.Database.Driver
+	}
+	if database.DetectDBType(dbDriver) == database.DBTypeSQLite {
+		query = "DELETE FROM funding_rate_history WHERE collected_at < datetime('now', $1)"
+		result, err = c.db.Exec(ctx, query, fmt.Sprintf("-%d days", c.retentionDays))
+	} else {
+		query = "DELETE FROM funding_rate_history WHERE collected_at < NOW() - $1::INTERVAL"
+		result, err = c.db.Exec(ctx, query, interval)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to cleanup old data: %w", err)
 	}
@@ -385,15 +397,23 @@ func (c *FundingRateCollector) getHistoricalRates(
 	exchange string,
 	days int,
 ) ([]decimal.Decimal, error) {
-	query := `
-		SELECT funding_rate FROM funding_rate_history
-		WHERE symbol = $1 AND exchange = $2
-		  AND funding_time > NOW() - $3::INTERVAL
-		ORDER BY funding_time ASC
-	`
-
+	// Use database-specific syntax for time comparison
+	var query string
+	var rows database.Rows
+	var err error
 	interval := fmt.Sprintf("%d days", days)
-	rows, err := c.db.Query(ctx, query, symbol, exchange, interval)
+
+	var dbDriver string
+	if c.config != nil {
+		dbDriver = c.config.Database.Driver
+	}
+	if database.DetectDBType(dbDriver) == database.DBTypeSQLite {
+		query = "SELECT funding_rate FROM funding_rate_history WHERE symbol = $1 AND exchange = $2 AND funding_time > datetime('now', $3) ORDER BY funding_time ASC"
+		rows, err = c.db.Query(ctx, query, symbol, exchange, fmt.Sprintf("-%d days", days))
+	} else {
+		query = "SELECT funding_rate FROM funding_rate_history WHERE symbol = $1 AND exchange = $2 AND funding_time > NOW() - $3::INTERVAL ORDER BY funding_time ASC"
+		rows, err = c.db.Query(ctx, query, symbol, exchange, interval)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -562,16 +582,23 @@ func (c *FundingRateCollector) GetFundingRateHistory(
 		return nil, fmt.Errorf("database pool is not available")
 	}
 
-	query := `
-		SELECT funding_time, funding_rate, mark_price
-		FROM funding_rate_history
-		WHERE symbol = $1 AND exchange = $2
-		  AND funding_time > NOW() - $3::INTERVAL
-		ORDER BY funding_time ASC
-	`
-
+	// Use database-specific syntax for time comparison
+	var query string
+	var rows database.Rows
+	var err error
 	interval := fmt.Sprintf("%d days", days)
-	rows, err := c.db.Query(ctx, query, symbol, exchange, interval)
+
+	var dbDriver string
+	if c.config != nil {
+		dbDriver = c.config.Database.Driver
+	}
+	if database.DetectDBType(dbDriver) == database.DBTypeSQLite {
+		query = "SELECT funding_time, funding_rate, mark_price FROM funding_rate_history WHERE symbol = $1 AND exchange = $2 AND funding_time > datetime('now', $3) ORDER BY funding_time ASC"
+		rows, err = c.db.Query(ctx, query, symbol, exchange, fmt.Sprintf("-%d days", days))
+	} else {
+		query = "SELECT funding_time, funding_rate, mark_price FROM funding_rate_history WHERE symbol = $1 AND exchange = $2 AND funding_time > NOW() - $3::INTERVAL ORDER BY funding_time ASC"
+		rows, err = c.db.Query(ctx, query, symbol, exchange, interval)
+	}
 	if err != nil {
 		return nil, err
 	}

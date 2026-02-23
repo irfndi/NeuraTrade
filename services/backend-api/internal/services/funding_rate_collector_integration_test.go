@@ -190,6 +190,7 @@ func TestFundingRateCollector_Integration_Collect(t *testing.T) {
 
 	// Setup Config & Logger
 	cfg := &config.Config{}
+	cfg.Database.Driver = "postgres" // Use PostgreSQL since the mock is pgxmock
 	logger := logging.NewStandardLogger("debug", "testing")
 
 	// Create Collector with default config (binance, bybit)
@@ -236,6 +237,7 @@ func TestFundingRateCollector_Integration_GetStats_MockDB(t *testing.T) {
 
 	// Setup Config & Logger
 	cfg := &config.Config{}
+	cfg.Database.Driver = "postgres" // Use PostgreSQL since the mock is pgxmock
 	logger := logging.NewStandardLogger("debug", "testing")
 
 	// We don't need CCXT for this test

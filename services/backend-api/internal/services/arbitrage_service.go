@@ -579,7 +579,19 @@ func (s *ArbitrageService) diagnoseNoMarketData() {
 	}
 
 	// Check fresh market_data rows (within 10 minutes)
-	err = s.db.QueryRow(s.ctx, "SELECT COUNT(*) FROM market_data WHERE timestamp >= NOW() - INTERVAL '10 minutes'").Scan(&freshRows)
+	// Use database-specific syntax for time comparison
+	var dbDriver string
+	if s.config != nil {
+		dbDriver = s.config.Database.Driver
+	}
+	dbType := database.DetectDBType(dbDriver)
+	var freshDataQuery string
+	if dbType == database.DBTypeSQLite {
+		freshDataQuery = "SELECT COUNT(*) FROM market_data WHERE timestamp >= datetime('now', '-10 minutes')"
+	} else {
+		freshDataQuery = "SELECT COUNT(*) FROM market_data WHERE timestamp >= NOW() - INTERVAL '10 minutes'"
+	}
+	err = s.db.QueryRow(s.ctx, freshDataQuery).Scan(&freshRows)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to count fresh market_data rows")
 		freshRows = -1
