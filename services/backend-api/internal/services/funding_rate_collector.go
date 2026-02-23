@@ -9,7 +9,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"github.com/irfndi/neuratrade/internal/ccxt"
-		"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/logging"
 	"github.com/irfndi/neuratrade/internal/models"
@@ -277,7 +277,7 @@ func (c *FundingRateCollector) cleanupOldData(ctx context.Context) error {
 	var result database.Result
 	var err error
 	interval := fmt.Sprintf("%d days", c.retentionDays)
-	
+
 	// Note: c.config may be nil in some test scenarios
 	if c.config != nil && c.config.Database.Driver == "sqlite" {
 		query = fmt.Sprintf("DELETE FROM funding_rate_history WHERE collected_at < datetime('now', '-%d days')", c.retentionDays)
@@ -398,7 +398,7 @@ func (c *FundingRateCollector) getHistoricalRates(
 	var rows database.Rows
 	var err error
 	interval := fmt.Sprintf("%d days", days)
-	
+
 	if c.config != nil && c.config.Database.Driver == "sqlite" {
 		query = fmt.Sprintf("SELECT funding_rate FROM funding_rate_history WHERE symbol = $1 AND exchange = $2 AND funding_time > datetime('now', '-%d days') ORDER BY funding_time ASC", days)
 		rows, err = c.db.Query(ctx, query, symbol, exchange)
@@ -579,7 +579,7 @@ func (c *FundingRateCollector) GetFundingRateHistory(
 	var rows database.Rows
 	var err error
 	interval := fmt.Sprintf("%d days", days)
-	
+
 	if c.config != nil && c.config.Database.Driver == "sqlite" {
 		query = fmt.Sprintf("SELECT funding_time, funding_rate, mark_price FROM funding_rate_history WHERE symbol = $1 AND exchange = $2 AND funding_time > datetime('now', '-%d days') ORDER BY funding_time ASC", days)
 		rows, err = c.db.Query(ctx, query, symbol, exchange)
