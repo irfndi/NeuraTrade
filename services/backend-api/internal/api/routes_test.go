@@ -368,6 +368,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
 
 	mockDB := setupMockDB(t)
 	mockRedis := &database.RedisClient{
@@ -425,6 +426,7 @@ func TestSetupRoutes_RouteGroups(t *testing.T) {
 	// Create minimal mock dependencies
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
 
 	mockTelegramConfig := &config.TelegramConfig{
 		BotToken: "test-token",
@@ -489,6 +491,7 @@ func TestSetupRoutes_HttpMethods(t *testing.T) {
 	// Create minimal mock dependencies
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
 
 	mockTelegramConfig := &config.TelegramConfig{
 		BotToken: "test-token",
@@ -556,6 +559,7 @@ func TestSetupRoutes_Middleware(t *testing.T) {
 	// Create minimal mock dependencies
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
 
 	mockTelegramConfig := &config.TelegramConfig{
 		BotToken: "test-token",
@@ -608,6 +612,7 @@ func TestSetupRoutes_MissingAdminKey(t *testing.T) {
 	// Create minimal mock dependencies
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
 
 	mockTelegramConfig := &config.TelegramConfig{
 		BotToken: "test-token",
@@ -651,6 +656,7 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 	// Create minimal mock dependencies
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
 
 	mockTelegramConfig := &config.TelegramConfig{
 		BotToken: "test-token",

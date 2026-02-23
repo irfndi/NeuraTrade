@@ -1,0 +1,15 @@
+name: "CodeQL Config for NeuraTrade"
+
+# Paths to exclude from analysis
+paths-ignore:
+  - signoz/**
+  - '**/coverage/**'
+  - coverage/**
+  - '**/*.out'
+  - docs/**
+  - .trae/**
+  - '**/*_test.go'
+  - '**/*.test.ts'
+  - '**/*.spec.ts'
+  - '**/test-setup.ts'
+  - test/**

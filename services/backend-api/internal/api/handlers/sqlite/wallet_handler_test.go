@@ -23,12 +23,10 @@ func setupTestDatabase(t *testing.T) *database.SQLiteDB {
 	_, err = db.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			telegram_id TEXT UNIQUE,
+			telegram_chat_id TEXT UNIQUE,
 			email TEXT UNIQUE,
 			username TEXT,
 			password_hash TEXT,
-			risk_level TEXT DEFAULT 'medium',
-			mode TEXT DEFAULT 'live',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
@@ -91,8 +89,8 @@ func TestWalletHandler_GetWallets(t *testing.T) {
 	handler := NewWalletHandler(db)
 
 	// Create test user
-	_, err := db.DB.Exec("INSERT INTO users (telegram_id, email, username) VALUES (?, ?, ?)",
-		"test_chat_123", "test@example.com", "testuser")
+	_, err := db.DB.Exec("INSERT INTO users (telegram_chat_id, email, username) VALUES (?, ?, ?)",
+		"test_chat_123", "test@example.com", "test_user")
 	assert.NoError(t, err)
 
 	// Create test wallet
@@ -135,7 +133,7 @@ func TestWalletHandler_AddWallet(t *testing.T) {
 	handler := NewWalletHandler(db)
 
 	// Create test user
-	_, err := db.DB.Exec("INSERT INTO users (telegram_id, email) VALUES (?, ?)",
+	_, err := db.DB.Exec("INSERT INTO users (telegram_chat_id, email) VALUES (?, ?)",
 		"test_chat_456", "test2@example.com")
 	assert.NoError(t, err)
 
@@ -164,7 +162,7 @@ func TestWalletHandler_RemoveWallet_WithAuthorization(t *testing.T) {
 	handler := NewWalletHandler(db)
 
 	// Create test user
-	_, err := db.DB.Exec("INSERT INTO users (telegram_id) VALUES (?)", "test_chat_789")
+	_, err := db.DB.Exec("INSERT INTO users (telegram_chat_id) VALUES (?)", "test_chat_789")
 	assert.NoError(t, err)
 
 	// Create test wallet for user 1
@@ -213,11 +211,11 @@ func TestWalletHandler_ConnectExchange_EncryptsAPIKeys(t *testing.T) {
 
 	handler := NewWalletHandler(db)
 
-	// Set encryption key for this test
-	t.Setenv("ENCRYPTION_KEY", "test-encryption-key-32-bytes!!")
+	// Set encryption key for this test (must be 32 bytes for AES-256-GCM)
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	// Create test user
-	_, err := db.DB.Exec("INSERT INTO users (telegram_id) VALUES (?)", "test_chat_exchange")
+	_, err := db.DB.Exec("INSERT INTO users (telegram_chat_id) VALUES (?)", "test_chat_exchange")
 	assert.NoError(t, err)
 
 	// Test ConnectExchange

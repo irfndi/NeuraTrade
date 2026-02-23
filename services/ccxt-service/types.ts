@@ -264,6 +264,24 @@ export interface ExchangeManager {
   [key: string]: Exchange;
 }
 
+/**
+ * Configured exchange information.
+ */
+export interface ConfiguredExchange {
+  name: string;
+  enabled: boolean;
+  has_auth: boolean;
+  added_at: string;
+}
+
+/**
+ * Response containing list of configured exchanges.
+ */
+export interface ExchangesListResponse {
+  exchanges: ConfiguredExchange[];
+  count: number;
+}
+
 // Query Parameters
 
 /**

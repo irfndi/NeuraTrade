@@ -21,12 +21,10 @@ export function registerSettingsCommands(
       "⚙️ Alert Settings:\n\n" +
       `🔔 Notifications: ${statusIcon} ${statusText}\n` +
       "📊 Min Profit Threshold: 0.5%\n" +
-      "⏰ Alert Frequency: Every 5 minutes\n" +
-      "💰 Subscription: Free Tier\n\n" +
+      "⏰ Alert Frequency: Every 5 minutes\n\n" +
       "To change settings:\n" +
       "/stop - Pause notifications\n" +
-      "/resume - Resume notifications\n" +
-      "/upgrade - Upgrade to premium for more options";
+      "/resume - Resume notifications";
 
     await ctx.reply(msg);
   });

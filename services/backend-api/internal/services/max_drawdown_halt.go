@@ -180,7 +180,6 @@ func (h *MaxDrawdownHalt) CheckDrawdown(ctx context.Context, chatID string, curr
 	h.metrics.IncrementTotal()
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	state, exists := h.states[chatID]
 	if !exists {
@@ -212,12 +211,27 @@ func (h *MaxDrawdownHalt) CheckDrawdown(ctx context.Context, chatID string, curr
 		h.metrics.UpdateMaxDrawdown(state.CurrentDrawdown)
 	}
 
-	h.updateState(state)
+	// Collect notification events while holding lock, then release before notifying
+	events := h.updateState(state)
+
+	h.mu.Unlock()
+
+	// Send notifications after releasing lock to prevent deadlock during network I/O
+	for _, evt := range events {
+		h.notifyRiskEvent(state, evt.eventType, evt.severity)
+	}
 
 	return state, nil
 }
 
-func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
+// riskEvent captures notification details to be sent after lock release
+type riskEvent struct {
+	eventType string
+	severity  string
+}
+
+func (h *MaxDrawdownHalt) updateState(state *DrawdownState) []riskEvent {
+	var events []riskEvent
 	previousStatus := state.Status
 
 	if state.CurrentDrawdown.GreaterThanOrEqual(h.config.HaltThreshold) {
@@ -229,20 +243,20 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 			state.HaltCount++
 			h.metrics.IncrementHalt()
 			h.metrics.IncrementByChatID(state.ChatID)
-			h.notifyRiskEvent(state, RiskEventHalt, SeverityCritical)
+			events = append(events, riskEvent{RiskEventHalt, SeverityCritical})
 		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.CriticalThreshold) {
 		state.Status = DrawdownStatusCritical
 		if previousStatus != DrawdownStatusCritical {
 			h.metrics.IncrementCritical()
-			h.notifyRiskEvent(state, RiskEventCritical, SeverityHigh)
+			events = append(events, riskEvent{RiskEventCritical, SeverityHigh})
 		}
 	} else if state.CurrentDrawdown.GreaterThanOrEqual(h.config.WarningThreshold) {
 		state.Status = DrawdownStatusWarning
 		if previousStatus != DrawdownStatusWarning {
 			state.WarningCount++
 			h.metrics.IncrementWarning()
-			h.notifyRiskEvent(state, RiskEventWarning, SeverityMedium)
+			events = append(events, riskEvent{RiskEventWarning, SeverityMedium})
 		}
 	} else {
 		if state.TradingHalted && state.CurrentDrawdown.LessThanOrEqual(h.config.RecoveryThreshold) {
@@ -252,7 +266,7 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 				now := time.Now().UTC()
 				state.RecoveredAt = &now
 				h.metrics.IncrementRecovery()
-				h.notifyRiskEvent(state, RiskEventRecovery, SeverityLow)
+				events = append(events, riskEvent{RiskEventRecovery, SeverityLow})
 			} else {
 				state.Status = DrawdownStatusNormal
 			}
@@ -260,10 +274,12 @@ func (h *MaxDrawdownHalt) updateState(state *DrawdownState) {
 			state.Status = DrawdownStatusNormal
 		}
 	}
+
+	return events
 }
 
-// notifyRiskEvent sends a risk event notification.
-// PRECONDITION: Caller must hold h.mu (write lock) before calling this method.
+// notifyRiskEvent sends a risk event notification asynchronously.
+// This method does NOT hold the mutex and is safe to call after releasing locks.
 func (h *MaxDrawdownHalt) notifyRiskEvent(state *DrawdownState, eventType, severity string) {
 	if h.notificationSvc == nil {
 		return

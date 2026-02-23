@@ -334,7 +334,7 @@ Timestamp: %s
 	// Build message
 	var msg strings.Builder
 	for k, v := range headers {
-		msg.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+		fmt.Fprintf(&msg, "%s: %s\r\n", k, v)
 	}
 	msg.WriteString("\r\n")
 	msg.WriteString(body)

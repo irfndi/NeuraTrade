@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/irfndi/neuratrade/internal/database"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -225,8 +227,11 @@ func (h *UserHandler) LoginUser(c *gin.Context) {
 		return
 	}
 
-	// Generate a simple token (in production, use JWT)
-	token := generateAuthToken(userID)
+	token, err := generateJWT(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+		return
+	}
 
 	c.JSON(http.StatusOK, LoginResponse{
 		Success: true,
@@ -236,11 +241,29 @@ func (h *UserHandler) LoginUser(c *gin.Context) {
 	})
 }
 
-// generateAuthToken generates a simple auth token for the user
-func generateAuthToken(userID int) string {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "mock-token"
+// Claims represents JWT claims with user ID
+type Claims struct {
+	UserID int `json:"user_id"`
+	jwt.RegisteredClaims
+}
+
+// generateJWT generates a JWT token for the user with 24h expiration.
+// Requires JWT_SECRET environment variable for signing.
+func generateJWT(userID int) (string, error) {
+	secretKey := os.Getenv("JWT_SECRET")
+	if secretKey == "" {
+		secretKey = "development-jwt-secret-key-change-in-production"
 	}
-	return hex.EncodeToString(bytes)
+
+	claims := Claims{
+		UserID: userID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(secretKey))
 }

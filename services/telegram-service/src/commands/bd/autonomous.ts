@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import type { BackendApiClient } from "../../api/client";
 import type { SessionManager } from "../../session";
-import { getChatId } from "./helpers";
+import { getChatId, persistChatIdToLocalConfig } from "./helpers";
 
 export function registerAutonomousCommands(
   bot: Bot,
@@ -16,6 +16,9 @@ export function registerAutonomousCommands(
       );
       return;
     }
+
+    // Persist chat ownership as soon as command is received, even if readiness fails.
+    await persistChatIdToLocalConfig(chatId);
 
     try {
       const response = await api.beginAutonomous(chatId);

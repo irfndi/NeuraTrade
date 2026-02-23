@@ -134,6 +134,14 @@ func (m *MockCCXTForTracker) CalculateFundingRateArbitrage(ctx context.Context, 
 	return args.Get(0).([]ccxt.FundingArbitrageOpportunity), args.Error(1)
 }
 
+func (m *MockCCXTForTracker) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	args := m.Called(ctx, exchange)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.BalanceResponse), args.Error(1)
+}
+
 func setupPositionTrackerTest(t *testing.T) (*PositionTracker, *MockCCXTForTracker, func()) {
 	logrusLogger := zaplogrus.New()
 

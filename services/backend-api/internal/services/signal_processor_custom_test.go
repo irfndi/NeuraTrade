@@ -67,7 +67,7 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 
 	// 4. getArbitrageOpportunities
 	mockPool.ExpectQuery("SELECT .* FROM arbitrage_opportunities .*").
-		WithArgs("BTC/USDT").
+		WithArgs("BTC/USDT", pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "trading_pair_id", "buy_exchange_id", "sell_exchange_id",
 			"buy_price", "sell_price", "profit_percentage", "detected_at", "expires_at",

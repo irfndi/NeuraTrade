@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import path from "node:path";
 import type { Bot } from "grammy";
 import { SessionManager } from "../../session";
 import { registerAutonomousCommands } from "./autonomous";
@@ -49,7 +50,28 @@ async function runCommand(
 }
 
 describe("BD command handlers", () => {
+  const originalHome = process.env.NEURATRADE_HOME;
+  let tempHome = "";
+
+  beforeEach(async () => {
+    tempHome = path.join(process.cwd(), ".tmp-test-neuratrade-home-commands");
+    await Bun.$`mkdir -p ${tempHome}`.quiet();
+    process.env.NEURATRADE_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    process.env.NEURATRADE_HOME = originalHome;
+    if (tempHome) {
+      await Bun.$`rm -rf ${tempHome}`.quiet();
+    }
+  });
+
   test("/begin handles readiness gate failure", async () => {
+    await Bun.write(
+      path.join(tempHome, "config.json"),
+      JSON.stringify({ telegram: {} }),
+    );
+
     const bot = new MockBot();
     const sessions = new SessionManager();
     const api = {
@@ -77,6 +99,13 @@ describe("BD command handlers", () => {
     expect(ctx.replies).toHaveLength(1);
     expect(ctx.replies[0]).toContain("Readiness gate blocked autonomous mode");
     expect(ctx.replies[0]).toContain("wallet minimum");
+
+    const cfg = (await Bun.file(path.join(tempHome, "config.json")).json()) as {
+      telegram?: { chat_id?: string };
+      services?: { telegram?: { chat_id?: string } };
+    };
+    expect(cfg.telegram?.chat_id).toBe("777");
+    expect(cfg.services?.telegram?.chat_id).toBe("777");
   });
 
   test("/liquidate_all requires confirmation before execution", async () => {

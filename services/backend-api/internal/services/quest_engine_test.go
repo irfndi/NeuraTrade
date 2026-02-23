@@ -42,7 +42,7 @@ func TestShouldExecute_MicroCadence(t *testing.T) {
 			expectedResult: true,
 		},
 		{
-			name: "skip non-divisible-5 minute",
+			name: "first execution at non-divisible-5 minute",
 			quest: &Quest{
 				ID:             "test-3",
 				Cadence:        CadenceMicro,
@@ -50,7 +50,7 @@ func TestShouldExecute_MicroCadence(t *testing.T) {
 				LastExecutedAt: nil,
 			},
 			now:            time.Date(2024, 1, 15, 10, 3, 0, 0, time.UTC),
-			expectedResult: false,
+			expectedResult: true,
 		},
 		{
 			name: "too soon since last execution",
@@ -108,7 +108,7 @@ func TestShouldExecute_HourlyCadence(t *testing.T) {
 			expectedResult: true,
 		},
 		{
-			name: "skip non-zero minute",
+			name: "first execution at non-zero minute",
 			quest: &Quest{
 				ID:             "test-2",
 				Cadence:        CadenceHourly,
@@ -116,7 +116,7 @@ func TestShouldExecute_HourlyCadence(t *testing.T) {
 				LastExecutedAt: nil,
 			},
 			now:            time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
-			expectedResult: false,
+			expectedResult: true,
 		},
 		{
 			name: "less than 1 hour since last execution",
@@ -174,7 +174,7 @@ func TestShouldExecute_DailyCadence(t *testing.T) {
 			expectedResult: true,
 		},
 		{
-			name: "skip non-midnight time",
+			name: "first execution at non-midnight time",
 			quest: &Quest{
 				ID:             "test-2",
 				Cadence:        CadenceDaily,
@@ -182,7 +182,7 @@ func TestShouldExecute_DailyCadence(t *testing.T) {
 				LastExecutedAt: nil,
 			},
 			now:            time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
-			expectedResult: false,
+			expectedResult: true,
 		},
 		{
 			name: "less than 24 hours since last execution",
@@ -247,7 +247,7 @@ func TestShouldExecute_WeeklyCadence(t *testing.T) {
 			expectedResult: true,
 		},
 		{
-			name: "skip Monday midnight",
+			name: "first execution on Monday midnight",
 			quest: &Quest{
 				ID:             "test-2",
 				Cadence:        CadenceWeekly,
@@ -255,7 +255,7 @@ func TestShouldExecute_WeeklyCadence(t *testing.T) {
 				LastExecutedAt: nil,
 			},
 			now:            monday,
-			expectedResult: false,
+			expectedResult: true,
 		},
 		{
 			name: "less than 7 days since last execution",

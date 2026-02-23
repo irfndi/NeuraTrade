@@ -1,5 +1,7 @@
 import type { Bot } from "grammy";
 import type { BackendApiClient } from "../api/client";
+import { persistChatIdToLocalConfig } from "./bd/helpers";
+import { logger } from "../utils/logger";
 
 export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
   bot.command("start", async (ctx) => {
@@ -7,31 +9,80 @@ export function registerStartCommand(bot: Bot, api: BackendApiClient): void {
     const userId = ctx.from?.id;
 
     if (!chatId || !userId) {
+      logger.error(
+        "[Start] Missing chat information",
+        new Error(`User: ${ctx.from?.username || "unknown"}`),
+      );
       await ctx.reply("Unable to start: missing chat information.");
       return;
     }
 
     const chatIdStr = String(chatId);
+    await persistChatIdToLocalConfig(chatIdStr);
+    logger.info("[Start] Processing command", {
+      userId,
+      chatId: chatIdStr,
+      username: ctx.from?.username,
+    });
 
     try {
       const userResult = await api.getUserByChatId(chatIdStr);
 
       if (!userResult) {
+        logger.info("[Start] Registering new user", {
+          userId,
+          chatId: chatIdStr,
+        });
+        const password = `${globalThis.crypto.randomUUID()}${globalThis.crypto.randomUUID()}`;
         await api.registerTelegramUser({
           email: `telegram_${userId}@neuratrade.ai`,
-          password: `${globalThis.crypto.randomUUID()}${globalThis.crypto.randomUUID()}`,
+          password: password,
           telegram_chat_id: chatIdStr,
         });
+        logger.info("[Start] User registered successfully", {
+          userId,
+          chatId: chatIdStr,
+        });
+
+        await ctx.reply(
+          "🚀 Welcome to NeuraTrade!\n\n" +
+            "✅ Your account has been created.\n\n" +
+            "Please follow the instructions sent to your registration channel to set your password.\n\n" +
+            "Get started:\n" +
+            "• /ai_models - View available AI models\n" +
+            "• /ai_select <model> - Select your AI\n" +
+            "• /help - See all commands",
+        );
+        return;
       }
-    } catch {
-      // Silently ignore errors to match original behavior
+
+      logger.info("[Start] User already exists", { userId, chatId: chatIdStr });
+    } catch (error) {
+      // Log registration errors for debugging
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(
+        "[Start] User registration failed",
+        new Error(`User ${userId}: ${errorMsg}`),
+      );
+      // Don't expose internal errors to users
+      await ctx.reply(
+        "⚠️ Unable to complete registration. Please try again or contact support.",
+      );
+      return;
     }
 
     const welcomeMsg =
       "🚀 Welcome to NeuraTrade!\n\n" +
-      "✅ You're now registered and ready to receive arbitrage alerts!\n\n" +
-      "Use /opportunities to see current opportunities.\n" +
-      "Use /help to see available commands.";
+      "Your AI-powered trading platform with:\n" +
+      "• 🤖 AI Models (OpenAI, Claude, NVIDIA, DeepSeek & more)\n" +
+      "• 📈 Automated Trading & Arbitrage Detection\n" +
+      "• 💰 Portfolio Management\n" +
+      "• ⚡ Real-time Market Data (107+ exchanges)\n\n" +
+      "Get started:\n" +
+      "• /ai_models - View available AI models\n" +
+      "• /ai_select <model> - Select your AI\n" +
+      "• /help - See all commands\n\n" +
+      "Powered by models.dev - All major AI providers in one place!";
 
     await ctx.reply(welcomeMsg);
   });

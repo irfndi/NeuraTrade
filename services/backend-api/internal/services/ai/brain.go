@@ -251,7 +251,7 @@ func (brain *AITradingBrain) Reason(ctx context.Context, req *ReasoningRequest) 
 	// Record decision for learning
 	if brain.config.EnableLearning {
 		go func() {
-			brain.learningSystem.RecordDecision(context.Background(), &DecisionRecord{
+			if err := brain.learningSystem.RecordDecision(context.Background(), &DecisionRecord{
 				ID:          decision.ID,
 				Timestamp:   time.Now(),
 				Strategy:    req.Strategy,
@@ -261,7 +261,9 @@ func (brain *AITradingBrain) Reason(ctx context.Context, req *ReasoningRequest) 
 				Confidence:  decision.Confidence,
 				ModelUsed:   brain.config.Model,
 				TokensUsed:  llmResp.Usage.TotalTokens,
-			})
+			}); err != nil {
+				log.Printf("Failed to record decision for learning: %v", err)
+			}
 		}()
 	}
 
@@ -325,6 +327,7 @@ REQUIREMENTS:
 
 	switch strategy {
 	case "scalping":
+		//nolint:staticcheck
 		return fmt.Sprintf(basePrompt, "high-frequency scalping") + `
 
 SCALPING SPECIFICS:
@@ -342,6 +345,7 @@ SCALPING SIGNALS TO LOOK FOR:
 - Price bouncing off support/resistance
 - Momentum in order flow`
 	case "arbitrage":
+		//nolint:staticcheck
 		return fmt.Sprintf(basePrompt, "cross-exchange arbitrage") + `
 
 ARBITRAGE SPECIFICS:
@@ -351,6 +355,7 @@ ARBITRAGE SPECIFICS:
 - Consider execution speed and reliability
 - Monitor for delayed settlements`
 	default:
+		//nolint:staticcheck
 		return fmt.Sprintf(basePrompt, strategy)
 	}
 }
@@ -435,8 +440,8 @@ func (brain *AITradingBrain) formatSimilarDecisions(decisions []*DecisionRecord)
 		if i >= 3 { // Limit to 3 examples
 			break
 		}
-		sb.WriteString(fmt.Sprintf("- Decision: %s, Outcome: %s, PnL: %.2f\n",
-			d.Decision.Action, d.Outcome, d.PnL))
+		fmt.Fprintf(&sb, "- Decision: %s, Outcome: %s, PnL: %.2f\n",
+			d.Decision.Action, d.Outcome, d.PnL)
 	}
 	return sb.String()
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,7 +40,9 @@ type OptimalStrategy struct {
 // NewInMemoryLearningSystem creates a new learning system
 func NewInMemoryLearningSystem() *InMemoryLearningSystem {
 	dataDir := filepath.Join("data", "ai_learning")
-	os.MkdirAll(dataDir, 0755)
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
+		log.Printf("Failed to create AI learning data directory: %v", err)
+	}
 
 	return &InMemoryLearningSystem{
 		decisions: make(map[string]*DecisionRecord),
@@ -68,7 +71,7 @@ func (ls *InMemoryLearningSystem) persistDecision(record *DecisionRecord) error 
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filename, data, 0644)
+	return os.WriteFile(filename, data, 0600)
 }
 
 // GetSimilarDecisions retrieves similar past decisions
@@ -180,9 +183,10 @@ func (ls *InMemoryLearningSystem) GenerateInsights(symbol string) *AIInsights {
 
 	for _, d := range ls.decisions {
 		if d.MarketState.Symbol == symbol && d.Outcome != "" {
-			if d.Outcome == "win" {
+			switch d.Outcome {
+			case "win":
 				wins++
-			} else if d.Outcome == "loss" {
+			case "loss":
 				losses++
 			}
 			totalPnL += d.PnL

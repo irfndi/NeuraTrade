@@ -21,5 +21,3 @@ CREATE TABLE IF NOT EXISTS funding_rates (
 CREATE INDEX IF NOT EXISTS idx_funding_rates_exchange ON funding_rates(exchange_id);
 CREATE INDEX IF NOT EXISTS idx_funding_rates_pair ON funding_rates(trading_pair_id);
 CREATE INDEX IF NOT EXISTS idx_funding_rates_time ON funding_rates(funding_time);
-
-INSERT INTO schema_migrations (filename, applied_at) VALUES ('008_add_funding_rates.sql', CURRENT_TIMESTAMP);

@@ -39,12 +39,6 @@ var DefaultScalpingConfig = ScalpingConfig{
 	TradeSizeUsd:           15.0,
 }
 
-// scalpingExecutor is an interface for executing scalping trades
-type scalpingExecutor interface {
-	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
-	GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error)
-}
-
 // RegisterDefaultQuestHandlers registers default handlers for all quest types
 func (e *QuestEngine) RegisterDefaultQuestHandlers(
 	ccxtService interface{},

@@ -19,7 +19,9 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/irfndi/neuratrade/internal/services/risk"
 	"github.com/irfndi/neuratrade/internal/skill"
+	redisv9 "github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
@@ -93,7 +95,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Initialize user handler early for internal routes
-	userHandler := handlers.NewUserHandler(db, redis.Client, authMiddleware)
+	var redisClientRaw *redisv9.Client
+	if redis != nil {
+		redisClientRaw = redis.Client
+	}
+
+	userHandler := handlers.NewUserHandler(db, redisClientRaw, authMiddleware)
 
 	// Initialize notification service with Redis caching
 	var notificationService *services.NotificationService
@@ -106,7 +113,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Initialize handlers
 	marketHandler := handlers.NewMarketHandler(db, ccxtService, collectorService, redis, cacheAnalyticsService)
-	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redis.Client)
+	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redisClientRaw)
 	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
@@ -122,13 +129,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// userHandler and telegramInternalHandler already initialized above for internal routes
 	alertHandler := handlers.NewAlertHandler(db)
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
-	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
+	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redisClientRaw)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	webSocketHandler := handlers.NewWebSocketHandler(redis)
 
 	// AI handler - uses registry from ai package
 	aiRegistry := ai.NewRegistry(
-		ai.WithRedis(redis.Client),
+		ai.WithRedis(redisClientRaw),
 	)
 	aiHandler := handlers.NewAIHandler(aiRegistry, db)
 
@@ -167,6 +174,32 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	questStore := services.NewInMemoryQuestStore()
 	questEngine := services.NewQuestEngineWithNotification(questStore, nil, notificationService)
 
+	riskConfig := risk.DefaultRiskManagerConfig()
+	riskManager := risk.NewRiskManagerAgent(riskConfig)
+	drawdownHalt := services.NewMaxDrawdownHalt(db, services.DefaultMaxDrawdownConfig())
+
+	var dailyLossTracker *risk.DailyLossTracker
+	var positionThrottle *risk.PositionSizeThrottle
+	if redisClientRaw != nil {
+		dailyLossTracker = risk.NewDailyLossTracker(redisClientRaw, risk.DailyLossCapConfig{
+			MaxDailyLoss: riskConfig.MaxDailyLoss,
+		})
+		positionThrottle = risk.NewPositionSizeThrottle(redisClientRaw, risk.DefaultPositionSizeThrottleConfig())
+	}
+
+	portfolioSafetyConfig := services.DefaultPortfolioSafetyConfig()
+	portfolioSafety := services.NewPortfolioSafetyService(
+		portfolioSafetyConfig,
+		ccxtService,
+		nil,
+		riskManager,
+		drawdownHalt,
+		dailyLossTracker,
+		positionThrottle,
+		redisClientRaw,
+		nil,
+	)
+
 	// Legacy quest preload is opt-in only.
 	// In scalping-first mode we avoid restoring old active rows without metadata/chat ownership.
 	loadLegacyQuests := os.Getenv("NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS") == "1" ||
@@ -204,7 +237,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 						quest.Checkpoint = cp
 					}
 				}
-				questStore.SaveQuest(context.Background(), quest)
+				if err := questStore.SaveQuest(context.Background(), quest); err != nil {
+					log.Printf("Failed to save quest %s: %v", id, err)
+				}
 				log.Printf("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
 				loadedCount++
 			}
@@ -239,7 +274,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Wire order executor to integrated handlers for scalping execution
 	adminAPIKey := os.Getenv("ADMIN_API_KEY")
 	if adminAPIKey == "" {
-		adminAPIKey = "37c6151f7da4ed66170688a3add5c0c5"
+		log.Printf("WARNING: ADMIN_API_KEY is not set; CCXT order executor requests will be unauthenticated")
 	}
 	ccxtServiceURL := os.Getenv("CCXT_SERVICE_URL")
 	if ccxtServiceURL == "" {
@@ -367,7 +402,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Register integrated handlers for production-ready quest execution
 	questEngine.RegisterIntegratedHandlers(integratedHandlers)
 
-	autonomousHandler := handlers.NewAutonomousHandler(questEngine, db, nil, nil)
+	autonomousHandler := handlers.NewAutonomousHandler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges())
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
 	// Internal service-to-service routes (no auth, network-isolated via Docker)

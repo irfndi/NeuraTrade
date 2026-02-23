@@ -100,6 +100,11 @@ type CCXTService interface {
 	// FetchMarkets retrieves all tradable markets on an exchange.
 	FetchMarkets(ctx context.Context, exchange string) (*MarketsResponse, error)
 
+	// Balance operations
+
+	// FetchBalance retrieves account balance for an exchange.
+	FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error)
+
 	// Funding rate operations
 
 	// FetchFundingRate retrieves the current funding rate for a symbol.

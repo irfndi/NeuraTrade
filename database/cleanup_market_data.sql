@@ -26,8 +26,8 @@ WHERE expires_at < datetime('now', '-7 days')
 
 -- Delete old signals (keep last 1000)
 DELETE FROM signals
-WHERE id NOT IN (
-  SELECT id FROM signals
+WHERE rowid NOT IN (
+  SELECT rowid FROM signals
   ORDER BY created_at DESC
   LIMIT 1000
 );

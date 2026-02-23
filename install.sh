@@ -7,7 +7,7 @@ BOOTSTRAP_CMD_NAME="NeuraTrade"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/neuratrade}"
+CONFIG_DIR="${CONFIG_DIR:-$HOME/.neuratrade}"
 ENV_TARGET="$CONFIG_DIR/.env"
 TMP_DIR=""
 SKIP_BUILD="${SKIP_BUILD:-false}"
@@ -73,10 +73,20 @@ install_binary() {
   )
 }
 
+install_cli_binary() {
+  local output_bin="$1"
+
+  require_cmd go
+  log "building $APP_NAME-cli binary"
+  (
+    cd "$REPO_ROOT/cmd/neuratrade-cli"
+    go build -o "$output_bin" .
+  )
+}
+
 create_bootstrap_command() {
   local bin_path="$INSTALL_DIR/$APP_NAME"
   local bootstrap_path="$INSTALL_DIR/$BOOTSTRAP_CMD_NAME"
-  local bootstrap_alias_path="$CONFIG_DIR/bootstrap-command.sh"
   local app_name_lower
   local bootstrap_name_lower
 
@@ -89,6 +99,7 @@ create_bootstrap_command() {
   fi
 
   if [[ "$app_name_lower" == "$bootstrap_name_lower" ]]; then
+    local bootstrap_alias_path="$CONFIG_DIR/bootstrap-command.sh"
     cat >"$bootstrap_alias_path" <<EOF
 alias $BOOTSTRAP_CMD_NAME="$bin_path"
 EOF
@@ -148,6 +159,14 @@ print_next_steps() {
   elif [[ "$BOOTSTRAP_MODE" == "alias" ]]; then
     printf 'Bootstrap alias file: %s\n' "$BOOTSTRAP_LOCATION"
   fi
+
+  # Create a shorter alias for the CLI
+  local cli_shortcut_path="$CONFIG_DIR/cli-shortcut.sh"
+  cat >"$cli_shortcut_path" <<EOF
+alias nt="$INSTALL_DIR/${APP_NAME}-cli"
+EOF
+  log "installed CLI shortcut alias at $cli_shortcut_path"
+  printf 'CLI shortcut: nt (alias for neuratrade-cli)\n'
   printf 'Config directory:  %s\n' "$CONFIG_DIR"
   printf 'Env template:      %s\n' "$ENV_TARGET"
   printf '\n'
@@ -161,16 +180,13 @@ print_next_steps() {
 
   printf 'Next steps:\n'
   printf '  1) Edit %s\n' "$ENV_TARGET"
+  printf '  2) Run: neuratrade gateway start     # Start all services\n'
+  printf '     Or:  neuratrade --help             # Show all commands\n'
   if [[ "$BOOTSTRAP_MODE" == "binary" ]]; then
-    printf '  2) Run: %s --help\n' "$BOOTSTRAP_LOCATION"
+    printf '  3) Backend: %s --help\n' "$BOOTSTRAP_LOCATION"
   elif [[ "$BOOTSTRAP_MODE" == "alias" ]]; then
-    printf '  2) Source alias: source %s\n' "$BOOTSTRAP_LOCATION"
-    printf '  3) Run: %s --help\n' "$BOOTSTRAP_CMD_NAME"
-  elif [[ "$binary_installed" == "true" ]]; then
-    printf '  2) Run: %s --help\n' "$bin_path"
-  else
-    printf '  2) Build manually: (cd %s/services/backend-api && go build -o %s ./cmd/server)\n' "$REPO_ROOT" "$bin_path"
-    printf '  3) Re-run install to create bootstrap command: ./install.sh\n'
+    printf '  3) Source alias: source %s\n' "$BOOTSTRAP_LOCATION"
+    printf '  4) Backend: %s --help\n' "$BOOTSTRAP_CMD_NAME"
   fi
 }
 
@@ -189,6 +205,12 @@ main() {
     install_binary "$tmp_bin"
     install -m 0755 "$tmp_bin" "$INSTALL_DIR/$APP_NAME"
     binary_installed="true"
+
+    # Also install the CLI binary
+    local tmp_cli_bin="$TMP_DIR/${APP_NAME}-cli"
+    install_cli_binary "$tmp_cli_bin"
+    install -m 0755 "$tmp_cli_bin" "$INSTALL_DIR/${APP_NAME}-cli"
+    log "installed ${APP_NAME}-cli binary to $INSTALL_DIR/${APP_NAME}-cli"
   fi
 
   create_bootstrap_command
