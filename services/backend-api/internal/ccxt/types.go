@@ -37,7 +37,7 @@ type Service struct {
 func NewService(cfg *config.CCXTConfig, logger *zaplogrus.Logger, blacklistCache cache.BlacklistCache) *Service {
 	// Use native CCXT implementation (direct exchange API calls)
 	nativeClient := NewNativeCCXTService(time.Duration(cfg.Timeout)*time.Second, 3)
-	
+
 	s := &Service{
 		nativeClient:       nativeClient,
 		supportedExchanges: make(map[string]ExchangeInfo),
@@ -62,7 +62,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 	if err := s.nativeClient.Initialize(ctx); err != nil {
 		return fmt.Errorf("failed to initialize native CCXT: %w", err)
 	}
-	
+
 	// Get exchanges from native client
 	for _, exchangeID := range s.nativeClient.GetSupportedExchanges() {
 		if info, ok := s.nativeClient.GetExchangeInfo(exchangeID); ok {

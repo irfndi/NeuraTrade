@@ -37,14 +37,13 @@ func newRateLimiter(callsPerSecond int) *rateLimiter {
 func (r *rateLimiter) Wait() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	elapsed := time.Since(r.lastCall)
 	if elapsed < r.minDelay {
 		time.Sleep(r.minDelay - elapsed)
 	}
 	r.lastCall = time.Now()
 }
-
 
 // NativeCCXTService implements CCXTService using direct exchange API calls
 type NativeCCXTService struct {
@@ -69,7 +68,7 @@ type ExchangeConnection struct {
 // NewNativeCCXTService creates a new native CCXT service
 func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTService {
 	return &NativeCCXTService{
-		rateLimiter:  newRateLimiter(10), // 10 requests per second
+		rateLimiter: newRateLimiter(10), // 10 requests per second
 		httpClient: &http.Client{
 			Timeout: timeout,
 			Transport: &http.Transport{
@@ -319,7 +318,7 @@ func (s *NativeCCXTService) buildTickerURL(exchange, symbol string) string {
 func (s *NativeCCXTService) fetchTickerFromURL(ctx context.Context, url, exchange, symbol string) (*TickerData, error) {
 	// Rate limit API calls
 	s.rateLimiter.Wait()
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
