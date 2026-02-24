@@ -15,6 +15,37 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// parseDecimal safely parses a string to decimal, returning zero on error
+func parseDecimal(s string) decimal.Decimal {
+	d, _ := decimal.NewFromString(s)
+	return d
+}
+
+// rateLimiter implements simple rate limiting for API calls
+type rateLimiter struct {
+	mu       sync.Mutex
+	lastCall time.Time
+	minDelay time.Duration
+}
+
+func newRateLimiter(callsPerSecond int) *rateLimiter {
+	return &rateLimiter{
+		minDelay: time.Duration(float64(time.Second) / float64(callsPerSecond)),
+	}
+}
+
+func (r *rateLimiter) Wait() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	elapsed := time.Since(r.lastCall)
+	if elapsed < r.minDelay {
+		time.Sleep(r.minDelay - elapsed)
+	}
+	r.lastCall = time.Now()
+}
+
+
 // NativeCCXTService implements CCXTService using direct exchange API calls
 type NativeCCXTService struct {
 	mu            sync.RWMutex
@@ -22,6 +53,7 @@ type NativeCCXTService struct {
 	exchanges     map[string]*ExchangeConnection
 	timeout       time.Duration
 	retryAttempts int
+	rateLimiter   *rateLimiter
 }
 
 // ExchangeConnection holds exchange-specific configuration
@@ -37,6 +69,7 @@ type ExchangeConnection struct {
 // NewNativeCCXTService creates a new native CCXT service
 func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTService {
 	return &NativeCCXTService{
+		rateLimiter:  newRateLimiter(10), // 10 requests per second
 		httpClient: &http.Client{
 			Timeout: timeout,
 			Transport: &http.Transport{
@@ -284,6 +317,9 @@ func (s *NativeCCXTService) buildTickerURL(exchange, symbol string) string {
 
 // fetchTickerFromURL fetches and parses ticker data from a URL
 func (s *NativeCCXTService) fetchTickerFromURL(ctx context.Context, url, exchange, symbol string) (*TickerData, error) {
+	// Rate limit API calls
+	s.rateLimiter.Wait()
+	
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -354,14 +390,14 @@ func (s *NativeCCXTService) parseBinanceTicker(symbol string, body []byte) (*Tic
 
 	return &Ticker{
 		Symbol:    symbol,
-		Last:      decimal.RequireFromString(raw.LastPrice),
-		Bid:       decimal.RequireFromString(raw.BidPrice),
-		Ask:       decimal.RequireFromString(raw.AskPrice),
-		High:      decimal.RequireFromString(raw.High24h),
-		Low:       decimal.RequireFromString(raw.Low24h),
-		Volume:    decimal.RequireFromString(raw.Volume24h),
-		Open:      decimal.RequireFromString(raw.OpenPrice),
-		Close:     decimal.RequireFromString(raw.PrevClosePrice),
+		Last:      parseDecimal(raw.LastPrice),
+		Bid:       parseDecimal(raw.BidPrice),
+		Ask:       parseDecimal(raw.AskPrice),
+		High:      parseDecimal(raw.High24h),
+		Low:       parseDecimal(raw.Low24h),
+		Volume:    parseDecimal(raw.Volume24h),
+		Open:      parseDecimal(raw.OpenPrice),
+		Close:     parseDecimal(raw.PrevClosePrice),
 		Timestamp: UnixTimestamp(time.Now()),
 	}, nil
 }
@@ -399,12 +435,12 @@ func (s *NativeCCXTService) parseBybitTicker(symbol string, body []byte) (*Ticke
 	t := raw.Result.List[0]
 	return &Ticker{
 		Symbol:    t.Symbol,
-		Last:      decimal.RequireFromString(t.LastPrice),
-		Bid:       decimal.RequireFromString(t.Bid1Price),
-		Ask:       decimal.RequireFromString(t.Ask1Price),
-		High:      decimal.RequireFromString(t.High24h),
-		Low:       decimal.RequireFromString(t.Low24h),
-		Volume:    decimal.RequireFromString(t.Volume24h),
+		Last:      parseDecimal(t.LastPrice),
+		Bid:       parseDecimal(t.Bid1Price),
+		Ask:       parseDecimal(t.Ask1Price),
+		High:      parseDecimal(t.High24h),
+		Low:       parseDecimal(t.Low24h),
+		Volume:    parseDecimal(t.Volume24h),
 		Timestamp: UnixTimestamp(time.Now()),
 	}, nil
 }
@@ -440,12 +476,12 @@ func (s *NativeCCXTService) parseOKXTicker(symbol string, body []byte) (*Ticker,
 	t := raw.Data[0]
 	return &Ticker{
 		Symbol:    t.InstID,
-		Last:      decimal.RequireFromString(t.Last),
-		Bid:       decimal.RequireFromString(t.BidPx),
-		Ask:       decimal.RequireFromString(t.AskPx),
-		High:      decimal.RequireFromString(t.High24h),
-		Low:       decimal.RequireFromString(t.Low24h),
-		Volume:    decimal.RequireFromString(t.Vol24h),
+		Last:      parseDecimal(t.Last),
+		Bid:       parseDecimal(t.BidPx),
+		Ask:       parseDecimal(t.AskPx),
+		High:      parseDecimal(t.High24h),
+		Low:       parseDecimal(t.Low24h),
+		Volume:    parseDecimal(t.Vol24h),
 		Timestamp: UnixTimestamp(time.Now()),
 	}, nil
 }
@@ -544,7 +580,161 @@ func (s *NativeCCXTService) FetchTrades(ctx context.Context, exchange, symbol st
 }
 
 func (s *NativeCCXTService) FetchMarkets(ctx context.Context, exchange string) (*MarketsResponse, error) {
-	return &MarketsResponse{}, nil
+	s.mu.RLock()
+	_, ok := s.exchanges[exchange]
+	s.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("exchange %s not initialized", exchange)
+	}
+
+	url := s.buildMarketsURL(exchange)
+	if url == "" {
+		return nil, fmt.Errorf("markets endpoint not supported for %s", exchange)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "NeuraTrade/1.0")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	symbols, err := s.parseMarketsResponse(exchange, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return &MarketsResponse{
+		Exchange:  exchange,
+		Symbols:   symbols,
+		Count:     len(symbols),
+		Timestamp: time.Now().Format(time.RFC3339),
+	}, nil
+}
+
+func (s *NativeCCXTService) buildMarketsURL(exchange string) string {
+	switch exchange {
+	case "binance":
+		return "https://api.binance.com/api/v3/exchangeInfo"
+	case "bybit":
+		return "https://api.bybit.com/v5/market/instruments-info?category=linear"
+	case "okx":
+		return "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+	default:
+		return ""
+	}
+}
+
+func (s *NativeCCXTService) parseMarketsResponse(exchange string, body []byte) ([]string, error) {
+	switch exchange {
+	case "binance":
+		return s.parseBinanceMarkets(body)
+	case "bybit":
+		return s.parseBybitMarkets(body)
+	case "okx":
+		return s.parseOKXMarkets(body)
+	default:
+		return nil, fmt.Errorf("unsupported exchange: %s", exchange)
+	}
+}
+
+func (s *NativeCCXTService) parseBinanceMarkets(body []byte) ([]string, error) {
+	var raw struct {
+		Symbols []struct {
+			Symbol     string `json:"symbol"`
+			BaseAsset  string `json:"baseAsset"`
+			QuoteAsset string `json:"quoteAsset"`
+			Status     string `json:"status"`
+		} `json:"symbols"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse Binance markets: %w", err)
+	}
+	var symbols []string
+	for _, sym := range raw.Symbols {
+		if sym.Status != "TRADING" || sym.QuoteAsset != "USDT" {
+			continue
+		}
+		// Convert BTCUSDT format to BTC/USDT format
+		formatted := sym.BaseAsset + "/" + sym.QuoteAsset
+		symbols = append(symbols, formatted)
+	}
+	return symbols, nil
+}
+
+func (s *NativeCCXTService) parseBybitMarkets(body []byte) ([]string, error) {
+	var raw struct {
+		RetCode int `json:"retCode"`
+		Result  struct {
+			List []struct {
+				Symbol    string `json:"symbol"`
+				BaseCoin  string `json:"baseCoin"`
+				QuoteCoin string `json:"quoteCoin"`
+				Status    string `json:"status"`
+			} `json:"list"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse Bybit markets: %w", err)
+	}
+	if raw.RetCode != 0 {
+		return nil, fmt.Errorf("Bybit API error")
+	}
+	var symbols []string
+	for _, sym := range raw.Result.List {
+		if sym.Status != "Trading" || sym.QuoteCoin != "USDT" {
+			continue
+		}
+		// Convert BTCUSDT format to BTC/USDT format
+		formatted := sym.BaseCoin + "/" + sym.QuoteCoin
+		symbols = append(symbols, formatted)
+	}
+	return symbols, nil
+}
+
+func (s *NativeCCXTService) parseOKXMarkets(body []byte) ([]string, error) {
+	var raw struct {
+		Code string `json:"code"`
+		Data []struct {
+			InstId   string `json:"instId"`
+			BaseCcy  string `json:"baseCcy"`
+			QuoteCcy string `json:"quoteCcy"`
+			State    string `json:"state"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse OKX markets: %w", err)
+	}
+	if raw.Code != "0" {
+		return nil, fmt.Errorf("OKX API error")
+	}
+	var symbols []string
+	for _, inst := range raw.Data {
+		if inst.State != "live" || inst.QuoteCcy != "USDT" {
+			continue
+		}
+		// Convert BTC-USDT format to BTC/USDT format
+		formatted := inst.BaseCcy + "/" + inst.QuoteCcy
+		symbols = append(symbols, formatted)
+	}
+	return symbols, nil
 }
 
 func (s *NativeCCXTService) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
