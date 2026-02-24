@@ -282,30 +282,47 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		return err
 	}
 
-	usdtBalance := 0.0
-
-	balanceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	balance, err := balanceFetcher.FetchBalance(balanceCtx, "binance")
-	if err != nil {
-		log.Printf("[SCALPING] Failed to fetch balance, skipping cycle: %v", err)
-		quest.Checkpoint["status"] = "balance_unavailable_hold"
-		quest.Checkpoint["balance_warning"] = err.Error()
-		quest.Checkpoint["chat_id"] = chatID
-		return nil
-	}
-
-	if balance.Total != nil {
-		if v := balance.Total["USDT"]; v > 0 {
-			usdtBalance = v
+	// Check if we're in dry-run/paper trading mode
+	isDryRun := false
+	if quest.Metadata != nil {
+		if dryRunVal, ok := quest.Metadata["dry_run"]; ok && dryRunVal == "true" {
+			isDryRun = true
 		}
 	}
-	if usdtBalance <= 0 {
-		log.Printf("[SCALPING] USDT balance is zero/unavailable, skipping cycle")
-		quest.Checkpoint["status"] = "balance_zero_hold"
-		quest.Checkpoint["chat_id"] = chatID
-		return nil
+
+	usdtBalance := 0.0
+
+	// In dry-run mode, use virtual balance instead of requiring real exchange API keys
+	if isDryRun {
+		usdtBalance = 1000.0 // Virtual balance for paper trading
+		log.Printf("[SCALPING] DRY-RUN MODE: Using virtual balance of %.2f USDT", usdtBalance)
+		quest.Checkpoint["dry_run"] = true
+		quest.Checkpoint["virtual_balance"] = usdtBalance
+	} else {
+		// Live mode - require real balance from exchange
+		balanceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		balance, err := balanceFetcher.FetchBalance(balanceCtx, "binance")
+		if err != nil {
+			log.Printf("[SCALPING] Failed to fetch balance, skipping cycle: %v", err)
+			quest.Checkpoint["status"] = "balance_unavailable_hold"
+			quest.Checkpoint["balance_warning"] = err.Error()
+			quest.Checkpoint["chat_id"] = chatID
+			return nil
+		}
+
+		if balance.Total != nil {
+			if v := balance.Total["USDT"]; v > 0 {
+				usdtBalance = v
+			}
+		}
+		if usdtBalance <= 0 {
+			log.Printf("[SCALPING] USDT balance is zero/unavailable, skipping cycle")
+			quest.Checkpoint["status"] = "balance_zero_hold"
+			quest.Checkpoint["chat_id"] = chatID
+			return nil
+		}
 	}
 
 	portfolio := TradingPortfolio{
