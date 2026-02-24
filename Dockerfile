@@ -3,7 +3,7 @@
 # ==========================================
 # This Dockerfile builds all services from the monorepo structure:
 # - services/backend-api (Go)
-# - services/ccxt-service (Bun/TypeScript)
+# - services/ccxt-service (REMOVED - migrated to Go)
 # - services/telegram-service (Bun/TypeScript)
 # ==========================================
 
@@ -34,14 +34,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o 
 FROM oven/bun:1 AS ccxt-builder
 WORKDIR /app
 
-# Copy ccxt-service files
-COPY services/ccxt-service/package.json services/ccxt-service/bun.lock? ./
+# Copy ccxt-service files (REMOVED)
+# COPY services/ccxt-service/package.json (REMOVED) services/ccxt-service/bun.lock? ./
 
 # Install dependencies (fallback to non-frozen if lockfile missing)
 RUN bun install --frozen-lockfile || bun install
 
 # Copy source code
-COPY services/ccxt-service/ .
+# COPY services/ccxt-service/ . (REMOVED)
 
 # Build (try build:bun first, then standard build)
 RUN bun run build:bun || bun run build

@@ -87,7 +87,7 @@ neuratrade gateway logs --tail 50
 
 - `--native` - Run services as native processes instead of Docker
 - `--no-backend` - Skip starting backend-api service
-- `--no-ccxt` - Skip starting ccxt-service
+- `--no-ccxt` - Deprecated (CCXT now native Go)
 - `--no-telegram` - Skip starting telegram-service
 - `--detach, -d` - Run in detached mode (Docker only)
 
@@ -114,7 +114,7 @@ cd services/backend-api
 go run ./cmd/server/main.go
 
 # Terminal 2: CCXT Service
-cd services/ccxt-service
+# cd services/ccxt-service (REMOVED - migrated to Go)
 bun run index.ts
 
 # Terminal 3: Telegram Service
