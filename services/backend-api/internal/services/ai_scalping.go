@@ -906,8 +906,18 @@ func parseAIDecisionPayload(content string) (*AITradingDecision, error) {
 		TakeProfit  json.RawMessage `json:"take_profit"`
 	}
 
-	if err := json.Unmarshal([]byte(content), &payload); err != nil {
-		return nil, err
+	raw := strings.TrimSpace(content)
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		start := strings.Index(raw, "{")
+		end := strings.LastIndex(raw, "}")
+		if start >= 0 && end > start {
+			extracted := raw[start : end+1]
+			if extractErr := json.Unmarshal([]byte(extracted), &payload); extractErr != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	stopLoss, err := parseOptionalDecimal(payload.StopLoss)
