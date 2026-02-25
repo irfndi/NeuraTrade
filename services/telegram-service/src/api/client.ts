@@ -426,11 +426,14 @@ export class BackendApiClient {
     confirmedBy = "telegram",
   ): Promise<import("./types").TradingModeConfirmationResponse> {
     const endpoint = `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}/confirm`;
-    return this.fetch<import("./types").TradingModeConfirmationResponse>(endpoint, {
-      method: "POST",
-      body: JSON.stringify({ confirmed_by: confirmedBy }),
-      requireAdmin: false,
-    });
+    return this.fetch<import("./types").TradingModeConfirmationResponse>(
+      endpoint,
+      {
+        method: "POST",
+        body: JSON.stringify({ confirmed_by: confirmedBy }),
+        requireAdmin: false,
+      },
+    );
   }
 }
 

@@ -81,7 +81,7 @@ type openAIRequest struct {
 
 type openAIMessage struct {
 	Role             string           `json:"role"`
-	Content           interface{}      `json:"content"`
+	Content          interface{}      `json:"content"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 	ToolID           string           `json:"tool_call_id,omitempty"`
 	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
@@ -131,7 +131,7 @@ type openAIChoice struct {
 
 type openAIDelta struct {
 	Role             string           `json:"role,omitempty"`
-	Content           string           `json:"content,omitempty"`
+	Content          string           `json:"content,omitempty"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
 }

@@ -11,20 +11,20 @@ import (
 )
 
 // TradeDetails contains all information for a trade notification
- type TradeDetails struct {
+type TradeDetails struct {
 	Exchange      string
 	Symbol        string
 	Side          string
-	OrderType     string  // market, limit
-	MarketType    string  // spot, futures
-	Leverage      int     // for futures
+	OrderType     string // market, limit
+	MarketType    string // spot, futures
+	Leverage      int    // for futures
 	Amount        decimal.Decimal
 	AmountUSDT    decimal.Decimal
 	WalletPercent float64
 	EntryPrice    *decimal.Decimal
 	TakeProfit    *decimal.Decimal
 	StopLoss      *decimal.Decimal
-	TradeType     string  // scalping, arbitrage, swing, etc.
+	TradeType     string // scalping, arbitrage, swing, etc.
 	Confidence    float64
 	Reasoning     string
 	OrderID       string
@@ -69,9 +69,9 @@ func (e *NativeOrderExecutor) SetWalletBalance(balance float64) {
 func (e *NativeOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
 	// For paper trading / testing, simulate order placement
 	orderID := fmt.Sprintf("paper-order-%s-%s-%s", exchange, symbol, side)
-	
+
 	fmt.Printf("[NATIVE-ORDER] Placing %s order for %s %s (amount: %s USDT)\n", side, exchange, symbol, amount.String())
-	
+
 	return orderID, nil
 }
 
@@ -81,22 +81,22 @@ func (e *NativeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	if details.IsPaperTrade {
 		orderID = fmt.Sprintf("paper-%s", orderID)
 	}
-	
-	fmt.Printf("[NATIVE-ORDER] Placing %s order for %s %s (amount: %s USDT)\n", 
+
+	fmt.Printf("[NATIVE-ORDER] Placing %s order for %s %s (amount: %s USDT)\n",
 		details.Side, details.Exchange, details.Symbol, details.AmountUSDT.String())
-	
+
 	// Send rich Telegram notification
 	if e.notificationService != nil && e.chatID != "" {
 		msg := e.formatTradeNotification(details, orderID)
 		chatIDInt, _ := strconv.ParseInt(e.chatID, 10, 64)
-		
+
 		go func() {
 			if err := e.notificationService.sendTelegramMessage(ctx, chatIDInt, msg); err != nil {
 				fmt.Printf("[NATIVE-ORDER] Failed to send Telegram notification: %v\n", err)
 			}
 		}()
 	}
-	
+
 	return orderID, nil
 }
 
@@ -107,7 +107,7 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 	if d.Side == "sell" {
 		actionEmoji = "🔴"
 	}
-	
+
 	// Trade type emoji
 	tradeEmoji := "⚡" // scalping
 	if d.TradeType == "arbitrage" {
@@ -115,15 +115,15 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 	} else if d.TradeType == "swing" {
 		tradeEmoji = "📊"
 	}
-	
+
 	// Market type string
 	marketStr := "Spot"
 	if d.MarketType == "futures" {
 		marketStr = fmt.Sprintf("Futures (%dx)", d.Leverage)
 	}
-	
+
 	var lines []string
-	
+
 	// Header
 	if d.IsPaperTrade {
 		lines = append(lines, "⚠️ **PAPER TRADE**")
@@ -131,18 +131,18 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 		lines = append(lines, "✅ **TRADE EXECUTED**")
 	}
 	lines = append(lines, "")
-	
+
 	// Main info
 	lines = append(lines, fmt.Sprintf("%s **%s %s**", actionEmoji, strings.ToUpper(d.Side), d.Symbol))
 	lines = append(lines, "")
-	
+
 	// Trade details table
 	lines = append(lines, "━━━━━━━━━━━━━━━━━━━━━")
 	lines = append(lines, fmt.Sprintf("%s Type: %s", tradeEmoji, strings.Title(d.TradeType)))
 	lines = append(lines, fmt.Sprintf("📍 Market: %s", marketStr))
 	lines = append(lines, fmt.Sprintf("🏢 Exchange: %s", strings.Title(d.Exchange)))
 	lines = append(lines, "")
-	
+
 	// Position size
 	lines = append(lines, "💰 **Position Size**")
 	lines = append(lines, fmt.Sprintf("   Amount: %.2f USDT", d.AmountUSDT.InexactFloat64()))
@@ -153,7 +153,7 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 		lines = append(lines, fmt.Sprintf("   Entry: %s", formatPrice(*d.EntryPrice)))
 	}
 	lines = append(lines, "")
-	
+
 	// Risk management
 	if d.TakeProfit != nil || d.StopLoss != nil {
 		lines = append(lines, "🎯 **Risk Management**")
@@ -173,7 +173,7 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 		}
 		lines = append(lines, "")
 	}
-	
+
 	// AI Confidence
 	if d.Confidence > 0 {
 		confEmoji := "📊"
@@ -184,7 +184,7 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 		}
 		lines = append(lines, fmt.Sprintf("%s Confidence: %.0f%%", confEmoji, d.Confidence*100))
 	}
-	
+
 	// Reasoning (truncated)
 	if d.Reasoning != "" {
 		maxLen := 150
@@ -194,10 +194,10 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 		}
 		lines = append(lines, fmt.Sprintf("💭 _%s_", reasoning))
 	}
-	
+
 	lines = append(lines, "")
 	lines = append(lines, fmt.Sprintf("🎫 Order: `%s`", orderID))
-	
+
 	return strings.Join(lines, "\n")
 }
 
@@ -234,7 +234,7 @@ var _ ScalpingOrderExecutor = (*NativeOrderExecutor)(nil)
 // ExecuteTestTrade executes a test trade for debugging purposes
 func (e *NativeOrderExecutor) ExecuteTestTrade(ctx context.Context, exchange, symbol, side string) (string, error) {
 	amount := decimal.NewFromFloat(10.0)
-	
+
 	details := TradeDetails{
 		Exchange:      exchange,
 		Symbol:        symbol,
@@ -249,13 +249,13 @@ func (e *NativeOrderExecutor) ExecuteTestTrade(ctx context.Context, exchange, sy
 		Reasoning:     "Test trade to verify system connectivity",
 		IsPaperTrade:  true,
 	}
-	
+
 	orderID, err := e.PlaceOrderWithDetails(ctx, details)
 	if err != nil {
 		return "", err
 	}
-	
+
 	fmt.Printf("[NATIVE-ORDER] 🧪 TEST TRADE: %s %s %s (amount: %s USDT)\n", side, exchange, symbol, amount.String())
-	
+
 	return orderID, nil
 }

@@ -1,14 +1,14 @@
 package middleware
 
 import (
-	"encoding/json"
-	"path/filepath"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -64,29 +64,29 @@ func getAdminAPIKeyFromConfig() string {
 	if err != nil {
 		return ""
 	}
-	
+
 	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return ""
 	}
-	
+
 	var config map[string]interface{}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return ""
 	}
-	
+
 	if apiKey, ok := config["admin_api_key"].(string); ok {
 		return apiKey
 	}
-	
+
 	return ""
 }
 
 func NewAdminMiddleware() *AdminMiddleware {
 	// Get admin API key from config.json first, then environment variable
 	apiKey := getAdminAPIKeyFromConfig()
-	
+
 	if apiKey == "" {
 		apiKey = os.Getenv("ADMIN_API_KEY")
 	}

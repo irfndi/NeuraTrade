@@ -120,11 +120,11 @@ func (m *WalletValidationMetrics) GetMetrics() WalletValidationMetrics {
 }
 
 type WalletValidator struct {
-	config       WalletValidatorConfig
-	db           DBPool
-	ccxtService  *ccxt.Service
-	metrics      WalletValidationMetrics
-	mu           sync.RWMutex
+	config      WalletValidatorConfig
+	db          DBPool
+	ccxtService *ccxt.Service
+	metrics     WalletValidationMetrics
+	mu          sync.RWMutex
 }
 
 func NewWalletValidator(db DBPool, config WalletValidatorConfig) *WalletValidator {
@@ -302,7 +302,7 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 			}
 			wv.metrics.IncrementChecksByExchange(exchange)
 		}
-		
+
 		log.Printf("[WalletValidator] Fetched balances from %d exchanges: %d assets", len(exchanges), len(balances))
 	} else {
 		log.Printf("[WalletValidator] CCXT service not available, returning empty balances")

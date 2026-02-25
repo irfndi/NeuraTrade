@@ -393,4 +393,3 @@ export const TRADING_MODE_ENDPOINTS = {
   RESET_CONFIRMATIONS: (chatId: string) =>
     `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}/confirmations`,
 } as const;
-

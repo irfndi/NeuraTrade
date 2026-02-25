@@ -214,18 +214,18 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	// Example: 3 USDT / 0.01235 USDT per PORTAL = 243 PORTAL
 	// With sizeMultiplier 0.1: 243 / 0.1 = 2430 contracts
 	baseAmount := details.AmountUSDT.Div(price)
-	
+
 	// Convert to number of contracts based on sizeMultiplier
 	contractSize := baseAmount.Div(contractInfo.SizeMultiplier)
-	
+
 	// Round to appropriate precision based on volumePlace
 	contractSize = contractSize.Round(int32(contractInfo.VolumePlace))
-	
+
 	// Ensure minimum size
 	if contractSize.LessThan(contractInfo.MinTradeNum) {
 		contractSize = contractInfo.MinTradeNum
 	}
-	
+
 	size := contractSize.String()
 
 	fmt.Printf("[BITGET-ORDER] Size calc: %.2f USDT / %s = %.2f base / %s = %s contracts\n",

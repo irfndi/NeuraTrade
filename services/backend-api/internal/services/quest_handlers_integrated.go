@@ -13,6 +13,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/skill"
 	"github.com/shopspring/decimal"
 )
+
 type ScalpingOrderExecutor interface {
 	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
 	PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error)
@@ -33,6 +34,7 @@ type IntegratedQuestHandlers struct {
 	tradeMemory         *TradeMemory
 	db                  *sql.DB // Database for user settings
 }
+
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
 func NewIntegratedQuestHandlers(
 	ta *TechnicalAnalysisService,
@@ -292,7 +294,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// Get user's preferred exchange from database or default to bitget
 	userExchange := h.getUserExchange(chatID)
 	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
-	
+
 	// Set exchange on AI scalping service
 	if h.aiScalpingService != nil {
 		h.aiScalpingService.SetExchange(userExchange)
@@ -671,18 +673,18 @@ func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
 		log.Printf("[SCALPING] No database available, using default exchange: bitget")
 		return "bitget"
 	}
-	
+
 	var exchange string
 	query := `SELECT provider FROM telegram_operator_wallets 
 	          WHERE chat_id = ? AND status = 'connected' 
 	          ORDER BY created_at DESC LIMIT 1`
-	
+
 	err := h.db.QueryRow(query, chatID).Scan(&exchange)
 	if err != nil {
 		log.Printf("[SCALPING] No exchange found for chat %s, using default: bitget (%v)", chatID, err)
 		return "bitget"
 	}
-	
+
 	log.Printf("[SCALPING] Found user exchange: %s for chat: %s", exchange, chatID)
 	return exchange
 }

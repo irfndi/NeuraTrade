@@ -93,7 +93,7 @@ func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTS
 // NewNativeCCXTServiceWithConfig creates a native CCXT service with exchange credentials from config
 func NewNativeCCXTServiceWithConfig(timeout time.Duration, retryAttempts int, exchangeCreds map[string]config.ExchangeCredentials) *NativeCCXTService {
 	s := NewNativeCCXTService(timeout, retryAttempts)
-	
+
 	// Populate exchange credentials from config
 	for name, creds := range exchangeCreds {
 		baseURL, ok := s.getExchangeBaseURL(name)
@@ -121,7 +121,7 @@ func (s *NativeCCXTService) Initialize(ctx context.Context) error {
 
 	// Initialize default exchanges
 	defaultExchanges := []string{"binance", "bybit", "okx", "bitget"}
-	
+
 	for _, exchange := range defaultExchanges {
 		if err := s.initializeExchange(exchange); err != nil {
 			log.Printf("[CCXT Native] Failed to initialize %s: %v", exchange, err)
@@ -557,20 +557,19 @@ func (s *NativeCCXTService) parseOKXTicker(symbol string, body []byte) (*Ticker,
 	}, nil
 }
 
-
 func (s *NativeCCXTService) parseBitgetTicker(symbol string, body []byte) (*Ticker, error) {
 	var raw struct {
 		Code string `json:"code"`
 		Msg  string `json:"msg"`
 		Data []struct {
-			Symbol      string `json:"symbol"`
-			LastPr      string `json:"lastPr"`
-			BidPr       string `json:"bidPr"`
-			AskPr       string `json:"askPr"`
-			High24h     string `json:"high24h"`
-			Low24h      string `json:"low24h"`
-			BaseVolume  string `json:"baseVolume"`
-			Change24h   string `json:"change24h"`
+			Symbol     string `json:"symbol"`
+			LastPr     string `json:"lastPr"`
+			BidPr      string `json:"bidPr"`
+			AskPr      string `json:"askPr"`
+			High24h    string `json:"high24h"`
+			Low24h     string `json:"low24h"`
+			BaseVolume string `json:"baseVolume"`
+			Change24h  string `json:"change24h"`
 		} `json:"data"`
 	}
 
@@ -864,7 +863,7 @@ func (s *NativeCCXTService) parseBinanceOHLCV(symbol, timeframe string, body []b
 		if len(candle) < 6 {
 			continue
 		}
-		
+
 		timestamp := time.UnixMilli(int64(candle[0].(float64)))
 		open, _ := decimal.NewFromString(candle[1].(string))
 		high, _ := decimal.NewFromString(candle[2].(string))
@@ -988,8 +987,8 @@ func (s *NativeCCXTService) parseOKXOHLCV(symbol, timeframe string, body []byte)
 // parseBitgetOHLCV parses Bitget candles response
 func (s *NativeCCXTService) parseBitgetOHLCV(symbol, timeframe string, body []byte) (*OHLCVResponse, error) {
 	var raw struct {
-		Code string `json:"code"`
-		Msg  string `json:"msg"`
+		Code string     `json:"code"`
+		Msg  string     `json:"msg"`
 		Data [][]string `json:"data"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -1204,10 +1203,10 @@ func (s *NativeCCXTService) parseBitgetMarkets(body []byte) ([]string, error) {
 		Code string `json:"code"`
 		Msg  string `json:"msg"`
 		Data []struct {
-			Symbol     string `json:"symbol"`
-			BaseCoin   string `json:"baseCoin"`
-			QuoteCoin  string `json:"quoteCoin"`
-			Status     string `json:"status"`
+			Symbol    string `json:"symbol"`
+			BaseCoin  string `json:"baseCoin"`
+			QuoteCoin string `json:"quoteCoin"`
+			Status    string `json:"status"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -1456,11 +1455,11 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		Msg  string `json:"msg"`
 		Data []struct {
 			Coin []struct {
-				Coin    string `json:"coin"`
-				Balance string `json:"balance"`
+				Coin      string `json:"coin"`
+				Balance   string `json:"balance"`
 				Available string `json:"available"`
-				Frozen   string `json:"frozen"`
-				Lock     string `json:"lock"`
+				Frozen    string `json:"frozen"`
+				Lock      string `json:"lock"`
 			} `json:"coinList"`
 		} `json:"data"`
 	}
@@ -1490,11 +1489,11 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 			free, _ := strconv.ParseFloat(coin.Available, 64)
 			frozen, _ := strconv.ParseFloat(coin.Frozen, 64)
 			locked, _ := strconv.ParseFloat(coin.Lock, 64)
-			
+
 			result.Total[coin.Coin] = total
 			result.Free[coin.Coin] = free
 			result.Used[coin.Coin] = frozen + locked
-			
+
 			if total > 0 {
 				log.Printf("[CCXT Native] Bitget balance: %s = %.8f (free: %.8f)", coin.Coin, total, free)
 			}
@@ -1507,15 +1506,15 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 
 // fetchBinanceBalance fetches balance from Binance exchange
 func (s *NativeCCXTService) fetchBinanceBalance(ctx context.Context, conn *ExchangeConnection) (*BalanceResponse, error) {
-	 baseURL := "https://api.binance.com"
+	baseURL := "https://api.binance.com"
 	if conn.Testnet {
 		baseURL = "https://testnet.binance.vision"
 	}
-	
+
 	endpoint := "/api/v3/account"
 	timestamp := time.Now().UnixMilli()
 	queryString := fmt.Sprintf("timestamp=%d", timestamp)
-	
+
 	// Generate signature
 	signature := s.generateHMACSignature(conn.Secret, queryString)
 	url := fmt.Sprintf("%s%s?%s&signature=%s", baseURL, endpoint, queryString, signature)
@@ -1540,10 +1539,10 @@ func (s *NativeCCXTService) fetchBinanceBalance(ctx context.Context, conn *Excha
 
 	// Parse Binance account response
 	var raw struct {
-		MakerCommission  int64 `json:"makerCommission"`
-		TakerCommission  int64 `json:"takerCommission"`
-		CanTrade         bool  `json:"canTrade"`
-		Balances []struct {
+		MakerCommission int64 `json:"makerCommission"`
+		TakerCommission int64 `json:"takerCommission"`
+		CanTrade        bool  `json:"canTrade"`
+		Balances        []struct {
 			Asset  string `json:"asset"`
 			Free   string `json:"free"`
 			Locked string `json:"locked"`
@@ -1566,7 +1565,7 @@ func (s *NativeCCXTService) fetchBinanceBalance(ctx context.Context, conn *Excha
 		free, _ := strconv.ParseFloat(balance.Free, 64)
 		locked, _ := strconv.ParseFloat(balance.Locked, 64)
 		total := free + locked
-		
+
 		if total > 0 {
 			result.Total[balance.Asset] = total
 			result.Free[balance.Asset] = free
@@ -1585,11 +1584,11 @@ func (s *NativeCCXTService) fetchBybitBalance(ctx context.Context, conn *Exchang
 	if conn.Testnet {
 		baseURL = "https://api-testnet.bybit.com"
 	}
-	
+
 	endpoint := "/v5/account/wallet-balance"
 	accountType := "UNIFIED"
 	timestamp := time.Now().UnixMilli()
-	
+
 	// Generate signature
 	signString := fmt.Sprintf("%d%s%s%s", timestamp, conn.APIKey, "5000", accountType)
 	signature := s.generateHMACSignature(conn.Secret, signString)
@@ -1623,11 +1622,11 @@ func (s *NativeCCXTService) fetchBybitBalance(ctx context.Context, conn *Exchang
 		Result  struct {
 			List []struct {
 				AccountType string `json:"accountType"`
-				Coin []struct {
-					Coin       string `json:"coin"`
-					WalletBalance string `json:"walletBalance"`
+				Coin        []struct {
+					Coin                string `json:"coin"`
+					WalletBalance       string `json:"walletBalance"`
 					AvailableToWithdraw string `json:"availableToWithdraw"`
-					TotalEquity string `json:"totalEquity"`
+					TotalEquity         string `json:"totalEquity"`
 				} `json:"coin"`
 			} `json:"list"`
 		} `json:"result"`
@@ -1653,7 +1652,7 @@ func (s *NativeCCXTService) fetchBybitBalance(ctx context.Context, conn *Exchang
 		for _, coin := range account.Coin {
 			balance, _ := strconv.ParseFloat(coin.WalletBalance, 64)
 			available, _ := strconv.ParseFloat(coin.AvailableToWithdraw, 64)
-			
+
 			if balance > 0 {
 				result.Total[coin.Coin] = balance
 				result.Free[coin.Coin] = available
@@ -1673,12 +1672,12 @@ func (s *NativeCCXTService) fetchOKXBalance(ctx context.Context, conn *ExchangeC
 	if conn.Testnet {
 		baseURL = "https://www.okx.com" // OKX uses same URL with different headers for testnet
 	}
-	
+
 	endpoint := "/api/v5/account/balance"
 	timestamp := time.Now().UTC().Format("2006-01-02T15:04:05.999Z")
 	method := "GET"
 	body := ""
-	
+
 	// Generate signature
 	signString := timestamp + method + endpoint + body
 	signature := s.generateBase64HMACSignature(conn.Secret, signString)
@@ -1741,7 +1740,7 @@ func (s *NativeCCXTService) fetchOKXBalance(ctx context.Context, conn *ExchangeC
 		for _, detail := range balanceData.Details {
 			balance, _ := strconv.ParseFloat(detail.Bal, 64)
 			available, _ := strconv.ParseFloat(detail.AvailBal, 64)
-			
+
 			if balance > 0 {
 				result.Total[detail.Ccy] = balance
 				result.Free[detail.Ccy] = available
@@ -1912,12 +1911,12 @@ func (s *NativeCCXTService) parseFundingRateResponse(exchange string, body []byt
 // parseBinanceFundingRate parses Binance funding rate response
 func (s *NativeCCXTService) parseBinanceFundingRate(body []byte) ([]FundingRate, error) {
 	var raw []struct {
-		Symbol        string `json:"symbol"`
-		FundingTime   int64  `json:"fundingTime"`
-		FundingRate   string `json:"fundingRate"`
-		MarkPrice     string `json:"markPrice,omitempty"`
-		IndexPrice    string `json:"indexPrice,omitempty"`
-		NextFundingTime int64 `json:"nextFundingTime,omitempty"`
+		Symbol          string `json:"symbol"`
+		FundingTime     int64  `json:"fundingTime"`
+		FundingRate     string `json:"fundingRate"`
+		MarkPrice       string `json:"markPrice,omitempty"`
+		IndexPrice      string `json:"indexPrice,omitempty"`
+		NextFundingTime int64  `json:"nextFundingTime,omitempty"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse Binance funding rate: %w", err)
@@ -1931,12 +1930,12 @@ func (s *NativeCCXTService) parseBinanceFundingRate(body []byte) ([]FundingRate,
 
 		rates = append(rates, FundingRate{
 			Symbol:           item.Symbol,
-			FundingRate:       rate,
-			FundingTimestamp:  UnixTimestamp(time.UnixMilli(item.FundingTime)),
-			NextFundingTime:   UnixTimestamp(time.UnixMilli(item.NextFundingTime)),
-			MarkPrice:         markPrice,
-			IndexPrice:        indexPrice,
-			Timestamp:         UnixTimestamp(time.Now()),
+			FundingRate:      rate,
+			FundingTimestamp: UnixTimestamp(time.UnixMilli(item.FundingTime)),
+			NextFundingTime:  UnixTimestamp(time.UnixMilli(item.NextFundingTime)),
+			MarkPrice:        markPrice,
+			IndexPrice:       indexPrice,
+			Timestamp:        UnixTimestamp(time.Now()),
 		})
 	}
 	return rates, nil
@@ -1968,7 +1967,7 @@ func (s *NativeCCXTService) parseBybitFundingRate(body []byte) ([]FundingRate, e
 		ts, _ := strconv.ParseInt(item.FundingRateTimestamp, 10, 64)
 
 		rates = append(rates, FundingRate{
-			Symbol:          item.Symbol,
+			Symbol:           item.Symbol,
 			FundingRate:      rate,
 			FundingTimestamp: UnixTimestamp(time.UnixMilli(ts)),
 			Timestamp:        UnixTimestamp(time.Now()),
@@ -1983,13 +1982,13 @@ func (s *NativeCCXTService) parseOKXFundingRate(body []byte) ([]FundingRate, err
 		Code string `json:"code"`
 		Msg  string `json:"msg"`
 		Data []struct {
-			InstId        string `json:"instId"`
-			FundingRate   string `json:"fundingRate"`
-			FundingTime   string `json:"fundingTime"`
+			InstId          string `json:"instId"`
+			FundingRate     string `json:"fundingRate"`
+			FundingTime     string `json:"fundingTime"`
 			NextFundingRate string `json:"nextFundingRate"`
 			NextFundingTime string `json:"nextFundingTime"`
-			MarkPx        string `json:"markPx"`
-			IdxPx         string `json:"idxPx"`
+			MarkPx          string `json:"markPx"`
+			IdxPx           string `json:"idxPx"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -2009,12 +2008,12 @@ func (s *NativeCCXTService) parseOKXFundingRate(body []byte) ([]FundingRate, err
 
 		rates = append(rates, FundingRate{
 			Symbol:           item.InstId,
-			FundingRate:       rate,
-			FundingTimestamp:  UnixTimestamp(time.UnixMilli(ts)),
-			NextFundingTime:   UnixTimestamp(time.UnixMilli(nextTs)),
-			MarkPrice:         markPrice,
-			IndexPrice:        indexPrice,
-			Timestamp:         UnixTimestamp(time.Now()),
+			FundingRate:      rate,
+			FundingTimestamp: UnixTimestamp(time.UnixMilli(ts)),
+			NextFundingTime:  UnixTimestamp(time.UnixMilli(nextTs)),
+			MarkPrice:        markPrice,
+			IndexPrice:       indexPrice,
+			Timestamp:        UnixTimestamp(time.Now()),
 		})
 	}
 	return rates, nil
@@ -2026,9 +2025,9 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 		Code string `json:"code"`
 		Msg  string `json:"msg"`
 		Data []struct {
-			Symbol         string `json:"symbol"`
-			FundingRate    string `json:"fundingRate"`
-			FundingTime    string `json:"fundingTime"`
+			Symbol          string `json:"symbol"`
+			FundingRate     string `json:"fundingRate"`
+			FundingTime     string `json:"fundingTime"`
 			NextFundingTime string `json:"nextFundingTime"`
 		} `json:"data"`
 	}
@@ -2047,10 +2046,10 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 
 		rates = append(rates, FundingRate{
 			Symbol:           item.Symbol,
-			FundingRate:       rate,
-			FundingTimestamp:  UnixTimestamp(time.UnixMilli(ts)),
-			NextFundingTime:   UnixTimestamp(time.UnixMilli(nextTs)),
-			Timestamp:         UnixTimestamp(time.Now()),
+			FundingRate:      rate,
+			FundingTimestamp: UnixTimestamp(time.UnixMilli(ts)),
+			NextFundingTime:  UnixTimestamp(time.UnixMilli(nextTs)),
+			Timestamp:        UnixTimestamp(time.Now()),
 		})
 	}
 	return rates, nil

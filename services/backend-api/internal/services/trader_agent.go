@@ -31,6 +31,7 @@ const (
 	SideShort PositionSide = "short"
 	SideFlat  PositionSide = "flat"
 )
+
 type TradingSignal struct {
 	Name        string  `json:"name"`
 	Value       float64 `json:"value"`

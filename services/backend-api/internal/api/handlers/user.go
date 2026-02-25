@@ -236,7 +236,7 @@ func (h *UserHandler) RegisterUser(c *gin.Context) {
 		_, err2 = h.db.Exec(c.Request.Context(), query,
 			userID, req.Email, string(hashedPassword), req.TelegramChatID, "free")
 	}
-	
+
 	// For development/local mode: if database is not available, allow registration but log warning
 	// This enables Telegram bot to work without requiring full database setup
 	if err2 != nil {

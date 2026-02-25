@@ -33,7 +33,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		Exchange:          "bitget", // Default, will be overridden by user settings
 		Leverage:          5,
 		MaxCapitalPct:     5.0,
-		MinConfidence:     0.20,  // Temporarily lowered for testing
+		MinConfidence:     0.20, // Temporarily lowered for testing
 		MaxIterations:     3,
 		Timeout:           180 * time.Second,
 		AutoExecute:       true,
@@ -464,7 +464,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		Side:          decision.Action,
 		OrderType:     "market",
 		MarketType:    "spot", // Use spot trading (futures API has side mismatch issues)
-		Leverage:      1, // No leverage for spot
+		Leverage:      1,      // No leverage for spot
 		AmountUSDT:    amount,
 		WalletPercent: decision.SizePercent,
 		TakeProfit:    decision.TakeProfit,
@@ -484,7 +484,6 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	log.Printf("[AI-SCALPING] Order placed: %s", orderID)
 	return nil
 }
-
 
 func sumDecimalOrderVolume(orders []ccxt.OrderBookEntry, limit int) float64 {
 	var total float64

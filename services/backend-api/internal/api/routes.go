@@ -266,20 +266,20 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if ccxtServiceURL == "" {
 		ccxtServiceURL = "http://localhost:3001"
 	}
-	
+
 	// Get chat ID from config or environment
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
 	if chatID == "" {
 		chatID = "1082762347" // Default chat ID
 	}
-	
+
 	log.Printf("Using Bitget Order Executor for real exchange API calls")
-	
+
 	// Get Bitget API keys from config file
 	bitgetAPIKey := ""
 	bitgetSecret := ""
 	bitgetPassphrase := ""
-	
+
 	// Load config from file
 	homeDir, _ := os.UserHomeDir()
 	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
@@ -303,7 +303,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			}
 		}
 	}
-	
+
 	// Use BitgetOrderExecutor for real order execution
 	var orderExecutor services.ScalpingOrderExecutor
 	if bitgetAPIKey != "" && bitgetSecret != "" {
@@ -320,7 +320,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		orderExecutor = nativeOrderExec
 		log.Printf("⚠️ Paper trading mode (no Bitget API keys configured)")
 	}
-	
+
 	integratedHandlers.SetOrderExecutor(orderExecutor)
 
 	var sqlDB *sql.DB
@@ -332,7 +332,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	default:
 		log.Printf("Warning: Unknown database type, AI learning disabled")
 	}
-	
+
 	// Set database for user settings lookup
 	if sqlDB != nil {
 		integratedHandlers.SetDB(sqlDB)
