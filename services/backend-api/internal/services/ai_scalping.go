@@ -26,6 +26,7 @@ type AIScalpingConfig struct {
 	AutoExecute       bool
 	MaxPairsToAnalyze int
 	MaxCandidatePairs int
+	OrderBookPairs    int
 }
 
 func DefaultAIScalpingConfig() AIScalpingConfig {
@@ -33,12 +34,13 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		Exchange:          "bitget", // Default, will be overridden by user settings
 		Leverage:          5,
 		MaxCapitalPct:     5.0,
-		MinConfidence:     0.20,  // Temporarily lowered for testing
+		MinConfidence:     0.45,
 		MaxIterations:     3,
-		Timeout:           180 * time.Second,
+		Timeout:           90 * time.Second,
 		AutoExecute:       true,
-		MaxPairsToAnalyze: 10,
-		MaxCandidatePairs: 200,
+		MaxPairsToAnalyze: 8,
+		MaxCandidatePairs: 120,
+		OrderBookPairs:    4,
 	}
 }
 
@@ -50,6 +52,7 @@ type AITradingDecision struct {
 	Reasoning   string           `json:"reasoning"`
 	StopLoss    *decimal.Decimal `json:"stop_loss,omitempty"`
 	TakeProfit  *decimal.Decimal `json:"take_profit,omitempty"`
+	OrderID     string           `json:"order_id,omitempty"`
 }
 
 type TradingPortfolio struct {
@@ -262,25 +265,57 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		return nil, fmt.Errorf("dynamic pair discovery returned no symbols")
 	}
 
+	// Bulk ticker fetch keeps the cycle responsive under high symbol counts.
+	tickerBySymbol := make(map[string]ccxt.MarketPriceInterface, len(pairs))
+	if marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, pairs); bulkErr == nil {
+		for _, t := range marketData {
+			if t == nil {
+				continue
+			}
+			key := normalizeSymbolForComparison(t.GetSymbol())
+			if key == "" {
+				continue
+			}
+			tickerBySymbol[key] = t
+		}
+	} else {
+		log.Printf("[AI-SCALPING] Bulk ticker fetch unavailable: %v", bulkErr)
+	}
+
+	orderBookPairs := s.config.OrderBookPairs
+	if orderBookPairs <= 0 {
+		orderBookPairs = 4
+	}
+
 	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), s.config.Exchange)
-	for _, symbol := range pairs {
-		ticker, err := s.ccxtService.FetchSingleTicker(ctx, s.config.Exchange, symbol)
-		if err != nil {
-			log.Printf("[AI-SCALPING] Failed to fetch ticker for %s: %v", symbol, err)
-			continue
+	for idx, symbol := range pairs {
+		normalizedSymbol := normalizeSymbolForComparison(symbol)
+		tickerData, ok := tickerBySymbol[normalizedSymbol]
+		if !ok {
+			tickerData, err = s.ccxtService.FetchSingleTicker(ctx, s.config.Exchange, symbol)
+			if err != nil {
+				log.Printf("[AI-SCALPING] Failed to fetch ticker for %s: %v", symbol, err)
+				continue
+			}
 		}
 
-		obResp, err := s.ccxtService.FetchOrderBook(ctx, s.config.Exchange, symbol, 20)
-		if err != nil {
-			log.Printf("[AI-SCALPING] Failed to fetch orderbook for %s: %v", symbol, err)
+		var obResp *ccxt.OrderBookResponse
+		if idx < orderBookPairs {
+			obResp, err = s.ccxtService.FetchOrderBook(ctx, s.config.Exchange, symbol, 20)
+			if err != nil {
+				log.Printf("[AI-SCALPING] Failed to fetch orderbook for %s: %v", symbol, err)
+			}
 		}
 
 		signal := aiMarketSignal{
-			Symbol:    normalizeSymbolForComparison(symbol),
-			Price:     ticker.GetPrice(),
-			High24h:   ticker.GetHigh(),
-			Low24h:    ticker.GetLow(),
-			Volume24h: ticker.GetVolume(),
+			Symbol:    normalizeSymbolForComparison(tickerData.GetSymbol()),
+			Price:     tickerData.GetPrice(),
+			High24h:   tickerData.GetHigh(),
+			Low24h:    tickerData.GetLow(),
+			Volume24h: tickerData.GetVolume(),
+		}
+		if signal.Symbol == "" {
+			signal.Symbol = normalizedSymbol
 		}
 
 		if signal.High24h > 0 && signal.Low24h > 0 {
@@ -463,8 +498,8 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		Symbol:        decision.Symbol,
 		Side:          decision.Action,
 		OrderType:     "market",
-		MarketType:    "spot", // Use spot trading (futures API has side mismatch issues)
-		Leverage:      1, // No leverage for spot
+		MarketType:    "futures",
+		Leverage:      s.config.Leverage,
 		AmountUSDT:    amount,
 		WalletPercent: decision.SizePercent,
 		TakeProfit:    decision.TakeProfit,
@@ -481,10 +516,10 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		return fmt.Errorf("order failed: %w", err)
 	}
 
+	decision.OrderID = strings.TrimSpace(orderID)
 	log.Printf("[AI-SCALPING] Order placed: %s", orderID)
 	return nil
 }
-
 
 func sumDecimalOrderVolume(orders []ccxt.OrderBookEntry, limit int) float64 {
 	var total float64

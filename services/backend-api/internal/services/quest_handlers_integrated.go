@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
@@ -13,6 +15,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/skill"
 	"github.com/shopspring/decimal"
 )
+
 type ScalpingOrderExecutor interface {
 	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
 	PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error)
@@ -33,6 +36,7 @@ type IntegratedQuestHandlers struct {
 	tradeMemory         *TradeMemory
 	db                  *sql.DB // Database for user settings
 }
+
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
 func NewIntegratedQuestHandlers(
 	ta *TechnicalAnalysisService,
@@ -292,10 +296,16 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// Get user's preferred exchange from database or default to bitget
 	userExchange := h.getUserExchange(chatID)
 	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
-	
+
 	// Set exchange on AI scalping service
 	if h.aiScalpingService != nil {
 		h.aiScalpingService.SetExchange(userExchange)
+	}
+
+	// Ingest closed-order outcomes from the previous cycle so adaptive risk controls
+	// have fresher win/loss data before the next decision.
+	if lastSymbol, ok := quest.Checkpoint["ai_symbol"].(string); ok && strings.TrimSpace(lastSymbol) != "" {
+		h.ingestClosedOrderFeedback(ctx, quest, userExchange, lastSymbol)
 	}
 
 	// Check if we're in dry-run/paper trading mode
@@ -381,6 +391,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
+	h.recordTradeDecision(ctx, quest, decision, userExchange)
+	h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
 
 	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
 		decision.Action, decision.Symbol, decision.Confidence*100)
@@ -671,18 +683,218 @@ func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
 		log.Printf("[SCALPING] No database available, using default exchange: bitget")
 		return "bitget"
 	}
-	
+
 	var exchange string
 	query := `SELECT provider FROM telegram_operator_wallets 
 	          WHERE chat_id = ? AND status = 'connected' 
 	          ORDER BY created_at DESC LIMIT 1`
-	
+
 	err := h.db.QueryRow(query, chatID).Scan(&exchange)
 	if err != nil {
 		log.Printf("[SCALPING] No exchange found for chat %s, using default: bitget (%v)", chatID, err)
 		return "bitget"
 	}
-	
+
 	log.Printf("[SCALPING] Found user exchange: %s for chat: %s", exchange, chatID)
 	return exchange
+}
+
+func (h *IntegratedQuestHandlers) recordTradeDecision(ctx context.Context, quest *Quest, decision *AITradingDecision, exchange string) {
+	if h.tradeMemory == nil || decision == nil || decision.Action == "hold" {
+		return
+	}
+
+	tradeID := strings.TrimSpace(decision.OrderID)
+	if tradeID == "" {
+		tradeID = fmt.Sprintf("ai-order-%d", time.Now().UnixNano())
+	}
+
+	record := AITradeRecord{
+		ID:          tradeID,
+		Timestamp:   time.Now().UTC(),
+		Exchange:    exchange,
+		Symbol:      decision.Symbol,
+		Action:      decision.Action,
+		SizePercent: decision.SizePercent,
+		Confidence:  decision.Confidence,
+		Reasoning:   decision.Reasoning,
+		MarketContext: fmt.Sprintf(
+			"chat_id=%s,quest_id=%s,definition=%s",
+			quest.Metadata["chat_id"],
+			quest.ID,
+			quest.Metadata["definition_id"],
+		),
+	}
+	if err := h.tradeMemory.RecordDecision(ctx, record); err != nil {
+		log.Printf("[AI-MEMORY] Failed to record decision %s: %v", tradeID, err)
+		return
+	}
+
+	quest.Checkpoint["trade_memory_id"] = tradeID
+}
+
+func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context, quest *Quest, exchange, symbol string) {
+	if h.orderExecutor == nil || strings.TrimSpace(symbol) == "" {
+		return
+	}
+
+	closedOrders, err := h.orderExecutor.GetClosedOrders(ctx, exchange, symbol, 20)
+	if err != nil {
+		log.Printf("[SCALPING] Failed to fetch closed orders for feedback (%s %s): %v", exchange, symbol, err)
+		return
+	}
+
+	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
+	updatedProcessed := false
+
+	for _, order := range closedOrders {
+		orderID := getOrderID(order)
+		if orderID == "" || processed[orderID] {
+			continue
+		}
+
+		pnl, ok := decimalFromOrder(order, "totalProfits", "totalProfit", "pnl", "profit", "realizedPnl", "achievedProfits")
+		if !ok {
+			continue
+		}
+
+		side := "buy"
+		if rawSide, ok := stringFromOrder(order, "side", "tradeSide", "positionSide"); ok {
+			side = strings.ToLower(strings.TrimSpace(rawSide))
+		}
+		exitPrice := decimal.Zero
+		if p, ok := decimalFromOrder(order, "priceAvg", "avgPrice", "price", "fillPrice"); ok {
+			exitPrice = p
+		}
+
+		profitable := pnl.GreaterThan(decimal.Zero)
+		GetScalpingPerformance().RecordTrade(TradeRecord{
+			Timestamp:  time.Now().UTC(),
+			Symbol:     symbol,
+			Side:       side,
+			PnL:        pnl,
+			Profitable: profitable,
+			ExitPrice:  exitPrice,
+		})
+
+		if h.tradeMemory != nil {
+			outcome := "loss"
+			if profitable {
+				outcome = "win"
+			}
+			if err := h.tradeMemory.UpdateOutcome(ctx, orderID, outcome, exitPrice.InexactFloat64(), pnl); err != nil {
+				log.Printf("[AI-MEMORY] Failed to update outcome for %s: %v", orderID, err)
+			}
+		}
+
+		processed[orderID] = true
+		updatedProcessed = true
+	}
+
+	if !updatedProcessed {
+		return
+	}
+
+	ids := make([]string, 0, len(processed))
+	for id := range processed {
+		ids = append(ids, id)
+	}
+	if len(ids) > 200 {
+		ids = ids[len(ids)-200:]
+	}
+	quest.Checkpoint["processed_closed_order_ids"] = ids
+}
+
+func getProcessedOrderIDs(raw interface{}) map[string]bool {
+	processed := make(map[string]bool)
+	switch v := raw.(type) {
+	case []string:
+		for _, id := range v {
+			if strings.TrimSpace(id) != "" {
+				processed[strings.TrimSpace(id)] = true
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				processed[strings.TrimSpace(s)] = true
+			}
+		}
+	}
+	return processed
+}
+
+func getOrderID(order map[string]interface{}) string {
+	candidates := []string{"orderId", "orderID", "order_id", "id", "clientOid"}
+	for _, key := range candidates {
+		if raw, ok := order[key]; ok {
+			if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+func stringFromOrder(order map[string]interface{}, keys ...string) (string, bool) {
+	for _, key := range keys {
+		raw, ok := order[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return v, true
+			}
+		default:
+			s := strings.TrimSpace(fmt.Sprintf("%v", v))
+			if s != "" && s != "<nil>" {
+				return s, true
+			}
+		}
+	}
+	return "", false
+}
+
+func decimalFromOrder(order map[string]interface{}, keys ...string) (decimal.Decimal, bool) {
+	for _, key := range keys {
+		raw, ok := order[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case decimal.Decimal:
+			return v, true
+		case string:
+			s := strings.TrimSpace(v)
+			if s == "" {
+				continue
+			}
+			if d, err := decimal.NewFromString(s); err == nil {
+				return d, true
+			}
+		case float64:
+			return decimal.NewFromFloat(v), true
+		case float32:
+			return decimal.NewFromFloat(float64(v)), true
+		case int:
+			return decimal.NewFromInt(int64(v)), true
+		case int64:
+			return decimal.NewFromInt(v), true
+		case json.Number:
+			if d, err := decimal.NewFromString(v.String()); err == nil {
+				return d, true
+			}
+		default:
+			s := strings.TrimSpace(fmt.Sprintf("%v", raw))
+			if s == "" || s == "<nil>" {
+				continue
+			}
+			if d, err := decimal.NewFromString(s); err == nil {
+				return d, true
+			}
+		}
+	}
+	return decimal.Zero, false
 }

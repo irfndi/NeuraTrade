@@ -20,6 +20,7 @@ type AutonomousHandler struct {
 	readiness           *ReadinessChecker
 	portfolioSafety     *services.PortfolioSafetyService
 	configuredExchanges []string
+	reconciler          *services.ExchangePositionReconciler
 }
 
 // NewAutonomousHandler creates a new autonomous handler
@@ -29,6 +30,17 @@ func NewAutonomousHandler(questEngine *services.QuestEngine, portfolioSafety *se
 		readiness:           NewReadinessChecker(),
 		portfolioSafety:     portfolioSafety,
 		configuredExchanges: exchanges,
+	}
+}
+
+// NewAutonomousHandlerWithReconciler creates a new autonomous handler with reconciler
+func NewAutonomousHandlerWithReconciler(questEngine *services.QuestEngine, portfolioSafety *services.PortfolioSafetyService, exchanges []string, reconciler *services.ExchangePositionReconciler) *AutonomousHandler {
+	return &AutonomousHandler{
+		questEngine:         questEngine,
+		readiness:           NewReadinessChecker(),
+		portfolioSafety:     portfolioSafety,
+		configuredExchanges: exchanges,
+		reconciler:          reconciler,
 	}
 }
 
@@ -513,6 +525,42 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 		}
 	}
 
+	// Run reconciliation check if reconciler is available
+	if h.reconciler != nil {
+		ctx := c.Request.Context()
+		results, err := h.reconciler.ReconcileAll(ctx, services.ReconciliationDoctor, chatID)
+		if err == nil {
+			for _, result := range results {
+				status := "healthy"
+				message := h.reconciler.GetReconciliationSummary(&result)
+
+				if result.DriftDetected {
+					status = "warning"
+					if overallStatus == "healthy" {
+						overallStatus = "warning"
+					}
+				} else if result.Status == services.ReconciliationFailed {
+					status = "critical"
+					overallStatus = "critical"
+				}
+
+				check := DoctorCheck{
+					Name:    fmt.Sprintf("reconciliation_%s", result.Exchange),
+					Status:  status,
+					Message: message,
+					Details: map[string]string{
+						"orders_matched":    fmt.Sprintf("%d", result.OrdersMatched),
+						"orders_mismatched": fmt.Sprintf("%d", result.OrdersMismatched),
+						"orders_orphaned":   fmt.Sprintf("%d", result.OrdersOrphaned),
+						"positions_matched": fmt.Sprintf("%d", result.PositionsMatched),
+						"drift_detected":    fmt.Sprintf("%v", result.DriftDetected),
+					},
+				}
+				checks = append(checks, check)
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, DoctorResponse{
 		OverallStatus: overallStatus,
 		Summary:       readinessResult.Summary,
@@ -530,16 +578,24 @@ func (h *AutonomousHandler) GetPerformanceSummary(c *gin.Context) {
 	}
 
 	timeframe := c.DefaultQuery("timeframe", "24h")
+	perf := services.GetScalpingPerformance().GetPerformance()
+	trades := intFromMetric(perf["total_trades"])
+	winRate := floatFromMetric(perf["win_rate"]) * 100
+	pnl := fmt.Sprintf("%v", perf["total_pnl"])
 
-	// TODO: Implement actual performance calculation
+	note := "Live runtime scalping metrics"
+	if trades == 0 {
+		note = "No scalping trades recorded in runtime yet"
+	}
+
 	c.JSON(http.StatusOK, PerformanceSummaryResponse{
 		Timeframe: timeframe,
-		PnL:       "0.00",
-		WinRate:   "N/A",
+		PnL:       pnl,
+		WinRate:   fmt.Sprintf("%.1f%%", winRate),
 		Sharpe:    "N/A",
-		Drawdown:  "0%",
-		Trades:    0,
-		Note:      "No trading activity in this period",
+		Drawdown:  "N/A",
+		Trades:    trades,
+		Note:      note,
 	})
 }
 
@@ -552,20 +608,35 @@ func (h *AutonomousHandler) GetPerformanceBreakdown(c *gin.Context) {
 	}
 
 	timeframe := c.DefaultQuery("timeframe", "24h")
+	perf := services.GetScalpingPerformance().GetPerformance()
+	trades := intFromMetric(perf["total_trades"])
+	winRate := floatFromMetric(perf["win_rate"]) * 100
+	pnl := fmt.Sprintf("%v", perf["total_pnl"])
 
-	// TODO: Implement actual performance breakdown
+	note := "Live runtime scalping metrics"
+	if trades == 0 {
+		note = "No scalping trades recorded in runtime yet"
+	}
+
 	c.JSON(http.StatusOK, PerformanceBreakdownResponse{
 		Timeframe: timeframe,
 		Overall: PerformanceSummaryResponse{
 			Timeframe: timeframe,
-			PnL:       "0.00",
-			WinRate:   "N/A",
+			PnL:       pnl,
+			WinRate:   fmt.Sprintf("%.1f%%", winRate),
 			Sharpe:    "N/A",
-			Drawdown:  "0%",
-			Trades:    0,
-			Note:      "No trading activity in this period",
+			Drawdown:  "N/A",
+			Trades:    trades,
+			Note:      note,
 		},
-		Strategies: []StrategyPerformance{},
+		Strategies: []StrategyPerformance{
+			{
+				Strategy: "scalping",
+				PnL:      pnl,
+				WinRate:  fmt.Sprintf("%.1f%%", winRate),
+				Trades:   trades,
+			},
+		},
 	})
 }
 
@@ -704,6 +775,34 @@ func (h *AutonomousHandler) GetWallets(c *gin.Context) {
 
 func generateRequestID() string {
 	return uuid.New().String()[:8]
+}
+
+func intFromMetric(v interface{}) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func floatFromMetric(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
 }
 
 // ReadinessChecker checks system readiness for autonomous mode

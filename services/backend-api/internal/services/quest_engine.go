@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,11 @@ const (
 	QuestTypeTriggered QuestType = "triggered" // Event-driven quests
 	QuestTypeGoal      QuestType = "goal"      // Milestone-driven quests
 	QuestTypeArbitrage QuestType = "arbitrage" // Arbitrage execution quests
+)
+
+const (
+	defaultMicroCadenceInterval = time.Minute
+	minMicroCadenceInterval     = 10 * time.Second
 )
 
 // QuestCadence defines the frequency of routine quests
@@ -483,8 +489,13 @@ func (e *QuestEngine) Stop() {
 // schedulerLoop runs the periodic quest scheduling
 func (e *QuestEngine) schedulerLoop() {
 	log.Println("[QUEST] Scheduler loop started")
-	ticker := time.NewTicker(1 * time.Minute)
+	microInterval := microCadenceInterval()
+	ticker := time.NewTicker(microInterval)
 	defer ticker.Stop()
+	log.Printf("[QUEST] Scheduler micro cadence interval: %s", microInterval)
+
+	// Run an immediate check so newly activated quests do not wait for the first interval.
+	e.tick()
 
 	for {
 		select {
@@ -540,7 +551,7 @@ func (e *QuestEngine) tick() {
 }
 
 func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
-	minInterval := 1 * time.Minute
+	minInterval := microCadenceInterval()
 
 	if quest.LastExecutedAt != nil && now.Sub(*quest.LastExecutedAt) < minInterval {
 		return false
@@ -549,7 +560,7 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 	switch quest.Cadence {
 	case CadenceMicro:
 		if quest.LastExecutedAt != nil {
-			return now.Sub(*quest.LastExecutedAt) >= 1*time.Minute
+			return now.Sub(*quest.LastExecutedAt) >= minInterval
 		}
 		return true
 	case CadenceHourly:
@@ -572,6 +583,26 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 	default:
 		return false
 	}
+}
+
+func microCadenceInterval() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_MICRO_CADENCE_SECONDS"))
+	if raw == "" {
+		return defaultMicroCadenceInterval
+	}
+
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		log.Printf("[QUEST] Invalid NEURATRADE_MICRO_CADENCE_SECONDS=%q, using default %s", raw, defaultMicroCadenceInterval)
+		return defaultMicroCadenceInterval
+	}
+
+	interval := time.Duration(seconds) * time.Second
+	if interval < minMicroCadenceInterval {
+		log.Printf("[QUEST] NEURATRADE_MICRO_CADENCE_SECONDS too low (%ds), clamping to %s", seconds, minMicroCadenceInterval)
+		return minMicroCadenceInterval
+	}
+	return interval
 }
 
 // executeQuest executes a single quest

@@ -218,9 +218,9 @@ func run() error {
 		}
 	}
 
-	// Scalping-first mode: keep arbitrage engines off unless explicitly enabled.
-	enableArbitrageEngines := cfg.Features.EnableAIArbitrage && cfg.Arbitrage.Enabled
-	if enableArbitrageEngines {
+	// Keep spot and futures arbitrage controls explicit.
+	enableSpotArbitrageEngine := cfg.Features.EnableAIArbitrage && cfg.Arbitrage.Enabled
+	if enableSpotArbitrageEngine {
 		// Initialize futures arbitrage calculator
 		arbitrageCalculator := services.NewFuturesArbitrageCalculator()
 
@@ -239,16 +239,22 @@ func run() error {
 			logger.WithError(err).Fatal("Failed to start arbitrage service")
 		}
 		defer arbitrageService.Stop()
+		logger.Info("Spot arbitrage engine enabled")
+	} else {
+		logger.Info("Spot arbitrage engine disabled (enable with features.enable_ai_arbitrage=true and arbitrage.enabled=true)")
+	}
 
+	enableFuturesArbitrageEngine := cfg.Arbitrage.Enabled
+	if enableFuturesArbitrageEngine {
 		// Initialize futures arbitrage service
 		futuresArbitrageService := services.NewFuturesArbitrageService(db, getRedisClient(), cfg, errorRecoveryManager, resourceManager, performanceMonitor, getLogger("futures_arbitrage_service"))
 		if err := futuresArbitrageService.Start(); err != nil {
 			logger.WithError(err).Fatal("Failed to start futures arbitrage service")
 		}
 		defer futuresArbitrageService.Stop()
-		logger.Info("Arbitrage engines enabled")
+		logger.Info("Futures arbitrage engine enabled")
 	} else {
-		logger.Info("Arbitrage engines disabled in scalping-first mode")
+		logger.Info("Futures arbitrage engine disabled (enable with arbitrage.enabled=true)")
 	}
 
 	// Initialize signal aggregator service

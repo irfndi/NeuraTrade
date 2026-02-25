@@ -50,11 +50,12 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, "bitget", config.Exchange)
 	assert.Equal(t, 5, config.Leverage)
 	assert.Equal(t, 5.0, config.MaxCapitalPct)
-	assert.Equal(t, 0.20, config.MinConfidence)
+	assert.Equal(t, 0.45, config.MinConfidence)
 	assert.Equal(t, 3, config.MaxIterations)
 	assert.True(t, config.AutoExecute)
-	assert.Equal(t, 10, config.MaxPairsToAnalyze)
-	assert.Equal(t, 200, config.MaxCandidatePairs)
+	assert.Equal(t, 8, config.MaxPairsToAnalyze)
+	assert.Equal(t, 120, config.MaxCandidatePairs)
+	assert.Equal(t, 4, config.OrderBookPairs)
 }
 
 func TestAIScalpingConfig_Custom(t *testing.T) {
