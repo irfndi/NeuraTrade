@@ -236,6 +236,7 @@ func (h *ArbitrageHandler) sendArbitrageNotifications(opportunities []ArbitrageO
 		}
 	}
 }
+
 // GetArbitrageHistory returns historical arbitrage opportunities with pagination.
 //
 // Parameters:
