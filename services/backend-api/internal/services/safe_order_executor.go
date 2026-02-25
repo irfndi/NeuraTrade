@@ -114,6 +114,19 @@ func (s *SafeOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID s
 
 // PlaceOrderWithDetails places an order with full trade details
 func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
+	amount := details.AmountUSDT
+	if amount.LessThanOrEqual(decimal.Zero) {
+		return "", fmt.Errorf("invalid order size: amount_usdt must be positive")
+	}
+
+	allowed, reason, err := s.checkSafety(ctx, details.Exchange, details.Symbol, amount)
+	if err != nil {
+		return "", fmt.Errorf("safety check failed: %w", err)
+	}
+	if !allowed {
+		return "", fmt.Errorf("portfolio safety blocked: %s", reason)
+	}
+
 	return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
 }
 

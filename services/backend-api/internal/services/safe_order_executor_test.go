@@ -202,6 +202,67 @@ func TestSafeOrderExecutor_SetChatID(t *testing.T) {
 	assert.Equal(t, "new-chat", safeExec.GetChatID())
 }
 
+func TestSafeOrderExecutor_PlaceOrderWithDetails_BlocksWhenSafetyFails(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	details := TradeDetails{
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		AmountUSDT: decimal.NewFromFloat(100),
+	}
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "BTC/USDT", decimal.NewFromFloat(100)).
+		Return(false, "Trading halted due to max drawdown", nil)
+
+	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "portfolio safety blocked")
+	assert.Empty(t, orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrderWithDetails")
+}
+
+func TestSafeOrderExecutor_PlaceOrderWithDetails_AllowsWhenSafetyPasses(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	details := TradeDetails{
+		Exchange:   "bitget",
+		Symbol:     "ETH/USDT",
+		AmountUSDT: decimal.NewFromFloat(75),
+	}
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "ETH/USDT", decimal.NewFromFloat(75)).
+		Return(true, "", nil)
+	mockExecutor.On("PlaceOrderWithDetails", mock.Anything, details).Return("order-789", nil)
+
+	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "order-789", orderID)
+	mockExecutor.AssertExpectations(t)
+	mockSafety.AssertExpectations(t)
+}
+
+func TestSafeOrderExecutor_PlaceOrderWithDetails_RejectsNonPositiveSize(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	safeExec := NewSafeOrderExecutor(mockExecutor, nil, "test-chat")
+
+	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), TradeDetails{
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		AmountUSDT: decimal.Zero,
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid order size")
+	assert.Empty(t, orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrderWithDetails")
+}
+
 func TestSafetyCheckResult_String(t *testing.T) {
 	result := &SafetyCheckResult{
 		Allowed: false,

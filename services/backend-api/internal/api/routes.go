@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -362,6 +363,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("⚠️ Paper trading mode (no Bitget API keys configured)")
 	}
 
+	orderExecutor = services.NewSafeOrderExecutor(orderExecutor, portfolioSafety, chatID)
+	log.Printf("Portfolio safety gate enabled for scalping order execution")
+
 	integratedHandlers.SetOrderExecutor(orderExecutor)
 
 	var sqlDB *sql.DB
@@ -474,13 +478,48 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		} else {
 			log.Printf("Startup reconciliation disabled (set NEURATRADE_STARTUP_RECONCILIATION=true to enable)")
 		}
+
+		// Optional periodic reconciliation for drift detection after manual/external actions.
+		periodicRaw := strings.TrimSpace(os.Getenv("NEURATRADE_PERIODIC_RECONCILIATION_SECONDS"))
+		if periodicRaw != "" {
+			seconds, parseErr := strconv.Atoi(periodicRaw)
+			if parseErr != nil || seconds <= 0 {
+				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, periodic reconciliation disabled", periodicRaw)
+			} else {
+				interval := time.Duration(seconds) * time.Second
+				log.Printf("Periodic reconciliation enabled (interval=%s)", interval)
+				go func() {
+					ticker := time.NewTicker(interval)
+					defer ticker.Stop()
+					for range ticker.C {
+						ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+						results, err := reconciler.ReconcileAll(ctx, services.ReconciliationPeriodic, "")
+						cancel()
+						if err != nil {
+							log.Printf("Periodic reconciliation error: %v", err)
+							continue
+						}
+						for _, r := range results {
+							log.Printf("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
+						}
+					}
+				}()
+			}
+		}
 	}
 
 	// Restore autonomous scalping for operator chats that were enabled via Telegram /begin.
 	if db != nil {
+		restoreAllChats := strings.EqualFold(strings.TrimSpace(os.Getenv("NEURATRADE_RESTORE_ALL_AUTONOMOUS_CHATS")), "true") ||
+			strings.TrimSpace(os.Getenv("NEURATRADE_RESTORE_ALL_AUTONOMOUS_CHATS")) == "1"
+		query := "SELECT chat_id FROM telegram_operator_state WHERE autonomous_enabled = TRUE ORDER BY updated_at DESC"
+		if !restoreAllChats {
+			query += " LIMIT 1"
+		}
+
 		rows, err := db.Query(
 			context.Background(),
-			"SELECT chat_id FROM telegram_operator_state WHERE autonomous_enabled = TRUE ORDER BY updated_at DESC LIMIT 1",
+			query,
 		)
 		if err != nil {
 			log.Printf("Failed to restore autonomous-enabled chats: %v", err)
@@ -503,7 +542,11 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				}
 				restored++
 			}
-			log.Printf("Restored autonomous scalping for %d chat(s) from telegram_operator_state (latest enabled chat only)", restored)
+			mode := "latest enabled chat only"
+			if restoreAllChats {
+				mode = "all enabled chats"
+			}
+			log.Printf("Restored autonomous scalping for %d chat(s) from telegram_operator_state (%s)", restored, mode)
 		}
 	}
 

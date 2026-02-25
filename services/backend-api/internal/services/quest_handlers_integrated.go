@@ -321,6 +321,10 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	userExchange := h.getUserExchange(chatID)
 	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
 
+	if chatScopedExec, ok := h.orderExecutor.(interface{ SetChatID(string) }); ok {
+		chatScopedExec.SetChatID(chatID)
+	}
+
 	// Set exchange on AI scalping service
 	if h.aiScalpingService != nil {
 		h.aiScalpingService.SetExchange(userExchange)
