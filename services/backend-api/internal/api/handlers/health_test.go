@@ -326,6 +326,27 @@ func TestHealthHandler_CCXTServiceCheck(t *testing.T) {
 	}
 }
 
+func TestHealthHandler_CCXTServiceCheck_NativeMode(t *testing.T) {
+	mockDB := &MockDatabase{}
+	mockRedis := &MockRedisHealthClient{}
+	mockCacheAnalytics := NewMockCacheAnalyticsService()
+
+	tests := []string{
+		"",
+		"native",
+		"native://embedded",
+		"embedded-ccxt",
+	}
+
+	for _, ccxtURL := range tests {
+		t.Run(fmt.Sprintf("ccxt_url=%q", ccxtURL), func(t *testing.T) {
+			handler := NewHealthHandler(mockDB, mockRedis, ccxtURL, mockCacheAnalytics)
+			err := handler.checkCCXTService()
+			assert.NoError(t, err)
+		})
+	}
+}
+
 func TestHealthHandler_CCXTServiceZeroExchanges(t *testing.T) {
 	// Test behavior when CCXT service has zero exchanges
 	// If status is "healthy", we don't fail even with 0 exchanges (backward-compatible, startup condition)
@@ -409,6 +430,10 @@ func TestHealthHandler_TelegramTokenDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Use temp directory as HOME to avoid user's config.json
+			tempHome := t.TempDir()
+			t.Setenv("HOME", tempHome)
+
 			// Clear telegram environment variables first
 			t.Setenv("TELEGRAM_BOT_TOKEN", tt.botToken)
 			t.Setenv("TELEGRAM_TOKEN", tt.token)

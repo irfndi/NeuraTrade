@@ -564,3 +564,28 @@ func (s *Service) AddExchange(ctx context.Context, exchange string) (*ExchangeMa
 func (s *Service) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
 	return s.nativeClient.FetchBalance(ctx, exchange)
 }
+
+// FetchOpenOrders retrieves all open orders for an exchange.
+func (s *Service) FetchOpenOrders(ctx context.Context, exchange string) (*OpenOrdersResponse, error) {
+	return s.nativeClient.FetchOpenOrders(ctx, exchange)
+}
+
+// FetchOpenOrdersForSymbol retrieves open orders for a specific symbol.
+func (s *Service) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*OpenOrdersResponse, error) {
+	return s.nativeClient.FetchOpenOrdersForSymbol(ctx, exchange, symbol)
+}
+
+// CancelOrder cancels an order by ID.
+func (s *Service) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	return s.nativeClient.CancelOrder(ctx, exchange, orderID, symbol)
+}
+
+// FetchOrder retrieves a specific order by ID.
+func (s *Service) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*OrderResponse, error) {
+	return s.nativeClient.FetchOrder(ctx, exchange, orderID, symbol)
+}
+
+// FetchPositions retrieves all positions for an exchange.
+func (s *Service) FetchPositions(ctx context.Context, exchange string) (*PositionsResponse, error) {
+	return s.nativeClient.FetchPositions(ctx, exchange)
+}

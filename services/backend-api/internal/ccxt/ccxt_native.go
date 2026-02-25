@@ -1551,7 +1551,7 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 
 	// Generate signature
 	signString := fmt.Sprintf("%d%s%s%s", timestamp, method, requestPath, body)
-	signature := s.generateHMACSignature(conn.Secret, signString)
+	signature := s.generateBase64HMACSignature(conn.Secret, signString)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {

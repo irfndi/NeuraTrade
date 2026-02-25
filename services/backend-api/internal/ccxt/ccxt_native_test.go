@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,13 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 
 			if req.Header.Get("ACCESS-KEY") != "bitget-key" {
 				t.Fatalf("missing ACCESS-KEY header")
+			}
+			sign := req.Header.Get("ACCESS-SIGN")
+			if sign == "" {
+				t.Fatalf("missing ACCESS-SIGN header")
+			}
+			if ok, _ := regexp.MatchString(`^[A-Za-z0-9+/]+=*$`, sign); !ok {
+				t.Fatalf("ACCESS-SIGN is not base64 encoded: %q", sign)
 			}
 			if req.Header.Get("ACCESS-PASSPHRASE") != "bitget-passphrase" {
 				t.Fatalf("missing ACCESS-PASSPHRASE header")

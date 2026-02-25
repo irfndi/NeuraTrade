@@ -83,6 +83,26 @@ func (m *mockCCXTServiceForReplay) FetchOHLCV(ctx context.Context, exchange, sym
 	return m.ohlcvResponse, nil
 }
 
+func (m *mockCCXTServiceForReplay) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	return nil
+}
+
+func (m *mockCCXTServiceForReplay) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*ccxt.OrderResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTServiceForReplay) FetchOpenOrders(ctx context.Context, exchange string) (*ccxt.OpenOrdersResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTServiceForReplay) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*ccxt.OpenOrdersResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTServiceForReplay) FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error) {
+	return nil, nil
+}
+
 func TestOHLCVReplayEngine_New(t *testing.T) {
 	engine := NewOHLCVReplayEngine(nil, nil)
 	require.NotNil(t, engine)

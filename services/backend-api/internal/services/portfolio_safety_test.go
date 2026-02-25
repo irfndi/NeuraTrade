@@ -91,6 +91,26 @@ func (m *mockCCXTForPortfolioSafety) FetchBalance(ctx context.Context, exchange 
 	return m.balanceResponse, nil
 }
 
+func (m *mockCCXTForPortfolioSafety) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	return nil
+}
+
+func (m *mockCCXTForPortfolioSafety) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*ccxt.OrderResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTForPortfolioSafety) FetchOpenOrders(ctx context.Context, exchange string) (*ccxt.OpenOrdersResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTForPortfolioSafety) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*ccxt.OpenOrdersResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTForPortfolioSafety) FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error) {
+	return nil, nil
+}
+
 func TestDefaultPortfolioSafetyConfig(t *testing.T) {
 	config := DefaultPortfolioSafetyConfig()
 	assert.Equal(t, 0.10, config.MaxPositionSizePct)
