@@ -665,15 +665,15 @@ func (e *BitgetOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbo
 	}
 
 	var result struct {
-		Code string                   `json:"code"`
-		Data []map[string]interface{} `json:"data"`
+		Code string          `json:"code"`
+		Data json.RawMessage `json:"data"`
 	}
 
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, err
 	}
 
-	return result.Data, nil
+	return parseBitgetOrderList(result.Data)
 }
 
 // GetClosedOrders gets closed orders
@@ -687,15 +687,15 @@ func (e *BitgetOrderExecutor) GetClosedOrders(ctx context.Context, exchange, sym
 	}
 
 	var result struct {
-		Code string                   `json:"code"`
-		Data []map[string]interface{} `json:"data"`
+		Code string          `json:"code"`
+		Data json.RawMessage `json:"data"`
 	}
 
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, err
 	}
 
-	return result.Data, nil
+	return parseBitgetOrderList(result.Data)
 }
 
 // CancelOrder cancels an order
@@ -729,3 +729,47 @@ func (e *BitgetOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID
 }
 
 var _ ScalpingOrderExecutor = (*BitgetOrderExecutor)(nil)
+
+func parseBitgetOrderList(raw json.RawMessage) ([]map[string]interface{}, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+
+	var direct []map[string]interface{}
+	if err := json.Unmarshal(raw, &direct); err == nil {
+		return direct, nil
+	}
+
+	var container map[string]interface{}
+	if err := json.Unmarshal(raw, &container); err != nil {
+		return nil, err
+	}
+
+	knownListKeys := []string{
+		"entrustedList",
+		"orderList",
+		"list",
+		"rows",
+	}
+	for _, key := range knownListKeys {
+		value, ok := container[key]
+		if !ok {
+			continue
+		}
+		items, ok := value.([]interface{})
+		if !ok {
+			continue
+		}
+		result := make([]map[string]interface{}, 0, len(items))
+		for _, item := range items {
+			record, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			result = append(result, record)
+		}
+		return result, nil
+	}
+
+	return nil, nil
+}
