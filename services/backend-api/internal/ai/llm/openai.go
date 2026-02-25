@@ -156,6 +156,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, req *CompletionRequest) (*C
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	// Debug: Log the request body
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {

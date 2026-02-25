@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
@@ -338,7 +339,17 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		log.Printf("[SCALPING] AI decision error: %v", err)
 		quest.Checkpoint["status"] = "ai_error"
 		quest.Checkpoint["error"] = err.Error()
-		return err
+		// Return nil instead of err to prevent panic - quest continues with hold status
+		return nil
+	}
+
+	// Safety check: decision should not be nil
+	if decision == nil {
+		log.Printf("[SCALPING] AI returned nil decision - treating as hold")
+		quest.Checkpoint["status"] = "hold"
+		quest.Checkpoint["ai_action"] = "hold"
+		quest.Checkpoint["ai_reasoning"] = "AI returned nil decision"
+		return nil
 	}
 
 	quest.Checkpoint["ai_action"] = decision.Action
@@ -360,6 +371,23 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
 		decision.Action, decision.Symbol, decision.Confidence*100)
+
+	// Send Telegram notification for AI decision
+	if h.notificationService != nil && chatID != "" {
+		chatIDInt := parseChatID(chatID)
+		if chatIDInt != 0 {
+			notif := AIReasoningNotification{
+				DecisionType: "scalping",
+				Summary:      fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
+				Confidence:   decision.Confidence,
+				Reasons:      []string{decision.Reasoning},
+				Action:       decision.Action,
+			}
+			if err := h.notificationService.NotifyAIReasoning(ctx, chatIDInt, notif); err != nil {
+				log.Printf("[NOTIFICATION] Failed to send AI decision notification: %v", err)
+			}
+		}
+	}
 
 	return nil
 }
@@ -609,4 +637,16 @@ func (e *ProductionQuestExecutor) Stop() {
 // GetStatus returns executor status
 func (e *ProductionQuestExecutor) GetStatus(chatID string) map[string]interface{} {
 	return e.handlers.GetMonitoringSnapshot(chatID)
+}
+
+// parseChatID converts a chat ID string to int64
+func parseChatID(chatID string) int64 {
+	if chatID == "" {
+		return 0
+	}
+	id, err := strconv.ParseInt(chatID, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }

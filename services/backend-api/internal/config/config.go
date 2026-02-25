@@ -390,6 +390,8 @@ func Load() (*Config, error) {
 	// Map legacy environment variables for JWT secret
 	_ = viper.BindEnv("auth.jwt_secret", "JWT_SECRET")
 	_ = viper.BindEnv("security.jwt_secret", "JWT_SECRET")
+	// Also support ai.jwt_secret from ~/.neuratrade/config.json (local development)
+	_ = viper.BindEnv("auth.jwt_secret", "ai.jwt_secret")
 
 	// Bind encryption key for API key storage
 	_ = viper.BindEnv("security.encryption_key", "ENCRYPTION_KEY")
@@ -439,12 +441,16 @@ func Load() (*Config, error) {
 		config.Sentry.DSN = strings.TrimSpace(config.Sentry.DSN)
 	}
 
-	// Backfill JWT secret from legacy security configuration if needed
+	// Backfill JWT secret from multiple sources (priority: file > env > security)
 	if config.Auth.JWTSecret == "" {
 		config.Auth.JWTSecret = strings.TrimSpace(viper.GetString("auth.jwt_secret"))
 	}
 	if config.Auth.JWTSecret == "" {
 		config.Auth.JWTSecret = strings.TrimSpace(viper.GetString("security.jwt_secret"))
+	}
+	// Final fallback: try ai.jwt_secret from local config.json
+	if config.Auth.JWTSecret == "" {
+		config.Auth.JWTSecret = strings.TrimSpace(viper.GetString("ai.jwt_secret"))
 	}
 
 	// Validate critical security settings

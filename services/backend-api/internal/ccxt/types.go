@@ -181,7 +181,7 @@ func (s *Service) FetchSingleTicker(ctx context.Context, exchange, symbol string
 //	*OrderBookResponse: Order book data.
 //	error: Error if fetch fails.
 func (s *Service) FetchOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
-	return &OrderBookResponse{}, nil // TODO: Implement in native client
+	return s.nativeClient.FetchOrderBook(ctx, exchange, symbol, limit)
 }
 
 func (s *Service) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*OrderBookMetrics, error) {

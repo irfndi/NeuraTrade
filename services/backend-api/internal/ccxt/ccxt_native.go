@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -314,6 +315,34 @@ func (s *NativeCCXTService) buildTickerURL(exchange, symbol string) string {
 	}
 }
 
+// buildOrderBookURL builds the orderbook URL for an exchange
+func (s *NativeCCXTService) buildOrderBookURL(exchange, symbol, apiSymbol string, limit int) string {
+	switch exchange {
+	case "binance":
+		return fmt.Sprintf("https://api.binance.com/api/v3/depth?symbol=%s&limit=%d", apiSymbol, limit)
+	case "bybit":
+		return fmt.Sprintf("https://api.bybit.com/v5/market/orderbook?category=linear&symbol=%s&limit=%d", apiSymbol, limit)
+	case "okx":
+		return fmt.Sprintf("https://www.okx.com/api/v5/market/books?instId=%s&sz=%d", apiSymbol, limit)
+	default:
+		return ""
+	}
+}
+
+// parseOrderBookResponse parses orderbook data from API response
+func (s *NativeCCXTService) parseOrderBookResponse(exchange, symbol string, body []byte, limit int) (*OrderBookResponse, error) {
+	switch exchange {
+	case "binance":
+		return s.parseBinanceOrderBook(symbol, body, limit)
+	case "bybit":
+		return s.parseBybitOrderBook(symbol, body, limit)
+	case "okx":
+		return s.parseOKXOrderBook(symbol, body, limit)
+	default:
+		return nil, fmt.Errorf("unsupported exchange: %s", exchange)
+	}
+}
+
 // fetchTickerFromURL fetches and parses ticker data from a URL
 func (s *NativeCCXTService) fetchTickerFromURL(ctx context.Context, url, exchange, symbol string) (*TickerData, error) {
 	// Rate limit API calls
@@ -376,9 +405,9 @@ func (s *NativeCCXTService) parseBinanceTicker(symbol string, body []byte) (*Tic
 		LastPrice      string `json:"lastPrice"`
 		BidPrice       string `json:"bidPrice"`
 		AskPrice       string `json:"askPrice"`
-		High24h        string `json:"high24h"`
-		Low24h         string `json:"low24h"`
-		Volume24h      string `json:"volume24h"`
+		High24h        string `json:"highPrice"`
+		Low24h         string `json:"lowPrice"`
+		Volume24h      string `json:"volume"`
 		OpenPrice      string `json:"openPrice"`
 		PrevClosePrice string `json:"prevClosePrice"`
 	}
@@ -412,8 +441,8 @@ func (s *NativeCCXTService) parseBybitTicker(symbol string, body []byte) (*Ticke
 				LastPrice string `json:"lastPrice"`
 				Bid1Price string `json:"bid1Price"`
 				Ask1Price string `json:"ask1Price"`
-				High24h   string `json:"high24h"`
-				Low24h    string `json:"low24h"`
+				High24h   string `json:"highPrice24h"`
+				Low24h    string `json:"lowPrice24h"`
 				Volume24h string `json:"volume24h"`
 			} `json:"list"`
 		} `json:"result"`
@@ -563,7 +592,48 @@ func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []str
 }
 
 func (s *NativeCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
-	return &OrderBookResponse{}, nil
+	// Check if exchange is initialized
+	s.mu.RLock()
+	_, ok := s.exchanges[exchange]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("exchange %s not initialized", exchange)
+	}
+
+	// Build orderbook URL
+	url := s.buildOrderBookURL(exchange, symbol, symbol, limit)
+	if url == "" {
+		return nil, fmt.Errorf("orderbook endpoint not supported for %s", exchange)
+	}
+
+	// Rate limit API calls
+	s.rateLimiter.Wait()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("User-Agent", "NeuraTrade/1.0")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch orderbook: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.parseOrderBookResponse(exchange, symbol, body, limit)
 }
 
 func (s *NativeCCXTService) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*OrderBookMetrics, error) {
@@ -734,6 +804,159 @@ func (s *NativeCCXTService) parseOKXMarkets(body []byte) ([]string, error) {
 		symbols = append(symbols, formatted)
 	}
 	return symbols, nil
+}
+
+// parseBinanceOrderBook parses Binance orderbook response
+func (s *NativeCCXTService) parseBinanceOrderBook(symbol string, body []byte, limit int) (*OrderBookResponse, error) {
+	var raw struct {
+		LastUpdateID int64      `json:"lastUpdateId"`
+		Bids         [][]string `json:"bids"`
+		Asks         [][]string `json:"asks"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse Binance orderbook: %w", err)
+	}
+
+	bids := make([]OrderBookEntry, 0, len(raw.Bids))
+	for _, bid := range raw.Bids {
+		if len(bid) >= 2 {
+			bids = append(bids, OrderBookEntry{
+				Price:  parseDecimal(bid[0]),
+				Amount: parseDecimal(bid[1]),
+			})
+		}
+	}
+
+	asks := make([]OrderBookEntry, 0, len(raw.Asks))
+	for _, ask := range raw.Asks {
+		if len(ask) >= 2 {
+			asks = append(asks, OrderBookEntry{
+				Price:  parseDecimal(ask[0]),
+				Amount: parseDecimal(ask[1]),
+			})
+		}
+	}
+
+	return &OrderBookResponse{
+		Exchange: "binance",
+		Symbol:   symbol,
+		OrderBook: OrderBook{
+			Symbol:    symbol,
+			Bids:      bids,
+			Asks:      asks,
+			Timestamp: time.Now(),
+			Nonce:     raw.LastUpdateID,
+		},
+	}, nil
+}
+
+// parseBybitOrderBook parses Bybit orderbook response
+func (s *NativeCCXTService) parseBybitOrderBook(symbol string, body []byte, limit int) (*OrderBookResponse, error) {
+	var raw struct {
+		RetCode int `json:"retCode"`
+		Result  struct {
+			Bids       [][]string `json:"b"`
+			Asks       [][]string `json:"a"`
+			Timestamp  int64      `json:"ts"`
+			UpdateID   int64      `json:"u"`
+			Sequence   int64      `json:"seq"`
+		} `json:"result"`
+		RetMsg string `json:"retMsg"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse Bybit orderbook: %w", err)
+	}
+	if raw.RetCode != 0 {
+		return nil, fmt.Errorf("Bybit API error: %s", raw.RetMsg)
+	}
+
+	bids := make([]OrderBookEntry, 0, len(raw.Result.Bids))
+	for _, bid := range raw.Result.Bids {
+		if len(bid) >= 2 {
+			bids = append(bids, OrderBookEntry{
+				Price:  parseDecimal(bid[0]),
+				Amount: parseDecimal(bid[1]),
+			})
+		}
+	}
+
+	asks := make([]OrderBookEntry, 0, len(raw.Result.Asks))
+	for _, ask := range raw.Result.Asks {
+		if len(ask) >= 2 {
+			asks = append(asks, OrderBookEntry{
+				Price:  parseDecimal(ask[0]),
+				Amount: parseDecimal(ask[1]),
+			})
+		}
+	}
+
+	return &OrderBookResponse{
+		Exchange: "bybit",
+		Symbol:   symbol,
+		OrderBook: OrderBook{
+			Symbol:    symbol,
+			Bids:      bids,
+			Asks:      asks,
+			Timestamp: time.UnixMilli(raw.Result.Timestamp),
+			Nonce:     raw.Result.UpdateID,
+		},
+	}, nil
+}
+
+// parseOKXOrderBook parses OKX orderbook response
+func (s *NativeCCXTService) parseOKXOrderBook(symbol string, body []byte, limit int) (*OrderBookResponse, error) {
+	var raw struct {
+		Code string `json:"code"`
+		Data []struct {
+			Asks      [][]string `json:"asks"`
+			Bids      [][]string `json:"bids"`
+			Timestamp string     `json:"ts"`
+		} `json:"data"`
+		Msg string `json:"msg"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse OKX orderbook: %w", err)
+	}
+	if raw.Code != "0" {
+		return nil, fmt.Errorf("OKX API error: %s", raw.Msg)
+	}
+	if len(raw.Data) == 0 {
+		return nil, fmt.Errorf("OKX returned empty orderbook")
+	}
+
+	data := raw.Data[0]
+	bids := make([]OrderBookEntry, 0, len(data.Bids))
+	for _, bid := range data.Bids {
+		if len(bid) >= 2 {
+			bids = append(bids, OrderBookEntry{
+				Price:  parseDecimal(bid[0]),
+				Amount: parseDecimal(bid[1]),
+			})
+		}
+	}
+
+	asks := make([]OrderBookEntry, 0, len(data.Asks))
+	for _, ask := range data.Asks {
+		if len(ask) >= 2 {
+			asks = append(asks, OrderBookEntry{
+				Price:  parseDecimal(ask[0]),
+				Amount: parseDecimal(ask[1]),
+			})
+		}
+	}
+
+	ts, _ := strconv.ParseInt(data.Timestamp, 10, 64)
+
+	return &OrderBookResponse{
+		Exchange: "okx",
+		Symbol:   symbol,
+		OrderBook: OrderBook{
+			Symbol:    symbol,
+			Bids:      bids,
+			Asks:      asks,
+			Timestamp: time.UnixMilli(ts),
+		},
+	}, nil
 }
 
 func (s *NativeCCXTService) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {

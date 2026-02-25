@@ -327,7 +327,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		llmConfig := llm.ClientConfig{
 			APIKey:      aiAPIKey,
 			BaseURL:     aiBaseURL,
-			HTTPTimeout: 120,
+			HTTPTimeout: 300 * time.Second,  // 5 minutes for Zhipu GLM
+			MaxRetries:  5,
 		}
 
 		var llmClient llm.Client
@@ -338,6 +339,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			llmClient = llm.NewAnthropicClient(llmConfig)
 		case "mlx":
 			llmClient = llm.NewMLXClient(llmConfig)
+		case "minimax":
+			// MiniMax uses Anthropic-compatible API
+			llmClient = llm.NewAnthropicClient(llmConfig)
+		case "zhipu":
+			// Zhipu AI (Z.ai) uses OpenAI-compatible API
+			llmClient = llm.NewOpenAIClient(llmConfig)
 		default:
 			llmClient = llm.NewOpenAIClient(llmConfig)
 		}
@@ -511,6 +518,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
 			{
 				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
+				telegramInternal.GET("/quests/diagnostics", autonomousHandler.GetQuestDiagnostics)
 				telegramInternal.GET("/portfolio", autonomousHandler.GetPortfolio)
 				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
 				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)
