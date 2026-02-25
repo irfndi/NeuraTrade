@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/urfave/cli/v2"
@@ -253,18 +254,19 @@ func gatewayStop(cCtx *cli.Context) error {
 	pidsDir := filepath.Join(home, "pids")
 
 	services := []struct {
-		name    string
-		pidFile string
+		name           string
+		pidFile        string
+		processPattern string
 	}{
-		{"Backend API", "backend.pid"},
-		{"CCXT Service", "ccxt.pid"},
-		{"Telegram Service", "telegram.pid"},
+		{"Backend API", "backend.pid", "neuratrade-server"},
+		{"CCXT Service", "ccxt.pid", "ccxt-service"},
+		{"Telegram Service", "telegram.pid", "telegram-service"},
 	}
 
 	stoppedCount := 0
 	for _, svc := range services {
 		pidFile := filepath.Join(pidsDir, svc.pidFile)
-		if err := stopServiceByPIDFile(svc.name, pidFile); err != nil {
+		if err := stopServiceByPIDFile(svc.name, pidFile, svc.processPattern); err != nil {
 			fmt.Printf("⚠️  %s: %v\n", svc.name, err)
 		} else {
 			stoppedCount++
@@ -289,7 +291,7 @@ func gatewayStop(cCtx *cli.Context) error {
 }
 
 // stopServiceByPIDFile reads a PID file and sends SIGTERM to the process
-func stopServiceByPIDFile(name, pidFile string) error {
+func stopServiceByPIDFile(name, pidFile, expectedPattern string) error {
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -309,6 +311,11 @@ func stopServiceByPIDFile(name, pidFile string) error {
 		return fmt.Errorf("process not found (removing stale PID file)")
 	}
 
+	if expectedPattern != "" && !processMatchesPattern(pid, expectedPattern) {
+		_ = os.Remove(pidFile)
+		return fmt.Errorf("stale PID file (PID %d is not %s, removed)", pid, expectedPattern)
+	}
+
 	if err := process.Signal(syscall.SIGTERM); err != nil {
 		return fmt.Errorf("failed to send SIGTERM: %w", err)
 	}
@@ -316,6 +323,16 @@ func stopServiceByPIDFile(name, pidFile string) error {
 	fmt.Printf("✅ %s: Stopped (PID: %d)\n", name, pid)
 	os.Remove(pidFile)
 	return nil
+}
+
+func processMatchesPattern(pid int, expectedPattern string) bool {
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	command := strings.ToLower(strings.TrimSpace(string(output)))
+	return strings.Contains(command, strings.ToLower(expectedPattern))
 }
 
 // gatewayStatus shows the status of NeuraTrade services

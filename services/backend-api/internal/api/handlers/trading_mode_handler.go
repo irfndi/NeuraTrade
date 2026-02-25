@@ -28,11 +28,12 @@ func (h *OperationalModeHandler) GetTradingMode(c *gin.Context) {
 	}
 
 	state := h.opModeService.GetState(chatID)
+	required := h.opModeService.RequiredConfirmations()
 
 	c.JSON(http.StatusOK, gin.H{
 		"mode":                   string(state.Mode),
 		"confirmations":          state.Confirmations,
-		"required_confirmations": 2, // Default requirement
+		"required_confirmations": required,
 		"changed_at":             state.ChangedAt,
 		"changed_by":             state.ChangedBy,
 	})
@@ -101,10 +102,11 @@ func (h *OperationalModeHandler) AddTradingModeConfirmation(c *gin.Context) {
 	}
 
 	confirmations, err := h.opModeService.AddConfirmation(c.Request.Context(), chatID, req.ConfirmedBy)
+	required := h.opModeService.RequiredConfirmations()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"confirmations": 0,
-			"required":      2,
+			"required":      required,
 			"error":         err.Error(),
 		})
 		return
@@ -112,7 +114,7 @@ func (h *OperationalModeHandler) AddTradingModeConfirmation(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"confirmations": confirmations,
-		"required":      2,
+		"required":      required,
 	})
 }
 

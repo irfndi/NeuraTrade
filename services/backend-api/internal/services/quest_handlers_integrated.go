@@ -688,7 +688,7 @@ func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
 
 	var exchange string
 	query := `SELECT provider FROM telegram_operator_wallets 
-	          WHERE chat_id = ? AND status = 'connected' 
+	          WHERE chat_id = $1 AND status = 'connected' 
 	          ORDER BY created_at DESC LIMIT 1`
 
 	err := h.db.QueryRow(query, chatID).Scan(&exchange)

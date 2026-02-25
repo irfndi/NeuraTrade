@@ -1082,6 +1082,7 @@ func (sa *SignalAggregator) GetAggregatedSignalsBySymbol(ctx context.Context, sy
 
 	return signals, nil
 }
+
 // InvalidateSignalsForSymbol invalidates all active signals for a specific symbol.
 // This should be called when new technical analysis contradicts previous signals.
 //
@@ -1102,14 +1103,14 @@ func (sa *SignalAggregator) InvalidateSignalsForSymbol(ctx context.Context, symb
 		SET expires_at = NOW(), metadata = jsonb_set(
 			COALESCE(metadata, '{}'::jsonb),
 			'{invalidated}',
-			jsonb_build_object('reason', $3, 'invalidated_at', NOW())
+			jsonb_build_object('reason', $2, 'invalidated_at', NOW())
 		)
 		WHERE symbol = $1
 			AND expires_at > NOW()
 			AND (metadata->>'invalidated') IS NULL
 	`
 
-	result, err := sa.db.Exec(ctx, query, symbol, sa.sigConfig.MinConfidence, reason)
+	result, err := sa.db.Exec(ctx, query, symbol, reason)
 	if err != nil {
 		return 0, fmt.Errorf("failed to invalidate signals for %s: %w", symbol, err)
 	}
@@ -1117,10 +1118,10 @@ func (sa *SignalAggregator) InvalidateSignalsForSymbol(ctx context.Context, symb
 	rowsAffected, _ := result.RowsAffected()
 
 	sa.logger.WithFields(zaplogrus.Fields{
-		"symbol":        symbol,
-		"reason":        reason,
-		"count":         rowsAffected,
-		"operation":     "signal_invalidation",
+		"symbol":           symbol,
+		"reason":           reason,
+		"count":            rowsAffected,
+		"operation":        "signal_invalidation",
 		"operation_result": "success",
 	}).Info("Invalidated signals for symbol")
 
@@ -1184,12 +1185,12 @@ func (sa *SignalAggregator) InvalidateContradictingSignals(ctx context.Context, 
 
 	if rowsAffected > 0 {
 		sa.logger.WithFields(zaplogrus.Fields{
-			"symbol":                 symbol,
-			"new_action":             newAction,
-			"new_confidence":         newConfidence,
-			"invalidated_action":     contradictingAction,
-			"count":                  rowsAffected,
-			"operation":              "signal_contradiction_invalidation",
+			"symbol":             symbol,
+			"new_action":         newAction,
+			"new_confidence":     newConfidence,
+			"invalidated_action": contradictingAction,
+			"count":              rowsAffected,
+			"operation":          "signal_contradiction_invalidation",
 		}).Info("Invalidated contradicting signals")
 	}
 

@@ -58,6 +58,55 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+type routeRuntimeConfigFile struct {
+	CCXT struct {
+		Exchanges map[string]struct {
+			APIKey     string `json:"api_key"`
+			Secret     string `json:"secret"`
+			Passphrase string `json:"passphrase"`
+		} `json:"exchanges"`
+	} `json:"ccxt"`
+	Telegram struct {
+		ChatID string `json:"chat_id"`
+	} `json:"telegram"`
+	Services struct {
+		Telegram struct {
+			ChatID string `json:"chat_id"`
+		} `json:"telegram"`
+	} `json:"services"`
+}
+
+func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID string) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", "", ""
+	}
+	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
+	configFile, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", "", "", ""
+	}
+
+	var cfg routeRuntimeConfigFile
+	if err := json.Unmarshal(configFile, &cfg); err != nil {
+		log.Printf("WARNING: failed to parse runtime config %s: %v", configPath, err)
+		return "", "", "", ""
+	}
+
+	if bitget, ok := cfg.CCXT.Exchanges["bitget"]; ok {
+		bitgetAPIKey = strings.TrimSpace(bitget.APIKey)
+		bitgetSecret = strings.TrimSpace(bitget.Secret)
+		bitgetPassphrase = strings.TrimSpace(bitget.Passphrase)
+	}
+
+	chatID = strings.TrimSpace(cfg.Telegram.ChatID)
+	if chatID == "" {
+		chatID = strings.TrimSpace(cfg.Services.Telegram.ChatID)
+	}
+
+	return bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID
+}
+
 // Returns a cleanup function that should be called on shutdown.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService) func() {
 	// Initialize admin middleware
@@ -267,41 +316,27 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		ccxtServiceURL = "http://localhost:3001"
 	}
 
-	// Get chat ID from config or environment
-	chatID := os.Getenv("TELEGRAM_CHAT_ID")
-	if chatID == "" {
-		chatID = "1082762347" // Default chat ID
-	}
-
 	log.Printf("Using Bitget Order Executor for real exchange API calls")
 
-	// Get Bitget API keys from config file
-	bitgetAPIKey := ""
-	bitgetSecret := ""
-	bitgetPassphrase := ""
+	// Load runtime credentials/chat context from ~/.neuratrade/config.json first.
+	bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID := loadRouteRuntimeConfig()
 
-	// Load config from file
-	homeDir, _ := os.UserHomeDir()
-	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
-	if configFile, err := os.ReadFile(configPath); err == nil {
-		var cfg map[string]interface{}
-		if json.Unmarshal(configFile, &cfg) == nil {
-			if ccxt, ok := cfg["ccxt"].(map[string]interface{}); ok {
-				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-					if bitget, ok := exchanges["bitget"].(map[string]interface{}); ok {
-						if key, ok := bitget["api_key"].(string); ok {
-							bitgetAPIKey = key
-						}
-						if sec, ok := bitget["secret"].(string); ok {
-							bitgetSecret = sec
-						}
-						if pass, ok := bitget["passphrase"].(string); ok {
-							bitgetPassphrase = pass
-						}
-					}
-				}
-			}
-		}
+	// Optional env overrides for ops.
+	if val := strings.TrimSpace(os.Getenv("BITGET_API_KEY")); val != "" {
+		bitgetAPIKey = val
+	}
+	if val := strings.TrimSpace(os.Getenv("BITGET_SECRET")); val != "" {
+		bitgetSecret = val
+	}
+	if val := strings.TrimSpace(os.Getenv("BITGET_PASSPHRASE")); val != "" {
+		bitgetPassphrase = val
+	}
+	if val := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")); val != "" {
+		chatID = val
+	}
+
+	if chatID == "" {
+		log.Printf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
 	}
 
 	// Use BitgetOrderExecutor for real order execution

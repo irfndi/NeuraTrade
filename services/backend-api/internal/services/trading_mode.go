@@ -224,6 +224,12 @@ func (s *OperationalModeService) IsLive(chatID string) bool {
 	return s.GetMode(chatID) == OpModeLive
 }
 
+// RequiredConfirmations returns the configured number of confirmations needed
+// before switching to live mode.
+func (s *OperationalModeService) RequiredConfirmations() int {
+	return s.config.ConfirmationCount
+}
+
 // ToggleMode toggles between dry and live mode
 func (s *OperationalModeService) ToggleMode(ctx context.Context, chatID string, changedBy string) (OperationalMode, error) {
 	currentMode := s.GetMode(chatID)

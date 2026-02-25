@@ -229,19 +229,26 @@ func (h *UserHandler) RegisterUser(c *gin.Context) {
 	`
 
 	var err2 error
+	dbAvailable := false
 	if h.querier != nil {
 		_, err2 = h.querier.Exec(c.Request.Context(), query,
 			userID, req.Email, string(hashedPassword), req.TelegramChatID, "free")
+		dbAvailable = true
 	} else if h.db != nil {
 		_, err2 = h.db.Exec(c.Request.Context(), query,
 			userID, req.Email, string(hashedPassword), req.TelegramChatID, "free")
+		dbAvailable = true
 	}
-	
-	// For development/local mode: if database is not available, allow registration but log warning
-	// This enables Telegram bot to work without requiring full database setup
+
+	// Handle database errors
 	if err2 != nil {
+		if dbAvailable {
+			// Database is available but query failed - return error
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+			return
+		}
+		// Database not available (dev mode) - log warning and continue
 		log.Printf("[WARN] User registration proceeded without database persistence: %v", err2)
-		// Return success anyway for local development
 	}
 
 	// Return user response (without password)
@@ -439,16 +446,17 @@ func (h *UserHandler) userExists(ctx context.Context, email string) (bool, error
 		return count > 0, nil
 	}
 
-	// Return false if database is not available
-	// Note: In Go, interface is only nil if both type and value are nil
-	// So we attempt the query and handle errors gracefully
+	// Return error if database is not available
+	if h.db == nil {
+		return false, fmt.Errorf("database not available")
+	}
+
 	var count int
 	query := "SELECT COUNT(*) FROM users WHERE email = $1"
 	err := h.db.QueryRow(ctx, query, email).Scan(&count)
 	if err != nil {
-		// Database query failed - could be nil underlying value or connection issue
-		// For registration, treat this as "user does not exist" and allow registration
-		return false, nil
+		log.Printf("[USER] Failed to check existing user by email %q: %v", email, err)
+		return false, err
 	}
 	return count > 0, nil
 }
@@ -638,16 +646,7 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 		)
 
 		if err != nil {
-			// Dev mode: return default user if database not available
-			log.Printf("[WARN] GetUserByTelegramChatID proceeded without database: %v", err)
-			return &models.User{
-				ID:               "dev-user-" + chatID,
-				Email:            "telegram_" + chatID + "@neuratrade.ai",
-				TelegramChatID:   &chatID,
-				SubscriptionTier: "free",
-				CreatedAt:        time.Now(),
-				UpdatedAt:        time.Now(),
-			}, nil
+			return nil, err
 		}
 
 		return &user, nil
@@ -672,7 +671,10 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 	}
 
 	// Cache miss or Redis unavailable, query database
-	// In dev mode, database might not be available - handle gracefully
+	if h.db == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+
 	var user models.User
 	query := `
 		SELECT id, email, password_hash, telegram_chat_id,
@@ -686,16 +688,7 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 	)
 
 	if err != nil {
-		// Dev mode: return default user if database not available
-		log.Printf("[WARN] GetUserByTelegramChatID proceeded without database: %v", err)
-		return &models.User{
-			ID:               "dev-user-" + chatID,
-			Email:            "telegram_" + chatID + "@neuratrade.ai",
-			TelegramChatID:   &chatID,
-			SubscriptionTier: "free",
-			CreatedAt:        time.Now(),
-			UpdatedAt:        time.Now(),
-		}, nil
+		return nil, err
 	}
 
 	// Cache the result in Redis with 5-minute TTL

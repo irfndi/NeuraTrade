@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,7 +50,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 }
 
 func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
-	cfg := base
+	cfg := applyAIScalpingConfigFromFile(base)
 
 	if value := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_EXCHANGE")); value != "" {
 		cfg.Exchange = strings.ToLower(value)
@@ -108,6 +109,85 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.MaxCandidatePairs,
 		cfg.OrderBookPairs,
 	)
+
+	return cfg
+}
+
+type aiScalpingFileConfig struct {
+	AI struct {
+		MinConfidence *float64 `json:"min_confidence"`
+		Scalping      struct {
+			Exchange          string   `json:"exchange"`
+			Leverage          *int     `json:"leverage"`
+			MaxCapitalPct     *float64 `json:"max_capital_pct"`
+			MinConfidence     *float64 `json:"min_confidence"`
+			MaxIterations     *int     `json:"max_iterations"`
+			TimeoutSeconds    *int     `json:"timeout_seconds"`
+			AutoExecute       *bool    `json:"auto_execute"`
+			AllowSpotFallback *bool    `json:"allow_spot_fallback"`
+			MaxPairs          *int     `json:"max_pairs"`
+			MaxCandidates     *int     `json:"max_candidates"`
+			OrderBookPairs    *int     `json:"orderbook_pairs"`
+		} `json:"scalping"`
+	} `json:"ai"`
+}
+
+func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
+	cfg := base
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return cfg
+	}
+
+	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return cfg
+	}
+
+	var fileConfig aiScalpingFileConfig
+	if err := json.Unmarshal(content, &fileConfig); err != nil {
+		log.Printf("[AI-SCALPING] Failed to parse %s: %v", configPath, err)
+		return cfg
+	}
+
+	if fileConfig.AI.MinConfidence != nil {
+		cfg.MinConfidence = clampFloat(*fileConfig.AI.MinConfidence, 0.05, 0.99)
+	}
+	if value := strings.TrimSpace(fileConfig.AI.Scalping.Exchange); value != "" {
+		cfg.Exchange = strings.ToLower(value)
+	}
+	if fileConfig.AI.Scalping.Leverage != nil {
+		cfg.Leverage = clampInt(*fileConfig.AI.Scalping.Leverage, 1, 50)
+	}
+	if fileConfig.AI.Scalping.MaxCapitalPct != nil {
+		cfg.MaxCapitalPct = clampFloat(*fileConfig.AI.Scalping.MaxCapitalPct, 0.1, 100)
+	}
+	if fileConfig.AI.Scalping.MinConfidence != nil {
+		cfg.MinConfidence = clampFloat(*fileConfig.AI.Scalping.MinConfidence, 0.05, 0.99)
+	}
+	if fileConfig.AI.Scalping.MaxIterations != nil {
+		cfg.MaxIterations = clampInt(*fileConfig.AI.Scalping.MaxIterations, 1, 20)
+	}
+	if fileConfig.AI.Scalping.TimeoutSeconds != nil {
+		cfg.Timeout = time.Duration(clampInt(*fileConfig.AI.Scalping.TimeoutSeconds, 10, 600)) * time.Second
+	}
+	if fileConfig.AI.Scalping.AutoExecute != nil {
+		cfg.AutoExecute = *fileConfig.AI.Scalping.AutoExecute
+	}
+	if fileConfig.AI.Scalping.AllowSpotFallback != nil {
+		cfg.AllowSpotFallback = *fileConfig.AI.Scalping.AllowSpotFallback
+	}
+	if fileConfig.AI.Scalping.MaxPairs != nil {
+		cfg.MaxPairsToAnalyze = clampInt(*fileConfig.AI.Scalping.MaxPairs, 1, 64)
+	}
+	if fileConfig.AI.Scalping.MaxCandidates != nil {
+		cfg.MaxCandidatePairs = clampInt(*fileConfig.AI.Scalping.MaxCandidates, cfg.MaxPairsToAnalyze, 2000)
+	}
+	if fileConfig.AI.Scalping.OrderBookPairs != nil {
+		cfg.OrderBookPairs = clampInt(*fileConfig.AI.Scalping.OrderBookPairs, 1, cfg.MaxPairsToAnalyze)
+	}
 
 	return cfg
 }
