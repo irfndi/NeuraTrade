@@ -23,7 +23,7 @@ func TestNewService(t *testing.T) {
 	blacklistCache := cache.NewInMemoryBlacklistCache()
 	service := NewService(cfg, logger, blacklistCache)
 	require.NotNil(t, service)
-	assert.NotNil(t, service.client)
+	assert.NotNil(t, service.nativeClient)
 	assert.NotNil(t, service.supportedExchanges)
 }
 
@@ -326,7 +326,7 @@ func TestService_DifferentConfigs(t *testing.T) {
 			blacklistCache := cache.NewInMemoryBlacklistCache()
 			service := NewService(tc.config, logger, blacklistCache)
 			assert.NotNil(t, service)
-			assert.NotNil(t, service.client)
+			assert.NotNil(t, service.nativeClient)
 			assert.Equal(t, tc.expected, service != nil)
 		})
 	}
@@ -410,7 +410,7 @@ func TestService_InitializationState(t *testing.T) {
 	service := NewService(cfg, logger, blacklistCache)
 
 	// Test initial state
-	assert.NotNil(t, service.client)
+	assert.NotNil(t, service.nativeClient)
 	assert.NotNil(t, service.supportedExchanges)
 	assert.Empty(t, service.supportedExchanges)
 	assert.True(t, service.lastUpdate.IsZero())
@@ -441,7 +441,7 @@ func TestService_GetServiceURL(t *testing.T) {
 	assert.Equal(t, cfg.ServiceURL, url)
 
 	// Test with nil client
-	service.client = nil
+	service.nativeClient = nil
 	url = service.GetServiceURL()
 	assert.Empty(t, url)
 }
