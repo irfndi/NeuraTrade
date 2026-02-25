@@ -84,8 +84,9 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 247 total | 51 open | 1 in progress | 14 blocked | 195 closed | 37 ready
+**Stats:** 248 total | 51 open | 1 in progress | 14 blocked | 196 closed | 37 ready
 
+- ✓ `neura-iyw6`: Refactor notification.go into modular files (PR #205)
 ### Recently Completed (✓)
 - ✓ `neura-uj9s`: Enforce portfolio safety gate in live execution adapters
 - ✓ `neura-7e78`: Add AI package unit tests
