@@ -328,7 +328,7 @@ func TestService_Initialize_Success(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -353,7 +353,7 @@ func TestService_Initialize_ClientError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -384,7 +384,7 @@ func TestService_Initialize_BlacklistCacheError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -461,7 +461,7 @@ func TestService_FetchSingleTicker_Success(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -490,7 +490,7 @@ func TestService_FetchSingleTicker_ClientError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -523,7 +523,7 @@ func TestService_FetchOrderBook_Success(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -550,7 +550,7 @@ func TestService_FetchOrderBook_ClientError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -587,7 +587,7 @@ func TestService_FetchOHLCV_Success(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -617,7 +617,7 @@ func TestService_FetchOHLCV_ClientError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -654,7 +654,7 @@ func TestService_FetchTrades_Success(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -683,7 +683,7 @@ func TestService_FetchTrades_ClientError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -710,7 +710,7 @@ func TestService_FetchMarkets_Success(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -737,7 +737,7 @@ func TestService_FetchMarkets_ClientError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -779,7 +779,7 @@ func TestService_CalculateArbitrageOpportunities_Success(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -829,7 +829,7 @@ func TestService_CalculateArbitrageOpportunities_InsufficientProfit(t *testing.T
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -852,7 +852,7 @@ func TestService_CalculateArbitrageOpportunities_ClientError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -904,7 +904,7 @@ func TestService_FetchFundingRate(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -926,7 +926,7 @@ func TestService_FetchFundingRate_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -970,7 +970,7 @@ func TestService_FetchFundingRates(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -992,7 +992,7 @@ func TestService_FetchFundingRates_EmptySymbols(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1014,7 +1014,7 @@ func TestService_FetchFundingRates_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1058,7 +1058,7 @@ func TestService_FetchAllFundingRates(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1080,7 +1080,7 @@ func TestService_FetchAllFundingRates_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1125,7 +1125,7 @@ func TestService_CalculateFundingRateArbitrage(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1183,7 +1183,7 @@ func TestService_CalculateFundingRateArbitrage_InsufficientProfit(t *testing.T) 
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1231,7 +1231,7 @@ func TestService_CalculateFundingRateArbitrage_PriceDifferenceRisk(t *testing.T)
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1269,7 +1269,7 @@ func TestService_CalculateFundingRateArbitrage_InsufficientExchanges(t *testing.
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1295,7 +1295,7 @@ func TestService_CalculateFundingRateArbitrage_ClientError(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1333,7 +1333,7 @@ func TestService_GetExchangeConfig(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1362,7 +1362,7 @@ func TestService_GetExchangeConfig_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1392,7 +1392,7 @@ func TestService_AddExchangeToBlacklist(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1424,7 +1424,7 @@ func TestService_AddExchangeToBlacklist_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1464,7 +1464,7 @@ func TestService_RemoveExchangeFromBlacklist(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1496,7 +1496,7 @@ func TestService_RemoveExchangeFromBlacklist_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1527,7 +1527,7 @@ func TestService_RefreshExchanges(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1554,7 +1554,7 @@ func TestService_RefreshExchanges_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1584,7 +1584,7 @@ func TestService_AddExchange(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1613,7 +1613,7 @@ func TestService_FetchMarketData_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
@@ -1640,7 +1640,7 @@ func TestService_AddExchange_Error(t *testing.T) {
 	}
 
 	service := &Service{
-		nativeClient:         client,
+		nativeClient:   client,
 		blacklistCache: blacklistCache,
 		logger:         logger,
 	}
