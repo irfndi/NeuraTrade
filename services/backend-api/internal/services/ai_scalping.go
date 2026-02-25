@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +26,7 @@ type AIScalpingConfig struct {
 	MaxIterations     int
 	Timeout           time.Duration
 	AutoExecute       bool
+	AllowSpotFallback bool
 	MaxPairsToAnalyze int
 	MaxCandidatePairs int
 	OrderBookPairs    int
@@ -38,10 +41,75 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		MaxIterations:     3,
 		Timeout:           90 * time.Second,
 		AutoExecute:       true,
+		AllowSpotFallback: false,
 		MaxPairsToAnalyze: 8,
 		MaxCandidatePairs: 120,
 		OrderBookPairs:    4,
 	}
+}
+
+func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
+	cfg := base
+
+	if value := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_EXCHANGE")); value != "" {
+		cfg.Exchange = strings.ToLower(value)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_LEVERAGE"); value > 0 {
+		cfg.Leverage = clampInt(value, 1, 50)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MAX_CAPITAL_PCT"); ok {
+		cfg.MaxCapitalPct = clampFloat(value, 0.1, 100)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MIN_CONFIDENCE"); ok {
+		cfg.MinConfidence = clampFloat(value, 0.05, 0.99)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_MAX_ITERATIONS"); value > 0 {
+		cfg.MaxIterations = clampInt(value, 1, 20)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_TIMEOUT_SECONDS"); value > 0 {
+		cfg.Timeout = time.Duration(clampInt(value, 10, 600)) * time.Second
+	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_AUTO_EXECUTE"); ok {
+		cfg.AutoExecute = value
+	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_ALLOW_SPOT_FALLBACK"); ok {
+		cfg.AllowSpotFallback = value
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_MAX_PAIRS"); value > 0 {
+		cfg.MaxPairsToAnalyze = clampInt(value, 1, 64)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_MAX_CANDIDATES"); value > 0 {
+		cfg.MaxCandidatePairs = clampInt(value, cfg.MaxPairsToAnalyze, 2000)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_ORDERBOOK_PAIRS"); value > 0 {
+		cfg.OrderBookPairs = clampInt(value, 1, cfg.MaxPairsToAnalyze)
+	}
+
+	if cfg.MaxCandidatePairs < cfg.MaxPairsToAnalyze {
+		cfg.MaxCandidatePairs = cfg.MaxPairsToAnalyze
+	}
+	if cfg.OrderBookPairs > cfg.MaxPairsToAnalyze {
+		cfg.OrderBookPairs = cfg.MaxPairsToAnalyze
+	}
+	if cfg.OrderBookPairs <= 0 {
+		cfg.OrderBookPairs = 1
+	}
+
+	log.Printf(
+		"[AI-SCALPING] Runtime config: exchange=%s leverage=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d",
+		cfg.Exchange,
+		cfg.Leverage,
+		cfg.MaxCapitalPct,
+		cfg.MinConfidence,
+		cfg.Timeout,
+		cfg.AutoExecute,
+		cfg.AllowSpotFallback,
+		cfg.MaxPairsToAnalyze,
+		cfg.MaxCandidatePairs,
+		cfg.OrderBookPairs,
+	)
+
+	return cfg
 }
 
 type AITradingDecision struct {
@@ -494,20 +562,21 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 
 	// Build detailed trade info for rich notification
 	details := TradeDetails{
-		Exchange:      s.config.Exchange,
-		Symbol:        decision.Symbol,
-		Side:          decision.Action,
-		OrderType:     "market",
-		MarketType:    "futures",
-		Leverage:      s.config.Leverage,
-		AmountUSDT:    amount,
-		WalletPercent: decision.SizePercent,
-		TakeProfit:    decision.TakeProfit,
-		StopLoss:      decision.StopLoss,
-		TradeType:     "scalping",
-		Confidence:    decision.Confidence,
-		Reasoning:     decision.Reasoning,
-		IsPaperTrade:  false, // Real trading mode
+		Exchange:          s.config.Exchange,
+		Symbol:            decision.Symbol,
+		Side:              decision.Action,
+		OrderType:         "market",
+		MarketType:        "futures",
+		AllowSpotFallback: s.config.AllowSpotFallback,
+		Leverage:          s.config.Leverage,
+		AmountUSDT:        amount,
+		WalletPercent:     decision.SizePercent,
+		TakeProfit:        decision.TakeProfit,
+		StopLoss:          decision.StopLoss,
+		TradeType:         "scalping",
+		Confidence:        decision.Confidence,
+		Reasoning:         decision.Reasoning,
+		IsPaperTrade:      false, // Real trading mode
 	}
 
 	// Use PlaceOrderWithDetails for rich notifications
@@ -630,4 +699,66 @@ func readIntMetric(v interface{}) int {
 	default:
 		return 0
 	}
+}
+
+func getEnvInt(key string) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Printf("[AI-SCALPING] Invalid integer %s=%q", key, raw)
+		return 0
+	}
+	return value
+}
+
+func getEnvFloat(key string) (float64, bool) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		log.Printf("[AI-SCALPING] Invalid float %s=%q", key, raw)
+		return 0, false
+	}
+	return value, true
+}
+
+func getEnvBool(key string) (bool, bool) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return false, false
+	}
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		log.Printf("[AI-SCALPING] Invalid boolean %s=%q", key, raw)
+		return false, false
+	}
+}
+
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func clampFloat(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }

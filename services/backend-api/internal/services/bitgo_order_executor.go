@@ -86,18 +86,17 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	var orderID string
 	var err error
 
-	// Try futures first, fall back to spot if not available
+	// Try futures first. Spot fallback is explicit via AllowSpotFallback.
 	if details.MarketType == "futures" {
 		orderID, err = e.placeFuturesOrderWithTPSL(ctx, apiSymbol, details)
 		if err != nil {
 			fmt.Printf("[BITGET-ORDER] Futures order failed: %v\n", err)
-			// Check if symbol not found on futures - try spot
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "does not exist") || strings.Contains(errMsg, "removed") || strings.Contains(errMsg, "failed to get ticker") || strings.Contains(errMsg, "failed to get contract") {
+			if details.AllowSpotFallback && shouldFallbackToSpot(err) {
 				fmt.Printf("[BITGET-ORDER] Symbol %s not available on futures, trying spot...\n", apiSymbol)
-				// Update details for spot
 				details.MarketType = "spot"
 				orderID, err = e.placeSpotOrder(ctx, apiSymbol, details.Side, details.AmountUSDT, details.EntryPrice)
+			} else if shouldFallbackToSpot(err) {
+				return "", fmt.Errorf("futures-only mode prevented spot fallback for %s: %w", apiSymbol, err)
 			}
 		}
 	} else {
@@ -214,18 +213,18 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	// Example: 3 USDT / 0.01235 USDT per PORTAL = 243 PORTAL
 	// With sizeMultiplier 0.1: 243 / 0.1 = 2430 contracts
 	baseAmount := details.AmountUSDT.Div(price)
-	
+
 	// Convert to number of contracts based on sizeMultiplier
 	contractSize := baseAmount.Div(contractInfo.SizeMultiplier)
-	
+
 	// Round to appropriate precision based on volumePlace
 	contractSize = contractSize.Round(int32(contractInfo.VolumePlace))
-	
+
 	// Ensure minimum size
 	if contractSize.LessThan(contractInfo.MinTradeNum) {
 		contractSize = contractInfo.MinTradeNum
 	}
-	
+
 	size := contractSize.String()
 
 	fmt.Printf("[BITGET-ORDER] Size calc: %.2f USDT / %s = %.2f base / %s = %s contracts\n",
@@ -355,6 +354,17 @@ func (e *BitgetOrderExecutor) getContractInfo(ctx context.Context, symbol string
 	}
 
 	return info, nil
+}
+
+func shouldFallbackToSpot(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := strings.ToLower(err.Error())
+	return strings.Contains(errMsg, "does not exist") ||
+		strings.Contains(errMsg, "removed") ||
+		strings.Contains(errMsg, "failed to get ticker") ||
+		strings.Contains(errMsg, "failed to get contract")
 }
 
 // placeSpotOrder places a spot market order

@@ -78,8 +78,10 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 		return
 	}
 
+	scalpingConfig := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
+
 	h.aiScalpingService = NewAIScalpingService(
-		DefaultAIScalpingConfig(),
+		scalpingConfig,
 		llmClient,
 		skillRegistry,
 		ccxtSvc,

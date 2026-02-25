@@ -2,6 +2,7 @@ package services
 
 import (
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -53,6 +54,7 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 0.45, config.MinConfidence)
 	assert.Equal(t, 3, config.MaxIterations)
 	assert.True(t, config.AutoExecute)
+	assert.False(t, config.AllowSpotFallback)
 	assert.Equal(t, 8, config.MaxPairsToAnalyze)
 	assert.Equal(t, 120, config.MaxCandidatePairs)
 	assert.Equal(t, 4, config.OrderBookPairs)
@@ -67,6 +69,7 @@ func TestAIScalpingConfig_Custom(t *testing.T) {
 		MaxIterations:     5,
 		Timeout:           300000000000,
 		AutoExecute:       false,
+		AllowSpotFallback: true,
 		MaxPairsToAnalyze: 20,
 		MaxCandidatePairs: 500,
 	}
@@ -77,8 +80,34 @@ func TestAIScalpingConfig_Custom(t *testing.T) {
 	assert.Equal(t, 0.5, config.MinConfidence)
 	assert.Equal(t, 5, config.MaxIterations)
 	assert.False(t, config.AutoExecute)
+	assert.True(t, config.AllowSpotFallback)
 	assert.Equal(t, 20, config.MaxPairsToAnalyze)
 	assert.Equal(t, 500, config.MaxCandidatePairs)
+}
+
+func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_EXCHANGE", "binance")
+	t.Setenv("NEURATRADE_SCALPING_LEVERAGE", "12")
+	t.Setenv("NEURATRADE_SCALPING_MAX_CAPITAL_PCT", "3.5")
+	t.Setenv("NEURATRADE_SCALPING_MIN_CONFIDENCE", "0.61")
+	t.Setenv("NEURATRADE_SCALPING_TIMEOUT_SECONDS", "45")
+	t.Setenv("NEURATRADE_SCALPING_AUTO_EXECUTE", "false")
+	t.Setenv("NEURATRADE_SCALPING_ALLOW_SPOT_FALLBACK", "true")
+	t.Setenv("NEURATRADE_SCALPING_MAX_PAIRS", "11")
+	t.Setenv("NEURATRADE_SCALPING_MAX_CANDIDATES", "210")
+	t.Setenv("NEURATRADE_SCALPING_ORDERBOOK_PAIRS", "6")
+
+	cfg := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
+	assert.Equal(t, "binance", cfg.Exchange)
+	assert.Equal(t, 12, cfg.Leverage)
+	assert.Equal(t, 3.5, cfg.MaxCapitalPct)
+	assert.Equal(t, 0.61, cfg.MinConfidence)
+	assert.Equal(t, 45*time.Second, cfg.Timeout)
+	assert.False(t, cfg.AutoExecute)
+	assert.True(t, cfg.AllowSpotFallback)
+	assert.Equal(t, 11, cfg.MaxPairsToAnalyze)
+	assert.Equal(t, 210, cfg.MaxCandidatePairs)
+	assert.Equal(t, 6, cfg.OrderBookPairs)
 }
 
 func TestAIMarketSignal(t *testing.T) {
