@@ -400,6 +400,7 @@ func (e *QuestEngine) Start() {
 	e.mu.Lock()
 	if e.running {
 		e.mu.Unlock()
+		log.Println("[QUEST] Start called but already running")
 		return
 	}
 	e.running = true
@@ -409,7 +410,8 @@ func (e *QuestEngine) Start() {
 	e.loadActiveQuests()
 
 	go e.schedulerLoop()
-	log.Println("Quest engine started")
+	log.Printf("[QUEST] Quest engine started")
+	log.Printf("[QUEST] Initial state: %d quests loaded, running=%v", len(e.quests), e.running)
 }
 
 // loadActiveQuests loads active quests from the database into memory
@@ -480,16 +482,17 @@ func (e *QuestEngine) Stop() {
 
 // schedulerLoop runs the periodic quest scheduling
 func (e *QuestEngine) schedulerLoop() {
-	log.Println("Quest scheduler loop started")
+	log.Println("[QUEST] Scheduler loop started")
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-e.stopCh:
+			log.Println("[QUEST] Scheduler loop stopped")
 			return
 		case <-ticker.C:
-			log.Println("Quest scheduler ticker triggered")
+			log.Printf("[QUEST] Scheduler ticker triggered, %d quests in memory", len(e.quests))
 			e.tick()
 		}
 	}
@@ -507,7 +510,7 @@ func (e *QuestEngine) tick() {
 			if quest.UpdatedAt.Before(now.Add(-cleanupThreshold)) {
 				delete(e.quests, id)
 				delete(e.chatIDForQuest, id)
-				log.Printf("Cleaned up old quest: %s (status: %s)", id, quest.Status)
+				log.Printf("[QUEST] Cleaned up old quest: %s (status: %s)", id, quest.Status)
 			}
 		}
 	}
@@ -515,20 +518,24 @@ func (e *QuestEngine) tick() {
 
 	// Then, check quests for execution (read lock)
 	e.mu.RLock()
-	log.Printf("Quest scheduler tick: checking %d quests", len(e.quests))
+	log.Printf("[QUEST] Tick: checking %d quests for execution", len(e.quests))
+	activeCount := 0
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
+			log.Printf("[QUEST] Quest %s (%s) skipped - status: %s", quest.ID, quest.Name, quest.Status)
 			continue
 		}
+		activeCount++
 
 		// Check if quest should execute based on cadence
 		if e.shouldExecute(quest, now) {
-			log.Printf("Executing quest: %s (type: %s)", quest.ID, quest.Type)
+			log.Printf("[QUEST] Executing quest: %s (type: %s, def: %s, chat: %s)", quest.ID, quest.Type, quest.Metadata["definition_id"], quest.Metadata["chat_id"])
 			go e.executeQuest(quest)
 		} else {
-			log.Printf("Quest %s not ready (cadence: %s)", quest.ID, quest.Cadence)
+			log.Printf("[QUEST] Quest %s not ready (cadence: %s, last: %v)", quest.ID, quest.Cadence, quest.LastExecutedAt)
 		}
 	}
+	log.Printf("[QUEST] Tick complete: %d active quests, %d sent for execution", activeCount, activeCount)
 	e.mu.RUnlock()
 }
 
@@ -695,6 +702,14 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 			log.Printf("Failed to create quest %s: %v", defID, err)
 			continue
 		}
+		// Set dry-run mode from config (default to true for safety)
+		if quest.Metadata == nil {
+			quest.Metadata = make(map[string]string)
+		}
+		quest.Metadata["dry_run"] = "true"
+		quest.Metadata["paper_trading"] = "true"
+		log.Printf("[QUEST] Created quest %s with dry_run=true (paper trading mode)", quest.ID)
+
 		quest.Status = QuestStatusActive
 		state.ActiveQuests = append(state.ActiveQuests, quest.ID)
 	}

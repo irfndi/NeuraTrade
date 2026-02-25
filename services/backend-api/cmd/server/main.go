@@ -175,18 +175,23 @@ func run() error {
 	}
 
 	if err := collectorService.Start(); err != nil {
-		logger.WithError(err).Fatal("Failed to start collector service")
+		logger.WithError(err).Warn("Failed to start collector service - continuing without market data collection (AI scalping will use fallback data)")
+		// Don't fail startup - AI scalping can work with direct exchange API calls
+		// collectorService will be nil-safe for other operations
 	}
-	defer collectorService.Stop()
+	if err == nil {
+		// Only wait for data if collector started successfully
+		defer collectorService.Stop()
 
-	// Wait for first market data before starting dependent services
-	// This prevents arbitrage from running with no data (exchanges=0 issue)
-	logger.Info("Waiting for initial market data collection...")
-	if err := collectorService.WaitForFirstData(2 * time.Minute); err != nil {
-		logger.WithError(err).Warn("Timeout waiting for first market data - starting dependent services anyway")
-		// Don't fail startup, but log warning - services will retry on next collection
-	} else {
-		logger.Info("Initial market data collected successfully")
+		// Wait for first market data before starting dependent services
+		// This prevents arbitrage from running with no data (exchanges=0 issue)
+		logger.Info("Waiting for initial market data collection...")
+		if err := collectorService.WaitForFirstData(2 * time.Minute); err != nil {
+			logger.WithError(err).Warn("Timeout waiting for first market data - starting dependent services anyway")
+			// Don't fail startup, but log warning - services will retry on next collection
+		} else {
+			logger.Info("Initial market data collected successfully")
+		}
 	}
 
 	// Initialize support services for futures arbitrage and cleanup
@@ -196,7 +201,7 @@ func run() error {
 	defer performanceMonitor.Stop()
 
 	// Start historical data backfill in background only when explicitly enabled.
-	if cfg.Backfill.Enabled {
+	if cfg.Backfill.Enabled && collectorService != nil {
 		go func() {
 			logger.Info("Checking for historical data backfill requirements")
 			if err := collectorService.PerformBackfillIfNeeded(); err != nil {
@@ -206,7 +211,11 @@ func run() error {
 			}
 		}()
 	} else {
-		logger.Info("Historical data backfill disabled")
+		if !cfg.Backfill.Enabled {
+			logger.Info("Historical data backfill disabled")
+		} else {
+			logger.Info("Skipping backfill - collector service not available")
+		}
 	}
 
 	// Scalping-first mode: keep arbitrage engines off unless explicitly enabled.

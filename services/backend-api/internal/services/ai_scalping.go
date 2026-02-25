@@ -101,7 +101,8 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	decision, err := s.getAIDecision(ctx, signals, portfolio)
 	if err != nil {
 		log.Printf("[AI-SCALPING] Failed to get AI decision: %v", err)
-		return nil, fmt.Errorf("failed to get AI decision: %w", err)
+		log.Printf("[AI-SCALPING] Skipping this scalping cycle (AI unavailable)")
+		return nil, nil // Return nil, nil to skip cycle without error
 	}
 
 	decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
@@ -312,8 +313,11 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	userPrompt := s.buildUserPrompt(ctx, signals, portfolio)
 
 	log.Printf("[AI-SCALPING] Calling LLM with %d signals", len(signals))
+	log.Printf("[AI-SCALPING] === SYSTEM PROMPT ===\n%s", systemPrompt)
+	log.Printf("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", portfolio.USDTBalance, len(signals))
 
 	req := &llm.CompletionRequest{
+		Model: "glm-5", // Zhipu GLM-5 model
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: systemPrompt},
 			{Role: llm.RoleUser, Content: userPrompt},
@@ -323,19 +327,33 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
 	}
 
+	log.Printf("[AI-SCALPING] Sending LLM request...")
+
 	resp, err := s.llmClient.Complete(ctx, req)
 	if err != nil {
 		log.Printf("[AI-SCALPING] LLM completion failed: %v", err)
 		return nil, fmt.Errorf("LLM completion failed: %w", err)
 	}
 
-	log.Printf("[AI-SCALPING] LLM response received (latency: %dms)", resp.LatencyMs)
+	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
 
 	var decision AITradingDecision
 	if err := json.Unmarshal([]byte(resp.Message.Content), &decision); err != nil {
 		log.Printf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
 		return nil, fmt.Errorf("failed to parse AI decision: %w", err)
 	}
+
+	stopLossFloat := 0.0
+	takeProfitFloat := 0.0
+	if decision.StopLoss != nil {
+		stopLossFloat = decision.StopLoss.InexactFloat64()
+	}
+	if decision.TakeProfit != nil {
+		takeProfitFloat = decision.TakeProfit.InexactFloat64()
+	}
+	log.Printf("[AI-SCALPING] === AI DECISION PARSED ===\nAction: %s, Symbol: %s, Confidence: %.0f%%, Size: %.1f%%, SL: %.4f, TP: %.4f\nReasoning: %s",
+		decision.Action, decision.Symbol, decision.Confidence*100, decision.SizePercent,
+		stopLossFloat, takeProfitFloat, decision.Reasoning)
 
 	return &decision, nil
 }
