@@ -219,6 +219,11 @@ func (s *NativeCCXTService) GetServiceURL() string {
 	return "native"
 }
 
+// BaseURL returns the base URL for the native CCXT service (empty for direct API calls)
+func (s *NativeCCXTService) BaseURL() string {
+	return ""
+}
+
 // GetSupportedExchanges returns a list of supported exchange IDs
 func (s *NativeCCXTService) GetSupportedExchanges() []string {
 	s.mu.RLock()
