@@ -446,4 +446,3 @@ func (s *ArbitrageFinderService) calculateSMA(prices []float64, period int) floa
 
 	return sum / float64(min(period, len(prices)))
 }
-

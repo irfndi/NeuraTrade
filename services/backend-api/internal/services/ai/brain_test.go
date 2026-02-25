@@ -37,7 +37,6 @@ func (m *MockLLMClient) Close() error {
 	return nil
 }
 
-
 // MockToolRegistry implements ToolRegistry for testing
 type MockToolRegistry struct {
 	tools map[string]Tool

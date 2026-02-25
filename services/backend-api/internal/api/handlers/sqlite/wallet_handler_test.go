@@ -545,5 +545,5 @@ func TestWalletHandler_ConnectExchange_InvalidJSON(t *testing.T) {
 
 	handler.ConnectExchange(c)
 
-assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
