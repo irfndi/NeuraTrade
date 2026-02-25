@@ -653,7 +653,14 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	decision, err := parseAIDecisionPayload(resp.Message.Content)
 	if err != nil {
 		log.Printf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
-		return nil, fmt.Errorf("failed to parse AI decision: %w", err)
+		repaired, repairErr := s.repairDecisionJSON(ctx, resp.Message.Content)
+		if repairErr != nil {
+			return nil, fmt.Errorf("failed to parse AI decision: %w", err)
+		}
+		decision, err = parseAIDecisionPayload(repaired)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AI decision: %w", err)
+		}
 	}
 
 	stopLossFloat := 0.0
@@ -938,6 +945,61 @@ func parseAIDecisionPayload(content string) (*AITradingDecision, error) {
 		StopLoss:    stopLoss,
 		TakeProfit:  takeProfit,
 	}, nil
+}
+
+func (s *AIScalpingService) repairDecisionJSON(ctx context.Context, raw string) (string, error) {
+	modelID := strings.TrimSpace(s.config.Model)
+	if modelID == "" {
+		modelID = "glm-5"
+	}
+
+	maxTokens := 320
+	if s.config.MaxTokens > 0 && s.config.MaxTokens < maxTokens {
+		maxTokens = s.config.MaxTokens
+	}
+
+	repairCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+
+	req := &llm.CompletionRequest{
+		Model: modelID,
+		Messages: []llm.Message{
+			{
+				Role: llm.RoleSystem,
+				Content: `Convert the provided trading analysis into strict JSON only.
+Schema:
+{
+  "action": "buy" | "sell" | "hold",
+  "symbol": "SYMBOL/USDT",
+  "size_pct": number,
+  "confidence": number,
+  "reasoning": "text",
+  "stop_loss": number|null,
+  "take_profit": number|null
+}
+Do not include markdown or extra text.`,
+			},
+			{
+				Role:    llm.RoleUser,
+				Content: raw,
+			},
+		},
+		Temperature:    floatPtr(0),
+		MaxTokens:      maxTokens,
+		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
+	}
+
+	resp, err := s.llmClient.Complete(repairCtx, req)
+	if err != nil {
+		return "", err
+	}
+
+	content := strings.TrimSpace(resp.Message.Content)
+	if content == "" {
+		return "", fmt.Errorf("empty repair response")
+	}
+	log.Printf("[AI-SCALPING] Repaired non-JSON decision payload")
+	return content, nil
 }
 
 func parseOptionalDecimal(raw json.RawMessage) (*decimal.Decimal, error) {
