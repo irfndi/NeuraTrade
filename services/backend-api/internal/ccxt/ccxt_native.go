@@ -180,7 +180,7 @@ func (s *NativeCCXTService) testExchangeConnection(ctx context.Context, exchange
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return resp.StatusCode == http.StatusOK
 }
@@ -365,7 +365,7 @@ func (s *NativeCCXTService) fetchTickerFromURL(ctx context.Context, url, exchang
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -626,7 +626,7 @@ func (s *NativeCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch orderbook: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -678,7 +678,7 @@ func (s *NativeCCXTService) FetchMarkets(ctx context.Context, exchange string) (
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
