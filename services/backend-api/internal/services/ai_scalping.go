@@ -650,8 +650,8 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 
 	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
 
-	var decision AITradingDecision
-	if err := json.Unmarshal([]byte(resp.Message.Content), &decision); err != nil {
+	decision, err := parseAIDecisionPayload(resp.Message.Content)
+	if err != nil {
 		log.Printf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
 		return nil, fmt.Errorf("failed to parse AI decision: %w", err)
 	}
@@ -668,7 +668,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		decision.Action, decision.Symbol, decision.Confidence*100, decision.SizePercent,
 		stopLossFloat, takeProfitFloat, decision.Reasoning)
 
-	return &decision, nil
+	return decision, nil
 }
 
 func (s *AIScalpingService) buildSystemPrompt() string {
@@ -834,9 +834,15 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 	if decision.SizePercent <= 0 {
 		return fmt.Errorf("size_pct must be > 0")
 	}
-	// Loss prevention guardrail: require explicit exit levels for live executions.
 	if decision.StopLoss == nil || decision.TakeProfit == nil {
-		return fmt.Errorf("stop_loss and take_profit are required for non-hold decisions")
+		defaultSL, defaultTP := defaultExitLevels(resolved.Price, decision.Action)
+		if decision.StopLoss == nil {
+			decision.StopLoss = &defaultSL
+		}
+		if decision.TakeProfit == nil {
+			decision.TakeProfit = &defaultTP
+		}
+		log.Printf("[AI-SCALPING] Applied default SL/TP for %s %s due to incomplete model output", decision.Action, decision.Symbol)
 	}
 	if decision.StopLoss.LessThanOrEqual(decimal.Zero) || decision.TakeProfit.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("stop_loss and take_profit must be positive")
@@ -887,6 +893,87 @@ func normalizeFuturesSymbol(symbol string) string {
 		return base + "/USDT"
 	}
 	return normalized
+}
+
+func parseAIDecisionPayload(content string) (*AITradingDecision, error) {
+	var payload struct {
+		Action      string          `json:"action"`
+		Symbol      string          `json:"symbol"`
+		SizePercent float64         `json:"size_pct"`
+		Confidence  float64         `json:"confidence"`
+		Reasoning   string          `json:"reasoning"`
+		StopLoss    json.RawMessage `json:"stop_loss"`
+		TakeProfit  json.RawMessage `json:"take_profit"`
+	}
+
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return nil, err
+	}
+
+	stopLoss, err := parseOptionalDecimal(payload.StopLoss)
+	if err != nil {
+		return nil, fmt.Errorf("invalid stop_loss: %w", err)
+	}
+	takeProfit, err := parseOptionalDecimal(payload.TakeProfit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid take_profit: %w", err)
+	}
+
+	return &AITradingDecision{
+		Action:      payload.Action,
+		Symbol:      payload.Symbol,
+		SizePercent: payload.SizePercent,
+		Confidence:  payload.Confidence,
+		Reasoning:   payload.Reasoning,
+		StopLoss:    stopLoss,
+		TakeProfit:  takeProfit,
+	}, nil
+}
+
+func parseOptionalDecimal(raw json.RawMessage) (*decimal.Decimal, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+
+	// Handle numeric JSON values first.
+	var numeric float64
+	if err := json.Unmarshal(raw, &numeric); err == nil {
+		dec := decimal.NewFromFloat(numeric)
+		return &dec, nil
+	}
+
+	// Handle quoted values (including empty string placeholders).
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			return nil, nil
+		}
+		dec, err := decimal.NewFromString(trimmed)
+		if err != nil {
+			return nil, err
+		}
+		return &dec, nil
+	}
+
+	return nil, fmt.Errorf("unsupported value %s", string(raw))
+}
+
+func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.Decimal) {
+	entry := decimal.NewFromFloat(price)
+	stopPct := decimal.NewFromFloat(0.008) // 0.8%
+	takePct := decimal.NewFromFloat(0.012) // 1.2%
+
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "sell":
+		stopLoss := entry.Mul(decimal.NewFromInt(1).Add(stopPct))
+		takeProfit := entry.Mul(decimal.NewFromInt(1).Sub(takePct))
+		return stopLoss, takeProfit
+	default:
+		stopLoss := entry.Mul(decimal.NewFromInt(1).Sub(stopPct))
+		takeProfit := entry.Mul(decimal.NewFromInt(1).Add(takePct))
+		return stopLoss, takeProfit
+	}
 }
 
 func (s *AIScalpingService) dynamicRiskThresholds() (minConfidence float64, maxCapitalPct float64) {
