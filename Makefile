@@ -43,6 +43,10 @@ proto-gen: ## Generate gRPC code
 	@echo "$(GREEN)gRPC code generated!$(NC)"
 
 
+mod-download: ## Download Go module dependencies
+	@echo "$(GREEN)Downloading Go module dependencies...$(NC)"
+	@cd services/backend-api && go mod download
+
 build: services-setup ## Build the application across all languages
 	@echo "$(GREEN)Building $(APP_NAME)...$(NC)"
 	# CCXT Service removed - migrated to Go
