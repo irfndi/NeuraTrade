@@ -322,8 +322,8 @@ func (r *ExchangePositionReconciler) getLocalOrders(ctx context.Context, exchang
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		if isMissingTableError(err) {
-			r.logger.Printf("open_orders table missing, skipping order reconciliation for %s", exchange)
-			return []ReconcilerOrderRecord{}, nil
+			r.logger.Printf("open_orders table missing, falling back to trading_orders for %s", exchange)
+			return r.getLocalOrdersFromTradingOrders(ctx, exchange, chatID)
 		}
 		return nil, err
 	}
@@ -335,6 +335,38 @@ func (r *ExchangePositionReconciler) getLocalOrders(ctx context.Context, exchang
 		if err := rows.Scan(&o.OrderID, &o.Exchange, &o.Symbol, &o.Side, &o.Status, &o.Price, &o.Size, &o.Filled); err != nil {
 			return nil, err
 		}
+		orders = append(orders, o)
+	}
+
+	return orders, nil
+}
+
+func (r *ExchangePositionReconciler) getLocalOrdersFromTradingOrders(ctx context.Context, exchange, chatID string) ([]ReconcilerOrderRecord, error) {
+	if chatID != "" {
+		r.logger.Printf("chat-specific order reconciliation fallback unavailable for trading_orders on %s; using exchange-wide rows", exchange)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT order_id, exchange, symbol, side, status, price, amount
+		FROM trading_orders
+		WHERE exchange = $1 AND status IN ('open', 'pending', 'partial')
+	`, exchange)
+	if err != nil {
+		if isMissingTableError(err) {
+			r.logger.Printf("trading_orders table missing, skipping order reconciliation for %s", exchange)
+			return []ReconcilerOrderRecord{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	orders := make([]ReconcilerOrderRecord, 0)
+	for rows.Next() {
+		var o ReconcilerOrderRecord
+		if err := rows.Scan(&o.OrderID, &o.Exchange, &o.Symbol, &o.Side, &o.Status, &o.Price, &o.Size); err != nil {
+			return nil, err
+		}
+		o.Filled = decimal.Zero
 		orders = append(orders, o)
 	}
 
@@ -361,8 +393,8 @@ func (r *ExchangePositionReconciler) getLocalPositions(ctx context.Context, exch
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		if isMissingTableError(err) {
-			r.logger.Printf("reconciled_positions table missing, skipping position reconciliation for %s", exchange)
-			return []PositionRecord{}, nil
+			r.logger.Printf("reconciled_positions table missing, falling back to trading_positions for %s", exchange)
+			return r.getLocalPositionsFromTradingPositions(ctx, exchange, chatID)
 		}
 		return nil, err
 	}
@@ -374,6 +406,38 @@ func (r *ExchangePositionReconciler) getLocalPositions(ctx context.Context, exch
 		if err := rows.Scan(&p.Symbol, &p.Side, &p.Size, &p.EntryPrice, &p.CurrentPrice); err != nil {
 			return nil, err
 		}
+		positions = append(positions, p)
+	}
+
+	return positions, nil
+}
+
+func (r *ExchangePositionReconciler) getLocalPositionsFromTradingPositions(ctx context.Context, exchange, chatID string) ([]PositionRecord, error) {
+	if chatID != "" {
+		r.logger.Printf("chat-specific position reconciliation fallback unavailable for trading_positions on %s; using exchange-wide rows", exchange)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT symbol, side, size, entry_price
+		FROM trading_positions
+		WHERE exchange = $1 AND status = 'open'
+	`, exchange)
+	if err != nil {
+		if isMissingTableError(err) {
+			r.logger.Printf("trading_positions table missing, skipping position reconciliation for %s", exchange)
+			return []PositionRecord{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	positions := make([]PositionRecord, 0)
+	for rows.Next() {
+		var p PositionRecord
+		if err := rows.Scan(&p.Symbol, &p.Side, &p.Size, &p.EntryPrice); err != nil {
+			return nil, err
+		}
+		p.CurrentPrice = p.EntryPrice
 		positions = append(positions, p)
 	}
 
