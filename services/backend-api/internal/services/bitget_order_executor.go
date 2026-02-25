@@ -275,10 +275,10 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 
 	// Add TP/SL if provided
 	if details.TakeProfit != nil {
-		body["presetTakeProfitPrice"] = details.TakeProfit.StringFixed(5)
+		body["presetTakeProfitPrice"] = formatFuturesTriggerPrice(*details.TakeProfit, contractInfo)
 	}
 	if details.StopLoss != nil {
-		body["presetStopLossPrice"] = details.StopLoss.StringFixed(5)
+		body["presetStopLossPrice"] = formatFuturesTriggerPrice(*details.StopLoss, contractInfo)
 	}
 
 	fmt.Printf("[BITGET-ORDER] Placing futures order: %s %s (size: %s contracts @ %s USDT each)\n",
@@ -344,6 +344,7 @@ type ContractInfo struct {
 	SizeMultiplier decimal.Decimal
 	MinTradeNum    decimal.Decimal
 	VolumePlace    int
+	PricePlace     int
 }
 
 // getContractInfo fetches contract specification from Bitget
@@ -361,6 +362,7 @@ func (e *BitgetOrderExecutor) getContractInfo(ctx context.Context, symbol string
 			SizeMultiplier string `json:"sizeMultiplier"`
 			MinTradeNum    string `json:"minTradeNum"`
 			VolumePlace    string `json:"volumePlace"`
+			PricePlace     string `json:"pricePlace"`
 		} `json:"data"`
 	}
 
@@ -379,8 +381,21 @@ func (e *BitgetOrderExecutor) getContractInfo(ctx context.Context, symbol string
 	if vp, err := strconv.Atoi(result.Data[0].VolumePlace); err == nil {
 		info.VolumePlace = vp
 	}
+	if pp, err := strconv.Atoi(result.Data[0].PricePlace); err == nil {
+		info.PricePlace = pp
+	}
 
 	return info, nil
+}
+
+func formatFuturesTriggerPrice(price decimal.Decimal, contractInfo *ContractInfo) string {
+	if contractInfo == nil {
+		return price.StringFixed(5)
+	}
+	if contractInfo.PricePlace <= 0 {
+		return price.Round(0).String()
+	}
+	return price.Round(int32(contractInfo.PricePlace)).StringFixed(int32(contractInfo.PricePlace))
 }
 
 func shouldFallbackToSpot(err error) bool {
