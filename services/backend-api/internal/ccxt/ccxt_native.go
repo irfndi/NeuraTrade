@@ -458,7 +458,7 @@ func (s *NativeCCXTService) parseBybitTicker(symbol string, body []byte) (*Ticke
 	}
 
 	if raw.RetCode != 0 {
-		return nil, fmt.Errorf("Bybit API error: %s", raw.RetMsg)
+		return nil, fmt.Errorf("bybit API error: %s", raw.RetMsg)
 	}
 
 	if len(raw.Result.List) == 0 {
@@ -769,7 +769,7 @@ func (s *NativeCCXTService) parseBybitMarkets(body []byte) ([]string, error) {
 		return nil, fmt.Errorf("failed to parse Bybit markets: %w", err)
 	}
 	if raw.RetCode != 0 {
-		return nil, fmt.Errorf("Bybit API error")
+		return nil, fmt.Errorf("bybit API error")
 	}
 	var symbols []string
 	for _, sym := range raw.Result.List {
@@ -872,7 +872,7 @@ func (s *NativeCCXTService) parseBybitOrderBook(symbol string, body []byte, limi
 		return nil, fmt.Errorf("failed to parse Bybit orderbook: %w", err)
 	}
 	if raw.RetCode != 0 {
-		return nil, fmt.Errorf("Bybit API error: %s", raw.RetMsg)
+		return nil, fmt.Errorf("bybit API error: %s", raw.RetMsg)
 	}
 
 	bids := make([]OrderBookEntry, 0, len(raw.Result.Bids))
