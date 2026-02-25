@@ -68,10 +68,42 @@ func NewOperationalModeService(db DBPool, config OperationalModeConfig, logger l
 		states: make(map[string]*OperationalModeState),
 	}
 
+	// Ensure storage exists for environments where migrations are partial or delayed
+	// (common in local SQLite setups).
+	s.ensureStorage()
+
 	// Load existing states from database
 	s.loadStatesFromDB()
 
 	return s
+}
+
+func (s *OperationalModeService) ensureStorage() {
+	if s.db == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS trading_mode_states (
+			chat_id TEXT PRIMARY KEY,
+			mode TEXT NOT NULL DEFAULT 'dry',
+			changed_at TIMESTAMP NOT NULL,
+			changed_by TEXT,
+			previous_mode TEXT,
+			confirmations INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_trading_mode_states_mode ON trading_mode_states(mode)`,
+	}
+
+	for _, query := range queries {
+		if _, err := s.db.Exec(ctx, query); err != nil {
+			s.logger.WithError(err).Warn("Failed to ensure trading_mode_states storage")
+			return
+		}
+	}
 }
 
 // GetMode returns the current operational mode for a chat
