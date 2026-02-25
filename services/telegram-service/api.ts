@@ -359,10 +359,13 @@ export const createApi = (config: TelegramConfigPartial) => {
    * Set trading mode for a chat
    */
   const setTradingMode = (chatId: string, mode: string) =>
-    apiFetch<{ success: boolean; mode: string }>(`/api/v1/trading-mode/${encodeURIComponent(chatId)}`, {
-      method: "PUT",
-      body: JSON.stringify({ mode }),
-    });
+    apiFetch<{ success: boolean; mode: string }>(
+      `/api/v1/trading-mode/${encodeURIComponent(chatId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ mode }),
+      },
+    );
 
   /**
    * Add confirmation for live mode
@@ -388,6 +391,5 @@ export const createApi = (config: TelegramConfigPartial) => {
     addTradingModeConfirmation,
   };
 };
-
 
 export type Api = ReturnType<typeof createApi>;

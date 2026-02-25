@@ -260,7 +260,6 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	for contractSize.Mul(contractInfo.SizeMultiplier).Mul(price).LessThan(bitgetMinUSDTNotional) {
 		contractSize = contractSize.Add(step)
 	}
-
 	size := contractSize.String()
 
 	fmt.Printf("[BITGET-ORDER] Size calc: %.2f USDT / %s = %.2f base / %s = %s contracts\n",

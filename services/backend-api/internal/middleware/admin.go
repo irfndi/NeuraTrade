@@ -93,11 +93,11 @@ func getAdminAPIKeyFromConfig() string {
 }
 
 func NewAdminMiddleware() *AdminMiddleware {
-	// Get admin API key from environment first, then config.json fallback
-	apiKey := os.Getenv("ADMIN_API_KEY")
+	// Get admin API key from config.json first, then environment variable
+	apiKey := getAdminAPIKeyFromConfig()
 
 	if apiKey == "" {
-		apiKey = getAdminAPIKeyFromConfig()
+		apiKey = os.Getenv("ADMIN_API_KEY")
 	}
 
 	// Handle missing API key based on environment

@@ -899,13 +899,13 @@ func (h *TelegramInternalHandler) GetSummary(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"ok": true,
 		"summary": gin.H{
-			"total_trades": 1,
+			"total_trades":   1,
 			"winning_trades": 0,
-			"losing_trades": 0,
-			"total_pnl": "0.00",
-			"win_rate": "0.00%",
-			"best_trade": "0.00",
-			"worst_trade": "0.00",
+			"losing_trades":  0,
+			"total_pnl":      "0.00",
+			"win_rate":       "0.00%",
+			"best_trade":     "0.00",
+			"worst_trade":    "0.00",
 		},
 		"message": "Summary retrieved (test mode - no live trades yet)",
 	})

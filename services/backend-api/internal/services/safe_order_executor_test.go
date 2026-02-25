@@ -44,6 +44,7 @@ func (m *MockScalpingOrderExecutor) PlaceOrderWithDetails(ctx context.Context, d
 	args := m.Called(ctx, details)
 	return args.String(0), args.Error(1)
 }
+
 // mockSafetyChecker implements PortfolioSafetyChecker for testing
 type mockSafetyChecker struct {
 	mock.Mock

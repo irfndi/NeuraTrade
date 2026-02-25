@@ -1584,6 +1584,13 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		Data    []struct {
 			AccountType string `json:"accountType"`
 			USDTBalance string `json:"usdtBalance"`
+			Coin        []struct {
+				Coin      string `json:"coin"`
+				Balance   string `json:"balance"`
+				Available string `json:"available"`
+				Frozen    string `json:"frozen"`
+				Lock      string `json:"lock"`
+			} `json:"coinList"`
 		} `json:"data"`
 	}
 
@@ -1608,17 +1615,36 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 	}
 
 	totalUSDT := 0.0
-	for _, account := range raw.Data {
-		value, _ := strconv.ParseFloat(strings.TrimSpace(account.USDTBalance), 64)
-		if value <= 0 {
-			continue
+	for _, balanceData := range raw.Data {
+		if strings.TrimSpace(balanceData.USDTBalance) != "" {
+			value, _ := strconv.ParseFloat(strings.TrimSpace(balanceData.USDTBalance), 64)
+			if value > 0 {
+				totalUSDT += value
+				key := strings.ToUpper(strings.TrimSpace(balanceData.AccountType)) + "_USDT"
+				result.Total[key] = value
+				result.Free[key] = value
+				result.Used[key] = 0
+				log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, value)
+			}
 		}
-		totalUSDT += value
-		key := strings.ToUpper(strings.TrimSpace(account.AccountType)) + "_USDT"
-		result.Total[key] = value
-		result.Free[key] = value
-		result.Used[key] = 0
-		log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", account.AccountType, value)
+
+		for _, coin := range balanceData.Coin {
+			if coin.Balance == "" || coin.Balance == "0" {
+				continue
+			}
+			total, _ := strconv.ParseFloat(coin.Balance, 64)
+			free, _ := strconv.ParseFloat(coin.Available, 64)
+			frozen, _ := strconv.ParseFloat(coin.Frozen, 64)
+			locked, _ := strconv.ParseFloat(coin.Lock, 64)
+
+			result.Total[coin.Coin] = total
+			result.Free[coin.Coin] = free
+			result.Used[coin.Coin] = frozen + locked
+
+			if total > 0 {
+				log.Printf("[CCXT Native] Bitget balance: %s = %.8f (free: %.8f)", coin.Coin, total, free)
+			}
+		}
 	}
 	if totalUSDT > 0 {
 		result.Total["USDT"] = totalUSDT
