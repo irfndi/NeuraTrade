@@ -226,6 +226,7 @@ type AITradingDecision struct {
 	StopLoss    *decimal.Decimal `json:"stop_loss,omitempty"`
 	TakeProfit  *decimal.Decimal `json:"take_profit,omitempty"`
 	OrderID     string           `json:"order_id,omitempty"`
+	EntryPrice  *decimal.Decimal `json:"-"`
 }
 
 type TradingPortfolio struct {
@@ -287,8 +288,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	decision, err := s.getAIDecision(ctx, signals, portfolio)
 	if err != nil {
 		log.Printf("[AI-SCALPING] Failed to get AI decision: %v", err)
-		log.Printf("[AI-SCALPING] Skipping this scalping cycle (AI unavailable)")
-		return nil, nil // Return nil, nil to skip cycle without error
+		return fallbackHoldDecision(err.Error(), err), nil
 	}
 
 	decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
@@ -297,7 +297,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	log.Printf("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
 
 	if err := s.validateDecision(decision, signals); err != nil {
-		return nil, fmt.Errorf("invalid AI decision: %w", err)
+		return fallbackHoldDecision(err.Error(), err), nil
 	}
 
 	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds()
@@ -319,6 +319,14 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 
 	if s.config.AutoExecute && s.orderExecutor != nil {
 		if err := s.executeDecision(ctx, decision, portfolio, effectiveMaxCapital); err != nil {
+			if shouldDowngradeExecutionErrorToHold(err) {
+				decision.Action = "hold"
+				decision.Confidence = 0
+				decision.OrderID = ""
+				decision.Reasoning = buildExecutionFallbackReason(err)
+				log.Printf("[AI-SCALPING] Downgrading execution issue to HOLD: %v", err)
+				return decision, nil
+			}
 			return decision, fmt.Errorf("execution failed: %w", err)
 		}
 	}
@@ -789,6 +797,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		TradeType:         "scalping",
 		Confidence:        decision.Confidence,
 		Reasoning:         decision.Reasoning,
+		EntryPrice:        decision.EntryPrice,
 		IsPaperTrade:      false, // Real trading mode
 	}
 
@@ -835,11 +844,15 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 	for _, sig := range signals {
 		known[normalizeSymbolForComparison(sig.Symbol)] = sig
 	}
-	resolved, ok := known[normalizeSymbolForComparison(decision.Symbol)]
+	resolved, ok := resolveDecisionSymbol(decision.Symbol, known)
 	if !ok {
 		return fmt.Errorf("symbol %s not in current analyzed universe", decision.Symbol)
 	}
 	decision.Symbol = resolved.Symbol
+	if resolved.Price > 0 {
+		entry := decimal.NewFromFloat(resolved.Price)
+		decision.EntryPrice = &entry
+	}
 	if decision.SizePercent <= 0 {
 		return fmt.Errorf("size_pct must be > 0")
 	}
@@ -902,6 +915,33 @@ func normalizeFuturesSymbol(symbol string) string {
 		return base + "/USDT"
 	}
 	return normalized
+}
+
+func resolveDecisionSymbol(raw string, known map[string]aiMarketSignal) (aiMarketSignal, bool) {
+	normalized := normalizeSymbolForComparison(raw)
+	if sig, ok := known[normalized]; ok {
+		return sig, true
+	}
+
+	compact := strings.ReplaceAll(normalized, "/", "")
+	compact = strings.TrimSuffix(compact, "USDT")
+	compact = strings.TrimSpace(compact)
+	if compact == "" {
+		return aiMarketSignal{}, false
+	}
+
+	matches := make([]aiMarketSignal, 0, 1)
+	for key, sig := range known {
+		base := strings.TrimSuffix(strings.ReplaceAll(key, "/", ""), "USDT")
+		if strings.HasPrefix(base, compact) || strings.HasPrefix(compact, base) {
+			matches = append(matches, sig)
+		}
+	}
+
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+	return aiMarketSignal{}, false
 }
 
 func parseAIDecisionPayload(content string) (*AITradingDecision, error) {
@@ -975,6 +1015,29 @@ func fallbackHoldDecision(content string, parseErr error) *AITradingDecision {
 		Reasoning:   reason,
 		SizePercent: 0,
 	}
+}
+
+func shouldDowngradeExecutionErrorToHold(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "futures-only mode prevented spot fallback") ||
+		strings.Contains(msg, "parameter") && strings.Contains(msg, "does not exist") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "request failed") ||
+		strings.Contains(msg, "failed to get ticker")
+}
+
+func buildExecutionFallbackReason(err error) string {
+	if err == nil {
+		return "execution unavailable, held this cycle"
+	}
+	sanitized := strings.Join(strings.Fields(err.Error()), " ")
+	if len(sanitized) > 220 {
+		sanitized = sanitized[:217] + "..."
+	}
+	return fmt.Sprintf("execution unavailable, held this cycle: %s", sanitized)
 }
 
 func (s *AIScalpingService) repairDecisionJSON(ctx context.Context, raw string) (string, error) {

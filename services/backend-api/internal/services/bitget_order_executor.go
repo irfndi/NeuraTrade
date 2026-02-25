@@ -17,7 +17,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-var bitgetMinUSDTNotional = decimal.NewFromInt(5)
+var bitgetMinUSDTNotional = decimal.NewFromFloat(6.0)
 
 // BitgetOrderExecutor executes real orders on Bitget exchange
 type BitgetOrderExecutor struct {
@@ -163,24 +163,19 @@ func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, sid
 		"orderType":   "market",
 	}
 
-	jsonBody, _ := json.Marshal(body)
-	fmt.Printf("[BITGET-ORDER] Futures payload: %s\n", string(jsonBody))
-
-	resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/place-order", jsonBody)
+	result, err := e.placeBitgetFuturesOrderRequest(ctx, body)
 	if err != nil {
 		return "", fmt.Errorf("failed to place futures order: %w", err)
 	}
-
-	var result struct {
-		Code string `json:"code"`
-		Msg  string `json:"msg"`
-		Data struct {
-			OrderID string `json:"orderId"`
-		} `json:"data"`
-	}
-
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	if result.Code == "400172" {
+		legacyBody := cloneStringAnyMap(body)
+		legacyBody["side"] = legacyBitgetOpenSide(bitgetSide)
+		delete(legacyBody, "tradeSide")
+		delete(legacyBody, "holdSide")
+		result, err = e.placeBitgetFuturesOrderRequest(ctx, legacyBody)
+		if err != nil {
+			return "", fmt.Errorf("failed to place futures order (legacy side): %w", err)
+		}
 	}
 
 	if result.Code != "00000" {
@@ -188,9 +183,9 @@ func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, sid
 	}
 
 	fmt.Printf("[BITGET-ORDER] ✅ Futures order placed: %s %s (size: %s USDT) - OrderID: %s\n",
-		side, symbol, size, result.Data.OrderID)
+		side, symbol, size, result.OrderID)
 
-	return result.Data.OrderID, nil
+	return result.OrderID, nil
 }
 
 // placeFuturesOrderWithTPSL places a futures order with TP/SL
@@ -286,37 +281,31 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		body["presetStopLossPrice"] = details.StopLoss.StringFixed(5)
 	}
 
-	jsonBody, _ := json.Marshal(body)
-	fmt.Printf("[BITGET-ORDER] Futures payload: %s\n", string(jsonBody))
-
 	fmt.Printf("[BITGET-ORDER] Placing futures order: %s %s (size: %s contracts @ %s USDT each)\n",
 		bitgetSide, symbol, size, price.StringFixed(5))
 
-	resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/place-order", jsonBody)
+	result, err := e.placeBitgetFuturesOrderRequest(ctx, body)
 	if err != nil {
 		return "", fmt.Errorf("failed to place futures order: %w", err)
 	}
-
-	var result struct {
-		Code string `json:"code"`
-		Msg  string `json:"msg"`
-		Data struct {
-			OrderID string `json:"orderId"`
-		} `json:"data"`
+	if result.Code == "400172" {
+		legacyBody := cloneStringAnyMap(body)
+		legacyBody["side"] = legacyBitgetOpenSide(bitgetSide)
+		delete(legacyBody, "tradeSide")
+		delete(legacyBody, "holdSide")
+		result, err = e.placeBitgetFuturesOrderRequest(ctx, legacyBody)
+		if err != nil {
+			return "", fmt.Errorf("failed to place futures order (legacy side): %w", err)
+		}
 	}
-
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
 	if result.Code != "00000" {
 		return "", fmt.Errorf("Bitget API error: %s (code: %s)", result.Msg, result.Code)
 	}
 
 	fmt.Printf("[BITGET-ORDER] ✅ Futures order placed: %s %s (size: %s contracts) - OrderID: %s\n",
-		details.Side, symbol, size, result.Data.OrderID)
+		details.Side, symbol, size, result.OrderID)
 
-	return result.Data.OrderID, nil
+	return result.OrderID, nil
 }
 
 // getTicker fetches current ticker price from Bitget
@@ -415,6 +404,58 @@ func normalizeBitgetFuturesSide(side string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported futures side %q", side)
 	}
+}
+
+type bitgetOrderResult struct {
+	Code    string
+	Msg     string
+	OrderID string
+}
+
+func (e *BitgetOrderExecutor) placeBitgetFuturesOrderRequest(ctx context.Context, body map[string]interface{}) (*bitgetOrderResult, error) {
+	jsonBody, _ := json.Marshal(body)
+	fmt.Printf("[BITGET-ORDER] Futures payload: %s\n", string(jsonBody))
+
+	resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/place-order", jsonBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed struct {
+		Code string `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			OrderID string `json:"orderId"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &bitgetOrderResult{
+		Code:    parsed.Code,
+		Msg:     parsed.Msg,
+		OrderID: parsed.Data.OrderID,
+	}, nil
+}
+
+func legacyBitgetOpenSide(side string) string {
+	switch strings.ToLower(strings.TrimSpace(side)) {
+	case "buy":
+		return "open_long"
+	case "sell":
+		return "open_short"
+	default:
+		return side
+	}
+}
+
+func cloneStringAnyMap(input map[string]interface{}) map[string]interface{} {
+	cloned := make(map[string]interface{}, len(input))
+	for k, v := range input {
+		cloned[k] = v
+	}
+	return cloned
 }
 
 // placeSpotOrder places a spot market order
