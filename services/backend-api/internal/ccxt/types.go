@@ -35,8 +35,15 @@ type Service struct {
 //
 //	*Service: Initialized service.
 func NewService(cfg *config.CCXTConfig, logger *zaplogrus.Logger, blacklistCache cache.BlacklistCache) *Service {
-	// Use native CCXT implementation (direct exchange API calls)
-	nativeClient := NewNativeCCXTService(time.Duration(cfg.Timeout)*time.Second, 3)
+	// Use native CCXT implementation with exchange credentials from config
+	var nativeClient *NativeCCXTService
+	if len(cfg.Exchanges) > 0 {
+		nativeClient = NewNativeCCXTServiceWithConfig(time.Duration(cfg.Timeout)*time.Second, 3, cfg.Exchanges)
+		logger.Info("CCXT service initialized with exchange credentials", "count", len(cfg.Exchanges))
+	} else {
+		nativeClient = NewNativeCCXTService(time.Duration(cfg.Timeout)*time.Second, 3)
+		logger.Warn("CCXT service initialized without exchange credentials - balance fetching will return empty")
+	}
 
 	s := &Service{
 		nativeClient:       nativeClient,

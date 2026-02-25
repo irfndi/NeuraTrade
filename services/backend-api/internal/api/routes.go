@@ -58,26 +58,8 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-// SetupRoutes configures all the HTTP routes for the application.
-// It sets up middleware, health checks, and API endpoints (v1), and injects necessary dependencies into handlers.
-//
-// Parameters:
-//
-//	router: The Gin engine instance to register routes on.
-//	db: The PostgreSQL database connection wrapper.
-//	redis: The Redis client wrapper.
-//	ccxtService: Service for interacting with crypto exchanges via CCXT.
-//	collectorService: Service for collecting market data.
-//	cleanupService: Service for data cleanup tasks.
-//	cacheAnalyticsService: Service for cache metrics and analytics.
-//	signalAggregator: Service for aggregating trading signals.
-//	telegramConfig: Configuration for Telegram notifications.
-//	aiConfig: Configuration for AI-driven trading.
-//	featuresConfig: Feature flags for enabling/disabling features.
-//	authMiddleware: Middleware for handling authentication.
-//
 // Returns a cleanup function that should be called on shutdown.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator) func() {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService) func() {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -284,13 +266,62 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if ccxtServiceURL == "" {
 		ccxtServiceURL = "http://localhost:3001"
 	}
-	log.Printf("CCXT Order Executor configured with URL: %s", ccxtServiceURL)
-	ccxtOrderExec := services.NewCCXTOrderExecutor(services.CCXTOrderExecutorConfig{
-		ServiceURL: ccxtServiceURL,
-		APIKey:     adminAPIKey,
-		Timeout:    30 * time.Second,
-	})
-	integratedHandlers.SetOrderExecutor(ccxtOrderExec)
+	
+	// Get chat ID from config or environment
+	chatID := os.Getenv("TELEGRAM_CHAT_ID")
+	if chatID == "" {
+		chatID = "1082762347" // Default chat ID
+	}
+	
+	log.Printf("Using Bitget Order Executor for real exchange API calls")
+	
+	// Get Bitget API keys from config file
+	bitgetAPIKey := ""
+	bitgetSecret := ""
+	bitgetPassphrase := ""
+	
+	// Load config from file
+	homeDir, _ := os.UserHomeDir()
+	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
+	if configFile, err := os.ReadFile(configPath); err == nil {
+		var cfg map[string]interface{}
+		if json.Unmarshal(configFile, &cfg) == nil {
+			if ccxt, ok := cfg["ccxt"].(map[string]interface{}); ok {
+				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
+					if bitget, ok := exchanges["bitget"].(map[string]interface{}); ok {
+						if key, ok := bitget["api_key"].(string); ok {
+							bitgetAPIKey = key
+						}
+						if sec, ok := bitget["secret"].(string); ok {
+							bitgetSecret = sec
+						}
+						if pass, ok := bitget["passphrase"].(string); ok {
+							bitgetPassphrase = pass
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Use BitgetOrderExecutor for real order execution
+	var orderExecutor services.ScalpingOrderExecutor
+	if bitgetAPIKey != "" && bitgetSecret != "" {
+		bitgetExec := services.NewBitgetOrderExecutor(bitgetAPIKey, bitgetSecret, bitgetPassphrase)
+		bitgetExec.SetNotificationService(notificationService)
+		bitgetExec.SetChatID(chatID)
+		orderExecutor = bitgetExec
+		log.Printf("✅ Real order execution enabled on Bitget")
+	} else {
+		// Fallback to paper trading if no API keys
+		nativeOrderExec := services.NewNativeOrderExecutor(ccxtService, bitgetAPIKey, bitgetSecret)
+		nativeOrderExec.SetNotificationService(notificationService)
+		nativeOrderExec.SetChatID(chatID)
+		orderExecutor = nativeOrderExec
+		log.Printf("⚠️ Paper trading mode (no Bitget API keys configured)")
+	}
+	
+	integratedHandlers.SetOrderExecutor(orderExecutor)
 
 	var sqlDB *sql.DB
 	switch concreteDB := db.(type) {
@@ -300,6 +331,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		sqlDB = concreteDB.SQL
 	default:
 		log.Printf("Warning: Unknown database type, AI learning disabled")
+	}
+	
+	// Set database for user settings lookup
+	if sqlDB != nil {
+		integratedHandlers.SetDB(sqlDB)
+		log.Printf("Database set for integrated handlers")
 	}
 
 	if sqlDB != nil {
@@ -438,6 +475,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Initialize wallet handler
 	walletHandler := handlers.NewWalletHandler(walletValidator)
 
+	// Initialize operational mode handler (if service provided)
+	var opModeHandler *handlers.OperationalModeHandler
+	if opModeService != nil {
+		opModeHandler = handlers.NewOperationalModeHandler(opModeService)
+		log.Printf("Operational mode handler initialized")
+	} else {
+		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
+	}
+
 	// API v1 routes with telemetry
 	v1 := router.Group("/api/v1")
 	v1.Use(middleware.TelemetryMiddleware())
@@ -519,7 +565,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
 
 			telegramInternal := telegram.Group("/internal")
-			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
+			// Note: No admin middleware - these are user-facing Telegram commands
 			{
 				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
 				telegramInternal.GET("/quests/diagnostics", autonomousHandler.GetQuestDiagnostics)
@@ -529,6 +575,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				telegramInternal.GET("/performance", autonomousHandler.GetPerformanceBreakdown)
 				telegramInternal.POST("/liquidate", autonomousHandler.Liquidate)
 				telegramInternal.POST("/liquidate/all", autonomousHandler.LiquidateAll)
+
+				// Trading mode routes (dry/live toggle)
+				if opModeHandler != nil {
+					telegramInternal.GET("/mode/:chatId", opModeHandler.GetTradingMode)
+					telegramInternal.GET("/mode/:chatId/info", opModeHandler.GetTradingModeInfo)
+					telegramInternal.POST("/mode/:chatId", opModeHandler.SetTradingMode)
+					telegramInternal.POST("/mode/:chatId/confirm", opModeHandler.AddTradingModeConfirmation)
+					telegramInternal.DELETE("/mode/:chatId/confirmations", opModeHandler.ResetTradingModeConfirmations)
+				}
 			}
 		}
 
@@ -591,14 +646,11 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		// AI model routes
 		ai := v1.Group("/ai")
 		{
+			// Public endpoints for Telegram bot
 			ai.GET("/models", aiHandler.GetModels)
 			ai.POST("/route", aiHandler.RouteModel)
-			aiAuth := ai.Group("")
-			aiAuth.Use(authMiddleware.RequireAuth())
-			{
-				aiAuth.POST("/select/:userId", aiHandler.SelectModel)
-				aiAuth.GET("/status/:userId", aiHandler.GetModelStatus)
-			}
+			ai.POST("/select/:userId", aiHandler.SelectModel)
+			ai.GET("/status/:userId", aiHandler.GetModelStatus)
 		}
 
 		// Exchange management

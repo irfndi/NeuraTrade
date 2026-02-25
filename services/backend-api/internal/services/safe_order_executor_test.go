@@ -40,6 +40,10 @@ func (m *MockScalpingOrderExecutor) CancelOrder(ctx context.Context, exchange, o
 	return args.Error(0)
 }
 
+func (m *MockScalpingOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
+	args := m.Called(ctx, details)
+	return args.String(0), args.Error(1)
+}
 // mockSafetyChecker implements PortfolioSafetyChecker for testing
 type mockSafetyChecker struct {
 	mock.Mock

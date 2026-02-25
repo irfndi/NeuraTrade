@@ -112,6 +112,11 @@ func (s *SafeOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID s
 	return s.baseExecutor.CancelOrder(ctx, exchange, orderID)
 }
 
+// PlaceOrderWithDetails places an order with full trade details
+func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
+	return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+}
+
 func (s *SafeOrderExecutor) SetChatID(chatID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

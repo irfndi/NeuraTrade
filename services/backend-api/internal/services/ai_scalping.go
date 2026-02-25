@@ -30,10 +30,10 @@ type AIScalpingConfig struct {
 
 func DefaultAIScalpingConfig() AIScalpingConfig {
 	return AIScalpingConfig{
-		Exchange:          "binance",
+		Exchange:          "bitget", // Default, will be overridden by user settings
 		Leverage:          5,
 		MaxCapitalPct:     5.0,
-		MinConfidence:     0.7,
+		MinConfidence:     0.20,  // Temporarily lowered for testing
 		MaxIterations:     3,
 		Timeout:           180 * time.Second,
 		AutoExecute:       true,
@@ -66,6 +66,12 @@ type AIScalpingService struct {
 	ccxtService   ccxt.CCXTService
 	orderExecutor ScalpingOrderExecutor
 	tradeMemory   *TradeMemory
+}
+
+// SetExchange updates the exchange for scalping (called dynamically based on user wallet)
+func (s *AIScalpingService) SetExchange(exchange string) {
+	s.config.Exchange = exchange
+	log.Printf("[AI-SCALPING] Exchange set to: %s", exchange)
 }
 
 func NewAIScalpingService(
@@ -323,7 +329,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 			{Role: llm.RoleUser, Content: userPrompt},
 		},
 		Temperature:    floatPtr(0.3),
-		MaxTokens:      1000,
+		MaxTokens:      4096, // Increased for reasoning models
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
 	}
 
@@ -451,7 +457,26 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 
 	log.Printf("[AI-SCALPING] Executing: %s %s (%s USDT)", decision.Action, decision.Symbol, amount.String())
 
-	orderID, err := s.orderExecutor.PlaceOrder(ctx, s.config.Exchange, decision.Symbol, decision.Action, "market", amount, nil)
+	// Build detailed trade info for rich notification
+	details := TradeDetails{
+		Exchange:      s.config.Exchange,
+		Symbol:        decision.Symbol,
+		Side:          decision.Action,
+		OrderType:     "market",
+		MarketType:    "spot", // Use spot trading (futures API has side mismatch issues)
+		Leverage:      1, // No leverage for spot
+		AmountUSDT:    amount,
+		WalletPercent: decision.SizePercent,
+		TakeProfit:    decision.TakeProfit,
+		StopLoss:      decision.StopLoss,
+		TradeType:     "scalping",
+		Confidence:    decision.Confidence,
+		Reasoning:     decision.Reasoning,
+		IsPaperTrade:  false, // Real trading mode
+	}
+
+	// Use PlaceOrderWithDetails for rich notifications
+	orderID, err := s.orderExecutor.PlaceOrderWithDetails(ctx, details)
 	if err != nil {
 		return fmt.Errorf("order failed: %w", err)
 	}
@@ -459,6 +484,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	log.Printf("[AI-SCALPING] Order placed: %s", orderID)
 	return nil
 }
+
 
 func sumDecimalOrderVolume(orders []ccxt.OrderBookEntry, limit int) float64 {
 	var total float64

@@ -380,10 +380,12 @@ func run() error {
 	}
 	router.Use(gin.Recovery())
 
-	// Setup routes and get cleanup function
-	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator)
-	defer cleanupRoutes()
+	// Create operational mode service
+	opModeService := services.NewOperationalModeService(db, services.DefaultOperationalModeConfig(), logger.WithComponent("operational_mode"))
 
+	// Setup routes and get cleanup function
+	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService)
+	defer cleanupRoutes()
 	// Create HTTP server with security timeouts
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),

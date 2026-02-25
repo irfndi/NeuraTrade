@@ -24,15 +24,6 @@ const (
 	ActionWait       TradingAction = "wait"
 )
 
-type TradingMode string
-
-const (
-	ModeConservative TradingMode = "conservative"
-	ModeModerate     TradingMode = "moderate"
-	ModeAggressive   TradingMode = "aggressive"
-	ModePaper        TradingMode = "paper"
-)
-
 type PositionSide string
 
 const (
@@ -40,7 +31,6 @@ const (
 	SideShort PositionSide = "short"
 	SideFlat  PositionSide = "flat"
 )
-
 type TradingSignal struct {
 	Name        string  `json:"name"`
 	Value       float64 `json:"value"`
@@ -90,15 +80,15 @@ type TradingDecision struct {
 }
 
 type TraderAgentConfig struct {
-	Mode                TradingMode   `json:"mode"`
-	MaxPositionSize     float64       `json:"max_position_size"`
-	MaxOpenPositions    int           `json:"max_open_positions"`
-	StopLossPercent     float64       `json:"stop_loss_percent"`
-	TakeProfitPercent   float64       `json:"take_profit_percent"`
-	MinConfidence       float64       `json:"min_confidence"`
-	MaxRiskPerTrade     float64       `json:"max_risk_per_trade"`
-	CooldownPeriod      time.Duration `json:"cooldown_period"`
-	RequireConfirmation bool          `json:"require_confirmation"`
+	Mode                OperationalMode `json:"mode"`
+	MaxPositionSize     float64         `json:"max_position_size"`
+	MaxOpenPositions    int             `json:"max_open_positions"`
+	StopLossPercent     float64         `json:"stop_loss_percent"`
+	TakeProfitPercent   float64         `json:"take_profit_percent"`
+	MinConfidence       float64         `json:"min_confidence"`
+	MaxRiskPerTrade     float64         `json:"max_risk_per_trade"`
+	CooldownPeriod      time.Duration   `json:"cooldown_period"`
+	RequireConfirmation bool            `json:"require_confirmation"`
 }
 
 func DefaultTraderAgentConfig() TraderAgentConfig {

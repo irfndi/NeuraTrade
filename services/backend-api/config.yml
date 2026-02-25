@@ -97,6 +97,7 @@ market_data:
     - bitfinex
     - huobi
     - bybit
+    - bitget
 
 # Arbitrage configuration
 arbitrage:

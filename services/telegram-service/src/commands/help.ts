@@ -25,6 +25,11 @@ export function registerHelpCommand(bot: Bot): void {
       "/connect_exchange - Connect exchange\n" +
       "/add_wallet - Add wallet\n" +
       "/remove_wallet - Remove wallet\n\n" +
+      "🔧 Trading Mode\n" +
+      "/mode - Check trading mode (dry/live)\n" +
+      "/mode dry - Switch to paper trading\n" +
+      "/mode live - Switch to real trading\n" +
+      "/mode confirm - Add confirmation\n\n" +
       "💡 Tip: Use /doctor if /begin fails the readiness gate.";
 
     await ctx.reply(msg);

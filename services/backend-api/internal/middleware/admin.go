@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"encoding/json"
+	"path/filepath"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -54,14 +56,45 @@ func isProductionEnvironment() bool {
 // Returns:
 //
 //	*AdminMiddleware: Initialized middleware.
+
+// getAdminAPIKeyFromConfig reads admin API key from config.json
+func getAdminAPIKeyFromConfig() string {
+	// Try to read from ~/.neuratrade/config.json
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	
+	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+	
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return ""
+	}
+	
+	if apiKey, ok := config["admin_api_key"].(string); ok {
+		return apiKey
+	}
+	
+	return ""
+}
+
 func NewAdminMiddleware() *AdminMiddleware {
-	// Get admin API key from environment variable
-	apiKey := os.Getenv("ADMIN_API_KEY")
+	// Get admin API key from config.json first, then environment variable
+	apiKey := getAdminAPIKeyFromConfig()
+	
+	if apiKey == "" {
+		apiKey = os.Getenv("ADMIN_API_KEY")
+	}
 
 	// Handle missing API key based on environment
 	if apiKey == "" {
 		if isProductionEnvironment() {
-			log.Fatal("ADMIN_API_KEY environment variable must be set in production")
+			log.Fatal("ADMIN_API_KEY must be set in config.json or environment variable in production")
 		}
 		// Generate temporary key for non-production environments
 		apiKey = generateSecureKey(32)

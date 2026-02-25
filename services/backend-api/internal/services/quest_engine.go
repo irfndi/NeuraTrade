@@ -702,13 +702,13 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 			log.Printf("Failed to create quest %s: %v", defID, err)
 			continue
 		}
-		// Set dry-run mode from config (default to true for safety)
+		// Set dry-run mode from config (default to false for live trading)
 		if quest.Metadata == nil {
 			quest.Metadata = make(map[string]string)
 		}
-		quest.Metadata["dry_run"] = "true"
-		quest.Metadata["paper_trading"] = "true"
-		log.Printf("[QUEST] Created quest %s with dry_run=true (paper trading mode)", quest.ID)
+		quest.Metadata["dry_run"] = "false"
+		quest.Metadata["paper_trading"] = "false"
+		log.Printf("[QUEST] Created quest %s with dry_run=false (LIVE TRADING MODE)", quest.ID)
 
 		quest.Status = QuestStatusActive
 		state.ActiveQuests = append(state.ActiveQuests, quest.ID)

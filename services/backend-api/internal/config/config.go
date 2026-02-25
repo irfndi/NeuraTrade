@@ -142,6 +142,16 @@ type CCXTConfig struct {
 	Timeout int `mapstructure:"timeout"`
 	// AdminAPIKey is the API key for authenticating with admin endpoints.
 	AdminAPIKey string `mapstructure:"admin_api_key"`
+	// Exchanges holds exchange-specific credentials.
+	Exchanges map[string]ExchangeCredentials `mapstructure:"exchanges"`
+}
+
+// ExchangeCredentials holds API credentials for an exchange.
+type ExchangeCredentials struct {
+	APIKey     string `mapstructure:"api_key"`
+	Secret     string `mapstructure:"secret"`
+	Passphrase string `mapstructure:"passphrase"`
+	Testnet    bool   `mapstructure:"testnet"`
 }
 
 // TelegramConfig defines settings for the Telegram notification bot.
@@ -580,7 +590,7 @@ func setDefaults() {
 	viper.SetDefault("market_data.batch_size", 100)
 	viper.SetDefault("market_data.max_retries", 3)
 	viper.SetDefault("market_data.timeout", "15s")
-	viper.SetDefault("market_data.exchanges", []string{"binance", "coinbase", "kraken", "bitfinex", "huobi"})
+	viper.SetDefault("market_data.exchanges", []string{"binance", "coinbase", "kraken", "bitfinex", "huobi", "bybit", "bitget"})
 
 	// Arbitrage
 	viper.SetDefault("arbitrage.enabled", true)

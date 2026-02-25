@@ -593,4 +593,9 @@ func (e *SmartOrderExecutor) GetClosedOrders(ctx context.Context, exchange, symb
 	return e.config.BaseExecutor.GetClosedOrders(ctx, exchange, symbol, limit)
 }
 
+// PlaceOrderWithDetails places an order with full trade details
+func (e *SmartOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
+	return e.config.BaseExecutor.PlaceOrderWithDetails(ctx, details)
+}
+
 var _ ScalpingOrderExecutor = (*SmartOrderExecutor)(nil)
