@@ -190,4 +190,3 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, 0, SMA)
 	assert.Equal(t, 1, EMA)
 }
-

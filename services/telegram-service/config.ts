@@ -116,7 +116,9 @@ export const getEnvWithNeuratradeFallback = (
     return neuratradeConfig.services?.telegram?.port?.toString();
   }
   if (keyLower === "admin_api_key") {
-    return neuratradeConfig.admin_api_key || neuratradeConfig.security?.admin_api_key;
+    return (
+      neuratradeConfig.admin_api_key || neuratradeConfig.security?.admin_api_key
+    );
   }
   return undefined;
 };

@@ -386,7 +386,11 @@ export const handleMode = (api: Api) => async (ctx: Context) => {
     const modeResult = await Effect.runPromise(
       Effect.catchAll(api.getTradingMode(String(chatId)), (error) => {
         console.error("[Mode] Failed to get mode:", error);
-        return Effect.succeed({ mode: "dry", confirmations: 0, required_confirmations: 2 });
+        return Effect.succeed({
+          mode: "dry",
+          confirmations: 0,
+          required_confirmations: 2,
+        });
       }),
     );
 
@@ -474,9 +478,16 @@ export const handleModeAction = (api: Api) => async (ctx: Context) => {
     } else if (action === "confirm") {
       // Add confirmation
       const result = await Effect.runPromise(
-        Effect.catchAll(api.addTradingModeConfirmation(String(chatId)), (error) => {
-          return Effect.succeed({ confirmations: 0, required: 2, error: String(error) });
-        }),
+        Effect.catchAll(
+          api.addTradingModeConfirmation(String(chatId)),
+          (error) => {
+            return Effect.succeed({
+              confirmations: 0,
+              required: 2,
+              error: String(error),
+            });
+          },
+        ),
       );
 
       if (result.confirmations >= result.required) {

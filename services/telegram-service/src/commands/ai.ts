@@ -52,7 +52,9 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
           lines.push(`  ${m.model_id} ${tools}${vision}`);
         }
         if (models.length > MAX_MODELS_PER_PROVIDER) {
-          lines.push(`  ... and ${models.length - MAX_MODELS_PER_PROVIDER} more`);
+          lines.push(
+            `  ... and ${models.length - MAX_MODELS_PER_PROVIDER} more`,
+          );
         }
         lines.push("");
       }

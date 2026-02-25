@@ -165,6 +165,7 @@ func (m *MockCCXTService) AddExchange(ctx context.Context, exchange string) (*cc
 	}
 	return args.Get(0).(*ccxt.ExchangeManagementResponse), args.Error(1)
 }
+
 // Order management methods
 
 func (m *MockCCXTService) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
@@ -211,7 +212,6 @@ func (m *MockCCXTService) FetchPositions(ctx context.Context, exchange string) (
 	}
 	return args.Get(0).(*ccxt.PositionsResponse), args.Error(1)
 }
-
 
 // MockCollectorService is a mock implementation of CollectorInterface for testing
 type MockCollectorService struct {

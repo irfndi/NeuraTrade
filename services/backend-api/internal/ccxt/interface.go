@@ -121,7 +121,6 @@ type CCXTService interface {
 	// FetchPositions retrieves all positions for an exchange.
 	FetchPositions(ctx context.Context, exchange string) (*PositionsResponse, error)
 
-
 	// Funding rate operations
 
 	// FetchFundingRate retrieves the current funding rate for a symbol.
