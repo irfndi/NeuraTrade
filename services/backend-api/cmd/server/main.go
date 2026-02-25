@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -60,6 +63,16 @@ func main() {
 // Returns:
 //   - An error if initialization fails at any critical step.
 func run() error {
+	lock, err := acquireServerProcessLock()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if unlockErr := lock.Release(); unlockErr != nil {
+			fmt.Fprintf(os.Stderr, "Failed to release backend process lock: %v\n", unlockErr)
+		}
+	}()
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
@@ -446,4 +459,73 @@ func warnLegacyHandlersPath(logger *zaplogrus.Logger) {
 	} else if !os.IsNotExist(err) {
 		logger.WithError(err).Warn("Failed to inspect legacy handlers path")
 	}
+}
+
+type serverProcessLock struct {
+	file *os.File
+}
+
+func acquireServerProcessLock() (*serverProcessLock, error) {
+	lockPath, err := serverLockFilePath()
+	if err != nil {
+		return nil, err
+	}
+
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open backend lock file %q: %w", lockPath, err)
+	}
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, fmt.Errorf("backend server already running (lock: %s)", lockPath)
+		}
+		return nil, fmt.Errorf("failed to acquire backend lock %q: %w", lockPath, err)
+	}
+
+	if truncateErr := lockFile.Truncate(0); truncateErr == nil {
+		_, _ = lockFile.Seek(0, 0)
+		_, _ = lockFile.WriteString(strconv.Itoa(os.Getpid()))
+	}
+
+	return &serverProcessLock{file: lockFile}, nil
+}
+
+func serverLockFilePath() (string, error) {
+	homeDir := strings.TrimSpace(os.Getenv("NEURATRADE_HOME"))
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve home directory for backend lock: %w", err)
+		}
+		if strings.TrimSpace(homeDir) == "" {
+			return "", fmt.Errorf("failed to resolve home directory for backend lock: empty home directory")
+		}
+		homeDir = filepath.Join(homeDir, ".neuratrade")
+	}
+
+	runDir := filepath.Join(homeDir, "run")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		return "", fmt.Errorf("failed to create runtime directory %q: %w", runDir, err)
+	}
+
+	return filepath.Join(runDir, "backend.lock"), nil
+}
+
+func (l *serverProcessLock) Release() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+
+	fd := int(l.file.Fd())
+	unlockErr := syscall.Flock(fd, syscall.LOCK_UN)
+	closeErr := l.file.Close()
+	l.file = nil
+
+	if unlockErr != nil {
+		return unlockErr
+	}
+	return closeErr
 }

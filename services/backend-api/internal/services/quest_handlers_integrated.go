@@ -37,6 +37,12 @@ type IntegratedQuestHandlers struct {
 	db                  *sql.DB // Database for user settings
 }
 
+const (
+	scalpingFailureCooldownThreshold = 3
+	scalpingBaseCooldown             = 2 * time.Minute
+	scalpingMaxCooldown              = 15 * time.Minute
+)
+
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
 func NewIntegratedQuestHandlers(
 	ta *TechnicalAnalysisService,
@@ -284,6 +290,22 @@ func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, q
 }
 
 func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *Quest, chatID string) error {
+	if cooldownRemaining := h.scalpingCooldownRemaining(quest, time.Now().UTC()); cooldownRemaining > 0 {
+		quest.Checkpoint["status"] = "runtime_cooldown"
+		quest.Checkpoint["cooldown_remaining_seconds"] = int(cooldownRemaining.Seconds())
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "scalping_cycle",
+			Summary:      "Scalping paused temporarily after repeated runtime failures",
+			Confidence:   0,
+			Reasons: []string{
+				fmt.Sprintf("Cooldown remaining: %s", cooldownRemaining.Round(time.Second).String()),
+				"Runtime guardrail suppressed this cycle to avoid repeated failing actions and notification spam",
+			},
+			Action: "hold",
+		})
+		return nil
+	}
+
 	balanceFetcher, ok := h.ccxtService.(interface {
 		FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error)
 	})
@@ -362,13 +384,18 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(ctx, portfolio)
 	if err != nil {
 		log.Printf("[SCALPING] AI decision error: %v", err)
+		streak, cooldown := h.recordScalpingFailure(quest, err.Error())
 		quest.Checkpoint["status"] = "ai_error"
 		quest.Checkpoint["error"] = err.Error()
+		reasons := []string{err.Error(), fmt.Sprintf("Runtime failure streak: %d", streak)}
+		if cooldown > 0 {
+			reasons = append(reasons, fmt.Sprintf("Cooldown applied: %s", cooldown.Round(time.Second).String()))
+		}
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 			DecisionType: "scalping_cycle",
 			Summary:      "Scalping cycle skipped due to AI/runtime error",
 			Confidence:   0,
-			Reasons:      []string{err.Error()},
+			Reasons:      reasons,
 			Action:       "hold",
 		})
 		// Return nil instead of err to prevent panic - quest continues with hold status
@@ -378,14 +405,19 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// Safety check: decision should not be nil
 	if decision == nil {
 		log.Printf("[SCALPING] AI returned nil decision - treating as hold")
+		streak, cooldown := h.recordScalpingFailure(quest, "decision payload was nil")
 		quest.Checkpoint["status"] = "hold"
 		quest.Checkpoint["ai_action"] = "hold"
 		quest.Checkpoint["ai_reasoning"] = "AI returned nil decision"
+		reasons := []string{"Decision payload was nil; cycle held", fmt.Sprintf("Runtime failure streak: %d", streak)}
+		if cooldown > 0 {
+			reasons = append(reasons, fmt.Sprintf("Cooldown applied: %s", cooldown.Round(time.Second).String()))
+		}
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 			DecisionType: "scalping_cycle",
 			Summary:      "AI returned no trade decision",
 			Confidence:   0,
-			Reasons:      []string{"Decision payload was nil; cycle held"},
+			Reasons:      reasons,
 			Action:       "hold",
 		})
 		return nil
@@ -398,6 +430,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.Checkpoint["ai_size_pct"] = decision.SizePercent
 
 	if decision.Action == "hold" {
+		if isRuntimeHoldReason(decision.Reasoning) {
+			streak, cooldown := h.recordScalpingFailure(quest, decision.Reasoning)
+			if cooldown > 0 {
+				quest.Checkpoint["runtime_hold_cooldown"] = cooldown.String()
+			}
+			quest.Checkpoint["runtime_failure_streak"] = streak
+		} else {
+			h.resetScalpingFailureState(quest)
+		}
 		log.Printf("[SCALPING] AI decided to hold: %s", decision.Reasoning)
 		quest.Checkpoint["status"] = "hold"
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
@@ -410,6 +451,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		return nil
 	}
 
+	h.resetScalpingFailureState(quest)
 	quest.Checkpoint["status"] = "ai_executed"
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
@@ -962,4 +1004,103 @@ func decimalFromOrder(order map[string]interface{}, keys ...string) (decimal.Dec
 		}
 	}
 	return decimal.Zero, false
+}
+
+func (h *IntegratedQuestHandlers) scalpingCooldownRemaining(quest *Quest, now time.Time) time.Duration {
+	if quest == nil || quest.Checkpoint == nil {
+		return 0
+	}
+
+	raw, ok := quest.Checkpoint["runtime_cooldown_until"]
+	if !ok {
+		return 0
+	}
+
+	cooldownUntil, ok := raw.(string)
+	if !ok || strings.TrimSpace(cooldownUntil) == "" {
+		return 0
+	}
+
+	until, err := time.Parse(time.RFC3339, cooldownUntil)
+	if err != nil || !until.After(now) {
+		delete(quest.Checkpoint, "runtime_cooldown_until")
+		return 0
+	}
+
+	return until.Sub(now)
+}
+
+func (h *IntegratedQuestHandlers) recordScalpingFailure(quest *Quest, reason string) (int, time.Duration) {
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+
+	now := time.Now().UTC()
+	streak := checkpointInt(quest.Checkpoint["runtime_failure_streak"]) + 1
+	quest.Checkpoint["runtime_failure_streak"] = streak
+	quest.Checkpoint["runtime_last_failure"] = strings.TrimSpace(reason)
+	quest.Checkpoint["runtime_last_failure_at"] = now.Format(time.RFC3339)
+
+	if streak < scalpingFailureCooldownThreshold {
+		delete(quest.Checkpoint, "runtime_cooldown_until")
+		return streak, 0
+	}
+
+	level := streak - scalpingFailureCooldownThreshold
+	if level > 3 {
+		level = 3
+	}
+	cooldown := scalpingBaseCooldown * time.Duration(1<<level)
+	if cooldown > scalpingMaxCooldown {
+		cooldown = scalpingMaxCooldown
+	}
+	quest.Checkpoint["runtime_cooldown_until"] = now.Add(cooldown).Format(time.RFC3339)
+	return streak, cooldown
+}
+
+func (h *IntegratedQuestHandlers) resetScalpingFailureState(quest *Quest) {
+	if quest == nil || quest.Checkpoint == nil {
+		return
+	}
+	delete(quest.Checkpoint, "runtime_failure_streak")
+	delete(quest.Checkpoint, "runtime_last_failure")
+	delete(quest.Checkpoint, "runtime_last_failure_at")
+	delete(quest.Checkpoint, "runtime_cooldown_until")
+	delete(quest.Checkpoint, "runtime_hold_cooldown")
+}
+
+func checkpointInt(v interface{}) int {
+	switch value := v.(type) {
+	case int:
+		return value
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case float32:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return int(parsed)
+		}
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func isRuntimeHoldReason(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "execution unavailable") ||
+		strings.Contains(lower, "model response parse fallback") ||
+		strings.Contains(lower, "failed to parse ai decision") ||
+		strings.Contains(lower, "llm completion failed") ||
+		strings.Contains(lower, "runtime error")
 }

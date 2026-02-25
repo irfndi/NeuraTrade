@@ -112,6 +112,7 @@ type QuestHandler func(ctx context.Context, quest *Quest) error
 type QuestEngine struct {
 	mu              sync.RWMutex
 	quests          map[string]*Quest
+	executing       map[string]bool
 	autonomousState map[string]*AutonomousState
 	definitions     map[string]*QuestDefinition
 	handlers        map[QuestType]QuestHandler
@@ -243,6 +244,7 @@ func NewQuestEngine(store QuestStore) *QuestEngine {
 func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *QuestEngine {
 	engine := &QuestEngine{
 		quests:          make(map[string]*Quest),
+		executing:       make(map[string]bool),
 		autonomousState: make(map[string]*AutonomousState),
 		definitions:     make(map[string]*QuestDefinition),
 		handlers:        make(map[QuestType]QuestHandler),
@@ -520,6 +522,7 @@ func (e *QuestEngine) tick() {
 		if quest.Status == QuestStatusCompleted || quest.Status == QuestStatusFailed {
 			if quest.UpdatedAt.Before(now.Add(-cleanupThreshold)) {
 				delete(e.quests, id)
+				delete(e.executing, id)
 				delete(e.chatIDForQuest, id)
 				log.Printf("[QUEST] Cleaned up old quest: %s (status: %s)", id, quest.Status)
 			}
@@ -527,27 +530,34 @@ func (e *QuestEngine) tick() {
 	}
 	e.mu.Unlock()
 
-	// Then, check quests for execution (read lock)
-	e.mu.RLock()
+	// Then, check quests for execution.
+	e.mu.Lock()
 	log.Printf("[QUEST] Tick: checking %d quests for execution", len(e.quests))
 	activeCount := 0
+	scheduledCount := 0
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
 			log.Printf("[QUEST] Quest %s (%s) skipped - status: %s", quest.ID, quest.Name, quest.Status)
 			continue
 		}
 		activeCount++
+		if e.executing[quest.ID] {
+			log.Printf("[QUEST] Quest %s (%s) skipped - execution already in progress", quest.ID, quest.Name)
+			continue
+		}
 
 		// Check if quest should execute based on cadence
 		if e.shouldExecute(quest, now) {
 			log.Printf("[QUEST] Executing quest: %s (type: %s, def: %s, chat: %s)", quest.ID, quest.Type, quest.Metadata["definition_id"], quest.Metadata["chat_id"])
+			e.executing[quest.ID] = true
+			scheduledCount++
 			go e.executeQuest(quest)
 		} else {
 			log.Printf("[QUEST] Quest %s not ready (cadence: %s, last: %v)", quest.ID, quest.Cadence, quest.LastExecutedAt)
 		}
 	}
-	log.Printf("[QUEST] Tick complete: %d active quests, %d sent for execution", activeCount, activeCount)
-	e.mu.RUnlock()
+	log.Printf("[QUEST] Tick complete: %d active quests, %d sent for execution", activeCount, scheduledCount)
+	e.mu.Unlock()
 }
 
 func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
@@ -607,6 +617,8 @@ func microCadenceInterval() time.Duration {
 
 // executeQuest executes a single quest
 func (e *QuestEngine) executeQuest(quest *Quest) {
+	defer e.markQuestExecutionFinished(quest.ID)
+
 	e.mu.RLock()
 	handler, ok := e.handlers[quest.Type]
 	e.mu.RUnlock()
@@ -641,6 +653,12 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 			e.updateQuestStatus(quest.ID, QuestStatusCompleted)
 		}
 	}
+}
+
+func (e *QuestEngine) markQuestExecutionFinished(questID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.executing, questID)
 }
 
 func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Duration) bool {

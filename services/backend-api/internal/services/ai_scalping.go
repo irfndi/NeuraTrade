@@ -779,6 +779,13 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		return fmt.Errorf("computed order amount is non-positive")
 	}
 
+	openOrders, err := s.orderExecutor.GetOpenOrders(ctx, s.config.Exchange, decision.Symbol)
+	if err != nil {
+		log.Printf("[AI-SCALPING] Open-order check skipped for %s: %v", decision.Symbol, err)
+	} else if len(openOrders) > 0 {
+		return fmt.Errorf("open position/order already exists for %s (%d open orders)", decision.Symbol, len(openOrders))
+	}
+
 	log.Printf("[AI-SCALPING] Executing: %s %s (%s USDT)", decision.Action, decision.Symbol, amount.String())
 
 	// Build detailed trade info for rich notification
@@ -1026,7 +1033,8 @@ func shouldDowngradeExecutionErrorToHold(err error) bool {
 		strings.Contains(msg, "parameter") && strings.Contains(msg, "does not exist") ||
 		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "request failed") ||
-		strings.Contains(msg, "failed to get ticker")
+		strings.Contains(msg, "failed to get ticker") ||
+		strings.Contains(msg, "open position/order already exists")
 }
 
 func buildExecutionFallbackReason(err error) string {

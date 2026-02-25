@@ -21,16 +21,17 @@ import (
 
 // NotificationService handles sending notifications to users.
 type NotificationService struct {
-	db                 DBPool
-	redis              *database.RedisClient
-	telegramServiceURL string
-	telegramGrpcAddr   string
-	grpcClient         pb.TelegramServiceClient
-	grpcConn           *grpc.ClientConn
-	httpClient         *http.Client
-	adminAPIKey        string
-	logger             *slog.Logger
-	deadLetterService  *DeadLetterService
+	db                  DBPool
+	redis               *database.RedisClient
+	telegramServiceURL  string
+	telegramGrpcAddr    string
+	grpcClient          pb.TelegramServiceClient
+	grpcConn            *grpc.ClientConn
+	httpClient          *http.Client
+	adminAPIKey         string
+	logger              *slog.Logger
+	deadLetterService   *DeadLetterService
+	aiReasoningThrottle *AlertThrottler
 }
 
 // NewNotificationService creates a new notification service.
@@ -53,14 +54,15 @@ func NewNotificationService(db DBPool, redis *database.RedisClient, telegramServ
 	}
 
 	ns := &NotificationService{
-		db:                 db,
-		redis:              redis,
-		telegramServiceURL: telegramServiceURL,
-		telegramGrpcAddr:   telegramGrpcAddress,
-		httpClient:         &http.Client{Timeout: 10 * time.Second},
-		adminAPIKey:        adminAPIKey,
-		logger:             telemetry.Logger(),
-		deadLetterService:  deadLetterService,
+		db:                  db,
+		redis:               redis,
+		telegramServiceURL:  telegramServiceURL,
+		telegramGrpcAddr:    telegramGrpcAddress,
+		httpClient:          &http.Client{Timeout: 10 * time.Second},
+		adminAPIKey:         adminAPIKey,
+		logger:              telemetry.Logger(),
+		deadLetterService:   deadLetterService,
+		aiReasoningThrottle: NewAlertThrottler(90 * time.Second),
 	}
 
 	if telegramGrpcAddress != "" {
