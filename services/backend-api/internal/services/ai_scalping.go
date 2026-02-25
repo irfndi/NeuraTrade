@@ -655,11 +655,13 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		log.Printf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
 		repaired, repairErr := s.repairDecisionJSON(ctx, resp.Message.Content)
 		if repairErr != nil {
-			return nil, fmt.Errorf("failed to parse AI decision: %w", err)
+			log.Printf("[AI-SCALPING] Failed to repair AI response: %v", repairErr)
+			return fallbackHoldDecision(resp.Message.Content, err), nil
 		}
 		decision, err = parseAIDecisionPayload(repaired)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse AI decision: %w", err)
+			log.Printf("[AI-SCALPING] Failed to parse repaired AI response: %s", repaired)
+			return fallbackHoldDecision(repaired, err), nil
 		}
 	}
 
@@ -914,6 +916,12 @@ func parseAIDecisionPayload(content string) (*AITradingDecision, error) {
 	}
 
 	raw := strings.TrimSpace(content)
+	if strings.HasPrefix(raw, "```") {
+		raw = strings.TrimPrefix(raw, "```json")
+		raw = strings.TrimPrefix(raw, "```")
+		raw = strings.TrimSuffix(raw, "```")
+		raw = strings.TrimSpace(raw)
+	}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		start := strings.Index(raw, "{")
 		end := strings.LastIndex(raw, "}")
@@ -945,6 +953,28 @@ func parseAIDecisionPayload(content string) (*AITradingDecision, error) {
 		StopLoss:    stopLoss,
 		TakeProfit:  takeProfit,
 	}, nil
+}
+
+func fallbackHoldDecision(content string, parseErr error) *AITradingDecision {
+	sanitized := strings.Join(strings.Fields(strings.TrimSpace(content)), " ")
+	if len(sanitized) > 180 {
+		sanitized = sanitized[:177] + "..."
+	}
+	if sanitized == "" {
+		sanitized = "model response was empty"
+	}
+
+	reason := fmt.Sprintf("model response parse fallback: %s", sanitized)
+	if parseErr != nil {
+		reason = fmt.Sprintf("model response parse fallback (%v): %s", parseErr, sanitized)
+	}
+
+	return &AITradingDecision{
+		Action:      "hold",
+		Confidence:  0,
+		Reasoning:   reason,
+		SizePercent: 0,
+	}
 }
 
 func (s *AIScalpingService) repairDecisionJSON(ctx context.Context, raw string) (string, error) {
