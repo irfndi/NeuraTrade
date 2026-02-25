@@ -27,6 +27,7 @@ type NotificationService struct {
 	telegramGrpcAddr   string
 	grpcClient         pb.TelegramServiceClient
 	grpcConn           *grpc.ClientConn
+	httpClient         *http.Client
 	adminAPIKey        string
 	logger             *slog.Logger
 	deadLetterService  *DeadLetterService
@@ -56,6 +57,7 @@ func NewNotificationService(db DBPool, redis *database.RedisClient, telegramServ
 		redis:              redis,
 		telegramServiceURL: telegramServiceURL,
 		telegramGrpcAddr:   telegramGrpcAddress,
+		httpClient:         &http.Client{Timeout: 10 * time.Second},
 		adminAPIKey:        adminAPIKey,
 		logger:             telemetry.Logger(),
 		deadLetterService:  deadLetterService,
@@ -179,9 +181,8 @@ func (ns *NotificationService) sendTelegramMessageWithResult(ctx context.Context
 		req.Header.Set("X-API-Key", ns.adminAPIKey)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	// #nosec G704 -- URL is an internal service endpoint configured by trusted env
-	resp, err := client.Do(req)
+	resp, err := ns.httpClient.Do(req)
 	if err != nil {
 		observability.FinishSpan(httpSpan, err)
 		observability.CaptureExceptionWithContext(spanCtx, err, "telegram_http_send", map[string]interface{}{

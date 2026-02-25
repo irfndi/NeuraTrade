@@ -13,7 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// NotifyArbitrageOpportunities sends notifications about arbitrage opportunities to eligible users.
+// NotifyMarketOpportunities sends notifications about market opportunities to eligible users.
 //
 // Parameters:
 //
@@ -23,13 +23,13 @@ import (
 // Returns:
 //
 //	error: Error if notification fails.
-func (ns *NotificationService) NotifyArbitrageOpportunities(ctx context.Context, opportunities []ArbitrageOpportunity) error {
-	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyArbitrageOpportunities", map[string]string{
+func (ns *NotificationService) NotifyMarketOpportunities(ctx context.Context, opportunities []ArbitrageOpportunity) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyMarketOpportunities", map[string]string{
 		"opportunity_count": fmt.Sprintf("%d", len(opportunities)),
 	})
 	defer observability.FinishSpan(span, nil)
 
-	observability.AddBreadcrumb(spanCtx, "notification", "Starting arbitrage opportunity notifications", sentry.LevelInfo)
+	observability.AddBreadcrumb(spanCtx, "notification", "Starting market opportunity notifications", sentry.LevelInfo)
 
 	// Cache opportunities for faster subsequent access
 	ns.cacheArbitrageOpportunities(spanCtx, opportunities)
@@ -37,7 +37,7 @@ func (ns *NotificationService) NotifyArbitrageOpportunities(ctx context.Context,
 	// Publish opportunities for real-time updates
 	ns.PublishOpportunityUpdate(spanCtx, opportunities)
 
-	// Get eligible users (those with Telegram chat IDs and arbitrage alerts enabled)
+	// Get eligible users (those with Telegram chat IDs and alerts enabled)
 	users, err := ns.getEligibleUsers(spanCtx)
 	if err != nil {
 		observability.CaptureExceptionWithContext(spanCtx, err, "get_eligible_users", nil)
@@ -45,7 +45,7 @@ func (ns *NotificationService) NotifyArbitrageOpportunities(ctx context.Context,
 	}
 
 	if len(users) == 0 {
-		telemetry.Logger().Info("No eligible users found for arbitrage notifications")
+		telemetry.Logger().Info("No eligible users found for market notifications")
 		return nil
 	}
 
@@ -56,13 +56,21 @@ func (ns *NotificationService) NotifyArbitrageOpportunities(ctx context.Context,
 	technicalOpps := make([]ArbitrageOpportunity, 0)
 
 	for _, opp := range opportunities {
-		// Categorize opportunity based on exchanges
-		if opp.BuyExchange != opp.SellExchange {
-			opp.OpportunityType = "arbitrage"
+		// Use a switch for clarity and to respect existing types
+		switch opp.OpportunityType {
+		case "arbitrage":
 			arbitrageOpps = append(arbitrageOpps, opp)
-		} else {
-			opp.OpportunityType = "technical"
+		case "technical":
 			technicalOpps = append(technicalOpps, opp)
+		default:
+			// Fallback for older data or uncategorized opportunities
+			if opp.BuyExchange != opp.SellExchange {
+				opp.OpportunityType = "arbitrage"
+				arbitrageOpps = append(arbitrageOpps, opp)
+			} else {
+				opp.OpportunityType = "technical"
+				technicalOpps = append(technicalOpps, opp)
+			}
 		}
 	}
 

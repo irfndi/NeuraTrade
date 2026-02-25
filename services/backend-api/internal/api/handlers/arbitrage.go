@@ -231,12 +231,11 @@ func (h *ArbitrageHandler) sendArbitrageNotifications(opportunities []ArbitrageO
 
 	if len(notifiableOpportunities) > 0 {
 		ctx := context.Background()
-		if err := h.notificationService.NotifyArbitrageOpportunities(ctx, notifiableOpportunities); err != nil {
-			log.Printf("Failed to send arbitrage notifications: %v", err)
+		if err := h.notificationService.NotifyMarketOpportunities(ctx, notifiableOpportunities); err != nil {
+			log.Printf("Failed to send market notifications: %v", err)
 		}
 	}
 }
-
 // GetArbitrageHistory returns historical arbitrage opportunities with pagination.
 //
 // Parameters:
