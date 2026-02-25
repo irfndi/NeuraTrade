@@ -113,3 +113,108 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 		t.Fatalf("unexpected aggregated USDT balance: got %.8f", balance.Total["USDT"])
 	}
 }
+
+func TestBuildTickerURL(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+
+	tests := []struct {
+		name     string
+		exchange string
+		symbol   string
+		want     string
+	}{
+		{"bitget", "bitget", "BTC/USDT", "https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTC/USDT"},
+		{"binance", "binance", "ETH/USDT", "https://api.binance.com/api/v3/ticker/24hr?symbol=ETH/USDT"},
+		{"bybit", "bybit", "BTC/USDT", "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTC/USDT"},
+		{"okx", "okx", "BTC/USDT", "https://www.okx.com/api/v5/market/ticker?instId=BTC/USDT"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := service.buildTickerURL(tt.exchange, tt.symbol)
+			if got != tt.want {
+				t.Fatalf("buildTickerURL(%s, %s) = %s, want %s", tt.exchange, tt.symbol, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetExchangeBaseURL(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+
+	tests := []struct {
+		exchange string
+		want     string
+		wantOK   bool
+	}{
+		{"bitget", "https://api.bitget.com", true},
+		{"binance", "https://api.binance.com", true},
+		{"bybit", "https://api.bybit.com", true},
+		{"okx", "https://www.okx.com", true},
+		{"unknown", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.exchange, func(t *testing.T) {
+			got, ok := service.getExchangeBaseURL(tt.exchange)
+			if ok != tt.wantOK {
+				t.Fatalf("getExchangeBaseURL(%s) ok = %v, want %v", tt.exchange, ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Fatalf("getExchangeBaseURL(%s) = %s, want %s", tt.exchange, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetSupportedExchanges(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{Name: "bitget"}
+	service.exchanges["binance"] = &ExchangeConnection{Name: "binance"}
+
+	exchanges := service.GetSupportedExchanges()
+	if len(exchanges) != 2 {
+		t.Fatalf("GetSupportedExchanges() returned %d exchanges, want 2", len(exchanges))
+	}
+}
+
+func TestGetExchangeInfo(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:    "bitget",
+		BaseURL: "https://api.bitget.com",
+	}
+
+	info, ok := service.GetExchangeInfo("bitget")
+	if !ok {
+		t.Fatal("GetExchangeInfo(bitget) returned false")
+	}
+	if info.Name != "bitget" {
+		t.Fatalf("GetExchangeInfo.Name = %s, want bitget", info.Name)
+	}
+
+	_, ok = service.GetExchangeInfo("unknown")
+	if ok {
+		t.Fatal("GetExchangeInfo(unknown) should return false")
+	}
+}
+
+func TestClose(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{Name: "bitget"}
+
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+}
+
