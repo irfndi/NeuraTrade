@@ -400,7 +400,7 @@ export const handleMode = (api: Api) => async (ctx: Context) => {
         "🧪 Current Mode: DRY (Paper Trading)\n\n" +
         "• No real orders executed\n" +
         "• Safe for testing\n\n" +
-        `Confirmations: ${confirmations}/${required}\n\n" +
+        `Confirmations: ${confirmations}/${required}\n\n` +
         "Commands:\n" +
         "/mode confirm - Add confirmation\n" +
         "/mode live - Switch to live (requires confirmations)\n" +

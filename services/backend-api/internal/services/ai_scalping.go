@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
@@ -135,12 +136,16 @@ type aiScalpingFileConfig struct {
 func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 	cfg := base
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return cfg
+	configPath := strings.TrimSpace(os.Getenv("NEURATRADE_HOME"))
+	if configPath != "" {
+		configPath = filepath.Join(configPath, "config.json")
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return cfg
+		}
+		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
 	}
-
-	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		return cfg
@@ -217,6 +222,10 @@ type AIScalpingService struct {
 	ccxtService   ccxt.CCXTService
 	orderExecutor ScalpingOrderExecutor
 	tradeMemory   *TradeMemory
+	pairCacheMu   sync.RWMutex
+	cachedPairs   []string
+	cacheExchange string
+	cacheUpdated  time.Time
 }
 
 // SetExchange updates the exchange for scalping (called dynamically based on user wallet)
@@ -309,6 +318,10 @@ type aiMarketSignal struct {
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
+	if cached := s.getCachedPairs(); len(cached) > 0 {
+		return cached, nil
+	}
+
 	markets, err := s.ccxtService.FetchMarkets(ctx, s.config.Exchange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch markets: %w", err)
@@ -336,6 +349,14 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		return nil, fmt.Errorf("no USDT pairs discovered")
 	}
 
+	// The executor is futures-first. Prefer symbols that are present in funding-rate
+	// universe so trade candidates map to futures contracts.
+	if s.config.Exchange == "bitget" {
+		if filtered := s.filterFuturesSymbols(ctx, candidates); len(filtered) > 0 {
+			candidates = filtered
+		}
+	}
+
 	// Bound the scoring universe to keep the AI loop responsive on exchanges with
 	// thousands of pairs.
 	maxCandidates := s.config.MaxCandidatePairs
@@ -354,7 +375,9 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 			limit = len(candidates)
 		}
 		log.Printf("[AI-SCALPING] Dynamic pair scoring unavailable (%v), using discovered subset", err)
-		return candidates[:limit], nil
+		selected := candidates[:limit]
+		s.updatePairCache(selected)
+		return selected, nil
 	}
 
 	type pairScore struct {
@@ -398,7 +421,82 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 	}
 
 	log.Printf("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s", len(selected), len(candidates), s.config.Exchange)
+	s.updatePairCache(selected)
 	return selected, nil
+}
+
+func (s *AIScalpingService) getCachedPairs() []string {
+	s.pairCacheMu.RLock()
+	defer s.pairCacheMu.RUnlock()
+
+	if len(s.cachedPairs) == 0 {
+		return nil
+	}
+	if s.cacheExchange != s.config.Exchange {
+		return nil
+	}
+	if time.Since(s.cacheUpdated) > 2*time.Minute {
+		return nil
+	}
+
+	result := make([]string, len(s.cachedPairs))
+	copy(result, s.cachedPairs)
+	return result
+}
+
+func (s *AIScalpingService) updatePairCache(pairs []string) {
+	if len(pairs) == 0 {
+		return
+	}
+	s.pairCacheMu.Lock()
+	defer s.pairCacheMu.Unlock()
+
+	s.cachedPairs = append(s.cachedPairs[:0], pairs...)
+	s.cacheExchange = s.config.Exchange
+	s.cacheUpdated = time.Now()
+}
+
+func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, symbols []string) []string {
+	rates, err := s.ccxtService.FetchAllFundingRates(ctx, s.config.Exchange)
+	if err != nil || len(rates) == 0 {
+		if err != nil {
+			log.Printf("[AI-SCALPING] Futures universe unavailable on %s: %v", s.config.Exchange, err)
+		}
+		return nil
+	}
+
+	allowed := make(map[string]struct{}, len(rates)*2)
+	for _, rate := range rates {
+		normalized := normalizeFuturesSymbol(rate.Symbol)
+		if normalized == "" {
+			continue
+		}
+		allowed[normalized] = struct{}{}
+		allowed[strings.ReplaceAll(normalized, "/", "")] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		normalized := normalizeSymbolForComparison(symbol)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := allowed[normalized]; ok {
+			filtered = append(filtered, symbol)
+			continue
+		}
+		if _, ok := allowed[strings.ReplaceAll(normalized, "/", "")]; ok {
+			filtered = append(filtered, symbol)
+		}
+	}
+
+	if len(filtered) == 0 {
+		log.Printf("[AI-SCALPING] Futures universe filter returned no overlap on %s; using discovered pairs", s.config.Exchange)
+		return nil
+	}
+
+	log.Printf("[AI-SCALPING] Futures universe filtered %d -> %d symbols on %s", len(symbols), len(filtered), s.config.Exchange)
+	return filtered
 }
 
 func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarketSignal, error) {
@@ -743,6 +841,24 @@ func normalizeSymbolForComparison(symbol string) string {
 	normalized = strings.ReplaceAll(normalized, "-", "/")
 	if idx := strings.Index(normalized, ":"); idx >= 0 {
 		normalized = normalized[:idx]
+	}
+	return normalized
+}
+
+func normalizeFuturesSymbol(symbol string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	if normalized == "" {
+		return ""
+	}
+	if idx := strings.Index(normalized, ":"); idx >= 0 {
+		normalized = normalized[:idx]
+	}
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	normalized = strings.ReplaceAll(normalized, "/", "")
+	if strings.HasSuffix(normalized, "USDT") && len(normalized) > len("USDT") {
+		base := normalized[:len(normalized)-len("USDT")]
+		return base + "/USDT"
 	}
 	return normalized
 }

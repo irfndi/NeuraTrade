@@ -77,11 +77,17 @@ type routeRuntimeConfigFile struct {
 }
 
 func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID string) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", "", ""
+	configPath := strings.TrimSpace(os.Getenv("NEURATRADE_HOME"))
+	if configPath != "" {
+		configPath = filepath.Join(configPath, "config.json")
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", "", "", ""
+		}
+		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
 	}
-	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
+
 	configFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", "", "", ""

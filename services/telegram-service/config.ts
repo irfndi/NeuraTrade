@@ -21,6 +21,11 @@ import { join } from "path";
 import { homedir } from "os";
 
 type NeuratradeConfig = {
+  admin_api_key?: string;
+  server?: {
+    host?: string;
+    port?: number;
+  };
   telegram?: {
     enabled?: boolean;
     bot_token?: string;
@@ -52,7 +57,10 @@ const loadNeuratradeConfig = (): NeuratradeConfig | null => {
   if (cachedConfig !== null) {
     return cachedConfig;
   }
-  const configPath = join(homedir(), ".neuratrade", "config.json");
+  const configPath =
+    process.env.NEURATRADE_HOME && process.env.NEURATRADE_HOME.trim().length > 0
+      ? join(process.env.NEURATRADE_HOME, "config.json")
+      : join(homedir(), ".neuratrade", "config.json");
   if (!existsSync(configPath)) {
     cachedConfig = null;
     return null;
@@ -85,10 +93,15 @@ export const getEnvWithNeuratradeFallback = (
     return neuratradeConfig.services?.telegram?.bot_token;
   }
   if (keyLower === "telegram_api_base_url") {
-    if (neuratradeConfig.telegram?.api_base_url) {
-      return neuratradeConfig.telegram.api_base_url;
+    const serviceBaseURL = neuratradeConfig.services?.telegram?.api_base_url;
+    if (serviceBaseURL && !serviceBaseURL.includes("api.telegram.org")) {
+      return serviceBaseURL;
     }
-    return neuratradeConfig.services?.telegram?.api_base_url;
+    if (typeof neuratradeConfig.server?.port === "number") {
+      const host = neuratradeConfig.server.host || "localhost";
+      return `http://${host}:${neuratradeConfig.server.port}`;
+    }
+    return undefined;
   }
   if (keyLower === "telegram_use_polling") {
     if (neuratradeConfig.telegram?.use_polling !== undefined) {
@@ -103,7 +116,7 @@ export const getEnvWithNeuratradeFallback = (
     return neuratradeConfig.services?.telegram?.port?.toString();
   }
   if (keyLower === "admin_api_key") {
-    return neuratradeConfig.security?.admin_api_key;
+    return neuratradeConfig.admin_api_key || neuratradeConfig.security?.admin_api_key;
   }
   return undefined;
 };

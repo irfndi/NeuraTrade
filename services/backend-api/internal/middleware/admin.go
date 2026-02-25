@@ -1,14 +1,14 @@
 package middleware
 
 import (
-	"encoding/json"
-	"path/filepath"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -59,36 +59,45 @@ func isProductionEnvironment() bool {
 
 // getAdminAPIKeyFromConfig reads admin API key from config.json
 func getAdminAPIKeyFromConfig() string {
-	// Try to read from ~/.neuratrade/config.json
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	configPath := strings.TrimSpace(os.Getenv("NEURATRADE_HOME"))
+	if configPath != "" {
+		configPath = filepath.Join(configPath, "config.json")
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
 	}
-	
-	configPath := filepath.Join(homeDir, ".neuratrade", "config.json")
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return ""
 	}
-	
+
 	var config map[string]interface{}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return ""
 	}
-	
+
 	if apiKey, ok := config["admin_api_key"].(string); ok {
-		return apiKey
+		return strings.TrimSpace(apiKey)
 	}
-	
+	if security, ok := config["security"].(map[string]interface{}); ok {
+		if apiKey, ok := security["admin_api_key"].(string); ok {
+			return strings.TrimSpace(apiKey)
+		}
+	}
+
 	return ""
 }
 
 func NewAdminMiddleware() *AdminMiddleware {
-	// Get admin API key from config.json first, then environment variable
-	apiKey := getAdminAPIKeyFromConfig()
-	
+	// Get admin API key from environment first, then config.json fallback
+	apiKey := os.Getenv("ADMIN_API_KEY")
+
 	if apiKey == "" {
-		apiKey = os.Getenv("ADMIN_API_KEY")
+		apiKey = getAdminAPIKeyFromConfig()
 	}
 
 	// Handle missing API key based on environment

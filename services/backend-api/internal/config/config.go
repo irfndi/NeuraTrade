@@ -373,22 +373,15 @@ type FeaturesConfig struct {
 }
 
 func Load() (*Config, error) {
-	// First: Add ~/.neuratrade/ config path (user local config)
-	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
+	// First: add user-local NeuraTrade config path.
+	if dir := neuratradeHomeDir(); dir != "" {
+		viper.AddConfigPath(dir)
 	}
 
 	// Second: Add project config path
 	viper.SetConfigName("config")
 	// Don't set explicit config type - let viper auto-detect from file extension
 	viper.AddConfigPath(".")
-
-	// Also support JSON config from ~/.neuratrade/ (only if homeDir is available)
-	// Note: viper.AddConfigPath is cumulative, so this adds to the search paths
-	if err == nil {
-		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
-	}
 
 	// Set default values
 	setDefaults()
@@ -498,10 +491,10 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("database.conn_max_lifetime", "300s")
 	viper.SetDefault("database.conn_max_idle_time", "60s")
-	// Use absolute path for SQLite database to ensure consistent location
-	homeDir, _ := os.UserHomeDir()
-	if homeDir != "" {
-		viper.SetDefault("database.sqlite_path", filepath.Join(homeDir, ".neuratrade", "data", "neuratrade.db"))
+	// Use absolute path for SQLite database to ensure consistent location.
+	// Respect NEURATRADE_HOME when set.
+	if homeDir := neuratradeHomeDir(); homeDir != "" {
+		viper.SetDefault("database.sqlite_path", filepath.Join(homeDir, "data", "neuratrade.db"))
 	} else {
 		viper.SetDefault("database.sqlite_path", "neuratrade.db")
 	}
@@ -654,6 +647,17 @@ func setDefaults() {
 	viper.SetDefault("features.enable_ai_scalping", true)
 	viper.SetDefault("features.enable_ai_signals", false)
 	viper.SetDefault("features.enable_ai_arbitrage", false)
+}
+
+func neuratradeHomeDir() string {
+	if v := strings.TrimSpace(os.Getenv("NEURATRADE_HOME")); v != "" {
+		return v
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return ""
+	}
+	return filepath.Join(homeDir, ".neuratrade")
 }
 
 // GetServiceURL returns the CCXT service URL.

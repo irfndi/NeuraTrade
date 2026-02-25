@@ -364,6 +364,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		log.Printf("[SCALPING] AI decision error: %v", err)
 		quest.Checkpoint["status"] = "ai_error"
 		quest.Checkpoint["error"] = err.Error()
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "scalping_cycle",
+			Summary:      "Scalping cycle skipped due to AI/runtime error",
+			Confidence:   0,
+			Reasons:      []string{err.Error()},
+			Action:       "hold",
+		})
 		// Return nil instead of err to prevent panic - quest continues with hold status
 		return nil
 	}
@@ -374,6 +381,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		quest.Checkpoint["status"] = "hold"
 		quest.Checkpoint["ai_action"] = "hold"
 		quest.Checkpoint["ai_reasoning"] = "AI returned nil decision"
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "scalping_cycle",
+			Summary:      "AI returned no trade decision",
+			Confidence:   0,
+			Reasons:      []string{"Decision payload was nil; cycle held"},
+			Action:       "hold",
+		})
 		return nil
 	}
 
@@ -386,6 +400,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	if decision.Action == "hold" {
 		log.Printf("[SCALPING] AI decided to hold: %s", decision.Reasoning)
 		quest.Checkpoint["status"] = "hold"
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "scalping_cycle",
+			Summary:      "AI held position this cycle",
+			Confidence:   decision.Confidence,
+			Reasons:      []string{decision.Reasoning},
+			Action:       "hold",
+		})
 		return nil
 	}
 
@@ -399,28 +420,18 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
 		decision.Action, decision.Symbol, decision.Confidence*100)
 
-	// Send Telegram notification for AI decision
-	if h.notificationService != nil && chatID != "" {
-		chatIDInt := parseChatID(chatID)
-		if chatIDInt != 0 {
-			notif := AIReasoningNotification{
-				DecisionType: "scalping",
-				Summary:      fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
-				Confidence:   decision.Confidence,
-				Reasons:      []string{decision.Reasoning},
-				Action:       decision.Action,
-			}
-			if err := h.notificationService.NotifyAIReasoning(ctx, chatIDInt, notif); err != nil {
-				log.Printf("[NOTIFICATION] Failed to send AI decision notification: %v", err)
-			}
-		}
-	}
+	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+		DecisionType: "scalping",
+		Summary:      fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
+		Confidence:   decision.Confidence,
+		Reasons:      []string{decision.Reasoning},
+		Action:       decision.Action,
+	})
 
 	return nil
 }
 
 func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, quest *Quest, chatID string) error {
-	_ = ctx
 	log.Printf("[SCALPING] AI scalping service unavailable; static fallback execution disabled")
 	quest.Checkpoint["status"] = "ai_unavailable_hold"
 	quest.Checkpoint["fallback_mode"] = "observe_only"
@@ -428,6 +439,13 @@ func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, q
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_check"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
+	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+		DecisionType: "scalping_cycle",
+		Summary:      "Scalping engine unavailable; observe-only cycle",
+		Confidence:   0,
+		Reasons:      []string{"AI scalping service is not initialized"},
+		Action:       "hold",
+	})
 
 	return nil
 }
@@ -678,6 +696,19 @@ func parseChatID(chatID string) int64 {
 	return id
 }
 
+func (h *IntegratedQuestHandlers) notifyScalpingDecision(ctx context.Context, chatID string, notif AIReasoningNotification) {
+	if h.notificationService == nil {
+		return
+	}
+	chatIDInt := parseChatID(chatID)
+	if chatIDInt == 0 {
+		return
+	}
+	if err := h.notificationService.NotifyAIReasoning(ctx, chatIDInt, notif); err != nil {
+		log.Printf("[NOTIFICATION] Failed to send scalping status notification: %v", err)
+	}
+}
+
 // getUserExchange gets the user's preferred exchange from database
 // Returns the first connected exchange, or "bitget" as default
 func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
@@ -748,6 +779,10 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 
 	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
 	updatedProcessed := false
+	processedCount := 0
+	wins := 0
+	losses := 0
+	totalPnL := decimal.Zero
 
 	for _, order := range closedOrders {
 		orderID := getOrderID(order)
@@ -770,6 +805,13 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		}
 
 		profitable := pnl.GreaterThan(decimal.Zero)
+		if profitable {
+			wins++
+		} else if pnl.LessThan(decimal.Zero) {
+			losses++
+		}
+		totalPnL = totalPnL.Add(pnl)
+		processedCount++
 		GetScalpingPerformance().RecordTrade(TradeRecord{
 			Timestamp:  time.Now().UTC(),
 			Symbol:     symbol,
@@ -795,6 +837,27 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 
 	if !updatedProcessed {
 		return
+	}
+
+	if processedCount > 0 {
+		summary := fmt.Sprintf(
+			"Reconciled %d closed order(s) on %s (%s). Realized PnL: %s (wins=%d, losses=%d)",
+			processedCount,
+			exchange,
+			symbol,
+			totalPnL.StringFixed(4),
+			wins,
+			losses,
+		)
+		h.notifyScalpingDecision(ctx, quest.Metadata["chat_id"], AIReasoningNotification{
+			DecisionType: "pnl_reconciliation",
+			Summary:      summary,
+			Confidence:   1,
+			Reasons: []string{
+				"Closed orders were synced from exchange state",
+			},
+			Action: "record",
+		})
 	}
 
 	ids := make([]string, 0, len(processed))

@@ -115,23 +115,6 @@ func NewNativeCCXTServiceWithConfig(timeout time.Duration, retryAttempts int, ex
 		s.credentials[name] = creds
 		log.Printf("[CCXT Native] Configured exchange: %s with API key", name)
 	}
-	for name, creds := range exchangeCreds {
-		baseURL, ok := s.getExchangeBaseURL(name)
-		if !ok {
-			log.Printf("[CCXT Native] Unknown exchange in config: %s", name)
-			continue
-		}
-		s.exchanges[name] = &ExchangeConnection{
-			Name:       name,
-			BaseURL:    baseURL,
-			APIKey:     creds.APIKey,
-			Secret:     creds.Secret,
-			Passphrase: creds.Passphrase,
-			Testnet:    creds.Testnet,
-			LastUpdate: time.Now(),
-		}
-		log.Printf("[CCXT Native] Configured exchange: %s with API key", name)
-	}
 	return s
 }
 
@@ -163,13 +146,26 @@ func (s *NativeCCXTService) initializeExchange(exchangeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.exchanges[exchangeID] = &ExchangeConnection{
+	existing, hadExisting := s.exchanges[exchangeID]
+	connection := &ExchangeConnection{
 		Name:       exchangeID,
 		BaseURL:    baseURL,
 		LastUpdate: time.Now(),
 	}
+	if hadExisting && existing != nil {
+		connection.APIKey = existing.APIKey
+		connection.Secret = existing.Secret
+		connection.Passphrase = existing.Passphrase
+		connection.Testnet = existing.Testnet
+	}
 
-	log.Printf("[CCXT Native] Initialized exchange: %s (%s)", exchangeID, baseURL)
+	s.exchanges[exchangeID] = connection
+
+	if connection.APIKey != "" && connection.Secret != "" {
+		log.Printf("[CCXT Native] Initialized exchange: %s (%s) with configured credentials", exchangeID, baseURL)
+	} else {
+		log.Printf("[CCXT Native] Initialized exchange: %s (%s) without API credentials", exchangeID, baseURL)
+	}
 	return nil
 }
 
@@ -1547,10 +1543,10 @@ func (s *NativeCCXTService) FetchBalance(ctx context.Context, exchange string) (
 
 // fetchBitgetBalance fetches balance from Bitget exchange
 func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *ExchangeConnection) (*BalanceResponse, error) {
-	url := "https://api.bitget.com/api/v2/spot/account/balance"
+	url := "https://api.bitget.com/api/v2/account/all-account-balance"
 	timestamp := time.Now().UnixMilli()
 	method := "GET"
-	requestPath := "/api/v2/spot/account/balance"
+	requestPath := "/api/v2/account/all-account-balance"
 	body := ""
 
 	// Generate signature
@@ -1580,18 +1576,14 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Parse Bitget balance response
+	// Parse Bitget account-overview response.
 	var raw struct {
-		Code string `json:"code"`
-		Msg  string `json:"msg"`
-		Data []struct {
-			Coin []struct {
-				Coin      string `json:"coin"`
-				Balance   string `json:"balance"`
-				Available string `json:"available"`
-				Frozen    string `json:"frozen"`
-				Lock      string `json:"lock"`
-			} `json:"coinList"`
+		Code    string `json:"code"`
+		Msg     string `json:"msg"`
+		Message string `json:"message"`
+		Data    []struct {
+			AccountType string `json:"accountType"`
+			USDTBalance string `json:"usdtBalance"`
 		} `json:"data"`
 	}
 
@@ -1600,7 +1592,11 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 	}
 
 	if raw.Code != "00000" {
-		return nil, fmt.Errorf("Bitget API error: %s", raw.Msg)
+		errMsg := strings.TrimSpace(raw.Msg)
+		if errMsg == "" {
+			errMsg = strings.TrimSpace(raw.Message)
+		}
+		return nil, fmt.Errorf("Bitget API error: %s", errMsg)
 	}
 
 	result := &BalanceResponse{
@@ -1611,24 +1607,23 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		Used:      make(map[string]float64),
 	}
 
-	for _, balanceData := range raw.Data {
-		for _, coin := range balanceData.Coin {
-			if coin.Balance == "" || coin.Balance == "0" {
-				continue
-			}
-			total, _ := strconv.ParseFloat(coin.Balance, 64)
-			free, _ := strconv.ParseFloat(coin.Available, 64)
-			frozen, _ := strconv.ParseFloat(coin.Frozen, 64)
-			locked, _ := strconv.ParseFloat(coin.Lock, 64)
-
-			result.Total[coin.Coin] = total
-			result.Free[coin.Coin] = free
-			result.Used[coin.Coin] = frozen + locked
-
-			if total > 0 {
-				log.Printf("[CCXT Native] Bitget balance: %s = %.8f (free: %.8f)", coin.Coin, total, free)
-			}
+	totalUSDT := 0.0
+	for _, account := range raw.Data {
+		value, _ := strconv.ParseFloat(strings.TrimSpace(account.USDTBalance), 64)
+		if value <= 0 {
+			continue
 		}
+		totalUSDT += value
+		key := strings.ToUpper(strings.TrimSpace(account.AccountType)) + "_USDT"
+		result.Total[key] = value
+		result.Free[key] = value
+		result.Used[key] = 0
+		log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", account.AccountType, value)
+	}
+	if totalUSDT > 0 {
+		result.Total["USDT"] = totalUSDT
+		result.Free["USDT"] = totalUSDT
+		result.Used["USDT"] = 0
 	}
 
 	log.Printf("[CCXT Native] Bitget balance fetched: %d assets", len(result.Total))
