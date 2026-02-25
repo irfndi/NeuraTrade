@@ -343,6 +343,7 @@ type aiMarketSignal struct {
 	BidAskSpread       float64 `json:"spread_pct"`
 	OrderBookImbalance float64 `json:"ob_imbalance"`
 	PriceChange24h     float64 `json:"price_change_24h_pct"`
+	RangePosition24h   float64 `json:"range_pos_24h"`
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
@@ -592,8 +593,9 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 			signal.Symbol = normalizedSymbol
 		}
 
-		if signal.High24h > 0 && signal.Low24h > 0 {
-			signal.PriceChange24h = (signal.Price - signal.Low24h) / (signal.High24h - signal.Low24h) * 100
+		if signal.High24h > signal.Low24h {
+			// This is the relative location of current price inside today's range.
+			signal.RangePosition24h = ((signal.Price - signal.Low24h) / (signal.High24h - signal.Low24h)) * 100
 		}
 
 		if obResp != nil {
@@ -727,7 +729,8 @@ Return JSON only:
 - ob_imbalance > 0.2: Strong buy pressure (more bids)
 - ob_imbalance < -0.2: Strong sell pressure (more asks)
 - spread < 0.1%%: Good liquidity for execution
-- price_change_24h > 5%%: Strong momentum (consider direction)
+- range_pos_24h > 80: Price near daily high (avoid chasing late entries)
+- range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
 `, s.config.MinConfidence, s.config.MaxCapitalPct, s.config.Leverage, skillContent)
 }
 
@@ -831,6 +834,11 @@ func floatPtr(v float64) *float64 {
 	return &v
 }
 
+const (
+	maxScalpingSpreadPct = 0.20
+	minRiskRewardRatio   = 1.10
+)
+
 func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signals []aiMarketSignal) error {
 	if decision == nil {
 		return fmt.Errorf("decision is nil")
@@ -860,6 +868,12 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		entry := decimal.NewFromFloat(resolved.Price)
 		decision.EntryPrice = &entry
 	}
+	if resolved.BidAskSpread > maxScalpingSpreadPct {
+		return fmt.Errorf("spread %.3f%% too wide for scalping on %s", resolved.BidAskSpread, decision.Symbol)
+	}
+	if resolved.BidAskSpread == 0 && resolved.OrderBookImbalance == 0 {
+		return fmt.Errorf("missing orderbook quality signals for %s", decision.Symbol)
+	}
 	if decision.SizePercent <= 0 {
 		return fmt.Errorf("size_pct must be > 0")
 	}
@@ -886,9 +900,25 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		if stopLoss >= resolved.Price || takeProfit <= resolved.Price {
 			return fmt.Errorf("buy decision requires stop_loss < price < take_profit")
 		}
+		if resolved.RangePosition24h >= 85 && decision.Confidence < 0.75 {
+			return fmt.Errorf("buy decision rejected near day high (range_pos_24h=%.1f)", resolved.RangePosition24h)
+		}
+		reward := takeProfit - resolved.Price
+		risk := resolved.Price - stopLoss
+		if risk <= 0 || reward/risk < minRiskRewardRatio {
+			return fmt.Errorf("buy risk/reward %.2f below minimum %.2f", reward/risk, minRiskRewardRatio)
+		}
 	case "sell":
 		if stopLoss <= resolved.Price || takeProfit >= resolved.Price {
 			return fmt.Errorf("sell decision requires stop_loss > price > take_profit")
+		}
+		if resolved.RangePosition24h <= 15 && decision.Confidence < 0.75 {
+			return fmt.Errorf("sell decision rejected near day low (range_pos_24h=%.1f)", resolved.RangePosition24h)
+		}
+		reward := resolved.Price - takeProfit
+		risk := stopLoss - resolved.Price
+		if risk <= 0 || reward/risk < minRiskRewardRatio {
+			return fmt.Errorf("sell risk/reward %.2f below minimum %.2f", reward/risk, minRiskRewardRatio)
 		}
 	}
 	return nil

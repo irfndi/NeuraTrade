@@ -828,6 +828,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 	processedCount := 0
 	wins := 0
 	losses := 0
+	breakeven := 0
 	totalPnL := decimal.Zero
 
 	for _, order := range closedOrders {
@@ -855,6 +856,8 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			wins++
 		} else if pnl.LessThan(decimal.Zero) {
 			losses++
+		} else {
+			breakeven++
 		}
 		totalPnL = totalPnL.Add(pnl)
 		processedCount++
@@ -868,9 +871,11 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		})
 
 		if h.tradeMemory != nil {
-			outcome := "loss"
+			outcome := "breakeven"
 			if profitable {
 				outcome = "win"
+			} else if pnl.LessThan(decimal.Zero) {
+				outcome = "loss"
 			}
 			if err := h.tradeMemory.UpdateOutcome(ctx, orderID, outcome, exitPrice.InexactFloat64(), pnl); err != nil {
 				log.Printf("[AI-MEMORY] Failed to update outcome for %s: %v", orderID, err)
@@ -887,13 +892,14 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 
 	if processedCount > 0 {
 		summary := fmt.Sprintf(
-			"Reconciled %d closed order(s) on %s (%s). Realized PnL: %s (wins=%d, losses=%d)",
+			"Reconciled %d closed order(s) on %s (%s). Realized PnL: %s (wins=%d, losses=%d, breakeven=%d)",
 			processedCount,
 			exchange,
 			symbol,
 			totalPnL.StringFixed(4),
 			wins,
 			losses,
+			breakeven,
 		)
 		h.notifyScalpingDecision(ctx, quest.Metadata["chat_id"], AIReasoningNotification{
 			DecisionType: "pnl_reconciliation",
