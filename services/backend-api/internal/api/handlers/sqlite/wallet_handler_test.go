@@ -24,9 +24,11 @@ func setupTestDatabase(t *testing.T) *database.SQLiteDB {
 		CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			telegram_chat_id TEXT UNIQUE,
+			telegram_id TEXT UNIQUE,
 			email TEXT UNIQUE,
 			username TEXT,
 			password_hash TEXT,
+			risk_level TEXT DEFAULT 'medium',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
@@ -268,6 +270,280 @@ func TestWalletHandler_ConnectExchange_RequiresChatID(t *testing.T) {
 
 	handler.ConnectExchange(c)
 
+	assert.Contains(t, w.Body.String(), "chat_id is required")
+}
+func TestWalletHandler_GetWalletBalance(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/wallets/balance", nil)
+
+	handler.GetWalletBalance(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "mock")
+	assert.Contains(t, w.Body.String(), "balances")
+	assert.Contains(t, w.Body.String(), "BTC")
+	assert.Contains(t, w.Body.String(), "ETH")
+	assert.Contains(t, w.Body.String(), "USDT")
+}
+
+func TestWalletHandler_GetWallets_UserNotFound(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/wallets?chat_id=nonexistent", nil)
+
+	handler.GetWallets(c)
+
+	// Should return empty list when user not found
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "wallets")
+}
+
+func TestWalletHandler_AddWallet_CreatesUserIfNotExists(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	// Don't create user first - test auto-creation
+	reqBody := map[string]string{
+		"name":     "new-user-wallet",
+		"exchange": "binance",
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/wallets?chat_id=brand_new_user", bytes.NewBuffer(jsonBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.AddWallet(c)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Contains(t, w.Body.String(), "Wallet added successfully")
+
+	// Verify user was created
+	var count int
+	err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE telegram_chat_id = ?", "brand_new_user").Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestWalletHandler_AddWallet_RequiresChatID(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	reqBody := map[string]string{
+		"name":     "test-wallet",
+		"exchange": "binance",
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/wallets", bytes.NewBuffer(jsonBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.AddWallet(c)
+
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "chat_id is required")
+}
+
+func TestWalletHandler_RemoveWallet_UserNotFound(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	reqBody := map[string]string{"name": "some-wallet"}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("DELETE", "/wallets?chat_id=nonexistent", bytes.NewBuffer(jsonBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.RemoveWallet(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "User not found")
+}
+
+func TestWalletHandler_RemoveWallet_WalletNotFound(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	// Create user
+	_, err := db.DB.Exec("INSERT INTO users (telegram_chat_id) VALUES (?)", "test_chat_remove")
+	assert.NoError(t, err)
+
+	reqBody := map[string]string{"name": "nonexistent-wallet"}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("DELETE", "/wallets?chat_id=test_chat_remove", bytes.NewBuffer(jsonBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.RemoveWallet(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "Wallet not found")
+}
+
+func TestWalletHandler_ConnectExchange_UserNotFound(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	reqBody := map[string]string{
+		"exchange":   "binance",
+		"api_key":    "test-key",
+		"api_secret": "test-secret",
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/wallets/connect?chat_id=nonexistent", bytes.NewBuffer(jsonBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.ConnectExchange(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "User not found")
+}
+
+func TestWalletHandler_ConnectExchange_WithPassphrase(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	// Create user
+	_, err := db.DB.Exec("INSERT INTO users (telegram_chat_id) VALUES (?)", "test_passphrase")
+	assert.NoError(t, err)
+
+	reqBody := map[string]string{
+		"exchange":   "okx",
+		"api_key":    "test-key",
+		"api_secret": "test-secret",
+		"passphrase": "test-passphrase",
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/wallets/connect?chat_id=test_passphrase", bytes.NewBuffer(jsonBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.ConnectExchange(c)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Contains(t, w.Body.String(), "Exchange connected successfully")
+
+	// Verify passphrase is encrypted
+	var encryptedPassphrase string
+	err = db.DB.QueryRow("SELECT passphrase_encrypted FROM exchange_api_keys WHERE user_id = 1").Scan(&encryptedPassphrase)
+	assert.NoError(t, err)
+	assert.NotEqual(t, "test-passphrase", encryptedPassphrase)
+	assert.NotEmpty(t, encryptedPassphrase)
+}
+
+func TestWalletHandler_ConnectExchange_NoEncryptionKey(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	// Don't set ENCRYPTION_KEY - should fail gracefully
+
+	// Create user
+	_, err := db.DB.Exec("INSERT INTO users (telegram_chat_id) VALUES (?)", "test_no_key")
+	assert.NoError(t, err)
+
+	reqBody := map[string]string{
+		"exchange":   "binance",
+		"api_key":    "test-key",
+		"api_secret": "test-secret",
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/wallets/connect?chat_id=test_no_key", bytes.NewBuffer(jsonBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.ConnectExchange(c)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "Encryption not configured")
+}
+
+func TestWalletHandler_AddWallet_InvalidJSON(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/wallets?chat_id=test", bytes.NewBuffer([]byte("invalid json")))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.AddWallet(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestWalletHandler_RemoveWallet_InvalidJSON(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("DELETE", "/wallets?chat_id=test", bytes.NewBuffer([]byte("invalid json")))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.RemoveWallet(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestWalletHandler_ConnectExchange_InvalidJSON(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	handler := NewWalletHandler(db)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/wallets/connect?chat_id=test", bytes.NewBuffer([]byte("invalid json")))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.ConnectExchange(c)
+
+assert.Equal(t, http.StatusBadRequest, w.Code)
 }
