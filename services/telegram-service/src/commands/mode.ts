@@ -1,5 +1,22 @@
 import type { Bot } from "grammy";
+import { ApiClientError } from "../api/client";
 import type { BackendApiClient } from "../api/client";
+
+function isApiErrorWithStatus(
+  error: unknown,
+): error is { status: number; message: string } {
+  if (error instanceof ApiClientError) {
+    return true;
+  }
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as { status?: unknown; message?: unknown };
+  return (
+    typeof candidate.status === "number" &&
+    typeof candidate.message === "string"
+  );
+}
 
 async function handleModeAction(
   api: BackendApiClient,
@@ -19,7 +36,27 @@ async function handleModeAction(
   }
 
   if (action === "live") {
-    const result = await api.setTradingMode(chatId, "live");
+    let result: { success: boolean; mode?: string };
+    try {
+      result = await api.setTradingMode(chatId, "live");
+    } catch (error) {
+      if (
+        isApiErrorWithStatus(error) &&
+        error.status === 400 &&
+        (error.message.toLowerCase().includes("requires") ||
+          error.message.toLowerCase().includes("confirmation"))
+      ) {
+        await reply(
+          "⚠️ Cannot switch to LIVE MODE\n\n" +
+            "Live mode requires multiple confirmations for safety.\n" +
+            "Use /mode confirm to add a confirmation.\n\n" +
+            "This protects against accidental live trading.",
+        );
+        return;
+      }
+      throw error;
+    }
+
     if (result.success === false) {
       await reply(
         "⚠️ Cannot switch to LIVE MODE\n\n" +
@@ -86,7 +123,9 @@ export function registerModeCommand(bot: Bot, api: BackendApiClient): void {
       const parts = messageText.trim().split(/\s+/);
       const action = parts[1]?.toLowerCase() || "";
       if (action !== "") {
-        await handleModeAction(api, String(chatId), action, (text) => ctx.reply(text));
+        await handleModeAction(api, String(chatId), action, (text) =>
+          ctx.reply(text),
+        );
         return;
       }
 
@@ -119,7 +158,7 @@ export function registerModeCommand(bot: Bot, api: BackendApiClient): void {
       await ctx.reply(msg);
     } catch (error) {
       console.error("[Mode] Unexpected error:", error);
-      await ctx.reply("❌ Failed to get trading mode. Please try again.");
+      await ctx.reply("❌ Failed to process /mode command. Please try again.");
     }
   });
 }

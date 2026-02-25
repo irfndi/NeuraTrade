@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"
@@ -92,7 +93,9 @@ func (e *NativeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 		chatIDInt, _ := strconv.ParseInt(e.chatID, 10, 64)
 
 		go func() {
-			if err := e.notificationService.sendTelegramMessage(ctx, chatIDInt, msg); err != nil {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := e.notificationService.sendTelegramMessage(notifyCtx, chatIDInt, msg); err != nil {
 				fmt.Printf("[NATIVE-ORDER] Failed to send Telegram notification: %v\n", err)
 			}
 		}()

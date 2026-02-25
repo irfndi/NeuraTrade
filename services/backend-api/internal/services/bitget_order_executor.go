@@ -17,6 +17,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+var bitgetMinUSDTNotional = decimal.NewFromInt(5)
+
 // BitgetOrderExecutor executes real orders on Bitget exchange
 type BitgetOrderExecutor struct {
 	apiKey              string
@@ -116,7 +118,9 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 		chatIDInt, _ := strconv.ParseInt(e.chatID, 10, 64)
 
 		go func() {
-			if err := e.notificationService.sendTelegramMessage(ctx, chatIDInt, msg); err != nil {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := e.notificationService.sendTelegramMessage(notifyCtx, chatIDInt, msg); err != nil {
 				fmt.Printf("[BITGET-ORDER] Failed to send Telegram notification: %v\n", err)
 			}
 		}()
@@ -127,10 +131,20 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 
 // placeFuturesOrder places a futures market order
 func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, side string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
-	// Determine order side for Bitget API
-	bitgetSide := "open_long"
-	if side == "sell" {
-		bitgetSide = "open_short"
+	// Bitget v2 expects side=buy|sell (not open_long/open_short).
+	bitgetSide, err := normalizeBitgetFuturesSide(side)
+	if err != nil {
+		return "", err
+	}
+	holdSide := "long"
+	if bitgetSide == "sell" {
+		holdSide = "short"
+	}
+
+	if amount.LessThan(bitgetMinUSDTNotional) {
+		fmt.Printf("[BITGET-ORDER] Amount %s USDT below minimum, bumping to %s USDT\n",
+			amount.String(), bitgetMinUSDTNotional.String())
+		amount = bitgetMinUSDTNotional
 	}
 
 	// For buy, we're opening a long position
@@ -145,10 +159,12 @@ func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, sid
 		"size":        size,
 		"side":        bitgetSide,
 		"tradeSide":   "open",
+		"holdSide":    holdSide,
 		"orderType":   "market",
 	}
 
 	jsonBody, _ := json.Marshal(body)
+	fmt.Printf("[BITGET-ORDER] Futures payload: %s\n", string(jsonBody))
 
 	resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/place-order", jsonBody)
 	if err != nil {
@@ -179,9 +195,20 @@ func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, sid
 
 // placeFuturesOrderWithTPSL places a futures order with TP/SL
 func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, symbol string, details TradeDetails) (string, error) {
-	bitgetSide := "open_long"
-	if details.Side == "sell" {
-		bitgetSide = "open_short"
+	bitgetSide, err := normalizeBitgetFuturesSide(details.Side)
+	if err != nil {
+		return "", err
+	}
+	holdSide := "long"
+	if bitgetSide == "sell" {
+		holdSide = "short"
+	}
+
+	amountUSDT := details.AmountUSDT
+	if amountUSDT.LessThan(bitgetMinUSDTNotional) {
+		fmt.Printf("[BITGET-ORDER] Amount %s USDT below minimum, bumping to %s USDT\n",
+			amountUSDT.String(), bitgetMinUSDTNotional.String())
+		amountUSDT = bitgetMinUSDTNotional
 	}
 
 	// Get current price to calculate contract size
@@ -212,23 +239,32 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	// For USDT-FUTURES: size = (USDT amount / price) / sizeMultiplier
 	// Example: 3 USDT / 0.01235 USDT per PORTAL = 243 PORTAL
 	// With sizeMultiplier 0.1: 243 / 0.1 = 2430 contracts
-	baseAmount := details.AmountUSDT.Div(price)
+	baseAmount := amountUSDT.Div(price)
 
 	// Convert to number of contracts based on sizeMultiplier
 	contractSize := baseAmount.Div(contractInfo.SizeMultiplier)
 
-	// Round to appropriate precision based on volumePlace
-	contractSize = contractSize.Round(int32(contractInfo.VolumePlace))
+	// Round up so post-rounding notional does not slip below exchange minimum.
+	contractSize = contractSize.RoundCeil(int32(contractInfo.VolumePlace))
 
 	// Ensure minimum size
 	if contractSize.LessThan(contractInfo.MinTradeNum) {
 		contractSize = contractInfo.MinTradeNum
 	}
 
+	// Ensure resulting notional is not below Bitget's minimum.
+	step := decimal.NewFromInt(1).Shift(-int32(contractInfo.VolumePlace))
+	if step.LessThanOrEqual(decimal.Zero) {
+		step = decimal.NewFromInt(1)
+	}
+	for contractSize.Mul(contractInfo.SizeMultiplier).Mul(price).LessThan(bitgetMinUSDTNotional) {
+		contractSize = contractSize.Add(step)
+	}
+
 	size := contractSize.String()
 
 	fmt.Printf("[BITGET-ORDER] Size calc: %.2f USDT / %s = %.2f base / %s = %s contracts\n",
-		details.AmountUSDT.InexactFloat64(), price.StringFixed(5), baseAmount.InexactFloat64(),
+		amountUSDT.InexactFloat64(), price.StringFixed(5), baseAmount.InexactFloat64(),
 		contractInfo.SizeMultiplier.String(), size)
 
 	body := map[string]interface{}{
@@ -238,6 +274,8 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		"marginCoin":  "USDT",
 		"size":        size,
 		"side":        bitgetSide,
+		"tradeSide":   "open",
+		"holdSide":    holdSide,
 		"orderType":   "market",
 	}
 
@@ -250,6 +288,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	}
 
 	jsonBody, _ := json.Marshal(body)
+	fmt.Printf("[BITGET-ORDER] Futures payload: %s\n", string(jsonBody))
 
 	fmt.Printf("[BITGET-ORDER] Placing futures order: %s %s (size: %s contracts @ %s USDT each)\n",
 		bitgetSide, symbol, size, price.StringFixed(5))
@@ -365,6 +404,18 @@ func shouldFallbackToSpot(err error) bool {
 		strings.Contains(errMsg, "removed") ||
 		strings.Contains(errMsg, "failed to get ticker") ||
 		strings.Contains(errMsg, "failed to get contract")
+}
+
+func normalizeBitgetFuturesSide(side string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(side))
+	switch normalized {
+	case "buy", "long", "open_long":
+		return "buy", nil
+	case "sell", "short", "open_short":
+		return "sell", nil
+	default:
+		return "", fmt.Errorf("unsupported futures side %q", side)
+	}
 }
 
 // placeSpotOrder places a spot market order

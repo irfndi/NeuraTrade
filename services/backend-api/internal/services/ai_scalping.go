@@ -22,7 +22,9 @@ import (
 
 type AIScalpingConfig struct {
 	Exchange          string
+	Model             string
 	Leverage          int
+	MaxTokens         int
 	MaxCapitalPct     float64
 	MinConfidence     float64
 	MaxIterations     int
@@ -37,7 +39,9 @@ type AIScalpingConfig struct {
 func DefaultAIScalpingConfig() AIScalpingConfig {
 	return AIScalpingConfig{
 		Exchange:          "bitget", // Default, will be overridden by user settings
+		Model:             "glm-5",
 		Leverage:          5,
+		MaxTokens:         1200,
 		MaxCapitalPct:     5.0,
 		MinConfidence:     0.45,
 		MaxIterations:     3,
@@ -56,8 +60,14 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if value := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_EXCHANGE")); value != "" {
 		cfg.Exchange = strings.ToLower(value)
 	}
+	if value := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_MODEL")); value != "" {
+		cfg.Model = value
+	}
 	if value := getEnvInt("NEURATRADE_SCALPING_LEVERAGE"); value > 0 {
 		cfg.Leverage = clampInt(value, 1, 50)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_MAX_TOKENS"); value > 0 {
+		cfg.MaxTokens = clampInt(value, 128, 8192)
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MAX_CAPITAL_PCT"); ok {
 		cfg.MaxCapitalPct = clampFloat(value, 0.1, 100)
@@ -98,9 +108,11 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	}
 
 	log.Printf(
-		"[AI-SCALPING] Runtime config: exchange=%s leverage=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d",
 		cfg.Exchange,
+		cfg.Model,
 		cfg.Leverage,
+		cfg.MaxTokens,
 		cfg.MaxCapitalPct,
 		cfg.MinConfidence,
 		cfg.Timeout,
@@ -119,7 +131,9 @@ type aiScalpingFileConfig struct {
 		MinConfidence *float64 `json:"min_confidence"`
 		Scalping      struct {
 			Exchange          string   `json:"exchange"`
+			Model             string   `json:"model"`
 			Leverage          *int     `json:"leverage"`
+			MaxTokens         *int     `json:"max_tokens"`
 			MaxCapitalPct     *float64 `json:"max_capital_pct"`
 			MinConfidence     *float64 `json:"min_confidence"`
 			MaxIterations     *int     `json:"max_iterations"`
@@ -163,8 +177,14 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 	if value := strings.TrimSpace(fileConfig.AI.Scalping.Exchange); value != "" {
 		cfg.Exchange = strings.ToLower(value)
 	}
+	if value := strings.TrimSpace(fileConfig.AI.Scalping.Model); value != "" {
+		cfg.Model = value
+	}
 	if fileConfig.AI.Scalping.Leverage != nil {
 		cfg.Leverage = clampInt(*fileConfig.AI.Scalping.Leverage, 1, 50)
+	}
+	if fileConfig.AI.Scalping.MaxTokens != nil {
+		cfg.MaxTokens = clampInt(*fileConfig.AI.Scalping.MaxTokens, 128, 8192)
 	}
 	if fileConfig.AI.Scalping.MaxCapitalPct != nil {
 		cfg.MaxCapitalPct = clampFloat(*fileConfig.AI.Scalping.MaxCapitalPct, 0.1, 100)
@@ -604,14 +624,20 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	log.Printf("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", portfolio.USDTBalance, len(signals))
 
 	req := &llm.CompletionRequest{
-		Model: "glm-5", // Zhipu GLM-5 model
+		Model: strings.TrimSpace(s.config.Model),
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: systemPrompt},
 			{Role: llm.RoleUser, Content: userPrompt},
 		},
 		Temperature:    floatPtr(0.3),
-		MaxTokens:      4096, // Increased for reasoning models
+		MaxTokens:      s.config.MaxTokens,
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
+	}
+	if req.Model == "" {
+		req.Model = "glm-5"
+	}
+	if req.MaxTokens <= 0 {
+		req.MaxTokens = 1200
 	}
 
 	log.Printf("[AI-SCALPING] Sending LLM request...")

@@ -378,20 +378,28 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 		return err
 	}
 
-	// Get latest funding rates from database for each exchange-symbol combination
-	// Note: funding_rates table may not exist in all database setups, so we handle errors gracefully
+	// Use a cross-database query shape (SQLite + Postgres compatible) by joining
+	// the latest timestamp per exchange/trading pair.
+	// Note: funding_rates table may not exist in all database setups, so we handle errors gracefully.
 	query := `
-		SELECT DISTINCT ON (e.name, tp.symbol)
+		SELECT
 			e.name as exchange_name,
 			tp.symbol,
 			fr.funding_rate,
 			fr.next_funding_time,
 			fr.timestamp
 		FROM funding_rates fr
+		JOIN (
+			SELECT exchange_id, trading_pair_id, MAX(timestamp) AS max_ts
+			FROM funding_rates
+			GROUP BY exchange_id, trading_pair_id
+		) latest
+			ON latest.exchange_id = fr.exchange_id
+			AND latest.trading_pair_id = fr.trading_pair_id
+			AND latest.max_ts = fr.timestamp
 		JOIN exchanges e ON fr.exchange_id = e.id
 		JOIN trading_pairs tp ON fr.trading_pair_id = tp.id
-		WHERE fr.timestamp > NOW() - INTERVAL '24 hours'
-		ORDER BY e.name, tp.symbol, fr.timestamp DESC
+		ORDER BY e.name, tp.symbol
 		LIMIT 1000
 	`
 

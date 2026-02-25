@@ -2,6 +2,9 @@ import type { Bot } from "grammy";
 import type { BackendApiClient } from "../api/client";
 import type { AIModelInfo } from "../api/types";
 
+const MAX_PROVIDERS_IN_AI_MODELS = 15;
+const MAX_MODELS_PER_PROVIDER = 4;
+
 export function registerAICommands(bot: Bot, api: BackendApiClient): void {
   bot.command("ai_models", async (ctx) => {
     const userId = ctx.from?.id;
@@ -19,8 +22,6 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
         return;
       }
 
-      const lines = ["🤖 Available AI Models:\n"];
-
       const providerGroups: Record<string, AIModelInfo[]> = {};
       for (const model of result.models) {
         if (!providerGroups[model.provider]) {
@@ -29,16 +30,35 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
         providerGroups[model.provider].push(model);
       }
 
-      for (const [provider, models] of Object.entries(providerGroups)) {
+      const providers = Object.entries(providerGroups).sort(
+        (a, b) => b[1].length - a[1].length,
+      );
+      const selectedProviders = providers.slice(0, MAX_PROVIDERS_IN_AI_MODELS);
+      const omittedProviders = Math.max(
+        0,
+        providers.length - selectedProviders.length,
+      );
+
+      const lines = [
+        `🤖 Available AI Models (showing ${selectedProviders.length} providers):`,
+        "",
+      ];
+
+      for (const [provider, models] of selectedProviders) {
         lines.push(`<b>${provider.toUpperCase()}</b>`);
-        for (const m of models.slice(0, 5)) {
+        for (const m of models.slice(0, MAX_MODELS_PER_PROVIDER)) {
           const tools = m.supports_tools ? "🔧" : "";
           const vision = m.supports_vision ? "👁" : "";
           lines.push(`  ${m.model_id} ${tools}${vision}`);
         }
-        if (models.length > 5) {
-          lines.push(`  ... and ${models.length - 5} more`);
+        if (models.length > MAX_MODELS_PER_PROVIDER) {
+          lines.push(`  ... and ${models.length - MAX_MODELS_PER_PROVIDER} more`);
         }
+        lines.push("");
+      }
+
+      if (omittedProviders > 0) {
+        lines.push(`... and ${omittedProviders} more providers`);
         lines.push("");
       }
 
