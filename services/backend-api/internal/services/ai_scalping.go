@@ -346,10 +346,10 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	stopLossFloat := 0.0
 	takeProfitFloat := 0.0
 	if decision.StopLoss != nil {
-		stopLossFloat, _ = decision.StopLoss.InexactFloat64()
+		stopLossFloat = decision.StopLoss.InexactFloat64()
 	}
 	if decision.TakeProfit != nil {
-		takeProfitFloat, _ = decision.TakeProfit.InexactFloat64()
+		takeProfitFloat = decision.TakeProfit.InexactFloat64()
 	}
 	log.Printf("[AI-SCALPING] === AI DECISION PARSED ===\nAction: %s, Symbol: %s, Confidence: %.0f%%, Size: %.1f%%, SL: %.4f, TP: %.4f\nReasoning: %s",
 		decision.Action, decision.Symbol, decision.Confidence*100, decision.SizePercent,
