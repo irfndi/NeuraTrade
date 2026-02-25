@@ -327,7 +327,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		llmConfig := llm.ClientConfig{
 			APIKey:      aiAPIKey,
 			BaseURL:     aiBaseURL,
-			HTTPTimeout: 300 * time.Second,  // 5 minutes for Zhipu GLM
+			HTTPTimeout: 300 * time.Second, // 5 minutes for Zhipu GLM
 			MaxRetries:  5,
 		}
 

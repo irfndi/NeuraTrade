@@ -300,29 +300,29 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 			safety, err := h.portfolioSafety.CheckSafety(c.Request.Context(), chatID, snapshot)
 			if err == nil {
 				safetyStatus = gin.H{
-					"is_safe":             safety.IsSafe,
-					"trading_allowed":     safety.TradingAllowed,
-					"max_position_size":   safety.MaxPositionSize,
-					"current_drawdown":    safety.CurrentDrawdown,
-					"position_throttle":   safety.PositionThrottle,
-					"warnings":            safety.Warnings,
-					"total_equity":        snapshot.TotalEquity.String(),
-					"available_balance":   snapshot.AvailableFunds.String(),
-					"open_positions":      snapshot.OpenPositions,
-					"unrealized_pnl":      snapshot.UnrealizedPnL.String(),
-					"exposure_pct":        snapshot.ExposurePct,
+					"is_safe":           safety.IsSafe,
+					"trading_allowed":   safety.TradingAllowed,
+					"max_position_size": safety.MaxPositionSize,
+					"current_drawdown":  safety.CurrentDrawdown,
+					"position_throttle": safety.PositionThrottle,
+					"warnings":          safety.Warnings,
+					"total_equity":      snapshot.TotalEquity.String(),
+					"available_balance": snapshot.AvailableFunds.String(),
+					"open_positions":    snapshot.OpenPositions,
+					"unrealized_pnl":    snapshot.UnrealizedPnL.String(),
+					"exposure_pct":      snapshot.ExposurePct,
 				}
 			}
 		}
 	}
 
 	response := gin.H{
-		"chat_id":         chatID,
-		"autonomous":      state.IsActive,
-		"started_at":      state.StartedAt.Format(time.RFC3339),
-		"active_quests":   state.ActiveQuests,
-		"quest_progress":  progress,
-		"timestamp":       time.Now().UTC().Format(time.RFC3339),
+		"chat_id":        chatID,
+		"autonomous":     state.IsActive,
+		"started_at":     state.StartedAt.Format(time.RFC3339),
+		"active_quests":  state.ActiveQuests,
+		"quest_progress": progress,
+		"timestamp":      time.Now().UTC().Format(time.RFC3339),
 	}
 
 	if safetyStatus != nil {

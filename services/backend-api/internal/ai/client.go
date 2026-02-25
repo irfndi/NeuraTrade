@@ -175,19 +175,18 @@ func (c *Client) Chat(ctx context.Context, providerID, modelID string, messages 
 	c.mu.RUnlock()
 
 	// Use unified provider client for all providers
-fmt.Printf("[DEBUG CLIENT] providerID=%s\n", providerID)
+	fmt.Printf("[DEBUG CLIENT] providerID=%s\n", providerID)
 	apiKey := c.getAPIKey(providerID)
 	if apiKey == "" {
 		return nil, fmt.Errorf("no API key for provider: %s", providerID)
 	}
-	
+
 	baseURL := c.getBaseURL(providerID)
 	model := c.getModel(providerID)
-	
+
 	client := NewUnifiedProviderClient(providerID, apiKey, baseURL, model)
 	return client.Chat(ctx, req)
 }
-
 
 // getAPIKey returns the API key for a provider
 func (c *Client) getAPIKey(providerID string) string {

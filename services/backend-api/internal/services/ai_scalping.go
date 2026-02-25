@@ -317,7 +317,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	log.Printf("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", portfolio.USDTBalance, len(signals))
 
 	req := &llm.CompletionRequest{
-		Model:          "glm-5",  // Zhipu GLM-5 model
+		Model: "glm-5", // Zhipu GLM-5 model
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: systemPrompt},
 			{Role: llm.RoleUser, Content: userPrompt},
@@ -562,4 +562,3 @@ func readIntMetric(v interface{}) int {
 		return 0
 	}
 }
-

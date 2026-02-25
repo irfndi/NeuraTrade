@@ -13,11 +13,11 @@ import (
 
 // UnifiedProviderClient provides unified API access for all providers
 type UnifiedProviderClient struct {
-	providerID string
-	apiKey     string
-	baseURL    string
-	model      string
-	httpClient *http.Client
+	providerID         string
+	apiKey             string
+	baseURL            string
+	model              string
+	httpClient         *http.Client
 	useAnthropicFormat bool
 }
 
@@ -29,14 +29,14 @@ func NewUnifiedProviderClient(providerID, apiKey, baseURL, model string) *Unifie
 	// Zhipu uses OpenAI format
 	// DEBUG: Print detection result
 	fmt.Printf("[DEBUG] ProviderID=%s, baseURL=%s, useAnthropic=%v\n", providerID, baseURL, useAnthropic)
-	
+
 	return &UnifiedProviderClient{
 		providerID: providerID,
 		apiKey:     apiKey,
 		baseURL:    baseURL,
 		model:      model,
 		httpClient: &http.Client{
-			Timeout: 300 * time.Second,  // Increased for MiniMax
+			Timeout: 300 * time.Second, // Increased for MiniMax
 		},
 		useAnthropicFormat: useAnthropic,
 	}
@@ -46,13 +46,13 @@ func NewUnifiedProviderClient(providerID, apiKey, baseURL, model string) *Unifie
 func (c *UnifiedProviderClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	var body []byte
 	var err error
-	
+
 	if c.useAnthropicFormat {
 		body, err = c.buildAnthropicRequest(req)
 	} else {
 		body, err = c.buildOpenAIRequest(req)
 	}
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -64,7 +64,7 @@ func (c *UnifiedProviderClient) Chat(ctx context.Context, req *ChatRequest) (*Ch
 		// Anthropic format uses /messages endpoint
 		apiURL += "/messages"
 	}
-	
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -72,7 +72,7 @@ func (c *UnifiedProviderClient) Chat(ctx context.Context, req *ChatRequest) (*Ch
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	
+
 	if c.useAnthropicFormat {
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 		httpReq.Header.Set("x-api-key", c.apiKey)
@@ -102,7 +102,7 @@ func (c *UnifiedProviderClient) Chat(ctx context.Context, req *ChatRequest) (*Ch
 func (c *UnifiedProviderClient) buildAnthropicRequest(req *ChatRequest) ([]byte, error) {
 	messages := make([]map[string]interface{}, 0)
 	systemPrompt := ""
-	
+
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
 			systemPrompt = msg.Content
@@ -113,17 +113,17 @@ func (c *UnifiedProviderClient) buildAnthropicRequest(req *ChatRequest) ([]byte,
 			"content": msg.Content,
 		})
 	}
-	
+
 	requestBody := map[string]interface{}{
-		"model":       c.model,
-		"messages":    messages,
-		"max_tokens":  req.MaxTokens,
+		"model":      c.model,
+		"messages":   messages,
+		"max_tokens": req.MaxTokens,
 	}
-	
+
 	if systemPrompt != "" {
 		requestBody["system"] = systemPrompt
 	}
-	
+
 	return json.Marshal(requestBody)
 }
 

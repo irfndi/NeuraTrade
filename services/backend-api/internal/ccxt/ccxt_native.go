@@ -855,11 +855,11 @@ func (s *NativeCCXTService) parseBybitOrderBook(symbol string, body []byte, limi
 	var raw struct {
 		RetCode int `json:"retCode"`
 		Result  struct {
-			Bids       [][]string `json:"b"`
-			Asks       [][]string `json:"a"`
-			Timestamp  int64      `json:"ts"`
-			UpdateID   int64      `json:"u"`
-			Sequence   int64      `json:"seq"`
+			Bids      [][]string `json:"b"`
+			Asks      [][]string `json:"a"`
+			Timestamp int64      `json:"ts"`
+			UpdateID  int64      `json:"u"`
+			Sequence  int64      `json:"seq"`
 		} `json:"result"`
 		RetMsg string `json:"retMsg"`
 	}
