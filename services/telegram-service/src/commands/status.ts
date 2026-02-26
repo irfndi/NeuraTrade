@@ -97,6 +97,34 @@ function readBoolField(
   return null;
 }
 
+function readNumberField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): number | null {
+  if (!source) {
+    return null;
+  }
+  const value = source[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function readRecordField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): Readonly<Record<string, unknown>> | null {
+  if (!source) {
+    return null;
+  }
+  const value = source[key];
+  if (typeof value === "object" && value !== null) {
+    return value as Readonly<Record<string, unknown>>;
+  }
+  return null;
+}
+
 export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
   bot.command("status", async (ctx) => {
     const chatId = ctx.chat?.id;
@@ -190,6 +218,8 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         const chatRuntime = diagnostics.chat_runtime as
           | Readonly<Record<string, unknown>>
           | undefined;
+        const aiRuntime =
+          readRecordField(chatRuntime, "ai_runtime") ?? undefined;
 
         const heartbeatMode = readStringField(heartbeat, "mode");
         if (heartbeatMode) {
@@ -217,6 +247,20 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         const lastSpotUnwind = readStringField(chatRuntime, "last_spot_unwind");
         if (lastSpotUnwind) {
           lines.push(`• Last spot unwind: ${lastSpotUnwind}`);
+        }
+        if (aiRuntime) {
+          const runtimeStatus =
+            readStringField(aiRuntime, "status")?.toUpperCase() || "UNKNOWN";
+          const errorRate = readNumberField(aiRuntime, "error_rate");
+          const circuitActive = readBoolField(aiRuntime, "circuit_active");
+          const segments = [`${runtimeStatus}`];
+          if (typeof errorRate === "number") {
+            segments.push(`err_rate ${(errorRate * 100).toFixed(0)}%`);
+          }
+          if (circuitActive === true) {
+            segments.push("circuit OPEN");
+          }
+          lines.push(`• AI runtime: ${segments.join(", ")}`);
         }
       }
 

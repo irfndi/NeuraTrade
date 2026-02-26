@@ -850,6 +850,24 @@ func readQuestMetricInt(v interface{}) int {
 	return 0
 }
 
+func envFloatOrDefault(key string, fallback, min, max float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
+	}
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
 // executeQuest executes a single quest
 func (e *QuestEngine) executeQuest(quest *Quest) {
 	defer e.markQuestExecutionFinished(quest.ID)
@@ -1115,15 +1133,34 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	}
 
 	var (
-		lastStartupReconcile time.Time
-		lastSpotUnwind       time.Time
-		lastHoldDigest       time.Time
-		latestFailureAt      time.Time
-		holdStreak           int
-		unlockCycles         int
-		failureStreak        int
-		noFillSince          time.Time
-		activeScalping       int
+		lastStartupReconcile  time.Time
+		lastSpotUnwind        time.Time
+		lastHoldDigest        time.Time
+		latestFailureAt       time.Time
+		holdStreak            int
+		unlockCycles          int
+		failureStreak         int
+		noFillSince           time.Time
+		activeScalping        int
+		aiWindowTotal         int
+		aiWindowSuccess       int
+		aiWindowErrors        int
+		aiWindowTimeouts      int
+		aiWindowParseFails    int
+		aiWindowStarted       time.Time
+		aiLastEventAt         time.Time
+		aiLastCategory        string
+		aiLastProvider        string
+		aiLastSuccessProvider string
+		aiLastError           string
+		aiLastErrorAt         time.Time
+		aiLastSuccessAt       time.Time
+		aiCircuitUntil        time.Time
+		aiCircuitReason       string
+		aiCircuitTrips        int
+		aiFailoverAttempts    int
+		aiFailoverSuccesses   int
+		aiFailoverFailures    int
 	)
 
 	for _, quest := range e.quests {
@@ -1157,6 +1194,47 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if ts := readCheckpointTime(cp["runtime_no_fill_since"]); ts.After(noFillSince) {
 			noFillSince = ts
 		}
+
+		aiWindowTotal = maxInt(aiWindowTotal, readQuestMetricInt(cp["runtime_ai_window_total"]))
+		aiWindowSuccess = maxInt(aiWindowSuccess, readQuestMetricInt(cp["runtime_ai_window_success"]))
+		aiWindowErrors = maxInt(aiWindowErrors, readQuestMetricInt(cp["runtime_ai_window_errors"]))
+		aiWindowTimeouts = maxInt(aiWindowTimeouts, readQuestMetricInt(cp["runtime_ai_window_timeouts"]))
+		aiWindowParseFails = maxInt(aiWindowParseFails, readQuestMetricInt(cp["runtime_ai_window_parse_fails"]))
+		aiFailoverAttempts = maxInt(aiFailoverAttempts, readQuestMetricInt(cp["runtime_ai_window_failover_attempts"]))
+		aiFailoverSuccesses = maxInt(aiFailoverSuccesses, readQuestMetricInt(cp["runtime_ai_window_failover_successes"]))
+		aiFailoverFailures = maxInt(aiFailoverFailures, readQuestMetricInt(cp["runtime_ai_window_failover_failures"]))
+		aiCircuitTrips = maxInt(aiCircuitTrips, readQuestMetricInt(cp["runtime_ai_circuit_trips"]))
+
+		if ts := readCheckpointTime(cp["runtime_ai_window_started_at"]); ts.After(aiWindowStarted) {
+			aiWindowStarted = ts
+		}
+		if ts := readCheckpointTime(cp["runtime_ai_last_event_at"]); ts.After(aiLastEventAt) {
+			aiLastEventAt = ts
+			if category, ok := cp["runtime_ai_last_category"].(string); ok {
+				aiLastCategory = strings.TrimSpace(category)
+			}
+			if provider, ok := cp["runtime_ai_last_provider"].(string); ok {
+				aiLastProvider = strings.TrimSpace(provider)
+			}
+			if provider, ok := cp["runtime_ai_last_success_provider"].(string); ok {
+				aiLastSuccessProvider = strings.TrimSpace(provider)
+			}
+			if msg, ok := cp["runtime_ai_last_error"].(string); ok {
+				aiLastError = strings.TrimSpace(msg)
+			}
+		}
+		if ts := readCheckpointTime(cp["runtime_ai_last_error_at"]); ts.After(aiLastErrorAt) {
+			aiLastErrorAt = ts
+		}
+		if ts := readCheckpointTime(cp["runtime_ai_last_success_at"]); ts.After(aiLastSuccessAt) {
+			aiLastSuccessAt = ts
+		}
+		if ts := readCheckpointTime(cp["runtime_ai_circuit_until"]); ts.After(aiCircuitUntil) {
+			aiCircuitUntil = ts
+			if reason, ok := cp["runtime_ai_circuit_reason"].(string); ok {
+				aiCircuitReason = strings.TrimSpace(reason)
+			}
+		}
 	}
 
 	result["active_scalping_quests"] = activeScalping
@@ -1178,6 +1256,66 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if !noFillSince.IsZero() {
 		result["runtime_no_fill_since"] = noFillSince.Format(time.RFC3339)
 	}
+
+	windowErrorRate := 0.0
+	if aiWindowTotal > 0 {
+		windowErrorRate = float64(aiWindowErrors) / float64(aiWindowTotal)
+	}
+	warnRate := envFloatOrDefault("NEURATRADE_AI_RUNTIME_WARN_ERROR_RATE", 0.25, 0.01, 1)
+	criticalRate := envFloatOrDefault("NEURATRADE_AI_RUNTIME_CRITICAL_ERROR_RATE", 0.50, 0.01, 1)
+	now := time.Now().UTC()
+	circuitActive := aiCircuitUntil.After(now)
+
+	status := "healthy"
+	if circuitActive || windowErrorRate >= criticalRate {
+		status = "critical"
+	} else if windowErrorRate >= warnRate {
+		status = "warning"
+	}
+
+	aiRuntime := map[string]interface{}{
+		"status":                status,
+		"window_started_at":     "",
+		"window_total":          aiWindowTotal,
+		"window_success":        aiWindowSuccess,
+		"window_errors":         aiWindowErrors,
+		"window_timeouts":       aiWindowTimeouts,
+		"window_parse_fails":    aiWindowParseFails,
+		"error_rate":            windowErrorRate,
+		"warn_rate":             warnRate,
+		"critical_rate":         criticalRate,
+		"circuit_active":        circuitActive,
+		"circuit_until":         "",
+		"circuit_reason":        aiCircuitReason,
+		"circuit_trips":         aiCircuitTrips,
+		"last_category":         aiLastCategory,
+		"last_provider":         aiLastProvider,
+		"last_success_provider": aiLastSuccessProvider,
+		"last_error":            aiLastError,
+		"last_error_at":         "",
+		"last_success_at":       "",
+		"last_event_at":         "",
+		"failover_attempts":     aiFailoverAttempts,
+		"failover_successes":    aiFailoverSuccesses,
+		"failover_failures":     aiFailoverFailures,
+	}
+	if !aiWindowStarted.IsZero() {
+		aiRuntime["window_started_at"] = aiWindowStarted.Format(time.RFC3339)
+	}
+	if circuitActive {
+		aiRuntime["circuit_until"] = aiCircuitUntil.Format(time.RFC3339)
+	}
+	if !aiLastErrorAt.IsZero() {
+		aiRuntime["last_error_at"] = aiLastErrorAt.Format(time.RFC3339)
+	}
+	if !aiLastSuccessAt.IsZero() {
+		aiRuntime["last_success_at"] = aiLastSuccessAt.Format(time.RFC3339)
+	}
+	if !aiLastEventAt.IsZero() {
+		aiRuntime["last_event_at"] = aiLastEventAt.Format(time.RFC3339)
+	}
+	result["ai_runtime"] = aiRuntime
+
 	return result
 }
 

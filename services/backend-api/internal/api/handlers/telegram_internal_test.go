@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/services"
 )
 
 // TestTelegramInternalHandler_GetNotificationPreferences_Success tests success case
@@ -24,8 +25,9 @@ func TestTelegramInternalHandler_GetNotificationPreferences_Success(t *testing.T
 	assert.NoError(t, err)
 	defer mockDB.Close()
 	dbPool := database.NewMockDBPool(mockDB)
+	questEngine := services.NewQuestEngine(services.NewInMemoryQuestStore())
 
-	handler := NewTelegramInternalHandler(dbPool, nil, nil)
+	handler := NewTelegramInternalHandler(dbPool, nil, questEngine)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -598,9 +600,9 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 	var response map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
-	assert.Equal(t, "healthy", response["overall_status"])
+	assert.Equal(t, "warning", response["overall_status"])
 	checks, ok := response["checks"].([]interface{})
 	assert.True(t, ok)
-	assert.Len(t, checks, 5)
+	assert.Len(t, checks, 6)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }

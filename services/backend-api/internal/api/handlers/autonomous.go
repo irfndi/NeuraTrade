@@ -359,6 +359,23 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 
 	if safetyStatus != nil {
 		response["safety_status"] = safetyStatus
+		if safetyMap, ok := safetyStatus.(gin.H); ok {
+			drawdown, drawdownOK := safetyMap["current_drawdown"].(float64)
+			questRuntime, runtimeOK := response["quest_runtime"].(map[string]interface{})
+			riskLockActive := false
+			if runtimeOK {
+				if raw, ok := questRuntime["risk_lock_active"].(bool); ok {
+					riskLockActive = raw
+				}
+			}
+			if drawdownOK && drawdown >= 0.15 && !riskLockActive {
+				response["drawdown_observation"] = gin.H{
+					"high_drawdown_without_risk_lock": true,
+					"drawdown":                        drawdown,
+					"threshold":                       0.15,
+				}
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, response)

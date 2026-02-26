@@ -126,9 +126,11 @@ type FundMilestoneNotification struct {
 
 // AIReasoningNotification represents an AI reasoning notification
 type AIReasoningNotification struct {
-	DecisionType string
-	Summary      string
-	Confidence   float64
-	Reasons      []string
-	Action       string
+	DecisionType    string
+	Summary         string
+	Confidence      float64
+	ConfidenceKnown bool
+	ReasonCategory  string
+	Reasons         []string
+	Action          string
 }

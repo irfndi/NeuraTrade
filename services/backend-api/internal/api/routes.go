@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -57,6 +58,114 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+type llmProviderNodeConfig struct {
+	Provider      string
+	APIKey        string
+	BaseURL       string
+	ModelOverride string
+}
+
+func parseAIProviderChain(primary string) []string {
+	primary = strings.ToLower(strings.TrimSpace(primary))
+	if primary == "" {
+		primary = "zhipu"
+	}
+
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
+	if raw == "" {
+		raw = "zhipu,minimax"
+	}
+
+	parts := strings.Split(raw, ",")
+	seen := map[string]struct{}{primary: {}}
+	chain := []string{primary}
+	for _, part := range parts {
+		provider := strings.ToLower(strings.TrimSpace(part))
+		if provider == "" {
+			continue
+		}
+		if _, exists := seen[provider]; exists {
+			continue
+		}
+		seen[provider] = struct{}{}
+		chain = append(chain, provider)
+	}
+	return chain
+}
+
+func providerBaseURL(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "minimax":
+		return "https://api.minimax.chat/v1"
+	case "zhipu":
+		return "https://open.bigmodel.cn/api/coding/paas/v4"
+	case "mlx":
+		return "http://localhost:8080/v1"
+	default:
+		return "https://api.openai.com/v1"
+	}
+}
+
+func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBaseURL string, provider string) llmProviderNodeConfig {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	node := llmProviderNodeConfig{
+		Provider: provider,
+	}
+
+	if provider == strings.ToLower(strings.TrimSpace(primaryProvider)) {
+		node.APIKey = strings.TrimSpace(primaryAPIKey)
+		node.BaseURL = strings.TrimSpace(primaryBaseURL)
+	}
+
+	upper := strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))
+	if node.APIKey == "" {
+		node.APIKey = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_API_KEY", upper)))
+	}
+	if node.APIKey == "" {
+		node.APIKey = strings.TrimSpace(os.Getenv(fmt.Sprintf("%s_API_KEY", upper)))
+	}
+
+	if node.BaseURL == "" {
+		node.BaseURL = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_BASE_URL", upper)))
+	}
+	if node.BaseURL == "" {
+		node.BaseURL = providerBaseURL(provider)
+	}
+
+	node.ModelOverride = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_MODEL", upper)))
+	return node
+}
+
+func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, maxRetries int) llm.Client {
+	config := llm.ClientConfig{
+		APIKey:      node.APIKey,
+		BaseURL:     node.BaseURL,
+		HTTPTimeout: timeout,
+		MaxRetries:  maxRetries,
+	}
+
+	switch node.Provider {
+	case "anthropic":
+		return llm.NewAnthropicClient(config)
+	case "mlx":
+		return llm.NewMLXClient(config)
+	case "minimax":
+		// MiniMax exposes an Anthropic-compatible endpoint.
+		return llm.NewAnthropicClient(config)
+	case "zhipu":
+		// Zhipu exposes an OpenAI-compatible endpoint.
+		return llm.NewOpenAIClient(config)
+	default:
+		return llm.NewOpenAIClient(config)
+	}
+}
+
+func providerRequiresAPIKey(provider string) bool {
+	return strings.ToLower(strings.TrimSpace(provider)) != "mlx"
 }
 
 type routeRuntimeConfigFile struct {
@@ -451,48 +560,83 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		aiAPIKey = aiConfig.APIKey
 		aiBaseURL = aiConfig.BaseURL
 		if aiBaseURL == "" {
-			aiBaseURL = "https://api.minimax.chat/v1"
+			aiBaseURL = providerBaseURL(aiConfig.Provider)
 		}
 		aiProvider = aiConfig.Provider
 		if aiProvider == "" {
-			aiProvider = "minimax"
+			aiProvider = "zhipu"
 		}
 	}
 
 	if aiAPIKey != "" {
-		log.Printf("Initializing AI Scalping with provider: %s (base_url: %s)", aiProvider, aiBaseURL)
+		log.Printf("Initializing AI Scalping with primary provider: %s (base_url: %s)", aiProvider, aiBaseURL)
 
-		llmConfig := llm.ClientConfig{
-			APIKey:      aiAPIKey,
-			BaseURL:     aiBaseURL,
-			HTTPTimeout: 300 * time.Second, // 5 minutes for Zhipu GLM
-			MaxRetries:  5,
+		httpTimeout := 300 * time.Second
+		if raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_HTTP_TIMEOUT_SECONDS")); raw != "" {
+			if seconds, parseErr := strconv.Atoi(raw); parseErr == nil && seconds > 0 {
+				httpTimeout = time.Duration(seconds) * time.Second
+			}
+		}
+		maxRetries := 5
+		if raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_MAX_RETRIES")); raw != "" {
+			if retries, parseErr := strconv.Atoi(raw); parseErr == nil && retries >= 0 {
+				maxRetries = retries
+			}
+		}
+
+		providerChain := parseAIProviderChain(aiProvider)
+		failoverNodes := make([]llm.FailoverNode, 0, len(providerChain))
+		for _, provider := range providerChain {
+			nodeConfig := resolveProviderNode(aiProvider, aiAPIKey, aiBaseURL, provider)
+			if strings.TrimSpace(nodeConfig.APIKey) == "" && providerRequiresAPIKey(provider) {
+				log.Printf("Skipping AI provider %s in failover chain: missing API key", provider)
+				continue
+			}
+
+			client := buildLLMProviderClient(nodeConfig, httpTimeout, maxRetries)
+			failoverNodes = append(failoverNodes, llm.FailoverNode{
+				Client:        client,
+				Provider:      llm.Provider(provider),
+				ModelOverride: nodeConfig.ModelOverride,
+			})
+			overrideMsg := "none"
+			if strings.TrimSpace(nodeConfig.ModelOverride) != "" {
+				overrideMsg = nodeConfig.ModelOverride
+			}
+			log.Printf(
+				"AI failover node enabled: provider=%s base_url=%s model_override=%s",
+				provider,
+				nodeConfig.BaseURL,
+				overrideMsg,
+			)
 		}
 
 		var llmClient llm.Client
-		switch aiProvider {
-		case "openai":
-			llmClient = llm.NewOpenAIClient(llmConfig)
-		case "anthropic":
-			llmClient = llm.NewAnthropicClient(llmConfig)
-		case "mlx":
-			llmClient = llm.NewMLXClient(llmConfig)
-		case "minimax":
-			// MiniMax uses Anthropic-compatible API
-			llmClient = llm.NewAnthropicClient(llmConfig)
-		case "zhipu":
-			// Zhipu AI (Z.ai) uses OpenAI-compatible API
-			llmClient = llm.NewOpenAIClient(llmConfig)
+		switch len(failoverNodes) {
+		case 0:
+			log.Printf("AI provider chain has no usable nodes; AI scalping disabled")
+		case 1:
+			llmClient = failoverNodes[0].Client
+			log.Printf("AI provider chain active with single node: %s", failoverNodes[0].Provider)
 		default:
-			llmClient = llm.NewOpenAIClient(llmConfig)
+			maxHops := 1
+			if raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_FAILOVER_MAX_HOPS")); raw != "" {
+				if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 0 {
+					maxHops = parsed
+				}
+			}
+			llmClient = llm.NewFailoverClient(failoverNodes, maxHops)
+			log.Printf("AI provider failover enabled: nodes=%d max_hops=%d", len(failoverNodes), maxHops)
 		}
 
 		skillRegistry := skill.NewRegistry(filepath.Join(filepath.Dir(""), "skills"))
 		if err := skillRegistry.LoadAll(); err != nil {
 			log.Printf("Warning: Failed to load skills: %v", err)
 		}
-		integratedHandlers.SetAIScalping(llmClient, skillRegistry)
-		log.Printf("AI Scalping service initialized successfully")
+		if llmClient != nil {
+			integratedHandlers.SetAIScalping(llmClient, skillRegistry)
+			log.Printf("AI Scalping service initialized successfully")
+		}
 	} else {
 		log.Printf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
 	}

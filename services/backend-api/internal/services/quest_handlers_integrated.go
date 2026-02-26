@@ -48,6 +48,15 @@ const (
 	scalpingMaxCooldown              = 15 * time.Minute
 	defaultBootstrapInterval         = 10 * time.Minute
 	defaultSpotUnwindInterval        = 15 * time.Minute
+	defaultAIRuntimeWindow           = 15 * time.Minute
+	defaultAIRuntimeWarnErrorRate    = 0.25
+	defaultAIRuntimeCriticalRate     = 0.50
+	defaultAIRuntimeCircuitFailures  = 3
+	defaultAIRuntimeCircuitCooldown  = 120 * time.Second
+	aiReasonLLMTimeout               = "llm_timeout"
+	aiReasonLLMParseContract         = "llm_parse_contract"
+	aiReasonExecutionUnavailable     = "execution_unavailable"
+	aiReasonStrategyHold             = "strategy_hold"
 )
 
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
@@ -534,9 +543,41 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		return nil
 	}
 
+	if circuitRemaining := aiRuntimeCircuitRemaining(quest, time.Now().UTC()); circuitRemaining > 0 {
+		reasonCategory := aiReasonExecutionUnavailable
+		if raw, ok := quest.Checkpoint["runtime_ai_circuit_reason"].(string); ok && strings.TrimSpace(raw) != "" {
+			reasonCategory = strings.TrimSpace(raw)
+		}
+		holdDecision := &AITradingDecision{
+			Action:          "hold",
+			Confidence:      0,
+			Reasoning:       "AI runtime circuit breaker active",
+			ReasonCategory:  reasonCategory,
+			ConfidenceKnown: false,
+		}
+		quest.Checkpoint["status"] = "runtime_circuit_open"
+		quest.Checkpoint["runtime_ai_circuit_remaining_seconds"] = int(circuitRemaining.Seconds())
+		recordAIRuntimeEvent(quest, time.Now().UTC(), reasonCategory, false, h.getAIScalpingRuntimeSnapshot())
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType:    "scalping_cycle",
+			Summary:         "AI runtime circuit breaker active; entry scan skipped this cycle",
+			Confidence:      0,
+			ConfidenceKnown: false,
+			ReasonCategory:  reasonCategory,
+			Reasons: []string{
+				fmt.Sprintf("Circuit remaining: %s", circuitRemaining.Round(time.Second).String()),
+				"De-risk/protection/reconcile tasks are still active while entry decisions are paused",
+			},
+			Action: "hold",
+		})
+		h.maybeSendHoldDigest(ctx, quest, chatID, holdDecision, portfolio)
+		return nil
+	}
+
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(ctx, portfolio)
 	if err != nil {
 		log.Printf("[SCALPING] AI decision error: %v", err)
+		reasonCategory := classifyAIRuntimeReason(err.Error(), aiReasonExecutionUnavailable)
 		deriskClosed := 0
 		if strings.Contains(strings.ToLower(err.Error()), "portfolio safety blocked") {
 			closed, deriskErr := h.autoDeriskBlockedExposure(ctx, quest, chatID, userExchange, err.Error())
@@ -559,12 +600,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		if cooldown > 0 {
 			reasons = append(reasons, fmt.Sprintf("Cooldown applied: %s", cooldown.Round(time.Second).String()))
 		}
+		recordAIRuntimeEvent(quest, time.Now().UTC(), reasonCategory, false, h.getAIScalpingRuntimeSnapshot())
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
-			DecisionType: "scalping_cycle",
-			Summary:      "Scalping cycle skipped due to AI/runtime error",
-			Confidence:   0,
-			Reasons:      reasons,
-			Action:       "hold",
+			DecisionType:    "scalping_cycle",
+			Summary:         "Scalping cycle skipped due to AI/runtime error",
+			Confidence:      0,
+			ConfidenceKnown: false,
+			ReasonCategory:  reasonCategory,
+			Reasons:         reasons,
+			Action:          "hold",
 		})
 		// Return nil instead of err to prevent panic - quest continues with hold status
 		return nil
@@ -581,12 +625,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		if cooldown > 0 {
 			reasons = append(reasons, fmt.Sprintf("Cooldown applied: %s", cooldown.Round(time.Second).String()))
 		}
+		recordAIRuntimeEvent(quest, time.Now().UTC(), aiReasonLLMParseContract, false, h.getAIScalpingRuntimeSnapshot())
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
-			DecisionType: "scalping_cycle",
-			Summary:      "AI returned no trade decision",
-			Confidence:   0,
-			Reasons:      reasons,
-			Action:       "hold",
+			DecisionType:    "scalping_cycle",
+			Summary:         "AI returned no trade decision",
+			Confidence:      0,
+			ConfidenceKnown: false,
+			ReasonCategory:  aiReasonLLMParseContract,
+			Reasons:         reasons,
+			Action:          "hold",
 		})
 		return nil
 	}
@@ -605,14 +652,26 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			quest.Checkpoint["risk_unlock_error"] = unlockErr.Error()
 		}
 
-		if isRuntimeHoldReason(decision.Reasoning) {
+		runtimeHold := isRuntimeHoldReason(decision.Reasoning)
+		reasonCategory := strings.TrimSpace(decision.ReasonCategory)
+		if reasonCategory == "" {
+			if runtimeHold {
+				reasonCategory = classifyAIRuntimeReason(decision.Reasoning, aiReasonExecutionUnavailable)
+			} else {
+				reasonCategory = aiReasonStrategyHold
+			}
+		}
+
+		if runtimeHold {
 			streak, cooldown := h.recordScalpingFailure(quest, decision.Reasoning)
 			if cooldown > 0 {
 				quest.Checkpoint["runtime_hold_cooldown"] = cooldown.String()
 			}
 			quest.Checkpoint["runtime_failure_streak"] = streak
+			recordAIRuntimeEvent(quest, time.Now().UTC(), reasonCategory, false, h.getAIScalpingRuntimeSnapshot())
 		} else {
 			h.resetScalpingFailureState(quest)
+			recordAIRuntimeEvent(quest, time.Now().UTC(), reasonCategory, true, h.getAIScalpingRuntimeSnapshot())
 		}
 		log.Printf("[SCALPING] AI decided to hold: %s", decision.Reasoning)
 		quest.Checkpoint["status"] = "hold"
@@ -621,11 +680,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			reasons = append(reasons, fmt.Sprintf("Risk unlock trimmed %d position(s) by 35%%", unlockClosed))
 		}
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
-			DecisionType: "scalping_cycle",
-			Summary:      "AI held position this cycle",
-			Confidence:   decision.Confidence,
-			Reasons:      reasons,
-			Action:       "hold",
+			DecisionType:    "scalping_cycle",
+			Summary:         "AI held position this cycle",
+			Confidence:      decision.Confidence,
+			ConfidenceKnown: !runtimeHold && decision.ConfidenceKnown,
+			ReasonCategory:  reasonCategory,
+			Reasons:         reasons,
+			Action:          "hold",
 		})
 		h.maybeSendHoldDigest(ctx, quest, chatID, decision, portfolio)
 		return nil
@@ -662,16 +723,19 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 	h.recordTradeDecision(ctx, quest, decision, userExchange)
 	h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
+	recordAIRuntimeEvent(quest, time.Now().UTC(), aiReasonStrategyHold, true, h.getAIScalpingRuntimeSnapshot())
 
 	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
 		decision.Action, decision.Symbol, decision.Confidence*100)
 
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
-		DecisionType: "scalping",
-		Summary:      fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
-		Confidence:   decision.Confidence,
-		Reasons:      []string{decision.Reasoning},
-		Action:       decision.Action,
+		DecisionType:    "scalping",
+		Summary:         fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
+		Confidence:      decision.Confidence,
+		ConfidenceKnown: true,
+		ReasonCategory:  aiReasonStrategyHold,
+		Reasons:         []string{decision.Reasoning},
+		Action:          decision.Action,
 	})
 
 	return nil
@@ -1403,6 +1467,17 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 	if h.aiScalpingService != nil {
 		minConfidence, maxCapital = h.aiScalpingService.dynamicRiskThresholds(ctx)
 	}
+	runtimeHold := isRuntimeHoldReason(decision.Reasoning)
+	reasonCategory := strings.TrimSpace(decision.ReasonCategory)
+	if reasonCategory == "" {
+		if runtimeHold {
+			reasonCategory = classifyAIRuntimeReason(decision.Reasoning, aiReasonExecutionUnavailable)
+		} else {
+			reasonCategory = aiReasonStrategyHold
+		}
+	}
+	errorRate := checkpointFloat(quest.Checkpoint["runtime_ai_window_error_rate"])
+	circuitRemaining := aiRuntimeCircuitRemaining(quest, now)
 
 	reasons := []string{
 		decision.Reasoning,
@@ -1410,14 +1485,20 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		fmt.Sprintf("Risk drawdown: %.2f%%", portfolio.RiskDrawdown*100),
 		fmt.Sprintf("Current thresholds: min_confidence=%.2f, max_capital=%.2f%%", minConfidence, maxCapital),
 		fmt.Sprintf("Unlock cycles: %d", checkpointInt(quest.Checkpoint["runtime_unlock_cycles"])),
+		fmt.Sprintf("AI runtime error-rate window: %.0f%%", errorRate*100),
+	}
+	if circuitRemaining > 0 {
+		reasons = append(reasons, fmt.Sprintf("AI runtime circuit open: %s remaining", circuitRemaining.Round(time.Second).String()))
 	}
 
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
-		DecisionType: "scalping_digest",
-		Summary:      "Hold digest: waiting for qualified setup",
-		Confidence:   decision.Confidence,
-		Reasons:      reasons,
-		Action:       "hold",
+		DecisionType:    "scalping_digest",
+		Summary:         "Hold digest: waiting for qualified setup",
+		Confidence:      decision.Confidence,
+		ConfidenceKnown: !runtimeHold && decision.ConfidenceKnown,
+		ReasonCategory:  reasonCategory,
+		Reasons:         reasons,
+		Action:          "hold",
 	})
 
 	quest.Checkpoint["runtime_last_hold_digest_at"] = now.Format(time.RFC3339)
@@ -1444,6 +1525,13 @@ func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
 
 	log.Printf("[SCALPING] Found user exchange: %s for chat: %s", exchange, chatID)
 	return exchange
+}
+
+func (h *IntegratedQuestHandlers) getAIScalpingRuntimeSnapshot() map[string]interface{} {
+	if h.aiScalpingService == nil {
+		return map[string]interface{}{}
+	}
+	return h.aiScalpingService.RuntimeDiagnostics()
 }
 
 func (h *IntegratedQuestHandlers) recordTradeDecision(ctx context.Context, quest *Quest, decision *AITradingDecision, exchange string) {
@@ -1998,6 +2086,202 @@ func (h *IntegratedQuestHandlers) updateHoldStateCheckpoint(quest *Quest, held b
 	quest.Checkpoint["runtime_hold_updated_at"] = now.Format(time.RFC3339)
 }
 
+func aiRuntimeWindowDuration() time.Duration {
+	seconds := getEnvInt("NEURATRADE_AI_RUNTIME_WINDOW_SECONDS")
+	if seconds <= 0 {
+		return defaultAIRuntimeWindow
+	}
+	return time.Duration(clampQuestInt(seconds, 60, 7200)) * time.Second
+}
+
+func aiRuntimeWarnRateThreshold() float64 {
+	if value, ok := getEnvFloat("NEURATRADE_AI_RUNTIME_WARN_ERROR_RATE"); ok {
+		return clampQuestFloat(value, 0.01, 1)
+	}
+	return defaultAIRuntimeWarnErrorRate
+}
+
+func aiRuntimeCriticalRateThreshold() float64 {
+	if value, ok := getEnvFloat("NEURATRADE_AI_RUNTIME_CRITICAL_ERROR_RATE"); ok {
+		return clampQuestFloat(value, 0.01, 1)
+	}
+	return defaultAIRuntimeCriticalRate
+}
+
+func aiRuntimeCircuitFailureThreshold() int {
+	value := getEnvInt("NEURATRADE_AI_RUNTIME_CIRCUIT_FAILURES")
+	if value <= 0 {
+		value = defaultAIRuntimeCircuitFailures
+	}
+	return clampQuestInt(value, 1, 20)
+}
+
+func aiRuntimeCircuitCooldown() time.Duration {
+	seconds := getEnvInt("NEURATRADE_AI_RUNTIME_CIRCUIT_COOLDOWN_SECONDS")
+	if seconds <= 0 {
+		return defaultAIRuntimeCircuitCooldown
+	}
+	return time.Duration(clampQuestInt(seconds, 30, 3600)) * time.Second
+}
+
+func aiRuntimeCircuitRemaining(quest *Quest, now time.Time) time.Duration {
+	if quest == nil || quest.Checkpoint == nil {
+		return 0
+	}
+	raw, ok := quest.Checkpoint["runtime_ai_circuit_until"].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	until, err := time.Parse(time.RFC3339, raw)
+	if err != nil || !until.After(now) {
+		delete(quest.Checkpoint, "runtime_ai_circuit_until")
+		delete(quest.Checkpoint, "runtime_ai_circuit_reason")
+		return 0
+	}
+	return until.Sub(now)
+}
+
+func ensureAIRuntimeWindow(quest *Quest, now time.Time) {
+	if quest == nil {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	window := aiRuntimeWindowDuration()
+	raw, ok := quest.Checkpoint["runtime_ai_window_started_at"].(string)
+	if ok && strings.TrimSpace(raw) != "" {
+		if startedAt, err := time.Parse(time.RFC3339, raw); err == nil && now.Sub(startedAt) < window {
+			return
+		}
+	}
+
+	quest.Checkpoint["runtime_ai_window_started_at"] = now.UTC().Format(time.RFC3339)
+	quest.Checkpoint["runtime_ai_window_total"] = 0
+	quest.Checkpoint["runtime_ai_window_success"] = 0
+	quest.Checkpoint["runtime_ai_window_errors"] = 0
+	quest.Checkpoint["runtime_ai_window_timeouts"] = 0
+	quest.Checkpoint["runtime_ai_window_parse_fails"] = 0
+	quest.Checkpoint["runtime_ai_window_failover_attempts"] = 0
+	quest.Checkpoint["runtime_ai_window_failover_successes"] = 0
+	quest.Checkpoint["runtime_ai_window_failover_failures"] = 0
+}
+
+func applyAIScalpingRuntimeSnapshot(quest *Quest, runtime map[string]interface{}, success bool) {
+	if quest == nil || quest.Checkpoint == nil || len(runtime) == 0 {
+		return
+	}
+
+	if provider, ok := runtime["last_provider"].(string); ok {
+		quest.Checkpoint["runtime_ai_last_provider"] = provider
+	}
+	if provider, ok := runtime["last_successful_provider"].(string); ok {
+		quest.Checkpoint["runtime_ai_last_success_provider"] = provider
+	}
+	if raw, ok := runtime["last_success_at"].(string); ok {
+		quest.Checkpoint["runtime_ai_last_success_at"] = raw
+	}
+	if raw, ok := runtime["last_error"].(string); ok {
+		quest.Checkpoint["runtime_ai_last_error"] = raw
+	}
+	if raw, ok := runtime["last_error_at"].(string); ok {
+		quest.Checkpoint["runtime_ai_last_error_at"] = raw
+	}
+
+	failoverAttempted := checkpointBool(runtime["failover_attempted"])
+	failoverSucceeded := checkpointBool(runtime["failover_succeeded"])
+	if failoverAttempted {
+		quest.Checkpoint["runtime_ai_window_failover_attempts"] = checkpointInt(quest.Checkpoint["runtime_ai_window_failover_attempts"]) + 1
+		if failoverSucceeded {
+			quest.Checkpoint["runtime_ai_window_failover_successes"] = checkpointInt(quest.Checkpoint["runtime_ai_window_failover_successes"]) + 1
+		} else if !success {
+			quest.Checkpoint["runtime_ai_window_failover_failures"] = checkpointInt(quest.Checkpoint["runtime_ai_window_failover_failures"]) + 1
+		}
+	}
+
+	if attempted, ok := runtime["failover_providers"].([]string); ok {
+		quest.Checkpoint["runtime_ai_failover_providers"] = append([]string(nil), attempted...)
+	}
+	if failed, ok := runtime["failed_providers"].([]string); ok {
+		quest.Checkpoint["runtime_ai_failed_providers"] = append([]string(nil), failed...)
+	}
+}
+
+func recordAIRuntimeEvent(
+	quest *Quest,
+	now time.Time,
+	reasonCategory string,
+	success bool,
+	runtimeSnapshot map[string]interface{},
+) {
+	if quest == nil {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	ensureAIRuntimeWindow(quest, now)
+
+	quest.Checkpoint["runtime_ai_window_total"] = checkpointInt(quest.Checkpoint["runtime_ai_window_total"]) + 1
+	if success {
+		quest.Checkpoint["runtime_ai_window_success"] = checkpointInt(quest.Checkpoint["runtime_ai_window_success"]) + 1
+		quest.Checkpoint["runtime_ai_consecutive_failures"] = 0
+		delete(quest.Checkpoint, "runtime_ai_circuit_until")
+		delete(quest.Checkpoint, "runtime_ai_circuit_reason")
+	} else {
+		quest.Checkpoint["runtime_ai_window_errors"] = checkpointInt(quest.Checkpoint["runtime_ai_window_errors"]) + 1
+		if reasonCategory == aiReasonLLMTimeout {
+			quest.Checkpoint["runtime_ai_window_timeouts"] = checkpointInt(quest.Checkpoint["runtime_ai_window_timeouts"]) + 1
+		}
+		if reasonCategory == aiReasonLLMParseContract {
+			quest.Checkpoint["runtime_ai_window_parse_fails"] = checkpointInt(quest.Checkpoint["runtime_ai_window_parse_fails"]) + 1
+		}
+
+		consecutive := checkpointInt(quest.Checkpoint["runtime_ai_consecutive_failures"]) + 1
+		quest.Checkpoint["runtime_ai_consecutive_failures"] = consecutive
+		quest.Checkpoint["runtime_ai_last_failure_at"] = now.UTC().Format(time.RFC3339)
+		quest.Checkpoint["runtime_ai_last_failure_reason"] = reasonCategory
+		if consecutive >= aiRuntimeCircuitFailureThreshold() {
+			cooldown := aiRuntimeCircuitCooldown()
+			quest.Checkpoint["runtime_ai_circuit_until"] = now.Add(cooldown).UTC().Format(time.RFC3339)
+			quest.Checkpoint["runtime_ai_circuit_reason"] = reasonCategory
+			quest.Checkpoint["runtime_ai_circuit_trips"] = checkpointInt(quest.Checkpoint["runtime_ai_circuit_trips"]) + 1
+		}
+	}
+
+	quest.Checkpoint["runtime_ai_last_category"] = reasonCategory
+	quest.Checkpoint["runtime_ai_last_event_at"] = now.UTC().Format(time.RFC3339)
+	applyAIScalpingRuntimeSnapshot(quest, runtimeSnapshot, success)
+
+	total := checkpointInt(quest.Checkpoint["runtime_ai_window_total"])
+	errors := checkpointInt(quest.Checkpoint["runtime_ai_window_errors"])
+	errorRate := 0.0
+	if total > 0 {
+		errorRate = float64(errors) / float64(total)
+	}
+	quest.Checkpoint["runtime_ai_window_error_rate"] = errorRate
+}
+
+func clampQuestInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func clampQuestFloat(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
 func (h *IntegratedQuestHandlers) maybeApplyRiskUnlock(
 	ctx context.Context,
 	quest *Quest,
@@ -2285,6 +2569,30 @@ func checkpointInt(v interface{}) int {
 	return 0
 }
 
+func checkpointFloat(v interface{}) float64 {
+	switch value := v.(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int32:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		if parsed, err := value.Float64(); err == nil {
+			return parsed
+		}
+	case string:
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
 func checkpointBool(v interface{}) bool {
 	switch value := v.(type) {
 	case bool:
@@ -2313,6 +2621,34 @@ func isRuntimeHoldReason(reason string) bool {
 		strings.Contains(lower, "failed to parse ai decision") ||
 		strings.Contains(lower, "llm completion failed") ||
 		strings.Contains(lower, "runtime error")
+}
+
+func classifyAIRuntimeReason(reason string, fallback string) string {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(lower, "context deadline exceeded"),
+		strings.Contains(lower, "timeout"),
+		strings.Contains(lower, "deadline exceeded"):
+		return aiReasonLLMTimeout
+	case strings.Contains(lower, "model response parse fallback"),
+		strings.Contains(lower, "failed to parse ai decision"),
+		strings.Contains(lower, "invalid character"),
+		strings.Contains(lower, "json"):
+		return aiReasonLLMParseContract
+	case strings.Contains(lower, "execution unavailable"),
+		strings.Contains(lower, "request failed"),
+		strings.Contains(lower, "futures-only mode prevented spot fallback"),
+		strings.Contains(lower, "failed to get ticker"),
+		strings.Contains(lower, "symbol cooldown active"),
+		strings.Contains(lower, "runtime error"):
+		return aiReasonExecutionUnavailable
+	default:
+		fallback = strings.TrimSpace(fallback)
+		if fallback != "" {
+			return fallback
+		}
+		return aiReasonExecutionUnavailable
+	}
 }
 
 func shouldSendScalpingDecisionNotification(notif AIReasoningNotification) bool {

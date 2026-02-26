@@ -700,6 +700,75 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		})
 	}
 
+	aiRuntimeImpact := "optional"
+	aiRuntimeOptional := true
+	if autonomousEnabled {
+		aiRuntimeImpact = "core"
+		aiRuntimeOptional = false
+	}
+	if h.questEngine == nil {
+		status := "warning"
+		message := "quest runtime diagnostics unavailable"
+		if aiRuntimeOptional {
+			status = "warning"
+		}
+		checks = append(checks, gin.H{
+			"name":     "ai-runtime",
+			"status":   status,
+			"impact":   aiRuntimeImpact,
+			"optional": aiRuntimeOptional,
+			"message":  message,
+		})
+		if !aiRuntimeOptional && overall != "critical" {
+			overall = "warning"
+		}
+	} else {
+		diagnostics := h.questEngine.GetChatRuntimeDiagnostics(chatID)
+		rawRuntime, _ := diagnostics["ai_runtime"].(map[string]interface{})
+		runtimeStatus := "healthy"
+		if statusRaw, ok := rawRuntime["status"].(string); ok && strings.TrimSpace(statusRaw) != "" {
+			runtimeStatus = strings.ToLower(strings.TrimSpace(statusRaw))
+		}
+
+		message := "AI runtime healthy"
+		switch runtimeStatus {
+		case "critical":
+			message = "AI runtime degraded: high timeout/parse failure pressure"
+		case "warning":
+			message = "AI runtime warning: elevated error rate"
+		}
+		details := gin.H{}
+		if errorRate, ok := rawRuntime["error_rate"].(float64); ok {
+			details["error_rate"] = fmt.Sprintf("%.2f", errorRate)
+		}
+		if timeouts, ok := rawRuntime["window_timeouts"].(int); ok {
+			details["timeouts"] = fmt.Sprintf("%d", timeouts)
+		}
+		if parseFails, ok := rawRuntime["window_parse_fails"].(int); ok {
+			details["parse_fails"] = fmt.Sprintf("%d", parseFails)
+		}
+		if circuitActive, ok := rawRuntime["circuit_active"].(bool); ok {
+			details["circuit_active"] = fmt.Sprintf("%t", circuitActive)
+		}
+
+		checks = append(checks, gin.H{
+			"name":     "ai-runtime",
+			"status":   runtimeStatus,
+			"impact":   aiRuntimeImpact,
+			"optional": aiRuntimeOptional,
+			"message":  message,
+			"details":  details,
+		})
+
+		if !aiRuntimeOptional {
+			if runtimeStatus == "critical" {
+				overall = "critical"
+			} else if runtimeStatus == "warning" && overall != "critical" {
+				overall = "warning"
+			}
+		}
+	}
+
 	if err := h.db.QueryRow(c.Request.Context(), `
 		SELECT COALESCE(MAX(selected_ai_model), '')
 		FROM users

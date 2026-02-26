@@ -227,25 +227,40 @@ func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int
 
 // formatAIReasoningMessage formats an AI reasoning notification message
 func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNotification) string {
-	confidencePercent := int(reasoning.Confidence * 100)
-
-	var confidenceEmoji string
-	switch {
-	case reasoning.Confidence >= 0.8:
-		confidenceEmoji = "🟢"
-	case reasoning.Confidence >= 0.6:
-		confidenceEmoji = "🟡"
-	default:
-		confidenceEmoji = "🔴"
+	confidenceKnown := reasoning.ConfidenceKnown
+	if !confidenceKnown && strings.TrimSpace(reasoning.ReasonCategory) == "" {
+		// Backward-compatible fallback for legacy callers.
+		confidenceKnown = true
 	}
 
 	lines := []string{
 		"🤖 **AI Trading Decision**",
 		"",
 		fmt.Sprintf("**Type:** %s", reasoning.DecisionType),
-		fmt.Sprintf("**Confidence:** %s %d%%", confidenceEmoji, confidencePercent),
+	}
+
+	if confidenceKnown {
+		confidencePercent := int(reasoning.Confidence * 100)
+		var confidenceEmoji string
+		switch {
+		case reasoning.Confidence >= 0.8:
+			confidenceEmoji = "🟢"
+		case reasoning.Confidence >= 0.6:
+			confidenceEmoji = "🟡"
+		default:
+			confidenceEmoji = "🔴"
+		}
+		lines = append(lines, fmt.Sprintf("**Confidence:** %s %d%%", confidenceEmoji, confidencePercent))
+	} else {
+		lines = append(lines, "**Confidence:** ⚪ N/A (runtime-degraded)")
+	}
+
+	lines = append(lines,
 		"",
 		fmt.Sprintf("**Summary:** %s", reasoning.Summary),
+	)
+	if category := strings.TrimSpace(reasoning.ReasonCategory); category != "" {
+		lines = append(lines, fmt.Sprintf("**Reason Category:** %s", category))
 	}
 
 	if len(reasoning.Reasons) > 0 {
@@ -270,8 +285,12 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {
 	action := strings.ToLower(strings.TrimSpace(reasoning.Action))
 	summary := strings.ToLower(strings.TrimSpace(reasoning.Summary))
+	category := strings.ToLower(strings.TrimSpace(reasoning.ReasonCategory))
 
-	if action == "hold" && reasoning.Confidence <= 0.45 {
+	if action == "hold" && reasoning.ConfidenceKnown && reasoning.Confidence <= 0.45 {
+		return true
+	}
+	if category == "llm_timeout" || category == "llm_parse_contract" || category == "execution_unavailable" {
 		return true
 	}
 
