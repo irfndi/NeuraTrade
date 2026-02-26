@@ -188,12 +188,13 @@ func run() error {
 		// Don't fail startup, but log warning - exchanges may be created dynamically
 	}
 
-	if err := collectorService.Start(); err != nil {
-		logger.WithError(err).Warn("Failed to start collector service - continuing without market data collection (AI scalping will use fallback data)")
+	collectorStartErr := collectorService.Start()
+	if collectorStartErr != nil {
+		logger.WithError(collectorStartErr).Warn("Failed to start collector service - continuing without market data collection (AI scalping will use fallback data)")
 		// Don't fail startup - AI scalping can work with direct exchange API calls
 		// collectorService will be nil-safe for other operations
 	}
-	if err == nil {
+	if collectorStartErr == nil {
 		// Only wait for data if collector started successfully
 		defer collectorService.Stop()
 

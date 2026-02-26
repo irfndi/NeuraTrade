@@ -725,6 +725,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
 
 			telegramInternal := telegram.Group("/internal")
+			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
 			{
 				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
 				telegramInternal.GET("/quests/diagnostics", autonomousHandler.GetQuestDiagnostics)
@@ -810,11 +811,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		// AI model routes
 		ai := v1.Group("/ai")
 		{
-			// Public endpoints for Telegram bot
+			// Public read/routing endpoints used by external clients.
 			ai.GET("/models", aiHandler.GetModels)
 			ai.POST("/route", aiHandler.RouteModel)
-			ai.POST("/select/:userId", aiHandler.SelectModel)
-			ai.GET("/status/:userId", aiHandler.GetModelStatus)
+
+			// User-specific model operations require authentication.
+			aiProtected := ai.Group("/")
+			aiProtected.Use(authMiddleware.RequireAuth())
+			{
+				aiProtected.POST("/select/:userId", aiHandler.SelectModel)
+				aiProtected.GET("/status/:userId", aiHandler.GetModelStatus)
+			}
 		}
 
 		// Exchange management

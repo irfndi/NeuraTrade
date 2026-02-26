@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -723,4 +725,84 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 	// Verify routes were still registered
 	routes := router.Routes()
 	assert.Greater(t, len(routes), 0, "Routes should be registered even without telegram config")
+}
+
+func TestSetupRoutes_AIUserRoutesRequireAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
+	oldTelegramToken, telegramTokenExists := os.LookupEnv("TELEGRAM_BOT_TOKEN")
+	oldTelegramChat, telegramChatExists := os.LookupEnv("TELEGRAM_CHAT_ID")
+	defer func() {
+		restoreEnv(t, "ADMIN_API_KEY", oldAdminKey, adminKeyExists)
+		restoreEnv(t, "TELEGRAM_BOT_TOKEN", oldTelegramToken, telegramTokenExists)
+		restoreEnv(t, "TELEGRAM_CHAT_ID", oldTelegramChat, telegramChatExists)
+	}()
+
+	mustSetEnv(t, "ADMIN_API_KEY", "test-admin-key-that-is-at-least-32-chars")
+	mustSetEnv(t, "TELEGRAM_BOT_TOKEN", "test-token")
+	mustSetEnv(t, "TELEGRAM_CHAT_ID", "test-chat-id")
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
+
+	mockTelegramConfig := &config.TelegramConfig{BotToken: "test-token"}
+
+	router := gin.New()
+	mockDB := setupMockDB(t)
+	mockRedis := &database.RedisClient{
+		Client: redis.NewClient(&redis.Options{
+			Addr: "localhost:6379",
+		}),
+	}
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ai/status/user-123", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Authorization header required")
+}
+
+func TestSetupRoutes_TelegramInternalRequiresAdminAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
+	oldTelegramToken, telegramTokenExists := os.LookupEnv("TELEGRAM_BOT_TOKEN")
+	oldTelegramChat, telegramChatExists := os.LookupEnv("TELEGRAM_CHAT_ID")
+	defer func() {
+		restoreEnv(t, "ADMIN_API_KEY", oldAdminKey, adminKeyExists)
+		restoreEnv(t, "TELEGRAM_BOT_TOKEN", oldTelegramToken, telegramTokenExists)
+		restoreEnv(t, "TELEGRAM_CHAT_ID", oldTelegramChat, telegramChatExists)
+	}()
+
+	mustSetEnv(t, "ADMIN_API_KEY", "test-admin-key-that-is-at-least-32-chars")
+	mustSetEnv(t, "TELEGRAM_BOT_TOKEN", "test-token")
+	mustSetEnv(t, "TELEGRAM_CHAT_ID", "test-chat-id")
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
+
+	mockTelegramConfig := &config.TelegramConfig{BotToken: "test-token"}
+
+	router := gin.New()
+	mockDB := setupMockDB(t)
+	mockRedis := &database.RedisClient{
+		Client: redis.NewClient(&redis.Options{
+			Addr: "localhost:6379",
+		}),
+	}
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/telegram/internal/quests", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ADMIN_AUTH_FAILED")
 }
