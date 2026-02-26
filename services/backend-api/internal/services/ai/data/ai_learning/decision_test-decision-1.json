@@ -1,0 +1,34 @@
+{
+  "id": "test-decision-1",
+  "timestamp": "2026-02-26T15:05:07.832989+07:00",
+  "strategy": "scalping",
+  "market_state": {
+    "symbol": "BTC/USDT",
+    "exchange": "",
+    "price": 45000,
+    "bid": 0,
+    "ask": 0,
+    "spread": 0,
+    "volume_24h": 0,
+    "change_24h": 0,
+    "volatility": 0,
+    "order_book": {
+      "bids": null,
+      "asks": null,
+      "bid_depth": 0,
+      "ask_depth": 0,
+      "imbalance": 0
+    },
+    "timestamp": "2026-02-26T15:05:07.832989+07:00"
+  },
+  "decision": {
+    "id": "test-decision-1",
+    "action": "buy",
+    "symbol": "BTC/USDT",
+    "confidence": 0.85
+  },
+  "reasoning": "Test reasoning",
+  "confidence": 0.85,
+  "model_used": "",
+  "tokens_used": 0
+}

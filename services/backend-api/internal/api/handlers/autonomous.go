@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,16 +18,37 @@ import (
 
 // AutonomousHandler handles autonomous mode endpoints
 type AutonomousHandler struct {
-	questEngine *services.QuestEngine
-	readiness   *ReadinessChecker
+	questEngine         *services.QuestEngine
+	readiness           *ReadinessChecker
+	portfolioSafety     *services.PortfolioSafetyService
+	configuredExchanges []string
+	reconciler          *services.ExchangePositionReconciler
+	lifecycleStore      *services.TradingLifecycleStore
 }
 
 // NewAutonomousHandler creates a new autonomous handler
-func NewAutonomousHandler(questEngine *services.QuestEngine) *AutonomousHandler {
+func NewAutonomousHandler(questEngine *services.QuestEngine, portfolioSafety *services.PortfolioSafetyService, exchanges []string) *AutonomousHandler {
 	return &AutonomousHandler{
-		questEngine: questEngine,
-		readiness:   NewReadinessChecker(),
+		questEngine:         questEngine,
+		readiness:           NewReadinessChecker(),
+		portfolioSafety:     portfolioSafety,
+		configuredExchanges: exchanges,
 	}
+}
+
+// NewAutonomousHandlerWithReconciler creates a new autonomous handler with reconciler
+func NewAutonomousHandlerWithReconciler(questEngine *services.QuestEngine, portfolioSafety *services.PortfolioSafetyService, exchanges []string, reconciler *services.ExchangePositionReconciler) *AutonomousHandler {
+	return &AutonomousHandler{
+		questEngine:         questEngine,
+		readiness:           NewReadinessChecker(),
+		portfolioSafety:     portfolioSafety,
+		configuredExchanges: exchanges,
+		reconciler:          reconciler,
+	}
+}
+
+func (h *AutonomousHandler) SetLifecycleStore(store *services.TradingLifecycleStore) {
+	h.lifecycleStore = store
 }
 
 // BeginRequest represents the request body for /begin
@@ -73,11 +96,26 @@ type PortfolioPosition struct {
 
 // PortfolioResponse represents the response for /portfolio
 type PortfolioResponse struct {
-	TotalEquity      string              `json:"total_equity"`
-	AvailableBalance string              `json:"available_balance,omitempty"`
-	Exposure         string              `json:"exposure,omitempty"`
-	Positions        []PortfolioPosition `json:"positions"`
-	UpdatedAt        string              `json:"updated_at,omitempty"`
+	TotalEquity      string                `json:"total_equity"`
+	AvailableBalance string                `json:"available_balance,omitempty"`
+	Exposure         string                `json:"exposure,omitempty"`
+	ExposurePct      string                `json:"exposure_pct,omitempty"`
+	UnrealizedPnL    string                `json:"unrealized_pnl,omitempty"`
+	OpenOrders       int                   `json:"open_orders,omitempty"`
+	Positions        []PortfolioPosition   `json:"positions"`
+	SafetyStatus     *SafetyStatusResponse `json:"safety_status,omitempty"`
+	Note             string                `json:"note,omitempty"`
+	UpdatedAt        string                `json:"updated_at,omitempty"`
+}
+
+// SafetyStatusResponse represents safety status in portfolio response
+type SafetyStatusResponse struct {
+	IsSafe           bool     `json:"is_safe"`
+	TradingAllowed   bool     `json:"trading_allowed"`
+	MaxPositionSize  string   `json:"max_position_size"`
+	CurrentDrawdown  string   `json:"current_drawdown"`
+	PositionThrottle string   `json:"position_throttle"`
+	Warnings         []string `json:"warnings,omitempty"`
 }
 
 // OperatorLogEntry represents a log entry
@@ -253,6 +291,68 @@ func (h *AutonomousHandler) GetQuests(c *gin.Context) {
 	})
 }
 
+// GetQuestDiagnostics returns detailed quest engine diagnostics for debugging
+func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
+	chatID := c.Query("chat_id")
+	if chatID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
+	}
+
+	// Get quest progress
+	progress, err := h.questEngine.GetQuestProgress(chatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get quest progress: " + err.Error()})
+		return
+	}
+
+	// Get autonomous state
+	state, err := h.questEngine.GetAutonomousState(chatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get autonomous state: " + err.Error()})
+		return
+	}
+
+	// Get portfolio safety
+	var safetyStatus interface{}
+	if h.portfolioSafety != nil {
+		snapshot, err := h.portfolioSafety.GetPortfolioSnapshot(c.Request.Context(), chatID, h.configuredExchanges)
+		if err == nil {
+			safety, err := h.portfolioSafety.CheckSafety(c.Request.Context(), chatID, snapshot)
+			if err == nil {
+				safetyStatus = gin.H{
+					"is_safe":           safety.IsSafe,
+					"trading_allowed":   safety.TradingAllowed,
+					"max_position_size": safety.MaxPositionSize,
+					"current_drawdown":  safety.CurrentDrawdown,
+					"position_throttle": safety.PositionThrottle,
+					"warnings":          safety.Warnings,
+					"total_equity":      snapshot.TotalEquity.String(),
+					"available_balance": snapshot.AvailableFunds.String(),
+					"open_positions":    snapshot.OpenPositions,
+					"unrealized_pnl":    snapshot.UnrealizedPnL.String(),
+					"exposure_pct":      snapshot.ExposurePct,
+				}
+			}
+		}
+	}
+
+	response := gin.H{
+		"chat_id":        chatID,
+		"autonomous":     state.IsActive,
+		"started_at":     state.StartedAt.Format(time.RFC3339),
+		"active_quests":  state.ActiveQuests,
+		"quest_progress": progress,
+		"timestamp":      time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if safetyStatus != nil {
+		response["safety_status"] = safetyStatus
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 // GetPortfolio returns portfolio snapshot for a user
 func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 	chatID := c.Query("chat_id")
@@ -261,15 +361,87 @@ func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual portfolio retrieval from exchange connectors
-	// For now, return placeholder data
-	c.JSON(http.StatusOK, PortfolioResponse{
-		TotalEquity:      "0.00",
-		AvailableBalance: "0.00",
-		Exposure:         "0%",
-		Positions:        []PortfolioPosition{},
-		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
-	})
+	if h.portfolioSafety == nil {
+		response := PortfolioResponse{
+			TotalEquity:      "0.00",
+			AvailableBalance: "0.00",
+			Exposure:         "0.00",
+			Positions:        []PortfolioPosition{},
+			UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		}
+		h.enrichPortfolioWithLifecycle(c.Request.Context(), chatID, &response)
+		if len(response.Positions) > 0 || response.OpenOrders > 0 {
+			response.Note = "Lifecycle-backed snapshot (portfolio safety snapshot unavailable)"
+		}
+		c.JSON(http.StatusOK, response)
+		return
+	}
+
+	ctx := c.Request.Context()
+	snapshot, err := h.portfolioSafety.GetPortfolioSnapshot(ctx, chatID, h.configuredExchanges)
+	if err != nil {
+		response := PortfolioResponse{
+			TotalEquity:      "0.00",
+			AvailableBalance: "0.00",
+			Exposure:         "0.00",
+			Positions:        []PortfolioPosition{},
+			UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		}
+		h.enrichPortfolioWithLifecycle(ctx, chatID, &response)
+		if len(response.Positions) > 0 || response.OpenOrders > 0 {
+			response.Note = "Lifecycle-backed snapshot (exchange portfolio snapshot unavailable)"
+			c.JSON(http.StatusOK, response)
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get portfolio snapshot: " + err.Error()})
+		return
+	}
+
+	safety, err := h.portfolioSafety.CheckSafety(ctx, chatID, snapshot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check safety: " + err.Error()})
+		return
+	}
+
+	positions := make([]PortfolioPosition, 0, len(snapshot.Positions))
+	for _, p := range snapshot.Positions {
+		positions = append(positions, PortfolioPosition{
+			Symbol:        p.Symbol,
+			Side:          p.Side,
+			Size:          p.Size,
+			EntryPrice:    p.EntryPrice,
+			MarkPrice:     p.MarkPrice,
+			UnrealizedPnL: p.UnrealizedPnL,
+		})
+	}
+
+	response := PortfolioResponse{
+		TotalEquity:      snapshot.TotalEquity.StringFixed(2),
+		AvailableBalance: snapshot.AvailableFunds.StringFixed(2),
+		Exposure:         snapshot.TotalExposure.StringFixed(2),
+		ExposurePct:      fmt.Sprintf("%.2f%%", snapshot.ExposurePct*100),
+		UnrealizedPnL:    snapshot.UnrealizedPnL.StringFixed(2),
+		Positions:        positions,
+		UpdatedAt:        snapshot.CalculatedAt.Format(time.RFC3339),
+	}
+
+	if safety != nil {
+		response.SafetyStatus = &SafetyStatusResponse{
+			IsSafe:           safety.IsSafe,
+			TradingAllowed:   safety.TradingAllowed,
+			MaxPositionSize:  safety.MaxPositionSize.StringFixed(2),
+			CurrentDrawdown:  fmt.Sprintf("%.2f%%", safety.CurrentDrawdown*100),
+			PositionThrottle: fmt.Sprintf("%.0f%%", safety.PositionThrottle*100),
+			Warnings:         safety.Warnings,
+		}
+	}
+
+	h.enrichPortfolioWithLifecycle(ctx, chatID, &response)
+	if len(response.Positions) == 0 && response.OpenOrders > 0 && strings.TrimSpace(response.Note) == "" {
+		response.Note = "No open positions yet; open orders are pending fill"
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // GetLogs returns recent operator logs for a user
@@ -329,6 +501,98 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 		}
 	}
 
+	if h.portfolioSafety != nil {
+		ctx := c.Request.Context()
+		diagnostics, err := h.portfolioSafety.GetSafetyDiagnostics(ctx, chatID, h.configuredExchanges)
+		if err == nil {
+			if safetyMap, ok := diagnostics["safety"].(map[string]interface{}); ok {
+				isSafe, _ := safetyMap["is_safe"].(bool)
+				tradingAllowed, _ := safetyMap["trading_allowed"].(bool)
+
+				status := "healthy"
+				if !tradingAllowed {
+					status = "critical"
+					if overallStatus != "critical" {
+						overallStatus = "critical"
+					}
+				} else if !isSafe {
+					status = "warning"
+					if overallStatus == "healthy" {
+						overallStatus = "warning"
+					}
+				}
+
+				check := DoctorCheck{
+					Name:    "portfolio_safety",
+					Status:  status,
+					Message: fmt.Sprintf("Safe: %v, Trading: %v", isSafe, tradingAllowed),
+					Details: map[string]string{
+						"max_position_size": fmt.Sprintf("%v", safetyMap["max_position_size"]),
+						"current_drawdown":  fmt.Sprintf("%v", safetyMap["current_drawdown"]),
+						"position_throttle": fmt.Sprintf("%v", safetyMap["position_throttle"]),
+					},
+				}
+
+				if reasons, ok := safetyMap["reasons"].([]string); ok && len(reasons) > 0 {
+					check.Details["blocked_reasons"] = fmt.Sprintf("%v", reasons)
+				}
+
+				checks = append(checks, check)
+			}
+
+			if portfolioMap, ok := diagnostics["portfolio"].(map[string]interface{}); ok {
+				check := DoctorCheck{
+					Name:    "portfolio_status",
+					Status:  "healthy",
+					Message: fmt.Sprintf("Equity: %v, Positions: %v", portfolioMap["total_equity"], portfolioMap["open_positions"]),
+					Details: map[string]string{
+						"total_equity":    fmt.Sprintf("%v", portfolioMap["total_equity"]),
+						"available_funds": fmt.Sprintf("%v", portfolioMap["available_funds"]),
+						"exposure_pct":    fmt.Sprintf("%v", portfolioMap["exposure_pct"]),
+						"unrealized_pnl":  fmt.Sprintf("%v", portfolioMap["unrealized_pnl"]),
+					},
+				}
+				checks = append(checks, check)
+			}
+		}
+	}
+
+	// Run reconciliation check if reconciler is available
+	if h.reconciler != nil {
+		ctx := c.Request.Context()
+		results, err := h.reconciler.ReconcileAll(ctx, services.ReconciliationDoctor, chatID)
+		if err == nil {
+			for _, result := range results {
+				status := "healthy"
+				message := h.reconciler.GetReconciliationSummary(&result)
+
+				if result.DriftDetected {
+					status = "warning"
+					if overallStatus == "healthy" {
+						overallStatus = "warning"
+					}
+				} else if result.Status == services.ReconciliationFailed {
+					status = "critical"
+					overallStatus = "critical"
+				}
+
+				check := DoctorCheck{
+					Name:    fmt.Sprintf("reconciliation_%s", result.Exchange),
+					Status:  status,
+					Message: message,
+					Details: map[string]string{
+						"orders_matched":    fmt.Sprintf("%d", result.OrdersMatched),
+						"orders_mismatched": fmt.Sprintf("%d", result.OrdersMismatched),
+						"orders_orphaned":   fmt.Sprintf("%d", result.OrdersOrphaned),
+						"positions_matched": fmt.Sprintf("%d", result.PositionsMatched),
+						"drift_detected":    fmt.Sprintf("%v", result.DriftDetected),
+					},
+				}
+				checks = append(checks, check)
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, DoctorResponse{
 		OverallStatus: overallStatus,
 		Summary:       readinessResult.Summary,
@@ -346,17 +610,11 @@ func (h *AutonomousHandler) GetPerformanceSummary(c *gin.Context) {
 	}
 
 	timeframe := c.DefaultQuery("timeframe", "24h")
-
-	// TODO: Implement actual performance calculation
-	c.JSON(http.StatusOK, PerformanceSummaryResponse{
-		Timeframe: timeframe,
-		PnL:       "0.00",
-		WinRate:   "N/A",
-		Sharpe:    "N/A",
-		Drawdown:  "0%",
-		Trades:    0,
-		Note:      "No trading activity in this period",
-	})
+	if summary, ok := h.buildLifecyclePerformanceSummary(c.Request.Context(), chatID, timeframe); ok {
+		c.JSON(http.StatusOK, summary)
+		return
+	}
+	c.JSON(http.StatusOK, h.buildRuntimePerformanceSummary(timeframe))
 }
 
 // GetPerformanceBreakdown returns detailed performance breakdown
@@ -368,20 +626,23 @@ func (h *AutonomousHandler) GetPerformanceBreakdown(c *gin.Context) {
 	}
 
 	timeframe := c.DefaultQuery("timeframe", "24h")
-
-	// TODO: Implement actual performance breakdown
+	overall, ok := h.buildLifecyclePerformanceSummary(c.Request.Context(), chatID, timeframe)
+	if !ok {
+		overall = h.buildRuntimePerformanceSummary(timeframe)
+	}
 	c.JSON(http.StatusOK, PerformanceBreakdownResponse{
-		Timeframe: timeframe,
-		Overall: PerformanceSummaryResponse{
-			Timeframe: timeframe,
-			PnL:       "0.00",
-			WinRate:   "N/A",
-			Sharpe:    "N/A",
-			Drawdown:  "0%",
-			Trades:    0,
-			Note:      "No trading activity in this period",
+		Timeframe: overall.Timeframe,
+		Overall:   overall,
+		Strategies: []StrategyPerformance{
+			{
+				Strategy: "scalping",
+				PnL:      overall.PnL,
+				WinRate:  overall.WinRate,
+				Trades:   overall.Trades,
+				Sharpe:   overall.Sharpe,
+				Drawdown: overall.Drawdown,
+			},
 		},
-		Strategies: []StrategyPerformance{},
 	})
 }
 
@@ -520,6 +781,149 @@ func (h *AutonomousHandler) GetWallets(c *gin.Context) {
 
 func generateRequestID() string {
 	return uuid.New().String()[:8]
+}
+
+func intFromMetric(v interface{}) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func floatFromMetric(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, chatID string, response *PortfolioResponse) {
+	if h.lifecycleStore == nil || response == nil {
+		return
+	}
+
+	openOrders, err := h.lifecycleStore.CountOpenOrders(ctx, chatID, "")
+	if err == nil {
+		response.OpenOrders = openOrders
+	} else {
+		log.Printf("Failed to count open orders for chat %s: %v", chatID, err)
+	}
+
+	if len(response.Positions) > 0 {
+		return
+	}
+
+	managed, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, "", 25)
+	if err != nil {
+		log.Printf("Failed to list managed open positions for chat %s: %v", chatID, err)
+		return
+	}
+	if len(managed) == 0 {
+		return
+	}
+
+	positions := make([]PortfolioPosition, 0, len(managed))
+	for _, p := range managed {
+		positions = append(positions, PortfolioPosition{
+			Symbol:        p.Symbol,
+			Side:          p.Side,
+			Size:          p.Size.String(),
+			EntryPrice:    p.EntryPrice.String(),
+			MarkPrice:     p.LastPrice.String(),
+			UnrealizedPnL: p.UnrealizedPnL.String(),
+		})
+	}
+	response.Positions = positions
+	if strings.TrimSpace(response.Note) == "" {
+		response.Note = "Open positions sourced from lifecycle store"
+	}
+}
+
+func normalizePerformanceWindow(raw string) (string, time.Duration) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "24h", "1d":
+		return "24h", 24 * time.Hour
+	case "7d", "1w":
+		return "7d", 7 * 24 * time.Hour
+	case "30d", "1m":
+		return "30d", 30 * 24 * time.Hour
+	case "90d":
+		return "90d", 90 * 24 * time.Hour
+	case "180d", "6m":
+		return "180d", 180 * 24 * time.Hour
+	default:
+		return "24h", 24 * time.Hour
+	}
+}
+
+func (h *AutonomousHandler) buildRuntimePerformanceSummary(timeframe string) PerformanceSummaryResponse {
+	window, _ := normalizePerformanceWindow(timeframe)
+	perf := services.GetScalpingPerformance().GetPerformance()
+	trades := intFromMetric(perf["total_trades"])
+	winRate := floatFromMetric(perf["win_rate"]) * 100
+	pnl := fmt.Sprintf("%v", perf["total_pnl"])
+
+	note := "Live runtime scalping metrics"
+	if trades == 0 {
+		note = "No scalping trades recorded in runtime yet"
+	}
+
+	return PerformanceSummaryResponse{
+		Timeframe: window,
+		PnL:       pnl,
+		WinRate:   fmt.Sprintf("%.1f%%", winRate),
+		Sharpe:    "N/A",
+		Drawdown:  "N/A",
+		Trades:    trades,
+		Note:      note,
+	}
+}
+
+func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context, chatID, timeframe string) (PerformanceSummaryResponse, bool) {
+	if h.lifecycleStore == nil {
+		return PerformanceSummaryResponse{}, false
+	}
+	window, duration := normalizePerformanceWindow(timeframe)
+	since := time.Now().UTC().Add(-duration)
+
+	perf, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, "", since)
+	if err != nil {
+		log.Printf("Failed lifecycle performance query for chat %s: %v", chatID, err)
+		return PerformanceSummaryResponse{}, false
+	}
+	if perf.Trades == 0 {
+		return PerformanceSummaryResponse{}, false
+	}
+
+	winRate := 0.0
+	if perf.Trades > 0 {
+		winRate = (float64(perf.Wins) / float64(perf.Trades)) * 100
+	}
+	return PerformanceSummaryResponse{
+		Timeframe:  window,
+		PnL:        perf.RealizedPnL.String(),
+		WinRate:    fmt.Sprintf("%.1f%%", winRate),
+		Sharpe:     "N/A",
+		Drawdown:   "N/A",
+		Trades:     perf.Trades,
+		BestTrade:  perf.BestTrade.String(),
+		WorstTrade: perf.WorstTrade.String(),
+		Note:       "Exchange-reconciled realized PnL (lifecycle journal)",
+	}, true
 }
 
 // ReadinessChecker checks system readiness for autonomous mode

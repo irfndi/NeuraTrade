@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-15 09:50 Asia/Jakarta
-**Commit:** d4ec47c8
+**Generated:** 2026-02-25 16:44 WIB
+**Commit:** 9b7b7ea2
 **Branch:** development
 
 ## OVERVIEW
@@ -18,7 +18,7 @@ NeuraTrade/
 ├── protos/               # Shared protobuf definitions
 ├── docs/                 # Plans and legacy docs
 ├── Makefile              # Canonical dev/test/build entrypoint
-└── docker-compose.yaml   # Local/prod orchestration
+└── cmd/neuratrade-cli/   # Native gateway CLI orchestration
 ```
 
 ## WHERE TO LOOK
@@ -84,9 +84,16 @@ make dev-down
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 214 total | 31 open | 4 in progress | 7 blocked | 179 closed | 24 ready
+**Stats:** 248 total | 51 open | 1 in progress | 14 blocked | 196 closed | 37 ready
 
+- ✓ `neura-iyw6`: Refactor notification.go into modular files (PR #205)
 ### Recently Completed (✓)
+- ✓ `neura-uj9s`: Enforce portfolio safety gate in live execution adapters
+- ✓ `neura-7e78`: Add AI package unit tests
+- ✓ `neura-6044.2`: Replace subagent simulation scaffolding with live execution adapters
+- ✓ `neura-rxii`: Fix broken test: hasExchange function reference
+- ✓ `neura-3szk`: Trading Event Bus
+- ✓ `neura-v2mw`: Smart Order Execution Engine
 - ✓ `neura-s9zx`: Stop-Loss Auto-Execution Loop
 - ✓ `neura-ve52`: Position Tracker (Real-Time Sync)
 - ✓ `neura-za8`: Rate limit monitoring

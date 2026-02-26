@@ -17,7 +17,7 @@ import (
 
 const (
 	AnthropicDefaultBaseURL = "https://api.anthropic.com/v1"
-	AnthropicDefaultTimeout = 120 * time.Second
+	AnthropicDefaultTimeout = 300 * time.Second
 	AnthropicVersion        = "2023-06-01"
 )
 

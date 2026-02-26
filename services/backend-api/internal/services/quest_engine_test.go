@@ -431,6 +431,58 @@ func TestNewQuestEngineWithRedis(t *testing.T) {
 	}
 }
 
+func TestQuestExecutionStaleAfter(t *testing.T) {
+	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "")
+	if got := questExecutionStaleAfter(); got != defaultQuestExecutionStale {
+		t.Fatalf("questExecutionStaleAfter() = %s, want %s", got, defaultQuestExecutionStale)
+	}
+
+	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "30")
+	if got := questExecutionStaleAfter(); got != minQuestExecutionStale {
+		t.Fatalf("questExecutionStaleAfter() clamp = %s, want %s", got, minQuestExecutionStale)
+	}
+
+	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "480")
+	if got := questExecutionStaleAfter(); got != 8*time.Minute {
+		t.Fatalf("questExecutionStaleAfter() env = %s, want %s", got, 8*time.Minute)
+	}
+}
+
+func TestTick_ResetsStaleExecutionAndRunsQuest(t *testing.T) {
+	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "120")
+
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	executed := make(chan struct{}, 1)
+	engine.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
+		executed <- struct{}{}
+		return nil
+	})
+
+	quest := &Quest{
+		ID:         "stale-quest",
+		Name:       "Stale Quest",
+		Type:       QuestTypeRoutine,
+		Cadence:    CadenceMicro,
+		Status:     QuestStatusActive,
+		Checkpoint: make(map[string]interface{}),
+		Metadata: map[string]string{
+			"chat_id":       "123",
+			"definition_id": "scalping_execution",
+		},
+	}
+	engine.quests[quest.ID] = quest
+	engine.executing[quest.ID] = true
+	engine.executionStarts[quest.ID] = time.Now().Add(-10 * time.Minute)
+
+	engine.tick()
+
+	select {
+	case <-executed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected stale quest to be executed after stale marker reset")
+	}
+}
+
 func ptrTime(t time.Time) *time.Time {
 	return &t
 }

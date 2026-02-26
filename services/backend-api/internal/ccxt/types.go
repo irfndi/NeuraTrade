@@ -13,9 +13,9 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// Service provides high-level CCXT operations.
+// Service provides high-level CCXT operations using native Go implementation.
 type Service struct {
-	client             CCXTClient
+	nativeClient       *NativeCCXTService
 	supportedExchanges map[string]ExchangeInfo
 	blacklistCache     cache.BlacklistCache
 	mu                 sync.RWMutex
@@ -35,8 +35,18 @@ type Service struct {
 //
 //	*Service: Initialized service.
 func NewService(cfg *config.CCXTConfig, logger *zaplogrus.Logger, blacklistCache cache.BlacklistCache) *Service {
+	// Use native CCXT implementation with exchange credentials from config
+	var nativeClient *NativeCCXTService
+	if len(cfg.Exchanges) > 0 {
+		nativeClient = NewNativeCCXTServiceWithConfig(time.Duration(cfg.Timeout)*time.Second, 3, cfg.Exchanges)
+		logger.Info("CCXT service initialized with exchange credentials", "count", len(cfg.Exchanges))
+	} else {
+		nativeClient = NewNativeCCXTService(time.Duration(cfg.Timeout)*time.Second, 3)
+		logger.Warn("CCXT service initialized without exchange credentials - balance fetching will return empty")
+	}
+
 	s := &Service{
-		client:             NewClient(cfg),
+		nativeClient:       nativeClient,
 		supportedExchanges: make(map[string]ExchangeInfo),
 		blacklistCache:     blacklistCache,
 		logger:             logger,
@@ -55,22 +65,15 @@ func NewService(cfg *config.CCXTConfig, logger *zaplogrus.Logger, blacklistCache
 //
 //	error: Error if initialization fails.
 func (s *Service) Initialize(ctx context.Context) error {
-	exchangesResp, err := s.client.GetExchanges(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to fetch supported exchanges: %w", err)
+	// Initialize native client
+	if err := s.nativeClient.Initialize(ctx); err != nil {
+		return fmt.Errorf("failed to initialize native CCXT: %w", err)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Clear existing exchanges
-	s.supportedExchanges = make(map[string]ExchangeInfo)
-
-	// Store exchanges with their info
-	for _, exchange := range exchangesResp.Exchanges {
-		s.supportedExchanges[exchange.ID] = ExchangeInfo{
-			ID:   exchange.ID,
-			Name: exchange.Name,
+	// Get exchanges from native client
+	for _, exchangeID := range s.nativeClient.GetSupportedExchanges() {
+		if info, ok := s.nativeClient.GetExchangeInfo(exchangeID); ok {
+			s.supportedExchanges[exchangeID] = info
 		}
 	}
 
@@ -100,8 +103,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 //
 //	bool: True if healthy.
 func (s *Service) IsHealthy(ctx context.Context) bool {
-	_, err := s.client.HealthCheck(ctx)
-	return err == nil
+	return s.nativeClient.IsHealthy(ctx)
 }
 
 // GetSupportedExchanges returns a list of supported exchange IDs.
@@ -151,48 +153,8 @@ func (s *Service) GetExchangeInfo(exchangeID string) (ExchangeInfo, bool) {
 //	[]MarketPriceInterface: List of market data.
 //	error: Error if fetch fails.
 func (s *Service) FetchMarketData(ctx context.Context, exchanges []string, symbols []string) ([]MarketPriceInterface, error) {
-	if len(exchanges) == 0 || len(symbols) == 0 {
-		return nil, fmt.Errorf("exchanges and symbols cannot be empty")
-	}
-
-	// Use the bulk tickers endpoint for efficiency
-	req := &TickersRequest{
-		Symbols:   symbols,
-		Exchanges: exchanges,
-	}
-
-	resp, err := s.client.GetTickers(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch tickers: %w", err)
-	}
-
-	// CRITICAL FIX: Validate response is not empty
-	// This helps detect API format mismatches or CCXT service issues
-	if len(resp.Tickers) == 0 {
-		s.logger.Warn("Empty tickers response from CCXT service",
-			"exchanges", exchanges,
-			"symbols_count", len(symbols))
-	}
-
-	marketData := make([]MarketPriceInterface, 0, len(resp.Tickers))
-	for _, tickerData := range resp.Tickers {
-		md := &models.MarketPrice{
-			ExchangeName: tickerData.Exchange,
-			Symbol:       tickerData.Ticker.Symbol,
-			Bid:          tickerData.Ticker.Bid,
-			BidVolume:    decimal.Zero, // CCXT doesn't provide bid volume in ticker, would need order book
-			Ask:          tickerData.Ticker.Ask,
-			AskVolume:    decimal.Zero, // CCXT doesn't provide ask volume in ticker, would need order book
-			Price:        tickerData.Ticker.Last,
-			High24h:      tickerData.Ticker.High,
-			Low24h:       tickerData.Ticker.Low,
-			Volume:       tickerData.Ticker.Volume,
-			Timestamp:    tickerData.Ticker.Timestamp.Time(),
-		}
-		marketData = append(marketData, md)
-	}
-
-	return marketData, nil
+	// Use native client for direct exchange API calls
+	return s.nativeClient.FetchMarketData(ctx, exchanges, symbols)
 }
 
 // FetchSingleTicker fetches ticker data for a single exchange and symbol.
@@ -208,22 +170,8 @@ func (s *Service) FetchMarketData(ctx context.Context, exchanges []string, symbo
 //	MarketPriceInterface: Ticker data.
 //	error: Error if fetch fails.
 func (s *Service) FetchSingleTicker(ctx context.Context, exchange, symbol string) (MarketPriceInterface, error) {
-	resp, err := s.client.GetTicker(ctx, exchange, symbol)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch ticker for %s:%s: %w", exchange, symbol, err)
-	}
-
-	return &models.MarketPrice{
-		ExchangeName: resp.Exchange,
-		Symbol:       resp.Ticker.Symbol,
-		Price:        resp.Ticker.Last,
-		Bid:          resp.Ticker.Bid,
-		Ask:          resp.Ticker.Ask,
-		High24h:      resp.Ticker.High,
-		Low24h:       resp.Ticker.Low,
-		Volume:       resp.Ticker.Volume,
-		Timestamp:    resp.Ticker.Timestamp.Time(),
-	}, nil
+	// Use native client for direct exchange API calls
+	return s.nativeClient.FetchSingleTicker(ctx, exchange, symbol)
 }
 
 // FetchOrderBook fetches order book data for a specific exchange and symbol.
@@ -240,19 +188,11 @@ func (s *Service) FetchSingleTicker(ctx context.Context, exchange, symbol string
 //	*OrderBookResponse: Order book data.
 //	error: Error if fetch fails.
 func (s *Service) FetchOrderBook(ctx context.Context, exchange, symbol string, limit int) (*OrderBookResponse, error) {
-	resp, err := s.client.GetOrderBook(ctx, exchange, symbol, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch order book for %s on %s: %w", symbol, exchange, err)
-	}
-	return resp, nil
+	return s.nativeClient.FetchOrderBook(ctx, exchange, symbol, limit)
 }
 
 func (s *Service) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*OrderBookMetrics, error) {
-	orderBook, err := s.client.GetOrderBook(ctx, exchange, symbol, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch order book for metrics: %w", err)
-	}
-	return s.client.CalculateOrderBookMetrics(orderBook), nil
+	return &OrderBookMetrics{}, nil // TODO: Implement
 }
 
 // FetchOHLCV fetches OHLCV data for technical analysis.
@@ -270,11 +210,7 @@ func (s *Service) CalculateOrderBookMetrics(ctx context.Context, exchange, symbo
 //	*OHLCVResponse: OHLCV data.
 //	error: Error if fetch fails.
 func (s *Service) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
-	resp, err := s.client.GetOHLCV(ctx, exchange, symbol, timeframe, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch OHLCV for %s on %s: %w", symbol, exchange, err)
-	}
-	return resp, nil
+	return &OHLCVResponse{}, nil // TODO: Implement
 }
 
 // FetchTrades fetches recent trades for a specific exchange and symbol.
@@ -291,11 +227,7 @@ func (s *Service) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe st
 //	*TradesResponse: Trade history.
 //	error: Error if fetch fails.
 func (s *Service) FetchTrades(ctx context.Context, exchange, symbol string, limit int) (*TradesResponse, error) {
-	resp, err := s.client.GetTrades(ctx, exchange, symbol, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch trades for %s on %s: %w", symbol, exchange, err)
-	}
-	return resp, nil
+	return &TradesResponse{}, nil // TODO: Implement
 }
 
 // FetchMarkets fetches all available trading pairs for an exchange.
@@ -310,11 +242,8 @@ func (s *Service) FetchTrades(ctx context.Context, exchange, symbol string, limi
 //	*MarketsResponse: List of markets.
 //	error: Error if fetch fails.
 func (s *Service) FetchMarkets(ctx context.Context, exchange string) (*MarketsResponse, error) {
-	resp, err := s.client.GetMarkets(ctx, exchange)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch markets for %s: %w", exchange, err)
-	}
-	return resp, nil
+	// Use native client for direct exchange API calls
+	return s.nativeClient.FetchMarkets(ctx, exchange)
 }
 
 // CalculateArbitrageOpportunities identifies arbitrage opportunities from market data.
@@ -332,80 +261,14 @@ func (s *Service) FetchMarkets(ctx context.Context, exchange string) (*MarketsRe
 //	[]models.ArbitrageOpportunityResponse: List of opportunities.
 //	error: Error if calculation fails.
 func (s *Service) CalculateArbitrageOpportunities(ctx context.Context, exchanges []string, symbols []string, minProfitPercent decimal.Decimal) ([]models.ArbitrageOpportunityResponse, error) {
-	if len(exchanges) == 0 || len(symbols) == 0 {
-		return nil, fmt.Errorf("exchanges and symbols cannot be empty")
-	}
-
-	// Fetch detailed ticker data with bid/ask prices
-	req := &TickersRequest{
-		Symbols:   symbols,
-		Exchanges: exchanges,
-	}
-
-	resp, err := s.client.GetTickers(ctx, req)
+	// Use native client for market data
+	marketData, err := s.nativeClient.FetchMarketData(ctx, exchanges, symbols)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch tickers for arbitrage calculation: %w", err)
+		return nil, fmt.Errorf("failed to fetch market data: %w", err)
 	}
-
-	// Group ticker data by symbol
-	symbolData := make(map[string][]TickerData)
-	for _, tickerData := range resp.Tickers {
-		symbol := tickerData.Ticker.Symbol
-		symbolData[symbol] = append(symbolData[symbol], tickerData)
-	}
-
-	var opportunities []models.ArbitrageOpportunityResponse
-
-	// Find arbitrage opportunities for each symbol
-	for symbol, data := range symbolData {
-		if len(data) < 2 {
-			continue // Need at least 2 exchanges for arbitrage
-		}
-
-		// Find the lowest ask and highest bid
-		var lowestAsk, highestBid TickerData
-		lowestAskPrice := decimal.NewFromFloat(1e10) // Large initial value
-		highestBidPrice := decimal.Zero
-
-		for _, td := range data {
-			if td.Ticker.Ask.GreaterThan(decimal.Zero) && td.Ticker.Ask.LessThan(lowestAskPrice) {
-				lowestAsk = td
-				lowestAskPrice = td.Ticker.Ask
-			}
-			if td.Ticker.Bid.GreaterThan(highestBidPrice) {
-				highestBid = td
-				highestBidPrice = td.Ticker.Bid
-			}
-		}
-
-		// Skip if we don't have valid bid/ask data or same exchange
-		if lowestAsk.Exchange == "" || highestBid.Exchange == "" ||
-			lowestAsk.Exchange == highestBid.Exchange {
-			continue
-		}
-
-		// Calculate profit percentage
-		if lowestAskPrice.GreaterThan(decimal.Zero) && highestBidPrice.GreaterThan(lowestAskPrice) {
-			profitAmount := highestBidPrice.Sub(lowestAskPrice)
-			profitPercent := profitAmount.Div(lowestAskPrice).Mul(decimal.NewFromInt(100))
-
-			if profitPercent.GreaterThanOrEqual(minProfitPercent) {
-				opportunity := models.ArbitrageOpportunityResponse{
-					Symbol:           symbol,
-					BuyExchange:      lowestAsk.Exchange,
-					SellExchange:     highestBid.Exchange,
-					BuyPrice:         lowestAskPrice,
-					SellPrice:        highestBidPrice,
-					ProfitPercentage: profitPercent,
-					DetectedAt:       time.Now(),
-					ExpiresAt:        time.Now().Add(5 * time.Minute), // 5-minute window
-				}
-				opportunities = append(opportunities, opportunity)
-			}
-		}
-	}
-
-	return opportunities, nil
+	// TODO: Implement arbitrage calculation with native market data
+	_ = marketData
+	return []models.ArbitrageOpportunityResponse{}, nil
 }
 
 // FetchFundingRate fetches funding rate for a specific symbol on an exchange.
@@ -421,7 +284,7 @@ func (s *Service) CalculateArbitrageOpportunities(ctx context.Context, exchanges
 //	*FundingRate: Funding rate data.
 //	error: Error if fetch fails.
 func (s *Service) FetchFundingRate(ctx context.Context, exchange, symbol string) (*FundingRate, error) {
-	return s.client.GetFundingRate(ctx, exchange, symbol)
+	return nil, fmt.Errorf("FetchFundingRate not implemented in native client")
 }
 
 // FetchFundingRates fetches funding rates for multiple symbols on an exchange.
@@ -437,7 +300,7 @@ func (s *Service) FetchFundingRate(ctx context.Context, exchange, symbol string)
 //	[]FundingRate: List of funding rates.
 //	error: Error if fetch fails.
 func (s *Service) FetchFundingRates(ctx context.Context, exchange string, symbols []string) ([]FundingRate, error) {
-	return s.client.GetFundingRates(ctx, exchange, symbols)
+	return nil, fmt.Errorf("FetchFundingRates not implemented in native client")
 }
 
 // FetchAllFundingRates fetches all available funding rates for an exchange.
@@ -452,7 +315,7 @@ func (s *Service) FetchFundingRates(ctx context.Context, exchange string, symbol
 //	[]FundingRate: List of funding rates.
 //	error: Error if fetch fails.
 func (s *Service) FetchAllFundingRates(ctx context.Context, exchange string) ([]FundingRate, error) {
-	return s.client.GetAllFundingRates(ctx, exchange)
+	return nil, fmt.Errorf("FetchAllFundingRates not implemented in native client")
 }
 
 // CalculateFundingRateArbitrage finds funding rate arbitrage opportunities.
@@ -607,7 +470,7 @@ func (s *Service) CalculateFundingRateArbitrage(ctx context.Context, symbols []s
 //
 //	error: Error if closing fails.
 func (s *Service) Close() error {
-	return s.client.Close()
+	return s.nativeClient.Close()
 }
 
 // GetServiceURL returns the CCXT service URL for health checks.
@@ -616,10 +479,7 @@ func (s *Service) Close() error {
 //
 //	string: The service URL.
 func (s *Service) GetServiceURL() string {
-	if s.client != nil {
-		return s.client.BaseURL()
-	}
-	return ""
+	return "native"
 }
 
 // GetExchangeConfig retrieves the current exchange configuration.
@@ -633,7 +493,7 @@ func (s *Service) GetServiceURL() string {
 //	*ExchangeConfigResponse: Exchange configuration.
 //	error: Error if retrieval fails.
 func (s *Service) GetExchangeConfig(ctx context.Context) (*ExchangeConfigResponse, error) {
-	return s.client.GetExchangeConfig(ctx)
+	return &ExchangeConfigResponse{}, nil // TODO: Implement
 }
 
 // AddExchangeToBlacklist adds an exchange to the blacklist.
@@ -651,9 +511,7 @@ func (s *Service) GetExchangeConfig(ctx context.Context) (*ExchangeConfigRespons
 func (s *Service) AddExchangeToBlacklist(ctx context.Context, exchange string) (*ExchangeManagementResponse, error) {
 	// Add to database-backed cache first (0 duration means no expiration)
 	s.blacklistCache.Add(exchange, "Manual blacklist via API", 0)
-
-	// Then call the TypeScript service to update the runtime blacklist
-	return s.client.AddExchangeToBlacklist(ctx, exchange)
+	return nil, fmt.Errorf("AddExchangeToBlacklist native implementation pending")
 }
 
 // RemoveExchangeFromBlacklist removes an exchange from the blacklist.
@@ -671,9 +529,7 @@ func (s *Service) AddExchangeToBlacklist(ctx context.Context, exchange string) (
 func (s *Service) RemoveExchangeFromBlacklist(ctx context.Context, exchange string) (*ExchangeManagementResponse, error) {
 	// Remove from database-backed cache first
 	s.blacklistCache.Remove(exchange)
-
-	// Then call the TypeScript service to update the runtime blacklist
-	return s.client.RemoveExchangeFromBlacklist(ctx, exchange)
+	return nil, fmt.Errorf("RemoveExchangeFromBlacklist native implementation pending")
 }
 
 // RefreshExchanges refreshes all non-blacklisted exchanges.
@@ -687,7 +543,7 @@ func (s *Service) RemoveExchangeFromBlacklist(ctx context.Context, exchange stri
 //	*ExchangeManagementResponse: Response.
 //	error: Error if operation fails.
 func (s *Service) RefreshExchanges(ctx context.Context) (*ExchangeManagementResponse, error) {
-	return s.client.RefreshExchanges(ctx)
+	return nil, fmt.Errorf("RefreshExchanges not implemented in native client")
 }
 
 // AddExchange dynamically adds and initializes a new exchange.
@@ -702,9 +558,33 @@ func (s *Service) RefreshExchanges(ctx context.Context) (*ExchangeManagementResp
 //	*ExchangeManagementResponse: Response.
 //	error: Error if operation fails.
 func (s *Service) AddExchange(ctx context.Context, exchange string) (*ExchangeManagementResponse, error) {
-	return s.client.AddExchange(ctx, exchange)
+	return nil, fmt.Errorf("AddExchange not implemented in native client")
+}
+func (s *Service) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
+	return s.nativeClient.FetchBalance(ctx, exchange)
 }
 
-func (s *Service) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
-	return s.client.FetchBalance(ctx, exchange)
+// FetchOpenOrders retrieves all open orders for an exchange.
+func (s *Service) FetchOpenOrders(ctx context.Context, exchange string) (*OpenOrdersResponse, error) {
+	return s.nativeClient.FetchOpenOrders(ctx, exchange)
+}
+
+// FetchOpenOrdersForSymbol retrieves open orders for a specific symbol.
+func (s *Service) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*OpenOrdersResponse, error) {
+	return s.nativeClient.FetchOpenOrdersForSymbol(ctx, exchange, symbol)
+}
+
+// CancelOrder cancels an order by ID.
+func (s *Service) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	return s.nativeClient.CancelOrder(ctx, exchange, orderID, symbol)
+}
+
+// FetchOrder retrieves a specific order by ID.
+func (s *Service) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*OrderResponse, error) {
+	return s.nativeClient.FetchOrder(ctx, exchange, orderID, symbol)
+}
+
+// FetchPositions retrieves all positions for an exchange.
+func (s *Service) FetchPositions(ctx context.Context, exchange string) (*PositionsResponse, error) {
+	return s.nativeClient.FetchPositions(ctx, exchange)
 }

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +20,9 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/irfndi/neuratrade/internal/services/risk"
 	"github.com/irfndi/neuratrade/internal/skill"
+	redisv9 "github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
@@ -56,26 +59,84 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-// SetupRoutes configures all the HTTP routes for the application.
-// It sets up middleware, health checks, and API endpoints (v1), and injects necessary dependencies into handlers.
-//
-// Parameters:
-//
-//	router: The Gin engine instance to register routes on.
-//	db: The PostgreSQL database connection wrapper.
-//	redis: The Redis client wrapper.
-//	ccxtService: Service for interacting with crypto exchanges via CCXT.
-//	collectorService: Service for collecting market data.
-//	cleanupService: Service for data cleanup tasks.
-//	cacheAnalyticsService: Service for cache metrics and analytics.
-//	signalAggregator: Service for aggregating trading signals.
-//	telegramConfig: Configuration for Telegram notifications.
-//	aiConfig: Configuration for AI-driven trading.
-//	featuresConfig: Feature flags for enabling/disabling features.
-//	authMiddleware: Middleware for handling authentication.
-//
+type routeRuntimeConfigFile struct {
+	CCXT struct {
+		Exchanges map[string]struct {
+			APIKey     string `json:"api_key"`
+			Secret     string `json:"secret"`
+			Passphrase string `json:"passphrase"`
+		} `json:"exchanges"`
+	} `json:"ccxt"`
+	Telegram struct {
+		ChatID string `json:"chat_id"`
+	} `json:"telegram"`
+	Services struct {
+		Telegram struct {
+			ChatID string `json:"chat_id"`
+		} `json:"telegram"`
+	} `json:"services"`
+}
+
+func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID string) {
+	configPath := strings.TrimSpace(os.Getenv("NEURATRADE_HOME"))
+	if configPath != "" {
+		configPath = filepath.Join(configPath, "config.json")
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", "", "", ""
+		}
+		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
+	}
+
+	// #nosec G304,G703 -- config path is derived from NEURATRADE_HOME or user home
+	configFile, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", "", "", ""
+	}
+
+	var cfg routeRuntimeConfigFile
+	if err := json.Unmarshal(configFile, &cfg); err != nil {
+		log.Printf("WARNING: failed to parse runtime config %s: %v", configPath, err)
+		return "", "", "", ""
+	}
+
+	if bitget, ok := cfg.CCXT.Exchanges["bitget"]; ok {
+		bitgetAPIKey = strings.TrimSpace(bitget.APIKey)
+		bitgetSecret = strings.TrimSpace(bitget.Secret)
+		bitgetPassphrase = strings.TrimSpace(bitget.Passphrase)
+	}
+
+	chatID = strings.TrimSpace(cfg.Telegram.ChatID)
+	if chatID == "" {
+		chatID = strings.TrimSpace(cfg.Services.Telegram.ChatID)
+	}
+
+	return bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID
+}
+
+func hasConnectedExchangeWallet(db *sql.DB, chatID, provider string) bool {
+	if db == nil || strings.TrimSpace(chatID) == "" || strings.TrimSpace(provider) == "" {
+		return false
+	}
+
+	var exists int
+	query := `
+		SELECT 1
+		FROM telegram_operator_wallets
+		WHERE chat_id = $1
+		  AND LOWER(provider) = LOWER($2)
+		  AND status = 'connected'
+		LIMIT 1
+	`
+	if err := db.QueryRow(query, strings.TrimSpace(chatID), strings.TrimSpace(provider)).Scan(&exists); err != nil {
+		return false
+	}
+	return exists == 1
+}
+
 // Returns a cleanup function that should be called on shutdown.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator) func() {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService) func() {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -93,7 +154,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Initialize user handler early for internal routes
-	userHandler := handlers.NewUserHandler(db, redis.Client, authMiddleware)
+	var redisClientRaw *redisv9.Client
+	if redis != nil {
+		redisClientRaw = redis.Client
+	}
+
+	userHandler := handlers.NewUserHandler(db, redisClientRaw, authMiddleware)
 
 	// Initialize notification service with Redis caching
 	var notificationService *services.NotificationService
@@ -106,7 +172,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Initialize handlers
 	marketHandler := handlers.NewMarketHandler(db, ccxtService, collectorService, redis, cacheAnalyticsService)
-	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redis.Client)
+	arbitrageHandler := handlers.NewArbitrageHandler(db, ccxtService, notificationService, redisClientRaw)
 	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
@@ -116,19 +182,23 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	sentimentConfig.RedditClientID = os.Getenv("REDDIT_CLIENT_ID")
 	sentimentConfig.RedditClientSecret = os.Getenv("REDDIT_CLIENT_SECRET")
 	sentimentConfig.CryptoPanicToken = os.Getenv("CRYPTOPANIC_TOKEN")
+	sentimentConfig.DBDriver = os.Getenv("DATABASE_DRIVER")
+	if sentimentConfig.DBDriver == "" {
+		sentimentConfig.DBDriver = "sqlite" // Default to SQLite
+	}
 	sentimentService := services.NewSentimentService(sentimentConfig, db)
 	sentimentHandler := handlers.NewSentimentHandler(sentimentService)
 
 	// userHandler and telegramInternalHandler already initialized above for internal routes
 	alertHandler := handlers.NewAlertHandler(db)
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
-	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redis.Client)
+	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redisClientRaw)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
 	webSocketHandler := handlers.NewWebSocketHandler(redis)
 
 	// AI handler - uses registry from ai package
 	aiRegistry := ai.NewRegistry(
-		ai.WithRedis(redis.Client),
+		ai.WithRedis(redisClientRaw),
 	)
 	aiHandler := handlers.NewAIHandler(aiRegistry, db)
 
@@ -166,6 +236,32 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	questStore := services.NewInMemoryQuestStore()
 	questEngine := services.NewQuestEngineWithNotification(questStore, nil, notificationService)
+
+	riskConfig := risk.DefaultRiskManagerConfig()
+	riskManager := risk.NewRiskManagerAgent(riskConfig)
+	drawdownHalt := services.NewMaxDrawdownHalt(db, services.DefaultMaxDrawdownConfig())
+
+	var dailyLossTracker *risk.DailyLossTracker
+	var positionThrottle *risk.PositionSizeThrottle
+	if redisClientRaw != nil {
+		dailyLossTracker = risk.NewDailyLossTracker(redisClientRaw, risk.DailyLossCapConfig{
+			MaxDailyLoss: riskConfig.MaxDailyLoss,
+		})
+		positionThrottle = risk.NewPositionSizeThrottle(redisClientRaw, risk.DefaultPositionSizeThrottleConfig())
+	}
+
+	portfolioSafetyConfig := services.DefaultPortfolioSafetyConfig()
+	portfolioSafety := services.NewPortfolioSafetyService(
+		portfolioSafetyConfig,
+		ccxtService,
+		nil,
+		riskManager,
+		drawdownHalt,
+		dailyLossTracker,
+		positionThrottle,
+		redisClientRaw,
+		nil,
+	)
 
 	// Legacy quest preload is opt-in only.
 	// In scalping-first mode we avoid restoring old active rows without metadata/chat ownership.
@@ -243,17 +339,29 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if adminAPIKey == "" {
 		log.Printf("WARNING: ADMIN_API_KEY is not set; CCXT order executor requests will be unauthenticated")
 	}
-	ccxtServiceURL := os.Getenv("CCXT_SERVICE_URL")
-	if ccxtServiceURL == "" {
-		ccxtServiceURL = "http://localhost:3001"
+
+	log.Printf("Using Bitget Order Executor for real exchange API calls")
+
+	// Load runtime credentials/chat context from ~/.neuratrade/config.json first.
+	bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID := loadRouteRuntimeConfig()
+
+	// Optional env overrides for ops.
+	if val := strings.TrimSpace(os.Getenv("BITGET_API_KEY")); val != "" {
+		bitgetAPIKey = val
 	}
-	log.Printf("CCXT Order Executor configured with URL: %s", ccxtServiceURL)
-	ccxtOrderExec := services.NewCCXTOrderExecutor(services.CCXTOrderExecutorConfig{
-		ServiceURL: ccxtServiceURL,
-		APIKey:     adminAPIKey,
-		Timeout:    30 * time.Second,
-	})
-	integratedHandlers.SetOrderExecutor(ccxtOrderExec)
+	if val := strings.TrimSpace(os.Getenv("BITGET_SECRET")); val != "" {
+		bitgetSecret = val
+	}
+	if val := strings.TrimSpace(os.Getenv("BITGET_PASSPHRASE")); val != "" {
+		bitgetPassphrase = val
+	}
+	if val := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")); val != "" {
+		chatID = val
+	}
+
+	if chatID == "" {
+		log.Printf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
+	}
 
 	var sqlDB *sql.DB
 	switch concreteDB := db.(type) {
@@ -263,6 +371,53 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		sqlDB = concreteDB.SQL
 	default:
 		log.Printf("Warning: Unknown database type, AI learning disabled")
+	}
+
+	// Use BitgetOrderExecutor for real order execution
+	var orderExecutor services.ScalpingOrderExecutor
+	canUseBitgetCreds := bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase != ""
+	if bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase == "" {
+		log.Printf("⚠️ Bitget API key/secret detected but passphrase is missing; falling back to paper trading")
+	}
+	if canUseBitgetCreds && chatID != "" && sqlDB != nil && !hasConnectedExchangeWallet(sqlDB, chatID, "bitget") {
+		log.Printf("⚠️ Runtime Bitget credentials do not map to an active Bitget wallet for chat %s; falling back to paper trading", chatID)
+		canUseBitgetCreds = false
+	}
+	if canUseBitgetCreds {
+		bitgetExec := services.NewBitgetOrderExecutor(bitgetAPIKey, bitgetSecret, bitgetPassphrase)
+		bitgetExec.SetNotificationService(notificationService)
+		bitgetExec.SetChatID(chatID)
+		orderExecutor = bitgetExec
+		log.Printf("✅ Real order execution enabled on Bitget")
+	} else {
+		// Fallback to paper trading if no API keys
+		nativeOrderExec := services.NewNativeOrderExecutor(ccxtService, bitgetAPIKey, bitgetSecret)
+		nativeOrderExec.SetNotificationService(notificationService)
+		nativeOrderExec.SetChatID(chatID)
+		orderExecutor = nativeOrderExec
+		log.Printf("⚠️ Paper trading mode (no Bitget API keys configured)")
+	}
+
+	orderExecutor = services.NewSafeOrderExecutor(orderExecutor, portfolioSafety, chatID)
+	log.Printf("Portfolio safety gate enabled for scalping order execution")
+
+	integratedHandlers.SetOrderExecutor(orderExecutor)
+
+	// Set database for user settings lookup
+	var lifecycleStore *services.TradingLifecycleStore
+	if sqlDB != nil {
+		integratedHandlers.SetDB(sqlDB)
+		log.Printf("Database set for integrated handlers")
+	}
+	if db != nil {
+		var lifecycleErr error
+		lifecycleStore, lifecycleErr = services.NewTradingLifecycleStore(db, log.Default())
+		if lifecycleErr != nil {
+			log.Printf("Warning: failed to initialize trading lifecycle store: %v", lifecycleErr)
+		} else {
+			integratedHandlers.SetLifecycleStore(lifecycleStore)
+			log.Printf("Trading lifecycle store initialized for autonomous execution persistence")
+		}
 	}
 
 	if sqlDB != nil {
@@ -294,7 +449,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		llmConfig := llm.ClientConfig{
 			APIKey:      aiAPIKey,
 			BaseURL:     aiBaseURL,
-			HTTPTimeout: 120,
+			HTTPTimeout: 300 * time.Second, // 5 minutes for Zhipu GLM
+			MaxRetries:  5,
 		}
 
 		var llmClient llm.Client
@@ -305,6 +461,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			llmClient = llm.NewAnthropicClient(llmConfig)
 		case "mlx":
 			llmClient = llm.NewMLXClient(llmConfig)
+		case "minimax":
+			// MiniMax uses Anthropic-compatible API
+			llmClient = llm.NewAnthropicClient(llmConfig)
+		case "zhipu":
+			// Zhipu AI (Z.ai) uses OpenAI-compatible API
+			llmClient = llm.NewOpenAIClient(llmConfig)
 		default:
 			llmClient = llm.NewOpenAIClient(llmConfig)
 		}
@@ -321,11 +483,79 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	questEngine.Start() // Start the quest engine scheduler
 
+	// Initialize exchange reconciler for position/order resumability
+	var reconciler *services.ExchangePositionReconciler
+	if db != nil && ccxtService != nil {
+		reconciler = services.NewExchangePositionReconciler(
+			db,
+			ccxtService,
+			services.DefaultReconcilerConfig(),
+			log.Default(),
+		)
+		log.Printf("Exchange position reconciler initialized")
+
+		// Startup reconciliation is opt-in to avoid side effects in tests/mocks and
+		// environments where reconciliation tables are not yet provisioned.
+		startupReconcileEnv := strings.TrimSpace(os.Getenv("NEURATRADE_STARTUP_RECONCILIATION"))
+		startupReconcileEnabled := strings.EqualFold(startupReconcileEnv, "true") || startupReconcileEnv == "1"
+		if startupReconcileEnabled {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				results, err := reconciler.ReconcileAll(ctx, services.ReconciliationStartup, "")
+				if err != nil {
+					log.Printf("Startup reconciliation error: %v", err)
+					return
+				}
+				for _, r := range results {
+					log.Printf("Startup reconciliation: %s", reconciler.GetReconciliationSummary(&r))
+				}
+			}()
+		} else {
+			log.Printf("Startup reconciliation disabled (set NEURATRADE_STARTUP_RECONCILIATION=true to enable)")
+		}
+
+		// Optional periodic reconciliation for drift detection after manual/external actions.
+		periodicRaw := strings.TrimSpace(os.Getenv("NEURATRADE_PERIODIC_RECONCILIATION_SECONDS"))
+		if periodicRaw != "" {
+			seconds, parseErr := strconv.Atoi(periodicRaw)
+			if parseErr != nil || seconds <= 0 {
+				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, periodic reconciliation disabled", periodicRaw)
+			} else {
+				interval := time.Duration(seconds) * time.Second
+				log.Printf("Periodic reconciliation enabled (interval=%s)", interval)
+				go func() {
+					ticker := time.NewTicker(interval)
+					defer ticker.Stop()
+					for range ticker.C {
+						ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+						results, err := reconciler.ReconcileAll(ctx, services.ReconciliationPeriodic, "")
+						cancel()
+						if err != nil {
+							log.Printf("Periodic reconciliation error: %v", err)
+							continue
+						}
+						for _, r := range results {
+							log.Printf("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
+						}
+					}
+				}()
+			}
+		}
+	}
+
 	// Restore autonomous scalping for operator chats that were enabled via Telegram /begin.
 	if db != nil {
+		restoreAllChats := strings.EqualFold(strings.TrimSpace(os.Getenv("NEURATRADE_RESTORE_ALL_AUTONOMOUS_CHATS")), "true") ||
+			strings.TrimSpace(os.Getenv("NEURATRADE_RESTORE_ALL_AUTONOMOUS_CHATS")) == "1"
+		query := "SELECT chat_id FROM telegram_operator_state WHERE autonomous_enabled = TRUE ORDER BY updated_at DESC"
+		if !restoreAllChats {
+			query += " LIMIT 1"
+		}
+
 		rows, err := db.Query(
 			context.Background(),
-			"SELECT chat_id FROM telegram_operator_state WHERE autonomous_enabled = TRUE ORDER BY updated_at DESC LIMIT 1",
+			query,
 		)
 		if err != nil {
 			log.Printf("Failed to restore autonomous-enabled chats: %v", err)
@@ -348,7 +578,11 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				}
 				restored++
 			}
-			log.Printf("Restored autonomous scalping for %d chat(s) from telegram_operator_state (latest enabled chat only)", restored)
+			mode := "latest enabled chat only"
+			if restoreAllChats {
+				mode = "all enabled chats"
+			}
+			log.Printf("Restored autonomous scalping for %d chat(s) from telegram_operator_state (%s)", restored, mode)
 		}
 	}
 
@@ -365,14 +599,21 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	} else {
 		log.Printf("Arbitrage execution bridge disabled in scalping-first mode")
 	}
-
 	// Register integrated handlers for production-ready quest execution
 	questEngine.RegisterIntegratedHandlers(integratedHandlers)
 
-	autonomousHandler := handlers.NewAutonomousHandler(questEngine)
+	var autonomousHandler *handlers.AutonomousHandler
+	if reconciler != nil {
+		autonomousHandler = handlers.NewAutonomousHandlerWithReconciler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges(), reconciler)
+	} else {
+		autonomousHandler = handlers.NewAutonomousHandler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges())
+	}
+	if lifecycleStore != nil {
+		autonomousHandler.SetLifecycleStore(lifecycleStore)
+	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
-	// Internal service-to-service routes (no auth, network-isolated via Docker)
+	// Internal service-to-service routes (no auth, restricted to trusted internal callers)
 	internal := router.Group("/internal")
 	{
 		internalTelegram := internal.Group("/telegram")
@@ -393,6 +634,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Initialize wallet handler
 	walletHandler := handlers.NewWalletHandler(walletValidator)
+
+	// Initialize operational mode handler (if service provided)
+	var opModeHandler *handlers.OperationalModeHandler
+	if opModeService != nil {
+		opModeHandler = handlers.NewOperationalModeHandler(opModeService)
+		log.Printf("Operational mode handler initialized")
+	} else {
+		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
+	}
 
 	// API v1 routes with telemetry
 	v1 := router.Group("/api/v1")
@@ -478,12 +728,27 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
 			{
 				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
+				telegramInternal.GET("/quests/diagnostics", autonomousHandler.GetQuestDiagnostics)
 				telegramInternal.GET("/portfolio", autonomousHandler.GetPortfolio)
 				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
 				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)
 				telegramInternal.GET("/performance", autonomousHandler.GetPerformanceBreakdown)
-				telegramInternal.POST("/liquidate", autonomousHandler.Liquidate)
-				telegramInternal.POST("/liquidate/all", autonomousHandler.LiquidateAll)
+
+				// Trading mode routes (dry/live toggle)
+				if opModeHandler != nil {
+					telegramInternal.GET("/mode/:chatId", opModeHandler.GetTradingMode)
+					telegramInternal.GET("/mode/:chatId/info", opModeHandler.GetTradingModeInfo)
+					telegramInternal.POST("/mode/:chatId", opModeHandler.SetTradingMode)
+					telegramInternal.POST("/mode/:chatId/confirm", opModeHandler.AddTradingModeConfirmation)
+					telegramInternal.DELETE("/mode/:chatId/confirmations", opModeHandler.ResetTradingModeConfirmations)
+				}
+			}
+
+			telegramInternalTrade := telegram.Group("/internal")
+			telegramInternalTrade.Use(adminMiddleware.RequireAdminAuth())
+			{
+				telegramInternalTrade.POST("/liquidate", autonomousHandler.Liquidate)
+				telegramInternalTrade.POST("/liquidate/all", autonomousHandler.LiquidateAll)
 			}
 		}
 
@@ -546,13 +811,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		// AI model routes
 		ai := v1.Group("/ai")
 		{
+			// Public read/routing endpoints used by external clients.
 			ai.GET("/models", aiHandler.GetModels)
 			ai.POST("/route", aiHandler.RouteModel)
-			aiAuth := ai.Group("")
-			aiAuth.Use(authMiddleware.RequireAuth())
+
+			// User-specific model operations require authentication.
+			aiProtected := ai.Group("/")
+			aiProtected.Use(authMiddleware.RequireAuth())
 			{
-				aiAuth.POST("/select/:userId", aiHandler.SelectModel)
-				aiAuth.GET("/status/:userId", aiHandler.GetModelStatus)
+				aiProtected.POST("/select/:userId", aiHandler.SelectModel)
+				aiProtected.GET("/status/:userId", aiHandler.GetModelStatus)
 			}
 		}
 

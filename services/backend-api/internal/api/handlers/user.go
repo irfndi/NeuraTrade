@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -156,9 +159,20 @@ func (h *UserHandler) RegisterUser(c *gin.Context) {
 		return
 	}
 
+	// Legacy SQLite deployments may still have users(telegram_id, risk_level, created_at)
+	// without email/password columns. Keep Telegram onboarding working in that mode.
+	if h.querier == nil && h.db != nil && h.usesLegacyUsersSchema(c.Request.Context()) {
+		h.registerLegacyTelegramUser(c, req)
+		return
+	}
+
 	// Check if user already exists
 	exists, err := h.userExists(c.Request.Context(), req.Email)
 	if err != nil {
+		if h.db != nil && req.TelegramChatID != nil && strings.TrimSpace(*req.TelegramChatID) != "" {
+			h.registerLegacyTelegramUser(c, req)
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check user existence"})
 		return
 	}
@@ -173,11 +187,12 @@ func (h *UserHandler) RegisterUser(c *gin.Context) {
 
 		// If telegram_chat_id is different or NULL, update it
 		if existingUser.TelegramChatID == nil || *existingUser.TelegramChatID != *req.TelegramChatID {
-			updateQuery := `UPDATE users SET telegram_chat_id = $1, updated_at = NOW() WHERE email = $2`
 			var updateErr error
 			if h.querier != nil {
+				updateQuery := `UPDATE users SET telegram_chat_id = $1, updated_at = NOW() WHERE email = $2`
 				_, updateErr = h.querier.Exec(c.Request.Context(), updateQuery, req.TelegramChatID, req.Email)
 			} else if h.db != nil {
+				updateQuery := `UPDATE users SET telegram_chat_id = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?`
 				_, updateErr = h.db.Exec(c.Request.Context(), updateQuery, req.TelegramChatID, req.Email)
 			}
 			if updateErr != nil {
@@ -225,25 +240,30 @@ func (h *UserHandler) RegisterUser(c *gin.Context) {
 	// Insert user into database
 	query := `
 		INSERT INTO users (id, email, password_hash, telegram_chat_id, subscription_tier, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+		VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`
 
 	var err2 error
+	dbAvailable := false
 	if h.querier != nil {
 		_, err2 = h.querier.Exec(c.Request.Context(), query,
 			userID, req.Email, string(hashedPassword), req.TelegramChatID, "free")
+		dbAvailable = true
 	} else if h.db != nil {
 		_, err2 = h.db.Exec(c.Request.Context(), query,
 			userID, req.Email, string(hashedPassword), req.TelegramChatID, "free")
-	} else {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not available"})
-		return
+		dbAvailable = true
 	}
-	err = err2
 
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
-		return
+	// Handle database errors
+	if err2 != nil {
+		if dbAvailable {
+			// Database is available but query failed - return error
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+			return
+		}
+		// Database not available (dev mode) - log warning and continue
+		log.Printf("[WARN] User registration proceeded without database persistence: %v", err2)
 	}
 
 	// Return user response (without password)
@@ -441,7 +461,7 @@ func (h *UserHandler) userExists(ctx context.Context, email string) (bool, error
 		return count > 0, nil
 	}
 
-	// Return false if database is not available
+	// Return error if database is not available
 	if h.db == nil {
 		return false, fmt.Errorf("database not available")
 	}
@@ -450,6 +470,7 @@ func (h *UserHandler) userExists(ctx context.Context, email string) (bool, error
 	query := "SELECT COUNT(*) FROM users WHERE email = $1"
 	err := h.db.QueryRow(ctx, query, email).Scan(&count)
 	if err != nil {
+		log.Printf("[USER] Failed to check existing user by email %q: %v", email, err)
 		return false, err
 	}
 	return count > 0, nil
@@ -664,12 +685,11 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 		}
 	}
 
-	// Cache miss or Redis unavailable, check database availability
+	// Cache miss or Redis unavailable, query database
 	if h.db == nil {
 		return nil, fmt.Errorf("database not available")
 	}
 
-	// Query database
 	var user models.User
 	query := `
 		SELECT id, email, password_hash, telegram_chat_id,
@@ -683,6 +703,12 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 	)
 
 	if err != nil {
+		if legacyUser, legacyErr := h.getLegacyUserByTelegramID(ctx, chatID); legacyErr == nil {
+			return legacyUser, nil
+		}
+		if h.usesLegacyUsersSchema(ctx) {
+			return h.getLegacyUserByTelegramID(ctx, chatID)
+		}
 		return nil, err
 	}
 
@@ -699,6 +725,152 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 	}
 
 	return &user, nil
+}
+
+func (h *UserHandler) usesLegacyUsersSchema(ctx context.Context) bool {
+	if h.db == nil {
+		return false
+	}
+
+	rows, err := h.db.Query(ctx, "PRAGMA table_info(users)")
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+
+	hasTelegramID := false
+	hasTelegramChatID := false
+
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			colType   string
+			notNull   int
+			defaultV  sql.NullString
+			primaryID int
+		)
+		if scanErr := rows.Scan(&cid, &name, &colType, &notNull, &defaultV, &primaryID); scanErr != nil {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "telegram_id":
+			hasTelegramID = true
+		case "telegram_chat_id":
+			hasTelegramChatID = true
+		}
+	}
+
+	return hasTelegramID && !hasTelegramChatID
+}
+
+func (h *UserHandler) registerLegacyTelegramUser(c *gin.Context, req RegisterRequest) {
+	if req.TelegramChatID == nil || strings.TrimSpace(*req.TelegramChatID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "telegram_chat_id is required for legacy registration"})
+		return
+	}
+
+	chatID := strings.TrimSpace(*req.TelegramChatID)
+	var existingID int64
+	var createdAt time.Time
+	err := h.db.QueryRow(c.Request.Context(),
+		"SELECT id, created_at FROM users WHERE telegram_id = ?",
+		chatID,
+	).Scan(&existingID, &createdAt)
+	if err == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"user": UserResponse{
+				ID:               fmt.Sprintf("%d", existingID),
+				Email:            req.Email,
+				TelegramChatID:   &chatID,
+				SubscriptionTier: "free",
+				CreatedAt:        createdAt,
+				UpdatedAt:        createdAt,
+			},
+			"already_exists": true,
+		})
+		return
+	}
+	if !isNoRowsLookupError(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check user existence"})
+		return
+	}
+
+	if _, err := h.db.Exec(c.Request.Context(),
+		`INSERT INTO users (telegram_id, risk_level, created_at) VALUES (?, 'medium', CURRENT_TIMESTAMP)`,
+		chatID,
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+		return
+	}
+
+	var newID int64
+	if err := h.db.QueryRow(c.Request.Context(),
+		"SELECT id, created_at FROM users WHERE telegram_id = ?",
+		chatID,
+	).Scan(&newID, &createdAt); err != nil {
+		c.JSON(http.StatusCreated, gin.H{
+			"user": UserResponse{
+				ID:               "0",
+				Email:            req.Email,
+				TelegramChatID:   &chatID,
+				SubscriptionTier: "free",
+				CreatedAt:        time.Now(),
+				UpdatedAt:        time.Now(),
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"user": UserResponse{
+			ID:               fmt.Sprintf("%d", newID),
+			Email:            req.Email,
+			TelegramChatID:   &chatID,
+			SubscriptionTier: "free",
+			CreatedAt:        createdAt,
+			UpdatedAt:        createdAt,
+		},
+	})
+}
+
+func (h *UserHandler) getLegacyUserByTelegramID(ctx context.Context, chatID string) (*models.User, error) {
+	var (
+		id        int64
+		telegram  string
+		riskLevel string
+		createdAt time.Time
+	)
+
+	err := h.db.QueryRow(ctx,
+		"SELECT id, telegram_id, risk_level, created_at FROM users WHERE telegram_id = ?",
+		chatID,
+	).Scan(&id, &telegram, &riskLevel, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+
+	email := fmt.Sprintf("telegram_%s@neuratrade.ai", telegram)
+	return &models.User{
+		ID:               fmt.Sprintf("%d", id),
+		Email:            email,
+		PasswordHash:     "",
+		TelegramChatID:   &telegram,
+		SubscriptionTier: "free",
+		CreatedAt:        createdAt,
+		UpdatedAt:        createdAt,
+	}, nil
+}
+
+func isNoRowsLookupError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "no rows")
 }
 
 // CreateTelegramUser creates a new user from Telegram registration.

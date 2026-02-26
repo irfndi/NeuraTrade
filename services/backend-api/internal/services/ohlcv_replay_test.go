@@ -73,11 +73,34 @@ func (m *mockCCXTServiceForReplay) CalculateArbitrageOpportunities(ctx context.C
 func (m *mockCCXTServiceForReplay) CalculateFundingRateArbitrage(ctx context.Context, syms []string, ex []string, min float64) ([]ccxt.FundingArbitrageOpportunity, error) {
 	return nil, nil
 }
+func (m *mockCCXTServiceForReplay) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	return nil, nil
+}
 func (m *mockCCXTServiceForReplay) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*ccxt.OHLCVResponse, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
 	return m.ohlcvResponse, nil
+}
+
+func (m *mockCCXTServiceForReplay) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	return nil
+}
+
+func (m *mockCCXTServiceForReplay) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*ccxt.OrderResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTServiceForReplay) FetchOpenOrders(ctx context.Context, exchange string) (*ccxt.OpenOrdersResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTServiceForReplay) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*ccxt.OpenOrdersResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTServiceForReplay) FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error) {
+	return nil, nil
 }
 
 func TestOHLCVReplayEngine_New(t *testing.T) {

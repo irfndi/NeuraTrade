@@ -246,7 +246,7 @@ export const createApi = (config: TelegramConfigPartial) => {
       return payload as T;
     });
 
-  // Internal endpoints - no auth required (network-isolated via Docker)
+  // Internal endpoints - no auth required (restricted to trusted internal callers)
   const getUserByChatId = (chatId: string) =>
     apiFetch<{
       user: { id: string; subscription_tier: string; created_at: string };
@@ -296,32 +296,8 @@ export const createApi = (config: TelegramConfigPartial) => {
       "/api/v1/arbitrage/opportunities?limit=5&min_profit=0.5",
     );
 
-  /**
-   * Health check to verify backend connectivity
-   * Returns true if backend is reachable and responding
-   */
   const healthCheck = () =>
-    Effect.tryPromise(async () => {
-      try {
-        const response = await fetch(`${config.apiBaseUrl}/health`, {
-          method: "GET",
-          signal: AbortSignal.timeout(5000),
-        });
-
-        if (!response.ok) {
-          console.error(
-            `[API] Backend health check failed with status ${response.status}`,
-          );
-          return { healthy: false, status: response.status };
-        }
-
-        const data = await response.json().catch(() => ({}));
-        return { healthy: true, status: response.status, data };
-      } catch (error) {
-        console.error("[API] Backend health check failed:", error);
-        return { healthy: false, error: String(error) };
-      }
-    });
+    apiFetch<{ status: string; timestamp?: string }>("/health");
 
   /**
    * Verify admin API key is configured and matches backend
@@ -372,6 +348,39 @@ export const createApi = (config: TelegramConfigPartial) => {
       }
     });
 
+  /**
+   * Get current trading mode for a chat
+   */
+  const getTradingMode = (chatId: string) =>
+    apiFetch<{
+      mode: string;
+      confirmations: number;
+      required_confirmations: number;
+    }>(`/api/v1/trading-mode/${encodeURIComponent(chatId)}`);
+
+  /**
+   * Set trading mode for a chat
+   */
+  const setTradingMode = (chatId: string, mode: string) =>
+    apiFetch<{ success: boolean; mode: string }>(
+      `/api/v1/trading-mode/${encodeURIComponent(chatId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ mode }),
+      },
+    );
+
+  /**
+   * Add confirmation for live mode
+   */
+  const addTradingModeConfirmation = (chatId: string) =>
+    apiFetch<{
+      confirmations: number;
+      required: number;
+    }>(`/api/v1/trading-mode/${encodeURIComponent(chatId)}/confirm`, {
+      method: "POST",
+    });
+
   return {
     getUserByChatId,
     getNotificationPreference,
@@ -380,6 +389,9 @@ export const createApi = (config: TelegramConfigPartial) => {
     getOpportunities,
     healthCheck,
     verifyAdminAuth,
+    getTradingMode,
+    setTradingMode,
+    addTradingModeConfirmation,
   };
 };
 

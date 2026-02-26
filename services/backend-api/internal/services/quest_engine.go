@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,13 @@ const (
 	QuestTypeTriggered QuestType = "triggered" // Event-driven quests
 	QuestTypeGoal      QuestType = "goal"      // Milestone-driven quests
 	QuestTypeArbitrage QuestType = "arbitrage" // Arbitrage execution quests
+)
+
+const (
+	defaultMicroCadenceInterval = time.Minute
+	minMicroCadenceInterval     = 10 * time.Second
+	defaultQuestExecutionStale  = 3 * time.Minute
+	minQuestExecutionStale      = time.Minute
 )
 
 // QuestCadence defines the frequency of routine quests
@@ -106,6 +114,8 @@ type QuestHandler func(ctx context.Context, quest *Quest) error
 type QuestEngine struct {
 	mu              sync.RWMutex
 	quests          map[string]*Quest
+	executing       map[string]bool
+	executionStarts map[string]time.Time
 	autonomousState map[string]*AutonomousState
 	definitions     map[string]*QuestDefinition
 	handlers        map[QuestType]QuestHandler
@@ -237,6 +247,8 @@ func NewQuestEngine(store QuestStore) *QuestEngine {
 func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *QuestEngine {
 	engine := &QuestEngine{
 		quests:          make(map[string]*Quest),
+		executing:       make(map[string]bool),
+		executionStarts: make(map[string]time.Time),
 		autonomousState: make(map[string]*AutonomousState),
 		definitions:     make(map[string]*QuestDefinition),
 		handlers:        make(map[QuestType]QuestHandler),
@@ -400,6 +412,7 @@ func (e *QuestEngine) Start() {
 	e.mu.Lock()
 	if e.running {
 		e.mu.Unlock()
+		log.Println("[QUEST] Start called but already running")
 		return
 	}
 	e.running = true
@@ -409,7 +422,8 @@ func (e *QuestEngine) Start() {
 	e.loadActiveQuests()
 
 	go e.schedulerLoop()
-	log.Println("Quest engine started")
+	log.Printf("[QUEST] Quest engine started")
+	log.Printf("[QUEST] Initial state: %d quests loaded, running=%v", len(e.quests), e.running)
 }
 
 // loadActiveQuests loads active quests from the database into memory
@@ -480,16 +494,22 @@ func (e *QuestEngine) Stop() {
 
 // schedulerLoop runs the periodic quest scheduling
 func (e *QuestEngine) schedulerLoop() {
-	log.Println("Quest scheduler loop started")
-	ticker := time.NewTicker(1 * time.Minute)
+	log.Println("[QUEST] Scheduler loop started")
+	microInterval := microCadenceInterval()
+	ticker := time.NewTicker(microInterval)
 	defer ticker.Stop()
+	log.Printf("[QUEST] Scheduler micro cadence interval: %s", microInterval)
+
+	// Run an immediate check so newly activated quests do not wait for the first interval.
+	e.tick()
 
 	for {
 		select {
 		case <-e.stopCh:
+			log.Println("[QUEST] Scheduler loop stopped")
 			return
 		case <-ticker.C:
-			log.Println("Quest scheduler ticker triggered")
+			log.Printf("[QUEST] Scheduler ticker triggered, %d quests in memory", len(e.quests))
 			e.tick()
 		}
 	}
@@ -506,34 +526,73 @@ func (e *QuestEngine) tick() {
 		if quest.Status == QuestStatusCompleted || quest.Status == QuestStatusFailed {
 			if quest.UpdatedAt.Before(now.Add(-cleanupThreshold)) {
 				delete(e.quests, id)
+				delete(e.executing, id)
+				delete(e.executionStarts, id)
 				delete(e.chatIDForQuest, id)
-				log.Printf("Cleaned up old quest: %s (status: %s)", id, quest.Status)
+				log.Printf("[QUEST] Cleaned up old quest: %s (status: %s)", id, quest.Status)
 			}
 		}
 	}
 	e.mu.Unlock()
 
-	// Then, check quests for execution (read lock)
-	e.mu.RLock()
-	log.Printf("Quest scheduler tick: checking %d quests", len(e.quests))
+	// Then, check quests for execution.
+	e.mu.Lock()
+	log.Printf("[QUEST] Tick: checking %d quests for execution", len(e.quests))
+	activeCount := 0
+	scheduledCount := 0
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
+			log.Printf("[QUEST] Quest %s (%s) skipped - status: %s", quest.ID, quest.Name, quest.Status)
 			continue
+		}
+		activeCount++
+		if e.executing[quest.ID] {
+			startedAt := e.executionStarts[quest.ID]
+			if startedAt.IsZero() {
+				startedAt = now
+				e.executionStarts[quest.ID] = startedAt
+			}
+
+			age := now.Sub(startedAt)
+			staleAfter := questExecutionStaleAfter()
+			if age > staleAfter {
+				log.Printf(
+					"[QUEST] Quest %s (%s) execution stale after %s (limit=%s), resetting in-progress marker",
+					quest.ID,
+					quest.Name,
+					age.Round(time.Second),
+					staleAfter.Round(time.Second),
+				)
+				delete(e.executing, quest.ID)
+				delete(e.executionStarts, quest.ID)
+			} else {
+				log.Printf(
+					"[QUEST] Quest %s (%s) skipped - execution already in progress for %s",
+					quest.ID,
+					quest.Name,
+					age.Round(time.Second),
+				)
+				continue
+			}
 		}
 
 		// Check if quest should execute based on cadence
 		if e.shouldExecute(quest, now) {
-			log.Printf("Executing quest: %s (type: %s)", quest.ID, quest.Type)
+			log.Printf("[QUEST] Executing quest: %s (type: %s, def: %s, chat: %s)", quest.ID, quest.Type, quest.Metadata["definition_id"], quest.Metadata["chat_id"])
+			e.executing[quest.ID] = true
+			e.executionStarts[quest.ID] = now
+			scheduledCount++
 			go e.executeQuest(quest)
 		} else {
-			log.Printf("Quest %s not ready (cadence: %s)", quest.ID, quest.Cadence)
+			log.Printf("[QUEST] Quest %s not ready (cadence: %s, last: %v)", quest.ID, quest.Cadence, quest.LastExecutedAt)
 		}
 	}
-	e.mu.RUnlock()
+	log.Printf("[QUEST] Tick complete: %d active quests, %d sent for execution", activeCount, scheduledCount)
+	e.mu.Unlock()
 }
 
 func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
-	minInterval := 1 * time.Minute
+	minInterval := microCadenceInterval()
 
 	if quest.LastExecutedAt != nil && now.Sub(*quest.LastExecutedAt) < minInterval {
 		return false
@@ -542,7 +601,7 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 	switch quest.Cadence {
 	case CadenceMicro:
 		if quest.LastExecutedAt != nil {
-			return now.Sub(*quest.LastExecutedAt) >= 1*time.Minute
+			return now.Sub(*quest.LastExecutedAt) >= minInterval
 		}
 		return true
 	case CadenceHourly:
@@ -567,8 +626,50 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 	}
 }
 
+func microCadenceInterval() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_MICRO_CADENCE_SECONDS"))
+	if raw == "" {
+		return defaultMicroCadenceInterval
+	}
+
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		log.Printf("[QUEST] Invalid NEURATRADE_MICRO_CADENCE_SECONDS=%q, using default %s", raw, defaultMicroCadenceInterval)
+		return defaultMicroCadenceInterval
+	}
+
+	interval := time.Duration(seconds) * time.Second
+	if interval < minMicroCadenceInterval {
+		log.Printf("[QUEST] NEURATRADE_MICRO_CADENCE_SECONDS too low (%ds), clamping to %s", seconds, minMicroCadenceInterval)
+		return minMicroCadenceInterval
+	}
+	return interval
+}
+
+func questExecutionStaleAfter() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS"))
+	if raw == "" {
+		return defaultQuestExecutionStale
+	}
+
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		log.Printf("[QUEST] Invalid NEURATRADE_QUEST_EXECUTION_STALE_SECONDS=%q, using default %s", raw, defaultQuestExecutionStale)
+		return defaultQuestExecutionStale
+	}
+
+	ttl := time.Duration(seconds) * time.Second
+	if ttl < minQuestExecutionStale {
+		log.Printf("[QUEST] NEURATRADE_QUEST_EXECUTION_STALE_SECONDS too low (%ds), clamping to %s", seconds, minQuestExecutionStale)
+		return minQuestExecutionStale
+	}
+	return ttl
+}
+
 // executeQuest executes a single quest
 func (e *QuestEngine) executeQuest(quest *Quest) {
+	defer e.markQuestExecutionFinished(quest.ID)
+
 	e.mu.RLock()
 	handler, ok := e.handlers[quest.Type]
 	e.mu.RUnlock()
@@ -603,6 +704,13 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 			e.updateQuestStatus(quest.ID, QuestStatusCompleted)
 		}
 	}
+}
+
+func (e *QuestEngine) markQuestExecutionFinished(questID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.executing, questID)
+	delete(e.executionStarts, questID)
 }
 
 func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Duration) bool {
@@ -695,6 +803,14 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 			log.Printf("Failed to create quest %s: %v", defID, err)
 			continue
 		}
+		// Set dry-run mode from config (default to false for live trading)
+		if quest.Metadata == nil {
+			quest.Metadata = make(map[string]string)
+		}
+		quest.Metadata["dry_run"] = "false"
+		quest.Metadata["paper_trading"] = "false"
+		log.Printf("[QUEST] Created quest %s with dry_run=false (LIVE TRADING MODE)", quest.ID)
+
 		quest.Status = QuestStatusActive
 		state.ActiveQuests = append(state.ActiveQuests, quest.ID)
 	}

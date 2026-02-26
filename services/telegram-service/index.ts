@@ -6,6 +6,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { config } from "./src/config";
 import { BackendApiClient } from "./src/api/client";
 import { registerAllCommands } from "./src/commands";
+import { registerTelegramCommandMenu } from "./src/commands/menu";
 import { SessionManager } from "./src/session";
 import { logger } from "./src/utils/logger";
 import { startGrpcServer } from "./grpc-server";
@@ -162,6 +163,7 @@ const startBot = async () => {
 
   if (config.usePolling) {
     logger.info("Starting bot in polling mode");
+    await registerTelegramCommandMenu(bot);
 
     // Enable verbose polling debug
     bot.use(async (ctx, next) => {
@@ -204,6 +206,7 @@ const startBot = async () => {
     throw new Error("TELEGRAM_WEBHOOK_URL must be set for webhook mode");
   }
 
+  await registerTelegramCommandMenu(bot);
   logger.info("Setting Telegram webhook", { webhookUrl: config.webhookUrl });
   await bot.api.setWebhook(config.webhookUrl, {
     secret_token: config.webhookSecret || undefined,

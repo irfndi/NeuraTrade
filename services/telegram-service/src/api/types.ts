@@ -164,7 +164,9 @@ export interface PortfolioResponse {
   readonly total_equity: string;
   readonly available_balance?: string;
   readonly exposure?: string;
+  readonly open_orders?: number;
   readonly positions: readonly PortfolioPosition[];
+  readonly note?: string;
   readonly updated_at?: string;
 }
 
@@ -352,3 +354,44 @@ export interface CreateAlertResponse {
   readonly message: string;
   readonly data: UserAlert;
 }
+
+/**
+ * Trading mode response from backend API.
+ */
+export interface TradingModeResponse {
+  readonly mode: "dry" | "live";
+  readonly confirmations: number;
+  readonly required_confirmations: number;
+  readonly changed_at?: string;
+  readonly changed_by?: string;
+}
+
+/**
+ * Response from setting trading mode.
+ */
+export interface SetTradingModeResponse {
+  readonly success: boolean;
+  readonly mode: string;
+  readonly error?: string;
+}
+
+/**
+ * Response from adding trading mode confirmation.
+ */
+export interface TradingModeConfirmationResponse {
+  readonly confirmations: number;
+  readonly required: number;
+  readonly error?: string;
+}
+
+// Add trading mode endpoints to API_ENDPOINTS (need to redeclare)
+export const TRADING_MODE_ENDPOINTS = {
+  GET_TRADING_MODE: (chatId: string) =>
+    `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}`,
+  SET_TRADING_MODE: (chatId: string) =>
+    `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}`,
+  ADD_CONFIRMATION: (chatId: string) =>
+    `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}/confirm`,
+  RESET_CONFIRMATIONS: (chatId: string) =>
+    `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}/confirmations`,
+} as const;

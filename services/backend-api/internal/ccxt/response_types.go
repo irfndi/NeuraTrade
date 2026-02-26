@@ -348,3 +348,93 @@ type ExchangeManagementResponse struct {
 	// Timestamp is the response timestamp.
 	Timestamp string `json:"timestamp"`
 }
+
+// Order represents an exchange order.
+type Order struct {
+	// ID is the order ID.
+	ID string `json:"id"`
+	// ClientOrderID is the client-specified order ID.
+	ClientOrderID string `json:"clientOrderId"`
+	// Symbol is the trading pair.
+	Symbol string `json:"symbol"`
+	// Type is the order type (limit, market, etc.).
+	Type string `json:"type"`
+	// Side is buy or sell.
+	Side string `json:"side"`
+	// Status is the order status (open, closed, cancelled).
+	Status string `json:"status"`
+	// Price is the order price.
+	Price decimal.Decimal `json:"price"`
+	// Amount is the order amount.
+	Amount decimal.Decimal `json:"amount"`
+	// Filled is the filled amount.
+	Filled decimal.Decimal `json:"filled"`
+	// Remaining is the remaining amount.
+	Remaining decimal.Decimal `json:"remaining"`
+	// Cost is the total cost.
+	Cost decimal.Decimal `json:"cost"`
+	// CreatedAt is the creation time.
+	CreatedAt time.Time `json:"datetime"`
+	// Timestamp is the update time.
+	Timestamp UnixTimestamp `json:"timestamp"`
+}
+
+// OpenOrdersResponse represents the response from fetching open orders.
+type OpenOrdersResponse struct {
+	// Exchange is the exchange name.
+	Exchange string `json:"exchange"`
+	// Orders is the list of open orders.
+	Orders []Order `json:"orders"`
+	// Count is the number of orders.
+	Count int `json:"count"`
+	// Timestamp is the response timestamp.
+	Timestamp string `json:"timestamp"`
+}
+
+// OrderResponse represents the response from fetching a single order.
+type OrderResponse struct {
+	// Exchange is the exchange name.
+	Exchange string `json:"exchange"`
+	// Order is the order data.
+	Order Order `json:"order"`
+	// Timestamp is the response timestamp.
+	Timestamp string `json:"timestamp"`
+}
+
+// Position represents a futures position.
+type Position struct {
+	// ID is the position ID.
+	ID string `json:"id"`
+	// Symbol is the trading pair.
+	Symbol string `json:"symbol"`
+	// Side is long or short.
+	Side string `json:"side"`
+	// Size is the position size.
+	Size decimal.Decimal `json:"contracts"`
+	// EntryPrice is the entry price.
+	EntryPrice decimal.Decimal `json:"entryPrice"`
+	// MarkPrice is the current mark price.
+	MarkPrice decimal.Decimal `json:"markPrice"`
+	// UnrealizedPnl is the unrealized profit/loss.
+	UnrealizedPnl decimal.Decimal `json:"unrealizedPnl"`
+	// Leverage is the position leverage.
+	Lverage int `json:"leverage"`
+	// LiquidationPrice is the liquidation price.
+	LiquidationPrice decimal.Decimal `json:"liquidationPrice"`
+	// MarginMode is cross or isolated.
+	MarginMode string `json:"marginMode"`
+	// Timestamp is the update time.
+	Timestamp UnixTimestamp `json:"timestamp"`
+}
+
+// PositionsResponse represents the response from fetching positions.
+type PositionsResponse struct {
+	// Exchange is the exchange name.
+	Exchange string `json:"exchange"`
+	// Positions is the list of positions.
+	Positions []Position `json:"positions"`
+	// Count is the number of positions.
+	Count int `json:"count"`
+	// Timestamp is the response timestamp.
+	Timestamp string `json:"timestamp"`
+}

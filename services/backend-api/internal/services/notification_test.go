@@ -851,7 +851,7 @@ func TestNotificationService_formatAggregatedTechnicalMessage(t *testing.T) {
 	assert.Contains(t, message, "0.03%")
 }
 
-func TestNotificationService_NotifyArbitrageOpportunities_EmptyOpportunities(t *testing.T) {
+func TestNotificationService_NotifyMarketOpportunities_EmptyOpportunities(t *testing.T) {
 	ns := NewNotificationService(nil, nil, "", "", "")
 	ctx := context.Background()
 
@@ -859,11 +859,11 @@ func TestNotificationService_NotifyArbitrageOpportunities_EmptyOpportunities(t *
 
 	// Should panic due to nil database when trying to get eligible users
 	assert.Panics(t, func() {
-		_ = ns.NotifyArbitrageOpportunities(ctx, opportunities)
+		_ = ns.NotifyMarketOpportunities(ctx, opportunities)
 	})
 }
 
-func TestNotificationService_NotifyArbitrageOpportunities_CategorizationLogic(t *testing.T) {
+func TestNotificationService_NotifyMarketOpportunities_CategorizationLogic(t *testing.T) {
 	// Test the categorization logic directly by examining opportunities
 	opportunities := []ArbitrageOpportunity{
 		{
@@ -910,7 +910,7 @@ func TestNotificationService_NotifyArbitrageOpportunities_CategorizationLogic(t 
 	assert.Equal(t, "ETH/USDT", technicalOpps[0].Symbol)
 }
 
-func TestNotificationService_NotifyArbitrageOpportunities_MixedTypes(t *testing.T) {
+func TestNotificationService_NotifyMarketOpportunities_MixedTypes(t *testing.T) {
 	// Test with mixed opportunity types
 	opportunities := []ArbitrageOpportunity{
 		{
@@ -969,7 +969,7 @@ func TestNotificationService_NotifyArbitrageOpportunities_MixedTypes(t *testing.
 	}
 }
 
-func TestNotificationService_NotifyArbitrageOpportunities_WithDatabase(t *testing.T) {
+func TestNotificationService_NotifyMarketOpportunities_WithDatabase(t *testing.T) {
 	// This test demonstrates that the function requires a valid database
 	// In a real test environment, you would need to set up a test database
 	ctx := context.Background()
@@ -988,7 +988,7 @@ func TestNotificationService_NotifyArbitrageOpportunities_WithDatabase(t *testin
 	// Should panic due to nil database access
 	ns := NewNotificationService(nil, nil, "", "", "")
 	assert.Panics(t, func() {
-		_ = ns.NotifyArbitrageOpportunities(ctx, opportunities)
+		_ = ns.NotifyMarketOpportunities(ctx, opportunities)
 	})
 }
 

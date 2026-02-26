@@ -174,14 +174,74 @@ func (c *Client) Chat(ctx context.Context, providerID, modelID string, messages 
 	}
 	c.mu.RUnlock()
 
-	// Make request based on provider
+	// Use unified provider client for all providers
+	fmt.Printf("[DEBUG CLIENT] providerID=%s\n", providerID)
+	apiKey := c.getAPIKey(providerID)
+	if apiKey == "" {
+		return nil, fmt.Errorf("no API key for provider: %s", providerID)
+	}
+
+	baseURL := c.getBaseURL(providerID)
+	model := c.getModel(providerID)
+
+	client := NewUnifiedProviderClient(providerID, apiKey, baseURL, model)
+	return client.Chat(ctx, req)
+}
+
+// getAPIKey returns the API key for a provider
+func (c *Client) getAPIKey(providerID string) string {
 	switch providerID {
 	case "openai":
-		return c.chatOpenAI(ctx, provider, req)
+		return os.Getenv("OPENAI_API_KEY")
 	case "anthropic":
-		return c.chatAnthropic(ctx, provider, req)
+		return os.Getenv("ANTHROPIC_API_KEY")
+	case "minimax":
+		return os.Getenv("MINIMAX_API_KEY")
 	default:
-		return nil, fmt.Errorf("unsupported provider: %s", providerID)
+		return os.Getenv(providerID + "_API_KEY")
+	}
+}
+
+// getBaseURL returns the base URL for a provider
+func (c *Client) getBaseURL(providerID string) string {
+	switch providerID {
+	case "openai":
+		if envURL := os.Getenv("OPENAI_BASE_URL"); envURL != "" {
+			return envURL
+		}
+		return "https://api.openai.com/v1"
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "minimax":
+		return "https://api.minimax.io/anthropic/v1"
+	default:
+		if envURL := os.Getenv(providerID + "_BASE_URL"); envURL != "" {
+			return envURL
+		}
+		return "https://api.models.dev/v1"
+	}
+}
+
+// getModel returns the default model for a provider
+func (c *Client) getModel(providerID string) string {
+	switch providerID {
+	case "openai":
+		if envModel := os.Getenv("OPENAI_MODEL"); envModel != "" {
+			return envModel
+		}
+		return "gpt-4o-mini"
+	case "anthropic":
+		if envModel := os.Getenv("ANTHROPIC_MODEL"); envModel != "" {
+			return envModel
+		}
+		return "claude-sonnet-4-20250514"
+	case "minimax":
+		if envModel := os.Getenv("MINIMAX_MODEL"); envModel != "" {
+			return envModel
+		}
+		return "minimax-m2.5"
+	default:
+		return "gpt-4o-mini"
 	}
 }
 
@@ -341,6 +401,8 @@ func (c *Client) buildToolsJSON() ([]json.RawMessage, error) {
 }
 
 // chatOpenAI makes a request to OpenAI API.
+// chatOpenAI is deprecated - use provider_unified.go instead
+// nolint:unused,deadcode
 func (c *Client) chatOpenAI(ctx context.Context, provider *ProviderInfo, req *ChatRequest) (*ChatResponse, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -422,6 +484,8 @@ func (c *Client) chatOpenAI(ctx context.Context, provider *ProviderInfo, req *Ch
 }
 
 // chatAnthropic makes a request to Anthropic API.
+// chatAnthropic is deprecated - use provider_unified.go instead
+// nolint:unused,deadcode
 func (c *Client) chatAnthropic(ctx context.Context, provider *ProviderInfo, req *ChatRequest) (*ChatResponse, error) {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {

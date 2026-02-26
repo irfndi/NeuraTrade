@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -243,11 +244,21 @@ type CCXTHealthResponse struct {
 }
 
 func (h *HealthHandler) checkCCXTService() error {
+	ccxtURL := strings.TrimSpace(h.ccxtURL)
+	if ccxtURL == "" || strings.EqualFold(ccxtURL, "native") || strings.HasPrefix(strings.ToLower(ccxtURL), "native://") {
+		// Native CCXT mode is embedded in-process, so no external health endpoint is required.
+		return nil
+	}
+	if !strings.HasPrefix(ccxtURL, "http://") && !strings.HasPrefix(ccxtURL, "https://") {
+		// Non-HTTP identifiers (e.g. "native") are treated as in-process mode.
+		return nil
+	}
+
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	resp, err := client.Get(h.ccxtURL + "/health")
+	resp, err := client.Get(strings.TrimRight(ccxtURL, "/") + "/health")
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}

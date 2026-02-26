@@ -24,7 +24,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.5'
+          go-version: '1.26.0'
           cache: true
 
       - name: Set up Bun
@@ -39,9 +39,6 @@ jobs:
 
       - name: Install Bun dependencies
         run: |
-          if [ -d "services/ccxt-service" ]; then
-            cd services/ccxt-service && bun install
-          fi
           if [ -d "services/telegram-service" ]; then
             cd services/telegram-service && bun install
           fi
@@ -49,7 +46,7 @@ jobs:
       - name: Install golangci-lint
         run: |
           mkdir -p ./bin
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./bin v2.7.2
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./bin v2.10.1
 
       - name: Install shfmt
         run: |
@@ -65,12 +62,6 @@ jobs:
 
       - name: Run TypeScript/JS formatters
         run: |
-          if [ -d "services/ccxt-service" ]; then
-            cd services/ccxt-service
-            bunx prettier --write . || true
-            bunx oxlint --fix . || true
-            cd ../..
-          fi
           if [ -d "services/telegram-service" ]; then
             cd services/telegram-service
             bunx prettier --write . || true

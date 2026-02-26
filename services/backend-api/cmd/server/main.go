@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -60,6 +64,16 @@ func main() {
 // Returns:
 //   - An error if initialization fails at any critical step.
 func run() error {
+	lock, err := acquireServerProcessLock()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if unlockErr := lock.Release(); unlockErr != nil {
+			fmt.Fprintf(os.Stderr, "Failed to release backend process lock: %v\n", unlockErr)
+		}
+	}()
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
@@ -174,19 +188,25 @@ func run() error {
 		// Don't fail startup, but log warning - exchanges may be created dynamically
 	}
 
-	if err := collectorService.Start(); err != nil {
-		logger.WithError(err).Fatal("Failed to start collector service")
+	collectorStartErr := collectorService.Start()
+	if collectorStartErr != nil {
+		logger.WithError(collectorStartErr).Warn("Failed to start collector service - continuing without market data collection (AI scalping will use fallback data)")
+		// Don't fail startup - AI scalping can work with direct exchange API calls
+		// collectorService will be nil-safe for other operations
 	}
-	defer collectorService.Stop()
+	if collectorStartErr == nil {
+		// Only wait for data if collector started successfully
+		defer collectorService.Stop()
 
-	// Wait for first market data before starting dependent services
-	// This prevents arbitrage from running with no data (exchanges=0 issue)
-	logger.Info("Waiting for initial market data collection...")
-	if err := collectorService.WaitForFirstData(2 * time.Minute); err != nil {
-		logger.WithError(err).Warn("Timeout waiting for first market data - starting dependent services anyway")
-		// Don't fail startup, but log warning - services will retry on next collection
-	} else {
-		logger.Info("Initial market data collected successfully")
+		// Wait for first market data before starting dependent services
+		// This prevents arbitrage from running with no data (exchanges=0 issue)
+		logger.Info("Waiting for initial market data collection...")
+		if err := collectorService.WaitForFirstData(2 * time.Minute); err != nil {
+			logger.WithError(err).Warn("Timeout waiting for first market data - starting dependent services anyway")
+			// Don't fail startup, but log warning - services will retry on next collection
+		} else {
+			logger.Info("Initial market data collected successfully")
+		}
 	}
 
 	// Initialize support services for futures arbitrage and cleanup
@@ -196,7 +216,7 @@ func run() error {
 	defer performanceMonitor.Stop()
 
 	// Start historical data backfill in background only when explicitly enabled.
-	if cfg.Backfill.Enabled {
+	if cfg.Backfill.Enabled && collectorService != nil {
 		go func() {
 			logger.Info("Checking for historical data backfill requirements")
 			if err := collectorService.PerformBackfillIfNeeded(); err != nil {
@@ -206,12 +226,16 @@ func run() error {
 			}
 		}()
 	} else {
-		logger.Info("Historical data backfill disabled")
+		if !cfg.Backfill.Enabled {
+			logger.Info("Historical data backfill disabled")
+		} else {
+			logger.Info("Skipping backfill - collector service not available")
+		}
 	}
 
-	// Scalping-first mode: keep arbitrage engines off unless explicitly enabled.
-	enableArbitrageEngines := cfg.Features.EnableAIArbitrage && cfg.Arbitrage.Enabled
-	if enableArbitrageEngines {
+	// Keep spot and futures arbitrage controls explicit.
+	enableSpotArbitrageEngine := cfg.Features.EnableAIArbitrage && cfg.Arbitrage.Enabled
+	if enableSpotArbitrageEngine {
 		// Initialize futures arbitrage calculator
 		arbitrageCalculator := services.NewFuturesArbitrageCalculator()
 
@@ -230,16 +254,22 @@ func run() error {
 			logger.WithError(err).Fatal("Failed to start arbitrage service")
 		}
 		defer arbitrageService.Stop()
+		logger.Info("Spot arbitrage engine enabled")
+	} else {
+		logger.Info("Spot arbitrage engine disabled (enable with features.enable_ai_arbitrage=true and arbitrage.enabled=true)")
+	}
 
+	enableFuturesArbitrageEngine := cfg.Arbitrage.Enabled
+	if enableFuturesArbitrageEngine {
 		// Initialize futures arbitrage service
 		futuresArbitrageService := services.NewFuturesArbitrageService(db, getRedisClient(), cfg, errorRecoveryManager, resourceManager, performanceMonitor, getLogger("futures_arbitrage_service"))
 		if err := futuresArbitrageService.Start(); err != nil {
 			logger.WithError(err).Fatal("Failed to start futures arbitrage service")
 		}
 		defer futuresArbitrageService.Stop()
-		logger.Info("Arbitrage engines enabled")
+		logger.Info("Futures arbitrage engine enabled")
 	} else {
-		logger.Info("Arbitrage engines disabled in scalping-first mode")
+		logger.Info("Futures arbitrage engine disabled (enable with arbitrage.enabled=true)")
 	}
 
 	// Initialize signal aggregator service
@@ -371,10 +401,12 @@ func run() error {
 	}
 	router.Use(gin.Recovery())
 
-	// Setup routes and get cleanup function
-	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator)
-	defer cleanupRoutes()
+	// Create operational mode service
+	opModeService := services.NewOperationalModeService(db, services.DefaultOperationalModeConfig(), logger.WithComponent("operational_mode"))
 
+	// Setup routes and get cleanup function
+	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService)
+	defer cleanupRoutes()
 	// Create HTTP server with security timeouts
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
@@ -429,4 +461,99 @@ func warnLegacyHandlersPath(logger *zaplogrus.Logger) {
 	} else if !os.IsNotExist(err) {
 		logger.WithError(err).Warn("Failed to inspect legacy handlers path")
 	}
+}
+
+type serverProcessLock struct {
+	file *os.File
+}
+
+func acquireServerProcessLock() (*serverProcessLock, error) {
+	lockPath, err := serverLockFilePath()
+	if err != nil {
+		return nil, err
+	}
+
+	// #nosec G304 -- lock path is derived from NEURATRADE_HOME or user home, not request input
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open backend lock file %q: %w", lockPath, err)
+	}
+
+	fd, err := safeFD(lockFile)
+	if err != nil {
+		_ = lockFile.Close()
+		return nil, err
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, fmt.Errorf("backend server already running (lock: %s)", lockPath)
+		}
+		return nil, fmt.Errorf("failed to acquire backend lock %q: %w", lockPath, err)
+	}
+
+	if truncateErr := lockFile.Truncate(0); truncateErr == nil {
+		_, _ = lockFile.Seek(0, 0)
+		_, _ = lockFile.WriteString(strconv.Itoa(os.Getpid()))
+	}
+
+	return &serverProcessLock{file: lockFile}, nil
+}
+
+func serverLockFilePath() (string, error) {
+	homeDir := strings.TrimSpace(os.Getenv("NEURATRADE_HOME"))
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve home directory for backend lock: %w", err)
+		}
+		if strings.TrimSpace(homeDir) == "" {
+			return "", fmt.Errorf("failed to resolve home directory for backend lock: empty home directory")
+		}
+		homeDir = filepath.Join(homeDir, ".neuratrade")
+	}
+
+	runDir := filepath.Join(homeDir, "run")
+	// #nosec G703 -- runDir is derived from operator-controlled home path
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		return "", fmt.Errorf("failed to create runtime directory %q: %w", runDir, err)
+	}
+
+	return filepath.Join(runDir, "backend.lock"), nil
+}
+
+func (l *serverProcessLock) Release() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+
+	fd, err := safeFD(l.file)
+	if err != nil {
+		closeErr := l.file.Close()
+		l.file = nil
+		if closeErr != nil {
+			return fmt.Errorf("%v; additionally failed to close lock file: %w", err, closeErr)
+		}
+		return err
+	}
+	unlockErr := syscall.Flock(fd, syscall.LOCK_UN)
+	closeErr := l.file.Close()
+	l.file = nil
+
+	if unlockErr != nil {
+		return unlockErr
+	}
+	return closeErr
+}
+
+func safeFD(file *os.File) (int, error) {
+	if file == nil {
+		return 0, fmt.Errorf("lock file is nil")
+	}
+	fd := file.Fd()
+	if fd > uintptr(math.MaxInt) {
+		return 0, fmt.Errorf("lock file descriptor exceeds int range: %d", fd)
+	}
+	return int(fd), nil
 }

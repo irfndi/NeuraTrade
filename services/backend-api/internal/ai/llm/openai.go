@@ -80,10 +80,11 @@ type openAIRequest struct {
 }
 
 type openAIMessage struct {
-	Role      string           `json:"role"`
-	Content   interface{}      `json:"content"`
-	ToolID    string           `json:"tool_call_id,omitempty"`
-	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
+	Role             string           `json:"role"`
+	Content          interface{}      `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolID           string           `json:"tool_call_id,omitempty"`
+	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAIToolCall struct {
@@ -129,9 +130,10 @@ type openAIChoice struct {
 }
 
 type openAIDelta struct {
-	Role      string           `json:"role,omitempty"`
-	Content   string           `json:"content,omitempty"`
-	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
+	Role             string           `json:"role,omitempty"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAIUsage struct {
@@ -156,6 +158,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, req *CompletionRequest) (*C
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	// Debug: Log the request body
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -397,11 +400,15 @@ func (c *OpenAIClient) convertResponse(resp *openAIResponse, latencyMs int64) *C
 	}
 
 	choice := resp.Choices[0]
+	content := fmt.Sprintf("%v", choice.Message.Content)
+	// Handle Zhipu GLM-5 which returns content in reasoning_content field
+	if content == "" || content == "<nil>" {
+		content = choice.Message.ReasoningContent
+	}
 	message := Message{
 		Role:    Role(choice.Message.Role),
-		Content: fmt.Sprintf("%v", choice.Message.Content),
+		Content: content,
 	}
-
 	var toolCalls []ToolCall
 	for _, tc := range choice.Message.ToolCalls {
 		toolCalls = append(toolCalls, ToolCall{
