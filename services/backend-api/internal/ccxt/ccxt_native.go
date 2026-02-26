@@ -1973,12 +1973,30 @@ func (s *NativeCCXTService) FetchFundingRates(ctx context.Context, exchange stri
 		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.parseFundingRateResponse(exchange, body)
+	rates, err := s.parseFundingRateResponse(exchange, body)
+	if err != nil {
+		return nil, err
+	}
+	// For Bitget with specific symbols requested, filter results
+	if exchange == "bitget" && len(symbols) > 1 {
+		wanted := make(map[string]struct{}, len(symbols))
+		for _, symbol := range symbols {
+			wanted[bitgetSymbolKey(symbol)] = struct{}{}
+		}
+		filtered := make([]FundingRate, 0, len(rates))
+		for _, rate := range rates {
+			if _, ok := wanted[bitgetSymbolKey(rate.Symbol)]; ok {
+				filtered = append(filtered, rate)
+			}
+		}
+		return filtered, nil
+	}
+	return rates, nil
 }
 
 func (s *NativeCCXTService) FetchAllFundingRates(ctx context.Context, exchange string) ([]FundingRate, error) {
@@ -2040,13 +2058,13 @@ func (s *NativeCCXTService) buildFundingRateURL(exchange string, symbols []strin
 		}
 		instId := strings.ReplaceAll(symbols[0], "/", "-")
 		return fmt.Sprintf("https://www.okx.com/api/v5/public/funding-rate?instId=%s", instId)
-	case "bitget":
-		// Bitget v2: current-fund-rate for single symbol, tickers for all symbols.
-		if len(symbols) == 0 {
-			return "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
+case "bitget":
+		// Bitget v2: current-fund-rate for single symbol, tickers for all/filtered symbol sets.
+		if len(symbols) == 1 {
+			symbol := bitgetSymbolKey(symbols[0])
+			return fmt.Sprintf("https://api.bitget.com/api/v2/mix/market/current-fund-rate?symbol=%s&productType=USDT-FUTURES", symbol)
 		}
-		symbol := bitgetSymbolKey(symbols[0])
-		return fmt.Sprintf("https://api.bitget.com/api/v2/mix/market/current-fund-rate?symbol=%s&productType=USDT-FUTURES", symbol)
+		return "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
 	default:
 		return ""
 	}
@@ -2207,22 +2225,47 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 		return nil, fmt.Errorf("bitget API error: %s", raw.Msg)
 	}
 
-	rates := make([]FundingRate, 0, len(raw.Data))
+rates := make([]FundingRate, 0, len(raw.Data))
 	for _, item := range raw.Data {
-		rate, _ := strconv.ParseFloat(item.FundingRate, 64)
-		ts, _ := strconv.ParseInt(item.FundingTime, 10, 64)
-		if ts == 0 {
-			ts, _ = strconv.ParseInt(item.Ts, 10, 64)
+		rate, err := strconv.ParseFloat(strings.TrimSpace(item.FundingRate), 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid bitget fundingRate for %s: %w", item.Symbol, err)
+		}
+
+ts, err := strconv.ParseInt(strings.TrimSpace(item.FundingTime), 10, 64)
+		if err != nil {
+			ts, err = strconv.ParseInt(strings.TrimSpace(item.Ts), 10, 64)
 		}
 		if ts == 0 {
+			// Fallback to current time if no timestamp is available
 			ts = time.Now().UnixMilli()
 		}
-		nextTs, _ := strconv.ParseInt(item.NextFundingTime, 10, 64)
+
+		nextTs, _ := strconv.ParseInt(strings.TrimSpace(item.NextFundingTime), 10, 64)
 		if nextTs == 0 {
-			nextTs, _ = strconv.ParseInt(item.NextUpdate, 10, 64)
+			nextTs, _ = strconv.ParseInt(strings.TrimSpace(item.NextUpdate), 10, 64)
 		}
-		markPrice, _ := strconv.ParseFloat(item.MarkPrice, 64)
-		indexPrice, _ := strconv.ParseFloat(item.IndexPrice, 64)
+		if nextTs == 0 {
+			nextTs = ts
+		}
+
+		markPrice := 0.0
+		if v := strings.TrimSpace(item.MarkPrice); v != "" {
+			parsed, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid bitget markPrice for %s: %w", item.Symbol, err)
+			}
+			markPrice = parsed
+		}
+
+		indexPrice := 0.0
+		if v := strings.TrimSpace(item.IndexPrice); v != "" {
+			parsed, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid bitget indexPrice for %s: %w", item.Symbol, err)
+			}
+			indexPrice = parsed
+		}
 
 		rates = append(rates, FundingRate{
 			Symbol:           item.Symbol,
@@ -2636,7 +2679,7 @@ func (s *NativeCCXTService) fetchBitgetPositions(ctx context.Context, creds conf
 			EntryPrice:       entry,
 			MarkPrice:        mark,
 			UnrealizedPnl:    parseDecimal(rec.UnrealizedPL),
-			Lverage:          leverage,
+			Leverage:         leverage,
 			LiquidationPrice: parseDecimal(rec.LiquidationPrice),
 			MarginMode:       marginMode,
 			Timestamp:        ts,

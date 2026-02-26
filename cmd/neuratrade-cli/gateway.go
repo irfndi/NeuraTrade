@@ -370,11 +370,15 @@ func gatewayStatus(cCtx *cli.Context) error {
 	// Check health endpoint
 	backendPort := resolveBackendPort(getConfigValue(defaultNeuraTradeHome()))
 	bindHost := getEnvOrDefault("BIND_HOST", "127.0.0.1")
-	fmt.Printf("🏥 Health Check: http://%s:%s/health\n", bindHost, backendPort)
+	probeHost := bindHost
+	if probeHost == "0.0.0.0" || probeHost == "::" {
+		probeHost = "127.0.0.1"
+	}
+	fmt.Printf("🚪 Health Check: http://%s:%s/health\n", bindHost, backendPort)
 	fmt.Println()
 
 	// Try to get health
-	baseURL := fmt.Sprintf("http://%s:%s", bindHost, backendPort)
+	baseURL := fmt.Sprintf("http://%s:%s", probeHost, backendPort)
 	apiKey := getAPIKey()
 	client := NewAPIClient(baseURL, apiKey)
 
@@ -417,8 +421,8 @@ func gatewayStatus(cCtx *cli.Context) error {
 
 // checkProcess checks if a process is running
 func checkProcess(displayName string, processPatterns ...string) {
-	for _, pattern := range processPatterns {
-		cmd := exec.Command("pgrep", "-fl", pattern)
+for _, pattern := range processPatterns {
+		cmd := exec.Command("pgrep", "-af", pattern)
 		output, err := cmd.Output()
 		if err != nil || len(output) == 0 {
 			continue
@@ -433,7 +437,7 @@ func checkProcess(displayName string, processPatterns ...string) {
 
 			pid := fields[0]
 			cmdline := strings.ToLower(strings.Join(fields[1:], " "))
-			if strings.Contains(cmdline, "pgrep -f") || strings.Contains(cmdline, "pgrep -fl") {
+			if strings.Contains(cmdline, "pgrep -f") || strings.Contains(cmdline, "pgrep -af") {
 				continue
 			}
 			if strings.Contains(cmdline, "gateway status") {

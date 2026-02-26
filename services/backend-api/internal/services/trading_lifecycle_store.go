@@ -475,8 +475,11 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 	now := time.Now().UTC()
 	reconcileSource := normalizeLifecycleSource(source)
 
-	if snapshot.OrdersFresh {
+if snapshot.OrdersFresh {
 		for _, order := range snapshot.OpenOrders {
+			if strings.TrimSpace(order.ID) == "" {
+				continue
+			}
 			if err := s.SyncOpenOrder(ctx, chatID, exchange, order); err != nil {
 				return summary, fmt.Errorf("sync open order %s failed: %w", strings.TrimSpace(order.ID), err)
 			}
@@ -875,10 +878,7 @@ func (s *TradingLifecycleStore) GetRealizedReturnSeries(
 			return nil, fmt.Errorf("scan realized return row failed: %w", err)
 		}
 
-		notional := entry.Abs().Mul(filled.Abs())
-		if notional.LessThanOrEqual(decimal.Zero) {
-			notional = pnl.Abs()
-		}
+notional := entry.Abs().Mul(filled.Abs())
 		if notional.LessThanOrEqual(decimal.Zero) {
 			continue
 		}

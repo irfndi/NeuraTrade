@@ -241,7 +241,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		return "", fmt.Errorf("failed to get contract info: %w", err)
 	}
 
-	var contractSize decimal.Decimal
+var contractSize decimal.Decimal
 	if isRiskReduction {
 		contractSize = details.Amount.Abs()
 		if contractSize.LessThanOrEqual(decimal.Zero) {
@@ -249,7 +249,12 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		}
 		contractSize = contractSize.RoundFloor(safeInt32(contractInfo.VolumePlace))
 		if contractSize.LessThan(contractInfo.MinTradeNum) {
-			contractSize = contractInfo.MinTradeNum
+			return "", fmt.Errorf(
+				"risk reduction amount %s is below minimum tradable size %s for %s",
+				contractSize.String(),
+				contractInfo.MinTradeNum.String(),
+				symbol,
+			)
 		}
 	} else {
 		amountUSDT := details.AmountUSDT
@@ -842,8 +847,8 @@ func (e *BitgetOrderExecutor) SyncPositionProtection(
 	stopLoss decimal.Decimal,
 	takeProfit decimal.Decimal,
 ) error {
-	if !strings.EqualFold(strings.TrimSpace(exchange), "bitget") {
-		return fmt.Errorf("exchange-side protection sync is only supported on bitget")
+if !strings.EqualFold(strings.TrimSpace(exchange), "bitget") {
+		return ErrProtectionSyncUnsupported
 	}
 	apiSymbol := strings.ReplaceAll(strings.TrimSpace(position.Symbol), "/", "")
 	if apiSymbol == "" {
@@ -876,8 +881,8 @@ func (e *BitgetOrderExecutor) cancelExistingPositionTPSL(ctx context.Context, sy
 		symbol,
 	)
 	resp, err := e.doRequest(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return err
+if err != nil {
+		return fmt.Errorf("list pending TP/SL plans: %w", err)
 	}
 
 	var result struct {
@@ -922,10 +927,13 @@ func (e *BitgetOrderExecutor) cancelExistingPositionTPSL(ctx context.Context, sy
 		"marginCoin":  "USDT",
 		"orderIdList": orderIDList,
 	}
-	jsonBody, _ := json.Marshal(cancelBody)
+	jsonBody, err := json.Marshal(cancelBody)
+	if err != nil {
+		return fmt.Errorf("marshal cancel TP/SL payload: %w", err)
+	}
 	cancelResp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/cancel-plan-order", jsonBody)
 	if err != nil {
-		return err
+		return fmt.Errorf("cancel TP/SL plans request: %w", err)
 	}
 
 	var cancelResult struct {
@@ -966,10 +974,13 @@ func (e *BitgetOrderExecutor) placePositionTPSL(
 		body["stopLossExecutePrice"] = "0"
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal place TP/SL payload: %w", err)
+	}
 	resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/place-pos-tpsl", jsonBody)
 	if err != nil {
-		return err
+		return fmt.Errorf("place TP/SL request: %w", err)
 	}
 
 	var result struct {

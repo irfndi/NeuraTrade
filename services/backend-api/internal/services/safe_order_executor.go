@@ -137,7 +137,14 @@ func (s *SafeOrderExecutor) PlaceRiskReductionOrderWithDetails(ctx context.Conte
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return "", fmt.Errorf("invalid order size: amount_usdt must be positive")
 	}
-	return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+	if !details.ReduceOnly {
+		return "", fmt.Errorf("risk-reduction orders require ReduceOnly=true to prevent opening new positions")
+	}
+	orderID, err := s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+	if err != nil {
+		return "", fmt.Errorf("place risk-reduction order with details: %w", err)
+	}
+	return orderID, nil
 }
 
 func (s *SafeOrderExecutor) SyncPositionProtection(
@@ -150,10 +157,13 @@ func (s *SafeOrderExecutor) SyncPositionProtection(
 	syncable, ok := s.baseExecutor.(interface {
 		SyncPositionProtection(context.Context, string, ManagedOpenPosition, decimal.Decimal, decimal.Decimal) error
 	})
-	if !ok {
+if !ok {
 		return fmt.Errorf("%w: base executor does not support exchange-side protection sync", ErrProtectionSyncUnsupported)
 	}
-	return syncable.SyncPositionProtection(ctx, exchange, position, stopLoss, takeProfit)
+	if err := syncable.SyncPositionProtection(ctx, exchange, position, stopLoss, takeProfit); err != nil {
+		return fmt.Errorf("sync position protection: %w", err)
+	}
+	return nil
 }
 
 func (s *SafeOrderExecutor) SetChatID(chatID string) {

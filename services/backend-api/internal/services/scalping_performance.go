@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -123,8 +124,8 @@ func (sp *ScalpingPerformance) GetReturnSeries(limit int) []float64 {
 		if notional.LessThanOrEqual(decimal.Zero) {
 			continue
 		}
-		ret := trade.PnL.Div(notional).InexactFloat64()
-		if ret != ret {
+ret := trade.PnL.Div(notional).InexactFloat64()
+		if math.IsNaN(ret) || math.IsInf(ret, 0) {
 			continue
 		}
 		series = append(series, ret)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -393,12 +394,12 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		balanceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		balanceSnapshot, err = balanceFetcher.FetchBalance(balanceCtx, userExchange)
+balanceSnapshot, err = balanceFetcher.FetchBalance(balanceCtx, userExchange)
 		if err != nil {
-			log.Printf("[SCALPING] Failed to fetch balance from %s: %v, using default balance for trading", userExchange, err)
-			usdtBalance = 100.0 // Fallback balance
+			log.Printf("[SCALPING] Failed to fetch balance from %s: %v, skipping this cycle", userExchange, err)
 			quest.Checkpoint["balance_warning"] = err.Error()
-			quest.Checkpoint["fallback_balance"] = true
+			quest.Checkpoint["status"] = "hold"
+			return nil
 		} else {
 			if balanceSnapshot.Total != nil {
 				if v := balanceSnapshot.Total["USDT"]; v > 0 {
@@ -657,18 +658,19 @@ func (h *IntegratedQuestHandlers) autoDeriskBlockedExposure(
 		}
 
 		details := TradeDetails{
-			Exchange:     exchange,
+Exchange:     exchange,
 			Symbol:       pos.Symbol,
 			Side:         closeSide,
 			OrderType:    "market",
 			MarketType:   "futures",
-			Leverage:     pos.Lverage,
+			Leverage:     pos.Leverage,
 			Amount:       size,
 			AmountUSDT:   notional,
 			TradeType:    "risk_reduction",
 			Confidence:   1.0,
 			Reasoning:    fmt.Sprintf("Auto de-risk due to safety block: %s", safetyError),
 			IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+			ReduceOnly:   true,
 		}
 		if details.Leverage <= 0 {
 			details.Leverage = 1
@@ -822,7 +824,7 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 		maxOrders = value
 	}
 
-	stableAssets := map[string]struct{}{
+stableAssets := map[string]struct{}{
 		"USDT":  {},
 		"USDC":  {},
 		"BUSD":  {},
@@ -830,6 +832,17 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 		"DAI":   {},
 		"USDE":  {},
 		"USDP":  {},
+	}
+
+	// Allow override via environment variable
+	if envStable := os.Getenv("NEURATRADE_SPOT_UNWIND_STABLE_ASSETS"); envStable != "" {
+		stableAssets = make(map[string]struct{})
+		for _, asset := range strings.Split(envStable, ",") {
+			asset = strings.ToUpper(strings.TrimSpace(asset))
+			if asset != "" {
+				stableAssets[asset] = struct{}{}
+			}
+		}
 	}
 
 	execWithBypass, hasBypass := h.orderExecutor.(interface {
@@ -861,7 +874,7 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 			continue
 		}
 
-		details := TradeDetails{
+details := TradeDetails{
 			Exchange:     exchange,
 			Symbol:       symbol,
 			Side:         "sell",
@@ -873,6 +886,7 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 			Confidence:   1,
 			Reasoning:    "Startup/resume spot unwind to flatten non-core balances before autonomous entries",
 			IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+			ReduceOnly:   true,
 		}
 
 		placeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
