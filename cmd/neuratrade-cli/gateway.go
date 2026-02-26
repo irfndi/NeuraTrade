@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -11,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/urfave/cli/v2"
 )
@@ -32,18 +36,13 @@ func gatewayStart(cCtx *cli.Context) error {
 	home := defaultNeuraTradeHome()
 	cfg := getConfigValue(home)
 
-	backendPort := getEnvOrDefault("BACKEND_HOST_PORT", "")
-	if backendPort == "" && cfg != nil && cfg.Server.Port > 0 {
-		backendPort = strconv.Itoa(cfg.Server.Port)
-	}
-	if backendPort == "" {
-		backendPort = "8080"
-	}
+	backendPort := resolveBackendPort(cfg)
 
 	ccxtPort := getEnvOrDefault("CCXT_PORT", "3001")
 	telegramPort := getEnvOrDefault("TELEGRAM_PORT", "3002")
 	bindHost := getEnvOrDefault("BIND_HOST", "127.0.0.1")
-	adminAPIKey := getEnvOrDefault("ADMIN_API_KEY", configAdminAPIKey(cfg))
+	adminAPIKey := normalizeAdminAPIKey(getEnvOrDefault("ADMIN_API_KEY", configAdminAPIKey(cfg)))
+	jwtSecret := normalizeJWTSecret(getEnvOrDefault("JWT_SECRET", ""))
 
 	sqlitePath := getEnvOrDefault("SQLITE_PATH", "")
 	if sqlitePath == "" && cfg != nil && cfg.Database.SQLitePath != "" {
@@ -118,29 +117,6 @@ func gatewayStart(cCtx *cli.Context) error {
 	}
 	fmt.Println("✅ CCXT Service started")
 
-	// Start Telegram Service
-	fmt.Println("📞 Starting Telegram Service...")
-	telegramCmd := startService(
-		filepath.Join(execDir, "telegram-service"),
-		"Telegram Service",
-		filepath.Join(home, "logs", "telegram.log"),
-		map[string]string{
-			"PORT":                  telegramPort,
-			"BIND_HOST":             bindHost,
-			"TELEGRAM_BOT_TOKEN":    telegramToken,
-			"TELEGRAM_USE_POLLING":  getEnvOrDefault("TELEGRAM_USE_POLLING", "true"),
-			"TELEGRAM_API_BASE_URL": fmt.Sprintf("http://%s:%s", bindHost, backendPort),
-			"NODE_ENV":              "production",
-			"ADMIN_API_KEY":         adminAPIKey,
-		},
-		filepath.Join(home, "pids", "telegram.pid"),
-	)
-	if telegramCmd == nil {
-		ccxtCmd.Process.Signal(syscall.SIGTERM)
-		return fmt.Errorf("failed to start Telegram service")
-	}
-	fmt.Println("✅ Telegram Service started")
-
 	// Start Backend API
 	fmt.Println("🔧 Starting Backend API...")
 	backendCmd := startService(
@@ -149,6 +125,8 @@ func gatewayStart(cCtx *cli.Context) error {
 		filepath.Join(home, "logs", "backend.log"),
 		map[string]string{
 			"PORT":                  backendPort,
+			"SERVER_PORT":           backendPort,
+			"BACKEND_HOST_PORT":     backendPort,
 			"HOST":                  "0.0.0.0", // Backend binds to all interfaces
 			"DATABASE_DRIVER":       getEnvOrDefault("DATABASE_DRIVER", "sqlite"),
 			"SQLITE_PATH":           sqlitePath,
@@ -159,7 +137,7 @@ func gatewayStart(cCtx *cli.Context) error {
 			"CCXT_GRPC_ADDRESS":     fmt.Sprintf("%s:%s", bindHost, getEnvOrDefault("CCXT_GRPC_PORT", "50051")),
 			"TELEGRAM_SERVICE_URL":  fmt.Sprintf("http://%s:%s", bindHost, telegramPort),
 			"TELEGRAM_GRPC_ADDRESS": fmt.Sprintf("%s:%s", bindHost, getEnvOrDefault("TELEGRAM_GRPC_PORT", "50052")),
-			"JWT_SECRET":            getEnvOrDefault("JWT_SECRET", "dev-jwt-secret"),
+			"JWT_SECRET":            jwtSecret,
 			"ADMIN_API_KEY":         adminAPIKey,
 			"SENTRY_ENVIRONMENT":    getEnvOrDefault("SENTRY_ENVIRONMENT", "production"),
 			"SENTRY_DSN":            getEnvOrDefault("SENTRY_DSN", ""),
@@ -172,10 +150,45 @@ func gatewayStart(cCtx *cli.Context) error {
 	)
 	if backendCmd == nil {
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
-		telegramCmd.Process.Signal(syscall.SIGTERM)
 		return fmt.Errorf("failed to start backend API")
 	}
+	if err := waitForServiceHealthy("Backend API", fmt.Sprintf("http://%s:%s/health", bindHost, backendPort), 15*time.Second); err != nil {
+		backendCmd.Process.Signal(syscall.SIGTERM)
+		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		return err
+	}
 	fmt.Println("✅ Backend API started")
+
+	// Start Telegram Service
+	fmt.Println("📞 Starting Telegram Service...")
+	telegramCmd := startService(
+		filepath.Join(execDir, "telegram-service"),
+		"Telegram Service",
+		filepath.Join(home, "logs", "telegram.log"),
+		map[string]string{
+			"PORT":                  telegramPort,
+			"BIND_HOST":             bindHost,
+			"TELEGRAM_BOT_TOKEN":    telegramToken,
+			"TELEGRAM_USE_POLLING":  getEnvOrDefault("TELEGRAM_USE_POLLING", "true"),
+			"TELEGRAM_API_BASE_URL": fmt.Sprintf("http://%s:%s", bindHost, backendPort),
+			"BACKEND_HOST_PORT":     backendPort,
+			"NODE_ENV":              "production",
+			"ADMIN_API_KEY":         adminAPIKey,
+		},
+		filepath.Join(home, "pids", "telegram.pid"),
+	)
+	if telegramCmd == nil {
+		backendCmd.Process.Signal(syscall.SIGTERM)
+		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		return fmt.Errorf("failed to start Telegram service")
+	}
+	if err := waitForServiceHealthy("Telegram Service", fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort), 15*time.Second); err != nil {
+		telegramCmd.Process.Signal(syscall.SIGTERM)
+		backendCmd.Process.Signal(syscall.SIGTERM)
+		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		return err
+	}
+	fmt.Println("✅ Telegram Service started")
 	fmt.Println()
 	fmt.Println("🎉 All services started successfully!")
 	fmt.Println()
@@ -349,14 +362,7 @@ func gatewayStatus(cCtx *cli.Context) error {
 	fmt.Println()
 
 	// Check health endpoint
-	backendPort := getEnvOrDefault("BACKEND_HOST_PORT", "")
-	if backendPort == "" {
-		if cfg := getConfigValue(defaultNeuraTradeHome()); cfg != nil && cfg.Server.Port > 0 {
-			backendPort = strconv.Itoa(cfg.Server.Port)
-		} else {
-			backendPort = "8080"
-		}
-	}
+	backendPort := resolveBackendPort(getConfigValue(defaultNeuraTradeHome()))
 	fmt.Printf("🏥 Health Check: http://localhost:%s/health\n", backendPort)
 	fmt.Println()
 
@@ -428,4 +434,75 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func resolveBackendPort(cfg *localConfig) string {
+	candidates := []string{
+		os.Getenv("SERVER_PORT"),
+		os.Getenv("PORT"),
+		os.Getenv("BACKEND_HOST_PORT"),
+	}
+	for _, candidate := range candidates {
+		if isValidPort(candidate) {
+			return candidate
+		}
+	}
+	if cfg != nil && cfg.Server.Port > 0 {
+		return strconv.Itoa(cfg.Server.Port)
+	}
+	return "8080"
+}
+
+func isValidPort(port string) bool {
+	if strings.TrimSpace(port) == "" {
+		return false
+	}
+	num, err := strconv.Atoi(port)
+	return err == nil && num > 0 && num < 65536
+}
+
+func normalizeAdminAPIKey(adminAPIKey string) string {
+	key := strings.TrimSpace(adminAPIKey)
+	if len(key) >= 32 {
+		return key
+	}
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		fmt.Println("⚠️  Warning: Failed to generate secure ADMIN_API_KEY, using deterministic fallback")
+		return "neuratrade-generated-admin-key-32chars"
+	}
+	generated := hex.EncodeToString(buf)
+	fmt.Println("⚠️  Warning: ADMIN_API_KEY was missing/too short; generated an ephemeral secure key for this session")
+	return generated
+}
+
+func normalizeJWTSecret(jwtSecret string) string {
+	key := strings.TrimSpace(jwtSecret)
+	if len(key) >= 32 {
+		return key
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		fmt.Println("⚠️  Warning: Failed to generate secure JWT_SECRET, using deterministic fallback")
+		return "neuratrade-generated-jwt-secret-min-32"
+	}
+	generated := hex.EncodeToString(buf)
+	fmt.Println("⚠️  Warning: JWT_SECRET was missing/too short; generated an ephemeral secure key for this session")
+	return generated
+}
+
+func waitForServiceHealthy(name, url string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 2 * time.Second}
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url) // #nosec G107 -- URL is constructed from local fixed host/port.
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("%s failed health check at %s within %s", name, url, timeout.String())
 }

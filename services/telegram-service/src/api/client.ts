@@ -47,11 +47,13 @@ export interface BackendApiClientOptions {
 
 export class BackendApiClient {
   private readonly baseUrl: string;
+  private activeBaseUrl: string;
   private readonly adminKey: string;
   private readonly rateLimiter: RateLimiter;
 
   constructor(options: BackendApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.activeBaseUrl = this.baseUrl;
     this.adminKey = options.adminKey;
     this.rateLimiter = new RateLimiter({
       tokensPerSecond: options.rateLimit ?? DEFAULT_RATE_LIMIT,
@@ -322,11 +324,30 @@ export class BackendApiClient {
       headers["X-API-Key"] = this.adminKey;
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const requestInit: RequestInit = {
       method: options.method || "GET",
       headers,
       body: options.body,
-    });
+    };
+
+    let response: Response | null = null;
+    try {
+      response = await fetch(`${this.activeBaseUrl}${path}`, requestInit);
+    } catch (primaryError) {
+      let fallbackError = primaryError;
+      for (const fallbackBaseUrl of this.getFallbackBaseUrls()) {
+        try {
+          response = await fetch(`${fallbackBaseUrl}${path}`, requestInit);
+          this.activeBaseUrl = fallbackBaseUrl;
+          break;
+        } catch (retryError) {
+          fallbackError = retryError;
+        }
+      }
+      if (!response) {
+        throw fallbackError;
+      }
+    }
 
     if (options.handle404AsNull && response.status === 404) {
       return null as T;
@@ -345,6 +366,26 @@ export class BackendApiClient {
     }
 
     return payload as T;
+  }
+
+  private getFallbackBaseUrls(): string[] {
+    const candidates = [
+      this.baseUrl,
+      "http://127.0.0.1:8080",
+      "http://localhost:8080",
+    ];
+    const unique: string[] = [];
+    for (const candidate of candidates) {
+      const normalized = candidate.replace(/\/$/, "");
+      if (
+        normalized.length > 0 &&
+        normalized !== this.activeBaseUrl &&
+        !unique.includes(normalized)
+      ) {
+        unique.push(normalized);
+      }
+    }
+    return unique;
   }
 
   async getUserAlerts(userId: string): Promise<GetAlertsResponse> {
