@@ -67,7 +67,7 @@ backend_integration() {
     cd "$BACKEND_ROOT"
     NEURATRADE_HOME="$test_home" \
       ADMIN_API_KEY= \
-    DATABASE_DRIVER="${DATABASE_DRIVER:-sqlite}" \
+      DATABASE_DRIVER="${DATABASE_DRIVER:-sqlite}" \
       SQLITE_PATH="${SQLITE_PATH:-/tmp/neuratrade-test.db}" \
       go test -v -timeout=10m ./test/integration/...
   )
@@ -83,7 +83,7 @@ backend_e2e() {
     cd "$BACKEND_ROOT"
     NEURATRADE_HOME="$test_home" \
       ADMIN_API_KEY= \
-    DATABASE_DRIVER="${DATABASE_DRIVER:-sqlite}" \
+      DATABASE_DRIVER="${DATABASE_DRIVER:-sqlite}" \
       SQLITE_PATH="${SQLITE_PATH:-/tmp/neuratrade-test.db}" \
       go test -v -timeout=10m ./test/e2e/...
   )
@@ -193,7 +193,7 @@ main() {
     cleanup)
       stop_stack
       ;;
-    help|-h|--help)
+    help | -h | --help)
       usage
       ;;
     *)

@@ -222,7 +222,7 @@ main() {
     logs)
       logs_gateway
       ;;
-    help|-h|--help)
+    help | -h | --help)
       usage
       ;;
     *)

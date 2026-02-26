@@ -179,7 +179,7 @@ main() {
     webhook-unregister)
       unregister_telegram_webhook
       ;;
-    help|-h|--help)
+    help | -h | --help)
       usage
       ;;
     *)

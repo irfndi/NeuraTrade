@@ -188,7 +188,7 @@ main() {
     monitor)
       monitor_loop "$duration"
       ;;
-    check|status)
+    check | status)
       single_check
       ;;
     restart)
@@ -200,7 +200,7 @@ main() {
     verify)
       single_check
       ;;
-    help|-h|--help)
+    help | -h | --help)
       usage
       ;;
     *)
