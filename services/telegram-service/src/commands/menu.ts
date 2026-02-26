@@ -40,7 +40,10 @@ export const TELEGRAM_COMMAND_MENU: readonly TelegramMenuCommand[] = [
   { command: "quests", description: "Show active quest progress" },
   { command: "logs", description: "Show recent operator logs" },
   { command: "liquidate", description: "Liquidate one symbol position" },
-  { command: "liquidate_all", description: "Emergency liquidate all positions" },
+  {
+    command: "liquidate_all",
+    description: "Emergency liquidate all positions",
+  },
   { command: "alerts", description: "List configured alerts" },
   { command: "alert_add", description: "Create a new alert rule" },
   { command: "alert_toggle", description: "Enable/disable an alert rule" },

@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Bot } from "grammy";
-import {
-  TELEGRAM_COMMAND_MENU,
-  registerTelegramCommandMenu,
-} from "./menu";
+import { TELEGRAM_COMMAND_MENU, registerTelegramCommandMenu } from "./menu";
 
 describe("Telegram command menu", () => {
   test("registers full command menu via setMyCommands", async () => {
