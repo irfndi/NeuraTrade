@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,8 +266,8 @@ func TestPortfolioSafetyService_CheckSafety_ExposureWarning(t *testing.T) {
 	ctx := context.Background()
 	snapshot := &SafetyPortfolioSnapshot{
 		TotalEquity:    decimal.NewFromFloat(10000.0),
-		AvailableFunds: decimal.NewFromFloat(2000.0),
-		ExposurePct:    0.80,
+		AvailableFunds: decimal.NewFromFloat(5500.0),
+		ExposurePct:    0.45,
 		OpenPositions:  5,
 		CalculatedAt:   time.Now(),
 	}
@@ -276,7 +277,45 @@ func TestPortfolioSafetyService_CheckSafety_ExposureWarning(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, status)
 	assert.True(t, status.IsSafe)
+	assert.True(t, status.TradingAllowed)
 	assert.NotEmpty(t, status.Warnings)
+}
+
+func TestPortfolioSafetyService_CheckSafety_ExposureHardLimitBlocksTrading(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.MaxExposurePct = 0.30
+	mockCCXT := &mockCCXTForPortfolioSafety{}
+
+	service := NewPortfolioSafetyService(
+		config,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	ctx := context.Background()
+	snapshot := &SafetyPortfolioSnapshot{
+		TotalEquity:    decimal.NewFromFloat(10000.0),
+		AvailableFunds: decimal.NewFromFloat(1000.0),
+		ExposurePct:    0.80,
+		OpenPositions:  7,
+		CalculatedAt:   time.Now(),
+	}
+
+	status, err := service.CheckSafety(ctx, "test-chat", snapshot)
+
+	require.NoError(t, err)
+	assert.NotNil(t, status)
+	assert.False(t, status.IsSafe)
+	assert.False(t, status.TradingAllowed)
+	assert.NotEmpty(t, status.Warnings)
+	assert.NotEmpty(t, status.Reasons)
+	assert.Contains(t, strings.Join(status.Reasons, " | "), "Exposure hard limit")
 }
 
 func TestPortfolioSafetyService_CanExecuteTrade(t *testing.T) {

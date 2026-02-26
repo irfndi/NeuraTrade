@@ -451,8 +451,11 @@ func TestMainFunction(t *testing.T) {
 		return
 	}
 
+	testHome := t.TempDir()
+
 	// Set up test environment variables to mock external dependencies
 	testEnv := map[string]string{
+		"NEURATRADE_HOME":                 testHome,
 		"ENVIRONMENT":                     "test",
 		"LOG_LEVEL":                       "error",
 		"SERVER_PORT":                     "8081",

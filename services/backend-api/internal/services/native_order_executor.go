@@ -33,6 +33,7 @@ type TradeDetails struct {
 	Reasoning         string
 	OrderID           string
 	IsPaperTrade      bool
+	ReduceOnly        bool // Must be true for PlaceRiskReductionOrderWithDetails
 }
 
 // NativeOrderExecutor implements ScalpingOrderExecutor using native CCXT service

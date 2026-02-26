@@ -247,6 +247,23 @@ func TestAIScalpingService_ParseDecisionWithRetries_InvalidAction(t *testing.T) 
 	assert.Equal(t, 1, mockLLM.CallCount)
 }
 
+func TestAIScalpingService_ValidateDecision_HoldNormalization(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "hold",
+		Symbol:      "AR/",
+		SizePercent: 5,
+		Confidence:  0,
+		Reasoning:   "",
+	}
+
+	err := svc.validateDecision(decision, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, "", decision.Symbol)
+	assert.Equal(t, 0.0, decision.SizePercent)
+	assert.Equal(t, "model selected hold (no detailed reasoning)", decision.Reasoning)
+}
+
 func TestAIScalpingService_SymbolLossCooldown(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{

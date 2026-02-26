@@ -648,22 +648,42 @@ func microCadenceInterval() time.Duration {
 
 func questExecutionStaleAfter() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS"))
-	if raw == "" {
-		return defaultQuestExecutionStale
+	if raw != "" {
+		seconds, err := strconv.Atoi(raw)
+		if err != nil || seconds <= 0 {
+			log.Printf("[QUEST] Invalid NEURATRADE_QUEST_EXECUTION_STALE_SECONDS=%q, using default %s", raw, defaultQuestExecutionStale)
+			return defaultQuestExecutionStale
+		}
+
+		ttl := time.Duration(seconds) * time.Second
+		if ttl < minQuestExecutionStale {
+			log.Printf("[QUEST] NEURATRADE_QUEST_EXECUTION_STALE_SECONDS too low (%ds), clamping to %s", seconds, minQuestExecutionStale)
+			return minQuestExecutionStale
+		}
+		return ttl
 	}
 
-	seconds, err := strconv.Atoi(raw)
-	if err != nil || seconds <= 0 {
-		log.Printf("[QUEST] Invalid NEURATRADE_QUEST_EXECUTION_STALE_SECONDS=%q, using default %s", raw, defaultQuestExecutionStale)
-		return defaultQuestExecutionStale
+	// Align stale watchdog with AI cycle runtime budget to avoid premature stale resets.
+	scalpingTimeout := 90 * time.Second
+	if timeoutRaw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_TIMEOUT_SECONDS")); timeoutRaw != "" {
+		if timeoutSec, err := strconv.Atoi(timeoutRaw); err == nil && timeoutSec > 0 {
+			scalpingTimeout = time.Duration(timeoutSec) * time.Second
+		}
 	}
-
-	ttl := time.Duration(seconds) * time.Second
-	if ttl < minQuestExecutionStale {
-		log.Printf("[QUEST] NEURATRADE_QUEST_EXECUTION_STALE_SECONDS too low (%ds), clamping to %s", seconds, minQuestExecutionStale)
-		return minQuestExecutionStale
+	structuredRetries := 2
+	if retriesRaw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_STRUCTURED_RETRIES")); retriesRaw != "" {
+		if retries, err := strconv.Atoi(retriesRaw); err == nil && retries > 0 {
+			structuredRetries = retries
+		}
 	}
-	return ttl
+	derived := scalpingTimeout + time.Duration(structuredRetries+1)*20*time.Second + 45*time.Second
+	if derived < defaultQuestExecutionStale {
+		derived = defaultQuestExecutionStale
+	}
+	if derived < minQuestExecutionStale {
+		derived = minQuestExecutionStale
+	}
+	return derived
 }
 
 // executeQuest executes a single quest

@@ -207,6 +207,38 @@ func TestScalpingPerformance_HistoryLimit(t *testing.T) {
 	assert.Equal(t, 150, perf["total_trades"])
 }
 
+func TestScalpingPerformance_GetReturnSeries_UsesTradeNotional(t *testing.T) {
+	sp := NewScalpingPerformance()
+	sp.RecordTrade(TradeRecord{
+		Timestamp:  time.Now(),
+		Symbol:     "BTC/USDT",
+		PnL:        decimal.NewFromFloat(10),
+		Notional:   decimal.NewFromFloat(200),
+		Profitable: true,
+	})
+
+	series := sp.GetReturnSeries(10)
+	assert.Len(t, series, 1)
+	assert.True(t, series[0].Round(6).Equal(decimal.NewFromFloat(0.05)))
+}
+
+func TestScalpingPerformance_GetReturnSeries_FallbacksToExitPriceNotional(t *testing.T) {
+	sp := NewScalpingPerformance()
+	sp.RecordTrade(TradeRecord{
+		Timestamp:  time.Now(),
+		Symbol:     "BTC/USDT",
+		Amount:     decimal.NewFromFloat(2),
+		EntryPrice: decimal.Zero,
+		ExitPrice:  decimal.NewFromFloat(100),
+		PnL:        decimal.NewFromFloat(10),
+		Profitable: true,
+	})
+
+	series := sp.GetReturnSeries(10)
+	assert.Len(t, series, 1)
+	assert.True(t, series[0].Round(6).Equal(decimal.NewFromFloat(0.05)))
+}
+
 func TestRecordScalpingTrade(t *testing.T) {
 	globalScalpingPerformance = NewScalpingPerformance()
 

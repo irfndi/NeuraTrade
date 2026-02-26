@@ -365,10 +365,19 @@ type AITradingDecision struct {
 }
 
 type TradingPortfolio struct {
-	USDTBalance   float64 `json:"usdt_balance"`
-	TotalValue    float64 `json:"total_value"`
-	OpenPositions int     `json:"open_positions"`
-	UnrealizedPnL float64 `json:"unrealized_pnl"`
+	USDTBalance        float64 `json:"usdt_balance"`
+	TotalValue         float64 `json:"total_value"`
+	OpenPositions      int     `json:"open_positions"`
+	UnrealizedPnL      float64 `json:"unrealized_pnl"`
+	RiskSharpe         float64 `json:"risk_sharpe"`
+	RiskSortino        float64 `json:"risk_sortino"`
+	RiskDrawdown       float64 `json:"risk_drawdown"`
+	RiskExpectancy     float64 `json:"risk_expectancy"`
+	RiskSampleSize     int     `json:"risk_sample_size"`
+	StrategyPhase      string  `json:"strategy_phase"`
+	PhaseMinConfidence float64 `json:"phase_min_confidence"`
+	PhaseMaxCapitalPct float64 `json:"phase_max_capital_pct"`
+	MilestoneProgress  float64 `json:"milestone_progress"`
 }
 
 type AIScalpingService struct {
@@ -448,6 +457,28 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	}
 
 	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds(ctx)
+	if portfolio.PhaseMinConfidence > 0 && portfolio.PhaseMinConfidence > effectiveMinConfidence {
+		effectiveMinConfidence = portfolio.PhaseMinConfidence
+	}
+	if portfolio.PhaseMaxCapitalPct > 0 && portfolio.PhaseMaxCapitalPct < effectiveMaxCapital {
+		effectiveMaxCapital = portfolio.PhaseMaxCapitalPct
+	}
+	if portfolio.MilestoneProgress > 0 && portfolio.MilestoneProgress < 25 {
+		effectiveMaxCapital = effectiveMaxCapital * 0.8
+	}
+	if portfolio.RiskSampleSize >= 10 && portfolio.RiskExpectancy < 0 {
+		effectiveMaxCapital = effectiveMaxCapital * 0.75
+	}
+	if portfolio.RiskDrawdown > 0.12 {
+		effectiveMinConfidence += 0.05
+		effectiveMaxCapital = effectiveMaxCapital * 0.7
+	}
+	if effectiveMinConfidence > 0.95 {
+		effectiveMinConfidence = 0.95
+	}
+	if effectiveMaxCapital < 0.1 {
+		effectiveMaxCapital = 0.1
+	}
 	gate := s.evaluatePreTradeGate(ctx, decision, signals)
 	if !gate.Allowed {
 		attemptedAction := decision.Action
@@ -473,12 +504,14 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 	}
 	log.Printf(
-		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d",
+		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d phase=%s risk_drawdown=%.4f",
 		effectiveMinConfidence,
 		effectiveMaxCapital,
 		gate.Regime,
 		gate.NetExpectancy,
 		gate.SampleSize,
+		portfolio.StrategyPhase,
+		portfolio.RiskDrawdown,
 	)
 
 	if decision.Action == "hold" {
@@ -926,11 +959,38 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - USDT Balance: %.2f
 - Total Value: %.2f
 - Open Positions: %d
+- Unrealized PnL: %.4f
+
+## Autonomous Control Plane
+- Strategy Phase: %s
+- Phase Min Confidence: %.2f
+- Phase Max Capital %%: %.2f
+- Fund Milestone Progress: %.2f%%
+- Risk Sharpe: %.4f
+- Risk Sortino: %.4f
+- Risk Drawdown: %.4f
+- Risk Expectancy: %.6f (%d samples)
 
 ## Market Signals
 %s%s
 
-Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Return only valid JSON.`, portfolio.USDTBalance, portfolio.TotalValue, portfolio.OpenPositions, string(signalsJSON), memoryContext)
+Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Return only valid JSON.`,
+		portfolio.USDTBalance,
+		portfolio.TotalValue,
+		portfolio.OpenPositions,
+		portfolio.UnrealizedPnL,
+		portfolio.StrategyPhase,
+		portfolio.PhaseMinConfidence,
+		portfolio.PhaseMaxCapitalPct,
+		portfolio.MilestoneProgress,
+		portfolio.RiskSharpe,
+		portfolio.RiskSortino,
+		portfolio.RiskDrawdown,
+		portfolio.RiskExpectancy,
+		portfolio.RiskSampleSize,
+		string(signalsJSON),
+		memoryContext,
+	)
 }
 
 func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITradingDecision, portfolio TradingPortfolio, maxCapitalPct float64) error {
@@ -1221,6 +1281,11 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		return fmt.Errorf("confidence out of range: %.4f", decision.Confidence)
 	}
 	if decision.Action == "hold" {
+		decision.Symbol = ""
+		decision.SizePercent = 0
+		if strings.TrimSpace(decision.Reasoning) == "" {
+			decision.Reasoning = "model selected hold (no detailed reasoning)"
+		}
 		return nil
 	}
 	if decision.Symbol == "" {

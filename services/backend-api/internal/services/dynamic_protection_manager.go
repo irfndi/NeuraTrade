@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -15,6 +16,16 @@ type protectionTickerService interface {
 	FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
 }
 
+type positionProtectionSync interface {
+	SyncPositionProtection(
+		ctx context.Context,
+		exchange string,
+		position ManagedOpenPosition,
+		stopLoss decimal.Decimal,
+		takeProfit decimal.Decimal,
+	) error
+}
+
 type DynamicProtectionConfig struct {
 	Enabled               bool
 	MaxPositions          int
@@ -24,6 +35,8 @@ type DynamicProtectionConfig struct {
 	TrailingStopPct       float64
 	TakeProfitDistancePct float64
 }
+
+var ErrProtectionSyncUnsupported = errors.New("exchange-side protection sync unsupported")
 
 func DefaultDynamicProtectionConfig() DynamicProtectionConfig {
 	return DynamicProtectionConfig{
@@ -48,6 +61,7 @@ type DynamicProtectionManager struct {
 	config       DynamicProtectionConfig
 	lifecycle    *TradingLifecycleStore
 	tickerSource protectionTickerService
+	protection   positionProtectionSync
 	logger       *log.Logger
 }
 
@@ -66,6 +80,10 @@ func NewDynamicProtectionManager(
 		tickerSource: tickerSource,
 		logger:       logger,
 	}
+}
+
+func (m *DynamicProtectionManager) SetPositionProtectionSync(sync positionProtectionSync) {
+	m.protection = sync
 }
 
 func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, chatID, exchange string) (DynamicProtectionSummary, error) {
@@ -117,6 +135,17 @@ func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, c
 				newTake.String(),
 				currentPrice.String(),
 			)
+		}
+		if changed && m.protection != nil {
+			if err := m.protection.SyncPositionProtection(ctx, pos.Exchange, pos, newStop, newTake); err != nil {
+				if errors.Is(err, ErrProtectionSyncUnsupported) {
+					m.logger.Printf("[PROTECTION] Exchange-side TP/SL sync unsupported for %s, persisting lifecycle-only update", pos.PositionID)
+				} else {
+					summary.Errors++
+					m.logger.Printf("[PROTECTION] Failed to sync exchange-side TP/SL for %s: %v", pos.PositionID, err)
+					continue
+				}
+			}
 		}
 		if err := m.lifecycle.UpdatePositionProtection(ctx, pos.PositionID, newStop, newTake, currentPrice, unrealized, now); err != nil {
 			summary.Errors++

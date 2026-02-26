@@ -60,6 +60,9 @@ func TestAutonomousHandler_BuildLifecyclePerformanceSummary(t *testing.T) {
 	assert.Equal(t, "24h", summary.Timeframe)
 	assert.Equal(t, "0.05", summary.PnL)
 	assert.Equal(t, "50.0%", summary.WinRate)
+	assert.NotEqual(t, "N/A", summary.Sharpe)
+	assert.NotEqual(t, "N/A", summary.Sortino)
+	assert.NotEqual(t, "N/A", summary.Drawdown)
 	assert.Equal(t, 2, summary.Trades)
 	assert.Contains(t, summary.Note, "Exchange-reconciled")
 }
