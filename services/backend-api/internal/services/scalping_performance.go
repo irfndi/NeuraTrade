@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"log"
-	"math"
 	"sync"
 	"time"
 
@@ -108,7 +107,7 @@ func (sp *ScalpingPerformance) GetPerformance() map[string]interface{} {
 	}
 }
 
-func (sp *ScalpingPerformance) GetReturnSeries(limit int) []float64 {
+func (sp *ScalpingPerformance) GetReturnSeries(limit int) []decimal.Decimal {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
 
@@ -119,7 +118,7 @@ func (sp *ScalpingPerformance) GetReturnSeries(limit int) []float64 {
 		limit = len(sp.history)
 	}
 	start := len(sp.history) - limit
-	series := make([]float64, 0, limit)
+	series := make([]decimal.Decimal, 0, limit)
 	for _, trade := range sp.history[start:] {
 		notional := trade.Notional.Abs()
 		if notional.LessThanOrEqual(decimal.Zero) {
@@ -131,10 +130,7 @@ func (sp *ScalpingPerformance) GetReturnSeries(limit int) []float64 {
 		if notional.LessThanOrEqual(decimal.Zero) {
 			continue
 		}
-		ret := trade.PnL.Div(notional).InexactFloat64()
-		if math.IsNaN(ret) || math.IsInf(ret, 0) {
-			continue
-		}
+		ret := trade.PnL.Div(notional)
 		series = append(series, ret)
 	}
 	return series

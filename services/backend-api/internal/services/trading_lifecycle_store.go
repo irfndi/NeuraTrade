@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -884,7 +883,7 @@ func (s *TradingLifecycleStore) GetRealizedReturnSeries(
 	chatID string,
 	exchange string,
 	since time.Time,
-) ([]float64, error) {
+) ([]decimal.Decimal, error) {
 	if since.IsZero() {
 		since = time.Now().UTC().Add(-24 * time.Hour)
 	}
@@ -910,7 +909,7 @@ func (s *TradingLifecycleStore) GetRealizedReturnSeries(
 	}
 	defer rows.Close()
 
-	series := make([]float64, 0, 64)
+	series := make([]decimal.Decimal, 0, 64)
 	for rows.Next() {
 		var pnl decimal.Decimal
 		var entry decimal.Decimal
@@ -924,10 +923,7 @@ func (s *TradingLifecycleStore) GetRealizedReturnSeries(
 			continue
 		}
 
-		ret := pnl.Div(notional).InexactFloat64()
-		if math.IsNaN(ret) || math.IsInf(ret, 0) {
-			continue
-		}
+		ret := pnl.Div(notional)
 		series = append(series, ret)
 	}
 	if err := rows.Err(); err != nil {

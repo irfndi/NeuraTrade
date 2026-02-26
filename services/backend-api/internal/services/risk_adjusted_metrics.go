@@ -1,6 +1,10 @@
 package services
 
-import "math"
+import (
+	"math"
+
+	"github.com/shopspring/decimal"
+)
 
 // RiskAdjustedMetrics captures return-distribution quality metrics for autonomous controls.
 type RiskAdjustedMetrics struct {
@@ -13,19 +17,31 @@ type RiskAdjustedMetrics struct {
 
 // ComputeRiskAdjustedMetrics calculates risk-adjusted metrics from per-trade return samples.
 // Returns are expected as decimal returns (for example, 0.01 for +1%).
-func ComputeRiskAdjustedMetrics(returns []float64) RiskAdjustedMetrics {
-	metrics := RiskAdjustedMetrics{SampleSize: len(returns)}
+func ComputeRiskAdjustedMetrics(returns []decimal.Decimal) RiskAdjustedMetrics {
 	if len(returns) == 0 {
+		return RiskAdjustedMetrics{}
+	}
+	floatReturns := make([]float64, 0, len(returns))
+	for _, ret := range returns {
+		value := ret.InexactFloat64()
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
+		floatReturns = append(floatReturns, value)
+	}
+
+	metrics := RiskAdjustedMetrics{SampleSize: len(floatReturns)}
+	if len(floatReturns) == 0 {
 		return metrics
 	}
 
-	metrics.Expectancy = meanFloat64(returns)
-	std := stdDevFloat64(returns, metrics.Expectancy)
-	downsideStd := downsideStdDevFloat64(returns)
-	metrics.MaxDrawdown = maxDrawdownFromReturns(returns)
+	metrics.Expectancy = meanFloat64(floatReturns)
+	std := stdDevFloat64(floatReturns, metrics.Expectancy)
+	downsideStd := downsideStdDevFloat64(floatReturns)
+	metrics.MaxDrawdown = maxDrawdownFromReturns(floatReturns)
 
 	// Trade-sample scaling keeps ratios comparable across windows without pretending calendar frequency.
-	scale := math.Sqrt(float64(len(returns)))
+	scale := math.Sqrt(float64(len(floatReturns)))
 	if std > 0 {
 		metrics.Sharpe = (metrics.Expectancy / std) * scale
 	}

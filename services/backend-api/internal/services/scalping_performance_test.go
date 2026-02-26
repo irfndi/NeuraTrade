@@ -219,7 +219,7 @@ func TestScalpingPerformance_GetReturnSeries_UsesTradeNotional(t *testing.T) {
 
 	series := sp.GetReturnSeries(10)
 	assert.Len(t, series, 1)
-	assert.InDelta(t, 0.05, series[0], 1e-12)
+	assert.True(t, series[0].Round(6).Equal(decimal.NewFromFloat(0.05)))
 }
 
 func TestScalpingPerformance_GetReturnSeries_FallbacksToExitPriceNotional(t *testing.T) {
@@ -236,7 +236,7 @@ func TestScalpingPerformance_GetReturnSeries_FallbacksToExitPriceNotional(t *tes
 
 	series := sp.GetReturnSeries(10)
 	assert.Len(t, series, 1)
-	assert.InDelta(t, 0.05, series[0], 1e-12)
+	assert.True(t, series[0].Round(6).Equal(decimal.NewFromFloat(0.05)))
 }
 
 func TestRecordScalpingTrade(t *testing.T) {

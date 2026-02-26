@@ -202,8 +202,8 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries(t *testing.T) {
 	returns, err := store.GetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
 	require.NoError(t, err)
 	require.Len(t, returns, 2)
-	assert.InDelta(t, 0.01, returns[0], 0.000001)
-	assert.InDelta(t, -0.01, returns[1], 0.000001)
+	assert.True(t, returns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+	assert.True(t, returns[1].Round(6).Equal(decimal.NewFromFloat(-0.01)))
 }
 
 func TestTradingLifecycleStore_EnsureSchema_UpgradesLegacyTables(t *testing.T) {

@@ -946,7 +946,7 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		}
 	}
 
-	returns := make([]float64, 0, 64)
+	returns := make([]decimal.Decimal, 0, 64)
 	if h.lifecycleStore != nil {
 		series, err := h.lifecycleStore.GetRealizedReturnSeries(ctx, chatID, exchange, time.Now().UTC().Add(-30*24*time.Hour))
 		if err == nil {
