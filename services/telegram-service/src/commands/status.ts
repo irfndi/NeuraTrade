@@ -132,8 +132,13 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         api.getPortfolio(String(chatId)),
         api.getAIStatus(String(chatId)),
         api.getLogs(String(chatId), 1),
-        typeof (api as { getQuestDiagnostics?: (chatId: string) => Promise<QuestDiagnosticsResponse> })
-          .getQuestDiagnostics === "function"
+        typeof (
+          api as {
+            getQuestDiagnostics?: (
+              chatId: string,
+            ) => Promise<QuestDiagnosticsResponse>;
+          }
+        ).getQuestDiagnostics === "function"
           ? api.getQuestDiagnostics(String(chatId))
           : Promise.reject(new Error("quest diagnostics unavailable")),
       ]);
@@ -176,12 +181,15 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
       }
       if (questDiagnosticsResult.status === "fulfilled") {
         const diagnostics = questDiagnosticsResult.value;
-        const heartbeat =
-          diagnostics.heartbeat as Readonly<Record<string, unknown>> | undefined;
-        const questRuntime =
-          diagnostics.quest_runtime as Readonly<Record<string, unknown>> | undefined;
-        const chatRuntime =
-          diagnostics.chat_runtime as Readonly<Record<string, unknown>> | undefined;
+        const heartbeat = diagnostics.heartbeat as
+          | Readonly<Record<string, unknown>>
+          | undefined;
+        const questRuntime = diagnostics.quest_runtime as
+          | Readonly<Record<string, unknown>>
+          | undefined;
+        const chatRuntime = diagnostics.chat_runtime as
+          | Readonly<Record<string, unknown>>
+          | undefined;
 
         const heartbeatMode = readStringField(heartbeat, "mode");
         if (heartbeatMode) {
