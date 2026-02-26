@@ -190,10 +190,9 @@ export interface QuestDiagnosticsResponse {
   readonly autonomous?: boolean;
   readonly started_at?: string;
   readonly quest_runtime?: Readonly<Record<string, unknown>>;
-  readonly chat_runtime?:
-    | (Readonly<Record<string, unknown>> & {
-        readonly ai_runtime?: Readonly<Record<string, unknown>>;
-      });
+  readonly chat_runtime?: Readonly<Record<string, unknown>> & {
+    readonly ai_runtime?: Readonly<Record<string, unknown>>;
+  };
   readonly heartbeat?: Readonly<Record<string, unknown>>;
   readonly timestamp?: string;
 }
