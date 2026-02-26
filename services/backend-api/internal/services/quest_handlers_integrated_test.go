@@ -293,6 +293,43 @@ func TestHasExchange(t *testing.T) {
 	assert.False(t, hasExchange([]string{}, "binance"))
 }
 
+func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing.T) {
+	t.Setenv("NEURATRADE_TELEGRAM_NOTIFY_AI_DECISIONS", "")
+	t.Setenv("NEURATRADE_TELEGRAM_ACTIONABLE_ONLY", "")
+
+	assert.False(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "scalping_cycle",
+		Action:       "hold",
+	}))
+
+	assert.False(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "scalping",
+		Action:       "buy",
+	}))
+
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "pnl_reconciliation",
+		Action:       "record",
+	}))
+}
+
+func TestShouldSendScalpingDecisionNotification_EnvOverrides(t *testing.T) {
+	t.Setenv("NEURATRADE_TELEGRAM_ACTIONABLE_ONLY", "false")
+	t.Setenv("NEURATRADE_TELEGRAM_NOTIFY_AI_DECISIONS", "")
+
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "scalping_cycle",
+		Action:       "hold",
+	}))
+
+	t.Setenv("NEURATRADE_TELEGRAM_ACTIONABLE_ONLY", "true")
+	t.Setenv("NEURATRADE_TELEGRAM_NOTIFY_AI_DECISIONS", "true")
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "scalping_cycle",
+		Action:       "hold",
+	}))
+}
+
 // hasExchange checks if a specific exchange exists in the list
 func hasExchange(exchanges []string, exchangeName string) bool {
 	for _, ex := range exchanges {

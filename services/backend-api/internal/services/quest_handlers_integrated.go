@@ -746,6 +746,14 @@ func (h *IntegratedQuestHandlers) notifyScalpingDecision(ctx context.Context, ch
 	if h.notificationService == nil {
 		return
 	}
+	if !shouldSendScalpingDecisionNotification(notif) {
+		log.Printf(
+			"[NOTIFICATION] Suppressed non-actionable scalping update (type=%s action=%s)",
+			notif.DecisionType,
+			notif.Action,
+		)
+		return
+	}
 	chatIDInt := parseChatID(chatID)
 	if chatIDInt == 0 {
 		return
@@ -1113,4 +1121,23 @@ func isRuntimeHoldReason(reason string) bool {
 		strings.Contains(lower, "failed to parse ai decision") ||
 		strings.Contains(lower, "llm completion failed") ||
 		strings.Contains(lower, "runtime error")
+}
+
+func shouldSendScalpingDecisionNotification(notif AIReasoningNotification) bool {
+	if verbose, ok := getEnvBool("NEURATRADE_TELEGRAM_NOTIFY_AI_DECISIONS"); ok && verbose {
+		return true
+	}
+
+	actionableOnly := true
+	if value, ok := getEnvBool("NEURATRADE_TELEGRAM_ACTIONABLE_ONLY"); ok {
+		actionableOnly = value
+	}
+	if !actionableOnly {
+		return true
+	}
+
+	decisionType := strings.ToLower(strings.TrimSpace(notif.DecisionType))
+	action := strings.ToLower(strings.TrimSpace(notif.Action))
+
+	return decisionType == "pnl_reconciliation" || action == "record"
 }

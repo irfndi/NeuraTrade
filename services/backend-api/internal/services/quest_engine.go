@@ -28,6 +28,8 @@ const (
 const (
 	defaultMicroCadenceInterval = time.Minute
 	minMicroCadenceInterval     = 10 * time.Second
+	defaultQuestExecutionStale  = 3 * time.Minute
+	minQuestExecutionStale      = time.Minute
 )
 
 // QuestCadence defines the frequency of routine quests
@@ -113,6 +115,7 @@ type QuestEngine struct {
 	mu              sync.RWMutex
 	quests          map[string]*Quest
 	executing       map[string]bool
+	executionStarts map[string]time.Time
 	autonomousState map[string]*AutonomousState
 	definitions     map[string]*QuestDefinition
 	handlers        map[QuestType]QuestHandler
@@ -245,6 +248,7 @@ func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *Quest
 	engine := &QuestEngine{
 		quests:          make(map[string]*Quest),
 		executing:       make(map[string]bool),
+		executionStarts: make(map[string]time.Time),
 		autonomousState: make(map[string]*AutonomousState),
 		definitions:     make(map[string]*QuestDefinition),
 		handlers:        make(map[QuestType]QuestHandler),
@@ -523,6 +527,7 @@ func (e *QuestEngine) tick() {
 			if quest.UpdatedAt.Before(now.Add(-cleanupThreshold)) {
 				delete(e.quests, id)
 				delete(e.executing, id)
+				delete(e.executionStarts, id)
 				delete(e.chatIDForQuest, id)
 				log.Printf("[QUEST] Cleaned up old quest: %s (status: %s)", id, quest.Status)
 			}
@@ -542,14 +547,40 @@ func (e *QuestEngine) tick() {
 		}
 		activeCount++
 		if e.executing[quest.ID] {
-			log.Printf("[QUEST] Quest %s (%s) skipped - execution already in progress", quest.ID, quest.Name)
-			continue
+			startedAt := e.executionStarts[quest.ID]
+			if startedAt.IsZero() {
+				startedAt = now
+				e.executionStarts[quest.ID] = startedAt
+			}
+
+			age := now.Sub(startedAt)
+			staleAfter := questExecutionStaleAfter()
+			if age > staleAfter {
+				log.Printf(
+					"[QUEST] Quest %s (%s) execution stale after %s (limit=%s), resetting in-progress marker",
+					quest.ID,
+					quest.Name,
+					age.Round(time.Second),
+					staleAfter.Round(time.Second),
+				)
+				delete(e.executing, quest.ID)
+				delete(e.executionStarts, quest.ID)
+			} else {
+				log.Printf(
+					"[QUEST] Quest %s (%s) skipped - execution already in progress for %s",
+					quest.ID,
+					quest.Name,
+					age.Round(time.Second),
+				)
+				continue
+			}
 		}
 
 		// Check if quest should execute based on cadence
 		if e.shouldExecute(quest, now) {
 			log.Printf("[QUEST] Executing quest: %s (type: %s, def: %s, chat: %s)", quest.ID, quest.Type, quest.Metadata["definition_id"], quest.Metadata["chat_id"])
 			e.executing[quest.ID] = true
+			e.executionStarts[quest.ID] = now
 			scheduledCount++
 			go e.executeQuest(quest)
 		} else {
@@ -615,6 +646,26 @@ func microCadenceInterval() time.Duration {
 	return interval
 }
 
+func questExecutionStaleAfter() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS"))
+	if raw == "" {
+		return defaultQuestExecutionStale
+	}
+
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		log.Printf("[QUEST] Invalid NEURATRADE_QUEST_EXECUTION_STALE_SECONDS=%q, using default %s", raw, defaultQuestExecutionStale)
+		return defaultQuestExecutionStale
+	}
+
+	ttl := time.Duration(seconds) * time.Second
+	if ttl < minQuestExecutionStale {
+		log.Printf("[QUEST] NEURATRADE_QUEST_EXECUTION_STALE_SECONDS too low (%ds), clamping to %s", seconds, minQuestExecutionStale)
+		return minQuestExecutionStale
+	}
+	return ttl
+}
+
 // executeQuest executes a single quest
 func (e *QuestEngine) executeQuest(quest *Quest) {
 	defer e.markQuestExecutionFinished(quest.ID)
@@ -659,6 +710,7 @@ func (e *QuestEngine) markQuestExecutionFinished(questID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.executing, questID)
+	delete(e.executionStarts, questID)
 }
 
 func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Duration) bool {
