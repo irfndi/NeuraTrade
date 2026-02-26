@@ -30,6 +30,9 @@ const (
 	minMicroCadenceInterval     = 10 * time.Second
 	defaultQuestExecutionStale  = 3 * time.Minute
 	minQuestExecutionStale      = time.Minute
+	// Derived stale timeout buffers: per structured-retry repair budget and global latency cushion.
+	questExecutionRepairAttemptBuffer = 20 * time.Second
+	questExecutionGlobalWatchdogSlack = 45 * time.Second
 )
 
 // QuestCadence defines the frequency of routine quests
@@ -676,7 +679,9 @@ func questExecutionStaleAfter() time.Duration {
 			structuredRetries = retries
 		}
 	}
-	derived := scalpingTimeout + time.Duration(structuredRetries+1)*20*time.Second + 45*time.Second
+	derived := scalpingTimeout +
+		time.Duration(structuredRetries+1)*questExecutionRepairAttemptBuffer +
+		questExecutionGlobalWatchdogSlack
 	if derived < defaultQuestExecutionStale {
 		derived = defaultQuestExecutionStale
 	}

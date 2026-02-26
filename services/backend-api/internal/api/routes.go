@@ -481,6 +481,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
 	}
 
+	// Register integrated handlers before scheduler start so first tick has handlers.
+	questEngine.RegisterIntegratedHandlers(integratedHandlers)
 	questEngine.Start() // Start the quest engine scheduler
 
 	// Initialize exchange reconciler for position/order resumability
@@ -549,10 +551,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			}
 		}
 	}
-
-	// Register integrated handlers before autonomous restore so restored quests
-	// have handlers available on the first scheduler tick.
-	questEngine.RegisterIntegratedHandlers(integratedHandlers)
 
 	// Restore autonomous scalping for operator chats that were enabled via Telegram /begin.
 	if db != nil {

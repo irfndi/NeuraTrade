@@ -325,9 +325,15 @@ func stopServiceByPIDFile(name, pidFile string, expectedPatterns ...string) erro
 		return fmt.Errorf("process not found (removing stale PID file)")
 	}
 
-	if len(expectedPatterns) > 0 && !processMatchesAnyPattern(pid, expectedPatterns...) {
-		_ = os.Remove(pidFile)
-		return fmt.Errorf("stale PID file (PID %d does not match any expected process pattern, removed)", pid)
+	if len(expectedPatterns) > 0 {
+		matches, matchErr := processMatchesAnyPattern(pid, expectedPatterns...)
+		if matchErr != nil {
+			return fmt.Errorf("failed to validate process pattern for PID %d: %w", pid, matchErr)
+		}
+		if !matches {
+			_ = os.Remove(pidFile)
+			return fmt.Errorf("stale PID file (PID %d does not match any expected process pattern, removed)", pid)
+		}
 	}
 
 	if err := process.Signal(syscall.SIGTERM); err != nil {
@@ -339,19 +345,19 @@ func stopServiceByPIDFile(name, pidFile string, expectedPatterns ...string) erro
 	return nil
 }
 
-func processMatchesAnyPattern(pid int, expectedPatterns ...string) bool {
+func processMatchesAnyPattern(pid int, expectedPatterns ...string) (bool, error) {
 	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=")
 	output, err := cmd.Output()
 	if err != nil {
-		return false
+		return false, fmt.Errorf("ps command failed for PID %d: %w", pid, err)
 	}
 	command := strings.ToLower(strings.TrimSpace(string(output)))
 	for _, pattern := range expectedPatterns {
 		if strings.Contains(command, strings.ToLower(pattern)) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // gatewayStatus shows the status of NeuraTrade services
@@ -374,7 +380,7 @@ func gatewayStatus(cCtx *cli.Context) error {
 	if probeHost == "0.0.0.0" || probeHost == "::" {
 		probeHost = "127.0.0.1"
 	}
-	fmt.Printf("🚪 Health Check: http://%s:%s/health\n", bindHost, backendPort)
+	fmt.Printf("🚪 Health Check: http://%s:%s/health\n", probeHost, backendPort)
 	fmt.Println()
 
 	// Try to get health
@@ -421,7 +427,7 @@ func gatewayStatus(cCtx *cli.Context) error {
 
 // checkProcess checks if a process is running
 func checkProcess(displayName string, processPatterns ...string) {
-for _, pattern := range processPatterns {
+	for _, pattern := range processPatterns {
 		cmd := exec.Command("pgrep", "-af", pattern)
 		output, err := cmd.Output()
 		if err != nil || len(output) == 0 {

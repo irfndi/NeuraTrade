@@ -2226,10 +2226,13 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 	}
 
 	rates := make([]FundingRate, 0, len(raw.Data))
+	skipped := 0
 	for _, item := range raw.Data {
 		rate, err := strconv.ParseFloat(strings.TrimSpace(item.FundingRate), 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid bitget fundingRate for %s: %w", item.Symbol, err)
+			skipped++
+			log.Printf("[CCXT Native] skipping malformed bitget fundingRate row symbol=%s: %v", item.Symbol, err)
+			continue
 		}
 
 		ts := parseBitgetTimestampMillis(item.FundingTime)
@@ -2253,7 +2256,9 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 		if v := strings.TrimSpace(item.MarkPrice); v != "" {
 			parsed, err := strconv.ParseFloat(v, 64)
 			if err != nil {
-				return nil, fmt.Errorf("invalid bitget markPrice for %s: %w", item.Symbol, err)
+				skipped++
+				log.Printf("[CCXT Native] skipping malformed bitget markPrice row symbol=%s: %v", item.Symbol, err)
+				continue
 			}
 			markPrice = parsed
 		}
@@ -2262,7 +2267,9 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 		if v := strings.TrimSpace(item.IndexPrice); v != "" {
 			parsed, err := strconv.ParseFloat(v, 64)
 			if err != nil {
-				return nil, fmt.Errorf("invalid bitget indexPrice for %s: %w", item.Symbol, err)
+				skipped++
+				log.Printf("[CCXT Native] skipping malformed bitget indexPrice row symbol=%s: %v", item.Symbol, err)
+				continue
 			}
 			indexPrice = parsed
 		}
@@ -2276,6 +2283,12 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 			IndexPrice:       indexPrice,
 			Timestamp:        UnixTimestamp(time.Now()),
 		})
+	}
+	if len(rates) == 0 {
+		return nil, fmt.Errorf("no valid bitget funding rate rows in response")
+	}
+	if skipped > 0 {
+		log.Printf("[CCXT Native] parsed %d bitget funding rate rows, skipped %d malformed row(s)", len(rates), skipped)
 	}
 	return rates, nil
 }

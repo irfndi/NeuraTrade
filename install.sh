@@ -173,7 +173,16 @@ EOF
 }
 
 install_launchd_autostart() {
+  local launch_agents_dir="$HOME/Library/LaunchAgents"
+  local launch_script="$CONFIG_DIR/run-gateway.sh"
+  local launch_plist="$launch_agents_dir/$AUTOSTART_LABEL.plist"
+
   if [[ "$ENABLE_AUTOSTART" != "true" ]]; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      launchctl bootout "gui/$UID/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
+      launchctl unload "$launch_plist" >/dev/null 2>&1 || true
+      rm -f "$launch_plist" "$launch_script"
+    fi
     AUTOSTART_MODE="disabled"
     return
   fi
@@ -186,9 +195,13 @@ install_launchd_autostart() {
 
   require_cmd launchctl
 
-  local launch_agents_dir="$HOME/Library/LaunchAgents"
-  local launch_script="$CONFIG_DIR/run-gateway.sh"
-  local launch_plist="$launch_agents_dir/$AUTOSTART_LABEL.plist"
+  local cli_bin_path="$INSTALL_DIR/$CLI_BIN_NAME"
+  if [[ ! -x "$cli_bin_path" ]]; then
+    warn "autostart not installed: missing CLI binary at $cli_bin_path"
+    AUTOSTART_MODE="disabled"
+    return
+  fi
+
   local launch_log_dir="$CONFIG_DIR/logs"
 
   mkdir -p "$launch_agents_dir" "$launch_log_dir"
@@ -203,7 +216,7 @@ if [[ -f "$ENV_TARGET" ]]; then
   source "$ENV_TARGET"
   set +a
 fi
-exec "$INSTALL_DIR/$CLI_BIN_NAME" gateway start
+exec "$cli_bin_path" gateway start
 EOF
   chmod 0755 "$launch_script"
 

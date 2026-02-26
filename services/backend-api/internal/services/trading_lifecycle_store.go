@@ -438,8 +438,9 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 	if _, err := s.db.Exec(ctx, `
 		INSERT INTO trading_positions (
 			position_id, order_id, chat_id, exchange, symbol, side, market_type,
-			size, entry_price, close_price, realized_pnl, status, source, opened_at, closed_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,0,0,'open','bootstrap_positions',$9,NULL,$10)
+			size, entry_price, last_price, unrealized_pnl, close_price, realized_pnl,
+			status, source, opened_at, closed_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,$9,$10,0,0,'open','bootstrap_positions',$11,NULL,$12)
 		ON CONFLICT (position_id) DO UPDATE SET
 			order_id = EXCLUDED.order_id,
 			chat_id = EXCLUDED.chat_id,
@@ -449,6 +450,8 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 			market_type = EXCLUDED.market_type,
 			size = EXCLUDED.size,
 			entry_price = EXCLUDED.entry_price,
+			last_price = EXCLUDED.last_price,
+			unrealized_pnl = EXCLUDED.unrealized_pnl,
 			close_price = 0,
 			realized_pnl = 0,
 			status = 'open',
@@ -456,7 +459,7 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 			closed_at = NULL,
 			updated_at = EXCLUDED.updated_at
 	`, positionID, positionID, strings.TrimSpace(chatID), strings.TrimSpace(exchange), strings.TrimSpace(position.Symbol),
-		normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, now, now); err != nil {
+		normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, position.MarkPrice, position.UnrealizedPnl, now, now); err != nil {
 		return fmt.Errorf("sync position upsert failed: %w", err)
 	}
 	return nil

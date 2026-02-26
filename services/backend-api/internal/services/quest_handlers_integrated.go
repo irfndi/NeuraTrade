@@ -761,7 +761,11 @@ func (h *IntegratedQuestHandlers) autoDeriskIfExposureTooHigh(
 	}
 
 	exposureRatio, _ := totalNotional.Div(equity).Float64()
-	if exposureRatio <= 1.0 {
+	hardLimit := 1.0
+	if configured, ok := getEnvFloat("NEURATRADE_EXPOSURE_GUARD_HARD_LIMIT"); ok && configured > 0 {
+		hardLimit = configured
+	}
+	if exposureRatio <= hardLimit {
 		return 0, exposureRatio, nil
 	}
 
@@ -770,7 +774,7 @@ func (h *IntegratedQuestHandlers) autoDeriskIfExposureTooHigh(
 		quest,
 		chatID,
 		exchange,
-		fmt.Sprintf("pre-trade exposure guard %.2f exceeded hard limit 1.00", exposureRatio),
+		fmt.Sprintf("pre-trade exposure guard %.2f exceeded hard limit %.2f", exposureRatio, hardLimit),
 	)
 	return closed, exposureRatio, deriskErr
 }

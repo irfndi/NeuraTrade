@@ -112,7 +112,7 @@ func (sp *ScalpingPerformance) GetReturnSeries(limit int) []decimal.Decimal {
 	defer sp.mu.RUnlock()
 
 	if len(sp.history) == 0 {
-		return nil
+		return []decimal.Decimal{}
 	}
 	if limit <= 0 || limit > len(sp.history) {
 		limit = len(sp.history)

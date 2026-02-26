@@ -103,7 +103,11 @@ func downsideStdDevFloat64(values []float64) float64 {
 	if downsideCount == 0 {
 		return 0
 	}
-	return math.Sqrt(downsideSquares / float64(downsideCount))
+	denominator := float64(downsideCount)
+	if downsideCount > 1 {
+		denominator = float64(downsideCount - 1)
+	}
+	return math.Sqrt(downsideSquares / denominator)
 }
 
 func maxDrawdownFromReturns(returns []float64) float64 {
