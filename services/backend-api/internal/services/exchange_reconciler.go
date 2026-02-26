@@ -235,7 +235,7 @@ func (r *ExchangePositionReconciler) compareOrders(result *ReconciliationResult,
 		}
 
 		// Compare status
-		if local.Status != exchange.Status {
+		if !strings.EqualFold(local.Status, exchange.Status) {
 			result.OrdersMismatched++
 			result.DriftDetails = append(result.DriftDetails, DriftDetail{
 				Type:          "order",
@@ -255,12 +255,12 @@ func (r *ExchangePositionReconciler) compareOrders(result *ReconciliationResult,
 func (r *ExchangePositionReconciler) comparePositions(result *ReconciliationResult, localPositions []PositionRecord, exchangePositions []ccxt.Position) {
 	exchangePosMap := make(map[string]ccxt.Position)
 	for _, pos := range exchangePositions {
-		key := pos.Symbol + "_" + pos.Side
+		key := strings.ToUpper(strings.TrimSpace(pos.Symbol)) + "_" + normalizeReconcilerPositionSide(pos.Side)
 		exchangePosMap[key] = pos
 	}
 
 	for _, local := range localPositions {
-		key := local.Symbol + "_" + local.Side
+		key := strings.ToUpper(strings.TrimSpace(local.Symbol)) + "_" + normalizeReconcilerPositionSide(local.Side)
 		exchange, exists := exchangePosMap[key]
 		if !exists {
 			// Local position not found on exchange
@@ -310,12 +310,12 @@ func (r *ExchangePositionReconciler) getLocalOrders(ctx context.Context, exchang
 
 	query := `SELECT id, exchange, symbol, side, status, price, amount, filled
 	          FROM open_orders
-	          WHERE exchange = $1 AND status = 'open'`
+	          WHERE exchange = $1 AND LOWER(status) = 'open'`
 	args := []any{exchange}
 	if chatID != "" {
 		query = `SELECT id, exchange, symbol, side, status, price, amount, filled
 		         FROM open_orders
-		         WHERE exchange = $1 AND chat_id = $2 AND status = 'open'`
+		         WHERE exchange = $1 AND chat_id = $2 AND LOWER(status) = 'open'`
 		args = append(args, chatID)
 	}
 
@@ -349,7 +349,7 @@ func (r *ExchangePositionReconciler) getLocalOrdersFromTradingOrders(ctx context
 	rows, err := r.db.Query(ctx, `
 		SELECT order_id, exchange, symbol, side, status, price, amount
 		FROM trading_orders
-		WHERE exchange = $1 AND status IN ('open', 'pending', 'partial')
+		WHERE exchange = $1 AND LOWER(status) IN ('open', 'pending', 'partial')
 	`, exchange)
 	if err != nil {
 		if isMissingTableError(err) {
@@ -420,7 +420,7 @@ func (r *ExchangePositionReconciler) getLocalPositionsFromTradingPositions(ctx c
 	rows, err := r.db.Query(ctx, `
 		SELECT symbol, side, size, entry_price
 		FROM trading_positions
-		WHERE exchange = $1 AND status = 'open'
+		WHERE exchange = $1 AND LOWER(status) = 'open'
 	`, exchange)
 	if err != nil {
 		if isMissingTableError(err) {
@@ -560,4 +560,16 @@ func isMissingTableError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "no such table") ||
 		strings.Contains(msg, "does not exist")
+}
+
+func normalizeReconcilerPositionSide(side string) string {
+	normalized := strings.ToLower(strings.TrimSpace(side))
+	switch normalized {
+	case "open_long", "long", "buy":
+		return "long"
+	case "open_short", "short", "sell":
+		return "short"
+	default:
+		return normalized
+	}
 }

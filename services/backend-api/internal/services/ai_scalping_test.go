@@ -1,9 +1,12 @@
 package services
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 )
@@ -58,6 +61,11 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 8, config.MaxPairsToAnalyze)
 	assert.Equal(t, 120, config.MaxCandidatePairs)
 	assert.Equal(t, 4, config.OrderBookPairs)
+	assert.True(t, config.EnforceFutures)
+	assert.Equal(t, 90*time.Second, config.SymbolCooldown)
+	assert.Equal(t, 3, config.FailureBudget)
+	assert.Equal(t, 15*time.Minute, config.FailureWindow)
+	assert.Equal(t, 2, config.StructuredRetries)
 }
 
 func TestAIScalpingConfig_Custom(t *testing.T) {
@@ -96,6 +104,11 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_MAX_PAIRS", "11")
 	t.Setenv("NEURATRADE_SCALPING_MAX_CANDIDATES", "210")
 	t.Setenv("NEURATRADE_SCALPING_ORDERBOOK_PAIRS", "6")
+	t.Setenv("NEURATRADE_SCALPING_ENFORCE_FUTURES_UNIVERSE", "false")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_COOLDOWN_SECONDS", "45")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_FAILURE_BUDGET", "4")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_FAILURE_WINDOW_SECONDS", "600")
+	t.Setenv("NEURATRADE_SCALPING_STRUCTURED_RETRIES", "3")
 
 	cfg := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
 	assert.Equal(t, "binance", cfg.Exchange)
@@ -108,6 +121,11 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 11, cfg.MaxPairsToAnalyze)
 	assert.Equal(t, 210, cfg.MaxCandidatePairs)
 	assert.Equal(t, 6, cfg.OrderBookPairs)
+	assert.False(t, cfg.EnforceFutures)
+	assert.Equal(t, 45*time.Second, cfg.SymbolCooldown)
+	assert.Equal(t, 4, cfg.FailureBudget)
+	assert.Equal(t, 10*time.Minute, cfg.FailureWindow)
+	assert.Equal(t, 3, cfg.StructuredRetries)
 }
 
 func TestAIMarketSignal(t *testing.T) {
@@ -130,4 +148,54 @@ func TestAIMarketSignal(t *testing.T) {
 	assert.Equal(t, 0.01, signal.BidAskSpread)
 	assert.Equal(t, 0.5, signal.OrderBookImbalance)
 	assert.Equal(t, 5.0, signal.PriceChange24h)
+}
+
+func TestAIScalpingService_SymbolGuardFailureBudgetAndCooldown(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			SymbolCooldown: 2 * time.Minute,
+			FailureBudget:  2,
+			FailureWindow:  10 * time.Minute,
+		},
+		symbolGuards: make(map[string]symbolExecutionGuard),
+	}
+
+	svc.recordSymbolGuardResult("BTC/USDT", fmt.Errorf("network timeout"))
+	svc.recordSymbolGuardResult("BTC/USDT", fmt.Errorf("network timeout"))
+
+	err := svc.enforceSymbolGuard("BTC/USDT")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "symbol failure budget reached")
+
+	svc.recordSymbolGuardResult("BTC/USDT", nil)
+	err = svc.enforceSymbolGuard("BTC/USDT")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "symbol cooldown active")
+}
+
+func TestAIScalpingService_ParseDecisionWithRetries(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Message: llm.Message{
+					Content: `{"action":"hold","symbol":"BTC/USDT","size_pct":0,"confidence":0.2,"reasoning":"repair fallback","stop_loss":null,"take_profit":null}`,
+				},
+			},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 2,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.parseDecisionWithRetries(context.Background(), "not-json")
+	assert.NoError(t, err)
+	assert.NotNil(t, decision)
+	assert.Equal(t, "hold", decision.Action)
+	assert.Equal(t, 1, mockLLM.CallCount)
 }

@@ -42,6 +42,49 @@ func setupMockDB(t *testing.T) mockRouteDB {
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
 		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 
+	// Lifecycle store initialization
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_orders").
+		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_positions").
+		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS realized_pnl_journal").
+		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_chat_status").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_chat_status").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_symbol_closed").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN chat_id TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN market_type TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN filled_amount NUMERIC").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN source TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN closed_at TIMESTAMP").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN chat_id TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN market_type TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN close_price NUMERIC").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN realized_pnl NUMERIC").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN source TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN closed_at TIMESTAMP").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+
 	return mockRouteDB{DBPool: database.NewMockDBPool(mock)}
 }
 

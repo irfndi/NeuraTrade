@@ -34,6 +34,11 @@ type AIScalpingConfig struct {
 	MaxPairsToAnalyze int
 	MaxCandidatePairs int
 	OrderBookPairs    int
+	EnforceFutures    bool
+	SymbolCooldown    time.Duration
+	FailureBudget     int
+	FailureWindow     time.Duration
+	StructuredRetries int
 }
 
 func DefaultAIScalpingConfig() AIScalpingConfig {
@@ -51,6 +56,11 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		MaxPairsToAnalyze: 8,
 		MaxCandidatePairs: 120,
 		OrderBookPairs:    4,
+		EnforceFutures:    true,
+		SymbolCooldown:    90 * time.Second,
+		FailureBudget:     3,
+		FailureWindow:     15 * time.Minute,
+		StructuredRetries: 2,
 	}
 }
 
@@ -96,6 +106,21 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if value := getEnvInt("NEURATRADE_SCALPING_ORDERBOOK_PAIRS"); value > 0 {
 		cfg.OrderBookPairs = clampInt(value, 1, cfg.MaxPairsToAnalyze)
 	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_ENFORCE_FUTURES_UNIVERSE"); ok {
+		cfg.EnforceFutures = value
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_COOLDOWN_SECONDS"); value > 0 {
+		cfg.SymbolCooldown = time.Duration(clampInt(value, 5, 900)) * time.Second
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_FAILURE_BUDGET"); value > 0 {
+		cfg.FailureBudget = clampInt(value, 1, 20)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_FAILURE_WINDOW_SECONDS"); value > 0 {
+		cfg.FailureWindow = time.Duration(clampInt(value, 30, 7200)) * time.Second
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_STRUCTURED_RETRIES"); value > 0 {
+		cfg.StructuredRetries = clampInt(value, 1, 6)
+	}
 
 	if cfg.MaxCandidatePairs < cfg.MaxPairsToAnalyze {
 		cfg.MaxCandidatePairs = cfg.MaxPairsToAnalyze
@@ -108,7 +133,7 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	}
 
 	log.Printf(
-		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d",
 		cfg.Exchange,
 		cfg.Model,
 		cfg.Leverage,
@@ -121,6 +146,11 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.MaxPairsToAnalyze,
 		cfg.MaxCandidatePairs,
 		cfg.OrderBookPairs,
+		cfg.EnforceFutures,
+		cfg.SymbolCooldown,
+		cfg.FailureBudget,
+		cfg.FailureWindow,
+		cfg.StructuredRetries,
 	)
 
 	return cfg
@@ -143,6 +173,11 @@ type aiScalpingFileConfig struct {
 			MaxPairs          *int     `json:"max_pairs"`
 			MaxCandidates     *int     `json:"max_candidates"`
 			OrderBookPairs    *int     `json:"orderbook_pairs"`
+			EnforceFutures    *bool    `json:"enforce_futures_universe"`
+			SymbolCooldownSec *int     `json:"symbol_cooldown_seconds"`
+			FailureBudget     *int     `json:"symbol_failure_budget"`
+			FailureWindowSec  *int     `json:"symbol_failure_window_seconds"`
+			StructuredRetries *int     `json:"structured_retries"`
 		} `json:"scalping"`
 	} `json:"ai"`
 }
@@ -213,6 +248,21 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 	if fileConfig.AI.Scalping.OrderBookPairs != nil {
 		cfg.OrderBookPairs = clampInt(*fileConfig.AI.Scalping.OrderBookPairs, 1, cfg.MaxPairsToAnalyze)
 	}
+	if fileConfig.AI.Scalping.EnforceFutures != nil {
+		cfg.EnforceFutures = *fileConfig.AI.Scalping.EnforceFutures
+	}
+	if fileConfig.AI.Scalping.SymbolCooldownSec != nil {
+		cfg.SymbolCooldown = time.Duration(clampInt(*fileConfig.AI.Scalping.SymbolCooldownSec, 5, 900)) * time.Second
+	}
+	if fileConfig.AI.Scalping.FailureBudget != nil {
+		cfg.FailureBudget = clampInt(*fileConfig.AI.Scalping.FailureBudget, 1, 20)
+	}
+	if fileConfig.AI.Scalping.FailureWindowSec != nil {
+		cfg.FailureWindow = time.Duration(clampInt(*fileConfig.AI.Scalping.FailureWindowSec, 30, 7200)) * time.Second
+	}
+	if fileConfig.AI.Scalping.StructuredRetries != nil {
+		cfg.StructuredRetries = clampInt(*fileConfig.AI.Scalping.StructuredRetries, 1, 6)
+	}
 
 	return cfg
 }
@@ -247,6 +297,14 @@ type AIScalpingService struct {
 	cachedPairs   []string
 	cacheExchange string
 	cacheUpdated  time.Time
+	symbolGuardMu sync.Mutex
+	symbolGuards  map[string]symbolExecutionGuard
+}
+
+type symbolExecutionGuard struct {
+	LastSuccess       time.Time
+	FailureWindowFrom time.Time
+	FailureCount      int
 }
 
 // SetExchange updates the exchange for scalping (called dynamically based on user wallet)
@@ -270,6 +328,7 @@ func NewAIScalpingService(
 		ccxtService:   ccxtService,
 		orderExecutor: orderExecutor,
 		tradeMemory:   tradeMemory,
+		symbolGuards:  make(map[string]symbolExecutionGuard),
 	}
 }
 
@@ -383,6 +442,8 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 	if s.config.Exchange == "bitget" {
 		if filtered := s.filterFuturesSymbols(ctx, candidates); len(filtered) > 0 {
 			candidates = filtered
+		} else if s.config.EnforceFutures {
+			return nil, fmt.Errorf("futures universe prefilter returned no tradable symbols")
 		}
 	}
 
@@ -663,15 +724,10 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	decision, err := parseAIDecisionPayload(resp.Message.Content)
 	if err != nil {
 		log.Printf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
-		repaired, repairErr := s.repairDecisionJSON(ctx, resp.Message.Content)
-		if repairErr != nil {
-			log.Printf("[AI-SCALPING] Failed to repair AI response: %v", repairErr)
-			return fallbackHoldDecision(resp.Message.Content, err), nil
-		}
-		decision, err = parseAIDecisionPayload(repaired)
+		decision, err = s.parseDecisionWithRetries(ctx, resp.Message.Content)
 		if err != nil {
-			log.Printf("[AI-SCALPING] Failed to parse repaired AI response: %s", repaired)
-			return fallbackHoldDecision(repaired, err), nil
+			log.Printf("[AI-SCALPING] Structured-output retries exhausted: %v", err)
+			return fallbackHoldDecision(resp.Message.Content, err), nil
 		}
 	}
 
@@ -781,6 +837,9 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("computed order amount is non-positive")
 	}
+	if err := s.enforceSymbolGuard(decision.Symbol); err != nil {
+		return err
+	}
 
 	openOrders, err := s.orderExecutor.GetOpenOrders(ctx, s.config.Exchange, decision.Symbol)
 	if err != nil {
@@ -814,10 +873,12 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	// Use PlaceOrderWithDetails for rich notifications
 	orderID, err := s.orderExecutor.PlaceOrderWithDetails(ctx, details)
 	if err != nil {
+		s.recordSymbolGuardResult(decision.Symbol, err)
 		return fmt.Errorf("order failed: %w", err)
 	}
 
 	decision.OrderID = strings.TrimSpace(orderID)
+	s.recordSymbolGuardResult(decision.Symbol, nil)
 	log.Printf("[AI-SCALPING] Order placed: %s", orderID)
 	return nil
 }
@@ -1064,6 +1125,8 @@ func shouldDowngradeExecutionErrorToHold(err error) bool {
 		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "request failed") ||
 		strings.Contains(msg, "failed to get ticker") ||
+		strings.Contains(msg, "symbol cooldown active") ||
+		strings.Contains(msg, "symbol failure budget reached") ||
 		strings.Contains(msg, "open position/order already exists")
 }
 
@@ -1131,6 +1194,37 @@ Do not include markdown or extra text.`,
 	}
 	log.Printf("[AI-SCALPING] Repaired non-JSON decision payload")
 	return content, nil
+}
+
+func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw string) (*AITradingDecision, error) {
+	decision, err := parseAIDecisionPayload(raw)
+	if err == nil {
+		return decision, nil
+	}
+
+	maxRetries := s.config.StructuredRetries
+	if maxRetries <= 0 {
+		maxRetries = 2
+	}
+
+	lastErr := err
+	current := raw
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		repaired, repairErr := s.repairDecisionJSON(ctx, current)
+		if repairErr != nil {
+			lastErr = fmt.Errorf("repair attempt %d failed: %w", attempt, repairErr)
+			continue
+		}
+		decision, parseErr := parseAIDecisionPayload(repaired)
+		if parseErr == nil {
+			log.Printf("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
+			return decision, nil
+		}
+		lastErr = fmt.Errorf("repair attempt %d parse failed: %w", attempt, parseErr)
+		current = repaired
+	}
+
+	return nil, lastErr
 }
 
 func parseOptionalDecimal(raw json.RawMessage) (*decimal.Decimal, error) {
@@ -1211,6 +1305,71 @@ func readIntMetric(v interface{}) int {
 	default:
 		return 0
 	}
+}
+
+func (s *AIScalpingService) enforceSymbolGuard(symbol string) error {
+	normalized := normalizeSymbolForComparison(symbol)
+	if normalized == "" {
+		return nil
+	}
+	now := time.Now().UTC()
+
+	s.symbolGuardMu.Lock()
+	defer s.symbolGuardMu.Unlock()
+
+	state := s.symbolGuards[normalized]
+	cooldown := s.config.SymbolCooldown
+	if cooldown > 0 && !state.LastSuccess.IsZero() && now.Sub(state.LastSuccess) < cooldown {
+		remaining := cooldown - now.Sub(state.LastSuccess)
+		return fmt.Errorf("symbol cooldown active for %s (%s remaining)", normalized, remaining.Round(time.Second))
+	}
+
+	window := s.config.FailureWindow
+	if window <= 0 {
+		window = 15 * time.Minute
+	}
+	if !state.FailureWindowFrom.IsZero() && now.Sub(state.FailureWindowFrom) > window {
+		state.FailureWindowFrom = time.Time{}
+		state.FailureCount = 0
+	}
+	if s.config.FailureBudget > 0 && state.FailureCount >= s.config.FailureBudget {
+		return fmt.Errorf("symbol failure budget reached for %s (%d failures in %s)", normalized, state.FailureCount, window.Round(time.Second))
+	}
+
+	return nil
+}
+
+func (s *AIScalpingService) recordSymbolGuardResult(symbol string, execErr error) {
+	normalized := normalizeSymbolForComparison(symbol)
+	if normalized == "" {
+		return
+	}
+	now := time.Now().UTC()
+
+	s.symbolGuardMu.Lock()
+	defer s.symbolGuardMu.Unlock()
+
+	state := s.symbolGuards[normalized]
+	window := s.config.FailureWindow
+	if window <= 0 {
+		window = 15 * time.Minute
+	}
+
+	if execErr == nil {
+		state.LastSuccess = now
+		state.FailureWindowFrom = time.Time{}
+		state.FailureCount = 0
+		s.symbolGuards[normalized] = state
+		return
+	}
+
+	if state.FailureWindowFrom.IsZero() || now.Sub(state.FailureWindowFrom) > window {
+		state.FailureWindowFrom = now
+		state.FailureCount = 1
+	} else {
+		state.FailureCount++
+	}
+	s.symbolGuards[normalized] = state
 }
 
 func getEnvInt(key string) int {

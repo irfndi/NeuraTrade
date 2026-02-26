@@ -383,6 +383,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		integratedHandlers.SetDB(sqlDB)
 		log.Printf("Database set for integrated handlers")
 	}
+	if db != nil {
+		lifecycleStore, lifecycleErr := services.NewTradingLifecycleStore(db, log.Default())
+		if lifecycleErr != nil {
+			log.Printf("Warning: failed to initialize trading lifecycle store: %v", lifecycleErr)
+		} else {
+			integratedHandlers.SetLifecycleStore(lifecycleStore)
+			log.Printf("Trading lifecycle store initialized for autonomous execution persistence")
+		}
+	}
 
 	if sqlDB != nil {
 		tradeMemory, err := services.NewTradeMemory(sqlDB)

@@ -34,6 +34,7 @@ type IntegratedQuestHandlers struct {
 	orderExecutor       ScalpingOrderExecutor
 	aiScalpingService   *AIScalpingService
 	tradeMemory         *TradeMemory
+	lifecycleStore      *TradingLifecycleStore
 	db                  *sql.DB // Database for user settings
 }
 
@@ -41,6 +42,7 @@ const (
 	scalpingFailureCooldownThreshold = 3
 	scalpingBaseCooldown             = 2 * time.Minute
 	scalpingMaxCooldown              = 15 * time.Minute
+	defaultBootstrapInterval         = 10 * time.Minute
 )
 
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
@@ -75,6 +77,10 @@ func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 // SetTradeMemory sets the trade memory for AI learning
 func (h *IntegratedQuestHandlers) SetTradeMemory(memory *TradeMemory) {
 	h.tradeMemory = memory
+}
+
+func (h *IntegratedQuestHandlers) SetLifecycleStore(store *TradingLifecycleStore) {
+	h.lifecycleStore = store
 }
 
 func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
@@ -329,6 +335,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	if h.aiScalpingService != nil {
 		h.aiScalpingService.SetExchange(userExchange)
 	}
+	h.bootstrapLifecycleState(ctx, quest, userExchange, chatID)
 
 	// Ingest closed-order outcomes from the previous cycle so adaptive risk controls
 	// have fresher win/loss data before the next decision.
@@ -460,6 +467,27 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
+	if h.lifecycleStore != nil && strings.TrimSpace(decision.OrderID) != "" {
+		entryPrice := decimal.Zero
+		if decision.EntryPrice != nil {
+			entryPrice = *decision.EntryPrice
+		}
+		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+			OrderID:    decision.OrderID,
+			ChatID:     chatID,
+			Exchange:   userExchange,
+			Symbol:     decision.Symbol,
+			Side:       decision.Action,
+			OrderType:  "market",
+			MarketType: "futures",
+			Amount:     decimal.NewFromFloat(portfolio.USDTBalance * decision.SizePercent / 100),
+			EntryPrice: entryPrice,
+			Source:     "autonomous_scalping",
+			OpenedAt:   time.Now().UTC(),
+		}); err != nil {
+			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+		}
+	}
 	h.recordTradeDecision(ctx, quest, decision, userExchange)
 	h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
 
@@ -892,6 +920,34 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 
 		processed[orderID] = true
 		updatedProcessed = true
+
+		if h.lifecycleStore != nil {
+			filled := decimal.Zero
+			if v, ok := decimalFromOrder(order, "filled", "filledAmount", "baseVolume", "qty", "size"); ok {
+				filled = v
+			}
+			fees := decimal.Zero
+			if v, ok := decimalFromOrder(order, "fees", "fee", "totalFee", "commission"); ok {
+				fees = v
+			}
+			closedAt := timestampFromOrder(order)
+			if err := h.lifecycleStore.RecordClosedOrder(ctx, LifecycleCloseRecord{
+				OrderID:     orderID,
+				ChatID:      quest.Metadata["chat_id"],
+				Exchange:    exchange,
+				Symbol:      symbol,
+				Side:        side,
+				MarketType:  "futures",
+				Filled:      filled,
+				ExitPrice:   exitPrice,
+				RealizedPnL: pnl,
+				Fees:        fees,
+				Source:      "exchange_reconciliation",
+				ClosedAt:    closedAt,
+			}); err != nil {
+				log.Printf("[SCALPING] Failed to persist closed-order lifecycle for %s: %v", orderID, err)
+			}
+		}
 	}
 
 	if !updatedProcessed {
@@ -1022,6 +1078,114 @@ func decimalFromOrder(order map[string]interface{}, keys ...string) (decimal.Dec
 		}
 	}
 	return decimal.Zero, false
+}
+
+func timestampFromOrder(order map[string]interface{}) time.Time {
+	keys := []string{"uTime", "cTime", "fillTime", "updatedAt", "timestamp", "time"}
+	for _, key := range keys {
+		raw, ok := order[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case time.Time:
+			if !v.IsZero() {
+				return v.UTC()
+			}
+		case int64:
+			if ts := parseEpochTimestamp(v); !ts.IsZero() {
+				return ts
+			}
+		case int:
+			if ts := parseEpochTimestamp(int64(v)); !ts.IsZero() {
+				return ts
+			}
+		case float64:
+			if ts := parseEpochTimestamp(int64(v)); !ts.IsZero() {
+				return ts
+			}
+		case string:
+			text := strings.TrimSpace(v)
+			if text == "" {
+				continue
+			}
+			if numeric, err := strconv.ParseInt(text, 10, 64); err == nil {
+				if ts := parseEpochTimestamp(numeric); !ts.IsZero() {
+					return ts
+				}
+			}
+			if parsed, err := time.Parse(time.RFC3339, text); err == nil {
+				return parsed.UTC()
+			}
+		}
+	}
+	return time.Now().UTC()
+}
+
+func parseEpochTimestamp(value int64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	if value > 1_000_000_000_000 {
+		return time.UnixMilli(value).UTC()
+	}
+	return time.Unix(value, 0).UTC()
+}
+
+func (h *IntegratedQuestHandlers) bootstrapLifecycleState(ctx context.Context, quest *Quest, exchange, chatID string) {
+	if h.lifecycleStore == nil || quest == nil {
+		return
+	}
+	ccxtSvc, ok := h.ccxtService.(ccxt.CCXTService)
+	if !ok {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+
+	interval := defaultBootstrapInterval
+	if seconds := getEnvInt("NEURATRADE_SCALPING_BOOTSTRAP_SECONDS"); seconds > 0 {
+		interval = time.Duration(seconds) * time.Second
+	}
+	if raw, ok := quest.Checkpoint["runtime_bootstrap_synced_at"].(string); ok && strings.TrimSpace(raw) != "" {
+		if last, err := time.Parse(time.RFC3339, raw); err == nil && time.Since(last) < interval {
+			return
+		}
+	}
+
+	bootstrapCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	orderCount := 0
+	if openOrders, err := ccxtSvc.FetchOpenOrders(bootstrapCtx, exchange); err == nil && openOrders != nil {
+		for _, order := range openOrders.Orders {
+			if err := h.lifecycleStore.SyncOpenOrder(bootstrapCtx, chatID, exchange, order); err != nil {
+				log.Printf("[SCALPING] Failed to sync open order %s: %v", order.ID, err)
+				continue
+			}
+			orderCount++
+		}
+	} else if err != nil {
+		log.Printf("[SCALPING] Bootstrap open-order sync failed on %s: %v", exchange, err)
+	}
+
+	positionCount := 0
+	if positions, err := ccxtSvc.FetchPositions(bootstrapCtx, exchange); err == nil && positions != nil {
+		for _, position := range positions.Positions {
+			if err := h.lifecycleStore.SyncPosition(bootstrapCtx, chatID, exchange, position); err != nil {
+				log.Printf("[SCALPING] Failed to sync position %s %s: %v", position.Symbol, position.Side, err)
+				continue
+			}
+			positionCount++
+		}
+	} else if err != nil {
+		log.Printf("[SCALPING] Bootstrap position sync failed on %s: %v", exchange, err)
+	}
+
+	quest.Checkpoint["runtime_bootstrap_synced_at"] = time.Now().UTC().Format(time.RFC3339)
+	quest.Checkpoint["runtime_bootstrap_open_orders"] = orderCount
+	quest.Checkpoint["runtime_bootstrap_positions"] = positionCount
 }
 
 func (h *IntegratedQuestHandlers) scalpingCooldownRemaining(quest *Quest, now time.Time) time.Duration {
