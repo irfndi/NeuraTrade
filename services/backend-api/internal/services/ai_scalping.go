@@ -39,6 +39,9 @@ type AIScalpingConfig struct {
 	FailureBudget     int
 	FailureWindow     time.Duration
 	StructuredRetries int
+	LossStreakBudget  int
+	LossCooldown      time.Duration
+	LossWindow        time.Duration
 }
 
 func DefaultAIScalpingConfig() AIScalpingConfig {
@@ -61,6 +64,9 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		FailureBudget:     3,
 		FailureWindow:     15 * time.Minute,
 		StructuredRetries: 2,
+		LossStreakBudget:  2,
+		LossCooldown:      20 * time.Minute,
+		LossWindow:        90 * time.Minute,
 	}
 }
 
@@ -121,6 +127,15 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if value := getEnvInt("NEURATRADE_SCALPING_STRUCTURED_RETRIES"); value > 0 {
 		cfg.StructuredRetries = clampInt(value, 1, 6)
 	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET"); value > 0 {
+		cfg.LossStreakBudget = clampInt(value, 1, 10)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_COOLDOWN_SECONDS"); value > 0 {
+		cfg.LossCooldown = time.Duration(clampInt(value, 30, 14400)) * time.Second
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS"); value > 0 {
+		cfg.LossWindow = time.Duration(clampInt(value, 60, 43200)) * time.Second
+	}
 
 	if cfg.MaxCandidatePairs < cfg.MaxPairsToAnalyze {
 		cfg.MaxCandidatePairs = cfg.MaxPairsToAnalyze
@@ -133,7 +148,7 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	}
 
 	log.Printf(
-		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s",
 		cfg.Exchange,
 		cfg.Model,
 		cfg.Leverage,
@@ -151,6 +166,9 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.FailureBudget,
 		cfg.FailureWindow,
 		cfg.StructuredRetries,
+		cfg.LossStreakBudget,
+		cfg.LossCooldown,
+		cfg.LossWindow,
 	)
 
 	return cfg
@@ -178,6 +196,9 @@ type aiScalpingFileConfig struct {
 			FailureBudget     *int     `json:"symbol_failure_budget"`
 			FailureWindowSec  *int     `json:"symbol_failure_window_seconds"`
 			StructuredRetries *int     `json:"structured_retries"`
+			LossStreakBudget  *int     `json:"symbol_loss_streak_budget"`
+			LossCooldownSec   *int     `json:"symbol_loss_cooldown_seconds"`
+			LossWindowSec     *int     `json:"symbol_loss_window_seconds"`
 		} `json:"scalping"`
 	} `json:"ai"`
 }
@@ -263,6 +284,15 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 	if fileConfig.AI.Scalping.StructuredRetries != nil {
 		cfg.StructuredRetries = clampInt(*fileConfig.AI.Scalping.StructuredRetries, 1, 6)
 	}
+	if fileConfig.AI.Scalping.LossStreakBudget != nil {
+		cfg.LossStreakBudget = clampInt(*fileConfig.AI.Scalping.LossStreakBudget, 1, 10)
+	}
+	if fileConfig.AI.Scalping.LossCooldownSec != nil {
+		cfg.LossCooldown = time.Duration(clampInt(*fileConfig.AI.Scalping.LossCooldownSec, 30, 14400)) * time.Second
+	}
+	if fileConfig.AI.Scalping.LossWindowSec != nil {
+		cfg.LossWindow = time.Duration(clampInt(*fileConfig.AI.Scalping.LossWindowSec, 60, 43200)) * time.Second
+	}
 
 	return cfg
 }
@@ -305,6 +335,9 @@ type symbolExecutionGuard struct {
 	LastSuccess       time.Time
 	FailureWindowFrom time.Time
 	FailureCount      int
+	LossWindowFrom    time.Time
+	LossStreak        int
+	LastLoss          time.Time
 }
 
 // SetExchange updates the exchange for scalping (called dynamically based on user wallet)
@@ -359,7 +392,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		return fallbackHoldDecision(err.Error(), err), nil
 	}
 
-	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds()
+	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds(ctx)
 	log.Printf(
 		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f",
 		effectiveMinConfidence,
@@ -722,8 +755,11 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
 
 	decision, err := parseAIDecisionPayload(resp.Message.Content)
-	if err != nil {
+	if err != nil || !isValidDecisionAction(decision.Action) {
 		log.Printf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
+		if err == nil {
+			err = fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
+		}
 		decision, err = s.parseDecisionWithRetries(ctx, resp.Message.Content)
 		if err != nil {
 			log.Printf("[AI-SCALPING] Structured-output retries exhausted: %v", err)
@@ -1115,6 +1151,11 @@ func fallbackHoldDecision(content string, parseErr error) *AITradingDecision {
 	}
 }
 
+func isValidDecisionAction(action string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(action))
+	return normalized == "buy" || normalized == "sell" || normalized == "hold"
+}
+
 func shouldDowngradeExecutionErrorToHold(err error) bool {
 	if err == nil {
 		return false
@@ -1126,6 +1167,7 @@ func shouldDowngradeExecutionErrorToHold(err error) bool {
 		strings.Contains(msg, "request failed") ||
 		strings.Contains(msg, "failed to get ticker") ||
 		strings.Contains(msg, "symbol cooldown active") ||
+		strings.Contains(msg, "symbol loss cooldown active") ||
 		strings.Contains(msg, "symbol failure budget reached") ||
 		strings.Contains(msg, "open position/order already exists")
 }
@@ -1198,8 +1240,11 @@ Do not include markdown or extra text.`,
 
 func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw string) (*AITradingDecision, error) {
 	decision, err := parseAIDecisionPayload(raw)
-	if err == nil {
+	if err == nil && isValidDecisionAction(decision.Action) {
 		return decision, nil
+	}
+	if err == nil {
+		err = fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
 	}
 
 	maxRetries := s.config.StructuredRetries
@@ -1216,9 +1261,12 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 			continue
 		}
 		decision, parseErr := parseAIDecisionPayload(repaired)
-		if parseErr == nil {
+		if parseErr == nil && isValidDecisionAction(decision.Action) {
 			log.Printf("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
 			return decision, nil
+		}
+		if parseErr == nil {
+			parseErr = fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
 		}
 		lastErr = fmt.Errorf("repair attempt %d parse failed: %w", attempt, parseErr)
 		current = repaired
@@ -1273,7 +1321,7 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 	}
 }
 
-func (s *AIScalpingService) dynamicRiskThresholds() (minConfidence float64, maxCapitalPct float64) {
+func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context) (minConfidence float64, maxCapitalPct float64) {
 	minConfidence = s.config.MinConfidence
 	maxCapitalPct = s.config.MaxCapitalPct
 
@@ -1290,6 +1338,28 @@ func (s *AIScalpingService) dynamicRiskThresholds() (minConfidence float64, maxC
 	if minConfidence > 0.95 {
 		minConfidence = 0.95
 	}
+	if s.tradeMemory != nil {
+		stats, err := s.tradeMemory.GetPerformanceStats(ctx)
+		if err == nil {
+			totalTrades := readIntMetric(stats["total_trades"])
+			winRate := readFloatMetric(stats["win_rate"])
+			if totalTrades >= 10 && winRate > 0 && winRate < 35 {
+				if minConfidence < 0.70 {
+					minConfidence = 0.70
+				}
+				maxCapitalPct = maxCapitalPct * 0.6
+			}
+			if totalTrades >= 20 && winRate > 0 && winRate < 30 {
+				if minConfidence < 0.78 {
+					minConfidence = 0.78
+				}
+				maxCapitalPct = maxCapitalPct * 0.5
+			}
+		}
+	}
+	if maxCapitalPct < 0.1 {
+		maxCapitalPct = 0.1
+	}
 
 	return minConfidence, maxCapitalPct
 }
@@ -1305,6 +1375,25 @@ func readIntMetric(v interface{}) int {
 	default:
 		return 0
 	}
+}
+
+func readFloatMetric(v interface{}) float64 {
+	switch value := v.(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func (s *AIScalpingService) enforceSymbolGuard(symbol string) error {
@@ -1334,6 +1423,18 @@ func (s *AIScalpingService) enforceSymbolGuard(symbol string) error {
 	}
 	if s.config.FailureBudget > 0 && state.FailureCount >= s.config.FailureBudget {
 		return fmt.Errorf("symbol failure budget reached for %s (%d failures in %s)", normalized, state.FailureCount, window.Round(time.Second))
+	}
+	lossCooldown := s.config.LossCooldown
+	if lossCooldown <= 0 {
+		lossCooldown = 20 * time.Minute
+	}
+	if s.config.LossStreakBudget > 0 && state.LossStreak >= s.config.LossStreakBudget && !state.LastLoss.IsZero() && now.Sub(state.LastLoss) < lossCooldown {
+		return fmt.Errorf(
+			"symbol loss cooldown active for %s (%d consecutive losses, %s remaining)",
+			normalized,
+			state.LossStreak,
+			(lossCooldown - now.Sub(state.LastLoss)).Round(time.Second),
+		)
 	}
 
 	return nil
@@ -1368,6 +1469,37 @@ func (s *AIScalpingService) recordSymbolGuardResult(symbol string, execErr error
 		state.FailureCount = 1
 	} else {
 		state.FailureCount++
+	}
+	s.symbolGuards[normalized] = state
+}
+
+// ReportTradeOutcome feeds realized PnL back into symbol-level guardrails.
+func (s *AIScalpingService) ReportTradeOutcome(symbol string, pnl decimal.Decimal) {
+	normalized := normalizeSymbolForComparison(symbol)
+	if normalized == "" {
+		return
+	}
+	now := time.Now().UTC()
+	window := s.config.LossWindow
+	if window <= 0 {
+		window = 90 * time.Minute
+	}
+
+	s.symbolGuardMu.Lock()
+	defer s.symbolGuardMu.Unlock()
+
+	state := s.symbolGuards[normalized]
+	if pnl.LessThan(decimal.Zero) {
+		if state.LossWindowFrom.IsZero() || now.Sub(state.LossWindowFrom) > window {
+			state.LossWindowFrom = now
+			state.LossStreak = 1
+		} else {
+			state.LossStreak++
+		}
+		state.LastLoss = now
+	} else if pnl.GreaterThanOrEqual(decimal.Zero) {
+		state.LossWindowFrom = time.Time{}
+		state.LossStreak = 0
 	}
 	s.symbolGuards[normalized] = state
 }

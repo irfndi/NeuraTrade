@@ -897,6 +897,9 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		}
 		totalPnL = totalPnL.Add(pnl)
 		processedCount++
+		if h.aiScalpingService != nil {
+			h.aiScalpingService.ReportTradeOutcome(symbol, pnl)
+		}
 		GetScalpingPerformance().RecordTrade(TradeRecord{
 			Timestamp:  time.Now().UTC(),
 			Symbol:     symbol,

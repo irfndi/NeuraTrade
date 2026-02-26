@@ -109,6 +109,9 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_FAILURE_BUDGET", "4")
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_FAILURE_WINDOW_SECONDS", "600")
 	t.Setenv("NEURATRADE_SCALPING_STRUCTURED_RETRIES", "3")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET", "3")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_COOLDOWN_SECONDS", "900")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS", "3600")
 
 	cfg := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
 	assert.Equal(t, "binance", cfg.Exchange)
@@ -126,6 +129,9 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 4, cfg.FailureBudget)
 	assert.Equal(t, 10*time.Minute, cfg.FailureWindow)
 	assert.Equal(t, 3, cfg.StructuredRetries)
+	assert.Equal(t, 3, cfg.LossStreakBudget)
+	assert.Equal(t, 15*time.Minute, cfg.LossCooldown)
+	assert.Equal(t, 1*time.Hour, cfg.LossWindow)
 }
 
 func TestAIMarketSignal(t *testing.T) {
@@ -198,4 +204,52 @@ func TestAIScalpingService_ParseDecisionWithRetries(t *testing.T) {
 	assert.NotNil(t, decision)
 	assert.Equal(t, "hold", decision.Action)
 	assert.Equal(t, 1, mockLLM.CallCount)
+}
+
+func TestAIScalpingService_ParseDecisionWithRetries_InvalidAction(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Message: llm.Message{
+					Content: `{"action":"buy","symbol":"BTC/USDT","size_pct":1.0,"confidence":0.6,"reasoning":"fixed","stop_loss":41000,"take_profit":43000}`,
+				},
+			},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 2,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.parseDecisionWithRetries(context.Background(), `{"action":"","symbol":"BTC/USDT","size_pct":1.0,"confidence":0.6,"reasoning":"bad"}`)
+	assert.NoError(t, err)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, 1, mockLLM.CallCount)
+}
+
+func TestAIScalpingService_SymbolLossCooldown(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			LossStreakBudget: 2,
+			LossCooldown:     30 * time.Minute,
+			LossWindow:       90 * time.Minute,
+		},
+		symbolGuards: make(map[string]symbolExecutionGuard),
+	}
+
+	svc.ReportTradeOutcome("ADA/USDT", decimal.NewFromFloat(-0.1))
+	svc.ReportTradeOutcome("ADA/USDT", decimal.NewFromFloat(-0.2))
+
+	err := svc.enforceSymbolGuard("ADA/USDT")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "symbol loss cooldown active")
+
+	svc.ReportTradeOutcome("ADA/USDT", decimal.NewFromFloat(0.05))
+	err = svc.enforceSymbolGuard("ADA/USDT")
+	assert.NoError(t, err)
 }
