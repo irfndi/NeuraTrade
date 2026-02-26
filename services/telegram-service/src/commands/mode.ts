@@ -24,7 +24,26 @@ async function handleModeAction(
   action: string,
   reply: (text: string) => Promise<unknown>,
 ): Promise<void> {
+  let currentMode: "dry" | "live" | null = null;
+  let requiredConfirmations = 2;
+  try {
+    const state = await api.getTradingMode(chatId);
+    currentMode = state.mode;
+    requiredConfirmations = state.required_confirmations || 2;
+  } catch {
+    // Continue with action handling even if state probe fails.
+  }
+
   if (action === "dry") {
+    if (currentMode === "dry") {
+      await reply(
+        "🧪 Already in DRY MODE\n\n" +
+          "Paper trading is active and your funds are safe.\n" +
+          "Use /mode live when you are ready for real trading.",
+      );
+      return;
+    }
+
     await api.setTradingMode(chatId, "dry");
     await reply(
       "✅ Switched to DRY MODE\n\n" +
@@ -36,10 +55,31 @@ async function handleModeAction(
   }
 
   if (action === "live") {
+    if (currentMode === "live") {
+      await reply(
+        "🔴 Already in LIVE MODE\n\n" +
+          "Real trading is currently active.\n" +
+          "Use /mode dry to switch back to safe paper mode.",
+      );
+      return;
+    }
+
     let result: { success: boolean; mode?: string };
     try {
       result = await api.setTradingMode(chatId, "live");
     } catch (error) {
+      if (
+        isApiErrorWithStatus(error) &&
+        error.status === 400 &&
+        error.message.toLowerCase().includes("already in live mode")
+      ) {
+        await reply(
+          "🔴 Already in LIVE MODE\n\n" +
+            "Real trading is currently active.\n" +
+            "Use /mode dry to switch back to safe paper mode.",
+        );
+        return;
+      }
       if (
         isApiErrorWithStatus(error) &&
         error.status === 400 &&
@@ -77,7 +117,34 @@ async function handleModeAction(
   }
 
   if (action === "confirm") {
-    const result = await api.addTradingModeConfirmation(chatId);
+    if (currentMode === "live") {
+      await reply(
+        "🔴 LIVE MODE already active\n\n" +
+          "No additional confirmation is required.\n" +
+          "Use /mode dry to return to paper trading.",
+      );
+      return;
+    }
+
+    let result;
+    try {
+      result = await api.addTradingModeConfirmation(chatId);
+    } catch (error) {
+      if (
+        isApiErrorWithStatus(error) &&
+        error.status === 400 &&
+        error.message.toLowerCase().includes("already in live mode")
+      ) {
+        await reply(
+          "🔴 LIVE MODE already active\n\n" +
+            "No additional confirmation is required.\n" +
+            "Use /mode dry to return to paper trading.",
+        );
+        return;
+      }
+      throw error;
+    }
+
     if (result.confirmations >= result.required) {
       await reply(
         `✅ Confirmation ${result.confirmations}/${result.required}\n\n` +
@@ -91,6 +158,7 @@ async function handleModeAction(
       `✅ Confirmation ${result.confirmations}/${result.required}\n\n` +
         "More confirmations needed before live trading.\n" +
         "Use /mode confirm again to add another confirmation.\n\n" +
+        `Target confirmations: ${requiredConfirmations}\n\n` +
         "This protects against accidental live trading.",
     );
     return;
