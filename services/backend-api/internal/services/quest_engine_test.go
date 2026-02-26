@@ -433,8 +433,11 @@ func TestNewQuestEngineWithRedis(t *testing.T) {
 
 func TestQuestExecutionStaleAfter(t *testing.T) {
 	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "")
-	if got := questExecutionStaleAfter(); got != defaultQuestExecutionStale {
-		t.Fatalf("questExecutionStaleAfter() = %s, want %s", got, defaultQuestExecutionStale)
+	t.Setenv("NEURATRADE_SCALPING_TIMEOUT_SECONDS", "")
+	t.Setenv("NEURATRADE_SCALPING_STRUCTURED_RETRIES", "")
+	expectedDerived := 90*time.Second + 3*20*time.Second + 45*time.Second
+	if got := questExecutionStaleAfter(); got != expectedDerived {
+		t.Fatalf("questExecutionStaleAfter() derived default = %s, want %s", got, expectedDerived)
 	}
 
 	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "30")
@@ -445,6 +448,14 @@ func TestQuestExecutionStaleAfter(t *testing.T) {
 	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "480")
 	if got := questExecutionStaleAfter(); got != 8*time.Minute {
 		t.Fatalf("questExecutionStaleAfter() env = %s, want %s", got, 8*time.Minute)
+	}
+
+	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "")
+	t.Setenv("NEURATRADE_SCALPING_TIMEOUT_SECONDS", "120")
+	t.Setenv("NEURATRADE_SCALPING_STRUCTURED_RETRIES", "3")
+	expectedAligned := 120*time.Second + 4*20*time.Second + 45*time.Second
+	if got := questExecutionStaleAfter(); got != expectedAligned {
+		t.Fatalf("questExecutionStaleAfter() aligned = %s, want %s", got, expectedAligned)
 	}
 }
 

@@ -2041,12 +2041,12 @@ func (s *NativeCCXTService) buildFundingRateURL(exchange string, symbols []strin
 		instId := strings.ReplaceAll(symbols[0], "/", "-")
 		return fmt.Sprintf("https://www.okx.com/api/v5/public/funding-rate?instId=%s", instId)
 	case "bitget":
-		// Bitget: /api/v2/mix/market/funding-rate
+		// Bitget v2: current-fund-rate for single symbol, tickers for all symbols.
 		if len(symbols) == 0 {
-			return "https://api.bitget.com/api/v2/mix/market/funding-rate?productType=USDT-FUTURES"
+			return "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
 		}
-		symbol := strings.ReplaceAll(symbols[0], "/", "")
-		return fmt.Sprintf("https://api.bitget.com/api/v2/mix/market/funding-rate?symbol=%s&productType=USDT-FUTURES", symbol)
+		symbol := bitgetSymbolKey(symbols[0])
+		return fmt.Sprintf("https://api.bitget.com/api/v2/mix/market/current-fund-rate?symbol=%s&productType=USDT-FUTURES", symbol)
 	default:
 		return ""
 	}
@@ -2194,6 +2194,10 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 			FundingRate     string `json:"fundingRate"`
 			FundingTime     string `json:"fundingTime"`
 			NextFundingTime string `json:"nextFundingTime"`
+			NextUpdate      string `json:"nextUpdate"`
+			Ts              string `json:"ts"`
+			MarkPrice       string `json:"markPrice"`
+			IndexPrice      string `json:"indexPrice"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -2207,13 +2211,26 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 	for _, item := range raw.Data {
 		rate, _ := strconv.ParseFloat(item.FundingRate, 64)
 		ts, _ := strconv.ParseInt(item.FundingTime, 10, 64)
+		if ts == 0 {
+			ts, _ = strconv.ParseInt(item.Ts, 10, 64)
+		}
+		if ts == 0 {
+			ts = time.Now().UnixMilli()
+		}
 		nextTs, _ := strconv.ParseInt(item.NextFundingTime, 10, 64)
+		if nextTs == 0 {
+			nextTs, _ = strconv.ParseInt(item.NextUpdate, 10, 64)
+		}
+		markPrice, _ := strconv.ParseFloat(item.MarkPrice, 64)
+		indexPrice, _ := strconv.ParseFloat(item.IndexPrice, 64)
 
 		rates = append(rates, FundingRate{
 			Symbol:           item.Symbol,
 			FundingRate:      rate,
 			FundingTimestamp: UnixTimestamp(time.UnixMilli(ts)),
 			NextFundingTime:  UnixTimestamp(time.UnixMilli(nextTs)),
+			MarkPrice:        markPrice,
+			IndexPrice:       indexPrice,
 			Timestamp:        UnixTimestamp(time.Now()),
 		})
 	}

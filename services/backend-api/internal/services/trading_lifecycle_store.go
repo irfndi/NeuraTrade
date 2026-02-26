@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"time"
 
@@ -77,6 +78,20 @@ type LifecyclePerformanceSummary struct {
 	RealizedPnL decimal.Decimal
 	BestTrade   decimal.Decimal
 	WorstTrade  decimal.Decimal
+}
+
+type LifecycleExchangeSnapshot struct {
+	OpenOrders     []ccxt.Order
+	Positions      []ccxt.Position
+	OrdersFresh    bool
+	PositionsFresh bool
+}
+
+type LifecycleSnapshotReconcileSummary struct {
+	OrdersSynced    int
+	OrdersCancelled int
+	PositionsSynced int
+	PositionsClosed int
 }
 
 func NewTradingLifecycleStore(db database.DBPool, logger *log.Logger) (*TradingLifecycleStore, error) {
@@ -420,30 +435,251 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 		now = time.Now().UTC()
 	}
 
-	res, err := s.db.Exec(ctx, `
-		UPDATE trading_positions
-		SET chat_id = $2, exchange = $3, symbol = $4, side = $5, market_type = 'futures',
-			size = $6, entry_price = $7, close_price = 0, realized_pnl = 0, status = 'open',
-			source = 'bootstrap_positions', closed_at = NULL, updated_at = $8
-		WHERE position_id = $1
-	`, positionID, strings.TrimSpace(chatID), strings.TrimSpace(exchange), strings.TrimSpace(position.Symbol),
-		normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, now)
-	if err != nil {
-		return fmt.Errorf("sync position update failed: %w", err)
-	}
-	updated, _ := res.RowsAffected()
-	if updated == 0 {
-		if _, err := s.db.Exec(ctx, `
-			INSERT INTO trading_positions (
-				position_id, order_id, chat_id, exchange, symbol, side, market_type,
-				size, entry_price, status, source, opened_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,'open','bootstrap_positions',$9,$10)
-		`, positionID, positionID, strings.TrimSpace(chatID), strings.TrimSpace(exchange), strings.TrimSpace(position.Symbol),
-			normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, now, now); err != nil {
-			return fmt.Errorf("sync position insert failed: %w", err)
-		}
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO trading_positions (
+			position_id, order_id, chat_id, exchange, symbol, side, market_type,
+			size, entry_price, close_price, realized_pnl, status, source, opened_at, closed_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,0,0,'open','bootstrap_positions',$9,NULL,$10)
+		ON CONFLICT (position_id) DO UPDATE SET
+			order_id = EXCLUDED.order_id,
+			chat_id = EXCLUDED.chat_id,
+			exchange = EXCLUDED.exchange,
+			symbol = EXCLUDED.symbol,
+			side = EXCLUDED.side,
+			market_type = EXCLUDED.market_type,
+			size = EXCLUDED.size,
+			entry_price = EXCLUDED.entry_price,
+			close_price = 0,
+			realized_pnl = 0,
+			status = 'open',
+			source = 'bootstrap_positions',
+			closed_at = NULL,
+			updated_at = EXCLUDED.updated_at
+	`, positionID, positionID, strings.TrimSpace(chatID), strings.TrimSpace(exchange), strings.TrimSpace(position.Symbol),
+		normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, now, now); err != nil {
+		return fmt.Errorf("sync position upsert failed: %w", err)
 	}
 	return nil
+}
+
+func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	snapshot LifecycleExchangeSnapshot,
+	source string,
+) (LifecycleSnapshotReconcileSummary, error) {
+	summary := LifecycleSnapshotReconcileSummary{}
+	chatID = strings.TrimSpace(chatID)
+	exchange = strings.TrimSpace(exchange)
+	now := time.Now().UTC()
+	reconcileSource := normalizeLifecycleSource(source)
+
+	if snapshot.OrdersFresh {
+		for _, order := range snapshot.OpenOrders {
+			if err := s.SyncOpenOrder(ctx, chatID, exchange, order); err != nil {
+				return summary, fmt.Errorf("sync open order %s failed: %w", strings.TrimSpace(order.ID), err)
+			}
+			summary.OrdersSynced++
+		}
+
+		orderQuery := `
+			SELECT order_id
+			FROM trading_orders
+			WHERE LOWER(status) IN ('open', 'pending', 'partial')
+		`
+		orderArgs := make([]interface{}, 0, 2)
+		if chatID != "" {
+			orderQuery += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(orderArgs)+1)
+			orderArgs = append(orderArgs, chatID)
+		}
+		if exchange != "" {
+			orderQuery += fmt.Sprintf(" AND exchange = $%d", len(orderArgs)+1)
+			orderArgs = append(orderArgs, exchange)
+		}
+
+		rows, err := s.db.Query(ctx, orderQuery, orderArgs...)
+		if err != nil {
+			return summary, fmt.Errorf("query open trading_orders failed: %w", err)
+		}
+		defer rows.Close()
+
+		openOrderIDs := make(map[string]struct{}, len(snapshot.OpenOrders))
+		for _, order := range snapshot.OpenOrders {
+			orderID := strings.TrimSpace(order.ID)
+			if orderID == "" {
+				continue
+			}
+			openOrderIDs[orderID] = struct{}{}
+		}
+
+		for rows.Next() {
+			var orderID string
+			if err := rows.Scan(&orderID); err != nil {
+				return summary, fmt.Errorf("scan open trading_order failed: %w", err)
+			}
+			orderID = strings.TrimSpace(orderID)
+			if orderID == "" {
+				continue
+			}
+			if _, ok := openOrderIDs[orderID]; ok {
+				continue
+			}
+			if _, err := s.db.Exec(ctx, `
+				UPDATE trading_orders
+				SET status = 'cancelled', closed_at = $2, updated_at = $2
+				WHERE order_id = $1
+			`, orderID, now); err != nil {
+				return summary, fmt.Errorf("cancel stale trading_order %s failed: %w", orderID, err)
+			}
+			summary.OrdersCancelled++
+		}
+		if err := rows.Err(); err != nil {
+			return summary, fmt.Errorf("iterate open trading_orders failed: %w", err)
+		}
+	}
+
+	if snapshot.PositionsFresh {
+		for _, position := range snapshot.Positions {
+			if err := s.SyncPosition(ctx, chatID, exchange, position); err != nil {
+				return summary, fmt.Errorf("sync position %s failed: %w", strings.TrimSpace(position.Symbol), err)
+			}
+			if strings.TrimSpace(position.Symbol) != "" && !position.Size.IsZero() {
+				summary.PositionsSynced++
+			}
+		}
+
+		type localOpenPosition struct {
+			PositionID    string
+			OrderID       string
+			Symbol        string
+			Side          string
+			Size          decimal.Decimal
+			EntryPrice    decimal.Decimal
+			LastPrice     decimal.Decimal
+			UnrealizedPnL decimal.Decimal
+			MarketType    string
+		}
+
+		posQuery := `
+			SELECT
+				position_id,
+				COALESCE(order_id, ''),
+				symbol,
+				side,
+				size,
+				entry_price,
+				COALESCE(last_price, 0),
+				COALESCE(unrealized_pnl, 0),
+				COALESCE(market_type, 'futures')
+			FROM trading_positions
+			WHERE LOWER(status) = 'open'
+		`
+		posArgs := make([]interface{}, 0, 2)
+		if chatID != "" {
+			posQuery += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(posArgs)+1)
+			posArgs = append(posArgs, chatID)
+		}
+		if exchange != "" {
+			posQuery += fmt.Sprintf(" AND exchange = $%d", len(posArgs)+1)
+			posArgs = append(posArgs, exchange)
+		}
+
+		posRows, err := s.db.Query(ctx, posQuery, posArgs...)
+		if err != nil {
+			return summary, fmt.Errorf("query open trading_positions failed: %w", err)
+		}
+		defer posRows.Close()
+
+		localOpen := make([]localOpenPosition, 0)
+		for posRows.Next() {
+			var p localOpenPosition
+			if err := posRows.Scan(
+				&p.PositionID,
+				&p.OrderID,
+				&p.Symbol,
+				&p.Side,
+				&p.Size,
+				&p.EntryPrice,
+				&p.LastPrice,
+				&p.UnrealizedPnL,
+				&p.MarketType,
+			); err != nil {
+				return summary, fmt.Errorf("scan open trading_position failed: %w", err)
+			}
+			localOpen = append(localOpen, p)
+		}
+		if err := posRows.Err(); err != nil {
+			return summary, fmt.Errorf("iterate open trading_positions failed: %w", err)
+		}
+
+		exchangePositionKeys := make(map[string]struct{}, len(snapshot.Positions))
+		for _, pos := range snapshot.Positions {
+			if strings.TrimSpace(pos.Symbol) == "" || pos.Size.IsZero() {
+				continue
+			}
+			key := normalizeSymbolForComparison(pos.Symbol) + ":" + normalizeLifecycleSide(pos.Side)
+			exchangePositionKeys[key] = struct{}{}
+		}
+
+		for _, localPos := range localOpen {
+			key := normalizeSymbolForComparison(localPos.Symbol) + ":" + normalizeLifecycleSide(localPos.Side)
+			if _, ok := exchangePositionKeys[key]; ok {
+				continue
+			}
+
+			filled := localPos.Size
+			if filled.IsZero() {
+				filled = decimal.NewFromInt(1)
+			}
+			exitPrice := localPos.LastPrice
+			if exitPrice.IsZero() {
+				exitPrice = localPos.EntryPrice
+			}
+
+			realized := localPos.UnrealizedPnL
+			normalizedSide := normalizeLifecycleSide(localPos.Side)
+			if realized.IsZero() &&
+				filled.GreaterThan(decimal.Zero) &&
+				localPos.EntryPrice.GreaterThan(decimal.Zero) &&
+				exitPrice.GreaterThan(decimal.Zero) {
+				if normalizedSide == "sell" {
+					realized = localPos.EntryPrice.Sub(exitPrice).Mul(filled)
+				} else {
+					realized = exitPrice.Sub(localPos.EntryPrice).Mul(filled)
+				}
+			}
+
+			orderID := strings.TrimSpace(localPos.OrderID)
+			if orderID == "" {
+				orderID = strings.TrimSpace(localPos.PositionID)
+			}
+			if orderID == "" {
+				orderID = "reconciled-" + safeIDPart(localPos.Symbol+"-"+localPos.Side+"-"+now.Format(time.RFC3339Nano))
+			}
+
+			if err := s.RecordClosedOrder(ctx, LifecycleCloseRecord{
+				OrderID:     orderID,
+				ChatID:      chatID,
+				Exchange:    exchange,
+				Symbol:      localPos.Symbol,
+				Side:        normalizedSide,
+				MarketType:  normalizeLifecycleMarketType(localPos.MarketType),
+				Filled:      filled,
+				EntryPrice:  localPos.EntryPrice,
+				ExitPrice:   exitPrice,
+				RealizedPnL: realized,
+				Fees:        decimal.Zero,
+				Source:      reconcileSource,
+				ClosedAt:    now,
+			}); err != nil {
+				return summary, fmt.Errorf("close stale trading_position %s failed: %w", localPos.PositionID, err)
+			}
+			summary.PositionsClosed++
+		}
+	}
+
+	return summary, nil
 }
 
 func (s *TradingLifecycleStore) ListManagedOpenPositions(ctx context.Context, chatID, exchange string, limit int) ([]ManagedOpenPosition, error) {
@@ -597,6 +833,66 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 		summary.WorstTrade = decimal.Zero
 	}
 	return summary, nil
+}
+
+func (s *TradingLifecycleStore) GetRealizedReturnSeries(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	since time.Time,
+) ([]float64, error) {
+	if since.IsZero() {
+		since = time.Now().UTC().Add(-24 * time.Hour)
+	}
+	query := `
+		SELECT realized_pnl, entry_price, filled_amount
+		FROM realized_pnl_journal
+		WHERE closed_at >= $1
+	`
+	args := []interface{}{since.UTC()}
+	if strings.TrimSpace(chatID) != "" {
+		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(chatID))
+	}
+	if strings.TrimSpace(exchange) != "" {
+		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(exchange))
+	}
+	query += " ORDER BY closed_at ASC"
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query realized return series failed: %w", err)
+	}
+	defer rows.Close()
+
+	series := make([]float64, 0, 64)
+	for rows.Next() {
+		var pnl decimal.Decimal
+		var entry decimal.Decimal
+		var filled decimal.Decimal
+		if err := rows.Scan(&pnl, &entry, &filled); err != nil {
+			return nil, fmt.Errorf("scan realized return row failed: %w", err)
+		}
+
+		notional := entry.Abs().Mul(filled.Abs())
+		if notional.LessThanOrEqual(decimal.Zero) {
+			notional = pnl.Abs()
+		}
+		if notional.LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+
+		ret := pnl.Div(notional).InexactFloat64()
+		if math.IsNaN(ret) || math.IsInf(ret, 0) {
+			continue
+		}
+		series = append(series, ret)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate realized return rows failed: %w", err)
+	}
+	return series, nil
 }
 
 func parseLifecycleTimestamp(raw interface{}) time.Time {

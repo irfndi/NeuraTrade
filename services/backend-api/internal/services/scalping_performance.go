@@ -106,6 +106,32 @@ func (sp *ScalpingPerformance) GetPerformance() map[string]interface{} {
 	}
 }
 
+func (sp *ScalpingPerformance) GetReturnSeries(limit int) []float64 {
+	sp.mu.RLock()
+	defer sp.mu.RUnlock()
+
+	if len(sp.history) == 0 {
+		return nil
+	}
+	if limit <= 0 || limit > len(sp.history) {
+		limit = len(sp.history)
+	}
+	start := len(sp.history) - limit
+	series := make([]float64, 0, limit)
+	for _, trade := range sp.history[start:] {
+		notional := trade.EntryPrice.Abs().Mul(trade.Amount.Abs())
+		if notional.LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+		ret := trade.PnL.Div(notional).InexactFloat64()
+		if ret != ret {
+			continue
+		}
+		series = append(series, ret)
+	}
+	return series
+}
+
 func (sp *ScalpingPerformance) GetAdjustedParameters() ScalpingConfig {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()

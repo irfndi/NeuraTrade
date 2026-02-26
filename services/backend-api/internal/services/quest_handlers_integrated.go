@@ -12,6 +12,7 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/services/phase_management"
 	"github.com/irfndi/neuratrade/internal/skill"
 	"github.com/shopspring/decimal"
 )
@@ -45,6 +46,7 @@ const (
 	scalpingBaseCooldown             = 2 * time.Minute
 	scalpingMaxCooldown              = 15 * time.Minute
 	defaultBootstrapInterval         = 10 * time.Minute
+	defaultSpotUnwindInterval        = 15 * time.Minute
 )
 
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
@@ -377,6 +379,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 
 	usdtBalance := 0.0
+	var balanceSnapshot *ccxt.BalanceResponse
+	var err error
 
 	// In dry-run mode, use virtual balance instead of requiring real exchange API keys
 	if isDryRun {
@@ -389,15 +393,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		balanceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		balance, err := balanceFetcher.FetchBalance(balanceCtx, userExchange)
+		balanceSnapshot, err = balanceFetcher.FetchBalance(balanceCtx, userExchange)
 		if err != nil {
 			log.Printf("[SCALPING] Failed to fetch balance from %s: %v, using default balance for trading", userExchange, err)
 			usdtBalance = 100.0 // Fallback balance
 			quest.Checkpoint["balance_warning"] = err.Error()
 			quest.Checkpoint["fallback_balance"] = true
 		} else {
-			if balance.Total != nil {
-				if v := balance.Total["USDT"]; v > 0 {
+			if balanceSnapshot.Total != nil {
+				if v := balanceSnapshot.Total["USDT"]; v > 0 {
 					usdtBalance = v
 				}
 			}
@@ -409,21 +413,85 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		}
 	}
 
+	if !isDryRun {
+		if h.shouldRunSpotUnwindPass(quest, time.Now().UTC()) {
+			spotClosed, spotErr := h.autoDeriskSpotInventory(ctx, quest, chatID, userExchange, balanceSnapshot)
+			quest.Checkpoint["spot_unwind_checked_at"] = time.Now().UTC().Format(time.RFC3339)
+			if spotErr != nil {
+				log.Printf("[SCALPING] Spot unwind pass failed: %v", spotErr)
+				quest.Checkpoint["spot_unwind_error"] = spotErr.Error()
+			} else if spotClosed > 0 {
+				quest.Checkpoint["spot_unwind_closed_positions"] = spotClosed
+				quest.Checkpoint["status"] = "risk_reduction"
+				h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+					DecisionType: "risk_reduction",
+					Summary:      "Startup/resume spot unwind reduced non-core holdings before new entries",
+					Confidence:   1,
+					Reasons: []string{
+						fmt.Sprintf("Executed %d spot unwind close order(s)", spotClosed),
+						"Resumability guard prioritized state cleanup before scanning new opportunities",
+					},
+					Action: "hold",
+				})
+				return nil
+			}
+		}
+
+		deriskClosed, exposureRatio, guardErr := h.autoDeriskIfExposureTooHigh(ctx, quest, chatID, userExchange, usdtBalance)
+		if guardErr != nil {
+			log.Printf("[SCALPING] Exposure guard check failed: %v", guardErr)
+			quest.Checkpoint["exposure_guard_error"] = guardErr.Error()
+		} else {
+			quest.Checkpoint["exposure_ratio"] = fmt.Sprintf("%.4f", exposureRatio)
+			if deriskClosed > 0 {
+				quest.Checkpoint["status"] = "risk_reduction"
+				quest.Checkpoint["risk_reduction_closed_positions"] = deriskClosed
+				h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+					DecisionType: "risk_reduction",
+					Summary:      "Exposure guard closed positions before scanning new opportunities",
+					Confidence:   1,
+					Reasons: []string{
+						fmt.Sprintf("Exposure ratio %.2f exceeded hard limit 1.00", exposureRatio),
+						fmt.Sprintf("Placed %d close order(s) to reduce exposure", deriskClosed),
+					},
+					Action: "hold",
+				})
+				return nil
+			}
+		}
+	}
+
 	portfolio := TradingPortfolio{
 		USDTBalance:   usdtBalance,
 		TotalValue:    usdtBalance,
 		OpenPositions: 0,
 	}
+	h.enrichPortfolioControlPlane(ctx, quest, chatID, userExchange, &portfolio)
 
 	log.Printf("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
 
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(ctx, portfolio)
 	if err != nil {
 		log.Printf("[SCALPING] AI decision error: %v", err)
+		deriskClosed := 0
+		if strings.Contains(strings.ToLower(err.Error()), "portfolio safety blocked") {
+			closed, deriskErr := h.autoDeriskBlockedExposure(ctx, quest, chatID, userExchange, err.Error())
+			if deriskErr != nil {
+				log.Printf("[SCALPING] Auto de-risk attempt failed: %v", deriskErr)
+				quest.Checkpoint["auto_derisk_error"] = deriskErr.Error()
+			} else if closed > 0 {
+				deriskClosed = closed
+				quest.Checkpoint["auto_derisk_closed_positions"] = closed
+				quest.Checkpoint["auto_derisk_at"] = time.Now().UTC().Format(time.RFC3339)
+			}
+		}
 		streak, cooldown := h.recordScalpingFailure(quest, err.Error())
 		quest.Checkpoint["status"] = "ai_error"
 		quest.Checkpoint["error"] = err.Error()
 		reasons := []string{err.Error(), fmt.Sprintf("Runtime failure streak: %d", streak)}
+		if deriskClosed > 0 {
+			reasons = append(reasons, fmt.Sprintf("Auto de-risk placed %d close order(s)", deriskClosed))
+		}
 		if cooldown > 0 {
 			reasons = append(reasons, fmt.Sprintf("Cooldown applied: %s", cooldown.Round(time.Second).String()))
 		}
@@ -530,6 +598,398 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	})
 
 	return nil
+}
+
+func (h *IntegratedQuestHandlers) autoDeriskBlockedExposure(
+	ctx context.Context,
+	quest *Quest,
+	chatID, exchange, safetyError string,
+) (int, error) {
+	if h.orderExecutor == nil {
+		return 0, nil
+	}
+
+	positionFetcher, ok := h.ccxtService.(interface {
+		FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error)
+	})
+	if !ok {
+		return 0, nil
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	positionsResp, err := positionFetcher.FetchPositions(fetchCtx, exchange)
+	if err != nil {
+		return 0, fmt.Errorf("fetch positions: %w", err)
+	}
+	if positionsResp == nil || len(positionsResp.Positions) == 0 {
+		return 0, nil
+	}
+
+	execWithBypass, hasBypass := h.orderExecutor.(interface {
+		PlaceRiskReductionOrderWithDetails(context.Context, TradeDetails) (string, error)
+	})
+
+	closed := 0
+	for _, pos := range positionsResp.Positions {
+		size := pos.Size.Abs()
+		if size.LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+
+		closeSide := oppositeCloseSide(pos.Side)
+		if closeSide == "" {
+			continue
+		}
+
+		mark := pos.MarkPrice
+		if mark.LessThanOrEqual(decimal.Zero) {
+			mark = pos.EntryPrice
+		}
+		if mark.LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+
+		notional := size.Mul(mark)
+		if notional.LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+
+		details := TradeDetails{
+			Exchange:     exchange,
+			Symbol:       pos.Symbol,
+			Side:         closeSide,
+			OrderType:    "market",
+			MarketType:   "futures",
+			Leverage:     pos.Lverage,
+			Amount:       size,
+			AmountUSDT:   notional,
+			TradeType:    "risk_reduction",
+			Confidence:   1.0,
+			Reasoning:    fmt.Sprintf("Auto de-risk due to safety block: %s", safetyError),
+			IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+		}
+		if details.Leverage <= 0 {
+			details.Leverage = 1
+		}
+
+		placeCtx, placeCancel := context.WithTimeout(ctx, 15*time.Second)
+		var placeErr error
+		if hasBypass {
+			_, placeErr = execWithBypass.PlaceRiskReductionOrderWithDetails(placeCtx, details)
+		} else {
+			_, placeErr = h.orderExecutor.PlaceOrderWithDetails(placeCtx, details)
+		}
+		placeCancel()
+		if placeErr != nil {
+			log.Printf("[SCALPING] Auto de-risk failed for %s %s: %v", pos.Symbol, pos.Side, placeErr)
+			continue
+		}
+
+		closed++
+		log.Printf("[SCALPING] Auto de-risk order placed: close %s %s (size=%s, notional=%s)", pos.Side, pos.Symbol, size.String(), notional.StringFixed(4))
+	}
+
+	if closed > 0 {
+		quest.Checkpoint["auto_derisk_triggered"] = true
+		quest.Checkpoint["auto_derisk_exchange"] = exchange
+		quest.Checkpoint["auto_derisk_chat_id"] = chatID
+	}
+
+	return closed, nil
+}
+
+func (h *IntegratedQuestHandlers) autoDeriskIfExposureTooHigh(
+	ctx context.Context,
+	quest *Quest,
+	chatID, exchange string,
+	totalEquityUSDT float64,
+) (int, float64, error) {
+	if totalEquityUSDT <= 0 {
+		return 0, 0, nil
+	}
+
+	positionFetcher, ok := h.ccxtService.(interface {
+		FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error)
+	})
+	if !ok {
+		return 0, 0, nil
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	positionsResp, err := positionFetcher.FetchPositions(fetchCtx, exchange)
+	if err != nil {
+		return 0, 0, fmt.Errorf("fetch positions for exposure guard: %w", err)
+	}
+	if positionsResp == nil || len(positionsResp.Positions) == 0 {
+		return 0, 0, nil
+	}
+
+	totalNotional := decimal.Zero
+	for _, pos := range positionsResp.Positions {
+		size := pos.Size.Abs()
+		if size.LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+		mark := pos.MarkPrice
+		if mark.LessThanOrEqual(decimal.Zero) {
+			mark = pos.EntryPrice
+		}
+		if mark.LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+		totalNotional = totalNotional.Add(size.Mul(mark))
+	}
+	if totalNotional.LessThanOrEqual(decimal.Zero) {
+		return 0, 0, nil
+	}
+
+	equity := decimal.NewFromFloat(totalEquityUSDT)
+	if equity.LessThanOrEqual(decimal.Zero) {
+		return 0, 0, nil
+	}
+
+	exposureRatio, _ := totalNotional.Div(equity).Float64()
+	if exposureRatio <= 1.0 {
+		return 0, exposureRatio, nil
+	}
+
+	closed, deriskErr := h.autoDeriskBlockedExposure(
+		ctx,
+		quest,
+		chatID,
+		exchange,
+		fmt.Sprintf("pre-trade exposure guard %.2f exceeded hard limit 1.00", exposureRatio),
+	)
+	return closed, exposureRatio, deriskErr
+}
+
+func (h *IntegratedQuestHandlers) shouldRunSpotUnwindPass(quest *Quest, now time.Time) bool {
+	if quest == nil {
+		return false
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	interval := defaultSpotUnwindInterval
+	if seconds := getEnvInt("NEURATRADE_SPOT_UNWIND_INTERVAL_SECONDS"); seconds > 0 {
+		interval = time.Duration(seconds) * time.Second
+	}
+	raw, _ := quest.Checkpoint["spot_unwind_checked_at"].(string)
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	last, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return true
+	}
+	return now.Sub(last) >= interval
+}
+
+func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
+	ctx context.Context,
+	quest *Quest,
+	chatID, exchange string,
+	balance *ccxt.BalanceResponse,
+) (int, error) {
+	if h.orderExecutor == nil || balance == nil {
+		return 0, nil
+	}
+	tickerSource, ok := h.ccxtService.(interface {
+		FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
+	})
+	if !ok {
+		return 0, nil
+	}
+
+	assets := balance.Free
+	if len(assets) == 0 {
+		assets = balance.Total
+	}
+	if len(assets) == 0 {
+		return 0, nil
+	}
+
+	minNotional := 8.0
+	if value, ok := getEnvFloat("NEURATRADE_SPOT_UNWIND_MIN_NOTIONAL_USDT"); ok && value > 0 {
+		minNotional = value
+	}
+	maxOrders := 3
+	if value := getEnvInt("NEURATRADE_SPOT_UNWIND_MAX_ORDERS_PER_PASS"); value > 0 {
+		maxOrders = value
+	}
+
+	stableAssets := map[string]struct{}{
+		"USDT":  {},
+		"USDC":  {},
+		"BUSD":  {},
+		"FDUSD": {},
+		"DAI":   {},
+		"USDE":  {},
+		"USDP":  {},
+	}
+
+	execWithBypass, hasBypass := h.orderExecutor.(interface {
+		PlaceRiskReductionOrderWithDetails(context.Context, TradeDetails) (string, error)
+	})
+
+	closed := 0
+	for asset, amount := range assets {
+		if closed >= maxOrders {
+			break
+		}
+		asset = strings.ToUpper(strings.TrimSpace(asset))
+		if _, skip := stableAssets[asset]; skip {
+			continue
+		}
+		if amount <= 0 {
+			continue
+		}
+
+		symbol := asset + "/USDT"
+		ticker, err := tickerSource.FetchSingleTicker(ctx, exchange, symbol)
+		if err != nil || ticker == nil || ticker.GetPrice() <= 0 {
+			continue
+		}
+
+		amountDec := decimal.NewFromFloat(amount)
+		notional := amountDec.Mul(decimal.NewFromFloat(ticker.GetPrice()))
+		if notional.LessThan(decimal.NewFromFloat(minNotional)) {
+			continue
+		}
+
+		details := TradeDetails{
+			Exchange:     exchange,
+			Symbol:       symbol,
+			Side:         "sell",
+			OrderType:    "market",
+			MarketType:   "spot",
+			Amount:       amountDec,
+			AmountUSDT:   notional,
+			TradeType:    "risk_reduction",
+			Confidence:   1,
+			Reasoning:    "Startup/resume spot unwind to flatten non-core balances before autonomous entries",
+			IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+		}
+
+		placeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		var placeErr error
+		if hasBypass {
+			_, placeErr = execWithBypass.PlaceRiskReductionOrderWithDetails(placeCtx, details)
+		} else {
+			_, placeErr = h.orderExecutor.PlaceOrderWithDetails(placeCtx, details)
+		}
+		cancel()
+		if placeErr != nil {
+			log.Printf("[SCALPING] Spot unwind failed for %s on %s: %v", symbol, exchange, placeErr)
+			continue
+		}
+
+		closed++
+		log.Printf("[SCALPING] Spot unwind order placed: sell %s (notional=%s, chat=%s)", symbol, notional.StringFixed(4), chatID)
+	}
+
+	if closed > 0 && quest != nil {
+		quest.Checkpoint["spot_unwind_triggered"] = true
+		quest.Checkpoint["spot_unwind_exchange"] = exchange
+		quest.Checkpoint["spot_unwind_chat_id"] = chatID
+	}
+	return closed, nil
+}
+
+func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
+	ctx context.Context,
+	quest *Quest,
+	chatID, exchange string,
+	portfolio *TradingPortfolio,
+) {
+	if portfolio == nil {
+		return
+	}
+
+	if h.lifecycleStore != nil {
+		positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 100)
+		if err == nil {
+			portfolio.OpenPositions = len(positions)
+			unrealized := decimal.Zero
+			for _, pos := range positions {
+				unrealized = unrealized.Add(pos.UnrealizedPnL)
+			}
+			portfolio.UnrealizedPnL = unrealized.InexactFloat64()
+			portfolio.TotalValue = portfolio.USDTBalance + portfolio.UnrealizedPnL
+			if portfolio.TotalValue <= 0 {
+				portfolio.TotalValue = portfolio.USDTBalance
+			}
+		}
+	}
+
+	returns := make([]float64, 0, 64)
+	if h.lifecycleStore != nil {
+		series, err := h.lifecycleStore.GetRealizedReturnSeries(ctx, chatID, exchange, time.Now().UTC().Add(-30*24*time.Hour))
+		if err == nil {
+			returns = append(returns, series...)
+		}
+	}
+	if len(returns) == 0 {
+		returns = GetScalpingPerformance().GetReturnSeries(200)
+	}
+
+	riskMetrics := ComputeRiskAdjustedMetrics(returns)
+	portfolio.RiskSharpe = riskMetrics.Sharpe
+	portfolio.RiskSortino = riskMetrics.Sortino
+	portfolio.RiskDrawdown = riskMetrics.MaxDrawdown
+	portfolio.RiskExpectancy = riskMetrics.Expectancy
+	portfolio.RiskSampleSize = riskMetrics.SampleSize
+
+	phaseDetector := phase_management.NewPhaseDetector(phase_management.DefaultPhaseDetectorConfig(), nil)
+	currentPhase := phaseDetector.GetPhaseForValue(decimal.NewFromFloat(portfolio.TotalValue))
+	adapter := phase_management.NewStrategyAdapter(phase_management.DefaultStrategyAdapterConfig())
+	strategy := adapter.SelectStrategy(currentPhase)
+	riskParams := adapter.GetRiskParams(currentPhase)
+	portfolio.StrategyPhase = currentPhase.String()
+	portfolio.PhaseMinConfidence = strategy.MinSignalConfidence
+	portfolio.PhaseMaxCapitalPct = riskParams.RiskPerTradePercent.InexactFloat64()
+	if portfolio.PhaseMaxCapitalPct <= 0 {
+		portfolio.PhaseMaxCapitalPct = 1
+	}
+
+	target := 1000.0
+	if configuredTarget, ok := getEnvFloat("NEURATRADE_AI_FUND_TARGET"); ok && configuredTarget > 0 {
+		target = configuredTarget
+	}
+	if target > 0 {
+		portfolio.MilestoneProgress = (portfolio.TotalValue / target) * 100
+	}
+
+	if quest != nil {
+		if quest.Checkpoint == nil {
+			quest.Checkpoint = make(map[string]interface{})
+		}
+		quest.Checkpoint["risk_sharpe"] = portfolio.RiskSharpe
+		quest.Checkpoint["risk_sortino"] = portfolio.RiskSortino
+		quest.Checkpoint["risk_max_drawdown"] = portfolio.RiskDrawdown
+		quest.Checkpoint["risk_expectancy"] = portfolio.RiskExpectancy
+		quest.Checkpoint["risk_samples"] = portfolio.RiskSampleSize
+		quest.Checkpoint["strategy_phase"] = portfolio.StrategyPhase
+		quest.Checkpoint["phase_min_confidence"] = portfolio.PhaseMinConfidence
+		quest.Checkpoint["phase_max_capital_pct"] = portfolio.PhaseMaxCapitalPct
+		quest.Checkpoint["milestone_progress_pct"] = portfolio.MilestoneProgress
+	}
+}
+
+func oppositeCloseSide(positionSide string) string {
+	side := strings.ToLower(strings.TrimSpace(positionSide))
+	switch side {
+	case "long", "buy":
+		return "sell"
+	case "short", "sell":
+		return "buy"
+	default:
+		return ""
+	}
 }
 
 func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, quest *Quest, chatID string) error {
@@ -1173,6 +1633,11 @@ func (h *IntegratedQuestHandlers) ensureDynamicProtectionManager() {
 		return
 	}
 	h.protectionManager = NewDynamicProtectionManager(DefaultDynamicProtectionConfig(), h.lifecycleStore, tickerSource, log.Default())
+	if syncable, ok := h.orderExecutor.(interface {
+		SyncPositionProtection(context.Context, string, ManagedOpenPosition, decimal.Decimal, decimal.Decimal) error
+	}); ok {
+		h.protectionManager.SetPositionProtectionSync(syncable)
+	}
 }
 
 func decimalValueOrZero(value *decimal.Decimal) decimal.Decimal {
@@ -1207,35 +1672,80 @@ func (h *IntegratedQuestHandlers) bootstrapLifecycleState(ctx context.Context, q
 	bootstrapCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	orderCount := 0
+	snapshot := LifecycleExchangeSnapshot{
+		OpenOrders:     []ccxt.Order{},
+		Positions:      []ccxt.Position{},
+		OrdersFresh:    false,
+		PositionsFresh: false,
+	}
 	if openOrders, err := ccxtSvc.FetchOpenOrders(bootstrapCtx, exchange); err == nil && openOrders != nil {
-		for _, order := range openOrders.Orders {
-			if err := h.lifecycleStore.SyncOpenOrder(bootstrapCtx, chatID, exchange, order); err != nil {
-				log.Printf("[SCALPING] Failed to sync open order %s: %v", order.ID, err)
-				continue
-			}
-			orderCount++
-		}
+		snapshot.OpenOrders = openOrders.Orders
+		snapshot.OrdersFresh = true
 	} else if err != nil {
 		log.Printf("[SCALPING] Bootstrap open-order sync failed on %s: %v", exchange, err)
 	}
 
-	positionCount := 0
 	if positions, err := ccxtSvc.FetchPositions(bootstrapCtx, exchange); err == nil && positions != nil {
-		for _, position := range positions.Positions {
-			if err := h.lifecycleStore.SyncPosition(bootstrapCtx, chatID, exchange, position); err != nil {
-				log.Printf("[SCALPING] Failed to sync position %s %s: %v", position.Symbol, position.Side, err)
-				continue
-			}
-			positionCount++
-		}
+		snapshot.Positions = positions.Positions
+		snapshot.PositionsFresh = true
 	} else if err != nil {
 		log.Printf("[SCALPING] Bootstrap position sync failed on %s: %v", exchange, err)
 	}
 
+	reconcileSummary, err := h.lifecycleStore.ReconcileExchangeSnapshot(
+		bootstrapCtx,
+		chatID,
+		exchange,
+		snapshot,
+		"bootstrap_reconciliation",
+	)
+	if err != nil {
+		log.Printf("[SCALPING] Bootstrap lifecycle reconciliation failed on %s: %v", exchange, err)
+		quest.Checkpoint["runtime_bootstrap_error"] = err.Error()
+	}
+
 	quest.Checkpoint["runtime_bootstrap_synced_at"] = time.Now().UTC().Format(time.RFC3339)
-	quest.Checkpoint["runtime_bootstrap_open_orders"] = orderCount
-	quest.Checkpoint["runtime_bootstrap_positions"] = positionCount
+	quest.Checkpoint["runtime_bootstrap_open_orders"] = reconcileSummary.OrdersSynced
+	quest.Checkpoint["runtime_bootstrap_positions"] = reconcileSummary.PositionsSynced
+	quest.Checkpoint["runtime_bootstrap_orders_cancelled"] = reconcileSummary.OrdersCancelled
+	quest.Checkpoint["runtime_bootstrap_positions_closed"] = reconcileSummary.PositionsClosed
+
+	feedbackSymbols := make([]string, 0, 6)
+	feedbackSet := make(map[string]struct{}, 6)
+	addFeedbackSymbol := func(symbol string) {
+		symbol = strings.TrimSpace(symbol)
+		if symbol == "" {
+			return
+		}
+		if _, exists := feedbackSet[symbol]; exists {
+			return
+		}
+		feedbackSet[symbol] = struct{}{}
+		feedbackSymbols = append(feedbackSymbols, symbol)
+	}
+	for _, position := range snapshot.Positions {
+		addFeedbackSymbol(position.Symbol)
+		if len(feedbackSymbols) >= 6 {
+			break
+		}
+	}
+	if len(feedbackSymbols) < 6 {
+		for _, order := range snapshot.OpenOrders {
+			addFeedbackSymbol(order.Symbol)
+			if len(feedbackSymbols) >= 6 {
+				break
+			}
+		}
+	}
+	if len(feedbackSymbols) < 6 {
+		if lastSymbol, ok := quest.Checkpoint["ai_symbol"].(string); ok {
+			addFeedbackSymbol(lastSymbol)
+		}
+	}
+	for _, symbol := range feedbackSymbols {
+		h.ingestClosedOrderFeedback(bootstrapCtx, quest, exchange, symbol)
+	}
+	quest.Checkpoint["runtime_bootstrap_feedback_symbols"] = len(feedbackSymbols)
 }
 
 func (h *IntegratedQuestHandlers) scalpingCooldownRemaining(quest *Quest, now time.Time) time.Duration {

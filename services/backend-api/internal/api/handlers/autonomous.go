@@ -115,6 +115,7 @@ type SafetyStatusResponse struct {
 	MaxPositionSize  string   `json:"max_position_size"`
 	CurrentDrawdown  string   `json:"current_drawdown"`
 	PositionThrottle string   `json:"position_throttle"`
+	Reasons          []string `json:"reasons,omitempty"`
 	Warnings         []string `json:"warnings,omitempty"`
 }
 
@@ -154,6 +155,7 @@ type PerformanceSummaryResponse struct {
 	PnL        string `json:"pnl"`
 	WinRate    string `json:"win_rate,omitempty"`
 	Sharpe     string `json:"sharpe,omitempty"`
+	Sortino    string `json:"sortino,omitempty"`
 	Drawdown   string `json:"drawdown,omitempty"`
 	Trades     int    `json:"trades,omitempty"`
 	BestTrade  string `json:"best_trade,omitempty"`
@@ -167,6 +169,7 @@ type StrategyPerformance struct {
 	PnL      string `json:"pnl"`
 	WinRate  string `json:"win_rate,omitempty"`
 	Sharpe   string `json:"sharpe,omitempty"`
+	Sortino  string `json:"sortino,omitempty"`
 	Drawdown string `json:"drawdown,omitempty"`
 	Trades   int    `json:"trades,omitempty"`
 }
@@ -326,6 +329,7 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 					"max_position_size": safety.MaxPositionSize,
 					"current_drawdown":  safety.CurrentDrawdown,
 					"position_throttle": safety.PositionThrottle,
+					"reasons":           safety.Reasons,
 					"warnings":          safety.Warnings,
 					"total_equity":      snapshot.TotalEquity.String(),
 					"available_balance": snapshot.AvailableFunds.String(),
@@ -432,6 +436,7 @@ func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 			MaxPositionSize:  safety.MaxPositionSize.StringFixed(2),
 			CurrentDrawdown:  fmt.Sprintf("%.2f%%", safety.CurrentDrawdown*100),
 			PositionThrottle: fmt.Sprintf("%.0f%%", safety.PositionThrottle*100),
+			Reasons:          safety.Reasons,
 			Warnings:         safety.Warnings,
 		}
 	}
@@ -640,6 +645,7 @@ func (h *AutonomousHandler) GetPerformanceBreakdown(c *gin.Context) {
 				WinRate:  overall.WinRate,
 				Trades:   overall.Trades,
 				Sharpe:   overall.Sharpe,
+				Sortino:  overall.Sortino,
 				Drawdown: overall.Drawdown,
 			},
 		},
@@ -876,6 +882,7 @@ func (h *AutonomousHandler) buildRuntimePerformanceSummary(timeframe string) Per
 	trades := intFromMetric(perf["total_trades"])
 	winRate := floatFromMetric(perf["win_rate"]) * 100
 	pnl := fmt.Sprintf("%v", perf["total_pnl"])
+	risk := services.ComputeRiskAdjustedMetrics(services.GetScalpingPerformance().GetReturnSeries(200))
 
 	note := "Live runtime scalping metrics"
 	if trades == 0 {
@@ -886,8 +893,9 @@ func (h *AutonomousHandler) buildRuntimePerformanceSummary(timeframe string) Per
 		Timeframe: window,
 		PnL:       pnl,
 		WinRate:   fmt.Sprintf("%.1f%%", winRate),
-		Sharpe:    "N/A",
-		Drawdown:  "N/A",
+		Sharpe:    formatRiskRatio(risk.Sharpe, risk.SampleSize),
+		Sortino:   formatRiskRatio(risk.Sortino, risk.SampleSize),
+		Drawdown:  formatDrawdown(risk.MaxDrawdown, risk.SampleSize),
 		Trades:    trades,
 		Note:      note,
 	}
@@ -908,6 +916,12 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 	if perf.Trades == 0 {
 		return PerformanceSummaryResponse{}, false
 	}
+	returns, err := h.lifecycleStore.GetRealizedReturnSeries(ctx, chatID, "", since)
+	if err != nil {
+		log.Printf("Failed lifecycle return-series query for chat %s: %v", chatID, err)
+		returns = nil
+	}
+	risk := services.ComputeRiskAdjustedMetrics(returns)
 
 	winRate := 0.0
 	if perf.Trades > 0 {
@@ -917,13 +931,28 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 		Timeframe:  window,
 		PnL:        perf.RealizedPnL.String(),
 		WinRate:    fmt.Sprintf("%.1f%%", winRate),
-		Sharpe:     "N/A",
-		Drawdown:   "N/A",
+		Sharpe:     formatRiskRatio(risk.Sharpe, risk.SampleSize),
+		Sortino:    formatRiskRatio(risk.Sortino, risk.SampleSize),
+		Drawdown:   formatDrawdown(risk.MaxDrawdown, risk.SampleSize),
 		Trades:     perf.Trades,
 		BestTrade:  perf.BestTrade.String(),
 		WorstTrade: perf.WorstTrade.String(),
 		Note:       "Exchange-reconciled realized PnL (lifecycle journal)",
 	}, true
+}
+
+func formatRiskRatio(value float64, sampleSize int) string {
+	if sampleSize < 2 {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.4f", value)
+}
+
+func formatDrawdown(value float64, sampleSize int) string {
+	if sampleSize < 2 {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.2f%%", value*100)
 }
 
 // ReadinessChecker checks system readiness for autonomous mode

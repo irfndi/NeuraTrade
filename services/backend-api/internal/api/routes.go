@@ -494,10 +494,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		)
 		log.Printf("Exchange position reconciler initialized")
 
-		// Startup reconciliation is opt-in to avoid side effects in tests/mocks and
-		// environments where reconciliation tables are not yet provisioned.
+		// Startup reconciliation defaults to enabled so resumability is automatic.
+		// It can be disabled explicitly for constrained environments and tests.
 		startupReconcileEnv := strings.TrimSpace(os.Getenv("NEURATRADE_STARTUP_RECONCILIATION"))
-		startupReconcileEnabled := strings.EqualFold(startupReconcileEnv, "true") || startupReconcileEnv == "1"
+		startupReconcileEnabled := true
+		if strings.EqualFold(startupReconcileEnv, "false") || startupReconcileEnv == "0" {
+			startupReconcileEnabled = false
+		}
+		if gin.Mode() == gin.TestMode {
+			startupReconcileEnabled = false
+		}
 		if startupReconcileEnabled {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -512,7 +518,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				}
 			}()
 		} else {
-			log.Printf("Startup reconciliation disabled (set NEURATRADE_STARTUP_RECONCILIATION=true to enable)")
+			log.Printf("Startup reconciliation disabled (set NEURATRADE_STARTUP_RECONCILIATION=true to enable; auto-disabled in test mode)")
 		}
 
 		// Optional periodic reconciliation for drift detection after manual/external actions.
@@ -543,6 +549,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			}
 		}
 	}
+
+	// Register integrated handlers before autonomous restore so restored quests
+	// have handlers available on the first scheduler tick.
+	questEngine.RegisterIntegratedHandlers(integratedHandlers)
 
 	// Restore autonomous scalping for operator chats that were enabled via Telegram /begin.
 	if db != nil {
@@ -599,9 +609,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	} else {
 		log.Printf("Arbitrage execution bridge disabled in scalping-first mode")
 	}
-	// Register integrated handlers for production-ready quest execution
-	questEngine.RegisterIntegratedHandlers(integratedHandlers)
-
 	var autonomousHandler *handlers.AutonomousHandler
 	if reconciler != nil {
 		autonomousHandler = handlers.NewAutonomousHandlerWithReconciler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges(), reconciler)

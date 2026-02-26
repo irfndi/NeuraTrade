@@ -267,19 +267,19 @@ func gatewayStop(cCtx *cli.Context) error {
 	pidsDir := filepath.Join(home, "pids")
 
 	services := []struct {
-		name           string
-		pidFile        string
-		processPattern string
+		name            string
+		pidFile         string
+		processPatterns []string
 	}{
-		{"Backend API", "backend.pid", "neuratrade-server"},
-		{"CCXT Service", "ccxt.pid", "ccxt-service"},
-		{"Telegram Service", "telegram.pid", "telegram-service"},
+		{"Backend API", "backend.pid", []string{"neuratrade-server"}},
+		{"CCXT Service", "ccxt.pid", []string{"ccxt-service"}},
+		{"Telegram Service", "telegram.pid", []string{"telegram-service", "bun run index.ts"}},
 	}
 
 	stoppedCount := 0
 	for _, svc := range services {
 		pidFile := filepath.Join(pidsDir, svc.pidFile)
-		if err := stopServiceByPIDFile(svc.name, pidFile, svc.processPattern); err != nil {
+		if err := stopServiceByPIDFile(svc.name, pidFile, svc.processPatterns...); err != nil {
 			fmt.Printf("⚠️  %s: %v\n", svc.name, err)
 		} else {
 			stoppedCount++
@@ -295,6 +295,7 @@ func gatewayStop(cCtx *cli.Context) error {
 		fmt.Println("  pkill -f neuratrade-server")
 		fmt.Println("  pkill -f ccxt-service")
 		fmt.Println("  pkill -f telegram-service")
+		fmt.Println("  pkill -f 'bun run index.ts'")
 		return fmt.Errorf("no services stopped")
 	}
 
@@ -304,7 +305,7 @@ func gatewayStop(cCtx *cli.Context) error {
 }
 
 // stopServiceByPIDFile reads a PID file and sends SIGTERM to the process
-func stopServiceByPIDFile(name, pidFile, expectedPattern string) error {
+func stopServiceByPIDFile(name, pidFile string, expectedPatterns ...string) error {
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -324,9 +325,9 @@ func stopServiceByPIDFile(name, pidFile, expectedPattern string) error {
 		return fmt.Errorf("process not found (removing stale PID file)")
 	}
 
-	if expectedPattern != "" && !processMatchesPattern(pid, expectedPattern) {
+	if len(expectedPatterns) > 0 && !processMatchesAnyPattern(pid, expectedPatterns...) {
 		_ = os.Remove(pidFile)
-		return fmt.Errorf("stale PID file (PID %d is not %s, removed)", pid, expectedPattern)
+		return fmt.Errorf("stale PID file (PID %d does not match any expected process pattern, removed)", pid)
 	}
 
 	if err := process.Signal(syscall.SIGTERM); err != nil {
@@ -338,14 +339,19 @@ func stopServiceByPIDFile(name, pidFile, expectedPattern string) error {
 	return nil
 }
 
-func processMatchesPattern(pid int, expectedPattern string) bool {
+func processMatchesAnyPattern(pid int, expectedPatterns ...string) bool {
 	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=")
 	output, err := cmd.Output()
 	if err != nil {
 		return false
 	}
 	command := strings.ToLower(strings.TrimSpace(string(output)))
-	return strings.Contains(command, strings.ToLower(expectedPattern))
+	for _, pattern := range expectedPatterns {
+		if strings.Contains(command, strings.ToLower(pattern)) {
+			return true
+		}
+	}
+	return false
 }
 
 // gatewayStatus shows the status of NeuraTrade services
@@ -355,19 +361,20 @@ func gatewayStatus(cCtx *cli.Context) error {
 	fmt.Println()
 
 	// Check if processes are running
-	checkProcess("neuratrade-server", "Backend API")
-	checkProcess("ccxt-service", "CCXT Service")
-	checkProcess("telegram-service", "Telegram Service")
+	checkProcess("Backend API", "neuratrade-server")
+	checkProcess("CCXT Service", "ccxt-service")
+	checkProcess("Telegram Service", "telegram-service", "bun run index.ts")
 
 	fmt.Println()
 
 	// Check health endpoint
 	backendPort := resolveBackendPort(getConfigValue(defaultNeuraTradeHome()))
-	fmt.Printf("🏥 Health Check: http://localhost:%s/health\n", backendPort)
+	bindHost := getEnvOrDefault("BIND_HOST", "127.0.0.1")
+	fmt.Printf("🏥 Health Check: http://%s:%s/health\n", bindHost, backendPort)
 	fmt.Println()
 
 	// Try to get health
-	baseURL := fmt.Sprintf("http://localhost:%s", backendPort)
+	baseURL := fmt.Sprintf("http://%s:%s", bindHost, backendPort)
 	apiKey := getAPIKey()
 	client := NewAPIClient(baseURL, apiKey)
 
@@ -409,14 +416,38 @@ func gatewayStatus(cCtx *cli.Context) error {
 }
 
 // checkProcess checks if a process is running
-func checkProcess(processName, displayName string) {
-	cmd := exec.Command("pgrep", "-f", processName)
-	output, err := cmd.Output()
-	if err != nil || len(output) == 0 {
-		fmt.Printf("❌ %s: Not running\n", displayName)
-	} else {
-		fmt.Printf("✅ %s: Running (PID: %s)\n", displayName, string(output[:len(output)-1]))
+func checkProcess(displayName string, processPatterns ...string) {
+	for _, pattern := range processPatterns {
+		cmd := exec.Command("pgrep", "-fl", pattern)
+		output, err := cmd.Output()
+		if err != nil || len(output) == 0 {
+			continue
+		}
+
+		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+		for _, line := range lines {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+
+			pid := fields[0]
+			cmdline := strings.ToLower(strings.Join(fields[1:], " "))
+			if strings.Contains(cmdline, "pgrep -f") || strings.Contains(cmdline, "pgrep -fl") {
+				continue
+			}
+			if strings.Contains(cmdline, "gateway status") {
+				continue
+			}
+			if !strings.Contains(cmdline, strings.ToLower(pattern)) {
+				continue
+			}
+
+			fmt.Printf("✅ %s: Running (PID: %s)\n", displayName, pid)
+			return
+		}
 	}
+	fmt.Printf("❌ %s: Not running\n", displayName)
 }
 
 // printServiceStatus prints service health status

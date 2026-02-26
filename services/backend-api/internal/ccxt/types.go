@@ -284,7 +284,7 @@ func (s *Service) CalculateArbitrageOpportunities(ctx context.Context, exchanges
 //	*FundingRate: Funding rate data.
 //	error: Error if fetch fails.
 func (s *Service) FetchFundingRate(ctx context.Context, exchange, symbol string) (*FundingRate, error) {
-	return nil, fmt.Errorf("FetchFundingRate not implemented in native client")
+	return s.nativeClient.FetchFundingRate(ctx, exchange, symbol)
 }
 
 // FetchFundingRates fetches funding rates for multiple symbols on an exchange.
@@ -300,7 +300,7 @@ func (s *Service) FetchFundingRate(ctx context.Context, exchange, symbol string)
 //	[]FundingRate: List of funding rates.
 //	error: Error if fetch fails.
 func (s *Service) FetchFundingRates(ctx context.Context, exchange string, symbols []string) ([]FundingRate, error) {
-	return nil, fmt.Errorf("FetchFundingRates not implemented in native client")
+	return s.nativeClient.FetchFundingRates(ctx, exchange, symbols)
 }
 
 // FetchAllFundingRates fetches all available funding rates for an exchange.
@@ -315,7 +315,7 @@ func (s *Service) FetchFundingRates(ctx context.Context, exchange string, symbol
 //	[]FundingRate: List of funding rates.
 //	error: Error if fetch fails.
 func (s *Service) FetchAllFundingRates(ctx context.Context, exchange string) ([]FundingRate, error) {
-	return nil, fmt.Errorf("FetchAllFundingRates not implemented in native client")
+	return s.nativeClient.FetchAllFundingRates(ctx, exchange)
 }
 
 // CalculateFundingRateArbitrage finds funding rate arbitrage opportunities.

@@ -50,6 +50,17 @@ func (m *MockScalpingOrderExecutor) IsPaperTrading() bool {
 	return args.Bool(0)
 }
 
+func (m *MockScalpingOrderExecutor) SyncPositionProtection(
+	ctx context.Context,
+	exchange string,
+	position ManagedOpenPosition,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+) error {
+	args := m.Called(ctx, exchange, position, stopLoss, takeProfit)
+	return args.Error(0)
+}
+
 // mockSafetyChecker implements PortfolioSafetyChecker for testing
 type mockSafetyChecker struct {
 	mock.Mock
@@ -276,4 +287,23 @@ func TestSafetyCheckResult_String(t *testing.T) {
 
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "Daily loss limit exceeded", result.Reason)
+}
+
+func TestSafeOrderExecutor_SyncPositionProtection(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	safeExec := NewSafeOrderExecutor(mockExecutor, nil, "test-chat")
+
+	position := ManagedOpenPosition{
+		PositionID: "pos-1",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+	}
+	stopLoss := decimal.NewFromFloat(50000)
+	takeProfit := decimal.NewFromFloat(53000)
+	mockExecutor.On("SyncPositionProtection", mock.Anything, "bitget", position, stopLoss, takeProfit).Return(nil)
+
+	err := safeExec.SyncPositionProtection(context.Background(), "bitget", position, stopLoss, takeProfit)
+	assert.NoError(t, err)
+	mockExecutor.AssertExpectations(t)
 }

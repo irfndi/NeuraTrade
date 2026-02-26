@@ -598,6 +598,22 @@ func (e *SmartOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details 
 	return e.config.BaseExecutor.PlaceOrderWithDetails(ctx, details)
 }
 
+func (e *SmartOrderExecutor) SyncPositionProtection(
+	ctx context.Context,
+	exchange string,
+	position ManagedOpenPosition,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+) error {
+	syncable, ok := e.config.BaseExecutor.(interface {
+		SyncPositionProtection(context.Context, string, ManagedOpenPosition, decimal.Decimal, decimal.Decimal) error
+	})
+	if !ok {
+		return fmt.Errorf("%w: base executor does not support exchange-side protection sync", ErrProtectionSyncUnsupported)
+	}
+	return syncable.SyncPositionProtection(ctx, exchange, position, stopLoss, takeProfit)
+}
+
 // IsPaperTrading delegates to the base executor
 func (e *SmartOrderExecutor) IsPaperTrading() bool {
 	return e.config.BaseExecutor.IsPaperTrading()
