@@ -20,7 +20,10 @@ interface MockContext {
   reply(text: string): Promise<void>;
 }
 
-function createContext(text: string, chatId: number | string = 777): MockContext {
+function createContext(
+  text: string,
+  chatId: number | string = 777,
+): MockContext {
   return {
     chat: { id: chatId },
     message: { text },
