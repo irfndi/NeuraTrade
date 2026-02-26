@@ -53,6 +53,17 @@ build: mod-download services-setup ## Build backend binaries
 	@mkdir -p bin
 	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-server ./cmd/server
 	@cd cmd/neuratrade-cli && $(GO_ENV) go build -o ../../bin/neuratrade .
+	@printf '%s\n' '#!/usr/bin/env bash' \
+		'# CCXT Service Stub' \
+		'echo "[CCXT Service] Native CCXT implementation is running within neuratrade-server"' \
+		'trap "exit 0" SIGTERM SIGINT' \
+		'while true; do sleep 60; done' > bin/ccxt-service
+	@chmod +x bin/ccxt-service
+	@printf '%s\n' '#!/usr/bin/env bash' \
+		'SCRIPT_DIR="$$(cd "$$(dirname "$${BASH_SOURCE[0]}")" && pwd)"' \
+		'cd "$$SCRIPT_DIR/../services/telegram-service"' \
+		'exec bun run index.ts "$$@"' > bin/telegram-service
+	@chmod +x bin/telegram-service
 	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade$(NC)"
 
 fmt: ## Format backend + frontend code

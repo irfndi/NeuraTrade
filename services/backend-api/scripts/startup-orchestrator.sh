@@ -44,13 +44,13 @@ ensure_dirs() {
 }
 
 find_gateway_cmd() {
-  if command -v neuratrade >/dev/null 2>&1; then
-    echo "neuratrade gateway start"
+  if [ -x "${REPO_ROOT}/bin/neuratrade" ]; then
+    echo "${REPO_ROOT}/bin/neuratrade gateway start"
     return 0
   fi
 
-  if [ -x "${REPO_ROOT}/bin/neuratrade" ]; then
-    echo "${REPO_ROOT}/bin/neuratrade gateway start"
+  if command -v neuratrade >/dev/null 2>&1; then
+    echo "neuratrade gateway start"
     return 0
   fi
 
