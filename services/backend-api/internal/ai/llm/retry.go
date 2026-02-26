@@ -85,12 +85,9 @@ func (p transportRetryPolicy) backoffForRetry(retryCount int, retryAfter time.Du
 }
 
 func executeWithTransportRetry(ctx context.Context, policy transportRetryPolicy, send func(context.Context) (*http.Response, error)) (*httpAttemptResult, error) {
-	var lastErr error
-
 	for attempt := 0; ; attempt++ {
 		resp, err := send(ctx)
 		if err != nil {
-			lastErr = err
 			if attempt >= policy.MaxRetries || !isRetryableTransportError(err) {
 				return nil, err
 			}
@@ -104,7 +101,6 @@ func executeWithTransportRetry(ctx context.Context, policy transportRetryPolicy,
 
 		result, readErr := buildHTTPAttemptResult(resp)
 		if readErr != nil {
-			lastErr = readErr
 			if attempt >= policy.MaxRetries || !isRetryableTransportError(readErr) {
 				return nil, readErr
 			}
@@ -126,9 +122,6 @@ func executeWithTransportRetry(ctx context.Context, policy transportRetryPolicy,
 			return nil, waitErr
 		}
 	}
-
-	// Should never be reached.
-	return nil, fmt.Errorf("transport retry exhausted: %w", lastErr)
 }
 
 func buildHTTPAttemptResult(resp *http.Response) (*httpAttemptResult, error) {

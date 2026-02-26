@@ -805,10 +805,6 @@ func computeQuestRuntimeBudget() questRuntimeBudget {
 	return budget
 }
 
-func questExecutionStaleAfter() time.Duration {
-	return computeQuestRuntimeBudget().StaleTimeout
-}
-
 func (e *QuestEngine) shouldBlockQuestEntryLocked(quest *Quest) bool {
 	if quest == nil || !e.isRiskLockEnabledLocked() {
 		return false

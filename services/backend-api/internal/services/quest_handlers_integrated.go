@@ -2094,20 +2094,6 @@ func aiRuntimeWindowDuration() time.Duration {
 	return time.Duration(clampQuestInt(seconds, 60, 7200)) * time.Second
 }
 
-func aiRuntimeWarnRateThreshold() float64 {
-	if value, ok := getEnvFloat("NEURATRADE_AI_RUNTIME_WARN_ERROR_RATE"); ok {
-		return clampQuestFloat(value, 0.01, 1)
-	}
-	return defaultAIRuntimeWarnErrorRate
-}
-
-func aiRuntimeCriticalRateThreshold() float64 {
-	if value, ok := getEnvFloat("NEURATRADE_AI_RUNTIME_CRITICAL_ERROR_RATE"); ok {
-		return clampQuestFloat(value, 0.01, 1)
-	}
-	return defaultAIRuntimeCriticalRate
-}
-
 func aiRuntimeCircuitFailureThreshold() int {
 	value := getEnvInt("NEURATRADE_AI_RUNTIME_CIRCUIT_FAILURES")
 	if value <= 0 {
@@ -2263,16 +2249,6 @@ func recordAIRuntimeEvent(
 }
 
 func clampQuestInt(value, min, max int) int {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
-}
-
-func clampQuestFloat(value, min, max float64) float64 {
 	if value < min {
 		return min
 	}
