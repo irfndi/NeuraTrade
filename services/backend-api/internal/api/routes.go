@@ -89,6 +89,7 @@ func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, cha
 		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
 	}
 
+	// #nosec G304,G703 -- config path is derived from NEURATRADE_HOME or user home
 	configFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", "", "", ""
@@ -317,10 +318,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	adminAPIKey := os.Getenv("ADMIN_API_KEY")
 	if adminAPIKey == "" {
 		log.Printf("WARNING: ADMIN_API_KEY is not set; CCXT order executor requests will be unauthenticated")
-	}
-	ccxtServiceURL := os.Getenv("CCXT_SERVICE_URL")
-	if ccxtServiceURL == "" {
-		ccxtServiceURL = "http://localhost:3001"
 	}
 
 	log.Printf("Using Bitget Order Executor for real exchange API calls")

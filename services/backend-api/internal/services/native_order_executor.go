@@ -9,6 +9,8 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // TradeDetails contains all information for a trade notification
@@ -114,9 +116,10 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 
 	// Trade type emoji
 	tradeEmoji := "⚡" // scalping
-	if d.TradeType == "arbitrage" {
+	switch d.TradeType {
+	case "arbitrage":
 		tradeEmoji = "🔄"
-	} else if d.TradeType == "swing" {
+	case "swing":
 		tradeEmoji = "📊"
 	}
 
@@ -142,9 +145,10 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 
 	// Trade details table
 	lines = append(lines, "━━━━━━━━━━━━━━━━━━━━━")
-	lines = append(lines, fmt.Sprintf("%s Type: %s", tradeEmoji, strings.Title(d.TradeType)))
+	caser := cases.Title(language.English)
+	lines = append(lines, fmt.Sprintf("%s Type: %s", tradeEmoji, caser.String(d.TradeType)))
 	lines = append(lines, fmt.Sprintf("📍 Market: %s", marketStr))
-	lines = append(lines, fmt.Sprintf("🏢 Exchange: %s", strings.Title(d.Exchange)))
+	lines = append(lines, fmt.Sprintf("🏢 Exchange: %s", caser.String(d.Exchange)))
 	lines = append(lines, "")
 
 	// Position size

@@ -2,8 +2,6 @@ package services
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -279,7 +277,7 @@ func (r *ExchangePositionReconciler) comparePositions(result *ReconciliationResu
 		}
 
 		// Compare size
-		if !local.Size.Equals(exchange.Size) {
+		if !local.Size.Equal(exchange.Size) {
 			result.PositionsMismatched++
 			result.DriftDetails = append(result.DriftDetails, DriftDetail{
 				Type:          "position",
@@ -499,13 +497,14 @@ func (r *ExchangePositionReconciler) syncLocalState(ctx context.Context, exchang
 // GetReconciliationSummary returns a human-readable summary
 func (r *ExchangePositionReconciler) GetReconciliationSummary(result *ReconciliationResult) string {
 	status := "✅ All systems in sync"
-	if result.Status == ReconciliationDriftDetected {
+	switch result.Status {
+	case ReconciliationDriftDetected:
 		status = fmt.Sprintf("⚠️ Drift detected: %d orders, %d positions mismatched",
 			result.OrdersMismatched, result.PositionsMismatched)
-	} else if result.Status == ReconciliationPartial {
+	case ReconciliationPartial:
 		status = fmt.Sprintf("⚠️ Partial sync: %d orphaned orders, %d orphaned positions",
 			result.OrdersOrphaned, result.PositionsOrphaned)
-	} else if result.Status == ReconciliationFailed {
+	case ReconciliationFailed:
 		status = "❌ Reconciliation failed"
 	}
 
@@ -523,13 +522,6 @@ type ReconcilerOrderRecord struct {
 	Price    decimal.Decimal
 	Size     decimal.Decimal
 	Filled   decimal.Decimal
-}
-
-// computeHash creates a hash of state for drift detection
-func computeHash(data interface{}) string {
-	jsonData, _ := json.Marshal(data)
-	hash := sha256.Sum256(jsonData)
-	return hex.EncodeToString(hash[:])
 }
 
 // SetOnOrderDrift sets the callback for order drift detection

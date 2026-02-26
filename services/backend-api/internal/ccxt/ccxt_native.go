@@ -27,6 +27,15 @@ func parseDecimal(s string) decimal.Decimal {
 	return d
 }
 
+func closeBody(body io.Closer) {
+	if body == nil {
+		return
+	}
+	if err := body.Close(); err != nil {
+		log.Printf("[CCXT Native] failed to close response body: %v", err)
+	}
+}
+
 // rateLimiter implements simple rate limiting for API calls
 type rateLimiter struct {
 	mu       sync.Mutex
@@ -593,7 +602,7 @@ func (s *NativeCCXTService) parseBitgetTicker(symbol string, body []byte) (*Tick
 	}
 
 	if raw.Code != "00000" {
-		return nil, fmt.Errorf("Bitget API error: %s", raw.Msg)
+		return nil, fmt.Errorf("bitget API error: %s", raw.Msg)
 	}
 
 	if len(raw.Data) == 0 {
@@ -746,7 +755,7 @@ func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols 
 		return nil, fmt.Errorf("failed to parse Bitget bulk ticker response: %w", err)
 	}
 	if raw.Code != "00000" {
-		return nil, fmt.Errorf("Bitget API error: %s", raw.Msg)
+		return nil, fmt.Errorf("bitget API error: %s", raw.Msg)
 	}
 
 	wanted := make(map[string]struct{}, len(symbols))
@@ -892,7 +901,7 @@ func (s *NativeCCXTService) FetchOHLCV(ctx context.Context, exchange, symbol, ti
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OHLCV: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -1031,7 +1040,7 @@ func (s *NativeCCXTService) parseBybitOHLCV(symbol, timeframe string, body []byt
 		return nil, fmt.Errorf("failed to parse Bybit OHLCV: %w", err)
 	}
 	if raw.RetCode != 0 {
-		return nil, fmt.Errorf("Bybit API error: %s", raw.RetMsg)
+		return nil, fmt.Errorf("bybit API error: %s", raw.RetMsg)
 	}
 
 	ohlcv := make([]OHLCV, 0, len(raw.Result.List))
@@ -1123,7 +1132,7 @@ func (s *NativeCCXTService) parseBitgetOHLCV(symbol, timeframe string, body []by
 		return nil, fmt.Errorf("failed to parse Bitget OHLCV: %w", err)
 	}
 	if raw.Code != "00000" {
-		return nil, fmt.Errorf("Bitget API error: %s", raw.Msg)
+		return nil, fmt.Errorf("bitget API error: %s", raw.Msg)
 	}
 
 	ohlcv := make([]OHLCV, 0, len(raw.Data))
@@ -1340,7 +1349,7 @@ func (s *NativeCCXTService) parseBitgetMarkets(body []byte) ([]string, error) {
 		return nil, fmt.Errorf("failed to parse Bitget markets: %w", err)
 	}
 	if raw.Code != "00000" {
-		return nil, fmt.Errorf("Bitget API error: %s", raw.Msg)
+		return nil, fmt.Errorf("bitget API error: %s", raw.Msg)
 	}
 	var symbols []string
 	for _, inst := range raw.Data {
@@ -1569,7 +1578,7 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch balance: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1603,7 +1612,7 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		if errMsg == "" {
 			errMsg = strings.TrimSpace(raw.Message)
 		}
-		return nil, fmt.Errorf("Bitget API error: %s", errMsg)
+		return nil, fmt.Errorf("bitget API error: %s", errMsg)
 	}
 
 	result := &BalanceResponse{
@@ -1682,7 +1691,7 @@ func (s *NativeCCXTService) fetchBinanceBalance(ctx context.Context, conn *Excha
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch balance: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1760,7 +1769,7 @@ func (s *NativeCCXTService) fetchBybitBalance(ctx context.Context, conn *Exchang
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch balance: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1789,7 +1798,7 @@ func (s *NativeCCXTService) fetchBybitBalance(ctx context.Context, conn *Exchang
 	}
 
 	if raw.RetCode != 0 {
-		return nil, fmt.Errorf("Bybit API error: %s", raw.RetMsg)
+		return nil, fmt.Errorf("bybit API error: %s", raw.RetMsg)
 	}
 
 	result := &BalanceResponse{
@@ -1850,7 +1859,7 @@ func (s *NativeCCXTService) fetchOKXBalance(ctx context.Context, conn *ExchangeC
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch balance: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1953,7 +1962,7 @@ func (s *NativeCCXTService) FetchFundingRates(ctx context.Context, exchange stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch funding rates: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -1988,7 +1997,7 @@ func (s *NativeCCXTService) FetchAllFundingRates(ctx context.Context, exchange s
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch all funding rates: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -2110,7 +2119,7 @@ func (s *NativeCCXTService) parseBybitFundingRate(body []byte) ([]FundingRate, e
 		return nil, fmt.Errorf("failed to parse Bybit funding rate: %w", err)
 	}
 	if raw.RetCode != 0 {
-		return nil, fmt.Errorf("Bybit API error: %s", raw.RetMsg)
+		return nil, fmt.Errorf("bybit API error: %s", raw.RetMsg)
 	}
 
 	rates := make([]FundingRate, 0, len(raw.Result.List))
@@ -2187,7 +2196,7 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 		return nil, fmt.Errorf("failed to parse Bitget funding rate: %w", err)
 	}
 	if raw.Code != "00000" {
-		return nil, fmt.Errorf("Bitget API error: %s", raw.Msg)
+		return nil, fmt.Errorf("bitget API error: %s", raw.Msg)
 	}
 
 	rates := make([]FundingRate, 0, len(raw.Data))
@@ -2232,7 +2241,7 @@ func (s *NativeCCXTService) parseBitgetOrderBook(symbol string, body []byte, lim
 	}
 
 	if raw.Code != "00000" {
-		return nil, fmt.Errorf("Bitget API error: %s", raw.Msg)
+		return nil, fmt.Errorf("bitget API error: %s", raw.Msg)
 	}
 
 	bids := make([]OrderBookEntry, 0, len(raw.Data.Bids))

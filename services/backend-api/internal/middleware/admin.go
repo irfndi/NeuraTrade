@@ -70,6 +70,7 @@ func getAdminAPIKeyFromConfig() string {
 		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
 	}
 
+	// #nosec G304,G703 -- config path is derived from NEURATRADE_HOME or user home
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return ""
@@ -93,11 +94,10 @@ func getAdminAPIKeyFromConfig() string {
 }
 
 func NewAdminMiddleware() *AdminMiddleware {
-	// Get admin API key from config.json first, then environment variable
-	apiKey := getAdminAPIKeyFromConfig()
-
+	// Prefer explicit environment override first for tests/ops, then config.json fallback.
+	apiKey := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
 	if apiKey == "" {
-		apiKey = os.Getenv("ADMIN_API_KEY")
+		apiKey = getAdminAPIKeyFromConfig()
 	}
 
 	// Handle missing API key based on environment

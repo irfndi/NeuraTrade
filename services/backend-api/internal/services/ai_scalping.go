@@ -255,6 +255,7 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 		}
 		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
 	}
+	// #nosec G304,G703 -- config path is derived from NEURATRADE_HOME or user home
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		return cfg
@@ -835,12 +836,9 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 
 	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
 
-	decision, err := parseAIDecisionPayload(resp.Message.Content)
-	if err != nil || !isValidDecisionAction(decision.Action) {
+	decision, parseErr := parseAIDecisionPayload(resp.Message.Content)
+	if parseErr != nil || !isValidDecisionAction(decision.Action) {
 		log.Printf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
-		if err == nil {
-			err = fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
-		}
 		decision, err = s.parseDecisionWithRetries(ctx, resp.Message.Content)
 		if err != nil {
 			log.Printf("[AI-SCALPING] Structured-output retries exhausted: %v", err)

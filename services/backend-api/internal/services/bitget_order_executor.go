@@ -9,12 +9,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 var bitgetMinUSDTNotional = decimal.NewFromFloat(6.0)
@@ -60,7 +63,7 @@ func (e *BitgetOrderExecutor) SetWalletBalance(balance float64) {
 // PlaceOrder places a real order on Bitget
 func (e *BitgetOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
 	// Convert symbol format: BTC/USDT -> BTCUSDT
-	apiSymbol := strings.Replace(symbol, "/", "", -1)
+	apiSymbol := strings.ReplaceAll(symbol, "/", "")
 
 	// For futures scalping
 	return e.placeFuturesOrder(ctx, apiSymbol, side, amount, price)
@@ -76,7 +79,7 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	}()
 
 	// Convert symbol format
-	apiSymbol := strings.Replace(details.Symbol, "/", "", -1)
+	apiSymbol := strings.ReplaceAll(details.Symbol, "/", "")
 
 	// Validate inputs
 	if details.AmountUSDT.IsZero() || details.AmountUSDT.IsNegative() {
@@ -183,7 +186,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, sid
 	}
 
 	if result.Code != "00000" {
-		return "", fmt.Errorf("Bitget API error: %s (code: %s)", result.Msg, result.Code)
+		return "", fmt.Errorf("bitget API error: %s (code: %s)", result.Msg, result.Code)
 	}
 
 	fmt.Printf("[BITGET-ORDER] ✅ Futures order placed: %s %s (size: %s USDT) - OrderID: %s\n",
@@ -211,7 +214,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	}
 
 	// Get current price to calculate contract size
-	price := decimal.Zero
+	var price decimal.Decimal
 	if details.EntryPrice != nil {
 		price = *details.EntryPrice
 	} else {
@@ -244,7 +247,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	contractSize := baseAmount.Div(contractInfo.SizeMultiplier)
 
 	// Round up so post-rounding notional does not slip below exchange minimum.
-	contractSize = contractSize.RoundCeil(int32(contractInfo.VolumePlace))
+	contractSize = contractSize.RoundCeil(safeInt32(contractInfo.VolumePlace))
 
 	// Ensure minimum size
 	if contractSize.LessThan(contractInfo.MinTradeNum) {
@@ -252,7 +255,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	}
 
 	// Ensure resulting notional is not below Bitget's minimum.
-	step := decimal.NewFromInt(1).Shift(-int32(contractInfo.VolumePlace))
+	step := decimal.NewFromInt(1).Shift(-safeInt32(contractInfo.VolumePlace))
 	if step.LessThanOrEqual(decimal.Zero) {
 		step = decimal.NewFromInt(1)
 	}
@@ -303,7 +306,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		}
 	}
 	if result.Code != "00000" {
-		return "", fmt.Errorf("Bitget API error: %s (code: %s)", result.Msg, result.Code)
+		return "", fmt.Errorf("bitget API error: %s (code: %s)", result.Msg, result.Code)
 	}
 
 	fmt.Printf("[BITGET-ORDER] ✅ Futures order placed: %s %s (size: %s contracts) - OrderID: %s\n",
@@ -333,7 +336,7 @@ func (e *BitgetOrderExecutor) getTicker(ctx context.Context, symbol string) (dec
 	}
 
 	if result.Code != "00000" {
-		return decimal.Zero, fmt.Errorf("Bitget ticker API error: %s (code: %s)", result.Msg, result.Code)
+		return decimal.Zero, fmt.Errorf("bitget ticker API error: %s (code: %s)", result.Msg, result.Code)
 	}
 
 	if len(result.Data) == 0 {
@@ -375,7 +378,7 @@ func (e *BitgetOrderExecutor) getContractInfo(ctx context.Context, symbol string
 	}
 
 	if result.Code != "00000" || len(result.Data) == 0 {
-		return nil, fmt.Errorf("Bitget contract API error: %s", result.Msg)
+		return nil, fmt.Errorf("bitget contract API error: %s", result.Msg)
 	}
 
 	info := &ContractInfo{
@@ -399,7 +402,18 @@ func formatFuturesTriggerPrice(price decimal.Decimal, contractInfo *ContractInfo
 	if contractInfo.PricePlace <= 0 {
 		return price.Round(0).String()
 	}
-	return price.Round(int32(contractInfo.PricePlace)).StringFixed(int32(contractInfo.PricePlace))
+	scale := safeInt32(contractInfo.PricePlace)
+	return price.Round(scale).StringFixed(scale)
+}
+
+func safeInt32(value int) int32 {
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if value < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(value)
 }
 
 func shouldFallbackToSpot(err error) bool {
@@ -480,7 +494,7 @@ func cloneStringAnyMap(input map[string]interface{}) map[string]interface{} {
 // placeSpotOrder places a spot market order
 func (e *BitgetOrderExecutor) placeSpotOrder(ctx context.Context, symbol, side string, amountUSDT decimal.Decimal, price *decimal.Decimal) (string, error) {
 	// Get current price if not provided
-	currentPrice := decimal.Zero
+	var currentPrice decimal.Decimal
 	if price != nil && !price.IsZero() {
 		currentPrice = *price
 	} else {
@@ -532,7 +546,7 @@ func (e *BitgetOrderExecutor) placeSpotOrder(ctx context.Context, symbol, side s
 	}
 
 	if result.Code != "00000" {
-		return "", fmt.Errorf("Bitget API error: %s (code: %s)", result.Msg, result.Code)
+		return "", fmt.Errorf("bitget API error: %s (code: %s)", result.Msg, result.Code)
 	}
 
 	fmt.Printf("[BITGET-ORDER] ✅ Spot order placed: %s %s (%s base) - OrderID: %s\n",
@@ -562,7 +576,7 @@ func (e *BitgetOrderExecutor) getSpotTicker(ctx context.Context, symbol string) 
 	}
 
 	if result.Code != "00000" || len(result.Data) == 0 {
-		return decimal.Zero, fmt.Errorf("Bitget spot ticker API error: %s", result.Msg)
+		return decimal.Zero, fmt.Errorf("bitget spot ticker API error: %s", result.Msg)
 	}
 
 	return decimal.RequireFromString(result.Data[0].LastPr), nil
@@ -601,7 +615,9 @@ func (e *BitgetOrderExecutor) doRequest(ctx context.Context, method, endpoint st
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -627,9 +643,10 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 	}
 
 	tradeEmoji := "⚡"
-	if d.TradeType == "arbitrage" {
+	switch d.TradeType {
+	case "arbitrage":
 		tradeEmoji = "🔄"
-	} else if d.TradeType == "swing" {
+	case "swing":
 		tradeEmoji = "📊"
 	}
 
@@ -650,9 +667,10 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 
 	// Trade details table
 	lines = append(lines, "━━━━━━━━━━━━━━━━━━━━━")
-	lines = append(lines, fmt.Sprintf("%s Type: %s", tradeEmoji, strings.Title(d.TradeType)))
+	caser := cases.Title(language.English)
+	lines = append(lines, fmt.Sprintf("%s Type: %s", tradeEmoji, caser.String(d.TradeType)))
 	lines = append(lines, fmt.Sprintf("📍 Market: %s", marketStr))
-	lines = append(lines, fmt.Sprintf("🏢 Exchange: Bitget"))
+	lines = append(lines, "🏢 Exchange: Bitget")
 	lines = append(lines, "")
 
 	// Position size
@@ -715,7 +733,7 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 
 // GetOpenOrders gets open orders
 func (e *BitgetOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error) {
-	apiSymbol := strings.Replace(symbol, "/", "", -1)
+	apiSymbol := strings.ReplaceAll(symbol, "/", "")
 
 	endpoint := fmt.Sprintf("/api/v2/mix/order/orders-pending?productType=USDT-FUTURES&symbol=%s", apiSymbol)
 	resp, err := e.doRequest(ctx, "GET", endpoint, nil)
@@ -737,7 +755,7 @@ func (e *BitgetOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbo
 
 // GetClosedOrders gets closed orders
 func (e *BitgetOrderExecutor) GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error) {
-	apiSymbol := strings.Replace(symbol, "/", "", -1)
+	apiSymbol := strings.ReplaceAll(symbol, "/", "")
 
 	endpoint := fmt.Sprintf("/api/v2/mix/order/orders-history?productType=USDT-FUTURES&symbol=%s&limit=%d", apiSymbol, limit)
 	resp, err := e.doRequest(ctx, "GET", endpoint, nil)

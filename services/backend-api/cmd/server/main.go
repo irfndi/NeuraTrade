@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -471,12 +472,18 @@ func acquireServerProcessLock() (*serverProcessLock, error) {
 		return nil, err
 	}
 
+	// #nosec G304 -- lock path is derived from NEURATRADE_HOME or user home, not request input
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open backend lock file %q: %w", lockPath, err)
 	}
 
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	fd, err := safeFD(lockFile)
+	if err != nil {
+		_ = lockFile.Close()
+		return nil, err
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = lockFile.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
 			return nil, fmt.Errorf("backend server already running (lock: %s)", lockPath)
@@ -507,6 +514,7 @@ func serverLockFilePath() (string, error) {
 	}
 
 	runDir := filepath.Join(homeDir, "run")
+	// #nosec G703 -- runDir is derived from operator-controlled home path
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return "", fmt.Errorf("failed to create runtime directory %q: %w", runDir, err)
 	}
@@ -519,7 +527,15 @@ func (l *serverProcessLock) Release() error {
 		return nil
 	}
 
-	fd := int(l.file.Fd())
+	fd, err := safeFD(l.file)
+	if err != nil {
+		closeErr := l.file.Close()
+		l.file = nil
+		if closeErr != nil {
+			return fmt.Errorf("%v; additionally failed to close lock file: %w", err, closeErr)
+		}
+		return err
+	}
 	unlockErr := syscall.Flock(fd, syscall.LOCK_UN)
 	closeErr := l.file.Close()
 	l.file = nil
@@ -528,4 +544,15 @@ func (l *serverProcessLock) Release() error {
 		return unlockErr
 	}
 	return closeErr
+}
+
+func safeFD(file *os.File) (int, error) {
+	if file == nil {
+		return 0, fmt.Errorf("lock file is nil")
+	}
+	fd := file.Fd()
+	if fd > uintptr(math.MaxInt) {
+		return 0, fmt.Errorf("lock file descriptor exceeds int range: %d", fd)
+	}
+	return int(fd), nil
 }
