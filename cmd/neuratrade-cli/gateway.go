@@ -521,8 +521,10 @@ func gatewayStatus(cCtx *cli.Context) error {
 
 // checkProcess checks if a process is running
 func checkProcess(displayName string, processPatterns ...string) {
+	seen := make(map[string]struct{})
+
 	for _, pattern := range processPatterns {
-		cmd := exec.Command("pgrep", "-af", pattern)
+		cmd := exec.Command("pgrep", "-f", pattern)
 		output, err := cmd.Output()
 		if err != nil || len(output) == 0 {
 			continue
@@ -530,28 +532,47 @@ func checkProcess(displayName string, processPatterns ...string) {
 
 		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 		for _, line := range lines {
-			fields := strings.Fields(line)
-			if len(fields) < 2 {
+			pidField := strings.TrimSpace(strings.Fields(line)[0])
+			if pidField == "" {
 				continue
 			}
 
-			pid := fields[0]
-			cmdline := strings.ToLower(strings.Join(fields[1:], " "))
-			if strings.Contains(cmdline, "pgrep -f") || strings.Contains(cmdline, "pgrep -af") {
-				continue
-			}
-			if strings.Contains(cmdline, "gateway status") {
-				continue
-			}
-			if !strings.Contains(cmdline, strings.ToLower(pattern)) {
+			if _, exists := seen[pidField]; exists {
 				continue
 			}
 
-			fmt.Printf("✅ %s: Running (PID: %s)\n", displayName, pid)
+			cmdline, readErr := readCommandLineForPID(pidField)
+			if readErr != nil || strings.TrimSpace(cmdline) == "" {
+				continue
+			}
+			cmdlineLower := strings.ToLower(strings.TrimSpace(cmdline))
+			if strings.Contains(cmdlineLower, "pgrep -f") ||
+				strings.Contains(cmdlineLower, "pkill -f") ||
+				strings.Contains(cmdlineLower, "gateway status") {
+				continue
+			}
+			if !strings.Contains(cmdlineLower, strings.ToLower(pattern)) {
+				continue
+			}
+
+			seen[pidField] = struct{}{}
+			fmt.Printf("✅ %s: Running (PID: %s)\n", displayName, pidField)
 			return
 		}
 	}
 	fmt.Printf("❌ %s: Not running\n", displayName)
+}
+
+func readCommandLineForPID(pid string) (string, error) {
+	if strings.TrimSpace(pid) == "" {
+		return "", fmt.Errorf("empty pid")
+	}
+	cmd := exec.Command("ps", "-p", pid, "-o", "command=")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("ps command failed for PID %s: %w", pid, err)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // printServiceStatus prints service health status
