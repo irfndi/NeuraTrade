@@ -115,6 +115,26 @@ func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, cha
 	return bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID
 }
 
+func hasConnectedExchangeWallet(db *sql.DB, chatID, provider string) bool {
+	if db == nil || strings.TrimSpace(chatID) == "" || strings.TrimSpace(provider) == "" {
+		return false
+	}
+
+	var exists int
+	query := `
+		SELECT 1
+		FROM telegram_operator_wallets
+		WHERE chat_id = $1
+		  AND LOWER(provider) = LOWER($2)
+		  AND status = 'connected'
+		LIMIT 1
+	`
+	if err := db.QueryRow(query, strings.TrimSpace(chatID), strings.TrimSpace(provider)).Scan(&exists); err != nil {
+		return false
+	}
+	return exists == 1
+}
+
 // Returns a cleanup function that should be called on shutdown.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService) func() {
 	// Initialize admin middleware
@@ -343,9 +363,27 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
 	}
 
+	var sqlDB *sql.DB
+	switch concreteDB := db.(type) {
+	case *database.SQLiteDB:
+		sqlDB = concreteDB.DB
+	case *database.PostgresDB:
+		sqlDB = concreteDB.SQL
+	default:
+		log.Printf("Warning: Unknown database type, AI learning disabled")
+	}
+
 	// Use BitgetOrderExecutor for real order execution
 	var orderExecutor services.ScalpingOrderExecutor
-	if bitgetAPIKey != "" && bitgetSecret != "" {
+	canUseBitgetCreds := bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase != ""
+	if bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase == "" {
+		log.Printf("⚠️ Bitget API key/secret detected but passphrase is missing; falling back to paper trading")
+	}
+	if canUseBitgetCreds && chatID != "" && sqlDB != nil && !hasConnectedExchangeWallet(sqlDB, chatID, "bitget") {
+		log.Printf("⚠️ Runtime Bitget credentials do not map to an active Bitget wallet for chat %s; falling back to paper trading", chatID)
+		canUseBitgetCreds = false
+	}
+	if canUseBitgetCreds {
 		bitgetExec := services.NewBitgetOrderExecutor(bitgetAPIKey, bitgetSecret, bitgetPassphrase)
 		bitgetExec.SetNotificationService(notificationService)
 		bitgetExec.SetChatID(chatID)
@@ -364,16 +402,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	log.Printf("Portfolio safety gate enabled for scalping order execution")
 
 	integratedHandlers.SetOrderExecutor(orderExecutor)
-
-	var sqlDB *sql.DB
-	switch concreteDB := db.(type) {
-	case *database.SQLiteDB:
-		sqlDB = concreteDB.DB
-	case *database.PostgresDB:
-		sqlDB = concreteDB.SQL
-	default:
-		log.Printf("Warning: Unknown database type, AI learning disabled")
-	}
 
 	// Set database for user settings lookup
 	var lifecycleStore *services.TradingLifecycleStore
@@ -697,7 +725,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
 
 			telegramInternal := telegram.Group("/internal")
-			// Note: No admin middleware - these are user-facing Telegram commands
 			{
 				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
 				telegramInternal.GET("/quests/diagnostics", autonomousHandler.GetQuestDiagnostics)
@@ -705,8 +732,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
 				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)
 				telegramInternal.GET("/performance", autonomousHandler.GetPerformanceBreakdown)
-				telegramInternal.POST("/liquidate", autonomousHandler.Liquidate)
-				telegramInternal.POST("/liquidate/all", autonomousHandler.LiquidateAll)
 
 				// Trading mode routes (dry/live toggle)
 				if opModeHandler != nil {
@@ -716,6 +741,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 					telegramInternal.POST("/mode/:chatId/confirm", opModeHandler.AddTradingModeConfirmation)
 					telegramInternal.DELETE("/mode/:chatId/confirmations", opModeHandler.ResetTradingModeConfirmations)
 				}
+			}
+
+			telegramInternalTrade := telegram.Group("/internal")
+			telegramInternalTrade.Use(adminMiddleware.RequireAdminAuth())
+			{
+				telegramInternalTrade.POST("/liquidate", autonomousHandler.Liquidate)
+				telegramInternalTrade.POST("/liquidate/all", autonomousHandler.LiquidateAll)
 			}
 		}
 

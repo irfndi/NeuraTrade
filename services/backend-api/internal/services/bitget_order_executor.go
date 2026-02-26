@@ -244,6 +244,9 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	baseAmount := amountUSDT.Div(price)
 
 	// Convert to number of contracts based on sizeMultiplier
+	if contractInfo.SizeMultiplier.LessThanOrEqual(decimal.Zero) {
+		return "", fmt.Errorf("invalid contract size multiplier for %s", symbol)
+	}
 	contractSize := baseAmount.Div(contractInfo.SizeMultiplier)
 
 	// Round up so post-rounding notional does not slip below exchange minimum.
@@ -254,13 +257,13 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		contractSize = contractInfo.MinTradeNum
 	}
 
-	// Ensure resulting notional is not below Bitget's minimum.
-	step := decimal.NewFromInt(1).Shift(-safeInt32(contractInfo.VolumePlace))
-	if step.LessThanOrEqual(decimal.Zero) {
-		step = decimal.NewFromInt(1)
-	}
-	for contractSize.Mul(contractInfo.SizeMultiplier).Mul(price).LessThan(bitgetMinUSDTNotional) {
-		contractSize = contractSize.Add(step)
+	// Ensure resulting notional is not below Bitget's minimum without iterative bumps.
+	minContractsForNotional := bitgetMinUSDTNotional.
+		Div(price).
+		Div(contractInfo.SizeMultiplier).
+		RoundCeil(safeInt32(contractInfo.VolumePlace))
+	if contractSize.LessThan(minContractsForNotional) {
+		contractSize = minContractsForNotional
 	}
 	size := contractSize.String()
 

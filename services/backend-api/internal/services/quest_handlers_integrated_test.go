@@ -2,11 +2,14 @@ package services
 
 import (
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestIntegratedQuestHandlers_MarketScanWithTA tests market scanning with TA
@@ -291,6 +294,37 @@ func TestHasExchange(t *testing.T) {
 	assert.False(t, hasExchange(exchanges, "kraken"))
 	assert.False(t, hasExchange(exchanges, ""))
 	assert.False(t, hasExchange([]string{}, "binance"))
+}
+
+func TestIntegratedQuestHandlers_GetUserExchange_SQLiteLookup(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-user-exchange.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	ctx := context.Background()
+	_, err = sqliteDB.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS telegram_operator_wallets (
+			id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			status TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		)
+	`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO telegram_operator_wallets (id, chat_id, provider, status, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, "w1", "chat-1", "bitget", "connected", time.Now().UTC())
+	require.NoError(t, err)
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	assert.Equal(t, "bitget", handlers.getUserExchange("chat-1"))
+	assert.Equal(t, "bitget", handlers.getUserExchange("chat-missing"))
 }
 
 func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing.T) {

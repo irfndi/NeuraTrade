@@ -56,7 +56,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		Leverage:          5,
 		MaxTokens:         1200,
 		MaxCapitalPct:     5.0,
-		MinConfidence:     0.45,
+		MinConfidence:     0.65,
 		MaxIterations:     3,
 		Timeout:           90 * time.Second,
 		AutoExecute:       true,

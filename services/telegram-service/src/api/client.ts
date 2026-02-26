@@ -169,7 +169,7 @@ export class BackendApiClient {
     return this.fetch<LiquidationResponse>(API_ENDPOINTS.LIQUIDATE, {
       method: "POST",
       body: JSON.stringify({ chat_id: chatId, symbol }),
-      requireAdmin: false,
+      requireAdmin: true,
     });
   }
 
@@ -177,7 +177,7 @@ export class BackendApiClient {
     return this.fetch<LiquidationResponse>(API_ENDPOINTS.LIQUIDATE_ALL, {
       method: "POST",
       body: JSON.stringify({ chat_id: chatId }),
-      requireAdmin: false,
+      requireAdmin: true,
     });
   }
 
