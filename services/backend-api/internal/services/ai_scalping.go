@@ -42,6 +42,11 @@ type AIScalpingConfig struct {
 	LossStreakBudget  int
 	LossCooldown      time.Duration
 	LossWindow        time.Duration
+	PreTradeGate      bool
+	MinExpectancyEdge float64
+	MinExpectancyN    int
+	RegimeHighBand    float64
+	RegimeLowBand     float64
 }
 
 func DefaultAIScalpingConfig() AIScalpingConfig {
@@ -67,6 +72,11 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		LossStreakBudget:  2,
 		LossCooldown:      20 * time.Minute,
 		LossWindow:        90 * time.Minute,
+		PreTradeGate:      true,
+		MinExpectancyEdge: 0,
+		MinExpectancyN:    8,
+		RegimeHighBand:    85,
+		RegimeLowBand:     15,
 	}
 }
 
@@ -136,6 +146,21 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS"); value > 0 {
 		cfg.LossWindow = time.Duration(clampInt(value, 60, 43200)) * time.Second
 	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_PRETRADE_GATE"); ok {
+		cfg.PreTradeGate = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MIN_EXPECTANCY_EDGE"); ok {
+		cfg.MinExpectancyEdge = clampFloat(value, -10, 10)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_MIN_EXPECTANCY_SAMPLES"); value > 0 {
+		cfg.MinExpectancyN = clampInt(value, 1, 500)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_REGIME_HIGH_BAND"); ok {
+		cfg.RegimeHighBand = clampFloat(value, 55, 99)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_REGIME_LOW_BAND"); ok {
+		cfg.RegimeLowBand = clampFloat(value, 1, 45)
+	}
 
 	if cfg.MaxCandidatePairs < cfg.MaxPairsToAnalyze {
 		cfg.MaxCandidatePairs = cfg.MaxPairsToAnalyze
@@ -146,9 +171,13 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if cfg.OrderBookPairs <= 0 {
 		cfg.OrderBookPairs = 1
 	}
+	if cfg.RegimeLowBand >= cfg.RegimeHighBand {
+		cfg.RegimeLowBand = 15
+		cfg.RegimeHighBand = 85
+	}
 
 	log.Printf(
-		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f",
 		cfg.Exchange,
 		cfg.Model,
 		cfg.Leverage,
@@ -169,6 +198,11 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.LossStreakBudget,
 		cfg.LossCooldown,
 		cfg.LossWindow,
+		cfg.PreTradeGate,
+		cfg.MinExpectancyEdge,
+		cfg.MinExpectancyN,
+		cfg.RegimeLowBand,
+		cfg.RegimeHighBand,
 	)
 
 	return cfg
@@ -199,6 +233,11 @@ type aiScalpingFileConfig struct {
 			LossStreakBudget  *int     `json:"symbol_loss_streak_budget"`
 			LossCooldownSec   *int     `json:"symbol_loss_cooldown_seconds"`
 			LossWindowSec     *int     `json:"symbol_loss_window_seconds"`
+			PreTradeGate      *bool    `json:"pretrade_gate"`
+			MinExpectancyEdge *float64 `json:"min_expectancy_edge"`
+			MinExpectancyN    *int     `json:"min_expectancy_samples"`
+			RegimeHighBand    *float64 `json:"regime_high_band"`
+			RegimeLowBand     *float64 `json:"regime_low_band"`
 		} `json:"scalping"`
 	} `json:"ai"`
 }
@@ -292,6 +331,21 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 	}
 	if fileConfig.AI.Scalping.LossWindowSec != nil {
 		cfg.LossWindow = time.Duration(clampInt(*fileConfig.AI.Scalping.LossWindowSec, 60, 43200)) * time.Second
+	}
+	if fileConfig.AI.Scalping.PreTradeGate != nil {
+		cfg.PreTradeGate = *fileConfig.AI.Scalping.PreTradeGate
+	}
+	if fileConfig.AI.Scalping.MinExpectancyEdge != nil {
+		cfg.MinExpectancyEdge = clampFloat(*fileConfig.AI.Scalping.MinExpectancyEdge, -10, 10)
+	}
+	if fileConfig.AI.Scalping.MinExpectancyN != nil {
+		cfg.MinExpectancyN = clampInt(*fileConfig.AI.Scalping.MinExpectancyN, 1, 500)
+	}
+	if fileConfig.AI.Scalping.RegimeHighBand != nil {
+		cfg.RegimeHighBand = clampFloat(*fileConfig.AI.Scalping.RegimeHighBand, 55, 99)
+	}
+	if fileConfig.AI.Scalping.RegimeLowBand != nil {
+		cfg.RegimeLowBand = clampFloat(*fileConfig.AI.Scalping.RegimeLowBand, 1, 45)
 	}
 
 	return cfg
@@ -393,10 +447,37 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	}
 
 	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds(ctx)
+	gate := s.evaluatePreTradeGate(ctx, decision, signals)
+	if !gate.Allowed {
+		attemptedAction := decision.Action
+		decision.Action = "hold"
+		decision.Confidence = 0
+		decision.OrderID = ""
+		decision.Reasoning = gate.Reason
+		log.Printf(
+			"[AI-SCALPING] Pre-trade gate blocked %s %s (regime=%s expectancy=%.4f sample=%d): %s",
+			attemptedAction,
+			decision.Symbol,
+			gate.Regime,
+			gate.NetExpectancy,
+			gate.SampleSize,
+			gate.Reason,
+		)
+		return decision, nil
+	}
+	if gate.CapitalMultiplier > 0 && gate.CapitalMultiplier < 1 {
+		effectiveMaxCapital = effectiveMaxCapital * gate.CapitalMultiplier
+		if effectiveMaxCapital < 0.1 {
+			effectiveMaxCapital = 0.1
+		}
+	}
 	log.Printf(
-		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f",
+		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d",
 		effectiveMinConfidence,
 		effectiveMaxCapital,
+		gate.Regime,
+		gate.NetExpectancy,
+		gate.SampleSize,
 	)
 
 	if decision.Action == "hold" {
@@ -935,6 +1016,201 @@ const (
 	maxScalpingSpreadPct = 0.20
 	minRiskRewardRatio   = 1.10
 )
+
+type preTradeGateResult struct {
+	Allowed           bool
+	Regime            string
+	NetExpectancy     float64
+	SampleSize        int
+	CapitalMultiplier float64
+	Reason            string
+}
+
+func defaultPreTradeGateResult() preTradeGateResult {
+	return preTradeGateResult{
+		Allowed:           true,
+		Regime:            "neutral",
+		CapitalMultiplier: 1,
+	}
+}
+
+func (s *AIScalpingService) evaluatePreTradeGate(ctx context.Context, decision *AITradingDecision, signals []aiMarketSignal) preTradeGateResult {
+	result := defaultPreTradeGateResult()
+	if !s.config.PreTradeGate || decision == nil || decision.Action == "hold" {
+		return result
+	}
+
+	known := make(map[string]aiMarketSignal, len(signals))
+	for _, sig := range signals {
+		known[normalizeSymbolForComparison(sig.Symbol)] = sig
+	}
+	signal, ok := resolveDecisionSymbol(decision.Symbol, known)
+	if !ok {
+		result.Allowed = false
+		result.Reason = fmt.Sprintf("pre-trade gate: symbol %s missing from signal universe", decision.Symbol)
+		return result
+	}
+
+	regime, regimeMultiplier, regimeBlockReason := s.classifyScalpingRegime(signal, decision.Action)
+	result.Regime = regime
+	result.CapitalMultiplier = regimeMultiplier
+	if regimeBlockReason != "" {
+		result.Allowed = false
+		result.Reason = regimeBlockReason
+		return result
+	}
+
+	expectancy, sample, hasExpectancy := s.estimateNetExpectancy(ctx, signal.Symbol, decision.Action)
+	result.NetExpectancy = expectancy
+	result.SampleSize = sample
+	if hasExpectancy && sample >= s.config.MinExpectancyN && expectancy < s.config.MinExpectancyEdge {
+		result.Allowed = false
+		result.Reason = fmt.Sprintf(
+			"pre-trade expectancy gate blocked %s: net expectancy %.4f below minimum %.4f (%d samples)",
+			signal.Symbol,
+			expectancy,
+			s.config.MinExpectancyEdge,
+			sample,
+		)
+		return result
+	}
+
+	// In choppy/non-directional conditions require either strong confidence or proven edge.
+	if regime == "chop" && decision.Confidence < 0.65 && (!hasExpectancy || expectancy <= s.config.MinExpectancyEdge) {
+		result.Allowed = false
+		result.Reason = fmt.Sprintf(
+			"pre-trade regime gate blocked %s: choppy market with low confidence (%.2f)",
+			signal.Symbol,
+			decision.Confidence,
+		)
+	}
+	return result
+}
+
+func (s *AIScalpingService) classifyScalpingRegime(signal aiMarketSignal, action string) (string, float64, string) {
+	action = strings.ToLower(strings.TrimSpace(action))
+	highBand := s.config.RegimeHighBand
+	lowBand := s.config.RegimeLowBand
+	if highBand <= lowBand {
+		highBand = 85
+		lowBand = 15
+	}
+
+	if signal.BidAskSpread > maxScalpingSpreadPct*0.85 {
+		return "illiquid", 0, fmt.Sprintf("pre-trade regime gate blocked %s: spread %.3f%% too wide", signal.Symbol, signal.BidAskSpread)
+	}
+
+	if action == "buy" && signal.RangePosition24h >= highBand && signal.OrderBookImbalance < 0 {
+		return "blowoff_top", 0, fmt.Sprintf(
+			"pre-trade regime gate blocked %s: late-range buy rejected (range_pos_24h=%.1f, ob_imbalance=%.3f)",
+			signal.Symbol,
+			signal.RangePosition24h,
+			signal.OrderBookImbalance,
+		)
+	}
+	if action == "sell" && signal.RangePosition24h <= lowBand && signal.OrderBookImbalance > 0 {
+		return "capitulation_bottom", 0, fmt.Sprintf(
+			"pre-trade regime gate blocked %s: low-range sell rejected (range_pos_24h=%.1f, ob_imbalance=%.3f)",
+			signal.Symbol,
+			signal.RangePosition24h,
+			signal.OrderBookImbalance,
+		)
+	}
+
+	if math.Abs(signal.OrderBookImbalance) >= 0.25 && signal.RangePosition24h > lowBand+5 && signal.RangePosition24h < highBand-5 {
+		return "trend", 1, ""
+	}
+	if math.Abs(signal.OrderBookImbalance) < 0.10 {
+		return "chop", 0.65, ""
+	}
+	return "neutral", 0.85, ""
+}
+
+func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, action string) (float64, int, bool) {
+	normalizedSymbol := normalizeSymbolForComparison(symbol)
+	normalizedAction := strings.ToLower(strings.TrimSpace(action))
+	minSamples := s.config.MinExpectancyN
+	if minSamples <= 0 {
+		minSamples = 8
+	}
+
+	if s.tradeMemory != nil {
+		trades, err := s.tradeMemory.GetRecentTrades(ctx, 250)
+		if err == nil && len(trades) > 0 {
+			sumWin := 0.0
+			sumLoss := 0.0
+			wins := 0
+			losses := 0
+			for _, trade := range trades {
+				if normalizeSymbolForComparison(trade.Symbol) != normalizedSymbol {
+					continue
+				}
+				if normalizedAction != "" && strings.ToLower(strings.TrimSpace(trade.Action)) != normalizedAction {
+					continue
+				}
+				outcome := strings.ToLower(strings.TrimSpace(trade.Outcome))
+				if outcome != "win" && outcome != "loss" {
+					continue
+				}
+				pnl := trade.PnL.Abs().InexactFloat64()
+				if pnl <= 0 {
+					continue
+				}
+				if outcome == "win" {
+					wins++
+					sumWin += pnl
+				} else {
+					losses++
+					sumLoss += pnl
+				}
+			}
+			if wins+losses >= minSamples {
+				return calculateNetExpectancy(wins, losses, sumWin, sumLoss), wins + losses, true
+			}
+		}
+	}
+
+	perf := GetScalpingPerformance().GetPerformance()
+	total := readIntMetric(perf["total_trades"])
+	if total <= 0 {
+		return 0, 0, false
+	}
+
+	winRate := readFloatMetric(perf["win_rate"])
+	if winRate > 1 {
+		winRate = winRate / 100
+	}
+	if winRate < 0 {
+		winRate = 0
+	}
+	if winRate > 1 {
+		winRate = 1
+	}
+
+	avgWin := math.Abs(readFloatMetric(perf["avg_win"]))
+	avgLoss := math.Abs(readFloatMetric(perf["avg_loss"]))
+	if avgWin == 0 && avgLoss == 0 {
+		return 0, total, false
+	}
+	return winRate*avgWin - (1-winRate)*avgLoss, total, true
+}
+
+func calculateNetExpectancy(wins, losses int, sumWin, sumLoss float64) float64 {
+	total := wins + losses
+	if total == 0 {
+		return 0
+	}
+	winRate := float64(wins) / float64(total)
+	avgWin := 0.0
+	if wins > 0 {
+		avgWin = sumWin / float64(wins)
+	}
+	avgLoss := 0.0
+	if losses > 0 {
+		avgLoss = sumLoss / float64(losses)
+	}
+	return winRate*avgWin - (1-winRate)*avgLoss
+}
 
 func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signals []aiMarketSignal) error {
 	if decision == nil {

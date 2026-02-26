@@ -28,6 +28,8 @@ type LifecycleExecutionRecord struct {
 	MarketType string
 	Amount     decimal.Decimal
 	EntryPrice decimal.Decimal
+	StopLoss   decimal.Decimal
+	TakeProfit decimal.Decimal
 	Source     string
 	OpenedAt   time.Time
 }
@@ -46,6 +48,26 @@ type LifecycleCloseRecord struct {
 	Fees        decimal.Decimal
 	Source      string
 	ClosedAt    time.Time
+}
+
+type ManagedOpenPosition struct {
+	PositionID          string
+	OrderID             string
+	ChatID              string
+	Exchange            string
+	Symbol              string
+	Side                string
+	MarketType          string
+	Source              string
+	Size                decimal.Decimal
+	EntryPrice          decimal.Decimal
+	StopLoss            decimal.Decimal
+	TakeProfit          decimal.Decimal
+	LastPrice           decimal.Decimal
+	UnrealizedPnL       decimal.Decimal
+	ProtectionUpdatedAt time.Time
+	OpenedAt            time.Time
+	UpdatedAt           time.Time
 }
 
 func NewTradingLifecycleStore(db database.DBPool, logger *log.Logger) (*TradingLifecycleStore, error) {
@@ -89,20 +111,25 @@ func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
 			updated_at TIMESTAMP NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS trading_positions (
-			position_id TEXT PRIMARY KEY,
-			order_id TEXT NOT NULL,
-			chat_id TEXT,
-			exchange TEXT NOT NULL,
-			symbol TEXT NOT NULL,
-			side TEXT NOT NULL,
-			market_type TEXT NOT NULL DEFAULT 'spot',
-			size NUMERIC NOT NULL,
-			entry_price NUMERIC NOT NULL,
-			close_price NUMERIC NOT NULL DEFAULT 0,
-			realized_pnl NUMERIC NOT NULL DEFAULT 0,
-			status TEXT NOT NULL,
-			source TEXT NOT NULL DEFAULT 'autonomous',
-			opened_at TIMESTAMP NOT NULL,
+				position_id TEXT PRIMARY KEY,
+				order_id TEXT NOT NULL,
+				chat_id TEXT,
+				exchange TEXT NOT NULL,
+				symbol TEXT NOT NULL,
+				side TEXT NOT NULL,
+				market_type TEXT NOT NULL DEFAULT 'spot',
+				size NUMERIC NOT NULL,
+				entry_price NUMERIC NOT NULL,
+				stop_loss NUMERIC NOT NULL DEFAULT 0,
+				take_profit NUMERIC NOT NULL DEFAULT 0,
+				last_price NUMERIC NOT NULL DEFAULT 0,
+				unrealized_pnl NUMERIC NOT NULL DEFAULT 0,
+				protection_updated_at TIMESTAMP NULL,
+				close_price NUMERIC NOT NULL DEFAULT 0,
+				realized_pnl NUMERIC NOT NULL DEFAULT 0,
+				status TEXT NOT NULL,
+				source TEXT NOT NULL DEFAULT 'autonomous',
+				opened_at TIMESTAMP NOT NULL,
 			closed_at TIMESTAMP NULL,
 			updated_at TIMESTAMP NOT NULL
 		)`,
@@ -145,6 +172,11 @@ func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
 		`ALTER TABLE trading_positions ADD COLUMN market_type TEXT`,
 		`ALTER TABLE trading_positions ADD COLUMN close_price NUMERIC`,
 		`ALTER TABLE trading_positions ADD COLUMN realized_pnl NUMERIC`,
+		`ALTER TABLE trading_positions ADD COLUMN stop_loss NUMERIC`,
+		`ALTER TABLE trading_positions ADD COLUMN take_profit NUMERIC`,
+		`ALTER TABLE trading_positions ADD COLUMN last_price NUMERIC`,
+		`ALTER TABLE trading_positions ADD COLUMN unrealized_pnl NUMERIC`,
+		`ALTER TABLE trading_positions ADD COLUMN protection_updated_at TIMESTAMP`,
 		`ALTER TABLE trading_positions ADD COLUMN source TEXT`,
 		`ALTER TABLE trading_positions ADD COLUMN closed_at TIMESTAMP`,
 	}
@@ -207,27 +239,36 @@ func (s *TradingLifecycleStore) RecordOrderExecution(ctx context.Context, rec Li
 	}
 
 	if _, err := s.db.Exec(ctx, `
-		INSERT INTO trading_positions (
-			position_id, order_id, chat_id, exchange, symbol, side, market_type,
-			size, entry_price, status, source, opened_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'open',$10,$11,$12)
-		ON CONFLICT(position_id) DO UPDATE SET
-			order_id = EXCLUDED.order_id,
-			chat_id = EXCLUDED.chat_id,
-			exchange = EXCLUDED.exchange,
-			symbol = EXCLUDED.symbol,
-			side = EXCLUDED.side,
-			market_type = EXCLUDED.market_type,
-			size = EXCLUDED.size,
-			entry_price = EXCLUDED.entry_price,
-			status = 'open',
-			source = EXCLUDED.source,
-			close_price = 0,
-			realized_pnl = 0,
-			closed_at = NULL,
-			updated_at = EXCLUDED.updated_at
-	`, positionID, orderID, strings.TrimSpace(rec.ChatID), strings.TrimSpace(rec.Exchange), strings.TrimSpace(rec.Symbol),
-		side, marketType, rec.Amount, rec.EntryPrice, source, now, now); err != nil {
+			INSERT INTO trading_positions (
+				position_id, order_id, chat_id, exchange, symbol, side, market_type,
+				size, entry_price, stop_loss, take_profit, last_price, unrealized_pnl, protection_updated_at,
+				status, source, opened_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17)
+			ON CONFLICT(position_id) DO UPDATE SET
+				order_id = EXCLUDED.order_id,
+				chat_id = EXCLUDED.chat_id,
+				exchange = EXCLUDED.exchange,
+				symbol = EXCLUDED.symbol,
+				side = EXCLUDED.side,
+				market_type = EXCLUDED.market_type,
+				size = EXCLUDED.size,
+				entry_price = EXCLUDED.entry_price,
+				stop_loss = CASE WHEN EXCLUDED.stop_loss > 0 THEN EXCLUDED.stop_loss ELSE trading_positions.stop_loss END,
+				take_profit = CASE WHEN EXCLUDED.take_profit > 0 THEN EXCLUDED.take_profit ELSE trading_positions.take_profit END,
+				last_price = EXCLUDED.last_price,
+				unrealized_pnl = EXCLUDED.unrealized_pnl,
+				protection_updated_at = CASE
+					WHEN EXCLUDED.stop_loss > 0 OR EXCLUDED.take_profit > 0 THEN EXCLUDED.protection_updated_at
+					ELSE trading_positions.protection_updated_at
+				END,
+				status = 'open',
+				source = EXCLUDED.source,
+				close_price = 0,
+				realized_pnl = 0,
+				closed_at = NULL,
+				updated_at = EXCLUDED.updated_at
+		`, positionID, orderID, strings.TrimSpace(rec.ChatID), strings.TrimSpace(rec.Exchange), strings.TrimSpace(rec.Symbol),
+		side, marketType, rec.Amount, rec.EntryPrice, rec.StopLoss, rec.TakeProfit, rec.EntryPrice, decimal.Zero, now, source, now, now); err != nil {
 		return fmt.Errorf("upsert trading_positions failed: %w", err)
 	}
 
@@ -384,6 +425,205 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 			normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, now, now); err != nil {
 			return fmt.Errorf("sync position insert failed: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *TradingLifecycleStore) ListManagedOpenPositions(ctx context.Context, chatID, exchange string, limit int) ([]ManagedOpenPosition, error) {
+	query := `
+		SELECT
+			position_id, order_id, COALESCE(chat_id, ''), exchange, symbol, side, market_type,
+			COALESCE(source, 'autonomous'),
+			size, entry_price, COALESCE(stop_loss, 0), COALESCE(take_profit, 0),
+			COALESCE(last_price, 0), COALESCE(unrealized_pnl, 0),
+			protection_updated_at, opened_at, updated_at
+		FROM trading_positions
+		WHERE status = 'open'
+	`
+	args := make([]interface{}, 0, 3)
+	if strings.TrimSpace(chatID) != "" {
+		query += " AND chat_id = $1"
+		args = append(args, strings.TrimSpace(chatID))
+		if strings.TrimSpace(exchange) != "" {
+			query += " AND exchange = $2"
+			args = append(args, strings.TrimSpace(exchange))
+		}
+	} else if strings.TrimSpace(exchange) != "" {
+		query += " AND exchange = $1"
+		args = append(args, strings.TrimSpace(exchange))
+	}
+	query += " ORDER BY updated_at DESC"
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such column") {
+			return []ManagedOpenPosition{}, nil
+		}
+		return nil, fmt.Errorf("query open managed positions failed: %w", err)
+	}
+	defer rows.Close()
+
+	positions := make([]ManagedOpenPosition, 0)
+	for rows.Next() {
+		var p ManagedOpenPosition
+		var protectionRaw interface{}
+		var openedRaw interface{}
+		var updatedRaw interface{}
+		if err := rows.Scan(
+			&p.PositionID,
+			&p.OrderID,
+			&p.ChatID,
+			&p.Exchange,
+			&p.Symbol,
+			&p.Side,
+			&p.MarketType,
+			&p.Source,
+			&p.Size,
+			&p.EntryPrice,
+			&p.StopLoss,
+			&p.TakeProfit,
+			&p.LastPrice,
+			&p.UnrealizedPnL,
+			&protectionRaw,
+			&openedRaw,
+			&updatedRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan managed position failed: %w", err)
+		}
+		p.OpenedAt = parseLifecycleTimestamp(openedRaw)
+		p.UpdatedAt = parseLifecycleTimestamp(updatedRaw)
+		p.ProtectionUpdatedAt = parseLifecycleTimestamp(protectionRaw)
+		if p.ProtectionUpdatedAt.IsZero() {
+			p.ProtectionUpdatedAt = p.OpenedAt
+		}
+		positions = append(positions, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate managed positions failed: %w", err)
+	}
+	return positions, nil
+}
+
+func parseLifecycleTimestamp(raw interface{}) time.Time {
+	switch value := raw.(type) {
+	case nil:
+		return time.Time{}
+	case time.Time:
+		return value.UTC()
+	case string:
+		return parseLifecycleTimestampString(value)
+	case []byte:
+		return parseLifecycleTimestampString(string(value))
+	default:
+		return parseLifecycleTimestampString(fmt.Sprintf("%v", value))
+	}
+}
+
+func parseLifecycleTimestampString(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "<nil>" {
+		return time.Time{}
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Time{}
+}
+
+func (s *TradingLifecycleStore) UpdatePositionProtection(
+	ctx context.Context,
+	positionID string,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+	lastPrice decimal.Decimal,
+	unrealizedPnL decimal.Decimal,
+	updatedAt time.Time,
+) error {
+	positionID = strings.TrimSpace(positionID)
+	if positionID == "" {
+		return fmt.Errorf("position_id is required")
+	}
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+
+	var existing ManagedOpenPosition
+	var protectionRaw interface{}
+	var openedRaw interface{}
+	var updatedRaw interface{}
+	if err := s.db.QueryRow(ctx, `
+		SELECT
+			position_id, order_id, COALESCE(chat_id, ''), exchange, symbol, side, market_type,
+			COALESCE(source, 'autonomous'),
+			size, entry_price, COALESCE(stop_loss, 0), COALESCE(take_profit, 0),
+			COALESCE(last_price, 0), COALESCE(unrealized_pnl, 0),
+			COALESCE(protection_updated_at, opened_at), opened_at, updated_at
+		FROM trading_positions
+		WHERE position_id = $1
+	`, positionID).Scan(
+		&existing.PositionID,
+		&existing.OrderID,
+		&existing.ChatID,
+		&existing.Exchange,
+		&existing.Symbol,
+		&existing.Side,
+		&existing.MarketType,
+		&existing.Source,
+		&existing.Size,
+		&existing.EntryPrice,
+		&existing.StopLoss,
+		&existing.TakeProfit,
+		&existing.LastPrice,
+		&existing.UnrealizedPnL,
+		&protectionRaw,
+		&openedRaw,
+		&updatedRaw,
+	); err != nil {
+		return fmt.Errorf("load position for protection update failed: %w", err)
+	}
+	existing.ProtectionUpdatedAt = parseLifecycleTimestamp(protectionRaw)
+	existing.OpenedAt = parseLifecycleTimestamp(openedRaw)
+	existing.UpdatedAt = parseLifecycleTimestamp(updatedRaw)
+	if strings.TrimSpace(existing.OrderID) == "" {
+		existing.OrderID = positionID
+	}
+	if strings.TrimSpace(existing.MarketType) == "" {
+		existing.MarketType = "futures"
+	}
+	if existing.OpenedAt.IsZero() {
+		existing.OpenedAt = updatedAt
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO trading_positions (
+			position_id, order_id, chat_id, exchange, symbol, side, market_type,
+			size, entry_price, stop_loss, take_profit, last_price, unrealized_pnl,
+			protection_updated_at, status, source, opened_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17)
+		ON CONFLICT(position_id) DO UPDATE SET
+			stop_loss = EXCLUDED.stop_loss,
+			take_profit = EXCLUDED.take_profit,
+			last_price = EXCLUDED.last_price,
+			unrealized_pnl = EXCLUDED.unrealized_pnl,
+			protection_updated_at = EXCLUDED.protection_updated_at,
+			updated_at = EXCLUDED.updated_at
+	`, positionID, existing.OrderID, existing.ChatID, existing.Exchange, existing.Symbol, existing.Side, existing.MarketType,
+		existing.Size, existing.EntryPrice, stopLoss, takeProfit, lastPrice, unrealizedPnL, updatedAt.UTC(),
+		normalizeLifecycleSource(existing.Source), existing.OpenedAt.UTC(), updatedAt.UTC()); err != nil {
+		return fmt.Errorf("upsert position protection failed: %w", err)
 	}
 	return nil
 }

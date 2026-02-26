@@ -66,6 +66,11 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 3, config.FailureBudget)
 	assert.Equal(t, 15*time.Minute, config.FailureWindow)
 	assert.Equal(t, 2, config.StructuredRetries)
+	assert.True(t, config.PreTradeGate)
+	assert.Equal(t, 0.0, config.MinExpectancyEdge)
+	assert.Equal(t, 8, config.MinExpectancyN)
+	assert.Equal(t, 85.0, config.RegimeHighBand)
+	assert.Equal(t, 15.0, config.RegimeLowBand)
 }
 
 func TestAIScalpingConfig_Custom(t *testing.T) {
@@ -112,6 +117,11 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET", "3")
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_COOLDOWN_SECONDS", "900")
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS", "3600")
+	t.Setenv("NEURATRADE_SCALPING_PRETRADE_GATE", "true")
+	t.Setenv("NEURATRADE_SCALPING_MIN_EXPECTANCY_EDGE", "0.03")
+	t.Setenv("NEURATRADE_SCALPING_MIN_EXPECTANCY_SAMPLES", "12")
+	t.Setenv("NEURATRADE_SCALPING_REGIME_HIGH_BAND", "88")
+	t.Setenv("NEURATRADE_SCALPING_REGIME_LOW_BAND", "12")
 
 	cfg := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
 	assert.Equal(t, "binance", cfg.Exchange)
@@ -132,6 +142,11 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 3, cfg.LossStreakBudget)
 	assert.Equal(t, 15*time.Minute, cfg.LossCooldown)
 	assert.Equal(t, 1*time.Hour, cfg.LossWindow)
+	assert.True(t, cfg.PreTradeGate)
+	assert.Equal(t, 0.03, cfg.MinExpectancyEdge)
+	assert.Equal(t, 12, cfg.MinExpectancyN)
+	assert.Equal(t, 88.0, cfg.RegimeHighBand)
+	assert.Equal(t, 12.0, cfg.RegimeLowBand)
 }
 
 func TestAIMarketSignal(t *testing.T) {
@@ -252,4 +267,75 @@ func TestAIScalpingService_SymbolLossCooldown(t *testing.T) {
 	svc.ReportTradeOutcome("ADA/USDT", decimal.NewFromFloat(0.05))
 	err = svc.enforceSymbolGuard("ADA/USDT")
 	assert.NoError(t, err)
+}
+
+func TestAIScalpingService_PreTradeGate_RegimeBlock(t *testing.T) {
+	svc := &AIScalpingService{
+		config: DefaultAIScalpingConfig(),
+	}
+	decision := &AITradingDecision{
+		Action:     "buy",
+		Symbol:     "ADA/USDT",
+		Confidence: 0.72,
+	}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "ADA/USDT",
+			Price:              1.0,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: -0.31,
+			RangePosition24h:   94,
+		},
+	}
+
+	result := svc.evaluatePreTradeGate(context.Background(), decision, signals)
+	assert.False(t, result.Allowed)
+	assert.Contains(t, result.Reason, "late-range buy rejected")
+}
+
+func TestAIScalpingService_PreTradeGate_ExpectancyBlock(t *testing.T) {
+	original := globalScalpingPerformance
+	globalScalpingPerformance = NewScalpingPerformance()
+	t.Cleanup(func() {
+		globalScalpingPerformance = original
+	})
+
+	for i := 0; i < 7; i++ {
+		globalScalpingPerformance.RecordTrade(TradeRecord{
+			Timestamp:  time.Now().UTC(),
+			Symbol:     "ADA/USDT",
+			Side:       "buy",
+			PnL:        decimal.NewFromFloat(-0.2),
+			Profitable: false,
+		})
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			PreTradeGate:      true,
+			MinExpectancyEdge: 0,
+			MinExpectancyN:    5,
+			RegimeHighBand:    85,
+			RegimeLowBand:     15,
+		},
+	}
+	decision := &AITradingDecision{
+		Action:     "buy",
+		Symbol:     "ADA/USDT",
+		Confidence: 0.75,
+	}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "ADA/USDT",
+			Price:              1.0,
+			BidAskSpread:       0.03,
+			OrderBookImbalance: 0.32,
+			RangePosition24h:   55,
+		},
+	}
+
+	result := svc.evaluatePreTradeGate(context.Background(), decision, signals)
+	assert.False(t, result.Allowed)
+	assert.Contains(t, result.Reason, "expectancy gate")
+	assert.GreaterOrEqual(t, result.SampleSize, 5)
 }

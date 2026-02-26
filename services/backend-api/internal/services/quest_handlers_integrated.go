@@ -35,6 +35,7 @@ type IntegratedQuestHandlers struct {
 	aiScalpingService   *AIScalpingService
 	tradeMemory         *TradeMemory
 	lifecycleStore      *TradingLifecycleStore
+	protectionManager   *DynamicProtectionManager
 	db                  *sql.DB // Database for user settings
 }
 
@@ -81,6 +82,10 @@ func (h *IntegratedQuestHandlers) SetTradeMemory(memory *TradeMemory) {
 
 func (h *IntegratedQuestHandlers) SetLifecycleStore(store *TradingLifecycleStore) {
 	h.lifecycleStore = store
+}
+
+func (h *IntegratedQuestHandlers) SetDynamicProtectionManager(manager *DynamicProtectionManager) {
+	h.protectionManager = manager
 }
 
 func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
@@ -336,6 +341,25 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		h.aiScalpingService.SetExchange(userExchange)
 	}
 	h.bootstrapLifecycleState(ctx, quest, userExchange, chatID)
+	h.ensureDynamicProtectionManager()
+	if h.protectionManager != nil {
+		protectionSummary, protectErr := h.protectionManager.ReconcileOpenPositions(ctx, chatID, userExchange)
+		if protectErr != nil {
+			log.Printf("[SCALPING] Dynamic protection reconciliation failed: %v", protectErr)
+			quest.Checkpoint["protection_reconcile_error"] = protectErr.Error()
+		} else {
+			quest.Checkpoint["protection_positions_evaluated"] = protectionSummary.PositionsEvaluated
+			quest.Checkpoint["protection_updates"] = protectionSummary.ProtectionsUpdated
+			quest.Checkpoint["protection_errors"] = protectionSummary.Errors
+			if protectionSummary.ProtectionsUpdated > 0 {
+				log.Printf(
+					"[SCALPING] Dynamic protection updates applied: positions=%d updates=%d",
+					protectionSummary.PositionsEvaluated,
+					protectionSummary.ProtectionsUpdated,
+				)
+			}
+		}
+	}
 
 	// Ingest closed-order outcomes from the previous cycle so adaptive risk controls
 	// have fresher win/loss data before the next decision.
@@ -482,6 +506,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			MarketType: "futures",
 			Amount:     decimal.NewFromFloat(portfolio.USDTBalance * decision.SizePercent / 100),
 			EntryPrice: entryPrice,
+			StopLoss:   decimalValueOrZero(decision.StopLoss),
+			TakeProfit: decimalValueOrZero(decision.TakeProfit),
 			Source:     "autonomous_scalping",
 			OpenedAt:   time.Now().UTC(),
 		}); err != nil {
@@ -1133,6 +1159,26 @@ func parseEpochTimestamp(value int64) time.Time {
 		return time.UnixMilli(value).UTC()
 	}
 	return time.Unix(value, 0).UTC()
+}
+
+func (h *IntegratedQuestHandlers) ensureDynamicProtectionManager() {
+	if h.protectionManager != nil || h.lifecycleStore == nil {
+		return
+	}
+	tickerSource, ok := h.ccxtService.(interface {
+		FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
+	})
+	if !ok {
+		return
+	}
+	h.protectionManager = NewDynamicProtectionManager(DefaultDynamicProtectionConfig(), h.lifecycleStore, tickerSource, log.Default())
+}
+
+func decimalValueOrZero(value *decimal.Decimal) decimal.Decimal {
+	if value == nil {
+		return decimal.Zero
+	}
+	return *value
 }
 
 func (h *IntegratedQuestHandlers) bootstrapLifecycleState(ctx context.Context, quest *Quest, exchange, chatID string) {
