@@ -35,6 +35,7 @@ type TradeRecord struct {
 	Profitable   bool
 	ExitPrice    decimal.Decimal
 	EntryPrice   decimal.Decimal
+	Notional     decimal.Decimal
 	HoldDuration time.Duration
 }
 
@@ -120,7 +121,13 @@ func (sp *ScalpingPerformance) GetReturnSeries(limit int) []float64 {
 	start := len(sp.history) - limit
 	series := make([]float64, 0, limit)
 	for _, trade := range sp.history[start:] {
-		notional := trade.EntryPrice.Abs().Mul(trade.Amount.Abs())
+		notional := trade.Notional.Abs()
+		if notional.LessThanOrEqual(decimal.Zero) {
+			notional = trade.EntryPrice.Abs().Mul(trade.Amount.Abs())
+		}
+		if notional.LessThanOrEqual(decimal.Zero) {
+			notional = trade.ExitPrice.Abs().Mul(trade.Amount.Abs())
+		}
 		if notional.LessThanOrEqual(decimal.Zero) {
 			continue
 		}
@@ -180,6 +187,10 @@ func GetScalpingPerformance() *ScalpingPerformance {
 }
 
 func RecordScalpingTrade(ctx context.Context, symbol, side string, amount, entryPrice, exitPrice decimal.Decimal, profitable bool) {
+	notional := entryPrice.Abs().Mul(amount.Abs())
+	if notional.LessThanOrEqual(decimal.Zero) {
+		notional = exitPrice.Abs().Mul(amount.Abs())
+	}
 	record := TradeRecord{
 		Timestamp:    time.Now(),
 		Symbol:       symbol,
@@ -187,6 +198,7 @@ func RecordScalpingTrade(ctx context.Context, symbol, side string, amount, entry
 		Amount:       amount,
 		EntryPrice:   entryPrice,
 		ExitPrice:    exitPrice,
+		Notional:     notional,
 		Profitable:   profitable,
 		HoldDuration: time.Minute * 5,
 	}

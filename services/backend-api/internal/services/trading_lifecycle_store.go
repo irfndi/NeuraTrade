@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -474,6 +475,14 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 	exchange = strings.TrimSpace(exchange)
 	now := time.Now().UTC()
 	reconcileSource := normalizeLifecycleSource(source)
+	openOrderIDs := make(map[string]struct{}, len(snapshot.OpenOrders))
+	for _, order := range snapshot.OpenOrders {
+		orderID := strings.TrimSpace(order.ID)
+		if orderID == "" {
+			continue
+		}
+		openOrderIDs[orderID] = struct{}{}
+	}
 
 	if snapshot.OrdersFresh {
 		for _, order := range snapshot.OpenOrders {
@@ -506,15 +515,6 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 			return summary, fmt.Errorf("query open trading_orders failed: %w", err)
 		}
 		defer rows.Close()
-
-		openOrderIDs := make(map[string]struct{}, len(snapshot.OpenOrders))
-		for _, order := range snapshot.OpenOrders {
-			orderID := strings.TrimSpace(order.ID)
-			if orderID == "" {
-				continue
-			}
-			openOrderIDs[orderID] = struct{}{}
-		}
 
 		for rows.Next() {
 			var orderID string
@@ -562,6 +562,7 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 			LastPrice     decimal.Decimal
 			UnrealizedPnL decimal.Decimal
 			MarketType    string
+			Source        string
 		}
 
 		posQuery := `
@@ -574,7 +575,8 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 				entry_price,
 				COALESCE(last_price, 0),
 				COALESCE(unrealized_pnl, 0),
-				COALESCE(market_type, 'futures')
+				COALESCE(market_type, 'futures'),
+				COALESCE(source, '')
 			FROM trading_positions
 			WHERE LOWER(status) = 'open'
 		`
@@ -607,6 +609,7 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 				&p.LastPrice,
 				&p.UnrealizedPnL,
 				&p.MarketType,
+				&p.Source,
 			); err != nil {
 				return summary, fmt.Errorf("scan open trading_position failed: %w", err)
 			}
@@ -616,19 +619,57 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 			return summary, fmt.Errorf("iterate open trading_positions failed: %w", err)
 		}
 
-		exchangePositionKeys := make(map[string]struct{}, len(snapshot.Positions))
+		remainingByKey := make(map[string]decimal.Decimal, len(snapshot.Positions))
 		for _, pos := range snapshot.Positions {
 			if strings.TrimSpace(pos.Symbol) == "" || pos.Size.IsZero() {
 				continue
 			}
 			key := normalizeSymbolForComparison(pos.Symbol) + ":" + normalizeLifecycleSide(pos.Side)
-			exchangePositionKeys[key] = struct{}{}
+			remainingByKey[key] = remainingByKey[key].Add(pos.Size.Abs())
 		}
 
+		sort.SliceStable(localOpen, func(i, j int) bool {
+			leftSource := strings.TrimSpace(localOpen[i].Source)
+			rightSource := strings.TrimSpace(localOpen[j].Source)
+			leftBootstrap := strings.EqualFold(leftSource, "bootstrap_positions")
+			rightBootstrap := strings.EqualFold(rightSource, "bootstrap_positions")
+			if leftBootstrap != rightBootstrap {
+				return leftBootstrap
+			}
+			leftSync := strings.HasPrefix(strings.TrimSpace(localOpen[i].PositionID), "sync-")
+			rightSync := strings.HasPrefix(strings.TrimSpace(localOpen[j].PositionID), "sync-")
+			if leftSync != rightSync {
+				return leftSync
+			}
+			return strings.TrimSpace(localOpen[i].PositionID) < strings.TrimSpace(localOpen[j].PositionID)
+		})
+
 		for _, localPos := range localOpen {
+			localOrderID := strings.TrimSpace(localPos.OrderID)
+			if localOrderID != "" {
+				// When open-order snapshots are stale/unavailable, avoid force-closing rows tied to orders.
+				if !snapshot.OrdersFresh {
+					continue
+				}
+				if _, ok := openOrderIDs[localOrderID]; ok {
+					continue
+				}
+			}
+
 			key := normalizeSymbolForComparison(localPos.Symbol) + ":" + normalizeLifecycleSide(localPos.Side)
-			if _, ok := exchangePositionKeys[key]; ok {
-				continue
+			remaining := remainingByKey[key]
+			localSize := localPos.Size.Abs()
+			if remaining.GreaterThan(decimal.Zero) {
+				if localSize.GreaterThan(decimal.Zero) && remaining.GreaterThanOrEqual(localSize) {
+					remainingByKey[key] = remaining.Sub(localSize)
+					continue
+				}
+				// Preserve the snapshot-backed aggregate row for partial-size leftovers.
+				if strings.EqualFold(strings.TrimSpace(localPos.Source), "bootstrap_positions") ||
+					strings.HasPrefix(strings.TrimSpace(localPos.PositionID), "sync-") {
+					remainingByKey[key] = decimal.Zero
+					continue
+				}
 			}
 
 			filled := localPos.Size

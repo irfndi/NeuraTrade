@@ -111,11 +111,18 @@ EOF
 
 install_telegram_launcher() {
   local output_bin="$1"
+  local repo_telegram_service="$REPO_ROOT/services/telegram-service"
   cat >"$output_bin" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 export PATH="\$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH"
-cd "$REPO_ROOT/services/telegram-service"
+telegram_service_dir="\${NEURATRADE_TELEGRAM_SERVICE_DIR:-$repo_telegram_service}"
+if [[ ! -d "\$telegram_service_dir" ]]; then
+  echo "[telegram-service][error] service directory not found: \$telegram_service_dir" >&2
+  echo "[telegram-service][error] set NEURATRADE_TELEGRAM_SERVICE_DIR to a valid telegram-service directory or reinstall from repository root" >&2
+  exit 1
+fi
+cd "\$telegram_service_dir"
 exec bun run index.ts "\$@"
 EOF
   chmod 0755 "$output_bin"

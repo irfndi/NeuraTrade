@@ -380,6 +380,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 
 	usdtBalance := 0.0
+	usingFallbackBalance := false
 	var balanceSnapshot *ccxt.BalanceResponse
 	var err error
 
@@ -409,6 +410,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			if usdtBalance <= 0 {
 				log.Printf("[SCALPING] USDT balance is zero, using minimum balance for trading")
 				usdtBalance = 100.0 // Minimum balance
+				usingFallbackBalance = true
 				quest.Checkpoint["fallback_balance"] = true
 			}
 		}
@@ -438,26 +440,30 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			}
 		}
 
-		deriskClosed, exposureRatio, guardErr := h.autoDeriskIfExposureTooHigh(ctx, quest, chatID, userExchange, usdtBalance)
-		if guardErr != nil {
-			log.Printf("[SCALPING] Exposure guard check failed: %v", guardErr)
-			quest.Checkpoint["exposure_guard_error"] = guardErr.Error()
+		if usingFallbackBalance {
+			quest.Checkpoint["exposure_guard_skipped"] = "fallback_balance"
 		} else {
-			quest.Checkpoint["exposure_ratio"] = fmt.Sprintf("%.4f", exposureRatio)
-			if deriskClosed > 0 {
-				quest.Checkpoint["status"] = "risk_reduction"
-				quest.Checkpoint["risk_reduction_closed_positions"] = deriskClosed
-				h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
-					DecisionType: "risk_reduction",
-					Summary:      "Exposure guard closed positions before scanning new opportunities",
-					Confidence:   1,
-					Reasons: []string{
-						fmt.Sprintf("Exposure ratio %.2f exceeded hard limit 1.00", exposureRatio),
-						fmt.Sprintf("Placed %d close order(s) to reduce exposure", deriskClosed),
-					},
-					Action: "hold",
-				})
-				return nil
+			deriskClosed, exposureRatio, guardErr := h.autoDeriskIfExposureTooHigh(ctx, quest, chatID, userExchange, usdtBalance)
+			if guardErr != nil {
+				log.Printf("[SCALPING] Exposure guard check failed: %v", guardErr)
+				quest.Checkpoint["exposure_guard_error"] = guardErr.Error()
+			} else {
+				quest.Checkpoint["exposure_ratio"] = fmt.Sprintf("%.4f", exposureRatio)
+				if deriskClosed > 0 {
+					quest.Checkpoint["status"] = "risk_reduction"
+					quest.Checkpoint["risk_reduction_closed_positions"] = deriskClosed
+					h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+						DecisionType: "risk_reduction",
+						Summary:      "Exposure guard closed positions before scanning new opportunities",
+						Confidence:   1,
+						Reasons: []string{
+							fmt.Sprintf("Exposure ratio %.2f exceeded hard limit 1.00", exposureRatio),
+							fmt.Sprintf("Placed %d close order(s) to reduce exposure", deriskClosed),
+						},
+						Action: "hold",
+					})
+					return nil
+				}
 			}
 		}
 	}
@@ -1387,6 +1393,28 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		if p, ok := decimalFromOrder(order, "priceAvg", "avgPrice", "price", "fillPrice"); ok {
 			exitPrice = p
 		}
+		filled := decimal.Zero
+		if v, ok := decimalFromOrder(order, "filled", "filledAmount", "baseVolume", "qty", "size"); ok {
+			filled = v.Abs()
+		}
+		entryPrice := decimal.Zero
+		if v, ok := decimalFromOrder(order, "avgOpenPrice", "openPriceAvg", "openAvgPrice", "openPrice", "entryPrice", "priceOpen"); ok {
+			entryPrice = v
+		}
+		notional := decimal.Zero
+		if v, ok := decimalFromOrder(order, "notional", "cost", "quoteVolume", "tradeAmount"); ok {
+			notional = v.Abs()
+		}
+		if notional.LessThanOrEqual(decimal.Zero) && filled.GreaterThan(decimal.Zero) {
+			if entryPrice.GreaterThan(decimal.Zero) {
+				notional = entryPrice.Abs().Mul(filled)
+			} else if exitPrice.GreaterThan(decimal.Zero) {
+				notional = exitPrice.Abs().Mul(filled)
+			}
+		}
+		if entryPrice.LessThanOrEqual(decimal.Zero) && filled.GreaterThan(decimal.Zero) && notional.GreaterThan(decimal.Zero) {
+			entryPrice = notional.Div(filled)
+		}
 
 		profitable := pnl.GreaterThan(decimal.Zero)
 		if profitable {
@@ -1405,9 +1433,12 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			Timestamp:  time.Now().UTC(),
 			Symbol:     symbol,
 			Side:       side,
+			Amount:     filled,
 			PnL:        pnl,
 			Profitable: profitable,
 			ExitPrice:  exitPrice,
+			EntryPrice: entryPrice,
+			Notional:   notional,
 		})
 
 		if h.tradeMemory != nil {
@@ -1426,10 +1457,6 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		updatedProcessed = true
 
 		if h.lifecycleStore != nil {
-			filled := decimal.Zero
-			if v, ok := decimalFromOrder(order, "filled", "filledAmount", "baseVolume", "qty", "size"); ok {
-				filled = v
-			}
 			fees := decimal.Zero
 			if v, ok := decimalFromOrder(order, "fees", "fee", "totalFee", "commission"); ok {
 				fees = v
@@ -1443,6 +1470,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 				Side:        side,
 				MarketType:  "futures",
 				Filled:      filled,
+				EntryPrice:  entryPrice,
 				ExitPrice:   exitPrice,
 				RealizedPnL: pnl,
 				Fees:        fees,

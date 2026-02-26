@@ -73,16 +73,21 @@ func stdDevFloat64(values []float64, mean float64) float64 {
 }
 
 func downsideStdDevFloat64(values []float64) float64 {
-	negatives := make([]float64, 0, len(values))
-	for _, v := range values {
-		if v < 0 {
-			negatives = append(negatives, v)
-		}
-	}
-	if len(negatives) < 2 {
+	if len(values) == 0 {
 		return 0
 	}
-	return stdDevFloat64(negatives, meanFloat64(negatives))
+	downsideSquares := 0.0
+	downsideCount := 0
+	for _, v := range values {
+		if v < 0 {
+			downsideSquares += v * v
+			downsideCount++
+		}
+	}
+	if downsideCount == 0 {
+		return 0
+	}
+	return math.Sqrt(downsideSquares / float64(downsideCount))
 }
 
 func maxDrawdownFromReturns(returns []float64) float64 {

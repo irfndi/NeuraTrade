@@ -386,3 +386,119 @@ func TestTradingLifecycleStore_ReconcileExchangeSnapshot_DoesNotCloseOnStaleFetc
 	require.NoError(t, err)
 	assert.Equal(t, "open", posStatus)
 }
+
+func TestTradingLifecycleStore_ReconcileExchangeSnapshot_KeepsRowsBackedByOpenOrders(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-open-order.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-pending",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "XRP/USDT",
+		Side:       "buy",
+		OrderType:  "limit",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(100),
+		EntryPrice: decimal.NewFromFloat(0.6),
+		OpenedAt:   time.Now().UTC().Add(-5 * time.Minute),
+	}))
+
+	summary, err := store.ReconcileExchangeSnapshot(ctx, "chat-1", "bitget", LifecycleExchangeSnapshot{
+		OpenOrders: []ccxt.Order{
+			{
+				ID:        "ord-pending",
+				Symbol:    "XRP/USDT",
+				Side:      "buy",
+				Type:      "limit",
+				Amount:    decimal.NewFromFloat(100),
+				Price:     decimal.NewFromFloat(0.6),
+				CreatedAt: time.Now().UTC().Add(-4 * time.Minute),
+			},
+		},
+		OrdersFresh:    true,
+		PositionsFresh: true,
+	}, "bootstrap_reconciliation")
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.OrdersSynced)
+	assert.Equal(t, 0, summary.OrdersCancelled)
+	assert.Equal(t, 0, summary.PositionsClosed)
+
+	var posStatus string
+	err = sqliteDB.QueryRow(ctx, `SELECT LOWER(status) FROM trading_positions WHERE order_id = $1`, "ord-pending").Scan(&posStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "open", posStatus)
+}
+
+func TestTradingLifecycleStore_ReconcileExchangeSnapshot_ClosesExcessRowsBySize(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-size.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-a",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(50000),
+		OpenedAt:   time.Now().UTC().Add(-30 * time.Minute),
+	}))
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-b",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(51000),
+		OpenedAt:   time.Now().UTC().Add(-25 * time.Minute),
+	}))
+
+	summary, err := store.ReconcileExchangeSnapshot(ctx, "chat-1", "bitget", LifecycleExchangeSnapshot{
+		Positions: []ccxt.Position{
+			{
+				Symbol:        "BTC/USDT",
+				Side:          "long",
+				Size:          decimal.NewFromFloat(1),
+				EntryPrice:    decimal.NewFromFloat(50500),
+				MarkPrice:     decimal.NewFromFloat(50600),
+				UnrealizedPnl: decimal.NewFromFloat(100),
+				Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+			},
+		},
+		OrdersFresh:    true,
+		PositionsFresh: true,
+	}, "bootstrap_reconciliation")
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.PositionsSynced)
+	assert.GreaterOrEqual(t, summary.PositionsClosed, 1)
+
+	var closedCount int
+	err = sqliteDB.QueryRow(
+		ctx,
+		`SELECT COUNT(*) FROM trading_positions WHERE order_id IN ($1, $2) AND LOWER(status) = 'closed'`,
+		"ord-a",
+		"ord-b",
+	).Scan(&closedCount)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, closedCount, 1)
+}
