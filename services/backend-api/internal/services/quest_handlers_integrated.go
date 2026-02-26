@@ -2511,14 +2511,96 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 	})
 	if hasBypass {
 		if _, err := execWithBypass.PlaceRiskReductionOrderWithDetails(ctx, details); err != nil {
+			if isExchangePositionMissingError(err) {
+				if closeErr := h.reconcileMissingManagedPosition(ctx, position, source, err); closeErr != nil {
+					log.Printf("[SCALPING] Failed to close stale lifecycle row for %s: %v", position.PositionID, closeErr)
+				}
+				return 0, nil
+			}
 			return 0, err
 		}
 		return 1, nil
 	}
 	if _, err := h.orderExecutor.PlaceOrderWithDetails(ctx, details); err != nil {
+		if isExchangePositionMissingError(err) {
+			if closeErr := h.reconcileMissingManagedPosition(ctx, position, source, err); closeErr != nil {
+				log.Printf("[SCALPING] Failed to close stale lifecycle row for %s: %v", position.PositionID, closeErr)
+			}
+			return 0, nil
+		}
 		return 0, err
 	}
 	return 1, nil
+}
+
+func isExchangePositionMissingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "no position to close") ||
+		strings.Contains(lower, "insufficient position") ||
+		strings.Contains(lower, "code: 22002") ||
+		strings.Contains(lower, "code: 43023")
+}
+
+func (h *IntegratedQuestHandlers) reconcileMissingManagedPosition(
+	ctx context.Context,
+	position ManagedOpenPosition,
+	source string,
+	cause error,
+) error {
+	if h.lifecycleStore == nil {
+		return nil
+	}
+
+	orderID := strings.TrimSpace(position.OrderID)
+	if orderID == "" {
+		orderID = strings.TrimSpace(position.PositionID)
+	}
+	if orderID == "" {
+		return fmt.Errorf("cannot reconcile stale lifecycle position without order identifier")
+	}
+
+	exitPrice := position.LastPrice
+	if exitPrice.LessThanOrEqual(decimal.Zero) {
+		exitPrice = position.EntryPrice
+	}
+	if exitPrice.LessThanOrEqual(decimal.Zero) {
+		exitPrice = decimal.Zero
+	}
+
+	closeSource := strings.TrimSpace(source)
+	if closeSource == "" {
+		closeSource = "risk_reconcile"
+	}
+	closeSource = closeSource + "_exchange_missing"
+
+	if err := h.lifecycleStore.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     orderID,
+		ChatID:      position.ChatID,
+		Exchange:    position.Exchange,
+		Symbol:      position.Symbol,
+		Side:        position.Side,
+		MarketType:  position.MarketType,
+		Filled:      position.Size.Abs(),
+		EntryPrice:  position.EntryPrice,
+		ExitPrice:   exitPrice,
+		RealizedPnL: decimal.Zero,
+		Source:      closeSource,
+		ClosedAt:    time.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+
+	log.Printf(
+		"[SCALPING] Reconciled stale managed position %s (%s %s) as closed after exchange reported missing position: %v",
+		position.PositionID,
+		position.Exchange,
+		position.Symbol,
+		cause,
+	)
+	return nil
 }
 
 func checkpointInt(v interface{}) int {
@@ -2594,6 +2676,7 @@ func isRuntimeHoldReason(reason string) bool {
 	}
 	return strings.Contains(lower, "execution unavailable") ||
 		strings.Contains(lower, "model response parse fallback") ||
+		strings.Contains(lower, "invalid model decision contract") ||
 		strings.Contains(lower, "failed to parse ai decision") ||
 		strings.Contains(lower, "llm completion failed") ||
 		strings.Contains(lower, "runtime error")
@@ -2607,6 +2690,7 @@ func classifyAIRuntimeReason(reason string, fallback string) string {
 		strings.Contains(lower, "deadline exceeded"):
 		return aiReasonLLMTimeout
 	case strings.Contains(lower, "model response parse fallback"),
+		strings.Contains(lower, "invalid model decision contract"),
 		strings.Contains(lower, "failed to parse ai decision"),
 		strings.Contains(lower, "invalid character"),
 		strings.Contains(lower, "json"):

@@ -140,6 +140,13 @@ func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, c
 			if err := m.protection.SyncPositionProtection(ctx, pos.Exchange, pos, newStop, newTake); err != nil {
 				if errors.Is(err, ErrProtectionSyncUnsupported) {
 					m.logger.Printf("[PROTECTION] Exchange-side TP/SL sync unsupported for %s, persisting lifecycle-only update", pos.PositionID)
+				} else if isPositionMissingProtectionError(err) {
+					if closeErr := m.reconcileMissingPosition(ctx, pos, err); closeErr != nil {
+						summary.Errors++
+						m.logger.Printf("[PROTECTION] Failed to reconcile stale lifecycle position %s: %v", pos.PositionID, closeErr)
+						continue
+					}
+					continue
 				} else {
 					summary.Errors++
 					m.logger.Printf("[PROTECTION] Failed to sync exchange-side TP/SL for %s: %v", pos.PositionID, err)
@@ -295,4 +302,64 @@ func minDecimal(values ...decimal.Decimal) decimal.Decimal {
 		}
 	}
 	return best
+}
+
+func isPositionMissingProtectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "no position to close") ||
+		strings.Contains(lower, "insufficient position") ||
+		strings.Contains(lower, "code: 22002") ||
+		strings.Contains(lower, "code: 43023")
+}
+
+func (m *DynamicProtectionManager) reconcileMissingPosition(
+	ctx context.Context,
+	pos ManagedOpenPosition,
+	cause error,
+) error {
+	if m.lifecycle == nil {
+		return nil
+	}
+
+	orderID := strings.TrimSpace(pos.OrderID)
+	if orderID == "" {
+		orderID = strings.TrimSpace(pos.PositionID)
+	}
+	if orderID == "" {
+		return fmt.Errorf("cannot reconcile missing position without order identifier")
+	}
+
+	exitPrice := pos.LastPrice
+	if exitPrice.LessThanOrEqual(decimal.Zero) {
+		exitPrice = pos.EntryPrice
+	}
+
+	if err := m.lifecycle.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     orderID,
+		ChatID:      pos.ChatID,
+		Exchange:    pos.Exchange,
+		Symbol:      pos.Symbol,
+		Side:        pos.Side,
+		MarketType:  pos.MarketType,
+		Filled:      pos.Size.Abs(),
+		EntryPrice:  pos.EntryPrice,
+		ExitPrice:   exitPrice,
+		RealizedPnL: decimal.Zero,
+		Source:      "protection_exchange_missing",
+		ClosedAt:    time.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+
+	m.logger.Printf(
+		"[PROTECTION] Reconciled stale lifecycle position %s (%s %s) as closed after exchange reported missing position: %v",
+		pos.PositionID,
+		pos.Exchange,
+		pos.Symbol,
+		cause,
+	)
+	return nil
 }

@@ -643,14 +643,21 @@ func (e *QuestEngine) tick() {
 			}
 
 			age := now.Sub(startedAt)
+			// Never clear the in-progress marker before the distributed lock can expire.
+			// This prevents stale-reset -> immediate lock contention loops.
 			staleAfter := e.runtimeBudget.StaleTimeout
+			if e.runtimeBudget.LockTTL > staleAfter {
+				staleAfter = e.runtimeBudget.LockTTL
+			}
 			if age > staleAfter {
 				log.Printf(
-					"[QUEST] Quest %s (%s) execution stale after %s (limit=%s), resetting in-progress marker",
+					"[QUEST] Quest %s (%s) execution stale after %s (reset_after=%s stale=%s lock_ttl=%s), resetting in-progress marker",
 					quest.ID,
 					quest.Name,
 					age.Round(time.Second),
 					staleAfter.Round(time.Second),
+					e.runtimeBudget.StaleTimeout.Round(time.Second),
+					e.runtimeBudget.LockTTL.Round(time.Second),
 				)
 				delete(e.executing, quest.ID)
 				delete(e.executionStarts, quest.ID)
@@ -693,7 +700,11 @@ func (e *QuestEngine) tick() {
 }
 
 func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
-	minInterval := cadenceIntervalForMode("normal")
+	mode := strings.TrimSpace(e.cadenceMode)
+	if mode == "" {
+		mode = "normal"
+	}
+	minInterval := cadenceIntervalForMode(mode)
 
 	if quest.LastExecutedAt != nil && now.Sub(*quest.LastExecutedAt) < minInterval {
 		return false

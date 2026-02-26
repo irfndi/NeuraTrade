@@ -553,6 +553,17 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	log.Printf("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
 
 	if err := s.validateDecision(decision, signals); err != nil {
+		if isDecisionContractValidationError(decision, err) {
+			runtimeErr := fmt.Errorf("invalid model decision contract: %w", err)
+			s.updateRuntimeState(
+				reasonCategoryLLMParseContract,
+				runtimeErr,
+				false,
+				"",
+				s.getLatestFailoverAttemptInfo(),
+			)
+			return runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), nil
+		}
 		return strategyHoldDecision(err.Error(), decision.Confidence), nil
 	}
 
@@ -1747,6 +1758,55 @@ func strategyHoldDecision(reason string, confidence float64) *AITradingDecision 
 	}
 }
 
+func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecision {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "runtime-degraded decision fallback"
+	}
+	category = strings.TrimSpace(category)
+	if category == "" {
+		category = reasonCategoryExecutionUnavailable
+	}
+	return &AITradingDecision{
+		Action:          "hold",
+		Confidence:      0,
+		Reasoning:       reason,
+		ReasonCategory:  category,
+		ConfidenceKnown: false,
+		SizePercent:     0,
+	}
+}
+
+func isDecisionContractValidationError(decision *AITradingDecision, err error) bool {
+	if err == nil {
+		return false
+	}
+	if decision == nil {
+		return true
+	}
+	action := strings.ToLower(strings.TrimSpace(decision.Action))
+	if action == "hold" {
+		return false
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(lower, "decision is nil"),
+		strings.Contains(lower, "unsupported action"),
+		strings.Contains(lower, "confidence out of range"),
+		strings.Contains(lower, "symbol is required for action"),
+		strings.Contains(lower, "size_pct must be > 0"),
+		strings.Contains(lower, "symbol ") && strings.Contains(lower, "not in current analyzed universe"),
+		strings.Contains(lower, "invalid market price"),
+		strings.Contains(lower, "stop_loss and take_profit must be positive"),
+		strings.Contains(lower, "buy decision requires stop_loss < price < take_profit"),
+		strings.Contains(lower, "sell decision requires stop_loss > price > take_profit"):
+		return true
+	default:
+		return false
+	}
+}
+
 func classifyReasonCategory(err error, content string) string {
 	msg := ""
 	if err != nil {
@@ -1762,6 +1822,7 @@ func classifyReasonCategory(err error, content string) string {
 		return reasonCategoryLLMTimeout
 	case strings.Contains(msg, "failed to parse ai decision"),
 		strings.Contains(msg, "model response parse fallback"),
+		strings.Contains(msg, "invalid model decision contract"),
 		strings.Contains(msg, "invalid character"),
 		strings.Contains(msg, "json"):
 		return reasonCategoryLLMParseContract
