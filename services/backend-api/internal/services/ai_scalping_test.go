@@ -54,7 +54,7 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, "bitget", config.Exchange)
 	assert.Equal(t, 5, config.Leverage)
 	assert.Equal(t, 5.0, config.MaxCapitalPct)
-	assert.Equal(t, 0.45, config.MinConfidence)
+	assert.Equal(t, 0.65, config.MinConfidence)
 	assert.Equal(t, 3, config.MaxIterations)
 	assert.True(t, config.AutoExecute)
 	assert.False(t, config.AllowSpotFallback)
