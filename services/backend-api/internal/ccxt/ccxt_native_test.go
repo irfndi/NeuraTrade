@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/shopspring/decimal"
 )
 
 type roundTripFunc func(req *http.Request) (*http.Response, error)
@@ -111,6 +112,166 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 	}
 	if balance.Total["USDT"] != 12.75 {
 		t.Fatalf("unexpected aggregated USDT balance: got %.8f", balance.Total["USDT"])
+	}
+}
+
+func TestNativeCCXTService_FetchOpenOrders_Bitget(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.credentials["bitget"] = config.ExchangeCredentials{
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+
+	var gotPath string
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotPath = req.URL.Path + "?" + req.URL.RawQuery
+
+			if req.Header.Get("ACCESS-KEY") != "bitget-key" {
+				t.Fatalf("missing ACCESS-KEY header")
+			}
+			sign := req.Header.Get("ACCESS-SIGN")
+			if sign == "" {
+				t.Fatalf("missing ACCESS-SIGN header")
+			}
+			if ok, _ := regexp.MatchString(`^[A-Za-z0-9+/]+=*$`, sign); !ok {
+				t.Fatalf("ACCESS-SIGN is not base64 encoded: %q", sign)
+			}
+			if req.Header.Get("ACCESS-PASSPHRASE") != "bitget-passphrase" {
+				t.Fatalf("missing ACCESS-PASSPHRASE header")
+			}
+
+			body := `{
+				"code":"00000",
+				"msg":"success",
+				"data":{
+					"entrustedList":[
+						{
+							"orderId":"ord-1",
+							"clientOid":"client-1",
+							"symbol":"ADAUSDT",
+							"side":"open_long",
+							"orderType":"market",
+							"state":"live",
+							"price":"0.3000",
+							"size":"10",
+							"baseVolume":"2",
+							"cTime":"1700000000000",
+							"uTime":"1700000001000"
+						}
+					]
+				}
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	resp, err := service.FetchOpenOrders(context.Background(), "bitget")
+	if err != nil {
+		t.Fatalf("FetchOpenOrders() returned error: %v", err)
+	}
+	if gotPath != "/api/v2/mix/order/orders-pending?productType=USDT-FUTURES" {
+		t.Fatalf("unexpected Bitget endpoint path: got %q", gotPath)
+	}
+	if resp.Count != 1 {
+		t.Fatalf("expected one open order, got %d", resp.Count)
+	}
+	order := resp.Orders[0]
+	if order.Symbol != "ADA/USDT" {
+		t.Fatalf("unexpected symbol: %s", order.Symbol)
+	}
+	if order.Side != "buy" {
+		t.Fatalf("unexpected side: %s", order.Side)
+	}
+	if !order.Amount.Equal(decimal.NewFromInt(10)) {
+		t.Fatalf("unexpected amount: %s", order.Amount.String())
+	}
+	if !order.Filled.Equal(decimal.NewFromInt(2)) {
+		t.Fatalf("unexpected filled: %s", order.Filled.String())
+	}
+	if !order.Remaining.Equal(decimal.NewFromInt(8)) {
+		t.Fatalf("unexpected remaining: %s", order.Remaining.String())
+	}
+}
+
+func TestNativeCCXTService_FetchPositions_Bitget(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.credentials["bitget"] = config.ExchangeCredentials{
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+
+	var gotPath string
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotPath = req.URL.Path + "?" + req.URL.RawQuery
+
+			body := `{
+				"code":"00000",
+				"msg":"success",
+				"data":[
+					{
+						"positionId":"pos-1",
+						"symbol":"ADAUSDT",
+						"holdSide":"long",
+						"total":"12.5",
+						"averageOpenPrice":"0.3000",
+						"markPrice":"0.3100",
+						"unrealizedPL":"0.50",
+						"leverage":"5",
+						"liquidationPrice":"0.2000",
+						"marginMode":"isolated",
+						"uTime":"1700000000000"
+					},
+					{
+						"positionId":"pos-2",
+						"symbol":"DOGEUSDT",
+						"holdSide":"short",
+						"total":"0",
+						"averageOpenPrice":"0.1000"
+					}
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	resp, err := service.FetchPositions(context.Background(), "bitget")
+	if err != nil {
+		t.Fatalf("FetchPositions() returned error: %v", err)
+	}
+	if gotPath != "/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT" {
+		t.Fatalf("unexpected Bitget endpoint path: got %q", gotPath)
+	}
+	if resp.Count != 1 {
+		t.Fatalf("expected one open position, got %d", resp.Count)
+	}
+	position := resp.Positions[0]
+	if position.Symbol != "ADA/USDT" {
+		t.Fatalf("unexpected symbol: %s", position.Symbol)
+	}
+	if position.Side != "long" {
+		t.Fatalf("unexpected side: %s", position.Side)
+	}
+	if !position.Size.Equal(decimal.RequireFromString("12.5")) {
+		t.Fatalf("unexpected size: %s", position.Size.String())
+	}
+	if !position.UnrealizedPnl.Equal(decimal.RequireFromString("0.5")) {
+		t.Fatalf("unexpected unrealized pnl: %s", position.UnrealizedPnl.String())
 	}
 }
 

@@ -228,9 +228,11 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 		})
 	}
 
+	trackerHasPositions := false
 	if s.positionTracker != nil {
 		positions := s.positionTracker.GetAllPositions()
 		snapshot.OpenPositions = len(positions)
+		trackerHasPositions = len(positions) > 0
 
 		positionValue := decimal.Zero
 		for _, pos := range positions {
@@ -248,6 +250,49 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 		}
 
 		snapshot.TotalExposure = positionValue
+	}
+	if !trackerHasPositions && s.ccxtService != nil {
+		exchangeExposure := decimal.Zero
+		for _, exchange := range exchanges {
+			resp, err := s.ccxtService.FetchPositions(ctx, exchange)
+			if err != nil {
+				if s.logger != nil {
+					s.logger.Warn("Failed to fetch positions from exchange",
+						"exchange", exchange,
+						"error", err)
+				}
+				continue
+			}
+			if resp == nil || len(resp.Positions) == 0 {
+				continue
+			}
+
+			for _, pos := range resp.Positions {
+				size := pos.Size.Abs()
+				if size.IsZero() {
+					continue
+				}
+				markPrice := pos.MarkPrice
+				if markPrice.IsZero() {
+					markPrice = pos.EntryPrice
+				}
+				exchangeExposure = exchangeExposure.Add(size.Mul(markPrice))
+				snapshot.UnrealizedPnL = snapshot.UnrealizedPnL.Add(pos.UnrealizedPnl)
+
+				snapshot.Positions = append(snapshot.Positions, SafetyPosition{
+					Symbol:        pos.Symbol,
+					Side:          pos.Side,
+					Size:          size.String(),
+					EntryPrice:    pos.EntryPrice.String(),
+					MarkPrice:     markPrice.String(),
+					UnrealizedPnL: pos.UnrealizedPnl.String(),
+				})
+			}
+		}
+		if len(snapshot.Positions) > 0 {
+			snapshot.OpenPositions = len(snapshot.Positions)
+			snapshot.TotalExposure = exchangeExposure
+		}
 	}
 
 	snapshot.TotalEquity = totalBalance.Add(snapshot.UnrealizedPnL)

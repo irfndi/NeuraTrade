@@ -797,8 +797,12 @@ func bitgetSymbolKey(symbol string) string {
 	if idx := strings.Index(normalized, ":"); idx >= 0 {
 		normalized = normalized[:idx]
 	}
+	if idx := strings.Index(normalized, "_"); idx >= 0 {
+		normalized = normalized[:idx]
+	}
 	normalized = strings.ReplaceAll(normalized, "/", "")
 	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.ReplaceAll(normalized, "_", "")
 	return normalized
 }
 
@@ -2387,7 +2391,119 @@ func (s *NativeCCXTService) FetchPositions(ctx context.Context, exchange string)
 
 // Stub implementations for each exchange - to be implemented
 func (s *NativeCCXTService) fetchBitgetOpenOrders(ctx context.Context, creds config.ExchangeCredentials) (*OpenOrdersResponse, error) {
-	return &OpenOrdersResponse{Exchange: "bitget", Orders: []Order{}, Count: 0, Timestamp: time.Now().Format(time.RFC3339)}, nil
+	body, err := s.bitgetPrivateGet(ctx, creds, "/api/v2/mix/order/orders-pending?productType=USDT-FUTURES")
+	if err != nil {
+		return nil, err
+	}
+
+	var raw struct {
+		Code    string          `json:"code"`
+		Msg     string          `json:"msg"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse Bitget open orders: %w", err)
+	}
+	if raw.Code != "00000" {
+		return nil, fmt.Errorf("bitget API error: %s", bitgetErrorMessage(raw.Msg, raw.Message))
+	}
+
+	type bitgetPendingOrder struct {
+		OrderID   string `json:"orderId"`
+		ClientOid string `json:"clientOid"`
+		Symbol    string `json:"symbol"`
+		Side      string `json:"side"`
+		OrderType string `json:"orderType"`
+		State     string `json:"state"`
+		Price     string `json:"price"`
+		Size      string `json:"size"`
+		BaseVol   string `json:"baseVolume"`
+		CTime     string `json:"cTime"`
+		UTime     string `json:"uTime"`
+	}
+
+	records := make([]bitgetPendingOrder, 0)
+	if len(raw.Data) > 0 && string(raw.Data) != "null" {
+		var wrapped struct {
+			EntrustedList []bitgetPendingOrder `json:"entrustedList"`
+			List          []bitgetPendingOrder `json:"list"`
+		}
+		if err := json.Unmarshal(raw.Data, &wrapped); err == nil {
+			switch {
+			case len(wrapped.EntrustedList) > 0:
+				records = wrapped.EntrustedList
+			case len(wrapped.List) > 0:
+				records = wrapped.List
+			}
+		}
+		if len(records) == 0 {
+			var direct []bitgetPendingOrder
+			if err := json.Unmarshal(raw.Data, &direct); err == nil {
+				records = direct
+			}
+		}
+	}
+
+	orders := make([]Order, 0, len(records))
+	for _, rec := range records {
+		amount := parseDecimal(rec.Size)
+		filled := parseDecimal(rec.BaseVol)
+		if filled.GreaterThan(amount) {
+			filled = amount
+		}
+		remaining := amount.Sub(filled)
+		if remaining.IsNegative() {
+			remaining = decimal.Zero
+		}
+
+		createdMS := parseBitgetTimestampMillis(rec.CTime)
+		updatedMS := parseBitgetTimestampMillis(rec.UTime)
+		if updatedMS == 0 {
+			updatedMS = createdMS
+		}
+
+		createdAt := time.Now().UTC()
+		if createdMS > 0 {
+			createdAt = time.UnixMilli(createdMS).UTC()
+		}
+		updatedAt := UnixTimestamp(time.Now().UTC())
+		if updatedMS > 0 {
+			updatedAt = UnixTimestamp(time.UnixMilli(updatedMS).UTC())
+		}
+
+		side := normalizeBitgetOrderSide(rec.Side)
+		status := normalizeBitgetOrderStatus(rec.State)
+		if status == "" {
+			status = "open"
+		}
+
+		price := parseDecimal(rec.Price)
+		cost := price.Mul(filled)
+
+		orders = append(orders, Order{
+			ID:            rec.OrderID,
+			ClientOrderID: rec.ClientOid,
+			Symbol:        normalizeBitgetSpotSymbol(rec.Symbol),
+			Type:          strings.ToLower(strings.TrimSpace(rec.OrderType)),
+			Side:          side,
+			Status:        status,
+			Price:         price,
+			Amount:        amount,
+			Filled:        filled,
+			Remaining:     remaining,
+			Cost:          cost,
+			CreatedAt:     createdAt,
+			Timestamp:     updatedAt,
+		})
+	}
+
+	return &OpenOrdersResponse{
+		Exchange:  "bitget",
+		Orders:    orders,
+		Count:     len(orders),
+		Timestamp: time.Now().Format(time.RFC3339),
+	}, nil
 }
 func (s *NativeCCXTService) fetchBinanceOpenOrders(ctx context.Context, creds config.ExchangeCredentials) (*OpenOrdersResponse, error) {
 	return &OpenOrdersResponse{Exchange: "binance", Orders: []Order{}, Count: 0, Timestamp: time.Now().Format(time.RFC3339)}, nil
@@ -2413,7 +2529,109 @@ func (s *NativeCCXTService) cancelOKXOrder(ctx context.Context, creds config.Exc
 }
 
 func (s *NativeCCXTService) fetchBitgetPositions(ctx context.Context, creds config.ExchangeCredentials) (*PositionsResponse, error) {
-	return &PositionsResponse{Exchange: "bitget", Positions: []Position{}, Count: 0, Timestamp: time.Now().Format(time.RFC3339)}, nil
+	body, err := s.bitgetPrivateGet(ctx, creds, "/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT")
+	if err != nil {
+		return nil, err
+	}
+
+	var raw struct {
+		Code    string          `json:"code"`
+		Msg     string          `json:"msg"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse Bitget positions: %w", err)
+	}
+	if raw.Code != "00000" {
+		return nil, fmt.Errorf("bitget API error: %s", bitgetErrorMessage(raw.Msg, raw.Message))
+	}
+
+	type bitgetPositionRecord struct {
+		Symbol           string `json:"symbol"`
+		PositionID       string `json:"positionId"`
+		HoldSide         string `json:"holdSide"`
+		PosSide          string `json:"posSide"`
+		Total            string `json:"total"`
+		AverageOpenPrice string `json:"averageOpenPrice"`
+		OpenPriceAvg     string `json:"openPriceAvg"`
+		MarkPrice        string `json:"markPrice"`
+		UnrealizedPL     string `json:"unrealizedPL"`
+		Leverage         string `json:"leverage"`
+		LiquidationPrice string `json:"liquidationPrice"`
+		MarginMode       string `json:"marginMode"`
+		MarginType       string `json:"marginType"`
+		UTime            string `json:"uTime"`
+		CTime            string `json:"cTime"`
+	}
+
+	records := make([]bitgetPositionRecord, 0)
+	if len(raw.Data) > 0 && string(raw.Data) != "null" {
+		var wrapped struct {
+			List []bitgetPositionRecord `json:"list"`
+		}
+		if err := json.Unmarshal(raw.Data, &wrapped); err == nil && len(wrapped.List) > 0 {
+			records = wrapped.List
+		}
+		if len(records) == 0 {
+			var direct []bitgetPositionRecord
+			if err := json.Unmarshal(raw.Data, &direct); err == nil {
+				records = direct
+			}
+		}
+	}
+
+	positions := make([]Position, 0, len(records))
+	for _, rec := range records {
+		size := parseDecimal(rec.Total).Abs()
+		if size.IsZero() {
+			continue
+		}
+
+		entry := parseDecimal(firstNonEmpty(rec.AverageOpenPrice, rec.OpenPriceAvg))
+		mark := parseDecimal(rec.MarkPrice)
+		if mark.IsZero() {
+			mark = entry
+		}
+
+		leverage := 0
+		if parsed, err := strconv.Atoi(strings.TrimSpace(rec.Leverage)); err == nil {
+			leverage = parsed
+		}
+
+		tsMillis := parseBitgetTimestampMillis(firstNonEmpty(rec.UTime, rec.CTime))
+		ts := UnixTimestamp(time.Now().UTC())
+		if tsMillis > 0 {
+			ts = UnixTimestamp(time.UnixMilli(tsMillis).UTC())
+		}
+
+		side := normalizeBitgetPositionSide(firstNonEmpty(rec.HoldSide, rec.PosSide), size)
+		marginMode := strings.ToLower(strings.TrimSpace(firstNonEmpty(rec.MarginMode, rec.MarginType)))
+		if marginMode == "" {
+			marginMode = "crossed"
+		}
+
+		positions = append(positions, Position{
+			ID:               firstNonEmpty(rec.PositionID, rec.Symbol+":"+side),
+			Symbol:           normalizeBitgetSpotSymbol(rec.Symbol),
+			Side:             side,
+			Size:             size,
+			EntryPrice:       entry,
+			MarkPrice:        mark,
+			UnrealizedPnl:    parseDecimal(rec.UnrealizedPL),
+			Lverage:          leverage,
+			LiquidationPrice: parseDecimal(rec.LiquidationPrice),
+			MarginMode:       marginMode,
+			Timestamp:        ts,
+		})
+	}
+
+	return &PositionsResponse{
+		Exchange:  "bitget",
+		Positions: positions,
+		Count:     len(positions),
+		Timestamp: time.Now().Format(time.RFC3339),
+	}, nil
 }
 func (s *NativeCCXTService) fetchBinancePositions(ctx context.Context, creds config.ExchangeCredentials) (*PositionsResponse, error) {
 	return &PositionsResponse{Exchange: "binance", Positions: []Position{}, Count: 0, Timestamp: time.Now().Format(time.RFC3339)}, nil
@@ -2423,4 +2641,120 @@ func (s *NativeCCXTService) fetchBybitPositions(ctx context.Context, creds confi
 }
 func (s *NativeCCXTService) fetchOKXPositions(ctx context.Context, creds config.ExchangeCredentials) (*PositionsResponse, error) {
 	return &PositionsResponse{Exchange: "okx", Positions: []Position{}, Count: 0, Timestamp: time.Now().Format(time.RFC3339)}, nil
+}
+
+func (s *NativeCCXTService) bitgetPrivateGet(ctx context.Context, creds config.ExchangeCredentials, endpoint string) ([]byte, error) {
+	if strings.TrimSpace(creds.APIKey) == "" || strings.TrimSpace(creds.Secret) == "" {
+		return nil, fmt.Errorf("bitget credentials are incomplete")
+	}
+
+	s.rateLimiter.Wait()
+
+	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	signPayload := timestamp + "GET" + endpoint
+	signature := s.generateBase64HMACSignature(creds.Secret, signPayload)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.bitget.com"+endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Bitget request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("ACCESS-KEY", creds.APIKey)
+	req.Header.Set("ACCESS-SIGN", signature)
+	req.Header.Set("ACCESS-TIMESTAMP", timestamp)
+	req.Header.Set("ACCESS-PASSPHRASE", creds.Passphrase)
+	req.Header.Set("locale", "en-US")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Bitget API: %w", err)
+	}
+	defer closeBody(resp.Body)
+
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Bitget response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bitget API status %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+	}
+	return payload, nil
+}
+
+func bitgetErrorMessage(msg, message string) string {
+	candidates := []string{strings.TrimSpace(msg), strings.TrimSpace(message)}
+	for _, candidate := range candidates {
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return "unknown error"
+}
+
+func parseBitgetTimestampMillis(raw string) int64 {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0
+	}
+	if parsed, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		if parsed > 0 && parsed < 1_000_000_000_000 {
+			return parsed * 1000
+		}
+		return parsed
+	}
+	if parsedFloat, err := strconv.ParseFloat(trimmed, 64); err == nil {
+		parsed := int64(parsedFloat)
+		if parsed > 0 && parsed < 1_000_000_000_000 {
+			return parsed * 1000
+		}
+		return parsed
+	}
+	return 0
+}
+
+func normalizeBitgetOrderSide(side string) string {
+	switch strings.ToLower(strings.TrimSpace(side)) {
+	case "buy", "open_long", "close_short":
+		return "buy"
+	case "sell", "open_short", "close_long":
+		return "sell"
+	default:
+		return strings.ToLower(strings.TrimSpace(side))
+	}
+}
+
+func normalizeBitgetOrderStatus(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "", "live", "new", "partially_filled", "partial_fill":
+		return "open"
+	case "filled", "full_fill", "closed":
+		return "closed"
+	case "cancelled", "canceled":
+		return "canceled"
+	default:
+		return strings.ToLower(strings.TrimSpace(state))
+	}
+}
+
+func normalizeBitgetPositionSide(side string, size decimal.Decimal) string {
+	switch strings.ToLower(strings.TrimSpace(side)) {
+	case "long", "buy", "open_long":
+		return "long"
+	case "short", "sell", "open_short":
+		return "short"
+	default:
+		if size.IsNegative() {
+			return "short"
+		}
+		return "long"
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
