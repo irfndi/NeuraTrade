@@ -336,14 +336,22 @@ func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing
 		Action:       "hold",
 	}))
 
-	assert.False(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
 		DecisionType: "scalping",
 		Action:       "buy",
-	}))
+	}), "buy actions are now considered actionable regardless of decision type")
 
 	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
 		DecisionType: "pnl_reconciliation",
 		Action:       "record",
+	}))
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "risk_reduction",
+		Action:       "hold",
+	}))
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "scalping_digest",
+		Action:       "hold",
 	}))
 }
 

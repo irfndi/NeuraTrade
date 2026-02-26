@@ -60,6 +60,8 @@ export interface DoctorCheck {
   readonly message?: string;
   readonly latencyMs?: number;
   readonly details?: Readonly<Record<string, string>>;
+  readonly optional?: boolean;
+  readonly impact?: "core" | "optional" | string;
 }
 
 export interface DoctorDiagnosticsTemplateInput {

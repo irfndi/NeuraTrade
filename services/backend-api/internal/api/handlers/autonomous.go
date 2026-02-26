@@ -139,6 +139,8 @@ type DoctorCheck struct {
 	Message   string            `json:"message,omitempty"`
 	LatencyMs int64             `json:"latency_ms,omitempty"`
 	Details   map[string]string `json:"details,omitempty"`
+	Optional  bool              `json:"optional"`
+	Impact    string            `json:"impact,omitempty"`
 }
 
 // DoctorResponse represents the response for /doctor
@@ -347,7 +349,12 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		"started_at":     state.StartedAt.Format(time.RFC3339),
 		"active_quests":  state.ActiveQuests,
 		"quest_progress": progress,
+		"quest_runtime":  h.questEngine.GetRuntimeDiagnostics(),
+		"chat_runtime":   h.questEngine.GetChatRuntimeDiagnostics(chatID),
 		"timestamp":      time.Now().UTC().Format(time.RFC3339),
+	}
+	if heartbeat := services.CurrentHeartbeatRuntime(); heartbeat != nil {
+		response["heartbeat"] = heartbeatDiagnostics(heartbeat)
 	}
 
 	if safetyStatus != nil {
@@ -355,6 +362,59 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func heartbeatDiagnostics(heartbeat *services.TradingHeartbeat) gin.H {
+	if heartbeat == nil {
+		return gin.H{
+			"running": false,
+			"mode":    "idle",
+			"tasks":   gin.H{},
+		}
+	}
+
+	mode := ""
+	modeNote := ""
+	taskStatus := heartbeat.GetTaskStatus()
+	tasks := make(gin.H, len(taskStatus))
+	for name, status := range taskStatus {
+		if mode == "" && strings.TrimSpace(status.Mode) != "" {
+			mode = status.Mode
+			modeNote = status.ModeNote
+		}
+		entry := gin.H{
+			"name":              status.Name,
+			"enabled":           status.Enabled,
+			"running":           status.Running,
+			"interval":          status.Interval,
+			"last_run":          status.LastRun.UTC().Format(time.RFC3339),
+			"error_count":       status.ErrorCount,
+			"consecutive_error": status.ConsecutiveError,
+			"priority":          status.Priority,
+		}
+		if strings.TrimSpace(status.DisabledReason) != "" {
+			entry["disabled_reason"] = status.DisabledReason
+		}
+		if !status.BackoffUntil.IsZero() {
+			entry["backoff_until"] = status.BackoffUntil.UTC().Format(time.RFC3339)
+		}
+		if status.LastError != nil {
+			entry["last_error"] = status.LastError.Error()
+		}
+		tasks[name] = entry
+	}
+	if mode == "" {
+		mode = "normal"
+	}
+	result := gin.H{
+		"running": heartbeat.IsRunning(),
+		"mode":    mode,
+		"tasks":   tasks,
+	}
+	if strings.TrimSpace(modeNote) != "" {
+		result["note"] = modeNote
+	}
+	return result
 }
 
 // GetPortfolio returns portfolio snapshot for a user
@@ -484,9 +544,11 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 	checks := make([]DoctorCheck, 0, len(readinessResult.Checks))
 	for name, result := range readinessResult.Checks {
 		check := DoctorCheck{
-			Name:    name,
-			Status:  result.Status,
-			Message: result.Message,
+			Name:     name,
+			Status:   result.Status,
+			Message:  result.Message,
+			Optional: false,
+			Impact:   "core",
 		}
 		if result.LatencyMs > 0 {
 			check.LatencyMs = result.LatencyMs
@@ -528,9 +590,11 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 				}
 
 				check := DoctorCheck{
-					Name:    "portfolio_safety",
-					Status:  status,
-					Message: fmt.Sprintf("Safe: %v, Trading: %v", isSafe, tradingAllowed),
+					Name:     "portfolio_safety",
+					Status:   status,
+					Message:  fmt.Sprintf("Safe: %v, Trading: %v", isSafe, tradingAllowed),
+					Optional: false,
+					Impact:   "core",
 					Details: map[string]string{
 						"max_position_size": fmt.Sprintf("%v", safetyMap["max_position_size"]),
 						"current_drawdown":  fmt.Sprintf("%v", safetyMap["current_drawdown"]),
@@ -547,9 +611,11 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 
 			if portfolioMap, ok := diagnostics["portfolio"].(map[string]interface{}); ok {
 				check := DoctorCheck{
-					Name:    "portfolio_status",
-					Status:  "healthy",
-					Message: fmt.Sprintf("Equity: %v, Positions: %v", portfolioMap["total_equity"], portfolioMap["open_positions"]),
+					Name:     "portfolio_status",
+					Status:   "healthy",
+					Message:  fmt.Sprintf("Equity: %v, Positions: %v", portfolioMap["total_equity"], portfolioMap["open_positions"]),
+					Optional: false,
+					Impact:   "core",
 					Details: map[string]string{
 						"total_equity":    fmt.Sprintf("%v", portfolioMap["total_equity"]),
 						"available_funds": fmt.Sprintf("%v", portfolioMap["available_funds"]),
@@ -582,9 +648,11 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 				}
 
 				check := DoctorCheck{
-					Name:    fmt.Sprintf("reconciliation_%s", result.Exchange),
-					Status:  status,
-					Message: message,
+					Name:     fmt.Sprintf("reconciliation_%s", result.Exchange),
+					Status:   status,
+					Message:  message,
+					Optional: false,
+					Impact:   "core",
 					Details: map[string]string{
 						"orders_matched":    fmt.Sprintf("%d", result.OrdersMatched),
 						"orders_mismatched": fmt.Sprintf("%d", result.OrdersMismatched),

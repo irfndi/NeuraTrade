@@ -588,6 +588,9 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 	mockDB.ExpectQuery(`SELECT COALESCE\(\(SELECT autonomous_enabled FROM telegram_operator_state WHERE chat_id = \$1 LIMIT 1\), false\)`).
 		WithArgs("777").
 		WillReturnRows(pgxmock.NewRows([]string{"autonomous_enabled"}).AddRow(true))
+	mockDB.ExpectQuery(`SELECT COALESCE\(MAX\(selected_ai_model\), ''\)`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"selected_ai_model"}).AddRow("gpt-4o-mini"))
 
 	handler.GetDoctor(c)
 
@@ -598,6 +601,6 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 	assert.Equal(t, "healthy", response["overall_status"])
 	checks, ok := response["checks"].([]interface{})
 	assert.True(t, ok)
-	assert.Len(t, checks, 4)
+	assert.Len(t, checks, 5)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }

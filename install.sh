@@ -216,6 +216,7 @@ if [[ -f "$ENV_TARGET" ]]; then
   source "$ENV_TARGET"
   set +a
 fi
+export NEURATRADE_GATEWAY_SUPERVISED="${NEURATRADE_GATEWAY_SUPERVISED:-1}"
 exec "$cli_bin_path" gateway start
 EOF
   chmod 0755 "$launch_script"

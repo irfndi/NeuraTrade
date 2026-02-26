@@ -314,17 +314,29 @@ func run() error {
 	// Initialize heartbeat for continuous monitoring
 	heartbeatConfig := services.DefaultHeartbeatConfig()
 	heartbeatConfig.Enabled = true
+	if value := getEnvIntWithDefault("NEURATRADE_HEARTBEAT_MAX_CONCURRENCY", heartbeatConfig.MaxConcurrency); value > 0 {
+		heartbeatConfig.MaxConcurrency = value
+	}
+	heartbeatConfig.DegradedMultiplier = getEnvFloatWithDefault("NEURATRADE_HEARTBEAT_DEGRADED_MULTIPLIER", heartbeatConfig.DegradedMultiplier)
+	heartbeatConfig.RiskMultiplier = getEnvFloatWithDefault("NEURATRADE_HEARTBEAT_RISK_MULTIPLIER", heartbeatConfig.RiskMultiplier)
+
+	positionSync := &positionTrackerHeartbeatAdapter{tracker: positionTracker}
+	stopLossCycle := &stopLossHeartbeatAdapter{service: stopLossService}
+	connectivityCheck := &ccxtConnectivityHeartbeatAdapter{service: ccxtService}
+	checkpointStore := &dbCheckpointStore{db: db}
+
 	heartbeat := services.NewTradingHeartbeat(
 		heartbeatConfig,
-		nil, // positionTracker - interface{SyncPositions(ctx context.Context) error}
-		nil, // stopLossService - interface{UpdateAllStopLosses(ctx context.Context) error}
+		positionSync,
+		stopLossCycle,
 		nil, // signalProcessor - interface{ScanForSignals(ctx context.Context) error}
 		nil, // fundingCollector - interface{CheckFundingRates(ctx context.Context) error}
-		nil, // connectivityChecker - interface{CheckConnectivity(ctx context.Context) error}
-		nil, // tradingStateStore - services.TradingStateStoreInterface
+		connectivityCheck,
+		checkpointStore,
 		nil, // riskManager - interface{CheckRiskLimits(ctx context.Context) interface{}}
 		notificationService,
 	)
+	services.RegisterHeartbeatRuntime(heartbeat)
 	if err := heartbeat.Start(ctx); err != nil {
 		logger.WithError(err).Warn("Failed to start heartbeat - continuing without it")
 	} else {
@@ -448,6 +460,79 @@ func run() error {
 
 	logger.Info("Server exited gracefully")
 	return nil
+}
+
+type positionTrackerHeartbeatAdapter struct {
+	tracker *services.PositionTracker
+}
+
+func (a *positionTrackerHeartbeatAdapter) SyncPositions(ctx context.Context) error {
+	if a == nil || a.tracker == nil {
+		return fmt.Errorf("position tracker is not configured")
+	}
+	return a.tracker.SyncWithExchange(ctx)
+}
+
+type stopLossHeartbeatAdapter struct {
+	service *services.StopLossService
+}
+
+func (a *stopLossHeartbeatAdapter) UpdateAllStopLosses(ctx context.Context) error {
+	if a == nil || a.service == nil {
+		return fmt.Errorf("stop-loss service is not configured")
+	}
+	_, err := a.service.Evaluate(ctx)
+	return err
+}
+
+type ccxtConnectivityHeartbeatAdapter struct {
+	service ccxt.CCXTService
+}
+
+func (a *ccxtConnectivityHeartbeatAdapter) CheckConnectivity(ctx context.Context) error {
+	if a == nil || a.service == nil {
+		return fmt.Errorf("ccxt service is not configured")
+	}
+	if !a.service.IsHealthy(ctx) {
+		return fmt.Errorf("ccxt connectivity check failed")
+	}
+	return nil
+}
+
+type dbCheckpointStore struct {
+	db database.DBPool
+}
+
+func (s *dbCheckpointStore) Checkpoint(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("database checkpoint store is not configured")
+	}
+	var one int
+	return s.db.QueryRow(ctx, "SELECT 1").Scan(&one)
+}
+
+func getEnvIntWithDefault(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvFloatWithDefault(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func warnLegacyHandlersPath(logger *zaplogrus.Logger) {

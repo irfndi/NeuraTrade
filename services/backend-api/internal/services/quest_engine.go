@@ -26,14 +26,31 @@ const (
 )
 
 const (
-	defaultMicroCadenceInterval = time.Minute
-	minMicroCadenceInterval     = 10 * time.Second
-	defaultQuestExecutionStale  = 3 * time.Minute
-	minQuestExecutionStale      = time.Minute
+	defaultQuestSchedulerPoll = 5 * time.Second
+
+	defaultQuestCadenceNormal   = time.Minute
+	defaultQuestCadenceActive   = 25 * time.Second
+	defaultQuestCadenceDegraded = 90 * time.Second
+	defaultQuestCadenceIdle     = 120 * time.Second
+	minQuestCadenceInterval     = 10 * time.Second
+
+	defaultQuestExecutionStale = 3 * time.Minute
+	minQuestExecutionStale     = time.Minute
 	// Derived stale timeout buffers: per structured-retry repair budget and global latency cushion.
 	questExecutionRepairAttemptBuffer = 20 * time.Second
 	questExecutionGlobalWatchdogSlack = 45 * time.Second
+	questExecutionContextTail         = 20 * time.Second
+	questExecutionLockTail            = 35 * time.Second
 )
+
+type questRuntimeBudget struct {
+	ScalpingTimeout   time.Duration
+	StructuredRetries int
+	DerivedFloor      time.Duration
+	StaleTimeout      time.Duration
+	ExecutionTimeout  time.Duration
+	LockTTL           time.Duration
+}
 
 // QuestCadence defines the frequency of routine quests
 type QuestCadence string
@@ -126,6 +143,11 @@ type QuestEngine struct {
 	redis           *redis.Client
 	stopCh          chan struct{}
 	running         bool
+	cadenceMode     string
+	lastTickAt      time.Time
+	runtimeBudget   questRuntimeBudget
+	riskLockActive  bool
+	riskLockReasons []string
 	// notificationService is used to send quest progress notifications
 	notificationService *NotificationService
 	// chatIDForQuest maps quest IDs to their owner's chat ID
@@ -259,7 +281,9 @@ func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *Quest
 		redis:           redisClient,
 		stopCh:          make(chan struct{}),
 		chatIDForQuest:  make(map[string]int64),
+		cadenceMode:     "normal",
 	}
+	engine.runtimeBudget = computeQuestRuntimeBudget()
 
 	engine.registerDefaultDefinitions()
 
@@ -419,6 +443,7 @@ func (e *QuestEngine) Start() {
 		return
 	}
 	e.running = true
+	e.runtimeBudget = computeQuestRuntimeBudget()
 	e.mu.Unlock()
 
 	// Load active quests from database
@@ -427,6 +452,15 @@ func (e *QuestEngine) Start() {
 	go e.schedulerLoop()
 	log.Printf("[QUEST] Quest engine started")
 	log.Printf("[QUEST] Initial state: %d quests loaded, running=%v", len(e.quests), e.running)
+	log.Printf(
+		"[QUEST] Runtime budget: scalping_timeout=%s structured_retries=%d derived_floor=%s stale_timeout=%s execution_timeout=%s lock_ttl=%s",
+		e.runtimeBudget.ScalpingTimeout,
+		e.runtimeBudget.StructuredRetries,
+		e.runtimeBudget.DerivedFloor,
+		e.runtimeBudget.StaleTimeout,
+		e.runtimeBudget.ExecutionTimeout,
+		e.runtimeBudget.LockTTL,
+	)
 }
 
 // loadActiveQuests loads active quests from the database into memory
@@ -498,13 +532,12 @@ func (e *QuestEngine) Stop() {
 // schedulerLoop runs the periodic quest scheduling
 func (e *QuestEngine) schedulerLoop() {
 	log.Println("[QUEST] Scheduler loop started")
-	microInterval := microCadenceInterval()
-	ticker := time.NewTicker(microInterval)
+	ticker := time.NewTicker(defaultQuestSchedulerPoll)
 	defer ticker.Stop()
-	log.Printf("[QUEST] Scheduler micro cadence interval: %s", microInterval)
+	log.Printf("[QUEST] Scheduler polling interval: %s", defaultQuestSchedulerPoll)
 
 	// Run an immediate check so newly activated quests do not wait for the first interval.
-	e.tick()
+	e.evaluateAndTick(time.Now().UTC(), true)
 
 	for {
 		select {
@@ -512,10 +545,63 @@ func (e *QuestEngine) schedulerLoop() {
 			log.Println("[QUEST] Scheduler loop stopped")
 			return
 		case <-ticker.C:
-			log.Printf("[QUEST] Scheduler ticker triggered, %d quests in memory", len(e.quests))
-			e.tick()
+			e.evaluateAndTick(time.Now().UTC(), false)
 		}
 	}
+}
+
+func (e *QuestEngine) evaluateAndTick(now time.Time, force bool) {
+	if !e.shouldRunTick(now, force) {
+		return
+	}
+	e.tick()
+}
+
+func (e *QuestEngine) shouldRunTick(now time.Time, force bool) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	mode := e.determineCadenceModeLocked()
+	interval := cadenceIntervalForMode(mode)
+	if mode != e.cadenceMode {
+		log.Printf("[QUEST] Cadence mode changed: %s -> %s (interval=%s)", e.cadenceMode, mode, interval)
+		e.cadenceMode = mode
+	}
+
+	if force || e.lastTickAt.IsZero() || now.Sub(e.lastTickAt) >= interval {
+		e.lastTickAt = now
+		return true
+	}
+	return false
+}
+
+func (e *QuestEngine) determineCadenceModeLocked() string {
+	if e.isRiskLockEnabledLocked() {
+		return "risk_lock"
+	}
+
+	activeQuests := 0
+	degraded := false
+	for _, quest := range e.quests {
+		if quest.Status != QuestStatusActive {
+			continue
+		}
+		activeQuests++
+		if readQuestMetricInt(quest.Checkpoint["runtime_failure_streak"]) > 0 {
+			degraded = true
+		}
+	}
+
+	if activeQuests == 0 {
+		return "idle"
+	}
+	if len(e.executing) > 0 {
+		return "active_risk"
+	}
+	if degraded {
+		return "degraded"
+	}
+	return "normal"
 }
 
 // tick processes scheduled quests
@@ -557,7 +643,7 @@ func (e *QuestEngine) tick() {
 			}
 
 			age := now.Sub(startedAt)
-			staleAfter := questExecutionStaleAfter()
+			staleAfter := e.runtimeBudget.StaleTimeout
 			if age > staleAfter {
 				log.Printf(
 					"[QUEST] Quest %s (%s) execution stale after %s (limit=%s), resetting in-progress marker",
@@ -579,6 +665,18 @@ func (e *QuestEngine) tick() {
 			}
 		}
 
+		if e.shouldBlockQuestEntryLocked(quest) {
+			if quest.Checkpoint == nil {
+				quest.Checkpoint = make(map[string]interface{})
+			}
+			quest.Checkpoint["runtime_entry_blocked_by_risk_lock"] = true
+			quest.Checkpoint["runtime_entry_blocked_at"] = now.UTC().Format(time.RFC3339)
+			log.Printf("[QUEST] Entry decisions for quest %s are gated by risk lock", quest.ID)
+		} else if quest.Checkpoint != nil {
+			delete(quest.Checkpoint, "runtime_entry_blocked_by_risk_lock")
+			delete(quest.Checkpoint, "runtime_entry_blocked_at")
+		}
+
 		// Check if quest should execute based on cadence
 		if e.shouldExecute(quest, now) {
 			log.Printf("[QUEST] Executing quest: %s (type: %s, def: %s, chat: %s)", quest.ID, quest.Type, quest.Metadata["definition_id"], quest.Metadata["chat_id"])
@@ -595,7 +693,7 @@ func (e *QuestEngine) tick() {
 }
 
 func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
-	minInterval := microCadenceInterval()
+	minInterval := cadenceIntervalForMode("normal")
 
 	if quest.LastExecutedAt != nil && now.Sub(*quest.LastExecutedAt) < minInterval {
 		return false
@@ -629,66 +727,127 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 	}
 }
 
-func microCadenceInterval() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("NEURATRADE_MICRO_CADENCE_SECONDS"))
-	if raw == "" {
-		return defaultMicroCadenceInterval
+func cadenceIntervalForMode(mode string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "active_risk", "risk_lock":
+		return cadenceFromEnv("NEURATRADE_QUEST_ACTIVE_CADENCE_SECONDS", defaultQuestCadenceActive)
+	case "degraded":
+		return cadenceFromEnv("NEURATRADE_QUEST_DEGRADED_CADENCE_SECONDS", defaultQuestCadenceDegraded)
+	case "idle":
+		return cadenceFromEnv("NEURATRADE_QUEST_IDLE_CADENCE_SECONDS", defaultQuestCadenceIdle)
+	default:
+		return cadenceFromEnv("NEURATRADE_MICRO_CADENCE_SECONDS", defaultQuestCadenceNormal)
 	}
+}
 
+func cadenceFromEnv(envKey string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(envKey))
+	if raw == "" {
+		return fallback
+	}
 	seconds, err := strconv.Atoi(raw)
 	if err != nil || seconds <= 0 {
-		log.Printf("[QUEST] Invalid NEURATRADE_MICRO_CADENCE_SECONDS=%q, using default %s", raw, defaultMicroCadenceInterval)
-		return defaultMicroCadenceInterval
+		log.Printf("[QUEST] Invalid %s=%q, using default %s", envKey, raw, fallback)
+		return fallback
 	}
-
 	interval := time.Duration(seconds) * time.Second
-	if interval < minMicroCadenceInterval {
-		log.Printf("[QUEST] NEURATRADE_MICRO_CADENCE_SECONDS too low (%ds), clamping to %s", seconds, minMicroCadenceInterval)
-		return minMicroCadenceInterval
+	if interval < minQuestCadenceInterval {
+		log.Printf("[QUEST] %s too low (%ds), clamping to %s", envKey, seconds, minQuestCadenceInterval)
+		return minQuestCadenceInterval
 	}
 	return interval
 }
 
-func questExecutionStaleAfter() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS"))
-	if raw != "" {
-		seconds, err := strconv.Atoi(raw)
-		if err != nil || seconds <= 0 {
-			log.Printf("[QUEST] Invalid NEURATRADE_QUEST_EXECUTION_STALE_SECONDS=%q, using default %s", raw, defaultQuestExecutionStale)
-			return defaultQuestExecutionStale
-		}
-
-		ttl := time.Duration(seconds) * time.Second
-		if ttl < minQuestExecutionStale {
-			log.Printf("[QUEST] NEURATRADE_QUEST_EXECUTION_STALE_SECONDS too low (%ds), clamping to %s", seconds, minQuestExecutionStale)
-			return minQuestExecutionStale
-		}
-		return ttl
+func computeQuestRuntimeBudget() questRuntimeBudget {
+	budget := questRuntimeBudget{
+		ScalpingTimeout:   90 * time.Second,
+		StructuredRetries: 2,
 	}
 
-	// Align stale watchdog with AI cycle runtime budget to avoid premature stale resets.
-	scalpingTimeout := 90 * time.Second
 	if timeoutRaw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_TIMEOUT_SECONDS")); timeoutRaw != "" {
 		if timeoutSec, err := strconv.Atoi(timeoutRaw); err == nil && timeoutSec > 0 {
-			scalpingTimeout = time.Duration(timeoutSec) * time.Second
+			budget.ScalpingTimeout = time.Duration(timeoutSec) * time.Second
 		}
 	}
-	structuredRetries := 2
 	if retriesRaw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_STRUCTURED_RETRIES")); retriesRaw != "" {
 		if retries, err := strconv.Atoi(retriesRaw); err == nil && retries > 0 {
-			structuredRetries = retries
+			budget.StructuredRetries = retries
 		}
 	}
-	derived := scalpingTimeout +
-		time.Duration(structuredRetries+1)*questExecutionRepairAttemptBuffer +
+
+	budget.DerivedFloor = budget.ScalpingTimeout +
+		time.Duration(budget.StructuredRetries+1)*questExecutionRepairAttemptBuffer +
 		questExecutionGlobalWatchdogSlack
-	if derived < defaultQuestExecutionStale {
-		derived = defaultQuestExecutionStale
+	if budget.DerivedFloor < defaultQuestExecutionStale {
+		budget.DerivedFloor = defaultQuestExecutionStale
 	}
-	if derived < minQuestExecutionStale {
-		derived = minQuestExecutionStale
+	if budget.DerivedFloor < minQuestExecutionStale {
+		budget.DerivedFloor = minQuestExecutionStale
 	}
-	return derived
+
+	budget.StaleTimeout = budget.DerivedFloor
+	if raw := strings.TrimSpace(os.Getenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS")); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+			candidate := time.Duration(seconds) * time.Second
+			if candidate < budget.DerivedFloor {
+				budget.StaleTimeout = budget.DerivedFloor
+			} else {
+				budget.StaleTimeout = candidate
+			}
+		}
+	}
+	if budget.StaleTimeout < minQuestExecutionStale {
+		budget.StaleTimeout = minQuestExecutionStale
+	}
+
+	budget.ExecutionTimeout = budget.StaleTimeout + questExecutionContextTail
+	budget.LockTTL = budget.ExecutionTimeout + questExecutionLockTail
+	return budget
+}
+
+func questExecutionStaleAfter() time.Duration {
+	return computeQuestRuntimeBudget().StaleTimeout
+}
+
+func (e *QuestEngine) shouldBlockQuestEntryLocked(quest *Quest) bool {
+	if quest == nil || !e.isRiskLockEnabledLocked() {
+		return false
+	}
+	definitionID := strings.TrimSpace(quest.Metadata["definition_id"])
+	// Entry gate: block new scalping entries while risk-lock is active.
+	return definitionID == "scalping_execution"
+}
+
+func (e *QuestEngine) isRiskLockEnabledLocked() bool {
+	if e.riskLockActive {
+		return true
+	}
+	return envEnabled("NEURATRADE_QUEST_FORCE_RISK_LOCK")
+}
+
+func envEnabled(key string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func readQuestMetricInt(v interface{}) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float32:
+		return int(n)
+	case float64:
+		return int(n)
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 // executeQuest executes a single quest
@@ -704,11 +863,11 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), e.runtimeBudget.ExecutionTimeout)
 	defer cancel()
 
 	lockKey := fmt.Sprintf("quest:lock:%s", quest.ID)
-	locked := e.acquireLock(ctx, lockKey, 5*time.Minute)
+	locked := e.acquireLock(ctx, lockKey, e.runtimeBudget.LockTTL)
 	if !locked {
 		log.Printf("Quest %s skipped: could not acquire lock (another instance may be running)", quest.ID)
 		return
@@ -894,6 +1053,176 @@ func (e *QuestEngine) GetAutonomousState(chatID string) (*AutonomousState, error
 		return &AutonomousState{ChatID: chatID, IsActive: false}, nil
 	}
 	return state, nil
+}
+
+// SetRiskLockState sets global risk-lock state for quest entry gating.
+func (e *QuestEngine) SetRiskLockState(active bool, reasons []string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.riskLockActive = active
+	if len(reasons) == 0 {
+		e.riskLockReasons = nil
+		return
+	}
+	copied := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		reason = strings.TrimSpace(reason)
+		if reason != "" {
+			copied = append(copied, reason)
+		}
+	}
+	e.riskLockReasons = copied
+}
+
+// GetRuntimeDiagnostics returns quest scheduler runtime diagnostics for operators.
+func (e *QuestEngine) GetRuntimeDiagnostics() map[string]interface{} {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	return map[string]interface{}{
+		"cadence_mode":      e.cadenceMode,
+		"active_quests":     len(e.quests),
+		"executing_quests":  len(e.executing),
+		"risk_lock_active":  e.isRiskLockEnabledLocked(),
+		"risk_lock_reasons": append([]string(nil), e.riskLockReasons...),
+		"watchdog_stale":    e.runtimeBudget.StaleTimeout.String(),
+		"execution_timeout": e.runtimeBudget.ExecutionTimeout.String(),
+		"lock_ttl":          e.runtimeBudget.LockTTL.String(),
+		"budget_floor":      e.runtimeBudget.DerivedFloor.String(),
+	}
+}
+
+// GetChatRuntimeDiagnostics returns chat-scoped runtime checkpoint diagnostics for operators.
+func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interface{} {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	chatID = strings.TrimSpace(chatID)
+	result := map[string]interface{}{
+		"chat_id":                 chatID,
+		"active_scalping_quests":  0,
+		"hold_streak":             0,
+		"unlock_cycles":           0,
+		"last_startup_reconcile":  "",
+		"last_spot_unwind":        "",
+		"last_hold_digest":        "",
+		"runtime_no_fill_since":   "",
+		"runtime_failure_streak":  0,
+		"runtime_last_failure_at": "",
+	}
+	if chatID == "" {
+		return result
+	}
+
+	var (
+		lastStartupReconcile time.Time
+		lastSpotUnwind       time.Time
+		lastHoldDigest       time.Time
+		latestFailureAt      time.Time
+		holdStreak           int
+		unlockCycles         int
+		failureStreak        int
+		noFillSince          time.Time
+		activeScalping       int
+	)
+
+	for _, quest := range e.quests {
+		if strings.TrimSpace(quest.Metadata["chat_id"]) != chatID {
+			continue
+		}
+		if strings.TrimSpace(quest.Metadata["definition_id"]) == "scalping_execution" && quest.Status == QuestStatusActive {
+			activeScalping++
+		}
+
+		cp := quest.Checkpoint
+		if cp == nil {
+			continue
+		}
+		holdStreak = maxInt(holdStreak, readQuestMetricInt(cp["runtime_hold_streak"]))
+		unlockCycles = maxInt(unlockCycles, readQuestMetricInt(cp["runtime_unlock_cycles"]))
+		failureStreak = maxInt(failureStreak, readQuestMetricInt(cp["runtime_failure_streak"]))
+
+		if ts := readCheckpointTime(cp["runtime_bootstrap_synced_at"]); ts.After(lastStartupReconcile) {
+			lastStartupReconcile = ts
+		}
+		if ts := readCheckpointTime(cp["spot_unwind_checked_at"]); ts.After(lastSpotUnwind) {
+			lastSpotUnwind = ts
+		}
+		if ts := readCheckpointTime(cp["runtime_last_hold_digest_at"]); ts.After(lastHoldDigest) {
+			lastHoldDigest = ts
+		}
+		if ts := readCheckpointTime(cp["runtime_last_failure_at"]); ts.After(latestFailureAt) {
+			latestFailureAt = ts
+		}
+		if ts := readCheckpointTime(cp["runtime_no_fill_since"]); ts.After(noFillSince) {
+			noFillSince = ts
+		}
+	}
+
+	result["active_scalping_quests"] = activeScalping
+	result["hold_streak"] = holdStreak
+	result["unlock_cycles"] = unlockCycles
+	result["runtime_failure_streak"] = failureStreak
+	if !lastStartupReconcile.IsZero() {
+		result["last_startup_reconcile"] = lastStartupReconcile.Format(time.RFC3339)
+	}
+	if !lastSpotUnwind.IsZero() {
+		result["last_spot_unwind"] = lastSpotUnwind.Format(time.RFC3339)
+	}
+	if !lastHoldDigest.IsZero() {
+		result["last_hold_digest"] = lastHoldDigest.Format(time.RFC3339)
+	}
+	if !latestFailureAt.IsZero() {
+		result["runtime_last_failure_at"] = latestFailureAt.Format(time.RFC3339)
+	}
+	if !noFillSince.IsZero() {
+		result["runtime_no_fill_since"] = noFillSince.Format(time.RFC3339)
+	}
+	return result
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func readCheckpointTime(v interface{}) time.Time {
+	switch raw := v.(type) {
+	case time.Time:
+		return raw.UTC()
+	case *time.Time:
+		if raw != nil {
+			return raw.UTC()
+		}
+	case string:
+		text := strings.TrimSpace(raw)
+		if text == "" {
+			return time.Time{}
+		}
+		if parsed, err := time.Parse(time.RFC3339, text); err == nil {
+			return parsed.UTC()
+		}
+		if unixSec, err := strconv.ParseInt(text, 10, 64); err == nil {
+			if unixSec > 0 {
+				return time.Unix(unixSec, 0).UTC()
+			}
+		}
+	case int:
+		if raw > 0 {
+			return time.Unix(int64(raw), 0).UTC()
+		}
+	case int64:
+		if raw > 0 {
+			return time.Unix(raw, 0).UTC()
+		}
+	case float64:
+		if raw > 0 {
+			return time.Unix(int64(raw), 0).UTC()
+		}
+	}
+	return time.Time{}
 }
 
 // GetQuestProgress returns progress for all active quests for a user

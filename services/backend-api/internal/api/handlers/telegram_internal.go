@@ -583,40 +583,46 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 
 	if err := h.db.QueryRow(c.Request.Context(), "SELECT 1").Scan(new(int)); err != nil {
 		checks = append(checks, gin.H{
-			"name":    "database",
-			"status":  "critical",
-			"message": "database query failed",
+			"name":     "database",
+			"status":   "critical",
+			"impact":   "core",
+			"optional": false,
+			"message":  "database query failed",
 		})
 		overall = "critical"
 	} else {
 		checks = append(checks, gin.H{
-			"name":   "database",
-			"status": "healthy",
+			"name":     "database",
+			"status":   "healthy",
+			"impact":   "core",
+			"optional": false,
 		})
 	}
 
 	polymarketCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "provider = 'polymarket' AND status = 'connected'")
 	if err != nil {
 		checks = append(checks, gin.H{
-			"name":    "polymarket-wallet",
-			"status":  "critical",
-			"message": "failed to verify polymarket wallet",
+			"name":     "polymarket-wallet",
+			"status":   "warning",
+			"impact":   "optional",
+			"optional": true,
+			"message":  "failed to verify polymarket wallet",
 		})
-		overall = "critical"
 	} else if polymarketCount == 0 {
-		if overall != "critical" {
-			overall = "warning"
-		}
 		checks = append(checks, gin.H{
-			"name":    "polymarket-wallet",
-			"status":  "warning",
-			"message": "connect one wallet with /connect_polymarket",
-			"details": gin.H{"count": "0"},
+			"name":     "polymarket-wallet",
+			"status":   "warning",
+			"impact":   "optional",
+			"optional": true,
+			"message":  "connect one wallet with /connect_polymarket",
+			"details":  gin.H{"count": "0"},
 		})
 	} else {
 		checks = append(checks, gin.H{
-			"name":   "polymarket-wallet",
-			"status": "healthy",
+			"name":     "polymarket-wallet",
+			"status":   "healthy",
+			"impact":   "optional",
+			"optional": true,
 			"details": gin.H{
 				"count": fmt.Sprintf("%d", polymarketCount),
 			},
@@ -638,15 +644,19 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			overall = "warning"
 		}
 		checks = append(checks, gin.H{
-			"name":    "exchange-connection",
-			"status":  "warning",
-			"message": "connect one exchange with /connect_exchange",
-			"details": gin.H{"count": "0"},
+			"name":     "exchange-connection",
+			"status":   "warning",
+			"impact":   "core",
+			"optional": false,
+			"message":  "connect one exchange with /connect_exchange",
+			"details":  gin.H{"count": "0"},
 		})
 	} else {
 		checks = append(checks, gin.H{
-			"name":   "exchange-connection",
-			"status": "healthy",
+			"name":     "exchange-connection",
+			"status":   "healthy",
+			"impact":   "core",
+			"optional": false,
 			"details": gin.H{
 				"count": fmt.Sprintf("%d", exchangeCount),
 			},
@@ -663,24 +673,52 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			overall = "warning"
 		}
 		checks = append(checks, gin.H{
-			"name":    "autonomous-mode",
-			"status":  "warning",
-			"message": "unable to determine mode state",
+			"name":     "autonomous-mode",
+			"status":   "warning",
+			"impact":   "core",
+			"optional": false,
+			"message":  "unable to determine mode state",
 		})
 	} else if autonomousEnabled {
 		checks = append(checks, gin.H{
-			"name":    "autonomous-mode",
-			"status":  "healthy",
-			"message": "autonomous mode is running",
+			"name":     "autonomous-mode",
+			"status":   "healthy",
+			"impact":   "core",
+			"optional": false,
+			"message":  "autonomous mode is running",
 		})
 	} else {
 		if overall == "healthy" {
 			overall = "warning"
 		}
 		checks = append(checks, gin.H{
-			"name":    "autonomous-mode",
-			"status":  "warning",
-			"message": "run /begin to start autonomous mode",
+			"name":     "autonomous-mode",
+			"status":   "warning",
+			"impact":   "core",
+			"optional": false,
+			"message":  "run /begin to start autonomous mode",
+		})
+	}
+
+	if err := h.db.QueryRow(c.Request.Context(), `
+		SELECT COALESCE(MAX(selected_ai_model), '')
+		FROM users
+		WHERE COALESCE(telegram_chat_id, '') = $1 OR COALESCE(telegram_id, '') = $1
+	`, chatID).Scan(new(string)); err != nil {
+		checks = append(checks, gin.H{
+			"name":     "ai-snapshot",
+			"status":   "warning",
+			"impact":   "optional",
+			"optional": true,
+			"message":  "AI snapshot probe unavailable",
+		})
+	} else {
+		checks = append(checks, gin.H{
+			"name":     "ai-snapshot",
+			"status":   "healthy",
+			"impact":   "optional",
+			"optional": true,
+			"message":  "AI snapshot probe successful",
 		})
 	}
 
@@ -697,6 +735,47 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		"summary":        summary,
 		"checked_at":     time.Now().UTC().Format(time.RFC3339),
 		"checks":         checks,
+	})
+}
+
+func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
+	chatID := strings.TrimSpace(c.Param("chatId"))
+	if chatID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
+	}
+
+	selectedModel := ""
+	lookupQueries := []string{
+		"SELECT COALESCE(selected_ai_model, '') FROM users WHERE COALESCE(telegram_chat_id, '') = $1 LIMIT 1",
+		"SELECT COALESCE(selected_ai_model, '') FROM users WHERE COALESCE(telegram_id, '') = $1 LIMIT 1",
+	}
+	for _, query := range lookupQueries {
+		if err := h.db.QueryRow(c.Request.Context(), query, chatID).Scan(&selectedModel); err == nil {
+			break
+		}
+	}
+
+	provider := ""
+	modelLower := strings.ToLower(strings.TrimSpace(selectedModel))
+	switch {
+	case strings.HasPrefix(modelLower, "gpt"):
+		provider = "openai"
+	case strings.HasPrefix(modelLower, "claude"):
+		provider = "anthropic"
+	case strings.Contains(modelLower, "glm"):
+		provider = "zhipu"
+	case strings.Contains(modelLower, "mini"):
+		provider = "minimax"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"selected_model":        selectedModel,
+		"provider":              provider,
+		"daily_spend":           "0.00",
+		"monthly_spend":         "0.00",
+		"budget_limit":          "Unlimited",
+		"daily_budget_exceeded": false,
 	})
 }
 

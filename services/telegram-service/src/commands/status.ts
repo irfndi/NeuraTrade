@@ -6,6 +6,7 @@ import type {
   DoctorResponse,
   LogsResponse,
   PortfolioResponse,
+  QuestDiagnosticsResponse,
   TradingModeResponse,
 } from "../api/types";
 import { logger } from "../utils/logger";
@@ -68,6 +69,34 @@ function shortError(error: unknown): string {
   return String(error);
 }
 
+function readStringField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): string | null {
+  if (!source) {
+    return null;
+  }
+  const value = source[key];
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  return null;
+}
+
+function readBoolField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): boolean | null {
+  if (!source) {
+    return null;
+  }
+  const value = source[key];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return null;
+}
+
 export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
   bot.command("status", async (ctx) => {
     const chatId = ctx.chat?.id;
@@ -93,6 +122,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         portfolioResult,
         aiResult,
         logsResult,
+        questDiagnosticsResult,
       ] = await Promise.allSettled([
         userId
           ? api.getNotificationPreference(String(userId))
@@ -102,6 +132,10 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         api.getPortfolio(String(chatId)),
         api.getAIStatus(String(chatId)),
         api.getLogs(String(chatId), 1),
+        typeof (api as { getQuestDiagnostics?: (chatId: string) => Promise<QuestDiagnosticsResponse> })
+          .getQuestDiagnostics === "function"
+          ? api.getQuestDiagnostics(String(chatId))
+          : Promise.reject(new Error("quest diagnostics unavailable")),
       ]);
 
       const preference =
@@ -139,6 +173,43 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         lines.push(
           `• Health: unavailable (${shortError(doctorResult.reason)})`,
         );
+      }
+      if (questDiagnosticsResult.status === "fulfilled") {
+        const diagnostics = questDiagnosticsResult.value;
+        const heartbeat =
+          diagnostics.heartbeat as Readonly<Record<string, unknown>> | undefined;
+        const questRuntime =
+          diagnostics.quest_runtime as Readonly<Record<string, unknown>> | undefined;
+        const chatRuntime =
+          diagnostics.chat_runtime as Readonly<Record<string, unknown>> | undefined;
+
+        const heartbeatMode = readStringField(heartbeat, "mode");
+        if (heartbeatMode) {
+          lines.push(`• Heartbeat: ${heartbeatMode}`);
+        }
+
+        const cadenceMode = readStringField(questRuntime, "cadence_mode");
+        if (cadenceMode) {
+          lines.push(`• Quest cadence: ${cadenceMode}`);
+        }
+
+        const riskLock = readBoolField(questRuntime, "risk_lock_active");
+        if (riskLock !== null) {
+          lines.push(`• Risk lock: ${riskLock ? "ACTIVE" : "inactive"}`);
+        }
+
+        const lastReconcile = readStringField(
+          chatRuntime,
+          "last_startup_reconcile",
+        );
+        if (lastReconcile) {
+          lines.push(`• Last startup reconcile: ${lastReconcile}`);
+        }
+
+        const lastSpotUnwind = readStringField(chatRuntime, "last_spot_unwind");
+        if (lastSpotUnwind) {
+          lines.push(`• Last spot unwind: ${lastSpotUnwind}`);
+        }
       }
 
       lines.push("", "⚙️ Trading Snapshot");
@@ -219,6 +290,15 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           chatId,
           error: shortError(logsResult.reason),
         });
+      }
+      if (questDiagnosticsResult.status === "rejected") {
+        logger.warn(
+          "[Status] Quest diagnostics unavailable while building status",
+          {
+            chatId,
+            error: shortError(questDiagnosticsResult.reason),
+          },
+        );
       }
     } catch (error) {
       logger.error(

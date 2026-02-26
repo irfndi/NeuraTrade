@@ -234,8 +234,20 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		monthlyBudget,
 	)
 
-	questStore := services.NewInMemoryQuestStore()
-	questEngine := services.NewQuestEngineWithNotification(questStore, nil, notificationService)
+	var questStore services.QuestStore
+	questStoreMode := "in-memory"
+	questStore = services.NewInMemoryQuestStore()
+	if db != nil {
+		dbQuestStore := services.NewDBQuestStore(db)
+		if err := dbQuestStore.InitSchema(context.Background()); err != nil {
+			log.Printf("Failed to initialize runtime quest persistence schema, falling back to in-memory store: %v", err)
+		} else {
+			questStore = dbQuestStore
+			questStoreMode = "database"
+		}
+	}
+	questEngine := services.NewQuestEngineWithNotification(questStore, redisClientRaw, notificationService)
+	log.Printf("Quest runtime store initialized in %s mode", questStoreMode)
 
 	riskConfig := risk.DefaultRiskManagerConfig()
 	riskManager := risk.NewRiskManagerAgent(riskConfig)
@@ -269,44 +281,48 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		os.Getenv("NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS") == "true"
 	log.Printf("DEBUG: db is nil: %v", db == nil)
 	if db != nil && loadLegacyQuests {
-		log.Println("Loading legacy active quests from database into memory...")
-		rows, err := db.Query(context.Background(), "SELECT id, type, cadence, status, target_value, checkpoint, created_at FROM quests WHERE status = 'active'")
-		if err != nil {
-			log.Printf("Failed to load quests from database: %v", err)
+		if questStoreMode == "database" {
+			log.Println("Skipping legacy active quest preload to keep runtime tables isolated from legacy quests")
 		} else {
-			defer rows.Close()
-			loadedCount := 0
-			for rows.Next() {
-				var id, questType, cadence, status string
-				var targetValue float64
-				var checkpoint []byte
-				var createdAt time.Time
-				if err := rows.Scan(&id, &questType, &cadence, &status, &targetValue, &checkpoint, &createdAt); err != nil {
-					log.Printf("Failed to scan quest row: %v", err)
-					continue
-				}
-				quest := &services.Quest{
-					ID:          id,
-					Type:        services.QuestType(questType),
-					Cadence:     services.QuestCadence(cadence),
-					Status:      services.QuestStatus(status),
-					TargetCount: int(targetValue),
-					CreatedAt:   createdAt,
-					UpdatedAt:   time.Now(),
-				}
-				if len(checkpoint) > 0 {
-					var cp map[string]interface{}
-					if err := json.Unmarshal(checkpoint, &cp); err == nil {
-						quest.Checkpoint = cp
+			log.Println("Loading legacy active quests from database into memory...")
+			rows, err := db.Query(context.Background(), "SELECT id, type, cadence, status, target_value, checkpoint, created_at FROM quests WHERE status = 'active'")
+			if err != nil {
+				log.Printf("Failed to load quests from database: %v", err)
+			} else {
+				defer rows.Close()
+				loadedCount := 0
+				for rows.Next() {
+					var id, questType, cadence, status string
+					var targetValue float64
+					var checkpoint []byte
+					var createdAt time.Time
+					if err := rows.Scan(&id, &questType, &cadence, &status, &targetValue, &checkpoint, &createdAt); err != nil {
+						log.Printf("Failed to scan quest row: %v", err)
+						continue
 					}
+					quest := &services.Quest{
+						ID:          id,
+						Type:        services.QuestType(questType),
+						Cadence:     services.QuestCadence(cadence),
+						Status:      services.QuestStatus(status),
+						TargetCount: int(targetValue),
+						CreatedAt:   createdAt,
+						UpdatedAt:   time.Now(),
+					}
+					if len(checkpoint) > 0 {
+						var cp map[string]interface{}
+						if err := json.Unmarshal(checkpoint, &cp); err == nil {
+							quest.Checkpoint = cp
+						}
+					}
+					if err := questStore.SaveQuest(context.Background(), quest); err != nil {
+						log.Printf("Failed to save quest %s: %v", id, err)
+					}
+					log.Printf("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
+					loadedCount++
 				}
-				if err := questStore.SaveQuest(context.Background(), quest); err != nil {
-					log.Printf("Failed to save quest %s: %v", id, err)
-				}
-				log.Printf("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
-				loadedCount++
+				log.Printf("Loaded %d quests from database", loadedCount)
 			}
-			log.Printf("Loaded %d quests from database", loadedCount)
 		}
 	} else if db != nil {
 		log.Println("Skipping legacy active quest preload (set NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS=1 to enable)")
@@ -496,59 +512,59 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		)
 		log.Printf("Exchange position reconciler initialized")
 
-		// Startup reconciliation defaults to enabled so resumability is automatic.
-		// It can be disabled explicitly for constrained environments and tests.
-		startupReconcileEnv := strings.TrimSpace(os.Getenv("NEURATRADE_STARTUP_RECONCILIATION"))
-		startupReconcileEnabled := true
-		if strings.EqualFold(startupReconcileEnv, "false") || startupReconcileEnv == "0" {
-			startupReconcileEnabled = false
-		}
 		if gin.Mode() == gin.TestMode {
-			startupReconcileEnabled = false
-		}
-		if startupReconcileEnabled {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				results, err := reconciler.ReconcileAll(ctx, services.ReconciliationStartup, "")
-				if err != nil {
-					log.Printf("Startup reconciliation error: %v", err)
-					return
-				}
+			log.Printf("Startup reconciliation skipped in test mode")
+		} else {
+			// Mandatory startup reconciliation in non-test runtime.
+			// This runs before autonomous chat restore so resumability/protection is refreshed first.
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			results, err := reconciler.ReconcileAll(ctx, services.ReconciliationStartup, "")
+			cancel()
+			if err != nil {
+				log.Printf("Startup reconciliation error: %v", err)
+			} else {
 				for _, r := range results {
 					log.Printf("Startup reconciliation: %s", reconciler.GetReconciliationSummary(&r))
 				}
-			}()
-		} else {
-			log.Printf("Startup reconciliation disabled (set NEURATRADE_STARTUP_RECONCILIATION=true to enable; auto-disabled in test mode)")
+			}
 		}
 
-		// Optional periodic reconciliation for drift detection after manual/external actions.
-		periodicRaw := strings.TrimSpace(os.Getenv("NEURATRADE_PERIODIC_RECONCILIATION_SECONDS"))
-		if periodicRaw != "" {
+		// Periodic reconciliation defaults to enabled at 300s.
+		// Set NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=0 to disable explicitly.
+		periodicSeconds := 300
+		if periodicRaw := strings.TrimSpace(os.Getenv("NEURATRADE_PERIODIC_RECONCILIATION_SECONDS")); periodicRaw != "" {
 			seconds, parseErr := strconv.Atoi(periodicRaw)
-			if parseErr != nil || seconds <= 0 {
-				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, periodic reconciliation disabled", periodicRaw)
+			if parseErr != nil {
+				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, using default %ds", periodicRaw, periodicSeconds)
+			} else if seconds == 0 {
+				periodicSeconds = 0
+			} else if seconds > 0 {
+				periodicSeconds = seconds
 			} else {
-				interval := time.Duration(seconds) * time.Second
-				log.Printf("Periodic reconciliation enabled (interval=%s)", interval)
-				go func() {
-					ticker := time.NewTicker(interval)
-					defer ticker.Stop()
-					for range ticker.C {
-						ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-						results, err := reconciler.ReconcileAll(ctx, services.ReconciliationPeriodic, "")
-						cancel()
-						if err != nil {
-							log.Printf("Periodic reconciliation error: %v", err)
-							continue
-						}
-						for _, r := range results {
-							log.Printf("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
-						}
-					}
-				}()
+				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, using default %ds", periodicRaw, periodicSeconds)
 			}
+		}
+		if periodicSeconds > 0 {
+			interval := time.Duration(periodicSeconds) * time.Second
+			log.Printf("Periodic reconciliation enabled (interval=%s)", interval)
+			go func() {
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for range ticker.C {
+					ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+					results, err := reconciler.ReconcileAll(ctx, services.ReconciliationPeriodic, "")
+					cancel()
+					if err != nil {
+						log.Printf("Periodic reconciliation error: %v", err)
+						continue
+					}
+					for _, r := range results {
+						log.Printf("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
+					}
+				}
+			}()
+		} else {
+			log.Printf("Periodic reconciliation disabled (NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=0)")
 		}
 	}
 
@@ -738,6 +754,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
 				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)
 				telegramInternal.GET("/performance", autonomousHandler.GetPerformanceBreakdown)
+				telegramInternal.GET("/ai/status/:chatId", telegramInternalHandler.GetAIStatusByChatID)
 
 				// Trading mode routes (dry/live toggle)
 				if opModeHandler != nil {

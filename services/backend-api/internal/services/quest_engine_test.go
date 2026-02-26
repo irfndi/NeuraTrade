@@ -441,8 +441,8 @@ func TestQuestExecutionStaleAfter(t *testing.T) {
 	}
 
 	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "30")
-	if got := questExecutionStaleAfter(); got != minQuestExecutionStale {
-		t.Fatalf("questExecutionStaleAfter() clamp = %s, want %s", got, minQuestExecutionStale)
+	if got := questExecutionStaleAfter(); got != expectedDerived {
+		t.Fatalf("questExecutionStaleAfter() floor clamp = %s, want %s", got, expectedDerived)
 	}
 
 	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "480")

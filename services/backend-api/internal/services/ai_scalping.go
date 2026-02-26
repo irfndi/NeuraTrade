@@ -1678,21 +1678,52 @@ func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context) (minConfi
 		minConfidence = 0.95
 	}
 	if s.tradeMemory != nil {
-		stats, err := s.tradeMemory.GetPerformanceStats(ctx)
+		lookbackHours := getEnvInt("NEURATRADE_SCALPING_PERF_LOOKBACK_HOURS")
+		if lookbackHours <= 0 {
+			lookbackHours = 24 * 30
+		}
+		stats, err := s.tradeMemory.GetPerformanceStatsWindow(ctx, lookbackHours)
 		if err == nil {
-			totalTrades := readIntMetric(stats["total_trades"])
-			winRate := readFloatMetric(stats["win_rate"])
-			if totalTrades >= 10 && winRate > 0 && winRate < 35 {
+			decisiveTrades := stats.DecisiveTrades
+			winRate := stats.DecisiveWinRatePct
+			if decisiveTrades >= 10 && winRate > 0 && winRate < 35 {
 				if minConfidence < 0.70 {
 					minConfidence = 0.70
 				}
 				maxCapitalPct = maxCapitalPct * 0.6
 			}
-			if totalTrades >= 20 && winRate > 0 && winRate < 30 {
+			if decisiveTrades >= 20 && winRate > 0 && winRate < 30 {
 				if minConfidence < 0.78 {
 					minConfidence = 0.78
 				}
 				maxCapitalPct = maxCapitalPct * 0.5
+			}
+		}
+
+		recoveryMinutes := getEnvInt("NEURATRADE_SCALPING_NO_FILL_RECOVERY_MINUTES")
+		if recoveryMinutes <= 0 {
+			recoveryMinutes = 180
+		}
+		lastDecisionAt, err := s.tradeMemory.GetLastDecisionTimestamp(ctx)
+		if err == nil && !lastDecisionAt.IsZero() && consecutiveLosses < 2 {
+			idleFor := time.Since(lastDecisionAt)
+			if idleFor >= time.Duration(recoveryMinutes)*time.Minute {
+				recoveredConfidence := minConfidence - 0.05
+				floorConfidence := s.config.MinConfidence * 0.80
+				if recoveredConfidence < floorConfidence {
+					recoveredConfidence = floorConfidence
+				}
+				if recoveredConfidence < minConfidence {
+					minConfidence = recoveredConfidence
+				}
+
+				relaxedCap := maxCapitalPct * 1.15
+				if relaxedCap > s.config.MaxCapitalPct {
+					relaxedCap = s.config.MaxCapitalPct
+				}
+				if relaxedCap > maxCapitalPct {
+					maxCapitalPct = relaxedCap
+				}
 			}
 		}
 	}

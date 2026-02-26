@@ -5,7 +5,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+)
+
+const (
+	runtimeQuestTable      = "autonomous_quests"
+	runtimeStateTable      = "autonomous_state_runtime"
+	runtimeQuestStatusIdx  = "idx_autonomous_quests_status"
+	runtimeQuestTypeIdx    = "idx_autonomous_quests_type"
+	runtimeStateUpdatedIdx = "idx_autonomous_state_runtime_updated_at"
 )
 
 type DBQuestStore struct {
@@ -21,8 +30,8 @@ func (s *DBQuestStore) InitSchema(ctx context.Context) error {
 		return fmt.Errorf("database connection is nil")
 	}
 
-	_, err := s.db.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS quests (
+	_, err := s.db.Exec(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			description TEXT,
@@ -41,13 +50,13 @@ func (s *DBQuestStore) InitSchema(ctx context.Context) error {
 			last_error TEXT,
 			metadata TEXT
 		)
-	`)
+	`, runtimeQuestTable))
 	if err != nil {
-		return fmt.Errorf("failed to create quests table: %w", err)
+		return fmt.Errorf("failed to create %s table: %w", runtimeQuestTable, err)
 	}
 
-	_, err = s.db.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS autonomous_state (
+	_, err = s.db.Exec(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
 			chat_id TEXT PRIMARY KEY,
 			is_active BOOLEAN NOT NULL,
 			started_at TIMESTAMP,
@@ -55,19 +64,24 @@ func (s *DBQuestStore) InitSchema(ctx context.Context) error {
 			active_quests TEXT,
 			updated_at TIMESTAMP NOT NULL
 		)
-	`)
+	`, runtimeStateTable))
 	if err != nil {
-		return fmt.Errorf("failed to create autonomous_state table: %w", err)
+		return fmt.Errorf("failed to create %s table: %w", runtimeStateTable, err)
 	}
 
-	_, err = s.db.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_quests_status ON quests(status)`)
+	_, err = s.db.Exec(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s(status)`, runtimeQuestStatusIdx, runtimeQuestTable))
 	if err != nil {
-		return fmt.Errorf("failed to create quests status index: %w", err)
+		return fmt.Errorf("failed to create runtime quest status index: %w", err)
 	}
 
-	_, err = s.db.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_quests_type ON quests(type)`)
+	_, err = s.db.Exec(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s(type)`, runtimeQuestTypeIdx, runtimeQuestTable))
 	if err != nil {
-		return fmt.Errorf("failed to create quests type index: %w", err)
+		return fmt.Errorf("failed to create runtime quest type index: %w", err)
+	}
+
+	_, err = s.db.Exec(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s(updated_at)`, runtimeStateUpdatedIdx, runtimeStateTable))
+	if err != nil {
+		return fmt.Errorf("failed to create runtime autonomous_state updated_at index: %w", err)
 	}
 
 	return nil
@@ -81,8 +95,8 @@ func (s *DBQuestStore) SaveQuest(ctx context.Context, quest *Quest) error {
 	checkpointJSON, _ := json.Marshal(quest.Checkpoint)
 	metadataJSON, _ := json.Marshal(quest.Metadata)
 
-	query := `
-		INSERT INTO quests (
+	query := fmt.Sprintf(`
+		INSERT INTO %s (
 			id, name, description, type, cadence, cron_expr, status, prompt,
 			target_count, current_count, checkpoint, created_at, updated_at,
 			last_executed_at, completed_at, last_error, metadata
@@ -98,7 +112,7 @@ func (s *DBQuestStore) SaveQuest(ctx context.Context, quest *Quest) error {
 			completed_at = EXCLUDED.completed_at,
 			last_error = EXCLUDED.last_error,
 			metadata = EXCLUDED.metadata
-	`
+	`, runtimeQuestTable)
 
 	_, err := s.db.Exec(ctx, query,
 		quest.ID, quest.Name, quest.Description, quest.Type, quest.Cadence, quest.CronExpr,
@@ -120,12 +134,12 @@ func (s *DBQuestStore) GetQuest(ctx context.Context, id string) (*Quest, error) 
 	var cronExpr, lastError sql.NullString
 	var lastExecutedAt, completedAt sql.NullTime
 
-	err := s.db.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, fmt.Sprintf(`
 		SELECT id, name, description, type, cadence, cron_expr, status, prompt,
 			   target_count, current_count, checkpoint, created_at, updated_at,
 			   last_executed_at, completed_at, last_error, metadata
-		FROM quests WHERE id = $1
-	`, id).Scan(
+		FROM %s WHERE id = $1
+	`, runtimeQuestTable), id).Scan(
 		&quest.ID, &quest.Name, &quest.Description, &quest.Type, &quest.Cadence,
 		&cronExpr, &quest.Status, &quest.Prompt, &quest.TargetCount, &quest.CurrentCount,
 		&checkpointJSON, &quest.CreatedAt, &quest.UpdatedAt,
@@ -163,18 +177,12 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 		return nil, fmt.Errorf("database connection is nil")
 	}
 
-	query := `SELECT id, name, description, type, cadence, cron_expr, status, prompt,
+	query := fmt.Sprintf(`SELECT id, name, description, type, cadence, cron_expr, status, prompt,
 			  target_count, current_count, checkpoint, created_at, updated_at,
 			  last_executed_at, completed_at, last_error, metadata
-			  FROM quests WHERE 1=1`
-	args := make([]interface{}, 0, 2)
+			  FROM %s WHERE 1=1`, runtimeQuestTable)
+	args := make([]interface{}, 0, 1)
 	argIndex := 1
-
-	if chatID != "" {
-		query += fmt.Sprintf(" AND metadata->>'chat_id' = $%d", argIndex)
-		args = append(args, chatID)
-		argIndex++
-	}
 
 	if status != "" {
 		query += fmt.Sprintf(" AND status = $%d", argIndex)
@@ -226,6 +234,11 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
 		}
 
+		if strings.TrimSpace(chatID) != "" {
+			if strings.TrimSpace(quest.Metadata["chat_id"]) != strings.TrimSpace(chatID) {
+				continue
+			}
+		}
 		quests = append(quests, &quest)
 	}
 
@@ -239,10 +252,10 @@ func (s *DBQuestStore) UpdateQuestProgress(ctx context.Context, id string, curre
 
 	checkpointJSON, _ := json.Marshal(checkpoint)
 
-	_, err := s.db.Exec(ctx, `
-		UPDATE quests SET current_count = $2, checkpoint = $3, updated_at = $4
+	_, err := s.db.Exec(ctx, fmt.Sprintf(`
+		UPDATE %s SET current_count = $2, checkpoint = $3, updated_at = $4
 		WHERE id = $1
-	`, id, current, checkpointJSON, time.Now().UTC())
+	`, runtimeQuestTable), id, current, checkpointJSON, time.Now().UTC())
 
 	return err
 }
@@ -252,10 +265,10 @@ func (s *DBQuestStore) UpdateLastExecuted(ctx context.Context, id string, execut
 		return fmt.Errorf("database connection is nil")
 	}
 
-	_, err := s.db.Exec(ctx, `
-		UPDATE quests SET last_executed_at = $2, updated_at = $3
+	_, err := s.db.Exec(ctx, fmt.Sprintf(`
+		UPDATE %s SET last_executed_at = $2, updated_at = $3
 		WHERE id = $1
-	`, id, executedAt, time.Now().UTC())
+	`, runtimeQuestTable), id, executedAt, time.Now().UTC())
 
 	return err
 }
@@ -267,8 +280,8 @@ func (s *DBQuestStore) SaveAutonomousState(ctx context.Context, state *Autonomou
 
 	activeQuestsJSON, _ := json.Marshal(state.ActiveQuests)
 
-	query := `
-		INSERT INTO autonomous_state (chat_id, is_active, started_at, paused_at, active_quests, updated_at)
+	query := fmt.Sprintf(`
+		INSERT INTO %s (chat_id, is_active, started_at, paused_at, active_quests, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (chat_id) DO UPDATE SET
 			is_active = EXCLUDED.is_active,
@@ -276,7 +289,7 @@ func (s *DBQuestStore) SaveAutonomousState(ctx context.Context, state *Autonomou
 			paused_at = EXCLUDED.paused_at,
 			active_quests = EXCLUDED.active_quests,
 			updated_at = EXCLUDED.updated_at
-	`
+	`, runtimeStateTable)
 
 	_, err := s.db.Exec(ctx, query,
 		state.ChatID, state.IsActive, state.StartedAt, state.PausedAt,
@@ -295,10 +308,10 @@ func (s *DBQuestStore) GetAutonomousState(ctx context.Context, chatID string) (*
 	var activeQuestsJSON []byte
 	var startedAt, pausedAt sql.NullTime
 
-	err := s.db.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, fmt.Sprintf(`
 		SELECT chat_id, is_active, started_at, paused_at, active_quests
-		FROM autonomous_state WHERE chat_id = $1
-	`, chatID).Scan(
+		FROM %s WHERE chat_id = $1
+	`, runtimeStateTable), chatID).Scan(
 		&state.ChatID, &state.IsActive, &startedAt, &pausedAt, &activeQuestsJSON,
 	)
 	if err != nil {
@@ -324,7 +337,7 @@ func (s *DBQuestStore) DeleteQuest(ctx context.Context, id string) error {
 		return fmt.Errorf("database connection is nil")
 	}
 
-	_, err := s.db.Exec(ctx, `DELETE FROM quests WHERE id = $1`, id)
+	_, err := s.db.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, runtimeQuestTable), id)
 	return err
 }
 
@@ -336,9 +349,9 @@ func (s *DBQuestStore) CountQuests(ctx context.Context, status QuestStatus) (int
 	var count int
 	var err error
 	if status == "" {
-		err = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM quests`).Scan(&count)
+		err = s.db.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, runtimeQuestTable)).Scan(&count)
 	} else {
-		err = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM quests WHERE status = $1`, string(status)).Scan(&count)
+		err = s.db.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE status = $1`, runtimeQuestTable), string(status)).Scan(&count)
 	}
 	return count, err
 }

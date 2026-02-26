@@ -477,6 +477,63 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	log.Printf("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
 
+	if !isDryRun {
+		timeStopClosed, timeStopErr := h.enforceAdaptiveTimeStop(ctx, quest, chatID, userExchange, portfolio.StrategyPhase)
+		if timeStopErr != nil {
+			log.Printf("[SCALPING] Adaptive time-stop check failed: %v", timeStopErr)
+			quest.Checkpoint["time_stop_error"] = timeStopErr.Error()
+		} else if timeStopClosed > 0 {
+			quest.Checkpoint["status"] = "risk_reduction"
+			quest.Checkpoint["time_stop_closed_positions"] = timeStopClosed
+			h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+				DecisionType: "risk_reduction",
+				Summary:      "Adaptive time-stop closed stale positions before new entries",
+				Confidence:   1,
+				Reasons: []string{
+					fmt.Sprintf("Closed %d position(s) that exceeded max hold duration", timeStopClosed),
+					fmt.Sprintf("Regime phase used: %s", portfolio.StrategyPhase),
+				},
+				Action: "hold",
+			})
+			return nil
+		}
+	}
+
+	if checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"]) {
+		h.updateHoldStateCheckpoint(quest, true)
+		unlockClosed, unlockErr := h.maybeApplyRiskUnlock(ctx, quest, chatID, userExchange, portfolio.RiskDrawdown)
+		if unlockErr != nil {
+			log.Printf("[SCALPING] Risk unlock check failed during risk lock: %v", unlockErr)
+			quest.Checkpoint["risk_unlock_error"] = unlockErr.Error()
+		}
+
+		quest.Checkpoint["status"] = "risk_lock"
+		reasons := []string{
+			"Risk lock active: new entries are paused; only de-risk/protection/reconcile actions are allowed",
+		}
+		if blockedAt, ok := quest.Checkpoint["runtime_entry_blocked_at"].(string); ok && strings.TrimSpace(blockedAt) != "" {
+			reasons = append(reasons, fmt.Sprintf("Entry gate active since %s", blockedAt))
+		}
+		if unlockClosed > 0 {
+			reasons = append(reasons, fmt.Sprintf("Risk unlock trimmed %d position(s) by 35%%", unlockClosed))
+		}
+
+		holdDecision := &AITradingDecision{
+			Action:     "hold",
+			Confidence: 0,
+			Reasoning:  "risk lock active",
+		}
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "risk_reduction",
+			Summary:      "Risk lock active: entry scans paused, risk controls still running",
+			Confidence:   0,
+			Reasons:      reasons,
+			Action:       "hold",
+		})
+		h.maybeSendHoldDigest(ctx, quest, chatID, holdDecision, portfolio)
+		return nil
+	}
+
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(ctx, portfolio)
 	if err != nil {
 		log.Printf("[SCALPING] AI decision error: %v", err)
@@ -541,6 +598,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.Checkpoint["ai_size_pct"] = decision.SizePercent
 
 	if decision.Action == "hold" {
+		h.updateHoldStateCheckpoint(quest, true)
+		unlockClosed, unlockErr := h.maybeApplyRiskUnlock(ctx, quest, chatID, userExchange, portfolio.RiskDrawdown)
+		if unlockErr != nil {
+			log.Printf("[SCALPING] Risk unlock check failed: %v", unlockErr)
+			quest.Checkpoint["risk_unlock_error"] = unlockErr.Error()
+		}
+
 		if isRuntimeHoldReason(decision.Reasoning) {
 			streak, cooldown := h.recordScalpingFailure(quest, decision.Reasoning)
 			if cooldown > 0 {
@@ -552,16 +616,22 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		}
 		log.Printf("[SCALPING] AI decided to hold: %s", decision.Reasoning)
 		quest.Checkpoint["status"] = "hold"
+		reasons := []string{decision.Reasoning}
+		if unlockClosed > 0 {
+			reasons = append(reasons, fmt.Sprintf("Risk unlock trimmed %d position(s) by 35%%", unlockClosed))
+		}
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 			DecisionType: "scalping_cycle",
 			Summary:      "AI held position this cycle",
 			Confidence:   decision.Confidence,
-			Reasons:      []string{decision.Reasoning},
+			Reasons:      reasons,
 			Action:       "hold",
 		})
+		h.maybeSendHoldDigest(ctx, quest, chatID, decision, portfolio)
 		return nil
 	}
 
+	h.updateHoldStateCheckpoint(quest, false)
 	h.resetScalpingFailureState(quest)
 	quest.Checkpoint["status"] = "ai_executed"
 	quest.CurrentCount++
@@ -1302,6 +1372,57 @@ func (h *IntegratedQuestHandlers) notifyScalpingDecision(ctx context.Context, ch
 	}
 }
 
+func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
+	ctx context.Context,
+	quest *Quest,
+	chatID string,
+	decision *AITradingDecision,
+	portfolio TradingPortfolio,
+) {
+	if quest == nil || decision == nil {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+
+	interval := 15 * time.Minute
+	if seconds := getEnvInt("NEURATRADE_TELEGRAM_HOLD_DIGEST_INTERVAL_SECONDS"); seconds > 0 {
+		interval = time.Duration(seconds) * time.Second
+	}
+	now := time.Now().UTC()
+	if raw, ok := quest.Checkpoint["runtime_last_hold_digest_at"].(string); ok && strings.TrimSpace(raw) != "" {
+		if lastSent, err := time.Parse(time.RFC3339, raw); err == nil && now.Sub(lastSent) < interval {
+			return
+		}
+	}
+
+	holdStreak := checkpointInt(quest.Checkpoint["runtime_hold_streak"])
+	minConfidence := 0.0
+	maxCapital := 0.0
+	if h.aiScalpingService != nil {
+		minConfidence, maxCapital = h.aiScalpingService.dynamicRiskThresholds(ctx)
+	}
+
+	reasons := []string{
+		decision.Reasoning,
+		fmt.Sprintf("Hold streak: %d cycle(s)", holdStreak),
+		fmt.Sprintf("Risk drawdown: %.2f%%", portfolio.RiskDrawdown*100),
+		fmt.Sprintf("Current thresholds: min_confidence=%.2f, max_capital=%.2f%%", minConfidence, maxCapital),
+		fmt.Sprintf("Unlock cycles: %d", checkpointInt(quest.Checkpoint["runtime_unlock_cycles"])),
+	}
+
+	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+		DecisionType: "scalping_digest",
+		Summary:      "Hold digest: waiting for qualified setup",
+		Confidence:   decision.Confidence,
+		Reasons:      reasons,
+		Action:       "hold",
+	})
+
+	quest.Checkpoint["runtime_last_hold_digest_at"] = now.Format(time.RFC3339)
+}
+
 // getUserExchange gets the user's preferred exchange from database
 // Returns the first connected exchange, or "bitget" as default
 func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
@@ -1857,6 +1978,289 @@ func (h *IntegratedQuestHandlers) resetScalpingFailureState(quest *Quest) {
 	delete(quest.Checkpoint, "runtime_hold_cooldown")
 }
 
+func (h *IntegratedQuestHandlers) updateHoldStateCheckpoint(quest *Quest, held bool) {
+	if quest == nil {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	now := time.Now().UTC()
+	if held {
+		quest.Checkpoint["runtime_hold_streak"] = checkpointInt(quest.Checkpoint["runtime_hold_streak"]) + 1
+		if raw, ok := quest.Checkpoint["runtime_no_fill_since"].(string); !ok || strings.TrimSpace(raw) == "" {
+			quest.Checkpoint["runtime_no_fill_since"] = now.Format(time.RFC3339)
+		}
+	} else {
+		quest.Checkpoint["runtime_hold_streak"] = 0
+		delete(quest.Checkpoint, "runtime_no_fill_since")
+	}
+	quest.Checkpoint["runtime_hold_updated_at"] = now.Format(time.RFC3339)
+}
+
+func (h *IntegratedQuestHandlers) maybeApplyRiskUnlock(
+	ctx context.Context,
+	quest *Quest,
+	chatID, exchange string,
+	drawdown float64,
+) (int, error) {
+	if quest == nil || h.lifecycleStore == nil || h.orderExecutor == nil {
+		return 0, nil
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+
+	holdStreak := checkpointInt(quest.Checkpoint["runtime_hold_streak"])
+	if holdStreak < 3 {
+		return 0, nil
+	}
+
+	minDrawdown := 0.05
+	if configured, ok := getEnvFloat("NEURATRADE_RISK_UNLOCK_MIN_DRAWDOWN"); ok && configured > 0 {
+		minDrawdown = configured
+	}
+	if drawdown < minDrawdown {
+		return 0, nil
+	}
+
+	cooldown := 10 * time.Minute
+	if seconds := getEnvInt("NEURATRADE_RISK_UNLOCK_COOLDOWN_SECONDS"); seconds > 0 {
+		cooldown = time.Duration(seconds) * time.Second
+	}
+	if raw, ok := quest.Checkpoint["runtime_last_unlock_at"].(string); ok && strings.TrimSpace(raw) != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil && time.Since(parsed) < cooldown {
+			return 0, nil
+		}
+	}
+
+	trimmed, err := h.trimWorstManagedPosition(
+		ctx,
+		chatID,
+		exchange,
+		decimal.NewFromFloat(0.35),
+		"risk_unlock_trim",
+	)
+	if err != nil {
+		return 0, err
+	}
+	if trimmed > 0 {
+		quest.Checkpoint["runtime_last_unlock_at"] = time.Now().UTC().Format(time.RFC3339)
+		quest.Checkpoint["runtime_unlock_cycles"] = checkpointInt(quest.Checkpoint["runtime_unlock_cycles"]) + 1
+	}
+	return trimmed, nil
+}
+
+func (h *IntegratedQuestHandlers) enforceAdaptiveTimeStop(
+	ctx context.Context,
+	quest *Quest,
+	chatID, exchange, strategyPhase string,
+) (int, error) {
+	if h.lifecycleStore == nil || h.orderExecutor == nil {
+		return 0, nil
+	}
+	if quest != nil && quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+
+	maxHold := adaptiveMaxHoldDuration(strategyPhase)
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 100)
+	if err != nil {
+		return 0, err
+	}
+	if len(positions) == 0 {
+		return 0, nil
+	}
+
+	now := time.Now().UTC()
+	trimBeforeTimeout := maxHold * 3 / 4
+	closed := 0
+
+	for _, position := range positions {
+		openedAt := position.OpenedAt
+		if openedAt.IsZero() {
+			openedAt = position.UpdatedAt
+		}
+		if openedAt.IsZero() {
+			continue
+		}
+
+		heldFor := now.Sub(openedAt)
+		if heldFor >= maxHold {
+			if !shouldAttemptLifecycleAction(quest, "runtime_timestop_close", position.PositionID, 2*time.Minute, now) {
+				continue
+			}
+			trimmed, trimErr := h.trimManagedPosition(ctx, position, decimal.NewFromInt(1), "adaptive_time_stop_close")
+			if trimErr != nil {
+				return closed, trimErr
+			}
+			if trimmed > 0 {
+				closed += trimmed
+				markLifecycleActionAttempt(quest, "runtime_timestop_close", position.PositionID, now)
+			}
+			continue
+		}
+
+		if heldFor >= trimBeforeTimeout && checkpointInt(quest.Checkpoint["runtime_hold_streak"]) >= 2 {
+			key := fmt.Sprintf("runtime_timestop_trim_%s", position.PositionID)
+			if _, alreadyTrimmed := quest.Checkpoint[key]; alreadyTrimmed {
+				continue
+			}
+			trimmed, trimErr := h.trimManagedPosition(ctx, position, decimal.NewFromFloat(0.35), "adaptive_time_stop_pretrim")
+			if trimErr != nil {
+				return closed, trimErr
+			}
+			if trimmed > 0 {
+				closed += trimmed
+				quest.Checkpoint[key] = now.Format(time.RFC3339)
+			}
+		}
+	}
+
+	return closed, nil
+}
+
+func adaptiveMaxHoldDuration(strategyPhase string) time.Duration {
+	phase := strings.ToLower(strings.TrimSpace(strategyPhase))
+	switch {
+	case strings.Contains(phase, "trend"):
+		return 25 * time.Minute
+	case strings.Contains(phase, "chop"):
+		return 8 * time.Minute
+	default:
+		return 15 * time.Minute
+	}
+}
+
+func shouldAttemptLifecycleAction(quest *Quest, prefix, positionID string, cooldown time.Duration, now time.Time) bool {
+	if quest == nil || quest.Checkpoint == nil {
+		return true
+	}
+	key := fmt.Sprintf("%s_%s", prefix, positionID)
+	raw, ok := quest.Checkpoint[key].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return true
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return true
+	}
+	return now.Sub(parsed) >= cooldown
+}
+
+func markLifecycleActionAttempt(quest *Quest, prefix, positionID string, now time.Time) {
+	if quest == nil {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	key := fmt.Sprintf("%s_%s", prefix, positionID)
+	quest.Checkpoint[key] = now.Format(time.RFC3339)
+}
+
+func (h *IntegratedQuestHandlers) trimWorstManagedPosition(
+	ctx context.Context,
+	chatID, exchange string,
+	fraction decimal.Decimal,
+	source string,
+) (int, error) {
+	if h.lifecycleStore == nil {
+		return 0, nil
+	}
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 100)
+	if err != nil {
+		return 0, err
+	}
+	if len(positions) == 0 {
+		return 0, nil
+	}
+
+	worstIdx := -1
+	worstPnL := decimal.Zero
+	for idx, position := range positions {
+		if position.Size.Abs().LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+		if worstIdx == -1 || position.UnrealizedPnL.LessThan(worstPnL) {
+			worstIdx = idx
+			worstPnL = position.UnrealizedPnL
+		}
+	}
+	if worstIdx == -1 {
+		return 0, nil
+	}
+	return h.trimManagedPosition(ctx, positions[worstIdx], fraction, source)
+}
+
+func (h *IntegratedQuestHandlers) trimManagedPosition(
+	ctx context.Context,
+	position ManagedOpenPosition,
+	fraction decimal.Decimal,
+	source string,
+) (int, error) {
+	if h.orderExecutor == nil {
+		return 0, nil
+	}
+	if fraction.LessThanOrEqual(decimal.Zero) {
+		return 0, nil
+	}
+	sizeAbs := position.Size.Abs()
+	if sizeAbs.LessThanOrEqual(decimal.Zero) {
+		return 0, nil
+	}
+
+	closeSize := sizeAbs.Mul(fraction)
+	if closeSize.GreaterThan(sizeAbs) {
+		closeSize = sizeAbs
+	}
+	if closeSize.LessThanOrEqual(decimal.Zero) {
+		return 0, nil
+	}
+
+	closeSide := oppositeCloseSide(position.Side)
+	if closeSide == "" {
+		closeSide = "sell"
+	}
+	price := position.LastPrice
+	if price.LessThanOrEqual(decimal.Zero) {
+		price = position.EntryPrice
+	}
+	notional := price.Mul(closeSize).Abs()
+	if notional.LessThanOrEqual(decimal.Zero) {
+		notional = closeSize.Abs()
+	}
+
+	details := TradeDetails{
+		Exchange:     position.Exchange,
+		Symbol:       position.Symbol,
+		Side:         closeSide,
+		OrderType:    "market",
+		MarketType:   position.MarketType,
+		Amount:       closeSize,
+		AmountUSDT:   notional,
+		TradeType:    "risk_reduction",
+		Confidence:   1,
+		Reasoning:    source,
+		IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+		ReduceOnly:   true,
+	}
+
+	execWithBypass, hasBypass := h.orderExecutor.(interface {
+		PlaceRiskReductionOrderWithDetails(context.Context, TradeDetails) (string, error)
+	})
+	if hasBypass {
+		if _, err := execWithBypass.PlaceRiskReductionOrderWithDetails(ctx, details); err != nil {
+			return 0, err
+		}
+		return 1, nil
+	}
+	if _, err := h.orderExecutor.PlaceOrderWithDetails(ctx, details); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
 func checkpointInt(v interface{}) int {
 	switch value := v.(type) {
 	case int:
@@ -1879,6 +2283,24 @@ func checkpointInt(v interface{}) int {
 		}
 	}
 	return 0
+}
+
+func checkpointBool(v interface{}) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+	case int:
+		return value != 0
+	case int64:
+		return value != 0
+	case float64:
+		return value != 0
+	default:
+		return false
+	}
 }
 
 func isRuntimeHoldReason(reason string) bool {
@@ -1909,5 +2331,13 @@ func shouldSendScalpingDecisionNotification(notif AIReasoningNotification) bool 
 	decisionType := strings.ToLower(strings.TrimSpace(notif.DecisionType))
 	action := strings.ToLower(strings.TrimSpace(notif.Action))
 
-	return decisionType == "pnl_reconciliation" || action == "record"
+	if action == "buy" || action == "sell" || action == "record" {
+		return true
+	}
+	switch decisionType {
+	case "pnl_reconciliation", "risk_reduction", "scalping_digest":
+		return true
+	default:
+		return false
+	}
 }

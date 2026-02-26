@@ -40,6 +40,21 @@ type SimilarTrade struct {
 	SimilarityScore float64 `json:"similarity_score"`
 }
 
+type TradePerformanceWindowStats struct {
+	LookbackHours      int
+	WindowFrom         time.Time
+	WindowTo           time.Time
+	TotalTrades        int
+	Wins               int
+	Losses             int
+	Breakeven          int
+	Pending            int
+	DecisiveTrades     int
+	DecisiveWinRatePct float64
+	TotalPnL           decimal.Decimal
+	AvgConfidence      float64
+}
+
 func NewTradeMemory(db *sql.DB) (*TradeMemory, error) {
 	tm := &TradeMemory{db: db}
 	if err := tm.initTables(); err != nil {
@@ -323,31 +338,117 @@ func (tm *TradeMemory) extractLessonsFromTrades(ctx context.Context) []string {
 }
 
 func (tm *TradeMemory) GetPerformanceStats(ctx context.Context) (map[string]interface{}, error) {
-	stats := make(map[string]interface{})
+	windowStats, err := tm.GetPerformanceStatsWindow(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"total_trades":         windowStats.TotalTrades,
+		"wins":                 windowStats.Wins,
+		"losses":               windowStats.Losses,
+		"breakeven":            windowStats.Breakeven,
+		"pending":              windowStats.Pending,
+		"decisive_trades":      windowStats.DecisiveTrades,
+		"win_rate":             windowStats.DecisiveWinRatePct,
+		"decisive_win_rate":    windowStats.DecisiveWinRatePct,
+		"avg_confidence":       windowStats.AvgConfidence,
+		"total_pnl":            windowStats.TotalPnL,
+		"lookback_hours":       windowStats.LookbackHours,
+		"window_from":          windowStats.WindowFrom.Format(time.RFC3339),
+		"window_to":            windowStats.WindowTo.Format(time.RFC3339),
+		"decisive_sample_size": windowStats.DecisiveTrades,
+	}, nil
+}
 
-	queries := map[string]string{
-		"total_trades":   "SELECT COUNT(*) FROM ai_trade_memory WHERE outcome != 'pending'",
-		"wins":           "SELECT COUNT(*) FROM ai_trade_memory WHERE outcome = 'win'",
-		"losses":         "SELECT COUNT(*) FROM ai_trade_memory WHERE outcome = 'loss'",
-		"total_pnl":      "SELECT COALESCE(SUM(pnl), 0) FROM ai_trade_memory",
-		"avg_confidence": "SELECT AVG(confidence) FROM ai_trade_memory WHERE outcome != 'pending'",
+func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHours int) (*TradePerformanceWindowStats, error) {
+	if lookbackHours <= 0 {
+		lookbackHours = 24 * 30
+	}
+	windowTo := time.Now().UTC()
+	windowFrom := windowTo.Add(-time.Duration(lookbackHours) * time.Hour)
+
+	stats := &TradePerformanceWindowStats{
+		LookbackHours: lookbackHours,
+		WindowFrom:    windowFrom,
+		WindowTo:      windowTo,
+		TotalPnL:      decimal.Zero,
 	}
 
-	for key, q := range queries {
-		row := tm.db.QueryRowContext(ctx, q)
-		var val interface{}
-		if err := row.Scan(&val); err == nil {
-			stats[key] = val
+	rows, err := tm.db.QueryContext(ctx, `
+		SELECT outcome, COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(AVG(confidence), 0)
+		FROM ai_trade_memory
+		WHERE timestamp >= $1
+		GROUP BY outcome
+	`, windowFrom)
+	if err != nil {
+		return nil, fmt.Errorf("query performance stats window: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	totalConfidence := 0.0
+	for rows.Next() {
+		var outcome string
+		var count int
+		var pnl float64
+		var avgConfidence float64
+		if err := rows.Scan(&outcome, &count, &pnl, &avgConfidence); err != nil {
+			return nil, fmt.Errorf("scan performance stats window: %w", err)
+		}
+		outcome = strings.ToLower(strings.TrimSpace(outcome))
+		stats.TotalTrades += count
+		stats.TotalPnL = stats.TotalPnL.Add(decimal.NewFromFloat(pnl))
+		totalConfidence += avgConfidence * float64(count)
+
+		switch outcome {
+		case "win":
+			stats.Wins += count
+		case "loss":
+			stats.Losses += count
+		case "breakeven", "break_even":
+			stats.Breakeven += count
+		default:
+			stats.Pending += count
 		}
 	}
-
-	if total, ok := stats["total_trades"].(int64); ok && total > 0 {
-		if wins, ok := stats["wins"].(int64); ok {
-			stats["win_rate"] = float64(wins) / float64(total) * 100
-		}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate performance stats window: %w", err)
 	}
 
+	if stats.TotalTrades > 0 {
+		stats.AvgConfidence = totalConfidence / float64(stats.TotalTrades)
+	}
+
+	stats.DecisiveTrades = stats.Wins + stats.Losses
+	if stats.DecisiveTrades > 0 {
+		stats.DecisiveWinRatePct = (float64(stats.Wins) / float64(stats.DecisiveTrades)) * 100
+	}
 	return stats, nil
+}
+
+func (tm *TradeMemory) GetLastDecisionTimestamp(ctx context.Context) (time.Time, error) {
+	var raw sql.NullString
+	if err := tm.db.QueryRowContext(ctx, `
+		SELECT MAX(timestamp) FROM ai_trade_memory
+	`).Scan(&raw); err != nil {
+		return time.Time{}, fmt.Errorf("query last decision timestamp: %w", err)
+	}
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return time.Time{}, nil
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, raw.String); err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, nil
 }
 
 func (tm *TradeMemory) BuildMemoryContext(ctx context.Context, symbol string, currentContext string) (string, error) {
@@ -355,12 +456,14 @@ func (tm *TradeMemory) BuildMemoryContext(ctx context.Context, symbol string, cu
 
 	contextBuilder.WriteString("## Past Trading History\n\n")
 
-	stats, err := tm.GetPerformanceStats(ctx)
+	stats, err := tm.GetPerformanceStatsWindow(ctx, 24*30)
 	if err == nil {
 		contextBuilder.WriteString("### Performance Stats\n")
-		fmt.Fprintf(&contextBuilder, "- Total Trades: %v\n", stats["total_trades"])
-		fmt.Fprintf(&contextBuilder, "- Win Rate: %.1f%%\n", stats["win_rate"])
-		fmt.Fprintf(&contextBuilder, "- Total PnL: %v\n", stats["total_pnl"])
+		fmt.Fprintf(&contextBuilder, "- Lookback: %dh\n", stats.LookbackHours)
+		fmt.Fprintf(&contextBuilder, "- Total Trades: %d (pending: %d)\n", stats.TotalTrades, stats.Pending)
+		fmt.Fprintf(&contextBuilder, "- Decisive Sample: %d (wins: %d, losses: %d, breakeven: %d)\n", stats.DecisiveTrades, stats.Wins, stats.Losses, stats.Breakeven)
+		fmt.Fprintf(&contextBuilder, "- Decisive Win Rate: %.1f%%\n", stats.DecisiveWinRatePct)
+		fmt.Fprintf(&contextBuilder, "- Total PnL: %s\n", stats.TotalPnL.StringFixed(4))
 		contextBuilder.WriteString("\n")
 	}
 

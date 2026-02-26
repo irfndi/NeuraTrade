@@ -185,6 +185,16 @@ export interface QuestsResponse {
   readonly updated_at?: string;
 }
 
+export interface QuestDiagnosticsResponse {
+  readonly chat_id?: string;
+  readonly autonomous?: boolean;
+  readonly started_at?: string;
+  readonly quest_runtime?: Readonly<Record<string, unknown>>;
+  readonly chat_runtime?: Readonly<Record<string, unknown>>;
+  readonly heartbeat?: Readonly<Record<string, unknown>>;
+  readonly timestamp?: string;
+}
+
 export interface WalletInfo {
   readonly wallet_id?: string;
   readonly type: string;
@@ -215,6 +225,8 @@ export interface DoctorCheckResponse {
   readonly message?: string;
   readonly latency_ms?: number;
   readonly details?: Readonly<Record<string, string>>;
+  readonly optional?: boolean;
+  readonly impact?: "core" | "optional" | string;
 }
 
 export interface DoctorResponse {
@@ -307,6 +319,8 @@ export const API_ENDPOINTS = {
   REMOVE_WALLET: "/api/v1/telegram/internal/wallets/remove",
   GET_QUESTS: (chatId: string) =>
     `/api/v1/telegram/internal/quests?chat_id=${encodeURIComponent(chatId)}`,
+  GET_QUEST_DIAGNOSTICS: (chatId: string) =>
+    `/api/v1/telegram/internal/quests/diagnostics?chat_id=${encodeURIComponent(chatId)}`,
   GET_PORTFOLIO: (chatId: string) =>
     `/api/v1/telegram/internal/portfolio?chat_id=${encodeURIComponent(chatId)}`,
   GET_WALLETS: (chatId: string) =>
@@ -318,8 +332,8 @@ export const API_ENDPOINTS = {
   GET_AI_MODELS: "/api/v1/ai/models",
   SELECT_AI_MODEL: (userId: string) =>
     `/api/v1/ai/select/${encodeURIComponent(userId)}`,
-  GET_AI_STATUS: (userId: string) =>
-    `/api/v1/ai/status/${encodeURIComponent(userId)}`,
+  GET_AI_STATUS: (chatId: string) =>
+    `/api/v1/telegram/internal/ai/status/${encodeURIComponent(chatId)}`,
   ROUTE_AI_MODEL: "/api/v1/ai/route",
   GET_ALERTS: (userId: string) =>
     `/api/v1/alerts?user_id=${encodeURIComponent(userId)}`,

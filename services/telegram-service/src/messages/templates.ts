@@ -50,8 +50,15 @@ const normalizePercent = (input: QuestProgressTemplateInput): number => {
 };
 
 const formatDoctorCheck = (check: DoctorCheck): string[] => {
+  const impactRaw = (check.impact || "").toLowerCase();
+  const impact =
+    impactRaw === "core" || impactRaw === "optional"
+      ? impactRaw
+      : check.optional
+        ? "optional"
+        : "core";
   const lines = [
-    `${statusIcon(check.status)} ${check.name}: ${check.status.toUpperCase()}`,
+    `${statusIcon(check.status)} ${check.name} [${impact.toUpperCase()}]: ${check.status.toUpperCase()}`,
   ];
 
   if (hasValue(check.message)) {
