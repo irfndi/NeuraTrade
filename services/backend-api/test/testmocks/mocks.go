@@ -494,6 +494,44 @@ func (m *MockCCXTService) FetchBalance(ctx context.Context, exchange string) (*c
 	return args.Get(0).(*ccxt.BalanceResponse), args.Error(1)
 }
 
+// New methods for resumability
+func (m *MockCCXTService) FetchOpenOrders(ctx context.Context, exchange string) (*ccxt.OpenOrdersResponse, error) {
+	args := m.Called(ctx, exchange)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.OpenOrdersResponse), args.Error(1)
+}
+
+func (m *MockCCXTService) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*ccxt.OpenOrdersResponse, error) {
+	args := m.Called(ctx, exchange, symbol)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.OpenOrdersResponse), args.Error(1)
+}
+
+func (m *MockCCXTService) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	args := m.Called(ctx, exchange, orderID, symbol)
+	return args.Error(0)
+}
+
+func (m *MockCCXTService) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*ccxt.OrderResponse, error) {
+	args := m.Called(ctx, exchange, orderID, symbol)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.OrderResponse), args.Error(1)
+}
+
+func (m *MockCCXTService) FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error) {
+	args := m.Called(ctx, exchange)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.PositionsResponse), args.Error(1)
+}
+
 // Mock implementations for CollectorService
 func (m *MockCollectorService) Start() error {
 	args := m.Called()

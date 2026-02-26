@@ -123,9 +123,13 @@ export const loadConfig = Effect.try((): TelegramConfig => {
     );
   }
 
-  const apiBaseUrl = (
-    process.env.TELEGRAM_API_BASE_URL || "http://localhost:8080"
-  ).replace(/\/$/, "");
+  const rawApiBaseUrl =
+    getEnvWithNeuratradeFallback("TELEGRAM_API_BASE_URL") ||
+    process.env.TELEGRAM_API_BASE_URL ||
+    "http://localhost:8080";
+  const apiBaseUrl = rawApiBaseUrl.includes("api.telegram.org")
+    ? "http://localhost:8080"
+    : rawApiBaseUrl.replace(/\/$/, "");
 
   const webhookUrlRaw = (process.env.TELEGRAM_WEBHOOK_URL || "").trim();
   const webhookUrl = webhookUrlRaw.length > 0 ? webhookUrlRaw : null;

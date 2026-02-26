@@ -24,6 +24,10 @@ mock.module("grammy", () => {
     async setWebhook(_url: string, _options?: any) {
       return true;
     }
+
+    async setMyCommands(_commands: any[]) {
+      return true;
+    }
   }
 
   class MockBot {

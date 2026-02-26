@@ -1,12 +1,11 @@
 #!/bin/bash
 
-# Simple migration script for Docker containers
-# This script doesn't require docker/docker-compose tools inside the container
+# Simple migration script for native PostgreSQL deployments
 
 set -euo pipefail
 
 # Configuration
-DB_HOST="${DB_HOST:-postgres}"
+DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-neuratrade}"
 DB_USER="${DB_USER:-postgres}"
@@ -32,10 +31,10 @@ log_warn() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $*"
 }
 
-# Check if required tools are available (only psql needed in container)
+# Check if required tools are available
 check_prerequisites() {
   if ! command -v psql &>/dev/null; then
-    log_error "psql is not available in the container"
+    log_error "psql is not available"
     return 1
   fi
 

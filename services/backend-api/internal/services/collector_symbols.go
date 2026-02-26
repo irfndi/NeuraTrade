@@ -62,6 +62,9 @@ func (c *CollectorService) getMultiExchangeSymbols(exchanges []string) (map[stri
 func (c *CollectorService) getMultiExchangeSymbolsConcurrent(exchanges []string) (map[string]int, error) {
 	symbolCount := make(map[string]int)
 	minExchanges := 2 // Minimum number of exchanges a symbol must appear on
+	if len(exchanges) <= 1 {
+		minExchanges = 1
+	}
 
 	// Get dynamic concurrency limit from resource optimizer
 	optimalConcurrency := c.resourceOptimizer.GetOptimalConcurrency()
@@ -189,9 +192,13 @@ func (c *CollectorService) tryGetSymbolsConcurrent(ctx context.Context, exchange
 		}).Info("Found valid active symbols")
 	}
 
-	// Check if we have enough successful exchanges
-	if successfulExchanges < 2 {
-		return nil, fmt.Errorf("insufficient successful exchanges (%d), need at least 2", successfulExchanges)
+	// Check if we have enough successful exchanges for the configured topology.
+	requiredSuccessful := 2
+	if len(exchanges) <= 1 {
+		requiredSuccessful = 1
+	}
+	if successfulExchanges < requiredSuccessful {
+		return nil, fmt.Errorf("insufficient successful exchanges (%d), need at least %d", successfulExchanges, requiredSuccessful)
 	}
 
 	// Filter to only symbols that appear on multiple exchanges

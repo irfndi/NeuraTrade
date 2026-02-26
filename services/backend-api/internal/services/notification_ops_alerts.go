@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/observability"
@@ -189,6 +190,21 @@ func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int
 	})
 	defer observability.FinishSpan(span, nil)
 
+	if ns.aiReasoningThrottle != nil {
+		key := aiReasoningThrottleKey(chatID, reasoning)
+		if key != "" {
+			if !ns.aiReasoningThrottle.ShouldSend(key) {
+				ns.logger.Debug(
+					"AI reasoning notification throttled",
+					"chat_id", chatID,
+					"decision_type", reasoning.DecisionType,
+					"summary", reasoning.Summary,
+				)
+				return nil
+			}
+		}
+	}
+
 	message := ns.formatAIReasoningMessage(reasoning)
 
 	if err := ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
@@ -249,6 +265,47 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 	}
 
 	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+}
+
+func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {
+	action := strings.ToLower(strings.TrimSpace(reasoning.Action))
+	summary := strings.ToLower(strings.TrimSpace(reasoning.Summary))
+
+	if action == "hold" && reasoning.Confidence <= 0.45 {
+		return true
+	}
+
+	return strings.Contains(summary, "runtime error") ||
+		strings.Contains(summary, "skipped due to ai/runtime error") ||
+		strings.Contains(summary, "returned no trade decision") ||
+		strings.Contains(summary, "paused temporarily after repeated runtime failures")
+}
+
+func aiReasoningThrottleKey(chatID int64, reasoning AIReasoningNotification) string {
+	if !shouldThrottleAIReasoning(reasoning) {
+		return ""
+	}
+
+	decisionType := strings.ToLower(strings.TrimSpace(reasoning.DecisionType))
+	if decisionType == "" {
+		decisionType = "unknown"
+	}
+
+	summary := strings.ToLower(strings.TrimSpace(reasoning.Summary))
+	reasonText := strings.ToLower(strings.Join(reasoning.Reasons, " "))
+
+	category := "hold_low_conf"
+	if strings.Contains(summary, "runtime") ||
+		strings.Contains(summary, "error") ||
+		strings.Contains(summary, "returned no trade decision") ||
+		strings.Contains(reasonText, "execution unavailable") ||
+		strings.Contains(reasonText, "model response parse fallback") ||
+		strings.Contains(reasonText, "failed to parse ai decision") ||
+		strings.Contains(reasonText, "llm completion failed") {
+		category = "runtime_hold"
+	}
+
+	return fmt.Sprintf("ai_reasoning:%d:%s:%s", chatID, decisionType, category)
 }
 
 // generateProgressBar generates a visual progress bar

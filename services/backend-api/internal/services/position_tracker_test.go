@@ -141,6 +141,42 @@ func (m *MockCCXTForTracker) FetchBalance(ctx context.Context, exchange string) 
 	}
 	return args.Get(0).(*ccxt.BalanceResponse), args.Error(1)
 }
+func (m *MockCCXTForTracker) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	args := m.Called(ctx, exchange, orderID, symbol)
+	return args.Error(0)
+}
+
+func (m *MockCCXTForTracker) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*ccxt.OrderResponse, error) {
+	args := m.Called(ctx, exchange, orderID, symbol)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.OrderResponse), args.Error(1)
+}
+
+func (m *MockCCXTForTracker) FetchOpenOrders(ctx context.Context, exchange string) (*ccxt.OpenOrdersResponse, error) {
+	args := m.Called(ctx, exchange)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.OpenOrdersResponse), args.Error(1)
+}
+
+func (m *MockCCXTForTracker) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*ccxt.OpenOrdersResponse, error) {
+	args := m.Called(ctx, exchange, symbol)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.OpenOrdersResponse), args.Error(1)
+}
+
+func (m *MockCCXTForTracker) FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error) {
+	args := m.Called(ctx, exchange)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ccxt.PositionsResponse), args.Error(1)
+}
 
 func setupPositionTrackerTest(t *testing.T) (*PositionTracker, *MockCCXTForTracker, func()) {
 	logrusLogger := zaplogrus.New()

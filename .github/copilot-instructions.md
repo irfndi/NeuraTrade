@@ -93,8 +93,8 @@ make test             # Tests run with optimized settings
 
 **Issue**: Database connection timeout during tests
 - **Symptom**: Tests hang or timeout after 2 minutes
-- **Fix**: Verify Docker services running: `docker compose ps`
-- **Fix**: Check database health: `docker compose exec postgres pg_isready -U postgres`
+- **Fix**: Use SQLite test mode: `DATABASE_DRIVER=sqlite SQLITE_PATH=/tmp/neuratrade-ci.db make test`
+- **Fix**: Validate backend DB readiness via `curl http://localhost:8080/health`
 
 **Issue**: YAML module cache conflict in tests
 - **Symptom**: Conflicts with `gopkg.in/yaml.v3@v3.0.1` and `go.yaml.in/yaml/v3@v3.0.4`
@@ -120,9 +120,9 @@ make test             # Tests run with optimized settings
 - **Test Timing**: ~2-3 minutes with optimized database settings
 - **Coverage**: 80% minimum (non-blocking)
 
-**2. build-and-test.yml** (Fast PR validation)
-- **Triggers**: All PRs and pushes to main/develop
-- **Jobs**: test-go → test-ccxt → build-docker → security-scan
+**2. validation.yml** (Fast PR validation)
+- **Triggers**: All PRs and pushes to main/develop/development
+- **Jobs**: backend-quality → frontend-quality → backend-tests → security scans
 - **Timing**: ~5-8 minutes total
 - **Go Linter**: golangci-lint v2.5.0 with 5-minute timeout
 
@@ -383,9 +383,6 @@ make migrate-status
 # Run pending migrations
 make migrate
 
-# For Docker environment
-make migrate-docker
-
 # Create new migration (manual)
 # Add file to database/migrations/ with format: YYYYMMDDHHMMSS_description.sql
 ```
@@ -457,7 +454,7 @@ bun run build
 **Repository Configuration Files**:
 - Go dependencies: `go.mod`, `go.sum`
 - CCXT service: `ccxt-service/package.json`, `ccxt-service/bun.lock`
-- Docker: `Dockerfile`, `docker-compose.yml`, `docker-compose.*.yml`
+- Native runtime scripts: `services/backend-api/scripts/startup-orchestrator.sh`, `services/backend-api/scripts/health-monitor-enhanced.sh`
 - Environment: `.env.template`, `.env.ci`, `.env.example`
 - Build automation: `Makefile`
 

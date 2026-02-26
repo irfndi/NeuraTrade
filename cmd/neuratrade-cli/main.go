@@ -588,19 +588,20 @@ func generateAuthCode(cCtx *cli.Context) error {
 
 // getBaseURL gets the base URL from environment variable or returns default
 func getBaseURL() string {
-	baseURL := os.Getenv("NEURATRADE_API_BASE_URL")
-	if baseURL == "" {
-		cfg := getConfigValue(defaultNeuraTradeHome())
-		if cfg != nil && cfg.Telegram.ApiBaseURL != "" {
-			baseURL = cfg.Telegram.ApiBaseURL
-		} else if cfg != nil && cfg.Server.Port > 0 {
-			baseURL = fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
-		} else {
-			// Default to localhost for development
-			baseURL = "http://localhost:8080"
-		}
+	baseURL := strings.TrimSpace(os.Getenv("NEURATRADE_API_BASE_URL"))
+	if baseURL != "" {
+		return strings.TrimRight(baseURL, "/")
 	}
-	return baseURL
+
+	cfg := getConfigValue(defaultNeuraTradeHome())
+	// In config.json, telegram.api_base_url often points to Telegram public API;
+	// never use it as backend service endpoint.
+	if cfg != nil && cfg.Telegram.ApiBaseURL != "" && !strings.Contains(cfg.Telegram.ApiBaseURL, "api.telegram.org") {
+		return strings.TrimRight(cfg.Telegram.ApiBaseURL, "/")
+	}
+
+	backendPort := resolveBackendPort(cfg)
+	return fmt.Sprintf("http://localhost:%s", backendPort)
 }
 
 // getAPIKey gets the API key from environment variable
@@ -1741,7 +1742,7 @@ func reloadExchanges(cCtx *cli.Context) error {
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
 		fmt.Println("\nManual reload required:")
-		fmt.Println("  1. Stop CCXT service: docker compose restart ccxt-service")
+		fmt.Println("  1. Restart gateway services: neuratrade gateway restart")
 		fmt.Println("  2. Or restart all services: neuratrade gateway restart")
 		return nil
 	}

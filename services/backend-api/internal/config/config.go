@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,6 +141,16 @@ type CCXTConfig struct {
 	Timeout int `mapstructure:"timeout"`
 	// AdminAPIKey is the API key for authenticating with admin endpoints.
 	AdminAPIKey string `mapstructure:"admin_api_key"`
+	// Exchanges holds exchange-specific credentials.
+	Exchanges map[string]ExchangeCredentials `mapstructure:"exchanges"`
+}
+
+// ExchangeCredentials holds API credentials for an exchange.
+type ExchangeCredentials struct {
+	APIKey     string `mapstructure:"api_key"`
+	Secret     string `mapstructure:"secret"`
+	Passphrase string `mapstructure:"passphrase"`
+	Testnet    bool   `mapstructure:"testnet"`
 }
 
 // TelegramConfig defines settings for the Telegram notification bot.
@@ -363,22 +372,15 @@ type FeaturesConfig struct {
 }
 
 func Load() (*Config, error) {
-	// First: Add ~/.neuratrade/ config path (user local config)
-	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
+	// First: add user-local NeuraTrade config path.
+	if dir := neuratradeHomeDir(); dir != "" {
+		viper.AddConfigPath(dir)
 	}
 
 	// Second: Add project config path
 	viper.SetConfigName("config")
 	// Don't set explicit config type - let viper auto-detect from file extension
 	viper.AddConfigPath(".")
-
-	// Also support JSON config from ~/.neuratrade/ (only if homeDir is available)
-	// Note: viper.AddConfigPath is cumulative, so this adds to the search paths
-	if err == nil {
-		viper.AddConfigPath(filepath.Join(homeDir, ".neuratrade"))
-	}
 
 	// Set default values
 	setDefaults()
@@ -488,10 +490,10 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("database.conn_max_lifetime", "300s")
 	viper.SetDefault("database.conn_max_idle_time", "60s")
-	// Use absolute path for SQLite database to ensure consistent location
-	homeDir, _ := os.UserHomeDir()
-	if homeDir != "" {
-		viper.SetDefault("database.sqlite_path", filepath.Join(homeDir, ".neuratrade", "data", "neuratrade.db"))
+	// Use absolute path for SQLite database to ensure consistent location.
+	// Respect NEURATRADE_HOME when set.
+	if homeDir := neuratradeHomeDir(); homeDir != "" {
+		viper.SetDefault("database.sqlite_path", filepath.Join(homeDir, "data", "neuratrade.db"))
 	} else {
 		viper.SetDefault("database.sqlite_path", "neuratrade.db")
 	}
@@ -503,40 +505,16 @@ func setDefaults() {
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
 
-	// CCXT - Use Docker service names when running in Docker/Coolify
-	// Note: These defaults can be overridden by explicit env vars (CCXT_SERVICE_URL, CCXT_GRPC_ADDRESS)
-	// which are bound via viper.BindEnv() in Load(). Viper prioritizes env vars over defaults.
-	//
-	// Detect Coolify environment by checking for COOLIFY_* variables
-	// Coolify sets COOLIFY_CONTAINER_NAME, COOLIFY_RESOURCE_UUID, etc., not just COOLIFY=true
-	isCoolify := os.Getenv("COOLIFY_CONTAINER_NAME") != "" ||
-		os.Getenv("COOLIFY_RESOURCE_UUID") != "" ||
-		os.Getenv("COOLIFY") == "true"
-	isDocker := os.Getenv("DOCKER_ENVIRONMENT") == "true" || isCoolify
-
-	// Log detection result for debugging (only if log package is available)
-	if isDocker {
-		log.Printf("INFO: Docker/Coolify environment detected (COOLIFY=%v, DOCKER_ENVIRONMENT=%s)",
-			isCoolify, os.Getenv("DOCKER_ENVIRONMENT"))
-		viper.SetDefault("ccxt.service_url", "http://ccxt-service:3001")
-		viper.SetDefault("ccxt.grpc_address", "ccxt-service:50051")
-	} else {
-		viper.SetDefault("ccxt.service_url", "http://localhost:3001")
-		// Use explicit IPv4 address to avoid IPv6 resolution issues on some systems
-		viper.SetDefault("ccxt.grpc_address", "127.0.0.1:50051")
-	}
+	// CCXT defaults for native deployment. Explicit env vars still take precedence.
+	viper.SetDefault("ccxt.service_url", "http://localhost:3001")
+	// Use explicit IPv4 address to avoid IPv6 resolution issues on some systems
+	viper.SetDefault("ccxt.grpc_address", "127.0.0.1:50051")
 	viper.SetDefault("ccxt.timeout", 30)
 
-	// Telegram - Use Docker service names when running in Docker/Coolify
-	// Note: These defaults can be overridden by explicit env vars (TELEGRAM_SERVICE_URL, TELEGRAM_GRPC_ADDRESS)
-	if isDocker {
-		viper.SetDefault("telegram.service_url", "http://telegram-service:3002")
-		viper.SetDefault("telegram.grpc_address", "telegram-service:50052")
-	} else {
-		viper.SetDefault("telegram.service_url", "http://localhost:3002")
-		// Use explicit IPv4 address to avoid IPv6 resolution issues on some systems
-		viper.SetDefault("telegram.grpc_address", "127.0.0.1:50052")
-	}
+	// Telegram defaults for native deployment. Explicit env vars still take precedence.
+	viper.SetDefault("telegram.service_url", "http://localhost:3002")
+	// Use explicit IPv4 address to avoid IPv6 resolution issues on some systems
+	viper.SetDefault("telegram.grpc_address", "127.0.0.1:50052")
 	viper.SetDefault("telegram.admin_api_key", "")
 	viper.SetDefault("telegram.bot_token", "")
 	viper.SetDefault("telegram.webhook_url", "")
@@ -580,7 +558,7 @@ func setDefaults() {
 	viper.SetDefault("market_data.batch_size", 100)
 	viper.SetDefault("market_data.max_retries", 3)
 	viper.SetDefault("market_data.timeout", "15s")
-	viper.SetDefault("market_data.exchanges", []string{"binance", "coinbase", "kraken", "bitfinex", "huobi"})
+	viper.SetDefault("market_data.exchanges", []string{"binance", "coinbase", "kraken", "bitfinex", "huobi", "bybit", "bitget"})
 
 	// Arbitrage
 	viper.SetDefault("arbitrage.enabled", true)
@@ -646,6 +624,17 @@ func setDefaults() {
 	viper.SetDefault("features.enable_ai_arbitrage", false)
 }
 
+func neuratradeHomeDir() string {
+	if v := strings.TrimSpace(os.Getenv("NEURATRADE_HOME")); v != "" {
+		return v
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return ""
+	}
+	return filepath.Join(homeDir, ".neuratrade")
+}
+
 // GetServiceURL returns the CCXT service URL.
 //
 // Returns:
@@ -709,20 +698,6 @@ func validateConfig(config *Config) error {
 			}
 		}
 
-		// Validate Service URLs for production/staging
-		// If running in a containerized environment (common for production/staging),
-		// localhost/127.0.0.1 is almost always wrong for service-to-service communication.
-		if config.CCXT.ServiceURL != "" {
-			if strings.Contains(config.CCXT.ServiceURL, "localhost") || strings.Contains(config.CCXT.ServiceURL, "127.0.0.1") {
-				log.Printf("WARNING: CCXT_SERVICE_URL '%s' contains localhost/127.0.0.1 in %s environment. This may cause connectivity issues between containers.", config.CCXT.ServiceURL, config.Environment)
-			}
-		}
-
-		if config.Telegram.ServiceURL != "" {
-			if strings.Contains(config.Telegram.ServiceURL, "localhost") || strings.Contains(config.Telegram.ServiceURL, "127.0.0.1") {
-				log.Printf("WARNING: TELEGRAM_SERVICE_URL '%s' contains localhost/127.0.0.1 in %s environment. This may cause connectivity issues between containers.", config.Telegram.ServiceURL, config.Environment)
-			}
-		}
 	}
 
 	return nil

@@ -18,7 +18,7 @@ NeuraTrade/
 ├── protos/               # Shared protobuf definitions
 ├── docs/                 # Plans and legacy docs
 ├── Makefile              # Canonical dev/test/build entrypoint
-└── docker-compose.yaml   # Local/prod orchestration
+└── cmd/neuratrade-cli/   # Native gateway CLI orchestration
 ```
 
 ## WHERE TO LOOK

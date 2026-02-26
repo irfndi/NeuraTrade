@@ -1,57 +1,37 @@
-# NeuraTrade Deployment Scripts
+# NeuraTrade Operations Scripts
 
-This directory contains the optimized deployment and operations scripts for NeuraTrade.
+Native operations scripts for starting, testing, monitoring, and webhook control.
 
 ## Core Scripts
 
-### 🚀 Service Management
-- **`startup-orchestrator.sh`** - Service startup orchestrator
-  - Coordinates startup of infrastructure, core services, and proxy services
-  - Usage: `./startup-orchestrator.sh [start|stop|restart|status|help]`
+- `startup-orchestrator.sh`
+  - Native gateway lifecycle wrapper
+  - Usage: `./startup-orchestrator.sh [start|stop|restart|status|logs|help]`
 
-### 🔍 Health Monitoring
-- **`health-monitor-enhanced.sh`** - Comprehensive health monitoring
-  - Real-time service health checks and auto-recovery
+- `health-monitor-enhanced.sh`
+  - Runtime health checks for gateway/backend processes + health endpoint
   - Usage: `./health-monitor-enhanced.sh [monitor|check|restart|status|report|verify|help]`
 
-### 🧪 Testing
-- **`test.sh`** - Unified testing framework
-  - Consolidates all testing scenarios (unit, integration, full)
-  - Usage: `./test.sh [test|build|start|health|status|cleanup|help]`
+- `test.sh`
+  - Unified native test runner for backend/frontend suites
+  - Usage: `./test.sh [test|backend|frontend|health|start|status|cleanup|help]`
 
-### 🗄️ Database Management
-- **`simple-migrate.sh`** - Database migration script
-  - Handles schema migrations securely
-  - Usage: `./simple-migrate.sh` (typically run via Docker)
-- **`check-database-status.sh`** - Quick database status check
-- **`init.sql`** - Minimal database initialization for Docker volume
+- `webhook-control.sh`
+  - Telegram webhook registration + external connection flags
+  - Usage: `./webhook-control.sh [enable|disable|status|webhook-register|webhook-unregister|help]`
 
-### 🛡️ Security & Validation
-- **`validate-env.sh`** - Validates required environment variables
-- **`validate-redis-security.sh`** - Checks Redis security configuration
-- **`setup-firewall.sh`** - Configures UFW firewall rules
-- **`setup-github-secrets.sh`** - Helper to set up GitHub Actions secrets
-- **`webhook-control.sh`** - Manages Telegram webhooks and external connections
+## Quick Usage
 
-## Quick Start
-
-### Local Development
 ```bash
-# Validate environment
-./scripts/validate-env.sh
-
 # Start services
 ./scripts/startup-orchestrator.sh start
 
+# Verify health
+./scripts/health-monitor-enhanced.sh check
+
 # Run tests
-./scripts/test.sh
-```
+./scripts/test.sh test
 
-### Production Operations
-```bash
-# Monitor health
-./scripts/health-monitor-enhanced.sh monitor
-
-# Run migrations
-make migrate-docker
+# Inspect webhook status
+./scripts/webhook-control.sh status
 ```

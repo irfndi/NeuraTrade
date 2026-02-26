@@ -42,6 +42,49 @@ func setupMockDB(t *testing.T) mockRouteDB {
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
 		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 
+	// Lifecycle store initialization
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_orders").
+		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_positions").
+		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS realized_pnl_journal").
+		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_chat_status").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_chat_status").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_symbol_closed").
+		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN chat_id TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN market_type TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN filled_amount NUMERIC").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN source TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN closed_at TIMESTAMP").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN chat_id TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN market_type TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN close_price NUMERIC").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN realized_pnl NUMERIC").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN source TEXT").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN closed_at TIMESTAMP").
+		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
+
 	return mockRouteDB{DBPool: database.NewMockDBPool(mock)}
 }
 
@@ -340,7 +383,7 @@ func TestSetupRoutes_PanicHandling(t *testing.T) {
 	assert.NotNil(t, router)
 
 	assert.Panics(t, func() {
-		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should panic with nil dependencies")
 }
 
@@ -384,7 +427,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	assert.NotPanics(t, func() {
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
 	}, "SetupRoutes should handle minimal dependencies gracefully")
 
 	// Verify routes were registered
@@ -441,7 +484,7 @@ func TestSetupRoutes_RouteGroups(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -506,7 +549,7 @@ func TestSetupRoutes_HttpMethods(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -574,7 +617,7 @@ func TestSetupRoutes_Middleware(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil)
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
 
 	// Test that router has middleware configured
 	// Gin router should have middleware registered
@@ -630,7 +673,7 @@ func TestSetupRoutes_MissingAdminKey(t *testing.T) {
 			}),
 		}
 		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
 	}, "SetupRoutes should handle missing admin key gracefully")
 }
 
@@ -674,7 +717,7 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 			}),
 		}
 		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil)
+		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
 	}, "SetupRoutes should not panic when telegram config is missing")
 
 	// Verify routes were still registered

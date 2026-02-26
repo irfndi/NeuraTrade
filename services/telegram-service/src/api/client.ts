@@ -47,11 +47,13 @@ export interface BackendApiClientOptions {
 
 export class BackendApiClient {
   private readonly baseUrl: string;
+  private activeBaseUrl: string;
   private readonly adminKey: string;
   private readonly rateLimiter: RateLimiter;
 
   constructor(options: BackendApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.activeBaseUrl = this.baseUrl;
     this.adminKey = options.adminKey;
     this.rateLimiter = new RateLimiter({
       tokensPerSecond: options.rateLimit ?? DEFAULT_RATE_LIMIT,
@@ -63,7 +65,7 @@ export class BackendApiClient {
   ): Promise<GetUserByChatIdResponse | null> {
     const endpoint = API_ENDPOINTS.GET_USER_BY_CHAT_ID(chatId);
     const response = await this.fetch<Response | null>(endpoint, {
-      requireAdmin: true,
+      requireAdmin: false,
       handle404AsNull: true,
     });
     return response as GetUserByChatIdResponse | null;
@@ -76,7 +78,7 @@ export class BackendApiClient {
     try {
       const response = await this.fetch<NotificationPreferenceResponse>(
         endpoint,
-        { requireAdmin: true },
+        { requireAdmin: false },
       );
       return response;
     } catch {
@@ -93,7 +95,7 @@ export class BackendApiClient {
     await this.fetch(endpoint, {
       method: "POST",
       body: JSON.stringify(body),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -124,7 +126,7 @@ export class BackendApiClient {
     return this.fetch<BeginAutonomousResponse>(API_ENDPOINTS.BEGIN_AUTONOMOUS, {
       method: "POST",
       body: JSON.stringify({ chat_id: chatId }),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -132,7 +134,7 @@ export class BackendApiClient {
     return this.fetch<PauseAutonomousResponse>(API_ENDPOINTS.PAUSE_AUTONOMOUS, {
       method: "POST",
       body: JSON.stringify({ chat_id: chatId }),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -143,7 +145,7 @@ export class BackendApiClient {
     return this.fetch<PerformanceSummaryResponse>(
       API_ENDPOINTS.GET_SUMMARY(chatId, timeframe),
       {
-        requireAdmin: true,
+        requireAdmin: false,
       },
     );
   }
@@ -155,7 +157,7 @@ export class BackendApiClient {
     return this.fetch<PerformanceBreakdownResponse>(
       API_ENDPOINTS.GET_PERFORMANCE(chatId, timeframe),
       {
-        requireAdmin: true,
+        requireAdmin: false,
       },
     );
   }
@@ -191,7 +193,7 @@ export class BackendApiClient {
         exchange,
         account_label: accountLabel,
       }),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -205,7 +207,7 @@ export class BackendApiClient {
         chat_id: chatId,
         wallet_address: walletAddress,
       }),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -221,7 +223,7 @@ export class BackendApiClient {
         wallet_address: walletAddress,
         wallet_type: walletType,
       }),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -235,43 +237,43 @@ export class BackendApiClient {
         chat_id: chatId,
         wallet_id_or_address: walletIdOrAddress,
       }),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
   async getQuests(chatId: string): Promise<QuestsResponse> {
     return this.fetch<QuestsResponse>(API_ENDPOINTS.GET_QUESTS(chatId), {
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
   async getPortfolio(chatId: string): Promise<PortfolioResponse> {
     return this.fetch<PortfolioResponse>(API_ENDPOINTS.GET_PORTFOLIO(chatId), {
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
   async getWallets(chatId: string): Promise<WalletsResponse> {
     return this.fetch<WalletsResponse>(API_ENDPOINTS.GET_WALLETS(chatId), {
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
   async getLogs(chatId: string, limit = 10): Promise<LogsResponse> {
     return this.fetch<LogsResponse>(API_ENDPOINTS.GET_LOGS(chatId, limit), {
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
   async getDoctor(chatId: string): Promise<DoctorResponse> {
     return this.fetch<DoctorResponse>(API_ENDPOINTS.GET_DOCTOR(chatId), {
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
   async getAIModels(): Promise<AIModelsResponse> {
     return this.fetch<AIModelsResponse>(API_ENDPOINTS.GET_AI_MODELS, {
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -284,14 +286,14 @@ export class BackendApiClient {
       {
         method: "POST",
         body: JSON.stringify({ model_id: modelId }),
-        requireAdmin: true,
+        requireAdmin: false,
       },
     );
   }
 
   async getAIStatus(userId: string): Promise<AIStatusResponse> {
     return this.fetch<AIStatusResponse>(API_ENDPOINTS.GET_AI_STATUS(userId), {
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -299,7 +301,7 @@ export class BackendApiClient {
     return this.fetch<AIRouteResponse>(API_ENDPOINTS.ROUTE_AI_MODEL, {
       method: "POST",
       body: JSON.stringify(request),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -322,11 +324,30 @@ export class BackendApiClient {
       headers["X-API-Key"] = this.adminKey;
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const requestInit: RequestInit = {
       method: options.method || "GET",
       headers,
       body: options.body,
-    });
+    };
+
+    let response: Response | null = null;
+    try {
+      response = await fetch(`${this.activeBaseUrl}${path}`, requestInit);
+    } catch (primaryError) {
+      let fallbackError = primaryError;
+      for (const fallbackBaseUrl of this.getFallbackBaseUrls()) {
+        try {
+          response = await fetch(`${fallbackBaseUrl}${path}`, requestInit);
+          this.activeBaseUrl = fallbackBaseUrl;
+          break;
+        } catch (retryError) {
+          fallbackError = retryError;
+        }
+      }
+      if (!response) {
+        throw fallbackError;
+      }
+    }
 
     if (options.handle404AsNull && response.status === 404) {
       return null as T;
@@ -347,9 +368,29 @@ export class BackendApiClient {
     return payload as T;
   }
 
+  private getFallbackBaseUrls(): string[] {
+    const candidates = [
+      this.baseUrl,
+      "http://127.0.0.1:8080",
+      "http://localhost:8080",
+    ];
+    const unique: string[] = [];
+    for (const candidate of candidates) {
+      const normalized = candidate.replace(/\/$/, "");
+      if (
+        normalized.length > 0 &&
+        normalized !== this.activeBaseUrl &&
+        !unique.includes(normalized)
+      ) {
+        unique.push(normalized);
+      }
+    }
+    return unique;
+  }
+
   async getUserAlerts(userId: string): Promise<GetAlertsResponse> {
     const endpoint = API_ENDPOINTS.GET_ALERTS(userId);
-    return this.fetch<GetAlertsResponse>(endpoint, { requireAdmin: true });
+    return this.fetch<GetAlertsResponse>(endpoint, { requireAdmin: false });
   }
 
   async createAlert(
@@ -366,7 +407,7 @@ export class BackendApiClient {
     return this.fetch<CreateAlertResponse>(endpoint, {
       method: "POST",
       body: JSON.stringify(body),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -385,7 +426,7 @@ export class BackendApiClient {
     return this.fetch(endpoint, {
       method: "PUT",
       body: JSON.stringify(body),
-      requireAdmin: true,
+      requireAdmin: false,
     });
   }
 
@@ -395,8 +436,45 @@ export class BackendApiClient {
     const endpoint = API_ENDPOINTS.DELETE_ALERT(alertId);
     return this.fetch(endpoint, {
       method: "DELETE",
-      requireAdmin: true,
+      requireAdmin: false,
     });
+  }
+
+  async getTradingMode(
+    chatId: string,
+  ): Promise<import("./types").TradingModeResponse> {
+    const endpoint = `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}`;
+    return this.fetch<import("./types").TradingModeResponse>(endpoint, {
+      requireAdmin: false,
+    });
+  }
+
+  async setTradingMode(
+    chatId: string,
+    mode: "dry" | "live",
+    changedBy = "telegram",
+  ): Promise<import("./types").SetTradingModeResponse> {
+    const endpoint = `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}`;
+    return this.fetch<import("./types").SetTradingModeResponse>(endpoint, {
+      method: "POST",
+      body: JSON.stringify({ mode, changed_by: changedBy }),
+      requireAdmin: false,
+    });
+  }
+
+  async addTradingModeConfirmation(
+    chatId: string,
+    confirmedBy = "telegram",
+  ): Promise<import("./types").TradingModeConfirmationResponse> {
+    const endpoint = `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}/confirm`;
+    return this.fetch<import("./types").TradingModeConfirmationResponse>(
+      endpoint,
+      {
+        method: "POST",
+        body: JSON.stringify({ confirmed_by: confirmedBy }),
+        requireAdmin: false,
+      },
+    );
   }
 }
 

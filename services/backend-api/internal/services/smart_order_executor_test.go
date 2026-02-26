@@ -64,6 +64,13 @@ func (m *mockExecutor) CancelOrder(ctx context.Context, exchange, orderID string
 	return nil
 }
 
+func (m *mockExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
+	m.callCount++
+	if m.shouldFail && m.callCount <= m.failCount {
+		return "", m.failErr
+	}
+	return m.orderID, nil
+}
 func TestNewSmartOrderExecutor_Defaults(t *testing.T) {
 	cfg := DefaultSmartOrderExecutorConfig()
 	assert.Equal(t, 4, cfg.MaxRetries)

@@ -15,6 +15,7 @@ import (
 type mockCCXTForPortfolioSafety struct {
 	balanceResponse *ccxt.BalanceResponse
 	balanceByExch   map[string]*ccxt.BalanceResponse
+	positionsByExch map[string]*ccxt.PositionsResponse
 	err             error
 	fetchCalls      int
 }
@@ -89,6 +90,34 @@ func (m *mockCCXTForPortfolioSafety) FetchBalance(ctx context.Context, exchange 
 		}
 	}
 	return m.balanceResponse, nil
+}
+
+func (m *mockCCXTForPortfolioSafety) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	return nil
+}
+
+func (m *mockCCXTForPortfolioSafety) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*ccxt.OrderResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTForPortfolioSafety) FetchOpenOrders(ctx context.Context, exchange string) (*ccxt.OpenOrdersResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTForPortfolioSafety) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*ccxt.OpenOrdersResponse, error) {
+	return nil, nil
+}
+
+func (m *mockCCXTForPortfolioSafety) FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.positionsByExch != nil {
+		if response, ok := m.positionsByExch[exchange]; ok {
+			return response, nil
+		}
+	}
+	return nil, nil
 }
 
 func TestDefaultPortfolioSafetyConfig(t *testing.T) {
@@ -451,4 +480,57 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_CacheKeyNormalizesExchangeO
 	require.NoError(t, err)
 	assert.True(t, snapshot2.TotalEquity.Equal(decimal.NewFromFloat(13000.0)))
 	assert.Equal(t, 2, mockCCXT.fetchCalls)
+}
+
+func TestPortfolioSafetyService_GetPortfolioSnapshot_FallsBackToExchangePositions(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceByExch: map[string]*ccxt.BalanceResponse{
+			"bitget": {
+				Exchange:  "bitget",
+				Timestamp: time.Now(),
+				Total:     map[string]float64{"USDT": 1000.0},
+				Free:      map[string]float64{"USDT": 900.0},
+				Used:      map[string]float64{"USDT": 100.0},
+			},
+		},
+		positionsByExch: map[string]*ccxt.PositionsResponse{
+			"bitget": {
+				Exchange: "bitget",
+				Positions: []ccxt.Position{
+					{
+						ID:            "pos-1",
+						Symbol:        "ADA/USDT",
+						Side:          "long",
+						Size:          decimal.NewFromInt(10),
+						EntryPrice:    decimal.NewFromFloat(0.30),
+						MarkPrice:     decimal.NewFromFloat(0.31),
+						UnrealizedPnl: decimal.NewFromFloat(0.10),
+					},
+				},
+			},
+		},
+	}
+
+	service := NewPortfolioSafetyService(
+		config,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	snapshot, err := service.GetPortfolioSnapshot(context.Background(), "chat-1", []string{"bitget"})
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	require.Len(t, snapshot.Positions, 1)
+	assert.Equal(t, 1, snapshot.OpenPositions)
+	assert.True(t, snapshot.TotalExposure.Equal(decimal.NewFromFloat(3.1)))
+	assert.True(t, snapshot.UnrealizedPnL.Equal(decimal.NewFromFloat(0.1)))
+	assert.Equal(t, "ADA/USDT", snapshot.Positions[0].Symbol)
+	assert.Equal(t, "long", snapshot.Positions[0].Side)
 }

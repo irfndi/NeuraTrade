@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"
 )
 
@@ -118,10 +120,11 @@ func (m *WalletValidationMetrics) GetMetrics() WalletValidationMetrics {
 }
 
 type WalletValidator struct {
-	config  WalletValidatorConfig
-	db      DBPool
-	metrics WalletValidationMetrics
-	mu      sync.RWMutex
+	config      WalletValidatorConfig
+	db          DBPool
+	ccxtService *ccxt.Service
+	metrics     WalletValidationMetrics
+	mu          sync.RWMutex
 }
 
 func NewWalletValidator(db DBPool, config WalletValidatorConfig) *WalletValidator {
@@ -130,6 +133,23 @@ func NewWalletValidator(db DBPool, config WalletValidatorConfig) *WalletValidato
 		db:      db,
 		metrics: WalletValidationMetrics{ChecksByExchange: make(map[string]int64)},
 	}
+}
+
+// NewWalletValidatorWithCCXT creates a wallet validator with CCXT service for real balance fetching
+func NewWalletValidatorWithCCXT(db DBPool, config WalletValidatorConfig, ccxtService *ccxt.Service) *WalletValidator {
+	return &WalletValidator{
+		config:      config,
+		db:          db,
+		ccxtService: ccxtService,
+		metrics:     WalletValidationMetrics{ChecksByExchange: make(map[string]int64)},
+	}
+}
+
+// SetCCXTService sets the CCXT service for balance fetching
+func (wv *WalletValidator) SetCCXTService(ccxtService *ccxt.Service) {
+	wv.mu.Lock()
+	defer wv.mu.Unlock()
+	wv.ccxtService = ccxtService
 }
 
 func (wv *WalletValidator) CheckWalletMinimums(ctx context.Context, chatID string) (*WalletBalanceStatus, error) {
@@ -233,23 +253,60 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 
 	balances := make(map[string]decimal.Decimal)
 
-	var walletCount int
-	err := wv.db.QueryRow(ctx, `
-		SELECT COUNT(*)
+	// Get connected exchanges for this chat/user
+	rows, err := wv.db.Query(ctx, `
+		SELECT DISTINCT provider
 		FROM telegram_operator_wallets
 		WHERE chat_id = $1
+		  AND wallet_type = 'exchange'
 		  AND status = 'connected'
-	`, chatID).Scan(&walletCount)
+	`, chatID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to count wallets: %w", err)
+		log.Printf("[WalletValidator] Failed to query exchanges: %v", err)
+		return balances, nil // Return empty rather than error for backward compatibility
+	}
+	defer rows.Close()
+
+	var exchanges []string
+	for rows.Next() {
+		var exchange string
+		if err := rows.Scan(&exchange); err != nil {
+			continue
+		}
+		exchanges = append(exchanges, exchange)
 	}
 
-	if walletCount == 0 {
+	if len(exchanges) == 0 {
+		log.Printf("[WalletValidator] No connected exchanges for chat %s", chatID)
 		return balances, nil
 	}
 
-	// TODO: Implement actual balance fetching via CCXT service (neura-adu)
-	// Returning empty balances will cause validation to fail until implemented
+	// If CCXT service is available, fetch real balances
+	if wv.ccxtService != nil {
+		for _, exchange := range exchanges {
+			balanceResp, err := wv.ccxtService.FetchBalance(ctx, exchange)
+			if err != nil {
+				log.Printf("[WalletValidator] Failed to fetch balance from %s: %v", exchange, err)
+				continue
+			}
+
+			// Merge balances from this exchange
+			for asset, amount := range balanceResp.Total {
+				if amount > 0 {
+					if existing, ok := balances[asset]; ok {
+						balances[asset] = existing.Add(decimal.NewFromFloat(amount))
+					} else {
+						balances[asset] = decimal.NewFromFloat(amount)
+					}
+				}
+			}
+			wv.metrics.IncrementChecksByExchange(exchange)
+		}
+
+		log.Printf("[WalletValidator] Fetched balances from %d exchanges: %d assets", len(exchanges), len(balances))
+	} else {
+		log.Printf("[WalletValidator] CCXT service not available, returning empty balances")
+	}
 
 	return balances, nil
 }

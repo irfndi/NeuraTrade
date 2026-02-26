@@ -105,6 +105,22 @@ type CCXTService interface {
 	// FetchBalance retrieves account balance for an exchange.
 	FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error)
 
+	// Order operations
+
+	// FetchOpenOrders retrieves all open orders for an exchange.
+	FetchOpenOrders(ctx context.Context, exchange string) (*OpenOrdersResponse, error)
+	// FetchOpenOrdersForSymbol retrieves open orders for a specific symbol.
+	FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*OpenOrdersResponse, error)
+	// CancelOrder cancels an order by ID.
+	CancelOrder(ctx context.Context, exchange, orderID, symbol string) error
+	// FetchOrder retrieves a specific order by ID.
+	FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*OrderResponse, error)
+
+	// Position operations (futures)
+
+	// FetchPositions retrieves all positions for an exchange.
+	FetchPositions(ctx context.Context, exchange string) (*PositionsResponse, error)
+
 	// Funding rate operations
 
 	// FetchFundingRate retrieves the current funding rate for a symbol.

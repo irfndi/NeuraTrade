@@ -1082,3 +1082,161 @@ func (sa *SignalAggregator) GetAggregatedSignalsBySymbol(ctx context.Context, sy
 
 	return signals, nil
 }
+
+// InvalidateSignalsForSymbol invalidates all active signals for a specific symbol.
+// This should be called when new technical analysis contradicts previous signals.
+//
+// Parameters:
+//   - ctx: The context for the operation.
+//   - symbol: The trading symbol to invalidate signals for.
+//   - reason: The reason for invalidation (e.g., "ta_reversal", "market_condition_change").
+//
+// Returns:
+//   - The number of signals invalidated, or an error if the operation fails.
+func (sa *SignalAggregator) InvalidateSignalsForSymbol(ctx context.Context, symbol string, reason string) (int, error) {
+	if isNilDBPool(sa.db) {
+		return 0, nil
+	}
+
+	query := `
+		UPDATE aggregated_signals
+		SET expires_at = NOW(), metadata = jsonb_set(
+			COALESCE(metadata, '{}'::jsonb),
+			'{invalidated}',
+			jsonb_build_object('reason', $2, 'invalidated_at', NOW())
+		)
+		WHERE symbol = $1
+			AND expires_at > NOW()
+			AND (metadata->>'invalidated') IS NULL
+	`
+
+	result, err := sa.db.Exec(ctx, query, symbol, reason)
+	if err != nil {
+		return 0, fmt.Errorf("failed to invalidate signals for %s: %w", symbol, err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+
+	sa.logger.WithFields(zaplogrus.Fields{
+		"symbol":           symbol,
+		"reason":           reason,
+		"count":            rowsAffected,
+		"operation":        "signal_invalidation",
+		"operation_result": "success",
+	}).Info("Invalidated signals for symbol")
+
+	return int(rowsAffected), nil
+}
+
+// InvalidateContradictingSignals invalidates signals that contradict new technical analysis.
+// For example, if TA shows strong bearish signal, invalidate previous bullish signals.
+//
+// Parameters:
+//   - ctx: The context for the operation.
+//   - symbol: The trading symbol.
+//   - newAction: The new signal action ("buy", "sell", "hold").
+//   - newConfidence: The confidence of the new signal.
+//
+// Returns:
+//   - The number of signals invalidated, or an error if the operation fails.
+func (sa *SignalAggregator) InvalidateContradictingSignals(ctx context.Context, symbol string, newAction string, newConfidence float64) (int, error) {
+	if isNilDBPool(sa.db) {
+		return 0, nil
+	}
+
+	// Determine which actions to invalidate based on new signal
+	var contradictingAction string
+	switch strings.ToLower(newAction) {
+	case "buy", "long":
+		contradictingAction = "sell"
+	case "sell", "short":
+		contradictingAction = "buy"
+	default:
+		return 0, nil // No contradiction for hold or unknown actions
+	}
+
+	// Only invalidate if new signal has sufficient confidence
+	if newConfidence < 0.7 {
+		return 0, nil
+	}
+
+	reason := fmt.Sprintf("ta_contradiction: new %s signal (%.2f confidence)", newAction, newConfidence)
+
+	query := `
+		UPDATE aggregated_signals
+		SET expires_at = NOW(), metadata = jsonb_set(
+			COALESCE(metadata, '{}'::jsonb),
+			'{invalidated}',
+			jsonb_build_object('reason', $4, 'invalidated_at', NOW(), 'contradicted_by', $5)
+		)
+		WHERE symbol = $1
+			AND action = $2
+			AND expires_at > NOW()
+			AND confidence < $3
+			AND (metadata->>'invalidated') IS NULL
+	`
+
+	result, err := sa.db.Exec(ctx, query, symbol, contradictingAction, newConfidence, reason, newAction)
+	if err != nil {
+		return 0, fmt.Errorf("failed to invalidate contradicting signals: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+
+	if rowsAffected > 0 {
+		sa.logger.WithFields(zaplogrus.Fields{
+			"symbol":             symbol,
+			"new_action":         newAction,
+			"new_confidence":     newConfidence,
+			"invalidated_action": contradictingAction,
+			"count":              rowsAffected,
+			"operation":          "signal_contradiction_invalidation",
+		}).Info("Invalidated contradicting signals")
+	}
+
+	return int(rowsAffected), nil
+}
+
+// InvalidateStaleSignals invalidates signals older than a specified duration.
+// This helps clean up old signals that may no longer be relevant.
+//
+// Parameters:
+//   - ctx: The context for the operation.
+//   - olderThan: Duration after which signals are considered stale.
+//
+// Returns:
+//   - The number of signals invalidated, or an error if the operation fails.
+func (sa *SignalAggregator) InvalidateStaleSignals(ctx context.Context, olderThan time.Duration) (int, error) {
+	if isNilDBPool(sa.db) {
+		return 0, nil
+	}
+
+	cutoffTime := time.Now().Add(-olderThan)
+
+	query := `
+		UPDATE aggregated_signals
+		SET expires_at = NOW(), metadata = jsonb_set(
+			COALESCE(metadata, '{}'::jsonb),
+			'{invalidated}',
+			jsonb_build_object('reason', 'stale_signal', 'invalidated_at', NOW())
+		)
+		WHERE created_at < $1
+			AND expires_at > NOW()
+			AND (metadata->>'invalidated') IS NULL
+	`
+
+	result, err := sa.db.Exec(ctx, query, cutoffTime)
+	if err != nil {
+		return 0, fmt.Errorf("failed to invalidate stale signals: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+
+	sa.logger.WithFields(zaplogrus.Fields{
+		"cutoff_time": cutoffTime.Format(time.RFC3339),
+		"count":       rowsAffected,
+		"operation":   "stale_signal_cleanup",
+	}).Info("Invalidated stale signals")
+
+	return int(rowsAffected), nil
+}

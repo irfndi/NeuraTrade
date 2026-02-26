@@ -222,4 +222,39 @@ describe("BD command handlers", () => {
     expect(ctx.replies[0]).toContain("redis");
     expect(ctx.replies[0]).toContain("exchange-bridge");
   });
+
+  test("/portfolio renders open orders and note from backend", async () => {
+    const bot = new MockBot();
+    const api = {
+      async getDoctor() {
+        return { overall_status: "healthy", checks: [] };
+      },
+      async getQuests() {
+        return { quests: [] };
+      },
+      async getPortfolio() {
+        return {
+          total_equity: "45.65",
+          available_balance: "45.65",
+          exposure: "0.00",
+          open_orders: 2,
+          note: "No open positions yet; open orders are pending fill",
+          positions: [],
+        };
+      },
+      async getLogs() {
+        return { logs: [] };
+      },
+    };
+
+    registerMonitoringCommands(bot as unknown as Bot, api as unknown as never);
+
+    const ctx = createContext("/portfolio");
+    await runCommand(bot, "portfolio", ctx);
+
+    expect(ctx.replies).toHaveLength(1);
+    expect(ctx.replies[0]).toContain("Open Orders: 2");
+    expect(ctx.replies[0]).toContain("No open positions.");
+    expect(ctx.replies[0]).toContain("open orders are pending fill");
+  });
 });

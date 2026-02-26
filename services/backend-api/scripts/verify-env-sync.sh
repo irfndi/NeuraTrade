@@ -147,8 +147,8 @@ check_env_var "FEATURE_REAL_TRADING" false || ((ERROR_COUNT++))
 check_env_var "FEATURE_PAPER_TRADING" false || ((ERROR_COUNT++))
 echo
 
-# Docker Configuration
-echo "=== Docker Configuration ==="
+# PostgreSQL Runtime Configuration
+echo "=== PostgreSQL Runtime Configuration ==="
 check_env_var "POSTGRES_USER" || ((ERROR_COUNT++))
 check_env_var "POSTGRES_PASSWORD" true true || ((ERROR_COUNT++))
 check_env_var "POSTGRES_DB" || ((ERROR_COUNT++))

@@ -1,16 +1,64 @@
 import type { Bot } from "grammy";
+import { ApiClientError } from "../api/client";
 import type { BackendApiClient } from "../api/client";
 import type { AIModelInfo } from "../api/types";
+import { logger } from "../utils/logger";
+
+const MAX_PROVIDERS_IN_AI_MODELS = 15;
+const MAX_MODELS_PER_PROVIDER = 4;
+const TELEGRAM_MAX_MESSAGE_CHARS = 3900;
+
+function resolveTelegramIdentity(ctx: {
+  chat?: { id?: string | number };
+  from?: { id?: string | number };
+}): string | null {
+  const chatId = ctx.chat?.id;
+  if (chatId !== undefined && chatId !== null) {
+    return String(chatId);
+  }
+  const fromId = ctx.from?.id;
+  if (fromId !== undefined && fromId !== null) {
+    return String(fromId);
+  }
+  return null;
+}
+
+function splitIntoTelegramMessages(text: string): string[] {
+  if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > TELEGRAM_MAX_MESSAGE_CHARS) {
+    let splitAt = remaining.lastIndexOf("\n", TELEGRAM_MAX_MESSAGE_CHARS);
+    if (splitAt <= 0) {
+      splitAt = TELEGRAM_MAX_MESSAGE_CHARS;
+    }
+    chunks.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  if (remaining.length > 0) {
+    chunks.push(remaining);
+  }
+  return chunks;
+}
+
+function getErrorContext(error: unknown): { status?: number; detail: string } {
+  if (error instanceof ApiClientError) {
+    return {
+      status: error.status,
+      detail: `${error.message} (endpoint=${error.endpoint})`,
+    };
+  }
+  if (error instanceof Error) {
+    return { detail: error.message };
+  }
+  return { detail: String(error) };
+}
 
 export function registerAICommands(bot: Bot, api: BackendApiClient): void {
   bot.command("ai_models", async (ctx) => {
-    const userId = ctx.from?.id;
-
-    if (!userId) {
-      await ctx.reply("Unable to identify user.");
-      return;
-    }
-
     try {
       const result = await api.getAIModels();
 
@@ -18,8 +66,6 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
         await ctx.reply("No AI models available. Try again later.");
         return;
       }
-
-      const lines = ["🤖 Available AI Models:\n"];
 
       const providerGroups: Record<string, AIModelInfo[]> = {};
       for (const model of result.models) {
@@ -29,30 +75,59 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
         providerGroups[model.provider].push(model);
       }
 
-      for (const [provider, models] of Object.entries(providerGroups)) {
-        lines.push(`<b>${provider.toUpperCase()}</b>`);
-        for (const m of models.slice(0, 5)) {
+      const providers = Object.entries(providerGroups).sort(
+        (a, b) => b[1].length - a[1].length,
+      );
+      const selectedProviders = providers.slice(0, MAX_PROVIDERS_IN_AI_MODELS);
+      const omittedProviders = Math.max(
+        0,
+        providers.length - selectedProviders.length,
+      );
+
+      const lines = [
+        `🤖 Available AI Models (showing ${selectedProviders.length} providers)`,
+        "",
+      ];
+
+      for (const [provider, models] of selectedProviders) {
+        lines.push(`[${provider.toUpperCase()}]`);
+        for (const m of models.slice(0, MAX_MODELS_PER_PROVIDER)) {
           const tools = m.supports_tools ? "🔧" : "";
           const vision = m.supports_vision ? "👁" : "";
-          lines.push(`  ${m.model_id} ${tools}${vision}`);
+          lines.push(`- ${m.model_id} ${tools}${vision}`.trimEnd());
         }
-        if (models.length > 5) {
-          lines.push(`  ... and ${models.length - 5} more`);
+        if (models.length > MAX_MODELS_PER_PROVIDER) {
+          lines.push(
+            `- ... and ${models.length - MAX_MODELS_PER_PROVIDER} more`,
+          );
         }
+        lines.push("");
+      }
+
+      if (omittedProviders > 0) {
+        lines.push(`... and ${omittedProviders} more providers`);
         lines.push("");
       }
 
       lines.push("🔧 = Tool support | 👁 = Vision support");
       lines.push("\nUse /ai_select <model> to select a model.");
 
-      await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
-    } catch {
+      for (const chunk of splitIntoTelegramMessages(lines.join("\n"))) {
+        await ctx.reply(chunk);
+      }
+    } catch (error) {
+      const errorContext = getErrorContext(error);
+      logger.error("[AI] /ai_models failed", new Error(errorContext.detail), {
+        status: errorContext.status,
+        chatId: ctx.chat?.id,
+        fromId: ctx.from?.id,
+      });
       await ctx.reply("Failed to fetch AI models. Please try again later.");
     }
   });
 
   bot.command("ai_select", async (ctx) => {
-    const userId = ctx.from?.id;
+    const userId = resolveTelegramIdentity(ctx);
     const args = ctx.match?.toString().trim().split(/\s+/) || [];
 
     if (!userId) {
@@ -83,12 +158,17 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       }
 
       await ctx.reply(
-        `✅ AI model selected: <b>${result.model?.display_name || modelId}</b>\n` +
+        `✅ AI model selected: ${result.model?.display_name || modelId}\n` +
           `Provider: ${result.model?.provider || "Unknown"}\n` +
           `Cost: $${result.model?.cost || "N/A"} per 1M tokens`,
-        { parse_mode: "HTML" },
       );
-    } catch {
+    } catch (error) {
+      const errorContext = getErrorContext(error);
+      logger.error("[AI] /ai_select failed", new Error(errorContext.detail), {
+        status: errorContext.status,
+        chatId: ctx.chat?.id,
+        fromId: ctx.from?.id,
+      });
       await ctx.reply(
         `Failed to select model "${modelId}". Please try again later.`,
       );
@@ -96,7 +176,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
   });
 
   bot.command("ai_status", async (ctx) => {
-    const userId = ctx.from?.id;
+    const userId = resolveTelegramIdentity(ctx);
 
     if (!userId) {
       await ctx.reply("Unable to identify user.");
@@ -130,7 +210,13 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       lines.push("\nUse /ai_models to change model.");
 
       await ctx.reply(lines.join("\n"));
-    } catch {
+    } catch (error) {
+      const errorContext = getErrorContext(error);
+      logger.error("[AI] /ai_status failed", new Error(errorContext.detail), {
+        status: errorContext.status,
+        chatId: ctx.chat?.id,
+        fromId: ctx.from?.id,
+      });
       await ctx.reply("Failed to fetch AI status. Please try again later.");
     }
   });
@@ -198,7 +284,13 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       }
 
       await ctx.reply(lines.join("\n"));
-    } catch {
+    } catch (error) {
+      const errorContext = getErrorContext(error);
+      logger.error("[AI] /ai_route failed", new Error(errorContext.detail), {
+        status: errorContext.status,
+        chatId: ctx.chat?.id,
+        fromId: ctx.from?.id,
+      });
       await ctx.reply("Failed to route model. Please try again later.");
     }
   });

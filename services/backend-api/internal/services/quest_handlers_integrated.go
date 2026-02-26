@@ -2,9 +2,12 @@ package services
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
@@ -15,6 +18,7 @@ import (
 
 type ScalpingOrderExecutor interface {
 	PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error)
+	PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error)
 	GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error)
 	GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error)
 	CancelOrder(ctx context.Context, exchange, orderID string) error
@@ -30,7 +34,17 @@ type IntegratedQuestHandlers struct {
 	orderExecutor       ScalpingOrderExecutor
 	aiScalpingService   *AIScalpingService
 	tradeMemory         *TradeMemory
+	lifecycleStore      *TradingLifecycleStore
+	protectionManager   *DynamicProtectionManager
+	db                  *sql.DB // Database for user settings
 }
+
+const (
+	scalpingFailureCooldownThreshold = 3
+	scalpingBaseCooldown             = 2 * time.Minute
+	scalpingMaxCooldown              = 15 * time.Minute
+	defaultBootstrapInterval         = 10 * time.Minute
+)
 
 // NewIntegratedQuestHandlers creates integrated quest handlers with actual implementations
 func NewIntegratedQuestHandlers(
@@ -56,9 +70,22 @@ func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecuto
 	h.orderExecutor = executor
 }
 
+// SetDB sets the database for user settings lookup
+func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
+	h.db = db
+}
+
 // SetTradeMemory sets the trade memory for AI learning
 func (h *IntegratedQuestHandlers) SetTradeMemory(memory *TradeMemory) {
 	h.tradeMemory = memory
+}
+
+func (h *IntegratedQuestHandlers) SetLifecycleStore(store *TradingLifecycleStore) {
+	h.lifecycleStore = store
+}
+
+func (h *IntegratedQuestHandlers) SetDynamicProtectionManager(manager *DynamicProtectionManager) {
+	h.protectionManager = manager
 }
 
 func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
@@ -68,8 +95,10 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 		return
 	}
 
+	scalpingConfig := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
+
 	h.aiScalpingService = NewAIScalpingService(
-		DefaultAIScalpingConfig(),
+		scalpingConfig,
 		llmClient,
 		skillRegistry,
 		ccxtSvc,
@@ -272,6 +301,22 @@ func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, q
 }
 
 func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *Quest, chatID string) error {
+	if cooldownRemaining := h.scalpingCooldownRemaining(quest, time.Now().UTC()); cooldownRemaining > 0 {
+		quest.Checkpoint["status"] = "runtime_cooldown"
+		quest.Checkpoint["cooldown_remaining_seconds"] = int(cooldownRemaining.Seconds())
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "scalping_cycle",
+			Summary:      "Scalping paused temporarily after repeated runtime failures",
+			Confidence:   0,
+			Reasons: []string{
+				fmt.Sprintf("Cooldown remaining: %s", cooldownRemaining.Round(time.Second).String()),
+				"Runtime guardrail suppressed this cycle to avoid repeated failing actions and notification spam",
+			},
+			Action: "hold",
+		})
+		return nil
+	}
+
 	balanceFetcher, ok := h.ccxtService.(interface {
 		FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error)
 	})
@@ -281,6 +326,45 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		quest.Checkpoint["status"] = "balance_unavailable"
 		quest.Checkpoint["error"] = err.Error()
 		return err
+	}
+
+	// Get user's preferred exchange from database or default to bitget
+	userExchange := h.getUserExchange(chatID)
+	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
+
+	if chatScopedExec, ok := h.orderExecutor.(interface{ SetChatID(string) }); ok {
+		chatScopedExec.SetChatID(chatID)
+	}
+
+	// Set exchange on AI scalping service
+	if h.aiScalpingService != nil {
+		h.aiScalpingService.SetExchange(userExchange)
+	}
+	h.bootstrapLifecycleState(ctx, quest, userExchange, chatID)
+	h.ensureDynamicProtectionManager()
+	if h.protectionManager != nil {
+		protectionSummary, protectErr := h.protectionManager.ReconcileOpenPositions(ctx, chatID, userExchange)
+		if protectErr != nil {
+			log.Printf("[SCALPING] Dynamic protection reconciliation failed: %v", protectErr)
+			quest.Checkpoint["protection_reconcile_error"] = protectErr.Error()
+		} else {
+			quest.Checkpoint["protection_positions_evaluated"] = protectionSummary.PositionsEvaluated
+			quest.Checkpoint["protection_updates"] = protectionSummary.ProtectionsUpdated
+			quest.Checkpoint["protection_errors"] = protectionSummary.Errors
+			if protectionSummary.ProtectionsUpdated > 0 {
+				log.Printf(
+					"[SCALPING] Dynamic protection updates applied: positions=%d updates=%d",
+					protectionSummary.PositionsEvaluated,
+					protectionSummary.ProtectionsUpdated,
+				)
+			}
+		}
+	}
+
+	// Ingest closed-order outcomes from the previous cycle so adaptive risk controls
+	// have fresher win/loss data before the next decision.
+	if lastSymbol, ok := quest.Checkpoint["ai_symbol"].(string); ok && strings.TrimSpace(lastSymbol) != "" {
+		h.ingestClosedOrderFeedback(ctx, quest, userExchange, lastSymbol)
 	}
 
 	// Check if we're in dry-run/paper trading mode
@@ -300,29 +384,27 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		quest.Checkpoint["dry_run"] = true
 		quest.Checkpoint["virtual_balance"] = usdtBalance
 	} else {
-		// Live mode - require real balance from exchange
+		// Live mode - try to get real balance from user's exchange
 		balanceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		balance, err := balanceFetcher.FetchBalance(balanceCtx, "binance")
+		balance, err := balanceFetcher.FetchBalance(balanceCtx, userExchange)
 		if err != nil {
-			log.Printf("[SCALPING] Failed to fetch balance, skipping cycle: %v", err)
-			quest.Checkpoint["status"] = "balance_unavailable_hold"
+			log.Printf("[SCALPING] Failed to fetch balance from %s: %v, using default balance for trading", userExchange, err)
+			usdtBalance = 100.0 // Fallback balance
 			quest.Checkpoint["balance_warning"] = err.Error()
-			quest.Checkpoint["chat_id"] = chatID
-			return nil
-		}
-
-		if balance.Total != nil {
-			if v := balance.Total["USDT"]; v > 0 {
-				usdtBalance = v
+			quest.Checkpoint["fallback_balance"] = true
+		} else {
+			if balance.Total != nil {
+				if v := balance.Total["USDT"]; v > 0 {
+					usdtBalance = v
+				}
 			}
-		}
-		if usdtBalance <= 0 {
-			log.Printf("[SCALPING] USDT balance is zero/unavailable, skipping cycle")
-			quest.Checkpoint["status"] = "balance_zero_hold"
-			quest.Checkpoint["chat_id"] = chatID
-			return nil
+			if usdtBalance <= 0 {
+				log.Printf("[SCALPING] USDT balance is zero, using minimum balance for trading")
+				usdtBalance = 100.0 // Minimum balance
+				quest.Checkpoint["fallback_balance"] = true
+			}
 		}
 	}
 
@@ -337,8 +419,20 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(ctx, portfolio)
 	if err != nil {
 		log.Printf("[SCALPING] AI decision error: %v", err)
+		streak, cooldown := h.recordScalpingFailure(quest, err.Error())
 		quest.Checkpoint["status"] = "ai_error"
 		quest.Checkpoint["error"] = err.Error()
+		reasons := []string{err.Error(), fmt.Sprintf("Runtime failure streak: %d", streak)}
+		if cooldown > 0 {
+			reasons = append(reasons, fmt.Sprintf("Cooldown applied: %s", cooldown.Round(time.Second).String()))
+		}
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "scalping_cycle",
+			Summary:      "Scalping cycle skipped due to AI/runtime error",
+			Confidence:   0,
+			Reasons:      reasons,
+			Action:       "hold",
+		})
 		// Return nil instead of err to prevent panic - quest continues with hold status
 		return nil
 	}
@@ -346,9 +440,21 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// Safety check: decision should not be nil
 	if decision == nil {
 		log.Printf("[SCALPING] AI returned nil decision - treating as hold")
+		streak, cooldown := h.recordScalpingFailure(quest, "decision payload was nil")
 		quest.Checkpoint["status"] = "hold"
 		quest.Checkpoint["ai_action"] = "hold"
 		quest.Checkpoint["ai_reasoning"] = "AI returned nil decision"
+		reasons := []string{"Decision payload was nil; cycle held", fmt.Sprintf("Runtime failure streak: %d", streak)}
+		if cooldown > 0 {
+			reasons = append(reasons, fmt.Sprintf("Cooldown applied: %s", cooldown.Round(time.Second).String()))
+		}
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "scalping_cycle",
+			Summary:      "AI returned no trade decision",
+			Confidence:   0,
+			Reasons:      reasons,
+			Action:       "hold",
+		})
 		return nil
 	}
 
@@ -359,41 +465,73 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.Checkpoint["ai_size_pct"] = decision.SizePercent
 
 	if decision.Action == "hold" {
+		if isRuntimeHoldReason(decision.Reasoning) {
+			streak, cooldown := h.recordScalpingFailure(quest, decision.Reasoning)
+			if cooldown > 0 {
+				quest.Checkpoint["runtime_hold_cooldown"] = cooldown.String()
+			}
+			quest.Checkpoint["runtime_failure_streak"] = streak
+		} else {
+			h.resetScalpingFailureState(quest)
+		}
 		log.Printf("[SCALPING] AI decided to hold: %s", decision.Reasoning)
 		quest.Checkpoint["status"] = "hold"
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType: "scalping_cycle",
+			Summary:      "AI held position this cycle",
+			Confidence:   decision.Confidence,
+			Reasons:      []string{decision.Reasoning},
+			Action:       "hold",
+		})
 		return nil
 	}
 
+	h.resetScalpingFailureState(quest)
 	quest.Checkpoint["status"] = "ai_executed"
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
+	if h.lifecycleStore != nil && strings.TrimSpace(decision.OrderID) != "" {
+		entryPrice := decimal.Zero
+		if decision.EntryPrice != nil {
+			entryPrice = *decision.EntryPrice
+		}
+		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+			OrderID:    decision.OrderID,
+			ChatID:     chatID,
+			Exchange:   userExchange,
+			Symbol:     decision.Symbol,
+			Side:       decision.Action,
+			OrderType:  "market",
+			MarketType: "futures",
+			Amount:     decimal.NewFromFloat(portfolio.USDTBalance * decision.SizePercent / 100),
+			EntryPrice: entryPrice,
+			StopLoss:   decimalValueOrZero(decision.StopLoss),
+			TakeProfit: decimalValueOrZero(decision.TakeProfit),
+			Source:     "autonomous_scalping",
+			OpenedAt:   time.Now().UTC(),
+		}); err != nil {
+			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+		}
+	}
+	h.recordTradeDecision(ctx, quest, decision, userExchange)
+	h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
 
 	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
 		decision.Action, decision.Symbol, decision.Confidence*100)
 
-	// Send Telegram notification for AI decision
-	if h.notificationService != nil && chatID != "" {
-		chatIDInt := parseChatID(chatID)
-		if chatIDInt != 0 {
-			notif := AIReasoningNotification{
-				DecisionType: "scalping",
-				Summary:      fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
-				Confidence:   decision.Confidence,
-				Reasons:      []string{decision.Reasoning},
-				Action:       decision.Action,
-			}
-			if err := h.notificationService.NotifyAIReasoning(ctx, chatIDInt, notif); err != nil {
-				log.Printf("[NOTIFICATION] Failed to send AI decision notification: %v", err)
-			}
-		}
-	}
+	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+		DecisionType: "scalping",
+		Summary:      fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
+		Confidence:   decision.Confidence,
+		Reasons:      []string{decision.Reasoning},
+		Action:       decision.Action,
+	})
 
 	return nil
 }
 
 func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, quest *Quest, chatID string) error {
-	_ = ctx
 	log.Printf("[SCALPING] AI scalping service unavailable; static fallback execution disabled")
 	quest.Checkpoint["status"] = "ai_unavailable_hold"
 	quest.Checkpoint["fallback_mode"] = "observe_only"
@@ -401,6 +539,13 @@ func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, q
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_check"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
+	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+		DecisionType: "scalping_cycle",
+		Summary:      "Scalping engine unavailable; observe-only cycle",
+		Confidence:   0,
+		Reasons:      []string{"AI scalping service is not initialized"},
+		Action:       "hold",
+	})
 
 	return nil
 }
@@ -649,4 +794,563 @@ func parseChatID(chatID string) int64 {
 		return 0
 	}
 	return id
+}
+
+func (h *IntegratedQuestHandlers) notifyScalpingDecision(ctx context.Context, chatID string, notif AIReasoningNotification) {
+	if h.notificationService == nil {
+		return
+	}
+	if !shouldSendScalpingDecisionNotification(notif) {
+		log.Printf(
+			"[NOTIFICATION] Suppressed non-actionable scalping update (type=%s action=%s)",
+			notif.DecisionType,
+			notif.Action,
+		)
+		return
+	}
+	chatIDInt := parseChatID(chatID)
+	if chatIDInt == 0 {
+		return
+	}
+	if err := h.notificationService.NotifyAIReasoning(ctx, chatIDInt, notif); err != nil {
+		log.Printf("[NOTIFICATION] Failed to send scalping status notification: %v", err)
+	}
+}
+
+// getUserExchange gets the user's preferred exchange from database
+// Returns the first connected exchange, or "bitget" as default
+func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
+	if h.db == nil {
+		log.Printf("[SCALPING] No database available, using default exchange: bitget")
+		return "bitget"
+	}
+
+	var exchange string
+	query := `SELECT provider FROM telegram_operator_wallets 
+	          WHERE chat_id = $1 AND status = 'connected' 
+	          ORDER BY created_at DESC LIMIT 1`
+
+	err := h.db.QueryRow(query, chatID).Scan(&exchange)
+	if err != nil {
+		log.Printf("[SCALPING] No exchange found for chat %s, using default: bitget (%v)", chatID, err)
+		return "bitget"
+	}
+
+	log.Printf("[SCALPING] Found user exchange: %s for chat: %s", exchange, chatID)
+	return exchange
+}
+
+func (h *IntegratedQuestHandlers) recordTradeDecision(ctx context.Context, quest *Quest, decision *AITradingDecision, exchange string) {
+	if h.tradeMemory == nil || decision == nil || decision.Action == "hold" {
+		return
+	}
+
+	tradeID := strings.TrimSpace(decision.OrderID)
+	if tradeID == "" {
+		tradeID = fmt.Sprintf("ai-order-%d", time.Now().UnixNano())
+	}
+
+	record := AITradeRecord{
+		ID:          tradeID,
+		Timestamp:   time.Now().UTC(),
+		Exchange:    exchange,
+		Symbol:      decision.Symbol,
+		Action:      decision.Action,
+		SizePercent: decision.SizePercent,
+		Confidence:  decision.Confidence,
+		Reasoning:   decision.Reasoning,
+		MarketContext: fmt.Sprintf(
+			"chat_id=%s,quest_id=%s,definition=%s",
+			quest.Metadata["chat_id"],
+			quest.ID,
+			quest.Metadata["definition_id"],
+		),
+	}
+	if err := h.tradeMemory.RecordDecision(ctx, record); err != nil {
+		log.Printf("[AI-MEMORY] Failed to record decision %s: %v", tradeID, err)
+		return
+	}
+
+	quest.Checkpoint["trade_memory_id"] = tradeID
+}
+
+func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context, quest *Quest, exchange, symbol string) {
+	if h.orderExecutor == nil || strings.TrimSpace(symbol) == "" {
+		return
+	}
+
+	closedOrders, err := h.orderExecutor.GetClosedOrders(ctx, exchange, symbol, 20)
+	if err != nil {
+		log.Printf("[SCALPING] Failed to fetch closed orders for feedback (%s %s): %v", exchange, symbol, err)
+		return
+	}
+
+	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
+	updatedProcessed := false
+	processedCount := 0
+	wins := 0
+	losses := 0
+	breakeven := 0
+	totalPnL := decimal.Zero
+
+	for _, order := range closedOrders {
+		orderID := getOrderID(order)
+		if orderID == "" || processed[orderID] {
+			continue
+		}
+
+		pnl, ok := decimalFromOrder(order, "totalProfits", "totalProfit", "pnl", "profit", "realizedPnl", "achievedProfits")
+		if !ok {
+			continue
+		}
+
+		side := "buy"
+		if rawSide, ok := stringFromOrder(order, "side", "tradeSide", "positionSide"); ok {
+			side = strings.ToLower(strings.TrimSpace(rawSide))
+		}
+		exitPrice := decimal.Zero
+		if p, ok := decimalFromOrder(order, "priceAvg", "avgPrice", "price", "fillPrice"); ok {
+			exitPrice = p
+		}
+
+		profitable := pnl.GreaterThan(decimal.Zero)
+		if profitable {
+			wins++
+		} else if pnl.LessThan(decimal.Zero) {
+			losses++
+		} else {
+			breakeven++
+		}
+		totalPnL = totalPnL.Add(pnl)
+		processedCount++
+		if h.aiScalpingService != nil {
+			h.aiScalpingService.ReportTradeOutcome(symbol, pnl)
+		}
+		GetScalpingPerformance().RecordTrade(TradeRecord{
+			Timestamp:  time.Now().UTC(),
+			Symbol:     symbol,
+			Side:       side,
+			PnL:        pnl,
+			Profitable: profitable,
+			ExitPrice:  exitPrice,
+		})
+
+		if h.tradeMemory != nil {
+			outcome := "breakeven"
+			if profitable {
+				outcome = "win"
+			} else if pnl.LessThan(decimal.Zero) {
+				outcome = "loss"
+			}
+			if err := h.tradeMemory.UpdateOutcome(ctx, orderID, outcome, exitPrice.InexactFloat64(), pnl); err != nil {
+				log.Printf("[AI-MEMORY] Failed to update outcome for %s: %v", orderID, err)
+			}
+		}
+
+		processed[orderID] = true
+		updatedProcessed = true
+
+		if h.lifecycleStore != nil {
+			filled := decimal.Zero
+			if v, ok := decimalFromOrder(order, "filled", "filledAmount", "baseVolume", "qty", "size"); ok {
+				filled = v
+			}
+			fees := decimal.Zero
+			if v, ok := decimalFromOrder(order, "fees", "fee", "totalFee", "commission"); ok {
+				fees = v
+			}
+			closedAt := timestampFromOrder(order)
+			if err := h.lifecycleStore.RecordClosedOrder(ctx, LifecycleCloseRecord{
+				OrderID:     orderID,
+				ChatID:      quest.Metadata["chat_id"],
+				Exchange:    exchange,
+				Symbol:      symbol,
+				Side:        side,
+				MarketType:  "futures",
+				Filled:      filled,
+				ExitPrice:   exitPrice,
+				RealizedPnL: pnl,
+				Fees:        fees,
+				Source:      "exchange_reconciliation",
+				ClosedAt:    closedAt,
+			}); err != nil {
+				log.Printf("[SCALPING] Failed to persist closed-order lifecycle for %s: %v", orderID, err)
+			}
+		}
+	}
+
+	if !updatedProcessed {
+		return
+	}
+
+	if processedCount > 0 {
+		summary := fmt.Sprintf(
+			"Reconciled %d closed order(s) on %s (%s). Realized PnL: %s (wins=%d, losses=%d, breakeven=%d)",
+			processedCount,
+			exchange,
+			symbol,
+			totalPnL.StringFixed(4),
+			wins,
+			losses,
+			breakeven,
+		)
+		h.notifyScalpingDecision(ctx, quest.Metadata["chat_id"], AIReasoningNotification{
+			DecisionType: "pnl_reconciliation",
+			Summary:      summary,
+			Confidence:   1,
+			Reasons: []string{
+				"Closed orders were synced from exchange state",
+			},
+			Action: "record",
+		})
+	}
+
+	ids := make([]string, 0, len(processed))
+	for id := range processed {
+		ids = append(ids, id)
+	}
+	if len(ids) > 200 {
+		ids = ids[len(ids)-200:]
+	}
+	quest.Checkpoint["processed_closed_order_ids"] = ids
+}
+
+func getProcessedOrderIDs(raw interface{}) map[string]bool {
+	processed := make(map[string]bool)
+	switch v := raw.(type) {
+	case []string:
+		for _, id := range v {
+			if strings.TrimSpace(id) != "" {
+				processed[strings.TrimSpace(id)] = true
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				processed[strings.TrimSpace(s)] = true
+			}
+		}
+	}
+	return processed
+}
+
+func getOrderID(order map[string]interface{}) string {
+	candidates := []string{"orderId", "orderID", "order_id", "id", "clientOid"}
+	for _, key := range candidates {
+		if raw, ok := order[key]; ok {
+			if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+func stringFromOrder(order map[string]interface{}, keys ...string) (string, bool) {
+	for _, key := range keys {
+		raw, ok := order[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return v, true
+			}
+		default:
+			s := strings.TrimSpace(fmt.Sprintf("%v", v))
+			if s != "" && s != "<nil>" {
+				return s, true
+			}
+		}
+	}
+	return "", false
+}
+
+func decimalFromOrder(order map[string]interface{}, keys ...string) (decimal.Decimal, bool) {
+	for _, key := range keys {
+		raw, ok := order[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case decimal.Decimal:
+			return v, true
+		case string:
+			s := strings.TrimSpace(v)
+			if s == "" {
+				continue
+			}
+			if d, err := decimal.NewFromString(s); err == nil {
+				return d, true
+			}
+		case float64:
+			return decimal.NewFromFloat(v), true
+		case float32:
+			return decimal.NewFromFloat(float64(v)), true
+		case int:
+			return decimal.NewFromInt(int64(v)), true
+		case int64:
+			return decimal.NewFromInt(v), true
+		case json.Number:
+			if d, err := decimal.NewFromString(v.String()); err == nil {
+				return d, true
+			}
+		default:
+			s := strings.TrimSpace(fmt.Sprintf("%v", raw))
+			if s == "" || s == "<nil>" {
+				continue
+			}
+			if d, err := decimal.NewFromString(s); err == nil {
+				return d, true
+			}
+		}
+	}
+	return decimal.Zero, false
+}
+
+func timestampFromOrder(order map[string]interface{}) time.Time {
+	keys := []string{"uTime", "cTime", "fillTime", "updatedAt", "timestamp", "time"}
+	for _, key := range keys {
+		raw, ok := order[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case time.Time:
+			if !v.IsZero() {
+				return v.UTC()
+			}
+		case int64:
+			if ts := parseEpochTimestamp(v); !ts.IsZero() {
+				return ts
+			}
+		case int:
+			if ts := parseEpochTimestamp(int64(v)); !ts.IsZero() {
+				return ts
+			}
+		case float64:
+			if ts := parseEpochTimestamp(int64(v)); !ts.IsZero() {
+				return ts
+			}
+		case string:
+			text := strings.TrimSpace(v)
+			if text == "" {
+				continue
+			}
+			if numeric, err := strconv.ParseInt(text, 10, 64); err == nil {
+				if ts := parseEpochTimestamp(numeric); !ts.IsZero() {
+					return ts
+				}
+			}
+			if parsed, err := time.Parse(time.RFC3339, text); err == nil {
+				return parsed.UTC()
+			}
+		}
+	}
+	return time.Now().UTC()
+}
+
+func parseEpochTimestamp(value int64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	if value > 1_000_000_000_000 {
+		return time.UnixMilli(value).UTC()
+	}
+	return time.Unix(value, 0).UTC()
+}
+
+func (h *IntegratedQuestHandlers) ensureDynamicProtectionManager() {
+	if h.protectionManager != nil || h.lifecycleStore == nil {
+		return
+	}
+	tickerSource, ok := h.ccxtService.(interface {
+		FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
+	})
+	if !ok {
+		return
+	}
+	h.protectionManager = NewDynamicProtectionManager(DefaultDynamicProtectionConfig(), h.lifecycleStore, tickerSource, log.Default())
+}
+
+func decimalValueOrZero(value *decimal.Decimal) decimal.Decimal {
+	if value == nil {
+		return decimal.Zero
+	}
+	return *value
+}
+
+func (h *IntegratedQuestHandlers) bootstrapLifecycleState(ctx context.Context, quest *Quest, exchange, chatID string) {
+	if h.lifecycleStore == nil || quest == nil {
+		return
+	}
+	ccxtSvc, ok := h.ccxtService.(ccxt.CCXTService)
+	if !ok {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+
+	interval := defaultBootstrapInterval
+	if seconds := getEnvInt("NEURATRADE_SCALPING_BOOTSTRAP_SECONDS"); seconds > 0 {
+		interval = time.Duration(seconds) * time.Second
+	}
+	if raw, ok := quest.Checkpoint["runtime_bootstrap_synced_at"].(string); ok && strings.TrimSpace(raw) != "" {
+		if last, err := time.Parse(time.RFC3339, raw); err == nil && time.Since(last) < interval {
+			return
+		}
+	}
+
+	bootstrapCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	orderCount := 0
+	if openOrders, err := ccxtSvc.FetchOpenOrders(bootstrapCtx, exchange); err == nil && openOrders != nil {
+		for _, order := range openOrders.Orders {
+			if err := h.lifecycleStore.SyncOpenOrder(bootstrapCtx, chatID, exchange, order); err != nil {
+				log.Printf("[SCALPING] Failed to sync open order %s: %v", order.ID, err)
+				continue
+			}
+			orderCount++
+		}
+	} else if err != nil {
+		log.Printf("[SCALPING] Bootstrap open-order sync failed on %s: %v", exchange, err)
+	}
+
+	positionCount := 0
+	if positions, err := ccxtSvc.FetchPositions(bootstrapCtx, exchange); err == nil && positions != nil {
+		for _, position := range positions.Positions {
+			if err := h.lifecycleStore.SyncPosition(bootstrapCtx, chatID, exchange, position); err != nil {
+				log.Printf("[SCALPING] Failed to sync position %s %s: %v", position.Symbol, position.Side, err)
+				continue
+			}
+			positionCount++
+		}
+	} else if err != nil {
+		log.Printf("[SCALPING] Bootstrap position sync failed on %s: %v", exchange, err)
+	}
+
+	quest.Checkpoint["runtime_bootstrap_synced_at"] = time.Now().UTC().Format(time.RFC3339)
+	quest.Checkpoint["runtime_bootstrap_open_orders"] = orderCount
+	quest.Checkpoint["runtime_bootstrap_positions"] = positionCount
+}
+
+func (h *IntegratedQuestHandlers) scalpingCooldownRemaining(quest *Quest, now time.Time) time.Duration {
+	if quest == nil || quest.Checkpoint == nil {
+		return 0
+	}
+
+	raw, ok := quest.Checkpoint["runtime_cooldown_until"]
+	if !ok {
+		return 0
+	}
+
+	cooldownUntil, ok := raw.(string)
+	if !ok || strings.TrimSpace(cooldownUntil) == "" {
+		return 0
+	}
+
+	until, err := time.Parse(time.RFC3339, cooldownUntil)
+	if err != nil || !until.After(now) {
+		delete(quest.Checkpoint, "runtime_cooldown_until")
+		return 0
+	}
+
+	return until.Sub(now)
+}
+
+func (h *IntegratedQuestHandlers) recordScalpingFailure(quest *Quest, reason string) (int, time.Duration) {
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+
+	now := time.Now().UTC()
+	streak := checkpointInt(quest.Checkpoint["runtime_failure_streak"]) + 1
+	quest.Checkpoint["runtime_failure_streak"] = streak
+	quest.Checkpoint["runtime_last_failure"] = strings.TrimSpace(reason)
+	quest.Checkpoint["runtime_last_failure_at"] = now.Format(time.RFC3339)
+
+	if streak < scalpingFailureCooldownThreshold {
+		delete(quest.Checkpoint, "runtime_cooldown_until")
+		return streak, 0
+	}
+
+	level := streak - scalpingFailureCooldownThreshold
+	if level > 3 {
+		level = 3
+	}
+	cooldown := scalpingBaseCooldown * time.Duration(1<<level)
+	if cooldown > scalpingMaxCooldown {
+		cooldown = scalpingMaxCooldown
+	}
+	quest.Checkpoint["runtime_cooldown_until"] = now.Add(cooldown).Format(time.RFC3339)
+	return streak, cooldown
+}
+
+func (h *IntegratedQuestHandlers) resetScalpingFailureState(quest *Quest) {
+	if quest == nil || quest.Checkpoint == nil {
+		return
+	}
+	delete(quest.Checkpoint, "runtime_failure_streak")
+	delete(quest.Checkpoint, "runtime_last_failure")
+	delete(quest.Checkpoint, "runtime_last_failure_at")
+	delete(quest.Checkpoint, "runtime_cooldown_until")
+	delete(quest.Checkpoint, "runtime_hold_cooldown")
+}
+
+func checkpointInt(v interface{}) int {
+	switch value := v.(type) {
+	case int:
+		return value
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case float32:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return int(parsed)
+		}
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func isRuntimeHoldReason(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "execution unavailable") ||
+		strings.Contains(lower, "model response parse fallback") ||
+		strings.Contains(lower, "failed to parse ai decision") ||
+		strings.Contains(lower, "llm completion failed") ||
+		strings.Contains(lower, "runtime error")
+}
+
+func shouldSendScalpingDecisionNotification(notif AIReasoningNotification) bool {
+	if verbose, ok := getEnvBool("NEURATRADE_TELEGRAM_NOTIFY_AI_DECISIONS"); ok && verbose {
+		return true
+	}
+
+	actionableOnly := true
+	if value, ok := getEnvBool("NEURATRADE_TELEGRAM_ACTIONABLE_ONLY"); ok {
+		actionableOnly = value
+	}
+	if !actionableOnly {
+		return true
+	}
+
+	decisionType := strings.ToLower(strings.TrimSpace(notif.DecisionType))
+	action := strings.ToLower(strings.TrimSpace(notif.Action))
+
+	return decisionType == "pnl_reconciliation" || action == "record"
 }

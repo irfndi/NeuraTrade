@@ -35,8 +35,15 @@ type Service struct {
 //
 //	*Service: Initialized service.
 func NewService(cfg *config.CCXTConfig, logger *zaplogrus.Logger, blacklistCache cache.BlacklistCache) *Service {
-	// Use native CCXT implementation (direct exchange API calls)
-	nativeClient := NewNativeCCXTService(time.Duration(cfg.Timeout)*time.Second, 3)
+	// Use native CCXT implementation with exchange credentials from config
+	var nativeClient *NativeCCXTService
+	if len(cfg.Exchanges) > 0 {
+		nativeClient = NewNativeCCXTServiceWithConfig(time.Duration(cfg.Timeout)*time.Second, 3, cfg.Exchanges)
+		logger.Info("CCXT service initialized with exchange credentials", "count", len(cfg.Exchanges))
+	} else {
+		nativeClient = NewNativeCCXTService(time.Duration(cfg.Timeout)*time.Second, 3)
+		logger.Warn("CCXT service initialized without exchange credentials - balance fetching will return empty")
+	}
 
 	s := &Service{
 		nativeClient:       nativeClient,
@@ -556,4 +563,29 @@ func (s *Service) AddExchange(ctx context.Context, exchange string) (*ExchangeMa
 
 func (s *Service) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {
 	return s.nativeClient.FetchBalance(ctx, exchange)
+}
+
+// FetchOpenOrders retrieves all open orders for an exchange.
+func (s *Service) FetchOpenOrders(ctx context.Context, exchange string) (*OpenOrdersResponse, error) {
+	return s.nativeClient.FetchOpenOrders(ctx, exchange)
+}
+
+// FetchOpenOrdersForSymbol retrieves open orders for a specific symbol.
+func (s *Service) FetchOpenOrdersForSymbol(ctx context.Context, exchange, symbol string) (*OpenOrdersResponse, error) {
+	return s.nativeClient.FetchOpenOrdersForSymbol(ctx, exchange, symbol)
+}
+
+// CancelOrder cancels an order by ID.
+func (s *Service) CancelOrder(ctx context.Context, exchange, orderID, symbol string) error {
+	return s.nativeClient.CancelOrder(ctx, exchange, orderID, symbol)
+}
+
+// FetchOrder retrieves a specific order by ID.
+func (s *Service) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*OrderResponse, error) {
+	return s.nativeClient.FetchOrder(ctx, exchange, orderID, symbol)
+}
+
+// FetchPositions retrieves all positions for an exchange.
+func (s *Service) FetchPositions(ctx context.Context, exchange string) (*PositionsResponse, error) {
+	return s.nativeClient.FetchPositions(ctx, exchange)
 }

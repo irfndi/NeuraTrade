@@ -4,9 +4,11 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -54,14 +56,54 @@ func isProductionEnvironment() bool {
 // Returns:
 //
 //	*AdminMiddleware: Initialized middleware.
+
+// getAdminAPIKeyFromConfig reads admin API key from config.json
+func getAdminAPIKeyFromConfig() string {
+	configPath := strings.TrimSpace(os.Getenv("NEURATRADE_HOME"))
+	if configPath != "" {
+		configPath = filepath.Join(configPath, "config.json")
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
+	}
+
+	// #nosec G304,G703 -- config path is derived from NEURATRADE_HOME or user home
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return ""
+	}
+
+	if apiKey, ok := config["admin_api_key"].(string); ok {
+		return strings.TrimSpace(apiKey)
+	}
+	if security, ok := config["security"].(map[string]interface{}); ok {
+		if apiKey, ok := security["admin_api_key"].(string); ok {
+			return strings.TrimSpace(apiKey)
+		}
+	}
+
+	return ""
+}
+
 func NewAdminMiddleware() *AdminMiddleware {
-	// Get admin API key from environment variable
-	apiKey := os.Getenv("ADMIN_API_KEY")
+	// Prefer explicit environment override first for tests/ops, then config.json fallback.
+	apiKey := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
+	if apiKey == "" {
+		apiKey = getAdminAPIKeyFromConfig()
+	}
 
 	// Handle missing API key based on environment
 	if apiKey == "" {
 		if isProductionEnvironment() {
-			log.Fatal("ADMIN_API_KEY environment variable must be set in production")
+			log.Fatal("ADMIN_API_KEY must be set in config.json or environment variable in production")
 		}
 		// Generate temporary key for non-production environments
 		apiKey = generateSecureKey(32)

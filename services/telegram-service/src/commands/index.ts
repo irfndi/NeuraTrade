@@ -9,6 +9,7 @@ import { registerSettingsCommands } from "./settings";
 import { registerBdCommands } from "./bd";
 import { registerAICommands } from "./ai";
 import { registerAlertsCommands } from "./alerts";
+import { registerModeCommand } from "./mode";
 
 export { registerStartCommand } from "./start";
 export { registerHelpCommand } from "./help";
@@ -18,6 +19,7 @@ export { registerSettingsCommands } from "./settings";
 export { registerBdCommands } from "./bd";
 export { registerAICommands } from "./ai";
 export { registerAlertsCommands } from "./alerts";
+export { registerModeCommand } from "./mode";
 
 export function registerAllCommands(
   bot: Bot,
@@ -32,4 +34,5 @@ export function registerAllCommands(
   registerBdCommands(bot, api, sessions);
   registerAICommands(bot, api);
   registerAlertsCommands(bot, api);
+  registerModeCommand(bot, api);
 }

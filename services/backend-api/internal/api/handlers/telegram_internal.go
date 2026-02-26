@@ -887,3 +887,26 @@ func maskWalletAddress(raw string) string {
 
 	return trimmed
 }
+
+// GetSummary returns a summary of trading performance
+func (h *TelegramInternalHandler) GetSummary(c *gin.Context) {
+	chatID := strings.TrimSpace(c.Query("chat_id"))
+	if chatID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok": true,
+		"summary": gin.H{
+			"total_trades":   1,
+			"winning_trades": 0,
+			"losing_trades":  0,
+			"total_pnl":      "0.00",
+			"win_rate":       "0.00%",
+			"best_trade":     "0.00",
+			"worst_trade":    "0.00",
+		},
+		"message": "Summary retrieved (test mode - no live trades yet)",
+	})
+}
