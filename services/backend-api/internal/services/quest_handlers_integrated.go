@@ -22,6 +22,7 @@ type ScalpingOrderExecutor interface {
 	GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error)
 	GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error)
 	CancelOrder(ctx context.Context, exchange, orderID string) error
+	IsPaperTrading() bool
 }
 
 type IntegratedQuestHandlers struct {

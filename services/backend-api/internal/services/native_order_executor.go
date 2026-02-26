@@ -237,6 +237,11 @@ func (e *NativeOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID
 	return nil
 }
 
+// IsPaperTrading returns true for native executor (paper trading mode)
+func (e *NativeOrderExecutor) IsPaperTrading() bool {
+	return true
+}
+
 var _ ScalpingOrderExecutor = (*NativeOrderExecutor)(nil)
 
 // ExecuteTestTrade executes a test trade for debugging purposes

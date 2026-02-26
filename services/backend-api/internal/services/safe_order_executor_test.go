@@ -45,6 +45,11 @@ func (m *MockScalpingOrderExecutor) PlaceOrderWithDetails(ctx context.Context, d
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockScalpingOrderExecutor) IsPaperTrading() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
 // mockSafetyChecker implements PortfolioSafetyChecker for testing
 type mockSafetyChecker struct {
 	mock.Mock

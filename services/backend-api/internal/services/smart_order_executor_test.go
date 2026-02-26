@@ -71,6 +71,10 @@ func (m *mockExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeD
 	}
 	return m.orderID, nil
 }
+
+func (m *mockExecutor) IsPaperTrading() bool {
+	return false
+}
 func TestNewSmartOrderExecutor_Defaults(t *testing.T) {
 	cfg := DefaultSmartOrderExecutorConfig()
 	assert.Equal(t, 4, cfg.MaxRetries)

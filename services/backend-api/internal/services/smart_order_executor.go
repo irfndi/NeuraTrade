@@ -598,4 +598,9 @@ func (e *SmartOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details 
 	return e.config.BaseExecutor.PlaceOrderWithDetails(ctx, details)
 }
 
+// IsPaperTrading delegates to the base executor
+func (e *SmartOrderExecutor) IsPaperTrading() bool {
+	return e.config.BaseExecutor.IsPaperTrading()
+}
+
 var _ ScalpingOrderExecutor = (*SmartOrderExecutor)(nil)

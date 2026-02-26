@@ -801,11 +801,16 @@ func (e *BitgetOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID
 		return err
 	}
 
-	if result.Code != "00000" {
+if result.Code != "00000" {
 		return fmt.Errorf("failed to cancel order: %s", result.Msg)
 	}
 
 	return nil
+}
+
+// IsPaperTrading returns false for Bitget executor (real trading mode)
+func (e *BitgetOrderExecutor) IsPaperTrading() bool {
+	return false
 }
 
 var _ ScalpingOrderExecutor = (*BitgetOrderExecutor)(nil)

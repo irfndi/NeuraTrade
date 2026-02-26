@@ -982,7 +982,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		Confidence:        decision.Confidence,
 		Reasoning:         decision.Reasoning,
 		EntryPrice:        decision.EntryPrice,
-		IsPaperTrade:      false, // Real trading mode
+		IsPaperTrade:      s.orderExecutor.IsPaperTrading(),
 	}
 
 	// Use PlaceOrderWithDetails for rich notifications

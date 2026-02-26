@@ -142,4 +142,9 @@ func (s *SafeOrderExecutor) GetChatID() string {
 	return s.chatID
 }
 
+// IsPaperTrading delegates to the base executor
+func (s *SafeOrderExecutor) IsPaperTrading() bool {
+	return s.baseExecutor.IsPaperTrading()
+}
+
 var _ ScalpingOrderExecutor = (*SafeOrderExecutor)(nil)
