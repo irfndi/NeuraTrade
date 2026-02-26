@@ -157,7 +157,7 @@ func (s *SafeOrderExecutor) SyncPositionProtection(
 	syncable, ok := s.baseExecutor.(interface {
 		SyncPositionProtection(context.Context, string, ManagedOpenPosition, decimal.Decimal, decimal.Decimal) error
 	})
-if !ok {
+	if !ok {
 		return fmt.Errorf("%w: base executor does not support exchange-side protection sync", ErrProtectionSyncUnsupported)
 	}
 	if err := syncable.SyncPositionProtection(ctx, exchange, position, stopLoss, takeProfit); err != nil {

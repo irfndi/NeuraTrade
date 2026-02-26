@@ -1973,7 +1973,7 @@ func (s *NativeCCXTService) FetchFundingRates(ctx context.Context, exchange stri
 		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -2058,7 +2058,7 @@ func (s *NativeCCXTService) buildFundingRateURL(exchange string, symbols []strin
 		}
 		instId := strings.ReplaceAll(symbols[0], "/", "-")
 		return fmt.Sprintf("https://www.okx.com/api/v5/public/funding-rate?instId=%s", instId)
-case "bitget":
+	case "bitget":
 		// Bitget v2: current-fund-rate for single symbol, tickers for all/filtered symbol sets.
 		if len(symbols) == 1 {
 			symbol := bitgetSymbolKey(symbols[0])
@@ -2225,14 +2225,14 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 		return nil, fmt.Errorf("bitget API error: %s", raw.Msg)
 	}
 
-rates := make([]FundingRate, 0, len(raw.Data))
+	rates := make([]FundingRate, 0, len(raw.Data))
 	for _, item := range raw.Data {
 		rate, err := strconv.ParseFloat(strings.TrimSpace(item.FundingRate), 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid bitget fundingRate for %s: %w", item.Symbol, err)
 		}
 
-ts, err := strconv.ParseInt(strings.TrimSpace(item.FundingTime), 10, 64)
+		ts, err := strconv.ParseInt(strings.TrimSpace(item.FundingTime), 10, 64)
 		if err != nil {
 			ts, err = strconv.ParseInt(strings.TrimSpace(item.Ts), 10, 64)
 		}

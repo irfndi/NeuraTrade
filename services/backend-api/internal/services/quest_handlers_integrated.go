@@ -394,7 +394,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		balanceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-balanceSnapshot, err = balanceFetcher.FetchBalance(balanceCtx, userExchange)
+		balanceSnapshot, err = balanceFetcher.FetchBalance(balanceCtx, userExchange)
 		if err != nil {
 			log.Printf("[SCALPING] Failed to fetch balance from %s: %v, skipping this cycle", userExchange, err)
 			quest.Checkpoint["balance_warning"] = err.Error()
@@ -658,7 +658,7 @@ func (h *IntegratedQuestHandlers) autoDeriskBlockedExposure(
 		}
 
 		details := TradeDetails{
-Exchange:     exchange,
+			Exchange:     exchange,
 			Symbol:       pos.Symbol,
 			Side:         closeSide,
 			OrderType:    "market",
@@ -824,7 +824,7 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 		maxOrders = value
 	}
 
-stableAssets := map[string]struct{}{
+	stableAssets := map[string]struct{}{
 		"USDT":  {},
 		"USDC":  {},
 		"BUSD":  {},
@@ -874,7 +874,7 @@ stableAssets := map[string]struct{}{
 			continue
 		}
 
-details := TradeDetails{
+		details := TradeDetails{
 			Exchange:     exchange,
 			Symbol:       symbol,
 			Side:         "sell",

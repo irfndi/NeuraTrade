@@ -124,7 +124,7 @@ func (sp *ScalpingPerformance) GetReturnSeries(limit int) []float64 {
 		if notional.LessThanOrEqual(decimal.Zero) {
 			continue
 		}
-ret := trade.PnL.Div(notional).InexactFloat64()
+		ret := trade.PnL.Div(notional).InexactFloat64()
 		if math.IsNaN(ret) || math.IsInf(ret, 0) {
 			continue
 		}

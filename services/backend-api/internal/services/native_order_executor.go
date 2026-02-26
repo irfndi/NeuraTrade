@@ -31,7 +31,7 @@ type TradeDetails struct {
 	TradeType         string // scalping, arbitrage, swing, etc.
 	Confidence        float64
 	Reasoning         string
-OrderID           string
+	OrderID           string
 	IsPaperTrade      bool
 	ReduceOnly        bool // Must be true for PlaceRiskReductionOrderWithDetails
 }
