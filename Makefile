@@ -52,7 +52,7 @@ build: mod-download services-setup ## Build backend binaries
 	@echo "$(GREEN)Building $(APP_NAME)...$(NC)"
 	@mkdir -p bin
 	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-server ./cmd/server
-	@$(GO_ENV) go build -o bin/neuratrade ./cmd/neuratrade-cli
+	@cd cmd/neuratrade-cli && $(GO_ENV) go build -o ../../bin/neuratrade .
 	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade$(NC)"
 
 fmt: ## Format backend + frontend code

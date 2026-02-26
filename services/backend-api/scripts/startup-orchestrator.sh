@@ -109,7 +109,7 @@ start_gateway() {
   log_info "Starting gateway using: ${gateway_cmd}"
   (
     cd "$REPO_ROOT"
-    nohup bash -lc "$gateway_cmd" >>"${GATEWAY_LOG}" 2>&1 &
+    nohup bash -c "$gateway_cmd" >>"${GATEWAY_LOG}" 2>&1 &
     echo $! >"${PID_FILE}"
   )
 
@@ -117,8 +117,23 @@ start_gateway() {
   pid="$(gateway_pid)"
   log_info "Gateway launched (pid=${pid}), waiting for backend health..."
 
+  sleep 1
+  if ! pid_running "$pid"; then
+    log_error "Gateway process exited immediately (pid=${pid})"
+    log_error "Inspect logs: ${GATEWAY_LOG}"
+    rm -f "${PID_FILE}"
+    return 1
+  fi
+
   if wait_backend_health 60; then
-    log_success "Gateway is running and backend health endpoint is reachable"
+    if pid_running "$pid"; then
+      log_success "Gateway is running and backend health endpoint is reachable"
+    else
+      log_error "Backend health is reachable but gateway process exited (pid=${pid})"
+      log_error "Inspect logs: ${GATEWAY_LOG}"
+      rm -f "${PID_FILE}"
+      return 1
+    fi
   else
     log_warn "Gateway started, but backend health endpoint is not ready yet"
     log_warn "Check logs: tail -f ${GATEWAY_LOG}"
