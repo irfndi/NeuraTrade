@@ -58,6 +58,8 @@ function formatPortfolioMessage(input: {
   totalEquity: string;
   availableBalance?: string;
   exposure?: string;
+  openOrders?: number;
+  note?: string;
   updatedAt?: string;
   positions: readonly PortfolioPosition[];
 }): string {
@@ -71,12 +73,19 @@ function formatPortfolioMessage(input: {
     lines.push(`Exposure: ${input.exposure}`);
   }
 
+  if (typeof input.openOrders === "number") {
+    lines.push(`Open Orders: ${input.openOrders}`);
+  }
+
   if (input.updatedAt) {
     lines.push(`Updated At: ${input.updatedAt}`);
   }
 
   if (input.positions.length === 0) {
     lines.push("", "No open positions.");
+    if (input.note) {
+      lines.push("", `Note: ${input.note}`);
+    }
     return lines.join("\n");
   }
 
@@ -91,6 +100,10 @@ function formatPortfolioMessage(input: {
       "",
       `Showing ${topPositions.length}/${input.positions.length} positions.`,
     );
+  }
+
+  if (input.note) {
+    lines.push("", `Note: ${input.note}`);
   }
 
   return lines.join("\n");
@@ -183,6 +196,8 @@ export function registerMonitoringCommands(
           totalEquity: response.total_equity,
           availableBalance: response.available_balance,
           exposure: response.exposure,
+          openOrders: response.open_orders,
+          note: response.note,
           updatedAt: response.updated_at,
           positions: response.positions ?? [],
         }),

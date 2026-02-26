@@ -164,7 +164,9 @@ export interface PortfolioResponse {
   readonly total_equity: string;
   readonly available_balance?: string;
   readonly exposure?: string;
+  readonly open_orders?: number;
   readonly positions: readonly PortfolioPosition[];
+  readonly note?: string;
   readonly updated_at?: string;
 }
 

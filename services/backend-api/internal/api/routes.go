@@ -379,12 +379,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Set database for user settings lookup
+	var lifecycleStore *services.TradingLifecycleStore
 	if sqlDB != nil {
 		integratedHandlers.SetDB(sqlDB)
 		log.Printf("Database set for integrated handlers")
 	}
 	if db != nil {
-		lifecycleStore, lifecycleErr := services.NewTradingLifecycleStore(db, log.Default())
+		var lifecycleErr error
+		lifecycleStore, lifecycleErr = services.NewTradingLifecycleStore(db, log.Default())
 		if lifecycleErr != nil {
 			log.Printf("Warning: failed to initialize trading lifecycle store: %v", lifecycleErr)
 		} else {
@@ -580,6 +582,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		autonomousHandler = handlers.NewAutonomousHandlerWithReconciler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges(), reconciler)
 	} else {
 		autonomousHandler = handlers.NewAutonomousHandler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges())
+	}
+	if lifecycleStore != nil {
+		autonomousHandler.SetLifecycleStore(lifecycleStore)
 	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 

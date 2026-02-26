@@ -70,6 +70,15 @@ type ManagedOpenPosition struct {
 	UpdatedAt           time.Time
 }
 
+type LifecyclePerformanceSummary struct {
+	Trades      int
+	Wins        int
+	Losses      int
+	RealizedPnL decimal.Decimal
+	BestTrade   decimal.Decimal
+	WorstTrade  decimal.Decimal
+}
+
 func NewTradingLifecycleStore(db database.DBPool, logger *log.Logger) (*TradingLifecycleStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("lifecycle store requires database")
@@ -149,12 +158,6 @@ func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
 			closed_at TIMESTAMP NOT NULL,
 			created_at TIMESTAMP NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id ON trading_orders(position_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_trading_orders_chat_status ON trading_orders(chat_id, status)`,
-		`CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status ON trading_positions(symbol, status)`,
-		`CREATE INDEX IF NOT EXISTS idx_trading_positions_chat_status ON trading_positions(chat_id, status)`,
-		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed ON realized_pnl_journal(chat_id, closed_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_symbol_closed ON realized_pnl_journal(symbol, closed_at)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(ctx, stmt); err != nil {
@@ -183,6 +186,20 @@ func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
 	for _, stmt := range legacyColumns {
 		if _, err := s.db.Exec(ctx, stmt); err != nil && !isDuplicateColumnError(err) {
 			return fmt.Errorf("lifecycle schema alter failed: %w", err)
+		}
+	}
+
+	indexStatements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id ON trading_orders(position_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_trading_orders_chat_status ON trading_orders(chat_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status ON trading_positions(symbol, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_trading_positions_chat_status ON trading_positions(chat_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed ON realized_pnl_journal(chat_id, closed_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_symbol_closed ON realized_pnl_journal(symbol, closed_at)`,
+	}
+	for _, stmt := range indexStatements {
+		if _, err := s.db.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("lifecycle schema index failed: %w", err)
 		}
 	}
 
@@ -505,6 +522,81 @@ func (s *TradingLifecycleStore) ListManagedOpenPositions(ctx context.Context, ch
 		return nil, fmt.Errorf("iterate managed positions failed: %w", err)
 	}
 	return positions, nil
+}
+
+func (s *TradingLifecycleStore) CountOpenOrders(ctx context.Context, chatID, exchange string) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM trading_orders
+		WHERE status IN ('open', 'partial')
+	`
+	args := make([]interface{}, 0, 2)
+	if strings.TrimSpace(chatID) != "" {
+		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(chatID))
+	}
+	if strings.TrimSpace(exchange) != "" {
+		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(exchange))
+	}
+
+	var count int
+	if err := s.db.QueryRow(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count open orders failed: %w", err)
+	}
+	return count, nil
+}
+
+func (s *TradingLifecycleStore) GetRealizedPerformance(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	since time.Time,
+) (LifecyclePerformanceSummary, error) {
+	if since.IsZero() {
+		since = time.Now().UTC().Add(-24 * time.Hour)
+	}
+	query := `
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(realized_pnl), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(MAX(realized_pnl), 0),
+			COALESCE(MIN(realized_pnl), 0)
+		FROM realized_pnl_journal
+		WHERE closed_at >= $1
+	`
+	args := []interface{}{since.UTC()}
+	if strings.TrimSpace(chatID) != "" {
+		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(chatID))
+	}
+	if strings.TrimSpace(exchange) != "" {
+		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(exchange))
+	}
+
+	var summary LifecyclePerformanceSummary
+	var wins int64
+	var losses int64
+	if err := s.db.QueryRow(ctx, query, args...).Scan(
+		&summary.Trades,
+		&summary.RealizedPnL,
+		&wins,
+		&losses,
+		&summary.BestTrade,
+		&summary.WorstTrade,
+	); err != nil {
+		return LifecyclePerformanceSummary{}, fmt.Errorf("query realized performance failed: %w", err)
+	}
+	summary.Wins = int(wins)
+	summary.Losses = int(losses)
+	if summary.Trades == 0 {
+		summary.BestTrade = decimal.Zero
+		summary.WorstTrade = decimal.Zero
+	}
+	return summary, nil
 }
 
 func parseLifecycleTimestamp(raw interface{}) time.Time {
