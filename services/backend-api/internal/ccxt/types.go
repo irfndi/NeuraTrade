@@ -286,6 +286,7 @@ func (s *Service) CalculateArbitrageOpportunities(ctx context.Context, exchanges
 func (s *Service) FetchFundingRate(ctx context.Context, exchange, symbol string) (*FundingRate, error) {
 	return nil, fmt.Errorf("FetchFundingRate not implemented in native client")
 }
+
 // FetchFundingRates fetches funding rates for multiple symbols on an exchange.
 //
 // Parameters:
@@ -301,6 +302,7 @@ func (s *Service) FetchFundingRate(ctx context.Context, exchange, symbol string)
 func (s *Service) FetchFundingRates(ctx context.Context, exchange string, symbols []string) ([]FundingRate, error) {
 	return nil, fmt.Errorf("FetchFundingRates not implemented in native client")
 }
+
 // FetchAllFundingRates fetches all available funding rates for an exchange.
 //
 // Parameters:
@@ -315,6 +317,7 @@ func (s *Service) FetchFundingRates(ctx context.Context, exchange string, symbol
 func (s *Service) FetchAllFundingRates(ctx context.Context, exchange string) ([]FundingRate, error) {
 	return nil, fmt.Errorf("FetchAllFundingRates not implemented in native client")
 }
+
 // CalculateFundingRateArbitrage finds funding rate arbitrage opportunities.
 // It compares funding rates across exchanges for the same symbols.
 //
@@ -510,6 +513,7 @@ func (s *Service) AddExchangeToBlacklist(ctx context.Context, exchange string) (
 	s.blacklistCache.Add(exchange, "Manual blacklist via API", 0)
 	return nil, fmt.Errorf("AddExchangeToBlacklist native implementation pending")
 }
+
 // RemoveExchangeFromBlacklist removes an exchange from the blacklist.
 // It updates both the database cache and the runtime service.
 //
@@ -527,6 +531,7 @@ func (s *Service) RemoveExchangeFromBlacklist(ctx context.Context, exchange stri
 	s.blacklistCache.Remove(exchange)
 	return nil, fmt.Errorf("RemoveExchangeFromBlacklist native implementation pending")
 }
+
 // RefreshExchanges refreshes all non-blacklisted exchanges.
 //
 // Parameters:
@@ -540,6 +545,7 @@ func (s *Service) RemoveExchangeFromBlacklist(ctx context.Context, exchange stri
 func (s *Service) RefreshExchanges(ctx context.Context) (*ExchangeManagementResponse, error) {
 	return nil, fmt.Errorf("RefreshExchanges not implemented in native client")
 }
+
 // AddExchange dynamically adds and initializes a new exchange.
 //
 // Parameters:

@@ -801,7 +801,7 @@ func (e *BitgetOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID
 		return err
 	}
 
-if result.Code != "00000" {
+	if result.Code != "00000" {
 		return fmt.Errorf("failed to cancel order: %s", result.Msg)
 	}
 
