@@ -1,20 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # QuantVPS Server Setup Script - Run on the VPS after deployment
 set -euo pipefail
 
-echo "[INFO] Setting up NeuraTrade on QuantVPS..."
+echo "[INFO] Setting up NeuraTrade on QuantVPS (native runtime)..."
 
-# Update system
+# Update system and install runtime dependencies
 apt-get update
-apt-get install -y docker.io docker-compose git curl wget
-
-# Enable and start Docker
-systemctl enable docker
-systemctl start docker
+apt-get install -y git curl wget jq redis-server postgresql postgresql-contrib
 
 # Create neuratrade user
 useradd -m -s /bin/bash neuratrade || true
-usermod -aG docker neuratrade
 
 # Setup directory structure
 mkdir -p /opt/neuratrade/{data,logs,backups}
@@ -38,24 +33,26 @@ tar xzf node_exporter-1.6.1.linux-amd64.tar.gz
 mv node_exporter-1.6.1.linux-amd64/node_exporter /usr/local/bin/
 rm -rf node_exporter-1.6.1.linux-amd64*
 
-cat >/etc/systemd/system/node_exporter.service <<'EOF'
+cat >/etc/systemd/system/node_exporter.service <<'SERVICE'
 [Unit]
 Description=Node Exporter
 After=network.target
+
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/node_exporter
 Restart=always
+
 [Install]
 WantedBy=multi-user.target
-EOF
+SERVICE
 
 systemctl daemon-reload
 systemctl enable node_exporter
 systemctl start node_exporter
 
 # Setup log rotation
-cat >/etc/logrotate.d/neuratrade <<'EOF'
+cat >/etc/logrotate.d/neuratrade <<'ROTATE'
 /opt/neuratrade/logs/*.log {
     daily
     rotate 7
@@ -65,15 +62,16 @@ cat >/etc/logrotate.d/neuratrade <<'EOF'
     notifempty
     create 0644 neuratrade neuratrade
 }
-EOF
+ROTATE
 
 # Configure firewall
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow ssh
 ufw allow 8080/tcp # API port
-ufw allow 9090/tcp # Prometheus
+ufw allow 9090/tcp # Node exporter
 ufw --force enable
 
 echo "[INFO] QuantVPS setup complete"
-echo "[INFO] Start services with: cd /opt/neuratrade && docker-compose up -d"
+echo "[INFO] Build and start services natively:"
+echo "       cd /opt/neuratrade && make build && ./bin/neuratrade gateway start"

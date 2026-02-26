@@ -534,7 +534,7 @@ print_summary() {
   echo ""
   print_info "Next Steps:"
   print_info "1. Fix any failed tests above"
-  print_info "2. Run: neuratrade gateway start (or make dev-up-orchestrated)"
+  print_info "2. Run: neuratrade gateway start (or make run)"
   print_info "3. Test Telegram bot: Send /start to @your_bot"
   print_info "4. Connect exchange: /connect_exchange binance"
   print_info "5. Start autonomous: /begin"

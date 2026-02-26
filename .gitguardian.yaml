@@ -27,8 +27,6 @@ secrets:
       match: test-webhook-secret
     - name: secret-key-placeholder
       match: replace-with-secure-secret
-    - name: docker-compose-dev-default
-      match: "postgres"
     - name: dev-jwt-secret
       match: dev-jwt-secret
     - name: admin-secret-key-change-me
@@ -89,9 +87,6 @@ secrets:
     - "**/*.test.ts"
     - "**/*.spec.ts"
     - "**/test-setup.ts"
-    # Docker compose uses environment variable defaults
-    - "docker-compose*.yaml"
-    - "docker-compose*.yml"
     # Local git rewrite artifacts can contain historical examples
     - ".git-rewrite/**"
     # Internal utils for masking (tests contain fake secrets)

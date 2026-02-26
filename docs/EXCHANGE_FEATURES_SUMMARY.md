@@ -210,7 +210,7 @@ neuratrade exchanges remove --name okx
 **Exchange not loading:**
 ```bash
 # Check logs
-docker compose logs ccxt-service
+tail -f ~/.neuratrade/logs/ccxt.log
 
 # Verify exchange name
 neuratrade exchanges add --name <valid-exchange-name>

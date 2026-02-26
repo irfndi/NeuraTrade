@@ -424,7 +424,7 @@ This queue remains the canonical transport for execution and coordination. QMD i
 ### 6.3 Local vs. Cloud Infrastructure
 **Development:** The entire stack (including local LLMs) runs on an Apple M3 Max MacBook Pro. Default dev stack uses SQLite + Redis.
 
-**Production:** The system is containerized (Docker). The services run on a single VPS with SQLite + Redis for durable persistence and queue/cache operations.
+**Production:** The system runs natively under process supervision on a single VPS with SQLite + Redis for durable persistence and queue/cache operations.
 
 **VPS Strategy:** For low-latency execution, the Go service executes on a QuantVPS instance located in close proximity to exchange servers (e.g., AWS Tokyo for Binance) or Polygon RPC nodes. This minimizes the "tick-to-trade" latency, crucial for arbitrage and scalping.   
 
@@ -1175,7 +1175,6 @@ Verified reference points from official sources at this checkpoint:
 | SQLite | `3.51.2` (released 2026-01-09) | https://www.sqlite.org/changes.html |
 | sqlite-vec | Latest stable release `v0.1.6`; newer alpha tags available | https://github.com/asg017/sqlite-vec/releases |
 | Redis Open Source | `8.6.0` line available (Feb 2026) | https://redis.io/docs/latest/operate/oss_and_stack/stack-with-enterprise/release-notes/redisce/ |
-| Docker Engine | `29.2.1` release notes | https://docs.docker.com/engine/release-notes/ |
 | CCXT npm | `4.5.37` (`/latest`) | https://registry.npmjs.org/ccxt/latest |
 | grammY npm | `1.40.0` (`/latest`) | https://registry.npmjs.org/grammy/latest |
 | OpenAI Node SDK | `6.21.0` (`/latest`) | https://registry.npmjs.org/openai/latest |

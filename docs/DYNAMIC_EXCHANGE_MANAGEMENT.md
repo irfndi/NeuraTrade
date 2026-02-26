@@ -291,6 +291,6 @@ neuratrade exchanges list
 ## Support
 
 For issues or questions:
-- Check logs: `docker compose logs ccxt-service`
+- Check logs: `tail -f ~/.neuratrade/logs/ccxt.log`
 - View documentation: `docs/`
 - Run health check: `neuratrade health`

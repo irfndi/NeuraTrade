@@ -1741,7 +1741,7 @@ func reloadExchanges(cCtx *cli.Context) error {
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Could not reach API: %v\n", err)
 		fmt.Println("\nManual reload required:")
-		fmt.Println("  1. Stop CCXT service: docker compose restart ccxt-service")
+		fmt.Println("  1. Restart gateway services: neuratrade gateway restart")
 		fmt.Println("  2. Or restart all services: neuratrade gateway restart")
 		return nil
 	}

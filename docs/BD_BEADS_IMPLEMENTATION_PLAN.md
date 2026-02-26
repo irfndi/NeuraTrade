@@ -824,20 +824,20 @@ These constraints must be **strictly enforced** throughout implementation:
 **Dependencies**: 3.11
 
 #### Subtasks:
-4.1.1 Containerize agent and infra services
-   - **Acceptance**: Dockerfiles for neuratrade-agent and neuratrade-infra, multi-stage builds
-   - **DB Command**: `bd create "Containerize agent and infra services" -t task -p 0 --json`
+4.1.1 Prepare native service packaging and process supervision
+   - **Acceptance**: Native binaries + supervised startup scripts for agent and infra services
+   - **DB Command**: `bd create "Prepare native service packaging and process supervision" -t task -p 0 --json`
 
 4.1.2 Set up QuantVPS deployment
    - **Acceptance**: Deployments to ap-northeast-1 (Tokyo) or us-east-1 (Virginia), network topology optimized
    - **DB Command**: `bd create "Set up QuantVPS deployment" -t task -p 0 --json`
 
-4.1.3 Configure production Docker Compose
+4.1.3 Configure production native orchestration
    - **Acceptance**: Redis, SQLite, agent, infra services orchestrated, health checks
-   - **DB Command**: `bd create "Configure production Docker Compose" -t task -p 0 --json`
+   - **DB Command**: `bd create "Configure production native orchestration" -t task -p 0 --json`
 
 4.1.4 Set up CI/CD pipeline
-   - **Acceptance**: GitHub Actions for build, test, lint, Docker build/push
+   - **Acceptance**: GitHub Actions for build, test, lint, and security validation
    - **DB Command**: `bd create "Set up CI/CD pipeline" -t task -p 0 --json`
 
 #### Dependencies:

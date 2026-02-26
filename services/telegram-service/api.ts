@@ -246,7 +246,7 @@ export const createApi = (config: TelegramConfigPartial) => {
       return payload as T;
     });
 
-  // Internal endpoints - no auth required (network-isolated via Docker)
+  // Internal endpoints - no auth required (restricted to trusted internal callers)
   const getUserByChatId = (chatId: string) =>
     apiFetch<{
       user: { id: string; subscription_tier: string; created_at: string };
@@ -295,6 +295,9 @@ export const createApi = (config: TelegramConfigPartial) => {
     apiFetch<{ opportunities: any[] }>(
       "/api/v1/arbitrage/opportunities?limit=5&min_profit=0.5",
     );
+
+  const healthCheck = () =>
+    apiFetch<{ status: string; timestamp?: string }>("/health");
 
   /**
    * Verify admin API key is configured and matches backend

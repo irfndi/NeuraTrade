@@ -1,83 +1,128 @@
-# NeuraTrade - Makefile for development and deployment
+# NeuraTrade - Native-first Makefile (no Docker)
 
-# Variables
 APP_NAME=neuratrade
-GO_VERSION=1.25
-DOCKER_REGISTRY=ghcr.io/irfndi
-DOCKER_IMAGE_APP=$(DOCKER_REGISTRY)/app:latest
-DOCKER_COMPOSE_FILE?=docker-compose.yaml
-DOCKER_COMPOSE_ENV_FILE=.env
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GO_CACHE_DIR=$(PWD)/.cache/go-build
 GO_MOD_CACHE_DIR=$(PWD)/.cache/go-mod
-GO_ENV=GOCACHE=$(GO_CACHE_DIR)
+GO_ENV=GOCACHE=$(GO_CACHE_DIR) GOMODCACHE=$(GO_MOD_CACHE_DIR)
 
-# Colors for output
 RED=\033[0;31m
 GREEN=\033[0;32m
 YELLOW=\033[1;33m
 BLUE=\033[0;34m
-NC=\033[0m # No Color
+NC=\033[0m
 
-.PHONY: help build test test-coverage coverage-check lint fmt fmt-check run dev dev-setup dev-down install-tools security docker-build docker-run deploy clean dev-up-orchestrated prod-up-orchestrated webhook-enable webhook-disable webhook-status startup-status down-orchestrated go-env-setup # ccxt-setup (removed) telegram-setup services-setup mod-download mod-tidy ci-structure-check ci-naming-check bd-close-qa
+.PHONY: help all go-env-setup proto-gen mod-download build services-setup telegram-setup \
+	test test-backend test-frontend lint fmt fmt-check typecheck coverage-check \
+	run logs logs-all bd-close-qa
 
-# Default target
 all: build
 
-## Help
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Targets:'
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(BLUE)%-20s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-go-env-setup:
+go-env-setup: ## Create local Go cache directories
 	@mkdir -p $(GO_CACHE_DIR) $(GO_MOD_CACHE_DIR)
 
-## Development
-proto-gen: ## Generate gRPC code
+proto-gen: ## Generate protobuf/gRPC code (requires protoc + plugins)
 	@echo "$(GREEN)Generating gRPC code...$(NC)"
-	@docker build -t proto-builder -f tools/proto-builder/Dockerfile .
 	@chmod +x scripts/gen-proto.sh
-	@docker run --rm -v $(PWD):/workspace proto-builder ./scripts/gen-proto.sh
+	@./scripts/gen-proto.sh
 	@echo "$(GREEN)gRPC code generated!$(NC)"
 
-
-mod-download: ## Download Go module dependencies
+mod-download: go-env-setup ## Download backend dependencies
 	@echo "$(GREEN)Downloading Go module dependencies...$(NC)"
-	@cd services/backend-api && go mod download
-
-build: services-setup ## Build the application across all languages
-	@echo "$(GREEN)Building $(APP_NAME)...$(NC)"
-	# CCXT Service removed - migrated to Go
-# 	@if [ -d "services/ccxt-service" ] && command -v bun >/dev/null 2>&1; then \
-		cd services/ccxt-service && bun install; \
-	else \
-		echo "$(YELLOW)Skipping CCXT setup - directory or bun not found$(NC)"; \
-	fi
+	@cd services/backend-api && $(GO_ENV) go mod download
 
 telegram-setup: ## Install Telegram service dependencies
 	@echo "$(GREEN)Installing Telegram service dependencies...$(NC)"
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
-		cd services/telegram-service && bun install; \
+		cd services/telegram-service && bun install --frozen-lockfile; \
 	else \
 		echo "$(YELLOW)Skipping Telegram setup - directory or bun not found$(NC)"; \
 	fi
 
-services-setup: # ccxt-setup (removed) telegram-setup ## Install all service dependencies
-	@echo "$(GREEN)All service dependencies installed!$(NC)"
+services-setup: telegram-setup ## Install service dependencies
+	@echo "$(GREEN)Service dependencies ready$(NC)"
+
+build: mod-download services-setup ## Build backend binaries
+	@echo "$(GREEN)Building $(APP_NAME)...$(NC)"
+	@mkdir -p bin
+	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-server ./cmd/server
+	@$(GO_ENV) go build -o bin/neuratrade ./cmd/neuratrade-cli
+	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade$(NC)"
+
+fmt: ## Format backend + frontend code
+	@echo "$(GREEN)Formatting Go code...$(NC)"
+	@cd services/backend-api && gofmt -w .
+	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Formatting Telegram service...$(NC)"; \
+		cd services/telegram-service && bunx prettier --write .; \
+	fi
 
 fmt-check: ## Check if code is formatted (for CI)
-	@echo "$(GREEN)Checking code formatting...$(NC)"
+	@echo "$(GREEN)Checking Go formatting...$(NC)"
 	@cd services/backend-api && test -z "$$(gofmt -l .)" || (echo "$(RED)Go code is not formatted. Run 'make fmt'$(NC)" && gofmt -l . && exit 1)
-	@echo "$(GREEN)Code formatting check passed!$(NC)"
+	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Checking Telegram formatting...$(NC)"; \
+		cd services/telegram-service && bunx prettier --check .; \
+	fi
+	@echo "$(GREEN)Format checks passed!$(NC)"
 
-## Logs
-logs: ## Show application logs
-	docker compose -f $(DOCKER_COMPOSE_FILE) --env-file .env logs -f
+lint: ## Run lints
+	@echo "$(GREEN)Running Go lint...$(NC)"
+	@cd services/backend-api && golangci-lint run
+	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running Telegram lint...$(NC)"; \
+		cd services/telegram-service && bunx oxlint .; \
+	fi
 
-logs-all: ## Show all service logs
-	docker compose --env-file .env logs -f
+typecheck: ## Run TypeScript type checks
+	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running Telegram typecheck...$(NC)"; \
+		cd services/telegram-service && bunx tsc --noEmit; \
+	else \
+		echo "$(YELLOW)Skipping typecheck - telegram-service or bun missing$(NC)"; \
+	fi
+
+test: test-backend ## Run default tests
+
+test-backend: mod-download ## Run backend tests
+	@echo "$(GREEN)Running backend tests...$(NC)"
+	@TEST_HOME=$$(mktemp -d /tmp/neuratrade-ci-home.XXXXXX); \
+		cd services/backend-api && \
+		NEURATRADE_HOME="$$TEST_HOME" \
+		ADMIN_API_KEY= \
+		DATABASE_DRIVER=$${DATABASE_DRIVER:-sqlite} \
+		SQLITE_PATH=$${SQLITE_PATH:-/tmp/neuratrade-ci.db} \
+		SQLITE_DB_PATH=$${SQLITE_PATH:-/tmp/neuratrade-ci.db} \
+		go test -v -race -timeout=20m ./cmd/... ./internal/... ./pkg/... ./test/integration/... ./test/e2e/; \
+		rm -rf "$$TEST_HOME"
+
+test-frontend: ## Run Telegram service tests
+	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running Telegram tests...$(NC)"; \
+		cd services/telegram-service && bun test; \
+	else \
+		echo "$(YELLOW)Skipping frontend tests - telegram-service or bun missing$(NC)"; \
+	fi
+
+coverage-check: ## Run coverage threshold checks
+	@echo "$(GREEN)Running coverage checks...$(NC)"
+	@cd services/backend-api && STRICT=$${STRICT:-false} ./scripts/coverage-check.sh
+
+run: build ## Start NeuraTrade gateway in native mode
+	@echo "$(GREEN)Starting NeuraTrade gateway...$(NC)"
+	@./bin/neuratrade gateway start
+
+logs: ## Show backend logs from NEURATRADE_HOME
+	@tail -f $${NEURATRADE_HOME:-$$HOME/.neuratrade}/logs/backend.log
+
+logs-all: ## Show gateway logs from NEURATRADE_HOME
+	@tail -f $${NEURATRADE_HOME:-$$HOME/.neuratrade}/logs/gateway.log
 
 bd-close-qa: ## Close bd issue with mandatory QA evidence
 	@test -n "$${ISSUE_ID:-}" || (echo "ISSUE_ID is required" && exit 1)

@@ -1,22 +1,17 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Celebrum AI - Webhook Control Script
-# This script manages external connections and webhook enablement
+# Telegram webhook + external-connection control (native mode)
 
 set -euo pipefail
 
-# Configuration
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
-ENV_FILE=".env"
+ENV_FILE="${ENV_FILE:-.env}"
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Logging function
 log() {
   echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
@@ -29,145 +24,68 @@ log_success() {
   log "${GREEN}[SUCCESS]${NC} $1"
 }
 
-log_warning() {
-  log "${YELLOW}[WARNING]${NC} $1"
+log_warn() {
+  log "${YELLOW}[WARN]${NC} $1"
 }
 
 log_error() {
   log "${RED}[ERROR]${NC} $1"
 }
 
-# Check if all services are healthy
-check_all_services_healthy() {
-  local services=("postgres" "app")
-
-  for service in "${services[@]}"; do
-    local container_name="celebrum-${service}"
-    if ! docker ps --filter "name=${container_name}" --filter "health=healthy" --format "table {{.Names}}" | grep -q "${container_name}"; then
-      log_error "Service ${service} is not healthy"
-      return 1
-    fi
-  done
-
-  return 0
+load_env() {
+  if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+  fi
 }
 
-# Update environment file
 update_env_file() {
   local key="$1"
   local value="$2"
 
-  if [ -f "$ENV_FILE" ]; then
-    if grep -q "^${key}=" "$ENV_FILE"; then
-      sed -i.bak "s/^${key}=.*/${key}=${value}/" "$ENV_FILE"
-    else
-      echo "${key}=${value}" >>"$ENV_FILE"
-    fi
+  touch "$ENV_FILE"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    sed -i.bak "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
   else
-    echo "${key}=${value}" >"$ENV_FILE"
+    echo "${key}=${value}" >>"$ENV_FILE"
   fi
 }
 
-# Update running container environment
-update_container_env() {
-  local container_name="$1"
-  local env_var="$2"
-  local env_value="$3"
-
-  if docker ps --filter "name=${container_name}" --format "table {{.Names}}" | grep -q "${container_name}"; then
-    log_info "Updating ${container_name} environment: ${env_var}=${env_value}"
-    docker exec "${container_name}" sh -c "echo '${env_var}=${env_value}' >> /tmp/runtime.env" || true
-
-    # Signal the application to reload configuration if supported
-    docker exec "${container_name}" sh -c "kill -USR1 1" 2>/dev/null || true
-  fi
-}
-
-# Enable external connections
-enable_external_connections() {
-  log_info "Enabling external connections..."
-
-  # Check if all services are healthy first
-  if ! check_all_services_healthy; then
-    log_error "Cannot enable external connections: some services are not healthy"
-    return 1
-  fi
-
-  # Update environment file
-  update_env_file "EXTERNAL_CONNECTIONS_ENABLED" "true"
-  update_env_file "TELEGRAM_WEBHOOK_ENABLED" "true"
-
-  # Update running containers
-  update_container_env "celebrum-app" "EXTERNAL_CONNECTIONS_ENABLED" "true"
-  update_container_env "celebrum-app" "TELEGRAM_WEBHOOK_ENABLED" "true"
-
-  # Register Telegram webhook if URL is configured
-  if [ -n "${TELEGRAM_WEBHOOK_URL:-}" ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    log_info "Registering Telegram webhook..."
-    register_telegram_webhook
-  fi
-
-  log_success "External connections enabled successfully"
-}
-
-# Disable external connections
-disable_external_connections() {
-  log_info "Disabling external connections..."
-
-  # Update environment file
-  update_env_file "EXTERNAL_CONNECTIONS_ENABLED" "false"
-  update_env_file "TELEGRAM_WEBHOOK_ENABLED" "false"
-
-  # Update running containers
-  update_container_env "celebrum-app" "EXTERNAL_CONNECTIONS_ENABLED" "false"
-  update_container_env "celebrum-app" "TELEGRAM_WEBHOOK_ENABLED" "false"
-
-  # Unregister Telegram webhook
-  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    log_info "Unregistering Telegram webhook..."
-    unregister_telegram_webhook
-  fi
-
-  log_success "External connections disabled successfully"
-}
-
-# Register Telegram webhook
-register_telegram_webhook() {
+require_telegram_token() {
   if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    log_error "TELEGRAM_BOT_TOKEN not set"
+    log_error "TELEGRAM_BOT_TOKEN is not set (env or ${ENV_FILE})"
     return 1
   fi
+  return 0
+}
+
+register_telegram_webhook() {
+  require_telegram_token || return 1
 
   if [ -z "${TELEGRAM_WEBHOOK_URL:-}" ]; then
-    log_error "TELEGRAM_WEBHOOK_URL not set"
+    log_error "TELEGRAM_WEBHOOK_URL is not set"
     return 1
   fi
 
-  local webhook_url="${TELEGRAM_WEBHOOK_URL}"
-  local secret_token="${TELEGRAM_WEBHOOK_SECRET:-}"
-
-  local curl_data="url=${webhook_url}"
-  if [ -n "$secret_token" ]; then
-    curl_data="${curl_data}&secret_token=${secret_token}"
+  local payload="url=${TELEGRAM_WEBHOOK_URL}"
+  if [ -n "${TELEGRAM_WEBHOOK_SECRET:-}" ]; then
+    payload="${payload}&secret_token=${TELEGRAM_WEBHOOK_SECRET}"
   fi
 
-  if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-    -d "$curl_data" | grep -q '"ok":true'; then
-    log_success "Telegram webhook registered: $webhook_url"
+  if curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" -d "$payload" | grep -q '"ok":true'; then
+    log_success "Telegram webhook registered: ${TELEGRAM_WEBHOOK_URL}"
   else
     log_error "Failed to register Telegram webhook"
     return 1
   fi
 }
 
-# Unregister Telegram webhook
 unregister_telegram_webhook() {
-  if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    log_error "TELEGRAM_BOT_TOKEN not set"
-    return 1
-  fi
+  require_telegram_token || return 1
 
-  if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook" | grep -q '"ok":true'; then
+  if curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook" | grep -q '"ok":true'; then
     log_success "Telegram webhook unregistered"
   else
     log_error "Failed to unregister Telegram webhook"
@@ -175,72 +93,100 @@ unregister_telegram_webhook() {
   fi
 }
 
-# Get current status
-get_status() {
-  log_info "Current external connection status:"
+show_webhook_info() {
+  if ! require_telegram_token; then
+    return 0
+  fi
 
-  if [ -f "$ENV_FILE" ]; then
-    local external_enabled=$(grep "^EXTERNAL_CONNECTIONS_ENABLED=" "$ENV_FILE" | cut -d'=' -f2 || echo "false")
-    local webhook_enabled=$(grep "^TELEGRAM_WEBHOOK_ENABLED=" "$ENV_FILE" | cut -d'=' -f2 || echo "false")
+  log_info "Telegram webhook info:"
+  curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo" || true
+  echo
+}
 
-    echo "  External Connections: $external_enabled"
-    echo "  Telegram Webhook: $webhook_enabled"
+enable_external_connections() {
+  log_info "Enabling external connections flags in ${ENV_FILE}"
+  update_env_file "EXTERNAL_CONNECTIONS_ENABLED" "true"
+  update_env_file "TELEGRAM_WEBHOOK_ENABLED" "true"
+
+  load_env
+  if [ -n "${TELEGRAM_WEBHOOK_URL:-}" ]; then
+    register_telegram_webhook
   else
-    echo "  Configuration file not found: $ENV_FILE"
+    log_warn "TELEGRAM_WEBHOOK_URL not configured; skipping webhook registration"
   fi
 
-  log_info "Service health status:"
-  docker-compose -f "$COMPOSE_FILE" ps
+  log_success "External connection flags enabled"
 }
 
-# Show usage
-show_usage() {
-  echo "Usage: $0 {enable|disable|status|webhook-register|webhook-unregister}"
-  echo ""
-  echo "Commands:"
-  echo "  enable              Enable external connections and webhooks"
-  echo "  disable             Disable external connections and webhooks"
-  echo "  status              Show current status"
-  echo "  webhook-register    Register Telegram webhook only"
-  echo "  webhook-unregister  Unregister Telegram webhook only"
-  echo ""
-  echo "Environment variables:"
-  echo "  TELEGRAM_BOT_TOKEN     Telegram bot token"
-  echo "  TELEGRAM_WEBHOOK_URL   Webhook URL for Telegram"
-  echo "  TELEGRAM_WEBHOOK_SECRET Optional webhook secret"
+disable_external_connections() {
+  log_info "Disabling external connections flags in ${ENV_FILE}"
+  update_env_file "EXTERNAL_CONNECTIONS_ENABLED" "false"
+  update_env_file "TELEGRAM_WEBHOOK_ENABLED" "false"
+
+  load_env
+  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+    unregister_telegram_webhook || true
+  fi
+
+  log_success "External connection flags disabled"
 }
 
-# Main function
-main() {
-  # Load environment variables
+status() {
+  load_env
+
+  local external_enabled="false"
+  local webhook_enabled="false"
+
   if [ -f "$ENV_FILE" ]; then
-    set -a
-    source "$ENV_FILE"
-    set +a
+    external_enabled="$(grep '^EXTERNAL_CONNECTIONS_ENABLED=' "$ENV_FILE" | tail -n1 | cut -d'=' -f2- || true)"
+    webhook_enabled="$(grep '^TELEGRAM_WEBHOOK_ENABLED=' "$ENV_FILE" | tail -n1 | cut -d'=' -f2- || true)"
   fi
 
-  case "${1:-}" in
-    "enable")
+  echo "External Connections: ${external_enabled:-false}"
+  echo "Telegram Webhook Flag: ${webhook_enabled:-false}"
+  show_webhook_info
+}
+
+usage() {
+  cat <<USAGE
+Usage: $0 {enable|disable|status|webhook-register|webhook-unregister|help}
+
+Commands:
+  enable              Set EXTERNAL_CONNECTIONS_ENABLED=true and register webhook
+  disable             Set EXTERNAL_CONNECTIONS_ENABLED=false and unregister webhook
+  status              Show flag status and Telegram webhook info
+  webhook-register    Register webhook only
+  webhook-unregister  Unregister webhook only
+USAGE
+}
+
+main() {
+  load_env
+
+  case "${1:-status}" in
+    enable)
       enable_external_connections
       ;;
-    "disable")
+    disable)
       disable_external_connections
       ;;
-    "status")
-      get_status
+    status)
+      status
       ;;
-    "webhook-register")
+    webhook-register)
       register_telegram_webhook
       ;;
-    "webhook-unregister")
+    webhook-unregister)
       unregister_telegram_webhook
       ;;
+    help|-h|--help)
+      usage
+      ;;
     *)
-      show_usage
+      usage
       exit 1
       ;;
   esac
 }
 
-# Run main function
 main "$@"

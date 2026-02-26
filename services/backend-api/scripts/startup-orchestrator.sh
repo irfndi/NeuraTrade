@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 
-# Celebrum AI - Startup Orchestrator
-# This script manages the sequential startup of Docker services
+# NeuraTrade native startup orchestrator (no Docker)
 
 set -euo pipefail
 
-# Configuration
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.dev.yml}"
-LOG_FILE="/tmp/celebrum-startup.log"
-MAX_WAIT_TIME=600 # 10 minutes max wait
-HEALTH_CHECK_INTERVAL=10
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="$(dirname "$(dirname "$BACKEND_ROOT")")"
+NEURATRADE_HOME="${NEURATRADE_HOME:-$HOME/.neuratrade}"
+LOG_DIR="${NEURATRADE_HOME}/logs"
+PID_FILE="${NEURATRADE_HOME}/pids/gateway.pid"
+GATEWAY_LOG="${LOG_DIR}/gateway.log"
+BACKEND_PORT="${BACKEND_HOST_PORT:-${PORT:-8080}}"
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Logging function
 log() {
-  echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+  echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
 log_info() {
@@ -31,132 +31,205 @@ log_success() {
   log "${GREEN}[SUCCESS]${NC} $1"
 }
 
-log_warning() {
-  log "${YELLOW}[WARNING]${NC} $1"
+log_warn() {
+  log "${YELLOW}[WARN]${NC} $1"
 }
 
 log_error() {
   log "${RED}[ERROR]${NC} $1"
 }
 
-# Check if service is healthy
-check_service_health() {
-  local service_name="$1"
-  local container_name="celebrum-${service_name}"
-
-  if docker ps --filter "name=${container_name}" --filter "health=healthy" --format "table {{.Names}}" | grep -q "${container_name}"; then
-    return 0
-  else
-    return 1
-  fi
+ensure_dirs() {
+  mkdir -p "${LOG_DIR}" "${NEURATRADE_HOME}/pids" "${NEURATRADE_HOME}/data"
 }
 
-# Wait for service to be healthy
-wait_for_service() {
-  local service_name="$1"
-  local max_wait="${2:-$MAX_WAIT_TIME}"
-  local waited=0
+find_gateway_cmd() {
+  if command -v neuratrade >/dev/null 2>&1; then
+    echo "neuratrade gateway start"
+    return 0
+  fi
 
-  log_info "Waiting for ${service_name} to be healthy..."
+  if [ -x "${REPO_ROOT}/bin/neuratrade" ]; then
+    echo "${REPO_ROOT}/bin/neuratrade gateway start"
+    return 0
+  fi
 
-  while [ $waited -lt $max_wait ]; do
-    if check_service_health "$service_name"; then
-      log_success "${service_name} is healthy"
-      return 0
-    fi
+  if [ -f "${REPO_ROOT}/cmd/neuratrade-cli/main.go" ]; then
+    echo "go run ./cmd/neuratrade-cli gateway start"
+    return 0
+  fi
 
-    sleep $HEALTH_CHECK_INTERVAL
-    waited=$((waited + HEALTH_CHECK_INTERVAL))
-
-    if [ $((waited % 60)) -eq 0 ]; then
-      log_info "Still waiting for ${service_name}... (${waited}s elapsed)"
-    fi
-  done
-
-  log_error "${service_name} failed to become healthy within ${max_wait} seconds"
   return 1
 }
 
-# Enable external connections
-enable_external_connections() {
-  log_info "Enabling external connections..."
-
-  # Set environment variables to enable external connections
-  export EXTERNAL_CONNECTIONS_ENABLED=true
-  export TELEGRAM_WEBHOOK_ENABLED=true
-
-  # Update running containers with new environment variables
-  if docker ps --filter "name=celebrum-app" --format "table {{.Names}}" | grep -q "celebrum-app"; then
-    log_info "Updating app container environment for external connections..."
-    docker exec celebrum-app sh -c 'echo "EXTERNAL_CONNECTIONS_ENABLED=true" >> /tmp/runtime.env'
-    docker exec celebrum-app sh -c 'echo "TELEGRAM_WEBHOOK_ENABLED=true" >> /tmp/runtime.env'
-  fi
-
-  log_success "External connections enabled"
+pid_running() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null
 }
 
-# Main startup orchestration
-main() {
-  log_info "Starting Celebrum AI 3-Phase Sequential Startup"
-  log_info "Using compose file: $COMPOSE_FILE"
+gateway_pid() {
+  if [ -f "${PID_FILE}" ]; then
+    tr -d '[:space:]' <"${PID_FILE}"
+  fi
+}
 
-  # Ensure external connections are disabled initially
-  export EXTERNAL_CONNECTIONS_ENABLED=false
-  export TELEGRAM_WEBHOOK_ENABLED=false
+wait_backend_health() {
+  local timeout="${1:-45}"
+  local elapsed=0
+  local url="http://127.0.0.1:${BACKEND_PORT}/health"
 
-  # PHASE 1: Start database services
-  log_info "=== PHASE 1: Starting Database Services ==="
+  while [ "$elapsed" -lt "$timeout" ]; do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
 
-  log_info "Starting PostgreSQL..."
-  docker compose -f "$COMPOSE_FILE" up -d postgres
-  wait_for_service "postgres" 180
+  return 1
+}
 
-  log_success "Phase 1 completed: Database services are ready"
+start_gateway() {
+  ensure_dirs
 
-  # PHASE 2: Start application services
-  log_info "=== PHASE 2: Starting Application Services ==="
+  local current_pid
+  current_pid="$(gateway_pid || true)"
+  if [ -n "${current_pid:-}" ] && pid_running "$current_pid"; then
+    log_warn "Gateway is already running (pid=${current_pid})"
+    status_gateway
+    return 0
+  fi
 
-  log_info "Starting main application (Unified Container)..."
-  # Application will auto-run migrations on startup if RUN_MIGRATIONS=true
-  docker compose -f "$COMPOSE_FILE" up -d celebrum
-  wait_for_service "app" 300 # Increased wait time to account for migrations
+  local gateway_cmd
+  if ! gateway_cmd="$(find_gateway_cmd)"; then
+    log_error "Unable to find neuratrade CLI. Install it or build ./bin/neuratrade first."
+    return 1
+  fi
 
-  log_success "Phase 2 completed: Application services are running"
+  log_info "Starting gateway using: ${gateway_cmd}"
+  (
+    cd "$REPO_ROOT"
+    nohup bash -lc "$gateway_cmd" >>"${GATEWAY_LOG}" 2>&1 &
+    echo $! >"${PID_FILE}"
+  )
 
-  # PHASE 3: Enable external connections
-  log_info "=== PHASE 3: Enabling External Connections ==="
+  local pid
+  pid="$(gateway_pid)"
+  log_info "Gateway launched (pid=${pid}), waiting for backend health..."
 
-  # Wait a bit more for services to fully stabilize
-  log_info "Allowing services to stabilize for 30 seconds..."
-  sleep 30
-
-  # Final health check
-  log_info "Performing final health checks..."
-  if check_service_health "postgres" && check_service_health "app"; then
-
-    enable_external_connections
-
-    log_success "=== ALL PHASES COMPLETED SUCCESSFULLY ==="
-    log_success "Celebrum AI is ready to accept external connections"
-    log_info "Services status:"
-    docker compose -f "$COMPOSE_FILE" ps
-
+  if wait_backend_health 60; then
+    log_success "Gateway is running and backend health endpoint is reachable"
   else
-    log_error "Some services are not healthy. External connections will remain disabled."
-    log_info "Current service status:"
-    docker compose -f "$COMPOSE_FILE" ps
-    exit 1
+    log_warn "Gateway started, but backend health endpoint is not ready yet"
+    log_warn "Check logs: tail -f ${GATEWAY_LOG}"
   fi
 }
 
-# Cleanup function
-cleanup() {
-  log_info "Startup orchestrator interrupted. Current status:"
-  docker compose -f "$COMPOSE_FILE" ps
+stop_gateway() {
+  local pid
+  pid="$(gateway_pid || true)"
+
+  if [ -z "${pid:-}" ]; then
+    log_warn "No gateway pid file found"
+    return 0
+  fi
+
+  if ! pid_running "$pid"; then
+    log_warn "Stale gateway pid file found (pid=${pid}), removing"
+    rm -f "${PID_FILE}"
+    return 0
+  fi
+
+  log_info "Stopping gateway (pid=${pid})"
+  kill "$pid" 2>/dev/null || true
+
+  local waited=0
+  while pid_running "$pid" && [ "$waited" -lt 20 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if pid_running "$pid"; then
+    log_warn "Gateway still running after grace period, forcing kill"
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+
+  rm -f "${PID_FILE}"
+  log_success "Gateway stopped"
 }
 
-# Set trap for cleanup
-trap cleanup INT TERM
+status_gateway() {
+  local pid
+  pid="$(gateway_pid || true)"
 
-# Run main function
+  if [ -n "${pid:-}" ] && pid_running "$pid"; then
+    log_success "Gateway process is running (pid=${pid})"
+  else
+    log_warn "Gateway process is not running"
+  fi
+
+  local health_url="http://127.0.0.1:${BACKEND_PORT}/health"
+  if curl -fsS "$health_url" >/dev/null 2>&1; then
+    log_success "Backend health is reachable at ${health_url}"
+  else
+    log_warn "Backend health is not reachable at ${health_url}"
+  fi
+
+  echo ""
+  echo "Recent gateway logs:"
+  if [ -f "${GATEWAY_LOG}" ]; then
+    tail -n 20 "${GATEWAY_LOG}"
+  else
+    echo "No gateway log file found at ${GATEWAY_LOG}"
+  fi
+}
+
+logs_gateway() {
+  ensure_dirs
+  touch "${GATEWAY_LOG}"
+  tail -f "${GATEWAY_LOG}"
+}
+
+usage() {
+  cat <<USAGE
+Usage: $0 [start|stop|restart|status|logs|help]
+
+Commands:
+  start    Start NeuraTrade gateway in background (native mode)
+  stop     Stop gateway and managed services gracefully
+  restart  Stop then start gateway
+  status   Show process + backend health status
+  logs     Follow gateway logs
+  help     Show this message
+USAGE
+}
+
+main() {
+  case "${1:-start}" in
+    start)
+      start_gateway
+      ;;
+    stop)
+      stop_gateway
+      ;;
+    restart)
+      stop_gateway
+      start_gateway
+      ;;
+    status)
+      status_gateway
+      ;;
+    logs)
+      logs_gateway
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
 main "$@"

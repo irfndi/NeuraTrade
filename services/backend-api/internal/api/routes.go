@@ -583,7 +583,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
-	// Internal service-to-service routes (no auth, network-isolated via Docker)
+	// Internal service-to-service routes (no auth, restricted to trusted internal callers)
 	internal := router.Group("/internal")
 	{
 		internalTelegram := internal.Group("/telegram")
