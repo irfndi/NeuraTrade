@@ -12,7 +12,11 @@ import { logger } from "../utils/logger";
 
 function normalizeStatus(status: string): "healthy" | "warning" | "critical" {
   const lowered = status.toLowerCase();
-  if (lowered === "healthy" || lowered === "warning" || lowered === "critical") {
+  if (
+    lowered === "healthy" ||
+    lowered === "warning" ||
+    lowered === "critical"
+  ) {
     return lowered;
   }
   return "critical";
@@ -173,7 +177,9 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         const logs: LogsResponse = logsResult.value;
         if (logs.logs && logs.logs.length > 0) {
           const lastLog = logs.logs[0];
-          lines.push(`• Last activity: ${lastLog.timestamp} (${lastLog.level})`);
+          lines.push(
+            `• Last activity: ${lastLog.timestamp} (${lastLog.level})`,
+          );
         }
       }
 
