@@ -145,11 +145,10 @@ export class BackendApiClient {
     return this.fetch<PerformanceSummaryResponse>(
       API_ENDPOINTS.GET_SUMMARY(chatId, timeframe),
       {
-        requireAdmin: false,
+        requireAdmin: true,
       },
     );
   }
-
   async getPerformanceBreakdown(
     chatId: string,
     timeframe = "24h",
@@ -157,11 +156,10 @@ export class BackendApiClient {
     return this.fetch<PerformanceBreakdownResponse>(
       API_ENDPOINTS.GET_PERFORMANCE(chatId, timeframe),
       {
-        requireAdmin: false,
+        requireAdmin: true,
       },
     );
   }
-
   async liquidate(
     chatId: string,
     symbol: string,
@@ -243,16 +241,15 @@ export class BackendApiClient {
 
   async getQuests(chatId: string): Promise<QuestsResponse> {
     return this.fetch<QuestsResponse>(API_ENDPOINTS.GET_QUESTS(chatId), {
-      requireAdmin: false,
+      requireAdmin: true,
     });
   }
 
   async getPortfolio(chatId: string): Promise<PortfolioResponse> {
     return this.fetch<PortfolioResponse>(API_ENDPOINTS.GET_PORTFOLIO(chatId), {
-      requireAdmin: false,
+      requireAdmin: true,
     });
   }
-
   async getWallets(chatId: string): Promise<WalletsResponse> {
     return this.fetch<WalletsResponse>(API_ENDPOINTS.GET_WALLETS(chatId), {
       requireAdmin: false,
@@ -261,16 +258,14 @@ export class BackendApiClient {
 
   async getLogs(chatId: string, limit = 10): Promise<LogsResponse> {
     return this.fetch<LogsResponse>(API_ENDPOINTS.GET_LOGS(chatId, limit), {
-      requireAdmin: false,
+      requireAdmin: true,
     });
   }
-
   async getDoctor(chatId: string): Promise<DoctorResponse> {
     return this.fetch<DoctorResponse>(API_ENDPOINTS.GET_DOCTOR(chatId), {
-      requireAdmin: false,
+      requireAdmin: true,
     });
   }
-
   async getAIModels(): Promise<AIModelsResponse> {
     return this.fetch<AIModelsResponse>(API_ENDPOINTS.GET_AI_MODELS, {
       requireAdmin: false,
@@ -445,10 +440,9 @@ export class BackendApiClient {
   ): Promise<import("./types").TradingModeResponse> {
     const endpoint = `/api/v1/telegram/internal/mode/${encodeURIComponent(chatId)}`;
     return this.fetch<import("./types").TradingModeResponse>(endpoint, {
-      requireAdmin: false,
+      requireAdmin: true,
     });
   }
-
   async setTradingMode(
     chatId: string,
     mode: "dry" | "live",
@@ -458,10 +452,9 @@ export class BackendApiClient {
     return this.fetch<import("./types").SetTradingModeResponse>(endpoint, {
       method: "POST",
       body: JSON.stringify({ mode, changed_by: changedBy }),
-      requireAdmin: false,
+      requireAdmin: true,
     });
   }
-
   async addTradingModeConfirmation(
     chatId: string,
     confirmedBy = "telegram",
@@ -472,7 +465,7 @@ export class BackendApiClient {
       {
         method: "POST",
         body: JSON.stringify({ confirmed_by: confirmedBy }),
-        requireAdmin: false,
+        requireAdmin: true,
       },
     );
   }
