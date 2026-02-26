@@ -2232,18 +2232,18 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 			return nil, fmt.Errorf("invalid bitget fundingRate for %s: %w", item.Symbol, err)
 		}
 
-		ts, err := strconv.ParseInt(strings.TrimSpace(item.FundingTime), 10, 64)
-		if err != nil {
-			ts, err = strconv.ParseInt(strings.TrimSpace(item.Ts), 10, 64)
+		ts := parseBitgetTimestampMillis(item.FundingTime)
+		if ts == 0 {
+			ts = parseBitgetTimestampMillis(item.Ts)
 		}
 		if ts == 0 {
 			// Fallback to current time if no timestamp is available
 			ts = time.Now().UnixMilli()
 		}
 
-		nextTs, _ := strconv.ParseInt(strings.TrimSpace(item.NextFundingTime), 10, 64)
+		nextTs := parseBitgetTimestampMillis(item.NextFundingTime)
 		if nextTs == 0 {
-			nextTs, _ = strconv.ParseInt(strings.TrimSpace(item.NextUpdate), 10, 64)
+			nextTs = parseBitgetTimestampMillis(item.NextUpdate)
 		}
 		if nextTs == 0 {
 			nextTs = ts
