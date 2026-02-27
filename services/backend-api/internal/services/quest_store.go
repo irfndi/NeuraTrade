@@ -195,7 +195,6 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 		args = append(args, metadataChatIDLikePattern(chatID))
 	}
 
-
 	query += " ORDER BY created_at DESC"
 
 	rows, err := s.db.Query(ctx, query, args...)
