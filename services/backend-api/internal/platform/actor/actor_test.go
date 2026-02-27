@@ -23,8 +23,8 @@ func (m testMessage) MessageType() string {
 }
 
 type testActor struct {
-	id  string
-	fn  func(ctx context.Context, env Envelope) error
+	id string
+	fn func(ctx context.Context, env Envelope) error
 }
 
 func (a *testActor) Receive(ctx context.Context, env Envelope) error {
@@ -264,7 +264,6 @@ func TestSystemSpawn(t *testing.T) {
 	}
 }
 
-
 func TestSystemGet(t *testing.T) {
 	sys := NewSystem(DefaultConfig())
 
@@ -286,7 +285,6 @@ func TestSystemGet(t *testing.T) {
 	}
 }
 
-
 func TestSystemStop(t *testing.T) {
 	sys := NewSystem(DefaultConfig())
 
@@ -303,7 +301,6 @@ func TestSystemStop(t *testing.T) {
 	}
 }
 
-
 func TestSystemStopAll(t *testing.T) {
 	sys := NewSystem(DefaultConfig())
 
@@ -318,4 +315,3 @@ func TestSystemStopAll(t *testing.T) {
 		t.Error("all actors should be stopped")
 	}
 }
-

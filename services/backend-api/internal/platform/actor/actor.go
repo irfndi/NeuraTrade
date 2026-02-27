@@ -128,8 +128,7 @@ type Mailbox struct {
 	messages   chan Envelope
 	deadLetter func(Message)
 	stopped    atomic.Bool
-	}
-
+}
 
 // NewMailbox creates a new bounded mailbox.
 func NewMailbox(config Config) *Mailbox {

@@ -211,8 +211,7 @@ func (b *ExchangeRegistryBuilder) AddExchange(exchange string, service ccxtservi
 	adapter := ccxt.NewAdapter(service)
 	b.registry.Register(exchange, adapter)
 	return b
-	}
-
+}
 
 // Build returns the built registry.
 func (b *ExchangeRegistryBuilder) Build() ports.ExchangeRegistry {

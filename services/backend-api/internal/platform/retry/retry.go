@@ -11,8 +11,8 @@ import (
 
 // Errors
 var (
-	ErrMaxRetries    = errors.New("max retries exceeded")
-	ErrNonRetryable  = errors.New("non-retryable error")
+	ErrMaxRetries   = errors.New("max retries exceeded")
+	ErrNonRetryable = errors.New("non-retryable error")
 )
 
 // IsRetryable determines if an error is retryable.

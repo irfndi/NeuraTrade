@@ -65,8 +65,7 @@ func (a *Adapter) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe st
 	}
 
 	return candles, nil
-	}
-
+}
 
 func (a *Adapter) FetchOrderBook(ctx context.Context, exchange, symbol string, depth int) (ports.OrderBook, error) {
 	resp, err := a.service.FetchOrderBook(ctx, exchange, symbol, depth)
@@ -97,8 +96,7 @@ func (a *Adapter) FetchOrderBook(ctx context.Context, exchange, symbol string, d
 		Asks:      asks,
 		Timestamp: resp.OrderBook.Timestamp,
 	}, nil
-	}
-
+}
 
 func (a *Adapter) FetchFundingRate(ctx context.Context, exchange, symbol string) (ports.FundingRate, error) {
 	rate, err := a.service.FetchFundingRate(ctx, exchange, symbol)
@@ -113,8 +111,7 @@ func (a *Adapter) FetchFundingRate(ctx context.Context, exchange, symbol string)
 		NextFundingTime: time.Time(rate.NextFundingTime),
 		Timestamp:       time.Time(rate.Timestamp),
 	}, nil
-	}
-
+}
 
 func (a *Adapter) FetchFundingRates(ctx context.Context, exchange string, symbols []string) ([]ports.FundingRate, error) {
 	rates, err := a.service.FetchFundingRates(ctx, exchange, symbols)
@@ -134,8 +131,7 @@ func (a *Adapter) FetchFundingRates(ctx context.Context, exchange string, symbol
 	}
 
 	return result, nil
-	}
-
+}
 
 // IsHealthy checks if the gateway is healthy.
 func (a *Adapter) IsHealthy(ctx context.Context) bool {
@@ -169,7 +165,6 @@ func (a *Adapter) CancelAllOrders(ctx context.Context, exchange, symbol string) 
 	for _, order := range resp.Orders {
 		_ = a.service.CancelOrder(ctx, exchange, order.ID, symbol) // Best effort
 	}
-
 
 	return nil
 }
@@ -262,8 +257,7 @@ func (a *Adapter) FetchPositions(ctx context.Context, exchange string) ([]ports.
 	}
 
 	return positions, nil
-	}
-
+}
 
 func (a *Adapter) FetchBalances(ctx context.Context, exchange string) ([]ports.Balance, error) {
 	resp, err := a.service.FetchBalance(ctx, exchange)
