@@ -806,3 +806,153 @@ func TestSetupRoutes_TelegramInternalRequiresAdminAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ADMIN_AUTH_FAILED")
 }
+
+// TestGetEnvOrDefault tests the getEnvOrDefault helper function
+func TestGetEnvOrDefault(t *testing.T) {
+	// Test with env var set
+	originalVal, exists := os.LookupEnv("TEST_ENV_VAR")
+	if exists {
+		defer os.Setenv("TEST_ENV_VAR", originalVal)
+	} else {
+		defer os.Unsetenv("TEST_ENV_VAR")
+	}
+	
+	// Test with env var set
+	os.Setenv("TEST_ENV_VAR", "custom_value")
+	result := getEnvOrDefault("TEST_ENV_VAR", "default")
+	assert.Equal(t, "custom_value", result)
+	
+	// Test with env var not set
+	os.Unsetenv("TEST_ENV_VAR")
+	result = getEnvOrDefault("TEST_ENV_VAR", "default")
+	assert.Equal(t, "default", result)
+	
+	// Test with empty env var
+	os.Setenv("TEST_ENV_VAR", "")
+	result = getEnvOrDefault("TEST_ENV_VAR", "default")
+	assert.Equal(t, "default", result)
+}
+
+// TestParseAIProviderChain tests the parseAIProviderChain helper function
+func TestParseAIProviderChain(t *testing.T) {
+	originalChain, exists := os.LookupEnv("NEURATRADE_AI_PROVIDER_CHAIN")
+	if exists {
+		defer os.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", originalChain)
+	} else {
+		defer os.Unsetenv("NEURATRADE_AI_PROVIDER_CHAIN")
+	}
+	
+	// Test with empty primary and no env
+	os.Unsetenv("NEURATRADE_AI_PROVIDER_CHAIN")
+	result := parseAIProviderChain("")
+	assert.Equal(t, []string{"zhipu", "minimax"}, result)
+	
+	// Test with custom primary
+	result = parseAIProviderChain("anthropic")
+	assert.Equal(t, []string{"anthropic", "zhipu", "minimax"}, result)
+	
+	// Test with custom chain
+	os.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,anthropic")
+	result = parseAIProviderChain("zhipu")
+	assert.Equal(t, []string{"zhipu", "openai", "anthropic"}, result)
+	
+	// Test deduplication
+	os.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "zhipu,minimax,openai")
+	result = parseAIProviderChain("zhipu")
+	assert.Equal(t, []string{"zhipu", "minimax", "openai"}, result)
+	
+	// Test with empty entries in chain
+	os.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,,anthropic,")
+	result = parseAIProviderChain("zhipu")
+	assert.Equal(t, []string{"zhipu", "openai", "anthropic"}, result)
+}
+
+// TestProviderBaseURL tests the providerBaseURL helper function
+func TestProviderBaseURL(t *testing.T) {
+	testCases := []struct {
+		provider string
+		expected string
+	}{
+		{"anthropic", "https://api.anthropic.com/v1"},
+		{"minimax", "https://api.minimax.chat/v1"},
+		{"zhipu", "https://open.bigmodel.cn/api/coding/paas/v4"},
+		{"mlx", "http://localhost:8080/v1"},
+		{"openai", "https://api.openai.com/v1"},
+		{"unknown", "https://api.openai.com/v1"},
+		{"", "https://api.openai.com/v1"},
+		{"ANTHROPIC", "https://api.anthropic.com/v1"}, // case insensitive
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.provider, func(t *testing.T) {
+			result := providerBaseURL(tc.provider)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestProviderRequiresAPIKey tests the providerRequiresAPIKey helper function
+func TestProviderRequiresAPIKey(t *testing.T) {
+	testCases := []struct {
+		provider string
+		expected bool
+	}{
+		{"anthropic", true},
+		{"openai", true},
+		{"zhipu", true},
+		{"minimax", true},
+		{"mlx", false},
+		{"", true},
+		{"unknown", true},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.provider, func(t *testing.T) {
+			result := providerRequiresAPIKey(tc.provider)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestRiskLockSourcePriority tests the riskLockSourcePriority helper function
+func TestRiskLockSourcePriority(t *testing.T) {
+	testCases := []struct {
+		source   string
+		expected int
+	}{
+		{"manual_env", 3},
+		{"portfolio_safety", 2},
+		{"drawdown_threshold", 1},
+		{"unknown", 0},
+		{"", 0},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.source, func(t *testing.T) {
+			result := riskLockSourcePriority(tc.source)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestRouteEnvEnabled tests the routeEnvEnabled helper function
+func TestRouteEnvEnabled(t *testing.T) {
+	// Test with env var set to "true"
+	os.Setenv("TEST_ROUTE", "true")
+	assert.True(t, routeEnvEnabled("TEST_ROUTE"))
+	
+	// Test with env var set to "1"
+	os.Setenv("TEST_ROUTE", "1")
+	assert.True(t, routeEnvEnabled("TEST_ROUTE"))
+	
+	// Test with env var set to "false"
+	os.Setenv("TEST_ROUTE", "false")
+	assert.False(t, routeEnvEnabled("TEST_ROUTE"))
+	
+	// Test with env var not set
+	os.Unsetenv("TEST_ROUTE")
+	assert.False(t, routeEnvEnabled("TEST_ROUTE"))
+	
+	// Cleanup
+	os.Unsetenv("TEST_ROUTE")
+}
