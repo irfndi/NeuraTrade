@@ -7,7 +7,11 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
+	"github.com/irfndi/neuratrade/internal/adapters/db"
+	"github.com/irfndi/neuratrade/internal/adapters/redis"
+	telegramadapter "github.com/irfndi/neuratrade/internal/adapters/telegram"
 	ccxtservice "github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/platform/retry"
@@ -219,4 +223,105 @@ func (b *ExchangeRegistryBuilder) AddExchange(exchange string, service ccxtservi
 // Build returns the built registry.
 func (b *ExchangeRegistryBuilder) Build() ports.ExchangeRegistry {
 	return b.registry
+}
+
+// ============================================================
+// State Store Builder
+// ============================================================
+
+// StateStoreBuilder helps build a state store from database connection.
+type StateStoreBuilder struct {
+	db database.Database
+}
+
+// NewStateStoreBuilder creates a new state store builder.
+func NewStateStoreBuilder() *StateStoreBuilder {
+	return &StateStoreBuilder{}
+}
+
+// WithDatabase sets the database.
+func (b *StateStoreBuilder) WithDatabase(db database.Database) *StateStoreBuilder {
+	b.db = db
+	return b
+}
+
+// Build returns the built state store.
+func (b *StateStoreBuilder) Build() ports.StateStore {
+	return db.NewAdapter(b.db)
+}
+
+// ============================================================
+// Cache Store Builder
+// ============================================================
+
+// CacheStoreBuilder helps build a cache store from Redis client.
+type CacheStoreBuilder struct {
+	client *database.RedisClient
+}
+
+// NewCacheStoreBuilder creates a new cache store builder.
+func NewCacheStoreBuilder() *CacheStoreBuilder {
+	return &CacheStoreBuilder{}
+}
+
+// WithRedisClient sets the Redis client.
+func (b *CacheStoreBuilder) WithRedisClient(client *database.RedisClient) *CacheStoreBuilder {
+	b.client = client
+	return b
+}
+
+// Build returns the built cache store.
+func (b *CacheStoreBuilder) Build() ports.CacheStore {
+	return redis.NewAdapter(b.client)
+}
+
+// ============================================================
+// Notifier Builder
+// ============================================================
+
+// NotifierBuilder helps build a notifier from Telegram configuration.
+type NotifierBuilder struct {
+	config telegramadapter.Config
+}
+
+// NewNotifierBuilder creates a new notifier builder.
+func NewNotifierBuilder() *NotifierBuilder {
+	return &NotifierBuilder{
+		config: telegramadapter.DefaultConfig(),
+	}
+}
+
+// WithBaseURL sets the telegram-service base URL.
+func (b *NotifierBuilder) WithBaseURL(url string) *NotifierBuilder {
+	b.config.BaseURL = url
+	return b
+}
+
+// WithAPIKey sets the admin API key.
+func (b *NotifierBuilder) WithAPIKey(key string) *NotifierBuilder {
+	b.config.APIKey = key
+	return b
+}
+
+// WithChatID sets the default chat ID.
+func (b *NotifierBuilder) WithChatID(chatID string) *NotifierBuilder {
+	b.config.ChatID = chatID
+	return b
+}
+
+// WithEnabled enables or disables the notifier.
+func (b *NotifierBuilder) WithEnabled(enabled bool) *NotifierBuilder {
+	b.config.Enabled = enabled
+	return b
+}
+
+// WithTimeout sets the HTTP timeout.
+func (b *NotifierBuilder) WithTimeout(timeout time.Duration) *NotifierBuilder {
+	b.config.Timeout = timeout
+	return b
+}
+
+// Build returns the built notifier.
+func (b *NotifierBuilder) Build() ports.Notifier {
+	return telegramadapter.NewAdapter(b.config)
 }
