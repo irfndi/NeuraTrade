@@ -557,6 +557,69 @@ func TestGetChatRuntimeDiagnostics_IncludesDriftFields(t *testing.T) {
 	}
 }
 
+func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.SetAIProviderChainStats(2, 1)
+	engine.quests["q-recovery"] = &Quest{
+		ID:     "q-recovery",
+		Status: QuestStatusActive,
+		Metadata: map[string]string{
+			"chat_id":       "chat-recovery",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_mode":          "micro_entry",
+			"recovery_clean_cycles":  2,
+			"recovery_entry_allowed": false,
+			"entry_gate_type":        "risk_lock",
+			"risk_max_drawdown":      0.41,
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-recovery")
+	if mode, _ := diag["recovery_mode"].(string); mode != "micro_entry" {
+		t.Fatalf("expected recovery_mode=micro_entry, got %q", mode)
+	}
+	if cycles, _ := diag["recovery_clean_cycles"].(int); cycles != 2 {
+		t.Fatalf("expected recovery_clean_cycles=2, got %d", cycles)
+	}
+	if allowed, _ := diag["recovery_entry_allowed"].(bool); allowed {
+		t.Fatal("expected recovery_entry_allowed=false")
+	}
+	if gateType, _ := diag["entry_gate_type"].(string); gateType != "risk_lock" {
+		t.Fatalf("expected entry_gate_type=risk_lock, got %q", gateType)
+	}
+	if usable, _ := diag["provider_chain_usable"].(int); usable != 1 {
+		t.Fatalf("expected provider_chain_usable=1, got %d", usable)
+	}
+	if configured, _ := diag["provider_chain_configured"].(int); configured != 2 {
+		t.Fatalf("expected provider_chain_configured=2, got %d", configured)
+	}
+
+	aiRuntime, ok := diag["ai_runtime"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected ai_runtime map in diagnostics")
+	}
+	if usable, _ := aiRuntime["provider_chain_usable"].(int); usable != 1 {
+		t.Fatalf("expected ai_runtime.provider_chain_usable=1, got %d", usable)
+	}
+}
+
+func TestListActiveAutonomousChatIDs(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.autonomousState["chat-a"] = &AutonomousState{ChatID: "chat-a", IsActive: true}
+	engine.autonomousState["chat-b"] = &AutonomousState{ChatID: "chat-b", IsActive: false}
+	engine.autonomousState["chat-c"] = &AutonomousState{ChatID: "chat-c", IsActive: true}
+
+	ids := engine.ListActiveAutonomousChatIDs()
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 active chat IDs, got %d", len(ids))
+	}
+	if ids[0] != "chat-a" || ids[1] != "chat-c" {
+		t.Fatalf("unexpected active chat list: %#v", ids)
+	}
+}
+
 func ptrTime(t time.Time) *time.Time {
 	return &t
 }

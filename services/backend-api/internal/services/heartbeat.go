@@ -114,6 +114,8 @@ type TradingHeartbeat struct {
 var (
 	heartbeatRegistryMu sync.RWMutex
 	heartbeatRegistry   *TradingHeartbeat
+	heartbeatRiskMu     sync.RWMutex
+	heartbeatRiskBridge func(context.Context) map[string]interface{}
 )
 
 const (
@@ -146,6 +148,45 @@ func CurrentHeartbeatRuntime() *TradingHeartbeat {
 	heartbeatRegistryMu.RLock()
 	defer heartbeatRegistryMu.RUnlock()
 	return heartbeatRegistry
+}
+
+// SetHeartbeatRiskBridge registers a callback used by heartbeat risk checks.
+func SetHeartbeatRiskBridge(checker func(context.Context) map[string]interface{}) {
+	heartbeatRiskMu.Lock()
+	defer heartbeatRiskMu.Unlock()
+	heartbeatRiskBridge = checker
+}
+
+// HeartbeatRiskBridgeAdapter exposes bridge-backed risk checks through the heartbeat interface.
+type HeartbeatRiskBridgeAdapter struct{}
+
+// NewHeartbeatRiskBridgeAdapter creates a bridge-backed risk manager adapter.
+func NewHeartbeatRiskBridgeAdapter() *HeartbeatRiskBridgeAdapter {
+	return &HeartbeatRiskBridgeAdapter{}
+}
+
+// CheckRiskLimits implements the heartbeat risk manager interface.
+func (a *HeartbeatRiskBridgeAdapter) CheckRiskLimits(ctx context.Context) interface{} {
+	heartbeatRiskMu.RLock()
+	checker := heartbeatRiskBridge
+	heartbeatRiskMu.RUnlock()
+	if checker == nil {
+		return map[string]interface{}{
+			"risk_lock":       false,
+			"trading_allowed": true,
+		}
+	}
+	result := checker(ctx)
+	if result == nil {
+		return map[string]interface{}{
+			"risk_lock":       false,
+			"trading_allowed": true,
+		}
+	}
+	if _, ok := result["trading_allowed"]; !ok {
+		result["trading_allowed"] = !readQuestMetricBool(result["risk_lock"])
+	}
+	return result
 }
 
 // NewTradingHeartbeat creates a new trading heartbeat.
@@ -457,11 +498,15 @@ func (h *TradingHeartbeat) determineMode(ctx context.Context) (mode string, note
 }
 
 func (h *TradingHeartbeat) isRiskLocked(ctx context.Context) (bool, string) {
-	if h.riskManager == nil {
+	riskManager := h.riskManager
+	if riskManager == nil {
+		riskManager = NewHeartbeatRiskBridgeAdapter()
+	}
+	if riskManager == nil {
 		return false, ""
 	}
 
-	raw := h.riskManager.CheckRiskLimits(ctx)
+	raw := riskManager.CheckRiskLimits(ctx)
 	switch result := raw.(type) {
 	case map[string]interface{}:
 		if lock, ok := result["risk_lock"].(bool); ok && lock {

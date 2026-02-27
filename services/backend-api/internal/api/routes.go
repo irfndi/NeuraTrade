@@ -383,6 +383,49 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		redisClientRaw,
 		nil,
 	)
+	riskLockThreshold := 0.40
+	if raw := strings.TrimSpace(os.Getenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN")); raw != "" {
+		if parsed, err := strconv.ParseFloat(raw, 64); err == nil && parsed > 0 {
+			riskLockThreshold = parsed
+		}
+	}
+	services.SetHeartbeatRiskBridge(func(ctx context.Context) map[string]interface{} {
+		reasons := make([]string, 0, 4)
+		active := false
+		for _, chatID := range questEngine.ListActiveAutonomousChatIDs() {
+			diagnostics := questEngine.GetChatRuntimeDiagnostics(chatID)
+			drawdown := 0.0
+			switch value := diagnostics["risk_max_drawdown"].(type) {
+			case float64:
+				drawdown = value
+			case float32:
+				drawdown = float64(value)
+			case int:
+				drawdown = float64(value)
+			}
+			if drawdown >= riskLockThreshold {
+				active = true
+				reasons = append(reasons, fmt.Sprintf("chat %s drawdown %.2f%% >= %.2f%%", chatID, drawdown*100, riskLockThreshold*100))
+				continue
+			}
+			entryGateType, _ := diagnostics["entry_gate_type"].(string)
+			if strings.EqualFold(strings.TrimSpace(entryGateType), "risk_lock") {
+				active = true
+				reasons = append(reasons, fmt.Sprintf("chat %s reports risk-lock gate", chatID))
+			}
+		}
+
+		questEngine.SetRiskLockState(active, reasons)
+		result := map[string]interface{}{
+			"risk_lock":       active,
+			"trading_allowed": !active,
+		}
+		if len(reasons) > 0 {
+			result["reason"] = reasons[0]
+			result["reasons"] = reasons
+		}
+		return result
+	})
 
 	// Legacy quest preload is opt-in only.
 	// In scalping-first mode we avoid restoring old active rows without metadata/chat ownership.
@@ -610,6 +653,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				overrideMsg,
 			)
 		}
+		questEngine.SetAIProviderChainStats(len(providerChain), len(failoverNodes))
 
 		var llmClient llm.Client
 		switch len(failoverNodes) {

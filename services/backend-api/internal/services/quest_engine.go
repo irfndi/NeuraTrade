@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,22 +133,24 @@ type QuestHandler func(ctx context.Context, quest *Quest) error
 
 // QuestEngine manages quest scheduling and execution
 type QuestEngine struct {
-	mu              sync.RWMutex
-	quests          map[string]*Quest
-	executing       map[string]bool
-	executionStarts map[string]time.Time
-	autonomousState map[string]*AutonomousState
-	definitions     map[string]*QuestDefinition
-	handlers        map[QuestType]QuestHandler
-	store           QuestStore
-	redis           *redis.Client
-	stopCh          chan struct{}
-	running         bool
-	cadenceMode     string
-	lastTickAt      time.Time
-	runtimeBudget   questRuntimeBudget
-	riskLockActive  bool
-	riskLockReasons []string
+	mu                        sync.RWMutex
+	quests                    map[string]*Quest
+	executing                 map[string]bool
+	executionStarts           map[string]time.Time
+	autonomousState           map[string]*AutonomousState
+	definitions               map[string]*QuestDefinition
+	handlers                  map[QuestType]QuestHandler
+	store                     QuestStore
+	redis                     *redis.Client
+	stopCh                    chan struct{}
+	running                   bool
+	cadenceMode               string
+	lastTickAt                time.Time
+	runtimeBudget             questRuntimeBudget
+	riskLockActive            bool
+	riskLockReasons           []string
+	aiProviderChainConfigured int
+	aiProviderChainUsable     int
 	// notificationService is used to send quest progress notifications
 	notificationService *NotificationService
 	// chatIDForQuest maps quest IDs to their owner's chat ID
@@ -271,17 +274,19 @@ func NewQuestEngine(store QuestStore) *QuestEngine {
 // NewQuestEngineWithRedis creates a new quest engine with Redis for distributed coordination
 func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *QuestEngine {
 	engine := &QuestEngine{
-		quests:          make(map[string]*Quest),
-		executing:       make(map[string]bool),
-		executionStarts: make(map[string]time.Time),
-		autonomousState: make(map[string]*AutonomousState),
-		definitions:     make(map[string]*QuestDefinition),
-		handlers:        make(map[QuestType]QuestHandler),
-		store:           store,
-		redis:           redisClient,
-		stopCh:          make(chan struct{}),
-		chatIDForQuest:  make(map[string]int64),
-		cadenceMode:     "normal",
+		quests:                    make(map[string]*Quest),
+		executing:                 make(map[string]bool),
+		executionStarts:           make(map[string]time.Time),
+		autonomousState:           make(map[string]*AutonomousState),
+		definitions:               make(map[string]*QuestDefinition),
+		handlers:                  make(map[QuestType]QuestHandler),
+		store:                     store,
+		redis:                     redisClient,
+		stopCh:                    make(chan struct{}),
+		chatIDForQuest:            make(map[string]int64),
+		cadenceMode:               "normal",
+		aiProviderChainConfigured: 0,
+		aiProviderChainUsable:     0,
 	}
 	engine.runtimeBudget = computeQuestRuntimeBudget()
 
@@ -926,6 +931,25 @@ func readQuestMetricString(v interface{}) string {
 	}
 }
 
+func readQuestMetricFloat(v interface{}) float64 {
+	switch value := v.(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
 func envFloatOrDefault(key string, fallback, min, max float64) float64 {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -1168,21 +1192,53 @@ func (e *QuestEngine) SetRiskLockState(active bool, reasons []string) {
 	e.riskLockReasons = copied
 }
 
+// SetAIProviderChainStats records provider-chain readiness for diagnostics.
+func (e *QuestEngine) SetAIProviderChainStats(configured, usable int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if configured < 0 {
+		configured = 0
+	}
+	if usable < 0 {
+		usable = 0
+	}
+	e.aiProviderChainConfigured = configured
+	e.aiProviderChainUsable = usable
+}
+
+// ListActiveAutonomousChatIDs returns active autonomous chat IDs known by the runtime.
+func (e *QuestEngine) ListActiveAutonomousChatIDs() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	ids := make([]string, 0, len(e.autonomousState))
+	for chatID, state := range e.autonomousState {
+		chatID = strings.TrimSpace(chatID)
+		if chatID == "" || state == nil || !state.IsActive {
+			continue
+		}
+		ids = append(ids, chatID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // GetRuntimeDiagnostics returns quest scheduler runtime diagnostics for operators.
 func (e *QuestEngine) GetRuntimeDiagnostics() map[string]interface{} {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	return map[string]interface{}{
-		"cadence_mode":      e.cadenceMode,
-		"active_quests":     len(e.quests),
-		"executing_quests":  len(e.executing),
-		"risk_lock_active":  e.isRiskLockEnabledLocked(),
-		"risk_lock_reasons": append([]string(nil), e.riskLockReasons...),
-		"watchdog_stale":    e.runtimeBudget.StaleTimeout.String(),
-		"execution_timeout": e.runtimeBudget.ExecutionTimeout.String(),
-		"lock_ttl":          e.runtimeBudget.LockTTL.String(),
-		"budget_floor":      e.runtimeBudget.DerivedFloor.String(),
+		"cadence_mode":              e.cadenceMode,
+		"active_quests":             len(e.quests),
+		"executing_quests":          len(e.executing),
+		"risk_lock_active":          e.isRiskLockEnabledLocked(),
+		"risk_lock_reasons":         append([]string(nil), e.riskLockReasons...),
+		"provider_chain_configured": e.aiProviderChainConfigured,
+		"provider_chain_usable":     e.aiProviderChainUsable,
+		"watchdog_stale":            e.runtimeBudget.StaleTimeout.String(),
+		"execution_timeout":         e.runtimeBudget.ExecutionTimeout.String(),
+		"lock_ttl":                  e.runtimeBudget.LockTTL.String(),
+		"budget_floor":              e.runtimeBudget.DerivedFloor.String(),
 	}
 }
 
@@ -1197,11 +1253,16 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		"active_scalping_quests":      0,
 		"hold_streak":                 0,
 		"unlock_cycles":               0,
+		"recovery_mode":               "normal",
+		"recovery_clean_cycles":       0,
+		"recovery_entry_allowed":      true,
+		"recovery_next_condition":     "",
 		"state_drift_active":          false,
 		"state_drift_positions":       0,
 		"state_drift_count":           0,
 		"state_drift_last_checked_at": "",
 		"entry_gate_reason":           "",
+		"entry_gate_type":             "none",
 		"last_drift_repair_at":        "",
 		"last_clean_reconcile_at":     "",
 		"last_startup_reconcile":      "",
@@ -1210,6 +1271,8 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		"runtime_no_fill_since":       "",
 		"runtime_failure_streak":      0,
 		"runtime_last_failure_at":     "",
+		"provider_chain_configured":   0,
+		"provider_chain_usable":       0,
 	}
 	if chatID == "" {
 		return result
@@ -1225,12 +1288,18 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		failureStreak         int
 		noFillSince           time.Time
 		activeScalping        int
+		recoveryMode          string
+		recoveryNextCondition string
+		recoveryCleanCycles   int
+		recoveryEntryAllowed  = true
 		stateDriftActive      bool
 		stateDriftPositions   int
 		stateDriftLastChecked time.Time
 		lastDriftRepair       time.Time
 		lastCleanReconcile    time.Time
 		entryGateReason       string
+		entryGateType         string
+		riskMaxDrawdown       float64
 		aiWindowTotal         int
 		aiWindowSuccess       int
 		aiWindowErrors        int
@@ -1267,6 +1336,22 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		holdStreak = maxInt(holdStreak, readQuestMetricInt(cp["runtime_hold_streak"]))
 		unlockCycles = maxInt(unlockCycles, readQuestMetricInt(cp["runtime_unlock_cycles"]))
 		failureStreak = maxInt(failureStreak, readQuestMetricInt(cp["runtime_failure_streak"]))
+		recoveryCleanCycles = maxInt(recoveryCleanCycles, readQuestMetricInt(cp["recovery_clean_cycles"]))
+		if mode := readQuestMetricString(cp["recovery_mode"]); mode != "" {
+			recoveryMode = mode
+		}
+		if nextCondition := readQuestMetricString(cp["recovery_next_condition"]); nextCondition != "" {
+			recoveryNextCondition = nextCondition
+		}
+		if _, exists := cp["recovery_entry_allowed"]; exists {
+			recoveryEntryAllowed = readQuestMetricBool(cp["recovery_entry_allowed"])
+		}
+		if gateType := readQuestMetricString(cp["entry_gate_type"]); gateType != "" {
+			entryGateType = gateType
+		}
+		if drawdown := readQuestMetricFloat(cp["risk_max_drawdown"]); drawdown > riskMaxDrawdown {
+			riskMaxDrawdown = drawdown
+		}
 
 		if ts := readCheckpointTime(cp["runtime_bootstrap_synced_at"]); ts.After(lastStartupReconcile) {
 			lastStartupReconcile = ts
@@ -1346,6 +1431,16 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	result["active_scalping_quests"] = activeScalping
 	result["hold_streak"] = holdStreak
 	result["unlock_cycles"] = unlockCycles
+	if recoveryMode == "" {
+		recoveryMode = "normal"
+	}
+	result["recovery_mode"] = recoveryMode
+	result["recovery_clean_cycles"] = recoveryCleanCycles
+	result["recovery_entry_allowed"] = recoveryEntryAllowed
+	if strings.TrimSpace(recoveryNextCondition) != "" {
+		result["recovery_next_condition"] = recoveryNextCondition
+	}
+	result["risk_max_drawdown"] = riskMaxDrawdown
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions
 	result["state_drift_count"] = stateDriftPositions
@@ -1365,9 +1460,22 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			entryGateReason = "risk lock active"
 		}
 	}
+	if entryGateType == "" {
+		switch {
+		case e.isRiskLockEnabledLocked():
+			entryGateType = "risk_lock"
+		case stateDriftActive:
+			entryGateType = "state_drift"
+		case aiCircuitUntil.After(time.Now().UTC()):
+			entryGateType = "runtime_circuit"
+		default:
+			entryGateType = "none"
+		}
+	}
 	if strings.TrimSpace(entryGateReason) != "" {
 		result["entry_gate_reason"] = strings.TrimSpace(entryGateReason)
 	}
+	result["entry_gate_type"] = entryGateType
 	result["runtime_failure_streak"] = failureStreak
 	if !lastStartupReconcile.IsZero() {
 		result["last_startup_reconcile"] = lastStartupReconcile.Format(time.RFC3339)
@@ -1402,30 +1510,32 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	}
 
 	aiRuntime := map[string]interface{}{
-		"status":                status,
-		"window_started_at":     "",
-		"window_total":          aiWindowTotal,
-		"window_success":        aiWindowSuccess,
-		"window_errors":         aiWindowErrors,
-		"window_timeouts":       aiWindowTimeouts,
-		"window_parse_fails":    aiWindowParseFails,
-		"error_rate":            windowErrorRate,
-		"warn_rate":             warnRate,
-		"critical_rate":         criticalRate,
-		"circuit_active":        circuitActive,
-		"circuit_until":         "",
-		"circuit_reason":        aiCircuitReason,
-		"circuit_trips":         aiCircuitTrips,
-		"last_category":         aiLastCategory,
-		"last_provider":         aiLastProvider,
-		"last_success_provider": aiLastSuccessProvider,
-		"last_error":            aiLastError,
-		"last_error_at":         "",
-		"last_success_at":       "",
-		"last_event_at":         "",
-		"failover_attempts":     aiFailoverAttempts,
-		"failover_successes":    aiFailoverSuccesses,
-		"failover_failures":     aiFailoverFailures,
+		"status":                    status,
+		"window_started_at":         "",
+		"window_total":              aiWindowTotal,
+		"window_success":            aiWindowSuccess,
+		"window_errors":             aiWindowErrors,
+		"window_timeouts":           aiWindowTimeouts,
+		"window_parse_fails":        aiWindowParseFails,
+		"error_rate":                windowErrorRate,
+		"warn_rate":                 warnRate,
+		"critical_rate":             criticalRate,
+		"circuit_active":            circuitActive,
+		"circuit_until":             "",
+		"circuit_reason":            aiCircuitReason,
+		"circuit_trips":             aiCircuitTrips,
+		"last_category":             aiLastCategory,
+		"last_provider":             aiLastProvider,
+		"last_success_provider":     aiLastSuccessProvider,
+		"last_error":                aiLastError,
+		"last_error_at":             "",
+		"last_success_at":           "",
+		"last_event_at":             "",
+		"failover_attempts":         aiFailoverAttempts,
+		"failover_successes":        aiFailoverSuccesses,
+		"failover_failures":         aiFailoverFailures,
+		"provider_chain_configured": e.aiProviderChainConfigured,
+		"provider_chain_usable":     e.aiProviderChainUsable,
 	}
 	if !aiWindowStarted.IsZero() {
 		aiRuntime["window_started_at"] = aiWindowStarted.Format(time.RFC3339)
@@ -1442,6 +1552,17 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if !aiLastEventAt.IsZero() {
 		aiRuntime["last_event_at"] = aiLastEventAt.Format(time.RFC3339)
 	}
+	if status != "healthy" {
+		reason := strings.TrimSpace(aiLastCategory)
+		if reason == "" {
+			reason = strings.TrimSpace(entryGateReason)
+		}
+		if reason != "" {
+			aiRuntime["runtime_degraded_reason"] = reason
+		}
+	}
+	result["provider_chain_configured"] = e.aiProviderChainConfigured
+	result["provider_chain_usable"] = e.aiProviderChainUsable
 	result["ai_runtime"] = aiRuntime
 
 	return result

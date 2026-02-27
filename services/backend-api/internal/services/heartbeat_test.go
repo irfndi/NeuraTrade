@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -276,4 +277,53 @@ type mockRiskManager struct{}
 
 func (m *mockRiskManager) CheckRiskLimits(ctx context.Context) interface{} {
 	return nil
+}
+
+func TestHeartbeatRiskBridgeAdapter_CheckRiskLimits(t *testing.T) {
+	SetHeartbeatRiskBridge(func(ctx context.Context) map[string]interface{} {
+		return map[string]interface{}{
+			"risk_lock":       true,
+			"trading_allowed": false,
+			"reason":          "drawdown lock",
+		}
+	})
+	t.Cleanup(func() {
+		SetHeartbeatRiskBridge(nil)
+	})
+
+	adapter := NewHeartbeatRiskBridgeAdapter()
+	raw := adapter.CheckRiskLimits(context.Background())
+	limits, ok := raw.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, limits["risk_lock"])
+	assert.Equal(t, false, limits["trading_allowed"])
+}
+
+func TestTradingHeartbeat_UsesRiskBridgeWhenRiskManagerNil(t *testing.T) {
+	SetHeartbeatRiskBridge(func(ctx context.Context) map[string]interface{} {
+		return map[string]interface{}{
+			"risk_lock":       true,
+			"trading_allowed": false,
+			"reason":          "bridge lock",
+		}
+	})
+	t.Cleanup(func() {
+		SetHeartbeatRiskBridge(nil)
+	})
+
+	heartbeat := NewTradingHeartbeat(
+		DefaultHeartbeatConfig(),
+		&mockPositionTracker{},
+		&mockStopLossService{},
+		&mockSignalProcessor{},
+		&mockFundingCollector{},
+		&mockConnectivityChecker{},
+		nil,
+		nil,
+		nil,
+	)
+
+	locked, reason := heartbeat.isRiskLocked(context.Background())
+	assert.True(t, locked)
+	assert.NotEmpty(t, strings.TrimSpace(reason))
 }

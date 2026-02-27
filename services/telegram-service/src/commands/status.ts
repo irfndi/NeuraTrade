@@ -251,9 +251,22 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         const entryGateReason =
           readStringField(chatRuntime, "entry_gate_reason") ||
           diagnostics.entry_gate_reason;
+        const entryGateType =
+          readStringField(chatRuntime, "entry_gate_type") || "none";
         if (entryGateReason) {
           lines.push(`• Entry gate reason: ${entryGateReason}`);
         }
+        lines.push(`• Entry gate type: ${entryGateType}`);
+
+        const recoveryMode =
+          readStringField(chatRuntime, "recovery_mode") || "normal";
+        const recoveryCleanCycles =
+          readNumberField(chatRuntime, "recovery_clean_cycles") ?? 0;
+        const recoveryEntryAllowed =
+          readBoolField(chatRuntime, "recovery_entry_allowed") ?? true;
+        lines.push(
+          `• Recovery: mode=${recoveryMode}, clean_cycles=${recoveryCleanCycles}, entry_allowed=${recoveryEntryAllowed ? "yes" : "no"}`,
+        );
 
         const lastDriftRepair =
           readStringField(chatRuntime, "last_drift_repair_at") ||
@@ -286,12 +299,33 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
             readStringField(aiRuntime, "status")?.toUpperCase() || "UNKNOWN";
           const errorRate = readNumberField(aiRuntime, "error_rate");
           const circuitActive = readBoolField(aiRuntime, "circuit_active");
+          const providerChainUsable =
+            readNumberField(aiRuntime, "provider_chain_usable") ??
+            readNumberField(chatRuntime, "provider_chain_usable");
+          const providerChainConfigured =
+            readNumberField(aiRuntime, "provider_chain_configured") ??
+            readNumberField(chatRuntime, "provider_chain_configured");
+          const lastSuccessProvider = readStringField(
+            aiRuntime,
+            "last_success_provider",
+          );
           const segments = [`${runtimeStatus}`];
           if (typeof errorRate === "number") {
             segments.push(`err_rate ${(errorRate * 100).toFixed(0)}%`);
           }
           if (circuitActive === true) {
             segments.push("circuit OPEN");
+          }
+          if (
+            typeof providerChainUsable === "number" &&
+            typeof providerChainConfigured === "number"
+          ) {
+            segments.push(
+              `providers ${providerChainUsable}/${providerChainConfigured}`,
+            );
+          }
+          if (lastSuccessProvider) {
+            segments.push(`last_ok ${lastSuccessProvider}`);
           }
           lines.push(`• AI runtime: ${segments.join(", ")}`);
         }

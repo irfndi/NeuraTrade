@@ -247,6 +247,47 @@ func TestAIScalpingService_ParseDecisionWithRetries_InvalidAction(t *testing.T) 
 	assert.Equal(t, 1, mockLLM.CallCount)
 }
 
+func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
+	category := normalizeHoldReasonCategory(
+		reasonCategoryStrategyHold,
+		"model response parse fallback (context deadline exceeded)",
+	)
+	assert.Equal(t, reasonCategoryLLMTimeout, category)
+
+	category = normalizeHoldReasonCategory("", "waiting for qualified setup")
+	assert.Equal(t, reasonCategoryStrategyHold, category)
+}
+
+func TestParseAIDecisionJSONObject_DoesNotForceStrategyMetadata(t *testing.T) {
+	decision, err := parseAIDecisionJSONObject(`{"action":"hold","symbol":"BTC/USDT","size_pct":0,"confidence":0.1,"reasoning":"wait"}`)
+	assert.NoError(t, err)
+	assert.Equal(t, "hold", decision.Action)
+	assert.Equal(t, "", decision.ReasonCategory)
+	assert.False(t, decision.ConfidenceKnown)
+}
+
+func TestAIScalpingService_DynamicRiskThresholds_RecoveryModes(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MinConfidence: 0.65,
+			MaxCapitalPct: 5.00,
+		},
+	}
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT", "0.50")
+
+	minConf, maxCap := svc.dynamicRiskThresholds(context.Background(), TradingPortfolio{
+		RecoveryMode: recoveryModeMicroEntry,
+	})
+	assert.InDelta(t, 0.50, maxCap, 0.0001)
+	assert.GreaterOrEqual(t, minConf, 0.65)
+
+	minConf, maxCap = svc.dynamicRiskThresholds(context.Background(), TradingPortfolio{
+		RecoveryMode: recoveryModeDeriskOnly,
+	})
+	assert.InDelta(t, 0.10, maxCap, 0.0001)
+	assert.GreaterOrEqual(t, minConf, 0.85)
+}
+
 func TestAIScalpingService_ApplyControlledNoFillRecovery_StepLadder(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{

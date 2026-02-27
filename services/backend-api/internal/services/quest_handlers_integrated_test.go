@@ -372,6 +372,52 @@ func TestShouldSendScalpingDecisionNotification_EnvOverrides(t *testing.T) {
 	}))
 }
 
+func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testing.T) {
+	t.Setenv("NEURATRADE_RECOVERY_CLEAN_CYCLES", "3")
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
+	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT", "0.50")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"recovery_clean_cycles": 2,
+		},
+	}
+	state := handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+		RiskDrawdown: 0.35,
+	})
+	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
+	assert.False(t, state.EntryAllowed)
+	assert.Equal(t, 2, state.CleanCycles)
+
+	quest.Checkpoint["recovery_clean_cycles"] = 3
+	state = handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+		RiskDrawdown: 0.35,
+	})
+	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
+	assert.True(t, state.EntryAllowed)
+
+	state = handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+		RiskDrawdown: 0.41,
+	})
+	assert.Equal(t, recoveryModeDeriskOnly, state.Mode)
+	assert.False(t, state.EntryAllowed)
+}
+
+func TestIntegratedQuestHandlers_UpdateRecoveryCleanCycles_ResetOnFailure(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+
+	handlers.updateRecoveryCleanCycles(quest, true, "")
+	handlers.updateRecoveryCleanCycles(quest, true, "")
+	assert.Equal(t, 2, checkpointInt(quest.Checkpoint["recovery_clean_cycles"]))
+
+	handlers.updateRecoveryCleanCycles(quest, false, "runtime_error")
+	assert.Equal(t, 0, checkpointInt(quest.Checkpoint["recovery_clean_cycles"]))
+	assert.Equal(t, "runtime_error", checkpointString(quest.Checkpoint["recovery_last_reset_reason"]))
+}
+
 // hasExchange checks if a specific exchange exists in the list
 func hasExchange(exchanges []string, exchangeName string) bool {
 	for _, ex := range exchanges {

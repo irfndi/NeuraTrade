@@ -365,11 +365,29 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if reason, ok := chatRuntime["entry_gate_reason"].(string); ok && strings.TrimSpace(reason) != "" {
 			response["entry_gate_reason"] = strings.TrimSpace(reason)
 		}
+		if gateType, ok := chatRuntime["entry_gate_type"].(string); ok && strings.TrimSpace(gateType) != "" {
+			response["entry_gate_type"] = strings.TrimSpace(gateType)
+		}
 		if repairedAt, ok := chatRuntime["last_drift_repair_at"].(string); ok && strings.TrimSpace(repairedAt) != "" {
 			response["last_drift_repair_at"] = repairedAt
 		}
 		if cleanAt, ok := chatRuntime["last_clean_reconcile_at"].(string); ok && strings.TrimSpace(cleanAt) != "" {
 			response["last_clean_reconcile_at"] = cleanAt
+		}
+		if recoveryMode, ok := chatRuntime["recovery_mode"].(string); ok && strings.TrimSpace(recoveryMode) != "" {
+			response["recovery_mode"] = strings.TrimSpace(recoveryMode)
+		}
+		if cleanCycles, ok := chatRuntime["recovery_clean_cycles"]; ok {
+			response["recovery_clean_cycles"] = cleanCycles
+		}
+		if allowed, ok := chatRuntime["recovery_entry_allowed"].(bool); ok {
+			response["recovery_entry_allowed"] = allowed
+		}
+		if providerUsable, ok := chatRuntime["provider_chain_usable"]; ok {
+			response["provider_chain_usable"] = providerUsable
+		}
+		if providerConfigured, ok := chatRuntime["provider_chain_configured"]; ok {
+			response["provider_chain_configured"] = providerConfigured
 		}
 	}
 	if heartbeat := services.CurrentHeartbeatRuntime(); heartbeat != nil {

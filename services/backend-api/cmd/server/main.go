@@ -333,7 +333,7 @@ func run() error {
 		nil, // fundingCollector - interface{CheckFundingRates(ctx context.Context) error}
 		connectivityCheck,
 		checkpointStore,
-		nil, // riskManager - interface{CheckRiskLimits(ctx context.Context) interface{}}
+		services.NewHeartbeatRiskBridgeAdapter(),
 		notificationService,
 	)
 	services.RegisterHeartbeatRuntime(heartbeat)

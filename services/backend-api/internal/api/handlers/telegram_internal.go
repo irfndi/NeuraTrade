@@ -739,9 +739,35 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if rawReason, ok := diagnostics["entry_gate_reason"].(string); ok {
 			entryGateReason = strings.TrimSpace(rawReason)
 		}
+		entryGateType := ""
+		if rawType, ok := diagnostics["entry_gate_type"].(string); ok {
+			entryGateType = strings.TrimSpace(rawType)
+		}
 		runtimeStatus := "healthy"
 		if statusRaw, ok := rawRuntime["status"].(string); ok && strings.TrimSpace(statusRaw) != "" {
 			runtimeStatus = strings.ToLower(strings.TrimSpace(statusRaw))
+		}
+		providerChainUsable := 0
+		switch value := rawRuntime["provider_chain_usable"].(type) {
+		case int:
+			providerChainUsable = value
+		case int64:
+			providerChainUsable = int(value)
+		case float64:
+			providerChainUsable = int(value)
+		}
+		providerChainConfigured := 0
+		switch value := rawRuntime["provider_chain_configured"].(type) {
+		case int:
+			providerChainConfigured = value
+		case int64:
+			providerChainConfigured = int(value)
+		case float64:
+			providerChainConfigured = int(value)
+		}
+		runtimeReason := ""
+		if reason, ok := rawRuntime["runtime_degraded_reason"].(string); ok && strings.TrimSpace(reason) != "" {
+			runtimeReason = strings.TrimSpace(reason)
 		}
 
 		message := "AI runtime healthy"
@@ -763,6 +789,13 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 		if entryGateReason != "" {
 			message = entryGateReason
+		} else if runtimeReason != "" {
+			message = runtimeReason
+		}
+		if providerChainConfigured > 0 && providerChainUsable <= 1 {
+			if runtimeStatus == "healthy" {
+				message = "AI runtime healthy (single-provider chain; failover redundancy limited)"
+			}
 		}
 		details := gin.H{}
 		if errorRate, ok := rawRuntime["error_rate"].(float64); ok {
@@ -777,11 +810,19 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if circuitActive, ok := rawRuntime["circuit_active"].(bool); ok {
 			details["circuit_active"] = fmt.Sprintf("%t", circuitActive)
 		}
+		if runtimeReason != "" {
+			details["runtime_degraded_reason"] = runtimeReason
+		}
 		details["state_drift_active"] = fmt.Sprintf("%t", driftActive)
 		details["state_drift_positions"] = fmt.Sprintf("%d", driftPositions)
 		if entryGateReason != "" {
 			details["entry_gate_reason"] = entryGateReason
 		}
+		if entryGateType != "" {
+			details["entry_gate_type"] = entryGateType
+		}
+		details["provider_chain_configured"] = fmt.Sprintf("%d", providerChainConfigured)
+		details["provider_chain_usable"] = fmt.Sprintf("%d", providerChainUsable)
 
 		checks = append(checks, gin.H{
 			"name":     "ai-runtime",
