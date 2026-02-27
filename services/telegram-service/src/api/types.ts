@@ -198,7 +198,12 @@ export interface QuestDiagnosticsResponse {
   readonly state_drift_active?: boolean;
   readonly state_drift_positions?: number;
   readonly entry_gate_reason?: string;
-  readonly entry_gate_type?: "none" | "risk_lock" | "state_drift" | "runtime_circuit" | string;
+  readonly entry_gate_type?:
+    | "none"
+    | "risk_lock"
+    | "state_drift"
+    | "runtime_circuit"
+    | string;
   readonly recovery_mode?: "normal" | "derisk_only" | "micro_entry" | string;
   readonly recovery_clean_cycles?: number;
   readonly recovery_entry_allowed?: boolean;
