@@ -12,7 +12,6 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-
 func TestContext(t *testing.T) {
 	parent := context.Background()
 	ctx, cancel := Context(parent, 100*time.Millisecond)
