@@ -238,8 +238,8 @@ func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID str
 			continue
 		}
 		_ = a.eventBus.PublishSync(ctx, eventbus.Event{
-			Topic:     "market.tick",
-			Type:      "tick",
+			Topic: "market.tick",
+			Type:  "tick",
 			Payload: marketdata.MarketTickEvent{
 				TraceID:   uuid.New().String(),
 				Exchange:  exchangeID,

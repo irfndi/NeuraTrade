@@ -7,15 +7,15 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
+	"github.com/irfndi/neuratrade/internal/app/marketdata"
 	ccxtservice "github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/platform/retry"
 	"github.com/irfndi/neuratrade/internal/platform/supervisor"
 	"github.com/irfndi/neuratrade/internal/platform/timeout"
 	"github.com/irfndi/neuratrade/internal/ports"
-	"github.com/irfndi/neuratrade/internal/database"
-	"github.com/irfndi/neuratrade/internal/app/marketdata"
 )
 
 // Config holds bootstrap configuration.
@@ -45,29 +45,29 @@ func DefaultConfig() Config {
 
 // Application holds all initialized components.
 type Application struct {
-	Config      Config
-	Supervisor  *supervisor.Supervisor
-	ActorSystem *actor.System
-	EventBus    *eventbus.Bus
-	Timeout     *timeout.Config
-	Retry       *retry.Policy
-	Exchange    ports.ExchangeRegistry
-	State       ports.StateStore
-	Notifier    ports.Notifier
-	Policy      ports.PolicyEngine
-	KillSwitch  ports.KillSwitch
+	Config            Config
+	Supervisor        *supervisor.Supervisor
+	ActorSystem       *actor.System
+	EventBus          *eventbus.Bus
+	Timeout           *timeout.Config
+	Retry             *retry.Policy
+	Exchange          ports.ExchangeRegistry
+	State             ports.StateStore
+	Notifier          ports.Notifier
+	Policy            ports.PolicyEngine
+	KillSwitch        ports.KillSwitch
 	CollectorActor    *marketdata.CollectorActor
 	CollectorActorRef *actor.Ref
 }
 
 // Builder builds an Application.
 type Builder struct {
-	config     Config
-	exchanges  ports.ExchangeRegistry
-	state      ports.StateStore
-	notifier   ports.Notifier
-	policy     ports.PolicyEngine
-	killSwitch ports.KillSwitch
+	config       Config
+	exchanges    ports.ExchangeRegistry
+	state        ports.StateStore
+	notifier     ports.Notifier
+	policy       ports.PolicyEngine
+	killSwitch   ports.KillSwitch
 	db           database.DBPool
 	collectorCfg marketdata.Config
 }

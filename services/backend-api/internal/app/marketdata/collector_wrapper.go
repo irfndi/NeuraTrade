@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
+	md "github.com/irfndi/neuratrade/internal/domain/marketdata"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
-	md "github.com/irfndi/neuratrade/internal/domain/marketdata"
 )
 
 // CollectorServiceWrapper provides backward-compatible API for existing CollectorService callers.
