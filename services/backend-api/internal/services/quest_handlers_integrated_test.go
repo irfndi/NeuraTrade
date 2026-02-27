@@ -418,6 +418,58 @@ func TestIntegratedQuestHandlers_UpdateRecoveryCleanCycles_ResetOnFailure(t *tes
 	assert.Equal(t, "runtime_error", checkpointString(quest.Checkpoint["recovery_last_reset_reason"]))
 }
 
+func TestIntegratedQuestHandlers_EvaluateEntryAttemptGateState_BudgetLimit(t *testing.T) {
+	t.Setenv("NEURATRADE_LIVENESS_IDLE_MINUTES", "45")
+	t.Setenv("NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR", "3")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	now := time.Now().UTC()
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"runtime_entry_attempt_window_started_at": now.Add(-15 * time.Minute).Format(time.RFC3339),
+			"runtime_entry_attempts_1h":               3,
+		},
+	}
+	state := handlers.evaluateEntryAttemptGateState(quest, TradingPortfolio{
+		USDTBalance:        10,
+		TotalValue:         100,
+		OpenPositions:      0,
+		DriftActive:        false,
+		RecoveryEntryOK:    true,
+		NoFillMinutes:      60,
+		RiskDrawdown:       0.20,
+		RecoveryMode:       recoveryModeNormal,
+		RecoveryCleanCycle: 0,
+	}, now)
+
+	assert.True(t, state.Forced)
+	assert.False(t, state.AllowNow)
+	assert.Equal(t, 3, state.AttemptsInWindow)
+	assert.Contains(t, state.BlockReason, "budget reached")
+	assert.Contains(t, state.NextCondition, "Next entry-attempt window opens")
+}
+
+func TestIntegratedQuestHandlers_RecordEntryAttempt_RotatesWindow(t *testing.T) {
+	t.Setenv("NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR", "3")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	now := time.Now().UTC()
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"runtime_entry_attempt_window_started_at": now.Add(-2 * time.Hour).Format(time.RFC3339),
+			"runtime_entry_attempts_1h":               2,
+		},
+	}
+
+	handlers.recordEntryAttempt(quest, now, entryAttemptGateState{MaxAttemptsPerHour: 3})
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["runtime_entry_attempts_1h"]))
+	assert.Equal(t, "1/3 in current 1h window", checkpointString(quest.Checkpoint["runtime_entry_attempt_window_progress"]))
+
+	windowStart, ok := checkpointRFC3339(quest.Checkpoint["runtime_entry_attempt_window_started_at"])
+	require.True(t, ok)
+	assert.WithinDuration(t, now, windowStart, time.Second)
+}
+
 // hasExchange checks if a specific exchange exists in the list
 func hasExchange(exchanges []string, exchangeName string) bool {
 	for _, ex := range exchanges {

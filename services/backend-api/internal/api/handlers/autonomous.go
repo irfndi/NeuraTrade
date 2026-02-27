@@ -368,6 +368,27 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if gateType, ok := chatRuntime["entry_gate_type"].(string); ok && strings.TrimSpace(gateType) != "" {
 			response["entry_gate_type"] = strings.TrimSpace(gateType)
 		}
+		if blockReason, ok := chatRuntime["entry_attempt_block_reason"].(string); ok && strings.TrimSpace(blockReason) != "" {
+			response["entry_attempt_block_reason"] = strings.TrimSpace(blockReason)
+		}
+		if nextCondition, ok := chatRuntime["next_unblock_condition"].(string); ok && strings.TrimSpace(nextCondition) != "" {
+			response["next_unblock_condition"] = strings.TrimSpace(nextCondition)
+		}
+		if attemptsInWindow, ok := chatRuntime["entry_attempts_1h"]; ok {
+			response["entry_attempts_1h"] = attemptsInWindow
+		}
+		if lastAttemptAt, ok := chatRuntime["last_entry_attempt_at"].(string); ok && strings.TrimSpace(lastAttemptAt) != "" {
+			response["last_entry_attempt_at"] = strings.TrimSpace(lastAttemptAt)
+		}
+		if minutesSince, ok := chatRuntime["minutes_since_entry_attempt"]; ok {
+			response["minutes_since_entry_attempt"] = minutesSince
+		}
+		if driftSignature, ok := chatRuntime["drift_signature"].(string); ok && strings.TrimSpace(driftSignature) != "" {
+			response["drift_signature"] = strings.TrimSpace(driftSignature)
+		}
+		if driftDeadlockCycles, ok := chatRuntime["drift_deadlock_cycles"]; ok {
+			response["drift_deadlock_cycles"] = driftDeadlockCycles
+		}
 		if repairedAt, ok := chatRuntime["last_drift_repair_at"].(string); ok && strings.TrimSpace(repairedAt) != "" {
 			response["last_drift_repair_at"] = repairedAt
 		}

@@ -587,6 +587,7 @@ func (e *QuestEngine) determineCadenceModeLocked() string {
 
 	activeQuests := 0
 	degraded := false
+	driftActive := false
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
 			continue
@@ -595,10 +596,17 @@ func (e *QuestEngine) determineCadenceModeLocked() string {
 		if readQuestMetricInt(quest.Checkpoint["runtime_failure_streak"]) > 0 {
 			degraded = true
 		}
+		if readQuestMetricBool(quest.Checkpoint["state_drift_active"]) {
+			driftActive = true
+		}
 	}
 
 	if activeQuests == 0 {
 		return "idle"
+	}
+	// During drift reconciliation keep cadence at 60s checks to speed gate clearing.
+	if driftActive {
+		return "normal"
 	}
 	if len(e.executing) > 0 {
 		return "active_risk"
@@ -1263,8 +1271,15 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		"state_drift_last_checked_at": "",
 		"entry_gate_reason":           "",
 		"entry_gate_type":             "none",
+		"last_entry_attempt_at":       "",
+		"minutes_since_entry_attempt": 0.0,
+		"entry_attempts_1h":           0,
+		"entry_attempt_block_reason":  "",
+		"next_unblock_condition":      "",
 		"last_drift_repair_at":        "",
 		"last_clean_reconcile_at":     "",
+		"drift_signature":             "",
+		"drift_deadlock_cycles":       0,
 		"last_startup_reconcile":      "",
 		"last_spot_unwind":            "",
 		"last_hold_digest":            "",
@@ -1282,6 +1297,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		lastStartupReconcile  time.Time
 		lastSpotUnwind        time.Time
 		lastHoldDigest        time.Time
+		lastEntryAttempt      time.Time
 		latestFailureAt       time.Time
 		holdStreak            int
 		unlockCycles          int
@@ -1291,6 +1307,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		recoveryMode          string
 		recoveryNextCondition string
 		recoveryCleanCycles   int
+		entryAttempts1h       int
+		entryAttemptBlock     string
+		nextUnblockCondition  string
+		driftSignature        string
+		driftDeadlockCycles   int
 		recoveryEntryAllowed  = true
 		stateDriftActive      bool
 		stateDriftPositions   int
@@ -1343,6 +1364,9 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if nextCondition := readQuestMetricString(cp["recovery_next_condition"]); nextCondition != "" {
 			recoveryNextCondition = nextCondition
 		}
+		if unblock := readQuestMetricString(cp["runtime_next_unblock_condition"]); unblock != "" {
+			nextUnblockCondition = unblock
+		}
 		if _, exists := cp["recovery_entry_allowed"]; exists {
 			recoveryEntryAllowed = readQuestMetricBool(cp["recovery_entry_allowed"])
 		}
@@ -1362,17 +1386,28 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if ts := readCheckpointTime(cp["runtime_last_hold_digest_at"]); ts.After(lastHoldDigest) {
 			lastHoldDigest = ts
 		}
+		if ts := readCheckpointTime(cp["runtime_last_entry_attempt_at"]); ts.After(lastEntryAttempt) {
+			lastEntryAttempt = ts
+		}
 		if ts := readCheckpointTime(cp["runtime_last_failure_at"]); ts.After(latestFailureAt) {
 			latestFailureAt = ts
 		}
 		if ts := readCheckpointTime(cp["runtime_no_fill_since"]); ts.After(noFillSince) {
 			noFillSince = ts
 		}
+		entryAttempts1h = maxInt(entryAttempts1h, readQuestMetricInt(cp["runtime_entry_attempts_1h"]))
+		if reason := readQuestMetricString(cp["runtime_entry_attempt_block_reason"]); reason != "" {
+			entryAttemptBlock = reason
+		}
 		if readQuestMetricBool(cp["state_drift_active"]) {
 			stateDriftActive = true
 		}
 		stateDriftPositions = maxInt(stateDriftPositions, readQuestMetricInt(cp["state_drift_positions"]))
 		stateDriftPositions = maxInt(stateDriftPositions, readQuestMetricInt(cp["state_drift_count"]))
+		driftDeadlockCycles = maxInt(driftDeadlockCycles, readQuestMetricInt(cp["state_drift_deadlock_cycles"]))
+		if sig := readQuestMetricString(cp["state_drift_signature"]); sig != "" {
+			driftSignature = sig
+		}
 		if ts := readCheckpointTime(cp["state_drift_last_checked_at"]); ts.After(stateDriftLastChecked) {
 			stateDriftLastChecked = ts
 		}
@@ -1440,10 +1475,20 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if strings.TrimSpace(recoveryNextCondition) != "" {
 		result["recovery_next_condition"] = recoveryNextCondition
 	}
+	if strings.TrimSpace(nextUnblockCondition) == "" {
+		nextUnblockCondition = recoveryNextCondition
+	}
+	if strings.TrimSpace(nextUnblockCondition) != "" {
+		result["next_unblock_condition"] = strings.TrimSpace(nextUnblockCondition)
+	}
 	result["risk_max_drawdown"] = riskMaxDrawdown
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions
 	result["state_drift_count"] = stateDriftPositions
+	result["drift_deadlock_cycles"] = driftDeadlockCycles
+	if strings.TrimSpace(driftSignature) != "" {
+		result["drift_signature"] = strings.TrimSpace(driftSignature)
+	}
 	if !stateDriftLastChecked.IsZero() {
 		result["state_drift_last_checked_at"] = stateDriftLastChecked.Format(time.RFC3339)
 	}
@@ -1476,6 +1521,10 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		result["entry_gate_reason"] = strings.TrimSpace(entryGateReason)
 	}
 	result["entry_gate_type"] = entryGateType
+	result["entry_attempts_1h"] = entryAttempts1h
+	if strings.TrimSpace(entryAttemptBlock) != "" {
+		result["entry_attempt_block_reason"] = strings.TrimSpace(entryAttemptBlock)
+	}
 	result["runtime_failure_streak"] = failureStreak
 	if !lastStartupReconcile.IsZero() {
 		result["last_startup_reconcile"] = lastStartupReconcile.Format(time.RFC3339)
@@ -1485,6 +1534,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	}
 	if !lastHoldDigest.IsZero() {
 		result["last_hold_digest"] = lastHoldDigest.Format(time.RFC3339)
+	}
+	if !lastEntryAttempt.IsZero() {
+		nowForAttempt := time.Now().UTC()
+		result["last_entry_attempt_at"] = lastEntryAttempt.Format(time.RFC3339)
+		result["minutes_since_entry_attempt"] = nowForAttempt.Sub(lastEntryAttempt).Minutes()
 	}
 	if !latestFailureAt.IsZero() {
 		result["runtime_last_failure_at"] = latestFailureAt.Format(time.RFC3339)

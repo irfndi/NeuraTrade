@@ -253,10 +253,53 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           diagnostics.entry_gate_reason;
         const entryGateType =
           readStringField(chatRuntime, "entry_gate_type") || "none";
+        const entryAttemptBlockReason =
+          readStringField(chatRuntime, "entry_attempt_block_reason") ||
+          diagnostics.entry_attempt_block_reason;
+        const nextUnblockCondition =
+          readStringField(chatRuntime, "next_unblock_condition") ||
+          diagnostics.next_unblock_condition;
+        const entryAttempts1h =
+          readNumberField(chatRuntime, "entry_attempts_1h") ??
+          diagnostics.entry_attempts_1h;
+        const lastEntryAttemptAt =
+          readStringField(chatRuntime, "last_entry_attempt_at") ||
+          diagnostics.last_entry_attempt_at;
+        const minutesSinceEntryAttempt =
+          readNumberField(chatRuntime, "minutes_since_entry_attempt") ??
+          diagnostics.minutes_since_entry_attempt;
+        const driftDeadlockCycles =
+          readNumberField(chatRuntime, "drift_deadlock_cycles") ??
+          diagnostics.drift_deadlock_cycles;
+        const driftSignature =
+          readStringField(chatRuntime, "drift_signature") ||
+          diagnostics.drift_signature;
         if (entryGateReason) {
           lines.push(`• Entry gate reason: ${entryGateReason}`);
         }
         lines.push(`• Entry gate type: ${entryGateType}`);
+        if (entryAttemptBlockReason) {
+          lines.push(`• Entry attempt block: ${entryAttemptBlockReason}`);
+        }
+        if (nextUnblockCondition) {
+          lines.push(`• Next unblock: ${nextUnblockCondition}`);
+        }
+        if (typeof entryAttempts1h === "number") {
+          lines.push(`• Entry attempts (1h): ${entryAttempts1h}`);
+        }
+        if (lastEntryAttemptAt) {
+          const minutesText =
+            typeof minutesSinceEntryAttempt === "number"
+              ? ` (${minutesSinceEntryAttempt.toFixed(1)}m ago)`
+              : "";
+          lines.push(`• Last entry attempt: ${lastEntryAttemptAt}${minutesText}`);
+        }
+        if (typeof driftDeadlockCycles === "number" && driftDeadlockCycles > 0) {
+          lines.push(`• Drift deadlock cycles: ${driftDeadlockCycles}`);
+        }
+        if (driftSignature) {
+          lines.push(`• Drift signature: ${driftSignature}`);
+        }
 
         const recoveryMode =
           readStringField(chatRuntime, "recovery_mode") || "normal";

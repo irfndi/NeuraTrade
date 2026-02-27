@@ -743,6 +743,49 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if rawType, ok := diagnostics["entry_gate_type"].(string); ok {
 			entryGateType = strings.TrimSpace(rawType)
 		}
+		nextUnblockCondition := ""
+		if rawNext, ok := diagnostics["next_unblock_condition"].(string); ok {
+			nextUnblockCondition = strings.TrimSpace(rawNext)
+		}
+		entryAttemptBlockReason := ""
+		if rawBlock, ok := diagnostics["entry_attempt_block_reason"].(string); ok {
+			entryAttemptBlockReason = strings.TrimSpace(rawBlock)
+		}
+		entryAttempts1h := 0
+		switch value := diagnostics["entry_attempts_1h"].(type) {
+		case int:
+			entryAttempts1h = value
+		case int64:
+			entryAttempts1h = int(value)
+		case float64:
+			entryAttempts1h = int(value)
+		}
+		lastEntryAttemptAt := ""
+		if rawLast, ok := diagnostics["last_entry_attempt_at"].(string); ok {
+			lastEntryAttemptAt = strings.TrimSpace(rawLast)
+		}
+		minutesSinceEntryAttempt := 0.0
+		switch value := diagnostics["minutes_since_entry_attempt"].(type) {
+		case float64:
+			minutesSinceEntryAttempt = value
+		case int:
+			minutesSinceEntryAttempt = float64(value)
+		case int64:
+			minutesSinceEntryAttempt = float64(value)
+		}
+		driftSignature := ""
+		if rawSignature, ok := diagnostics["drift_signature"].(string); ok {
+			driftSignature = strings.TrimSpace(rawSignature)
+		}
+		driftDeadlockCycles := 0
+		switch value := diagnostics["drift_deadlock_cycles"].(type) {
+		case int:
+			driftDeadlockCycles = value
+		case int64:
+			driftDeadlockCycles = int(value)
+		case float64:
+			driftDeadlockCycles = int(value)
+		}
 		runtimeStatus := "healthy"
 		if statusRaw, ok := rawRuntime["status"].(string); ok && strings.TrimSpace(statusRaw) != "" {
 			runtimeStatus = strings.ToLower(strings.TrimSpace(statusRaw))
@@ -769,6 +812,20 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if reason, ok := rawRuntime["runtime_degraded_reason"].(string); ok && strings.TrimSpace(reason) != "" {
 			runtimeReason = strings.TrimSpace(reason)
 		}
+		if entryGateReason == "" {
+			switch entryGateType {
+			case "risk_lock":
+				entryGateReason = "entry blocked by risk lock"
+			case "state_drift":
+				entryGateReason = fmt.Sprintf("entry blocked by state drift (%d mismatch(es))", driftPositions)
+			case "runtime_circuit":
+				entryGateReason = "entry blocked by AI runtime circuit breaker"
+			case "none":
+				if entryAttemptBlockReason != "" {
+					entryGateReason = entryAttemptBlockReason
+				}
+			}
+		}
 
 		message := "AI runtime healthy"
 		if driftActive {
@@ -789,6 +846,9 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 		if entryGateReason != "" {
 			message = entryGateReason
+			if nextUnblockCondition != "" {
+				message = fmt.Sprintf("%s (next: %s)", message, nextUnblockCondition)
+			}
 		} else if runtimeReason != "" {
 			message = runtimeReason
 		}
@@ -815,11 +875,26 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 		details["state_drift_active"] = fmt.Sprintf("%t", driftActive)
 		details["state_drift_positions"] = fmt.Sprintf("%d", driftPositions)
+		details["drift_deadlock_cycles"] = fmt.Sprintf("%d", driftDeadlockCycles)
+		details["entry_attempts_1h"] = fmt.Sprintf("%d", entryAttempts1h)
+		details["minutes_since_entry_attempt"] = fmt.Sprintf("%.1f", minutesSinceEntryAttempt)
 		if entryGateReason != "" {
 			details["entry_gate_reason"] = entryGateReason
 		}
 		if entryGateType != "" {
 			details["entry_gate_type"] = entryGateType
+		}
+		if entryAttemptBlockReason != "" {
+			details["entry_attempt_block_reason"] = entryAttemptBlockReason
+		}
+		if nextUnblockCondition != "" {
+			details["next_unblock_condition"] = nextUnblockCondition
+		}
+		if lastEntryAttemptAt != "" {
+			details["last_entry_attempt_at"] = lastEntryAttemptAt
+		}
+		if driftSignature != "" {
+			details["drift_signature"] = driftSignature
 		}
 		details["provider_chain_configured"] = fmt.Sprintf("%d", providerChainConfigured)
 		details["provider_chain_usable"] = fmt.Sprintf("%d", providerChainUsable)

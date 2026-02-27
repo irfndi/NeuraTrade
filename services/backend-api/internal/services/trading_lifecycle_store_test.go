@@ -287,6 +287,100 @@ func TestTradingLifecycleStore_RecordClosedOrder_ClosesSyncRowInPlace(t *testing
 	assert.Equal(t, 1, rowCount)
 }
 
+func TestTradingLifecycleStore_RecordClosedOrder_PrefersOpenSyncRowOverLegacyOrderMapping(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-ordermap.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	syncID := "sync-bitget-ada-usdt-long"
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(8),
+		EntryPrice:    decimal.NewFromFloat(0.30),
+		MarkPrice:     decimal.NewFromFloat(0.29),
+		UnrealizedPnl: decimal.NewFromFloat(-0.08),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	// Simulate legacy/incorrect mapping row from an earlier bad close path.
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO trading_orders (
+			order_id, position_id, chat_id, exchange, symbol, side, type, market_type,
+			amount, price, filled_amount, status, source, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'market','futures',$7,$8,$9,'closed',$10,$11,$12)
+		ON CONFLICT(order_id) DO UPDATE SET
+			position_id = EXCLUDED.position_id,
+			status = EXCLUDED.status,
+			source = EXCLUDED.source,
+			updated_at = EXCLUDED.updated_at
+	`,
+		syncID,
+		"pos-"+syncID,
+		"chat-1",
+		"bitget",
+		"ADA/USDT",
+		"buy",
+		decimal.NewFromFloat(8),
+		decimal.NewFromFloat(0.30),
+		decimal.NewFromFloat(8),
+		"adaptive_time_stop_close_exchange_missing",
+		time.Now().UTC(),
+		time.Now().UTC(),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     syncID,
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ADA/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(8),
+		EntryPrice:  decimal.NewFromFloat(0.30),
+		ExitPrice:   decimal.NewFromFloat(0.29),
+		RealizedPnL: decimal.Zero,
+		Source:      "state_drift_deadlock_clear",
+		ClosedAt:    time.Now().UTC(),
+	}))
+
+	var syncStatus string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT LOWER(status)
+		FROM trading_positions
+		WHERE position_id = $1
+	`, syncID).Scan(&syncStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", syncStatus)
+
+	var openSync int
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM trading_positions
+		WHERE position_id = $1
+		  AND LOWER(status) = 'open'
+	`, syncID).Scan(&openSync)
+	require.NoError(t, err)
+	assert.Equal(t, 0, openSync)
+
+	var openPosSync int
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM trading_positions
+		WHERE position_id = $1
+		  AND LOWER(status) = 'open'
+	`, "pos-"+syncID).Scan(&openPosSync)
+	require.NoError(t, err)
+	assert.Equal(t, 0, openPosSync)
+}
+
 func TestTradingLifecycleStore_RepairMissingSyncPositions_ClosesMissingRows(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-repair.db"))
 	require.NoError(t, err)

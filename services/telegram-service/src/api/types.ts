@@ -203,7 +203,25 @@ export interface QuestDiagnosticsResponse {
     | "risk_lock"
     | "state_drift"
     | "runtime_circuit"
+    | "recovery_gate"
     | string;
+  readonly recovery_gate_reason?: string;
+  readonly risk_lock_source?:
+    | "manual_env"
+    | "portfolio_safety"
+    | "drawdown_threshold"
+    | "none"
+    | string;
+  readonly execution_stage?: "lock" | "handler" | "persist" | "done" | string;
+  readonly execution_last_progress_at?: string;
+  readonly execution_in_progress_age_seconds?: number;
+  readonly entry_attempt_block_reason?: string;
+  readonly next_unblock_condition?: string;
+  readonly last_entry_attempt_at?: string;
+  readonly minutes_since_entry_attempt?: number;
+  readonly entry_attempts_1h?: number;
+  readonly drift_signature?: string;
+  readonly drift_deadlock_cycles?: number;
   readonly recovery_mode?: "normal" | "derisk_only" | "micro_entry" | string;
   readonly recovery_clean_cycles?: number;
   readonly recovery_entry_allowed?: boolean;

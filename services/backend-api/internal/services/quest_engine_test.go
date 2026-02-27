@@ -605,6 +605,55 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	}
 }
 
+func TestGetChatRuntimeDiagnostics_IncludesLivenessAndDeadlockFields(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-liveness"] = &Quest{
+		ID:     "q-liveness",
+		Status: QuestStatusActive,
+		Metadata: map[string]string{
+			"chat_id":       "chat-liveness",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"runtime_entry_attempts_1h":          2,
+			"runtime_entry_attempt_block_reason": "liveness entry-attempt budget reached",
+			"runtime_next_unblock_condition":     "Next entry-attempt window opens at 2026-02-27T12:00:00Z",
+			"runtime_last_entry_attempt_at":      now.Add(-8 * time.Minute).Format(time.RFC3339),
+			"state_drift_signature":              "sync-1|sync-2",
+			"state_drift_deadlock_cycles":        6,
+			"state_drift_active":                 true,
+			"state_drift_positions":              2,
+			"runtime_entry_gate_reason":          "state drift detected",
+			"entry_gate_type":                    "state_drift",
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-liveness")
+
+	if attempts, _ := diag["entry_attempts_1h"].(int); attempts != 2 {
+		t.Fatalf("expected entry_attempts_1h=2, got %d", attempts)
+	}
+	if blockReason, _ := diag["entry_attempt_block_reason"].(string); blockReason == "" {
+		t.Fatal("expected entry_attempt_block_reason to be populated")
+	}
+	if unblock, _ := diag["next_unblock_condition"].(string); unblock == "" {
+		t.Fatal("expected next_unblock_condition to be populated")
+	}
+	if signature, _ := diag["drift_signature"].(string); signature != "sync-1|sync-2" {
+		t.Fatalf("expected drift_signature=sync-1|sync-2, got %q", signature)
+	}
+	if deadlockCycles, _ := diag["drift_deadlock_cycles"].(int); deadlockCycles != 6 {
+		t.Fatalf("expected drift_deadlock_cycles=6, got %d", deadlockCycles)
+	}
+	if _, ok := diag["last_entry_attempt_at"].(string); !ok {
+		t.Fatal("expected last_entry_attempt_at in diagnostics")
+	}
+	if minutes, ok := diag["minutes_since_entry_attempt"].(float64); !ok || minutes <= 0 {
+		t.Fatalf("expected minutes_since_entry_attempt > 0, got %#v", diag["minutes_since_entry_attempt"])
+	}
+}
+
 func TestListActiveAutonomousChatIDs(t *testing.T) {
 	engine := NewQuestEngine(NewInMemoryQuestStore())
 	engine.autonomousState["chat-a"] = &AutonomousState{ChatID: "chat-a", IsActive: true}

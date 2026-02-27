@@ -268,6 +268,12 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 	if category != "" {
 		lines = append(lines, fmt.Sprintf("**Reason Category:** %s", category))
 	}
+	if strings.TrimSpace(reasoning.UnblockCondition) != "" {
+		lines = append(lines, fmt.Sprintf("**Unblock Condition:** %s", strings.TrimSpace(reasoning.UnblockCondition)))
+	}
+	if strings.TrimSpace(reasoning.AttemptWindowProgress) != "" {
+		lines = append(lines, fmt.Sprintf("**Attempt Window:** %s", strings.TrimSpace(reasoning.AttemptWindowProgress)))
+	}
 
 	if len(reasoning.Reasons) > 0 {
 		lines = append(lines, "", "**Key Factors:**")
