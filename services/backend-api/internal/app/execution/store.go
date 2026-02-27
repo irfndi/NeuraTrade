@@ -1,0 +1,430 @@
+package execution
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/irfndi/neuratrade/internal/ports"
+	"github.com/shopspring/decimal"
+)
+
+// SQLIdempotencyStore implements IdempotencyStore using SQL database
+type SQLIdempotencyStore struct {
+	db *sql.DB
+}
+
+// NewSQLIdempotencyStore creates a new SQL-backed idempotency store
+func NewSQLIdempotencyStore(db *sql.DB) (*SQLIdempotencyStore, error) {
+	store := &SQLIdempotencyStore{db: db}
+	if err := store.ensureTable(); err != nil {
+		return nil, fmt.Errorf("ensure idempotency table: %w", err)
+	}
+	return store, nil
+}
+
+// ensureTable creates the idempotency table if it doesn't exist
+func (s *SQLIdempotencyStore) ensureTable() error {
+	query := `
+	CREATE TABLE IF NOT EXISTS order_intents (
+		intent_id TEXT PRIMARY KEY,
+		client_order_id TEXT UNIQUE NOT NULL,
+		exchange_order_id TEXT,
+		status TEXT NOT NULL,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		order_type TEXT NOT NULL,
+		amount TEXT NOT NULL,
+		price TEXT,
+		stop_price TEXT,
+		take_profit TEXT,
+		reduce_only BOOLEAN,
+		post_only BOOLEAN,
+		filled_amount TEXT DEFAULT '0',
+		fill_price TEXT DEFAULT '0',
+		reject_reason TEXT,
+		attempt_count INTEGER DEFAULT 1,
+		submitted_at TIMESTAMP NOT NULL,
+		updated_at TIMESTAMP NOT NULL,
+		strategy_id TEXT,
+		signal_id TEXT,
+		metadata TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_order_intents_client_id ON order_intents(client_order_id);
+	CREATE INDEX IF NOT EXISTS idx_order_intents_exchange_id ON order_intents(exchange_order_id);
+	CREATE INDEX IF NOT EXISTS idx_order_intents_status ON order_intents(status);
+	CREATE INDEX IF NOT EXISTS idx_order_intents_submitted ON order_intents(submitted_at);
+	`
+	_, err := s.db.Exec(query)
+	return err
+}
+
+// SaveIntent persists a new order intent
+func (s *SQLIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderIntent) error {
+	_, _ = json.Marshal(intent.Request) // Metadata stored separately in columns
+
+	query := `
+	INSERT INTO order_intents (
+		intent_id, client_order_id, exchange_order_id, status,
+		exchange, symbol, side, order_type, amount, price,
+		stop_price, take_profit, reduce_only, post_only,
+		filled_amount, fill_price, reject_reason, attempt_count,
+		submitted_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err := s.db.ExecContext(ctx, query,
+		intent.IntentID,
+		intent.ClientOrderID,
+		intent.ExchangeOrderID,
+		string(intent.Status),
+		intent.Request.Exchange,
+		intent.Request.Symbol,
+		string(intent.Request.Side),
+		string(intent.Request.Type),
+		intent.Request.Amount.String(),
+		nullDecimal(intent.Request.Price),
+		nullDecimal(intent.Request.StopPrice),
+		nullDecimal(intent.Request.TakeProfit),
+		intent.Request.ReduceOnly,
+		intent.Request.PostOnly,
+		intent.FilledAmount.String(),
+		intent.FillPrice.String(),
+		intent.RejectReason,
+		intent.AttemptCount,
+		intent.SubmittedAt,
+		intent.UpdatedAt,
+	)
+
+	return err
+}
+
+// GetIntent retrieves an intent by IntentID
+func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*OrderIntent, error) {
+	query := `
+	SELECT intent_id, client_order_id, exchange_order_id, status,
+		exchange, symbol, side, order_type, amount, price,
+		stop_price, take_profit, reduce_only, post_only,
+		filled_amount, fill_price, reject_reason, attempt_count,
+		submitted_at, updated_at
+	FROM order_intents WHERE intent_id = ?
+	`
+
+	var intent OrderIntent
+	var statusStr, sideStr, typeStr string
+	var amountStr, priceStr, stopPriceStr, takeProfitStr, filledStr, fillPriceStr string
+
+	err := s.db.QueryRowContext(ctx, query, intentID).Scan(
+		&intent.IntentID,
+		&intent.ClientOrderID,
+		&intent.ExchangeOrderID,
+		&statusStr,
+		&intent.Request.Exchange,
+		&intent.Request.Symbol,
+		&sideStr,
+		&typeStr,
+		&amountStr,
+		&priceStr,
+		&stopPriceStr,
+		&takeProfitStr,
+		&intent.Request.ReduceOnly,
+		&intent.Request.PostOnly,
+		&filledStr,
+		&fillPriceStr,
+		&intent.RejectReason,
+		&intent.AttemptCount,
+		&intent.SubmittedAt,
+		&intent.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse enums
+	intent.Status = parseOrderStatus(statusStr)
+	intent.Request.Side = parseOrderSide(sideStr)
+	intent.Request.Type = parseOrderType(typeStr)
+
+	// Parse decimals
+	intent.Request.Amount = parseDecimal(amountStr)
+	intent.Request.Price = parseNullableDecimal(priceStr)
+	intent.Request.StopPrice = parseNullableDecimal(stopPriceStr)
+	intent.Request.TakeProfit = parseNullableDecimal(takeProfitStr)
+	intent.FilledAmount = parseDecimal(filledStr)
+	intent.FillPrice = parseDecimal(fillPriceStr)
+
+	return &intent, nil
+}
+
+// GetIntentByClientID retrieves an intent by ClientOrderID
+func (s *SQLIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID string) (*OrderIntent, error) {
+	query := `
+	SELECT intent_id FROM order_intents WHERE client_order_id = ?
+	`
+
+	var intentID string
+	err := s.db.QueryRowContext(ctx, query, clientID).Scan(&intentID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return s.GetIntent(ctx, intentID)
+}
+
+// UpdateIntent updates an existing intent
+func (s *SQLIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderIntent) error {
+	intent.UpdatedAt = time.Now()
+
+	query := `
+	UPDATE order_intents SET
+		exchange_order_id = ?,
+		status = ?,
+		filled_amount = ?,
+		fill_price = ?,
+		reject_reason = ?,
+		attempt_count = ?,
+		updated_at = ?
+	WHERE intent_id = ?
+	`
+
+	result, err := s.db.ExecContext(ctx, query,
+		intent.ExchangeOrderID,
+		string(intent.Status),
+		intent.FilledAmount.String(),
+		intent.FillPrice.String(),
+		intent.RejectReason,
+		intent.AttemptCount,
+		intent.UpdatedAt,
+		intent.IntentID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return errors.New("intent not found")
+	}
+
+	return nil
+}
+
+// SQLAuditLogger implements AuditLogger using SQL database
+type SQLAuditLogger struct {
+	db *sql.DB
+}
+
+// NewSQLAuditLogger creates a new SQL-backed audit logger
+func NewSQLAuditLogger(db *sql.DB) (*SQLAuditLogger, error) {
+	logger := &SQLAuditLogger{db: db}
+	if err := logger.ensureTable(); err != nil {
+		return nil, fmt.Errorf("ensure audit table: %w", err)
+	}
+	return logger, nil
+}
+
+// ensureTable creates the audit log table if it doesn't exist
+func (l *SQLAuditLogger) ensureTable() error {
+	query := `
+	CREATE TABLE IF NOT EXISTS order_audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_id TEXT UNIQUE NOT NULL,
+		intent_id TEXT NOT NULL,
+		client_order_id TEXT NOT NULL,
+		exchange_order_id TEXT,
+		event_type TEXT NOT NULL,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT,
+		amount TEXT,
+		price TEXT,
+		filled_amount TEXT,
+		fill_price TEXT,
+		reason TEXT,
+		metadata TEXT,
+		timestamp TIMESTAMP NOT NULL,
+		hash_chain TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_audit_intent ON order_audit_log(intent_id);
+	CREATE INDEX IF NOT EXISTS idx_audit_event_id ON order_audit_log(event_id);
+	CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON order_audit_log(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_audit_type ON order_audit_log(event_type);
+	`
+	_, err := l.db.Exec(query)
+	return err
+}
+
+// LogOrderEvent persists an audit event
+func (l *SQLAuditLogger) LogOrderEvent(ctx context.Context, event OrderAuditEvent) error {
+	metadataJSON, _ := json.Marshal(event.Metadata)
+
+	query := `
+	INSERT INTO order_audit_log (
+		event_id, intent_id, client_order_id, exchange_order_id,
+		event_type, exchange, symbol, side, amount, price,
+		filled_amount, fill_price, reason, metadata, timestamp, hash_chain
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err := l.db.ExecContext(ctx, query,
+		event.EventID,
+		event.IntentID,
+		event.ClientOrderID,
+		event.ExchangeOrderID,
+		event.EventType,
+		event.Exchange,
+		event.Symbol,
+		event.Side,
+		nullDecimal(event.Amount),
+		nullDecimal(event.Price),
+		nullDecimal(event.FilledAmount),
+		nullDecimal(event.FillPrice),
+		event.Reason,
+		string(metadataJSON),
+		event.Timestamp,
+		event.HashChain,
+	)
+
+	return err
+}
+
+// GetOrderHistory retrieves audit history for an intent
+func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) ([]OrderAuditEvent, error) {
+	query := `
+	SELECT event_id, intent_id, client_order_id, exchange_order_id,
+		event_type, exchange, symbol, side, amount, price,
+		filled_amount, fill_price, reason, metadata, timestamp, hash_chain
+	FROM order_audit_log
+	WHERE intent_id = ?
+	ORDER BY timestamp ASC
+	`
+
+	rows, err := l.db.QueryContext(ctx, query, intentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []OrderAuditEvent
+	for rows.Next() {
+		var event OrderAuditEvent
+		var amountStr, priceStr, filledStr, fillPriceStr string
+		var metadataStr string
+
+		err := rows.Scan(
+			&event.EventID,
+			&event.IntentID,
+			&event.ClientOrderID,
+			&event.ExchangeOrderID,
+			&event.EventType,
+			&event.Exchange,
+			&event.Symbol,
+			&event.Side,
+			&amountStr,
+			&priceStr,
+			&filledStr,
+			&fillPriceStr,
+			&event.Reason,
+			&metadataStr,
+			&event.Timestamp,
+			&event.HashChain,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		event.Amount = parseDecimal(amountStr)
+		event.Price = parseDecimal(priceStr)
+		event.FilledAmount = parseDecimal(filledStr)
+		event.FillPrice = parseDecimal(fillPriceStr)
+		json.Unmarshal([]byte(metadataStr), &event.Metadata)
+
+		events = append(events, event)
+	}
+
+	return events, rows.Err()
+}
+
+// Helper functions
+
+func nullDecimal(d decimal.Decimal) interface{} {
+	if d.IsZero() {
+		return nil
+	}
+	return d.String()
+}
+
+func parseDecimal(s string) decimal.Decimal {
+	d, _ := decimal.NewFromString(s)
+	return d
+}
+
+func parseNullableDecimal(s string) decimal.Decimal {
+	if s == "" {
+		return decimal.Zero
+	}
+	d, _ := decimal.NewFromString(s)
+	return d
+}
+
+func parseOrderStatus(s string) ports.OrderStatus {
+	switch s {
+	case "pending":
+		return ports.OrderStatusPending
+	case "open":
+		return ports.OrderStatusOpen
+	case "filled":
+		return ports.OrderStatusFilled
+	case "partial":
+		return ports.OrderStatusPartial
+	case "cancelled":
+		return ports.OrderStatusCancelled
+	case "rejected":
+		return ports.OrderStatusRejected
+	default:
+		return ports.OrderStatusPending
+	}
+}
+
+func parseOrderSide(s string) ports.OrderSide {
+	switch s {
+	case "buy":
+		return ports.OrderSideBuy
+	case "sell":
+		return ports.OrderSideSell
+	default:
+		return ports.OrderSideBuy
+	}
+}
+
+func parseOrderType(s string) ports.OrderType {
+	switch s {
+	case "market":
+		return ports.OrderTypeMarket
+	case "limit":
+		return ports.OrderTypeLimit
+	default:
+		return ports.OrderTypeMarket
+	}
+}
+
+// Compile-time interface checks
+var (
+	_ IdempotencyStore = (*SQLIdempotencyStore)(nil)
+	_ AuditLogger      = (*SQLAuditLogger)(nil)
+)
