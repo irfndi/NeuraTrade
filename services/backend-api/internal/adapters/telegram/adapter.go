@@ -173,12 +173,12 @@ func (a *Adapter) formatMessage(n ports.Notification) string {
 		buf.WriteString("*\n\n")
 	}
 
-// Add message
+	// Add message
 	buf.WriteString(n.Message)
 
 	// Add context info
 
-// Add context info
+	// Add context info
 	if n.Exchange != "" || n.Symbol != "" || n.StrategyID != "" {
 		buf.WriteString("\n\n_")
 		if n.Exchange != "" {
@@ -219,7 +219,7 @@ func (a *Adapter) sendMessage(ctx context.Context, chatID, text string) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", a.config.APIKey)
 
-resp, err := a.client.Do(req)
+	resp, err := a.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
