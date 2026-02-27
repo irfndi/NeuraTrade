@@ -583,40 +583,46 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 
 	if err := h.db.QueryRow(c.Request.Context(), "SELECT 1").Scan(new(int)); err != nil {
 		checks = append(checks, gin.H{
-			"name":    "database",
-			"status":  "critical",
-			"message": "database query failed",
+			"name":     "database",
+			"status":   "critical",
+			"impact":   "core",
+			"optional": false,
+			"message":  "database query failed",
 		})
 		overall = "critical"
 	} else {
 		checks = append(checks, gin.H{
-			"name":   "database",
-			"status": "healthy",
+			"name":     "database",
+			"status":   "healthy",
+			"impact":   "core",
+			"optional": false,
 		})
 	}
 
 	polymarketCount, err := h.countConnectedWallets(c.Request.Context(), chatID, "provider = 'polymarket' AND status = 'connected'")
 	if err != nil {
 		checks = append(checks, gin.H{
-			"name":    "polymarket-wallet",
-			"status":  "critical",
-			"message": "failed to verify polymarket wallet",
+			"name":     "polymarket-wallet",
+			"status":   "warning",
+			"impact":   "optional",
+			"optional": true,
+			"message":  "failed to verify polymarket wallet",
 		})
-		overall = "critical"
 	} else if polymarketCount == 0 {
-		if overall != "critical" {
-			overall = "warning"
-		}
 		checks = append(checks, gin.H{
-			"name":    "polymarket-wallet",
-			"status":  "warning",
-			"message": "connect one wallet with /connect_polymarket",
-			"details": gin.H{"count": "0"},
+			"name":     "polymarket-wallet",
+			"status":   "warning",
+			"impact":   "optional",
+			"optional": true,
+			"message":  "connect one wallet with /connect_polymarket",
+			"details":  gin.H{"count": "0"},
 		})
 	} else {
 		checks = append(checks, gin.H{
-			"name":   "polymarket-wallet",
-			"status": "healthy",
+			"name":     "polymarket-wallet",
+			"status":   "healthy",
+			"impact":   "optional",
+			"optional": true,
 			"details": gin.H{
 				"count": fmt.Sprintf("%d", polymarketCount),
 			},
@@ -638,15 +644,19 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			overall = "warning"
 		}
 		checks = append(checks, gin.H{
-			"name":    "exchange-connection",
-			"status":  "warning",
-			"message": "connect one exchange with /connect_exchange",
-			"details": gin.H{"count": "0"},
+			"name":     "exchange-connection",
+			"status":   "warning",
+			"impact":   "core",
+			"optional": false,
+			"message":  "connect one exchange with /connect_exchange",
+			"details":  gin.H{"count": "0"},
 		})
 	} else {
 		checks = append(checks, gin.H{
-			"name":   "exchange-connection",
-			"status": "healthy",
+			"name":     "exchange-connection",
+			"status":   "healthy",
+			"impact":   "core",
+			"optional": false,
 			"details": gin.H{
 				"count": fmt.Sprintf("%d", exchangeCount),
 			},
@@ -663,24 +673,313 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			overall = "warning"
 		}
 		checks = append(checks, gin.H{
-			"name":    "autonomous-mode",
-			"status":  "warning",
-			"message": "unable to determine mode state",
+			"name":     "autonomous-mode",
+			"status":   "warning",
+			"impact":   "core",
+			"optional": false,
+			"message":  "unable to determine mode state",
 		})
 	} else if autonomousEnabled {
 		checks = append(checks, gin.H{
-			"name":    "autonomous-mode",
-			"status":  "healthy",
-			"message": "autonomous mode is running",
+			"name":     "autonomous-mode",
+			"status":   "healthy",
+			"impact":   "core",
+			"optional": false,
+			"message":  "autonomous mode is running",
 		})
 	} else {
 		if overall == "healthy" {
 			overall = "warning"
 		}
 		checks = append(checks, gin.H{
-			"name":    "autonomous-mode",
-			"status":  "warning",
-			"message": "run /begin to start autonomous mode",
+			"name":     "autonomous-mode",
+			"status":   "warning",
+			"impact":   "core",
+			"optional": false,
+			"message":  "run /begin to start autonomous mode",
+		})
+	}
+
+	aiRuntimeImpact := "optional"
+	aiRuntimeOptional := true
+	if autonomousEnabled {
+		aiRuntimeImpact = "core"
+		aiRuntimeOptional = false
+	}
+	if h.questEngine == nil {
+		status := "warning"
+		message := "quest runtime diagnostics unavailable"
+		if aiRuntimeOptional {
+			status = "warning"
+		}
+		checks = append(checks, gin.H{
+			"name":     "ai-runtime",
+			"status":   status,
+			"impact":   aiRuntimeImpact,
+			"optional": aiRuntimeOptional,
+			"message":  message,
+		})
+		if !aiRuntimeOptional && overall != "critical" {
+			overall = "warning"
+		}
+	} else {
+		diagnostics := h.questEngine.GetChatRuntimeDiagnostics(chatID)
+		rawRuntime, _ := diagnostics["ai_runtime"].(map[string]interface{})
+		driftActive, _ := diagnostics["state_drift_active"].(bool)
+		driftPositions := 0
+		switch value := diagnostics["state_drift_positions"].(type) {
+		case int:
+			driftPositions = value
+		case int64:
+			driftPositions = int(value)
+		case float64:
+			driftPositions = int(value)
+		}
+		entryGateReason := ""
+		if rawReason, ok := diagnostics["entry_gate_reason"].(string); ok {
+			entryGateReason = strings.TrimSpace(rawReason)
+		}
+		entryGateType := ""
+		if rawType, ok := diagnostics["entry_gate_type"].(string); ok {
+			entryGateType = strings.TrimSpace(rawType)
+		}
+		nextUnblockCondition := ""
+		if rawNext, ok := diagnostics["next_unblock_condition"].(string); ok {
+			nextUnblockCondition = strings.TrimSpace(rawNext)
+		}
+		recoveryGateReason := ""
+		if rawRecoveryReason, ok := diagnostics["recovery_gate_reason"].(string); ok {
+			recoveryGateReason = strings.TrimSpace(rawRecoveryReason)
+		}
+		riskLockSource := ""
+		if rawSource, ok := diagnostics["risk_lock_source"].(string); ok {
+			riskLockSource = strings.TrimSpace(rawSource)
+		}
+		entryAttemptBlockReason := ""
+		if rawBlock, ok := diagnostics["entry_attempt_block_reason"].(string); ok {
+			entryAttemptBlockReason = strings.TrimSpace(rawBlock)
+		}
+		entryAttempts1h := 0
+		switch value := diagnostics["entry_attempts_1h"].(type) {
+		case int:
+			entryAttempts1h = value
+		case int64:
+			entryAttempts1h = int(value)
+		case float64:
+			entryAttempts1h = int(value)
+		}
+		lastEntryAttemptAt := ""
+		if rawLast, ok := diagnostics["last_entry_attempt_at"].(string); ok {
+			lastEntryAttemptAt = strings.TrimSpace(rawLast)
+		}
+		minutesSinceEntryAttempt := 0.0
+		switch value := diagnostics["minutes_since_entry_attempt"].(type) {
+		case float64:
+			minutesSinceEntryAttempt = value
+		case int:
+			minutesSinceEntryAttempt = float64(value)
+		case int64:
+			minutesSinceEntryAttempt = float64(value)
+		}
+		driftSignature := ""
+		if rawSignature, ok := diagnostics["drift_signature"].(string); ok {
+			driftSignature = strings.TrimSpace(rawSignature)
+		}
+		driftDeadlockCycles := 0
+		switch value := diagnostics["drift_deadlock_cycles"].(type) {
+		case int:
+			driftDeadlockCycles = value
+		case int64:
+			driftDeadlockCycles = int(value)
+		case float64:
+			driftDeadlockCycles = int(value)
+		}
+		executionStage := ""
+		if rawStage, ok := diagnostics["execution_stage"].(string); ok {
+			executionStage = strings.TrimSpace(rawStage)
+		}
+		executionLastProgressAt := ""
+		if rawProgressAt, ok := diagnostics["execution_last_progress_at"].(string); ok {
+			executionLastProgressAt = strings.TrimSpace(rawProgressAt)
+		}
+		executionInProgressAge := 0.0
+		switch value := diagnostics["execution_in_progress_age_seconds"].(type) {
+		case float64:
+			executionInProgressAge = value
+		case int:
+			executionInProgressAge = float64(value)
+		case int64:
+			executionInProgressAge = float64(value)
+		}
+		runtimeStatus := "healthy"
+		if statusRaw, ok := rawRuntime["status"].(string); ok && strings.TrimSpace(statusRaw) != "" {
+			runtimeStatus = strings.ToLower(strings.TrimSpace(statusRaw))
+		}
+		providerChainUsable := 0
+		switch value := rawRuntime["provider_chain_usable"].(type) {
+		case int:
+			providerChainUsable = value
+		case int64:
+			providerChainUsable = int(value)
+		case float64:
+			providerChainUsable = int(value)
+		}
+		providerChainConfigured := 0
+		switch value := rawRuntime["provider_chain_configured"].(type) {
+		case int:
+			providerChainConfigured = value
+		case int64:
+			providerChainConfigured = int(value)
+		case float64:
+			providerChainConfigured = int(value)
+		}
+		runtimeReason := ""
+		if reason, ok := rawRuntime["runtime_degraded_reason"].(string); ok && strings.TrimSpace(reason) != "" {
+			runtimeReason = strings.TrimSpace(reason)
+		}
+		if entryGateReason == "" {
+			switch entryGateType {
+			case "risk_lock":
+				entryGateReason = "entry blocked by risk lock"
+			case "state_drift":
+				entryGateReason = fmt.Sprintf("entry blocked by state drift (%d mismatch(es))", driftPositions)
+			case "runtime_circuit":
+				entryGateReason = "entry blocked by AI runtime circuit breaker"
+			case "recovery_gate":
+				if recoveryGateReason != "" {
+					entryGateReason = recoveryGateReason
+				} else {
+					entryGateReason = "entry blocked by recovery clean-cycle gate"
+				}
+			case "none":
+				if entryAttemptBlockReason != "" {
+					entryGateReason = entryAttemptBlockReason
+				}
+			}
+		}
+
+		message := "AI runtime healthy"
+		if driftActive {
+			if runtimeStatus == "healthy" {
+				runtimeStatus = "warning"
+			}
+			message = fmt.Sprintf(
+				"Entry blocked by state drift: %d mismatch(es) pending reconcile",
+				driftPositions,
+			)
+		} else {
+			switch runtimeStatus {
+			case "critical":
+				message = "AI runtime degraded: high timeout/parse failure pressure"
+			case "warning":
+				message = "AI runtime warning: elevated error rate"
+			}
+		}
+		if entryGateReason != "" {
+			message = entryGateReason
+			if nextUnblockCondition != "" {
+				message = fmt.Sprintf("%s (next: %s)", message, nextUnblockCondition)
+			}
+		} else if runtimeReason != "" {
+			message = runtimeReason
+		}
+		if providerChainConfigured > 0 && providerChainUsable <= 1 {
+			if runtimeStatus == "healthy" {
+				message = "AI runtime healthy (single-provider chain; failover redundancy limited)"
+			}
+		}
+		details := gin.H{}
+		if errorRate, ok := rawRuntime["error_rate"].(float64); ok {
+			details["error_rate"] = fmt.Sprintf("%.2f", errorRate)
+		}
+		if timeouts, ok := rawRuntime["window_timeouts"].(int); ok {
+			details["timeouts"] = fmt.Sprintf("%d", timeouts)
+		}
+		if parseFails, ok := rawRuntime["window_parse_fails"].(int); ok {
+			details["parse_fails"] = fmt.Sprintf("%d", parseFails)
+		}
+		if circuitActive, ok := rawRuntime["circuit_active"].(bool); ok {
+			details["circuit_active"] = fmt.Sprintf("%t", circuitActive)
+		}
+		if runtimeReason != "" {
+			details["runtime_degraded_reason"] = runtimeReason
+		}
+		details["state_drift_active"] = fmt.Sprintf("%t", driftActive)
+		details["state_drift_positions"] = fmt.Sprintf("%d", driftPositions)
+		details["drift_deadlock_cycles"] = fmt.Sprintf("%d", driftDeadlockCycles)
+		details["entry_attempts_1h"] = fmt.Sprintf("%d", entryAttempts1h)
+		details["minutes_since_entry_attempt"] = fmt.Sprintf("%.1f", minutesSinceEntryAttempt)
+		if entryGateReason != "" {
+			details["entry_gate_reason"] = entryGateReason
+		}
+		if entryGateType != "" {
+			details["entry_gate_type"] = entryGateType
+		}
+		if recoveryGateReason != "" {
+			details["recovery_gate_reason"] = recoveryGateReason
+		}
+		if riskLockSource != "" {
+			details["risk_lock_source"] = riskLockSource
+		}
+		if entryAttemptBlockReason != "" {
+			details["entry_attempt_block_reason"] = entryAttemptBlockReason
+		}
+		if nextUnblockCondition != "" {
+			details["next_unblock_condition"] = nextUnblockCondition
+		}
+		if lastEntryAttemptAt != "" {
+			details["last_entry_attempt_at"] = lastEntryAttemptAt
+		}
+		if driftSignature != "" {
+			details["drift_signature"] = driftSignature
+		}
+		if executionStage != "" {
+			details["execution_stage"] = executionStage
+		}
+		if executionLastProgressAt != "" {
+			details["execution_last_progress_at"] = executionLastProgressAt
+			details["execution_in_progress_age_seconds"] = fmt.Sprintf("%.1f", executionInProgressAge)
+		}
+		details["provider_chain_configured"] = fmt.Sprintf("%d", providerChainConfigured)
+		details["provider_chain_usable"] = fmt.Sprintf("%d", providerChainUsable)
+
+		checks = append(checks, gin.H{
+			"name":     "ai-runtime",
+			"status":   runtimeStatus,
+			"impact":   aiRuntimeImpact,
+			"optional": aiRuntimeOptional,
+			"message":  message,
+			"details":  details,
+		})
+
+		if !aiRuntimeOptional {
+			if runtimeStatus == "critical" {
+				overall = "critical"
+			} else if runtimeStatus == "warning" && overall != "critical" {
+				overall = "warning"
+			}
+		}
+	}
+
+	if err := h.db.QueryRow(c.Request.Context(), `
+		SELECT COALESCE(MAX(selected_ai_model), '')
+		FROM users
+		WHERE COALESCE(telegram_chat_id, '') = $1 OR COALESCE(telegram_id, '') = $1
+	`, chatID).Scan(new(string)); err != nil {
+		checks = append(checks, gin.H{
+			"name":     "ai-snapshot",
+			"status":   "warning",
+			"impact":   "optional",
+			"optional": true,
+			"message":  "AI snapshot probe unavailable",
+		})
+	} else {
+		checks = append(checks, gin.H{
+			"name":     "ai-snapshot",
+			"status":   "healthy",
+			"impact":   "optional",
+			"optional": true,
+			"message":  "AI snapshot probe successful",
 		})
 	}
 
@@ -697,6 +996,48 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		"summary":        summary,
 		"checked_at":     time.Now().UTC().Format(time.RFC3339),
 		"checks":         checks,
+	})
+}
+
+func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
+	chatID := strings.TrimSpace(c.Param("chatId"))
+	if chatID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
+	}
+
+	selectedModel := ""
+	query := `
+		SELECT COALESCE(selected_ai_model, '')
+		FROM users
+		WHERE COALESCE(telegram_chat_id, '') = $1
+		   OR COALESCE(telegram_id, '') = $1
+		LIMIT 1
+	`
+	if err := h.db.QueryRow(c.Request.Context(), query, chatID).Scan(&selectedModel); err != nil {
+		selectedModel = ""
+	}
+
+	provider := ""
+	modelLower := strings.ToLower(strings.TrimSpace(selectedModel))
+	switch {
+	case strings.HasPrefix(modelLower, "gpt"):
+		provider = "openai"
+	case strings.HasPrefix(modelLower, "claude"):
+		provider = "anthropic"
+	case strings.Contains(modelLower, "glm"):
+		provider = "zhipu"
+	case strings.Contains(modelLower, "mini"):
+		provider = "minimax"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"selected_model":        selectedModel,
+		"provider":              provider,
+		"daily_spend":           "0.00",
+		"monthly_spend":         "0.00",
+		"budget_limit":          "Unlimited",
+		"daily_budget_exceeded": false,
 	})
 }
 

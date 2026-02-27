@@ -57,7 +57,11 @@ issues:
     - path: technical_analysis\.go
       linters:
         - unused
-
+    # signal_processor.go methods are called through goroutines and circuit breaker
+    # function literals which the unused linter cannot trace
+    - path: signal_processor\.go
+      linters:
+        - unused
   max-issues-per-linter: 0
   max-same-issues: 0
 

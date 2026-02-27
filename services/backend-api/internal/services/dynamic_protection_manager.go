@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
@@ -13,6 +15,16 @@ import (
 
 type protectionTickerService interface {
 	FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
+}
+
+type positionProtectionSync interface {
+	SyncPositionProtection(
+		ctx context.Context,
+		exchange string,
+		position ManagedOpenPosition,
+		stopLoss decimal.Decimal,
+		takeProfit decimal.Decimal,
+	) error
 }
 
 type DynamicProtectionConfig struct {
@@ -24,6 +36,8 @@ type DynamicProtectionConfig struct {
 	TrailingStopPct       float64
 	TakeProfitDistancePct float64
 }
+
+var ErrProtectionSyncUnsupported = errors.New("exchange-side protection sync unsupported")
 
 func DefaultDynamicProtectionConfig() DynamicProtectionConfig {
 	return DynamicProtectionConfig{
@@ -48,7 +62,10 @@ type DynamicProtectionManager struct {
 	config       DynamicProtectionConfig
 	lifecycle    *TradingLifecycleStore
 	tickerSource protectionTickerService
+	protection   positionProtectionSync
 	logger       *log.Logger
+	missingMu    sync.Mutex
+	missingRetry map[string]time.Time
 }
 
 func NewDynamicProtectionManager(
@@ -66,6 +83,10 @@ func NewDynamicProtectionManager(
 		tickerSource: tickerSource,
 		logger:       logger,
 	}
+}
+
+func (m *DynamicProtectionManager) SetPositionProtectionSync(sync positionProtectionSync) {
+	m.protection = sync
 }
 
 func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, chatID, exchange string) (DynamicProtectionSummary, error) {
@@ -117,6 +138,34 @@ func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, c
 				newTake.String(),
 				currentPrice.String(),
 			)
+		}
+		if changed && m.protection != nil {
+			if m.shouldSkipMissingRetry(pos, now) {
+				m.logger.Printf(
+					"[PROTECTION] Skipping stale protection retry due to cooldown for %s %s %s",
+					pos.Exchange,
+					pos.Symbol,
+					pos.Side,
+				)
+				continue
+			}
+			if err := m.protection.SyncPositionProtection(ctx, pos.Exchange, pos, newStop, newTake); err != nil {
+				if errors.Is(err, ErrProtectionSyncUnsupported) {
+					m.logger.Printf("[PROTECTION] Exchange-side TP/SL sync unsupported for %s, persisting lifecycle-only update", pos.PositionID)
+				} else if isPositionMissingProtectionError(err) {
+					m.markMissingRetry(pos, now)
+					if closeErr := m.reconcileMissingPosition(ctx, pos, err); closeErr != nil {
+						summary.Errors++
+						m.logger.Printf("[PROTECTION] Failed to reconcile stale lifecycle position %s: %v", pos.PositionID, closeErr)
+						continue
+					}
+					continue
+				} else {
+					summary.Errors++
+					m.logger.Printf("[PROTECTION] Failed to sync exchange-side TP/SL for %s: %v", pos.PositionID, err)
+					continue
+				}
+			}
 		}
 		if err := m.lifecycle.UpdatePositionProtection(ctx, pos.PositionID, newStop, newTake, currentPrice, unrealized, now); err != nil {
 			summary.Errors++
@@ -266,4 +315,107 @@ func minDecimal(values ...decimal.Decimal) decimal.Decimal {
 		}
 	}
 	return best
+}
+
+func isPositionMissingProtectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "no position to close") ||
+		strings.Contains(lower, "insufficient position") ||
+		strings.Contains(lower, "code: 22002") ||
+		strings.Contains(lower, "code: 43023")
+}
+
+func (m *DynamicProtectionManager) reconcileMissingPosition(
+	ctx context.Context,
+	pos ManagedOpenPosition,
+	cause error,
+) error {
+	if m.lifecycle == nil {
+		return nil
+	}
+
+	orderID := strings.TrimSpace(pos.OrderID)
+	if orderID == "" {
+		orderID = strings.TrimSpace(pos.PositionID)
+	}
+	if orderID == "" {
+		return fmt.Errorf("cannot reconcile missing position without order identifier")
+	}
+
+	exitPrice := pos.LastPrice
+	if exitPrice.LessThanOrEqual(decimal.Zero) {
+		exitPrice = pos.EntryPrice
+	}
+
+	if err := m.lifecycle.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     orderID,
+		ChatID:      pos.ChatID,
+		Exchange:    pos.Exchange,
+		Symbol:      pos.Symbol,
+		Side:        pos.Side,
+		MarketType:  pos.MarketType,
+		Filled:      pos.Size.Abs(),
+		EntryPrice:  pos.EntryPrice,
+		ExitPrice:   exitPrice,
+		RealizedPnL: decimal.Zero,
+		Source:      "protection_exchange_missing",
+		ClosedAt:    time.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+
+	m.logger.Printf(
+		"[PROTECTION] Reconciled stale lifecycle position %s (%s %s) as closed after exchange reported missing position: %v",
+		pos.PositionID,
+		pos.Exchange,
+		pos.Symbol,
+		cause,
+	)
+	return nil
+}
+
+func (m *DynamicProtectionManager) shouldSkipMissingRetry(pos ManagedOpenPosition, now time.Time) bool {
+	cooldown := stateDriftRepairCooldown()
+	if cooldown <= 0 {
+		return false
+	}
+	key := stalePositionRetryKey(pos)
+	if key == "|||" {
+		return false
+	}
+
+	m.missingMu.Lock()
+	defer m.missingMu.Unlock()
+	if m.missingRetry == nil {
+		m.missingRetry = make(map[string]time.Time)
+		return false
+	}
+
+	for k, ts := range m.missingRetry {
+		if now.Sub(ts) >= cooldown {
+			delete(m.missingRetry, k)
+		}
+	}
+
+	last, ok := m.missingRetry[key]
+	if !ok {
+		return false
+	}
+	return now.Sub(last) < cooldown
+}
+
+func (m *DynamicProtectionManager) markMissingRetry(pos ManagedOpenPosition, now time.Time) {
+	key := stalePositionRetryKey(pos)
+	if key == "|||" {
+		return
+	}
+	m.missingMu.Lock()
+	defer m.missingMu.Unlock()
+	if m.missingRetry == nil {
+		m.missingRetry = make(map[string]time.Time)
+	}
+	m.missingRetry[key] = now
 }

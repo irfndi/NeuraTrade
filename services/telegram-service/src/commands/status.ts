@@ -6,6 +6,7 @@ import type {
   DoctorResponse,
   LogsResponse,
   PortfolioResponse,
+  QuestDiagnosticsResponse,
   TradingModeResponse,
 } from "../api/types";
 import { logger } from "../utils/logger";
@@ -68,6 +69,62 @@ function shortError(error: unknown): string {
   return String(error);
 }
 
+function readStringField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): string | null {
+  if (!source) {
+    return null;
+  }
+  const value = source[key];
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  return null;
+}
+
+function readBoolField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): boolean | null {
+  if (!source) {
+    return null;
+  }
+  const value = source[key];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return null;
+}
+
+function readNumberField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): number | null {
+  if (!source) {
+    return null;
+  }
+  const value = source[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function readRecordField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): Readonly<Record<string, unknown>> | null {
+  if (!source) {
+    return null;
+  }
+  const value = source[key];
+  if (typeof value === "object" && value !== null) {
+    return value as Readonly<Record<string, unknown>>;
+  }
+  return null;
+}
+
 export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
   bot.command("status", async (ctx) => {
     const chatId = ctx.chat?.id;
@@ -93,6 +150,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         portfolioResult,
         aiResult,
         logsResult,
+        questDiagnosticsResult,
       ] = await Promise.allSettled([
         userId
           ? api.getNotificationPreference(String(userId))
@@ -102,6 +160,15 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         api.getPortfolio(String(chatId)),
         api.getAIStatus(String(chatId)),
         api.getLogs(String(chatId), 1),
+        typeof (
+          api as {
+            getQuestDiagnostics?: (
+              chatId: string,
+            ) => Promise<QuestDiagnosticsResponse>;
+          }
+        ).getQuestDiagnostics === "function"
+          ? api.getQuestDiagnostics(String(chatId))
+          : Promise.reject(new Error("quest diagnostics unavailable")),
       ]);
 
       const preference =
@@ -140,6 +207,259 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           `• Health: unavailable (${shortError(doctorResult.reason)})`,
         );
       }
+      if (questDiagnosticsResult.status === "fulfilled") {
+        const diagnostics = questDiagnosticsResult.value;
+        const heartbeat = diagnostics.heartbeat as
+          | Readonly<Record<string, unknown>>
+          | undefined;
+        const questRuntime = diagnostics.quest_runtime as
+          | Readonly<Record<string, unknown>>
+          | undefined;
+        const chatRuntime = diagnostics.chat_runtime as
+          | Readonly<Record<string, unknown>>
+          | undefined;
+        const aiRuntime =
+          readRecordField(chatRuntime, "ai_runtime") ?? undefined;
+
+        const heartbeatMode = readStringField(heartbeat, "mode");
+        if (heartbeatMode) {
+          lines.push(`• Heartbeat: ${heartbeatMode}`);
+        }
+
+        const cadenceMode = readStringField(questRuntime, "cadence_mode");
+        if (cadenceMode) {
+          lines.push(`• Quest cadence: ${cadenceMode}`);
+        }
+
+        const riskLock = readBoolField(questRuntime, "risk_lock_active");
+        if (riskLock !== null) {
+          lines.push(`• Risk lock: ${riskLock ? "ACTIVE" : "inactive"}`);
+        }
+
+        const driftActive =
+          readBoolField(chatRuntime, "state_drift_active") ??
+          diagnostics.state_drift_active ??
+          false;
+        const driftCount =
+          readNumberField(chatRuntime, "state_drift_positions") ??
+          diagnostics.state_drift_positions;
+        lines.push(
+          `• Drift gate: ${driftActive ? "ACTIVE" : "inactive"}${
+            typeof driftCount === "number" ? ` (${driftCount} mismatch)` : ""
+          }`,
+        );
+        const entryGateReason =
+          readStringField(chatRuntime, "entry_gate_reason") ||
+          diagnostics.entry_gate_reason;
+        const entryGateType =
+          readStringField(chatRuntime, "entry_gate_type") || "none";
+        const recoveryGateReason =
+          readStringField(chatRuntime, "recovery_gate_reason") ||
+          diagnostics.recovery_gate_reason;
+        const riskLockSource =
+          readStringField(chatRuntime, "risk_lock_source") ||
+          readStringField(questRuntime, "risk_lock_source") ||
+          diagnostics.risk_lock_source ||
+          "none";
+        const runtimeCircuitActive =
+          readBoolField(aiRuntime, "circuit_active") === true;
+        const entryGatePriority = (() => {
+          if (riskLock === true || entryGateType === "risk_lock") {
+            return "risk_lock";
+          }
+          if (driftActive || entryGateType === "state_drift") {
+            return "state_drift";
+          }
+          if (runtimeCircuitActive || entryGateType === "runtime_circuit") {
+            return "runtime_circuit";
+          }
+          if (entryGateType === "recovery_gate") {
+            return "recovery_gate";
+          }
+          return "none";
+        })();
+        const entryAttemptBlockReason =
+          readStringField(chatRuntime, "entry_attempt_block_reason") ||
+          diagnostics.entry_attempt_block_reason;
+        const nextUnblockCondition =
+          readStringField(chatRuntime, "next_unblock_condition") ||
+          diagnostics.next_unblock_condition;
+        const entryAttempts1h =
+          readNumberField(chatRuntime, "entry_attempts_1h") ??
+          diagnostics.entry_attempts_1h;
+        const lastEntryAttemptAt =
+          readStringField(chatRuntime, "last_entry_attempt_at") ||
+          diagnostics.last_entry_attempt_at;
+        const minutesSinceEntryAttempt =
+          readNumberField(chatRuntime, "minutes_since_entry_attempt") ??
+          diagnostics.minutes_since_entry_attempt;
+        const driftDeadlockCycles =
+          readNumberField(chatRuntime, "drift_deadlock_cycles") ??
+          diagnostics.drift_deadlock_cycles;
+        const driftSignature =
+          readStringField(chatRuntime, "drift_signature") ||
+          diagnostics.drift_signature;
+        const executionStage =
+          readStringField(chatRuntime, "execution_stage") ||
+          readStringField(questRuntime, "execution_stage");
+        const executionLastProgressAt =
+          readStringField(chatRuntime, "execution_last_progress_at") ||
+          readStringField(questRuntime, "execution_last_progress_at");
+        const executionInProgressAgeSeconds =
+          readNumberField(chatRuntime, "execution_in_progress_age_seconds") ??
+          readNumberField(questRuntime, "execution_in_progress_age_seconds");
+        if (entryGateReason) {
+          lines.push(`• Entry gate reason: ${entryGateReason}`);
+        }
+        let blockerReason =
+          entryGateReason ||
+          entryAttemptBlockReason ||
+          recoveryGateReason ||
+          "";
+        if (!blockerReason) {
+          switch (entryGatePriority) {
+            case "risk_lock":
+              blockerReason =
+                riskLockSource === "manual_env"
+                  ? "forced by operator env lock"
+                  : "global risk lock active";
+              break;
+            case "state_drift":
+              blockerReason =
+                typeof driftCount === "number"
+                  ? `lifecycle drift pending reconcile (${driftCount})`
+                  : "lifecycle drift pending reconcile";
+              break;
+            case "runtime_circuit":
+              blockerReason = "AI runtime circuit is open";
+              break;
+            case "recovery_gate":
+              blockerReason = "recovery clean-cycle gate active";
+              break;
+            default:
+              blockerReason = "none";
+              break;
+          }
+        }
+        lines.push(`• Entry blocker: ${entryGatePriority} (${blockerReason})`);
+        if (entryGatePriority === "risk_lock") {
+          lines.push(`• Risk lock source: ${riskLockSource}`);
+        }
+        if (entryAttemptBlockReason) {
+          lines.push(`• Entry attempt block: ${entryAttemptBlockReason}`);
+        }
+        const resolvedUnblockCondition =
+          nextUnblockCondition ||
+          (entryGatePriority === "none"
+            ? "none (entries currently eligible)"
+            : "await gate condition recovery");
+        lines.push(`• Next unblock: ${resolvedUnblockCondition}`);
+        if (typeof entryAttempts1h === "number") {
+          lines.push(`• Entry attempts (1h): ${entryAttempts1h}`);
+        }
+        if (lastEntryAttemptAt) {
+          const minutesText =
+            typeof minutesSinceEntryAttempt === "number"
+              ? ` (${minutesSinceEntryAttempt.toFixed(1)}m ago)`
+              : "";
+          lines.push(
+            `• Last entry attempt: ${lastEntryAttemptAt}${minutesText}`,
+          );
+        }
+        if (
+          typeof driftDeadlockCycles === "number" &&
+          driftDeadlockCycles > 0
+        ) {
+          lines.push(`• Drift deadlock cycles: ${driftDeadlockCycles}`);
+        }
+        if (driftSignature) {
+          lines.push(`• Drift signature: ${driftSignature}`);
+        }
+        if (executionStage) {
+          lines.push(`• Execution stage: ${executionStage}`);
+        }
+        if (executionLastProgressAt) {
+          const ageText =
+            typeof executionInProgressAgeSeconds === "number"
+              ? ` (${executionInProgressAgeSeconds.toFixed(1)}s ago)`
+              : "";
+          lines.push(
+            `• Last execution progress: ${executionLastProgressAt}${ageText}`,
+          );
+        }
+
+        const recoveryMode =
+          readStringField(chatRuntime, "recovery_mode") || "normal";
+        const recoveryCleanCycles =
+          readNumberField(chatRuntime, "recovery_clean_cycles") ?? 0;
+        const recoveryEntryAllowed =
+          readBoolField(chatRuntime, "recovery_entry_allowed") ?? true;
+        lines.push(
+          `• Recovery: mode=${recoveryMode}, clean_cycles=${recoveryCleanCycles}, entry_allowed=${recoveryEntryAllowed ? "yes" : "no"}`,
+        );
+
+        const lastDriftRepair =
+          readStringField(chatRuntime, "last_drift_repair_at") ||
+          diagnostics.last_drift_repair_at;
+        if (lastDriftRepair) {
+          lines.push(`• Last drift repair: ${lastDriftRepair}`);
+        }
+
+        const lastCleanReconcile =
+          readStringField(chatRuntime, "last_clean_reconcile_at") ||
+          diagnostics.last_clean_reconcile_at;
+        if (lastCleanReconcile) {
+          lines.push(`• Last clean reconcile: ${lastCleanReconcile}`);
+        }
+
+        const lastReconcile = readStringField(
+          chatRuntime,
+          "last_startup_reconcile",
+        );
+        if (lastReconcile) {
+          lines.push(`• Last startup reconcile: ${lastReconcile}`);
+        }
+
+        const lastSpotUnwind = readStringField(chatRuntime, "last_spot_unwind");
+        if (lastSpotUnwind) {
+          lines.push(`• Last spot unwind: ${lastSpotUnwind}`);
+        }
+        if (aiRuntime) {
+          const runtimeStatus =
+            readStringField(aiRuntime, "status")?.toUpperCase() || "UNKNOWN";
+          const errorRate = readNumberField(aiRuntime, "error_rate");
+          const circuitActive = readBoolField(aiRuntime, "circuit_active");
+          const providerChainUsable =
+            readNumberField(aiRuntime, "provider_chain_usable") ??
+            readNumberField(chatRuntime, "provider_chain_usable");
+          const providerChainConfigured =
+            readNumberField(aiRuntime, "provider_chain_configured") ??
+            readNumberField(chatRuntime, "provider_chain_configured");
+          const lastSuccessProvider = readStringField(
+            aiRuntime,
+            "last_success_provider",
+          );
+          const segments = [`${runtimeStatus}`];
+          if (typeof errorRate === "number") {
+            segments.push(`err_rate ${(errorRate * 100).toFixed(0)}%`);
+          }
+          if (circuitActive === true) {
+            segments.push("circuit OPEN");
+          }
+          if (
+            typeof providerChainUsable === "number" &&
+            typeof providerChainConfigured === "number"
+          ) {
+            segments.push(
+              `providers ${providerChainUsable}/${providerChainConfigured}`,
+            );
+          }
+          if (lastSuccessProvider) {
+            segments.push(`last_ok ${lastSuccessProvider}`);
+          }
+          lines.push(`• AI runtime: ${segments.join(", ")}`);
+        }
+      }
 
       lines.push("", "⚙️ Trading Snapshot");
 
@@ -156,6 +476,14 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           `• Exposure: ${portfolio.exposure ?? "0.00"}`,
           `• Open positions: ${portfolio.positions?.length ?? 0}`,
         );
+        if (portfolio.positions_source) {
+          lines.push(`• Position source: ${portfolio.positions_source}`);
+        }
+        if (typeof portfolio.drift_detected === "boolean") {
+          lines.push(
+            `• Portfolio drift flag: ${portfolio.drift_detected ? "true" : "false"}`,
+          );
+        }
         if (typeof portfolio.open_orders === "number") {
           lines.push(`• Open orders: ${portfolio.open_orders}`);
         }
@@ -219,6 +547,15 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           chatId,
           error: shortError(logsResult.reason),
         });
+      }
+      if (questDiagnosticsResult.status === "rejected") {
+        logger.warn(
+          "[Status] Quest diagnostics unavailable while building status",
+          {
+            chatId,
+            error: shortError(questDiagnosticsResult.reason),
+          },
+        );
       }
     } catch (error) {
       logger.error(

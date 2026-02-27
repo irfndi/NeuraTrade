@@ -418,7 +418,7 @@ type Position struct {
 	// UnrealizedPnl is the unrealized profit/loss.
 	UnrealizedPnl decimal.Decimal `json:"unrealizedPnl"`
 	// Leverage is the position leverage.
-	Lverage int `json:"leverage"`
+	Leverage int `json:"leverage"`
 	// LiquidationPrice is the liquidation price.
 	LiquidationPrice decimal.Decimal `json:"liquidationPrice"`
 	// MarginMode is cross or isolated.

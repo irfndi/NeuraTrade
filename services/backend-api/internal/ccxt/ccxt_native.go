@@ -1978,7 +1978,25 @@ func (s *NativeCCXTService) FetchFundingRates(ctx context.Context, exchange stri
 		return nil, err
 	}
 
-	return s.parseFundingRateResponse(exchange, body)
+	rates, err := s.parseFundingRateResponse(exchange, body)
+	if err != nil {
+		return nil, err
+	}
+	// For Bitget with specific symbols requested, filter results
+	if exchange == "bitget" && len(symbols) > 1 {
+		wanted := make(map[string]struct{}, len(symbols))
+		for _, symbol := range symbols {
+			wanted[bitgetSymbolKey(symbol)] = struct{}{}
+		}
+		filtered := make([]FundingRate, 0, len(rates))
+		for _, rate := range rates {
+			if _, ok := wanted[bitgetSymbolKey(rate.Symbol)]; ok {
+				filtered = append(filtered, rate)
+			}
+		}
+		return filtered, nil
+	}
+	return rates, nil
 }
 
 func (s *NativeCCXTService) FetchAllFundingRates(ctx context.Context, exchange string) ([]FundingRate, error) {
@@ -2041,12 +2059,12 @@ func (s *NativeCCXTService) buildFundingRateURL(exchange string, symbols []strin
 		instId := strings.ReplaceAll(symbols[0], "/", "-")
 		return fmt.Sprintf("https://www.okx.com/api/v5/public/funding-rate?instId=%s", instId)
 	case "bitget":
-		// Bitget: /api/v2/mix/market/funding-rate
-		if len(symbols) == 0 {
-			return "https://api.bitget.com/api/v2/mix/market/funding-rate?productType=USDT-FUTURES"
+		// Bitget v2: current-fund-rate for single symbol, tickers for all/filtered symbol sets.
+		if len(symbols) == 1 {
+			symbol := bitgetSymbolKey(symbols[0])
+			return fmt.Sprintf("https://api.bitget.com/api/v2/mix/market/current-fund-rate?symbol=%s&productType=USDT-FUTURES", symbol)
 		}
-		symbol := strings.ReplaceAll(symbols[0], "/", "")
-		return fmt.Sprintf("https://api.bitget.com/api/v2/mix/market/funding-rate?symbol=%s&productType=USDT-FUTURES", symbol)
+		return "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
 	default:
 		return ""
 	}
@@ -2194,6 +2212,10 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 			FundingRate     string `json:"fundingRate"`
 			FundingTime     string `json:"fundingTime"`
 			NextFundingTime string `json:"nextFundingTime"`
+			NextUpdate      string `json:"nextUpdate"`
+			Ts              string `json:"ts"`
+			MarkPrice       string `json:"markPrice"`
+			IndexPrice      string `json:"indexPrice"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -2204,18 +2226,69 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 	}
 
 	rates := make([]FundingRate, 0, len(raw.Data))
+	skipped := 0
 	for _, item := range raw.Data {
-		rate, _ := strconv.ParseFloat(item.FundingRate, 64)
-		ts, _ := strconv.ParseInt(item.FundingTime, 10, 64)
-		nextTs, _ := strconv.ParseInt(item.NextFundingTime, 10, 64)
+		rate, err := strconv.ParseFloat(strings.TrimSpace(item.FundingRate), 64)
+		if err != nil {
+			skipped++
+			log.Printf("[CCXT Native] skipping malformed bitget fundingRate row symbol=%s: %v", item.Symbol, err)
+			continue
+		}
+
+		ts := parseBitgetTimestampMillis(item.FundingTime)
+		if ts == 0 {
+			ts = parseBitgetTimestampMillis(item.Ts)
+		}
+		if ts == 0 {
+			// Fallback to current time if no timestamp is available
+			ts = time.Now().UnixMilli()
+		}
+
+		nextTs := parseBitgetTimestampMillis(item.NextFundingTime)
+		if nextTs == 0 {
+			nextTs = parseBitgetTimestampMillis(item.NextUpdate)
+		}
+		if nextTs == 0 {
+			nextTs = ts
+		}
+
+		markPrice := 0.0
+		if v := strings.TrimSpace(item.MarkPrice); v != "" {
+			parsed, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				skipped++
+				log.Printf("[CCXT Native] skipping malformed bitget markPrice row symbol=%s: %v", item.Symbol, err)
+				continue
+			}
+			markPrice = parsed
+		}
+
+		indexPrice := 0.0
+		if v := strings.TrimSpace(item.IndexPrice); v != "" {
+			parsed, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				skipped++
+				log.Printf("[CCXT Native] skipping malformed bitget indexPrice row symbol=%s: %v", item.Symbol, err)
+				continue
+			}
+			indexPrice = parsed
+		}
 
 		rates = append(rates, FundingRate{
 			Symbol:           item.Symbol,
 			FundingRate:      rate,
 			FundingTimestamp: UnixTimestamp(time.UnixMilli(ts)),
 			NextFundingTime:  UnixTimestamp(time.UnixMilli(nextTs)),
+			MarkPrice:        markPrice,
+			IndexPrice:       indexPrice,
 			Timestamp:        UnixTimestamp(time.Now()),
 		})
+	}
+	if len(rates) == 0 {
+		return nil, fmt.Errorf("no valid bitget funding rate rows in response")
+	}
+	if skipped > 0 {
+		log.Printf("[CCXT Native] parsed %d bitget funding rate rows, skipped %d malformed row(s)", len(rates), skipped)
 	}
 	return rates, nil
 }
@@ -2619,7 +2692,7 @@ func (s *NativeCCXTService) fetchBitgetPositions(ctx context.Context, creds conf
 			EntryPrice:       entry,
 			MarkPrice:        mark,
 			UnrealizedPnl:    parseDecimal(rec.UnrealizedPL),
-			Lverage:          leverage,
+			Leverage:         leverage,
 			LiquidationPrice: parseDecimal(rec.LiquidationPrice),
 			MarginMode:       marginMode,
 			Timestamp:        ts,

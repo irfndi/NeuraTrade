@@ -302,6 +302,150 @@ func TestBuildTickerURL(t *testing.T) {
 	}
 }
 
+func TestBuildFundingRateURL_Bitget(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+
+	tests := []struct {
+		name    string
+		symbols []string
+		want    string
+	}{
+		{
+			name:    "all funding rates",
+			symbols: nil,
+			want:    "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES",
+		},
+		{
+			name:    "single symbol",
+			symbols: []string{"BTC/USDT:USDT"},
+			want:    "https://api.bitget.com/api/v2/mix/market/current-fund-rate?symbol=BTCUSDT&productType=USDT-FUTURES",
+		},
+		{
+			name:    "multiple symbols",
+			symbols: []string{"BTC/USDT:USDT", "ETH/USDT:USDT"},
+			want:    "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got := service.buildFundingRateURL("bitget", tt.symbols)
+			if got != tt.want {
+				t.Fatalf("buildFundingRateURL(bitget, %v) = %s, want %s", tt.symbols, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseBitgetFundingRate_V2Formats(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+
+	currentFundRatePayload := []byte(`{
+		"code":"00000",
+		"msg":"success",
+		"data":[
+			{
+				"symbol":"BTCUSDT",
+				"fundingRate":"-0.000033",
+				"fundingRateInterval":"8",
+				"nextUpdate":"1772121600000"
+			}
+		]
+	}`)
+
+	rates, err := service.parseBitgetFundingRate(currentFundRatePayload)
+	if err != nil {
+		t.Fatalf("parseBitgetFundingRate(current-fund-rate) returned error: %v", err)
+	}
+	if len(rates) != 1 {
+		t.Fatalf("expected 1 funding rate, got %d", len(rates))
+	}
+	if rates[0].Symbol != "BTCUSDT" {
+		t.Fatalf("unexpected symbol: %s", rates[0].Symbol)
+	}
+	parsedRate := decimal.NewFromFloat(rates[0].FundingRate).Round(6)
+	if !parsedRate.Equal(decimal.RequireFromString("-0.000033")) {
+		t.Fatalf("unexpected funding rate: %s", parsedRate.String())
+	}
+	if time.Time(rates[0].NextFundingTime).UnixMilli() != 1772121600000 {
+		t.Fatalf("unexpected next funding time: %d", time.Time(rates[0].NextFundingTime).UnixMilli())
+	}
+
+	tickersPayload := []byte(`{
+		"code":"00000",
+		"msg":"success",
+		"data":[
+			{
+				"symbol":"ETHUSDT",
+				"fundingRate":"-0.000072",
+				"ts":"1772103947939",
+				"markPrice":"2063.73",
+				"indexPrice":"2064.9400585406"
+			}
+		]
+	}`)
+
+	rates, err = service.parseBitgetFundingRate(tickersPayload)
+	if err != nil {
+		t.Fatalf("parseBitgetFundingRate(tickers) returned error: %v", err)
+	}
+	if len(rates) != 1 {
+		t.Fatalf("expected 1 funding rate from tickers payload, got %d", len(rates))
+	}
+	if rates[0].Symbol != "ETHUSDT" {
+		t.Fatalf("unexpected symbol from tickers payload: %s", rates[0].Symbol)
+	}
+	if time.Time(rates[0].FundingTimestamp).UnixMilli() != 1772103947939 {
+		t.Fatalf("unexpected funding timestamp from tickers payload: %d", time.Time(rates[0].FundingTimestamp).UnixMilli())
+	}
+	if rates[0].MarkPrice <= 0 {
+		t.Fatalf("expected positive mark price, got %f", rates[0].MarkPrice)
+	}
+	if rates[0].IndexPrice <= 0 {
+		t.Fatalf("expected positive index price, got %f", rates[0].IndexPrice)
+	}
+}
+
+func TestParseBitgetFundingRate_SkipsMalformedRows(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+
+	payload := []byte(`{
+		"code":"00000",
+		"msg":"success",
+		"data":[
+			{
+				"symbol":"BADUSDT",
+				"fundingRate":"bad"
+			},
+			{
+				"symbol":"ETHUSDT",
+				"fundingRate":"-0.000072",
+				"ts":"1772103947939",
+				"markPrice":"2063.73",
+				"indexPrice":"2064.9400585406"
+			}
+		]
+	}`)
+
+	rates, err := service.parseBitgetFundingRate(payload)
+	if err != nil {
+		t.Fatalf("parseBitgetFundingRate returned error: %v", err)
+	}
+	if len(rates) != 1 {
+		t.Fatalf("expected 1 valid funding rate, got %d", len(rates))
+	}
+	if rates[0].Symbol != "ETHUSDT" {
+		t.Fatalf("unexpected symbol from valid row: %s", rates[0].Symbol)
+	}
+}
+
 func TestGetExchangeBaseURL(t *testing.T) {
 	t.Parallel()
 

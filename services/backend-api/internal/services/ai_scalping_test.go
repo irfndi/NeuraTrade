@@ -247,6 +247,139 @@ func TestAIScalpingService_ParseDecisionWithRetries_InvalidAction(t *testing.T) 
 	assert.Equal(t, 1, mockLLM.CallCount)
 }
 
+func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
+	category := normalizeHoldReasonCategory(
+		reasonCategoryStrategyHold,
+		"model response parse fallback (context deadline exceeded)",
+	)
+	assert.Equal(t, reasonCategoryLLMTimeout, category)
+
+	category = normalizeHoldReasonCategory("", "waiting for qualified setup")
+	assert.Equal(t, reasonCategoryStrategyHold, category)
+}
+
+func TestParseAIDecisionJSONObject_DoesNotForceStrategyMetadata(t *testing.T) {
+	decision, err := parseAIDecisionJSONObject(`{"action":"hold","symbol":"BTC/USDT","size_pct":0,"confidence":0.1,"reasoning":"wait"}`)
+	assert.NoError(t, err)
+	assert.Equal(t, "hold", decision.Action)
+	assert.Equal(t, "", decision.ReasonCategory)
+	assert.False(t, decision.ConfidenceKnown)
+}
+
+func TestAIScalpingService_DynamicRiskThresholds_RecoveryModes(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MinConfidence: 0.65,
+			MaxCapitalPct: 5.00,
+		},
+	}
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT", "0.50")
+
+	minConf, maxCap := svc.dynamicRiskThresholds(context.Background(), TradingPortfolio{
+		RecoveryMode: recoveryModeMicroEntry,
+	})
+	assert.InDelta(t, 0.50, maxCap, 0.0001)
+	assert.GreaterOrEqual(t, minConf, 0.65)
+
+	minConf, maxCap = svc.dynamicRiskThresholds(context.Background(), TradingPortfolio{
+		RecoveryMode: recoveryModeDeriskOnly,
+	})
+	assert.InDelta(t, 0.10, maxCap, 0.0001)
+	assert.GreaterOrEqual(t, minConf, 0.85)
+}
+
+func TestAIScalpingService_ApplyControlledNoFillRecovery_StepLadder(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MinConfidence: 0.80,
+			MaxCapitalPct: 5.00,
+		},
+	}
+	t.Setenv("NEURATRADE_NOFILL_RECOVERY_MINUTES", "180")
+	t.Setenv("NEURATRADE_NOFILL_MIN_CONF_FLOOR", "0.70")
+	t.Setenv("NEURATRADE_NOFILL_MAX_CAP_PCT_CAP", "1.50")
+
+	minConfidence := 0.85
+	maxCapital := 0.10
+	svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, TradingPortfolio{
+		NoFillMinutes: 200,
+		OpenPositions: 0,
+		DriftActive:   false,
+	}, 0)
+	assert.InDelta(t, 0.75, minConfidence, 0.0001)
+	assert.InDelta(t, 0.50, maxCapital, 0.0001)
+
+	minConfidence = 0.85
+	maxCapital = 0.10
+	svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, TradingPortfolio{
+		NoFillMinutes: 420,
+		OpenPositions: 0,
+		DriftActive:   false,
+	}, 0)
+	assert.InDelta(t, 0.70, minConfidence, 0.0001)
+	assert.InDelta(t, 1.00, maxCapital, 0.0001)
+
+	minConfidence = 0.85
+	maxCapital = 0.10
+	svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, TradingPortfolio{
+		NoFillMinutes: 720,
+		OpenPositions: 0,
+		DriftActive:   false,
+	}, 0)
+	assert.InDelta(t, 0.70, minConfidence, 0.0001)
+	assert.InDelta(t, 1.50, maxCapital, 0.0001)
+}
+
+func TestAIScalpingService_ApplyControlledNoFillRecovery_RequiresClearState(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MinConfidence: 0.80,
+			MaxCapitalPct: 5.00,
+		},
+	}
+	t.Setenv("NEURATRADE_NOFILL_RECOVERY_MINUTES", "180")
+
+	tests := []TradingPortfolio{
+		{NoFillMinutes: 240, OpenPositions: 1, DriftActive: false},
+		{NoFillMinutes: 240, OpenPositions: 0, DriftActive: true},
+	}
+	for _, portfolio := range tests {
+		minConfidence := 0.80
+		maxCapital := 0.10
+		svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, portfolio, 0)
+		assert.InDelta(t, 0.80, minConfidence, 0.0001)
+		assert.InDelta(t, 0.10, maxCapital, 0.0001)
+	}
+
+	// Consecutive losses should suppress recovery unlock.
+	minConfidence := 0.80
+	maxCapital := 0.10
+	svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, TradingPortfolio{
+		NoFillMinutes: 300,
+		OpenPositions: 0,
+		DriftActive:   false,
+	}, 3)
+	assert.InDelta(t, 0.80, minConfidence, 0.0001)
+	assert.InDelta(t, 0.10, maxCapital, 0.0001)
+}
+
+func TestAIScalpingService_ValidateDecision_HoldNormalization(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "hold",
+		Symbol:      "AR/",
+		SizePercent: 5,
+		Confidence:  0,
+		Reasoning:   "",
+	}
+
+	err := svc.validateDecision(decision, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, "", decision.Symbol)
+	assert.Equal(t, 0.0, decision.SizePercent)
+	assert.Equal(t, "model selected hold (no detailed reasoning)", decision.Reasoning)
+}
+
 func TestAIScalpingService_SymbolLossCooldown(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{

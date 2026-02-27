@@ -141,32 +141,37 @@ func (c *AnthropicClient) Complete(ctx context.Context, req *CompletionRequest) 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.BaseURL+"/messages", bytes.NewReader(body))
+	retryPolicy := resolveTransportRetryPolicy(c.config.MaxRetries)
+	result, err := executeWithTransportRetry(ctx, retryPolicy, func(attemptCtx context.Context) (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(
+			attemptCtx,
+			http.MethodPost,
+			c.config.BaseURL+"/messages",
+			bytes.NewReader(body),
+		)
+		if reqErr != nil {
+			return nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
+
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-api-key", c.config.APIKey)
+		httpReq.Header.Set("anthropic-version", AnthropicVersion)
+
+		resp, doErr := c.httpClient.Do(httpReq)
+		if doErr != nil {
+			return nil, fmt.Errorf("failed to send request: %w", doErr)
+		}
+		return resp, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", c.config.APIKey)
-	httpReq.Header.Set("anthropic-version", AnthropicVersion)
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp.StatusCode, respBody)
+	if result.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(result.StatusCode, result.Headers, result.Body)
 	}
 
 	var anthropicResp anthropicResponse
-	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
+	if err := json.Unmarshal(result.Body, &anthropicResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -188,28 +193,53 @@ func (c *AnthropicClient) Stream(ctx context.Context, req *CompletionRequest) (<
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.BaseURL+"/messages", bytes.NewReader(body))
-	if err != nil {
-		close(eventChan)
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	retryPolicy := resolveTransportRetryPolicy(c.config.MaxRetries)
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		httpReq, reqErr := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			c.config.BaseURL+"/messages",
+			bytes.NewReader(body),
+		)
+		if reqErr != nil {
+			close(eventChan)
+			return nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", c.config.APIKey)
-	httpReq.Header.Set("anthropic-version", AnthropicVersion)
-	httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-api-key", c.config.APIKey)
+		httpReq.Header.Set("anthropic-version", AnthropicVersion)
+		httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		close(eventChan)
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
+		resp, err = c.httpClient.Do(httpReq)
+		if err != nil {
+			if attempt >= retryPolicy.MaxRetries || !isRetryableTransportError(err) {
+				close(eventChan)
+				return nil, fmt.Errorf("failed to send request: %w", err)
+			}
+			if waitErr := waitForRetry(ctx, retryPolicy.backoffForRetry(attempt+1, 0)); waitErr != nil {
+				close(eventChan)
+				return nil, waitErr
+			}
+			continue
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+
 		respBody, _ := io.ReadAll(resp.Body)
-		close(eventChan)
-		return nil, c.handleErrorResponse(resp.StatusCode, respBody)
+		_ = resp.Body.Close()
+		if attempt >= retryPolicy.MaxRetries || !isRetryableHTTPStatus(resp.StatusCode) {
+			close(eventChan)
+			return nil, c.handleErrorResponse(resp.StatusCode, resp.Header, respBody)
+		}
+		retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
+		if waitErr := waitForRetry(ctx, retryPolicy.backoffForRetry(attempt+1, retryAfter)); waitErr != nil {
+			close(eventChan)
+			return nil, waitErr
+		}
 	}
 
 	go c.processStream(resp.Body, eventChan)
@@ -451,20 +481,39 @@ func (c *AnthropicClient) calculateCost(usage UsageMetrics) CostMetrics {
 	}
 }
 
-func (c *AnthropicClient) handleErrorResponse(statusCode int, body []byte) error {
+func (c *AnthropicClient) handleErrorResponse(statusCode int, headers http.Header, body []byte) error {
 	var apiErr anthropicError
 	if err := json.Unmarshal(body, &apiErr); err != nil {
-		return fmt.Errorf("anthropic API error (status %d): %s", statusCode, string(body))
+		return ProviderAPIError{
+			Provider:   ProviderAnthropic,
+			StatusCode: statusCode,
+			Message:    string(body),
+		}
 	}
 
 	switch statusCode {
 	case http.StatusTooManyRequests:
-		return RateLimitedError{Provider: ProviderAnthropic, RetryAfter: 30 * time.Second}
+		retryAfter := parseRetryAfterHeader(headers.Get("Retry-After"))
+		if retryAfter <= 0 {
+			retryAfter = 30 * time.Second
+		}
+		return RateLimitedError{Provider: ProviderAnthropic, RetryAfter: retryAfter}
 	case http.StatusBadRequest:
 		if apiErr.Error.Type == "invalid_request_error" {
-			return fmt.Errorf("anthropic API error: %s", apiErr.Error.Message)
+			return ProviderAPIError{
+				Provider:   ProviderAnthropic,
+				StatusCode: statusCode,
+				Message:    apiErr.Error.Message,
+				Type:       apiErr.Error.Type,
+			}
 		}
 	}
 
-	return fmt.Errorf("anthropic API error: %s (type: %s)", apiErr.Error.Message, apiErr.Error.Type)
+	return ProviderAPIError{
+		Provider:   ProviderAnthropic,
+		StatusCode: statusCode,
+		Message:    apiErr.Error.Message,
+		Type:       apiErr.Error.Type,
+		RetryAfter: parseRetryAfterHeader(headers.Get("Retry-After")),
+	}
 }

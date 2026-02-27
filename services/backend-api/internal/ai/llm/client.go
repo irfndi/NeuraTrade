@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai"
@@ -270,4 +271,36 @@ type ContentFilteredError struct {
 
 func (e ContentFilteredError) Error() string {
 	return "content filtered by " + string(e.Provider) + ": " + e.Reason
+}
+
+// ProviderAPIError captures provider HTTP/API errors with status metadata.
+type ProviderAPIError struct {
+	Provider   Provider
+	StatusCode int
+	Message    string
+	Type       string
+	Code       string
+	RetryAfter time.Duration
+}
+
+func (e ProviderAPIError) Error() string {
+	parts := []string{}
+	if e.Message != "" {
+		parts = append(parts, e.Message)
+	}
+	if e.Type != "" {
+		parts = append(parts, "type: "+e.Type)
+	}
+	if e.Code != "" {
+		parts = append(parts, "code: "+e.Code)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "unknown provider API error")
+	}
+	return fmt.Sprintf("%s API error (status %d): %s", e.Provider, e.StatusCode, strings.Join(parts, ", "))
+}
+
+// Retryable indicates whether the API error can be retried safely.
+func (e ProviderAPIError) Retryable() bool {
+	return e.StatusCode == 408 || e.StatusCode == 429 || (e.StatusCode >= 500 && e.StatusCode <= 599)
 }

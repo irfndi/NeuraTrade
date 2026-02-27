@@ -44,6 +44,20 @@ func (s *stubTickerSource) FetchSingleTicker(_ context.Context, _ string, symbol
 	}, nil
 }
 
+type stubProtectionSync struct {
+	err error
+}
+
+func (s *stubProtectionSync) SyncPositionProtection(
+	_ context.Context,
+	_ string,
+	_ ManagedOpenPosition,
+	_ decimal.Decimal,
+	_ decimal.Decimal,
+) error {
+	return s.err
+}
+
 func TestDynamicProtectionManager_ReconcileOpenPositions_TightensLongProtection(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "dynamic-protection-1.db"))
 	require.NoError(t, err)
@@ -158,6 +172,68 @@ func TestDynamicProtectionManager_ReconcileOpenPositions_RespectsCooldown(t *tes
 	require.NoError(t, err)
 	assert.Equal(t, 1, summary.PositionsEvaluated)
 	assert.Equal(t, 0, summary.ProtectionsUpdated)
+
+	after, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 5)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.True(t, after[0].StopLoss.Equal(originalStop))
+	assert.True(t, after[0].TakeProfit.Equal(originalTake))
+}
+
+func TestDynamicProtectionManager_ReconcileOpenPositions_SkipsDBUpdateWhenExchangeSyncFails(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "dynamic-protection-sync-fail.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	entry := decimal.NewFromFloat(1.00)
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "order-long-sync",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(10),
+		EntryPrice: entry,
+		StopLoss:   decimal.NewFromFloat(0.992),
+		TakeProfit: decimal.NewFromFloat(1.012),
+		OpenedAt:   time.Now().UTC().Add(-2 * time.Minute),
+	}))
+
+	manager := NewDynamicProtectionManager(
+		DynamicProtectionConfig{
+			Enabled:               true,
+			MaxPositions:          10,
+			UpdateCooldown:        0,
+			ProfitActivationPct:   0.20,
+			BreakevenBufferPct:    0.05,
+			TrailingStopPct:       0.40,
+			TakeProfitDistancePct: 0.50,
+		},
+		store,
+		&stubTickerSource{prices: map[string]float64{"ADA/USDT": 1.03}},
+		nil,
+	)
+	manager.SetPositionProtectionSync(&stubProtectionSync{err: fmt.Errorf("exchange unavailable")})
+
+	before, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 5)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	originalStop := before[0].StopLoss
+	originalTake := before[0].TakeProfit
+
+	summary, err := manager.ReconcileOpenPositions(ctx, "chat-1", "bitget")
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.PositionsEvaluated)
+	assert.Equal(t, 0, summary.ProtectionsUpdated)
+	assert.Equal(t, 1, summary.Errors)
 
 	after, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 5)
 	require.NoError(t, err)

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -201,16 +202,20 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	if err != nil {
 		return "", err
 	}
+	isRiskReduction := strings.EqualFold(strings.TrimSpace(details.TradeType), "risk_reduction")
+	tradeSide := "open"
 	holdSide := "long"
 	if bitgetSide == "sell" {
 		holdSide = "short"
 	}
-
-	amountUSDT := details.AmountUSDT
-	if amountUSDT.LessThan(bitgetMinUSDTNotional) {
-		fmt.Printf("[BITGET-ORDER] Amount %s USDT below minimum, bumping to %s USDT\n",
-			amountUSDT.String(), bitgetMinUSDTNotional.String())
-		amountUSDT = bitgetMinUSDTNotional
+	if isRiskReduction {
+		tradeSide = "close"
+		// To close longs, side=sell and holdSide=long. To close shorts, side=buy and holdSide=short.
+		if bitgetSide == "sell" {
+			holdSide = "long"
+		} else {
+			holdSide = "short"
+		}
 	}
 
 	// Get current price to calculate contract size
@@ -230,46 +235,69 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		return "", fmt.Errorf("cannot place order with zero price")
 	}
 
-	// Get contract info to determine size multiplier
+	// Get contract info to determine size precision/multiplier
 	contractInfo, err := e.getContractInfo(ctx, symbol)
 	if err != nil {
 		fmt.Printf("[BITGET-ORDER] Failed to get contract info for %s: %v\n", symbol, err)
 		return "", fmt.Errorf("failed to get contract info: %w", err)
 	}
 
-	// Calculate contract size:
-	// For USDT-FUTURES: size = (USDT amount / price) / sizeMultiplier
-	// Example: 3 USDT / 0.01235 USDT per PORTAL = 243 PORTAL
-	// With sizeMultiplier 0.1: 243 / 0.1 = 2430 contracts
-	baseAmount := amountUSDT.Div(price)
+	var contractSize decimal.Decimal
+	if isRiskReduction {
+		contractSize = details.Amount.Abs()
+		if contractSize.LessThanOrEqual(decimal.Zero) {
+			return "", fmt.Errorf("risk reduction order requires positive contract amount")
+		}
+		contractSize = contractSize.RoundFloor(safeInt32(contractInfo.VolumePlace))
+		if contractSize.LessThan(contractInfo.MinTradeNum) {
+			return "", fmt.Errorf(
+				"risk reduction amount %s is below minimum tradable size %s for %s",
+				contractSize.String(),
+				contractInfo.MinTradeNum.String(),
+				symbol,
+			)
+		}
+	} else {
+		amountUSDT := details.AmountUSDT
+		if amountUSDT.LessThan(bitgetMinUSDTNotional) {
+			fmt.Printf("[BITGET-ORDER] Amount %s USDT below minimum, bumping to %s USDT\n",
+				amountUSDT.String(), bitgetMinUSDTNotional.String())
+			amountUSDT = bitgetMinUSDTNotional
+		}
 
-	// Convert to number of contracts based on sizeMultiplier
-	if contractInfo.SizeMultiplier.LessThanOrEqual(decimal.Zero) {
-		return "", fmt.Errorf("invalid contract size multiplier for %s", symbol)
-	}
-	contractSize := baseAmount.Div(contractInfo.SizeMultiplier)
-
-	// Round up so post-rounding notional does not slip below exchange minimum.
-	contractSize = contractSize.RoundCeil(safeInt32(contractInfo.VolumePlace))
-
-	// Ensure minimum size
-	if contractSize.LessThan(contractInfo.MinTradeNum) {
-		contractSize = contractInfo.MinTradeNum
-	}
-
-	// Ensure resulting notional is not below Bitget's minimum without iterative bumps.
-	minContractsForNotional := bitgetMinUSDTNotional.
-		Div(price).
-		Div(contractInfo.SizeMultiplier).
-		RoundCeil(safeInt32(contractInfo.VolumePlace))
-	if contractSize.LessThan(minContractsForNotional) {
-		contractSize = minContractsForNotional
+		// Calculate contract size:
+		// For USDT-FUTURES: size = (USDT amount / price) / sizeMultiplier
+		baseAmount := amountUSDT.Div(price)
+		if contractInfo.SizeMultiplier.LessThanOrEqual(decimal.Zero) {
+			return "", fmt.Errorf("invalid contract size multiplier for %s", symbol)
+		}
+		contractSize = baseAmount.Div(contractInfo.SizeMultiplier)
+		// Round up so post-rounding notional does not slip below exchange minimum.
+		contractSize = contractSize.RoundCeil(safeInt32(contractInfo.VolumePlace))
+		// Ensure minimum size
+		if contractSize.LessThan(contractInfo.MinTradeNum) {
+			contractSize = contractInfo.MinTradeNum
+		}
+		// Ensure resulting notional is not below Bitget's minimum without iterative bumps.
+		minContractsForNotional := bitgetMinUSDTNotional.
+			Div(price).
+			Div(contractInfo.SizeMultiplier).
+			RoundCeil(safeInt32(contractInfo.VolumePlace))
+		if contractSize.LessThan(minContractsForNotional) {
+			contractSize = minContractsForNotional
+		}
 	}
 	size := contractSize.String()
 
-	fmt.Printf("[BITGET-ORDER] Size calc: %.2f USDT / %s = %.2f base / %s = %s contracts\n",
-		amountUSDT.InexactFloat64(), price.StringFixed(5), baseAmount.InexactFloat64(),
-		contractInfo.SizeMultiplier.String(), size)
+	if isRiskReduction {
+		fmt.Printf("[BITGET-ORDER] Risk reduction size calc: requested=%s contracts rounded=%s\n",
+			details.Amount.Abs().String(), size)
+	} else {
+		baseAmount := details.AmountUSDT.Div(price)
+		fmt.Printf("[BITGET-ORDER] Size calc: %.2f USDT / %s = %.2f base / %s = %s contracts\n",
+			details.AmountUSDT.InexactFloat64(), price.StringFixed(5), baseAmount.InexactFloat64(),
+			contractInfo.SizeMultiplier.String(), size)
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -278,31 +306,36 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		"marginCoin":  "USDT",
 		"size":        size,
 		"side":        bitgetSide,
-		"tradeSide":   "open",
+		"tradeSide":   tradeSide,
 		"holdSide":    holdSide,
 		"orderType":   "market",
 	}
+	if isRiskReduction {
+		body["reduceOnly"] = "YES"
+	}
 
 	// Add TP/SL if provided
-	if details.TakeProfit != nil {
+	if !isRiskReduction && details.TakeProfit != nil {
 		body["presetTakeProfitPrice"] = formatFuturesTriggerPrice(*details.TakeProfit, contractInfo)
 	}
-	if details.StopLoss != nil {
+	if !isRiskReduction && details.StopLoss != nil {
 		body["presetStopLossPrice"] = formatFuturesTriggerPrice(*details.StopLoss, contractInfo)
 	}
 
-	fmt.Printf("[BITGET-ORDER] Placing futures order: %s %s (size: %s contracts @ %s USDT each)\n",
-		bitgetSide, symbol, size, price.StringFixed(5))
+	fmt.Printf("[BITGET-ORDER] Placing futures order: %s %s (tradeSide=%s holdSide=%s size=%s @ %s)\n",
+		bitgetSide, symbol, tradeSide, holdSide, size, price.StringFixed(5))
+	fmt.Printf("[BITGET-ORDER] Futures payload: %s\n", marshalForLog(body))
 
 	result, err := e.placeBitgetFuturesOrderRequest(ctx, body)
 	if err != nil {
 		return "", fmt.Errorf("failed to place futures order: %w", err)
 	}
-	if result.Code == "400172" {
+	if !isRiskReduction && result.Code == "400172" {
 		legacyBody := cloneStringAnyMap(body)
 		legacyBody["side"] = legacyBitgetOpenSide(bitgetSide)
 		delete(legacyBody, "tradeSide")
 		delete(legacyBody, "holdSide")
+		delete(legacyBody, "reduceOnly")
 		result, err = e.placeBitgetFuturesOrderRequest(ctx, legacyBody)
 		if err != nil {
 			return "", fmt.Errorf("failed to place futures order (legacy side): %w", err)
@@ -808,12 +841,231 @@ func (e *BitgetOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID
 	return nil
 }
 
+func (e *BitgetOrderExecutor) SyncPositionProtection(
+	ctx context.Context,
+	exchange string,
+	position ManagedOpenPosition,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+) error {
+	if !strings.EqualFold(strings.TrimSpace(exchange), "bitget") {
+		return ErrProtectionSyncUnsupported
+	}
+	if !strings.EqualFold(strings.TrimSpace(position.MarketType), "futures") {
+		return ErrProtectionSyncUnsupported
+	}
+	apiSymbol := strings.ReplaceAll(strings.TrimSpace(position.Symbol), "/", "")
+	if apiSymbol == "" {
+		return fmt.Errorf("symbol is required for exchange-side protection sync")
+	}
+	holdSide := "short"
+	if isLongSide(position.Side) {
+		holdSide = "long"
+	}
+
+	contractInfo, err := e.getContractInfo(ctx, apiSymbol)
+	if err != nil {
+		return fmt.Errorf("fetch contract info for protection sync: %w", err)
+	}
+	if err := e.cancelExistingPositionTPSL(ctx, apiSymbol, holdSide); err != nil {
+		return fmt.Errorf("cancel existing TP/SL plan orders failed: %w", err)
+	}
+	if stopLoss.LessThanOrEqual(decimal.Zero) && takeProfit.LessThanOrEqual(decimal.Zero) {
+		return nil
+	}
+	if err := e.placePositionTPSL(ctx, apiSymbol, holdSide, stopLoss, takeProfit, contractInfo); err != nil {
+		splitErr := e.placePositionTPSLSplit(ctx, apiSymbol, holdSide, stopLoss, takeProfit, contractInfo)
+		if splitErr != nil {
+			return fmt.Errorf("place replacement TP/SL plan order failed: %w (split fallback failed: %v)", err, splitErr)
+		}
+		log.Printf("[BITGET-ORDER] Combined TP/SL sync rejected, split fallback applied for %s", apiSymbol)
+	}
+	return nil
+}
+
+func (e *BitgetOrderExecutor) cancelExistingPositionTPSL(ctx context.Context, symbol, holdSide string) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/mix/order/orders-plan-pending?productType=USDT-FUTURES&planType=profit_loss&symbol=%s",
+		symbol,
+	)
+	resp, err := e.doRequest(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("list pending TP/SL plans: %w", err)
+	}
+
+	var result struct {
+		Code string          `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return fmt.Errorf("failed to parse pending TP/SL orders response: %w", err)
+	}
+	if result.Code != "00000" {
+		return fmt.Errorf("bitget API error while listing TP/SL plans: %s (code: %s)", result.Msg, result.Code)
+	}
+
+	orders, err := parseBitgetOrderList(result.Data)
+	if err != nil {
+		return fmt.Errorf("failed to parse pending TP/SL orders payload: %w", err)
+	}
+	if len(orders) == 0 {
+		return nil
+	}
+
+	orderIDList := make([]map[string]string, 0, len(orders))
+	for _, order := range orders {
+		orderID := strings.TrimSpace(mapStringAny(order, "orderId", "orderID", "id"))
+		if orderID == "" {
+			continue
+		}
+		recordHoldSide := strings.ToLower(strings.TrimSpace(mapStringAny(order, "holdSide", "posSide")))
+		if recordHoldSide != "" && recordHoldSide != strings.ToLower(strings.TrimSpace(holdSide)) {
+			continue
+		}
+		orderIDList = append(orderIDList, map[string]string{"orderId": orderID})
+	}
+	if len(orderIDList) == 0 {
+		return nil
+	}
+
+	cancelBody := map[string]interface{}{
+		"symbol":      symbol,
+		"productType": "USDT-FUTURES",
+		"marginCoin":  "USDT",
+		"orderIdList": orderIDList,
+	}
+	jsonBody, err := json.Marshal(cancelBody)
+	if err != nil {
+		return fmt.Errorf("marshal cancel TP/SL payload: %w", err)
+	}
+	cancelResp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/cancel-plan-order", jsonBody)
+	if err != nil {
+		return fmt.Errorf("cancel TP/SL plans request: %w", err)
+	}
+
+	var cancelResult struct {
+		Code string `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(cancelResp, &cancelResult); err != nil {
+		return fmt.Errorf("failed to parse cancel TP/SL response: %w", err)
+	}
+	if cancelResult.Code != "00000" {
+		return fmt.Errorf("bitget cancel TP/SL error: %s (code: %s)", cancelResult.Msg, cancelResult.Code)
+	}
+	return nil
+}
+
+func (e *BitgetOrderExecutor) placePositionTPSL(
+	ctx context.Context,
+	symbol, holdSide string,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+	contractInfo *ContractInfo,
+) error {
+	body := map[string]interface{}{
+		"symbol":      symbol,
+		"productType": "USDT-FUTURES",
+		"marginCoin":  "USDT",
+		"holdSide":    holdSide,
+	}
+
+	if takeProfit.GreaterThan(decimal.Zero) {
+		tpPrice := formatFuturesTriggerPrice(takeProfit, contractInfo)
+		body["stopSurplusTriggerPrice"] = tpPrice
+		body["stopSurplusTriggerType"] = "mark_price"
+		body["stopSurplusExecutePrice"] = tpPrice
+	}
+	if stopLoss.GreaterThan(decimal.Zero) {
+		slPrice := formatFuturesTriggerPrice(stopLoss, contractInfo)
+		body["stopLossTriggerPrice"] = slPrice
+		body["stopLossTriggerType"] = "mark_price"
+		body["stopLossExecutePrice"] = slPrice
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal place TP/SL payload: %w", err)
+	}
+	resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/place-pos-tpsl", jsonBody)
+	if err != nil {
+		return fmt.Errorf("place TP/SL request: %w", err)
+	}
+
+	var result struct {
+		Code string `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return fmt.Errorf("failed to parse place TP/SL response: %w", err)
+	}
+	if result.Code != "00000" {
+		return fmt.Errorf("bitget place TP/SL error: %s (code: %s)", result.Msg, result.Code)
+	}
+	return nil
+}
+
+func (e *BitgetOrderExecutor) placePositionTPSLSplit(
+	ctx context.Context,
+	symbol, holdSide string,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+	contractInfo *ContractInfo,
+) error {
+	if takeProfit.GreaterThan(decimal.Zero) {
+		if err := e.placePositionTPSL(ctx, symbol, holdSide, decimal.Zero, takeProfit, contractInfo); err != nil {
+			return fmt.Errorf("split TP placement failed: %w", err)
+		}
+	}
+	if stopLoss.GreaterThan(decimal.Zero) {
+		if err := e.placePositionTPSL(ctx, symbol, holdSide, stopLoss, decimal.Zero, contractInfo); err != nil {
+			return fmt.Errorf("split SL placement failed: %w", err)
+		}
+	}
+	return nil
+}
+
 // IsPaperTrading returns false for Bitget executor (real trading mode)
 func (e *BitgetOrderExecutor) IsPaperTrading() bool {
 	return false
 }
 
 var _ ScalpingOrderExecutor = (*BitgetOrderExecutor)(nil)
+
+func marshalForLog(v interface{}) string {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(payload)
+}
+
+func mapStringAny(raw map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		value, ok := raw[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				return typed
+			}
+		case fmt.Stringer:
+			text := typed.String()
+			if strings.TrimSpace(text) != "" {
+				return text
+			}
+		default:
+			text := fmt.Sprintf("%v", typed)
+			if strings.TrimSpace(text) != "" && text != "<nil>" {
+				return text
+			}
+		}
+	}
+	return ""
+}
 
 func parseBitgetOrderList(raw json.RawMessage) ([]map[string]interface{}, error) {
 	if len(raw) == 0 || string(raw) == "null" {

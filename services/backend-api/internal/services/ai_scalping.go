@@ -353,22 +353,38 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 }
 
 type AITradingDecision struct {
-	Action      string           `json:"action"`
-	Symbol      string           `json:"symbol"`
-	SizePercent float64          `json:"size_pct"`
-	Confidence  float64          `json:"confidence"`
-	Reasoning   string           `json:"reasoning"`
-	StopLoss    *decimal.Decimal `json:"stop_loss,omitempty"`
-	TakeProfit  *decimal.Decimal `json:"take_profit,omitempty"`
-	OrderID     string           `json:"order_id,omitempty"`
-	EntryPrice  *decimal.Decimal `json:"-"`
+	Action          string           `json:"action"`
+	Symbol          string           `json:"symbol"`
+	SizePercent     float64          `json:"size_pct"`
+	Confidence      float64          `json:"confidence"`
+	Reasoning       string           `json:"reasoning"`
+	ReasonCategory  string           `json:"reason_category,omitempty"`
+	ConfidenceKnown bool             `json:"confidence_known"`
+	StopLoss        *decimal.Decimal `json:"stop_loss,omitempty"`
+	TakeProfit      *decimal.Decimal `json:"take_profit,omitempty"`
+	OrderID         string           `json:"order_id,omitempty"`
+	EntryPrice      *decimal.Decimal `json:"-"`
 }
 
 type TradingPortfolio struct {
-	USDTBalance   float64 `json:"usdt_balance"`
-	TotalValue    float64 `json:"total_value"`
-	OpenPositions int     `json:"open_positions"`
-	UnrealizedPnL float64 `json:"unrealized_pnl"`
+	USDTBalance        float64 `json:"usdt_balance"`
+	TotalValue         float64 `json:"total_value"`
+	OpenPositions      int     `json:"open_positions"`
+	UnrealizedPnL      float64 `json:"unrealized_pnl"`
+	RiskSharpe         float64 `json:"risk_sharpe"`
+	RiskSortino        float64 `json:"risk_sortino"`
+	RiskDrawdown       float64 `json:"risk_drawdown"`
+	RiskExpectancy     float64 `json:"risk_expectancy"`
+	RiskSampleSize     int     `json:"risk_sample_size"`
+	StrategyPhase      string  `json:"strategy_phase"`
+	PhaseMinConfidence float64 `json:"phase_min_confidence"`
+	PhaseMaxCapitalPct float64 `json:"phase_max_capital_pct"`
+	MilestoneProgress  float64 `json:"milestone_progress"`
+	NoFillMinutes      float64 `json:"no_fill_minutes"`
+	DriftActive        bool    `json:"state_drift_active"`
+	RecoveryMode       string  `json:"recovery_mode,omitempty"`
+	RecoveryEntryOK    bool    `json:"recovery_entry_allowed"`
+	RecoveryCleanCycle int     `json:"recovery_clean_cycles"`
 }
 
 type AIScalpingService struct {
@@ -378,6 +394,8 @@ type AIScalpingService struct {
 	ccxtService   ccxt.CCXTService
 	orderExecutor ScalpingOrderExecutor
 	tradeMemory   *TradeMemory
+	runtimeMu     sync.RWMutex
+	runtimeState  AIScalpingRuntimeState
 	pairCacheMu   sync.RWMutex
 	cachedPairs   []string
 	cacheExchange string
@@ -393,6 +411,26 @@ type symbolExecutionGuard struct {
 	LossWindowFrom    time.Time
 	LossStreak        int
 	LastLoss          time.Time
+}
+
+const (
+	reasonCategoryLLMTimeout           = "llm_timeout"
+	reasonCategoryLLMParseContract     = "llm_parse_contract"
+	reasonCategoryExecutionUnavailable = "execution_unavailable"
+	reasonCategoryStrategyHold         = "strategy_hold"
+)
+
+type AIScalpingRuntimeState struct {
+	LastProvider           string    `json:"last_provider"`
+	LastSuccessfulProvider string    `json:"last_successful_provider"`
+	LastError              string    `json:"last_error"`
+	LastErrorAt            time.Time `json:"last_error_at"`
+	LastSuccessAt          time.Time `json:"last_success_at"`
+	LastReasonCategory     string    `json:"last_reason_category"`
+	FailoverAttempted      bool      `json:"failover_attempted"`
+	FailoverSucceeded      bool      `json:"failover_succeeded"`
+	FailoverProviders      []string  `json:"failover_providers"`
+	FailedProviders        []string  `json:"failed_providers"`
 }
 
 // SetExchange updates the exchange for scalping (called dynamically based on user wallet)
@@ -420,6 +458,76 @@ func NewAIScalpingService(
 	}
 }
 
+// RuntimeDiagnostics returns the latest AI runtime diagnostics for operator visibility.
+func (s *AIScalpingService) RuntimeDiagnostics() map[string]interface{} {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+
+	result := map[string]interface{}{
+		"last_provider":            s.runtimeState.LastProvider,
+		"last_successful_provider": s.runtimeState.LastSuccessfulProvider,
+		"last_error":               s.runtimeState.LastError,
+		"last_error_at":            "",
+		"last_success_at":          "",
+		"last_reason_category":     s.runtimeState.LastReasonCategory,
+		"failover_attempted":       s.runtimeState.FailoverAttempted,
+		"failover_succeeded":       s.runtimeState.FailoverSucceeded,
+		"failover_providers":       append([]string(nil), s.runtimeState.FailoverProviders...),
+		"failed_providers":         append([]string(nil), s.runtimeState.FailedProviders...),
+	}
+	if !s.runtimeState.LastErrorAt.IsZero() {
+		result["last_error_at"] = s.runtimeState.LastErrorAt.UTC().Format(time.RFC3339)
+	}
+	if !s.runtimeState.LastSuccessAt.IsZero() {
+		result["last_success_at"] = s.runtimeState.LastSuccessAt.UTC().Format(time.RFC3339)
+	}
+	return result
+}
+
+func (s *AIScalpingService) updateRuntimeState(
+	reasonCategory string,
+	err error,
+	success bool,
+	provider string,
+	failoverInfo llm.FailoverAttemptInfo,
+) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		provider = strings.TrimSpace(failoverInfo.SuccessProvider)
+	}
+	if provider != "" {
+		s.runtimeState.LastProvider = provider
+	}
+	if success {
+		s.runtimeState.LastSuccessfulProvider = s.runtimeState.LastProvider
+		s.runtimeState.LastSuccessAt = time.Now().UTC()
+		s.runtimeState.LastError = ""
+		s.runtimeState.LastErrorAt = time.Time{}
+	} else if err != nil {
+		s.runtimeState.LastError = err.Error()
+		s.runtimeState.LastErrorAt = time.Now().UTC()
+	}
+
+	s.runtimeState.LastReasonCategory = strings.TrimSpace(reasonCategory)
+	s.runtimeState.FailoverAttempted = failoverInfo.FailoverAttempted
+	s.runtimeState.FailoverSucceeded = failoverInfo.FailoverSucceeded
+	s.runtimeState.FailoverProviders = append([]string(nil), failoverInfo.AttemptedProviders...)
+	s.runtimeState.FailedProviders = append([]string(nil), failoverInfo.FailedProviders...)
+}
+
+func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptInfo {
+	type statsProvider interface {
+		Stats() llm.FailoverStats
+	}
+	if provider, ok := s.llmClient.(statsProvider); ok {
+		return provider.Stats().LastAttempt
+	}
+	return llm.FailoverAttemptInfo{}
+}
+
 func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (*AITradingDecision, error) {
 	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", portfolio.USDTBalance)
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
@@ -440,14 +548,63 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 
 	decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
 	decision.Symbol = normalizeSymbolForComparison(decision.Symbol)
+	if decision.Action == "hold" {
+		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
+		if isRuntimeReasonCategory(decision.ReasonCategory) {
+			decision.ConfidenceKnown = false
+			decision.Confidence = 0
+		} else if !decision.ConfidenceKnown {
+			decision.ConfidenceKnown = true
+		}
+	} else {
+		if decision.ReasonCategory == "" {
+			decision.ReasonCategory = reasonCategoryStrategyHold
+		}
+		if !decision.ConfidenceKnown {
+			decision.ConfidenceKnown = true
+		}
+	}
 
 	log.Printf("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
 
 	if err := s.validateDecision(decision, signals); err != nil {
-		return fallbackHoldDecision(err.Error(), err), nil
+		if isDecisionContractValidationError(decision, err) {
+			runtimeErr := fmt.Errorf("invalid model decision contract: %w", err)
+			s.updateRuntimeState(
+				reasonCategoryLLMParseContract,
+				runtimeErr,
+				false,
+				"",
+				s.getLatestFailoverAttemptInfo(),
+			)
+			return runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), nil
+		}
+		return strategyHoldDecision(err.Error(), decision.Confidence), nil
 	}
 
-	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds(ctx)
+	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds(ctx, portfolio)
+	if portfolio.PhaseMinConfidence > 0 && portfolio.PhaseMinConfidence > effectiveMinConfidence {
+		effectiveMinConfidence = portfolio.PhaseMinConfidence
+	}
+	if portfolio.PhaseMaxCapitalPct > 0 && portfolio.PhaseMaxCapitalPct < effectiveMaxCapital {
+		effectiveMaxCapital = portfolio.PhaseMaxCapitalPct
+	}
+	if portfolio.MilestoneProgress > 0 && portfolio.MilestoneProgress < 25 {
+		effectiveMaxCapital = effectiveMaxCapital * 0.8
+	}
+	if portfolio.RiskSampleSize >= 10 && portfolio.RiskExpectancy < 0 {
+		effectiveMaxCapital = effectiveMaxCapital * 0.75
+	}
+	if portfolio.RiskDrawdown > 0.12 {
+		effectiveMinConfidence += 0.05
+		effectiveMaxCapital = effectiveMaxCapital * 0.7
+	}
+	if effectiveMinConfidence > 0.95 {
+		effectiveMinConfidence = 0.95
+	}
+	if effectiveMaxCapital < 0.1 {
+		effectiveMaxCapital = 0.1
+	}
 	gate := s.evaluatePreTradeGate(ctx, decision, signals)
 	if !gate.Allowed {
 		attemptedAction := decision.Action
@@ -455,6 +612,8 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		decision.Confidence = 0
 		decision.OrderID = ""
 		decision.Reasoning = gate.Reason
+		decision.ReasonCategory = reasonCategoryStrategyHold
+		decision.ConfidenceKnown = true
 		log.Printf(
 			"[AI-SCALPING] Pre-trade gate blocked %s %s (regime=%s expectancy=%.4f sample=%d): %s",
 			attemptedAction,
@@ -473,22 +632,34 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 	}
 	log.Printf(
-		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d",
+		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d phase=%s risk_drawdown=%.4f",
 		effectiveMinConfidence,
 		effectiveMaxCapital,
 		gate.Regime,
 		gate.NetExpectancy,
 		gate.SampleSize,
+		portfolio.StrategyPhase,
+		portfolio.RiskDrawdown,
 	)
 
 	if decision.Action == "hold" {
+		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
+		if isRuntimeReasonCategory(decision.ReasonCategory) {
+			decision.ConfidenceKnown = false
+			decision.Confidence = 0
+		} else {
+			decision.ConfidenceKnown = true
+		}
 		log.Printf("[AI-SCALPING] AI decided to hold: %s", decision.Reasoning)
 		return decision, nil
 	}
 
 	if decision.Confidence < effectiveMinConfidence {
 		log.Printf("[AI-SCALPING] Confidence %.2f below minimum %.2f, skipping", decision.Confidence, effectiveMinConfidence)
-		return decision, fmt.Errorf("confidence below threshold")
+		return strategyHoldDecision(
+			fmt.Sprintf("confidence %.2f below dynamic threshold %.2f", decision.Confidence, effectiveMinConfidence),
+			decision.Confidence,
+		), nil
 	}
 
 	if s.config.AutoExecute && s.orderExecutor != nil {
@@ -498,6 +669,8 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				decision.Confidence = 0
 				decision.OrderID = ""
 				decision.Reasoning = buildExecutionFallbackReason(err)
+				decision.ReasonCategory = reasonCategoryExecutionUnavailable
+				decision.ConfidenceKnown = false
 				log.Printf("[AI-SCALPING] Downgrading execution issue to HOLD: %v", err)
 				return decision, nil
 			}
@@ -828,8 +1001,18 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 
 	log.Printf("[AI-SCALPING] Sending LLM request...")
 
-	resp, err := s.llmClient.Complete(ctx, req)
+	inferenceCtx, cancelInference := s.withInferenceBudget(ctx)
+	defer cancelInference()
+
+	resp, err := s.llmClient.Complete(inferenceCtx, req)
 	if err != nil {
+		s.updateRuntimeState(
+			classifyReasonCategory(err, ""),
+			err,
+			false,
+			"",
+			s.getLatestFailoverAttemptInfo(),
+		)
 		log.Printf("[AI-SCALPING] LLM completion failed: %v", err)
 		return nil, fmt.Errorf("LLM completion failed: %w", err)
 	}
@@ -842,9 +1025,38 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		decision, err = s.parseDecisionWithRetries(ctx, resp.Message.Content)
 		if err != nil {
 			log.Printf("[AI-SCALPING] Structured-output retries exhausted: %v", err)
-			return fallbackHoldDecision(resp.Message.Content, err), nil
+			hold := fallbackHoldDecision(resp.Message.Content, err)
+			s.updateRuntimeState(
+				hold.ReasonCategory,
+				err,
+				false,
+				string(resp.Provider),
+				s.getLatestFailoverAttemptInfo(),
+			)
+			return hold, nil
 		}
 	}
+	if decision.Action == "hold" {
+		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
+		if isRuntimeReasonCategory(decision.ReasonCategory) {
+			decision.ConfidenceKnown = false
+			decision.Confidence = 0
+		}
+	} else {
+		if decision.ReasonCategory == "" {
+			decision.ReasonCategory = reasonCategoryStrategyHold
+		}
+		if !decision.ConfidenceKnown {
+			decision.ConfidenceKnown = true
+		}
+	}
+	s.updateRuntimeState(
+		decision.ReasonCategory,
+		nil,
+		true,
+		string(resp.Provider),
+		s.getLatestFailoverAttemptInfo(),
+	)
 
 	stopLossFloat := 0.0
 	takeProfitFloat := 0.0
@@ -909,6 +1121,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
 
 	var memoryContext string
+	var recoveryContext string
 	if s.tradeMemory != nil {
 		topSymbol := ""
 		if len(signals) > 0 {
@@ -918,6 +1131,10 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 		if mem, err := s.tradeMemory.BuildMemoryContext(ctx, topSymbol, currentContext); err == nil {
 			memoryContext = "\n" + mem
 		}
+		// Add recovery-specific context if in drawdown
+		if portfolio.RiskDrawdown > 0.05 {
+			recoveryContext = "\n" + s.tradeMemory.BuildRecoveryContext(ctx, portfolio.RiskDrawdown)
+		}
 	}
 
 	return fmt.Sprintf(`Analyze these market signals and make a trading decision.
@@ -926,11 +1143,42 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - USDT Balance: %.2f
 - Total Value: %.2f
 - Open Positions: %d
+- Unrealized PnL: %.4f
+
+## Autonomous Control Plane
+- Strategy Phase: %s
+- Phase Min Confidence: %.2f
+- Phase Max Capital %%: %.2f
+- Fund Milestone Progress: %.2f%%
+- No-fill Duration (minutes): %.1f
+- State Drift Active: %t
+- Risk Sharpe: %.4f
+- Risk Sortino: %.4f
+- Risk Drawdown: %.4f
+- Risk Expectancy: %.6f (%d samples)
 
 ## Market Signals
-%s%s
-
-Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Return only valid JSON.`, portfolio.USDTBalance, portfolio.TotalValue, portfolio.OpenPositions, string(signalsJSON), memoryContext)
+%s%s%s
+Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Adapt your strategy based on recovery context if provided. Return only valid JSON.`,
+		portfolio.USDTBalance,
+		portfolio.TotalValue,
+		portfolio.OpenPositions,
+		portfolio.UnrealizedPnL,
+		portfolio.StrategyPhase,
+		portfolio.PhaseMinConfidence,
+		portfolio.PhaseMaxCapitalPct,
+		portfolio.MilestoneProgress,
+		portfolio.NoFillMinutes,
+		portfolio.DriftActive,
+		portfolio.RiskSharpe,
+		portfolio.RiskSortino,
+		portfolio.RiskDrawdown,
+		portfolio.RiskExpectancy,
+		portfolio.RiskSampleSize,
+		string(signalsJSON),
+		memoryContext,
+		recoveryContext,
+	)
 }
 
 func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITradingDecision, portfolio TradingPortfolio, maxCapitalPct float64) error {
@@ -1221,6 +1469,11 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		return fmt.Errorf("confidence out of range: %.4f", decision.Confidence)
 	}
 	if decision.Action == "hold" {
+		decision.Symbol = ""
+		decision.SizePercent = 0
+		if strings.TrimSpace(decision.Reasoning) == "" {
+			decision.Reasoning = "model selected hold (no detailed reasoning)"
+		}
 		return nil
 	}
 	if decision.Symbol == "" {
@@ -1353,54 +1606,177 @@ func resolveDecisionSymbol(raw string, known map[string]aiMarketSignal) (aiMarke
 }
 
 func parseAIDecisionPayload(content string) (*AITradingDecision, error) {
-	var payload struct {
-		Action      string          `json:"action"`
-		Symbol      string          `json:"symbol"`
-		SizePercent float64         `json:"size_pct"`
-		Confidence  float64         `json:"confidence"`
-		Reasoning   string          `json:"reasoning"`
-		StopLoss    json.RawMessage `json:"stop_loss"`
-		TakeProfit  json.RawMessage `json:"take_profit"`
-	}
-
 	raw := strings.TrimSpace(content)
-	if strings.HasPrefix(raw, "```") {
-		raw = strings.TrimPrefix(raw, "```json")
-		raw = strings.TrimPrefix(raw, "```")
-		raw = strings.TrimSuffix(raw, "```")
-		raw = strings.TrimSpace(raw)
-	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		start := strings.Index(raw, "{")
-		end := strings.LastIndex(raw, "}")
-		if start >= 0 && end > start {
-			extracted := raw[start : end+1]
-			if extractErr := json.Unmarshal([]byte(extracted), &payload); extractErr != nil {
-				return nil, err
-			}
-		} else {
-			return nil, err
-		}
+	if raw == "" {
+		return nil, fmt.Errorf("empty decision payload")
 	}
 
-	stopLoss, err := parseOptionalDecimal(payload.StopLoss)
+	candidates := make([]string, 0, 4)
+	appendCandidate := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == candidate {
+				return
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	cleaned := stripDecisionCodeFence(raw)
+	appendCandidate(cleaned)
+	if extracted, ok := extractBalancedJSONObject(cleaned); ok {
+		appendCandidate(extracted)
+	}
+	if extracted, ok := extractBalancedJSONObject(raw); ok {
+		appendCandidate(extracted)
+	}
+	appendCandidate(raw)
+
+	var lastErr error
+	for _, candidate := range candidates {
+		decision, err := parseAIDecisionJSONObject(candidate)
+		if err == nil {
+			return decision, nil
+		}
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("unable to parse AI decision payload")
+}
+
+func stripDecisionCodeFence(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+
+	trimmed = strings.TrimPrefix(trimmed, "```json")
+	trimmed = strings.TrimPrefix(trimmed, "```JSON")
+	trimmed = strings.TrimPrefix(trimmed, "```")
+	trimmed = strings.TrimSuffix(trimmed, "```")
+	return strings.TrimSpace(trimmed)
+}
+
+func parseAIDecisionJSONObject(raw string) (*AITradingDecision, error) {
+	payload := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, err
+	}
+
+	action, err := parseStringRaw(selectDecisionField(payload, "action", "decision", "trade_action"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid action: %w", err)
+	}
+	symbol, _ := parseStringRaw(selectDecisionField(payload, "symbol", "pair", "ticker"))
+	sizePct, _ := parseFloatRaw(selectDecisionField(payload, "size_pct", "size_percent", "size"))
+	confidence, _ := parseFloatRaw(selectDecisionField(payload, "confidence", "probability", "score"))
+	reasoning, _ := parseStringRaw(selectDecisionField(payload, "reasoning", "reason", "analysis", "summary"))
+
+	stopLoss, err := parseOptionalDecimal(selectDecisionField(payload, "stop_loss", "sl", "stoploss"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid stop_loss: %w", err)
 	}
-	takeProfit, err := parseOptionalDecimal(payload.TakeProfit)
+	takeProfit, err := parseOptionalDecimal(selectDecisionField(payload, "take_profit", "tp", "takeprofit"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid take_profit: %w", err)
 	}
+	reasonCategory, _ := parseStringRaw(selectDecisionField(payload, "reason_category", "hold_category"))
+	confidenceKnown, confidenceKnownErr := parseBoolRaw(selectDecisionField(payload, "confidence_known"))
+	if confidenceKnownErr != nil {
+		confidenceKnown = false
+	}
 
 	return &AITradingDecision{
-		Action:      payload.Action,
-		Symbol:      payload.Symbol,
-		SizePercent: payload.SizePercent,
-		Confidence:  payload.Confidence,
-		Reasoning:   payload.Reasoning,
-		StopLoss:    stopLoss,
-		TakeProfit:  takeProfit,
+		Action:          action,
+		Symbol:          symbol,
+		SizePercent:     sizePct,
+		Confidence:      confidence,
+		Reasoning:       reasoning,
+		ReasonCategory:  strings.TrimSpace(strings.ToLower(reasonCategory)),
+		ConfidenceKnown: confidenceKnown,
+		StopLoss:        stopLoss,
+		TakeProfit:      takeProfit,
 	}, nil
+}
+
+func selectDecisionField(payload map[string]json.RawMessage, keys ...string) json.RawMessage {
+	for _, key := range keys {
+		if raw, ok := payload[key]; ok {
+			return raw
+		}
+	}
+	return nil
+}
+
+func parseStringRaw(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", fmt.Errorf("field missing")
+	}
+
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return strings.TrimSpace(asString), nil
+	}
+
+	var asNumber float64
+	if err := json.Unmarshal(raw, &asNumber); err == nil {
+		return strings.TrimSpace(strconv.FormatFloat(asNumber, 'f', -1, 64)), nil
+	}
+
+	return "", fmt.Errorf("unsupported string field %s", string(raw))
+}
+
+func parseFloatRaw(raw json.RawMessage) (float64, error) {
+	if len(raw) == 0 {
+		return 0, fmt.Errorf("field missing")
+	}
+
+	var asNumber float64
+	if err := json.Unmarshal(raw, &asNumber); err == nil {
+		return asNumber, nil
+	}
+
+	var asText string
+	if err := json.Unmarshal(raw, &asText); err == nil {
+		value, parseErr := strconv.ParseFloat(strings.TrimSpace(asText), 64)
+		if parseErr != nil {
+			return 0, parseErr
+		}
+		return value, nil
+	}
+
+	return 0, fmt.Errorf("unsupported numeric field %s", string(raw))
+}
+
+func parseBoolRaw(raw json.RawMessage) (bool, error) {
+	if len(raw) == 0 {
+		return false, fmt.Errorf("field missing")
+	}
+
+	var asBool bool
+	if err := json.Unmarshal(raw, &asBool); err == nil {
+		return asBool, nil
+	}
+
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		switch strings.ToLower(strings.TrimSpace(asString)) {
+		case "true", "1", "yes", "on":
+			return true, nil
+		case "false", "0", "no", "off":
+			return false, nil
+		default:
+			return false, fmt.Errorf("unsupported bool string %q", asString)
+		}
+	}
+
+	return false, fmt.Errorf("unsupported bool field %s", string(raw))
 }
 
 func fallbackHoldDecision(content string, parseErr error) *AITradingDecision {
@@ -1417,11 +1793,178 @@ func fallbackHoldDecision(content string, parseErr error) *AITradingDecision {
 		reason = fmt.Sprintf("model response parse fallback (%v): %s", parseErr, sanitized)
 	}
 
+	reasonCategory := classifyReasonCategory(parseErr, sanitized)
+	if reasonCategory == "" {
+		reasonCategory = reasonCategoryLLMParseContract
+	}
+
 	return &AITradingDecision{
-		Action:      "hold",
-		Confidence:  0,
-		Reasoning:   reason,
-		SizePercent: 0,
+		Action:          "hold",
+		Confidence:      0,
+		Reasoning:       reason,
+		ReasonCategory:  reasonCategory,
+		ConfidenceKnown: false,
+		SizePercent:     0,
+	}
+}
+
+func strategyHoldDecision(reason string, confidence float64) *AITradingDecision {
+	if confidence < 0 {
+		confidence = 0
+	}
+	if confidence > 1 {
+		confidence = 1
+	}
+	return &AITradingDecision{
+		Action:          "hold",
+		Confidence:      confidence,
+		Reasoning:       strings.TrimSpace(reason),
+		ReasonCategory:  reasonCategoryStrategyHold,
+		ConfidenceKnown: true,
+		SizePercent:     0,
+	}
+}
+
+func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecision {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "runtime-degraded decision fallback"
+	}
+	category = strings.TrimSpace(category)
+	if category == "" {
+		category = reasonCategoryExecutionUnavailable
+	}
+	return &AITradingDecision{
+		Action:          "hold",
+		Confidence:      0,
+		Reasoning:       reason,
+		ReasonCategory:  category,
+		ConfidenceKnown: false,
+		SizePercent:     0,
+	}
+}
+
+func isDecisionContractValidationError(decision *AITradingDecision, err error) bool {
+	if err == nil {
+		return false
+	}
+	if decision == nil {
+		return true
+	}
+	action := strings.ToLower(strings.TrimSpace(decision.Action))
+	if action == "hold" {
+		return false
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(lower, "decision is nil"),
+		strings.Contains(lower, "unsupported action"),
+		strings.Contains(lower, "confidence out of range"),
+		strings.Contains(lower, "symbol is required for action"),
+		strings.Contains(lower, "size_pct must be > 0"),
+		strings.Contains(lower, "symbol ") && strings.Contains(lower, "not in current analyzed universe"),
+		strings.Contains(lower, "invalid market price"),
+		strings.Contains(lower, "stop_loss and take_profit must be positive"),
+		strings.Contains(lower, "buy decision requires stop_loss < price < take_profit"),
+		strings.Contains(lower, "sell decision requires stop_loss > price > take_profit"):
+		return true
+	default:
+		return false
+	}
+}
+
+func classifyReasonCategory(err error, content string) string {
+	msg := ""
+	if err != nil {
+		msg = strings.ToLower(err.Error())
+	}
+	if content != "" {
+		msg = strings.TrimSpace(msg + " " + strings.ToLower(content))
+	}
+	switch {
+	case strings.Contains(msg, "context deadline exceeded"),
+		strings.Contains(msg, "timeout"),
+		strings.Contains(msg, "deadline exceeded"):
+		return reasonCategoryLLMTimeout
+	case strings.Contains(msg, "failed to parse ai decision"),
+		strings.Contains(msg, "model response parse fallback"),
+		strings.Contains(msg, "invalid model decision contract"),
+		strings.Contains(msg, "invalid character"),
+		strings.Contains(msg, "json"):
+		return reasonCategoryLLMParseContract
+	case strings.Contains(msg, "execution unavailable"),
+		strings.Contains(msg, "request failed"),
+		strings.Contains(msg, "futures-only mode prevented spot fallback"),
+		strings.Contains(msg, "failed to get ticker"),
+		strings.Contains(msg, "symbol cooldown active"),
+		strings.Contains(msg, "symbol loss cooldown active"),
+		strings.Contains(msg, "symbol failure budget reached"):
+		return reasonCategoryExecutionUnavailable
+	default:
+		if strings.TrimSpace(msg) == "" {
+			return reasonCategoryStrategyHold
+		}
+		return reasonCategoryExecutionUnavailable
+	}
+}
+
+func isRuntimeReasonCategory(category string) bool {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case reasonCategoryLLMTimeout, reasonCategoryLLMParseContract, reasonCategoryExecutionUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeHoldReasonCategory(category, reasoning string) string {
+	category = strings.ToLower(strings.TrimSpace(category))
+	inferredRuntime := classifyRuntimeReasoning(reasoning)
+	if category == "" {
+		if inferredRuntime != "" {
+			category = inferredRuntime
+		} else {
+			category = reasonCategoryStrategyHold
+		}
+	}
+	// Runtime-degraded holds must never be surfaced as strategy holds.
+	if category == reasonCategoryStrategyHold && inferredRuntime != "" {
+		category = inferredRuntime
+	}
+	if category == "" {
+		category = reasonCategoryStrategyHold
+	}
+	return category
+}
+
+func classifyRuntimeReasoning(reasoning string) string {
+	lower := strings.ToLower(strings.TrimSpace(reasoning))
+	if lower == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(lower, "context deadline exceeded"),
+		strings.Contains(lower, "timeout"),
+		strings.Contains(lower, "deadline exceeded"):
+		return reasonCategoryLLMTimeout
+	case strings.Contains(lower, "model response parse fallback"),
+		strings.Contains(lower, "invalid model decision contract"),
+		strings.Contains(lower, "failed to parse ai decision"),
+		strings.Contains(lower, "invalid character"),
+		strings.Contains(lower, "json"):
+		return reasonCategoryLLMParseContract
+	case strings.Contains(lower, "execution unavailable"),
+		strings.Contains(lower, "request failed"),
+		strings.Contains(lower, "futures-only mode prevented spot fallback"),
+		strings.Contains(lower, "failed to get ticker"),
+		strings.Contains(lower, "symbol cooldown active"),
+		strings.Contains(lower, "symbol loss cooldown active"),
+		strings.Contains(lower, "symbol failure budget reached"),
+		strings.Contains(lower, "runtime error"):
+		return reasonCategoryExecutionUnavailable
+	default:
+		return ""
 	}
 }
 
@@ -1526,9 +2069,23 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 		maxRetries = 2
 	}
 
+	if repairedLocal, localErr := repairDecisionJSONLocally(raw); localErr == nil {
+		localDecision, parseErr := parseAIDecisionPayload(repairedLocal)
+		if parseErr == nil && isValidDecisionAction(localDecision.Action) {
+			log.Printf("[AI-SCALPING] Structured-output recovered via deterministic local repair")
+			return localDecision, nil
+		}
+	}
+
 	lastErr := err
 	current := raw
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		remaining, hasBudget := s.remainingRepairBudget(ctx)
+		if !hasBudget {
+			lastErr = fmt.Errorf("repair attempt %d skipped: remaining context budget %s below floor %s", attempt, remaining.Round(time.Millisecond), s.repairMinRemainingBudget())
+			break
+		}
+
 		repaired, repairErr := s.repairDecisionJSON(ctx, current)
 		if repairErr != nil {
 			lastErr = fmt.Errorf("repair attempt %d failed: %w", attempt, repairErr)
@@ -1547,6 +2104,109 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 	}
 
 	return nil, lastErr
+}
+
+func (s *AIScalpingService) withInferenceBudget(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+
+	remaining := time.Until(deadline)
+	reserve := s.repairMinRemainingBudget()
+	// Keep a small tail buffer so outer context cancellation can propagate cleanly.
+	minTail := 2 * time.Second
+	if remaining <= reserve+minTail {
+		return ctx, func() {}
+	}
+
+	inferenceBudget := remaining - reserve
+	if inferenceBudget <= minTail {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, inferenceBudget)
+}
+
+func (s *AIScalpingService) repairMinRemainingBudget() time.Duration {
+	seconds := getEnvInt("NEURATRADE_AI_REPAIR_MIN_REMAINING_SECONDS")
+	if seconds <= 0 {
+		seconds = 15
+	}
+	seconds = clampInt(seconds, 5, 180)
+	return time.Duration(seconds) * time.Second
+}
+
+func (s *AIScalpingService) remainingRepairBudget(ctx context.Context) (time.Duration, bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 999 * time.Hour, true
+	}
+	remaining := time.Until(deadline)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, remaining >= s.repairMinRemainingBudget()
+}
+
+func repairDecisionJSONLocally(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("empty model response")
+	}
+
+	cleaned := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "```json"), "```"))
+	if cleaned == "" {
+		cleaned = trimmed
+	}
+
+	if candidate, ok := extractBalancedJSONObject(cleaned); ok {
+		return candidate, nil
+	}
+	if candidate, ok := extractBalancedJSONObject(trimmed); ok {
+		return candidate, nil
+	}
+
+	return "", fmt.Errorf("no JSON object candidate found in model response")
+}
+
+func extractBalancedJSONObject(raw string) (string, bool) {
+	inString := false
+	escapeNext := false
+	depth := 0
+	start := -1
+
+	for idx, ch := range raw {
+		if escapeNext {
+			escapeNext = false
+			continue
+		}
+		switch ch {
+		case '\\':
+			if inString {
+				escapeNext = true
+			}
+		case '"':
+			inString = !inString
+		case '{':
+			if inString {
+				continue
+			}
+			if depth == 0 {
+				start = idx
+			}
+			depth++
+		case '}':
+			if inString || depth == 0 {
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				return strings.TrimSpace(raw[start : idx+1]), true
+			}
+		}
+	}
+
+	return "", false
 }
 
 func parseOptionalDecimal(raw json.RawMessage) (*decimal.Decimal, error) {
@@ -1595,7 +2255,7 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 	}
 }
 
-func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context) (minConfidence float64, maxCapitalPct float64) {
+func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {
 	minConfidence = s.config.MinConfidence
 	maxCapitalPct = s.config.MaxCapitalPct
 
@@ -1613,22 +2273,46 @@ func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context) (minConfi
 		minConfidence = 0.95
 	}
 	if s.tradeMemory != nil {
-		stats, err := s.tradeMemory.GetPerformanceStats(ctx)
+		lookbackHours := getEnvInt("NEURATRADE_SCALPING_PERF_LOOKBACK_HOURS")
+		if lookbackHours <= 0 {
+			lookbackHours = 24 * 30
+		}
+		stats, err := s.tradeMemory.GetPerformanceStatsWindow(ctx, lookbackHours)
 		if err == nil {
-			totalTrades := readIntMetric(stats["total_trades"])
-			winRate := readFloatMetric(stats["win_rate"])
-			if totalTrades >= 10 && winRate > 0 && winRate < 35 {
+			decisiveTrades := stats.DecisiveTrades
+			winRate := stats.DecisiveWinRatePct
+			if decisiveTrades >= 10 && winRate > 0 && winRate < 35 {
 				if minConfidence < 0.70 {
 					minConfidence = 0.70
 				}
 				maxCapitalPct = maxCapitalPct * 0.6
 			}
-			if totalTrades >= 20 && winRate > 0 && winRate < 30 {
+			if decisiveTrades >= 20 && winRate > 0 && winRate < 30 {
 				if minConfidence < 0.78 {
 					minConfidence = 0.78
 				}
 				maxCapitalPct = maxCapitalPct * 0.5
 			}
+		}
+
+	}
+
+	s.applyControlledNoFillRecovery(&minConfidence, &maxCapitalPct, portfolio, consecutiveLosses)
+	switch strings.ToLower(strings.TrimSpace(portfolio.RecoveryMode)) {
+	case "micro_entry":
+		microCap := 0.50
+		if value, ok := getEnvFloat("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT"); ok && value > 0 {
+			microCap = value
+		}
+		if maxCapitalPct > microCap {
+			maxCapitalPct = microCap
+		}
+	case "derisk_only":
+		if maxCapitalPct > 0.10 {
+			maxCapitalPct = 0.10
+		}
+		if minConfidence < 0.85 {
+			minConfidence = 0.85
 		}
 	}
 	if maxCapitalPct < 0.1 {
@@ -1636,6 +2320,88 @@ func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context) (minConfi
 	}
 
 	return minConfidence, maxCapitalPct
+}
+
+func (s *AIScalpingService) applyControlledNoFillRecovery(
+	minConfidence *float64,
+	maxCapitalPct *float64,
+	portfolio TradingPortfolio,
+	consecutiveLosses int,
+) {
+	if minConfidence == nil || maxCapitalPct == nil {
+		return
+	}
+	if consecutiveLosses >= 2 {
+		return
+	}
+	if portfolio.DriftActive || portfolio.OpenPositions > 0 {
+		return
+	}
+
+	recoveryMinutes := getEnvInt("NEURATRADE_NOFILL_RECOVERY_MINUTES")
+	if recoveryMinutes <= 0 {
+		recoveryMinutes = getEnvInt("NEURATRADE_SCALPING_NO_FILL_RECOVERY_MINUTES")
+	}
+	if recoveryMinutes <= 0 {
+		recoveryMinutes = 180
+	}
+	if portfolio.NoFillMinutes < float64(recoveryMinutes) {
+		return
+	}
+
+	minFloor := 0.70
+	if value, ok := getEnvFloat("NEURATRADE_NOFILL_MIN_CONF_FLOOR"); ok && value > 0 {
+		minFloor = value
+	}
+	if minFloor < 0.50 {
+		minFloor = 0.50
+	}
+	if minFloor > 0.90 {
+		minFloor = 0.90
+	}
+
+	maxCapTarget := 1.50
+	if value, ok := getEnvFloat("NEURATRADE_NOFILL_MAX_CAP_PCT_CAP"); ok && value > 0 {
+		maxCapTarget = value
+	}
+	if maxCapTarget < 0.50 {
+		maxCapTarget = 0.50
+	}
+
+	step := int(portfolio.NoFillMinutes / float64(recoveryMinutes))
+	if step < 1 {
+		return
+	}
+
+	switch {
+	case step >= 2:
+		if *minConfidence > minFloor {
+			*minConfidence = minFloor
+		}
+	default:
+		if *minConfidence > 0.75 {
+			*minConfidence = 0.75
+		}
+	}
+
+	switch {
+	case step >= 3:
+		if *maxCapitalPct < maxCapTarget {
+			*maxCapitalPct = maxCapTarget
+		}
+	case step >= 2:
+		if *maxCapitalPct < 1.00 {
+			*maxCapitalPct = 1.00
+		}
+	default:
+		if *maxCapitalPct < 0.50 {
+			*maxCapitalPct = 0.50
+		}
+	}
+
+	if *maxCapitalPct > maxCapTarget {
+		*maxCapitalPct = maxCapTarget
+	}
 }
 
 func readIntMetric(v interface{}) int {

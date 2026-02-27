@@ -227,25 +227,62 @@ func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int
 
 // formatAIReasoningMessage formats an AI reasoning notification message
 func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNotification) string {
-	confidencePercent := int(reasoning.Confidence * 100)
-
-	var confidenceEmoji string
-	switch {
-	case reasoning.Confidence >= 0.8:
-		confidenceEmoji = "🟢"
-	case reasoning.Confidence >= 0.6:
-		confidenceEmoji = "🟡"
-	default:
-		confidenceEmoji = "🔴"
+	confidenceKnown := reasoning.ConfidenceKnown
+	if !confidenceKnown &&
+		strings.TrimSpace(reasoning.ReasonCategory) == "" &&
+		strings.TrimSpace(reasoning.HoldCategory) == "" {
+		// Backward-compatible fallback for legacy callers.
+		confidenceKnown = true
+	}
+	category := strings.TrimSpace(reasoning.ReasonCategory)
+	if category == "" {
+		category = strings.TrimSpace(reasoning.HoldCategory)
+	}
+	if !confidenceKnown && (category == "" || strings.EqualFold(category, "strategy_hold")) {
+		evidence := strings.TrimSpace(reasoning.Summary + " " + strings.Join(reasoning.Reasons, " "))
+		category = classifyAIRuntimeReason(evidence, "execution_unavailable")
+	}
+	if isRuntimeReasonCategory(category) {
+		confidenceKnown = false
+	}
+	if !confidenceKnown && strings.EqualFold(category, "strategy_hold") {
+		category = "execution_unavailable"
 	}
 
 	lines := []string{
 		"🤖 **AI Trading Decision**",
 		"",
 		fmt.Sprintf("**Type:** %s", reasoning.DecisionType),
-		fmt.Sprintf("**Confidence:** %s %d%%", confidenceEmoji, confidencePercent),
+	}
+
+	if confidenceKnown {
+		confidencePercent := int(reasoning.Confidence * 100)
+		var confidenceEmoji string
+		switch {
+		case reasoning.Confidence >= 0.8:
+			confidenceEmoji = "🟢"
+		case reasoning.Confidence >= 0.6:
+			confidenceEmoji = "🟡"
+		default:
+			confidenceEmoji = "🔴"
+		}
+		lines = append(lines, fmt.Sprintf("**Confidence:** %s %d%%", confidenceEmoji, confidencePercent))
+	} else {
+		lines = append(lines, "**Confidence:** ⚪ N/A (runtime-degraded)")
+	}
+
+	lines = append(lines,
 		"",
 		fmt.Sprintf("**Summary:** %s", reasoning.Summary),
+	)
+	if category != "" {
+		lines = append(lines, fmt.Sprintf("**Reason Category:** %s", category))
+	}
+	if strings.TrimSpace(reasoning.UnblockCondition) != "" {
+		lines = append(lines, fmt.Sprintf("**Unblock Condition:** %s", strings.TrimSpace(reasoning.UnblockCondition)))
+	}
+	if strings.TrimSpace(reasoning.AttemptWindowProgress) != "" {
+		lines = append(lines, fmt.Sprintf("**Attempt Window:** %s", strings.TrimSpace(reasoning.AttemptWindowProgress)))
 	}
 
 	if len(reasoning.Reasons) > 0 {
@@ -270,8 +307,15 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {
 	action := strings.ToLower(strings.TrimSpace(reasoning.Action))
 	summary := strings.ToLower(strings.TrimSpace(reasoning.Summary))
+	category := strings.ToLower(strings.TrimSpace(reasoning.ReasonCategory))
+	if category == "" {
+		category = strings.ToLower(strings.TrimSpace(reasoning.HoldCategory))
+	}
 
-	if action == "hold" && reasoning.Confidence <= 0.45 {
+	if action == "hold" && reasoning.ConfidenceKnown && reasoning.Confidence <= 0.45 {
+		return true
+	}
+	if category == "llm_timeout" || category == "llm_parse_contract" || category == "execution_unavailable" {
 		return true
 	}
 

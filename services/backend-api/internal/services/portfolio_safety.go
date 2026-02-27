@@ -394,29 +394,41 @@ func (s *PortfolioSafetyService) CheckSafety(ctx context.Context, chatID string,
 		status.Warnings = append(status.Warnings,
 			fmt.Sprintf("Total exposure (%.1f%%) exceeds limit (%.1f%%)",
 				snapshot.ExposurePct*100, s.config.MaxExposurePct*100))
+
+		// Hard-stop only when exposure is materially beyond policy, otherwise keep this as warning.
+		if snapshot.ExposurePct > s.config.MaxExposurePct*2 {
+			status.TradingAllowed = false
+			status.IsSafe = false
+			status.Reasons = append(status.Reasons,
+				fmt.Sprintf("Exposure hard limit breached: %.1f%% exceeds %.1f%%", snapshot.ExposurePct*100, s.config.MaxExposurePct*200))
+		}
 	}
 
 	if s.riskManager != nil && snapshot != nil {
+		drawdownSignal := normalizeRiskSignal(status.CurrentDrawdown, 0.15)
+		exposureSignal := normalizeRiskSignal(snapshot.ExposurePct, s.config.MaxExposurePct)
+		positionCountSignal := normalizeRiskSignal(float64(snapshot.OpenPositions), 5.0)
+
 		signals := []risk.RiskSignal{
 			{
 				Name:        "drawdown",
-				Value:       status.CurrentDrawdown,
+				Value:       drawdownSignal,
 				Weight:      0.3,
-				Threshold:   0.15,
+				Threshold:   1.0,
 				Description: "Current portfolio drawdown",
 			},
 			{
 				Name:        "exposure",
-				Value:       snapshot.ExposurePct,
+				Value:       exposureSignal,
 				Weight:      0.2,
-				Threshold:   s.config.MaxExposurePct,
+				Threshold:   1.0,
 				Description: "Total portfolio exposure",
 			},
 			{
 				Name:        "position_count",
-				Value:       float64(snapshot.OpenPositions),
+				Value:       positionCountSignal,
 				Weight:      0.1,
-				Threshold:   5.0,
+				Threshold:   1.0,
 				Description: "Number of open positions",
 			},
 		}
@@ -534,4 +546,22 @@ func (s *PortfolioSafetyService) GetConfig() PortfolioSafetyConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.config
+}
+
+func normalizeRiskSignal(value, threshold float64) float64 {
+	if threshold <= 0 {
+		if value <= 0 {
+			return 0
+		}
+		return 1
+	}
+	normalized := value / threshold
+	switch {
+	case normalized < 0:
+		return 0
+	case normalized > 1:
+		return 1
+	default:
+		return normalized
+	}
 }

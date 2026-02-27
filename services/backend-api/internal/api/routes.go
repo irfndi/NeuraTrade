@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -57,6 +59,114 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+type llmProviderNodeConfig struct {
+	Provider      string
+	APIKey        string
+	BaseURL       string
+	ModelOverride string
+}
+
+func parseAIProviderChain(primary string) []string {
+	primary = strings.ToLower(strings.TrimSpace(primary))
+	if primary == "" {
+		primary = "zhipu"
+	}
+
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
+	if raw == "" {
+		raw = "zhipu,minimax"
+	}
+
+	parts := strings.Split(raw, ",")
+	seen := map[string]struct{}{primary: {}}
+	chain := []string{primary}
+	for _, part := range parts {
+		provider := strings.ToLower(strings.TrimSpace(part))
+		if provider == "" {
+			continue
+		}
+		if _, exists := seen[provider]; exists {
+			continue
+		}
+		seen[provider] = struct{}{}
+		chain = append(chain, provider)
+	}
+	return chain
+}
+
+func providerBaseURL(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "minimax":
+		return "https://api.minimax.chat/v1"
+	case "zhipu":
+		return "https://open.bigmodel.cn/api/coding/paas/v4"
+	case "mlx":
+		return "http://localhost:8080/v1"
+	default:
+		return "https://api.openai.com/v1"
+	}
+}
+
+func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBaseURL string, provider string) llmProviderNodeConfig {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	node := llmProviderNodeConfig{
+		Provider: provider,
+	}
+
+	if provider == strings.ToLower(strings.TrimSpace(primaryProvider)) {
+		node.APIKey = strings.TrimSpace(primaryAPIKey)
+		node.BaseURL = strings.TrimSpace(primaryBaseURL)
+	}
+
+	upper := strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))
+	if node.APIKey == "" {
+		node.APIKey = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_API_KEY", upper)))
+	}
+	if node.APIKey == "" {
+		node.APIKey = strings.TrimSpace(os.Getenv(fmt.Sprintf("%s_API_KEY", upper)))
+	}
+
+	if node.BaseURL == "" {
+		node.BaseURL = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_BASE_URL", upper)))
+	}
+	if node.BaseURL == "" {
+		node.BaseURL = providerBaseURL(provider)
+	}
+
+	node.ModelOverride = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_MODEL", upper)))
+	return node
+}
+
+func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, maxRetries int) llm.Client {
+	config := llm.ClientConfig{
+		APIKey:      node.APIKey,
+		BaseURL:     node.BaseURL,
+		HTTPTimeout: timeout,
+		MaxRetries:  maxRetries,
+	}
+
+	switch node.Provider {
+	case "anthropic":
+		return llm.NewAnthropicClient(config)
+	case "mlx":
+		return llm.NewMLXClient(config)
+	case "minimax":
+		// MiniMax exposes an Anthropic-compatible endpoint.
+		return llm.NewAnthropicClient(config)
+	case "zhipu":
+		// Zhipu exposes an OpenAI-compatible endpoint.
+		return llm.NewOpenAIClient(config)
+	default:
+		return llm.NewOpenAIClient(config)
+	}
+}
+
+func providerRequiresAPIKey(provider string) bool {
+	return strings.ToLower(strings.TrimSpace(provider)) != "mlx"
 }
 
 type routeRuntimeConfigFile struct {
@@ -133,6 +243,56 @@ func hasConnectedExchangeWallet(db *sql.DB, chatID, provider string) bool {
 		return false
 	}
 	return exists == 1
+}
+
+func listConnectedExchangeProviders(ctx context.Context, db routeDB, chatID string) []string {
+	if db == nil || strings.TrimSpace(chatID) == "" {
+		return nil
+	}
+
+	rows, err := db.Query(ctx, `
+		SELECT DISTINCT LOWER(TRIM(provider))
+		FROM telegram_operator_wallets
+		WHERE chat_id = $1
+		  AND status = 'connected'
+		  AND TRIM(provider) <> ''
+	`, strings.TrimSpace(chatID))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	providers := make([]string, 0, 4)
+	for rows.Next() {
+		var provider string
+		if scanErr := rows.Scan(&provider); scanErr != nil {
+			continue
+		}
+		provider = strings.TrimSpace(strings.ToLower(provider))
+		if provider == "" {
+			continue
+		}
+		providers = append(providers, provider)
+	}
+	return providers
+}
+
+func routeEnvEnabled(key string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func riskLockSourcePriority(source string) int {
+	switch strings.TrimSpace(source) {
+	case "manual_env":
+		return 3
+	case "portfolio_safety":
+		return 2
+	case "drawdown_threshold":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // Returns a cleanup function that should be called on shutdown.
@@ -234,12 +394,24 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		monthlyBudget,
 	)
 
-	questStore := services.NewInMemoryQuestStore()
-	questEngine := services.NewQuestEngineWithNotification(questStore, nil, notificationService)
+	var questStore services.QuestStore
+	questStoreMode := "in-memory"
+	questStore = services.NewInMemoryQuestStore()
+	if db != nil {
+		dbQuestStore := services.NewDBQuestStore(db)
+		if err := dbQuestStore.InitSchema(context.Background()); err != nil {
+			log.Printf("Failed to initialize runtime quest persistence schema, falling back to in-memory store: %v", err)
+		} else {
+			questStore = dbQuestStore
+			questStoreMode = "database"
+		}
+	}
+	questEngine := services.NewQuestEngineWithNotification(questStore, redisClientRaw, notificationService)
+	log.Printf("Quest runtime store initialized in %s mode", questStoreMode)
 
 	riskConfig := risk.DefaultRiskManagerConfig()
 	riskManager := risk.NewRiskManagerAgent(riskConfig)
-	drawdownHalt := services.NewMaxDrawdownHalt(db, services.DefaultMaxDrawdownConfig())
+	drawdownHalt := services.NewMaxDrawdownHalt(db, services.ResolveMaxDrawdownConfigFromEnv(services.DefaultMaxDrawdownConfig()))
 
 	var dailyLossTracker *risk.DailyLossTracker
 	var positionThrottle *risk.PositionSizeThrottle
@@ -262,6 +434,92 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		redisClientRaw,
 		nil,
 	)
+	riskLockThreshold := 0.40
+	if raw := strings.TrimSpace(os.Getenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN")); raw != "" {
+		if parsed, err := strconv.ParseFloat(raw, 64); err == nil && parsed > 0 {
+			riskLockThreshold = parsed
+		}
+	}
+	services.SetHeartbeatRiskBridge(func(ctx context.Context) map[string]interface{} {
+		reasons := make([]string, 0, 4)
+		active := false
+		source := "none"
+		setSource := func(candidate string) {
+			if riskLockSourcePriority(candidate) > riskLockSourcePriority(source) {
+				source = candidate
+			}
+		}
+
+		if routeEnvEnabled("NEURATRADE_QUEST_FORCE_RISK_LOCK") {
+			active = true
+			setSource("manual_env")
+			reasons = append(reasons, "manual_env: NEURATRADE_QUEST_FORCE_RISK_LOCK enabled")
+		}
+
+		for _, chatID := range questEngine.ListActiveAutonomousChatIDs() {
+			diagnostics := questEngine.GetChatRuntimeDiagnostics(chatID)
+			drawdown := 0.0
+			switch value := diagnostics["risk_max_drawdown"].(type) {
+			case float64:
+				drawdown = value
+			case float32:
+				drawdown = float64(value)
+			case int:
+				drawdown = float64(value)
+			}
+			if drawdown >= riskLockThreshold {
+				active = true
+				setSource("drawdown_threshold")
+				reasons = append(reasons, fmt.Sprintf(
+					"drawdown_threshold: chat %s drawdown %.2f%% >= %.2f%%",
+					chatID,
+					drawdown*100,
+					riskLockThreshold*100,
+				))
+			}
+
+			exchanges := listConnectedExchangeProviders(ctx, db, chatID)
+			if len(exchanges) == 0 {
+				continue
+			}
+			safetyCtx, cancelSafety := context.WithTimeout(ctx, 8*time.Second)
+			snapshot, snapshotErr := portfolioSafety.GetPortfolioSnapshot(safetyCtx, chatID, exchanges)
+			if snapshotErr != nil {
+				cancelSafety()
+				log.Printf("[QUEST] Risk bridge snapshot check failed for chat %s: %v", chatID, snapshotErr)
+				continue
+			}
+			safety, safetyErr := portfolioSafety.CheckSafety(safetyCtx, chatID, snapshot)
+			cancelSafety()
+			if safetyErr != nil {
+				log.Printf("[QUEST] Risk bridge safety check failed for chat %s: %v", chatID, safetyErr)
+				continue
+			}
+			if !safety.TradingAllowed {
+				active = true
+				setSource("portfolio_safety")
+				reason := "portfolio_safety: trading_allowed=false"
+				if len(safety.Reasons) > 0 {
+					reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false (%s)", chatID, strings.Join(safety.Reasons, "; "))
+				} else {
+					reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false", chatID)
+				}
+				reasons = append(reasons, reason)
+			}
+		}
+
+		questEngine.SetRiskLockStateWithSource(active, source, reasons)
+		result := map[string]interface{}{
+			"risk_lock":        active,
+			"risk_lock_source": source,
+			"trading_allowed":  !active,
+		}
+		if len(reasons) > 0 {
+			result["reason"] = reasons[0]
+			result["reasons"] = reasons
+		}
+		return result
+	})
 
 	// Legacy quest preload is opt-in only.
 	// In scalping-first mode we avoid restoring old active rows without metadata/chat ownership.
@@ -269,44 +527,48 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		os.Getenv("NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS") == "true"
 	log.Printf("DEBUG: db is nil: %v", db == nil)
 	if db != nil && loadLegacyQuests {
-		log.Println("Loading legacy active quests from database into memory...")
-		rows, err := db.Query(context.Background(), "SELECT id, type, cadence, status, target_value, checkpoint, created_at FROM quests WHERE status = 'active'")
-		if err != nil {
-			log.Printf("Failed to load quests from database: %v", err)
+		if questStoreMode == "database" {
+			log.Println("Skipping legacy active quest preload to keep runtime tables isolated from legacy quests")
 		} else {
-			defer rows.Close()
-			loadedCount := 0
-			for rows.Next() {
-				var id, questType, cadence, status string
-				var targetValue float64
-				var checkpoint []byte
-				var createdAt time.Time
-				if err := rows.Scan(&id, &questType, &cadence, &status, &targetValue, &checkpoint, &createdAt); err != nil {
-					log.Printf("Failed to scan quest row: %v", err)
-					continue
-				}
-				quest := &services.Quest{
-					ID:          id,
-					Type:        services.QuestType(questType),
-					Cadence:     services.QuestCadence(cadence),
-					Status:      services.QuestStatus(status),
-					TargetCount: int(targetValue),
-					CreatedAt:   createdAt,
-					UpdatedAt:   time.Now(),
-				}
-				if len(checkpoint) > 0 {
-					var cp map[string]interface{}
-					if err := json.Unmarshal(checkpoint, &cp); err == nil {
-						quest.Checkpoint = cp
+			log.Println("Loading legacy active quests from database into memory...")
+			rows, err := db.Query(context.Background(), "SELECT id, type, cadence, status, target_value, checkpoint, created_at FROM quests WHERE status = 'active'")
+			if err != nil {
+				log.Printf("Failed to load quests from database: %v", err)
+			} else {
+				defer rows.Close()
+				loadedCount := 0
+				for rows.Next() {
+					var id, questType, cadence, status string
+					var targetValue float64
+					var checkpoint []byte
+					var createdAt time.Time
+					if err := rows.Scan(&id, &questType, &cadence, &status, &targetValue, &checkpoint, &createdAt); err != nil {
+						log.Printf("Failed to scan quest row: %v", err)
+						continue
 					}
+					quest := &services.Quest{
+						ID:          id,
+						Type:        services.QuestType(questType),
+						Cadence:     services.QuestCadence(cadence),
+						Status:      services.QuestStatus(status),
+						TargetCount: int(targetValue),
+						CreatedAt:   createdAt,
+						UpdatedAt:   time.Now(),
+					}
+					if len(checkpoint) > 0 {
+						var cp map[string]interface{}
+						if err := json.Unmarshal(checkpoint, &cp); err == nil {
+							quest.Checkpoint = cp
+						}
+					}
+					if err := questStore.SaveQuest(context.Background(), quest); err != nil {
+						log.Printf("Failed to save quest %s: %v", id, err)
+					}
+					log.Printf("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
+					loadedCount++
 				}
-				if err := questStore.SaveQuest(context.Background(), quest); err != nil {
-					log.Printf("Failed to save quest %s: %v", id, err)
-				}
-				log.Printf("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
-				loadedCount++
+				log.Printf("Loaded %d quests from database", loadedCount)
 			}
-			log.Printf("Loaded %d quests from database", loadedCount)
 		}
 	} else if db != nil {
 		log.Println("Skipping legacy active quest preload (set NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS=1 to enable)")
@@ -435,52 +697,90 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		aiAPIKey = aiConfig.APIKey
 		aiBaseURL = aiConfig.BaseURL
 		if aiBaseURL == "" {
-			aiBaseURL = "https://api.minimax.chat/v1"
+			aiBaseURL = providerBaseURL(aiConfig.Provider)
 		}
 		aiProvider = aiConfig.Provider
 		if aiProvider == "" {
-			aiProvider = "minimax"
+			aiProvider = "zhipu"
 		}
 	}
 
 	if aiAPIKey != "" {
-		log.Printf("Initializing AI Scalping with provider: %s (base_url: %s)", aiProvider, aiBaseURL)
+		log.Printf("Initializing AI Scalping with primary provider: %s (base_url: %s)", aiProvider, aiBaseURL)
 
-		llmConfig := llm.ClientConfig{
-			APIKey:      aiAPIKey,
-			BaseURL:     aiBaseURL,
-			HTTPTimeout: 300 * time.Second, // 5 minutes for Zhipu GLM
-			MaxRetries:  5,
+		httpTimeout := 300 * time.Second
+		if raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_HTTP_TIMEOUT_SECONDS")); raw != "" {
+			if seconds, parseErr := strconv.Atoi(raw); parseErr == nil && seconds > 0 {
+				httpTimeout = time.Duration(seconds) * time.Second
+			}
+		}
+		maxRetries := 5
+		if raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_MAX_RETRIES")); raw != "" {
+			if retries, parseErr := strconv.Atoi(raw); parseErr == nil && retries >= 0 {
+				maxRetries = retries
+			}
 		}
 
+		providerChain := parseAIProviderChain(aiProvider)
+		failoverNodes := make([]llm.FailoverNode, 0, len(providerChain))
+		for _, provider := range providerChain {
+			nodeConfig := resolveProviderNode(aiProvider, aiAPIKey, aiBaseURL, provider)
+			if strings.TrimSpace(nodeConfig.APIKey) == "" && providerRequiresAPIKey(provider) {
+				log.Printf("Skipping AI provider %s in failover chain: missing API key", provider)
+				continue
+			}
+
+			client := buildLLMProviderClient(nodeConfig, httpTimeout, maxRetries)
+			failoverNodes = append(failoverNodes, llm.FailoverNode{
+				Client:        client,
+				Provider:      llm.Provider(provider),
+				ModelOverride: nodeConfig.ModelOverride,
+			})
+			overrideMsg := "none"
+			if strings.TrimSpace(nodeConfig.ModelOverride) != "" {
+				overrideMsg = nodeConfig.ModelOverride
+			}
+			log.Printf(
+				"AI failover node enabled: provider=%s base_url=%s model_override=%s",
+				provider,
+				nodeConfig.BaseURL,
+				overrideMsg,
+			)
+		}
+		questEngine.SetAIProviderChainStats(len(providerChain), len(failoverNodes))
+
 		var llmClient llm.Client
-		switch aiProvider {
-		case "openai":
-			llmClient = llm.NewOpenAIClient(llmConfig)
-		case "anthropic":
-			llmClient = llm.NewAnthropicClient(llmConfig)
-		case "mlx":
-			llmClient = llm.NewMLXClient(llmConfig)
-		case "minimax":
-			// MiniMax uses Anthropic-compatible API
-			llmClient = llm.NewAnthropicClient(llmConfig)
-		case "zhipu":
-			// Zhipu AI (Z.ai) uses OpenAI-compatible API
-			llmClient = llm.NewOpenAIClient(llmConfig)
+		switch len(failoverNodes) {
+		case 0:
+			log.Printf("AI provider chain has no usable nodes; AI scalping disabled")
+		case 1:
+			llmClient = failoverNodes[0].Client
+			log.Printf("AI provider chain active with single node: %s", failoverNodes[0].Provider)
 		default:
-			llmClient = llm.NewOpenAIClient(llmConfig)
+			maxHops := 1
+			if raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_FAILOVER_MAX_HOPS")); raw != "" {
+				if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 0 {
+					maxHops = parsed
+				}
+			}
+			llmClient = llm.NewFailoverClient(failoverNodes, maxHops)
+			log.Printf("AI provider failover enabled: nodes=%d max_hops=%d", len(failoverNodes), maxHops)
 		}
 
 		skillRegistry := skill.NewRegistry(filepath.Join(filepath.Dir(""), "skills"))
 		if err := skillRegistry.LoadAll(); err != nil {
 			log.Printf("Warning: Failed to load skills: %v", err)
 		}
-		integratedHandlers.SetAIScalping(llmClient, skillRegistry)
-		log.Printf("AI Scalping service initialized successfully")
+		if llmClient != nil {
+			integratedHandlers.SetAIScalping(llmClient, skillRegistry)
+			log.Printf("AI Scalping service initialized successfully")
+		}
 	} else {
 		log.Printf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
 	}
 
+	// Register integrated handlers before scheduler start so first tick has handlers.
+	questEngine.RegisterIntegratedHandlers(integratedHandlers)
 	questEngine.Start() // Start the quest engine scheduler
 
 	// Initialize exchange reconciler for position/order resumability
@@ -494,53 +794,59 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		)
 		log.Printf("Exchange position reconciler initialized")
 
-		// Startup reconciliation is opt-in to avoid side effects in tests/mocks and
-		// environments where reconciliation tables are not yet provisioned.
-		startupReconcileEnv := strings.TrimSpace(os.Getenv("NEURATRADE_STARTUP_RECONCILIATION"))
-		startupReconcileEnabled := strings.EqualFold(startupReconcileEnv, "true") || startupReconcileEnv == "1"
-		if startupReconcileEnabled {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				results, err := reconciler.ReconcileAll(ctx, services.ReconciliationStartup, "")
-				if err != nil {
-					log.Printf("Startup reconciliation error: %v", err)
-					return
-				}
+		if gin.Mode() == gin.TestMode {
+			log.Printf("Startup reconciliation skipped in test mode")
+		} else {
+			// Mandatory startup reconciliation in non-test runtime.
+			// This runs before autonomous chat restore so resumability/protection is refreshed first.
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			results, err := reconciler.ReconcileAll(ctx, services.ReconciliationStartup, "")
+			cancel()
+			if err != nil {
+				log.Printf("Startup reconciliation error: %v", err)
+			} else {
 				for _, r := range results {
 					log.Printf("Startup reconciliation: %s", reconciler.GetReconciliationSummary(&r))
 				}
-			}()
-		} else {
-			log.Printf("Startup reconciliation disabled (set NEURATRADE_STARTUP_RECONCILIATION=true to enable)")
+			}
 		}
 
-		// Optional periodic reconciliation for drift detection after manual/external actions.
-		periodicRaw := strings.TrimSpace(os.Getenv("NEURATRADE_PERIODIC_RECONCILIATION_SECONDS"))
-		if periodicRaw != "" {
+		// Periodic reconciliation defaults to enabled at 300s.
+		// Set NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=0 to disable explicitly.
+		periodicSeconds := 300
+		if periodicRaw := strings.TrimSpace(os.Getenv("NEURATRADE_PERIODIC_RECONCILIATION_SECONDS")); periodicRaw != "" {
 			seconds, parseErr := strconv.Atoi(periodicRaw)
-			if parseErr != nil || seconds <= 0 {
-				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, periodic reconciliation disabled", periodicRaw)
+			if parseErr != nil {
+				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, using default %ds", periodicRaw, periodicSeconds)
+			} else if seconds == 0 {
+				periodicSeconds = 0
+			} else if seconds > 0 {
+				periodicSeconds = seconds
 			} else {
-				interval := time.Duration(seconds) * time.Second
-				log.Printf("Periodic reconciliation enabled (interval=%s)", interval)
-				go func() {
-					ticker := time.NewTicker(interval)
-					defer ticker.Stop()
-					for range ticker.C {
-						ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-						results, err := reconciler.ReconcileAll(ctx, services.ReconciliationPeriodic, "")
-						cancel()
-						if err != nil {
-							log.Printf("Periodic reconciliation error: %v", err)
-							continue
-						}
-						for _, r := range results {
-							log.Printf("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
-						}
-					}
-				}()
+				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, using default %ds", periodicRaw, periodicSeconds)
 			}
+		}
+		if periodicSeconds > 0 {
+			interval := time.Duration(periodicSeconds) * time.Second
+			log.Printf("Periodic reconciliation enabled (interval=%s)", interval)
+			go func() {
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for range ticker.C {
+					ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+					results, err := reconciler.ReconcileAll(ctx, services.ReconciliationPeriodic, "")
+					cancel()
+					if err != nil {
+						log.Printf("Periodic reconciliation error: %v", err)
+						continue
+					}
+					for _, r := range results {
+						log.Printf("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
+					}
+				}
+			}()
+		} else {
+			log.Printf("Periodic reconciliation disabled (NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=0)")
 		}
 	}
 
@@ -599,9 +905,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	} else {
 		log.Printf("Arbitrage execution bridge disabled in scalping-first mode")
 	}
-	// Register integrated handlers for production-ready quest execution
-	questEngine.RegisterIntegratedHandlers(integratedHandlers)
-
 	var autonomousHandler *handlers.AutonomousHandler
 	if reconciler != nil {
 		autonomousHandler = handlers.NewAutonomousHandlerWithReconciler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges(), reconciler)
@@ -733,6 +1036,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
 				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)
 				telegramInternal.GET("/performance", autonomousHandler.GetPerformanceBreakdown)
+				telegramInternal.GET("/ai/status/:chatId", telegramInternalHandler.GetAIStatusByChatID)
 
 				// Trading mode routes (dry/live toggle)
 				if opModeHandler != nil {
@@ -787,6 +1091,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		adminRisk.Use(adminMiddleware.RequireAdminAuth())
 		{
 			adminRisk.POST("/validate_wallet", walletHandler.ValidateWallet)
+			adminRisk.POST("/force_resume", func(c *gin.Context) {
+				resumed := drawdownHalt.ForceResumeAll(c.Request.Context())
+				// Also clear the quest engine risk lock
+				questEngine.SetRiskLockState(false, nil)
+				c.JSON(http.StatusOK, gin.H{
+					"success":       true,
+					"message":       "Trading resumed for all halted accounts",
+					"resumed_count": len(resumed),
+					"accounts":      resumed,
+				})
+			})
 		}
 
 		trading := v1.Group("/trading")

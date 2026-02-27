@@ -138,9 +138,9 @@ describe("message templates", () => {
         "Summary: One subsystem degraded\n" +
         "\n" +
         "Checks:\n" +
-        "✅ Backend API: HEALTHY\n" +
+        "✅ Backend API [CORE]: HEALTHY\n" +
         "   Latency: 22ms\n" +
-        "⚠️ Redis: WARNING\n" +
+        "⚠️ Redis [CORE]: WARNING\n" +
         "   Latency elevated\n" +
         "   Latency: 78ms\n" +
         "   - pool: at-capacity\n" +

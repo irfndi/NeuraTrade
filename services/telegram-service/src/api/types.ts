@@ -166,6 +166,12 @@ export interface PortfolioResponse {
   readonly exposure?: string;
   readonly open_orders?: number;
   readonly positions: readonly PortfolioPosition[];
+  readonly drift_detected?: boolean;
+  readonly positions_source?:
+    | "exchange"
+    | "lifecycle_repair_pending"
+    | "lifecycle_fallback"
+    | string;
   readonly note?: string;
   readonly updated_at?: string;
 }
@@ -183,6 +189,52 @@ export interface QuestProgress {
 export interface QuestsResponse {
   readonly quests: readonly QuestProgress[];
   readonly updated_at?: string;
+}
+
+export interface QuestDiagnosticsResponse {
+  readonly chat_id?: string;
+  readonly autonomous?: boolean;
+  readonly started_at?: string;
+  readonly state_drift_active?: boolean;
+  readonly state_drift_positions?: number;
+  readonly entry_gate_reason?: string;
+  readonly entry_gate_type?:
+    | "none"
+    | "risk_lock"
+    | "state_drift"
+    | "runtime_circuit"
+    | "recovery_gate"
+    | string;
+  readonly recovery_gate_reason?: string;
+  readonly risk_lock_source?:
+    | "manual_env"
+    | "portfolio_safety"
+    | "drawdown_threshold"
+    | "none"
+    | string;
+  readonly execution_stage?: "lock" | "handler" | "persist" | "done" | string;
+  readonly execution_last_progress_at?: string;
+  readonly execution_in_progress_age_seconds?: number;
+  readonly entry_attempt_block_reason?: string;
+  readonly next_unblock_condition?: string;
+  readonly last_entry_attempt_at?: string;
+  readonly minutes_since_entry_attempt?: number;
+  readonly entry_attempts_1h?: number;
+  readonly drift_signature?: string;
+  readonly drift_deadlock_cycles?: number;
+  readonly recovery_mode?: "normal" | "derisk_only" | "micro_entry" | string;
+  readonly recovery_clean_cycles?: number;
+  readonly recovery_entry_allowed?: boolean;
+  readonly last_drift_repair_at?: string;
+  readonly last_clean_reconcile_at?: string;
+  readonly provider_chain_configured?: number;
+  readonly provider_chain_usable?: number;
+  readonly quest_runtime?: Readonly<Record<string, unknown>>;
+  readonly chat_runtime?: Readonly<Record<string, unknown>> & {
+    readonly ai_runtime?: Readonly<Record<string, unknown>>;
+  };
+  readonly heartbeat?: Readonly<Record<string, unknown>>;
+  readonly timestamp?: string;
 }
 
 export interface WalletInfo {
@@ -215,6 +267,8 @@ export interface DoctorCheckResponse {
   readonly message?: string;
   readonly latency_ms?: number;
   readonly details?: Readonly<Record<string, string>>;
+  readonly optional?: boolean;
+  readonly impact?: "core" | "optional" | string;
 }
 
 export interface DoctorResponse {
@@ -307,6 +361,8 @@ export const API_ENDPOINTS = {
   REMOVE_WALLET: "/api/v1/telegram/internal/wallets/remove",
   GET_QUESTS: (chatId: string) =>
     `/api/v1/telegram/internal/quests?chat_id=${encodeURIComponent(chatId)}`,
+  GET_QUEST_DIAGNOSTICS: (chatId: string) =>
+    `/api/v1/telegram/internal/quests/diagnostics?chat_id=${encodeURIComponent(chatId)}`,
   GET_PORTFOLIO: (chatId: string) =>
     `/api/v1/telegram/internal/portfolio?chat_id=${encodeURIComponent(chatId)}`,
   GET_WALLETS: (chatId: string) =>
@@ -318,8 +374,8 @@ export const API_ENDPOINTS = {
   GET_AI_MODELS: "/api/v1/ai/models",
   SELECT_AI_MODEL: (userId: string) =>
     `/api/v1/ai/select/${encodeURIComponent(userId)}`,
-  GET_AI_STATUS: (userId: string) =>
-    `/api/v1/ai/status/${encodeURIComponent(userId)}`,
+  GET_AI_STATUS: (chatId: string) =>
+    `/api/v1/telegram/internal/ai/status/${encodeURIComponent(chatId)}`,
   ROUTE_AI_MODEL: "/api/v1/ai/route",
   GET_ALERTS: (userId: string) =>
     `/api/v1/alerts?user_id=${encodeURIComponent(userId)}`,

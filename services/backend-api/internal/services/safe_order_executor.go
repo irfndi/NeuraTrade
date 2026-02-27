@@ -130,6 +130,42 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 	return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
 }
 
+// PlaceRiskReductionOrderWithDetails bypasses pre-trade safety checks for forced de-risking actions.
+// This is only intended for emergency exposure reduction where normal entries are already blocked.
+func (s *SafeOrderExecutor) PlaceRiskReductionOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
+	amount := details.AmountUSDT
+	if amount.LessThanOrEqual(decimal.Zero) {
+		return "", fmt.Errorf("invalid order size: amount_usdt must be positive")
+	}
+	if !details.ReduceOnly {
+		return "", fmt.Errorf("risk-reduction orders require ReduceOnly=true to prevent opening new positions")
+	}
+	orderID, err := s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+	if err != nil {
+		return "", fmt.Errorf("place risk-reduction order with details: %w", err)
+	}
+	return orderID, nil
+}
+
+func (s *SafeOrderExecutor) SyncPositionProtection(
+	ctx context.Context,
+	exchange string,
+	position ManagedOpenPosition,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+) error {
+	syncable, ok := s.baseExecutor.(interface {
+		SyncPositionProtection(context.Context, string, ManagedOpenPosition, decimal.Decimal, decimal.Decimal) error
+	})
+	if !ok {
+		return fmt.Errorf("%w: base executor does not support exchange-side protection sync", ErrProtectionSyncUnsupported)
+	}
+	if err := syncable.SyncPositionProtection(ctx, exchange, position, stopLoss, takeProfit); err != nil {
+		return fmt.Errorf("sync position protection: %w", err)
+	}
+	return nil
+}
+
 func (s *SafeOrderExecutor) SetChatID(chatID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

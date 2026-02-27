@@ -336,14 +336,22 @@ func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing
 		Action:       "hold",
 	}))
 
-	assert.False(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
 		DecisionType: "scalping",
 		Action:       "buy",
-	}))
+	}), "buy actions are now considered actionable regardless of decision type")
 
 	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
 		DecisionType: "pnl_reconciliation",
 		Action:       "record",
+	}))
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "risk_reduction",
+		Action:       "hold",
+	}))
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "scalping_digest",
+		Action:       "hold",
 	}))
 }
 
@@ -362,6 +370,140 @@ func TestShouldSendScalpingDecisionNotification_EnvOverrides(t *testing.T) {
 		DecisionType: "scalping_cycle",
 		Action:       "hold",
 	}))
+}
+
+func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testing.T) {
+	t.Setenv("NEURATRADE_RECOVERY_CLEAN_CYCLES", "3")
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
+	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT", "0.50")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"recovery_clean_cycles": 2,
+		},
+	}
+	state := handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+		RiskDrawdown: 0.35,
+	})
+	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
+	assert.False(t, state.EntryAllowed)
+	assert.Equal(t, 2, state.CleanCycles)
+
+	quest.Checkpoint["recovery_clean_cycles"] = 3
+	state = handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+		RiskDrawdown: 0.35,
+	})
+	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
+	assert.True(t, state.EntryAllowed)
+
+	state = handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+		RiskDrawdown: 0.41,
+	})
+	assert.Equal(t, recoveryModeDeriskOnly, state.Mode)
+	assert.False(t, state.EntryAllowed)
+}
+
+func TestIntegratedQuestHandlers_UpdateRecoveryCleanCycles_ResetOnFailure(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+
+	handlers.updateRecoveryCleanCycles(quest, true, "")
+	handlers.updateRecoveryCleanCycles(quest, true, "")
+	assert.Equal(t, 2, checkpointInt(quest.Checkpoint["recovery_clean_cycles"]))
+
+	handlers.updateRecoveryCleanCycles(quest, false, "runtime_error")
+	assert.Equal(t, 0, checkpointInt(quest.Checkpoint["recovery_clean_cycles"]))
+	assert.Equal(t, "runtime_error", checkpointString(quest.Checkpoint["recovery_last_reset_reason"]))
+}
+
+func TestIntegratedQuestHandlers_EvaluateEntryAttemptGateState_BudgetLimit(t *testing.T) {
+	t.Setenv("NEURATRADE_LIVENESS_IDLE_MINUTES", "45")
+	t.Setenv("NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR", "3")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	now := time.Now().UTC()
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"runtime_entry_attempt_window_started_at": now.Add(-15 * time.Minute).Format(time.RFC3339),
+			"runtime_entry_attempts_1h":               3,
+		},
+	}
+	state := handlers.evaluateEntryAttemptGateState(quest, TradingPortfolio{
+		USDTBalance:        10,
+		TotalValue:         100,
+		OpenPositions:      0,
+		DriftActive:        false,
+		RecoveryEntryOK:    true,
+		NoFillMinutes:      60,
+		RiskDrawdown:       0.20,
+		RecoveryMode:       recoveryModeNormal,
+		RecoveryCleanCycle: 0,
+	}, now)
+
+	assert.True(t, state.Forced)
+	assert.False(t, state.AllowNow)
+	assert.Equal(t, 3, state.AttemptsInWindow)
+	assert.Contains(t, state.BlockReason, "budget reached")
+	assert.Contains(t, state.NextCondition, "Next entry-attempt window opens")
+}
+
+func TestIntegratedQuestHandlers_RecordEntryAttempt_RotatesWindow(t *testing.T) {
+	t.Setenv("NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR", "3")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	now := time.Now().UTC()
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"runtime_entry_attempt_window_started_at": now.Add(-2 * time.Hour).Format(time.RFC3339),
+			"runtime_entry_attempts_1h":               2,
+		},
+	}
+
+	handlers.recordEntryAttempt(quest, now, entryAttemptGateState{MaxAttemptsPerHour: 3})
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["runtime_entry_attempts_1h"]))
+	assert.Equal(t, "1/3 in current 1h window", checkpointString(quest.Checkpoint["runtime_entry_attempt_window_progress"]))
+
+	windowStart, ok := checkpointRFC3339(quest.Checkpoint["runtime_entry_attempt_window_started_at"])
+	require.True(t, ok)
+	assert.WithinDuration(t, now, windowStart, time.Second)
+}
+
+func TestNormalizeAINotificationSemantics_RuntimeDegradedNotStrategyHold(t *testing.T) {
+	notif := AIReasoningNotification{
+		DecisionType:    "scalping_digest",
+		Summary:         "Hold digest: waiting for qualified setup",
+		ConfidenceKnown: false,
+		ReasonCategory:  aiReasonStrategyHold,
+		Reasons: []string{
+			"model response parse fallback (repair attempt 2 failed: context deadline exceeded)",
+		},
+		Action: "hold",
+	}
+
+	normalized := normalizeAINotificationSemantics(notif)
+	assert.False(t, normalized.ConfidenceKnown)
+	assert.NotEqual(t, aiReasonStrategyHold, normalized.ReasonCategory)
+	assert.Equal(t, normalized.ReasonCategory, normalized.HoldCategory)
+}
+
+func TestNormalizeAINotificationSemantics_StrategyHoldPreservedWhenConfidenceKnown(t *testing.T) {
+	notif := AIReasoningNotification{
+		DecisionType:    "scalping_digest",
+		Summary:         "Hold digest: waiting for qualified setup",
+		ConfidenceKnown: true,
+		ReasonCategory:  aiReasonStrategyHold,
+		Reasons: []string{
+			"No candidate passed pretrade validity/liquidity filters",
+		},
+		Action: "hold",
+	}
+
+	normalized := normalizeAINotificationSemantics(notif)
+	assert.True(t, normalized.ConfidenceKnown)
+	assert.Equal(t, aiReasonStrategyHold, normalized.ReasonCategory)
+	assert.Equal(t, aiReasonStrategyHold, normalized.HoldCategory)
 }
 
 // hasExchange checks if a specific exchange exists in the list
