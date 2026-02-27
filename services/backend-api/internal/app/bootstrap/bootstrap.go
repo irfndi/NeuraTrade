@@ -156,7 +156,10 @@ func (a *Application) HealthCheck(ctx context.Context) error {
 
 	// Check exchanges
 	if a.Exchange != nil {
-		exchanges, _ := a.Exchange.ListExchanges(ctx)
+		exchanges, err := a.Exchange.ListExchanges(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list exchanges for health check: %w", err)
+		}
 		for _, ex := range exchanges {
 			gw, err := a.Exchange.GetMarketDataGateway(ex.ID)
 			if err != nil {
