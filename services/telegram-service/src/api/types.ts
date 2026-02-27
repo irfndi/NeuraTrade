@@ -167,7 +167,11 @@ export interface PortfolioResponse {
   readonly open_orders?: number;
   readonly positions: readonly PortfolioPosition[];
   readonly drift_detected?: boolean;
-  readonly positions_source?: "exchange" | "lifecycle_repair_pending" | "lifecycle_fallback" | string;
+  readonly positions_source?:
+    | "exchange"
+    | "lifecycle_repair_pending"
+    | "lifecycle_fallback"
+    | string;
   readonly note?: string;
   readonly updated_at?: string;
 }
