@@ -3,7 +3,10 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,8 +37,8 @@ func DefaultMaxDrawdownConfig() MaxDrawdownConfig {
 		CriticalThreshold: decimal.NewFromFloat(0.10),
 		HaltThreshold:     decimal.NewFromFloat(0.15),
 		CheckInterval:     time.Minute,
-		RecoveryThreshold: decimal.NewFromFloat(0.03),
-		AutoResumeEnabled: false,
+		RecoveryThreshold: decimal.NewFromFloat(0.10), // Changed from 0.03 to 0.10 - more achievable recovery
+		AutoResumeEnabled: true,                       // Changed from false to true - enable auto-recovery from drawdown
 	}
 }
 
@@ -479,4 +482,73 @@ func (h *MaxDrawdownHalt) ResetPeak(ctx context.Context, chatID string, newValue
 	state.CurrentDrawdown = decimal.Zero
 
 	return nil
+}
+
+// ForceResumeAll resumes trading for all halted accounts.
+// This is useful for manual intervention or when system state needs to be reset.
+func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	resumed := make([]string, 0)
+	now := time.Now().UTC()
+
+	for chatID, state := range h.states {
+		if state.TradingHalted {
+			state.TradingHalted = false
+			state.Status = DrawdownStatusNormal
+			state.RecoveredAt = &now
+			h.metrics.IncrementRecovery()
+			resumed = append(resumed, chatID)
+		}
+	}
+
+	if len(resumed) > 0 {
+		log.Printf("[DRAWDOWN] Force resumed trading for %d account(s): %v", len(resumed), resumed)
+	}
+
+	return resumed
+}
+
+// ResolveMaxDrawdownConfigFromEnv overrides default config with environment variables.
+func ResolveMaxDrawdownConfigFromEnv(base MaxDrawdownConfig) MaxDrawdownConfig {
+	cfg := base
+
+	if v := getEnvFloat64("NEURATRADE_DRAWDOWN_WARNING_THRESHOLD"); v > 0 {
+		cfg.WarningThreshold = decimal.NewFromFloat(v)
+	}
+	if v := getEnvFloat64("NEURATRADE_DRAWDOWN_CRITICAL_THRESHOLD"); v > 0 {
+		cfg.CriticalThreshold = decimal.NewFromFloat(v)
+	}
+	if v := getEnvFloat64("NEURATRADE_DRAWDOWN_HALT_THRESHOLD"); v > 0 {
+		cfg.HaltThreshold = decimal.NewFromFloat(v)
+	}
+	if v := getEnvFloat64("NEURATRADE_DRAWDOWN_RECOVERY_THRESHOLD"); v > 0 {
+		cfg.RecoveryThreshold = decimal.NewFromFloat(v)
+	}
+	if v := os.Getenv("NEURATRADE_DRAWDOWN_AUTO_RESUME"); v != "" {
+		cfg.AutoResumeEnabled = strings.ToLower(v) == "true" || v == "1" || v == "yes"
+	}
+
+	log.Printf("[DRAWDOWN] Config: warning=%.0f%% critical=%.0f%% halt=%.0f%% recovery=%.0f%% auto_resume=%v",
+		cfg.WarningThreshold.InexactFloat64()*100,
+		cfg.CriticalThreshold.InexactFloat64()*100,
+		cfg.HaltThreshold.InexactFloat64()*100,
+		cfg.RecoveryThreshold.InexactFloat64()*100,
+		cfg.AutoResumeEnabled,
+	)
+
+	return cfg
+}
+
+func getEnvFloat64(key string) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0
+	}
+	return f
 }

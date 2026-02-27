@@ -323,9 +323,23 @@ func (s *TradingLifecycleStore) RecordClosedOrder(ctx context.Context, rec Lifec
 
 	positionID := defaultPositionID(orderID, rec.Symbol, side)
 	var existingEntryPrice decimal.Decimal
-	err := s.db.QueryRow(ctx, `SELECT position_id, price FROM trading_orders WHERE order_id = $1`, orderID).Scan(&positionID, &existingEntryPrice)
-	if err != nil && !isLifecycleNoRows(err) {
-		return fmt.Errorf("load existing order failed: %w", err)
+	resolvedPositionID, resolvedEntryPrice, err := s.resolveClosePositionReference(
+		ctx,
+		orderID,
+		strings.TrimSpace(rec.ChatID),
+		strings.TrimSpace(rec.Exchange),
+		strings.TrimSpace(rec.Symbol),
+		side,
+		source,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve close position reference failed: %w", err)
+	}
+	if strings.TrimSpace(resolvedPositionID) != "" {
+		positionID = resolvedPositionID
+	}
+	if !resolvedEntryPrice.IsZero() {
+		existingEntryPrice = resolvedEntryPrice
 	}
 	if rec.EntryPrice.IsZero() && !existingEntryPrice.IsZero() {
 		rec.EntryPrice = existingEntryPrice
@@ -380,6 +394,47 @@ func (s *TradingLifecycleStore) RecordClosedOrder(ctx context.Context, rec Lifec
 		return fmt.Errorf("upsert closed trading_positions failed: %w", err)
 	}
 
+	// Drift-safe post-condition: ensure the intended lifecycle row is closed in place
+	// when stale sync/bootstrap rows are being repaired.
+	if err := s.forceCloseOpenPositionRow(
+		ctx,
+		positionID,
+		orderID,
+		strings.TrimSpace(rec.ChatID),
+		strings.TrimSpace(rec.Exchange),
+		strings.TrimSpace(rec.Symbol),
+		side,
+		marketType,
+		rec.Filled,
+		rec.EntryPrice,
+		rec.ExitPrice,
+		rec.RealizedPnL,
+		source,
+		closedAt,
+	); err != nil {
+		return fmt.Errorf("force-close primary lifecycle row failed: %w", err)
+	}
+	if isSyncLifecycleCloseContext(orderID, source) && strings.TrimSpace(positionID) != orderID {
+		if err := s.forceCloseOpenPositionRow(
+			ctx,
+			orderID,
+			orderID,
+			strings.TrimSpace(rec.ChatID),
+			strings.TrimSpace(rec.Exchange),
+			strings.TrimSpace(rec.Symbol),
+			side,
+			marketType,
+			rec.Filled,
+			rec.EntryPrice,
+			rec.ExitPrice,
+			rec.RealizedPnL,
+			source,
+			closedAt,
+		); err != nil {
+			return fmt.Errorf("force-close sync lifecycle row failed: %w", err)
+		}
+	}
+
 	journalID := "pnl-" + safeIDPart(orderID)
 	if _, err := s.db.Exec(ctx, `
 		INSERT INTO realized_pnl_journal (
@@ -403,6 +458,151 @@ func (s *TradingLifecycleStore) RecordClosedOrder(ctx context.Context, rec Lifec
 		return fmt.Errorf("upsert realized_pnl_journal failed: %w", err)
 	}
 
+	return nil
+}
+
+func (s *TradingLifecycleStore) resolveClosePositionReference(
+	ctx context.Context,
+	orderID, chatID, exchange, symbol, side, source string,
+) (string, decimal.Decimal, error) {
+	positionID := defaultPositionID(orderID, symbol, side)
+	var entryPrice decimal.Decimal
+
+	// Drift-safe precedence for sync/bootstrap close contexts: close the existing open
+	// lifecycle row in-place first, before consulting trading_orders mapping.
+	if isSyncLifecycleCloseContext(orderID, source) && strings.TrimSpace(orderID) != "" {
+		err := s.db.QueryRow(ctx, `
+			SELECT position_id, COALESCE(entry_price, 0)
+			FROM trading_positions
+			WHERE position_id = $1
+			  AND LOWER(status) = 'open'
+			ORDER BY updated_at DESC
+			LIMIT 1
+		`, orderID).Scan(&positionID, &entryPrice)
+		if err == nil {
+			return positionID, entryPrice, nil
+		}
+		if err != nil && !isLifecycleNoRows(err) {
+			return "", decimal.Zero, fmt.Errorf("load open position by exact position_id failed: %w", err)
+		}
+	}
+
+	// Prefer an existing open lifecycle row by order_id before legacy order mapping.
+	err := s.db.QueryRow(ctx, `
+		SELECT position_id, COALESCE(entry_price, 0)
+		FROM trading_positions
+		WHERE order_id = $1
+		  AND LOWER(status) = 'open'
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, orderID).Scan(&positionID, &entryPrice)
+	if err == nil {
+		return positionID, entryPrice, nil
+	}
+	if err != nil && !isLifecycleNoRows(err) {
+		return "", decimal.Zero, fmt.Errorf("load open position by order_id failed: %w", err)
+	}
+
+	// Drift-safe fallback for sync/bootstrap rows that may not have trading_orders mapping.
+	if chatID != "" && exchange != "" && symbol != "" && side != "" {
+		err = s.db.QueryRow(ctx, `
+			SELECT position_id, COALESCE(entry_price, 0)
+			FROM trading_positions
+			WHERE LOWER(status) = 'open'
+			  AND COALESCE(chat_id, '') = $1
+			  AND exchange = $2
+			  AND symbol = $3
+			  AND side = $4
+			  AND (
+				COALESCE(source, '') = 'bootstrap_positions' OR
+				position_id LIKE 'sync-%'
+			  )
+			ORDER BY CASE WHEN position_id LIKE 'sync-%' THEN 0 ELSE 1 END, updated_at DESC
+			LIMIT 1
+		`, chatID, exchange, symbol, side).Scan(&positionID, &entryPrice)
+		if err == nil {
+			return positionID, entryPrice, nil
+		}
+		if err != nil && !isLifecycleNoRows(err) {
+			return "", decimal.Zero, fmt.Errorf("load open sync/bootstrap position failed: %w", err)
+		}
+	}
+
+	err = s.db.QueryRow(ctx, `
+		SELECT position_id, COALESCE(price, 0)
+		FROM trading_orders
+		WHERE order_id = $1
+		LIMIT 1
+	`, orderID).Scan(&positionID, &entryPrice)
+	if err == nil {
+		return positionID, entryPrice, nil
+	}
+	if err != nil && !isLifecycleNoRows(err) {
+		return "", decimal.Zero, fmt.Errorf("load order mapping failed: %w", err)
+	}
+
+	return positionID, entryPrice, nil
+}
+
+func isSyncLifecycleCloseContext(orderID, source string) bool {
+	orderID = strings.ToLower(strings.TrimSpace(orderID))
+	source = strings.ToLower(strings.TrimSpace(source))
+	if strings.HasPrefix(orderID, "sync-") {
+		return true
+	}
+	return strings.Contains(source, "drift") ||
+		strings.Contains(source, "exchange_missing") ||
+		strings.Contains(source, "bootstrap")
+}
+
+func (s *TradingLifecycleStore) forceCloseOpenPositionRow(
+	ctx context.Context,
+	positionID, orderID, chatID, exchange, symbol, side, marketType string,
+	filled, entryPrice, exitPrice, realizedPnL decimal.Decimal,
+	source string,
+	closedAt time.Time,
+) error {
+	positionID = strings.TrimSpace(positionID)
+	if positionID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(ctx, `
+		UPDATE trading_positions
+		SET
+			order_id = CASE WHEN $2 <> '' THEN $2 ELSE order_id END,
+			chat_id = CASE WHEN $3 <> '' THEN $3 ELSE chat_id END,
+			exchange = CASE WHEN $4 <> '' THEN $4 ELSE exchange END,
+			symbol = CASE WHEN $5 <> '' THEN $5 ELSE symbol END,
+			side = CASE WHEN $6 <> '' THEN $6 ELSE side END,
+			market_type = CASE WHEN $7 <> '' THEN $7 ELSE market_type END,
+			size = CASE WHEN $8 > 0 THEN $8 ELSE size END,
+			entry_price = CASE WHEN entry_price = 0 AND $9 > 0 THEN $9 ELSE entry_price END,
+			close_price = CASE WHEN $10 > 0 THEN $10 ELSE close_price END,
+			realized_pnl = $11,
+			status = 'closed',
+			source = CASE WHEN $12 <> '' THEN $12 ELSE source END,
+			closed_at = $13,
+			updated_at = $13
+		WHERE position_id = $1
+		  AND LOWER(status) = 'open'
+	`,
+		positionID,
+		strings.TrimSpace(orderID),
+		strings.TrimSpace(chatID),
+		strings.TrimSpace(exchange),
+		strings.TrimSpace(symbol),
+		normalizeLifecycleSide(side),
+		normalizeLifecycleMarketType(marketType),
+		filled,
+		entryPrice,
+		exitPrice,
+		realizedPnL,
+		normalizeLifecycleSource(source),
+		closedAt.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("force close row %s failed: %w", positionID, err)
+	}
 	return nil
 }
 
@@ -726,6 +926,140 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 	}
 
 	return summary, nil
+}
+
+// RepairMissingSyncPositions closes open lifecycle sync/bootstrap rows that are absent from
+// a fresh exchange position snapshot. This preserves history by marking rows closed in-place.
+func (s *TradingLifecycleStore) RepairMissingSyncPositions(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	positions []ccxt.Position,
+	source string,
+) (int, error) {
+	chatID = strings.TrimSpace(chatID)
+	exchange = strings.TrimSpace(exchange)
+	now := time.Now().UTC()
+	closeSource := normalizeLifecycleSource(source)
+	if closeSource == "" {
+		closeSource = "startup_drift_repair_exchange_missing"
+	}
+
+	remainingByKey := make(map[string]decimal.Decimal, len(positions))
+	for _, pos := range positions {
+		if strings.TrimSpace(pos.Symbol) == "" || pos.Size.IsZero() {
+			continue
+		}
+		key := normalizeSymbolForComparison(pos.Symbol) + ":" + normalizeLifecycleSide(pos.Side)
+		remainingByKey[key] = remainingByKey[key].Add(pos.Size.Abs())
+	}
+
+	query := `
+		SELECT
+			position_id,
+			COALESCE(order_id, ''),
+			COALESCE(chat_id, ''),
+			exchange,
+			symbol,
+			side,
+			COALESCE(market_type, 'futures'),
+			size,
+			entry_price,
+			COALESCE(last_price, 0)
+		FROM trading_positions
+		WHERE LOWER(status) = 'open'
+		  AND (
+			COALESCE(source, '') = 'bootstrap_positions' OR
+			position_id LIKE 'sync-%'
+		  )
+	`
+	args := make([]interface{}, 0, 2)
+	if chatID != "" {
+		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
+		args = append(args, chatID)
+	}
+	if exchange != "" {
+		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
+		args = append(args, exchange)
+	}
+	query += " ORDER BY updated_at DESC"
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("query open sync/bootstrap positions failed: %w", err)
+	}
+	defer rows.Close()
+
+	closed := 0
+	for rows.Next() {
+		var pos ManagedOpenPosition
+		if err := rows.Scan(
+			&pos.PositionID,
+			&pos.OrderID,
+			&pos.ChatID,
+			&pos.Exchange,
+			&pos.Symbol,
+			&pos.Side,
+			&pos.MarketType,
+			&pos.Size,
+			&pos.EntryPrice,
+			&pos.LastPrice,
+		); err != nil {
+			return closed, fmt.Errorf("scan open sync/bootstrap position failed: %w", err)
+		}
+
+		key := normalizeSymbolForComparison(pos.Symbol) + ":" + normalizeLifecycleSide(pos.Side)
+		remaining := remainingByKey[key]
+		sizeAbs := pos.Size.Abs()
+		if remaining.GreaterThan(decimal.Zero) {
+			if sizeAbs.GreaterThan(decimal.Zero) && remaining.GreaterThanOrEqual(sizeAbs) {
+				remainingByKey[key] = remaining.Sub(sizeAbs)
+				continue
+			}
+			remainingByKey[key] = decimal.Zero
+		}
+
+		orderID := strings.TrimSpace(pos.OrderID)
+		if orderID == "" {
+			orderID = strings.TrimSpace(pos.PositionID)
+		}
+		if orderID == "" {
+			orderID = "sync-repair-" + safeIDPart(pos.Symbol+"-"+pos.Side+"-"+now.Format(time.RFC3339Nano))
+		}
+
+		filled := sizeAbs
+		if filled.IsZero() {
+			filled = decimal.NewFromInt(1)
+		}
+		exitPrice := pos.LastPrice
+		if exitPrice.IsZero() {
+			exitPrice = pos.EntryPrice
+		}
+
+		if err := s.RecordClosedOrder(ctx, LifecycleCloseRecord{
+			OrderID:     orderID,
+			ChatID:      pos.ChatID,
+			Exchange:    pos.Exchange,
+			Symbol:      pos.Symbol,
+			Side:        normalizeLifecycleSide(pos.Side),
+			MarketType:  normalizeLifecycleMarketType(pos.MarketType),
+			Filled:      filled,
+			EntryPrice:  pos.EntryPrice,
+			ExitPrice:   exitPrice,
+			RealizedPnL: decimal.Zero,
+			Fees:        decimal.Zero,
+			Source:      closeSource,
+			ClosedAt:    now,
+		}); err != nil {
+			return closed, fmt.Errorf("repair stale sync/bootstrap position %s failed: %w", pos.PositionID, err)
+		}
+		closed++
+	}
+	if err := rows.Err(); err != nil {
+		return closed, fmt.Errorf("iterate open sync/bootstrap positions failed: %w", err)
+	}
+
+	return closed, nil
 }
 
 func (s *TradingLifecycleStore) ListManagedOpenPositions(ctx context.Context, chatID, exchange string, limit int) ([]ManagedOpenPosition, error) {

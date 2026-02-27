@@ -104,6 +104,8 @@ type PortfolioResponse struct {
 	OpenOrders       int                   `json:"open_orders,omitempty"`
 	Positions        []PortfolioPosition   `json:"positions"`
 	SafetyStatus     *SafetyStatusResponse `json:"safety_status,omitempty"`
+	DriftDetected    bool                  `json:"drift_detected"`
+	PositionsSource  string                `json:"positions_source,omitempty"`
 	Note             string                `json:"note,omitempty"`
 	UpdatedAt        string                `json:"updated_at,omitempty"`
 }
@@ -139,6 +141,8 @@ type DoctorCheck struct {
 	Message   string            `json:"message,omitempty"`
 	LatencyMs int64             `json:"latency_ms,omitempty"`
 	Details   map[string]string `json:"details,omitempty"`
+	Optional  bool              `json:"optional"`
+	Impact    string            `json:"impact,omitempty"`
 }
 
 // DoctorResponse represents the response for /doctor
@@ -347,14 +351,160 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		"started_at":     state.StartedAt.Format(time.RFC3339),
 		"active_quests":  state.ActiveQuests,
 		"quest_progress": progress,
+		"quest_runtime":  h.questEngine.GetRuntimeDiagnostics(),
 		"timestamp":      time.Now().UTC().Format(time.RFC3339),
+	}
+	if chatRuntime := h.questEngine.GetChatRuntimeDiagnostics(chatID); chatRuntime != nil {
+		response["chat_runtime"] = chatRuntime
+		if active, ok := chatRuntime["state_drift_active"].(bool); ok {
+			response["state_drift_active"] = active
+		}
+		if count, ok := chatRuntime["state_drift_positions"]; ok {
+			response["state_drift_positions"] = count
+		}
+		if reason, ok := chatRuntime["entry_gate_reason"].(string); ok && strings.TrimSpace(reason) != "" {
+			response["entry_gate_reason"] = strings.TrimSpace(reason)
+		}
+		if gateType, ok := chatRuntime["entry_gate_type"].(string); ok && strings.TrimSpace(gateType) != "" {
+			response["entry_gate_type"] = strings.TrimSpace(gateType)
+		}
+		if recoveryGateReason, ok := chatRuntime["recovery_gate_reason"].(string); ok && strings.TrimSpace(recoveryGateReason) != "" {
+			response["recovery_gate_reason"] = strings.TrimSpace(recoveryGateReason)
+		}
+		if source, ok := chatRuntime["risk_lock_source"].(string); ok && strings.TrimSpace(source) != "" {
+			response["risk_lock_source"] = strings.TrimSpace(source)
+		}
+		if stage, ok := chatRuntime["execution_stage"].(string); ok && strings.TrimSpace(stage) != "" {
+			response["execution_stage"] = strings.TrimSpace(stage)
+		}
+		if progressAt, ok := chatRuntime["execution_last_progress_at"].(string); ok && strings.TrimSpace(progressAt) != "" {
+			response["execution_last_progress_at"] = strings.TrimSpace(progressAt)
+		}
+		if ageSeconds, ok := chatRuntime["execution_in_progress_age_seconds"]; ok {
+			response["execution_in_progress_age_seconds"] = ageSeconds
+		}
+		if blockReason, ok := chatRuntime["entry_attempt_block_reason"].(string); ok && strings.TrimSpace(blockReason) != "" {
+			response["entry_attempt_block_reason"] = strings.TrimSpace(blockReason)
+		}
+		if nextCondition, ok := chatRuntime["next_unblock_condition"].(string); ok && strings.TrimSpace(nextCondition) != "" {
+			response["next_unblock_condition"] = strings.TrimSpace(nextCondition)
+		}
+		if attemptsInWindow, ok := chatRuntime["entry_attempts_1h"]; ok {
+			response["entry_attempts_1h"] = attemptsInWindow
+		}
+		if lastAttemptAt, ok := chatRuntime["last_entry_attempt_at"].(string); ok && strings.TrimSpace(lastAttemptAt) != "" {
+			response["last_entry_attempt_at"] = strings.TrimSpace(lastAttemptAt)
+		}
+		if minutesSince, ok := chatRuntime["minutes_since_entry_attempt"]; ok {
+			response["minutes_since_entry_attempt"] = minutesSince
+		}
+		if driftSignature, ok := chatRuntime["drift_signature"].(string); ok && strings.TrimSpace(driftSignature) != "" {
+			response["drift_signature"] = strings.TrimSpace(driftSignature)
+		}
+		if driftDeadlockCycles, ok := chatRuntime["drift_deadlock_cycles"]; ok {
+			response["drift_deadlock_cycles"] = driftDeadlockCycles
+		}
+		if repairedAt, ok := chatRuntime["last_drift_repair_at"].(string); ok && strings.TrimSpace(repairedAt) != "" {
+			response["last_drift_repair_at"] = repairedAt
+		}
+		if cleanAt, ok := chatRuntime["last_clean_reconcile_at"].(string); ok && strings.TrimSpace(cleanAt) != "" {
+			response["last_clean_reconcile_at"] = cleanAt
+		}
+		if recoveryMode, ok := chatRuntime["recovery_mode"].(string); ok && strings.TrimSpace(recoveryMode) != "" {
+			response["recovery_mode"] = strings.TrimSpace(recoveryMode)
+		}
+		if cleanCycles, ok := chatRuntime["recovery_clean_cycles"]; ok {
+			response["recovery_clean_cycles"] = cleanCycles
+		}
+		if allowed, ok := chatRuntime["recovery_entry_allowed"].(bool); ok {
+			response["recovery_entry_allowed"] = allowed
+		}
+		if providerUsable, ok := chatRuntime["provider_chain_usable"]; ok {
+			response["provider_chain_usable"] = providerUsable
+		}
+		if providerConfigured, ok := chatRuntime["provider_chain_configured"]; ok {
+			response["provider_chain_configured"] = providerConfigured
+		}
+	}
+	if heartbeat := services.CurrentHeartbeatRuntime(); heartbeat != nil {
+		response["heartbeat"] = heartbeatDiagnostics(heartbeat)
 	}
 
 	if safetyStatus != nil {
 		response["safety_status"] = safetyStatus
+		if safetyMap, ok := safetyStatus.(gin.H); ok {
+			drawdown, drawdownOK := safetyMap["current_drawdown"].(float64)
+			questRuntime, runtimeOK := response["quest_runtime"].(map[string]interface{})
+			riskLockActive := false
+			if runtimeOK {
+				if raw, ok := questRuntime["risk_lock_active"].(bool); ok {
+					riskLockActive = raw
+				}
+			}
+			if drawdownOK && drawdown >= 0.15 && !riskLockActive {
+				response["drawdown_observation"] = gin.H{
+					"high_drawdown_without_risk_lock": true,
+					"drawdown":                        drawdown,
+					"threshold":                       0.15,
+				}
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func heartbeatDiagnostics(heartbeat *services.TradingHeartbeat) gin.H {
+	if heartbeat == nil {
+		return gin.H{
+			"running": false,
+			"mode":    "idle",
+			"tasks":   gin.H{},
+		}
+	}
+
+	mode := ""
+	modeNote := ""
+	taskStatus := heartbeat.GetTaskStatus()
+	tasks := make(gin.H, len(taskStatus))
+	for name, status := range taskStatus {
+		if mode == "" && strings.TrimSpace(status.Mode) != "" {
+			mode = status.Mode
+			modeNote = status.ModeNote
+		}
+		entry := gin.H{
+			"name":              status.Name,
+			"enabled":           status.Enabled,
+			"running":           status.Running,
+			"interval":          status.Interval,
+			"last_run":          status.LastRun.UTC().Format(time.RFC3339),
+			"error_count":       status.ErrorCount,
+			"consecutive_error": status.ConsecutiveError,
+			"priority":          status.Priority,
+		}
+		if strings.TrimSpace(status.DisabledReason) != "" {
+			entry["disabled_reason"] = status.DisabledReason
+		}
+		if !status.BackoffUntil.IsZero() {
+			entry["backoff_until"] = status.BackoffUntil.UTC().Format(time.RFC3339)
+		}
+		if status.LastError != nil {
+			entry["last_error"] = status.LastError.Error()
+		}
+		tasks[name] = entry
+	}
+	if mode == "" {
+		mode = "normal"
+	}
+	result := gin.H{
+		"running": heartbeat.IsRunning(),
+		"mode":    mode,
+		"tasks":   tasks,
+	}
+	if strings.TrimSpace(modeNote) != "" {
+		result["note"] = modeNote
+	}
+	return result
 }
 
 // GetPortfolio returns portfolio snapshot for a user
@@ -365,15 +515,36 @@ func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 		return
 	}
 
+	driftDetected := false
+	entryGateReason := ""
+	if h.questEngine != nil {
+		if runtime := h.questEngine.GetChatRuntimeDiagnostics(chatID); runtime != nil {
+			if raw, ok := runtime["state_drift_active"].(bool); ok {
+				driftDetected = raw
+			}
+			if raw, ok := runtime["entry_gate_reason"].(string); ok {
+				entryGateReason = strings.TrimSpace(raw)
+			}
+		}
+	}
+
 	if h.portfolioSafety == nil {
 		response := PortfolioResponse{
 			TotalEquity:      "0.00",
 			AvailableBalance: "0.00",
 			Exposure:         "0.00",
 			Positions:        []PortfolioPosition{},
+			DriftDetected:    driftDetected,
+			PositionsSource:  "lifecycle_fallback",
 			UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 		}
 		h.enrichPortfolioWithLifecycle(c.Request.Context(), chatID, &response)
+		if driftDetected {
+			response.PositionsSource = "lifecycle_repair_pending"
+		}
+		if response.Note == "" && entryGateReason != "" {
+			response.Note = entryGateReason
+		}
 		if len(response.Positions) > 0 || response.OpenOrders > 0 {
 			response.Note = "Lifecycle-backed snapshot (portfolio safety snapshot unavailable)"
 		}
@@ -389,9 +560,17 @@ func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 			AvailableBalance: "0.00",
 			Exposure:         "0.00",
 			Positions:        []PortfolioPosition{},
+			DriftDetected:    driftDetected,
+			PositionsSource:  "lifecycle_fallback",
 			UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 		}
 		h.enrichPortfolioWithLifecycle(ctx, chatID, &response)
+		if driftDetected {
+			response.PositionsSource = "lifecycle_repair_pending"
+		}
+		if response.Note == "" && entryGateReason != "" {
+			response.Note = entryGateReason
+		}
 		if len(response.Positions) > 0 || response.OpenOrders > 0 {
 			response.Note = "Lifecycle-backed snapshot (exchange portfolio snapshot unavailable)"
 			c.JSON(http.StatusOK, response)
@@ -426,6 +605,8 @@ func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 		ExposurePct:      fmt.Sprintf("%.2f%%", snapshot.ExposurePct*100),
 		UnrealizedPnL:    snapshot.UnrealizedPnL.StringFixed(2),
 		Positions:        positions,
+		DriftDetected:    driftDetected,
+		PositionsSource:  "exchange",
 		UpdatedAt:        snapshot.CalculatedAt.Format(time.RFC3339),
 	}
 
@@ -441,7 +622,16 @@ func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 		}
 	}
 
-	h.enrichPortfolioWithLifecycle(ctx, chatID, &response)
+	lifecycleBackfilled := h.enrichPortfolioWithLifecycle(ctx, chatID, &response)
+	if lifecycleBackfilled {
+		response.PositionsSource = "lifecycle_fallback"
+	}
+	if driftDetected {
+		response.PositionsSource = "lifecycle_repair_pending"
+	}
+	if response.Note == "" && entryGateReason != "" {
+		response.Note = entryGateReason
+	}
 	if len(response.Positions) == 0 && response.OpenOrders > 0 && strings.TrimSpace(response.Note) == "" {
 		response.Note = "No open positions yet; open orders are pending fill"
 	}
@@ -484,9 +674,11 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 	checks := make([]DoctorCheck, 0, len(readinessResult.Checks))
 	for name, result := range readinessResult.Checks {
 		check := DoctorCheck{
-			Name:    name,
-			Status:  result.Status,
-			Message: result.Message,
+			Name:     name,
+			Status:   result.Status,
+			Message:  result.Message,
+			Optional: false,
+			Impact:   "core",
 		}
 		if result.LatencyMs > 0 {
 			check.LatencyMs = result.LatencyMs
@@ -528,9 +720,11 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 				}
 
 				check := DoctorCheck{
-					Name:    "portfolio_safety",
-					Status:  status,
-					Message: fmt.Sprintf("Safe: %v, Trading: %v", isSafe, tradingAllowed),
+					Name:     "portfolio_safety",
+					Status:   status,
+					Message:  fmt.Sprintf("Safe: %v, Trading: %v", isSafe, tradingAllowed),
+					Optional: false,
+					Impact:   "core",
 					Details: map[string]string{
 						"max_position_size": fmt.Sprintf("%v", safetyMap["max_position_size"]),
 						"current_drawdown":  fmt.Sprintf("%v", safetyMap["current_drawdown"]),
@@ -547,9 +741,11 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 
 			if portfolioMap, ok := diagnostics["portfolio"].(map[string]interface{}); ok {
 				check := DoctorCheck{
-					Name:    "portfolio_status",
-					Status:  "healthy",
-					Message: fmt.Sprintf("Equity: %v, Positions: %v", portfolioMap["total_equity"], portfolioMap["open_positions"]),
+					Name:     "portfolio_status",
+					Status:   "healthy",
+					Message:  fmt.Sprintf("Equity: %v, Positions: %v", portfolioMap["total_equity"], portfolioMap["open_positions"]),
+					Optional: false,
+					Impact:   "core",
 					Details: map[string]string{
 						"total_equity":    fmt.Sprintf("%v", portfolioMap["total_equity"]),
 						"available_funds": fmt.Sprintf("%v", portfolioMap["available_funds"]),
@@ -582,9 +778,11 @@ func (h *AutonomousHandler) GetDoctor(c *gin.Context) {
 				}
 
 				check := DoctorCheck{
-					Name:    fmt.Sprintf("reconciliation_%s", result.Exchange),
-					Status:  status,
-					Message: message,
+					Name:     fmt.Sprintf("reconciliation_%s", result.Exchange),
+					Status:   status,
+					Message:  message,
+					Optional: false,
+					Impact:   "core",
 					Details: map[string]string{
 						"orders_matched":    fmt.Sprintf("%d", result.OrdersMatched),
 						"orders_mismatched": fmt.Sprintf("%d", result.OrdersMismatched),
@@ -817,9 +1015,9 @@ func floatFromMetric(v interface{}) float64 {
 	}
 }
 
-func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, chatID string, response *PortfolioResponse) {
+func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, chatID string, response *PortfolioResponse) bool {
 	if h.lifecycleStore == nil || response == nil {
-		return
+		return false
 	}
 
 	openOrders, err := h.lifecycleStore.CountOpenOrders(ctx, chatID, "")
@@ -830,16 +1028,16 @@ func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, ch
 	}
 
 	if len(response.Positions) > 0 {
-		return
+		return false
 	}
 
 	managed, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, "", 25)
 	if err != nil {
 		log.Printf("Failed to list managed open positions for chat %s: %v", chatID, err)
-		return
+		return false
 	}
 	if len(managed) == 0 {
-		return
+		return false
 	}
 
 	positions := make([]PortfolioPosition, 0, len(managed))
@@ -857,6 +1055,10 @@ func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, ch
 	if strings.TrimSpace(response.Note) == "" {
 		response.Note = "Open positions sourced from lifecycle store"
 	}
+	if strings.TrimSpace(response.PositionsSource) == "" {
+		response.PositionsSource = "lifecycle_fallback"
+	}
+	return true
 }
 
 func normalizePerformanceWindow(raw string) (string, time.Duration) {

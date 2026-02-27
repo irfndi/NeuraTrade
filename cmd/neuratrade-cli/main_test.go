@@ -350,6 +350,18 @@ func TestStatusCommand(t *testing.T) {
 }
 
 func TestHealthCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/health", r.URL.Path)
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"healthy","services":{"backend":"healthy"},"timestamp":"2026-02-26T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	originalURL := os.Getenv("NEURATRADE_API_BASE_URL")
+	os.Setenv("NEURATRADE_API_BASE_URL", server.URL)
+	defer os.Setenv("NEURATRADE_API_BASE_URL", originalURL)
+
 	// Create a context for the CLI command
 	app := &cli.App{
 		Name: "test",

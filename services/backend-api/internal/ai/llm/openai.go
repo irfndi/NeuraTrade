@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -158,33 +157,37 @@ func (c *OpenAIClient) Complete(ctx context.Context, req *CompletionRequest) (*C
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	// Debug: Log the request body
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.BaseURL+"/chat/completions", bytes.NewReader(body))
+	retryPolicy := resolveTransportRetryPolicy(c.config.MaxRetries)
+	result, err := executeWithTransportRetry(ctx, retryPolicy, func(attemptCtx context.Context) (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(
+			attemptCtx,
+			http.MethodPost,
+			c.config.BaseURL+"/chat/completions",
+			bytes.NewReader(body),
+		)
+		if reqErr != nil {
+			return nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
+
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+
+		resp, doErr := c.httpClient.Do(httpReq)
+		if doErr != nil {
+			return nil, fmt.Errorf("failed to send request: %w", doErr)
+		}
+		return resp, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp.StatusCode, respBody)
+	if result.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(result.StatusCode, result.Headers, result.Body)
 	}
 
 	var openAIResp openAIResponse
-	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
+	if err := json.Unmarshal(result.Body, &openAIResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -208,27 +211,52 @@ func (c *OpenAIClient) Stream(ctx context.Context, req *CompletionRequest) (<-ch
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.BaseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		close(eventChan)
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	retryPolicy := resolveTransportRetryPolicy(c.config.MaxRetries)
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		httpReq, reqErr := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			c.config.BaseURL+"/chat/completions",
+			bytes.NewReader(body),
+		)
+		if reqErr != nil {
+			close(eventChan)
+			return nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
-	httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+		httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		close(eventChan)
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
+		resp, err = c.httpClient.Do(httpReq)
+		if err != nil {
+			if attempt >= retryPolicy.MaxRetries || !isRetryableTransportError(err) {
+				close(eventChan)
+				return nil, fmt.Errorf("failed to send request: %w", err)
+			}
+			if waitErr := waitForRetry(ctx, retryPolicy.backoffForRetry(attempt+1, 0)); waitErr != nil {
+				close(eventChan)
+				return nil, waitErr
+			}
+			continue
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+
 		respBody, _ := io.ReadAll(resp.Body)
-		close(eventChan)
-		return nil, c.handleErrorResponse(resp.StatusCode, respBody)
+		_ = resp.Body.Close()
+		if attempt >= retryPolicy.MaxRetries || !isRetryableHTTPStatus(resp.StatusCode) {
+			close(eventChan)
+			return nil, c.handleErrorResponse(resp.StatusCode, resp.Header, respBody)
+		}
+		retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
+		if waitErr := waitForRetry(ctx, retryPolicy.backoffForRetry(attempt+1, retryAfter)); waitErr != nil {
+			close(eventChan)
+			return nil, waitErr
+		}
 	}
 
 	go c.processStream(resp.Body, eventChan)
@@ -456,19 +484,21 @@ func (c *OpenAIClient) calculateCost(usage UsageMetrics) CostMetrics {
 	}
 }
 
-func (c *OpenAIClient) handleErrorResponse(statusCode int, body []byte) error {
+func (c *OpenAIClient) handleErrorResponse(statusCode int, headers http.Header, body []byte) error {
 	var apiErr openAIError
 	if err := json.Unmarshal(body, &apiErr); err != nil {
-		return fmt.Errorf("OpenAI API error (status %d): %s", statusCode, string(body))
+		return ProviderAPIError{
+			Provider:   ProviderOpenAI,
+			StatusCode: statusCode,
+			Message:    string(body),
+		}
 	}
 
 	switch statusCode {
 	case http.StatusTooManyRequests:
-		retryAfter := 30 * time.Second
-		if retryHeader := string(body); retryHeader != "" {
-			if secs, err := strconv.Atoi(retryHeader); err == nil {
-				retryAfter = time.Duration(secs) * time.Second
-			}
+		retryAfter := parseRetryAfterHeader(headers.Get("Retry-After"))
+		if retryAfter <= 0 {
+			retryAfter = 30 * time.Second
 		}
 		return RateLimitedError{Provider: ProviderOpenAI, RetryAfter: retryAfter}
 	case http.StatusBadRequest:
@@ -481,5 +511,12 @@ func (c *OpenAIClient) handleErrorResponse(statusCode int, body []byte) error {
 		}
 	}
 
-	return fmt.Errorf("OpenAI API error: %s (type: %s, code: %s)", apiErr.Error.Message, apiErr.Error.Type, apiErr.Error.Code)
+	return ProviderAPIError{
+		Provider:   ProviderOpenAI,
+		StatusCode: statusCode,
+		Message:    apiErr.Error.Message,
+		Type:       apiErr.Error.Type,
+		Code:       apiErr.Error.Code,
+		RetryAfter: parseRetryAfterHeader(headers.Get("Retry-After")),
+	}
 }

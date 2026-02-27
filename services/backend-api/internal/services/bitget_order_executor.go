@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -850,6 +851,9 @@ func (e *BitgetOrderExecutor) SyncPositionProtection(
 	if !strings.EqualFold(strings.TrimSpace(exchange), "bitget") {
 		return ErrProtectionSyncUnsupported
 	}
+	if !strings.EqualFold(strings.TrimSpace(position.MarketType), "futures") {
+		return ErrProtectionSyncUnsupported
+	}
 	apiSymbol := strings.ReplaceAll(strings.TrimSpace(position.Symbol), "/", "")
 	if apiSymbol == "" {
 		return fmt.Errorf("symbol is required for exchange-side protection sync")
@@ -870,7 +874,11 @@ func (e *BitgetOrderExecutor) SyncPositionProtection(
 		return nil
 	}
 	if err := e.placePositionTPSL(ctx, apiSymbol, holdSide, stopLoss, takeProfit, contractInfo); err != nil {
-		return fmt.Errorf("place replacement TP/SL plan order failed: %w", err)
+		splitErr := e.placePositionTPSLSplit(ctx, apiSymbol, holdSide, stopLoss, takeProfit, contractInfo)
+		if splitErr != nil {
+			return fmt.Errorf("place replacement TP/SL plan order failed: %w (split fallback failed: %v)", err, splitErr)
+		}
+		log.Printf("[BITGET-ORDER] Combined TP/SL sync rejected, split fallback applied for %s", apiSymbol)
 	}
 	return nil
 }
@@ -964,14 +972,16 @@ func (e *BitgetOrderExecutor) placePositionTPSL(
 	}
 
 	if takeProfit.GreaterThan(decimal.Zero) {
-		body["stopSurplusTriggerPrice"] = formatFuturesTriggerPrice(takeProfit, contractInfo)
+		tpPrice := formatFuturesTriggerPrice(takeProfit, contractInfo)
+		body["stopSurplusTriggerPrice"] = tpPrice
 		body["stopSurplusTriggerType"] = "mark_price"
-		body["stopSurplusExecutePrice"] = "0"
+		body["stopSurplusExecutePrice"] = tpPrice
 	}
 	if stopLoss.GreaterThan(decimal.Zero) {
-		body["stopLossTriggerPrice"] = formatFuturesTriggerPrice(stopLoss, contractInfo)
+		slPrice := formatFuturesTriggerPrice(stopLoss, contractInfo)
+		body["stopLossTriggerPrice"] = slPrice
 		body["stopLossTriggerType"] = "mark_price"
-		body["stopLossExecutePrice"] = "0"
+		body["stopLossExecutePrice"] = slPrice
 	}
 
 	jsonBody, err := json.Marshal(body)
@@ -992,6 +1002,26 @@ func (e *BitgetOrderExecutor) placePositionTPSL(
 	}
 	if result.Code != "00000" {
 		return fmt.Errorf("bitget place TP/SL error: %s (code: %s)", result.Msg, result.Code)
+	}
+	return nil
+}
+
+func (e *BitgetOrderExecutor) placePositionTPSLSplit(
+	ctx context.Context,
+	symbol, holdSide string,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+	contractInfo *ContractInfo,
+) error {
+	if takeProfit.GreaterThan(decimal.Zero) {
+		if err := e.placePositionTPSL(ctx, symbol, holdSide, decimal.Zero, takeProfit, contractInfo); err != nil {
+			return fmt.Errorf("split TP placement failed: %w", err)
+		}
+	}
+	if stopLoss.GreaterThan(decimal.Zero) {
+		if err := e.placePositionTPSL(ctx, symbol, holdSide, stopLoss, decimal.Zero, contractInfo); err != nil {
+			return fmt.Errorf("split SL placement failed: %w", err)
+		}
 	}
 	return nil
 }

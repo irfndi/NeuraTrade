@@ -270,8 +270,14 @@ func main() {
 				Usage: "Manage NeuraTrade gateway (start/stop/status)",
 				Subcommands: []*cli.Command{
 					{
-						Name:   "start",
-						Usage:  "Start all NeuraTrade services",
+						Name:  "start",
+						Usage: "Start all NeuraTrade services",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:  "supervised",
+								Usage: "keep gateway running while backend/telegram warm up even if initial health probe fails",
+							},
+						},
 						Action: gatewayStart,
 					},
 					{

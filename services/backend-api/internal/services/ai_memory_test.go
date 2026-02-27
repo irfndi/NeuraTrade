@@ -179,9 +179,9 @@ func TestTradeMemory_GetPerformanceStats(t *testing.T) {
 	require.NotNil(t, stats["total_trades"])
 	require.NotNil(t, stats["wins"])
 	require.NotNil(t, stats["losses"])
-	assert.Equal(t, int64(3), stats["total_trades"])
-	assert.Equal(t, int64(2), stats["wins"])
-	assert.Equal(t, int64(1), stats["losses"])
+	assert.Equal(t, 3, stats["total_trades"])
+	assert.Equal(t, 2, stats["wins"])
+	assert.Equal(t, 1, stats["losses"])
 }
 
 func TestTradeMemory_BuildMemoryContext(t *testing.T) {

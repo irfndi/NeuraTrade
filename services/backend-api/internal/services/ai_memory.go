@@ -40,6 +40,21 @@ type SimilarTrade struct {
 	SimilarityScore float64 `json:"similarity_score"`
 }
 
+type TradePerformanceWindowStats struct {
+	LookbackHours      int
+	WindowFrom         time.Time
+	WindowTo           time.Time
+	TotalTrades        int
+	Wins               int
+	Losses             int
+	Breakeven          int
+	Pending            int
+	DecisiveTrades     int
+	DecisiveWinRatePct float64
+	TotalPnL           decimal.Decimal
+	AvgConfidence      float64
+}
+
 func NewTradeMemory(db *sql.DB) (*TradeMemory, error) {
 	tm := &TradeMemory{db: db}
 	if err := tm.initTables(); err != nil {
@@ -92,6 +107,10 @@ func (tm *TradeMemory) initTables() error {
 		weight REAL DEFAULT 1.0
 	)`
 	_, _ = tm.db.Exec(lessonsTable)
+
+	// Initialize recovery patterns table
+	_ = tm.initRecoveryPatternsTable()
+
 	return nil
 }
 
@@ -323,31 +342,117 @@ func (tm *TradeMemory) extractLessonsFromTrades(ctx context.Context) []string {
 }
 
 func (tm *TradeMemory) GetPerformanceStats(ctx context.Context) (map[string]interface{}, error) {
-	stats := make(map[string]interface{})
+	windowStats, err := tm.GetPerformanceStatsWindow(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"total_trades":         windowStats.TotalTrades,
+		"wins":                 windowStats.Wins,
+		"losses":               windowStats.Losses,
+		"breakeven":            windowStats.Breakeven,
+		"pending":              windowStats.Pending,
+		"decisive_trades":      windowStats.DecisiveTrades,
+		"win_rate":             windowStats.DecisiveWinRatePct,
+		"decisive_win_rate":    windowStats.DecisiveWinRatePct,
+		"avg_confidence":       windowStats.AvgConfidence,
+		"total_pnl":            windowStats.TotalPnL,
+		"lookback_hours":       windowStats.LookbackHours,
+		"window_from":          windowStats.WindowFrom.Format(time.RFC3339),
+		"window_to":            windowStats.WindowTo.Format(time.RFC3339),
+		"decisive_sample_size": windowStats.DecisiveTrades,
+	}, nil
+}
 
-	queries := map[string]string{
-		"total_trades":   "SELECT COUNT(*) FROM ai_trade_memory WHERE outcome != 'pending'",
-		"wins":           "SELECT COUNT(*) FROM ai_trade_memory WHERE outcome = 'win'",
-		"losses":         "SELECT COUNT(*) FROM ai_trade_memory WHERE outcome = 'loss'",
-		"total_pnl":      "SELECT COALESCE(SUM(pnl), 0) FROM ai_trade_memory",
-		"avg_confidence": "SELECT AVG(confidence) FROM ai_trade_memory WHERE outcome != 'pending'",
+func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHours int) (*TradePerformanceWindowStats, error) {
+	if lookbackHours <= 0 {
+		lookbackHours = 24 * 30
+	}
+	windowTo := time.Now().UTC()
+	windowFrom := windowTo.Add(-time.Duration(lookbackHours) * time.Hour)
+
+	stats := &TradePerformanceWindowStats{
+		LookbackHours: lookbackHours,
+		WindowFrom:    windowFrom,
+		WindowTo:      windowTo,
+		TotalPnL:      decimal.Zero,
 	}
 
-	for key, q := range queries {
-		row := tm.db.QueryRowContext(ctx, q)
-		var val interface{}
-		if err := row.Scan(&val); err == nil {
-			stats[key] = val
+	rows, err := tm.db.QueryContext(ctx, `
+		SELECT outcome, COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(AVG(confidence), 0)
+		FROM ai_trade_memory
+		WHERE timestamp >= $1
+		GROUP BY outcome
+	`, windowFrom)
+	if err != nil {
+		return nil, fmt.Errorf("query performance stats window: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	totalConfidence := 0.0
+	for rows.Next() {
+		var outcome string
+		var count int
+		var pnl float64
+		var avgConfidence float64
+		if err := rows.Scan(&outcome, &count, &pnl, &avgConfidence); err != nil {
+			return nil, fmt.Errorf("scan performance stats window: %w", err)
+		}
+		outcome = strings.ToLower(strings.TrimSpace(outcome))
+		stats.TotalTrades += count
+		stats.TotalPnL = stats.TotalPnL.Add(decimal.NewFromFloat(pnl))
+		totalConfidence += avgConfidence * float64(count)
+
+		switch outcome {
+		case "win":
+			stats.Wins += count
+		case "loss":
+			stats.Losses += count
+		case "breakeven", "break_even":
+			stats.Breakeven += count
+		default:
+			stats.Pending += count
 		}
 	}
-
-	if total, ok := stats["total_trades"].(int64); ok && total > 0 {
-		if wins, ok := stats["wins"].(int64); ok {
-			stats["win_rate"] = float64(wins) / float64(total) * 100
-		}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate performance stats window: %w", err)
 	}
 
+	if stats.TotalTrades > 0 {
+		stats.AvgConfidence = totalConfidence / float64(stats.TotalTrades)
+	}
+
+	stats.DecisiveTrades = stats.Wins + stats.Losses
+	if stats.DecisiveTrades > 0 {
+		stats.DecisiveWinRatePct = (float64(stats.Wins) / float64(stats.DecisiveTrades)) * 100
+	}
 	return stats, nil
+}
+
+func (tm *TradeMemory) GetLastDecisionTimestamp(ctx context.Context) (time.Time, error) {
+	var raw sql.NullString
+	if err := tm.db.QueryRowContext(ctx, `
+		SELECT MAX(timestamp) FROM ai_trade_memory
+	`).Scan(&raw); err != nil {
+		return time.Time{}, fmt.Errorf("query last decision timestamp: %w", err)
+	}
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return time.Time{}, nil
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, raw.String); err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, nil
 }
 
 func (tm *TradeMemory) BuildMemoryContext(ctx context.Context, symbol string, currentContext string) (string, error) {
@@ -355,12 +460,14 @@ func (tm *TradeMemory) BuildMemoryContext(ctx context.Context, symbol string, cu
 
 	contextBuilder.WriteString("## Past Trading History\n\n")
 
-	stats, err := tm.GetPerformanceStats(ctx)
+	stats, err := tm.GetPerformanceStatsWindow(ctx, 24*30)
 	if err == nil {
 		contextBuilder.WriteString("### Performance Stats\n")
-		fmt.Fprintf(&contextBuilder, "- Total Trades: %v\n", stats["total_trades"])
-		fmt.Fprintf(&contextBuilder, "- Win Rate: %.1f%%\n", stats["win_rate"])
-		fmt.Fprintf(&contextBuilder, "- Total PnL: %v\n", stats["total_pnl"])
+		fmt.Fprintf(&contextBuilder, "- Lookback: %dh\n", stats.LookbackHours)
+		fmt.Fprintf(&contextBuilder, "- Total Trades: %d (pending: %d)\n", stats.TotalTrades, stats.Pending)
+		fmt.Fprintf(&contextBuilder, "- Decisive Sample: %d (wins: %d, losses: %d, breakeven: %d)\n", stats.DecisiveTrades, stats.Wins, stats.Losses, stats.Breakeven)
+		fmt.Fprintf(&contextBuilder, "- Decisive Win Rate: %.1f%%\n", stats.DecisiveWinRatePct)
+		fmt.Fprintf(&contextBuilder, "- Total PnL: %s\n", stats.TotalPnL.StringFixed(4))
 		contextBuilder.WriteString("\n")
 	}
 
@@ -470,4 +577,225 @@ func (tm *TradeMemory) RecordTradeDecisionJSON(decisionJSON string) error {
 		MarketContext: decisionJSON,
 	}
 	return tm.RecordDecision(context.Background(), record)
+}
+
+// ===== RECOVERY-AWARE LEARNING =====
+
+// RecoveryPattern represents a successful recovery from drawdown
+type RecoveryPattern struct {
+	ID                    string
+	Timestamp             time.Time
+	DrawdownStart         float64
+	DrawdownPeak          float64
+	DrawdownRecovered     float64
+	RecoveryDuration      time.Duration
+	ActionsDuringRecovery []string
+	WinsDuringRecovery    int
+	LossesDuringRecovery  int
+	KeyStrategies         []string
+}
+
+// RecordRecoveryPattern stores a successful recovery pattern for future learning
+func (tm *TradeMemory) RecordRecoveryPattern(ctx context.Context, pattern RecoveryPattern) error {
+	query := `
+		INSERT INTO ai_recovery_patterns 
+		(id, timestamp, drawdown_start, drawdown_peak, drawdown_recovered, 
+		 recovery_duration_hours, actions, wins, losses, key_strategies)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	actionsJSON, _ := json.Marshal(pattern.ActionsDuringRecovery)
+	strategiesJSON, _ := json.Marshal(pattern.KeyStrategies)
+
+	_, err := tm.db.ExecContext(ctx, query,
+		pattern.ID,
+		pattern.Timestamp,
+		pattern.DrawdownStart,
+		pattern.DrawdownPeak,
+		pattern.DrawdownRecovered,
+		pattern.RecoveryDuration.Hours(),
+		string(actionsJSON),
+		pattern.WinsDuringRecovery,
+		pattern.LossesDuringRecovery,
+		string(strategiesJSON),
+	)
+
+	if err == nil {
+		log.Printf("[AI-MEMORY] Recorded recovery pattern: peak=%.2f%% recovered=%.2f%% duration=%.1fh",
+			pattern.DrawdownPeak*100, pattern.DrawdownRecovered*100, pattern.RecoveryDuration.Hours())
+	}
+	return err
+}
+
+// GetSuccessfulRecoveryPatterns retrieves past successful recovery patterns
+func (tm *TradeMemory) GetSuccessfulRecoveryPatterns(ctx context.Context, minDrawdown float64, limit int) ([]RecoveryPattern, error) {
+	query := `
+		SELECT id, timestamp, drawdown_start, drawdown_peak, drawdown_recovered,
+		       recovery_duration_hours, actions, wins, losses, key_strategies
+		FROM ai_recovery_patterns
+		WHERE drawdown_peak >= ?
+		ORDER BY drawdown_peak DESC, recovery_duration_hours ASC
+		LIMIT ?
+	`
+
+	rows, err := tm.db.QueryContext(ctx, query, minDrawdown, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var patterns []RecoveryPattern
+	for rows.Next() {
+		var p RecoveryPattern
+		var durationHours float64
+		var actionsJSON, strategiesJSON string
+
+		if err := rows.Scan(
+			&p.ID, &p.Timestamp, &p.DrawdownStart, &p.DrawdownPeak, &p.DrawdownRecovered,
+			&durationHours, &actionsJSON, &p.WinsDuringRecovery, &p.LossesDuringRecovery, &strategiesJSON,
+		); err != nil {
+			continue
+		}
+
+		p.RecoveryDuration = time.Duration(durationHours * float64(time.Hour))
+		json.Unmarshal([]byte(actionsJSON), &p.ActionsDuringRecovery)
+		json.Unmarshal([]byte(strategiesJSON), &p.KeyStrategies)
+		patterns = append(patterns, p)
+	}
+
+	return patterns, nil
+}
+
+// BuildRecoveryContext generates context for recovery decision-making
+func (tm *TradeMemory) BuildRecoveryContext(ctx context.Context, currentDrawdown float64) string {
+	var builder strings.Builder
+
+	builder.WriteString("## Recovery Intelligence\n\n")
+
+	// Get successful recovery patterns from similar or worse drawdowns
+	patterns, err := tm.GetSuccessfulRecoveryPatterns(ctx, currentDrawdown*0.8, 5)
+	if err == nil && len(patterns) > 0 {
+		builder.WriteString("### Successful Past Recoveries\n")
+		for _, p := range patterns {
+			fmt.Fprintf(&builder, "- From %.1f%% to %.1f%% in %.1fh (%d wins, %d losses)\n",
+				p.DrawdownPeak*100, p.DrawdownRecovered*100, p.RecoveryDuration.Hours(),
+				p.WinsDuringRecovery, p.LossesDuringRecovery)
+			if len(p.KeyStrategies) > 0 {
+				builder.WriteString("  Strategies: ")
+				builder.WriteString(strings.Join(p.KeyStrategies, ", "))
+				builder.WriteString("\n")
+			}
+		}
+		builder.WriteString("\n")
+	}
+
+	// Get lessons from drawdown category
+	lessons := tm.getLessonsByCategory(ctx, "drawdown_recovery")
+	if lessons != "" {
+		builder.WriteString("### Recovery Lessons\n")
+		builder.WriteString(lessons)
+		builder.WriteString("\n")
+	}
+
+	// Adaptive confidence guidance
+	if currentDrawdown > 0.10 {
+		builder.WriteString("### Current State: HIGH DRAWDOWN\n")
+		builder.WriteString("- Recommended: Reduce position sizes to 50%\n")
+		builder.WriteString("- Focus on high-confidence setups only\n")
+		builder.WriteString("- Prioritize capital preservation over growth\n")
+	} else if currentDrawdown > 0.05 {
+		builder.WriteString("### Current State: MODERATE DRAWDOWN\n")
+		builder.WriteString("- Recommended: Reduce position sizes to 75%\n")
+		builder.WriteString("- Wait for clear trend confirmation\n")
+	}
+
+	return builder.String()
+}
+
+// getLessonsByCategory retrieves lessons for a specific category
+func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string) string {
+	query := `SELECT lesson FROM ai_lessons WHERE category = ? ORDER BY weight DESC LIMIT 5`
+	rows, err := tm.db.QueryContext(ctx, query, category)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+
+	var lessons []string
+	for rows.Next() {
+		var lesson string
+		if err := rows.Scan(&lesson); err == nil {
+			lessons = append(lessons, "- "+lesson)
+		}
+	}
+
+	return strings.Join(lessons, "\n")
+}
+
+// AdaptiveConfidence adjusts confidence threshold based on performance
+func (tm *TradeMemory) AdaptiveConfidence(baseConfidence float64, currentDrawdown float64) float64 {
+	// Increase required confidence during drawdown
+	switch {
+	case currentDrawdown >= 0.15:
+		return minFloat64(baseConfidence+0.15, 0.95) // Require much higher confidence
+	case currentDrawdown >= 0.10:
+		return minFloat64(baseConfidence+0.10, 0.90)
+	case currentDrawdown >= 0.05:
+		return minFloat64(baseConfidence+0.05, 0.85)
+	default:
+		return baseConfidence
+	}
+}
+
+// RecordDrawdownLesson automatically extracts lessons from drawdown events
+func (tm *TradeMemory) RecordDrawdownLesson(ctx context.Context, peakDrawdown float64, recoveryActions []string, outcome string) error {
+	category := "drawdown_recovery"
+
+	// Generate pattern description
+	pattern := fmt.Sprintf("drawdown_%.0f%%", peakDrawdown*100)
+
+	// Generate lesson based on outcome
+	var lesson string
+	if outcome == "recovered" {
+		lesson = fmt.Sprintf("Recovered from %.1f%% drawdown using: %s",
+			peakDrawdown*100, strings.Join(recoveryActions, ", "))
+	} else {
+		lesson = fmt.Sprintf("Failed to recover from %.1f%% drawdown. Avoid: %s",
+			peakDrawdown*100, strings.Join(recoveryActions, ", "))
+	}
+
+	return tm.RecordLesson(ctx, category, pattern, lesson, "")
+}
+
+// initRecoveryPatternsTable creates the recovery patterns table if it doesn't exist
+func (tm *TradeMemory) initRecoveryPatternsTable() error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS ai_recovery_patterns (
+		id TEXT PRIMARY KEY,
+		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+		drawdown_start REAL NOT NULL,
+		drawdown_peak REAL NOT NULL,
+		drawdown_recovered REAL NOT NULL,
+		recovery_duration_hours REAL NOT NULL,
+		actions TEXT,
+		wins INTEGER DEFAULT 0,
+		losses INTEGER DEFAULT 0,
+		key_strategies TEXT
+	)`
+	_, err := tm.db.Exec(schema)
+	if err != nil {
+		return err
+	}
+
+	// Create index
+	indexSQL := `CREATE INDEX IF NOT EXISTS idx_recovery_patterns_peak ON ai_recovery_patterns(drawdown_peak)`
+	_, _ = tm.db.Exec(indexSQL)
+
+	return nil
+}
+
+func minFloat64(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }

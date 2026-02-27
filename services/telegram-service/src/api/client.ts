@@ -12,6 +12,7 @@ import type {
   WalletCommandResponse,
   PortfolioResponse,
   QuestsResponse,
+  QuestDiagnosticsResponse,
   WalletsResponse,
   LogsResponse,
   DoctorResponse,
@@ -245,6 +246,15 @@ export class BackendApiClient {
     });
   }
 
+  async getQuestDiagnostics(chatId: string): Promise<QuestDiagnosticsResponse> {
+    return this.fetch<QuestDiagnosticsResponse>(
+      API_ENDPOINTS.GET_QUEST_DIAGNOSTICS(chatId),
+      {
+        requireAdmin: true,
+      },
+    );
+  }
+
   async getPortfolio(chatId: string): Promise<PortfolioResponse> {
     return this.fetch<PortfolioResponse>(API_ENDPOINTS.GET_PORTFOLIO(chatId), {
       requireAdmin: true,
@@ -286,9 +296,9 @@ export class BackendApiClient {
     );
   }
 
-  async getAIStatus(userId: string): Promise<AIStatusResponse> {
-    return this.fetch<AIStatusResponse>(API_ENDPOINTS.GET_AI_STATUS(userId), {
-      requireAdmin: false,
+  async getAIStatus(chatId: string): Promise<AIStatusResponse> {
+    return this.fetch<AIStatusResponse>(API_ENDPOINTS.GET_AI_STATUS(chatId), {
+      requireAdmin: true,
     });
   }
 

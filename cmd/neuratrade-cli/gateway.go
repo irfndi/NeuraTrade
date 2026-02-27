@@ -28,6 +28,25 @@ type GatewayCommand struct {
 	NeuratradeHome string
 }
 
+type gatewayServiceRuntime struct {
+	Status   string `json:"status"`
+	Detail   string `json:"detail,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
+type gatewayRuntimeState struct {
+	Mode                 string                           `json:"mode"`
+	Supervised           bool                             `json:"supervised"`
+	UpdatedAt            string                           `json:"updated_at"`
+	HealthTimeoutSeconds int                              `json:"health_timeout_seconds"`
+	Services             map[string]gatewayServiceRuntime `json:"services"`
+}
+
+type serviceProbeResult struct {
+	healthy bool
+	detail  string
+}
+
 // gatewayStart starts all NeuraTrade services
 func gatewayStart(cCtx *cli.Context) error {
 	fmt.Println("🚀 Starting NeuraTrade Gateway...")
@@ -35,12 +54,15 @@ func gatewayStart(cCtx *cli.Context) error {
 
 	home := defaultNeuraTradeHome()
 	cfg := getConfigValue(home)
+	statePath := filepath.Join(home, "pids", "gateway-state.json")
 
 	backendPort := resolveBackendPort(cfg)
 
 	ccxtPort := getEnvOrDefault("CCXT_PORT", "3001")
 	telegramPort := getEnvOrDefault("TELEGRAM_PORT", "3002")
 	bindHost := getEnvOrDefault("BIND_HOST", "127.0.0.1")
+	supervised := cCtx.Bool("supervised") || getEnvBoolDefault("NEURATRADE_GATEWAY_SUPERVISED", false)
+	healthTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", 90)
 	adminAPIKey := normalizeAdminAPIKey(getEnvOrDefault("ADMIN_API_KEY", configAdminAPIKey(cfg)))
 	jwtSecret := normalizeJWTSecret(getEnvOrDefault("JWT_SECRET", ""))
 
@@ -81,6 +103,8 @@ func gatewayStart(cCtx *cli.Context) error {
 	fmt.Printf("🌐 Backend Port: %s (public)\n", backendPort)
 	fmt.Printf("🔌 CCXT Port: %s (internal, bound to %s)\n", ccxtPort, bindHost)
 	fmt.Printf("📞 Telegram Port: %s (internal, bound to %s)\n", telegramPort, bindHost)
+	fmt.Printf("🛡️  Supervised Mode: %t\n", supervised)
+	fmt.Printf("⏱️  Health Timeout: %s\n", healthTimeout.Round(time.Second))
 	fmt.Println()
 
 	// Ensure directories exist
@@ -90,6 +114,17 @@ func gatewayStart(cCtx *cli.Context) error {
 	if err := os.MkdirAll(filepath.Join(home, "pids"), 0755); err != nil {
 		return fmt.Errorf("failed to create pids directory: %w", err)
 	}
+	writeGatewayState(statePath, gatewayRuntimeState{
+		Mode:                 "starting",
+		Supervised:           supervised,
+		UpdatedAt:            time.Now().UTC().Format(time.RFC3339),
+		HealthTimeoutSeconds: int(healthTimeout.Seconds()),
+		Services: map[string]gatewayServiceRuntime{
+			"backend":  {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, backendPort)},
+			"telegram": {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)},
+			"ccxt":     {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, ccxtPort)},
+		},
+	})
 
 	// Get executable directory
 	execDir, err := os.Executable()
@@ -150,14 +185,25 @@ func gatewayStart(cCtx *cli.Context) error {
 	)
 	if backendCmd == nil {
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		writeGatewayStateMode(statePath, "down", "backend failed to start")
 		return fmt.Errorf("failed to start backend API")
 	}
-	if err := waitForServiceHealthy("Backend API", fmt.Sprintf("http://%s:%s/health", bindHost, backendPort), 15*time.Second); err != nil {
+	backendHealthURL := fmt.Sprintf("http://%s:%s/health", bindHost, backendPort)
+	backendProbe := waitForServiceHealthy("Backend API", backendHealthURL, healthTimeout)
+	if backendProbe.healthy {
+		fmt.Println("✅ Backend API started")
+		writeGatewayServiceState(statePath, "backend", "healthy", backendProbe.detail, backendHealthURL)
+	} else if supervised {
+		fmt.Printf("⚠️  Backend API still warming: %s\n", backendProbe.detail)
+		writeGatewayServiceState(statePath, "backend", "warming", backendProbe.detail, backendHealthURL)
+		writeGatewayStateMode(statePath, "warming", "backend warming up")
+	} else {
 		backendCmd.Process.Signal(syscall.SIGTERM)
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
-		return err
+		writeGatewayServiceState(statePath, "backend", "down", backendProbe.detail, backendHealthURL)
+		writeGatewayStateMode(statePath, "down", "backend health check failed")
+		return fmt.Errorf("%s", backendProbe.detail)
 	}
-	fmt.Println("✅ Backend API started")
 
 	// Start Telegram Service
 	fmt.Println("📞 Starting Telegram Service...")
@@ -180,27 +226,54 @@ func gatewayStart(cCtx *cli.Context) error {
 	if telegramCmd == nil {
 		backendCmd.Process.Signal(syscall.SIGTERM)
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		writeGatewayStateMode(statePath, "down", "telegram failed to start")
 		return fmt.Errorf("failed to start Telegram service")
 	}
-	if err := waitForServiceHealthy("Telegram Service", fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort), 15*time.Second); err != nil {
+	telegramHealthURL := fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)
+	telegramProbe := waitForServiceHealthy("Telegram Service", telegramHealthURL, healthTimeout)
+	if telegramProbe.healthy {
+		fmt.Println("✅ Telegram Service started")
+		writeGatewayServiceState(statePath, "telegram", "healthy", telegramProbe.detail, telegramHealthURL)
+	} else if supervised {
+		fmt.Printf("⚠️  Telegram service still warming: %s\n", telegramProbe.detail)
+		writeGatewayServiceState(statePath, "telegram", "warming", telegramProbe.detail, telegramHealthURL)
+		writeGatewayStateMode(statePath, "warming", "telegram warming up")
+	} else {
 		telegramCmd.Process.Signal(syscall.SIGTERM)
 		backendCmd.Process.Signal(syscall.SIGTERM)
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
-		return err
+		writeGatewayServiceState(statePath, "telegram", "down", telegramProbe.detail, telegramHealthURL)
+		writeGatewayStateMode(statePath, "down", "telegram health check failed")
+		return fmt.Errorf("%s", telegramProbe.detail)
 	}
-	fmt.Println("✅ Telegram Service started")
+
+	writeGatewayServiceState(statePath, "ccxt", "healthy", "process started", fmt.Sprintf("http://%s:%s/health", bindHost, ccxtPort))
+
+	initialMode := "healthy"
+	if !backendProbe.healthy || !telegramProbe.healthy {
+		initialMode = "warming"
+	}
+	writeGatewayStateMode(statePath, initialMode, "services started")
 	fmt.Println()
-	fmt.Println("🎉 All services started successfully!")
+	if initialMode == "healthy" {
+		fmt.Println("🎉 All services started successfully!")
+	} else {
+		fmt.Println("⏳ Services started in warmup mode (supervised)")
+	}
 	fmt.Println()
 	fmt.Printf("📡 Backend API: http://localhost:%s\n", backendPort)
 	fmt.Printf("🏥 Health Check: http://localhost:%s/health\n", backendPort)
 	fmt.Println()
 	fmt.Println("Press Ctrl+C to stop all services")
 
+	monitorStop := make(chan struct{})
+	go monitorGatewayHealth(statePath, bindHost, backendPort, telegramPort, backendCmd, telegramCmd, ccxtCmd, monitorStop)
+
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
+	close(monitorStop)
 
 	fmt.Println()
 	fmt.Println("🛑 Shutting down services...")
@@ -214,6 +287,7 @@ func gatewayStart(cCtx *cli.Context) error {
 	backendCmd.Wait()
 	telegramCmd.Wait()
 	ccxtCmd.Wait()
+	writeGatewayStateMode(statePath, "down", "gateway stopped")
 
 	fmt.Println("✅ All services stopped")
 	return nil
@@ -362,9 +436,23 @@ func processMatchesAnyPattern(pid int, expectedPatterns ...string) (bool, error)
 
 // gatewayStatus shows the status of NeuraTrade services
 func gatewayStatus(cCtx *cli.Context) error {
+	home := defaultNeuraTradeHome()
+	statePath := filepath.Join(home, "pids", "gateway-state.json")
+
 	fmt.Println("📊 NeuraTrade Service Status")
 	fmt.Println("============================")
 	fmt.Println()
+
+	if state, ok := readGatewayState(statePath); ok {
+		fmt.Printf("Runtime Mode: %s\n", strings.ToUpper(state.Mode))
+		if state.UpdatedAt != "" {
+			fmt.Printf("Last Update: %s\n", state.UpdatedAt)
+		}
+		if state.Supervised {
+			fmt.Println("Supervision: ENABLED")
+		}
+		fmt.Println()
+	}
 
 	// Check if processes are running
 	checkProcess("Backend API", "neuratrade-server")
@@ -390,7 +478,13 @@ func gatewayStatus(cCtx *cli.Context) error {
 
 	respBody, err := client.makeRequest("GET", "/health", nil)
 	if err != nil {
-		fmt.Printf("❌ Health check failed: %v\n", err)
+		fmt.Printf("⚠️  Backend health probe failed: %v\n", err)
+		if state, ok := readGatewayState(statePath); ok {
+			if strings.EqualFold(state.Mode, "warming") || strings.EqualFold(state.Mode, "degraded") {
+				fmt.Printf("Gateway runtime mode is %s (services may still be warming).\n", strings.ToUpper(state.Mode))
+				return nil
+			}
+		}
 		fmt.Println()
 		fmt.Println("Make sure the backend is running:")
 		fmt.Println("  neuratrade gateway start")
@@ -427,8 +521,10 @@ func gatewayStatus(cCtx *cli.Context) error {
 
 // checkProcess checks if a process is running
 func checkProcess(displayName string, processPatterns ...string) {
+	seen := make(map[string]struct{})
+
 	for _, pattern := range processPatterns {
-		cmd := exec.Command("pgrep", "-af", pattern)
+		cmd := exec.Command("pgrep", "-f", pattern)
 		output, err := cmd.Output()
 		if err != nil || len(output) == 0 {
 			continue
@@ -436,28 +532,47 @@ func checkProcess(displayName string, processPatterns ...string) {
 
 		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 		for _, line := range lines {
-			fields := strings.Fields(line)
-			if len(fields) < 2 {
+			pidField := strings.TrimSpace(strings.Fields(line)[0])
+			if pidField == "" {
 				continue
 			}
 
-			pid := fields[0]
-			cmdline := strings.ToLower(strings.Join(fields[1:], " "))
-			if strings.Contains(cmdline, "pgrep -f") || strings.Contains(cmdline, "pgrep -af") {
-				continue
-			}
-			if strings.Contains(cmdline, "gateway status") {
-				continue
-			}
-			if !strings.Contains(cmdline, strings.ToLower(pattern)) {
+			if _, exists := seen[pidField]; exists {
 				continue
 			}
 
-			fmt.Printf("✅ %s: Running (PID: %s)\n", displayName, pid)
+			cmdline, readErr := readCommandLineForPID(pidField)
+			if readErr != nil || strings.TrimSpace(cmdline) == "" {
+				continue
+			}
+			cmdlineLower := strings.ToLower(strings.TrimSpace(cmdline))
+			if strings.Contains(cmdlineLower, "pgrep -f") ||
+				strings.Contains(cmdlineLower, "pkill -f") ||
+				strings.Contains(cmdlineLower, "gateway status") {
+				continue
+			}
+			if !strings.Contains(cmdlineLower, strings.ToLower(pattern)) {
+				continue
+			}
+
+			seen[pidField] = struct{}{}
+			fmt.Printf("✅ %s: Running (PID: %s)\n", displayName, pidField)
 			return
 		}
 	}
 	fmt.Printf("❌ %s: Not running\n", displayName)
+}
+
+func readCommandLineForPID(pid string) (string, error) {
+	if strings.TrimSpace(pid) == "" {
+		return "", fmt.Errorf("empty pid")
+	}
+	cmd := exec.Command("ps", "-p", pid, "-o", "command=")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("ps command failed for PID %s: %w", pid, err)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // printServiceStatus prints service health status
@@ -475,6 +590,33 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getEnvBoolDefault(key string, defaultValue bool) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if value == "" {
+		return defaultValue
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return defaultValue
+	}
+}
+
+func getEnvDurationSeconds(key string, defaultSeconds int) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return time.Duration(defaultSeconds) * time.Second
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return time.Duration(defaultSeconds) * time.Second
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func resolveBackendPort(cfg *localConfig) string {
@@ -532,18 +674,165 @@ func normalizeJWTSecret(jwtSecret string) string {
 	return generated
 }
 
-func waitForServiceHealthy(name, url string, timeout time.Duration) error {
+func waitForServiceHealthy(name, url string, timeout time.Duration) serviceProbeResult {
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 2 * time.Second}
+	lastDetail := "no response yet"
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url) // #nosec G107 -- URL is constructed from local fixed host/port.
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 500 {
-				return nil
+				return serviceProbeResult{
+					healthy: true,
+					detail:  fmt.Sprintf("%s reachable (%d)", name, resp.StatusCode),
+				}
 			}
+			lastDetail = fmt.Sprintf("%s returned %d", name, resp.StatusCode)
+		} else {
+			lastDetail = err.Error()
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("%s failed health check at %s within %s", name, url, timeout.String())
+	return serviceProbeResult{
+		healthy: false,
+		detail:  fmt.Sprintf("%s failed health check at %s within %s (%s)", name, url, timeout.String(), lastDetail),
+	}
+}
+
+func monitorGatewayHealth(
+	statePath, bindHost, backendPort, telegramPort string,
+	backendCmd, telegramCmd, ccxtCmd *exec.Cmd,
+	stop <-chan struct{},
+) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	backendURL := fmt.Sprintf("http://%s:%s/health", bindHost, backendPort)
+	telegramURL := fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)
+	httpClient := &http.Client{Timeout: 2 * time.Second}
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			backendUp := processRunning(backendCmd)
+			telegramUp := processRunning(telegramCmd)
+			ccxtUp := processRunning(ccxtCmd)
+
+			backendHealthy := probeHTTPHealthy(httpClient, backendURL)
+			telegramHealthy := probeHTTPHealthy(httpClient, telegramURL)
+
+			writeGatewayServiceState(statePath, "backend", serviceRuntimeState(backendUp, backendHealthy), "", backendURL)
+			writeGatewayServiceState(statePath, "telegram", serviceRuntimeState(telegramUp, telegramHealthy), "", telegramURL)
+			writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(ccxtUp, true), "", "")
+
+			mode := deriveGatewayMode(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy)
+			writeGatewayStateMode(statePath, mode, "runtime monitor")
+		}
+	}
+}
+
+func deriveGatewayMode(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy bool) string {
+	if !backendUp && !telegramUp && !ccxtUp {
+		return "down"
+	}
+	if backendUp && telegramUp && backendHealthy && telegramHealthy {
+		return "healthy"
+	}
+	// Services are up but probes are not yet passing: treat as startup warming.
+	if (backendUp || telegramUp) && !backendHealthy && !telegramHealthy {
+		return "warming"
+	}
+	return "degraded"
+}
+
+func serviceRuntimeState(processUp, healthy bool) string {
+	switch {
+	case !processUp:
+		return "down"
+	case processUp && healthy:
+		return "healthy"
+	default:
+		return "warming"
+	}
+}
+
+func processRunning(cmd *exec.Cmd) bool {
+	if cmd == nil || cmd.Process == nil {
+		return false
+	}
+	return syscall.Kill(cmd.Process.Pid, 0) == nil
+}
+
+func probeHTTPHealthy(client *http.Client, url string) bool {
+	resp, err := client.Get(url) // #nosec G107 -- internal local URL probe.
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode >= 200 && resp.StatusCode < 500
+}
+
+func writeGatewayState(path string, state gatewayRuntimeState) {
+	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	payload, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, payload, 0644)
+}
+
+func readGatewayState(path string) (gatewayRuntimeState, bool) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return gatewayRuntimeState{}, false
+	}
+	var state gatewayRuntimeState
+	if err := json.Unmarshal(content, &state); err != nil {
+		return gatewayRuntimeState{}, false
+	}
+	if state.Services == nil {
+		state.Services = make(map[string]gatewayServiceRuntime)
+	}
+	return state, true
+}
+
+func writeGatewayStateMode(path, mode, detail string) {
+	state, ok := readGatewayState(path)
+	if !ok {
+		state = gatewayRuntimeState{
+			Services: make(map[string]gatewayServiceRuntime),
+		}
+	}
+	state.Mode = mode
+	if detail != "" {
+		if state.Services == nil {
+			state.Services = make(map[string]gatewayServiceRuntime)
+		}
+		state.Services["gateway"] = gatewayServiceRuntime{
+			Status: mode,
+			Detail: detail,
+		}
+	}
+	writeGatewayState(path, state)
+}
+
+func writeGatewayServiceState(path, serviceName, status, detail, endpoint string) {
+	state, ok := readGatewayState(path)
+	if !ok {
+		state = gatewayRuntimeState{
+			Services: make(map[string]gatewayServiceRuntime),
+		}
+	}
+	if state.Services == nil {
+		state.Services = make(map[string]gatewayServiceRuntime)
+	}
+	state.Services[serviceName] = gatewayServiceRuntime{
+		Status:   status,
+		Detail:   detail,
+		Endpoint: endpoint,
+	}
+	writeGatewayState(path, state)
 }
