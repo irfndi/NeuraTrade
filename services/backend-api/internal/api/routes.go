@@ -244,6 +244,56 @@ func hasConnectedExchangeWallet(db *sql.DB, chatID, provider string) bool {
 	return exists == 1
 }
 
+func listConnectedExchangeProviders(ctx context.Context, db routeDB, chatID string) []string {
+	if db == nil || strings.TrimSpace(chatID) == "" {
+		return nil
+	}
+
+	rows, err := db.Query(ctx, `
+		SELECT DISTINCT LOWER(TRIM(provider))
+		FROM telegram_operator_wallets
+		WHERE chat_id = $1
+		  AND status = 'connected'
+		  AND TRIM(provider) <> ''
+	`, strings.TrimSpace(chatID))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	providers := make([]string, 0, 4)
+	for rows.Next() {
+		var provider string
+		if scanErr := rows.Scan(&provider); scanErr != nil {
+			continue
+		}
+		provider = strings.TrimSpace(strings.ToLower(provider))
+		if provider == "" {
+			continue
+		}
+		providers = append(providers, provider)
+	}
+	return providers
+}
+
+func routeEnvEnabled(key string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func riskLockSourcePriority(source string) int {
+	switch strings.TrimSpace(source) {
+	case "manual_env":
+		return 3
+	case "portfolio_safety":
+		return 2
+	case "drawdown_threshold":
+		return 1
+	default:
+		return 0
+	}
+}
+
 // Returns a cleanup function that should be called on shutdown.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService) func() {
 	// Initialize admin middleware
@@ -392,6 +442,19 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	services.SetHeartbeatRiskBridge(func(ctx context.Context) map[string]interface{} {
 		reasons := make([]string, 0, 4)
 		active := false
+		source := "none"
+		setSource := func(candidate string) {
+			if riskLockSourcePriority(candidate) > riskLockSourcePriority(source) {
+				source = candidate
+			}
+		}
+
+		if routeEnvEnabled("NEURATRADE_QUEST_FORCE_RISK_LOCK") {
+			active = true
+			setSource("manual_env")
+			reasons = append(reasons, "manual_env: NEURATRADE_QUEST_FORCE_RISK_LOCK enabled")
+		}
+
 		for _, chatID := range questEngine.ListActiveAutonomousChatIDs() {
 			diagnostics := questEngine.GetChatRuntimeDiagnostics(chatID)
 			drawdown := 0.0
@@ -405,20 +468,50 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			}
 			if drawdown >= riskLockThreshold {
 				active = true
-				reasons = append(reasons, fmt.Sprintf("chat %s drawdown %.2f%% >= %.2f%%", chatID, drawdown*100, riskLockThreshold*100))
+				setSource("drawdown_threshold")
+				reasons = append(reasons, fmt.Sprintf(
+					"drawdown_threshold: chat %s drawdown %.2f%% >= %.2f%%",
+					chatID,
+					drawdown*100,
+					riskLockThreshold*100,
+				))
+			}
+
+			exchanges := listConnectedExchangeProviders(ctx, db, chatID)
+			if len(exchanges) == 0 {
 				continue
 			}
-			entryGateType, _ := diagnostics["entry_gate_type"].(string)
-			if strings.EqualFold(strings.TrimSpace(entryGateType), "risk_lock") {
+			safetyCtx, cancelSafety := context.WithTimeout(ctx, 8*time.Second)
+			snapshot, snapshotErr := portfolioSafety.GetPortfolioSnapshot(safetyCtx, chatID, exchanges)
+			if snapshotErr != nil {
+				cancelSafety()
+				log.Printf("[QUEST] Risk bridge snapshot check failed for chat %s: %v", chatID, snapshotErr)
+				continue
+			}
+			safety, safetyErr := portfolioSafety.CheckSafety(safetyCtx, chatID, snapshot)
+			cancelSafety()
+			if safetyErr != nil {
+				log.Printf("[QUEST] Risk bridge safety check failed for chat %s: %v", chatID, safetyErr)
+				continue
+			}
+			if !safety.TradingAllowed {
 				active = true
-				reasons = append(reasons, fmt.Sprintf("chat %s reports risk-lock gate", chatID))
+				setSource("portfolio_safety")
+				reason := "portfolio_safety: trading_allowed=false"
+				if len(safety.Reasons) > 0 {
+					reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false (%s)", chatID, strings.Join(safety.Reasons, "; "))
+				} else {
+					reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false", chatID)
+				}
+				reasons = append(reasons, reason)
 			}
 		}
 
-		questEngine.SetRiskLockState(active, reasons)
+		questEngine.SetRiskLockStateWithSource(active, source, reasons)
 		result := map[string]interface{}{
-			"risk_lock":       active,
-			"trading_allowed": !active,
+			"risk_lock":        active,
+			"risk_lock_source": source,
+			"trading_allowed":  !active,
 		}
 		if len(reasons) > 0 {
 			result["reason"] = reasons[0]

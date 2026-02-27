@@ -470,6 +470,42 @@ func TestIntegratedQuestHandlers_RecordEntryAttempt_RotatesWindow(t *testing.T) 
 	assert.WithinDuration(t, now, windowStart, time.Second)
 }
 
+func TestNormalizeAINotificationSemantics_RuntimeDegradedNotStrategyHold(t *testing.T) {
+	notif := AIReasoningNotification{
+		DecisionType:    "scalping_digest",
+		Summary:         "Hold digest: waiting for qualified setup",
+		ConfidenceKnown: false,
+		ReasonCategory:  aiReasonStrategyHold,
+		Reasons: []string{
+			"model response parse fallback (repair attempt 2 failed: context deadline exceeded)",
+		},
+		Action: "hold",
+	}
+
+	normalized := normalizeAINotificationSemantics(notif)
+	assert.False(t, normalized.ConfidenceKnown)
+	assert.NotEqual(t, aiReasonStrategyHold, normalized.ReasonCategory)
+	assert.Equal(t, normalized.ReasonCategory, normalized.HoldCategory)
+}
+
+func TestNormalizeAINotificationSemantics_StrategyHoldPreservedWhenConfidenceKnown(t *testing.T) {
+	notif := AIReasoningNotification{
+		DecisionType:    "scalping_digest",
+		Summary:         "Hold digest: waiting for qualified setup",
+		ConfidenceKnown: true,
+		ReasonCategory:  aiReasonStrategyHold,
+		Reasons: []string{
+			"No candidate passed pretrade validity/liquidity filters",
+		},
+		Action: "hold",
+	}
+
+	normalized := normalizeAINotificationSemantics(notif)
+	assert.True(t, normalized.ConfidenceKnown)
+	assert.Equal(t, aiReasonStrategyHold, normalized.ReasonCategory)
+	assert.Equal(t, aiReasonStrategyHold, normalized.HoldCategory)
+}
+
 // hasExchange checks if a specific exchange exists in the list
 func hasExchange(exchanges []string, exchangeName string) bool {
 	for _, ex := range exchanges {

@@ -253,6 +253,31 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           diagnostics.entry_gate_reason;
         const entryGateType =
           readStringField(chatRuntime, "entry_gate_type") || "none";
+        const recoveryGateReason =
+          readStringField(chatRuntime, "recovery_gate_reason") ||
+          diagnostics.recovery_gate_reason;
+        const riskLockSource =
+          readStringField(chatRuntime, "risk_lock_source") ||
+          readStringField(questRuntime, "risk_lock_source") ||
+          diagnostics.risk_lock_source ||
+          "none";
+        const runtimeCircuitActive =
+          readBoolField(aiRuntime, "circuit_active") === true;
+        const entryGatePriority = (() => {
+          if (riskLock === true || entryGateType === "risk_lock") {
+            return "risk_lock";
+          }
+          if (driftActive || entryGateType === "state_drift") {
+            return "state_drift";
+          }
+          if (runtimeCircuitActive || entryGateType === "runtime_circuit") {
+            return "runtime_circuit";
+          }
+          if (entryGateType === "recovery_gate") {
+            return "recovery_gate";
+          }
+          return "none";
+        })();
         const entryAttemptBlockReason =
           readStringField(chatRuntime, "entry_attempt_block_reason") ||
           diagnostics.entry_attempt_block_reason;
@@ -274,16 +299,58 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         const driftSignature =
           readStringField(chatRuntime, "drift_signature") ||
           diagnostics.drift_signature;
+        const executionStage =
+          readStringField(chatRuntime, "execution_stage") ||
+          readStringField(questRuntime, "execution_stage");
+        const executionLastProgressAt =
+          readStringField(chatRuntime, "execution_last_progress_at") ||
+          readStringField(questRuntime, "execution_last_progress_at");
+        const executionInProgressAgeSeconds =
+          readNumberField(chatRuntime, "execution_in_progress_age_seconds") ??
+          readNumberField(questRuntime, "execution_in_progress_age_seconds");
         if (entryGateReason) {
           lines.push(`• Entry gate reason: ${entryGateReason}`);
         }
-        lines.push(`• Entry gate type: ${entryGateType}`);
+        let blockerReason =
+          entryGateReason || entryAttemptBlockReason || recoveryGateReason || "";
+        if (!blockerReason) {
+          switch (entryGatePriority) {
+            case "risk_lock":
+              blockerReason =
+                riskLockSource === "manual_env"
+                  ? "forced by operator env lock"
+                  : "global risk lock active";
+              break;
+            case "state_drift":
+              blockerReason =
+                typeof driftCount === "number"
+                  ? `lifecycle drift pending reconcile (${driftCount})`
+                  : "lifecycle drift pending reconcile";
+              break;
+            case "runtime_circuit":
+              blockerReason = "AI runtime circuit is open";
+              break;
+            case "recovery_gate":
+              blockerReason = "recovery clean-cycle gate active";
+              break;
+            default:
+              blockerReason = "none";
+              break;
+          }
+        }
+        lines.push(`• Entry blocker: ${entryGatePriority} (${blockerReason})`);
+        if (entryGatePriority === "risk_lock") {
+          lines.push(`• Risk lock source: ${riskLockSource}`);
+        }
         if (entryAttemptBlockReason) {
           lines.push(`• Entry attempt block: ${entryAttemptBlockReason}`);
         }
-        if (nextUnblockCondition) {
-          lines.push(`• Next unblock: ${nextUnblockCondition}`);
-        }
+        const resolvedUnblockCondition =
+          nextUnblockCondition ||
+          (entryGatePriority === "none"
+            ? "none (entries currently eligible)"
+            : "await gate condition recovery");
+        lines.push(`• Next unblock: ${resolvedUnblockCondition}`);
         if (typeof entryAttempts1h === "number") {
           lines.push(`• Entry attempts (1h): ${entryAttempts1h}`);
         }
@@ -299,6 +366,16 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         }
         if (driftSignature) {
           lines.push(`• Drift signature: ${driftSignature}`);
+        }
+        if (executionStage) {
+          lines.push(`• Execution stage: ${executionStage}`);
+        }
+        if (executionLastProgressAt) {
+          const ageText =
+            typeof executionInProgressAgeSeconds === "number"
+              ? ` (${executionInProgressAgeSeconds.toFixed(1)}s ago)`
+              : "";
+          lines.push(`• Last execution progress: ${executionLastProgressAt}${ageText}`);
         }
 
         const recoveryMode =

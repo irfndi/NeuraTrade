@@ -238,6 +238,16 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 	if category == "" {
 		category = strings.TrimSpace(reasoning.HoldCategory)
 	}
+	if !confidenceKnown && (category == "" || strings.EqualFold(category, "strategy_hold")) {
+		evidence := strings.TrimSpace(reasoning.Summary + " " + strings.Join(reasoning.Reasons, " "))
+		category = classifyAIRuntimeReason(evidence, "execution_unavailable")
+	}
+	if isRuntimeReasonCategory(category) {
+		confidenceKnown = false
+	}
+	if !confidenceKnown && strings.EqualFold(category, "strategy_hold") {
+		category = "execution_unavailable"
+	}
 
 	lines := []string{
 		"🤖 **AI Trading Decision**",

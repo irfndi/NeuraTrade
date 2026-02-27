@@ -368,6 +368,21 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if gateType, ok := chatRuntime["entry_gate_type"].(string); ok && strings.TrimSpace(gateType) != "" {
 			response["entry_gate_type"] = strings.TrimSpace(gateType)
 		}
+		if recoveryGateReason, ok := chatRuntime["recovery_gate_reason"].(string); ok && strings.TrimSpace(recoveryGateReason) != "" {
+			response["recovery_gate_reason"] = strings.TrimSpace(recoveryGateReason)
+		}
+		if source, ok := chatRuntime["risk_lock_source"].(string); ok && strings.TrimSpace(source) != "" {
+			response["risk_lock_source"] = strings.TrimSpace(source)
+		}
+		if stage, ok := chatRuntime["execution_stage"].(string); ok && strings.TrimSpace(stage) != "" {
+			response["execution_stage"] = strings.TrimSpace(stage)
+		}
+		if progressAt, ok := chatRuntime["execution_last_progress_at"].(string); ok && strings.TrimSpace(progressAt) != "" {
+			response["execution_last_progress_at"] = strings.TrimSpace(progressAt)
+		}
+		if ageSeconds, ok := chatRuntime["execution_in_progress_age_seconds"]; ok {
+			response["execution_in_progress_age_seconds"] = ageSeconds
+		}
 		if blockReason, ok := chatRuntime["entry_attempt_block_reason"].(string); ok && strings.TrimSpace(blockReason) != "" {
 			response["entry_attempt_block_reason"] = strings.TrimSpace(blockReason)
 		}

@@ -747,6 +747,14 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if rawNext, ok := diagnostics["next_unblock_condition"].(string); ok {
 			nextUnblockCondition = strings.TrimSpace(rawNext)
 		}
+		recoveryGateReason := ""
+		if rawRecoveryReason, ok := diagnostics["recovery_gate_reason"].(string); ok {
+			recoveryGateReason = strings.TrimSpace(rawRecoveryReason)
+		}
+		riskLockSource := ""
+		if rawSource, ok := diagnostics["risk_lock_source"].(string); ok {
+			riskLockSource = strings.TrimSpace(rawSource)
+		}
 		entryAttemptBlockReason := ""
 		if rawBlock, ok := diagnostics["entry_attempt_block_reason"].(string); ok {
 			entryAttemptBlockReason = strings.TrimSpace(rawBlock)
@@ -786,6 +794,23 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		case float64:
 			driftDeadlockCycles = int(value)
 		}
+		executionStage := ""
+		if rawStage, ok := diagnostics["execution_stage"].(string); ok {
+			executionStage = strings.TrimSpace(rawStage)
+		}
+		executionLastProgressAt := ""
+		if rawProgressAt, ok := diagnostics["execution_last_progress_at"].(string); ok {
+			executionLastProgressAt = strings.TrimSpace(rawProgressAt)
+		}
+		executionInProgressAge := 0.0
+		switch value := diagnostics["execution_in_progress_age_seconds"].(type) {
+		case float64:
+			executionInProgressAge = value
+		case int:
+			executionInProgressAge = float64(value)
+		case int64:
+			executionInProgressAge = float64(value)
+		}
 		runtimeStatus := "healthy"
 		if statusRaw, ok := rawRuntime["status"].(string); ok && strings.TrimSpace(statusRaw) != "" {
 			runtimeStatus = strings.ToLower(strings.TrimSpace(statusRaw))
@@ -820,6 +845,12 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 				entryGateReason = fmt.Sprintf("entry blocked by state drift (%d mismatch(es))", driftPositions)
 			case "runtime_circuit":
 				entryGateReason = "entry blocked by AI runtime circuit breaker"
+			case "recovery_gate":
+				if recoveryGateReason != "" {
+					entryGateReason = recoveryGateReason
+				} else {
+					entryGateReason = "entry blocked by recovery clean-cycle gate"
+				}
 			case "none":
 				if entryAttemptBlockReason != "" {
 					entryGateReason = entryAttemptBlockReason
@@ -884,6 +915,12 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if entryGateType != "" {
 			details["entry_gate_type"] = entryGateType
 		}
+		if recoveryGateReason != "" {
+			details["recovery_gate_reason"] = recoveryGateReason
+		}
+		if riskLockSource != "" {
+			details["risk_lock_source"] = riskLockSource
+		}
 		if entryAttemptBlockReason != "" {
 			details["entry_attempt_block_reason"] = entryAttemptBlockReason
 		}
@@ -895,6 +932,13 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 		if driftSignature != "" {
 			details["drift_signature"] = driftSignature
+		}
+		if executionStage != "" {
+			details["execution_stage"] = executionStage
+		}
+		if executionLastProgressAt != "" {
+			details["execution_last_progress_at"] = executionLastProgressAt
+			details["execution_in_progress_age_seconds"] = fmt.Sprintf("%.1f", executionInProgressAge)
 		}
 		details["provider_chain_configured"] = fmt.Sprintf("%d", providerChainConfigured)
 		details["provider_chain_usable"] = fmt.Sprintf("%d", providerChainUsable)

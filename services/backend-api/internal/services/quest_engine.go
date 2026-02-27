@@ -42,6 +42,13 @@ const (
 	questExecutionGlobalWatchdogSlack = 45 * time.Second
 	questExecutionContextTail         = 20 * time.Second
 	questExecutionLockTail            = 35 * time.Second
+	defaultQuestLockReleaseTimeout    = 2 * time.Second
+	maxQuestLockReleaseTimeout        = 10 * time.Second
+
+	questExecutionStageLock    = "lock"
+	questExecutionStageHandler = "handler"
+	questExecutionStagePersist = "persist"
+	questExecutionStageDone    = "done"
 )
 
 type questRuntimeBudget struct {
@@ -137,6 +144,8 @@ type QuestEngine struct {
 	quests                    map[string]*Quest
 	executing                 map[string]bool
 	executionStarts           map[string]time.Time
+	executionLastProgress     map[string]time.Time
+	executionStage            map[string]string
 	autonomousState           map[string]*AutonomousState
 	definitions               map[string]*QuestDefinition
 	handlers                  map[QuestType]QuestHandler
@@ -148,6 +157,7 @@ type QuestEngine struct {
 	lastTickAt                time.Time
 	runtimeBudget             questRuntimeBudget
 	riskLockActive            bool
+	riskLockSource            string
 	riskLockReasons           []string
 	aiProviderChainConfigured int
 	aiProviderChainUsable     int
@@ -277,6 +287,8 @@ func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *Quest
 		quests:                    make(map[string]*Quest),
 		executing:                 make(map[string]bool),
 		executionStarts:           make(map[string]time.Time),
+		executionLastProgress:     make(map[string]time.Time),
+		executionStage:            make(map[string]string),
 		autonomousState:           make(map[string]*AutonomousState),
 		definitions:               make(map[string]*QuestDefinition),
 		handlers:                  make(map[QuestType]QuestHandler),
@@ -285,6 +297,7 @@ func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *Quest
 		stopCh:                    make(chan struct{}),
 		chatIDForQuest:            make(map[string]int64),
 		cadenceMode:               "normal",
+		riskLockSource:            "none",
 		aiProviderChainConfigured: 0,
 		aiProviderChainUsable:     0,
 	}
@@ -630,6 +643,8 @@ func (e *QuestEngine) tick() {
 				delete(e.quests, id)
 				delete(e.executing, id)
 				delete(e.executionStarts, id)
+				delete(e.executionLastProgress, id)
+				delete(e.executionStage, id)
 				delete(e.chatIDForQuest, id)
 				log.Printf("[QUEST] Cleaned up old quest: %s (status: %s)", id, quest.Status)
 			}
@@ -654,32 +669,42 @@ func (e *QuestEngine) tick() {
 				startedAt = now
 				e.executionStarts[quest.ID] = startedAt
 			}
+			lastProgressAt := e.executionLastProgress[quest.ID]
+			if lastProgressAt.IsZero() {
+				lastProgressAt = startedAt
+				e.executionLastProgress[quest.ID] = lastProgressAt
+			}
+			stage := strings.TrimSpace(e.executionStage[quest.ID])
+			if stage == "" {
+				stage = questExecutionStageLock
+				e.executionStage[quest.ID] = stage
+			}
 
 			age := now.Sub(startedAt)
-			// Never clear the in-progress marker before the distributed lock can expire.
-			// This prevents stale-reset -> immediate lock contention loops.
+			progressAge := now.Sub(lastProgressAt)
 			staleAfter := e.runtimeBudget.StaleTimeout
-			if e.runtimeBudget.LockTTL > staleAfter {
-				staleAfter = e.runtimeBudget.LockTTL
-			}
-			if age > staleAfter {
+			if progressAge > staleAfter {
 				log.Printf(
-					"[QUEST] Quest %s (%s) execution stale after %s (reset_after=%s stale=%s lock_ttl=%s), resetting in-progress marker",
+					"[QUEST] Quest %s (%s) execution stale after progress_age=%s (start_age=%s stage=%s reset_after=%s), resetting in-progress marker",
 					quest.ID,
 					quest.Name,
+					progressAge.Round(time.Second),
 					age.Round(time.Second),
+					stage,
 					staleAfter.Round(time.Second),
-					e.runtimeBudget.StaleTimeout.Round(time.Second),
-					e.runtimeBudget.LockTTL.Round(time.Second),
 				)
 				delete(e.executing, quest.ID)
 				delete(e.executionStarts, quest.ID)
+				delete(e.executionLastProgress, quest.ID)
+				delete(e.executionStage, quest.ID)
 			} else {
 				log.Printf(
-					"[QUEST] Quest %s (%s) skipped - execution already in progress for %s",
+					"[QUEST] Quest %s (%s) skipped - execution already in progress for %s (stage=%s last_progress=%s ago)",
 					quest.ID,
 					quest.Name,
 					age.Round(time.Second),
+					stage,
+					progressAge.Round(time.Second),
 				)
 				continue
 			}
@@ -724,6 +749,8 @@ func (e *QuestEngine) tick() {
 			log.Printf("[QUEST] Executing quest: %s (type: %s, def: %s, chat: %s)", quest.ID, quest.Type, quest.Metadata["definition_id"], quest.Metadata["chat_id"])
 			e.executing[quest.ID] = true
 			e.executionStarts[quest.ID] = now
+			e.executionLastProgress[quest.ID] = now
+			e.executionStage[quest.ID] = questExecutionStageLock
 			scheduledCount++
 			go e.executeQuest(quest)
 		} else {
@@ -885,6 +912,20 @@ func (e *QuestEngine) isRiskLockEnabledLocked() bool {
 	return envEnabled("NEURATRADE_QUEST_FORCE_RISK_LOCK")
 }
 
+func (e *QuestEngine) currentRiskLockSourceLocked() string {
+	if envEnabled("NEURATRADE_QUEST_FORCE_RISK_LOCK") {
+		return "manual_env"
+	}
+	if !e.riskLockActive {
+		return "none"
+	}
+	source := normalizeRiskLockSource(e.riskLockSource)
+	if source == "none" {
+		source = inferRiskLockSource(e.riskLockReasons)
+	}
+	return source
+}
+
 func envEnabled(key string) bool {
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
@@ -976,9 +1017,22 @@ func envFloatOrDefault(key string, fallback, min, max float64) float64 {
 	return value
 }
 
+func questLockReleaseTimeout() time.Duration {
+	seconds := getEnvInt("NEURATRADE_QUEST_LOCK_RELEASE_TIMEOUT_SECONDS")
+	if seconds <= 0 {
+		return defaultQuestLockReleaseTimeout
+	}
+	timeout := time.Duration(seconds) * time.Second
+	if timeout > maxQuestLockReleaseTimeout {
+		return maxQuestLockReleaseTimeout
+	}
+	return timeout
+}
+
 // executeQuest executes a single quest
 func (e *QuestEngine) executeQuest(quest *Quest) {
 	defer e.markQuestExecutionFinished(quest.ID)
+	e.markQuestExecutionProgress(quest.ID, questExecutionStageLock)
 
 	e.mu.RLock()
 	handler, ok := e.handlers[quest.Type]
@@ -998,15 +1052,23 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 		log.Printf("Quest %s skipped: could not acquire lock (another instance may be running)", quest.ID)
 		return
 	}
-	defer e.releaseLock(ctx, lockKey)
+	defer func() {
+		e.markQuestExecutionProgress(quest.ID, questExecutionStageDone)
+		releaseCtx, cancelRelease := context.WithTimeout(context.Background(), questLockReleaseTimeout())
+		defer cancelRelease()
+		e.releaseLock(releaseCtx, lockKey)
+	}()
 
+	e.markQuestExecutionProgress(quest.ID, questExecutionStageHandler)
 	if err := handler(ctx, quest); err != nil {
 		log.Printf("Quest %s (%s) failed: %v", quest.ID, quest.Name, err)
+		e.markQuestExecutionProgress(quest.ID, questExecutionStagePersist)
 		e.updateQuestStatus(quest.ID, QuestStatusFailed)
 		quest.LastError = err.Error()
 	} else {
 		log.Printf("Quest %s (%s) completed successfully", quest.ID, quest.Name)
 		now := time.Now()
+		e.markQuestExecutionProgress(quest.ID, questExecutionStagePersist)
 		e.updateLastExecuted(quest.ID, now)
 		if quest.Type == QuestTypeRoutine {
 			e.updateQuestStatus(quest.ID, QuestStatusActive)
@@ -1021,6 +1083,22 @@ func (e *QuestEngine) markQuestExecutionFinished(questID string) {
 	defer e.mu.Unlock()
 	delete(e.executing, questID)
 	delete(e.executionStarts, questID)
+	delete(e.executionLastProgress, questID)
+	delete(e.executionStage, questID)
+}
+
+func (e *QuestEngine) markQuestExecutionProgress(questID, stage string) {
+	now := time.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, exists := e.executionStarts[questID]; !exists {
+		e.executionStarts[questID] = now
+	}
+	e.executionLastProgress[questID] = now
+	if strings.TrimSpace(stage) == "" {
+		stage = questExecutionStageLock
+	}
+	e.executionStage[questID] = stage
 }
 
 func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Duration) bool {
@@ -1183,9 +1261,20 @@ func (e *QuestEngine) GetAutonomousState(chatID string) (*AutonomousState, error
 
 // SetRiskLockState sets global risk-lock state for quest entry gating.
 func (e *QuestEngine) SetRiskLockState(active bool, reasons []string) {
+	e.SetRiskLockStateWithSource(active, inferRiskLockSource(reasons), reasons)
+}
+
+// SetRiskLockStateWithSource sets global risk-lock state with an explicit source tag.
+func (e *QuestEngine) SetRiskLockStateWithSource(active bool, source string, reasons []string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.riskLockActive = active
+	if !active {
+		e.riskLockSource = "none"
+		e.riskLockReasons = nil
+		return
+	}
+	e.riskLockSource = normalizeRiskLockSource(source)
 	if len(reasons) == 0 {
 		e.riskLockReasons = nil
 		return
@@ -1198,6 +1287,34 @@ func (e *QuestEngine) SetRiskLockState(active bool, reasons []string) {
 		}
 	}
 	e.riskLockReasons = copied
+}
+
+func normalizeRiskLockSource(source string) string {
+	switch strings.TrimSpace(source) {
+	case "manual_env":
+		return "manual_env"
+	case "portfolio_safety":
+		return "portfolio_safety"
+	case "drawdown_threshold":
+		return "drawdown_threshold"
+	default:
+		return "none"
+	}
+}
+
+func inferRiskLockSource(reasons []string) string {
+	for _, reason := range reasons {
+		normalized := strings.ToLower(strings.TrimSpace(reason))
+		switch {
+		case strings.HasPrefix(normalized, "manual_env:"):
+			return "manual_env"
+		case strings.HasPrefix(normalized, "portfolio_safety:"):
+			return "portfolio_safety"
+		case strings.HasPrefix(normalized, "drawdown_threshold:"):
+			return "drawdown_threshold"
+		}
+	}
+	return "none"
 }
 
 // SetAIProviderChainStats records provider-chain readiness for diagnostics.
@@ -1235,18 +1352,44 @@ func (e *QuestEngine) GetRuntimeDiagnostics() map[string]interface{} {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	riskLockSource := e.currentRiskLockSourceLocked()
+	executionStage := questExecutionStageDone
+	executionLastProgress := ""
+	executionInProgressAge := 0.0
+	now := time.Now().UTC()
+	for questID := range e.executing {
+		stage := strings.TrimSpace(e.executionStage[questID])
+		if stage == "" {
+			stage = questExecutionStageLock
+		}
+		executionStage = stage
+		progressAt := e.executionLastProgress[questID]
+		if progressAt.IsZero() {
+			progressAt = e.executionStarts[questID]
+		}
+		if !progressAt.IsZero() {
+			executionLastProgress = progressAt.UTC().Format(time.RFC3339)
+			executionInProgressAge = now.Sub(progressAt).Seconds()
+		}
+		break
+	}
+
 	return map[string]interface{}{
-		"cadence_mode":              e.cadenceMode,
-		"active_quests":             len(e.quests),
-		"executing_quests":          len(e.executing),
-		"risk_lock_active":          e.isRiskLockEnabledLocked(),
-		"risk_lock_reasons":         append([]string(nil), e.riskLockReasons...),
-		"provider_chain_configured": e.aiProviderChainConfigured,
-		"provider_chain_usable":     e.aiProviderChainUsable,
-		"watchdog_stale":            e.runtimeBudget.StaleTimeout.String(),
-		"execution_timeout":         e.runtimeBudget.ExecutionTimeout.String(),
-		"lock_ttl":                  e.runtimeBudget.LockTTL.String(),
-		"budget_floor":              e.runtimeBudget.DerivedFloor.String(),
+		"cadence_mode":                      e.cadenceMode,
+		"active_quests":                     len(e.quests),
+		"executing_quests":                  len(e.executing),
+		"risk_lock_active":                  e.isRiskLockEnabledLocked(),
+		"risk_lock_source":                  riskLockSource,
+		"risk_lock_reasons":                 append([]string(nil), e.riskLockReasons...),
+		"execution_stage":                   executionStage,
+		"execution_last_progress_at":        executionLastProgress,
+		"execution_in_progress_age_seconds": executionInProgressAge,
+		"provider_chain_configured":         e.aiProviderChainConfigured,
+		"provider_chain_usable":             e.aiProviderChainUsable,
+		"watchdog_stale":                    e.runtimeBudget.StaleTimeout.String(),
+		"execution_timeout":                 e.runtimeBudget.ExecutionTimeout.String(),
+		"lock_ttl":                          e.runtimeBudget.LockTTL.String(),
+		"budget_floor":                      e.runtimeBudget.DerivedFloor.String(),
 	}
 }
 
@@ -1257,37 +1400,42 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 
 	chatID = strings.TrimSpace(chatID)
 	result := map[string]interface{}{
-		"chat_id":                     chatID,
-		"active_scalping_quests":      0,
-		"hold_streak":                 0,
-		"unlock_cycles":               0,
-		"recovery_mode":               "normal",
-		"recovery_clean_cycles":       0,
-		"recovery_entry_allowed":      true,
-		"recovery_next_condition":     "",
-		"state_drift_active":          false,
-		"state_drift_positions":       0,
-		"state_drift_count":           0,
-		"state_drift_last_checked_at": "",
-		"entry_gate_reason":           "",
-		"entry_gate_type":             "none",
-		"last_entry_attempt_at":       "",
-		"minutes_since_entry_attempt": 0.0,
-		"entry_attempts_1h":           0,
-		"entry_attempt_block_reason":  "",
-		"next_unblock_condition":      "",
-		"last_drift_repair_at":        "",
-		"last_clean_reconcile_at":     "",
-		"drift_signature":             "",
-		"drift_deadlock_cycles":       0,
-		"last_startup_reconcile":      "",
-		"last_spot_unwind":            "",
-		"last_hold_digest":            "",
-		"runtime_no_fill_since":       "",
-		"runtime_failure_streak":      0,
-		"runtime_last_failure_at":     "",
-		"provider_chain_configured":   0,
-		"provider_chain_usable":       0,
+		"chat_id":                           chatID,
+		"active_scalping_quests":            0,
+		"hold_streak":                       0,
+		"unlock_cycles":                     0,
+		"recovery_mode":                     "normal",
+		"recovery_clean_cycles":             0,
+		"recovery_entry_allowed":            true,
+		"recovery_next_condition":           "",
+		"state_drift_active":                false,
+		"state_drift_positions":             0,
+		"state_drift_count":                 0,
+		"state_drift_last_checked_at":       "",
+		"entry_gate_reason":                 "",
+		"entry_gate_type":                   "none",
+		"recovery_gate_reason":              "",
+		"last_entry_attempt_at":             "",
+		"minutes_since_entry_attempt":       0.0,
+		"entry_attempts_1h":                 0,
+		"entry_attempt_block_reason":        "",
+		"next_unblock_condition":            "",
+		"last_drift_repair_at":              "",
+		"last_clean_reconcile_at":           "",
+		"drift_signature":                   "",
+		"drift_deadlock_cycles":             0,
+		"last_startup_reconcile":            "",
+		"last_spot_unwind":                  "",
+		"last_hold_digest":                  "",
+		"runtime_no_fill_since":             "",
+		"runtime_failure_streak":            0,
+		"runtime_last_failure_at":           "",
+		"risk_lock_source":                  "none",
+		"execution_stage":                   questExecutionStageDone,
+		"execution_last_progress_at":        "",
+		"execution_in_progress_age_seconds": 0.0,
+		"provider_chain_configured":         0,
+		"provider_chain_usable":             0,
 	}
 	if chatID == "" {
 		return result
@@ -1340,6 +1488,8 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		aiFailoverAttempts    int
 		aiFailoverSuccesses   int
 		aiFailoverFailures    int
+		executionProgressAt   time.Time
+		executionStage        string
 	)
 
 	for _, quest := range e.quests {
@@ -1348,6 +1498,21 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		}
 		if strings.TrimSpace(quest.Metadata["definition_id"]) == "scalping_execution" && quest.Status == QuestStatusActive {
 			activeScalping++
+		}
+		if e.executing[quest.ID] {
+			startedAt := e.executionStarts[quest.ID]
+			progressAt := e.executionLastProgress[quest.ID]
+			if progressAt.IsZero() {
+				progressAt = startedAt
+			}
+			if progressAt.After(executionProgressAt) {
+				executionProgressAt = progressAt
+				stage := strings.TrimSpace(e.executionStage[quest.ID])
+				if stage == "" {
+					stage = questExecutionStageLock
+				}
+				executionStage = stage
+			}
 		}
 
 		cp := quest.Checkpoint
@@ -1498,6 +1663,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if !lastCleanReconcile.IsZero() {
 		result["last_clean_reconcile_at"] = lastCleanReconcile.Format(time.RFC3339)
 	}
+	result["risk_lock_source"] = e.currentRiskLockSourceLocked()
 	if strings.TrimSpace(entryGateReason) == "" && e.isRiskLockEnabledLocked() {
 		if len(e.riskLockReasons) > 0 {
 			entryGateReason = e.riskLockReasons[0]
@@ -1505,22 +1671,32 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			entryGateReason = "risk lock active"
 		}
 	}
-	if entryGateType == "" {
-		switch {
-		case e.isRiskLockEnabledLocked():
-			entryGateType = "risk_lock"
-		case stateDriftActive:
-			entryGateType = "state_drift"
-		case aiCircuitUntil.After(time.Now().UTC()):
-			entryGateType = "runtime_circuit"
-		default:
-			entryGateType = "none"
-		}
+	nowForGate := time.Now().UTC()
+	switch {
+	case e.isRiskLockEnabledLocked():
+		entryGateType = "risk_lock"
+	case stateDriftActive:
+		entryGateType = "state_drift"
+	case aiCircuitUntil.After(nowForGate):
+		entryGateType = "runtime_circuit"
+	case strings.TrimSpace(entryGateType) == "":
+		entryGateType = "none"
 	}
 	if strings.TrimSpace(entryGateReason) != "" {
 		result["entry_gate_reason"] = strings.TrimSpace(entryGateReason)
 	}
 	result["entry_gate_type"] = entryGateType
+	if entryGateType == "recovery_gate" {
+		result["recovery_gate_reason"] = strings.TrimSpace(entryGateReason)
+	}
+	if strings.TrimSpace(executionStage) != "" {
+		result["execution_stage"] = executionStage
+	}
+	if !executionProgressAt.IsZero() {
+		nowForExecution := time.Now().UTC()
+		result["execution_last_progress_at"] = executionProgressAt.Format(time.RFC3339)
+		result["execution_in_progress_age_seconds"] = nowForExecution.Sub(executionProgressAt).Seconds()
+	}
 	result["entry_attempts_1h"] = entryAttempts1h
 	if strings.TrimSpace(entryAttemptBlock) != "" {
 		result["entry_attempt_block_reason"] = strings.TrimSpace(entryAttemptBlock)

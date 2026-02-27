@@ -571,7 +571,7 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 			"recovery_mode":          "micro_entry",
 			"recovery_clean_cycles":  2,
 			"recovery_entry_allowed": false,
-			"entry_gate_type":        "risk_lock",
+			"entry_gate_type":        "recovery_gate",
 			"risk_max_drawdown":      0.41,
 		},
 	}
@@ -586,8 +586,8 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	if allowed, _ := diag["recovery_entry_allowed"].(bool); allowed {
 		t.Fatal("expected recovery_entry_allowed=false")
 	}
-	if gateType, _ := diag["entry_gate_type"].(string); gateType != "risk_lock" {
-		t.Fatalf("expected entry_gate_type=risk_lock, got %q", gateType)
+	if gateType, _ := diag["entry_gate_type"].(string); gateType != "recovery_gate" {
+		t.Fatalf("expected entry_gate_type=recovery_gate, got %q", gateType)
 	}
 	if usable, _ := diag["provider_chain_usable"].(int); usable != 1 {
 		t.Fatalf("expected provider_chain_usable=1, got %d", usable)
@@ -651,6 +651,66 @@ func TestGetChatRuntimeDiagnostics_IncludesLivenessAndDeadlockFields(t *testing.
 	}
 	if minutes, ok := diag["minutes_since_entry_attempt"].(float64); !ok || minutes <= 0 {
 		t.Fatalf("expected minutes_since_entry_attempt > 0, got %#v", diag["minutes_since_entry_attempt"])
+	}
+}
+
+func TestSetRiskLockStateWithSource_ExposesSourceInDiagnostics(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.SetRiskLockStateWithSource(true, "portfolio_safety", []string{"portfolio_safety: trading_allowed=false"})
+
+	runtimeDiag := engine.GetRuntimeDiagnostics()
+	if source, _ := runtimeDiag["risk_lock_source"].(string); source != "portfolio_safety" {
+		t.Fatalf("expected runtime risk_lock_source=portfolio_safety, got %q", source)
+	}
+	if active, _ := runtimeDiag["risk_lock_active"].(bool); !active {
+		t.Fatal("expected runtime risk_lock_active=true")
+	}
+}
+
+func TestTick_UsesLastProgressForStaleReset(t *testing.T) {
+	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "120")
+
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	executed := make(chan struct{}, 1)
+	engine.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
+		executed <- struct{}{}
+		return nil
+	})
+
+	quest := &Quest{
+		ID:         "progress-quest",
+		Name:       "Progress Quest",
+		Type:       QuestTypeRoutine,
+		Cadence:    CadenceMicro,
+		Status:     QuestStatusActive,
+		Checkpoint: make(map[string]interface{}),
+		Metadata: map[string]string{
+			"chat_id":       "123",
+			"definition_id": "scalping_execution",
+		},
+	}
+	engine.quests[quest.ID] = quest
+	engine.executing[quest.ID] = true
+	engine.executionStarts[quest.ID] = time.Now().Add(-10 * time.Minute)
+	engine.executionLastProgress[quest.ID] = time.Now().Add(-20 * time.Second)
+	engine.executionStage[quest.ID] = "handler"
+
+	engine.tick()
+	select {
+	case <-executed:
+		t.Fatal("expected quest to remain in-progress when progress heartbeat is recent")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if !engine.executing[quest.ID] {
+		t.Fatal("expected in-progress marker to remain when progress is fresh")
+	}
+
+	engine.executionLastProgress[quest.ID] = time.Now().Add(-10 * time.Minute)
+	engine.tick()
+	select {
+	case <-executed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected stale in-progress quest to execute after progress timeout reset")
 	}
 }
 
