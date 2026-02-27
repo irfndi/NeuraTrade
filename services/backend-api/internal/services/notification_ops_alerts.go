@@ -228,9 +228,15 @@ func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int
 // formatAIReasoningMessage formats an AI reasoning notification message
 func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNotification) string {
 	confidenceKnown := reasoning.ConfidenceKnown
-	if !confidenceKnown && strings.TrimSpace(reasoning.ReasonCategory) == "" {
+	if !confidenceKnown &&
+		strings.TrimSpace(reasoning.ReasonCategory) == "" &&
+		strings.TrimSpace(reasoning.HoldCategory) == "" {
 		// Backward-compatible fallback for legacy callers.
 		confidenceKnown = true
+	}
+	category := strings.TrimSpace(reasoning.ReasonCategory)
+	if category == "" {
+		category = strings.TrimSpace(reasoning.HoldCategory)
 	}
 
 	lines := []string{
@@ -259,7 +265,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		"",
 		fmt.Sprintf("**Summary:** %s", reasoning.Summary),
 	)
-	if category := strings.TrimSpace(reasoning.ReasonCategory); category != "" {
+	if category != "" {
 		lines = append(lines, fmt.Sprintf("**Reason Category:** %s", category))
 	}
 
@@ -286,6 +292,9 @@ func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {
 	action := strings.ToLower(strings.TrimSpace(reasoning.Action))
 	summary := strings.ToLower(strings.TrimSpace(reasoning.Summary))
 	category := strings.ToLower(strings.TrimSpace(reasoning.ReasonCategory))
+	if category == "" {
+		category = strings.ToLower(strings.TrimSpace(reasoning.HoldCategory))
+	}
 
 	if action == "hold" && reasoning.ConfidenceKnown && reasoning.Confidence <= 0.45 {
 		return true

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
@@ -63,6 +64,8 @@ type DynamicProtectionManager struct {
 	tickerSource protectionTickerService
 	protection   positionProtectionSync
 	logger       *log.Logger
+	missingMu    sync.Mutex
+	missingRetry map[string]time.Time
 }
 
 func NewDynamicProtectionManager(
@@ -137,10 +140,20 @@ func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, c
 			)
 		}
 		if changed && m.protection != nil {
+			if m.shouldSkipMissingRetry(pos, now) {
+				m.logger.Printf(
+					"[PROTECTION] Skipping stale protection retry due to cooldown for %s %s %s",
+					pos.Exchange,
+					pos.Symbol,
+					pos.Side,
+				)
+				continue
+			}
 			if err := m.protection.SyncPositionProtection(ctx, pos.Exchange, pos, newStop, newTake); err != nil {
 				if errors.Is(err, ErrProtectionSyncUnsupported) {
 					m.logger.Printf("[PROTECTION] Exchange-side TP/SL sync unsupported for %s, persisting lifecycle-only update", pos.PositionID)
 				} else if isPositionMissingProtectionError(err) {
+					m.markMissingRetry(pos, now)
 					if closeErr := m.reconcileMissingPosition(ctx, pos, err); closeErr != nil {
 						summary.Errors++
 						m.logger.Printf("[PROTECTION] Failed to reconcile stale lifecycle position %s: %v", pos.PositionID, closeErr)
@@ -362,4 +375,47 @@ func (m *DynamicProtectionManager) reconcileMissingPosition(
 		cause,
 	)
 	return nil
+}
+
+func (m *DynamicProtectionManager) shouldSkipMissingRetry(pos ManagedOpenPosition, now time.Time) bool {
+	cooldown := stateDriftRepairCooldown()
+	if cooldown <= 0 {
+		return false
+	}
+	key := stalePositionRetryKey(pos)
+	if key == "|||" {
+		return false
+	}
+
+	m.missingMu.Lock()
+	defer m.missingMu.Unlock()
+	if m.missingRetry == nil {
+		m.missingRetry = make(map[string]time.Time)
+		return false
+	}
+
+	for k, ts := range m.missingRetry {
+		if now.Sub(ts) >= cooldown {
+			delete(m.missingRetry, k)
+		}
+	}
+
+	last, ok := m.missingRetry[key]
+	if !ok {
+		return false
+	}
+	return now.Sub(last) < cooldown
+}
+
+func (m *DynamicProtectionManager) markMissingRetry(pos ManagedOpenPosition, now time.Time) {
+	key := stalePositionRetryKey(pos)
+	if key == "|||" {
+		return
+	}
+	m.missingMu.Lock()
+	defer m.missingMu.Unlock()
+	if m.missingRetry == nil {
+		m.missingRetry = make(map[string]time.Time)
+	}
+	m.missingRetry[key] = now
 }

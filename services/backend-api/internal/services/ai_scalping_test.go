@@ -247,6 +247,81 @@ func TestAIScalpingService_ParseDecisionWithRetries_InvalidAction(t *testing.T) 
 	assert.Equal(t, 1, mockLLM.CallCount)
 }
 
+func TestAIScalpingService_ApplyControlledNoFillRecovery_StepLadder(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MinConfidence: 0.80,
+			MaxCapitalPct: 5.00,
+		},
+	}
+	t.Setenv("NEURATRADE_NOFILL_RECOVERY_MINUTES", "180")
+	t.Setenv("NEURATRADE_NOFILL_MIN_CONF_FLOOR", "0.70")
+	t.Setenv("NEURATRADE_NOFILL_MAX_CAP_PCT_CAP", "1.50")
+
+	minConfidence := 0.85
+	maxCapital := 0.10
+	svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, TradingPortfolio{
+		NoFillMinutes: 200,
+		OpenPositions: 0,
+		DriftActive:   false,
+	}, 0)
+	assert.InDelta(t, 0.75, minConfidence, 0.0001)
+	assert.InDelta(t, 0.50, maxCapital, 0.0001)
+
+	minConfidence = 0.85
+	maxCapital = 0.10
+	svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, TradingPortfolio{
+		NoFillMinutes: 420,
+		OpenPositions: 0,
+		DriftActive:   false,
+	}, 0)
+	assert.InDelta(t, 0.70, minConfidence, 0.0001)
+	assert.InDelta(t, 1.00, maxCapital, 0.0001)
+
+	minConfidence = 0.85
+	maxCapital = 0.10
+	svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, TradingPortfolio{
+		NoFillMinutes: 720,
+		OpenPositions: 0,
+		DriftActive:   false,
+	}, 0)
+	assert.InDelta(t, 0.70, minConfidence, 0.0001)
+	assert.InDelta(t, 1.50, maxCapital, 0.0001)
+}
+
+func TestAIScalpingService_ApplyControlledNoFillRecovery_RequiresClearState(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MinConfidence: 0.80,
+			MaxCapitalPct: 5.00,
+		},
+	}
+	t.Setenv("NEURATRADE_NOFILL_RECOVERY_MINUTES", "180")
+
+	tests := []TradingPortfolio{
+		{NoFillMinutes: 240, OpenPositions: 1, DriftActive: false},
+		{NoFillMinutes: 240, OpenPositions: 0, DriftActive: true},
+	}
+	for _, portfolio := range tests {
+		minConfidence := 0.80
+		maxCapital := 0.10
+		svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, portfolio, 0)
+		assert.InDelta(t, 0.80, minConfidence, 0.0001)
+		assert.InDelta(t, 0.10, maxCapital, 0.0001)
+	}
+
+	// Consecutive losses should suppress recovery unlock.
+	minConfidence := 0.80
+	maxCapital := 0.10
+	svc.applyControlledNoFillRecovery(&minConfidence, &maxCapital, TradingPortfolio{
+		NoFillMinutes: 300,
+		OpenPositions: 0,
+		DriftActive:   false,
+	}, 3)
+	assert.InDelta(t, 0.80, minConfidence, 0.0001)
+	assert.InDelta(t, 0.10, maxCapital, 0.0001)
+}
+
 func TestAIScalpingService_ValidateDecision_HoldNormalization(t *testing.T) {
 	svc := &AIScalpingService{}
 	decision := &AITradingDecision{

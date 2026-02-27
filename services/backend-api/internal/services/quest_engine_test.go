@@ -494,6 +494,69 @@ func TestTick_ResetsStaleExecutionAndRunsQuest(t *testing.T) {
 	}
 }
 
+func TestShouldBlockQuestEntryByStateDriftLocked(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	quest := &Quest{
+		ID:     "q1",
+		Status: QuestStatusActive,
+		Metadata: map[string]string{
+			"chat_id":       "123",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"state_drift_active": true,
+		},
+	}
+	if !engine.shouldBlockQuestEntryByStateDriftLocked(quest) {
+		t.Fatal("expected drift-active checkpoint to block new entries")
+	}
+
+	quest.Checkpoint["state_drift_active"] = false
+	if engine.shouldBlockQuestEntryByStateDriftLocked(quest) {
+		t.Fatal("expected drift-inactive checkpoint to allow entries")
+	}
+}
+
+func TestGetChatRuntimeDiagnostics_IncludesDriftFields(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.quests["q-drift"] = &Quest{
+		ID:     "q-drift",
+		Status: QuestStatusActive,
+		Metadata: map[string]string{
+			"chat_id":       "1082762347",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"state_drift_active":                  true,
+			"state_drift_positions":               3,
+			"state_drift_last_checked_at":         "2026-02-27T03:31:24Z",
+			"state_drift_last_repair_at":          "2026-02-27T03:20:01Z",
+			"state_drift_last_clean_reconcile_at": "2026-02-27T03:35:01Z",
+			"runtime_entry_gate_reason":           "state drift detected",
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("1082762347")
+	active, _ := diag["state_drift_active"].(bool)
+	if !active {
+		t.Fatal("expected state_drift_active=true in diagnostics")
+	}
+	count, _ := diag["state_drift_positions"].(int)
+	if count != 3 {
+		t.Fatalf("expected state_drift_positions=3, got %d", count)
+	}
+	reason, _ := diag["entry_gate_reason"].(string)
+	if reason != "state drift detected" {
+		t.Fatalf("expected entry_gate_reason to be populated, got %q", reason)
+	}
+	if _, ok := diag["last_drift_repair_at"].(string); !ok {
+		t.Fatal("expected last_drift_repair_at in diagnostics")
+	}
+	if _, ok := diag["last_clean_reconcile_at"].(string); !ok {
+		t.Fatal("expected last_clean_reconcile_at in diagnostics")
+	}
+}
+
 func ptrTime(t time.Time) *time.Time {
 	return &t
 }

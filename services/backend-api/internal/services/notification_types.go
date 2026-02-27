@@ -131,6 +131,7 @@ type AIReasoningNotification struct {
 	Confidence      float64
 	ConfidenceKnown bool
 	ReasonCategory  string
+	HoldCategory    string
 	Reasons         []string
 	Action          string
 }

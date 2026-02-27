@@ -728,24 +728,24 @@ func monitorGatewayHealth(
 			writeGatewayServiceState(statePath, "telegram", serviceRuntimeState(telegramUp, telegramHealthy), "", telegramURL)
 			writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(ccxtUp, true), "", "")
 
-			mode := "healthy"
-			switch {
-			case !backendUp && !telegramUp && !ccxtUp:
-				mode = "down"
-			case backendUp && telegramUp && backendHealthy && telegramHealthy:
-				mode = "healthy"
-			case backendUp || telegramUp || ccxtUp:
-				if !backendHealthy || !telegramHealthy {
-					mode = "degraded"
-				} else {
-					mode = "warming"
-				}
-			default:
-				mode = "down"
-			}
+			mode := deriveGatewayMode(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy)
 			writeGatewayStateMode(statePath, mode, "runtime monitor")
 		}
 	}
+}
+
+func deriveGatewayMode(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy bool) string {
+	if !backendUp && !telegramUp && !ccxtUp {
+		return "down"
+	}
+	if backendUp && telegramUp && backendHealthy && telegramHealthy {
+		return "healthy"
+	}
+	// Services are up but probes are not yet passing: treat as startup warming.
+	if (backendUp || telegramUp) && !backendHealthy && !telegramHealthy {
+		return "warming"
+	}
+	return "degraded"
 }
 
 func serviceRuntimeState(processUp, healthy bool) string {

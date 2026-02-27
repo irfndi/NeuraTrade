@@ -166,6 +166,8 @@ export interface PortfolioResponse {
   readonly exposure?: string;
   readonly open_orders?: number;
   readonly positions: readonly PortfolioPosition[];
+  readonly drift_detected?: boolean;
+  readonly positions_source?: "exchange" | "lifecycle_repair_pending" | "lifecycle_fallback" | string;
   readonly note?: string;
   readonly updated_at?: string;
 }
@@ -189,6 +191,11 @@ export interface QuestDiagnosticsResponse {
   readonly chat_id?: string;
   readonly autonomous?: boolean;
   readonly started_at?: string;
+  readonly state_drift_active?: boolean;
+  readonly state_drift_positions?: number;
+  readonly entry_gate_reason?: string;
+  readonly last_drift_repair_at?: string;
+  readonly last_clean_reconcile_at?: string;
   readonly quest_runtime?: Readonly<Record<string, unknown>>;
   readonly chat_runtime?: Readonly<Record<string, unknown>> & {
     readonly ai_runtime?: Readonly<Record<string, unknown>>;

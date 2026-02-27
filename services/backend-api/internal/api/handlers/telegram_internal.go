@@ -725,17 +725,44 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 	} else {
 		diagnostics := h.questEngine.GetChatRuntimeDiagnostics(chatID)
 		rawRuntime, _ := diagnostics["ai_runtime"].(map[string]interface{})
+		driftActive, _ := diagnostics["state_drift_active"].(bool)
+		driftPositions := 0
+		switch value := diagnostics["state_drift_positions"].(type) {
+		case int:
+			driftPositions = value
+		case int64:
+			driftPositions = int(value)
+		case float64:
+			driftPositions = int(value)
+		}
+		entryGateReason := ""
+		if rawReason, ok := diagnostics["entry_gate_reason"].(string); ok {
+			entryGateReason = strings.TrimSpace(rawReason)
+		}
 		runtimeStatus := "healthy"
 		if statusRaw, ok := rawRuntime["status"].(string); ok && strings.TrimSpace(statusRaw) != "" {
 			runtimeStatus = strings.ToLower(strings.TrimSpace(statusRaw))
 		}
 
 		message := "AI runtime healthy"
-		switch runtimeStatus {
-		case "critical":
-			message = "AI runtime degraded: high timeout/parse failure pressure"
-		case "warning":
-			message = "AI runtime warning: elevated error rate"
+		if driftActive {
+			if runtimeStatus == "healthy" {
+				runtimeStatus = "warning"
+			}
+			message = fmt.Sprintf(
+				"Entry blocked by state drift: %d mismatch(es) pending reconcile",
+				driftPositions,
+			)
+		} else {
+			switch runtimeStatus {
+			case "critical":
+				message = "AI runtime degraded: high timeout/parse failure pressure"
+			case "warning":
+				message = "AI runtime warning: elevated error rate"
+			}
+		}
+		if entryGateReason != "" {
+			message = entryGateReason
 		}
 		details := gin.H{}
 		if errorRate, ok := rawRuntime["error_rate"].(float64); ok {
@@ -749,6 +776,11 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 		if circuitActive, ok := rawRuntime["circuit_active"].(bool); ok {
 			details["circuit_active"] = fmt.Sprintf("%t", circuitActive)
+		}
+		details["state_drift_active"] = fmt.Sprintf("%t", driftActive)
+		details["state_drift_positions"] = fmt.Sprintf("%d", driftPositions)
+		if entryGateReason != "" {
+			details["entry_gate_reason"] = entryGateReason
 		}
 
 		checks = append(checks, gin.H{
@@ -815,14 +847,15 @@ func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
 	}
 
 	selectedModel := ""
-	lookupQueries := []string{
-		"SELECT COALESCE(selected_ai_model, '') FROM users WHERE COALESCE(telegram_chat_id, '') = $1 LIMIT 1",
-		"SELECT COALESCE(selected_ai_model, '') FROM users WHERE COALESCE(telegram_id, '') = $1 LIMIT 1",
-	}
-	for _, query := range lookupQueries {
-		if err := h.db.QueryRow(c.Request.Context(), query, chatID).Scan(&selectedModel); err == nil {
-			break
-		}
+	query := `
+		SELECT COALESCE(selected_ai_model, '')
+		FROM users
+		WHERE COALESCE(telegram_chat_id, '') = $1
+		   OR COALESCE(telegram_id, '') = $1
+		LIMIT 1
+	`
+	if err := h.db.QueryRow(c.Request.Context(), query, chatID).Scan(&selectedModel); err != nil {
+		selectedModel = ""
 	}
 
 	provider := ""

@@ -187,6 +187,13 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 	if status != "" {
 		query += fmt.Sprintf(" AND status = $%d", argIndex)
 		args = append(args, string(status))
+		argIndex++
+	}
+
+	if strings.TrimSpace(chatID) != "" {
+		query += fmt.Sprintf(" AND metadata LIKE $%d ESCAPE '\\\\'", argIndex)
+		args = append(args, metadataChatIDLikePattern(chatID))
+		argIndex++
 	}
 
 	query += " ORDER BY created_at DESC"
@@ -234,15 +241,22 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
 		}
 
-		if strings.TrimSpace(chatID) != "" {
-			if strings.TrimSpace(quest.Metadata["chat_id"]) != strings.TrimSpace(chatID) {
-				continue
-			}
+		if strings.TrimSpace(chatID) != "" && strings.TrimSpace(quest.Metadata["chat_id"]) != strings.TrimSpace(chatID) {
+			continue
 		}
 		quests = append(quests, &quest)
 	}
 
 	return quests, nil
+}
+
+func metadataChatIDLikePattern(chatID string) string {
+	escaped := strings.TrimSpace(chatID)
+	escaped = strings.ReplaceAll(escaped, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `%`, `\%`)
+	escaped = strings.ReplaceAll(escaped, `_`, `\_`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return fmt.Sprintf("%%\"chat_id\":\"%s\"%%", escaped)
 }
 
 func (s *DBQuestStore) UpdateQuestProgress(ctx context.Context, id string, current int, checkpoint map[string]interface{}) error {

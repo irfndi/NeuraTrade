@@ -236,6 +236,39 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           lines.push(`• Risk lock: ${riskLock ? "ACTIVE" : "inactive"}`);
         }
 
+        const driftActive =
+          readBoolField(chatRuntime, "state_drift_active") ??
+          diagnostics.state_drift_active ??
+          false;
+        const driftCount =
+          readNumberField(chatRuntime, "state_drift_positions") ??
+          diagnostics.state_drift_positions;
+        lines.push(
+          `• Drift gate: ${driftActive ? "ACTIVE" : "inactive"}${
+            typeof driftCount === "number" ? ` (${driftCount} mismatch)` : ""
+          }`,
+        );
+        const entryGateReason =
+          readStringField(chatRuntime, "entry_gate_reason") ||
+          diagnostics.entry_gate_reason;
+        if (entryGateReason) {
+          lines.push(`• Entry gate reason: ${entryGateReason}`);
+        }
+
+        const lastDriftRepair =
+          readStringField(chatRuntime, "last_drift_repair_at") ||
+          diagnostics.last_drift_repair_at;
+        if (lastDriftRepair) {
+          lines.push(`• Last drift repair: ${lastDriftRepair}`);
+        }
+
+        const lastCleanReconcile =
+          readStringField(chatRuntime, "last_clean_reconcile_at") ||
+          diagnostics.last_clean_reconcile_at;
+        if (lastCleanReconcile) {
+          lines.push(`• Last clean reconcile: ${lastCleanReconcile}`);
+        }
+
         const lastReconcile = readStringField(
           chatRuntime,
           "last_startup_reconcile",
@@ -279,6 +312,14 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           `• Exposure: ${portfolio.exposure ?? "0.00"}`,
           `• Open positions: ${portfolio.positions?.length ?? 0}`,
         );
+        if (portfolio.positions_source) {
+          lines.push(`• Position source: ${portfolio.positions_source}`);
+        }
+        if (typeof portfolio.drift_detected === "boolean") {
+          lines.push(
+            `• Portfolio drift flag: ${portfolio.drift_detected ? "true" : "false"}`,
+          );
+        }
         if (typeof portfolio.open_orders === "number") {
           lines.push(`• Open orders: ${portfolio.open_orders}`);
         }

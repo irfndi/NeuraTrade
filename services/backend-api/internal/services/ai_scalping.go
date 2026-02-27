@@ -380,6 +380,8 @@ type TradingPortfolio struct {
 	PhaseMinConfidence float64 `json:"phase_min_confidence"`
 	PhaseMaxCapitalPct float64 `json:"phase_max_capital_pct"`
 	MilestoneProgress  float64 `json:"milestone_progress"`
+	NoFillMinutes      float64 `json:"no_fill_minutes"`
+	DriftActive        bool    `json:"state_drift_active"`
 }
 
 type AIScalpingService struct {
@@ -567,7 +569,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		return strategyHoldDecision(err.Error(), decision.Confidence), nil
 	}
 
-	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds(ctx)
+	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds(ctx, portfolio)
 	if portfolio.PhaseMinConfidence > 0 && portfolio.PhaseMinConfidence > effectiveMinConfidence {
 		effectiveMinConfidence = portfolio.PhaseMinConfidence
 	}
@@ -1117,6 +1119,8 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - Phase Min Confidence: %.2f
 - Phase Max Capital %%: %.2f
 - Fund Milestone Progress: %.2f%%
+- No-fill Duration (minutes): %.1f
+- State Drift Active: %t
 - Risk Sharpe: %.4f
 - Risk Sortino: %.4f
 - Risk Drawdown: %.4f
@@ -1134,6 +1138,8 @@ Based on the signals and past trading history, what is your trading decision? Le
 		portfolio.PhaseMinConfidence,
 		portfolio.PhaseMaxCapitalPct,
 		portfolio.MilestoneProgress,
+		portfolio.NoFillMinutes,
+		portfolio.DriftActive,
 		portfolio.RiskSharpe,
 		portfolio.RiskSortino,
 		portfolio.RiskDrawdown,
@@ -2129,7 +2135,7 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 	}
 }
 
-func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context) (minConfidence float64, maxCapitalPct float64) {
+func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {
 	minConfidence = s.config.MinConfidence
 	maxCapitalPct = s.config.MaxCapitalPct
 
@@ -2169,38 +2175,96 @@ func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context) (minConfi
 			}
 		}
 
-		recoveryMinutes := getEnvInt("NEURATRADE_SCALPING_NO_FILL_RECOVERY_MINUTES")
-		if recoveryMinutes <= 0 {
-			recoveryMinutes = 180
-		}
-		lastDecisionAt, err := s.tradeMemory.GetLastDecisionTimestamp(ctx)
-		if err == nil && !lastDecisionAt.IsZero() && consecutiveLosses < 2 {
-			idleFor := time.Since(lastDecisionAt)
-			if idleFor >= time.Duration(recoveryMinutes)*time.Minute {
-				recoveredConfidence := minConfidence - 0.05
-				floorConfidence := s.config.MinConfidence * 0.80
-				if recoveredConfidence < floorConfidence {
-					recoveredConfidence = floorConfidence
-				}
-				if recoveredConfidence < minConfidence {
-					minConfidence = recoveredConfidence
-				}
-
-				relaxedCap := maxCapitalPct * 1.15
-				if relaxedCap > s.config.MaxCapitalPct {
-					relaxedCap = s.config.MaxCapitalPct
-				}
-				if relaxedCap > maxCapitalPct {
-					maxCapitalPct = relaxedCap
-				}
-			}
-		}
 	}
+
+	s.applyControlledNoFillRecovery(&minConfidence, &maxCapitalPct, portfolio, consecutiveLosses)
 	if maxCapitalPct < 0.1 {
 		maxCapitalPct = 0.1
 	}
 
 	return minConfidence, maxCapitalPct
+}
+
+func (s *AIScalpingService) applyControlledNoFillRecovery(
+	minConfidence *float64,
+	maxCapitalPct *float64,
+	portfolio TradingPortfolio,
+	consecutiveLosses int,
+) {
+	if minConfidence == nil || maxCapitalPct == nil {
+		return
+	}
+	if consecutiveLosses >= 2 {
+		return
+	}
+	if portfolio.DriftActive || portfolio.OpenPositions > 0 {
+		return
+	}
+
+	recoveryMinutes := getEnvInt("NEURATRADE_NOFILL_RECOVERY_MINUTES")
+	if recoveryMinutes <= 0 {
+		recoveryMinutes = getEnvInt("NEURATRADE_SCALPING_NO_FILL_RECOVERY_MINUTES")
+	}
+	if recoveryMinutes <= 0 {
+		recoveryMinutes = 180
+	}
+	if portfolio.NoFillMinutes < float64(recoveryMinutes) {
+		return
+	}
+
+	minFloor := 0.70
+	if value, ok := getEnvFloat("NEURATRADE_NOFILL_MIN_CONF_FLOOR"); ok && value > 0 {
+		minFloor = value
+	}
+	if minFloor < 0.50 {
+		minFloor = 0.50
+	}
+	if minFloor > 0.90 {
+		minFloor = 0.90
+	}
+
+	maxCapTarget := 1.50
+	if value, ok := getEnvFloat("NEURATRADE_NOFILL_MAX_CAP_PCT_CAP"); ok && value > 0 {
+		maxCapTarget = value
+	}
+	if maxCapTarget < 0.50 {
+		maxCapTarget = 0.50
+	}
+
+	step := int(portfolio.NoFillMinutes / float64(recoveryMinutes))
+	if step < 1 {
+		return
+	}
+
+	switch {
+	case step >= 2:
+		if *minConfidence > minFloor {
+			*minConfidence = minFloor
+		}
+	default:
+		if *minConfidence > 0.75 {
+			*minConfidence = 0.75
+		}
+	}
+
+	switch {
+	case step >= 3:
+		if *maxCapitalPct < maxCapTarget {
+			*maxCapitalPct = maxCapTarget
+		}
+	case step >= 2:
+		if *maxCapitalPct < 1.00 {
+			*maxCapitalPct = 1.00
+		}
+	default:
+		if *maxCapitalPct < 0.50 {
+			*maxCapitalPct = 0.50
+		}
+	}
+
+	if *maxCapitalPct > maxCapTarget {
+		*maxCapitalPct = maxCapTarget
+	}
 }
 
 func readIntMetric(v interface{}) int {

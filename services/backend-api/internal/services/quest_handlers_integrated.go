@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
@@ -40,6 +41,8 @@ type IntegratedQuestHandlers struct {
 	lifecycleStore      *TradingLifecycleStore
 	protectionManager   *DynamicProtectionManager
 	db                  *sql.DB // Database for user settings
+	stalePositionMu     sync.Mutex
+	stalePositionWindow map[string]time.Time
 }
 
 const (
@@ -53,6 +56,8 @@ const (
 	defaultAIRuntimeCriticalRate     = 0.50
 	defaultAIRuntimeCircuitFailures  = 3
 	defaultAIRuntimeCircuitCooldown  = 120 * time.Second
+	defaultDriftRepairCooldown       = 180 * time.Second
+	defaultDriftClearPasses          = 2
 	aiReasonLLMTimeout               = "llm_timeout"
 	aiReasonLLMParseContract         = "llm_parse_contract"
 	aiReasonExecutionUnavailable     = "execution_unavailable"
@@ -477,6 +482,21 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		}
 	}
 
+	driftState, driftErr := h.refreshStateDriftGate(ctx, quest, chatID, userExchange)
+	if driftErr != nil {
+		log.Printf("[SCALPING] State drift refresh failed: %v", driftErr)
+		quest.Checkpoint["state_drift_error"] = driftErr.Error()
+	}
+	quest.Checkpoint["state_drift_active"] = driftState.Active
+	quest.Checkpoint["state_drift_positions"] = driftState.DriftPositions
+	quest.Checkpoint["state_drift_last_checked_at"] = driftState.LastCheckedAt.Format(time.RFC3339)
+	quest.Checkpoint["state_drift_clean_passes"] = driftState.CleanPasses
+	if strings.TrimSpace(driftState.EntryGateReason) != "" {
+		quest.Checkpoint["runtime_entry_gate_reason"] = driftState.EntryGateReason
+	} else if !checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"]) {
+		delete(quest.Checkpoint, "runtime_entry_gate_reason")
+	}
+
 	portfolio := TradingPortfolio{
 		USDTBalance:   usdtBalance,
 		TotalValue:    usdtBalance,
@@ -517,6 +537,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		}
 
 		quest.Checkpoint["status"] = "risk_lock"
+		quest.Checkpoint["runtime_entry_gate_reason"] = "risk lock active: drawdown/exposure guardrail blocking new entries"
 		reasons := []string{
 			"Risk lock active: new entries are paused; only de-risk/protection/reconcile actions are allowed",
 		}
@@ -543,6 +564,41 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		return nil
 	}
 
+	if checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_state_drift"]) {
+		h.updateHoldStateCheckpoint(quest, true)
+		quest.Checkpoint["status"] = "state_drift_gate"
+		reasons := []string{
+			"Lifecycle/exchange drift detected: new entries are paused until reconcile is clean",
+			fmt.Sprintf("Drift positions pending repair: %d", checkpointInt(quest.Checkpoint["state_drift_positions"])),
+		}
+		if gateReason, ok := quest.Checkpoint["runtime_entry_gate_reason"].(string); ok && strings.TrimSpace(gateReason) != "" {
+			reasons = append(reasons, gateReason)
+		}
+		if repairedAt, ok := quest.Checkpoint["state_drift_last_repair_at"].(string); ok && strings.TrimSpace(repairedAt) != "" {
+			reasons = append(reasons, fmt.Sprintf("Last drift repair: %s", repairedAt))
+		}
+
+		holdDecision := &AITradingDecision{
+			Action:          "hold",
+			Confidence:      0,
+			Reasoning:       "entry paused by state drift gate",
+			ReasonCategory:  aiReasonExecutionUnavailable,
+			ConfidenceKnown: false,
+		}
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType:    "scalping_cycle",
+			Summary:         "State drift gate active: reconciling lifecycle with exchange before new entries",
+			Confidence:      0,
+			ConfidenceKnown: false,
+			ReasonCategory:  aiReasonExecutionUnavailable,
+			HoldCategory:    aiReasonExecutionUnavailable,
+			Reasons:         reasons,
+			Action:          "hold",
+		})
+		h.maybeSendHoldDigest(ctx, quest, chatID, holdDecision, portfolio)
+		return nil
+	}
+
 	if circuitRemaining := aiRuntimeCircuitRemaining(quest, time.Now().UTC()); circuitRemaining > 0 {
 		reasonCategory := aiReasonExecutionUnavailable
 		if raw, ok := quest.Checkpoint["runtime_ai_circuit_reason"].(string); ok && strings.TrimSpace(raw) != "" {
@@ -564,6 +620,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Confidence:      0,
 			ConfidenceKnown: false,
 			ReasonCategory:  reasonCategory,
+			HoldCategory:    reasonCategory,
 			Reasons: []string{
 				fmt.Sprintf("Circuit remaining: %s", circuitRemaining.Round(time.Second).String()),
 				"De-risk/protection/reconcile tasks are still active while entry decisions are paused",
@@ -607,6 +664,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Confidence:      0,
 			ConfidenceKnown: false,
 			ReasonCategory:  reasonCategory,
+			HoldCategory:    reasonCategory,
 			Reasons:         reasons,
 			Action:          "hold",
 		})
@@ -632,6 +690,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Confidence:      0,
 			ConfidenceKnown: false,
 			ReasonCategory:  aiReasonLLMParseContract,
+			HoldCategory:    aiReasonLLMParseContract,
 			Reasons:         reasons,
 			Action:          "hold",
 		})
@@ -685,6 +744,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Confidence:      decision.Confidence,
 			ConfidenceKnown: !runtimeHold && decision.ConfidenceKnown,
 			ReasonCategory:  reasonCategory,
+			HoldCategory:    reasonCategory,
 			Reasons:         reasons,
 			Action:          "hold",
 		})
@@ -1058,6 +1118,272 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 	return closed, nil
 }
 
+type stateDriftGateState struct {
+	Active           bool
+	DriftPositions   int
+	CleanPasses      int
+	EntryGateReason  string
+	LastCheckedAt    time.Time
+	Repaired         int
+	StalePositionIDs []string
+}
+
+func (h *IntegratedQuestHandlers) refreshStateDriftGate(
+	ctx context.Context,
+	quest *Quest,
+	chatID, exchange string,
+) (stateDriftGateState, error) {
+	now := time.Now().UTC()
+	state := stateDriftGateState{
+		Active:         false,
+		DriftPositions: 0,
+		CleanPasses:    0,
+		LastCheckedAt:  now,
+	}
+	if quest == nil {
+		return state, nil
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	if h.lifecycleStore == nil {
+		quest.Checkpoint["state_drift_active"] = false
+		quest.Checkpoint["state_drift_positions"] = 0
+		quest.Checkpoint["state_drift_count"] = 0
+		quest.Checkpoint["state_drift_last_checked_at"] = now.Format(time.RFC3339)
+		quest.Checkpoint["state_drift_clean_passes"] = 0
+		delete(quest.Checkpoint, "state_drift_stale_position_ids")
+		delete(quest.Checkpoint, "runtime_entry_blocked_by_state_drift")
+		return state, nil
+	}
+
+	fetcher, ok := h.ccxtService.(interface {
+		FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error)
+	})
+	if !ok {
+		state.Active = checkpointBool(quest.Checkpoint["state_drift_active"])
+		state.DriftPositions = checkpointInt(quest.Checkpoint["state_drift_positions"])
+		state.CleanPasses = checkpointInt(quest.Checkpoint["state_drift_clean_passes"])
+		state.EntryGateReason = checkpointString(quest.Checkpoint["runtime_entry_gate_reason"])
+		return state, nil
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := fetcher.FetchPositions(fetchCtx, exchange)
+	if err != nil {
+		state.Active = checkpointBool(quest.Checkpoint["state_drift_active"])
+		state.DriftPositions = checkpointInt(quest.Checkpoint["state_drift_positions"])
+		state.CleanPasses = checkpointInt(quest.Checkpoint["state_drift_clean_passes"])
+		state.EntryGateReason = checkpointString(quest.Checkpoint["runtime_entry_gate_reason"])
+		quest.Checkpoint["state_drift_last_checked_at"] = now.Format(time.RFC3339)
+		return state, err
+	}
+
+	positions := make([]ccxt.Position, 0)
+	if resp != nil {
+		positions = resp.Positions
+	}
+
+	repaired, repairErr := h.lifecycleStore.RepairMissingSyncPositions(
+		ctx,
+		chatID,
+		exchange,
+		positions,
+		"state_drift_repair_exchange_missing",
+	)
+	if repairErr != nil {
+		return state, repairErr
+	}
+	if repaired > 0 {
+		quest.Checkpoint["state_drift_last_repair_at"] = now.Format(time.RFC3339)
+	}
+	state.Repaired = repaired
+
+	driftCount, staleIDs, driftErr := h.countLifecyclePositionDrift(ctx, chatID, exchange, positions)
+	if driftErr != nil {
+		return state, driftErr
+	}
+	state.DriftPositions = driftCount
+	state.StalePositionIDs = staleIDs
+
+	requiredCleanPasses := stateDriftClearPassTarget()
+	previousActive := checkpointBool(quest.Checkpoint["state_drift_active"])
+	cleanPasses := checkpointInt(quest.Checkpoint["state_drift_clean_passes"])
+
+	if driftCount > 0 {
+		state.Active = true
+		cleanPasses = 0
+		state.EntryGateReason = fmt.Sprintf(
+			"state drift detected: %d lifecycle position(s) are missing on exchange snapshot",
+			driftCount,
+		)
+		quest.Checkpoint["runtime_entry_gate_reason"] = state.EntryGateReason
+		quest.Checkpoint["state_drift_last_drift_at"] = now.Format(time.RFC3339)
+		quest.Checkpoint["runtime_entry_blocked_by_state_drift"] = true
+		if _, exists := quest.Checkpoint["runtime_entry_blocked_at"]; !exists {
+			quest.Checkpoint["runtime_entry_blocked_at"] = now.Format(time.RFC3339)
+		}
+	} else {
+		if previousActive {
+			cleanPasses++
+			if cleanPasses >= requiredCleanPasses {
+				state.Active = false
+				quest.Checkpoint["state_drift_last_clean_reconcile_at"] = now.Format(time.RFC3339)
+				delete(quest.Checkpoint, "runtime_entry_blocked_by_state_drift")
+				delete(quest.Checkpoint, "runtime_entry_gate_reason")
+			} else {
+				state.Active = true
+				state.EntryGateReason = fmt.Sprintf(
+					"state drift clearing in progress: %d/%d clean reconciliation pass(es)",
+					cleanPasses,
+					requiredCleanPasses,
+				)
+				quest.Checkpoint["runtime_entry_gate_reason"] = state.EntryGateReason
+				quest.Checkpoint["runtime_entry_blocked_by_state_drift"] = true
+			}
+		} else {
+			state.Active = false
+			cleanPasses = 0
+			quest.Checkpoint["state_drift_last_clean_reconcile_at"] = now.Format(time.RFC3339)
+			delete(quest.Checkpoint, "runtime_entry_blocked_by_state_drift")
+			if !checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"]) {
+				delete(quest.Checkpoint, "runtime_entry_gate_reason")
+			}
+		}
+	}
+
+	state.CleanPasses = cleanPasses
+	quest.Checkpoint["state_drift_active"] = state.Active
+	quest.Checkpoint["state_drift_positions"] = state.DriftPositions
+	quest.Checkpoint["state_drift_count"] = state.DriftPositions
+	quest.Checkpoint["state_drift_last_checked_at"] = now.Format(time.RFC3339)
+	quest.Checkpoint["state_drift_clean_passes"] = cleanPasses
+	if len(staleIDs) > 0 {
+		quest.Checkpoint["state_drift_stale_position_ids"] = staleIDs
+	} else {
+		delete(quest.Checkpoint, "state_drift_stale_position_ids")
+	}
+
+	return state, nil
+}
+
+func (h *IntegratedQuestHandlers) countLifecyclePositionDrift(
+	ctx context.Context,
+	chatID, exchange string,
+	positions []ccxt.Position,
+) (int, []string, error) {
+	if h.lifecycleStore == nil {
+		return 0, nil, nil
+	}
+	managed, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 200)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(managed) == 0 {
+		return 0, nil, nil
+	}
+
+	remainingByKey := make(map[string]decimal.Decimal, len(positions))
+	for _, pos := range positions {
+		if strings.TrimSpace(pos.Symbol) == "" || pos.Size.IsZero() {
+			continue
+		}
+		key := normalizeSymbolForComparison(pos.Symbol) + ":" + normalizeLifecycleSide(pos.Side)
+		remainingByKey[key] = remainingByKey[key].Add(pos.Size.Abs())
+	}
+
+	driftCount := 0
+	stale := make([]string, 0, len(managed))
+	for _, local := range managed {
+		if !strings.EqualFold(strings.TrimSpace(local.MarketType), "futures") && strings.TrimSpace(local.MarketType) != "" {
+			continue
+		}
+		key := normalizeSymbolForComparison(local.Symbol) + ":" + normalizeLifecycleSide(local.Side)
+		remaining := remainingByKey[key]
+		sizeAbs := local.Size.Abs()
+		if remaining.GreaterThan(decimal.Zero) {
+			if sizeAbs.GreaterThan(decimal.Zero) && remaining.GreaterThanOrEqual(sizeAbs) {
+				remainingByKey[key] = remaining.Sub(sizeAbs)
+				continue
+			}
+			remainingByKey[key] = decimal.Zero
+		}
+		driftCount++
+		stale = append(stale, local.PositionID)
+	}
+	return driftCount, stale, nil
+}
+
+func stateDriftClearPassTarget() int {
+	value := getEnvInt("NEURATRADE_DRIFT_CLEAR_CONSECUTIVE_PASSES")
+	if value <= 0 {
+		value = defaultDriftClearPasses
+	}
+	return clampQuestInt(value, 1, 10)
+}
+
+func stateDriftRepairCooldown() time.Duration {
+	seconds := getEnvInt("NEURATRADE_DRIFT_REPAIR_COOLDOWN_SECONDS")
+	if seconds <= 0 {
+		return defaultDriftRepairCooldown
+	}
+	return time.Duration(clampQuestInt(seconds, 10, 1800)) * time.Second
+}
+
+func stalePositionRetryKey(position ManagedOpenPosition) string {
+	return strings.Join([]string{
+		strings.TrimSpace(position.ChatID),
+		strings.TrimSpace(position.Exchange),
+		normalizeSymbolForComparison(position.Symbol),
+		normalizeLifecycleSide(position.Side),
+	}, "|")
+}
+
+func (h *IntegratedQuestHandlers) shouldSkipStalePositionRetry(position ManagedOpenPosition, now time.Time) bool {
+	cooldown := stateDriftRepairCooldown()
+	if cooldown <= 0 {
+		return false
+	}
+	key := stalePositionRetryKey(position)
+	if key == "|||" {
+		return false
+	}
+
+	h.stalePositionMu.Lock()
+	defer h.stalePositionMu.Unlock()
+	if h.stalePositionWindow == nil {
+		h.stalePositionWindow = make(map[string]time.Time)
+		return false
+	}
+
+	// Opportunistic cleanup for expired entries.
+	for k, ts := range h.stalePositionWindow {
+		if now.Sub(ts) >= cooldown {
+			delete(h.stalePositionWindow, k)
+		}
+	}
+
+	lastAttempt, ok := h.stalePositionWindow[key]
+	if !ok {
+		return false
+	}
+	return now.Sub(lastAttempt) < cooldown
+}
+
+func (h *IntegratedQuestHandlers) markStalePositionRetry(position ManagedOpenPosition, now time.Time) {
+	key := stalePositionRetryKey(position)
+	if key == "|||" {
+		return
+	}
+	h.stalePositionMu.Lock()
+	defer h.stalePositionMu.Unlock()
+	if h.stalePositionWindow == nil {
+		h.stalePositionWindow = make(map[string]time.Time)
+	}
+	h.stalePositionWindow[key] = now
+}
+
 func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	ctx context.Context,
 	quest *Quest,
@@ -1068,12 +1394,46 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		return
 	}
 
+	staleIDs := make(map[string]struct{})
+	if quest != nil && quest.Checkpoint != nil {
+		portfolio.DriftActive = checkpointBool(quest.Checkpoint["state_drift_active"])
+		if raw, ok := quest.Checkpoint["runtime_no_fill_since"].(string); ok && strings.TrimSpace(raw) != "" {
+			if since, err := time.Parse(time.RFC3339, raw); err == nil && !since.IsZero() {
+				portfolio.NoFillMinutes = time.Since(since).Minutes()
+				if portfolio.NoFillMinutes < 0 {
+					portfolio.NoFillMinutes = 0
+				}
+			}
+		}
+		if rawIDs, ok := quest.Checkpoint["state_drift_stale_position_ids"].([]string); ok {
+			for _, id := range rawIDs {
+				id = strings.TrimSpace(id)
+				if id != "" {
+					staleIDs[id] = struct{}{}
+				}
+			}
+		} else if rawIDs, ok := quest.Checkpoint["state_drift_stale_position_ids"].([]interface{}); ok {
+			for _, raw := range rawIDs {
+				id := checkpointString(raw)
+				if id != "" {
+					staleIDs[id] = struct{}{}
+				}
+			}
+		}
+	}
+
 	if h.lifecycleStore != nil {
 		positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 100)
 		if err == nil {
-			portfolio.OpenPositions = len(positions)
+			portfolio.OpenPositions = 0
 			unrealized := decimal.Zero
 			for _, pos := range positions {
+				if portfolio.DriftActive {
+					if _, skip := staleIDs[strings.TrimSpace(pos.PositionID)]; skip {
+						continue
+					}
+				}
+				portfolio.OpenPositions++
 				unrealized = unrealized.Add(pos.UnrealizedPnL)
 			}
 			portfolio.UnrealizedPnL = unrealized.InexactFloat64()
@@ -1465,7 +1825,7 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 	minConfidence := 0.0
 	maxCapital := 0.0
 	if h.aiScalpingService != nil {
-		minConfidence, maxCapital = h.aiScalpingService.dynamicRiskThresholds(ctx)
+		minConfidence, maxCapital = h.aiScalpingService.dynamicRiskThresholds(ctx, portfolio)
 	}
 	runtimeHold := isRuntimeHoldReason(decision.Reasoning)
 	reasonCategory := strings.TrimSpace(decision.ReasonCategory)
@@ -1487,6 +1847,15 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		fmt.Sprintf("Unlock cycles: %d", checkpointInt(quest.Checkpoint["runtime_unlock_cycles"])),
 		fmt.Sprintf("AI runtime error-rate window: %.0f%%", errorRate*100),
 	}
+	if checkpointBool(quest.Checkpoint["state_drift_active"]) {
+		reasons = append(
+			reasons,
+			fmt.Sprintf("State drift active: %d position(s) pending clean reconcile", checkpointInt(quest.Checkpoint["state_drift_positions"])),
+		)
+		if gateReason, ok := quest.Checkpoint["runtime_entry_gate_reason"].(string); ok && strings.TrimSpace(gateReason) != "" {
+			reasons = append(reasons, gateReason)
+		}
+	}
 	if circuitRemaining > 0 {
 		reasons = append(reasons, fmt.Sprintf("AI runtime circuit open: %s remaining", circuitRemaining.Round(time.Second).String()))
 	}
@@ -1497,6 +1866,7 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		Confidence:      decision.Confidence,
 		ConfidenceKnown: !runtimeHold && decision.ConfidenceKnown,
 		ReasonCategory:  reasonCategory,
+		HoldCategory:    reasonCategory,
 		Reasons:         reasons,
 		Action:          "hold",
 	})
@@ -1957,6 +2327,24 @@ func (h *IntegratedQuestHandlers) bootstrapLifecycleState(ctx context.Context, q
 	if err != nil {
 		log.Printf("[SCALPING] Bootstrap lifecycle reconciliation failed on %s: %v", exchange, err)
 		quest.Checkpoint["runtime_bootstrap_error"] = err.Error()
+	}
+
+	if snapshot.PositionsFresh {
+		repaired, repairErr := h.lifecycleStore.RepairMissingSyncPositions(
+			bootstrapCtx,
+			chatID,
+			exchange,
+			snapshot.Positions,
+			"startup_drift_repair_exchange_missing",
+		)
+		if repairErr != nil {
+			log.Printf("[SCALPING] Startup drift repair failed on %s: %v", exchange, repairErr)
+			quest.Checkpoint["runtime_startup_drift_repair_error"] = repairErr.Error()
+		} else if repaired > 0 {
+			quest.Checkpoint["runtime_startup_drift_repair_closed"] = repaired
+			quest.Checkpoint["state_drift_last_repair_at"] = time.Now().UTC().Format(time.RFC3339)
+			log.Printf("[SCALPING] Startup drift repair closed %d stale lifecycle position(s) on %s", repaired, exchange)
+		}
 	}
 
 	quest.Checkpoint["runtime_bootstrap_synced_at"] = time.Now().UTC().Format(time.RFC3339)
@@ -2462,6 +2850,16 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 	if h.orderExecutor == nil {
 		return 0, nil
 	}
+	now := time.Now().UTC()
+	if h.shouldSkipStalePositionRetry(position, now) {
+		log.Printf(
+			"[SCALPING] Skipping stale position retry due to cooldown: %s %s %s",
+			position.Exchange,
+			position.Symbol,
+			position.Side,
+		)
+		return 0, nil
+	}
 	if fraction.LessThanOrEqual(decimal.Zero) {
 		return 0, nil
 	}
@@ -2512,6 +2910,7 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 	if hasBypass {
 		if _, err := execWithBypass.PlaceRiskReductionOrderWithDetails(ctx, details); err != nil {
 			if isExchangePositionMissingError(err) {
+				h.markStalePositionRetry(position, now)
 				if closeErr := h.reconcileMissingManagedPosition(ctx, position, source, err); closeErr != nil {
 					log.Printf("[SCALPING] Failed to close stale lifecycle row for %s: %v", position.PositionID, closeErr)
 				}
@@ -2523,6 +2922,7 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 	}
 	if _, err := h.orderExecutor.PlaceOrderWithDetails(ctx, details); err != nil {
 		if isExchangePositionMissingError(err) {
+			h.markStalePositionRetry(position, now)
 			if closeErr := h.reconcileMissingManagedPosition(ctx, position, source, err); closeErr != nil {
 				log.Printf("[SCALPING] Failed to close stale lifecycle row for %s: %v", position.PositionID, closeErr)
 			}
@@ -2666,6 +3066,25 @@ func checkpointBool(v interface{}) bool {
 		return value != 0
 	default:
 		return false
+	}
+}
+
+func checkpointString(v interface{}) string {
+	switch value := v.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case fmt.Stringer:
+		return strings.TrimSpace(value.String())
+	case json.Number:
+		return strings.TrimSpace(value.String())
+	case int:
+		return strconv.Itoa(value)
+	case int64:
+		return strconv.FormatInt(value, 10)
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	default:
+		return ""
 	}
 }
 

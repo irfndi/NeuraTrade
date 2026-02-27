@@ -672,16 +672,38 @@ func (e *QuestEngine) tick() {
 			}
 		}
 
-		if e.shouldBlockQuestEntryLocked(quest) {
+		riskBlocked := e.shouldBlockQuestEntryByRiskLockLocked(quest)
+		driftBlocked := e.shouldBlockQuestEntryByStateDriftLocked(quest)
+		if riskBlocked {
 			if quest.Checkpoint == nil {
 				quest.Checkpoint = make(map[string]interface{})
 			}
 			quest.Checkpoint["runtime_entry_blocked_by_risk_lock"] = true
 			quest.Checkpoint["runtime_entry_blocked_at"] = now.UTC().Format(time.RFC3339)
+			quest.Checkpoint["runtime_entry_gate_reason"] = "risk lock active: drawdown/exposure guardrail blocking new entries"
 			log.Printf("[QUEST] Entry decisions for quest %s are gated by risk lock", quest.ID)
 		} else if quest.Checkpoint != nil {
 			delete(quest.Checkpoint, "runtime_entry_blocked_by_risk_lock")
-			delete(quest.Checkpoint, "runtime_entry_blocked_at")
+		}
+
+		if driftBlocked {
+			if quest.Checkpoint == nil {
+				quest.Checkpoint = make(map[string]interface{})
+			}
+			quest.Checkpoint["runtime_entry_blocked_by_state_drift"] = true
+			if _, exists := quest.Checkpoint["runtime_entry_blocked_at"]; !exists {
+				quest.Checkpoint["runtime_entry_blocked_at"] = now.UTC().Format(time.RFC3339)
+			}
+			if strings.TrimSpace(readQuestMetricString(quest.Checkpoint["runtime_entry_gate_reason"])) == "" {
+				quest.Checkpoint["runtime_entry_gate_reason"] = "state drift detected: reconcile/repair pending"
+			}
+			log.Printf("[QUEST] Entry decisions for quest %s are gated by state drift", quest.ID)
+		} else if quest.Checkpoint != nil {
+			delete(quest.Checkpoint, "runtime_entry_blocked_by_state_drift")
+			if !readQuestMetricBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"]) {
+				delete(quest.Checkpoint, "runtime_entry_blocked_at")
+				delete(quest.Checkpoint, "runtime_entry_gate_reason")
+			}
 		}
 
 		// Check if quest should execute based on cadence
@@ -817,12 +839,30 @@ func computeQuestRuntimeBudget() questRuntimeBudget {
 }
 
 func (e *QuestEngine) shouldBlockQuestEntryLocked(quest *Quest) bool {
+	return e.shouldBlockQuestEntryByRiskLockLocked(quest) || e.shouldBlockQuestEntryByStateDriftLocked(quest)
+}
+
+func (e *QuestEngine) shouldBlockQuestEntryByRiskLockLocked(quest *Quest) bool {
 	if quest == nil || !e.isRiskLockEnabledLocked() {
 		return false
 	}
 	definitionID := strings.TrimSpace(quest.Metadata["definition_id"])
 	// Entry gate: block new scalping entries while risk-lock is active.
 	return definitionID == "scalping_execution"
+}
+
+func (e *QuestEngine) shouldBlockQuestEntryByStateDriftLocked(quest *Quest) bool {
+	if quest == nil {
+		return false
+	}
+	definitionID := strings.TrimSpace(quest.Metadata["definition_id"])
+	if definitionID != "scalping_execution" {
+		return false
+	}
+	if quest.Checkpoint == nil {
+		return false
+	}
+	return readQuestMetricBool(quest.Checkpoint["state_drift_active"])
 }
 
 func (e *QuestEngine) isRiskLockEnabledLocked() bool {
@@ -855,6 +895,35 @@ func readQuestMetricInt(v interface{}) int {
 		}
 	}
 	return 0
+}
+
+func readQuestMetricBool(v interface{}) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+	case int:
+		return value != 0
+	case int64:
+		return value != 0
+	case float64:
+		return value != 0
+	default:
+		return false
+	}
+}
+
+func readQuestMetricString(v interface{}) string {
+	switch value := v.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case fmt.Stringer:
+		return strings.TrimSpace(value.String())
+	default:
+		return ""
+	}
 }
 
 func envFloatOrDefault(key string, fallback, min, max float64) float64 {
@@ -1124,16 +1193,23 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 
 	chatID = strings.TrimSpace(chatID)
 	result := map[string]interface{}{
-		"chat_id":                 chatID,
-		"active_scalping_quests":  0,
-		"hold_streak":             0,
-		"unlock_cycles":           0,
-		"last_startup_reconcile":  "",
-		"last_spot_unwind":        "",
-		"last_hold_digest":        "",
-		"runtime_no_fill_since":   "",
-		"runtime_failure_streak":  0,
-		"runtime_last_failure_at": "",
+		"chat_id":                     chatID,
+		"active_scalping_quests":      0,
+		"hold_streak":                 0,
+		"unlock_cycles":               0,
+		"state_drift_active":          false,
+		"state_drift_positions":       0,
+		"state_drift_count":           0,
+		"state_drift_last_checked_at": "",
+		"entry_gate_reason":           "",
+		"last_drift_repair_at":        "",
+		"last_clean_reconcile_at":     "",
+		"last_startup_reconcile":      "",
+		"last_spot_unwind":            "",
+		"last_hold_digest":            "",
+		"runtime_no_fill_since":       "",
+		"runtime_failure_streak":      0,
+		"runtime_last_failure_at":     "",
 	}
 	if chatID == "" {
 		return result
@@ -1149,6 +1225,12 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		failureStreak         int
 		noFillSince           time.Time
 		activeScalping        int
+		stateDriftActive      bool
+		stateDriftPositions   int
+		stateDriftLastChecked time.Time
+		lastDriftRepair       time.Time
+		lastCleanReconcile    time.Time
+		entryGateReason       string
 		aiWindowTotal         int
 		aiWindowSuccess       int
 		aiWindowErrors        int
@@ -1201,6 +1283,23 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if ts := readCheckpointTime(cp["runtime_no_fill_since"]); ts.After(noFillSince) {
 			noFillSince = ts
 		}
+		if readQuestMetricBool(cp["state_drift_active"]) {
+			stateDriftActive = true
+		}
+		stateDriftPositions = maxInt(stateDriftPositions, readQuestMetricInt(cp["state_drift_positions"]))
+		stateDriftPositions = maxInt(stateDriftPositions, readQuestMetricInt(cp["state_drift_count"]))
+		if ts := readCheckpointTime(cp["state_drift_last_checked_at"]); ts.After(stateDriftLastChecked) {
+			stateDriftLastChecked = ts
+		}
+		if ts := readCheckpointTime(cp["state_drift_last_repair_at"]); ts.After(lastDriftRepair) {
+			lastDriftRepair = ts
+		}
+		if ts := readCheckpointTime(cp["state_drift_last_clean_reconcile_at"]); ts.After(lastCleanReconcile) {
+			lastCleanReconcile = ts
+		}
+		if reason := readQuestMetricString(cp["runtime_entry_gate_reason"]); reason != "" {
+			entryGateReason = reason
+		}
 
 		aiWindowTotal = maxInt(aiWindowTotal, readQuestMetricInt(cp["runtime_ai_window_total"]))
 		aiWindowSuccess = maxInt(aiWindowSuccess, readQuestMetricInt(cp["runtime_ai_window_success"]))
@@ -1247,6 +1346,28 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	result["active_scalping_quests"] = activeScalping
 	result["hold_streak"] = holdStreak
 	result["unlock_cycles"] = unlockCycles
+	result["state_drift_active"] = stateDriftActive
+	result["state_drift_positions"] = stateDriftPositions
+	result["state_drift_count"] = stateDriftPositions
+	if !stateDriftLastChecked.IsZero() {
+		result["state_drift_last_checked_at"] = stateDriftLastChecked.Format(time.RFC3339)
+	}
+	if !lastDriftRepair.IsZero() {
+		result["last_drift_repair_at"] = lastDriftRepair.Format(time.RFC3339)
+	}
+	if !lastCleanReconcile.IsZero() {
+		result["last_clean_reconcile_at"] = lastCleanReconcile.Format(time.RFC3339)
+	}
+	if strings.TrimSpace(entryGateReason) == "" && e.isRiskLockEnabledLocked() {
+		if len(e.riskLockReasons) > 0 {
+			entryGateReason = e.riskLockReasons[0]
+		} else {
+			entryGateReason = "risk lock active"
+		}
+	}
+	if strings.TrimSpace(entryGateReason) != "" {
+		result["entry_gate_reason"] = strings.TrimSpace(entryGateReason)
+	}
 	result["runtime_failure_streak"] = failureStreak
 	if !lastStartupReconcile.IsZero() {
 		result["last_startup_reconcile"] = lastStartupReconcile.Format(time.RFC3339)
