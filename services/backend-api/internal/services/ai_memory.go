@@ -107,10 +107,10 @@ func (tm *TradeMemory) initTables() error {
 		weight REAL DEFAULT 1.0
 	)`
 	_, _ = tm.db.Exec(lessonsTable)
-	
+
 	// Initialize recovery patterns table
 	_ = tm.initRecoveryPatternsTable()
-	
+
 	return nil
 }
 
@@ -583,16 +583,16 @@ func (tm *TradeMemory) RecordTradeDecisionJSON(decisionJSON string) error {
 
 // RecoveryPattern represents a successful recovery from drawdown
 type RecoveryPattern struct {
-	ID                 string
-	Timestamp          time.Time
-	DrawdownStart      float64
-	DrawdownPeak       float64
-	DrawdownRecovered  float64
-	RecoveryDuration   time.Duration
+	ID                    string
+	Timestamp             time.Time
+	DrawdownStart         float64
+	DrawdownPeak          float64
+	DrawdownRecovered     float64
+	RecoveryDuration      time.Duration
 	ActionsDuringRecovery []string
-	WinsDuringRecovery     int
-	LossesDuringRecovery   int
-	KeyStrategies      []string
+	WinsDuringRecovery    int
+	LossesDuringRecovery  int
+	KeyStrategies         []string
 }
 
 // RecordRecoveryPattern stores a successful recovery pattern for future learning
@@ -605,7 +605,7 @@ func (tm *TradeMemory) RecordRecoveryPattern(ctx context.Context, pattern Recove
 	`
 	actionsJSON, _ := json.Marshal(pattern.ActionsDuringRecovery)
 	strategiesJSON, _ := json.Marshal(pattern.KeyStrategies)
-	
+
 	_, err := tm.db.ExecContext(ctx, query,
 		pattern.ID,
 		pattern.Timestamp,
@@ -618,7 +618,7 @@ func (tm *TradeMemory) RecordRecoveryPattern(ctx context.Context, pattern Recove
 		pattern.LossesDuringRecovery,
 		string(strategiesJSON),
 	)
-	
+
 	if err == nil {
 		log.Printf("[AI-MEMORY] Recorded recovery pattern: peak=%.2f%% recovered=%.2f%% duration=%.1fh",
 			pattern.DrawdownPeak*100, pattern.DrawdownRecovered*100, pattern.RecoveryDuration.Hours())
@@ -636,41 +636,41 @@ func (tm *TradeMemory) GetSuccessfulRecoveryPatterns(ctx context.Context, minDra
 		ORDER BY drawdown_peak DESC, recovery_duration_hours ASC
 		LIMIT ?
 	`
-	
+
 	rows, err := tm.db.QueryContext(ctx, query, minDrawdown, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var patterns []RecoveryPattern
 	for rows.Next() {
 		var p RecoveryPattern
 		var durationHours float64
 		var actionsJSON, strategiesJSON string
-		
+
 		if err := rows.Scan(
 			&p.ID, &p.Timestamp, &p.DrawdownStart, &p.DrawdownPeak, &p.DrawdownRecovered,
 			&durationHours, &actionsJSON, &p.WinsDuringRecovery, &p.LossesDuringRecovery, &strategiesJSON,
 		); err != nil {
 			continue
 		}
-		
+
 		p.RecoveryDuration = time.Duration(durationHours * float64(time.Hour))
 		json.Unmarshal([]byte(actionsJSON), &p.ActionsDuringRecovery)
 		json.Unmarshal([]byte(strategiesJSON), &p.KeyStrategies)
 		patterns = append(patterns, p)
 	}
-	
+
 	return patterns, nil
 }
 
 // BuildRecoveryContext generates context for recovery decision-making
 func (tm *TradeMemory) BuildRecoveryContext(ctx context.Context, currentDrawdown float64) string {
 	var builder strings.Builder
-	
+
 	builder.WriteString("## Recovery Intelligence\n\n")
-	
+
 	// Get successful recovery patterns from similar or worse drawdowns
 	patterns, err := tm.GetSuccessfulRecoveryPatterns(ctx, currentDrawdown*0.8, 5)
 	if err == nil && len(patterns) > 0 {
@@ -687,7 +687,7 @@ func (tm *TradeMemory) BuildRecoveryContext(ctx context.Context, currentDrawdown
 		}
 		builder.WriteString("\n")
 	}
-	
+
 	// Get lessons from drawdown category
 	lessons := tm.getLessonsByCategory(ctx, "drawdown_recovery")
 	if lessons != "" {
@@ -695,7 +695,7 @@ func (tm *TradeMemory) BuildRecoveryContext(ctx context.Context, currentDrawdown
 		builder.WriteString(lessons)
 		builder.WriteString("\n")
 	}
-	
+
 	// Adaptive confidence guidance
 	if currentDrawdown > 0.10 {
 		builder.WriteString("### Current State: HIGH DRAWDOWN\n")
@@ -707,7 +707,7 @@ func (tm *TradeMemory) BuildRecoveryContext(ctx context.Context, currentDrawdown
 		builder.WriteString("- Recommended: Reduce position sizes to 75%\n")
 		builder.WriteString("- Wait for clear trend confirmation\n")
 	}
-	
+
 	return builder.String()
 }
 
@@ -719,7 +719,7 @@ func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string
 		return ""
 	}
 	defer rows.Close()
-	
+
 	var lessons []string
 	for rows.Next() {
 		var lesson string
@@ -727,7 +727,7 @@ func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string
 			lessons = append(lessons, "- "+lesson)
 		}
 	}
-	
+
 	return strings.Join(lessons, "\n")
 }
 
@@ -749,10 +749,10 @@ func (tm *TradeMemory) AdaptiveConfidence(baseConfidence float64, currentDrawdow
 // RecordDrawdownLesson automatically extracts lessons from drawdown events
 func (tm *TradeMemory) RecordDrawdownLesson(ctx context.Context, peakDrawdown float64, recoveryActions []string, outcome string) error {
 	category := "drawdown_recovery"
-	
+
 	// Generate pattern description
 	pattern := fmt.Sprintf("drawdown_%.0f%%", peakDrawdown*100)
-	
+
 	// Generate lesson based on outcome
 	var lesson string
 	if outcome == "recovered" {
@@ -762,7 +762,7 @@ func (tm *TradeMemory) RecordDrawdownLesson(ctx context.Context, peakDrawdown fl
 		lesson = fmt.Sprintf("Failed to recover from %.1f%% drawdown. Avoid: %s",
 			peakDrawdown*100, strings.Join(recoveryActions, ", "))
 	}
-	
+
 	return tm.RecordLesson(ctx, category, pattern, lesson, "")
 }
 
@@ -785,11 +785,11 @@ func (tm *TradeMemory) initRecoveryPatternsTable() error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Create index
 	indexSQL := `CREATE INDEX IF NOT EXISTS idx_recovery_patterns_peak ON ai_recovery_patterns(drawdown_peak)`
 	_, _ = tm.db.Exec(indexSQL)
-	
+
 	return nil
 }
 

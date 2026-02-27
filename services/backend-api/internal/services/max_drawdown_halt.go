@@ -38,7 +38,7 @@ func DefaultMaxDrawdownConfig() MaxDrawdownConfig {
 		HaltThreshold:     decimal.NewFromFloat(0.15),
 		CheckInterval:     time.Minute,
 		RecoveryThreshold: decimal.NewFromFloat(0.10), // Changed from 0.03 to 0.10 - more achievable recovery
-		AutoResumeEnabled: true, // Changed from false to true - enable auto-recovery from drawdown
+		AutoResumeEnabled: true,                       // Changed from false to true - enable auto-recovery from drawdown
 	}
 }
 
@@ -483,7 +483,6 @@ func (h *MaxDrawdownHalt) ResetPeak(ctx context.Context, chatID string, newValue
 
 	return nil
 }
-
 
 // ForceResumeAll resumes trading for all halted accounts.
 // This is useful for manual intervention or when system state needs to be reset.

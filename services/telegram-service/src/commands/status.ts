@@ -312,7 +312,10 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           lines.push(`• Entry gate reason: ${entryGateReason}`);
         }
         let blockerReason =
-          entryGateReason || entryAttemptBlockReason || recoveryGateReason || "";
+          entryGateReason ||
+          entryAttemptBlockReason ||
+          recoveryGateReason ||
+          "";
         if (!blockerReason) {
           switch (entryGatePriority) {
             case "risk_lock":
@@ -359,9 +362,14 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
             typeof minutesSinceEntryAttempt === "number"
               ? ` (${minutesSinceEntryAttempt.toFixed(1)}m ago)`
               : "";
-          lines.push(`• Last entry attempt: ${lastEntryAttemptAt}${minutesText}`);
+          lines.push(
+            `• Last entry attempt: ${lastEntryAttemptAt}${minutesText}`,
+          );
         }
-        if (typeof driftDeadlockCycles === "number" && driftDeadlockCycles > 0) {
+        if (
+          typeof driftDeadlockCycles === "number" &&
+          driftDeadlockCycles > 0
+        ) {
           lines.push(`• Drift deadlock cycles: ${driftDeadlockCycles}`);
         }
         if (driftSignature) {
@@ -375,7 +383,9 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
             typeof executionInProgressAgeSeconds === "number"
               ? ` (${executionInProgressAgeSeconds.toFixed(1)}s ago)`
               : "";
-          lines.push(`• Last execution progress: ${executionLastProgressAt}${ageText}`);
+          lines.push(
+            `• Last execution progress: ${executionLastProgressAt}${ageText}`,
+          );
         }
 
         const recoveryMode =
