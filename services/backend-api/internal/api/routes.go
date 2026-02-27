@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -410,7 +411,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	riskConfig := risk.DefaultRiskManagerConfig()
 	riskManager := risk.NewRiskManagerAgent(riskConfig)
-	drawdownHalt := services.NewMaxDrawdownHalt(db, services.DefaultMaxDrawdownConfig())
+	drawdownHalt := services.NewMaxDrawdownHalt(db, services.ResolveMaxDrawdownConfigFromEnv(services.DefaultMaxDrawdownConfig()))
 
 	var dailyLossTracker *risk.DailyLossTracker
 	var positionThrottle *risk.PositionSizeThrottle
@@ -1090,6 +1091,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		adminRisk.Use(adminMiddleware.RequireAdminAuth())
 		{
 			adminRisk.POST("/validate_wallet", walletHandler.ValidateWallet)
+			adminRisk.POST("/force_resume", func(c *gin.Context) {
+				resumed := drawdownHalt.ForceResumeAll(c.Request.Context())
+				// Also clear the quest engine risk lock
+				questEngine.SetRiskLockState(false, nil)
+				c.JSON(http.StatusOK, gin.H{
+					"success":       true,
+					"message":       "Trading resumed for all halted accounts",
+					"resumed_count": len(resumed),
+					"accounts":      resumed,
+				})
+			})
 		}
 
 		trading := v1.Group("/trading")

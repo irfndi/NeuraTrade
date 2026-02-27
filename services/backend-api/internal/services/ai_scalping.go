@@ -1121,6 +1121,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
 
 	var memoryContext string
+	var recoveryContext string
 	if s.tradeMemory != nil {
 		topSymbol := ""
 		if len(signals) > 0 {
@@ -1129,6 +1130,10 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 		currentContext := string(signalsJSON)
 		if mem, err := s.tradeMemory.BuildMemoryContext(ctx, topSymbol, currentContext); err == nil {
 			memoryContext = "\n" + mem
+		}
+		// Add recovery-specific context if in drawdown
+		if portfolio.RiskDrawdown > 0.05 {
+			recoveryContext = "\n" + s.tradeMemory.BuildRecoveryContext(ctx, portfolio.RiskDrawdown)
 		}
 	}
 
@@ -1153,9 +1158,8 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - Risk Expectancy: %.6f (%d samples)
 
 ## Market Signals
-%s%s
-
-Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Return only valid JSON.`,
+%s%s%s
+Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Adapt your strategy based on recovery context if provided. Return only valid JSON.`,
 		portfolio.USDTBalance,
 		portfolio.TotalValue,
 		portfolio.OpenPositions,
@@ -1173,6 +1177,7 @@ Based on the signals and past trading history, what is your trading decision? Le
 		portfolio.RiskSampleSize,
 		string(signalsJSON),
 		memoryContext,
+		recoveryContext,
 	)
 }
 
