@@ -816,17 +816,17 @@ func TestGetEnvOrDefault(t *testing.T) {
 	} else {
 		defer os.Unsetenv("TEST_ENV_VAR")
 	}
-	
+
 	// Test with env var set
 	os.Setenv("TEST_ENV_VAR", "custom_value")
 	result := getEnvOrDefault("TEST_ENV_VAR", "default")
 	assert.Equal(t, "custom_value", result)
-	
+
 	// Test with env var not set
 	os.Unsetenv("TEST_ENV_VAR")
 	result = getEnvOrDefault("TEST_ENV_VAR", "default")
 	assert.Equal(t, "default", result)
-	
+
 	// Test with empty env var
 	os.Setenv("TEST_ENV_VAR", "")
 	result = getEnvOrDefault("TEST_ENV_VAR", "default")
@@ -841,26 +841,26 @@ func TestParseAIProviderChain(t *testing.T) {
 	} else {
 		defer os.Unsetenv("NEURATRADE_AI_PROVIDER_CHAIN")
 	}
-	
+
 	// Test with empty primary and no env
 	os.Unsetenv("NEURATRADE_AI_PROVIDER_CHAIN")
 	result := parseAIProviderChain("")
 	assert.Equal(t, []string{"zhipu", "minimax"}, result)
-	
+
 	// Test with custom primary
 	result = parseAIProviderChain("anthropic")
 	assert.Equal(t, []string{"anthropic", "zhipu", "minimax"}, result)
-	
+
 	// Test with custom chain
 	os.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,anthropic")
 	result = parseAIProviderChain("zhipu")
 	assert.Equal(t, []string{"zhipu", "openai", "anthropic"}, result)
-	
+
 	// Test deduplication
 	os.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "zhipu,minimax,openai")
 	result = parseAIProviderChain("zhipu")
 	assert.Equal(t, []string{"zhipu", "minimax", "openai"}, result)
-	
+
 	// Test with empty entries in chain
 	os.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,,anthropic,")
 	result = parseAIProviderChain("zhipu")
@@ -882,7 +882,7 @@ func TestProviderBaseURL(t *testing.T) {
 		{"", "https://api.openai.com/v1"},
 		{"ANTHROPIC", "https://api.anthropic.com/v1"}, // case insensitive
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.provider, func(t *testing.T) {
 			result := providerBaseURL(tc.provider)
@@ -905,7 +905,7 @@ func TestProviderRequiresAPIKey(t *testing.T) {
 		{"", true},
 		{"unknown", true},
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.provider, func(t *testing.T) {
 			result := providerRequiresAPIKey(tc.provider)
@@ -926,7 +926,7 @@ func TestRiskLockSourcePriority(t *testing.T) {
 		{"unknown", 0},
 		{"", 0},
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.source, func(t *testing.T) {
 			result := riskLockSourcePriority(tc.source)
@@ -940,19 +940,19 @@ func TestRouteEnvEnabled(t *testing.T) {
 	// Test with env var set to "true"
 	os.Setenv("TEST_ROUTE", "true")
 	assert.True(t, routeEnvEnabled("TEST_ROUTE"))
-	
+
 	// Test with env var set to "1"
 	os.Setenv("TEST_ROUTE", "1")
 	assert.True(t, routeEnvEnabled("TEST_ROUTE"))
-	
+
 	// Test with env var set to "false"
 	os.Setenv("TEST_ROUTE", "false")
 	assert.False(t, routeEnvEnabled("TEST_ROUTE"))
-	
+
 	// Test with env var not set
 	os.Unsetenv("TEST_ROUTE")
 	assert.False(t, routeEnvEnabled("TEST_ROUTE"))
-	
+
 	// Cleanup
 	os.Unsetenv("TEST_ROUTE")
 }
