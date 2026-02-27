@@ -230,7 +230,7 @@ func (b *Bus) processSubscriber(sub *subscriber) {
 			if !ok {
 				return
 			}
-						// Handler errors are intentionally not propagated to avoid affecting other subscribers.
+			// Handler errors are intentionally not propagated to avoid affecting other subscribers.
 			// In a production system, these errors should be logged or emitted as metrics.
 			_ = sub.handler(sub.ctx, event)
 		}
