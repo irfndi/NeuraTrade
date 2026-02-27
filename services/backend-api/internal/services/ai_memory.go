@@ -641,7 +641,7 @@ func (tm *TradeMemory) GetSuccessfulRecoveryPatterns(ctx context.Context, minDra
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = rows.Close() }() //nolint:errcheck // defer close is best effort
 
 	var patterns []RecoveryPattern
 	for rows.Next() {
@@ -657,13 +657,12 @@ func (tm *TradeMemory) GetSuccessfulRecoveryPatterns(ctx context.Context, minDra
 		}
 
 		p.RecoveryDuration = time.Duration(durationHours * float64(time.Hour))
-		_ = json.Unmarshal([]byte(actionsJSON), &p.ActionsDuringRecovery)
-		_ = json.Unmarshal([]byte(strategiesJSON), &p.KeyStrategies)
+			_ = json.Unmarshal([]byte(actionsJSON), &p.ActionsDuringRecovery)
+			_ = json.Unmarshal([]byte(strategiesJSON), &p.KeyStrategies)
+			patterns = append(patterns, p)
+		}
 
-		patterns = append(patterns, p)
-	}
-
-	return patterns, nil
+		return patterns, nil
 }
 
 // BuildRecoveryContext generates context for recovery decision-making
@@ -719,8 +718,7 @@ func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string
 	if err != nil {
 		return ""
 	}
-	defer func() { _ = rows.Close() }()
-
+	defer func() { _ = rows.Close() }() //nolint:errcheck // defer close is best effort
 	var lessons []string
 	for rows.Next() {
 		var lesson string
