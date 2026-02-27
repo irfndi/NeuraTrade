@@ -14,6 +14,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/platform/supervisor"
 	"github.com/irfndi/neuratrade/internal/platform/timeout"
 	"github.com/irfndi/neuratrade/internal/ports"
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/app/marketdata"
 )
 
 // Config holds bootstrap configuration.
@@ -54,6 +56,8 @@ type Application struct {
 	Notifier    ports.Notifier
 	Policy      ports.PolicyEngine
 	KillSwitch  ports.KillSwitch
+	CollectorActor    *marketdata.CollectorActor
+	CollectorActorRef *actor.Ref
 }
 
 // Builder builds an Application.
@@ -64,6 +68,8 @@ type Builder struct {
 	notifier   ports.Notifier
 	policy     ports.PolicyEngine
 	killSwitch ports.KillSwitch
+	db           database.DBPool
+	collectorCfg marketdata.Config
 }
 
 // NewBuilder creates a new Builder.
