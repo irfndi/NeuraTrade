@@ -204,6 +204,8 @@ type Ref struct {
 	actor   Actor
 	running atomic.Bool
 	wg      sync.WaitGroup
+	mu      sync.Mutex
+	started bool
 }
 
 // NewRef creates a new actor reference.
@@ -211,11 +213,14 @@ func NewRef(actor Actor, config Config) *Ref {
 	if config.MailboxSize <= 0 {
 		config.MailboxSize = DefaultConfig().MailboxSize
 	}
-	return &Ref{
+	ref := &Ref{
 		id:      actor.ID(),
 		mailbox: NewMailbox(config),
 		actor:   actor,
 	}
+	// Pre-add to wait group - Run() will call Done()
+	ref.wg.Add(1)
+	return ref
 }
 
 // ID returns the actor's unique identifier.
@@ -272,13 +277,19 @@ func (r *Ref) Ask(ctx context.Context, msg Message) (any, error) {
 // Run starts the actor's message processing loop.
 // It blocks until the context is cancelled.
 func (r *Ref) Run(ctx context.Context) error {
+	r.mu.Lock()
+	if r.started {
+		r.mu.Unlock()
+		return errors.New("actor already running")
+	}
+	r.started = true
+	r.mu.Unlock()
+
 	if !r.running.CompareAndSwap(false, true) {
 		return errors.New("actor already running")
 	}
 
-	r.wg.Add(1)
 	defer r.wg.Done()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -317,7 +328,13 @@ func (r *Ref) Run(ctx context.Context) error {
 func (r *Ref) Stop() {
 	r.running.Store(false)
 	r.mailbox.Stop()
-	r.wg.Wait()
+	// Only wait if the actor was actually started
+	r.mu.Lock()
+	started := r.started
+	r.mu.Unlock()
+	if started {
+		r.wg.Wait()
+	}
 }
 
 // IsRunning returns whether the actor is currently running.
