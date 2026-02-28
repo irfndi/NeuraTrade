@@ -878,6 +878,7 @@ func computeQuestRuntimeBudget() questRuntimeBudget {
 	return budget
 }
 
+//nolint:unused // Helper for future risk gate expansion
 func (e *QuestEngine) shouldBlockQuestEntryLocked(quest *Quest) bool {
 	return e.shouldBlockQuestEntryByRiskLockLocked(quest) || e.shouldBlockQuestEntryByStateDriftLocked(quest)
 }
