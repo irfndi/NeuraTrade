@@ -43,8 +43,8 @@ func (h *AgentControlHandler) PauseExchange(c *gin.Context) {
 	// TODO: Wire to actual collector service
 	// For now, just acknowledge the command
 	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
-		"action":     "pause_exchange",
+		"status":      "ok",
+		"action":      "pause_exchange",
 		"exchange_id": req.ExchangeID,
 	})
 }
@@ -67,8 +67,8 @@ func (h *AgentControlHandler) ResumeExchange(c *gin.Context) {
 
 	// TODO: Wire to actual collector service
 	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
-		"action":     "resume_exchange",
+		"status":      "ok",
+		"action":      "resume_exchange",
 		"exchange_id": req.ExchangeID,
 	})
 }
