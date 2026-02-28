@@ -452,7 +452,6 @@ func TestLiveTradingGate_Evaluate(t *testing.T) {
 			expectOpen: false,
 			blockCount: 1,
 		},
-
 	}
 
 	for _, tt := range tests {

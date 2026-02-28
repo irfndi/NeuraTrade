@@ -55,7 +55,6 @@ func NewLiveTradingGate(
 	}
 }
 
-
 // Evaluate evaluates all gate checks for a strategy.
 func (g *LiveTradingGate) Evaluate(ctx context.Context, strategyID string) (*GateState, error) {
 	// Check cache first
