@@ -165,13 +165,20 @@ type TaskStatus struct {
 
 func (h *HeartbeatActor) handleTick(ctx context.Context, msg *TickMessage) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	h.lastTick = msg.Timestamp
+	maxConcurrency := h.config.MaxConcurrency
+	h.mu.Unlock()
+
 	now := msg.Timestamp
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, h.config.MaxConcurrency)
+	// Collect tasks to run under read lock
+	type taskToRun struct {
+		name  string
+		state *taskState
+	}
+
+	h.mu.RLock()
+	tasksToRun := make([]taskToRun, 0, len(h.tasks))
 
 	for name, state := range h.tasks {
 		if !state.config.Enabled {
@@ -179,7 +186,7 @@ func (h *HeartbeatActor) handleTick(ctx context.Context, msg *TickMessage) error
 		}
 
 		// Calculate effective interval based on mode
-		interval := h.effectiveInterval(state.config.Interval)
+		interval := h.effectiveIntervalLocked(state.config.Interval)
 
 		// Check if task is due
 		if now.Sub(state.lastRun) < interval {
@@ -191,7 +198,15 @@ func (h *HeartbeatActor) handleTick(ctx context.Context, msg *TickMessage) error
 			continue
 		}
 
-		// Execute task with concurrency limit
+		tasksToRun = append(tasksToRun, taskToRun{name: name, state: state})
+	}
+	h.mu.RUnlock()
+
+	// Execute tasks without holding the lock
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrency)
+
+	for _, task := range tasksToRun {
 		wg.Add(1)
 		go func(name string, state *taskState) {
 			defer wg.Done()
@@ -199,17 +214,15 @@ func (h *HeartbeatActor) handleTick(ctx context.Context, msg *TickMessage) error
 			defer func() { <-sem }()
 
 			h.executeTask(ctx, name, state)
-		}(name, state)
+		}(task.name, task.state)
 	}
 
 	wg.Wait()
 	return nil
 }
 
-func (h *HeartbeatActor) effectiveInterval(base time.Duration) time.Duration {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
+// effectiveIntervalLocked returns the effective interval assuming the lock is already held.
+func (h *HeartbeatActor) effectiveIntervalLocked(base time.Duration) time.Duration {
 	switch h.mode {
 	case "degraded":
 		return time.Duration(float64(base) * h.config.DegradedMultiplier)
@@ -218,6 +231,16 @@ func (h *HeartbeatActor) effectiveInterval(base time.Duration) time.Duration {
 	default:
 		return base
 	}
+}
+
+// effectiveInterval returns the effective interval for a task.
+// It acquires RLock to read the current mode.
+//
+//nolint:unused // Kept for testing purposes
+func (h *HeartbeatActor) effectiveInterval(base time.Duration) time.Duration {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.effectiveIntervalLocked(base)
 }
 
 func (h *HeartbeatActor) executeTask(ctx context.Context, name string, state *taskState) {
@@ -230,6 +253,7 @@ func (h *HeartbeatActor) executeTask(ctx context.Context, name string, state *ta
 	}()
 
 	h.logger.Debug("executing task", "task", name)
+	executionTime := time.Now()
 
 	if err := state.config.Handler(ctx); err != nil {
 		h.logger.Error("task failed", "task", name, "error", err)
@@ -239,7 +263,7 @@ func (h *HeartbeatActor) executeTask(ctx context.Context, name string, state *ta
 		// Apply backoff on failure
 		if state.config.BackoffOnFailure > 0 {
 			backoff := state.config.BackoffOnFailure * time.Duration(state.consecutiveFail)
-			state.backoffUntil = time.Now().Add(backoff)
+			state.backoffUntil = executionTime.Add(backoff)
 		}
 
 		h.mu.Lock()
@@ -252,7 +276,7 @@ func (h *HeartbeatActor) executeTask(ctx context.Context, name string, state *ta
 				BaseEvent: ports.BaseEvent{
 					Type:       "heartbeat.task_failed",
 					Aggregate:  h.id,
-					OccurredAt: time.Now().Unix(),
+					OccurredAt: executionTime.Unix(),
 				},
 				TaskName: name,
 				Error:    err.Error(),
@@ -268,7 +292,7 @@ func (h *HeartbeatActor) executeTask(ctx context.Context, name string, state *ta
 		h.mu.Unlock()
 	}
 
-	state.lastRun = time.Now()
+	state.lastRun = executionTime
 }
 
 func (h *HeartbeatActor) handleAddTask(ctx context.Context, msg *AddTaskMessage) error {

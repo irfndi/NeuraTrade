@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,9 +51,9 @@ func TestPlatformEventBusAdapter_Unsubscribe(t *testing.T) {
 	bus := eventbus.New(eventbus.DefaultConfig())
 	adapter := NewPlatformEventBusAdapter(bus)
 
-	callCount := 0
+	var callCount atomic.Int32
 	err := adapter.Subscribe(context.Background(), "test.event", func(ctx context.Context, e ports.Event) error {
-		callCount++
+		callCount.Add(1)
 		return nil
 	})
 	if err != nil {
@@ -65,7 +66,8 @@ func TestPlatformEventBusAdapter_Unsubscribe(t *testing.T) {
 	_ = adapter.Publish(context.Background(), event)
 	time.Sleep(10 * time.Millisecond)
 
-	if callCount != 1 {
+	if callCount.Load() != 1 {
+		t.Errorf("expected 1 call, got %d", callCount.Load())
 		t.Errorf("expected 1 call, got %d", callCount)
 	}
 
@@ -79,7 +81,8 @@ func TestPlatformEventBusAdapter_Unsubscribe(t *testing.T) {
 	_ = adapter.Publish(context.Background(), event)
 	time.Sleep(10 * time.Millisecond)
 
-	if callCount != 1 {
+	if callCount.Load() != 1 {
+		t.Errorf("expected still 1 call after unsubscribe, got %d", callCount.Load())
 		t.Errorf("expected still 1 call after unsubscribe, got %d", callCount)
 	}
 }
