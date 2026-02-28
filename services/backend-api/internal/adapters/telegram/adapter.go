@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -127,13 +128,17 @@ func (a *Adapter) SendBatch(ctx context.Context, notifications []ports.Notificat
 	wg.Wait()
 	close(errChan)
 
-	// Return first error if any
+	// Collect and return all errors
+	var allErrors []error
 	for err := range errChan {
 		if err != nil {
-			return err
+			allErrors = append(allErrors, err)
 		}
 	}
 
+	if len(allErrors) > 0 {
+		return errors.Join(allErrors...)
+	}
 	return nil
 }
 
