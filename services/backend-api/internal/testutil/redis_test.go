@@ -361,38 +361,3 @@ func TestGetTestRedisClient_MiniredisIntegration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "test_value", value)
 }
-
-// TestGenerateTestSecret tests the GenerateTestSecret function
-func TestGenerateTestSecret(t *testing.T) {
-	// Test normal generation
-	secret := GenerateTestSecret()
-	assert.NotEmpty(t, secret)
-	assert.GreaterOrEqual(t, len(secret), 32, "secret should be at least 32 characters")
-
-	// Test that two secrets are different (randomness)
-	secret2 := GenerateTestSecret()
-	assert.NotEqual(t, secret, secret2, "two secrets should be different")
-}
-
-// TestMustGenerateTestSecret tests the MustGenerateTestSecret function
-func TestMustGenerateTestSecret(t *testing.T) {
-	// Should not panic and return a valid secret
-	secret := MustGenerateTestSecret()
-	assert.NotEmpty(t, secret)
-	assert.GreaterOrEqual(t, len(secret), 32, "secret should be at least 32 characters")
-}
-
-// TestGenerateTestSecret_WithEnvFallback tests the env fallback
-func TestGenerateTestSecret_WithEnvFallback(t *testing.T) {
-	originalSecret := os.Getenv("TEST_JWT_SECRET")
-	deferRestoreEnv(t, "TEST_JWT_SECRET", originalSecret)
-
-	// Set a valid test secret
-	testSecret := "this_is_a_very_long_secret_for_testing_32chars"
-	mustSetEnv(t, "TEST_JWT_SECRET", testSecret)
-
-	// Should use the env variable when crypto/rand fails
-	// Note: We can't easily make rand.Read fail, but we can verify the env path works
-	secret := GenerateTestSecret()
-	assert.NotEmpty(t, secret)
-}

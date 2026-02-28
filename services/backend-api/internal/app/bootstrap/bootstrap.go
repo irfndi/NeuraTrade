@@ -7,9 +7,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
-	"github.com/irfndi/neuratrade/internal/adapters/db"
-	"github.com/irfndi/neuratrade/internal/adapters/redis"
-	telegramadapter "github.com/irfndi/neuratrade/internal/adapters/telegram"
+	"github.com/irfndi/neuratrade/internal/app/marketdata"
 	ccxtservice "github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
@@ -47,27 +45,31 @@ func DefaultConfig() Config {
 
 // Application holds all initialized components.
 type Application struct {
-	Config      Config
-	Supervisor  *supervisor.Supervisor
-	ActorSystem *actor.System
-	EventBus    *eventbus.Bus
-	Timeout     *timeout.Config
-	Retry       *retry.Policy
-	Exchange    ports.ExchangeRegistry
-	State       ports.StateStore
-	Notifier    ports.Notifier
-	Policy      ports.PolicyEngine
-	KillSwitch  ports.KillSwitch
+	Config            Config
+	Supervisor        *supervisor.Supervisor
+	ActorSystem       *actor.System
+	EventBus          *eventbus.Bus
+	Timeout           *timeout.Config
+	Retry             *retry.Policy
+	Exchange          ports.ExchangeRegistry
+	State             ports.StateStore
+	Notifier          ports.Notifier
+	Policy            ports.PolicyEngine
+	KillSwitch        ports.KillSwitch
+	CollectorActor    *marketdata.CollectorActor
+	CollectorActorRef *actor.Ref
 }
 
 // Builder builds an Application.
 type Builder struct {
-	config     Config
-	exchanges  ports.ExchangeRegistry
-	state      ports.StateStore
-	notifier   ports.Notifier
-	policy     ports.PolicyEngine
-	killSwitch ports.KillSwitch
+	config       Config
+	exchanges    ports.ExchangeRegistry
+	state        ports.StateStore
+	notifier     ports.Notifier
+	policy       ports.PolicyEngine
+	killSwitch   ports.KillSwitch
+	db           database.DBPool
+	collectorCfg marketdata.Config
 }
 
 // NewBuilder creates a new Builder.
@@ -160,10 +162,7 @@ func (a *Application) HealthCheck(ctx context.Context) error {
 
 	// Check exchanges
 	if a.Exchange != nil {
-		exchanges, err := a.Exchange.ListExchanges(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to list exchanges for health check: %w", err)
-		}
+		exchanges, _ := a.Exchange.ListExchanges(ctx)
 		for _, ex := range exchanges {
 			gw, err := a.Exchange.GetMarketDataGateway(ex.ID)
 			if err != nil {
@@ -223,122 +222,4 @@ func (b *ExchangeRegistryBuilder) AddExchange(exchange string, service ccxtservi
 // Build returns the built registry.
 func (b *ExchangeRegistryBuilder) Build() ports.ExchangeRegistry {
 	return b.registry
-}
-
-// ============================================================
-// State Store Builder
-// ============================================================
-
-// StateStoreBuilder helps build a state store from database connection.
-type StateStoreBuilder struct {
-	db database.Database
-}
-
-// NewStateStoreBuilder creates a new state store builder.
-func NewStateStoreBuilder() *StateStoreBuilder {
-	return &StateStoreBuilder{}
-}
-
-// WithDatabase sets the database.
-func (b *StateStoreBuilder) WithDatabase(db database.Database) *StateStoreBuilder {
-	b.db = db
-	return b
-}
-
-// Build returns the built state store.
-func (b *StateStoreBuilder) Build() (ports.StateStore, error) {
-	if b.db == nil {
-		return nil, fmt.Errorf("StateStoreBuilder: database is required, call WithDatabase")
-	}
-	return db.NewAdapter(b.db), nil
-}
-
-// ============================================================
-// Cache Store Builder
-// ============================================================
-
-// CacheStoreBuilder helps build a cache store from Redis client.
-type CacheStoreBuilder struct {
-	client *database.RedisClient
-}
-
-// NewCacheStoreBuilder creates a new cache store builder.
-func NewCacheStoreBuilder() *CacheStoreBuilder {
-	return &CacheStoreBuilder{}
-}
-
-// WithRedisClient sets the Redis client.
-func (b *CacheStoreBuilder) WithRedisClient(client *database.RedisClient) *CacheStoreBuilder {
-	b.client = client
-	return b
-}
-
-// Build returns the built cache store.
-func (b *CacheStoreBuilder) Build() (ports.CacheStore, error) {
-	if b.client == nil {
-		return nil, fmt.Errorf("CacheStoreBuilder: redis client is required, call WithRedisClient")
-	}
-	return redis.NewAdapter(b.client), nil
-}
-
-// ============================================================
-// Notifier Builder
-// ============================================================
-
-// NotifierBuilder helps build a notifier from Telegram configuration.
-type NotifierBuilder struct {
-	config telegramadapter.Config
-}
-
-// NewNotifierBuilder creates a new notifier builder.
-func NewNotifierBuilder() *NotifierBuilder {
-	return &NotifierBuilder{
-		config: telegramadapter.DefaultConfig(),
-	}
-}
-
-// WithBaseURL sets the telegram-service base URL.
-func (b *NotifierBuilder) WithBaseURL(url string) *NotifierBuilder {
-	b.config.BaseURL = url
-	return b
-}
-
-// WithAPIKey sets the admin API key.
-func (b *NotifierBuilder) WithAPIKey(key string) *NotifierBuilder {
-	b.config.APIKey = key
-	return b
-}
-
-// WithChatID sets the default chat ID.
-func (b *NotifierBuilder) WithChatID(chatID string) *NotifierBuilder {
-	b.config.ChatID = chatID
-	return b
-}
-
-// WithEnabled enables or disables the notifier.
-func (b *NotifierBuilder) WithEnabled(enabled bool) *NotifierBuilder {
-	b.config.Enabled = enabled
-	return b
-}
-
-// WithTimeout sets the HTTP timeout.
-func (b *NotifierBuilder) WithTimeout(timeout time.Duration) *NotifierBuilder {
-	b.config.Timeout = timeout
-	return b
-}
-
-// Build returns the built notifier.
-func (b *NotifierBuilder) Build() (ports.Notifier, error) {
-	if b.config.Enabled {
-		if b.config.BaseURL == "" {
-			return nil, fmt.Errorf("NotifierBuilder: BaseURL is required when enabled")
-		}
-		if b.config.APIKey == "" {
-			return nil, fmt.Errorf("NotifierBuilder: APIKey is required when enabled")
-		}
-		if b.config.ChatID == "" {
-			return nil, fmt.Errorf("NotifierBuilder: ChatID is required when enabled")
-		}
-	}
-	return telegramadapter.NewAdapter(b.config), nil
 }

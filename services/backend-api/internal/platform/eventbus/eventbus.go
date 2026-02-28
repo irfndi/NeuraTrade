@@ -82,13 +82,6 @@ func (e Event) WithMetadata(key string, value any) Event {
 // Handler processes events.
 type Handler func(ctx context.Context, event Event) error
 
-// ErrorHandler handles errors from event handlers.
-// It is called when a handler returns an error, allowing observability without affecting other subscribers.
-type ErrorHandler func(ctx context.Context, event Event, err error)
-
-// EventDroppedHandler is called when an event is dropped due to buffer overflow.
-type EventDroppedHandler func(event Event)
-
 // Subscription represents an active subscription.
 type Subscription struct {
 	id          string
@@ -123,14 +116,6 @@ type Config struct {
 	// WildcardChar is the character used for wildcards.
 	// Default: "*"
 	WildcardChar string
-
-	// ErrorHandler is called when a handler returns an error.
-	// If nil, errors are silently ignored.
-	ErrorHandler ErrorHandler
-
-	// OnEventDropped is called when an event is dropped due to buffer full.
-	// If nil, dropped events are silently ignored.
-	OnEventDropped EventDroppedHandler
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -245,10 +230,7 @@ func (b *Bus) processSubscriber(sub *subscriber) {
 			if !ok {
 				return
 			}
-			// Call handler and optionally report errors
-			if err := sub.handler(sub.ctx, event); err != nil && b.config.ErrorHandler != nil {
-				b.config.ErrorHandler(sub.ctx, event, err)
-			}
+			_ = sub.handler(sub.ctx, event) // Handler errors ignored
 		}
 	}
 }
@@ -274,10 +256,7 @@ func (b *Bus) Publish(ctx context.Context, event Event) error {
 					// Event sent
 				default:
 					// Buffer full - drop event (backpressure)
-					// Notify via callback if configured
-					if b.config.OnEventDropped != nil {
-						b.config.OnEventDropped(event)
-					}
+					// In production, this would emit a metric
 				}
 			}
 		}
@@ -309,18 +288,18 @@ func (b *Bus) PublishSync(ctx context.Context, event Event) error {
 	return nil
 }
 
-// matchingTopics returns all topics that match the given topic (including wildcards).
-// Caller must hold b.mu.RLock() before calling.
 func (b *Bus) matchingTopics(topic string) []string {
 	// Exact match
 	topics := []string{topic}
 
 	// Wildcard matching
+	b.mu.RLock()
 	for t := range b.subs {
 		if b.isWildcardMatch(topic, t) {
 			topics = append(topics, t)
 		}
 	}
+	b.mu.RUnlock()
 
 	return topics
 }

@@ -204,8 +204,6 @@ type Ref struct {
 	actor   Actor
 	running atomic.Bool
 	wg      sync.WaitGroup
-	mu      sync.Mutex
-	started bool
 }
 
 // NewRef creates a new actor reference.
@@ -213,12 +211,11 @@ func NewRef(actor Actor, config Config) *Ref {
 	if config.MailboxSize <= 0 {
 		config.MailboxSize = DefaultConfig().MailboxSize
 	}
-	ref := &Ref{
+	return &Ref{
 		id:      actor.ID(),
 		mailbox: NewMailbox(config),
 		actor:   actor,
 	}
-	return ref
 }
 
 // ID returns the actor's unique identifier.
@@ -275,20 +272,15 @@ func (r *Ref) Ask(ctx context.Context, msg Message) (any, error) {
 // Run starts the actor's message processing loop.
 // It blocks until the context is cancelled.
 func (r *Ref) Run(ctx context.Context) error {
-	r.mu.Lock()
-	if r.started {
-		r.mu.Unlock()
-		return errors.New("actor already running")
-	}
+	// Add to WaitGroup FIRST to prevent race with Stop()'s wg.Wait()
 	r.wg.Add(1)
-	r.started = true
-	r.mu.Unlock()
+	defer r.wg.Done()
 
 	if !r.running.CompareAndSwap(false, true) {
-		return errors.New("actor already running")
+		return errors.New("actor already running") // defer will call wg.Done()
 	}
 
-	defer r.wg.Done()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -300,15 +292,13 @@ func (r *Ref) Run(ctx context.Context) error {
 
 			// Process message with timeout from envelope
 			msgCtx := ctx
-			cancelFunc := func() {}
 			if !env.Deadline.IsZero() {
 				var cancel context.CancelFunc
 				msgCtx, cancel = context.WithDeadline(ctx, env.Deadline)
-				cancelFunc = cancel
+				defer cancel()
 			}
 
 			err := r.actor.Receive(msgCtx, env)
-			cancelFunc() // Call cancel immediately after processing
 			if env.Reply != nil {
 				if err != nil {
 					env.Reply <- err
@@ -329,13 +319,7 @@ func (r *Ref) Run(ctx context.Context) error {
 func (r *Ref) Stop() {
 	r.running.Store(false)
 	r.mailbox.Stop()
-	// Only wait if the actor was actually started
-	r.mu.Lock()
-	started := r.started
-	r.mu.Unlock()
-	if started {
-		r.wg.Wait()
-	}
+	r.wg.Wait()
 }
 
 // IsRunning returns whether the actor is currently running.
@@ -359,8 +343,6 @@ func NewSystem(config Config) *System {
 }
 
 // Spawn creates and registers a new actor.
-// The returned Ref must be started by calling ref.Run(ctx) in a goroutine
-// before it will process messages.
 func (s *System) Spawn(actor Actor, config Config) (*Ref, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -372,24 +354,6 @@ func (s *System) Spawn(actor Actor, config Config) (*Ref, error) {
 
 	ref := NewRef(actor, config)
 	s.actors[id] = ref
-	return ref, nil
-}
-
-// SpawnAndRun creates, registers, and starts a new actor in a goroutine.
-// This is a convenience method that combines Spawn and Run.
-// Note: Run errors are logged but not returned since the actor runs asynchronously.
-func (s *System) SpawnAndRun(ctx context.Context, actor Actor, config Config) (*Ref, error) {
-	ref, err := s.Spawn(actor, config)
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		if runErr := ref.Run(ctx); runErr != nil {
-			// Actor stopped with error - in production, this should be logged or emitted as a metric
-			// log.Printf("actor %s stopped with error: %v", ref.ID(), runErr)
-			_ = runErr // Explicitly acknowledge - actor lifecycle is managed by caller
-		}
-	}()
 	return ref, nil
 }
 

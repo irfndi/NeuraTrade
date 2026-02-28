@@ -482,10 +482,9 @@ func (s *TradingLifecycleStore) resolveClosePositionReference(
 		if err == nil {
 			return positionID, entryPrice, nil
 		}
-		if !isLifecycleNoRows(err) {
+		if err != nil && !isLifecycleNoRows(err) {
 			return "", decimal.Zero, fmt.Errorf("load open position by exact position_id failed: %w", err)
 		}
-
 	}
 
 	// Prefer an existing open lifecycle row by order_id before legacy order mapping.
@@ -500,7 +499,7 @@ func (s *TradingLifecycleStore) resolveClosePositionReference(
 	if err == nil {
 		return positionID, entryPrice, nil
 	}
-	if !isLifecycleNoRows(err) {
+	if err != nil && !isLifecycleNoRows(err) {
 		return "", decimal.Zero, fmt.Errorf("load open position by order_id failed: %w", err)
 	}
 
@@ -524,10 +523,9 @@ func (s *TradingLifecycleStore) resolveClosePositionReference(
 		if err == nil {
 			return positionID, entryPrice, nil
 		}
-		if !isLifecycleNoRows(err) {
+		if err != nil && !isLifecycleNoRows(err) {
 			return "", decimal.Zero, fmt.Errorf("load open sync/bootstrap position failed: %w", err)
 		}
-
 	}
 
 	err = s.db.QueryRow(ctx, `
@@ -539,7 +537,7 @@ func (s *TradingLifecycleStore) resolveClosePositionReference(
 	if err == nil {
 		return positionID, entryPrice, nil
 	}
-	if !isLifecycleNoRows(err) {
+	if err != nil && !isLifecycleNoRows(err) {
 		return "", decimal.Zero, fmt.Errorf("load order mapping failed: %w", err)
 	}
 
