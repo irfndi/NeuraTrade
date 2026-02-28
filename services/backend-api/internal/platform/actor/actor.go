@@ -218,8 +218,6 @@ func NewRef(actor Actor, config Config) *Ref {
 		mailbox: NewMailbox(config),
 		actor:   actor,
 	}
-	// Pre-add to wait group - Run() will call Done()
-	ref.wg.Add(1)
 	return ref
 }
 
@@ -282,6 +280,7 @@ func (r *Ref) Run(ctx context.Context) error {
 		r.mu.Unlock()
 		return errors.New("actor already running")
 	}
+	r.wg.Add(1)
 	r.started = true
 	r.mu.Unlock()
 
@@ -360,6 +359,8 @@ func NewSystem(config Config) *System {
 }
 
 // Spawn creates and registers a new actor.
+// The returned Ref must be started by calling ref.Run(ctx) in a goroutine
+// before it will process messages.
 func (s *System) Spawn(actor Actor, config Config) (*Ref, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -371,6 +372,17 @@ func (s *System) Spawn(actor Actor, config Config) (*Ref, error) {
 
 	ref := NewRef(actor, config)
 	s.actors[id] = ref
+	return ref, nil
+}
+
+// SpawnAndRun creates, registers, and starts a new actor in a goroutine.
+// This is a convenience method that combines Spawn and Run.
+func (s *System) SpawnAndRun(ctx context.Context, actor Actor, config Config) (*Ref, error) {
+	ref, err := s.Spawn(actor, config)
+	if err != nil {
+		return nil, err
+	}
+	go ref.Run(ctx)
 	return ref, nil
 }
 
