@@ -68,8 +68,8 @@ type Builder struct {
 	notifier     ports.Notifier
 	policy       ports.PolicyEngine
 	killSwitch   ports.KillSwitch
-	db           database.DBPool    //lint:ignore U1000 Used via WithDatabase builder
-	collectorCfg marketdata.Config    //lint:ignore U1000 Used via WithCollectorConfig builder
+	db           database.DBPool   //lint:ignore U1000 Used via WithDatabase builder
+	collectorCfg marketdata.Config //lint:ignore U1000 Used via WithCollectorConfig builder
 
 }
 
