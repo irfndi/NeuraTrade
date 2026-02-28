@@ -53,7 +53,7 @@ func TestPluginActor_ListPlugins(t *testing.T) {
 	eventBus := eventbus.New(eventbus.DefaultConfig())
 	a := NewPluginActor(registry, nil, eventBus)
 
-	// Register test plugins
+	// Register test plugins with unique IDs
 	for i := 1; i <= 3; i++ {
 		info := plugin.PluginInfo{
 			Manifest: plugin.PluginManifest{
