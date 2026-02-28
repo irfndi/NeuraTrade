@@ -3987,8 +3987,6 @@ func checkpointString(v interface{}) string {
 		return strings.TrimSpace(value)
 	case fmt.Stringer:
 		return strings.TrimSpace(value.String())
-	case json.Number:
-		return strings.TrimSpace(value.String())
 	case int:
 		return strconv.Itoa(value)
 	case int64:

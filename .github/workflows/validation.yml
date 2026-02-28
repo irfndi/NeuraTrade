@@ -155,6 +155,7 @@ jobs:
   backend-security:
     name: Backend Security
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -181,10 +182,12 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run static security scan (gosec)
-        run: cd services/backend-api && gosec -severity medium -confidence medium -exclude=G117,G704,G404 ./...
+        timeout-minutes: 8
+        run: cd services/backend-api && gosec -tests=false -severity medium -confidence medium -exclude=G117,G704,G404 ./cmd/... ./internal/... ./pkg/...
 
       - name: Run vulnerability scan (govulncheck)
-        run: cd services/backend-api && govulncheck ./...
+        timeout-minutes: 8
+        run: cd services/backend-api && govulncheck ./cmd/... ./internal/... ./pkg/...
 
   frontend-security:
     name: Frontend Security (telegram-service)

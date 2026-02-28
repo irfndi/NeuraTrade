@@ -193,7 +193,6 @@ func (s *DBQuestStore) ListQuests(ctx context.Context, chatID string, status Que
 	if strings.TrimSpace(chatID) != "" {
 		query += fmt.Sprintf(" AND metadata LIKE $%d ESCAPE '\\\\'", argIndex)
 		args = append(args, metadataChatIDLikePattern(chatID))
-		argIndex++
 	}
 
 	query += " ORDER BY created_at DESC"
