@@ -229,7 +229,14 @@ func TestRefStop(t *testing.T) {
 	ctx := context.Background()
 
 	go ref.Run(ctx)
-	time.Sleep(10 * time.Millisecond)
+
+	// Wait for actor to start running (prevents race between Run's wg.Add and Stop's wg.Wait)
+	for i := 0; i < 100; i++ {
+		if ref.IsRunning() {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	ref.Stop()
 

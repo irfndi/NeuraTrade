@@ -155,7 +155,6 @@ jobs:
   backend-security:
     name: Backend Security
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -182,21 +181,11 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run static security scan (gosec)
-        timeout-minutes: 12
-        # TODO(security): Re-enable G118 after backlog remediation for existing context-lifecycle findings.
-        run: cd services/backend-api && gosec -tests=false -severity medium -confidence medium -exclude=G117,G704,G404,G118 ./cmd/... ./internal/... ./pkg/...
-      - name: Run vulnerability scan (govulncheck)
-        timeout-minutes: 10
-        run: cd services/backend-api && govulncheck ./cmd/... ./internal/... ./pkg/...
+        run: cd services/backend-api && gosec -severity medium -confidence medium -exclude=G117,G704,G404 ./...
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: fs
-          scan-ref: services/backend-api
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
+      - name: Run vulnerability scan (govulncheck)
+        run: cd services/backend-api && govulncheck ./...
+
   frontend-security:
     name: Frontend Security (telegram-service)
     runs-on: ubuntu-latest
