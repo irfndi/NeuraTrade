@@ -728,7 +728,7 @@ func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string
 	for rows.Next() {
 		var lesson string
 		if err := rows.Scan(&lesson); err == nil {
-		lessons = append(lessons, "- "+lesson)
+			lessons = append(lessons, "- "+lesson)
 		}
 	}
 
