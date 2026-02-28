@@ -290,18 +290,18 @@ func (b *Bus) PublishSync(ctx context.Context, event Event) error {
 	return nil
 }
 
-func (b *Bus) matchingTopics(topic string) []string {
+// matchingTopics returns all topics that match the given topic (including wildcards).
+	// Caller must hold b.mu.RLock() before calling.
+	func (b *Bus) matchingTopics(topic string) []string {
 	// Exact match
 	topics := []string{topic}
 
 	// Wildcard matching
-	b.mu.RLock()
 	for t := range b.subs {
 		if b.isWildcardMatch(topic, t) {
 			topics = append(topics, t)
 		}
 	}
-	b.mu.RUnlock()
 
 	return topics
 }

@@ -301,13 +301,15 @@ func (r *Ref) Run(ctx context.Context) error {
 
 			// Process message with timeout from envelope
 			msgCtx := ctx
+			cancelFunc := func() {}
 			if !env.Deadline.IsZero() {
 				var cancel context.CancelFunc
 				msgCtx, cancel = context.WithDeadline(ctx, env.Deadline)
-				defer cancel()
+				cancelFunc = cancel
 			}
 
 			err := r.actor.Receive(msgCtx, env)
+			cancelFunc() // Call cancel immediately after processing
 			if env.Reply != nil {
 				if err != nil {
 					env.Reply <- err
