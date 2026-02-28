@@ -280,7 +280,6 @@ func (r *Ref) Run(ctx context.Context) error {
 		return errors.New("actor already running") // defer will call wg.Done()
 	}
 
-
 	for {
 		select {
 		case <-ctx.Done():
