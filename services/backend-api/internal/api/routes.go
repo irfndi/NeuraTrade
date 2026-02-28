@@ -496,15 +496,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				continue
 			}
 			if !safety.TradingAllowed {
-				active = true
-				setSource("portfolio_safety")
-				reason := "portfolio_safety: trading_allowed=false"
-				if len(safety.Reasons) > 0 {
-					reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false (%s)", chatID, strings.Join(safety.Reasons, "; "))
-				} else {
-					reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false", chatID)
-				}
-				reasons = append(reasons, reason)
+			active = true
+			setSource("portfolio_safety")
+			var reason string
+			if len(safety.Reasons) > 0 {
+				reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false (%s)", chatID, strings.Join(safety.Reasons, "; "))
+			} else {
+				reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false", chatID)
+			}
+			reasons = append(reasons, reason)
+
 			}
 		}
 

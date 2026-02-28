@@ -1,6 +1,6 @@
 {
   "id": "G",
-  "timestamp": "2026-02-28T17:48:13.474076+07:00",
+  "timestamp": "2026-02-28T18:23:33.863414+07:00",
   "strategy": "scalping",
   "market_state": {
     "symbol": "BTC/USDT",
@@ -19,7 +19,7 @@
       "ask_depth": 0,
       "imbalance": 0
     },
-    "timestamp": "2026-02-28T17:48:13.474076+07:00"
+    "timestamp": "2026-02-28T18:23:33.863414+07:00"
   },
   "decision": {
     "id": "",
