@@ -73,3 +73,47 @@ func TestLogLevelConstants(t *testing.T) {
 		t.Error("LevelWarn should be less than LevelError")
 	}
 }
+
+func TestLoggerMaxEntries(t *testing.T) {
+	logger := NewLogger(AuditConfig{
+		Level:      LevelInfo,
+		MaxEntries: 100,
+	})
+	ctx := context.Background()
+
+	// Log more than max entries
+	for i := 0; i < 150; i++ {
+		logger.Log(ctx, ActionAgentStarted, "test", map[string]any{"index": i})
+	}
+
+	count := logger.Count()
+	if count > 100 {
+		t.Errorf("Expected max 100 entries, got %d", count)
+	}
+	if count < 90 {
+		t.Errorf("Expected at least 90 entries after trimming, got %d", count)
+	}
+}
+
+func TestLoggerCount(t *testing.T) {
+	logger := NewLogger(AuditConfig{Level: LevelInfo})
+	ctx := context.Background()
+
+	if logger.Count() != 0 {
+		t.Error("Expected 0 entries initially")
+	}
+
+	logger.Log(ctx, ActionAgentStarted, "test", map[string]any{})
+	logger.Log(ctx, ActionAgentStopping, "test", map[string]any{})
+
+	if logger.Count() != 2 {
+		t.Errorf("Expected 2 entries, got %d", logger.Count())
+	}
+}
+
+func TestAuditConfigDefaults(t *testing.T) {
+	logger := NewLogger(AuditConfig{})
+	if logger.config.MaxEntries <= 0 {
+		t.Error("Expected default MaxEntries to be set")
+	}
+}

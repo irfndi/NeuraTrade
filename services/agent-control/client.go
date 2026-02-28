@@ -106,11 +106,17 @@ func (c *BackendClient) executeCommand(ctx context.Context, endpoint string, pay
 			time.Sleep(time.Duration(attempt+1) * time.Second)
 			continue
 		}
-		defer resp.Body.Close()
+
+		// Close body immediately after reading (not using defer in loop)
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
 
 		if resp.StatusCode >= 400 {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			lastErr = fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+			if readErr == nil {
+				lastErr = fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+			} else {
+				lastErr = fmt.Errorf("request failed with status %d: %w", resp.StatusCode, readErr)
+			}
 			if resp.StatusCode >= 500 {
 				// Retry on server errors
 				time.Sleep(time.Duration(attempt+1) * time.Second)

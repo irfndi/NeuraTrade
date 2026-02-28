@@ -41,16 +41,17 @@ const (
 type AuditConfig struct {
 	Level      LogLevel
 	OutputPath string
+	MaxEntries int // Maximum entries to keep in memory (0 = unlimited)
 }
 
 // Entry represents a single audit log entry.
 type Entry struct {
-	Timestamp time.Time      `json:"timestamp"`
-	Level     LogLevel       `json:"level"`
-	ActionType  ActionType   `json:"action_type"`
-	Component string         `json:"component"`
-	Data      map[string]any `json:"data"`
-	TraceID   string         `json:"trace_id,omitempty"`
+	Timestamp  time.Time      `json:"timestamp"`
+	Level      LogLevel       `json:"level"`
+	ActionType ActionType     `json:"action_type"`
+	Component  string         `json:"component"`
+	Data       map[string]any `json:"data"`
+	TraceID    string         `json:"trace_id,omitempty"`
 }
 
 // Logger provides audit logging functionality.
@@ -62,9 +63,13 @@ type Logger struct {
 
 // NewLogger creates a new audit logger.
 func NewLogger(config AuditConfig) *Logger {
+	// Set default max entries if not specified
+	if config.MaxEntries <= 0 {
+		config.MaxEntries = 10000 // Default limit to prevent memory leak
+	}
 	return &Logger{
 		config:  config,
-		entries: make([]Entry, 0),
+		entries: make([]Entry, 0, config.MaxEntries),
 	}
 }
 
@@ -86,6 +91,14 @@ func (l *Logger) Log(ctx context.Context, actionType ActionType, component strin
 	}
 
 	l.entries = append(l.entries, entry)
+
+	// Prevent memory leak by limiting entries (circular buffer behavior)
+	if l.config.MaxEntries > 0 && len(l.entries) > l.config.MaxEntries {
+		// Remove oldest 10% of entries when limit exceeded
+		cutIndex := len(l.entries) / 10
+		l.entries = l.entries[cutIndex:]
+	}
+
 	l.writeEntry(entry)
 }
 
@@ -125,4 +138,11 @@ func (l *Logger) Clear() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = nil
+}
+
+// Count returns the number of entries currently in memory.
+func (l *Logger) Count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.entries)
 }
