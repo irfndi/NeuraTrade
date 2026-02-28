@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -74,7 +75,7 @@ func (r *positionsRepo) Create(ctx context.Context, pos ports.StoredPosition) (p
 	query := `
 		INSERT INTO positions (id, exchange, symbol, side, amount, entry_price, current_price,
 			unrealized_pnl, realized_pnl, opened_at, updated_at, closed_at, status, strategy_id, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 	_, err := r.db.Exec(ctx, query,
 		pos.ID, pos.Exchange, pos.Symbol, pos.Side, pos.Amount, pos.EntryPrice, pos.CurrentPrice,
@@ -89,10 +90,10 @@ func (r *positionsRepo) Create(ctx context.Context, pos ports.StoredPosition) (p
 func (r *positionsRepo) Update(ctx context.Context, pos ports.StoredPosition) error {
 	metadata, _ := json.Marshal(pos.Metadata)
 	query := `
-		UPDATE positions SET exchange = ?, symbol = ?, side = ?, amount = ?, entry_price = ?,
-			current_price = ?, unrealized_pnl = ?, realized_pnl = ?, updated_at = ?,
-			closed_at = ?, status = ?, strategy_id = ?, metadata = ?
-		WHERE id = ?
+		UPDATE positions SET exchange = $1, symbol = $2, side = $3, amount = $4, entry_price = $5,
+			current_price = $6, unrealized_pnl = $7, realized_pnl = $8, updated_at = $9,
+			closed_at = $10, status = $11, strategy_id = $12, metadata = $13
+		WHERE id = $14
 	`
 	_, err := r.db.Exec(ctx, query,
 		pos.Exchange, pos.Symbol, pos.Side, pos.Amount, pos.EntryPrice, pos.CurrentPrice,
@@ -108,7 +109,7 @@ func (r *positionsRepo) GetByID(ctx context.Context, id string) (ports.StoredPos
 	query := `
 		SELECT id, exchange, symbol, side, amount, entry_price, current_price,
 			unrealized_pnl, realized_pnl, opened_at, updated_at, closed_at, status, strategy_id, metadata
-		FROM positions WHERE id = ?
+		FROM positions WHERE id = $1
 	`
 	var pos ports.StoredPosition
 	var metadata []byte
@@ -140,15 +141,15 @@ func (r *positionsRepo) GetOpenBySymbol(ctx context.Context, exchange, symbol st
 	query := `
 		SELECT id, exchange, symbol, side, amount, entry_price, current_price,
 			unrealized_pnl, realized_pnl, opened_at, updated_at, closed_at, status, strategy_id, metadata
-		FROM positions WHERE status = 'open' AND exchange = ? AND symbol = ?
+		FROM positions WHERE status = 'open' AND exchange = $1 AND symbol = $2
 	`
 	return r.queryPositions(ctx, query, exchange, symbol)
 }
 
 func (r *positionsRepo) Close(ctx context.Context, id string, closedAt time.Time, realizedPnL decimal.Decimal) error {
 	query := `
-		UPDATE positions SET status = 'closed', closed_at = ?, realized_pnl = ?, updated_at = ?
-		WHERE id = ?
+		UPDATE positions SET status = 'closed', closed_at = $1, realized_pnl = $2, updated_at = $3
+		WHERE id = $4
 	`
 	_, err := r.db.Exec(ctx, query, closedAt, realizedPnL, time.Now(), id)
 	if err != nil {
@@ -199,7 +200,7 @@ func (r *ordersRepo) Create(ctx context.Context, order ports.StoredOrder) (ports
 		INSERT INTO orders (id, exchange, symbol, exchange_order_id, client_order_id, side, type,
 			amount, filled_amount, price, average_price, status, strategy_id, signal_id,
 			created_at, updated_at, closed_at, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 	_, err := r.db.Exec(ctx, query,
 		order.ID, order.Exchange, order.Symbol, order.ExchangeOrderID, order.ClientOrderID, order.Side, order.Type,
@@ -215,10 +216,10 @@ func (r *ordersRepo) Create(ctx context.Context, order ports.StoredOrder) (ports
 func (r *ordersRepo) Update(ctx context.Context, order ports.StoredOrder) error {
 	metadata, _ := json.Marshal(order.Metadata)
 	query := `
-		UPDATE orders SET exchange = ?, symbol = ?, exchange_order_id = ?, client_order_id = ?,
-			side = ?, type = ?, amount = ?, filled_amount = ?, price = ?, average_price = ?,
-			status = ?, strategy_id = ?, signal_id = ?, updated_at = ?, closed_at = ?, metadata = ?
-		WHERE id = ?
+		UPDATE orders SET exchange = $1, symbol = $2, exchange_order_id = $3, client_order_id = $4,
+			side = $5, type = $6, amount = $7, filled_amount = $8, price = $9, average_price = $10,
+			status = $11, strategy_id = $12, signal_id = $13, updated_at = $14, closed_at = $15, metadata = $16
+		WHERE id = $17
 	`
 	_, err := r.db.Exec(ctx, query,
 		order.Exchange, order.Symbol, order.ExchangeOrderID, order.ClientOrderID, order.Side, order.Type,
@@ -236,7 +237,7 @@ func (r *ordersRepo) GetByID(ctx context.Context, id string) (ports.StoredOrder,
 		SELECT id, exchange, symbol, exchange_order_id, client_order_id, side, type,
 			amount, filled_amount, price, average_price, status, strategy_id, signal_id,
 			created_at, updated_at, closed_at, metadata
-		FROM orders WHERE id = ?
+		FROM orders WHERE id = $1
 	`
 	return r.scanOrder(r.db.QueryRow(ctx, query, id))
 }
@@ -246,7 +247,7 @@ func (r *ordersRepo) GetByExchangeOrderID(ctx context.Context, exchange, exchang
 		SELECT id, exchange, symbol, exchange_order_id, client_order_id, side, type,
 			amount, filled_amount, price, average_price, status, strategy_id, signal_id,
 			created_at, updated_at, closed_at, metadata
-		FROM orders WHERE exchange = ? AND exchange_order_id = ?
+		FROM orders WHERE exchange = $1 AND exchange_order_id = $2
 	`
 	return r.scanOrder(r.db.QueryRow(ctx, query, exchange, exchangeOrderID))
 }
@@ -256,7 +257,7 @@ func (r *ordersRepo) GetByClientOrderID(ctx context.Context, exchange, clientOrd
 		SELECT id, exchange, symbol, exchange_order_id, client_order_id, side, type,
 			amount, filled_amount, price, average_price, status, strategy_id, signal_id,
 			created_at, updated_at, closed_at, metadata
-		FROM orders WHERE exchange = ? AND client_order_id = ?
+		FROM orders WHERE exchange = $1 AND client_order_id = $2
 	`
 	return r.scanOrder(r.db.QueryRow(ctx, query, exchange, clientOrderID))
 }
@@ -277,7 +278,7 @@ func (r *ordersRepo) GetRecent(ctx context.Context, limit int) ([]ports.StoredOr
 		SELECT id, exchange, symbol, exchange_order_id, client_order_id, side, type,
 			amount, filled_amount, price, average_price, status, strategy_id, signal_id,
 			created_at, updated_at, closed_at, metadata
-		FROM orders ORDER BY created_at DESC LIMIT ?
+		FROM orders ORDER BY created_at DESC LIMIT $1
 	`
 	return r.queryOrders(ctx, query, limit)
 }
@@ -343,7 +344,7 @@ func (r *tradesRepo) Create(ctx context.Context, trade ports.StoredTrade) (ports
 	query := `
 		INSERT INTO trades (id, exchange, symbol, order_id, exchange_order_id, side, amount,
 			price, fee, fee_currency, pnl, position_id, executed_at, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 	_, err := r.db.Exec(ctx, query,
 		trade.ID, trade.Exchange, trade.Symbol, trade.OrderID, trade.ExchangeOrderID, trade.Side, trade.Amount,
@@ -359,7 +360,7 @@ func (r *tradesRepo) GetByID(ctx context.Context, id string) (ports.StoredTrade,
 	query := `
 		SELECT id, exchange, symbol, order_id, exchange_order_id, side, amount,
 			price, fee, fee_currency, pnl, position_id, executed_at, metadata
-		FROM trades WHERE id = ?
+		FROM trades WHERE id = $1
 	`
 	return r.scanTrade(r.db.QueryRow(ctx, query, id))
 }
@@ -368,7 +369,7 @@ func (r *tradesRepo) GetByOrderID(ctx context.Context, orderID string) ([]ports.
 	query := `
 		SELECT id, exchange, symbol, order_id, exchange_order_id, side, amount,
 			price, fee, fee_currency, pnl, position_id, executed_at, metadata
-		FROM trades WHERE order_id = ? ORDER BY executed_at
+		FROM trades WHERE order_id = $1 ORDER BY executed_at
 	`
 	return r.queryTrades(ctx, query, orderID)
 }
@@ -377,7 +378,7 @@ func (r *tradesRepo) GetRecent(ctx context.Context, limit int) ([]ports.StoredTr
 	query := `
 		SELECT id, exchange, symbol, order_id, exchange_order_id, side, amount,
 			price, fee, fee_currency, pnl, position_id, executed_at, metadata
-		FROM trades ORDER BY executed_at DESC LIMIT ?
+		FROM trades ORDER BY executed_at DESC LIMIT $1
 	`
 	return r.queryTrades(ctx, query, limit)
 }
@@ -386,7 +387,7 @@ func (r *tradesRepo) GetByPositionID(ctx context.Context, positionID string) ([]
 	query := `
 		SELECT id, exchange, symbol, order_id, exchange_order_id, side, amount,
 			price, fee, fee_currency, pnl, position_id, executed_at, metadata
-		FROM trades WHERE position_id = ? ORDER BY executed_at
+		FROM trades WHERE position_id = $1 ORDER BY executed_at
 	`
 	return r.queryTrades(ctx, query, positionID)
 }
@@ -442,7 +443,7 @@ func (r *signalsRepo) Create(ctx context.Context, signal ports.StoredSignal) (po
 	query := `
 		INSERT INTO signals (id, exchange, symbol, strategy_id, side, confidence, price,
 			stop_loss, take_profit, status, generated_at, processed_at, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 	_, err := r.db.Exec(ctx, query,
 		signal.ID, signal.Exchange, signal.Symbol, signal.StrategyID, signal.Side, signal.Confidence, signal.Price,
@@ -457,9 +458,9 @@ func (r *signalsRepo) Create(ctx context.Context, signal ports.StoredSignal) (po
 func (r *signalsRepo) Update(ctx context.Context, signal ports.StoredSignal) error {
 	metadata, _ := json.Marshal(signal.Metadata)
 	query := `
-		UPDATE signals SET exchange = ?, symbol = ?, strategy_id = ?, side = ?, confidence = ?,
-			price = ?, stop_loss = ?, take_profit = ?, status = ?, processed_at = ?, metadata = ?
-		WHERE id = ?
+		UPDATE signals SET exchange = $1, symbol = $2, strategy_id = $3, side = $4, confidence = $5,
+			price = $6, stop_loss = $7, take_profit = $8, status = $9, processed_at = $10, metadata = $11
+		WHERE id = $12
 	`
 	_, err := r.db.Exec(ctx, query,
 		signal.Exchange, signal.Symbol, signal.StrategyID, signal.Side, signal.Confidence, signal.Price,
@@ -475,7 +476,7 @@ func (r *signalsRepo) GetByID(ctx context.Context, id string) (ports.StoredSigna
 	query := `
 		SELECT id, exchange, symbol, strategy_id, side, confidence, price,
 			stop_loss, take_profit, status, generated_at, processed_at, metadata
-		FROM signals WHERE id = ?
+		FROM signals WHERE id = $1
 	`
 	return r.scanSignal(r.db.QueryRow(ctx, query, id))
 }
@@ -484,13 +485,13 @@ func (r *signalsRepo) GetPending(ctx context.Context, limit int) ([]ports.Stored
 	query := `
 		SELECT id, exchange, symbol, strategy_id, side, confidence, price,
 			stop_loss, take_profit, status, generated_at, processed_at, metadata
-		FROM signals WHERE status = 'pending' ORDER BY generated_at LIMIT ?
+		FROM signals WHERE status = 'pending' ORDER BY generated_at LIMIT $1
 	`
 	return r.querySignals(ctx, query, limit)
 }
 
 func (r *signalsRepo) MarkProcessed(ctx context.Context, id string, processedAt time.Time) error {
-	query := `UPDATE signals SET status = 'processed', processed_at = ? WHERE id = ?`
+	query := `UPDATE signals SET status = 'processed', processed_at = $1 WHERE id = $2`
 	_, err := r.db.Exec(ctx, query, processedAt, id)
 	if err != nil {
 		return fmt.Errorf("failed to mark signal processed: %w", err)
@@ -545,7 +546,7 @@ type configRepo struct {
 }
 
 func (r *configRepo) GetStrategyConfig(ctx context.Context, strategyID string) (ports.StrategyConfig, error) {
-	query := `SELECT id, name, enabled, config, updated_at FROM strategy_configs WHERE id = ?`
+	query := `SELECT id, name, enabled, config, updated_at FROM strategy_configs WHERE id = $1`
 	var cfg ports.StrategyConfig
 	var configJSON []byte
 	err := r.db.QueryRow(ctx, query, strategyID).Scan(&cfg.ID, &cfg.Name, &cfg.Enabled, &configJSON, &cfg.UpdatedAt)
@@ -558,12 +559,26 @@ func (r *configRepo) GetStrategyConfig(ctx context.Context, strategyID string) (
 
 func (r *configRepo) UpdateStrategyConfig(ctx context.Context, config ports.StrategyConfig) error {
 	configJSON, _ := json.Marshal(config.Config)
-	query := `INSERT OR REPLACE INTO strategy_configs (id, name, enabled, config, updated_at) VALUES (?, ?, ?, ?, ?)`
+	query := `INSERT OR REPLACE INTO strategy_configs (id, name, enabled, config, updated_at) VALUES ($1, $2, $3, $4, $5)`
 	_, err := r.db.Exec(ctx, query, config.ID, config.Name, config.Enabled, configJSON, config.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to update strategy config: %w", err)
 	}
 	return nil
+}
+
+// defaultRiskConfig returns the default risk configuration.
+func defaultRiskConfig() ports.RiskConfig {
+	return ports.RiskConfig{
+		MaxPositionSize:  decimal.NewFromFloat(0.1),
+		MaxDailyLoss:     decimal.NewFromFloat(0.05),
+		MaxDrawdown:      decimal.NewFromFloat(0.1),
+		MaxLeverage:      decimal.NewFromInt(2),
+		AllowedSymbols:   []string{},
+		AllowedExchanges: []string{},
+		SafeMode:         false,
+		KillSwitch:       false,
+	}
 }
 
 func (r *configRepo) GetRiskConfig(ctx context.Context) (ports.RiskConfig, error) {
@@ -576,17 +591,11 @@ func (r *configRepo) GetRiskConfig(ctx context.Context) (ports.RiskConfig, error
 		&symbolsJSON, &exchangesJSON, &cfg.SafeMode, &cfg.KillSwitch,
 	)
 	if err != nil {
-		// Return defaults if no config exists
-		return ports.RiskConfig{
-			MaxPositionSize:  decimal.NewFromFloat(0.1),
-			MaxDailyLoss:     decimal.NewFromFloat(0.05),
-			MaxDrawdown:      decimal.NewFromFloat(0.1),
-			MaxLeverage:      decimal.NewFromInt(2),
-			AllowedSymbols:   []string{},
-			AllowedExchanges: []string{},
-			SafeMode:         false,
-			KillSwitch:       false,
-		}, nil
+		// Only return defaults if no config row exists
+		if errors.Is(err, sql.ErrNoRows) {
+			return defaultRiskConfig(), nil
+		}
+		return ports.RiskConfig{}, fmt.Errorf("failed to get risk config: %w", err)
 	}
 	_ = json.Unmarshal(symbolsJSON, &cfg.AllowedSymbols)
 	_ = json.Unmarshal(exchangesJSON, &cfg.AllowedExchanges)
@@ -597,7 +606,7 @@ func (r *configRepo) UpdateRiskConfig(ctx context.Context, config ports.RiskConf
 	symbolsJSON, _ := json.Marshal(config.AllowedSymbols)
 	exchangesJSON, _ := json.Marshal(config.AllowedExchanges)
 	query := `INSERT OR REPLACE INTO risk_config (id, max_position_size, max_daily_loss, max_drawdown,
-		max_leverage, allowed_symbols, allowed_exchanges, safe_mode, kill_switch) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)`
+		max_leverage, allowed_symbols, allowed_exchanges, safe_mode, kill_switch) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)`
 	_, err := r.db.Exec(ctx, query,
 		config.MaxPositionSize, config.MaxDailyLoss, config.MaxDrawdown, config.MaxLeverage,
 		symbolsJSON, exchangesJSON, config.SafeMode, config.KillSwitch,
@@ -609,17 +618,21 @@ func (r *configRepo) UpdateRiskConfig(ctx context.Context, config ports.RiskConf
 }
 
 func (r *configRepo) GetFeatureFlag(ctx context.Context, key string) (bool, error) {
-	query := `SELECT value FROM feature_flags WHERE key = ?`
+	query := `SELECT value FROM feature_flags WHERE key = $1`
 	var value bool
 	err := r.db.QueryRow(ctx, query, key).Scan(&value)
 	if err != nil {
-		return false, nil // Default to false if not found
+		// Only return default false if no row exists
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get feature flag: %w", err)
 	}
 	return value, nil
 }
 
 func (r *configRepo) SetFeatureFlag(ctx context.Context, key string, value bool) error {
-	query := `INSERT OR REPLACE INTO feature_flags (key, value, updated_at) VALUES (?, ?, ?)`
+	query := `INSERT OR REPLACE INTO feature_flags (key, value, updated_at) VALUES ($1, $2, $3)`
 	_, err := r.db.Exec(ctx, query, key, value, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to set feature flag: %w", err)
