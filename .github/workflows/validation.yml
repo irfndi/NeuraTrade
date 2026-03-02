@@ -197,13 +197,6 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: fs
-          scan-ref: services/backend-api
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
   frontend-security:
     name: Frontend Security (telegram-service)
     runs-on: ubuntu-latest
