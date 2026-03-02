@@ -367,7 +367,7 @@ func TestGenerateTestSecret(t *testing.T) {
 	secret := GenerateTestSecret()
 	assert.NotEmpty(t, secret)
 	assert.GreaterOrEqual(t, len(secret), 64) // 32 bytes = 64 hex chars
-	
+
 	// Test that multiple calls return different secrets (randomness)
 	secret2 := GenerateTestSecret()
 	assert.NotEmpty(t, secret2)
@@ -380,4 +380,3 @@ func TestMustGenerateTestSecret(t *testing.T) {
 	assert.NotEmpty(t, secret)
 	assert.GreaterOrEqual(t, len(secret), 64)
 }
-
