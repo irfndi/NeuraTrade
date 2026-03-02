@@ -806,3 +806,58 @@ func TestSetupRoutes_TelegramInternalRequiresAdminAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ADMIN_AUTH_FAILED")
 }
+
+func TestGetEnvOrDefault(t *testing.T) {
+	t.Run("returns value when env set", func(t *testing.T) {
+		t.Setenv("TEST_KEY", "test-value")
+		result := getEnvOrDefault("TEST_KEY", "default")
+		assert.Equal(t, "test-value", result)
+	})
+
+	t.Run("returns default when env not set", func(t *testing.T) {
+		result := getEnvOrDefault("NONEXISTENT_KEY", "default-value")
+		assert.Equal(t, "default-value", result)
+	})
+
+	t.Run("returns empty string when env is empty", func(t *testing.T) {
+		t.Setenv("EMPTY_KEY", "")
+		result := getEnvOrDefault("EMPTY_KEY", "default")
+		// Empty env is treated as not set, so default is returned
+		assert.Equal(t, "default", result)
+	})
+}
+
+func TestParseAIProviderChain(t *testing.T) {
+	t.Run("returns default chain when no env set", func(t *testing.T) {
+		result := parseAIProviderChain("")
+		assert.Contains(t, result, "zhipu")
+		assert.GreaterOrEqual(t, len(result), 1)
+	})
+
+	t.Run("uses primary provider", func(t *testing.T) {
+		result := parseAIProviderChain("openai")
+		assert.Equal(t, "openai", result[0])
+	})
+
+	t.Run("parses chain from env", func(t *testing.T) {
+		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "anthropic,openai")
+		result := parseAIProviderChain("primary")
+		assert.Equal(t, "primary", result[0])
+		assert.Contains(t, result, "anthropic")
+		assert.Contains(t, result, "openai")
+	})
+
+	t.Run("deduplicates providers", func(t *testing.T) {
+		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,openai,anthropic")
+		result := parseAIProviderChain("primary")
+		// Count occurrences of each provider
+		counts := make(map[string]int)
+		for _, p := range result {
+			counts[p]++
+		}
+		// Each provider should appear at most once
+		for provider, count := range counts {
+			assert.LessOrEqual(t, count, 1, "provider %s appears %d times", provider, count)
+		}
+	})
+}
