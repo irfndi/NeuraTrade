@@ -245,7 +245,6 @@ func (b *StateStoreBuilder) WithDatabase(db database.Database) *StateStoreBuilde
 	return b
 }
 
-
 // Build returns the built state store.
 func (b *StateStoreBuilder) Build() (ports.StateStore, error) {
 	if b.db == nil {
