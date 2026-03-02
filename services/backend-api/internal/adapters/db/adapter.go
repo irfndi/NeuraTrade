@@ -293,6 +293,9 @@ func (r *ordersRepo) GetOpen(ctx context.Context) ([]ports.StoredOrder, error) {
 }
 
 func (r *ordersRepo) GetRecent(ctx context.Context, limit int) ([]ports.StoredOrder, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("invalid limit: %d", limit)
+	}
 	query := `
 		SELECT id, exchange, symbol, exchange_order_id, client_order_id, side, type,
 			amount, filled_amount, price, average_price, status, strategy_id, signal_id,
@@ -404,6 +407,9 @@ func (r *tradesRepo) GetByOrderID(ctx context.Context, orderID string) ([]ports.
 }
 
 func (r *tradesRepo) GetRecent(ctx context.Context, limit int) ([]ports.StoredTrade, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("invalid limit: %d", limit)
+	}
 	query := `
 		SELECT id, exchange, symbol, order_id, exchange_order_id, side, amount,
 			price, fee, fee_currency, pnl, position_id, executed_at, metadata
@@ -524,6 +530,9 @@ func (r *signalsRepo) GetByID(ctx context.Context, id string) (ports.StoredSigna
 }
 
 func (r *signalsRepo) GetPending(ctx context.Context, limit int) ([]ports.StoredSignal, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("invalid limit: %d", limit)
+	}
 	query := `
 		SELECT id, exchange, symbol, strategy_id, side, confidence, price,
 			stop_loss, take_profit, status, generated_at, processed_at, metadata

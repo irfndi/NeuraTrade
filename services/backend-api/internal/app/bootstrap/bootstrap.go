@@ -245,11 +245,13 @@ func (b *StateStoreBuilder) WithDatabase(db database.Database) *StateStoreBuilde
 	return b
 }
 
-func (b *StateStoreBuilder) Build() ports.StateStore {
+
+// Build returns the built state store.
+func (b *StateStoreBuilder) Build() (ports.StateStore, error) {
 	if b.db == nil {
-		panic("StateStoreBuilder: database is required, call WithDatabase")
+		return nil, fmt.Errorf("StateStoreBuilder: database is required, call WithDatabase")
 	}
-	return db.NewAdapter(b.db)
+	return db.NewAdapter(b.db), nil
 }
 
 // ============================================================
@@ -272,11 +274,12 @@ func (b *CacheStoreBuilder) WithRedisClient(client *database.RedisClient) *Cache
 	return b
 }
 
-func (b *CacheStoreBuilder) Build() ports.CacheStore {
+// Build returns the built cache store.
+func (b *CacheStoreBuilder) Build() (ports.CacheStore, error) {
 	if b.client == nil {
-		panic("CacheStoreBuilder: redis client is required, call WithRedisClient")
+		return nil, fmt.Errorf("CacheStoreBuilder: redis client is required, call WithRedisClient")
 	}
-	return redis.NewAdapter(b.client)
+	return redis.NewAdapter(b.client), nil
 }
 
 // ============================================================

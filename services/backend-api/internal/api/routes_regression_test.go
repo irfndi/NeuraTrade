@@ -19,6 +19,9 @@ import (
 
 func TestSetupRoutes_HealthEndpointContractRegression(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() {
+		gin.SetMode(gin.DebugMode)
+	})
 
 	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
 	oldTelegramToken, telegramTokenExists := os.LookupEnv("TELEGRAM_BOT_TOKEN")
