@@ -149,3 +149,71 @@ func TestAdapter_Send_RequiresChatID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no chat ID configured")
 }
+
+func TestAdapter_SendAsync_Smoke(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(Config{
+		BaseURL: server.URL,
+		APIKey:  "test-api-key",
+		ChatID:  "123456",
+		Timeout: time.Second,
+		Enabled: true,
+	})
+
+	resultChan, err := adapter.SendAsync(context.Background(), ports.Notification{
+		ID:      "n-async-1",
+		Type:    ports.NotificationTypeTrade,
+		Message: "async message",
+	})
+	require.NoError(t, err)
+
+	result := <-resultChan
+	assert.True(t, result.Sent)
+	assert.Equal(t, "n-async-1", result.ID)
+	assert.Equal(t, "telegram", result.Channel)
+}
+
+func TestAdapter_SendAsync_MapsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server error", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(Config{
+		BaseURL: server.URL,
+		APIKey:  "test-api-key",
+		ChatID:  "123456",
+		Timeout: time.Second,
+		Enabled: true,
+	})
+
+	resultChan, err := adapter.SendAsync(context.Background(), ports.Notification{
+		ID:      "n-async-2",
+		Message: "error test",
+	})
+	require.NoError(t, err)
+
+	result := <-resultChan
+	assert.False(t, result.Sent)
+	assert.Contains(t, result.Error, "telegram service error")
+}
+
+func TestAdapter_SendAsync_DisabledDoesNothing(t *testing.T) {
+	adapter := NewAdapter(Config{
+		Enabled: false,
+	})
+
+	resultChan, err := adapter.SendAsync(context.Background(), ports.Notification{
+		ID:      "n-async-3",
+		Message: "should be ignored",
+	})
+	require.NoError(t, err)
+
+	result := <-resultChan
+	assert.True(t, result.Sent)
+	assert.NoError(t, result.Error)
+}

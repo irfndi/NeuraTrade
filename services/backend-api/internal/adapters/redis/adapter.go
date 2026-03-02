@@ -33,40 +33,45 @@ func (a *Adapter) Get(ctx context.Context, key string) ([]byte, error) {
 	return []byte(val), nil
 }
 
-// Set stores a value in the cache.
 func (a *Adapter) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	if a.client == nil {
 		return fmt.Errorf("redis client is nil")
 	}
-	return a.client.Set(ctx, key, value, ttl)
+	if err := a.client.Set(ctx, key, value, ttl); err != nil {
+		return fmt.Errorf("cache set failed: %w", err)
+	}
+	return nil
 }
 
-// Delete deletes a value from the cache.
 func (a *Adapter) Delete(ctx context.Context, key string) error {
 	if a.client == nil {
 		return fmt.Errorf("redis client is nil")
 	}
-	return a.client.Delete(ctx, key)
+	if err := a.client.Delete(ctx, key); err != nil {
+		return fmt.Errorf("cache delete failed: %w", err)
+	}
+	return nil
 }
 
-// Exists checks if a key exists.
 func (a *Adapter) Exists(ctx context.Context, key string) (bool, error) {
 	if a.client == nil {
 		return false, fmt.Errorf("redis client is nil")
 	}
 	count, err := a.client.Exists(ctx, key)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("cache exists check failed: %w", err)
 	}
 	return count > 0, nil
 }
 
-// Health checks if the cache is healthy.
 func (a *Adapter) Health(ctx context.Context) error {
 	if a.client == nil {
 		return fmt.Errorf("redis client is nil")
 	}
-	return a.client.HealthCheck(ctx)
+	if err := a.client.HealthCheck(ctx); err != nil {
+		return fmt.Errorf("cache health check failed: %w", err)
+	}
+	return nil
 }
 
 // Compile-time interface check
