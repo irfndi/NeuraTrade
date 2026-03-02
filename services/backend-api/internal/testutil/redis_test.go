@@ -361,3 +361,23 @@ func TestGetTestRedisClient_MiniredisIntegration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "test_value", value)
 }
+
+func TestGenerateTestSecret(t *testing.T) {
+	// Test that GenerateTestSecret returns a non-empty secret
+	secret := GenerateTestSecret()
+	assert.NotEmpty(t, secret)
+	assert.GreaterOrEqual(t, len(secret), 64) // 32 bytes = 64 hex chars
+	
+	// Test that multiple calls return different secrets (randomness)
+	secret2 := GenerateTestSecret()
+	assert.NotEmpty(t, secret2)
+	assert.NotEqual(t, secret, secret2)
+}
+
+func TestMustGenerateTestSecret(t *testing.T) {
+	// Test that MustGenerateTestSecret returns a valid secret
+	secret := MustGenerateTestSecret()
+	assert.NotEmpty(t, secret)
+	assert.GreaterOrEqual(t, len(secret), 64)
+}
+
