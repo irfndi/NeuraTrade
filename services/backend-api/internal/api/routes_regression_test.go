@@ -11,6 +11,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/api/handlers/testmocks"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/middleware"
+	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
