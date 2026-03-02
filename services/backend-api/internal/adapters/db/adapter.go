@@ -71,13 +71,16 @@ type positionsRepo struct {
 }
 
 func (r *positionsRepo) Create(ctx context.Context, pos ports.StoredPosition) (ports.StoredPosition, error) {
-	metadata, _ := json.Marshal(pos.Metadata)
+	metadata, err := json.Marshal(pos.Metadata)
+	if err != nil {
+		return ports.StoredPosition{}, fmt.Errorf("marshal position metadata: %w", err)
+	}
 	query := `
 		INSERT INTO positions (id, exchange, symbol, side, amount, entry_price, current_price,
 			unrealized_pnl, realized_pnl, opened_at, updated_at, closed_at, status, strategy_id, metadata)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		pos.ID, pos.Exchange, pos.Symbol, pos.Side, pos.Amount, pos.EntryPrice, pos.CurrentPrice,
 		pos.UnrealizedPnL, pos.RealizedPnL, pos.OpenedAt, pos.UpdatedAt, pos.ClosedAt, pos.Status, pos.StrategyID, metadata,
 	)
@@ -88,14 +91,17 @@ func (r *positionsRepo) Create(ctx context.Context, pos ports.StoredPosition) (p
 }
 
 func (r *positionsRepo) Update(ctx context.Context, pos ports.StoredPosition) error {
-	metadata, _ := json.Marshal(pos.Metadata)
+	metadata, err := json.Marshal(pos.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshal position metadata: %w", err)
+	}
 	query := `
 		UPDATE positions SET exchange = $1, symbol = $2, side = $3, amount = $4, entry_price = $5,
 			current_price = $6, unrealized_pnl = $7, realized_pnl = $8, updated_at = $9,
 			closed_at = $10, status = $11, strategy_id = $12, metadata = $13
 		WHERE id = $14
 	`
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		pos.Exchange, pos.Symbol, pos.Side, pos.Amount, pos.EntryPrice, pos.CurrentPrice,
 		pos.UnrealizedPnL, pos.RealizedPnL, pos.UpdatedAt, pos.ClosedAt, pos.Status, pos.StrategyID, metadata, pos.ID,
 	)
@@ -124,7 +130,9 @@ func (r *positionsRepo) GetByID(ctx context.Context, id string) (ports.StoredPos
 	if closedAt.Valid {
 		pos.ClosedAt = &closedAt.Time
 	}
-	_ = json.Unmarshal(metadata, &pos.Metadata)
+	if err := json.Unmarshal(metadata, &pos.Metadata); err != nil {
+		return ports.StoredPosition{}, fmt.Errorf("unmarshal position metadata: %w", err)
+	}
 	return pos, nil
 }
 
@@ -180,8 +188,13 @@ func (r *positionsRepo) queryPositions(ctx context.Context, query string, args .
 		if closedAt.Valid {
 			pos.ClosedAt = &closedAt.Time
 		}
-		_ = json.Unmarshal(metadata, &pos.Metadata)
+		if err := json.Unmarshal(metadata, &pos.Metadata); err != nil {
+			return nil, fmt.Errorf("unmarshal position metadata: %w", err)
+		}
 		positions = append(positions, pos)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 	return positions, nil
 }
@@ -195,14 +208,17 @@ type ordersRepo struct {
 }
 
 func (r *ordersRepo) Create(ctx context.Context, order ports.StoredOrder) (ports.StoredOrder, error) {
-	metadata, _ := json.Marshal(order.Metadata)
+	metadata, err := json.Marshal(order.Metadata)
+	if err != nil {
+		return ports.StoredOrder{}, fmt.Errorf("marshal order metadata: %w", err)
+	}
 	query := `
 		INSERT INTO orders (id, exchange, symbol, exchange_order_id, client_order_id, side, type,
 			amount, filled_amount, price, average_price, status, strategy_id, signal_id,
 			created_at, updated_at, closed_at, metadata)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		order.ID, order.Exchange, order.Symbol, order.ExchangeOrderID, order.ClientOrderID, order.Side, order.Type,
 		order.Amount, order.FilledAmount, order.Price, order.AveragePrice, order.Status, order.StrategyID, order.SignalID,
 		order.CreatedAt, order.UpdatedAt, order.ClosedAt, metadata,
@@ -214,14 +230,17 @@ func (r *ordersRepo) Create(ctx context.Context, order ports.StoredOrder) (ports
 }
 
 func (r *ordersRepo) Update(ctx context.Context, order ports.StoredOrder) error {
-	metadata, _ := json.Marshal(order.Metadata)
+	metadata, err := json.Marshal(order.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshal order metadata: %w", err)
+	}
 	query := `
 		UPDATE orders SET exchange = $1, symbol = $2, exchange_order_id = $3, client_order_id = $4,
 			side = $5, type = $6, amount = $7, filled_amount = $8, price = $9, average_price = $10,
 			status = $11, strategy_id = $12, signal_id = $13, updated_at = $14, closed_at = $15, metadata = $16
 		WHERE id = $17
 	`
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		order.Exchange, order.Symbol, order.ExchangeOrderID, order.ClientOrderID, order.Side, order.Type,
 		order.Amount, order.FilledAmount, order.Price, order.AveragePrice, order.Status, order.StrategyID, order.SignalID,
 		order.UpdatedAt, order.ClosedAt, metadata, order.ID,
@@ -298,7 +317,9 @@ func (r *ordersRepo) scanOrder(row database.Row) (ports.StoredOrder, error) {
 	if closedAt.Valid {
 		order.ClosedAt = &closedAt.Time
 	}
-	_ = json.Unmarshal(metadata, &order.Metadata)
+	if err := json.Unmarshal(metadata, &order.Metadata); err != nil {
+		return ports.StoredOrder{}, fmt.Errorf("unmarshal order metadata: %w", err)
+	}
 	return order, nil
 }
 
@@ -325,8 +346,13 @@ func (r *ordersRepo) queryOrders(ctx context.Context, query string, args ...inte
 		if closedAt.Valid {
 			order.ClosedAt = &closedAt.Time
 		}
-		_ = json.Unmarshal(metadata, &order.Metadata)
+		if err := json.Unmarshal(metadata, &order.Metadata); err != nil {
+			return nil, fmt.Errorf("unmarshal order metadata: %w", err)
+		}
 		orders = append(orders, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 	return orders, nil
 }
@@ -340,13 +366,16 @@ type tradesRepo struct {
 }
 
 func (r *tradesRepo) Create(ctx context.Context, trade ports.StoredTrade) (ports.StoredTrade, error) {
-	metadata, _ := json.Marshal(trade.Metadata)
+	metadata, err := json.Marshal(trade.Metadata)
+	if err != nil {
+		return ports.StoredTrade{}, fmt.Errorf("marshal trade metadata: %w", err)
+	}
 	query := `
 		INSERT INTO trades (id, exchange, symbol, order_id, exchange_order_id, side, amount,
 			price, fee, fee_currency, pnl, position_id, executed_at, metadata)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		trade.ID, trade.Exchange, trade.Symbol, trade.OrderID, trade.ExchangeOrderID, trade.Side, trade.Amount,
 		trade.Price, trade.Fee, trade.FeeCurrency, trade.PnL, trade.PositionID, trade.ExecutedAt, metadata,
 	)
@@ -402,7 +431,9 @@ func (r *tradesRepo) scanTrade(row database.Row) (ports.StoredTrade, error) {
 	if err != nil {
 		return ports.StoredTrade{}, fmt.Errorf("failed to scan trade: %w", err)
 	}
-	_ = json.Unmarshal(metadata, &trade.Metadata)
+	if err := json.Unmarshal(metadata, &trade.Metadata); err != nil {
+		return ports.StoredTrade{}, fmt.Errorf("unmarshal trade metadata: %w", err)
+	}
 	return trade, nil
 }
 
@@ -424,8 +455,13 @@ func (r *tradesRepo) queryTrades(ctx context.Context, query string, args ...inte
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan trade: %w", err)
 		}
-		_ = json.Unmarshal(metadata, &trade.Metadata)
+		if err := json.Unmarshal(metadata, &trade.Metadata); err != nil {
+			return nil, fmt.Errorf("unmarshal trade metadata: %w", err)
+		}
 		trades = append(trades, trade)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 	return trades, nil
 }
@@ -439,13 +475,16 @@ type signalsRepo struct {
 }
 
 func (r *signalsRepo) Create(ctx context.Context, signal ports.StoredSignal) (ports.StoredSignal, error) {
-	metadata, _ := json.Marshal(signal.Metadata)
+	metadata, err := json.Marshal(signal.Metadata)
+	if err != nil {
+		return ports.StoredSignal{}, fmt.Errorf("marshal signal metadata: %w", err)
+	}
 	query := `
 		INSERT INTO signals (id, exchange, symbol, strategy_id, side, confidence, price,
 			stop_loss, take_profit, status, generated_at, processed_at, metadata)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		signal.ID, signal.Exchange, signal.Symbol, signal.StrategyID, signal.Side, signal.Confidence, signal.Price,
 		signal.StopLoss, signal.TakeProfit, signal.Status, signal.GeneratedAt, signal.ProcessedAt, metadata,
 	)
@@ -456,13 +495,16 @@ func (r *signalsRepo) Create(ctx context.Context, signal ports.StoredSignal) (po
 }
 
 func (r *signalsRepo) Update(ctx context.Context, signal ports.StoredSignal) error {
-	metadata, _ := json.Marshal(signal.Metadata)
+	metadata, err := json.Marshal(signal.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshal signal metadata: %w", err)
+	}
 	query := `
 		UPDATE signals SET exchange = $1, symbol = $2, strategy_id = $3, side = $4, confidence = $5,
 			price = $6, stop_loss = $7, take_profit = $8, status = $9, processed_at = $10, metadata = $11
 		WHERE id = $12
 	`
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		signal.Exchange, signal.Symbol, signal.StrategyID, signal.Side, signal.Confidence, signal.Price,
 		signal.StopLoss, signal.TakeProfit, signal.Status, signal.ProcessedAt, metadata, signal.ID,
 	)
@@ -509,7 +551,9 @@ func (r *signalsRepo) scanSignal(row database.Row) (ports.StoredSignal, error) {
 	if err != nil {
 		return ports.StoredSignal{}, fmt.Errorf("failed to scan signal: %w", err)
 	}
-	_ = json.Unmarshal(metadata, &signal.Metadata)
+	if err := json.Unmarshal(metadata, &signal.Metadata); err != nil {
+		return ports.StoredSignal{}, fmt.Errorf("unmarshal signal metadata: %w", err)
+	}
 	return signal, nil
 }
 
@@ -531,8 +575,13 @@ func (r *signalsRepo) querySignals(ctx context.Context, query string, args ...in
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan signal: %w", err)
 		}
-		_ = json.Unmarshal(metadata, &signal.Metadata)
+		if err := json.Unmarshal(metadata, &signal.Metadata); err != nil {
+			return nil, fmt.Errorf("unmarshal signal metadata: %w", err)
+		}
 		signals = append(signals, signal)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 	return signals, nil
 }
@@ -553,14 +602,19 @@ func (r *configRepo) GetStrategyConfig(ctx context.Context, strategyID string) (
 	if err != nil {
 		return ports.StrategyConfig{}, fmt.Errorf("failed to get strategy config: %w", err)
 	}
-	_ = json.Unmarshal(configJSON, &cfg.Config)
+	if err := json.Unmarshal(configJSON, &cfg.Config); err != nil {
+		return ports.StrategyConfig{}, fmt.Errorf("unmarshal strategy config: %w", err)
+	}
 	return cfg, nil
 }
 
 func (r *configRepo) UpdateStrategyConfig(ctx context.Context, config ports.StrategyConfig) error {
-	configJSON, _ := json.Marshal(config.Config)
-	query := `INSERT OR REPLACE INTO strategy_configs (id, name, enabled, config, updated_at) VALUES ($1, $2, $3, $4, $5)`
-	_, err := r.db.Exec(ctx, query, config.ID, config.Name, config.Enabled, configJSON, config.UpdatedAt)
+	configJSON, err := json.Marshal(config.Config)
+	if err != nil {
+		return fmt.Errorf("marshal strategy config: %w", err)
+	}
+	query := `INSERT INTO strategy_configs (id, name, enabled, config, updated_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name, enabled = EXCLUDED.enabled, config = EXCLUDED.config, updated_at = EXCLUDED.updated_at`
+	_, err = r.db.Exec(ctx, query, config.ID, config.Name, config.Enabled, configJSON, config.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to update strategy config: %w", err)
 	}
@@ -570,9 +624,9 @@ func (r *configRepo) UpdateStrategyConfig(ctx context.Context, config ports.Stra
 // defaultRiskConfig returns the default risk configuration.
 func defaultRiskConfig() ports.RiskConfig {
 	return ports.RiskConfig{
-		MaxPositionSize:  decimal.NewFromFloat(0.1),
-		MaxDailyLoss:     decimal.NewFromFloat(0.05),
-		MaxDrawdown:      decimal.NewFromFloat(0.1),
+		MaxPositionSize:  decimal.RequireFromString("0.1"),
+		MaxDailyLoss:     decimal.RequireFromString("0.05"),
+		MaxDrawdown:      decimal.RequireFromString("0.1"),
 		MaxLeverage:      decimal.NewFromInt(2),
 		AllowedSymbols:   []string{},
 		AllowedExchanges: []string{},
@@ -582,8 +636,7 @@ func defaultRiskConfig() ports.RiskConfig {
 }
 
 func (r *configRepo) GetRiskConfig(ctx context.Context) (ports.RiskConfig, error) {
-	query := `SELECT max_position_size, max_daily_loss, max_drawdown, max_leverage,
-		allowed_symbols, allowed_exchanges, safe_mode, kill_switch FROM risk_config LIMIT 1`
+	query := `SELECT max_position_size, max_daily_loss, max_drawdown, max_leverage, allowed_symbols, allowed_exchanges, safe_mode, kill_switch FROM risk_config LIMIT 1`
 	var cfg ports.RiskConfig
 	var symbolsJSON, exchangesJSON []byte
 	err := r.db.QueryRow(ctx, query).Scan(
@@ -591,23 +644,31 @@ func (r *configRepo) GetRiskConfig(ctx context.Context) (ports.RiskConfig, error
 		&symbolsJSON, &exchangesJSON, &cfg.SafeMode, &cfg.KillSwitch,
 	)
 	if err != nil {
-		// Only return defaults if no config row exists
 		if errors.Is(err, sql.ErrNoRows) {
 			return defaultRiskConfig(), nil
 		}
 		return ports.RiskConfig{}, fmt.Errorf("failed to get risk config: %w", err)
 	}
-	_ = json.Unmarshal(symbolsJSON, &cfg.AllowedSymbols)
-	_ = json.Unmarshal(exchangesJSON, &cfg.AllowedExchanges)
+	if err := json.Unmarshal(symbolsJSON, &cfg.AllowedSymbols); err != nil {
+		return ports.RiskConfig{}, fmt.Errorf("unmarshal allowed symbols: %w", err)
+	}
+	if err := json.Unmarshal(exchangesJSON, &cfg.AllowedExchanges); err != nil {
+		return ports.RiskConfig{}, fmt.Errorf("unmarshal allowed exchanges: %w", err)
+	}
 	return cfg, nil
 }
 
 func (r *configRepo) UpdateRiskConfig(ctx context.Context, config ports.RiskConfig) error {
-	symbolsJSON, _ := json.Marshal(config.AllowedSymbols)
-	exchangesJSON, _ := json.Marshal(config.AllowedExchanges)
-	query := `INSERT OR REPLACE INTO risk_config (id, max_position_size, max_daily_loss, max_drawdown,
-		max_leverage, allowed_symbols, allowed_exchanges, safe_mode, kill_switch) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)`
-	_, err := r.db.Exec(ctx, query,
+	symbolsJSON, err := json.Marshal(config.AllowedSymbols)
+	if err != nil {
+		return fmt.Errorf("marshal allowed symbols: %w", err)
+	}
+	exchangesJSON, err := json.Marshal(config.AllowedExchanges)
+	if err != nil {
+		return fmt.Errorf("marshal allowed exchanges: %w", err)
+	}
+	query := `INSERT INTO risk_config (id, max_position_size, max_daily_loss, max_drawdown, max_leverage, allowed_symbols, allowed_exchanges, safe_mode, kill_switch) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT(id) DO UPDATE SET max_position_size = EXCLUDED.max_position_size, max_daily_loss = EXCLUDED.max_daily_loss, max_drawdown = EXCLUDED.max_drawdown, max_leverage = EXCLUDED.max_leverage, allowed_symbols = EXCLUDED.allowed_symbols, allowed_exchanges = EXCLUDED.allowed_exchanges, safe_mode = EXCLUDED.safe_mode, kill_switch = EXCLUDED.kill_switch`
+	_, err = r.db.Exec(ctx, query,
 		config.MaxPositionSize, config.MaxDailyLoss, config.MaxDrawdown, config.MaxLeverage,
 		symbolsJSON, exchangesJSON, config.SafeMode, config.KillSwitch,
 	)
@@ -622,7 +683,6 @@ func (r *configRepo) GetFeatureFlag(ctx context.Context, key string) (bool, erro
 	var value bool
 	err := r.db.QueryRow(ctx, query, key).Scan(&value)
 	if err != nil {
-		// Only return default false if no row exists
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
@@ -632,7 +692,7 @@ func (r *configRepo) GetFeatureFlag(ctx context.Context, key string) (bool, erro
 }
 
 func (r *configRepo) SetFeatureFlag(ctx context.Context, key string, value bool) error {
-	query := `INSERT OR REPLACE INTO feature_flags (key, value, updated_at) VALUES ($1, $2, $3)`
+	query := `INSERT INTO feature_flags (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`
 	_, err := r.db.Exec(ctx, query, key, value, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to set feature flag: %w", err)

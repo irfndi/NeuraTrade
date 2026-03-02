@@ -112,6 +112,12 @@ func (a *Adapter) SendBatch(ctx context.Context, notifications []ports.Notificat
 		return nil
 	}
 
+	maxConcurrent := 5
+	if len(notifications) < maxConcurrent {
+		maxConcurrent = len(notifications)
+	}
+	sem := make(chan struct{}, maxConcurrent)
+
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(notifications))
 
@@ -119,6 +125,8 @@ func (a *Adapter) SendBatch(ctx context.Context, notifications []ports.Notificat
 		wg.Add(1)
 		go func(notification ports.Notification) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			if err := a.Send(ctx, notification); err != nil {
 				errChan <- err
 			}
@@ -230,7 +238,10 @@ func (a *Adapter) sendMessage(ctx context.Context, chatID, text string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("telegram service error: status %d, body: %s", resp.StatusCode, string(respBody))

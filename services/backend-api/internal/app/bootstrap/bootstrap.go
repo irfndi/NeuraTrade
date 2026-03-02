@@ -245,8 +245,10 @@ func (b *StateStoreBuilder) WithDatabase(db database.Database) *StateStoreBuilde
 	return b
 }
 
-// Build returns the built state store.
 func (b *StateStoreBuilder) Build() ports.StateStore {
+	if b.db == nil {
+		panic("StateStoreBuilder: database is required, call WithDatabase")
+	}
 	return db.NewAdapter(b.db)
 }
 
@@ -270,8 +272,10 @@ func (b *CacheStoreBuilder) WithRedisClient(client *database.RedisClient) *Cache
 	return b
 }
 
-// Build returns the built cache store.
 func (b *CacheStoreBuilder) Build() ports.CacheStore {
+	if b.client == nil {
+		panic("CacheStoreBuilder: redis client is required, call WithRedisClient")
+	}
 	return redis.NewAdapter(b.client)
 }
 
