@@ -43,6 +43,9 @@ func TestSetupRoutes_HealthEndpointContractRegression(t *testing.T) {
 	mockTelegramConfig := &config.TelegramConfig{
 		BotToken: "test-token",
 	}
+	cacheAnalyticsService := services.NewCacheAnalyticsService(nil)
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+
 	teardown := SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
 	defer teardown()
 
@@ -61,6 +64,8 @@ func TestSetupRoutes_HealthEndpointContractRegression(t *testing.T) {
 	assert.Contains(t, payload, "version")
 	assert.Contains(t, payload, "uptime")
 
+	servicesPayload, ok := payload["services"].(map[string]any)
+	require.True(t, ok)
 	assert.Contains(t, servicesPayload, "database")
 	assert.Contains(t, servicesPayload, "redis")
 	assert.Contains(t, servicesPayload, "ccxt")

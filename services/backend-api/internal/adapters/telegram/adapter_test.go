@@ -215,5 +215,5 @@ func TestAdapter_SendAsync_DisabledDoesNothing(t *testing.T) {
 
 	result := <-resultChan
 	assert.True(t, result.Sent)
-	assert.NoError(t, result.Error)
+	assert.Empty(t, result.Error)
 }
