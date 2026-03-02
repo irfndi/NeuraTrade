@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -359,5 +360,93 @@ func TestAdminMiddleware_RequireAdminAuth_ErrorCode(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.NotContains(t, w.Body.String(), "ADMIN_AUTH_FAILED")
 		assert.Contains(t, w.Body.String(), "admin access granted")
+	})
+}
+
+func TestGetAdminAPIKeyFromConfig(t *testing.T) {
+	t.Run("reads key from NEURATRADE_HOME config", func(t *testing.T) {
+		// Create temp directory with config
+		tmpDir := t.TempDir()
+		configContent := `{"admin_api_key": "test-key-from-config-home"}`
+		configPath := tmpDir + "/config.json"
+		if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		t.Setenv("NEURATRADE_HOME", tmpDir)
+		key := getAdminAPIKeyFromConfig()
+		assert.Equal(t, "test-key-from-config-home", key)
+	})
+
+	t.Run("reads key from security section", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configContent := `{"security": {"admin_api_key": "test-key-from-security"}}`
+		configPath := tmpDir + "/config.json"
+		if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		t.Setenv("NEURATRADE_HOME", tmpDir)
+		key := getAdminAPIKeyFromConfig()
+		assert.Equal(t, "test-key-from-security", key)
+	})
+
+	t.Run("returns empty when config missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("NEURATRADE_HOME", tmpDir)
+		// No config.json created
+		key := getAdminAPIKeyFromConfig()
+		assert.Equal(t, "", key)
+	})
+
+	t.Run("returns empty on invalid JSON", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := tmpDir + "/config.json"
+		if err := os.WriteFile(configPath, []byte("invalid json"), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		t.Setenv("NEURATRADE_HOME", tmpDir)
+		key := getAdminAPIKeyFromConfig()
+		assert.Equal(t, "", key)
+	})
+
+	t.Run("returns empty when key not in config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configContent := `{"other_key": "value"}`
+		configPath := tmpDir + "/config.json"
+		if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		t.Setenv("NEURATRADE_HOME", tmpDir)
+		key := getAdminAPIKeyFromConfig()
+		assert.Equal(t, "", key)
+	})
+
+	t.Run("trims whitespace from key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configContent := `{"admin_api_key": "  trimmed-key  "}`
+		configPath := tmpDir + "/config.json"
+		if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		t.Setenv("NEURATRADE_HOME", tmpDir)
+		key := getAdminAPIKeyFromConfig()
+		assert.Equal(t, "trimmed-key", key)
+	})
+
+	t.Run("falls back to home directory when NEURATRADE_HOME unset", func(t *testing.T) {
+		// This test verifies the fallback path doesn't panic
+		// We can't easily mock os.UserHomeDir, so just verify it returns a string
+		t.Setenv("NEURATRADE_HOME", "")
+		key := getAdminAPIKeyFromConfig()
+		// Either empty or a key from the user's actual config file is fine
+		assert.NotPanics(t, func() {
+			_ = getAdminAPIKeyFromConfig()
+		})
+		// Just verify we got a string (could be empty or actual key)
+		_ = key // key is a string, test passes if no panic
 	})
 }
