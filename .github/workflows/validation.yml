@@ -190,6 +190,13 @@ jobs:
         run: cd services/backend-api && govulncheck ./cmd/... ./internal/... ./pkg/...
 
       - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: services/backend-api
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
