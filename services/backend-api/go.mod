@@ -3,7 +3,7 @@ module github.com/irfndi/neuratrade
 go 1.26
 
 require (
-	github.com/alicebob/miniredis/v2 v2.35.0
+	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/cinar/indicator/v2 v2.1.22
 	github.com/getsentry/sentry-go v0.40.0
 	github.com/getsentry/sentry-go/gin v0.40.0
