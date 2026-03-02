@@ -7,12 +7,14 @@ import (
 	"os"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/api/handlers/testmocks"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +40,16 @@ func TestSetupRoutes_HealthEndpointContractRegression(t *testing.T) {
 
 	router := gin.New()
 	mockDB := setupMockDB(t)
-	mockRedis := &database.RedisClient{}
+
+	// Use miniredis for proper Redis mocking
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	mockRedis := &database.RedisClient{Client: rdb}
+	t.Cleanup(func() {
+		_ = rdb.Close()
+		mr.Close()
+	})
+
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("native")
 	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})

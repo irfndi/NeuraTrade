@@ -328,6 +328,17 @@ func (b *NotifierBuilder) WithTimeout(timeout time.Duration) *NotifierBuilder {
 }
 
 // Build returns the built notifier.
-func (b *NotifierBuilder) Build() ports.Notifier {
-	return telegramadapter.NewAdapter(b.config)
+func (b *NotifierBuilder) Build() (ports.Notifier, error) {
+	if b.config.Enabled {
+		if b.config.BaseURL == "" {
+			return nil, fmt.Errorf("NotifierBuilder: BaseURL is required when enabled")
+		}
+		if b.config.APIKey == "" {
+			return nil, fmt.Errorf("NotifierBuilder: APIKey is required when enabled")
+		}
+		if b.config.ChatID == "" {
+			return nil, fmt.Errorf("NotifierBuilder: ChatID is required when enabled")
+		}
+	}
+	return telegramadapter.NewAdapter(b.config), nil
 }
