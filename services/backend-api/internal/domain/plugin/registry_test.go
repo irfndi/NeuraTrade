@@ -62,8 +62,8 @@ func TestRegistry_ConfigReloadSafe(t *testing.T) {
 				},
 			},
 		},
-		State:   PluginStateActive,
-		Config:  map[string]interface{}{"scale_factor": 1.5},
+		State:  PluginStateActive,
+		Config: map[string]interface{}{"scale_factor": 1.5},
 	}
 	err := registry.Register(info)
 	assert.NoError(t, err)

@@ -18,9 +18,9 @@ var _ actor.Message = (*DisablePluginCommand)(nil)
 var _ actor.Message = (*ListPluginsCommand)(nil)
 var _ actor.Message = (*GetPluginCommand)(nil)
 
-func (m LoadPluginCommand) MessageType() string   { return "plugin.load" }
-func (m UnloadPluginCommand) MessageType() string { return "plugin.unload" }
-func (m EnablePluginCommand) MessageType() string { return "plugin.enable" }
+func (m LoadPluginCommand) MessageType() string    { return "plugin.load" }
+func (m UnloadPluginCommand) MessageType() string  { return "plugin.unload" }
+func (m EnablePluginCommand) MessageType() string  { return "plugin.enable" }
 func (m DisablePluginCommand) MessageType() string { return "plugin.disable" }
-func (m ListPluginsCommand) MessageType() string  { return "plugin.list" }
-func (m GetPluginCommand) MessageType() string    { return "plugin.get" }
+func (m ListPluginsCommand) MessageType() string   { return "plugin.list" }
+func (m GetPluginCommand) MessageType() string     { return "plugin.get" }
