@@ -877,6 +877,12 @@ func computeQuestRuntimeBudget() questRuntimeBudget {
 	budget.LockTTL = budget.ExecutionTimeout + questExecutionLockTail
 	return budget
 }
+
+//nolint:unused // Helper for future risk gate expansion
+func (e *QuestEngine) shouldBlockQuestEntryLocked(quest *Quest) bool {
+	return e.shouldBlockQuestEntryByRiskLockLocked(quest) || e.shouldBlockQuestEntryByStateDriftLocked(quest)
+}
+
 func (e *QuestEngine) shouldBlockQuestEntryByRiskLockLocked(quest *Quest) bool {
 	if quest == nil || !e.isRiskLockEnabledLocked() {
 		return false

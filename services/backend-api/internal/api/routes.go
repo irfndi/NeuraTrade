@@ -505,6 +505,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 					reason = fmt.Sprintf("portfolio_safety: chat %s trading_allowed=false", chatID)
 				}
 				reasons = append(reasons, reason)
+
 			}
 		}
 

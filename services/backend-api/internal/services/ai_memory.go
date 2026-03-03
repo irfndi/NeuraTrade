@@ -659,11 +659,11 @@ func (tm *TradeMemory) GetSuccessfulRecoveryPatterns(ctx context.Context, minDra
 		p.RecoveryDuration = time.Duration(durationHours * float64(time.Hour))
 		_ = json.Unmarshal([]byte(actionsJSON), &p.ActionsDuringRecovery)
 		_ = json.Unmarshal([]byte(strategiesJSON), &p.KeyStrategies)
+
 		patterns = append(patterns, p)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterate recovery patterns: %w", err)
 	}
 
 	return patterns, nil
@@ -731,8 +731,8 @@ func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string
 			lessons = append(lessons, "- "+lesson)
 		}
 	}
-
 	if err := rows.Err(); err != nil {
+		log.Printf("[AI-MEMORY] failed iterating lessons for category %s: %v", category, err)
 		return ""
 	}
 
