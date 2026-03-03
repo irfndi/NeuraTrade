@@ -21,7 +21,6 @@ type CollectorServiceWrapper struct {
 	actorRef *actor.Ref
 	timeout  time.Duration
 	cancel   context.CancelFunc
-	runDone  chan error
 	stopOnce sync.Once
 }
 
@@ -65,7 +64,6 @@ func NewCollectorServiceWrapper(
 		actorRef: ref,
 		timeout:  10 * time.Second,
 		cancel:   cancel,
-		runDone:  runDone,
 	}, nil
 }
 
@@ -194,12 +192,6 @@ func (w *CollectorServiceWrapper) Stop() {
 		}
 		if w.actorRef != nil {
 			w.actorRef.Stop()
-		}
-		if w.runDone != nil {
-			select {
-			case <-w.runDone:
-			case <-time.After(time.Second):
-			}
 		}
 	})
 }
