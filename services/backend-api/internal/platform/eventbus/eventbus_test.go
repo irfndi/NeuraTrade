@@ -2,6 +2,8 @@ package eventbus
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -235,6 +237,31 @@ func TestBusPublishSync(t *testing.T) {
 	// Sync publish should have processed immediately
 	if received.Load() != 1 {
 		t.Errorf("expected 1 event (sync), got %d", received.Load())
+	}
+}
+
+func TestBusPublishSyncReturnsHandlerError(t *testing.T) {
+	bus := New(DefaultConfig())
+	defer bus.Stop()
+	ctx := context.Background()
+
+	expectedErr := errors.New("handler failed")
+
+	_, err := bus.Subscribe(ctx, "test", func(ctx context.Context, event Event) error {
+		return expectedErr
+	})
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	err = bus.PublishSync(ctx, NewEvent("test", "test", nil))
+	if err == nil {
+		t.Fatal("expected PublishSync to return an error")
+	}
+	if !strings.Contains(err.Error(), expectedErr.Error()) {
+		t.Fatalf("expected error to contain %q, got: %v", expectedErr.Error(), err)
 	}
 }
 

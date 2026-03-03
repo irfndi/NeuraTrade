@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -245,9 +246,13 @@ func (b *Bus) processSubscriber(sub *subscriber) {
 			if !ok {
 				return
 			}
-			// Call handler and optionally report errors
-			if err := sub.handler(sub.ctx, event); err != nil && b.config.ErrorHandler != nil {
-				b.config.ErrorHandler(sub.ctx, event, err)
+			// Call handler and report failures for observability.
+			if err := sub.handler(sub.ctx, event); err != nil {
+				if b.config.ErrorHandler != nil {
+					b.config.ErrorHandler(sub.ctx, event, err)
+				} else {
+					log.Printf("eventbus async handler error (topic=%s subscriber=%s type=%s): %v", sub.topic, sub.id, event.Type, err)
+				}
 			}
 		}
 	}
@@ -273,10 +278,11 @@ func (b *Bus) Publish(ctx context.Context, event Event) error {
 				case sub.buffer <- event:
 					// Event sent
 				default:
-					// Buffer full - drop event (backpressure)
-					// Notify via callback if configured
+					// Buffer full - drop event (backpressure).
 					if b.config.OnEventDropped != nil {
 						b.config.OnEventDropped(event)
+					} else {
+						log.Printf("eventbus dropped event (topic=%s type=%s source=%s): subscriber buffer full", event.Topic, event.Type, event.Source)
 					}
 				}
 			}
@@ -296,14 +302,25 @@ func (b *Bus) PublishSync(ctx context.Context, event Event) error {
 	defer b.mu.RUnlock()
 
 	topics := b.matchingTopics(event.Topic)
+	var handlerErrs []error
 
 	for _, topic := range topics {
 		if topicSubs, ok := b.subs[topic]; ok {
 			for _, sub := range topicSubs {
-				_ = sub.handler(ctx, event) // Handler errors ignored
+				if err := sub.handler(ctx, event); err != nil {
+					handlerErrs = append(handlerErrs, fmt.Errorf("topic %s subscriber %s: %w", topic, sub.id, err))
+					if b.config.ErrorHandler != nil {
+						b.config.ErrorHandler(ctx, event, err)
+					} else {
+						log.Printf("eventbus sync handler error (topic=%s subscriber=%s type=%s): %v", topic, sub.id, event.Type, err)
+					}
+				}
 			}
 		}
+	}
 
+	if len(handlerErrs) > 0 {
+		return errors.Join(handlerErrs...)
 	}
 
 	return nil

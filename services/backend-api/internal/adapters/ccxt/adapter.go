@@ -5,6 +5,7 @@ package ccxt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -167,7 +168,7 @@ func (a *Adapter) CancelAllOrders(ctx context.Context, exchange, symbol string) 
 	var errs []error
 	for _, order := range resp.Orders {
 		if err := a.service.CancelOrder(ctx, exchange, order.ID, symbol); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("cancel order %s on %s:%s: %w", order.ID, exchange, symbol, err))
 		}
 	}
 
