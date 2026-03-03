@@ -21,16 +21,12 @@ func NewLoader(manifestDirs ...string) *Loader {
 func (l *Loader) LoadAll() ([]PluginManifest, error) {
 	var manifests []PluginManifest
 	for _, dir := range l.manifestDirs {
-		files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
+		files, err := l.globManifestFiles(dir)
 		if err != nil {
-			return nil, fmt.Errorf("failed to glob manifests in %s: %w", dir, err)
+			return nil, err
 		}
-		ymlFiles, _ := filepath.Glob(filepath.Join(dir, "*.yml"))
-		files = append(files, ymlFiles...)
-		jsonFiles, _ := filepath.Glob(filepath.Join(dir, "*.json"))
-		files = append(files, jsonFiles...)
 		for _, file := range files {
-			manifest, err := l.loadFile(file)
+			manifest, err := l.LoadManifest(file)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load %s: %w", file, err)
 			}
@@ -40,7 +36,7 @@ func (l *Loader) LoadAll() ([]PluginManifest, error) {
 	return manifests, nil
 }
 
-func (l *Loader) loadFile(path string) (PluginManifest, error) {
+func (l *Loader) LoadManifest(path string) (PluginManifest, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return PluginManifest{}, fmt.Errorf("failed to read file: %w", err)
@@ -67,4 +63,17 @@ func (l *Loader) loadFile(path string) (PluginManifest, error) {
 		manifest.UpdatedAt = now
 	}
 	return manifest, nil
+}
+
+func (l *Loader) globManifestFiles(dir string) ([]string, error) {
+	patterns := []string{"*.yaml", "*.yml", "*.json"}
+	files := make([]string, 0)
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return nil, fmt.Errorf("failed to glob %s in %s: %w", pattern, dir, err)
+		}
+		files = append(files, matches...)
+	}
+	return files, nil
 }

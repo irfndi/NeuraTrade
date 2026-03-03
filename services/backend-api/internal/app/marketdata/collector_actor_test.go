@@ -110,6 +110,20 @@ func TestCollectorActor_Receive_StartStopExchange(t *testing.T) {
 	}
 	err := a.Receive(ctx, actor.Envelope{Message: startCmd})
 	assert.NoError(t, err)
+	a.mu.RLock()
+	state, exists := a.exchangeStates["binance"]
+	a.mu.RUnlock()
+	assert.True(t, exists)
+	assert.NotNil(t, state)
+	if state == nil {
+		return
+	}
+
+	state.mu.RLock()
+	assert.True(t, state.Enabled)
+	originalTimerStop := state.TimerStop
+	state.mu.RUnlock()
+	assert.NotNil(t, originalTimerStop)
 
 	// Stop exchange
 	stopCmd := marketdata.StopExchangeCommand{
@@ -117,6 +131,21 @@ func TestCollectorActor_Receive_StartStopExchange(t *testing.T) {
 	}
 	err = a.Receive(ctx, actor.Envelope{Message: stopCmd})
 	assert.NoError(t, err)
+	state.mu.RLock()
+	assert.False(t, state.Enabled)
+	state.mu.RUnlock()
+
+	// Stop again should be idempotent and must not panic.
+	err = a.Receive(ctx, actor.Envelope{Message: stopCmd})
+	assert.NoError(t, err)
+
+	// Start again should recreate loop channels for a clean restart.
+	err = a.Receive(ctx, actor.Envelope{Message: startCmd})
+	assert.NoError(t, err)
+	state.mu.RLock()
+	assert.True(t, state.Enabled)
+	assert.NotEqual(t, originalTimerStop, state.TimerStop)
+	state.mu.RUnlock()
 }
 
 func TestCollectorActor_Receive_PauseResumeExchange(t *testing.T) {
@@ -133,6 +162,17 @@ func TestCollectorActor_Receive_PauseResumeExchange(t *testing.T) {
 	}
 	err := a.Receive(ctx, actor.Envelope{Message: startCmd})
 	assert.NoError(t, err)
+	a.mu.RLock()
+	state := a.exchangeStates["binance"]
+	a.mu.RUnlock()
+	assert.NotNil(t, state)
+	if state == nil {
+		return
+	}
+
+	state.mu.RLock()
+	originalTimerStop := state.TimerStop
+	state.mu.RUnlock()
 
 	// Pause exchange
 	pauseCmd := marketdata.PauseExchangeCommand{
@@ -140,6 +180,9 @@ func TestCollectorActor_Receive_PauseResumeExchange(t *testing.T) {
 	}
 	err = a.Receive(ctx, actor.Envelope{Message: pauseCmd})
 	assert.NoError(t, err)
+	state.mu.RLock()
+	assert.True(t, state.Paused)
+	state.mu.RUnlock()
 
 	// Resume exchange
 	resumeCmd := marketdata.ResumeExchangeCommand{
@@ -147,4 +190,8 @@ func TestCollectorActor_Receive_PauseResumeExchange(t *testing.T) {
 	}
 	err = a.Receive(ctx, actor.Envelope{Message: resumeCmd})
 	assert.NoError(t, err)
+	state.mu.RLock()
+	assert.False(t, state.Paused)
+	assert.Equal(t, originalTimerStop, state.TimerStop)
+	state.mu.RUnlock()
 }

@@ -80,3 +80,40 @@ func TestRegistry_ConfigReloadSafe(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1.5, pluginInfo.Config["scale_factor"])
 }
+
+func TestRegistry_Get_ReturnsCopy(t *testing.T) {
+	registry := NewRegistry()
+
+	info := PluginInfo{
+		Manifest: PluginManifest{
+			ID:      "copy-plugin",
+			Name:    "Copy Plugin",
+			Version: "1.0.0",
+			Type:    "strategy",
+			ConfigSchema: map[string]interface{}{
+				"nested": map[string]interface{}{
+					"enabled": true,
+				},
+			},
+			Dependencies: []string{"dep-a"},
+		},
+		State:  PluginStateInactive,
+		Config: map[string]interface{}{"threshold": 0.5},
+	}
+	err := registry.Register(info)
+	assert.NoError(t, err)
+
+	got, err := registry.Get("copy-plugin")
+	assert.NoError(t, err)
+	got.State = PluginStateActive
+	got.Config["threshold"] = 0.9
+	got.Manifest.ConfigSchema["nested"] = map[string]interface{}{"enabled": false}
+	got.Manifest.Dependencies[0] = "dep-b"
+
+	stored, err := registry.Get("copy-plugin")
+	assert.NoError(t, err)
+	assert.Equal(t, PluginStateInactive, stored.State)
+	assert.Equal(t, 0.5, stored.Config["threshold"])
+	assert.Equal(t, map[string]interface{}{"enabled": true}, stored.Manifest.ConfigSchema["nested"])
+	assert.Equal(t, []string{"dep-a"}, stored.Manifest.Dependencies)
+}

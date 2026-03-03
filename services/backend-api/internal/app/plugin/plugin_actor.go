@@ -3,7 +3,6 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,7 +20,6 @@ type PluginActor struct {
 	registry *plugin.Registry
 	loader   *plugin.Loader
 	eventBus *eventbus.Bus
-	mu       sync.RWMutex
 }
 
 func NewPluginActor(registry *plugin.Registry, loader *plugin.Loader, eventBus *eventbus.Bus) *PluginActor {
@@ -61,10 +59,25 @@ func (a *PluginActor) Receive(ctx context.Context, env actor.Envelope) error {
 }
 
 func (a *PluginActor) handleLoadPlugin(ctx context.Context, traceID string, msg plugin.LoadPluginCommand) error {
-	manifests, err := a.loader.LoadAll()
-	if err != nil {
-		return fmt.Errorf("failed to load plugins: %w", err)
+	if a.loader == nil {
+		return fmt.Errorf("plugin loader is nil")
 	}
+
+	var manifests []plugin.PluginManifest
+	if msg.ManifestPath != "" {
+		manifest, err := a.loader.LoadManifest(msg.ManifestPath)
+		if err != nil {
+			return fmt.Errorf("failed to load plugin manifest %s: %w", msg.ManifestPath, err)
+		}
+		manifests = []plugin.PluginManifest{manifest}
+	} else {
+		all, err := a.loader.LoadAll()
+		if err != nil {
+			return fmt.Errorf("failed to load plugins: %w", err)
+		}
+		manifests = all
+	}
+
 	for _, manifest := range manifests {
 		info := plugin.PluginInfo{
 			Manifest: manifest,
@@ -76,7 +89,9 @@ func (a *PluginActor) handleLoadPlugin(ctx context.Context, traceID string, msg 
 			continue
 		}
 		if manifest.Enabled {
-			a.registry.Enable(manifest.ID)
+			if err := a.registry.Enable(manifest.ID); err != nil {
+				a.logger.Warnf("Failed to enable plugin %s: %v", manifest.ID, err)
+			}
 		}
 	}
 	a.logger.Infof("Loaded %d plugins", len(manifests))
@@ -109,7 +124,7 @@ func (a *PluginActor) handleGetPlugin(ctx context.Context, traceID string, msg p
 		return err
 	}
 	if env.Reply != nil {
-		env.Reply <- plugin.GetPluginResponse{Plugin: *info}
+		env.Reply <- plugin.GetPluginResponse{Plugin: info}
 	}
 	return nil
 }

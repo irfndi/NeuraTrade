@@ -22,7 +22,8 @@ func (r *Registry) Register(info PluginInfo) error {
 	if _, exists := r.plugins[info.Manifest.ID]; exists {
 		return fmt.Errorf("plugin %s already registered", info.Manifest.ID)
 	}
-	r.plugins[info.Manifest.ID] = &info
+	cloned := clonePluginInfo(info)
+	r.plugins[info.Manifest.ID] = &cloned
 	return nil
 }
 
@@ -36,14 +37,14 @@ func (r *Registry) Unregister(pluginID string) error {
 	return nil
 }
 
-func (r *Registry) Get(pluginID string) (*PluginInfo, error) {
+func (r *Registry) Get(pluginID string) (PluginInfo, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	info, exists := r.plugins[pluginID]
 	if !exists {
-		return nil, fmt.Errorf("plugin %s not found", pluginID)
+		return PluginInfo{}, fmt.Errorf("plugin %s not found", pluginID)
 	}
-	return info, nil
+	return clonePluginInfo(*info), nil
 }
 
 func (r *Registry) List() []PluginInfo {
@@ -51,7 +52,7 @@ func (r *Registry) List() []PluginInfo {
 	defer r.mu.RUnlock()
 	result := make([]PluginInfo, 0, len(r.plugins))
 	for _, info := range r.plugins {
-		result = append(result, *info)
+		result = append(result, clonePluginInfo(*info))
 	}
 	return result
 }
@@ -86,4 +87,49 @@ func (r *Registry) IsEnabled(pluginID string) bool {
 		return false
 	}
 	return info.State == PluginStateActive
+}
+
+func clonePluginInfo(in PluginInfo) PluginInfo {
+	out := in
+	out.Manifest = clonePluginManifest(in.Manifest)
+	if in.Config != nil {
+		out.Config = cloneMapStringAny(in.Config)
+	}
+	return out
+}
+
+func clonePluginManifest(in PluginManifest) PluginManifest {
+	out := in
+	if in.ConfigSchema != nil {
+		out.ConfigSchema = cloneMapStringAny(in.ConfigSchema)
+	}
+	if in.Dependencies != nil {
+		out.Dependencies = append([]string(nil), in.Dependencies...)
+	}
+	return out
+}
+
+func cloneMapStringAny(in map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = cloneAny(v)
+	}
+	return out
+}
+
+func cloneAny(v interface{}) interface{} {
+	switch typed := v.(type) {
+	case map[string]interface{}:
+		return cloneMapStringAny(typed)
+	case []interface{}:
+		out := make([]interface{}, len(typed))
+		for i := range typed {
+			out[i] = cloneAny(typed[i])
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return typed
+	}
 }
