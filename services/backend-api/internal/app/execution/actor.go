@@ -293,10 +293,16 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 		intent.Status = ports.OrderStatusRejected
 		intent.RejectReason = err.Error()
 		intent.UpdatedAt = time.Now()
-		a.idempotencyStore.UpdateIntent(ctx, intent)
+		updateErr := a.idempotencyStore.UpdateIntent(ctx, intent)
 
 		a.logAuditEvent(ctx, msg.IntentID, "rejected", req.Exchange, req.Symbol, err.Error(), nil)
 		a.publishEvent(ctx, ports.EventTypeOrderRejected, intent)
+		if updateErr != nil {
+			return errors.Join(
+				fmt.Errorf("%w: %v", ErrExecutionRejected, err),
+				fmt.Errorf("persist rejected intent: %w", updateErr),
+			)
+		}
 		return fmt.Errorf("%w: %v", ErrExecutionRejected, err)
 	}
 

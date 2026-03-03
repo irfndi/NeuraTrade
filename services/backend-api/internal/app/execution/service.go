@@ -137,12 +137,7 @@ func (s *ExecutionService) CancelOrder(ctx context.Context, req CancelOrderReque
 		return ErrActorStopped
 	}
 
-	msg := CancelOrderMsg{
-		IntentID: req.IntentID,
-		OrderID:  req.OrderID,
-		Exchange: req.Exchange,
-		Reason:   req.Reason,
-	}
+	msg := CancelOrderMsg(req)
 
 	if err := s.actorRef.Send(ctx, msg); err != nil {
 		return fmt.Errorf("failed to send cancel order message: %w", err)

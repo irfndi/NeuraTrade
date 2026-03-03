@@ -346,7 +346,9 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var events []OrderAuditEvent
 	for rows.Next() {
@@ -380,7 +382,11 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 		event.Price = parseDecimal(priceStr)
 		event.FilledAmount = parseDecimal(filledStr)
 		event.FillPrice = parseDecimal(fillPriceStr)
-		json.Unmarshal([]byte(metadataStr), &event.Metadata)
+		if metadataStr != "" {
+			if err := json.Unmarshal([]byte(metadataStr), &event.Metadata); err != nil {
+				return nil, fmt.Errorf("unmarshal metadata for event %s: %w", event.EventID, err)
+			}
+		}
 
 		events = append(events, event)
 	}
