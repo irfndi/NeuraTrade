@@ -440,7 +440,18 @@ func TestGetAdminAPIKeyFromConfig(t *testing.T) {
 	t.Run("falls back to home directory when NEURATRADE_HOME unset", func(t *testing.T) {
 		// This test verifies the fallback path doesn't panic
 		// We can't easily mock os.UserHomeDir, so just verify it returns a string
-		t.Setenv("NEURATRADE_HOME", "")
+		prev, had := os.LookupEnv("NEURATRADE_HOME")
+		if err := os.Unsetenv("NEURATRADE_HOME"); err != nil {
+			t.Fatalf("failed to unset NEURATRADE_HOME: %v", err)
+		}
+		t.Cleanup(func() {
+			if had {
+				_ = os.Setenv("NEURATRADE_HOME", prev)
+				return
+			}
+			_ = os.Unsetenv("NEURATRADE_HOME")
+		})
+
 		key := getAdminAPIKeyFromConfig()
 		// Either empty or a key from the user's actual config file is fine
 		assert.NotPanics(t, func() {

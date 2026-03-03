@@ -17,6 +17,14 @@ type SignalProposedEvent struct {
 
 // NewSignalProposedEvent builds a port-compatible event from a domain signal.
 func NewSignalProposedEvent(signal ProposedSignal) SignalProposedEvent {
+	var metadataCopy map[string]string
+	if signal.Metadata != nil {
+		metadataCopy = make(map[string]string, len(signal.Metadata))
+		for key, value := range signal.Metadata {
+			metadataCopy[key] = value
+		}
+	}
+
 	return SignalProposedEvent{
 		BaseEvent: ports.BaseEvent{
 			Type:       ports.EventTypeSignalProposed,
@@ -27,6 +35,6 @@ func NewSignalProposedEvent(signal ProposedSignal) SignalProposedEvent {
 		Symbol:     signal.Symbol,
 		Side:       signal.Side,
 		Confidence: signal.Confidence,
-		Metadata:   signal.Metadata,
+		Metadata:   metadataCopy,
 	}
 }

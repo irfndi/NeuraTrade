@@ -662,6 +662,9 @@ func (tm *TradeMemory) GetSuccessfulRecoveryPatterns(ctx context.Context, minDra
 
 		patterns = append(patterns, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recovery patterns: %w", err)
+	}
 
 	return patterns, nil
 }
@@ -727,6 +730,10 @@ func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string
 		if err := rows.Scan(&lesson); err == nil {
 			lessons = append(lessons, "- "+lesson)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("[AI-MEMORY] failed iterating lessons for category %s: %v", category, err)
+		return ""
 	}
 
 	return strings.Join(lessons, "\n")

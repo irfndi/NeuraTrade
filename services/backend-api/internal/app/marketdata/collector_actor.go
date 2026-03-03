@@ -17,6 +17,7 @@ import (
 )
 
 const CollectorActorID = "marketdata-collector"
+const minimumInterval = time.Second
 
 type CollectorActor struct {
 	logger          *zaplogrus.Logger
@@ -40,22 +41,40 @@ type ExchangeState struct {
 
 type Config struct {
 	DefaultInterval time.Duration
+	LogLevel        string
 }
 
 func DefaultConfig() Config {
-	return Config{DefaultInterval: 5 * time.Minute}
+	return Config{
+		DefaultInterval: 5 * time.Minute,
+		LogLevel:        "info",
+	}
 }
 
 func NewCollectorActor(db database.DBPool, exchange ports.ExchangeRegistry, eventBus *eventbus.Bus, config Config) *CollectorActor {
+	defaultInterval := config.DefaultInterval
+	if defaultInterval <= 0 {
+		defaultInterval = DefaultConfig().DefaultInterval
+	}
+	if defaultInterval < minimumInterval {
+		defaultInterval = minimumInterval
+	}
+
+	logLevel := config.LogLevel
+	if logLevel == "" {
+		logLevel = DefaultConfig().LogLevel
+	}
+
 	logger := zaplogrus.New()
-	logger.SetLevel(logging.ParseLogrusLevel("info"))
+	logger.SetLevel(logging.ParseLogrusLevel(logLevel))
+
 	return &CollectorActor{
 		logger:          logger,
 		db:              db,
 		exchange:        exchange,
 		eventBus:        eventBus,
 		exchangeStates:  make(map[string]*ExchangeState),
-		defaultInterval: config.DefaultInterval,
+		defaultInterval: defaultInterval,
 	}
 }
 
@@ -75,6 +94,12 @@ func (a *CollectorActor) Receive(ctx context.Context, env actor.Envelope) error 
 		return a.handlePauseExchange(ctx, traceID, msg)
 	case marketdata.ResumeExchangeCommand:
 		return a.handleResumeExchange(ctx, traceID, msg)
+	case marketdata.UpdateSymbolsCommand:
+		return a.handleUpdateSymbols(ctx, traceID, msg)
+	case marketdata.SetIntervalCommand:
+		return a.handleSetInterval(ctx, traceID, msg)
+	case marketdata.FetchNowCommand:
+		return a.handleFetchNow(ctx, traceID, msg)
 	case marketdata.HealthCheckCommand:
 		return a.handleHealthCheck(ctx, traceID, msg, env)
 	case marketdata.GetStatsCommand:
@@ -86,25 +111,36 @@ func (a *CollectorActor) Receive(ctx context.Context, env actor.Envelope) error 
 
 func (a *CollectorActor) handleStartExchange(ctx context.Context, traceID string, msg marketdata.StartExchangeCommand) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if _, exists := a.exchangeStates[msg.ExchangeID]; exists {
+		a.mu.Unlock()
 		return nil
 	}
+
+	interval := msg.Interval
+	if interval <= 0 {
+		interval = a.defaultInterval
+	}
+	if interval < minimumInterval {
+		interval = minimumInterval
+	}
+
 	state := &ExchangeState{
 		ExchangeID: msg.ExchangeID,
 		Enabled:    true,
 		Symbols:    msg.Symbols,
-		Interval:   msg.Interval,
+		Interval:   interval,
 		TimerStop:  make(chan struct{}),
 	}
-	if state.Interval == 0 {
-		state.Interval = a.defaultInterval
-	}
 	a.exchangeStates[msg.ExchangeID] = state
+	a.mu.Unlock()
+
 	go a.runCollectionLoop(ctx, state)
-	a.publishEvent(ctx, "collector.status", "started", marketdata.CollectorStatusEvent{
+	if err := a.publishEvent(ctx, "collector.status", "started", marketdata.CollectorStatusEvent{
 		TraceID: traceID, ExchangeID: msg.ExchangeID, Status: "started", Timestamp: time.Now(),
-	})
+	}); err != nil {
+		a.logger.WithError(err).Warn("failed to publish start event")
+	}
+
 	return nil
 }
 
@@ -115,13 +151,29 @@ func (a *CollectorActor) handleStopExchange(ctx context.Context, traceID string,
 	if !exists {
 		return fmt.Errorf("exchange %s not found", msg.ExchangeID)
 	}
+
 	state.mu.Lock()
-	close(state.TimerStop)
+	if !state.Enabled {
+		state.mu.Unlock()
+		return nil
+	}
+	if state.TimerStop != nil {
+		select {
+		case <-state.TimerStop:
+		default:
+			close(state.TimerStop)
+		}
+	}
 	state.Enabled = false
+	state.Paused = false
 	state.mu.Unlock()
-	a.publishEvent(ctx, "collector.status", "stopped", marketdata.CollectorStatusEvent{
+
+	if err := a.publishEvent(ctx, "collector.status", "stopped", marketdata.CollectorStatusEvent{
 		TraceID: traceID, ExchangeID: msg.ExchangeID, Status: "stopped", Timestamp: time.Now(),
-	})
+	}); err != nil {
+		a.logger.WithError(err).Warn("failed to publish stop event")
+	}
+
 	return nil
 }
 
@@ -132,12 +184,17 @@ func (a *CollectorActor) handlePauseExchange(ctx context.Context, traceID string
 	if !exists {
 		return fmt.Errorf("exchange %s not found", msg.ExchangeID)
 	}
+
 	state.mu.Lock()
 	state.Paused = true
 	state.mu.Unlock()
-	a.publishEvent(ctx, "collector.status", "paused", marketdata.CollectorStatusEvent{
+
+	if err := a.publishEvent(ctx, "collector.status", "paused", marketdata.CollectorStatusEvent{
 		TraceID: traceID, ExchangeID: msg.ExchangeID, Status: "paused", Timestamp: time.Now(),
-	})
+	}); err != nil {
+		a.logger.WithError(err).Warn("failed to publish pause event")
+	}
+
 	return nil
 }
 
@@ -148,13 +205,109 @@ func (a *CollectorActor) handleResumeExchange(ctx context.Context, traceID strin
 	if !exists {
 		return fmt.Errorf("exchange %s not found", msg.ExchangeID)
 	}
+
 	state.mu.Lock()
+	if !state.Enabled {
+		state.mu.Unlock()
+		return fmt.Errorf("exchange %s is stopped, cannot resume", msg.ExchangeID)
+	}
 	state.Paused = false
 	state.mu.Unlock()
-	go a.runCollectionLoop(ctx, state)
-	a.publishEvent(ctx, "collector.status", "resumed", marketdata.CollectorStatusEvent{
+
+	if err := a.publishEvent(ctx, "collector.status", "resumed", marketdata.CollectorStatusEvent{
 		TraceID: traceID, ExchangeID: msg.ExchangeID, Status: "resumed", Timestamp: time.Now(),
-	})
+	}); err != nil {
+		a.logger.WithError(err).Warn("failed to publish resume event")
+	}
+
+	return nil
+}
+
+func (a *CollectorActor) handleUpdateSymbols(ctx context.Context, traceID string, msg marketdata.UpdateSymbolsCommand) error {
+	a.mu.RLock()
+	state, exists := a.exchangeStates[msg.ExchangeID]
+	a.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("exchange %s not found", msg.ExchangeID)
+	}
+
+	state.mu.Lock()
+	state.Symbols = msg.Symbols
+	state.mu.Unlock()
+
+	if err := a.publishEvent(ctx, "collector.symbols_updated", "symbols_updated", marketdata.SymbolsUpdatedEvent{
+		TraceID:      traceID,
+		ExchangeID:   msg.ExchangeID,
+		AddedSymbols: msg.Symbols,
+		TotalSymbols: len(msg.Symbols),
+		Timestamp:    time.Now(),
+	}); err != nil {
+		a.logger.WithError(err).Warn("failed to publish symbols update event")
+	}
+
+	return nil
+}
+
+func (a *CollectorActor) handleSetInterval(ctx context.Context, traceID string, msg marketdata.SetIntervalCommand) error {
+	a.mu.RLock()
+	state, exists := a.exchangeStates[msg.ExchangeID]
+	a.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("exchange %s not found", msg.ExchangeID)
+	}
+
+	interval := msg.Interval
+	if interval <= 0 {
+		interval = a.defaultInterval
+	}
+	if interval < minimumInterval {
+		interval = minimumInterval
+	}
+
+	state.mu.Lock()
+	state.Interval = interval
+	state.mu.Unlock()
+
+	if err := a.publishEvent(ctx, "collector.interval_updated", "interval_updated", marketdata.CollectorStatusEvent{
+		TraceID: traceID, ExchangeID: msg.ExchangeID, Status: "interval_updated", Timestamp: time.Now(),
+	}); err != nil {
+		a.logger.WithError(err).Warn("failed to publish interval update event")
+	}
+
+	return nil
+}
+
+func (a *CollectorActor) handleFetchNow(ctx context.Context, traceID string, msg marketdata.FetchNowCommand) error {
+	a.mu.RLock()
+	state, exists := a.exchangeStates[msg.ExchangeID]
+	a.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("exchange %s not found", msg.ExchangeID)
+	}
+
+	state.mu.RLock()
+	enabled := state.Enabled
+	stateSymbols := append([]string(nil), state.Symbols...)
+	state.mu.RUnlock()
+	if !enabled {
+		return fmt.Errorf("exchange %s is stopped", msg.ExchangeID)
+	}
+
+	symbols := msg.Symbols
+	if len(symbols) == 0 {
+		symbols = stateSymbols
+	}
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	a.collectFromExchange(ctx, msg.ExchangeID, symbols)
+	if err := a.publishEvent(ctx, "collector.fetch_now", "fetch_now", marketdata.CollectorStatusEvent{
+		TraceID: traceID, ExchangeID: msg.ExchangeID, Status: "fetch_now", Timestamp: time.Now(),
+	}); err != nil {
+		a.logger.WithError(err).Warn("failed to publish fetch-now event")
+	}
+
 	return nil
 }
 
@@ -205,8 +358,19 @@ func (a *CollectorActor) handleGetStats(ctx context.Context, traceID string, msg
 }
 
 func (a *CollectorActor) runCollectionLoop(ctx context.Context, state *ExchangeState) {
-	ticker := time.NewTicker(state.Interval)
+	state.mu.RLock()
+	interval := state.Interval
+	state.mu.RUnlock()
+	if interval <= 0 {
+		interval = a.defaultInterval
+	}
+	if interval < minimumInterval {
+		interval = minimumInterval
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -232,12 +396,16 @@ func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID str
 	if err != nil || gw == nil {
 		return
 	}
+	if a.eventBus == nil {
+		return
+	}
+
 	for _, symbol := range symbols {
 		tick, err := gw.FetchTick(ctx, exchangeID, symbol)
 		if err != nil {
 			continue
 		}
-		_ = a.eventBus.PublishSync(ctx, eventbus.Event{
+		if err := a.eventBus.PublishSync(ctx, eventbus.Event{
 			Topic: "market.tick",
 			Type:  "tick",
 			Payload: marketdata.MarketTickEvent{
@@ -252,16 +420,26 @@ func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID str
 			},
 			Source:    CollectorActorID,
 			Timestamp: time.Now(),
-		})
+		}); err != nil {
+			a.logger.WithError(err).Warnf("failed to publish market tick for %s:%s", exchangeID, symbol)
+		}
 	}
 }
 
-func (a *CollectorActor) publishEvent(ctx context.Context, topic, eventType string, payload interface{}) {
-	_ = a.eventBus.PublishSync(ctx, eventbus.Event{
+func (a *CollectorActor) publishEvent(ctx context.Context, topic, eventType string, payload interface{}) error {
+	if a.eventBus == nil {
+		return fmt.Errorf("publish %s: event bus is nil", eventType)
+	}
+
+	if err := a.eventBus.PublishSync(ctx, eventbus.Event{
 		Topic:     topic,
 		Type:      eventType,
 		Payload:   payload,
 		Source:    CollectorActorID,
 		Timestamp: time.Now(),
-	})
+	}); err != nil {
+		return fmt.Errorf("publish %s: %w", eventType, err)
+	}
+
+	return nil
 }

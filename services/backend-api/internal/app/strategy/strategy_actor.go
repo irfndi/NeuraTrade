@@ -122,7 +122,7 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 
 	window := append(s.windows[tick.Symbol], snapshot)
 	if len(window) > s.windowSize {
-		window = window[len(window)-s.windowSize:]
+		window = append(make([]signals.Tick, 0, s.windowSize), window[len(window)-s.windowSize:]...)
 	}
 	s.windows[tick.Symbol] = window
 
@@ -147,7 +147,10 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 		"side", payload.Side,
 		"confidence", payload.Confidence.String())
 
-	return s.eventBus.PublishSync(ctx, event)
+	if err := s.eventBus.PublishSync(ctx, event); err != nil {
+		return fmt.Errorf("publish SignalProposed event: %w", err)
+	}
+	return nil
 }
 
 // SubscribeMarketTicks forwards market.tick events from event bus into the strategy actor mailbox.
@@ -165,13 +168,21 @@ func SubscribeMarketTicks(ctx context.Context, bus *eventbus.Bus, ref *actor.Ref
 			return nil
 		}
 
-		return ref.SendEnvelope(ctx, actor.Envelope{
+		env := actor.Envelope{
 			Message: &IngestMarketTickMessage{Tick: tick},
 			TraceID: event.TraceID,
-		})
+		}
+		if err := ref.SendEnvelope(ctx, env); err != nil {
+			return fmt.Errorf("send envelope for market tick trace=%s: %w", event.TraceID, err)
+		}
+		return nil
 	}
 
-	return bus.Subscribe(ctx, ports.EventTypeMarketTick, handler)
+	sub, err := bus.Subscribe(ctx, ports.EventTypeMarketTick, handler)
+	if err != nil {
+		return nil, fmt.Errorf("subscribe to %s: %w", ports.EventTypeMarketTick, err)
+	}
+	return sub, nil
 }
 
 func payloadToMarketTick(payload any) (marketdata.MarketTickEvent, bool) {

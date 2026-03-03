@@ -9,7 +9,6 @@ import (
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
 	"github.com/irfndi/neuratrade/internal/app/marketdata"
 	ccxtservice "github.com/irfndi/neuratrade/internal/ccxt"
-	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/platform/retry"
@@ -68,9 +67,8 @@ type Builder struct {
 	notifier     ports.Notifier
 	policy       ports.PolicyEngine
 	killSwitch   ports.KillSwitch
-	db           database.DBPool   //lint:ignore U1000 Used via WithDatabase builder
-	collectorCfg marketdata.Config //lint:ignore U1000 Used via WithCollectorConfig builder
-
+	collector    *marketdata.CollectorActor
+	collectorRef *actor.Ref
 }
 
 // NewBuilder creates a new Builder.
@@ -116,20 +114,29 @@ func (b *Builder) WithKillSwitch(ks ports.KillSwitch) *Builder {
 	return b
 }
 
+// WithCollector sets the collector actor and its reference.
+func (b *Builder) WithCollector(collector *marketdata.CollectorActor, ref *actor.Ref) *Builder {
+	b.collector = collector
+	b.collectorRef = ref
+	return b
+}
+
 // Build builds the Application.
 func (b *Builder) Build() *Application {
 	app := &Application{
-		Config:      b.config,
-		Supervisor:  supervisor.New(),
-		ActorSystem: actor.NewSystem(b.config.Actor),
-		EventBus:    eventbus.New(b.config.EventBus),
-		Timeout:     &b.config.Timeout,
-		Retry:       retry.NewPolicy(b.config.Retry),
-		Exchange:    b.exchanges,
-		State:       b.state,
-		Notifier:    b.notifier,
-		Policy:      b.policy,
-		KillSwitch:  b.killSwitch,
+		Config:            b.config,
+		Supervisor:        supervisor.New(),
+		ActorSystem:       actor.NewSystem(b.config.Actor),
+		EventBus:          eventbus.New(b.config.EventBus),
+		Timeout:           &b.config.Timeout,
+		Retry:             retry.NewPolicy(b.config.Retry),
+		Exchange:          b.exchanges,
+		State:             b.state,
+		Notifier:          b.notifier,
+		Policy:            b.policy,
+		KillSwitch:        b.killSwitch,
+		CollectorActor:    b.collector,
+		CollectorActorRef: b.collectorRef,
 	}
 
 	return app

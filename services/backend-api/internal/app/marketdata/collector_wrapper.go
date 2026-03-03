@@ -18,6 +18,7 @@ import (
 // CollectorServiceWrapper provides backward-compatible API for existing CollectorService callers.
 // It delegates all operations to the underlying CollectorActor.
 type CollectorServiceWrapper struct {
+	sys      *actor.System
 	actorRef *actor.Ref
 	timeout  time.Duration
 	cancel   context.CancelFunc
@@ -61,6 +62,7 @@ func NewCollectorServiceWrapper(
 	}
 
 	return &CollectorServiceWrapper{
+		sys:      sys,
 		actorRef: ref,
 		timeout:  10 * time.Second,
 		cancel:   cancel,
@@ -138,10 +140,13 @@ func (w *CollectorServiceWrapper) IsExchangeHealthy(ctx context.Context, exchang
 
 	select {
 	case resp := <-reply:
+		if err, ok := resp.(error); ok {
+			return false, fmt.Errorf("actor error: %w", err)
+		}
 		if healthResp, ok := resp.(md.HealthCheckResponse); ok {
 			return healthResp.Healthy, nil
 		}
-		return false, fmt.Errorf("unexpected response type")
+		return false, fmt.Errorf("unexpected response type: %T", resp)
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
@@ -168,6 +173,9 @@ func (w *CollectorServiceWrapper) GetExchangeStats(ctx context.Context, exchange
 
 	select {
 	case resp := <-reply:
+		if err, ok := resp.(error); ok {
+			return nil, fmt.Errorf("actor error: %w", err)
+		}
 		if statsResp, ok := resp.(md.GetStatsResponse); ok {
 			return map[string]interface{}{
 				"exchange_id":      statsResp.ExchangeID,
@@ -178,7 +186,7 @@ func (w *CollectorServiceWrapper) GetExchangeStats(ctx context.Context, exchange
 				"avg_latency_ms":   statsResp.AvgLatencyMs,
 			}, nil
 		}
-		return nil, fmt.Errorf("unexpected response type")
+		return nil, fmt.Errorf("unexpected response type: %T", resp)
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -189,6 +197,10 @@ func (w *CollectorServiceWrapper) Stop() {
 	w.stopOnce.Do(func() {
 		if w.cancel != nil {
 			w.cancel()
+		}
+		if w.sys != nil {
+			w.sys.StopAll()
+			return
 		}
 		if w.actorRef != nil {
 			w.actorRef.Stop()

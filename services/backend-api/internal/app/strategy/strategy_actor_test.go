@@ -3,7 +3,6 @@ package strategy
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStrategyActor_EmitsSignalProposed(t *testing.T) {
@@ -218,8 +218,14 @@ func TestStrategyActor_DeterministicReplay(t *testing.T) {
 	if len(runA) == 0 {
 		t.Fatal("expected replay output to contain signals")
 	}
-	if !reflect.DeepEqual(runA, runB) {
-		t.Fatalf("expected deterministic replay output, runA=%v runB=%v", runA, runB)
+	require.Equal(t, len(runA), len(runB), "replay run size mismatch")
+	for i := range runA {
+		require.Equal(t, runA[i].StrategyID, runB[i].StrategyID, "strategy mismatch at index %d", i)
+		require.Equal(t, runA[i].Symbol, runB[i].Symbol, "symbol mismatch at index %d", i)
+		require.Equal(t, runA[i].Side, runB[i].Side, "side mismatch at index %d", i)
+		require.True(t, runA[i].Confidence.Equal(runB[i].Confidence), "confidence mismatch at index %d", i)
+		require.True(t, runA[i].OccurredAt == runB[i].OccurredAt, "occurred_at mismatch at index %d", i)
+		require.Equal(t, runA[i].Metadata, runB[i].Metadata, "metadata mismatch at index %d", i)
 	}
 }
 
