@@ -338,21 +338,21 @@ func (r *Ref) Run(ctx context.Context) error {
 				return nil // Mailbox closed
 			}
 
-				// Process message with timeout from envelope.
-				msgCtx := ctx
-				cancelFunc := func() {}
-				if !env.Deadline.IsZero() {
-					var cancel context.CancelFunc
-					msgCtx, cancel = context.WithDeadline(ctx, env.Deadline)
-					cancelFunc = cancel
-				}
+			// Process message with timeout from envelope.
+			msgCtx := ctx
+			cancelFunc := func() {}
+			if !env.Deadline.IsZero() {
+				var cancel context.CancelFunc
+				msgCtx, cancel = context.WithDeadline(ctx, env.Deadline)
+				cancelFunc = cancel
+			}
 
-				err := r.actor.Receive(msgCtx, env)
-				cancelFunc()
-				// Only send reply if actor hasn't already (non-blocking to avoid deadlock).
-				if env.Reply != nil {
-					select {
-					case env.Reply <- err:
+			err := r.actor.Receive(msgCtx, env)
+			cancelFunc()
+			// Only send reply if actor hasn't already (non-blocking to avoid deadlock).
+			if env.Reply != nil {
+				select {
+				case env.Reply <- err:
 					// Reply sent successfully
 				default:
 					// Channel full or closed, skip

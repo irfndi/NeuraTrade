@@ -19,7 +19,6 @@ type TradingEventBusBridge struct {
 	logger      *slog.Logger
 	mu          sync.RWMutex
 	running     bool
-	stopCh      chan struct{}
 }
 
 // NewTradingEventBusBridge creates a new bridge between legacy and platform event buses.
@@ -30,7 +29,6 @@ func NewTradingEventBusBridge(platformBus *eventbus.Bus, logger *slog.Logger) *T
 	return &TradingEventBusBridge{
 		platformBus: platformBus,
 		logger:      logger,
-		stopCh:      make(chan struct{}),
 	}
 }
 
@@ -101,7 +99,6 @@ func (b *TradingEventBusBridge) Stop() {
 		return
 	}
 
-	close(b.stopCh)
 	b.running = false
 	b.logger.Info("trading event bus bridge stopped")
 }
