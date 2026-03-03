@@ -338,20 +338,29 @@ func (r *Ref) Run(ctx context.Context) error {
 				return nil // Mailbox closed
 			}
 
-			// Process message with timeout from envelope
+			// Process message with timeout from envelope.
 			msgCtx := ctx
+			cancelFunc := func() {}
 			if !env.Deadline.IsZero() {
 				var cancel context.CancelFunc
 				msgCtx, cancel = context.WithDeadline(ctx, env.Deadline)
-				defer cancel()
+				cancelFunc = cancel
 			}
 
 			err := r.actor.Receive(msgCtx, env)
+			cancelFunc()
+
+			// Only send fallback reply when caller provided a reply channel.
+			// Use non-blocking send so an actor that already replied cannot deadlock the run loop.
 			if env.Reply != nil {
+				reply := any(struct{}{})
 				if err != nil {
-					env.Reply <- err
-				} else {
-					env.Reply <- struct{}{}
+					reply = err
+				}
+
+				select {
+				case env.Reply <- reply:
+				default:
 				}
 			}
 

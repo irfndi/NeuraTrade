@@ -3,7 +3,9 @@ package marketdata
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
@@ -18,6 +20,8 @@ import (
 type CollectorServiceWrapper struct {
 	actorRef *actor.Ref
 	timeout  time.Duration
+	cancel   context.CancelFunc
+	stopOnce sync.Once
 }
 
 // NewCollectorServiceWrapper creates a new compatibility wrapper.
@@ -36,9 +40,30 @@ func NewCollectorServiceWrapper(
 		return nil, fmt.Errorf("failed to spawn collector actor: %w", err)
 	}
 
+	runCtx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- ref.Run(runCtx)
+	}()
+
+	startDeadline := time.Now().Add(250 * time.Millisecond)
+	for !ref.IsRunning() && time.Now().Before(startDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !ref.IsRunning() {
+		cancel()
+		select {
+		case <-runDone:
+		default:
+		}
+		ref.Stop()
+		return nil, errors.New("collector actor did not start")
+	}
+
 	return &CollectorServiceWrapper{
 		actorRef: ref,
 		timeout:  10 * time.Second,
+		cancel:   cancel,
 	}, nil
 }
 
@@ -161,7 +186,12 @@ func (w *CollectorServiceWrapper) GetExchangeStats(ctx context.Context, exchange
 
 // Stop stops the collector service (backward compatible).
 func (w *CollectorServiceWrapper) Stop() {
-	if w.actorRef != nil {
-		w.actorRef.Stop()
-	}
+	w.stopOnce.Do(func() {
+		if w.cancel != nil {
+			w.cancel()
+		}
+		if w.actorRef != nil {
+			w.actorRef.Stop()
+		}
+	})
 }
