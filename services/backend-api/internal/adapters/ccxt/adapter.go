@@ -4,6 +4,8 @@ package ccxt
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
@@ -146,7 +148,7 @@ func (a *Adapter) IsHealthy(ctx context.Context) bool {
 func (a *Adapter) PlaceOrder(ctx context.Context, req ports.OrderRequest) (ports.OrderResult, error) {
 	// Note: The existing CCXT service may not have a PlaceOrder method.
 	// This is a placeholder that should be implemented when trading is enabled.
-	return ports.OrderResult{}, nil
+	return ports.OrderResult{}, errors.New("PlaceOrder not implemented: trading not enabled")
 }
 
 // CancelOrder cancels an existing order.
@@ -162,10 +164,16 @@ func (a *Adapter) CancelAllOrders(ctx context.Context, exchange, symbol string) 
 		return err
 	}
 
+	var errs []error
 	for _, order := range resp.Orders {
-		_ = a.service.CancelOrder(ctx, exchange, order.ID, symbol) // Best effort
+		if err := a.service.CancelOrder(ctx, exchange, order.ID, symbol); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
 	return nil
 }
 
@@ -287,6 +295,7 @@ func (a *Adapter) FetchBalances(ctx context.Context, exchange string) ([]ports.B
 
 // Registry manages exchange gateways.
 type Registry struct {
+	mu       sync.RWMutex
 	adapters map[string]*Adapter
 }
 
@@ -299,38 +308,51 @@ func NewRegistry() *Registry {
 
 // Register registers an exchange adapter.
 func (r *Registry) Register(exchange string, adapter *Adapter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.adapters[exchange] = adapter
 }
 
+// ErrExchangeNotFound is returned when an exchange is not registered.
+var ErrExchangeNotFound = errors.New("exchange not found")
+
 // GetGateway returns the gateway for an exchange.
 func (r *Registry) GetGateway(exchange string) (ports.ExchangeGateway, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	adapter, ok := r.adapters[exchange]
 	if !ok {
-		return nil, nil
+		return nil, ErrExchangeNotFound
 	}
 	return adapter, nil
 }
 
 // GetMarketDataGateway returns the market data gateway for an exchange.
 func (r *Registry) GetMarketDataGateway(exchange string) (ports.MarketDataGateway, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	adapter, ok := r.adapters[exchange]
 	if !ok {
-		return nil, nil
+		return nil, ErrExchangeNotFound
 	}
 	return adapter, nil
 }
 
 // GetTradingGateway returns the trading gateway for an exchange.
 func (r *Registry) GetTradingGateway(exchange string) (ports.TradingGateway, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	adapter, ok := r.adapters[exchange]
 	if !ok {
-		return nil, nil
+		return nil, ErrExchangeNotFound
 	}
 	return adapter, nil
 }
 
 // ListExchanges returns all configured exchanges.
 func (r *Registry) ListExchanges(ctx context.Context) ([]ports.ExchangeInfo, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	exchanges := make([]ports.ExchangeInfo, 0, len(r.adapters))
 	for id := range r.adapters {
 		exchanges = append(exchanges, ports.ExchangeInfo{
@@ -344,6 +366,8 @@ func (r *Registry) ListExchanges(ctx context.Context) ([]ports.ExchangeInfo, err
 
 // IsExchangeEnabled checks if an exchange is enabled.
 func (r *Registry) IsExchangeEnabled(exchange string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	_, ok := r.adapters[exchange]
 	return ok
 }

@@ -26,6 +26,39 @@ var (
 	ErrNoReplyChannel = errors.New("no reply channel")
 )
 
+// FatalError marks an actor error as unrecoverable and should stop the actor loop.
+type FatalError struct {
+	Err error
+}
+
+func (e *FatalError) Error() string {
+	if e == nil || e.Err == nil {
+		return "fatal actor error"
+	}
+	return "fatal actor error: " + e.Err.Error()
+}
+
+func (e *FatalError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// Fatal wraps an error to indicate that the actor should stop processing messages.
+func Fatal(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &FatalError{Err: err}
+}
+
+// IsFatal returns true when the error chain contains a FatalError.
+func IsFatal(err error) bool {
+	var fatalErr *FatalError
+	return errors.As(err, &fatalErr)
+}
+
 // OverflowStrategy determines how to handle mailbox overflow.
 type OverflowStrategy int
 
@@ -168,15 +201,30 @@ func (m *Mailbox) Send(ctx context.Context, env Envelope) error {
 				return ctx.Err()
 			}
 		case OverflowDropOldest:
-			select {
-			case <-m.messages: // Drop oldest
-			default:
-			}
-			select {
-			case m.messages <- env:
-				return nil
-			default:
-				return ErrMailboxFull
+			for {
+				// Prefer sending immediately if space is available.
+				select {
+				case m.messages <- env:
+					return nil
+				default:
+				}
+
+				// Mailbox still full; drop one oldest message and retry.
+				select {
+				case dropped, ok := <-m.messages:
+					if ok && m.deadLetter != nil && dropped.Message != nil {
+						m.deadLetter(dropped.Message)
+					}
+				default:
+					// Another sender/receiver changed mailbox state; retry send.
+				}
+
+				// Honor caller cancellation under sustained contention.
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
 			}
 		case OverflowReject:
 			return ErrMailboxFull
@@ -279,6 +327,7 @@ func (r *Ref) Run(ctx context.Context) error {
 	if !r.running.CompareAndSwap(false, true) {
 		return errors.New("actor already running") // defer will call wg.Done()
 	}
+	defer r.running.Store(false)
 
 	for {
 		select {
@@ -306,8 +355,8 @@ func (r *Ref) Run(ctx context.Context) error {
 				}
 			}
 
-			// On fatal error, stop the actor
-			if err != nil && errors.Is(err, context.Canceled) {
+			// Stop when canceled or when actor reports an unrecoverable fatal error.
+			if err != nil && (errors.Is(err, context.Canceled) || IsFatal(err)) {
 				return err
 			}
 		}
