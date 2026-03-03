@@ -819,10 +819,10 @@ func TestGetEnvOrDefault(t *testing.T) {
 		assert.Equal(t, "default-value", result)
 	})
 
-	t.Run("returns empty string when env is empty", func(t *testing.T) {
+	t.Run("returns default when env is empty string", func(t *testing.T) {
 		t.Setenv("EMPTY_KEY", "")
 		result := getEnvOrDefault("EMPTY_KEY", "default")
-		// Empty env is treated as not set, so default is returned
+		// Empty env values are treated as unset values, so default is returned.
 		assert.Equal(t, "default", result)
 	})
 }

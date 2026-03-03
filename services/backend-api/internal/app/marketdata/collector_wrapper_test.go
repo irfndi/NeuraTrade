@@ -8,54 +8,53 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestCollectorServiceWrapper_StartsActorAndProcessesCommands(t *testing.T) {
-	bus := eventbus.New(eventbus.DefaultConfig())
-	wrapper, err := NewCollectorServiceWrapper(nil, nil, bus, DefaultConfig())
-	if err != nil {
-		t.Fatalf("new wrapper failed: %v", err)
-	}
-	defer wrapper.Stop()
+func TestCollectorServiceWrapper_Behavior(t *testing.T) {
+	testCases := []struct {
+		name string
+		run  func(t *testing.T, wrapper *CollectorServiceWrapper)
+	}{
+		{
+			name: "start health stop flow",
+			run: func(t *testing.T, wrapper *CollectorServiceWrapper) {
+				ctx := context.Background()
+				require.NoError(t, wrapper.StartExchange(ctx, "binance", []string{"BTC/USDT"}, time.Second))
 
-	ctx := context.Background()
-	if err := wrapper.StartExchange(ctx, "binance", []string{"BTC/USDT"}, time.Second); err != nil {
-		t.Fatalf("start exchange failed: %v", err)
-	}
+				healthy, err := wrapper.IsExchangeHealthy(ctx, "binance")
+				require.NoError(t, err)
+				require.True(t, healthy)
 
-	healthy, err := wrapper.IsExchangeHealthy(ctx, "binance")
-	if err != nil {
-		t.Fatalf("health check failed: %v", err)
-	}
-	if !healthy {
-		t.Fatal("expected started exchange to be healthy")
-	}
+				require.NoError(t, wrapper.StopExchange(ctx, "binance"))
 
-	if err := wrapper.StopExchange(ctx, "binance"); err != nil {
-		t.Fatalf("stop exchange failed: %v", err)
-	}
+				healthy, err = wrapper.IsExchangeHealthy(ctx, "binance")
+				require.NoError(t, err)
+				require.False(t, healthy)
+			},
+		},
+		{
+			name: "stop is idempotent",
+			run: func(t *testing.T, wrapper *CollectorServiceWrapper) {
+				wrapper.Stop()
+				wrapper.Stop()
 
-	healthy, err = wrapper.IsExchangeHealthy(ctx, "binance")
-	if err != nil {
-		t.Fatalf("health check after stop failed: %v", err)
-	}
-	if healthy {
-		t.Fatal("expected stopped exchange to be unhealthy")
-	}
-}
-
-func TestCollectorServiceWrapper_StopIsIdempotent(t *testing.T) {
-	bus := eventbus.New(eventbus.DefaultConfig())
-	wrapper, err := NewCollectorServiceWrapper(nil, nil, bus, DefaultConfig())
-	if err != nil {
-		t.Fatalf("new wrapper failed: %v", err)
+				err := wrapper.StartExchange(context.Background(), "binance", []string{"BTC/USDT"}, time.Second)
+				assert.True(t, errors.Is(err, actor.ErrActorStopped))
+			},
+		},
 	}
 
-	wrapper.Stop()
-	wrapper.Stop()
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := eventbus.New(eventbus.DefaultConfig())
+			wrapper, err := NewCollectorServiceWrapper(nil, nil, bus, DefaultConfig())
+			require.NoError(t, err)
+			require.NotNil(t, wrapper)
+			defer wrapper.Stop()
 
-	err = wrapper.StartExchange(context.Background(), "binance", []string{"BTC/USDT"}, time.Second)
-	if !errors.Is(err, actor.ErrActorStopped) {
-		t.Fatalf("expected ErrActorStopped after stop, got %v", err)
+			tc.run(t, wrapper)
+		})
 	}
 }
