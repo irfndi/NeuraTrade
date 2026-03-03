@@ -422,7 +422,13 @@ func (a *CollectorActor) normalizedInterval(state *ExchangeState) time.Duration 
 
 func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID string, symbols []string) {
 	gw, err := a.exchange.GetMarketDataGateway(exchangeID)
-	if err != nil || gw == nil {
+	if err != nil {
+		a.logger.WithError(fmt.Errorf("get market data gateway for %s: %w", exchangeID, err)).
+			Warn("collector gateway lookup failed")
+		return
+	}
+	if gw == nil {
+		a.logger.Warnf("collector gateway is nil for %s", exchangeID)
 		return
 	}
 	if a.eventBus == nil {
@@ -432,6 +438,8 @@ func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID str
 	for _, symbol := range symbols {
 		tick, err := gw.FetchTick(ctx, exchangeID, symbol)
 		if err != nil {
+			a.logger.WithError(fmt.Errorf("fetch tick for %s:%s: %w", exchangeID, symbol, err)).
+				Warn("collector fetch tick failed")
 			continue
 		}
 		if err := a.eventBus.PublishSync(ctx, eventbus.Event{
