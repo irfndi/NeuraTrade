@@ -815,6 +815,11 @@ func TestGetEnvOrDefault(t *testing.T) {
 	})
 
 	t.Run("returns default when env not set", func(t *testing.T) {
+		key := "NONEXISTENT_KEY"
+		old, existed := os.LookupEnv(key)
+		mustUnsetEnv(t, key)
+		t.Cleanup(func() { restoreEnv(t, key, old, existed) })
+
 		result := getEnvOrDefault("NONEXISTENT_KEY", "default-value")
 		assert.Equal(t, "default-value", result)
 	})
@@ -829,6 +834,11 @@ func TestGetEnvOrDefault(t *testing.T) {
 
 func TestParseAIProviderChain(t *testing.T) {
 	t.Run("returns default chain when no env set", func(t *testing.T) {
+		key := "NEURATRADE_AI_PROVIDER_CHAIN"
+		old, existed := os.LookupEnv(key)
+		mustUnsetEnv(t, key)
+		t.Cleanup(func() { restoreEnv(t, key, old, existed) })
+
 		result := parseAIProviderChain("")
 		assert.Contains(t, result, "zhipu")
 		assert.GreaterOrEqual(t, len(result), 1)

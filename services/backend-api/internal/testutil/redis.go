@@ -3,6 +3,7 @@ package testutil
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
 
 	"github.com/redis/go-redis/v9"
@@ -39,7 +40,7 @@ func GenerateTestSecret() string {
 		}
 		// A failure to read from rand.Read is a critical problem in the environment.
 		// Panicking is better than using a hardcoded, insecure secret.
-		panic("failed to generate random bytes for test secret and TEST_JWT_SECRET is not set")
+		panic(fmt.Errorf("generate random bytes for test secret: %w; TEST_JWT_SECRET missing or shorter than 64 chars", err))
 	}
 	return hex.EncodeToString(bytes)
 }

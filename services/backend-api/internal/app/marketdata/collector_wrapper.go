@@ -80,7 +80,10 @@ func (w *CollectorServiceWrapper) StartExchange(ctx context.Context, exchangeID 
 		Interval:   interval,
 	}
 
-	return w.actorRef.Send(ctx, cmd)
+	if err := w.actorRef.Send(ctx, cmd); err != nil {
+		return fmt.Errorf("start exchange %s: %w", exchangeID, err)
+	}
+	return nil
 }
 
 // StopExchange stops collection for an exchange (backward compatible).
@@ -92,7 +95,10 @@ func (w *CollectorServiceWrapper) StopExchange(ctx context.Context, exchangeID s
 		ExchangeID: exchangeID,
 	}
 
-	return w.actorRef.Send(ctx, cmd)
+	if err := w.actorRef.Send(ctx, cmd); err != nil {
+		return fmt.Errorf("stop exchange %s: %w", exchangeID, err)
+	}
+	return nil
 }
 
 // PauseExchange pauses collection for an exchange (backward compatible).
@@ -104,7 +110,10 @@ func (w *CollectorServiceWrapper) PauseExchange(ctx context.Context, exchangeID 
 		ExchangeID: exchangeID,
 	}
 
-	return w.actorRef.Send(ctx, cmd)
+	if err := w.actorRef.Send(ctx, cmd); err != nil {
+		return fmt.Errorf("pause exchange %s: %w", exchangeID, err)
+	}
+	return nil
 }
 
 // ResumeExchange resumes collection for an exchange (backward compatible).
@@ -116,7 +125,10 @@ func (w *CollectorServiceWrapper) ResumeExchange(ctx context.Context, exchangeID
 		ExchangeID: exchangeID,
 	}
 
-	return w.actorRef.Send(ctx, cmd)
+	if err := w.actorRef.Send(ctx, cmd); err != nil {
+		return fmt.Errorf("resume exchange %s: %w", exchangeID, err)
+	}
+	return nil
 }
 
 // IsExchangeHealthy checks if an exchange is healthy (backward compatible).
@@ -135,7 +147,7 @@ func (w *CollectorServiceWrapper) IsExchangeHealthy(ctx context.Context, exchang
 	}
 
 	if err := w.actorRef.SendEnvelope(ctx, env); err != nil {
-		return false, err
+		return false, fmt.Errorf("health check exchange %s: %w", exchangeID, err)
 	}
 
 	select {
@@ -168,7 +180,7 @@ func (w *CollectorServiceWrapper) GetExchangeStats(ctx context.Context, exchange
 	}
 
 	if err := w.actorRef.SendEnvelope(ctx, env); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get stats exchange %s: %w", exchangeID, err)
 	}
 
 	select {
