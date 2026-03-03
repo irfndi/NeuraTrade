@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -37,12 +38,17 @@ func (l *Loader) LoadAll() ([]PluginManifest, error) {
 }
 
 func (l *Loader) LoadManifest(path string) (PluginManifest, error) {
-	data, err := os.ReadFile(path)
+	if !l.isAllowedManifestPath(path) {
+		return PluginManifest{}, fmt.Errorf("manifest path %s is outside configured directories", path)
+	}
+
+	cleanPath := filepath.Clean(path)
+	data, err := os.ReadFile(cleanPath) // #nosec G304 -- path is validated against configured manifest dirs
 	if err != nil {
 		return PluginManifest{}, fmt.Errorf("failed to read file: %w", err)
 	}
 	var manifest PluginManifest
-	ext := filepath.Ext(path)
+	ext := filepath.Ext(cleanPath)
 	switch ext {
 	case ".yaml", ".yml":
 		if err := yaml.Unmarshal(data, &manifest); err != nil {
@@ -76,4 +82,34 @@ func (l *Loader) globManifestFiles(dir string) ([]string, error) {
 		files = append(files, matches...)
 	}
 	return files, nil
+}
+
+func (l *Loader) isAllowedManifestPath(path string) bool {
+	if len(l.manifestDirs) == 0 {
+		return false
+	}
+
+	cleanPath := filepath.Clean(path)
+	absPath, err := filepath.Abs(cleanPath)
+	if err != nil {
+		return false
+	}
+
+	for _, dir := range l.manifestDirs {
+		cleanDir := filepath.Clean(dir)
+		absDir, err := filepath.Abs(cleanDir)
+		if err != nil {
+			continue
+		}
+
+		if absPath == absDir {
+			return true
+		}
+		prefix := absDir + string(os.PathSeparator)
+		if strings.HasPrefix(absPath, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
