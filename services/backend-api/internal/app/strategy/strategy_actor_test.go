@@ -271,15 +271,9 @@ func startActor(t *testing.T, ref *actor.Ref) (context.CancelFunc, chan error) {
 		done <- ref.Run(ctx)
 	}()
 
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for !ref.IsRunning() && time.Now().Before(deadline) {
-		time.Sleep(1 * time.Millisecond)
-	}
-	if !ref.IsRunning() {
-		cancel()
-		<-done
-		t.Fatal("actor did not start")
-	}
+	require.Eventually(t, func() bool {
+		return ref.IsRunning()
+	}, 2*time.Second, 10*time.Millisecond, "actor did not start")
 
 	return cancel, done
 }

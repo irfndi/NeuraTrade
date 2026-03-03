@@ -191,6 +191,15 @@ jobs:
       - name: Run vulnerability scan (govulncheck)
         run: cd services/backend-api && govulncheck ./...
 
+      - name: Run vulnerability scan (trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: services/backend-api
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+
   frontend-security:
     name: Frontend Security (telegram-service)
     runs-on: ubuntu-latest

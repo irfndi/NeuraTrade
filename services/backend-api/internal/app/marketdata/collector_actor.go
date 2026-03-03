@@ -30,13 +30,14 @@ type CollectorActor struct {
 }
 
 type ExchangeState struct {
-	ExchangeID string
-	Enabled    bool
-	Paused     bool
-	Symbols    []string
-	Interval   time.Duration
-	TimerStop  chan struct{}
-	mu         sync.RWMutex
+	ExchangeID  string
+	Enabled     bool
+	Paused      bool
+	Symbols     []string
+	Interval    time.Duration
+	TimerStop   chan struct{}
+	TickerReset chan struct{}
+	mu          sync.RWMutex
 }
 
 type Config struct {
@@ -111,10 +112,6 @@ func (a *CollectorActor) Receive(ctx context.Context, env actor.Envelope) error 
 
 func (a *CollectorActor) handleStartExchange(ctx context.Context, traceID string, msg marketdata.StartExchangeCommand) error {
 	a.mu.Lock()
-	if _, exists := a.exchangeStates[msg.ExchangeID]; exists {
-		a.mu.Unlock()
-		return nil
-	}
 
 	interval := msg.Interval
 	if interval <= 0 {
@@ -124,17 +121,36 @@ func (a *CollectorActor) handleStartExchange(ctx context.Context, traceID string
 		interval = minimumInterval
 	}
 
-	state := &ExchangeState{
-		ExchangeID: msg.ExchangeID,
-		Enabled:    true,
-		Symbols:    msg.Symbols,
-		Interval:   interval,
-		TimerStop:  make(chan struct{}),
+	state, exists := a.exchangeStates[msg.ExchangeID]
+	if exists {
+		state.mu.Lock()
+		if state.Enabled {
+			state.mu.Unlock()
+			a.mu.Unlock()
+			return nil
+		}
+
+		state.Enabled = true
+		state.Paused = false
+		state.Symbols = msg.Symbols
+		state.Interval = interval
+		state.TimerStop = make(chan struct{})
+		state.TickerReset = make(chan struct{}, 1)
+		state.mu.Unlock()
+	} else {
+		state = &ExchangeState{
+			ExchangeID:  msg.ExchangeID,
+			Enabled:     true,
+			Symbols:     msg.Symbols,
+			Interval:    interval,
+			TimerStop:   make(chan struct{}),
+			TickerReset: make(chan struct{}, 1),
+		}
+		a.exchangeStates[msg.ExchangeID] = state
 	}
-	a.exchangeStates[msg.ExchangeID] = state
 	a.mu.Unlock()
 
-	go a.runCollectionLoop(ctx, state)
+	go a.runCollectionLoop(context.WithoutCancel(ctx), state)
 	if err := a.publishEvent(ctx, "collector.status", "started", marketdata.CollectorStatusEvent{
 		TraceID: traceID, ExchangeID: msg.ExchangeID, Status: "started", Timestamp: time.Now(),
 	}); err != nil {
@@ -266,7 +282,14 @@ func (a *CollectorActor) handleSetInterval(ctx context.Context, traceID string, 
 
 	state.mu.Lock()
 	state.Interval = interval
+	resetCh := state.TickerReset
 	state.mu.Unlock()
+	if resetCh != nil {
+		select {
+		case resetCh <- struct{}{}:
+		default:
+		}
+	}
 
 	if err := a.publishEvent(ctx, "collector.interval_updated", "interval_updated", marketdata.CollectorStatusEvent{
 		TraceID: traceID, ExchangeID: msg.ExchangeID, Status: "interval_updated", Timestamp: time.Now(),
@@ -358,17 +381,7 @@ func (a *CollectorActor) handleGetStats(ctx context.Context, traceID string, msg
 }
 
 func (a *CollectorActor) runCollectionLoop(ctx context.Context, state *ExchangeState) {
-	state.mu.RLock()
-	interval := state.Interval
-	state.mu.RUnlock()
-	if interval <= 0 {
-		interval = a.defaultInterval
-	}
-	if interval < minimumInterval {
-		interval = minimumInterval
-	}
-
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(a.normalizedInterval(state))
 	defer ticker.Stop()
 
 	for {
@@ -377,6 +390,9 @@ func (a *CollectorActor) runCollectionLoop(ctx context.Context, state *ExchangeS
 			return
 		case <-state.TimerStop:
 			return
+		case <-state.TickerReset:
+			ticker.Stop()
+			ticker = time.NewTicker(a.normalizedInterval(state))
 		case <-ticker.C:
 			state.mu.RLock()
 			enabled := state.Enabled
@@ -389,6 +405,19 @@ func (a *CollectorActor) runCollectionLoop(ctx context.Context, state *ExchangeS
 			}
 		}
 	}
+}
+
+func (a *CollectorActor) normalizedInterval(state *ExchangeState) time.Duration {
+	state.mu.RLock()
+	interval := state.Interval
+	state.mu.RUnlock()
+	if interval <= 0 {
+		interval = a.defaultInterval
+	}
+	if interval < minimumInterval {
+		interval = minimumInterval
+	}
+	return interval
 }
 
 func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID string, symbols []string) {
