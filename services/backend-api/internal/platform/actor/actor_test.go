@@ -221,6 +221,61 @@ func TestRefAsk(t *testing.T) {
 	}
 }
 
+func TestRefAskTimeoutWithActorReplyDoesNotBlockRunLoop(t *testing.T) {
+	var processedAfterTimeout atomic.Int32
+
+	actor := ActorFunc(func(ctx context.Context, env Envelope) error {
+		msg, ok := env.Message.(testMessage)
+		if !ok {
+			return nil
+		}
+
+		if msg.value == 1 {
+			// Intentionally outlive ask timeout to create a late reply.
+			time.Sleep(30 * time.Millisecond)
+			if env.Reply != nil {
+				env.Reply <- "late-reply"
+			}
+			return nil
+		}
+
+		processedAfterTimeout.Store(int32(msg.value))
+		return nil
+	})
+
+	ref := NewRef(actor, DefaultConfig())
+	ctx := context.Background()
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	go ref.Run(runCtx)
+	time.Sleep(10 * time.Millisecond)
+
+	askCtx, cancelAsk := context.WithTimeout(ctx, 5*time.Millisecond)
+	defer cancelAsk()
+
+	_, err := ref.Ask(askCtx, testMessage{value: 1})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+
+	// Give the actor enough time to process the late reply path.
+	time.Sleep(50 * time.Millisecond)
+
+	if err := ref.Send(ctx, testMessage{value: 2}); err != nil {
+		t.Fatalf("send after timeout failed: %v", err)
+	}
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for processedAfterTimeout.Load() != 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if processedAfterTimeout.Load() != 2 {
+		t.Fatal("actor run loop appears blocked after late reply")
+	}
+}
+
 func TestRefStop(t *testing.T) {
 	actor := ActorFunc(func(ctx context.Context, env Envelope) error {
 		return nil
