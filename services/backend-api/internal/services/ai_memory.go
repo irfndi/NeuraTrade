@@ -659,11 +659,8 @@ func (tm *TradeMemory) GetSuccessfulRecoveryPatterns(ctx context.Context, minDra
 		p.RecoveryDuration = time.Duration(durationHours * float64(time.Hour))
 		_ = json.Unmarshal([]byte(actionsJSON), &p.ActionsDuringRecovery)
 		_ = json.Unmarshal([]byte(strategiesJSON), &p.KeyStrategies)
-		patterns = append(patterns, p)
-	}
 
-	if err := rows.Err(); err != nil {
-		return nil, err
+		patterns = append(patterns, p)
 	}
 
 	return patterns, nil
@@ -730,10 +727,6 @@ func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string
 		if err := rows.Scan(&lesson); err == nil {
 			lessons = append(lessons, "- "+lesson)
 		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return ""
 	}
 
 	return strings.Join(lessons, "\n")

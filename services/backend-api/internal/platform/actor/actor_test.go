@@ -2,6 +2,7 @@ package actor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -229,7 +230,14 @@ func TestRefStop(t *testing.T) {
 	ctx := context.Background()
 
 	go ref.Run(ctx)
-	time.Sleep(10 * time.Millisecond)
+
+	// Wait for actor to start running (prevents race between Run's wg.Add and Stop's wg.Wait)
+	for i := 0; i < 100; i++ {
+		if ref.IsRunning() {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	ref.Stop()
 
@@ -313,5 +321,65 @@ func TestSystemStopAll(t *testing.T) {
 
 	if len(sys.List()) != 0 {
 		t.Error("all actors should be stopped")
+	}
+}
+
+func TestRefRunStopsOnFatalError(t *testing.T) {
+	want := errors.New("fatal boom")
+	actor := ActorFunc(func(ctx context.Context, env Envelope) error {
+		return Fatal(want)
+	})
+
+	ref := NewRef(actor, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ref.Run(ctx)
+	}()
+
+	// Wait for actor to start.
+	for i := 0; i < 100; i++ {
+		if ref.IsRunning() {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if err := ref.Send(ctx, testMessage{value: 1}); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !IsFatal(err) {
+			t.Fatalf("expected fatal error, got %v", err)
+		}
+		if !errors.Is(err, want) {
+			t.Fatalf("expected wrapped error %v, got %v", want, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for fatal run exit")
+	}
+
+	if ref.IsRunning() {
+		t.Fatal("actor should not remain running after fatal error")
+	}
+
+	if err := ref.Send(ctx, testMessage{value: 2}); err != ErrActorStopped {
+		t.Fatalf("expected ErrActorStopped, got %v", err)
+	}
+}
+
+func TestIsFatal(t *testing.T) {
+	if IsFatal(nil) {
+		t.Fatal("nil should not be fatal")
+	}
+	if IsFatal(errors.New("plain")) {
+		t.Fatal("plain error should not be fatal")
+	}
+	if !IsFatal(Fatal(errors.New("boom"))) {
+		t.Fatal("fatal wrapper should be detected")
 	}
 }

@@ -26,6 +26,39 @@ var (
 	ErrNoReplyChannel = errors.New("no reply channel")
 )
 
+// FatalError marks an actor error as unrecoverable and should stop the actor loop.
+type FatalError struct {
+	Err error
+}
+
+func (e *FatalError) Error() string {
+	if e == nil || e.Err == nil {
+		return "fatal actor error"
+	}
+	return "fatal actor error: " + e.Err.Error()
+}
+
+func (e *FatalError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// Fatal wraps an error to indicate that the actor should stop processing messages.
+func Fatal(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &FatalError{Err: err}
+}
+
+// IsFatal returns true when the error chain contains a FatalError.
+func IsFatal(err error) bool {
+	var fatalErr *FatalError
+	return errors.As(err, &fatalErr)
+}
+
 // OverflowStrategy determines how to handle mailbox overflow.
 type OverflowStrategy int
 
@@ -168,15 +201,30 @@ func (m *Mailbox) Send(ctx context.Context, env Envelope) error {
 				return ctx.Err()
 			}
 		case OverflowDropOldest:
-			select {
-			case <-m.messages: // Drop oldest
-			default:
-			}
-			select {
-			case m.messages <- env:
-				return nil
-			default:
-				return ErrMailboxFull
+			for {
+				// Prefer sending immediately if space is available.
+				select {
+				case m.messages <- env:
+					return nil
+				default:
+				}
+
+				// Mailbox still full; drop one oldest message and retry.
+				select {
+				case dropped, ok := <-m.messages:
+					if ok && m.deadLetter != nil && dropped.Message != nil {
+						m.deadLetter(dropped.Message)
+					}
+				default:
+					// Another sender/receiver changed mailbox state; retry send.
+				}
+
+				// Honor caller cancellation under sustained contention.
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
 			}
 		case OverflowReject:
 			return ErrMailboxFull
@@ -204,8 +252,6 @@ type Ref struct {
 	actor   Actor
 	running atomic.Bool
 	wg      sync.WaitGroup
-	mu      sync.Mutex
-	started bool
 }
 
 // NewRef creates a new actor reference.
@@ -213,12 +259,11 @@ func NewRef(actor Actor, config Config) *Ref {
 	if config.MailboxSize <= 0 {
 		config.MailboxSize = DefaultConfig().MailboxSize
 	}
-	ref := &Ref{
+	return &Ref{
 		id:      actor.ID(),
 		mailbox: NewMailbox(config),
 		actor:   actor,
 	}
-	return ref
 }
 
 // ID returns the actor's unique identifier.
@@ -275,20 +320,15 @@ func (r *Ref) Ask(ctx context.Context, msg Message) (any, error) {
 // Run starts the actor's message processing loop.
 // It blocks until the context is cancelled.
 func (r *Ref) Run(ctx context.Context) error {
-	r.mu.Lock()
-	if r.started {
-		r.mu.Unlock()
-		return errors.New("actor already running")
-	}
+	// Add to WaitGroup FIRST to prevent race with Stop()'s wg.Wait()
 	r.wg.Add(1)
-	r.started = true
-	r.mu.Unlock()
+	defer r.wg.Done()
 
 	if !r.running.CompareAndSwap(false, true) {
-		return errors.New("actor already running")
+		return errors.New("actor already running") // defer will call wg.Done()
 	}
+	defer r.running.Store(false)
 
-	defer r.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
@@ -300,15 +340,13 @@ func (r *Ref) Run(ctx context.Context) error {
 
 			// Process message with timeout from envelope
 			msgCtx := ctx
-			cancelFunc := func() {}
 			if !env.Deadline.IsZero() {
 				var cancel context.CancelFunc
 				msgCtx, cancel = context.WithDeadline(ctx, env.Deadline)
-				cancelFunc = cancel
+				defer cancel()
 			}
 
 			err := r.actor.Receive(msgCtx, env)
-			cancelFunc() // Call cancel immediately after processing
 			if env.Reply != nil {
 				if err != nil {
 					env.Reply <- err
@@ -317,8 +355,8 @@ func (r *Ref) Run(ctx context.Context) error {
 				}
 			}
 
-			// On fatal error, stop the actor
-			if err != nil && errors.Is(err, context.Canceled) {
+			// Stop when canceled or when actor reports an unrecoverable fatal error.
+			if err != nil && (errors.Is(err, context.Canceled) || IsFatal(err)) {
 				return err
 			}
 		}
@@ -329,13 +367,7 @@ func (r *Ref) Run(ctx context.Context) error {
 func (r *Ref) Stop() {
 	r.running.Store(false)
 	r.mailbox.Stop()
-	// Only wait if the actor was actually started
-	r.mu.Lock()
-	started := r.started
-	r.mu.Unlock()
-	if started {
-		r.wg.Wait()
-	}
+	r.wg.Wait()
 }
 
 // IsRunning returns whether the actor is currently running.
@@ -359,8 +391,6 @@ func NewSystem(config Config) *System {
 }
 
 // Spawn creates and registers a new actor.
-// The returned Ref must be started by calling ref.Run(ctx) in a goroutine
-// before it will process messages.
 func (s *System) Spawn(actor Actor, config Config) (*Ref, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -372,24 +402,6 @@ func (s *System) Spawn(actor Actor, config Config) (*Ref, error) {
 
 	ref := NewRef(actor, config)
 	s.actors[id] = ref
-	return ref, nil
-}
-
-// SpawnAndRun creates, registers, and starts a new actor in a goroutine.
-// This is a convenience method that combines Spawn and Run.
-// Note: Run errors are logged but not returned since the actor runs asynchronously.
-func (s *System) SpawnAndRun(ctx context.Context, actor Actor, config Config) (*Ref, error) {
-	ref, err := s.Spawn(actor, config)
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		if runErr := ref.Run(ctx); runErr != nil {
-			// Actor stopped with error - in production, this should be logged or emitted as a metric
-			// log.Printf("actor %s stopped with error: %v", ref.ID(), runErr)
-			_ = runErr // Explicitly acknowledge - actor lifecycle is managed by caller
-		}
-	}()
 	return ref, nil
 }
 

@@ -185,9 +185,6 @@ func calculateDelay(config Config, attempt int) time.Duration {
 	if config.Jitter > 0 {
 		jitter := delay * config.Jitter * (2*rand.Float64() - 1) // -jitter to +jitter
 		delay += jitter
-		if delay < 0 {
-			delay = 0
-		}
 	}
 
 	return time.Duration(delay)
