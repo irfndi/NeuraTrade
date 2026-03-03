@@ -389,11 +389,28 @@ func TestScheduler(t *testing.T) {
 		t.Fatalf("failed to spawn actor: %v", err)
 	}
 
+	actorCtx, actorCancel := context.WithCancel(context.Background())
+	defer actorCancel()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- ref.Run(actorCtx)
+	}()
+
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for !ref.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(1 * time.Millisecond)
+	}
+	if !ref.IsRunning() {
+		t.Fatal("actor did not start before scheduler test")
+	}
+
 	// Create scheduler
-	scheduler := NewScheduler(ref, 10*time.Millisecond)
+	scheduler := NewScheduler(ref, 5*time.Millisecond)
+	defer scheduler.Stop()
 
 	// Start scheduler
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
 	if err := scheduler.Start(ctx); err != nil {
@@ -407,13 +424,16 @@ func TestScheduler(t *testing.T) {
 		case <-ticksReceived:
 			tickCount++
 			if tickCount >= 3 {
-				scheduler.Stop()
+				actorCancel()
+				_ = <-runDone
 				return // Success
 			}
 		case <-ctx.Done():
 			if tickCount < 3 {
 				t.Errorf("expected at least 3 ticks, got %d", tickCount)
 			}
+			actorCancel()
+			_ = <-runDone
 			return
 		}
 	}
