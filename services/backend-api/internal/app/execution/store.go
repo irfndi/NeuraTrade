@@ -28,39 +28,43 @@ func NewSQLIdempotencyStore(db *sql.DB) (*SQLIdempotencyStore, error) {
 
 // ensureTable creates the idempotency table if it doesn't exist
 func (s *SQLIdempotencyStore) ensureTable() error {
-	query := `
-	CREATE TABLE IF NOT EXISTS order_intents (
-		intent_id TEXT PRIMARY KEY,
-		client_order_id TEXT UNIQUE NOT NULL,
-		exchange_order_id TEXT,
-		status TEXT NOT NULL,
-		exchange TEXT NOT NULL,
-		symbol TEXT NOT NULL,
-		side TEXT NOT NULL,
-		order_type TEXT NOT NULL,
-		amount TEXT NOT NULL,
-		price TEXT,
-		stop_price TEXT,
-		take_profit TEXT,
-		reduce_only BOOLEAN,
-		post_only BOOLEAN,
-		filled_amount TEXT DEFAULT '0',
-		fill_price TEXT DEFAULT '0',
-		reject_reason TEXT,
-		attempt_count INTEGER DEFAULT 1,
-		submitted_at TIMESTAMP NOT NULL,
-		updated_at TIMESTAMP NOT NULL,
-		strategy_id TEXT,
-		signal_id TEXT,
-		metadata TEXT
-	);
-	CREATE INDEX IF NOT EXISTS idx_order_intents_client_id ON order_intents(client_order_id);
-	CREATE INDEX IF NOT EXISTS idx_order_intents_exchange_id ON order_intents(exchange_order_id);
-	CREATE INDEX IF NOT EXISTS idx_order_intents_status ON order_intents(status);
-	CREATE INDEX IF NOT EXISTS idx_order_intents_submitted ON order_intents(submitted_at);
-	`
-	_, err := s.db.Exec(query)
-	return err
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS order_intents (
+			intent_id TEXT PRIMARY KEY,
+			client_order_id TEXT UNIQUE NOT NULL,
+			exchange_order_id TEXT,
+			status TEXT NOT NULL,
+			exchange TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			order_type TEXT NOT NULL,
+			amount TEXT NOT NULL,
+			price TEXT,
+			stop_price TEXT,
+			take_profit TEXT,
+			reduce_only BOOLEAN,
+			post_only BOOLEAN,
+			filled_amount TEXT DEFAULT '0',
+			fill_price TEXT DEFAULT '0',
+			reject_reason TEXT,
+			attempt_count INTEGER DEFAULT 1,
+			submitted_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			strategy_id TEXT,
+			signal_id TEXT,
+			metadata TEXT
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_intents_exchange_id ON order_intents(exchange_order_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_intents_status ON order_intents(status);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_intents_submitted ON order_intents(submitted_at);`,
+	}
+
+	for i, stmt := range statements {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("execute idempotency schema statement %d: %w", i+1, err)
+		}
+	}
+	return nil
 }
 
 // SaveIntent persists a new order intent
@@ -182,6 +186,26 @@ func (s *SQLIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID 
 	return s.GetIntent(ctx, intentID)
 }
 
+// GetIntentByExchangeID retrieves an intent by ExchangeOrderID.
+func (s *SQLIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchangeOrderID string) (*OrderIntent, error) {
+	query := `
+	SELECT intent_id FROM order_intents WHERE exchange_order_id = ?
+	ORDER BY updated_at DESC
+	LIMIT 1
+	`
+
+	var intentID string
+	err := s.db.QueryRowContext(ctx, query, exchangeOrderID).Scan(&intentID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return s.GetIntent(ctx, intentID)
+}
+
 // UpdateIntent updates an existing intent
 func (s *SQLIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderIntent) error {
 	intent.UpdatedAt = time.Now()
@@ -240,33 +264,37 @@ func NewSQLAuditLogger(db *sql.DB) (*SQLAuditLogger, error) {
 
 // ensureTable creates the audit log table if it doesn't exist
 func (l *SQLAuditLogger) ensureTable() error {
-	query := `
-	CREATE TABLE IF NOT EXISTS order_audit_log (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		event_id TEXT UNIQUE NOT NULL,
-		intent_id TEXT NOT NULL,
-		client_order_id TEXT NOT NULL,
-		exchange_order_id TEXT,
-		event_type TEXT NOT NULL,
-		exchange TEXT NOT NULL,
-		symbol TEXT NOT NULL,
-		side TEXT,
-		amount TEXT,
-		price TEXT,
-		filled_amount TEXT,
-		fill_price TEXT,
-		reason TEXT,
-		metadata TEXT,
-		timestamp TIMESTAMP NOT NULL,
-		hash_chain TEXT
-	);
-	CREATE INDEX IF NOT EXISTS idx_audit_intent ON order_audit_log(intent_id);
-	CREATE INDEX IF NOT EXISTS idx_audit_event_id ON order_audit_log(event_id);
-	CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON order_audit_log(timestamp);
-	CREATE INDEX IF NOT EXISTS idx_audit_type ON order_audit_log(event_type);
-	`
-	_, err := l.db.Exec(query)
-	return err
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS order_audit_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT UNIQUE NOT NULL,
+			intent_id TEXT NOT NULL,
+			client_order_id TEXT NOT NULL,
+			exchange_order_id TEXT,
+			event_type TEXT NOT NULL,
+			exchange TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT,
+			amount TEXT,
+			price TEXT,
+			filled_amount TEXT,
+			fill_price TEXT,
+			reason TEXT,
+			metadata TEXT,
+			timestamp TIMESTAMP NOT NULL,
+			hash_chain TEXT
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_intent ON order_audit_log(intent_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON order_audit_log(timestamp);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_type ON order_audit_log(event_type);`,
+	}
+
+	for i, stmt := range statements {
+		if _, err := l.db.Exec(stmt); err != nil {
+			return fmt.Errorf("execute audit schema statement %d: %w", i+1, err)
+		}
+	}
+	return nil
 }
 
 // LogOrderEvent persists an audit event

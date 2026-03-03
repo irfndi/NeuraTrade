@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -362,6 +363,10 @@ func (r *Ref) Run(ctx context.Context) error {
 				case env.Reply <- reply:
 				default:
 				}
+			}
+
+			if err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("actor %s receive error (%T): %v", r.id, env.Message, err)
 			}
 
 			// Stop when canceled or when actor reports an unrecoverable fatal error.

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/ports"
 	"github.com/shopspring/decimal"
@@ -124,6 +125,8 @@ type IdempotencyStore interface {
 	GetIntent(ctx context.Context, intentID string) (*OrderIntent, error)
 	// GetIntentByClientID retrieves an intent by ClientOrderID
 	GetIntentByClientID(ctx context.Context, clientID string) (*OrderIntent, error)
+	// GetIntentByExchangeID retrieves an intent by ExchangeOrderID
+	GetIntentByExchangeID(ctx context.Context, exchangeOrderID string) (*OrderIntent, error)
 	// UpdateIntent updates an existing intent
 	UpdateIntent(ctx context.Context, intent *OrderIntent) error
 }
@@ -399,20 +402,9 @@ func (a *ExecutionActor) handleGetOrderStatus(ctx context.Context, env actor.Env
 
 // handleFillUpdate processes order fill updates
 func (a *ExecutionActor) handleFillUpdate(ctx context.Context, msg OrderFillUpdateMsg) error {
-	intentID, exists := a.exchangeIDToIntent[msg.OrderID]
-	if !exists {
-		// Try to find by exchange order ID from store
-		return fmt.Errorf("unknown order ID: %s", msg.OrderID)
-	}
-
-	intent, exists := a.intents[intentID]
-	if !exists {
-		loaded, err := a.idempotencyStore.GetIntent(ctx, intentID)
-		if err != nil {
-			return fmt.Errorf("intent not found: %s", intentID)
-		}
-		intent = loaded
-		a.intents[intentID] = intent
+	intentID, intent, err := a.resolveIntentByExchangeOrderID(ctx, msg.OrderID)
+	if err != nil {
+		return err
 	}
 
 	// Update fill information
@@ -444,19 +436,9 @@ func (a *ExecutionActor) handleFillUpdate(ctx context.Context, msg OrderFillUpda
 
 // handleRejected processes order rejection updates
 func (a *ExecutionActor) handleRejected(ctx context.Context, msg OrderRejectedMsg) error {
-	intentID, exists := a.exchangeIDToIntent[msg.OrderID]
-	if !exists {
-		return fmt.Errorf("unknown order ID: %s", msg.OrderID)
-	}
-
-	intent, exists := a.intents[intentID]
-	if !exists {
-		loaded, err := a.idempotencyStore.GetIntent(ctx, intentID)
-		if err != nil {
-			return fmt.Errorf("intent not found: %s", intentID)
-		}
-		intent = loaded
-		a.intents[intentID] = intent
+	intentID, intent, err := a.resolveIntentByExchangeOrderID(ctx, msg.OrderID)
+	if err != nil {
+		return err
 	}
 
 	// Update status
@@ -476,6 +458,46 @@ func (a *ExecutionActor) handleRejected(ctx context.Context, msg OrderRejectedMs
 	a.publishEvent(ctx, ports.EventTypeOrderRejected, intent)
 
 	return nil
+}
+
+func (a *ExecutionActor) resolveIntentByExchangeOrderID(ctx context.Context, exchangeOrderID string) (string, *OrderIntent, error) {
+	if intentID, exists := a.exchangeIDToIntent[exchangeOrderID]; exists {
+		if intent, ok := a.intents[intentID]; ok {
+			return intentID, intent, nil
+		}
+
+		loaded, err := a.idempotencyStore.GetIntent(ctx, intentID)
+		if err != nil {
+			return "", nil, fmt.Errorf("load intent %s: %w", intentID, err)
+		}
+		if loaded == nil {
+			return "", nil, fmt.Errorf("intent not found: %s", intentID)
+		}
+
+		a.intents[intentID] = loaded
+		if loaded.ClientOrderID != "" {
+			a.clientIDToIntent[loaded.ClientOrderID] = intentID
+		}
+		return intentID, loaded, nil
+	}
+
+	loaded, err := a.idempotencyStore.GetIntentByExchangeID(ctx, exchangeOrderID)
+	if err != nil {
+		return "", nil, fmt.Errorf("lookup intent by exchange order ID %s: %w", exchangeOrderID, err)
+	}
+	if loaded == nil {
+		return "", nil, fmt.Errorf("unknown order ID: %s", exchangeOrderID)
+	}
+
+	intentID := loaded.IntentID
+	a.intents[intentID] = loaded
+	if loaded.ClientOrderID != "" {
+		a.clientIDToIntent[loaded.ClientOrderID] = intentID
+	}
+	if loaded.ExchangeOrderID != "" {
+		a.exchangeIDToIntent[loaded.ExchangeOrderID] = intentID
+	}
+	return intentID, loaded, nil
 }
 
 // validateRequest validates an order request
@@ -586,7 +608,7 @@ func generateClientOrderID(intentID string, attempt int) string {
 
 // generateEventID creates a unique event ID
 func generateEventID() string {
-	return fmt.Sprintf("evt_%d_%s", time.Now().UnixNano(), generateRandomString(8))
+	return fmt.Sprintf("evt_%s", uuid.NewString())
 }
 
 // calculateHash computes a hash of an audit event for tamper detection
@@ -594,16 +616,6 @@ func calculateHash(event OrderAuditEvent) string {
 	data, _ := json.Marshal(event)
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
-}
-
-// generateRandomString generates a random string of given length
-func generateRandomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	result := make([]byte, length)
-	for i := range result {
-		result[i] = charset[time.Now().UnixNano()%int64(len(charset))]
-	}
-	return string(result)
 }
 
 // Compile-time interface check

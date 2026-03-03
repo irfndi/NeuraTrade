@@ -110,6 +110,15 @@ func (m *MockIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID
 	return nil, nil
 }
 
+func (m *MockIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchangeOrderID string) (*OrderIntent, error) {
+	for _, intent := range m.intents {
+		if intent.ExchangeOrderID == exchangeOrderID {
+			return intent, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *MockIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderIntent) error {
 	m.intents[intent.IntentID] = intent
 	return nil
@@ -384,6 +393,60 @@ func TestExecutionActor_HandleFillUpdate(t *testing.T) {
 	}
 	if !intent.FilledAmount.Equal(decimal.NewFromFloat(1.0)) {
 		t.Errorf("Expected filled amount 1.0, got %s", intent.FilledAmount)
+	}
+}
+
+func TestExecutionActor_HandleFillUpdate_AfterRestart(t *testing.T) {
+	ctx := context.Background()
+	gateway := NewMockTradingGateway()
+	idempotencyStore := NewMockIdempotencyStore()
+	auditLog := NewMockAuditLogger()
+
+	firstEventBus := NewMockEventBus()
+	actorBeforeRestart := NewExecutionActor("test-actor-before", gateway, firstEventBus, idempotencyStore, auditLog)
+
+	placeMsg := PlaceOrderMsg{
+		IntentID: "intent-restart-001",
+		Request: ports.OrderRequest{
+			Exchange: "test-exchange",
+			Symbol:   "BTC/USDT",
+			Side:     ports.OrderSideBuy,
+			Type:     ports.OrderTypeMarket,
+			Amount:   decimal.NewFromFloat(1.0),
+		},
+	}
+
+	if err := actorBeforeRestart.Receive(ctx, actor.Envelope{Message: placeMsg}); err != nil {
+		t.Fatalf("PlaceOrder failed: %v", err)
+	}
+
+	storedIntent, _ := idempotencyStore.GetIntent(ctx, "intent-restart-001")
+	if storedIntent == nil || storedIntent.ExchangeOrderID == "" {
+		t.Fatal("expected persisted intent with exchange order ID")
+	}
+
+	// Simulate restart with a fresh actor instance and empty in-memory maps.
+	secondEventBus := NewMockEventBus()
+	actorAfterRestart := NewExecutionActor("test-actor-after", gateway, secondEventBus, idempotencyStore, auditLog)
+
+	fillMsg := OrderFillUpdateMsg{
+		OrderID:      storedIntent.ExchangeOrderID,
+		Exchange:     "test-exchange",
+		FilledAmount: decimal.NewFromFloat(1.0),
+		FillPrice:    decimal.NewFromFloat(50000.0),
+		Timestamp:    time.Now(),
+	}
+
+	if err := actorAfterRestart.Receive(ctx, actor.Envelope{Message: fillMsg}); err != nil {
+		t.Fatalf("HandleFillUpdate after restart failed: %v", err)
+	}
+
+	updatedIntent, _ := idempotencyStore.GetIntent(ctx, "intent-restart-001")
+	if updatedIntent == nil {
+		t.Fatal("expected persisted intent after fill update")
+	}
+	if updatedIntent.Status != ports.OrderStatusFilled {
+		t.Errorf("expected status 'filled', got '%s'", updatedIntent.Status)
 	}
 }
 
