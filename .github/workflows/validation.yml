@@ -199,6 +199,7 @@ jobs:
           format: table
           exit-code: "1"
           severity: HIGH,CRITICAL
+          version: v0.69.2
 
   frontend-security:
     name: Frontend Security (telegram-service)
