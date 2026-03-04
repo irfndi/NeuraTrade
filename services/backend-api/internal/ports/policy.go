@@ -52,7 +52,7 @@ type OrderIntent struct {
 	StopLoss        float64
 	TakeProfit      float64
 	CurrentPosition float64
-	PortfolioValue  float64
+	PortfolioValue  decimal.Decimal
 }
 
 // PolicyEngine evaluates order intents against policy rules.

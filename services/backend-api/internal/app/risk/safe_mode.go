@@ -4,6 +4,7 @@ package risk
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -52,27 +53,24 @@ func DefaultSafeModeConfig() SafeModeConfig {
 
 // NewSafeMode creates a new safe mode controller.
 func NewSafeMode(config SafeModeConfig) *SafeModeImpl {
-	// Validate and clamp multipliers to acceptable range (0, 1]
-	maxOrderSizeMult := config.MaxOrderSizeMultiplier
-	if maxOrderSizeMult <= 0 || maxOrderSizeMult > 1 {
-		maxOrderSizeMult = 1.0 // Default to safe value
-	}
-	maxLeverageMult := config.MaxLeverageMultiplier
-	if maxLeverageMult <= 0 || maxLeverageMult > 1 {
-		maxLeverageMult = 1.0
-	}
-	maxPositionMult := config.MaxPositionMultiplier
-	if maxPositionMult <= 0 || maxPositionMult > 1 {
-		maxPositionMult = 1.0
-	}
-
 	return &SafeModeImpl{
-		maxOrderSizeMultiplier: maxOrderSizeMult,
-		maxLeverageMultiplier:  maxLeverageMult,
-		maxPositionMultiplier:  maxPositionMult,
+		maxOrderSizeMultiplier: normalizeSafeModeMultiplier(config.MaxOrderSizeMultiplier),
+		maxLeverageMultiplier:  normalizeSafeModeMultiplier(config.MaxLeverageMultiplier),
+		maxPositionMultiplier:  normalizeSafeModeMultiplier(config.MaxPositionMultiplier),
 		restrictToPaper:        config.RestrictToPaper,
 		listeners:              make([]SafeModeListener, 0),
 	}
+}
+
+func normalizeSafeModeMultiplier(multiplier float64) float64 {
+	// Keep multipliers in a conservative valid range (0, 1].
+	if multiplier <= 0 {
+		return 1.0
+	}
+	if multiplier > 1.0 {
+		return 1.0
+	}
+	return multiplier
 }
 
 // Enable enables safe mode.
@@ -233,38 +231,12 @@ func (t *AutoSafeModeTrigger) OnDrawdownUpdate(drawdown float64) {
 	if drawdown >= t.drawdownLimit {
 		if err := t.safeMode.EnableWithReason(context.Background(),
 			fmt.Sprintf("auto-triggered: drawdown %.2f%% >= limit %.2f%%", drawdown*100, t.drawdownLimit*100)); err != nil {
-			return fmt.Errorf("enable safe mode auto-trigger: %w", err)
+			log.Printf("[risk] %v", fmt.Errorf("enable safe mode auto-trigger: %w", err))
 		}
-	}
-	return nil
-}
-func (t *AutoSafeModeTrigger) OnDrawdownUpdate(drawdown float64) {
-	if drawdown >= t.drawdownLimit {
-		_ = t.safeMode.EnableWithReason(context.Background(),
-			fmt.Sprintf("auto-triggered: drawdown %.2f%% >= limit %.2f%%", drawdown*100, t.drawdownLimit*100))
 	}
 }
 
 // OnTradeResult is called after each trade result.
-func (t *AutoSafeModeTrigger) OnTradeResult(profitable bool) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if profitable {
-		t.currentStreak = 0
-		return nil
-	}
-
-	t.currentStreak++
-	if t.currentStreak >= t.lossStreak {
-		if err := t.safeMode.EnableWithReason(context.Background(),
-			fmt.Sprintf("auto-triggered: %d consecutive losses", t.currentStreak)); err != nil {
-			return fmt.Errorf("enable safe mode auto-trigger: %w", err)
-		}
-		t.currentStreak = 0 // Reset after triggering
-	}
-	return nil
-}
 func (t *AutoSafeModeTrigger) OnTradeResult(profitable bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -280,8 +252,10 @@ func (t *AutoSafeModeTrigger) OnTradeResult(profitable bool) {
 
 	t.currentStreak++
 	if t.currentStreak >= t.lossStreak {
-		_ = t.safeMode.EnableWithReason(context.Background(),
-			fmt.Sprintf("auto-triggered: %d consecutive losses", t.currentStreak))
+		if err := t.safeMode.EnableWithReason(context.Background(),
+			fmt.Sprintf("auto-triggered: %d consecutive losses", t.currentStreak)); err != nil {
+			log.Printf("[risk] %v", fmt.Errorf("enable safe mode auto-trigger: %w", err))
+		}
 		t.currentStreak = 0 // Reset after triggering
 	}
 }

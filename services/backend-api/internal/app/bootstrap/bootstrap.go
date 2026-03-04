@@ -291,7 +291,8 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 	}
 
 	riskActorIDValue := riskActorID(b.config.RiskActorID)
-	a.RiskActor = risk.NewRiskActor(risk.RiskActorConfig{
+	var err error
+	a.RiskActor, err = risk.NewRiskActor(risk.RiskActorConfig{
 		ID:                  riskActorIDValue,
 		PolicyEngine:        policyEngine,
 		KillSwitch:          ks,
@@ -302,6 +303,9 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 		CooldownPeriod:      b.config.Risk.CooldownPeriod,
 		CooldownAfterLosses: b.config.Risk.CooldownAfterLosses,
 	})
+	if err != nil {
+		return fmt.Errorf("create RiskActor: %w", err)
+	}
 
 	// Spawn risk actor in actor system
 	ref, err := a.ActorSystem.Spawn(a.RiskActor, actor.DefaultConfig())
@@ -310,8 +314,9 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 	}
 
 	runErrCh := make(chan error, 1)
+	actorRunCtx, actorRunCancel := context.WithCancel(context.Background())
 	go func() {
-		runErrCh <- ref.Run(context.Background())
+		runErrCh <- ref.Run(actorRunCtx)
 	}()
 
 	startTimeout := time.NewTimer(5 * time.Second)
@@ -322,12 +327,14 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 	for !ref.IsRunning() {
 		select {
 		case runErr := <-runErrCh:
+			actorRunCancel()
 			ref.Stop()
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
 				return fmt.Errorf("run RiskActor before RiskRef assignment: %w", runErr)
 			}
 			return fmt.Errorf("risk actor stopped before RiskRef assignment")
 		case <-startTimeout.C:
+			actorRunCancel()
 			ref.Stop()
 			return fmt.Errorf("timeout waiting for RiskActor to start before creating RiskRef")
 		case <-startTicker.C:
@@ -338,12 +345,14 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 	a.Supervisor.AddFunc(riskActorIDValue, func(ctx context.Context) error {
 		select {
 		case runErr := <-runErrCh:
+			actorRunCancel()
 			ref.Stop()
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
 				return fmt.Errorf("run risk actor: %w", runErr)
 			}
 			return nil
 		case <-ctx.Done():
+			actorRunCancel()
 			ref.Stop()
 			if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
 				return fmt.Errorf("run risk actor: %w", runErr)

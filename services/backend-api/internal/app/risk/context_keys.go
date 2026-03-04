@@ -1,6 +1,7 @@
 package risk
 
 import "context"
+import "strings"
 
 type ctxKey string
 
@@ -32,10 +33,16 @@ func tradingModeFromContext(ctx context.Context) (string, bool) {
 
 func sourceFromContext(ctx context.Context) string {
 	if source, ok := ctx.Value(sourceKey).(string); ok {
-		return source
+		trimmed := strings.TrimSpace(source)
+		if trimmed != "" {
+			return trimmed
+		}
 	}
 	if user, ok := ctx.Value(userKey).(string); ok {
-		return user
+		trimmed := strings.TrimSpace(user)
+		if trimmed != "" {
+			return trimmed
+		}
 	}
 	return "system"
 }

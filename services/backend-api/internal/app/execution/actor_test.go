@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -64,6 +65,24 @@ func (m *MockTradingGateway) CancelOrder(ctx context.Context, exchange, orderID 
 	m.canceledOrders[orderID] = true
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *MockTradingGateway) SetPlaceOrderFunc(fn func(ctx context.Context, req ports.OrderRequest) (ports.OrderResult, error)) {
+	m.mu.Lock()
+	m.placeOrderFunc = fn
+	m.mu.Unlock()
+}
+
+func (m *MockTradingGateway) SetCancelOrderFunc(fn func(ctx context.Context, exchange, orderID string) error) {
+	m.mu.Lock()
+	m.cancelOrderFunc = fn
+	m.mu.Unlock()
+}
+
+func (m *MockTradingGateway) OrdersCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.orders)
 }
 
 func (m *MockTradingGateway) CancelAllOrders(ctx context.Context, exchange, symbol string) error {
@@ -297,6 +316,169 @@ func TestExecutionActor_PlaceOrder_Success(t *testing.T) {
 	// Verify event was published
 	if eventBus.EventsCount() == 0 {
 		t.Error("Expected event to be published")
+	}
+}
+
+func TestExecutionActor_PlaceOrder_RiskNotApproved(t *testing.T) {
+	ctx := context.Background()
+	gateway := NewMockTradingGateway()
+	eventBus := NewMockEventBus()
+	idempotencyStore := NewMockIdempotencyStore()
+	auditLog := NewMockAuditLogger()
+
+	execActor := NewExecutionActor("test-actor", gateway, eventBus, idempotencyStore, auditLog)
+
+	msg := PlaceOrderMsg{
+		IntentID: "intent-risk-reject-001",
+		Request: ports.OrderRequest{
+			Exchange: "test-exchange",
+			Symbol:   "BTC/USDT",
+			Side:     ports.OrderSideBuy,
+			Type:     ports.OrderTypeMarket,
+			Amount:   decimal.NewFromFloat(1.0),
+		},
+		RiskApproved: false,
+	}
+
+	err := execActor.Receive(ctx, actor.Envelope{Message: msg})
+	if !errors.Is(err, ErrRiskNotApproved) {
+		t.Fatalf("expected ErrRiskNotApproved, got %v", err)
+	}
+
+	intent, getErr := idempotencyStore.GetIntent(ctx, msg.IntentID)
+	if getErr != nil {
+		t.Fatalf("GetIntent failed: %v", getErr)
+	}
+	if intent == nil {
+		t.Fatalf("expected stored intent for %s", msg.IntentID)
+	}
+	if intent.Status != ports.OrderStatusRejected {
+		t.Fatalf("expected rejected status, got %s", intent.Status)
+	}
+	if gateway.OrdersCount() != 0 {
+		t.Fatalf("gateway should not place any order when risk is not approved")
+	}
+}
+
+func TestExecutionActor_PlaceOrder_ValidationFailures(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name    string
+		request ports.OrderRequest
+	}{
+		{
+			name: "empty exchange",
+			request: ports.OrderRequest{
+				Symbol: "BTC/USDT",
+				Side:   ports.OrderSideBuy,
+				Type:   ports.OrderTypeMarket,
+				Amount: decimal.NewFromFloat(1.0),
+			},
+		},
+		{
+			name: "invalid side",
+			request: ports.OrderRequest{
+				Exchange: "test-exchange",
+				Symbol:   "BTC/USDT",
+				Side:     ports.OrderSide(""),
+				Type:     ports.OrderTypeMarket,
+				Amount:   decimal.NewFromFloat(1.0),
+			},
+		},
+		{
+			name: "invalid type",
+			request: ports.OrderRequest{
+				Exchange: "test-exchange",
+				Symbol:   "BTC/USDT",
+				Side:     ports.OrderSideBuy,
+				Type:     ports.OrderType(""),
+				Amount:   decimal.NewFromFloat(1.0),
+			},
+		},
+		{
+			name: "zero amount",
+			request: ports.OrderRequest{
+				Exchange: "test-exchange",
+				Symbol:   "BTC/USDT",
+				Side:     ports.OrderSideBuy,
+				Type:     ports.OrderTypeMarket,
+				Amount:   decimal.Zero,
+			},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gateway := NewMockTradingGateway()
+			eventBus := NewMockEventBus()
+			idempotencyStore := NewMockIdempotencyStore()
+			auditLog := NewMockAuditLogger()
+			execActor := NewExecutionActor("test-actor", gateway, eventBus, idempotencyStore, auditLog)
+
+			intentID := fmt.Sprintf("intent-validation-%d", i)
+			err := execActor.Receive(ctx, actor.Envelope{
+				Message: PlaceOrderMsg{
+					IntentID:     intentID,
+					Request:      tt.request,
+					RiskApproved: true,
+				},
+			})
+			if err == nil {
+				t.Fatalf("expected validation error")
+			}
+			if !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("expected ErrInvalidRequest, got %v", err)
+			}
+			if gateway.OrdersCount() != 0 {
+				t.Fatalf("no gateway order should be placed on validation failure")
+			}
+		})
+	}
+}
+
+func TestExecutionActor_PlaceOrder_GatewayFailure(t *testing.T) {
+	ctx := context.Background()
+	gateway := NewMockTradingGateway()
+	gateway.SetPlaceOrderFunc(func(ctx context.Context, req ports.OrderRequest) (ports.OrderResult, error) {
+		return ports.OrderResult{}, fmt.Errorf("exchange temporary failure")
+	})
+	eventBus := NewMockEventBus()
+	idempotencyStore := NewMockIdempotencyStore()
+	auditLog := NewMockAuditLogger()
+
+	execActor := NewExecutionActor("test-actor", gateway, eventBus, idempotencyStore, auditLog)
+	msg := PlaceOrderMsg{
+		IntentID: "intent-gateway-failure-001",
+		Request: ports.OrderRequest{
+			Exchange: "test-exchange",
+			Symbol:   "BTC/USDT",
+			Side:     ports.OrderSideBuy,
+			Type:     ports.OrderTypeMarket,
+			Amount:   decimal.NewFromFloat(1.0),
+		},
+		RiskApproved: true,
+	}
+
+	err := execActor.Receive(ctx, actor.Envelope{Message: msg})
+	if !errors.Is(err, ErrExecutionRejected) {
+		t.Fatalf("expected ErrExecutionRejected, got %v", err)
+	}
+
+	intent, getErr := idempotencyStore.GetIntent(ctx, msg.IntentID)
+	if getErr != nil {
+		t.Fatalf("GetIntent failed: %v", getErr)
+	}
+	if intent == nil {
+		t.Fatalf("expected stored intent for failed gateway placement")
+	}
+	if intent.Status != ports.OrderStatusRejected {
+		t.Fatalf("expected rejected status after gateway failure, got %s", intent.Status)
+	}
+	if auditLog.EventsCount() == 0 {
+		t.Fatalf("expected audit events for failed gateway placement")
+	}
+	if eventBus.EventsCount() == 0 {
+		t.Fatalf("expected event publication for failed gateway placement")
 	}
 }
 
@@ -586,6 +768,35 @@ func cloneOrderIntent(intent *OrderIntent) *OrderIntent {
 	if intent == nil {
 		return nil
 	}
-	cloned := *intent
-	return &cloned
+	return &OrderIntent{
+		IntentID:        intent.IntentID,
+		ClientOrderID:   intent.ClientOrderID,
+		ExchangeOrderID: intent.ExchangeOrderID,
+		Status:          intent.Status,
+		Request:         cloneOrderRequest(intent.Request),
+		SubmittedAt:     intent.SubmittedAt,
+		UpdatedAt:       intent.UpdatedAt,
+		FilledAmount:    intent.FilledAmount,
+		FillPrice:       intent.FillPrice,
+		RejectReason:    intent.RejectReason,
+		AttemptCount:    intent.AttemptCount,
+		LastAuditHash:   intent.LastAuditHash,
+	}
+}
+
+func cloneOrderRequest(req ports.OrderRequest) ports.OrderRequest {
+	// Explicit field mapping keeps cloning behavior stable if mutable nested fields are added later.
+	return ports.OrderRequest{
+		ClientID:   req.ClientID,
+		Exchange:   req.Exchange,
+		Symbol:     req.Symbol,
+		Side:       req.Side,
+		Type:       req.Type,
+		Amount:     req.Amount,
+		Price:      req.Price,
+		StopPrice:  req.StopPrice,
+		TakeProfit: req.TakeProfit,
+		ReduceOnly: req.ReduceOnly,
+		PostOnly:   req.PostOnly,
+	}
 }

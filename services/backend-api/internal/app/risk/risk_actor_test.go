@@ -11,29 +11,55 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-func TestRiskActorEvaluateIntent(t *testing.T) {
-	// Setup
-	policy := NewEngine()
-	ks := NewKillSwitch()
-	sm := NewSafeMode(DefaultSafeModeConfig())
+type riskActorFixture struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	ref    *actor.Ref
+	client *RiskActorRef
+}
 
-	ra := NewRiskActor(RiskActorConfig{
-		ID:           "test-risk-actor",
-		PolicyEngine: policy,
-		KillSwitch:   ks,
-		SafeMode:     sm,
-	})
+func newTestRiskFixture(t *testing.T, cfg RiskActorConfig) *riskActorFixture {
+	t.Helper()
 
-	// Create actor ref
+	if cfg.ID == "" {
+		cfg.ID = "test-risk-actor"
+	}
+	if cfg.PolicyEngine == nil {
+		cfg.PolicyEngine = NewEngine()
+	}
+	if cfg.KillSwitch == nil {
+		cfg.KillSwitch = NewKillSwitch()
+	}
+	if cfg.SafeMode == nil {
+		cfg.SafeMode = NewSafeMode(DefaultSafeModeConfig())
+	}
+
+	ra, err := NewRiskActor(cfg)
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
+
 	ref := actor.NewRef(ra, actor.DefaultConfig())
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	go ref.Run(ctx)
 	waitForActorRunning(t, ref, time.Second)
 
-	// Create client ref
-	client := NewRiskActorRef(ref)
+	return &riskActorFixture{
+		ctx:    ctx,
+		cancel: cancel,
+		ref:    ref,
+		client: NewRiskActorRef(ref),
+	}
+}
+
+func (f *riskActorFixture) Close() {
+	f.cancel()
+	f.ref.Stop()
+}
+
+func TestRiskActorEvaluateIntent(t *testing.T) {
+	fixture := newTestRiskFixture(t, RiskActorConfig{})
+	defer fixture.Close()
 
 	// Test evaluation
 	intent := ports.OrderIntent{
@@ -44,7 +70,7 @@ func TestRiskActorEvaluateIntent(t *testing.T) {
 		Price:    decimal.NewFromFloat(50000.0),
 	}
 
-	decision, err := client.EvaluateIntent(ctx, intent)
+	decision, err := fixture.client.EvaluateIntent(fixture.ctx, intent)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -54,7 +80,10 @@ func TestRiskActorEvaluateIntent(t *testing.T) {
 }
 
 func TestNewRiskActor_DefaultDependencies(t *testing.T) {
-	ra := NewRiskActor(RiskActorConfig{})
+	ra, err := NewRiskActor(RiskActorConfig{})
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
 	if ra.policy == nil {
 		t.Fatal("policy engine should be initialized")
 	}
@@ -67,36 +96,18 @@ func TestNewRiskActor_DefaultDependencies(t *testing.T) {
 }
 
 func TestRiskActorKillSwitchViaMessages(t *testing.T) {
-	// Setup
-	policy := NewEngine()
-	ks := NewKillSwitch()
-	sm := NewSafeMode(DefaultSafeModeConfig())
-
-	ra := NewRiskActor(RiskActorConfig{
-		ID:           "test-risk-actor",
-		PolicyEngine: policy,
-		KillSwitch:   ks,
-		SafeMode:     sm,
-	})
-
-	ref := actor.NewRef(ra, actor.DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go ref.Run(ctx)
-	waitForActorRunning(t, ref, time.Second)
-
-	client := NewRiskActorRef(ref)
+	fixture := newTestRiskFixture(t, RiskActorConfig{})
+	defer fixture.Close()
 
 	// Engage kill switch
-	err := client.EngageKillSwitch(ctx, "test emergency")
+	err := fixture.client.EngageKillSwitch(fixture.ctx, "test emergency")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should reject
 	intent := ports.OrderIntent{IntentID: "test-1"}
-	decision, err := client.EvaluateIntent(ctx, intent)
+	decision, err := fixture.client.EvaluateIntent(fixture.ctx, intent)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,13 +116,13 @@ func TestRiskActorKillSwitchViaMessages(t *testing.T) {
 	}
 
 	// Disengage
-	err = client.DisengageKillSwitch(ctx)
+	err = fixture.client.DisengageKillSwitch(fixture.ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Should approve now
-	decision, err = client.EvaluateIntent(ctx, intent)
+	decision, err = fixture.client.EvaluateIntent(fixture.ctx, intent)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,34 +132,17 @@ func TestRiskActorKillSwitchViaMessages(t *testing.T) {
 }
 
 func TestRiskActorSafeMode(t *testing.T) {
-	policy := NewEngine()
-	ks := NewKillSwitch()
-	sm := NewSafeMode(DefaultSafeModeConfig())
-
-	ra := NewRiskActor(RiskActorConfig{
-		ID:           "test-risk-actor",
-		PolicyEngine: policy,
-		KillSwitch:   ks,
-		SafeMode:     sm,
-	})
-
-	ref := actor.NewRef(ra, actor.DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go ref.Run(ctx)
-	waitForActorRunning(t, ref, time.Second)
-
-	client := NewRiskActorRef(ref)
+	fixture := newTestRiskFixture(t, RiskActorConfig{})
+	defer fixture.Close()
 
 	// Enable safe mode
-	err := client.EnableSafeMode(ctx, "testing")
+	err := fixture.client.EnableSafeMode(fixture.ctx, "testing")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Get state
-	state, err := client.GetState(ctx)
+	state, err := fixture.client.GetState(fixture.ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -160,12 +154,12 @@ func TestRiskActorSafeMode(t *testing.T) {
 	}
 
 	// Disable safe mode
-	err = client.DisableSafeMode(ctx)
+	err = fixture.client.DisableSafeMode(fixture.ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	state, err = client.GetState(ctx)
+	state, err = fixture.client.GetState(fixture.ctx)
 	if err != nil {
 		t.Fatalf("GetState after disabling safe mode: %v", err)
 	}
@@ -179,26 +173,10 @@ func TestRiskActorGetState(t *testing.T) {
 	if err := policy.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0))); err != nil {
 		t.Fatalf("add max order size rule: %v", err)
 	}
-	ks := NewKillSwitch()
-	sm := NewSafeMode(DefaultSafeModeConfig())
+	fixture := newTestRiskFixture(t, RiskActorConfig{PolicyEngine: policy})
+	defer fixture.Close()
 
-	ra := NewRiskActor(RiskActorConfig{
-		ID:           "test-risk-actor",
-		PolicyEngine: policy,
-		KillSwitch:   ks,
-		SafeMode:     sm,
-	})
-
-	ref := actor.NewRef(ra, actor.DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go ref.Run(ctx)
-	waitForActorRunning(t, ref, time.Second)
-
-	client := NewRiskActorRef(ref)
-
-	state, err := client.GetState(ctx)
+	state, err := fixture.client.GetState(fixture.ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,13 +198,16 @@ func TestRiskActorWithEventBus(t *testing.T) {
 	sm := NewSafeMode(DefaultSafeModeConfig())
 	bus := eventbus.New(eventbus.DefaultConfig())
 
-	ra := NewRiskActor(RiskActorConfig{
+	ra, err := NewRiskActor(RiskActorConfig{
 		ID:           "test-risk-actor",
 		PolicyEngine: policy,
 		KillSwitch:   ks,
 		SafeMode:     sm,
 		EventBus:     bus,
 	})
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
 
 	ref := actor.NewRef(ra, actor.DefaultConfig())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -262,27 +243,12 @@ func TestRiskActorWithEventBus(t *testing.T) {
 }
 
 func TestRiskActorAddRemoveRule(t *testing.T) {
-	policy := NewEngine()
-	ks := NewKillSwitch()
-	sm := NewSafeMode(DefaultSafeModeConfig())
-
-	ra := NewRiskActor(RiskActorConfig{
-		ID:           "test-risk-actor",
-		PolicyEngine: policy,
-		KillSwitch:   ks,
-		SafeMode:     sm,
-	})
-
-	ref := actor.NewRef(ra, actor.DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go ref.Run(ctx)
-	waitForActorRunning(t, ref, time.Second)
+	fixture := newTestRiskFixture(t, RiskActorConfig{})
+	defer fixture.Close()
 
 	// Test adding rule via message
 	reply := make(chan error, 1)
-	if err := ref.Send(ctx, AddRuleMsg{
+	if err := fixture.ref.Send(fixture.ctx, AddRuleMsg{
 		Rule:  NewMinConfidenceRule(0.8),
 		Reply: reply,
 	}); err != nil {
@@ -300,7 +266,7 @@ func TestRiskActorAddRemoveRule(t *testing.T) {
 
 	// Test removing rule via message
 	reply2 := make(chan error, 1)
-	if err := ref.Send(ctx, RemoveRuleMsg{
+	if err := fixture.ref.Send(fixture.ctx, RemoveRuleMsg{
 		RuleName: "min_confidence",
 		Reply:    reply2,
 	}); err != nil {

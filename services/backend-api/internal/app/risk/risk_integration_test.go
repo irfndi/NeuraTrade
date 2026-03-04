@@ -33,13 +33,16 @@ func TestIntegration_SignalProposed_RiskRejected_NoOrder(t *testing.T) {
 	sm := NewSafeMode(DefaultSafeModeConfig())
 	bus := eventbus.New(eventbus.DefaultConfig())
 
-	ra := NewRiskActor(RiskActorConfig{
+	ra, err := NewRiskActor(RiskActorConfig{
 		ID:           "test-risk-actor",
 		PolicyEngine: policy,
 		KillSwitch:   ks,
 		SafeMode:     sm,
 		EventBus:     bus,
 	})
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
 
 	ref := actor.NewRef(ra, actor.DefaultConfig())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -143,13 +146,16 @@ func TestIntegration_SignalProposed_RiskApproved(t *testing.T) {
 	sm := NewSafeMode(DefaultSafeModeConfig())
 	bus := eventbus.New(eventbus.DefaultConfig())
 
-	ra := NewRiskActor(RiskActorConfig{
+	ra, err := NewRiskActor(RiskActorConfig{
 		ID:           "test-risk-actor",
 		PolicyEngine: policy,
 		KillSwitch:   ks,
 		SafeMode:     sm,
 		EventBus:     bus,
 	})
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
 
 	ref := actor.NewRef(ra, actor.DefaultConfig())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -214,13 +220,16 @@ func TestIntegration_KillSwitch_ImmediateBlocking(t *testing.T) {
 	sm := NewSafeMode(DefaultSafeModeConfig())
 	bus := eventbus.New(eventbus.DefaultConfig())
 
-	ra := NewRiskActor(RiskActorConfig{
+	ra, err := NewRiskActor(RiskActorConfig{
 		ID:           "test-risk-actor",
 		PolicyEngine: policy,
 		KillSwitch:   ks,
 		SafeMode:     sm,
 		EventBus:     bus,
 	})
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
 
 	ref := actor.NewRef(ra, actor.DefaultConfig())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -312,13 +321,16 @@ func TestIntegration_SafeMode_ImmediateBlocking(t *testing.T) {
 	sm := NewSafeMode(config)
 	bus := eventbus.New(eventbus.DefaultConfig())
 
-	ra := NewRiskActor(RiskActorConfig{
+	ra, err := NewRiskActor(RiskActorConfig{
 		ID:           "test-risk-actor",
 		PolicyEngine: policy,
 		KillSwitch:   ks,
 		SafeMode:     sm,
 		EventBus:     bus,
 	})
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
 
 	ref := actor.NewRef(ra, actor.DefaultConfig())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -430,13 +442,16 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 	sm := NewSafeMode(DefaultSafeModeConfig())
 	bus := eventbus.New(eventbus.DefaultConfig())
 
-	ra := NewRiskActor(RiskActorConfig{
+	ra, err := NewRiskActor(RiskActorConfig{
 		ID:           "test-risk-actor",
 		PolicyEngine: policy,
 		KillSwitch:   ks,
 		SafeMode:     sm,
 		EventBus:     bus,
 	})
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
 
 	ref := actor.NewRef(ra, actor.DefaultConfig())
 	ctx, cancel := context.WithCancel(context.Background())

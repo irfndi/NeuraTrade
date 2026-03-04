@@ -27,7 +27,8 @@ type KillSwitchListener func(state ports.KillSwitchState)
 // NewKillSwitch creates a new kill switch.
 func NewKillSwitch() *KillSwitchImpl {
 	return &KillSwitchImpl{
-		listeners: make([]KillSwitchListener, 0),
+		cancelOrders: true,
+		listeners:    make([]KillSwitchListener, 0),
 	}
 }
 
@@ -44,7 +45,15 @@ func (k *KillSwitchImpl) Engage(ctx context.Context, reason string) error {
 	k.engagedAt = time.Now()
 	k.engagedBy = extractSourceFromContext(ctx)
 	k.reason = reason
-	// Note: k.cancelOrders is persistent config, set via SetCancelOrders()
+
+	// Notify listeners
+	state := k.stateLocked()
+	for _, listener := range k.listeners {
+		go listener(state)
+	}
+
+	return nil
+}
 
 // Disengage disengages the kill switch.
 func (k *KillSwitchImpl) Disengage(ctx context.Context) error {
@@ -59,7 +68,14 @@ func (k *KillSwitchImpl) Disengage(ctx context.Context) error {
 	k.engagedAt = time.Time{}
 	k.engagedBy = ""
 	k.reason = ""
-	// Note: k.cancelOrders is persistent config, preserve it
+
+	// Notify listeners
+	state := k.stateLocked()
+	for _, listener := range k.listeners {
+		go listener(state)
+	}
+
+	return nil
 }
 
 // IsEngaged returns whether the kill switch is engaged.

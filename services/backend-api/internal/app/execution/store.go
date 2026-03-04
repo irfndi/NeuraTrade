@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -84,7 +85,7 @@ func (s *SQLIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderInten
 		submitted_at, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	query = rebindQuestionPlaceholders(query)
+	query = rebindQuestionPlaceholders(s.db, query)
 
 	_, err := s.db.ExecContext(ctx, query,
 		intent.IntentID,
@@ -125,7 +126,7 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 		submitted_at, updated_at
 	FROM order_intents WHERE intent_id = ?
 	`
-	query = rebindQuestionPlaceholders(query)
+	query = rebindQuestionPlaceholders(s.db, query)
 
 	var intent OrderIntent
 	var statusStr, sideStr, typeStr string
@@ -202,7 +203,7 @@ func (s *SQLIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID 
 	query := `
 	SELECT intent_id FROM order_intents WHERE client_order_id = ?
 	`
-	query = rebindQuestionPlaceholders(query)
+	query = rebindQuestionPlaceholders(s.db, query)
 
 	var intentID string
 	err := s.db.QueryRowContext(ctx, query, clientID).Scan(&intentID)
@@ -223,7 +224,7 @@ func (s *SQLIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchang
 	ORDER BY updated_at DESC
 	LIMIT 1
 	`
-	query = rebindQuestionPlaceholders(query)
+	query = rebindQuestionPlaceholders(s.db, query)
 
 	var intentID string
 	err := s.db.QueryRowContext(ctx, query, exchange, exchangeOrderID).Scan(&intentID)
@@ -257,7 +258,7 @@ func (s *SQLIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderInt
 		updated_at = ?
 	WHERE intent_id = ?
 	`
-	query = rebindQuestionPlaceholders(query)
+	query = rebindQuestionPlaceholders(s.db, query)
 
 	result, err := s.db.ExecContext(ctx, query,
 		intent.ExchangeOrderID,
@@ -358,7 +359,7 @@ func (l *SQLAuditLogger) LogOrderEvent(ctx context.Context, event OrderAuditEven
 		filled_amount, fill_price, reason, metadata, timestamp, hash_chain
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	query = rebindQuestionPlaceholders(query)
+	query = rebindQuestionPlaceholders(l.db, query)
 
 	_, err = l.db.ExecContext(ctx, query,
 		event.EventID,
@@ -395,7 +396,7 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 	WHERE intent_id = ?
 	ORDER BY timestamp ASC
 	`
-	query = rebindQuestionPlaceholders(query)
+	query = rebindQuestionPlaceholders(l.db, query)
 
 	rows, err := l.db.QueryContext(ctx, query, intentID)
 	if err != nil {
@@ -507,7 +508,11 @@ func nullStringValue(s sql.NullString) string {
 	return s.String
 }
 
-func rebindQuestionPlaceholders(query string) string {
+func rebindQuestionPlaceholders(db *sql.DB, query string) string {
+	if db == nil || isSQLiteDriver(db) {
+		return query
+	}
+
 	argPos := 1
 	var out strings.Builder
 	out.Grow(len(query) + 16)
@@ -542,6 +547,7 @@ func parseOrderStatus(s string) ports.OrderStatus {
 	case "rejected":
 		return ports.OrderStatusRejected
 	default:
+		log.Printf("[execution.store] parseOrderStatus: unrecognized status %q, defaulting to pending", s)
 		return ports.OrderStatusPending
 	}
 }
@@ -553,6 +559,7 @@ func parseOrderSide(s string) ports.OrderSide {
 	case "sell":
 		return ports.OrderSideSell
 	default:
+		log.Printf("[execution.store] parseOrderSide: unrecognized side %q, defaulting to buy", s)
 		return ports.OrderSideBuy
 	}
 }
@@ -564,6 +571,7 @@ func parseOrderType(s string) ports.OrderType {
 	case "limit":
 		return ports.OrderTypeLimit
 	default:
+		log.Printf("[execution.store] parseOrderType: unrecognized type %q, defaulting to market", s)
 		return ports.OrderTypeMarket
 	}
 }

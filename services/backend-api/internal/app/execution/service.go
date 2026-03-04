@@ -171,8 +171,8 @@ func (s *ExecutionService) CancelOrder(ctx context.Context, req CancelOrderReque
 	}
 	msg.Reason = req.Reason
 
-	if err := s.actorRef.Send(ctx, msg); err != nil {
-		return fmt.Errorf("failed to send cancel order message: %w", err)
+	if _, err := s.actorRef.Ask(ctx, msg); err != nil {
+		return fmt.Errorf("cancel order rejected: %w", err)
 	}
 
 	return nil
@@ -198,6 +198,10 @@ func (s *ExecutionService) GetOrderStatus(ctx context.Context, intentID string) 
 		return nil, fmt.Errorf("authorize get order status for intent %s: %w", intentID, err)
 	}
 
+	return s.getOrderStatusWithoutAuthorization(ctx, intentID)
+}
+
+func (s *ExecutionService) getOrderStatusWithoutAuthorization(ctx context.Context, intentID string) (*OrderStatusResponse, error) {
 	msg := GetOrderStatusMsg{
 		IntentID: intentID,
 	}
@@ -261,8 +265,19 @@ func (s *ExecutionService) GetAuditHistory(ctx context.Context, intentID string)
 	return s.actor.auditLog.GetOrderHistory(ctx, intentID)
 }
 
-// WaitForTerminalState waits for an order to reach a terminal state
+// WaitForTerminalState waits for an order to reach a terminal state.
+// Authorization is performed once before polling so repeated status checks avoid re-authorizing.
 func (s *ExecutionService) WaitForTerminalState(ctx context.Context, intentID string, timeout time.Duration) (*OrderStatusResponse, error) {
+	if !s.actorRef.IsRunning() {
+		return nil, ErrActorStopped
+	}
+	if intentID == "" {
+		return nil, fmt.Errorf("intent ID is required")
+	}
+	if err := s.authorizeIntent(ctx, intentID); err != nil {
+		return nil, fmt.Errorf("authorize wait for terminal state for intent %s: %w", intentID, err)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -274,7 +289,7 @@ func (s *ExecutionService) WaitForTerminalState(ctx context.Context, intentID st
 		case <-ctx.Done():
 			return nil, fmt.Errorf("timeout waiting for terminal state: %w", ctx.Err())
 		case <-ticker.C:
-			status, err := s.GetOrderStatus(ctx, intentID)
+			status, err := s.getOrderStatusWithoutAuthorization(ctx, intentID)
 			if err != nil {
 				return nil, err
 			}

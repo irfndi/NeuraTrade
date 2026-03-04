@@ -34,6 +34,7 @@ type (
 	// PlaceOrderMsg requests order placement with idempotency
 	PlaceOrderMsg struct {
 		IntentID     string                 // Unique intent ID for idempotency
+		AttemptCount int                    // Optional retry attempt start (defaults to 1)
 		Request      ports.OrderRequest     // The order request
 		RiskApproved bool                   // Whether risk has approved this
 		StrategyID   string                 // Optional: originating strategy
@@ -94,6 +95,7 @@ type OrderIntent struct {
 	FillPrice       decimal.Decimal
 	RejectReason    string
 	AttemptCount    int
+	LastAuditHash   string
 }
 
 // IsTerminal returns true if the order has reached a terminal state
@@ -118,6 +120,7 @@ type ExecutionActor struct {
 	intents               map[string]*OrderIntent // IntentID -> Intent
 	clientIDToIntent      map[string]string       // ClientOrderID -> IntentID
 	exchangeOrderToIntent map[string]string       // exchange:orderID -> IntentID
+	lastAuditHash         map[string]string       // IntentID -> hash of most recent audit event
 }
 
 // IdempotencyStore persists intent mappings for restart safety
@@ -195,6 +198,7 @@ func NewExecutionActor(
 		intents:               make(map[string]*OrderIntent),
 		clientIDToIntent:      make(map[string]string),
 		exchangeOrderToIntent: make(map[string]string),
+		lastAuditHash:         make(map[string]string),
 	}
 }
 
@@ -239,6 +243,14 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 		if err := a.idempotencyStore.UpdateIntent(ctx, existing); err != nil {
 			return fmt.Errorf("update intent attempt count: %w", err)
 		}
+		a.intents[msg.IntentID] = existing
+		if existing.ClientOrderID != "" {
+			a.clientIDToIntent[existing.ClientOrderID] = existing.IntentID
+		}
+		if existing.ExchangeOrderID != "" {
+			a.exchangeOrderToIntent[exchangeOrderKey(existing.Request.Exchange, existing.ExchangeOrderID)] = existing.IntentID
+		}
+		return nil
 	}
 
 	// Validate request
@@ -247,26 +259,44 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
-	// Generate deterministic ClientOrderID from IntentID (initial attempt is 1)
-	clientOrderID := generateClientOrderID(msg.IntentID, 1)
-
-	// Check if we've already placed this order (via client ID)
-	existing, err = a.idempotencyStore.GetIntentByClientID(ctx, clientOrderID)
-	if err != nil {
-		return fmt.Errorf("lookup intent by client order ID %s: %w", clientOrderID, err)
+	// Resolve deterministic client order ID while handling collisions.
+	attempt := msg.AttemptCount
+	if attempt <= 0 {
+		attempt = 1
 	}
-	if existing != nil {
-		// Order already placed with this client ID
-		a.intents[msg.IntentID] = existing
-		a.clientIDToIntent[clientOrderID] = msg.IntentID
-		if existing.ExchangeOrderID != "" {
-			a.exchangeOrderToIntent[exchangeOrderKey(existing.Request.Exchange, existing.ExchangeOrderID)] = msg.IntentID
+	var clientOrderID string
+	for {
+		clientOrderID = generateClientOrderID(msg.IntentID, attempt)
+		existingByClientID, lookupErr := a.idempotencyStore.GetIntentByClientID(ctx, clientOrderID)
+		if lookupErr != nil {
+			return fmt.Errorf("lookup intent by client order ID %s: %w", clientOrderID, lookupErr)
 		}
-		if existing.IsTerminal() {
+
+		if existingByClientID == nil {
+			break
+		}
+
+		// Existing mapping belongs to the same intent: reuse and keep idempotent behavior.
+		if existingByClientID.IntentID == msg.IntentID {
+			existingByClientID.AttemptCount++
+			if err := a.idempotencyStore.UpdateIntent(ctx, existingByClientID); err != nil {
+				return fmt.Errorf("update intent attempt count: %w", err)
+			}
+
+			a.intents[msg.IntentID] = existingByClientID
+			a.clientIDToIntent[clientOrderID] = existingByClientID.IntentID
+			if existingByClientID.ExchangeOrderID != "" {
+				a.exchangeOrderToIntent[exchangeOrderKey(existingByClientID.Request.Exchange, existingByClientID.ExchangeOrderID)] = existingByClientID.IntentID
+			}
+			if existingByClientID.IsTerminal() {
+				return nil
+			}
+			a.publishEvent(ctx, ports.EventTypeOrderPlaced, existingByClientID)
 			return nil
 		}
-		a.publishEvent(ctx, ports.EventTypeOrderPlaced, existing)
-		return nil
+
+		// Collision with a different intent: advance attempt and retry.
+		attempt++
 	}
 
 	// Create intent record
@@ -277,7 +307,7 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 		Request:       msg.Request,
 		SubmittedAt:   time.Now(),
 		UpdatedAt:     time.Now(),
-		AttemptCount:  1,
+		AttemptCount:  attempt,
 	}
 
 	// Persist intent before execution (for crash recovery)
@@ -607,10 +637,21 @@ func (a *ExecutionActor) logAuditEvent(ctx context.Context, intentID, eventType,
 		Timestamp: time.Now(),
 	}
 
-	// Add hash chain if we have previous events
-	if history, err := a.auditLog.GetOrderHistory(ctx, intentID); err == nil && len(history) > 0 {
-		lastEvent := history[len(history)-1]
-		event.HashChain = calculateHash(lastEvent)
+	// Derive hash chain from cached prior hash when available.
+	previousHash := a.lastAuditHash[intentID]
+	if previousHash == "" {
+		if history, err := a.auditLog.GetOrderHistory(ctx, intentID); err == nil && len(history) > 0 {
+			lastEvent := history[len(history)-1]
+			hash, hashErr := calculateHash(lastEvent)
+			if hashErr != nil {
+				log.Printf("[AUDIT] failed to hash previous event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(hashErr))
+			} else {
+				previousHash = hash
+			}
+		}
+	}
+	if previousHash != "" {
+		event.HashChain = previousHash
 	}
 
 	if intent, exists := a.intents[intentID]; exists {
@@ -626,6 +667,17 @@ func (a *ExecutionActor) logAuditEvent(ctx context.Context, intentID, eventType,
 	if err := a.auditLog.LogOrderEvent(ctx, event); err != nil {
 		// Audit logging is best-effort by design.
 		log.Printf("[AUDIT] failed to log event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(err))
+		return
+	}
+
+	eventHash, err := calculateHash(event)
+	if err != nil {
+		log.Printf("[AUDIT] failed to hash event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(err))
+		return
+	}
+	a.lastAuditHash[intentID] = eventHash
+	if intent, exists := a.intents[intentID]; exists {
+		intent.LastAuditHash = eventHash
 	}
 }
 
@@ -688,13 +740,13 @@ func generateEventID() string {
 }
 
 // calculateHash computes a hash of an audit event for tamper detection
-func calculateHash(event OrderAuditEvent) string {
+func calculateHash(event OrderAuditEvent) (string, error) {
 	data, err := json.Marshal(event)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("marshal audit event: %w", err)
 	}
 	hash := sha256.Sum256(data)
-	return hex.EncodeToString(hash[:])
+	return hex.EncodeToString(hash[:]), nil
 }
 
 func exchangeOrderKey(exchange, orderID string) string {

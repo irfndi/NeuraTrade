@@ -165,7 +165,7 @@ type RiskActorConfig struct {
 }
 
 // NewRiskActor creates a new RiskActor.
-func NewRiskActor(config RiskActorConfig) *RiskActor {
+func NewRiskActor(config RiskActorConfig) (*RiskActor, error) {
 	policyEngine := config.PolicyEngine
 	if policyEngine == nil {
 		policyEngine = NewEngine()
@@ -212,16 +212,16 @@ func NewRiskActor(config RiskActorConfig) *RiskActor {
 
 	// Add kill switch and safe mode rules to policy engine
 	if err := policyEngine.AddRule(NewKillSwitchRule(killSwitch)); err != nil {
-		log.Printf("[risk] add kill switch rule: %v", err)
+		return nil, fmt.Errorf("add kill switch rule: %w", err)
 	}
 	if err := policyEngine.AddRule(NewSafeModeRule(safeMode)); err != nil {
-		log.Printf("[risk] add safe mode rule: %v", err)
+		return nil, fmt.Errorf("add safe mode rule: %w", err)
 	}
 
 	// Set up kill switch listener
 	killSwitch.AddListener(func(state ports.KillSwitchState) {
 		if ra.eventBus != nil && state.Enabled {
-			ra.publishEvent(ports.EventTypeKillSwitchEngaged, map[string]any{
+			ra.publishEvent(context.Background(), "", ports.EventTypeKillSwitchEngaged, map[string]any{
 				"reason":        state.Reason,
 				"engaged_by":    state.EngagedBy,
 				"cancel_orders": state.CancelOrders,
@@ -232,13 +232,13 @@ func NewRiskActor(config RiskActorConfig) *RiskActor {
 	// Set up safe mode listener
 	safeMode.AddListener(func(enabled bool, reason string) {
 		if ra.eventBus != nil && enabled {
-			ra.publishEvent(ports.EventTypeSafeModeEnabled, map[string]any{
+			ra.publishEvent(context.Background(), "", ports.EventTypeSafeModeEnabled, map[string]any{
 				"reason": reason,
 			})
 		}
 	})
 
-	return ra
+	return ra, nil
 }
 
 // ID returns the actor's identifier.
@@ -248,14 +248,14 @@ func (a *RiskActor) ID() string {
 
 // Receive processes incoming messages.
 func (a *RiskActor) Receive(ctx context.Context, env actor.Envelope) error {
+	traceID := env.TraceID
 	a.mu.Lock()
 	a.lastEvalTime = time.Now()
-	a.traceID = env.TraceID // Capture trace ID for event propagation
 	a.mu.Unlock()
 
 	switch msg := env.Message.(type) {
 	case EvaluateIntentMsg:
-		a.handleEvaluateIntent(ctx, msg)
+		a.handleEvaluateIntent(ctx, traceID, msg)
 	case EngageKillSwitchMsg:
 		a.handleEngageKillSwitch(ctx, msg)
 	case DisengageKillSwitchMsg:
@@ -283,7 +283,7 @@ func (a *RiskActor) Receive(ctx context.Context, env actor.Envelope) error {
 	return nil
 }
 
-func (a *RiskActor) handleEvaluateIntent(ctx context.Context, msg EvaluateIntentMsg) {
+func (a *RiskActor) handleEvaluateIntent(ctx context.Context, traceID string, msg EvaluateIntentMsg) {
 	decision, err := a.policy.Evaluate(ctx, msg.Intent)
 
 	// Publish decision event
@@ -292,7 +292,7 @@ func (a *RiskActor) handleEvaluateIntent(ctx context.Context, msg EvaluateIntent
 		if err != nil || !decision.Approved {
 			eventType = ports.EventTypeOrderIntentRejected
 		}
-		a.publishEvent(eventType, map[string]any{
+		a.publishEvent(ctx, traceID, eventType, map[string]any{
 			"intent_id": msg.Intent.IntentID,
 			"approved":  decision.Approved,
 			"reason":    decision.Reason,
@@ -416,20 +416,21 @@ func (a *RiskActor) handleRecordTradeResult(msg RecordTradeResultMsg) {
 	}
 }
 
-func (a *RiskActor) publishEvent(eventType string, payload map[string]any) {
+func (a *RiskActor) publishEvent(ctx context.Context, traceID, eventType string, payload map[string]any) {
 	if a.eventBus == nil {
 		return
 	}
-
-	a.mu.RLock()
-	traceID := a.traceID
-	a.mu.RUnlock()
 
 	event := eventbus.NewEvent("risk", eventType, payload).
 		WithSource(a.id).
 		WithTraceID(traceID)
 
-	if err := a.eventBus.Publish(context.Background(), event); err != nil {
+	publishCtx := ctx
+	if publishCtx == nil {
+		publishCtx = context.Background()
+	}
+
+	if err := a.eventBus.Publish(publishCtx, event); err != nil {
 		log.Printf("[risk] %v", fmt.Errorf("publish risk event type=%s: %w", eventType, err))
 	}
 }
@@ -534,6 +535,24 @@ func (r *RiskActorRef) DisableSafeMode(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// UpdateDrawdown updates current drawdown tracking inside the risk actor.
+func (r *RiskActorRef) UpdateDrawdown(ctx context.Context, drawdown decimal.Decimal) error {
+	return r.ref.Send(ctx, UpdateDrawdownMsg{Drawdown: drawdown})
+}
+
+// UpdateDailyLoss updates current daily loss tracking inside the risk actor.
+func (r *RiskActorRef) UpdateDailyLoss(ctx context.Context, loss decimal.Decimal) error {
+	return r.ref.Send(ctx, UpdateDailyLossMsg{Loss: loss})
+}
+
+// RecordTradeResult records a trade outcome for cooldown/loss streak tracking.
+func (r *RiskActorRef) RecordTradeResult(ctx context.Context, profitable bool, pnl decimal.Decimal) error {
+	return r.ref.Send(ctx, RecordTradeResultMsg{
+		Profitable: profitable,
+		PnL:        pnl,
+	})
 }
 
 // GetState gets the current risk state.
