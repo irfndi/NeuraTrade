@@ -47,13 +47,17 @@ func (a *PortfolioActor) SubscribeOrderFilled(ctx context.Context) error {
 		return nil
 	}
 	return a.eventBus.Subscribe(ctx, ports.EventTypeOrderFilled, func(handlerCtx context.Context, event ports.Event) error {
-		orderFilled, ok := event.(OrderFilledEvent)
-		if !ok {
-			if e, okPtr := event.(*OrderFilledEvent); okPtr && e != nil {
-				orderFilled = *e
-			} else {
+		var orderFilled OrderFilledEvent
+		switch e := event.(type) {
+		case OrderFilledEvent:
+			orderFilled = e
+		case *OrderFilledEvent:
+			if e == nil {
 				return nil
 			}
+			orderFilled = *e
+		default:
+			return nil
 		}
 
 		ref, found := a.getRef()
@@ -140,7 +144,11 @@ func (a *PortfolioActor) handleOrderFilled(ctx context.Context, event OrderFille
 		}
 	}
 
-	return a.publishWithTimeout(ctx, NewPnLUpdatedEvent(a.id, change.Position, a.portfolio.Snapshot()))
+	totals := a.portfolio.Totals()
+	return a.publishWithTimeout(
+		ctx,
+		NewPnLUpdatedEvent(a.id, change.Position, totals.TotalRealizedPnL, totals.TotalUnrealizedPnL),
+	)
 }
 
 func (a *PortfolioActor) handleMarkPriceUpdate(ctx context.Context, msg UpdateMarkPriceMessage) error {
@@ -156,7 +164,11 @@ func (a *PortfolioActor) handleMarkPriceUpdate(ctx context.Context, msg UpdateMa
 		return err
 	}
 
-	return a.publishWithTimeout(ctx, NewPnLUpdatedEvent(a.id, position, a.portfolio.Snapshot()))
+	totals := a.portfolio.Totals()
+	return a.publishWithTimeout(
+		ctx,
+		NewPnLUpdatedEvent(a.id, position, totals.TotalRealizedPnL, totals.TotalUnrealizedPnL),
+	)
 }
 
 func (a *PortfolioActor) publishWithTimeout(ctx context.Context, event ports.Event) error {

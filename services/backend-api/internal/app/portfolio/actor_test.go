@@ -174,11 +174,9 @@ func TestPortfolioActor_ReconcileAndQuery(t *testing.T) {
 		},
 	}})
 	require.NoError(t, err)
-	_, ok := resp.([]domainportfolio.Change)
-	if !ok {
-		_, ok = resp.(struct{})
-		require.True(t, ok)
-	}
+	changes, ok := resp.([]domainportfolio.Change)
+	require.True(t, ok)
+	require.Len(t, changes, 3)
 
 	snapshot := askSnapshot(t, ref)
 	require.Len(t, snapshot.Positions, 2)
@@ -187,9 +185,7 @@ func TestPortfolioActor_ReconcileAndQuery(t *testing.T) {
 	posResp, err := ref.Ask(ctx, GetPositionQuery{Exchange: "binance", Symbol: "BTC/USDT"})
 	require.NoError(t, err)
 	positionResult, ok := posResp.(PositionQueryResult)
-	if !ok {
-		positionResult = askPosition(t, ref, "binance", "BTC/USDT")
-	}
+	require.True(t, ok)
 	require.True(t, positionResult.Found)
 	assert.True(t, positionResult.Position.Quantity.Equal(decimal.NewFromInt(1)))
 }
@@ -233,15 +229,11 @@ func askSnapshot(t *testing.T, ref *actor.Ref) domainportfolio.Snapshot {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	for range 4 {
-		resp, err := ref.Ask(ctx, GetSnapshotQuery{})
-		require.NoError(t, err)
-		if snap, ok := resp.(domainportfolio.Snapshot); ok {
-			return snap
-		}
-	}
-	t.Fatalf("failed to get snapshot response")
-	return domainportfolio.Snapshot{}
+	resp, err := ref.Ask(ctx, GetSnapshotQuery{})
+	require.NoError(t, err)
+	snap, ok := resp.(domainportfolio.Snapshot)
+	require.True(t, ok)
+	return snap
 }
 
 func askPosition(t *testing.T, ref *actor.Ref, exchange, symbol string) PositionQueryResult {
@@ -249,13 +241,9 @@ func askPosition(t *testing.T, ref *actor.Ref, exchange, symbol string) Position
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	for range 4 {
-		resp, err := ref.Ask(ctx, GetPositionQuery{Exchange: exchange, Symbol: symbol})
-		require.NoError(t, err)
-		if out, ok := resp.(PositionQueryResult); ok {
-			return out
-		}
-	}
-	t.Fatalf("failed to get position response")
-	return PositionQueryResult{}
+	resp, err := ref.Ask(ctx, GetPositionQuery{Exchange: exchange, Symbol: symbol})
+	require.NoError(t, err)
+	out, ok := resp.(PositionQueryResult)
+	require.True(t, ok)
+	return out
 }

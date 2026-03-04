@@ -11,6 +11,7 @@ import (
 
 func TestPositionApplyFill_AverageCostAndPartialClose(t *testing.T) {
 	p := NewPosition("binance", "BTC/USDT")
+	baseTime := time.Date(2026, time.January, 2, 10, 0, 0, 0, time.UTC)
 
 	_, err := p.ApplyFill(Fill{
 		Exchange:   "binance",
@@ -18,7 +19,7 @@ func TestPositionApplyFill_AverageCostAndPartialClose(t *testing.T) {
 		Side:       SideBuy,
 		Quantity:   decimal.NewFromInt(1),
 		Price:      decimal.NewFromInt(100),
-		ExecutedAt: time.Now(),
+		ExecutedAt: baseTime,
 	})
 	require.NoError(t, err)
 
@@ -28,7 +29,7 @@ func TestPositionApplyFill_AverageCostAndPartialClose(t *testing.T) {
 		Side:       SideBuy,
 		Quantity:   decimal.NewFromInt(1),
 		Price:      decimal.NewFromInt(120),
-		ExecutedAt: time.Now(),
+		ExecutedAt: baseTime.Add(time.Minute),
 	})
 	require.NoError(t, err)
 	assert.True(t, p.EntryPrice.Equal(decimal.NewFromInt(110)))
@@ -39,7 +40,7 @@ func TestPositionApplyFill_AverageCostAndPartialClose(t *testing.T) {
 		Side:       SideSell,
 		Quantity:   decimal.NewFromInt(1),
 		Price:      decimal.NewFromInt(130),
-		ExecutedAt: time.Now(),
+		ExecutedAt: baseTime.Add(2 * time.Minute),
 	})
 	require.NoError(t, err)
 	assert.False(t, res.Closed)
@@ -51,6 +52,7 @@ func TestPositionApplyFill_AverageCostAndPartialClose(t *testing.T) {
 
 func TestPositionApplyFill_ShortAndReverse(t *testing.T) {
 	p := NewPosition("bybit", "ETH/USDT")
+	baseTime := time.Date(2026, time.January, 2, 11, 0, 0, 0, time.UTC)
 
 	_, err := p.ApplyFill(Fill{
 		Exchange:   "bybit",
@@ -58,7 +60,7 @@ func TestPositionApplyFill_ShortAndReverse(t *testing.T) {
 		Side:       SideSell,
 		Quantity:   decimal.NewFromInt(2),
 		Price:      decimal.NewFromInt(200),
-		ExecutedAt: time.Now(),
+		ExecutedAt: baseTime,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, PositionSideShort, p.Side())
@@ -69,7 +71,7 @@ func TestPositionApplyFill_ShortAndReverse(t *testing.T) {
 		Side:       SideBuy,
 		Quantity:   decimal.NewFromInt(3),
 		Price:      decimal.NewFromInt(180),
-		ExecutedAt: time.Now(),
+		ExecutedAt: baseTime.Add(time.Minute),
 	})
 	require.NoError(t, err)
 	assert.True(t, res.Reversed)

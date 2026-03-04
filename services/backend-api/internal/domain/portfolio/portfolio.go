@@ -30,6 +30,12 @@ type Snapshot struct {
 	GeneratedAt        time.Time
 }
 
+type Totals struct {
+	TotalExposure      decimal.Decimal
+	TotalRealizedPnL   decimal.Decimal
+	TotalUnrealizedPnL decimal.Decimal
+}
+
 type Change struct {
 	Key              string
 	Position         PositionState
@@ -41,6 +47,7 @@ type Change struct {
 
 type Portfolio struct {
 	positions map[string]Position
+	totals    Totals
 }
 
 func NewPortfolio() *Portfolio {
@@ -54,8 +61,11 @@ func PositionKey(exchange, symbol string) string {
 func (p *Portfolio) ApplyFill(fill Fill) (Change, error) {
 	key := PositionKey(fill.Exchange, fill.Symbol)
 	pos, ok := p.positions[key]
+	before := PositionState{}
 	if !ok {
 		pos = NewPosition(fill.Exchange, fill.Symbol)
+	} else {
+		before = positionState(pos)
 	}
 
 	res, err := pos.ApplyFill(fill)
@@ -68,6 +78,14 @@ func (p *Portfolio) ApplyFill(fill Fill) (Change, error) {
 	} else {
 		delete(p.positions, key)
 	}
+
+	after := PositionState{}
+	if pos.IsOpen() {
+		after = positionState(pos)
+	}
+	p.totals.TotalExposure = p.totals.TotalExposure.Sub(before.Exposure).Add(after.Exposure)
+	p.totals.TotalRealizedPnL = p.totals.TotalRealizedPnL.Sub(before.RealizedPnL).Add(after.RealizedPnL)
+	p.totals.TotalUnrealizedPnL = p.totals.TotalUnrealizedPnL.Sub(before.UnrealizedPnL).Add(after.UnrealizedPnL)
 
 	return Change{
 		Key:              key,
@@ -85,11 +103,16 @@ func (p *Portfolio) UpdateMarkPrice(exchange, symbol string, markPrice decimal.D
 	if !ok {
 		return PositionState{}, false, nil
 	}
+	before := positionState(pos)
 	if err := pos.UpdateMarkPrice(markPrice); err != nil {
 		return PositionState{}, false, err
 	}
 	p.positions[key] = pos
-	return positionState(pos), true, nil
+	after := positionState(pos)
+	p.totals.TotalExposure = p.totals.TotalExposure.Sub(before.Exposure).Add(after.Exposure)
+	p.totals.TotalRealizedPnL = p.totals.TotalRealizedPnL.Sub(before.RealizedPnL).Add(after.RealizedPnL)
+	p.totals.TotalUnrealizedPnL = p.totals.TotalUnrealizedPnL.Sub(before.UnrealizedPnL).Add(after.UnrealizedPnL)
+	return after, true, nil
 }
 
 func (p *Portfolio) GetPosition(exchange, symbol string) (PositionState, bool) {
@@ -102,16 +125,10 @@ func (p *Portfolio) GetPosition(exchange, symbol string) (PositionState, bool) {
 
 func (p *Portfolio) Snapshot() Snapshot {
 	states := make([]PositionState, 0, len(p.positions))
-	totalExposure := decimal.Zero
-	totalRealized := decimal.Zero
-	totalUnrealized := decimal.Zero
 
 	for _, pos := range p.positions {
 		state := positionState(pos)
 		states = append(states, state)
-		totalExposure = totalExposure.Add(state.Exposure)
-		totalRealized = totalRealized.Add(state.RealizedPnL)
-		totalUnrealized = totalUnrealized.Add(state.UnrealizedPnL)
 	}
 
 	sort.Slice(states, func(i, j int) bool {
@@ -123,11 +140,15 @@ func (p *Portfolio) Snapshot() Snapshot {
 
 	return Snapshot{
 		Positions:          states,
-		TotalExposure:      totalExposure,
-		TotalRealizedPnL:   totalRealized,
-		TotalUnrealizedPnL: totalUnrealized,
+		TotalExposure:      p.totals.TotalExposure,
+		TotalRealizedPnL:   p.totals.TotalRealizedPnL,
+		TotalUnrealizedPnL: p.totals.TotalUnrealizedPnL,
 		GeneratedAt:        time.Now().UTC(),
 	}
+}
+
+func (p *Portfolio) Totals() Totals {
+	return p.totals
 }
 
 func (p *Portfolio) Reconcile(fills []Fill) ([]Change, error) {
@@ -156,6 +177,7 @@ func (p *Portfolio) Reconcile(fills []Fill) ([]Change, error) {
 	}
 
 	p.positions = working.positions
+	p.totals = working.totals
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}

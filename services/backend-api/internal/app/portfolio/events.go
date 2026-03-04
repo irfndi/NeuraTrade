@@ -98,7 +98,12 @@ type PnLUpdatedEvent struct {
 	TotalUnrealizedPnL decimal.Decimal
 }
 
-func NewPnLUpdatedEvent(aggregateID string, state domainportfolio.PositionState, snapshot domainportfolio.Snapshot) PnLUpdatedEvent {
+func NewPnLUpdatedEvent(
+	aggregateID string,
+	state domainportfolio.PositionState,
+	totalRealizedPnL decimal.Decimal,
+	totalUnrealizedPnL decimal.Decimal,
+) PnLUpdatedEvent {
 	return PnLUpdatedEvent{
 		BaseEvent: ports.BaseEvent{
 			Type:       EventTypePnLUpdated,
@@ -109,8 +114,8 @@ func NewPnLUpdatedEvent(aggregateID string, state domainportfolio.PositionState,
 		Symbol:             state.Symbol,
 		RealizedPnL:        state.RealizedPnL,
 		UnrealizedPnL:      state.UnrealizedPnL,
-		TotalRealizedPnL:   snapshot.TotalRealizedPnL,
-		TotalUnrealizedPnL: snapshot.TotalUnrealizedPnL,
+		TotalRealizedPnL:   totalRealizedPnL,
+		TotalUnrealizedPnL: totalUnrealizedPnL,
 	}
 }
 
