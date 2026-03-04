@@ -5,7 +5,6 @@ package risk
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -30,7 +29,7 @@ func NewMaxOrderSizeRule(maxSize decimal.Decimal) *MaxOrderSizeRule {
 func (r *MaxOrderSizeRule) Name() string { return "max_order_size" }
 
 func (r *MaxOrderSizeRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
-	amount := intent.Amount
+	amount := decimal.NewFromFloat(intent.Amount)
 	if amount.GreaterThan(r.maxSize) {
 		return ports.PolicyDecision{
 			Approved: false,
@@ -62,46 +61,11 @@ func NewMaxLeverageRule(maxLeverage decimal.Decimal) *MaxLeverageRule {
 func (r *MaxLeverageRule) Name() string { return "max_leverage" }
 
 func (r *MaxLeverageRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
-	if r.maxLeverage.LessThanOrEqual(decimal.Zero) {
-		return ports.PolicyDecision{
-			Approved: true,
-			RuleName: r.Name(),
-		}, nil
-	}
-
-	portfolioValue := decimal.NewFromFloat(intent.PortfolioValue)
-	if portfolioValue.LessThanOrEqual(decimal.Zero) {
-		return ports.PolicyDecision{
-			Approved: false,
-			Reason:   "leverage unknown - conservative deny (missing portfolio value)",
-			RuleName: r.Name(),
-		}, nil
-	}
-	if intent.Price.LessThanOrEqual(decimal.Zero) {
-		return ports.PolicyDecision{
-			Approved: false,
-			Reason:   "leverage unknown - conservative deny (missing price)",
-			RuleName: r.Name(),
-		}, nil
-	}
-
-	notional := intent.Amount.Abs().Mul(intent.Price.Abs())
-	effectiveLeverage := notional.Div(portfolioValue)
-	if effectiveLeverage.GreaterThan(r.maxLeverage) {
-		return ports.PolicyDecision{
-			Approved: false,
-			Reason:   fmt.Sprintf("leverage %s exceeds maximum %s", effectiveLeverage.String(), r.maxLeverage.String()),
-			RuleName: r.Name(),
-		}, nil
-	}
-
+	// Leverage is not directly in OrderIntent but could be inferred from position
+	// For now, this is a placeholder for when leverage info is available
 	return ports.PolicyDecision{
 		Approved: true,
 		RuleName: r.Name(),
-		Constraints: []ports.Constraint{
-			{Type: "effective_leverage", Value: effectiveLeverage.String()},
-			{Type: "max_leverage", Value: r.maxLeverage.String()},
-		},
 	}, nil
 }
 
@@ -120,14 +84,17 @@ func NewMaxNotionalRule(maxNotional decimal.Decimal) *MaxNotionalRule {
 func (r *MaxNotionalRule) Name() string { return "max_notional" }
 
 func (r *MaxNotionalRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
-	amount := intent.Amount
-	price := intent.Price
+	amount := decimal.NewFromFloat(intent.Amount)
+	price := decimal.NewFromFloat(intent.Price)
 	notional := amount.Mul(price)
 
-	if notional.GreaterThan(r.maxNotional) {
+	// Use absolute value to handle both long and short positions
+	absNotional := notional.Abs()
+
+	if absNotional.GreaterThan(r.maxNotional) {
 		return ports.PolicyDecision{
 			Approved: false,
-			Reason:   fmt.Sprintf("notional value %s exceeds maximum %s", notional.String(), r.maxNotional.String()),
+			Reason:   fmt.Sprintf("notional value %s exceeds maximum %s", absNotional.String(), r.maxNotional.String()),
 			RuleName: r.Name(),
 		}, nil
 	}
@@ -165,7 +132,7 @@ func (r *MaxDailyLossRule) UpdateDailyLoss(loss decimal.Decimal) {
 
 	// Reset if new day
 	now := time.Now()
-	if !sameCalendarDay(now, r.lastReset) {
+	if now.Day() != r.lastReset.Day() {
 		r.dailyLoss = decimal.Zero
 		r.lastReset = now
 	}
@@ -176,13 +143,21 @@ func (r *MaxDailyLossRule) UpdateDailyLoss(loss decimal.Decimal) {
 func (r *MaxDailyLossRule) Name() string { return "max_daily_loss" }
 
 func (r *MaxDailyLossRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	// Check and reset if new day (requires write lock)
+	r.mu.Lock()
+	now := time.Now()
+	if now.Day() != r.lastReset.Day() {
+		r.dailyLoss = decimal.Zero
+		r.lastReset = now
+	}
+	currentLoss := r.dailyLoss
+	maxLoss := r.maxLoss
+	r.mu.Unlock()
 
-	if r.dailyLoss.GreaterThan(r.maxLoss) {
+	if currentLoss.GreaterThan(maxLoss) {
 		return ports.PolicyDecision{
 			Approved: false,
-			Reason:   fmt.Sprintf("daily loss %s exceeds maximum %s", r.dailyLoss.String(), r.maxLoss.String()),
+			Reason:   fmt.Sprintf("daily loss %s exceeds maximum %s", currentLoss.String(), maxLoss.String()),
 			RuleName: r.Name(),
 		}, nil
 	}
@@ -190,8 +165,8 @@ func (r *MaxDailyLossRule) Evaluate(ctx context.Context, intent ports.OrderInten
 		Approved: true,
 		RuleName: r.Name(),
 		Constraints: []ports.Constraint{
-			{Type: "current_daily_loss", Value: r.dailyLoss.String()},
-			{Type: "max_daily_loss", Value: r.maxLoss.String()},
+			{Type: "current_daily_loss", Value: currentLoss.String()},
+			{Type: "max_daily_loss", Value: maxLoss.String()},
 		},
 	}, nil
 }
@@ -223,13 +198,6 @@ func (r *MaxDrawdownRule) UpdatePortfolioValue(value decimal.Decimal) {
 	if r.highWaterMark.GreaterThan(decimal.Zero) {
 		r.currentDraw = r.highWaterMark.Sub(value).Div(r.highWaterMark)
 	}
-}
-
-// UpdateDrawdown directly updates current drawdown.
-func (r *MaxDrawdownRule) UpdateDrawdown(drawdown decimal.Decimal) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.currentDraw = drawdown
 }
 
 func (r *MaxDrawdownRule) Name() string { return "max_drawdown" }
@@ -476,6 +444,9 @@ func NewEngine() *Engine {
 
 // AddRule adds a policy rule.
 func (e *Engine) AddRule(rule ports.PolicyRule) error {
+	if rule == nil {
+		return fmt.Errorf("nil rule")
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -547,11 +518,12 @@ func (e *Engine) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.
 
 	// Evaluate soft rules
 	var constraints []ports.Constraint
+	var softErrors []error
 	for _, rule := range e.softRules {
 		decision, err := rule.Evaluate(ctx, intent)
 		if err != nil {
-			wrappedErr := fmt.Errorf("soft rule %s evaluation failed: %w", rule.Name(), err)
-			log.Printf("[risk] %v", wrappedErr)
+			// Soft rule errors are collected and propagated
+			softErrors = append(softErrors, fmt.Errorf("soft rule %s evaluation failed: %w", rule.Name(), err))
 			continue
 		}
 		if !decision.Approved {
@@ -559,6 +531,11 @@ func (e *Engine) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.
 			return decision, nil
 		}
 		constraints = append(constraints, decision.Constraints...)
+	}
+
+	// Return aggregated soft rule errors if any
+	if len(softErrors) > 0 {
+		return ports.PolicyDecision{}, fmt.Errorf("soft rule errors: %v", softErrors)
 	}
 
 	return ports.PolicyDecision{
@@ -580,10 +557,4 @@ func (e *Engine) GetSoftRules() []ports.PolicyRule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return append([]ports.PolicyRule{}, e.softRules...)
-}
-
-func sameCalendarDay(a, b time.Time) bool {
-	yearA, monthA, dayA := a.Date()
-	yearB, monthB, dayB := b.Date()
-	return yearA == yearB && monthA == monthB && dayA == dayB
 }

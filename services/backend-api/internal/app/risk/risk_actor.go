@@ -145,7 +145,6 @@ type RiskActor struct {
 	dailyLoss         decimal.Decimal
 	drawdown          decimal.Decimal
 	lastEvalTime      time.Time
-	traceID           string // Current trace ID for event propagation
 	// Drawdown tracking for MaxDrawdownRule
 	drawdownRule  *MaxDrawdownRule
 	dailyLossRule *MaxDailyLossRule

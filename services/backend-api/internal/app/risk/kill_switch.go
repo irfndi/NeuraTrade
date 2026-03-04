@@ -44,16 +44,7 @@ func (k *KillSwitchImpl) Engage(ctx context.Context, reason string) error {
 	k.engagedAt = time.Now()
 	k.engagedBy = extractSourceFromContext(ctx)
 	k.reason = reason
-	k.cancelOrders = true // Default to cancel orders on engage
-
-	// Notify listeners
-	state := k.stateLocked()
-	for _, listener := range k.listeners {
-		go listener(state)
-	}
-
-	return nil
-}
+	// Note: k.cancelOrders is persistent config, set via SetCancelOrders()
 
 // Disengage disengages the kill switch.
 func (k *KillSwitchImpl) Disengage(ctx context.Context) error {
@@ -68,15 +59,7 @@ func (k *KillSwitchImpl) Disengage(ctx context.Context) error {
 	k.engagedAt = time.Time{}
 	k.engagedBy = ""
 	k.reason = ""
-	k.cancelOrders = false
-
-	// Notify listeners
-	state := k.stateLocked()
-	for _, listener := range k.listeners {
-		go listener(state)
-	}
-
-	return nil
+	// Note: k.cancelOrders is persistent config, preserve it
 }
 
 // IsEngaged returns whether the kill switch is engaged.
