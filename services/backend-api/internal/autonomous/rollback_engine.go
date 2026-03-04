@@ -112,25 +112,31 @@ func (e *AutoRollbackEngine) checkTriggers(metrics RolloutMetrics) (RollbackTrig
 			metrics.MaxDrawdown.String(), e.config.MaxDrawdownThreshold.String())
 	}
 
-	// Check net losses (total losing trades minus winning trades)
-	netLosses := metrics.LosingTrades - metrics.WinningTrades
-	if metrics.WinningTrades == 0 {
-		netLosses = metrics.LosingTrades
-	}
+	// Check net losses (losing trades minus winning trades in the current rollout window).
+	netLosses := netLossCount(metrics)
 	if netLosses >= e.config.ConsecutiveLossLimit {
-		return TriggerConsecutiveLoss, fmt.Sprintf("%d net losses exceeds limit %d",
-			netLosses, e.config.ConsecutiveLossLimit)
-	}
-	consecutiveLosses := metrics.LosingTrades - metrics.WinningTrades
-	if metrics.WinningTrades == 0 {
-		consecutiveLosses = metrics.LosingTrades
-	}
-	if consecutiveLosses >= e.config.ConsecutiveLossLimit {
-		return TriggerConsecutiveLoss, fmt.Sprintf("%d losses exceeds limit %d",
-			consecutiveLosses, e.config.ConsecutiveLossLimit)
+		return TriggerConsecutiveLoss, fmt.Sprintf(
+			"net loss count %d exceeds limit %d",
+			netLosses,
+			e.config.ConsecutiveLossLimit,
+		)
 	}
 
 	return "", ""
+}
+
+func netLossCount(metrics RolloutMetrics) int {
+	if metrics.WinningTrades <= 0 {
+		if metrics.LosingTrades < 0 {
+			return 0
+		}
+		return metrics.LosingTrades
+	}
+	net := metrics.LosingTrades - metrics.WinningTrades
+	if net < 0 {
+		return 0
+	}
+	return net
 }
 
 // executeRollback executes the rollback process.

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -683,8 +684,20 @@ func (s *NativeCCXTService) AddExchange(ctx context.Context, exchange string) (*
 
 func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []string, symbols []string) ([]MarketPriceInterface, error) {
 	var allTickers []MarketPriceInterface
+	maxFallbackSymbols := fallbackMaxSymbolsPerCycle(len(symbols))
+	fallbackCycleBudget := fallbackCycleBudget()
+	fallbackPerSymbolTimeout := fallbackPerSymbolTimeout()
+	fallbackFetches := 0
+	cycleStarted := time.Now()
 
 	for _, exchange := range exchanges {
+		if err := ctx.Err(); err != nil {
+			if len(allTickers) > 0 {
+				return allTickers, nil
+			}
+			return nil, err
+		}
+
 		// Bitget supports bulk spot ticker fetch; use it to avoid per-symbol request storms.
 		if exchange == "bitget" && len(symbols) > 1 {
 			bulkTickers, err := s.fetchBitgetBulkTickers(ctx, symbols)
@@ -696,7 +709,35 @@ func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []str
 		}
 
 		for _, symbol := range symbols {
-			ticker, err := s.FetchSingleTicker(ctx, exchange, symbol)
+			if err := ctx.Err(); err != nil {
+				if len(allTickers) > 0 {
+					return allTickers, nil
+				}
+				return nil, err
+			}
+			if maxFallbackSymbols > 0 && fallbackFetches >= maxFallbackSymbols {
+				log.Printf(
+					"[CCXT Native] Fallback ticker fetch budget reached (%d symbols), returning partial market data",
+					maxFallbackSymbols,
+				)
+				return allTickers, nil
+			}
+			if fallbackCycleBudget > 0 && time.Since(cycleStarted) >= fallbackCycleBudget {
+				log.Printf(
+					"[CCXT Native] Fallback cycle budget exceeded (%s), returning partial market data",
+					fallbackCycleBudget,
+				)
+				return allTickers, nil
+			}
+
+			tickerCtx := ctx
+			cancel := func() {}
+			if fallbackPerSymbolTimeout > 0 {
+				tickerCtx, cancel = context.WithTimeout(ctx, fallbackPerSymbolTimeout)
+			}
+			ticker, err := s.FetchSingleTicker(tickerCtx, exchange, symbol)
+			cancel()
+			fallbackFetches++
 			if err != nil {
 				log.Printf("[CCXT Native] Failed to fetch %s:%s: %v", exchange, symbol, err)
 				continue
@@ -706,6 +747,49 @@ func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []str
 	}
 
 	return allTickers, nil
+}
+
+func fallbackMaxSymbolsPerCycle(symbolCount int) int {
+	fallback := 32
+	if symbolCount > 0 && symbolCount < fallback {
+		fallback = symbolCount
+	}
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_MAX_SYMBOLS_PER_CYCLE"))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	if symbolCount > 0 && parsed > symbolCount {
+		return symbolCount
+	}
+	return parsed
+}
+
+func fallbackCycleBudget() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_CYCLE_BUDGET_MS"))
+	if raw == "" {
+		return 4 * time.Second
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return 4 * time.Second
+	}
+	return time.Duration(parsed) * time.Millisecond
+}
+
+func fallbackPerSymbolTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_PER_SYMBOL_TIMEOUT_MS"))
+	if raw == "" {
+		return 900 * time.Millisecond
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return 900 * time.Millisecond
+	}
+	return time.Duration(parsed) * time.Millisecond
 }
 
 func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols []string) ([]MarketPriceInterface, error) {

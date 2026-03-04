@@ -19,7 +19,6 @@ func DefaultGateConfig() GateConfig {
 }
 
 // LiveTradingGate is the final authorization gate for live trading.
-// LiveTradingGate is the final authorization gate for live trading.
 type LiveTradingGate struct {
 	config    GateConfig
 	validator PolicyValidator
@@ -140,9 +139,6 @@ func (g *LiveTradingGate) Evaluate(ctx context.Context, strategyID string) (*Gat
 		checks.StrategyLive = false
 		blockReasons = append(blockReasons, "rollout_manager_not_configured")
 	}
-	// This is checked separately via rollout state
-	checks.StrategyLive = true // Will be updated by caller
-
 	// Check risk budget
 	if g.risk != nil {
 		budget, err := g.risk.GetAvailableBudget(ctx, strategyID)

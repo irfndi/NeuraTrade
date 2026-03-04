@@ -373,6 +373,58 @@ func TestAutoRollbackEngine_CheckTriggers(t *testing.T) {
 	}
 }
 
+func TestAutoRollbackEngine_CheckTriggers_UsesNetLossCount(t *testing.T) {
+	config := DefaultRollbackConfig()
+	config.ConsecutiveLossLimit = 3
+	engine := NewAutoRollbackEngine(config, nil, nil, nil, nil)
+
+	tests := []struct {
+		name          string
+		metrics       RolloutMetrics
+		expectTrigger RollbackTrigger
+	}{
+		{
+			name: "net losses below threshold does not trigger",
+			metrics: RolloutMetrics{
+				WinningTrades: 4,
+				LosingTrades:  6, // net = 2
+			},
+			expectTrigger: "",
+		},
+		{
+			name: "net losses above threshold triggers",
+			metrics: RolloutMetrics{
+				WinningTrades: 2,
+				LosingTrades:  6, // net = 4
+			},
+			expectTrigger: TriggerConsecutiveLoss,
+		},
+		{
+			name: "all losses and no wins trigger",
+			metrics: RolloutMetrics{
+				WinningTrades: 0,
+				LosingTrades:  3,
+			},
+			expectTrigger: TriggerConsecutiveLoss,
+		},
+		{
+			name: "more wins than losses clamps to zero",
+			metrics: RolloutMetrics{
+				WinningTrades: 7,
+				LosingTrades:  2,
+			},
+			expectTrigger: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trigger, _ := engine.CheckTriggersOnly(tt.metrics)
+			assert.Equal(t, tt.expectTrigger, trigger)
+		})
+	}
+}
+
 func TestAutoRollbackEngine_Cooldown(t *testing.T) {
 	config := DefaultRollbackConfig()
 	config.CooldownPeriod = 1 * time.Hour
@@ -397,6 +449,10 @@ func TestLiveTradingGate_Evaluate(t *testing.T) {
 	// Promote to live for testing
 	liveRepo.states["strategy-1"].CurrentStage = StageLive
 	liveRepo.states["strategy-1"].Status = StatusActive
+
+	shadowRepo := newMockRepo()
+	shadowManager := NewStagedRolloutManager(shadowRepo, nil)
+	shadowManager.InitializeRollout(context.Background(), "strategy-1", DefaultPromotionCriteria())
 
 	tests := []struct {
 		name       string
@@ -449,6 +505,24 @@ func TestLiveTradingGate_Evaluate(t *testing.T) {
 			risk:       &mockRiskManager{budget: decimal.NewFromFloat(1000), riskPasses: true},
 			exchange:   &mockExchangeConnector{connected: false},
 			rollout:    liveManager,
+			expectOpen: false,
+			blockCount: 1,
+		},
+		{
+			name:       "shadow stage blocks live execution",
+			validator:  &mockPolicyValidator{policyPasses: true, safeModeEnabled: false, killSwitchOn: false},
+			risk:       &mockRiskManager{budget: decimal.NewFromFloat(1000), riskPasses: true},
+			exchange:   &mockExchangeConnector{connected: true},
+			rollout:    shadowManager,
+			expectOpen: false,
+			blockCount: 1,
+		},
+		{
+			name:       "rollout manager missing blocks by default",
+			validator:  &mockPolicyValidator{policyPasses: true, safeModeEnabled: false, killSwitchOn: false},
+			risk:       &mockRiskManager{budget: decimal.NewFromFloat(1000), riskPasses: true},
+			exchange:   &mockExchangeConnector{connected: true},
+			rollout:    nil,
 			expectOpen: false,
 			blockCount: 1,
 		},
