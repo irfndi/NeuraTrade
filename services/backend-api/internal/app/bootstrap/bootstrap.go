@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/irfendi/neuratrade/internal/app/risk"
+	ccxtservice "github.com/irfendi/neuratrade/internal/ccxt"
+	"github.com/irfendi/neuratrade/internal/platform/actor"
+	"github.com/irfendi/neuratrade/internal/platform/eventbus"
+	"github.com/irfendi/neuratrade/internal/platform/retry"
+	"github.com/irfendi/neuratrade/internal/platform/supervisor"
+	"github.com/irfendi/neuratrade/internal/platform/timeout"
+	"github.com/irfendi/neuratrade/internal/ports"
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
 	"github.com/irfndi/neuratrade/internal/app/marketdata"
-	ccxtservice "github.com/irfndi/neuratrade/internal/ccxt"
-	"github.com/irfndi/neuratrade/internal/platform/actor"
-	"github.com/irfndi/neuratrade/internal/platform/eventbus"
-	"github.com/irfndi/neuratrade/internal/platform/retry"
-	"github.com/irfndi/neuratrade/internal/platform/supervisor"
-	"github.com/irfndi/neuratrade/internal/platform/timeout"
-	"github.com/irfndi/neuratrade/internal/ports"
+	"github.com/shopspring/decimal"
 )
 
 // Config holds bootstrap configuration.
@@ -30,6 +32,38 @@ type Config struct {
 
 	// EventBus configuration
 	EventBus eventbus.Config
+
+	// Risk configuration
+	Risk RiskConfig
+}
+
+// RiskConfig holds risk system configuration.
+type RiskConfig struct {
+	// MaxDrawdown is the maximum allowed drawdown (e.g., 0.1 = 10%)
+	MaxDrawdown float64
+
+	// MaxDailyLoss is the maximum daily loss
+	MaxDailyLoss float64
+
+	// CooldownPeriod after consecutive losses
+	CooldownPeriod time.Duration
+
+	// CooldownAfterLosses triggers cooldown after this many losses
+	CooldownAfterLosses int
+
+	// SafeMode configures safe mode behavior
+	SafeMode risk.SafeModeConfig
+}
+
+// DefaultRiskConfig returns default risk configuration.
+func DefaultRiskConfig() RiskConfig {
+	return RiskConfig{
+		MaxDrawdown:         0.1,  // 10%
+		MaxDailyLoss:        0.05, // 5%
+		CooldownPeriod:      5 * time.Minute,
+		CooldownAfterLosses: 3,
+		SafeMode:            risk.DefaultSafeModeConfig(),
+	}
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -39,6 +73,7 @@ func DefaultConfig() Config {
 		Retry:    retry.DefaultConfig(),
 		Actor:    actor.DefaultConfig(),
 		EventBus: eventbus.DefaultConfig(),
+		Risk:     DefaultRiskConfig(),
 	}
 }
 
@@ -55,6 +90,9 @@ type Application struct {
 	Notifier          ports.Notifier
 	Policy            ports.PolicyEngine
 	KillSwitch        ports.KillSwitch
+	SafeMode          *risk.SafeModeImpl
+	RiskActor         *risk.RiskActor
+	RiskRef           *risk.RiskActorRef
 	CollectorActor    *marketdata.CollectorActor
 	CollectorActorRef *actor.Ref
 }
@@ -67,6 +105,7 @@ type Builder struct {
 	notifier     ports.Notifier
 	policy       ports.PolicyEngine
 	killSwitch   ports.KillSwitch
+	safeMode     *risk.SafeModeImpl
 	collector    *marketdata.CollectorActor
 	collectorRef *actor.Ref
 }
@@ -114,32 +153,103 @@ func (b *Builder) WithKillSwitch(ks ports.KillSwitch) *Builder {
 	return b
 }
 
-// WithCollector sets the collector actor and its reference.
-func (b *Builder) WithCollector(collector *marketdata.CollectorActor, ref *actor.Ref) *Builder {
+// WithSafeMode sets the safe mode controller.
+func (b *Builder) WithSafeMode(sm *risk.SafeModeImpl) *Builder {
+	b.safeMode = sm
+	return b
+}
+
+// WithCollector sets the collector actor.
+func (b *Builder) WithCollector(collector *marketdata.CollectorActor) *Builder {
 	b.collector = collector
-	b.collectorRef = ref
 	return b
 }
 
 // Build builds the Application.
 func (b *Builder) Build() *Application {
 	app := &Application{
-		Config:            b.config,
-		Supervisor:        supervisor.New(),
-		ActorSystem:       actor.NewSystem(b.config.Actor),
-		EventBus:          eventbus.New(b.config.EventBus),
-		Timeout:           &b.config.Timeout,
-		Retry:             retry.NewPolicy(b.config.Retry),
-		Exchange:          b.exchanges,
-		State:             b.state,
-		Notifier:          b.notifier,
-		Policy:            b.policy,
-		KillSwitch:        b.killSwitch,
-		CollectorActor:    b.collector,
-		CollectorActorRef: b.collectorRef,
+		Config:      b.config,
+		Supervisor:  supervisor.New(),
+		ActorSystem: actor.NewSystem(b.config.Actor),
+		EventBus:    eventbus.New(b.config.EventBus),
+		Timeout:     &b.config.Timeout,
+		Retry:       retry.NewPolicy(b.config.Retry),
+		Exchange:    b.exchanges,
+		State:       b.state,
+		Notifier:    b.notifier,
 	}
 
+	// Build risk components if not provided
+	app.buildRiskComponents(b)
+
 	return app
+}
+
+// buildRiskComponents builds the risk system components.
+func (a *Application) buildRiskComponents(b *Builder) {
+	// Create safe mode if not provided
+	if b.safeMode != nil {
+		a.SafeMode = b.safeMode
+	} else {
+		a.SafeMode = risk.NewSafeMode(b.config.Risk.SafeMode)
+	}
+
+	// Create kill switch if not provided
+	if b.killSwitch != nil {
+		a.KillSwitch = b.killSwitch
+	} else {
+		a.KillSwitch = risk.NewKillSwitch()
+	}
+
+	// Create policy engine if not provided
+	if b.policy != nil {
+		a.Policy = b.policy
+	} else {
+		policyEngine := risk.NewEngine()
+		// Add default rules from config
+		if b.config.Risk.MaxDrawdown > 0 {
+			_ = policyEngine.AddRule(risk.NewMaxDrawdownRule(
+				decimal.NewFromFloat(b.config.Risk.MaxDrawdown)))
+		}
+		if b.config.Risk.MaxDailyLoss > 0 {
+			_ = policyEngine.AddRule(risk.NewMaxDailyLossRule(
+				decimal.NewFromFloat(b.config.Risk.MaxDailyLoss)))
+		}
+		if b.config.Risk.CooldownPeriod > 0 && b.config.Risk.CooldownAfterLosses > 0 {
+			_ = policyEngine.AddRule(risk.NewCooldownRule(
+				b.config.Risk.CooldownPeriod,
+				b.config.Risk.CooldownAfterLosses))
+		}
+		a.Policy = policyEngine
+	}
+
+	// Create risk actor
+	ks, ok := a.KillSwitch.(*risk.KillSwitchImpl)
+	if !ok && a.KillSwitch != nil {
+		// Custom KillSwitch implementation provided, cannot create RiskActor
+		return
+	}
+	var policyEngine *risk.Engine
+	if pe, ok := a.Policy.(*risk.Engine); ok {
+		policyEngine = pe
+	}
+	a.RiskActor = risk.NewRiskActor(risk.RiskActorConfig{
+		ID:                  "risk-actor",
+		PolicyEngine:        policyEngine,
+		KillSwitch:          ks,
+		SafeMode:            a.SafeMode,
+		EventBus:            a.EventBus,
+		MaxDrawdown:         b.config.Risk.MaxDrawdown,
+		MaxDailyLoss:        b.config.Risk.MaxDailyLoss,
+		CooldownPeriod:      b.config.Risk.CooldownPeriod,
+		CooldownAfterLosses: b.config.Risk.CooldownAfterLosses,
+	})
+
+	// Spawn risk actor in actor system
+	ref, err := a.ActorSystem.Spawn(a.RiskActor, actor.DefaultConfig())
+	if err == nil {
+		a.RiskRef = risk.NewRiskActorRef(ref)
+	}
 }
 
 // Run starts the application and blocks until context is cancelled.
