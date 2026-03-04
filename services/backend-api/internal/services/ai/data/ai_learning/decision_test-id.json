@@ -1,6 +1,6 @@
 {
   "id": "test-id",
-  "timestamp": "2026-02-28T05:06:52.770148+07:00",
+  "timestamp": "2026-03-04T12:44:11.427511+07:00",
   "strategy": "scalping",
   "market_state": {
     "symbol": "BTC/USDT",
@@ -19,7 +19,7 @@
       "ask_depth": 0,
       "imbalance": 0
     },
-    "timestamp": "2026-02-28T05:06:52.770148+07:00"
+    "timestamp": "2026-03-04T12:44:11.427511+07:00"
   },
   "decision": {
     "id": "",
@@ -33,5 +33,5 @@
   "tokens_used": 0,
   "outcome": "win",
   "pnl": 100.5,
-  "completed_at": "2026-02-28T05:06:52.770148+07:00"
+  "completed_at": "2026-03-04T12:44:11.427516+07:00"
 }

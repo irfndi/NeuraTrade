@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/irfendi/neuratrade/internal/app/risk"
-	ccxtservice "github.com/irfendi/neuratrade/internal/ccxt"
-	"github.com/irfendi/neuratrade/internal/platform/actor"
-	"github.com/irfendi/neuratrade/internal/platform/eventbus"
-	"github.com/irfendi/neuratrade/internal/platform/retry"
-	"github.com/irfendi/neuratrade/internal/platform/supervisor"
-	"github.com/irfendi/neuratrade/internal/platform/timeout"
-	"github.com/irfendi/neuratrade/internal/ports"
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
 	"github.com/irfndi/neuratrade/internal/app/marketdata"
+	"github.com/irfndi/neuratrade/internal/app/risk"
+	ccxtservice "github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/platform/actor"
+	"github.com/irfndi/neuratrade/internal/platform/eventbus"
+	"github.com/irfndi/neuratrade/internal/platform/retry"
+	"github.com/irfndi/neuratrade/internal/platform/supervisor"
+	"github.com/irfndi/neuratrade/internal/platform/timeout"
+	"github.com/irfndi/neuratrade/internal/ports"
 	"github.com/shopspring/decimal"
 )
 
@@ -99,15 +99,14 @@ type Application struct {
 
 // Builder builds an Application.
 type Builder struct {
-	config       Config
-	exchanges    ports.ExchangeRegistry
-	state        ports.StateStore
-	notifier     ports.Notifier
-	policy       ports.PolicyEngine
-	killSwitch   ports.KillSwitch
-	safeMode     *risk.SafeModeImpl
-	collector    *marketdata.CollectorActor
-	collectorRef *actor.Ref
+	config     Config
+	exchanges  ports.ExchangeRegistry
+	state      ports.StateStore
+	notifier   ports.Notifier
+	policy     ports.PolicyEngine
+	killSwitch ports.KillSwitch
+	safeMode   *risk.SafeModeImpl
+	collector  *marketdata.CollectorActor
 }
 
 // NewBuilder creates a new Builder.
