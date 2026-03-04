@@ -31,6 +31,18 @@ func TestClientConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestClientConfigNegativeRetriesClamped(t *testing.T) {
+	client := NewBackendClient(ClientConfig{
+		BaseURL:    "http://localhost:8080",
+		Timeout:    30 * time.Second,
+		MaxRetries: -5,
+	})
+
+	if client.config.MaxRetries != 0 {
+		t.Fatalf("expected MaxRetries to be clamped to 0, got %d", client.config.MaxRetries)
+	}
+}
+
 func TestClientMethodsExist(t *testing.T) {
 	client := NewBackendClient(ClientConfig{
 		BaseURL:    "http://localhost:8080",

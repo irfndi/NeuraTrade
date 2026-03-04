@@ -8,7 +8,7 @@ import (
 
 func TestNewIngestor(t *testing.T) {
 	ingestor := NewIngestor(IngestConfig{
-		BackendEventURL: "ws://localhost:8080/events",
+		BackendEventURL: "http://localhost:8080/events",
 		BufferSize:      1024,
 		ReconnectDelay:  5 * time.Second,
 	})
@@ -29,7 +29,7 @@ func TestIngestorConfigDefaults(t *testing.T) {
 
 func TestIngestorStartStop(t *testing.T) {
 	ingestor := NewIngestor(IngestConfig{
-		BackendEventURL: "ws://localhost:8080/events",
+		BackendEventURL: "http://localhost:8080/events",
 		BufferSize:      1024,
 	})
 
@@ -54,7 +54,7 @@ func TestIngestorStartStop(t *testing.T) {
 
 func TestIngestorStartAlreadyRunning(t *testing.T) {
 	ingestor := NewIngestor(IngestConfig{
-		BackendEventURL: "ws://localhost:8080/events",
+		BackendEventURL: "http://localhost:8080/events",
 	})
 
 	ctx := context.Background()

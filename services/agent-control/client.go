@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -28,6 +29,10 @@ type BackendClient struct {
 
 // NewBackendClient creates a new backend client.
 func NewBackendClient(config ClientConfig) *BackendClient {
+	if config.MaxRetries < 0 {
+		config.MaxRetries = 0
+	}
+
 	return &BackendClient{
 		config: config,
 		httpClient: &http.Client{
@@ -148,7 +153,22 @@ func (c *BackendClient) executeCommand(ctx context.Context, endpoint string, pay
 }
 
 func waitRetry(ctx context.Context, attempt int) error {
-	timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt > 5 {
+		attempt = 5
+	}
+
+	baseDelay := time.Second << attempt
+	jitterWindow := baseDelay / 2
+	if jitterWindow < time.Millisecond {
+		jitterWindow = time.Millisecond
+	}
+	jitter := time.Duration(rand.Int63n(int64(jitterWindow)))
+	delay := baseDelay + jitter
+
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
 	select {

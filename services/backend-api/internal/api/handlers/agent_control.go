@@ -4,6 +4,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -204,6 +205,7 @@ func (h *AgentControlHandler) StreamEvents(c *gin.Context) {
 		case event := <-subscription:
 			payload, err := json.Marshal(event)
 			if err != nil {
+				log.Printf("agent_control: failed to marshal event for stream: %v", err)
 				continue
 			}
 

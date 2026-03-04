@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -188,6 +189,7 @@ func (i *Ingestor) connectAndListen(ctx context.Context) error {
 
 		var event Event
 		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			log.Printf("agent-control: dropping invalid event payload: %v payload=%q", err, truncateForLog(raw, 512))
 			return
 		}
 		if event.Timestamp.IsZero() {
@@ -245,4 +247,11 @@ func (i *Ingestor) IsRunning() bool {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.running
+}
+
+func truncateForLog(value string, maxLen int) string {
+	if maxLen <= 0 || len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen] + "...(truncated)"
 }

@@ -43,6 +43,9 @@ func (a *AgentRuntime) Start(ctx context.Context) error {
 	if a.running {
 		return fmt.Errorf("agent already running")
 	}
+	if err := a.validateConfig(); err != nil {
+		return err
+	}
 
 	// Start event ingestor
 	eventChan, err := a.config.EventIngestor.Start(ctx)
@@ -145,7 +148,7 @@ func (a *AgentRuntime) handleEvent(ctx context.Context, event Event) {
 		Type:      ActionPlaybookExecution,
 		Playbook:  playbook.Name,
 		Event:     event,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().UTC(),
 	})
 
 	if !policyResult.Approved {
@@ -201,4 +204,19 @@ func (a *AgentRuntime) IsRunning() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.running
+}
+
+func (a *AgentRuntime) validateConfig() error {
+	switch {
+	case a.config.AuditLogger == nil:
+		return fmt.Errorf("invalid runtime config: missing audit logger")
+	case a.config.EventIngestor == nil:
+		return fmt.Errorf("invalid runtime config: missing event ingestor")
+	case a.config.PolicyEngine == nil:
+		return fmt.Errorf("invalid runtime config: missing policy engine")
+	case a.config.PlaybookRegistry == nil:
+		return fmt.Errorf("invalid runtime config: missing playbook registry")
+	}
+
+	return nil
 }
