@@ -38,11 +38,12 @@ func NewAgentRuntime(config AgentRuntimeConfig) *AgentRuntime {
 // Start begins the agent runtime.
 func (a *AgentRuntime) Start(ctx context.Context) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if a.running {
+		a.mu.Unlock()
 		return fmt.Errorf("agent already running")
 	}
+	a.mu.Unlock()
+
 	if err := a.validateConfig(); err != nil {
 		return err
 	}
@@ -52,15 +53,21 @@ func (a *AgentRuntime) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to start event ingestor: %w", err)
 	}
-	a.eventChan = eventChan
-
-	// Start event processing loop
 	shutdownChan := make(chan struct{})
+
+	a.mu.Lock()
+	if a.running {
+		a.mu.Unlock()
+		return fmt.Errorf("agent already running")
+	}
+	a.eventChan = eventChan
 	a.shutdownChan = shutdownChan
 	a.processingWg.Add(1)
+	a.running = true
+	a.mu.Unlock()
+
 	go a.processEvents(ctx, shutdownChan)
 
-	a.running = true
 	a.config.AuditLogger.Log(ctx, ActionAgentStarted, "agent_runtime", map[string]any{
 		"timestamp": time.Now().UTC(),
 	})
@@ -75,7 +82,6 @@ func (a *AgentRuntime) Shutdown(ctx context.Context) error {
 		a.mu.Unlock()
 		return nil
 	}
-	a.running = false
 	shutdownChan := a.shutdownChan
 	a.shutdownChan = nil
 
@@ -91,6 +97,9 @@ func (a *AgentRuntime) Shutdown(ctx context.Context) error {
 
 	// Stop event ingestor
 	if err := a.config.EventIngestor.Stop(ctx); err != nil {
+		a.mu.Lock()
+		a.running = true
+		a.mu.Unlock()
 		return fmt.Errorf("failed to stop event ingestor: %w", err)
 	}
 
@@ -103,8 +112,14 @@ func (a *AgentRuntime) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-processingDone:
+		a.mu.Lock()
+		a.running = false
+		a.mu.Unlock()
 		return nil
 	case <-ctx.Done():
+		a.mu.Lock()
+		a.running = true
+		a.mu.Unlock()
 		return fmt.Errorf("shutdown timed out: %w", ctx.Err())
 	}
 }

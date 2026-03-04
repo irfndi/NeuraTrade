@@ -70,6 +70,10 @@ func (i *Ingestor) Start(ctx context.Context) (<-chan Event, error) {
 		i.mu.Unlock()
 		return nil, fmt.Errorf("ingestor already running")
 	}
+	if strings.TrimSpace(i.config.BackendEventURL) == "" {
+		i.mu.Unlock()
+		return nil, fmt.Errorf("invalid ingestor config: backend event url is required")
+	}
 
 	loopCtx, cancel := context.WithCancel(ctx)
 	shutdownChan := make(chan struct{})
@@ -172,7 +176,10 @@ func (i *Ingestor) connectAndListen(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		if readErr != nil {
+			return fmt.Errorf("reading response body: %w", readErr)
+		}
 		return fmt.Errorf("event stream status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
@@ -189,7 +196,7 @@ func (i *Ingestor) connectAndListen(ctx context.Context) error {
 
 		var event Event
 		if err := json.Unmarshal([]byte(raw), &event); err != nil {
-			log.Printf("agent-control: dropping invalid event payload: %v payload=%q", err, truncateForLog(raw, 512))
+			log.Printf("agent-control: dropping invalid event payload: %v payload_length=%d", err, len(raw))
 			return
 		}
 		if event.Timestamp.IsZero() {
@@ -247,11 +254,4 @@ func (i *Ingestor) IsRunning() bool {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.running
-}
-
-func truncateForLog(value string, maxLen int) string {
-	if maxLen <= 0 || len(value) <= maxLen {
-		return value
-	}
-	return value[:maxLen] + "...(truncated)"
 }

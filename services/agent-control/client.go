@@ -27,6 +27,8 @@ type BackendClient struct {
 	httpClient *http.Client
 }
 
+const maxErrorBodyRead = 1 << 20 // 1 MiB
+
 // NewBackendClient creates a new backend client.
 func NewBackendClient(config ClientConfig) *BackendClient {
 	if config.MaxRetries < 0 {
@@ -43,6 +45,11 @@ func NewBackendClient(config ClientConfig) *BackendClient {
 
 // PauseExchange pauses market data collection for an exchange.
 func (c *BackendClient) PauseExchange(ctx context.Context, exchangeID string) error {
+	exchangeID = strings.TrimSpace(exchangeID)
+	if exchangeID == "" {
+		return fmt.Errorf("invalid exchangeID")
+	}
+
 	return c.executeCommand(ctx, "/api/v1/agent/pause-exchange", map[string]any{
 		"exchange_id": exchangeID,
 	})
@@ -50,6 +57,11 @@ func (c *BackendClient) PauseExchange(ctx context.Context, exchangeID string) er
 
 // ResumeExchange resumes market data collection for an exchange.
 func (c *BackendClient) ResumeExchange(ctx context.Context, exchangeID string) error {
+	exchangeID = strings.TrimSpace(exchangeID)
+	if exchangeID == "" {
+		return fmt.Errorf("invalid exchangeID")
+	}
+
 	return c.executeCommand(ctx, "/api/v1/agent/resume-exchange", map[string]any{
 		"exchange_id": exchangeID,
 	})
@@ -117,6 +129,9 @@ func (c *BackendClient) executeCommand(ctx context.Context, endpoint string, pay
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = err
+			if attempt >= c.config.MaxRetries {
+				break
+			}
 			if err := waitRetry(ctx, attempt); err != nil {
 				return err
 			}
@@ -124,7 +139,7 @@ func (c *BackendClient) executeCommand(ctx context.Context, endpoint string, pay
 		}
 
 		// Close body immediately after reading (not using defer in loop)
-		bodyBytes, readErr := io.ReadAll(resp.Body)
+		bodyBytes, readErr := readBodyWithLimit(resp.Body, maxErrorBodyRead)
 		resp.Body.Close()
 
 		if resp.StatusCode >= 400 {
@@ -135,6 +150,9 @@ func (c *BackendClient) executeCommand(ctx context.Context, endpoint string, pay
 			}
 			if resp.StatusCode >= 500 {
 				// Retry on server errors
+				if attempt >= c.config.MaxRetries {
+					break
+				}
 				if err := waitRetry(ctx, attempt); err != nil {
 					return err
 				}
@@ -150,6 +168,22 @@ func (c *BackendClient) executeCommand(ctx context.Context, endpoint string, pay
 		lastErr = fmt.Errorf("request failed")
 	}
 	return fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+func readBodyWithLimit(reader io.Reader, maxBytes int64) ([]byte, error) {
+	limitedReader := io.LimitReader(reader, maxBytes+1)
+	body, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return nil, err
+	}
+
+	if int64(len(body)) > maxBytes {
+		truncatedBody := append([]byte{}, body[:maxBytes]...)
+		truncatedBody = append(truncatedBody, []byte("...(truncated)")...)
+		return truncatedBody, nil
+	}
+
+	return body, nil
 }
 
 func waitRetry(ctx context.Context, attempt int) error {
