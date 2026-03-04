@@ -132,7 +132,7 @@ func (a *CollectorActor) handleStartExchange(ctx context.Context, traceID string
 
 		state.Enabled = true
 		state.Paused = false
-		state.Symbols = msg.Symbols
+		state.Symbols = append([]string(nil), msg.Symbols...)
 		state.Interval = interval
 		state.TimerStop = make(chan struct{})
 		state.TickerReset = make(chan struct{}, 1)
@@ -141,7 +141,7 @@ func (a *CollectorActor) handleStartExchange(ctx context.Context, traceID string
 		state = &ExchangeState{
 			ExchangeID:  msg.ExchangeID,
 			Enabled:     true,
-			Symbols:     msg.Symbols,
+			Symbols:     append([]string(nil), msg.Symbols...),
 			Interval:    interval,
 			TimerStop:   make(chan struct{}),
 			TickerReset: make(chan struct{}, 1),
@@ -248,7 +248,7 @@ func (a *CollectorActor) handleUpdateSymbols(ctx context.Context, traceID string
 	}
 
 	state.mu.Lock()
-	state.Symbols = msg.Symbols
+	state.Symbols = append([]string(nil), msg.Symbols...)
 	state.mu.Unlock()
 
 	if err := a.publishEvent(ctx, "collector.symbols_updated", "symbols_updated", marketdata.SymbolsUpdatedEvent{

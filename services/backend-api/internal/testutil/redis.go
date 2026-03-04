@@ -47,6 +47,13 @@ func GenerateTestSecret() string {
 
 // MustGenerateTestSecret generates a test secret or panics if generation fails.
 // Use this in test setup where a secret is required.
+//
+// Note: The length check below is defensive coding to protect against future
+// changes to GenerateTestSecret(). GenerateTestSecret() currently guarantees
+// 64-character hex output (32 random bytes), but this check ensures we fail
+// fast if that guarantee ever changes. This is a safeguard - the function
+// will panic if the generated secret is shorter than 64 characters.
+// Use this in test setup where a secret is required.
 func MustGenerateTestSecret() string {
 	secret := GenerateTestSecret()
 	if len(secret) < 64 {
