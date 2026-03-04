@@ -3,6 +3,8 @@ package ports
 
 import (
 	"context"
+
+	"github.com/shopspring/decimal"
 )
 
 // ============================================================
@@ -42,15 +44,15 @@ type OrderIntent struct {
 	Symbol          string
 	Side            OrderSide
 	Type            OrderType
-	Amount          float64
-	Price           float64
+	Amount          decimal.Decimal
+	Price           decimal.Decimal
 	StrategyID      string
 	SignalID        string
 	Confidence      float64
 	StopLoss        float64
 	TakeProfit      float64
 	CurrentPosition float64
-	PortfolioValue  float64
+	PortfolioValue  decimal.Decimal
 }
 
 // PolicyEngine evaluates order intents against policy rules.
