@@ -1,7 +1,9 @@
 package risk
 
-import "context"
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 type ctxKey string
 
