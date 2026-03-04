@@ -224,7 +224,11 @@ func (a *ExecutionActor) Receive(ctx context.Context, env actor.Envelope) error 
 // handlePlaceOrder processes a new order placement with idempotency
 func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg) error {
 	// Check for duplicate intent
-	if existing, err := a.idempotencyStore.GetIntent(ctx, msg.IntentID); err == nil && existing != nil {
+	existing, err := a.idempotencyStore.GetIntent(ctx, msg.IntentID)
+	if err != nil {
+		return fmt.Errorf("load intent %s: %w", msg.IntentID, err)
+	}
+	if existing != nil {
 		// Intent already exists - this is a retry
 		if existing.IsTerminal() {
 			// Order already in terminal state, return success without re-executing.
@@ -247,7 +251,11 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 	clientOrderID := generateClientOrderID(msg.IntentID, 1)
 
 	// Check if we've already placed this order (via client ID)
-	if existing, err := a.idempotencyStore.GetIntentByClientID(ctx, clientOrderID); err == nil && existing != nil {
+	existing, err = a.idempotencyStore.GetIntentByClientID(ctx, clientOrderID)
+	if err != nil {
+		return fmt.Errorf("lookup intent by client order ID %s: %w", clientOrderID, err)
+	}
+	if existing != nil {
 		// Order already placed with this client ID
 		a.intents[msg.IntentID] = existing
 		a.clientIDToIntent[clientOrderID] = msg.IntentID
@@ -388,10 +396,23 @@ func (a *ExecutionActor) handleCancelOrder(ctx context.Context, msg CancelOrderM
 		return nil
 	}
 
+	// Use persisted identifiers as canonical values for cancellation.
+	exchange := intent.Request.Exchange
+	if exchange == "" {
+		exchange = msg.Exchange
+	}
+	orderID := intent.ExchangeOrderID
+	if orderID == "" {
+		orderID = msg.OrderID
+	}
+	if exchange == "" || orderID == "" {
+		return fmt.Errorf("cancel order intent %s: missing exchange/order identifier", msg.IntentID)
+	}
+
 	// Execute cancellation via gateway
-	if err := a.gateway.CancelOrder(ctx, msg.Exchange, msg.OrderID); err != nil {
-		a.logAuditEvent(ctx, msg.IntentID, "cancel_failed", msg.Exchange, intent.Request.Symbol, err.Error(), nil)
-		return err
+	if err := a.gateway.CancelOrder(ctx, exchange, orderID); err != nil {
+		a.logAuditEvent(ctx, msg.IntentID, "cancel_failed", exchange, intent.Request.Symbol, sanitizeExternalError(err), nil)
+		return fmt.Errorf("cancel order exchange=%s orderID=%s: %w", exchange, orderID, err)
 	}
 
 	// Update intent
@@ -402,7 +423,7 @@ func (a *ExecutionActor) handleCancelOrder(ctx context.Context, msg CancelOrderM
 	}
 
 	// Audit log
-	a.logAuditEvent(ctx, msg.IntentID, "cancelled", msg.Exchange, intent.Request.Symbol, msg.Reason, nil)
+	a.logAuditEvent(ctx, msg.IntentID, "cancelled", exchange, intent.Request.Symbol, msg.Reason, nil)
 
 	// Publish event
 	a.publishEvent(ctx, ports.EventTypeOrderCancelled, intent)
@@ -552,6 +573,12 @@ func (a *ExecutionActor) validateRequest(req *ports.OrderRequest) error {
 	}
 	if req.Symbol == "" {
 		return errors.New("symbol is required")
+	}
+	if req.Side != ports.OrderSideBuy && req.Side != ports.OrderSideSell {
+		return errors.New("side must be buy or sell")
+	}
+	if req.Type != ports.OrderTypeMarket && req.Type != ports.OrderTypeLimit {
+		return errors.New("order type must be market or limit")
 	}
 	if req.Amount.LessThanOrEqual(decimal.Zero) {
 		return errors.New("amount must be greater than zero")

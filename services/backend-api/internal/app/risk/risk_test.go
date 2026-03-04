@@ -154,9 +154,15 @@ func TestMinConfidenceRule(t *testing.T) {
 
 func TestEngineWithMultipleRules(t *testing.T) {
 	engine := NewEngine()
-	engine.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0)))
-	engine.AddRule(NewAllowedSymbolsRule([]string{"BTC/USDT"}))
-	engine.AddRule(NewMinConfidenceRule(0.5))
+	if err := engine.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0))); err != nil {
+		t.Fatalf("add max order size rule: %v", err)
+	}
+	if err := engine.AddRule(NewAllowedSymbolsRule([]string{"BTC/USDT"})); err != nil {
+		t.Fatalf("add allowed symbols rule: %v", err)
+	}
+	if err := engine.AddRule(NewMinConfidenceRule(0.5)); err != nil {
+		t.Fatalf("add min confidence rule: %v", err)
+	}
 
 	// Should pass all rules
 	intent1 := ports.OrderIntent{
@@ -209,7 +215,9 @@ func TestEngineWithMultipleRules(t *testing.T) {
 
 func TestEngineRemoveRule(t *testing.T) {
 	engine := NewEngine()
-	engine.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0)))
+	if err := engine.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0))); err != nil {
+		t.Fatalf("add max order size rule: %v", err)
+	}
 
 	rules := engine.ListRules()
 	if len(rules) != 1 {
@@ -263,7 +271,9 @@ func TestKillSwitchEngage(t *testing.T) {
 
 func TestKillSwitchDisengage(t *testing.T) {
 	ks := NewKillSwitch()
-	ks.Engage(context.Background(), "test")
+	if err := ks.Engage(context.Background(), "test"); err != nil {
+		t.Fatalf("engage kill switch: %v", err)
+	}
 
 	err := ks.Disengage(context.Background())
 	if err != nil {
@@ -290,7 +300,9 @@ func TestKillSwitchRule(t *testing.T) {
 	}
 
 	// Should reject when engaged
-	ks.Engage(context.Background(), "emergency")
+	if err := ks.Engage(context.Background(), "emergency"); err != nil {
+		t.Fatalf("engage kill switch: %v", err)
+	}
 	decision, err = rule.Evaluate(context.Background(), intent)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -308,7 +320,9 @@ func TestKillSwitchListener(t *testing.T) {
 		called.Store(true)
 	})
 
-	ks.Engage(context.Background(), "test")
+	if err := ks.Engage(context.Background(), "test"); err != nil {
+		t.Fatalf("engage kill switch: %v", err)
+	}
 
 	time.Sleep(50 * time.Millisecond) // Wait for goroutine
 
@@ -341,7 +355,9 @@ func TestSafeModeEnable(t *testing.T) {
 func TestSafeModeEnableWithReason(t *testing.T) {
 	sm := NewSafeMode(DefaultSafeModeConfig())
 
-	sm.EnableWithReason(context.Background(), "high volatility")
+	if err := sm.EnableWithReason(context.Background(), "high volatility"); err != nil {
+		t.Fatalf("enable safe mode with reason: %v", err)
+	}
 
 	if sm.GetReason() != "high volatility" {
 		t.Errorf("wrong reason: %s", sm.GetReason())
@@ -364,7 +380,9 @@ func TestSafeModeMultipliers(t *testing.T) {
 	}
 
 	// When enabled, should return configured values
-	sm.Enable(context.Background())
+	if err := sm.Enable(context.Background()); err != nil {
+		t.Fatalf("enable safe mode: %v", err)
+	}
 	os, lev, pos = sm.GetMultipliers()
 	if os != 0.5 || lev != 0.25 || pos != 0.1 {
 		t.Errorf("wrong multipliers: os=%v, lev=%v, pos=%v", os, lev, pos)
@@ -386,7 +404,9 @@ func TestSafeModeRule(t *testing.T) {
 	}
 
 	// When enabled, check constraints are applied
-	sm.Enable(context.Background())
+	if err := sm.Enable(context.Background()); err != nil {
+		t.Fatalf("enable safe mode: %v", err)
+	}
 	decision, err = rule.Evaluate(context.Background(), intent)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -395,7 +415,7 @@ func TestSafeModeRule(t *testing.T) {
 		t.Error("should reject when trading_mode is missing and safe mode is paper-only")
 	}
 
-	paperCtx := context.WithValue(context.Background(), "trading_mode", "paper")
+	paperCtx := WithTradingMode(context.Background(), "paper")
 	decision, err = rule.Evaluate(paperCtx, intent)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -417,21 +437,30 @@ func TestCooldownRule(t *testing.T) {
 
 	// First loss - should still approve
 	rule.RecordLoss()
-	decision, _ := rule.Evaluate(ctx, intent)
+	decision, err := rule.Evaluate(ctx, intent)
+	if err != nil {
+		t.Fatalf("evaluate cooldown after first loss: %v", err)
+	}
 	if !decision.Approved {
 		t.Error("should approve after 1 loss")
 	}
 
 	// Second loss - triggers cooldown
 	rule.RecordLoss()
-	decision, _ = rule.Evaluate(ctx, intent)
+	decision, err = rule.Evaluate(ctx, intent)
+	if err != nil {
+		t.Fatalf("evaluate cooldown after second loss: %v", err)
+	}
 	if decision.Approved {
 		t.Error("should reject during cooldown")
 	}
 
 	// Wait for cooldown
 	time.Sleep(150 * time.Millisecond)
-	decision, _ = rule.Evaluate(ctx, intent)
+	decision, err = rule.Evaluate(ctx, intent)
+	if err != nil {
+		t.Fatalf("evaluate cooldown after waiting: %v", err)
+	}
 	if !decision.Approved {
 		t.Error("should approve after cooldown")
 	}
@@ -440,7 +469,10 @@ func TestCooldownRule(t *testing.T) {
 	rule.RecordLoss()
 	rule.RecordWin()
 	rule.RecordLoss()
-	decision, _ = rule.Evaluate(ctx, intent)
+	decision, err = rule.Evaluate(ctx, intent)
+	if err != nil {
+		t.Fatalf("evaluate cooldown after reset by win: %v", err)
+	}
 	if !decision.Approved {
 		t.Error("should approve - counter reset by win")
 	}

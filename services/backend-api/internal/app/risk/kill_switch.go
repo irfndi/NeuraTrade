@@ -130,13 +130,7 @@ func (k *KillSwitchImpl) ShouldCancelOrders() bool {
 
 // extractSourceFromContext extracts the source from context.
 func extractSourceFromContext(ctx context.Context) string {
-	if source, ok := ctx.Value("source").(string); ok {
-		return source
-	}
-	if source, ok := ctx.Value("user").(string); ok {
-		return source
-	}
-	return "system"
+	return sourceFromContext(ctx)
 }
 
 // KillSwitchRule is a hard rule that rejects all orders when kill switch is engaged.

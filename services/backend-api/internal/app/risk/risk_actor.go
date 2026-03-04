@@ -343,7 +343,7 @@ func (a *RiskActor) handleUpdateDrawdown(msg UpdateDrawdownMsg) {
 	a.mu.Unlock()
 
 	if a.drawdownRule != nil {
-		a.drawdownRule.UpdatePortfolioValue(decimal.NewFromInt(1).Sub(msg.Drawdown))
+		a.drawdownRule.UpdateDrawdown(msg.Drawdown)
 	}
 
 	if a.autoTrigger != nil {
@@ -353,11 +353,12 @@ func (a *RiskActor) handleUpdateDrawdown(msg UpdateDrawdownMsg) {
 
 func (a *RiskActor) handleUpdateDailyLoss(msg UpdateDailyLossMsg) {
 	a.mu.Lock()
+	prevLoss := a.dailyLoss
 	a.dailyLoss = msg.Loss
 	a.mu.Unlock()
 
 	if a.dailyLossRule != nil {
-		a.dailyLossRule.UpdateDailyLoss(msg.Loss)
+		a.dailyLossRule.UpdateDailyLoss(msg.Loss.Sub(prevLoss))
 	}
 }
 
@@ -429,7 +430,9 @@ func (a *RiskActor) publishEvent(eventType string, payload map[string]any) {
 		WithSource(a.id).
 		WithTraceID(traceID)
 
-	_ = a.eventBus.Publish(context.Background(), event)
+	if err := a.eventBus.Publish(context.Background(), event); err != nil {
+		log.Printf("[risk] %v", fmt.Errorf("publish risk event type=%s: %w", eventType, err))
+	}
 }
 
 // ============================================================

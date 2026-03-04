@@ -165,7 +165,7 @@ func (r *SafeModeRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (
 	if r.safeMode.IsEnabled() {
 		if r.safeMode.IsRestrictedToPaper() {
 			// Deny by default unless the caller explicitly sets trading_mode=paper.
-			if mode, ok := ctx.Value("trading_mode").(string); !ok || mode != "paper" {
+			if mode, ok := tradingModeFromContext(ctx); !ok || mode != "paper" {
 				return ports.PolicyDecision{
 					Approved: false,
 					Reason:   fmt.Sprintf("safe mode restricts trading to paper mode: %s", r.safeMode.GetReason()),

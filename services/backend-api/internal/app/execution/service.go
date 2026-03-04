@@ -4,7 +4,9 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/platform/actor"
@@ -14,8 +16,9 @@ import (
 
 // ExecutionService provides a high-level API for order execution
 type ExecutionService struct {
-	actorRef *actor.Ref
-	actor    *ExecutionActor
+	actorRef        *actor.Ref
+	actor           *ExecutionActor
+	authorizeIntent func(ctx context.Context, intentID string) error
 }
 
 // ServiceConfig holds configuration for the execution service
@@ -25,6 +28,7 @@ type ServiceConfig struct {
 	EventBus         ports.EventBus
 	IdempotencyStore IdempotencyStore
 	AuditLog         AuditLogger
+	AuthorizeIntent  func(ctx context.Context, intentID string) error
 }
 
 // NewExecutionService creates and initializes the execution service
@@ -37,6 +41,9 @@ func NewExecutionService(config ServiceConfig) (*ExecutionService, error) {
 	}
 	if config.AuditLog == nil {
 		return nil, fmt.Errorf("audit log is required")
+	}
+	if config.AuthorizeIntent == nil {
+		return nil, fmt.Errorf("intent authorizer is required")
 	}
 
 	// Create the execution actor
@@ -52,8 +59,9 @@ func NewExecutionService(config ServiceConfig) (*ExecutionService, error) {
 	actorRef := actor.NewRef(execActor, config.ActorConfig)
 
 	return &ExecutionService{
-		actorRef: actorRef,
-		actor:    execActor,
+		actorRef:        actorRef,
+		actor:           execActor,
+		authorizeIntent: config.AuthorizeIntent,
 	}, nil
 }
 
@@ -61,8 +69,8 @@ func NewExecutionService(config ServiceConfig) (*ExecutionService, error) {
 func (s *ExecutionService) Start(ctx context.Context) error {
 	// Start the actor's message processing loop
 	go func() {
-		if err := s.actorRef.Run(ctx); err != nil && err != context.Canceled {
-			fmt.Printf("[ExecutionService] Actor stopped with error: %v\n", err)
+		if err := s.actorRef.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("[execution] actor stopped: %s", sanitizeExternalError(err))
 		}
 	}()
 
@@ -111,8 +119,8 @@ func (s *ExecutionService) PlaceOrder(ctx context.Context, req PlaceOrderRequest
 		Metadata:     req.Metadata,
 	}
 
-	if err := s.actorRef.Send(ctx, msg); err != nil {
-		return nil, fmt.Errorf("failed to send place order message: %w", err)
+	if _, err := s.actorRef.Ask(ctx, msg); err != nil {
+		return nil, fmt.Errorf("place order rejected: %w", err)
 	}
 
 	return &PlaceOrderResponse{
@@ -145,13 +153,23 @@ func (s *ExecutionService) CancelOrder(ctx context.Context, req CancelOrderReque
 	if req.IntentID == "" {
 		return fmt.Errorf("intent ID is required")
 	}
+	if req.OrderID == "" {
+		return fmt.Errorf("order ID is required")
+	}
+	if req.Exchange == "" {
+		return fmt.Errorf("exchange is required")
+	}
+	if err := s.authorizeIntent(ctx, req.IntentID); err != nil {
+		return fmt.Errorf("authorize cancel order for intent %s: %w", req.IntentID, err)
+	}
 
+	//lint:ignore S1016 Explicit field mapping prevents brittle coupling between request/message layouts.
 	msg := CancelOrderMsg{
 		IntentID: req.IntentID,
 		OrderID:  req.OrderID,
 		Exchange: req.Exchange,
-		Reason:   req.Reason,
 	}
+	msg.Reason = req.Reason
 
 	if err := s.actorRef.Send(ctx, msg); err != nil {
 		return fmt.Errorf("failed to send cancel order message: %w", err)
@@ -175,6 +193,9 @@ func (s *ExecutionService) GetOrderStatus(ctx context.Context, intentID string) 
 	}
 	if intentID == "" {
 		return nil, fmt.Errorf("intent ID is required")
+	}
+	if err := s.authorizeIntent(ctx, intentID); err != nil {
+		return nil, fmt.Errorf("authorize get order status for intent %s: %w", intentID, err)
 	}
 
 	msg := GetOrderStatusMsg{
@@ -232,6 +253,9 @@ func (s *ExecutionService) GetAuditHistory(ctx context.Context, intentID string)
 	}
 	if s.actor == nil || s.actor.auditLog == nil {
 		return nil, ErrAuditLogNotInitialized
+	}
+	if err := s.authorizeIntent(ctx, intentID); err != nil {
+		return nil, fmt.Errorf("authorize get audit history for intent %s: %w", intentID, err)
 	}
 
 	return s.actor.auditLog.GetOrderHistory(ctx, intentID)

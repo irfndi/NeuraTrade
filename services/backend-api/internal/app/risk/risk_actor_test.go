@@ -30,7 +30,7 @@ func TestRiskActorEvaluateIntent(t *testing.T) {
 	defer cancel()
 
 	go ref.Run(ctx)
-	time.Sleep(10 * time.Millisecond) // Let actor start
+	waitForActorRunning(t, ref, time.Second)
 
 	// Create client ref
 	client := NewRiskActorRef(ref)
@@ -84,7 +84,7 @@ func TestRiskActorKillSwitchViaMessages(t *testing.T) {
 	defer cancel()
 
 	go ref.Run(ctx)
-	time.Sleep(10 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 
@@ -137,7 +137,7 @@ func TestRiskActorSafeMode(t *testing.T) {
 	defer cancel()
 
 	go ref.Run(ctx)
-	time.Sleep(10 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 
@@ -165,7 +165,10 @@ func TestRiskActorSafeMode(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	state, _ = client.GetState(ctx)
+	state, err = client.GetState(ctx)
+	if err != nil {
+		t.Fatalf("GetState after disabling safe mode: %v", err)
+	}
 	if state.SafeModeEnabled {
 		t.Error("safe mode should be disabled")
 	}
@@ -173,7 +176,9 @@ func TestRiskActorSafeMode(t *testing.T) {
 
 func TestRiskActorGetState(t *testing.T) {
 	policy := NewEngine()
-	policy.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0)))
+	if err := policy.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0))); err != nil {
+		t.Fatalf("add max order size rule: %v", err)
+	}
 	ks := NewKillSwitch()
 	sm := NewSafeMode(DefaultSafeModeConfig())
 
@@ -189,7 +194,7 @@ func TestRiskActorGetState(t *testing.T) {
 	defer cancel()
 
 	go ref.Run(ctx)
-	time.Sleep(10 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 
@@ -238,12 +243,14 @@ func TestRiskActorWithEventBus(t *testing.T) {
 	})
 
 	go ref.Run(ctx)
-	time.Sleep(20 * time.Millisecond) // Wait for actor to start
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 
 	// This should trigger an event
-	client.EngageKillSwitch(ctx, "test")
+	if err := client.EngageKillSwitch(ctx, "test"); err != nil {
+		t.Fatalf("EngageKillSwitch failed: %v", err)
+	}
 
 	// Wait for event with timeout
 	select {
@@ -271,14 +278,16 @@ func TestRiskActorAddRemoveRule(t *testing.T) {
 	defer cancel()
 
 	go ref.Run(ctx)
-	time.Sleep(10 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	// Test adding rule via message
 	reply := make(chan error, 1)
-	ref.Send(ctx, AddRuleMsg{
+	if err := ref.Send(ctx, AddRuleMsg{
 		Rule:  NewMinConfidenceRule(0.8),
 		Reply: reply,
-	})
+	}); err != nil {
+		t.Fatalf("send AddRuleMsg failed: %v", err)
+	}
 
 	select {
 	case err := <-reply:
@@ -291,10 +300,12 @@ func TestRiskActorAddRemoveRule(t *testing.T) {
 
 	// Test removing rule via message
 	reply2 := make(chan error, 1)
-	ref.Send(ctx, RemoveRuleMsg{
+	if err := ref.Send(ctx, RemoveRuleMsg{
 		RuleName: "min_confidence",
 		Reply:    reply2,
-	})
+	}); err != nil {
+		t.Fatalf("send RemoveRuleMsg failed: %v", err)
+	}
 
 	select {
 	case err := <-reply2:

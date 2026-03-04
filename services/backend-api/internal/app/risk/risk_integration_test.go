@@ -22,8 +22,12 @@ func TestIntegration_SignalProposed_RiskRejected_NoOrder(t *testing.T) {
 	policy := NewEngine()
 
 	// Add rule that will reject: only allow BTC/USDT, signal is for ETH/USDT
-	policy.AddRule(NewAllowedSymbolsRule([]string{"BTC/USDT"}))
-	policy.AddRule(NewMinConfidenceRule(0.7))
+	if err := policy.AddRule(NewAllowedSymbolsRule([]string{"BTC/USDT"})); err != nil {
+		t.Fatalf("add allowed symbols rule: %v", err)
+	}
+	if err := policy.AddRule(NewMinConfidenceRule(0.7)); err != nil {
+		t.Fatalf("add min confidence rule: %v", err)
+	}
 
 	ks := NewKillSwitch()
 	sm := NewSafeMode(DefaultSafeModeConfig())
@@ -61,7 +65,7 @@ func TestIntegration_SignalProposed_RiskRejected_NoOrder(t *testing.T) {
 	})
 
 	go ref.Run(ctx)
-	time.Sleep(20 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 
@@ -125,9 +129,15 @@ func TestIntegration_SignalProposed_RiskRejected_NoOrder(t *testing.T) {
 // SignalProposed -> Risk evaluates -> Approved -> Order can proceed
 func TestIntegration_SignalProposed_RiskApproved(t *testing.T) {
 	policy := NewEngine()
-	policy.AddRule(NewAllowedSymbolsRule([]string{"BTC/USDT", "ETH/USDT"}))
-	policy.AddRule(NewMinConfidenceRule(0.6))
-	policy.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0)))
+	if err := policy.AddRule(NewAllowedSymbolsRule([]string{"BTC/USDT", "ETH/USDT"})); err != nil {
+		t.Fatalf("add allowed symbols rule: %v", err)
+	}
+	if err := policy.AddRule(NewMinConfidenceRule(0.6)); err != nil {
+		t.Fatalf("add min confidence rule: %v", err)
+	}
+	if err := policy.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(10.0))); err != nil {
+		t.Fatalf("add max order size rule: %v", err)
+	}
 
 	ks := NewKillSwitch()
 	sm := NewSafeMode(DefaultSafeModeConfig())
@@ -157,7 +167,7 @@ func TestIntegration_SignalProposed_RiskApproved(t *testing.T) {
 	})
 
 	go ref.Run(ctx)
-	time.Sleep(20 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 
@@ -217,7 +227,7 @@ func TestIntegration_KillSwitch_ImmediateBlocking(t *testing.T) {
 	defer cancel()
 
 	go ref.Run(ctx)
-	time.Sleep(20 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 
@@ -229,19 +239,25 @@ func TestIntegration_KillSwitch_ImmediateBlocking(t *testing.T) {
 		Amount:   decimal.NewFromFloat(1.0),
 	}
 
-	decision, _ := client.EvaluateIntent(ctx, intent)
+	decision, err := client.EvaluateIntent(ctx, intent)
+	if err != nil {
+		t.Fatalf("evaluate intent before kill switch: %v", err)
+	}
 	if !decision.Approved {
 		t.Error("should approve before kill switch")
 	}
 
 	// Engage kill switch
-	err := client.EngageKillSwitch(ctx, "emergency stop test")
+	err = client.EngageKillSwitch(ctx, "emergency stop test")
 	if err != nil {
 		t.Fatalf("failed to engage kill switch: %v", err)
 	}
 
 	// Verify kill switch is engaged
-	state, _ := client.GetState(ctx)
+	state, err := client.GetState(ctx)
+	if err != nil {
+		t.Fatalf("get state after engaging kill switch: %v", err)
+	}
 	if !state.KillSwitchEngaged {
 		t.Error("kill switch should be engaged")
 	}
@@ -269,8 +285,13 @@ func TestIntegration_KillSwitch_ImmediateBlocking(t *testing.T) {
 	}
 
 	// Disengage and verify trading resumes
-	client.DisengageKillSwitch(ctx)
-	decision, _ = client.EvaluateIntent(ctx, intent)
+	if err := client.DisengageKillSwitch(ctx); err != nil {
+		t.Fatalf("disengage kill switch: %v", err)
+	}
+	decision, err = client.EvaluateIntent(ctx, intent)
+	if err != nil {
+		t.Fatalf("evaluate intent after disengaging kill switch: %v", err)
+	}
 	if !decision.Approved {
 		t.Error("should approve after kill switch disengaged")
 	}
@@ -304,12 +325,15 @@ func TestIntegration_SafeMode_ImmediateBlocking(t *testing.T) {
 	defer cancel()
 
 	go ref.Run(ctx)
-	time.Sleep(20 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 
 	// Verify safe mode is initially disabled
-	state, _ := client.GetState(ctx)
+	state, err := client.GetState(ctx)
+	if err != nil {
+		t.Fatalf("get initial safe mode state: %v", err)
+	}
 	if state.SafeModeEnabled {
 		t.Error("safe mode should start disabled")
 	}
@@ -321,13 +345,16 @@ func TestIntegration_SafeMode_ImmediateBlocking(t *testing.T) {
 	}
 
 	// Enable safe mode
-	err := client.EnableSafeMode(ctx, "high volatility detected")
+	err = client.EnableSafeMode(ctx, "high volatility detected")
 	if err != nil {
 		t.Fatalf("failed to enable safe mode: %v", err)
 	}
 
 	// Verify safe mode is enabled immediately
-	state, _ = client.GetState(ctx)
+	state, err = client.GetState(ctx)
+	if err != nil {
+		t.Fatalf("get safe mode state after enabling: %v", err)
+	}
 	if !state.SafeModeEnabled {
 		t.Error("safe mode should be enabled")
 	}
@@ -364,7 +391,9 @@ func TestIntegration_SafeMode_ImmediateBlocking(t *testing.T) {
 	}
 
 	// Disable safe mode and verify multipliers return to normal immediately
-	client.DisableSafeMode(ctx)
+	if err := client.DisableSafeMode(ctx); err != nil {
+		t.Fatalf("disable safe mode: %v", err)
+	}
 	os, lev, pos = sm.GetMultipliers()
 	if os != 1.0 || lev != 1.0 || pos != 1.0 {
 		t.Error("multipliers should return to 1.0 when safe mode disabled")
@@ -375,13 +404,27 @@ func TestIntegration_SafeMode_ImmediateBlocking(t *testing.T) {
 func TestIntegration_FullRiskPipeline(t *testing.T) {
 	// Setup complete risk system with all rules
 	policy := NewEngine()
-	policy.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(5.0)))
-	policy.AddRule(NewMaxNotionalRule(decimal.NewFromFloat(100000.0)))
-	policy.AddRule(NewAllowedSymbolsRule([]string{"BTC/USDT", "ETH/USDT", "SOL/USDT"}))
-	policy.AddRule(NewAllowedExchangesRule([]string{"binance", "coinbase"}))
-	policy.AddRule(NewMinConfidenceRule(0.65))
-	policy.AddRule(NewMaxDrawdownRule(decimal.NewFromFloat(0.15)))
-	policy.AddRule(NewMaxDailyLossRule(decimal.NewFromFloat(5000.0)))
+	if err := policy.AddRule(NewMaxOrderSizeRule(decimal.NewFromFloat(5.0))); err != nil {
+		t.Fatalf("add max order size rule: %v", err)
+	}
+	if err := policy.AddRule(NewMaxNotionalRule(decimal.NewFromFloat(100000.0))); err != nil {
+		t.Fatalf("add max notional rule: %v", err)
+	}
+	if err := policy.AddRule(NewAllowedSymbolsRule([]string{"BTC/USDT", "ETH/USDT", "SOL/USDT"})); err != nil {
+		t.Fatalf("add allowed symbols rule: %v", err)
+	}
+	if err := policy.AddRule(NewAllowedExchangesRule([]string{"binance", "coinbase"})); err != nil {
+		t.Fatalf("add allowed exchanges rule: %v", err)
+	}
+	if err := policy.AddRule(NewMinConfidenceRule(0.65)); err != nil {
+		t.Fatalf("add min confidence rule: %v", err)
+	}
+	if err := policy.AddRule(NewMaxDrawdownRule(decimal.NewFromFloat(0.15))); err != nil {
+		t.Fatalf("add max drawdown rule: %v", err)
+	}
+	if err := policy.AddRule(NewMaxDailyLossRule(decimal.NewFromFloat(5000.0))); err != nil {
+		t.Fatalf("add max daily loss rule: %v", err)
+	}
 
 	ks := NewKillSwitch()
 	sm := NewSafeMode(DefaultSafeModeConfig())
@@ -400,7 +443,7 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 	defer cancel()
 
 	go ref.Run(ctx)
-	time.Sleep(20 * time.Millisecond)
+	waitForActorRunning(t, ref, time.Second)
 
 	client := NewRiskActorRef(ref)
 

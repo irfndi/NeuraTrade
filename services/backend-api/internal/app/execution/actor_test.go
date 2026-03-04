@@ -2,6 +2,8 @@ package execution
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 
 // MockTradingGateway implements ports.TradingGateway for testing
 type MockTradingGateway struct {
+	mu              sync.RWMutex
 	orders          map[string]ports.OrderResult
 	canceledOrders  map[string]bool
 	placeOrderFunc  func(ctx context.Context, req ports.OrderRequest) (ports.OrderResult, error)
@@ -26,8 +29,11 @@ func NewMockTradingGateway() *MockTradingGateway {
 }
 
 func (m *MockTradingGateway) PlaceOrder(ctx context.Context, req ports.OrderRequest) (ports.OrderResult, error) {
-	if m.placeOrderFunc != nil {
-		return m.placeOrderFunc(ctx, req)
+	m.mu.RLock()
+	placeOrderFn := m.placeOrderFunc
+	m.mu.RUnlock()
+	if placeOrderFn != nil {
+		return placeOrderFn(ctx, req)
 	}
 	result := ports.OrderResult{
 		Exchange:  req.Exchange,
@@ -41,15 +47,22 @@ func (m *MockTradingGateway) PlaceOrder(ctx context.Context, req ports.OrderRequ
 		Status:    ports.OrderStatusOpen,
 		Timestamp: time.Now(),
 	}
+	m.mu.Lock()
 	m.orders[result.OrderID] = result
+	m.mu.Unlock()
 	return result, nil
 }
 
 func (m *MockTradingGateway) CancelOrder(ctx context.Context, exchange, orderID string) error {
-	if m.cancelOrderFunc != nil {
-		return m.cancelOrderFunc(ctx, exchange, orderID)
+	m.mu.RLock()
+	cancelOrderFn := m.cancelOrderFunc
+	m.mu.RUnlock()
+	if cancelOrderFn != nil {
+		return cancelOrderFn(ctx, exchange, orderID)
 	}
+	m.mu.Lock()
 	m.canceledOrders[orderID] = true
+	m.mu.Unlock()
 	return nil
 }
 
@@ -79,6 +92,7 @@ func (m *MockTradingGateway) IsHealthy(ctx context.Context) bool {
 
 // MockIdempotencyStore implements IdempotencyStore for testing
 type MockIdempotencyStore struct {
+	mu      sync.RWMutex
 	intents map[string]*OrderIntent
 }
 
@@ -89,43 +103,54 @@ func NewMockIdempotencyStore() *MockIdempotencyStore {
 }
 
 func (m *MockIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderIntent) error {
-	m.intents[intent.IntentID] = intent
+	m.mu.Lock()
+	m.intents[intent.IntentID] = cloneOrderIntent(intent)
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *MockIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*OrderIntent, error) {
+	m.mu.RLock()
 	intent, exists := m.intents[intentID]
+	m.mu.RUnlock()
 	if !exists {
 		return nil, nil
 	}
-	return intent, nil
+	return cloneOrderIntent(intent), nil
 }
 
 func (m *MockIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID string) (*OrderIntent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for _, intent := range m.intents {
 		if intent.ClientOrderID == clientID {
-			return intent, nil
+			return cloneOrderIntent(intent), nil
 		}
 	}
 	return nil, nil
 }
 
 func (m *MockIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchange, exchangeOrderID string) (*OrderIntent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for _, intent := range m.intents {
 		if intent.Request.Exchange == exchange && intent.ExchangeOrderID == exchangeOrderID {
-			return intent, nil
+			return cloneOrderIntent(intent), nil
 		}
 	}
 	return nil, nil
 }
 
 func (m *MockIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderIntent) error {
-	m.intents[intent.IntentID] = intent
+	m.mu.Lock()
+	m.intents[intent.IntentID] = cloneOrderIntent(intent)
+	m.mu.Unlock()
 	return nil
 }
 
 // MockAuditLogger implements AuditLogger for testing
 type MockAuditLogger struct {
+	mu     sync.RWMutex
 	events []OrderAuditEvent
 }
 
@@ -136,11 +161,15 @@ func NewMockAuditLogger() *MockAuditLogger {
 }
 
 func (m *MockAuditLogger) LogOrderEvent(ctx context.Context, event OrderAuditEvent) error {
+	m.mu.Lock()
 	m.events = append(m.events, event)
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *MockAuditLogger) GetOrderHistory(ctx context.Context, intentID string) ([]OrderAuditEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var history []OrderAuditEvent
 	for _, event := range m.events {
 		if event.IntentID == intentID {
@@ -150,8 +179,15 @@ func (m *MockAuditLogger) GetOrderHistory(ctx context.Context, intentID string) 
 	return history, nil
 }
 
+func (m *MockAuditLogger) EventsCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.events)
+}
+
 // MockEventBus implements ports.EventBus for testing
 type MockEventBus struct {
+	mu          sync.RWMutex
 	subscribers map[string][]ports.EventHandler
 	events      []ports.Event
 }
@@ -164,12 +200,16 @@ func NewMockEventBus() *MockEventBus {
 }
 
 func (m *MockEventBus) Publish(ctx context.Context, event ports.Event) error {
+	m.mu.Lock()
 	m.events = append(m.events, event)
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *MockEventBus) Subscribe(ctx context.Context, eventType string, handler ports.EventHandler) error {
+	m.mu.Lock()
 	m.subscribers[eventType] = append(m.subscribers[eventType], handler)
+	m.mu.Unlock()
 	return nil
 }
 
@@ -178,8 +218,16 @@ func (m *MockEventBus) SubscribeAll(ctx context.Context, handler ports.EventHand
 }
 
 func (m *MockEventBus) Unsubscribe(ctx context.Context, eventType string) error {
+	m.mu.Lock()
 	delete(m.subscribers, eventType)
+	m.mu.Unlock()
 	return nil
+}
+
+func (m *MockEventBus) EventsCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.events)
 }
 
 func TestExecutionActor_ID(t *testing.T) {
@@ -242,12 +290,12 @@ func TestExecutionActor_PlaceOrder_Success(t *testing.T) {
 	}
 
 	// Verify audit log
-	if len(auditLog.events) < 2 {
-		t.Errorf("Expected at least 2 audit events, got %d", len(auditLog.events))
+	if auditLog.EventsCount() < 2 {
+		t.Errorf("Expected at least 2 audit events, got %d", auditLog.EventsCount())
 	}
 
 	// Verify event was published
-	if len(eventBus.events) == 0 {
+	if eventBus.EventsCount() == 0 {
 		t.Error("Expected event to be published")
 	}
 }
@@ -287,8 +335,8 @@ func TestExecutionActor_PlaceOrder_Idempotency(t *testing.T) {
 	}
 
 	// Should only have 2 audit events (not 4)
-	if len(auditLog.events) != 2 {
-		t.Errorf("Expected 2 audit events (idempotent), got %d", len(auditLog.events))
+	if auditLog.EventsCount() != 2 {
+		t.Errorf("Expected 2 audit events (idempotent), got %d", auditLog.EventsCount())
 	}
 }
 
@@ -515,22 +563,29 @@ func BenchmarkPlaceOrder(b *testing.B) {
 
 	execActor := NewExecutionActor("bench-actor", gateway, eventBus, idempotencyStore, auditLog)
 
-	msg := PlaceOrderMsg{
-		IntentID: "benchmark-intent",
-		Request: ports.OrderRequest{
-			Exchange: "test-exchange",
-			Symbol:   "BTC/USDT",
-			Side:     ports.OrderSideBuy,
-			Type:     ports.OrderTypeMarket,
-			Amount:   decimal.NewFromFloat(1.0),
-		},
-		RiskApproved: true,
-	}
-
-	env := actor.Envelope{Message: msg}
-
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		execActor.Receive(ctx, env)
+		msg := PlaceOrderMsg{
+			IntentID: fmt.Sprintf("benchmark-intent-%d", i),
+			Request: ports.OrderRequest{
+				Exchange: "test-exchange",
+				Symbol:   "BTC/USDT",
+				Side:     ports.OrderSideBuy,
+				Type:     ports.OrderTypeMarket,
+				Amount:   decimal.NewFromFloat(1.0),
+			},
+			RiskApproved: true,
+		}
+		if err := execActor.Receive(ctx, actor.Envelope{Message: msg}); err != nil {
+			b.Fatalf("PlaceOrder failed: %v", err)
+		}
 	}
+}
+
+func cloneOrderIntent(intent *OrderIntent) *OrderIntent {
+	if intent == nil {
+		return nil
+	}
+	cloned := *intent
+	return &cloned
 }

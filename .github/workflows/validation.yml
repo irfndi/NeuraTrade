@@ -216,4 +216,4 @@ jobs:
         run: cd services/telegram-service && bun install --frozen-lockfile
 
       - name: Run dependency audit
-        run: cd services/telegram-service && bun audit || true
+        run: cd services/telegram-service && bun audit

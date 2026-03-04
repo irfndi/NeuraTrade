@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ports"
@@ -42,21 +44,25 @@ func (s *SQLIdempotencyStore) ensureTable() error {
 			price TEXT,
 			stop_price TEXT,
 			take_profit TEXT,
-			reduce_only BOOLEAN,
-			post_only BOOLEAN,
+			reduce_only BOOLEAN DEFAULT FALSE,
+			post_only BOOLEAN DEFAULT FALSE,
 			filled_amount TEXT DEFAULT '0',
 			fill_price TEXT DEFAULT '0',
 			reject_reason TEXT,
 			attempt_count INTEGER DEFAULT 1,
-			submitted_at TIMESTAMP NOT NULL,
-			updated_at TIMESTAMP NOT NULL,
+			submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			strategy_id TEXT,
 			signal_id TEXT,
 			metadata TEXT
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_intents_client_id ON order_intents(client_order_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_order_intents_exchange_id ON order_intents(exchange_order_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_order_intents_status ON order_intents(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_order_intents_submitted ON order_intents(submitted_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_intents_exchange ON order_intents(exchange);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_intents_symbol ON order_intents(symbol);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_intents_strategy ON order_intents(strategy_id);`,
 	}
 
 	for i, stmt := range statements {
@@ -78,6 +84,7 @@ func (s *SQLIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderInten
 		submitted_at, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
+	query = rebindQuestionPlaceholders(query)
 
 	_, err := s.db.ExecContext(ctx, query,
 		intent.IntentID,
@@ -101,8 +108,11 @@ func (s *SQLIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderInten
 		intent.SubmittedAt,
 		intent.UpdatedAt,
 	)
+	if err != nil {
+		return fmt.Errorf("save intent %s: %w", intent.IntentID, err)
+	}
 
-	return err
+	return nil
 }
 
 // GetIntent retrieves an intent by IntentID
@@ -115,6 +125,7 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 		submitted_at, updated_at
 	FROM order_intents WHERE intent_id = ?
 	`
+	query = rebindQuestionPlaceholders(query)
 
 	var intent OrderIntent
 	var statusStr, sideStr, typeStr string
@@ -148,7 +159,7 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query intent by intent_id %s: %w", intentID, err)
 	}
 
 	// Parse enums
@@ -160,27 +171,27 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 	// Parse decimals
 	intent.Request.Amount, err = parseDecimal("order_intents.amount", amountStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode intent %s amount: %w", intentID, err)
 	}
 	intent.Request.Price, err = parseNullableDecimal("order_intents.price", priceStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode intent %s price: %w", intentID, err)
 	}
 	intent.Request.StopPrice, err = parseNullableDecimal("order_intents.stop_price", stopPriceStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode intent %s stop_price: %w", intentID, err)
 	}
 	intent.Request.TakeProfit, err = parseNullableDecimal("order_intents.take_profit", takeProfitStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode intent %s take_profit: %w", intentID, err)
 	}
 	intent.FilledAmount, err = parseDecimal("order_intents.filled_amount", filledStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode intent %s filled_amount: %w", intentID, err)
 	}
 	intent.FillPrice, err = parseDecimal("order_intents.fill_price", fillPriceStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode intent %s fill_price: %w", intentID, err)
 	}
 
 	return &intent, nil
@@ -191,6 +202,7 @@ func (s *SQLIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID 
 	query := `
 	SELECT intent_id FROM order_intents WHERE client_order_id = ?
 	`
+	query = rebindQuestionPlaceholders(query)
 
 	var intentID string
 	err := s.db.QueryRowContext(ctx, query, clientID).Scan(&intentID)
@@ -198,7 +210,7 @@ func (s *SQLIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID 
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query intent by client_order_id %s: %w", clientID, err)
 	}
 
 	return s.GetIntent(ctx, intentID)
@@ -211,6 +223,7 @@ func (s *SQLIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchang
 	ORDER BY updated_at DESC
 	LIMIT 1
 	`
+	query = rebindQuestionPlaceholders(query)
 
 	var intentID string
 	err := s.db.QueryRowContext(ctx, query, exchange, exchangeOrderID).Scan(&intentID)
@@ -218,7 +231,12 @@ func (s *SQLIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchang
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf(
+			"query intent by exchange=%s exchange_order_id=%s: %w",
+			exchange,
+			exchangeOrderID,
+			err,
+		)
 	}
 
 	return s.GetIntent(ctx, intentID)
@@ -239,6 +257,7 @@ func (s *SQLIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderInt
 		updated_at = ?
 	WHERE intent_id = ?
 	`
+	query = rebindQuestionPlaceholders(query)
 
 	result, err := s.db.ExecContext(ctx, query,
 		intent.ExchangeOrderID,
@@ -252,12 +271,12 @@ func (s *SQLIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderInt
 	)
 
 	if err != nil {
-		return err
+		return fmt.Errorf("update intent %s: %w", intent.IntentID, err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return fmt.Errorf("rows affected for intent %s: %w", intent.IntentID, err)
 	}
 	if rows == 0 {
 		return errors.New("intent not found")
@@ -282,9 +301,15 @@ func NewSQLAuditLogger(db *sql.DB) (*SQLAuditLogger, error) {
 
 // ensureTable creates the audit log table if it doesn't exist
 func (l *SQLAuditLogger) ensureTable() error {
+	idColumn := "id BIGSERIAL PRIMARY KEY"
+	if isSQLiteDriver(l.db) {
+		// SQLite equivalent of auto-incrementing primary key.
+		idColumn = "id INTEGER PRIMARY KEY"
+	}
+
 	statements := []string{
-		`CREATE TABLE IF NOT EXISTS order_audit_log (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS order_audit_log (
+			%s,
 			event_id TEXT UNIQUE NOT NULL,
 			intent_id TEXT NOT NULL,
 			client_order_id TEXT NOT NULL,
@@ -299,12 +324,16 @@ func (l *SQLAuditLogger) ensureTable() error {
 			fill_price TEXT,
 			reason TEXT,
 			metadata TEXT,
-			timestamp TIMESTAMP NOT NULL,
+			timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			hash_chain TEXT
-		);`,
+		);`, idColumn),
 		`CREATE INDEX IF NOT EXISTS idx_audit_intent ON order_audit_log(intent_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_client_id ON order_audit_log(client_order_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_exchange_id ON order_audit_log(exchange_order_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_event_id ON order_audit_log(event_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON order_audit_log(timestamp);`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_type ON order_audit_log(event_type);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_exchange ON order_audit_log(exchange);`,
 	}
 
 	for i, stmt := range statements {
@@ -329,6 +358,7 @@ func (l *SQLAuditLogger) LogOrderEvent(ctx context.Context, event OrderAuditEven
 		filled_amount, fill_price, reason, metadata, timestamp, hash_chain
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
+	query = rebindQuestionPlaceholders(query)
 
 	_, err = l.db.ExecContext(ctx, query,
 		event.EventID,
@@ -348,8 +378,11 @@ func (l *SQLAuditLogger) LogOrderEvent(ctx context.Context, event OrderAuditEven
 		event.Timestamp,
 		event.HashChain,
 	)
+	if err != nil {
+		return fmt.Errorf("insert audit event %s: %w", event.EventID, err)
+	}
 
-	return err
+	return nil
 }
 
 // GetOrderHistory retrieves audit history for an intent
@@ -362,10 +395,11 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 	WHERE intent_id = ?
 	ORDER BY timestamp ASC
 	`
+	query = rebindQuestionPlaceholders(query)
 
 	rows, err := l.db.QueryContext(ctx, query, intentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query audit history for intent %s: %w", intentID, err)
 	}
 	defer func() {
 		_ = rows.Close()
@@ -396,7 +430,7 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 			&event.HashChain,
 		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan audit row for intent %s: %w", intentID, err)
 		}
 
 		event.ExchangeOrderID = nullStringValue(exchangeOrderID)
@@ -405,19 +439,19 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 
 		event.Amount, err = parseNullableDecimal("order_audit_log.amount", amountStr)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode audit event %s amount: %w", event.EventID, err)
 		}
 		event.Price, err = parseNullableDecimal("order_audit_log.price", priceStr)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode audit event %s price: %w", event.EventID, err)
 		}
 		event.FilledAmount, err = parseNullableDecimal("order_audit_log.filled_amount", filledStr)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode audit event %s filled_amount: %w", event.EventID, err)
 		}
 		event.FillPrice, err = parseNullableDecimal("order_audit_log.fill_price", fillPriceStr)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode audit event %s fill_price: %w", event.EventID, err)
 		}
 
 		if metadataStr.Valid && metadataStr.String != "" {
@@ -429,7 +463,10 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 		events = append(events, event)
 	}
 
-	return events, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit rows for intent %s: %w", intentID, err)
+	}
+	return events, nil
 }
 
 // Helper functions
@@ -468,6 +505,26 @@ func nullStringValue(s sql.NullString) string {
 		return ""
 	}
 	return s.String
+}
+
+func rebindQuestionPlaceholders(query string) string {
+	argPos := 1
+	var out strings.Builder
+	out.Grow(len(query) + 16)
+	for _, ch := range query {
+		if ch != '?' {
+			out.WriteRune(ch)
+			continue
+		}
+		out.WriteByte('$')
+		out.WriteString(strconv.Itoa(argPos))
+		argPos++
+	}
+	return out.String()
+}
+
+func isSQLiteDriver(db *sql.DB) bool {
+	return strings.Contains(strings.ToLower(fmt.Sprintf("%T", db.Driver())), "sqlite")
 }
 
 func parseOrderStatus(s string) ports.OrderStatus {
