@@ -2,8 +2,13 @@
 package agentcontrol
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,6 +29,7 @@ type IngestConfig struct {
 	BackendEventURL string
 	BufferSize      int
 	ReconnectDelay  time.Duration
+	AdminAPIKey     string
 }
 
 // Ingestor manages event ingestion from backend.
@@ -33,6 +39,9 @@ type Ingestor struct {
 	running      bool
 	eventChan    chan Event
 	shutdownChan chan struct{}
+	httpClient   *http.Client
+	loopCancel   context.CancelFunc
+	workerWg     sync.WaitGroup
 }
 
 // NewIngestor creates a new event ingestor.
@@ -47,22 +56,30 @@ func NewIngestor(config IngestConfig) *Ingestor {
 		config:       config,
 		eventChan:    make(chan Event, config.BufferSize),
 		shutdownChan: make(chan struct{}),
+		httpClient: &http.Client{
+			Timeout: 0, // stream request; canceled by context
+		},
 	}
 }
 
 // Start begins the event ingestion process.
 func (i *Ingestor) Start(ctx context.Context) (<-chan Event, error) {
 	i.mu.Lock()
-	defer i.mu.Unlock()
-
 	if i.running {
+		i.mu.Unlock()
 		return nil, fmt.Errorf("ingestor already running")
 	}
 
+	loopCtx, cancel := context.WithCancel(ctx)
+	shutdownChan := make(chan struct{})
+	i.loopCancel = cancel
+	i.shutdownChan = shutdownChan
 	i.running = true
+	i.workerWg.Add(1)
+	i.mu.Unlock()
 
 	// Start connection loop
-	go i.connectLoop(ctx)
+	go i.connectLoop(loopCtx, shutdownChan)
 
 	return i.eventChan, nil
 }
@@ -70,41 +87,61 @@ func (i *Ingestor) Start(ctx context.Context) (<-chan Event, error) {
 // Stop gracefully stops the ingestor.
 func (i *Ingestor) Stop(ctx context.Context) error {
 	i.mu.Lock()
-	defer i.mu.Unlock()
-
 	if !i.running {
+		i.mu.Unlock()
 		return nil
 	}
 
-	close(i.shutdownChan)
 	i.running = false
+	loopCancel := i.loopCancel
+	shutdownChan := i.shutdownChan
+	i.loopCancel = nil
+	i.shutdownChan = nil
+	i.mu.Unlock()
 
-	// Wait for connection loop to exit
+	if loopCancel != nil {
+		loopCancel()
+	}
+	if shutdownChan != nil {
+		close(shutdownChan)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		i.workerWg.Wait()
+	}()
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("stop timeout")
+	case <-done:
+		return nil
 	}
 }
 
 // connectLoop maintains connection to backend event stream.
-func (i *Ingestor) connectLoop(ctx context.Context) {
+func (i *Ingestor) connectLoop(ctx context.Context, shutdownChan <-chan struct{}) {
+	defer i.workerWg.Done()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-i.shutdownChan:
+		case <-shutdownChan:
 			return
 		default:
 			if err := i.connectAndListen(ctx); err != nil {
 				// Log error and retry
+				retryTimer := time.NewTimer(i.config.ReconnectDelay)
 				select {
-				case <-time.After(i.config.ReconnectDelay):
+				case <-retryTimer.C:
 					// Retry
 				case <-ctx.Done():
+					retryTimer.Stop()
 					return
-				case <-i.shutdownChan:
+				case <-shutdownChan:
+					retryTimer.Stop()
 					return
 				}
 			}
@@ -114,10 +151,81 @@ func (i *Ingestor) connectLoop(ctx context.Context) {
 
 // connectAndListen establishes connection and listens for events.
 func (i *Ingestor) connectAndListen(ctx context.Context) error {
-	// TODO: Implement actual WebSocket/SSE connection to backend
-	// For now, this is a placeholder that simulates connection
-	<-ctx.Done()
-	return ctx.Err()
+	if strings.TrimSpace(i.config.BackendEventURL) == "" {
+		return fmt.Errorf("backend event url is required")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, i.config.BackendEventURL, nil)
+	if err != nil {
+		return fmt.Errorf("create event stream request: %w", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if adminAPIKey := strings.TrimSpace(i.config.AdminAPIKey); adminAPIKey != "" {
+		req.Header.Set("X-API-Key", adminAPIKey)
+	}
+
+	resp, err := i.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect to event stream: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return fmt.Errorf("event stream status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	dataLines := make([]string, 0, 4)
+	flushEvent := func() {
+		if len(dataLines) == 0 {
+			return
+		}
+		raw := strings.Join(dataLines, "\n")
+		dataLines = dataLines[:0]
+
+		var event Event
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return
+		}
+		if event.Timestamp.IsZero() {
+			event.Timestamp = time.Now().UTC()
+		}
+		i.publishEvent(ctx, event)
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			flushEvent()
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case strings.HasPrefix(line, ":"):
+			// SSE comment/keepalive line; ignore.
+		default:
+			// Fallback support for raw JSON lines.
+			dataLines = append(dataLines, strings.TrimSpace(line))
+		}
+	}
+	flushEvent()
+
+	if err := scanner.Err(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("read event stream: %w", err)
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return io.EOF
 }
 
 // publishEvent sends an event to the event channel.

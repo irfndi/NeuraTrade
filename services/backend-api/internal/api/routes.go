@@ -948,6 +948,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
+	agentControlHandler := handlers.NewAgentControlHandler()
+
 	// API v1 routes with telemetry
 	v1 := router.Group("/api/v1")
 	v1.Use(middleware.TelemetryMiddleware())
@@ -1086,6 +1088,20 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		risk := v1.Group("/risk")
 		{
 			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
+		}
+
+		// Agent control plane command and event stream APIs (admin-only).
+		agent := v1.Group("/agent")
+		agent.Use(adminMiddleware.RequireAdminAuth())
+		{
+			agent.GET("/events", agentControlHandler.StreamEvents)
+			agent.POST("/events", agentControlHandler.PublishEvent)
+			agent.POST("/pause-exchange", agentControlHandler.PauseExchange)
+			agent.POST("/resume-exchange", agentControlHandler.ResumeExchange)
+			agent.POST("/enable-safe-mode", agentControlHandler.EnableSafeMode)
+			agent.POST("/disable-safe-mode", agentControlHandler.DisableSafeMode)
+			agent.POST("/kill-switch", agentControlHandler.EngageKillSwitch)
+			agent.POST("/cancel-all-orders", agentControlHandler.CancelAllOrders)
 		}
 
 		adminRisk := v1.Group("/admin/risk")

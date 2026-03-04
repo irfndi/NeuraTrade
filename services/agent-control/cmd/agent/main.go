@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	agentcontrol "github.com/irfndi/neuratrade/services/agent-control"
-	
-	
-	
-	
 )
 
 func main() {
@@ -37,17 +35,22 @@ func run() error {
 	auditLogger := agentcontrol.NewLogger(agentcontrol.AuditConfig{
 		Level: agentcontrol.LevelInfo,
 	})
+	defer auditLogger.Close()
+
+	adminAPIKey := getEnv("ADMIN_API_KEY", "")
 
 	backendClient := agentcontrol.NewBackendClient(agentcontrol.ClientConfig{
-		BaseURL:    getEnv("BACKEND_API_URL", "http://localhost:8080"),
-		Timeout:    30 * time.Second,
-		MaxRetries: 3,
+		BaseURL:     getEnv("BACKEND_API_URL", "http://localhost:8080"),
+		Timeout:     30 * time.Second,
+		MaxRetries:  3,
+		AdminAPIKey: adminAPIKey,
 	})
 
 	eventIngestor := agentcontrol.NewIngestor(agentcontrol.IngestConfig{
-		BackendEventURL: getEnv("BACKEND_EVENT_URL", "ws://localhost:8080/events"),
+		BackendEventURL: getEnv("BACKEND_EVENT_URL", "http://localhost:8080/api/v1/agent/events"),
 		BufferSize:      1024,
 		ReconnectDelay:  5 * time.Second,
+		AdminAPIKey:     adminAPIKey,
 	})
 
 	policyEngine := agentcontrol.NewEngine(agentcontrol.PolicyConfig{
@@ -97,9 +100,9 @@ func registerDefaultPlaybooks(registry *agentcontrol.Registry, backendClient *ag
 		Name:        "Pause Exchange on Error Spikes",
 		Description: "Pause market data collection when error rate exceeds threshold",
 		Execute: func(ctx context.Context, event any) error {
-			exchangeID, ok := event.(string)
-			if !ok {
-				return fmt.Errorf("invalid event type")
+			exchangeID, err := extractExchangeID(event)
+			if err != nil {
+				return err
 			}
 			auditLogger.Log(ctx, agentcontrol.ActionPlaybookExecuted, "pause_exchange_on_errors", map[string]any{
 				"exchange_id": exchangeID,
@@ -155,8 +158,10 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 	if value == "" {
 		return defaultValue
 	}
-	var result float64
-	fmt.Sscanf(value, "%f", &result)
+	result, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return defaultValue
+	}
 	return result
 }
 
@@ -169,9 +174,10 @@ func getEnvList(key string, defaultValue []string) []string {
 }
 
 func splitCSV(s string) []string {
-	result := []string{}
-	for _, item := range split(s, ',') {
-		trimmed := trim(item)
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, item := range parts {
+		trimmed := strings.TrimSpace(item)
 		if trimmed != "" {
 			result = append(result, trimmed)
 		}
@@ -179,29 +185,19 @@ func splitCSV(s string) []string {
 	return result
 }
 
-func split(s string, sep rune) []string {
-	result := []string{}
-	current := ""
-	for _, r := range s {
-		if r == sep {
-			result = append(result, current)
-			current = ""
-		} else {
-			current += string(r)
+func extractExchangeID(event any) (string, error) {
+	switch value := event.(type) {
+	case string:
+		exchangeID := strings.TrimSpace(value)
+		if exchangeID == "" {
+			return "", fmt.Errorf("exchange id is empty")
+		}
+		return exchangeID, nil
+	case map[string]any:
+		if exchangeID, ok := value["exchange_id"].(string); ok && strings.TrimSpace(exchangeID) != "" {
+			return strings.TrimSpace(exchangeID), nil
 		}
 	}
-	result = append(result, current)
-	return result
-}
 
-func trim(s string) string {
-	start := 0
-	end := len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
+	return "", fmt.Errorf("invalid exchange payload type: %T", event)
 }

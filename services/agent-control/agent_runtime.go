@@ -52,8 +52,10 @@ func (a *AgentRuntime) Start(ctx context.Context) error {
 	a.eventChan = eventChan
 
 	// Start event processing loop
+	shutdownChan := make(chan struct{})
+	a.shutdownChan = shutdownChan
 	a.processingWg.Add(1)
-	go a.processEvents(ctx)
+	go a.processEvents(ctx, shutdownChan)
 
 	a.running = true
 	a.config.AuditLogger.Log(ctx, ActionAgentStarted, "agent_runtime", map[string]any{
@@ -66,18 +68,23 @@ func (a *AgentRuntime) Start(ctx context.Context) error {
 // Shutdown gracefully stops the agent runtime.
 func (a *AgentRuntime) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if !a.running {
+		a.mu.Unlock()
 		return nil
 	}
+	a.running = false
+	shutdownChan := a.shutdownChan
+	a.shutdownChan = nil
 
 	a.config.AuditLogger.Log(ctx, ActionAgentStopping, "agent_runtime", map[string]any{
 		"timestamp": time.Now().UTC(),
 	})
 
 	// Signal shutdown
-	close(a.shutdownChan)
+	if shutdownChan != nil {
+		close(shutdownChan)
+	}
+	a.mu.Unlock()
 
 	// Stop event ingestor
 	if err := a.config.EventIngestor.Stop(ctx); err != nil {
@@ -85,30 +92,29 @@ func (a *AgentRuntime) Shutdown(ctx context.Context) error {
 	}
 
 	// Wait for event processing to complete
-	done := make(chan struct{})
+	processingDone := make(chan struct{})
 	go func() {
 		a.processingWg.Wait()
-		close(done)
+		close(processingDone)
 	}()
 
 	select {
-	case <-done:
-		a.running = false
+	case <-processingDone:
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("shutdown timed out")
+		return fmt.Errorf("shutdown timed out: %w", ctx.Err())
 	}
 }
 
 // processEvents is the main event processing loop.
-func (a *AgentRuntime) processEvents(ctx context.Context) {
+func (a *AgentRuntime) processEvents(ctx context.Context, shutdownChan <-chan struct{}) {
 	defer a.processingWg.Done()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-a.shutdownChan:
+		case <-shutdownChan:
 			return
 		case event, ok := <-a.eventChan:
 			if !ok {

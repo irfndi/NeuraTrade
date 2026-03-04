@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -59,6 +60,10 @@ type Logger struct {
 	config  AuditConfig
 	mu      sync.Mutex
 	entries []Entry
+
+	writeMu    sync.Mutex
+	output     io.Writer
+	outputFile *os.File
 }
 
 // NewLogger creates a new audit logger.
@@ -67,17 +72,28 @@ func NewLogger(config AuditConfig) *Logger {
 	if config.MaxEntries <= 0 {
 		config.MaxEntries = 10000 // Default limit to prevent memory leak
 	}
-	return &Logger{
+
+	logger := &Logger{
 		config:  config,
 		entries: make([]Entry, 0, config.MaxEntries),
+		output:  os.Stdout,
 	}
+
+	if config.OutputPath != "" {
+		f, err := os.OpenFile(config.OutputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open audit log file %q: %v\n", config.OutputPath, err)
+		} else {
+			logger.outputFile = f
+			logger.output = f
+		}
+	}
+
+	return logger
 }
 
 // Log records an audit entry.
 func (l *Logger) Log(ctx context.Context, actionType ActionType, component string, data map[string]any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	entry := Entry{
 		Timestamp:  time.Now().UTC(),
 		Level:      LevelInfo,
@@ -90,6 +106,7 @@ func (l *Logger) Log(ctx context.Context, actionType ActionType, component strin
 		entry.TraceID = traceID
 	}
 
+	l.mu.Lock()
 	l.entries = append(l.entries, entry)
 
 	// Prevent memory leak by limiting entries (circular buffer behavior)
@@ -98,7 +115,9 @@ func (l *Logger) Log(ctx context.Context, actionType ActionType, component strin
 		cutIndex := len(l.entries) / 10
 		l.entries = l.entries[cutIndex:]
 	}
+	l.mu.Unlock()
 
+	// File/stdout write is intentionally outside the entries lock to minimize contention.
 	l.writeEntry(entry)
 }
 
@@ -109,18 +128,11 @@ func (l *Logger) writeEntry(entry Entry) {
 		return
 	}
 
-	if l.config.OutputPath != "" {
-		f, err := os.OpenFile(l.config.OutputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to open audit log file: %v\n", err)
-			return
-		}
-		defer f.Close()
-		if _, err := f.Write(append(data, '\n')); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to write audit entry: %v\n", err)
-		}
-	} else {
-		fmt.Println(string(data))
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+
+	if _, err := l.output.Write(append(data, '\n')); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write audit entry: %v\n", err)
 	}
 }
 
@@ -137,7 +149,7 @@ func (l *Logger) GetEntries() []Entry {
 func (l *Logger) Clear() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.entries = nil
+	l.entries = l.entries[:0]
 }
 
 // Count returns the number of entries currently in memory.
@@ -145,4 +157,20 @@ func (l *Logger) Count() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.entries)
+}
+
+// Close closes any owned file handle used for audit output.
+func (l *Logger) Close() error {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+
+	if l.outputFile == nil {
+		return nil
+	}
+
+	file := l.outputFile
+	l.outputFile = nil
+	l.output = os.Stdout
+
+	return file.Close()
 }
