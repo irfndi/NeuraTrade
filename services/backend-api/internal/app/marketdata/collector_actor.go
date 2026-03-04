@@ -30,19 +30,14 @@ type CollectorActor struct {
 }
 
 type ExchangeState struct {
-	ExchangeID      string
-	Enabled         bool
-	Paused          bool
-	Symbols         []string
-	Interval        time.Duration
-	TimerStop       chan struct{}
-	TickerReset     chan struct{}
-	LastCollection  time.Time
-	CollectionCount int64
-	ErrorCount      int64
-	TotalLatency    time.Duration
-	LatencySamples  int64
-	mu              sync.RWMutex
+	ExchangeID  string
+	Enabled     bool
+	Paused      bool
+	Symbols     []string
+	Interval    time.Duration
+	TimerStop   chan struct{}
+	TickerReset chan struct{}
+	mu          sync.RWMutex
 }
 
 type Config struct {
@@ -375,22 +370,11 @@ func (a *CollectorActor) handleGetStats(ctx context.Context, traceID string, msg
 	}
 	state.mu.RLock()
 	symbolsCount := len(state.Symbols)
-	lastCollection := state.LastCollection
-	collectionCount := state.CollectionCount
-	errorCount := state.ErrorCount
-	avgLatencyMs := float64(0)
-	if state.LatencySamples > 0 {
-		avgLatencyMs = float64(state.TotalLatency.Microseconds()) / 1000.0 / float64(state.LatencySamples)
-	}
 	state.mu.RUnlock()
 	if env.Reply != nil {
 		env.Reply <- marketdata.GetStatsResponse{
-			ExchangeID:      msg.ExchangeID,
-			SymbolsCount:    symbolsCount,
-			LastCollection:  lastCollection,
-			CollectionCount: collectionCount,
-			ErrorCount:      errorCount,
-			AvgLatencyMs:    avgLatencyMs,
+			ExchangeID:   msg.ExchangeID,
+			SymbolsCount: symbolsCount,
 		}
 	}
 	return nil
@@ -437,43 +421,25 @@ func (a *CollectorActor) normalizedInterval(state *ExchangeState) time.Duration 
 }
 
 func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID string, symbols []string) {
-	if len(symbols) == 0 {
-		return
-	}
-
 	gw, err := a.exchange.GetMarketDataGateway(exchangeID)
 	if err != nil {
 		a.logger.WithError(fmt.Errorf("get market data gateway for %s: %w", exchangeID, err)).
 			Warn("collector gateway lookup failed")
-		a.recordCollectionStats(exchangeID, 0, 1, 0, 0, time.Time{})
 		return
 	}
 	if gw == nil {
 		a.logger.Warnf("collector gateway is nil for %s", exchangeID)
-		a.recordCollectionStats(exchangeID, 0, 1, 0, 0, time.Time{})
 		return
 	}
 	if a.eventBus == nil {
-		a.recordCollectionStats(exchangeID, 0, 1, 0, 0, time.Time{})
 		return
 	}
 
-	var successCount int64
-	var errorCount int64
-	var sampleCount int64
-	var totalLatency time.Duration
-	var lastCollection time.Time
-
 	for _, symbol := range symbols {
-		start := time.Now()
 		tick, err := gw.FetchTick(ctx, exchangeID, symbol)
-		latency := time.Since(start)
-		totalLatency += latency
-		sampleCount++
 		if err != nil {
 			a.logger.WithError(fmt.Errorf("fetch tick for %s:%s: %w", exchangeID, symbol, err)).
 				Warn("collector fetch tick failed")
-			errorCount++
 			continue
 		}
 		if err := a.eventBus.PublishSync(ctx, eventbus.Event{
@@ -493,14 +459,8 @@ func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID str
 			Timestamp: time.Now(),
 		}); err != nil {
 			a.logger.WithError(err).Warnf("failed to publish market tick for %s:%s", exchangeID, symbol)
-			errorCount++
-			continue
 		}
-		successCount++
-		lastCollection = time.Now()
 	}
-
-	a.recordCollectionStats(exchangeID, successCount, errorCount, sampleCount, totalLatency, lastCollection)
 }
 
 func (a *CollectorActor) publishEvent(ctx context.Context, topic, eventType string, payload interface{}) error {
@@ -519,30 +479,4 @@ func (a *CollectorActor) publishEvent(ctx context.Context, topic, eventType stri
 	}
 
 	return nil
-}
-
-func (a *CollectorActor) recordCollectionStats(
-	exchangeID string,
-	successDelta int64,
-	errorDelta int64,
-	sampleDelta int64,
-	latencyDelta time.Duration,
-	lastCollection time.Time,
-) {
-	a.mu.RLock()
-	state, exists := a.exchangeStates[exchangeID]
-	a.mu.RUnlock()
-	if !exists {
-		return
-	}
-
-	state.mu.Lock()
-	state.CollectionCount += successDelta
-	state.ErrorCount += errorDelta
-	state.LatencySamples += sampleDelta
-	state.TotalLatency += latencyDelta
-	if !lastCollection.IsZero() {
-		state.LastCollection = lastCollection
-	}
-	state.mu.Unlock()
 }
