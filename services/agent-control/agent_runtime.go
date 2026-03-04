@@ -175,7 +175,14 @@ func (a *AgentRuntime) handleEvent(ctx context.Context, event Event) {
 	}
 
 	// Execute playbook
-	if err := playbook.Execute(ctx, event.Payload); err != nil {
+	execCtx := ctx
+	cancel := func() {}
+	if playbook.Timeout > 0 {
+		execCtx, cancel = context.WithTimeout(ctx, playbook.Timeout)
+	}
+	defer cancel()
+
+	if err := playbook.Execute(execCtx, event.Payload); err != nil {
 		a.config.AuditLogger.Log(ctx, ActionPlaybookFailed, "playbook_execution", map[string]any{
 			"playbook": playbook.Name,
 			"error":    err.Error(),

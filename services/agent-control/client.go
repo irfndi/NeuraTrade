@@ -133,7 +133,7 @@ func (c *BackendClient) executeCommand(ctx context.Context, endpoint string, pay
 				break
 			}
 			if err := waitRetry(ctx, attempt); err != nil {
-				return err
+				return fmt.Errorf("waiting before retrying agent command (attempt %d): %w", attempt+1, err)
 			}
 			continue
 		}
@@ -154,7 +154,7 @@ func (c *BackendClient) executeCommand(ctx context.Context, endpoint string, pay
 					break
 				}
 				if err := waitRetry(ctx, attempt); err != nil {
-					return err
+					return fmt.Errorf("waiting before retrying agent command after server error (attempt %d): %w", attempt+1, err)
 				}
 				continue
 			}

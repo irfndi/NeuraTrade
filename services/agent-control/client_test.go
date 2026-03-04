@@ -3,6 +3,7 @@ package agentcontrol
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -95,7 +96,10 @@ func TestClientMethodsExist(t *testing.T) {
 			Path:   r.URL.Path,
 		}
 		if r.Body != nil {
-			_ = json.NewDecoder(r.Body).Decode(&record.Body)
+			err := json.NewDecoder(r.Body).Decode(&record.Body)
+			if err != nil && err != io.EOF {
+				t.Fatalf("failed to decode request body: %v", err)
+			}
 		}
 
 		mu.Lock()

@@ -38,6 +38,9 @@ type Ingestor struct {
 	config       IngestConfig
 	mu           sync.Mutex
 	running      bool
+	stopping     bool
+	stopDone     chan struct{}
+	shutdownSent bool
 	eventChan    chan Event
 	shutdownChan chan struct{}
 	httpClient   *http.Client
@@ -74,11 +77,16 @@ func (i *Ingestor) Start(ctx context.Context) (<-chan Event, error) {
 		i.mu.Unlock()
 		return nil, fmt.Errorf("invalid ingestor config: backend event url is required")
 	}
+	if err := ctx.Err(); err != nil {
+		i.mu.Unlock()
+		return nil, fmt.Errorf("context canceled before start: %w", err)
+	}
 
 	loopCtx, cancel := context.WithCancel(ctx)
 	shutdownChan := make(chan struct{})
 	i.loopCancel = cancel
 	i.shutdownChan = shutdownChan
+	i.shutdownSent = false
 	i.running = true
 	i.workerWg.Add(1)
 	i.mu.Unlock()
@@ -91,37 +99,72 @@ func (i *Ingestor) Start(ctx context.Context) (<-chan Event, error) {
 
 // Stop gracefully stops the ingestor.
 func (i *Ingestor) Stop(ctx context.Context) error {
-	i.mu.Lock()
-	if !i.running {
+	for {
+		i.mu.Lock()
+		if !i.running {
+			i.mu.Unlock()
+			return nil
+		}
+
+		if i.stopping {
+			done := i.stopDone
+			i.mu.Unlock()
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-done:
+				// Re-check state after the in-flight stop finishes.
+				continue
+			}
+		}
+
+		loopCancel := i.loopCancel
+		shutdownChan := i.shutdownChan
+		shouldSignal := !i.shutdownSent
+		if shouldSignal {
+			i.shutdownSent = true
+		}
+		i.stopping = true
+		i.stopDone = make(chan struct{})
+		done := i.stopDone
 		i.mu.Unlock()
-		return nil
-	}
 
-	i.running = false
-	loopCancel := i.loopCancel
-	shutdownChan := i.shutdownChan
-	i.loopCancel = nil
-	i.shutdownChan = nil
-	i.mu.Unlock()
+		if shouldSignal {
+			if loopCancel != nil {
+				loopCancel()
+			}
+			if shutdownChan != nil {
+				close(shutdownChan)
+			}
+		}
 
-	if loopCancel != nil {
-		loopCancel()
-	}
-	if shutdownChan != nil {
-		close(shutdownChan)
-	}
+		waitDone := make(chan struct{})
+		go func() {
+			defer close(waitDone)
+			i.workerWg.Wait()
+		}()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		i.workerWg.Wait()
-	}()
+		var stopErr error
+		select {
+		case <-ctx.Done():
+			stopErr = ctx.Err()
+		case <-waitDone:
+		}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
-		return nil
+		i.mu.Lock()
+		if stopErr == nil {
+			i.running = false
+			i.shutdownSent = false
+			i.loopCancel = nil
+			i.shutdownChan = nil
+		}
+		close(done)
+		i.stopDone = nil
+		i.stopping = false
+		i.mu.Unlock()
+
+		return stopErr
 	}
 }
 
