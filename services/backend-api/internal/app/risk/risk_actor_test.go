@@ -40,8 +40,8 @@ func TestRiskActorEvaluateIntent(t *testing.T) {
 		IntentID: "test-1",
 		Exchange: "binance",
 		Symbol:   "BTC/USDT",
-		Amount:   1.0,
-		Price:    50000.0,
+		Amount:   decimal.NewFromFloat(1.0),
+		Price:    decimal.NewFromFloat(50000.0),
 	}
 
 	decision, err := client.EvaluateIntent(ctx, intent)
@@ -50,6 +50,19 @@ func TestRiskActorEvaluateIntent(t *testing.T) {
 	}
 	if !decision.Approved {
 		t.Error("should approve with no rules")
+	}
+}
+
+func TestNewRiskActor_DefaultDependencies(t *testing.T) {
+	ra := NewRiskActor(RiskActorConfig{})
+	if ra.policy == nil {
+		t.Fatal("policy engine should be initialized")
+	}
+	if ra.killSwitch == nil {
+		t.Fatal("kill switch should be initialized")
+	}
+	if ra.safeMode == nil {
+		t.Fatal("safe mode should be initialized")
 	}
 }
 

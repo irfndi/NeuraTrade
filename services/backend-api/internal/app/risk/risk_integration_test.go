@@ -73,8 +73,8 @@ func TestIntegration_SignalProposed_RiskRejected_NoOrder(t *testing.T) {
 		Symbol:     "ETH/USDT", // Not in allowed list
 		Side:       ports.OrderSideBuy,
 		Type:       ports.OrderTypeMarket,
-		Amount:     1.0,
-		Price:      3000.0,
+		Amount:     decimal.NewFromFloat(1.0),
+		Price:      decimal.NewFromFloat(3000.0),
 		StrategyID: "scalping-v1",
 		SignalID:   "signal-001",
 		Confidence: 0.8,
@@ -168,8 +168,8 @@ func TestIntegration_SignalProposed_RiskApproved(t *testing.T) {
 		Symbol:     "BTC/USDT",
 		Side:       ports.OrderSideBuy,
 		Type:       ports.OrderTypeMarket,
-		Amount:     0.5, // Under max order size
-		Price:      50000.0,
+		Amount:     decimal.NewFromFloat(0.5), // Under max order size
+		Price:      decimal.NewFromFloat(50000.0),
 		StrategyID: "scalping-v1",
 		SignalID:   "signal-002",
 		Confidence: 0.75, // Above threshold
@@ -226,7 +226,7 @@ func TestIntegration_KillSwitch_ImmediateBlocking(t *testing.T) {
 		IntentID: "test-1",
 		Exchange: "binance",
 		Symbol:   "BTC/USDT",
-		Amount:   1.0,
+		Amount:   decimal.NewFromFloat(1.0),
 	}
 
 	decision, _ := client.EvaluateIntent(ctx, intent)
@@ -252,7 +252,7 @@ func TestIntegration_KillSwitch_ImmediateBlocking(t *testing.T) {
 			IntentID:   "test-emergency",
 			Exchange:   "binance",
 			Symbol:     "BTC/USDT",
-			Amount:     1.0,
+			Amount:     decimal.NewFromFloat(1.0),
 			Confidence: 0.99,
 		}
 
@@ -352,8 +352,8 @@ func TestIntegration_SafeMode_ImmediateBlocking(t *testing.T) {
 		IntentID: "safe-mode-test-1",
 		Exchange: "binance",
 		Symbol:   "BTC/USDT",
-		Amount:   1.0,
-		Price:    50000.0,
+		Amount:   decimal.NewFromFloat(1.0),
+		Price:    decimal.NewFromFloat(50000.0),
 	}
 	decision, err := client.EvaluateIntent(ctx, intent)
 	if err != nil {
@@ -418,8 +418,8 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 				Symbol:     "BTC/USDT",
 				Side:       ports.OrderSideBuy,
 				Type:       ports.OrderTypeLimit,
-				Amount:     1.0,
-				Price:      50000.0,
+				Amount:     decimal.NewFromFloat(1.0),
+				Price:      decimal.NewFromFloat(50000.0),
 				Confidence: 0.8,
 			},
 			approved: true,
@@ -430,8 +430,8 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 				IntentID:   "too-big-1",
 				Exchange:   "binance",
 				Symbol:     "BTC/USDT",
-				Amount:     10.0, // Exceeds max 5.0
-				Price:      50000.0,
+				Amount:     decimal.NewFromFloat(10.0), // Exceeds max 5.0
+				Price:      decimal.NewFromFloat(50000.0),
 				Confidence: 0.8,
 			},
 			approved: false,
@@ -443,8 +443,8 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 				IntentID:   "bad-symbol-1",
 				Exchange:   "binance",
 				Symbol:     "DOGE/USDT", // Not in allowed list
-				Amount:     1.0,
-				Price:      0.1,
+				Amount:     decimal.NewFromFloat(1.0),
+				Price:      decimal.NewFromFloat(0.1),
 				Confidence: 0.8,
 			},
 			approved: false,
@@ -456,8 +456,8 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 				IntentID:   "bad-exchange-1",
 				Exchange:   "kraken", // Not in allowed list
 				Symbol:     "BTC/USDT",
-				Amount:     1.0,
-				Price:      50000.0,
+				Amount:     decimal.NewFromFloat(1.0),
+				Price:      decimal.NewFromFloat(50000.0),
 				Confidence: 0.8,
 			},
 			approved: false,
@@ -469,8 +469,8 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 				IntentID:   "low-conf-1",
 				Exchange:   "binance",
 				Symbol:     "BTC/USDT",
-				Amount:     1.0,
-				Price:      50000.0,
+				Amount:     decimal.NewFromFloat(1.0),
+				Price:      decimal.NewFromFloat(50000.0),
 				Confidence: 0.5, // Below 0.65 threshold
 			},
 			approved: false,

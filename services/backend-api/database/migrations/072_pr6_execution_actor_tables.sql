@@ -39,7 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_order_intents_strategy ON order_intents(strategy_
 
 -- Order audit log table for tracking order lifecycle events
 CREATE TABLE IF NOT EXISTS order_audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     event_id TEXT UNIQUE NOT NULL,
     intent_id TEXT NOT NULL,
     client_order_id TEXT NOT NULL,
@@ -100,8 +100,18 @@ SELECT
     oi.filled_amount,
     oi.submitted_at,
     oi.updated_at,
-    (SELECT COUNT(*) FROM order_audit_log WHERE intent_id = oi.intent_id) as event_count,
-    (SELECT timestamp FROM order_audit_log WHERE intent_id = oi.intent_id AND event_type = 'filled' LIMIT 1) as filled_at,
-    (SELECT timestamp FROM order_audit_log WHERE intent_id = oi.intent_id AND event_type = 'rejected' LIMIT 1) as rejected_at,
-    (SELECT timestamp FROM order_audit_log WHERE intent_id = oi.intent_id AND event_type = 'cancelled' LIMIT 1) as cancelled_at
-FROM order_intents oi;
+    COALESCE(agg.event_count, 0) as event_count,
+    agg.filled_at,
+    agg.rejected_at,
+    agg.cancelled_at
+FROM order_intents oi
+LEFT JOIN (
+    SELECT
+        intent_id,
+        COUNT(*) as event_count,
+        MAX(CASE WHEN event_type = 'filled' THEN timestamp END) as filled_at,
+        MAX(CASE WHEN event_type = 'rejected' THEN timestamp END) as rejected_at,
+        MAX(CASE WHEN event_type = 'cancelled' THEN timestamp END) as cancelled_at
+    FROM order_audit_log
+    GROUP BY intent_id
+) agg ON agg.intent_id = oi.intent_id;

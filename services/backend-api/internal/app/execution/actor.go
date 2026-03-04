@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +26,7 @@ var (
 	ErrGatewayUnavailable = errors.New("trading gateway unavailable")
 	ErrInvalidRequest     = errors.New("invalid order request")
 	ErrExecutionRejected  = errors.New("order execution rejected")
+	ErrRiskNotApproved    = errors.New("risk approval required")
 )
 
 // Message types for ExecutionActor
@@ -112,9 +115,9 @@ type ExecutionActor struct {
 	auditLog         AuditLogger
 
 	// In-memory state (actor-owned, single-writer)
-	intents            map[string]*OrderIntent // IntentID -> Intent
-	clientIDToIntent   map[string]string       // ClientOrderID -> IntentID
-	exchangeIDToIntent map[string]string       // ExchangeOrderID -> IntentID
+	intents               map[string]*OrderIntent // IntentID -> Intent
+	clientIDToIntent      map[string]string       // ClientOrderID -> IntentID
+	exchangeOrderToIntent map[string]string       // exchange:orderID -> IntentID
 }
 
 // IdempotencyStore persists intent mappings for restart safety
@@ -126,7 +129,7 @@ type IdempotencyStore interface {
 	// GetIntentByClientID retrieves an intent by ClientOrderID
 	GetIntentByClientID(ctx context.Context, clientID string) (*OrderIntent, error)
 	// GetIntentByExchangeID retrieves an intent by ExchangeOrderID
-	GetIntentByExchangeID(ctx context.Context, exchangeOrderID string) (*OrderIntent, error)
+	GetIntentByExchangeID(ctx context.Context, exchange, exchangeOrderID string) (*OrderIntent, error)
 	// UpdateIntent updates an existing intent
 	UpdateIntent(ctx context.Context, intent *OrderIntent) error
 }
@@ -184,14 +187,14 @@ func NewExecutionActor(
 	auditLog AuditLogger,
 ) *ExecutionActor {
 	return &ExecutionActor{
-		id:                 id,
-		gateway:            gateway,
-		eventBus:           eventBus,
-		idempotencyStore:   idempotencyStore,
-		auditLog:           auditLog,
-		intents:            make(map[string]*OrderIntent),
-		clientIDToIntent:   make(map[string]string),
-		exchangeIDToIntent: make(map[string]string),
+		id:                    id,
+		gateway:               gateway,
+		eventBus:              eventBus,
+		idempotencyStore:      idempotencyStore,
+		auditLog:              auditLog,
+		intents:               make(map[string]*OrderIntent),
+		clientIDToIntent:      make(map[string]string),
+		exchangeOrderToIntent: make(map[string]string),
 	}
 }
 
@@ -224,8 +227,7 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 	if existing, err := a.idempotencyStore.GetIntent(ctx, msg.IntentID); err == nil && existing != nil {
 		// Intent already exists - this is a retry
 		if existing.IsTerminal() {
-			// Order already in terminal state, return success without re-executing
-			a.publishEvent(ctx, ports.EventTypeOrderPlaced, existing)
+			// Order already in terminal state, return success without re-executing.
 			return nil
 		}
 		// Order in flight, increment attempt count
@@ -250,7 +252,10 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 		a.intents[msg.IntentID] = existing
 		a.clientIDToIntent[clientOrderID] = msg.IntentID
 		if existing.ExchangeOrderID != "" {
-			a.exchangeIDToIntent[existing.ExchangeOrderID] = msg.IntentID
+			a.exchangeOrderToIntent[exchangeOrderKey(existing.Request.Exchange, existing.ExchangeOrderID)] = msg.IntentID
+		}
+		if existing.IsTerminal() {
+			return nil
 		}
 		a.publishEvent(ctx, ports.EventTypeOrderPlaced, existing)
 		return nil
@@ -284,26 +289,46 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 		"signal_id":       msg.SignalID,
 	})
 
+	if !msg.RiskApproved {
+		intent.Status = ports.OrderStatusRejected
+		intent.RejectReason = ErrRiskNotApproved.Error()
+		intent.UpdatedAt = time.Now()
+		updateErr := a.idempotencyStore.UpdateIntent(ctx, intent)
+
+		a.logAuditEvent(ctx, msg.IntentID, "rejected", msg.Request.Exchange, msg.Request.Symbol, ErrRiskNotApproved.Error(), map[string]interface{}{
+			"rejection_source": "execution_actor",
+		})
+		a.publishEvent(ctx, ports.EventTypeOrderRejected, intent)
+		if updateErr != nil {
+			return errors.Join(
+				ErrRiskNotApproved,
+				fmt.Errorf("persist rejected intent: %w", updateErr),
+			)
+		}
+		return ErrRiskNotApproved
+	}
+
 	// Execute order via gateway
 	req := msg.Request
 	req.ClientID = clientOrderID
 
 	result, err := a.gateway.PlaceOrder(ctx, req)
 	if err != nil {
+		reason := sanitizeExternalError(err)
 		intent.Status = ports.OrderStatusRejected
-		intent.RejectReason = err.Error()
+		intent.RejectReason = reason
 		intent.UpdatedAt = time.Now()
 		updateErr := a.idempotencyStore.UpdateIntent(ctx, intent)
 
-		a.logAuditEvent(ctx, msg.IntentID, "rejected", req.Exchange, req.Symbol, err.Error(), nil)
+		a.logAuditEvent(ctx, msg.IntentID, "rejected", req.Exchange, req.Symbol, reason, nil)
 		a.publishEvent(ctx, ports.EventTypeOrderRejected, intent)
 		if updateErr != nil {
 			return errors.Join(
-				fmt.Errorf("%w: %v", ErrExecutionRejected, err),
+				fmt.Errorf("%w: %s", ErrExecutionRejected, reason),
 				fmt.Errorf("persist rejected intent: %w", updateErr),
 			)
 		}
-		return fmt.Errorf("%w: %v", ErrExecutionRejected, err)
+		return fmt.Errorf("%w: %s", ErrExecutionRejected, reason)
 	}
 
 	// Update intent with result
@@ -319,7 +344,7 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 	}
 
 	// Update mappings
-	a.exchangeIDToIntent[result.OrderID] = msg.IntentID
+	a.exchangeOrderToIntent[exchangeOrderKey(req.Exchange, result.OrderID)] = msg.IntentID
 
 	// Audit log: placed
 	a.logAuditEvent(ctx, msg.IntentID, "placed", req.Exchange, req.Symbol, "", map[string]interface{}{
@@ -349,6 +374,9 @@ func (a *ExecutionActor) handleCancelOrder(ctx context.Context, msg CancelOrderM
 		// Try to load from store
 		loaded, err := a.idempotencyStore.GetIntent(ctx, msg.IntentID)
 		if err != nil {
+			return fmt.Errorf("load intent %s: %w", msg.IntentID, err)
+		}
+		if loaded == nil {
 			return fmt.Errorf("intent not found: %s", msg.IntentID)
 		}
 		intent = loaded
@@ -393,6 +421,9 @@ func (a *ExecutionActor) handleGetOrderStatus(ctx context.Context, env actor.Env
 	if !exists {
 		loaded, err := a.idempotencyStore.GetIntent(ctx, msg.IntentID)
 		if err != nil {
+			return fmt.Errorf("load intent %s: %w", msg.IntentID, err)
+		}
+		if loaded == nil {
 			return fmt.Errorf("intent not found: %s", msg.IntentID)
 		}
 		intent = loaded
@@ -408,7 +439,7 @@ func (a *ExecutionActor) handleGetOrderStatus(ctx context.Context, env actor.Env
 
 // handleFillUpdate processes order fill updates
 func (a *ExecutionActor) handleFillUpdate(ctx context.Context, msg OrderFillUpdateMsg) error {
-	intentID, intent, err := a.resolveIntentByExchangeOrderID(ctx, msg.OrderID)
+	intentID, intent, err := a.resolveIntentByExchangeAndOrderID(ctx, msg.Exchange, msg.OrderID)
 	if err != nil {
 		return err
 	}
@@ -442,7 +473,7 @@ func (a *ExecutionActor) handleFillUpdate(ctx context.Context, msg OrderFillUpda
 
 // handleRejected processes order rejection updates
 func (a *ExecutionActor) handleRejected(ctx context.Context, msg OrderRejectedMsg) error {
-	intentID, intent, err := a.resolveIntentByExchangeOrderID(ctx, msg.OrderID)
+	intentID, intent, err := a.resolveIntentByExchangeAndOrderID(ctx, msg.Exchange, msg.OrderID)
 	if err != nil {
 		return err
 	}
@@ -466,8 +497,13 @@ func (a *ExecutionActor) handleRejected(ctx context.Context, msg OrderRejectedMs
 	return nil
 }
 
-func (a *ExecutionActor) resolveIntentByExchangeOrderID(ctx context.Context, exchangeOrderID string) (string, *OrderIntent, error) {
-	if intentID, exists := a.exchangeIDToIntent[exchangeOrderID]; exists {
+func (a *ExecutionActor) resolveIntentByExchangeAndOrderID(
+	ctx context.Context,
+	exchange string,
+	exchangeOrderID string,
+) (string, *OrderIntent, error) {
+	key := exchangeOrderKey(exchange, exchangeOrderID)
+	if intentID, exists := a.exchangeOrderToIntent[key]; exists {
 		if intent, ok := a.intents[intentID]; ok {
 			return intentID, intent, nil
 		}
@@ -484,15 +520,18 @@ func (a *ExecutionActor) resolveIntentByExchangeOrderID(ctx context.Context, exc
 		if loaded.ClientOrderID != "" {
 			a.clientIDToIntent[loaded.ClientOrderID] = intentID
 		}
+		if loaded.ExchangeOrderID != "" {
+			a.exchangeOrderToIntent[exchangeOrderKey(loaded.Request.Exchange, loaded.ExchangeOrderID)] = intentID
+		}
 		return intentID, loaded, nil
 	}
 
-	loaded, err := a.idempotencyStore.GetIntentByExchangeID(ctx, exchangeOrderID)
+	loaded, err := a.idempotencyStore.GetIntentByExchangeID(ctx, exchange, exchangeOrderID)
 	if err != nil {
-		return "", nil, fmt.Errorf("lookup intent by exchange order ID %s: %w", exchangeOrderID, err)
+		return "", nil, fmt.Errorf("lookup intent by exchange=%s orderID=%s: %w", exchange, exchangeOrderID, err)
 	}
 	if loaded == nil {
-		return "", nil, fmt.Errorf("unknown order ID: %s", exchangeOrderID)
+		return "", nil, fmt.Errorf("unknown order exchange=%s orderID=%s", exchange, exchangeOrderID)
 	}
 
 	intentID := loaded.IntentID
@@ -501,7 +540,7 @@ func (a *ExecutionActor) resolveIntentByExchangeOrderID(ctx context.Context, exc
 		a.clientIDToIntent[loaded.ClientOrderID] = intentID
 	}
 	if loaded.ExchangeOrderID != "" {
-		a.exchangeIDToIntent[loaded.ExchangeOrderID] = intentID
+		a.exchangeOrderToIntent[exchangeOrderKey(loaded.Request.Exchange, loaded.ExchangeOrderID)] = intentID
 	}
 	return intentID, loaded, nil
 }
@@ -525,13 +564,18 @@ func (a *ExecutionActor) validateRequest(req *ports.OrderRequest) error {
 
 // logAuditEvent creates and persists an audit event
 func (a *ExecutionActor) logAuditEvent(ctx context.Context, intentID, eventType, exchange, symbol, reason string, metadata map[string]interface{}) {
+	if a.auditLog == nil {
+		log.Printf("[AUDIT] logger unavailable for intent %s event %s", intentID, eventType)
+		return
+	}
+
 	event := OrderAuditEvent{
 		EventID:   generateEventID(),
 		IntentID:  intentID,
 		EventType: eventType,
 		Exchange:  exchange,
 		Symbol:    symbol,
-		Reason:    reason,
+		Reason:    sanitizeMessage(reason),
 		Metadata:  metadata,
 		Timestamp: time.Now(),
 	}
@@ -553,9 +597,8 @@ func (a *ExecutionActor) logAuditEvent(ctx context.Context, intentID, eventType,
 	}
 
 	if err := a.auditLog.LogOrderEvent(ctx, event); err != nil {
-		// Log error but don't fail - audit is best-effort
-		// In production, this should trigger an alert
-		fmt.Printf("[AUDIT] Failed to log event: %v\n", err)
+		// Audit logging is best-effort by design.
+		log.Printf("[AUDIT] failed to log event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(err))
 	}
 }
 
@@ -586,7 +629,7 @@ func (a *ExecutionActor) publishEvent(ctx context.Context, eventType string, int
 	}
 
 	if err := a.eventBus.Publish(ctx, orderEvent); err != nil {
-		fmt.Printf("[EVENT] Failed to publish event: %v\n", err)
+		log.Printf("[EVENT] failed to publish intent=%s type=%s: %s", intent.IntentID, eventType, sanitizeExternalError(err))
 	}
 }
 
@@ -619,9 +662,39 @@ func generateEventID() string {
 
 // calculateHash computes a hash of an audit event for tamper detection
 func calculateHash(event OrderAuditEvent) string {
-	data, _ := json.Marshal(event)
+	data, err := json.Marshal(event)
+	if err != nil {
+		return ""
+	}
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
+}
+
+func exchangeOrderKey(exchange, orderID string) string {
+	return strings.ToLower(strings.TrimSpace(exchange)) + ":" + strings.TrimSpace(orderID)
+}
+
+func sanitizeExternalError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return sanitizeMessage(err.Error())
+}
+
+func sanitizeMessage(message string) string {
+	normalized := strings.TrimSpace(strings.ReplaceAll(message, "\n", " "))
+	lower := strings.ToLower(normalized)
+	for _, marker := range []string{"api key", "secret", "token", "authorization", "passphrase", "signature"} {
+		if strings.Contains(lower, marker) {
+			return "external provider error (redacted)"
+		}
+	}
+
+	if len(normalized) > 256 {
+		return normalized[:256]
+	}
+	return normalized
 }
 
 // Compile-time interface check

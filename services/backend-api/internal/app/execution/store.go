@@ -33,11 +33,11 @@ func (s *SQLIdempotencyStore) ensureTable() error {
 			intent_id TEXT PRIMARY KEY,
 			client_order_id TEXT UNIQUE NOT NULL,
 			exchange_order_id TEXT,
-			status TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending', 'open', 'filled', 'partial', 'cancelled', 'rejected')),
 			exchange TEXT NOT NULL,
 			symbol TEXT NOT NULL,
-			side TEXT NOT NULL,
-			order_type TEXT NOT NULL,
+			side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+			order_type TEXT NOT NULL CHECK (order_type IN ('market', 'limit')),
 			amount TEXT NOT NULL,
 			price TEXT,
 			stop_price TEXT,
@@ -69,8 +69,6 @@ func (s *SQLIdempotencyStore) ensureTable() error {
 
 // SaveIntent persists a new order intent
 func (s *SQLIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderIntent) error {
-	_, _ = json.Marshal(intent.Request) // Metadata stored separately in columns
-
 	query := `
 	INSERT INTO order_intents (
 		intent_id, client_order_id, exchange_order_id, status,
@@ -91,13 +89,13 @@ func (s *SQLIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderInten
 		string(intent.Request.Side),
 		string(intent.Request.Type),
 		intent.Request.Amount.String(),
-		nullDecimal(intent.Request.Price),
-		nullDecimal(intent.Request.StopPrice),
-		nullDecimal(intent.Request.TakeProfit),
+		optionalDecimal(intent.Request.Price),
+		optionalDecimal(intent.Request.StopPrice),
+		optionalDecimal(intent.Request.TakeProfit),
 		intent.Request.ReduceOnly,
 		intent.Request.PostOnly,
-		intent.FilledAmount.String(),
-		intent.FillPrice.String(),
+		decimalString(intent.FilledAmount),
+		decimalString(intent.FillPrice),
 		intent.RejectReason,
 		intent.AttemptCount,
 		intent.SubmittedAt,
@@ -120,7 +118,8 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 
 	var intent OrderIntent
 	var statusStr, sideStr, typeStr string
-	var amountStr, priceStr, stopPriceStr, takeProfitStr, filledStr, fillPriceStr string
+	var amountStr, filledStr, fillPriceStr string
+	var priceStr, stopPriceStr, takeProfitStr, rejectReason sql.NullString
 
 	err := s.db.QueryRowContext(ctx, query, intentID).Scan(
 		&intent.IntentID,
@@ -139,7 +138,7 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 		&intent.Request.PostOnly,
 		&filledStr,
 		&fillPriceStr,
-		&intent.RejectReason,
+		&rejectReason,
 		&intent.AttemptCount,
 		&intent.SubmittedAt,
 		&intent.UpdatedAt,
@@ -156,14 +155,33 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 	intent.Status = parseOrderStatus(statusStr)
 	intent.Request.Side = parseOrderSide(sideStr)
 	intent.Request.Type = parseOrderType(typeStr)
+	intent.RejectReason = nullStringValue(rejectReason)
 
 	// Parse decimals
-	intent.Request.Amount = parseDecimal(amountStr)
-	intent.Request.Price = parseNullableDecimal(priceStr)
-	intent.Request.StopPrice = parseNullableDecimal(stopPriceStr)
-	intent.Request.TakeProfit = parseNullableDecimal(takeProfitStr)
-	intent.FilledAmount = parseDecimal(filledStr)
-	intent.FillPrice = parseDecimal(fillPriceStr)
+	intent.Request.Amount, err = parseDecimal("order_intents.amount", amountStr)
+	if err != nil {
+		return nil, err
+	}
+	intent.Request.Price, err = parseNullableDecimal("order_intents.price", priceStr)
+	if err != nil {
+		return nil, err
+	}
+	intent.Request.StopPrice, err = parseNullableDecimal("order_intents.stop_price", stopPriceStr)
+	if err != nil {
+		return nil, err
+	}
+	intent.Request.TakeProfit, err = parseNullableDecimal("order_intents.take_profit", takeProfitStr)
+	if err != nil {
+		return nil, err
+	}
+	intent.FilledAmount, err = parseDecimal("order_intents.filled_amount", filledStr)
+	if err != nil {
+		return nil, err
+	}
+	intent.FillPrice, err = parseDecimal("order_intents.fill_price", fillPriceStr)
+	if err != nil {
+		return nil, err
+	}
 
 	return &intent, nil
 }
@@ -186,16 +204,16 @@ func (s *SQLIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID 
 	return s.GetIntent(ctx, intentID)
 }
 
-// GetIntentByExchangeID retrieves an intent by ExchangeOrderID.
-func (s *SQLIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchangeOrderID string) (*OrderIntent, error) {
+// GetIntentByExchangeID retrieves an intent by exchange and ExchangeOrderID.
+func (s *SQLIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchange, exchangeOrderID string) (*OrderIntent, error) {
 	query := `
-	SELECT intent_id FROM order_intents WHERE exchange_order_id = ?
+	SELECT intent_id FROM order_intents WHERE exchange = ? AND exchange_order_id = ?
 	ORDER BY updated_at DESC
 	LIMIT 1
 	`
 
 	var intentID string
-	err := s.db.QueryRowContext(ctx, query, exchangeOrderID).Scan(&intentID)
+	err := s.db.QueryRowContext(ctx, query, exchange, exchangeOrderID).Scan(&intentID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -271,7 +289,7 @@ func (l *SQLAuditLogger) ensureTable() error {
 			intent_id TEXT NOT NULL,
 			client_order_id TEXT NOT NULL,
 			exchange_order_id TEXT,
-			event_type TEXT NOT NULL,
+			event_type TEXT NOT NULL CHECK (event_type IN ('submitted', 'placed', 'filled', 'rejected', 'cancelled', 'cancel_failed', 'validation_failed')),
 			exchange TEXT NOT NULL,
 			symbol TEXT NOT NULL,
 			side TEXT,
@@ -299,7 +317,10 @@ func (l *SQLAuditLogger) ensureTable() error {
 
 // LogOrderEvent persists an audit event
 func (l *SQLAuditLogger) LogOrderEvent(ctx context.Context, event OrderAuditEvent) error {
-	metadataJSON, _ := json.Marshal(event.Metadata)
+	metadataJSON, err := json.Marshal(event.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshal audit metadata for event %s: %w", event.EventID, err)
+	}
 
 	query := `
 	INSERT INTO order_audit_log (
@@ -309,7 +330,7 @@ func (l *SQLAuditLogger) LogOrderEvent(ctx context.Context, event OrderAuditEven
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := l.db.ExecContext(ctx, query,
+	_, err = l.db.ExecContext(ctx, query,
 		event.EventID,
 		event.IntentID,
 		event.ClientOrderID,
@@ -318,10 +339,10 @@ func (l *SQLAuditLogger) LogOrderEvent(ctx context.Context, event OrderAuditEven
 		event.Exchange,
 		event.Symbol,
 		event.Side,
-		nullDecimal(event.Amount),
-		nullDecimal(event.Price),
-		nullDecimal(event.FilledAmount),
-		nullDecimal(event.FillPrice),
+		decimalString(event.Amount),
+		decimalString(event.Price),
+		decimalString(event.FilledAmount),
+		decimalString(event.FillPrice),
 		event.Reason,
 		string(metadataJSON),
 		event.Timestamp,
@@ -353,23 +374,23 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 	var events []OrderAuditEvent
 	for rows.Next() {
 		var event OrderAuditEvent
-		var amountStr, priceStr, filledStr, fillPriceStr string
-		var metadataStr string
+		var amountStr, priceStr, filledStr, fillPriceStr sql.NullString
+		var side, metadataStr, exchangeOrderID, reason sql.NullString
 
 		err := rows.Scan(
 			&event.EventID,
 			&event.IntentID,
 			&event.ClientOrderID,
-			&event.ExchangeOrderID,
+			&exchangeOrderID,
 			&event.EventType,
 			&event.Exchange,
 			&event.Symbol,
-			&event.Side,
+			&side,
 			&amountStr,
 			&priceStr,
 			&filledStr,
 			&fillPriceStr,
-			&event.Reason,
+			&reason,
 			&metadataStr,
 			&event.Timestamp,
 			&event.HashChain,
@@ -378,12 +399,29 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 			return nil, err
 		}
 
-		event.Amount = parseDecimal(amountStr)
-		event.Price = parseDecimal(priceStr)
-		event.FilledAmount = parseDecimal(filledStr)
-		event.FillPrice = parseDecimal(fillPriceStr)
-		if metadataStr != "" {
-			if err := json.Unmarshal([]byte(metadataStr), &event.Metadata); err != nil {
+		event.ExchangeOrderID = nullStringValue(exchangeOrderID)
+		event.Side = nullStringValue(side)
+		event.Reason = nullStringValue(reason)
+
+		event.Amount, err = parseNullableDecimal("order_audit_log.amount", amountStr)
+		if err != nil {
+			return nil, err
+		}
+		event.Price, err = parseNullableDecimal("order_audit_log.price", priceStr)
+		if err != nil {
+			return nil, err
+		}
+		event.FilledAmount, err = parseNullableDecimal("order_audit_log.filled_amount", filledStr)
+		if err != nil {
+			return nil, err
+		}
+		event.FillPrice, err = parseNullableDecimal("order_audit_log.fill_price", fillPriceStr)
+		if err != nil {
+			return nil, err
+		}
+
+		if metadataStr.Valid && metadataStr.String != "" {
+			if err := json.Unmarshal([]byte(metadataStr.String), &event.Metadata); err != nil {
 				return nil, fmt.Errorf("unmarshal metadata for event %s: %w", event.EventID, err)
 			}
 		}
@@ -396,24 +434,40 @@ func (l *SQLAuditLogger) GetOrderHistory(ctx context.Context, intentID string) (
 
 // Helper functions
 
-func nullDecimal(d decimal.Decimal) interface{} {
+func optionalDecimal(d decimal.Decimal) interface{} {
 	if d.IsZero() {
 		return nil
 	}
 	return d.String()
 }
 
-func parseDecimal(s string) decimal.Decimal {
-	d, _ := decimal.NewFromString(s)
-	return d
+func decimalString(d decimal.Decimal) string {
+	return d.String()
 }
 
-func parseNullableDecimal(s string) decimal.Decimal {
+func parseDecimal(field, s string) (decimal.Decimal, error) {
 	if s == "" {
-		return decimal.Zero
+		return decimal.Zero, fmt.Errorf("parse decimal for %s: empty value", field)
 	}
-	d, _ := decimal.NewFromString(s)
-	return d
+	d, err := decimal.NewFromString(s)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("parse decimal for %s: %w", field, err)
+	}
+	return d, nil
+}
+
+func parseNullableDecimal(field string, s sql.NullString) (decimal.Decimal, error) {
+	if !s.Valid || s.String == "" {
+		return decimal.Zero, nil
+	}
+	return parseDecimal(field, s.String)
+}
+
+func nullStringValue(s sql.NullString) string {
+	if !s.Valid {
+		return ""
+	}
+	return s.String
 }
 
 func parseOrderStatus(s string) ports.OrderStatus {

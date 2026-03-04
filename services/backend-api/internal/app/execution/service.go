@@ -32,6 +32,12 @@ func NewExecutionService(config ServiceConfig) (*ExecutionService, error) {
 	if config.Gateway == nil {
 		return nil, fmt.Errorf("trading gateway is required")
 	}
+	if config.IdempotencyStore == nil {
+		return nil, fmt.Errorf("idempotency store is required")
+	}
+	if config.AuditLog == nil {
+		return nil, fmt.Errorf("audit log is required")
+	}
 
 	// Create the execution actor
 	execActor := NewExecutionActor(
@@ -136,8 +142,16 @@ func (s *ExecutionService) CancelOrder(ctx context.Context, req CancelOrderReque
 	if !s.actorRef.IsRunning() {
 		return ErrActorStopped
 	}
+	if req.IntentID == "" {
+		return fmt.Errorf("intent ID is required")
+	}
 
-	msg := CancelOrderMsg(req)
+	msg := CancelOrderMsg{
+		IntentID: req.IntentID,
+		OrderID:  req.OrderID,
+		Exchange: req.Exchange,
+		Reason:   req.Reason,
+	}
 
 	if err := s.actorRef.Send(ctx, msg); err != nil {
 		return fmt.Errorf("failed to send cancel order message: %w", err)
@@ -159,6 +173,9 @@ func (s *ExecutionService) GetOrderStatus(ctx context.Context, intentID string) 
 	if !s.actorRef.IsRunning() {
 		return nil, ErrActorStopped
 	}
+	if intentID == "" {
+		return nil, fmt.Errorf("intent ID is required")
+	}
 
 	msg := GetOrderStatusMsg{
 		IntentID: intentID,
@@ -170,8 +187,8 @@ func (s *ExecutionService) GetOrderStatus(ctx context.Context, intentID string) 
 	}
 
 	intent, ok := result.(*OrderIntent)
-	if !ok {
-		return nil, fmt.Errorf("unexpected response type from actor")
+	if !ok || intent == nil {
+		return nil, fmt.Errorf("unexpected or nil OrderIntent response from actor")
 	}
 
 	return &OrderStatusResponse{
@@ -210,6 +227,13 @@ type OrderStatusResponse struct {
 
 // GetAuditHistory retrieves the audit trail for an order
 func (s *ExecutionService) GetAuditHistory(ctx context.Context, intentID string) ([]OrderAuditEvent, error) {
+	if intentID == "" {
+		return nil, fmt.Errorf("intent ID is required")
+	}
+	if s.actor == nil || s.actor.auditLog == nil {
+		return nil, ErrAuditLogNotInitialized
+	}
+
 	return s.actor.auditLog.GetOrderHistory(ctx, intentID)
 }
 
@@ -239,5 +263,6 @@ func (s *ExecutionService) WaitForTerminalState(ctx context.Context, intentID st
 
 // Helper types and errors
 var (
-	ErrActorStopped = fmt.Errorf("execution actor is stopped")
+	ErrActorStopped           = fmt.Errorf("execution actor is stopped")
+	ErrAuditLogNotInitialized = fmt.Errorf("execution audit logger is not initialized")
 )

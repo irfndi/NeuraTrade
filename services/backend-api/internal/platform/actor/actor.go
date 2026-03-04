@@ -366,7 +366,11 @@ func (r *Ref) Run(ctx context.Context) error {
 			}
 
 			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Printf("actor %s receive error (%T): %v", r.id, env.Message, err)
+				msgType := "<nil>"
+				if env.Message != nil {
+					msgType = env.Message.MessageType()
+				}
+				log.Printf("actor %s receive error (type=%s): %v", r.id, msgType, err)
 			}
 
 			// Stop when canceled or when actor reports an unrecoverable fatal error.

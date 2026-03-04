@@ -29,7 +29,7 @@ func NewMaxOrderSizeRule(maxSize decimal.Decimal) *MaxOrderSizeRule {
 func (r *MaxOrderSizeRule) Name() string { return "max_order_size" }
 
 func (r *MaxOrderSizeRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
-	amount := decimal.NewFromFloat(intent.Amount)
+	amount := intent.Amount
 	if amount.GreaterThan(r.maxSize) {
 		return ports.PolicyDecision{
 			Approved: false,
@@ -84,8 +84,8 @@ func NewMaxNotionalRule(maxNotional decimal.Decimal) *MaxNotionalRule {
 func (r *MaxNotionalRule) Name() string { return "max_notional" }
 
 func (r *MaxNotionalRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
-	amount := decimal.NewFromFloat(intent.Amount)
-	price := decimal.NewFromFloat(intent.Price)
+	amount := intent.Amount
+	price := intent.Price
 	notional := amount.Mul(price)
 
 	if notional.GreaterThan(r.maxNotional) {

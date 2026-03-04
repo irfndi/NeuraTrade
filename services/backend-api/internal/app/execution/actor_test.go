@@ -110,9 +110,9 @@ func (m *MockIdempotencyStore) GetIntentByClientID(ctx context.Context, clientID
 	return nil, nil
 }
 
-func (m *MockIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchangeOrderID string) (*OrderIntent, error) {
+func (m *MockIdempotencyStore) GetIntentByExchangeID(ctx context.Context, exchange, exchangeOrderID string) (*OrderIntent, error) {
 	for _, intent := range m.intents {
-		if intent.ExchangeOrderID == exchangeOrderID {
+		if intent.Request.Exchange == exchange && intent.ExchangeOrderID == exchangeOrderID {
 			return intent, nil
 		}
 	}
@@ -270,6 +270,7 @@ func TestExecutionActor_PlaceOrder_Idempotency(t *testing.T) {
 			Type:     ports.OrderTypeMarket,
 			Amount:   decimal.NewFromFloat(1.0),
 		},
+		RiskApproved: true,
 	}
 
 	// First placement
@@ -310,6 +311,7 @@ func TestExecutionActor_CancelOrder(t *testing.T) {
 			Type:     ports.OrderTypeMarket,
 			Amount:   decimal.NewFromFloat(1.0),
 		},
+		RiskApproved: true,
 	}
 
 	err := execActor.Receive(ctx, actor.Envelope{Message: placeMsg})
@@ -362,6 +364,7 @@ func TestExecutionActor_HandleFillUpdate(t *testing.T) {
 			Type:     ports.OrderTypeMarket,
 			Amount:   decimal.NewFromFloat(1.0),
 		},
+		RiskApproved: true,
 	}
 
 	err := execActor.Receive(ctx, actor.Envelope{Message: placeMsg})
@@ -414,6 +417,7 @@ func TestExecutionActor_HandleFillUpdate_AfterRestart(t *testing.T) {
 			Type:     ports.OrderTypeMarket,
 			Amount:   decimal.NewFromFloat(1.0),
 		},
+		RiskApproved: true,
 	}
 
 	if err := actorBeforeRestart.Receive(ctx, actor.Envelope{Message: placeMsg}); err != nil {
@@ -520,6 +524,7 @@ func BenchmarkPlaceOrder(b *testing.B) {
 			Type:     ports.OrderTypeMarket,
 			Amount:   decimal.NewFromFloat(1.0),
 		},
+		RiskApproved: true,
 	}
 
 	env := actor.Envelope{Message: msg}

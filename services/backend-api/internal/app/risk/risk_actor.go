@@ -4,6 +4,7 @@ package risk
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -63,14 +64,14 @@ func (m DisableSafeModeMsg) MessageType() string { return "risk.disable_safe_mod
 
 // UpdateDrawdownMsg updates the current drawdown.
 type UpdateDrawdownMsg struct {
-	Drawdown float64
+	Drawdown decimal.Decimal
 }
 
 func (m UpdateDrawdownMsg) MessageType() string { return "risk.update_drawdown" }
 
 // UpdateDailyLossMsg updates the daily loss.
 type UpdateDailyLossMsg struct {
-	Loss float64
+	Loss decimal.Decimal
 }
 
 func (m UpdateDailyLossMsg) MessageType() string { return "risk.update_daily_loss" }
@@ -101,7 +102,7 @@ func (m RemoveRuleMsg) MessageType() string { return "risk.remove_rule" }
 // RecordTradeResultMsg records a trade result for risk tracking.
 type RecordTradeResultMsg struct {
 	Profitable bool
-	PnL        float64
+	PnL        decimal.Decimal
 }
 
 func (m RecordTradeResultMsg) MessageType() string { return "risk.record_trade_result" }
@@ -115,8 +116,8 @@ type RiskState struct {
 	KillSwitchEngaged  bool
 	SafeModeEnabled    bool
 	SafeModeReason     string
-	CurrentDrawdown    float64
-	DailyLoss          float64
+	CurrentDrawdown    decimal.Decimal
+	DailyLoss          decimal.Decimal
 	ConsecutiveLosses  int
 	ActiveRules        []string
 	LastEvaluationTime time.Time
@@ -141,8 +142,8 @@ type RiskActor struct {
 	// State tracking
 	mu                sync.RWMutex
 	consecutiveLosses int
-	dailyLoss         float64
-	drawdown          float64
+	dailyLoss         decimal.Decimal
+	drawdown          decimal.Decimal
 	lastEvalTime      time.Time
 	traceID           string // Current trace ID for event propagation
 	// Drawdown tracking for MaxDrawdownRule
@@ -158,71 +159,85 @@ type RiskActorConfig struct {
 	KillSwitch          *KillSwitchImpl
 	SafeMode            *SafeModeImpl
 	EventBus            *eventbus.Bus
-	MaxDrawdown         float64
-	MaxDailyLoss        float64
+	MaxDrawdown         decimal.Decimal
+	MaxDailyLoss        decimal.Decimal
 	CooldownPeriod      time.Duration
 	CooldownAfterLosses int
 }
 
 // NewRiskActor creates a new RiskActor.
 func NewRiskActor(config RiskActorConfig) *RiskActor {
+	policyEngine := config.PolicyEngine
+	if policyEngine == nil {
+		policyEngine = NewEngine()
+	}
+
+	killSwitch := config.KillSwitch
+	if killSwitch == nil {
+		killSwitch = NewKillSwitch()
+	}
+
+	safeMode := config.SafeMode
+	if safeMode == nil {
+		safeMode = NewSafeMode(DefaultSafeModeConfig())
+	}
+
+	actorID := config.ID
+	if actorID == "" {
+		actorID = "risk-actor"
+	}
+
 	ra := &RiskActor{
-		id:         config.ID,
-		policy:     config.PolicyEngine,
-		killSwitch: config.KillSwitch,
-		safeMode:   config.SafeMode,
+		id:         actorID,
+		policy:     policyEngine,
+		killSwitch: killSwitch,
+		safeMode:   safeMode,
 		eventBus:   config.EventBus,
 	}
 
 	// Set up auto trigger if safe mode is provided
-	if config.SafeMode != nil && config.MaxDrawdown > 0 {
-		ra.autoTrigger = NewAutoSafeModeTrigger(config.SafeMode, config.MaxDrawdown, config.CooldownAfterLosses)
+	if config.MaxDrawdown.GreaterThan(decimal.Zero) {
+		ra.autoTrigger = NewAutoSafeModeTrigger(safeMode, config.MaxDrawdown.InexactFloat64(), config.CooldownAfterLosses)
 	}
 
 	// Initialize tracking rules
-	if config.MaxDrawdown > 0 {
-		ra.drawdownRule = NewMaxDrawdownRule(floatToDecimal(config.MaxDrawdown))
+	if config.MaxDrawdown.GreaterThan(decimal.Zero) {
+		ra.drawdownRule = NewMaxDrawdownRule(config.MaxDrawdown)
 	}
-	if config.MaxDailyLoss > 0 {
-		ra.dailyLossRule = NewMaxDailyLossRule(floatToDecimal(config.MaxDailyLoss))
+	if config.MaxDailyLoss.GreaterThan(decimal.Zero) {
+		ra.dailyLossRule = NewMaxDailyLossRule(config.MaxDailyLoss)
 	}
 	if config.CooldownPeriod > 0 && config.CooldownAfterLosses > 0 {
 		ra.cooldownRule = NewCooldownRule(config.CooldownPeriod, config.CooldownAfterLosses)
 	}
 
 	// Add kill switch and safe mode rules to policy engine
-	if config.PolicyEngine != nil {
-		if config.KillSwitch != nil {
-			_ = config.PolicyEngine.AddRule(NewKillSwitchRule(config.KillSwitch))
-		}
-		if config.SafeMode != nil {
-			_ = config.PolicyEngine.AddRule(NewSafeModeRule(config.SafeMode))
-		}
+	if err := policyEngine.AddRule(NewKillSwitchRule(killSwitch)); err != nil {
+		log.Printf("[risk] add kill switch rule: %v", err)
+	}
+	if err := policyEngine.AddRule(NewSafeModeRule(safeMode)); err != nil {
+		log.Printf("[risk] add safe mode rule: %v", err)
 	}
 
 	// Set up kill switch listener
-	if config.KillSwitch != nil {
-		config.KillSwitch.AddListener(func(state ports.KillSwitchState) {
-			if ra.eventBus != nil && state.Enabled {
-				ra.publishEvent(ports.EventTypeKillSwitchEngaged, map[string]any{
-					"reason":        state.Reason,
-					"engaged_by":    state.EngagedBy,
-					"cancel_orders": state.CancelOrders,
-				})
-			}
-		})
-	}
+	killSwitch.AddListener(func(state ports.KillSwitchState) {
+		if ra.eventBus != nil && state.Enabled {
+			ra.publishEvent(ports.EventTypeKillSwitchEngaged, map[string]any{
+				"reason":        state.Reason,
+				"engaged_by":    state.EngagedBy,
+				"cancel_orders": state.CancelOrders,
+			})
+		}
+	})
 
 	// Set up safe mode listener
-	if config.SafeMode != nil {
-		config.SafeMode.AddListener(func(enabled bool, reason string) {
-			if ra.eventBus != nil && enabled {
-				ra.publishEvent(ports.EventTypeSafeModeEnabled, map[string]any{
-					"reason": reason,
-				})
-			}
-		})
-	}
+	safeMode.AddListener(func(enabled bool, reason string) {
+		if ra.eventBus != nil && enabled {
+			ra.publishEvent(ports.EventTypeSafeModeEnabled, map[string]any{
+				"reason": reason,
+			})
+		}
+	})
 
 	return ra
 }
@@ -328,11 +343,11 @@ func (a *RiskActor) handleUpdateDrawdown(msg UpdateDrawdownMsg) {
 	a.mu.Unlock()
 
 	if a.drawdownRule != nil {
-		a.drawdownRule.UpdatePortfolioValue(floatToDecimal(1.0 - msg.Drawdown))
+		a.drawdownRule.UpdatePortfolioValue(decimal.NewFromInt(1).Sub(msg.Drawdown))
 	}
 
 	if a.autoTrigger != nil {
-		a.autoTrigger.OnDrawdownUpdate(msg.Drawdown)
+		a.autoTrigger.OnDrawdownUpdate(msg.Drawdown.InexactFloat64())
 	}
 }
 
@@ -342,7 +357,7 @@ func (a *RiskActor) handleUpdateDailyLoss(msg UpdateDailyLossMsg) {
 	a.mu.Unlock()
 
 	if a.dailyLossRule != nil {
-		a.dailyLossRule.UpdateDailyLoss(floatToDecimal(msg.Loss))
+		a.dailyLossRule.UpdateDailyLoss(msg.Loss)
 	}
 }
 
@@ -534,9 +549,4 @@ func (r *RiskActorRef) GetState(ctx context.Context) (RiskState, error) {
 	case <-ctx.Done():
 		return RiskState{}, ctx.Err()
 	}
-}
-
-// Helper function
-func floatToDecimal(f float64) decimal.Decimal {
-	return decimal.NewFromFloat(f)
 }

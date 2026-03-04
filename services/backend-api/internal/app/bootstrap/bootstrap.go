@@ -4,6 +4,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
@@ -40,10 +41,10 @@ type Config struct {
 // RiskConfig holds risk system configuration.
 type RiskConfig struct {
 	// MaxDrawdown is the maximum allowed drawdown (e.g., 0.1 = 10%)
-	MaxDrawdown float64
+	MaxDrawdown decimal.Decimal
 
 	// MaxDailyLoss is the maximum daily loss
-	MaxDailyLoss float64
+	MaxDailyLoss decimal.Decimal
 
 	// CooldownPeriod after consecutive losses
 	CooldownPeriod time.Duration
@@ -58,8 +59,8 @@ type RiskConfig struct {
 // DefaultRiskConfig returns default risk configuration.
 func DefaultRiskConfig() RiskConfig {
 	return RiskConfig{
-		MaxDrawdown:         0.1,  // 10%
-		MaxDailyLoss:        0.05, // 5%
+		MaxDrawdown:         decimal.NewFromFloat(0.1),  // 10%
+		MaxDailyLoss:        decimal.NewFromFloat(0.05), // 5%
 		CooldownPeriod:      5 * time.Minute,
 		CooldownAfterLosses: 3,
 		SafeMode:            risk.DefaultSafeModeConfig(),
@@ -206,18 +207,32 @@ func (a *Application) buildRiskComponents(b *Builder) {
 	} else {
 		policyEngine := risk.NewEngine()
 		// Add default rules from config
-		if b.config.Risk.MaxDrawdown > 0 {
-			_ = policyEngine.AddRule(risk.NewMaxDrawdownRule(
-				decimal.NewFromFloat(b.config.Risk.MaxDrawdown)))
+		if b.config.Risk.MaxDrawdown.GreaterThan(decimal.Zero) {
+			threshold := b.config.Risk.MaxDrawdown
+			if err := policyEngine.AddRule(risk.NewMaxDrawdownRule(threshold)); err != nil {
+				wrappedErr := fmt.Errorf("adding max_drawdown rule (threshold=%s): %w", threshold.String(), err)
+				log.Printf("[bootstrap] %v", wrappedErr)
+			}
 		}
-		if b.config.Risk.MaxDailyLoss > 0 {
-			_ = policyEngine.AddRule(risk.NewMaxDailyLossRule(
-				decimal.NewFromFloat(b.config.Risk.MaxDailyLoss)))
+		if b.config.Risk.MaxDailyLoss.GreaterThan(decimal.Zero) {
+			threshold := b.config.Risk.MaxDailyLoss
+			if err := policyEngine.AddRule(risk.NewMaxDailyLossRule(threshold)); err != nil {
+				wrappedErr := fmt.Errorf("adding max_daily_loss rule (threshold=%s): %w", threshold.String(), err)
+				log.Printf("[bootstrap] %v", wrappedErr)
+			}
 		}
 		if b.config.Risk.CooldownPeriod > 0 && b.config.Risk.CooldownAfterLosses > 0 {
-			_ = policyEngine.AddRule(risk.NewCooldownRule(
+			if err := policyEngine.AddRule(risk.NewCooldownRule(
 				b.config.Risk.CooldownPeriod,
-				b.config.Risk.CooldownAfterLosses))
+				b.config.Risk.CooldownAfterLosses)); err != nil {
+				wrappedErr := fmt.Errorf(
+					"adding cooldown rule (period=%s, losses=%d): %w",
+					b.config.Risk.CooldownPeriod,
+					b.config.Risk.CooldownAfterLosses,
+					err,
+				)
+				log.Printf("[bootstrap] %v", wrappedErr)
+			}
 		}
 		a.Policy = policyEngine
 	}
@@ -225,12 +240,14 @@ func (a *Application) buildRiskComponents(b *Builder) {
 	// Create risk actor
 	ks, ok := a.KillSwitch.(*risk.KillSwitchImpl)
 	if !ok && a.KillSwitch != nil {
-		// Custom KillSwitch implementation provided, cannot create RiskActor
+		log.Printf("[bootstrap] custom kill switch type %T provided; skipping RiskActor creation", a.KillSwitch)
 		return
 	}
 	var policyEngine *risk.Engine
 	if pe, ok := a.Policy.(*risk.Engine); ok {
 		policyEngine = pe
+	} else if a.Policy != nil {
+		log.Printf("[bootstrap] custom policy engine type %T provided; RiskActor will use fallback policy", a.Policy)
 	}
 	a.RiskActor = risk.NewRiskActor(risk.RiskActorConfig{
 		ID:                  "risk-actor",
@@ -246,9 +263,18 @@ func (a *Application) buildRiskComponents(b *Builder) {
 
 	// Spawn risk actor in actor system
 	ref, err := a.ActorSystem.Spawn(a.RiskActor, actor.DefaultConfig())
-	if err == nil {
-		a.RiskRef = risk.NewRiskActorRef(ref)
+	if err != nil {
+		log.Printf("[bootstrap] failed to spawn risk actor: %v", err)
+		return
 	}
+
+	a.RiskRef = risk.NewRiskActorRef(ref)
+	a.Supervisor.AddFunc("risk-actor", func(ctx context.Context) error {
+		if runErr := ref.Run(ctx); runErr != nil && runErr != context.Canceled {
+			return fmt.Errorf("run risk actor: %w", runErr)
+		}
+		return nil
+	})
 }
 
 // Run starts the application and blocks until context is cancelled.

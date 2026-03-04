@@ -25,8 +25,8 @@ func TestEngineEvaluateEmpty(t *testing.T) {
 		IntentID: "test-1",
 		Exchange: "binance",
 		Symbol:   "BTC/USDT",
-		Amount:   1.0,
-		Price:    50000.0,
+		Amount:   decimal.NewFromFloat(1.0),
+		Price:    decimal.NewFromFloat(50000.0),
 	}
 
 	decision, err := engine.Evaluate(context.Background(), intent)
@@ -53,7 +53,7 @@ func TestMaxOrderSizeRule(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			intent := ports.OrderIntent{Amount: tt.amount}
+			intent := ports.OrderIntent{Amount: decimal.NewFromFloat(tt.amount)}
 			decision, err := rule.Evaluate(context.Background(), intent)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -85,8 +85,8 @@ func TestMaxNotionalRule(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			intent := ports.OrderIntent{
-				Amount: tt.amount,
-				Price:  tt.price,
+				Amount: decimal.NewFromFloat(tt.amount),
+				Price:  decimal.NewFromFloat(tt.price),
 			}
 			decision, err := rule.Evaluate(context.Background(), intent)
 			if err != nil {
@@ -163,7 +163,7 @@ func TestEngineWithMultipleRules(t *testing.T) {
 		IntentID:   "test-1",
 		Exchange:   "binance",
 		Symbol:     "BTC/USDT",
-		Amount:     5.0,
+		Amount:     decimal.NewFromFloat(5.0),
 		Confidence: 0.7,
 	}
 	decision, err := engine.Evaluate(context.Background(), intent1)
@@ -179,7 +179,7 @@ func TestEngineWithMultipleRules(t *testing.T) {
 		IntentID:   "test-2",
 		Exchange:   "binance",
 		Symbol:     "BTC/USDT",
-		Amount:     15.0,
+		Amount:     decimal.NewFromFloat(15.0),
 		Confidence: 0.7,
 	}
 	decision, err = engine.Evaluate(context.Background(), intent2)
@@ -195,7 +195,7 @@ func TestEngineWithMultipleRules(t *testing.T) {
 		IntentID:   "test-3",
 		Exchange:   "binance",
 		Symbol:     "ETH/USDT",
-		Amount:     5.0,
+		Amount:     decimal.NewFromFloat(5.0),
 		Confidence: 0.7,
 	}
 	decision, err = engine.Evaluate(context.Background(), intent3)
@@ -391,8 +391,17 @@ func TestSafeModeRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if decision.Approved {
+		t.Error("should reject when trading_mode is missing and safe mode is paper-only")
+	}
+
+	paperCtx := context.WithValue(context.Background(), "trading_mode", "paper")
+	decision, err = rule.Evaluate(paperCtx, intent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !decision.Approved {
-		t.Error("should still approve but with constraints")
+		t.Error("should approve when trading_mode=paper")
 	}
 }
 
@@ -468,5 +477,18 @@ func TestAutoSafeModeOnLossStreak(t *testing.T) {
 	trigger.OnTradeResult(false) // 2 losses
 	if !sm.IsEnabled() {
 		t.Error("should trigger after 2 consecutive losses")
+	}
+}
+
+func TestAutoSafeModeOnLossStreak_DisabledWhenThresholdNonPositive(t *testing.T) {
+	sm := NewSafeMode(DefaultSafeModeConfig())
+	trigger := NewAutoSafeModeTrigger(sm, 0.5, 0)
+
+	trigger.OnTradeResult(false)
+	trigger.OnTradeResult(false)
+	trigger.OnTradeResult(false)
+
+	if sm.IsEnabled() {
+		t.Error("safe mode should stay disabled when loss streak trigger is disabled")
 	}
 }

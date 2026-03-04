@@ -164,8 +164,8 @@ func (r *SafeModeRule) Name() string { return "safe_mode" }
 func (r *SafeModeRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
 	if r.safeMode.IsEnabled() {
 		if r.safeMode.IsRestrictedToPaper() {
-			// Check if this is a paper/live context
-			if mode, ok := ctx.Value("trading_mode").(string); ok && mode != "paper" {
+			// Deny by default unless the caller explicitly sets trading_mode=paper.
+			if mode, ok := ctx.Value("trading_mode").(string); !ok || mode != "paper" {
 				return ports.PolicyDecision{
 					Approved: false,
 					Reason:   fmt.Sprintf("safe mode restricts trading to paper mode: %s", r.safeMode.GetReason()),
@@ -203,6 +203,10 @@ type AutoSafeModeTrigger struct {
 
 // NewAutoSafeModeTrigger creates a new auto safe mode trigger.
 func NewAutoSafeModeTrigger(sm *SafeModeImpl, drawdownLimit float64, lossStreak int) *AutoSafeModeTrigger {
+	// Non-positive values disable streak-based triggering.
+	if lossStreak <= 0 {
+		lossStreak = 0
+	}
 	return &AutoSafeModeTrigger{
 		safeMode:      sm,
 		drawdownLimit: drawdownLimit,
@@ -225,6 +229,10 @@ func (t *AutoSafeModeTrigger) OnTradeResult(profitable bool) {
 
 	if profitable {
 		t.currentStreak = 0
+		return
+	}
+
+	if t.lossStreak <= 0 {
 		return
 	}
 

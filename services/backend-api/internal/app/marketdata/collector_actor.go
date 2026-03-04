@@ -398,7 +398,7 @@ func (a *CollectorActor) runCollectionLoop(ctx context.Context, state *ExchangeS
 			enabled := state.Enabled
 			paused := state.Paused
 			exchangeID := state.ExchangeID
-			symbols := state.Symbols
+			symbols := append([]string(nil), state.Symbols...)
 			state.mu.RUnlock()
 			if enabled && !paused {
 				a.collectFromExchange(ctx, exchangeID, symbols)
