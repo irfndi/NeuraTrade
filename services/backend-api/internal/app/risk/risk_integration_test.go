@@ -496,4 +496,3 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 		})
 	}
 }
-
