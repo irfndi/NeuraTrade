@@ -246,8 +246,12 @@ describe("Status command", () => {
 
     expect(ctx.replies[0]).toContain("Entry gate reason:");
     expect(ctx.replies[0]).toContain("Next unblock: Reach 1 clean cycle(s)");
-    expect(ctx.replies[0]).toContain("Recovery: mode=micro_entry, clean_cycles=0/1");
+    expect(ctx.replies[0]).toContain(
+      "Recovery: mode=micro_entry, clean_cycles=0/1",
+    );
     expect(ctx.replies[0]).toContain("Recovery cycles-to-entry: 1");
-    expect(ctx.replies[0]).toContain("Recovery gate eval: 2026-03-05T10:20:13Z");
+    expect(ctx.replies[0]).toContain(
+      "Recovery gate eval: 2026-03-05T10:20:13Z",
+    );
   });
 });
