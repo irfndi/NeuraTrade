@@ -16,6 +16,8 @@ import (
 var (
 	// ErrProposalExpired indicates the proposal has expired.
 	ErrProposalExpired = errors.New("proposal expired")
+	// ErrNilProposal indicates no proposal payload was provided.
+	ErrNilProposal = errors.New("proposal is nil")
 	// ErrProposalRejected indicates the proposal was rejected by policy.
 	ErrProposalRejected = errors.New("proposal rejected by policy")
 	// ErrLowConfidence indicates the proposal confidence is too low.
@@ -110,6 +112,10 @@ func (e *StrategyProposalEngine) GenerateProposal(
 
 // ValidateProposal validates a proposal against policy and risk limits.
 func (e *StrategyProposalEngine) ValidateProposal(ctx context.Context, proposal *StrategyProposal) error {
+	if proposal == nil {
+		return ErrNilProposal
+	}
+
 	// Check expiration
 	if time.Now().After(proposal.ExpiresAt) {
 		return ErrProposalExpired

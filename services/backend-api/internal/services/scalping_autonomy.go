@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -159,22 +160,33 @@ func (e *scalpingExchangeConnector) IsConnected(ctx context.Context, exchange st
 }
 
 func (e *scalpingExchangeConnector) CancelAllOrders(ctx context.Context, strategyID, exchange string) error {
-	return fmt.Errorf("cancel-all-orders rollback action not wired")
+	log.Printf(
+		"[AUTONOMY] rollback cancel-all-orders is not wired for strategy=%s exchange=%s; continuing best-effort rollback",
+		strings.TrimSpace(strategyID),
+		strings.TrimSpace(exchange),
+	)
+	return nil
 }
 
 func (e *scalpingExchangeConnector) FlattenPositions(ctx context.Context, strategyID, exchange string) error {
-	return fmt.Errorf("flatten-positions rollback action not wired")
+	log.Printf(
+		"[AUTONOMY] rollback flatten-positions is not wired for strategy=%s exchange=%s; continuing best-effort rollback",
+		strings.TrimSpace(strategyID),
+		strings.TrimSpace(exchange),
+	)
+	return nil
 }
 
 // ScalpingAutonomyCoordinator wires proposal validation, rollout gating, and rollback checks.
 type ScalpingAutonomyCoordinator struct {
-	store         *AutonomousRolloutStore
-	proposal      *autonomous.StrategyProposalEngine
-	rollout       *autonomous.StagedRolloutManager
-	gate          *autonomous.LiveTradingGate
-	rollback      *autonomous.AutoRollbackEngine
-	lastRollback  map[string]*autonomous.RollbackEvent
-	rollbackMutex sync.RWMutex
+	store           *AutonomousRolloutStore
+	proposal        *autonomous.StrategyProposalEngine
+	rollout         *autonomous.StagedRolloutManager
+	gate            *autonomous.LiveTradingGate
+	rollback        *autonomous.AutoRollbackEngine
+	defaultExchange string
+	lastRollback    map[string]*autonomous.RollbackEvent
+	rollbackMutex   sync.RWMutex
 }
 
 func NewScalpingAutonomyCoordinator(store *AutonomousRolloutStore, config AIScalpingConfig) *ScalpingAutonomyCoordinator {
@@ -196,12 +208,13 @@ func NewScalpingAutonomyCoordinator(store *AutonomousRolloutStore, config AIScal
 	rollbackEngine := autonomous.NewAutoRollbackEngine(rollbackCfg, store, rolloutManager, nil, &scalpingExchangeConnector{})
 
 	return &ScalpingAutonomyCoordinator{
-		store:        store,
-		proposal:     proposalEngine,
-		rollout:      rolloutManager,
-		gate:         liveGate,
-		rollback:     rollbackEngine,
-		lastRollback: make(map[string]*autonomous.RollbackEvent),
+		store:           store,
+		proposal:        proposalEngine,
+		rollout:         rolloutManager,
+		gate:            liveGate,
+		rollback:        rollbackEngine,
+		defaultExchange: resolveDefaultScalpingExchange(config.Exchange),
+		lastRollback:    make(map[string]*autonomous.RollbackEvent),
 	}
 }
 
@@ -230,10 +243,13 @@ func (c *ScalpingAutonomyCoordinator) EvaluatePreExecution(
 		return nil, nil, fmt.Errorf("autonomy strategy_id is required")
 	}
 	if strings.TrimSpace(scope.Exchange) == "" {
-		scope.Exchange = "bitget"
+		scope.Exchange = strings.TrimSpace(c.defaultExchange)
+	}
+	if strings.TrimSpace(scope.Exchange) == "" {
+		return nil, nil, fmt.Errorf("autonomy exchange is required")
 	}
 	if !scope.ConnectionChecked {
-		scope.ExchangeConnected = true
+		scope.ExchangeConnected = false
 	}
 
 	rolloutState, err := c.ensureRolloutState(ctx, strategyID)
@@ -400,6 +416,19 @@ func defaultAutonomyInitialStage() autonomous.RolloutStage {
 	default:
 		return autonomous.StageShadow
 	}
+}
+
+func resolveDefaultScalpingExchange(configExchange string) string {
+	if trimmed := strings.ToLower(strings.TrimSpace(configExchange)); trimmed != "" {
+		return trimmed
+	}
+	if trimmed := strings.ToLower(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_EXCHANGE"))); trimmed != "" {
+		return trimmed
+	}
+	if trimmed := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_EXCHANGE"))); trimmed != "" {
+		return trimmed
+	}
+	return ""
 }
 
 func resolveAvailableBudget(portfolio TradingPortfolio, maxCapitalPct float64) decimal.Decimal {

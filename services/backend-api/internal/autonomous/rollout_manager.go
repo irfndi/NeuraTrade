@@ -40,6 +40,9 @@ type StagedRolloutManager struct {
 
 // NewStagedRolloutManager creates a new rollout manager.
 func NewStagedRolloutManager(repo StrategyRepository, events EventPublisher) *StagedRolloutManager {
+	if repo == nil {
+		panic("strategy repository is required")
+	}
 	return &StagedRolloutManager{
 		repo:   repo,
 		events: events,
@@ -200,7 +203,9 @@ func (m *StagedRolloutManager) Promote(ctx context.Context, strategyID string, r
 
 	// Publish event
 	if m.events != nil {
-		_ = m.events.PublishStageTransition(ctx, &transition)
+		if err := m.events.PublishStageTransition(ctx, &transition); err != nil {
+			return nil, fmt.Errorf("publish stage transition: %w", err)
+		}
 	}
 
 	return state, nil
@@ -243,7 +248,9 @@ func (m *StagedRolloutManager) Rollback(ctx context.Context, strategyID string, 
 
 	// Publish event
 	if m.events != nil {
-		_ = m.events.PublishStageTransition(ctx, &transition)
+		if err := m.events.PublishStageTransition(ctx, &transition); err != nil {
+			return nil, fmt.Errorf("publish stage transition: %w", err)
+		}
 	}
 
 	return state, nil

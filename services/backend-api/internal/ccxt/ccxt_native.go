@@ -757,7 +757,7 @@ func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []str
 	for _, exchange := range exchanges {
 		if err := ctx.Err(); err != nil {
 			if len(allTickers) > 0 {
-				return allTickers, nil
+				return allTickers, err
 			}
 			return nil, err
 		}
@@ -775,7 +775,7 @@ func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []str
 		for _, symbol := range symbols {
 			if err := ctx.Err(); err != nil {
 				if len(allTickers) > 0 {
-					return allTickers, nil
+					return allTickers, err
 				}
 				return nil, err
 			}

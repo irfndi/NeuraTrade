@@ -197,6 +197,12 @@ func TestStrategyProposalEngine_GenerateProposal(t *testing.T) {
 func TestStrategyProposalEngine_ValidateProposal(t *testing.T) {
 	config := DefaultStrategyProposalConfig()
 
+	t.Run("nil proposal", func(t *testing.T) {
+		engine := NewStrategyProposalEngine(config, nil, nil)
+		err := engine.ValidateProposal(context.Background(), nil)
+		assert.ErrorIs(t, err, ErrNilProposal)
+	})
+
 	t.Run("expired proposal", func(t *testing.T) {
 		engine := NewStrategyProposalEngine(config, nil, nil)
 		proposal := &StrategyProposal{
@@ -254,6 +260,12 @@ func TestStagedRolloutManager_InitializeRollout(t *testing.T) {
 	assert.Equal(t, StageShadow, state.CurrentStage)
 	assert.Equal(t, StatusActive, state.Status)
 	assert.WithinDuration(t, time.Now(), state.EnteredAt, time.Second)
+}
+
+func TestNewStagedRolloutManager_RequiresRepository(t *testing.T) {
+	assert.PanicsWithValue(t, "strategy repository is required", func() {
+		_ = NewStagedRolloutManager(nil, nil)
+	})
 }
 
 func TestStagedRolloutManager_Promote(t *testing.T) {
@@ -484,6 +496,16 @@ func TestAutoRollbackEngine_Evaluate_RequiresRolloutManager(t *testing.T) {
 	assert.Contains(t, err.Error(), "rollout manager")
 }
 
+func TestAutoRollbackEngine_Evaluate_RequiresStrategyID(t *testing.T) {
+	engine := NewAutoRollbackEngine(DefaultRollbackConfig(), nil, nil, nil, nil)
+
+	event, err := engine.Evaluate(context.Background(), "   ", RolloutMetrics{})
+
+	require.Error(t, err)
+	assert.Nil(t, event)
+	assert.Contains(t, err.Error(), "strategyID is required")
+}
+
 func TestAutoRollbackEngine_ForceRollback_RequiresRolloutManager(t *testing.T) {
 	engine := NewAutoRollbackEngine(DefaultRollbackConfig(), nil, nil, nil, nil)
 
@@ -492,6 +514,16 @@ func TestAutoRollbackEngine_ForceRollback_RequiresRolloutManager(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, event)
 	assert.Contains(t, err.Error(), "rollout manager")
+}
+
+func TestAutoRollbackEngine_ForceRollback_RequiresStrategyID(t *testing.T) {
+	engine := NewAutoRollbackEngine(DefaultRollbackConfig(), nil, nil, nil, nil)
+
+	event, err := engine.ForceRollback(context.Background(), "\t", TriggerMaxDrawdown, "manual")
+
+	require.Error(t, err)
+	assert.Nil(t, event)
+	assert.Contains(t, err.Error(), "strategyID is required")
 }
 
 func TestLiveTradingGate_Evaluate(t *testing.T) {

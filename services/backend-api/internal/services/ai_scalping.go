@@ -571,7 +571,10 @@ func (s *AIScalpingService) updateAutonomyGateState(
 		}
 		s.autonomyState.LastEvaluated = gateState.LastEvaluated
 	} else {
+		s.autonomyState.GateOpen = false
+		s.autonomyState.GateBlockReasons = []string{}
 		s.autonomyState.GateChecks = map[string]bool{}
+		s.autonomyState.LastEvaluated = time.Time{}
 	}
 	if evalErr != nil {
 		s.autonomyState.LastError = evalErr.Error()

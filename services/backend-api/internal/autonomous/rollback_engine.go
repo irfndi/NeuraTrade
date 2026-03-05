@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +56,11 @@ func NewAutoRollbackEngine(
 
 // Evaluate checks if a rollback should be triggered for a strategy.
 func (e *AutoRollbackEngine) Evaluate(ctx context.Context, strategyID string, metrics RolloutMetrics) (*RollbackEvent, error) {
+	strategyID = strings.TrimSpace(strategyID)
+	if strategyID == "" {
+		return nil, fmt.Errorf("strategyID is required")
+	}
+
 	// Check cooldown
 	if e.isOnCooldown(strategyID) {
 		return nil, nil
@@ -223,6 +229,11 @@ func (e *AutoRollbackEngine) ForceRollback(
 	trigger RollbackTrigger,
 	reason string,
 ) (*RollbackEvent, error) {
+	strategyID = strings.TrimSpace(strategyID)
+	if strategyID == "" {
+		return nil, fmt.Errorf("strategyID is required")
+	}
+
 	if e.rollout == nil {
 		return nil, fmt.Errorf("rollout manager is required for forced rollback")
 	}

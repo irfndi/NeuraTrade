@@ -2,6 +2,7 @@ package ccxt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -462,6 +463,7 @@ func TestNativeCCXTService_FetchMarketData_FallbackConfig(t *testing.T) {
 		expectedMaxData       int
 		expectedRequests      int
 		expectedElapsedMax    time.Duration
+		expectContextErr      bool
 	}{
 		{
 			name:                  "symbol_budget_limits_fetches",
@@ -548,6 +550,7 @@ func TestNativeCCXTService_FetchMarketData_FallbackConfig(t *testing.T) {
 			expectedMaxData:       2,
 			expectedRequests:      -1,
 			expectedElapsedMax:    3 * time.Second,
+			expectContextErr:      true,
 		},
 	}
 
@@ -602,7 +605,14 @@ func TestNativeCCXTService_FetchMarketData_FallbackConfig(t *testing.T) {
 			data, err := service.FetchMarketData(ctx, []string{"binance"}, tt.symbols)
 			elapsed := time.Since(start)
 
-			if err != nil {
+			if tt.expectContextErr {
+				if err == nil {
+					t.Fatalf("expected context cancellation error, got nil")
+				}
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("expected context cancellation error, got: %v", err)
+				}
+			} else if err != nil {
 				t.Fatalf("FetchMarketData returned error: %v", err)
 			}
 			if len(data) < tt.expectedMinData || len(data) > tt.expectedMaxData {

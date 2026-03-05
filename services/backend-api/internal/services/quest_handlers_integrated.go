@@ -582,12 +582,11 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 	h.enrichPortfolioControlPlane(ctx, quest, chatID, userExchange, &portfolio)
 	recoveryState := h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
-	recentLoss := h.currentRecentLossStreak(ctx, chatID, userExchange)
-	quest.Checkpoint["recovery_recent_loss_streak"] = recentLoss.ConsecutiveLosses
-	quest.Checkpoint["recovery_recent_loss_active"] = recentLoss.Active
-	quest.Checkpoint["recovery_recent_loss_window_seconds"] = int(recentLoss.Window.Seconds())
-	if !recentLoss.LastTradeAt.IsZero() {
-		quest.Checkpoint["recovery_recent_loss_last_trade_at"] = recentLoss.LastTradeAt.Format(time.RFC3339)
+	quest.Checkpoint["recovery_recent_loss_streak"] = recoveryState.RecentLossStreak
+	quest.Checkpoint["recovery_recent_loss_active"] = recoveryState.RecentLossActive
+	quest.Checkpoint["recovery_recent_loss_window_seconds"] = int(recoveryState.RecentLossWindow.Seconds())
+	if !recoveryState.RecentLossLastTradeAt.IsZero() {
+		quest.Checkpoint["recovery_recent_loss_last_trade_at"] = recoveryState.RecentLossLastTradeAt.Format(time.RFC3339)
 	} else {
 		delete(quest.Checkpoint, "recovery_recent_loss_last_trade_at")
 	}
@@ -602,7 +601,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	} else {
 		delete(quest.Checkpoint, "recovery_next_condition")
 	}
-	if recentLoss.Active && recentLoss.ConsecutiveLosses >= recoveryLossStreakResetThreshold() {
+	if recoveryState.RecentLossActive && recoveryState.RecentLossStreak >= recoveryLossStreakResetThreshold() {
 		h.updateRecoveryCleanCycles(quest, false, "recent_loss_streak")
 		recoveryState = h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
 		portfolio.RecoveryMode = recoveryState.Mode
@@ -2505,18 +2504,19 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 }
 
 type recoveryGateState struct {
-	Mode                string
-	EntryAllowed        bool
-	CleanCycles         int
-	RequiredCleanCycles int
-	DeriskOnlyThreshold float64
-	MicroEntryThreshold float64
-	MicroEntryCapPct    float64
-	GateReason          string
-	NextCondition       string
-	RecentLossStreak    int
-	RecentLossWindow    time.Duration
-	RecentLossActive    bool
+	Mode                  string
+	EntryAllowed          bool
+	CleanCycles           int
+	RequiredCleanCycles   int
+	DeriskOnlyThreshold   float64
+	MicroEntryThreshold   float64
+	MicroEntryCapPct      float64
+	GateReason            string
+	NextCondition         string
+	RecentLossStreak      int
+	RecentLossWindow      time.Duration
+	RecentLossActive      bool
+	RecentLossLastTradeAt time.Time
 }
 
 type entryAttemptGateState struct {
@@ -2528,10 +2528,6 @@ type entryAttemptGateState struct {
 	BlockReason            string
 	NextCondition          string
 	AttemptWindowProgress  string
-}
-
-func (h *IntegratedQuestHandlers) evaluateRecoveryGateState(quest *Quest, portfolio TradingPortfolio) recoveryGateState {
-	return h.evaluateRecoveryGateStateForScope(context.Background(), quest, portfolio, "", "")
 }
 
 func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
@@ -2592,6 +2588,7 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 	state.RecentLossStreak = recentLoss.ConsecutiveLosses
 	state.RecentLossWindow = recentLoss.Window
 	state.RecentLossActive = recentLoss.Active
+	state.RecentLossLastTradeAt = recentLoss.LastTradeAt
 
 	if quest != nil && quest.Checkpoint != nil {
 		if checkpointInt(quest.Checkpoint["runtime_failure_streak"]) > 0 {
@@ -2643,7 +2640,6 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 		}
 	default:
 		state.Mode = recoveryModeNormal
-		state.EntryAllowed = true
 	}
 
 	if !state.EntryAllowed && strings.TrimSpace(state.GateReason) == "" &&

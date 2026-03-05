@@ -52,6 +52,7 @@ func loadAutonomousRolloutMigrationStatements() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G304 -- migrationPath is resolved from repository-internal paths, not user input.
 	raw, err := os.ReadFile(migrationPath)
 	if err != nil {
 		return nil, fmt.Errorf("read autonomous rollout migration: %w", err)
@@ -187,15 +188,6 @@ func (s *AutonomousRolloutStore) SaveRollbackEvent(ctx context.Context, event *a
 		INSERT INTO %s (
 			id, strategy_id, chat_id, trigger, from_stage, to_stage, reason, payload, occurred_at, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (id) DO UPDATE SET
-			strategy_id = EXCLUDED.strategy_id,
-			chat_id = EXCLUDED.chat_id,
-			trigger = EXCLUDED.trigger,
-			from_stage = EXCLUDED.from_stage,
-			to_stage = EXCLUDED.to_stage,
-			reason = EXCLUDED.reason,
-			payload = EXCLUDED.payload,
-			occurred_at = EXCLUDED.occurred_at
 	`, autonomyRollbackEventTable)
 
 	if _, err := s.db.ExecContext(
@@ -212,6 +204,9 @@ func (s *AutonomousRolloutStore) SaveRollbackEvent(ctx context.Context, event *a
 		occurredAt,
 		time.Now().UTC(),
 	); err != nil {
+		if isUniqueConstraintErr(err) {
+			return fmt.Errorf("save rollback event: duplicate rollback event id %q: %w", event.ID, err)
+		}
 		return fmt.Errorf("save rollback event: %w", err)
 	}
 
@@ -314,4 +309,13 @@ func strategyChatID(strategyID string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[1])
+}
+
+func isUniqueConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "duplicate key value violates unique constraint") ||
+		strings.Contains(lower, "unique constraint failed")
 }

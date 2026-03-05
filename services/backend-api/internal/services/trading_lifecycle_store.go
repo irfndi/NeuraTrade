@@ -1245,7 +1245,10 @@ func (s *TradingLifecycleStore) GetRecentLossStreak(
 		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
 		args = append(args, strings.TrimSpace(exchange))
 	}
-	query += " ORDER BY closed_at DESC LIMIT 200"
+	query += " ORDER BY closed_at DESC"
+	if limit := recentLossStreakQueryLimit(); limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
 
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1280,6 +1283,17 @@ func (s *TradingLifecycleStore) GetRecentLossStreak(
 		return RecentLossStreakSummary{}, fmt.Errorf("iterate recent loss streak rows failed: %w", err)
 	}
 	return summary, nil
+}
+
+func recentLossStreakQueryLimit() int {
+	limit := getEnvInt("NEURATRADE_SCALPING_RECENT_LOSS_QUERY_LIMIT")
+	if limit <= 0 {
+		return 0
+	}
+	if limit > 10000 {
+		return 10000
+	}
+	return limit
 }
 
 func (s *TradingLifecycleStore) GetRealizedReturnSeries(

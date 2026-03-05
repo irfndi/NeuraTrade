@@ -1349,6 +1349,12 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 		log.Printf("[QUEST] Created quest %s with dry_run=false (LIVE TRADING MODE)", quest.ID)
 
 		quest.Status = QuestStatusActive
+		quest.UpdatedAt = time.Now()
+		if e.store != nil {
+			if err := e.store.SaveQuest(context.Background(), quest); err != nil {
+				log.Printf("Failed to persist active quest %s: %v", quest.ID, err)
+			}
+		}
 		state.ActiveQuests = append(state.ActiveQuests, quest.ID)
 	}
 
@@ -1377,11 +1383,6 @@ func (e *QuestEngine) ensureQuestForChatInternal(definitionID, chatID string) (*
 		quest.UpdatedAt = time.Now()
 		if quest.Checkpoint == nil {
 			quest.Checkpoint = make(map[string]interface{})
-		}
-		if e.store != nil {
-			if err := e.store.SaveQuest(context.Background(), quest); err != nil {
-				log.Printf("Failed to persist reused quest %s: %v", quest.ID, err)
-			}
 		}
 		return quest, nil
 	}
