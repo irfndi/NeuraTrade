@@ -44,6 +44,7 @@ const (
 	questExecutionLockTail            = 35 * time.Second
 	defaultQuestLockReleaseTimeout    = 2 * time.Second
 	maxQuestLockReleaseTimeout        = 10 * time.Second
+	defaultQuestExecutionHeartbeat    = 15 * time.Second
 
 	questExecutionStageLock    = "lock"
 	questExecutionStageHandler = "handler"
@@ -146,6 +147,11 @@ type QuestEngine struct {
 	executionStarts           map[string]time.Time
 	executionLastProgress     map[string]time.Time
 	executionStage            map[string]string
+	executionLockHeld         map[string]bool
+	executionLockTTL          map[string]time.Duration
+	executionLockCheckedAt    map[string]time.Time
+	executionStaleResetReason map[string]string
+	executionStaleResetAt     map[string]time.Time
 	autonomousState           map[string]*AutonomousState
 	definitions               map[string]*QuestDefinition
 	handlers                  map[QuestType]QuestHandler
@@ -289,6 +295,11 @@ func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *Quest
 		executionStarts:           make(map[string]time.Time),
 		executionLastProgress:     make(map[string]time.Time),
 		executionStage:            make(map[string]string),
+		executionLockHeld:         make(map[string]bool),
+		executionLockTTL:          make(map[string]time.Duration),
+		executionLockCheckedAt:    make(map[string]time.Time),
+		executionStaleResetReason: make(map[string]string),
+		executionStaleResetAt:     make(map[string]time.Time),
 		autonomousState:           make(map[string]*AutonomousState),
 		definitions:               make(map[string]*QuestDefinition),
 		handlers:                  make(map[QuestType]QuestHandler),
@@ -645,6 +656,11 @@ func (e *QuestEngine) tick() {
 				delete(e.executionStarts, id)
 				delete(e.executionLastProgress, id)
 				delete(e.executionStage, id)
+				delete(e.executionLockHeld, id)
+				delete(e.executionLockTTL, id)
+				delete(e.executionLockCheckedAt, id)
+				delete(e.executionStaleResetReason, id)
+				delete(e.executionStaleResetAt, id)
 				delete(e.chatIDForQuest, id)
 				log.Printf("[QUEST] Cleaned up old quest: %s (status: %s)", id, quest.Status)
 			}
@@ -684,6 +700,50 @@ func (e *QuestEngine) tick() {
 			progressAge := now.Sub(lastProgressAt)
 			staleAfter := e.runtimeBudget.StaleTimeout
 			if progressAge > staleAfter {
+				lockKey := fmt.Sprintf("quest:lock:%s", quest.ID)
+				lockHeld := false
+				lockTTL := time.Duration(0)
+				lockCheckErr := error(nil)
+				if e.redis != nil {
+					lockCheckCtx, cancelLockCheck := context.WithTimeout(context.Background(), 750*time.Millisecond)
+					lockHeld, lockTTL, lockCheckErr = e.readLockState(lockCheckCtx, lockKey)
+					cancelLockCheck()
+				}
+				if lockCheckErr != nil {
+					delete(e.executing, quest.ID)
+					delete(e.executionStarts, quest.ID)
+					delete(e.executionLastProgress, quest.ID)
+					delete(e.executionStage, quest.ID)
+					e.executionLockHeld[quest.ID] = false
+					e.executionLockTTL[quest.ID] = 0
+					e.executionLockCheckedAt[quest.ID] = now.UTC()
+					e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_reset_lock_check_failed:%v", lockCheckErr)
+					e.executionStaleResetAt[quest.ID] = now.UTC()
+					log.Printf(
+						"[QUEST] Quest %s (%s) stale reset after lock check failure (%v)",
+						quest.ID,
+						quest.Name,
+						lockCheckErr,
+					)
+					continue
+				}
+				e.executionLockHeld[quest.ID] = lockHeld
+				e.executionLockTTL[quest.ID] = lockTTL
+				e.executionLockCheckedAt[quest.ID] = now.UTC()
+				if lockHeld {
+					e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_detected_but_lock_active(ttl=%s)", lockTTL.Round(time.Second))
+					e.executionStaleResetAt[quest.ID] = now.UTC()
+					log.Printf(
+						"[QUEST] Quest %s (%s) stale marker retained because lock is still active (ttl=%s progress_age=%s stage=%s)",
+						quest.ID,
+						quest.Name,
+						lockTTL.Round(time.Second),
+						progressAge.Round(time.Second),
+						stage,
+					)
+					continue
+				}
+
 				log.Printf(
 					"[QUEST] Quest %s (%s) execution stale after progress_age=%s (start_age=%s stage=%s reset_after=%s), resetting in-progress marker",
 					quest.ID,
@@ -697,6 +757,8 @@ func (e *QuestEngine) tick() {
 				delete(e.executionStarts, quest.ID)
 				delete(e.executionLastProgress, quest.ID)
 				delete(e.executionStage, quest.ID)
+				e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_reset_progress_age=%s", progressAge.Round(time.Second))
+				e.executionStaleResetAt[quest.ID] = now.UTC()
 			} else {
 				log.Printf(
 					"[QUEST] Quest %s (%s) skipped - execution already in progress for %s (stage=%s last_progress=%s ago)",
@@ -1030,6 +1092,78 @@ func questLockReleaseTimeout() time.Duration {
 	return timeout
 }
 
+func questExecutionHeartbeatInterval() time.Duration {
+	seconds := getEnvInt("NEURATRADE_QUEST_EXECUTION_HEARTBEAT_SECONDS")
+	if seconds <= 0 {
+		return defaultQuestExecutionHeartbeat
+	}
+	interval := time.Duration(seconds) * time.Second
+	if interval < 5*time.Second {
+		return 5 * time.Second
+	}
+	if interval > time.Minute {
+		return time.Minute
+	}
+	return interval
+}
+
+func (e *QuestEngine) startExecutionHeartbeat(questID string) func() {
+	interval := questExecutionHeartbeatInterval()
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				e.markQuestExecutionProgress(questID, questExecutionStageHandler)
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+	}
+}
+
+func (e *QuestEngine) recordExecutionLockState(questID string, held bool, ttl time.Duration, checkedAt time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.executionLockHeld[questID] = held
+	e.executionLockTTL[questID] = ttl
+	e.executionLockCheckedAt[questID] = checkedAt.UTC()
+}
+
+func (e *QuestEngine) readLockState(ctx context.Context, key string) (bool, time.Duration, error) {
+	if e.redis == nil {
+		return false, 0, nil
+	}
+	exists, err := e.redis.Exists(ctx, key).Result()
+	if err != nil {
+		return false, 0, err
+	}
+	if exists == 0 {
+		return false, 0, nil
+	}
+	ttl, err := e.redis.TTL(ctx, key).Result()
+	if err != nil {
+		return false, 0, err
+	}
+	switch ttl {
+	case time.Duration(-2):
+		return false, 0, nil
+	case time.Duration(-1):
+		return true, 0, nil
+	default:
+		if ttl <= 0 {
+			return true, 0, nil
+		}
+		return true, ttl, nil
+	}
+}
+
 // executeQuest executes a single quest
 func (e *QuestEngine) executeQuest(quest *Quest) {
 	defer e.markQuestExecutionFinished(quest.ID)
@@ -1050,17 +1184,28 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 	lockKey := fmt.Sprintf("quest:lock:%s", quest.ID)
 	locked := e.acquireLock(ctx, lockKey, e.runtimeBudget.LockTTL)
 	if !locked {
+		e.mu.Lock()
+		e.executionLockHeld[quest.ID] = true
+		e.executionLockTTL[quest.ID] = e.runtimeBudget.LockTTL
+		e.executionLockCheckedAt[quest.ID] = time.Now().UTC()
+		e.executionStaleResetReason[quest.ID] = "lock_acquire_failed_already_owned"
+		e.executionStaleResetAt[quest.ID] = time.Now().UTC()
+		e.mu.Unlock()
 		log.Printf("Quest %s skipped: could not acquire lock (another instance may be running)", quest.ID)
 		return
 	}
+	e.recordExecutionLockState(quest.ID, true, e.runtimeBudget.LockTTL, time.Now().UTC())
 	defer func() {
 		e.markQuestExecutionProgress(quest.ID, questExecutionStageDone)
 		releaseCtx, cancelRelease := context.WithTimeout(context.Background(), questLockReleaseTimeout())
 		defer cancelRelease()
 		e.releaseLock(releaseCtx, lockKey)
+		e.recordExecutionLockState(quest.ID, false, 0, time.Now().UTC())
 	}()
 
 	e.markQuestExecutionProgress(quest.ID, questExecutionStageHandler)
+	stopHeartbeat := e.startExecutionHeartbeat(quest.ID)
+	defer stopHeartbeat()
 	if err := handler(ctx, quest); err != nil {
 		log.Printf("Quest %s (%s) failed: %v", quest.ID, quest.Name, err)
 		e.markQuestExecutionProgress(quest.ID, questExecutionStagePersist)
@@ -1092,6 +1237,9 @@ func (e *QuestEngine) markQuestExecutionProgress(questID, stage string) {
 	now := time.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if !e.executing[questID] {
+		return
+	}
 	if _, exists := e.executionStarts[questID]; !exists {
 		e.executionStarts[questID] = now
 	}
@@ -1187,7 +1335,7 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 	// Current operating mode is scalping-first, so only enable scalping execution.
 	defaultQuests := []string{"scalping_execution"}
 	for _, defID := range defaultQuests {
-		quest, err := e.createQuestInternal(defID, chatID)
+		quest, err := e.ensureQuestForChatInternal(defID, chatID)
 		if err != nil {
 			log.Printf("Failed to create quest %s: %v", defID, err)
 			continue
@@ -1201,6 +1349,12 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 		log.Printf("[QUEST] Created quest %s with dry_run=false (LIVE TRADING MODE)", quest.ID)
 
 		quest.Status = QuestStatusActive
+		quest.UpdatedAt = time.Now()
+		if e.store != nil {
+			if err := e.store.SaveQuest(context.Background(), quest); err != nil {
+				log.Printf("Failed to persist active quest %s: %v", quest.ID, err)
+			}
+		}
 		state.ActiveQuests = append(state.ActiveQuests, quest.ID)
 	}
 
@@ -1213,6 +1367,26 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 	}
 
 	return state, nil
+}
+
+func (e *QuestEngine) ensureQuestForChatInternal(definitionID, chatID string) (*Quest, error) {
+	for _, quest := range e.quests {
+		if quest == nil {
+			continue
+		}
+		if strings.TrimSpace(quest.Metadata["chat_id"]) != strings.TrimSpace(chatID) {
+			continue
+		}
+		if strings.TrimSpace(quest.Metadata["definition_id"]) != strings.TrimSpace(definitionID) {
+			continue
+		}
+		quest.UpdatedAt = time.Now()
+		if quest.Checkpoint == nil {
+			quest.Checkpoint = make(map[string]interface{})
+		}
+		return quest, nil
+	}
+	return e.createQuestInternal(definitionID, chatID)
 }
 
 // PauseAutonomous pauses autonomous mode for a user
@@ -1357,6 +1531,11 @@ func (e *QuestEngine) GetRuntimeDiagnostics() map[string]interface{} {
 	executionStage := questExecutionStageDone
 	executionLastProgress := ""
 	executionInProgressAge := 0.0
+	executionLockHeld := false
+	executionLockTTL := ""
+	executionLockCheckedAt := ""
+	executionStaleReason := ""
+	executionStaleAt := ""
 	now := time.Now().UTC()
 	for questID := range e.executing {
 		stage := strings.TrimSpace(e.executionStage[questID])
@@ -1372,6 +1551,19 @@ func (e *QuestEngine) GetRuntimeDiagnostics() map[string]interface{} {
 			executionLastProgress = progressAt.UTC().Format(time.RFC3339)
 			executionInProgressAge = now.Sub(progressAt).Seconds()
 		}
+		executionLockHeld = e.executionLockHeld[questID]
+		if ttl, ok := e.executionLockTTL[questID]; ok {
+			executionLockTTL = ttl.String()
+		}
+		if checkedAt, ok := e.executionLockCheckedAt[questID]; ok && !checkedAt.IsZero() {
+			executionLockCheckedAt = checkedAt.UTC().Format(time.RFC3339)
+		}
+		if reason, ok := e.executionStaleResetReason[questID]; ok {
+			executionStaleReason = strings.TrimSpace(reason)
+		}
+		if staleAt, ok := e.executionStaleResetAt[questID]; ok && !staleAt.IsZero() {
+			executionStaleAt = staleAt.UTC().Format(time.RFC3339)
+		}
 		break
 	}
 
@@ -1385,6 +1577,11 @@ func (e *QuestEngine) GetRuntimeDiagnostics() map[string]interface{} {
 		"execution_stage":                   executionStage,
 		"execution_last_progress_at":        executionLastProgress,
 		"execution_in_progress_age_seconds": executionInProgressAge,
+		"execution_lock_held":               executionLockHeld,
+		"execution_lock_ttl":                executionLockTTL,
+		"execution_lock_checked_at":         executionLockCheckedAt,
+		"execution_stale_reset_reason":      executionStaleReason,
+		"execution_stale_reset_at":          executionStaleAt,
 		"provider_chain_configured":         e.aiProviderChainConfigured,
 		"provider_chain_usable":             e.aiProviderChainUsable,
 		"watchdog_stale":                    e.runtimeBudget.StaleTimeout.String(),
@@ -1435,6 +1632,19 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		"execution_stage":                   questExecutionStageDone,
 		"execution_last_progress_at":        "",
 		"execution_in_progress_age_seconds": 0.0,
+		"execution_lock_held":               false,
+		"execution_lock_ttl":                "",
+		"execution_lock_checked_at":         "",
+		"stale_reset_reason":                "",
+		"stale_reset_at":                    "",
+		"autonomy_strategy_id":              "",
+		"autonomy_rollout_stage":            "",
+		"autonomy_rollout_status":           "",
+		"autonomy_gate_open":                false,
+		"autonomy_gate_block_reasons":       []string{},
+		"recovery_recent_loss_streak":       0,
+		"recovery_recent_loss_active":       false,
+		"recovery_recent_loss_window":       "",
 		"provider_chain_configured":         0,
 		"provider_chain_usable":             0,
 	}
@@ -1491,6 +1701,19 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		aiFailoverFailures    int
 		executionProgressAt   time.Time
 		executionStage        string
+		executionLockHeld     bool
+		executionLockTTL      time.Duration
+		executionLockChecked  time.Time
+		staleResetReason      string
+		staleResetAt          time.Time
+		autonomyStrategyID    string
+		autonomyRolloutStage  string
+		autonomyRolloutStatus string
+		autonomyGateOpen      bool
+		autonomyGateReasons   []string
+		recentLossStreak      int
+		recentLossActive      bool
+		recentLossWindowSec   int
 	)
 
 	for _, quest := range e.quests {
@@ -1514,6 +1737,25 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 				}
 				executionStage = stage
 			}
+		}
+
+		// Prefer lock/stale fields with the latest check/reset timestamps for deterministic diagnostics.
+		if checkedAt, ok := e.executionLockCheckedAt[quest.ID]; ok && checkedAt.After(executionLockChecked) {
+			executionLockChecked = checkedAt
+			if lockTTL, ok := e.executionLockTTL[quest.ID]; ok {
+				executionLockTTL = lockTTL
+			} else {
+				executionLockTTL = 0
+			}
+			if lockHeld, ok := e.executionLockHeld[quest.ID]; ok {
+				executionLockHeld = lockHeld
+			} else {
+				executionLockHeld = false
+			}
+		}
+		if resetAt, ok := e.executionStaleResetAt[quest.ID]; ok && resetAt.After(staleResetAt) {
+			staleResetAt = resetAt
+			staleResetReason = strings.TrimSpace(e.executionStaleResetReason[quest.ID])
 		}
 
 		cp := quest.Checkpoint
@@ -1541,6 +1783,39 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		}
 		if drawdown := readQuestMetricFloat(cp["risk_max_drawdown"]); drawdown > riskMaxDrawdown {
 			riskMaxDrawdown = drawdown
+		}
+		recentLossStreak = maxInt(recentLossStreak, readQuestMetricInt(cp["recovery_recent_loss_streak"]))
+		if readQuestMetricBool(cp["recovery_recent_loss_active"]) {
+			recentLossActive = true
+		}
+		if windowSec := readQuestMetricInt(cp["recovery_recent_loss_window_seconds"]); windowSec > recentLossWindowSec {
+			recentLossWindowSec = windowSec
+		}
+		if value := readQuestMetricString(cp["autonomy_strategy_id"]); value != "" {
+			autonomyStrategyID = value
+		}
+		if value := readQuestMetricString(cp["autonomy_rollout_stage"]); value != "" {
+			autonomyRolloutStage = value
+		}
+		if value := readQuestMetricString(cp["autonomy_rollout_status"]); value != "" {
+			autonomyRolloutStatus = value
+		}
+		if _, exists := cp["autonomy_gate_open"]; exists {
+			autonomyGateOpen = readQuestMetricBool(cp["autonomy_gate_open"])
+		}
+		if raw, ok := cp["autonomy_gate_block_reasons"].([]string); ok {
+			autonomyGateReasons = append([]string(nil), raw...)
+		} else if raw, ok := cp["autonomy_gate_block_reasons"].([]interface{}); ok {
+			converted := make([]string, 0, len(raw))
+			for _, item := range raw {
+				text := readQuestMetricString(item)
+				if text != "" {
+					converted = append(converted, text)
+				}
+			}
+			if len(converted) > 0 {
+				autonomyGateReasons = converted
+			}
 		}
 
 		if ts := readCheckpointTime(cp["runtime_bootstrap_synced_at"]); ts.After(lastStartupReconcile) {
@@ -1697,6 +1972,37 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		nowForExecution := time.Now().UTC()
 		result["execution_last_progress_at"] = executionProgressAt.Format(time.RFC3339)
 		result["execution_in_progress_age_seconds"] = nowForExecution.Sub(executionProgressAt).Seconds()
+	}
+	result["execution_lock_held"] = executionLockHeld
+	if executionLockTTL > 0 {
+		result["execution_lock_ttl"] = executionLockTTL.String()
+	}
+	if !executionLockChecked.IsZero() {
+		result["execution_lock_checked_at"] = executionLockChecked.Format(time.RFC3339)
+	}
+	if strings.TrimSpace(staleResetReason) != "" {
+		result["stale_reset_reason"] = strings.TrimSpace(staleResetReason)
+	}
+	if !staleResetAt.IsZero() {
+		result["stale_reset_at"] = staleResetAt.Format(time.RFC3339)
+	}
+	if strings.TrimSpace(autonomyStrategyID) != "" {
+		result["autonomy_strategy_id"] = autonomyStrategyID
+	}
+	if strings.TrimSpace(autonomyRolloutStage) != "" {
+		result["autonomy_rollout_stage"] = autonomyRolloutStage
+	}
+	if strings.TrimSpace(autonomyRolloutStatus) != "" {
+		result["autonomy_rollout_status"] = autonomyRolloutStatus
+	}
+	result["autonomy_gate_open"] = autonomyGateOpen
+	if len(autonomyGateReasons) > 0 {
+		result["autonomy_gate_block_reasons"] = autonomyGateReasons
+	}
+	result["recovery_recent_loss_streak"] = recentLossStreak
+	result["recovery_recent_loss_active"] = recentLossActive
+	if recentLossWindowSec > 0 {
+		result["recovery_recent_loss_window"] = (time.Duration(recentLossWindowSec) * time.Second).String()
 	}
 	result["entry_attempts_1h"] = entryAttempts1h
 	if strings.TrimSpace(entryAttemptBlock) != "" {

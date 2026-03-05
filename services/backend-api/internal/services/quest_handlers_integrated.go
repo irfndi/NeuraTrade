@@ -43,6 +43,8 @@ type IntegratedQuestHandlers struct {
 	lifecycleStore      *TradingLifecycleStore
 	protectionManager   *DynamicProtectionManager
 	db                  *sql.DB // Database for user settings
+	autonomyStore       *AutonomousRolloutStore
+	autonomyCoordinator *ScalpingAutonomyCoordinator
 	stalePositionMu     sync.Mutex
 	stalePositionWindow map[string]time.Time
 }
@@ -58,6 +60,7 @@ const (
 	defaultAIRuntimeCriticalRate     = 0.50
 	defaultAIRuntimeCircuitFailures  = 3
 	defaultAIRuntimeCircuitCooldown  = 120 * time.Second
+	defaultAutonomyInitTimeout       = 5 * time.Second
 	defaultDriftRepairCooldown       = 180 * time.Second
 	defaultDriftClearPasses          = 2
 	defaultDriftDeadlockClearCycles  = 6
@@ -92,6 +95,58 @@ func NewIntegratedQuestHandlers(
 	}
 }
 
+// NewIntegratedQuestHandlersWithAutonomyStore creates handlers with deterministic autonomy wiring.
+func NewIntegratedQuestHandlersWithAutonomyStore(
+	ta *TechnicalAnalysisService,
+	ccxt interface{},
+	arb interface{},
+	futuresArb interface{},
+	notif *NotificationService,
+	monitoring *AutonomousMonitorManager,
+	db *sql.DB,
+	store *AutonomousRolloutStore,
+) (*IntegratedQuestHandlers, error) {
+	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring)
+	handlers.SetDB(db)
+	if err := handlers.setAutonomyStoreWithInit(context.Background(), store); err != nil {
+		return nil, fmt.Errorf("failed to set autonomy store in NewIntegratedQuestHandlersWithAutonomyStore: %w", err)
+	}
+	return handlers, nil
+}
+
+func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, store *AutonomousRolloutStore) error {
+	if h == nil {
+		return nil
+	}
+	if store == nil {
+		if h.db == nil {
+			h.autonomyStore = nil
+			h.clearScalpingAutonomyCoordinator()
+			return nil
+		}
+		store = NewAutonomousRolloutStore(h.db)
+	}
+
+	initCtx := ctx
+	cancel := func() {}
+	if initCtx == nil {
+		initCtx = context.Background()
+	}
+	if _, hasDeadline := initCtx.Deadline(); !hasDeadline {
+		initCtx, cancel = context.WithTimeout(initCtx, autonomyInitTimeout())
+	}
+	defer cancel()
+
+	if err := store.InitSchema(initCtx); err != nil {
+		h.autonomyStore = nil
+		h.clearScalpingAutonomyCoordinator()
+		return fmt.Errorf("initialize autonomous rollout schema: %w", err)
+	}
+	h.autonomyStore = store
+	h.configureScalpingAutonomy()
+	return nil
+}
+
 // SetOrderExecutor sets the order executor for scalping
 func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecutor) {
 	h.orderExecutor = executor
@@ -100,6 +155,11 @@ func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecuto
 // SetDB sets the database for user settings lookup
 func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 	h.db = db
+}
+
+// SetAutonomyStore sets the autonomy rollout store and applies coordinator wiring when available.
+func (h *IntegratedQuestHandlers) SetAutonomyStore(store *AutonomousRolloutStore) error {
+	return h.setAutonomyStoreWithInit(context.Background(), store)
 }
 
 // SetTradeMemory sets the trade memory for AI learning
@@ -132,7 +192,24 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 		h.orderExecutor,
 		h.tradeMemory,
 	)
+	h.configureScalpingAutonomy()
 	log.Printf("[SCALPING] AI-driven scalping service initialized")
+}
+
+func (h *IntegratedQuestHandlers) configureScalpingAutonomy() {
+	if h.aiScalpingService == nil || h.autonomyStore == nil {
+		h.clearScalpingAutonomyCoordinator()
+		return
+	}
+	h.autonomyCoordinator = NewScalpingAutonomyCoordinator(h.autonomyStore, h.aiScalpingService.config)
+	h.aiScalpingService.SetAutonomyCoordinator(h.autonomyCoordinator)
+}
+
+func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
+	h.autonomyCoordinator = nil
+	if h.aiScalpingService != nil {
+		h.aiScalpingService.SetAutonomyCoordinator(nil)
+	}
 }
 
 // RegisterIntegratedHandlers registers production-ready quest handlers
@@ -514,7 +591,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		OpenPositions: 0,
 	}
 	h.enrichPortfolioControlPlane(ctx, quest, chatID, userExchange, &portfolio)
-	recoveryState := h.evaluateRecoveryGateState(quest, portfolio)
+	recoveryState := h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
+	quest.Checkpoint["recovery_recent_loss_streak"] = recoveryState.RecentLossStreak
+	quest.Checkpoint["recovery_recent_loss_active"] = recoveryState.RecentLossActive
+	quest.Checkpoint["recovery_recent_loss_window_seconds"] = int(recoveryState.RecentLossWindow.Seconds())
+	if !recoveryState.RecentLossLastTradeAt.IsZero() {
+		quest.Checkpoint["recovery_recent_loss_last_trade_at"] = recoveryState.RecentLossLastTradeAt.Format(time.RFC3339)
+	} else {
+		delete(quest.Checkpoint, "recovery_recent_loss_last_trade_at")
+	}
 	portfolio.RecoveryMode = recoveryState.Mode
 	portfolio.RecoveryEntryOK = recoveryState.EntryAllowed
 	portfolio.RecoveryCleanCycle = recoveryState.CleanCycles
@@ -526,9 +611,9 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	} else {
 		delete(quest.Checkpoint, "recovery_next_condition")
 	}
-	if currentLossStreak() > 0 {
-		h.updateRecoveryCleanCycles(quest, false, "loss_streak")
-		recoveryState = h.evaluateRecoveryGateState(quest, portfolio)
+	if recoveryState.RecentLossActive && recoveryState.RecentLossStreak >= recoveryLossStreakResetThreshold() {
+		h.updateRecoveryCleanCycles(quest, false, "recent_loss_streak")
+		recoveryState = h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
 		portfolio.RecoveryMode = recoveryState.Mode
 		portfolio.RecoveryEntryOK = recoveryState.EntryAllowed
 		portfolio.RecoveryCleanCycle = recoveryState.CleanCycles
@@ -822,7 +907,35 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 	h.recordEntryAttempt(quest, nowUTC, livenessGate)
 
-	decision, err := h.aiScalpingService.ExecuteTradingCycle(ctx, portfolio)
+	exchangeConnected := true
+	connectionChecked := false
+	if healthChecker, ok := h.ccxtService.(interface{ IsHealthy(context.Context) bool }); ok {
+		connectionChecked = true
+		exchangeConnected = healthChecker.IsHealthy(ctx)
+	}
+	safeMode := checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"])
+	if envSafeMode, ok := getEnvBool("NEURATRADE_SAFE_MODE_ENABLED"); ok && envSafeMode {
+		safeMode = true
+	}
+	killSwitchEngaged := false
+	if envKillSwitch, ok := getEnvBool("NEURATRADE_KILL_SWITCH_ENGAGED"); ok {
+		killSwitchEngaged = envKillSwitch
+	} else if envKillSwitch, ok := getEnvBool("NEURATRADE_KILL_SWITCH"); ok {
+		killSwitchEngaged = envKillSwitch
+	}
+	strategyID := ScalpingStrategyID(chatID)
+	cycleCtx := WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
+		ChatID:            chatID,
+		StrategyID:        strategyID,
+		Exchange:          userExchange,
+		SafeModeEnabled:   safeMode,
+		KillSwitchEngaged: killSwitchEngaged,
+		ExchangeConnected: exchangeConnected,
+		ConnectionChecked: connectionChecked,
+	})
+
+	decision, err := h.aiScalpingService.ExecuteTradingCycle(cycleCtx, portfolio)
+	h.applyAutonomyCheckpoint(quest)
 	if err != nil {
 		h.updateRecoveryCleanCycles(quest, false, "runtime_error")
 		log.Printf("[SCALPING] AI decision error: %v", err)
@@ -2354,6 +2467,17 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		),
 		fmt.Sprintf("AI runtime error-rate window: %.0f%%", errorRate*100),
 	}
+	if recentWindowSec := checkpointInt(quest.Checkpoint["recovery_recent_loss_window_seconds"]); recentWindowSec > 0 {
+		reasons = append(
+			reasons,
+			fmt.Sprintf(
+				"Recent loss streak: %d (active=%t, window=%s)",
+				checkpointInt(quest.Checkpoint["recovery_recent_loss_streak"]),
+				checkpointBool(quest.Checkpoint["recovery_recent_loss_active"]),
+				(time.Duration(recentWindowSec)*time.Second).String(),
+			),
+		)
+	}
 	if checkpointBool(quest.Checkpoint["state_drift_active"]) {
 		reasons = append(
 			reasons,
@@ -2390,15 +2514,19 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 }
 
 type recoveryGateState struct {
-	Mode                string
-	EntryAllowed        bool
-	CleanCycles         int
-	RequiredCleanCycles int
-	DeriskOnlyThreshold float64
-	MicroEntryThreshold float64
-	MicroEntryCapPct    float64
-	GateReason          string
-	NextCondition       string
+	Mode                  string
+	EntryAllowed          bool
+	CleanCycles           int
+	RequiredCleanCycles   int
+	DeriskOnlyThreshold   float64
+	MicroEntryThreshold   float64
+	MicroEntryCapPct      float64
+	GateReason            string
+	NextCondition         string
+	RecentLossStreak      int
+	RecentLossWindow      time.Duration
+	RecentLossActive      bool
+	RecentLossLastTradeAt time.Time
 }
 
 type entryAttemptGateState struct {
@@ -2412,7 +2540,17 @@ type entryAttemptGateState struct {
 	AttemptWindowProgress  string
 }
 
+//nolint:unused // retained for focused recovery-gate unit tests.
 func (h *IntegratedQuestHandlers) evaluateRecoveryGateState(quest *Quest, portfolio TradingPortfolio) recoveryGateState {
+	return h.evaluateRecoveryGateStateForScope(context.Background(), quest, portfolio, "", "")
+}
+func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
+	ctx context.Context,
+	quest *Quest,
+	portfolio TradingPortfolio,
+	chatID string,
+	exchange string,
+) recoveryGateState {
 	cleanCycles := 0
 	if quest != nil {
 		cleanCycles = checkpointInt(quest.Checkpoint["recovery_clean_cycles"])
@@ -2460,6 +2598,12 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateState(quest *Quest, portfo
 		MicroEntryCapPct:    microCap,
 	}
 
+	recentLoss := h.currentRecentLossStreak(ctx, chatID, exchange)
+	state.RecentLossStreak = recentLoss.ConsecutiveLosses
+	state.RecentLossWindow = recentLoss.Window
+	state.RecentLossActive = recentLoss.Active
+	state.RecentLossLastTradeAt = recentLoss.LastTradeAt
+
 	if quest != nil && quest.Checkpoint != nil {
 		if checkpointInt(quest.Checkpoint["runtime_failure_streak"]) > 0 {
 			state.EntryAllowed = false
@@ -2468,7 +2612,7 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateState(quest *Quest, portfo
 	if portfolio.DriftActive {
 		state.EntryAllowed = false
 	}
-	if currentLossStreak() > 0 {
+	if recentLoss.Active && recentLoss.ConsecutiveLosses >= recoveryLossStreakResetThreshold() {
 		state.EntryAllowed = false
 	}
 
@@ -2492,14 +2636,39 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateState(quest *Quest, portfo
 			)
 			state.NextCondition = fmt.Sprintf("Reach %d clean cycle(s) (current %d)", requiredCycles, state.CleanCycles)
 		} else if !state.EntryAllowed {
-			state.GateReason = "recovery micro-entry paused until runtime/drift/loss streak is clean"
-			state.NextCondition = "Clear runtime failures, drift state, and loss streak"
+			if recentLoss.Active && recentLoss.ConsecutiveLosses >= recoveryLossStreakResetThreshold() {
+				state.GateReason = fmt.Sprintf(
+					"recent loss streak %d within %s exceeds threshold; micro-entry paused",
+					recentLoss.ConsecutiveLosses,
+					recentLoss.Window.Round(time.Minute).String(),
+				)
+				state.NextCondition = fmt.Sprintf(
+					"Need loss streak below %d within %s window",
+					recoveryLossStreakResetThreshold(),
+					recentLoss.Window.Round(time.Minute).String(),
+				)
+			} else {
+				state.GateReason = "recovery micro-entry paused until runtime/drift constraints clear"
+				state.NextCondition = "Clear runtime failures and drift state"
+			}
 		}
 	default:
 		state.Mode = recoveryModeNormal
-		state.EntryAllowed = true
 	}
 
+	if !state.EntryAllowed && strings.TrimSpace(state.GateReason) == "" &&
+		recentLoss.Active && recentLoss.ConsecutiveLosses >= recoveryLossStreakResetThreshold() {
+		state.GateReason = fmt.Sprintf(
+			"recent loss streak %d still active within %s window",
+			recentLoss.ConsecutiveLosses,
+			recentLoss.Window.Round(time.Minute).String(),
+		)
+		state.NextCondition = fmt.Sprintf(
+			"Need loss streak below %d within %s window",
+			recoveryLossStreakResetThreshold(),
+			recentLoss.Window.Round(time.Minute).String(),
+		)
+	}
 	if !state.EntryAllowed && strings.TrimSpace(state.GateReason) == "" {
 		state.GateReason = "recovery entry gate is active"
 	}
@@ -2526,9 +2695,84 @@ func (h *IntegratedQuestHandlers) updateRecoveryCleanCycles(quest *Quest, clean 
 	delete(quest.Checkpoint, "recovery_last_reset_reason")
 }
 
-func currentLossStreak() int {
-	perf := GetScalpingPerformance().GetPerformance()
-	return readIntMetric(perf["consecutive_losses"])
+type recentLossStreakState struct {
+	ConsecutiveLosses int
+	LastTradeAt       time.Time
+	Window            time.Duration
+	Active            bool
+}
+
+func (h *IntegratedQuestHandlers) currentRecentLossStreak(ctx context.Context, chatID string, exchange string) recentLossStreakState {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	window := recoveryLossWindow()
+	perf := h.scopedScalpingPerformance(ctx, strings.TrimSpace(chatID), strings.TrimSpace(exchange), window)
+	losses := readIntMetric(perf["consecutive_losses"])
+	lastTrade := readCheckpointTime(perf["last_trade_time"])
+
+	active := false
+	if !lastTrade.IsZero() && losses > 0 {
+		active = time.Since(lastTrade) <= window
+	}
+
+	return recentLossStreakState{
+		ConsecutiveLosses: losses,
+		LastTradeAt:       lastTrade,
+		Window:            window,
+		Active:            active,
+	}
+}
+
+func (h *IntegratedQuestHandlers) scopedScalpingPerformance(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	window time.Duration,
+) map[string]interface{} {
+	perf := map[string]interface{}{
+		"consecutive_losses": 0,
+	}
+	if h == nil || h.lifecycleStore == nil || chatID == "" {
+		return perf
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	since := time.Now().UTC().Add(-window)
+	queryCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	summary, err := h.lifecycleStore.GetRecentLossStreak(queryCtx, chatID, exchange, since)
+	if err != nil {
+		log.Printf(
+			"[SCALPING] Failed to read scoped recent loss streak (chat=%s exchange=%s): %v",
+			chatID,
+			exchange,
+			err,
+		)
+		return perf
+	}
+	perf["consecutive_losses"] = summary.ConsecutiveLosses
+	perf["last_trade_time"] = summary.LastTradeAt
+	return perf
+}
+
+func recoveryLossWindow() time.Duration {
+	seconds := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS")
+	if seconds <= 0 {
+		seconds = int((90 * time.Minute).Seconds())
+	}
+	seconds = clampQuestInt(seconds, 60, 24*60*60)
+	return time.Duration(seconds) * time.Second
+}
+
+func recoveryLossStreakResetThreshold() int {
+	threshold := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET")
+	if threshold <= 0 {
+		threshold = 2
+	}
+	return clampQuestInt(threshold, 1, 20)
 }
 
 func livenessIdleMinutes() int {
@@ -2812,6 +3056,48 @@ func (h *IntegratedQuestHandlers) getAIScalpingRuntimeSnapshot() map[string]inte
 		return map[string]interface{}{}
 	}
 	return h.aiScalpingService.RuntimeDiagnostics()
+}
+
+func (h *IntegratedQuestHandlers) applyAutonomyCheckpoint(quest *Quest) {
+	if quest == nil || quest.Checkpoint == nil || h.aiScalpingService == nil {
+		return
+	}
+	diag := h.aiScalpingService.AutonomyDiagnostics()
+	canonicalFields := []struct {
+		diagKey       string
+		checkpointKey string
+	}{
+		{diagKey: "strategy_id", checkpointKey: "autonomy_strategy_id"},
+		{diagKey: "rollout_stage", checkpointKey: "autonomy_rollout_stage"},
+		{diagKey: "rollout_status", checkpointKey: "autonomy_rollout_status"},
+		{diagKey: "gate_open", checkpointKey: "autonomy_gate_open"},
+		{diagKey: "gate_block_reasons", checkpointKey: "autonomy_gate_block_reasons"},
+		{diagKey: "gate_checks", checkpointKey: "autonomy_gate_checks"},
+		{diagKey: "last_evaluated_at", checkpointKey: "autonomy_last_evaluated_at"},
+		{diagKey: "last_error", checkpointKey: "autonomy_last_error"},
+		{diagKey: "last_rollback_at", checkpointKey: "autonomy_last_rollback_at"},
+		{diagKey: "last_rollback_reason", checkpointKey: "autonomy_last_rollback_reason"},
+		{diagKey: "last_rollback_trigger", checkpointKey: "autonomy_last_rollback_trigger"},
+	}
+	for _, field := range canonicalFields {
+		if value, ok := diag[field.diagKey]; ok {
+			quest.Checkpoint[field.checkpointKey] = value
+			continue
+		}
+		delete(quest.Checkpoint, field.checkpointKey)
+	}
+}
+
+func autonomyInitTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("AUTONOMY_INIT_TIMEOUT"))
+	if raw == "" {
+		return defaultAutonomyInitTimeout
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return defaultAutonomyInitTimeout
+	}
+	return timeout
 }
 
 func (h *IntegratedQuestHandlers) recordTradeDecision(ctx context.Context, quest *Quest, decision *AITradingDecision, exchange string) {

@@ -2,10 +2,13 @@ package ccxt
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -443,6 +446,201 @@ func TestParseBitgetFundingRate_SkipsMalformedRows(t *testing.T) {
 	}
 	if rates[0].Symbol != "ETHUSDT" {
 		t.Fatalf("unexpected symbol from valid row: %s", rates[0].Symbol)
+	}
+}
+
+func TestNativeCCXTService_FetchMarketData_FallbackConfig(t *testing.T) {
+	tests := []struct {
+		name                  string
+		maxSymbolsEnv         string
+		cycleBudgetEnvMS      string
+		perSymbolTimeoutEnvMS string
+		symbols               []string
+		perRequestDelay       time.Duration
+		cancelOnSymbolPrefix  string
+		ctxTimeout            time.Duration
+		expectedMinData       int
+		expectedMaxData       int
+		expectedRequests      int
+		expectedElapsedMax    time.Duration
+		expectContextErr      bool
+		expectPartialErr      bool
+	}{
+		{
+			name:                  "symbol_budget_limits_fetches",
+			maxSymbolsEnv:         "2",
+			cycleBudgetEnvMS:      "10000",
+			perSymbolTimeoutEnvMS: "500",
+			symbols:               []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"},
+			expectedMinData:       2,
+			expectedMaxData:       2,
+			expectedRequests:      2,
+			expectPartialErr:      true,
+		},
+		{
+			name:                  "empty_symbols_returns_fast",
+			maxSymbolsEnv:         "10",
+			cycleBudgetEnvMS:      "10000",
+			perSymbolTimeoutEnvMS: "500",
+			symbols:               []string{},
+			expectedMinData:       0,
+			expectedMaxData:       0,
+			expectedRequests:      0,
+		},
+		{
+			name:                  "zero_budget_uses_default_budget",
+			maxSymbolsEnv:         "10",
+			cycleBudgetEnvMS:      "0",
+			perSymbolTimeoutEnvMS: "500",
+			symbols:               []string{"BTC/USDT"},
+			expectedMinData:       1,
+			expectedMaxData:       1,
+			expectedRequests:      1,
+		},
+		{
+			name:                  "one_ms_cycle_budget_returns_partial",
+			maxSymbolsEnv:         "10",
+			cycleBudgetEnvMS:      "2",
+			perSymbolTimeoutEnvMS: "500",
+			symbols:               []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"},
+			perRequestDelay:       5 * time.Millisecond,
+			expectedMinData:       0,
+			expectedMaxData:       1,
+			expectedRequests:      -1,
+			expectPartialErr:      true,
+		},
+		{
+			name:                  "one_ms_per_symbol_timeout_does_not_error",
+			maxSymbolsEnv:         "10",
+			cycleBudgetEnvMS:      "10000",
+			perSymbolTimeoutEnvMS: "1",
+			symbols:               []string{"BTC/USDT", "ETH/USDT"},
+			perRequestDelay:       20 * time.Millisecond,
+			expectedMinData:       0,
+			expectedMaxData:       0,
+			expectedRequests:      -1,
+		},
+		{
+			name:                  "negative_values_fall_back_to_defaults",
+			maxSymbolsEnv:         "-4",
+			cycleBudgetEnvMS:      "-1",
+			perSymbolTimeoutEnvMS: "-5",
+			symbols:               []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"},
+			expectedMinData:       3,
+			expectedMaxData:       3,
+			expectedRequests:      3,
+		},
+		{
+			name:                  "non_numeric_values_fall_back_to_defaults",
+			maxSymbolsEnv:         "abc",
+			cycleBudgetEnvMS:      "oops",
+			perSymbolTimeoutEnvMS: "bad",
+			symbols:               []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"},
+			expectedMinData:       3,
+			expectedMaxData:       3,
+			expectedRequests:      3,
+		},
+		{
+			name:                  "context_cancellation_returns_partial_data",
+			maxSymbolsEnv:         "10",
+			cycleBudgetEnvMS:      "10000",
+			perSymbolTimeoutEnvMS: "500",
+			symbols:               []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"},
+			perRequestDelay:       40 * time.Millisecond,
+			cancelOnSymbolPrefix:  "ETH",
+			ctxTimeout:            400 * time.Millisecond,
+			expectedMinData:       1,
+			expectedMaxData:       2,
+			expectedRequests:      -1,
+			expectedElapsedMax:    3 * time.Second,
+			expectContextErr:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("NEURATRADE_SCALPING_FALLBACK_MAX_SYMBOLS_PER_CYCLE", tt.maxSymbolsEnv)
+			t.Setenv("NEURATRADE_SCALPING_FALLBACK_CYCLE_BUDGET_MS", tt.cycleBudgetEnvMS)
+			t.Setenv("NEURATRADE_SCALPING_FALLBACK_PER_SYMBOL_TIMEOUT_MS", tt.perSymbolTimeoutEnvMS)
+
+			service := NewNativeCCXTService(5*time.Second, 1)
+			service.exchanges["binance"] = &ExchangeConnection{
+				Name:    "binance",
+				BaseURL: "https://api.binance.com",
+			}
+
+			var requests atomic.Int32
+			service.httpClient = &http.Client{
+				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					requests.Add(1)
+					symbol := req.URL.Query().Get("symbol")
+					if symbol == "" {
+						symbol = "BTCUSDT"
+					}
+					if tt.cancelOnSymbolPrefix != "" && strings.HasPrefix(symbol, tt.cancelOnSymbolPrefix) {
+						<-req.Context().Done()
+						return nil, req.Context().Err()
+					}
+					if tt.perRequestDelay > 0 {
+						select {
+						case <-time.After(tt.perRequestDelay):
+						case <-req.Context().Done():
+							return nil, req.Context().Err()
+						}
+					}
+					body := fmt.Sprintf(`{"symbol":"%s","lastPrice":"100","bidPrice":"99","askPrice":"101","highPrice":"105","lowPrice":"95","volume":"123","openPrice":"98","prevClosePrice":"97"}`, symbol)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(body)),
+						Header:     make(http.Header),
+					}, nil
+				}),
+			}
+
+			ctx := context.Background()
+			cancel := func() {}
+			if tt.ctxTimeout > 0 {
+				ctx, cancel = context.WithTimeout(ctx, tt.ctxTimeout)
+			}
+			defer cancel()
+
+			start := time.Now()
+			data, err := service.FetchMarketData(ctx, []string{"binance"}, tt.symbols)
+			elapsed := time.Since(start)
+
+			if tt.expectContextErr {
+				if err == nil {
+					t.Fatalf("expected context cancellation error, got nil")
+				}
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("expected context cancellation error, got: %v", err)
+				}
+			} else if tt.expectPartialErr {
+				var partialErr *PartialMarketDataError
+				if err == nil {
+					t.Fatalf("expected partial market data error, got nil")
+				}
+				if !errors.As(err, &partialErr) {
+					t.Fatalf("expected PartialMarketDataError, got: %v", err)
+				}
+				if len(partialErr.Data) != len(data) {
+					t.Fatalf("expected partial payload length %d, got %d", len(data), len(partialErr.Data))
+				}
+			} else if err != nil {
+				t.Fatalf("FetchMarketData returned error: %v", err)
+			}
+			if len(data) < tt.expectedMinData || len(data) > tt.expectedMaxData {
+				t.Fatalf("expected ticker count in [%d,%d], got %d", tt.expectedMinData, tt.expectedMaxData, len(data))
+			}
+			if tt.expectedRequests >= 0 {
+				if got := int(requests.Load()); got != tt.expectedRequests {
+					t.Fatalf("expected %d HTTP requests, got %d", tt.expectedRequests, got)
+				}
+			}
+			if tt.expectedElapsedMax > 0 && elapsed > tt.expectedElapsedMax {
+				t.Fatalf("expected elapsed <= %s, got %s", tt.expectedElapsedMax, elapsed)
+			}
+		})
 	}
 }
 

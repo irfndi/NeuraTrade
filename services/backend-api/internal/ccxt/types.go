@@ -2,6 +2,7 @@ package ccxt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -264,7 +265,11 @@ func (s *Service) CalculateArbitrageOpportunities(ctx context.Context, exchanges
 	// Use native client for market data
 	marketData, err := s.nativeClient.FetchMarketData(ctx, exchanges, symbols)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch market data: %w", err)
+		var partialErr *PartialMarketDataError
+		if !errors.As(err, &partialErr) || len(partialErr.Data) == 0 {
+			return nil, fmt.Errorf("failed to fetch market data: %w", err)
+		}
+		marketData = partialErr.Data
 	}
 	// TODO: Implement arbitrage calculation with native market data
 	_ = marketData

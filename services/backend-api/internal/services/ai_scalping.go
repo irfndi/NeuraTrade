@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
+	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/skill"
 	"github.com/shopspring/decimal"
@@ -402,6 +404,9 @@ type AIScalpingService struct {
 	cacheUpdated  time.Time
 	symbolGuardMu sync.Mutex
 	symbolGuards  map[string]symbolExecutionGuard
+	autonomyMu    sync.RWMutex
+	autonomy      *ScalpingAutonomyCoordinator
+	autonomyState AIScalpingAutonomyState
 }
 
 type symbolExecutionGuard struct {
@@ -431,6 +436,20 @@ type AIScalpingRuntimeState struct {
 	FailoverSucceeded      bool      `json:"failover_succeeded"`
 	FailoverProviders      []string  `json:"failover_providers"`
 	FailedProviders        []string  `json:"failed_providers"`
+}
+
+type AIScalpingAutonomyState struct {
+	StrategyID          string
+	RolloutStage        string
+	RolloutStatus       string
+	GateOpen            bool
+	GateBlockReasons    []string
+	GateChecks          map[string]bool
+	LastEvaluated       time.Time
+	LastError           string
+	LastRollbackAt      time.Time
+	LastRollbackReason  string
+	LastRollbackTrigger string
 }
 
 // SetExchange updates the exchange for scalping (called dynamically based on user wallet)
@@ -481,7 +500,99 @@ func (s *AIScalpingService) RuntimeDiagnostics() map[string]interface{} {
 	if !s.runtimeState.LastSuccessAt.IsZero() {
 		result["last_success_at"] = s.runtimeState.LastSuccessAt.UTC().Format(time.RFC3339)
 	}
+	result["autonomy"] = s.AutonomyDiagnostics()
 	return result
+}
+
+// SetAutonomyCoordinator wires staged rollout/live gate enforcement into scalping execution.
+func (s *AIScalpingService) SetAutonomyCoordinator(coordinator *ScalpingAutonomyCoordinator) {
+	s.autonomyMu.Lock()
+	defer s.autonomyMu.Unlock()
+	s.autonomy = coordinator
+}
+
+func (s *AIScalpingService) autonomyCoordinator() *ScalpingAutonomyCoordinator {
+	s.autonomyMu.RLock()
+	defer s.autonomyMu.RUnlock()
+	return s.autonomy
+}
+
+// AutonomyDiagnostics returns latest rollout/gate status captured during scalping evaluation.
+func (s *AIScalpingService) AutonomyDiagnostics() map[string]interface{} {
+	s.autonomyMu.RLock()
+	defer s.autonomyMu.RUnlock()
+
+	result := map[string]interface{}{
+		"strategy_id":           s.autonomyState.StrategyID,
+		"rollout_stage":         s.autonomyState.RolloutStage,
+		"rollout_status":        s.autonomyState.RolloutStatus,
+		"gate_open":             s.autonomyState.GateOpen,
+		"gate_block_reasons":    append([]string(nil), s.autonomyState.GateBlockReasons...),
+		"gate_checks":           copyBoolMap(s.autonomyState.GateChecks),
+		"last_evaluated_at":     "",
+		"last_error":            s.autonomyState.LastError,
+		"last_rollback_at":      "",
+		"last_rollback_reason":  s.autonomyState.LastRollbackReason,
+		"last_rollback_trigger": s.autonomyState.LastRollbackTrigger,
+	}
+	if !s.autonomyState.LastEvaluated.IsZero() {
+		result["last_evaluated_at"] = s.autonomyState.LastEvaluated.UTC().Format(time.RFC3339)
+	}
+	if !s.autonomyState.LastRollbackAt.IsZero() {
+		result["last_rollback_at"] = s.autonomyState.LastRollbackAt.UTC().Format(time.RFC3339)
+	}
+	return result
+}
+
+func (s *AIScalpingService) updateAutonomyGateState(
+	scope ScalpingAutonomyScope,
+	rolloutState *autonomous.RolloutState,
+	gateState *autonomous.GateState,
+	evalErr error,
+) {
+	s.autonomyMu.Lock()
+	defer s.autonomyMu.Unlock()
+
+	if strings.TrimSpace(scope.StrategyID) != "" {
+		s.autonomyState.StrategyID = strings.TrimSpace(scope.StrategyID)
+	}
+	if rolloutState != nil {
+		s.autonomyState.RolloutStage = string(rolloutState.CurrentStage)
+		s.autonomyState.RolloutStatus = string(rolloutState.Status)
+	}
+	if gateState != nil {
+		s.autonomyState.GateOpen = gateState.IsOpen
+		s.autonomyState.GateBlockReasons = append([]string(nil), gateState.BlockReasons...)
+		s.autonomyState.GateChecks = map[string]bool{
+			"safe_mode_off":         gateState.Checks.SafeModeOff,
+			"kill_switch_off":       gateState.Checks.KillSwitchOff,
+			"strategy_live":         gateState.Checks.StrategyLive,
+			"risk_budget_available": gateState.Checks.RiskBudgetAvailable,
+			"exchange_connected":    gateState.Checks.ExchangeConnected,
+		}
+		s.autonomyState.LastEvaluated = gateState.LastEvaluated
+	} else {
+		s.autonomyState.GateOpen = false
+		s.autonomyState.GateBlockReasons = []string{}
+		s.autonomyState.GateChecks = map[string]bool{}
+		s.autonomyState.LastEvaluated = time.Time{}
+	}
+	if evalErr != nil {
+		s.autonomyState.LastError = evalErr.Error()
+	} else {
+		s.autonomyState.LastError = ""
+	}
+}
+
+func (s *AIScalpingService) updateAutonomyRollbackState(event *autonomous.RollbackEvent) {
+	if event == nil {
+		return
+	}
+	s.autonomyMu.Lock()
+	defer s.autonomyMu.Unlock()
+	s.autonomyState.LastRollbackAt = event.Timestamp.UTC()
+	s.autonomyState.LastRollbackReason = strings.TrimSpace(event.Reason)
+	s.autonomyState.LastRollbackTrigger = string(event.Trigger)
 }
 
 func (s *AIScalpingService) updateRuntimeState(
@@ -662,19 +773,84 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		), nil
 	}
 
+	scope, hasScope := scalpingAutonomyScopeFromContext(ctx)
+	if !hasScope {
+		scope = ScalpingAutonomyScope{
+			ExchangeConnected: true,
+			ConnectionChecked: true,
+		}
+	}
+	if strings.TrimSpace(scope.Exchange) == "" {
+		scope.Exchange = s.config.Exchange
+	}
+	if strings.TrimSpace(scope.StrategyID) == "" {
+		scope.StrategyID = ScalpingStrategyID(scope.ChatID)
+	}
+
 	if s.config.AutoExecute && s.orderExecutor != nil {
-		if err := s.executeDecision(ctx, decision, portfolio, effectiveMaxCapital); err != nil {
-			if shouldDowngradeExecutionErrorToHold(err) {
+		autonomyCoordinator := s.autonomyCoordinator()
+		strategyResolved := strings.TrimSpace(scope.StrategyID) != ""
+		if autonomyCoordinator != nil && strategyResolved {
+			gateState, rolloutState, gateErr := autonomyCoordinator.EvaluatePreExecution(
+				ctx,
+				scope,
+				decision,
+				portfolio,
+				decimal.NewFromFloat(effectiveMaxCapital),
+			)
+			s.updateAutonomyGateState(scope, rolloutState, gateState, gateErr)
+			if gateErr != nil {
+				log.Printf("[AI-SCALPING] Autonomous gate evaluation failed: %v", gateErr)
+				return strategyHoldDecision(
+					fmt.Sprintf("autonomy gate evaluation failed: %v", gateErr),
+					decision.Confidence,
+				), nil
+			}
+			if gateState != nil && !gateState.IsOpen {
+				reason := strings.Join(gateState.BlockReasons, "; ")
+				if strings.TrimSpace(reason) == "" {
+					reason = "autonomy live gate closed"
+				}
+				log.Printf("[AI-SCALPING] Autonomous live gate blocked execution for %s: %s", scope.StrategyID, reason)
+				return strategyHoldDecision(
+					fmt.Sprintf("autonomy live gate closed: %s", reason),
+					decision.Confidence,
+				), nil
+			}
+		}
+		if autonomyCoordinator != nil && !strategyResolved {
+			log.Printf(
+				"[AI-SCALPING] Skipping autonomy gate: unresolved strategy_id (chat_id=%q)",
+				strings.TrimSpace(scope.ChatID),
+			)
+		}
+
+		executionErr := s.executeDecision(ctx, decision, portfolio, effectiveMaxCapital)
+		if autonomyCoordinator != nil && strategyResolved {
+			if recordErr := autonomyCoordinator.RecordExecutionResult(ctx, scope, decision, portfolio, executionErr); recordErr != nil {
+				log.Printf("[AI-SCALPING] Failed to record autonomy rollout metrics: %v", recordErr)
+			} else if rollback := autonomyCoordinator.LastRollback(scope.StrategyID); rollback != nil {
+				s.updateAutonomyRollbackState(rollback)
+			}
+		}
+		if autonomyCoordinator != nil && !strategyResolved {
+			log.Printf(
+				"[AI-SCALPING] Skipping autonomy metrics update: unresolved strategy_id (chat_id=%q)",
+				strings.TrimSpace(scope.ChatID),
+			)
+		}
+		if executionErr != nil {
+			if shouldDowngradeExecutionErrorToHold(executionErr) {
 				decision.Action = "hold"
 				decision.Confidence = 0
 				decision.OrderID = ""
-				decision.Reasoning = buildExecutionFallbackReason(err)
+				decision.Reasoning = buildExecutionFallbackReason(executionErr)
 				decision.ReasonCategory = reasonCategoryExecutionUnavailable
 				decision.ConfidenceKnown = false
-				log.Printf("[AI-SCALPING] Downgrading execution issue to HOLD: %v", err)
+				log.Printf("[AI-SCALPING] Downgrading execution issue to HOLD: %v", executionErr)
 				return decision, nil
 			}
-			return decision, fmt.Errorf("execution failed: %w", err)
+			return decision, fmt.Errorf("execution failed: %w", executionErr)
 		}
 	}
 
@@ -747,7 +923,14 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 
 	// Dynamically rank discovered symbols by liquidity + spread + intraday movement.
 	scored, err := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, candidates)
-	if err != nil || len(scored) == 0 {
+	if err != nil {
+		var partialErr *ccxt.PartialMarketDataError
+		if errors.As(err, &partialErr) && len(partialErr.Data) > 0 {
+			scored = partialErr.Data
+			log.Printf("[AI-SCALPING] Dynamic pair scoring using partial market data: %v", err)
+		}
+	}
+	if len(scored) == 0 {
 		limit := s.config.MaxPairsToAnalyze
 		if limit > len(candidates) {
 			limit = len(candidates)
@@ -891,7 +1074,15 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 
 	// Bulk ticker fetch keeps the cycle responsive under high symbol counts.
 	tickerBySymbol := make(map[string]ccxt.MarketPriceInterface, len(pairs))
-	if marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, pairs); bulkErr == nil {
+	marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, pairs)
+	if bulkErr != nil {
+		var partialErr *ccxt.PartialMarketDataError
+		if errors.As(bulkErr, &partialErr) && len(partialErr.Data) > 0 {
+			marketData = partialErr.Data
+			log.Printf("[AI-SCALPING] Bulk ticker fetch returned partial data: %v", bulkErr)
+		}
+	}
+	if bulkErr == nil || len(marketData) > 0 {
 		for _, t := range marketData {
 			if t == nil {
 				continue
@@ -902,7 +1093,8 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 			}
 			tickerBySymbol[key] = t
 		}
-	} else {
+	}
+	if bulkErr != nil && len(marketData) == 0 {
 		log.Printf("[AI-SCALPING] Bulk ticker fetch unavailable: %v", bulkErr)
 	}
 
@@ -1256,6 +1448,17 @@ func sumDecimalOrderVolume(orders []ccxt.OrderBookEntry, limit int) float64 {
 
 func floatPtr(v float64) *float64 {
 	return &v
+}
+
+func copyBoolMap(input map[string]bool) map[string]bool {
+	if len(input) == 0 {
+		return map[string]bool{}
+	}
+	cloned := make(map[string]bool, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 const (

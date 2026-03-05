@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -384,25 +385,137 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testin
 			"recovery_clean_cycles": 2,
 		},
 	}
-	state := handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+	state := handlers.evaluateRecoveryGateStateForScope(context.Background(), quest, TradingPortfolio{
 		RiskDrawdown: 0.35,
-	})
+	}, "", "")
 	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
 	assert.False(t, state.EntryAllowed)
 	assert.Equal(t, 2, state.CleanCycles)
 
 	quest.Checkpoint["recovery_clean_cycles"] = 3
-	state = handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+	state = handlers.evaluateRecoveryGateStateForScope(context.Background(), quest, TradingPortfolio{
 		RiskDrawdown: 0.35,
-	})
+	}, "", "")
 	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
 	assert.True(t, state.EntryAllowed)
 
-	state = handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+	state = handlers.evaluateRecoveryGateStateForScope(context.Background(), quest, TradingPortfolio{
 		RiskDrawdown: 0.41,
-	})
+	}, "", "")
 	assert.Equal(t, recoveryModeDeriskOnly, state.Mode)
 	assert.False(t, state.EntryAllowed)
+}
+
+func newLifecycleStoreForTest(t *testing.T) *TradingLifecycleStore {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-recent-loss.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	return store
+}
+
+func TestIntegratedQuestHandlers_RecentLossWindowRecoveryGate(t *testing.T) {
+	t.Setenv("NEURATRADE_RECOVERY_CLEAN_CYCLES", "3")
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
+	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET", "1")
+
+	type closeRow struct {
+		orderID   string
+		symbol    string
+		closedAgo time.Duration
+	}
+
+	tests := []struct {
+		name                     string
+		windowSeconds            string
+		rows                     []closeRow
+		expectedLosses           int
+		expectedActive           bool
+		expectedWindow           time.Duration
+		expectedRecoveryMode     string
+		expectedEntryAllowed     bool
+		expectedReasonContains   string
+		expectedConditionContain string
+	}{
+		{
+			name:           "old losses outside window do not block",
+			windowSeconds:  "900",
+			expectedLosses: 0,
+			expectedActive: false,
+			expectedWindow: 15 * time.Minute,
+			rows: []closeRow{
+				{orderID: "old-loss-1", symbol: "BTC/USDT", closedAgo: 2 * time.Hour},
+			},
+			expectedRecoveryMode: recoveryModeMicroEntry,
+			expectedEntryAllowed: true,
+		},
+		{
+			name:           "fresh losses inside window block micro entry",
+			windowSeconds:  "900",
+			expectedLosses: 1,
+			expectedActive: true,
+			expectedWindow: 15 * time.Minute,
+			rows: []closeRow{
+				{orderID: "fresh-loss-1", symbol: "ETH/USDT", closedAgo: 0},
+			},
+			expectedRecoveryMode:     recoveryModeMicroEntry,
+			expectedEntryAllowed:     false,
+			expectedReasonContains:   "recent loss streak",
+			expectedConditionContain: "loss streak below",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS", tt.windowSeconds)
+			handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+			store := newLifecycleStoreForTest(t)
+			handlers.SetLifecycleStore(store)
+
+			for _, row := range tt.rows {
+				require.NoError(t, store.RecordClosedOrder(context.Background(), LifecycleCloseRecord{
+					OrderID:     row.orderID,
+					ChatID:      "chat-1",
+					Exchange:    "bitget",
+					Symbol:      row.symbol,
+					Side:        "buy",
+					MarketType:  "spot",
+					Filled:      decimal.NewFromFloat(0.1),
+					EntryPrice:  decimal.NewFromFloat(100),
+					ExitPrice:   decimal.NewFromFloat(95),
+					RealizedPnL: decimal.NewFromFloat(-5),
+					ClosedAt:    time.Now().UTC().Add(-row.closedAgo),
+				}))
+			}
+
+			recentLoss := handlers.currentRecentLossStreak(context.Background(), "chat-1", "bitget")
+			assert.Equal(t, tt.expectedLosses, recentLoss.ConsecutiveLosses)
+			assert.Equal(t, tt.expectedActive, recentLoss.Active)
+			assert.Equal(t, tt.expectedWindow, recentLoss.Window)
+
+			quest := &Quest{
+				Checkpoint: map[string]interface{}{
+					"recovery_clean_cycles": 3,
+				},
+			}
+			state := handlers.evaluateRecoveryGateStateForScope(context.Background(), quest, TradingPortfolio{
+				RiskDrawdown: 0.34,
+			}, "chat-1", "bitget")
+			assert.Equal(t, tt.expectedRecoveryMode, state.Mode)
+			assert.Equal(t, tt.expectedEntryAllowed, state.EntryAllowed)
+			if tt.expectedReasonContains != "" {
+				assert.Contains(t, state.GateReason, tt.expectedReasonContains)
+			}
+			if tt.expectedConditionContain != "" {
+				assert.Contains(t, state.NextCondition, tt.expectedConditionContain)
+			}
+		})
+	}
 }
 
 func TestIntegratedQuestHandlers_UpdateRecoveryCleanCycles_ResetOnFailure(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,15 +50,23 @@ func newRateLimiter(callsPerSecond int) *rateLimiter {
 	}
 }
 
-func (r *rateLimiter) Wait() {
+func (r *rateLimiter) Wait(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	elapsed := time.Since(r.lastCall)
 	if elapsed < r.minDelay {
-		time.Sleep(r.minDelay - elapsed)
+		delay := r.minDelay - elapsed
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	r.lastCall = time.Now()
+	return nil
 }
 
 // NativeCCXTService implements CCXTService using direct exchange API calls
@@ -69,6 +78,37 @@ type NativeCCXTService struct {
 	timeout       time.Duration
 	retryAttempts int
 	rateLimiter   *rateLimiter
+	// Scalping fallback controls are loaded once at construction for deterministic behavior.
+	fallbackMaxSymbolsPerCycle int
+	fallbackCycleBudget        time.Duration
+	fallbackPerSymbolTimeout   time.Duration
+}
+
+const (
+	defaultFallbackMaxSymbolsPerCycle = 32
+	defaultFallbackCycleBudget        = 4 * time.Second
+	defaultFallbackPerSymbolTimeout   = 900 * time.Millisecond
+)
+
+// PartialMarketDataError indicates that market data fetch returned only a subset of requested data.
+type PartialMarketDataError struct {
+	Data   []MarketPriceInterface
+	Reason string
+}
+
+func (e *PartialMarketDataError) Error() string {
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		reason = "partial market data"
+	}
+	return reason
+}
+
+type fallbackCycleLimits struct {
+	maxSymbols       int
+	cycleBudget      time.Duration
+	perSymbolTimeout time.Duration
+	cycleStarted     time.Time
 }
 
 // ExchangeConnection holds exchange-specific configuration
@@ -84,6 +124,8 @@ type ExchangeConnection struct {
 
 // NewNativeCCXTService creates a new native CCXT service
 func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTService {
+	fallbackCfg := resolveScalpingFallbackConfigFromEnv()
+
 	return &NativeCCXTService{
 		rateLimiter: newRateLimiter(10), // 10 requests per second
 		httpClient: &http.Client{
@@ -94,11 +136,53 @@ func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTS
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		exchanges:     make(map[string]*ExchangeConnection),
-		credentials:   make(map[string]config.ExchangeCredentials),
-		timeout:       timeout,
-		retryAttempts: retryAttempts,
+		exchanges:                  make(map[string]*ExchangeConnection),
+		credentials:                make(map[string]config.ExchangeCredentials),
+		timeout:                    timeout,
+		retryAttempts:              retryAttempts,
+		fallbackMaxSymbolsPerCycle: fallbackCfg.maxSymbolsPerCycle,
+		fallbackCycleBudget:        fallbackCfg.cycleBudget,
+		fallbackPerSymbolTimeout:   fallbackCfg.perSymbolTimeout,
 	}
+}
+
+type scalpingFallbackConfig struct {
+	maxSymbolsPerCycle int
+	cycleBudget        time.Duration
+	perSymbolTimeout   time.Duration
+}
+
+func resolveScalpingFallbackConfigFromEnv() scalpingFallbackConfig {
+	maxSymbols := readPositiveIntEnv(
+		"NEURATRADE_SCALPING_FALLBACK_MAX_SYMBOLS_PER_CYCLE",
+		defaultFallbackMaxSymbolsPerCycle,
+	)
+	cycleBudgetMS := readPositiveIntEnv(
+		"NEURATRADE_SCALPING_FALLBACK_CYCLE_BUDGET_MS",
+		int(defaultFallbackCycleBudget.Milliseconds()),
+	)
+	perSymbolTimeoutMS := readPositiveIntEnv(
+		"NEURATRADE_SCALPING_FALLBACK_PER_SYMBOL_TIMEOUT_MS",
+		int(defaultFallbackPerSymbolTimeout.Milliseconds()),
+	)
+
+	return scalpingFallbackConfig{
+		maxSymbolsPerCycle: maxSymbols,
+		cycleBudget:        time.Duration(cycleBudgetMS) * time.Millisecond,
+		perSymbolTimeout:   time.Duration(perSymbolTimeoutMS) * time.Millisecond,
+	}
+}
+
+func readPositiveIntEnv(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 // NewNativeCCXTServiceWithConfig creates a native CCXT service with exchange credentials from config
@@ -412,7 +496,9 @@ func (s *NativeCCXTService) parseOrderBookResponse(exchange, symbol string, body
 // fetchTickerFromURL fetches and parses ticker data from a URL
 func (s *NativeCCXTService) fetchTickerFromURL(ctx context.Context, url, exchange, symbol string) (*TickerData, error) {
 	// Rate limit API calls
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -683,29 +769,137 @@ func (s *NativeCCXTService) AddExchange(ctx context.Context, exchange string) (*
 
 func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []string, symbols []string) ([]MarketPriceInterface, error) {
 	var allTickers []MarketPriceInterface
+	limits := s.newFallbackCycleLimits(len(symbols))
+	fallbackFetches := 0
 
 	for _, exchange := range exchanges {
-		// Bitget supports bulk spot ticker fetch; use it to avoid per-symbol request storms.
-		if exchange == "bitget" && len(symbols) > 1 {
-			bulkTickers, err := s.fetchBitgetBulkTickers(ctx, symbols)
-			if err == nil {
-				allTickers = append(allTickers, bulkTickers...)
-				continue
+		if err := ctx.Err(); err != nil {
+			if len(allTickers) > 0 {
+				return allTickers, err
 			}
-			log.Printf("[CCXT Native] Failed bulk ticker fetch for bitget: %v", err)
+			return nil, err
 		}
 
-		for _, symbol := range symbols {
-			ticker, err := s.FetchSingleTicker(ctx, exchange, symbol)
-			if err != nil {
-				log.Printf("[CCXT Native] Failed to fetch %s:%s: %v", exchange, symbol, err)
-				continue
+		if err := s.processExchange(ctx, exchange, symbols, &allTickers, &fallbackFetches, limits); err != nil {
+			if len(allTickers) > 0 {
+				return allTickers, err
 			}
-			allTickers = append(allTickers, ticker)
+			return nil, err
 		}
 	}
 
 	return allTickers, nil
+}
+
+func (s *NativeCCXTService) newFallbackCycleLimits(symbolCount int) fallbackCycleLimits {
+	return fallbackCycleLimits{
+		maxSymbols:       s.fallbackMaxSymbolsForCycle(symbolCount),
+		cycleBudget:      s.getFallbackCycleBudget(),
+		perSymbolTimeout: s.getFallbackPerSymbolTimeout(),
+		cycleStarted:     time.Now(),
+	}
+}
+
+func (s *NativeCCXTService) processExchange(
+	ctx context.Context,
+	exchange string,
+	symbols []string,
+	allTickers *[]MarketPriceInterface,
+	fallbackFetches *int,
+	limits fallbackCycleLimits,
+) error {
+	// Bitget supports bulk spot ticker fetch; use it to avoid per-symbol request storms.
+	if exchange == "bitget" && len(symbols) > 1 {
+		bulkTickers, err := s.fetchBitgetBulkTickers(ctx, symbols)
+		if err == nil {
+			*allTickers = append(*allTickers, bulkTickers...)
+			return nil
+		}
+		log.Printf("[CCXT Native] Failed bulk ticker fetch for bitget: %v", err)
+	}
+
+	for _, symbol := range symbols {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.checkFallbackLimits(*allTickers, *fallbackFetches, limits); err != nil {
+			return err
+		}
+
+		ticker, err := s.fetchSymbolWithTimeout(ctx, exchange, symbol, limits.perSymbolTimeout)
+		*fallbackFetches = *fallbackFetches + 1
+		if err != nil {
+			log.Printf("[CCXT Native] Failed to fetch %s:%s: %v", exchange, symbol, err)
+			continue
+		}
+		*allTickers = append(*allTickers, ticker)
+	}
+
+	return nil
+}
+
+func (s *NativeCCXTService) fetchSymbolWithTimeout(
+	ctx context.Context,
+	exchange string,
+	symbol string,
+	perSymbolTimeout time.Duration,
+) (MarketPriceInterface, error) {
+	tickerCtx := ctx
+	cancel := func() {}
+	if perSymbolTimeout > 0 {
+		tickerCtx, cancel = context.WithTimeout(ctx, perSymbolTimeout)
+	}
+	defer cancel()
+	return s.FetchSingleTicker(tickerCtx, exchange, symbol)
+}
+
+func (s *NativeCCXTService) checkFallbackLimits(
+	allTickers []MarketPriceInterface,
+	fallbackFetches int,
+	limits fallbackCycleLimits,
+) error {
+	if limits.maxSymbols > 0 && fallbackFetches >= limits.maxSymbols {
+		reason := fmt.Sprintf("fallback ticker fetch budget reached (%d symbols)", limits.maxSymbols)
+		log.Printf("[CCXT Native] %s, returning partial market data", reason)
+		return &PartialMarketDataError{
+			Data:   append([]MarketPriceInterface(nil), allTickers...),
+			Reason: reason,
+		}
+	}
+	if limits.cycleBudget > 0 && time.Since(limits.cycleStarted) >= limits.cycleBudget {
+		reason := fmt.Sprintf("fallback cycle budget exceeded (%s)", limits.cycleBudget)
+		log.Printf("[CCXT Native] %s, returning partial market data", reason)
+		return &PartialMarketDataError{
+			Data:   append([]MarketPriceInterface(nil), allTickers...),
+			Reason: reason,
+		}
+	}
+	return nil
+}
+
+func (s *NativeCCXTService) fallbackMaxSymbolsForCycle(symbolCount int) int {
+	maxSymbols := s.fallbackMaxSymbolsPerCycle
+	if maxSymbols <= 0 {
+		maxSymbols = defaultFallbackMaxSymbolsPerCycle
+	}
+	if symbolCount > 0 && maxSymbols > symbolCount {
+		return symbolCount
+	}
+	return maxSymbols
+}
+
+func (s *NativeCCXTService) getFallbackCycleBudget() time.Duration {
+	if s.fallbackCycleBudget <= 0 {
+		return defaultFallbackCycleBudget
+	}
+	return s.fallbackCycleBudget
+}
+
+func (s *NativeCCXTService) getFallbackPerSymbolTimeout() time.Duration {
+	if s.fallbackPerSymbolTimeout <= 0 {
+		return defaultFallbackPerSymbolTimeout
+	}
+	return s.fallbackPerSymbolTimeout
 }
 
 func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols []string) ([]MarketPriceInterface, error) {
@@ -713,7 +907,9 @@ func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols 
 		return nil, nil
 	}
 
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.bitget.com/api/v2/spot/market/tickers", nil)
 	if err != nil {
@@ -836,7 +1032,9 @@ func (s *NativeCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol
 	}
 
 	// Rate limit API calls
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -892,7 +1090,9 @@ func (s *NativeCCXTService) FetchOHLCV(ctx context.Context, exchange, symbol, ti
 	}
 
 	// Rate limit API calls
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -1953,7 +2153,9 @@ func (s *NativeCCXTService) FetchFundingRates(ctx context.Context, exchange stri
 		return []FundingRate{}, nil // Not supported, return empty
 	}
 
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -2006,7 +2208,9 @@ func (s *NativeCCXTService) FetchAllFundingRates(ctx context.Context, exchange s
 		return []FundingRate{}, nil // Not supported
 	}
 
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -2721,7 +2925,9 @@ func (s *NativeCCXTService) bitgetPrivateGet(ctx context.Context, creds config.E
 		return nil, fmt.Errorf("bitget credentials are incomplete")
 	}
 
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	signPayload := timestamp + "GET" + endpoint
