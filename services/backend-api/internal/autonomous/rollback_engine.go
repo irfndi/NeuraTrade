@@ -12,6 +12,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const RollbackHistoryMaxLimit = 500
+
 // DefaultRollbackConfig returns default rollback configuration.
 func DefaultRollbackConfig() RollbackConfig {
 	return RollbackConfig{
@@ -125,7 +127,7 @@ func (e *AutoRollbackEngine) checkTriggers(metrics RolloutMetrics) (RollbackTrig
 	// Check net losses (losing trades minus winning trades in the current rollout window).
 	netLosses := netLossCount(metrics)
 	if netLosses >= e.config.ConsecutiveLossLimit {
-		return TriggerConsecutiveLoss, fmt.Sprintf(
+		return TriggerNetLoss, fmt.Sprintf(
 			"net loss count %d exceeds limit %d",
 			netLosses,
 			e.config.ConsecutiveLossLimit,
@@ -152,6 +154,7 @@ func (e *AutoRollbackEngine) executeRollback(
 	reason string,
 ) (*RollbackEvent, error) {
 	var actionsTaken []string
+	originalFromStage := state.CurrentStage
 
 	// If graceful rollback, cancel orders and flatten positions
 	if e.config.GracefulRollback && e.exchange != nil && state.CurrentStage == StageLive {
@@ -279,6 +282,13 @@ func (e *AutoRollbackEngine) ClearCooldown(strategyID string) {
 
 // GetRollbackHistory retrieves the rollback history for a strategy.
 func (e *AutoRollbackEngine) GetRollbackHistory(ctx context.Context, strategyID string, limit int) ([]RollbackEvent, error) {
+	strategyID = strings.TrimSpace(strategyID)
+	if strategyID == "" {
+		return nil, fmt.Errorf("strategy_id is required")
+	}
+	if limit <= 0 || limit > RollbackHistoryMaxLimit {
+		return nil, fmt.Errorf("rollback history limit must be between 1 and %d", RollbackHistoryMaxLimit)
+	}
 	if e.repo == nil {
 		return nil, nil
 	}

@@ -3,12 +3,10 @@ package services
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -27,6 +25,9 @@ type AutonomousRolloutStore struct {
 
 var _ autonomous.StrategyRepository = (*AutonomousRolloutStore)(nil)
 
+//go:embed autonomy_rollout_migration.sql
+var autonomyRolloutMigrationSQL string
+
 func NewAutonomousRolloutStore(db *sql.DB) *AutonomousRolloutStore {
 	return &AutonomousRolloutStore{db: db}
 }
@@ -39,25 +40,24 @@ func (s *AutonomousRolloutStore) InitSchema(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin autonomous rollout schema transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	for _, statement := range statements {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("init autonomous rollout schema: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit autonomous rollout schema transaction: %w", err)
 	}
 	return nil
 }
 
 func loadAutonomousRolloutMigrationStatements() ([]string, error) {
-	migrationPath, err := autonomousRolloutMigrationPath()
-	if err != nil {
-		return nil, err
-	}
-	// #nosec G304 -- migrationPath is resolved from repository-internal paths, not user input.
-	raw, err := os.ReadFile(migrationPath)
-	if err != nil {
-		return nil, fmt.Errorf("read autonomous rollout migration: %w", err)
-	}
-	parts := strings.Split(string(raw), ";")
+	parts := strings.Split(autonomyRolloutMigrationSQL, ";")
 	statements := make([]string, 0, len(parts))
 	for _, part := range parts {
 		statement := strings.TrimSpace(part)
@@ -67,24 +67,9 @@ func loadAutonomousRolloutMigrationStatements() ([]string, error) {
 		statements = append(statements, statement)
 	}
 	if len(statements) == 0 {
-		return nil, fmt.Errorf("autonomous rollout migration contains no statements: %s", migrationPath)
+		return nil, fmt.Errorf("autonomous rollout migration contains no statements")
 	}
 	return statements, nil
-}
-
-func autonomousRolloutMigrationPath() (string, error) {
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("resolve autonomous rollout migration path: runtime caller unavailable")
-	}
-	return filepath.Clean(filepath.Join(
-		filepath.Dir(currentFile),
-		"..",
-		"..",
-		"database",
-		"migrations",
-		"073_create_autonomous_rollout_tables.sql",
-	)), nil
 }
 
 func (s *AutonomousRolloutStore) SaveRolloutState(ctx context.Context, state *autonomous.RolloutState) error {

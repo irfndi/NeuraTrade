@@ -47,10 +47,36 @@ type serviceProbeResult struct {
 	detail  string
 }
 
-var allowedGatewayServiceBinaries = map[string]struct{}{
-	"neuratrade-server": {},
-	"telegram-service":  {},
-	"ccxt-service":      {},
+var allowedGatewayServiceBinaries = newAllowedGatewayServiceBinaries()
+
+func newAllowedGatewayServiceBinaries() map[string]struct{} {
+	defaults := []string{"neuratrade-server", "telegram-service", "ccxt-service"}
+	defaultSet := make(map[string]struct{}, len(defaults))
+	for _, binary := range defaults {
+		defaultSet[binary] = struct{}{}
+	}
+
+	raw := strings.TrimSpace(os.Getenv("GATEWAY_ALLOWED_BINARIES"))
+	if raw == "" {
+		return defaultSet
+	}
+
+	customSet := make(map[string]struct{})
+	for _, entry := range strings.Split(raw, ",") {
+		candidate := strings.TrimSpace(entry)
+		if candidate == "" {
+			continue
+		}
+		base := filepath.Base(candidate)
+		if base == "" || base == "." || base == ".." {
+			continue
+		}
+		customSet[base] = struct{}{}
+	}
+	if len(customSet) == 0 {
+		return defaultSet
+	}
+	return customSet
 }
 
 // gatewayStart starts all NeuraTrade services
@@ -141,7 +167,7 @@ func gatewayStart(cCtx *cli.Context) error {
 
 	// Start CCXT Service
 	fmt.Println("📊 Starting CCXT Service...")
-	ccxtCmd := startService(
+	ccxtCmd, err := startService(
 		filepath.Join(execDir, "ccxt-service"),
 		"CCXT Service",
 		filepath.Join(home, "logs", "ccxt.log"),
@@ -153,14 +179,14 @@ func gatewayStart(cCtx *cli.Context) error {
 		},
 		filepath.Join(home, "pids", "ccxt.pid"),
 	)
-	if ccxtCmd == nil {
-		return fmt.Errorf("failed to start CCXT service")
+	if err != nil {
+		return fmt.Errorf("failed to start CCXT service: %w", err)
 	}
 	fmt.Println("✅ CCXT Service started")
 
 	// Start Backend API
 	fmt.Println("🔧 Starting Backend API...")
-	backendCmd := startService(
+	backendCmd, err := startService(
 		filepath.Join(execDir, "neuratrade-server"),
 		"Backend API",
 		filepath.Join(home, "logs", "backend.log"),
@@ -189,10 +215,10 @@ func gatewayStart(cCtx *cli.Context) error {
 		},
 		filepath.Join(home, "pids", "backend.pid"),
 	)
-	if backendCmd == nil {
+	if err != nil {
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
 		writeGatewayStateMode(statePath, "down", "backend failed to start")
-		return fmt.Errorf("failed to start backend API")
+		return fmt.Errorf("failed to start backend API: %w", err)
 	}
 	backendHealthURL := fmt.Sprintf("http://%s:%s/health", bindHost, backendPort)
 	backendProbe := waitForServiceHealthy("Backend API", backendHealthURL, healthTimeout)
@@ -213,7 +239,7 @@ func gatewayStart(cCtx *cli.Context) error {
 
 	// Start Telegram Service
 	fmt.Println("📞 Starting Telegram Service...")
-	telegramCmd := startService(
+	telegramCmd, err := startService(
 		filepath.Join(execDir, "telegram-service"),
 		"Telegram Service",
 		filepath.Join(home, "logs", "telegram.log"),
@@ -229,11 +255,11 @@ func gatewayStart(cCtx *cli.Context) error {
 		},
 		filepath.Join(home, "pids", "telegram.pid"),
 	)
-	if telegramCmd == nil {
+	if err != nil {
 		backendCmd.Process.Signal(syscall.SIGTERM)
 		ccxtCmd.Process.Signal(syscall.SIGTERM)
 		writeGatewayStateMode(statePath, "down", "telegram failed to start")
-		return fmt.Errorf("failed to start Telegram service")
+		return fmt.Errorf("failed to start Telegram service: %w", err)
 	}
 	telegramHealthURL := fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)
 	telegramProbe := waitForServiceHealthy("Telegram Service", telegramHealthURL, healthTimeout)
@@ -299,14 +325,12 @@ func gatewayStart(cCtx *cli.Context) error {
 	return nil
 }
 
-// startService starts a service process and writes its PID to a file
-func startService(binary, name, logFile string, env map[string]string, pidFile string) *exec.Cmd {
+// startService starts a service process and writes its PID to a file.
+func startService(binary, name, logFile string, env map[string]string, pidFile string) (*exec.Cmd, error) {
 	resolvedBinary, err := resolveServiceBinary(binary)
 	if err != nil {
-		fmt.Printf("❌ Failed to resolve executable for %s: %v\n", name, err)
-		return nil
+		return nil, fmt.Errorf("resolve %s executable: %w", name, err)
 	}
-
 	cmd := exec.Command(resolvedBinary)
 
 	// Set environment
@@ -330,8 +354,7 @@ func startService(binary, name, logFile string, env map[string]string, pidFile s
 	}
 
 	if err := cmd.Start(); err != nil {
-		fmt.Printf("❌ Failed to start %s: %v\n", name, err)
-		return nil
+		return nil, fmt.Errorf("start %s process: %w", name, err)
 	}
 
 	// Write PID file for later cleanup
@@ -341,7 +364,23 @@ func startService(binary, name, logFile string, env map[string]string, pidFile s
 		}
 	}
 
-	return cmd
+	return cmd, nil
+}
+
+func resolveServiceBinary(binary string) (string, error) {
+	binary = strings.TrimSpace(binary)
+	if binary == "" {
+		return "", fmt.Errorf("binary path is required")
+	}
+	base := filepath.Base(binary)
+	if _, allowed := allowedGatewayServiceBinaries[base]; !allowed {
+		return "", fmt.Errorf("binary %q is not in allowlist", base)
+	}
+	resolved, err := exec.LookPath(binary)
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
 func resolveServiceBinary(binary string) (string, error) {

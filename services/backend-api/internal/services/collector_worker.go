@@ -84,7 +84,6 @@ func (c *CollectorService) createWorker(exchangeID string, multiExchangeSymbols 
 
 	// Start worker goroutine
 	c.wg.Add(1)
-	c.wg.Add(1)
 	go c.runWorker(worker)
 
 	c.logger.WithFields(map[string]interface{}{
@@ -357,8 +356,6 @@ func (c *CollectorService) collectTickerDataBulk(worker *Worker) error {
 		"exchange":     worker.Exchange,
 		"symbol_count": fmt.Sprintf("%d", len(worker.Symbols)),
 	})
-	defer observability.FinishSpan(span, nil)
-
 	defer observability.FinishSpan(span, nil)
 
 	c.logger.WithFields(map[string]interface{}{

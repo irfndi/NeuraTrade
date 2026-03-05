@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -19,6 +20,8 @@ var (
 	ErrStrategyNotFound = errors.New("strategy not found")
 	// ErrAlreadyInStage indicates strategy is already in target stage.
 	ErrAlreadyInStage = errors.New("strategy already in target stage")
+	// ErrNoPreviousStage indicates rollback is not possible from the current stage.
+	ErrNoPreviousStage = errors.New("no previous stage available")
 )
 
 // DefaultPromotionCriteria returns default promotion criteria.
@@ -56,9 +59,13 @@ func (m *StagedRolloutManager) InitializeRollout(
 	strategyID string,
 	criteria PromotionCriteria,
 ) (*RolloutState, error) {
+	normalizedStrategyID, err := validateStrategyID(strategyID)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now()
 	state := &RolloutState{
-		StrategyID:        strategyID,
+		StrategyID:        normalizedStrategyID,
 		CurrentStage:      StageShadow,
 		Status:            StatusActive,
 		EnteredAt:         now,
@@ -78,7 +85,11 @@ func (m *StagedRolloutManager) InitializeRollout(
 
 // GetRolloutState retrieves the current rollout state.
 func (m *StagedRolloutManager) GetRolloutState(ctx context.Context, strategyID string) (*RolloutState, error) {
-	return m.repo.GetRolloutState(ctx, strategyID)
+	normalizedStrategyID, err := validateStrategyID(strategyID)
+	if err != nil {
+		return nil, err
+	}
+	return m.repo.GetRolloutState(ctx, normalizedStrategyID)
 }
 
 // UpdateMetrics updates the performance metrics for a rollout.
@@ -87,7 +98,11 @@ func (m *StagedRolloutManager) UpdateMetrics(
 	strategyID string,
 	metrics RolloutMetrics,
 ) error {
-	state, err := m.repo.GetRolloutState(ctx, strategyID)
+	normalizedStrategyID, err := validateStrategyID(strategyID)
+	if err != nil {
+		return err
+	}
+	state, err := m.repo.GetRolloutState(ctx, normalizedStrategyID)
 	if err != nil {
 		return fmt.Errorf("failed to get rollout state: %w", err)
 	}
@@ -167,7 +182,11 @@ func (m *StagedRolloutManager) ForcePromote(ctx context.Context, strategyID stri
 }
 
 func (m *StagedRolloutManager) promote(ctx context.Context, strategyID string, reason string, force bool) (*RolloutState, error) {
-	state, err := m.repo.GetRolloutState(ctx, strategyID)
+	normalizedStrategyID, err := validateStrategyID(strategyID)
+	if err != nil {
+		return nil, err
+	}
+	state, err := m.repo.GetRolloutState(ctx, normalizedStrategyID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rollout state: %w", err)
 	}
@@ -232,7 +251,11 @@ func (m *StagedRolloutManager) promote(ctx context.Context, strategyID string, r
 
 // Rollback rolls back a strategy to the previous stage.
 func (m *StagedRolloutManager) Rollback(ctx context.Context, strategyID string, trigger RollbackTrigger, reason string) (*RolloutState, error) {
-	state, err := m.repo.GetRolloutState(ctx, strategyID)
+	normalizedStrategyID, err := validateStrategyID(strategyID)
+	if err != nil {
+		return nil, err
+	}
+	state, err := m.repo.GetRolloutState(ctx, normalizedStrategyID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rollout state: %w", err)
 	}
@@ -284,7 +307,11 @@ func (m *StagedRolloutManager) Rollback(ctx context.Context, strategyID string, 
 
 // Pause pauses a strategy rollout.
 func (m *StagedRolloutManager) Pause(ctx context.Context, strategyID string, reason string) error {
-	state, err := m.repo.GetRolloutState(ctx, strategyID)
+	normalizedStrategyID, err := validateStrategyID(strategyID)
+	if err != nil {
+		return err
+	}
+	state, err := m.repo.GetRolloutState(ctx, normalizedStrategyID)
 	if err != nil {
 		return fmt.Errorf("failed to get rollout state: %w", err)
 	}
@@ -301,7 +328,11 @@ func (m *StagedRolloutManager) Pause(ctx context.Context, strategyID string, rea
 
 // Resume resumes a paused strategy rollout.
 func (m *StagedRolloutManager) Resume(ctx context.Context, strategyID string) error {
-	state, err := m.repo.GetRolloutState(ctx, strategyID)
+	normalizedStrategyID, err := validateStrategyID(strategyID)
+	if err != nil {
+		return err
+	}
+	state, err := m.repo.GetRolloutState(ctx, normalizedStrategyID)
 	if err != nil {
 		return fmt.Errorf("failed to get rollout state: %w", err)
 	}
@@ -340,8 +371,16 @@ func (m *StagedRolloutManager) getPreviousStage(current RolloutStage) (RolloutSt
 	case StagePaper:
 		return StageShadow, nil
 	case StageShadow:
-		return StageShadow, nil // Already at min
+		return "", ErrNoPreviousStage
 	default:
 		return "", ErrInvalidStage
 	}
+}
+
+func validateStrategyID(strategyID string) (string, error) {
+	normalized := strings.TrimSpace(strategyID)
+	if normalized == "" {
+		return "", fmt.Errorf("strategy_id is required")
+	}
+	return normalized, nil
 }

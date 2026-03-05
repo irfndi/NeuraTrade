@@ -120,7 +120,7 @@ func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, 
 	if store == nil {
 		if h.db == nil {
 			h.autonomyStore = nil
-			h.configureScalpingAutonomy()
+			h.clearScalpingAutonomyCoordinator()
 			return nil
 		}
 		store = NewAutonomousRolloutStore(h.db)
@@ -137,6 +137,8 @@ func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, 
 	defer cancel()
 
 	if err := store.InitSchema(initCtx); err != nil {
+		h.autonomyStore = nil
+		h.clearScalpingAutonomyCoordinator()
 		return fmt.Errorf("initialize autonomous rollout schema: %w", err)
 	}
 	h.autonomyStore = store
@@ -197,10 +199,18 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 
 func (h *IntegratedQuestHandlers) configureScalpingAutonomy() {
 	if h.aiScalpingService == nil || h.autonomyStore == nil {
+		h.clearScalpingAutonomyCoordinator()
 		return
 	}
 	h.autonomyCoordinator = NewScalpingAutonomyCoordinator(h.autonomyStore, h.aiScalpingService.config)
 	h.aiScalpingService.SetAutonomyCoordinator(h.autonomyCoordinator)
+}
+
+func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
+	h.autonomyCoordinator = nil
+	if h.aiScalpingService != nil {
+		h.aiScalpingService.SetAutonomyCoordinator(nil)
+	}
 }
 
 // RegisterIntegratedHandlers registers production-ready quest handlers
@@ -2531,6 +2541,10 @@ type entryAttemptGateState struct {
 	AttemptWindowProgress  string
 }
 
+//nolint:unused // retained for focused recovery-gate unit tests.
+func (h *IntegratedQuestHandlers) evaluateRecoveryGateState(quest *Quest, portfolio TradingPortfolio) recoveryGateState {
+	return h.evaluateRecoveryGateStateForScope(context.Background(), quest, portfolio, "", "")
+}
 func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 	ctx context.Context,
 	quest *Quest,
@@ -2723,9 +2737,14 @@ func (h *IntegratedQuestHandlers) scopedScalpingPerformance(
 	if h == nil || h.lifecycleStore == nil || chatID == "" {
 		return perf
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	since := time.Now().UTC().Add(-window)
-	summary, err := h.lifecycleStore.GetRecentLossStreak(ctx, chatID, exchange, since)
+	queryCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	summary, err := h.lifecycleStore.GetRecentLossStreak(queryCtx, chatID, exchange, since)
 	if err != nil {
 		log.Printf(
 			"[SCALPING] Failed to read scoped recent loss streak (chat=%s exchange=%s): %v",

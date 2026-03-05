@@ -795,7 +795,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				scope,
 				decision,
 				portfolio,
-				effectiveMaxCapital,
+				decimal.NewFromFloat(effectiveMaxCapital),
 			)
 			s.updateAutonomyGateState(scope, rolloutState, gateState, gateErr)
 			if gateErr != nil {
@@ -822,7 +822,6 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		if autonomyCoordinator != nil {
 			if recordErr := autonomyCoordinator.RecordExecutionResult(ctx, scope, decision, portfolio, executionErr); recordErr != nil {
 				log.Printf("[AI-SCALPING] Failed to record autonomy rollout metrics: %v", recordErr)
-				s.updateAutonomyGateState(scope, nil, nil, recordErr)
 			} else if rollback := autonomyCoordinator.LastRollback(scope.StrategyID); rollback != nil {
 				s.updateAutonomyRollbackState(rollback)
 			}

@@ -115,7 +115,17 @@ func (m *mockStrategyRepository) SaveRollbackEvent(ctx context.Context, event *R
 }
 
 func (m *mockStrategyRepository) GetRollbackHistory(ctx context.Context, strategyID string, limit int) ([]RollbackEvent, error) {
-	return m.events, nil
+	result := make([]RollbackEvent, 0, len(m.events))
+	for _, event := range m.events {
+		if event.StrategyID != strategyID {
+			continue
+		}
+		result = append(result, event)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
 }
 
 func TestStrategyProposalEngine_GenerateProposal(t *testing.T) {
@@ -268,6 +278,17 @@ func TestNewStagedRolloutManager_RequiresRepository(t *testing.T) {
 	})
 }
 
+func TestStagedRolloutManager_InitializeRollout_RejectsEmptyStrategyID(t *testing.T) {
+	repo := newMockRepo()
+	manager := NewStagedRolloutManager(repo, nil)
+
+	state, err := manager.InitializeRollout(context.Background(), "   ", DefaultPromotionCriteria())
+
+	require.Error(t, err)
+	assert.Nil(t, state)
+	assert.Contains(t, err.Error(), "strategy_id is required")
+}
+
 func TestStagedRolloutManager_Promote(t *testing.T) {
 	repo := newMockRepo()
 	manager := NewStagedRolloutManager(repo, &mockEventPublisher{})
@@ -319,13 +340,10 @@ func TestStagedRolloutManager_Rollback(t *testing.T) {
 		DurationRequired: 0,
 	})
 	require.NoError(t, err)
-
 	err = manager.UpdateMetrics(context.Background(), "strategy-1", RolloutMetrics{TotalTrades: 10, WinRate: 0.6, UptimePercent: 99})
 	require.NoError(t, err)
-
 	_, err = manager.Promote(context.Background(), "strategy-1", "test")
 	require.NoError(t, err)
-
 	state, err = manager.Rollback(context.Background(), "strategy-1", TriggerMaxDrawdown, "drawdown exceeded")
 	require.NoError(t, err)
 	assert.Equal(t, StageShadow, state.CurrentStage)
@@ -346,6 +364,23 @@ func TestStagedRolloutManager_Rollback_InvalidStage(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidStage)
+	assert.Nil(t, state)
+}
+
+func TestStagedRolloutManager_Rollback_NoPreviousStage(t *testing.T) {
+	repo := newMockRepo()
+	manager := NewStagedRolloutManager(repo, nil)
+	repo.states["strategy-1"] = &RolloutState{
+		StrategyID:   "strategy-1",
+		CurrentStage: StageShadow,
+		Status:       StatusActive,
+		EnteredAt:    time.Now(),
+	}
+
+	state, err := manager.Rollback(context.Background(), "strategy-1", TriggerMaxDrawdown, "test")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoPreviousStage)
 	assert.Nil(t, state)
 }
 
@@ -414,7 +449,7 @@ func TestAutoRollbackEngine_CheckTriggers(t *testing.T) {
 				LosingTrades:  10,
 				WinningTrades: 2,
 			},
-			expectTrigger: TriggerConsecutiveLoss,
+			expectTrigger: TriggerNetLoss,
 		},
 	}
 
@@ -424,6 +459,20 @@ func TestAutoRollbackEngine_CheckTriggers(t *testing.T) {
 			assert.Equal(t, tt.expectTrigger, trigger)
 		})
 	}
+}
+
+func TestAutoRollbackEngine_GetRollbackHistory_ValidatesInput(t *testing.T) {
+	engine := NewAutoRollbackEngine(DefaultRollbackConfig(), newMockRepo(), nil, nil, nil)
+
+	history, err := engine.GetRollbackHistory(context.Background(), "   ", 5)
+	require.Error(t, err)
+	assert.Nil(t, history)
+	assert.Contains(t, err.Error(), "strategy_id is required")
+
+	history, err = engine.GetRollbackHistory(context.Background(), "strategy-1", 0)
+	require.Error(t, err)
+	assert.Nil(t, history)
+	assert.Contains(t, err.Error(), "rollback history limit")
 }
 
 func TestAutoRollbackEngine_CheckTriggers_UsesNetLossCount(t *testing.T) {
@@ -450,7 +499,7 @@ func TestAutoRollbackEngine_CheckTriggers_UsesNetLossCount(t *testing.T) {
 				WinningTrades: 2,
 				LosingTrades:  6, // net = 4
 			},
-			expectTrigger: TriggerConsecutiveLoss,
+			expectTrigger: TriggerNetLoss,
 		},
 		{
 			name: "all losses and no wins trigger",
@@ -458,7 +507,7 @@ func TestAutoRollbackEngine_CheckTriggers_UsesNetLossCount(t *testing.T) {
 				WinningTrades: 0,
 				LosingTrades:  3,
 			},
-			expectTrigger: TriggerConsecutiveLoss,
+			expectTrigger: TriggerNetLoss,
 		},
 		{
 			name: "more wins than losses clamps to zero",
@@ -538,14 +587,16 @@ func TestLiveTradingGate_Evaluate(t *testing.T) {
 	// Setup mock rollout manager with a live strategy
 	liveRepo := newMockRepo()
 	liveManager := NewStagedRolloutManager(liveRepo, nil)
-	liveManager.InitializeRollout(context.Background(), "strategy-1", DefaultPromotionCriteria())
+	_, err := liveManager.InitializeRollout(context.Background(), "strategy-1", DefaultPromotionCriteria())
+	require.NoError(t, err)
 	// Promote to live for testing
 	liveRepo.states["strategy-1"].CurrentStage = StageLive
 	liveRepo.states["strategy-1"].Status = StatusActive
 
 	shadowRepo := newMockRepo()
 	shadowManager := NewStagedRolloutManager(shadowRepo, nil)
-	shadowManager.InitializeRollout(context.Background(), "strategy-1", DefaultPromotionCriteria())
+	_, err = shadowManager.InitializeRollout(context.Background(), "strategy-1", DefaultPromotionCriteria())
+	require.NoError(t, err)
 
 	tests := []struct {
 		name       string

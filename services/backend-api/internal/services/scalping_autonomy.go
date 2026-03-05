@@ -224,7 +224,7 @@ func (c *ScalpingAutonomyCoordinator) EvaluatePreExecution(
 	scope ScalpingAutonomyScope,
 	decision *AITradingDecision,
 	portfolio TradingPortfolio,
-	maxCapitalPct float64,
+	maxCapitalPct decimal.Decimal,
 ) (*autonomous.GateState, *autonomous.RolloutState, error) {
 	if c == nil {
 		return nil, nil, nil
@@ -343,8 +343,8 @@ func (c *ScalpingAutonomyCoordinator) RecordExecutionResult(
 	}
 	if rollbackEvent != nil {
 		c.rollbackMutex.Lock()
+		defer c.rollbackMutex.Unlock()
 		c.lastRollback[strategyID] = rollbackEvent
-		c.rollbackMutex.Unlock()
 	}
 
 	return nil
@@ -435,8 +435,8 @@ func resolveDefaultScalpingExchange(configExchange string) string {
 	return ""
 }
 
-func resolveAvailableBudget(portfolio TradingPortfolio, maxCapitalPct float64) decimal.Decimal {
-	pctDec := decimal.NewFromFloat(maxCapitalPct)
+func resolveAvailableBudget(portfolio TradingPortfolio, maxCapitalPct decimal.Decimal) decimal.Decimal {
+	pctDec := maxCapitalPct
 	if pctDec.LessThanOrEqual(decimal.Zero) {
 		pctDec = decimal.NewFromInt(1)
 	}

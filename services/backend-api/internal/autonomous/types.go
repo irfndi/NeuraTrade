@@ -161,8 +161,10 @@ const (
 	TriggerRejectionRate RollbackTrigger = "rejection_rate"
 	// TriggerMaxDrawdown triggers rollback on max drawdown breach.
 	TriggerMaxDrawdown RollbackTrigger = "max_drawdown"
-	// TriggerConsecutiveLoss triggers rollback on consecutive losses.
-	TriggerConsecutiveLoss RollbackTrigger = "consecutive_loss"
+	// TriggerNetLoss triggers rollback when net losses exceed the configured limit.
+	TriggerNetLoss RollbackTrigger = "net_loss"
+	// TriggerConsecutiveLoss is kept as a backward-compatible alias.
+	TriggerConsecutiveLoss RollbackTrigger = TriggerNetLoss
 	// TriggerKillSwitch triggers rollback when kill switch is engaged.
 	TriggerKillSwitch RollbackTrigger = "kill_switch"
 	// TriggerSafeMode triggers rollback when safe mode is enabled.
@@ -179,7 +181,7 @@ type RollbackConfig struct {
 	RejectionRateThreshold float64 `json:"rejection_rate_threshold"`
 	// MaxDrawdownThreshold is the max drawdown percentage.
 	MaxDrawdownThreshold decimal.Decimal `json:"max_drawdown_threshold"`
-	// ConsecutiveLossLimit is the max consecutive losses.
+	// ConsecutiveLossLimit is the max net losses (losing minus winning trades).
 	ConsecutiveLossLimit int `json:"consecutive_loss_limit"`
 	// CooldownPeriod is the time before re-enabling after rollback.
 	CooldownPeriod time.Duration `json:"cooldown_period"`
