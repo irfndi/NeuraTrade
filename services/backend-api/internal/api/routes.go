@@ -788,7 +788,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Register quest runtime via app/autonomy entrypoint before scheduler start.
 	if err := autonomyruntime.RegisterQuestRuntime(questEngine, integratedHandlers); err != nil {
-		log.Printf("Failed to register quest runtime handlers: %v", err)
+		log.Fatalf("Failed to register quest runtime handlers: %v", err)
 	}
 	questEngine.Start() // Start the quest engine scheduler
 
