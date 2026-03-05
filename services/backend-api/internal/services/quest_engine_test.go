@@ -729,6 +729,97 @@ func TestListActiveAutonomousChatIDs(t *testing.T) {
 	}
 }
 
+func TestTick_DoesNotResetStaleExecutionWhenLockStillHeld(t *testing.T) {
+	t.Setenv("NEURATRADE_QUEST_EXECUTION_STALE_SECONDS", "120")
+
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer func() { _ = client.Close() }()
+
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	executed := make(chan struct{}, 1)
+	engine.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
+		executed <- struct{}{}
+		return nil
+	})
+
+	quest := &Quest{
+		ID:         "lock-held-quest",
+		Name:       "Lock Held Quest",
+		Type:       QuestTypeRoutine,
+		Cadence:    CadenceMicro,
+		Status:     QuestStatusActive,
+		Checkpoint: make(map[string]interface{}),
+		Metadata: map[string]string{
+			"chat_id":       "chat-lock",
+			"definition_id": "scalping_execution",
+		},
+	}
+	engine.quests[quest.ID] = quest
+	engine.executing[quest.ID] = true
+	engine.executionStarts[quest.ID] = time.Now().Add(-10 * time.Minute)
+	engine.executionLastProgress[quest.ID] = time.Now().Add(-10 * time.Minute)
+	engine.executionStage[quest.ID] = questExecutionStageHandler
+
+	lockKey := "quest:lock:" + quest.ID
+	if setErr := client.Set(context.Background(), lockKey, "locked", 5*time.Minute).Err(); setErr != nil {
+		t.Fatalf("failed to set lock key: %v", setErr)
+	}
+
+	engine.tick()
+
+	select {
+	case <-executed:
+		t.Fatal("expected stale quest not to be rescheduled while lock is still active")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if !engine.executing[quest.ID] {
+		t.Fatal("expected in-progress marker to remain when lock is active")
+	}
+	if held := engine.executionLockHeld[quest.ID]; !held {
+		t.Fatal("expected diagnostics to mark lock as held")
+	}
+}
+
+func TestBeginAutonomous_ReusesExistingScalpingQuest(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	existing := &Quest{
+		ID:      "existing-scalping-quest",
+		Name:    "Scalping Executor",
+		Type:    QuestTypeRoutine,
+		Cadence: CadenceMicro,
+		Status:  QuestStatusPaused,
+		Metadata: map[string]string{
+			"chat_id":       "chat-777",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{},
+	}
+	engine.quests[existing.ID] = existing
+
+	state, err := engine.BeginAutonomous("chat-777")
+	if err != nil {
+		t.Fatalf("BeginAutonomous returned error: %v", err)
+	}
+	if len(state.ActiveQuests) != 1 {
+		t.Fatalf("expected 1 active quest, got %d", len(state.ActiveQuests))
+	}
+	if state.ActiveQuests[0] != existing.ID {
+		t.Fatalf("expected reused quest ID %s, got %s", existing.ID, state.ActiveQuests[0])
+	}
+	if len(engine.quests) != 1 {
+		t.Fatalf("expected quest count to stay at 1, got %d", len(engine.quests))
+	}
+	if engine.quests[existing.ID].Status != QuestStatusActive {
+		t.Fatalf("expected reused quest status active, got %s", engine.quests[existing.ID].Status)
+	}
+}
+
 func ptrTime(t time.Time) *time.Time {
 	return &t
 }

@@ -2,10 +2,12 @@ package ccxt
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -443,6 +445,99 @@ func TestParseBitgetFundingRate_SkipsMalformedRows(t *testing.T) {
 	}
 	if rates[0].Symbol != "ETHUSDT" {
 		t.Fatalf("unexpected symbol from valid row: %s", rates[0].Symbol)
+	}
+}
+
+func TestNativeCCXTService_FetchMarketData_RespectsFallbackSymbolBudget(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_MAX_SYMBOLS_PER_CYCLE", "2")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_CYCLE_BUDGET_MS", "10000")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_PER_SYMBOL_TIMEOUT_MS", "500")
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["binance"] = &ExchangeConnection{
+		Name:    "binance",
+		BaseURL: "https://api.binance.com",
+	}
+
+	var requests atomic.Int32
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests.Add(1)
+			symbol := req.URL.Query().Get("symbol")
+			if symbol == "" {
+				symbol = "BTCUSDT"
+			}
+			body := fmt.Sprintf(`{"symbol":"%s","lastPrice":"100","bidPrice":"99","askPrice":"101","highPrice":"105","lowPrice":"95","volume":"123","openPrice":"98","prevClosePrice":"97"}`, symbol)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	data, err := service.FetchMarketData(
+		context.Background(),
+		[]string{"binance"},
+		[]string{"BTC/USDT", "ETH/USDT", "SOL/USDT"},
+	)
+	if err != nil {
+		t.Fatalf("FetchMarketData returned error: %v", err)
+	}
+	if len(data) != 2 {
+		t.Fatalf("expected 2 tickers due to fallback symbol budget, got %d", len(data))
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("expected 2 HTTP requests due to fallback budget, got %d", got)
+	}
+}
+
+func TestNativeCCXTService_FetchMarketData_ContextCancellationReturnsPartialData(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_MAX_SYMBOLS_PER_CYCLE", "10")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_CYCLE_BUDGET_MS", "10000")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_PER_SYMBOL_TIMEOUT_MS", "500")
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["binance"] = &ExchangeConnection{
+		Name:    "binance",
+		BaseURL: "https://api.binance.com",
+	}
+
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			symbol := req.URL.Query().Get("symbol")
+			if strings.HasPrefix(symbol, "ETH") {
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}
+			time.Sleep(40 * time.Millisecond)
+			body := fmt.Sprintf(`{"symbol":"%s","lastPrice":"100","bidPrice":"99","askPrice":"101","highPrice":"105","lowPrice":"95","volume":"123","openPrice":"98","prevClosePrice":"97"}`, symbol)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	data, err := service.FetchMarketData(
+		ctx,
+		[]string{"binance"},
+		[]string{"BTC/USDT", "ETH/USDT", "SOL/USDT"},
+	)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("FetchMarketData should return partial data without failing hard, got: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("expected partial ticker data before cancellation")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("expected cancellation-aware fallback to return quickly, took %s", elapsed)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -403,6 +404,104 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testin
 	})
 	assert.Equal(t, recoveryModeDeriskOnly, state.Mode)
 	assert.False(t, state.EntryAllowed)
+}
+
+func resetScalpingPerformanceForTest(t *testing.T) {
+	previous := globalScalpingPerformance
+	globalScalpingPerformance = NewScalpingPerformance()
+	t.Cleanup(func() {
+		globalScalpingPerformance = previous
+	})
+}
+
+func TestCurrentRecentLossStreak_RespectsWindow(t *testing.T) {
+	resetScalpingPerformanceForTest(t)
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS", "1800")
+
+	GetScalpingPerformance().RecordTrade(TradeRecord{
+		Timestamp:  time.Now().UTC().Add(-2 * time.Hour),
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		Amount:     decimal.NewFromFloat(0.1),
+		EntryPrice: decimal.NewFromFloat(100),
+		ExitPrice:  decimal.NewFromFloat(95),
+		PnL:        decimal.NewFromFloat(-5),
+		Profitable: false,
+	})
+
+	state := currentRecentLossStreak()
+	assert.Equal(t, 1, state.ConsecutiveLosses)
+	assert.False(t, state.Active)
+	assert.Equal(t, 30*time.Minute, state.Window)
+
+	GetScalpingPerformance().RecordTrade(TradeRecord{
+		Timestamp:  time.Now().UTC(),
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		Amount:     decimal.NewFromFloat(0.1),
+		EntryPrice: decimal.NewFromFloat(100),
+		ExitPrice:  decimal.NewFromFloat(94),
+		PnL:        decimal.NewFromFloat(-6),
+		Profitable: false,
+	})
+
+	state = currentRecentLossStreak()
+	assert.Equal(t, 2, state.ConsecutiveLosses)
+	assert.True(t, state.Active)
+}
+
+func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_RecentLossWindow(t *testing.T) {
+	resetScalpingPerformanceForTest(t)
+	t.Setenv("NEURATRADE_RECOVERY_CLEAN_CYCLES", "3")
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
+	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET", "1")
+	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS", "900")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"recovery_clean_cycles": 3,
+		},
+	}
+
+	// Old losses outside the recent window should not block micro-entry unlock.
+	GetScalpingPerformance().RecordTrade(TradeRecord{
+		Timestamp:  time.Now().UTC().Add(-2 * time.Hour),
+		Symbol:     "ETH/USDT",
+		Side:       "sell",
+		Amount:     decimal.NewFromFloat(0.1),
+		EntryPrice: decimal.NewFromFloat(100),
+		ExitPrice:  decimal.NewFromFloat(103),
+		PnL:        decimal.NewFromFloat(-3),
+		Profitable: false,
+	})
+
+	state := handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+		RiskDrawdown: 0.34,
+	})
+	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
+	assert.True(t, state.EntryAllowed)
+
+	// Fresh recent loss streak should close the gate.
+	GetScalpingPerformance().RecordTrade(TradeRecord{
+		Timestamp:  time.Now().UTC(),
+		Symbol:     "ETH/USDT",
+		Side:       "sell",
+		Amount:     decimal.NewFromFloat(0.1),
+		EntryPrice: decimal.NewFromFloat(100),
+		ExitPrice:  decimal.NewFromFloat(104),
+		PnL:        decimal.NewFromFloat(-4),
+		Profitable: false,
+	})
+
+	state = handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+		RiskDrawdown: 0.34,
+	})
+	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
+	assert.False(t, state.EntryAllowed)
+	assert.Contains(t, state.GateReason, "recent loss streak")
+	assert.Contains(t, state.NextCondition, "loss streak below")
 }
 
 func TestIntegratedQuestHandlers_UpdateRecoveryCleanCycles_ResetOnFailure(t *testing.T) {
