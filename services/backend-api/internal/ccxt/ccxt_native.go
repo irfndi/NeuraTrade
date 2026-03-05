@@ -90,6 +90,27 @@ const (
 	defaultFallbackPerSymbolTimeout   = 900 * time.Millisecond
 )
 
+// PartialMarketDataError indicates that market data fetch returned only a subset of requested data.
+type PartialMarketDataError struct {
+	Data   []MarketPriceInterface
+	Reason string
+}
+
+func (e *PartialMarketDataError) Error() string {
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		reason = "partial market data"
+	}
+	return reason
+}
+
+type fallbackCycleLimits struct {
+	maxSymbols       int
+	cycleBudget      time.Duration
+	perSymbolTimeout time.Duration
+	cycleStarted     time.Time
+}
+
 // ExchangeConnection holds exchange-specific configuration
 type ExchangeConnection struct {
 	Name       string
@@ -748,11 +769,8 @@ func (s *NativeCCXTService) AddExchange(ctx context.Context, exchange string) (*
 
 func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []string, symbols []string) ([]MarketPriceInterface, error) {
 	var allTickers []MarketPriceInterface
-	maxFallbackSymbols := s.fallbackMaxSymbolsForCycle(len(symbols))
-	fallbackCycleBudget := s.getFallbackCycleBudget()
-	fallbackPerSymbolTimeout := s.getFallbackPerSymbolTimeout()
+	limits := s.newFallbackCycleLimits(len(symbols))
 	fallbackFetches := 0
-	cycleStarted := time.Now()
 
 	for _, exchange := range exchanges {
 		if err := ctx.Err(); err != nil {
@@ -762,55 +780,101 @@ func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []str
 			return nil, err
 		}
 
-		// Bitget supports bulk spot ticker fetch; use it to avoid per-symbol request storms.
-		if exchange == "bitget" && len(symbols) > 1 {
-			bulkTickers, err := s.fetchBitgetBulkTickers(ctx, symbols)
-			if err == nil {
-				allTickers = append(allTickers, bulkTickers...)
-				continue
+		if err := s.processExchange(ctx, exchange, symbols, &allTickers, &fallbackFetches, limits); err != nil {
+			if len(allTickers) > 0 {
+				return allTickers, err
 			}
-			log.Printf("[CCXT Native] Failed bulk ticker fetch for bitget: %v", err)
-		}
-
-		for _, symbol := range symbols {
-			if err := ctx.Err(); err != nil {
-				if len(allTickers) > 0 {
-					return allTickers, err
-				}
-				return nil, err
-			}
-			if maxFallbackSymbols > 0 && fallbackFetches >= maxFallbackSymbols {
-				log.Printf(
-					"[CCXT Native] Fallback ticker fetch budget reached (%d symbols), returning partial market data",
-					maxFallbackSymbols,
-				)
-				return allTickers, nil
-			}
-			if fallbackCycleBudget > 0 && time.Since(cycleStarted) >= fallbackCycleBudget {
-				log.Printf(
-					"[CCXT Native] Fallback cycle budget exceeded (%s), returning partial market data",
-					fallbackCycleBudget,
-				)
-				return allTickers, nil
-			}
-
-			tickerCtx := ctx
-			cancel := func() {}
-			if fallbackPerSymbolTimeout > 0 {
-				tickerCtx, cancel = context.WithTimeout(ctx, fallbackPerSymbolTimeout)
-			}
-			ticker, err := s.FetchSingleTicker(tickerCtx, exchange, symbol)
-			cancel()
-			fallbackFetches++
-			if err != nil {
-				log.Printf("[CCXT Native] Failed to fetch %s:%s: %v", exchange, symbol, err)
-				continue
-			}
-			allTickers = append(allTickers, ticker)
+			return nil, err
 		}
 	}
 
 	return allTickers, nil
+}
+
+func (s *NativeCCXTService) newFallbackCycleLimits(symbolCount int) fallbackCycleLimits {
+	return fallbackCycleLimits{
+		maxSymbols:       s.fallbackMaxSymbolsForCycle(symbolCount),
+		cycleBudget:      s.getFallbackCycleBudget(),
+		perSymbolTimeout: s.getFallbackPerSymbolTimeout(),
+		cycleStarted:     time.Now(),
+	}
+}
+
+func (s *NativeCCXTService) processExchange(
+	ctx context.Context,
+	exchange string,
+	symbols []string,
+	allTickers *[]MarketPriceInterface,
+	fallbackFetches *int,
+	limits fallbackCycleLimits,
+) error {
+	// Bitget supports bulk spot ticker fetch; use it to avoid per-symbol request storms.
+	if exchange == "bitget" && len(symbols) > 1 {
+		bulkTickers, err := s.fetchBitgetBulkTickers(ctx, symbols)
+		if err == nil {
+			*allTickers = append(*allTickers, bulkTickers...)
+			return nil
+		}
+		log.Printf("[CCXT Native] Failed bulk ticker fetch for bitget: %v", err)
+	}
+
+	for _, symbol := range symbols {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.checkFallbackLimits(*allTickers, *fallbackFetches, limits); err != nil {
+			return err
+		}
+
+		ticker, err := s.fetchSymbolWithTimeout(ctx, exchange, symbol, limits.perSymbolTimeout)
+		*fallbackFetches = *fallbackFetches + 1
+		if err != nil {
+			log.Printf("[CCXT Native] Failed to fetch %s:%s: %v", exchange, symbol, err)
+			continue
+		}
+		*allTickers = append(*allTickers, ticker)
+	}
+
+	return nil
+}
+
+func (s *NativeCCXTService) fetchSymbolWithTimeout(
+	ctx context.Context,
+	exchange string,
+	symbol string,
+	perSymbolTimeout time.Duration,
+) (MarketPriceInterface, error) {
+	tickerCtx := ctx
+	cancel := func() {}
+	if perSymbolTimeout > 0 {
+		tickerCtx, cancel = context.WithTimeout(ctx, perSymbolTimeout)
+	}
+	defer cancel()
+	return s.FetchSingleTicker(tickerCtx, exchange, symbol)
+}
+
+func (s *NativeCCXTService) checkFallbackLimits(
+	allTickers []MarketPriceInterface,
+	fallbackFetches int,
+	limits fallbackCycleLimits,
+) error {
+	if limits.maxSymbols > 0 && fallbackFetches >= limits.maxSymbols {
+		reason := fmt.Sprintf("fallback ticker fetch budget reached (%d symbols)", limits.maxSymbols)
+		log.Printf("[CCXT Native] %s, returning partial market data", reason)
+		return &PartialMarketDataError{
+			Data:   append([]MarketPriceInterface(nil), allTickers...),
+			Reason: reason,
+		}
+	}
+	if limits.cycleBudget > 0 && time.Since(limits.cycleStarted) >= limits.cycleBudget {
+		reason := fmt.Sprintf("fallback cycle budget exceeded (%s)", limits.cycleBudget)
+		log.Printf("[CCXT Native] %s, returning partial market data", reason)
+		return &PartialMarketDataError{
+			Data:   append([]MarketPriceInterface(nil), allTickers...),
+			Reason: reason,
+		}
+	}
+	return nil
 }
 
 func (s *NativeCCXTService) fallbackMaxSymbolsForCycle(symbolCount int) int {

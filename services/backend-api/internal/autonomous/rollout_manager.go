@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -157,6 +158,15 @@ func (m *StagedRolloutManager) CheckPromotionEligibility(state *RolloutState) (b
 
 // Promote promotes a strategy to the next stage.
 func (m *StagedRolloutManager) Promote(ctx context.Context, strategyID string, reason string) (*RolloutState, error) {
+	return m.promote(ctx, strategyID, reason, false)
+}
+
+// ForcePromote promotes a strategy to the next stage without enforcing promotion criteria.
+func (m *StagedRolloutManager) ForcePromote(ctx context.Context, strategyID string, reason string) (*RolloutState, error) {
+	return m.promote(ctx, strategyID, reason, true)
+}
+
+func (m *StagedRolloutManager) promote(ctx context.Context, strategyID string, reason string, force bool) (*RolloutState, error) {
 	state, err := m.repo.GetRolloutState(ctx, strategyID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rollout state: %w", err)
@@ -177,9 +187,11 @@ func (m *StagedRolloutManager) Promote(ctx context.Context, strategyID string, r
 	}
 
 	// Check promotion eligibility (can be bypassed with force)
-	eligible, failedCriteria := m.CheckPromotionEligibility(state)
-	if !eligible {
-		return nil, fmt.Errorf("%w: %v", ErrPromotionCriteriaNotMet, failedCriteria)
+	if !force {
+		eligible, failedCriteria := m.CheckPromotionEligibility(state)
+		if !eligible {
+			return nil, fmt.Errorf("%w: %v", ErrPromotionCriteriaNotMet, failedCriteria)
+		}
 	}
 
 	// Record transition
@@ -204,7 +216,14 @@ func (m *StagedRolloutManager) Promote(ctx context.Context, strategyID string, r
 	// Publish event
 	if m.events != nil {
 		if err := m.events.PublishStageTransition(ctx, &transition); err != nil {
-			return nil, fmt.Errorf("publish stage transition: %w", err)
+			log.Printf(
+				"[AUTONOMY] PublishStageTransition failed (strategy_id=%s from=%s to=%s reason=%s): %v",
+				strategyID,
+				transition.FromStage,
+				transition.ToStage,
+				transition.Reason,
+				err,
+			)
 		}
 	}
 
@@ -249,7 +268,14 @@ func (m *StagedRolloutManager) Rollback(ctx context.Context, strategyID string, 
 	// Publish event
 	if m.events != nil {
 		if err := m.events.PublishStageTransition(ctx, &transition); err != nil {
-			return nil, fmt.Errorf("publish stage transition: %w", err)
+			log.Printf(
+				"[AUTONOMY] PublishStageTransition failed (strategy_id=%s from=%s to=%s reason=%s): %v",
+				strategyID,
+				transition.FromStage,
+				transition.ToStage,
+				transition.Reason,
+				err,
+			)
 		}
 	}
 

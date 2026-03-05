@@ -174,15 +174,17 @@ func (s *AutonomousRolloutStore) SaveRollbackEvent(ctx context.Context, event *a
 		return fmt.Errorf("rollback event strategy_id is required")
 	}
 
+	occurredAt := event.Timestamp.UTC()
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	event.Timestamp = occurredAt
+
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal rollback event: %w", err)
 	}
 	chatID := strategyChatID(event.StrategyID)
-	occurredAt := event.Timestamp.UTC()
-	if occurredAt.IsZero() {
-		occurredAt = time.Now().UTC()
-	}
 
 	query := fmt.Sprintf(`
 		INSERT INTO %s (

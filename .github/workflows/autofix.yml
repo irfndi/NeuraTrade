@@ -28,7 +28,7 @@ jobs:
           cache: true
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2
         with:
           bun-version: 1.3.9
 
@@ -87,7 +87,7 @@ jobs:
           git checkout -- .github/workflows/ 2>/dev/null || true
 
       - name: Commit changes
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@b863ae1933cb653a53c021fe36dbb774e1fb9403 # v5
         with:
           commit_message: "chore: autofix code formatting and linting"
           commit_user_name: "autofix-ci[bot]"

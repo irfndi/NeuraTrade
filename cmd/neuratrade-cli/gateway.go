@@ -47,6 +47,12 @@ type serviceProbeResult struct {
 	detail  string
 }
 
+var allowedGatewayServiceBinaries = map[string]struct{}{
+	"neuratrade-server": {},
+	"telegram-service":  {},
+	"ccxt-service":      {},
+}
+
 // gatewayStart starts all NeuraTrade services
 func gatewayStart(cCtx *cli.Context) error {
 	fmt.Println("🚀 Starting NeuraTrade Gateway...")
@@ -295,7 +301,13 @@ func gatewayStart(cCtx *cli.Context) error {
 
 // startService starts a service process and writes its PID to a file
 func startService(binary, name, logFile string, env map[string]string, pidFile string) *exec.Cmd {
-	cmd := exec.Command(binary)
+	resolvedBinary, err := resolveServiceBinary(binary)
+	if err != nil {
+		fmt.Printf("❌ Failed to resolve executable for %s: %v\n", name, err)
+		return nil
+	}
+
+	cmd := exec.Command(resolvedBinary)
 
 	// Set environment
 	envVars := os.Environ()
@@ -330,6 +342,24 @@ func startService(binary, name, logFile string, env map[string]string, pidFile s
 	}
 
 	return cmd
+}
+
+func resolveServiceBinary(binary string) (string, error) {
+	binary = strings.TrimSpace(binary)
+	if binary == "" {
+		return "", fmt.Errorf("binary path is empty")
+	}
+
+	base := filepath.Base(binary)
+	if _, ok := allowedGatewayServiceBinaries[base]; !ok {
+		return "", fmt.Errorf("binary %q is not allowlisted", base)
+	}
+
+	resolved, err := exec.LookPath(binary)
+	if err != nil {
+		return "", fmt.Errorf("look up binary %q: %w", binary, err)
+	}
+	return resolved, nil
 }
 
 // gatewayStop stops all NeuraTrade services by reading PID files and sending SIGTERM

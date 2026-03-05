@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -910,7 +911,14 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 
 	// Dynamically rank discovered symbols by liquidity + spread + intraday movement.
 	scored, err := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, candidates)
-	if err != nil || len(scored) == 0 {
+	if err != nil {
+		var partialErr *ccxt.PartialMarketDataError
+		if errors.As(err, &partialErr) && len(partialErr.Data) > 0 {
+			scored = partialErr.Data
+			log.Printf("[AI-SCALPING] Dynamic pair scoring using partial market data: %v", err)
+		}
+	}
+	if len(scored) == 0 {
 		limit := s.config.MaxPairsToAnalyze
 		if limit > len(candidates) {
 			limit = len(candidates)
@@ -1054,7 +1062,15 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 
 	// Bulk ticker fetch keeps the cycle responsive under high symbol counts.
 	tickerBySymbol := make(map[string]ccxt.MarketPriceInterface, len(pairs))
-	if marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, pairs); bulkErr == nil {
+	marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, pairs)
+	if bulkErr != nil {
+		var partialErr *ccxt.PartialMarketDataError
+		if errors.As(bulkErr, &partialErr) && len(partialErr.Data) > 0 {
+			marketData = partialErr.Data
+			log.Printf("[AI-SCALPING] Bulk ticker fetch returned partial data: %v", bulkErr)
+		}
+	}
+	if bulkErr == nil || len(marketData) > 0 {
 		for _, t := range marketData {
 			if t == nil {
 				continue
@@ -1065,7 +1081,8 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 			}
 			tickerBySymbol[key] = t
 		}
-	} else {
+	}
+	if bulkErr != nil && len(marketData) == 0 {
 		log.Printf("[AI-SCALPING] Bulk ticker fetch unavailable: %v", bulkErr)
 	}
 

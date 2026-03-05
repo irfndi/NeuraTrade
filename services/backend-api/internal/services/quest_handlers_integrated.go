@@ -108,7 +108,7 @@ func NewIntegratedQuestHandlersWithAutonomyStore(
 	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring)
 	handlers.SetDB(db)
 	if err := handlers.setAutonomyStoreWithInit(context.Background(), store); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to set autonomy store in NewIntegratedQuestHandlersWithAutonomyStore: %w", err)
 	}
 	return handlers, nil
 }
@@ -156,8 +156,9 @@ func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 
 // SetAutonomyStore sets the autonomy rollout store and applies coordinator wiring when available.
 func (h *IntegratedQuestHandlers) SetAutonomyStore(store *AutonomousRolloutStore) {
-	h.autonomyStore = store
-	h.configureScalpingAutonomy()
+	if err := h.setAutonomyStoreWithInit(context.Background(), store); err != nil {
+		log.Printf("[SCALPING] failed to initialize autonomy store: %v", err)
+	}
 }
 
 // SetTradeMemory sets the trade memory for AI learning

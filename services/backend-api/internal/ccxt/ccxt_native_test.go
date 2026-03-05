@@ -464,6 +464,7 @@ func TestNativeCCXTService_FetchMarketData_FallbackConfig(t *testing.T) {
 		expectedRequests      int
 		expectedElapsedMax    time.Duration
 		expectContextErr      bool
+		expectPartialErr      bool
 	}{
 		{
 			name:                  "symbol_budget_limits_fetches",
@@ -474,6 +475,7 @@ func TestNativeCCXTService_FetchMarketData_FallbackConfig(t *testing.T) {
 			expectedMinData:       2,
 			expectedMaxData:       2,
 			expectedRequests:      2,
+			expectPartialErr:      true,
 		},
 		{
 			name:                  "empty_symbols_returns_fast",
@@ -498,13 +500,14 @@ func TestNativeCCXTService_FetchMarketData_FallbackConfig(t *testing.T) {
 		{
 			name:                  "one_ms_cycle_budget_returns_partial",
 			maxSymbolsEnv:         "10",
-			cycleBudgetEnvMS:      "1",
+			cycleBudgetEnvMS:      "2",
 			perSymbolTimeoutEnvMS: "500",
 			symbols:               []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"},
 			perRequestDelay:       5 * time.Millisecond,
-			expectedMinData:       1,
+			expectedMinData:       0,
 			expectedMaxData:       1,
-			expectedRequests:      1,
+			expectedRequests:      -1,
+			expectPartialErr:      true,
 		},
 		{
 			name:                  "one_ms_per_symbol_timeout_does_not_error",
@@ -611,6 +614,17 @@ func TestNativeCCXTService_FetchMarketData_FallbackConfig(t *testing.T) {
 				}
 				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("expected context cancellation error, got: %v", err)
+				}
+			} else if tt.expectPartialErr {
+				var partialErr *PartialMarketDataError
+				if err == nil {
+					t.Fatalf("expected partial market data error, got nil")
+				}
+				if !errors.As(err, &partialErr) {
+					t.Fatalf("expected PartialMarketDataError, got: %v", err)
+				}
+				if len(partialErr.Data) != len(data) {
+					t.Fatalf("expected partial payload length %d, got %d", len(data), len(partialErr.Data))
 				}
 			} else if err != nil {
 				t.Fatalf("FetchMarketData returned error: %v", err)

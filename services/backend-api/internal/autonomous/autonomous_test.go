@@ -314,14 +314,19 @@ func TestStagedRolloutManager_Rollback(t *testing.T) {
 	repo := newMockRepo()
 	manager := NewStagedRolloutManager(repo, &mockEventPublisher{})
 
-	state, _ := manager.InitializeRollout(context.Background(), "strategy-1", PromotionCriteria{
+	state, err := manager.InitializeRollout(context.Background(), "strategy-1", PromotionCriteria{
 		MinTrades:        0,
 		DurationRequired: 0,
 	})
-	manager.UpdateMetrics(context.Background(), "strategy-1", RolloutMetrics{TotalTrades: 10, WinRate: 0.6, UptimePercent: 99})
-	manager.Promote(context.Background(), "strategy-1", "test")
+	require.NoError(t, err)
 
-	state, err := manager.Rollback(context.Background(), "strategy-1", TriggerMaxDrawdown, "drawdown exceeded")
+	err = manager.UpdateMetrics(context.Background(), "strategy-1", RolloutMetrics{TotalTrades: 10, WinRate: 0.6, UptimePercent: 99})
+	require.NoError(t, err)
+
+	_, err = manager.Promote(context.Background(), "strategy-1", "test")
+	require.NoError(t, err)
+
+	state, err = manager.Rollback(context.Background(), "strategy-1", TriggerMaxDrawdown, "drawdown exceeded")
 	require.NoError(t, err)
 	assert.Equal(t, StageShadow, state.CurrentStage)
 	assert.Equal(t, StatusRolledBack, state.Status)
@@ -348,9 +353,10 @@ func TestStagedRolloutManager_PauseResume(t *testing.T) {
 	repo := newMockRepo()
 	manager := NewStagedRolloutManager(repo, nil)
 
-	manager.InitializeRollout(context.Background(), "strategy-1", DefaultPromotionCriteria())
+	_, err := manager.InitializeRollout(context.Background(), "strategy-1", DefaultPromotionCriteria())
+	require.NoError(t, err)
 
-	err := manager.Pause(context.Background(), "strategy-1", "maintenance")
+	err = manager.Pause(context.Background(), "strategy-1", "maintenance")
 	require.NoError(t, err)
 
 	state, _ := manager.GetRolloutState(context.Background(), "strategy-1")

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -420,7 +421,18 @@ func (c *CollectorService) collectTickerDataBulk(worker *Worker) error {
 			var resp []ccxt.MarketPriceInterface
 			resp, fetchErr = c.ccxtService.FetchMarketData(ctx, []string{worker.Exchange}, validSymbols)
 			if fetchErr != nil {
-				return fetchErr
+				var partialErr *ccxt.PartialMarketDataError
+				if errors.As(fetchErr, &partialErr) && len(partialErr.Data) > 0 {
+					c.logger.WithFields(map[string]interface{}{
+						"exchange":   worker.Exchange,
+						"symbol_cnt": len(validSymbols),
+						"partial":    len(partialErr.Data),
+						"reason":     partialErr.Error(),
+					}).WithError(fetchErr).Warn("Fetched partial market data within fallback limits")
+					resp = partialErr.Data
+				} else {
+					return fetchErr
+				}
 			}
 			// Convert interface slice to models for downstream processing
 			marketData = c.convertMarketPriceInterfacesToModels(resp)

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -393,6 +394,9 @@ func (c *ScalpingAutonomyCoordinator) ensureRolloutState(ctx context.Context, st
 	if targetStage != autonomous.StageShadow {
 		for state.CurrentStage != targetStage {
 			state, err = c.rollout.Promote(ctx, strategyID, "initial_stage_override")
+			if errors.Is(err, autonomous.ErrPromotionCriteriaNotMet) {
+				state, err = c.rollout.ForcePromote(ctx, strategyID, "initial_stage_override")
+			}
 			if err != nil {
 				return nil, fmt.Errorf("promote initial rollout stage to %s: %w", targetStage, err)
 			}
