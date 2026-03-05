@@ -174,7 +174,6 @@ func (e *AutoRollbackEngine) executeRollback(
 	}
 
 	// Roll back to previous stage
-	originalFromStage := state.CurrentStage
 	newState, err := e.rollout.Rollback(ctx, strategyID, trigger, reason)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute rollback: %w", err)

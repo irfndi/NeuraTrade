@@ -370,22 +370,6 @@ func startService(binary, name, logFile string, env map[string]string, pidFile s
 func resolveServiceBinary(binary string) (string, error) {
 	binary = strings.TrimSpace(binary)
 	if binary == "" {
-		return "", fmt.Errorf("binary path is required")
-	}
-	base := filepath.Base(binary)
-	if _, allowed := allowedGatewayServiceBinaries[base]; !allowed {
-		return "", fmt.Errorf("binary %q is not in allowlist", base)
-	}
-	resolved, err := exec.LookPath(binary)
-	if err != nil {
-		return "", err
-	}
-	return resolved, nil
-}
-
-func resolveServiceBinary(binary string) (string, error) {
-	binary = strings.TrimSpace(binary)
-	if binary == "" {
 		return "", fmt.Errorf("binary path is empty")
 	}
 
