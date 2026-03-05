@@ -362,14 +362,11 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if count, ok := chatRuntime["state_drift_positions"]; ok {
 			response["state_drift_positions"] = count
 		}
-		if reason, ok := chatRuntime["entry_gate_reason"].(string); ok && strings.TrimSpace(reason) != "" {
-			response["entry_gate_reason"] = strings.TrimSpace(reason)
+		if reason, ok := chatRuntime["entry_gate_reason_current"].(string); ok && strings.TrimSpace(reason) != "" {
+			response["entry_gate_reason_current"] = strings.TrimSpace(reason)
 		}
 		if gateType, ok := chatRuntime["entry_gate_type"].(string); ok && strings.TrimSpace(gateType) != "" {
 			response["entry_gate_type"] = strings.TrimSpace(gateType)
-		}
-		if recoveryGateReason, ok := chatRuntime["recovery_gate_reason"].(string); ok && strings.TrimSpace(recoveryGateReason) != "" {
-			response["recovery_gate_reason"] = strings.TrimSpace(recoveryGateReason)
 		}
 		if source, ok := chatRuntime["risk_lock_source"].(string); ok && strings.TrimSpace(source) != "" {
 			response["risk_lock_source"] = strings.TrimSpace(source)
@@ -386,8 +383,8 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if blockReason, ok := chatRuntime["entry_attempt_block_reason"].(string); ok && strings.TrimSpace(blockReason) != "" {
 			response["entry_attempt_block_reason"] = strings.TrimSpace(blockReason)
 		}
-		if nextCondition, ok := chatRuntime["next_unblock_condition"].(string); ok && strings.TrimSpace(nextCondition) != "" {
-			response["next_unblock_condition"] = strings.TrimSpace(nextCondition)
+		if nextCondition, ok := chatRuntime["next_unblock_condition_current"].(string); ok && strings.TrimSpace(nextCondition) != "" {
+			response["next_unblock_condition_current"] = strings.TrimSpace(nextCondition)
 		}
 		if attemptsInWindow, ok := chatRuntime["entry_attempts_1h"]; ok {
 			response["entry_attempts_1h"] = attemptsInWindow
@@ -413,8 +410,17 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if recoveryMode, ok := chatRuntime["recovery_mode"].(string); ok && strings.TrimSpace(recoveryMode) != "" {
 			response["recovery_mode"] = strings.TrimSpace(recoveryMode)
 		}
-		if cleanCycles, ok := chatRuntime["recovery_clean_cycles"]; ok {
-			response["recovery_clean_cycles"] = cleanCycles
+		if cleanCycles, ok := chatRuntime["recovery_clean_cycles_current"]; ok {
+			response["recovery_clean_cycles_current"] = cleanCycles
+		}
+		if requiredCycles, ok := chatRuntime["recovery_clean_cycles_required"]; ok {
+			response["recovery_clean_cycles_required"] = requiredCycles
+		}
+		if cyclesToEntry, ok := chatRuntime["recovery_cycles_to_entry"]; ok {
+			response["recovery_cycles_to_entry"] = cyclesToEntry
+		}
+		if gateEvalAt, ok := chatRuntime["recovery_gate_eval_at"].(string); ok && strings.TrimSpace(gateEvalAt) != "" {
+			response["recovery_gate_eval_at"] = strings.TrimSpace(gateEvalAt)
 		}
 		if allowed, ok := chatRuntime["recovery_entry_allowed"].(bool); ok {
 			response["recovery_entry_allowed"] = allowed
@@ -522,7 +528,7 @@ func (h *AutonomousHandler) GetPortfolio(c *gin.Context) {
 			if raw, ok := runtime["state_drift_active"].(bool); ok {
 				driftDetected = raw
 			}
-			if raw, ok := runtime["entry_gate_reason"].(string); ok {
+			if raw, ok := runtime["entry_gate_reason_current"].(string); ok {
 				entryGateReason = strings.TrimSpace(raw)
 			}
 		}

@@ -102,7 +102,7 @@ func TestTelegramIntegration(t *testing.T) {
 	}()
 
 	t.Run("GetUserByChatID", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+testTelegramChatID, nil)
+		req, _ := http.NewRequest("GET", "/internal/telegram/users/"+testTelegramChatID, nil)
 		req.Header.Set("X-API-Key", testAdminKey)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -119,7 +119,7 @@ func TestTelegramIntegration(t *testing.T) {
 	})
 
 	t.Run("GetNotificationPreferences_Default", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+userID, nil)
+		req, _ := http.NewRequest("GET", "/internal/telegram/notifications/"+userID, nil)
 		req.Header.Set("X-API-Key", testAdminKey)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -137,7 +137,7 @@ func TestTelegramIntegration(t *testing.T) {
 
 	t.Run("SetNotificationPreferences_Disable", func(t *testing.T) {
 		body := []byte(`{"enabled": false}`)
-		req, _ := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+userID, bytes.NewBuffer(body))
+		req, _ := http.NewRequest("POST", "/internal/telegram/notifications/"+userID, bytes.NewBuffer(body))
 		req.Header.Set("X-API-Key", testAdminKey)
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -146,7 +146,7 @@ func TestTelegramIntegration(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		// Verify it's persistent
-		reqValues, _ := http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+userID, nil)
+		reqValues, _ := http.NewRequest("GET", "/internal/telegram/notifications/"+userID, nil)
 		reqValues.Header.Set("X-API-Key", testAdminKey)
 		wValues := httptest.NewRecorder()
 		router.ServeHTTP(wValues, reqValues)
@@ -158,7 +158,7 @@ func TestTelegramIntegration(t *testing.T) {
 
 	t.Run("SetNotificationPreferences_EnableAgain", func(t *testing.T) {
 		body := []byte(`{"enabled": true}`)
-		req, _ := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+userID, bytes.NewBuffer(body))
+		req, _ := http.NewRequest("POST", "/internal/telegram/notifications/"+userID, bytes.NewBuffer(body))
 		req.Header.Set("X-API-Key", testAdminKey)
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -167,7 +167,7 @@ func TestTelegramIntegration(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		// Verify it's persistent
-		reqValues, _ := http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+userID, nil)
+		reqValues, _ := http.NewRequest("GET", "/internal/telegram/notifications/"+userID, nil)
 		reqValues.Header.Set("X-API-Key", testAdminKey)
 		wValues := httptest.NewRecorder()
 		router.ServeHTTP(wValues, reqValues)
@@ -178,7 +178,7 @@ func TestTelegramIntegration(t *testing.T) {
 	})
 
 	t.Run("InternalRoute_AllowsNoKey", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+testTelegramChatID, nil)
+		req, _ := http.NewRequest("GET", "/internal/telegram/users/"+testTelegramChatID, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 

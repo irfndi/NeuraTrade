@@ -858,7 +858,7 @@ func beginAutonomous(cCtx *cli.Context) error {
 		ChatID: chatID,
 	}
 
-	respBody, err := client.makeRequest("POST", "/api/v1/telegram/internal/autonomous/begin", request)
+	respBody, err := client.makeRequest("POST", "/internal/telegram/autonomous/begin", request)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
 		fmt.Println("This is a simulated autonomous mode start for demonstration purposes...")
@@ -920,7 +920,7 @@ func pauseAutonomous(cCtx *cli.Context) error {
 		ChatID: chatID,
 	}
 
-	respBody, err := client.makeRequest("POST", "/api/v1/telegram/internal/autonomous/pause", request)
+	respBody, err := client.makeRequest("POST", "/internal/telegram/autonomous/pause", request)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
 		fmt.Println("This is a simulated autonomous mode pause for demonstration purposes...")
@@ -975,7 +975,7 @@ func getAutonomousStatus(cCtx *cli.Context) error {
 	client := NewAPIClient(baseURL, apiKey)
 
 	// For status, we'll use the doctor endpoint which gives us the status
-	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/doctor?chat_id=%s", chatID), nil)
+	respBody, err := client.makeRequest("GET", fmt.Sprintf("/internal/telegram/doctor?chat_id=%s", chatID), nil)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
 		fmt.Println("This is a simulated status check for demonstration purposes...")

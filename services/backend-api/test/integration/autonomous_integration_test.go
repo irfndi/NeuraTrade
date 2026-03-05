@@ -124,7 +124,7 @@ func TestAutonomousIntegration(t *testing.T) {
 	})
 
 	t.Run("GetDoctor", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/telegram/internal/doctor?chat_id="+testTelegramChatID, nil)
+		req, _ := http.NewRequest("GET", "/internal/telegram/doctor?chat_id="+testTelegramChatID, nil)
 		// Internal doctor doesn't strictly need X-API-Key in all setups but we'll provide it
 		req.Header.Set("X-API-Key", testAdminKey)
 		w := httptest.NewRecorder()

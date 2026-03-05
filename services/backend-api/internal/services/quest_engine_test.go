@@ -642,9 +642,9 @@ func TestGetChatRuntimeDiagnostics_IncludesDriftFields(t *testing.T) {
 	if count != 3 {
 		t.Fatalf("expected state_drift_positions=3, got %d", count)
 	}
-	reason, _ := diag["entry_gate_reason"].(string)
+	reason, _ := diag["entry_gate_reason_current"].(string)
 	if reason != "state drift detected" {
-		t.Fatalf("expected entry_gate_reason to be populated, got %q", reason)
+		t.Fatalf("expected entry_gate_reason_current to be populated, got %q", reason)
 	}
 	if _, ok := diag["last_drift_repair_at"].(string); !ok {
 		t.Fatal("expected last_drift_repair_at in diagnostics")
@@ -665,11 +665,14 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 			"definition_id": "scalping_execution",
 		},
 		Checkpoint: map[string]interface{}{
-			"recovery_mode":          "micro_entry",
-			"recovery_clean_cycles":  2,
-			"recovery_entry_allowed": false,
-			"entry_gate_type":        "recovery_gate",
-			"risk_max_drawdown":      0.41,
+			"recovery_mode":                  "micro_entry",
+			"recovery_clean_cycles":          2,
+			"recovery_clean_cycles_required": 3,
+			"recovery_cycles_to_entry":       1,
+			"recovery_gate_eval_at":          "2026-02-27T03:36:01Z",
+			"recovery_entry_allowed":         false,
+			"entry_gate_type":                "recovery_gate",
+			"risk_max_drawdown":              0.41,
 		},
 	}
 
@@ -677,8 +680,17 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	if mode, _ := diag["recovery_mode"].(string); mode != "micro_entry" {
 		t.Fatalf("expected recovery_mode=micro_entry, got %q", mode)
 	}
-	if cycles, _ := diag["recovery_clean_cycles"].(int); cycles != 2 {
-		t.Fatalf("expected recovery_clean_cycles=2, got %d", cycles)
+	if cycles, _ := diag["recovery_clean_cycles_current"].(int); cycles != 2 {
+		t.Fatalf("expected recovery_clean_cycles_current=2, got %d", cycles)
+	}
+	if required, _ := diag["recovery_clean_cycles_required"].(int); required != 3 {
+		t.Fatalf("expected recovery_clean_cycles_required=3, got %d", required)
+	}
+	if cyclesToEntry, _ := diag["recovery_cycles_to_entry"].(int); cyclesToEntry != 1 {
+		t.Fatalf("expected recovery_cycles_to_entry=1, got %d", cyclesToEntry)
+	}
+	if evalAt, _ := diag["recovery_gate_eval_at"].(string); evalAt == "" {
+		t.Fatal("expected recovery_gate_eval_at to be populated")
 	}
 	if allowed, _ := diag["recovery_entry_allowed"].(bool); allowed {
 		t.Fatal("expected recovery_entry_allowed=false")
@@ -734,8 +746,8 @@ func TestGetChatRuntimeDiagnostics_IncludesLivenessAndDeadlockFields(t *testing.
 	if blockReason, _ := diag["entry_attempt_block_reason"].(string); blockReason == "" {
 		t.Fatal("expected entry_attempt_block_reason to be populated")
 	}
-	if unblock, _ := diag["next_unblock_condition"].(string); unblock == "" {
-		t.Fatal("expected next_unblock_condition to be populated")
+	if unblock, _ := diag["next_unblock_condition_current"].(string); unblock == "" {
+		t.Fatal("expected next_unblock_condition_current to be populated")
 	}
 	if signature, _ := diag["drift_signature"].(string); signature != "sync-1|sync-2" {
 		t.Fatalf("expected drift_signature=sync-1|sync-2, got %q", signature)

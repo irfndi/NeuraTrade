@@ -807,6 +807,57 @@ func TestSetupRoutes_TelegramInternalRequiresAdminAuth(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "ADMIN_AUTH_FAILED")
 }
 
+func TestSetupRoutes_TelegramLegacyInternalAliasesRemoved(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
+	oldTelegramToken, telegramTokenExists := os.LookupEnv("TELEGRAM_BOT_TOKEN")
+	oldTelegramChat, telegramChatExists := os.LookupEnv("TELEGRAM_CHAT_ID")
+	defer func() {
+		restoreEnv(t, "ADMIN_API_KEY", oldAdminKey, adminKeyExists)
+		restoreEnv(t, "TELEGRAM_BOT_TOKEN", oldTelegramToken, telegramTokenExists)
+		restoreEnv(t, "TELEGRAM_CHAT_ID", oldTelegramChat, telegramChatExists)
+	}()
+
+	mustSetEnv(t, "ADMIN_API_KEY", "test-admin-key-that-is-at-least-32-chars")
+	mustSetEnv(t, "TELEGRAM_BOT_TOKEN", "test-token")
+	mustSetEnv(t, "TELEGRAM_CHAT_ID", "test-chat-id")
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
+
+	mockTelegramConfig := &config.TelegramConfig{BotToken: "test-token"}
+
+	router := gin.New()
+	mockDB := setupMockDB(t)
+	mockRedis := &database.RedisClient{
+		Client: redis.NewClient(&redis.Options{
+			Addr: "localhost:6379",
+		}),
+	}
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
+
+	legacyPaths := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/telegram/internal/users/123"},
+		{method: http.MethodGet, path: "/api/v1/telegram/internal/notifications/123"},
+		{method: http.MethodPost, path: "/api/v1/telegram/internal/autonomous/begin"},
+		{method: http.MethodPost, path: "/api/v1/telegram/internal/autonomous/pause"},
+		{method: http.MethodGet, path: "/api/v1/telegram/internal/doctor?chat_id=123"},
+	}
+
+	for _, tc := range legacyPaths {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		assert.Equalf(t, http.StatusNotFound, rec.Code, "expected legacy path removed: %s %s", tc.method, tc.path)
+	}
+}
+
 func TestGetEnvOrDefault(t *testing.T) {
 	t.Run("returns value when env set", func(t *testing.T) {
 		t.Setenv("TEST_KEY", "test-value")

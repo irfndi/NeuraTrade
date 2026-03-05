@@ -1022,22 +1022,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 
 		// Telegram internal routes - backward compatible (no auth for internal network)
-		// Both new (/internal/telegram/*) and legacy (/api/v1/telegram/internal/*) paths work
+		// Internal Telegram routes under /api/v1 remain admin-authenticated.
 		telegram := v1.Group("/telegram")
 		{
-			// Legacy paths kept for backward compatibility with older telegram-service versions
-			telegram.GET("/internal/users/:id", telegramInternalHandler.GetUserByChatID)
-			telegram.GET("/internal/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
-			telegram.POST("/internal/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
-			telegram.POST("/internal/autonomous/begin", telegramInternalHandler.BeginAutonomous)
-			telegram.POST("/internal/autonomous/pause", telegramInternalHandler.PauseAutonomous)
-			telegram.POST("/internal/wallets/connect_exchange", telegramInternalHandler.ConnectExchange)
-			telegram.POST("/internal/wallets/connect_polymarket", telegramInternalHandler.ConnectPolymarket)
-			telegram.POST("/internal/wallets", telegramInternalHandler.AddWallet)
-			telegram.POST("/internal/wallets/remove", telegramInternalHandler.RemoveWallet)
-			telegram.GET("/internal/wallets", telegramInternalHandler.GetWallets)
-			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
-
 			telegramInternal := telegram.Group("/internal")
 			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
 			{

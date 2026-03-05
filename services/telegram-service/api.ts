@@ -313,7 +313,7 @@ export const createApi = (config: TelegramConfigPartial) => {
       try {
         // Try to make a simple authenticated request
         const response = await fetch(
-          `${config.apiBaseUrl}/api/v1/telegram/internal/users/test`,
+          `${config.apiBaseUrl}/internal/telegram/users/test`,
           {
             method: "GET",
             headers: {
