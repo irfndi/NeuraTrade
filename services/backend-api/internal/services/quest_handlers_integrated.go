@@ -176,6 +176,10 @@ func (h *IntegratedQuestHandlers) SetDynamicProtectionManager(manager *DynamicPr
 	h.protectionManager = manager
 }
 
+func (h *IntegratedQuestHandlers) SetQuestEngine(engine *QuestEngine) {
+	h.questEngine = engine
+}
+
 func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
 	ccxtSvc, ok := h.ccxtService.(ccxt.CCXTService)
 	if !ok {
@@ -213,47 +217,38 @@ func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
 	}
 }
 
-// RegisterIntegratedHandlers registers production-ready quest handlers
-func (e *QuestEngine) RegisterIntegratedHandlers(handlers *IntegratedQuestHandlers) {
-	handlers.questEngine = e
-
-	// Register a single routine handler and dispatch by quest definition_id.
-	// RegisterHandler stores one handler per QuestType, so multiple registrations
-	// for QuestTypeRoutine were previously overwriting each other.
-	e.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
-		var err error
-		switch quest.Metadata["definition_id"] {
-		case "market_scan":
-			err = handlers.handleMarketScanWithTA(ctx, quest)
-		case "funding_rate_scan":
-			err = handlers.handleFundingRateScan(ctx, quest)
-		case "portfolio_health":
-			err = handlers.handlePortfolioHealthWithRisk(ctx, quest)
-		case "scalping_execution":
-			err = handlers.handleScalpingExecution(ctx, quest)
-		default:
-			err = fmt.Errorf("unknown routine quest definition: %s", quest.Metadata["definition_id"])
-		}
-		handlers.recordQuestResult(quest, err == nil, decimal.Zero)
-		return err
-	})
-
-	// Arbitrage Execution - execute arbitrage opportunities when detected
-	e.RegisterHandler(QuestTypeArbitrage, func(ctx context.Context, quest *Quest) error {
-		err := handlers.handleArbitrageExecution(ctx, quest)
-		handlers.recordQuestResult(quest, err == nil, decimal.Zero)
-		return err
-	})
-
-	log.Println("Integrated quest handlers registered successfully")
-}
-
 // recordQuestResult records quest execution result for monitoring
 func (h *IntegratedQuestHandlers) recordQuestResult(quest *Quest, success bool, pnl decimal.Decimal) {
 	chatID := quest.Metadata["chat_id"]
 	if h.monitoring != nil && chatID != "" {
 		h.monitoring.RecordQuestExecution(chatID, success, pnl)
 	}
+}
+
+// ExecuteRoutine runs one routine quest definition and records monitoring outcomes.
+func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Quest) error {
+	var err error
+	switch quest.Metadata["definition_id"] {
+	case "market_scan":
+		err = h.handleMarketScanWithTA(ctx, quest)
+	case "funding_rate_scan":
+		err = h.handleFundingRateScan(ctx, quest)
+	case "portfolio_health":
+		err = h.handlePortfolioHealthWithRisk(ctx, quest)
+	case "scalping_execution":
+		err = h.handleScalpingExecution(ctx, quest)
+	default:
+		err = fmt.Errorf("unknown routine quest definition: %s", quest.Metadata["definition_id"])
+	}
+	h.recordQuestResult(quest, err == nil, decimal.Zero)
+	return err
+}
+
+// ExecuteArbitrage runs arbitrage quest execution and records monitoring outcomes.
+func (h *IntegratedQuestHandlers) ExecuteArbitrage(ctx context.Context, quest *Quest) error {
+	err := h.handleArbitrageExecution(ctx, quest)
+	h.recordQuestResult(quest, err == nil, decimal.Zero)
+	return err
 }
 
 // handleMarketScanWithTA scans markets using technical analysis
@@ -2227,52 +2222,6 @@ func (h *IntegratedQuestHandlers) GetMonitoringSnapshot(chatID string) map[strin
 		"health_status":     snapshot.HealthStatus,
 		"last_quest_update": snapshot.LastQuestUpdate.Format(time.RFC3339),
 	}
-}
-
-// ProductionQuestExecutor handles production quest execution with full monitoring
-type ProductionQuestExecutor struct {
-	handlers   *IntegratedQuestHandlers
-	engine     *QuestEngine
-	monitoring *AutonomousMonitorManager
-}
-
-// NewProductionQuestExecutor creates a production-ready quest executor
-func NewProductionQuestExecutor(
-	ta *TechnicalAnalysisService,
-	ccxt interface{},
-	arb interface{},
-	futuresArb interface{},
-	notif *NotificationService,
-) *ProductionQuestExecutor {
-	monitoring := NewAutonomousMonitorManager(notif)
-	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring)
-	engine := NewQuestEngineWithNotification(NewInMemoryQuestStore(), nil, notif)
-
-	// Register integrated handlers
-	engine.RegisterIntegratedHandlers(handlers)
-
-	return &ProductionQuestExecutor{
-		handlers:   handlers,
-		engine:     engine,
-		monitoring: monitoring,
-	}
-}
-
-// Start begins quest execution
-func (e *ProductionQuestExecutor) Start() {
-	e.engine.Start()
-	log.Println("Production quest executor started")
-}
-
-// Stop stops quest execution
-func (e *ProductionQuestExecutor) Stop() {
-	e.engine.Stop()
-	log.Println("Production quest executor stopped")
-}
-
-// GetStatus returns executor status
-func (e *ProductionQuestExecutor) GetStatus(chatID string) map[string]interface{} {
-	return e.handlers.GetMonitoringSnapshot(chatID)
 }
 
 // parseChatID converts a chat ID string to int64

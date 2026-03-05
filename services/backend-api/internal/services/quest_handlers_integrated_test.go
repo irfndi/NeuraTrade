@@ -116,42 +116,33 @@ func TestIntegratedQuestHandlers_GetMonitoringSnapshot(t *testing.T) {
 	assert.Contains(t, snapshot, "total_quests")
 }
 
-// TestProductionQuestExecutor tests the production quest executor
-func TestProductionQuestExecutor(t *testing.T) {
-	mockNotif := &NotificationService{}
-
-	executor := NewProductionQuestExecutor(
-		nil, nil, nil, nil, mockNotif,
-	)
-
-	assert.NotNil(t, executor)
-	assert.NotNil(t, executor.engine)
-	assert.NotNil(t, executor.monitoring)
-
-	// Test start
-	executor.Start()
-
-	// Test status
-	status := executor.GetStatus("test123")
-	assert.NotNil(t, status)
-
-	// Test stop
-	executor.Stop()
-}
-
-// TestQuestEngine_IntegratedHandlerRegistration tests handler registration
-func TestQuestEngine_IntegratedHandlerRegistration(t *testing.T) {
-	engine := NewQuestEngineWithNotification(NewInMemoryQuestStore(), nil, nil)
-
+func TestIntegratedQuestHandlers_ExecuteRoutineUnknownDefinition(t *testing.T) {
 	mockNotif := &NotificationService{}
 	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
 
-	// Should not panic
-	engine.RegisterIntegratedHandlers(handlers)
+	quest := &Quest{
+		ID:         "unknown-routine",
+		Name:       "Unknown Routine",
+		Type:       QuestTypeRoutine,
+		Status:     QuestStatusActive,
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id":       "test123",
+			"definition_id": "not-supported",
+		},
+	}
 
-	// Verify handlers are registered
-	assert.NotNil(t, engine.handlers)
+	err := handlers.ExecuteRoutine(context.Background(), quest)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown routine quest definition")
+}
+
+func TestIntegratedQuestHandlers_SetQuestEngine(t *testing.T) {
+	engine := NewQuestEngineWithNotification(NewInMemoryQuestStore(), nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetQuestEngine(engine)
+	assert.Equal(t, engine, handlers.questEngine)
 }
 
 // TestQuestEngine_QuestExecutionWithCheckpoint tests quest execution with checkpoints
