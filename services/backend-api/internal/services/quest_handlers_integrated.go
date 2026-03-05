@@ -94,6 +94,56 @@ func NewIntegratedQuestHandlers(
 	}
 }
 
+// NewIntegratedQuestHandlersWithAutonomyStore creates handlers with deterministic autonomy wiring.
+func NewIntegratedQuestHandlersWithAutonomyStore(
+	ta *TechnicalAnalysisService,
+	ccxt interface{},
+	arb interface{},
+	futuresArb interface{},
+	notif *NotificationService,
+	monitoring *AutonomousMonitorManager,
+	db *sql.DB,
+	store *AutonomousRolloutStore,
+) (*IntegratedQuestHandlers, error) {
+	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring)
+	handlers.SetDB(db)
+	if err := handlers.setAutonomyStoreWithInit(context.Background(), store); err != nil {
+		return nil, err
+	}
+	return handlers, nil
+}
+
+func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, store *AutonomousRolloutStore) error {
+	if h == nil {
+		return nil
+	}
+	if store == nil {
+		if h.db == nil {
+			h.autonomyStore = nil
+			h.configureScalpingAutonomy()
+			return nil
+		}
+		store = NewAutonomousRolloutStore(h.db)
+	}
+
+	initCtx := ctx
+	cancel := func() {}
+	if initCtx == nil {
+		initCtx = context.Background()
+	}
+	if _, hasDeadline := initCtx.Deadline(); !hasDeadline {
+		initCtx, cancel = context.WithTimeout(initCtx, 5*time.Second)
+	}
+	defer cancel()
+
+	if err := store.InitSchema(initCtx); err != nil {
+		return fmt.Errorf("initialize autonomous rollout schema: %w", err)
+	}
+	h.autonomyStore = store
+	h.configureScalpingAutonomy()
+	return nil
+}
+
 // SetOrderExecutor sets the order executor for scalping
 func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecutor) {
 	h.orderExecutor = executor
@@ -102,16 +152,10 @@ func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecuto
 // SetDB sets the database for user settings lookup
 func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 	h.db = db
-	if db == nil {
-		return
-	}
-	store := NewAutonomousRolloutStore(db)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := store.InitSchema(ctx); err != nil {
-		log.Printf("[SCALPING] Failed to initialize autonomous rollout schema: %v", err)
-		return
-	}
+}
+
+// SetAutonomyStore sets the autonomy rollout store and applies coordinator wiring when available.
+func (h *IntegratedQuestHandlers) SetAutonomyStore(store *AutonomousRolloutStore) {
 	h.autonomyStore = store
 	h.configureScalpingAutonomy()
 }
@@ -537,8 +581,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		OpenPositions: 0,
 	}
 	h.enrichPortfolioControlPlane(ctx, quest, chatID, userExchange, &portfolio)
-	recoveryState := h.evaluateRecoveryGateState(quest, portfolio)
-	recentLoss := currentRecentLossStreak()
+	recoveryState := h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
+	recentLoss := h.currentRecentLossStreak(ctx, chatID, userExchange)
 	quest.Checkpoint["recovery_recent_loss_streak"] = recentLoss.ConsecutiveLosses
 	quest.Checkpoint["recovery_recent_loss_active"] = recentLoss.Active
 	quest.Checkpoint["recovery_recent_loss_window_seconds"] = int(recentLoss.Window.Seconds())
@@ -560,7 +604,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 	if recentLoss.Active && recentLoss.ConsecutiveLosses >= recoveryLossStreakResetThreshold() {
 		h.updateRecoveryCleanCycles(quest, false, "recent_loss_streak")
-		recoveryState = h.evaluateRecoveryGateState(quest, portfolio)
+		recoveryState = h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
 		portfolio.RecoveryMode = recoveryState.Mode
 		portfolio.RecoveryEntryOK = recoveryState.EntryAllowed
 		portfolio.RecoveryCleanCycle = recoveryState.CleanCycles
@@ -2487,6 +2531,16 @@ type entryAttemptGateState struct {
 }
 
 func (h *IntegratedQuestHandlers) evaluateRecoveryGateState(quest *Quest, portfolio TradingPortfolio) recoveryGateState {
+	return h.evaluateRecoveryGateStateForScope(context.Background(), quest, portfolio, "", "")
+}
+
+func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
+	ctx context.Context,
+	quest *Quest,
+	portfolio TradingPortfolio,
+	chatID string,
+	exchange string,
+) recoveryGateState {
 	cleanCycles := 0
 	if quest != nil {
 		cleanCycles = checkpointInt(quest.Checkpoint["recovery_clean_cycles"])
@@ -2534,7 +2588,7 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateState(quest *Quest, portfo
 		MicroEntryCapPct:    microCap,
 	}
 
-	recentLoss := currentRecentLossStreak()
+	recentLoss := h.currentRecentLossStreak(ctx, chatID, exchange)
 	state.RecentLossStreak = recentLoss.ConsecutiveLosses
 	state.RecentLossWindow = recentLoss.Window
 	state.RecentLossActive = recentLoss.Active
@@ -2638,14 +2692,18 @@ type recentLossStreakState struct {
 	Active            bool
 }
 
-func currentRecentLossStreak() recentLossStreakState {
+func (h *IntegratedQuestHandlers) currentRecentLossStreak(ctx context.Context, chatID string, exchange string) recentLossStreakState {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	window := recoveryLossWindow()
-	perf := GetScalpingPerformance().GetPerformance()
+	perf := h.scopedScalpingPerformance(ctx, strings.TrimSpace(chatID), strings.TrimSpace(exchange), window)
 	losses := readIntMetric(perf["consecutive_losses"])
 	lastTrade := readCheckpointTime(perf["last_trade_time"])
-	active := losses > 0
-	if !lastTrade.IsZero() {
-		active = active && time.Since(lastTrade) <= window
+
+	active := false
+	if !lastTrade.IsZero() && losses > 0 {
+		active = time.Since(lastTrade) <= window
 	}
 
 	return recentLossStreakState{
@@ -2654,6 +2712,35 @@ func currentRecentLossStreak() recentLossStreakState {
 		Window:            window,
 		Active:            active,
 	}
+}
+
+func (h *IntegratedQuestHandlers) scopedScalpingPerformance(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	window time.Duration,
+) map[string]interface{} {
+	perf := map[string]interface{}{
+		"consecutive_losses": 0,
+	}
+	if h == nil || h.lifecycleStore == nil || chatID == "" {
+		return perf
+	}
+
+	since := time.Now().UTC().Add(-window)
+	summary, err := h.lifecycleStore.GetRecentLossStreak(ctx, chatID, exchange, since)
+	if err != nil {
+		log.Printf(
+			"[SCALPING] Failed to read scoped recent loss streak (chat=%s exchange=%s): %v",
+			chatID,
+			exchange,
+			err,
+		)
+		return perf
+	}
+	perf["consecutive_losses"] = summary.ConsecutiveLosses
+	perf["last_trade_time"] = summary.LastTradeAt
+	return perf
 }
 
 func recoveryLossWindow() time.Duration {

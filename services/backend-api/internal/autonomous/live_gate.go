@@ -32,8 +32,20 @@ type LiveTradingGate struct {
 }
 
 type cachedGateState struct {
-	state    *GateState
-	cachedAt time.Time
+	state     *GateState
+	cachedAt  time.Time
+	expiresAt time.Time
+}
+
+func cloneGateState(state *GateState) *GateState {
+	if state == nil {
+		return nil
+	}
+	clone := *state
+	if len(state.BlockReasons) > 0 {
+		clone.BlockReasons = append([]string(nil), state.BlockReasons...)
+	}
+	return &clone
 }
 
 // NewLiveTradingGate creates a new live trading gate.
@@ -67,24 +79,6 @@ func (g *LiveTradingGate) Evaluate(ctx context.Context, strategyID string) (*Gat
 
 	checks := GateChecks{}
 	var blockReasons []string
-
-	// Check policy validation
-	if g.validator != nil {
-		passes, _, err := g.validator.ValidateProposal(ctx, &StrategyProposal{
-			StrategyID: strategyID,
-		})
-		if err != nil {
-			blockReasons = append(blockReasons, fmt.Sprintf("policy_check_error: %v", err))
-			checks.PolicyPasses = false
-		} else {
-			checks.PolicyPasses = passes
-			if !passes {
-				blockReasons = append(blockReasons, "policy_validation_failed")
-			}
-		}
-	} else {
-		checks.PolicyPasses = true // No validator = pass
-	}
 
 	// Check safe mode
 	if g.validator != nil {
@@ -183,7 +177,7 @@ func (g *LiveTradingGate) Evaluate(ctx context.Context, strategyID string) (*Gat
 	}
 
 	// Cache the result
-	g.storeInCache(strategyID, state)
+	g.storeInCache(strategyID, state, g.config.CacheDuration)
 
 	return state, nil
 }
@@ -216,7 +210,7 @@ func (g *LiveTradingGate) ForceOpen(ctx context.Context, strategyID string) erro
 		Checks:        GateChecks{},
 		LastEvaluated: time.Now(),
 	}
-	g.storeInCache(strategyID, state)
+	g.storeInCache(strategyID, state, 0)
 	return nil
 }
 
@@ -229,7 +223,7 @@ func (g *LiveTradingGate) ForceClose(ctx context.Context, strategyID string, rea
 		Checks:        GateChecks{},
 		LastEvaluated: time.Now(),
 	}
-	g.storeInCache(strategyID, state)
+	g.storeInCache(strategyID, state, 0)
 	return nil
 }
 
@@ -250,8 +244,7 @@ func (g *LiveTradingGate) ClearAllCache() {
 // determineGateOpen determines if the gate should be open based on checks.
 func (g *LiveTradingGate) determineGateOpen(checks GateChecks) bool {
 	if g.config.RequireAllChecks {
-		return checks.PolicyPasses &&
-			checks.SafeModeOff &&
+		return checks.SafeModeOff &&
 			checks.KillSwitchOff &&
 			checks.StrategyLive &&
 			checks.RiskBudgetAvailable &&
@@ -273,20 +266,25 @@ func (g *LiveTradingGate) getFromCache(strategyID string) *GateState {
 	}
 
 	// Check if cache is still valid
-	if time.Since(cached.cachedAt) > g.config.CacheDuration {
+	if !cached.expiresAt.IsZero() && time.Now().After(cached.expiresAt) {
 		return nil
 	}
 
-	return cached.state
+	return cloneGateState(cached.state)
 }
 
 // storeInCache stores a gate state in cache.
-func (g *LiveTradingGate) storeInCache(strategyID string, state *GateState) {
+func (g *LiveTradingGate) storeInCache(strategyID string, state *GateState, ttl time.Duration) {
 	g.cacheMutex.Lock()
 	defer g.cacheMutex.Unlock()
 
+	var expiresAt time.Time
+	if ttl > 0 {
+		expiresAt = time.Now().Add(ttl)
+	}
 	g.cache[strategyID] = &cachedGateState{
-		state:    state,
-		cachedAt: time.Now(),
+		state:     cloneGateState(state),
+		cachedAt:  time.Now(),
+		expiresAt: expiresAt,
 	}
 }

@@ -2,6 +2,7 @@ package autonomous
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -133,7 +134,10 @@ func TestStrategyProposalEngine_GenerateProposal(t *testing.T) {
 			name:        "valid proposal",
 			confidence:  0.8,
 			maxDrawdown: decimal.NewFromFloat(0.5),
-			params:      map[string]any{"leverage": 1.5},
+			params: map[string]any{
+				"leverage":              2,
+				"position_size_percent": json.Number("10"),
+			},
 			expectError: false,
 		},
 		{
@@ -148,7 +152,10 @@ func TestStrategyProposalEngine_GenerateProposal(t *testing.T) {
 			name:        "high risk",
 			confidence:  0.9,
 			maxDrawdown: decimal.NewFromFloat(50),
-			params:      map[string]any{"leverage": 20.0},
+			params: map[string]any{
+				"leverage":              int64(20),
+				"position_size_percent": decimal.NewFromFloat(100),
+			},
 			expectError: true,
 			expectedErr: ErrHighRisk,
 		},
@@ -280,6 +287,17 @@ func TestStagedRolloutManager_Promote(t *testing.T) {
 	assert.Equal(t, StagePaper, state.History[0].ToStage)
 }
 
+func TestStagedRolloutManager_CheckPromotionEligibility_NilState(t *testing.T) {
+	repo := newMockRepo()
+	manager := NewStagedRolloutManager(repo, nil)
+
+	eligible, failed := manager.CheckPromotionEligibility(nil)
+
+	assert.False(t, eligible)
+	require.NotEmpty(t, failed)
+	assert.Contains(t, failed[0], "rollout state is nil")
+}
+
 func TestStagedRolloutManager_Rollback(t *testing.T) {
 	repo := newMockRepo()
 	manager := NewStagedRolloutManager(repo, &mockEventPublisher{})
@@ -295,6 +313,23 @@ func TestStagedRolloutManager_Rollback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StageShadow, state.CurrentStage)
 	assert.Equal(t, StatusRolledBack, state.Status)
+}
+
+func TestStagedRolloutManager_Rollback_InvalidStage(t *testing.T) {
+	repo := newMockRepo()
+	manager := NewStagedRolloutManager(repo, nil)
+	repo.states["strategy-1"] = &RolloutState{
+		StrategyID:   "strategy-1",
+		CurrentStage: RolloutStage("invalid"),
+		Status:       StatusActive,
+		EnteredAt:    time.Now(),
+	}
+
+	state, err := manager.Rollback(context.Background(), "strategy-1", TriggerMaxDrawdown, "test")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidStage)
+	assert.Nil(t, state)
 }
 
 func TestStagedRolloutManager_PauseResume(t *testing.T) {
@@ -439,6 +474,26 @@ func TestAutoRollbackEngine_Cooldown(t *testing.T) {
 	assert.False(t, engine.isOnCooldown("strategy-1"))
 }
 
+func TestAutoRollbackEngine_Evaluate_RequiresRolloutManager(t *testing.T) {
+	engine := NewAutoRollbackEngine(DefaultRollbackConfig(), nil, nil, nil, nil)
+
+	event, err := engine.Evaluate(context.Background(), "strategy-1", RolloutMetrics{})
+
+	require.Error(t, err)
+	assert.Nil(t, event)
+	assert.Contains(t, err.Error(), "rollout manager")
+}
+
+func TestAutoRollbackEngine_ForceRollback_RequiresRolloutManager(t *testing.T) {
+	engine := NewAutoRollbackEngine(DefaultRollbackConfig(), nil, nil, nil, nil)
+
+	event, err := engine.ForceRollback(context.Background(), "strategy-1", TriggerMaxDrawdown, "manual")
+
+	require.Error(t, err)
+	assert.Nil(t, event)
+	assert.Contains(t, err.Error(), "rollout manager")
+}
+
 func TestLiveTradingGate_Evaluate(t *testing.T) {
 	config := DefaultGateConfig()
 
@@ -557,6 +612,24 @@ func TestLiveTradingGate_ForceOpenClose(t *testing.T) {
 	assert.False(t, isOpen)
 }
 
+func TestLiveTradingGate_ForceOverridesDoNotExpire(t *testing.T) {
+	config := DefaultGateConfig()
+	config.CacheDuration = 10 * time.Millisecond
+	gate := NewLiveTradingGate(config, nil, nil, nil, nil)
+
+	require.NoError(t, gate.ForceOpen(context.Background(), "strategy-1"))
+	time.Sleep(25 * time.Millisecond)
+	isOpen, err := gate.IsOpen(context.Background(), "strategy-1")
+	require.NoError(t, err)
+	assert.True(t, isOpen)
+
+	require.NoError(t, gate.ForceClose(context.Background(), "strategy-1", "test"))
+	time.Sleep(25 * time.Millisecond)
+	isOpen, err = gate.IsOpen(context.Background(), "strategy-1")
+	require.NoError(t, err)
+	assert.False(t, isOpen)
+}
+
 func TestLiveTradingGate_Cache(t *testing.T) {
 	config := DefaultGateConfig()
 	config.CacheDuration = 5 * time.Second
@@ -576,4 +649,21 @@ func TestLiveTradingGate_Cache(t *testing.T) {
 	state3, err := gate.Evaluate(context.Background(), "strategy-1")
 	require.NoError(t, err)
 	assert.True(t, state3.LastEvaluated.After(state1.LastEvaluated))
+}
+
+func TestLiveTradingGate_CacheReturnsDefensiveCopy(t *testing.T) {
+	config := DefaultGateConfig()
+	gate := NewLiveTradingGate(config, nil, nil, nil, nil)
+
+	require.NoError(t, gate.ForceClose(context.Background(), "strategy-1", "immutable"))
+
+	state1, err := gate.Evaluate(context.Background(), "strategy-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, state1.BlockReasons)
+	state1.BlockReasons[0] = "mutated"
+
+	state2, err := gate.Evaluate(context.Background(), "strategy-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, state2.BlockReasons)
+	assert.Equal(t, "force_closed: immutable", state2.BlockReasons[0])
 }

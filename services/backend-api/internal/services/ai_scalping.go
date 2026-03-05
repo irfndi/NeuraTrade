@@ -563,7 +563,6 @@ func (s *AIScalpingService) updateAutonomyGateState(
 		s.autonomyState.GateOpen = gateState.IsOpen
 		s.autonomyState.GateBlockReasons = append([]string(nil), gateState.BlockReasons...)
 		s.autonomyState.GateChecks = map[string]bool{
-			"policy_passes":         gateState.Checks.PolicyPasses,
 			"safe_mode_off":         gateState.Checks.SafeModeOff,
 			"kill_switch_off":       gateState.Checks.KillSwitchOff,
 			"strategy_live":         gateState.Checks.StrategyLive,

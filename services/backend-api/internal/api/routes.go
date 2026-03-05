@@ -587,15 +587,39 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Create autonomous monitoring for tracking quest execution
 	autonomousMonitoring := services.NewAutonomousMonitorManager(notificationService)
 
+	var sqlDB *sql.DB
+	switch concreteDB := db.(type) {
+	case *database.SQLiteDB:
+		sqlDB = concreteDB.DB
+	case *database.PostgresDB:
+		sqlDB = concreteDB.SQL
+	default:
+		log.Printf("Warning: Unknown database type, AI learning disabled")
+	}
+
 	// Create integrated quest handlers with actual implementations
-	integratedHandlers := services.NewIntegratedQuestHandlers(
+	integratedHandlers, integratedHandlersErr := services.NewIntegratedQuestHandlersWithAutonomyStore(
 		nil,                     // TA service - TODO: Initialize when ready
 		ccxtService,             // CCXT service
 		arbitrageHandler,        // Arbitrage service
 		futuresArbitrageHandler, // Futures arbitrage
 		notificationService,     // Notification service
 		autonomousMonitoring,    // Monitoring service
+		sqlDB,                   // SQL database (for user settings + autonomy store)
+		nil,                     // Autonomy store (auto-create from SQL DB)
 	)
+	if integratedHandlersErr != nil {
+		log.Printf("Warning: failed to initialize integrated handlers with autonomy store: %v", integratedHandlersErr)
+		integratedHandlers = services.NewIntegratedQuestHandlers(
+			nil,
+			ccxtService,
+			arbitrageHandler,
+			futuresArbitrageHandler,
+			notificationService,
+			autonomousMonitoring,
+		)
+		integratedHandlers.SetDB(sqlDB)
+	}
 
 	// Wire order executor to integrated handlers for scalping execution
 	adminAPIKey := os.Getenv("ADMIN_API_KEY")
@@ -624,16 +648,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	if chatID == "" {
 		log.Printf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
-	}
-
-	var sqlDB *sql.DB
-	switch concreteDB := db.(type) {
-	case *database.SQLiteDB:
-		sqlDB = concreteDB.DB
-	case *database.PostgresDB:
-		sqlDB = concreteDB.SQL
-	default:
-		log.Printf("Warning: Unknown database type, AI learning disabled")
 	}
 
 	// Use BitgetOrderExecutor for real order execution
@@ -669,8 +683,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Set database for user settings lookup
 	var lifecycleStore *services.TradingLifecycleStore
 	if sqlDB != nil {
-		integratedHandlers.SetDB(sqlDB)
-		log.Printf("Database set for integrated handlers")
+		log.Printf("Database available for integrated handlers")
 	}
 	if db != nil {
 		var lifecycleErr error

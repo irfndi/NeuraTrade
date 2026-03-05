@@ -3,6 +3,7 @@ package autonomous
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -57,6 +58,9 @@ func (e *AutoRollbackEngine) Evaluate(ctx context.Context, strategyID string, me
 	// Check cooldown
 	if e.isOnCooldown(strategyID) {
 		return nil, nil
+	}
+	if e.rollout == nil {
+		return nil, fmt.Errorf("rollout manager is required for rollback evaluation")
 	}
 
 	// Get current rollout state
@@ -126,17 +130,11 @@ func (e *AutoRollbackEngine) checkTriggers(metrics RolloutMetrics) (RollbackTrig
 }
 
 func netLossCount(metrics RolloutMetrics) int {
-	if metrics.WinningTrades <= 0 {
-		if metrics.LosingTrades < 0 {
-			return 0
-		}
-		return metrics.LosingTrades
-	}
 	net := metrics.LosingTrades - metrics.WinningTrades
-	if net < 0 {
-		return 0
+	if net > 0 {
+		return net
 	}
-	return net
+	return 0
 }
 
 // executeRollback executes the rollback process.
@@ -188,12 +186,28 @@ func (e *AutoRollbackEngine) executeRollback(
 
 	// Save event
 	if e.repo != nil {
-		_ = e.repo.SaveRollbackEvent(ctx, event)
+		if err := e.repo.SaveRollbackEvent(ctx, event); err != nil {
+			log.Printf(
+				"[AUTONOMY] SaveRollbackEvent failed (event_id=%s strategy_id=%s trigger=%s): %v",
+				event.ID,
+				event.StrategyID,
+				event.Trigger,
+				err,
+			)
+		}
 	}
 
 	// Publish event
 	if e.events != nil {
-		_ = e.events.PublishRollbackEvent(ctx, event)
+		if err := e.events.PublishRollbackEvent(ctx, event); err != nil {
+			log.Printf(
+				"[AUTONOMY] PublishRollbackEvent failed (event_id=%s strategy_id=%s trigger=%s): %v",
+				event.ID,
+				event.StrategyID,
+				event.Trigger,
+				err,
+			)
+		}
 	}
 
 	// Set cooldown
@@ -209,6 +223,9 @@ func (e *AutoRollbackEngine) ForceRollback(
 	trigger RollbackTrigger,
 	reason string,
 ) (*RollbackEvent, error) {
+	if e.rollout == nil {
+		return nil, fmt.Errorf("rollout manager is required for forced rollback")
+	}
 	state, err := e.rollout.GetRolloutState(ctx, strategyID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rollout state: %w", err)

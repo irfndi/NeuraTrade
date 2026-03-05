@@ -710,11 +710,17 @@ func (e *QuestEngine) tick() {
 					cancelLockCheck()
 				}
 				if lockCheckErr != nil {
+					delete(e.executing, quest.ID)
+					delete(e.executionStarts, quest.ID)
+					delete(e.executionLastProgress, quest.ID)
+					delete(e.executionStage, quest.ID)
+					e.executionLockHeld[quest.ID] = false
+					e.executionLockTTL[quest.ID] = 0
 					e.executionLockCheckedAt[quest.ID] = now.UTC()
-					e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_detected_lock_check_failed:%v", lockCheckErr)
+					e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_reset_lock_check_failed:%v", lockCheckErr)
 					e.executionStaleResetAt[quest.ID] = now.UTC()
 					log.Printf(
-						"[QUEST] Quest %s (%s) stale check deferred: lock state unavailable (%v)",
+						"[QUEST] Quest %s (%s) stale reset after lock check failure (%v)",
 						quest.ID,
 						quest.Name,
 						lockCheckErr,
@@ -1145,10 +1151,17 @@ func (e *QuestEngine) readLockState(ctx context.Context, key string) (bool, time
 	if err != nil {
 		return false, 0, err
 	}
-	if ttl <= 0 {
+	switch ttl {
+	case time.Duration(-2):
+		return false, 0, nil
+	case time.Duration(-1):
 		return true, 0, nil
+	default:
+		if ttl <= 0 {
+			return true, 0, nil
+		}
+		return true, ttl, nil
 	}
-	return true, ttl, nil
 }
 
 // executeQuest executes a single quest
@@ -1723,36 +1736,25 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 				}
 				executionStage = stage
 			}
-			if lockHeld, ok := e.executionLockHeld[quest.ID]; ok {
-				executionLockHeld = lockHeld
-			}
+		}
+
+		// Prefer lock/stale fields with the latest check/reset timestamps for deterministic diagnostics.
+		if checkedAt, ok := e.executionLockCheckedAt[quest.ID]; ok && checkedAt.After(executionLockChecked) {
+			executionLockChecked = checkedAt
 			if lockTTL, ok := e.executionLockTTL[quest.ID]; ok {
 				executionLockTTL = lockTTL
+			} else {
+				executionLockTTL = 0
 			}
-			if checkedAt, ok := e.executionLockCheckedAt[quest.ID]; ok && checkedAt.After(executionLockChecked) {
-				executionLockChecked = checkedAt
+			if lockHeld, ok := e.executionLockHeld[quest.ID]; ok {
+				executionLockHeld = lockHeld
+			} else {
+				executionLockHeld = false
 			}
-			if reason, ok := e.executionStaleResetReason[quest.ID]; ok && strings.TrimSpace(reason) != "" {
-				staleResetReason = strings.TrimSpace(reason)
-			}
-			if resetAt, ok := e.executionStaleResetAt[quest.ID]; ok && resetAt.After(staleResetAt) {
-				staleResetAt = resetAt
-			}
-		}
-		if reason, ok := e.executionStaleResetReason[quest.ID]; ok && strings.TrimSpace(reason) != "" {
-			staleResetReason = strings.TrimSpace(reason)
 		}
 		if resetAt, ok := e.executionStaleResetAt[quest.ID]; ok && resetAt.After(staleResetAt) {
 			staleResetAt = resetAt
-		}
-		if lockTTL, ok := e.executionLockTTL[quest.ID]; ok {
-			executionLockTTL = lockTTL
-		}
-		if checkedAt, ok := e.executionLockCheckedAt[quest.ID]; ok && checkedAt.After(executionLockChecked) {
-			executionLockChecked = checkedAt
-		}
-		if lockHeld, ok := e.executionLockHeld[quest.ID]; ok {
-			executionLockHeld = lockHeld
+			staleResetReason = strings.TrimSpace(e.executionStaleResetReason[quest.ID])
 		}
 
 		cp := quest.Checkpoint

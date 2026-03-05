@@ -375,11 +375,14 @@ func (c *ScalpingAutonomyCoordinator) ensureRolloutState(ctx context.Context, st
 
 	targetStage := defaultAutonomyInitialStage()
 	if targetStage != autonomous.StageShadow {
-		state.CurrentStage = targetStage
-		state.Status = autonomous.StatusActive
-		state.EnteredAt = time.Now().UTC()
-		if saveErr := c.store.SaveRolloutState(ctx, state); saveErr != nil {
-			return nil, fmt.Errorf("promote initial rollout stage: %w", saveErr)
+		for state.CurrentStage != targetStage {
+			state, err = c.rollout.Promote(ctx, strategyID, "initial_stage_override")
+			if err != nil {
+				return nil, fmt.Errorf("promote initial rollout stage to %s: %w", targetStage, err)
+			}
+			if state.CurrentStage == autonomous.StageLive {
+				break
+			}
 		}
 	}
 	return state, nil
@@ -395,18 +398,21 @@ func defaultAutonomyInitialStage() autonomous.RolloutStage {
 	case "live":
 		return autonomous.StageLive
 	default:
-		return autonomous.StageLive
+		return autonomous.StageShadow
 	}
 }
 
 func resolveAvailableBudget(portfolio TradingPortfolio, maxCapitalPct float64) decimal.Decimal {
-	if maxCapitalPct <= 0 {
-		maxCapitalPct = 1
+	pctDec := decimal.NewFromFloat(maxCapitalPct)
+	if pctDec.LessThanOrEqual(decimal.Zero) {
+		pctDec = decimal.NewFromInt(1)
 	}
-	if maxCapitalPct > 100 {
-		maxCapitalPct = 100
+	maxPct := decimal.NewFromInt(100)
+	if pctDec.GreaterThan(maxPct) {
+		pctDec = maxPct
 	}
-	budget := decimal.NewFromFloat(portfolio.USDTBalance * maxCapitalPct / 100)
+	usdtDec := decimal.NewFromFloat(portfolio.USDTBalance)
+	budget := usdtDec.Mul(pctDec).Div(maxPct)
 	if budget.LessThan(decimal.Zero) {
 		return decimal.Zero
 	}
@@ -482,11 +488,12 @@ func mergeRolloutMetrics(
 	}
 
 	perfTotal := readIntMetric(perf["total_trades"])
+	prevTotal := metrics.TotalTrades
 	if perfTotal > metrics.TotalTrades {
 		metrics.TotalTrades = perfTotal
 	}
-	if attemptIncrement > 0 && perfTotal <= metrics.TotalTrades {
-		metrics.TotalTrades += attemptIncrement
+	if attemptIncrement > 0 && perfTotal <= prevTotal {
+		metrics.TotalTrades = prevTotal + attemptIncrement
 	}
 
 	if executionErr != nil {

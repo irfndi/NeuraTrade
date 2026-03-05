@@ -406,52 +406,63 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testin
 	assert.False(t, state.EntryAllowed)
 }
 
-func resetScalpingPerformanceForTest(t *testing.T) {
-	previous := globalScalpingPerformance
-	globalScalpingPerformance = NewScalpingPerformance()
+func newLifecycleStoreForTest(t *testing.T) *TradingLifecycleStore {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-recent-loss.db"))
+	require.NoError(t, err)
 	t.Cleanup(func() {
-		globalScalpingPerformance = previous
+		_ = sqliteDB.Close()
 	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	return store
 }
 
 func TestCurrentRecentLossStreak_RespectsWindow(t *testing.T) {
-	resetScalpingPerformanceForTest(t)
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS", "1800")
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	store := newLifecycleStoreForTest(t)
+	handlers.SetLifecycleStore(store)
 
-	GetScalpingPerformance().RecordTrade(TradeRecord{
-		Timestamp:  time.Now().UTC().Add(-2 * time.Hour),
-		Symbol:     "BTC/USDT",
-		Side:       "buy",
-		Amount:     decimal.NewFromFloat(0.1),
-		EntryPrice: decimal.NewFromFloat(100),
-		ExitPrice:  decimal.NewFromFloat(95),
-		PnL:        decimal.NewFromFloat(-5),
-		Profitable: false,
-	})
+	require.NoError(t, store.RecordClosedOrder(context.Background(), LifecycleCloseRecord{
+		OrderID:     "old-loss-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "spot",
+		Filled:      decimal.NewFromFloat(0.1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(95),
+		RealizedPnL: decimal.NewFromFloat(-5),
+		ClosedAt:    time.Now().UTC().Add(-2 * time.Hour),
+	}))
 
-	state := currentRecentLossStreak()
-	assert.Equal(t, 1, state.ConsecutiveLosses)
+	state := handlers.currentRecentLossStreak(context.Background(), "chat-1", "bitget")
+	assert.Equal(t, 0, state.ConsecutiveLosses)
 	assert.False(t, state.Active)
 	assert.Equal(t, 30*time.Minute, state.Window)
 
-	GetScalpingPerformance().RecordTrade(TradeRecord{
-		Timestamp:  time.Now().UTC(),
-		Symbol:     "BTC/USDT",
-		Side:       "buy",
-		Amount:     decimal.NewFromFloat(0.1),
-		EntryPrice: decimal.NewFromFloat(100),
-		ExitPrice:  decimal.NewFromFloat(94),
-		PnL:        decimal.NewFromFloat(-6),
-		Profitable: false,
-	})
+	require.NoError(t, store.RecordClosedOrder(context.Background(), LifecycleCloseRecord{
+		OrderID:     "new-loss-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "spot",
+		Filled:      decimal.NewFromFloat(0.1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(94),
+		RealizedPnL: decimal.NewFromFloat(-6),
+		ClosedAt:    time.Now().UTC(),
+	}))
 
-	state = currentRecentLossStreak()
-	assert.Equal(t, 2, state.ConsecutiveLosses)
+	state = handlers.currentRecentLossStreak(context.Background(), "chat-1", "bitget")
+	assert.Equal(t, 1, state.ConsecutiveLosses)
 	assert.True(t, state.Active)
 }
 
 func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_RecentLossWindow(t *testing.T) {
-	resetScalpingPerformanceForTest(t)
 	t.Setenv("NEURATRADE_RECOVERY_CLEAN_CYCLES", "3")
 	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
 	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
@@ -459,6 +470,8 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_RecentLossWindow(t *t
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS", "900")
 
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	store := newLifecycleStoreForTest(t)
+	handlers.SetLifecycleStore(store)
 	quest := &Quest{
 		Checkpoint: map[string]interface{}{
 			"recovery_clean_cycles": 3,
@@ -466,38 +479,44 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_RecentLossWindow(t *t
 	}
 
 	// Old losses outside the recent window should not block micro-entry unlock.
-	GetScalpingPerformance().RecordTrade(TradeRecord{
-		Timestamp:  time.Now().UTC().Add(-2 * time.Hour),
-		Symbol:     "ETH/USDT",
-		Side:       "sell",
-		Amount:     decimal.NewFromFloat(0.1),
-		EntryPrice: decimal.NewFromFloat(100),
-		ExitPrice:  decimal.NewFromFloat(103),
-		PnL:        decimal.NewFromFloat(-3),
-		Profitable: false,
-	})
+	require.NoError(t, store.RecordClosedOrder(context.Background(), LifecycleCloseRecord{
+		OrderID:     "old-loss-2",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ETH/USDT",
+		Side:        "sell",
+		MarketType:  "spot",
+		Filled:      decimal.NewFromFloat(0.1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(103),
+		RealizedPnL: decimal.NewFromFloat(-3),
+		ClosedAt:    time.Now().UTC().Add(-2 * time.Hour),
+	}))
 
-	state := handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+	state := handlers.evaluateRecoveryGateStateForScope(context.Background(), quest, TradingPortfolio{
 		RiskDrawdown: 0.34,
-	})
+	}, "chat-1", "bitget")
 	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
 	assert.True(t, state.EntryAllowed)
 
 	// Fresh recent loss streak should close the gate.
-	GetScalpingPerformance().RecordTrade(TradeRecord{
-		Timestamp:  time.Now().UTC(),
-		Symbol:     "ETH/USDT",
-		Side:       "sell",
-		Amount:     decimal.NewFromFloat(0.1),
-		EntryPrice: decimal.NewFromFloat(100),
-		ExitPrice:  decimal.NewFromFloat(104),
-		PnL:        decimal.NewFromFloat(-4),
-		Profitable: false,
-	})
+	require.NoError(t, store.RecordClosedOrder(context.Background(), LifecycleCloseRecord{
+		OrderID:     "new-loss-2",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ETH/USDT",
+		Side:        "sell",
+		MarketType:  "spot",
+		Filled:      decimal.NewFromFloat(0.1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(104),
+		RealizedPnL: decimal.NewFromFloat(-4),
+		ClosedAt:    time.Now().UTC(),
+	}))
 
-	state = handlers.evaluateRecoveryGateState(quest, TradingPortfolio{
+	state = handlers.evaluateRecoveryGateStateForScope(context.Background(), quest, TradingPortfolio{
 		RiskDrawdown: 0.34,
-	})
+	}, "chat-1", "bitget")
 	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
 	assert.False(t, state.EntryAllowed)
 	assert.Contains(t, state.GateReason, "recent loss streak")

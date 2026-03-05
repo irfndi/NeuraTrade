@@ -94,11 +94,17 @@ func (m *StagedRolloutManager) UpdateMetrics(
 	state.Metrics = metrics
 	state.Metrics.LastUpdated = time.Now()
 
-	return m.repo.SaveRolloutState(ctx, state)
+	if err := m.repo.SaveRolloutState(ctx, state); err != nil {
+		return fmt.Errorf("failed to save rollout state: %w", err)
+	}
+	return nil
 }
 
 // CheckPromotionEligibility checks if a strategy is eligible for promotion.
 func (m *StagedRolloutManager) CheckPromotionEligibility(state *RolloutState) (bool, []string) {
+	if state == nil {
+		return false, []string{"rollout state is nil"}
+	}
 	criteria := state.PromotionCriteria
 	metrics := state.Metrics
 	var failed []string
@@ -211,7 +217,10 @@ func (m *StagedRolloutManager) Rollback(ctx context.Context, strategyID string, 
 	}
 
 	// Determine previous stage
-	prevStage := m.getPreviousStage(state.CurrentStage)
+	prevStage, err := m.getPreviousStage(state.CurrentStage)
+	if err != nil {
+		return nil, err
+	}
 
 	// Record transition
 	transition := StageTransition{
@@ -251,7 +260,10 @@ func (m *StagedRolloutManager) Pause(ctx context.Context, strategyID string, rea
 	}
 
 	state.Status = StatusPaused
-	return m.repo.SaveRolloutState(ctx, state)
+	if err := m.repo.SaveRolloutState(ctx, state); err != nil {
+		return fmt.Errorf("failed to save rollout state: %w", err)
+	}
+	return nil
 }
 
 // Resume resumes a paused strategy rollout.
@@ -267,7 +279,10 @@ func (m *StagedRolloutManager) Resume(ctx context.Context, strategyID string) er
 	if state.Status == StatusPaused {
 		state.Status = StatusActive
 	}
-	return m.repo.SaveRolloutState(ctx, state)
+	if err := m.repo.SaveRolloutState(ctx, state); err != nil {
+		return fmt.Errorf("failed to save rollout state: %w", err)
+	}
+	return nil
 }
 
 // getNextStage returns the next stage in the progression.
@@ -285,15 +300,15 @@ func (m *StagedRolloutManager) getNextStage(current RolloutStage) (RolloutStage,
 }
 
 // getPreviousStage returns the previous stage in the progression.
-func (m *StagedRolloutManager) getPreviousStage(current RolloutStage) RolloutStage {
+func (m *StagedRolloutManager) getPreviousStage(current RolloutStage) (RolloutStage, error) {
 	switch current {
 	case StageLive:
-		return StagePaper
+		return StagePaper, nil
 	case StagePaper:
-		return StageShadow
+		return StageShadow, nil
 	case StageShadow:
-		return StageShadow // Already at min
+		return StageShadow, nil // Already at min
 	default:
-		return StageShadow
+		return "", ErrInvalidStage
 	}
 }

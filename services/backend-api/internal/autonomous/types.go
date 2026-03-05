@@ -225,8 +225,6 @@ type GateState struct {
 
 // GateChecks contains the results of all gate checks.
 type GateChecks struct {
-	// PolicyPasses indicates if policy validation passed.
-	PolicyPasses bool `json:"policy_passes"`
 	// SafeModeOff indicates if safe mode is disabled.
 	SafeModeOff bool `json:"safe_mode_off"`
 	// KillSwitchOff indicates if kill switch is disabled.

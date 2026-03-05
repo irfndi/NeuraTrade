@@ -50,15 +50,23 @@ func newRateLimiter(callsPerSecond int) *rateLimiter {
 	}
 }
 
-func (r *rateLimiter) Wait() {
+func (r *rateLimiter) Wait(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	elapsed := time.Since(r.lastCall)
 	if elapsed < r.minDelay {
-		time.Sleep(r.minDelay - elapsed)
+		delay := r.minDelay - elapsed
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	r.lastCall = time.Now()
+	return nil
 }
 
 // NativeCCXTService implements CCXTService using direct exchange API calls
@@ -70,7 +78,17 @@ type NativeCCXTService struct {
 	timeout       time.Duration
 	retryAttempts int
 	rateLimiter   *rateLimiter
+	// Scalping fallback controls are loaded once at construction for deterministic behavior.
+	fallbackMaxSymbolsPerCycle int
+	fallbackCycleBudget        time.Duration
+	fallbackPerSymbolTimeout   time.Duration
 }
+
+const (
+	defaultFallbackMaxSymbolsPerCycle = 32
+	defaultFallbackCycleBudget        = 4 * time.Second
+	defaultFallbackPerSymbolTimeout   = 900 * time.Millisecond
+)
 
 // ExchangeConnection holds exchange-specific configuration
 type ExchangeConnection struct {
@@ -85,6 +103,8 @@ type ExchangeConnection struct {
 
 // NewNativeCCXTService creates a new native CCXT service
 func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTService {
+	fallbackCfg := resolveScalpingFallbackConfigFromEnv()
+
 	return &NativeCCXTService{
 		rateLimiter: newRateLimiter(10), // 10 requests per second
 		httpClient: &http.Client{
@@ -95,11 +115,53 @@ func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTS
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		exchanges:     make(map[string]*ExchangeConnection),
-		credentials:   make(map[string]config.ExchangeCredentials),
-		timeout:       timeout,
-		retryAttempts: retryAttempts,
+		exchanges:                  make(map[string]*ExchangeConnection),
+		credentials:                make(map[string]config.ExchangeCredentials),
+		timeout:                    timeout,
+		retryAttempts:              retryAttempts,
+		fallbackMaxSymbolsPerCycle: fallbackCfg.maxSymbolsPerCycle,
+		fallbackCycleBudget:        fallbackCfg.cycleBudget,
+		fallbackPerSymbolTimeout:   fallbackCfg.perSymbolTimeout,
 	}
+}
+
+type scalpingFallbackConfig struct {
+	maxSymbolsPerCycle int
+	cycleBudget        time.Duration
+	perSymbolTimeout   time.Duration
+}
+
+func resolveScalpingFallbackConfigFromEnv() scalpingFallbackConfig {
+	maxSymbols := readPositiveIntEnv(
+		"NEURATRADE_SCALPING_FALLBACK_MAX_SYMBOLS_PER_CYCLE",
+		defaultFallbackMaxSymbolsPerCycle,
+	)
+	cycleBudgetMS := readPositiveIntEnv(
+		"NEURATRADE_SCALPING_FALLBACK_CYCLE_BUDGET_MS",
+		int(defaultFallbackCycleBudget.Milliseconds()),
+	)
+	perSymbolTimeoutMS := readPositiveIntEnv(
+		"NEURATRADE_SCALPING_FALLBACK_PER_SYMBOL_TIMEOUT_MS",
+		int(defaultFallbackPerSymbolTimeout.Milliseconds()),
+	)
+
+	return scalpingFallbackConfig{
+		maxSymbolsPerCycle: maxSymbols,
+		cycleBudget:        time.Duration(cycleBudgetMS) * time.Millisecond,
+		perSymbolTimeout:   time.Duration(perSymbolTimeoutMS) * time.Millisecond,
+	}
+}
+
+func readPositiveIntEnv(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 // NewNativeCCXTServiceWithConfig creates a native CCXT service with exchange credentials from config
@@ -413,7 +475,9 @@ func (s *NativeCCXTService) parseOrderBookResponse(exchange, symbol string, body
 // fetchTickerFromURL fetches and parses ticker data from a URL
 func (s *NativeCCXTService) fetchTickerFromURL(ctx context.Context, url, exchange, symbol string) (*TickerData, error) {
 	// Rate limit API calls
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -684,9 +748,9 @@ func (s *NativeCCXTService) AddExchange(ctx context.Context, exchange string) (*
 
 func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []string, symbols []string) ([]MarketPriceInterface, error) {
 	var allTickers []MarketPriceInterface
-	maxFallbackSymbols := fallbackMaxSymbolsPerCycle(len(symbols))
-	fallbackCycleBudget := fallbackCycleBudget()
-	fallbackPerSymbolTimeout := fallbackPerSymbolTimeout()
+	maxFallbackSymbols := s.fallbackMaxSymbolsForCycle(len(symbols))
+	fallbackCycleBudget := s.getFallbackCycleBudget()
+	fallbackPerSymbolTimeout := s.getFallbackPerSymbolTimeout()
 	fallbackFetches := 0
 	cycleStarted := time.Now()
 
@@ -749,47 +813,29 @@ func (s *NativeCCXTService) FetchMarketData(ctx context.Context, exchanges []str
 	return allTickers, nil
 }
 
-func fallbackMaxSymbolsPerCycle(symbolCount int) int {
-	fallback := 32
-	if symbolCount > 0 && symbolCount < fallback {
-		fallback = symbolCount
+func (s *NativeCCXTService) fallbackMaxSymbolsForCycle(symbolCount int) int {
+	maxSymbols := s.fallbackMaxSymbolsPerCycle
+	if maxSymbols <= 0 {
+		maxSymbols = defaultFallbackMaxSymbolsPerCycle
 	}
-	raw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_MAX_SYMBOLS_PER_CYCLE"))
-	if raw == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed <= 0 {
-		return fallback
-	}
-	if symbolCount > 0 && parsed > symbolCount {
+	if symbolCount > 0 && maxSymbols > symbolCount {
 		return symbolCount
 	}
-	return parsed
+	return maxSymbols
 }
 
-func fallbackCycleBudget() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_CYCLE_BUDGET_MS"))
-	if raw == "" {
-		return 4 * time.Second
+func (s *NativeCCXTService) getFallbackCycleBudget() time.Duration {
+	if s.fallbackCycleBudget <= 0 {
+		return defaultFallbackCycleBudget
 	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed <= 0 {
-		return 4 * time.Second
-	}
-	return time.Duration(parsed) * time.Millisecond
+	return s.fallbackCycleBudget
 }
 
-func fallbackPerSymbolTimeout() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_PER_SYMBOL_TIMEOUT_MS"))
-	if raw == "" {
-		return 900 * time.Millisecond
+func (s *NativeCCXTService) getFallbackPerSymbolTimeout() time.Duration {
+	if s.fallbackPerSymbolTimeout <= 0 {
+		return defaultFallbackPerSymbolTimeout
 	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed <= 0 {
-		return 900 * time.Millisecond
-	}
-	return time.Duration(parsed) * time.Millisecond
+	return s.fallbackPerSymbolTimeout
 }
 
 func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols []string) ([]MarketPriceInterface, error) {
@@ -797,7 +843,9 @@ func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols 
 		return nil, nil
 	}
 
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.bitget.com/api/v2/spot/market/tickers", nil)
 	if err != nil {
@@ -920,7 +968,9 @@ func (s *NativeCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol
 	}
 
 	// Rate limit API calls
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -976,7 +1026,9 @@ func (s *NativeCCXTService) FetchOHLCV(ctx context.Context, exchange, symbol, ti
 	}
 
 	// Rate limit API calls
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -2037,7 +2089,9 @@ func (s *NativeCCXTService) FetchFundingRates(ctx context.Context, exchange stri
 		return []FundingRate{}, nil // Not supported, return empty
 	}
 
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -2090,7 +2144,9 @@ func (s *NativeCCXTService) FetchAllFundingRates(ctx context.Context, exchange s
 		return []FundingRate{}, nil // Not supported
 	}
 
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -2805,7 +2861,9 @@ func (s *NativeCCXTService) bitgetPrivateGet(ctx context.Context, creds config.E
 		return nil, fmt.Errorf("bitget credentials are incomplete")
 	}
 
-	s.rateLimiter.Wait()
+	if err := s.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+	}
 
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	signPayload := timestamp + "GET" + endpoint

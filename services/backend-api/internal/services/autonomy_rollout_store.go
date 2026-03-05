@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -32,45 +35,55 @@ func (s *AutonomousRolloutStore) InitSchema(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("autonomous rollout store database is nil")
 	}
-
-	queries := []string{
-		fmt.Sprintf(`
-			CREATE TABLE IF NOT EXISTS %s (
-				strategy_id TEXT PRIMARY KEY,
-				chat_id TEXT NOT NULL DEFAULT '',
-				current_stage TEXT NOT NULL,
-				status TEXT NOT NULL,
-				entered_at TIMESTAMP NOT NULL,
-				payload TEXT NOT NULL,
-				updated_at TIMESTAMP NOT NULL
-			)
-		`, autonomyRolloutStateTable),
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_autonomy_rollout_chat_id ON %s(chat_id)`, autonomyRolloutStateTable),
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_autonomy_rollout_stage_status ON %s(current_stage, status)`, autonomyRolloutStateTable),
-		fmt.Sprintf(`
-			CREATE TABLE IF NOT EXISTS %s (
-				id TEXT PRIMARY KEY,
-				strategy_id TEXT NOT NULL,
-				chat_id TEXT NOT NULL DEFAULT '',
-				trigger TEXT NOT NULL,
-				from_stage TEXT,
-				to_stage TEXT,
-				reason TEXT,
-				payload TEXT NOT NULL,
-				occurred_at TIMESTAMP NOT NULL,
-				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-			)
-		`, autonomyRollbackEventTable),
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_autonomy_rollback_strategy_time ON %s(strategy_id, occurred_at DESC)`, autonomyRollbackEventTable),
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_autonomy_rollback_chat_time ON %s(chat_id, occurred_at DESC)`, autonomyRollbackEventTable),
+	statements, err := loadAutonomousRolloutMigrationStatements()
+	if err != nil {
+		return err
 	}
-
-	for _, query := range queries {
-		if _, err := s.db.ExecContext(ctx, query); err != nil {
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("init autonomous rollout schema: %w", err)
 		}
 	}
 	return nil
+}
+
+func loadAutonomousRolloutMigrationStatements() ([]string, error) {
+	migrationPath, err := autonomousRolloutMigrationPath()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(migrationPath)
+	if err != nil {
+		return nil, fmt.Errorf("read autonomous rollout migration: %w", err)
+	}
+	parts := strings.Split(string(raw), ";")
+	statements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		statement := strings.TrimSpace(part)
+		if statement == "" {
+			continue
+		}
+		statements = append(statements, statement)
+	}
+	if len(statements) == 0 {
+		return nil, fmt.Errorf("autonomous rollout migration contains no statements: %s", migrationPath)
+	}
+	return statements, nil
+}
+
+func autonomousRolloutMigrationPath() (string, error) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("resolve autonomous rollout migration path: runtime caller unavailable")
+	}
+	return filepath.Clean(filepath.Join(
+		filepath.Dir(currentFile),
+		"..",
+		"..",
+		"database",
+		"migrations",
+		"073_create_autonomous_rollout_tables.sql",
+	)), nil
 }
 
 func (s *AutonomousRolloutStore) SaveRolloutState(ctx context.Context, state *autonomous.RolloutState) error {

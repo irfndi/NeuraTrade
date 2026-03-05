@@ -80,6 +80,11 @@ type LifecyclePerformanceSummary struct {
 	WorstTrade  decimal.Decimal
 }
 
+type RecentLossStreakSummary struct {
+	ConsecutiveLosses int
+	LastTradeAt       time.Time
+}
+
 type LifecycleExchangeSnapshot struct {
 	OpenOrders     []ccxt.Order
 	Positions      []ccxt.Position
@@ -1213,6 +1218,66 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 	if summary.Trades == 0 {
 		summary.BestTrade = decimal.Zero
 		summary.WorstTrade = decimal.Zero
+	}
+	return summary, nil
+}
+
+func (s *TradingLifecycleStore) GetRecentLossStreak(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	since time.Time,
+) (RecentLossStreakSummary, error) {
+	if since.IsZero() {
+		since = time.Now().UTC().Add(-24 * time.Hour)
+	}
+	query := `
+		SELECT CAST(realized_pnl AS TEXT), closed_at
+		FROM realized_pnl_journal
+		WHERE closed_at >= $1
+	`
+	args := []interface{}{since.UTC()}
+	if strings.TrimSpace(chatID) != "" {
+		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(chatID))
+	}
+	if strings.TrimSpace(exchange) != "" {
+		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(exchange))
+	}
+	query += " ORDER BY closed_at DESC LIMIT 200"
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return RecentLossStreakSummary{}, fmt.Errorf("query recent loss streak failed: %w", err)
+	}
+	defer rows.Close()
+
+	summary := RecentLossStreakSummary{}
+	for rows.Next() {
+		var pnlRaw string
+		var closedAtRaw interface{}
+		if err := rows.Scan(&pnlRaw, &closedAtRaw); err != nil {
+			return RecentLossStreakSummary{}, fmt.Errorf("scan recent loss streak row failed: %w", err)
+		}
+
+		closedAt := parseLifecycleTimestamp(closedAtRaw)
+		if summary.LastTradeAt.IsZero() {
+			summary.LastTradeAt = closedAt
+		}
+
+		pnl, err := decimal.NewFromString(strings.TrimSpace(pnlRaw))
+		if err != nil {
+			continue
+		}
+		if pnl.LessThan(decimal.Zero) {
+			summary.ConsecutiveLosses++
+			continue
+		}
+		break
+	}
+	if err := rows.Err(); err != nil {
+		return RecentLossStreakSummary{}, fmt.Errorf("iterate recent loss streak rows failed: %w", err)
 	}
 	return summary, nil
 }

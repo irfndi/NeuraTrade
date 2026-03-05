@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -155,14 +156,14 @@ func (e *StrategyProposalEngine) calculateRiskScore(parameters map[string]any, m
 	}
 
 	// Factor in leverage if present
-	if leverage, ok := parameters["leverage"].(float64); ok {
+	if leverage, ok := numericValue(parameters["leverage"]); ok {
 		if leverage > 1 {
 			score += (leverage / 20) * 0.3 // 30% weight on leverage
 		}
 	}
 
 	// Factor in position size if present
-	if posSize, ok := parameters["position_size_percent"].(float64); ok {
+	if posSize, ok := numericValue(parameters["position_size_percent"]); ok {
 		score += (posSize / 100) * 0.3 // 30% weight on position size
 	}
 
@@ -172,6 +173,34 @@ func (e *StrategyProposalEngine) calculateRiskScore(parameters map[string]any, m
 	}
 
 	return score
+}
+
+func numericValue(raw any) (float64, bool) {
+	switch value := raw.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int32:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case uint:
+		return float64(value), true
+	case uint32:
+		return float64(value), true
+	case uint64:
+		return float64(value), true
+	case json.Number:
+		parsed, err := value.Float64()
+		return parsed, err == nil
+	case decimal.Decimal:
+		return value.InexactFloat64(), true
+	default:
+		return 0, false
+	}
 }
 
 // generateProposalID generates a unique proposal ID.
