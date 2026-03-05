@@ -180,6 +180,7 @@ func gatewayStart(cCtx *cli.Context) error {
 		filepath.Join(home, "pids", "ccxt.pid"),
 	)
 	if err != nil {
+		writeGatewayStateMode(statePath, "down", "ccxt failed to start")
 		return fmt.Errorf("failed to start CCXT service: %w", err)
 	}
 	fmt.Println("✅ CCXT Service started")
@@ -331,7 +332,10 @@ func startService(binary, name, logFile string, env map[string]string, pidFile s
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s executable: %w", name, err)
 	}
-	cmd := exec.Command(resolvedBinary)
+	cmd, err := commandForAllowedBinary(resolvedBinary)
+	if err != nil {
+		return nil, fmt.Errorf("build %s command: %w", name, err)
+	}
 
 	// Set environment
 	envVars := os.Environ()
@@ -365,6 +369,26 @@ func startService(binary, name, logFile string, env map[string]string, pidFile s
 	}
 
 	return cmd, nil
+}
+
+func commandForAllowedBinary(resolvedBinary string) (*exec.Cmd, error) {
+	base := filepath.Base(strings.TrimSpace(resolvedBinary))
+	switch base {
+	case "neuratrade-server":
+		cmd := exec.Command("neuratrade-server")
+		cmd.Path = resolvedBinary
+		return cmd, nil
+	case "telegram-service":
+		cmd := exec.Command("telegram-service")
+		cmd.Path = resolvedBinary
+		return cmd, nil
+	case "ccxt-service":
+		cmd := exec.Command("ccxt-service")
+		cmd.Path = resolvedBinary
+		return cmd, nil
+	default:
+		return nil, fmt.Errorf("binary %q is not allowlisted", base)
+	}
 }
 
 func resolveServiceBinary(binary string) (string, error) {

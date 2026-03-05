@@ -394,13 +394,15 @@ func TestStagedRolloutManager_PauseResume(t *testing.T) {
 	err = manager.Pause(context.Background(), "strategy-1", "maintenance")
 	require.NoError(t, err)
 
-	state, _ := manager.GetRolloutState(context.Background(), "strategy-1")
+	state, err := manager.GetRolloutState(context.Background(), "strategy-1")
+	require.NoError(t, err)
 	assert.Equal(t, StatusPaused, state.Status)
 
 	err = manager.Resume(context.Background(), "strategy-1")
 	require.NoError(t, err)
 
-	state, _ = manager.GetRolloutState(context.Background(), "strategy-1")
+	state, err = manager.GetRolloutState(context.Background(), "strategy-1")
+	require.NoError(t, err)
 	assert.Equal(t, StatusActive, state.Status)
 }
 

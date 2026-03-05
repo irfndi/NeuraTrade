@@ -60,6 +60,7 @@ const (
 	defaultAIRuntimeCriticalRate     = 0.50
 	defaultAIRuntimeCircuitFailures  = 3
 	defaultAIRuntimeCircuitCooldown  = 120 * time.Second
+	defaultAutonomyInitTimeout       = 5 * time.Second
 	defaultDriftRepairCooldown       = 180 * time.Second
 	defaultDriftClearPasses          = 2
 	defaultDriftDeadlockClearCycles  = 6
@@ -132,7 +133,7 @@ func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, 
 		initCtx = context.Background()
 	}
 	if _, hasDeadline := initCtx.Deadline(); !hasDeadline {
-		initCtx, cancel = context.WithTimeout(initCtx, 5*time.Second)
+		initCtx, cancel = context.WithTimeout(initCtx, autonomyInitTimeout())
 	}
 	defer cancel()
 
@@ -157,10 +158,8 @@ func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 }
 
 // SetAutonomyStore sets the autonomy rollout store and applies coordinator wiring when available.
-func (h *IntegratedQuestHandlers) SetAutonomyStore(store *AutonomousRolloutStore) {
-	if err := h.setAutonomyStoreWithInit(context.Background(), store); err != nil {
-		log.Printf("[SCALPING] failed to initialize autonomy store: %v", err)
-	}
+func (h *IntegratedQuestHandlers) SetAutonomyStore(store *AutonomousRolloutStore) error {
+	return h.setAutonomyStoreWithInit(context.Background(), store)
 }
 
 // SetTradeMemory sets the trade memory for AI learning
@@ -3064,43 +3063,41 @@ func (h *IntegratedQuestHandlers) applyAutonomyCheckpoint(quest *Quest) {
 		return
 	}
 	diag := h.aiScalpingService.AutonomyDiagnostics()
-	if len(diag) == 0 {
-		return
+	canonicalFields := []struct {
+		diagKey       string
+		checkpointKey string
+	}{
+		{diagKey: "strategy_id", checkpointKey: "autonomy_strategy_id"},
+		{diagKey: "rollout_stage", checkpointKey: "autonomy_rollout_stage"},
+		{diagKey: "rollout_status", checkpointKey: "autonomy_rollout_status"},
+		{diagKey: "gate_open", checkpointKey: "autonomy_gate_open"},
+		{diagKey: "gate_block_reasons", checkpointKey: "autonomy_gate_block_reasons"},
+		{diagKey: "gate_checks", checkpointKey: "autonomy_gate_checks"},
+		{diagKey: "last_evaluated_at", checkpointKey: "autonomy_last_evaluated_at"},
+		{diagKey: "last_error", checkpointKey: "autonomy_last_error"},
+		{diagKey: "last_rollback_at", checkpointKey: "autonomy_last_rollback_at"},
+		{diagKey: "last_rollback_reason", checkpointKey: "autonomy_last_rollback_reason"},
+		{diagKey: "last_rollback_trigger", checkpointKey: "autonomy_last_rollback_trigger"},
 	}
+	for _, field := range canonicalFields {
+		if value, ok := diag[field.diagKey]; ok {
+			quest.Checkpoint[field.checkpointKey] = value
+			continue
+		}
+		delete(quest.Checkpoint, field.checkpointKey)
+	}
+}
 
-	if value, ok := diag["strategy_id"]; ok {
-		quest.Checkpoint["autonomy_strategy_id"] = value
+func autonomyInitTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("AUTONOMY_INIT_TIMEOUT"))
+	if raw == "" {
+		return defaultAutonomyInitTimeout
 	}
-	if value, ok := diag["rollout_stage"]; ok {
-		quest.Checkpoint["autonomy_rollout_stage"] = value
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return defaultAutonomyInitTimeout
 	}
-	if value, ok := diag["rollout_status"]; ok {
-		quest.Checkpoint["autonomy_rollout_status"] = value
-	}
-	if value, ok := diag["gate_open"]; ok {
-		quest.Checkpoint["autonomy_gate_open"] = value
-	}
-	if value, ok := diag["gate_block_reasons"]; ok {
-		quest.Checkpoint["autonomy_gate_block_reasons"] = value
-	}
-	if value, ok := diag["gate_checks"]; ok {
-		quest.Checkpoint["autonomy_gate_checks"] = value
-	}
-	if value, ok := diag["last_evaluated_at"]; ok {
-		quest.Checkpoint["autonomy_last_evaluated_at"] = value
-	}
-	if value, ok := diag["last_error"]; ok {
-		quest.Checkpoint["autonomy_last_error"] = value
-	}
-	if value, ok := diag["last_rollback_at"]; ok {
-		quest.Checkpoint["autonomy_last_rollback_at"] = value
-	}
-	if value, ok := diag["last_rollback_reason"]; ok {
-		quest.Checkpoint["autonomy_last_rollback_reason"] = value
-	}
-	if value, ok := diag["last_rollback_trigger"]; ok {
-		quest.Checkpoint["autonomy_last_rollback_trigger"] = value
-	}
+	return timeout
 }
 
 func (h *IntegratedQuestHandlers) recordTradeDecision(ctx context.Context, quest *Quest, decision *AITradingDecision, exchange string) {

@@ -789,7 +789,8 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 
 	if s.config.AutoExecute && s.orderExecutor != nil {
 		autonomyCoordinator := s.autonomyCoordinator()
-		if autonomyCoordinator != nil {
+		strategyResolved := strings.TrimSpace(scope.StrategyID) != ""
+		if autonomyCoordinator != nil && strategyResolved {
 			gateState, rolloutState, gateErr := autonomyCoordinator.EvaluatePreExecution(
 				ctx,
 				scope,
@@ -817,14 +818,26 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				), nil
 			}
 		}
+		if autonomyCoordinator != nil && !strategyResolved {
+			log.Printf(
+				"[AI-SCALPING] Skipping autonomy gate: unresolved strategy_id (chat_id=%q)",
+				strings.TrimSpace(scope.ChatID),
+			)
+		}
 
 		executionErr := s.executeDecision(ctx, decision, portfolio, effectiveMaxCapital)
-		if autonomyCoordinator != nil {
+		if autonomyCoordinator != nil && strategyResolved {
 			if recordErr := autonomyCoordinator.RecordExecutionResult(ctx, scope, decision, portfolio, executionErr); recordErr != nil {
 				log.Printf("[AI-SCALPING] Failed to record autonomy rollout metrics: %v", recordErr)
 			} else if rollback := autonomyCoordinator.LastRollback(scope.StrategyID); rollback != nil {
 				s.updateAutonomyRollbackState(rollback)
 			}
+		}
+		if autonomyCoordinator != nil && !strategyResolved {
+			log.Printf(
+				"[AI-SCALPING] Skipping autonomy metrics update: unresolved strategy_id (chat_id=%q)",
+				strings.TrimSpace(scope.ChatID),
+			)
 		}
 		if executionErr != nil {
 			if shouldDowngradeExecutionErrorToHold(executionErr) {

@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -158,6 +160,9 @@ func (s *AutonomousRolloutStore) SaveRollbackEvent(ctx context.Context, event *a
 	if strings.TrimSpace(event.StrategyID) == "" {
 		return fmt.Errorf("rollback event strategy_id is required")
 	}
+	if strings.TrimSpace(string(event.Trigger)) == "" {
+		return fmt.Errorf("rollback event trigger is required")
+	}
 
 	occurredAt := event.Timestamp.UTC()
 	if occurredAt.IsZero() {
@@ -226,9 +231,10 @@ func (s *AutonomousRolloutStore) GetRollbackHistory(ctx context.Context, strateg
 	if err != nil {
 		return nil, fmt.Errorf("get rollback history: %w", err)
 	}
+	redactedID := redactStrategyID(strategyID)
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
-			log.Printf("autonomous rollout store: failed to close rollback rows for strategy %s: %v", strategyID, closeErr)
+			log.Printf("autonomous rollout store: failed to close rollback rows for strategy %s: %v", redactedID, closeErr)
 		}
 	}()
 
@@ -305,4 +311,9 @@ func isUniqueConstraintErr(err error) bool {
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "duplicate key value violates unique constraint") ||
 		strings.Contains(lower, "unique constraint failed")
+}
+
+func redactStrategyID(strategyID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(strategyID)))
+	return hex.EncodeToString(sum[:4])
 }
