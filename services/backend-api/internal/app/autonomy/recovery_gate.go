@@ -112,25 +112,26 @@ type RecoveryGateDecision struct {
 
 func EvaluateRecoveryGate(input RecoveryGateInput, cfg RecoveryConfig) RecoveryGateState {
 	cfg = cfg.Normalized()
+	runtimeBlocked := input.RuntimeFailureStreak > 0 || input.DriftActive
 
 	state := RecoveryGateState{
 		Mode:                  RecoveryModeNormal,
 		EntryAllowed:          true,
-		CleanCycles:           maxInt(input.CleanCycles, 0),
+		CleanCycles:           max(input.CleanCycles, 0),
 		RequiredCleanCycles:   cfg.RequiredCleanCycles,
 		DeriskOnlyThreshold:   cfg.DeriskOnlyThreshold,
 		MicroEntryThreshold:   cfg.MicroEntryThreshold,
 		MicroEntryCapPct:      cfg.MicroEntryCapPct,
-		RecentLossStreak:      maxInt(input.RecentLossStreak, 0),
+		RecentLossStreak:      max(input.RecentLossStreak, 0),
 		RecentLossActive:      input.RecentLossActive,
 		RecentLossWindow:      input.RecentLossWindow,
 		RecentLossLastTradeAt: input.RecentLossLastTradeAt,
 	}
 
-	if input.RuntimeFailureStreak > 0 || input.DriftActive {
+	if runtimeBlocked {
 		state.EntryAllowed = false
 	}
-	if state.RecentLossActive && state.RecentLossStreak >= cfg.LossStreakBudget {
+	if recoveryLossStreakExceeded(state, cfg) {
 		state.EntryAllowed = false
 	}
 
@@ -158,62 +159,87 @@ func EvaluateRecoveryGate(input RecoveryGateInput, cfg RecoveryConfig) RecoveryG
 				state.CleanCycles,
 			)
 		} else if !state.EntryAllowed {
-			if state.RecentLossActive && state.RecentLossStreak >= cfg.LossStreakBudget {
-				state.GateReason = fmt.Sprintf(
-					"recent loss streak %d within %s exceeds threshold; micro-entry paused",
-					state.RecentLossStreak,
-					roundDurationString(state.RecentLossWindow, time.Minute),
-				)
-				state.NextCondition = fmt.Sprintf(
-					"Need loss streak below %d within %s window",
-					cfg.LossStreakBudget,
-					roundDurationString(state.RecentLossWindow, time.Minute),
-				)
+			if recoveryLossStreakExceeded(state, cfg) {
+				applyRecentLossGate(&state, cfg)
 			} else {
-				state.GateReason = "recovery micro-entry paused until runtime/drift constraints clear"
-				state.NextCondition = "Clear runtime failures and drift state"
+				applyRuntimeOrDriftGate(&state, runtimeBlocked)
 			}
 		}
 	default:
 		state.Mode = RecoveryModeNormal
 	}
 
-	if !state.EntryAllowed && state.GateReason == "" &&
-		state.RecentLossActive && state.RecentLossStreak >= cfg.LossStreakBudget {
-		state.GateReason = fmt.Sprintf(
-			"recent loss streak %d still active within %s window",
-			state.RecentLossStreak,
-			roundDurationString(state.RecentLossWindow, time.Minute),
-		)
-		state.NextCondition = fmt.Sprintf(
-			"Need loss streak below %d within %s window",
-			cfg.LossStreakBudget,
-			roundDurationString(state.RecentLossWindow, time.Minute),
-		)
+	if !state.EntryAllowed && state.GateReason == "" && recoveryLossStreakExceeded(state, cfg) {
+		applyRecentLossGate(&state, cfg)
+	}
+	if !state.EntryAllowed && state.GateReason == "" {
+		applyRuntimeOrDriftGate(&state, runtimeBlocked)
 	}
 	if !state.EntryAllowed && state.GateReason == "" {
 		state.GateReason = "recovery entry gate is active"
 	}
 
 	if state.Mode == RecoveryModeMicroEntry {
-		state.CyclesToEntry = maxInt(cfg.RequiredCleanCycles-state.CleanCycles, 0)
+		state.CyclesToEntry = max(cfg.RequiredCleanCycles-state.CleanCycles, 0)
 	}
 	return state
 }
 
-func DecideRecoveryCycleUpdate(state RecoveryGateState) RecoveryGateDecision {
+func DecideRecoveryCycleUpdate(state RecoveryGateState, cfg RecoveryConfig) RecoveryGateDecision {
 	decision := RecoveryGateDecision{State: state}
+	cfg = cfg.Normalized()
 
 	switch {
 	case state.Mode == RecoveryModeDeriskOnly:
 		decision.ShouldResetCycles = true
 		decision.ResetReason = "drawdown_derisk_only"
 	case !state.EntryAllowed && state.Mode == RecoveryModeMicroEntry &&
-		state.RecentLossActive && state.RecentLossStreak >= DefaultRecoveryLossStreakBudget:
+		recoveryLossStreakExceeded(state, cfg):
 		decision.ShouldResetCycles = true
 		decision.ResetReason = "recent_loss_streak"
 	}
 	return decision
+}
+
+func recoveryLossStreakExceeded(state RecoveryGateState, cfg RecoveryConfig) bool {
+	return state.RecentLossActive && state.RecentLossStreak >= cfg.LossStreakBudget
+}
+
+func applyRecentLossGate(state *RecoveryGateState, cfg RecoveryConfig) {
+	if state == nil {
+		return
+	}
+	window := roundDurationString(state.RecentLossWindow, time.Minute)
+	if state.Mode == RecoveryModeMicroEntry {
+		state.GateReason = fmt.Sprintf(
+			"recent loss streak %d within %s exceeds threshold; micro-entry paused",
+			state.RecentLossStreak,
+			window,
+		)
+	} else {
+		state.GateReason = fmt.Sprintf(
+			"recent loss streak %d still active within %s window",
+			state.RecentLossStreak,
+			window,
+		)
+	}
+	state.NextCondition = fmt.Sprintf(
+		"Need loss streak below %d within %s window",
+		cfg.LossStreakBudget,
+		window,
+	)
+}
+
+func applyRuntimeOrDriftGate(state *RecoveryGateState, runtimeBlocked bool) {
+	if state == nil || !runtimeBlocked {
+		return
+	}
+	if state.Mode == RecoveryModeMicroEntry {
+		state.GateReason = "recovery micro-entry paused until runtime/drift constraints clear"
+	} else {
+		state.GateReason = "recovery entry gate is active: runtime/drift constraints must clear"
+	}
+	state.NextCondition = "Clear runtime failures and drift state"
 }
 
 type LivenessConfig struct {
@@ -271,7 +297,7 @@ func EvaluateEntryAttemptGate(input EntryAttemptGateInput, cfg LivenessConfig) E
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	attempts := maxInt(input.AttemptsInWindow, 0)
+	attempts := max(input.AttemptsInWindow, 0)
 	windowStart := input.WindowStartedAt.UTC()
 	if !input.HasWindow || windowStart.IsZero() || now.Sub(windowStart) >= time.Hour {
 		windowStart = now
@@ -342,11 +368,4 @@ func clampInt(value, min, max int) int {
 		return max
 	}
 	return value
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

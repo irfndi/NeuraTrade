@@ -2528,6 +2528,7 @@ type entryAttemptGateState struct {
 	BlockReason            string
 	NextCondition          string
 	AttemptWindowProgress  string
+	WindowStartedAt        time.Time
 }
 
 //nolint:unused // retained for focused recovery-gate unit tests.
@@ -2819,6 +2820,7 @@ func (h *IntegratedQuestHandlers) evaluateEntryAttemptGateState(
 		BlockReason:            evaluated.BlockReason,
 		NextCondition:          evaluated.NextCondition,
 		AttemptWindowProgress:  evaluated.AttemptWindowProgress,
+		WindowStartedAt:        evaluated.WindowStartedAt,
 	}
 }
 
@@ -2829,12 +2831,11 @@ func (h *IntegratedQuestHandlers) recordEntryAttempt(quest *Quest, now time.Time
 	if quest.Checkpoint == nil {
 		quest.Checkpoint = make(map[string]interface{})
 	}
-	windowStart, hasWindow := checkpointRFC3339(quest.Checkpoint["runtime_entry_attempt_window_started_at"])
-	attempts := checkpointInt(quest.Checkpoint["runtime_entry_attempts_1h"])
-	if !hasWindow || now.Sub(windowStart) >= time.Hour {
+	windowStart := state.WindowStartedAt.UTC()
+	if windowStart.IsZero() {
 		windowStart = now
-		attempts = 0
 	}
+	attempts := max(state.AttemptsInWindow, 0)
 	attempts++
 	quest.Checkpoint["runtime_entry_attempt_window_started_at"] = windowStart.UTC().Format(time.RFC3339)
 	quest.Checkpoint["runtime_entry_attempts_1h"] = attempts
