@@ -311,7 +311,6 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         let blockerReason =
           entryGateReason ||
           entryAttemptBlockReason ||
-          recoveryGateReason ||
           "";
         if (!blockerReason) {
           switch (entryGatePriority) {
