@@ -1217,7 +1217,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 			s.getLatestFailoverAttemptInfo(),
 		)
 		log.Printf("[AI-SCALPING] LLM completion failed: %v", err)
-		return nil, fmt.Errorf("LLM completion failed: %w", err)
+		return s.deterministicFallbackDecision(signals, portfolio), nil
 	}
 
 	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
@@ -1228,15 +1228,14 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		decision, err = s.parseDecisionWithRetries(ctx, resp.Message.Content)
 		if err != nil {
 			log.Printf("[AI-SCALPING] Structured-output retries exhausted: %v", err)
-			hold := fallbackHoldDecision(resp.Message.Content, err)
 			s.updateRuntimeState(
-				hold.ReasonCategory,
+				classifyReasonCategory(err, resp.Message.Content),
 				err,
 				false,
 				string(resp.Provider),
 				s.getLatestFailoverAttemptInfo(),
 			)
-			return hold, nil
+			return s.deterministicFallbackDecision(signals, portfolio), nil
 		}
 	}
 	if decision.Action == "hold" {
@@ -2057,6 +2056,126 @@ func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecis
 		ConfidenceKnown: false,
 		SizePercent:     0,
 	}
+}
+
+func (s *AIScalpingService) deterministicFallbackDecision(signals []aiMarketSignal, portfolio TradingPortfolio) *AITradingDecision {
+	bestDecision := (*AITradingDecision)(nil)
+	bestScore := 0.0
+
+	for _, signal := range signals {
+		decision, score, ok := s.deterministicFallbackCandidate(signal, portfolio)
+		if !ok {
+			continue
+		}
+		if bestDecision == nil || score > bestScore {
+			bestDecision = decision
+			bestScore = score
+		}
+	}
+
+	if bestDecision != nil {
+		log.Printf(
+			"[AI-SCALPING] Deterministic fallback selected %s %s (confidence=%.2f score=%.2f)",
+			bestDecision.Action,
+			bestDecision.Symbol,
+			bestDecision.Confidence,
+			bestScore,
+		)
+		return bestDecision
+	}
+
+	return strategyHoldDecision(
+		"deterministic fallback found no eligible candidate after liquidity and signal checks",
+		0,
+	)
+}
+
+func (s *AIScalpingService) deterministicFallbackCandidate(
+	signal aiMarketSignal,
+	portfolio TradingPortfolio,
+) (*AITradingDecision, float64, bool) {
+	if signal.Price <= 0 || signal.Symbol == "" {
+		return nil, 0, false
+	}
+	if signal.BidAskSpread <= 0 || signal.BidAskSpread > 0.08 {
+		return nil, 0, false
+	}
+
+	imbalance := math.Abs(signal.OrderBookImbalance)
+	if imbalance < 0.35 {
+		return nil, 0, false
+	}
+
+	action := ""
+	rangeAlignment := 0.0
+	switch {
+	case signal.OrderBookImbalance >= 0.35 && signal.RangePosition24h <= 45:
+		action = "buy"
+		rangeAlignment = clampFloat((55-signal.RangePosition24h)/55, 0, 1)
+	case signal.OrderBookImbalance <= -0.35 && signal.RangePosition24h >= 55:
+		action = "sell"
+		rangeAlignment = clampFloat((signal.RangePosition24h-45)/55, 0, 1)
+	default:
+		return nil, 0, false
+	}
+
+	liquidityScore := clampFloat(1-(signal.BidAskSpread/0.08), 0, 1)
+	volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/8, 0, 1)
+	score := imbalance*0.65 + liquidityScore*0.20 + rangeAlignment*0.10 + volumeScore*0.05
+	confidence := clampFloat(0.55+score*0.35, 0.55, 0.85)
+	if confidence < clampFloat(math.Max(s.config.MinConfidence, 0.72), 0.05, 0.99) {
+		return nil, 0, false
+	}
+
+	sizeCap := s.config.MaxCapitalPct
+	if portfolio.PhaseMaxCapitalPct > 0 && portfolio.PhaseMaxCapitalPct < sizeCap {
+		sizeCap = portfolio.PhaseMaxCapitalPct
+	}
+	if sizeCap <= 0 {
+		sizeCap = s.config.MaxCapitalPct
+	}
+	sizePct := clampFloat(sizeCap*0.5, 1, sizeCap)
+
+	riskPct := 0.006
+	if signal.High24h > signal.Low24h && signal.Price > 0 {
+		rangePct := (signal.High24h - signal.Low24h) / signal.Price
+		riskPct = clampFloat(rangePct*0.20, 0.004, 0.012)
+	}
+	rewardPct := clampFloat(riskPct*1.6, 0.006, 0.02)
+
+	stopLoss := decimal.Zero
+	takeProfit := decimal.Zero
+	price := decimal.NewFromFloat(signal.Price)
+	switch action {
+	case "buy":
+		stopLoss = price.Mul(decimal.NewFromFloat(1 - riskPct))
+		takeProfit = price.Mul(decimal.NewFromFloat(1 + rewardPct))
+	case "sell":
+		stopLoss = price.Mul(decimal.NewFromFloat(1 + riskPct))
+		takeProfit = price.Mul(decimal.NewFromFloat(1 - rewardPct))
+	default:
+		return nil, 0, false
+	}
+
+	reason := fmt.Sprintf(
+		"deterministic fallback: %s pressure %.3f with spread %.3f%% and range position %.1f%%",
+		action,
+		signal.OrderBookImbalance,
+		signal.BidAskSpread,
+		signal.RangePosition24h,
+	)
+
+	return &AITradingDecision{
+		Action:          action,
+		Symbol:          signal.Symbol,
+		SizePercent:     sizePct,
+		Confidence:      confidence,
+		Reasoning:       reason,
+		ReasonCategory:  reasonCategoryStrategyHold,
+		ConfidenceKnown: true,
+		StopLoss:        &stopLoss,
+		TakeProfit:      &takeProfit,
+	}, score, true
 }
 
 func isDecisionContractValidationError(decision *AITradingDecision, err error) bool {

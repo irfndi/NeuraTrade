@@ -11,6 +11,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type errorLLMClient struct {
+	err error
+}
+
+func (m *errorLLMClient) Complete(ctx context.Context, req *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	return nil, m.err
+}
+
+func (m *errorLLMClient) Stream(ctx context.Context, req *llm.CompletionRequest) (<-chan llm.StreamEvent, error) {
+	return nil, m.err
+}
+
+func (m *errorLLMClient) Provider() llm.Provider {
+	return llm.ProviderOpenAI
+}
+
+func (m *errorLLMClient) Close() error {
+	return nil
+}
+
 func TestAITradingDecision_Validation(t *testing.T) {
 	tp := decimal.NewFromFloat(50000)
 	sl := decimal.NewFromFloat(45000)
@@ -256,6 +276,82 @@ func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
 
 	category = normalizeHoldReasonCategory("", "waiting for qualified setup")
 	assert.Equal(t, reasonCategoryStrategyHold, category)
+}
+
+func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackOnLLMError(t *testing.T) {
+	svc := &AIScalpingService{
+		config:    DefaultAIScalpingConfig(),
+		llmClient: &errorLLMClient{err: context.DeadlineExceeded},
+	}
+
+	decision, err := svc.getAIDecision(context.Background(), []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			RangePosition24h:   18,
+		},
+	}, TradingPortfolio{})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+	assert.True(t, decision.ConfidenceKnown)
+	assert.Greater(t, decision.Confidence, 0.70)
+
+	diagnostics := svc.RuntimeDiagnostics()
+	assert.Contains(t, diagnostics["last_error"], "context deadline exceeded")
+}
+
+func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackAfterParseExhaustion(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Message: llm.Message{Content: "analysis without json"},
+			},
+			{
+				Message: llm.Message{Content: "still not json"},
+			},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 1,
+			MinConfidence:     0.65,
+			MaxCapitalPct:     5,
+			RegimeHighBand:    85,
+			RegimeLowBand:     15,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.getAIDecision(context.Background(), []aiMarketSignal{
+		{
+			Symbol:             "ETH/USDT",
+			Price:              200,
+			High24h:            208,
+			Low24h:             192,
+			Volume24h:          3100000,
+			BidAskSpread:       0.03,
+			OrderBookImbalance: -0.61,
+			RangePosition24h:   82,
+		},
+	}, TradingPortfolio{})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, decision)
+	assert.Equal(t, "sell", decision.Action)
+	assert.Equal(t, "ETH/USDT", decision.Symbol)
+	assert.True(t, decision.ConfidenceKnown)
+	assert.Equal(t, 2, mockLLM.CallCount)
 }
 
 func TestParseAIDecisionJSONObject_DoesNotForceStrategyMetadata(t *testing.T) {

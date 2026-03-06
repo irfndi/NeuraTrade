@@ -92,8 +92,14 @@ func (s *DBQuestStore) SaveQuest(ctx context.Context, quest *Quest) error {
 		return fmt.Errorf("database connection is nil")
 	}
 
-	checkpointJSON, _ := json.Marshal(quest.Checkpoint)
-	metadataJSON, _ := json.Marshal(quest.Metadata)
+	checkpointJSON, err := json.Marshal(quest.Checkpoint)
+	if err != nil {
+		return fmt.Errorf("marshal quest checkpoint: %w", err)
+	}
+	metadataJSON, err := json.Marshal(quest.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshal quest metadata: %w", err)
+	}
 
 	query := fmt.Sprintf(`
 		INSERT INTO %s (
@@ -114,7 +120,7 @@ func (s *DBQuestStore) SaveQuest(ctx context.Context, quest *Quest) error {
 			metadata = EXCLUDED.metadata
 	`, runtimeQuestTable)
 
-	_, err := s.db.Exec(ctx, query,
+	_, err = s.db.Exec(ctx, query,
 		quest.ID, quest.Name, quest.Description, quest.Type, quest.Cadence, quest.CronExpr,
 		quest.Status, quest.Prompt, quest.TargetCount, quest.CurrentCount, checkpointJSON,
 		quest.CreatedAt, quest.UpdatedAt, quest.LastExecutedAt, quest.CompletedAt,

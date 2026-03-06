@@ -2,12 +2,46 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
+
+type recordingQuestStore struct {
+	savedQuest *Quest
+}
+
+func (s *recordingQuestStore) SaveQuest(ctx context.Context, quest *Quest) error {
+	s.savedQuest = cloneQuestForPersistence(quest)
+	return nil
+}
+
+func (s *recordingQuestStore) GetQuest(ctx context.Context, id string) (*Quest, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *recordingQuestStore) ListQuests(ctx context.Context, chatID string, status QuestStatus) ([]*Quest, error) {
+	return nil, nil
+}
+
+func (s *recordingQuestStore) UpdateQuestProgress(ctx context.Context, id string, current int, checkpoint map[string]interface{}) error {
+	return nil
+}
+
+func (s *recordingQuestStore) UpdateLastExecuted(ctx context.Context, id string, executedAt time.Time) error {
+	return nil
+}
+
+func (s *recordingQuestStore) SaveAutonomousState(ctx context.Context, state *AutonomousState) error {
+	return nil
+}
+
+func (s *recordingQuestStore) GetAutonomousState(ctx context.Context, chatID string) (*AutonomousState, error) {
+	return &AutonomousState{ChatID: chatID}, nil
+}
 
 func TestShouldExecute_MicroCadence(t *testing.T) {
 	store := NewInMemoryQuestStore()
@@ -715,6 +749,63 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	}
 	if usable, _ := aiRuntime["provider_chain_usable"].(int); usable != 1 {
 		t.Fatalf("expected ai_runtime.provider_chain_usable=1, got %d", usable)
+	}
+}
+
+func TestQuestEngine_ExecuteQuestPersistsFinalLocalCheckpointSnapshot(t *testing.T) {
+	store := &recordingQuestStore{}
+	engine := NewQuestEngine(store)
+
+	staleQuest := &Quest{
+		ID:          "q-runtime",
+		Name:        "Scalping Executor",
+		Type:        QuestTypeRoutine,
+		Cadence:     CadenceMicro,
+		Status:      QuestStatusActive,
+		Checkpoint:  map[string]interface{}{"entry_gate_type": "recovery_gate"},
+		Metadata:    map[string]string{"chat_id": "1082762347", "definition_id": "scalping_execution"},
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+		TargetCount: 0,
+	}
+	liveQuest := &Quest{
+		ID:          staleQuest.ID,
+		Name:        staleQuest.Name,
+		Type:        staleQuest.Type,
+		Cadence:     staleQuest.Cadence,
+		Status:      staleQuest.Status,
+		Checkpoint:  map[string]interface{}{},
+		Metadata:    staleQuest.Metadata,
+		CreatedAt:   staleQuest.CreatedAt,
+		UpdatedAt:   staleQuest.UpdatedAt,
+		TargetCount: staleQuest.TargetCount,
+	}
+
+	engine.quests[liveQuest.ID] = staleQuest
+	engine.executing[liveQuest.ID] = true
+	engine.executionStarts[liveQuest.ID] = time.Now().UTC()
+	engine.executionLastProgress[liveQuest.ID] = time.Now().UTC()
+	engine.executionStage[liveQuest.ID] = questExecutionStageHandler
+	engine.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
+		quest.Checkpoint["entry_gate_type"] = "none"
+		quest.Checkpoint["recovery_entry_allowed"] = true
+		quest.Checkpoint["risk_current_drawdown"] = 0.0
+		return nil
+	})
+
+	engine.executeQuest(liveQuest)
+
+	if store.savedQuest == nil {
+		t.Fatal("expected final quest snapshot to be persisted")
+	}
+	if gateType, _ := store.savedQuest.Checkpoint["entry_gate_type"].(string); gateType != "none" {
+		t.Fatalf("expected persisted entry_gate_type=none, got %q", gateType)
+	}
+	if allowed, _ := store.savedQuest.Checkpoint["recovery_entry_allowed"].(bool); !allowed {
+		t.Fatal("expected persisted recovery_entry_allowed=true")
+	}
+	if gateType, _ := engine.quests[liveQuest.ID].Checkpoint["entry_gate_type"].(string); gateType != "none" {
+		t.Fatalf("expected in-memory entry_gate_type=none, got %q", gateType)
 	}
 }
 

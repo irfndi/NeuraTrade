@@ -1327,17 +1327,50 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 	if err := handler(ctx, quest); err != nil {
 		log.Printf("Quest %s (%s) failed: %v", quest.ID, quest.Name, err)
 		e.markQuestExecutionProgress(quest.ID, questExecutionStagePersist)
-		e.updateQuestStatus(quest.ID, QuestStatusFailed)
-		quest.LastError = err.Error()
+		e.finalizeQuestExecution(quest, err)
 	} else {
 		log.Printf("Quest %s (%s) completed successfully", quest.ID, quest.Name)
-		now := time.Now()
 		e.markQuestExecutionProgress(quest.ID, questExecutionStagePersist)
-		e.updateLastExecuted(quest.ID, now)
+		e.finalizeQuestExecution(quest, nil)
+	}
+}
+
+func (e *QuestEngine) finalizeQuestExecution(quest *Quest, execErr error) {
+	if quest == nil {
+		return
+	}
+
+	now := time.Now()
+
+	e.mu.Lock()
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	quest.UpdatedAt = now
+	if execErr != nil {
+		quest.Status = QuestStatusFailed
+		quest.LastError = execErr.Error()
+		quest.CompletedAt = nil
+	} else {
+		quest.LastExecutedAt = &now
+		quest.LastError = ""
 		if quest.Type == QuestTypeRoutine {
-			e.updateQuestStatus(quest.ID, QuestStatusActive)
+			quest.Status = QuestStatusActive
+			quest.CompletedAt = nil
 		} else {
-			e.updateQuestStatus(quest.ID, QuestStatusCompleted)
+			quest.Status = QuestStatusCompleted
+			quest.CompletedAt = &now
+		}
+	}
+	e.quests[quest.ID] = quest
+	if chatID, err := strconv.ParseInt(strings.TrimSpace(quest.Metadata["chat_id"]), 10, 64); err == nil && chatID > 0 {
+		e.chatIDForQuest[quest.ID] = chatID
+	}
+	e.mu.Unlock()
+
+	if e.store != nil {
+		if err := e.store.SaveQuest(context.Background(), cloneQuestForPersistence(quest)); err != nil {
+			log.Printf("Failed to persist final quest snapshot %s: %v", quest.ID, err)
 		}
 	}
 }
@@ -2473,6 +2506,78 @@ func UnmarshalCheckpoint(data []byte) (map[string]interface{}, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func cloneQuestForPersistence(quest *Quest) *Quest {
+	if quest == nil {
+		return nil
+	}
+
+	cloned := *quest
+	cloned.Checkpoint = cloneCheckpointMap(quest.Checkpoint)
+	cloned.Metadata = cloneStringMap(quest.Metadata)
+	if quest.LastExecutedAt != nil {
+		lastExecuted := *quest.LastExecutedAt
+		cloned.LastExecutedAt = &lastExecuted
+	}
+	if quest.CompletedAt != nil {
+		completedAt := *quest.CompletedAt
+		cloned.CompletedAt = &completedAt
+	}
+	return &cloned
+}
+
+func cloneCheckpointMap(input map[string]interface{}) map[string]interface{} {
+	if input == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		cloned[key] = cloneCheckpointValue(value)
+	}
+	return cloned
+}
+
+func cloneCheckpointValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneCheckpointMap(typed)
+	case []interface{}:
+		cloned := make([]interface{}, len(typed))
+		for i, item := range typed {
+			cloned[i] = cloneCheckpointValue(item)
+		}
+		return cloned
+	case []string:
+		return append([]string(nil), typed...)
+	case []int:
+		return append([]int(nil), typed...)
+	case []float64:
+		return append([]float64(nil), typed...)
+	case []bool:
+		return append([]bool(nil), typed...)
+	case map[string]string:
+		return cloneStringMap(typed)
+	case map[string]bool:
+		cloned := make(map[string]bool, len(typed))
+		for key, item := range typed {
+			cloned[key] = item
+		}
+		return cloned
+	default:
+		return value
+	}
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func calculateTimeRemaining(quest *Quest) string {

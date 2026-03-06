@@ -890,8 +890,6 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		h.maybeSendHoldDigest(ctx, quest, chatID, holdDecision, portfolio)
 		return nil
 	}
-	h.recordEntryAttempt(quest, nowUTC, livenessGate)
-
 	exchangeConnected := true
 	connectionChecked := false
 	if healthChecker, ok := h.ccxtService.(interface{ IsHealthy(context.Context) bool }); ok {
@@ -921,6 +919,9 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(cycleCtx, portfolio)
 	h.applyAutonomyCheckpoint(quest)
+	if shouldRecordEntryAttempt(decision, err) {
+		h.recordEntryAttempt(quest, nowUTC, livenessGate)
+	}
 	if err != nil {
 		h.updateRecoveryCleanCycles(quest, false, "runtime_error")
 		log.Printf("[SCALPING] AI decision error: %v", err)
@@ -2838,7 +2839,41 @@ func (h *IntegratedQuestHandlers) recordEntryAttempt(quest *Quest, now time.Time
 		attempts,
 		state.MaxAttemptsPerHour,
 	)
+	if attempts >= state.MaxAttemptsPerHour {
+		blockReason := fmt.Sprintf(
+			"liveness entry-attempt budget reached: %d/%d in current 1h window",
+			attempts,
+			state.MaxAttemptsPerHour,
+		)
+		nextCondition := fmt.Sprintf(
+			"Next entry-attempt window opens at %s",
+			windowStart.Add(time.Hour).UTC().Format(time.RFC3339),
+		)
+		quest.Checkpoint["runtime_entry_attempt_block_reason"] = blockReason
+		quest.Checkpoint["runtime_entry_gate_reason"] = blockReason
+		quest.Checkpoint["runtime_next_unblock_condition"] = nextCondition
+		return
+	}
+
+	quest.Checkpoint["runtime_next_unblock_condition"] = fmt.Sprintf(
+		"Liveness attempt budget available: %d/%d used in current 1h window",
+		attempts,
+		state.MaxAttemptsPerHour,
+	)
 	delete(quest.Checkpoint, "runtime_entry_attempt_block_reason")
+}
+
+func shouldRecordEntryAttempt(decision *AITradingDecision, execErr error) bool {
+	if decision == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		return false
+	}
+	if strings.TrimSpace(decision.OrderID) != "" {
+		return true
+	}
+	return execErr != nil
 }
 
 func (h *IntegratedQuestHandlers) assertPostEntryProtectionAsync(chatID, exchange, orderID, symbol, side string) {
