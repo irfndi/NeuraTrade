@@ -515,10 +515,12 @@ func TestIntegratedQuestHandlers_UpdateRecoveryCleanCycles_ResetOnFailure(t *tes
 
 	handlers.updateRecoveryCleanCycles(quest, true, "")
 	handlers.updateRecoveryCleanCycles(quest, true, "")
-	assert.Equal(t, 2, checkpointInt(quest.Checkpoint["recovery_clean_cycles"]))
+	assert.Equal(t, 2, checkpointInt(quest.Checkpoint["recovery_clean_cycles_current"]))
+	assert.NotContains(t, quest.Checkpoint, "recovery_clean_cycles")
 
 	handlers.updateRecoveryCleanCycles(quest, false, "runtime_error")
-	assert.Equal(t, 0, checkpointInt(quest.Checkpoint["recovery_clean_cycles"]))
+	assert.Equal(t, 0, checkpointInt(quest.Checkpoint["recovery_clean_cycles_current"]))
+	assert.NotContains(t, quest.Checkpoint, "recovery_clean_cycles")
 	assert.Equal(t, "runtime_error", checkpointString(quest.Checkpoint["recovery_last_reset_reason"]))
 }
 

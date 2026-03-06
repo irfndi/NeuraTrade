@@ -1061,6 +1061,16 @@ func readQuestMetricInt(v interface{}) int {
 	return 0
 }
 
+func readQuestMetricIntWithFallback(checkpoint map[string]interface{}, primary, fallback string) int {
+	if checkpoint == nil {
+		return 0
+	}
+	if value, ok := checkpoint[primary]; ok {
+		return readQuestMetricInt(value)
+	}
+	return readQuestMetricInt(checkpoint[fallback])
+}
+
 func readQuestMetricBool(v interface{}) bool {
 	switch value := v.(type) {
 	case bool:
@@ -1894,7 +1904,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		holdStreak = maxInt(holdStreak, readQuestMetricInt(cp["runtime_hold_streak"]))
 		unlockCycles = maxInt(unlockCycles, readQuestMetricInt(cp["runtime_unlock_cycles"]))
 		failureStreak = maxInt(failureStreak, readQuestMetricInt(cp["runtime_failure_streak"]))
-		recoveryCleanCycles = maxInt(recoveryCleanCycles, readQuestMetricInt(cp["recovery_clean_cycles"]))
+		recoveryCleanCycles = maxInt(recoveryCleanCycles, readQuestMetricIntWithFallback(cp, "recovery_clean_cycles_current", "recovery_clean_cycles"))
 		recoveryCleanRequired = maxInt(recoveryCleanRequired, readQuestMetricInt(cp["recovery_clean_cycles_required"]))
 		recoveryCyclesToEntry = maxInt(recoveryCyclesToEntry, readQuestMetricInt(cp["recovery_cycles_to_entry"]))
 		if mode := readQuestMetricString(cp["recovery_mode"]); mode != "" {
