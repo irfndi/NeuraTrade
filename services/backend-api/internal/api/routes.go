@@ -17,6 +17,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/ai"
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/api/handlers"
+	autonomyruntime "github.com/irfndi/neuratrade/internal/app/autonomy/runtime"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
@@ -597,28 +598,20 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("Warning: Unknown database type, AI learning disabled")
 	}
 
-	// Create integrated quest handlers with actual implementations
-	integratedHandlers, integratedHandlersErr := services.NewIntegratedQuestHandlersWithAutonomyStore(
-		nil,                     // TA service - TODO: Initialize when ready
-		ccxtService,             // CCXT service
-		arbitrageHandler,        // Arbitrage service
-		futuresArbitrageHandler, // Futures arbitrage
-		notificationService,     // Notification service
-		autonomousMonitoring,    // Monitoring service
-		sqlDB,                   // SQL database (for user settings + autonomy store)
-		nil,                     // Autonomy store (auto-create from SQL DB)
+	// Create integrated quest runtime handlers through app/autonomy module.
+	integratedHandlers, integratedHandlersErr := autonomyruntime.BuildIntegratedHandlers(
+		autonomyruntime.Dependencies{
+			TechnicalAnalysis:   nil,
+			CCXTService:         ccxtService,
+			ArbitrageService:    arbitrageHandler,
+			FuturesArbService:   futuresArbitrageHandler,
+			NotificationService: notificationService,
+			MonitoringService:   autonomousMonitoring,
+			SQLDB:               sqlDB,
+		},
 	)
 	if integratedHandlersErr != nil {
-		log.Printf("Warning: failed to initialize integrated handlers with autonomy store: %v", integratedHandlersErr)
-		integratedHandlers = services.NewIntegratedQuestHandlers(
-			nil,
-			ccxtService,
-			arbitrageHandler,
-			futuresArbitrageHandler,
-			notificationService,
-			autonomousMonitoring,
-		)
-		integratedHandlers.SetDB(sqlDB)
+		log.Fatalf("Failed to initialize autonomy runtime handlers: %v", integratedHandlersErr)
 	}
 
 	// Wire order executor to integrated handlers for scalping execution
@@ -793,8 +786,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
 	}
 
-	// Register integrated handlers before scheduler start so first tick has handlers.
-	questEngine.RegisterIntegratedHandlers(integratedHandlers)
+	// Register quest runtime via app/autonomy entrypoint before scheduler start.
+	if err := autonomyruntime.RegisterQuestRuntime(questEngine, integratedHandlers); err != nil {
+		log.Fatalf("Failed to register quest runtime handlers: %v", err)
+	}
 	questEngine.Start() // Start the quest engine scheduler
 
 	// Initialize exchange reconciler for position/order resumability
@@ -1027,22 +1022,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 
 		// Telegram internal routes - backward compatible (no auth for internal network)
-		// Both new (/internal/telegram/*) and legacy (/api/v1/telegram/internal/*) paths work
+		// Internal Telegram routes under /api/v1 remain admin-authenticated.
 		telegram := v1.Group("/telegram")
 		{
-			// Legacy paths kept for backward compatibility with older telegram-service versions
-			telegram.GET("/internal/users/:id", telegramInternalHandler.GetUserByChatID)
-			telegram.GET("/internal/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
-			telegram.POST("/internal/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
-			telegram.POST("/internal/autonomous/begin", telegramInternalHandler.BeginAutonomous)
-			telegram.POST("/internal/autonomous/pause", telegramInternalHandler.PauseAutonomous)
-			telegram.POST("/internal/wallets/connect_exchange", telegramInternalHandler.ConnectExchange)
-			telegram.POST("/internal/wallets/connect_polymarket", telegramInternalHandler.ConnectPolymarket)
-			telegram.POST("/internal/wallets", telegramInternalHandler.AddWallet)
-			telegram.POST("/internal/wallets/remove", telegramInternalHandler.RemoveWallet)
-			telegram.GET("/internal/wallets", telegramInternalHandler.GetWallets)
-			telegram.GET("/internal/doctor", telegramInternalHandler.GetDoctor)
-
 			telegramInternal := telegram.Group("/internal")
 			telegramInternal.Use(adminMiddleware.RequireAdminAuth())
 			{

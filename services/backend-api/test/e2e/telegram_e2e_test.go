@@ -137,7 +137,7 @@ func (s *TelegramE2ETestSuite) TestCompleteUserFlowE2E() {
 
 	// Step 1: Lookup user by chat ID (simulates /start command flow)
 	t.Run("Step1_LookupUserByChatID", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+s.testChatID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/"+s.testChatID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -157,7 +157,7 @@ func (s *TelegramE2ETestSuite) TestCompleteUserFlowE2E() {
 
 	// Step 2: Check default notification preferences (simulates /settings command)
 	t.Run("Step2_CheckDefaultPreferences", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+s.testUserID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/notifications/"+s.testUserID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -176,7 +176,7 @@ func (s *TelegramE2ETestSuite) TestCompleteUserFlowE2E() {
 	// Step 3: Disable notifications (simulates /stop command)
 	t.Run("Step3_DisableNotifications", func(t *testing.T) {
 		body := []byte(`{"enabled": false}`)
-		req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+s.testUserID, bytes.NewBuffer(body))
+		req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+s.testUserID, bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -193,7 +193,7 @@ func (s *TelegramE2ETestSuite) TestCompleteUserFlowE2E() {
 
 	// Step 4: Verify notifications are disabled
 	t.Run("Step4_VerifyNotificationsDisabled", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+s.testUserID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/notifications/"+s.testUserID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -210,7 +210,7 @@ func (s *TelegramE2ETestSuite) TestCompleteUserFlowE2E() {
 	// Step 5: Re-enable notifications (simulates /resume command)
 	t.Run("Step5_ReEnableNotifications", func(t *testing.T) {
 		body := []byte(`{"enabled": true}`)
-		req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+s.testUserID, bytes.NewBuffer(body))
+		req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+s.testUserID, bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -222,7 +222,7 @@ func (s *TelegramE2ETestSuite) TestCompleteUserFlowE2E() {
 
 	// Step 6: Verify notifications are enabled again
 	t.Run("Step6_VerifyNotificationsEnabled", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+s.testUserID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/notifications/"+s.testUserID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -242,7 +242,7 @@ func (s *TelegramE2ETestSuite) TestUserNotFoundE2E() {
 	t := s.T()
 
 	t.Run("LookupNonExistentUser", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/nonexistent_chat_id", nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/nonexistent_chat_id", nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -262,7 +262,7 @@ func (s *TelegramE2ETestSuite) TestAuthenticationE2E() {
 	t := s.T()
 
 	t.Run("NoAPIKey", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+s.testChatID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/"+s.testChatID, nil)
 		require.NoError(t, err)
 		// No API key
 		w := httptest.NewRecorder()
@@ -272,7 +272,7 @@ func (s *TelegramE2ETestSuite) TestAuthenticationE2E() {
 	})
 
 	t.Run("InvalidAPIKey", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+s.testChatID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/"+s.testChatID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", "wrong-api-key")
 		w := httptest.NewRecorder()
@@ -282,7 +282,7 @@ func (s *TelegramE2ETestSuite) TestAuthenticationE2E() {
 	})
 
 	t.Run("ValidAPIKey", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+s.testChatID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/"+s.testChatID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -303,7 +303,7 @@ func (s *TelegramE2ETestSuite) TestConcurrentAccessE2E() {
 
 		for i := 0; i < 10; i++ {
 			go func() {
-				req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+s.testChatID, nil)
+				req, err := http.NewRequest("GET", "/internal/telegram/users/"+s.testChatID, nil)
 				if err != nil {
 					errors <- err
 					done <- true
@@ -340,7 +340,7 @@ func (s *TelegramE2ETestSuite) TestConcurrentAccessE2E() {
 			enabled := i%2 == 0
 			go func(enable bool) {
 				body := []byte(fmt.Sprintf(`{"enabled": %v}`, enable))
-				req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+s.testUserID, bytes.NewBuffer(body))
+				req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+s.testUserID, bytes.NewBuffer(body))
 				if err != nil {
 					done <- true
 					return
@@ -359,7 +359,7 @@ func (s *TelegramE2ETestSuite) TestConcurrentAccessE2E() {
 		}
 
 		// Final state should be consistent (one of enabled or disabled)
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+s.testUserID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/notifications/"+s.testUserID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -381,7 +381,7 @@ func (s *TelegramE2ETestSuite) TestValidationE2E() {
 	t := s.T()
 
 	t.Run("EmptyChatID", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/", nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/", nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -393,7 +393,7 @@ func (s *TelegramE2ETestSuite) TestValidationE2E() {
 
 	t.Run("InvalidJSONBody", func(t *testing.T) {
 		body := []byte(`{invalid json}`)
-		req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+s.testUserID, bytes.NewBuffer(body))
+		req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+s.testUserID, bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -463,7 +463,7 @@ func (s *TelegramE2ETestSuite) TestMultipleUsersFlowE2E() {
 
 	t.Run("IndependentUserLookups", func(t *testing.T) {
 		for _, user := range users {
-			req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+user.chatID, nil)
+			req, err := http.NewRequest("GET", "/internal/telegram/users/"+user.chatID, nil)
 			require.NoError(t, err)
 			req.Header.Set("X-API-Key", s.adminAPIKey)
 			w := httptest.NewRecorder()
@@ -489,7 +489,7 @@ func (s *TelegramE2ETestSuite) TestMultipleUsersFlowE2E() {
 		// Concurrent reads for each user
 		for _, user := range users {
 			go func(u testUser) {
-				req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+u.chatID, nil)
+				req, err := http.NewRequest("GET", "/internal/telegram/users/"+u.chatID, nil)
 				if err != nil {
 					errors <- err
 					done <- true
@@ -508,7 +508,7 @@ func (s *TelegramE2ETestSuite) TestMultipleUsersFlowE2E() {
 			// Also toggle notifications concurrently
 			go func(u testUser) {
 				body := []byte(`{"enabled": false}`)
-				req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+u.id, bytes.NewBuffer(body))
+				req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+u.id, bytes.NewBuffer(body))
 				if err != nil {
 					errors <- err
 					done <- true
@@ -540,7 +540,7 @@ func (s *TelegramE2ETestSuite) TestMultipleUsersFlowE2E() {
 	t.Run("IsolatedNotificationPreferences", func(t *testing.T) {
 		// Disable notifications for user 1
 		body := []byte(`{"enabled": false}`)
-		req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+users[0].id, bytes.NewBuffer(body))
+		req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+users[0].id, bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -550,7 +550,7 @@ func (s *TelegramE2ETestSuite) TestMultipleUsersFlowE2E() {
 
 		// Enable notifications for user 2
 		body = []byte(`{"enabled": true}`)
-		req, err = http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+users[1].id, bytes.NewBuffer(body))
+		req, err = http.NewRequest("POST", "/internal/telegram/notifications/"+users[1].id, bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -559,7 +559,7 @@ func (s *TelegramE2ETestSuite) TestMultipleUsersFlowE2E() {
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		// Verify user 1 has notifications disabled
-		req, err = http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+users[0].id, nil)
+		req, err = http.NewRequest("GET", "/internal/telegram/notifications/"+users[0].id, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w = httptest.NewRecorder()
@@ -571,7 +571,7 @@ func (s *TelegramE2ETestSuite) TestMultipleUsersFlowE2E() {
 		assert.Equal(t, false, resp1["enabled"])
 
 		// Verify user 2 has notifications enabled
-		req, err = http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+users[1].id, nil)
+		req, err = http.NewRequest("GET", "/internal/telegram/notifications/"+users[1].id, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w = httptest.NewRecorder()
@@ -610,7 +610,7 @@ func (s *TelegramE2ETestSuite) TestSubscriptionTierAccessE2E() {
 			}()
 
 			// Verify tier is returned correctly
-			req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+chatID, nil)
+			req, err := http.NewRequest("GET", "/internal/telegram/users/"+chatID, nil)
 			require.NoError(t, err)
 			req.Header.Set("X-API-Key", s.adminAPIKey)
 			w := httptest.NewRecorder()
@@ -638,7 +638,7 @@ func (s *TelegramE2ETestSuite) TestUserRegistrationFlowE2E() {
 
 	t.Run("NewUserNotFound", func(t *testing.T) {
 		// First lookup should return 404
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+newChatID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/"+newChatID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -666,7 +666,7 @@ func (s *TelegramE2ETestSuite) TestUserRegistrationFlowE2E() {
 	}()
 
 	t.Run("UserFoundAfterRegistration", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+newChatID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/"+newChatID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -685,7 +685,7 @@ func (s *TelegramE2ETestSuite) TestUserRegistrationFlowE2E() {
 	})
 
 	t.Run("DefaultNotificationPreferencesForNewUser", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+newUserID, nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/notifications/"+newUserID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -710,7 +710,7 @@ func (s *TelegramE2ETestSuite) TestNotificationPreferencesPersistenceE2E() {
 	t.Run("PersistDisabledState", func(t *testing.T) {
 		// Disable notifications
 		body := []byte(`{"enabled": false}`)
-		req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+s.testUserID, bytes.NewBuffer(body))
+		req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+s.testUserID, bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -731,7 +731,7 @@ func (s *TelegramE2ETestSuite) TestNotificationPreferencesPersistenceE2E() {
 	t.Run("PersistEnabledState", func(t *testing.T) {
 		// Re-enable notifications
 		body := []byte(`{"enabled": true}`)
-		req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+s.testUserID, bytes.NewBuffer(body))
+		req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+s.testUserID, bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -761,7 +761,7 @@ func (s *TelegramE2ETestSuite) TestHighThroughputE2E() {
 		const requestCount = 20
 		successCount := 0
 		for i := 0; i < requestCount; i++ {
-			req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/"+s.testChatID, nil)
+			req, err := http.NewRequest("GET", "/internal/telegram/users/"+s.testChatID, nil)
 			require.NoError(t, err)
 			req.Header.Set("X-API-Key", s.adminAPIKey)
 			w := httptest.NewRecorder()
@@ -783,7 +783,7 @@ func (s *TelegramE2ETestSuite) TestErrorRecoveryE2E() {
 	t.Run("RecoverFromBadRequest", func(t *testing.T) {
 		// Send invalid request
 		body := []byte(`{invalid}`)
-		req, err := http.NewRequest("POST", "/api/v1/telegram/internal/notifications/"+s.testUserID, bytes.NewBuffer(body))
+		req, err := http.NewRequest("POST", "/internal/telegram/notifications/"+s.testUserID, bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		req.Header.Set("Content-Type", "application/json")
@@ -792,7 +792,7 @@ func (s *TelegramE2ETestSuite) TestErrorRecoveryE2E() {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		// System should still work normally after error
-		req, err = http.NewRequest("GET", "/api/v1/telegram/internal/notifications/"+s.testUserID, nil)
+		req, err = http.NewRequest("GET", "/internal/telegram/notifications/"+s.testUserID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w = httptest.NewRecorder()
@@ -802,7 +802,7 @@ func (s *TelegramE2ETestSuite) TestErrorRecoveryE2E() {
 
 	t.Run("RecoverFromNotFoundError", func(t *testing.T) {
 		// Try to access non-existent user
-		req, err := http.NewRequest("GET", "/api/v1/telegram/internal/users/nonexistent", nil)
+		req, err := http.NewRequest("GET", "/internal/telegram/users/nonexistent", nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w := httptest.NewRecorder()
@@ -810,7 +810,7 @@ func (s *TelegramE2ETestSuite) TestErrorRecoveryE2E() {
 		assert.Equal(t, http.StatusNotFound, w.Code)
 
 		// System should still work for valid requests
-		req, err = http.NewRequest("GET", "/api/v1/telegram/internal/users/"+s.testChatID, nil)
+		req, err = http.NewRequest("GET", "/internal/telegram/users/"+s.testChatID, nil)
 		require.NoError(t, err)
 		req.Header.Set("X-API-Key", s.adminAPIKey)
 		w = httptest.NewRecorder()

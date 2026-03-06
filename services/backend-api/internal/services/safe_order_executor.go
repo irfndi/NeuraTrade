@@ -87,6 +87,9 @@ func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol st
 	chatID := s.chatID
 	safetyService := s.safetyService
 	s.mu.RUnlock()
+	if scopedChatID := scalpingChatIDFromContext(ctx); scopedChatID != "" {
+		chatID = scopedChatID
+	}
 
 	if safetyService == nil {
 		return true, "", nil

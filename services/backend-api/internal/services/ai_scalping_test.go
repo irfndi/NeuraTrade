@@ -472,3 +472,18 @@ func TestAIScalpingService_PreTradeGate_ExpectancyBlock(t *testing.T) {
 	assert.Contains(t, result.Reason, "expectancy gate")
 	assert.GreaterOrEqual(t, result.SampleSize, 5)
 }
+
+func TestAIScalpingService_ExchangeForContextPrefersScopedExchange(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange: "bitget",
+		},
+	}
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "123",
+		Exchange: "binance",
+	})
+
+	assert.Equal(t, "binance", svc.exchangeForContext(ctx))
+	assert.Equal(t, "bitget", svc.exchangeForContext(context.Background()))
+}

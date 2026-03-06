@@ -1,6 +1,6 @@
 /**
  * User data returned from backend API.
- * Retrieved via GET /api/v1/telegram/internal/users/:chatId
+ * Retrieved via GET /internal/telegram/users/:chatId
  */
 export interface BackendUser {
   readonly id: string;
@@ -17,7 +17,7 @@ export interface GetUserByChatIdResponse {
 
 /**
  * Notification preference returned from backend API.
- * Retrieved via GET /api/v1/telegram/internal/notifications/:userId
+ * Retrieved via GET /internal/telegram/notifications/:userId
  */
 export interface NotificationPreferenceResponse {
   readonly enabled: boolean;
@@ -25,7 +25,7 @@ export interface NotificationPreferenceResponse {
 
 /**
  * Request body for setting notification preference.
- * Sent via POST /api/v1/telegram/internal/notifications/:userId
+ * Sent via POST /internal/telegram/notifications/:userId
  */
 export interface SetNotificationPreferenceRequest {
   readonly enabled: boolean;
@@ -197,7 +197,7 @@ export interface QuestDiagnosticsResponse {
   readonly started_at?: string;
   readonly state_drift_active?: boolean;
   readonly state_drift_positions?: number;
-  readonly entry_gate_reason?: string;
+  readonly entry_gate_reason_current?: string;
   readonly entry_gate_type?:
     | "none"
     | "risk_lock"
@@ -205,7 +205,6 @@ export interface QuestDiagnosticsResponse {
     | "runtime_circuit"
     | "recovery_gate"
     | string;
-  readonly recovery_gate_reason?: string;
   readonly risk_lock_source?:
     | "manual_env"
     | "portfolio_safety"
@@ -216,14 +215,17 @@ export interface QuestDiagnosticsResponse {
   readonly execution_last_progress_at?: string;
   readonly execution_in_progress_age_seconds?: number;
   readonly entry_attempt_block_reason?: string;
-  readonly next_unblock_condition?: string;
+  readonly next_unblock_condition_current?: string;
   readonly last_entry_attempt_at?: string;
   readonly minutes_since_entry_attempt?: number;
   readonly entry_attempts_1h?: number;
   readonly drift_signature?: string;
   readonly drift_deadlock_cycles?: number;
   readonly recovery_mode?: "normal" | "derisk_only" | "micro_entry" | string;
-  readonly recovery_clean_cycles?: number;
+  readonly recovery_clean_cycles_current?: number;
+  readonly recovery_clean_cycles_required?: number;
+  readonly recovery_cycles_to_entry?: number;
+  readonly recovery_gate_eval_at?: string;
   readonly recovery_entry_allowed?: boolean;
   readonly last_drift_repair_at?: string;
   readonly last_clean_reconcile_at?: string;
@@ -339,26 +341,26 @@ export interface WebhookUpdateResponse {
  */
 export const API_ENDPOINTS = {
   GET_USER_BY_CHAT_ID: (chatId: string) =>
-    `/api/v1/telegram/internal/users/${encodeURIComponent(chatId)}`,
+    `/internal/telegram/users/${encodeURIComponent(chatId)}`,
   GET_NOTIFICATION_PREFERENCE: (userId: string) =>
-    `/api/v1/telegram/internal/notifications/${encodeURIComponent(userId)}`,
+    `/internal/telegram/notifications/${encodeURIComponent(userId)}`,
   SET_NOTIFICATION_PREFERENCE: (userId: string) =>
-    `/api/v1/telegram/internal/notifications/${encodeURIComponent(userId)}`,
+    `/internal/telegram/notifications/${encodeURIComponent(userId)}`,
   REGISTER_USER: "/api/v1/users/register",
   GET_ARBITRAGE_OPPORTUNITIES: (limit = 5, minProfit = 0.5) =>
     `/api/v1/arbitrage/opportunities?limit=${limit}&min_profit=${minProfit}`,
-  BEGIN_AUTONOMOUS: "/api/v1/telegram/internal/autonomous/begin",
-  PAUSE_AUTONOMOUS: "/api/v1/telegram/internal/autonomous/pause",
+  BEGIN_AUTONOMOUS: "/internal/telegram/autonomous/begin",
+  PAUSE_AUTONOMOUS: "/internal/telegram/autonomous/pause",
   GET_SUMMARY: (chatId: string, timeframe = "24h") =>
     `/api/v1/telegram/internal/performance/summary?chat_id=${encodeURIComponent(chatId)}&timeframe=${encodeURIComponent(timeframe)}`,
   GET_PERFORMANCE: (chatId: string, timeframe = "24h") =>
     `/api/v1/telegram/internal/performance?chat_id=${encodeURIComponent(chatId)}&timeframe=${encodeURIComponent(timeframe)}`,
   LIQUIDATE: "/api/v1/telegram/internal/liquidate",
   LIQUIDATE_ALL: "/api/v1/telegram/internal/liquidate/all",
-  CONNECT_EXCHANGE: "/api/v1/telegram/internal/wallets/connect_exchange",
-  CONNECT_POLYMARKET: "/api/v1/telegram/internal/wallets/connect_polymarket",
-  ADD_WALLET: "/api/v1/telegram/internal/wallets",
-  REMOVE_WALLET: "/api/v1/telegram/internal/wallets/remove",
+  CONNECT_EXCHANGE: "/internal/telegram/wallets/connect_exchange",
+  CONNECT_POLYMARKET: "/internal/telegram/wallets/connect_polymarket",
+  ADD_WALLET: "/internal/telegram/wallets",
+  REMOVE_WALLET: "/internal/telegram/wallets/remove",
   GET_QUESTS: (chatId: string) =>
     `/api/v1/telegram/internal/quests?chat_id=${encodeURIComponent(chatId)}`,
   GET_QUEST_DIAGNOSTICS: (chatId: string) =>
@@ -366,11 +368,11 @@ export const API_ENDPOINTS = {
   GET_PORTFOLIO: (chatId: string) =>
     `/api/v1/telegram/internal/portfolio?chat_id=${encodeURIComponent(chatId)}`,
   GET_WALLETS: (chatId: string) =>
-    `/api/v1/telegram/internal/wallets?chat_id=${encodeURIComponent(chatId)}`,
+    `/internal/telegram/wallets?chat_id=${encodeURIComponent(chatId)}`,
   GET_LOGS: (chatId: string, limit = 10) =>
     `/api/v1/telegram/internal/logs?chat_id=${encodeURIComponent(chatId)}&limit=${limit}`,
   GET_DOCTOR: (chatId: string) =>
-    `/api/v1/telegram/internal/doctor?chat_id=${encodeURIComponent(chatId)}`,
+    `/internal/telegram/doctor?chat_id=${encodeURIComponent(chatId)}`,
   GET_AI_MODELS: "/api/v1/ai/models",
   SELECT_AI_MODEL: (userId: string) =>
     `/api/v1/ai/select/${encodeURIComponent(userId)}`,

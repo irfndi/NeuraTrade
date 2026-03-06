@@ -1727,21 +1727,23 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		"hold_streak":                       0,
 		"unlock_cycles":                     0,
 		"recovery_mode":                     "normal",
-		"recovery_clean_cycles":             0,
+		"recovery_clean_cycles_current":     0,
+		"recovery_clean_cycles_required":    1,
+		"recovery_cycles_to_entry":          0,
+		"recovery_gate_eval_at":             "",
 		"recovery_entry_allowed":            true,
 		"recovery_next_condition":           "",
 		"state_drift_active":                false,
 		"state_drift_positions":             0,
 		"state_drift_count":                 0,
 		"state_drift_last_checked_at":       "",
-		"entry_gate_reason":                 "",
+		"entry_gate_reason_current":         "",
 		"entry_gate_type":                   "none",
-		"recovery_gate_reason":              "",
 		"last_entry_attempt_at":             "",
 		"minutes_since_entry_attempt":       0.0,
 		"entry_attempts_1h":                 0,
 		"entry_attempt_block_reason":        "",
-		"next_unblock_condition":            "",
+		"next_unblock_condition_current":    "",
 		"last_drift_repair_at":              "",
 		"last_clean_reconcile_at":           "",
 		"drift_signature":                   "",
@@ -1777,67 +1779,70 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	}
 
 	var (
-		lastStartupReconcile  time.Time
-		lastSpotUnwind        time.Time
-		lastHoldDigest        time.Time
-		lastEntryAttempt      time.Time
-		latestFailureAt       time.Time
-		holdStreak            int
-		unlockCycles          int
-		failureStreak         int
-		noFillSince           time.Time
-		activeScalping        int
-		recoveryMode          string
-		recoveryNextCondition string
-		recoveryCleanCycles   int
-		entryAttempts1h       int
-		entryAttemptBlock     string
-		nextUnblockCondition  string
-		driftSignature        string
-		driftDeadlockCycles   int
-		recoveryEntryAllowed  = true
-		stateDriftActive      bool
-		stateDriftPositions   int
-		stateDriftLastChecked time.Time
-		lastDriftRepair       time.Time
-		lastCleanReconcile    time.Time
-		entryGateReason       string
-		entryGateType         string
-		riskMaxDrawdown       float64
-		aiWindowTotal         int
-		aiWindowSuccess       int
-		aiWindowErrors        int
-		aiWindowTimeouts      int
-		aiWindowParseFails    int
-		aiWindowStarted       time.Time
-		aiLastEventAt         time.Time
-		aiLastCategory        string
-		aiLastProvider        string
-		aiLastSuccessProvider string
-		aiLastError           string
-		aiLastErrorAt         time.Time
-		aiLastSuccessAt       time.Time
-		aiCircuitUntil        time.Time
-		aiCircuitReason       string
-		aiCircuitTrips        int
-		aiFailoverAttempts    int
-		aiFailoverSuccesses   int
-		aiFailoverFailures    int
-		executionProgressAt   time.Time
-		executionStage        string
-		executionLockHeld     bool
-		executionLockTTL      time.Duration
-		executionLockChecked  time.Time
-		staleResetReason      string
-		staleResetAt          time.Time
-		autonomyStrategyID    string
-		autonomyRolloutStage  string
-		autonomyRolloutStatus string
-		autonomyGateOpen      bool
-		autonomyGateReasons   []string
-		recentLossStreak      int
-		recentLossActive      bool
-		recentLossWindowSec   int
+		lastStartupReconcile   time.Time
+		lastSpotUnwind         time.Time
+		lastHoldDigest         time.Time
+		lastEntryAttempt       time.Time
+		latestFailureAt        time.Time
+		holdStreak             int
+		unlockCycles           int
+		failureStreak          int
+		noFillSince            time.Time
+		activeScalping         int
+		recoveryMode           string
+		recoveryNextCondition  string
+		recoveryCleanCycles    int
+		recoveryCleanRequired  int
+		recoveryCyclesToEntry  int
+		recoveryGateEvalAt     time.Time
+		entryAttempts1h        int
+		entryAttemptBlock      string
+		nextUnblockCondition   string
+		driftSignature         string
+		driftDeadlockCycles    int
+		recoveryEntryAllowed   = true
+		stateDriftActive       bool
+		stateDriftPositions    int
+		stateDriftLastChecked  time.Time
+		lastDriftRepair        time.Time
+		lastCleanReconcile     time.Time
+		entryGateReasonCurrent string
+		entryGateType          string
+		riskMaxDrawdown        float64
+		aiWindowTotal          int
+		aiWindowSuccess        int
+		aiWindowErrors         int
+		aiWindowTimeouts       int
+		aiWindowParseFails     int
+		aiWindowStarted        time.Time
+		aiLastEventAt          time.Time
+		aiLastCategory         string
+		aiLastProvider         string
+		aiLastSuccessProvider  string
+		aiLastError            string
+		aiLastErrorAt          time.Time
+		aiLastSuccessAt        time.Time
+		aiCircuitUntil         time.Time
+		aiCircuitReason        string
+		aiCircuitTrips         int
+		aiFailoverAttempts     int
+		aiFailoverSuccesses    int
+		aiFailoverFailures     int
+		executionProgressAt    time.Time
+		executionStage         string
+		executionLockHeld      bool
+		executionLockTTL       time.Duration
+		executionLockChecked   time.Time
+		staleResetReason       string
+		staleResetAt           time.Time
+		autonomyStrategyID     string
+		autonomyRolloutStage   string
+		autonomyRolloutStatus  string
+		autonomyGateOpen       bool
+		autonomyGateReasons    []string
+		recentLossStreak       int
+		recentLossActive       bool
+		recentLossWindowSec    int
 	)
 
 	for _, quest := range e.quests {
@@ -1890,8 +1895,13 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		unlockCycles = maxInt(unlockCycles, readQuestMetricInt(cp["runtime_unlock_cycles"]))
 		failureStreak = maxInt(failureStreak, readQuestMetricInt(cp["runtime_failure_streak"]))
 		recoveryCleanCycles = maxInt(recoveryCleanCycles, readQuestMetricInt(cp["recovery_clean_cycles"]))
+		recoveryCleanRequired = maxInt(recoveryCleanRequired, readQuestMetricInt(cp["recovery_clean_cycles_required"]))
+		recoveryCyclesToEntry = maxInt(recoveryCyclesToEntry, readQuestMetricInt(cp["recovery_cycles_to_entry"]))
 		if mode := readQuestMetricString(cp["recovery_mode"]); mode != "" {
 			recoveryMode = mode
+		}
+		if ts := readCheckpointTime(cp["recovery_gate_eval_at"]); ts.After(recoveryGateEvalAt) {
+			recoveryGateEvalAt = ts
 		}
 		if nextCondition := readQuestMetricString(cp["recovery_next_condition"]); nextCondition != "" {
 			recoveryNextCondition = nextCondition
@@ -1983,7 +1993,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			lastCleanReconcile = ts
 		}
 		if reason := readQuestMetricString(cp["runtime_entry_gate_reason"]); reason != "" {
-			entryGateReason = reason
+			entryGateReasonCurrent = reason
 		}
 
 		aiWindowTotal = maxInt(aiWindowTotal, readQuestMetricInt(cp["runtime_ai_window_total"]))
@@ -2034,9 +2044,17 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if recoveryMode == "" {
 		recoveryMode = "normal"
 	}
+	if recoveryCleanRequired <= 0 {
+		recoveryCleanRequired = 1
+	}
 	result["recovery_mode"] = recoveryMode
-	result["recovery_clean_cycles"] = recoveryCleanCycles
+	result["recovery_clean_cycles_current"] = recoveryCleanCycles
+	result["recovery_clean_cycles_required"] = recoveryCleanRequired
+	result["recovery_cycles_to_entry"] = recoveryCyclesToEntry
 	result["recovery_entry_allowed"] = recoveryEntryAllowed
+	if !recoveryGateEvalAt.IsZero() {
+		result["recovery_gate_eval_at"] = recoveryGateEvalAt.Format(time.RFC3339)
+	}
 	if strings.TrimSpace(recoveryNextCondition) != "" {
 		result["recovery_next_condition"] = recoveryNextCondition
 	}
@@ -2044,7 +2062,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		nextUnblockCondition = recoveryNextCondition
 	}
 	if strings.TrimSpace(nextUnblockCondition) != "" {
-		result["next_unblock_condition"] = strings.TrimSpace(nextUnblockCondition)
+		result["next_unblock_condition_current"] = strings.TrimSpace(nextUnblockCondition)
 	}
 	result["risk_max_drawdown"] = riskMaxDrawdown
 	result["state_drift_active"] = stateDriftActive
@@ -2064,11 +2082,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		result["last_clean_reconcile_at"] = lastCleanReconcile.Format(time.RFC3339)
 	}
 	result["risk_lock_source"] = e.currentRiskLockSourceLocked()
-	if strings.TrimSpace(entryGateReason) == "" && e.isRiskLockEnabledLocked() {
+	if strings.TrimSpace(entryGateReasonCurrent) == "" && e.isRiskLockEnabledLocked() {
 		if len(e.riskLockReasons) > 0 {
-			entryGateReason = e.riskLockReasons[0]
+			entryGateReasonCurrent = e.riskLockReasons[0]
 		} else {
-			entryGateReason = "risk lock active"
+			entryGateReasonCurrent = "risk lock active"
 		}
 	}
 	nowForGate := time.Now().UTC()
@@ -2082,13 +2100,10 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	case strings.TrimSpace(entryGateType) == "":
 		entryGateType = "none"
 	}
-	if strings.TrimSpace(entryGateReason) != "" {
-		result["entry_gate_reason"] = strings.TrimSpace(entryGateReason)
+	if strings.TrimSpace(entryGateReasonCurrent) != "" {
+		result["entry_gate_reason_current"] = strings.TrimSpace(entryGateReasonCurrent)
 	}
 	result["entry_gate_type"] = entryGateType
-	if entryGateType == "recovery_gate" {
-		result["recovery_gate_reason"] = strings.TrimSpace(entryGateReason)
-	}
 	if strings.TrimSpace(executionStage) != "" {
 		result["execution_stage"] = executionStage
 	}
@@ -2216,7 +2231,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if status != "healthy" {
 		reason := strings.TrimSpace(aiLastCategory)
 		if reason == "" {
-			reason = strings.TrimSpace(entryGateReason)
+			reason = strings.TrimSpace(entryGateReasonCurrent)
 		}
 		if reason != "" {
 			aiRuntime["runtime_degraded_reason"] = reason

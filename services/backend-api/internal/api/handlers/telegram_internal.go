@@ -736,7 +736,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			driftPositions = int(value)
 		}
 		entryGateReason := ""
-		if rawReason, ok := diagnostics["entry_gate_reason"].(string); ok {
+		if rawReason, ok := diagnostics["entry_gate_reason_current"].(string); ok {
 			entryGateReason = strings.TrimSpace(rawReason)
 		}
 		entryGateType := ""
@@ -744,12 +744,8 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			entryGateType = strings.TrimSpace(rawType)
 		}
 		nextUnblockCondition := ""
-		if rawNext, ok := diagnostics["next_unblock_condition"].(string); ok {
+		if rawNext, ok := diagnostics["next_unblock_condition_current"].(string); ok {
 			nextUnblockCondition = strings.TrimSpace(rawNext)
-		}
-		recoveryGateReason := ""
-		if rawRecoveryReason, ok := diagnostics["recovery_gate_reason"].(string); ok {
-			recoveryGateReason = strings.TrimSpace(rawRecoveryReason)
 		}
 		riskLockSource := ""
 		if rawSource, ok := diagnostics["risk_lock_source"].(string); ok {
@@ -846,11 +842,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			case "runtime_circuit":
 				entryGateReason = "entry blocked by AI runtime circuit breaker"
 			case "recovery_gate":
-				if recoveryGateReason != "" {
-					entryGateReason = recoveryGateReason
-				} else {
-					entryGateReason = "entry blocked by recovery clean-cycle gate"
-				}
+				entryGateReason = "entry blocked by recovery clean-cycle gate"
 			case "none":
 				if entryAttemptBlockReason != "" {
 					entryGateReason = entryAttemptBlockReason
@@ -915,9 +907,6 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if entryGateType != "" {
 			details["entry_gate_type"] = entryGateType
 		}
-		if recoveryGateReason != "" {
-			details["recovery_gate_reason"] = recoveryGateReason
-		}
 		if riskLockSource != "" {
 			details["risk_lock_source"] = riskLockSource
 		}
@@ -926,6 +915,18 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 		if nextUnblockCondition != "" {
 			details["next_unblock_condition"] = nextUnblockCondition
+		}
+		if currentCycles, ok := diagnostics["recovery_clean_cycles_current"]; ok {
+			details["recovery_clean_cycles_current"] = fmt.Sprintf("%v", currentCycles)
+		}
+		if requiredCycles, ok := diagnostics["recovery_clean_cycles_required"]; ok {
+			details["recovery_clean_cycles_required"] = fmt.Sprintf("%v", requiredCycles)
+		}
+		if cyclesToEntry, ok := diagnostics["recovery_cycles_to_entry"]; ok {
+			details["recovery_cycles_to_entry"] = fmt.Sprintf("%v", cyclesToEntry)
+		}
+		if rawEvalAt, ok := diagnostics["recovery_gate_eval_at"].(string); ok && strings.TrimSpace(rawEvalAt) != "" {
+			details["recovery_gate_eval_at"] = strings.TrimSpace(rawEvalAt)
 		}
 		if lastEntryAttemptAt != "" {
 			details["last_entry_attempt_at"] = lastEntryAttemptAt
