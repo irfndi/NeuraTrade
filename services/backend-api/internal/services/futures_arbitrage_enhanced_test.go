@@ -96,6 +96,7 @@ func TestAPYOverflowProtection(t *testing.T) {
 // TestNextFundingTimeCalculation tests the funding time calculation via CalculateFuturesArbitrage
 func TestNextFundingTimeCalculation(t *testing.T) {
 	calc := NewFuturesArbitrageCalculator()
+	calculatedAt := time.Now().UTC()
 
 	// Test via the public CalculateFuturesArbitrage method which uses calculateNextFundingTime internally
 	input := models.FuturesArbitrageCalculationInput{
@@ -119,8 +120,8 @@ func TestNextFundingTimeCalculation(t *testing.T) {
 
 	// Verify that next funding time is calculated and in the future
 	assert.False(t, opportunity.NextFundingTime.IsZero(), "next funding time should be set")
-	assert.True(t, opportunity.NextFundingTime.After(time.Now()) || opportunity.NextFundingTime.Equal(time.Now()),
-		"next funding time should be in the future or now")
+	assert.False(t, opportunity.NextFundingTime.Before(calculatedAt),
+		"next funding time should not be before calculation started")
 
 	// Verify time to next funding is reasonable (0 to 8 hours = 0 to 480 minutes)
 	assert.GreaterOrEqual(t, opportunity.TimeToNextFunding, 0)

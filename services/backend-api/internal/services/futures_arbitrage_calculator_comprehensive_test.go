@@ -78,11 +78,12 @@ func TestFuturesArbitrageCalculator_calculateNextFundingTime(t *testing.T) {
 	calculator := NewFuturesArbitrageCalculator()
 
 	// Test with 8-hour interval
+	calculatedAt := time.Now().UTC()
 	fundingTime := calculator.calculateNextFundingTime(8)
 	assert.NotNil(t, fundingTime)
 
-	// Should be in the future
-	assert.True(t, fundingTime.After(time.Now()))
+	// Should not be before the calculation started.
+	assert.False(t, fundingTime.Before(calculatedAt))
 
 	// Should be at one of the standard funding times (00:00, 08:00, 16:00 UTC)
 	hour := fundingTime.Hour()
@@ -91,9 +92,10 @@ func TestFuturesArbitrageCalculator_calculateNextFundingTime(t *testing.T) {
 	assert.Equal(t, 0, fundingTime.Second())
 
 	// Test with 4-hour interval
+	calculatedAt = time.Now().UTC()
 	fundingTime = calculator.calculateNextFundingTime(4)
 	assert.NotNil(t, fundingTime)
-	assert.True(t, fundingTime.After(time.Now()))
+	assert.False(t, fundingTime.Before(calculatedAt))
 
 	// Should be at one of the 4-hour interval times
 	hour = fundingTime.Hour()

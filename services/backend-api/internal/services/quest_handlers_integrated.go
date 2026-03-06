@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/services/phase_management"
 	"github.com/irfndi/neuratrade/internal/skill"
@@ -64,9 +65,9 @@ const (
 	defaultDriftRepairCooldown       = 180 * time.Second
 	defaultDriftClearPasses          = 2
 	defaultDriftDeadlockClearCycles  = 6
-	defaultRecoveryCleanCycles       = 3
+	defaultRecoveryCleanCycles       = appautonomy.DefaultRecoveryCleanCycles
 	defaultLivenessIdleMinutes       = 45
-	defaultLivenessMaxAttemptsPerHr  = 3
+	defaultLivenessMaxAttemptsPerHr  = appautonomy.DefaultLivenessMaxAttemptsPerHour
 	recoveryModeNormal               = "normal"
 	recoveryModeDeriskOnly           = "derisk_only"
 	recoveryModeMicroEntry           = "micro_entry"
@@ -600,31 +601,11 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	} else {
 		delete(quest.Checkpoint, "recovery_recent_loss_last_trade_at")
 	}
-	portfolio.RecoveryMode = recoveryState.Mode
-	portfolio.RecoveryEntryOK = recoveryState.EntryAllowed
-	portfolio.RecoveryCleanCycle = recoveryState.CleanCycles
-	quest.Checkpoint["recovery_mode"] = recoveryState.Mode
-	quest.Checkpoint["recovery_entry_allowed"] = recoveryState.EntryAllowed
-	quest.Checkpoint["recovery_clean_cycles"] = recoveryState.CleanCycles
-	if strings.TrimSpace(recoveryState.NextCondition) != "" {
-		quest.Checkpoint["recovery_next_condition"] = recoveryState.NextCondition
-	} else {
-		delete(quest.Checkpoint, "recovery_next_condition")
-	}
+	h.applyRecoveryStateCheckpoint(quest, &portfolio, recoveryState, time.Now().UTC())
 	if recoveryState.RecentLossActive && recoveryState.RecentLossStreak >= recoveryLossStreakResetThreshold() {
 		h.updateRecoveryCleanCycles(quest, false, "recent_loss_streak")
 		recoveryState = h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
-		portfolio.RecoveryMode = recoveryState.Mode
-		portfolio.RecoveryEntryOK = recoveryState.EntryAllowed
-		portfolio.RecoveryCleanCycle = recoveryState.CleanCycles
-		quest.Checkpoint["recovery_mode"] = recoveryState.Mode
-		quest.Checkpoint["recovery_entry_allowed"] = recoveryState.EntryAllowed
-		quest.Checkpoint["recovery_clean_cycles"] = recoveryState.CleanCycles
-		if strings.TrimSpace(recoveryState.NextCondition) != "" {
-			quest.Checkpoint["recovery_next_condition"] = recoveryState.NextCondition
-		} else {
-			delete(quest.Checkpoint, "recovery_next_condition")
-		}
+		h.applyRecoveryStateCheckpoint(quest, &portfolio, recoveryState, time.Now().UTC())
 	}
 
 	log.Printf("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
@@ -826,39 +807,47 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	if recoveryState.Mode == recoveryModeMicroEntry && !recoveryState.EntryAllowed {
 		gateCtx, gateCancel := h.withGatePathContext(ctx)
 		defer gateCancel()
-		h.updateHoldStateCheckpoint(quest, true)
 		h.updateRecoveryCleanCycles(quest, true, "")
-		quest.Checkpoint["status"] = "recovery_micro_entry_wait"
-		quest.Checkpoint["runtime_entry_gate_reason"] = recoveryState.GateReason
-		quest.Checkpoint["entry_gate_type"] = "recovery_gate"
-		if strings.TrimSpace(recoveryState.NextCondition) != "" {
-			quest.Checkpoint["runtime_next_unblock_condition"] = recoveryState.NextCondition
+		recoveryState = h.evaluateRecoveryGateStateForScope(gateCtx, quest, portfolio, chatID, userExchange)
+		h.applyRecoveryStateCheckpoint(quest, &portfolio, recoveryState, time.Now().UTC())
+		if recoveryState.EntryAllowed {
+			delete(quest.Checkpoint, "runtime_entry_gate_reason")
+			delete(quest.Checkpoint, "runtime_next_unblock_condition")
+			delete(quest.Checkpoint, "entry_gate_type")
+		} else {
+			h.updateHoldStateCheckpoint(quest, true)
+			quest.Checkpoint["status"] = "recovery_micro_entry_wait"
+			quest.Checkpoint["runtime_entry_gate_reason"] = recoveryState.GateReason
+			quest.Checkpoint["entry_gate_type"] = "recovery_gate"
+			if strings.TrimSpace(recoveryState.NextCondition) != "" {
+				quest.Checkpoint["runtime_next_unblock_condition"] = recoveryState.NextCondition
+			}
+			reasons := []string{
+				recoveryState.GateReason,
+				fmt.Sprintf("Clean cycles progress: %d/%d", recoveryState.CleanCycles, recoveryState.RequiredCleanCycles),
+				fmt.Sprintf("Micro-entry cap when unlocked: %.2f%%", recoveryState.MicroEntryCapPct),
+			}
+			holdDecision := &AITradingDecision{
+				Action:          "hold",
+				Confidence:      0,
+				Reasoning:       recoveryState.GateReason,
+				ReasonCategory:  aiReasonStrategyHold,
+				ConfidenceKnown: true,
+			}
+			h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
+				DecisionType:     "scalping_cycle",
+				Summary:          "Recovery mode active: waiting for clean cycles before micro-entry",
+				Confidence:       0,
+				ConfidenceKnown:  true,
+				ReasonCategory:   aiReasonStrategyHold,
+				HoldCategory:     aiReasonStrategyHold,
+				UnblockCondition: checkpointString(quest.Checkpoint["runtime_next_unblock_condition"]),
+				Reasons:          reasons,
+				Action:           "hold",
+			})
+			h.maybeSendHoldDigest(gateCtx, quest, chatID, holdDecision, portfolio)
+			return nil
 		}
-		reasons := []string{
-			recoveryState.GateReason,
-			fmt.Sprintf("Clean cycles progress: %d/%d", recoveryState.CleanCycles, recoveryState.RequiredCleanCycles),
-			fmt.Sprintf("Micro-entry cap when unlocked: %.2f%%", recoveryState.MicroEntryCapPct),
-		}
-		holdDecision := &AITradingDecision{
-			Action:          "hold",
-			Confidence:      0,
-			Reasoning:       recoveryState.GateReason,
-			ReasonCategory:  aiReasonStrategyHold,
-			ConfidenceKnown: true,
-		}
-		h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
-			DecisionType:     "scalping_cycle",
-			Summary:          "Recovery mode active: waiting for clean cycles before micro-entry",
-			Confidence:       0,
-			ConfidenceKnown:  true,
-			ReasonCategory:   aiReasonStrategyHold,
-			HoldCategory:     aiReasonStrategyHold,
-			UnblockCondition: checkpointString(quest.Checkpoint["runtime_next_unblock_condition"]),
-			Reasons:          reasons,
-			Action:           "hold",
-		})
-		h.maybeSendHoldDigest(gateCtx, quest, chatID, holdDecision, portfolio)
-		return nil
 	}
 
 	nowUTC := time.Now().UTC()
@@ -2518,6 +2507,7 @@ type recoveryGateState struct {
 	EntryAllowed          bool
 	CleanCycles           int
 	RequiredCleanCycles   int
+	CyclesToEntry         int
 	DeriskOnlyThreshold   float64
 	MicroEntryThreshold   float64
 	MicroEntryCapPct      float64
@@ -2538,6 +2528,7 @@ type entryAttemptGateState struct {
 	BlockReason            string
 	NextCondition          string
 	AttemptWindowProgress  string
+	WindowStartedAt        time.Time
 }
 
 //nolint:unused // retained for focused recovery-gate unit tests.
@@ -2552,127 +2543,95 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 	exchange string,
 ) recoveryGateState {
 	cleanCycles := 0
-	if quest != nil {
-		cleanCycles = checkpointInt(quest.Checkpoint["recovery_clean_cycles"])
-	}
-	requiredCycles := getEnvInt("NEURATRADE_RECOVERY_CLEAN_CYCLES")
-	if requiredCycles <= 0 {
-		requiredCycles = defaultRecoveryCleanCycles
-	}
-	requiredCycles = clampQuestInt(requiredCycles, 1, 20)
-
-	deriskThreshold := 0.40
-	if configured, ok := getEnvFloat("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN"); ok && configured > 0 {
-		deriskThreshold = configured
-	}
-	if deriskThreshold < 0.10 {
-		deriskThreshold = 0.10
-	}
-
-	microThreshold := 0.30
-	if configured, ok := getEnvFloat("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN"); ok && configured > 0 {
-		microThreshold = configured
-	}
-	if microThreshold < 0 {
-		microThreshold = 0
-	}
-	if microThreshold > deriskThreshold {
-		microThreshold = deriskThreshold
-	}
-
-	microCap := 0.50
-	if configured, ok := getEnvFloat("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT"); ok && configured > 0 {
-		microCap = configured
-	}
-	if microCap < 0.10 {
-		microCap = 0.10
-	}
-
-	state := recoveryGateState{
-		Mode:                recoveryModeNormal,
-		EntryAllowed:        true,
-		CleanCycles:         cleanCycles,
-		RequiredCleanCycles: requiredCycles,
-		DeriskOnlyThreshold: deriskThreshold,
-		MicroEntryThreshold: microThreshold,
-		MicroEntryCapPct:    microCap,
-	}
-
-	recentLoss := h.currentRecentLossStreak(ctx, chatID, exchange)
-	state.RecentLossStreak = recentLoss.ConsecutiveLosses
-	state.RecentLossWindow = recentLoss.Window
-	state.RecentLossActive = recentLoss.Active
-	state.RecentLossLastTradeAt = recentLoss.LastTradeAt
-
+	failureStreak := 0
 	if quest != nil && quest.Checkpoint != nil {
-		if checkpointInt(quest.Checkpoint["runtime_failure_streak"]) > 0 {
-			state.EntryAllowed = false
-		}
+		cleanCycles = checkpointInt(quest.Checkpoint["recovery_clean_cycles"])
+		failureStreak = checkpointInt(quest.Checkpoint["runtime_failure_streak"])
 	}
-	if portfolio.DriftActive {
-		state.EntryAllowed = false
+	recentLoss := h.currentRecentLossStreak(ctx, chatID, exchange)
+
+	recoveryCfg := appautonomy.DefaultRecoveryConfig()
+	if configured := getEnvInt("NEURATRADE_RECOVERY_CLEAN_CYCLES"); configured > 0 {
+		recoveryCfg.RequiredCleanCycles = configured
 	}
-	if recentLoss.Active && recentLoss.ConsecutiveLosses >= recoveryLossStreakResetThreshold() {
-		state.EntryAllowed = false
+	if configured, ok := getEnvFloat("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN"); ok && configured > 0 {
+		recoveryCfg.DeriskOnlyThreshold = configured
+	}
+	if configured, ok := getEnvFloat("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN"); ok && configured > 0 {
+		recoveryCfg.MicroEntryThreshold = configured
+	}
+	if configured, ok := getEnvFloat("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT"); ok && configured > 0 {
+		recoveryCfg.MicroEntryCapPct = configured
+	}
+	if configured := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET"); configured > 0 {
+		recoveryCfg.LossStreakBudget = configured
 	}
 
-	switch {
-	case portfolio.RiskDrawdown >= deriskThreshold:
-		state.Mode = recoveryModeDeriskOnly
-		state.EntryAllowed = false
-		state.GateReason = fmt.Sprintf(
-			"drawdown %.2f%% above %.2f%% threshold: de-risk only",
-			portfolio.RiskDrawdown*100,
-			deriskThreshold*100,
-		)
-		state.NextCondition = fmt.Sprintf("Reduce drawdown below %.2f%%", deriskThreshold*100)
-	case portfolio.RiskDrawdown >= microThreshold:
-		state.Mode = recoveryModeMicroEntry
-		if state.CleanCycles < requiredCycles {
-			state.EntryAllowed = false
-			state.GateReason = fmt.Sprintf(
-				"drawdown %.2f%% in recovery band: waiting for clean cycles before micro-entry",
-				portfolio.RiskDrawdown*100,
-			)
-			state.NextCondition = fmt.Sprintf("Reach %d clean cycle(s) (current %d)", requiredCycles, state.CleanCycles)
-		} else if !state.EntryAllowed {
-			if recentLoss.Active && recentLoss.ConsecutiveLosses >= recoveryLossStreakResetThreshold() {
-				state.GateReason = fmt.Sprintf(
-					"recent loss streak %d within %s exceeds threshold; micro-entry paused",
-					recentLoss.ConsecutiveLosses,
-					recentLoss.Window.Round(time.Minute).String(),
-				)
-				state.NextCondition = fmt.Sprintf(
-					"Need loss streak below %d within %s window",
-					recoveryLossStreakResetThreshold(),
-					recentLoss.Window.Round(time.Minute).String(),
-				)
-			} else {
-				state.GateReason = "recovery micro-entry paused until runtime/drift constraints clear"
-				state.NextCondition = "Clear runtime failures and drift state"
-			}
-		}
-	default:
-		state.Mode = recoveryModeNormal
+	evaluated := appautonomy.EvaluateRecoveryGate(
+		appautonomy.RecoveryGateInput{
+			Drawdown:              portfolio.RiskDrawdown,
+			CleanCycles:           cleanCycles,
+			DriftActive:           portfolio.DriftActive,
+			RuntimeFailureStreak:  failureStreak,
+			RecentLossStreak:      recentLoss.ConsecutiveLosses,
+			RecentLossActive:      recentLoss.Active,
+			RecentLossWindow:      recentLoss.Window,
+			RecentLossLastTradeAt: recentLoss.LastTradeAt,
+		},
+		recoveryCfg,
+	)
+
+	return recoveryGateState{
+		Mode:                  evaluated.Mode,
+		EntryAllowed:          evaluated.EntryAllowed,
+		CleanCycles:           evaluated.CleanCycles,
+		RequiredCleanCycles:   evaluated.RequiredCleanCycles,
+		CyclesToEntry:         evaluated.CyclesToEntry,
+		DeriskOnlyThreshold:   evaluated.DeriskOnlyThreshold,
+		MicroEntryThreshold:   evaluated.MicroEntryThreshold,
+		MicroEntryCapPct:      evaluated.MicroEntryCapPct,
+		GateReason:            evaluated.GateReason,
+		NextCondition:         evaluated.NextCondition,
+		RecentLossStreak:      evaluated.RecentLossStreak,
+		RecentLossWindow:      evaluated.RecentLossWindow,
+		RecentLossActive:      evaluated.RecentLossActive,
+		RecentLossLastTradeAt: evaluated.RecentLossLastTradeAt,
+	}
+}
+
+func (h *IntegratedQuestHandlers) applyRecoveryStateCheckpoint(
+	quest *Quest,
+	portfolio *TradingPortfolio,
+	state recoveryGateState,
+	evaluatedAt time.Time,
+) {
+	if quest == nil {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
 	}
 
-	if !state.EntryAllowed && strings.TrimSpace(state.GateReason) == "" &&
-		recentLoss.Active && recentLoss.ConsecutiveLosses >= recoveryLossStreakResetThreshold() {
-		state.GateReason = fmt.Sprintf(
-			"recent loss streak %d still active within %s window",
-			recentLoss.ConsecutiveLosses,
-			recentLoss.Window.Round(time.Minute).String(),
-		)
-		state.NextCondition = fmt.Sprintf(
-			"Need loss streak below %d within %s window",
-			recoveryLossStreakResetThreshold(),
-			recentLoss.Window.Round(time.Minute).String(),
-		)
+	if portfolio != nil {
+		portfolio.RecoveryMode = state.Mode
+		portfolio.RecoveryEntryOK = state.EntryAllowed
+		portfolio.RecoveryCleanCycle = state.CleanCycles
 	}
-	if !state.EntryAllowed && strings.TrimSpace(state.GateReason) == "" {
-		state.GateReason = "recovery entry gate is active"
+
+	quest.Checkpoint["recovery_mode"] = state.Mode
+	quest.Checkpoint["recovery_entry_allowed"] = state.EntryAllowed
+	quest.Checkpoint["recovery_clean_cycles"] = state.CleanCycles
+	quest.Checkpoint["recovery_clean_cycles_required"] = state.RequiredCleanCycles
+	quest.Checkpoint["recovery_cycles_to_entry"] = state.CyclesToEntry
+	if evaluatedAt.IsZero() {
+		evaluatedAt = time.Now().UTC()
 	}
-	return state
+	quest.Checkpoint["recovery_gate_eval_at"] = evaluatedAt.UTC().Format(time.RFC3339)
+	if strings.TrimSpace(state.NextCondition) != "" {
+		quest.Checkpoint["recovery_next_condition"] = state.NextCondition
+	} else {
+		delete(quest.Checkpoint, "recovery_next_condition")
+	}
 }
 
 func (h *IntegratedQuestHandlers) updateRecoveryCleanCycles(quest *Quest, clean bool, reason string) {
@@ -2808,83 +2767,61 @@ func (h *IntegratedQuestHandlers) evaluateEntryAttemptGateState(
 	portfolio TradingPortfolio,
 	now time.Time,
 ) entryAttemptGateState {
-	state := entryAttemptGateState{
-		Forced:             false,
-		AllowNow:           true,
-		AttemptsInWindow:   0,
-		MaxAttemptsPerHour: livenessMaxAttemptsPerHour(),
+	now = now.UTC()
+	maxAttempts := livenessMaxAttemptsPerHour()
+	if maxAttempts <= 0 {
+		maxAttempts = defaultLivenessMaxAttemptsPerHr
 	}
-	if state.MaxAttemptsPerHour <= 0 {
-		state.MaxAttemptsPerHour = defaultLivenessMaxAttemptsPerHr
-	}
+
 	totalValue := portfolio.TotalValue
 	if totalValue <= 0 {
 		totalValue = portfolio.USDTBalance
 	}
+	deployableBalanceRatio := 0.0
 	if totalValue > 0 {
-		state.DeployableBalanceRatio = portfolio.USDTBalance / totalValue
-	}
-	noFillIdleTarget := livenessIdleMinutes()
-	state.Forced = state.DeployableBalanceRatio >= 0.05 &&
-		portfolio.OpenPositions == 0 &&
-		!portfolio.DriftActive &&
-		portfolio.RecoveryEntryOK &&
-		portfolio.NoFillMinutes >= float64(noFillIdleTarget)
-
-	if quest == nil || quest.Checkpoint == nil {
-		if state.Forced {
-			state.NextCondition = fmt.Sprintf(
-				"Use at most %d entry attempts per 1h window while no-fill recovery is active",
-				state.MaxAttemptsPerHour,
-			)
-			state.AttemptWindowProgress = fmt.Sprintf("0/%d in current 1h window", state.MaxAttemptsPerHour)
-		} else {
-			state.NextCondition = fmt.Sprintf(
-				"Force liveness mode starts after %dm no-fill with deployable balance >=5%%",
-				noFillIdleTarget,
-			)
-		}
-		return state
+		deployableBalanceRatio = portfolio.USDTBalance / totalValue
 	}
 
-	windowStart, hasWindow := checkpointRFC3339(quest.Checkpoint["runtime_entry_attempt_window_started_at"])
-	attempts := checkpointInt(quest.Checkpoint["runtime_entry_attempts_1h"])
-	if !hasWindow || now.Sub(windowStart) >= time.Hour {
-		windowStart = now
-		attempts = 0
-	}
-	state.AttemptsInWindow = attempts
-	state.AttemptWindowProgress = fmt.Sprintf("%d/%d in current 1h window", attempts, state.MaxAttemptsPerHour)
-
-	if !state.Forced {
-		state.NextCondition = fmt.Sprintf(
-			"Force liveness mode starts after %dm no-fill with deployable balance >=5%%",
-			noFillIdleTarget,
-		)
-		return state
-	}
-
-	if attempts >= state.MaxAttemptsPerHour {
-		state.AllowNow = false
-		state.BlockReason = fmt.Sprintf(
-			"liveness entry-attempt budget reached: %d/%d in current 1h window",
-			attempts,
-			state.MaxAttemptsPerHour,
-		)
-		state.NextCondition = fmt.Sprintf(
-			"Next entry-attempt window opens at %s",
-			windowStart.Add(time.Hour).UTC().Format(time.RFC3339),
-		)
-		return state
-	}
-
-	state.AllowNow = true
-	state.NextCondition = fmt.Sprintf(
-		"Liveness attempt budget available: %d/%d used in current 1h window",
-		attempts,
-		state.MaxAttemptsPerHour,
+	var (
+		windowStart time.Time
+		hasWindow   bool
+		attempts    int
 	)
-	return state
+	if quest != nil && quest.Checkpoint != nil {
+		windowStart, hasWindow = checkpointRFC3339(quest.Checkpoint["runtime_entry_attempt_window_started_at"])
+		attempts = checkpointInt(quest.Checkpoint["runtime_entry_attempts_1h"])
+	}
+
+	gateCfg := appautonomy.DefaultLivenessConfig()
+	gateCfg.IdleMinutes = livenessIdleMinutes()
+	gateCfg.MaxAttemptsPerHour = maxAttempts
+
+	evaluated := appautonomy.EvaluateEntryAttemptGate(
+		appautonomy.EntryAttemptGateInput{
+			Now:                    now,
+			DeployableBalanceRatio: deployableBalanceRatio,
+			OpenPositions:          portfolio.OpenPositions,
+			DriftActive:            portfolio.DriftActive,
+			RecoveryEntryAllowed:   portfolio.RecoveryEntryOK,
+			NoFillMinutes:          portfolio.NoFillMinutes,
+			HasWindow:              hasWindow,
+			WindowStartedAt:        windowStart,
+			AttemptsInWindow:       attempts,
+		},
+		gateCfg,
+	)
+
+	return entryAttemptGateState{
+		Forced:                 evaluated.Forced,
+		AllowNow:               evaluated.AllowNow,
+		AttemptsInWindow:       evaluated.AttemptsInWindow,
+		MaxAttemptsPerHour:     evaluated.MaxAttemptsPerHour,
+		DeployableBalanceRatio: evaluated.DeployableBalanceRatio,
+		BlockReason:            evaluated.BlockReason,
+		NextCondition:          evaluated.NextCondition,
+		AttemptWindowProgress:  evaluated.AttemptWindowProgress,
+		WindowStartedAt:        evaluated.WindowStartedAt,
+	}
 }
 
 func (h *IntegratedQuestHandlers) recordEntryAttempt(quest *Quest, now time.Time, state entryAttemptGateState) {
@@ -2894,12 +2831,11 @@ func (h *IntegratedQuestHandlers) recordEntryAttempt(quest *Quest, now time.Time
 	if quest.Checkpoint == nil {
 		quest.Checkpoint = make(map[string]interface{})
 	}
-	windowStart, hasWindow := checkpointRFC3339(quest.Checkpoint["runtime_entry_attempt_window_started_at"])
-	attempts := checkpointInt(quest.Checkpoint["runtime_entry_attempts_1h"])
-	if !hasWindow || now.Sub(windowStart) >= time.Hour {
+	windowStart := state.WindowStartedAt.UTC()
+	if windowStart.IsZero() {
 		windowStart = now
-		attempts = 0
 	}
+	attempts := max(state.AttemptsInWindow, 0)
 	attempts++
 	quest.Checkpoint["runtime_entry_attempt_window_started_at"] = windowStart.UTC().Format(time.RFC3339)
 	quest.Checkpoint["runtime_entry_attempts_1h"] = attempts

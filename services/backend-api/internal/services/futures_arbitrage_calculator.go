@@ -639,33 +639,15 @@ func (calc *FuturesArbitrageCalculator) calculateNextFundingTime(fundingInterval
 		fundingHours = []int{0, 8, 16}
 	}
 
-	currentHour := now.Hour()
-	currentMinute := now.Minute()
-	nextFundingHour := -1
-
 	for _, hour := range fundingHours {
-		// If we're past the current hour, or at the current hour but past minute 0,
-		// the next funding is at the next funding hour
-		if hour > currentHour || (hour == currentHour && currentMinute == 0) {
-			nextFundingHour = hour
-			break
+		candidate := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, time.UTC)
+		if !candidate.Before(now) {
+			return candidate
 		}
 	}
 
-	// If no funding hour found today (we're past the last funding hour),
-	// use first hour of next day
-	if nextFundingHour == -1 {
-		nextFundingHour = fundingHours[0]
-		return time.Date(now.Year(), now.Month(), now.Day()+1, nextFundingHour, 0, 0, 0, time.UTC)
-	}
-
-	// If the next funding time is exactly now (currentMinute == 0 and hour matches),
-	// that means funding just happened, so return current time
-	if nextFundingHour == currentHour && currentMinute == 0 {
-		return time.Date(now.Year(), now.Month(), now.Day(), nextFundingHour, 0, 0, 0, time.UTC)
-	}
-
-	return time.Date(now.Year(), now.Month(), now.Day(), nextFundingHour, 0, 0, 0, time.UTC)
+	// If we're past the last funding hour for today, use the first hour of next day.
+	return time.Date(now.Year(), now.Month(), now.Day()+1, fundingHours[0], 0, 0, 0, time.UTC)
 }
 
 // isOpportunityActive determines if an opportunity is worth pursuing
