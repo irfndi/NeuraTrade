@@ -308,10 +308,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         if (entryGateReason) {
           lines.push(`• Entry gate reason: ${entryGateReason}`);
         }
-        let blockerReason =
-          entryGateReason ||
-          entryAttemptBlockReason ||
-          "";
+        let blockerReason = entryGateReason || entryAttemptBlockReason || "";
         if (!blockerReason) {
           switch (entryGatePriority) {
             case "risk_lock":
