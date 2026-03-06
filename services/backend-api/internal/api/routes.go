@@ -611,7 +611,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		},
 	)
 	if integratedHandlersErr != nil {
-		log.Fatalf("Failed to initialize autonomy runtime handlers: %v", integratedHandlersErr)
+		if integratedHandlers == nil {
+			log.Fatalf("Failed to initialize autonomy runtime handlers: %v", integratedHandlersErr)
+		}
+		log.Printf("Warning: autonomy runtime started without rollout store initialization: %v", integratedHandlersErr)
 	}
 
 	// Wire order executor to integrated handlers for scalping execution
