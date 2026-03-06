@@ -2396,7 +2396,7 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		fmt.Sprintf(
 			"Recovery mode: %s (clean cycles %d, entry_allowed=%t)",
 			checkpointString(quest.Checkpoint["recovery_mode"]),
-			checkpointInt(quest.Checkpoint["recovery_clean_cycles"]),
+			checkpointIntWithFallback(quest.Checkpoint, "recovery_clean_cycles_current", "recovery_clean_cycles"),
 			checkpointBool(quest.Checkpoint["recovery_entry_allowed"]),
 		),
 		fmt.Sprintf("AI runtime error-rate window: %.0f%%", errorRate*100),
@@ -2490,7 +2490,7 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 	cleanCycles := 0
 	failureStreak := 0
 	if quest != nil && quest.Checkpoint != nil {
-		cleanCycles = checkpointInt(quest.Checkpoint["recovery_clean_cycles"])
+		cleanCycles = checkpointIntWithFallback(quest.Checkpoint, "recovery_clean_cycles_current", "recovery_clean_cycles")
 		failureStreak = checkpointInt(quest.Checkpoint["runtime_failure_streak"])
 	}
 	recentLoss := h.currentRecentLossStreak(ctx, chatID, exchange)
@@ -2565,7 +2565,8 @@ func (h *IntegratedQuestHandlers) applyRecoveryStateCheckpoint(
 
 	quest.Checkpoint["recovery_mode"] = state.Mode
 	quest.Checkpoint["recovery_entry_allowed"] = state.EntryAllowed
-	quest.Checkpoint["recovery_clean_cycles"] = state.CleanCycles
+	quest.Checkpoint["recovery_clean_cycles_current"] = state.CleanCycles
+	delete(quest.Checkpoint, "recovery_clean_cycles")
 	quest.Checkpoint["recovery_clean_cycles_required"] = state.RequiredCleanCycles
 	quest.Checkpoint["recovery_cycles_to_entry"] = state.CyclesToEntry
 	if evaluatedAt.IsZero() {
@@ -2587,15 +2588,17 @@ func (h *IntegratedQuestHandlers) updateRecoveryCleanCycles(quest *Quest, clean 
 		quest.Checkpoint = make(map[string]interface{})
 	}
 	if !clean {
-		quest.Checkpoint["recovery_clean_cycles"] = 0
+		quest.Checkpoint["recovery_clean_cycles_current"] = 0
+		delete(quest.Checkpoint, "recovery_clean_cycles")
 		if strings.TrimSpace(reason) != "" {
 			quest.Checkpoint["recovery_last_reset_reason"] = strings.TrimSpace(reason)
 		}
 		return
 	}
-	cleanCycles := checkpointInt(quest.Checkpoint["recovery_clean_cycles"])
+	cleanCycles := checkpointIntWithFallback(quest.Checkpoint, "recovery_clean_cycles_current", "recovery_clean_cycles")
 	cleanCycles++
-	quest.Checkpoint["recovery_clean_cycles"] = cleanCycles
+	quest.Checkpoint["recovery_clean_cycles_current"] = cleanCycles
+	delete(quest.Checkpoint, "recovery_clean_cycles")
 	delete(quest.Checkpoint, "recovery_last_reset_reason")
 }
 
@@ -4105,6 +4108,16 @@ func checkpointInt(v interface{}) int {
 		}
 	}
 	return 0
+}
+
+func checkpointIntWithFallback(checkpoint map[string]interface{}, primary, fallback string) int {
+	if checkpoint == nil {
+		return 0
+	}
+	if value, ok := checkpoint[primary]; ok {
+		return checkpointInt(value)
+	}
+	return checkpointInt(checkpoint[fallback])
 }
 
 func checkpointFloat(v interface{}) float64 {
