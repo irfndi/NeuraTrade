@@ -1818,6 +1818,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		lastCleanReconcile     time.Time
 		entryGateReasonCurrent string
 		entryGateType          string
+		riskCurrentDrawdown    float64
 		riskMaxDrawdown        float64
 		aiWindowTotal          int
 		aiWindowSuccess        int
@@ -1924,6 +1925,9 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		}
 		if gateType := readQuestMetricString(cp["entry_gate_type"]); gateType != "" {
 			entryGateType = gateType
+		}
+		if drawdown := readQuestMetricFloat(cp["risk_current_drawdown"]); drawdown > riskCurrentDrawdown {
+			riskCurrentDrawdown = drawdown
 		}
 		if drawdown := readQuestMetricFloat(cp["risk_max_drawdown"]); drawdown > riskMaxDrawdown {
 			riskMaxDrawdown = drawdown
@@ -2074,6 +2078,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if strings.TrimSpace(nextUnblockCondition) != "" {
 		result["next_unblock_condition_current"] = strings.TrimSpace(nextUnblockCondition)
 	}
+	result["risk_current_drawdown"] = riskCurrentDrawdown
 	result["risk_max_drawdown"] = riskMaxDrawdown
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions

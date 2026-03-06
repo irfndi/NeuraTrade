@@ -38,6 +38,7 @@ type IntegratedQuestHandlers struct {
 	notificationService *NotificationService
 	monitoring          *AutonomousMonitorManager
 	questEngine         *QuestEngine
+	drawdownHalt        *MaxDrawdownHalt
 	orderExecutor       ScalpingOrderExecutor
 	aiScalpingService   *AIScalpingService
 	tradeMemory         *TradeMemory
@@ -178,6 +179,10 @@ func (h *IntegratedQuestHandlers) SetDynamicProtectionManager(manager *DynamicPr
 
 func (h *IntegratedQuestHandlers) SetQuestEngine(engine *QuestEngine) {
 	h.questEngine = engine
+}
+
+func (h *IntegratedQuestHandlers) SetDrawdownHalt(halt *MaxDrawdownHalt) {
+	h.drawdownHalt = halt
 }
 
 func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
@@ -1961,9 +1966,50 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	riskMetrics := ComputeRiskAdjustedMetrics(returns)
 	portfolio.RiskSharpe = riskMetrics.Sharpe
 	portfolio.RiskSortino = riskMetrics.Sortino
-	portfolio.RiskDrawdown = riskMetrics.MaxDrawdown
+	portfolio.RiskMaxDrawdown = riskMetrics.MaxDrawdown
 	portfolio.RiskExpectancy = riskMetrics.Expectancy
 	portfolio.RiskSampleSize = riskMetrics.SampleSize
+
+	currentDrawdown := 0.0
+	peakEquity := portfolio.TotalValue
+	maxRecordedDrawdown := portfolio.RiskMaxDrawdown
+	if quest != nil && quest.Checkpoint != nil {
+		if checkpointPeak := checkpointFloat(quest.Checkpoint["risk_peak_equity"]); checkpointPeak > peakEquity {
+			peakEquity = checkpointPeak
+		}
+		if checkpointMax := checkpointFloat(quest.Checkpoint["risk_max_drawdown"]); checkpointMax > maxRecordedDrawdown {
+			maxRecordedDrawdown = checkpointMax
+		}
+	}
+	if peakEquity > 0 && portfolio.TotalValue > 0 {
+		if portfolio.TotalValue > peakEquity {
+			peakEquity = portfolio.TotalValue
+		}
+		currentDrawdown = (peakEquity - portfolio.TotalValue) / peakEquity
+		if currentDrawdown < 0 {
+			currentDrawdown = 0
+		}
+	}
+	if currentDrawdown > maxRecordedDrawdown {
+		maxRecordedDrawdown = currentDrawdown
+	}
+	portfolio.CurrentDrawdown = currentDrawdown
+	portfolio.RiskDrawdown = currentDrawdown
+	portfolio.RiskMaxDrawdown = maxRecordedDrawdown
+
+	if h.drawdownHalt != nil && chatID != "" && peakEquity > 0 && portfolio.TotalValue > 0 {
+		peakValue := decimal.NewFromFloat(peakEquity)
+		if state, exists := h.drawdownHalt.GetState(chatID); !exists || state.PeakValue.LessThan(peakValue) {
+			_ = h.drawdownHalt.ResetPeak(ctx, chatID, peakValue)
+		}
+		if state, err := h.drawdownHalt.CheckDrawdown(ctx, chatID, decimal.NewFromFloat(portfolio.TotalValue)); err == nil && state != nil {
+			portfolio.CurrentDrawdown = state.CurrentDrawdown.InexactFloat64()
+			portfolio.RiskDrawdown = portfolio.CurrentDrawdown
+			if seen := state.MaxDrawdownSeen.InexactFloat64(); seen > portfolio.RiskMaxDrawdown {
+				portfolio.RiskMaxDrawdown = seen
+			}
+		}
+	}
 
 	phaseDetector := phase_management.NewPhaseDetector(phase_management.DefaultPhaseDetectorConfig(), nil)
 	currentPhase := phaseDetector.GetPhaseForValue(decimal.NewFromFloat(portfolio.TotalValue))
@@ -1989,9 +2035,11 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		if quest.Checkpoint == nil {
 			quest.Checkpoint = make(map[string]interface{})
 		}
+		quest.Checkpoint["risk_peak_equity"] = peakEquity
+		quest.Checkpoint["risk_current_drawdown"] = portfolio.CurrentDrawdown
 		quest.Checkpoint["risk_sharpe"] = portfolio.RiskSharpe
 		quest.Checkpoint["risk_sortino"] = portfolio.RiskSortino
-		quest.Checkpoint["risk_max_drawdown"] = portfolio.RiskDrawdown
+		quest.Checkpoint["risk_max_drawdown"] = portfolio.RiskMaxDrawdown
 		quest.Checkpoint["risk_expectancy"] = portfolio.RiskExpectancy
 		quest.Checkpoint["risk_samples"] = portfolio.RiskSampleSize
 		quest.Checkpoint["strategy_phase"] = portfolio.StrategyPhase
@@ -2488,10 +2536,8 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 	exchange string,
 ) recoveryGateState {
 	cleanCycles := 0
-	failureStreak := 0
 	if quest != nil && quest.Checkpoint != nil {
 		cleanCycles = checkpointIntWithFallback(quest.Checkpoint, "recovery_clean_cycles_current", "recovery_clean_cycles")
-		failureStreak = checkpointInt(quest.Checkpoint["runtime_failure_streak"])
 	}
 	recentLoss := h.currentRecentLossStreak(ctx, chatID, exchange)
 
@@ -2517,7 +2563,6 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 			Drawdown:              portfolio.RiskDrawdown,
 			CleanCycles:           cleanCycles,
 			DriftActive:           portfolio.DriftActive,
-			RuntimeFailureStreak:  failureStreak,
 			RecentLossStreak:      recentLoss.ConsecutiveLosses,
 			RecentLossActive:      recentLoss.Active,
 			RecentLossWindow:      recentLoss.Window,

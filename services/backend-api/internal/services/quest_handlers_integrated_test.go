@@ -397,6 +397,54 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testin
 	assert.False(t, state.EntryAllowed)
 }
 
+func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_IgnoresRuntimeFailureStreak(t *testing.T) {
+	t.Setenv("NEURATRADE_RECOVERY_CLEAN_CYCLES", "1")
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
+	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"recovery_clean_cycles_current": 1,
+			"runtime_failure_streak":        1,
+		},
+	}
+
+	state := handlers.evaluateRecoveryGateStateForScope(context.Background(), quest, TradingPortfolio{
+		RiskDrawdown: 0.35,
+	}, "", "")
+
+	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
+	assert.True(t, state.EntryAllowed)
+	assert.Equal(t, 0, state.CyclesToEntry)
+}
+
+func TestIntegratedQuestHandlers_EnrichPortfolioControlPlane_UsesCurrentDrawdownFromPeakEquity(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDrawdownHalt(NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig()))
+
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"risk_peak_equity":   1000.0,
+			"risk_max_drawdown":  0.35,
+			"state_drift_active": false,
+		},
+	}
+	portfolio := &TradingPortfolio{
+		USDTBalance: 700,
+		TotalValue:  700,
+	}
+
+	handlers.enrichPortfolioControlPlane(context.Background(), quest, "chat-1", "bitget", portfolio)
+
+	assert.InDelta(t, 0.30, portfolio.CurrentDrawdown, 0.0001)
+	assert.InDelta(t, 0.30, portfolio.RiskDrawdown, 0.0001)
+	assert.InDelta(t, 0.35, portfolio.RiskMaxDrawdown, 0.0001)
+	assert.InDelta(t, 1000.0, checkpointFloat(quest.Checkpoint["risk_peak_equity"]), 0.0001)
+	assert.InDelta(t, 0.30, checkpointFloat(quest.Checkpoint["risk_current_drawdown"]), 0.0001)
+	assert.InDelta(t, 0.35, checkpointFloat(quest.Checkpoint["risk_max_drawdown"]), 0.0001)
+}
+
 func newLifecycleStoreForTest(t *testing.T) *TradingLifecycleStore {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-recent-loss.db"))
 	require.NoError(t, err)

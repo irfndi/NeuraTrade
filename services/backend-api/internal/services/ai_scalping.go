@@ -373,9 +373,11 @@ type TradingPortfolio struct {
 	TotalValue         float64 `json:"total_value"`
 	OpenPositions      int     `json:"open_positions"`
 	UnrealizedPnL      float64 `json:"unrealized_pnl"`
+	CurrentDrawdown    float64 `json:"current_drawdown"`
 	RiskSharpe         float64 `json:"risk_sharpe"`
 	RiskSortino        float64 `json:"risk_sortino"`
 	RiskDrawdown       float64 `json:"risk_drawdown"`
+	RiskMaxDrawdown    float64 `json:"risk_max_drawdown"`
 	RiskExpectancy     float64 `json:"risk_expectancy"`
 	RiskSampleSize     int     `json:"risk_sample_size"`
 	StrategyPhase      string  `json:"strategy_phase"`

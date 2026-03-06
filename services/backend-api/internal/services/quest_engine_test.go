@@ -672,6 +672,7 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 			"recovery_gate_eval_at":          "2026-02-27T03:36:01Z",
 			"recovery_entry_allowed":         false,
 			"entry_gate_type":                "recovery_gate",
+			"risk_current_drawdown":          0.08,
 			"risk_max_drawdown":              0.41,
 		},
 	}
@@ -697,6 +698,9 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	}
 	if gateType, _ := diag["entry_gate_type"].(string); gateType != "recovery_gate" {
 		t.Fatalf("expected entry_gate_type=recovery_gate, got %q", gateType)
+	}
+	if drawdown, _ := diag["risk_current_drawdown"].(float64); drawdown != 0.08 {
+		t.Fatalf("expected risk_current_drawdown=0.08, got %v", drawdown)
 	}
 	if usable, _ := diag["provider_chain_usable"].(int); usable != 1 {
 		t.Fatalf("expected provider_chain_usable=1, got %d", usable)

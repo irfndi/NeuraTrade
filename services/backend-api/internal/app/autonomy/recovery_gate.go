@@ -112,7 +112,7 @@ type RecoveryGateDecision struct {
 
 func EvaluateRecoveryGate(input RecoveryGateInput, cfg RecoveryConfig) RecoveryGateState {
 	cfg = cfg.Normalized()
-	runtimeBlocked := input.RuntimeFailureStreak > 0 || input.DriftActive
+	driftBlocked := input.DriftActive
 
 	state := RecoveryGateState{
 		Mode:                  RecoveryModeNormal,
@@ -128,7 +128,7 @@ func EvaluateRecoveryGate(input RecoveryGateInput, cfg RecoveryConfig) RecoveryG
 		RecentLossLastTradeAt: input.RecentLossLastTradeAt,
 	}
 
-	if runtimeBlocked {
+	if driftBlocked {
 		state.EntryAllowed = false
 	}
 	if recoveryLossStreakExceeded(state, cfg) {
@@ -162,7 +162,7 @@ func EvaluateRecoveryGate(input RecoveryGateInput, cfg RecoveryConfig) RecoveryG
 			if recoveryLossStreakExceeded(state, cfg) {
 				applyRecentLossGate(&state, cfg)
 			} else {
-				applyRuntimeOrDriftGate(&state, runtimeBlocked)
+				applyDriftGate(&state, driftBlocked)
 			}
 		}
 	default:
@@ -173,7 +173,7 @@ func EvaluateRecoveryGate(input RecoveryGateInput, cfg RecoveryConfig) RecoveryG
 		applyRecentLossGate(&state, cfg)
 	}
 	if !state.EntryAllowed && state.GateReason == "" {
-		applyRuntimeOrDriftGate(&state, runtimeBlocked)
+		applyDriftGate(&state, driftBlocked)
 	}
 	if !state.EntryAllowed && state.GateReason == "" {
 		state.GateReason = "recovery entry gate is active"
@@ -230,16 +230,16 @@ func applyRecentLossGate(state *RecoveryGateState, cfg RecoveryConfig) {
 	)
 }
 
-func applyRuntimeOrDriftGate(state *RecoveryGateState, runtimeBlocked bool) {
-	if state == nil || !runtimeBlocked {
+func applyDriftGate(state *RecoveryGateState, driftBlocked bool) {
+	if state == nil || !driftBlocked {
 		return
 	}
 	if state.Mode == RecoveryModeMicroEntry {
-		state.GateReason = "recovery micro-entry paused until runtime/drift constraints clear"
+		state.GateReason = "recovery micro-entry paused until drift constraints clear"
 	} else {
-		state.GateReason = "recovery entry gate is active: runtime/drift constraints must clear"
+		state.GateReason = "recovery entry gate is active: drift constraints must clear"
 	}
-	state.NextCondition = "Clear runtime failures and drift state"
+	state.NextCondition = "Clear drift state"
 }
 
 type LivenessConfig struct {

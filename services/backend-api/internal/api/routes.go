@@ -460,7 +460,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		for _, chatID := range questEngine.ListActiveAutonomousChatIDs() {
 			diagnostics := questEngine.GetChatRuntimeDiagnostics(chatID)
 			drawdown := 0.0
-			switch value := diagnostics["risk_max_drawdown"].(type) {
+			switch value := diagnostics["risk_current_drawdown"].(type) {
 			case float64:
 				drawdown = value
 			case float32:
@@ -468,11 +468,21 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			case int:
 				drawdown = float64(value)
 			}
+			if drawdown <= 0 {
+				switch value := diagnostics["risk_max_drawdown"].(type) {
+				case float64:
+					drawdown = value
+				case float32:
+					drawdown = float64(value)
+				case int:
+					drawdown = float64(value)
+				}
+			}
 			if drawdown >= riskLockThreshold {
 				active = true
 				setSource("drawdown_threshold")
 				reasons = append(reasons, fmt.Sprintf(
-					"drawdown_threshold: chat %s drawdown %.2f%% >= %.2f%%",
+					"drawdown_threshold: chat %s current drawdown %.2f%% >= %.2f%%",
 					chatID,
 					drawdown*100,
 					riskLockThreshold*100,
@@ -674,6 +684,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	orderExecutor = services.NewSafeOrderExecutor(orderExecutor, portfolioSafety, chatID)
 	log.Printf("Portfolio safety gate enabled for scalping order execution")
 
+	integratedHandlers.SetDrawdownHalt(drawdownHalt)
 	integratedHandlers.SetOrderExecutor(orderExecutor)
 
 	// Set database for user settings lookup
