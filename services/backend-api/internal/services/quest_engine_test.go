@@ -341,6 +341,40 @@ func TestAcquireLock_WithRedis(t *testing.T) {
 	}
 }
 
+func TestAcquireLock_ReclaimsStaleLockWhenOwnerHeartbeatMissing(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer func() { _ = client.Close() }()
+
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	ctx := context.Background()
+	lockKey := "test:lock:stale-reclaim"
+
+	if err := client.Set(ctx, lockKey, "stale-owner", 5*time.Minute).Err(); err != nil {
+		t.Fatalf("failed to seed stale lock: %v", err)
+	}
+
+	ok := engine.acquireLock(ctx, lockKey, 5*time.Minute)
+	if !ok {
+		t.Fatal("expected stale lock to be reclaimed")
+	}
+
+	owner, err := client.Get(ctx, lockKey).Result()
+	if err != nil {
+		t.Fatalf("failed to read reclaimed lock owner: %v", err)
+	}
+	if owner != engine.lockOwnerID {
+		t.Fatalf("expected reclaimed lock owner %q, got %q", engine.lockOwnerID, owner)
+	}
+}
+
 func TestAcquireLock_WithoutRedis(t *testing.T) {
 	store := NewInMemoryQuestStore()
 	engine := NewQuestEngine(store)
@@ -386,6 +420,69 @@ func TestReleaseLock_WithRedis(t *testing.T) {
 	ok = engine.acquireLock(ctx, lockKey, 5*time.Minute)
 	if !ok {
 		t.Error("lock acquisition after release should succeed")
+	}
+}
+
+func TestReleaseLock_DoesNotDeleteOtherOwnerLock(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer func() { _ = client.Close() }()
+
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	ctx := context.Background()
+	lockKey := "test:lock:other-owner"
+
+	if err := client.Set(ctx, lockKey, "different-owner", 5*time.Minute).Err(); err != nil {
+		t.Fatalf("failed to seed foreign lock: %v", err)
+	}
+
+	engine.releaseLock(ctx, lockKey)
+
+	owner, err := client.Get(ctx, lockKey).Result()
+	if err != nil {
+		t.Fatalf("expected foreign lock to remain, got error: %v", err)
+	}
+	if owner != "different-owner" {
+		t.Fatalf("expected foreign lock owner to remain unchanged, got %q", owner)
+	}
+}
+
+func TestStop_KeepsOwnerHeartbeatWhileQuestExecuting(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer func() { _ = client.Close() }()
+
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	engine.running = true
+	engine.executing["quest-1"] = true
+
+	ctx := context.Background()
+	if err := engine.refreshQuestLockOwnerHeartbeat(ctx); err != nil {
+		t.Fatalf("failed to seed owner heartbeat: %v", err)
+	}
+
+	engine.Stop()
+
+	exists, err := client.Exists(ctx, questLockOwnerHeartbeatKey(engine.lockOwnerID)).Result()
+	if err != nil {
+		t.Fatalf("failed to read owner heartbeat: %v", err)
+	}
+	if exists != 1 {
+		t.Fatal("expected owner heartbeat to remain while a quest is still executing")
 	}
 }
 
@@ -691,7 +788,7 @@ func TestTick_UsesLastProgressForStaleReset(t *testing.T) {
 	}
 	engine.quests[quest.ID] = quest
 	engine.executing[quest.ID] = true
-	engine.executionStarts[quest.ID] = time.Now().Add(-10 * time.Minute)
+	engine.executionStarts[quest.ID] = time.Now().Add(-2 * time.Minute)
 	engine.executionLastProgress[quest.ID] = time.Now().Add(-20 * time.Second)
 	engine.executionStage[quest.ID] = "handler"
 
@@ -783,6 +880,41 @@ func TestTick_DoesNotResetStaleExecutionWhenLockStillHeld(t *testing.T) {
 	}
 	if held := engine.executionLockHeld[quest.ID]; !held {
 		t.Fatal("expected diagnostics to mark lock as held")
+	}
+}
+
+func TestTick_ResetsExecutionThatExceededTimeoutDespiteFreshHeartbeat(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	executed := make(chan struct{}, 1)
+	engine.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
+		executed <- struct{}{}
+		return nil
+	})
+
+	quest := &Quest{
+		ID:         "timeout-reset-quest",
+		Name:       "Timeout Reset Quest",
+		Type:       QuestTypeRoutine,
+		Cadence:    CadenceMicro,
+		Status:     QuestStatusActive,
+		Checkpoint: make(map[string]interface{}),
+		Metadata: map[string]string{
+			"chat_id":       "chat-timeout",
+			"definition_id": "scalping_execution",
+		},
+	}
+	engine.quests[quest.ID] = quest
+	engine.executing[quest.ID] = true
+	engine.executionStarts[quest.ID] = time.Now().Add(-engine.runtimeBudget.ExecutionTimeout - time.Minute)
+	engine.executionLastProgress[quest.ID] = time.Now().Add(-10 * time.Second)
+	engine.executionStage[quest.ID] = questExecutionStageHandler
+
+	engine.tick()
+
+	select {
+	case <-executed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected execution timeout to reset stale quest despite fresh heartbeat")
 	}
 }
 

@@ -45,12 +45,28 @@ const (
 	defaultQuestLockReleaseTimeout    = 2 * time.Second
 	maxQuestLockReleaseTimeout        = 10 * time.Second
 	defaultQuestExecutionHeartbeat    = 15 * time.Second
+	questLockOwnerHeartbeatTTL        = 30 * time.Second
 
 	questExecutionStageLock    = "lock"
 	questExecutionStageHandler = "handler"
 	questExecutionStagePersist = "persist"
 	questExecutionStageDone    = "done"
 )
+
+var releaseQuestLockIfOwnedScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+	return redis.call("DEL", KEYS[1])
+end
+return 0
+`)
+
+var replaceStaleQuestLockScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+	return 0
+end
+redis.call("SET", KEYS[1], ARGV[2], "PX", ARGV[3])
+return 1
+`)
 
 type questRuntimeBudget struct {
 	ScalpingTimeout   time.Duration
@@ -159,6 +175,7 @@ type QuestEngine struct {
 	redis                     *redis.Client
 	stopCh                    chan struct{}
 	running                   bool
+	lockOwnerID               string
 	cadenceMode               string
 	lastTickAt                time.Time
 	runtimeBudget             questRuntimeBudget
@@ -306,6 +323,7 @@ func NewQuestEngineWithRedis(store QuestStore, redisClient *redis.Client) *Quest
 		store:                     store,
 		redis:                     redisClient,
 		stopCh:                    make(chan struct{}),
+		lockOwnerID:               uuid.NewString(),
 		chatIDForQuest:            make(map[string]int64),
 		cadenceMode:               "normal",
 		riskLockSource:            "none",
@@ -478,6 +496,14 @@ func (e *QuestEngine) Start() {
 	// Load active quests from database
 	e.loadActiveQuests()
 
+	if e.redis != nil {
+		heartbeatCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if err := e.refreshQuestLockOwnerHeartbeat(heartbeatCtx); err != nil {
+			log.Printf("[QUEST] Failed to initialize quest lock owner heartbeat: %v", err)
+		}
+		cancel()
+	}
+
 	go e.schedulerLoop()
 	log.Printf("[QUEST] Quest engine started")
 	log.Printf("[QUEST] Initial state: %d quests loaded, running=%v", len(e.quests), e.running)
@@ -549,12 +575,24 @@ func (e *QuestEngine) loadActiveQuests() {
 // Stop stops the quest engine
 func (e *QuestEngine) Stop() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if !e.running {
+		e.mu.Unlock()
 		return
 	}
 	close(e.stopCh)
 	e.running = false
+	redisClient := e.redis
+	ownerID := strings.TrimSpace(e.lockOwnerID)
+	clearHeartbeat := len(e.executing) == 0
+	e.mu.Unlock()
+
+	if redisClient != nil && ownerID != "" && clearHeartbeat {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
+			log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+		}
+		cancel()
+	}
 	log.Println("Quest engine stopped")
 }
 
@@ -580,6 +618,13 @@ func (e *QuestEngine) schedulerLoop() {
 }
 
 func (e *QuestEngine) evaluateAndTick(now time.Time, force bool) {
+	if e.redis != nil {
+		heartbeatCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if err := e.refreshQuestLockOwnerHeartbeat(heartbeatCtx); err != nil {
+			log.Printf("[QUEST] Failed to refresh quest lock owner heartbeat: %v", err)
+		}
+		cancel()
+	}
 	if !e.shouldRunTick(now, force) {
 		return
 	}
@@ -699,7 +744,8 @@ func (e *QuestEngine) tick() {
 			age := now.Sub(startedAt)
 			progressAge := now.Sub(lastProgressAt)
 			staleAfter := e.runtimeBudget.StaleTimeout
-			if progressAge > staleAfter {
+			executionTimedOut := age > e.runtimeBudget.ExecutionTimeout
+			if progressAge > staleAfter || executionTimedOut {
 				lockKey := fmt.Sprintf("quest:lock:%s", quest.ID)
 				lockHeld := false
 				lockTTL := time.Duration(0)
@@ -734,11 +780,12 @@ func (e *QuestEngine) tick() {
 					e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_detected_but_lock_active(ttl=%s)", lockTTL.Round(time.Second))
 					e.executionStaleResetAt[quest.ID] = now.UTC()
 					log.Printf(
-						"[QUEST] Quest %s (%s) stale marker retained because lock is still active (ttl=%s progress_age=%s stage=%s)",
+						"[QUEST] Quest %s (%s) stale marker retained because lock is still active (ttl=%s progress_age=%s start_age=%s stage=%s)",
 						quest.ID,
 						quest.Name,
 						lockTTL.Round(time.Second),
 						progressAge.Round(time.Second),
+						age.Round(time.Second),
 						stage,
 					)
 					continue
@@ -1107,7 +1154,22 @@ func questExecutionHeartbeatInterval() time.Duration {
 	return interval
 }
 
-func (e *QuestEngine) startExecutionHeartbeat(questID string) func() {
+func questLockOwnerHeartbeatKey(ownerID string) string {
+	return fmt.Sprintf("quest:lock-owner:%s", strings.TrimSpace(ownerID))
+}
+
+func (e *QuestEngine) refreshQuestLockOwnerHeartbeat(ctx context.Context) error {
+	if e.redis == nil {
+		return nil
+	}
+	ownerID := strings.TrimSpace(e.lockOwnerID)
+	if ownerID == "" {
+		return nil
+	}
+	return e.redis.Set(ctx, questLockOwnerHeartbeatKey(ownerID), time.Now().UTC().Format(time.RFC3339), questLockOwnerHeartbeatTTL).Err()
+}
+
+func (e *QuestEngine) startExecutionHeartbeat(ctx context.Context, questID string) func() {
 	interval := questExecutionHeartbeatInterval()
 	done := make(chan struct{})
 	go func() {
@@ -1115,6 +1177,8 @@ func (e *QuestEngine) startExecutionHeartbeat(questID string) func() {
 		defer ticker.Stop()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-done:
 				return
 			case <-ticker.C:
@@ -1164,6 +1228,50 @@ func (e *QuestEngine) readLockState(ctx context.Context, key string) (bool, time
 	}
 }
 
+func (e *QuestEngine) reclaimStaleLock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if e.redis == nil {
+		return false, nil
+	}
+
+	currentOwner, err := e.redis.Get(ctx, key).Result()
+	switch {
+	case err == redis.Nil:
+		return e.redis.SetNX(ctx, key, e.lockOwnerID, ttl).Result()
+	case err != nil:
+		return false, err
+	}
+
+	currentOwner = strings.TrimSpace(currentOwner)
+	if currentOwner == "" || currentOwner == strings.TrimSpace(e.lockOwnerID) {
+		return false, nil
+	}
+
+	ownerAlive, err := e.redis.Exists(ctx, questLockOwnerHeartbeatKey(currentOwner)).Result()
+	if err != nil {
+		return false, err
+	}
+	if ownerAlive != 0 {
+		return false, nil
+	}
+
+	replaced, err := replaceStaleQuestLockScript.Run(
+		ctx,
+		e.redis,
+		[]string{key},
+		currentOwner,
+		e.lockOwnerID,
+		strconv.FormatInt(ttl.Milliseconds(), 10),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	if replaced == 1 {
+		log.Printf("[QUEST] Reclaimed stale quest lock %s from inactive owner %s", key, currentOwner)
+		return true, nil
+	}
+	return false, nil
+}
+
 // executeQuest executes a single quest
 func (e *QuestEngine) executeQuest(quest *Quest) {
 	defer e.markQuestExecutionFinished(quest.ID)
@@ -1204,7 +1312,7 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 	}()
 
 	e.markQuestExecutionProgress(quest.ID, questExecutionStageHandler)
-	stopHeartbeat := e.startExecutionHeartbeat(quest.ID)
+	stopHeartbeat := e.startExecutionHeartbeat(ctx, quest.ID)
 	defer stopHeartbeat()
 	if err := handler(ctx, quest); err != nil {
 		log.Printf("Quest %s (%s) failed: %v", quest.ID, quest.Name, err)
@@ -1254,10 +1362,24 @@ func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Dura
 	if e.redis == nil {
 		return true
 	}
-	ok, err := e.redis.SetNX(ctx, key, "locked", ttl).Result()
+	if err := e.refreshQuestLockOwnerHeartbeat(ctx); err != nil {
+		log.Printf("Failed to refresh quest lock owner heartbeat: %v", err)
+	}
+	ok, err := e.redis.SetNX(ctx, key, e.lockOwnerID, ttl).Result()
 	if err != nil {
 		log.Printf("Failed to acquire lock %s: %v", key, err)
 		return false
+	}
+	if ok {
+		return true
+	}
+	reclaimed, err := e.reclaimStaleLock(ctx, key, ttl)
+	if err != nil {
+		log.Printf("Failed to reclaim stale lock %s: %v", key, err)
+		return false
+	}
+	if reclaimed {
+		return true
 	}
 	return ok
 }
@@ -1266,7 +1388,9 @@ func (e *QuestEngine) releaseLock(ctx context.Context, key string) {
 	if e.redis == nil {
 		return
 	}
-	e.redis.Del(ctx, key)
+	if _, err := releaseQuestLockIfOwnedScript.Run(ctx, e.redis, []string{key}, e.lockOwnerID).Int(); err != nil && err != redis.Nil {
+		log.Printf("Failed to release lock %s: %v", key, err)
+	}
 }
 
 func (e *QuestEngine) updateLastExecuted(questID string, executedAt time.Time) {

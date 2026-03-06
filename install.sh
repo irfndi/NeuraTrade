@@ -115,7 +115,7 @@ install_telegram_launcher() {
   cat >"$output_bin" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export PATH="\$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH"
+export PATH="\$HOME/.local/bin:\$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH"
 telegram_service_dir="\${NEURATRADE_TELEGRAM_SERVICE_DIR:-$repo_telegram_service}"
 if [[ ! -d "\$telegram_service_dir" ]]; then
   echo "[telegram-service][error] service directory not found: \$telegram_service_dir" >&2
@@ -209,7 +209,7 @@ install_launchd_autostart() {
   cat >"$launch_script" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export PATH="\$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH"
+export PATH="\$HOME/.local/bin:\$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH"
 if [[ -f "$ENV_TARGET" ]]; then
   set -a
   # shellcheck disable=SC1090
