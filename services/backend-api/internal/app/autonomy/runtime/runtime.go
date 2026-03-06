@@ -31,7 +31,16 @@ func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandle
 		nil,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build integrated autonomy handlers: %w", err)
+		fallback := services.NewIntegratedQuestHandlers(
+			deps.TechnicalAnalysis,
+			deps.CCXTService,
+			deps.ArbitrageService,
+			deps.FuturesArbService,
+			deps.NotificationService,
+			deps.MonitoringService,
+		)
+		fallback.SetDB(deps.SQLDB)
+		return fallback, fmt.Errorf("build integrated autonomy handlers: %w", err)
 	}
 	return handlers, nil
 }

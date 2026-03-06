@@ -1258,7 +1258,7 @@ type BalanceResponse struct {
 
 // GetBalance retrieves account balance from the API
 func (c *APIClient) GetBalance() (*BalanceResponse, error) {
-	respBody, err := c.makeRequest("GET", "/api/v1/telegram/internal/wallets", nil)
+	respBody, err := c.makeRequest("GET", "/internal/telegram/wallets", nil)
 	if err != nil {
 		return nil, err
 	}
