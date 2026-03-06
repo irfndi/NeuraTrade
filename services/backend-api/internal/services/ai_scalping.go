@@ -452,10 +452,17 @@ type AIScalpingAutonomyState struct {
 	LastRollbackTrigger string
 }
 
-// SetExchange updates the exchange for scalping (called dynamically based on user wallet)
+// SetExchange updates the default exchange for legacy callers.
 func (s *AIScalpingService) SetExchange(exchange string) {
 	s.config.Exchange = exchange
 	log.Printf("[AI-SCALPING] Exchange set to: %s", exchange)
+}
+
+func (s *AIScalpingService) exchangeForContext(ctx context.Context) string {
+	if exchange := scalpingExchangeFromContext(ctx); exchange != "" {
+		return exchange
+	}
+	return strings.TrimSpace(s.config.Exchange)
 }
 
 func NewAIScalpingService(
@@ -781,7 +788,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 	}
 	if strings.TrimSpace(scope.Exchange) == "" {
-		scope.Exchange = s.config.Exchange
+		scope.Exchange = s.exchangeForContext(ctx)
 	}
 	if strings.TrimSpace(scope.StrategyID) == "" {
 		scope.StrategyID = ScalpingStrategyID(scope.ChatID)
@@ -870,11 +877,12 @@ type aiMarketSignal struct {
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
-	if cached := s.getCachedPairs(); len(cached) > 0 {
+	exchange := s.exchangeForContext(ctx)
+	if cached := s.getCachedPairs(exchange); len(cached) > 0 {
 		return cached, nil
 	}
 
-	markets, err := s.ccxtService.FetchMarkets(ctx, s.config.Exchange)
+	markets, err := s.ccxtService.FetchMarkets(ctx, exchange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch markets: %w", err)
 	}
@@ -903,8 +911,8 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 
 	// The executor is futures-first. Prefer symbols that are present in funding-rate
 	// universe so trade candidates map to futures contracts.
-	if s.config.Exchange == "bitget" {
-		if filtered := s.filterFuturesSymbols(ctx, candidates); len(filtered) > 0 {
+	if exchange == "bitget" {
+		if filtered := s.filterFuturesSymbols(ctx, exchange, candidates); len(filtered) > 0 {
 			candidates = filtered
 		} else if s.config.EnforceFutures {
 			return nil, fmt.Errorf("futures universe prefilter returned no tradable symbols")
@@ -922,7 +930,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 	}
 
 	// Dynamically rank discovered symbols by liquidity + spread + intraday movement.
-	scored, err := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, candidates)
+	scored, err := s.ccxtService.FetchMarketData(ctx, []string{exchange}, candidates)
 	if err != nil {
 		var partialErr *ccxt.PartialMarketDataError
 		if errors.As(err, &partialErr) && len(partialErr.Data) > 0 {
@@ -937,7 +945,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		}
 		log.Printf("[AI-SCALPING] Dynamic pair scoring unavailable (%v), using discovered subset", err)
 		selected := candidates[:limit]
-		s.updatePairCache(selected)
+		s.updatePairCache(exchange, selected)
 		return selected, nil
 	}
 
@@ -981,19 +989,19 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		selected = append(selected, pairs[i].symbol)
 	}
 
-	log.Printf("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s", len(selected), len(candidates), s.config.Exchange)
-	s.updatePairCache(selected)
+	log.Printf("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s", len(selected), len(candidates), exchange)
+	s.updatePairCache(exchange, selected)
 	return selected, nil
 }
 
-func (s *AIScalpingService) getCachedPairs() []string {
+func (s *AIScalpingService) getCachedPairs(exchange string) []string {
 	s.pairCacheMu.RLock()
 	defer s.pairCacheMu.RUnlock()
 
 	if len(s.cachedPairs) == 0 {
 		return nil
 	}
-	if s.cacheExchange != s.config.Exchange {
+	if s.cacheExchange != exchange {
 		return nil
 	}
 	if time.Since(s.cacheUpdated) > 2*time.Minute {
@@ -1005,7 +1013,7 @@ func (s *AIScalpingService) getCachedPairs() []string {
 	return result
 }
 
-func (s *AIScalpingService) updatePairCache(pairs []string) {
+func (s *AIScalpingService) updatePairCache(exchange string, pairs []string) {
 	if len(pairs) == 0 {
 		return
 	}
@@ -1013,15 +1021,15 @@ func (s *AIScalpingService) updatePairCache(pairs []string) {
 	defer s.pairCacheMu.Unlock()
 
 	s.cachedPairs = append(s.cachedPairs[:0], pairs...)
-	s.cacheExchange = s.config.Exchange
+	s.cacheExchange = exchange
 	s.cacheUpdated = time.Now()
 }
 
-func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, symbols []string) []string {
-	rates, err := s.ccxtService.FetchAllFundingRates(ctx, s.config.Exchange)
+func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, exchange string, symbols []string) []string {
+	rates, err := s.ccxtService.FetchAllFundingRates(ctx, exchange)
 	if err != nil || len(rates) == 0 {
 		if err != nil {
-			log.Printf("[AI-SCALPING] Futures universe unavailable on %s: %v", s.config.Exchange, err)
+			log.Printf("[AI-SCALPING] Futures universe unavailable on %s: %v", exchange, err)
 		}
 		return nil
 	}
@@ -1052,16 +1060,17 @@ func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, symbols []
 	}
 
 	if len(filtered) == 0 {
-		log.Printf("[AI-SCALPING] Futures universe filter returned no overlap on %s; using discovered pairs", s.config.Exchange)
+		log.Printf("[AI-SCALPING] Futures universe filter returned no overlap on %s; using discovered pairs", exchange)
 		return nil
 	}
 
-	log.Printf("[AI-SCALPING] Futures universe filtered %d -> %d symbols on %s", len(symbols), len(filtered), s.config.Exchange)
+	log.Printf("[AI-SCALPING] Futures universe filtered %d -> %d symbols on %s", len(symbols), len(filtered), exchange)
 	return filtered
 }
 
 func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarketSignal, error) {
 	var signals []aiMarketSignal
+	exchange := s.exchangeForContext(ctx)
 
 	pairs, err := s.discoverTradingPairs(ctx)
 	if err != nil {
@@ -1074,7 +1083,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 
 	// Bulk ticker fetch keeps the cycle responsive under high symbol counts.
 	tickerBySymbol := make(map[string]ccxt.MarketPriceInterface, len(pairs))
-	marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, pairs)
+	marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{exchange}, pairs)
 	if bulkErr != nil {
 		var partialErr *ccxt.PartialMarketDataError
 		if errors.As(bulkErr, &partialErr) && len(partialErr.Data) > 0 {
@@ -1103,12 +1112,12 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		orderBookPairs = 4
 	}
 
-	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), s.config.Exchange)
+	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), exchange)
 	for idx, symbol := range pairs {
 		normalizedSymbol := normalizeSymbolForComparison(symbol)
 		tickerData, ok := tickerBySymbol[normalizedSymbol]
 		if !ok {
-			tickerData, err = s.ccxtService.FetchSingleTicker(ctx, s.config.Exchange, symbol)
+			tickerData, err = s.ccxtService.FetchSingleTicker(ctx, exchange, symbol)
 			if err != nil {
 				log.Printf("[AI-SCALPING] Failed to fetch ticker for %s: %v", symbol, err)
 				continue
@@ -1117,7 +1126,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 
 		var obResp *ccxt.OrderBookResponse
 		if idx < orderBookPairs {
-			obResp, err = s.ccxtService.FetchOrderBook(ctx, s.config.Exchange, symbol, 20)
+			obResp, err = s.ccxtService.FetchOrderBook(ctx, exchange, symbol, 20)
 			if err != nil {
 				log.Printf("[AI-SCALPING] Failed to fetch orderbook for %s: %v", symbol, err)
 			}
@@ -1377,6 +1386,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	if s.orderExecutor == nil {
 		return fmt.Errorf("no order executor configured")
 	}
+	exchange := s.exchangeForContext(ctx)
 
 	if maxCapitalPct <= 0 {
 		maxCapitalPct = s.config.MaxCapitalPct
@@ -1396,7 +1406,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		return err
 	}
 
-	openOrders, err := s.orderExecutor.GetOpenOrders(ctx, s.config.Exchange, decision.Symbol)
+	openOrders, err := s.orderExecutor.GetOpenOrders(ctx, exchange, decision.Symbol)
 	if err != nil {
 		log.Printf("[AI-SCALPING] Open-order check skipped for %s: %v", decision.Symbol, err)
 	} else if len(openOrders) > 0 {
@@ -1407,7 +1417,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 
 	// Build detailed trade info for rich notification
 	details := TradeDetails{
-		Exchange:          s.config.Exchange,
+		Exchange:          exchange,
 		Symbol:            decision.Symbol,
 		Side:              decision.Action,
 		OrderType:         "market",

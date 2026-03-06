@@ -51,6 +51,22 @@ func scalpingAutonomyScopeFromContext(ctx context.Context) (ScalpingAutonomyScop
 	return scope, true
 }
 
+func scalpingChatIDFromContext(ctx context.Context) string {
+	scope, ok := scalpingAutonomyScopeFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(scope.ChatID)
+}
+
+func scalpingExchangeFromContext(ctx context.Context) string {
+	scope, ok := scalpingAutonomyScopeFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(scope.Exchange)
+}
+
 func withScalpingAutonomyEvalInput(ctx context.Context, input scalpingAutonomyEvalInput) context.Context {
 	return context.WithValue(ctx, scalpingAutonomyEvalInputKey{}, input)
 }

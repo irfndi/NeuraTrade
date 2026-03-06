@@ -433,15 +433,11 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// Get user's preferred exchange from database or default to bitget
 	userExchange := h.getUserExchange(chatID)
 	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
-
-	if chatScopedExec, ok := h.orderExecutor.(interface{ SetChatID(string) }); ok {
-		chatScopedExec.SetChatID(chatID)
-	}
-
-	// Set exchange on AI scalping service
-	if h.aiScalpingService != nil {
-		h.aiScalpingService.SetExchange(userExchange)
-	}
+	ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
+		ChatID:     chatID,
+		StrategyID: ScalpingStrategyID(chatID),
+		Exchange:   userExchange,
+	})
 	h.bootstrapLifecycleState(ctx, quest, userExchange, chatID)
 	h.ensureDynamicProtectionManager()
 	if h.protectionManager != nil {
@@ -2809,12 +2805,13 @@ func (h *IntegratedQuestHandlers) assertPostEntryProtectionAsync(chatID, exchang
 			graceSeconds = 45
 		}
 		timeout := time.Duration(clampQuestInt(graceSeconds, 10, 300)) * time.Second
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		baseCtx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+			ChatID:     chatID,
+			StrategyID: ScalpingStrategyID(chatID),
+			Exchange:   exchange,
+		})
+		ctx, cancel := context.WithTimeout(baseCtx, timeout)
 		defer cancel()
-
-		if chatScopedExec, ok := h.orderExecutor.(interface{ SetChatID(string) }); ok {
-			chatScopedExec.SetChatID(chatID)
-		}
 
 		deadline := time.Now().UTC().Add(timeout)
 		for {
