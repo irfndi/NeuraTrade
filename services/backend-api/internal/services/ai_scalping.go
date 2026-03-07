@@ -421,10 +421,32 @@ type symbolExecutionGuard struct {
 }
 
 const (
-	reasonCategoryLLMTimeout           = "llm_timeout"
-	reasonCategoryLLMParseContract     = "llm_parse_contract"
-	reasonCategoryExecutionUnavailable = "execution_unavailable"
-	reasonCategoryStrategyHold         = "strategy_hold"
+	reasonCategoryLLMTimeout            = "llm_timeout"
+	reasonCategoryLLMParseContract      = "llm_parse_contract"
+	reasonCategoryExecutionUnavailable  = "execution_unavailable"
+	reasonCategoryDeterministicFallback = "deterministic_fallback"
+	reasonCategoryStrategyHold          = "strategy_hold"
+)
+
+const (
+	deterministicFallbackMaxBidAskSpread = 0.08
+	deterministicFallbackMinImbalance    = 0.35
+	deterministicFallbackBuyRangeMax     = 45.0
+	deterministicFallbackSellRangeMin    = 55.0
+	deterministicFallbackRangeAnchor     = 55.0
+	deterministicFallbackRangeOffset     = 45.0
+	deterministicFallbackImbalanceWeight = 0.65
+	deterministicFallbackLiquidityWeight = 0.20
+	deterministicFallbackRangeWeight     = 0.10
+	deterministicFallbackVolumeWeight    = 0.05
+	deterministicFallbackBaseConfidence  = 0.55
+	deterministicFallbackConfidenceScale = 0.35
+	deterministicFallbackMinConfidence   = 0.55
+	deterministicFallbackMaxConfidence   = 0.85
+	deterministicFallbackConfidenceFloor = 0.72
+	deterministicFallbackSizeFraction    = 0.50
+	deterministicFallbackMinSizePct      = 0.10
+	deterministicFallbackVolumeLogScale  = 8.0
 )
 
 type AIScalpingRuntimeState struct {
@@ -2097,33 +2119,50 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if signal.Price <= 0 || signal.Symbol == "" {
 		return nil, 0, false
 	}
-	if signal.BidAskSpread <= 0 || signal.BidAskSpread > 0.08 {
+	if signal.BidAskSpread <= 0 || signal.BidAskSpread > deterministicFallbackMaxBidAskSpread {
 		return nil, 0, false
 	}
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
-	if imbalance < 0.35 {
+	if imbalance < deterministicFallbackMinImbalance {
 		return nil, 0, false
 	}
 
 	action := ""
 	rangeAlignment := 0.0
 	switch {
-	case signal.OrderBookImbalance >= 0.35 && signal.RangePosition24h <= 45:
+	case signal.OrderBookImbalance >= deterministicFallbackMinImbalance &&
+		signal.RangePosition24h <= deterministicFallbackBuyRangeMax:
 		action = "buy"
-		rangeAlignment = clampFloat((55-signal.RangePosition24h)/55, 0, 1)
-	case signal.OrderBookImbalance <= -0.35 && signal.RangePosition24h >= 55:
+		rangeAlignment = clampFloat(
+			(deterministicFallbackRangeAnchor-signal.RangePosition24h)/deterministicFallbackRangeAnchor,
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance <= -deterministicFallbackMinImbalance &&
+		signal.RangePosition24h >= deterministicFallbackSellRangeMin:
 		action = "sell"
-		rangeAlignment = clampFloat((signal.RangePosition24h-45)/55, 0, 1)
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-deterministicFallbackRangeOffset)/deterministicFallbackRangeAnchor,
+			0,
+			1,
+		)
 	default:
 		return nil, 0, false
 	}
 
-	liquidityScore := clampFloat(1-(signal.BidAskSpread/0.08), 0, 1)
-	volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/8, 0, 1)
-	score := imbalance*0.65 + liquidityScore*0.20 + rangeAlignment*0.10 + volumeScore*0.05
-	confidence := clampFloat(0.55+score*0.35, 0.55, 0.85)
-	if confidence < clampFloat(math.Max(s.config.MinConfidence, 0.72), 0.05, 0.99) {
+	liquidityScore := clampFloat(1-(signal.BidAskSpread/deterministicFallbackMaxBidAskSpread), 0, 1)
+	volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/deterministicFallbackVolumeLogScale, 0, 1)
+	score := imbalance*deterministicFallbackImbalanceWeight +
+		liquidityScore*deterministicFallbackLiquidityWeight +
+		rangeAlignment*deterministicFallbackRangeWeight +
+		volumeScore*deterministicFallbackVolumeWeight
+	confidence := clampFloat(
+		deterministicFallbackBaseConfidence+score*deterministicFallbackConfidenceScale,
+		deterministicFallbackMinConfidence,
+		deterministicFallbackMaxConfidence,
+	)
+	if confidence < clampFloat(math.Max(s.config.MinConfidence, deterministicFallbackConfidenceFloor), 0.05, 0.99) {
 		return nil, 0, false
 	}
 
@@ -2132,9 +2171,10 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		sizeCap = portfolio.PhaseMaxCapitalPct
 	}
 	if sizeCap <= 0 {
-		sizeCap = s.config.MaxCapitalPct
+		sizeCap = DefaultAIScalpingConfig().MaxCapitalPct
 	}
-	sizePct := clampFloat(sizeCap*0.5, 1, sizeCap)
+	minSizePct := math.Min(deterministicFallbackMinSizePct, sizeCap)
+	sizePct := clampFloat(sizeCap*deterministicFallbackSizeFraction, minSizePct, sizeCap)
 
 	riskPct := 0.006
 	if signal.High24h > signal.Low24h && signal.Price > 0 {
@@ -2171,7 +2211,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		SizePercent:     sizePct,
 		Confidence:      confidence,
 		Reasoning:       reason,
-		ReasonCategory:  reasonCategoryStrategyHold,
+		ReasonCategory:  reasonCategoryDeterministicFallback,
 		ConfidenceKnown: true,
 		StopLoss:        &stopLoss,
 		TakeProfit:      &takeProfit,

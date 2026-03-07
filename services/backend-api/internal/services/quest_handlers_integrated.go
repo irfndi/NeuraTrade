@@ -2001,9 +2001,14 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	if h.drawdownHalt != nil && chatID != "" && peakEquity > 0 && portfolio.TotalValue > 0 {
 		peakValue := decimal.NewFromFloat(peakEquity)
 		if state, exists := h.drawdownHalt.GetState(chatID); !exists || state.PeakValue.LessThan(peakValue) {
-			_ = h.drawdownHalt.ResetPeak(ctx, chatID, peakValue)
+			if err := h.drawdownHalt.ResetPeak(ctx, chatID, peakValue); err != nil {
+				log.Printf("[SCALPING] Drawdown halt peak reset failed for chat %s: %v", chatID, err)
+			}
 		}
-		if state, err := h.drawdownHalt.CheckDrawdown(ctx, chatID, decimal.NewFromFloat(portfolio.TotalValue)); err == nil && state != nil {
+		state, err := h.drawdownHalt.CheckDrawdown(ctx, chatID, decimal.NewFromFloat(portfolio.TotalValue))
+		if err != nil {
+			log.Printf("[SCALPING] Drawdown halt check failed for chat %s: %v", chatID, err)
+		} else if state != nil {
 			portfolio.CurrentDrawdown = state.CurrentDrawdown.InexactFloat64()
 			portfolio.RiskDrawdown = portfolio.CurrentDrawdown
 			if seen := state.MaxDrawdownSeen.InexactFloat64(); seen > portfolio.RiskMaxDrawdown {

@@ -280,7 +280,9 @@ func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
 
 func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackOnLLMError(t *testing.T) {
 	svc := &AIScalpingService{
-		config:    DefaultAIScalpingConfig(),
+		config: AIScalpingConfig{
+			MaxCapitalPct: 0.5,
+		},
 		llmClient: &errorLLMClient{err: context.DeadlineExceeded},
 	}
 
@@ -301,8 +303,10 @@ func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackOnLLMError(t *
 	assert.NotNil(t, decision)
 	assert.Equal(t, "buy", decision.Action)
 	assert.Equal(t, "BTC/USDT", decision.Symbol)
+	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
 	assert.True(t, decision.ConfidenceKnown)
 	assert.Greater(t, decision.Confidence, 0.70)
+	assert.LessOrEqual(t, decision.SizePercent, 0.5)
 
 	diagnostics := svc.RuntimeDiagnostics()
 	assert.Contains(t, diagnostics["last_error"], "context deadline exceeded")
@@ -350,6 +354,7 @@ func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackAfterParseExha
 	assert.NotNil(t, decision)
 	assert.Equal(t, "sell", decision.Action)
 	assert.Equal(t, "ETH/USDT", decision.Symbol)
+	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
 	assert.True(t, decision.ConfidenceKnown)
 	assert.Equal(t, 2, mockLLM.CallCount)
 }

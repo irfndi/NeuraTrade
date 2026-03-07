@@ -520,30 +520,6 @@ func TestStop_KeepsOwnerHeartbeatWhileQuestExecuting(t *testing.T) {
 	}
 }
 
-func TestUpdateLastExecuted(t *testing.T) {
-	store := NewInMemoryQuestStore()
-	engine := NewQuestEngine(store)
-
-	quest := &Quest{
-		ID:             "test-1",
-		Name:           "Test Quest",
-		Cadence:        CadenceMicro,
-		Status:         QuestStatusActive,
-		LastExecutedAt: nil,
-	}
-	engine.quests["test-1"] = quest
-
-	executedAt := time.Date(2024, 1, 15, 10, 5, 0, 0, time.UTC)
-	engine.updateLastExecuted("test-1", executedAt)
-
-	if quest.LastExecutedAt == nil {
-		t.Fatal("LastExecutedAt should be set")
-	}
-	if !quest.LastExecutedAt.Equal(executedAt) {
-		t.Errorf("LastExecutedAt = %v, want %v", *quest.LastExecutedAt, executedAt)
-	}
-}
-
 func TestNewQuestEngineWithRedis(t *testing.T) {
 	store := NewInMemoryQuestStore()
 	engine := NewQuestEngineWithRedis(store, nil)

@@ -1436,43 +1436,6 @@ func (e *QuestEngine) releaseLock(ctx context.Context, key string) {
 	}
 }
 
-func (e *QuestEngine) updateLastExecuted(questID string, executedAt time.Time) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if quest, ok := e.quests[questID]; ok {
-		quest.LastExecutedAt = &executedAt
-		quest.UpdatedAt = time.Now()
-
-		if e.store != nil {
-			if err := e.store.UpdateLastExecuted(context.Background(), questID, executedAt); err != nil {
-				log.Printf("Failed to persist last executed time: %v", err)
-			}
-		}
-	}
-}
-
-// updateQuestStatus updates a quest's status
-func (e *QuestEngine) updateQuestStatus(questID string, status QuestStatus) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if quest, ok := e.quests[questID]; ok {
-		quest.Status = status
-		quest.UpdatedAt = time.Now()
-		if status == QuestStatusCompleted {
-			now := time.Now()
-			quest.CompletedAt = &now
-		}
-
-		if e.store != nil {
-			if err := e.store.SaveQuest(context.Background(), quest); err != nil {
-				log.Printf("Failed to persist quest status update: %v", err)
-			}
-		}
-	}
-}
-
 // BeginAutonomous starts autonomous mode for a user
 func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 	e.mu.Lock()
