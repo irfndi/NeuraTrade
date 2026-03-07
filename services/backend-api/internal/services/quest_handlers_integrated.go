@@ -38,6 +38,7 @@ type IntegratedQuestHandlers struct {
 	notificationService *NotificationService
 	monitoring          *AutonomousMonitorManager
 	questEngine         *QuestEngine
+	drawdownHalt        *MaxDrawdownHalt
 	orderExecutor       ScalpingOrderExecutor
 	aiScalpingService   *AIScalpingService
 	tradeMemory         *TradeMemory
@@ -178,6 +179,10 @@ func (h *IntegratedQuestHandlers) SetDynamicProtectionManager(manager *DynamicPr
 
 func (h *IntegratedQuestHandlers) SetQuestEngine(engine *QuestEngine) {
 	h.questEngine = engine
+}
+
+func (h *IntegratedQuestHandlers) SetDrawdownHalt(halt *MaxDrawdownHalt) {
+	h.drawdownHalt = halt
 }
 
 func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
@@ -885,8 +890,6 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		h.maybeSendHoldDigest(ctx, quest, chatID, holdDecision, portfolio)
 		return nil
 	}
-	h.recordEntryAttempt(quest, nowUTC, livenessGate)
-
 	exchangeConnected := true
 	connectionChecked := false
 	if healthChecker, ok := h.ccxtService.(interface{ IsHealthy(context.Context) bool }); ok {
@@ -916,6 +919,9 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(cycleCtx, portfolio)
 	h.applyAutonomyCheckpoint(quest)
+	if shouldRecordEntryAttempt(decision, err) {
+		h.recordEntryAttempt(quest, nowUTC, livenessGate)
+	}
 	if err != nil {
 		h.updateRecoveryCleanCycles(quest, false, "runtime_error")
 		log.Printf("[SCALPING] AI decision error: %v", err)
@@ -1961,9 +1967,55 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	riskMetrics := ComputeRiskAdjustedMetrics(returns)
 	portfolio.RiskSharpe = riskMetrics.Sharpe
 	portfolio.RiskSortino = riskMetrics.Sortino
-	portfolio.RiskDrawdown = riskMetrics.MaxDrawdown
+	portfolio.RiskMaxDrawdown = riskMetrics.MaxDrawdown
 	portfolio.RiskExpectancy = riskMetrics.Expectancy
 	portfolio.RiskSampleSize = riskMetrics.SampleSize
+
+	currentDrawdown := 0.0
+	peakEquity := portfolio.TotalValue
+	maxRecordedDrawdown := portfolio.RiskMaxDrawdown
+	if quest != nil && quest.Checkpoint != nil {
+		if checkpointPeak := checkpointFloat(quest.Checkpoint["risk_peak_equity"]); checkpointPeak > peakEquity {
+			peakEquity = checkpointPeak
+		}
+		if checkpointMax := checkpointFloat(quest.Checkpoint["risk_max_drawdown"]); checkpointMax > maxRecordedDrawdown {
+			maxRecordedDrawdown = checkpointMax
+		}
+	}
+	if peakEquity > 0 && portfolio.TotalValue > 0 {
+		if portfolio.TotalValue > peakEquity {
+			peakEquity = portfolio.TotalValue
+		}
+		currentDrawdown = (peakEquity - portfolio.TotalValue) / peakEquity
+		if currentDrawdown < 0 {
+			currentDrawdown = 0
+		}
+	}
+	if currentDrawdown > maxRecordedDrawdown {
+		maxRecordedDrawdown = currentDrawdown
+	}
+	portfolio.CurrentDrawdown = currentDrawdown
+	portfolio.RiskDrawdown = currentDrawdown
+	portfolio.RiskMaxDrawdown = maxRecordedDrawdown
+
+	if h.drawdownHalt != nil && chatID != "" && peakEquity > 0 && portfolio.TotalValue > 0 {
+		peakValue := decimal.NewFromFloat(peakEquity)
+		if state, exists := h.drawdownHalt.GetState(chatID); !exists || state.PeakValue.LessThan(peakValue) {
+			if err := h.drawdownHalt.ResetPeak(ctx, chatID, peakValue); err != nil {
+				log.Printf("[SCALPING] Drawdown halt peak reset failed for chat %s: %v", chatID, err)
+			}
+		}
+		state, err := h.drawdownHalt.CheckDrawdown(ctx, chatID, decimal.NewFromFloat(portfolio.TotalValue))
+		if err != nil {
+			log.Printf("[SCALPING] Drawdown halt check failed for chat %s: %v", chatID, err)
+		} else if state != nil {
+			portfolio.CurrentDrawdown = state.CurrentDrawdown.InexactFloat64()
+			portfolio.RiskDrawdown = portfolio.CurrentDrawdown
+			if seen := state.MaxDrawdownSeen.InexactFloat64(); seen > portfolio.RiskMaxDrawdown {
+				portfolio.RiskMaxDrawdown = seen
+			}
+		}
+	}
 
 	phaseDetector := phase_management.NewPhaseDetector(phase_management.DefaultPhaseDetectorConfig(), nil)
 	currentPhase := phaseDetector.GetPhaseForValue(decimal.NewFromFloat(portfolio.TotalValue))
@@ -1989,9 +2041,11 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		if quest.Checkpoint == nil {
 			quest.Checkpoint = make(map[string]interface{})
 		}
+		quest.Checkpoint["risk_peak_equity"] = peakEquity
+		quest.Checkpoint["risk_current_drawdown"] = portfolio.CurrentDrawdown
 		quest.Checkpoint["risk_sharpe"] = portfolio.RiskSharpe
 		quest.Checkpoint["risk_sortino"] = portfolio.RiskSortino
-		quest.Checkpoint["risk_max_drawdown"] = portfolio.RiskDrawdown
+		quest.Checkpoint["risk_max_drawdown"] = portfolio.RiskMaxDrawdown
 		quest.Checkpoint["risk_expectancy"] = portfolio.RiskExpectancy
 		quest.Checkpoint["risk_samples"] = portfolio.RiskSampleSize
 		quest.Checkpoint["strategy_phase"] = portfolio.StrategyPhase
@@ -2488,10 +2542,8 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 	exchange string,
 ) recoveryGateState {
 	cleanCycles := 0
-	failureStreak := 0
 	if quest != nil && quest.Checkpoint != nil {
 		cleanCycles = checkpointIntWithFallback(quest.Checkpoint, "recovery_clean_cycles_current", "recovery_clean_cycles")
-		failureStreak = checkpointInt(quest.Checkpoint["runtime_failure_streak"])
 	}
 	recentLoss := h.currentRecentLossStreak(ctx, chatID, exchange)
 
@@ -2517,7 +2569,6 @@ func (h *IntegratedQuestHandlers) evaluateRecoveryGateStateForScope(
 			Drawdown:              portfolio.RiskDrawdown,
 			CleanCycles:           cleanCycles,
 			DriftActive:           portfolio.DriftActive,
-			RuntimeFailureStreak:  failureStreak,
 			RecentLossStreak:      recentLoss.ConsecutiveLosses,
 			RecentLossActive:      recentLoss.Active,
 			RecentLossWindow:      recentLoss.Window,
@@ -2793,7 +2844,41 @@ func (h *IntegratedQuestHandlers) recordEntryAttempt(quest *Quest, now time.Time
 		attempts,
 		state.MaxAttemptsPerHour,
 	)
+	if attempts >= state.MaxAttemptsPerHour {
+		blockReason := fmt.Sprintf(
+			"liveness entry-attempt budget reached: %d/%d in current 1h window",
+			attempts,
+			state.MaxAttemptsPerHour,
+		)
+		nextCondition := fmt.Sprintf(
+			"Next entry-attempt window opens at %s",
+			windowStart.Add(time.Hour).UTC().Format(time.RFC3339),
+		)
+		quest.Checkpoint["runtime_entry_attempt_block_reason"] = blockReason
+		quest.Checkpoint["runtime_entry_gate_reason"] = blockReason
+		quest.Checkpoint["runtime_next_unblock_condition"] = nextCondition
+		return
+	}
+
+	quest.Checkpoint["runtime_next_unblock_condition"] = fmt.Sprintf(
+		"Liveness attempt budget available: %d/%d used in current 1h window",
+		attempts,
+		state.MaxAttemptsPerHour,
+	)
 	delete(quest.Checkpoint, "runtime_entry_attempt_block_reason")
+}
+
+func shouldRecordEntryAttempt(decision *AITradingDecision, execErr error) bool {
+	if decision == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		return false
+	}
+	if strings.TrimSpace(decision.OrderID) != "" {
+		return true
+	}
+	return execErr != nil
 }
 
 func (h *IntegratedQuestHandlers) assertPostEntryProtectionAsync(chatID, exchange, orderID, symbol, side string) {

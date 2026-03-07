@@ -16,8 +16,41 @@ import (
 )
 
 const (
-	autonomyRolloutStateTable  = "autonomous_rollout_states"
-	autonomyRollbackEventTable = "autonomous_rollback_events"
+	saveRolloutStateQuery = `
+		INSERT INTO autonomous_rollout_states (strategy_id, chat_id, current_stage, status, entered_at, payload, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (strategy_id) DO UPDATE SET
+			chat_id = EXCLUDED.chat_id,
+			current_stage = EXCLUDED.current_stage,
+			status = EXCLUDED.status,
+			entered_at = EXCLUDED.entered_at,
+			payload = EXCLUDED.payload,
+			updated_at = EXCLUDED.updated_at
+	`
+
+	getRolloutStateQuery = `SELECT payload FROM autonomous_rollout_states WHERE strategy_id = $1`
+
+	saveRollbackEventQuery = `
+		INSERT INTO autonomous_rollback_events (
+			id, strategy_id, chat_id, trigger, from_stage, to_stage, reason, payload, occurred_at, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`
+
+	getRollbackHistoryQuery = `
+		SELECT payload
+		FROM autonomous_rollback_events
+		WHERE strategy_id = $1
+		ORDER BY occurred_at DESC
+		LIMIT $2
+	`
+
+	getChatRolloutStateQuery = `
+		SELECT payload
+		FROM autonomous_rollout_states
+		WHERE chat_id = $1
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`
 )
 
 // AutonomousRolloutStore persists rollout state and rollback events for autonomous strategies.
@@ -92,21 +125,9 @@ func (s *AutonomousRolloutStore) SaveRolloutState(ctx context.Context, state *au
 	chatID := strategyChatID(state.StrategyID)
 	now := time.Now().UTC()
 
-	query := fmt.Sprintf(`
-		INSERT INTO %s (strategy_id, chat_id, current_stage, status, entered_at, payload, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (strategy_id) DO UPDATE SET
-			chat_id = EXCLUDED.chat_id,
-			current_stage = EXCLUDED.current_stage,
-			status = EXCLUDED.status,
-			entered_at = EXCLUDED.entered_at,
-			payload = EXCLUDED.payload,
-			updated_at = EXCLUDED.updated_at
-	`, autonomyRolloutStateTable)
-
 	if _, err := s.db.ExecContext(
 		ctx,
-		query,
+		saveRolloutStateQuery,
 		state.StrategyID,
 		chatID,
 		string(state.CurrentStage),
@@ -131,8 +152,7 @@ func (s *AutonomousRolloutStore) GetRolloutState(ctx context.Context, strategyID
 	}
 
 	var payload string
-	query := fmt.Sprintf(`SELECT payload FROM %s WHERE strategy_id = $1`, autonomyRolloutStateTable)
-	err := s.db.QueryRowContext(ctx, query, strategyID).Scan(&payload)
+	err := s.db.QueryRowContext(ctx, getRolloutStateQuery, strategyID).Scan(&payload)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -176,15 +196,9 @@ func (s *AutonomousRolloutStore) SaveRollbackEvent(ctx context.Context, event *a
 	}
 	chatID := strategyChatID(event.StrategyID)
 
-	query := fmt.Sprintf(`
-		INSERT INTO %s (
-			id, strategy_id, chat_id, trigger, from_stage, to_stage, reason, payload, occurred_at, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, autonomyRollbackEventTable)
-
 	if _, err := s.db.ExecContext(
 		ctx,
-		query,
+		saveRollbackEventQuery,
 		event.ID,
 		event.StrategyID,
 		chatID,
@@ -220,14 +234,7 @@ func (s *AutonomousRolloutStore) GetRollbackHistory(ctx context.Context, strateg
 		limit = 500
 	}
 
-	query := fmt.Sprintf(`
-		SELECT payload
-		FROM %s
-		WHERE strategy_id = $1
-		ORDER BY occurred_at DESC
-		LIMIT $2
-	`, autonomyRollbackEventTable)
-	rows, err := s.db.QueryContext(ctx, query, strategyID, limit)
+	rows, err := s.db.QueryContext(ctx, getRollbackHistoryQuery, strategyID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get rollback history: %w", err)
 	}
@@ -267,14 +274,7 @@ func (s *AutonomousRolloutStore) GetChatRolloutState(ctx context.Context, chatID
 	}
 
 	var payload string
-	query := fmt.Sprintf(`
-		SELECT payload
-		FROM %s
-		WHERE chat_id = $1
-		ORDER BY updated_at DESC
-		LIMIT 1
-	`, autonomyRolloutStateTable)
-	err := s.db.QueryRowContext(ctx, query, chatID).Scan(&payload)
+	err := s.db.QueryRowContext(ctx, getChatRolloutStateQuery, chatID).Scan(&payload)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil

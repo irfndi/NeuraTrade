@@ -373,9 +373,11 @@ type TradingPortfolio struct {
 	TotalValue         float64 `json:"total_value"`
 	OpenPositions      int     `json:"open_positions"`
 	UnrealizedPnL      float64 `json:"unrealized_pnl"`
+	CurrentDrawdown    float64 `json:"current_drawdown"`
 	RiskSharpe         float64 `json:"risk_sharpe"`
 	RiskSortino        float64 `json:"risk_sortino"`
 	RiskDrawdown       float64 `json:"risk_drawdown"`
+	RiskMaxDrawdown    float64 `json:"risk_max_drawdown"`
 	RiskExpectancy     float64 `json:"risk_expectancy"`
 	RiskSampleSize     int     `json:"risk_sample_size"`
 	StrategyPhase      string  `json:"strategy_phase"`
@@ -419,10 +421,32 @@ type symbolExecutionGuard struct {
 }
 
 const (
-	reasonCategoryLLMTimeout           = "llm_timeout"
-	reasonCategoryLLMParseContract     = "llm_parse_contract"
-	reasonCategoryExecutionUnavailable = "execution_unavailable"
-	reasonCategoryStrategyHold         = "strategy_hold"
+	reasonCategoryLLMTimeout            = "llm_timeout"
+	reasonCategoryLLMParseContract      = "llm_parse_contract"
+	reasonCategoryExecutionUnavailable  = "execution_unavailable"
+	reasonCategoryDeterministicFallback = "deterministic_fallback"
+	reasonCategoryStrategyHold          = "strategy_hold"
+)
+
+const (
+	deterministicFallbackMaxBidAskSpread = 0.08
+	deterministicFallbackMinImbalance    = 0.35
+	deterministicFallbackBuyRangeMax     = 45.0
+	deterministicFallbackSellRangeMin    = 55.0
+	deterministicFallbackRangeAnchor     = 55.0
+	deterministicFallbackRangeOffset     = 45.0
+	deterministicFallbackImbalanceWeight = 0.65
+	deterministicFallbackLiquidityWeight = 0.20
+	deterministicFallbackRangeWeight     = 0.10
+	deterministicFallbackVolumeWeight    = 0.05
+	deterministicFallbackBaseConfidence  = 0.55
+	deterministicFallbackConfidenceScale = 0.35
+	deterministicFallbackMinConfidence   = 0.55
+	deterministicFallbackMaxConfidence   = 0.85
+	deterministicFallbackConfidenceFloor = 0.72
+	deterministicFallbackSizeFraction    = 0.50
+	deterministicFallbackMinSizePct      = 0.10
+	deterministicFallbackVolumeLogScale  = 8.0
 )
 
 type AIScalpingRuntimeState struct {
@@ -1215,7 +1239,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 			s.getLatestFailoverAttemptInfo(),
 		)
 		log.Printf("[AI-SCALPING] LLM completion failed: %v", err)
-		return nil, fmt.Errorf("LLM completion failed: %w", err)
+		return s.deterministicFallbackDecision(signals, portfolio), nil
 	}
 
 	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
@@ -1226,15 +1250,14 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		decision, err = s.parseDecisionWithRetries(ctx, resp.Message.Content)
 		if err != nil {
 			log.Printf("[AI-SCALPING] Structured-output retries exhausted: %v", err)
-			hold := fallbackHoldDecision(resp.Message.Content, err)
 			s.updateRuntimeState(
-				hold.ReasonCategory,
+				classifyReasonCategory(err, resp.Message.Content),
 				err,
 				false,
 				string(resp.Provider),
 				s.getLatestFailoverAttemptInfo(),
 			)
-			return hold, nil
+			return s.deterministicFallbackDecision(signals, portfolio), nil
 		}
 	}
 	if decision.Action == "hold" {
@@ -2055,6 +2078,144 @@ func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecis
 		ConfidenceKnown: false,
 		SizePercent:     0,
 	}
+}
+
+func (s *AIScalpingService) deterministicFallbackDecision(signals []aiMarketSignal, portfolio TradingPortfolio) *AITradingDecision {
+	bestDecision := (*AITradingDecision)(nil)
+	bestScore := 0.0
+
+	for _, signal := range signals {
+		decision, score, ok := s.deterministicFallbackCandidate(signal, portfolio)
+		if !ok {
+			continue
+		}
+		if bestDecision == nil || score > bestScore {
+			bestDecision = decision
+			bestScore = score
+		}
+	}
+
+	if bestDecision != nil {
+		log.Printf(
+			"[AI-SCALPING] Deterministic fallback selected %s %s (confidence=%.2f score=%.2f)",
+			bestDecision.Action,
+			bestDecision.Symbol,
+			bestDecision.Confidence,
+			bestScore,
+		)
+		return bestDecision
+	}
+
+	return strategyHoldDecision(
+		"deterministic fallback found no eligible candidate after liquidity and signal checks",
+		0,
+	)
+}
+
+func (s *AIScalpingService) deterministicFallbackCandidate(
+	signal aiMarketSignal,
+	portfolio TradingPortfolio,
+) (*AITradingDecision, float64, bool) {
+	if signal.Price <= 0 || signal.Symbol == "" {
+		return nil, 0, false
+	}
+	if signal.BidAskSpread <= 0 || signal.BidAskSpread > deterministicFallbackMaxBidAskSpread {
+		return nil, 0, false
+	}
+
+	imbalance := math.Abs(signal.OrderBookImbalance)
+	if imbalance < deterministicFallbackMinImbalance {
+		return nil, 0, false
+	}
+
+	action := ""
+	rangeAlignment := 0.0
+	switch {
+	case signal.OrderBookImbalance >= deterministicFallbackMinImbalance &&
+		signal.RangePosition24h <= deterministicFallbackBuyRangeMax:
+		action = "buy"
+		rangeAlignment = clampFloat(
+			(deterministicFallbackRangeAnchor-signal.RangePosition24h)/deterministicFallbackRangeAnchor,
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance <= -deterministicFallbackMinImbalance &&
+		signal.RangePosition24h >= deterministicFallbackSellRangeMin:
+		action = "sell"
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-deterministicFallbackRangeOffset)/deterministicFallbackRangeAnchor,
+			0,
+			1,
+		)
+	default:
+		return nil, 0, false
+	}
+
+	liquidityScore := clampFloat(1-(signal.BidAskSpread/deterministicFallbackMaxBidAskSpread), 0, 1)
+	volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/deterministicFallbackVolumeLogScale, 0, 1)
+	score := imbalance*deterministicFallbackImbalanceWeight +
+		liquidityScore*deterministicFallbackLiquidityWeight +
+		rangeAlignment*deterministicFallbackRangeWeight +
+		volumeScore*deterministicFallbackVolumeWeight
+	confidence := clampFloat(
+		deterministicFallbackBaseConfidence+score*deterministicFallbackConfidenceScale,
+		deterministicFallbackMinConfidence,
+		deterministicFallbackMaxConfidence,
+	)
+	if confidence < clampFloat(math.Max(s.config.MinConfidence, deterministicFallbackConfidenceFloor), 0.05, 0.99) {
+		return nil, 0, false
+	}
+
+	sizeCap := s.config.MaxCapitalPct
+	if portfolio.PhaseMaxCapitalPct > 0 && portfolio.PhaseMaxCapitalPct < sizeCap {
+		sizeCap = portfolio.PhaseMaxCapitalPct
+	}
+	if sizeCap <= 0 {
+		sizeCap = DefaultAIScalpingConfig().MaxCapitalPct
+	}
+	minSizePct := math.Min(deterministicFallbackMinSizePct, sizeCap)
+	sizePct := clampFloat(sizeCap*deterministicFallbackSizeFraction, minSizePct, sizeCap)
+
+	riskPct := 0.006
+	if signal.High24h > signal.Low24h && signal.Price > 0 {
+		rangePct := (signal.High24h - signal.Low24h) / signal.Price
+		riskPct = clampFloat(rangePct*0.20, 0.004, 0.012)
+	}
+	rewardPct := clampFloat(riskPct*1.6, 0.006, 0.02)
+
+	stopLoss := decimal.Zero
+	takeProfit := decimal.Zero
+	price := decimal.NewFromFloat(signal.Price)
+	switch action {
+	case "buy":
+		stopLoss = price.Mul(decimal.NewFromFloat(1 - riskPct))
+		takeProfit = price.Mul(decimal.NewFromFloat(1 + rewardPct))
+	case "sell":
+		stopLoss = price.Mul(decimal.NewFromFloat(1 + riskPct))
+		takeProfit = price.Mul(decimal.NewFromFloat(1 - rewardPct))
+	default:
+		return nil, 0, false
+	}
+
+	reason := fmt.Sprintf(
+		"deterministic fallback: %s pressure %.3f with spread %.3f%% and range position %.1f%%",
+		action,
+		signal.OrderBookImbalance,
+		signal.BidAskSpread,
+		signal.RangePosition24h,
+	)
+
+	return &AITradingDecision{
+		Action:          action,
+		Symbol:          signal.Symbol,
+		SizePercent:     sizePct,
+		Confidence:      confidence,
+		Reasoning:       reason,
+		ReasonCategory:  reasonCategoryDeterministicFallback,
+		ConfidenceKnown: true,
+		StopLoss:        &stopLoss,
+		TakeProfit:      &takeProfit,
+	}, score, true
 }
 
 func isDecisionContractValidationError(decision *AITradingDecision, err error) bool {

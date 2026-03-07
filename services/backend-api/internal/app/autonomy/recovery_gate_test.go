@@ -58,7 +58,7 @@ func TestEvaluateRecoveryGate_DeriskOnlyResets(t *testing.T) {
 	}
 }
 
-func TestEvaluateRecoveryGate_RuntimeFailureBlocksEntry(t *testing.T) {
+func TestEvaluateRecoveryGate_RuntimeFailureStreakDoesNotBlockMicroEntryByItself(t *testing.T) {
 	cfg := DefaultRecoveryConfig()
 
 	state := EvaluateRecoveryGate(RecoveryGateInput{
@@ -70,11 +70,8 @@ func TestEvaluateRecoveryGate_RuntimeFailureBlocksEntry(t *testing.T) {
 	if state.Mode != RecoveryModeMicroEntry {
 		t.Fatalf("expected micro-entry mode, got %q", state.Mode)
 	}
-	if state.EntryAllowed {
-		t.Fatal("expected runtime failure streak to block entry")
-	}
-	if state.GateReason == "" || state.NextCondition == "" {
-		t.Fatalf("expected runtime/drift block messaging, got reason=%q next=%q", state.GateReason, state.NextCondition)
+	if !state.EntryAllowed {
+		t.Fatalf("expected runtime failure streak alone not to block micro-entry, reason=%q next=%q", state.GateReason, state.NextCondition)
 	}
 }
 
@@ -94,7 +91,10 @@ func TestEvaluateRecoveryGate_DriftBlocksEntry(t *testing.T) {
 		t.Fatal("expected drift gate to block entry")
 	}
 	if state.GateReason == "" || state.NextCondition == "" {
-		t.Fatalf("expected runtime/drift block messaging, got reason=%q next=%q", state.GateReason, state.NextCondition)
+		t.Fatalf("expected drift block messaging, got reason=%q next=%q", state.GateReason, state.NextCondition)
+	}
+	if state.NextCondition != "Clear drift state" {
+		t.Fatalf("expected drift next condition, got %q", state.NextCondition)
 	}
 }
 

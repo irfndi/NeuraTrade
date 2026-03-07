@@ -1,0 +1,53 @@
+name: Backend Security Deep
+
+on:
+  push:
+    branches: [main, develop, development]
+    paths:
+      - "services/backend-api/**"
+      - ".github/workflows/backend-security-deep.yml"
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  GO_VERSION: "1.26.1"
+
+jobs:
+  backend-security-deep:
+    name: Backend Security Deep (gosec taint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: services/backend-api/go.sum
+
+      - name: Install dependencies
+        run: make mod-download
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.24.7
+
+      - name: Run deep taint scan (gosec)
+        # TODO(security:taint,target=2026-05-15): fold this back into validation after internal/services decomposition removes the current taint-analysis blow-up.
+        run: |
+          cd services/backend-api
+          gosec \
+            -severity medium \
+            -confidence medium \
+            -exclude=G117,G704,G404,G118 \
+            -exclude-generated \
+            -exclude-dir=internal/testutil \
+            -exclude-dir=internal/api/handlers/testmocks \
+            -exclude-dir=pkg/pb \
+            ./internal/services

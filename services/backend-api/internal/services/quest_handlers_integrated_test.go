@@ -397,6 +397,54 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testin
 	assert.False(t, state.EntryAllowed)
 }
 
+func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_IgnoresRuntimeFailureStreak(t *testing.T) {
+	t.Setenv("NEURATRADE_RECOVERY_CLEAN_CYCLES", "1")
+	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
+	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"recovery_clean_cycles_current": 1,
+			"runtime_failure_streak":        1,
+		},
+	}
+
+	state := handlers.evaluateRecoveryGateStateForScope(context.Background(), quest, TradingPortfolio{
+		RiskDrawdown: 0.35,
+	}, "", "")
+
+	assert.Equal(t, recoveryModeMicroEntry, state.Mode)
+	assert.True(t, state.EntryAllowed)
+	assert.Equal(t, 0, state.CyclesToEntry)
+}
+
+func TestIntegratedQuestHandlers_EnrichPortfolioControlPlane_UsesCurrentDrawdownFromPeakEquity(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDrawdownHalt(NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig()))
+
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"risk_peak_equity":   1000.0,
+			"risk_max_drawdown":  0.35,
+			"state_drift_active": false,
+		},
+	}
+	portfolio := &TradingPortfolio{
+		USDTBalance: 700,
+		TotalValue:  700,
+	}
+
+	handlers.enrichPortfolioControlPlane(context.Background(), quest, "chat-1", "bitget", portfolio)
+
+	assert.InDelta(t, 0.30, portfolio.CurrentDrawdown, 0.0001)
+	assert.InDelta(t, 0.30, portfolio.RiskDrawdown, 0.0001)
+	assert.InDelta(t, 0.35, portfolio.RiskMaxDrawdown, 0.0001)
+	assert.InDelta(t, 1000.0, checkpointFloat(quest.Checkpoint["risk_peak_equity"]), 0.0001)
+	assert.InDelta(t, 0.30, checkpointFloat(quest.Checkpoint["risk_current_drawdown"]), 0.0001)
+	assert.InDelta(t, 0.35, checkpointFloat(quest.Checkpoint["risk_max_drawdown"]), 0.0001)
+}
+
 func newLifecycleStoreForTest(t *testing.T) *TradingLifecycleStore {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-recent-loss.db"))
 	require.NoError(t, err)
@@ -574,6 +622,56 @@ func TestIntegratedQuestHandlers_RecordEntryAttempt_RotatesWindow(t *testing.T) 
 	windowStart, ok := checkpointRFC3339(quest.Checkpoint["runtime_entry_attempt_window_started_at"])
 	require.True(t, ok)
 	assert.WithinDuration(t, now, windowStart, time.Second)
+}
+
+func TestIntegratedQuestHandlers_RecordEntryAttempt_SetsBlockReasonAtBudgetEdge(t *testing.T) {
+	t.Setenv("NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR", "3")
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	now := time.Now().UTC()
+	windowStart := now.Add(-20 * time.Minute)
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+
+	handlers.recordEntryAttempt(quest, now, entryAttemptGateState{
+		AttemptsInWindow:   2,
+		MaxAttemptsPerHour: 3,
+		WindowStartedAt:    windowStart,
+	})
+
+	assert.Equal(t, 3, checkpointInt(quest.Checkpoint["runtime_entry_attempts_1h"]))
+	assert.Equal(t, "3/3 in current 1h window", checkpointString(quest.Checkpoint["runtime_entry_attempt_window_progress"]))
+	assert.Contains(t, checkpointString(quest.Checkpoint["runtime_entry_attempt_block_reason"]), "budget reached")
+	assert.Equal(
+		t,
+		checkpointString(quest.Checkpoint["runtime_entry_attempt_block_reason"]),
+		checkpointString(quest.Checkpoint["runtime_entry_gate_reason"]),
+	)
+	assert.Contains(t, checkpointString(quest.Checkpoint["runtime_next_unblock_condition"]), "Next entry-attempt window opens")
+}
+
+func TestShouldRecordEntryAttempt(t *testing.T) {
+	t.Run("hold does not count", func(t *testing.T) {
+		assert.False(t, shouldRecordEntryAttempt(&AITradingDecision{
+			Action: "hold",
+		}, nil))
+	})
+
+	t.Run("executed order counts", func(t *testing.T) {
+		assert.True(t, shouldRecordEntryAttempt(&AITradingDecision{
+			Action:  "buy",
+			OrderID: "order-123",
+		}, nil))
+	})
+
+	t.Run("execution error counts", func(t *testing.T) {
+		assert.True(t, shouldRecordEntryAttempt(&AITradingDecision{
+			Action: "sell",
+		}, assert.AnError))
+	})
+
+	t.Run("nil decision does not count", func(t *testing.T) {
+		assert.False(t, shouldRecordEntryAttempt(nil, assert.AnError))
+	})
 }
 
 func TestNormalizeAINotificationSemantics_RuntimeDegradedNotStrategyHold(t *testing.T) {
