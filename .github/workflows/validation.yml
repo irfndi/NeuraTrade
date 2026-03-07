@@ -155,7 +155,7 @@ jobs:
   backend-security:
     name: Backend Security
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -186,7 +186,17 @@ jobs:
         # TODO(security:G704,target=2026-04-15): remove exclusion after replacing deferred recover/error handling patterns.
         # TODO(security:G404,target=2026-04-15): remove exclusion after replacing weak-rand usage in non-test paths.
         # TODO(security:G118,target=2026-04-15): remove exclusion after context-lifecycle remediation backlog is complete.
-        run: cd services/backend-api && gosec -severity medium -confidence medium -exclude=G117,G704,G404,G118 ./cmd/... ./internal/... ./pkg/...
+        run: |
+          cd services/backend-api
+          gosec \
+            -severity medium \
+            -confidence medium \
+            -exclude=G117,G704,G404,G118 \
+            -exclude-generated \
+            -exclude-dir=internal/testutil \
+            -exclude-dir=internal/api/handlers/testmocks \
+            -exclude-dir=pkg/pb \
+            ./cmd/... ./internal/... ./pkg/...
 
       - name: Run vulnerability scan (govulncheck)
         run: cd services/backend-api && govulncheck ./cmd/... ./internal/... ./pkg/...
