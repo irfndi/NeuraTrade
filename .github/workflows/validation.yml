@@ -178,8 +178,8 @@ jobs:
 
       - name: Install security tools
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.24.7
 
       - name: Run static security scan (gosec)
         # TODO(security:G117,target=2026-04-15): remove exclusion after validating http server timeout handling patterns.

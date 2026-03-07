@@ -36,7 +36,7 @@ jobs:
         run: make mod-download
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.24.7
 
       - name: Run deep taint scan (gosec)
         # TODO(security:taint,target=2026-05-15): fold this back into validation after internal/services decomposition removes the current taint-analysis blow-up.
