@@ -6,22 +6,27 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/irfndi/neuratrade/internal/autonomous"
+	"github.com/irfndi/neuratrade/internal/services"
 )
 
 // AgentControlHandler handles agent control API requests.
 type AgentControlHandler struct {
 	mu          sync.RWMutex
 	subscribers map[chan AgentEvent]struct{}
+	autonomy    *services.ScalpingAutonomyCoordinator
 }
 
 // NewAgentControlHandler creates a new agent control handler.
-func NewAgentControlHandler() *AgentControlHandler {
+func NewAgentControlHandler(autonomy *services.ScalpingAutonomyCoordinator) *AgentControlHandler {
 	return &AgentControlHandler{
 		subscribers: make(map[chan AgentEvent]struct{}),
+		autonomy:    autonomy,
 	}
 }
 
@@ -30,6 +35,12 @@ type AgentCommandRequest struct {
 	ExchangeID string `json:"exchange_id,omitempty"`
 	Scope      string `json:"scope,omitempty"`
 	Engage     *bool  `json:"engage,omitempty"`
+}
+
+type StrategyModeRequest struct {
+	StrategyID string `json:"strategy_id,omitempty"`
+	ChatID     string `json:"chat_id,omitempty"`
+	Mode       string `json:"mode" binding:"required"`
 }
 
 // AgentEvent represents a control-plane event streamed to the agent service.
@@ -169,6 +180,53 @@ func (h *AgentControlHandler) CancelAllOrders(c *gin.Context) {
 		"status": "ok",
 		"action": "cancel_all_orders",
 		"scope":  req.Scope,
+	})
+}
+
+// SetStrategyMode updates the rollout mode for a strategy.
+// @Summary Set strategy mode
+// @Description Set a strategy rollout mode (shadow, paper, live)
+// @Tags agent
+// @Accept json
+// @Produce json
+// @Param request body StrategyModeRequest true "Strategy mode request"
+// @Success 200 {object} map[string]any
+// @Router /api/v1/agent/strategy-mode [post]
+func (h *AgentControlHandler) SetStrategyMode(c *gin.Context) {
+	if h.autonomy == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "autonomy coordinator unavailable"})
+		return
+	}
+
+	var req StrategyModeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		return
+	}
+
+	strategyID := strings.TrimSpace(req.StrategyID)
+	if strategyID == "" && strings.TrimSpace(req.ChatID) != "" {
+		strategyID = services.ScalpingStrategyID(req.ChatID)
+	}
+	if strategyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "strategy_id or chat_id is required"})
+		return
+	}
+
+	mode := autonomous.StrategyMode(strings.ToLower(strings.TrimSpace(req.Mode)))
+	state, err := h.autonomy.SetStrategyMode(c.Request.Context(), strategyID, mode)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":         "ok",
+		"strategy_id":    strategyID,
+		"mode":           mode,
+		"current_stage":  state.CurrentStage,
+		"current_status": state.Status,
+		"entered_at":     state.EnteredAt.UTC().Format(time.RFC3339),
 	})
 }
 

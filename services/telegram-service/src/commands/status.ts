@@ -125,6 +125,23 @@ function readRecordField(
   return null;
 }
 
+function readRecordArrayField(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): readonly Readonly<Record<string, unknown>>[] {
+  if (!source) {
+    return [];
+  }
+  const value = source[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (item): item is Readonly<Record<string, unknown>> =>
+      typeof item === "object" && item !== null,
+  );
+}
+
 export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
   bot.command("status", async (ctx) => {
     const chatId = ctx.chat?.id;
@@ -260,27 +277,50 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           "none";
         const runtimeCircuitActive =
           readBoolField(aiRuntime, "circuit_active") === true;
-        const entryGatePriority = (() => {
-          if (riskLock === true || entryGateType === "risk_lock") {
-            return "risk_lock";
-          }
-          if (driftActive || entryGateType === "state_drift") {
-            return "state_drift";
-          }
-          if (runtimeCircuitActive || entryGateType === "runtime_circuit") {
-            return "runtime_circuit";
-          }
-          if (entryGateType === "recovery_gate") {
-            return "recovery_gate";
-          }
-          return "none";
-        })();
         const entryAttemptBlockReason =
           readStringField(chatRuntime, "entry_attempt_block_reason") ||
           diagnostics.entry_attempt_block_reason;
         const nextUnblockCondition =
           readStringField(chatRuntime, "next_unblock_condition_current") ||
           diagnostics.next_unblock_condition_current;
+        const accountTier =
+          readStringField(chatRuntime, "account_tier") ||
+          diagnostics.account_tier;
+        const effectiveMinConfidence =
+          readNumberField(chatRuntime, "effective_min_confidence") ??
+          diagnostics.effective_min_confidence;
+        const effectiveMaxCapitalPct =
+          readNumberField(chatRuntime, "effective_max_capital_pct") ??
+          diagnostics.effective_max_capital_pct;
+        const candidateUniverseCount =
+          readNumberField(chatRuntime, "candidate_universe_count") ??
+          diagnostics.candidate_universe_count;
+        const candidateRankedCount =
+          readNumberField(chatRuntime, "candidate_ranked_count") ??
+          diagnostics.candidate_ranked_count;
+        const candidateViableCount =
+          readNumberField(chatRuntime, "candidate_viable_count") ??
+          diagnostics.candidate_viable_count;
+        const topCandidateRejections =
+          readRecordArrayField(chatRuntime, "top_candidate_rejections").length > 0
+            ? readRecordArrayField(chatRuntime, "top_candidate_rejections")
+            : (diagnostics.top_candidate_rejections ?? []);
+        const progressBlocked =
+          readBoolField(chatRuntime, "progress_blocked") ??
+          diagnostics.progress_blocked ??
+          false;
+        const progressBlockReason =
+          readStringField(chatRuntime, "progress_block_reason") ||
+          diagnostics.progress_block_reason;
+        const rolloutStageCurrent =
+          readStringField(chatRuntime, "rollout_stage_current") ||
+          diagnostics.rollout_stage_current;
+        const rolloutStatusCurrent =
+          readStringField(chatRuntime, "rollout_status_current") ||
+          diagnostics.rollout_status_current;
+        const rolloutGateReasonCurrent =
+          readStringField(chatRuntime, "rollout_gate_reason_current") ||
+          diagnostics.rollout_gate_reason_current;
         const entryAttempts1h =
           readNumberField(chatRuntime, "entry_attempts_1h") ??
           diagnostics.entry_attempts_1h;
@@ -305,6 +345,29 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         const executionInProgressAgeSeconds =
           readNumberField(chatRuntime, "execution_in_progress_age_seconds") ??
           readNumberField(questRuntime, "execution_in_progress_age_seconds");
+        const entryGatePriority = (() => {
+          if (riskLock === true || entryGateType === "risk_lock") {
+            return "risk_lock";
+          }
+          if (driftActive || entryGateType === "state_drift") {
+            return "state_drift";
+          }
+          if (runtimeCircuitActive || entryGateType === "runtime_circuit") {
+            return "runtime_circuit";
+          }
+          if (
+            entryAttemptBlockReason === "rollout_shadow_block" ||
+            (rolloutGateReasonCurrent &&
+              typeof candidateViableCount === "number" &&
+              candidateViableCount > 0)
+          ) {
+            return "rollout_gate";
+          }
+          if (entryGateType === "recovery_gate") {
+            return "recovery_gate";
+          }
+          return "none";
+        })();
         if (entryGateReason) {
           lines.push(`• Entry gate reason: ${entryGateReason}`);
         }
@@ -326,6 +389,11 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
             case "runtime_circuit":
               blockerReason = "AI runtime circuit is open";
               break;
+            case "rollout_gate":
+              blockerReason =
+                rolloutGateReasonCurrent ||
+                "strategy is not live yet; rollout still blocks execution";
+              break;
             case "recovery_gate":
               blockerReason = "recovery clean-cycle gate active";
               break;
@@ -335,6 +403,14 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           }
         }
         lines.push(`• Entry blocker: ${entryGatePriority} (${blockerReason})`);
+        if (rolloutStageCurrent || rolloutStatusCurrent) {
+          lines.push(
+            `• Rollout: ${rolloutStageCurrent || "unknown"}/${rolloutStatusCurrent || "unknown"}`,
+          );
+        }
+        if (rolloutGateReasonCurrent) {
+          lines.push(`• Rollout gate: ${rolloutGateReasonCurrent}`);
+        }
         if (entryGatePriority === "risk_lock") {
           lines.push(`• Risk lock source: ${riskLockSource}`);
         }
@@ -349,6 +425,38 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         lines.push(`• Next unblock: ${resolvedUnblockCondition}`);
         if (typeof entryAttempts1h === "number") {
           lines.push(`• Entry attempts (1h): ${entryAttempts1h}`);
+        }
+        if (accountTier) {
+          lines.push(`• Account tier: ${accountTier}`);
+        }
+        if (
+          typeof effectiveMinConfidence === "number" &&
+          typeof effectiveMaxCapitalPct === "number"
+        ) {
+          lines.push(
+            `• Effective thresholds: min_confidence=${effectiveMinConfidence.toFixed(2)}, max_capital=${effectiveMaxCapitalPct.toFixed(2)}%`,
+          );
+        }
+        if (
+          typeof candidateUniverseCount === "number" &&
+          typeof candidateRankedCount === "number" &&
+          typeof candidateViableCount === "number"
+        ) {
+          lines.push(
+            `• Candidate funnel: universe=${candidateUniverseCount}, ranked=${candidateRankedCount}, viable=${candidateViableCount}`,
+          );
+        }
+        topCandidateRejections.slice(0, 3).forEach((rejection, index) => {
+          const symbol = readStringField(rejection, "symbol");
+          const reason = readStringField(rejection, "reason");
+          if (symbol && reason) {
+            lines.push(`• Top reject ${index + 1}: ${symbol} (${reason})`);
+          }
+        });
+        if (progressBlocked) {
+          lines.push(
+            `• Progress watchdog: blocked${progressBlockReason ? ` (${progressBlockReason})` : ""}`,
+          );
         }
         if (lastEntryAttemptAt) {
           const minutesText =

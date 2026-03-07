@@ -11,6 +11,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -813,6 +814,77 @@ func TestNormalizeAINotificationSemantics_StrategyHoldPreservedWhenConfidenceKno
 	assert.True(t, normalized.ConfidenceKnown)
 	assert.Equal(t, aiReasonStrategyHold, normalized.ReasonCategory)
 	assert.Equal(t, aiReasonStrategyHold, normalized.HoldCategory)
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_PersistsLegacyTradeClose(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-journal.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-1",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	entryPrice := decimal.NewFromFloat(1.0)
+	handlers.persistLegacyTradeEntry(context.Background(), quest, &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "ADA/USDT",
+		SizePercent: 1.0,
+		OrderID:     "ord-1",
+		EntryPrice:  &entryPrice,
+	}, "bitget", TradingPortfolio{
+		USDTBalance:   100,
+		StrategyPhase: "bootstrap",
+	}, "ord-1")
+
+	closedAt := time.Now().UTC()
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "ADA/USDT", 20).
+		Return([]map[string]interface{}{
+			{
+				"orderId":      "ord-1",
+				"side":         "buy",
+				"avgOpenPrice": "1.0",
+				"avgPrice":     "1.05",
+				"filled":       "2.0",
+				"pnl":          "0.10",
+				"fees":         "0.01",
+				"uTime":        closedAt.UnixMilli(),
+			},
+		}, nil).
+		Once()
+
+	handlers.ingestClosedOrderFeedback(context.Background(), quest, "bitget", "ADA/USDT")
+
+	var status string
+	var exitPrice float64
+	var pnl float64
+	var fees float64
+	err = sqliteDB.DB.QueryRowContext(
+		context.Background(),
+		`SELECT status, exit_price, pnl, fees FROM trades WHERE order_id = $1`,
+		"ord-1",
+	).Scan(&status, &exitPrice, &pnl, &fees)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", status)
+	assert.InDelta(t, 1.05, exitPrice, 0.0001)
+	assert.InDelta(t, 0.10, pnl, 0.0001)
+	assert.InDelta(t, 0.01, fees, 0.0001)
+	assert.Contains(t, quest.Checkpoint["processed_closed_order_ids"], "ord-1")
+
+	orderExecutor.AssertExpectations(t)
 }
 
 // hasExchange checks if a specific exchange exists in the list

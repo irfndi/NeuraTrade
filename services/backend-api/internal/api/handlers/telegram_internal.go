@@ -755,6 +755,49 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if rawBlock, ok := diagnostics["entry_attempt_block_reason"].(string); ok {
 			entryAttemptBlockReason = strings.TrimSpace(rawBlock)
 		}
+		accountTier := ""
+		if rawTier, ok := diagnostics["account_tier"].(string); ok {
+			accountTier = strings.TrimSpace(rawTier)
+		}
+		effectiveMinConfidence := 0.0
+		switch value := diagnostics["effective_min_confidence"].(type) {
+		case float64:
+			effectiveMinConfidence = value
+		case int:
+			effectiveMinConfidence = float64(value)
+		case int64:
+			effectiveMinConfidence = float64(value)
+		}
+		effectiveMaxCapitalPct := 0.0
+		switch value := diagnostics["effective_max_capital_pct"].(type) {
+		case float64:
+			effectiveMaxCapitalPct = value
+		case int:
+			effectiveMaxCapitalPct = float64(value)
+		case int64:
+			effectiveMaxCapitalPct = float64(value)
+		}
+		candidateViableCount := 0
+		switch value := diagnostics["candidate_viable_count"].(type) {
+		case int:
+			candidateViableCount = value
+		case int64:
+			candidateViableCount = int(value)
+		case float64:
+			candidateViableCount = int(value)
+		}
+		rolloutStageCurrent := ""
+		if rawStage, ok := diagnostics["rollout_stage_current"].(string); ok {
+			rolloutStageCurrent = strings.TrimSpace(rawStage)
+		}
+		rolloutStatusCurrent := ""
+		if rawStatus, ok := diagnostics["rollout_status_current"].(string); ok {
+			rolloutStatusCurrent = strings.TrimSpace(rawStatus)
+		}
+		rolloutGateReason := ""
+		if rawReason, ok := diagnostics["rollout_gate_reason_current"].(string); ok {
+			rolloutGateReason = strings.TrimSpace(rawReason)
+		}
 		entryAttempts1h := 0
 		switch value := diagnostics["entry_attempts_1h"].(type) {
 		case int:
@@ -849,6 +892,9 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 				}
 			}
 		}
+		if entryGateReason == "" && rolloutGateReason != "" && candidateViableCount > 0 {
+			entryGateReason = rolloutGateReason
+		}
 
 		message := "AI runtime healthy"
 		if driftActive {
@@ -912,6 +958,25 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 		if entryAttemptBlockReason != "" {
 			details["entry_attempt_block_reason"] = entryAttemptBlockReason
+		}
+		if accountTier != "" {
+			details["account_tier"] = accountTier
+		}
+		if effectiveMinConfidence > 0 {
+			details["effective_min_confidence"] = fmt.Sprintf("%.2f", effectiveMinConfidence)
+		}
+		if effectiveMaxCapitalPct > 0 {
+			details["effective_max_capital_pct"] = fmt.Sprintf("%.2f", effectiveMaxCapitalPct)
+		}
+		details["candidate_viable_count"] = fmt.Sprintf("%d", candidateViableCount)
+		if rolloutStageCurrent != "" {
+			details["rollout_stage_current"] = rolloutStageCurrent
+		}
+		if rolloutStatusCurrent != "" {
+			details["rollout_status_current"] = rolloutStatusCurrent
+		}
+		if rolloutGateReason != "" {
+			details["rollout_gate_reason_current"] = rolloutGateReason
 		}
 		if nextUnblockCondition != "" {
 			details["next_unblock_condition"] = nextUnblockCondition

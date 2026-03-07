@@ -1144,6 +1144,66 @@ func TestGetChatRuntimeDiagnostics_IncludesLivenessAndDeadlockFields(t *testing.
 	}
 }
 
+func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	lastAttempt := time.Now().UTC().Add(-3 * time.Hour)
+	engine.quests["q-cycle"] = &Quest{
+		ID:     "q-cycle",
+		Status: QuestStatusActive,
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"account_tier":                  "micro",
+			"effective_min_confidence":      0.65,
+			"effective_max_capital_pct":     0.50,
+			"candidate_universe_count":      12,
+			"candidate_ranked_count":        4,
+			"candidate_viable_count":        1,
+			"top_candidate_rejections":      []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "confidence_below_effective_threshold", "estimated_confidence": 0.55}},
+			"rollout_stage_current":         "shadow",
+			"rollout_status_current":        "active",
+			"rollout_gate_reason_current":   "strategy_not_live (stage: shadow, status: active)",
+			"runtime_last_entry_attempt_at": lastAttempt.Format(time.RFC3339),
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-cycle")
+
+	if tier, _ := diag["account_tier"].(string); tier != "micro" {
+		t.Fatalf("expected account_tier=micro, got %q", tier)
+	}
+	if minConfidence, _ := diag["effective_min_confidence"].(float64); minConfidence != 0.65 {
+		t.Fatalf("expected effective_min_confidence=0.65, got %v", minConfidence)
+	}
+	if maxCapital, _ := diag["effective_max_capital_pct"].(float64); maxCapital != 0.50 {
+		t.Fatalf("expected effective_max_capital_pct=0.50, got %v", maxCapital)
+	}
+	if universe, _ := diag["candidate_universe_count"].(int); universe != 12 {
+		t.Fatalf("expected candidate_universe_count=12, got %d", universe)
+	}
+	if viable, _ := diag["candidate_viable_count"].(int); viable != 1 {
+		t.Fatalf("expected candidate_viable_count=1, got %d", viable)
+	}
+	rejections, ok := diag["top_candidate_rejections"].([]map[string]interface{})
+	if !ok || len(rejections) != 1 {
+		t.Fatalf("expected one top candidate rejection, got %#v", diag["top_candidate_rejections"])
+	}
+	if reason, _ := rejections[0]["reason"].(string); reason != "confidence_below_effective_threshold" {
+		t.Fatalf("expected rejection reason to be propagated, got %q", reason)
+	}
+	if stage, _ := diag["rollout_stage_current"].(string); stage != "shadow" {
+		t.Fatalf("expected rollout_stage_current=shadow, got %q", stage)
+	}
+	if blocked, _ := diag["progress_blocked"].(bool); !blocked {
+		t.Fatal("expected progress_blocked=true")
+	}
+	if reason, _ := diag["progress_block_reason"].(string); reason == "" {
+		t.Fatal("expected progress_block_reason to be populated")
+	}
+}
+
 func TestSetRiskLockStateWithSource_ExposesSourceInDiagnostics(t *testing.T) {
 	engine := NewQuestEngine(NewInMemoryQuestStore())
 	engine.SetRiskLockStateWithSource(true, "portfolio_safety", []string{"portfolio_safety: trading_allowed=false"})
