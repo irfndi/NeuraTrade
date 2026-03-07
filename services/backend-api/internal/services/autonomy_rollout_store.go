@@ -16,9 +16,6 @@ import (
 )
 
 const (
-	autonomyRolloutStateTable  = "autonomous_rollout_states"
-	autonomyRollbackEventTable = "autonomous_rollback_events"
-
 	saveRolloutStateQuery = `
 		INSERT INTO autonomous_rollout_states (strategy_id, chat_id, current_stage, status, entered_at, payload, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
