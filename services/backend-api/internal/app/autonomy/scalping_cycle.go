@@ -48,12 +48,12 @@ const (
 )
 
 type ScalpingPolicyConfig struct {
-	MicroAccountMaxValue    float64
-	SmallAccountMaxValue    float64
-	MicroMinConfidenceFloor float64
-	MicroMaxCapitalPct      float64
-	MicroMaxConcurrent      int
-	NoFillRecoveryMinutes   int
+	MicroAccountMaxValue     float64
+	SmallAccountMaxValue     float64
+	MicroMinConfidenceFloor  float64
+	MicroMaxCapitalPct       float64
+	MicroMaxConcurrent       int
+	NoFillRecoveryMinutes    int
 	NoFillMinConfidenceFloor float64
 	NoFillMaxCapitalPctCap   float64
 	RecoveryMicroEntryCapPct float64
@@ -120,23 +120,23 @@ type PerformanceWindowInput struct {
 }
 
 type ScalpingCycleInput struct {
-	TotalValue          float64
-	OpenPositions       int
-	DriftActive         bool
-	BaseMinConfidence   float64
-	BaseMaxCapitalPct   float64
+	TotalValue            float64
+	OpenPositions         int
+	DriftActive           bool
+	BaseMinConfidence     float64
+	BaseMaxCapitalPct     float64
 	AdjustedMaxCapitalPct float64
-	ConsecutiveLosses   int
-	Phase               string
-	PhaseMinConfidence  float64
-	PhaseMaxCapitalPct  float64
-	MilestoneProgress   float64
-	NoFillMinutes       float64
-	RiskDrawdown        float64
-	RiskExpectancy      float64
-	RiskSampleSize      int
-	RecoveryMode        string
-	PerformanceWindow   PerformanceWindowInput
+	ConsecutiveLosses     int
+	Phase                 string
+	PhaseMinConfidence    float64
+	PhaseMaxCapitalPct    float64
+	MilestoneProgress     float64
+	NoFillMinutes         float64
+	RiskDrawdown          float64
+	RiskExpectancy        float64
+	RiskSampleSize        int
+	RecoveryMode          string
+	PerformanceWindow     PerformanceWindowInput
 }
 
 type ScalpingCyclePolicy struct {

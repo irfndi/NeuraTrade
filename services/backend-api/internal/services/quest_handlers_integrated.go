@@ -32,24 +32,24 @@ type ScalpingOrderExecutor interface {
 }
 
 type IntegratedQuestHandlers struct {
-	technicalAnalysis   *TechnicalAnalysisService
-	ccxtService         interface{}
-	arbitrageService    interface{}
-	futuresArbService   interface{}
-	notificationService *NotificationService
-	monitoring          *AutonomousMonitorManager
-	questEngine         *QuestEngine
-	drawdownHalt        *MaxDrawdownHalt
-	orderExecutor       ScalpingOrderExecutor
-	aiScalpingService   *AIScalpingService
-	tradeMemory         *TradeMemory
-	lifecycleStore      *TradingLifecycleStore
-	protectionManager   *DynamicProtectionManager
-	db                  *sql.DB // Database for user settings
-	autonomyStore       *AutonomousRolloutStore
-	autonomyCoordinator *ScalpingAutonomyCoordinator
-	stalePositionMu     sync.Mutex
-	stalePositionWindow map[string]time.Time
+	technicalAnalysis    *TechnicalAnalysisService
+	ccxtService          interface{}
+	arbitrageService     interface{}
+	futuresArbService    interface{}
+	notificationService  *NotificationService
+	monitoring           *AutonomousMonitorManager
+	questEngine          *QuestEngine
+	drawdownHalt         *MaxDrawdownHalt
+	orderExecutor        ScalpingOrderExecutor
+	aiScalpingService    *AIScalpingService
+	tradeMemory          *TradeMemory
+	lifecycleStore       *TradingLifecycleStore
+	protectionManager    *DynamicProtectionManager
+	db                   *sql.DB // Database for user settings
+	autonomyStore        *AutonomousRolloutStore
+	autonomyCoordinator  *ScalpingAutonomyCoordinator
+	stalePositionMu      sync.Mutex
+	stalePositionWindow  map[string]time.Time
 	tradeJournalInitOnce sync.Once
 	tradeJournalInitErr  error
 }

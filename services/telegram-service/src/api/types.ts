@@ -222,11 +222,17 @@ export interface QuestDiagnosticsResponse {
   readonly candidate_universe_count?: number;
   readonly candidate_ranked_count?: number;
   readonly candidate_viable_count?: number;
-  readonly top_candidate_rejections?: readonly Readonly<Record<string, unknown>>[];
+  readonly top_candidate_rejections?: readonly Readonly<
+    Record<string, unknown>
+  >[];
   readonly progress_blocked?: boolean;
   readonly progress_block_reason?: string;
   readonly rollout_stage_current?: "shadow" | "paper" | "live" | string;
-  readonly rollout_status_current?: "active" | "paused" | "rolled_back" | string;
+  readonly rollout_status_current?:
+    | "active"
+    | "paused"
+    | "rolled_back"
+    | string;
   readonly rollout_gate_reason_current?: string;
   readonly last_entry_attempt_at?: string;
   readonly minutes_since_entry_attempt?: number;
