@@ -214,6 +214,17 @@ func (h *AgentControlHandler) SetStrategyMode(c *gin.Context) {
 	}
 
 	mode := autonomous.StrategyMode(strings.ToLower(strings.TrimSpace(req.Mode)))
+	switch mode {
+	case autonomous.ModeShadow, autonomous.ModePaper, autonomous.ModeLive:
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":          fmt.Sprintf("invalid mode %q; allowed modes are: shadow, paper, live", mode),
+			"allowed_modes":  []string{string(autonomous.ModeShadow), string(autonomous.ModePaper), string(autonomous.ModeLive)},
+			"requested_mode": mode,
+		})
+		return
+	}
+
 	state, err := h.autonomy.SetStrategyMode(c.Request.Context(), strategyID, mode)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

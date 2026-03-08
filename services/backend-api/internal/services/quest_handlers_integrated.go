@@ -3261,13 +3261,15 @@ func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Q
 		delete(quest.Checkpoint, "effective_policy_adjustments")
 	}
 
-	quest.Checkpoint["candidate_universe_count"] = decision.CandidateFunnel.CandidateUniverseCount
-	quest.Checkpoint["candidate_ranked_count"] = decision.CandidateFunnel.CandidateRankedCount
-	quest.Checkpoint["candidate_viable_count"] = decision.CandidateFunnel.CandidateViableCount
-	if encoded := encodeCandidateRejections(decision.CandidateFunnel.TopCandidateRejections); len(encoded) > 0 {
-		quest.Checkpoint["top_candidate_rejections"] = encoded
-	} else {
-		delete(quest.Checkpoint, "top_candidate_rejections")
+	if decision.CandidateFunnelKnown {
+		quest.Checkpoint["candidate_universe_count"] = decision.CandidateFunnel.CandidateUniverseCount
+		quest.Checkpoint["candidate_ranked_count"] = decision.CandidateFunnel.CandidateRankedCount
+		quest.Checkpoint["candidate_viable_count"] = decision.CandidateFunnel.CandidateViableCount
+		if encoded := encodeCandidateRejections(decision.CandidateFunnel.TopCandidateRejections); len(encoded) > 0 {
+			quest.Checkpoint["top_candidate_rejections"] = encoded
+		} else {
+			delete(quest.Checkpoint, "top_candidate_rejections")
+		}
 	}
 
 	if decision.ExecutionGate != nil {

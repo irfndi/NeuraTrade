@@ -578,6 +578,7 @@ type AITradingDecision struct {
 	EffectiveMaxCapitalPct          float64                             `json:"-"`
 	EffectiveMaxConcurrentPositions int                                 `json:"-"`
 	PolicyAdjustments               []string                            `json:"-"`
+	CandidateFunnelKnown            bool                                `json:"-"`
 	CandidateFunnel                 appautonomy.CandidateFunnelSnapshot `json:"-"`
 	ExecutionGate                   *appautonomy.ExecutionGateSnapshot  `json:"-"`
 }
@@ -903,6 +904,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			return
 		}
 		applyDecisionPolicy(decision, policy)
+		decision.CandidateFunnelKnown = true
 		decision.CandidateFunnel = funnel
 	}()
 
@@ -938,8 +940,6 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			decision.ConfidenceKnown = true
 		}
 	}
-	applyDecisionPolicy(decision, policy)
-
 	log.Printf("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
 
 	if err := s.validateDecision(decision, signals); err != nil {
@@ -3038,6 +3038,9 @@ func scalpingPolicyConfigFromEnv() appautonomy.ScalpingPolicyConfig {
 	}
 	if value, ok := getEnvFloat("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT"); ok && value > 0 {
 		cfg.RecoveryMicroEntryCapPct = value
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES"); value > 0 {
+		cfg.ProgressBlockAfter = time.Duration(value) * time.Minute
 	}
 	return cfg.Normalized()
 }
