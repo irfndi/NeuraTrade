@@ -77,7 +77,7 @@ PY
 first_non_empty() {
   local value
   for value in "$@"; do
-    if [[ -n "${value// }" ]]; then
+    if [[ -n "${value// /}" ]]; then
       printf '%s\n' "$value"
       return 0
     fi
@@ -104,7 +104,7 @@ describe_source() {
 
 resolve_telegram_api_base_url() {
   local env_value="${TELEGRAM_API_BASE_URL:-}"
-  if [[ -n "${env_value// }" ]]; then
+  if [[ -n "${env_value// /}" ]]; then
     printf '%s\n' "${env_value%/}"
     return 0
   fi
@@ -219,7 +219,7 @@ echo "=== Database ==="
 report_value "Database driver" "DATABASE_DRIVER" "database.driver" false false "sqlite"
 database_driver="$(printf '%s' "$REPORTED_VALUE" | tr '[:upper:]' '[:lower:]')"
 case "$database_driver" in
-  sqlite|'')
+  sqlite | '')
     report_value "SQLite path" "SQLITE_PATH" "database.sqlite_path" false false "$(read_config_value 'database.path' 2>/dev/null || true)" "${NEURATRADE_HOME}/data/neuratrade.db"
     ;;
   postgres)

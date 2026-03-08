@@ -73,7 +73,7 @@ PY
 first_non_empty() {
   local value
   for value in "$@"; do
-    if [[ -n "${value// }" ]]; then
+    if [[ -n "${value// /}" ]]; then
       printf '%s\n' "$value"
       return 0
     fi
