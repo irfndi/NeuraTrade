@@ -1582,7 +1582,7 @@ func (s *AIScalpingService) buildSystemPrompt() string {
 You analyze market data and make trading decisions. You have access to real-time market signals and portfolio state.
 
 ## Trading Rules
-1. Only trade when confidence meets or exceeds the effective threshold supplied in the user prompt
+1. Only trade when confidence meets or exceeds the effective threshold supplied in the user prompt; never use strategy-phase reference values as execution gates when they differ from the effective threshold
 2. Never size above the effective max capital percentage supplied in the user prompt
 3. Use futures with %dx leverage
 4. Always consider risk: set stop-loss and take-profit levels
@@ -1643,10 +1643,9 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 ## Autonomous Control Plane
 - Account Tier: %s
 - Strategy Phase: %s
-- Phase Min Confidence (reference only): %.2f
-- Phase Max Capital %% (reference only): %.2f
 - Effective Min Confidence (must obey): %.2f
 - Effective Max Capital %% (must obey): %.2f
+- Policy note: account-tier and recovery adjustments are already reflected in the effective values above; cite and enforce those effective values only
 - Fund Milestone Progress: %.2f%%
 - No-fill Duration (minutes): %.1f
 - State Drift Active: %t
@@ -1664,8 +1663,6 @@ Based on the signals and past trading history, what is your trading decision? Le
 		portfolio.UnrealizedPnL,
 		portfolio.AccountTier,
 		portfolio.StrategyPhase,
-		portfolio.PhaseMinConfidence,
-		portfolio.PhaseMaxCapitalPct,
 		portfolio.EffectiveMinConfidence,
 		portfolio.EffectiveMaxCapitalPct,
 		portfolio.MilestoneProgress,

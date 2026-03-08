@@ -284,6 +284,32 @@ func TestAIScalpingService_ParseDecisionWithRetries_InvalidAction(t *testing.T) 
 	assert.Equal(t, 1, mockLLM.CallCount)
 }
 
+func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testing.T) {
+	svc := &AIScalpingService{}
+	prompt := svc.buildUserPrompt(context.Background(), []aiMarketSignal{{
+		Symbol:             "PEPE/USDT",
+		Price:              1,
+		BidAskSpread:       0.04,
+		OrderBookImbalance: -0.39,
+		RangePosition24h:   27,
+	}}, TradingPortfolio{
+		USDTBalance:            50,
+		TotalValue:             50,
+		AccountTier:            "micro",
+		StrategyPhase:          "bootstrap",
+		PhaseMinConfidence:     0.75,
+		PhaseMaxCapitalPct:     1.0,
+		EffectiveMinConfidence: 0.65,
+		EffectiveMaxCapitalPct: 1.50,
+	})
+
+	assert.Contains(t, prompt, "Effective Min Confidence (must obey): 0.65")
+	assert.Contains(t, prompt, "Effective Max Capital % (must obey): 1.50")
+	assert.Contains(t, prompt, "Policy note: account-tier and recovery adjustments are already reflected")
+	assert.NotContains(t, prompt, "Phase Min Confidence (reference only)")
+	assert.NotContains(t, prompt, "Phase Max Capital % (reference only)")
+}
+
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
 	category := normalizeHoldReasonCategory(
 		reasonCategoryStrategyHold,

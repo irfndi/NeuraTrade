@@ -2577,7 +2577,7 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		decision.Reasoning,
 		fmt.Sprintf("Hold streak: %d cycle(s)", holdStreak),
 		fmt.Sprintf("Risk drawdown: %.2f%%", portfolio.RiskDrawdown*100),
-		fmt.Sprintf("Current thresholds: min_confidence=%.2f, max_capital=%.2f%%", minConfidence, maxCapital),
+		fmt.Sprintf("Effective thresholds: min_confidence=%.2f, max_capital=%.2f%%", minConfidence, maxCapital),
 		fmt.Sprintf("Unlock cycles: %d", checkpointInt(quest.Checkpoint["runtime_unlock_cycles"])),
 		fmt.Sprintf(
 			"Recovery mode: %s (clean cycles %d, entry_allowed=%t)",
@@ -2586,6 +2586,26 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 			checkpointBool(quest.Checkpoint["recovery_entry_allowed"]),
 		),
 		fmt.Sprintf("AI runtime error-rate window: %.0f%%", errorRate*100),
+	}
+	if rawAdjustments, ok := quest.Checkpoint["effective_policy_adjustments"]; ok {
+		adjustments := make([]string, 0, 4)
+		switch typed := rawAdjustments.(type) {
+		case []string:
+			adjustments = append(adjustments, typed...)
+		case []interface{}:
+			for _, entry := range typed {
+				if value, ok := entry.(string); ok && strings.TrimSpace(value) != "" {
+					adjustments = append(adjustments, value)
+				}
+			}
+		}
+		if len(adjustments) > 0 {
+			human := make([]string, 0, len(adjustments))
+			for _, adjustment := range adjustments {
+				human = append(human, strings.ReplaceAll(strings.TrimSpace(adjustment), "_", " "))
+			}
+			reasons = append(reasons[:4], append([]string{fmt.Sprintf("Policy adjustments: %s", strings.Join(human, ", "))}, reasons[4:]...)...)
+		}
 	}
 	if accountTier := checkpointString(quest.Checkpoint["account_tier"]); accountTier != "" {
 		reasons = append(reasons, fmt.Sprintf("Account tier: %s", accountTier))
