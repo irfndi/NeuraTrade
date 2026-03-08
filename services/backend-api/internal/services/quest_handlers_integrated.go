@@ -2617,23 +2617,11 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 			),
 		)
 	}
-	if rawRejections, ok := quest.Checkpoint["top_candidate_rejections"].([]map[string]interface{}); ok && len(rawRejections) > 0 {
-		for i, rejection := range rawRejections {
+	if rejections := normalizeTopCandidateRejections(quest.Checkpoint); len(rejections) > 0 {
+		for i, rejection := range rejections {
 			if i >= 2 {
 				break
 			}
-			symbol := checkpointString(rejection["symbol"])
-			reason := checkpointString(rejection["reason"])
-			if symbol != "" && reason != "" {
-				reasons = append(reasons, fmt.Sprintf("Top reject: %s (%s)", symbol, reason))
-			}
-		}
-	} else if rawRejections, ok := quest.Checkpoint["top_candidate_rejections"].([]interface{}); ok && len(rawRejections) > 0 {
-		for i, raw := range rawRejections {
-			if i >= 2 {
-				break
-			}
-			rejection, _ := raw.(map[string]interface{})
 			symbol := checkpointString(rejection["symbol"])
 			reason := checkpointString(rejection["reason"])
 			if symbol != "" && reason != "" {
@@ -3261,14 +3249,12 @@ func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Q
 		delete(quest.Checkpoint, "effective_policy_adjustments")
 	}
 
-	if decision.CandidateFunnelKnown {
+	if candidateFunnelHasData(decision.CandidateFunnel) {
 		quest.Checkpoint["candidate_universe_count"] = decision.CandidateFunnel.CandidateUniverseCount
 		quest.Checkpoint["candidate_ranked_count"] = decision.CandidateFunnel.CandidateRankedCount
 		quest.Checkpoint["candidate_viable_count"] = decision.CandidateFunnel.CandidateViableCount
 		if encoded := encodeCandidateRejections(decision.CandidateFunnel.TopCandidateRejections); len(encoded) > 0 {
 			quest.Checkpoint["top_candidate_rejections"] = encoded
-		} else {
-			delete(quest.Checkpoint, "top_candidate_rejections")
 		}
 	}
 
@@ -3297,6 +3283,40 @@ func encodeCandidateRejections(rejections []appautonomy.CandidateRejection) []ma
 		encoded = append(encoded, entry)
 	}
 	return encoded
+}
+
+func normalizeTopCandidateRejections(checkpoint map[string]interface{}) []map[string]interface{} {
+	if len(checkpoint) == 0 {
+		return nil
+	}
+	if typed, ok := checkpoint["top_candidate_rejections"].([]map[string]interface{}); ok {
+		return typed
+	}
+	raw, ok := checkpoint["top_candidate_rejections"].([]interface{})
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	converted := make([]map[string]interface{}, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(map[string]interface{})
+		if !ok || len(entry) == 0 {
+			continue
+		}
+		converted = append(converted, entry)
+	}
+	if len(converted) == 0 {
+		delete(checkpoint, "top_candidate_rejections")
+		return nil
+	}
+	checkpoint["top_candidate_rejections"] = converted
+	return converted
+}
+
+func candidateFunnelHasData(funnel appautonomy.CandidateFunnelSnapshot) bool {
+	return funnel.CandidateUniverseCount > 0 ||
+		funnel.CandidateRankedCount > 0 ||
+		funnel.CandidateViableCount > 0 ||
+		len(funnel.TopCandidateRejections) > 0
 }
 
 func decisionPolicy(decision *AITradingDecision) appautonomy.ScalpingCyclePolicy {

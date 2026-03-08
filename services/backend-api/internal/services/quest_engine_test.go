@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -1205,19 +1204,16 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 	}
 }
 
-func TestGetChatRuntimeDiagnostics_UsesEnvConfiguredProgressBlockWindow(t *testing.T) {
-	t.Setenv("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES", "30")
-	t.Cleanup(func() {
-		_ = os.Unsetenv("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES")
-	})
+func TestGetChatRuntimeDiagnostics_ProgressBlockUsesPolicyEnvOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES", "240")
 
 	engine := NewQuestEngine(NewInMemoryQuestStore())
-	lastAttempt := time.Now().UTC().Add(-45 * time.Minute)
-	engine.quests["q-cycle-env"] = &Quest{
-		ID:     "q-cycle-env",
+	lastAttempt := time.Now().UTC().Add(-3 * time.Hour)
+	engine.quests["q-cycle-progress-env"] = &Quest{
+		ID:     "q-cycle-progress-env",
 		Status: QuestStatusActive,
 		Metadata: map[string]string{
-			"chat_id":       "chat-cycle-env",
+			"chat_id":       "chat-progress-env",
 			"definition_id": "scalping_execution",
 		},
 		Checkpoint: map[string]interface{}{
@@ -1225,9 +1221,9 @@ func TestGetChatRuntimeDiagnostics_UsesEnvConfiguredProgressBlockWindow(t *testi
 		},
 	}
 
-	diag := engine.GetChatRuntimeDiagnostics("chat-cycle-env")
-	if blocked, _ := diag["progress_blocked"].(bool); !blocked {
-		t.Fatal("expected env-configured progress block to apply")
+	diag := engine.GetChatRuntimeDiagnostics("chat-progress-env")
+	if blocked, _ := diag["progress_blocked"].(bool); blocked {
+		t.Fatal("expected progress_blocked=false when env override increases block window")
 	}
 }
 
