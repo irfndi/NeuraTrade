@@ -20,6 +20,19 @@ type Dependencies struct {
 	SQLDB               *sql.DB
 }
 
+func BuildLocalIntegratedHandlers(deps Dependencies) *services.IntegratedQuestHandlers {
+	handlers := services.NewIntegratedQuestHandlers(
+		deps.TechnicalAnalysis,
+		deps.CCXTService,
+		deps.ArbitrageService,
+		deps.FuturesArbService,
+		deps.NotificationService,
+		deps.MonitoringService,
+	)
+	handlers.SetDB(deps.SQLDB)
+	return handlers
+}
+
 func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandlers, error) {
 	if deps.SQLDB == nil {
 		return nil, fmt.Errorf("build integrated autonomy handlers: sql db is nil")

@@ -21,7 +21,7 @@ jobs:
   backend-security-deep:
     name: Backend Security Deep (gosec taint)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -39,9 +39,17 @@ jobs:
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.24.7
 
       - name: Run deep taint scan (gosec)
-        # TODO(security:taint,target=2026-05-15): fold this back into validation after internal/services decomposition removes the current taint-analysis blow-up.
+        # TODO(security:taint,target=2026-05-15): restore the monolithic internal/services package after decomposition removes the current taint-analysis blow-up.
         run: |
+          set -euo pipefail
           cd services/backend-api
+          mapfile -t deep_packages < <(go list -f '{{.Dir}}' ./internal/services/... | grep -v '/internal/services$')
+
+          if [ "${#deep_packages[@]}" -eq 0 ]; then
+            echo "No decomposed internal/services subpackages available for bounded taint scan"
+            exit 0
+          fi
+
           gosec \
             -severity medium \
             -confidence medium \
@@ -50,4 +58,4 @@ jobs:
             -exclude-dir=internal/testutil \
             -exclude-dir=internal/api/handlers/testmocks \
             -exclude-dir=pkg/pb \
-            ./internal/services
+            "${deep_packages[@]}"

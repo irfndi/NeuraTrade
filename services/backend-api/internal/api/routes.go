@@ -610,29 +610,21 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("Warning: Unknown database type, AI learning disabled")
 	}
 
+	runtimeDeps := autonomyruntime.Dependencies{
+		TechnicalAnalysis:   technicalAnalysisService,
+		CCXTService:         ccxtService,
+		ArbitrageService:    arbitrageHandler,
+		FuturesArbService:   futuresArbitrageHandler,
+		NotificationService: notificationService,
+		MonitoringService:   autonomousMonitoring,
+		SQLDB:               sqlDB,
+	}
+
 	// Create integrated quest runtime handlers through app/autonomy module.
-	integratedHandlers, integratedHandlersErr := autonomyruntime.BuildIntegratedHandlers(
-		autonomyruntime.Dependencies{
-			TechnicalAnalysis:   technicalAnalysisService,
-			CCXTService:         ccxtService,
-			ArbitrageService:    arbitrageHandler,
-			FuturesArbService:   futuresArbitrageHandler,
-			NotificationService: notificationService,
-			MonitoringService:   autonomousMonitoring,
-			SQLDB:               sqlDB,
-		},
-	)
+	integratedHandlers, integratedHandlersErr := autonomyruntime.BuildIntegratedHandlers(runtimeDeps)
 	if integratedHandlersErr != nil {
 		log.Printf("Warning: autonomy runtime rollout store unavailable, using local fallback handlers: %v", integratedHandlersErr)
-		integratedHandlers = services.NewIntegratedQuestHandlers(
-			technicalAnalysisService,
-			ccxtService,
-			arbitrageHandler,
-			futuresArbitrageHandler,
-			notificationService,
-			autonomousMonitoring,
-		)
-		integratedHandlers.SetDB(sqlDB)
+		integratedHandlers = autonomyruntime.BuildLocalIntegratedHandlers(runtimeDeps)
 	}
 
 	// Wire order executor to integrated handlers for scalping execution

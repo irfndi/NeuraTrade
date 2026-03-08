@@ -29,6 +29,18 @@ func TestBuildIntegratedHandlers_WithSQLDBInitializesHandlers(t *testing.T) {
 	require.NotNil(t, handlers)
 }
 
+func TestBuildLocalIntegratedHandlers_SetsDBForFallback(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "autonomy-runtime-fallback.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := BuildLocalIntegratedHandlers(Dependencies{SQLDB: sqliteDB.DB})
+	require.NotNil(t, handlers)
+	require.NoError(t, handlers.SetAutonomyStore(nil))
+}
+
 func TestEnsureAutonomySchema_WrapsInitErrors(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "autonomy-runtime-wrap.db"))
 	require.NoError(t, err)
