@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -194,6 +195,12 @@ func (c *APIClient) makeRequest(method, endpoint string, body interface{}) ([]by
 	}
 
 	return respBody, nil
+}
+
+func withChatID(endpoint, chatID string) string {
+	query := url.Values{}
+	query.Set("chat_id", strings.TrimSpace(chatID))
+	return fmt.Sprintf("%s?%s", endpoint, query.Encode())
 }
 
 // GenerateAuthCode generates an auth code for Telegram binding
@@ -975,7 +982,7 @@ func getAutonomousStatus(cCtx *cli.Context) error {
 	client := NewAPIClient(baseURL, apiKey)
 
 	// For status, we'll use the doctor endpoint which gives us the status
-	respBody, err := client.makeRequest("GET", fmt.Sprintf("/internal/telegram/doctor?chat_id=%s", chatID), nil)
+	respBody, err := client.makeRequest("GET", withChatID("/internal/telegram/doctor", chatID), nil)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
 		fmt.Println("This is a simulated status check for demonstration purposes...")
@@ -1065,7 +1072,7 @@ func getPortfolio(cCtx *cli.Context) error {
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/portfolio?chat_id=%s", chatID), nil)
+	respBody, err := client.makeRequest("GET", withChatID("/api/v1/telegram/internal/portfolio", chatID), nil)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
 		fmt.Println("This is a simulated portfolio check for demonstration purposes...")
@@ -1127,7 +1134,7 @@ func getQuests(cCtx *cli.Context) error {
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/quests?chat_id=%s", chatID), nil)
+	respBody, err := client.makeRequest("GET", withChatID("/api/v1/telegram/internal/quests", chatID), nil)
 	if err != nil {
 		fmt.Printf("Warning: Could not reach API: %v\n", err)
 		fmt.Println("This is a simulated quests check for demonstration purposes...")
@@ -1258,7 +1265,7 @@ type BalanceResponse struct {
 
 // GetBalance retrieves account balance from the API
 func (c *APIClient) GetBalance(chatID string) (*BalanceResponse, error) {
-	respBody, err := c.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/portfolio?chat_id=%s", chatID), nil)
+	respBody, err := c.makeRequest("GET", withChatID("/api/v1/telegram/internal/portfolio", chatID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1374,7 +1381,7 @@ func viewPortfolio(cCtx *cli.Context) error {
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/portfolio?chat_id=%s", chatID), nil)
+	respBody, err := client.makeRequest("GET", withChatID("/api/v1/telegram/internal/portfolio", chatID), nil)
 	if err != nil {
 		fmt.Printf("Error: Could not reach API: %v\n", err)
 		fmt.Println("\nMake sure the NeuraTrade backend is running:")

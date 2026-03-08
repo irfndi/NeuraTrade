@@ -138,6 +138,58 @@ func TestIntegratedQuestHandlers_ExecuteRoutineUnknownDefinition(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown routine quest definition")
 }
 
+func TestIntegratedQuestHandlers_ExecuteRoutine_VolatilityWatchUsesPortfolioHealthFlow(t *testing.T) {
+	mockNotif := &NotificationService{}
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
+
+	quest := &Quest{
+		ID:           "volatility-watch",
+		Name:         "Volatility Watch",
+		Type:         QuestTypeTriggered,
+		Status:       QuestStatusActive,
+		CurrentCount: 0,
+		Checkpoint:   map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id":       "test123",
+			"definition_id": "volatility_watch",
+		},
+	}
+
+	err := handlers.ExecuteRoutine(context.Background(), quest)
+	require.NoError(t, err)
+	assert.Equal(t, 1, quest.CurrentCount)
+	assert.Contains(t, quest.Checkpoint, "last_health_check")
+	assert.Contains(t, quest.Checkpoint, "health_status")
+}
+
+func TestIntegratedQuestHandlers_ExecuteRoutine_FundGrowthGoalUpdatesCheckpoint(t *testing.T) {
+	mockNotif := &NotificationService{}
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
+
+	quest := &Quest{
+		ID:           "fund-growth",
+		Name:         "Fund Growth Target",
+		Type:         QuestTypeGoal,
+		Status:       QuestStatusActive,
+		CurrentCount: 40,
+		TargetCount:  100,
+		Checkpoint:   map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id":       "test123",
+			"definition_id": "fund_growth",
+		},
+	}
+
+	err := handlers.ExecuteRoutine(context.Background(), quest)
+	require.NoError(t, err)
+	assert.Equal(t, 40.0, quest.Checkpoint["goal_progress_pct"])
+	assert.Equal(t, 100, quest.Checkpoint["goal_target_count"])
+	assert.Equal(t, 40, quest.Checkpoint["goal_current_count"])
+	assert.Equal(t, false, quest.Checkpoint["goal_reached"])
+}
+
 func TestIntegratedQuestHandlers_SetQuestEngine(t *testing.T) {
 	engine := NewQuestEngineWithNotification(NewInMemoryQuestStore(), nil, nil)
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)

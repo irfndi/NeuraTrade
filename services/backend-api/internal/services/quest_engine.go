@@ -500,11 +500,7 @@ func (e *QuestEngine) Start() {
 	e.loadActiveQuests()
 
 	if e.redis != nil {
-		heartbeatCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		if err := e.refreshQuestLockOwnerHeartbeat(heartbeatCtx); err != nil {
-			log.Printf("[QUEST] Failed to initialize quest lock owner heartbeat: %v", err)
-		}
-		cancel()
+		go e.questLockOwnerHeartbeatLoop()
 	}
 
 	go e.schedulerLoop()
@@ -584,18 +580,9 @@ func (e *QuestEngine) Stop() {
 	}
 	close(e.stopCh)
 	e.running = false
-	redisClient := e.redis
-	ownerID := strings.TrimSpace(e.lockOwnerID)
-	clearHeartbeat := len(e.executing) == 0
 	e.mu.Unlock()
 
-	if redisClient != nil && ownerID != "" && clearHeartbeat {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
-			log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
-		}
-		cancel()
-	}
+	e.clearQuestLockOwnerHeartbeatIfIdle()
 	log.Println("Quest engine stopped")
 }
 
@@ -621,13 +608,6 @@ func (e *QuestEngine) schedulerLoop() {
 }
 
 func (e *QuestEngine) evaluateAndTick(now time.Time, force bool) {
-	if e.redis != nil {
-		heartbeatCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		if err := e.refreshQuestLockOwnerHeartbeat(heartbeatCtx); err != nil {
-			log.Printf("[QUEST] Failed to refresh quest lock owner heartbeat: %v", err)
-		}
-		cancel()
-	}
 	if !e.shouldRunTick(now, force) {
 		return
 	}
@@ -906,7 +886,7 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 		}
 		return true
 	case CadenceOnetime:
-		return false
+		return quest.LastExecutedAt == nil
 	default:
 		return false
 	}
@@ -1171,6 +1151,66 @@ func questLockOwnerHeartbeatKey(ownerID string) string {
 	return fmt.Sprintf("quest:lock-owner:%s", strings.TrimSpace(ownerID))
 }
 
+func (e *QuestEngine) questLockOwnerHeartbeatLoop() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		if e.refreshQuestLockOwnerHeartbeatCycle() {
+			return
+		}
+		<-ticker.C
+	}
+}
+
+func (e *QuestEngine) refreshQuestLockOwnerHeartbeatCycle() bool {
+	e.mu.RLock()
+	redisClient := e.redis
+	ownerID := strings.TrimSpace(e.lockOwnerID)
+	running := e.running
+	executing := len(e.executing)
+	e.mu.RUnlock()
+
+	if redisClient == nil || ownerID == "" {
+		return true
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if !running && executing == 0 {
+		if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
+			log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+		}
+		return true
+	}
+
+	if err := redisClient.Set(ctx, questLockOwnerHeartbeatKey(ownerID), time.Now().UTC().Format(time.RFC3339), questLockOwnerHeartbeatTTL).Err(); err != nil {
+		log.Printf("[QUEST] Failed to refresh quest lock owner heartbeat: %v", err)
+	}
+
+	return false
+}
+
+func (e *QuestEngine) clearQuestLockOwnerHeartbeatIfIdle() {
+	e.mu.RLock()
+	redisClient := e.redis
+	ownerID := strings.TrimSpace(e.lockOwnerID)
+	running := e.running
+	executing := len(e.executing)
+	e.mu.RUnlock()
+
+	if redisClient == nil || ownerID == "" || running || executing > 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
+		log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+	}
+}
+
 func (e *QuestEngine) refreshQuestLockOwnerHeartbeat(ctx context.Context) error {
 	if e.redis == nil {
 		return nil
@@ -1349,7 +1389,7 @@ func (e *QuestEngine) finalizeQuestExecution(quest *Quest, execErr error) {
 	} else {
 		quest.LastExecutedAt = &now
 		quest.LastError = ""
-		if quest.Type == QuestTypeRoutine {
+		if quest.Type == QuestTypeRoutine || (quest.Type == QuestTypeGoal && !questGoalReached(quest)) {
 			quest.Status = QuestStatusActive
 			quest.CompletedAt = nil
 		} else {
@@ -1377,6 +1417,9 @@ func (e *QuestEngine) markQuestExecutionFinished(questID string) {
 	delete(e.executionStarts, questID)
 	delete(e.executionLastProgress, questID)
 	delete(e.executionStage, questID)
+	if !e.running && len(e.executing) == 0 {
+		go e.clearQuestLockOwnerHeartbeatIfIdle()
+	}
 }
 
 func (e *QuestEngine) markQuestExecutionProgress(questID, stage string) {
@@ -1402,6 +1445,7 @@ func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Dura
 	}
 	if err := e.refreshQuestLockOwnerHeartbeat(ctx); err != nil {
 		log.Printf("Failed to refresh quest lock owner heartbeat: %v", err)
+		return false
 	}
 	ok, err := e.redis.SetNX(ctx, key, e.lockOwnerID, ttl).Result()
 	if err != nil {
@@ -1420,6 +1464,19 @@ func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Dura
 		return true
 	}
 	return ok
+}
+
+func questGoalReached(quest *Quest) bool {
+	if quest == nil {
+		return false
+	}
+	if quest.TargetCount > 0 && quest.CurrentCount >= quest.TargetCount {
+		return true
+	}
+	if quest.Checkpoint != nil && readQuestMetricBool(quest.Checkpoint["goal_reached"]) {
+		return true
+	}
+	return false
 }
 
 func (e *QuestEngine) releaseLock(ctx context.Context, key string) {
@@ -1812,6 +1869,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		riskCurrentDrawdown    float64
 		riskCurrentDrawdownAt  time.Time
 		hasActiveScalpingRisk  bool
+		hasRiskCurrentDrawdown bool
 		riskMaxDrawdown        float64
 		aiWindowTotal          int
 		aiWindowSuccess        int
@@ -1932,9 +1990,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 				riskCurrentDrawdown = drawdown
 				riskCurrentDrawdownAt = checkpointAt
 				hasActiveScalpingRisk = true
+				hasRiskCurrentDrawdown = true
 			case !hasActiveScalpingRisk && checkpointAt.After(riskCurrentDrawdownAt):
 				riskCurrentDrawdown = drawdown
 				riskCurrentDrawdownAt = checkpointAt
+				hasRiskCurrentDrawdown = true
 			}
 		}
 		if drawdown := readQuestMetricFloat(cp["risk_max_drawdown"]); drawdown > riskMaxDrawdown {
@@ -2086,7 +2146,9 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if strings.TrimSpace(nextUnblockCondition) != "" {
 		result["next_unblock_condition_current"] = strings.TrimSpace(nextUnblockCondition)
 	}
-	result["risk_current_drawdown"] = riskCurrentDrawdown
+	if hasRiskCurrentDrawdown {
+		result["risk_current_drawdown"] = riskCurrentDrawdown
+	}
 	result["risk_max_drawdown"] = riskMaxDrawdown
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions

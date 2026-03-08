@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -236,10 +237,14 @@ func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Que
 	switch quest.Metadata["definition_id"] {
 	case "market_scan":
 		err = h.handleMarketScanWithTA(ctx, quest)
+	case "volatility_watch":
+		err = h.handleVolatilityWatch(ctx, quest)
 	case "funding_rate_scan":
 		err = h.handleFundingRateScan(ctx, quest)
 	case "portfolio_health":
 		err = h.handlePortfolioHealthWithRisk(ctx, quest)
+	case "fund_growth":
+		err = h.handleFundGrowthGoal(ctx, quest)
 	case "scalping_execution":
 		err = h.handleScalpingExecution(ctx, quest)
 	default:
@@ -254,6 +259,29 @@ func (h *IntegratedQuestHandlers) ExecuteArbitrage(ctx context.Context, quest *Q
 	err := h.handleArbitrageExecution(ctx, quest)
 	h.recordQuestResult(quest, err == nil, decimal.Zero)
 	return err
+}
+
+func (h *IntegratedQuestHandlers) handleVolatilityWatch(ctx context.Context, quest *Quest) error {
+	return h.handlePortfolioHealthWithRisk(ctx, quest)
+}
+
+func (h *IntegratedQuestHandlers) handleFundGrowthGoal(_ context.Context, quest *Quest) error {
+	if quest == nil {
+		return fmt.Errorf("quest is nil")
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	progressPct := 0.0
+	if quest.TargetCount > 0 {
+		progressPct = math.Min(float64(quest.CurrentCount)/float64(quest.TargetCount)*100.0, 100.0)
+	}
+	goalReached := quest.TargetCount > 0 && quest.CurrentCount >= quest.TargetCount
+	quest.Checkpoint["goal_progress_pct"] = progressPct
+	quest.Checkpoint["goal_target_count"] = quest.TargetCount
+	quest.Checkpoint["goal_current_count"] = quest.CurrentCount
+	quest.Checkpoint["goal_reached"] = goalReached
+	return nil
 }
 
 // handleMarketScanWithTA scans markets using technical analysis

@@ -337,8 +337,14 @@ func TestShouldExecute_OnetimeCadence(t *testing.T) {
 	}
 
 	result := engine.shouldExecute(quest, time.Now())
-	if result != false {
-		t.Errorf("shouldExecute() for onetime cadence should always return false, got %v", result)
+	if !result {
+		t.Errorf("shouldExecute() for first onetime execution should return true, got %v", result)
+	}
+
+	quest.LastExecutedAt = ptrTime(time.Now().UTC())
+	result = engine.shouldExecute(quest, time.Now())
+	if result {
+		t.Errorf("shouldExecute() for already executed onetime quest should return false, got %v", result)
 	}
 }
 
@@ -406,6 +412,37 @@ func TestAcquireLock_ReclaimsStaleLockWhenOwnerHeartbeatMissing(t *testing.T) {
 	}
 	if owner != engine.lockOwnerID {
 		t.Fatalf("expected reclaimed lock owner %q, got %q", engine.lockOwnerID, owner)
+	}
+}
+
+func TestAcquireLock_FailsWhenOwnerHeartbeatRefreshFails(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer func() { _ = client.Close() }()
+
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	lockKey := "test:lock:heartbeat-failure"
+	ok := engine.acquireLock(ctx, lockKey, 5*time.Minute)
+	if ok {
+		t.Fatal("expected lock acquisition to fail when owner heartbeat refresh fails")
+	}
+
+	exists, err := client.Exists(context.Background(), lockKey).Result()
+	if err != nil {
+		t.Fatalf("failed to inspect lock key: %v", err)
+	}
+	if exists != 0 {
+		t.Fatal("expected lock key to remain unset after heartbeat refresh failure")
 	}
 }
 
@@ -728,6 +765,26 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	}
 }
 
+func TestGetChatRuntimeDiagnostics_OmitsRiskCurrentDrawdownWhenAbsent(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.quests["q-recovery"] = &Quest{
+		ID:     "q-recovery",
+		Status: QuestStatusActive,
+		Metadata: map[string]string{
+			"chat_id":       "chat-recovery",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"risk_max_drawdown": 0.41,
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-recovery")
+	if _, exists := diag["risk_current_drawdown"]; exists {
+		t.Fatalf("expected risk_current_drawdown to be omitted when no checkpoint provides it, got %#v", diag["risk_current_drawdown"])
+	}
+}
+
 func TestQuestEngine_ExecuteQuestPersistsFinalLocalCheckpointSnapshot(t *testing.T) {
 	store := &recordingQuestStore{}
 	engine := NewQuestEngine(store)
@@ -782,6 +839,42 @@ func TestQuestEngine_ExecuteQuestPersistsFinalLocalCheckpointSnapshot(t *testing
 	}
 	if gateType, _ := engine.quests[liveQuest.ID].Checkpoint["entry_gate_type"].(string); gateType != "none" {
 		t.Fatalf("expected in-memory entry_gate_type=none, got %q", gateType)
+	}
+}
+
+func TestFinalizeQuestExecution_GoalQuestRemainsActiveUntilReached(t *testing.T) {
+	store := &recordingQuestStore{}
+	engine := NewQuestEngine(store)
+	quest := &Quest{
+		ID:           "goal-quest",
+		Name:         "Fund Growth",
+		Type:         QuestTypeGoal,
+		Cadence:      CadenceOnetime,
+		Status:       QuestStatusActive,
+		TargetCount:  100,
+		CurrentCount: 40,
+		Checkpoint: map[string]interface{}{
+			"goal_reached": false,
+		},
+		Metadata: map[string]string{
+			"chat_id":       "chat-goal",
+			"definition_id": "fund_growth",
+		},
+	}
+
+	engine.finalizeQuestExecution(quest, nil)
+
+	if quest.Status != QuestStatusActive {
+		t.Fatalf("expected incomplete goal quest to stay active, got %s", quest.Status)
+	}
+	if quest.CompletedAt != nil {
+		t.Fatal("expected incomplete goal quest to remain without completion timestamp")
+	}
+	if store.savedQuest == nil {
+		t.Fatal("expected goal quest snapshot to be persisted")
+	}
+	if store.savedQuest.Status != QuestStatusActive {
+		t.Fatalf("expected persisted goal quest status to remain active, got %s", store.savedQuest.Status)
 	}
 }
 

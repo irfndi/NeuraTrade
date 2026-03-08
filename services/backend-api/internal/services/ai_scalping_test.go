@@ -9,6 +9,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type errorLLMClient struct {
@@ -299,8 +300,8 @@ func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackOnLLMError(t *
 		},
 	}, TradingPortfolio{})
 
-	assert.NoError(t, err)
-	assert.NotNil(t, decision)
+	require.NoError(t, err)
+	require.NotNil(t, decision)
 	assert.Equal(t, "buy", decision.Action)
 	assert.Equal(t, "BTC/USDT", decision.Symbol)
 	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
@@ -350,8 +351,8 @@ func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackAfterParseExha
 		},
 	}, TradingPortfolio{})
 
-	assert.NoError(t, err)
-	assert.NotNil(t, decision)
+	require.NoError(t, err)
+	require.NotNil(t, decision)
 	assert.Equal(t, "sell", decision.Action)
 	assert.Equal(t, "ETH/USDT", decision.Symbol)
 	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
@@ -646,16 +647,16 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RespectsConfidenceAndP
 		Price:              100,
 		High24h:            104,
 		Low24h:             96,
-		Volume24h:          2500000,
-		BidAskSpread:       0.02,
-		OrderBookImbalance: 0.58,
-		RangePosition24h:   18,
+		Volume24h:          100000000,
+		BidAskSpread:       0.005,
+		OrderBookImbalance: 0.90,
+		RangePosition24h:   5,
 	}
 	decision, _, ok := svc.deterministicFallbackCandidate(eligibleSignal, TradingPortfolio{
 		PhaseMaxCapitalPct: 0.25,
 	})
-	assert.True(t, ok)
-	assert.NotNil(t, decision)
+	require.True(t, ok)
+	require.NotNil(t, decision)
 	assert.LessOrEqual(t, decision.SizePercent, 0.25)
 }
 

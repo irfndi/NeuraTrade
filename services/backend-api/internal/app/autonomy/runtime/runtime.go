@@ -56,6 +56,8 @@ func RegisterQuestRuntime(engine *services.QuestEngine, handlers *services.Integ
 	// Keep runtime registration owned by internal/app/autonomy/runtime.
 	handlers.SetQuestEngine(engine)
 	engine.RegisterHandler(services.QuestTypeRoutine, handlers.ExecuteRoutine)
+	engine.RegisterHandler(services.QuestTypeTriggered, handlers.ExecuteRoutine)
+	engine.RegisterHandler(services.QuestTypeGoal, handlers.ExecuteRoutine)
 	engine.RegisterHandler(services.QuestTypeArbitrage, handlers.ExecuteArbitrage)
 	log.Println("[AUTONOMY-RUNTIME] integrated quest runtime registered")
 	return nil

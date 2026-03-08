@@ -393,6 +393,7 @@ type TradingPortfolio struct {
 
 type AIScalpingService struct {
 	config        AIScalpingConfig
+	exchangeMu    sync.RWMutex
 	llmClient     llm.Client
 	skillRegistry *skill.Registry
 	ccxtService   ccxt.CCXTService
@@ -478,15 +479,24 @@ type AIScalpingAutonomyState struct {
 
 // SetExchange updates the default exchange for legacy callers.
 func (s *AIScalpingService) SetExchange(exchange string) {
+	exchange = strings.ToLower(strings.TrimSpace(exchange))
+	s.exchangeMu.Lock()
 	s.config.Exchange = exchange
+	s.exchangeMu.Unlock()
 	log.Printf("[AI-SCALPING] Exchange set to: %s", exchange)
+}
+
+func (s *AIScalpingService) configuredExchange() string {
+	s.exchangeMu.RLock()
+	defer s.exchangeMu.RUnlock()
+	return strings.ToLower(strings.TrimSpace(s.config.Exchange))
 }
 
 func (s *AIScalpingService) exchangeForContext(ctx context.Context) string {
 	if exchange := strings.ToLower(strings.TrimSpace(scalpingExchangeFromContext(ctx))); exchange != "" {
 		return exchange
 	}
-	return strings.ToLower(strings.TrimSpace(s.config.Exchange))
+	return s.configuredExchange()
 }
 
 func NewAIScalpingService(
@@ -680,9 +690,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		ctx = WithScalpingAutonomyScope(ctx, scope)
 	} else if effectiveExchange != "" {
 		ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
-			Exchange:          effectiveExchange,
-			ExchangeConnected: true,
-			ConnectionChecked: true,
+			Exchange: effectiveExchange,
 		})
 	}
 
@@ -2197,13 +2205,16 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	stopLoss := decimal.Zero
 	takeProfit := decimal.Zero
 	price := decimal.NewFromFloat(signal.Price)
+	risk := decimal.NewFromFloat(riskPct)
+	reward := decimal.NewFromFloat(rewardPct)
+	one := decimal.NewFromInt(1)
 	switch action {
 	case "buy":
-		stopLoss = price.Mul(decimal.NewFromFloat(1 - riskPct))
-		takeProfit = price.Mul(decimal.NewFromFloat(1 + rewardPct))
+		stopLoss = price.Mul(one.Sub(risk))
+		takeProfit = price.Mul(one.Add(reward))
 	case "sell":
-		stopLoss = price.Mul(decimal.NewFromFloat(1 + riskPct))
-		takeProfit = price.Mul(decimal.NewFromFloat(1 - rewardPct))
+		stopLoss = price.Mul(one.Add(risk))
+		takeProfit = price.Mul(one.Sub(reward))
 	default:
 		return nil, 0, false
 	}
