@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -1129,6 +1130,25 @@ func readQuestMetricFloat(v interface{}) float64 {
 	return 0
 }
 
+func readCandidateRejections(v interface{}) []map[string]interface{} {
+	switch value := v.(type) {
+	case []map[string]interface{}:
+		return append([]map[string]interface{}(nil), value...)
+	case []interface{}:
+		converted := make([]map[string]interface{}, 0, len(value))
+		for _, item := range value {
+			entry, ok := item.(map[string]interface{})
+			if !ok || len(entry) == 0 {
+				continue
+			}
+			converted = append(converted, entry)
+		}
+		return converted
+	default:
+		return nil
+	}
+}
+
 func envFloatOrDefault(key string, fallback, min, max float64) float64 {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -1845,6 +1865,18 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		"entry_attempts_1h":                 0,
 		"entry_attempt_block_reason":        "",
 		"next_unblock_condition_current":    "",
+		"account_tier":                      "",
+		"effective_min_confidence":          0.0,
+		"effective_max_capital_pct":         0.0,
+		"candidate_universe_count":          0,
+		"candidate_ranked_count":            0,
+		"candidate_viable_count":            0,
+		"top_candidate_rejections":          []map[string]interface{}{},
+		"progress_blocked":                  false,
+		"progress_block_reason":             "",
+		"rollout_stage_current":             "",
+		"rollout_status_current":            "",
+		"rollout_gate_reason_current":       "",
 		"last_drift_repair_at":              "",
 		"last_clean_reconcile_at":           "",
 		"drift_signature":                   "",
@@ -1903,6 +1935,14 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		nextUnblockCondition           string
 		nextUnblockConditionAt         time.Time
 		hasActiveNextUnblockCondition  bool
+		accountTier                    string
+		effectiveMinConfidence         float64
+		effectiveMaxCapitalPct         float64
+		candidateUniverseCount         int
+		candidateRankedCount           int
+		candidateViableCount           int
+		topCandidateRejections         []map[string]interface{}
+		progressBlockReason            string
 		driftSignature                 string
 		driftDeadlockCycles            int
 		recoveryEntryAllowed           = true
@@ -1953,6 +1993,9 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		autonomyRolloutStatus          string
 		autonomyGateOpen               bool
 		autonomyGateReasons            []string
+		rolloutStageCurrent            string
+		rolloutStatusCurrent           string
+		rolloutGateReason              string
 		recentLossStreak               int
 		recentLossActive               bool
 		recentLossWindowSec            int
@@ -2089,6 +2132,15 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if value := readQuestMetricString(cp["autonomy_rollout_status"]); value != "" {
 			autonomyRolloutStatus = value
 		}
+		if value := readQuestMetricString(cp["rollout_stage_current"]); value != "" {
+			rolloutStageCurrent = value
+		}
+		if value := readQuestMetricString(cp["rollout_status_current"]); value != "" {
+			rolloutStatusCurrent = value
+		}
+		if value := readQuestMetricString(cp["rollout_gate_reason_current"]); value != "" {
+			rolloutGateReason = value
+		}
 		if _, exists := cp["autonomy_gate_open"]; exists {
 			autonomyGateOpen = readQuestMetricBool(cp["autonomy_gate_open"])
 		}
@@ -2128,6 +2180,21 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		entryAttempts1h = maxInt(entryAttempts1h, readQuestMetricInt(cp["runtime_entry_attempts_1h"]))
 		if reason := readQuestMetricString(cp["runtime_entry_attempt_block_reason"]); reason != "" {
 			entryAttemptBlock = reason
+		}
+		if tier := readQuestMetricString(cp["account_tier"]); tier != "" {
+			accountTier = tier
+		}
+		if value := readQuestMetricFloat(cp["effective_min_confidence"]); value > effectiveMinConfidence {
+			effectiveMinConfidence = value
+		}
+		if value := readQuestMetricFloat(cp["effective_max_capital_pct"]); value > effectiveMaxCapitalPct {
+			effectiveMaxCapitalPct = value
+		}
+		candidateUniverseCount = maxInt(candidateUniverseCount, readQuestMetricInt(cp["candidate_universe_count"]))
+		candidateRankedCount = maxInt(candidateRankedCount, readQuestMetricInt(cp["candidate_ranked_count"]))
+		candidateViableCount = maxInt(candidateViableCount, readQuestMetricInt(cp["candidate_viable_count"]))
+		if rejections := readCandidateRejections(cp["top_candidate_rejections"]); len(rejections) > 0 {
+			topCandidateRejections = rejections
 		}
 		if readQuestMetricBool(cp["state_drift_active"]) {
 			stateDriftActive = true
@@ -2227,6 +2294,21 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if strings.TrimSpace(nextUnblockCondition) != "" {
 		result["next_unblock_condition_current"] = strings.TrimSpace(nextUnblockCondition)
 	}
+	if strings.TrimSpace(accountTier) != "" {
+		result["account_tier"] = strings.TrimSpace(accountTier)
+	}
+	if effectiveMinConfidence > 0 {
+		result["effective_min_confidence"] = effectiveMinConfidence
+	}
+	if effectiveMaxCapitalPct > 0 {
+		result["effective_max_capital_pct"] = effectiveMaxCapitalPct
+	}
+	result["candidate_universe_count"] = candidateUniverseCount
+	result["candidate_ranked_count"] = candidateRankedCount
+	result["candidate_viable_count"] = candidateViableCount
+	if len(topCandidateRejections) > 0 {
+		result["top_candidate_rejections"] = topCandidateRejections
+	}
 	if hasRiskCurrentDrawdown {
 		result["risk_current_drawdown"] = riskCurrentDrawdown
 	}
@@ -2300,6 +2382,24 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if strings.TrimSpace(autonomyRolloutStatus) != "" {
 		result["autonomy_rollout_status"] = autonomyRolloutStatus
 	}
+	if strings.TrimSpace(rolloutStageCurrent) == "" {
+		rolloutStageCurrent = autonomyRolloutStage
+	}
+	if strings.TrimSpace(rolloutStatusCurrent) == "" {
+		rolloutStatusCurrent = autonomyRolloutStatus
+	}
+	if strings.TrimSpace(rolloutGateReason) == "" && len(autonomyGateReasons) > 0 {
+		rolloutGateReason = autonomyGateReasons[0]
+	}
+	if strings.TrimSpace(rolloutStageCurrent) != "" {
+		result["rollout_stage_current"] = rolloutStageCurrent
+	}
+	if strings.TrimSpace(rolloutStatusCurrent) != "" {
+		result["rollout_status_current"] = rolloutStatusCurrent
+	}
+	if strings.TrimSpace(rolloutGateReason) != "" {
+		result["rollout_gate_reason_current"] = rolloutGateReason
+	}
 	result["autonomy_gate_open"] = autonomyGateOpen
 	if len(autonomyGateReasons) > 0 {
 		result["autonomy_gate_block_reasons"] = autonomyGateReasons
@@ -2327,6 +2427,14 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		nowForAttempt := time.Now().UTC()
 		result["last_entry_attempt_at"] = lastEntryAttempt.Format(time.RFC3339)
 		result["minutes_since_entry_attempt"] = nowForAttempt.Sub(lastEntryAttempt).Minutes()
+	}
+	progressBlock := appautonomy.EvaluateProgressBlock(lastEntryAttempt, time.Now().UTC(), scalpingPolicyConfigFromEnv())
+	result["progress_blocked"] = progressBlock.Blocked
+	if strings.TrimSpace(progressBlock.Reason) != "" {
+		progressBlockReason = progressBlock.Reason
+	}
+	if strings.TrimSpace(progressBlockReason) != "" {
+		result["progress_block_reason"] = strings.TrimSpace(progressBlockReason)
 	}
 	if !latestFailureAt.IsZero() {
 		result["runtime_last_failure_at"] = latestFailureAt.Format(time.RFC3339)

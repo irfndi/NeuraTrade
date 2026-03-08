@@ -32,24 +32,26 @@ type ScalpingOrderExecutor interface {
 }
 
 type IntegratedQuestHandlers struct {
-	technicalAnalysis   *TechnicalAnalysisService
-	ccxtService         interface{}
-	arbitrageService    interface{}
-	futuresArbService   interface{}
-	notificationService *NotificationService
-	monitoring          *AutonomousMonitorManager
-	questEngine         *QuestEngine
-	drawdownHalt        *MaxDrawdownHalt
-	orderExecutor       ScalpingOrderExecutor
-	aiScalpingService   *AIScalpingService
-	tradeMemory         *TradeMemory
-	lifecycleStore      *TradingLifecycleStore
-	protectionManager   *DynamicProtectionManager
-	db                  *sql.DB // Database for user settings
-	autonomyStore       *AutonomousRolloutStore
-	autonomyCoordinator *ScalpingAutonomyCoordinator
-	stalePositionMu     sync.Mutex
-	stalePositionWindow map[string]time.Time
+	technicalAnalysis    *TechnicalAnalysisService
+	ccxtService          interface{}
+	arbitrageService     interface{}
+	futuresArbService    interface{}
+	notificationService  *NotificationService
+	monitoring           *AutonomousMonitorManager
+	questEngine          *QuestEngine
+	drawdownHalt         *MaxDrawdownHalt
+	orderExecutor        ScalpingOrderExecutor
+	aiScalpingService    *AIScalpingService
+	tradeMemory          *TradeMemory
+	lifecycleStore       *TradingLifecycleStore
+	protectionManager    *DynamicProtectionManager
+	db                   *sql.DB // Database for user settings
+	autonomyStore        *AutonomousRolloutStore
+	autonomyCoordinator  *ScalpingAutonomyCoordinator
+	stalePositionMu      sync.Mutex
+	stalePositionWindow  map[string]time.Time
+	tradeJournalInitOnce sync.Once
+	tradeJournalInitErr  error
 }
 
 const (
@@ -158,6 +160,66 @@ func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecuto
 // SetDB sets the database for user settings lookup
 func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 	h.db = db
+	if err := h.ensureTradeJournalSchema(); err != nil {
+		log.Printf("[SCALPING] Failed to initialize legacy trade journal schema: %v", err)
+	}
+}
+
+func (h *IntegratedQuestHandlers) ensureTradeJournalSchema() error {
+	if h == nil || h.db == nil {
+		return nil
+	}
+	h.tradeJournalInitOnce.Do(func() {
+		statements := []string{
+			`CREATE TABLE IF NOT EXISTS trades (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				order_id TEXT,
+				quest_id TEXT,
+				strategy_id TEXT NOT NULL,
+				strategy_version TEXT,
+				chat_id TEXT,
+				exchange TEXT NOT NULL,
+				symbol TEXT NOT NULL,
+				side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+				entry_price REAL NOT NULL,
+				exit_price REAL,
+				size REAL NOT NULL,
+				fees REAL NOT NULL DEFAULT 0,
+				pnl REAL,
+				cost_basis REAL,
+				status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'cancelled')),
+				opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				closed_at DATETIME
+			)`,
+			`ALTER TABLE trades ADD COLUMN order_id TEXT`,
+			`ALTER TABLE trades ADD COLUMN quest_id TEXT`,
+			`ALTER TABLE trades ADD COLUMN chat_id TEXT`,
+		}
+		for _, statement := range statements {
+			if _, err := h.db.Exec(statement); err != nil && !isIgnorableTradeJournalSchemaErr(err) {
+				h.tradeJournalInitErr = err
+				return
+			}
+		}
+		if _, err := h.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_order_id ON trades(order_id)`); err != nil {
+			h.tradeJournalInitErr = err
+			return
+		}
+		if _, err := h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_strategy_status ON trades(strategy_id, status)`); err != nil {
+			h.tradeJournalInitErr = err
+			return
+		}
+	})
+	return h.tradeJournalInitErr
+}
+
+func isIgnorableTradeJournalSchemaErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "duplicate column name") ||
+		strings.Contains(lower, "already exists")
 }
 
 // SetAutonomyStore sets the autonomy rollout store and applies coordinator wiring when available.
@@ -184,6 +246,13 @@ func (h *IntegratedQuestHandlers) SetQuestEngine(engine *QuestEngine) {
 
 func (h *IntegratedQuestHandlers) SetDrawdownHalt(halt *MaxDrawdownHalt) {
 	h.drawdownHalt = halt
+}
+
+func (h *IntegratedQuestHandlers) AutonomyCoordinator() *ScalpingAutonomyCoordinator {
+	if h == nil {
+		return nil
+	}
+	return h.autonomyCoordinator
 }
 
 func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
@@ -947,6 +1016,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(cycleCtx, portfolio)
 	h.applyAutonomyCheckpoint(quest)
+	h.applyScalpingCycleDecisionDiagnostics(quest, decision)
 	if shouldRecordEntryAttempt(decision, err) {
 		h.recordEntryAttempt(quest, nowUTC, livenessGate)
 	}
@@ -1073,11 +1143,25 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		if unlockClosed > 0 {
 			reasons = append(reasons, fmt.Sprintf("Risk unlock trimmed %d position(s) by 35%%", unlockClosed))
 		}
-		if livenessGate.Forced && !runtimeHold && !runtimeCategory {
-			quest.Checkpoint["runtime_entry_attempt_block_reason"] = "no_candidate_passed_filters"
-			quest.Checkpoint["runtime_next_unblock_condition"] = "Await candidate that passes pretrade validity/liquidity filters"
-			quest.Checkpoint["runtime_entry_gate_reason"] = "no candidate passed pretrade validity/liquidity filters"
-			reasons = append(reasons, "No candidate passed pretrade validity/liquidity filters in this attempt window")
+		if !runtimeHold && !runtimeCategory {
+			blockReason, nextCondition, humanReason := structuredHoldBlock(decision)
+			if blockReason != "" {
+				quest.Checkpoint["runtime_entry_attempt_block_reason"] = blockReason
+			} else if livenessGate.Forced {
+				quest.Checkpoint["runtime_entry_attempt_block_reason"] = "no_candidate_passed_filters"
+			}
+			if nextCondition != "" {
+				quest.Checkpoint["runtime_next_unblock_condition"] = nextCondition
+			} else if livenessGate.Forced {
+				quest.Checkpoint["runtime_next_unblock_condition"] = "Await candidate that passes pretrade validity/liquidity filters"
+			}
+			if humanReason != "" {
+				quest.Checkpoint["runtime_entry_gate_reason"] = humanReason
+				reasons = append(reasons, humanReason)
+			} else if livenessGate.Forced {
+				quest.Checkpoint["runtime_entry_gate_reason"] = "no candidate passed pretrade validity/liquidity filters"
+				reasons = append(reasons, "No candidate passed pretrade validity/liquidity filters in this attempt window")
+			}
 		}
 		if raw, ok := quest.Checkpoint["runtime_entry_attempt_window_progress"].(string); ok && strings.TrimSpace(raw) != "" {
 			reasons = append(reasons, fmt.Sprintf("Attempt window: %s", strings.TrimSpace(raw)))
@@ -1132,7 +1216,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
 		}
 	}
-	h.recordTradeDecision(ctx, quest, decision, userExchange)
+	h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
 	h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
 	recordAIRuntimeEvent(quest, time.Now().UTC(), aiReasonStrategyHold, true, h.getAIScalpingRuntimeSnapshot())
 	if !isDryRun {
@@ -2456,9 +2540,9 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 	}
 
 	holdStreak := checkpointInt(quest.Checkpoint["runtime_hold_streak"])
-	minConfidence := 0.0
-	maxCapital := 0.0
-	if h.aiScalpingService != nil {
+	minConfidence := checkpointFloat(quest.Checkpoint["effective_min_confidence"])
+	maxCapital := checkpointFloat(quest.Checkpoint["effective_max_capital_pct"])
+	if (minConfidence <= 0 || maxCapital <= 0) && h.aiScalpingService != nil {
 		minConfidence, maxCapital = h.aiScalpingService.dynamicRiskThresholds(ctx, portfolio)
 	}
 	runtimeHold := isRuntimeHoldReason(decision.Reasoning)
@@ -2493,7 +2577,7 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		decision.Reasoning,
 		fmt.Sprintf("Hold streak: %d cycle(s)", holdStreak),
 		fmt.Sprintf("Risk drawdown: %.2f%%", portfolio.RiskDrawdown*100),
-		fmt.Sprintf("Current thresholds: min_confidence=%.2f, max_capital=%.2f%%", minConfidence, maxCapital),
+		fmt.Sprintf("Effective thresholds: min_confidence=%.2f, max_capital=%.2f%%", minConfidence, maxCapital),
 		fmt.Sprintf("Unlock cycles: %d", checkpointInt(quest.Checkpoint["runtime_unlock_cycles"])),
 		fmt.Sprintf(
 			"Recovery mode: %s (clean cycles %d, entry_allowed=%t)",
@@ -2502,6 +2586,68 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 			checkpointBool(quest.Checkpoint["recovery_entry_allowed"]),
 		),
 		fmt.Sprintf("AI runtime error-rate window: %.0f%%", errorRate*100),
+	}
+	if rawAdjustments, ok := quest.Checkpoint["effective_policy_adjustments"]; ok {
+		adjustments := make([]string, 0, 4)
+		switch typed := rawAdjustments.(type) {
+		case []string:
+			adjustments = append(adjustments, typed...)
+		case []interface{}:
+			for _, entry := range typed {
+				if value, ok := entry.(string); ok && strings.TrimSpace(value) != "" {
+					adjustments = append(adjustments, value)
+				}
+			}
+		}
+		if len(adjustments) > 0 {
+			human := make([]string, 0, len(adjustments))
+			for _, adjustment := range adjustments {
+				human = append(human, strings.ReplaceAll(strings.TrimSpace(adjustment), "_", " "))
+			}
+			reasons = append(reasons[:4], append([]string{fmt.Sprintf("Policy adjustments: %s", strings.Join(human, ", "))}, reasons[4:]...)...)
+		}
+	}
+	if accountTier := checkpointString(quest.Checkpoint["account_tier"]); accountTier != "" {
+		reasons = append(reasons, fmt.Sprintf("Account tier: %s", accountTier))
+	}
+	if universe := checkpointInt(quest.Checkpoint["candidate_universe_count"]); universe > 0 {
+		reasons = append(
+			reasons,
+			fmt.Sprintf(
+				"Candidate funnel: universe=%d ranked=%d viable=%d",
+				universe,
+				checkpointInt(quest.Checkpoint["candidate_ranked_count"]),
+				checkpointInt(quest.Checkpoint["candidate_viable_count"]),
+			),
+		)
+	}
+	if rolloutStage := checkpointString(quest.Checkpoint["rollout_stage_current"]); rolloutStage == "" {
+		rolloutStage = checkpointString(quest.Checkpoint["autonomy_rollout_stage"])
+		if rolloutStage != "" {
+			rolloutStatus := checkpointString(quest.Checkpoint["autonomy_rollout_status"])
+			reasons = append(reasons, fmt.Sprintf("Rollout stage: %s (status=%s)", rolloutStage, rolloutStatus))
+		}
+	} else {
+		reasons = append(
+			reasons,
+			fmt.Sprintf(
+				"Rollout stage: %s (status=%s)",
+				rolloutStage,
+				checkpointString(quest.Checkpoint["rollout_status_current"]),
+			),
+		)
+	}
+	if rejections := normalizeTopCandidateRejections(quest.Checkpoint); len(rejections) > 0 {
+		for i, rejection := range rejections {
+			if i >= 2 {
+				break
+			}
+			symbol := checkpointString(rejection["symbol"])
+			reason := checkpointString(rejection["reason"])
+			if symbol != "" && reason != "" {
+				reasons = append(reasons, fmt.Sprintf("Top reject: %s (%s)", symbol, reason))
+			}
+		}
 	}
 	if recentWindowSec := checkpointInt(quest.Checkpoint["recovery_recent_loss_window_seconds"]); recentWindowSec > 0 {
 		reasons = append(
@@ -3100,6 +3246,135 @@ func (h *IntegratedQuestHandlers) applyAutonomyCheckpoint(quest *Quest) {
 	}
 }
 
+func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Quest, decision *AITradingDecision) {
+	if quest == nil || quest.Checkpoint == nil || decision == nil {
+		return
+	}
+
+	if decision.AccountTier != "" {
+		quest.Checkpoint["account_tier"] = decision.AccountTier
+	}
+	if decision.EffectiveMinConfidence > 0 {
+		quest.Checkpoint["effective_min_confidence"] = decision.EffectiveMinConfidence
+	}
+	if decision.EffectiveMaxCapitalPct > 0 {
+		quest.Checkpoint["effective_max_capital_pct"] = decision.EffectiveMaxCapitalPct
+	}
+	if decision.EffectiveMaxConcurrentPositions > 0 {
+		quest.Checkpoint["effective_max_concurrent_positions"] = decision.EffectiveMaxConcurrentPositions
+	}
+	if len(decision.PolicyAdjustments) > 0 {
+		quest.Checkpoint["effective_policy_adjustments"] = append([]string(nil), decision.PolicyAdjustments...)
+	} else {
+		delete(quest.Checkpoint, "effective_policy_adjustments")
+	}
+
+	if candidateFunnelHasData(decision.CandidateFunnel) {
+		quest.Checkpoint["candidate_universe_count"] = decision.CandidateFunnel.CandidateUniverseCount
+		quest.Checkpoint["candidate_ranked_count"] = decision.CandidateFunnel.CandidateRankedCount
+		quest.Checkpoint["candidate_viable_count"] = decision.CandidateFunnel.CandidateViableCount
+		if encoded := encodeCandidateRejections(decision.CandidateFunnel.TopCandidateRejections); len(encoded) > 0 {
+			quest.Checkpoint["top_candidate_rejections"] = encoded
+		}
+	}
+
+	if decision.ExecutionGate != nil {
+		quest.Checkpoint["rollout_stage_current"] = decision.ExecutionGate.RolloutStageCurrent
+		quest.Checkpoint["rollout_status_current"] = decision.ExecutionGate.RolloutStatusCurrent
+		quest.Checkpoint["rollout_gate_reason_current"] = decision.ExecutionGate.RolloutGateReason
+	} else {
+		delete(quest.Checkpoint, "rollout_gate_reason_current")
+	}
+}
+
+func encodeCandidateRejections(rejections []appautonomy.CandidateRejection) []map[string]interface{} {
+	if len(rejections) == 0 {
+		return nil
+	}
+	encoded := make([]map[string]interface{}, 0, len(rejections))
+	for _, rejection := range rejections {
+		entry := map[string]interface{}{
+			"symbol": rejection.Symbol,
+			"reason": rejection.Reason,
+		}
+		if rejection.EstimatedConfidence > 0 {
+			entry["estimated_confidence"] = rejection.EstimatedConfidence
+		}
+		encoded = append(encoded, entry)
+	}
+	return encoded
+}
+
+func normalizeTopCandidateRejections(checkpoint map[string]interface{}) []map[string]interface{} {
+	if len(checkpoint) == 0 {
+		return nil
+	}
+	if typed, ok := checkpoint["top_candidate_rejections"].([]map[string]interface{}); ok {
+		return typed
+	}
+	raw, ok := checkpoint["top_candidate_rejections"].([]interface{})
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	converted := make([]map[string]interface{}, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(map[string]interface{})
+		if !ok || len(entry) == 0 {
+			continue
+		}
+		converted = append(converted, entry)
+	}
+	if len(converted) == 0 {
+		delete(checkpoint, "top_candidate_rejections")
+		return nil
+	}
+	checkpoint["top_candidate_rejections"] = converted
+	return converted
+}
+
+func candidateFunnelHasData(funnel appautonomy.CandidateFunnelSnapshot) bool {
+	return funnel.CandidateUniverseCount > 0 ||
+		funnel.CandidateRankedCount > 0 ||
+		funnel.CandidateViableCount > 0 ||
+		len(funnel.TopCandidateRejections) > 0
+}
+
+func decisionPolicy(decision *AITradingDecision) appautonomy.ScalpingCyclePolicy {
+	if decision == nil {
+		return appautonomy.ScalpingCyclePolicy{}
+	}
+	return appautonomy.ScalpingCyclePolicy{
+		AccountTier:            decision.AccountTier,
+		EffectiveMinConfidence: decision.EffectiveMinConfidence,
+		EffectiveMaxCapitalPct: decision.EffectiveMaxCapitalPct,
+		MaxConcurrentPositions: decision.EffectiveMaxConcurrentPositions,
+	}
+}
+
+func structuredHoldBlock(decision *AITradingDecision) (string, string, string) {
+	if decision == nil {
+		return "", "", ""
+	}
+	policy := decisionPolicy(decision)
+	if decision.ExecutionGate != nil && strings.TrimSpace(decision.ExecutionGate.BlockCode) != "" {
+		reasonCode := strings.TrimSpace(decision.ExecutionGate.BlockCode)
+		humanReason := strings.TrimSpace(decision.ExecutionGate.BlockReason)
+		if humanReason == "" {
+			humanReason = reasonCode
+		}
+		return reasonCode, appautonomy.NextUnblockCondition(reasonCode, policy), humanReason
+	}
+	if len(decision.CandidateFunnel.TopCandidateRejections) > 0 {
+		top := decision.CandidateFunnel.TopCandidateRejections[0]
+		humanReason := strings.TrimSpace(top.Reason)
+		if strings.TrimSpace(top.Symbol) != "" {
+			humanReason = fmt.Sprintf("top candidate %s rejected: %s", top.Symbol, top.Reason)
+		}
+		return top.Reason, appautonomy.NextUnblockCondition(top.Reason, policy), humanReason
+	}
+	return "", "", ""
+}
+
 func autonomyInitTimeout() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("AUTONOMY_INIT_TIMEOUT"))
 	if raw == "" {
@@ -3112,8 +3387,14 @@ func autonomyInitTimeout() time.Duration {
 	return timeout
 }
 
-func (h *IntegratedQuestHandlers) recordTradeDecision(ctx context.Context, quest *Quest, decision *AITradingDecision, exchange string) {
-	if h.tradeMemory == nil || decision == nil || decision.Action == "hold" {
+func (h *IntegratedQuestHandlers) recordTradeDecision(
+	ctx context.Context,
+	quest *Quest,
+	decision *AITradingDecision,
+	exchange string,
+	portfolio TradingPortfolio,
+) {
+	if decision == nil || decision.Action == "hold" {
 		return
 	}
 
@@ -3122,28 +3403,157 @@ func (h *IntegratedQuestHandlers) recordTradeDecision(ctx context.Context, quest
 		tradeID = fmt.Sprintf("ai-order-%d", time.Now().UnixNano())
 	}
 
-	record := AITradeRecord{
-		ID:          tradeID,
-		Timestamp:   time.Now().UTC(),
-		Exchange:    exchange,
-		Symbol:      decision.Symbol,
-		Action:      decision.Action,
-		SizePercent: decision.SizePercent,
-		Confidence:  decision.Confidence,
-		Reasoning:   decision.Reasoning,
-		MarketContext: fmt.Sprintf(
-			"chat_id=%s,quest_id=%s,definition=%s",
-			quest.Metadata["chat_id"],
-			quest.ID,
-			quest.Metadata["definition_id"],
-		),
+	if h.tradeMemory != nil {
+		record := AITradeRecord{
+			ID:          tradeID,
+			Timestamp:   time.Now().UTC(),
+			Exchange:    exchange,
+			Symbol:      decision.Symbol,
+			Action:      decision.Action,
+			SizePercent: decision.SizePercent,
+			Confidence:  decision.Confidence,
+			Reasoning:   decision.Reasoning,
+			MarketContext: fmt.Sprintf(
+				"chat_id=%s,quest_id=%s,definition=%s",
+				quest.Metadata["chat_id"],
+				quest.ID,
+				quest.Metadata["definition_id"],
+			),
+		}
+		if err := h.tradeMemory.RecordDecision(ctx, record); err != nil {
+			log.Printf("[AI-MEMORY] Failed to record decision %s: %v", tradeID, err)
+		}
 	}
-	if err := h.tradeMemory.RecordDecision(ctx, record); err != nil {
-		log.Printf("[AI-MEMORY] Failed to record decision %s: %v", tradeID, err)
+
+	h.persistLegacyTradeEntry(ctx, quest, decision, exchange, portfolio, tradeID)
+	quest.Checkpoint["trade_memory_id"] = tradeID
+}
+
+func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
+	ctx context.Context,
+	quest *Quest,
+	decision *AITradingDecision,
+	exchange string,
+	portfolio TradingPortfolio,
+	tradeID string,
+) {
+	if h == nil || h.db == nil || quest == nil || decision == nil {
+		return
+	}
+	if err := h.ensureTradeJournalSchema(); err != nil {
+		log.Printf("[SCALPING] Legacy trade journal schema unavailable: %v", err)
 		return
 	}
 
-	quest.Checkpoint["trade_memory_id"] = tradeID
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+	strategyID := ScalpingStrategyID(chatID)
+	entryPrice := 0.0
+	if decision.EntryPrice != nil {
+		entryPrice = decision.EntryPrice.InexactFloat64()
+	}
+	size := portfolio.USDTBalance * decision.SizePercent / 100
+	if size <= 0 {
+		size = decision.SizePercent
+	}
+	now := time.Now().UTC()
+	if _, err := h.db.ExecContext(
+		ctx,
+		`INSERT INTO trades (
+			order_id, quest_id, strategy_id, strategy_version, chat_id, exchange, symbol, side,
+			entry_price, size, cost_basis, status, opened_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open',$12)
+		ON CONFLICT(order_id) DO UPDATE SET
+			quest_id = EXCLUDED.quest_id,
+			strategy_id = EXCLUDED.strategy_id,
+			strategy_version = EXCLUDED.strategy_version,
+			chat_id = EXCLUDED.chat_id,
+			exchange = EXCLUDED.exchange,
+			symbol = EXCLUDED.symbol,
+			side = EXCLUDED.side,
+			entry_price = EXCLUDED.entry_price,
+			size = EXCLUDED.size,
+			cost_basis = EXCLUDED.cost_basis,
+			status = 'open',
+			opened_at = EXCLUDED.opened_at,
+			closed_at = NULL`,
+		tradeID,
+		quest.ID,
+		strategyID,
+		portfolio.StrategyPhase,
+		chatID,
+		exchange,
+		decision.Symbol,
+		decision.Action,
+		entryPrice,
+		size,
+		size,
+		now,
+	); err != nil {
+		log.Printf("[SCALPING] Failed to persist legacy trade journal entry %s: %v", tradeID, err)
+	}
+}
+
+func (h *IntegratedQuestHandlers) persistLegacyTradeClose(
+	ctx context.Context,
+	quest *Quest,
+	orderID, exchange, symbol, side string,
+	entryPrice, exitPrice, size, pnl, fees decimal.Decimal,
+	closedAt time.Time,
+) {
+	if h == nil || h.db == nil || quest == nil || strings.TrimSpace(orderID) == "" {
+		return
+	}
+	if err := h.ensureTradeJournalSchema(); err != nil {
+		log.Printf("[SCALPING] Legacy trade journal schema unavailable: %v", err)
+		return
+	}
+
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+	strategyID := ScalpingStrategyID(chatID)
+	if closedAt.IsZero() {
+		closedAt = time.Now().UTC()
+	}
+	if _, err := h.db.ExecContext(
+		ctx,
+		`INSERT INTO trades (
+			order_id, quest_id, strategy_id, strategy_version, chat_id, exchange, symbol, side,
+			entry_price, exit_price, size, fees, pnl, cost_basis, status, opened_at, closed_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'closed',$15,$16)
+		ON CONFLICT(order_id) DO UPDATE SET
+			quest_id = EXCLUDED.quest_id,
+			strategy_id = EXCLUDED.strategy_id,
+			strategy_version = EXCLUDED.strategy_version,
+			chat_id = EXCLUDED.chat_id,
+			exchange = EXCLUDED.exchange,
+			symbol = EXCLUDED.symbol,
+			side = EXCLUDED.side,
+			entry_price = CASE WHEN EXCLUDED.entry_price > 0 THEN EXCLUDED.entry_price ELSE trades.entry_price END,
+			exit_price = EXCLUDED.exit_price,
+			size = CASE WHEN EXCLUDED.size > 0 THEN EXCLUDED.size ELSE trades.size END,
+			fees = EXCLUDED.fees,
+			pnl = EXCLUDED.pnl,
+			cost_basis = CASE WHEN EXCLUDED.cost_basis > 0 THEN EXCLUDED.cost_basis ELSE trades.cost_basis END,
+			status = 'closed',
+			closed_at = EXCLUDED.closed_at`,
+		orderID,
+		quest.ID,
+		strategyID,
+		checkpointString(quest.Checkpoint["strategy_phase"]),
+		chatID,
+		exchange,
+		symbol,
+		side,
+		entryPrice.InexactFloat64(),
+		exitPrice.InexactFloat64(),
+		size.InexactFloat64(),
+		fees.InexactFloat64(),
+		pnl.InexactFloat64(),
+		entryPrice.Mul(size).InexactFloat64(),
+		closedAt,
+		closedAt,
+	); err != nil {
+		log.Printf("[SCALPING] Failed to persist legacy trade journal close %s: %v", orderID, err)
+	}
 }
 
 func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context, quest *Quest, exchange, symbol string) {
@@ -3247,12 +3657,14 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		processed[orderID] = true
 		updatedProcessed = true
 
+		fees := decimal.Zero
+		if v, ok := decimalFromOrder(order, "fees", "fee", "totalFee", "commission"); ok {
+			fees = v
+		}
+		closedAt := timestampFromOrder(order)
+		h.persistLegacyTradeClose(ctx, quest, orderID, exchange, symbol, side, entryPrice, exitPrice, filled, pnl, fees, closedAt)
+
 		if h.lifecycleStore != nil {
-			fees := decimal.Zero
-			if v, ok := decimalFromOrder(order, "fees", "fee", "totalFee", "commission"); ok {
-				fees = v
-			}
-			closedAt := timestampFromOrder(order)
 			if err := h.lifecycleStore.RecordClosedOrder(ctx, LifecycleCloseRecord{
 				OrderID:     orderID,
 				ChatID:      quest.Metadata["chat_id"],
