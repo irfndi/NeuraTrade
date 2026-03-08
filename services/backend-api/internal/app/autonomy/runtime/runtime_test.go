@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildIntegratedHandlers_WithoutSQLDBReturnsFallbackAndError(t *testing.T) {
+func TestBuildIntegratedHandlers_WithoutSQLDBReturnsNilAndError(t *testing.T) {
 	handlers, err := BuildIntegratedHandlers(Dependencies{})
 	require.Error(t, err)
-	require.NotNil(t, handlers)
+	require.Nil(t, handlers)
 	assert.Contains(t, err.Error(), "sql db is nil")
 }
 

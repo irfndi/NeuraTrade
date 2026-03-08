@@ -21,24 +21,14 @@ type Dependencies struct {
 }
 
 func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandlers, error) {
-	fallback := services.NewIntegratedQuestHandlers(
-		deps.TechnicalAnalysis,
-		deps.CCXTService,
-		deps.ArbitrageService,
-		deps.FuturesArbService,
-		deps.NotificationService,
-		deps.MonitoringService,
-	)
-	fallback.SetDB(deps.SQLDB)
-
 	if deps.SQLDB == nil {
-		return fallback, fmt.Errorf("build integrated autonomy handlers: sql db is nil")
+		return nil, fmt.Errorf("build integrated autonomy handlers: sql db is nil")
 	}
 
 	schemaCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := EnsureAutonomySchema(schemaCtx, deps.SQLDB); err != nil {
-		return fallback, fmt.Errorf("build integrated autonomy handlers: ensure autonomy schema: %w", err)
+		return nil, fmt.Errorf("build integrated autonomy handlers: ensure autonomy schema: %w", err)
 	}
 
 	handlers, err := services.NewIntegratedQuestHandlersWithAutonomyStore(
@@ -52,7 +42,7 @@ func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandle
 		nil,
 	)
 	if err != nil {
-		return fallback, fmt.Errorf("build integrated autonomy handlers: %w", err)
+		return nil, fmt.Errorf("build integrated autonomy handlers: %w", err)
 	}
 	return handlers, nil
 }

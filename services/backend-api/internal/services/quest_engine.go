@@ -179,6 +179,7 @@ type QuestEngine struct {
 	redis                     *redis.Client
 	stopCh                    chan struct{}
 	stopChClosed              bool
+	runCancel                 context.CancelFunc
 	running                   bool
 	lockOwnerID               string
 	cadenceMode               string
@@ -494,10 +495,19 @@ func (e *QuestEngine) Start() {
 		log.Println("[QUEST] Start called but already running")
 		return
 	}
-	if e.stopCh == nil || e.stopChClosed {
-		e.stopCh = make(chan struct{})
-		e.stopChClosed = false
+	if e.runCancel != nil {
+		e.runCancel()
+		e.runCancel = nil
 	}
+	if e.stopCh != nil && !e.stopChClosed {
+		close(e.stopCh)
+		e.stopChClosed = true
+	}
+	e.stopCh = make(chan struct{})
+	e.stopChClosed = false
+	runStopCh := e.stopCh
+	runCtx, runCancel := context.WithCancel(context.Background())
+	e.runCancel = runCancel
 	e.running = true
 	e.runtimeBudget = computeQuestRuntimeBudget()
 	e.mu.Unlock()
@@ -506,10 +516,10 @@ func (e *QuestEngine) Start() {
 	e.loadActiveQuests()
 
 	if e.redis != nil {
-		go e.questLockOwnerHeartbeatLoop()
+		go e.questLockOwnerHeartbeatLoop(runCtx)
 	}
 
-	go e.schedulerLoop()
+	go e.schedulerLoop(runStopCh)
 	log.Printf("[QUEST] Quest engine started")
 	log.Printf("[QUEST] Initial state: %d quests loaded, running=%v", len(e.quests), e.running)
 	log.Printf(
@@ -584,6 +594,10 @@ func (e *QuestEngine) Stop() {
 		e.mu.Unlock()
 		return
 	}
+	if e.runCancel != nil {
+		e.runCancel()
+		e.runCancel = nil
+	}
 	if e.stopCh != nil && !e.stopChClosed {
 		close(e.stopCh)
 		e.stopChClosed = true
@@ -596,7 +610,7 @@ func (e *QuestEngine) Stop() {
 }
 
 // schedulerLoop runs the periodic quest scheduling
-func (e *QuestEngine) schedulerLoop() {
+func (e *QuestEngine) schedulerLoop(stopCh <-chan struct{}) {
 	log.Println("[QUEST] Scheduler loop started")
 	ticker := time.NewTicker(defaultQuestSchedulerPoll)
 	defer ticker.Stop()
@@ -607,7 +621,7 @@ func (e *QuestEngine) schedulerLoop() {
 
 	for {
 		select {
-		case <-e.stopCh:
+		case <-stopCh:
 			log.Println("[QUEST] Scheduler loop stopped")
 			return
 		case <-ticker.C:
@@ -1164,19 +1178,29 @@ func questLockOwnerHeartbeatKey(ownerID string) string {
 	return fmt.Sprintf("quest:lock-owner:%s", strings.TrimSpace(ownerID))
 }
 
-func (e *QuestEngine) questLockOwnerHeartbeatLoop() {
+func (e *QuestEngine) questLockOwnerHeartbeatLoop(runCtx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
-		if e.refreshQuestLockOwnerHeartbeatCycle() {
+		if e.refreshQuestLockOwnerHeartbeatCycle(runCtx) {
 			return
 		}
-		<-ticker.C
+		select {
+		case <-runCtx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 
-func (e *QuestEngine) refreshQuestLockOwnerHeartbeatCycle() bool {
+func (e *QuestEngine) refreshQuestLockOwnerHeartbeatCycle(runCtx context.Context) bool {
+	select {
+	case <-runCtx.Done():
+		return true
+	default:
+	}
+
 	e.mu.RLock()
 	redisClient := e.redis
 	ownerID := strings.TrimSpace(e.lockOwnerID)
@@ -1188,8 +1212,11 @@ func (e *QuestEngine) refreshQuestLockOwnerHeartbeatCycle() bool {
 		return true
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(runCtx, time.Second)
 	defer cancel()
+	if ctx.Err() != nil {
+		return true
+	}
 
 	if !running && executing == 0 {
 		if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
@@ -1805,7 +1832,6 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		"recovery_clean_cycles_current":     0,
 		"recovery_clean_cycles_required":    1,
 		"recovery_cycles_to_entry":          0,
-		"recovery_gate_eval_at":             "",
 		"recovery_entry_allowed":            true,
 		"recovery_next_condition":           "",
 		"state_drift_active":                false,
@@ -1936,9 +1962,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if strings.TrimSpace(quest.Metadata["chat_id"]) != chatID {
 			continue
 		}
-		checkpointAt := quest.UpdatedAt.UTC()
-		if evalAt := readCheckpointTime(quest.Checkpoint["recovery_gate_eval_at"]); evalAt.After(checkpointAt) {
-			checkpointAt = evalAt
+		cp := quest.Checkpoint
+		selectionAt := quest.UpdatedAt.UTC()
+		checkpointAt := readCheckpointTime(cp["recovery_gate_eval_at"])
+		if checkpointAt.After(selectionAt) {
+			selectionAt = checkpointAt
 		}
 		isActiveScalpingQuest := strings.TrimSpace(quest.Metadata["definition_id"]) == "scalping_execution" &&
 			quest.Status == QuestStatusActive
@@ -1980,10 +2008,6 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			staleResetReason = strings.TrimSpace(e.executionStaleResetReason[quest.ID])
 		}
 
-		cp := quest.Checkpoint
-		if cp == nil {
-			continue
-		}
 		holdStreak = maxInt(holdStreak, readQuestMetricInt(cp["runtime_hold_streak"]))
 		unlockCycles = maxInt(unlockCycles, readQuestMetricInt(cp["runtime_unlock_cycles"]))
 		failureStreak = maxInt(failureStreak, readQuestMetricInt(cp["runtime_failure_streak"]))
@@ -2000,22 +2024,22 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			switch {
 			case isActiveScalpingQuest:
 				recoveryNextCondition = nextCondition
-				recoveryNextConditionAt = checkpointAt
+				recoveryNextConditionAt = selectionAt
 				hasActiveRecoveryNextCondition = true
-			case !hasActiveRecoveryNextCondition && checkpointAt.After(recoveryNextConditionAt):
+			case !hasActiveRecoveryNextCondition && selectionAt.After(recoveryNextConditionAt):
 				recoveryNextCondition = nextCondition
-				recoveryNextConditionAt = checkpointAt
+				recoveryNextConditionAt = selectionAt
 			}
 		}
 		if unblock := readQuestMetricString(cp["runtime_next_unblock_condition"]); unblock != "" {
 			switch {
 			case isActiveScalpingQuest:
 				nextUnblockCondition = unblock
-				nextUnblockConditionAt = checkpointAt
+				nextUnblockConditionAt = selectionAt
 				hasActiveNextUnblockCondition = true
-			case !hasActiveNextUnblockCondition && checkpointAt.After(nextUnblockConditionAt):
+			case !hasActiveNextUnblockCondition && selectionAt.After(nextUnblockConditionAt):
 				nextUnblockCondition = unblock
-				nextUnblockConditionAt = checkpointAt
+				nextUnblockConditionAt = selectionAt
 			}
 		}
 		if _, exists := cp["recovery_entry_allowed"]; exists {
@@ -2025,24 +2049,24 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			switch {
 			case isActiveScalpingQuest:
 				entryGateType = gateType
-				entryGateTypeAt = checkpointAt
+				entryGateTypeAt = selectionAt
 				hasActiveEntryGateType = true
-			case !hasActiveEntryGateType && checkpointAt.After(entryGateTypeAt):
+			case !hasActiveEntryGateType && selectionAt.After(entryGateTypeAt):
 				entryGateType = gateType
-				entryGateTypeAt = checkpointAt
+				entryGateTypeAt = selectionAt
 			}
 		}
 		if raw, exists := cp["risk_current_drawdown"]; exists {
 			drawdown := readQuestMetricFloat(raw)
 			switch {
-			case isActiveScalpingQuest && (!hasActiveScalpingRisk || checkpointAt.After(riskCurrentDrawdownAt)):
+			case isActiveScalpingQuest && (!hasActiveScalpingRisk || selectionAt.After(riskCurrentDrawdownAt)):
 				riskCurrentDrawdown = drawdown
-				riskCurrentDrawdownAt = checkpointAt
+				riskCurrentDrawdownAt = selectionAt
 				hasActiveScalpingRisk = true
 				hasRiskCurrentDrawdown = true
-			case !hasActiveScalpingRisk && checkpointAt.After(riskCurrentDrawdownAt):
+			case !hasActiveScalpingRisk && selectionAt.After(riskCurrentDrawdownAt):
 				riskCurrentDrawdown = drawdown
-				riskCurrentDrawdownAt = checkpointAt
+				riskCurrentDrawdownAt = selectionAt
 				hasRiskCurrentDrawdown = true
 			}
 		}
@@ -2127,11 +2151,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			switch {
 			case isActiveScalpingQuest:
 				entryGateReasonCurrent = reason
-				entryGateReasonCurrentAt = checkpointAt
+				entryGateReasonCurrentAt = selectionAt
 				hasActiveEntryGateReason = true
-			case !hasActiveEntryGateReason && checkpointAt.After(entryGateReasonCurrentAt):
+			case !hasActiveEntryGateReason && selectionAt.After(entryGateReasonCurrentAt):
 				entryGateReasonCurrent = reason
-				entryGateReasonCurrentAt = checkpointAt
+				entryGateReasonCurrentAt = selectionAt
 			}
 		}
 

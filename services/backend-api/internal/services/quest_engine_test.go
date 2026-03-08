@@ -340,48 +340,71 @@ func TestShouldExecute_WeeklyCadence(t *testing.T) {
 func TestShouldExecute_OnetimeCadence(t *testing.T) {
 	store := NewInMemoryQuestStore()
 	engine := NewQuestEngine(store)
+	now := time.Now().UTC()
 
-	quest := &Quest{
-		ID:             "test-1",
-		Cadence:        CadenceOnetime,
-		Status:         QuestStatusActive,
-		LastExecutedAt: nil,
-	}
-
-	result := engine.shouldExecute(quest, time.Now())
-	if !result {
-		t.Errorf("shouldExecute() for first onetime execution should return true, got %v", result)
-	}
-
-	quest.LastExecutedAt = ptrTime(time.Now().UTC())
-	result = engine.shouldExecute(quest, time.Now())
-	if result {
-		t.Errorf("shouldExecute() for already executed onetime quest should return false, got %v", result)
-	}
-
-	goalQuest := &Quest{
-		ID:             "goal-1",
-		Type:           QuestTypeGoal,
-		Cadence:        CadenceOnetime,
-		Status:         QuestStatusActive,
-		TargetCount:    100,
-		CurrentCount:   40,
-		LastExecutedAt: ptrTime(time.Now().UTC()),
-		Checkpoint: map[string]interface{}{
-			"goal_reached": false,
+	tests := []struct {
+		name     string
+		quest    *Quest
+		expected bool
+	}{
+		{
+			name: "first onetime execution runs",
+			quest: &Quest{
+				ID:             "test-1",
+				Cadence:        CadenceOnetime,
+				Status:         QuestStatusActive,
+				LastExecutedAt: nil,
+			},
+			expected: true,
+		},
+		{
+			name: "already executed onetime quest stays paused",
+			quest: &Quest{
+				ID:             "test-2",
+				Cadence:        CadenceOnetime,
+				Status:         QuestStatusActive,
+				LastExecutedAt: ptrTime(now),
+			},
+			expected: false,
+		},
+		{
+			name: "active incomplete goal quest reruns",
+			quest: &Quest{
+				ID:             "goal-1",
+				Type:           QuestTypeGoal,
+				Cadence:        CadenceOnetime,
+				Status:         QuestStatusActive,
+				TargetCount:    100,
+				CurrentCount:   40,
+				LastExecutedAt: ptrTime(now),
+				Checkpoint: map[string]interface{}{
+					"goal_reached": false,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "completed goal quest does not rerun",
+			quest: &Quest{
+				ID:             "goal-2",
+				Type:           QuestTypeGoal,
+				Cadence:        CadenceOnetime,
+				Status:         QuestStatusActive,
+				TargetCount:    100,
+				CurrentCount:   100,
+				LastExecutedAt: ptrTime(now),
+				Checkpoint: map[string]interface{}{
+					"goal_reached": true,
+				},
+			},
+			expected: false,
 		},
 	}
 
-	result = engine.shouldExecute(goalQuest, time.Now())
-	if !result {
-		t.Errorf("shouldExecute() for active incomplete goal quest should return true, got %v", result)
-	}
-
-	goalQuest.CurrentCount = 100
-	goalQuest.Checkpoint["goal_reached"] = true
-	result = engine.shouldExecute(goalQuest, time.Now())
-	if result {
-		t.Errorf("shouldExecute() for completed goal quest should return false, got %v", result)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, engine.shouldExecute(tt.quest, now))
+		})
 	}
 }
 
@@ -822,6 +845,27 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	}
 	if usable, _ := aiRuntime["provider_chain_usable"].(int); usable != 1 {
 		t.Fatalf("expected ai_runtime.provider_chain_usable=1, got %d", usable)
+	}
+}
+
+func TestGetChatRuntimeDiagnostics_OmitsRecoveryGateEvalAtWhenCheckpointMissing(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.quests["q-recovery"] = &Quest{
+		ID:        "q-recovery",
+		Status:    QuestStatusActive,
+		UpdatedAt: time.Now().UTC(),
+		Metadata: map[string]string{
+			"chat_id":       "chat-recovery",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_mode": "micro_entry",
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-recovery")
+	if _, exists := diag["recovery_gate_eval_at"]; exists {
+		t.Fatalf("expected recovery_gate_eval_at to be omitted when checkpoint field is absent, got %#v", diag["recovery_gate_eval_at"])
 	}
 }
 

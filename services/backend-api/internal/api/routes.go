@@ -623,10 +623,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		},
 	)
 	if integratedHandlersErr != nil {
-		if integratedHandlers == nil {
-			log.Fatalf("Failed to initialize autonomy runtime handlers: %v", integratedHandlersErr)
-		}
-		log.Printf("Warning: autonomy runtime started without rollout store initialization: %v", integratedHandlersErr)
+		log.Printf("Warning: autonomy runtime rollout store unavailable, using local fallback handlers: %v", integratedHandlersErr)
+		integratedHandlers = services.NewIntegratedQuestHandlers(
+			technicalAnalysisService,
+			ccxtService,
+			arbitrageHandler,
+			futuresArbitrageHandler,
+			notificationService,
+			autonomousMonitoring,
+		)
+		integratedHandlers.SetDB(sqlDB)
 	}
 
 	// Wire order executor to integrated handlers for scalping execution
