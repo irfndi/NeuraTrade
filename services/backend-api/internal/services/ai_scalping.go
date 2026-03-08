@@ -2968,7 +2968,10 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 
 func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {
 	policy := s.scalpingCyclePolicy(ctx, portfolio)
-	return policy.EffectiveMinConfidence, policy.EffectiveMaxCapitalPct
+	minConfidence = policy.EffectiveMinConfidence
+	maxCapitalPct = policy.EffectiveMaxCapitalPct
+	s.applyControlledNoFillRecovery(&minConfidence, &maxCapitalPct, portfolio, 0)
+	return minConfidence, maxCapitalPct
 }
 
 func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio TradingPortfolio) appautonomy.ScalpingCyclePolicy {
