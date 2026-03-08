@@ -2446,7 +2446,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		minConfidenceFloor = portfolio.PhaseMinConfidence
 	}
 	if minConfidenceFloor <= 0 {
-		minConfidenceFloor = deterministicFallbackConfidenceFloor
+		minConfidenceFloor = fallbackCfg.ConfidenceFloor
 	}
 	if confidence < clampFloat(minConfidenceFloor, 0.05, 0.99) {
 		return nil, 0, false
