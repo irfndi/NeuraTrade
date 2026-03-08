@@ -1,15 +1,17 @@
 package autonomy
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
 
 func TestEvaluateScalpingPolicy_MicroTierRelaxesBootstrapFloor(t *testing.T) {
 	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
-		TotalValue:         46.93,
+		TotalValue:         decimal.NewFromFloat(46.93),
 		BaseMinConfidence:  0.65,
 		BaseMaxCapitalPct:  5.0,
 		Phase:              "bootstrap",
@@ -23,9 +25,119 @@ func TestEvaluateScalpingPolicy_MicroTierRelaxesBootstrapFloor(t *testing.T) {
 	require.Equal(t, 1, policy.MaxConcurrentPositions)
 }
 
+func TestEvaluateScalpingPolicy_NoFillRecoveryAdjustments(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	baseInput := ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(1_000),
+		BaseMinConfidence: 0.85,
+		BaseMaxCapitalPct: 0.10,
+	}
+
+	testCases := []struct {
+		name            string
+		noFillMinutes   float64
+		expectedMinConf float64
+		expectedMaxCap  float64
+	}{
+		{
+			name:            "at_1x_recovery_window",
+			noFillMinutes:   float64(config.NoFillRecoveryMinutes),
+			expectedMinConf: 0.75,
+			expectedMaxCap:  0.50,
+		},
+		{
+			name:            "at_2x_recovery_window",
+			noFillMinutes:   float64(2 * config.NoFillRecoveryMinutes),
+			expectedMinConf: config.NoFillMinConfidenceFloor,
+			expectedMaxCap:  1.00,
+		},
+		{
+			name:            "at_3x_recovery_window",
+			noFillMinutes:   float64(3 * config.NoFillRecoveryMinutes),
+			expectedMinConf: config.NoFillMinConfidenceFloor,
+			expectedMaxCap:  config.NoFillMaxCapitalPctCap,
+		},
+	}
+
+	var prevMinConfidence float64
+	var prevMaxCapitalPct float64
+	for i, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := baseInput
+			input.NoFillMinutes = tc.noFillMinutes
+
+			policy := EvaluateScalpingPolicy(input, config)
+
+			require.Contains(t, policy.PolicyAdjustments, "controlled_no_fill_recovery")
+			require.InDelta(t, tc.expectedMinConf, policy.EffectiveMinConfidence, 0.0001)
+			require.InDelta(t, tc.expectedMaxCap, policy.EffectiveMaxCapitalPct, 0.0001)
+			if i > 0 {
+				require.LessOrEqual(t, policy.EffectiveMinConfidence, prevMinConfidence)
+				require.GreaterOrEqual(t, policy.EffectiveMaxCapitalPct, prevMaxCapitalPct)
+			}
+
+			prevMinConfidence = policy.EffectiveMinConfidence
+			prevMaxCapitalPct = policy.EffectiveMaxCapitalPct
+		})
+	}
+}
+
+func TestEvaluateScalpingPolicy_LossStreakAndNegativeExpectancyTightening(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	baseline := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(1_000),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+	}, config)
+
+	withLossAndNegativeExpectancy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(1_000),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+		ConsecutiveLosses: 3,
+		RiskExpectancy:    -0.01,
+		RiskSampleSize:    12,
+	}, config)
+
+	require.Greater(t, withLossAndNegativeExpectancy.EffectiveMinConfidence, baseline.EffectiveMinConfidence)
+	require.Less(t, withLossAndNegativeExpectancy.EffectiveMaxCapitalPct, baseline.EffectiveMaxCapitalPct)
+	require.Contains(t, withLossAndNegativeExpectancy.PolicyAdjustments, "loss_streak_confidence_tightening")
+	require.Contains(t, withLossAndNegativeExpectancy.PolicyAdjustments, "negative_expectancy_cap")
+}
+
+func TestNextUnblockCondition_Mappings(t *testing.T) {
+	policy := ScalpingCyclePolicy{
+		EffectiveMinConfidence: 0.72,
+		MaxConcurrentPositions: 2,
+	}
+
+	testCases := []struct {
+		name     string
+		reason   string
+		expected string
+	}{
+		{name: "confidence", reason: CandidateRejectConfidenceBelowThreshold, expected: "confidence"},
+		{name: "spread", reason: CandidateRejectSpreadTooWide, expected: "spread"},
+		{name: "orderbook", reason: CandidateRejectMissingOrderbookSignal, expected: "orderbook"},
+		{name: "expectancy", reason: CandidateRejectPreTradeExpectancy, expected: "expectancy"},
+		{name: "rollout", reason: CandidateRejectRolloutShadow, expected: "strategy-mode"},
+		{name: "max_concurrent", reason: CandidateRejectMaxConcurrentPositions, expected: "reduce open positions"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			next := NextUnblockCondition(tc.reason, policy)
+			require.NotEmpty(t, next)
+			require.Contains(t, strings.ToLower(next), strings.ToLower(tc.expected))
+		})
+	}
+}
+
 func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
-		TotalValue:        46.93,
+		TotalValue:        decimal.NewFromFloat(46.93),
 		BaseMinConfidence: 0.65,
 		BaseMaxCapitalPct: 5.0,
 	}, DefaultScalpingPolicyConfig())
@@ -33,30 +145,30 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 	snapshot := BuildCandidateFunnel([]CandidateSignal{
 		{
 			Symbol:             "PLUME/USDT",
-			Price:              1.0,
-			High24h:            1.1,
-			Low24h:             0.9,
-			Volume24h:          500000,
+			Price:              decimal.NewFromFloat(1.0),
+			High24h:            decimal.NewFromFloat(1.1),
+			Low24h:             decimal.NewFromFloat(0.9),
+			Volume24h:          decimal.NewFromInt(500000),
 			BidAskSpread:       0.36,
 			OrderBookImbalance: -0.30,
 			RangePosition24h:   60,
 		},
 		{
 			Symbol:             "OPN/USDT",
-			Price:              1.0,
-			High24h:            1.2,
-			Low24h:             0.8,
-			Volume24h:          100,
+			Price:              decimal.NewFromFloat(1.0),
+			High24h:            decimal.NewFromFloat(1.2),
+			Low24h:             decimal.NewFromFloat(0.8),
+			Volume24h:          decimal.NewFromInt(100),
 			BidAskSpread:       0.19,
 			OrderBookImbalance: -0.20,
 			RangePosition24h:   56,
 		},
 		{
 			Symbol:             "WIF/USDT",
-			Price:              1.0,
-			High24h:            1.1,
-			Low24h:             0.9,
-			Volume24h:          1000000,
+			Price:              decimal.NewFromFloat(1.0),
+			High24h:            decimal.NewFromFloat(1.1),
+			Low24h:             decimal.NewFromFloat(0.9),
+			Volume24h:          decimal.NewFromInt(1000000),
 			BidAskSpread:       0.08,
 			OrderBookImbalance: 0.02,
 			RangePosition24h:   40,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -432,6 +433,39 @@ func TestAIScalpingService_DynamicRiskThresholds_RecoveryModes(t *testing.T) {
 	assert.GreaterOrEqual(t, minConf, 0.85)
 }
 
+func TestAIScalpingService_ScalpingCyclePolicy_UsesScopedLossStreakInsteadOfGlobalSingleton(t *testing.T) {
+	previous := globalScalpingPerformance
+	globalScalpingPerformance = NewScalpingPerformance()
+	t.Cleanup(func() {
+		globalScalpingPerformance = previous
+	})
+
+	for i := 0; i < 3; i++ {
+		globalScalpingPerformance.RecordTrade(TradeRecord{
+			Timestamp:  time.Now().UTC(),
+			PnL:        decimal.NewFromFloat(-1),
+			Profitable: false,
+		})
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MinConfidence: 0.65,
+			MaxCapitalPct: 5.00,
+		},
+	}
+
+	baseline := svc.scalpingCyclePolicy(context.Background(), TradingPortfolio{})
+	assert.InDelta(t, 0.65, baseline.EffectiveMinConfidence, 0.0001)
+	assert.NotContains(t, baseline.PolicyAdjustments, "loss_streak_confidence_tightening")
+
+	scoped := svc.scalpingCyclePolicy(context.Background(), TradingPortfolio{
+		RecentConsecutiveLosses: 3,
+	})
+	assert.Greater(t, scoped.EffectiveMinConfidence, baseline.EffectiveMinConfidence)
+	assert.Contains(t, scoped.PolicyAdjustments, "loss_streak_confidence_tightening")
+}
+
 func TestAIScalpingService_ApplyControlledNoFillRecovery_StepLadder(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{
@@ -505,6 +539,27 @@ func TestAIScalpingService_ApplyControlledNoFillRecovery_RequiresClearState(t *t
 	}, 3)
 	assert.InDelta(t, 0.80, minConfidence, 0.0001)
 	assert.InDelta(t, 0.10, maxCapital, 0.0001)
+}
+
+func TestAutonomyGateBlockCode_MapsOperatorActionableReasons(t *testing.T) {
+	testCases := []struct {
+		name     string
+		reason   string
+		expected string
+	}{
+		{name: "shadow", reason: "strategy_not_live (stage: shadow, status: active)", expected: appautonomy.CandidateRejectRolloutShadow},
+		{name: "safe_mode", reason: "safe-mode active after rollback", expected: appautonomy.CandidateRejectSafeMode},
+		{name: "kill_switch", reason: "kill-switch engaged by operator", expected: appautonomy.CandidateRejectKillSwitch},
+		{name: "connectivity", reason: "exchange connectivity degraded", expected: appautonomy.CandidateRejectConnectivity},
+		{name: "risk_budget", reason: "risk budget exhausted", expected: appautonomy.CandidateRejectRiskBudget},
+		{name: "generic_gate", reason: "live gate paused by operator", expected: appautonomy.CandidateRejectAutonomyGateClosed},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, autonomyGateBlockCode(tc.reason))
+		})
+	}
 }
 
 func TestAIScalpingService_ValidateDecision_HoldNormalization(t *testing.T) {

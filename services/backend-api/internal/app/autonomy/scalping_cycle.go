@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -30,6 +32,12 @@ const (
 	CandidateRejectPreTradeExpectancy       = "pretrade_expectancy_block"
 	CandidateRejectRolloutShadow            = "rollout_shadow_block"
 	CandidateRejectMaxConcurrentPositions   = "max_concurrent_positions_reached"
+	CandidateRejectAutonomyGateClosed       = "autonomy_gate_closed"
+	CandidateRejectAutonomyRuntime          = "autonomy_runtime_unavailable"
+	CandidateRejectSafeMode                 = "safe_mode_active"
+	CandidateRejectKillSwitch               = "kill_switch_active"
+	CandidateRejectConnectivity             = "connectivity_block"
+	CandidateRejectRiskBudget               = "risk_budget_block"
 	CandidateRejectNoDirectionalEdge        = "no_directional_edge"
 )
 
@@ -48,8 +56,8 @@ const (
 )
 
 type ScalpingPolicyConfig struct {
-	MicroAccountMaxValue     float64
-	SmallAccountMaxValue     float64
+	MicroAccountMaxValue     decimal.Decimal
+	SmallAccountMaxValue     decimal.Decimal
 	MicroMinConfidenceFloor  float64
 	MicroMaxCapitalPct       float64
 	MicroMaxConcurrent       int
@@ -62,8 +70,8 @@ type ScalpingPolicyConfig struct {
 
 func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
 	return ScalpingPolicyConfig{
-		MicroAccountMaxValue:     DefaultMicroAccountMaxValue,
-		SmallAccountMaxValue:     DefaultSmallAccountMaxValue,
+		MicroAccountMaxValue:     decimal.NewFromFloat(DefaultMicroAccountMaxValue),
+		SmallAccountMaxValue:     decimal.NewFromFloat(DefaultSmallAccountMaxValue),
 		MicroMinConfidenceFloor:  DefaultMicroMinConfidenceFloor,
 		MicroMaxCapitalPct:       DefaultMicroMaxCapitalPct,
 		MicroMaxConcurrent:       DefaultMicroMaxConcurrentPosition,
@@ -76,11 +84,11 @@ func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
 }
 
 func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
-	if c.MicroAccountMaxValue <= 0 {
-		c.MicroAccountMaxValue = DefaultMicroAccountMaxValue
+	if c.MicroAccountMaxValue.LessThanOrEqual(decimal.Zero) {
+		c.MicroAccountMaxValue = decimal.NewFromFloat(DefaultMicroAccountMaxValue)
 	}
-	if c.SmallAccountMaxValue <= c.MicroAccountMaxValue {
-		c.SmallAccountMaxValue = DefaultSmallAccountMaxValue
+	if c.SmallAccountMaxValue.LessThanOrEqual(c.MicroAccountMaxValue) {
+		c.SmallAccountMaxValue = decimal.NewFromFloat(DefaultSmallAccountMaxValue)
 	}
 	if c.MicroMinConfidenceFloor <= 0 {
 		c.MicroMinConfidenceFloor = DefaultMicroMinConfidenceFloor
@@ -120,7 +128,7 @@ type PerformanceWindowInput struct {
 }
 
 type ScalpingCycleInput struct {
-	TotalValue            float64
+	TotalValue            decimal.Decimal
 	OpenPositions         int
 	DriftActive           bool
 	BaseMinConfidence     float64
@@ -149,10 +157,10 @@ type ScalpingCyclePolicy struct {
 
 type CandidateSignal struct {
 	Symbol             string
-	Price              float64
-	High24h            float64
-	Low24h             float64
-	Volume24h          float64
+	Price              decimal.Decimal
+	High24h            decimal.Decimal
+	Low24h             decimal.Decimal
+	Volume24h          decimal.Decimal
 	BidAskSpread       float64
 	OrderBookImbalance float64
 	RangePosition24h   float64
@@ -282,12 +290,12 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 	return policy
 }
 
-func ResolveAccountTier(totalValue float64, cfg ScalpingPolicyConfig) string {
+func ResolveAccountTier(totalValue decimal.Decimal, cfg ScalpingPolicyConfig) string {
 	cfg = cfg.Normalized()
 	switch {
-	case totalValue < cfg.MicroAccountMaxValue:
+	case totalValue.Cmp(cfg.MicroAccountMaxValue) < 0:
 		return AccountTierMicro
-	case totalValue < cfg.SmallAccountMaxValue:
+	case totalValue.Cmp(cfg.SmallAccountMaxValue) < 0:
 		return AccountTierSmall
 	default:
 		return AccountTierStandard
@@ -386,6 +394,18 @@ func NextUnblockCondition(reason string, policy ScalpingCyclePolicy) string {
 		return "Promote strategy to live via /api/v1/agent/strategy-mode"
 	case CandidateRejectMaxConcurrentPositions:
 		return fmt.Sprintf("Reduce open positions below %d", policy.MaxConcurrentPositions)
+	case CandidateRejectAutonomyGateClosed:
+		return "Inspect autonomy gate diagnostics and clear the operator block"
+	case CandidateRejectAutonomyRuntime:
+		return "Retry after autonomy coordinator/runtime connectivity is restored"
+	case CandidateRejectSafeMode:
+		return "Disable safe mode or clear the rollback trigger before re-enabling entries"
+	case CandidateRejectKillSwitch:
+		return "Release the kill switch before re-enabling entries"
+	case CandidateRejectConnectivity:
+		return "Restore exchange/provider connectivity before retrying execution"
+	case CandidateRejectRiskBudget:
+		return "Reduce exposure or replenish the configured risk budget before retrying"
 	default:
 		return "Await candidate that passes pretrade validity/liquidity filters"
 	}
@@ -435,7 +455,7 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy) (ranked bool, viable bool, rejection CandidateRejection) {
 	symbol := strings.TrimSpace(signal.Symbol)
 	rejection.Symbol = symbol
-	if symbol == "" || signal.Price <= 0 {
+	if symbol == "" || signal.Price.LessThanOrEqual(decimal.Zero) {
 		rejection.Reason = CandidateRejectMissingOrderbookSignal
 		return false, false, rejection
 	}
@@ -489,7 +509,7 @@ func estimateCandidateConfidence(signal CandidateSignal) (string, float64, bool)
 	}
 
 	liquidityScore := clampFloat(1-(signal.BidAskSpread/scalpingMaxBidAskSpreadPct), 0, 1)
-	volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/scalpingConfidenceVolumeLogBase, 0, 1)
+	volumeScore := clampFloat(math.Log10(signal.Volume24h.InexactFloat64()+1)/scalpingConfidenceVolumeLogBase, 0, 1)
 	confidence := scalpingConfidenceBase +
 		imbalance*scalpingConfidenceImbalanceW +
 		liquidityScore*scalpingConfidenceLiquidityW +

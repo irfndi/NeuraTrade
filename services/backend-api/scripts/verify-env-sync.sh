@@ -14,6 +14,7 @@ ENV_PATH="${ENV_PATH:-.env}"
 
 warn_count=0
 error_count=0
+config_reader_status="unknown"
 
 print_status() {
   local status="$1"
@@ -36,10 +37,50 @@ fail() {
   error_count=$((error_count + 1))
 }
 
+ensure_config_reader() {
+  case "$config_reader_status" in
+    available)
+      return 0
+      ;;
+    missing)
+      return 1
+      ;;
+  esac
+
+  if command -v python3 >/dev/null 2>&1; then
+    config_reader_status="available"
+    return 0
+  fi
+
+  config_reader_status="missing"
+  warn "python3 is unavailable; skipping config.json value checks"
+  return 1
+}
+
+config_json_is_valid() {
+  if [[ ! -f "$CONFIG_PATH" ]]; then
+    return 1
+  fi
+  if ! ensure_config_reader; then
+    return 2
+  fi
+
+  python3 - "$CONFIG_PATH" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+    json.load(handle)
+PY
+}
+
 read_config_value() {
   local path="$1"
 
   if [[ ! -f "$CONFIG_PATH" ]]; then
+    return 0
+  fi
+  if ! ensure_config_reader; then
     return 0
   fi
 
@@ -150,17 +191,23 @@ report_value() {
   local required="${4:-false}"
   local secret="${5:-false}"
   shift 5 || true
-  local fallback_values=("$@")
+  local -a fallback_values=()
+  if [[ $# -gt 0 ]]; then
+    fallback_values=("$@")
+  fi
 
   local config_value=""
   if [[ -n "$config_path" ]]; then
     config_value="$(read_config_value "$config_path" 2>/dev/null || true)"
   fi
 
+  local -a resolved_sources=("${!env_name:-}" "$config_value")
+  if [[ ${#fallback_values[@]} -gt 0 ]]; then
+    resolved_sources+=("${fallback_values[@]}")
+  fi
+
   local resolved=""
-  resolved="$({
-    first_non_empty "${!env_name:-}" "$config_value" "${fallback_values[@]}"
-  } | head -n 1 || true)"
+  resolved="$(first_non_empty "${resolved_sources[@]}" || true)"
 
   if [[ -n "$resolved" ]]; then
     local source_label
@@ -185,8 +232,10 @@ print_status "INFO" "Config path: ${CONFIG_PATH}"
 load_dotenv_if_present
 
 if [[ -f "$CONFIG_PATH" ]]; then
-  if read_config_value "server.port" >/dev/null 2>&1; then
+  if config_json_is_valid; then
     print_status "OK" "config.json is present and readable"
+  elif [[ "$config_reader_status" == "missing" ]]; then
+    warn "config.json exists, but validation is skipped because python3 is unavailable"
   else
     fail "config.json exists but is not valid JSON"
   fi
@@ -217,12 +266,12 @@ echo
 
 echo "=== Database ==="
 report_value "Database driver" "DATABASE_DRIVER" "database.driver" false false "sqlite"
-database_driver="$(printf '%s' "$REPORTED_VALUE" | tr '[:upper:]' '[:lower:]')"
+database_driver="$REPORTED_VALUE"
 case "$database_driver" in
-  sqlite | '')
+  [Ss][Qq][Ll][Ii][Tt][Ee] | '')
     report_value "SQLite path" "SQLITE_PATH" "database.sqlite_path" false false "$(read_config_value 'database.path' 2>/dev/null || true)" "${NEURATRADE_HOME}/data/neuratrade.db"
     ;;
-  postgres)
+  [Pp][Oo][Ss][Tt][Gg][Rr][Ee][Ss])
     report_value "Database URL" "DATABASE_URL" "database.database_url" false true
     database_url="$REPORTED_VALUE"
     if [[ -z "$database_url" ]]; then
@@ -257,7 +306,7 @@ echo
 
 echo "=== AI ==="
 report_value "AI provider" "AI_PROVIDER" "ai.provider" false false
-report_value "AI model" "AI_MODEL" "ai.model" false false
+report_value "AI model" "AI_MODEL" "" false false
 report_value "AI API key" "AI_API_KEY" "ai.api_key" false true
 echo
 

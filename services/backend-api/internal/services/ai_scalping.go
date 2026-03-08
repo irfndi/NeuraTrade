@@ -605,6 +605,8 @@ type TradingPortfolio struct {
 	EffectiveMinConfidence          float64 `json:"effective_min_confidence,omitempty"`
 	EffectiveMaxCapitalPct          float64 `json:"effective_max_capital_pct,omitempty"`
 	EffectiveMaxConcurrentPositions int     `json:"effective_max_concurrent_positions,omitempty"`
+	RecentConsecutiveLosses         int     `json:"recent_consecutive_losses,omitempty"`
+	ScopedAdjustedMaxCapitalPct     float64 `json:"scoped_adjusted_max_capital_pct,omitempty"`
 	RecoveryMode                    string  `json:"recovery_mode,omitempty"`
 	RecoveryEntryOK                 bool    `json:"recovery_entry_allowed"`
 	RecoveryCleanCycle              int     `json:"recovery_clean_cycles"`
@@ -1079,14 +1081,15 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			s.updateAutonomyGateState(scope, rolloutState, gateState, gateErr)
 			if gateErr != nil {
 				log.Printf("[AI-SCALPING] Autonomous gate evaluation failed: %v", gateErr)
-				decision = strategyHoldDecision(
-					fmt.Sprintf("autonomy gate evaluation failed: %v", gateErr),
-					decision.Confidence,
-				)
+				reason := fmt.Sprintf("autonomy gate evaluation failed: %v", gateErr)
+				decision = runtimeDegradedHoldDecision(reason, reasonCategoryExecutionUnavailable)
 				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
-					Allowed:     false,
-					BlockReason: decision.Reasoning,
-					BlockCode:   appautonomy.CandidateRejectRolloutShadow,
+					Allowed:              false,
+					BlockReason:          reason,
+					BlockCode:            appautonomy.CandidateRejectAutonomyRuntime,
+					RolloutStageCurrent:  strings.TrimSpace(s.autonomyState.RolloutStage),
+					RolloutStatusCurrent: strings.TrimSpace(s.autonomyState.RolloutStatus),
+					RolloutGateReason:    reason,
 				}
 				return decision, nil
 			}
@@ -2612,12 +2615,32 @@ func classifyPreTradeBlockCode(reason string) string {
 
 func autonomyGateBlockCode(reason string) string {
 	lower := strings.ToLower(strings.TrimSpace(reason))
-	if strings.Contains(lower, "strategy_not_live") ||
+	switch {
+	case strings.Contains(lower, "strategy_not_live") ||
 		strings.Contains(lower, "autonomy live gate closed") ||
-		strings.Contains(lower, "stage: shadow") {
+		strings.Contains(lower, "stage: shadow"):
 		return appautonomy.CandidateRejectRolloutShadow
+	case strings.Contains(lower, "safe-mode") ||
+		strings.Contains(lower, "safe mode") ||
+		strings.Contains(lower, "safe_mode"):
+		return appautonomy.CandidateRejectSafeMode
+	case strings.Contains(lower, "kill-switch") ||
+		strings.Contains(lower, "kill switch") ||
+		strings.Contains(lower, "killswitch") ||
+		strings.Contains(lower, "kill_switch"):
+		return appautonomy.CandidateRejectKillSwitch
+	case strings.Contains(lower, "connectivity") ||
+		strings.Contains(lower, "connection") ||
+		strings.Contains(lower, "disconnected") ||
+		strings.Contains(lower, "unreachable"):
+		return appautonomy.CandidateRejectConnectivity
+	case strings.Contains(lower, "risk-budget") ||
+		strings.Contains(lower, "risk budget") ||
+		strings.Contains(lower, "budget exceeded"):
+		return appautonomy.CandidateRejectRiskBudget
+	default:
+		return appautonomy.CandidateRejectAutonomyGateClosed
 	}
-	return appautonomy.CandidateRejectNoDirectionalEdge
 }
 
 func isRuntimeReasonCategory(category string) bool {
@@ -2968,16 +2991,11 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 
 func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {
 	policy := s.scalpingCyclePolicy(ctx, portfolio)
-	minConfidence = policy.EffectiveMinConfidence
-	maxCapitalPct = policy.EffectiveMaxCapitalPct
-	s.applyControlledNoFillRecovery(&minConfidence, &maxCapitalPct, portfolio, 0)
-	return minConfidence, maxCapitalPct
+	return policy.EffectiveMinConfidence, policy.EffectiveMaxCapitalPct
 }
 
 func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio TradingPortfolio) appautonomy.ScalpingCyclePolicy {
 	cfg := scalpingPolicyConfigFromEnv()
-	perf := GetScalpingPerformance().GetPerformance()
-	adjusted := GetScalpingPerformance().GetAdjustedParameters()
 
 	performanceWindow := appautonomy.PerformanceWindowInput{}
 	if s.tradeMemory != nil {
@@ -2993,13 +3011,13 @@ func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio T
 	}
 
 	return appautonomy.EvaluateScalpingPolicy(appautonomy.ScalpingCycleInput{
-		TotalValue:            portfolio.TotalValue,
+		TotalValue:            decimal.NewFromFloat(portfolio.TotalValue),
 		OpenPositions:         portfolio.OpenPositions,
 		DriftActive:           portfolio.DriftActive,
 		BaseMinConfidence:     s.config.MinConfidence,
 		BaseMaxCapitalPct:     s.config.MaxCapitalPct,
-		AdjustedMaxCapitalPct: adjusted.MaxCapitalPercent,
-		ConsecutiveLosses:     readIntMetric(perf["consecutive_losses"]),
+		AdjustedMaxCapitalPct: portfolio.ScopedAdjustedMaxCapitalPct,
+		ConsecutiveLosses:     portfolio.RecentConsecutiveLosses,
 		Phase:                 portfolio.StrategyPhase,
 		PhaseMinConfidence:    portfolio.PhaseMinConfidence,
 		PhaseMaxCapitalPct:    portfolio.PhaseMaxCapitalPct,
@@ -3016,10 +3034,10 @@ func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio T
 func scalpingPolicyConfigFromEnv() appautonomy.ScalpingPolicyConfig {
 	cfg := appautonomy.DefaultScalpingPolicyConfig()
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_ACCOUNT_MAX_VALUE"); ok && value > 0 {
-		cfg.MicroAccountMaxValue = value
+		cfg.MicroAccountMaxValue = decimal.NewFromFloat(value)
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_SMALL_ACCOUNT_MAX_VALUE"); ok && value > 0 {
-		cfg.SmallAccountMaxValue = value
+		cfg.SmallAccountMaxValue = decimal.NewFromFloat(value)
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_MIN_CONFIDENCE_FLOOR"); ok && value > 0 {
 		cfg.MicroMinConfidenceFloor = value
@@ -3056,10 +3074,10 @@ func candidateSignalsFromMarketSignals(signals []aiMarketSignal) []appautonomy.C
 	for _, signal := range signals {
 		candidates = append(candidates, appautonomy.CandidateSignal{
 			Symbol:             signal.Symbol,
-			Price:              signal.Price,
-			High24h:            signal.High24h,
-			Low24h:             signal.Low24h,
-			Volume24h:          signal.Volume24h,
+			Price:              decimal.NewFromFloat(signal.Price),
+			High24h:            decimal.NewFromFloat(signal.High24h),
+			Low24h:             decimal.NewFromFloat(signal.Low24h),
+			Volume24h:          decimal.NewFromFloat(signal.Volume24h),
 			BidAskSpread:       signal.BidAskSpread,
 			OrderBookImbalance: signal.OrderBookImbalance,
 			RangePosition24h:   signal.RangePosition24h,

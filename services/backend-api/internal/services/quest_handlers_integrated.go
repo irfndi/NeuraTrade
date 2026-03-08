@@ -50,8 +50,9 @@ type IntegratedQuestHandlers struct {
 	autonomyCoordinator  *ScalpingAutonomyCoordinator
 	stalePositionMu      sync.Mutex
 	stalePositionWindow  map[string]time.Time
-	tradeJournalInitOnce sync.Once
-	tradeJournalInitErr  error
+	tradeJournalMu       sync.Mutex
+	tradeJournalReady    bool
+	tradeJournalReadyFor *sql.DB
 }
 
 const (
@@ -159,58 +160,76 @@ func (h *IntegratedQuestHandlers) SetOrderExecutor(executor ScalpingOrderExecuto
 
 // SetDB sets the database for user settings lookup
 func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
+	if h == nil {
+		return
+	}
+	h.tradeJournalMu.Lock()
+	dbChanged := h.db != db
 	h.db = db
+	if dbChanged {
+		h.tradeJournalReady = false
+		h.tradeJournalReadyFor = nil
+	}
+	h.tradeJournalMu.Unlock()
 	if err := h.ensureTradeJournalSchema(); err != nil {
 		log.Printf("[SCALPING] Failed to initialize legacy trade journal schema: %v", err)
 	}
 }
 
 func (h *IntegratedQuestHandlers) ensureTradeJournalSchema() error {
-	if h == nil || h.db == nil {
+	if h == nil {
 		return nil
 	}
-	h.tradeJournalInitOnce.Do(func() {
-		statements := []string{
-			`CREATE TABLE IF NOT EXISTS trades (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				order_id TEXT,
-				quest_id TEXT,
-				strategy_id TEXT NOT NULL,
-				strategy_version TEXT,
-				chat_id TEXT,
-				exchange TEXT NOT NULL,
-				symbol TEXT NOT NULL,
-				side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
-				entry_price REAL NOT NULL,
-				exit_price REAL,
-				size REAL NOT NULL,
-				fees REAL NOT NULL DEFAULT 0,
-				pnl REAL,
-				cost_basis REAL,
-				status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'cancelled')),
-				opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				closed_at DATETIME
-			)`,
-			`ALTER TABLE trades ADD COLUMN order_id TEXT`,
-			`ALTER TABLE trades ADD COLUMN quest_id TEXT`,
-			`ALTER TABLE trades ADD COLUMN chat_id TEXT`,
+	h.tradeJournalMu.Lock()
+	defer h.tradeJournalMu.Unlock()
+	if h.db == nil {
+		return nil
+	}
+	if h.tradeJournalReady && h.tradeJournalReadyFor == h.db {
+		return nil
+	}
+
+	db := h.db
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			order_id TEXT,
+			quest_id TEXT,
+			strategy_id TEXT NOT NULL,
+			strategy_version TEXT,
+			chat_id TEXT,
+			exchange TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+			entry_price REAL NOT NULL,
+			exit_price REAL,
+			size REAL NOT NULL,
+			fees REAL NOT NULL DEFAULT 0,
+			pnl REAL,
+			cost_basis REAL,
+			status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'cancelled')),
+			opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			closed_at DATETIME
+		)`,
+		`ALTER TABLE trades ADD COLUMN order_id TEXT`,
+		`ALTER TABLE trades ADD COLUMN quest_id TEXT`,
+		`ALTER TABLE trades ADD COLUMN chat_id TEXT`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil && !isIgnorableTradeJournalSchemaErr(err) {
+			return err
 		}
-		for _, statement := range statements {
-			if _, err := h.db.Exec(statement); err != nil && !isIgnorableTradeJournalSchemaErr(err) {
-				h.tradeJournalInitErr = err
-				return
-			}
-		}
-		if _, err := h.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_order_id ON trades(order_id)`); err != nil {
-			h.tradeJournalInitErr = err
-			return
-		}
-		if _, err := h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_strategy_status ON trades(strategy_id, status)`); err != nil {
-			h.tradeJournalInitErr = err
-			return
-		}
-	})
-	return h.tradeJournalInitErr
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_order_id ON trades(order_id)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_strategy_status ON trades(strategy_id, status)`); err != nil {
+		return err
+	}
+
+	h.tradeJournalReady = true
+	h.tradeJournalReadyFor = db
+	return nil
 }
 
 func isIgnorableTradeJournalSchemaErr(err error) bool {
@@ -2806,6 +2825,7 @@ func (h *IntegratedQuestHandlers) applyRecoveryStateCheckpoint(
 		portfolio.RecoveryMode = state.Mode
 		portfolio.RecoveryEntryOK = state.EntryAllowed
 		portfolio.RecoveryCleanCycle = state.CleanCycles
+		portfolio.RecentConsecutiveLosses = state.RecentLossStreak
 	}
 
 	quest.Checkpoint["recovery_mode"] = state.Mode
@@ -3275,7 +3295,14 @@ func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Q
 		quest.Checkpoint["candidate_viable_count"] = decision.CandidateFunnel.CandidateViableCount
 		if encoded := encodeCandidateRejections(decision.CandidateFunnel.TopCandidateRejections); len(encoded) > 0 {
 			quest.Checkpoint["top_candidate_rejections"] = encoded
+		} else {
+			delete(quest.Checkpoint, "top_candidate_rejections")
 		}
+	} else {
+		delete(quest.Checkpoint, "candidate_universe_count")
+		delete(quest.Checkpoint, "candidate_ranked_count")
+		delete(quest.Checkpoint, "candidate_viable_count")
+		delete(quest.Checkpoint, "top_candidate_rejections")
 	}
 
 	if decision.ExecutionGate != nil {
@@ -3283,6 +3310,8 @@ func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Q
 		quest.Checkpoint["rollout_status_current"] = decision.ExecutionGate.RolloutStatusCurrent
 		quest.Checkpoint["rollout_gate_reason_current"] = decision.ExecutionGate.RolloutGateReason
 	} else {
+		delete(quest.Checkpoint, "rollout_stage_current")
+		delete(quest.Checkpoint, "rollout_status_current")
 		delete(quest.Checkpoint, "rollout_gate_reason_current")
 	}
 }
@@ -3447,14 +3476,16 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
 
 	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 	strategyID := ScalpingStrategyID(chatID)
-	entryPrice := 0.0
+	side := normalizeLifecycleSide(decision.Action)
+	if side == "" {
+		log.Printf("[SCALPING] Skipping legacy trade journal entry %s with unsupported side %q", tradeID, decision.Action)
+		return
+	}
+	entryPrice := decimal.Zero
 	if decision.EntryPrice != nil {
-		entryPrice = decision.EntryPrice.InexactFloat64()
+		entryPrice = decision.EntryPrice.Abs()
 	}
-	size := portfolio.USDTBalance * decision.SizePercent / 100
-	if size <= 0 {
-		size = decision.SizePercent
-	}
+	size, costBasis := legacyTradeEntryMetrics(portfolio, decision)
 	now := time.Now().UTC()
 	if _, err := h.db.ExecContext(
 		ctx,
@@ -3483,13 +3514,44 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
 		chatID,
 		exchange,
 		decision.Symbol,
-		decision.Action,
-		entryPrice,
-		size,
-		size,
+		side,
+		entryPrice.InexactFloat64(),
+		size.InexactFloat64(),
+		costBasis.InexactFloat64(),
 		now,
 	); err != nil {
 		log.Printf("[SCALPING] Failed to persist legacy trade journal entry %s: %v", tradeID, err)
+	}
+}
+
+func legacyTradeEntryMetrics(portfolio TradingPortfolio, decision *AITradingDecision) (decimal.Decimal, decimal.Decimal) {
+	if decision == nil || portfolio.USDTBalance <= 0 || decision.SizePercent <= 0 {
+		return decimal.Zero, decimal.Zero
+	}
+
+	costBasis := decimal.NewFromFloat(portfolio.USDTBalance).
+		Mul(decimal.NewFromFloat(decision.SizePercent)).
+		Div(decimal.NewFromInt(100))
+	if decision.EntryPrice == nil || decision.EntryPrice.LessThanOrEqual(decimal.Zero) || costBasis.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, costBasis
+	}
+
+	return costBasis.Div(decision.EntryPrice.Abs()), costBasis
+}
+
+func normalizeLegacyTradeJournalCloseSide(side string) string {
+	normalized := strings.ToLower(strings.TrimSpace(side))
+	switch normalized {
+	case "long", "open_long", "close_long":
+		return "buy"
+	case "short", "open_short", "close_short":
+		return "sell"
+	case "buy":
+		return "sell"
+	case "sell":
+		return "buy"
+	default:
+		return normalizeLifecycleSide(side)
 	}
 }
 
@@ -3513,6 +3575,11 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeClose(
 	if closedAt.IsZero() {
 		closedAt = time.Now().UTC()
 	}
+	journalSide := normalizeLegacyTradeJournalCloseSide(side)
+	if journalSide == "" {
+		journalSide = normalizeLifecycleSide(side)
+	}
+	size = size.Abs()
 	if _, err := h.db.ExecContext(
 		ctx,
 		`INSERT INTO trades (
@@ -3526,7 +3593,7 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeClose(
 			chat_id = EXCLUDED.chat_id,
 			exchange = EXCLUDED.exchange,
 			symbol = EXCLUDED.symbol,
-			side = EXCLUDED.side,
+			side = CASE WHEN trades.side IN ('buy', 'sell') THEN trades.side ELSE EXCLUDED.side END,
 			entry_price = CASE WHEN EXCLUDED.entry_price > 0 THEN EXCLUDED.entry_price ELSE trades.entry_price END,
 			exit_price = EXCLUDED.exit_price,
 			size = CASE WHEN EXCLUDED.size > 0 THEN EXCLUDED.size ELSE trades.size END,
@@ -3542,7 +3609,7 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeClose(
 		chatID,
 		exchange,
 		symbol,
-		side,
+		journalSide,
 		entryPrice.InexactFloat64(),
 		exitPrice.InexactFloat64(),
 		size.InexactFloat64(),

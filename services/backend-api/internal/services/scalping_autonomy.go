@@ -386,14 +386,20 @@ func (c *ScalpingAutonomyCoordinator) SetStrategyMode(
 		return nil, fmt.Errorf("strategy_id is required")
 	}
 
-	state, err := c.ensureRolloutState(ctx, strategyID)
+	targetStage, err := stageForMode(mode)
 	if err != nil {
 		return nil, err
 	}
 
-	targetStage, err := stageForMode(mode)
+	state, err := c.rollout.GetRolloutState(ctx, strategyID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get rollout state: %w", err)
+	}
+	if state == nil {
+		state, err = c.rollout.InitializeRollout(ctx, strategyID, autonomous.DefaultPromotionCriteria())
+		if err != nil {
+			return nil, fmt.Errorf("initialize rollout state: %w", err)
+		}
 	}
 	for state.CurrentStage != targetStage {
 		switch {
