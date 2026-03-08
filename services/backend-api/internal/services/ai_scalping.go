@@ -59,6 +59,7 @@ type DeterministicFallbackConfig struct {
 	SellRangeMin    float64
 	RangeAnchor     float64
 	RangeOffset     float64
+	rangeOffsetSet  bool
 
 	ImbalanceWeight float64
 	LiquidityWeight float64
@@ -122,7 +123,7 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	if cfg.RangeAnchor > 0 {
 		normalized.RangeAnchor = clampFloat(cfg.RangeAnchor, 1, 100)
 	}
-	if cfg.RangeOffset > 0 {
+	if cfg.RangeOffset != 0 || cfg.rangeOffsetSet {
 		normalized.RangeOffset = clampFloat(cfg.RangeOffset, 0, 99)
 	}
 	if normalized.RangeOffset >= normalized.RangeAnchor {
@@ -373,6 +374,7 @@ func applyDeterministicFallbackConfigFromEnv(base DeterministicFallbackConfig) D
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RANGE_OFFSET"); ok {
 		cfg.RangeOffset = value
+		cfg.rangeOffsetSet = true
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_IMBALANCE_WEIGHT"); ok {
 		cfg.ImbalanceWeight = value
@@ -2359,7 +2361,8 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	}
 
 	liquidityScore := clampFloat(1-(signal.BidAskSpread/fallbackCfg.MaxBidAskSpread), 0, 1)
-	volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/fallbackCfg.VolumeLogScale, 0, 1)
+	volumeBasis := math.Max(signal.Volume24h, 0)
+	volumeScore := clampFloat(math.Log10(volumeBasis+1)/fallbackCfg.VolumeLogScale, 0, 1)
 	score := imbalance*fallbackCfg.ImbalanceWeight +
 		liquidityScore*fallbackCfg.LiquidityWeight +
 		rangeAlignment*fallbackCfg.RangeWeight +
@@ -2369,6 +2372,9 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		fallbackCfg.MinConfidence,
 		fallbackCfg.MaxConfidence,
 	)
+	if isNonFiniteFloat(volumeScore) || isNonFiniteFloat(score) || isNonFiniteFloat(confidence) {
+		return nil, 0, false
+	}
 	if confidence < clampFloat(math.Max(s.config.MinConfidence, fallbackCfg.ConfidenceFloor), 0.05, 0.99) {
 		return nil, 0, false
 	}
@@ -3177,6 +3183,10 @@ func getEnvBool(key string) (bool, bool) {
 		log.Printf("[AI-SCALPING] Invalid boolean %s=%q", key, raw)
 		return false, false
 	}
+}
+
+func isNonFiniteFloat(value float64) bool {
+	return math.IsNaN(value) || math.IsInf(value, 0)
 }
 
 func clampInt(value, min, max int) int {

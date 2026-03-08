@@ -46,6 +46,7 @@ const (
 	maxQuestLockReleaseTimeout        = 10 * time.Second
 	defaultQuestExecutionHeartbeat    = 15 * time.Second
 	questLockOwnerHeartbeatTTL        = 30 * time.Second
+	defaultQuestStoreWriteTimeout     = 5 * time.Second
 
 	questExecutionStageLock    = "lock"
 	questExecutionStageHandler = "handler"
@@ -177,6 +178,7 @@ type QuestEngine struct {
 	store                     QuestStore
 	redis                     *redis.Client
 	stopCh                    chan struct{}
+	stopChClosed              bool
 	running                   bool
 	lockOwnerID               string
 	cadenceMode               string
@@ -492,6 +494,10 @@ func (e *QuestEngine) Start() {
 		log.Println("[QUEST] Start called but already running")
 		return
 	}
+	if e.stopCh == nil || e.stopChClosed {
+		e.stopCh = make(chan struct{})
+		e.stopChClosed = false
+	}
 	e.running = true
 	e.runtimeBudget = computeQuestRuntimeBudget()
 	e.mu.Unlock()
@@ -578,7 +584,10 @@ func (e *QuestEngine) Stop() {
 		e.mu.Unlock()
 		return
 	}
-	close(e.stopCh)
+	if e.stopCh != nil && !e.stopChClosed {
+		close(e.stopCh)
+		e.stopChClosed = true
+	}
 	e.running = false
 	e.mu.Unlock()
 
@@ -1380,6 +1389,7 @@ func (e *QuestEngine) finalizeQuestExecution(quest *Quest, execErr error) {
 	}
 
 	now := time.Now()
+	var snapshot *Quest
 
 	e.mu.Lock()
 	if quest.Checkpoint == nil {
@@ -1405,10 +1415,13 @@ func (e *QuestEngine) finalizeQuestExecution(quest *Quest, execErr error) {
 	if chatID, err := strconv.ParseInt(strings.TrimSpace(quest.Metadata["chat_id"]), 10, 64); err == nil && chatID > 0 {
 		e.chatIDForQuest[quest.ID] = chatID
 	}
+	snapshot = cloneQuestForPersistence(quest)
 	e.mu.Unlock()
 
-	if e.store != nil {
-		if err := e.store.SaveQuest(context.Background(), cloneQuestForPersistence(quest)); err != nil {
+	if e.store != nil && snapshot != nil {
+		saveCtx, cancel := context.WithTimeout(context.Background(), defaultQuestStoreWriteTimeout)
+		defer cancel()
+		if err := e.store.SaveQuest(saveCtx, snapshot); err != nil {
 			log.Printf("Failed to persist final quest snapshot %s: %v", quest.ID, err)
 		}
 	}

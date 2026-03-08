@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -26,4 +27,14 @@ func TestBuildIntegratedHandlers_WithSQLDBInitializesHandlers(t *testing.T) {
 	handlers, err := BuildIntegratedHandlers(Dependencies{SQLDB: sqliteDB.DB})
 	require.NoError(t, err)
 	require.NotNil(t, handlers)
+}
+
+func TestEnsureAutonomySchema_WrapsInitErrors(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "autonomy-runtime-wrap.db"))
+	require.NoError(t, err)
+	require.NoError(t, sqliteDB.Close())
+
+	err = EnsureAutonomySchema(context.Background(), sqliteDB.DB)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "init autonomy schema")
 }

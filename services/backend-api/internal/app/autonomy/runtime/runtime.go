@@ -80,5 +80,8 @@ func EnsureAutonomySchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("autonomy schema requires sql db")
 	}
 	store := services.NewAutonomousRolloutStore(db)
-	return store.InitSchema(ctx)
+	if err := store.InitSchema(ctx); err != nil {
+		return fmt.Errorf("init autonomy schema: %w", err)
+	}
+	return nil
 }

@@ -44,6 +44,17 @@ func (s *recordingQuestStore) GetAutonomousState(ctx context.Context, chatID str
 	return &AutonomousState{ChatID: chatID}, nil
 }
 
+type contextRecordingQuestStore struct {
+	recordingQuestStore
+	saveCtx context.Context
+}
+
+func (s *contextRecordingQuestStore) SaveQuest(ctx context.Context, quest *Quest) error {
+	s.saveCtx = ctx
+	s.savedQuest = cloneQuestForPersistence(quest)
+	return nil
+}
+
 func TestShouldExecute_MicroCadence(t *testing.T) {
 	store := NewInMemoryQuestStore()
 	engine := NewQuestEngine(store)
@@ -583,6 +594,29 @@ func TestStop_KeepsOwnerHeartbeatWhileQuestExecuting(t *testing.T) {
 	}
 }
 
+func TestStart_ReinitializesStopChannelAfterStop(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.Start()
+	oldStopCh := engine.stopCh
+	engine.Stop()
+
+	engine.Start()
+	newStopCh := engine.stopCh
+	if newStopCh == nil {
+		t.Fatal("expected Start to initialize stopCh")
+	}
+	if oldStopCh == newStopCh {
+		t.Fatal("expected Start to replace a closed stopCh on restart")
+	}
+	select {
+	case <-newStopCh:
+		t.Fatal("expected restarted stopCh to remain open")
+	default:
+	}
+
+	engine.Stop()
+}
+
 func TestNewQuestEngineWithRedis(t *testing.T) {
 	store := NewInMemoryQuestStore()
 	engine := NewQuestEngineWithRedis(store, nil)
@@ -983,6 +1017,37 @@ func TestFinalizeQuestExecution_GoalQuestRemainsActiveUntilReached(t *testing.T)
 	}
 	if store.savedQuest.Status != QuestStatusActive {
 		t.Fatalf("expected persisted goal quest status to remain active, got %s", store.savedQuest.Status)
+	}
+}
+
+func TestFinalizeQuestExecution_PersistsWithBoundedContext(t *testing.T) {
+	store := &contextRecordingQuestStore{}
+	engine := NewQuestEngine(store)
+	quest := &Quest{
+		ID:         "persist-timeout",
+		Name:       "Persist Timeout",
+		Type:       QuestTypeRoutine,
+		Cadence:    CadenceMicro,
+		Status:     QuestStatusActive,
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id":       "chat-timeout",
+			"definition_id": "scalping_execution",
+		},
+	}
+
+	before := time.Now()
+	engine.finalizeQuestExecution(quest, nil)
+
+	if store.saveCtx == nil {
+		t.Fatal("expected SaveQuest context to be captured")
+	}
+	deadline, ok := store.saveCtx.Deadline()
+	if !ok {
+		t.Fatal("expected SaveQuest to use a bounded context")
+	}
+	if deadline.Before(before) || deadline.After(before.Add(defaultQuestStoreWriteTimeout+time.Second)) {
+		t.Fatalf("expected SaveQuest deadline near %s, got %s", defaultQuestStoreWriteTimeout, deadline.Sub(before))
 	}
 }
 

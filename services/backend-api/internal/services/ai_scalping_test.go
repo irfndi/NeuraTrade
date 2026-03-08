@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -151,6 +152,7 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_MAX_BID_ASK_SPREAD", "0.04")
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_MIN_IMBALANCE", "0.42")
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_CONFIDENCE_FLOOR", "0.79")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_RANGE_OFFSET", "0")
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_SIZE_FRACTION", "0.33")
 
 	cfg := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
@@ -180,6 +182,7 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 0.04, cfg.DeterministicFallback.MaxBidAskSpread)
 	assert.Equal(t, 0.42, cfg.DeterministicFallback.MinImbalance)
 	assert.Equal(t, 0.79, cfg.DeterministicFallback.ConfidenceFloor)
+	assert.Equal(t, 0.0, cfg.DeterministicFallback.RangeOffset)
 	assert.Equal(t, 0.33, cfg.DeterministicFallback.SizeFraction)
 }
 
@@ -699,6 +702,31 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesConfigOverrides(t 
 	assert.False(t, ok)
 	assert.Nil(t, decision)
 	assert.Zero(t, confidence)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_ClampsNegativeVolume(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxCapitalPct: 5,
+			MinConfidence: 0.60,
+		},
+	}
+
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		High24h:            104,
+		Low24h:             96,
+		Volume24h:          -1000,
+		BidAskSpread:       0.005,
+		OrderBookImbalance: 0.90,
+		RangePosition24h:   5,
+	}
+
+	decision, confidence, ok := svc.deterministicFallbackCandidate(signal, TradingPortfolio{})
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.False(t, math.IsNaN(confidence) || math.IsInf(confidence, 0))
 }
 
 func TestAIScalpingService_GetAIDecision_ClassifiesUnsupportedActionAsParseContract(t *testing.T) {
