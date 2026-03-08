@@ -21,6 +21,7 @@ const (
 	DefaultSmallAccountMaxValue       = 2500.0
 	DefaultMicroMinConfidenceFloor    = 0.65
 	DefaultMicroMaxCapitalPct         = 0.50
+	DefaultMaxConcurrentPositions     = 3
 	DefaultMicroMaxConcurrentPosition = 1
 	DefaultScalpingProgressBlockAfter = 2 * time.Hour
 )
@@ -31,6 +32,7 @@ const (
 	CandidateRejectMissingOrderbookSignal   = "missing_orderbook_signal"
 	CandidateRejectPreTradeExpectancy       = "pretrade_expectancy_block"
 	CandidateRejectRolloutShadow            = "rollout_shadow_block"
+	CandidateRejectRolloutPaper             = "rollout_paper_block"
 	CandidateRejectMaxConcurrentPositions   = "max_concurrent_positions_reached"
 	CandidateRejectAutonomyGateClosed       = "autonomy_gate_closed"
 	CandidateRejectAutonomyRuntime          = "autonomy_runtime_unavailable"
@@ -60,6 +62,7 @@ type ScalpingPolicyConfig struct {
 	SmallAccountMaxValue     decimal.Decimal
 	MicroMinConfidenceFloor  float64
 	MicroMaxCapitalPct       float64
+	MaxConcurrentPositions   int
 	MicroMaxConcurrent       int
 	NoFillRecoveryMinutes    int
 	NoFillMinConfidenceFloor float64
@@ -74,6 +77,7 @@ func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
 		SmallAccountMaxValue:     decimal.NewFromFloat(DefaultSmallAccountMaxValue),
 		MicroMinConfidenceFloor:  DefaultMicroMinConfidenceFloor,
 		MicroMaxCapitalPct:       DefaultMicroMaxCapitalPct,
+		MaxConcurrentPositions:   DefaultMaxConcurrentPositions,
 		MicroMaxConcurrent:       DefaultMicroMaxConcurrentPosition,
 		NoFillRecoveryMinutes:    180,
 		NoFillMinConfidenceFloor: 0.70,
@@ -98,6 +102,9 @@ func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
 		c.MicroMaxCapitalPct = DefaultMicroMaxCapitalPct
 	}
 	c.MicroMaxCapitalPct = clampFloat(c.MicroMaxCapitalPct, 0.10, 100.0)
+	if c.MaxConcurrentPositions <= 0 {
+		c.MaxConcurrentPositions = DefaultMaxConcurrentPositions
+	}
 	if c.MicroMaxConcurrent <= 0 {
 		c.MicroMaxConcurrent = DefaultMicroMaxConcurrentPosition
 	}
@@ -200,6 +207,7 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		AccountTier:            ResolveAccountTier(input.TotalValue, cfg),
 		EffectiveMinConfidence: clampFloat(input.BaseMinConfidence, 0.05, 0.95),
 		EffectiveMaxCapitalPct: clampFloat(input.BaseMaxCapitalPct, 0.10, 100.0),
+		MaxConcurrentPositions: cfg.MaxConcurrentPositions,
 	}
 	if policy.EffectiveMaxCapitalPct <= 0 {
 		policy.EffectiveMaxCapitalPct = 0.10
@@ -293,9 +301,9 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 func ResolveAccountTier(totalValue decimal.Decimal, cfg ScalpingPolicyConfig) string {
 	cfg = cfg.Normalized()
 	switch {
-	case totalValue.Cmp(cfg.MicroAccountMaxValue) < 0:
+	case totalValue.Cmp(cfg.MicroAccountMaxValue) <= 0:
 		return AccountTierMicro
-	case totalValue.Cmp(cfg.SmallAccountMaxValue) < 0:
+	case totalValue.Cmp(cfg.SmallAccountMaxValue) <= 0:
 		return AccountTierSmall
 	default:
 		return AccountTierStandard
@@ -370,10 +378,14 @@ func BuildRolloutShadowGate(stage, status, reason string) ExecutionGateSnapshot 
 	if reason == "" {
 		reason = fmt.Sprintf("strategy_not_live (stage: %s, status: %s)", stage, status)
 	}
+	blockCode := CandidateRejectRolloutShadow
+	if strings.EqualFold(stage, "paper") {
+		blockCode = CandidateRejectRolloutPaper
+	}
 	return ExecutionGateSnapshot{
 		Allowed:              false,
 		BlockReason:          reason,
-		BlockCode:            CandidateRejectRolloutShadow,
+		BlockCode:            blockCode,
 		RolloutStageCurrent:  stage,
 		RolloutStatusCurrent: status,
 		RolloutGateReason:    reason,
@@ -392,6 +404,8 @@ func NextUnblockCondition(reason string, policy ScalpingCyclePolicy) string {
 		return "Await candidate with positive expectancy and stronger regime alignment"
 	case CandidateRejectRolloutShadow:
 		return "Promote strategy to live via /api/v1/agent/strategy-mode"
+	case CandidateRejectRolloutPaper:
+		return "Promote strategy from paper to live via /api/v1/agent/strategy-mode"
 	case CandidateRejectMaxConcurrentPositions:
 		return fmt.Sprintf("Reduce open positions below %d", policy.MaxConcurrentPositions)
 	case CandidateRejectAutonomyGateClosed:
@@ -460,7 +474,7 @@ func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy)
 		return false, false, rejection
 	}
 
-	if signal.BidAskSpread <= 0 {
+	if hasInvalidCandidateMetrics(signal) || signal.BidAskSpread <= 0 {
 		rejection.Reason = CandidateRejectMissingOrderbookSignal
 		return false, false, rejection
 	}
@@ -488,6 +502,10 @@ func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy)
 }
 
 func estimateCandidateConfidence(signal CandidateSignal) (string, float64, bool) {
+	if hasInvalidCandidateMetrics(signal) {
+		return "", 0, false
+	}
+
 	imbalance := math.Abs(signal.OrderBookImbalance)
 	if imbalance < scalpingStrongImbalanceFloor {
 		if imbalance < scalpingNeutralImbalanceFloor {
@@ -517,6 +535,20 @@ func estimateCandidateConfidence(signal CandidateSignal) (string, float64, bool)
 		volumeScore*scalpingConfidenceVolumeW
 	confidence = clampFloat(confidence, 0, 0.99)
 	return action, confidence, true
+}
+
+func hasInvalidCandidateMetrics(signal CandidateSignal) bool {
+	volume := signal.Volume24h.InexactFloat64()
+	return invalidCandidateFloat(signal.BidAskSpread) ||
+		invalidCandidateFloat(signal.OrderBookImbalance) ||
+		invalidCandidateFloat(signal.RangePosition24h) ||
+		math.IsNaN(volume) ||
+		math.IsInf(volume, 0) ||
+		volume < 0
+}
+
+func invalidCandidateFloat(value float64) bool {
+	return math.IsNaN(value) || math.IsInf(value, 0)
 }
 
 func clampFloat(value, minValue, maxValue float64) float64 {

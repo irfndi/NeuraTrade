@@ -408,7 +408,7 @@ func (c *ScalpingAutonomyCoordinator) SetStrategyMode(
 		case state.CurrentStage == autonomous.StagePaper && targetStage == autonomous.StageLive:
 			state, err = c.rollout.ForcePromote(ctx, strategyID, "operator_set_strategy_mode")
 		default:
-			state, err = c.rollout.Rollback(ctx, strategyID, autonomous.TriggerSafeMode, "operator_set_strategy_mode")
+			state, err = c.rollout.Rollback(ctx, strategyID, autonomous.TriggerOperatorSetMode, "operator_set_strategy_mode")
 		}
 		if err != nil {
 			return nil, fmt.Errorf("set strategy mode to %s: %w", mode, err)

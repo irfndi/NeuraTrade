@@ -55,3 +55,30 @@ func TestScalpingAutonomyCoordinator_SetStrategyMode_PromotesOnlyToRequestedStag
 	assert.Equal(t, autonomous.StageShadow, state.History[0].FromStage)
 	assert.Equal(t, autonomous.StagePaper, state.History[0].ToStage)
 }
+
+func TestScalpingAutonomyCoordinator_SetStrategyMode_UsesOperatorTriggerOnRollback(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-autonomy-rollback.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	coordinator := NewScalpingAutonomyCoordinator(store, AIScalpingConfig{})
+
+	_, err = coordinator.SetStrategyMode(context.Background(), "strategy-live", autonomous.ModeLive)
+	require.NoError(t, err)
+
+	state, err := coordinator.SetStrategyMode(context.Background(), "strategy-live", autonomous.ModePaper)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.NotEmpty(t, state.History)
+
+	last := state.History[len(state.History)-1]
+	assert.Equal(t, autonomous.StageLive, last.FromStage)
+	assert.Equal(t, autonomous.StagePaper, last.ToStage)
+	assert.Contains(t, last.Reason, string(autonomous.TriggerOperatorSetMode))
+	assert.NotContains(t, last.Reason, string(autonomous.TriggerSafeMode))
+}

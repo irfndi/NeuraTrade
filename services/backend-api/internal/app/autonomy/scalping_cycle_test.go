@@ -1,6 +1,7 @@
 package autonomy
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,22 @@ func TestEvaluateScalpingPolicy_LossStreakAndNegativeExpectancyTightening(t *tes
 	require.Contains(t, withLossAndNegativeExpectancy.PolicyAdjustments, "negative_expectancy_cap")
 }
 
+func TestEvaluateScalpingPolicy_UsesInclusiveTierThresholdsAndStandardConcurrentCap(t *testing.T) {
+	cfg := DefaultScalpingPolicyConfig()
+
+	require.Equal(t, AccountTierMicro, ResolveAccountTier(cfg.MicroAccountMaxValue, cfg))
+	require.Equal(t, AccountTierSmall, ResolveAccountTier(cfg.SmallAccountMaxValue, cfg))
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(1_000),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+	}, cfg)
+
+	require.Equal(t, AccountTierSmall, policy.AccountTier)
+	require.Equal(t, DefaultMaxConcurrentPositions, policy.MaxConcurrentPositions)
+}
+
 func TestNextUnblockCondition_Mappings(t *testing.T) {
 	policy := ScalpingCyclePolicy{
 		EffectiveMinConfidence: 0.72,
@@ -123,6 +140,7 @@ func TestNextUnblockCondition_Mappings(t *testing.T) {
 		{name: "orderbook", reason: CandidateRejectMissingOrderbookSignal, expected: "orderbook"},
 		{name: "expectancy", reason: CandidateRejectPreTradeExpectancy, expected: "expectancy"},
 		{name: "rollout", reason: CandidateRejectRolloutShadow, expected: "strategy-mode"},
+		{name: "rollout_paper", reason: CandidateRejectRolloutPaper, expected: "paper"},
 		{name: "max_concurrent", reason: CandidateRejectMaxConcurrentPositions, expected: "reduce open positions"},
 	}
 
@@ -189,6 +207,73 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 	require.Contains(t, reasons, CandidateRejectMissingOrderbookSignal)
 }
 
+func TestEvaluateCandidateSignal_RejectsInvalidMetrics(t *testing.T) {
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(500),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+	}, DefaultScalpingPolicyConfig())
+
+	testCases := []struct {
+		name   string
+		signal CandidateSignal
+	}{
+		{
+			name: "nan_spread",
+			signal: CandidateSignal{
+				Symbol:             "ADA/USDT",
+				Price:              decimal.NewFromInt(1),
+				Volume24h:          decimal.NewFromInt(1_000),
+				BidAskSpread:       math.NaN(),
+				OrderBookImbalance: 0.25,
+				RangePosition24h:   30,
+			},
+		},
+		{
+			name: "negative_volume",
+			signal: CandidateSignal{
+				Symbol:             "ADA/USDT",
+				Price:              decimal.NewFromInt(1),
+				Volume24h:          decimal.NewFromInt(-1),
+				BidAskSpread:       0.05,
+				OrderBookImbalance: 0.25,
+				RangePosition24h:   30,
+			},
+		},
+		{
+			name: "infinite_imbalance",
+			signal: CandidateSignal{
+				Symbol:             "ADA/USDT",
+				Price:              decimal.NewFromInt(1),
+				Volume24h:          decimal.NewFromInt(1_000),
+				BidAskSpread:       0.05,
+				OrderBookImbalance: math.Inf(1),
+				RangePosition24h:   30,
+			},
+		},
+		{
+			name: "nan_range_position",
+			signal: CandidateSignal{
+				Symbol:             "ADA/USDT",
+				Price:              decimal.NewFromInt(1),
+				Volume24h:          decimal.NewFromInt(1_000),
+				BidAskSpread:       0.05,
+				OrderBookImbalance: 0.25,
+				RangePosition24h:   math.NaN(),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ranked, viable, rejection := evaluateCandidateSignal(tc.signal, policy)
+			require.False(t, ranked)
+			require.False(t, viable)
+			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
+		})
+	}
+}
+
 func TestEvaluateProgressBlock_AfterTwoHoursWithoutAttempt(t *testing.T) {
 	state := EvaluateProgressBlock(
 		time.Date(2026, time.March, 7, 10, 0, 0, 0, time.UTC),
@@ -208,4 +293,11 @@ func TestBuildRolloutShadowGate(t *testing.T) {
 	require.Equal(t, "shadow", snapshot.RolloutStageCurrent)
 	require.Equal(t, "active", snapshot.RolloutStatusCurrent)
 	require.Contains(t, snapshot.RolloutGateReason, "strategy_not_live")
+}
+
+func TestBuildRolloutShadowGate_PaperStageUsesPaperBlockCode(t *testing.T) {
+	snapshot := BuildRolloutShadowGate("paper", "active", "")
+
+	require.False(t, snapshot.Allowed)
+	require.Equal(t, CandidateRejectRolloutPaper, snapshot.BlockCode)
 }

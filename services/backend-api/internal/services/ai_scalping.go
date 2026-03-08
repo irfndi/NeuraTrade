@@ -900,14 +900,11 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	portfolio.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct
 	portfolio.EffectiveMaxConcurrentPositions = policy.MaxConcurrentPositions
 
+	effectiveMinConfidence := policy.EffectiveMinConfidence
+	effectiveMaxCapital := policy.EffectiveMaxCapitalPct
 	var funnel appautonomy.CandidateFunnelSnapshot
 	defer func() {
-		if decision == nil {
-			return
-		}
-		applyDecisionPolicy(decision, policy)
-		decision.CandidateFunnelKnown = true
-		decision.CandidateFunnel = funnel
+		finalizeDecisionMetadata(decision, &policy, effectiveMinConfidence, effectiveMaxCapital, funnel)
 	}()
 
 	signals, err := s.gatherMarketSignals(ctx)
@@ -965,8 +962,6 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		return decision, nil
 	}
 
-	effectiveMinConfidence := policy.EffectiveMinConfidence
-	effectiveMaxCapital := policy.EffectiveMaxCapitalPct
 	gate := s.evaluatePreTradeGate(ctx, decision, signals)
 	if !gate.Allowed {
 		attemptedAction := decision.Action
@@ -1143,10 +1138,14 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				decision.Reasoning = buildExecutionFallbackReason(executionErr)
 				decision.ReasonCategory = reasonCategoryExecutionUnavailable
 				decision.ConfidenceKnown = false
+				blockCode := classifyExecutionBlockCode(executionErr)
+				if blockCode == "" && strings.TrimSpace(decision.Reasoning) != "" {
+					blockCode = classifyExecutionBlockCode(errors.New(decision.Reasoning))
+				}
 				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 					Allowed:     false,
 					BlockReason: decision.Reasoning,
-					BlockCode:   appautonomy.CandidateRejectMissingOrderbookSignal,
+					BlockCode:   blockCode,
 				}
 				log.Printf("[AI-SCALPING] Downgrading execution issue to HOLD: %v", executionErr)
 				return decision, nil
@@ -2613,13 +2612,50 @@ func classifyPreTradeBlockCode(reason string) string {
 	}
 }
 
+func classifyExecutionBlockCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	if lower == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(lower, "missing orderbook"):
+		return appautonomy.CandidateRejectMissingOrderbookSignal
+	case strings.Contains(lower, "connectivity") ||
+		strings.Contains(lower, "connection") ||
+		strings.Contains(lower, "disconnected") ||
+		strings.Contains(lower, "unreachable") ||
+		strings.Contains(lower, "request failed") ||
+		strings.Contains(lower, "failed to get ticker") ||
+		strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "deadline exceeded"):
+		return appautonomy.CandidateRejectConnectivity
+	case strings.Contains(lower, "cooldown") ||
+		strings.Contains(lower, "failure budget") ||
+		strings.Contains(lower, "risk budget"):
+		return appautonomy.CandidateRejectRiskBudget
+	default:
+		return appautonomy.CandidateRejectAutonomyRuntime
+	}
+}
+
 func autonomyGateBlockCode(reason string) string {
 	lower := strings.ToLower(strings.TrimSpace(reason))
 	switch {
-	case strings.Contains(lower, "strategy_not_live") ||
-		strings.Contains(lower, "autonomy live gate closed") ||
+	case strings.Contains(lower, "strategy_not_live"):
+		if strings.Contains(lower, "stage: paper") {
+			return appautonomy.CandidateRejectRolloutPaper
+		}
+		return appautonomy.CandidateRejectRolloutShadow
+	case strings.Contains(lower, "autonomy live gate closed") && strings.Contains(lower, "stage: paper"):
+		return appautonomy.CandidateRejectRolloutPaper
+	case strings.Contains(lower, "autonomy live gate closed") ||
 		strings.Contains(lower, "stage: shadow"):
 		return appautonomy.CandidateRejectRolloutShadow
+	case strings.Contains(lower, "stage: paper"):
+		return appautonomy.CandidateRejectRolloutPaper
 	case strings.Contains(lower, "safe-mode") ||
 		strings.Contains(lower, "safe mode") ||
 		strings.Contains(lower, "safe_mode"):
@@ -3045,6 +3081,9 @@ func scalpingPolicyConfigFromEnv() appautonomy.ScalpingPolicyConfig {
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_MAX_CAPITAL_PCT"); ok && value > 0 {
 		cfg.MicroMaxCapitalPct = value
 	}
+	if value := getEnvInt("NEURATRADE_SCALPING_MAX_CONCURRENT_POSITIONS"); value > 0 {
+		cfg.MaxConcurrentPositions = value
+	}
 	if value := getEnvInt("NEURATRADE_SCALPING_MICRO_MAX_CONCURRENT_POSITIONS"); value > 0 {
 		cfg.MicroMaxConcurrent = value
 	}
@@ -3072,6 +3111,12 @@ func candidateSignalsFromMarketSignals(signals []aiMarketSignal) []appautonomy.C
 	}
 	candidates := make([]appautonomy.CandidateSignal, 0, len(signals))
 	for _, signal := range signals {
+		if hasNonFiniteScalpingSignalValue(signal.Price) ||
+			hasNonFiniteScalpingSignalValue(signal.High24h) ||
+			hasNonFiniteScalpingSignalValue(signal.Low24h) ||
+			hasNonFiniteScalpingSignalValue(signal.Volume24h) {
+			continue
+		}
 		candidates = append(candidates, appautonomy.CandidateSignal{
 			Symbol:             signal.Symbol,
 			Price:              decimal.NewFromFloat(signal.Price),
@@ -3084,6 +3129,27 @@ func candidateSignalsFromMarketSignals(signals []aiMarketSignal) []appautonomy.C
 		})
 	}
 	return candidates
+}
+
+func hasNonFiniteScalpingSignalValue(value float64) bool {
+	return math.IsNaN(value) || math.IsInf(value, 0)
+}
+
+func finalizeDecisionMetadata(
+	decision *AITradingDecision,
+	policy *appautonomy.ScalpingCyclePolicy,
+	effectiveMinConfidence float64,
+	effectiveMaxCapital float64,
+	funnel appautonomy.CandidateFunnelSnapshot,
+) {
+	if decision == nil || policy == nil {
+		return
+	}
+	policy.EffectiveMinConfidence = effectiveMinConfidence
+	policy.EffectiveMaxCapitalPct = effectiveMaxCapital
+	applyDecisionPolicy(decision, *policy)
+	decision.CandidateFunnelKnown = true
+	decision.CandidateFunnel = funnel
 }
 
 func applyDecisionPolicy(decision *AITradingDecision, policy appautonomy.ScalpingCyclePolicy) {

@@ -1134,31 +1134,104 @@ func TestIntegratedQuestHandlers_SetDB_RetriesTradeJournalInitAfterDBReplacement
 func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsStaleDecisionMetadata(t *testing.T) {
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{
-		"candidate_universe_count":    8,
-		"candidate_ranked_count":      3,
-		"candidate_viable_count":      1,
-		"top_candidate_rejections":    []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "spread_too_wide"}},
-		"rollout_stage_current":       "paper",
-		"rollout_status_current":      "paused",
-		"rollout_gate_reason_current": "safe mode",
+		"account_tier":                       "micro",
+		"effective_min_confidence":           0.72,
+		"effective_max_capital_pct":          1.25,
+		"effective_max_concurrent_positions": 1,
+		"effective_policy_adjustments":       []string{"recovery_cap"},
+		"candidate_universe_count":           8,
+		"candidate_ranked_count":             3,
+		"candidate_viable_count":             1,
+		"top_candidate_rejections":           []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "spread_too_wide"}},
+		"rollout_stage_current":              "paper",
+		"rollout_status_current":             "paused",
+		"rollout_gate_reason_current":        "safe mode",
 	}}
 
 	handlers.applyScalpingCycleDecisionDiagnostics(quest, &AITradingDecision{})
 
-	_, ok := quest.Checkpoint["candidate_universe_count"]
+	for _, key := range []string{
+		"account_tier",
+		"effective_min_confidence",
+		"effective_max_capital_pct",
+		"effective_max_concurrent_positions",
+		"effective_policy_adjustments",
+		"candidate_universe_count",
+		"candidate_ranked_count",
+		"candidate_viable_count",
+		"top_candidate_rejections",
+		"rollout_stage_current",
+		"rollout_status_current",
+		"rollout_gate_reason_current",
+	} {
+		_, ok := quest.Checkpoint[key]
+		assert.False(t, ok, key)
+	}
+}
+
+func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsNilDecisionMetadata(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{
+		"account_tier":                       "small",
+		"effective_min_confidence":           0.70,
+		"effective_max_capital_pct":          2.5,
+		"effective_max_concurrent_positions": 3,
+		"effective_policy_adjustments":       []string{"performance_cap_applied"},
+	}}
+
+	handlers.applyScalpingCycleDecisionDiagnostics(quest, nil)
+
+	for _, key := range []string{
+		"account_tier",
+		"effective_min_confidence",
+		"effective_max_capital_pct",
+		"effective_max_concurrent_positions",
+		"effective_policy_adjustments",
+	} {
+		_, ok := quest.Checkpoint[key]
+		assert.False(t, ok, key)
+	}
+}
+
+func TestIntegratedQuestHandlers_RecordTradeDecision_DoesNotSynthesizeTradeMemoryID(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-decision.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	quest := &Quest{
+		ID:         "quest-no-order-id",
+		Checkpoint: map[string]interface{}{"trade_memory_id": "stale"},
+		Metadata: map[string]string{
+			"chat_id":       "chat-1",
+			"definition_id": "def-1",
+		},
+	}
+
+	handlers.recordTradeDecision(context.Background(), quest, &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "SOL/USDT",
+		SizePercent: 1.0,
+		Confidence:  0.8,
+		OrderID:     "",
+	}, "bitget", TradingPortfolio{
+		USDTBalance:   100,
+		StrategyPhase: "bootstrap",
+	})
+
+	_, ok := quest.Checkpoint["trade_memory_id"]
 	assert.False(t, ok)
-	_, ok = quest.Checkpoint["candidate_ranked_count"]
-	assert.False(t, ok)
-	_, ok = quest.Checkpoint["candidate_viable_count"]
-	assert.False(t, ok)
-	_, ok = quest.Checkpoint["top_candidate_rejections"]
-	assert.False(t, ok)
-	_, ok = quest.Checkpoint["rollout_stage_current"]
-	assert.False(t, ok)
-	_, ok = quest.Checkpoint["rollout_status_current"]
-	assert.False(t, ok)
-	_, ok = quest.Checkpoint["rollout_gate_reason_current"]
-	assert.False(t, ok)
+
+	require.NoError(t, handlers.ensureTradeJournalSchema())
+
+	var count int
+	err = sqliteDB.DB.QueryRowContext(context.Background(), `SELECT COUNT(1) FROM trades`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }
 
 // hasExchange checks if a specific exchange exists in the list

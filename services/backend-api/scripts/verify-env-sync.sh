@@ -15,6 +15,8 @@ ENV_PATH="${ENV_PATH:-.env}"
 warn_count=0
 error_count=0
 config_reader_status="unknown"
+first_non_empty_index=-1
+first_non_empty_value=""
 
 print_status() {
   local status="$1"
@@ -116,48 +118,69 @@ PY
 }
 
 first_non_empty() {
+  local idx=0
   local value
+  first_non_empty_index=-1
+  first_non_empty_value=""
   for value in "$@"; do
     if [[ -n "${value// /}" ]]; then
-      printf '%s\n' "$value"
+      first_non_empty_index=$idx
+      first_non_empty_value="$value"
       return 0
     fi
+    idx=$((idx + 1))
   done
   return 1
 }
 
 describe_source() {
-  local env_name="$1"
-  local config_path="$2"
+  local source_key="$1"
+  case "$source_key" in
+    env:*)
+      printf 'environment (%s)' "${source_key#env:}"
+      ;;
+    config:*)
+      printf 'config.json (%s)' "${source_key#config:}"
+      ;;
+    fallback:*)
+      printf 'fallback (%s)' "${source_key#fallback:}"
+      ;;
+    *)
+      printf 'default'
+      ;;
+  esac
+}
 
-  if [[ -n "${!env_name:-}" ]]; then
-    printf 'environment (%s)' "$env_name"
-    return 0
+normalize_telegram_api_base_url() {
+  local value="${1:-}"
+  value="${value%/}"
+  if [[ -z "${value// /}" ]] || [[ "$value" == *"api.telegram.org"* ]]; then
+    return 1
   fi
-
-  if [[ -n "$config_path" ]] && [[ -n "$(read_config_value "$config_path" 2>/dev/null || true)" ]]; then
-    printf 'config.json (%s)' "$config_path"
-    return 0
-  fi
-
-  printf 'default'
+  printf '%s\n' "$value"
 }
 
 resolve_telegram_api_base_url() {
   local env_value="${TELEGRAM_API_BASE_URL:-}"
-  if [[ -n "${env_value// /}" ]]; then
-    printf '%s\n' "${env_value%/}"
+  local normalized=""
+  normalized="$(normalize_telegram_api_base_url "$env_value" || true)"
+  if [[ -n "$normalized" ]]; then
+    printf '%s\n' "$normalized"
     return 0
   fi
 
   local config_value=""
   config_value="$(read_config_value 'telegram.api_base_url' 2>/dev/null || true)"
-  if [[ -z "$config_value" ]]; then
-    config_value="$(read_config_value 'services.telegram.api_base_url' 2>/dev/null || true)"
+  normalized="$(normalize_telegram_api_base_url "$config_value" || true)"
+  if [[ -n "$normalized" ]]; then
+    printf '%s\n' "$normalized"
+    return 0
   fi
 
-  if [[ -n "$config_value" && "$config_value" != *"api.telegram.org"* ]]; then
-    printf '%s\n' "${config_value%/}"
+  config_value="$(read_config_value 'services.telegram.api_base_url' 2>/dev/null || true)"
+  normalized="$(normalize_telegram_api_base_url "$config_value" || true)"
+  if [[ -n "$normalized" ]]; then
+    printf '%s\n' "$normalized"
     return 0
   fi
 
@@ -180,6 +203,7 @@ load_dotenv_if_present() {
 
   print_status "INFO" "Loading environment variables from ${ENV_PATH}"
   set -a
+  # shellcheck disable=SC1090
   source "$ENV_PATH"
   set +a
 }
@@ -202,16 +226,31 @@ report_value() {
   fi
 
   local -a resolved_sources=("${!env_name:-}" "$config_value")
+  local -a source_keys=("env:${env_name}")
+  if [[ -n "$config_path" ]]; then
+    source_keys+=("config:${config_path}")
+  else
+    source_keys+=("default")
+  fi
   if [[ ${#fallback_values[@]} -gt 0 ]]; then
     resolved_sources+=("${fallback_values[@]}")
+    local idx
+    for idx in "${!fallback_values[@]}"; do
+      source_keys+=("fallback:$((idx + 1))")
+    done
   fi
 
   local resolved=""
-  resolved="$(first_non_empty "${resolved_sources[@]}" || true)"
+  first_non_empty "${resolved_sources[@]}" || true
+  resolved="$first_non_empty_value"
 
   if [[ -n "$resolved" ]]; then
     local source_label
-    source_label="$(describe_source "$env_name" "$config_path")"
+    local source_key="default"
+    if [[ $first_non_empty_index -ge 0 && $first_non_empty_index -lt ${#source_keys[@]} ]]; then
+      source_key="${source_keys[$first_non_empty_index]}"
+    fi
+    source_label="$(describe_source "$source_key")"
     if [[ "$secret" == "true" ]]; then
       print_status "OK" "${label}: set via ${source_label} (value hidden)"
     else

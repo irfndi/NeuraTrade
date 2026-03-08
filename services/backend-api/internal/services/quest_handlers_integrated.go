@@ -3267,21 +3267,33 @@ func (h *IntegratedQuestHandlers) applyAutonomyCheckpoint(quest *Quest) {
 }
 
 func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Quest, decision *AITradingDecision) {
-	if quest == nil || quest.Checkpoint == nil || decision == nil {
+	if quest == nil || quest.Checkpoint == nil {
+		return
+	}
+	if decision == nil {
+		clearScalpingCycleDecisionDiagnostics(quest.Checkpoint)
 		return
 	}
 
 	if decision.AccountTier != "" {
 		quest.Checkpoint["account_tier"] = decision.AccountTier
+	} else {
+		delete(quest.Checkpoint, "account_tier")
 	}
 	if decision.EffectiveMinConfidence > 0 {
 		quest.Checkpoint["effective_min_confidence"] = decision.EffectiveMinConfidence
+	} else {
+		delete(quest.Checkpoint, "effective_min_confidence")
 	}
 	if decision.EffectiveMaxCapitalPct > 0 {
 		quest.Checkpoint["effective_max_capital_pct"] = decision.EffectiveMaxCapitalPct
+	} else {
+		delete(quest.Checkpoint, "effective_max_capital_pct")
 	}
 	if decision.EffectiveMaxConcurrentPositions > 0 {
 		quest.Checkpoint["effective_max_concurrent_positions"] = decision.EffectiveMaxConcurrentPositions
+	} else {
+		delete(quest.Checkpoint, "effective_max_concurrent_positions")
 	}
 	if len(decision.PolicyAdjustments) > 0 {
 		quest.Checkpoint["effective_policy_adjustments"] = append([]string(nil), decision.PolicyAdjustments...)
@@ -3313,6 +3325,28 @@ func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Q
 		delete(quest.Checkpoint, "rollout_stage_current")
 		delete(quest.Checkpoint, "rollout_status_current")
 		delete(quest.Checkpoint, "rollout_gate_reason_current")
+	}
+}
+
+func clearScalpingCycleDecisionDiagnostics(checkpoint map[string]interface{}) {
+	if checkpoint == nil {
+		return
+	}
+	for _, key := range []string{
+		"account_tier",
+		"effective_min_confidence",
+		"effective_max_capital_pct",
+		"effective_max_concurrent_positions",
+		"effective_policy_adjustments",
+		"candidate_universe_count",
+		"candidate_ranked_count",
+		"candidate_viable_count",
+		"top_candidate_rejections",
+		"rollout_stage_current",
+		"rollout_status_current",
+		"rollout_gate_reason_current",
+	} {
+		delete(checkpoint, key)
 	}
 }
 
@@ -3428,9 +3462,6 @@ func (h *IntegratedQuestHandlers) recordTradeDecision(
 	}
 
 	tradeID := strings.TrimSpace(decision.OrderID)
-	if tradeID == "" {
-		tradeID = fmt.Sprintf("ai-order-%d", time.Now().UnixNano())
-	}
 
 	if h.tradeMemory != nil {
 		record := AITradeRecord{
@@ -3455,7 +3486,11 @@ func (h *IntegratedQuestHandlers) recordTradeDecision(
 	}
 
 	h.persistLegacyTradeEntry(ctx, quest, decision, exchange, portfolio, tradeID)
-	quest.Checkpoint["trade_memory_id"] = tradeID
+	if tradeID != "" {
+		quest.Checkpoint["trade_memory_id"] = tradeID
+	} else {
+		delete(quest.Checkpoint, "trade_memory_id")
+	}
 }
 
 func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
@@ -3467,6 +3502,10 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
 	tradeID string,
 ) {
 	if h == nil || h.db == nil || quest == nil || decision == nil {
+		return
+	}
+	tradeID = strings.TrimSpace(tradeID)
+	if tradeID == "" {
 		return
 	}
 	if err := h.ensureTradeJournalSchema(); err != nil {

@@ -169,6 +169,8 @@ const (
 	TriggerKillSwitch RollbackTrigger = "kill_switch"
 	// TriggerSafeMode triggers rollback when safe mode is enabled.
 	TriggerSafeMode RollbackTrigger = "safe_mode"
+	// TriggerOperatorSetMode records an operator-requested stage change.
+	TriggerOperatorSetMode RollbackTrigger = "operator_set_mode"
 )
 
 // RollbackConfig configures automatic rollback behavior.
