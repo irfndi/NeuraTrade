@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/irfndi/neuratrade/internal/services"
 )
@@ -20,6 +21,26 @@ type Dependencies struct {
 }
 
 func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandlers, error) {
+	fallback := services.NewIntegratedQuestHandlers(
+		deps.TechnicalAnalysis,
+		deps.CCXTService,
+		deps.ArbitrageService,
+		deps.FuturesArbService,
+		deps.NotificationService,
+		deps.MonitoringService,
+	)
+	fallback.SetDB(deps.SQLDB)
+
+	if deps.SQLDB == nil {
+		return fallback, fmt.Errorf("build integrated autonomy handlers: sql db is nil")
+	}
+
+	schemaCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := EnsureAutonomySchema(schemaCtx, deps.SQLDB); err != nil {
+		return fallback, fmt.Errorf("build integrated autonomy handlers: ensure autonomy schema: %w", err)
+	}
+
 	handlers, err := services.NewIntegratedQuestHandlersWithAutonomyStore(
 		deps.TechnicalAnalysis,
 		deps.CCXTService,
@@ -31,15 +52,6 @@ func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandle
 		nil,
 	)
 	if err != nil {
-		fallback := services.NewIntegratedQuestHandlers(
-			deps.TechnicalAnalysis,
-			deps.CCXTService,
-			deps.ArbitrageService,
-			deps.FuturesArbService,
-			deps.NotificationService,
-			deps.MonitoringService,
-		)
-		fallback.SetDB(deps.SQLDB)
 		return fallback, fmt.Errorf("build integrated autonomy handlers: %w", err)
 	}
 	return handlers, nil
@@ -65,7 +77,7 @@ func RegisterQuestRuntime(engine *services.QuestEngine, handlers *services.Integ
 
 func EnsureAutonomySchema(ctx context.Context, db *sql.DB) error {
 	if db == nil {
-		return nil
+		return fmt.Errorf("autonomy schema requires sql db")
 	}
 	store := services.NewAutonomousRolloutStore(db)
 	return store.InitSchema(ctx)

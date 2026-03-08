@@ -1051,6 +1051,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)
 				telegramInternal.GET("/performance", autonomousHandler.GetPerformanceBreakdown)
 				telegramInternal.GET("/ai/status/:chatId", telegramInternalHandler.GetAIStatusByChatID)
+				telegramInternal.GET("/users/:id", telegramInternalHandler.GetUserByChatID)
+				telegramInternal.GET("/notifications/:userId", telegramInternalHandler.GetNotificationPreferences)
+				telegramInternal.POST("/notifications/:userId", telegramInternalHandler.SetNotificationPreferences)
+				telegramInternal.POST("/autonomous/begin", telegramInternalHandler.BeginAutonomous)
+				telegramInternal.POST("/autonomous/pause", telegramInternalHandler.PauseAutonomous)
+				telegramInternal.GET("/doctor", telegramInternalHandler.GetDoctor)
 
 				// Trading mode routes (dry/live toggle)
 				if opModeHandler != nil {

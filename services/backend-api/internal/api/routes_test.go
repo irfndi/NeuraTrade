@@ -807,7 +807,7 @@ func TestSetupRoutes_TelegramInternalRequiresAdminAuth(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "ADMIN_AUTH_FAILED")
 }
 
-func TestSetupRoutes_TelegramLegacyInternalAliasesRemoved(t *testing.T) {
+func TestSetupRoutes_TelegramLegacyInternalAliasesRequireAdminAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
@@ -854,7 +854,8 @@ func TestSetupRoutes_TelegramLegacyInternalAliasesRemoved(t *testing.T) {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
-		assert.Equalf(t, http.StatusNotFound, rec.Code, "expected legacy path removed: %s %s", tc.method, tc.path)
+		assert.Equalf(t, http.StatusUnauthorized, rec.Code, "expected legacy path to require admin auth: %s %s", tc.method, tc.path)
+		assert.Containsf(t, rec.Body.String(), "ADMIN_AUTH_FAILED", "expected admin auth failure body for %s %s", tc.method, tc.path)
 	}
 }
 

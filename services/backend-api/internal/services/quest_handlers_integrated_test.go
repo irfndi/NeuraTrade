@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -495,6 +496,58 @@ func TestIntegratedQuestHandlers_EnrichPortfolioControlPlane_UsesCurrentDrawdown
 	assert.InDelta(t, 1000.0, checkpointFloat(quest.Checkpoint["risk_peak_equity"]), 0.0001)
 	assert.InDelta(t, 0.30, checkpointFloat(quest.Checkpoint["risk_current_drawdown"]), 0.0001)
 	assert.InDelta(t, 0.35, checkpointFloat(quest.Checkpoint["risk_max_drawdown"]), 0.0001)
+}
+
+func TestIntegratedQuestHandlers_EnrichPortfolioControlPlane_UsesRawEquityForFullDrawdown(t *testing.T) {
+	store := newLifecycleStoreForTest(t)
+	ctx := context.Background()
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-drawdown",
+		ChatID:     "chat-raw-equity",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(10),
+		EntryPrice: decimal.NewFromFloat(100),
+		OpenedAt:   time.Now().UTC().Add(-5 * time.Minute),
+	}))
+	_, err := store.ReconcileExchangeSnapshot(ctx, "chat-raw-equity", "bitget", LifecycleExchangeSnapshot{
+		Positions: []ccxt.Position{
+			{
+				Symbol:        "BTC/USDT",
+				Side:          "long",
+				Size:          decimal.NewFromFloat(10),
+				EntryPrice:    decimal.NewFromFloat(100),
+				MarkPrice:     decimal.NewFromFloat(10),
+				UnrealizedPnl: decimal.NewFromFloat(-900),
+				Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+			},
+		},
+		PositionsFresh: true,
+	}, "bootstrap_reconciliation")
+	require.NoError(t, err)
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetLifecycleStore(store)
+	handlers.SetDrawdownHalt(NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig()))
+
+	quest := &Quest{
+		Checkpoint: map[string]interface{}{
+			"risk_peak_equity": 1000.0,
+		},
+	}
+	portfolio := &TradingPortfolio{
+		USDTBalance: 200,
+		TotalValue:  200,
+	}
+
+	handlers.enrichPortfolioControlPlane(ctx, quest, "chat-raw-equity", "bitget", portfolio)
+
+	assert.InDelta(t, 1.0, portfolio.CurrentDrawdown, 0.0001)
+	assert.InDelta(t, 1.0, portfolio.RiskDrawdown, 0.0001)
+	assert.InDelta(t, 1.0, checkpointFloat(quest.Checkpoint["risk_current_drawdown"]), 0.0001)
 }
 
 func newLifecycleStoreForTest(t *testing.T) *TradingLifecycleStore {

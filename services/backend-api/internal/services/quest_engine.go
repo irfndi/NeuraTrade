@@ -859,8 +859,9 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 		mode = "normal"
 	}
 	minInterval := cadenceIntervalForMode(mode)
+	activeGoalOnetime := quest.Cadence == CadenceOnetime && quest.Type == QuestTypeGoal && quest.Status == QuestStatusActive
 
-	if quest.LastExecutedAt != nil && now.Sub(*quest.LastExecutedAt) < minInterval {
+	if !activeGoalOnetime && quest.LastExecutedAt != nil && now.Sub(*quest.LastExecutedAt) < minInterval {
 		return false
 	}
 
@@ -886,6 +887,9 @@ func (e *QuestEngine) shouldExecute(quest *Quest, now time.Time) bool {
 		}
 		return true
 	case CadenceOnetime:
+		if quest.Type == QuestTypeGoal && quest.Status == QuestStatusActive {
+			return !questGoalReached(quest)
+		}
 		return quest.LastExecutedAt == nil
 	default:
 		return false
@@ -1837,81 +1841,95 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	}
 
 	var (
-		lastStartupReconcile   time.Time
-		lastSpotUnwind         time.Time
-		lastHoldDigest         time.Time
-		lastEntryAttempt       time.Time
-		latestFailureAt        time.Time
-		holdStreak             int
-		unlockCycles           int
-		failureStreak          int
-		noFillSince            time.Time
-		activeScalping         int
-		recoveryMode           string
-		recoveryNextCondition  string
-		recoveryCleanCycles    int
-		recoveryCleanRequired  int
-		recoveryCyclesToEntry  int
-		recoveryGateEvalAt     time.Time
-		entryAttempts1h        int
-		entryAttemptBlock      string
-		nextUnblockCondition   string
-		driftSignature         string
-		driftDeadlockCycles    int
-		recoveryEntryAllowed   = true
-		stateDriftActive       bool
-		stateDriftPositions    int
-		stateDriftLastChecked  time.Time
-		lastDriftRepair        time.Time
-		lastCleanReconcile     time.Time
-		entryGateReasonCurrent string
-		entryGateType          string
-		riskCurrentDrawdown    float64
-		riskCurrentDrawdownAt  time.Time
-		hasActiveScalpingRisk  bool
-		hasRiskCurrentDrawdown bool
-		riskMaxDrawdown        float64
-		aiWindowTotal          int
-		aiWindowSuccess        int
-		aiWindowErrors         int
-		aiWindowTimeouts       int
-		aiWindowParseFails     int
-		aiWindowStarted        time.Time
-		aiLastEventAt          time.Time
-		aiLastCategory         string
-		aiLastProvider         string
-		aiLastSuccessProvider  string
-		aiLastError            string
-		aiLastErrorAt          time.Time
-		aiLastSuccessAt        time.Time
-		aiCircuitUntil         time.Time
-		aiCircuitReason        string
-		aiCircuitTrips         int
-		aiFailoverAttempts     int
-		aiFailoverSuccesses    int
-		aiFailoverFailures     int
-		executionProgressAt    time.Time
-		executionStage         string
-		executionLockHeld      bool
-		executionLockTTL       time.Duration
-		executionLockChecked   time.Time
-		staleResetReason       string
-		staleResetAt           time.Time
-		autonomyStrategyID     string
-		autonomyRolloutStage   string
-		autonomyRolloutStatus  string
-		autonomyGateOpen       bool
-		autonomyGateReasons    []string
-		recentLossStreak       int
-		recentLossActive       bool
-		recentLossWindowSec    int
+		lastStartupReconcile           time.Time
+		lastSpotUnwind                 time.Time
+		lastHoldDigest                 time.Time
+		lastEntryAttempt               time.Time
+		latestFailureAt                time.Time
+		holdStreak                     int
+		unlockCycles                   int
+		failureStreak                  int
+		noFillSince                    time.Time
+		activeScalping                 int
+		recoveryMode                   string
+		recoveryNextCondition          string
+		recoveryNextConditionAt        time.Time
+		hasActiveRecoveryNextCondition bool
+		recoveryCleanCycles            int
+		recoveryCleanRequired          int
+		recoveryCyclesToEntry          int
+		recoveryGateEvalAt             time.Time
+		entryAttempts1h                int
+		entryAttemptBlock              string
+		nextUnblockCondition           string
+		nextUnblockConditionAt         time.Time
+		hasActiveNextUnblockCondition  bool
+		driftSignature                 string
+		driftDeadlockCycles            int
+		recoveryEntryAllowed           = true
+		stateDriftActive               bool
+		stateDriftPositions            int
+		stateDriftLastChecked          time.Time
+		lastDriftRepair                time.Time
+		lastCleanReconcile             time.Time
+		entryGateReasonCurrent         string
+		entryGateReasonCurrentAt       time.Time
+		hasActiveEntryGateReason       bool
+		entryGateType                  string
+		entryGateTypeAt                time.Time
+		hasActiveEntryGateType         bool
+		riskCurrentDrawdown            float64
+		riskCurrentDrawdownAt          time.Time
+		hasActiveScalpingRisk          bool
+		hasRiskCurrentDrawdown         bool
+		riskMaxDrawdown                float64
+		aiWindowTotal                  int
+		aiWindowSuccess                int
+		aiWindowErrors                 int
+		aiWindowTimeouts               int
+		aiWindowParseFails             int
+		aiWindowStarted                time.Time
+		aiLastEventAt                  time.Time
+		aiLastCategory                 string
+		aiLastProvider                 string
+		aiLastSuccessProvider          string
+		aiLastError                    string
+		aiLastErrorAt                  time.Time
+		aiLastSuccessAt                time.Time
+		aiCircuitUntil                 time.Time
+		aiCircuitReason                string
+		aiCircuitTrips                 int
+		aiFailoverAttempts             int
+		aiFailoverSuccesses            int
+		aiFailoverFailures             int
+		executionProgressAt            time.Time
+		executionStage                 string
+		executionLockHeld              bool
+		executionLockTTL               time.Duration
+		executionLockChecked           time.Time
+		staleResetReason               string
+		staleResetAt                   time.Time
+		autonomyStrategyID             string
+		autonomyRolloutStage           string
+		autonomyRolloutStatus          string
+		autonomyGateOpen               bool
+		autonomyGateReasons            []string
+		recentLossStreak               int
+		recentLossActive               bool
+		recentLossWindowSec            int
 	)
 
 	for _, quest := range e.quests {
 		if strings.TrimSpace(quest.Metadata["chat_id"]) != chatID {
 			continue
 		}
-		if strings.TrimSpace(quest.Metadata["definition_id"]) == "scalping_execution" && quest.Status == QuestStatusActive {
+		checkpointAt := quest.UpdatedAt.UTC()
+		if evalAt := readCheckpointTime(quest.Checkpoint["recovery_gate_eval_at"]); evalAt.After(checkpointAt) {
+			checkpointAt = evalAt
+		}
+		isActiveScalpingQuest := strings.TrimSpace(quest.Metadata["definition_id"]) == "scalping_execution" &&
+			quest.Status == QuestStatusActive
+		if isActiveScalpingQuest {
 			activeScalping++
 		}
 		if e.executing[quest.ID] {
@@ -1962,29 +1980,47 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if mode := readQuestMetricString(cp["recovery_mode"]); mode != "" {
 			recoveryMode = mode
 		}
-		if ts := readCheckpointTime(cp["recovery_gate_eval_at"]); ts.After(recoveryGateEvalAt) {
-			recoveryGateEvalAt = ts
+		if checkpointAt.After(recoveryGateEvalAt) {
+			recoveryGateEvalAt = checkpointAt
 		}
 		if nextCondition := readQuestMetricString(cp["recovery_next_condition"]); nextCondition != "" {
-			recoveryNextCondition = nextCondition
+			switch {
+			case isActiveScalpingQuest:
+				recoveryNextCondition = nextCondition
+				recoveryNextConditionAt = checkpointAt
+				hasActiveRecoveryNextCondition = true
+			case !hasActiveRecoveryNextCondition && checkpointAt.After(recoveryNextConditionAt):
+				recoveryNextCondition = nextCondition
+				recoveryNextConditionAt = checkpointAt
+			}
 		}
 		if unblock := readQuestMetricString(cp["runtime_next_unblock_condition"]); unblock != "" {
-			nextUnblockCondition = unblock
+			switch {
+			case isActiveScalpingQuest:
+				nextUnblockCondition = unblock
+				nextUnblockConditionAt = checkpointAt
+				hasActiveNextUnblockCondition = true
+			case !hasActiveNextUnblockCondition && checkpointAt.After(nextUnblockConditionAt):
+				nextUnblockCondition = unblock
+				nextUnblockConditionAt = checkpointAt
+			}
 		}
 		if _, exists := cp["recovery_entry_allowed"]; exists {
 			recoveryEntryAllowed = readQuestMetricBool(cp["recovery_entry_allowed"])
 		}
 		if gateType := readQuestMetricString(cp["entry_gate_type"]); gateType != "" {
-			entryGateType = gateType
+			switch {
+			case isActiveScalpingQuest:
+				entryGateType = gateType
+				entryGateTypeAt = checkpointAt
+				hasActiveEntryGateType = true
+			case !hasActiveEntryGateType && checkpointAt.After(entryGateTypeAt):
+				entryGateType = gateType
+				entryGateTypeAt = checkpointAt
+			}
 		}
 		if raw, exists := cp["risk_current_drawdown"]; exists {
 			drawdown := readQuestMetricFloat(raw)
-			checkpointAt := quest.UpdatedAt.UTC()
-			if evalAt := readCheckpointTime(cp["recovery_gate_eval_at"]); evalAt.After(checkpointAt) {
-				checkpointAt = evalAt
-			}
-			isActiveScalpingQuest := strings.TrimSpace(quest.Metadata["definition_id"]) == "scalping_execution" &&
-				quest.Status == QuestStatusActive
 			switch {
 			case isActiveScalpingQuest && (!hasActiveScalpingRisk || checkpointAt.After(riskCurrentDrawdownAt)):
 				riskCurrentDrawdown = drawdown
@@ -2075,7 +2111,15 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			lastCleanReconcile = ts
 		}
 		if reason := readQuestMetricString(cp["runtime_entry_gate_reason"]); reason != "" {
-			entryGateReasonCurrent = reason
+			switch {
+			case isActiveScalpingQuest:
+				entryGateReasonCurrent = reason
+				entryGateReasonCurrentAt = checkpointAt
+				hasActiveEntryGateReason = true
+			case !hasActiveEntryGateReason && checkpointAt.After(entryGateReasonCurrentAt):
+				entryGateReasonCurrent = reason
+				entryGateReasonCurrentAt = checkpointAt
+			}
 		}
 
 		aiWindowTotal = maxInt(aiWindowTotal, readQuestMetricInt(cp["runtime_ai_window_total"]))

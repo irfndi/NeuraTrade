@@ -125,7 +125,7 @@ func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, 
 		if h.db == nil {
 			h.autonomyStore = nil
 			h.clearScalpingAutonomyCoordinator()
-			return nil
+			return fmt.Errorf("autonomy store requires sql db")
 		}
 		store = NewAutonomousRolloutStore(h.db)
 	}
@@ -1975,9 +1975,6 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 			}
 			portfolio.UnrealizedPnL = unrealized.InexactFloat64()
 			portfolio.TotalValue = portfolio.USDTBalance + portfolio.UnrealizedPnL
-			if portfolio.TotalValue <= 0 {
-				portfolio.TotalValue = portfolio.USDTBalance
-			}
 		}
 	}
 
@@ -1999,8 +1996,14 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	portfolio.RiskExpectancy = riskMetrics.Expectancy
 	portfolio.RiskSampleSize = riskMetrics.SampleSize
 
+	rawEquity := portfolio.TotalValue
+	clampedTotalValue := portfolio.TotalValue
+	if clampedTotalValue <= 0 {
+		clampedTotalValue = portfolio.USDTBalance
+	}
+
 	currentDrawdown := 0.0
-	peakEquity := portfolio.TotalValue
+	peakEquity := rawEquity
 	maxRecordedDrawdown := portfolio.RiskMaxDrawdown
 	if quest != nil && quest.Checkpoint != nil {
 		if checkpointPeak := checkpointFloat(quest.Checkpoint["risk_peak_equity"]); checkpointPeak > peakEquity {
@@ -2011,13 +2014,13 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		}
 	}
 	if peakEquity > 0 {
-		if portfolio.TotalValue > peakEquity {
-			peakEquity = portfolio.TotalValue
+		if rawEquity > peakEquity {
+			peakEquity = rawEquity
 		}
-		if portfolio.TotalValue <= 0 {
+		if rawEquity <= 0 {
 			currentDrawdown = 1
 		} else {
-			currentDrawdown = (peakEquity - portfolio.TotalValue) / peakEquity
+			currentDrawdown = (peakEquity - rawEquity) / peakEquity
 			if currentDrawdown < 0 {
 				currentDrawdown = 0
 			}
@@ -2037,21 +2040,30 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 				log.Printf("[SCALPING] Drawdown halt peak reset failed for chat %s: %v", chatID, err)
 			}
 		}
-		marketValue := decimal.NewFromFloat(portfolio.TotalValue)
-		if portfolio.TotalValue <= 0 {
-			marketValue = decimal.Zero
-		}
+		marketValue := decimal.NewFromFloat(rawEquity)
 		state, err := h.drawdownHalt.CheckDrawdown(ctx, chatID, marketValue)
 		if err != nil {
 			log.Printf("[SCALPING] Drawdown halt check failed for chat %s: %v", chatID, err)
 		} else if state != nil {
 			portfolio.CurrentDrawdown = state.CurrentDrawdown.InexactFloat64()
+			if portfolio.CurrentDrawdown < 0 {
+				portfolio.CurrentDrawdown = 0
+			}
+			if portfolio.CurrentDrawdown > 1 {
+				portfolio.CurrentDrawdown = 1
+			}
 			portfolio.RiskDrawdown = portfolio.CurrentDrawdown
-			if seen := state.MaxDrawdownSeen.InexactFloat64(); seen > portfolio.RiskMaxDrawdown {
+			seen := state.MaxDrawdownSeen.InexactFloat64()
+			if seen > 1 {
+				seen = 1
+			}
+			if seen > portfolio.RiskMaxDrawdown {
 				portfolio.RiskMaxDrawdown = seen
 			}
 		}
 	}
+
+	portfolio.TotalValue = clampedTotalValue
 
 	phaseDetector := phase_management.NewPhaseDetector(phase_management.DefaultPhaseDetectorConfig(), nil)
 	currentPhase := phaseDetector.GetPhaseForValue(decimal.NewFromFloat(portfolio.TotalValue))

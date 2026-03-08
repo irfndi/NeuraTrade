@@ -8,6 +8,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
 )
 
 type recordingQuestStore struct {
@@ -345,6 +346,31 @@ func TestShouldExecute_OnetimeCadence(t *testing.T) {
 	result = engine.shouldExecute(quest, time.Now())
 	if result {
 		t.Errorf("shouldExecute() for already executed onetime quest should return false, got %v", result)
+	}
+
+	goalQuest := &Quest{
+		ID:             "goal-1",
+		Type:           QuestTypeGoal,
+		Cadence:        CadenceOnetime,
+		Status:         QuestStatusActive,
+		TargetCount:    100,
+		CurrentCount:   40,
+		LastExecutedAt: ptrTime(time.Now().UTC()),
+		Checkpoint: map[string]interface{}{
+			"goal_reached": false,
+		},
+	}
+
+	result = engine.shouldExecute(goalQuest, time.Now())
+	if !result {
+		t.Errorf("shouldExecute() for active incomplete goal quest should return true, got %v", result)
+	}
+
+	goalQuest.CurrentCount = 100
+	goalQuest.Checkpoint["goal_reached"] = true
+	result = engine.shouldExecute(goalQuest, time.Now())
+	if result {
+		t.Errorf("shouldExecute() for completed goal quest should return false, got %v", result)
 	}
 }
 
@@ -783,6 +809,88 @@ func TestGetChatRuntimeDiagnostics_OmitsRiskCurrentDrawdownWhenAbsent(t *testing
 	if _, exists := diag["risk_current_drawdown"]; exists {
 		t.Fatalf("expected risk_current_drawdown to be omitted when no checkpoint provides it, got %#v", diag["risk_current_drawdown"])
 	}
+}
+
+func TestGetChatRuntimeDiagnostics_PrefersActiveScalpingGateFields(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-active"] = &Quest{
+		ID:        "q-active",
+		Status:    QuestStatusActive,
+		UpdatedAt: now.Add(-10 * time.Minute),
+		Metadata: map[string]string{
+			"chat_id":       "chat-gates",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_next_condition":        "active recovery",
+			"runtime_next_unblock_condition": "active unblock",
+			"runtime_entry_gate_reason":      "active reason",
+			"entry_gate_type":                "recovery_gate",
+		},
+	}
+	engine.quests["q-paused"] = &Quest{
+		ID:        "q-paused",
+		Status:    QuestStatusPaused,
+		UpdatedAt: now,
+		Metadata: map[string]string{
+			"chat_id":       "chat-gates",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_next_condition":        "paused recovery",
+			"runtime_next_unblock_condition": "paused unblock",
+			"runtime_entry_gate_reason":      "paused reason",
+			"entry_gate_type":                "state_drift",
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-gates")
+	assert.Equal(t, "active recovery", diag["recovery_next_condition"])
+	assert.Equal(t, "active unblock", diag["next_unblock_condition_current"])
+	assert.Equal(t, "active reason", diag["entry_gate_reason_current"])
+	assert.Equal(t, "recovery_gate", diag["entry_gate_type"])
+}
+
+func TestGetChatRuntimeDiagnostics_UsesLatestNonActiveGateFieldsWhenNoActiveScalping(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-older"] = &Quest{
+		ID:        "q-older",
+		Status:    QuestStatusPaused,
+		UpdatedAt: now.Add(-20 * time.Minute),
+		Metadata: map[string]string{
+			"chat_id":       "chat-gates",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_next_condition":        "older recovery",
+			"runtime_next_unblock_condition": "older unblock",
+			"runtime_entry_gate_reason":      "older reason",
+			"entry_gate_type":                "recovery_gate",
+		},
+	}
+	engine.quests["q-newer"] = &Quest{
+		ID:        "q-newer",
+		Status:    QuestStatusPaused,
+		UpdatedAt: now,
+		Metadata: map[string]string{
+			"chat_id":       "chat-gates",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_next_condition":        "newer recovery",
+			"runtime_next_unblock_condition": "newer unblock",
+			"runtime_entry_gate_reason":      "newer reason",
+			"entry_gate_type":                "runtime_circuit",
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-gates")
+	assert.Equal(t, "newer recovery", diag["recovery_next_condition"])
+	assert.Equal(t, "newer unblock", diag["next_unblock_condition_current"])
+	assert.Equal(t, "newer reason", diag["entry_gate_reason_current"])
+	assert.Equal(t, "runtime_circuit", diag["entry_gate_type"])
 }
 
 func TestQuestEngine_ExecuteQuestPersistsFinalLocalCheckpointSnapshot(t *testing.T) {
