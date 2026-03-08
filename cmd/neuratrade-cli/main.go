@@ -1257,15 +1257,28 @@ type BalanceResponse struct {
 }
 
 // GetBalance retrieves account balance from the API
-func (c *APIClient) GetBalance() (*BalanceResponse, error) {
-	respBody, err := c.makeRequest("GET", "/internal/telegram/wallets", nil)
+func (c *APIClient) GetBalance(chatID string) (*BalanceResponse, error) {
+	respBody, err := c.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/portfolio?chat_id=%s", chatID), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var response BalanceResponse
-	if err := json.Unmarshal(respBody, &response); err != nil {
+	var payload struct {
+		TotalEquity      string `json:"total_equity"`
+		AvailableBalance string `json:"available_balance"`
+	}
+	if err := json.Unmarshal(respBody, &payload); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	response := BalanceResponse{
+		TotalBalance: payload.TotalEquity,
+		Available:    payload.AvailableBalance,
+		Locked:       "",
+		Currency:     "USDT",
+	}
+	if response.Locked == "" {
+		response.Locked = "0"
 	}
 
 	return &response, nil
@@ -1383,12 +1396,17 @@ func checkBalance(cCtx *cli.Context) error {
 	fmt.Println("Account Balance")
 	fmt.Println("===============")
 
+	chatID := cCtx.String("chat-id")
+	if chatID == "" {
+		return cli.Exit("Error: chat-id is required", 1)
+	}
+
 	baseURL := getBaseURL()
 	apiKey := getAPIKey()
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	response, err := client.GetBalance()
+	response, err := client.GetBalance(chatID)
 	if err != nil {
 		fmt.Printf("Error: Could not reach API: %v\n", err)
 		fmt.Println("\nMake sure the NeuraTrade backend is running:")

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -28,5 +29,58 @@ func TestAutonomousMonitoring_RecordQuestExecution_DoesNotDeadlock(t *testing.T)
 	}
 	if snapshot.SuccessRate != 1 {
 		t.Fatalf("expected success rate 1, got %f", snapshot.SuccessRate)
+	}
+}
+
+func TestAutonomousMonitoring_ComputeAlertsLocked_DrawdownThreshold(t *testing.T) {
+	monitor := NewAutonomousMonitoring("chat-1", nil)
+	monitor.alertThresholds.MaxDrawdownPercent = 0.10
+	monitor.alertThresholds.MinWinRate = 0
+	monitor.alertThresholds.MaxConsecutiveLosses = 99
+
+	monitor.RecordQuestExecution(false, decimal.NewFromFloat(-0.15))
+
+	monitor.mu.Lock()
+	alerts := monitor.computeAlertsLocked()
+	monitor.mu.Unlock()
+
+	found := false
+	for _, alert := range alerts {
+		if strings.Contains(alert, "Max drawdown breached") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected drawdown alert, got %#v", alerts)
+	}
+}
+
+func TestAutonomousMonitoring_ComputeAlertsLocked_LowWinRateThreshold(t *testing.T) {
+	monitor := NewAutonomousMonitoring("chat-2", nil)
+	monitor.alertThresholds.MaxDrawdownPercent = 1.0
+	monitor.alertThresholds.MinWinRate = 0.50
+	monitor.alertThresholds.MaxConsecutiveLosses = 99
+
+	monitor.RecordTrade(false, decimal.NewFromFloat(-0.01))
+	monitor.RecordTrade(false, decimal.NewFromFloat(-0.01))
+	monitor.RecordTrade(false, decimal.NewFromFloat(-0.01))
+	monitor.RecordTrade(false, decimal.NewFromFloat(-0.01))
+	monitor.RecordTrade(false, decimal.NewFromFloat(-0.01))
+	monitor.RecordTrade(true, decimal.NewFromFloat(0.01))
+
+	monitor.mu.Lock()
+	alerts := monitor.computeAlertsLocked()
+	monitor.mu.Unlock()
+
+	found := false
+	for _, alert := range alerts {
+		if strings.Contains(alert, "Win rate below threshold") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected low win-rate alert, got %#v", alerts)
 	}
 }

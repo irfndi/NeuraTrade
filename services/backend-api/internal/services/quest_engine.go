@@ -64,6 +64,9 @@ var replaceStaleQuestLockScript = redis.NewScript(`
 if redis.call("GET", KEYS[1]) ~= ARGV[1] then
 	return 0
 end
+if redis.call("EXISTS", KEYS[2]) ~= 0 then
+	return 0
+end
 redis.call("SET", KEYS[1], ARGV[2], "PX", ARGV[3])
 return 1
 `)
@@ -1256,18 +1259,10 @@ func (e *QuestEngine) reclaimStaleLock(ctx context.Context, key string, ttl time
 		return false, nil
 	}
 
-	ownerAlive, err := e.redis.Exists(ctx, questLockOwnerHeartbeatKey(currentOwner)).Result()
-	if err != nil {
-		return false, err
-	}
-	if ownerAlive != 0 {
-		return false, nil
-	}
-
 	replaced, err := replaceStaleQuestLockScript.Run(
 		ctx,
 		e.redis,
-		[]string{key},
+		[]string{key, questLockOwnerHeartbeatKey(currentOwner)},
 		currentOwner,
 		e.lockOwnerID,
 		strconv.FormatInt(ttl.Milliseconds(), 10),
@@ -1815,6 +1810,8 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		entryGateReasonCurrent string
 		entryGateType          string
 		riskCurrentDrawdown    float64
+		riskCurrentDrawdownAt  time.Time
+		hasActiveScalpingRisk  bool
 		riskMaxDrawdown        float64
 		aiWindowTotal          int
 		aiWindowSuccess        int
@@ -1922,8 +1919,23 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if gateType := readQuestMetricString(cp["entry_gate_type"]); gateType != "" {
 			entryGateType = gateType
 		}
-		if drawdown := readQuestMetricFloat(cp["risk_current_drawdown"]); drawdown > riskCurrentDrawdown {
-			riskCurrentDrawdown = drawdown
+		if raw, exists := cp["risk_current_drawdown"]; exists {
+			drawdown := readQuestMetricFloat(raw)
+			checkpointAt := quest.UpdatedAt.UTC()
+			if evalAt := readCheckpointTime(cp["recovery_gate_eval_at"]); evalAt.After(checkpointAt) {
+				checkpointAt = evalAt
+			}
+			isActiveScalpingQuest := strings.TrimSpace(quest.Metadata["definition_id"]) == "scalping_execution" &&
+				quest.Status == QuestStatusActive
+			switch {
+			case isActiveScalpingQuest && (!hasActiveScalpingRisk || checkpointAt.After(riskCurrentDrawdownAt)):
+				riskCurrentDrawdown = drawdown
+				riskCurrentDrawdownAt = checkpointAt
+				hasActiveScalpingRisk = true
+			case !hasActiveScalpingRisk && checkpointAt.After(riskCurrentDrawdownAt):
+				riskCurrentDrawdown = drawdown
+				riskCurrentDrawdownAt = checkpointAt
+			}
 		}
 		if drawdown := readQuestMetricFloat(cp["risk_max_drawdown"]); drawdown > riskMaxDrawdown {
 			riskMaxDrawdown = drawdown

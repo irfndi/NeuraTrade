@@ -55,16 +55,20 @@ type routeDB interface {
 	HealthCheck(ctx context.Context) error
 }
 
-func diagnosticFloat(metrics map[string]interface{}, key string) float64 {
-	switch value := metrics[key].(type) {
+func diagnosticFloat(metrics map[string]interface{}, key string) (float64, bool) {
+	value, ok := metrics[key]
+	if !ok {
+		return 0, false
+	}
+	switch value := value.(type) {
 	case float64:
-		return value
+		return value, true
 	case float32:
-		return float64(value)
+		return float64(value), true
 	case int:
-		return float64(value)
+		return float64(value), true
 	default:
-		return 0
+		return 0, false
 	}
 }
 
@@ -472,9 +476,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 		for _, chatID := range questEngine.ListActiveAutonomousChatIDs() {
 			diagnostics := questEngine.GetChatRuntimeDiagnostics(chatID)
-			drawdown := diagnosticFloat(diagnostics, "risk_current_drawdown")
-			if drawdown <= 0 {
-				drawdown = diagnosticFloat(diagnostics, "risk_max_drawdown")
+			drawdown, ok := diagnosticFloat(diagnostics, "risk_current_drawdown")
+			if !ok {
+				drawdown, _ = diagnosticFloat(diagnostics, "risk_max_drawdown")
 			}
 			if drawdown >= riskLockThreshold {
 				active = true

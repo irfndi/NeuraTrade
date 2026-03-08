@@ -122,12 +122,16 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 
 	// Send rich notification
 	chatID := strings.TrimSpace(e.chatID)
-	if scopedChatID := scalpingChatIDFromContext(ctx); scopedChatID != "" {
+	if scopedChatID := strings.TrimSpace(scalpingChatIDFromContext(ctx)); scopedChatID != "" {
 		chatID = scopedChatID
 	}
 	if e.notificationService != nil && chatID != "" {
 		msg := e.formatTradeNotification(details, orderID)
-		chatIDInt, _ := strconv.ParseInt(chatID, 10, 64)
+		chatIDInt, err := strconv.ParseInt(chatID, 10, 64)
+		if err != nil {
+			fmt.Printf("[BITGET-ORDER] Invalid Telegram chat ID %q: %v\n", chatID, err)
+			return orderID, nil
+		}
 
 		go func() {
 			notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

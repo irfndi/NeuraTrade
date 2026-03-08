@@ -40,7 +40,7 @@ const (
 		SELECT payload
 		FROM autonomous_rollback_events
 		WHERE strategy_id = $1
-		ORDER BY occurred_at DESC
+		ORDER BY occurred_at DESC, created_at DESC, id DESC
 		LIMIT $2
 	`
 
@@ -48,7 +48,7 @@ const (
 		SELECT payload
 		FROM autonomous_rollout_states
 		WHERE chat_id = $1
-		ORDER BY updated_at DESC
+		ORDER BY updated_at DESC, strategy_id DESC
 		LIMIT 1
 	`
 )

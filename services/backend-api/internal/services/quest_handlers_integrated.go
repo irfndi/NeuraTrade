@@ -1982,13 +1982,17 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 			maxRecordedDrawdown = checkpointMax
 		}
 	}
-	if peakEquity > 0 && portfolio.TotalValue > 0 {
+	if peakEquity > 0 {
 		if portfolio.TotalValue > peakEquity {
 			peakEquity = portfolio.TotalValue
 		}
-		currentDrawdown = (peakEquity - portfolio.TotalValue) / peakEquity
-		if currentDrawdown < 0 {
-			currentDrawdown = 0
+		if portfolio.TotalValue <= 0 {
+			currentDrawdown = 1
+		} else {
+			currentDrawdown = (peakEquity - portfolio.TotalValue) / peakEquity
+			if currentDrawdown < 0 {
+				currentDrawdown = 0
+			}
 		}
 	}
 	if currentDrawdown > maxRecordedDrawdown {
@@ -1998,14 +2002,18 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	portfolio.RiskDrawdown = currentDrawdown
 	portfolio.RiskMaxDrawdown = maxRecordedDrawdown
 
-	if h.drawdownHalt != nil && chatID != "" && peakEquity > 0 && portfolio.TotalValue > 0 {
+	if h.drawdownHalt != nil && chatID != "" && peakEquity > 0 {
 		peakValue := decimal.NewFromFloat(peakEquity)
 		if state, exists := h.drawdownHalt.GetState(chatID); !exists || state.PeakValue.LessThan(peakValue) {
 			if err := h.drawdownHalt.ResetPeak(ctx, chatID, peakValue); err != nil {
 				log.Printf("[SCALPING] Drawdown halt peak reset failed for chat %s: %v", chatID, err)
 			}
 		}
-		state, err := h.drawdownHalt.CheckDrawdown(ctx, chatID, decimal.NewFromFloat(portfolio.TotalValue))
+		marketValue := decimal.NewFromFloat(portfolio.TotalValue)
+		if portfolio.TotalValue <= 0 {
+			marketValue = decimal.Zero
+		}
+		state, err := h.drawdownHalt.CheckDrawdown(ctx, chatID, marketValue)
 		if err != nil {
 			log.Printf("[SCALPING] Drawdown halt check failed for chat %s: %v", chatID, err)
 		} else if state != nil {
@@ -2617,7 +2625,7 @@ func (h *IntegratedQuestHandlers) applyRecoveryStateCheckpoint(
 	quest.Checkpoint["recovery_mode"] = state.Mode
 	quest.Checkpoint["recovery_entry_allowed"] = state.EntryAllowed
 	quest.Checkpoint["recovery_clean_cycles_current"] = state.CleanCycles
-	delete(quest.Checkpoint, "recovery_clean_cycles")
+	quest.Checkpoint["recovery_clean_cycles"] = state.CleanCycles
 	quest.Checkpoint["recovery_clean_cycles_required"] = state.RequiredCleanCycles
 	quest.Checkpoint["recovery_cycles_to_entry"] = state.CyclesToEntry
 	if evaluatedAt.IsZero() {
@@ -2640,7 +2648,7 @@ func (h *IntegratedQuestHandlers) updateRecoveryCleanCycles(quest *Quest, clean 
 	}
 	if !clean {
 		quest.Checkpoint["recovery_clean_cycles_current"] = 0
-		delete(quest.Checkpoint, "recovery_clean_cycles")
+		quest.Checkpoint["recovery_clean_cycles"] = 0
 		if strings.TrimSpace(reason) != "" {
 			quest.Checkpoint["recovery_last_reset_reason"] = strings.TrimSpace(reason)
 		}
@@ -2649,7 +2657,7 @@ func (h *IntegratedQuestHandlers) updateRecoveryCleanCycles(quest *Quest, clean 
 	cleanCycles := checkpointIntWithFallback(quest.Checkpoint, "recovery_clean_cycles_current", "recovery_clean_cycles")
 	cleanCycles++
 	quest.Checkpoint["recovery_clean_cycles_current"] = cleanCycles
-	delete(quest.Checkpoint, "recovery_clean_cycles")
+	quest.Checkpoint["recovery_clean_cycles"] = cleanCycles
 	delete(quest.Checkpoint, "recovery_last_reset_reason")
 }
 
@@ -2868,17 +2876,11 @@ func (h *IntegratedQuestHandlers) recordEntryAttempt(quest *Quest, now time.Time
 	delete(quest.Checkpoint, "runtime_entry_attempt_block_reason")
 }
 
-func shouldRecordEntryAttempt(decision *AITradingDecision, execErr error) bool {
+func shouldRecordEntryAttempt(decision *AITradingDecision, _ error) bool {
 	if decision == nil {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
-		return false
-	}
-	if strings.TrimSpace(decision.OrderID) != "" {
-		return true
-	}
-	return execErr != nil
+	return !strings.EqualFold(strings.TrimSpace(decision.Action), "hold")
 }
 
 func (h *IntegratedQuestHandlers) assertPostEntryProtectionAsync(chatID, exchange, orderID, symbol, side string) {

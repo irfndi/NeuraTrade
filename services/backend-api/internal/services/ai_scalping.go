@@ -483,10 +483,10 @@ func (s *AIScalpingService) SetExchange(exchange string) {
 }
 
 func (s *AIScalpingService) exchangeForContext(ctx context.Context) string {
-	if exchange := scalpingExchangeFromContext(ctx); exchange != "" {
+	if exchange := strings.ToLower(strings.TrimSpace(scalpingExchangeFromContext(ctx))); exchange != "" {
 		return exchange
 	}
-	return strings.TrimSpace(s.config.Exchange)
+	return strings.ToLower(strings.TrimSpace(s.config.Exchange))
 }
 
 func NewAIScalpingService(
@@ -674,6 +674,17 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", portfolio.USDTBalance)
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
+	effectiveExchange := s.exchangeForContext(ctx)
+	if scope, ok := scalpingAutonomyScopeFromContext(ctx); ok {
+		scope.Exchange = effectiveExchange
+		ctx = WithScalpingAutonomyScope(ctx, scope)
+	} else if effectiveExchange != "" {
+		ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
+			Exchange:          effectiveExchange,
+			ExchangeConnected: true,
+			ConnectionChecked: true,
+		})
+	}
 
 	signals, err := s.gatherMarketSignals(ctx)
 	if err != nil {
@@ -812,7 +823,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 	}
 	if strings.TrimSpace(scope.Exchange) == "" {
-		scope.Exchange = s.exchangeForContext(ctx)
+		scope.Exchange = effectiveExchange
 	}
 	if strings.TrimSpace(scope.StrategyID) == "" {
 		scope.StrategyID = ScalpingStrategyID(scope.ChatID)
@@ -2106,9 +2117,9 @@ func (s *AIScalpingService) deterministicFallbackDecision(signals []aiMarketSign
 		return bestDecision
 	}
 
-	return strategyHoldDecision(
+	return runtimeDegradedHoldDecision(
 		"deterministic fallback found no eligible candidate after liquidity and signal checks",
-		0,
+		reasonCategoryDeterministicFallback,
 	)
 }
 
@@ -2285,7 +2296,7 @@ func classifyReasonCategory(err error, content string) string {
 
 func isRuntimeReasonCategory(category string) bool {
 	switch strings.ToLower(strings.TrimSpace(category)) {
-	case reasonCategoryLLMTimeout, reasonCategoryLLMParseContract, reasonCategoryExecutionUnavailable:
+	case reasonCategoryLLMTimeout, reasonCategoryLLMParseContract, reasonCategoryExecutionUnavailable, reasonCategoryDeterministicFallback:
 		return true
 	default:
 		return false
