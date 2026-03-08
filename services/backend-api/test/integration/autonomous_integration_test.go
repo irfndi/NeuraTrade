@@ -84,7 +84,7 @@ func TestAutonomousIntegration(t *testing.T) {
 		Used:      map[string]float64{"USDT": 5000.0, "BTC": 0.0},
 	}, nil)
 
-	api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil)
+	api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil)
 
 	testTelegramChatID := fmt.Sprintf("tg_auto_%s", uuid.New().String())
 	testEmail := fmt.Sprintf("test_auto_%s@celebrum.ai", uuid.New().String())
@@ -124,7 +124,7 @@ func TestAutonomousIntegration(t *testing.T) {
 	})
 
 	t.Run("GetDoctor", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/telegram/internal/doctor?chat_id="+testTelegramChatID, nil)
+		req, _ := http.NewRequest("GET", "/internal/telegram/doctor?chat_id="+testTelegramChatID, nil)
 		// Internal doctor doesn't strictly need X-API-Key in all setups but we'll provide it
 		req.Header.Set("X-API-Key", testAdminKey)
 		w := httptest.NewRecorder()

@@ -60,7 +60,7 @@ func TestSetupRoutes_HealthEndpointContractRegression(t *testing.T) {
 	cacheAnalyticsService := services.NewCacheAnalyticsService(nil)
 	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
-	teardown := SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil)
+	teardown := SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
 	defer teardown()
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

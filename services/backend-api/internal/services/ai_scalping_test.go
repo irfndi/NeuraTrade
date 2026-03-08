@@ -3,13 +3,35 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type errorLLMClient struct {
+	err error
+}
+
+func (m *errorLLMClient) Complete(ctx context.Context, req *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	return nil, m.err
+}
+
+func (m *errorLLMClient) Stream(ctx context.Context, req *llm.CompletionRequest) (<-chan llm.StreamEvent, error) {
+	return nil, m.err
+}
+
+func (m *errorLLMClient) Provider() llm.Provider {
+	return llm.ProviderOpenAI
+}
+
+func (m *errorLLMClient) Close() error {
+	return nil
+}
 
 func TestAITradingDecision_Validation(t *testing.T) {
 	tp := decimal.NewFromFloat(50000)
@@ -71,6 +93,10 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 8, config.MinExpectancyN)
 	assert.Equal(t, 85.0, config.RegimeHighBand)
 	assert.Equal(t, 15.0, config.RegimeLowBand)
+	assert.Equal(t, 0.08, config.DeterministicFallback.MaxBidAskSpread)
+	assert.Equal(t, 0.35, config.DeterministicFallback.MinImbalance)
+	assert.Equal(t, 0.72, config.DeterministicFallback.ConfidenceFloor)
+	assert.Equal(t, 0.50, config.DeterministicFallback.SizeFraction)
 }
 
 func TestAIScalpingConfig_Custom(t *testing.T) {
@@ -99,6 +125,7 @@ func TestAIScalpingConfig_Custom(t *testing.T) {
 }
 
 func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
+	t.Setenv("NEURATRADE_HOME", t.TempDir())
 	t.Setenv("NEURATRADE_SCALPING_EXCHANGE", "binance")
 	t.Setenv("NEURATRADE_SCALPING_LEVERAGE", "12")
 	t.Setenv("NEURATRADE_SCALPING_MAX_CAPITAL_PCT", "3.5")
@@ -122,6 +149,11 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_MIN_EXPECTANCY_SAMPLES", "12")
 	t.Setenv("NEURATRADE_SCALPING_REGIME_HIGH_BAND", "88")
 	t.Setenv("NEURATRADE_SCALPING_REGIME_LOW_BAND", "12")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_MAX_BID_ASK_SPREAD", "0.04")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_MIN_IMBALANCE", "0.42")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_CONFIDENCE_FLOOR", "0.79")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_RANGE_OFFSET", "0")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_SIZE_FRACTION", "0.33")
 
 	cfg := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
 	assert.Equal(t, "binance", cfg.Exchange)
@@ -147,6 +179,11 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 12, cfg.MinExpectancyN)
 	assert.Equal(t, 88.0, cfg.RegimeHighBand)
 	assert.Equal(t, 12.0, cfg.RegimeLowBand)
+	assert.Equal(t, 0.04, cfg.DeterministicFallback.MaxBidAskSpread)
+	assert.Equal(t, 0.42, cfg.DeterministicFallback.MinImbalance)
+	assert.Equal(t, 0.79, cfg.DeterministicFallback.ConfidenceFloor)
+	assert.Equal(t, 0.0, cfg.DeterministicFallback.RangeOffset)
+	assert.Equal(t, 0.33, cfg.DeterministicFallback.SizeFraction)
 }
 
 func TestAIMarketSignal(t *testing.T) {
@@ -256,6 +293,87 @@ func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
 
 	category = normalizeHoldReasonCategory("", "waiting for qualified setup")
 	assert.Equal(t, reasonCategoryStrategyHold, category)
+}
+
+func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackOnLLMError(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxCapitalPct: 0.5,
+		},
+		llmClient: &errorLLMClient{err: context.DeadlineExceeded},
+	}
+
+	decision, err := svc.getAIDecision(context.Background(), []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			RangePosition24h:   18,
+		},
+	}, TradingPortfolio{})
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
+	assert.True(t, decision.ConfidenceKnown)
+	assert.Greater(t, decision.Confidence, 0.70)
+	assert.LessOrEqual(t, decision.SizePercent, 0.5)
+
+	diagnostics := svc.RuntimeDiagnostics()
+	assert.Contains(t, diagnostics["last_error"], "context deadline exceeded")
+}
+
+func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackAfterParseExhaustion(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Message: llm.Message{Content: "analysis without json"},
+			},
+			{
+				Message: llm.Message{Content: "still not json"},
+			},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 1,
+			MinConfidence:     0.65,
+			MaxCapitalPct:     5,
+			RegimeHighBand:    85,
+			RegimeLowBand:     15,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.getAIDecision(context.Background(), []aiMarketSignal{
+		{
+			Symbol:             "ETH/USDT",
+			Price:              200,
+			High24h:            208,
+			Low24h:             192,
+			Volume24h:          3100000,
+			BidAskSpread:       0.03,
+			OrderBookImbalance: -0.61,
+			RangePosition24h:   82,
+		},
+	}, TradingPortfolio{})
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "sell", decision.Action)
+	assert.Equal(t, "ETH/USDT", decision.Symbol)
+	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
+	assert.True(t, decision.ConfidenceKnown)
+	assert.Equal(t, 2, mockLLM.CallCount)
 }
 
 func TestParseAIDecisionJSONObject_DoesNotForceStrategyMetadata(t *testing.T) {
@@ -471,4 +589,226 @@ func TestAIScalpingService_PreTradeGate_ExpectancyBlock(t *testing.T) {
 	assert.False(t, result.Allowed)
 	assert.Contains(t, result.Reason, "expectancy gate")
 	assert.GreaterOrEqual(t, result.SampleSize, 5)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_RejectsIneligibleSignals(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxCapitalPct: 0.5,
+		},
+	}
+
+	tests := []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.09,
+			OrderBookImbalance: 0.60,
+			RangePosition24h:   20,
+		},
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.03,
+			OrderBookImbalance: 0.20,
+			RangePosition24h:   20,
+		},
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.03,
+			OrderBookImbalance: 0.60,
+			RangePosition24h:   90,
+		},
+	}
+
+	for _, signal := range tests {
+		_, _, ok := svc.deterministicFallbackCandidate(signal, TradingPortfolio{})
+		assert.False(t, ok)
+	}
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_RespectsConfidenceAndPhaseCap(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxCapitalPct: 0.5,
+			MinConfidence: 0.82,
+		},
+	}
+
+	lowConfidenceSignal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		High24h:            104,
+		Low24h:             96,
+		Volume24h:          10000,
+		BidAskSpread:       0.079,
+		OrderBookImbalance: 0.36,
+		RangePosition24h:   20,
+	}
+	_, _, ok := svc.deterministicFallbackCandidate(lowConfidenceSignal, TradingPortfolio{})
+	assert.False(t, ok)
+
+	eligibleSignal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		High24h:            104,
+		Low24h:             96,
+		Volume24h:          100000000,
+		BidAskSpread:       0.005,
+		OrderBookImbalance: 0.90,
+		RangePosition24h:   5,
+	}
+	decision, _, ok := svc.deterministicFallbackCandidate(eligibleSignal, TradingPortfolio{
+		PhaseMaxCapitalPct: 0.25,
+	})
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.LessOrEqual(t, decision.SizePercent, 0.25)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_UsesConfigOverrides(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxCapitalPct: 5,
+			MinConfidence: 0.60,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.01,
+			},
+		},
+	}
+
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		High24h:            104,
+		Low24h:             96,
+		Volume24h:          2500000,
+		BidAskSpread:       0.02,
+		OrderBookImbalance: 0.58,
+		RangePosition24h:   18,
+	}
+
+	decision, confidence, ok := svc.deterministicFallbackCandidate(signal, TradingPortfolio{})
+	assert.False(t, ok)
+	assert.Nil(t, decision)
+	assert.Zero(t, confidence)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_ClampsNegativeVolume(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxCapitalPct: 5,
+			MinConfidence: 0.60,
+		},
+	}
+
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		High24h:            104,
+		Low24h:             96,
+		Volume24h:          -1000,
+		BidAskSpread:       0.005,
+		OrderBookImbalance: 0.90,
+		RangePosition24h:   5,
+	}
+
+	decision, confidence, ok := svc.deterministicFallbackCandidate(signal, TradingPortfolio{})
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.False(t, math.IsNaN(confidence) || math.IsInf(confidence, 0))
+}
+
+func TestAIScalpingService_GetAIDecision_ClassifiesUnsupportedActionAsParseContract(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Message: llm.Message{
+					Content: `{"action":"jump","symbol":"BTC/USDT","size_pct":1.0,"confidence":0.7,"reasoning":"invalid action","stop_loss":99,"take_profit":101}`,
+				},
+			},
+			{
+				Message: llm.Message{
+					Content: `{"action":"jump","symbol":"BTC/USDT","size_pct":1.0,"confidence":0.7,"reasoning":"still invalid","stop_loss":99,"take_profit":101}`,
+				},
+			},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 1,
+			MinConfidence:     0.65,
+			MaxCapitalPct:     5,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.getAIDecision(context.Background(), []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			RangePosition24h:   18,
+		},
+	}, TradingPortfolio{})
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
+
+	diagnostics := svc.RuntimeDiagnostics()
+	assert.Equal(t, reasonCategoryLLMParseContract, diagnostics["last_reason_category"])
+	assert.Contains(t, diagnostics["last_error"], "unsupported action")
+}
+
+func TestAIScalpingService_DeterministicFallbackDecision_NoCandidateUsesRuntimeHold(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := svc.deterministicFallbackDecision([]aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.03,
+			OrderBookImbalance: 0.60,
+			RangePosition24h:   95,
+		},
+	}, TradingPortfolio{})
+
+	assert.Equal(t, "hold", decision.Action)
+	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
+	assert.False(t, decision.ConfidenceKnown)
+}
+
+func TestAIScalpingService_ExchangeForContextPrefersScopedExchange(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange: "BiTGet",
+		},
+	}
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "123",
+		Exchange: "Binance ",
+	})
+
+	assert.Equal(t, "binance", svc.exchangeForContext(ctx))
+	assert.Equal(t, "bitget", svc.exchangeForContext(context.Background()))
 }

@@ -91,9 +91,17 @@ func (e *NativeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 		details.Side, details.Exchange, details.Symbol, details.AmountUSDT.String())
 
 	// Send rich Telegram notification
-	if e.notificationService != nil && e.chatID != "" {
+	chatID := strings.TrimSpace(e.chatID)
+	if scopedChatID := strings.TrimSpace(scalpingChatIDFromContext(ctx)); scopedChatID != "" {
+		chatID = scopedChatID
+	}
+	if e.notificationService != nil && chatID != "" {
 		msg := e.formatTradeNotification(details, orderID)
-		chatIDInt, _ := strconv.ParseInt(e.chatID, 10, 64)
+		chatIDInt, err := strconv.ParseInt(chatID, 10, 64)
+		if err != nil {
+			fmt.Printf("[NATIVE-ORDER] Invalid Telegram chat ID %q: %v\n", chatID, err)
+			return orderID, nil
+		}
 
 		go func() {
 			notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

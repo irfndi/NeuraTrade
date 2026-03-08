@@ -78,7 +78,6 @@ func NewAutonomousMonitoring(chatID string, notifService *NotificationService) *
 // RecordQuestExecution records a quest execution result
 func (m *AutonomousMonitoring) RecordQuestExecution(success bool, pnl decimal.Decimal) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	m.totalQuests++
 	m.lastQuestUpdate = time.Now()
@@ -103,14 +102,17 @@ func (m *AutonomousMonitoring) RecordQuestExecution(success bool, pnl decimal.De
 		}
 	}
 
-	// Check alerts
-	m.checkAlerts()
+	alerts := m.computeAlertsLocked()
+	m.mu.Unlock()
+
+	for _, alert := range alerts {
+		m.sendAlert(alert)
+	}
 }
 
 // RecordTrade records a trade execution
 func (m *AutonomousMonitoring) RecordTrade(profitable bool, pnl decimal.Decimal) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	m.totalTrades++
 	if profitable {
@@ -121,7 +123,12 @@ func (m *AutonomousMonitoring) RecordTrade(profitable bool, pnl decimal.Decimal)
 		m.totalPnL = m.totalPnL.Add(pnl)
 	}
 
-	m.checkAlerts()
+	alerts := m.computeAlertsLocked()
+	m.mu.Unlock()
+
+	for _, alert := range alerts {
+		m.sendAlert(alert)
+	}
 }
 
 // GetSnapshot returns current monitoring state
@@ -162,24 +169,27 @@ func (m *AutonomousMonitoring) GetSnapshot() MonitoringSnapshot {
 	}
 }
 
-// checkAlerts checks if any alert thresholds are breached
-func (m *AutonomousMonitoring) checkAlerts() {
+// computeAlertsLocked checks alert thresholds while m.mu is already held.
+func (m *AutonomousMonitoring) computeAlertsLocked() []string {
 	if !m.alertsEnabled {
-		return
+		return nil
 	}
 
-	snapshot := m.GetSnapshot()
 	alerts := []string{}
 
 	// Check drawdown
-	drawdownFloat, _ := snapshot.MaxDrawdown.Float64()
+	drawdownFloat, _ := m.maxDrawdown.Float64()
 	if drawdownFloat > m.alertThresholds.MaxDrawdownPercent {
 		alerts = append(alerts, fmt.Sprintf("Max drawdown breached: %.2f%%", drawdownFloat*100))
 	}
 
 	// Check win rate
-	if snapshot.TotalTrades > 5 && snapshot.WinRate < m.alertThresholds.MinWinRate {
-		alerts = append(alerts, fmt.Sprintf("Win rate below threshold: %.1f%%", snapshot.WinRate*100))
+	winRate := 0.0
+	if m.totalTrades > 0 {
+		winRate = float64(m.profitableTrades) / float64(m.totalTrades)
+	}
+	if m.totalTrades > 5 && winRate < m.alertThresholds.MinWinRate {
+		alerts = append(alerts, fmt.Sprintf("Win rate below threshold: %.1f%%", winRate*100))
 	}
 
 	// Check consecutive losses (simplified - would need tracking)
@@ -187,10 +197,7 @@ func (m *AutonomousMonitoring) checkAlerts() {
 		alerts = append(alerts, fmt.Sprintf("Too many failed quests: %d", m.failedQuests))
 	}
 
-	// Send alerts
-	for _, alert := range alerts {
-		m.sendAlert(alert)
-	}
+	return alerts
 }
 
 // sendAlert sends an alert notification

@@ -2,12 +2,58 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
 )
+
+type recordingQuestStore struct {
+	savedQuest *Quest
+}
+
+func (s *recordingQuestStore) SaveQuest(ctx context.Context, quest *Quest) error {
+	s.savedQuest = cloneQuestForPersistence(quest)
+	return nil
+}
+
+func (s *recordingQuestStore) GetQuest(ctx context.Context, id string) (*Quest, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *recordingQuestStore) ListQuests(ctx context.Context, chatID string, status QuestStatus) ([]*Quest, error) {
+	return nil, nil
+}
+
+func (s *recordingQuestStore) UpdateQuestProgress(ctx context.Context, id string, current int, checkpoint map[string]interface{}) error {
+	return nil
+}
+
+func (s *recordingQuestStore) UpdateLastExecuted(ctx context.Context, id string, executedAt time.Time) error {
+	return nil
+}
+
+func (s *recordingQuestStore) SaveAutonomousState(ctx context.Context, state *AutonomousState) error {
+	return nil
+}
+
+func (s *recordingQuestStore) GetAutonomousState(ctx context.Context, chatID string) (*AutonomousState, error) {
+	return &AutonomousState{ChatID: chatID}, nil
+}
+
+type contextRecordingQuestStore struct {
+	recordingQuestStore
+	saveCtx context.Context
+}
+
+func (s *contextRecordingQuestStore) SaveQuest(ctx context.Context, quest *Quest) error {
+	s.saveCtx = ctx
+	s.savedQuest = cloneQuestForPersistence(quest)
+	return nil
+}
 
 func TestShouldExecute_MicroCadence(t *testing.T) {
 	store := NewInMemoryQuestStore()
@@ -294,17 +340,71 @@ func TestShouldExecute_WeeklyCadence(t *testing.T) {
 func TestShouldExecute_OnetimeCadence(t *testing.T) {
 	store := NewInMemoryQuestStore()
 	engine := NewQuestEngine(store)
+	now := time.Now().UTC()
 
-	quest := &Quest{
-		ID:             "test-1",
-		Cadence:        CadenceOnetime,
-		Status:         QuestStatusActive,
-		LastExecutedAt: nil,
+	tests := []struct {
+		name     string
+		quest    *Quest
+		expected bool
+	}{
+		{
+			name: "first onetime execution runs",
+			quest: &Quest{
+				ID:             "test-1",
+				Cadence:        CadenceOnetime,
+				Status:         QuestStatusActive,
+				LastExecutedAt: nil,
+			},
+			expected: true,
+		},
+		{
+			name: "already executed onetime quest stays paused",
+			quest: &Quest{
+				ID:             "test-2",
+				Cadence:        CadenceOnetime,
+				Status:         QuestStatusActive,
+				LastExecutedAt: ptrTime(now),
+			},
+			expected: false,
+		},
+		{
+			name: "active incomplete goal quest reruns",
+			quest: &Quest{
+				ID:             "goal-1",
+				Type:           QuestTypeGoal,
+				Cadence:        CadenceOnetime,
+				Status:         QuestStatusActive,
+				TargetCount:    100,
+				CurrentCount:   40,
+				LastExecutedAt: ptrTime(now),
+				Checkpoint: map[string]interface{}{
+					"goal_reached": false,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "completed goal quest does not rerun",
+			quest: &Quest{
+				ID:             "goal-2",
+				Type:           QuestTypeGoal,
+				Cadence:        CadenceOnetime,
+				Status:         QuestStatusActive,
+				TargetCount:    100,
+				CurrentCount:   100,
+				LastExecutedAt: ptrTime(now),
+				Checkpoint: map[string]interface{}{
+					"goal_reached": true,
+				},
+			},
+			expected: false,
+		},
 	}
 
-	result := engine.shouldExecute(quest, time.Now())
-	if result != false {
-		t.Errorf("shouldExecute() for onetime cadence should always return false, got %v", result)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, engine.shouldExecute(tt.quest, now))
+		})
 	}
 }
 
@@ -338,6 +438,71 @@ func TestAcquireLock_WithRedis(t *testing.T) {
 	ok = engine.acquireLock(ctx, "test:lock:2", 5*time.Minute)
 	if !ok {
 		t.Error("lock acquisition with different key should succeed")
+	}
+}
+
+func TestAcquireLock_ReclaimsStaleLockWhenOwnerHeartbeatMissing(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer func() { _ = client.Close() }()
+
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	ctx := context.Background()
+	lockKey := "test:lock:stale-reclaim"
+
+	if err := client.Set(ctx, lockKey, "stale-owner", 5*time.Minute).Err(); err != nil {
+		t.Fatalf("failed to seed stale lock: %v", err)
+	}
+
+	ok := engine.acquireLock(ctx, lockKey, 5*time.Minute)
+	if !ok {
+		t.Fatal("expected stale lock to be reclaimed")
+	}
+
+	owner, err := client.Get(ctx, lockKey).Result()
+	if err != nil {
+		t.Fatalf("failed to read reclaimed lock owner: %v", err)
+	}
+	if owner != engine.lockOwnerID {
+		t.Fatalf("expected reclaimed lock owner %q, got %q", engine.lockOwnerID, owner)
+	}
+}
+
+func TestAcquireLock_FailsWhenOwnerHeartbeatRefreshFails(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer func() { _ = client.Close() }()
+
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	lockKey := "test:lock:heartbeat-failure"
+	ok := engine.acquireLock(ctx, lockKey, 5*time.Minute)
+	if ok {
+		t.Fatal("expected lock acquisition to fail when owner heartbeat refresh fails")
+	}
+
+	exists, err := client.Exists(context.Background(), lockKey).Result()
+	if err != nil {
+		t.Fatalf("failed to inspect lock key: %v", err)
+	}
+	if exists != 0 {
+		t.Fatal("expected lock key to remain unset after heartbeat refresh failure")
 	}
 }
 
@@ -389,28 +554,90 @@ func TestReleaseLock_WithRedis(t *testing.T) {
 	}
 }
 
-func TestUpdateLastExecuted(t *testing.T) {
-	store := NewInMemoryQuestStore()
-	engine := NewQuestEngine(store)
-
-	quest := &Quest{
-		ID:             "test-1",
-		Name:           "Test Quest",
-		Cadence:        CadenceMicro,
-		Status:         QuestStatusActive,
-		LastExecutedAt: nil,
+func TestReleaseLock_DoesNotDeleteOtherOwnerLock(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
 	}
-	engine.quests["test-1"] = quest
+	defer mr.Close()
 
-	executedAt := time.Date(2024, 1, 15, 10, 5, 0, 0, time.UTC)
-	engine.updateLastExecuted("test-1", executedAt)
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer func() { _ = client.Close() }()
 
-	if quest.LastExecutedAt == nil {
-		t.Fatal("LastExecutedAt should be set")
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	ctx := context.Background()
+	lockKey := "test:lock:other-owner"
+
+	if err := client.Set(ctx, lockKey, "different-owner", 5*time.Minute).Err(); err != nil {
+		t.Fatalf("failed to seed foreign lock: %v", err)
 	}
-	if !quest.LastExecutedAt.Equal(executedAt) {
-		t.Errorf("LastExecutedAt = %v, want %v", *quest.LastExecutedAt, executedAt)
+
+	engine.releaseLock(ctx, lockKey)
+
+	owner, err := client.Get(ctx, lockKey).Result()
+	if err != nil {
+		t.Fatalf("expected foreign lock to remain, got error: %v", err)
 	}
+	if owner != "different-owner" {
+		t.Fatalf("expected foreign lock owner to remain unchanged, got %q", owner)
+	}
+}
+
+func TestStop_KeepsOwnerHeartbeatWhileQuestExecuting(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+	defer func() { _ = client.Close() }()
+
+	engine := NewQuestEngineWithRedis(NewInMemoryQuestStore(), client)
+	engine.running = true
+	engine.executing["quest-1"] = true
+
+	ctx := context.Background()
+	if err := engine.refreshQuestLockOwnerHeartbeat(ctx); err != nil {
+		t.Fatalf("failed to seed owner heartbeat: %v", err)
+	}
+
+	engine.Stop()
+
+	exists, err := client.Exists(ctx, questLockOwnerHeartbeatKey(engine.lockOwnerID)).Result()
+	if err != nil {
+		t.Fatalf("failed to read owner heartbeat: %v", err)
+	}
+	if exists != 1 {
+		t.Fatal("expected owner heartbeat to remain while a quest is still executing")
+	}
+}
+
+func TestStart_ReinitializesStopChannelAfterStop(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.Start()
+	oldStopCh := engine.stopCh
+	engine.Stop()
+
+	engine.Start()
+	newStopCh := engine.stopCh
+	if newStopCh == nil {
+		t.Fatal("expected Start to initialize stopCh")
+	}
+	if oldStopCh == newStopCh {
+		t.Fatal("expected Start to replace a closed stopCh on restart")
+	}
+	select {
+	case <-newStopCh:
+		t.Fatal("expected restarted stopCh to remain open")
+	default:
+	}
+
+	engine.Stop()
 }
 
 func TestNewQuestEngineWithRedis(t *testing.T) {
@@ -545,9 +772,9 @@ func TestGetChatRuntimeDiagnostics_IncludesDriftFields(t *testing.T) {
 	if count != 3 {
 		t.Fatalf("expected state_drift_positions=3, got %d", count)
 	}
-	reason, _ := diag["entry_gate_reason"].(string)
+	reason, _ := diag["entry_gate_reason_current"].(string)
 	if reason != "state drift detected" {
-		t.Fatalf("expected entry_gate_reason to be populated, got %q", reason)
+		t.Fatalf("expected entry_gate_reason_current to be populated, got %q", reason)
 	}
 	if _, ok := diag["last_drift_repair_at"].(string); !ok {
 		t.Fatal("expected last_drift_repair_at in diagnostics")
@@ -568,11 +795,15 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 			"definition_id": "scalping_execution",
 		},
 		Checkpoint: map[string]interface{}{
-			"recovery_mode":          "micro_entry",
-			"recovery_clean_cycles":  2,
-			"recovery_entry_allowed": false,
-			"entry_gate_type":        "recovery_gate",
-			"risk_max_drawdown":      0.41,
+			"recovery_mode":                  "micro_entry",
+			"recovery_clean_cycles":          2,
+			"recovery_clean_cycles_required": 3,
+			"recovery_cycles_to_entry":       1,
+			"recovery_gate_eval_at":          "2026-02-27T03:36:01Z",
+			"recovery_entry_allowed":         false,
+			"entry_gate_type":                "recovery_gate",
+			"risk_current_drawdown":          0.08,
+			"risk_max_drawdown":              0.41,
 		},
 	}
 
@@ -580,14 +811,26 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	if mode, _ := diag["recovery_mode"].(string); mode != "micro_entry" {
 		t.Fatalf("expected recovery_mode=micro_entry, got %q", mode)
 	}
-	if cycles, _ := diag["recovery_clean_cycles"].(int); cycles != 2 {
-		t.Fatalf("expected recovery_clean_cycles=2, got %d", cycles)
+	if cycles, _ := diag["recovery_clean_cycles_current"].(int); cycles != 2 {
+		t.Fatalf("expected recovery_clean_cycles_current=2, got %d", cycles)
+	}
+	if required, _ := diag["recovery_clean_cycles_required"].(int); required != 3 {
+		t.Fatalf("expected recovery_clean_cycles_required=3, got %d", required)
+	}
+	if cyclesToEntry, _ := diag["recovery_cycles_to_entry"].(int); cyclesToEntry != 1 {
+		t.Fatalf("expected recovery_cycles_to_entry=1, got %d", cyclesToEntry)
+	}
+	if evalAt, _ := diag["recovery_gate_eval_at"].(string); evalAt == "" {
+		t.Fatal("expected recovery_gate_eval_at to be populated")
 	}
 	if allowed, _ := diag["recovery_entry_allowed"].(bool); allowed {
 		t.Fatal("expected recovery_entry_allowed=false")
 	}
 	if gateType, _ := diag["entry_gate_type"].(string); gateType != "recovery_gate" {
 		t.Fatalf("expected entry_gate_type=recovery_gate, got %q", gateType)
+	}
+	if drawdown, _ := diag["risk_current_drawdown"].(float64); drawdown != 0.08 {
+		t.Fatalf("expected risk_current_drawdown=0.08, got %v", drawdown)
 	}
 	if usable, _ := diag["provider_chain_usable"].(int); usable != 1 {
 		t.Fatalf("expected provider_chain_usable=1, got %d", usable)
@@ -602,6 +845,253 @@ func TestGetChatRuntimeDiagnostics_IncludesRecoveryAndProviderChainFields(t *tes
 	}
 	if usable, _ := aiRuntime["provider_chain_usable"].(int); usable != 1 {
 		t.Fatalf("expected ai_runtime.provider_chain_usable=1, got %d", usable)
+	}
+}
+
+func TestGetChatRuntimeDiagnostics_OmitsRecoveryGateEvalAtWhenCheckpointMissing(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.quests["q-recovery"] = &Quest{
+		ID:        "q-recovery",
+		Status:    QuestStatusActive,
+		UpdatedAt: time.Now().UTC(),
+		Metadata: map[string]string{
+			"chat_id":       "chat-recovery",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_mode": "micro_entry",
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-recovery")
+	if _, exists := diag["recovery_gate_eval_at"]; exists {
+		t.Fatalf("expected recovery_gate_eval_at to be omitted when checkpoint field is absent, got %#v", diag["recovery_gate_eval_at"])
+	}
+}
+
+func TestGetChatRuntimeDiagnostics_OmitsRiskCurrentDrawdownWhenAbsent(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.quests["q-recovery"] = &Quest{
+		ID:     "q-recovery",
+		Status: QuestStatusActive,
+		Metadata: map[string]string{
+			"chat_id":       "chat-recovery",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"risk_max_drawdown": 0.41,
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-recovery")
+	if _, exists := diag["risk_current_drawdown"]; exists {
+		t.Fatalf("expected risk_current_drawdown to be omitted when no checkpoint provides it, got %#v", diag["risk_current_drawdown"])
+	}
+}
+
+func TestGetChatRuntimeDiagnostics_PrefersActiveScalpingGateFields(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-active"] = &Quest{
+		ID:        "q-active",
+		Status:    QuestStatusActive,
+		UpdatedAt: now.Add(-10 * time.Minute),
+		Metadata: map[string]string{
+			"chat_id":       "chat-gates",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_next_condition":        "active recovery",
+			"runtime_next_unblock_condition": "active unblock",
+			"runtime_entry_gate_reason":      "active reason",
+			"entry_gate_type":                "recovery_gate",
+		},
+	}
+	engine.quests["q-paused"] = &Quest{
+		ID:        "q-paused",
+		Status:    QuestStatusPaused,
+		UpdatedAt: now,
+		Metadata: map[string]string{
+			"chat_id":       "chat-gates",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_next_condition":        "paused recovery",
+			"runtime_next_unblock_condition": "paused unblock",
+			"runtime_entry_gate_reason":      "paused reason",
+			"entry_gate_type":                "state_drift",
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-gates")
+	assert.Equal(t, "active recovery", diag["recovery_next_condition"])
+	assert.Equal(t, "active unblock", diag["next_unblock_condition_current"])
+	assert.Equal(t, "active reason", diag["entry_gate_reason_current"])
+	assert.Equal(t, "recovery_gate", diag["entry_gate_type"])
+}
+
+func TestGetChatRuntimeDiagnostics_UsesLatestNonActiveGateFieldsWhenNoActiveScalping(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-older"] = &Quest{
+		ID:        "q-older",
+		Status:    QuestStatusPaused,
+		UpdatedAt: now.Add(-20 * time.Minute),
+		Metadata: map[string]string{
+			"chat_id":       "chat-gates",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_next_condition":        "older recovery",
+			"runtime_next_unblock_condition": "older unblock",
+			"runtime_entry_gate_reason":      "older reason",
+			"entry_gate_type":                "recovery_gate",
+		},
+	}
+	engine.quests["q-newer"] = &Quest{
+		ID:        "q-newer",
+		Status:    QuestStatusPaused,
+		UpdatedAt: now,
+		Metadata: map[string]string{
+			"chat_id":       "chat-gates",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"recovery_next_condition":        "newer recovery",
+			"runtime_next_unblock_condition": "newer unblock",
+			"runtime_entry_gate_reason":      "newer reason",
+			"entry_gate_type":                "runtime_circuit",
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-gates")
+	assert.Equal(t, "newer recovery", diag["recovery_next_condition"])
+	assert.Equal(t, "newer unblock", diag["next_unblock_condition_current"])
+	assert.Equal(t, "newer reason", diag["entry_gate_reason_current"])
+	assert.Equal(t, "runtime_circuit", diag["entry_gate_type"])
+}
+
+func TestQuestEngine_ExecuteQuestPersistsFinalLocalCheckpointSnapshot(t *testing.T) {
+	store := &recordingQuestStore{}
+	engine := NewQuestEngine(store)
+
+	staleQuest := &Quest{
+		ID:          "q-runtime",
+		Name:        "Scalping Executor",
+		Type:        QuestTypeRoutine,
+		Cadence:     CadenceMicro,
+		Status:      QuestStatusActive,
+		Checkpoint:  map[string]interface{}{"entry_gate_type": "recovery_gate"},
+		Metadata:    map[string]string{"chat_id": "1082762347", "definition_id": "scalping_execution"},
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+		TargetCount: 0,
+	}
+	liveQuest := &Quest{
+		ID:          staleQuest.ID,
+		Name:        staleQuest.Name,
+		Type:        staleQuest.Type,
+		Cadence:     staleQuest.Cadence,
+		Status:      staleQuest.Status,
+		Checkpoint:  map[string]interface{}{},
+		Metadata:    staleQuest.Metadata,
+		CreatedAt:   staleQuest.CreatedAt,
+		UpdatedAt:   staleQuest.UpdatedAt,
+		TargetCount: staleQuest.TargetCount,
+	}
+
+	engine.quests[liveQuest.ID] = staleQuest
+	engine.executing[liveQuest.ID] = true
+	engine.executionStarts[liveQuest.ID] = time.Now().UTC()
+	engine.executionLastProgress[liveQuest.ID] = time.Now().UTC()
+	engine.executionStage[liveQuest.ID] = questExecutionStageHandler
+	engine.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
+		quest.Checkpoint["entry_gate_type"] = "none"
+		quest.Checkpoint["recovery_entry_allowed"] = true
+		quest.Checkpoint["risk_current_drawdown"] = 0.0
+		return nil
+	})
+
+	engine.executeQuest(liveQuest)
+
+	if store.savedQuest == nil {
+		t.Fatal("expected final quest snapshot to be persisted")
+	}
+	if gateType, _ := store.savedQuest.Checkpoint["entry_gate_type"].(string); gateType != "none" {
+		t.Fatalf("expected persisted entry_gate_type=none, got %q", gateType)
+	}
+	if allowed, _ := store.savedQuest.Checkpoint["recovery_entry_allowed"].(bool); !allowed {
+		t.Fatal("expected persisted recovery_entry_allowed=true")
+	}
+	if gateType, _ := engine.quests[liveQuest.ID].Checkpoint["entry_gate_type"].(string); gateType != "none" {
+		t.Fatalf("expected in-memory entry_gate_type=none, got %q", gateType)
+	}
+}
+
+func TestFinalizeQuestExecution_GoalQuestRemainsActiveUntilReached(t *testing.T) {
+	store := &recordingQuestStore{}
+	engine := NewQuestEngine(store)
+	quest := &Quest{
+		ID:           "goal-quest",
+		Name:         "Fund Growth",
+		Type:         QuestTypeGoal,
+		Cadence:      CadenceOnetime,
+		Status:       QuestStatusActive,
+		TargetCount:  100,
+		CurrentCount: 40,
+		Checkpoint: map[string]interface{}{
+			"goal_reached": false,
+		},
+		Metadata: map[string]string{
+			"chat_id":       "chat-goal",
+			"definition_id": "fund_growth",
+		},
+	}
+
+	engine.finalizeQuestExecution(quest, nil)
+
+	if quest.Status != QuestStatusActive {
+		t.Fatalf("expected incomplete goal quest to stay active, got %s", quest.Status)
+	}
+	if quest.CompletedAt != nil {
+		t.Fatal("expected incomplete goal quest to remain without completion timestamp")
+	}
+	if store.savedQuest == nil {
+		t.Fatal("expected goal quest snapshot to be persisted")
+	}
+	if store.savedQuest.Status != QuestStatusActive {
+		t.Fatalf("expected persisted goal quest status to remain active, got %s", store.savedQuest.Status)
+	}
+}
+
+func TestFinalizeQuestExecution_PersistsWithBoundedContext(t *testing.T) {
+	store := &contextRecordingQuestStore{}
+	engine := NewQuestEngine(store)
+	quest := &Quest{
+		ID:         "persist-timeout",
+		Name:       "Persist Timeout",
+		Type:       QuestTypeRoutine,
+		Cadence:    CadenceMicro,
+		Status:     QuestStatusActive,
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id":       "chat-timeout",
+			"definition_id": "scalping_execution",
+		},
+	}
+
+	before := time.Now()
+	engine.finalizeQuestExecution(quest, nil)
+
+	if store.saveCtx == nil {
+		t.Fatal("expected SaveQuest context to be captured")
+	}
+	deadline, ok := store.saveCtx.Deadline()
+	if !ok {
+		t.Fatal("expected SaveQuest to use a bounded context")
+	}
+	if deadline.Before(before) || deadline.After(before.Add(defaultQuestStoreWriteTimeout+time.Second)) {
+		t.Fatalf("expected SaveQuest deadline near %s, got %s", defaultQuestStoreWriteTimeout, deadline.Sub(before))
 	}
 }
 
@@ -637,8 +1127,8 @@ func TestGetChatRuntimeDiagnostics_IncludesLivenessAndDeadlockFields(t *testing.
 	if blockReason, _ := diag["entry_attempt_block_reason"].(string); blockReason == "" {
 		t.Fatal("expected entry_attempt_block_reason to be populated")
 	}
-	if unblock, _ := diag["next_unblock_condition"].(string); unblock == "" {
-		t.Fatal("expected next_unblock_condition to be populated")
+	if unblock, _ := diag["next_unblock_condition_current"].(string); unblock == "" {
+		t.Fatal("expected next_unblock_condition_current to be populated")
 	}
 	if signature, _ := diag["drift_signature"].(string); signature != "sync-1|sync-2" {
 		t.Fatalf("expected drift_signature=sync-1|sync-2, got %q", signature)
@@ -691,7 +1181,7 @@ func TestTick_UsesLastProgressForStaleReset(t *testing.T) {
 	}
 	engine.quests[quest.ID] = quest
 	engine.executing[quest.ID] = true
-	engine.executionStarts[quest.ID] = time.Now().Add(-10 * time.Minute)
+	engine.executionStarts[quest.ID] = time.Now().Add(-2 * time.Minute)
 	engine.executionLastProgress[quest.ID] = time.Now().Add(-20 * time.Second)
 	engine.executionStage[quest.ID] = "handler"
 
@@ -783,6 +1273,41 @@ func TestTick_DoesNotResetStaleExecutionWhenLockStillHeld(t *testing.T) {
 	}
 	if held := engine.executionLockHeld[quest.ID]; !held {
 		t.Fatal("expected diagnostics to mark lock as held")
+	}
+}
+
+func TestTick_ResetsExecutionThatExceededTimeoutDespiteFreshHeartbeat(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	executed := make(chan struct{}, 1)
+	engine.RegisterHandler(QuestTypeRoutine, func(ctx context.Context, quest *Quest) error {
+		executed <- struct{}{}
+		return nil
+	})
+
+	quest := &Quest{
+		ID:         "timeout-reset-quest",
+		Name:       "Timeout Reset Quest",
+		Type:       QuestTypeRoutine,
+		Cadence:    CadenceMicro,
+		Status:     QuestStatusActive,
+		Checkpoint: make(map[string]interface{}),
+		Metadata: map[string]string{
+			"chat_id":       "chat-timeout",
+			"definition_id": "scalping_execution",
+		},
+	}
+	engine.quests[quest.ID] = quest
+	engine.executing[quest.ID] = true
+	engine.executionStarts[quest.ID] = time.Now().Add(-engine.runtimeBudget.ExecutionTimeout - time.Minute)
+	engine.executionLastProgress[quest.ID] = time.Now().Add(-10 * time.Second)
+	engine.executionStage[quest.ID] = questExecutionStageHandler
+
+	engine.tick()
+
+	select {
+	case <-executed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected execution timeout to reset stale quest despite fresh heartbeat")
 	}
 }
 

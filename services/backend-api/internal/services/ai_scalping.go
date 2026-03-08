@@ -23,67 +23,206 @@ import (
 )
 
 type AIScalpingConfig struct {
-	Exchange          string
-	Model             string
-	Leverage          int
-	MaxTokens         int
-	MaxCapitalPct     float64
-	MinConfidence     float64
-	MaxIterations     int
-	Timeout           time.Duration
-	AutoExecute       bool
-	AllowSpotFallback bool
-	MaxPairsToAnalyze int
-	MaxCandidatePairs int
-	OrderBookPairs    int
-	EnforceFutures    bool
-	SymbolCooldown    time.Duration
-	FailureBudget     int
-	FailureWindow     time.Duration
-	StructuredRetries int
-	LossStreakBudget  int
-	LossCooldown      time.Duration
-	LossWindow        time.Duration
-	PreTradeGate      bool
-	MinExpectancyEdge float64
-	MinExpectancyN    int
-	RegimeHighBand    float64
-	RegimeLowBand     float64
+	Exchange              string
+	Model                 string
+	Leverage              int
+	MaxTokens             int
+	MaxCapitalPct         float64
+	MinConfidence         float64
+	MaxIterations         int
+	Timeout               time.Duration
+	AutoExecute           bool
+	AllowSpotFallback     bool
+	MaxPairsToAnalyze     int
+	MaxCandidatePairs     int
+	OrderBookPairs        int
+	EnforceFutures        bool
+	SymbolCooldown        time.Duration
+	FailureBudget         int
+	FailureWindow         time.Duration
+	StructuredRetries     int
+	LossStreakBudget      int
+	LossCooldown          time.Duration
+	LossWindow            time.Duration
+	PreTradeGate          bool
+	MinExpectancyEdge     float64
+	MinExpectancyN        int
+	RegimeHighBand        float64
+	RegimeLowBand         float64
+	DeterministicFallback DeterministicFallbackConfig
+}
+
+type DeterministicFallbackConfig struct {
+	MaxBidAskSpread float64
+	MinImbalance    float64
+	BuyRangeMax     float64
+	SellRangeMin    float64
+	RangeAnchor     float64
+	RangeOffset     float64
+	rangeOffsetSet  bool
+
+	ImbalanceWeight float64
+	LiquidityWeight float64
+	RangeWeight     float64
+	VolumeWeight    float64
+
+	BaseConfidence  float64
+	ConfidenceScale float64
+	MinConfidence   float64
+	MaxConfidence   float64
+	ConfidenceFloor float64
+
+	SizeFraction   float64
+	MinSizePct     float64
+	VolumeLogScale float64
+}
+
+func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
+	return DeterministicFallbackConfig{
+		MaxBidAskSpread: 0.08,
+		MinImbalance:    0.35,
+		BuyRangeMax:     45.0,
+		SellRangeMin:    55.0,
+		RangeAnchor:     55.0,
+		RangeOffset:     45.0,
+		ImbalanceWeight: 0.65,
+		LiquidityWeight: 0.20,
+		RangeWeight:     0.10,
+		VolumeWeight:    0.05,
+		BaseConfidence:  0.55,
+		ConfidenceScale: 0.35,
+		MinConfidence:   0.55,
+		MaxConfidence:   0.85,
+		ConfidenceFloor: 0.72,
+		SizeFraction:    0.50,
+		MinSizePct:      0.10,
+		VolumeLogScale:  8.0,
+	}
+}
+
+func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig {
+	defaults := DefaultDeterministicFallbackConfig()
+	normalized := defaults
+
+	if cfg.MaxBidAskSpread > 0 {
+		normalized.MaxBidAskSpread = clampFloat(cfg.MaxBidAskSpread, 0.0001, 1)
+	}
+	if cfg.MinImbalance > 0 {
+		normalized.MinImbalance = clampFloat(cfg.MinImbalance, 0.01, 1)
+	}
+	if cfg.BuyRangeMax > 0 {
+		normalized.BuyRangeMax = clampFloat(cfg.BuyRangeMax, 1, 99)
+	}
+	if cfg.SellRangeMin > 0 {
+		normalized.SellRangeMin = clampFloat(cfg.SellRangeMin, 1, 99)
+	}
+	if normalized.BuyRangeMax >= normalized.SellRangeMin {
+		normalized.BuyRangeMax = defaults.BuyRangeMax
+		normalized.SellRangeMin = defaults.SellRangeMin
+	}
+	if cfg.RangeAnchor > 0 {
+		normalized.RangeAnchor = clampFloat(cfg.RangeAnchor, 1, 100)
+	}
+	if cfg.RangeOffset != 0 || cfg.rangeOffsetSet {
+		normalized.RangeOffset = clampFloat(cfg.RangeOffset, 0, 99)
+	}
+	if normalized.RangeOffset >= normalized.RangeAnchor {
+		normalized.RangeOffset = defaults.RangeOffset
+	}
+
+	if cfg.ImbalanceWeight > 0 {
+		normalized.ImbalanceWeight = clampFloat(cfg.ImbalanceWeight, 0.0001, 10)
+	}
+	if cfg.LiquidityWeight > 0 {
+		normalized.LiquidityWeight = clampFloat(cfg.LiquidityWeight, 0.0001, 10)
+	}
+	if cfg.RangeWeight > 0 {
+		normalized.RangeWeight = clampFloat(cfg.RangeWeight, 0.0001, 10)
+	}
+	if cfg.VolumeWeight > 0 {
+		normalized.VolumeWeight = clampFloat(cfg.VolumeWeight, 0.0001, 10)
+	}
+	weightSum := normalized.ImbalanceWeight + normalized.LiquidityWeight + normalized.RangeWeight + normalized.VolumeWeight
+	if weightSum <= 0 {
+		normalized.ImbalanceWeight = defaults.ImbalanceWeight
+		normalized.LiquidityWeight = defaults.LiquidityWeight
+		normalized.RangeWeight = defaults.RangeWeight
+		normalized.VolumeWeight = defaults.VolumeWeight
+		weightSum = normalized.ImbalanceWeight + normalized.LiquidityWeight + normalized.RangeWeight + normalized.VolumeWeight
+	}
+	normalized.ImbalanceWeight /= weightSum
+	normalized.LiquidityWeight /= weightSum
+	normalized.RangeWeight /= weightSum
+	normalized.VolumeWeight /= weightSum
+
+	if cfg.BaseConfidence > 0 {
+		normalized.BaseConfidence = clampFloat(cfg.BaseConfidence, 0.05, 0.99)
+	}
+	if cfg.ConfidenceScale > 0 {
+		normalized.ConfidenceScale = clampFloat(cfg.ConfidenceScale, 0.01, 1)
+	}
+	if cfg.MinConfidence > 0 {
+		normalized.MinConfidence = clampFloat(cfg.MinConfidence, 0.05, 0.99)
+	}
+	if cfg.MaxConfidence > 0 {
+		normalized.MaxConfidence = clampFloat(cfg.MaxConfidence, 0.05, 0.99)
+	}
+	if normalized.MinConfidence > normalized.MaxConfidence {
+		normalized.MinConfidence = defaults.MinConfidence
+		normalized.MaxConfidence = defaults.MaxConfidence
+	}
+	if cfg.ConfidenceFloor > 0 {
+		normalized.ConfidenceFloor = clampFloat(cfg.ConfidenceFloor, 0.05, 0.99)
+	}
+
+	if cfg.SizeFraction > 0 {
+		normalized.SizeFraction = clampFloat(cfg.SizeFraction, 0.01, 1)
+	}
+	if cfg.MinSizePct > 0 {
+		normalized.MinSizePct = clampFloat(cfg.MinSizePct, 0.01, 100)
+	}
+	if cfg.VolumeLogScale > 0 {
+		normalized.VolumeLogScale = clampFloat(cfg.VolumeLogScale, 0.1, 20)
+	}
+
+	return normalized
 }
 
 func DefaultAIScalpingConfig() AIScalpingConfig {
 	return AIScalpingConfig{
-		Exchange:          "bitget", // Default, will be overridden by user settings
-		Model:             "glm-5",
-		Leverage:          5,
-		MaxTokens:         1200,
-		MaxCapitalPct:     5.0,
-		MinConfidence:     0.65,
-		MaxIterations:     3,
-		Timeout:           90 * time.Second,
-		AutoExecute:       true,
-		AllowSpotFallback: false,
-		MaxPairsToAnalyze: 8,
-		MaxCandidatePairs: 120,
-		OrderBookPairs:    4,
-		EnforceFutures:    true,
-		SymbolCooldown:    90 * time.Second,
-		FailureBudget:     3,
-		FailureWindow:     15 * time.Minute,
-		StructuredRetries: 2,
-		LossStreakBudget:  2,
-		LossCooldown:      20 * time.Minute,
-		LossWindow:        90 * time.Minute,
-		PreTradeGate:      true,
-		MinExpectancyEdge: 0,
-		MinExpectancyN:    8,
-		RegimeHighBand:    85,
-		RegimeLowBand:     15,
+		Exchange:              "bitget", // Default, will be overridden by user settings
+		Model:                 "glm-5",
+		Leverage:              5,
+		MaxTokens:             1200,
+		MaxCapitalPct:         5.0,
+		MinConfidence:         0.65,
+		MaxIterations:         3,
+		Timeout:               90 * time.Second,
+		AutoExecute:           true,
+		AllowSpotFallback:     false,
+		MaxPairsToAnalyze:     8,
+		MaxCandidatePairs:     120,
+		OrderBookPairs:        4,
+		EnforceFutures:        true,
+		SymbolCooldown:        90 * time.Second,
+		FailureBudget:         3,
+		FailureWindow:         15 * time.Minute,
+		StructuredRetries:     2,
+		LossStreakBudget:      2,
+		LossCooldown:          20 * time.Minute,
+		LossWindow:            90 * time.Minute,
+		PreTradeGate:          true,
+		MinExpectancyEdge:     0,
+		MinExpectancyN:        8,
+		RegimeHighBand:        85,
+		RegimeLowBand:         15,
+		DeterministicFallback: DefaultDeterministicFallbackConfig(),
 	}
 }
 
 func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	cfg := applyAIScalpingConfigFromFile(base)
+	cfg.DeterministicFallback = cfg.DeterministicFallback.Normalized()
 
 	if value := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_EXCHANGE")); value != "" {
 		cfg.Exchange = strings.ToLower(value)
@@ -177,9 +316,10 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.RegimeLowBand = 15
 		cfg.RegimeHighBand = 85
 	}
+	cfg.DeterministicFallback = applyDeterministicFallbackConfigFromEnv(cfg.DeterministicFallback).Normalized()
 
 	log.Printf(
-		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
 		cfg.Exchange,
 		cfg.Model,
 		cfg.Leverage,
@@ -205,7 +345,73 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.MinExpectancyN,
 		cfg.RegimeLowBand,
 		cfg.RegimeHighBand,
+		cfg.DeterministicFallback.MaxBidAskSpread,
+		cfg.DeterministicFallback.MinImbalance,
+		cfg.DeterministicFallback.ConfidenceFloor,
+		cfg.DeterministicFallback.SizeFraction,
 	)
+
+	return cfg
+}
+
+func applyDeterministicFallbackConfigFromEnv(base DeterministicFallbackConfig) DeterministicFallbackConfig {
+	cfg := base
+
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_MAX_BID_ASK_SPREAD"); ok {
+		cfg.MaxBidAskSpread = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_MIN_IMBALANCE"); ok {
+		cfg.MinImbalance = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BUY_RANGE_MAX"); ok {
+		cfg.BuyRangeMax = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_RANGE_MIN"); ok {
+		cfg.SellRangeMin = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RANGE_ANCHOR"); ok {
+		cfg.RangeAnchor = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RANGE_OFFSET"); ok {
+		cfg.RangeOffset = value
+		cfg.rangeOffsetSet = true
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_IMBALANCE_WEIGHT"); ok {
+		cfg.ImbalanceWeight = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_LIQUIDITY_WEIGHT"); ok {
+		cfg.LiquidityWeight = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RANGE_WEIGHT"); ok {
+		cfg.RangeWeight = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_VOLUME_WEIGHT"); ok {
+		cfg.VolumeWeight = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BASE_CONFIDENCE"); ok {
+		cfg.BaseConfidence = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_CONFIDENCE_SCALE"); ok {
+		cfg.ConfidenceScale = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_MIN_CONFIDENCE"); ok {
+		cfg.MinConfidence = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_MAX_CONFIDENCE"); ok {
+		cfg.MaxConfidence = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_CONFIDENCE_FLOOR"); ok {
+		cfg.ConfidenceFloor = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SIZE_FRACTION"); ok {
+		cfg.SizeFraction = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_MIN_SIZE_PCT"); ok {
+		cfg.MinSizePct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_VOLUME_LOG_SCALE"); ok {
+		cfg.VolumeLogScale = value
+	}
 
 	return cfg
 }
@@ -373,9 +579,11 @@ type TradingPortfolio struct {
 	TotalValue         float64 `json:"total_value"`
 	OpenPositions      int     `json:"open_positions"`
 	UnrealizedPnL      float64 `json:"unrealized_pnl"`
+	CurrentDrawdown    float64 `json:"current_drawdown"`
 	RiskSharpe         float64 `json:"risk_sharpe"`
 	RiskSortino        float64 `json:"risk_sortino"`
 	RiskDrawdown       float64 `json:"risk_drawdown"`
+	RiskMaxDrawdown    float64 `json:"risk_max_drawdown"`
 	RiskExpectancy     float64 `json:"risk_expectancy"`
 	RiskSampleSize     int     `json:"risk_sample_size"`
 	StrategyPhase      string  `json:"strategy_phase"`
@@ -391,6 +599,7 @@ type TradingPortfolio struct {
 
 type AIScalpingService struct {
 	config        AIScalpingConfig
+	exchangeMu    sync.RWMutex
 	llmClient     llm.Client
 	skillRegistry *skill.Registry
 	ccxtService   ccxt.CCXTService
@@ -419,10 +628,11 @@ type symbolExecutionGuard struct {
 }
 
 const (
-	reasonCategoryLLMTimeout           = "llm_timeout"
-	reasonCategoryLLMParseContract     = "llm_parse_contract"
-	reasonCategoryExecutionUnavailable = "execution_unavailable"
-	reasonCategoryStrategyHold         = "strategy_hold"
+	reasonCategoryLLMTimeout            = "llm_timeout"
+	reasonCategoryLLMParseContract      = "llm_parse_contract"
+	reasonCategoryExecutionUnavailable  = "execution_unavailable"
+	reasonCategoryDeterministicFallback = "deterministic_fallback"
+	reasonCategoryStrategyHold          = "strategy_hold"
 )
 
 type AIScalpingRuntimeState struct {
@@ -452,10 +662,26 @@ type AIScalpingAutonomyState struct {
 	LastRollbackTrigger string
 }
 
-// SetExchange updates the exchange for scalping (called dynamically based on user wallet)
+// SetExchange updates the default exchange for legacy callers.
 func (s *AIScalpingService) SetExchange(exchange string) {
+	exchange = strings.ToLower(strings.TrimSpace(exchange))
+	s.exchangeMu.Lock()
+	defer s.exchangeMu.Unlock()
 	s.config.Exchange = exchange
 	log.Printf("[AI-SCALPING] Exchange set to: %s", exchange)
+}
+
+func (s *AIScalpingService) configuredExchange() string {
+	s.exchangeMu.RLock()
+	defer s.exchangeMu.RUnlock()
+	return strings.ToLower(strings.TrimSpace(s.config.Exchange))
+}
+
+func (s *AIScalpingService) exchangeForContext(ctx context.Context) string {
+	if exchange := strings.ToLower(strings.TrimSpace(scalpingExchangeFromContext(ctx))); exchange != "" {
+		return exchange
+	}
+	return s.configuredExchange()
 }
 
 func NewAIScalpingService(
@@ -643,6 +869,15 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", portfolio.USDTBalance)
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
+	effectiveExchange := s.exchangeForContext(ctx)
+	if scope, ok := scalpingAutonomyScopeFromContext(ctx); ok {
+		scope.Exchange = effectiveExchange
+		ctx = WithScalpingAutonomyScope(ctx, scope)
+	} else if effectiveExchange != "" {
+		ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
+			Exchange: effectiveExchange,
+		})
+	}
 
 	signals, err := s.gatherMarketSignals(ctx)
 	if err != nil {
@@ -781,7 +1016,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 	}
 	if strings.TrimSpace(scope.Exchange) == "" {
-		scope.Exchange = s.config.Exchange
+		scope.Exchange = effectiveExchange
 	}
 	if strings.TrimSpace(scope.StrategyID) == "" {
 		scope.StrategyID = ScalpingStrategyID(scope.ChatID)
@@ -870,11 +1105,12 @@ type aiMarketSignal struct {
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
-	if cached := s.getCachedPairs(); len(cached) > 0 {
+	exchange := s.exchangeForContext(ctx)
+	if cached := s.getCachedPairs(exchange); len(cached) > 0 {
 		return cached, nil
 	}
 
-	markets, err := s.ccxtService.FetchMarkets(ctx, s.config.Exchange)
+	markets, err := s.ccxtService.FetchMarkets(ctx, exchange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch markets: %w", err)
 	}
@@ -903,8 +1139,8 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 
 	// The executor is futures-first. Prefer symbols that are present in funding-rate
 	// universe so trade candidates map to futures contracts.
-	if s.config.Exchange == "bitget" {
-		if filtered := s.filterFuturesSymbols(ctx, candidates); len(filtered) > 0 {
+	if exchange == "bitget" {
+		if filtered := s.filterFuturesSymbols(ctx, exchange, candidates); len(filtered) > 0 {
 			candidates = filtered
 		} else if s.config.EnforceFutures {
 			return nil, fmt.Errorf("futures universe prefilter returned no tradable symbols")
@@ -922,7 +1158,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 	}
 
 	// Dynamically rank discovered symbols by liquidity + spread + intraday movement.
-	scored, err := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, candidates)
+	scored, err := s.ccxtService.FetchMarketData(ctx, []string{exchange}, candidates)
 	if err != nil {
 		var partialErr *ccxt.PartialMarketDataError
 		if errors.As(err, &partialErr) && len(partialErr.Data) > 0 {
@@ -937,7 +1173,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		}
 		log.Printf("[AI-SCALPING] Dynamic pair scoring unavailable (%v), using discovered subset", err)
 		selected := candidates[:limit]
-		s.updatePairCache(selected)
+		s.updatePairCache(exchange, selected)
 		return selected, nil
 	}
 
@@ -981,19 +1217,19 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		selected = append(selected, pairs[i].symbol)
 	}
 
-	log.Printf("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s", len(selected), len(candidates), s.config.Exchange)
-	s.updatePairCache(selected)
+	log.Printf("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s", len(selected), len(candidates), exchange)
+	s.updatePairCache(exchange, selected)
 	return selected, nil
 }
 
-func (s *AIScalpingService) getCachedPairs() []string {
+func (s *AIScalpingService) getCachedPairs(exchange string) []string {
 	s.pairCacheMu.RLock()
 	defer s.pairCacheMu.RUnlock()
 
 	if len(s.cachedPairs) == 0 {
 		return nil
 	}
-	if s.cacheExchange != s.config.Exchange {
+	if s.cacheExchange != exchange {
 		return nil
 	}
 	if time.Since(s.cacheUpdated) > 2*time.Minute {
@@ -1005,7 +1241,7 @@ func (s *AIScalpingService) getCachedPairs() []string {
 	return result
 }
 
-func (s *AIScalpingService) updatePairCache(pairs []string) {
+func (s *AIScalpingService) updatePairCache(exchange string, pairs []string) {
 	if len(pairs) == 0 {
 		return
 	}
@@ -1013,15 +1249,15 @@ func (s *AIScalpingService) updatePairCache(pairs []string) {
 	defer s.pairCacheMu.Unlock()
 
 	s.cachedPairs = append(s.cachedPairs[:0], pairs...)
-	s.cacheExchange = s.config.Exchange
+	s.cacheExchange = exchange
 	s.cacheUpdated = time.Now()
 }
 
-func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, symbols []string) []string {
-	rates, err := s.ccxtService.FetchAllFundingRates(ctx, s.config.Exchange)
+func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, exchange string, symbols []string) []string {
+	rates, err := s.ccxtService.FetchAllFundingRates(ctx, exchange)
 	if err != nil || len(rates) == 0 {
 		if err != nil {
-			log.Printf("[AI-SCALPING] Futures universe unavailable on %s: %v", s.config.Exchange, err)
+			log.Printf("[AI-SCALPING] Futures universe unavailable on %s: %v", exchange, err)
 		}
 		return nil
 	}
@@ -1052,16 +1288,17 @@ func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, symbols []
 	}
 
 	if len(filtered) == 0 {
-		log.Printf("[AI-SCALPING] Futures universe filter returned no overlap on %s; using discovered pairs", s.config.Exchange)
+		log.Printf("[AI-SCALPING] Futures universe filter returned no overlap on %s; using discovered pairs", exchange)
 		return nil
 	}
 
-	log.Printf("[AI-SCALPING] Futures universe filtered %d -> %d symbols on %s", len(symbols), len(filtered), s.config.Exchange)
+	log.Printf("[AI-SCALPING] Futures universe filtered %d -> %d symbols on %s", len(symbols), len(filtered), exchange)
 	return filtered
 }
 
 func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarketSignal, error) {
 	var signals []aiMarketSignal
+	exchange := s.exchangeForContext(ctx)
 
 	pairs, err := s.discoverTradingPairs(ctx)
 	if err != nil {
@@ -1074,7 +1311,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 
 	// Bulk ticker fetch keeps the cycle responsive under high symbol counts.
 	tickerBySymbol := make(map[string]ccxt.MarketPriceInterface, len(pairs))
-	marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{s.config.Exchange}, pairs)
+	marketData, bulkErr := s.ccxtService.FetchMarketData(ctx, []string{exchange}, pairs)
 	if bulkErr != nil {
 		var partialErr *ccxt.PartialMarketDataError
 		if errors.As(bulkErr, &partialErr) && len(partialErr.Data) > 0 {
@@ -1103,12 +1340,12 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		orderBookPairs = 4
 	}
 
-	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), s.config.Exchange)
+	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), exchange)
 	for idx, symbol := range pairs {
 		normalizedSymbol := normalizeSymbolForComparison(symbol)
 		tickerData, ok := tickerBySymbol[normalizedSymbol]
 		if !ok {
-			tickerData, err = s.ccxtService.FetchSingleTicker(ctx, s.config.Exchange, symbol)
+			tickerData, err = s.ccxtService.FetchSingleTicker(ctx, exchange, symbol)
 			if err != nil {
 				log.Printf("[AI-SCALPING] Failed to fetch ticker for %s: %v", symbol, err)
 				continue
@@ -1117,7 +1354,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 
 		var obResp *ccxt.OrderBookResponse
 		if idx < orderBookPairs {
-			obResp, err = s.ccxtService.FetchOrderBook(ctx, s.config.Exchange, symbol, 20)
+			obResp, err = s.ccxtService.FetchOrderBook(ctx, exchange, symbol, 20)
 			if err != nil {
 				log.Printf("[AI-SCALPING] Failed to fetch orderbook for %s: %v", symbol, err)
 			}
@@ -1206,7 +1443,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 			s.getLatestFailoverAttemptInfo(),
 		)
 		log.Printf("[AI-SCALPING] LLM completion failed: %v", err)
-		return nil, fmt.Errorf("LLM completion failed: %w", err)
+		return s.deterministicFallbackDecision(signals, portfolio), nil
 	}
 
 	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
@@ -1217,15 +1454,18 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		decision, err = s.parseDecisionWithRetries(ctx, resp.Message.Content)
 		if err != nil {
 			log.Printf("[AI-SCALPING] Structured-output retries exhausted: %v", err)
-			hold := fallbackHoldDecision(resp.Message.Content, err)
+			reasonCategory := classifyReasonCategory(err, resp.Message.Content)
+			if isDecisionContractErrorText(err) {
+				reasonCategory = reasonCategoryLLMParseContract
+			}
 			s.updateRuntimeState(
-				hold.ReasonCategory,
+				reasonCategory,
 				err,
 				false,
 				string(resp.Provider),
 				s.getLatestFailoverAttemptInfo(),
 			)
-			return hold, nil
+			return s.deterministicFallbackDecision(signals, portfolio), nil
 		}
 	}
 	if decision.Action == "hold" {
@@ -1377,6 +1617,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	if s.orderExecutor == nil {
 		return fmt.Errorf("no order executor configured")
 	}
+	exchange := s.exchangeForContext(ctx)
 
 	if maxCapitalPct <= 0 {
 		maxCapitalPct = s.config.MaxCapitalPct
@@ -1396,7 +1637,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		return err
 	}
 
-	openOrders, err := s.orderExecutor.GetOpenOrders(ctx, s.config.Exchange, decision.Symbol)
+	openOrders, err := s.orderExecutor.GetOpenOrders(ctx, exchange, decision.Symbol)
 	if err != nil {
 		log.Printf("[AI-SCALPING] Open-order check skipped for %s: %v", decision.Symbol, err)
 	} else if len(openOrders) > 0 {
@@ -1407,7 +1648,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 
 	// Build detailed trade info for rich notification
 	details := TradeDetails{
-		Exchange:          s.config.Exchange,
+		Exchange:          exchange,
 		Symbol:            decision.Symbol,
 		Side:              decision.Action,
 		OrderType:         "market",
@@ -2047,6 +2288,152 @@ func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecis
 	}
 }
 
+func (s *AIScalpingService) deterministicFallbackDecision(signals []aiMarketSignal, portfolio TradingPortfolio) *AITradingDecision {
+	bestDecision := (*AITradingDecision)(nil)
+	bestScore := 0.0
+
+	for _, signal := range signals {
+		decision, score, ok := s.deterministicFallbackCandidate(signal, portfolio)
+		if !ok {
+			continue
+		}
+		if bestDecision == nil || score > bestScore {
+			bestDecision = decision
+			bestScore = score
+		}
+	}
+
+	if bestDecision != nil {
+		log.Printf(
+			"[AI-SCALPING] Deterministic fallback selected %s %s (confidence=%.2f score=%.2f)",
+			bestDecision.Action,
+			bestDecision.Symbol,
+			bestDecision.Confidence,
+			bestScore,
+		)
+		return bestDecision
+	}
+
+	return runtimeDegradedHoldDecision(
+		"deterministic fallback found no eligible candidate after liquidity and signal checks",
+		reasonCategoryDeterministicFallback,
+	)
+}
+
+func (s *AIScalpingService) deterministicFallbackCandidate(
+	signal aiMarketSignal,
+	portfolio TradingPortfolio,
+) (*AITradingDecision, float64, bool) {
+	fallbackCfg := s.config.DeterministicFallback.Normalized()
+	if signal.Price <= 0 || signal.Symbol == "" {
+		return nil, 0, false
+	}
+	if signal.BidAskSpread <= 0 || signal.BidAskSpread > fallbackCfg.MaxBidAskSpread {
+		return nil, 0, false
+	}
+
+	imbalance := math.Abs(signal.OrderBookImbalance)
+	if imbalance < fallbackCfg.MinImbalance {
+		return nil, 0, false
+	}
+
+	action := ""
+	rangeAlignment := 0.0
+	switch {
+	case signal.OrderBookImbalance >= fallbackCfg.MinImbalance &&
+		signal.RangePosition24h <= fallbackCfg.BuyRangeMax:
+		action = "buy"
+		rangeAlignment = clampFloat(
+			(fallbackCfg.RangeAnchor-signal.RangePosition24h)/fallbackCfg.RangeAnchor,
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance <= -fallbackCfg.MinImbalance &&
+		signal.RangePosition24h >= fallbackCfg.SellRangeMin:
+		action = "sell"
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-fallbackCfg.RangeOffset)/fallbackCfg.RangeAnchor,
+			0,
+			1,
+		)
+	default:
+		return nil, 0, false
+	}
+
+	liquidityScore := clampFloat(1-(signal.BidAskSpread/fallbackCfg.MaxBidAskSpread), 0, 1)
+	volumeBasis := math.Max(signal.Volume24h, 0)
+	volumeScore := clampFloat(math.Log10(volumeBasis+1)/fallbackCfg.VolumeLogScale, 0, 1)
+	score := imbalance*fallbackCfg.ImbalanceWeight +
+		liquidityScore*fallbackCfg.LiquidityWeight +
+		rangeAlignment*fallbackCfg.RangeWeight +
+		volumeScore*fallbackCfg.VolumeWeight
+	confidence := clampFloat(
+		fallbackCfg.BaseConfidence+score*fallbackCfg.ConfidenceScale,
+		fallbackCfg.MinConfidence,
+		fallbackCfg.MaxConfidence,
+	)
+	if isNonFiniteFloat(volumeScore) || isNonFiniteFloat(score) || isNonFiniteFloat(confidence) {
+		return nil, 0, false
+	}
+	if confidence < clampFloat(math.Max(s.config.MinConfidence, fallbackCfg.ConfidenceFloor), 0.05, 0.99) {
+		return nil, 0, false
+	}
+
+	sizeCap := s.config.MaxCapitalPct
+	if portfolio.PhaseMaxCapitalPct > 0 && portfolio.PhaseMaxCapitalPct < sizeCap {
+		sizeCap = portfolio.PhaseMaxCapitalPct
+	}
+	if sizeCap <= 0 {
+		sizeCap = DefaultAIScalpingConfig().MaxCapitalPct
+	}
+	minSizePct := math.Min(fallbackCfg.MinSizePct, sizeCap)
+	sizePct := clampFloat(sizeCap*fallbackCfg.SizeFraction, minSizePct, sizeCap)
+
+	riskPct := 0.006
+	if signal.High24h > signal.Low24h && signal.Price > 0 {
+		rangePct := (signal.High24h - signal.Low24h) / signal.Price
+		riskPct = clampFloat(rangePct*0.20, 0.004, 0.012)
+	}
+	rewardPct := clampFloat(riskPct*1.6, 0.006, 0.02)
+
+	stopLoss := decimal.Zero
+	takeProfit := decimal.Zero
+	price := decimal.NewFromFloat(signal.Price)
+	risk := decimal.NewFromFloat(riskPct)
+	reward := decimal.NewFromFloat(rewardPct)
+	one := decimal.NewFromInt(1)
+	switch action {
+	case "buy":
+		stopLoss = price.Mul(one.Sub(risk))
+		takeProfit = price.Mul(one.Add(reward))
+	case "sell":
+		stopLoss = price.Mul(one.Add(risk))
+		takeProfit = price.Mul(one.Sub(reward))
+	default:
+		return nil, 0, false
+	}
+
+	reason := fmt.Sprintf(
+		"deterministic fallback: %s pressure %.3f with spread %.3f%% and range position %.1f%%",
+		action,
+		signal.OrderBookImbalance,
+		signal.BidAskSpread,
+		signal.RangePosition24h,
+	)
+
+	return &AITradingDecision{
+		Action:          action,
+		Symbol:          signal.Symbol,
+		SizePercent:     sizePct,
+		Confidence:      confidence,
+		Reasoning:       reason,
+		ReasonCategory:  reasonCategoryDeterministicFallback,
+		ConfidenceKnown: true,
+		StopLoss:        &stopLoss,
+		TakeProfit:      &takeProfit,
+	}, score, true
+}
+
 func isDecisionContractValidationError(decision *AITradingDecision, err error) bool {
 	if err == nil {
 		return false
@@ -2059,6 +2446,13 @@ func isDecisionContractValidationError(decision *AITradingDecision, err error) b
 		return false
 	}
 
+	return isDecisionContractErrorText(err)
+}
+
+func isDecisionContractErrorText(err error) bool {
+	if err == nil {
+		return false
+	}
 	lower := strings.ToLower(strings.TrimSpace(err.Error()))
 	switch {
 	case strings.Contains(lower, "decision is nil"),
@@ -2090,6 +2484,8 @@ func classifyReasonCategory(err error, content string) string {
 		strings.Contains(msg, "timeout"),
 		strings.Contains(msg, "deadline exceeded"):
 		return reasonCategoryLLMTimeout
+	case isDecisionContractErrorText(err):
+		return reasonCategoryLLMParseContract
 	case strings.Contains(msg, "failed to parse ai decision"),
 		strings.Contains(msg, "model response parse fallback"),
 		strings.Contains(msg, "invalid model decision contract"),
@@ -2114,7 +2510,7 @@ func classifyReasonCategory(err error, content string) string {
 
 func isRuntimeReasonCategory(category string) bool {
 	switch strings.ToLower(strings.TrimSpace(category)) {
-	case reasonCategoryLLMTimeout, reasonCategoryLLMParseContract, reasonCategoryExecutionUnavailable:
+	case reasonCategoryLLMTimeout, reasonCategoryLLMParseContract, reasonCategoryExecutionUnavailable, reasonCategoryDeterministicFallback:
 		return true
 	default:
 		return false
@@ -2787,6 +3183,10 @@ func getEnvBool(key string) (bool, bool) {
 		log.Printf("[AI-SCALPING] Invalid boolean %s=%q", key, raw)
 		return false, false
 	}
+}
+
+func isNonFiniteFloat(value float64) bool {
+	return math.IsNaN(value) || math.IsInf(value, 0)
 }
 
 func clampInt(value, min, max int) int {

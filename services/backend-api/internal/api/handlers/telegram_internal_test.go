@@ -211,7 +211,7 @@ func TestTelegramInternalHandler_GetUserByChatID_Success(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/api/v1/telegram/internal/users/"+chatID, nil)
+	c.Request = httptest.NewRequest("GET", "/internal/telegram/users/"+chatID, nil)
 	c.Params = gin.Params{{Key: "id", Value: chatID}}
 
 	handler.GetUserByChatID(c)
@@ -248,7 +248,7 @@ func TestTelegramInternalHandler_GetUserByChatID_NotFound(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/api/v1/telegram/internal/users/"+chatID, nil)
+	c.Request = httptest.NewRequest("GET", "/internal/telegram/users/"+chatID, nil)
 	c.Params = gin.Params{{Key: "id", Value: chatID}}
 
 	handler.GetUserByChatID(c)
@@ -273,7 +273,7 @@ func TestTelegramInternalHandler_GetUserByChatID_EmptyID(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/api/v1/telegram/internal/users/", nil)
+	c.Request = httptest.NewRequest("GET", "/internal/telegram/users/", nil)
 	c.Params = gin.Params{{Key: "id", Value: ""}}
 
 	handler.GetUserByChatID(c)
@@ -306,7 +306,7 @@ func TestTelegramInternalHandler_GetUserByChatID_DatabaseError(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/api/v1/telegram/internal/users/"+chatID, nil)
+	c.Request = httptest.NewRequest("GET", "/internal/telegram/users/"+chatID, nil)
 	c.Params = gin.Params{{Key: "id", Value: chatID}}
 
 	handler.GetUserByChatID(c)
@@ -328,7 +328,7 @@ func TestTelegramInternalHandler_GetNotificationPreferences_DatabaseError(t *tes
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/api/v1/telegram/internal/notifications/user-123", nil)
+	c.Request = httptest.NewRequest("GET", "/internal/telegram/notifications/user-123", nil)
 	c.Params = gin.Params{{Key: "userId", Value: "user-123"}}
 
 	// Mock count query with error
@@ -358,7 +358,7 @@ func TestTelegramInternalHandler_GetNotificationPreferences_EmptyUserID(t *testi
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/api/v1/telegram/internal/notifications/", nil)
+	c.Request = httptest.NewRequest("GET", "/internal/telegram/notifications/", nil)
 	c.Params = gin.Params{{Key: "userId", Value: ""}}
 
 	handler.GetNotificationPreferences(c)
@@ -382,7 +382,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_InvalidJSON(t *testi
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/api/v1/telegram/internal/notifications/user-123", bytes.NewBufferString("invalid json"))
+	c.Request = httptest.NewRequest("POST", "/internal/telegram/notifications/user-123", bytes.NewBufferString("invalid json"))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "userId", Value: "user-123"}}
 
@@ -410,7 +410,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_EmptyUserID(t *testi
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/api/v1/telegram/internal/notifications/", bytes.NewBuffer(jsonBytes))
+	c.Request = httptest.NewRequest("POST", "/internal/telegram/notifications/", bytes.NewBuffer(jsonBytes))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "userId", Value: ""}}
 
@@ -439,7 +439,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_TransactionBeginErro
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/api/v1/telegram/internal/notifications/user-123", bytes.NewBuffer(jsonBytes))
+	c.Request = httptest.NewRequest("POST", "/internal/telegram/notifications/user-123", bytes.NewBuffer(jsonBytes))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "userId", Value: "user-123"}}
 
@@ -472,7 +472,7 @@ func TestTelegramInternalHandler_SetNotificationPreferences_DeleteError(t *testi
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/api/v1/telegram/internal/notifications/user-123", bytes.NewBuffer(jsonBytes))
+	c.Request = httptest.NewRequest("POST", "/internal/telegram/notifications/user-123", bytes.NewBuffer(jsonBytes))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "userId", Value: "user-123"}}
 
@@ -507,7 +507,7 @@ func TestTelegramInternalHandler_ConnectPolymarket_Success(t *testing.T) {
 	requestBody := `{"chat_id":"777","wallet_address":"0x1234567890abcdef1234567890abcdef12345678"}`
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/telegram/internal/wallets/connect_polymarket", bytes.NewBufferString(requestBody))
+	c.Request = httptest.NewRequest(http.MethodPost, "/internal/telegram/wallets/connect_polymarket", bytes.NewBufferString(requestBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
@@ -550,7 +550,7 @@ func TestTelegramInternalHandler_BeginAutonomous_ReadinessBlocked(t *testing.T) 
 	requestBody := `{"chat_id":"777"}`
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/telegram/internal/autonomous/begin", bytes.NewBufferString(requestBody))
+	c.Request = httptest.NewRequest(http.MethodPost, "/internal/telegram/autonomous/begin", bytes.NewBufferString(requestBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	// Mock schema creation (may be skipped if sync.Once already executed)
@@ -576,7 +576,7 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/telegram/internal/doctor?chat_id=777", nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/internal/telegram/doctor?chat_id=777", nil)
 
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))

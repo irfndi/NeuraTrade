@@ -7,7 +7,7 @@ import {
   describe,
   beforeEach,
 } from "bun:test";
-import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import {

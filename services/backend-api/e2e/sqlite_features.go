@@ -60,9 +60,9 @@ func main() {
 		{"GET /api/v1/market/workers/status", "GET", "/api/v1/market/workers/status", nil},
 
 		// Telegram internal endpoints
-		{"GET /api/v1/telegram/internal/users/123456789", "GET", "/api/v1/telegram/internal/users/123456789", nil},
-		{"GET /api/v1/telegram/internal/wallets", "GET", "/api/v1/telegram/internal/wallets", nil},
-		{"GET /api/v1/telegram/internal/doctor", "GET", "/api/v1/telegram/internal/doctor", nil},
+		{"GET /internal/telegram/users/123456789", "GET", "/internal/telegram/users/123456789", nil},
+		{"GET /internal/telegram/wallets", "GET", "/internal/telegram/wallets", nil},
+		{"GET /internal/telegram/doctor", "GET", "/internal/telegram/doctor", nil},
 		{"GET /api/v1/telegram/internal/portfolio", "GET", "/api/v1/telegram/internal/portfolio", nil},
 	}
 

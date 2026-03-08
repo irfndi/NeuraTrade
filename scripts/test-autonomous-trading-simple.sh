@@ -150,14 +150,14 @@ if curl -s --connect-timeout 3 http://localhost:8080/health >/dev/null 2>&1; the
   fi
 
   # Test Doctor Check
-  DOCTOR=$(curl -s --connect-timeout 5 "http://localhost:8080/api/v1/telegram/internal/doctor?chat_id=test_chat_123" 2>/dev/null)
+  DOCTOR=$(curl -s --connect-timeout 5 "http://localhost:8080/internal/telegram/doctor?chat_id=test_chat_123" 2>/dev/null)
   if nt_validate_json_field "$DOCTOR" "checks"; then
-    nt_test_result "GET /api/v1/telegram/internal/doctor" "pass" "contains doctor checks"
+    nt_test_result "GET /internal/telegram/doctor" "pass" "contains doctor checks"
   else
     if echo "$DOCTOR" | grep -qi "unauthorized\|error"; then
-      nt_test_result "GET /api/v1/telegram/internal/doctor" "pass" "correctly rejects unauthorized"
+      nt_test_result "GET /internal/telegram/doctor" "pass" "correctly rejects unauthorized"
     else
-      nt_test_result "GET /api/v1/telegram/internal/doctor" "fail" "no valid response"
+      nt_test_result "GET /internal/telegram/doctor" "fail" "no valid response"
     fi
   fi
 else

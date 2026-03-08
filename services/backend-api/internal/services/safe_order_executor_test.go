@@ -218,6 +218,25 @@ func TestSafeOrderExecutor_SetChatID(t *testing.T) {
 	assert.Equal(t, "new-chat", safeExec.GetChatID())
 }
 
+func TestSafeOrderExecutor_UsesChatIDFromScopedContext(t *testing.T) {
+	mockSafety := &mockSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(nil, mockSafety, "default-chat")
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "scoped-chat",
+		Exchange: "binance",
+	})
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "scoped-chat", "binance", "BTC/USDT", decimal.NewFromFloat(50)).
+		Return(true, "", nil)
+
+	allowed, reason, err := safeExec.CheckSafety(ctx, "binance", "BTC/USDT", decimal.NewFromFloat(50))
+
+	assert.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Empty(t, reason)
+	mockSafety.AssertExpectations(t)
+}
+
 func TestSafeOrderExecutor_PlaceOrderWithDetails_BlocksWhenSafetyFails(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	mockSafety := &mockSafetyChecker{}

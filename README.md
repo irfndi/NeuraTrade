@@ -67,6 +67,16 @@ make coverage-check
 - Runtime/log/pid state is stored under `NEURATRADE_HOME` (default `~/.neuratrade`).
 - Telegram notifications are managed by `services/telegram-service`; configure bot settings in `.env` or `config.json`.
 
+## Recovery Tuning (Autonomous)
+
+- Fractional values are ratios (`0.30 = 30%`, `0.50 = 50%`).
+- `NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN=0.30`: Drawdown threshold where recovery mode can allow micro entries.
+- `NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN=0.40`: Drawdown threshold where new entries are blocked and de-risk-only mode is enforced.
+- `NEURATRADE_RECOVERY_CLEAN_CYCLES=1`: Required consecutive clean cycles before micro-entry mode can re-open entries.
+- `NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT=0.50`: Maximum position-size cap multiplier while micro-entry mode is active.
+- `NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR=5`: Maximum liveness-forced entry attempts allowed per rolling hour.
+- `NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET=2`: Consecutive per-symbol losses allowed before the symbol is temporarily paused.
+
 ## License
 
 MIT

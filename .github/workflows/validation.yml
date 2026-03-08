@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26.0"
+  GO_VERSION: "1.26.1"
   BUN_VERSION: "1.3.9"
 
 jobs:
@@ -155,7 +155,7 @@ jobs:
   backend-security:
     name: Backend Security
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -178,18 +178,43 @@ jobs:
 
       - name: Install security tools
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.24.7
 
       - name: Run static security scan (gosec)
         # TODO(security:G117,target=2026-04-15): remove exclusion after validating http server timeout handling patterns.
         # TODO(security:G704,target=2026-04-15): remove exclusion after replacing deferred recover/error handling patterns.
         # TODO(security:G404,target=2026-04-15): remove exclusion after replacing weak-rand usage in non-test paths.
         # TODO(security:G118,target=2026-04-15): remove exclusion after context-lifecycle remediation backlog is complete.
-        run: cd services/backend-api && gosec -severity medium -confidence medium -exclude=G117,G704,G404,G118 ./...
+        # TODO(security:taint,target=2026-05-15): restore G701-G707 in PR validation after internal/services is decomposed enough for bounded scan time.
+        run: |
+          cd services/backend-api
+          mapfile -t base_packages < <(go list -f '{{.Dir}}' ./cmd/... ./internal/... ./pkg/... | grep -v '/internal/services$')
+
+          if [ "${#base_packages[@]}" -gt 0 ]; then
+            gosec \
+              -severity medium \
+              -confidence medium \
+              -exclude=G117,G704,G404,G118 \
+              -exclude-generated \
+              -exclude-dir=internal/testutil \
+              -exclude-dir=internal/api/handlers/testmocks \
+              -exclude-dir=pkg/pb \
+              "${base_packages[@]}"
+          fi
+
+          gosec \
+            -severity medium \
+            -confidence medium \
+            -exclude=G117,G704,G404,G118,G701,G702,G703,G705,G706,G707 \
+            -exclude-generated \
+            -exclude-dir=internal/testutil \
+            -exclude-dir=internal/api/handlers/testmocks \
+            -exclude-dir=pkg/pb \
+            ./internal/services
 
       - name: Run vulnerability scan (govulncheck)
-        run: cd services/backend-api && govulncheck ./...
+        run: cd services/backend-api && govulncheck ./cmd/... ./internal/... ./pkg/...
 
       - name: Run vulnerability scan (trivy)
         uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0

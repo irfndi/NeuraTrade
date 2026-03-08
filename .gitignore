@@ -186,3 +186,6 @@ _temporary/
 .qwen/
 gha-creds-*.json
 dist/
+
+# Dolt database files (added by bd init)
+.dolt/

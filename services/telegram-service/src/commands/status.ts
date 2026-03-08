@@ -249,13 +249,10 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           }`,
         );
         const entryGateReason =
-          readStringField(chatRuntime, "entry_gate_reason") ||
-          diagnostics.entry_gate_reason;
+          readStringField(chatRuntime, "entry_gate_reason_current") ||
+          diagnostics.entry_gate_reason_current;
         const entryGateType =
           readStringField(chatRuntime, "entry_gate_type") || "none";
-        const recoveryGateReason =
-          readStringField(chatRuntime, "recovery_gate_reason") ||
-          diagnostics.recovery_gate_reason;
         const riskLockSource =
           readStringField(chatRuntime, "risk_lock_source") ||
           readStringField(questRuntime, "risk_lock_source") ||
@@ -282,8 +279,8 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           readStringField(chatRuntime, "entry_attempt_block_reason") ||
           diagnostics.entry_attempt_block_reason;
         const nextUnblockCondition =
-          readStringField(chatRuntime, "next_unblock_condition") ||
-          diagnostics.next_unblock_condition;
+          readStringField(chatRuntime, "next_unblock_condition_current") ||
+          diagnostics.next_unblock_condition_current;
         const entryAttempts1h =
           readNumberField(chatRuntime, "entry_attempts_1h") ??
           diagnostics.entry_attempts_1h;
@@ -311,11 +308,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         if (entryGateReason) {
           lines.push(`• Entry gate reason: ${entryGateReason}`);
         }
-        let blockerReason =
-          entryGateReason ||
-          entryAttemptBlockReason ||
-          recoveryGateReason ||
-          "";
+        let blockerReason = entryGateReason || entryAttemptBlockReason || "";
         if (!blockerReason) {
           switch (entryGatePriority) {
             case "risk_lock":
@@ -388,15 +381,42 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           );
         }
 
+        const diagnosticsFields = diagnostics as unknown as Readonly<
+          Record<string, unknown>
+        >;
         const recoveryMode =
-          readStringField(chatRuntime, "recovery_mode") || "normal";
+          readStringField(diagnosticsFields, "recovery_mode") ||
+          readStringField(chatRuntime, "recovery_mode") ||
+          "normal";
         const recoveryCleanCycles =
-          readNumberField(chatRuntime, "recovery_clean_cycles") ?? 0;
+          readNumberField(diagnosticsFields, "recovery_clean_cycles_current") ??
+          readNumberField(chatRuntime, "recovery_clean_cycles_current") ??
+          0;
+        const recoveryCleanRequired =
+          readNumberField(
+            diagnosticsFields,
+            "recovery_clean_cycles_required",
+          ) ??
+          readNumberField(chatRuntime, "recovery_clean_cycles_required") ??
+          1;
+        const recoveryCyclesToEntry =
+          readNumberField(diagnosticsFields, "recovery_cycles_to_entry") ??
+          readNumberField(chatRuntime, "recovery_cycles_to_entry") ??
+          0;
         const recoveryEntryAllowed =
-          readBoolField(chatRuntime, "recovery_entry_allowed") ?? true;
+          readBoolField(diagnosticsFields, "recovery_entry_allowed") ??
+          readBoolField(chatRuntime, "recovery_entry_allowed") ??
+          true;
         lines.push(
-          `• Recovery: mode=${recoveryMode}, clean_cycles=${recoveryCleanCycles}, entry_allowed=${recoveryEntryAllowed ? "yes" : "no"}`,
+          `• Recovery: mode=${recoveryMode}, clean_cycles=${recoveryCleanCycles}/${recoveryCleanRequired}, entry_allowed=${recoveryEntryAllowed ? "yes" : "no"}`,
         );
+        lines.push(`• Recovery cycles-to-entry: ${recoveryCyclesToEntry}`);
+        const recoveryGateEvalAt =
+          readStringField(diagnosticsFields, "recovery_gate_eval_at") ||
+          readStringField(chatRuntime, "recovery_gate_eval_at");
+        if (recoveryGateEvalAt) {
+          lines.push(`• Recovery gate eval: ${recoveryGateEvalAt}`);
+        }
 
         const lastDriftRepair =
           readStringField(chatRuntime, "last_drift_repair_at") ||
