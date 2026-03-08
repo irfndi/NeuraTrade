@@ -653,7 +653,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RespectsConfidenceAndP
 		Volume24h:          10000,
 		BidAskSpread:       0.079,
 		OrderBookImbalance: 0.36,
-		RangePosition24h:   20,
+		RangePosition24h:   50,
 	}
 	_, _, ok := svc.deterministicFallbackCandidate(lowConfidenceSignal, TradingPortfolio{})
 	assert.False(t, ok)
@@ -663,17 +663,19 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RespectsConfidenceAndP
 		Price:              100,
 		High24h:            104,
 		Low24h:             96,
-		Volume24h:          100000000,
-		BidAskSpread:       0.005,
-		OrderBookImbalance: 0.90,
-		RangePosition24h:   5,
+		Volume24h:          2500000,
+		BidAskSpread:       0.02,
+		OrderBookImbalance: 0.58,
+		RangePosition24h:   18,
 	}
 	decision, _, ok := svc.deterministicFallbackCandidate(eligibleSignal, TradingPortfolio{
 		PhaseMaxCapitalPct: 0.25,
 	})
-	require.True(t, ok)
-	require.NotNil(t, decision)
-	assert.LessOrEqual(t, decision.SizePercent, 0.25)
+	assert.True(t, ok)
+	assert.NotNil(t, decision)
+	if decision != nil {
+		assert.LessOrEqual(t, decision.SizePercent, 0.25)
+	}
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_UsesConfigOverrides(t *testing.T) {
