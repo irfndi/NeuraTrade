@@ -381,32 +381,39 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           );
         }
 
-        const diagnosticsFields =
-          diagnostics as unknown as Readonly<Record<string, unknown>>;
+        const diagnosticsFields = diagnostics as unknown as Readonly<
+          Record<string, unknown>
+        >;
         const recoveryMode =
           readStringField(diagnosticsFields, "recovery_mode") ||
           readStringField(chatRuntime, "recovery_mode") ||
           "normal";
         const recoveryCleanCycles =
           readNumberField(diagnosticsFields, "recovery_clean_cycles_current") ??
-          (readNumberField(chatRuntime, "recovery_clean_cycles_current") ?? 0);
+          readNumberField(chatRuntime, "recovery_clean_cycles_current") ??
+          0;
         const recoveryCleanRequired =
-          readNumberField(diagnosticsFields, "recovery_clean_cycles_required") ??
-          (readNumberField(chatRuntime, "recovery_clean_cycles_required") ?? 1);
+          readNumberField(
+            diagnosticsFields,
+            "recovery_clean_cycles_required",
+          ) ??
+          readNumberField(chatRuntime, "recovery_clean_cycles_required") ??
+          1;
         const recoveryCyclesToEntry =
           readNumberField(diagnosticsFields, "recovery_cycles_to_entry") ??
-          (readNumberField(chatRuntime, "recovery_cycles_to_entry") ?? 0);
+          readNumberField(chatRuntime, "recovery_cycles_to_entry") ??
+          0;
         const recoveryEntryAllowed =
           readBoolField(diagnosticsFields, "recovery_entry_allowed") ??
-          (readBoolField(chatRuntime, "recovery_entry_allowed") ?? true);
+          readBoolField(chatRuntime, "recovery_entry_allowed") ??
+          true;
         lines.push(
           `• Recovery: mode=${recoveryMode}, clean_cycles=${recoveryCleanCycles}/${recoveryCleanRequired}, entry_allowed=${recoveryEntryAllowed ? "yes" : "no"}`,
         );
         lines.push(`• Recovery cycles-to-entry: ${recoveryCyclesToEntry}`);
-        const recoveryGateEvalAt = readStringField(
-          diagnosticsFields,
-          "recovery_gate_eval_at",
-        ) || readStringField(chatRuntime, "recovery_gate_eval_at");
+        const recoveryGateEvalAt =
+          readStringField(diagnosticsFields, "recovery_gate_eval_at") ||
+          readStringField(chatRuntime, "recovery_gate_eval_at");
         if (recoveryGateEvalAt) {
           lines.push(`• Recovery gate eval: ${recoveryGateEvalAt}`);
         }
