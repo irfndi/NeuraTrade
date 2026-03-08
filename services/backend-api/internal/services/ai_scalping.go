@@ -3076,6 +3076,7 @@ func applyDecisionPolicy(decision *AITradingDecision, policy appautonomy.Scalpin
 	decision.PolicyAdjustments = append([]string(nil), policy.PolicyAdjustments...)
 }
 
+//nolint:unused // Retained for direct recovery-policy unit tests while rollout wiring is still in flux.
 func (s *AIScalpingService) applyControlledNoFillRecovery(
 	minConfidence *float64,
 	maxCapitalPct *float64,

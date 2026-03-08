@@ -305,7 +305,6 @@ func BuildCandidateFunnel(signals []CandidateSignal, policy ScalpingCyclePolicy)
 	type evaluatedCandidate struct {
 		rejection CandidateRejection
 		ranked    bool
-		viable    bool
 	}
 
 	rejections := make([]evaluatedCandidate, 0, len(signals))
