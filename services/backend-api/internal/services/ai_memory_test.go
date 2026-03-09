@@ -199,6 +199,57 @@ func TestTradeMemory_BuildMemoryContext(t *testing.T) {
 	assert.Contains(t, context, "Performance Stats")
 }
 
+func TestTradeMemory_GetPerformanceStatsWindow_PrefersRealizedPnLJournalForAutonomyScope(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
+		('mem_1', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'breakeven', 0, 0.70),
+		('mem_2', datetime('now'), 'bitget', 'ETH/USDT', 'buy', 'breakeven', 0, 0.70)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 101, 1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_2', 'ord_2', 'chat-1', 'bitget', 'ETH/USDT', 'sell', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_3', 'ord_3', 'chat-1', 'bitget', 'SOL/USDT', 'buy', 1, 100, 100, 0, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+	stats, err := tm.GetPerformanceStatsWindow(ctx, 24*30)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, stats.TotalTrades)
+	assert.Equal(t, 1, stats.Wins)
+	assert.Equal(t, 1, stats.Losses)
+	assert.Equal(t, 1, stats.Breakeven)
+	assert.Equal(t, 2, stats.DecisiveTrades)
+	assert.Equal(t, "0", stats.TotalPnL.String())
+}
+
 func TestTradeMemory_RecordLesson(t *testing.T) {
 	db := setupTestDB(t)
 	tm, err := NewTradeMemory(db)

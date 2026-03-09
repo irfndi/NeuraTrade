@@ -446,6 +446,13 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 		return
 	}
 
+	minConfidenceFloor := cfg.NoFillMinConfidenceFloor
+	if policy.AccountTier == AccountTierMicro &&
+		cfg.MicroMinConfidenceFloor > 0 &&
+		cfg.MicroMinConfidenceFloor < minConfidenceFloor {
+		minConfidenceFloor = cfg.MicroMinConfidenceFloor
+	}
+
 	step := int(input.NoFillMinutes / float64(cfg.NoFillRecoveryMinutes))
 	switch {
 	case step <= 1:
@@ -456,15 +463,15 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 			policy.EffectiveMaxCapitalPct = 0.50
 		}
 	case step == 2:
-		if policy.EffectiveMinConfidence > cfg.NoFillMinConfidenceFloor {
-			policy.EffectiveMinConfidence = cfg.NoFillMinConfidenceFloor
+		if policy.EffectiveMinConfidence > minConfidenceFloor {
+			policy.EffectiveMinConfidence = minConfidenceFloor
 		}
 		if policy.EffectiveMaxCapitalPct < 1.00 {
 			policy.EffectiveMaxCapitalPct = 1.00
 		}
 	default:
-		if policy.EffectiveMinConfidence > cfg.NoFillMinConfidenceFloor {
-			policy.EffectiveMinConfidence = cfg.NoFillMinConfidenceFloor
+		if policy.EffectiveMinConfidence > minConfidenceFloor {
+			policy.EffectiveMinConfidence = minConfidenceFloor
 		}
 		if policy.EffectiveMaxCapitalPct < cfg.NoFillMaxCapitalPctCap {
 			policy.EffectiveMaxCapitalPct = cfg.NoFillMaxCapitalPctCap

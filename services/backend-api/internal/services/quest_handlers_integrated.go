@@ -16,6 +16,7 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
+	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/services/phase_management"
 	"github.com/irfndi/neuratrade/internal/skill"
@@ -46,6 +47,7 @@ type IntegratedQuestHandlers struct {
 	lifecycleStore       *TradingLifecycleStore
 	protectionManager    *DynamicProtectionManager
 	db                   *sql.DB // Database for user settings
+	opModeService        *OperationalModeService
 	autonomyStore        *AutonomousRolloutStore
 	autonomyCoordinator  *ScalpingAutonomyCoordinator
 	stalePositionMu      sync.Mutex
@@ -174,6 +176,13 @@ func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 	if err := h.ensureTradeJournalSchema(); err != nil {
 		log.Printf("[SCALPING] Failed to initialize legacy trade journal schema: %v", err)
 	}
+}
+
+func (h *IntegratedQuestHandlers) SetOperationalModeService(service *OperationalModeService) {
+	if h == nil {
+		return
+	}
+	h.opModeService = service
 }
 
 func (h *IntegratedQuestHandlers) ensureTradeJournalSchema() error {
@@ -309,6 +318,36 @@ func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
 	if h.aiScalpingService != nil {
 		h.aiScalpingService.SetAutonomyCoordinator(nil)
 	}
+}
+
+func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Quest) OperationalMode {
+	if h != nil && h.opModeService != nil {
+		mode := h.opModeService.GetMode(chatID)
+		if mode == OpModeDry || mode == OpModeLive {
+			return mode
+		}
+	}
+	if quest != nil && quest.Metadata != nil && strings.EqualFold(strings.TrimSpace(quest.Metadata["dry_run"]), "true") {
+		return OpModeDry
+	}
+	return OpModeLive
+}
+
+func (h *IntegratedQuestHandlers) syncScalpingStrategyMode(ctx context.Context, chatID string, mode OperationalMode) error {
+	if h == nil || h.autonomyCoordinator == nil {
+		return nil
+	}
+	strategyID := ScalpingStrategyID(chatID)
+	if strings.TrimSpace(strategyID) == "" {
+		return nil
+	}
+
+	targetMode := autonomous.ModeShadow
+	if mode == OpModeLive {
+		targetMode = autonomous.ModeLive
+	}
+	_, err := h.autonomyCoordinator.SetStrategyMode(ctx, strategyID, targetMode)
+	return err
 }
 
 // recordQuestResult records quest execution result for monitoring
@@ -554,11 +593,26 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// Get user's preferred exchange from database or default to bitget
 	userExchange := h.getUserExchange(chatID)
 	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
+	currentMode := h.resolveOperationalMode(chatID, quest)
+	isDryRun := currentMode != OpModeLive
+	if quest.Metadata == nil {
+		quest.Metadata = make(map[string]string)
+	}
+	quest.Metadata["dry_run"] = strconv.FormatBool(isDryRun)
+	quest.Metadata["paper_trading"] = quest.Metadata["dry_run"]
 	ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
 		ChatID:     chatID,
 		StrategyID: ScalpingStrategyID(chatID),
 		Exchange:   userExchange,
 	})
+	if err := h.syncScalpingStrategyMode(ctx, chatID, currentMode); err != nil {
+		log.Printf("[SCALPING] Failed to sync rollout mode for chat %s (%s): %v", chatID, currentMode, err)
+		quest.Checkpoint["autonomy_mode_sync_error"] = err.Error()
+		if !isDryRun {
+			quest.Checkpoint["status"] = "hold"
+			return nil
+		}
+	}
 	h.bootstrapLifecycleState(ctx, quest, userExchange, chatID)
 	h.ensureDynamicProtectionManager()
 	if h.protectionManager != nil {
@@ -584,14 +638,6 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// have fresher win/loss data before the next decision.
 	if lastSymbol, ok := quest.Checkpoint["ai_symbol"].(string); ok && strings.TrimSpace(lastSymbol) != "" {
 		h.ingestClosedOrderFeedback(ctx, quest, userExchange, lastSymbol)
-	}
-
-	// Check if we're in dry-run/paper trading mode
-	isDryRun := false
-	if quest.Metadata != nil {
-		if dryRunVal, ok := quest.Metadata["dry_run"]; ok && dryRunVal == "true" {
-			isDryRun = true
-		}
 	}
 
 	usdtBalance := 0.0

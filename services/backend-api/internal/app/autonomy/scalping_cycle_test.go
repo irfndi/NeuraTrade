@@ -101,6 +101,46 @@ func TestEvaluateScalpingPolicy_NoFillRecoveryAdjustments(t *testing.T) {
 	}
 }
 
+func TestEvaluateScalpingPolicy_MicroNoFillRecoveryUsesMicroConfidenceFloor(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.85,
+		BaseMaxCapitalPct: 0.10,
+		NoFillMinutes:     float64(2 * config.NoFillRecoveryMinutes),
+	}, config)
+
+	require.Equal(t, AccountTierMicro, policy.AccountTier)
+	require.Contains(t, policy.PolicyAdjustments, "controlled_no_fill_recovery")
+	require.InDelta(t, config.MicroMinConfidenceFloor, policy.EffectiveMinConfidence, 0.0001)
+	require.InDelta(t, 0.50, policy.EffectiveMaxCapitalPct, 0.0001)
+}
+
+func TestEvaluateScalpingPolicy_MicroNoFillRecoveryOverridesWeakRecentWinRateTightening(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+		NoFillMinutes:     float64(3 * config.NoFillRecoveryMinutes),
+		PerformanceWindow: PerformanceWindowInput{
+			DecisiveTrades:     21,
+			DecisiveWinRatePct: 9.5,
+		},
+		Phase:              "bootstrap",
+		PhaseMinConfidence: 0.75,
+		PhaseMaxCapitalPct: 1.0,
+	}, config)
+
+	require.Equal(t, AccountTierMicro, policy.AccountTier)
+	require.Contains(t, policy.PolicyAdjustments, "weak_recent_win_rate")
+	require.Contains(t, policy.PolicyAdjustments, "critical_recent_win_rate")
+	require.Contains(t, policy.PolicyAdjustments, "controlled_no_fill_recovery")
+	require.InDelta(t, config.MicroMinConfidenceFloor, policy.EffectiveMinConfidence, 0.0001)
+}
+
 func TestEvaluateScalpingPolicy_LossStreakAndNegativeExpectancyTightening(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 

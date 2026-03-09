@@ -378,6 +378,15 @@ func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHo
 		TotalPnL:      decimal.Zero,
 	}
 
+	if realizedStats, found, err := tm.getRealizedPnLWindowStats(ctx, windowFrom, windowTo); err != nil {
+		return nil, err
+	} else if found {
+		realizedStats.LookbackHours = lookbackHours
+		realizedStats.WindowFrom = windowFrom
+		realizedStats.WindowTo = windowTo
+		return realizedStats, nil
+	}
+
 	rows, err := tm.db.QueryContext(ctx, `
 		SELECT outcome, COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(AVG(confidence), 0)
 		FROM ai_trade_memory
@@ -427,6 +436,62 @@ func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHo
 		stats.DecisiveWinRatePct = (float64(stats.Wins) / float64(stats.DecisiveTrades)) * 100
 	}
 	return stats, nil
+}
+
+func (tm *TradeMemory) getRealizedPnLWindowStats(
+	ctx context.Context,
+	windowFrom time.Time,
+	windowTo time.Time,
+) (*TradePerformanceWindowStats, bool, error) {
+	query := `
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(realized_pnl), 0)
+		FROM realized_pnl_journal
+		WHERE closed_at >= $1 AND closed_at <= $2
+	`
+	args := []interface{}{windowFrom.UTC(), windowTo.UTC()}
+	if scope, ok := scalpingAutonomyScopeFromContext(ctx); ok {
+		if chatID := strings.TrimSpace(scope.ChatID); chatID != "" {
+			query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
+			args = append(args, chatID)
+		}
+		if exchange := strings.TrimSpace(scope.Exchange); exchange != "" {
+			query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
+			args = append(args, exchange)
+		}
+	}
+
+	stats := &TradePerformanceWindowStats{}
+	var totalTrades int
+	var wins int
+	var losses int
+	var breakeven int
+	var totalPnL float64
+	if err := tm.db.QueryRowContext(ctx, query, args...).Scan(&totalTrades, &wins, &losses, &breakeven, &totalPnL); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("query realized pnl stats window: %w", err)
+	}
+	if totalTrades == 0 {
+		return nil, false, nil
+	}
+
+	stats.TotalTrades = totalTrades
+	stats.Wins = wins
+	stats.Losses = losses
+	stats.Breakeven = breakeven
+	stats.Pending = 0
+	stats.TotalPnL = decimal.NewFromFloat(totalPnL)
+	stats.DecisiveTrades = wins + losses
+	if stats.DecisiveTrades > 0 {
+		stats.DecisiveWinRatePct = (float64(stats.Wins) / float64(stats.DecisiveTrades)) * 100
+	}
+	return stats, true, nil
 }
 
 func (tm *TradeMemory) GetLastDecisionTimestamp(ctx context.Context) (time.Time, error) {
