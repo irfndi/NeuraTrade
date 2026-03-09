@@ -37,3 +37,34 @@ func TestOperationalModeService_SQLitePersistence(t *testing.T) {
 	reloaded := NewOperationalModeService(sqliteDB, DefaultOperationalModeConfig(), logger)
 	assert.Equal(t, OpModeLive, reloaded.GetMode("chat-1"))
 }
+
+func TestOperationalModeService_DryAndPaperHelpersRemainDistinct(t *testing.T) {
+	logger := logging.NewStandardLogger("error", "development")
+	service := NewOperationalModeService(nil, DefaultOperationalModeConfig(), logger)
+	ctx := context.Background()
+
+	require.NoError(t, service.SetMode(ctx, "chat-dry", OpModeDry, "tester"))
+	require.NoError(t, service.SetMode(ctx, "chat-paper", ModePaper, "tester"))
+
+	assert.True(t, service.IsDry("chat-dry"))
+	assert.False(t, service.IsPaper("chat-dry"))
+	assert.False(t, service.IsDry("chat-paper"))
+	assert.True(t, service.IsPaper("chat-paper"))
+}
+
+func TestOperationalModeService_GetModeInfo_UsesDistinctDryAndPaperLabels(t *testing.T) {
+	logger := logging.NewStandardLogger("error", "development")
+	service := NewOperationalModeService(nil, DefaultOperationalModeConfig(), logger)
+	ctx := context.Background()
+
+	require.NoError(t, service.SetMode(ctx, "chat-dry", OpModeDry, "tester"))
+	require.NoError(t, service.SetMode(ctx, "chat-paper", ModePaper, "tester"))
+
+	dryInfo := service.GetModeInfo("chat-dry")
+	paperInfo := service.GetModeInfo("chat-paper")
+
+	assert.Contains(t, dryInfo, "DRY MODE (Shadow/No Order Execution)")
+	assert.Contains(t, dryInfo, "Strategy runs stay in shadow observation mode")
+	assert.Contains(t, paperInfo, "PAPER MODE (Simulated Orders)")
+	assert.Contains(t, paperInfo, "Orders are simulated through the autonomy paper stage")
+}

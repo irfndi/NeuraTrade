@@ -66,7 +66,7 @@ Issues in Beads are:
 
 🚀 **Developer Focused**
 - Issues live in your repo, right next to your code
-- Works offline, syncs when you run `bd dolt push`
+- Works offline — commit local changes with `bd dolt commit`, then sync them with `bd dolt push`
 - Fast, lightweight, and stays out of your way
 
 🔧 **Dolt Workflow**

@@ -395,6 +395,15 @@ func TestAIScalpingService_BuildUserPrompt_SurfacesWalletBasisFallback(t *testin
 	assert.Contains(t, prompt, "Wallet Basis For size_pct: 46.93")
 }
 
+func TestAIScalpingService_BuildSystemPrompt_AllowsFractionalSizePct(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
+
+	prompt := svc.buildSystemPrompt()
+
+	assert.Contains(t, prompt, `"size_pct": 0.01-100`)
+	assert.Contains(t, prompt, "size_pct is a direct percentage of wallet value converted into order notional")
+}
+
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
 	category := normalizeHoldReasonCategory(
 		reasonCategoryStrategyHold,

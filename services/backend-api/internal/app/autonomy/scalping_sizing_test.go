@@ -31,6 +31,14 @@ func TestResolveExecutableSizingConstraints_BitgetFutures(t *testing.T) {
 			expectedNonExecutableWallet: false,
 		},
 		{
+			name:                        "ceils_executable_size_pct_to_avoid_rounding_down",
+			walletBalance:               decimal.NewFromFloat(46.932),
+			expectedMinOrderNotional:    decimal.NewFromFloat(6),
+			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
+			expectedMinExecutableSize:   12.7845,
+			expectedNonExecutableWallet: false,
+		},
+		{
 			name:                        "zero_wallet_balance",
 			walletBalance:               decimal.Zero,
 			expectedMinOrderNotional:    decimal.NewFromFloat(6),

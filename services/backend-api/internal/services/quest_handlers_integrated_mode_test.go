@@ -4,10 +4,12 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -144,6 +146,55 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyModeFollowsOperatorMode(t *t
 	require.NotNil(t, state)
 	assert.Equal(t, autonomous.StagePaper, state.CurrentStage)
 	assert.Equal(t, autonomous.StatusActive, state.Status)
+}
+
+func TestIntegratedQuestHandlersSyncScalpingStrategyMode_BlocksNonLiveTransitionWithExposure(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "rollout-sync-exposure.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{
+		autonomyCoordinator: NewScalpingAutonomyCoordinator(store, AIScalpingConfig{}),
+		lifecycleStore:      lifecycleStore,
+	}
+
+	chatID := "1082762347"
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:     chatID,
+		StrategyID: ScalpingStrategyID(chatID),
+		Exchange:   "bitget",
+	})
+
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, OpModeLive))
+	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-exposure",
+		ChatID:     chatID,
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(0.01),
+		EntryPrice: decimal.NewFromFloat(50000),
+		OpenedAt:   time.Now().UTC(),
+	}))
+
+	err = handlers.syncScalpingStrategyMode(ctx, chatID, OpModeDry)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot switch scalping:1082762347:default to non-live mode")
+
+	state, err := store.GetRolloutState(ctx, ScalpingStrategyID(chatID))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, autonomous.StageLive, state.CurrentStage)
 }
 
 type syncFailureBalanceFetcher struct{}

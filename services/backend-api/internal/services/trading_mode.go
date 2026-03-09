@@ -248,8 +248,12 @@ func (s *OperationalModeService) ResetConfirmations(ctx context.Context, chatID 
 
 // IsDry returns true if the system is in dry mode
 func (s *OperationalModeService) IsDry(chatID string) bool {
-	mode := s.GetMode(chatID)
-	return mode == OpModeDry || mode == ModePaper
+	return s.GetMode(chatID) == OpModeDry
+}
+
+// IsPaper returns true if the system is in paper mode.
+func (s *OperationalModeService) IsPaper(chatID string) bool {
+	return s.GetMode(chatID) == ModePaper
 }
 
 // IsLive returns true if the system is in live mode
@@ -373,7 +377,7 @@ func (s *OperationalModeService) GetModeInfo(chatID string) string {
 			"• No real exchange orders will be sent\n" +
 			"• Useful for validating execution behavior before live mode"
 	default:
-		status = "🧪 DRY MODE (Paper Trading)\n\n" +
+		status = "🧪 DRY MODE (Shadow/No Order Execution)\n\n" +
 			"• No orders will be executed\n" +
 			"• Strategy runs stay in shadow observation mode\n" +
 			"• Safe for validating gating and reasoning"

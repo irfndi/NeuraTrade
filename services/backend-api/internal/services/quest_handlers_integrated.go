@@ -360,8 +360,44 @@ func (h *IntegratedQuestHandlers) syncScalpingStrategyMode(ctx context.Context, 
 	case ModePaper:
 		targetMode = autonomous.ModePaper
 	}
+	if targetMode != autonomous.ModeLive {
+		if err := h.rejectNonLiveModeTransitionWithExposure(ctx, chatID, strategyID); err != nil {
+			return err
+		}
+	}
 	_, err := h.autonomyCoordinator.SetStrategyMode(ctx, strategyID, targetMode)
 	return err
+}
+
+func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx context.Context, chatID, strategyID string) error {
+	if h == nil || h.lifecycleStore == nil {
+		return nil
+	}
+
+	exchange := strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 20)
+	if err != nil {
+		return fmt.Errorf("check managed positions before non-live transition for %s: %w", strategyID, err)
+	}
+	openOrders, err := h.lifecycleStore.CountOpenOrders(ctx, chatID, exchange)
+	if err != nil {
+		return fmt.Errorf("check open orders before non-live transition for %s: %w", strategyID, err)
+	}
+	if len(positions) == 0 && openOrders == 0 {
+		return nil
+	}
+
+	targetExchange := exchange
+	if targetExchange == "" {
+		targetExchange = "all"
+	}
+	return fmt.Errorf(
+		"cannot switch %s to non-live mode while managed exposure remains (open_positions=%d open_orders=%d exchange=%s)",
+		strategyID,
+		len(positions),
+		openOrders,
+		targetExchange,
+	)
 }
 
 // recordQuestResult records quest execution result for monitoring
@@ -758,9 +794,11 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 
 	portfolio := TradingPortfolio{
-		USDTBalance:   usdtBalance,
-		TotalValue:    usdtBalance,
-		OpenPositions: 0,
+		USDTBalance:        usdtBalance,
+		USDTBalanceDecimal: decimalFromBalanceFloat(usdtBalance),
+		TotalValue:         usdtBalance,
+		TotalValueDecimal:  decimalFromBalanceFloat(usdtBalance),
+		OpenPositions:      0,
 	}
 	h.enrichPortfolioControlPlane(ctx, quest, chatID, userExchange, &portfolio)
 	recoveryState := h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
@@ -2137,6 +2175,7 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 			}
 			portfolio.UnrealizedPnL = unrealized.InexactFloat64()
 			portfolio.TotalValue = portfolio.USDTBalance + portfolio.UnrealizedPnL
+			portfolio.TotalValueDecimal = portfolio.USDTBalanceDecimal.Add(unrealized)
 		}
 	}
 
@@ -2226,9 +2265,10 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	}
 
 	portfolio.TotalValue = clampedTotalValue
+	portfolio.TotalValueDecimal = decimalFromBalanceFloat(clampedTotalValue)
 
 	phaseDetector := phase_management.NewPhaseDetector(phase_management.DefaultPhaseDetectorConfig(), nil)
-	currentPhase := phaseDetector.GetPhaseForValue(decimal.NewFromFloat(portfolio.TotalValue))
+	currentPhase := phaseDetector.GetPhaseForValue(portfolioTotalValueDecimal(*portfolio))
 	adapter := phase_management.NewStrategyAdapter(phase_management.DefaultStrategyAdapterConfig())
 	strategy := adapter.SelectStrategy(currentPhase)
 	riskParams := adapter.GetRiskParams(currentPhase)

@@ -525,7 +525,10 @@ func resolveAvailableBudget(portfolio TradingPortfolio, maxCapitalPct decimal.De
 	if pctDec.GreaterThan(maxPct) {
 		pctDec = maxPct
 	}
-	usdtDec := decimal.NewFromFloat(portfolio.USDTBalance)
+	usdtDec := portfolio.USDTBalanceDecimal
+	if !usdtDec.GreaterThan(decimal.Zero) {
+		usdtDec = decimalFromBalanceFloat(portfolio.USDTBalance)
+	}
 	budget := usdtDec.Mul(pctDec).Div(maxPct)
 	if budget.LessThan(decimal.Zero) {
 		return decimal.Zero

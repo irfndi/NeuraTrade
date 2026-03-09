@@ -585,7 +585,9 @@ type AITradingDecision struct {
 
 type TradingPortfolio struct {
 	USDTBalance                     float64          `json:"usdt_balance"`
+	USDTBalanceDecimal              decimal.Decimal  `json:"-"`
 	TotalValue                      float64          `json:"total_value"`
+	TotalValueDecimal               decimal.Decimal  `json:"-"`
 	OpenPositions                   int              `json:"open_positions"`
 	UnrealizedPnL                   float64          `json:"unrealized_pnl"`
 	CurrentDrawdown                 float64          `json:"current_drawdown"`
@@ -705,13 +707,38 @@ func (s *AIScalpingService) exchangeForContext(ctx context.Context) string {
 
 func walletBasis(portfolio TradingPortfolio) decimal.Decimal {
 	switch {
+	case portfolio.USDTBalanceDecimal.GreaterThan(decimal.Zero):
+		return portfolio.USDTBalanceDecimal
+	case portfolio.TotalValueDecimal.GreaterThan(decimal.Zero):
+		return portfolio.TotalValueDecimal
 	case portfolio.USDTBalance > 0:
-		return decimal.NewFromFloat(portfolio.USDTBalance)
+		return decimalFromBalanceFloat(portfolio.USDTBalance)
 	case portfolio.TotalValue > 0:
-		return decimal.NewFromFloat(portfolio.TotalValue)
+		return decimalFromBalanceFloat(portfolio.TotalValue)
 	default:
 		return decimal.Zero
 	}
+}
+
+func portfolioTotalValueDecimal(portfolio TradingPortfolio) decimal.Decimal {
+	if portfolio.TotalValueDecimal.GreaterThan(decimal.Zero) {
+		return portfolio.TotalValueDecimal
+	}
+	if portfolio.TotalValue > 0 {
+		return decimalFromBalanceFloat(portfolio.TotalValue)
+	}
+	return decimal.Zero
+}
+
+func decimalFromBalanceFloat(value float64) decimal.Decimal {
+	if value <= 0 {
+		return decimal.Zero
+	}
+	parsed, err := decimal.NewFromString(strconv.FormatFloat(value, 'f', -1, 64))
+	if err != nil {
+		return decimal.Zero
+	}
+	return parsed
 }
 
 func positiveDecimalPointer(value decimal.Decimal) *decimal.Decimal {
@@ -1660,7 +1687,7 @@ Return JSON only:
 {
   "action": "buy" | "sell" | "hold",
   "symbol": "SYMBOL/USDT",
-  "size_pct": 1-100,
+  "size_pct": 0.01-100,
   "confidence": 0.0-1.0,
   "reasoning": "explanation",
   "stop_loss": 123.45,
@@ -3187,7 +3214,7 @@ func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio T
 	}
 
 	return appautonomy.EvaluateScalpingPolicy(appautonomy.ScalpingCycleInput{
-		TotalValue:             decimal.NewFromFloat(portfolio.TotalValue),
+		TotalValue:             portfolioTotalValueDecimal(portfolio),
 		OpenPositions:          portfolio.OpenPositions,
 		DriftActive:            portfolio.DriftActive,
 		BaseMinConfidence:      s.config.MinConfidence,

@@ -65,7 +65,9 @@ func ResolveExecutableSizingConstraints(exchange string, walletBalance decimal.D
 	constraints.MinExecutableSizePct = constraints.MinOrderNotional.
 		Div(walletBalance).
 		Mul(decimal.NewFromInt(100)).
-		Round(4).
+		Mul(decimal.NewFromInt(10000)).
+		Ceil().
+		Div(decimal.NewFromInt(10000)).
 		InexactFloat64()
 
 	return constraints

@@ -232,7 +232,9 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 	) VALUES
 		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 101, 1, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_2', 'ord_2', 'chat-1', 'bitget', 'ETH/USDT', 'sell', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
-		('rp_3', 'ord_3', 'chat-1', 'bitget', 'SOL/USDT', 'buy', 1, 100, 100, 0, 0, 'autonomous', datetime('now'), datetime('now'))`)
+		('rp_3', 'ord_3', 'chat-1', 'bitget', 'SOL/USDT', 'buy', 1, 100, 100, 0, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_4', 'ord_4', 'chat-foreign', 'bitget', 'XRP/USDT', 'buy', 1, 100, 105, 5, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_5', 'ord_5', 'chat-1', 'binance', 'BNB/USDT', 'buy', 1, 100, 104, 4, 0, 'autonomous', datetime('now'), datetime('now'))`)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -243,7 +245,7 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 		expectedLosses int
 		expectedBreak  int
 		expectedDecis  int
-		expectedPnL    string
+		expectedPnL    decimal.Decimal
 	}{
 		{
 			name: "full_scope_prefers_realized_journal",
@@ -256,19 +258,32 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 			expectedLosses: 1,
 			expectedBreak:  1,
 			expectedDecis:  2,
-			expectedPnL:    "0",
+			expectedPnL:    decimal.Zero,
 		},
 		{
 			name: "exchange_only_scope_prefers_realized_journal",
 			scope: ScalpingAutonomyScope{
 				Exchange: "bitget",
 			},
-			expectedTrades: 3,
-			expectedWins:   1,
+			expectedTrades: 4,
+			expectedWins:   2,
 			expectedLosses: 1,
 			expectedBreak:  1,
+			expectedDecis:  3,
+			expectedPnL:    decimal.NewFromInt(5),
+		},
+		{
+			name: "scoped_no_match_falls_back_to_legacy_memory",
+			scope: ScalpingAutonomyScope{
+				ChatID:   "chat-1",
+				Exchange: "kraken",
+			},
+			expectedTrades: 2,
+			expectedWins:   1,
+			expectedLosses: 1,
+			expectedBreak:  0,
 			expectedDecis:  2,
-			expectedPnL:    "0",
+			expectedPnL:    decimal.NewFromInt(1),
 		},
 		{
 			name:           "empty_scope_falls_back_to_legacy_memory",
@@ -278,7 +293,7 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 			expectedLosses: 1,
 			expectedBreak:  0,
 			expectedDecis:  2,
-			expectedPnL:    "1",
+			expectedPnL:    decimal.NewFromInt(1),
 		},
 	}
 
@@ -293,7 +308,7 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 			assert.Equal(t, tt.expectedLosses, stats.Losses)
 			assert.Equal(t, tt.expectedBreak, stats.Breakeven)
 			assert.Equal(t, tt.expectedDecis, stats.DecisiveTrades)
-			assert.Equal(t, tt.expectedPnL, stats.TotalPnL.String())
+			assert.True(t, stats.TotalPnL.Equal(tt.expectedPnL), "expected pnl %s, got %s", tt.expectedPnL.String(), stats.TotalPnL.String())
 		})
 	}
 }
