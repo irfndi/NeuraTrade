@@ -322,12 +322,18 @@ func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
 
 func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Quest) OperationalMode {
 	if h != nil && h.opModeService != nil {
-		mode := h.opModeService.GetMode(chatID)
-		if mode == OpModeDry || mode == OpModeLive {
-			return mode
+		switch mode := h.opModeService.GetMode(chatID); mode {
+		case OpModeLive:
+			return OpModeLive
+		case OpModeDry, ModePaper, ModeConservative, ModeModerate, ModeAggressive:
+			return OpModeDry
+		default:
+			return OpModeDry
 		}
 	}
-	if quest != nil && quest.Metadata != nil && strings.EqualFold(strings.TrimSpace(quest.Metadata["dry_run"]), "true") {
+	if quest != nil && quest.Metadata != nil &&
+		(strings.EqualFold(strings.TrimSpace(quest.Metadata["dry_run"]), "true") ||
+			strings.EqualFold(strings.TrimSpace(quest.Metadata["paper_trading"]), "true")) {
 		return OpModeDry
 	}
 	return OpModeLive
@@ -608,10 +614,9 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	if err := h.syncScalpingStrategyMode(ctx, chatID, currentMode); err != nil {
 		log.Printf("[SCALPING] Failed to sync rollout mode for chat %s (%s): %v", chatID, currentMode, err)
 		quest.Checkpoint["autonomy_mode_sync_error"] = err.Error()
-		if !isDryRun {
-			quest.Checkpoint["status"] = "hold"
-			return nil
-		}
+		quest.Checkpoint["status"] = "hold"
+		quest.Checkpoint["runtime_entry_gate_reason"] = "failed to synchronize scalping rollout mode"
+		return nil
 	}
 	h.bootstrapLifecycleState(ctx, quest, userExchange, chatID)
 	h.ensureDynamicProtectionManager()
@@ -1271,7 +1276,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Side:       decision.Action,
 			OrderType:  "market",
 			MarketType: "futures",
-			Amount:     decimal.NewFromFloat(portfolio.USDTBalance * decision.SizePercent / 100),
+			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)),
 			EntryPrice: entryPrice,
 			StopLoss:   decimalValueOrZero(decision.StopLoss),
 			TakeProfit: decimalValueOrZero(decision.TakeProfit),
@@ -3610,11 +3615,11 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
 }
 
 func legacyTradeEntryMetrics(portfolio TradingPortfolio, decision *AITradingDecision) (decimal.Decimal, decimal.Decimal) {
-	if decision == nil || portfolio.USDTBalance <= 0 || decision.SizePercent <= 0 {
+	if decision == nil || decision.SizePercent <= 0 {
 		return decimal.Zero, decimal.Zero
 	}
 
-	costBasis := decimal.NewFromFloat(portfolio.USDTBalance).
+	costBasis := walletBasis(portfolio).
 		Mul(decimal.NewFromFloat(decision.SizePercent)).
 		Div(decimal.NewFromInt(100))
 	if decision.EntryPrice == nil || decision.EntryPrice.LessThanOrEqual(decimal.Zero) || costBasis.LessThanOrEqual(decimal.Zero) {

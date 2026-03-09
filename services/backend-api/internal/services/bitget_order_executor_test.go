@@ -2,10 +2,16 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_Validation(t *testing.T) {
@@ -87,6 +93,43 @@ func TestBitgetOrderExecutor_SetWalletBalance(t *testing.T) {
 
 	executor.SetWalletBalance(1000.0)
 	assert.Equal(t, 1000.0, executor.walletBalance)
+}
+
+func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmount(t *testing.T) {
+	var spotOrderBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/contracts"):
+			_, _ = w.Write([]byte(`{"code":"40001","msg":"contract does not exist","data":[]}`))
+		case r.URL.Path == "/api/v2/spot/trade/place-order":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &spotOrderBody))
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"spot-123"}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	entryPrice := decimal.NewFromInt(1)
+	orderID, err := executor.PlaceOrderWithDetails(context.Background(), TradeDetails{
+		Symbol:            "SONIC/USDT",
+		Side:              "buy",
+		MarketType:        "futures",
+		AllowSpotFallback: true,
+		AmountUSDT:        decimal.NewFromInt(3),
+		EntryPrice:        &entryPrice,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "spot-123", orderID)
+	require.NotNil(t, spotOrderBody)
+	assert.Equal(t, "3", spotOrderBody["size"])
 }
 
 func TestContractInfo(t *testing.T) {

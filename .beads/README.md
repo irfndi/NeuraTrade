@@ -26,8 +26,11 @@ bd show <issue-id>
 bd update <issue-id> --status in_progress
 bd update <issue-id> --status done
 
-# Sync with git remote
-bd sync
+# Commit Beads changes locally
+bd dolt commit
+
+# Push to configured Dolt remote
+bd dolt push
 ```
 
 ### QA Gate Closure

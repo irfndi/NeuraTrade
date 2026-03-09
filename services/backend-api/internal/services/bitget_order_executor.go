@@ -87,10 +87,6 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	if details.AmountUSDT.IsZero() || details.AmountUSDT.IsNegative() {
 		return "", fmt.Errorf("invalid order amount: %s", details.AmountUSDT.String())
 	}
-	// Keep risk display consistent with actual executable minimum notional on Bitget futures.
-	if details.MarketType == "futures" && details.AmountUSDT.LessThan(bitgetMinUSDTNotional) {
-		details.AmountUSDT = bitgetMinUSDTNotional
-	}
 
 	fmt.Printf("[BITGET-ORDER] Starting order: %s %s (%.2f USDT)\n", details.Side, apiSymbol, details.AmountUSDT.InexactFloat64())
 

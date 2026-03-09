@@ -9,10 +9,11 @@ import (
 const BitgetFuturesMinNotionalUSDT = 6.0
 
 type ExecutableSizingConstraints struct {
-	Exchange             string
-	MinOrderNotional     decimal.Decimal
-	MinInitialMargin     decimal.Decimal
-	MinExecutableSizePct float64
+	Exchange                 string
+	MinOrderNotional         decimal.Decimal
+	MinInitialMargin         decimal.Decimal
+	MinExecutableSizePct     float64
+	NonExecutableDueToWallet bool
 }
 
 func BitgetFuturesMinNotional() decimal.Decimal {
@@ -39,13 +40,20 @@ func ResolveExecutableSizingConstraints(exchange string, walletBalance decimal.D
 	}
 	constraints.MinInitialMargin = constraints.MinOrderNotional.Div(decimal.NewFromInt(int64(leverage)))
 
-	if walletBalance.GreaterThan(decimal.Zero) {
-		constraints.MinExecutableSizePct = constraints.MinOrderNotional.
-			Div(walletBalance).
-			Mul(decimal.NewFromInt(100)).
-			Round(4).
-			InexactFloat64()
+	if !walletBalance.GreaterThan(decimal.Zero) {
+		constraints.NonExecutableDueToWallet = true
+		return constraints
 	}
+	if walletBalance.LessThan(constraints.MinOrderNotional) {
+		constraints.NonExecutableDueToWallet = true
+		return constraints
+	}
+
+	constraints.MinExecutableSizePct = constraints.MinOrderNotional.
+		Div(walletBalance).
+		Mul(decimal.NewFromInt(100)).
+		Round(4).
+		InexactFloat64()
 
 	return constraints
 }

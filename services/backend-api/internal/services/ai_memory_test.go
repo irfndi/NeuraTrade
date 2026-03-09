@@ -250,6 +250,50 @@ func TestTradeMemory_GetPerformanceStatsWindow_PrefersRealizedPnLJournalForAuton
 	assert.Equal(t, "0", stats.TotalPnL.String())
 }
 
+func TestTradeMemory_GetPerformanceStatsWindow_FallsBackWithoutScopedAutonomyKeys(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
+		('mem_1', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'win', 2, 0.90),
+		('mem_2', datetime('now'), 'bitget', 'ETH/USDT', 'buy', 'loss', -1, 0.60)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 101, 10, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{})
+	stats, err := tm.GetPerformanceStatsWindow(ctx, 24*30)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, stats.TotalTrades)
+	assert.Equal(t, 1, stats.Wins)
+	assert.Equal(t, 1, stats.Losses)
+	assert.Equal(t, "1", stats.TotalPnL.String())
+}
+
 func TestTradeMemory_RecordLesson(t *testing.T) {
 	db := setupTestDB(t)
 	tm, err := NewTradeMemory(db)

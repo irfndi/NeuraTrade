@@ -8,10 +8,57 @@ import (
 )
 
 func TestResolveExecutableSizingConstraints_BitgetFutures(t *testing.T) {
-	constraints := ResolveExecutableSizingConstraints("bitget", decimal.NewFromFloat(46.93), 5)
+	tests := []struct {
+		name                        string
+		walletBalance               decimal.Decimal
+		expectedMinOrderNotional    decimal.Decimal
+		expectedMinInitialMargin    decimal.Decimal
+		expectedMinExecutableSize   float64
+		expectedNonExecutableWallet bool
+	}{
+		{
+			name:                        "happy_path",
+			walletBalance:               decimal.NewFromFloat(46.93),
+			expectedMinOrderNotional:    BitgetFuturesMinNotional(),
+			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
+			expectedMinExecutableSize:   12.7850,
+			expectedNonExecutableWallet: false,
+		},
+		{
+			name:                        "zero_wallet_balance",
+			walletBalance:               decimal.Zero,
+			expectedMinOrderNotional:    BitgetFuturesMinNotional(),
+			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
+			expectedMinExecutableSize:   0,
+			expectedNonExecutableWallet: true,
+		},
+		{
+			name:                        "subminimum_wallet_balance",
+			walletBalance:               decimal.NewFromFloat(5),
+			expectedMinOrderNotional:    BitgetFuturesMinNotional(),
+			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
+			expectedMinExecutableSize:   0,
+			expectedNonExecutableWallet: true,
+		},
+		{
+			name:                        "tiny_nonzero_wallet_balance",
+			walletBalance:               decimal.NewFromFloat(0.0000001),
+			expectedMinOrderNotional:    BitgetFuturesMinNotional(),
+			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
+			expectedMinExecutableSize:   0,
+			expectedNonExecutableWallet: true,
+		},
+	}
 
-	require.Equal(t, "bitget", constraints.Exchange)
-	require.True(t, constraints.MinOrderNotional.Equal(BitgetFuturesMinNotional()))
-	require.InDelta(t, 1.20, constraints.MinInitialMargin.InexactFloat64(), 0.0001)
-	require.InDelta(t, 12.7850, constraints.MinExecutableSizePct, 0.0001)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			constraints := ResolveExecutableSizingConstraints("bitget", tt.walletBalance, 5)
+
+			require.Equal(t, "bitget", constraints.Exchange)
+			require.True(t, constraints.MinOrderNotional.Equal(tt.expectedMinOrderNotional))
+			require.True(t, constraints.MinInitialMargin.Equal(tt.expectedMinInitialMargin))
+			require.InDelta(t, tt.expectedMinExecutableSize, constraints.MinExecutableSizePct, 0.0001)
+			require.Equal(t, tt.expectedNonExecutableWallet, constraints.NonExecutableDueToWallet)
+		})
+	}
 }

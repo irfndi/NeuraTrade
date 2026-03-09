@@ -140,7 +140,7 @@ type ScalpingCycleInput struct {
 	DriftActive            bool
 	BaseMinConfidence      float64
 	BaseMaxCapitalPct      float64
-	ExecutionMinCapitalPct float64
+	ExecutionMinCapitalPct decimal.Decimal
 	AdjustedMaxCapitalPct  float64
 	ConsecutiveLosses      int
 	Phase                  string
@@ -293,15 +293,21 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		}
 		policy.MaxConcurrentPositions = cfg.MicroMaxConcurrent
 	}
-	if input.ExecutionMinCapitalPct > 0 &&
-		input.ExecutionMinCapitalPct <= 100 &&
-		input.ExecutionMinCapitalPct > policy.EffectiveMaxCapitalPct {
-		policy.EffectiveMaxCapitalPct = input.ExecutionMinCapitalPct
+	if input.ExecutionMinCapitalPct.GreaterThan(decimal.NewFromInt(100)) {
+		policy.EffectiveMaxCapitalPct = 0
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "exchange_min_notional_block")
+	}
+	if input.ExecutionMinCapitalPct.GreaterThan(decimal.Zero) &&
+		input.ExecutionMinCapitalPct.LessThanOrEqual(decimal.NewFromInt(100)) &&
+		input.ExecutionMinCapitalPct.GreaterThan(decimal.NewFromFloat(policy.EffectiveMaxCapitalPct)) {
+		policy.EffectiveMaxCapitalPct = input.ExecutionMinCapitalPct.InexactFloat64()
 		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "exchange_min_notional_floor")
 	}
 
 	policy.EffectiveMinConfidence = clampFloat(policy.EffectiveMinConfidence, 0.05, 0.95)
-	policy.EffectiveMaxCapitalPct = clampFloat(policy.EffectiveMaxCapitalPct, 0.10, 100.0)
+	if policy.EffectiveMaxCapitalPct > 0 {
+		policy.EffectiveMaxCapitalPct = clampFloat(policy.EffectiveMaxCapitalPct, 0.10, 100.0)
+	}
 	return policy
 }
 
