@@ -26,6 +26,23 @@ func TestEvaluateScalpingPolicy_MicroTierRelaxesBootstrapFloor(t *testing.T) {
 	require.Equal(t, 1, policy.MaxConcurrentPositions)
 }
 
+func TestEvaluateScalpingPolicy_FloorsToExecutableMinimumWhenPolicyCapIsTooSmall(t *testing.T) {
+	sizing := ResolveExecutableSizingConstraints("bitget", decimal.NewFromFloat(46.93), 5)
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:             decimal.NewFromFloat(46.93),
+		BaseMinConfidence:      0.65,
+		BaseMaxCapitalPct:      5.0,
+		ExecutionMinCapitalPct: sizing.MinExecutableSizePct,
+		Phase:                  "bootstrap",
+		PhaseMinConfidence:     0.75,
+		PhaseMaxCapitalPct:     1.0,
+	}, DefaultScalpingPolicyConfig())
+
+	require.InDelta(t, sizing.MinExecutableSizePct, policy.EffectiveMaxCapitalPct, 0.01)
+	require.Contains(t, policy.PolicyAdjustments, "exchange_min_notional_floor")
+}
+
 func TestEvaluateScalpingPolicy_NoFillRecoveryAdjustments(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 

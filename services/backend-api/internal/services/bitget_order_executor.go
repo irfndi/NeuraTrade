@@ -16,12 +16,13 @@ import (
 	"strings"
 	"time"
 
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/shopspring/decimal"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
 
-var bitgetMinUSDTNotional = decimal.NewFromFloat(6.0)
+var bitgetMinUSDTNotional = appautonomy.BitgetFuturesMinNotional()
 
 // BitgetOrderExecutor executes real orders on Bitget exchange
 type BitgetOrderExecutor struct {

@@ -135,23 +135,24 @@ type PerformanceWindowInput struct {
 }
 
 type ScalpingCycleInput struct {
-	TotalValue            decimal.Decimal
-	OpenPositions         int
-	DriftActive           bool
-	BaseMinConfidence     float64
-	BaseMaxCapitalPct     float64
-	AdjustedMaxCapitalPct float64
-	ConsecutiveLosses     int
-	Phase                 string
-	PhaseMinConfidence    float64
-	PhaseMaxCapitalPct    float64
-	MilestoneProgress     float64
-	NoFillMinutes         float64
-	RiskDrawdown          float64
-	RiskExpectancy        float64
-	RiskSampleSize        int
-	RecoveryMode          string
-	PerformanceWindow     PerformanceWindowInput
+	TotalValue             decimal.Decimal
+	OpenPositions          int
+	DriftActive            bool
+	BaseMinConfidence      float64
+	BaseMaxCapitalPct      float64
+	ExecutionMinCapitalPct float64
+	AdjustedMaxCapitalPct  float64
+	ConsecutiveLosses      int
+	Phase                  string
+	PhaseMinConfidence     float64
+	PhaseMaxCapitalPct     float64
+	MilestoneProgress      float64
+	NoFillMinutes          float64
+	RiskDrawdown           float64
+	RiskExpectancy         float64
+	RiskSampleSize         int
+	RecoveryMode           string
+	PerformanceWindow      PerformanceWindowInput
 }
 
 type ScalpingCyclePolicy struct {
@@ -291,6 +292,12 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 			policy.EffectiveMaxCapitalPct = cfg.MicroMaxCapitalPct
 		}
 		policy.MaxConcurrentPositions = cfg.MicroMaxConcurrent
+	}
+	if input.ExecutionMinCapitalPct > 0 &&
+		input.ExecutionMinCapitalPct <= 100 &&
+		input.ExecutionMinCapitalPct > policy.EffectiveMaxCapitalPct {
+		policy.EffectiveMaxCapitalPct = input.ExecutionMinCapitalPct
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "exchange_min_notional_floor")
 	}
 
 	policy.EffectiveMinConfidence = clampFloat(policy.EffectiveMinConfidence, 0.05, 0.95)
