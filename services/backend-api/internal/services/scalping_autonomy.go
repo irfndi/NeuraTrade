@@ -373,6 +373,71 @@ func (c *ScalpingAutonomyCoordinator) GetChatRolloutState(ctx context.Context, c
 	return c.store.GetChatRolloutState(ctx, chatID)
 }
 
+func (c *ScalpingAutonomyCoordinator) SetStrategyMode(
+	ctx context.Context,
+	strategyID string,
+	mode autonomous.StrategyMode,
+) (*autonomous.RolloutState, error) {
+	if c == nil || c.store == nil || c.rollout == nil {
+		return nil, fmt.Errorf("autonomy coordinator is unavailable")
+	}
+	strategyID = strings.TrimSpace(strategyID)
+	if strategyID == "" {
+		return nil, fmt.Errorf("strategy_id is required")
+	}
+
+	targetStage, err := stageForMode(mode)
+	if err != nil {
+		return nil, err
+	}
+
+	state, err := c.rollout.GetRolloutState(ctx, strategyID)
+	if err != nil {
+		return nil, fmt.Errorf("get rollout state: %w", err)
+	}
+	if state == nil {
+		state, err = c.rollout.InitializeRollout(ctx, strategyID, autonomous.DefaultPromotionCriteria())
+		if err != nil {
+			return nil, fmt.Errorf("initialize rollout state: %w", err)
+		}
+	}
+	for state.CurrentStage != targetStage {
+		switch {
+		case state.CurrentStage == autonomous.StageShadow && targetStage != autonomous.StageShadow:
+			state, err = c.rollout.ForcePromote(ctx, strategyID, "operator_set_strategy_mode")
+		case state.CurrentStage == autonomous.StagePaper && targetStage == autonomous.StageLive:
+			state, err = c.rollout.ForcePromote(ctx, strategyID, "operator_set_strategy_mode")
+		default:
+			state, err = c.rollout.Rollback(ctx, strategyID, autonomous.TriggerOperatorSetMode, "operator_set_strategy_mode")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("set strategy mode to %s: %w", mode, err)
+		}
+	}
+
+	if state.Status == autonomous.StatusPaused || state.Status == autonomous.StatusRolledBack {
+		state.Status = autonomous.StatusActive
+		state.EnteredAt = time.Now().UTC()
+		if err := c.store.SaveRolloutState(ctx, state); err != nil {
+			return nil, fmt.Errorf("persist active rollout status: %w", err)
+		}
+	}
+	return state, nil
+}
+
+func stageForMode(mode autonomous.StrategyMode) (autonomous.RolloutStage, error) {
+	switch mode {
+	case autonomous.ModeShadow:
+		return autonomous.StageShadow, nil
+	case autonomous.ModePaper:
+		return autonomous.StagePaper, nil
+	case autonomous.ModeLive:
+		return autonomous.StageLive, nil
+	default:
+		return "", fmt.Errorf("unsupported strategy mode: %s", mode)
+	}
+}
+
 func (c *ScalpingAutonomyCoordinator) LastRollback(strategyID string) *autonomous.RollbackEvent {
 	if c == nil {
 		return nil

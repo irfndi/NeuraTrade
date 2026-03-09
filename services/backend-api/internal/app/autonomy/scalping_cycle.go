@@ -1,0 +1,562 @@
+package autonomy
+
+import (
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/shopspring/decimal"
+)
+
+const (
+	AccountTierMicro    = "micro"
+	AccountTierSmall    = "small"
+	AccountTierStandard = "standard"
+)
+
+const (
+	DefaultMicroAccountMaxValue       = 250.0
+	DefaultSmallAccountMaxValue       = 2500.0
+	DefaultMicroMinConfidenceFloor    = 0.65
+	DefaultMicroMaxCapitalPct         = 0.50
+	DefaultMaxConcurrentPositions     = 3
+	DefaultMicroMaxConcurrentPosition = 1
+	DefaultScalpingProgressBlockAfter = 2 * time.Hour
+)
+
+const (
+	CandidateRejectConfidenceBelowThreshold = "confidence_below_effective_threshold"
+	CandidateRejectSpreadTooWide            = "spread_too_wide"
+	CandidateRejectMissingOrderbookSignal   = "missing_orderbook_signal"
+	CandidateRejectPreTradeExpectancy       = "pretrade_expectancy_block"
+	CandidateRejectRolloutShadow            = "rollout_shadow_block"
+	CandidateRejectRolloutPaper             = "rollout_paper_block"
+	CandidateRejectMaxConcurrentPositions   = "max_concurrent_positions_reached"
+	CandidateRejectAutonomyGateClosed       = "autonomy_gate_closed"
+	CandidateRejectAutonomyRuntime          = "autonomy_runtime_unavailable"
+	CandidateRejectSafeMode                 = "safe_mode_active"
+	CandidateRejectKillSwitch               = "kill_switch_active"
+	CandidateRejectConnectivity             = "connectivity_block"
+	CandidateRejectRiskBudget               = "risk_budget_block"
+	CandidateRejectNoDirectionalEdge        = "no_directional_edge"
+)
+
+const (
+	scalpingMaxBidAskSpreadPct      = 0.20
+	scalpingStrongImbalanceFloor    = 0.20
+	scalpingNeutralImbalanceFloor   = 0.10
+	scalpingBuyRangeMax             = 45.0
+	scalpingSellRangeMin            = 55.0
+	scalpingConfidenceBase          = 0.50
+	scalpingConfidenceImbalanceW    = 0.55
+	scalpingConfidenceLiquidityW    = 0.20
+	scalpingConfidenceRangeW        = 0.15
+	scalpingConfidenceVolumeW       = 0.10
+	scalpingConfidenceVolumeLogBase = 8.0
+)
+
+type ScalpingPolicyConfig struct {
+	MicroAccountMaxValue     decimal.Decimal
+	SmallAccountMaxValue     decimal.Decimal
+	MicroMinConfidenceFloor  float64
+	MicroMaxCapitalPct       float64
+	MaxConcurrentPositions   int
+	MicroMaxConcurrent       int
+	NoFillRecoveryMinutes    int
+	NoFillMinConfidenceFloor float64
+	NoFillMaxCapitalPctCap   float64
+	RecoveryMicroEntryCapPct float64
+	ProgressBlockAfter       time.Duration
+}
+
+func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
+	return ScalpingPolicyConfig{
+		MicroAccountMaxValue:     decimal.NewFromFloat(DefaultMicroAccountMaxValue),
+		SmallAccountMaxValue:     decimal.NewFromFloat(DefaultSmallAccountMaxValue),
+		MicroMinConfidenceFloor:  DefaultMicroMinConfidenceFloor,
+		MicroMaxCapitalPct:       DefaultMicroMaxCapitalPct,
+		MaxConcurrentPositions:   DefaultMaxConcurrentPositions,
+		MicroMaxConcurrent:       DefaultMicroMaxConcurrentPosition,
+		NoFillRecoveryMinutes:    180,
+		NoFillMinConfidenceFloor: 0.70,
+		NoFillMaxCapitalPctCap:   1.50,
+		RecoveryMicroEntryCapPct: DefaultRecoveryMicroEntryCapPct,
+		ProgressBlockAfter:       DefaultScalpingProgressBlockAfter,
+	}
+}
+
+func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
+	if c.MicroAccountMaxValue.LessThanOrEqual(decimal.Zero) {
+		c.MicroAccountMaxValue = decimal.NewFromFloat(DefaultMicroAccountMaxValue)
+	}
+	if c.SmallAccountMaxValue.LessThanOrEqual(c.MicroAccountMaxValue) {
+		c.SmallAccountMaxValue = decimal.NewFromFloat(DefaultSmallAccountMaxValue)
+	}
+	if c.MicroMinConfidenceFloor <= 0 {
+		c.MicroMinConfidenceFloor = DefaultMicroMinConfidenceFloor
+	}
+	c.MicroMinConfidenceFloor = clampFloat(c.MicroMinConfidenceFloor, 0.05, 0.95)
+	if c.MicroMaxCapitalPct <= 0 {
+		c.MicroMaxCapitalPct = DefaultMicroMaxCapitalPct
+	}
+	c.MicroMaxCapitalPct = clampFloat(c.MicroMaxCapitalPct, 0.10, 100.0)
+	if c.MaxConcurrentPositions <= 0 {
+		c.MaxConcurrentPositions = DefaultMaxConcurrentPositions
+	}
+	if c.MicroMaxConcurrent <= 0 {
+		c.MicroMaxConcurrent = DefaultMicroMaxConcurrentPosition
+	}
+	if c.NoFillRecoveryMinutes <= 0 {
+		c.NoFillRecoveryMinutes = 180
+	}
+	if c.NoFillMinConfidenceFloor <= 0 {
+		c.NoFillMinConfidenceFloor = 0.70
+	}
+	c.NoFillMinConfidenceFloor = clampFloat(c.NoFillMinConfidenceFloor, 0.05, 0.95)
+	if c.NoFillMaxCapitalPctCap <= 0 {
+		c.NoFillMaxCapitalPctCap = 1.50
+	}
+	c.NoFillMaxCapitalPctCap = clampFloat(c.NoFillMaxCapitalPctCap, 0.10, 100.0)
+	if c.RecoveryMicroEntryCapPct <= 0 {
+		c.RecoveryMicroEntryCapPct = DefaultRecoveryMicroEntryCapPct
+	}
+	c.RecoveryMicroEntryCapPct = clampFloat(c.RecoveryMicroEntryCapPct, 0.10, 100.0)
+	if c.ProgressBlockAfter <= 0 {
+		c.ProgressBlockAfter = DefaultScalpingProgressBlockAfter
+	}
+	return c
+}
+
+type PerformanceWindowInput struct {
+	DecisiveTrades     int
+	DecisiveWinRatePct float64
+}
+
+type ScalpingCycleInput struct {
+	TotalValue            decimal.Decimal
+	OpenPositions         int
+	DriftActive           bool
+	BaseMinConfidence     float64
+	BaseMaxCapitalPct     float64
+	AdjustedMaxCapitalPct float64
+	ConsecutiveLosses     int
+	Phase                 string
+	PhaseMinConfidence    float64
+	PhaseMaxCapitalPct    float64
+	MilestoneProgress     float64
+	NoFillMinutes         float64
+	RiskDrawdown          float64
+	RiskExpectancy        float64
+	RiskSampleSize        int
+	RecoveryMode          string
+	PerformanceWindow     PerformanceWindowInput
+}
+
+type ScalpingCyclePolicy struct {
+	AccountTier            string
+	EffectiveMinConfidence float64
+	EffectiveMaxCapitalPct float64
+	MaxConcurrentPositions int
+	PolicyAdjustments      []string
+}
+
+type CandidateSignal struct {
+	Symbol             string
+	Price              decimal.Decimal
+	High24h            decimal.Decimal
+	Low24h             decimal.Decimal
+	Volume24h          decimal.Decimal
+	BidAskSpread       float64
+	OrderBookImbalance float64
+	RangePosition24h   float64
+}
+
+type CandidateRejection struct {
+	Symbol              string  `json:"symbol"`
+	Reason              string  `json:"reason"`
+	EstimatedConfidence float64 `json:"estimated_confidence,omitempty"`
+}
+
+type CandidateFunnelSnapshot struct {
+	CandidateUniverseCount int                  `json:"candidate_universe_count"`
+	CandidateRankedCount   int                  `json:"candidate_ranked_count"`
+	CandidateViableCount   int                  `json:"candidate_viable_count"`
+	TopCandidateRejections []CandidateRejection `json:"top_candidate_rejections,omitempty"`
+}
+
+type ExecutionGateSnapshot struct {
+	Allowed              bool   `json:"allowed"`
+	BlockReason          string `json:"block_reason,omitempty"`
+	BlockCode            string `json:"block_code,omitempty"`
+	RolloutStageCurrent  string `json:"rollout_stage_current,omitempty"`
+	RolloutStatusCurrent string `json:"rollout_status_current,omitempty"`
+	RolloutGateReason    string `json:"rollout_gate_reason_current,omitempty"`
+}
+
+type ProgressBlockState struct {
+	Blocked bool   `json:"progress_blocked"`
+	Reason  string `json:"progress_block_reason,omitempty"`
+}
+
+func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) ScalpingCyclePolicy {
+	cfg = cfg.Normalized()
+
+	policy := ScalpingCyclePolicy{
+		AccountTier:            ResolveAccountTier(input.TotalValue, cfg),
+		EffectiveMinConfidence: clampFloat(input.BaseMinConfidence, 0.05, 0.95),
+		EffectiveMaxCapitalPct: clampFloat(input.BaseMaxCapitalPct, 0.10, 100.0),
+		MaxConcurrentPositions: cfg.MaxConcurrentPositions,
+	}
+	if policy.EffectiveMaxCapitalPct <= 0 {
+		policy.EffectiveMaxCapitalPct = 0.10
+	}
+
+	if input.AdjustedMaxCapitalPct > 0 && input.AdjustedMaxCapitalPct < policy.EffectiveMaxCapitalPct {
+		policy.EffectiveMaxCapitalPct = input.AdjustedMaxCapitalPct
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "performance_cap_applied")
+	}
+
+	if input.PerformanceWindow.DecisiveTrades >= 10 &&
+		input.PerformanceWindow.DecisiveWinRatePct > 0 &&
+		input.PerformanceWindow.DecisiveWinRatePct < 35 {
+		if policy.EffectiveMinConfidence < 0.70 {
+			policy.EffectiveMinConfidence = 0.70
+		}
+		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.60
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "weak_recent_win_rate")
+	}
+	if input.PerformanceWindow.DecisiveTrades >= 20 &&
+		input.PerformanceWindow.DecisiveWinRatePct > 0 &&
+		input.PerformanceWindow.DecisiveWinRatePct < 30 {
+		if policy.EffectiveMinConfidence < 0.78 {
+			policy.EffectiveMinConfidence = 0.78
+		}
+		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.50
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "critical_recent_win_rate")
+	}
+
+	if input.ConsecutiveLosses >= 2 {
+		policy.EffectiveMinConfidence += 0.05 * float64(input.ConsecutiveLosses-1)
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "loss_streak_confidence_tightening")
+	}
+
+	applyNoFillRecovery(&policy, input, cfg)
+
+	phaseMinConfidence := input.PhaseMinConfidence
+	if policy.AccountTier == AccountTierMicro && phaseMinConfidence > cfg.MicroMinConfidenceFloor {
+		phaseMinConfidence = cfg.MicroMinConfidenceFloor
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "micro_tier_bootstrap_relaxation")
+	}
+	if phaseMinConfidence > policy.EffectiveMinConfidence {
+		policy.EffectiveMinConfidence = phaseMinConfidence
+	}
+
+	if input.PhaseMaxCapitalPct > 0 && input.PhaseMaxCapitalPct < policy.EffectiveMaxCapitalPct {
+		policy.EffectiveMaxCapitalPct = input.PhaseMaxCapitalPct
+	}
+	if input.MilestoneProgress > 0 && input.MilestoneProgress < 25 {
+		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.80
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "fund_milestone_cap")
+	}
+	if input.RiskSampleSize >= 10 && input.RiskExpectancy < 0 {
+		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.75
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "negative_expectancy_cap")
+	}
+	if input.RiskDrawdown > 0.12 {
+		policy.EffectiveMinConfidence += 0.05
+		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.70
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "drawdown_tightening")
+	}
+
+	switch strings.ToLower(strings.TrimSpace(input.RecoveryMode)) {
+	case RecoveryModeMicroEntry:
+		if policy.EffectiveMaxCapitalPct > cfg.RecoveryMicroEntryCapPct {
+			policy.EffectiveMaxCapitalPct = cfg.RecoveryMicroEntryCapPct
+		}
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "recovery_micro_entry_cap")
+	case RecoveryModeDeriskOnly:
+		if policy.EffectiveMaxCapitalPct > 0.10 {
+			policy.EffectiveMaxCapitalPct = 0.10
+		}
+		if policy.EffectiveMinConfidence < 0.85 {
+			policy.EffectiveMinConfidence = 0.85
+		}
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "recovery_derisk_only")
+	}
+
+	if policy.AccountTier == AccountTierMicro {
+		if policy.EffectiveMaxCapitalPct > cfg.MicroMaxCapitalPct {
+			policy.EffectiveMaxCapitalPct = cfg.MicroMaxCapitalPct
+		}
+		policy.MaxConcurrentPositions = cfg.MicroMaxConcurrent
+	}
+
+	policy.EffectiveMinConfidence = clampFloat(policy.EffectiveMinConfidence, 0.05, 0.95)
+	policy.EffectiveMaxCapitalPct = clampFloat(policy.EffectiveMaxCapitalPct, 0.10, 100.0)
+	return policy
+}
+
+func ResolveAccountTier(totalValue decimal.Decimal, cfg ScalpingPolicyConfig) string {
+	cfg = cfg.Normalized()
+	switch {
+	case totalValue.Cmp(cfg.MicroAccountMaxValue) <= 0:
+		return AccountTierMicro
+	case totalValue.Cmp(cfg.SmallAccountMaxValue) <= 0:
+		return AccountTierSmall
+	default:
+		return AccountTierStandard
+	}
+}
+
+func BuildCandidateFunnel(signals []CandidateSignal, policy ScalpingCyclePolicy) CandidateFunnelSnapshot {
+	snapshot := CandidateFunnelSnapshot{
+		CandidateUniverseCount: len(signals),
+	}
+	if len(signals) == 0 {
+		return snapshot
+	}
+
+	type evaluatedCandidate struct {
+		rejection CandidateRejection
+		ranked    bool
+	}
+
+	rejections := make([]evaluatedCandidate, 0, len(signals))
+	for _, signal := range signals {
+		ranked, viable, rejection := evaluateCandidateSignal(signal, policy)
+		if ranked {
+			snapshot.CandidateRankedCount++
+		}
+		if viable {
+			snapshot.CandidateViableCount++
+			continue
+		}
+		rejections = append(rejections, evaluatedCandidate{
+			rejection: rejection,
+			ranked:    ranked,
+		})
+	}
+
+	sort.SliceStable(rejections, func(i, j int) bool {
+		if rejections[i].rejection.EstimatedConfidence == rejections[j].rejection.EstimatedConfidence {
+			return rejections[i].rejection.Symbol < rejections[j].rejection.Symbol
+		}
+		return rejections[i].rejection.EstimatedConfidence > rejections[j].rejection.EstimatedConfidence
+	})
+
+	limit := 3
+	if len(rejections) < limit {
+		limit = len(rejections)
+	}
+	snapshot.TopCandidateRejections = make([]CandidateRejection, 0, limit)
+	for i := 0; i < limit; i++ {
+		snapshot.TopCandidateRejections = append(snapshot.TopCandidateRejections, rejections[i].rejection)
+	}
+	return snapshot
+}
+
+func EvaluateProgressBlock(lastEntryAttempt time.Time, now time.Time, cfg ScalpingPolicyConfig) ProgressBlockState {
+	cfg = cfg.Normalized()
+	if lastEntryAttempt.IsZero() || now.IsZero() {
+		return ProgressBlockState{}
+	}
+	if now.Sub(lastEntryAttempt) < cfg.ProgressBlockAfter {
+		return ProgressBlockState{}
+	}
+	return ProgressBlockState{
+		Blocked: true,
+		Reason:  fmt.Sprintf("no real entry attempt for %s", cfg.ProgressBlockAfter.Round(time.Minute)),
+	}
+}
+
+func BuildRolloutShadowGate(stage, status, reason string) ExecutionGateSnapshot {
+	stage = strings.TrimSpace(stage)
+	status = strings.TrimSpace(status)
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = fmt.Sprintf("strategy_not_live (stage: %s, status: %s)", stage, status)
+	}
+	blockCode := CandidateRejectRolloutShadow
+	if strings.EqualFold(stage, "paper") {
+		blockCode = CandidateRejectRolloutPaper
+	}
+	return ExecutionGateSnapshot{
+		Allowed:              false,
+		BlockReason:          reason,
+		BlockCode:            blockCode,
+		RolloutStageCurrent:  stage,
+		RolloutStatusCurrent: status,
+		RolloutGateReason:    reason,
+	}
+}
+
+func NextUnblockCondition(reason string, policy ScalpingCyclePolicy) string {
+	switch strings.TrimSpace(reason) {
+	case CandidateRejectConfidenceBelowThreshold:
+		return fmt.Sprintf("Await candidate confidence >= %.2f", policy.EffectiveMinConfidence)
+	case CandidateRejectSpreadTooWide:
+		return fmt.Sprintf("Await candidate spread <= %.2f%%", scalpingMaxBidAskSpreadPct)
+	case CandidateRejectMissingOrderbookSignal:
+		return "Await candidate with valid orderbook imbalance and executable spread"
+	case CandidateRejectPreTradeExpectancy:
+		return "Await candidate with positive expectancy and stronger regime alignment"
+	case CandidateRejectRolloutShadow:
+		return "Promote strategy to live via /api/v1/agent/strategy-mode"
+	case CandidateRejectRolloutPaper:
+		return "Promote strategy from paper to live via /api/v1/agent/strategy-mode"
+	case CandidateRejectMaxConcurrentPositions:
+		return fmt.Sprintf("Reduce open positions below %d", policy.MaxConcurrentPositions)
+	case CandidateRejectAutonomyGateClosed:
+		return "Inspect autonomy gate diagnostics and clear the operator block"
+	case CandidateRejectAutonomyRuntime:
+		return "Retry after autonomy coordinator/runtime connectivity is restored"
+	case CandidateRejectSafeMode:
+		return "Disable safe mode or clear the rollback trigger before re-enabling entries"
+	case CandidateRejectKillSwitch:
+		return "Release the kill switch before re-enabling entries"
+	case CandidateRejectConnectivity:
+		return "Restore exchange/provider connectivity before retrying execution"
+	case CandidateRejectRiskBudget:
+		return "Reduce exposure or replenish the configured risk budget before retrying"
+	default:
+		return "Await candidate that passes pretrade validity/liquidity filters"
+	}
+}
+
+func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, cfg ScalpingPolicyConfig) {
+	if policy == nil {
+		return
+	}
+	if input.ConsecutiveLosses >= 2 {
+		return
+	}
+	if input.DriftActive || input.OpenPositions > 0 {
+		return
+	}
+	if input.NoFillMinutes < float64(cfg.NoFillRecoveryMinutes) {
+		return
+	}
+
+	step := int(input.NoFillMinutes / float64(cfg.NoFillRecoveryMinutes))
+	switch {
+	case step <= 1:
+		if policy.EffectiveMinConfidence > 0.75 {
+			policy.EffectiveMinConfidence = 0.75
+		}
+		if policy.EffectiveMaxCapitalPct < 0.50 {
+			policy.EffectiveMaxCapitalPct = 0.50
+		}
+	case step == 2:
+		if policy.EffectiveMinConfidence > cfg.NoFillMinConfidenceFloor {
+			policy.EffectiveMinConfidence = cfg.NoFillMinConfidenceFloor
+		}
+		if policy.EffectiveMaxCapitalPct < 1.00 {
+			policy.EffectiveMaxCapitalPct = 1.00
+		}
+	default:
+		if policy.EffectiveMinConfidence > cfg.NoFillMinConfidenceFloor {
+			policy.EffectiveMinConfidence = cfg.NoFillMinConfidenceFloor
+		}
+		if policy.EffectiveMaxCapitalPct < cfg.NoFillMaxCapitalPctCap {
+			policy.EffectiveMaxCapitalPct = cfg.NoFillMaxCapitalPctCap
+		}
+	}
+	policy.PolicyAdjustments = append(policy.PolicyAdjustments, "controlled_no_fill_recovery")
+}
+
+func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy) (ranked bool, viable bool, rejection CandidateRejection) {
+	symbol := strings.TrimSpace(signal.Symbol)
+	rejection.Symbol = symbol
+	if symbol == "" || signal.Price.LessThanOrEqual(decimal.Zero) {
+		rejection.Reason = CandidateRejectMissingOrderbookSignal
+		return false, false, rejection
+	}
+
+	if hasInvalidCandidateMetrics(signal) || signal.BidAskSpread <= 0 {
+		rejection.Reason = CandidateRejectMissingOrderbookSignal
+		return false, false, rejection
+	}
+	if signal.BidAskSpread > scalpingMaxBidAskSpreadPct {
+		rejection.Reason = CandidateRejectSpreadTooWide
+		return true, false, rejection
+	}
+
+	action, estimatedConfidence, ok := estimateCandidateConfidence(signal)
+	rejection.EstimatedConfidence = estimatedConfidence
+	if !ok {
+		if math.Abs(signal.OrderBookImbalance) < scalpingNeutralImbalanceFloor {
+			rejection.Reason = CandidateRejectMissingOrderbookSignal
+		} else {
+			rejection.Reason = CandidateRejectNoDirectionalEdge
+		}
+		return true, false, rejection
+	}
+	_ = action
+	if estimatedConfidence < policy.EffectiveMinConfidence {
+		rejection.Reason = CandidateRejectConfidenceBelowThreshold
+		return true, false, rejection
+	}
+	return true, true, CandidateRejection{}
+}
+
+func estimateCandidateConfidence(signal CandidateSignal) (string, float64, bool) {
+	if hasInvalidCandidateMetrics(signal) {
+		return "", 0, false
+	}
+
+	imbalance := math.Abs(signal.OrderBookImbalance)
+	if imbalance < scalpingStrongImbalanceFloor {
+		if imbalance < scalpingNeutralImbalanceFloor {
+			return "", 0, false
+		}
+	}
+
+	action := ""
+	rangeAlignment := 0.0
+	switch {
+	case signal.OrderBookImbalance > 0 && signal.RangePosition24h <= scalpingBuyRangeMax:
+		action = "buy"
+		rangeAlignment = clampFloat((scalpingBuyRangeMax-signal.RangePosition24h)/scalpingBuyRangeMax, 0, 1)
+	case signal.OrderBookImbalance < 0 && signal.RangePosition24h >= scalpingSellRangeMin:
+		action = "sell"
+		rangeAlignment = clampFloat((signal.RangePosition24h-scalpingSellRangeMin)/(100.0-scalpingSellRangeMin), 0, 1)
+	default:
+		return "", 0, false
+	}
+
+	liquidityScore := clampFloat(1-(signal.BidAskSpread/scalpingMaxBidAskSpreadPct), 0, 1)
+	volumeScore := clampFloat(math.Log10(signal.Volume24h.InexactFloat64()+1)/scalpingConfidenceVolumeLogBase, 0, 1)
+	confidence := scalpingConfidenceBase +
+		imbalance*scalpingConfidenceImbalanceW +
+		liquidityScore*scalpingConfidenceLiquidityW +
+		rangeAlignment*scalpingConfidenceRangeW +
+		volumeScore*scalpingConfidenceVolumeW
+	confidence = clampFloat(confidence, 0, 0.99)
+	return action, confidence, true
+}
+
+func hasInvalidCandidateMetrics(signal CandidateSignal) bool {
+	volume := signal.Volume24h.InexactFloat64()
+	return invalidCandidateFloat(signal.BidAskSpread) ||
+		invalidCandidateFloat(signal.OrderBookImbalance) ||
+		invalidCandidateFloat(signal.RangePosition24h) ||
+		math.IsNaN(volume) ||
+		math.IsInf(volume, 0) ||
+		volume < 0
+}
+
+func invalidCandidateFloat(value float64) bool {
+	return math.IsNaN(value) || math.IsInf(value, 0)
+}
+
+func clampFloat(value, minValue, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}

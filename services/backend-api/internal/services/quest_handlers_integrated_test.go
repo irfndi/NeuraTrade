@@ -11,6 +11,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -813,6 +814,424 @@ func TestNormalizeAINotificationSemantics_StrategyHoldPreservedWhenConfidenceKno
 	assert.True(t, normalized.ConfidenceKnown)
 	assert.Equal(t, aiReasonStrategyHold, normalized.ReasonCategory)
 	assert.Equal(t, aiReasonStrategyHold, normalized.HoldCategory)
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_PersistsLegacyTradeClose(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-journal.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-1",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	entryPrice := decimal.NewFromFloat(1.0)
+	handlers.persistLegacyTradeEntry(context.Background(), quest, &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "ADA/USDT",
+		SizePercent: 1.0,
+		OrderID:     "ord-1",
+		EntryPrice:  &entryPrice,
+	}, "bitget", TradingPortfolio{
+		USDTBalance:   100,
+		StrategyPhase: "bootstrap",
+	}, "ord-1")
+
+	closedAt := time.Now().UTC()
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "ADA/USDT", 20).
+		Return([]map[string]interface{}{
+			{
+				"orderId":      "ord-1",
+				"side":         "buy",
+				"avgOpenPrice": "1.0",
+				"avgPrice":     "1.05",
+				"filled":       "2.0",
+				"pnl":          "0.10",
+				"fees":         "0.01",
+				"uTime":        closedAt.UnixMilli(),
+			},
+		}, nil).
+		Once()
+
+	handlers.ingestClosedOrderFeedback(context.Background(), quest, "bitget", "ADA/USDT")
+
+	var status string
+	var exitPrice float64
+	var pnl float64
+	var fees float64
+	err = sqliteDB.DB.QueryRowContext(
+		context.Background(),
+		`SELECT status, exit_price, pnl, fees FROM trades WHERE order_id = $1`,
+		"ord-1",
+	).Scan(&status, &exitPrice, &pnl, &fees)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", status)
+	assert.InDelta(t, 1.05, exitPrice, 0.0001)
+	assert.InDelta(t, 0.10, pnl, 0.0001)
+	assert.InDelta(t, 0.01, fees, 0.0001)
+	assert.Contains(t, quest.Checkpoint["processed_closed_order_ids"], "ord-1")
+
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsLegacyJournalWhenSchemaUnavailable(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "quest-trade-journal-schema-unavailable.db")
+	sqliteDB, err := database.NewSQLiteConnection(dbPath)
+	require.NoError(t, err)
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.db = sqliteDB.DB
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-schema-unavailable",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "ADA/USDT", 20).
+		Return([]map[string]interface{}{
+			{
+				"orderId":      "ord-schema-unavailable",
+				"side":         "buy",
+				"avgOpenPrice": "1.0",
+				"avgPrice":     "1.05",
+				"filled":       "1.0",
+				"pnl":          "0.05",
+			},
+		}, nil).
+		Once()
+
+	require.NoError(t, sqliteDB.Close())
+
+	require.NotPanics(t, func() {
+		handlers.ingestClosedOrderFeedback(context.Background(), quest, "bitget", "ADA/USDT")
+	})
+
+	sqliteDB2, err := database.NewSQLiteConnection(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB2.Close()
+	})
+
+	var tradesTableCount int
+	err = sqliteDB2.DB.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'trades'`,
+	).Scan(&tradesTableCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, tradesTableCount)
+
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_LegacyCloseWithoutOptionalFields(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-journal-missing-fields.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-missing-fields",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	entryPrice := decimal.NewFromFloat(100.0)
+	handlers.persistLegacyTradeEntry(context.Background(), quest, &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "ETH/USDT",
+		SizePercent: 0.25,
+		OrderID:     "ord-no-optional",
+		EntryPrice:  &entryPrice,
+	}, "bitget", TradingPortfolio{
+		USDTBalance:   50,
+		StrategyPhase: "bootstrap",
+	}, "ord-no-optional")
+
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "ETH/USDT", 20).
+		Return([]map[string]interface{}{
+			{
+				"orderId":      "ord-no-optional",
+				"side":         "buy",
+				"avgOpenPrice": "100.0",
+				"avgPrice":     "101.0",
+				"filled":       "0.25",
+				"pnl":          "0.25",
+			},
+		}, nil).
+		Once()
+
+	handlers.ingestClosedOrderFeedback(context.Background(), quest, "bitget", "ETH/USDT")
+
+	var status string
+	err = sqliteDB.DB.QueryRowContext(
+		context.Background(),
+		`SELECT status FROM trades WHERE order_id = $1`,
+		"ord-no-optional",
+	).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", status)
+	assert.Contains(t, quest.Checkpoint["processed_closed_order_ids"], "ord-no-optional")
+
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestIntegratedQuestHandlers_PersistLegacyTradeEntry_StoresBaseSizeAndCostBasis(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-journal-size-cost-basis.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	quest := &Quest{
+		ID:         "quest-size-cost-basis",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	entryPrice := decimal.NewFromFloat(100)
+	handlers.persistLegacyTradeEntry(context.Background(), quest, &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "BTC/USDT",
+		SizePercent: 1.0,
+		OrderID:     "entry-size-cost-basis",
+		EntryPrice:  &entryPrice,
+	}, "bitget", TradingPortfolio{
+		USDTBalance:   50,
+		StrategyPhase: "bootstrap",
+	}, "entry-size-cost-basis")
+
+	var size float64
+	var costBasis float64
+	err = sqliteDB.DB.QueryRowContext(
+		context.Background(),
+		`SELECT size, cost_basis FROM trades WHERE order_id = $1`,
+		"entry-size-cost-basis",
+	).Scan(&size, &costBasis)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.005, size, 0.0000001)
+	assert.InDelta(t, 0.5, costBasis, 0.0000001)
+}
+
+func TestIntegratedQuestHandlers_PersistLegacyTradeEntry_StoresZeroSizeWithoutEntryPrice(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-journal-size-fallback.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	quest := &Quest{
+		ID:         "quest-size-fallback",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	handlers.persistLegacyTradeEntry(context.Background(), quest, &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "BTC/USDT",
+		SizePercent: 0.42,
+		OrderID:     "entry-size-fallback",
+	}, "bitget", TradingPortfolio{
+		USDTBalance:   0,
+		StrategyPhase: "bootstrap",
+	}, "entry-size-fallback")
+
+	var size float64
+	var costBasis float64
+	err = sqliteDB.DB.QueryRowContext(
+		context.Background(),
+		`SELECT size, cost_basis FROM trades WHERE order_id = $1`,
+		"entry-size-fallback",
+	).Scan(&size, &costBasis)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.0, size, 0.0000001)
+	assert.InDelta(t, 0.0, costBasis, 0.0000001)
+}
+
+func TestIntegratedQuestHandlers_SetDB_RetriesTradeJournalInitAfterDBReplacement(t *testing.T) {
+	dbPath1 := filepath.Join(t.TempDir(), "quest-trade-journal-first.db")
+	sqliteDB1, err := database.NewSQLiteConnection(dbPath1)
+	require.NoError(t, err)
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+
+	require.NoError(t, sqliteDB1.Close())
+	handlers.SetDB(sqliteDB1.DB)
+
+	sqliteDB2, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-journal-second.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB2.Close()
+	})
+
+	handlers.SetDB(sqliteDB2.DB)
+
+	quest := &Quest{
+		ID:         "quest-retry-schema",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	entryPrice := decimal.NewFromFloat(10)
+	handlers.persistLegacyTradeEntry(context.Background(), quest, &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "SOL/USDT",
+		SizePercent: 1.0,
+		OrderID:     "retry-entry",
+		EntryPrice:  &entryPrice,
+	}, "bitget", TradingPortfolio{
+		USDTBalance:   100,
+		StrategyPhase: "bootstrap",
+	}, "retry-entry")
+
+	var count int
+	err = sqliteDB2.DB.QueryRowContext(context.Background(), `SELECT COUNT(1) FROM trades WHERE order_id = $1`, "retry-entry").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsStaleDecisionMetadata(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{
+		"account_tier":                       "micro",
+		"effective_min_confidence":           0.72,
+		"effective_max_capital_pct":          1.25,
+		"effective_max_concurrent_positions": 1,
+		"effective_policy_adjustments":       []string{"recovery_cap"},
+		"candidate_universe_count":           8,
+		"candidate_ranked_count":             3,
+		"candidate_viable_count":             1,
+		"top_candidate_rejections":           []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "spread_too_wide"}},
+		"rollout_stage_current":              "paper",
+		"rollout_status_current":             "paused",
+		"rollout_gate_reason_current":        "safe mode",
+	}}
+
+	handlers.applyScalpingCycleDecisionDiagnostics(quest, &AITradingDecision{})
+
+	for _, key := range []string{
+		"account_tier",
+		"effective_min_confidence",
+		"effective_max_capital_pct",
+		"effective_max_concurrent_positions",
+		"effective_policy_adjustments",
+		"candidate_universe_count",
+		"candidate_ranked_count",
+		"candidate_viable_count",
+		"top_candidate_rejections",
+		"rollout_stage_current",
+		"rollout_status_current",
+		"rollout_gate_reason_current",
+	} {
+		_, ok := quest.Checkpoint[key]
+		assert.False(t, ok, key)
+	}
+}
+
+func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsNilDecisionMetadata(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{
+		"account_tier":                       "small",
+		"effective_min_confidence":           0.70,
+		"effective_max_capital_pct":          2.5,
+		"effective_max_concurrent_positions": 3,
+		"effective_policy_adjustments":       []string{"performance_cap_applied"},
+	}}
+
+	handlers.applyScalpingCycleDecisionDiagnostics(quest, nil)
+
+	for _, key := range []string{
+		"account_tier",
+		"effective_min_confidence",
+		"effective_max_capital_pct",
+		"effective_max_concurrent_positions",
+		"effective_policy_adjustments",
+	} {
+		_, ok := quest.Checkpoint[key]
+		assert.False(t, ok, key)
+	}
+}
+
+func TestIntegratedQuestHandlers_RecordTradeDecision_DoesNotSynthesizeTradeMemoryID(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-decision.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	quest := &Quest{
+		ID:         "quest-no-order-id",
+		Checkpoint: map[string]interface{}{"trade_memory_id": "stale"},
+		Metadata: map[string]string{
+			"chat_id":       "chat-1",
+			"definition_id": "def-1",
+		},
+	}
+
+	handlers.recordTradeDecision(context.Background(), quest, &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "SOL/USDT",
+		SizePercent: 1.0,
+		Confidence:  0.8,
+		OrderID:     "",
+	}, "bitget", TradingPortfolio{
+		USDTBalance:   100,
+		StrategyPhase: "bootstrap",
+	})
+
+	_, ok := quest.Checkpoint["trade_memory_id"]
+	assert.False(t, ok)
+
+	require.NoError(t, handlers.ensureTradeJournalSchema())
+
+	var count int
+	err = sqliteDB.DB.QueryRowContext(context.Background(), `SELECT COUNT(1) FROM trades`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }
 
 // hasExchange checks if a specific exchange exists in the list

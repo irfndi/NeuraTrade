@@ -431,6 +431,42 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if providerConfigured, ok := chatRuntime["provider_chain_configured"]; ok {
 			response["provider_chain_configured"] = providerConfigured
 		}
+		if accountTier, ok := chatRuntime["account_tier"].(string); ok && strings.TrimSpace(accountTier) != "" {
+			response["account_tier"] = strings.TrimSpace(accountTier)
+		}
+		if effectiveMinConfidence, ok := chatRuntime["effective_min_confidence"]; ok {
+			response["effective_min_confidence"] = effectiveMinConfidence
+		}
+		if effectiveMaxCapitalPct, ok := chatRuntime["effective_max_capital_pct"]; ok {
+			response["effective_max_capital_pct"] = effectiveMaxCapitalPct
+		}
+		if candidateUniverseCount, ok := chatRuntime["candidate_universe_count"]; ok {
+			response["candidate_universe_count"] = candidateUniverseCount
+		}
+		if candidateViableCount, ok := chatRuntime["candidate_viable_count"]; ok {
+			response["candidate_viable_count"] = candidateViableCount
+		}
+		if candidateRankedCount, ok := chatRuntime["candidate_ranked_count"]; ok {
+			response["candidate_ranked_count"] = candidateRankedCount
+		}
+		if topCandidateRejections, ok := chatRuntime["top_candidate_rejections"]; ok {
+			response["top_candidate_rejections"] = topCandidateRejections
+		}
+		if progressBlocked, ok := chatRuntime["progress_blocked"]; ok {
+			response["progress_blocked"] = progressBlocked
+		}
+		if progressBlockReason, ok := chatRuntime["progress_block_reason"].(string); ok && strings.TrimSpace(progressBlockReason) != "" {
+			response["progress_block_reason"] = strings.TrimSpace(progressBlockReason)
+		}
+		if rolloutStage, ok := chatRuntime["rollout_stage_current"].(string); ok && strings.TrimSpace(rolloutStage) != "" {
+			response["rollout_stage_current"] = strings.TrimSpace(rolloutStage)
+		}
+		if rolloutStatus, ok := chatRuntime["rollout_status_current"].(string); ok && strings.TrimSpace(rolloutStatus) != "" {
+			response["rollout_status_current"] = strings.TrimSpace(rolloutStatus)
+		}
+		if rolloutGateReason, ok := chatRuntime["rollout_gate_reason_current"].(string); ok && strings.TrimSpace(rolloutGateReason) != "" {
+			response["rollout_gate_reason_current"] = strings.TrimSpace(rolloutGateReason)
+		}
 	}
 	if heartbeat := services.CurrentHeartbeatRuntime(); heartbeat != nil {
 		response["heartbeat"] = heartbeatDiagnostics(heartbeat)

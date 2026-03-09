@@ -726,15 +726,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		diagnostics := h.questEngine.GetChatRuntimeDiagnostics(chatID)
 		rawRuntime, _ := diagnostics["ai_runtime"].(map[string]interface{})
 		driftActive, _ := diagnostics["state_drift_active"].(bool)
-		driftPositions := 0
-		switch value := diagnostics["state_drift_positions"].(type) {
-		case int:
-			driftPositions = value
-		case int64:
-			driftPositions = int(value)
-		case float64:
-			driftPositions = int(value)
-		}
+		driftPositions := readIntFromRecord(diagnostics, "state_drift_positions")
 		entryGateReason := ""
 		if rawReason, ok := diagnostics["entry_gate_reason_current"].(string); ok {
 			entryGateReason = strings.TrimSpace(rawReason)
@@ -755,41 +747,36 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if rawBlock, ok := diagnostics["entry_attempt_block_reason"].(string); ok {
 			entryAttemptBlockReason = strings.TrimSpace(rawBlock)
 		}
-		entryAttempts1h := 0
-		switch value := diagnostics["entry_attempts_1h"].(type) {
-		case int:
-			entryAttempts1h = value
-		case int64:
-			entryAttempts1h = int(value)
-		case float64:
-			entryAttempts1h = int(value)
+		accountTier := ""
+		if rawTier, ok := diagnostics["account_tier"].(string); ok {
+			accountTier = strings.TrimSpace(rawTier)
 		}
+		effectiveMinConfidence := readFloatFromRecord(diagnostics, "effective_min_confidence")
+		effectiveMaxCapitalPct := readFloatFromRecord(diagnostics, "effective_max_capital_pct")
+		candidateViableCount := readIntFromRecord(diagnostics, "candidate_viable_count")
+		rolloutStageCurrent := ""
+		if rawStage, ok := diagnostics["rollout_stage_current"].(string); ok {
+			rolloutStageCurrent = strings.TrimSpace(rawStage)
+		}
+		rolloutStatusCurrent := ""
+		if rawStatus, ok := diagnostics["rollout_status_current"].(string); ok {
+			rolloutStatusCurrent = strings.TrimSpace(rawStatus)
+		}
+		rolloutGateReason := ""
+		if rawReason, ok := diagnostics["rollout_gate_reason_current"].(string); ok {
+			rolloutGateReason = strings.TrimSpace(rawReason)
+		}
+		entryAttempts1h := readIntFromRecord(diagnostics, "entry_attempts_1h")
 		lastEntryAttemptAt := ""
 		if rawLast, ok := diagnostics["last_entry_attempt_at"].(string); ok {
 			lastEntryAttemptAt = strings.TrimSpace(rawLast)
 		}
-		minutesSinceEntryAttempt := 0.0
-		switch value := diagnostics["minutes_since_entry_attempt"].(type) {
-		case float64:
-			minutesSinceEntryAttempt = value
-		case int:
-			minutesSinceEntryAttempt = float64(value)
-		case int64:
-			minutesSinceEntryAttempt = float64(value)
-		}
+		minutesSinceEntryAttempt := readFloatFromRecord(diagnostics, "minutes_since_entry_attempt")
 		driftSignature := ""
 		if rawSignature, ok := diagnostics["drift_signature"].(string); ok {
 			driftSignature = strings.TrimSpace(rawSignature)
 		}
-		driftDeadlockCycles := 0
-		switch value := diagnostics["drift_deadlock_cycles"].(type) {
-		case int:
-			driftDeadlockCycles = value
-		case int64:
-			driftDeadlockCycles = int(value)
-		case float64:
-			driftDeadlockCycles = int(value)
-		}
+		driftDeadlockCycles := readIntFromRecord(diagnostics, "drift_deadlock_cycles")
 		executionStage := ""
 		if rawStage, ok := diagnostics["execution_stage"].(string); ok {
 			executionStage = strings.TrimSpace(rawStage)
@@ -798,37 +785,13 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if rawProgressAt, ok := diagnostics["execution_last_progress_at"].(string); ok {
 			executionLastProgressAt = strings.TrimSpace(rawProgressAt)
 		}
-		executionInProgressAge := 0.0
-		switch value := diagnostics["execution_in_progress_age_seconds"].(type) {
-		case float64:
-			executionInProgressAge = value
-		case int:
-			executionInProgressAge = float64(value)
-		case int64:
-			executionInProgressAge = float64(value)
-		}
+		executionInProgressAge := readFloatFromRecord(diagnostics, "execution_in_progress_age_seconds")
 		runtimeStatus := "healthy"
 		if statusRaw, ok := rawRuntime["status"].(string); ok && strings.TrimSpace(statusRaw) != "" {
 			runtimeStatus = strings.ToLower(strings.TrimSpace(statusRaw))
 		}
-		providerChainUsable := 0
-		switch value := rawRuntime["provider_chain_usable"].(type) {
-		case int:
-			providerChainUsable = value
-		case int64:
-			providerChainUsable = int(value)
-		case float64:
-			providerChainUsable = int(value)
-		}
-		providerChainConfigured := 0
-		switch value := rawRuntime["provider_chain_configured"].(type) {
-		case int:
-			providerChainConfigured = value
-		case int64:
-			providerChainConfigured = int(value)
-		case float64:
-			providerChainConfigured = int(value)
-		}
+		providerChainUsable := readIntFromRecord(rawRuntime, "provider_chain_usable")
+		providerChainConfigured := readIntFromRecord(rawRuntime, "provider_chain_configured")
 		runtimeReason := ""
 		if reason, ok := rawRuntime["runtime_degraded_reason"].(string); ok && strings.TrimSpace(reason) != "" {
 			runtimeReason = strings.TrimSpace(reason)
@@ -848,6 +811,9 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 					entryGateReason = entryAttemptBlockReason
 				}
 			}
+		}
+		if entryGateReason == "" && rolloutGateReason != "" && candidateViableCount > 0 {
+			entryGateReason = rolloutGateReason
 		}
 
 		message := "AI runtime healthy"
@@ -912,6 +878,25 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 		if entryAttemptBlockReason != "" {
 			details["entry_attempt_block_reason"] = entryAttemptBlockReason
+		}
+		if accountTier != "" {
+			details["account_tier"] = accountTier
+		}
+		if effectiveMinConfidence > 0 {
+			details["effective_min_confidence"] = fmt.Sprintf("%.2f", effectiveMinConfidence)
+		}
+		if effectiveMaxCapitalPct > 0 {
+			details["effective_max_capital_pct"] = fmt.Sprintf("%.2f", effectiveMaxCapitalPct)
+		}
+		details["candidate_viable_count"] = fmt.Sprintf("%d", candidateViableCount)
+		if rolloutStageCurrent != "" {
+			details["rollout_stage_current"] = rolloutStageCurrent
+		}
+		if rolloutStatusCurrent != "" {
+			details["rollout_status_current"] = rolloutStatusCurrent
+		}
+		if rolloutGateReason != "" {
+			details["rollout_gate_reason_current"] = rolloutGateReason
 		}
 		if nextUnblockCondition != "" {
 			details["next_unblock_condition"] = nextUnblockCondition
@@ -1228,6 +1213,38 @@ func maskWalletAddress(raw string) string {
 	}
 
 	return trimmed
+}
+
+func readIntFromRecord(record map[string]interface{}, key string) int {
+	if record == nil {
+		return 0
+	}
+	switch value := record[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func readFloatFromRecord(record map[string]interface{}, key string) float64 {
+	if record == nil {
+		return 0
+	}
+	switch value := record[key].(type) {
+	case float64:
+		return value
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	default:
+		return 0
+	}
 }
 
 // GetSummary returns a summary of trading performance

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/skill"
@@ -561,40 +562,54 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 }
 
 type AITradingDecision struct {
-	Action          string           `json:"action"`
-	Symbol          string           `json:"symbol"`
-	SizePercent     float64          `json:"size_pct"`
-	Confidence      float64          `json:"confidence"`
-	Reasoning       string           `json:"reasoning"`
-	ReasonCategory  string           `json:"reason_category,omitempty"`
-	ConfidenceKnown bool             `json:"confidence_known"`
-	StopLoss        *decimal.Decimal `json:"stop_loss,omitempty"`
-	TakeProfit      *decimal.Decimal `json:"take_profit,omitempty"`
-	OrderID         string           `json:"order_id,omitempty"`
-	EntryPrice      *decimal.Decimal `json:"-"`
+	Action                          string                              `json:"action"`
+	Symbol                          string                              `json:"symbol"`
+	SizePercent                     float64                             `json:"size_pct"`
+	Confidence                      float64                             `json:"confidence"`
+	Reasoning                       string                              `json:"reasoning"`
+	ReasonCategory                  string                              `json:"reason_category,omitempty"`
+	ConfidenceKnown                 bool                                `json:"confidence_known"`
+	StopLoss                        *decimal.Decimal                    `json:"stop_loss,omitempty"`
+	TakeProfit                      *decimal.Decimal                    `json:"take_profit,omitempty"`
+	OrderID                         string                              `json:"order_id,omitempty"`
+	EntryPrice                      *decimal.Decimal                    `json:"-"`
+	AccountTier                     string                              `json:"-"`
+	EffectiveMinConfidence          float64                             `json:"-"`
+	EffectiveMaxCapitalPct          float64                             `json:"-"`
+	EffectiveMaxConcurrentPositions int                                 `json:"-"`
+	PolicyAdjustments               []string                            `json:"-"`
+	CandidateFunnelKnown            bool                                `json:"-"`
+	CandidateFunnel                 appautonomy.CandidateFunnelSnapshot `json:"-"`
+	ExecutionGate                   *appautonomy.ExecutionGateSnapshot  `json:"-"`
 }
 
 type TradingPortfolio struct {
-	USDTBalance        float64 `json:"usdt_balance"`
-	TotalValue         float64 `json:"total_value"`
-	OpenPositions      int     `json:"open_positions"`
-	UnrealizedPnL      float64 `json:"unrealized_pnl"`
-	CurrentDrawdown    float64 `json:"current_drawdown"`
-	RiskSharpe         float64 `json:"risk_sharpe"`
-	RiskSortino        float64 `json:"risk_sortino"`
-	RiskDrawdown       float64 `json:"risk_drawdown"`
-	RiskMaxDrawdown    float64 `json:"risk_max_drawdown"`
-	RiskExpectancy     float64 `json:"risk_expectancy"`
-	RiskSampleSize     int     `json:"risk_sample_size"`
-	StrategyPhase      string  `json:"strategy_phase"`
-	PhaseMinConfidence float64 `json:"phase_min_confidence"`
-	PhaseMaxCapitalPct float64 `json:"phase_max_capital_pct"`
-	MilestoneProgress  float64 `json:"milestone_progress"`
-	NoFillMinutes      float64 `json:"no_fill_minutes"`
-	DriftActive        bool    `json:"state_drift_active"`
-	RecoveryMode       string  `json:"recovery_mode,omitempty"`
-	RecoveryEntryOK    bool    `json:"recovery_entry_allowed"`
-	RecoveryCleanCycle int     `json:"recovery_clean_cycles"`
+	USDTBalance                     float64 `json:"usdt_balance"`
+	TotalValue                      float64 `json:"total_value"`
+	OpenPositions                   int     `json:"open_positions"`
+	UnrealizedPnL                   float64 `json:"unrealized_pnl"`
+	CurrentDrawdown                 float64 `json:"current_drawdown"`
+	RiskSharpe                      float64 `json:"risk_sharpe"`
+	RiskSortino                     float64 `json:"risk_sortino"`
+	RiskDrawdown                    float64 `json:"risk_drawdown"`
+	RiskMaxDrawdown                 float64 `json:"risk_max_drawdown"`
+	RiskExpectancy                  float64 `json:"risk_expectancy"`
+	RiskSampleSize                  int     `json:"risk_sample_size"`
+	StrategyPhase                   string  `json:"strategy_phase"`
+	PhaseMinConfidence              float64 `json:"phase_min_confidence"`
+	PhaseMaxCapitalPct              float64 `json:"phase_max_capital_pct"`
+	MilestoneProgress               float64 `json:"milestone_progress"`
+	NoFillMinutes                   float64 `json:"no_fill_minutes"`
+	DriftActive                     bool    `json:"state_drift_active"`
+	AccountTier                     string  `json:"account_tier,omitempty"`
+	EffectiveMinConfidence          float64 `json:"effective_min_confidence,omitempty"`
+	EffectiveMaxCapitalPct          float64 `json:"effective_max_capital_pct,omitempty"`
+	EffectiveMaxConcurrentPositions int     `json:"effective_max_concurrent_positions,omitempty"`
+	RecentConsecutiveLosses         int     `json:"recent_consecutive_losses,omitempty"`
+	ScopedAdjustedMaxCapitalPct     float64 `json:"scoped_adjusted_max_capital_pct,omitempty"`
+	RecoveryMode                    string  `json:"recovery_mode,omitempty"`
+	RecoveryEntryOK                 bool    `json:"recovery_entry_allowed"`
+	RecoveryCleanCycle              int     `json:"recovery_clean_cycles"`
 }
 
 type AIScalpingService struct {
@@ -865,7 +880,7 @@ func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptIn
 	return llm.FailoverAttemptInfo{}
 }
 
-func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (*AITradingDecision, error) {
+func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (decision *AITradingDecision, err error) {
 	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", portfolio.USDTBalance)
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
@@ -879,14 +894,28 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		})
 	}
 
+	policy := s.scalpingCyclePolicy(ctx, portfolio)
+	portfolio.AccountTier = policy.AccountTier
+	portfolio.EffectiveMinConfidence = policy.EffectiveMinConfidence
+	portfolio.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct
+	portfolio.EffectiveMaxConcurrentPositions = policy.MaxConcurrentPositions
+
+	effectiveMinConfidence := policy.EffectiveMinConfidence
+	effectiveMaxCapital := policy.EffectiveMaxCapitalPct
+	var funnel appautonomy.CandidateFunnelSnapshot
+	defer func() {
+		finalizeDecisionMetadata(decision, &policy, effectiveMinConfidence, effectiveMaxCapital, funnel)
+	}()
+
 	signals, err := s.gatherMarketSignals(ctx)
 	if err != nil {
 		log.Printf("[AI-SCALPING] Failed to gather signals: %v", err)
 		return nil, fmt.Errorf("failed to gather market signals: %w", err)
 	}
 	log.Printf("[AI-SCALPING] Gathered %d market signals", len(signals))
+	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy)
 
-	decision, err := s.getAIDecision(ctx, signals, portfolio)
+	decision, err = s.getAIDecision(ctx, signals, portfolio)
 	if err != nil {
 		log.Printf("[AI-SCALPING] Failed to get AI decision: %v", err)
 		return fallbackHoldDecision(err.Error(), err), nil
@@ -910,7 +939,6 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			decision.ConfidenceKnown = true
 		}
 	}
-
 	log.Printf("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
 
 	if err := s.validateDecision(decision, signals); err != nil {
@@ -925,32 +953,15 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			)
 			return runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), nil
 		}
-		return strategyHoldDecision(err.Error(), decision.Confidence), nil
+		decision = strategyHoldDecision(err.Error(), decision.Confidence)
+		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+			Allowed:     false,
+			BlockReason: err.Error(),
+			BlockCode:   classifyValidationBlockCode(err),
+		}
+		return decision, nil
 	}
 
-	effectiveMinConfidence, effectiveMaxCapital := s.dynamicRiskThresholds(ctx, portfolio)
-	if portfolio.PhaseMinConfidence > 0 && portfolio.PhaseMinConfidence > effectiveMinConfidence {
-		effectiveMinConfidence = portfolio.PhaseMinConfidence
-	}
-	if portfolio.PhaseMaxCapitalPct > 0 && portfolio.PhaseMaxCapitalPct < effectiveMaxCapital {
-		effectiveMaxCapital = portfolio.PhaseMaxCapitalPct
-	}
-	if portfolio.MilestoneProgress > 0 && portfolio.MilestoneProgress < 25 {
-		effectiveMaxCapital = effectiveMaxCapital * 0.8
-	}
-	if portfolio.RiskSampleSize >= 10 && portfolio.RiskExpectancy < 0 {
-		effectiveMaxCapital = effectiveMaxCapital * 0.75
-	}
-	if portfolio.RiskDrawdown > 0.12 {
-		effectiveMinConfidence += 0.05
-		effectiveMaxCapital = effectiveMaxCapital * 0.7
-	}
-	if effectiveMinConfidence > 0.95 {
-		effectiveMinConfidence = 0.95
-	}
-	if effectiveMaxCapital < 0.1 {
-		effectiveMaxCapital = 0.1
-	}
 	gate := s.evaluatePreTradeGate(ctx, decision, signals)
 	if !gate.Allowed {
 		attemptedAction := decision.Action
@@ -969,6 +980,11 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			gate.SampleSize,
 			gate.Reason,
 		)
+		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+			Allowed:     false,
+			BlockReason: gate.Reason,
+			BlockCode:   classifyPreTradeBlockCode(gate.Reason),
+		}
 		return decision, nil
 	}
 	if gate.CapitalMultiplier > 0 && gate.CapitalMultiplier < 1 {
@@ -1000,12 +1016,36 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		return decision, nil
 	}
 
+	if policy.MaxConcurrentPositions > 0 && portfolio.OpenPositions >= policy.MaxConcurrentPositions {
+		decision = strategyHoldDecision(
+			fmt.Sprintf(
+				"account tier %s allows at most %d concurrent position(s); current %d",
+				policy.AccountTier,
+				policy.MaxConcurrentPositions,
+				portfolio.OpenPositions,
+			),
+			decision.Confidence,
+		)
+		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+			Allowed:     false,
+			BlockReason: decision.Reasoning,
+			BlockCode:   appautonomy.CandidateRejectMaxConcurrentPositions,
+		}
+		return decision, nil
+	}
+
 	if decision.Confidence < effectiveMinConfidence {
 		log.Printf("[AI-SCALPING] Confidence %.2f below minimum %.2f, skipping", decision.Confidence, effectiveMinConfidence)
-		return strategyHoldDecision(
+		decision = strategyHoldDecision(
 			fmt.Sprintf("confidence %.2f below dynamic threshold %.2f", decision.Confidence, effectiveMinConfidence),
 			decision.Confidence,
-		), nil
+		)
+		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+			Allowed:     false,
+			BlockReason: decision.Reasoning,
+			BlockCode:   appautonomy.CandidateRejectConfidenceBelowThreshold,
+		}
+		return decision, nil
 	}
 
 	scope, hasScope := scalpingAutonomyScopeFromContext(ctx)
@@ -1036,10 +1076,17 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			s.updateAutonomyGateState(scope, rolloutState, gateState, gateErr)
 			if gateErr != nil {
 				log.Printf("[AI-SCALPING] Autonomous gate evaluation failed: %v", gateErr)
-				return strategyHoldDecision(
-					fmt.Sprintf("autonomy gate evaluation failed: %v", gateErr),
-					decision.Confidence,
-				), nil
+				reason := fmt.Sprintf("autonomy gate evaluation failed: %v", gateErr)
+				decision = runtimeDegradedHoldDecision(reason, reasonCategoryExecutionUnavailable)
+				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+					Allowed:              false,
+					BlockReason:          reason,
+					BlockCode:            appautonomy.CandidateRejectAutonomyRuntime,
+					RolloutStageCurrent:  strings.TrimSpace(s.autonomyState.RolloutStage),
+					RolloutStatusCurrent: strings.TrimSpace(s.autonomyState.RolloutStatus),
+					RolloutGateReason:    reason,
+				}
+				return decision, nil
 			}
 			if gateState != nil && !gateState.IsOpen {
 				reason := strings.Join(gateState.BlockReasons, "; ")
@@ -1047,10 +1094,19 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 					reason = "autonomy live gate closed"
 				}
 				log.Printf("[AI-SCALPING] Autonomous live gate blocked execution for %s: %s", scope.StrategyID, reason)
-				return strategyHoldDecision(
+				decision = strategyHoldDecision(
 					fmt.Sprintf("autonomy live gate closed: %s", reason),
 					decision.Confidence,
-				), nil
+				)
+				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+					Allowed:              false,
+					BlockReason:          reason,
+					BlockCode:            autonomyGateBlockCode(reason),
+					RolloutStageCurrent:  strings.TrimSpace(s.autonomyState.RolloutStage),
+					RolloutStatusCurrent: strings.TrimSpace(s.autonomyState.RolloutStatus),
+					RolloutGateReason:    reason,
+				}
+				return decision, nil
 			}
 		}
 		if autonomyCoordinator != nil && !strategyResolved {
@@ -1082,6 +1138,15 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				decision.Reasoning = buildExecutionFallbackReason(executionErr)
 				decision.ReasonCategory = reasonCategoryExecutionUnavailable
 				decision.ConfidenceKnown = false
+				blockCode := classifyExecutionBlockCode(executionErr)
+				if blockCode == "" && strings.TrimSpace(decision.Reasoning) != "" {
+					blockCode = classifyExecutionBlockCode(errors.New(decision.Reasoning))
+				}
+				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+					Allowed:     false,
+					BlockReason: decision.Reasoning,
+					BlockCode:   blockCode,
+				}
 				log.Printf("[AI-SCALPING] Downgrading execution issue to HOLD: %v", executionErr)
 				return decision, nil
 			}
@@ -1519,8 +1584,8 @@ func (s *AIScalpingService) buildSystemPrompt() string {
 You analyze market data and make trading decisions. You have access to real-time market signals and portfolio state.
 
 ## Trading Rules
-1. Only trade when you have HIGH confidence (>%.1f)
-2. Maximum position size: %.1f%% of portfolio
+1. Only trade when confidence meets or exceeds the effective threshold supplied in the user prompt; never use strategy-phase reference values as execution gates when they differ from the effective threshold
+2. Never size above the effective max capital percentage supplied in the user prompt
 3. Use futures with %dx leverage
 4. Always consider risk: set stop-loss and take-profit levels
 5. If uncertain, return action: "hold" with reasoning
@@ -1546,7 +1611,7 @@ Return JSON only:
 - spread < 0.1%%: Good liquidity for execution
 - range_pos_24h > 80: Price near daily high (avoid chasing late entries)
 - range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
-`, s.config.MinConfidence, s.config.MaxCapitalPct, s.config.Leverage, skillContent)
+`, s.config.Leverage, skillContent)
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
@@ -1578,9 +1643,11 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - Unrealized PnL: %.4f
 
 ## Autonomous Control Plane
+- Account Tier: %s
 - Strategy Phase: %s
-- Phase Min Confidence: %.2f
-- Phase Max Capital %%: %.2f
+- Effective Min Confidence (must obey): %.2f
+- Effective Max Capital %% (must obey): %.2f
+- Policy note: account-tier and recovery adjustments are already reflected in the effective values above; cite and enforce those effective values only
 - Fund Milestone Progress: %.2f%%
 - No-fill Duration (minutes): %.1f
 - State Drift Active: %t
@@ -1596,9 +1663,10 @@ Based on the signals and past trading history, what is your trading decision? Le
 		portfolio.TotalValue,
 		portfolio.OpenPositions,
 		portfolio.UnrealizedPnL,
+		portfolio.AccountTier,
 		portfolio.StrategyPhase,
-		portfolio.PhaseMinConfidence,
-		portfolio.PhaseMaxCapitalPct,
+		portfolio.EffectiveMinConfidence,
+		portfolio.EffectiveMaxCapitalPct,
 		portfolio.MilestoneProgress,
 		portfolio.NoFillMinutes,
 		portfolio.DriftActive,
@@ -2375,13 +2443,20 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if isNonFiniteFloat(volumeScore) || isNonFiniteFloat(score) || isNonFiniteFloat(confidence) {
 		return nil, 0, false
 	}
-	if confidence < clampFloat(math.Max(s.config.MinConfidence, fallbackCfg.ConfidenceFloor), 0.05, 0.99) {
+	minConfidenceFloor := portfolio.EffectiveMinConfidence
+	if minConfidenceFloor <= 0 {
+		minConfidenceFloor = portfolio.PhaseMinConfidence
+	}
+	if minConfidenceFloor <= 0 {
+		minConfidenceFloor = fallbackCfg.ConfidenceFloor
+	}
+	if confidence < clampFloat(minConfidenceFloor, 0.05, 0.99) {
 		return nil, 0, false
 	}
 
-	sizeCap := s.config.MaxCapitalPct
-	if portfolio.PhaseMaxCapitalPct > 0 && portfolio.PhaseMaxCapitalPct < sizeCap {
-		sizeCap = portfolio.PhaseMaxCapitalPct
+	sizeCap := portfolio.EffectiveMaxCapitalPct
+	if sizeCap <= 0 {
+		sizeCap = s.config.MaxCapitalPct
 	}
 	if sizeCap <= 0 {
 		sizeCap = DefaultAIScalpingConfig().MaxCapitalPct
@@ -2505,6 +2580,102 @@ func classifyReasonCategory(err error, content string) string {
 			return reasonCategoryStrategyHold
 		}
 		return reasonCategoryExecutionUnavailable
+	}
+}
+
+func classifyValidationBlockCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(lower, "spread") && strings.Contains(lower, "too wide"):
+		return appautonomy.CandidateRejectSpreadTooWide
+	case strings.Contains(lower, "missing orderbook"):
+		return appautonomy.CandidateRejectMissingOrderbookSignal
+	case strings.Contains(lower, "confidence") && strings.Contains(lower, "below"):
+		return appautonomy.CandidateRejectConfidenceBelowThreshold
+	default:
+		return appautonomy.CandidateRejectNoDirectionalEdge
+	}
+}
+
+func classifyPreTradeBlockCode(reason string) string {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(lower, "spread") && strings.Contains(lower, "too wide"):
+		return appautonomy.CandidateRejectSpreadTooWide
+	case strings.Contains(lower, "expectancy"):
+		return appautonomy.CandidateRejectPreTradeExpectancy
+	default:
+		return appautonomy.CandidateRejectNoDirectionalEdge
+	}
+}
+
+func classifyExecutionBlockCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	if lower == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(lower, "missing orderbook"):
+		return appautonomy.CandidateRejectMissingOrderbookSignal
+	case strings.Contains(lower, "connectivity") ||
+		strings.Contains(lower, "connection") ||
+		strings.Contains(lower, "disconnected") ||
+		strings.Contains(lower, "unreachable") ||
+		strings.Contains(lower, "request failed") ||
+		strings.Contains(lower, "failed to get ticker") ||
+		strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "deadline exceeded"):
+		return appautonomy.CandidateRejectConnectivity
+	case strings.Contains(lower, "cooldown") ||
+		strings.Contains(lower, "failure budget") ||
+		strings.Contains(lower, "risk budget"):
+		return appautonomy.CandidateRejectRiskBudget
+	default:
+		return appautonomy.CandidateRejectAutonomyRuntime
+	}
+}
+
+func autonomyGateBlockCode(reason string) string {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(lower, "strategy_not_live"):
+		if strings.Contains(lower, "stage: paper") {
+			return appautonomy.CandidateRejectRolloutPaper
+		}
+		return appautonomy.CandidateRejectRolloutShadow
+	case strings.Contains(lower, "autonomy live gate closed") && strings.Contains(lower, "stage: paper"):
+		return appautonomy.CandidateRejectRolloutPaper
+	case strings.Contains(lower, "autonomy live gate closed") ||
+		strings.Contains(lower, "stage: shadow"):
+		return appautonomy.CandidateRejectRolloutShadow
+	case strings.Contains(lower, "stage: paper"):
+		return appautonomy.CandidateRejectRolloutPaper
+	case strings.Contains(lower, "safe-mode") ||
+		strings.Contains(lower, "safe mode") ||
+		strings.Contains(lower, "safe_mode"):
+		return appautonomy.CandidateRejectSafeMode
+	case strings.Contains(lower, "kill-switch") ||
+		strings.Contains(lower, "kill switch") ||
+		strings.Contains(lower, "killswitch") ||
+		strings.Contains(lower, "kill_switch"):
+		return appautonomy.CandidateRejectKillSwitch
+	case strings.Contains(lower, "connectivity") ||
+		strings.Contains(lower, "connection") ||
+		strings.Contains(lower, "disconnected") ||
+		strings.Contains(lower, "unreachable"):
+		return appautonomy.CandidateRejectConnectivity
+	case strings.Contains(lower, "risk-budget") ||
+		strings.Contains(lower, "risk budget") ||
+		strings.Contains(lower, "budget exceeded"):
+		return appautonomy.CandidateRejectRiskBudget
+	default:
+		return appautonomy.CandidateRejectAutonomyGateClosed
 	}
 }
 
@@ -2855,22 +3026,14 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 }
 
 func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {
-	minConfidence = s.config.MinConfidence
-	maxCapitalPct = s.config.MaxCapitalPct
+	policy := s.scalpingCyclePolicy(ctx, portfolio)
+	return policy.EffectiveMinConfidence, policy.EffectiveMaxCapitalPct
+}
 
-	adjusted := GetScalpingPerformance().GetAdjustedParameters()
-	if adjusted.MaxCapitalPercent > 0 && adjusted.MaxCapitalPercent < maxCapitalPct {
-		maxCapitalPct = adjusted.MaxCapitalPercent
-	}
+func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio TradingPortfolio) appautonomy.ScalpingCyclePolicy {
+	cfg := scalpingPolicyConfigFromEnv()
 
-	perf := GetScalpingPerformance().GetPerformance()
-	consecutiveLosses := readIntMetric(perf["consecutive_losses"])
-	if consecutiveLosses >= 2 {
-		minConfidence += 0.05 * float64(consecutiveLosses-1)
-	}
-	if minConfidence > 0.95 {
-		minConfidence = 0.95
-	}
+	performanceWindow := appautonomy.PerformanceWindowInput{}
 	if s.tradeMemory != nil {
 		lookbackHours := getEnvInt("NEURATRADE_SCALPING_PERF_LOOKBACK_HOURS")
 		if lookbackHours <= 0 {
@@ -2878,49 +3041,129 @@ func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio
 		}
 		stats, err := s.tradeMemory.GetPerformanceStatsWindow(ctx, lookbackHours)
 		if err == nil {
-			decisiveTrades := stats.DecisiveTrades
-			winRate := stats.DecisiveWinRatePct
-			if decisiveTrades >= 10 && winRate > 0 && winRate < 35 {
-				if minConfidence < 0.70 {
-					minConfidence = 0.70
-				}
-				maxCapitalPct = maxCapitalPct * 0.6
-			}
-			if decisiveTrades >= 20 && winRate > 0 && winRate < 30 {
-				if minConfidence < 0.78 {
-					minConfidence = 0.78
-				}
-				maxCapitalPct = maxCapitalPct * 0.5
-			}
-		}
-
-	}
-
-	s.applyControlledNoFillRecovery(&minConfidence, &maxCapitalPct, portfolio, consecutiveLosses)
-	switch strings.ToLower(strings.TrimSpace(portfolio.RecoveryMode)) {
-	case "micro_entry":
-		microCap := 0.50
-		if value, ok := getEnvFloat("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT"); ok && value > 0 {
-			microCap = value
-		}
-		if maxCapitalPct > microCap {
-			maxCapitalPct = microCap
-		}
-	case "derisk_only":
-		if maxCapitalPct > 0.10 {
-			maxCapitalPct = 0.10
-		}
-		if minConfidence < 0.85 {
-			minConfidence = 0.85
+			performanceWindow.DecisiveTrades = stats.DecisiveTrades
+			performanceWindow.DecisiveWinRatePct = stats.DecisiveWinRatePct
 		}
 	}
-	if maxCapitalPct < 0.1 {
-		maxCapitalPct = 0.1
-	}
 
-	return minConfidence, maxCapitalPct
+	return appautonomy.EvaluateScalpingPolicy(appautonomy.ScalpingCycleInput{
+		TotalValue:            decimal.NewFromFloat(portfolio.TotalValue),
+		OpenPositions:         portfolio.OpenPositions,
+		DriftActive:           portfolio.DriftActive,
+		BaseMinConfidence:     s.config.MinConfidence,
+		BaseMaxCapitalPct:     s.config.MaxCapitalPct,
+		AdjustedMaxCapitalPct: portfolio.ScopedAdjustedMaxCapitalPct,
+		ConsecutiveLosses:     portfolio.RecentConsecutiveLosses,
+		Phase:                 portfolio.StrategyPhase,
+		PhaseMinConfidence:    portfolio.PhaseMinConfidence,
+		PhaseMaxCapitalPct:    portfolio.PhaseMaxCapitalPct,
+		MilestoneProgress:     portfolio.MilestoneProgress,
+		NoFillMinutes:         portfolio.NoFillMinutes,
+		RiskDrawdown:          portfolio.RiskDrawdown,
+		RiskExpectancy:        portfolio.RiskExpectancy,
+		RiskSampleSize:        portfolio.RiskSampleSize,
+		RecoveryMode:          portfolio.RecoveryMode,
+		PerformanceWindow:     performanceWindow,
+	}, cfg)
 }
 
+func scalpingPolicyConfigFromEnv() appautonomy.ScalpingPolicyConfig {
+	cfg := appautonomy.DefaultScalpingPolicyConfig()
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_ACCOUNT_MAX_VALUE"); ok && value > 0 {
+		cfg.MicroAccountMaxValue = decimal.NewFromFloat(value)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_SMALL_ACCOUNT_MAX_VALUE"); ok && value > 0 {
+		cfg.SmallAccountMaxValue = decimal.NewFromFloat(value)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_MIN_CONFIDENCE_FLOOR"); ok && value > 0 {
+		cfg.MicroMinConfidenceFloor = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_MAX_CAPITAL_PCT"); ok && value > 0 {
+		cfg.MicroMaxCapitalPct = value
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_MAX_CONCURRENT_POSITIONS"); value > 0 {
+		cfg.MaxConcurrentPositions = value
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_MICRO_MAX_CONCURRENT_POSITIONS"); value > 0 {
+		cfg.MicroMaxConcurrent = value
+	}
+	if value := getEnvInt("NEURATRADE_NOFILL_RECOVERY_MINUTES"); value > 0 {
+		cfg.NoFillRecoveryMinutes = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_NOFILL_MIN_CONF_FLOOR"); ok && value > 0 {
+		cfg.NoFillMinConfidenceFloor = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_NOFILL_MAX_CAP_PCT_CAP"); ok && value > 0 {
+		cfg.NoFillMaxCapitalPctCap = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT"); ok && value > 0 {
+		cfg.RecoveryMicroEntryCapPct = value
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES"); value > 0 {
+		cfg.ProgressBlockAfter = time.Duration(value) * time.Minute
+	}
+	return cfg.Normalized()
+}
+
+func candidateSignalsFromMarketSignals(signals []aiMarketSignal) []appautonomy.CandidateSignal {
+	if len(signals) == 0 {
+		return nil
+	}
+	candidates := make([]appautonomy.CandidateSignal, 0, len(signals))
+	for _, signal := range signals {
+		if hasNonFiniteScalpingSignalValue(signal.Price) ||
+			hasNonFiniteScalpingSignalValue(signal.High24h) ||
+			hasNonFiniteScalpingSignalValue(signal.Low24h) ||
+			hasNonFiniteScalpingSignalValue(signal.Volume24h) {
+			continue
+		}
+		candidates = append(candidates, appautonomy.CandidateSignal{
+			Symbol:             signal.Symbol,
+			Price:              decimal.NewFromFloat(signal.Price),
+			High24h:            decimal.NewFromFloat(signal.High24h),
+			Low24h:             decimal.NewFromFloat(signal.Low24h),
+			Volume24h:          decimal.NewFromFloat(signal.Volume24h),
+			BidAskSpread:       signal.BidAskSpread,
+			OrderBookImbalance: signal.OrderBookImbalance,
+			RangePosition24h:   signal.RangePosition24h,
+		})
+	}
+	return candidates
+}
+
+func hasNonFiniteScalpingSignalValue(value float64) bool {
+	return math.IsNaN(value) || math.IsInf(value, 0)
+}
+
+func finalizeDecisionMetadata(
+	decision *AITradingDecision,
+	policy *appautonomy.ScalpingCyclePolicy,
+	effectiveMinConfidence float64,
+	effectiveMaxCapital float64,
+	funnel appautonomy.CandidateFunnelSnapshot,
+) {
+	if decision == nil || policy == nil {
+		return
+	}
+	policy.EffectiveMinConfidence = effectiveMinConfidence
+	policy.EffectiveMaxCapitalPct = effectiveMaxCapital
+	applyDecisionPolicy(decision, *policy)
+	decision.CandidateFunnelKnown = true
+	decision.CandidateFunnel = funnel
+}
+
+func applyDecisionPolicy(decision *AITradingDecision, policy appautonomy.ScalpingCyclePolicy) {
+	if decision == nil {
+		return
+	}
+	decision.AccountTier = policy.AccountTier
+	decision.EffectiveMinConfidence = policy.EffectiveMinConfidence
+	decision.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct
+	decision.EffectiveMaxConcurrentPositions = policy.MaxConcurrentPositions
+	decision.PolicyAdjustments = append([]string(nil), policy.PolicyAdjustments...)
+}
+
+//nolint:unused // Retained for direct recovery-policy unit tests while rollout wiring is still in flux.
 func (s *AIScalpingService) applyControlledNoFillRecovery(
 	minConfidence *float64,
 	maxCapitalPct *float64,

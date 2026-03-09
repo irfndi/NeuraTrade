@@ -970,7 +970,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
-	agentControlHandler := handlers.NewAgentControlHandler()
+	agentControlHandler := handlers.NewAgentControlHandler(integratedHandlers.AutonomyCoordinator())
 
 	// API v1 routes with telemetry
 	v1 := router.Group("/api/v1")
@@ -1117,6 +1117,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			agent.POST("/disable-safe-mode", agentControlHandler.DisableSafeMode)
 			agent.POST("/kill-switch", agentControlHandler.EngageKillSwitch)
 			agent.POST("/cancel-all-orders", agentControlHandler.CancelAllOrders)
+			agent.POST("/strategy-mode", agentControlHandler.SetStrategyMode)
 		}
 
 		adminRisk := v1.Group("/admin/risk")
