@@ -1,12 +1,16 @@
 package autonomy
 
 import (
+	"os"
 	"strings"
 
 	"github.com/shopspring/decimal"
 )
 
-const BitgetFuturesMinNotionalUSDT = 6.0
+const (
+	defaultBitgetFuturesMinNotionalUSDT = "6.0"
+	bitgetFuturesMinNotionalEnv         = "NEURATRADE_BITGET_FUTURES_MIN_NOTIONAL_USDT"
+)
 
 type ExecutableSizingConstraints struct {
 	Exchange                 string
@@ -17,7 +21,16 @@ type ExecutableSizingConstraints struct {
 }
 
 func BitgetFuturesMinNotional() decimal.Decimal {
-	return decimal.NewFromFloat(BitgetFuturesMinNotionalUSDT)
+	if raw := strings.TrimSpace(os.Getenv(bitgetFuturesMinNotionalEnv)); raw != "" {
+		if configured, err := decimal.NewFromString(raw); err == nil && configured.GreaterThan(decimal.Zero) {
+			return configured
+		}
+	}
+	configured, err := decimal.NewFromString(defaultBitgetFuturesMinNotionalUSDT)
+	if err != nil {
+		return decimal.NewFromInt(6)
+	}
+	return configured
 }
 
 func ResolveExecutableSizingConstraints(exchange string, walletBalance decimal.Decimal, leverage int) ExecutableSizingConstraints {

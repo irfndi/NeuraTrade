@@ -7,6 +7,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBitgetFuturesMinNotional_UsesEnvOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_BITGET_FUTURES_MIN_NOTIONAL_USDT", "7.25")
+
+	require.True(t, BitgetFuturesMinNotional().Equal(decimal.NewFromFloat(7.25)))
+}
+
 func TestResolveExecutableSizingConstraints_BitgetFutures(t *testing.T) {
 	tests := []struct {
 		name                        string
@@ -19,7 +25,7 @@ func TestResolveExecutableSizingConstraints_BitgetFutures(t *testing.T) {
 		{
 			name:                        "happy_path",
 			walletBalance:               decimal.NewFromFloat(46.93),
-			expectedMinOrderNotional:    BitgetFuturesMinNotional(),
+			expectedMinOrderNotional:    decimal.NewFromFloat(6),
 			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
 			expectedMinExecutableSize:   12.7850,
 			expectedNonExecutableWallet: false,
@@ -27,7 +33,7 @@ func TestResolveExecutableSizingConstraints_BitgetFutures(t *testing.T) {
 		{
 			name:                        "zero_wallet_balance",
 			walletBalance:               decimal.Zero,
-			expectedMinOrderNotional:    BitgetFuturesMinNotional(),
+			expectedMinOrderNotional:    decimal.NewFromFloat(6),
 			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
 			expectedMinExecutableSize:   0,
 			expectedNonExecutableWallet: true,
@@ -35,7 +41,7 @@ func TestResolveExecutableSizingConstraints_BitgetFutures(t *testing.T) {
 		{
 			name:                        "subminimum_wallet_balance",
 			walletBalance:               decimal.NewFromFloat(5),
-			expectedMinOrderNotional:    BitgetFuturesMinNotional(),
+			expectedMinOrderNotional:    decimal.NewFromFloat(6),
 			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
 			expectedMinExecutableSize:   0,
 			expectedNonExecutableWallet: true,
@@ -43,7 +49,7 @@ func TestResolveExecutableSizingConstraints_BitgetFutures(t *testing.T) {
 		{
 			name:                        "tiny_nonzero_wallet_balance",
 			walletBalance:               decimal.NewFromFloat(0.0000001),
-			expectedMinOrderNotional:    BitgetFuturesMinNotional(),
+			expectedMinOrderNotional:    decimal.NewFromFloat(6),
 			expectedMinInitialMargin:    decimal.NewFromFloat(1.2),
 			expectedMinExecutableSize:   0,
 			expectedNonExecutableWallet: true,

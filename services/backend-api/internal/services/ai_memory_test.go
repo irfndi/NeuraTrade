@@ -199,58 +199,7 @@ func TestTradeMemory_BuildMemoryContext(t *testing.T) {
 	assert.Contains(t, context, "Performance Stats")
 }
 
-func TestTradeMemory_GetPerformanceStatsWindow_PrefersRealizedPnLJournalForAutonomyScope(t *testing.T) {
-	db := setupTestDB(t)
-	tm, err := NewTradeMemory(db)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
-		id TEXT PRIMARY KEY,
-		order_id TEXT NOT NULL UNIQUE,
-		chat_id TEXT,
-		exchange TEXT NOT NULL,
-		symbol TEXT NOT NULL,
-		side TEXT NOT NULL,
-		filled_amount NUMERIC NOT NULL DEFAULT 0,
-		entry_price NUMERIC NOT NULL DEFAULT 0,
-		exit_price NUMERIC NOT NULL DEFAULT 0,
-		realized_pnl NUMERIC NOT NULL DEFAULT 0,
-		fees NUMERIC NOT NULL DEFAULT 0,
-		source TEXT NOT NULL DEFAULT 'autonomous',
-		closed_at TIMESTAMP NOT NULL,
-		created_at TIMESTAMP NOT NULL
-	)`)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
-		('mem_1', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'breakeven', 0, 0.70),
-		('mem_2', datetime('now'), 'bitget', 'ETH/USDT', 'buy', 'breakeven', 0, 0.70)`)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
-		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
-	) VALUES
-		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 101, 1, 0, 'autonomous', datetime('now'), datetime('now')),
-		('rp_2', 'ord_2', 'chat-1', 'bitget', 'ETH/USDT', 'sell', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
-		('rp_3', 'ord_3', 'chat-1', 'bitget', 'SOL/USDT', 'buy', 1, 100, 100, 0, 0, 'autonomous', datetime('now'), datetime('now'))`)
-	require.NoError(t, err)
-
-	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
-		ChatID:   "chat-1",
-		Exchange: "bitget",
-	})
-	stats, err := tm.GetPerformanceStatsWindow(ctx, 24*30)
-	require.NoError(t, err)
-
-	assert.Equal(t, 3, stats.TotalTrades)
-	assert.Equal(t, 1, stats.Wins)
-	assert.Equal(t, 1, stats.Losses)
-	assert.Equal(t, 1, stats.Breakeven)
-	assert.Equal(t, 2, stats.DecisiveTrades)
-	assert.Equal(t, "0", stats.TotalPnL.String())
-}
-
-func TestTradeMemory_GetPerformanceStatsWindow_FallsBackWithoutScopedAutonomyKeys(t *testing.T) {
+func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKeysExist(t *testing.T) {
 	db := setupTestDB(t)
 	tm, err := NewTradeMemory(db)
 	require.NoError(t, err)
@@ -281,17 +230,72 @@ func TestTradeMemory_GetPerformanceStatsWindow_FallsBackWithoutScopedAutonomyKey
 	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
 		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
 	) VALUES
-		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 101, 10, 0, 'autonomous', datetime('now'), datetime('now'))`)
+		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 101, 1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_2', 'ord_2', 'chat-1', 'bitget', 'ETH/USDT', 'sell', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_3', 'ord_3', 'chat-1', 'bitget', 'SOL/USDT', 'buy', 1, 100, 100, 0, 0, 'autonomous', datetime('now'), datetime('now'))`)
 	require.NoError(t, err)
 
-	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{})
-	stats, err := tm.GetPerformanceStatsWindow(ctx, 24*30)
-	require.NoError(t, err)
+	tests := []struct {
+		name           string
+		scope          ScalpingAutonomyScope
+		expectedTrades int
+		expectedWins   int
+		expectedLosses int
+		expectedBreak  int
+		expectedDecis  int
+		expectedPnL    string
+	}{
+		{
+			name: "full_scope_prefers_realized_journal",
+			scope: ScalpingAutonomyScope{
+				ChatID:   "chat-1",
+				Exchange: "bitget",
+			},
+			expectedTrades: 3,
+			expectedWins:   1,
+			expectedLosses: 1,
+			expectedBreak:  1,
+			expectedDecis:  2,
+			expectedPnL:    "0",
+		},
+		{
+			name: "exchange_only_scope_prefers_realized_journal",
+			scope: ScalpingAutonomyScope{
+				Exchange: "bitget",
+			},
+			expectedTrades: 3,
+			expectedWins:   1,
+			expectedLosses: 1,
+			expectedBreak:  1,
+			expectedDecis:  2,
+			expectedPnL:    "0",
+		},
+		{
+			name:           "empty_scope_falls_back_to_legacy_memory",
+			scope:          ScalpingAutonomyScope{},
+			expectedTrades: 2,
+			expectedWins:   1,
+			expectedLosses: 1,
+			expectedBreak:  0,
+			expectedDecis:  2,
+			expectedPnL:    "1",
+		},
+	}
 
-	assert.Equal(t, 2, stats.TotalTrades)
-	assert.Equal(t, 1, stats.Wins)
-	assert.Equal(t, 1, stats.Losses)
-	assert.Equal(t, "1", stats.TotalPnL.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithScalpingAutonomyScope(context.Background(), tt.scope)
+			stats, err := tm.GetPerformanceStatsWindow(ctx, 24*30)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectedTrades, stats.TotalTrades)
+			assert.Equal(t, tt.expectedWins, stats.Wins)
+			assert.Equal(t, tt.expectedLosses, stats.Losses)
+			assert.Equal(t, tt.expectedBreak, stats.Breakeven)
+			assert.Equal(t, tt.expectedDecis, stats.DecisiveTrades)
+			assert.Equal(t, tt.expectedPnL, stats.TotalPnL.String())
+		})
+	}
 }
 
 func TestTradeMemory_RecordLesson(t *testing.T) {

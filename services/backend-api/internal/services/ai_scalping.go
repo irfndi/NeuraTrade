@@ -1681,6 +1681,7 @@ Return JSON only:
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
+	walletBalance := walletBasis(portfolio)
 
 	var memoryContext string
 	var recoveryContext string
@@ -1724,6 +1725,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 ## Portfolio
 - USDT Balance: %.2f
 - Total Value: %.2f
+- Wallet Basis For size_pct: %.2f
 - Open Positions: %d
 - Unrealized PnL: %.4f
 
@@ -1746,6 +1748,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Adapt your strategy based on recovery context if provided. Return only valid JSON.`,
 		portfolio.USDTBalance,
 		portfolio.TotalValue,
+		walletBalance.InexactFloat64(),
 		portfolio.OpenPositions,
 		portfolio.UnrealizedPnL,
 		portfolio.AccountTier,

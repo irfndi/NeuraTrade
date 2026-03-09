@@ -13,7 +13,7 @@ import (
 type OperationalMode string
 
 const (
-	// OpModeDry means paper trading - no real orders executed
+	// OpModeDry means shadow/dry mode - no orders executed
 	OpModeDry OperationalMode = "dry"
 	// OpModeLive means real trading - actual orders executed on exchanges
 	OpModeLive OperationalMode = "live"
@@ -248,7 +248,8 @@ func (s *OperationalModeService) ResetConfirmations(ctx context.Context, chatID 
 
 // IsDry returns true if the system is in dry mode
 func (s *OperationalModeService) IsDry(chatID string) bool {
-	return s.GetMode(chatID) == OpModeDry
+	mode := s.GetMode(chatID)
+	return mode == OpModeDry || mode == ModePaper
 }
 
 // IsLive returns true if the system is in live mode
@@ -360,16 +361,22 @@ func (s *OperationalModeService) GetModeInfo(chatID string) string {
 	state := s.GetState(chatID)
 
 	var status string
-	if state.Mode == OpModeDry {
-		status = "🧪 DRY MODE (Paper Trading)\n\n" +
-			"• No real orders will be executed\n" +
-			"• All trades are simulated\n" +
-			"• Safe for testing strategies"
-	} else {
+	switch state.Mode {
+	case OpModeLive:
 		status = "🔴 LIVE MODE (Real Trading)\n\n" +
 			"• Real orders WILL be executed\n" +
 			"• Real money is at risk\n" +
 			"• Be cautious!"
+	case ModePaper:
+		status = "🧪 PAPER MODE (Simulated Orders)\n\n" +
+			"• Orders are simulated through the autonomy paper stage\n" +
+			"• No real exchange orders will be sent\n" +
+			"• Useful for validating execution behavior before live mode"
+	default:
+		status = "🧪 DRY MODE (Paper Trading)\n\n" +
+			"• No orders will be executed\n" +
+			"• Strategy runs stay in shadow observation mode\n" +
+			"• Safe for validating gating and reasoning"
 	}
 
 	status += fmt.Sprintf("\n\nChanged: %s", state.ChangedAt.Format("2006-01-02 15:04:05"))

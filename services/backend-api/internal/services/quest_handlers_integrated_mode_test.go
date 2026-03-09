@@ -46,7 +46,7 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 			expected: OpModeDry,
 		},
 		{
-			name: "unsupported_stored_mode_is_treated_as_dry",
+			name: "stored_paper_preserves_paper_mode",
 			opModeService: &OperationalModeService{
 				config: DefaultOperationalModeConfig(),
 				states: map[string]*OperationalModeState{
@@ -58,6 +58,21 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 			},
 			quest:    &Quest{Metadata: map[string]string{"dry_run": "false"}},
 			chatID:   "chat-paper",
+			expected: ModePaper,
+		},
+		{
+			name: "unsupported_stored_mode_is_treated_as_dry",
+			opModeService: &OperationalModeService{
+				config: DefaultOperationalModeConfig(),
+				states: map[string]*OperationalModeState{
+					"chat-unknown": {
+						ChatID: "chat-unknown",
+						Mode:   OperationalMode("unknown"),
+					},
+				},
+			},
+			quest:    &Quest{Metadata: map[string]string{"dry_run": "false"}},
+			chatID:   "chat-unknown",
 			expected: OpModeDry,
 		},
 		{
@@ -72,7 +87,7 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 			opModeService: nil,
 			quest:         &Quest{Metadata: map[string]string{"paper_trading": "true"}},
 			chatID:        "chat-meta-paper",
-			expected:      OpModeDry,
+			expected:      ModePaper,
 		},
 		{
 			name:          "no_service_or_metadata_defaults_live",
@@ -120,6 +135,14 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyModeFollowsOperatorMode(t *t
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Equal(t, autonomous.StageShadow, state.CurrentStage)
+	assert.Equal(t, autonomous.StatusActive, state.Status)
+
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, "1082762347", ModePaper))
+
+	state, err = store.GetRolloutState(ctx, ScalpingStrategyID("1082762347"))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, autonomous.StagePaper, state.CurrentStage)
 	assert.Equal(t, autonomous.StatusActive, state.Status)
 }
 

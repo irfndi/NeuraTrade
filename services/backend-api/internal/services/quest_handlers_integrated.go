@@ -325,16 +325,21 @@ func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Q
 		switch mode := h.opModeService.GetMode(chatID); mode {
 		case OpModeLive:
 			return OpModeLive
-		case OpModeDry, ModePaper, ModeConservative, ModeModerate, ModeAggressive:
+		case ModePaper:
+			return ModePaper
+		case OpModeDry, ModeConservative, ModeModerate, ModeAggressive:
 			return OpModeDry
 		default:
 			return OpModeDry
 		}
 	}
-	if quest != nil && quest.Metadata != nil &&
-		(strings.EqualFold(strings.TrimSpace(quest.Metadata["dry_run"]), "true") ||
-			strings.EqualFold(strings.TrimSpace(quest.Metadata["paper_trading"]), "true")) {
-		return OpModeDry
+	if quest != nil && quest.Metadata != nil {
+		if strings.EqualFold(strings.TrimSpace(quest.Metadata["paper_trading"]), "true") {
+			return ModePaper
+		}
+		if strings.EqualFold(strings.TrimSpace(quest.Metadata["dry_run"]), "true") {
+			return OpModeDry
+		}
 	}
 	return OpModeLive
 }
@@ -349,8 +354,11 @@ func (h *IntegratedQuestHandlers) syncScalpingStrategyMode(ctx context.Context, 
 	}
 
 	targetMode := autonomous.ModeShadow
-	if mode == OpModeLive {
+	switch mode {
+	case OpModeLive:
 		targetMode = autonomous.ModeLive
+	case ModePaper:
+		targetMode = autonomous.ModePaper
 	}
 	_, err := h.autonomyCoordinator.SetStrategyMode(ctx, strategyID, targetMode)
 	return err
@@ -605,7 +613,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		quest.Metadata = make(map[string]string)
 	}
 	quest.Metadata["dry_run"] = strconv.FormatBool(isDryRun)
-	quest.Metadata["paper_trading"] = quest.Metadata["dry_run"]
+	quest.Metadata["paper_trading"] = strconv.FormatBool(currentMode == ModePaper)
 	ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
 		ChatID:     chatID,
 		StrategyID: ScalpingStrategyID(chatID),

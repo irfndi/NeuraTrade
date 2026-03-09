@@ -371,6 +371,7 @@ func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testin
 
 	assert.Contains(t, prompt, "Effective Min Confidence (must obey): 0.65")
 	assert.Contains(t, prompt, "Effective Max Capital % (must obey): 12.00")
+	assert.Contains(t, prompt, "Wallet Basis For size_pct: 50.00")
 	assert.Contains(t, prompt, "Executable Size Band % (must obey if action != hold): 12.00 - 12.00")
 	assert.Contains(t, prompt, "Exchange Minimum Futures Notional: 6.00 USDT")
 	assert.Contains(t, prompt, "Estimated Initial Margin @ 5x: 1.20 USDT")
@@ -378,6 +379,20 @@ func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testin
 	assert.Contains(t, prompt, "Policy note: account-tier and recovery adjustments are already reflected")
 	assert.NotContains(t, prompt, "Phase Min Confidence (reference only)")
 	assert.NotContains(t, prompt, "Phase Max Capital % (reference only)")
+}
+
+func TestAIScalpingService_BuildUserPrompt_SurfacesWalletBasisFallback(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
+	prompt := svc.buildUserPrompt(context.Background(), nil, TradingPortfolio{
+		USDTBalance:            0,
+		TotalValue:             46.93,
+		AccountTier:            "micro",
+		StrategyPhase:          "bootstrap",
+		EffectiveMinConfidence: 0.65,
+		EffectiveMaxCapitalPct: 12.78,
+	})
+
+	assert.Contains(t, prompt, "Wallet Basis For size_pct: 46.93")
 }
 
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
