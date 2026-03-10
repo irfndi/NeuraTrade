@@ -749,7 +749,7 @@ func portfolioTotalValueDecimal(portfolio TradingPortfolio) decimal.Decimal {
 	if portfolio.TotalValue > 0 {
 		return decimalFromBalanceFloat(portfolio.TotalValue)
 	}
-	return decimal.Zero
+	return walletBasis(portfolio)
 }
 
 func decimalFromBalanceFloat(value float64) decimal.Decimal {
@@ -1001,6 +1001,17 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	defer func() {
 		finalizeDecisionMetadata(decision, &policy, effectiveMinConfidence, effectiveMaxCapital, funnel)
 	}()
+	if !walletBasis(portfolio).GreaterThan(decimal.Zero) {
+		reason := "wallet basis is zero; waiting for funded balance before autonomous execution"
+		log.Printf("[AI-SCALPING] %s", reason)
+		decision = strategyHoldDecision(reason, 0)
+		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+			Allowed:     false,
+			BlockReason: reason,
+			BlockCode:   appautonomy.CandidateRejectRiskBudget,
+		}
+		return decision, nil
+	}
 	if portfolio.NonExecutableDueToWallet {
 		notional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT)
 		reason := fmt.Sprintf(

@@ -17,6 +17,7 @@ agent-control/
 ```
 
 ## WHERE TO LOOK
+
 | Task | Location | Notes |
 |------|----------|-------|
 | Agent orchestration | `agent_runtime.go` | Quest scheduling, state management |
@@ -33,7 +34,7 @@ agent-control/
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 312 total | 64 open | 1 in progress | 14 blocked | 247 closed | 50 ready
+**Stats:** 313 total | 65 open | 1 in progress | 14 blocked | 247 closed | 51 ready
 
 ## ANTI-PATTERNS
 - Allowing agent to bypass risk policy.

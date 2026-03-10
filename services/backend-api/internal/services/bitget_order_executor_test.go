@@ -107,7 +107,14 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmou
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/account/account"):
+		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/contracts"):
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{
+				"sizeMultiplier":"1",
+				"minTradeNum":"1",
+				"volumePlace":"0",
+				"pricePlace":"2"
+			}]}`))
+		case r.URL.Path == "/api/v2/mix/order/place-order":
 			_, _ = w.Write([]byte(`{"code":"40001","msg":"symbol not exist","data":{}}`))
 		case r.URL.Path == "/api/v2/spot/trade/place-order":
 			body, err := io.ReadAll(r.Body)
@@ -129,7 +136,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmou
 		Side:              "buy",
 		MarketType:        "futures",
 		AllowSpotFallback: true,
-		Leverage:          5,
+		Leverage:          0,
 		AmountUSDT:        decimal.NewFromInt(3),
 		EntryPrice:        &entryPrice,
 	})

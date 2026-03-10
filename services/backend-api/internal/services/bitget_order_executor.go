@@ -97,6 +97,7 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	var orderID string
 	var err error
 	details.ReduceOnly = isRiskReductionOrder(details)
+	originalAmountUSDT := details.AmountUSDT
 
 	// Try futures first. Spot fallback is explicit via AllowSpotFallback.
 	if details.MarketType == "futures" {
@@ -127,7 +128,8 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 				}
 				details.MarketType = "spot"
 				details.Side = spotSide
-				orderID, err = e.placeSpotOrder(ctx, apiSymbol, spotSide, details.AmountUSDT, details.EntryPrice)
+				details.AmountUSDT = originalAmountUSDT
+				orderID, err = e.placeSpotOrder(ctx, apiSymbol, spotSide, originalAmountUSDT, details.EntryPrice)
 			} else if shouldFallbackToSpot(err) {
 				return "", fmt.Errorf("futures-only mode prevented spot fallback for %s: %w", apiSymbol, err)
 			}

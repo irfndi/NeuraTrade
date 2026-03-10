@@ -284,17 +284,17 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 			expectedPnL:    decimal.NewFromInt(5),
 		},
 		{
-			name: "scoped_no_match_falls_back_to_legacy_memory",
+			name: "scoped_no_match_returns_empty_scoped_stats",
 			scope: ScalpingAutonomyScope{
 				ChatID:   "chat-1",
 				Exchange: "kraken",
 			},
-			expectedTrades: 2,
-			expectedWins:   1,
-			expectedLosses: 1,
+			expectedTrades: 0,
+			expectedWins:   0,
+			expectedLosses: 0,
 			expectedBreak:  0,
-			expectedDecis:  2,
-			expectedPnL:    decimal.NewFromInt(1),
+			expectedDecis:  0,
+			expectedPnL:    decimal.Zero,
 		},
 		{
 			name:           "empty_scope_falls_back_to_legacy_memory",
@@ -322,6 +322,32 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 			assert.True(t, stats.TotalPnL.Equal(tt.expectedPnL), "expected pnl %s, got %s", tt.expectedPnL.String(), stats.TotalPnL.String())
 		})
 	}
+}
+
+func TestTradeMemory_GetPerformanceStatsWindow_UsesConfiguredDefaultLookback(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemoryWithConfig(db, TradeMemoryConfig{
+		MemoryLookbackHoursDefault: 24,
+		MemorySampleLimitDefault:   250,
+	})
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
+		('recent_1', ?, 'bitget', 'BTC/USDT', 'buy', 'win', 2, 0.90),
+		('old_1', ?, 'bitget', 'ETH/USDT', 'buy', 'loss', -1, 0.60)`,
+		time.Now().UTC().Add(-6*time.Hour),
+		time.Now().UTC().Add(-48*time.Hour),
+	)
+	require.NoError(t, err)
+
+	stats, err := tm.GetPerformanceStatsWindow(context.Background(), 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, 24, stats.LookbackHours)
+	assert.Equal(t, 1, stats.TotalTrades)
+	assert.Equal(t, 1, stats.Wins)
+	assert.Zero(t, stats.Losses)
+	assert.True(t, stats.TotalPnL.Equal(decimal.NewFromInt(2)))
 }
 
 func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {

@@ -1147,6 +1147,30 @@ func TestAIScalpingService_ExecuteTradingCycle_HoldsWhenWalletBelowExchangeMinim
 	assert.Zero(t, decision.EffectiveMaxCapitalPct)
 }
 
+func TestAIScalpingService_ExecuteTradingCycle_HoldsWhenWalletBasisIsZero(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange: "bitget",
+			Leverage: 5,
+			Timeout:  5 * time.Second,
+		},
+		symbolGuards: make(map[string]symbolExecutionGuard),
+	}
+
+	decision, err := svc.ExecuteTradingCycle(context.Background(), TradingPortfolio{})
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "hold", decision.Action)
+	assert.Contains(t, decision.Reasoning, "wallet basis is zero")
+	if assert.NotNil(t, decision.ExecutionGate) {
+		assert.False(t, decision.ExecutionGate.Allowed)
+	}
+	assert.NotEmpty(t, decision.AccountTier)
+	assert.Greater(t, decision.EffectiveMinConfidence, 0.0)
+	assert.Zero(t, decision.EffectiveMaxCapitalPct)
+}
+
 func TestAIScalpingService_ScalpingCyclePolicy_UsesScopedLossStreakInsteadOfGlobalSingleton(t *testing.T) {
 	previous := globalScalpingPerformance
 	globalScalpingPerformance = NewScalpingPerformance()

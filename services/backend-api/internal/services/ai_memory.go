@@ -415,7 +415,7 @@ func (tm *TradeMemory) GetPerformanceStats(ctx context.Context) (map[string]inte
 
 func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHours int) (*TradePerformanceWindowStats, error) {
 	if lookbackHours <= 0 {
-		lookbackHours = 24 * 30
+		lookbackHours = tm.config.MemoryLookbackHoursDefault
 	}
 	windowTo := time.Now().UTC()
 	windowFrom := windowTo.Add(-time.Duration(lookbackHours) * time.Hour)
@@ -435,6 +435,8 @@ func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHo
 			realizedStats.WindowFrom = windowFrom
 			realizedStats.WindowTo = windowTo
 			return realizedStats, nil
+		} else {
+			return stats, nil
 		}
 	}
 
