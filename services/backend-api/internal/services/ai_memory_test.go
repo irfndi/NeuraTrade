@@ -342,6 +342,7 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 	) VALUES
 		('rp_a', 'ord_a', 'chat-1', 'bitget', 'btc/usdt', 'buy', 1, 100, 102, 2, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_b', 'ord_b', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_future', 'ord_future', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 140, 40, 0, 'autonomous', datetime('now', '+2 hours'), datetime('now', '+2 hours')),
 		('rp_c', 'ord_c', 'chat-2', 'bitget', 'BTC/USDT', 'buy', 1, 100, 109, 9, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_d', 'ord_d', 'chat-1', 'binance', 'BTC/USDT', 'buy', 1, 100, 108, 8, 0, 'autonomous', datetime('now'), datetime('now'))`)
 	require.NoError(t, err)

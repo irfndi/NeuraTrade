@@ -2069,6 +2069,7 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 				normalizedAction,
 				err,
 			)
+			return 0, 0, false
 		} else if found {
 			if scoped.SampleSize >= minSamples {
 				return scoped.NetExpectancy, scoped.SampleSize, true

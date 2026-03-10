@@ -141,7 +141,10 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 		effectiveLeverage = d.Leverage
 	}
 	if d.MarketType == "futures" {
-		marketStr = fmt.Sprintf("Futures (%dx)", effectiveLeverage)
+		marketStr = "Futures"
+		if effectiveLeverage > 0 {
+			marketStr = fmt.Sprintf("Futures (%dx)", effectiveLeverage)
+		}
 	}
 
 	var lines []string

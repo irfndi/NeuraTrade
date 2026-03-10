@@ -792,7 +792,7 @@ func TestAIScalpingService_EstimateNetExpectancy_ScopedSampleBelowMinThresholdFa
 	assert.InDelta(t, 0.5, expectancy, 0.0001)
 }
 
-func TestAIScalpingService_EstimateNetExpectancy_ScopedQueryErrorFallsBackToLegacyHistory(t *testing.T) {
+func TestAIScalpingService_EstimateNetExpectancy_ScopedQueryErrorReturnsSafeDegradedState(t *testing.T) {
 	original := globalScalpingPerformance
 	globalScalpingPerformance = NewScalpingPerformance()
 	t.Cleanup(func() {
@@ -824,9 +824,9 @@ func TestAIScalpingService_EstimateNetExpectancy_ScopedQueryErrorFallsBackToLega
 	})
 
 	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
-	assert.True(t, found)
-	assert.Equal(t, 2, sample)
-	assert.InDelta(t, 0.5, expectancy, 0.0001)
+	assert.False(t, found)
+	assert.Zero(t, sample)
+	assert.Zero(t, expectancy)
 }
 
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {

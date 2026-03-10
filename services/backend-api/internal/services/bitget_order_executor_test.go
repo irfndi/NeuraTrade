@@ -345,6 +345,42 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_ErrOnVerificationMismatch(t *
 	assert.Equal(t, 1, setCalls)
 }
 
+func TestBitgetOrderExecutor_SyncFuturesLeverageForDetails_NormalizesSideAliases(t *testing.T) {
+	accountCalls := 0
+	setCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
+				"marginMode":"isolated",
+				"posMode":"one_way_mode",
+				"isolatedShortLever":"5"
+			}}`))
+		case "/api/v2/mix/account/set-leverage":
+			setCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	leverage, status, err := executor.syncFuturesLeverageForDetails(context.Background(), "BTCUSDT", TradeDetails{
+		Side:     "open_short",
+		Leverage: 5,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "exchange confirmed", status)
+	assert.Equal(t, 1, accountCalls)
+	assert.Zero(t, setCalls)
+}
+
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksOnLeverageSyncFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -417,6 +453,25 @@ func TestBitgetOrderExecutor_FormatTradeNotification_FallsBackToConfiguredLevera
 	assert.Contains(t, msg, "Futures (5x)")
 	assert.Contains(t, msg, "⚙️ Leverage: 5x (not synced)")
 	assert.NotContains(t, msg, "Futures (0x)")
+}
+
+func TestBitgetOrderExecutor_FormatTradeNotification_SuppressesZeroLeverageLabel(t *testing.T) {
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+
+	msg := executor.formatTradeNotification(TradeDetails{
+		Symbol:             "BTC/USDT",
+		Side:               "buy",
+		MarketType:         "futures",
+		TradeType:          "scalping",
+		Leverage:           0,
+		EffectiveLeverage:  0,
+		LeverageSyncStatus: "",
+		AmountUSDT:         decimal.NewFromInt(100),
+	}, "ord-789")
+
+	assert.Contains(t, msg, "📍 Market: Futures")
+	assert.NotContains(t, msg, "Futures (0x)")
+	assert.NotContains(t, msg, "⚙️ Leverage:")
 }
 
 func TestContractInfo(t *testing.T) {

@@ -520,8 +520,12 @@ func (e *BitgetOrderExecutor) syncFuturesLeverageForDetails(
 	symbol string,
 	details TradeDetails,
 ) (int, string, error) {
+	bitgetSide, err := normalizeBitgetFuturesSide(details.Side)
+	if err != nil {
+		return 0, "", fmt.Errorf("normalize futures side for leverage sync: %w", err)
+	}
 	holdSide := "long"
-	if strings.EqualFold(strings.TrimSpace(details.Side), "sell") {
+	if bitgetSide == "sell" {
 		holdSide = "short"
 	}
 	effectiveLeverage, syncStatus, err := e.ensureFuturesLeverage(
@@ -948,7 +952,10 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 		effectiveLeverage = d.Leverage
 	}
 	if d.MarketType == "futures" {
-		marketStr = fmt.Sprintf("Futures (%dx)", effectiveLeverage)
+		marketStr = "Futures"
+		if effectiveLeverage > 0 {
+			marketStr = fmt.Sprintf("Futures (%dx)", effectiveLeverage)
+		}
 	}
 
 	var lines []string

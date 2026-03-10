@@ -457,6 +457,8 @@ func (tm *TradeMemory) getRealizedPnLWindowStats(
 		return nil, false, nil
 	}
 
+	chatID := strings.TrimSpace(scope.ChatID)
+	exchange := strings.TrimSpace(scope.Exchange)
 	query := `
 		SELECT
 			COUNT(*),
@@ -465,17 +467,11 @@ func (tm *TradeMemory) getRealizedPnLWindowStats(
 			COALESCE(SUM(CASE WHEN realized_pnl = 0 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(realized_pnl), 0)
 		FROM realized_pnl_journal
-		WHERE closed_at >= $1 AND closed_at <= $2
+		WHERE closed_at >= ? AND closed_at <= ?
+			AND (? = '' OR COALESCE(chat_id, '') = ?)
+			AND (? = '' OR exchange = ?)
 	`
-	args := []interface{}{windowFrom.UTC(), windowTo.UTC()}
-	if chatID := strings.TrimSpace(scope.ChatID); chatID != "" {
-		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
-		args = append(args, chatID)
-	}
-	if exchange := strings.TrimSpace(scope.Exchange); exchange != "" {
-		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
-		args = append(args, exchange)
-	}
+	args := []interface{}{windowFrom.UTC(), windowTo.UTC(), chatID, chatID, exchange, exchange}
 
 	stats := &TradePerformanceWindowStats{}
 	var totalTrades int
@@ -524,28 +520,45 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		limit = 250
 	}
 
-	query := `
+	windowTo := time.Now().UTC()
+	chatID := strings.TrimSpace(scope.ChatID)
+	exchange := strings.TrimSpace(scope.Exchange)
+	normalizedSymbol := normalizeSymbolForComparison(symbol)
+	normalizedAction := normalizeLifecycleSide(action)
+
+	const scopedExpectancyQuery = `
 		SELECT CAST(realized_pnl AS TEXT), symbol
 		FROM realized_pnl_journal
-		WHERE closed_at >= $1
+		WHERE closed_at >= ? AND closed_at <= ?
+			AND (? = '' OR COALESCE(chat_id, '') = ?)
+			AND (? = '' OR exchange = ?)
+			AND (? = '' OR side = ?)
+		ORDER BY closed_at DESC
 	`
-	args := []interface{}{time.Now().UTC().Add(-time.Duration(lookbackHours) * time.Hour)}
-	if chatID := strings.TrimSpace(scope.ChatID); chatID != "" {
-		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
-		args = append(args, chatID)
+	const scopedExpectancyLimitedQuery = `
+		SELECT CAST(realized_pnl AS TEXT), symbol
+		FROM realized_pnl_journal
+		WHERE closed_at >= ? AND closed_at <= ?
+			AND (? = '' OR COALESCE(chat_id, '') = ?)
+			AND (? = '' OR exchange = ?)
+			AND (? = '' OR side = ?)
+		ORDER BY closed_at DESC
+		LIMIT ?
+	`
+	query := scopedExpectancyQuery
+	args := []interface{}{
+		windowTo.Add(-time.Duration(lookbackHours) * time.Hour),
+		windowTo,
+		chatID,
+		chatID,
+		exchange,
+		exchange,
+		normalizedAction,
+		normalizedAction,
 	}
-	if exchange := strings.TrimSpace(scope.Exchange); exchange != "" {
-		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
-		args = append(args, exchange)
-	}
-	normalizedSymbol := normalizeSymbolForComparison(symbol)
-	if normalizedAction := normalizeLifecycleSide(action); normalizedAction != "" {
-		query += fmt.Sprintf(" AND side = $%d", len(args)+1)
-		args = append(args, normalizedAction)
-	}
-	query += " ORDER BY closed_at DESC"
 	if limit > 0 && normalizedSymbol == "" {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query = scopedExpectancyLimitedQuery
+		args = append(args, limit)
 	}
 
 	rows, err := tm.db.QueryContext(ctx, query, args...)
