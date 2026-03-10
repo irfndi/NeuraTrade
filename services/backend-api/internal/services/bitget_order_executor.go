@@ -22,8 +22,6 @@ import (
 	"golang.org/x/text/language"
 )
 
-var bitgetMinUSDTNotional = appautonomy.BitgetFuturesMinNotional()
-
 // BitgetOrderExecutor executes real orders on Bitget exchange
 type BitgetOrderExecutor struct {
 	apiKey              string
@@ -153,6 +151,10 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	return orderID, nil
 }
 
+func bitgetFuturesMinUSDTNotional() decimal.Decimal {
+	return appautonomy.BitgetFuturesMinNotional()
+}
+
 // placeFuturesOrder places a futures market order
 func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, side string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
 	// Bitget v2 expects side=buy|sell (not open_long/open_short).
@@ -165,10 +167,11 @@ func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, sid
 		holdSide = "short"
 	}
 
-	if amount.LessThan(bitgetMinUSDTNotional) {
+	minNotional := bitgetFuturesMinUSDTNotional()
+	if amount.LessThan(minNotional) {
 		fmt.Printf("[BITGET-ORDER] Amount %s USDT below minimum, bumping to %s USDT\n",
-			amount.String(), bitgetMinUSDTNotional.String())
-		amount = bitgetMinUSDTNotional
+			amount.String(), minNotional.String())
+		amount = minNotional
 	}
 
 	// For buy, we're opening a long position
@@ -275,10 +278,11 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		}
 	} else {
 		amountUSDT := details.AmountUSDT
-		if amountUSDT.LessThan(bitgetMinUSDTNotional) {
+		minNotional := bitgetFuturesMinUSDTNotional()
+		if amountUSDT.LessThan(minNotional) {
 			fmt.Printf("[BITGET-ORDER] Amount %s USDT below minimum, bumping to %s USDT\n",
-				amountUSDT.String(), bitgetMinUSDTNotional.String())
-			amountUSDT = bitgetMinUSDTNotional
+				amountUSDT.String(), minNotional.String())
+			amountUSDT = minNotional
 		}
 
 		// Calculate contract size:
@@ -295,7 +299,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 			contractSize = contractInfo.MinTradeNum
 		}
 		// Ensure resulting notional is not below Bitget's minimum without iterative bumps.
-		minContractsForNotional := bitgetMinUSDTNotional.
+		minContractsForNotional := minNotional.
 			Div(price).
 			Div(contractInfo.SizeMultiplier).
 			RoundCeil(safeInt32(contractInfo.VolumePlace))

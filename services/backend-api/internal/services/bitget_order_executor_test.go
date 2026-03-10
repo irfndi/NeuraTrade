@@ -95,6 +95,12 @@ func TestBitgetOrderExecutor_SetWalletBalance(t *testing.T) {
 	assert.Equal(t, 1000.0, executor.walletBalance)
 }
 
+func TestBitgetOrderExecutor_MinNotionalUsesDynamicEnv(t *testing.T) {
+	t.Setenv("NEURATRADE_BITGET_FUTURES_MIN_NOTIONAL_USDT", "7.25")
+
+	assert.True(t, bitgetFuturesMinUSDTNotional().Equal(decimal.NewFromFloat(7.25)))
+}
+
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmount(t *testing.T) {
 	var spotOrderBody map[string]interface{}
 
