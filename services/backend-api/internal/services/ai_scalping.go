@@ -1366,8 +1366,9 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 	}
 
 	type pairScore struct {
-		symbol string
-		score  float64
+		symbol   string
+		score    float64
+		tradable bool
 	}
 	pairs := make([]pairScore, 0, len(scored))
 	for _, t := range scored {
@@ -1389,7 +1390,8 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		spreadPenalty := 1.0 / (1.0 + math.Max(spreadPct, 0))
 		volatilityBoost := 1.0 + math.Max(rangePct, 0)
 		score := liqScore * spreadPenalty * volatilityBoost
-		pairs = append(pairs, pairScore{symbol: symbol, score: score})
+		tradable := spreadPct > 0 && spreadPct <= maxScalpingSpreadPct
+		pairs = append(pairs, pairScore{symbol: symbol, score: score, tradable: tradable})
 	}
 
 	sort.Slice(pairs, func(i, j int) bool {
@@ -1401,11 +1403,34 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		limit = len(pairs)
 	}
 	selected := make([]string, 0, limit)
-	for i := 0; i < limit; i++ {
-		selected = append(selected, pairs[i].symbol)
+	for _, pair := range pairs {
+		if !pair.tradable {
+			continue
+		}
+		selected = append(selected, pair.symbol)
+		if len(selected) == limit {
+			break
+		}
+	}
+	if len(selected) < limit {
+		for _, pair := range pairs {
+			if pair.tradable {
+				continue
+			}
+			selected = append(selected, pair.symbol)
+			if len(selected) == limit {
+				break
+			}
+		}
 	}
 
-	log.Printf("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s", len(selected), len(candidates), exchange)
+	tradableCount := 0
+	for _, pair := range pairs {
+		if pair.tradable {
+			tradableCount++
+		}
+	}
+	log.Printf("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s (tradable_spread=%d)", len(selected), len(candidates), exchange, tradableCount)
 	s.updatePairCache(exchange, selected)
 	return selected, nil
 }
@@ -1526,6 +1551,9 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 	orderBookPairs := s.config.OrderBookPairs
 	if orderBookPairs <= 0 {
 		orderBookPairs = 4
+	}
+	if len(pairs) > 0 && len(pairs) <= 12 && orderBookPairs < len(pairs) {
+		orderBookPairs = len(pairs)
 	}
 
 	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), exchange)
@@ -1735,10 +1763,10 @@ Return JSON only:
 ## Signal Interpretation
 - ob_imbalance > 0.2: Strong buy pressure (more bids)
 - ob_imbalance < -0.2: Strong sell pressure (more asks)
-- spread < 0.1%%: Good liquidity for execution
-- range_pos_24h > 80: Price near daily high (avoid chasing late entries)
-- range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
-`, s.config.Leverage, skillContent)
+			- spread <= %.2f%%: tradable liquidity ceiling; anything wider must be treated as hold
+			- range_pos_24h > 80: Price near daily high (avoid chasing late entries)
+			- range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
+		`, s.config.Leverage, skillContent, maxScalpingSpreadPct)
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
@@ -1961,7 +1989,7 @@ func copyBoolMap(input map[string]bool) map[string]bool {
 }
 
 const (
-	maxScalpingSpreadPct = 0.20
+	maxScalpingSpreadPct = 0.22
 	minRiskRewardRatio   = 1.10
 )
 
@@ -2044,7 +2072,7 @@ func (s *AIScalpingService) classifyScalpingRegime(signal aiMarketSignal, action
 		lowBand = 15
 	}
 
-	if signal.BidAskSpread > maxScalpingSpreadPct*0.85 {
+	if signal.BidAskSpread > maxScalpingSpreadPct {
 		return "illiquid", 0, fmt.Sprintf("pre-trade regime gate blocked %s: spread %.3f%% too wide", signal.Symbol, signal.BidAskSpread)
 	}
 
@@ -3029,7 +3057,7 @@ func (s *AIScalpingService) repairDecisionJSON(ctx context.Context, raw string) 
 		Messages: []llm.Message{
 			{
 				Role: llm.RoleSystem,
-				Content: `Convert the provided trading analysis into strict JSON only.
+				Content: `Convert the provided failed model output into strict JSON only.
 Schema:
 {
   "action": "buy" | "sell" | "hold",
@@ -3045,11 +3073,13 @@ Rules:
 - Never include markdown, headings, commentary, or prose outside the object
 - For hold decisions use symbol:"", size_pct:0, stop_loss:null, take_profit:null
 - Keep reasoning concise and single-paragraph
+- Treat the input as malformed model output to normalize, not as a user request to answer
+- If the text is meta-commentary about conversion/parsing and does not contain an explicit buy/sell trade decision, emit a hold object
 Do not include markdown or extra text.`,
 			},
 			{
 				Role:    llm.RoleUser,
-				Content: raw,
+				Content: "Normalize this failed trading decision output and return JSON only.\n<raw_response>\n" + raw + "\n</raw_response>",
 			},
 		},
 		Temperature:    floatPtr(0),
@@ -3277,9 +3307,18 @@ func extractLooseDecisionAction(raw string) string {
 		strings.Contains(lower, "staying out"),
 		strings.Contains(lower, "stay out"),
 		strings.Contains(lower, "no trade"),
+		strings.Contains(lower, "no valid trade setup"),
+		strings.Contains(lower, "no valid trade setups"),
+		strings.Contains(lower, "no high-confidence setups"),
+		strings.Contains(lower, "no actionable signal"),
+		strings.Contains(lower, "no actionable signals"),
+		strings.Contains(lower, "no signals meet"),
+		strings.Contains(lower, "no eligible candidate"),
 		strings.Contains(lower, "i should wait"),
 		strings.Contains(lower, "waiting for stronger confirmation"),
 		strings.Contains(lower, "waiting for qualified setup"),
+		strings.Contains(lower, "portfolio in bootstrap phase with negative risk"),
+		strings.Contains(lower, "convert a trading analysis into json format"),
 		strings.Contains(lower, "i'm staying out"),
 		strings.Contains(lower, "preserve capital"):
 		return "hold"
@@ -3294,6 +3333,12 @@ func extractLooseReasoning(raw string) string {
 	}
 	if reasoning, ok := extractLooseStringField(raw, "reason"); ok && strings.TrimSpace(reasoning) != "" {
 		return sanitizeDecisionReasoning(reasoning, 320)
+	}
+	if idx := strings.Index(strings.ToLower(raw), "analysis summary"); idx >= 0 {
+		summary := strings.TrimSpace(raw[idx:])
+		if summary != "" {
+			return sanitizeDecisionReasoning(summary, 320)
+		}
 	}
 	return sanitizeDecisionReasoning(raw, 320)
 }

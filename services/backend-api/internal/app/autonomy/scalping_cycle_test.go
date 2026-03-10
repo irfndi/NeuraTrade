@@ -283,15 +283,13 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 
 	require.Equal(t, 3, snapshot.CandidateUniverseCount)
 	require.Equal(t, 3, snapshot.CandidateRankedCount)
-	require.Equal(t, 0, snapshot.CandidateViableCount)
-	require.Len(t, snapshot.TopCandidateRejections, 3)
+	require.Equal(t, 1, snapshot.CandidateViableCount)
+	require.Len(t, snapshot.TopCandidateRejections, 2)
 	reasons := []string{
 		snapshot.TopCandidateRejections[0].Reason,
 		snapshot.TopCandidateRejections[1].Reason,
-		snapshot.TopCandidateRejections[2].Reason,
 	}
 	require.Contains(t, reasons, CandidateRejectSpreadTooWide)
-	require.Contains(t, reasons, CandidateRejectConfidenceBelowThreshold)
 	require.Contains(t, reasons, CandidateRejectMissingOrderbookSignal)
 }
 

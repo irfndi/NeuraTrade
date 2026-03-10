@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
@@ -1134,18 +1135,20 @@ func TestIntegratedQuestHandlers_SetDB_RetriesTradeJournalInitAfterDBReplacement
 func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsStaleDecisionMetadata(t *testing.T) {
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{
-		"account_tier":                       "micro",
-		"effective_min_confidence":           0.72,
-		"effective_max_capital_pct":          1.25,
-		"effective_max_concurrent_positions": 1,
-		"effective_policy_adjustments":       []string{"recovery_cap"},
-		"candidate_universe_count":           8,
-		"candidate_ranked_count":             3,
-		"candidate_viable_count":             1,
-		"top_candidate_rejections":           []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "spread_too_wide"}},
-		"rollout_stage_current":              "paper",
-		"rollout_status_current":             "paused",
-		"rollout_gate_reason_current":        "safe mode",
+		"account_tier":                          "micro",
+		"effective_min_confidence":              0.72,
+		"effective_max_capital_pct":             1.25,
+		"effective_max_concurrent_positions":    1,
+		"effective_policy_adjustments":          []string{"recovery_cap"},
+		"effective_policy_adjustment_counts":    map[string]int{"recovery_cap": 1},
+		"candidate_universe_count":              8,
+		"candidate_ranked_count":                3,
+		"candidate_viable_count":                1,
+		"top_candidate_rejections":              []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "spread_too_wide"}},
+		"top_candidate_rejection_reason_counts": map[string]int{"spread_too_wide": 1},
+		"rollout_stage_current":                 "paper",
+		"rollout_status_current":                "paused",
+		"rollout_gate_reason_current":           "safe mode",
 	}}
 
 	handlers.applyScalpingCycleDecisionDiagnostics(quest, &AITradingDecision{})
@@ -1156,10 +1159,12 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsSta
 		"effective_max_capital_pct",
 		"effective_max_concurrent_positions",
 		"effective_policy_adjustments",
+		"effective_policy_adjustment_counts",
 		"candidate_universe_count",
 		"candidate_ranked_count",
 		"candidate_viable_count",
 		"top_candidate_rejections",
+		"top_candidate_rejection_reason_counts",
 		"rollout_stage_current",
 		"rollout_status_current",
 		"rollout_gate_reason_current",
@@ -1172,11 +1177,13 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsSta
 func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsNilDecisionMetadata(t *testing.T) {
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{
-		"account_tier":                       "small",
-		"effective_min_confidence":           0.70,
-		"effective_max_capital_pct":          2.5,
-		"effective_max_concurrent_positions": 3,
-		"effective_policy_adjustments":       []string{"performance_cap_applied"},
+		"account_tier":                          "small",
+		"effective_min_confidence":              0.70,
+		"effective_max_capital_pct":             2.5,
+		"effective_max_concurrent_positions":    3,
+		"effective_policy_adjustments":          []string{"performance_cap_applied"},
+		"effective_policy_adjustment_counts":    map[string]int{"performance_cap_applied": 1},
+		"top_candidate_rejection_reason_counts": map[string]int{"spread_too_wide": 1},
 	}}
 
 	handlers.applyScalpingCycleDecisionDiagnostics(quest, nil)
@@ -1187,10 +1194,47 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsNil
 		"effective_max_capital_pct",
 		"effective_max_concurrent_positions",
 		"effective_policy_adjustments",
+		"effective_policy_adjustment_counts",
+		"top_candidate_rejection_reason_counts",
 	} {
 		_, ok := quest.Checkpoint[key]
 		assert.False(t, ok, key)
 	}
+}
+
+func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_PopulatesCountMetadata(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+	decision := &AITradingDecision{
+		PolicyAdjustments: []string{
+			"weak_recent_win_rate",
+			"weak_recent_win_rate",
+			"negative_expectancy_cap",
+		},
+		CandidateFunnelKnown: true,
+		CandidateFunnel: appautonomy.CandidateFunnelSnapshot{
+			CandidateUniverseCount: 4,
+			CandidateRankedCount:   3,
+			CandidateViableCount:   1,
+			TopCandidateRejections: []appautonomy.CandidateRejection{
+				{Symbol: "AAA/USDT", Reason: appautonomy.CandidateRejectSpreadTooWide},
+				{Symbol: "BBB/USDT", Reason: appautonomy.CandidateRejectSpreadTooWide},
+				{Symbol: "CCC/USDT", Reason: appautonomy.CandidateRejectMissingOrderbookSignal},
+			},
+		},
+	}
+
+	handlers.applyScalpingCycleDecisionDiagnostics(quest, decision)
+
+	adjCounts, ok := quest.Checkpoint["effective_policy_adjustment_counts"].(map[string]int)
+	require.True(t, ok)
+	assert.Equal(t, 2, adjCounts["weak_recent_win_rate"])
+	assert.Equal(t, 1, adjCounts["negative_expectancy_cap"])
+
+	rejectCounts, ok := quest.Checkpoint["top_candidate_rejection_reason_counts"].(map[string]int)
+	require.True(t, ok)
+	assert.Equal(t, 2, rejectCounts[appautonomy.CandidateRejectSpreadTooWide])
+	assert.Equal(t, 1, rejectCounts[appautonomy.CandidateRejectMissingOrderbookSignal])
 }
 
 func TestIntegratedQuestHandlers_RecordTradeDecision_DoesNotSynthesizeTradeMemoryID(t *testing.T) {

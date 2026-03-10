@@ -44,7 +44,7 @@ const (
 )
 
 const (
-	scalpingMaxBidAskSpreadPct      = 0.20
+	scalpingMaxBidAskSpreadPct      = 0.22
 	scalpingStrongImbalanceFloor    = 0.20
 	scalpingNeutralImbalanceFloor   = 0.10
 	scalpingBuyRangeMax             = 45.0

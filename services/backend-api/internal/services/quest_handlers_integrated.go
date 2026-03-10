@@ -3394,8 +3394,10 @@ func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Q
 	}
 	if len(decision.PolicyAdjustments) > 0 {
 		quest.Checkpoint["effective_policy_adjustments"] = append([]string(nil), decision.PolicyAdjustments...)
+		quest.Checkpoint["effective_policy_adjustment_counts"] = countStringValues(decision.PolicyAdjustments)
 	} else {
 		delete(quest.Checkpoint, "effective_policy_adjustments")
+		delete(quest.Checkpoint, "effective_policy_adjustment_counts")
 	}
 
 	if candidateFunnelHasData(decision.CandidateFunnel) {
@@ -3404,14 +3406,17 @@ func (h *IntegratedQuestHandlers) applyScalpingCycleDecisionDiagnostics(quest *Q
 		quest.Checkpoint["candidate_viable_count"] = decision.CandidateFunnel.CandidateViableCount
 		if encoded := encodeCandidateRejections(decision.CandidateFunnel.TopCandidateRejections); len(encoded) > 0 {
 			quest.Checkpoint["top_candidate_rejections"] = encoded
+			quest.Checkpoint["top_candidate_rejection_reason_counts"] = countCandidateRejectionReasons(decision.CandidateFunnel.TopCandidateRejections)
 		} else {
 			delete(quest.Checkpoint, "top_candidate_rejections")
+			delete(quest.Checkpoint, "top_candidate_rejection_reason_counts")
 		}
 	} else {
 		delete(quest.Checkpoint, "candidate_universe_count")
 		delete(quest.Checkpoint, "candidate_ranked_count")
 		delete(quest.Checkpoint, "candidate_viable_count")
 		delete(quest.Checkpoint, "top_candidate_rejections")
+		delete(quest.Checkpoint, "top_candidate_rejection_reason_counts")
 	}
 
 	if decision.ExecutionGate != nil {
@@ -3435,16 +3440,54 @@ func clearScalpingCycleDecisionDiagnostics(checkpoint map[string]interface{}) {
 		"effective_max_capital_pct",
 		"effective_max_concurrent_positions",
 		"effective_policy_adjustments",
+		"effective_policy_adjustment_counts",
 		"candidate_universe_count",
 		"candidate_ranked_count",
 		"candidate_viable_count",
 		"top_candidate_rejections",
+		"top_candidate_rejection_reason_counts",
 		"rollout_stage_current",
 		"rollout_status_current",
 		"rollout_gate_reason_current",
 	} {
 		delete(checkpoint, key)
 	}
+}
+
+func countStringValues(values []string) map[string]int {
+	if len(values) == 0 {
+		return nil
+	}
+	counts := make(map[string]int, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		counts[value]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
+}
+
+func countCandidateRejectionReasons(rejections []appautonomy.CandidateRejection) map[string]int {
+	if len(rejections) == 0 {
+		return nil
+	}
+	counts := make(map[string]int, len(rejections))
+	for _, rejection := range rejections {
+		reason := strings.TrimSpace(rejection.Reason)
+		if reason == "" {
+			continue
+		}
+		counts[reason]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 func encodeCandidateRejections(rejections []appautonomy.CandidateRejection) []map[string]interface{} {

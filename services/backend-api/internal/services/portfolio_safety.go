@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/irfndi/neuratrade/internal/services/risk"
@@ -18,6 +19,7 @@ import (
 
 type PortfolioSafetyConfig struct {
 	MaxPositionSizePct   float64       `json:"max_position_size_pct"`
+	MaxPositionFloorPct  float64       `json:"max_position_floor_pct"`
 	MaxExposurePct       float64       `json:"max_exposure_pct"`
 	DefaultQuoteCurrency string        `json:"default_quote_currency"`
 	CacheTTL             time.Duration `json:"cache_ttl"`
@@ -26,6 +28,7 @@ type PortfolioSafetyConfig struct {
 func DefaultPortfolioSafetyConfig() PortfolioSafetyConfig {
 	return PortfolioSafetyConfig{
 		MaxPositionSizePct:   0.10,
+		MaxPositionFloorPct:  0.20,
 		MaxExposurePct:       0.50,
 		DefaultQuoteCurrency: "USDT",
 		CacheTTL:             30 * time.Second,
@@ -480,12 +483,48 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 		return false, fmt.Sprintf("Trading not allowed: %v", status.Reasons), nil
 	}
 
-	if size.GreaterThan(status.MaxPositionSize) {
+	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, snapshot, status.MaxPositionSize)
+
+	if size.GreaterThan(effectiveMaxPosition) {
 		return false, fmt.Sprintf("Position size %s exceeds maximum allowed %s (throttled to %.0f%%)",
-			size.StringFixed(2), status.MaxPositionSize.StringFixed(2), status.PositionThrottle*100), nil
+			size.StringFixed(2), effectiveMaxPosition.StringFixed(2), status.PositionThrottle*100), nil
 	}
 
 	return true, "", nil
+}
+
+func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, snapshot *SafetyPortfolioSnapshot, defaultMax decimal.Decimal) decimal.Decimal {
+	if snapshot == nil || !defaultMax.GreaterThan(decimal.Zero) {
+		return defaultMax
+	}
+
+	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)))
+	if !minNotional.GreaterThan(decimal.Zero) || !minNotional.GreaterThan(defaultMax) {
+		return defaultMax
+	}
+	if !snapshot.AvailableFunds.GreaterThanOrEqual(minNotional) || !snapshot.TotalEquity.GreaterThan(decimal.Zero) {
+		return defaultMax
+	}
+
+	requiredPct := minNotional.Div(snapshot.TotalEquity)
+	floorCapPct := s.config.MaxPositionFloorPct
+	if floorCapPct <= 0 {
+		floorCapPct = DefaultPortfolioSafetyConfig().MaxPositionFloorPct
+	}
+	if requiredPct.GreaterThan(decimal.NewFromFloat(floorCapPct)) {
+		return defaultMax
+	}
+
+	return minNotional
+}
+
+func exchangeMinExecutableNotional(exchange string) decimal.Decimal {
+	switch exchange {
+	case "bitget":
+		return appautonomy.BitgetFuturesMinNotional()
+	default:
+		return decimal.Zero
+	}
 }
 
 func (s *PortfolioSafetyService) GetSafetyDiagnostics(ctx context.Context, chatID string, exchanges []string) (map[string]interface{}, error) {

@@ -109,6 +109,7 @@ start_gateway() {
   log_info "Starting gateway using: ${gateway_cmd}"
   (
     cd "$REPO_ROOT"
+    export PATH="${REPO_ROOT}/bin:${PATH}"
     nohup bash -c "$gateway_cmd" >>"${GATEWAY_LOG}" 2>&1 &
     echo $! >"${PID_FILE}"
   )
