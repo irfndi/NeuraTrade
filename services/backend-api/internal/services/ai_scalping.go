@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1371,6 +1372,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		tradable bool
 	}
 	pairs := make([]pairScore, 0, len(scored))
+	maxSpreadPct := appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
 	for _, t := range scored {
 		symbol := t.GetSymbol()
 		price := t.GetPrice()
@@ -1390,7 +1392,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		spreadPenalty := 1.0 / (1.0 + math.Max(spreadPct, 0))
 		volatilityBoost := 1.0 + math.Max(rangePct, 0)
 		score := liqScore * spreadPenalty * volatilityBoost
-		tradable := spreadPct > 0 && spreadPct <= appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
+		tradable := spreadPct > 0 && spreadPct <= maxSpreadPct
 		pairs = append(pairs, pairScore{symbol: symbol, score: score, tradable: tradable})
 	}
 
@@ -1763,9 +1765,10 @@ Return JSON only:
 ## Signal Interpretation
 - ob_imbalance > 0.2: Strong buy pressure (more bids)
 - ob_imbalance < -0.2: Strong sell pressure (more asks)
-	- spread <= %.2f%%: tradable liquidity ceiling; anything wider must be treated as hold
-	- range_pos_24h > 80: Price near daily high (avoid chasing late entries)
-	- range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
+
+- spread <= %.2f%%: tradable liquidity ceiling; anything wider must be treated as hold
+- range_pos_24h > 80: Price near daily high (avoid chasing late entries)
+- range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
 		`, s.config.Leverage, skillContent, appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv())
 }
 
@@ -2071,7 +2074,8 @@ func (s *AIScalpingService) classifyScalpingRegime(signal aiMarketSignal, action
 		lowBand = 15
 	}
 
-	if signal.BidAskSpread > appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv() {
+	spreadThreshold := appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
+	if signal.BidAskSpread > spreadThreshold {
 		return "illiquid", 0, fmt.Sprintf("pre-trade regime gate blocked %s: spread %.3f%% too wide", signal.Symbol, signal.BidAskSpread)
 	}
 
@@ -2249,7 +2253,8 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		entry := decimal.NewFromFloat(resolved.Price)
 		decision.EntryPrice = &entry
 	}
-	if resolved.BidAskSpread > appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv() {
+	spreadThreshold := appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
+	if resolved.BidAskSpread > spreadThreshold {
 		return fmt.Errorf("spread %.3f%% too wide for scalping on %s", resolved.BidAskSpread, decision.Symbol)
 	}
 	if resolved.BidAskSpread == 0 && resolved.OrderBookImbalance == 0 {
@@ -3326,6 +3331,8 @@ func extractLooseDecisionAction(raw string) string {
 	}
 }
 
+var analysisSummaryMarker = regexp.MustCompile(`(?i)analysis summary`)
+
 func extractLooseReasoning(raw string) string {
 	if reasoning, ok := extractLooseStringField(raw, "reasoning"); ok && strings.TrimSpace(reasoning) != "" {
 		return sanitizeDecisionReasoning(reasoning, 320)
@@ -3333,8 +3340,8 @@ func extractLooseReasoning(raw string) string {
 	if reasoning, ok := extractLooseStringField(raw, "reason"); ok && strings.TrimSpace(reasoning) != "" {
 		return sanitizeDecisionReasoning(reasoning, 320)
 	}
-	if idx := strings.Index(strings.ToLower(raw), "analysis summary"); idx >= 0 {
-		summary := strings.TrimSpace(raw[idx:])
+	if loc := analysisSummaryMarker.FindStringIndex(raw); len(loc) == 2 {
+		summary := strings.TrimSpace(raw[loc[0]:])
 		if summary != "" {
 			return sanitizeDecisionReasoning(summary, 320)
 		}
@@ -3672,10 +3679,9 @@ func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio T
 
 func scalpingPolicyConfigFromEnv() appautonomy.ScalpingPolicyConfig {
 	cfg := appautonomy.DefaultScalpingPolicyConfig()
-	cfg.MaxBidAskSpreadPct = appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
-	if value, ok := getEnvFloat(appautonomy.NeuraScalpingMaxBidAskSpreadPctEnv); ok {
+	if value, ok := getEnvFloat(appautonomy.NeuraScalpingMaxBidAskSpreadPctEnv); ok && value > 0 {
 		cfg.MaxBidAskSpreadPct = value
-	} else if value, ok := getEnvFloat(appautonomy.ScalpingMaxBidAskSpreadPctEnv); ok {
+	} else if value, ok := getEnvFloat(appautonomy.ScalpingMaxBidAskSpreadPctEnv); ok && value > 0 {
 		cfg.MaxBidAskSpreadPct = value
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_ACCOUNT_MAX_VALUE"); ok && value > 0 {

@@ -103,6 +103,9 @@ func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
 	if c.MaxBidAskSpreadPct <= 0 {
 		c.MaxBidAskSpreadPct = ResolveScalpingMaxBidAskSpreadPctFromEnv()
 	}
+	if math.IsNaN(c.MaxBidAskSpreadPct) || math.IsInf(c.MaxBidAskSpreadPct, 0) {
+		c.MaxBidAskSpreadPct = ResolveScalpingMaxBidAskSpreadPctFromEnv()
+	}
 	c.MaxBidAskSpreadPct = clampFloat(c.MaxBidAskSpreadPct, 0.0001, 5)
 	if c.MicroMinConfidenceFloor <= 0 {
 		c.MicroMinConfidenceFloor = DefaultMicroMinConfidenceFloor
@@ -592,7 +595,7 @@ func invalidCandidateFloat(value float64) bool {
 }
 
 func resolvePolicySpreadThreshold(policy ScalpingCyclePolicy) float64 {
-	if policy.MaxBidAskSpreadPct > 0 {
+	if !math.IsNaN(policy.MaxBidAskSpreadPct) && !math.IsInf(policy.MaxBidAskSpreadPct, 0) && policy.MaxBidAskSpreadPct > 0 {
 		return policy.MaxBidAskSpreadPct
 	}
 	return ResolveScalpingMaxBidAskSpreadPctFromEnv()
@@ -607,7 +610,7 @@ func ResolveScalpingMaxBidAskSpreadPctFromEnv() float64 {
 		return DefaultScalpingMaxBidAskSpreadPct
 	}
 	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil || value <= 0 {
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
 		return DefaultScalpingMaxBidAskSpreadPct
 	}
 	return clampFloat(value, 0.0001, 5)

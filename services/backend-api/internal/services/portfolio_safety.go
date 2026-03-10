@@ -482,12 +482,12 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 	if !status.TradingAllowed {
 		return false, fmt.Sprintf("Trading not allowed: %v", status.Reasons), nil
 	}
-	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)))
+	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol)
 	if minNotional.GreaterThan(decimal.Zero) && size.GreaterThan(decimal.Zero) && size.LessThan(minNotional) {
 		return false, fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)), nil
 	}
 
-	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, snapshot, status.MaxPositionSize)
+	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, symbol, snapshot, status.MaxPositionSize)
 	effectiveThrottlePct := resolveEffectiveThrottlePct(status.MaxPositionSize, effectiveMaxPosition)
 
 	if size.GreaterThan(effectiveMaxPosition) {
@@ -498,12 +498,12 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 	return true, "", nil
 }
 
-func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, snapshot *SafetyPortfolioSnapshot, defaultMax decimal.Decimal) decimal.Decimal {
+func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, symbol string, snapshot *SafetyPortfolioSnapshot, defaultMax decimal.Decimal) decimal.Decimal {
 	if snapshot == nil || !defaultMax.GreaterThan(decimal.Zero) {
 		return defaultMax
 	}
 
-	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)))
+	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol)
 	if !minNotional.GreaterThan(decimal.Zero) || !minNotional.GreaterThan(defaultMax) {
 		return defaultMax
 	}
@@ -523,13 +523,24 @@ func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string
 	return minNotional
 }
 
-func exchangeMinExecutableNotional(exchange string) decimal.Decimal {
+func exchangeMinExecutableNotional(exchange string, symbol string) decimal.Decimal {
 	switch exchange {
 	case "bitget":
+		if !isLikelyFuturesInstrument(symbol) {
+			return decimal.Zero
+		}
 		return appautonomy.BitgetFuturesMinNotional()
 	default:
 		return decimal.Zero
 	}
+}
+
+func isLikelyFuturesInstrument(symbol string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, ":") || strings.Contains(normalized, "PERP") || strings.Contains(normalized, "SWAP")
 }
 
 func (s *PortfolioSafetyService) GetSafetyDiagnostics(ctx context.Context, chatID string, exchanges []string) (map[string]interface{}, error) {
