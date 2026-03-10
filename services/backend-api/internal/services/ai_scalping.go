@@ -2060,7 +2060,7 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 			expectancyLookbackHours,
 			expectancyQueryLimit,
 		); err == nil && found {
-			return scoped.NetExpectancy, scoped.SampleSize, true
+			return scoped.NetExpectancy, scoped.SampleSize, scoped.SampleSize >= minSamples
 		}
 		if normalizedAction != "" {
 			if scoped, found, err := s.tradeMemory.GetScopedExpectancyStats(
@@ -2070,7 +2070,7 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 				expectancyLookbackHours,
 				expectancyQueryLimit,
 			); err == nil && found {
-				return scoped.NetExpectancy, scoped.SampleSize, true
+				return scoped.NetExpectancy, scoped.SampleSize, scoped.SampleSize >= minSamples
 			}
 		}
 

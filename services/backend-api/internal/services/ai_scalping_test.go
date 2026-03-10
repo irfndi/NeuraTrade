@@ -531,6 +531,50 @@ func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t 
 	})
 }
 
+func TestAIScalpingService_EstimateNetExpectancy_ScopedSampleBelowMinThresholdDoesNotCountAsUsableEdge(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	svc := &AIScalpingService{
+		config:      AIScalpingConfig{MinExpectancyN: 2},
+		tradeMemory: tm,
+	}
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
+	assert.False(t, found)
+	assert.Equal(t, 1, sample)
+	assert.InDelta(t, 3.0, expectancy, 0.0001)
+}
+
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
 	category := normalizeHoldReasonCategory(
 		reasonCategoryStrategyHold,
