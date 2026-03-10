@@ -877,6 +877,45 @@ func TestAIScalpingService_EstimateNetExpectancy_ScopedQueryErrorFallsBackToLega
 	assert.InDelta(t, 0.5, expectancy, 0.0001)
 }
 
+func TestAIScalpingService_EstimateNetExpectancy_BreakevenScopedHistoryDoesNotFallbackToLegacy(t *testing.T) {
+	original := globalScalpingPerformance
+	globalScalpingPerformance = NewScalpingPerformance()
+	t.Cleanup(func() {
+		globalScalpingPerformance = original
+	})
+
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	setupRealizedPnLJournal(t, db)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('flat_1', 'ord_flat_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 100, 0, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
+		('legacy_1', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'win', 2, 0.70),
+		('legacy_2', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'loss', -1, 0.70)`)
+	require.NoError(t, err)
+
+	svc := &AIScalpingService{
+		config:      AIScalpingConfig{MinExpectancyN: 2},
+		tradeMemory: tm,
+	}
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
+	assert.False(t, found)
+	assert.Zero(t, sample)
+	assert.Zero(t, expectancy)
+}
+
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
 	category := normalizeHoldReasonCategory(
 		reasonCategoryStrategyHold,

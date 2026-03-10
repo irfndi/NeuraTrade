@@ -656,11 +656,13 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	stats := &TradeExpectancyStats{}
 	sumWin := decimal.Zero
 	sumLoss := decimal.Zero
+	matchedRows := 0
 	for rows.Next() {
 		var pnl decimal.Decimal
 		if err := rows.Scan(&pnl); err != nil {
 			return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
 		}
+		matchedRows++
 		if pnl.IsZero() {
 			continue
 		}
@@ -677,8 +679,11 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	}
 
 	stats.SampleSize = stats.Wins + stats.Losses
-	if stats.SampleSize == 0 {
+	if matchedRows == 0 {
 		return nil, false, nil
+	}
+	if stats.SampleSize == 0 {
+		return stats, true, nil
 	}
 	stats.NetExpectancy = calculateNetExpectancy(
 		stats.Wins,

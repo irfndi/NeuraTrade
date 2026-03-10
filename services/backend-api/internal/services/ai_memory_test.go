@@ -401,6 +401,28 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 		assert.False(t, found)
 		assert.Nil(t, stats)
 	})
+
+	t.Run("breakeven_only_rows_return_scoped_zero_sample", func(t *testing.T) {
+		_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+			id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+		) VALUES
+			('rp_flat', 'ord_flat', 'chat-flat', 'bitget', 'BTC/USDT', 'buy', 1, 100, 100, 0, 0, 'autonomous', datetime('now'), datetime('now'))`)
+		require.NoError(t, err)
+
+		ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+			ChatID:   "chat-flat",
+			Exchange: "bitget",
+		})
+
+		stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 24*30, 50)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.NotNil(t, stats)
+		assert.Zero(t, stats.SampleSize)
+		assert.Zero(t, stats.Wins)
+		assert.Zero(t, stats.Losses)
+		assert.Zero(t, stats.NetExpectancy)
+	})
 }
 
 func TestTradeMemory_GetScopedExpectancyStats_MissingTableReturnsNoData(t *testing.T) {
