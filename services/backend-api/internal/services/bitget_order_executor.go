@@ -471,10 +471,6 @@ type bitgetFuturesAccount struct {
 	IsolatedShortLeverage int
 }
 
-func (a bitgetFuturesAccount) effectiveLeverage(holdSide string) int {
-	return a.effectiveLeverageForMarginMode(holdSide, "")
-}
-
 func (a bitgetFuturesAccount) effectiveLeverageForMarginMode(holdSide string, marginMode string) int {
 	holdSide = strings.ToLower(strings.TrimSpace(holdSide))
 	marginMode = strings.ToLower(strings.TrimSpace(marginMode))
