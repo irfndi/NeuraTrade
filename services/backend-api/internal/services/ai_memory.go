@@ -13,7 +13,13 @@ import (
 )
 
 type TradeMemory struct {
-	db *sql.DB
+	db     *sql.DB
+	config TradeMemoryConfig
+}
+
+type TradeMemoryConfig struct {
+	MemoryLookbackHoursDefault int
+	MemorySampleLimitDefault   int
 }
 
 type AITradeRecord struct {
@@ -55,12 +61,55 @@ type TradePerformanceWindowStats struct {
 	AvgConfidence      float64
 }
 
+type TradeExpectancyStats struct {
+	SampleSize    int
+	Wins          int
+	Losses        int
+	NetExpectancy float64
+}
+
 func NewTradeMemory(db *sql.DB) (*TradeMemory, error) {
-	tm := &TradeMemory{db: db}
+	return NewTradeMemoryWithConfig(db, DefaultTradeMemoryConfig())
+}
+
+func NewTradeMemoryWithConfig(db *sql.DB, config TradeMemoryConfig) (*TradeMemory, error) {
+	tm := &TradeMemory{
+		db:     db,
+		config: normalizeTradeMemoryConfig(config),
+	}
 	if err := tm.initTables(); err != nil {
 		return nil, fmt.Errorf("failed to init trade memory tables: %w", err)
 	}
 	return tm, nil
+}
+
+func DefaultTradeMemoryConfig() TradeMemoryConfig {
+	return TradeMemoryConfig{
+		MemoryLookbackHoursDefault: 24 * 30,
+		MemorySampleLimitDefault:   250,
+	}
+}
+
+func ResolveTradeMemoryConfigFromEnv(base TradeMemoryConfig) TradeMemoryConfig {
+	cfg := normalizeTradeMemoryConfig(base)
+	if value := getEnvInt("NEURATRADE_AI_MEMORY_LOOKBACK_HOURS"); value > 0 {
+		cfg.MemoryLookbackHoursDefault = value
+	}
+	if value := getEnvInt("NEURATRADE_AI_MEMORY_SAMPLE_LIMIT"); value > 0 {
+		cfg.MemorySampleLimitDefault = value
+	}
+	return normalizeTradeMemoryConfig(cfg)
+}
+
+func normalizeTradeMemoryConfig(config TradeMemoryConfig) TradeMemoryConfig {
+	defaults := DefaultTradeMemoryConfig()
+	if config.MemoryLookbackHoursDefault <= 0 {
+		config.MemoryLookbackHoursDefault = defaults.MemoryLookbackHoursDefault
+	}
+	if config.MemorySampleLimitDefault <= 0 {
+		config.MemorySampleLimitDefault = defaults.MemorySampleLimitDefault
+	}
+	return config
 }
 
 func (tm *TradeMemory) initTables() error {
@@ -366,7 +415,7 @@ func (tm *TradeMemory) GetPerformanceStats(ctx context.Context) (map[string]inte
 
 func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHours int) (*TradePerformanceWindowStats, error) {
 	if lookbackHours <= 0 {
-		lookbackHours = 24 * 30
+		lookbackHours = tm.config.MemoryLookbackHoursDefault
 	}
 	windowTo := time.Now().UTC()
 	windowFrom := windowTo.Add(-time.Duration(lookbackHours) * time.Hour)
@@ -376,6 +425,19 @@ func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHo
 		WindowFrom:    windowFrom,
 		WindowTo:      windowTo,
 		TotalPnL:      decimal.Zero,
+	}
+
+	if scope, ok := scalpingAutonomyScopeFromContext(ctx); ok && hasRealizedPnLWindowScope(scope) {
+		if realizedStats, found, err := tm.getRealizedPnLWindowStats(ctx, windowFrom, windowTo); err != nil {
+			return nil, err
+		} else if found {
+			realizedStats.LookbackHours = lookbackHours
+			realizedStats.WindowFrom = windowFrom
+			realizedStats.WindowTo = windowTo
+			return realizedStats, nil
+		} else {
+			return stats, nil
+		}
 	}
 
 	rows, err := tm.db.QueryContext(ctx, `
@@ -427,6 +489,181 @@ func (tm *TradeMemory) GetPerformanceStatsWindow(ctx context.Context, lookbackHo
 		stats.DecisiveWinRatePct = (float64(stats.Wins) / float64(stats.DecisiveTrades)) * 100
 	}
 	return stats, nil
+}
+
+func (tm *TradeMemory) getRealizedPnLWindowStats(
+	ctx context.Context,
+	windowFrom time.Time,
+	windowTo time.Time,
+) (*TradePerformanceWindowStats, bool, error) {
+	scope, ok := scalpingAutonomyScopeFromContext(ctx)
+	if !ok || !hasRealizedPnLWindowScope(scope) {
+		return nil, false, nil
+	}
+
+	chatID := strings.TrimSpace(scope.ChatID)
+	exchange := strings.TrimSpace(scope.Exchange)
+	query := `
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(realized_pnl), 0)
+		FROM realized_pnl_journal
+		WHERE closed_at >= ? AND closed_at <= ?
+			AND (? = '' OR COALESCE(chat_id, '') = ?)
+			AND (? = '' OR exchange = ?)
+	`
+	args := []interface{}{windowFrom.UTC(), windowTo.UTC(), chatID, chatID, exchange, exchange}
+
+	stats := &TradePerformanceWindowStats{}
+	var totalTrades int
+	var wins int
+	var losses int
+	var breakeven int
+	var totalPnL decimal.Decimal
+	if err := tm.db.QueryRowContext(ctx, query, args...).Scan(&totalTrades, &wins, &losses, &breakeven, &totalPnL); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("query realized pnl stats window: %w", err)
+	}
+	if totalTrades == 0 {
+		return stats, true, nil
+	}
+
+	stats.TotalTrades = totalTrades
+	stats.Wins = wins
+	stats.Losses = losses
+	stats.Breakeven = breakeven
+	stats.Pending = 0
+	stats.TotalPnL = totalPnL
+	stats.DecisiveTrades = wins + losses
+	if stats.DecisiveTrades > 0 {
+		stats.DecisiveWinRatePct = (float64(stats.Wins) / float64(stats.DecisiveTrades)) * 100
+	}
+	return stats, true, nil
+}
+
+func (tm *TradeMemory) GetScopedExpectancyStats(
+	ctx context.Context,
+	symbol string,
+	action string,
+	lookbackHours int,
+	limit int,
+) (*TradeExpectancyStats, bool, error) {
+	scope, ok := scalpingAutonomyScopeFromContext(ctx)
+	if !ok || !hasRealizedPnLWindowScope(scope) {
+		return nil, false, nil
+	}
+	if lookbackHours <= 0 {
+		lookbackHours = tm.config.MemoryLookbackHoursDefault
+	}
+	if limit <= 0 {
+		limit = tm.config.MemorySampleLimitDefault
+	}
+
+	windowTo := time.Now().UTC()
+	chatID := strings.TrimSpace(scope.ChatID)
+	exchange := strings.TrimSpace(scope.Exchange)
+	normalizedSymbol := normalizeSymbolForComparison(symbol)
+	normalizedAction := normalizeLifecycleSide(action)
+	const normalizedScopedSymbolSQL = `
+		UPPER(REPLACE(
+			CASE
+				WHEN INSTR(TRIM(symbol), ':') > 0 THEN SUBSTR(TRIM(symbol), 1, INSTR(TRIM(symbol), ':') - 1)
+				ELSE TRIM(symbol)
+			END,
+			'-',
+			'/'
+		))
+	`
+
+	const scopedExpectancyBaseQuery = `
+		SELECT realized_pnl
+		FROM realized_pnl_journal
+		WHERE closed_at >= ? AND closed_at <= ?
+			AND (? = '' OR COALESCE(chat_id, '') = ?)
+			AND (? = '' OR exchange = ?)
+			AND (? = '' OR side = ?)
+	`
+	const scopedExpectancyOrderClause = `
+		ORDER BY closed_at DESC, created_at DESC, id DESC
+	`
+	query := scopedExpectancyBaseQuery
+	args := []interface{}{
+		windowTo.Add(-time.Duration(lookbackHours) * time.Hour),
+		windowTo,
+		chatID,
+		chatID,
+		exchange,
+		exchange,
+		normalizedAction,
+		normalizedAction,
+	}
+	if normalizedSymbol != "" {
+		query += "\n\t\t\tAND " + normalizedScopedSymbolSQL + " = ?"
+		args = append(args, normalizedSymbol)
+	}
+	query += scopedExpectancyOrderClause
+	if limit > 0 {
+		query += "\n\t\tLIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := tm.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("query scoped expectancy stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	stats := &TradeExpectancyStats{}
+	sumWin := decimal.Zero
+	sumLoss := decimal.Zero
+	matchedRows := 0
+	for rows.Next() {
+		var pnl decimal.Decimal
+		if err := rows.Scan(&pnl); err != nil {
+			return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
+		}
+		matchedRows++
+		if pnl.IsZero() {
+			continue
+		}
+		if pnl.GreaterThan(decimal.Zero) {
+			stats.Wins++
+			sumWin = sumWin.Add(pnl)
+			continue
+		}
+		stats.Losses++
+		sumLoss = sumLoss.Add(pnl.Abs())
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("iterate scoped expectancy stats: %w", err)
+	}
+
+	stats.SampleSize = stats.Wins + stats.Losses
+	if matchedRows == 0 {
+		return nil, false, nil
+	}
+	if stats.SampleSize == 0 {
+		return stats, true, nil
+	}
+	stats.NetExpectancy = calculateNetExpectancy(
+		stats.Wins,
+		stats.Losses,
+		sumWin.InexactFloat64(),
+		sumLoss.InexactFloat64(),
+	)
+	return stats, true, nil
+}
+
+func hasRealizedPnLWindowScope(scope ScalpingAutonomyScope) bool {
+	return strings.TrimSpace(scope.ChatID) != "" || strings.TrimSpace(scope.Exchange) != ""
 }
 
 func (tm *TradeMemory) GetLastDecisionTimestamp(ctx context.Context) (time.Time, error) {

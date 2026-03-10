@@ -31,6 +31,10 @@ bash scripts/startup-orchestrator.sh start
 bash scripts/health-monitor-enhanced.sh check
 ```
 
+## BACKLOG (bd CLI)
+
+**Stats:** 312 total | 64 open | 1 in progress | 14 blocked | 247 closed | 50 ready
+
 ## ANTI-PATTERNS
 - Running operational scripts without validating env inputs.
 - Hardcoding secrets in script invocations/history.

@@ -135,23 +135,25 @@ type PerformanceWindowInput struct {
 }
 
 type ScalpingCycleInput struct {
-	TotalValue            decimal.Decimal
-	OpenPositions         int
-	DriftActive           bool
-	BaseMinConfidence     float64
-	BaseMaxCapitalPct     float64
-	AdjustedMaxCapitalPct float64
-	ConsecutiveLosses     int
-	Phase                 string
-	PhaseMinConfidence    float64
-	PhaseMaxCapitalPct    float64
-	MilestoneProgress     float64
-	NoFillMinutes         float64
-	RiskDrawdown          float64
-	RiskExpectancy        float64
-	RiskSampleSize        int
-	RecoveryMode          string
-	PerformanceWindow     PerformanceWindowInput
+	TotalValue               decimal.Decimal
+	OpenPositions            int
+	DriftActive              bool
+	BaseMinConfidence        float64
+	BaseMaxCapitalPct        float64
+	ExecutionMinCapitalPct   decimal.Decimal
+	NonExecutableDueToWallet bool
+	AdjustedMaxCapitalPct    float64
+	ConsecutiveLosses        int
+	Phase                    string
+	PhaseMinConfidence       float64
+	PhaseMaxCapitalPct       float64
+	MilestoneProgress        float64
+	NoFillMinutes            float64
+	RiskDrawdown             float64
+	RiskExpectancy           float64
+	RiskSampleSize           int
+	RecoveryMode             string
+	PerformanceWindow        PerformanceWindowInput
 }
 
 type ScalpingCyclePolicy struct {
@@ -292,9 +294,26 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		}
 		policy.MaxConcurrentPositions = cfg.MicroMaxConcurrent
 	}
+	if input.NonExecutableDueToWallet {
+		policy.EffectiveMaxCapitalPct = 0
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "exchange_min_notional_block")
+	}
+	if !input.NonExecutableDueToWallet && input.ExecutionMinCapitalPct.GreaterThan(decimal.NewFromInt(100)) {
+		policy.EffectiveMaxCapitalPct = 0
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "exchange_min_notional_block")
+	}
+	if !input.NonExecutableDueToWallet &&
+		input.ExecutionMinCapitalPct.GreaterThan(decimal.Zero) &&
+		input.ExecutionMinCapitalPct.LessThanOrEqual(decimal.NewFromInt(100)) &&
+		input.ExecutionMinCapitalPct.GreaterThan(decimal.NewFromFloat(policy.EffectiveMaxCapitalPct)) {
+		policy.EffectiveMaxCapitalPct = input.ExecutionMinCapitalPct.InexactFloat64()
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "exchange_min_notional_floor")
+	}
 
 	policy.EffectiveMinConfidence = clampFloat(policy.EffectiveMinConfidence, 0.05, 0.95)
-	policy.EffectiveMaxCapitalPct = clampFloat(policy.EffectiveMaxCapitalPct, 0.10, 100.0)
+	if policy.EffectiveMaxCapitalPct > 0 {
+		policy.EffectiveMaxCapitalPct = clampFloat(policy.EffectiveMaxCapitalPct, 0.10, 100.0)
+	}
 	return policy
 }
 
@@ -439,6 +458,13 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 		return
 	}
 
+	minConfidenceFloor := cfg.NoFillMinConfidenceFloor
+	if policy.AccountTier == AccountTierMicro &&
+		cfg.MicroMinConfidenceFloor > 0 &&
+		cfg.MicroMinConfidenceFloor < minConfidenceFloor {
+		minConfidenceFloor = cfg.MicroMinConfidenceFloor
+	}
+
 	step := int(input.NoFillMinutes / float64(cfg.NoFillRecoveryMinutes))
 	switch {
 	case step <= 1:
@@ -449,15 +475,15 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 			policy.EffectiveMaxCapitalPct = 0.50
 		}
 	case step == 2:
-		if policy.EffectiveMinConfidence > cfg.NoFillMinConfidenceFloor {
-			policy.EffectiveMinConfidence = cfg.NoFillMinConfidenceFloor
+		if policy.EffectiveMinConfidence > minConfidenceFloor {
+			policy.EffectiveMinConfidence = minConfidenceFloor
 		}
 		if policy.EffectiveMaxCapitalPct < 1.00 {
 			policy.EffectiveMaxCapitalPct = 1.00
 		}
 	default:
-		if policy.EffectiveMinConfidence > cfg.NoFillMinConfidenceFloor {
-			policy.EffectiveMinConfidence = cfg.NoFillMinConfidenceFloor
+		if policy.EffectiveMinConfidence > minConfidenceFloor {
+			policy.EffectiveMinConfidence = minConfidenceFloor
 		}
 		if policy.EffectiveMaxCapitalPct < cfg.NoFillMaxCapitalPctCap {
 			policy.EffectiveMaxCapitalPct = cfg.NoFillMaxCapitalPctCap

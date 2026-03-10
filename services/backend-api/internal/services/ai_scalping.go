@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
@@ -584,32 +586,38 @@ type AITradingDecision struct {
 }
 
 type TradingPortfolio struct {
-	USDTBalance                     float64 `json:"usdt_balance"`
-	TotalValue                      float64 `json:"total_value"`
-	OpenPositions                   int     `json:"open_positions"`
-	UnrealizedPnL                   float64 `json:"unrealized_pnl"`
-	CurrentDrawdown                 float64 `json:"current_drawdown"`
-	RiskSharpe                      float64 `json:"risk_sharpe"`
-	RiskSortino                     float64 `json:"risk_sortino"`
-	RiskDrawdown                    float64 `json:"risk_drawdown"`
-	RiskMaxDrawdown                 float64 `json:"risk_max_drawdown"`
-	RiskExpectancy                  float64 `json:"risk_expectancy"`
-	RiskSampleSize                  int     `json:"risk_sample_size"`
-	StrategyPhase                   string  `json:"strategy_phase"`
-	PhaseMinConfidence              float64 `json:"phase_min_confidence"`
-	PhaseMaxCapitalPct              float64 `json:"phase_max_capital_pct"`
-	MilestoneProgress               float64 `json:"milestone_progress"`
-	NoFillMinutes                   float64 `json:"no_fill_minutes"`
-	DriftActive                     bool    `json:"state_drift_active"`
-	AccountTier                     string  `json:"account_tier,omitempty"`
-	EffectiveMinConfidence          float64 `json:"effective_min_confidence,omitempty"`
-	EffectiveMaxCapitalPct          float64 `json:"effective_max_capital_pct,omitempty"`
-	EffectiveMaxConcurrentPositions int     `json:"effective_max_concurrent_positions,omitempty"`
-	RecentConsecutiveLosses         int     `json:"recent_consecutive_losses,omitempty"`
-	ScopedAdjustedMaxCapitalPct     float64 `json:"scoped_adjusted_max_capital_pct,omitempty"`
-	RecoveryMode                    string  `json:"recovery_mode,omitempty"`
-	RecoveryEntryOK                 bool    `json:"recovery_entry_allowed"`
-	RecoveryCleanCycle              int     `json:"recovery_clean_cycles"`
+	USDTBalance                     float64          `json:"usdt_balance"`
+	USDTBalanceDecimal              decimal.Decimal  `json:"-"`
+	TotalValue                      float64          `json:"total_value"`
+	TotalValueDecimal               decimal.Decimal  `json:"-"`
+	OpenPositions                   int              `json:"open_positions"`
+	UnrealizedPnL                   float64          `json:"unrealized_pnl"`
+	CurrentDrawdown                 float64          `json:"current_drawdown"`
+	RiskSharpe                      float64          `json:"risk_sharpe"`
+	RiskSortino                     float64          `json:"risk_sortino"`
+	RiskDrawdown                    float64          `json:"risk_drawdown"`
+	RiskMaxDrawdown                 float64          `json:"risk_max_drawdown"`
+	RiskExpectancy                  float64          `json:"risk_expectancy"`
+	RiskSampleSize                  int              `json:"risk_sample_size"`
+	StrategyPhase                   string           `json:"strategy_phase"`
+	PhaseMinConfidence              float64          `json:"phase_min_confidence"`
+	PhaseMaxCapitalPct              float64          `json:"phase_max_capital_pct"`
+	MilestoneProgress               float64          `json:"milestone_progress"`
+	NoFillMinutes                   float64          `json:"no_fill_minutes"`
+	DriftActive                     bool             `json:"state_drift_active"`
+	AccountTier                     string           `json:"account_tier,omitempty"`
+	EffectiveMinConfidence          float64          `json:"effective_min_confidence,omitempty"`
+	EffectiveMaxCapitalPct          float64          `json:"effective_max_capital_pct,omitempty"`
+	MinExecutableSizePct            float64          `json:"min_executable_size_pct,omitempty"`
+	MinExecutableNotionalUSDT       *decimal.Decimal `json:"min_executable_notional_usdt,omitempty"`
+	MinExecutableInitialMarginUSDT  *decimal.Decimal `json:"min_executable_initial_margin_usdt,omitempty"`
+	NonExecutableDueToWallet        bool             `json:"non_executable_due_to_wallet,omitempty"`
+	EffectiveMaxConcurrentPositions int              `json:"effective_max_concurrent_positions,omitempty"`
+	RecentConsecutiveLosses         int              `json:"recent_consecutive_losses,omitempty"`
+	ScopedAdjustedMaxCapitalPct     float64          `json:"scoped_adjusted_max_capital_pct,omitempty"`
+	RecoveryMode                    string           `json:"recovery_mode,omitempty"`
+	RecoveryEntryOK                 bool             `json:"recovery_entry_allowed"`
+	RecoveryCleanCycle              int              `json:"recovery_clean_cycles"`
 }
 
 type AIScalpingService struct {
@@ -697,6 +705,92 @@ func (s *AIScalpingService) exchangeForContext(ctx context.Context) string {
 		return exchange
 	}
 	return s.configuredExchange()
+}
+
+func walletBasis(portfolio TradingPortfolio) decimal.Decimal {
+	switch {
+	case portfolio.USDTBalanceDecimal.GreaterThan(decimal.Zero):
+		return portfolio.USDTBalanceDecimal
+	case portfolio.USDTBalance > 0:
+		return decimalFromBalanceFloat(portfolio.USDTBalance)
+	case portfolio.TotalValueDecimal.GreaterThan(decimal.Zero):
+		return portfolio.TotalValueDecimal
+	case portfolio.TotalValue > 0:
+		return decimalFromBalanceFloat(portfolio.TotalValue)
+	default:
+		return decimal.Zero
+	}
+}
+
+func promptUSDTBalanceDecimal(portfolio TradingPortfolio) decimal.Decimal {
+	if portfolio.USDTBalanceDecimal.GreaterThan(decimal.Zero) {
+		return portfolio.USDTBalanceDecimal
+	}
+	if portfolio.USDTBalance > 0 {
+		return decimalFromBalanceFloat(portfolio.USDTBalance)
+	}
+	return decimal.Zero
+}
+
+func promptTotalValueDecimal(portfolio TradingPortfolio) decimal.Decimal {
+	if portfolio.TotalValueDecimal.GreaterThan(decimal.Zero) {
+		return portfolio.TotalValueDecimal
+	}
+	if portfolio.TotalValue > 0 {
+		return decimalFromBalanceFloat(portfolio.TotalValue)
+	}
+	return decimal.Zero
+}
+
+func portfolioTotalValueDecimal(portfolio TradingPortfolio) decimal.Decimal {
+	if portfolio.TotalValueDecimal.GreaterThan(decimal.Zero) {
+		return portfolio.TotalValueDecimal
+	}
+	if portfolio.TotalValue > 0 {
+		return decimalFromBalanceFloat(portfolio.TotalValue)
+	}
+	return walletBasis(portfolio)
+}
+
+func decimalFromBalanceFloat(value float64) decimal.Decimal {
+	if value <= 0 {
+		return decimal.Zero
+	}
+	parsed, err := decimal.NewFromString(strconv.FormatFloat(value, 'f', -1, 64))
+	if err != nil {
+		return decimal.Zero
+	}
+	return parsed
+}
+
+func positiveDecimalPointer(value decimal.Decimal) *decimal.Decimal {
+	if !value.GreaterThan(decimal.Zero) {
+		return nil
+	}
+	val := value
+	return &val
+}
+
+func (s *AIScalpingService) executableSizingConstraints(ctx context.Context, portfolio TradingPortfolio) appautonomy.ExecutableSizingConstraints {
+	return appautonomy.ResolveExecutableSizingConstraints(
+		s.exchangeForContext(ctx),
+		walletBasis(portfolio),
+		s.config.Leverage,
+	)
+}
+
+func applyExecutableSizingContext(portfolio *TradingPortfolio, constraints appautonomy.ExecutableSizingConstraints) {
+	if portfolio == nil {
+		return
+	}
+
+	portfolio.MinExecutableSizePct = 0
+	if constraints.MinExecutableSizePct > 0 {
+		portfolio.MinExecutableSizePct = constraints.MinExecutableSizePct
+	}
+	portfolio.MinExecutableNotionalUSDT = positiveDecimalPointer(constraints.MinOrderNotional)
+	portfolio.MinExecutableInitialMarginUSDT = positiveDecimalPointer(constraints.MinInitialMargin)
+	portfolio.NonExecutableDueToWallet = constraints.NonExecutableDueToWallet
 }
 
 func NewAIScalpingService(
@@ -881,7 +975,7 @@ func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptIn
 }
 
 func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (decision *AITradingDecision, err error) {
-	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", portfolio.USDTBalance)
+	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", walletBasis(portfolio).InexactFloat64())
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
 	effectiveExchange := s.exchangeForContext(ctx)
@@ -894,18 +988,47 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		})
 	}
 
+	executableSizing := s.executableSizingConstraints(ctx, portfolio)
+	applyExecutableSizingContext(&portfolio, executableSizing)
 	policy := s.scalpingCyclePolicy(ctx, portfolio)
 	portfolio.AccountTier = policy.AccountTier
 	portfolio.EffectiveMinConfidence = policy.EffectiveMinConfidence
 	portfolio.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct
 	portfolio.EffectiveMaxConcurrentPositions = policy.MaxConcurrentPositions
-
 	effectiveMinConfidence := policy.EffectiveMinConfidence
 	effectiveMaxCapital := policy.EffectiveMaxCapitalPct
 	var funnel appautonomy.CandidateFunnelSnapshot
 	defer func() {
 		finalizeDecisionMetadata(decision, &policy, effectiveMinConfidence, effectiveMaxCapital, funnel)
 	}()
+	if !walletBasis(portfolio).GreaterThan(decimal.Zero) {
+		reason := "wallet basis is zero; waiting for funded balance before autonomous execution"
+		log.Printf("[AI-SCALPING] %s", reason)
+		decision = strategyHoldDecision(reason, 0)
+		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+			Allowed:     false,
+			BlockReason: reason,
+			BlockCode:   appautonomy.CandidateRejectRiskBudget,
+		}
+		return decision, nil
+	}
+	if portfolio.NonExecutableDueToWallet {
+		notional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT)
+		reason := fmt.Sprintf(
+			"wallet basis %.2f USDT is below exchange minimum notional %s USDT on %s",
+			walletBasis(portfolio).InexactFloat64(),
+			notional.StringFixed(2),
+			effectiveExchange,
+		)
+		log.Printf("[AI-SCALPING] %s", reason)
+		decision = strategyHoldDecision(reason, 0)
+		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+			Allowed:     false,
+			BlockReason: reason,
+			BlockCode:   appautonomy.CandidateRejectRiskBudget,
+		}
+		return decision, nil
+	}
 
 	signals, err := s.gatherMarketSignals(ctx)
 	if err != nil {
@@ -1474,7 +1597,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 
 	log.Printf("[AI-SCALPING] Calling LLM with %d signals", len(signals))
 	log.Printf("[AI-SCALPING] === SYSTEM PROMPT ===\n%s", systemPrompt)
-	log.Printf("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", portfolio.USDTBalance, len(signals))
+	log.Printf("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", walletBasis(portfolio).InexactFloat64(), len(signals))
 
 	req := &llm.CompletionRequest{
 		Model: strings.TrimSpace(s.config.Model),
@@ -1585,17 +1708,21 @@ You analyze market data and make trading decisions. You have access to real-time
 
 ## Trading Rules
 1. Only trade when confidence meets or exceeds the effective threshold supplied in the user prompt; never use strategy-phase reference values as execution gates when they differ from the effective threshold
-2. Never size above the effective max capital percentage supplied in the user prompt
-3. Use futures with %dx leverage
-4. Always consider risk: set stop-loss and take-profit levels
-5. If uncertain, return action: "hold" with reasoning
+2. If action is buy or sell, choose size_pct inside the executable size band supplied in the user prompt
+3. size_pct is a direct percentage of wallet value converted into order notional; leverage affects required margin, not the size_pct math
+4. Use futures with %dx leverage
+5. Always consider risk: set stop-loss and take-profit levels
+6. If uncertain, return action: "hold" with reasoning
+7. Never emit markdown, headings, bullets, or commentary outside the JSON object
+8. Keep reasoning concise (one short paragraph, <= 320 characters)
+9. For hold decisions, use symbol: "", size_pct: 0, stop_loss: null, take_profit: null
 
 ## Response Format
 Return JSON only:
 {
   "action": "buy" | "sell" | "hold",
   "symbol": "SYMBOL/USDT",
-  "size_pct": 1-100,
+  "size_pct": 0.01-100,
   "confidence": 0.0-1.0,
   "reasoning": "explanation",
   "stop_loss": 123.45,
@@ -1616,9 +1743,13 @@ Return JSON only:
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
+	walletBalance := walletBasis(portfolio)
+	usdtBalance := promptUSDTBalanceDecimal(portfolio)
+	totalValue := promptTotalValueDecimal(portfolio)
 
 	var memoryContext string
 	var recoveryContext string
+	sizingContext := ""
 	if s.tradeMemory != nil {
 		topSymbol := ""
 		if len(signals) > 0 {
@@ -1633,12 +1764,32 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 			recoveryContext = "\n" + s.tradeMemory.BuildRecoveryContext(ctx, portfolio.RiskDrawdown)
 		}
 	}
+	minNotional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT)
+	minInitialMargin := decimalValueOrZero(portfolio.MinExecutableInitialMarginUSDT)
+	if portfolio.NonExecutableDueToWallet && minNotional.GreaterThan(decimal.Zero) {
+		sizingContext = fmt.Sprintf(
+			"- Exchange Minimum Futures Notional: %s USDT\n- Estimated Initial Margin @ %dx: %s USDT\n- Wallet is below the exchange minimum notional; return hold until deployable balance reaches the exchange minimum.\n",
+			minNotional.StringFixed(2),
+			s.config.Leverage,
+			minInitialMargin.StringFixed(2),
+		)
+	} else if portfolio.MinExecutableSizePct > 0 && minNotional.GreaterThan(decimal.Zero) {
+		sizingContext = fmt.Sprintf(
+			"- Executable Size Band %% (must obey if action != hold): %.2f - %.2f\n- Exchange Minimum Futures Notional: %s USDT\n- Estimated Initial Margin @ %dx: %s USDT\n- Sizing semantics: size_pct maps directly to order notional as a share of wallet; do not multiply size_pct by leverage\n",
+			portfolio.MinExecutableSizePct,
+			portfolio.EffectiveMaxCapitalPct,
+			minNotional.StringFixed(2),
+			s.config.Leverage,
+			minInitialMargin.StringFixed(2),
+		)
+	}
 
 	return fmt.Sprintf(`Analyze these market signals and make a trading decision.
 
 ## Portfolio
 - USDT Balance: %.2f
 - Total Value: %.2f
+- Wallet Basis For size_pct: %.2f
 - Open Positions: %d
 - Unrealized PnL: %.4f
 
@@ -1648,7 +1799,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - Effective Min Confidence (must obey): %.2f
 - Effective Max Capital %% (must obey): %.2f
 - Policy note: account-tier and recovery adjustments are already reflected in the effective values above; cite and enforce those effective values only
-- Fund Milestone Progress: %.2f%%
+%s- Fund Milestone Progress: %.2f%%
 - No-fill Duration (minutes): %.1f
 - State Drift Active: %t
 - Risk Sharpe: %.4f
@@ -1659,14 +1810,16 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 ## Market Signals
 %s%s%s
 Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Adapt your strategy based on recovery context if provided. Return only valid JSON.`,
-		portfolio.USDTBalance,
-		portfolio.TotalValue,
+		usdtBalance.InexactFloat64(),
+		totalValue.InexactFloat64(),
+		walletBalance.InexactFloat64(),
 		portfolio.OpenPositions,
 		portfolio.UnrealizedPnL,
 		portfolio.AccountTier,
 		portfolio.StrategyPhase,
 		portfolio.EffectiveMinConfidence,
 		portfolio.EffectiveMaxCapitalPct,
+		sizingContext,
 		portfolio.MilestoneProgress,
 		portfolio.NoFillMinutes,
 		portfolio.DriftActive,
@@ -1686,18 +1839,55 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		return fmt.Errorf("no order executor configured")
 	}
 	exchange := s.exchangeForContext(ctx)
+	walletBalance := walletBasis(portfolio)
+	if portfolio.NonExecutableDueToWallet {
+		return fmt.Errorf(
+			"wallet basis %.4f USDT below exchange minimum notional %s USDT on %s",
+			walletBalance.InexactFloat64(),
+			decimalValueOrZero(portfolio.MinExecutableNotionalUSDT).StringFixed(2),
+			exchange,
+		)
+	}
+	if !walletBalance.GreaterThan(decimal.Zero) {
+		return fmt.Errorf("computed wallet basis is non-positive")
+	}
 
 	if maxCapitalPct <= 0 {
 		maxCapitalPct = s.config.MaxCapitalPct
 	}
+	if portfolio.MinExecutableSizePct > 100 {
+		return fmt.Errorf("invalid executable size floor %.4f exceeds 100%%", portfolio.MinExecutableSizePct)
+	}
+	if portfolio.MinExecutableSizePct > 0 && maxCapitalPct < portfolio.MinExecutableSizePct {
+		maxCapitalPct = portfolio.MinExecutableSizePct
+	}
 	if decision.SizePercent > maxCapitalPct {
 		decision.SizePercent = maxCapitalPct
+	}
+	if portfolio.MinExecutableSizePct > 0 && decision.SizePercent < portfolio.MinExecutableSizePct {
+		if minNotional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT); minNotional.GreaterThan(decimal.Zero) {
+			log.Printf(
+				"[AI-SCALPING] Requested size %.2f%% below executable floor %.2f%% on %s, bumping to exchange minimum %s USDT",
+				decision.SizePercent,
+				portfolio.MinExecutableSizePct,
+				exchange,
+				minNotional.StringFixed(2),
+			)
+		} else {
+			log.Printf(
+				"[AI-SCALPING] Requested size %.2f%% below executable floor %.2f%% on %s, bumping to executable floor",
+				decision.SizePercent,
+				portfolio.MinExecutableSizePct,
+				exchange,
+			)
+		}
+		decision.SizePercent = portfolio.MinExecutableSizePct
 	}
 	if decision.SizePercent <= 0 || decision.SizePercent > 100 {
 		return fmt.Errorf("invalid size_pct %.4f", decision.SizePercent)
 	}
 
-	amount := decimal.NewFromFloat(portfolio.USDTBalance * decision.SizePercent / 100)
+	amount := walletBalance.Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100))
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("computed order amount is non-positive")
 	}
@@ -1893,6 +2083,30 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 	}
 
 	if s.tradeMemory != nil {
+		var scopedFallback *TradeExpectancyStats
+		if scoped, found, err := s.tradeMemory.GetScopedExpectancyStats(
+			ctx,
+			normalizedSymbol,
+			normalizedAction,
+			0,
+			0,
+		); err != nil {
+			log.Printf(
+				"[AI-SCALPING] scoped expectancy unavailable for %s/%s: %v",
+				normalizedSymbol,
+				normalizedAction,
+				err,
+			)
+		} else if found {
+			if scoped.SampleSize == 0 {
+				return 0, 0, false
+			}
+			if scoped.SampleSize >= minSamples {
+				return scoped.NetExpectancy, scoped.SampleSize, true
+			}
+			scopedFallback = scoped
+		}
+
 		trades, err := s.tradeMemory.GetRecentTrades(ctx, 250)
 		if err == nil && len(trades) > 0 {
 			sumWin := 0.0
@@ -1925,6 +2139,10 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 			if wins+losses >= minSamples {
 				return calculateNetExpectancy(wins, losses, sumWin, sumLoss), wins + losses, true
 			}
+		}
+
+		if scopedFallback != nil {
+			return scopedFallback.NetExpectancy, scopedFallback.SampleSize, false
 		}
 	}
 
@@ -2453,6 +2671,9 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if confidence < clampFloat(minConfidenceFloor, 0.05, 0.99) {
 		return nil, 0, false
 	}
+	if portfolio.NonExecutableDueToWallet {
+		return nil, 0, false
+	}
 
 	sizeCap := portfolio.EffectiveMaxCapitalPct
 	if sizeCap <= 0 {
@@ -2461,7 +2682,17 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if sizeCap <= 0 {
 		sizeCap = DefaultAIScalpingConfig().MaxCapitalPct
 	}
-	minSizePct := math.Min(fallbackCfg.MinSizePct, sizeCap)
+	minSizePct := fallbackCfg.MinSizePct
+	if portfolio.MinExecutableSizePct > minSizePct {
+		minSizePct = portfolio.MinExecutableSizePct
+	}
+	if minSizePct > 100 {
+		return nil, 0, false
+	}
+	if sizeCap < minSizePct {
+		sizeCap = minSizePct
+	}
+	sizeCap = math.Min(sizeCap, 100)
 	sizePct := clampFloat(sizeCap*fallbackCfg.SizeFraction, minSizePct, sizeCap)
 
 	riskPct := 0.006
@@ -2623,6 +2854,11 @@ func classifyExecutionBlockCode(err error) string {
 	switch {
 	case strings.Contains(lower, "missing orderbook"):
 		return appautonomy.CandidateRejectMissingOrderbookSignal
+	case strings.Contains(lower, "failed to sync futures leverage"),
+		strings.Contains(lower, "failed to get futures account"),
+		strings.Contains(lower, "failed to set futures leverage"),
+		strings.Contains(lower, "futures leverage verification mismatch"):
+		return appautonomy.CandidateRejectAutonomyRuntime
 	case strings.Contains(lower, "connectivity") ||
 		strings.Contains(lower, "connection") ||
 		strings.Contains(lower, "disconnected") ||
@@ -2752,6 +2988,10 @@ func shouldDowngradeExecutionErrorToHold(err error) bool {
 		strings.Contains(msg, "parameter") && strings.Contains(msg, "does not exist") ||
 		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "request failed") ||
+		strings.Contains(msg, "failed to sync futures leverage") ||
+		strings.Contains(msg, "failed to get futures account") ||
+		strings.Contains(msg, "failed to set futures leverage") ||
+		strings.Contains(msg, "futures leverage verification mismatch") ||
 		strings.Contains(msg, "failed to get ticker") ||
 		strings.Contains(msg, "symbol cooldown active") ||
 		strings.Contains(msg, "symbol loss cooldown active") ||
@@ -2800,6 +3040,11 @@ Schema:
   "stop_loss": number|null,
   "take_profit": number|null
 }
+Rules:
+- Return exactly one JSON object and nothing else
+- Never include markdown, headings, commentary, or prose outside the object
+- For hold decisions use symbol:"", size_pct:0, stop_loss:null, take_profit:null
+- Keep reasoning concise and single-paragraph
 Do not include markdown or extra text.`,
 			},
 			{
@@ -2846,9 +3091,16 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 			return localDecision, nil
 		}
 	}
+	if inferred, inferErr := inferDecisionFromLooseText(raw); inferErr == nil {
+		log.Printf("[AI-SCALPING] Structured-output recovered via local decision inference")
+		return inferred, nil
+	}
 
 	lastErr := err
 	current := raw
+	if s.llmClient == nil {
+		return nil, lastErr
+	}
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		remaining, hasBudget := s.remainingRepairBudget(ctx)
 		if !hasBudget {
@@ -2865,6 +3117,10 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 		if parseErr == nil && isValidDecisionAction(decision.Action) {
 			log.Printf("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
 			return decision, nil
+		}
+		if inferred, inferErr := inferDecisionFromLooseText(repaired); inferErr == nil {
+			log.Printf("[AI-SCALPING] Structured-output retry recovered via local decision inference on attempt %d", attempt)
+			return inferred, nil
 		}
 		if parseErr == nil {
 			parseErr = fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
@@ -2937,6 +3193,306 @@ func repairDecisionJSONLocally(raw string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no JSON object candidate found in model response")
+}
+
+func inferDecisionFromLooseText(raw string) (*AITradingDecision, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("empty model response")
+	}
+
+	action := extractLooseDecisionAction(raw)
+	switch action {
+	case "hold":
+		confidence, confidenceKnown := extractLooseNumericField(raw, "confidence")
+		reasoning := extractLooseReasoning(raw)
+		decision := &AITradingDecision{
+			Action:          "hold",
+			Symbol:          "",
+			SizePercent:     0,
+			Confidence:      0,
+			Reasoning:       reasoning,
+			ReasonCategory:  normalizeHoldReasonCategory("", reasoning),
+			ConfidenceKnown: false,
+		}
+		if confidenceKnown {
+			decision.Confidence = normalizeLooseConfidence(confidence)
+			decision.ConfidenceKnown = true
+		}
+		return decision, nil
+	case "buy", "sell":
+		symbol, ok := extractLooseStringField(raw, "symbol")
+		if !ok || strings.TrimSpace(symbol) == "" {
+			return nil, fmt.Errorf("actionable local inference missing symbol")
+		}
+		sizePct, sizeKnown := extractLooseNumericField(raw, "size_pct")
+		confidence, confidenceKnown := extractLooseNumericField(raw, "confidence")
+		if !sizeKnown || !confidenceKnown {
+			return nil, fmt.Errorf("actionable local inference missing size_pct/confidence")
+		}
+		reasoning := extractLooseReasoning(raw)
+		decision := &AITradingDecision{
+			Action:          action,
+			Symbol:          symbol,
+			SizePercent:     sizePct,
+			Confidence:      normalizeLooseConfidence(confidence),
+			Reasoning:       reasoning,
+			ReasonCategory:  "",
+			ConfidenceKnown: true,
+		}
+		if stopLoss, ok := extractLooseDecimalField(raw, "stop_loss"); ok {
+			decision.StopLoss = &stopLoss
+		}
+		if takeProfit, ok := extractLooseDecimalField(raw, "take_profit"); ok {
+			decision.TakeProfit = &takeProfit
+		}
+		return decision, nil
+	default:
+		return nil, fmt.Errorf("no local action inference")
+	}
+}
+
+func normalizeLooseConfidence(value float64) float64 {
+	if value > 1 && value <= 100 {
+		value /= 100
+	}
+	return clampFloat(value, 0, 1)
+}
+
+func extractLooseDecisionAction(raw string) string {
+	if action, ok := extractLooseStringField(raw, "action"); ok {
+		action = strings.ToLower(strings.TrimSpace(action))
+		if isValidDecisionAction(action) {
+			return action
+		}
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case strings.Contains(lower, "recommended action: hold"),
+		strings.Contains(lower, "recommended action hold"),
+		strings.Contains(lower, "i should hold"),
+		strings.Contains(lower, "should hold"),
+		strings.Contains(lower, "return hold"),
+		strings.Contains(lower, "staying out"),
+		strings.Contains(lower, "stay out"),
+		strings.Contains(lower, "no trade"),
+		strings.Contains(lower, "i should wait"),
+		strings.Contains(lower, "waiting for stronger confirmation"),
+		strings.Contains(lower, "waiting for qualified setup"),
+		strings.Contains(lower, "i'm staying out"),
+		strings.Contains(lower, "preserve capital"):
+		return "hold"
+	default:
+		return ""
+	}
+}
+
+func extractLooseReasoning(raw string) string {
+	if reasoning, ok := extractLooseStringField(raw, "reasoning"); ok && strings.TrimSpace(reasoning) != "" {
+		return sanitizeDecisionReasoning(reasoning, 320)
+	}
+	if reasoning, ok := extractLooseStringField(raw, "reason"); ok && strings.TrimSpace(reasoning) != "" {
+		return sanitizeDecisionReasoning(reasoning, 320)
+	}
+	return sanitizeDecisionReasoning(raw, 320)
+}
+
+func extractLooseStringField(raw string, key string) (string, bool) {
+	value, ok := extractLooseFieldValue(raw, key)
+	if !ok {
+		return "", false
+	}
+	value = strings.TrimSpace(strings.Trim(value, "\"'`"))
+	if value == "" || strings.EqualFold(value, "null") {
+		return "", false
+	}
+	return value, true
+}
+
+func extractLooseNumericField(raw string, key string) (float64, bool) {
+	value, ok := extractLooseFieldValue(raw, key)
+	if !ok {
+		return 0, false
+	}
+	value = strings.TrimSpace(strings.Trim(value, "\"'`"))
+	if value == "" || strings.EqualFold(value, "null") {
+		return 0, false
+	}
+	if number, err := strconv.ParseFloat(value, 64); err == nil {
+		return number, true
+	}
+	candidate := make([]rune, 0, len(value))
+	seenDot := false
+	for _, ch := range value {
+		switch {
+		case ch >= '0' && ch <= '9':
+			candidate = append(candidate, ch)
+		case ch == '-' && len(candidate) == 0:
+			candidate = append(candidate, ch)
+		case ch == '.' && !seenDot:
+			candidate = append(candidate, ch)
+			seenDot = true
+		default:
+			if len(candidate) > 0 {
+				goto parseCandidate
+			}
+		}
+	}
+parseCandidate:
+	if len(candidate) == 0 {
+		return 0, false
+	}
+	number, err := strconv.ParseFloat(string(candidate), 64)
+	if err != nil {
+		return 0, false
+	}
+	return number, true
+}
+
+func extractLooseDecimalField(raw string, key string) (decimal.Decimal, bool) {
+	value, ok := extractLooseFieldValue(raw, key)
+	if !ok {
+		return decimal.Zero, false
+	}
+	value = strings.TrimSpace(strings.Trim(value, "\"'`"))
+	if value == "" || strings.EqualFold(value, "null") {
+		return decimal.Zero, false
+	}
+	if dec, err := decimal.NewFromString(value); err == nil {
+		return dec, true
+	}
+	if number, ok := extractLooseNumericField(raw, key); ok {
+		return decimal.NewFromFloat(number), true
+	}
+	return decimal.Zero, false
+}
+
+func extractLooseFieldValue(raw string, key string) (string, bool) {
+	normalizedKey := strings.ToLower(strings.TrimSpace(key))
+	if normalizedKey == "" {
+		return "", false
+	}
+	if value, ok := extractLooseFieldValueWithMarker(raw, `"`+normalizedKey+`"`, false); ok {
+		return value, true
+	}
+	if value, ok := extractLooseFieldValueWithMarker(raw, `'`+normalizedKey+`'`, false); ok {
+		return value, true
+	}
+	return extractLooseFieldValueWithMarker(raw, normalizedKey, true)
+}
+
+func extractLooseFieldValueWithMarker(raw string, marker string, requireBoundary bool) (string, bool) {
+	if raw == "" || marker == "" {
+		return "", false
+	}
+
+	searchStart := 0
+	for searchStart < len(raw) {
+		idx, end, ok := findLooseMarkerFold(raw, marker, searchStart)
+		if !ok {
+			return "", false
+		}
+		if requireBoundary {
+			if idx > 0 {
+				prev, _ := utf8.DecodeLastRuneInString(raw[:idx])
+				if isLooseFieldIdentifierRune(prev) {
+					searchStart = end
+					continue
+				}
+			}
+			if end < len(raw) {
+				next, _ := utf8.DecodeRuneInString(raw[end:])
+				if isLooseFieldIdentifierRune(next) {
+					searchStart = end
+					continue
+				}
+			}
+		}
+
+		remainder := raw[end:]
+		colon := strings.Index(remainder, ":")
+		if colon < 0 || strings.TrimSpace(remainder[:colon]) != "" {
+			searchStart = end
+			continue
+		}
+
+		remainder = strings.TrimLeft(remainder[colon+1:], " \t\r\n")
+		if remainder == "" {
+			return "", false
+		}
+		if remainder[0] == '"' || remainder[0] == '\'' {
+			return readLooseQuotedValue(remainder[1:], rune(remainder[0])), true
+		}
+		return readLooseTokenValue(remainder), true
+	}
+	return "", false
+}
+
+func findLooseMarkerFold(raw string, marker string, searchStart int) (int, int, bool) {
+	for idx := range raw[searchStart:] {
+		candidateStart := searchStart + idx
+		candidateEnd := candidateStart + len(marker)
+		if candidateEnd > len(raw) {
+			return 0, 0, false
+		}
+		if strings.EqualFold(raw[candidateStart:candidateEnd], marker) {
+			return candidateStart, candidateEnd, true
+		}
+	}
+	return 0, 0, false
+}
+
+func isLooseFieldIdentifierRune(ch rune) bool {
+	return ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch)
+}
+
+func readLooseQuotedValue(raw string, quote rune) string {
+	var builder strings.Builder
+	escaped := false
+	for _, ch := range raw {
+		if escaped {
+			builder.WriteRune(ch)
+			escaped = false
+			continue
+		}
+		switch ch {
+		case '\\':
+			escaped = true
+		case quote:
+			return builder.String()
+		default:
+			builder.WriteRune(ch)
+		}
+	}
+	return builder.String()
+}
+
+func readLooseTokenValue(raw string) string {
+	end := 0
+	for end < len(raw) {
+		switch raw[end] {
+		case ',', ';', '}', '\n', '\r':
+			return strings.TrimSpace(raw[:end])
+		default:
+			end++
+		}
+	}
+	return strings.TrimSpace(raw)
+}
+
+func sanitizeDecisionReasoning(raw string, maxLen int) string {
+	reasoning := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if maxLen > 0 {
+		runes := []rune(reasoning)
+		if len(runes) > maxLen {
+			if maxLen <= 3 {
+				return string(runes[:maxLen])
+			}
+			reasoning = string(runes[:maxLen-3]) + "..."
+		}
+	}
+	return reasoning
 }
 
 func extractBalancedJSONObject(raw string) (string, bool) {
@@ -3026,6 +3582,7 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 }
 
 func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {
+	applyExecutableSizingContext(&portfolio, s.executableSizingConstraints(ctx, portfolio))
 	policy := s.scalpingCyclePolicy(ctx, portfolio)
 	return policy.EffectiveMinConfidence, policy.EffectiveMaxCapitalPct
 }
@@ -3047,23 +3604,25 @@ func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio T
 	}
 
 	return appautonomy.EvaluateScalpingPolicy(appautonomy.ScalpingCycleInput{
-		TotalValue:            decimal.NewFromFloat(portfolio.TotalValue),
-		OpenPositions:         portfolio.OpenPositions,
-		DriftActive:           portfolio.DriftActive,
-		BaseMinConfidence:     s.config.MinConfidence,
-		BaseMaxCapitalPct:     s.config.MaxCapitalPct,
-		AdjustedMaxCapitalPct: portfolio.ScopedAdjustedMaxCapitalPct,
-		ConsecutiveLosses:     portfolio.RecentConsecutiveLosses,
-		Phase:                 portfolio.StrategyPhase,
-		PhaseMinConfidence:    portfolio.PhaseMinConfidence,
-		PhaseMaxCapitalPct:    portfolio.PhaseMaxCapitalPct,
-		MilestoneProgress:     portfolio.MilestoneProgress,
-		NoFillMinutes:         portfolio.NoFillMinutes,
-		RiskDrawdown:          portfolio.RiskDrawdown,
-		RiskExpectancy:        portfolio.RiskExpectancy,
-		RiskSampleSize:        portfolio.RiskSampleSize,
-		RecoveryMode:          portfolio.RecoveryMode,
-		PerformanceWindow:     performanceWindow,
+		TotalValue:               portfolioTotalValueDecimal(portfolio),
+		OpenPositions:            portfolio.OpenPositions,
+		DriftActive:              portfolio.DriftActive,
+		BaseMinConfidence:        s.config.MinConfidence,
+		BaseMaxCapitalPct:        s.config.MaxCapitalPct,
+		ExecutionMinCapitalPct:   decimal.NewFromFloat(portfolio.MinExecutableSizePct),
+		NonExecutableDueToWallet: portfolio.NonExecutableDueToWallet,
+		AdjustedMaxCapitalPct:    portfolio.ScopedAdjustedMaxCapitalPct,
+		ConsecutiveLosses:        portfolio.RecentConsecutiveLosses,
+		Phase:                    portfolio.StrategyPhase,
+		PhaseMinConfidence:       portfolio.PhaseMinConfidence,
+		PhaseMaxCapitalPct:       portfolio.PhaseMaxCapitalPct,
+		MilestoneProgress:        portfolio.MilestoneProgress,
+		NoFillMinutes:            portfolio.NoFillMinutes,
+		RiskDrawdown:             portfolio.RiskDrawdown,
+		RiskExpectancy:           portfolio.RiskExpectancy,
+		RiskSampleSize:           portfolio.RiskSampleSize,
+		RecoveryMode:             portfolio.RecoveryMode,
+		PerformanceWindow:        performanceWindow,
 	}, cfg)
 }
 

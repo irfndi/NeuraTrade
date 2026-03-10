@@ -686,6 +686,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	integratedHandlers.SetDrawdownHalt(drawdownHalt)
 	integratedHandlers.SetOrderExecutor(orderExecutor)
+	integratedHandlers.SetOperationalModeService(opModeService)
 
 	// Set database for user settings lookup
 	var lifecycleStore *services.TradingLifecycleStore
@@ -704,7 +705,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	if sqlDB != nil {
-		tradeMemory, err := services.NewTradeMemory(sqlDB)
+		tradeMemory, err := services.NewTradeMemoryWithConfig(
+			sqlDB,
+			services.ResolveTradeMemoryConfigFromEnv(services.DefaultTradeMemoryConfig()),
+		)
 		if err != nil {
 			log.Printf("Warning: Failed to create trade memory: %v", err)
 		} else {

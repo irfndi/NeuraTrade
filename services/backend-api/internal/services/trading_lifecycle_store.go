@@ -215,6 +215,7 @@ func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status ON trading_positions(symbol, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_trading_positions_chat_status ON trading_positions(chat_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed ON realized_pnl_journal(chat_id, closed_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_exchange_closed ON realized_pnl_journal(exchange, closed_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_symbol_closed ON realized_pnl_journal(symbol, closed_at)`,
 	}
 	for _, stmt := range indexStatements {

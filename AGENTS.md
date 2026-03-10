@@ -1,8 +1,8 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-25 16:44 WIB
-**Commit:** 9b7b7ea2
-**Branch:** development
+**Generated:** 2026-03-10
+**Commit:** bd0c0726
+**Branch:** codex/live-entry-reliability
 
 ## OVERVIEW
 NeuraTrade is a multi-service trading platform: Go backend API + Bun TypeScript sidecar services for CCXT exchange access and Telegram delivery.
@@ -77,14 +77,17 @@ make dev-down
 - `services/backend-api/AGENTS.md`
 - `services/backend-api/internal/api/AGENTS.md`
 - `services/backend-api/internal/services/AGENTS.md`
+- `services/backend-api/internal/platform/AGENTS.md`
+- `services/backend-api/internal/app/AGENTS.md`
 - `services/backend-api/database/AGENTS.md`
 - `services/backend-api/scripts/AGENTS.md`
-- `services/ccxt-service/AGENTS.md`
+- `services/ccxt/AGENTS.md`
 - `services/telegram-service/AGENTS.md`
+- `services/agent-control/AGENTS.md`
 
 ## BACKLOG (bd CLI)
 
-**Stats:** 248 total | 51 open | 1 in progress | 14 blocked | 196 closed | 37 ready
+**Stats:** 312 total | 64 open | 1 in progress | 14 blocked | 247 closed | 50 ready
 
 - ✓ `neura-iyw6`: Refactor notification.go into modular files (PR #205)
 ### Recently Completed (✓)
@@ -269,7 +272,8 @@ For more details, see README.md and docs/QUICKSTART.md.
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
+   bd dolt commit
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```

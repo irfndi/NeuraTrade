@@ -175,6 +175,7 @@ cmd/neuratrade-cli/neuratrade-cli
 
 # Beads (issue tracking) runtime files
 .beads/daemon-error
+.beads-backup-*/
 
 # NeuraTrade user data directory (macOS/Linux)
 .neuratrade/

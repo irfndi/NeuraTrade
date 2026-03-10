@@ -26,6 +26,54 @@ func TestEvaluateScalpingPolicy_MicroTierRelaxesBootstrapFloor(t *testing.T) {
 	require.Equal(t, 1, policy.MaxConcurrentPositions)
 }
 
+func TestEvaluateScalpingPolicy_FloorsToExecutableMinimumWhenPolicyCapIsTooSmall(t *testing.T) {
+	sizing := ResolveExecutableSizingConstraints("bitget", decimal.NewFromFloat(46.93), 5)
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:             decimal.NewFromFloat(46.93),
+		BaseMinConfidence:      0.65,
+		BaseMaxCapitalPct:      5.0,
+		ExecutionMinCapitalPct: decimal.NewFromFloat(sizing.MinExecutableSizePct),
+		Phase:                  "bootstrap",
+		PhaseMinConfidence:     0.75,
+		PhaseMaxCapitalPct:     1.0,
+	}, DefaultScalpingPolicyConfig())
+
+	require.InDelta(t, sizing.MinExecutableSizePct, policy.EffectiveMaxCapitalPct, 0.01)
+	require.Contains(t, policy.PolicyAdjustments, "exchange_min_notional_floor")
+}
+
+func TestEvaluateScalpingPolicy_BlocksWhenExecutableMinimumExceedsWallet(t *testing.T) {
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:             decimal.NewFromFloat(46.93),
+		BaseMinConfidence:      0.65,
+		BaseMaxCapitalPct:      5.0,
+		ExecutionMinCapitalPct: decimal.NewFromFloat(120),
+		Phase:                  "bootstrap",
+		PhaseMinConfidence:     0.75,
+		PhaseMaxCapitalPct:     1.0,
+	}, DefaultScalpingPolicyConfig())
+
+	require.Zero(t, policy.EffectiveMaxCapitalPct)
+	require.Contains(t, policy.PolicyAdjustments, "exchange_min_notional_block")
+}
+
+func TestEvaluateScalpingPolicy_BlocksWhenWalletIsExplicitlyNonExecutable(t *testing.T) {
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:               decimal.NewFromFloat(5),
+		BaseMinConfidence:        0.65,
+		BaseMaxCapitalPct:        5.0,
+		ExecutionMinCapitalPct:   decimal.Zero,
+		NonExecutableDueToWallet: true,
+		Phase:                    "bootstrap",
+		PhaseMinConfidence:       0.75,
+		PhaseMaxCapitalPct:       1.0,
+	}, DefaultScalpingPolicyConfig())
+
+	require.Zero(t, policy.EffectiveMaxCapitalPct)
+	require.Contains(t, policy.PolicyAdjustments, "exchange_min_notional_block")
+}
+
 func TestEvaluateScalpingPolicy_NoFillRecoveryAdjustments(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 
@@ -82,6 +130,46 @@ func TestEvaluateScalpingPolicy_NoFillRecoveryAdjustments(t *testing.T) {
 			prevMaxCapitalPct = policy.EffectiveMaxCapitalPct
 		})
 	}
+}
+
+func TestEvaluateScalpingPolicy_MicroNoFillRecoveryUsesMicroConfidenceFloor(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.85,
+		BaseMaxCapitalPct: 0.10,
+		NoFillMinutes:     float64(2 * config.NoFillRecoveryMinutes),
+	}, config)
+
+	require.Equal(t, AccountTierMicro, policy.AccountTier)
+	require.Contains(t, policy.PolicyAdjustments, "controlled_no_fill_recovery")
+	require.InDelta(t, config.MicroMinConfidenceFloor, policy.EffectiveMinConfidence, 0.0001)
+	require.InDelta(t, 0.50, policy.EffectiveMaxCapitalPct, 0.0001)
+}
+
+func TestEvaluateScalpingPolicy_MicroNoFillRecoveryOverridesWeakRecentWinRateTightening(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+		NoFillMinutes:     float64(3 * config.NoFillRecoveryMinutes),
+		PerformanceWindow: PerformanceWindowInput{
+			DecisiveTrades:     21,
+			DecisiveWinRatePct: 9.5,
+		},
+		Phase:              "bootstrap",
+		PhaseMinConfidence: 0.75,
+		PhaseMaxCapitalPct: 1.0,
+	}, config)
+
+	require.Equal(t, AccountTierMicro, policy.AccountTier)
+	require.Contains(t, policy.PolicyAdjustments, "weak_recent_win_rate")
+	require.Contains(t, policy.PolicyAdjustments, "critical_recent_win_rate")
+	require.Contains(t, policy.PolicyAdjustments, "controlled_no_fill_recovery")
+	require.InDelta(t, config.MicroMinConfidenceFloor, policy.EffectiveMinConfidence, 0.0001)
 }
 
 func TestEvaluateScalpingPolicy_LossStreakAndNegativeExpectancyTightening(t *testing.T) {
