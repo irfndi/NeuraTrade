@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -31,6 +32,16 @@ func TestNewTradeMemory(t *testing.T) {
 	err = db.QueryRow("SELECT COUNT(*) FROM ai_trade_memory").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
+}
+
+func TestResolveTradeMemoryConfigFromEnv(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_MEMORY_LOOKBACK_HOURS", "168")
+	t.Setenv("NEURATRADE_AI_MEMORY_SAMPLE_LIMIT", "42")
+
+	cfg := ResolveTradeMemoryConfigFromEnv(DefaultTradeMemoryConfig())
+
+	assert.Equal(t, 168, cfg.MemoryLookbackHoursDefault)
+	assert.Equal(t, 42, cfg.MemorySampleLimitDefault)
 }
 
 func TestTradeMemory_RecordDecision(t *testing.T) {
@@ -311,6 +322,222 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 			assert.True(t, stats.TotalPnL.Equal(tt.expectedPnL), "expected pnl %s, got %s", tt.expectedPnL.String(), stats.TotalPnL.String())
 		})
 	}
+}
+
+func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_a', 'ord_a', 'chat-1', 'bitget', 'btc/usdt', 'buy', 1, 100, 102, 2, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_b', 'ord_b', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_suffix', 'ord_suffix', 'chat-1', 'bitget', 'BTC-USDT:USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_future', 'ord_future', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 140, 40, 0, 'autonomous', datetime('now', '+2 hours'), datetime('now', '+2 hours')),
+		('rp_c', 'ord_c', 'chat-2', 'bitget', 'BTC/USDT', 'buy', 1, 100, 109, 9, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_d', 'ord_d', 'chat-1', 'binance', 'BTC/USDT', 'buy', 1, 100, 108, 8, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	t.Run("scoped_match", func(t *testing.T) {
+		ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+			ChatID:   "chat-1",
+			Exchange: "bitget",
+		})
+
+		stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 24*30, 50)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.NotNil(t, stats)
+		assert.Equal(t, 3, stats.SampleSize)
+		assert.Equal(t, 2, stats.Wins)
+		assert.Equal(t, 1, stats.Losses)
+		assert.InDelta(t, 1.3333333, stats.NetExpectancy, 0.0001)
+	})
+
+	t.Run("scoped_no_match_returns_false", func(t *testing.T) {
+		ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+			ChatID:   "chat-1",
+			Exchange: "kraken",
+		})
+
+		stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 24*30, 50)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Nil(t, stats)
+	})
+}
+
+func TestTradeMemory_GetScopedExpectancyStats_MissingTableReturnsNoData(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 24, 10)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Nil(t, stats)
+}
+
+func TestTradeMemory_GetScopedExpectancyStats_DefaultLookbackAndLimit(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	for i := 0; i < 300; i++ {
+		_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+			id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			fmt.Sprintf("rp_%03d", i),
+			fmt.Sprintf("ord_%03d", i),
+			"chat-1",
+			"bitget",
+			"BTC/USDT",
+			"buy",
+			1,
+			100,
+			101,
+			1,
+			0,
+			"autonomous",
+			time.Now().UTC(),
+			time.Now().UTC(),
+		)
+		require.NoError(t, err)
+	}
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"rp_old",
+		"ord_old",
+		"chat-1",
+		"bitget",
+		"BTC/USDT",
+		"buy",
+		1,
+		100,
+		101,
+		5,
+		0,
+		"autonomous",
+		time.Now().UTC().Add(-31*24*time.Hour),
+		time.Now().UTC().Add(-31*24*time.Hour),
+	)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 0, 0)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, stats)
+	assert.Equal(t, 250, stats.SampleSize)
+	assert.Equal(t, 250, stats.Wins)
+	assert.Zero(t, stats.Losses)
+}
+
+func TestTradeMemory_GetScopedExpectancyStats_UsesConfiguredDefaultsAndDeterministicOrdering(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemoryWithConfig(db, TradeMemoryConfig{
+		MemoryLookbackHoursDefault: 24,
+		MemorySampleLimitDefault:   1,
+	})
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	closedAt := time.Now().UTC().Truncate(time.Second)
+	olderCreatedAt := closedAt.Add(-2 * time.Minute)
+	newerCreatedAt := closedAt.Add(-1 * time.Minute)
+	outsideLookback := closedAt.Add(-48 * time.Hour)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_oldest', 'ord_oldest', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 98, -2, 0, 'autonomous', ?, ?),
+		('rp_newest', 'ord_newest', 'chat-1', 'bitget', 'BTC-USDT:USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', ?, ?),
+		('rp_outside', 'ord_outside', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 110, 10, 0, 'autonomous', ?, ?)`,
+		closedAt, olderCreatedAt,
+		closedAt, newerCreatedAt,
+		outsideLookback, outsideLookback,
+	)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 0, 0)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, stats)
+	assert.Equal(t, 1, stats.SampleSize)
+	assert.Equal(t, 1, stats.Wins)
+	assert.Zero(t, stats.Losses)
+	assert.InDelta(t, 3.0, stats.NetExpectancy, 0.0001)
 }
 
 func TestTradeMemory_RecordLesson(t *testing.T) {

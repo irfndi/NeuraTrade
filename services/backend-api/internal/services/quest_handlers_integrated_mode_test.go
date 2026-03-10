@@ -92,11 +92,11 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 			expected:      ModePaper,
 		},
 		{
-			name:          "no_service_or_metadata_defaults_live",
+			name:          "no_service_or_metadata_defaults_dry",
 			opModeService: nil,
 			quest:         &Quest{Metadata: map[string]string{}},
 			chatID:        "chat-live-default",
-			expected:      OpModeLive,
+			expected:      OpModeDry,
 		},
 	}
 

@@ -341,7 +341,7 @@ func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Q
 			return OpModeDry
 		}
 	}
-	return OpModeLive
+	return OpModeDry
 }
 
 func (h *IntegratedQuestHandlers) syncScalpingStrategyMode(ctx context.Context, chatID string, mode OperationalMode) error {
