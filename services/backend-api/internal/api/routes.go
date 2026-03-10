@@ -686,6 +686,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	integratedHandlers.SetDrawdownHalt(drawdownHalt)
 	integratedHandlers.SetOrderExecutor(orderExecutor)
+	integratedHandlers.SetOperationalModeService(opModeService)
 
 	// Set database for user settings lookup
 	var lifecycleStore *services.TradingLifecycleStore

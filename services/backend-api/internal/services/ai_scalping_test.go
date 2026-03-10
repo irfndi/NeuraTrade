@@ -12,6 +12,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,6 +89,11 @@ func (m *mockAIScalpingCCXT) FetchOrderBook(ctx context.Context, exchange, symbo
 		return nil, nil
 	}
 	return m.orderBooks[normalizeSymbolForComparison(symbol)], nil
+}
+
+func decimalPointer(value float64) *decimal.Decimal {
+	amount := decimal.NewFromFloat(value)
+	return &amount
 }
 
 func TestAITradingDecision_Validation(t *testing.T) {
@@ -342,7 +348,7 @@ func TestAIScalpingService_ParseDecisionWithRetries_InvalidAction(t *testing.T) 
 }
 
 func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testing.T) {
-	svc := &AIScalpingService{}
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
 	prompt := svc.buildUserPrompt(context.Background(), []aiMarketSignal{{
 		Symbol:             "PEPE/USDT",
 		Price:              1,
@@ -350,21 +356,52 @@ func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testin
 		OrderBookImbalance: -0.39,
 		RangePosition24h:   27,
 	}}, TradingPortfolio{
-		USDTBalance:            50,
-		TotalValue:             50,
-		AccountTier:            "micro",
-		StrategyPhase:          "bootstrap",
-		PhaseMinConfidence:     0.75,
-		PhaseMaxCapitalPct:     1.0,
-		EffectiveMinConfidence: 0.65,
-		EffectiveMaxCapitalPct: 1.50,
+		USDTBalance:                    50,
+		TotalValue:                     50,
+		AccountTier:                    "micro",
+		StrategyPhase:                  "bootstrap",
+		PhaseMinConfidence:             0.75,
+		PhaseMaxCapitalPct:             1.0,
+		EffectiveMinConfidence:         0.65,
+		EffectiveMaxCapitalPct:         12.00,
+		MinExecutableSizePct:           12.00,
+		MinExecutableNotionalUSDT:      decimalPointer(6.00),
+		MinExecutableInitialMarginUSDT: decimalPointer(1.20),
 	})
 
 	assert.Contains(t, prompt, "Effective Min Confidence (must obey): 0.65")
-	assert.Contains(t, prompt, "Effective Max Capital % (must obey): 1.50")
+	assert.Contains(t, prompt, "Effective Max Capital % (must obey): 12.00")
+	assert.Contains(t, prompt, "Wallet Basis For size_pct: 50.00")
+	assert.Contains(t, prompt, "Executable Size Band % (must obey if action != hold): 12.00 - 12.00")
+	assert.Contains(t, prompt, "Exchange Minimum Futures Notional: 6.00 USDT")
+	assert.Contains(t, prompt, "Estimated Initial Margin @ 5x: 1.20 USDT")
+	assert.Contains(t, prompt, "do not multiply size_pct by leverage")
 	assert.Contains(t, prompt, "Policy note: account-tier and recovery adjustments are already reflected")
 	assert.NotContains(t, prompt, "Phase Min Confidence (reference only)")
 	assert.NotContains(t, prompt, "Phase Max Capital % (reference only)")
+}
+
+func TestAIScalpingService_BuildUserPrompt_SurfacesWalletBasisFallback(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
+	prompt := svc.buildUserPrompt(context.Background(), nil, TradingPortfolio{
+		USDTBalance:            0,
+		TotalValue:             46.93,
+		AccountTier:            "micro",
+		StrategyPhase:          "bootstrap",
+		EffectiveMinConfidence: 0.65,
+		EffectiveMaxCapitalPct: 12.78,
+	})
+
+	assert.Contains(t, prompt, "Wallet Basis For size_pct: 46.93")
+}
+
+func TestAIScalpingService_BuildSystemPrompt_AllowsFractionalSizePct(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
+
+	prompt := svc.buildSystemPrompt()
+
+	assert.Contains(t, prompt, `"size_pct": 0.01-100`)
+	assert.Contains(t, prompt, "size_pct is a direct percentage of wallet value converted into order notional")
 }
 
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
@@ -487,6 +524,151 @@ func TestAIScalpingService_DynamicRiskThresholds_RecoveryModes(t *testing.T) {
 	})
 	assert.InDelta(t, 0.10, maxCap, 0.0001)
 	assert.GreaterOrEqual(t, minConf, 0.85)
+}
+
+func TestAIScalpingService_DynamicRiskThresholds_FloorsToExecutableMinimum(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange:      "bitget",
+			Leverage:      5,
+			MinConfidence: 0.65,
+			MaxCapitalPct: 5.00,
+		},
+	}
+
+	minConf, maxCap := svc.dynamicRiskThresholds(context.Background(), TradingPortfolio{
+		USDTBalance: 46.93,
+		TotalValue:  46.93,
+	})
+	sizing := appautonomy.ResolveExecutableSizingConstraints("bitget", decimal.NewFromFloat(46.93), 5)
+
+	assert.InDelta(t, sizing.MinExecutableSizePct, maxCap, 0.01)
+	assert.GreaterOrEqual(t, minConf, 0.65)
+}
+
+func TestAIScalpingService_DynamicRiskThresholds_BlockNonExecutableWallet(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange:      "bitget",
+			Leverage:      5,
+			MinConfidence: 0.65,
+			MaxCapitalPct: 5.00,
+		},
+	}
+	sizing := appautonomy.ResolveExecutableSizingConstraints("bitget", decimal.NewFromFloat(5), 5)
+
+	minConf, maxCap := svc.dynamicRiskThresholds(context.Background(), TradingPortfolio{
+		USDTBalance:                    5,
+		TotalValue:                     5,
+		NonExecutableDueToWallet:       true,
+		MinExecutableSizePct:           0,
+		MinExecutableNotionalUSDT:      positiveDecimalPointer(sizing.MinOrderNotional),
+		MinExecutableInitialMarginUSDT: positiveDecimalPointer(sizing.MinInitialMargin),
+	})
+
+	assert.Zero(t, maxCap)
+	assert.GreaterOrEqual(t, minConf, 0.65)
+}
+
+func TestAIScalpingService_ExecuteDecision_BumpsSizeToExecutableMinimum(t *testing.T) {
+	orderExecutor := new(MockScalpingOrderExecutor)
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange:      "bitget",
+			Leverage:      5,
+			MaxCapitalPct: 5.00,
+		},
+		orderExecutor: orderExecutor,
+		symbolGuards:  make(map[string]symbolExecutionGuard),
+	}
+
+	sizing := appautonomy.ResolveExecutableSizingConstraints("bitget", decimal.NewFromFloat(46.93), 5)
+	portfolio := TradingPortfolio{
+		USDTBalance:               46.93,
+		MinExecutableSizePct:      sizing.MinExecutableSizePct,
+		MinExecutableNotionalUSDT: positiveDecimalPointer(sizing.MinOrderNotional),
+	}
+	decision := &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "BTC/USDT",
+		SizePercent: 1.0,
+		Confidence:  0.82,
+		Reasoning:   "execution floor regression check",
+	}
+
+	orderExecutor.On("GetOpenOrders", mock.Anything, "bitget", "BTC/USDT").
+		Return([]map[string]interface{}{}, nil).Once()
+	orderExecutor.On("IsPaperTrading").Return(false).Once()
+	orderExecutor.On("PlaceOrderWithDetails", mock.Anything, mock.MatchedBy(func(details TradeDetails) bool {
+		return details.MarketType == "futures" &&
+			details.WalletPercent >= sizing.MinExecutableSizePct-0.01 &&
+			details.AmountUSDT.GreaterThanOrEqual(appautonomy.BitgetFuturesMinNotional())
+	})).Return("order-123", nil).Once()
+
+	err := svc.executeDecision(context.Background(), decision, portfolio, 5.0)
+
+	require.NoError(t, err)
+	assert.InDelta(t, sizing.MinExecutableSizePct, decision.SizePercent, 0.01)
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestAIScalpingService_ExecuteDecision_UsesWalletBasisFallback(t *testing.T) {
+	orderExecutor := new(MockScalpingOrderExecutor)
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange: "binance",
+		},
+		orderExecutor: orderExecutor,
+		symbolGuards:  make(map[string]symbolExecutionGuard),
+	}
+
+	decision := &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "BTC/USDT",
+		SizePercent: 10.0,
+		Confidence:  0.80,
+		Reasoning:   "wallet basis fallback",
+	}
+	portfolio := TradingPortfolio{
+		USDTBalance: 0,
+		TotalValue:  50,
+	}
+
+	orderExecutor.On("GetOpenOrders", mock.Anything, "binance", "BTC/USDT").
+		Return([]map[string]interface{}{}, nil).Once()
+	orderExecutor.On("IsPaperTrading").Return(false).Once()
+	orderExecutor.On("PlaceOrderWithDetails", mock.Anything, mock.MatchedBy(func(details TradeDetails) bool {
+		return details.AmountUSDT.Equal(decimal.NewFromFloat(5)) && details.WalletPercent == 10.0
+	})).Return("order-wallet-basis", nil).Once()
+
+	err := svc.executeDecision(context.Background(), decision, portfolio, 15.0)
+
+	require.NoError(t, err)
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestAIScalpingService_ExecuteTradingCycle_HoldsWhenWalletBelowExchangeMinimum(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange: "bitget",
+			Leverage: 5,
+			Timeout:  5 * time.Second,
+		},
+		symbolGuards: make(map[string]symbolExecutionGuard),
+	}
+
+	decision, err := svc.ExecuteTradingCycle(context.Background(), TradingPortfolio{
+		USDTBalance: 5,
+		TotalValue:  5,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "hold", decision.Action)
+	assert.Contains(t, decision.Reasoning, "below exchange minimum notional 6.00 USDT")
+	if assert.NotNil(t, decision.ExecutionGate) {
+		assert.False(t, decision.ExecutionGate.Allowed)
+	}
 }
 
 func TestAIScalpingService_ScalpingCyclePolicy_UsesScopedLossStreakInsteadOfGlobalSingleton(t *testing.T) {

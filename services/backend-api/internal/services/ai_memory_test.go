@@ -199,6 +199,120 @@ func TestTradeMemory_BuildMemoryContext(t *testing.T) {
 	assert.Contains(t, context, "Performance Stats")
 }
 
+func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKeysExist(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
+		('mem_1', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'win', 2, 0.90),
+		('mem_2', datetime('now'), 'bitget', 'ETH/USDT', 'buy', 'loss', -1, 0.60)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 101, 1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_2', 'ord_2', 'chat-1', 'bitget', 'ETH/USDT', 'sell', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_3', 'ord_3', 'chat-1', 'bitget', 'SOL/USDT', 'buy', 1, 100, 100, 0, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_4', 'ord_4', 'chat-foreign', 'bitget', 'XRP/USDT', 'buy', 1, 100, 105, 5, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_5', 'ord_5', 'chat-1', 'binance', 'BNB/USDT', 'buy', 1, 100, 104, 4, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name           string
+		scope          ScalpingAutonomyScope
+		expectedTrades int
+		expectedWins   int
+		expectedLosses int
+		expectedBreak  int
+		expectedDecis  int
+		expectedPnL    decimal.Decimal
+	}{
+		{
+			name: "full_scope_prefers_realized_journal",
+			scope: ScalpingAutonomyScope{
+				ChatID:   "chat-1",
+				Exchange: "bitget",
+			},
+			expectedTrades: 3,
+			expectedWins:   1,
+			expectedLosses: 1,
+			expectedBreak:  1,
+			expectedDecis:  2,
+			expectedPnL:    decimal.Zero,
+		},
+		{
+			name: "exchange_only_scope_prefers_realized_journal",
+			scope: ScalpingAutonomyScope{
+				Exchange: "bitget",
+			},
+			expectedTrades: 4,
+			expectedWins:   2,
+			expectedLosses: 1,
+			expectedBreak:  1,
+			expectedDecis:  3,
+			expectedPnL:    decimal.NewFromInt(5),
+		},
+		{
+			name: "scoped_no_match_falls_back_to_legacy_memory",
+			scope: ScalpingAutonomyScope{
+				ChatID:   "chat-1",
+				Exchange: "kraken",
+			},
+			expectedTrades: 2,
+			expectedWins:   1,
+			expectedLosses: 1,
+			expectedBreak:  0,
+			expectedDecis:  2,
+			expectedPnL:    decimal.NewFromInt(1),
+		},
+		{
+			name:           "empty_scope_falls_back_to_legacy_memory",
+			scope:          ScalpingAutonomyScope{},
+			expectedTrades: 2,
+			expectedWins:   1,
+			expectedLosses: 1,
+			expectedBreak:  0,
+			expectedDecis:  2,
+			expectedPnL:    decimal.NewFromInt(1),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithScalpingAutonomyScope(context.Background(), tt.scope)
+			stats, err := tm.GetPerformanceStatsWindow(ctx, 24*30)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectedTrades, stats.TotalTrades)
+			assert.Equal(t, tt.expectedWins, stats.Wins)
+			assert.Equal(t, tt.expectedLosses, stats.Losses)
+			assert.Equal(t, tt.expectedBreak, stats.Breakeven)
+			assert.Equal(t, tt.expectedDecis, stats.DecisiveTrades)
+			assert.True(t, stats.TotalPnL.Equal(tt.expectedPnL), "expected pnl %s, got %s", tt.expectedPnL.String(), stats.TotalPnL.String())
+		})
+	}
+}
+
 func TestTradeMemory_RecordLesson(t *testing.T) {
 	db := setupTestDB(t)
 	tm, err := NewTradeMemory(db)

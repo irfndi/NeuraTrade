@@ -584,32 +584,38 @@ type AITradingDecision struct {
 }
 
 type TradingPortfolio struct {
-	USDTBalance                     float64 `json:"usdt_balance"`
-	TotalValue                      float64 `json:"total_value"`
-	OpenPositions                   int     `json:"open_positions"`
-	UnrealizedPnL                   float64 `json:"unrealized_pnl"`
-	CurrentDrawdown                 float64 `json:"current_drawdown"`
-	RiskSharpe                      float64 `json:"risk_sharpe"`
-	RiskSortino                     float64 `json:"risk_sortino"`
-	RiskDrawdown                    float64 `json:"risk_drawdown"`
-	RiskMaxDrawdown                 float64 `json:"risk_max_drawdown"`
-	RiskExpectancy                  float64 `json:"risk_expectancy"`
-	RiskSampleSize                  int     `json:"risk_sample_size"`
-	StrategyPhase                   string  `json:"strategy_phase"`
-	PhaseMinConfidence              float64 `json:"phase_min_confidence"`
-	PhaseMaxCapitalPct              float64 `json:"phase_max_capital_pct"`
-	MilestoneProgress               float64 `json:"milestone_progress"`
-	NoFillMinutes                   float64 `json:"no_fill_minutes"`
-	DriftActive                     bool    `json:"state_drift_active"`
-	AccountTier                     string  `json:"account_tier,omitempty"`
-	EffectiveMinConfidence          float64 `json:"effective_min_confidence,omitempty"`
-	EffectiveMaxCapitalPct          float64 `json:"effective_max_capital_pct,omitempty"`
-	EffectiveMaxConcurrentPositions int     `json:"effective_max_concurrent_positions,omitempty"`
-	RecentConsecutiveLosses         int     `json:"recent_consecutive_losses,omitempty"`
-	ScopedAdjustedMaxCapitalPct     float64 `json:"scoped_adjusted_max_capital_pct,omitempty"`
-	RecoveryMode                    string  `json:"recovery_mode,omitempty"`
-	RecoveryEntryOK                 bool    `json:"recovery_entry_allowed"`
-	RecoveryCleanCycle              int     `json:"recovery_clean_cycles"`
+	USDTBalance                     float64          `json:"usdt_balance"`
+	USDTBalanceDecimal              decimal.Decimal  `json:"-"`
+	TotalValue                      float64          `json:"total_value"`
+	TotalValueDecimal               decimal.Decimal  `json:"-"`
+	OpenPositions                   int              `json:"open_positions"`
+	UnrealizedPnL                   float64          `json:"unrealized_pnl"`
+	CurrentDrawdown                 float64          `json:"current_drawdown"`
+	RiskSharpe                      float64          `json:"risk_sharpe"`
+	RiskSortino                     float64          `json:"risk_sortino"`
+	RiskDrawdown                    float64          `json:"risk_drawdown"`
+	RiskMaxDrawdown                 float64          `json:"risk_max_drawdown"`
+	RiskExpectancy                  float64          `json:"risk_expectancy"`
+	RiskSampleSize                  int              `json:"risk_sample_size"`
+	StrategyPhase                   string           `json:"strategy_phase"`
+	PhaseMinConfidence              float64          `json:"phase_min_confidence"`
+	PhaseMaxCapitalPct              float64          `json:"phase_max_capital_pct"`
+	MilestoneProgress               float64          `json:"milestone_progress"`
+	NoFillMinutes                   float64          `json:"no_fill_minutes"`
+	DriftActive                     bool             `json:"state_drift_active"`
+	AccountTier                     string           `json:"account_tier,omitempty"`
+	EffectiveMinConfidence          float64          `json:"effective_min_confidence,omitempty"`
+	EffectiveMaxCapitalPct          float64          `json:"effective_max_capital_pct,omitempty"`
+	MinExecutableSizePct            float64          `json:"min_executable_size_pct,omitempty"`
+	MinExecutableNotionalUSDT       *decimal.Decimal `json:"min_executable_notional_usdt,omitempty"`
+	MinExecutableInitialMarginUSDT  *decimal.Decimal `json:"min_executable_initial_margin_usdt,omitempty"`
+	NonExecutableDueToWallet        bool             `json:"non_executable_due_to_wallet,omitempty"`
+	EffectiveMaxConcurrentPositions int              `json:"effective_max_concurrent_positions,omitempty"`
+	RecentConsecutiveLosses         int              `json:"recent_consecutive_losses,omitempty"`
+	ScopedAdjustedMaxCapitalPct     float64          `json:"scoped_adjusted_max_capital_pct,omitempty"`
+	RecoveryMode                    string           `json:"recovery_mode,omitempty"`
+	RecoveryEntryOK                 bool             `json:"recovery_entry_allowed"`
+	RecoveryCleanCycle              int              `json:"recovery_clean_cycles"`
 }
 
 type AIScalpingService struct {
@@ -697,6 +703,72 @@ func (s *AIScalpingService) exchangeForContext(ctx context.Context) string {
 		return exchange
 	}
 	return s.configuredExchange()
+}
+
+func walletBasis(portfolio TradingPortfolio) decimal.Decimal {
+	switch {
+	case portfolio.USDTBalanceDecimal.GreaterThan(decimal.Zero):
+		return portfolio.USDTBalanceDecimal
+	case portfolio.TotalValueDecimal.GreaterThan(decimal.Zero):
+		return portfolio.TotalValueDecimal
+	case portfolio.USDTBalance > 0:
+		return decimalFromBalanceFloat(portfolio.USDTBalance)
+	case portfolio.TotalValue > 0:
+		return decimalFromBalanceFloat(portfolio.TotalValue)
+	default:
+		return decimal.Zero
+	}
+}
+
+func portfolioTotalValueDecimal(portfolio TradingPortfolio) decimal.Decimal {
+	if portfolio.TotalValueDecimal.GreaterThan(decimal.Zero) {
+		return portfolio.TotalValueDecimal
+	}
+	if portfolio.TotalValue > 0 {
+		return decimalFromBalanceFloat(portfolio.TotalValue)
+	}
+	return decimal.Zero
+}
+
+func decimalFromBalanceFloat(value float64) decimal.Decimal {
+	if value <= 0 {
+		return decimal.Zero
+	}
+	parsed, err := decimal.NewFromString(strconv.FormatFloat(value, 'f', -1, 64))
+	if err != nil {
+		return decimal.Zero
+	}
+	return parsed
+}
+
+func positiveDecimalPointer(value decimal.Decimal) *decimal.Decimal {
+	if !value.GreaterThan(decimal.Zero) {
+		return nil
+	}
+	copy := value
+	return &copy
+}
+
+func (s *AIScalpingService) executableSizingConstraints(ctx context.Context, portfolio TradingPortfolio) appautonomy.ExecutableSizingConstraints {
+	return appautonomy.ResolveExecutableSizingConstraints(
+		s.exchangeForContext(ctx),
+		walletBasis(portfolio),
+		s.config.Leverage,
+	)
+}
+
+func applyExecutableSizingContext(portfolio *TradingPortfolio, constraints appautonomy.ExecutableSizingConstraints) {
+	if portfolio == nil {
+		return
+	}
+
+	portfolio.MinExecutableSizePct = 0
+	if constraints.MinExecutableSizePct > 0 {
+		portfolio.MinExecutableSizePct = constraints.MinExecutableSizePct
+	}
+	portfolio.MinExecutableNotionalUSDT = positiveDecimalPointer(constraints.MinOrderNotional)
+	portfolio.MinExecutableInitialMarginUSDT = positiveDecimalPointer(constraints.MinInitialMargin)
+	portfolio.NonExecutableDueToWallet = constraints.NonExecutableDueToWallet
 }
 
 func NewAIScalpingService(
@@ -881,7 +953,7 @@ func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptIn
 }
 
 func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (decision *AITradingDecision, err error) {
-	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", portfolio.USDTBalance)
+	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", walletBasis(portfolio).InexactFloat64())
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
 	effectiveExchange := s.exchangeForContext(ctx)
@@ -894,11 +966,30 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		})
 	}
 
+	executableSizing := s.executableSizingConstraints(ctx, portfolio)
+	applyExecutableSizingContext(&portfolio, executableSizing)
 	policy := s.scalpingCyclePolicy(ctx, portfolio)
 	portfolio.AccountTier = policy.AccountTier
 	portfolio.EffectiveMinConfidence = policy.EffectiveMinConfidence
 	portfolio.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct
 	portfolio.EffectiveMaxConcurrentPositions = policy.MaxConcurrentPositions
+	if portfolio.NonExecutableDueToWallet {
+		notional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT)
+		reason := fmt.Sprintf(
+			"wallet basis %.2f USDT is below exchange minimum notional %s USDT on %s",
+			walletBasis(portfolio).InexactFloat64(),
+			notional.StringFixed(2),
+			effectiveExchange,
+		)
+		log.Printf("[AI-SCALPING] %s", reason)
+		decision = strategyHoldDecision(reason, 0)
+		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+			Allowed:     false,
+			BlockReason: reason,
+			BlockCode:   appautonomy.CandidateRejectRiskBudget,
+		}
+		return decision, nil
+	}
 
 	effectiveMinConfidence := policy.EffectiveMinConfidence
 	effectiveMaxCapital := policy.EffectiveMaxCapitalPct
@@ -1474,7 +1565,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 
 	log.Printf("[AI-SCALPING] Calling LLM with %d signals", len(signals))
 	log.Printf("[AI-SCALPING] === SYSTEM PROMPT ===\n%s", systemPrompt)
-	log.Printf("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", portfolio.USDTBalance, len(signals))
+	log.Printf("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", walletBasis(portfolio).InexactFloat64(), len(signals))
 
 	req := &llm.CompletionRequest{
 		Model: strings.TrimSpace(s.config.Model),
@@ -1585,17 +1676,18 @@ You analyze market data and make trading decisions. You have access to real-time
 
 ## Trading Rules
 1. Only trade when confidence meets or exceeds the effective threshold supplied in the user prompt; never use strategy-phase reference values as execution gates when they differ from the effective threshold
-2. Never size above the effective max capital percentage supplied in the user prompt
-3. Use futures with %dx leverage
-4. Always consider risk: set stop-loss and take-profit levels
-5. If uncertain, return action: "hold" with reasoning
+2. If action is buy or sell, choose size_pct inside the executable size band supplied in the user prompt
+3. size_pct is a direct percentage of wallet value converted into order notional; leverage affects required margin, not the size_pct math
+4. Use futures with %dx leverage
+5. Always consider risk: set stop-loss and take-profit levels
+6. If uncertain, return action: "hold" with reasoning
 
 ## Response Format
 Return JSON only:
 {
   "action": "buy" | "sell" | "hold",
   "symbol": "SYMBOL/USDT",
-  "size_pct": 1-100,
+  "size_pct": 0.01-100,
   "confidence": 0.0-1.0,
   "reasoning": "explanation",
   "stop_loss": 123.45,
@@ -1616,9 +1708,11 @@ Return JSON only:
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
+	walletBalance := walletBasis(portfolio)
 
 	var memoryContext string
 	var recoveryContext string
+	sizingContext := ""
 	if s.tradeMemory != nil {
 		topSymbol := ""
 		if len(signals) > 0 {
@@ -1633,12 +1727,32 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 			recoveryContext = "\n" + s.tradeMemory.BuildRecoveryContext(ctx, portfolio.RiskDrawdown)
 		}
 	}
+	minNotional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT)
+	minInitialMargin := decimalValueOrZero(portfolio.MinExecutableInitialMarginUSDT)
+	if portfolio.NonExecutableDueToWallet && minNotional.GreaterThan(decimal.Zero) {
+		sizingContext = fmt.Sprintf(
+			"- Exchange Minimum Futures Notional: %s USDT\n- Estimated Initial Margin @ %dx: %s USDT\n- Wallet is below the exchange minimum notional; return hold until deployable balance reaches the exchange minimum.\n",
+			minNotional.StringFixed(2),
+			s.config.Leverage,
+			minInitialMargin.StringFixed(2),
+		)
+	} else if portfolio.MinExecutableSizePct > 0 && minNotional.GreaterThan(decimal.Zero) {
+		sizingContext = fmt.Sprintf(
+			"- Executable Size Band %% (must obey if action != hold): %.2f - %.2f\n- Exchange Minimum Futures Notional: %s USDT\n- Estimated Initial Margin @ %dx: %s USDT\n- Sizing semantics: size_pct maps directly to order notional as a share of wallet; do not multiply size_pct by leverage\n",
+			portfolio.MinExecutableSizePct,
+			portfolio.EffectiveMaxCapitalPct,
+			minNotional.StringFixed(2),
+			s.config.Leverage,
+			minInitialMargin.StringFixed(2),
+		)
+	}
 
 	return fmt.Sprintf(`Analyze these market signals and make a trading decision.
 
 ## Portfolio
 - USDT Balance: %.2f
 - Total Value: %.2f
+- Wallet Basis For size_pct: %.2f
 - Open Positions: %d
 - Unrealized PnL: %.4f
 
@@ -1648,7 +1762,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - Effective Min Confidence (must obey): %.2f
 - Effective Max Capital %% (must obey): %.2f
 - Policy note: account-tier and recovery adjustments are already reflected in the effective values above; cite and enforce those effective values only
-- Fund Milestone Progress: %.2f%%
+%s- Fund Milestone Progress: %.2f%%
 - No-fill Duration (minutes): %.1f
 - State Drift Active: %t
 - Risk Sharpe: %.4f
@@ -1661,12 +1775,14 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Adapt your strategy based on recovery context if provided. Return only valid JSON.`,
 		portfolio.USDTBalance,
 		portfolio.TotalValue,
+		walletBalance.InexactFloat64(),
 		portfolio.OpenPositions,
 		portfolio.UnrealizedPnL,
 		portfolio.AccountTier,
 		portfolio.StrategyPhase,
 		portfolio.EffectiveMinConfidence,
 		portfolio.EffectiveMaxCapitalPct,
+		sizingContext,
 		portfolio.MilestoneProgress,
 		portfolio.NoFillMinutes,
 		portfolio.DriftActive,
@@ -1686,18 +1802,55 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		return fmt.Errorf("no order executor configured")
 	}
 	exchange := s.exchangeForContext(ctx)
+	walletBalance := walletBasis(portfolio)
+	if portfolio.NonExecutableDueToWallet {
+		return fmt.Errorf(
+			"wallet basis %.4f USDT below exchange minimum notional %s USDT on %s",
+			walletBalance.InexactFloat64(),
+			decimalValueOrZero(portfolio.MinExecutableNotionalUSDT).StringFixed(2),
+			exchange,
+		)
+	}
+	if !walletBalance.GreaterThan(decimal.Zero) {
+		return fmt.Errorf("computed wallet basis is non-positive")
+	}
 
 	if maxCapitalPct <= 0 {
 		maxCapitalPct = s.config.MaxCapitalPct
 	}
+	if portfolio.MinExecutableSizePct > 100 {
+		return fmt.Errorf("invalid executable size floor %.4f exceeds 100%%", portfolio.MinExecutableSizePct)
+	}
+	if portfolio.MinExecutableSizePct > 0 && maxCapitalPct < portfolio.MinExecutableSizePct {
+		maxCapitalPct = portfolio.MinExecutableSizePct
+	}
 	if decision.SizePercent > maxCapitalPct {
 		decision.SizePercent = maxCapitalPct
+	}
+	if portfolio.MinExecutableSizePct > 0 && decision.SizePercent < portfolio.MinExecutableSizePct {
+		if minNotional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT); minNotional.GreaterThan(decimal.Zero) {
+			log.Printf(
+				"[AI-SCALPING] Requested size %.2f%% below executable floor %.2f%% on %s, bumping to exchange minimum %s USDT",
+				decision.SizePercent,
+				portfolio.MinExecutableSizePct,
+				exchange,
+				minNotional.StringFixed(2),
+			)
+		} else {
+			log.Printf(
+				"[AI-SCALPING] Requested size %.2f%% below executable floor %.2f%% on %s, bumping to executable floor",
+				decision.SizePercent,
+				portfolio.MinExecutableSizePct,
+				exchange,
+			)
+		}
+		decision.SizePercent = portfolio.MinExecutableSizePct
 	}
 	if decision.SizePercent <= 0 || decision.SizePercent > 100 {
 		return fmt.Errorf("invalid size_pct %.4f", decision.SizePercent)
 	}
 
-	amount := decimal.NewFromFloat(portfolio.USDTBalance * decision.SizePercent / 100)
+	amount := walletBalance.Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100))
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("computed order amount is non-positive")
 	}
@@ -2453,6 +2606,9 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if confidence < clampFloat(minConfidenceFloor, 0.05, 0.99) {
 		return nil, 0, false
 	}
+	if portfolio.NonExecutableDueToWallet {
+		return nil, 0, false
+	}
 
 	sizeCap := portfolio.EffectiveMaxCapitalPct
 	if sizeCap <= 0 {
@@ -2461,7 +2617,17 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if sizeCap <= 0 {
 		sizeCap = DefaultAIScalpingConfig().MaxCapitalPct
 	}
-	minSizePct := math.Min(fallbackCfg.MinSizePct, sizeCap)
+	minSizePct := fallbackCfg.MinSizePct
+	if portfolio.MinExecutableSizePct > minSizePct {
+		minSizePct = portfolio.MinExecutableSizePct
+	}
+	if minSizePct > 100 {
+		return nil, 0, false
+	}
+	if sizeCap < minSizePct {
+		sizeCap = minSizePct
+	}
+	sizeCap = math.Min(sizeCap, 100)
 	sizePct := clampFloat(sizeCap*fallbackCfg.SizeFraction, minSizePct, sizeCap)
 
 	riskPct := 0.006
@@ -3026,6 +3192,7 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 }
 
 func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {
+	applyExecutableSizingContext(&portfolio, s.executableSizingConstraints(ctx, portfolio))
 	policy := s.scalpingCyclePolicy(ctx, portfolio)
 	return policy.EffectiveMinConfidence, policy.EffectiveMaxCapitalPct
 }
@@ -3047,23 +3214,25 @@ func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio T
 	}
 
 	return appautonomy.EvaluateScalpingPolicy(appautonomy.ScalpingCycleInput{
-		TotalValue:            decimal.NewFromFloat(portfolio.TotalValue),
-		OpenPositions:         portfolio.OpenPositions,
-		DriftActive:           portfolio.DriftActive,
-		BaseMinConfidence:     s.config.MinConfidence,
-		BaseMaxCapitalPct:     s.config.MaxCapitalPct,
-		AdjustedMaxCapitalPct: portfolio.ScopedAdjustedMaxCapitalPct,
-		ConsecutiveLosses:     portfolio.RecentConsecutiveLosses,
-		Phase:                 portfolio.StrategyPhase,
-		PhaseMinConfidence:    portfolio.PhaseMinConfidence,
-		PhaseMaxCapitalPct:    portfolio.PhaseMaxCapitalPct,
-		MilestoneProgress:     portfolio.MilestoneProgress,
-		NoFillMinutes:         portfolio.NoFillMinutes,
-		RiskDrawdown:          portfolio.RiskDrawdown,
-		RiskExpectancy:        portfolio.RiskExpectancy,
-		RiskSampleSize:        portfolio.RiskSampleSize,
-		RecoveryMode:          portfolio.RecoveryMode,
-		PerformanceWindow:     performanceWindow,
+		TotalValue:               portfolioTotalValueDecimal(portfolio),
+		OpenPositions:            portfolio.OpenPositions,
+		DriftActive:              portfolio.DriftActive,
+		BaseMinConfidence:        s.config.MinConfidence,
+		BaseMaxCapitalPct:        s.config.MaxCapitalPct,
+		ExecutionMinCapitalPct:   decimal.NewFromFloat(portfolio.MinExecutableSizePct),
+		NonExecutableDueToWallet: portfolio.NonExecutableDueToWallet,
+		AdjustedMaxCapitalPct:    portfolio.ScopedAdjustedMaxCapitalPct,
+		ConsecutiveLosses:        portfolio.RecentConsecutiveLosses,
+		Phase:                    portfolio.StrategyPhase,
+		PhaseMinConfidence:       portfolio.PhaseMinConfidence,
+		PhaseMaxCapitalPct:       portfolio.PhaseMaxCapitalPct,
+		MilestoneProgress:        portfolio.MilestoneProgress,
+		NoFillMinutes:            portfolio.NoFillMinutes,
+		RiskDrawdown:             portfolio.RiskDrawdown,
+		RiskExpectancy:           portfolio.RiskExpectancy,
+		RiskSampleSize:           portfolio.RiskSampleSize,
+		RecoveryMode:             portfolio.RecoveryMode,
+		PerformanceWindow:        performanceWindow,
 	}, cfg)
 }
 

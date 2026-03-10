@@ -16,6 +16,7 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
+	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/services/phase_management"
 	"github.com/irfndi/neuratrade/internal/skill"
@@ -46,6 +47,7 @@ type IntegratedQuestHandlers struct {
 	lifecycleStore       *TradingLifecycleStore
 	protectionManager    *DynamicProtectionManager
 	db                   *sql.DB // Database for user settings
+	opModeService        *OperationalModeService
 	autonomyStore        *AutonomousRolloutStore
 	autonomyCoordinator  *ScalpingAutonomyCoordinator
 	stalePositionMu      sync.Mutex
@@ -174,6 +176,13 @@ func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 	if err := h.ensureTradeJournalSchema(); err != nil {
 		log.Printf("[SCALPING] Failed to initialize legacy trade journal schema: %v", err)
 	}
+}
+
+func (h *IntegratedQuestHandlers) SetOperationalModeService(service *OperationalModeService) {
+	if h == nil {
+		return
+	}
+	h.opModeService = service
 }
 
 func (h *IntegratedQuestHandlers) ensureTradeJournalSchema() error {
@@ -309,6 +318,86 @@ func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
 	if h.aiScalpingService != nil {
 		h.aiScalpingService.SetAutonomyCoordinator(nil)
 	}
+}
+
+func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Quest) OperationalMode {
+	if h != nil && h.opModeService != nil {
+		switch mode := h.opModeService.GetMode(chatID); mode {
+		case OpModeLive:
+			return OpModeLive
+		case ModePaper:
+			return ModePaper
+		case OpModeDry, ModeConservative, ModeModerate, ModeAggressive:
+			return OpModeDry
+		default:
+			return OpModeDry
+		}
+	}
+	if quest != nil && quest.Metadata != nil {
+		if strings.EqualFold(strings.TrimSpace(quest.Metadata["paper_trading"]), "true") {
+			return ModePaper
+		}
+		if strings.EqualFold(strings.TrimSpace(quest.Metadata["dry_run"]), "true") {
+			return OpModeDry
+		}
+	}
+	return OpModeLive
+}
+
+func (h *IntegratedQuestHandlers) syncScalpingStrategyMode(ctx context.Context, chatID string, mode OperationalMode) error {
+	if h == nil || h.autonomyCoordinator == nil {
+		return nil
+	}
+	strategyID := ScalpingStrategyID(chatID)
+	if strings.TrimSpace(strategyID) == "" {
+		return nil
+	}
+
+	targetMode := autonomous.ModeShadow
+	switch mode {
+	case OpModeLive:
+		targetMode = autonomous.ModeLive
+	case ModePaper:
+		targetMode = autonomous.ModePaper
+	}
+	if targetMode != autonomous.ModeLive {
+		if err := h.rejectNonLiveModeTransitionWithExposure(ctx, chatID, strategyID); err != nil {
+			return err
+		}
+	}
+	_, err := h.autonomyCoordinator.SetStrategyMode(ctx, strategyID, targetMode)
+	return err
+}
+
+func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx context.Context, chatID, strategyID string) error {
+	if h == nil || h.lifecycleStore == nil {
+		return nil
+	}
+
+	exchange := strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 20)
+	if err != nil {
+		return fmt.Errorf("check managed positions before non-live transition for %s: %w", strategyID, err)
+	}
+	openOrders, err := h.lifecycleStore.CountOpenOrders(ctx, chatID, exchange)
+	if err != nil {
+		return fmt.Errorf("check open orders before non-live transition for %s: %w", strategyID, err)
+	}
+	if len(positions) == 0 && openOrders == 0 {
+		return nil
+	}
+
+	targetExchange := exchange
+	if targetExchange == "" {
+		targetExchange = "all"
+	}
+	return fmt.Errorf(
+		"cannot switch %s to non-live mode while managed exposure remains (open_positions=%d open_orders=%d exchange=%s)",
+		strategyID,
+		len(positions),
+		openOrders,
+		targetExchange,
+	)
 }
 
 // recordQuestResult records quest execution result for monitoring
@@ -554,11 +643,25 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// Get user's preferred exchange from database or default to bitget
 	userExchange := h.getUserExchange(chatID)
 	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
+	currentMode := h.resolveOperationalMode(chatID, quest)
+	isDryRun := currentMode != OpModeLive
+	if quest.Metadata == nil {
+		quest.Metadata = make(map[string]string)
+	}
+	quest.Metadata["dry_run"] = strconv.FormatBool(isDryRun)
+	quest.Metadata["paper_trading"] = strconv.FormatBool(currentMode == ModePaper)
 	ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
 		ChatID:     chatID,
 		StrategyID: ScalpingStrategyID(chatID),
 		Exchange:   userExchange,
 	})
+	if err := h.syncScalpingStrategyMode(ctx, chatID, currentMode); err != nil {
+		log.Printf("[SCALPING] Failed to sync rollout mode for chat %s (%s): %v", chatID, currentMode, err)
+		quest.Checkpoint["autonomy_mode_sync_error"] = err.Error()
+		quest.Checkpoint["status"] = "hold"
+		quest.Checkpoint["runtime_entry_gate_reason"] = "failed to synchronize scalping rollout mode"
+		return nil
+	}
 	h.bootstrapLifecycleState(ctx, quest, userExchange, chatID)
 	h.ensureDynamicProtectionManager()
 	if h.protectionManager != nil {
@@ -584,14 +687,6 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// have fresher win/loss data before the next decision.
 	if lastSymbol, ok := quest.Checkpoint["ai_symbol"].(string); ok && strings.TrimSpace(lastSymbol) != "" {
 		h.ingestClosedOrderFeedback(ctx, quest, userExchange, lastSymbol)
-	}
-
-	// Check if we're in dry-run/paper trading mode
-	isDryRun := false
-	if quest.Metadata != nil {
-		if dryRunVal, ok := quest.Metadata["dry_run"]; ok && dryRunVal == "true" {
-			isDryRun = true
-		}
 	}
 
 	usdtBalance := 0.0
@@ -699,9 +794,11 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 
 	portfolio := TradingPortfolio{
-		USDTBalance:   usdtBalance,
-		TotalValue:    usdtBalance,
-		OpenPositions: 0,
+		USDTBalance:        usdtBalance,
+		USDTBalanceDecimal: decimalFromBalanceFloat(usdtBalance),
+		TotalValue:         usdtBalance,
+		TotalValueDecimal:  decimalFromBalanceFloat(usdtBalance),
+		OpenPositions:      0,
 	}
 	h.enrichPortfolioControlPlane(ctx, quest, chatID, userExchange, &portfolio)
 	recoveryState := h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
@@ -1225,7 +1322,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Side:       decision.Action,
 			OrderType:  "market",
 			MarketType: "futures",
-			Amount:     decimal.NewFromFloat(portfolio.USDTBalance * decision.SizePercent / 100),
+			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)),
 			EntryPrice: entryPrice,
 			StopLoss:   decimalValueOrZero(decision.StopLoss),
 			TakeProfit: decimalValueOrZero(decision.TakeProfit),
@@ -2078,6 +2175,7 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 			}
 			portfolio.UnrealizedPnL = unrealized.InexactFloat64()
 			portfolio.TotalValue = portfolio.USDTBalance + portfolio.UnrealizedPnL
+			portfolio.TotalValueDecimal = portfolio.USDTBalanceDecimal.Add(unrealized)
 		}
 	}
 
@@ -2167,9 +2265,10 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	}
 
 	portfolio.TotalValue = clampedTotalValue
+	portfolio.TotalValueDecimal = decimalFromBalanceFloat(clampedTotalValue)
 
 	phaseDetector := phase_management.NewPhaseDetector(phase_management.DefaultPhaseDetectorConfig(), nil)
-	currentPhase := phaseDetector.GetPhaseForValue(decimal.NewFromFloat(portfolio.TotalValue))
+	currentPhase := phaseDetector.GetPhaseForValue(portfolioTotalValueDecimal(*portfolio))
 	adapter := phase_management.NewStrategyAdapter(phase_management.DefaultStrategyAdapterConfig())
 	strategy := adapter.SelectStrategy(currentPhase)
 	riskParams := adapter.GetRiskParams(currentPhase)
@@ -3564,11 +3663,11 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
 }
 
 func legacyTradeEntryMetrics(portfolio TradingPortfolio, decision *AITradingDecision) (decimal.Decimal, decimal.Decimal) {
-	if decision == nil || portfolio.USDTBalance <= 0 || decision.SizePercent <= 0 {
+	if decision == nil || decision.SizePercent <= 0 {
 		return decimal.Zero, decimal.Zero
 	}
 
-	costBasis := decimal.NewFromFloat(portfolio.USDTBalance).
+	costBasis := walletBasis(portfolio).
 		Mul(decimal.NewFromFloat(decision.SizePercent)).
 		Div(decimal.NewFromInt(100))
 	if decision.EntryPrice == nil || decision.EntryPrice.LessThanOrEqual(decimal.Zero) || costBasis.LessThanOrEqual(decimal.Zero) {
