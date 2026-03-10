@@ -329,8 +329,6 @@ func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Q
 			return ModePaper
 		case OpModeDry, ModeConservative, ModeModerate, ModeAggressive:
 			return OpModeDry
-		default:
-			return OpModeDry
 		}
 	}
 	if quest != nil && quest.Metadata != nil {
@@ -2198,10 +2196,6 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	portfolio.RiskSampleSize = riskMetrics.SampleSize
 
 	rawEquity := portfolio.TotalValue
-	clampedTotalValue := portfolio.TotalValue
-	if clampedTotalValue <= 0 {
-		clampedTotalValue = portfolio.USDTBalance
-	}
 
 	currentDrawdown := 0.0
 	peakEquity := rawEquity
@@ -2264,8 +2258,12 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		}
 	}
 
-	portfolio.TotalValue = clampedTotalValue
-	portfolio.TotalValueDecimal = decimalFromBalanceFloat(clampedTotalValue)
+	clampedTotalValueDecimal := portfolio.TotalValueDecimal
+	if clampedTotalValueDecimal.LessThanOrEqual(decimal.Zero) {
+		clampedTotalValueDecimal = portfolio.USDTBalanceDecimal
+	}
+	portfolio.TotalValueDecimal = clampedTotalValueDecimal
+	portfolio.TotalValue = clampedTotalValueDecimal.InexactFloat64()
 
 	phaseDetector := phase_management.NewPhaseDetector(phase_management.DefaultPhaseDetectorConfig(), nil)
 	currentPhase := phaseDetector.GetPhaseForValue(portfolioTotalValueDecimal(*portfolio))

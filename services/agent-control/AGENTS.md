@@ -11,7 +11,7 @@ agent-control/
 ├── audit.go                            # Action audit logging
 ├── client.go                           # Backend API client
 ├── ingest.go                           # Event ingestion from eventbus
-├── playbooks.go                        # Self-heal and degradatation playbooks
+├── playbooks.go                        # Self-heal and degradation playbooks
 ├── policy.go                           # Agent permission policies
 └── *_test.go                           # Tests
 ```

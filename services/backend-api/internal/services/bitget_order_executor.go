@@ -112,10 +112,10 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 
 				details.EffectiveLeverage = effectiveLeverage
 				details.LeverageSyncStatus = syncStatus
-				return e.placeFuturesOrderWithTPSL(ctx, apiSymbol, details)
+				return e.placeFuturesOrderWithTPSL(ctx, apiSymbol, &details)
 			}()
 		} else {
-			orderID, err = e.placeFuturesOrderWithTPSL(ctx, apiSymbol, details)
+			orderID, err = e.placeFuturesOrderWithTPSL(ctx, apiSymbol, &details)
 		}
 		if err != nil {
 			fmt.Printf("[BITGET-ORDER] Futures order failed: %v\n", err)
@@ -195,12 +195,15 @@ func normalizeSpotFallbackSide(side string) (string, error) {
 }
 
 // placeFuturesOrderWithTPSL places a futures order with TP/SL
-func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, symbol string, details TradeDetails) (string, error) {
+func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, symbol string, details *TradeDetails) (string, error) {
+	if details == nil {
+		return "", fmt.Errorf("trade details are required")
+	}
 	bitgetSide, err := normalizeBitgetFuturesSide(details.Side)
 	if err != nil {
 		return "", err
 	}
-	isRiskReduction := isRiskReductionOrder(details)
+	isRiskReduction := isRiskReductionOrder(*details)
 	tradeSide := "open"
 	holdSide := "long"
 	if bitgetSide == "sell" {
@@ -263,6 +266,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 				amountUSDT.String(), minNotional.String())
 			amountUSDT = minNotional
 		}
+		details.AmountUSDT = amountUSDT
 
 		// Calculate contract size:
 		// For USDT-FUTURES: size = (USDT amount / price) / sizeMultiplier

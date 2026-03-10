@@ -625,6 +625,50 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_RiskReductionSkipsLeverageSyn
 	assert.Equal(t, bitgetFuturesOrderMarginMode, orderBody["marginMode"])
 }
 
+func TestBitgetOrderExecutor_PlaceFuturesOrderWithTPSL_PropagatesBumpedNotional(t *testing.T) {
+	var orderBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/market/contracts":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{
+				"sizeMultiplier":"1",
+				"minTradeNum":"1",
+				"volumePlace":"0",
+				"pricePlace":"2"
+			}]}`))
+		case "/api/v2/mix/order/place-order":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &orderBody))
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"min-bump-123"}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	entryPrice := decimal.NewFromInt(2)
+	details := &TradeDetails{
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		MarketType: "futures",
+		AmountUSDT: decimal.NewFromInt(1),
+		EntryPrice: &entryPrice,
+	}
+
+	orderID, err := executor.placeFuturesOrderWithTPSL(context.Background(), "BTCUSDT", details)
+
+	require.NoError(t, err)
+	assert.Equal(t, "min-bump-123", orderID)
+	assert.True(t, details.AmountUSDT.Equal(bitgetFuturesMinUSDTNotional()))
+	require.NotNil(t, orderBody)
+	assert.Equal(t, "BTCUSDT", orderBody["symbol"])
+}
+
 func TestBitgetFuturesAccount_EffectiveLeverageForCrossMarginPrefersCrossValues(t *testing.T) {
 	account := bitgetFuturesAccount{
 		CrossMarginLeverage:   9,

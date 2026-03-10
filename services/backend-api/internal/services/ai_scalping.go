@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -723,6 +722,26 @@ func walletBasis(portfolio TradingPortfolio) decimal.Decimal {
 	}
 }
 
+func promptUSDTBalanceDecimal(portfolio TradingPortfolio) decimal.Decimal {
+	if portfolio.USDTBalanceDecimal.GreaterThan(decimal.Zero) {
+		return portfolio.USDTBalanceDecimal
+	}
+	if portfolio.USDTBalance > 0 {
+		return decimalFromBalanceFloat(portfolio.USDTBalance)
+	}
+	return decimal.Zero
+}
+
+func promptTotalValueDecimal(portfolio TradingPortfolio) decimal.Decimal {
+	if portfolio.TotalValueDecimal.GreaterThan(decimal.Zero) {
+		return portfolio.TotalValueDecimal
+	}
+	if portfolio.TotalValue > 0 {
+		return decimalFromBalanceFloat(portfolio.TotalValue)
+	}
+	return decimal.Zero
+}
+
 func portfolioTotalValueDecimal(portfolio TradingPortfolio) decimal.Decimal {
 	if portfolio.TotalValueDecimal.GreaterThan(decimal.Zero) {
 		return portfolio.TotalValueDecimal
@@ -976,6 +995,12 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	portfolio.EffectiveMinConfidence = policy.EffectiveMinConfidence
 	portfolio.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct
 	portfolio.EffectiveMaxConcurrentPositions = policy.MaxConcurrentPositions
+	effectiveMinConfidence := policy.EffectiveMinConfidence
+	effectiveMaxCapital := policy.EffectiveMaxCapitalPct
+	var funnel appautonomy.CandidateFunnelSnapshot
+	defer func() {
+		finalizeDecisionMetadata(decision, &policy, effectiveMinConfidence, effectiveMaxCapital, funnel)
+	}()
 	if portfolio.NonExecutableDueToWallet {
 		notional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT)
 		reason := fmt.Sprintf(
@@ -993,13 +1018,6 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 		return decision, nil
 	}
-
-	effectiveMinConfidence := policy.EffectiveMinConfidence
-	effectiveMaxCapital := policy.EffectiveMaxCapitalPct
-	var funnel appautonomy.CandidateFunnelSnapshot
-	defer func() {
-		finalizeDecisionMetadata(decision, &policy, effectiveMinConfidence, effectiveMaxCapital, funnel)
-	}()
 
 	signals, err := s.gatherMarketSignals(ctx)
 	if err != nil {
@@ -1715,6 +1733,8 @@ Return JSON only:
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
 	walletBalance := walletBasis(portfolio)
+	usdtBalance := promptUSDTBalanceDecimal(portfolio)
+	totalValue := promptTotalValueDecimal(portfolio)
 
 	var memoryContext string
 	var recoveryContext string
@@ -1779,8 +1799,8 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 ## Market Signals
 %s%s%s
 Based on the signals and past trading history, what is your trading decision? Learn from past mistakes. Adapt your strategy based on recovery context if provided. Return only valid JSON.`,
-		portfolio.USDTBalance,
-		portfolio.TotalValue,
+		usdtBalance.InexactFloat64(),
+		totalValue.InexactFloat64(),
 		walletBalance.InexactFloat64(),
 		portfolio.OpenPositions,
 		portfolio.UnrealizedPnL,
@@ -3354,15 +3374,12 @@ func extractLooseFieldValueWithMarker(raw string, marker string, requireBoundary
 		return "", false
 	}
 
-	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(marker))
 	searchStart := 0
 	for searchStart < len(raw) {
-		loc := re.FindStringIndex(raw[searchStart:])
-		if loc == nil {
+		idx, end, ok := findLooseMarkerFold(raw, marker, searchStart)
+		if !ok {
 			return "", false
 		}
-		idx := searchStart + loc[0]
-		end := searchStart + loc[1]
 		if requireBoundary {
 			if idx > 0 {
 				prev, _ := utf8.DecodeLastRuneInString(raw[:idx])
@@ -3399,6 +3416,20 @@ func extractLooseFieldValueWithMarker(raw string, marker string, requireBoundary
 	return "", false
 }
 
+func findLooseMarkerFold(raw string, marker string, searchStart int) (int, int, bool) {
+	for idx := range raw[searchStart:] {
+		candidateStart := searchStart + idx
+		candidateEnd := candidateStart + len(marker)
+		if candidateEnd > len(raw) {
+			return 0, 0, false
+		}
+		if strings.EqualFold(raw[candidateStart:candidateEnd], marker) {
+			return candidateStart, candidateEnd, true
+		}
+	}
+	return 0, 0, false
+}
+
 func isLooseFieldIdentifierRune(ch rune) bool {
 	return ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch)
 }
@@ -3428,7 +3459,7 @@ func readLooseTokenValue(raw string) string {
 	end := 0
 	for end < len(raw) {
 		switch raw[end] {
-		case ',', '}', '\n', '\r':
+		case ',', ';', '}', '\n', '\r':
 			return strings.TrimSpace(raw[:end])
 		default:
 			end++

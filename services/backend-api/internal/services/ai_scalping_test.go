@@ -381,6 +381,21 @@ Reason: Waiting for qualified setup until spread is executable.`,
 	assert.Equal(t, 0, mockLLM.CallCount)
 }
 
+func TestAIScalpingService_ParseDecisionWithRetries_NoLLMAndInferenceFailure(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 2,
+		},
+	}
+
+	decision, err := svc.parseDecisionWithRetries(context.Background(), "<<<garbled-response>>>")
+
+	require.Error(t, err)
+	assert.Nil(t, decision)
+}
+
 func TestAIScalpingService_ParseDecisionWithRetries_InfersActionableDecisionFromMalformedJSON(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		Responses: []*llm.CompletionResponse{
@@ -471,6 +486,23 @@ func TestInferDecisionFromLooseText_ConfidenceNormalization(t *testing.T) {
 			assert.InDelta(t, tt.expected, decision.Confidence, 0.0001)
 		})
 	}
+}
+
+func TestInferDecisionFromLooseText_ParsesSemicolonSeparatedFields(t *testing.T) {
+	decision, err := inferDecisionFromLooseText(
+		`action: buy; symbol: BTC/USDT; size_pct: 0.75; confidence: 68%; reasoning: breakout; stop_loss: 41000; take_profit: 43000`,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+	assert.InDelta(t, 0.75, decision.SizePercent, 0.0001)
+	assert.InDelta(t, 0.68, decision.Confidence, 0.0001)
+	require.NotNil(t, decision.StopLoss)
+	require.NotNil(t, decision.TakeProfit)
+	assert.True(t, decision.StopLoss.Equal(decimal.NewFromInt(41000)))
+	assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
 }
 
 func TestInferDecisionFromLooseText_SingleQuotedPseudoJSON(t *testing.T) {
@@ -609,6 +641,22 @@ func TestAIScalpingService_BuildUserPrompt_SurfacesWalletBasisFallback(t *testin
 		EffectiveMaxCapitalPct: 12.78,
 	})
 
+	assert.Contains(t, prompt, "Wallet Basis For size_pct: 46.93")
+}
+
+func TestAIScalpingService_BuildUserPrompt_UsesDecimalBackedDisplayedBalances(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
+	prompt := svc.buildUserPrompt(context.Background(), nil, TradingPortfolio{
+		USDTBalanceDecimal:     decimal.RequireFromString("46.93"),
+		TotalValueDecimal:      decimal.RequireFromString("48.11"),
+		AccountTier:            "micro",
+		StrategyPhase:          "bootstrap",
+		EffectiveMinConfidence: 0.65,
+		EffectiveMaxCapitalPct: 12.78,
+	})
+
+	assert.Contains(t, prompt, "USDT Balance: 46.93")
+	assert.Contains(t, prompt, "Total Value: 48.11")
 	assert.Contains(t, prompt, "Wallet Basis For size_pct: 46.93")
 }
 
@@ -1094,6 +1142,9 @@ func TestAIScalpingService_ExecuteTradingCycle_HoldsWhenWalletBelowExchangeMinim
 	if assert.NotNil(t, decision.ExecutionGate) {
 		assert.False(t, decision.ExecutionGate.Allowed)
 	}
+	assert.NotEmpty(t, decision.AccountTier)
+	assert.Greater(t, decision.EffectiveMinConfidence, 0.0)
+	assert.Zero(t, decision.EffectiveMaxCapitalPct)
 }
 
 func TestAIScalpingService_ScalpingCyclePolicy_UsesScopedLossStreakInsteadOfGlobalSingleton(t *testing.T) {

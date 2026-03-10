@@ -73,8 +73,23 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 					},
 				},
 			},
-			quest:    &Quest{Metadata: map[string]string{"dry_run": "false"}},
+			quest:    &Quest{Metadata: map[string]string{"paper_trading": "true"}},
 			chatID:   "chat-unknown",
+			expected: ModePaper,
+		},
+		{
+			name: "unsupported_stored_mode_without_metadata_stays_dry",
+			opModeService: &OperationalModeService{
+				config: DefaultOperationalModeConfig(),
+				states: map[string]*OperationalModeState{
+					"chat-unknown-dry": {
+						ChatID: "chat-unknown-dry",
+						Mode:   OperationalMode("unknown"),
+					},
+				},
+			},
+			quest:    &Quest{Metadata: map[string]string{"dry_run": "false"}},
+			chatID:   "chat-unknown-dry",
 			expected: OpModeDry,
 		},
 		{

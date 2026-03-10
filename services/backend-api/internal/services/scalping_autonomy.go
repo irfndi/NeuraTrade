@@ -525,6 +525,9 @@ func resolveAvailableBudget(portfolio TradingPortfolio, maxCapitalPct decimal.De
 	if pctDec.GreaterThan(maxPct) {
 		pctDec = maxPct
 	}
+	// Budget gating uses deployable quote balance only. Unlike walletBasis(), it
+	// intentionally excludes TotalValue / unrealized-PnL fallbacks so autonomy
+	// does not size fresh entries off paper equity that may not be free to deploy.
 	usdtDec := portfolio.USDTBalanceDecimal
 	if !usdtDec.GreaterThan(decimal.Zero) {
 		usdtDec = decimalFromBalanceFloat(portfolio.USDTBalance)

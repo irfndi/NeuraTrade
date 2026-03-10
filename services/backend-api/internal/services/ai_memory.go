@@ -579,7 +579,7 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	`
 
 	const scopedExpectancyQuery = `
-		SELECT CAST(realized_pnl AS TEXT)
+		SELECT realized_pnl
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
@@ -588,7 +588,7 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		ORDER BY closed_at DESC, created_at DESC, id DESC
 	`
 	const scopedExpectancyLimitedQuery = `
-		SELECT CAST(realized_pnl AS TEXT)
+		SELECT realized_pnl
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
@@ -598,7 +598,7 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		LIMIT ?
 	`
 	const scopedExpectancyBySymbolQuery = `
-		SELECT CAST(realized_pnl AS TEXT)
+		SELECT realized_pnl
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
@@ -608,7 +608,7 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		ORDER BY closed_at DESC, created_at DESC, id DESC
 	`
 	const scopedExpectancyBySymbolLimitedQuery = `
-		SELECT CAST(realized_pnl AS TEXT)
+		SELECT realized_pnl
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
@@ -655,12 +655,11 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	sumWin := decimal.Zero
 	sumLoss := decimal.Zero
 	for rows.Next() {
-		var pnlRaw string
-		if err := rows.Scan(&pnlRaw); err != nil {
+		var pnl decimal.Decimal
+		if err := rows.Scan(&pnl); err != nil {
 			return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
 		}
-		pnl, err := decimal.NewFromString(strings.TrimSpace(pnlRaw))
-		if err != nil || pnl.IsZero() {
+		if pnl.IsZero() {
 			continue
 		}
 		if pnl.GreaterThan(decimal.Zero) {
