@@ -641,3 +641,92 @@ func TestPortfolioSafetyService_CanExecuteTrade_BlocksBitgetMinNotionalFloorBeyo
 	assert.False(t, allowed)
 	assert.Contains(t, reason, "exceeds maximum allowed")
 }
+
+func TestPortfolioSafetyService_CanExecuteTrade_BlocksBelowExchangeMinNotional(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"USDT": 100.00},
+			Free:      map[string]float64{"USDT": 100.00},
+			Used:      map[string]float64{"USDT": 0},
+		},
+	}
+
+	service := NewPortfolioSafetyService(config, mockCCXT, nil, nil, nil, nil, nil, nil, nil)
+
+	allowed, reason, err := service.CanExecuteTrade(context.Background(), "chat-bitget", "bitget", "OPN/USDT", decimal.NewFromFloat(5.0))
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Contains(t, reason, "below exchange minimum notional 6.00")
+}
+
+func TestPortfolioSafetyService_CanExecuteTrade_ReportsEffectiveThrottleAfterFloorOverride(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.MaxPositionSizePct = 0.10
+	config.MaxPositionFloorPct = 0.20
+
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"USDT": 46.93},
+			Free:      map[string]float64{"USDT": 46.93},
+			Used:      map[string]float64{"USDT": 0},
+		},
+	}
+
+	service := NewPortfolioSafetyService(config, mockCCXT, nil, nil, nil, nil, nil, nil, nil)
+
+	allowed, reason, err := service.CanExecuteTrade(context.Background(), "chat-bitget", "bitget", "OPN/USDT", decimal.NewFromFloat(7.0))
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Contains(t, reason, "maximum allowed 6.00")
+	assert.Contains(t, reason, "throttled to 128%")
+}
+
+func TestPortfolioSafetyService_CanExecuteTrade_ZeroFloorDisablesNotionalOverride(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.MaxPositionSizePct = 0.10
+	config.MaxPositionFloorPct = 0
+
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"USDT": 46.93},
+			Free:      map[string]float64{"USDT": 46.93},
+			Used:      map[string]float64{"USDT": 0},
+		},
+	}
+
+	service := NewPortfolioSafetyService(config, mockCCXT, nil, nil, nil, nil, nil, nil, nil)
+
+	allowed, reason, err := service.CanExecuteTrade(context.Background(), "chat-bitget", "bitget", "OPN/USDT", decimal.NewFromFloat(6.0))
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Contains(t, reason, "maximum allowed 4.69")
+	assert.Contains(t, reason, "throttled to 100%")
+}
+
+func TestPortfolioSafetyService_SetConfig_NormalizesDefaultsButPreservesZeroFloor(t *testing.T) {
+	service := NewPortfolioSafetyService(DefaultPortfolioSafetyConfig(), nil, nil, nil, nil, nil, nil, nil, nil)
+
+	service.SetConfig(PortfolioSafetyConfig{
+		MaxPositionSizePct:   0,
+		MaxPositionFloorPct:  0,
+		MaxExposurePct:       0,
+		DefaultQuoteCurrency: "",
+		CacheTTL:             0,
+	})
+
+	cfg := service.GetConfig()
+	defaults := DefaultPortfolioSafetyConfig()
+	assert.Equal(t, defaults.MaxPositionSizePct, cfg.MaxPositionSizePct)
+	assert.Equal(t, defaults.MaxExposurePct, cfg.MaxExposurePct)
+	assert.Equal(t, defaults.DefaultQuoteCurrency, cfg.DefaultQuoteCurrency)
+	assert.Equal(t, defaults.CacheTTL, cfg.CacheTTL)
+	assert.Equal(t, 0.0, cfg.MaxPositionFloorPct)
+}

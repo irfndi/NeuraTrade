@@ -1390,7 +1390,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		spreadPenalty := 1.0 / (1.0 + math.Max(spreadPct, 0))
 		volatilityBoost := 1.0 + math.Max(rangePct, 0)
 		score := liqScore * spreadPenalty * volatilityBoost
-		tradable := spreadPct > 0 && spreadPct <= maxScalpingSpreadPct
+		tradable := spreadPct > 0 && spreadPct <= appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
 		pairs = append(pairs, pairScore{symbol: symbol, score: score, tradable: tradable})
 	}
 
@@ -1763,10 +1763,10 @@ Return JSON only:
 ## Signal Interpretation
 - ob_imbalance > 0.2: Strong buy pressure (more bids)
 - ob_imbalance < -0.2: Strong sell pressure (more asks)
-			- spread <= %.2f%%: tradable liquidity ceiling; anything wider must be treated as hold
-			- range_pos_24h > 80: Price near daily high (avoid chasing late entries)
-			- range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
-		`, s.config.Leverage, skillContent, maxScalpingSpreadPct)
+	- spread <= %.2f%%: tradable liquidity ceiling; anything wider must be treated as hold
+	- range_pos_24h > 80: Price near daily high (avoid chasing late entries)
+	- range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
+		`, s.config.Leverage, skillContent, appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv())
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
@@ -1989,8 +1989,7 @@ func copyBoolMap(input map[string]bool) map[string]bool {
 }
 
 const (
-	maxScalpingSpreadPct = 0.22
-	minRiskRewardRatio   = 1.10
+	minRiskRewardRatio = 1.10
 )
 
 type preTradeGateResult struct {
@@ -2072,7 +2071,7 @@ func (s *AIScalpingService) classifyScalpingRegime(signal aiMarketSignal, action
 		lowBand = 15
 	}
 
-	if signal.BidAskSpread > maxScalpingSpreadPct {
+	if signal.BidAskSpread > appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv() {
 		return "illiquid", 0, fmt.Sprintf("pre-trade regime gate blocked %s: spread %.3f%% too wide", signal.Symbol, signal.BidAskSpread)
 	}
 
@@ -2250,7 +2249,7 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		entry := decimal.NewFromFloat(resolved.Price)
 		decision.EntryPrice = &entry
 	}
-	if resolved.BidAskSpread > maxScalpingSpreadPct {
+	if resolved.BidAskSpread > appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv() {
 		return fmt.Errorf("spread %.3f%% too wide for scalping on %s", resolved.BidAskSpread, decision.Symbol)
 	}
 	if resolved.BidAskSpread == 0 && resolved.OrderBookImbalance == 0 {
@@ -3673,6 +3672,12 @@ func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio T
 
 func scalpingPolicyConfigFromEnv() appautonomy.ScalpingPolicyConfig {
 	cfg := appautonomy.DefaultScalpingPolicyConfig()
+	cfg.MaxBidAskSpreadPct = appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
+	if value, ok := getEnvFloat(appautonomy.NeuraScalpingMaxBidAskSpreadPctEnv); ok {
+		cfg.MaxBidAskSpreadPct = value
+	} else if value, ok := getEnvFloat(appautonomy.ScalpingMaxBidAskSpreadPctEnv); ok {
+		cfg.MaxBidAskSpreadPct = value
+	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_ACCOUNT_MAX_VALUE"); ok && value > 0 {
 		cfg.MicroAccountMaxValue = decimal.NewFromFloat(value)
 	}

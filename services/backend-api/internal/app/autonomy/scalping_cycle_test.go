@@ -279,18 +279,38 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			OrderBookImbalance: 0.02,
 			RangePosition24h:   40,
 		},
+		{
+			Symbol:             "BND/USDT",
+			Price:              decimal.NewFromFloat(1.0),
+			High24h:            decimal.NewFromFloat(1.1),
+			Low24h:             decimal.NewFromFloat(0.9),
+			Volume24h:          decimal.NewFromInt(1000000),
+			BidAskSpread:       0.22,
+			OrderBookImbalance: 0.02,
+			RangePosition24h:   40,
+		},
 	}, policy)
 
-	require.Equal(t, 3, snapshot.CandidateUniverseCount)
-	require.Equal(t, 3, snapshot.CandidateRankedCount)
+	require.Equal(t, 4, snapshot.CandidateUniverseCount)
+	require.Equal(t, 4, snapshot.CandidateRankedCount)
 	require.Equal(t, 1, snapshot.CandidateViableCount)
-	require.Len(t, snapshot.TopCandidateRejections, 2)
+	require.Len(t, snapshot.TopCandidateRejections, 3)
 	reasons := []string{
 		snapshot.TopCandidateRejections[0].Reason,
 		snapshot.TopCandidateRejections[1].Reason,
+		snapshot.TopCandidateRejections[2].Reason,
 	}
 	require.Contains(t, reasons, CandidateRejectSpreadTooWide)
 	require.Contains(t, reasons, CandidateRejectMissingOrderbookSignal)
+
+	bndSeen := false
+	for _, rejection := range snapshot.TopCandidateRejections {
+		if rejection.Symbol == "BND/USDT" {
+			bndSeen = true
+			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
+		}
+	}
+	require.True(t, bndSeen)
 }
 
 func TestEvaluateCandidateSignal_RejectsInvalidMetrics(t *testing.T) {

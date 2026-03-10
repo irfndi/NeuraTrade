@@ -3,7 +3,9 @@ package autonomy
 import (
 	"fmt"
 	"math"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,22 +46,25 @@ const (
 )
 
 const (
-	scalpingMaxBidAskSpreadPct      = 0.22
-	scalpingStrongImbalanceFloor    = 0.20
-	scalpingNeutralImbalanceFloor   = 0.10
-	scalpingBuyRangeMax             = 45.0
-	scalpingSellRangeMin            = 55.0
-	scalpingConfidenceBase          = 0.50
-	scalpingConfidenceImbalanceW    = 0.55
-	scalpingConfidenceLiquidityW    = 0.20
-	scalpingConfidenceRangeW        = 0.15
-	scalpingConfidenceVolumeW       = 0.10
-	scalpingConfidenceVolumeLogBase = 8.0
+	DefaultScalpingMaxBidAskSpreadPct  = 0.22
+	ScalpingMaxBidAskSpreadPctEnv      = "SCALPING_MAX_BID_ASK_SPREAD_PCT"
+	NeuraScalpingMaxBidAskSpreadPctEnv = "NEURATRADE_SCALPING_MAX_BID_ASK_SPREAD_PCT"
+	scalpingStrongImbalanceFloor       = 0.20
+	scalpingNeutralImbalanceFloor      = 0.10
+	scalpingBuyRangeMax                = 45.0
+	scalpingSellRangeMin               = 55.0
+	scalpingConfidenceBase             = 0.50
+	scalpingConfidenceImbalanceW       = 0.55
+	scalpingConfidenceLiquidityW       = 0.20
+	scalpingConfidenceRangeW           = 0.15
+	scalpingConfidenceVolumeW          = 0.10
+	scalpingConfidenceVolumeLogBase    = 8.0
 )
 
 type ScalpingPolicyConfig struct {
 	MicroAccountMaxValue     decimal.Decimal
 	SmallAccountMaxValue     decimal.Decimal
+	MaxBidAskSpreadPct       float64
 	MicroMinConfidenceFloor  float64
 	MicroMaxCapitalPct       float64
 	MaxConcurrentPositions   int
@@ -75,6 +80,7 @@ func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
 	return ScalpingPolicyConfig{
 		MicroAccountMaxValue:     decimal.NewFromFloat(DefaultMicroAccountMaxValue),
 		SmallAccountMaxValue:     decimal.NewFromFloat(DefaultSmallAccountMaxValue),
+		MaxBidAskSpreadPct:       ResolveScalpingMaxBidAskSpreadPctFromEnv(),
 		MicroMinConfidenceFloor:  DefaultMicroMinConfidenceFloor,
 		MicroMaxCapitalPct:       DefaultMicroMaxCapitalPct,
 		MaxConcurrentPositions:   DefaultMaxConcurrentPositions,
@@ -94,6 +100,10 @@ func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
 	if c.SmallAccountMaxValue.LessThanOrEqual(c.MicroAccountMaxValue) {
 		c.SmallAccountMaxValue = decimal.NewFromFloat(DefaultSmallAccountMaxValue)
 	}
+	if c.MaxBidAskSpreadPct <= 0 {
+		c.MaxBidAskSpreadPct = ResolveScalpingMaxBidAskSpreadPctFromEnv()
+	}
+	c.MaxBidAskSpreadPct = clampFloat(c.MaxBidAskSpreadPct, 0.0001, 5)
 	if c.MicroMinConfidenceFloor <= 0 {
 		c.MicroMinConfidenceFloor = DefaultMicroMinConfidenceFloor
 	}
@@ -160,6 +170,7 @@ type ScalpingCyclePolicy struct {
 	AccountTier            string
 	EffectiveMinConfidence float64
 	EffectiveMaxCapitalPct float64
+	MaxBidAskSpreadPct     float64
 	MaxConcurrentPositions int
 	PolicyAdjustments      []string
 }
@@ -209,6 +220,7 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		AccountTier:            ResolveAccountTier(input.TotalValue, cfg),
 		EffectiveMinConfidence: clampFloat(input.BaseMinConfidence, 0.05, 0.95),
 		EffectiveMaxCapitalPct: clampFloat(input.BaseMaxCapitalPct, 0.10, 100.0),
+		MaxBidAskSpreadPct:     cfg.MaxBidAskSpreadPct,
 		MaxConcurrentPositions: cfg.MaxConcurrentPositions,
 	}
 	if policy.EffectiveMaxCapitalPct <= 0 {
@@ -412,11 +424,12 @@ func BuildRolloutShadowGate(stage, status, reason string) ExecutionGateSnapshot 
 }
 
 func NextUnblockCondition(reason string, policy ScalpingCyclePolicy) string {
+	spreadThreshold := resolvePolicySpreadThreshold(policy)
 	switch strings.TrimSpace(reason) {
 	case CandidateRejectConfidenceBelowThreshold:
 		return fmt.Sprintf("Await candidate confidence >= %.2f", policy.EffectiveMinConfidence)
 	case CandidateRejectSpreadTooWide:
-		return fmt.Sprintf("Await candidate spread <= %.2f%%", scalpingMaxBidAskSpreadPct)
+		return fmt.Sprintf("Await candidate spread <= %.2f%%", spreadThreshold)
 	case CandidateRejectMissingOrderbookSignal:
 		return "Await candidate with valid orderbook imbalance and executable spread"
 	case CandidateRejectPreTradeExpectancy:
@@ -493,6 +506,7 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 }
 
 func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy) (ranked bool, viable bool, rejection CandidateRejection) {
+	spreadThreshold := resolvePolicySpreadThreshold(policy)
 	symbol := strings.TrimSpace(signal.Symbol)
 	rejection.Symbol = symbol
 	if symbol == "" || signal.Price.LessThanOrEqual(decimal.Zero) {
@@ -504,12 +518,12 @@ func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy)
 		rejection.Reason = CandidateRejectMissingOrderbookSignal
 		return false, false, rejection
 	}
-	if signal.BidAskSpread > scalpingMaxBidAskSpreadPct {
+	if signal.BidAskSpread > spreadThreshold {
 		rejection.Reason = CandidateRejectSpreadTooWide
 		return true, false, rejection
 	}
 
-	action, estimatedConfidence, ok := estimateCandidateConfidence(signal)
+	action, estimatedConfidence, ok := estimateCandidateConfidence(signal, spreadThreshold)
 	rejection.EstimatedConfidence = estimatedConfidence
 	if !ok {
 		if math.Abs(signal.OrderBookImbalance) < scalpingNeutralImbalanceFloor {
@@ -527,7 +541,7 @@ func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy)
 	return true, true, CandidateRejection{}
 }
 
-func estimateCandidateConfidence(signal CandidateSignal) (string, float64, bool) {
+func estimateCandidateConfidence(signal CandidateSignal, spreadThreshold float64) (string, float64, bool) {
 	if hasInvalidCandidateMetrics(signal) {
 		return "", 0, false
 	}
@@ -552,7 +566,7 @@ func estimateCandidateConfidence(signal CandidateSignal) (string, float64, bool)
 		return "", 0, false
 	}
 
-	liquidityScore := clampFloat(1-(signal.BidAskSpread/scalpingMaxBidAskSpreadPct), 0, 1)
+	liquidityScore := clampFloat(1-(signal.BidAskSpread/spreadThreshold), 0, 1)
 	volumeScore := clampFloat(math.Log10(signal.Volume24h.InexactFloat64()+1)/scalpingConfidenceVolumeLogBase, 0, 1)
 	confidence := scalpingConfidenceBase +
 		imbalance*scalpingConfidenceImbalanceW +
@@ -575,6 +589,28 @@ func hasInvalidCandidateMetrics(signal CandidateSignal) bool {
 
 func invalidCandidateFloat(value float64) bool {
 	return math.IsNaN(value) || math.IsInf(value, 0)
+}
+
+func resolvePolicySpreadThreshold(policy ScalpingCyclePolicy) float64 {
+	if policy.MaxBidAskSpreadPct > 0 {
+		return policy.MaxBidAskSpreadPct
+	}
+	return ResolveScalpingMaxBidAskSpreadPctFromEnv()
+}
+
+func ResolveScalpingMaxBidAskSpreadPctFromEnv() float64 {
+	raw := strings.TrimSpace(os.Getenv(NeuraScalpingMaxBidAskSpreadPctEnv))
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(ScalpingMaxBidAskSpreadPctEnv))
+	}
+	if raw == "" {
+		return DefaultScalpingMaxBidAskSpreadPct
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 {
+		return DefaultScalpingMaxBidAskSpreadPct
+	}
+	return clampFloat(value, 0.0001, 5)
 }
 
 func clampFloat(value, minValue, maxValue float64) float64 {

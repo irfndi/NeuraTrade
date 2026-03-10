@@ -604,14 +604,14 @@ func TestAIScalpingService_GatherMarketSignals_FetchesOrderbookForFullSmallUnive
 			Count: 8,
 		},
 		marketData: []ccxt.MarketPriceInterface{
-			mockMarketPrice{symbol: "AAA/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.999, ask: 1.001, exchange: "bitget"},
-			mockMarketPrice{symbol: "BBB/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.999, ask: 1.001, exchange: "bitget"},
-			mockMarketPrice{symbol: "CCC/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.999, ask: 1.001, exchange: "bitget"},
-			mockMarketPrice{symbol: "DDD/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.999, ask: 1.001, exchange: "bitget"},
-			mockMarketPrice{symbol: "EEE/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.999, ask: 1.001, exchange: "bitget"},
-			mockMarketPrice{symbol: "FFF/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.999, ask: 1.001, exchange: "bitget"},
-			mockMarketPrice{symbol: "GGG/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.999, ask: 1.001, exchange: "bitget"},
-			mockMarketPrice{symbol: "HHH/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.999, ask: 1.001, exchange: "bitget"},
+			mockMarketPrice{symbol: "AAA/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.95, ask: 1.05, exchange: "bitget"},
+			mockMarketPrice{symbol: "BBB/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.95, ask: 1.05, exchange: "bitget"},
+			mockMarketPrice{symbol: "CCC/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.95, ask: 1.05, exchange: "bitget"},
+			mockMarketPrice{symbol: "DDD/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.95, ask: 1.05, exchange: "bitget"},
+			mockMarketPrice{symbol: "EEE/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.95, ask: 1.05, exchange: "bitget"},
+			mockMarketPrice{symbol: "FFF/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.95, ask: 1.05, exchange: "bitget"},
+			mockMarketPrice{symbol: "GGG/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.95, ask: 1.05, exchange: "bitget"},
+			mockMarketPrice{symbol: "HHH/USDT", price: 1, volume: 1000, high24h: 1.1, low24h: 0.9, bid: 0.95, ask: 1.05, exchange: "bitget"},
 		},
 		orderBooks: map[string]*ccxt.OrderBookResponse{
 			"AAA/USDT": {OrderBook: ccxt.OrderBook{Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(0.999), Amount: decimal.NewFromInt(5)}}, Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(1.001), Amount: decimal.NewFromInt(4)}}}},
@@ -639,9 +639,23 @@ func TestAIScalpingService_GatherMarketSignals_FetchesOrderbookForFullSmallUnive
 	signals, err := svc.gatherMarketSignals(context.Background())
 	require.NoError(t, err)
 	require.Len(t, signals, 8)
-	assert.Len(t, mockCCXT.orderBookOps, 8)
+	assert.ElementsMatch(t, []string{
+		normalizeSymbolForComparison("AAA/USDT"),
+		normalizeSymbolForComparison("BBB/USDT"),
+		normalizeSymbolForComparison("CCC/USDT"),
+		normalizeSymbolForComparison("DDD/USDT"),
+		normalizeSymbolForComparison("EEE/USDT"),
+		normalizeSymbolForComparison("FFF/USDT"),
+		normalizeSymbolForComparison("GGG/USDT"),
+		normalizeSymbolForComparison("HHH/USDT"),
+	}, mockCCXT.orderBookOps)
 	for _, signal := range signals {
-		assert.NotZero(t, signal.BidAskSpread)
+		orderBook := mockCCXT.orderBooks[signal.Symbol]
+		require.NotNil(t, orderBook)
+		require.NotEmpty(t, orderBook.OrderBook.Bids)
+		require.NotEmpty(t, orderBook.OrderBook.Asks)
+		expectedSpread := (orderBook.OrderBook.Asks[0].Price.InexactFloat64() - orderBook.OrderBook.Bids[0].Price.InexactFloat64()) / signal.Price * 100
+		assert.InDelta(t, expectedSpread, signal.BidAskSpread, 1e-9)
 	}
 }
 
@@ -678,32 +692,53 @@ func TestAIScalpingService_DiscoverTradingPairs_PrefersTradableSpreadCandidates(
 }
 
 func TestAIScalpingService_PreTradeGate_UsesVisibleSpreadThreshold(t *testing.T) {
+	t.Setenv(appautonomy.NeuraScalpingMaxBidAskSpreadPctEnv, "0.22")
 	svc := &AIScalpingService{config: AIScalpingConfig{PreTradeGate: true, RegimeLowBand: 15, RegimeHighBand: 85}}
-	signal := aiMarketSignal{
-		Symbol:             "GRASS/USDT",
-		Price:              1,
-		High24h:            1.1,
-		Low24h:             0.9,
-		Volume24h:          100000,
-		BidAskSpread:       0.207,
-		OrderBookImbalance: 0.76,
-		RangePosition24h:   50,
+
+	tests := []struct {
+		name    string
+		spread  float64
+		allowed bool
+	}{
+		{name: "below_cutoff", spread: 0.219, allowed: true},
+		{name: "at_cutoff", spread: 0.22, allowed: true},
+		{name: "above_cutoff", spread: 0.221, allowed: false},
 	}
-	decision := &AITradingDecision{Action: "buy", Symbol: "GRASS/USDT", Confidence: 0.78}
 
-	result := svc.evaluatePreTradeGate(context.Background(), decision, []aiMarketSignal{signal})
-	assert.True(t, result.Allowed)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			signal := aiMarketSignal{
+				Symbol:             "GRASS/USDT",
+				Price:              1,
+				High24h:            1.1,
+				Low24h:             0.9,
+				Volume24h:          100000,
+				BidAskSpread:       tt.spread,
+				OrderBookImbalance: 0.76,
+				RangePosition24h:   50,
+			}
+			decision := &AITradingDecision{Action: "buy", Symbol: "GRASS/USDT", Confidence: 0.78}
 
-	err := svc.validateDecision(&AITradingDecision{
-		Action:      "buy",
-		Symbol:      "GRASS/USDT",
-		SizePercent: 12.78,
-		Confidence:  0.78,
-		Reasoning:   "spread threshold regression",
-		StopLoss:    decimalPointer("0.95"),
-		TakeProfit:  decimalPointer("1.08"),
-	}, []aiMarketSignal{signal})
-	assert.NoError(t, err)
+			result := svc.evaluatePreTradeGate(context.Background(), decision, []aiMarketSignal{signal})
+			assert.Equal(t, tt.allowed, result.Allowed)
+
+			err := svc.validateDecision(&AITradingDecision{
+				Action:      "buy",
+				Symbol:      "GRASS/USDT",
+				SizePercent: 12.78,
+				Confidence:  0.78,
+				Reasoning:   "spread threshold regression",
+				StopLoss:    decimalPointer("0.95"),
+				TakeProfit:  decimalPointer("1.08"),
+			}, []aiMarketSignal{signal})
+			if tt.allowed {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "spread")
+			}
+		})
+	}
 }
 
 func TestExtractLooseFieldValueWithMarker_UnicodePrefixPreservesAlignment(t *testing.T) {

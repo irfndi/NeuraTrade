@@ -109,7 +109,7 @@ func NewPortfolioSafetyService(
 	logger *zaplogrus.Logger,
 ) *PortfolioSafetyService {
 	return &PortfolioSafetyService{
-		config:           config,
+		config:           normalizePortfolioSafetyConfig(config),
 		ccxtService:      ccxtService,
 		positionTracker:  positionTracker,
 		riskManager:      riskManager,
@@ -482,12 +482,17 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 	if !status.TradingAllowed {
 		return false, fmt.Sprintf("Trading not allowed: %v", status.Reasons), nil
 	}
+	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)))
+	if minNotional.GreaterThan(decimal.Zero) && size.GreaterThan(decimal.Zero) && size.LessThan(minNotional) {
+		return false, fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)), nil
+	}
 
 	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, snapshot, status.MaxPositionSize)
+	effectiveThrottlePct := resolveEffectiveThrottlePct(status.MaxPositionSize, effectiveMaxPosition)
 
 	if size.GreaterThan(effectiveMaxPosition) {
 		return false, fmt.Sprintf("Position size %s exceeds maximum allowed %s (throttled to %.0f%%)",
-			size.StringFixed(2), effectiveMaxPosition.StringFixed(2), status.PositionThrottle*100), nil
+			size.StringFixed(2), effectiveMaxPosition.StringFixed(2), effectiveThrottlePct), nil
 	}
 
 	return true, "", nil
@@ -509,7 +514,7 @@ func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string
 	requiredPct := minNotional.Div(snapshot.TotalEquity)
 	floorCapPct := s.config.MaxPositionFloorPct
 	if floorCapPct <= 0 {
-		floorCapPct = DefaultPortfolioSafetyConfig().MaxPositionFloorPct
+		return defaultMax
 	}
 	if requiredPct.GreaterThan(decimal.NewFromFloat(floorCapPct)) {
 		return defaultMax
@@ -578,13 +583,40 @@ func (s *PortfolioSafetyService) InvalidateCache() {
 func (s *PortfolioSafetyService) SetConfig(config PortfolioSafetyConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.config = config
+	s.config = normalizePortfolioSafetyConfig(config)
 }
 
 func (s *PortfolioSafetyService) GetConfig() PortfolioSafetyConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.config
+}
+
+func normalizePortfolioSafetyConfig(config PortfolioSafetyConfig) PortfolioSafetyConfig {
+	defaults := DefaultPortfolioSafetyConfig()
+	if config.MaxPositionSizePct <= 0 {
+		config.MaxPositionSizePct = defaults.MaxPositionSizePct
+	}
+	if config.MaxExposurePct <= 0 {
+		config.MaxExposurePct = defaults.MaxExposurePct
+	}
+	if strings.TrimSpace(config.DefaultQuoteCurrency) == "" {
+		config.DefaultQuoteCurrency = defaults.DefaultQuoteCurrency
+	}
+	if config.CacheTTL <= 0 {
+		config.CacheTTL = defaults.CacheTTL
+	}
+	if config.MaxPositionFloorPct < 0 {
+		config.MaxPositionFloorPct = defaults.MaxPositionFloorPct
+	}
+	return config
+}
+
+func resolveEffectiveThrottlePct(defaultMax decimal.Decimal, effectiveMax decimal.Decimal) float64 {
+	if !defaultMax.GreaterThan(decimal.Zero) || !effectiveMax.GreaterThan(decimal.Zero) {
+		return 0
+	}
+	return effectiveMax.Div(defaultMax).Mul(decimal.NewFromInt(100)).InexactFloat64()
 }
 
 func normalizeRiskSignal(value, threshold float64) float64 {
