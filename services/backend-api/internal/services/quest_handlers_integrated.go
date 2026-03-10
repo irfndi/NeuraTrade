@@ -2693,7 +2693,7 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		decision.Reasoning,
 		fmt.Sprintf("Hold streak: %d cycle(s)", holdStreak),
 		fmt.Sprintf("Risk drawdown: %.2f%%", portfolio.RiskDrawdown*100),
-		fmt.Sprintf("Effective thresholds: min_confidence=%.2f, max_capital=%.2f%%", minConfidence, maxCapital),
+		fmt.Sprintf("Effective thresholds: min_confidence=%.2f, max_capital=%.4f%%", minConfidence, maxCapital),
 		fmt.Sprintf("Unlock cycles: %d", checkpointInt(quest.Checkpoint["runtime_unlock_cycles"])),
 		fmt.Sprintf(
 			"Recovery mode: %s (clean cycles %d, entry_allowed=%t)",

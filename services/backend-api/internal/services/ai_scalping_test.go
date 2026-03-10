@@ -442,6 +442,30 @@ func TestAIScalpingService_ParseDecisionWithRetries_InfersActionableDecisionFrom
 	assert.Equal(t, 0, mockLLM.CallCount)
 }
 
+func TestAIScalpingService_ParseDecisionWithRetries_RejectsMalformedRecoveredActionableContract(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{Message: llm.Message{Content: `{"action":"hold","symbol":"","size_pct":0,"confidence":0.1,"reasoning":"repair fallback"}`}},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 1,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.parseDecisionWithRetries(context.Background(), `{"action":"buy","symbol":"BAN/US","size_pct":0,"confidence":0,"reasoning":"bad contract"}`)
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "hold", decision.Action)
+	assert.Equal(t, 1, mockLLM.CallCount)
+}
+
 func TestInferDecisionFromLooseText_ConfidenceNormalization(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -802,7 +826,7 @@ func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testin
 	assert.Contains(t, prompt, "Effective Min Confidence (must obey): 0.65")
 	assert.Contains(t, prompt, "Effective Max Capital % (must obey): 12.00")
 	assert.Contains(t, prompt, "Wallet Basis For size_pct: 50.00")
-	assert.Contains(t, prompt, "Executable Size Band % (must obey if action != hold): 12.00 - 12.00")
+	assert.Contains(t, prompt, "Executable Size Band % (must obey if action != hold): 12.0000 - 12.0000")
 	assert.Contains(t, prompt, "Exchange Minimum Futures Notional: 6.00 USDT")
 	assert.Contains(t, prompt, "Estimated Initial Margin @ 5x: 1.20 USDT")
 	assert.Contains(t, prompt, "do not multiply size_pct by leverage")

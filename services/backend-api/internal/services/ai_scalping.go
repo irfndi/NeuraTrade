@@ -1847,7 +1847,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 		)
 	} else if portfolio.MinExecutableSizePct > 0 && minNotional.GreaterThan(decimal.Zero) {
 		sizingContext = fmt.Sprintf(
-			"- Executable Size Band %% (must obey if action != hold): %.2f - %.2f\n- Exchange Minimum Futures Notional: %s USDT\n- Estimated Initial Margin @ %dx: %s USDT\n- Sizing semantics: size_pct maps directly to order notional as a share of wallet; do not multiply size_pct by leverage\n",
+			"- Executable Size Band %% (must obey if action != hold): %.4f - %.4f\n- Exchange Minimum Futures Notional: %s USDT\n- Estimated Initial Margin @ %dx: %s USDT\n- Sizing semantics: size_pct maps directly to order notional as a share of wallet; do not multiply size_pct by leverage\n",
 			portfolio.MinExecutableSizePct,
 			portfolio.EffectiveMaxCapitalPct,
 			minNotional.StringFixed(2),
@@ -2647,6 +2647,29 @@ func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecis
 	}
 }
 
+func validateRecoveredDecisionContract(decision *AITradingDecision) error {
+	if decision == nil {
+		return fmt.Errorf("decision missing")
+	}
+	if decision.Action == "hold" {
+		return nil
+	}
+	if !isValidDecisionAction(decision.Action) {
+		return fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
+	}
+	normalizedSymbol := normalizeSymbolForComparison(decision.Symbol)
+	if normalizedSymbol == "" || !strings.Contains(normalizedSymbol, "/") {
+		return fmt.Errorf("actionable decision symbol malformed: %q", strings.TrimSpace(decision.Symbol))
+	}
+	if decision.SizePercent <= 0 {
+		return fmt.Errorf("actionable decision size_pct must be > 0")
+	}
+	if decision.Confidence <= 0 || decision.Confidence > 1 {
+		return fmt.Errorf("actionable decision confidence must be within (0,1]")
+	}
+	return nil
+}
+
 func (s *AIScalpingService) deterministicFallbackDecision(signals []aiMarketSignal, portfolio TradingPortfolio) *AITradingDecision {
 	bestDecision := (*AITradingDecision)(nil)
 	bestScore := 0.0
@@ -3148,7 +3171,11 @@ Do not include markdown or extra text.`,
 func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw string) (*AITradingDecision, error) {
 	decision, err := parseAIDecisionPayload(raw)
 	if err == nil && isValidDecisionAction(decision.Action) {
-		return decision, nil
+		if contractErr := validateRecoveredDecisionContract(decision); contractErr == nil {
+			return decision, nil
+		} else {
+			err = contractErr
+		}
 	}
 	if err == nil {
 		err = fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
@@ -3161,14 +3188,16 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 
 	if repairedLocal, localErr := repairDecisionJSONLocally(raw); localErr == nil {
 		localDecision, parseErr := parseAIDecisionPayload(repairedLocal)
-		if parseErr == nil && isValidDecisionAction(localDecision.Action) {
+		if parseErr == nil && isValidDecisionAction(localDecision.Action) && validateRecoveredDecisionContract(localDecision) == nil {
 			log.Printf("[AI-SCALPING] Structured-output recovered via deterministic local repair")
 			return localDecision, nil
 		}
 	}
 	if inferred, inferErr := inferDecisionFromLooseText(raw); inferErr == nil {
-		log.Printf("[AI-SCALPING] Structured-output recovered via local decision inference")
-		return inferred, nil
+		if contractErr := validateRecoveredDecisionContract(inferred); contractErr == nil {
+			log.Printf("[AI-SCALPING] Structured-output recovered via local decision inference")
+			return inferred, nil
+		}
 	}
 
 	lastErr := err
@@ -3189,13 +3218,15 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 			continue
 		}
 		decision, parseErr := parseAIDecisionPayload(repaired)
-		if parseErr == nil && isValidDecisionAction(decision.Action) {
+		if parseErr == nil && isValidDecisionAction(decision.Action) && validateRecoveredDecisionContract(decision) == nil {
 			log.Printf("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
 			return decision, nil
 		}
 		if inferred, inferErr := inferDecisionFromLooseText(repaired); inferErr == nil {
-			log.Printf("[AI-SCALPING] Structured-output retry recovered via local decision inference on attempt %d", attempt)
-			return inferred, nil
+			if contractErr := validateRecoveredDecisionContract(inferred); contractErr == nil {
+				log.Printf("[AI-SCALPING] Structured-output retry recovered via local decision inference on attempt %d", attempt)
+				return inferred, nil
+			}
 		}
 		if parseErr == nil {
 			parseErr = fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
