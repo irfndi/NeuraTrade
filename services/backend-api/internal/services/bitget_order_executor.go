@@ -64,11 +64,15 @@ func (e *BitgetOrderExecutor) SetWalletBalance(balance float64) {
 
 // PlaceOrder places a real order on Bitget
 func (e *BitgetOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
-	// Convert symbol format: BTC/USDT -> BTCUSDT
-	apiSymbol := strings.ReplaceAll(symbol, "/", "")
-
-	// For futures scalping
-	return e.placeFuturesOrder(ctx, apiSymbol, side, amount, price)
+	return e.PlaceOrderWithDetails(ctx, TradeDetails{
+		Exchange:   exchange,
+		Symbol:     symbol,
+		Side:       side,
+		OrderType:  orderType,
+		MarketType: "futures",
+		AmountUSDT: amount,
+		EntryPrice: price,
+	})
 }
 
 // PlaceOrderWithDetails places an order with full trade details
@@ -96,7 +100,7 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 
 	// Try futures first. Spot fallback is explicit via AllowSpotFallback.
 	if details.MarketType == "futures" {
-		if !details.ReduceOnly {
+		if !details.ReduceOnly && details.Leverage > 0 {
 			orderID, err = func() (string, error) {
 				e.leverageMu.Lock()
 				defer e.leverageMu.Unlock()
@@ -117,14 +121,24 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 			fmt.Printf("[BITGET-ORDER] Futures order failed: %v\n", err)
 			if details.AllowSpotFallback && shouldFallbackToSpot(err) {
 				fmt.Printf("[BITGET-ORDER] Symbol %s not available on futures, trying spot...\n", apiSymbol)
+				spotSide, spotErr := normalizeSpotFallbackSide(details.Side)
+				if spotErr != nil {
+					return "", spotErr
+				}
 				details.MarketType = "spot"
-				orderID, err = e.placeSpotOrder(ctx, apiSymbol, details.Side, details.AmountUSDT, details.EntryPrice)
+				details.Side = spotSide
+				orderID, err = e.placeSpotOrder(ctx, apiSymbol, spotSide, details.AmountUSDT, details.EntryPrice)
 			} else if shouldFallbackToSpot(err) {
 				return "", fmt.Errorf("futures-only mode prevented spot fallback for %s: %w", apiSymbol, err)
 			}
 		}
 	} else {
-		orderID, err = e.placeSpotOrder(ctx, apiSymbol, details.Side, details.AmountUSDT, details.EntryPrice)
+		spotSide, spotErr := normalizeSpotFallbackSide(details.Side)
+		if spotErr != nil {
+			return "", spotErr
+		}
+		details.Side = spotSide
+		orderID, err = e.placeSpotOrder(ctx, apiSymbol, spotSide, details.AmountUSDT, details.EntryPrice)
 	}
 
 	if err != nil {
@@ -169,64 +183,15 @@ func isRiskReductionOrder(details TradeDetails) bool {
 	return details.ReduceOnly || strings.EqualFold(strings.TrimSpace(details.TradeType), "risk_reduction")
 }
 
-// placeFuturesOrder places a futures market order
-func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, side string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
-	// Bitget v2 expects side=buy|sell (not open_long/open_short).
-	bitgetSide, err := normalizeBitgetFuturesSide(side)
-	if err != nil {
-		return "", err
+func normalizeSpotFallbackSide(side string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(side)) {
+	case "buy", "long", "open_long":
+		return "buy", nil
+	case "sell":
+		return "sell", nil
+	default:
+		return "", fmt.Errorf("spot fallback is unsupported for futures side %q", side)
 	}
-	holdSide := "long"
-	if bitgetSide == "sell" {
-		holdSide = "short"
-	}
-
-	minNotional := bitgetFuturesMinUSDTNotional()
-	if amount.LessThan(minNotional) {
-		fmt.Printf("[BITGET-ORDER] Amount %s USDT below minimum, bumping to %s USDT\n",
-			amount.String(), minNotional.String())
-		amount = minNotional
-	}
-
-	// For buy, we're opening a long position
-	// Calculate size in contracts (for USDT-FUTURES, size is in USDT)
-	size := amount.String()
-
-	body := map[string]interface{}{
-		"symbol":      symbol,
-		"productType": "USDT-FUTURES",
-		"marginMode":  "crossed",
-		"marginCoin":  "USDT",
-		"size":        size,
-		"side":        bitgetSide,
-		"tradeSide":   "open",
-		"holdSide":    holdSide,
-		"orderType":   "market",
-	}
-
-	result, err := e.placeBitgetFuturesOrderRequest(ctx, body)
-	if err != nil {
-		return "", fmt.Errorf("failed to place futures order: %w", err)
-	}
-	if result.Code == "400172" {
-		legacyBody := cloneStringAnyMap(body)
-		legacyBody["side"] = legacyBitgetOpenSide(bitgetSide)
-		delete(legacyBody, "tradeSide")
-		delete(legacyBody, "holdSide")
-		result, err = e.placeBitgetFuturesOrderRequest(ctx, legacyBody)
-		if err != nil {
-			return "", fmt.Errorf("failed to place futures order (legacy side): %w", err)
-		}
-	}
-
-	if result.Code != "00000" {
-		return "", fmt.Errorf("bitget API error: %s (code: %s)", result.Msg, result.Code)
-	}
-
-	fmt.Printf("[BITGET-ORDER] ✅ Futures order placed: %s %s (size: %s USDT) - OrderID: %s\n",
-		side, symbol, size, result.OrderID)
-
-	return result.OrderID, nil
 }
 
 // placeFuturesOrderWithTPSL places a futures order with TP/SL

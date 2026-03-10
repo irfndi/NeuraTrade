@@ -13,7 +13,13 @@ import (
 )
 
 type TradeMemory struct {
-	db *sql.DB
+	db     *sql.DB
+	config TradeMemoryConfig
+}
+
+type TradeMemoryConfig struct {
+	MemoryLookbackHoursDefault int
+	MemorySampleLimitDefault   int
 }
 
 type AITradeRecord struct {
@@ -63,11 +69,47 @@ type TradeExpectancyStats struct {
 }
 
 func NewTradeMemory(db *sql.DB) (*TradeMemory, error) {
-	tm := &TradeMemory{db: db}
+	return NewTradeMemoryWithConfig(db, DefaultTradeMemoryConfig())
+}
+
+func NewTradeMemoryWithConfig(db *sql.DB, config TradeMemoryConfig) (*TradeMemory, error) {
+	tm := &TradeMemory{
+		db:     db,
+		config: normalizeTradeMemoryConfig(config),
+	}
 	if err := tm.initTables(); err != nil {
 		return nil, fmt.Errorf("failed to init trade memory tables: %w", err)
 	}
 	return tm, nil
+}
+
+func DefaultTradeMemoryConfig() TradeMemoryConfig {
+	return TradeMemoryConfig{
+		MemoryLookbackHoursDefault: 24 * 30,
+		MemorySampleLimitDefault:   250,
+	}
+}
+
+func ResolveTradeMemoryConfigFromEnv(base TradeMemoryConfig) TradeMemoryConfig {
+	cfg := normalizeTradeMemoryConfig(base)
+	if value := getEnvInt("NEURATRADE_AI_MEMORY_LOOKBACK_HOURS"); value > 0 {
+		cfg.MemoryLookbackHoursDefault = value
+	}
+	if value := getEnvInt("NEURATRADE_AI_MEMORY_SAMPLE_LIMIT"); value > 0 {
+		cfg.MemorySampleLimitDefault = value
+	}
+	return normalizeTradeMemoryConfig(cfg)
+}
+
+func normalizeTradeMemoryConfig(config TradeMemoryConfig) TradeMemoryConfig {
+	defaults := DefaultTradeMemoryConfig()
+	if config.MemoryLookbackHoursDefault <= 0 {
+		config.MemoryLookbackHoursDefault = defaults.MemoryLookbackHoursDefault
+	}
+	if config.MemorySampleLimitDefault <= 0 {
+		config.MemorySampleLimitDefault = defaults.MemorySampleLimitDefault
+	}
+	return config
 }
 
 func (tm *TradeMemory) initTables() error {
@@ -514,10 +556,10 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		return nil, false, nil
 	}
 	if lookbackHours <= 0 {
-		lookbackHours = 24 * 30
+		lookbackHours = tm.config.MemoryLookbackHoursDefault
 	}
 	if limit <= 0 {
-		limit = 250
+		limit = tm.config.MemorySampleLimitDefault
 	}
 
 	windowTo := time.Now().UTC()
@@ -543,7 +585,7 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
 			AND (? = '' OR exchange = ?)
 			AND (? = '' OR side = ?)
-		ORDER BY closed_at DESC
+		ORDER BY closed_at DESC, created_at DESC, id DESC
 	`
 	const scopedExpectancyLimitedQuery = `
 		SELECT CAST(realized_pnl AS TEXT)
@@ -552,7 +594,7 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
 			AND (? = '' OR exchange = ?)
 			AND (? = '' OR side = ?)
-		ORDER BY closed_at DESC
+		ORDER BY closed_at DESC, created_at DESC, id DESC
 		LIMIT ?
 	`
 	const scopedExpectancyBySymbolQuery = `
@@ -563,7 +605,7 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 			AND (? = '' OR exchange = ?)
 			AND (? = '' OR side = ?)
 			AND ` + normalizedScopedSymbolSQL + ` = ?
-		ORDER BY closed_at DESC
+		ORDER BY closed_at DESC, created_at DESC, id DESC
 	`
 	const scopedExpectancyBySymbolLimitedQuery = `
 		SELECT CAST(realized_pnl AS TEXT)
@@ -573,7 +615,7 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 			AND (? = '' OR exchange = ?)
 			AND (? = '' OR side = ?)
 			AND ` + normalizedScopedSymbolSQL + ` = ?
-		ORDER BY closed_at DESC
+		ORDER BY closed_at DESC, created_at DESC, id DESC
 		LIMIT ?
 	`
 	query := scopedExpectancyQuery

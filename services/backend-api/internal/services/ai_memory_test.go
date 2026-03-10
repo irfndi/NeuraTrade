@@ -34,6 +34,16 @@ func TestNewTradeMemory(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
+func TestResolveTradeMemoryConfigFromEnv(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_MEMORY_LOOKBACK_HOURS", "168")
+	t.Setenv("NEURATRADE_AI_MEMORY_SAMPLE_LIMIT", "42")
+
+	cfg := ResolveTradeMemoryConfigFromEnv(DefaultTradeMemoryConfig())
+
+	assert.Equal(t, 168, cfg.MemoryLookbackHoursDefault)
+	assert.Equal(t, 42, cfg.MemorySampleLimitDefault)
+}
+
 func TestTradeMemory_RecordDecision(t *testing.T) {
 	db := setupTestDB(t)
 	tm, err := NewTradeMemory(db)
@@ -470,6 +480,64 @@ func TestTradeMemory_GetScopedExpectancyStats_DefaultLookbackAndLimit(t *testing
 	assert.Equal(t, 250, stats.SampleSize)
 	assert.Equal(t, 250, stats.Wins)
 	assert.Zero(t, stats.Losses)
+}
+
+func TestTradeMemory_GetScopedExpectancyStats_UsesConfiguredDefaultsAndDeterministicOrdering(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemoryWithConfig(db, TradeMemoryConfig{
+		MemoryLookbackHoursDefault: 24,
+		MemorySampleLimitDefault:   1,
+	})
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	closedAt := time.Now().UTC().Truncate(time.Second)
+	olderCreatedAt := closedAt.Add(-2 * time.Minute)
+	newerCreatedAt := closedAt.Add(-1 * time.Minute)
+	outsideLookback := closedAt.Add(-48 * time.Hour)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_oldest', 'ord_oldest', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 98, -2, 0, 'autonomous', ?, ?),
+		('rp_newest', 'ord_newest', 'chat-1', 'bitget', 'BTC-USDT:USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', ?, ?),
+		('rp_outside', 'ord_outside', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 110, 10, 0, 'autonomous', ?, ?)`,
+		closedAt, olderCreatedAt,
+		closedAt, newerCreatedAt,
+		outsideLookback, outsideLookback,
+	)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 0, 0)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, stats)
+	assert.Equal(t, 1, stats.SampleSize)
+	assert.Equal(t, 1, stats.Wins)
+	assert.Zero(t, stats.Losses)
+	assert.InDelta(t, 3.0, stats.NetExpectancy, 0.0001)
 }
 
 func TestTradeMemory_RecordLesson(t *testing.T) {
