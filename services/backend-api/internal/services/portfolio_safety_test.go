@@ -345,12 +345,12 @@ func TestPortfolioSafetyService_CanExecuteTrade(t *testing.T) {
 
 	ctx := context.Background()
 
-	allowed, reason, err := service.CanExecuteTrade(ctx, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(500))
+	allowed, reason, err := service.CanExecuteTrade(ctx, "test-chat", "binance", "BTC/USDT", "spot", decimal.NewFromFloat(500))
 	require.NoError(t, err)
 	assert.True(t, allowed)
 	assert.Empty(t, reason)
 
-	allowed, reason, err = service.CanExecuteTrade(ctx, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(50000))
+	allowed, reason, err = service.CanExecuteTrade(ctx, "test-chat", "binance", "BTC/USDT", "spot", decimal.NewFromFloat(50000))
 	require.NoError(t, err)
 	assert.False(t, allowed)
 	assert.NotEmpty(t, reason)
@@ -580,6 +580,7 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 	tests := []struct {
 		name                string
 		symbol              string
+		marketType          string
 		balanceTotal        float64
 		maxPositionSizePct  float64
 		maxPositionFloorPct float64
@@ -590,6 +591,7 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 		{
 			name:                "allows_min_notional_within_floor_cap",
 			symbol:              "OPN/USDT:USDT",
+			marketType:          "futures",
 			balanceTotal:        46.93,
 			maxPositionSizePct:  0.10,
 			maxPositionFloorPct: 0.20,
@@ -599,6 +601,7 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 		{
 			name:                "blocks_min_notional_beyond_floor_cap",
 			symbol:              "OPN/USDT:USDT",
+			marketType:          "futures",
 			balanceTotal:        20.00,
 			maxPositionSizePct:  0.10,
 			maxPositionFloorPct: 0.20,
@@ -609,6 +612,7 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 		{
 			name:                "blocks_below_exchange_min_notional",
 			symbol:              "OPN/USDT:USDT",
+			marketType:          "futures",
 			balanceTotal:        100.00,
 			maxPositionSizePct:  0.10,
 			maxPositionFloorPct: 0.20,
@@ -619,6 +623,7 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 		{
 			name:                "reports_effective_throttle_after_floor_override",
 			symbol:              "OPN/USDT:USDT",
+			marketType:          "futures",
 			balanceTotal:        46.93,
 			maxPositionSizePct:  0.10,
 			maxPositionFloorPct: 0.20,
@@ -629,6 +634,7 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 		{
 			name:                "zero_floor_disables_notional_override",
 			symbol:              "OPN/USDT:USDT",
+			marketType:          "futures",
 			balanceTotal:        46.93,
 			maxPositionSizePct:  0.10,
 			maxPositionFloorPct: 0,
@@ -639,10 +645,21 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 		{
 			name:                "spot_symbol_skips_futures_notional_floor",
 			symbol:              "OPN/USDT",
+			marketType:          "spot",
 			balanceTotal:        100.00,
 			maxPositionSizePct:  0.10,
 			maxPositionFloorPct: 0.20,
 			requestedNotional:   decimal.NewFromFloat(5.0),
+			wantAllowed:         true,
+		},
+		{
+			name:                "futures_market_type_applies_floor_for_bare_symbol",
+			symbol:              "PEPE/USDT",
+			marketType:          "futures",
+			balanceTotal:        46.93,
+			maxPositionSizePct:  0.10,
+			maxPositionFloorPct: 0.20,
+			requestedNotional:   decimal.NewFromFloat(6.0),
 			wantAllowed:         true,
 		},
 	}
@@ -664,7 +681,7 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 			}
 
 			service := NewPortfolioSafetyService(config, mockCCXT, nil, nil, nil, nil, nil, nil, nil)
-			allowed, reason, err := service.CanExecuteTrade(context.Background(), "chat-bitget", "bitget", tt.symbol, tt.requestedNotional)
+			allowed, reason, err := service.CanExecuteTrade(context.Background(), "chat-bitget", "bitget", tt.symbol, tt.marketType, tt.requestedNotional)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAllowed, allowed)
 			for _, fragment := range tt.wantReasonSubstring {

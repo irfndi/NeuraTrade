@@ -66,8 +66,8 @@ type mockSafetyChecker struct {
 	mock.Mock
 }
 
-func (m *mockSafetyChecker) CanExecuteTrade(ctx context.Context, chatID, exchange, symbol string, size decimal.Decimal) (bool, string, error) {
-	args := m.Called(ctx, chatID, exchange, symbol, size)
+func (m *mockSafetyChecker) CanExecuteTrade(ctx context.Context, chatID, exchange, symbol, marketType string, size decimal.Decimal) (bool, string, error) {
+	args := m.Called(ctx, chatID, exchange, symbol, marketType, size)
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
@@ -90,7 +90,7 @@ func TestSafeOrderExecutor_BlocksWhenSafetyCheckFails(t *testing.T) {
 
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", "", decimal.NewFromFloat(100)).
 		Return(false, "Trading halted due to max drawdown", nil)
 
 	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), nil)
@@ -108,7 +108,7 @@ func TestSafeOrderExecutor_BlocksOnDailyLossLimit(t *testing.T) {
 
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", "", decimal.NewFromFloat(100)).
 		Return(false, "Daily loss limit exceeded: 150.00/100.00", nil)
 
 	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), nil)
@@ -125,7 +125,7 @@ func TestSafeOrderExecutor_BlocksOnOversizedPosition(t *testing.T) {
 
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(1000)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", "", decimal.NewFromFloat(1000)).
 		Return(false, "Position size 1000.00 exceeds maximum allowed 500.00 (throttled to 50%)", nil)
 
 	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(1000), nil)
@@ -142,7 +142,7 @@ func TestSafeOrderExecutor_AllowsWhenSafetyPasses(t *testing.T) {
 
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", "", decimal.NewFromFloat(100)).
 		Return(true, "", nil)
 
 	mockExecutor.On("PlaceOrder", mock.Anything, "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), (*decimal.Decimal)(nil)).Return("order-456", nil)
@@ -161,7 +161,7 @@ func TestSafeOrderExecutor_FailsClosedOnError(t *testing.T) {
 
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", "", decimal.NewFromFloat(100)).
 		Return(false, "", errors.New("safety service unavailable"))
 
 	orderID, err := safeExec.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(100), nil)
@@ -177,7 +177,7 @@ func TestSafeOrderExecutor_CheckSafety(t *testing.T) {
 
 	safeExec := NewSafeOrderExecutor(nil, mockSafety, "test-chat")
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(50)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", "", decimal.NewFromFloat(50)).
 		Return(false, "Drawdown halt active", nil)
 
 	allowed, reason, err := safeExec.CheckSafety(context.Background(), "binance", "BTC/USDT", decimal.NewFromFloat(50))
@@ -193,7 +193,7 @@ func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck(t *testing.T) {
 
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", decimal.NewFromFloat(100)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "binance", "BTC/USDT", "", decimal.NewFromFloat(100)).
 		Return(false, "Trading not allowed", nil)
 
 	orderID, result, err := safeExec.PlaceOrderWithSafetyCheck(
@@ -226,7 +226,7 @@ func TestSafeOrderExecutor_UsesChatIDFromScopedContext(t *testing.T) {
 		Exchange: "binance",
 	})
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "scoped-chat", "binance", "BTC/USDT", decimal.NewFromFloat(50)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "scoped-chat", "binance", "BTC/USDT", "", decimal.NewFromFloat(50)).
 		Return(true, "", nil)
 
 	allowed, reason, err := safeExec.CheckSafety(ctx, "binance", "BTC/USDT", decimal.NewFromFloat(50))
@@ -244,11 +244,12 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_BlocksWhenSafetyFails(t *testin
 
 	details := TradeDetails{
 		Exchange:   "bitget",
+		MarketType: "futures",
 		Symbol:     "BTC/USDT",
 		AmountUSDT: decimal.NewFromFloat(100),
 	}
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "BTC/USDT", decimal.NewFromFloat(100)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "BTC/USDT", "futures", decimal.NewFromFloat(100)).
 		Return(false, "Trading halted due to max drawdown", nil)
 
 	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
@@ -266,11 +267,12 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_AllowsWhenSafetyPasses(t *testi
 
 	details := TradeDetails{
 		Exchange:   "bitget",
+		MarketType: "futures",
 		Symbol:     "ETH/USDT",
 		AmountUSDT: decimal.NewFromFloat(75),
 	}
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "ETH/USDT", decimal.NewFromFloat(75)).
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "ETH/USDT", "futures", decimal.NewFromFloat(75)).
 		Return(true, "", nil)
 	mockExecutor.On("PlaceOrderWithDetails", mock.Anything, details).Return("order-789", nil)
 

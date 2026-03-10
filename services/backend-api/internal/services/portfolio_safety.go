@@ -464,7 +464,7 @@ func (s *PortfolioSafetyService) CheckSafety(ctx context.Context, chatID string,
 	return status, nil
 }
 
-func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID string, exchange string, symbol string, size decimal.Decimal) (bool, string, error) {
+func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID string, exchange string, symbol string, marketType string, size decimal.Decimal) (bool, string, error) {
 	exchanges := []string{}
 	if exchange != "" {
 		exchanges = []string{exchange}
@@ -482,12 +482,12 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 	if !status.TradingAllowed {
 		return false, fmt.Sprintf("Trading not allowed: %v", status.Reasons), nil
 	}
-	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol)
+	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol, marketType)
 	if minNotional.GreaterThan(decimal.Zero) && size.GreaterThan(decimal.Zero) && size.LessThan(minNotional) {
 		return false, fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)), nil
 	}
 
-	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, symbol, snapshot, status.MaxPositionSize)
+	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, symbol, marketType, snapshot, status.MaxPositionSize)
 	effectiveThrottlePct := resolveEffectiveThrottlePct(status.MaxPositionSize, effectiveMaxPosition)
 	throttleLabel := formatEffectiveThrottleLabel(effectiveThrottlePct)
 
@@ -503,12 +503,12 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 // override for exchange minimum notionals: when requiredPct for the exchange
 // minimum is less than or equal to floorCapPct, the effective max may exceed
 // defaultMax so the trade remains executable; otherwise defaultMax is preserved.
-func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, symbol string, snapshot *SafetyPortfolioSnapshot, defaultMax decimal.Decimal) decimal.Decimal {
+func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, symbol string, marketType string, snapshot *SafetyPortfolioSnapshot, defaultMax decimal.Decimal) decimal.Decimal {
 	if snapshot == nil || !defaultMax.GreaterThan(decimal.Zero) {
 		return defaultMax
 	}
 
-	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol)
+	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol, marketType)
 	if !minNotional.GreaterThan(decimal.Zero) || !minNotional.GreaterThan(defaultMax) {
 		return defaultMax
 	}
@@ -528,10 +528,10 @@ func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string
 	return minNotional
 }
 
-func exchangeMinExecutableNotional(exchange string, symbol string) decimal.Decimal {
+func exchangeMinExecutableNotional(exchange string, symbol string, marketType string) decimal.Decimal {
 	switch exchange {
 	case "bitget":
-		if !isLikelyFuturesInstrument(symbol) {
+		if !strings.EqualFold(strings.TrimSpace(marketType), "futures") && !isLikelyFuturesInstrument(symbol) {
 			return decimal.Zero
 		}
 		return appautonomy.BitgetFuturesMinNotional()
@@ -540,6 +540,11 @@ func exchangeMinExecutableNotional(exchange string, symbol string) decimal.Decim
 	}
 }
 
+// isLikelyFuturesInstrument is a best-effort heuristic for exchange symbols.
+// It currently treats ':', 'PERP', and 'SWAP' patterns as futures-oriented,
+// primarily validated against Bitget conventions; it can still misclassify some
+// spot symbols or miss nonstandard futures tickers, so callers must not rely on
+// it for strict market-type correctness.
 func isLikelyFuturesInstrument(symbol string) bool {
 	normalized := strings.ToUpper(strings.TrimSpace(symbol))
 	if normalized == "" {

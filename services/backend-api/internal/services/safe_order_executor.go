@@ -9,7 +9,7 @@ import (
 )
 
 type PortfolioSafetyChecker interface {
-	CanExecuteTrade(ctx context.Context, chatID, exchange, symbol string, size decimal.Decimal) (bool, string, error)
+	CanExecuteTrade(ctx context.Context, chatID, exchange, symbol, marketType string, size decimal.Decimal) (bool, string, error)
 }
 
 type SafeOrderExecutor struct {
@@ -42,7 +42,7 @@ func (s *SafeOrderExecutor) PlaceOrder(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, error) {
-	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, amount)
+	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, "", amount)
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
@@ -60,7 +60,7 @@ func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, *SafetyCheckResult, error) {
-	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, amount)
+	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, "", amount)
 	if err != nil {
 		return "", nil, fmt.Errorf("safety check failed: %w", err)
 	}
@@ -79,10 +79,10 @@ func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
 }
 
 func (s *SafeOrderExecutor) CheckSafety(ctx context.Context, exchange string, symbol string, amount decimal.Decimal) (bool, string, error) {
-	return s.checkSafety(ctx, exchange, symbol, amount)
+	return s.checkSafety(ctx, exchange, symbol, "", amount)
 }
 
-func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol string, amount decimal.Decimal) (bool, string, error) {
+func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol, marketType string, amount decimal.Decimal) (bool, string, error) {
 	s.mu.RLock()
 	chatID := s.chatID
 	safetyService := s.safetyService
@@ -95,7 +95,7 @@ func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol st
 		return true, "", nil
 	}
 
-	allowed, reason, err := safetyService.CanExecuteTrade(ctx, chatID, exchange, symbol, amount)
+	allowed, reason, err := safetyService.CanExecuteTrade(ctx, chatID, exchange, symbol, marketType, amount)
 	if err != nil {
 		return false, fmt.Sprintf("safety check error: %v", err), err
 	}
@@ -122,7 +122,7 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 		return "", fmt.Errorf("invalid order size: amount_usdt must be positive")
 	}
 
-	allowed, reason, err := s.checkSafety(ctx, details.Exchange, details.Symbol, amount)
+	allowed, reason, err := s.checkSafety(ctx, details.Exchange, details.Symbol, details.MarketType, amount)
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
