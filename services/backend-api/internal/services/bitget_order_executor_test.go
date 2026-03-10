@@ -410,6 +410,71 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksOnLeverageSyncFailure(t
 	assert.Contains(t, err.Error(), "failed to sync futures leverage")
 }
 
+func TestBitgetOrderExecutor_PlaceOrderWithDetails_RiskReductionSkipsLeverageSync(t *testing.T) {
+	accountCalls := 0
+	var orderBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			t.Fatalf("risk reduction orders should not sync leverage")
+		case "/api/v2/mix/market/contracts":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{
+				"sizeMultiplier":"1",
+				"minTradeNum":"1",
+				"volumePlace":"0",
+				"pricePlace":"2"
+			}]}`))
+		case "/api/v2/mix/order/place-order":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &orderBody))
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"close-123"}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	entryPrice := decimal.NewFromInt(2)
+	orderID, err := executor.PlaceOrderWithDetails(context.Background(), TradeDetails{
+		Symbol:     "BTC/USDT",
+		Side:       "sell",
+		MarketType: "futures",
+		TradeType:  "risk_reduction",
+		Amount:     decimal.NewFromInt(3),
+		AmountUSDT: decimal.NewFromInt(10),
+		EntryPrice: &entryPrice,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "close-123", orderID)
+	assert.Zero(t, accountCalls)
+	require.NotNil(t, orderBody)
+	assert.Equal(t, "close", orderBody["tradeSide"])
+	assert.Equal(t, "YES", orderBody["reduceOnly"])
+	assert.Equal(t, "long", orderBody["holdSide"])
+	assert.Equal(t, bitgetFuturesOrderMarginMode, orderBody["marginMode"])
+}
+
+func TestBitgetFuturesAccount_EffectiveLeverageForCrossMarginPrefersCrossValues(t *testing.T) {
+	account := bitgetFuturesAccount{
+		CrossMarginLeverage:   9,
+		CrossedMarginLeverage: 11,
+		LongLeverage:          5,
+		ShortLeverage:         6,
+		IsolatedLongLeverage:  25,
+		IsolatedShortLeverage: 30,
+	}
+
+	assert.Equal(t, 11, account.effectiveLeverageForMarginMode("long", "crossed"))
+	assert.Equal(t, 11, account.effectiveLeverageForMarginMode("short", "crossed"))
+}
+
 func TestShouldFallbackToSpot_NarrowsMissingMarketDetection(t *testing.T) {
 	assert.True(t, shouldFallbackToSpot(errors.New("bitget futures account API error: symbol not exist (code: 40001)")))
 	assert.True(t, shouldFallbackToSpot(errors.New("failed to get contract info: contract does not exist")))

@@ -342,6 +342,7 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 	) VALUES
 		('rp_a', 'ord_a', 'chat-1', 'bitget', 'btc/usdt', 'buy', 1, 100, 102, 2, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_b', 'ord_b', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_suffix', 'ord_suffix', 'chat-1', 'bitget', 'BTC-USDT:USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_future', 'ord_future', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 140, 40, 0, 'autonomous', datetime('now', '+2 hours'), datetime('now', '+2 hours')),
 		('rp_c', 'ord_c', 'chat-2', 'bitget', 'BTC/USDT', 'buy', 1, 100, 109, 9, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_d', 'ord_d', 'chat-1', 'binance', 'BTC/USDT', 'buy', 1, 100, 108, 8, 0, 'autonomous', datetime('now'), datetime('now'))`)
@@ -357,10 +358,10 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, found)
 		require.NotNil(t, stats)
-		assert.Equal(t, 2, stats.SampleSize)
-		assert.Equal(t, 1, stats.Wins)
+		assert.Equal(t, 3, stats.SampleSize)
+		assert.Equal(t, 2, stats.Wins)
 		assert.Equal(t, 1, stats.Losses)
-		assert.InDelta(t, 0.5, stats.NetExpectancy, 0.0001)
+		assert.InDelta(t, 1.3333333, stats.NetExpectancy, 0.0001)
 	})
 
 	t.Run("scoped_no_match_returns_false", func(t *testing.T) {

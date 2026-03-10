@@ -525,9 +525,19 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	exchange := strings.TrimSpace(scope.Exchange)
 	normalizedSymbol := normalizeSymbolForComparison(symbol)
 	normalizedAction := normalizeLifecycleSide(action)
+	const normalizedScopedSymbolSQL = `
+		UPPER(REPLACE(
+			CASE
+				WHEN INSTR(TRIM(symbol), ':') > 0 THEN SUBSTR(TRIM(symbol), 1, INSTR(TRIM(symbol), ':') - 1)
+				ELSE TRIM(symbol)
+			END,
+			'-',
+			'/'
+		))
+	`
 
 	const scopedExpectancyQuery = `
-		SELECT CAST(realized_pnl AS TEXT), symbol
+		SELECT CAST(realized_pnl AS TEXT)
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
@@ -536,12 +546,33 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		ORDER BY closed_at DESC
 	`
 	const scopedExpectancyLimitedQuery = `
-		SELECT CAST(realized_pnl AS TEXT), symbol
+		SELECT CAST(realized_pnl AS TEXT)
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
 			AND (? = '' OR exchange = ?)
 			AND (? = '' OR side = ?)
+		ORDER BY closed_at DESC
+		LIMIT ?
+	`
+	const scopedExpectancyBySymbolQuery = `
+		SELECT CAST(realized_pnl AS TEXT)
+		FROM realized_pnl_journal
+		WHERE closed_at >= ? AND closed_at <= ?
+			AND (? = '' OR COALESCE(chat_id, '') = ?)
+			AND (? = '' OR exchange = ?)
+			AND (? = '' OR side = ?)
+			AND ` + normalizedScopedSymbolSQL + ` = ?
+		ORDER BY closed_at DESC
+	`
+	const scopedExpectancyBySymbolLimitedQuery = `
+		SELECT CAST(realized_pnl AS TEXT)
+		FROM realized_pnl_journal
+		WHERE closed_at >= ? AND closed_at <= ?
+			AND (? = '' OR COALESCE(chat_id, '') = ?)
+			AND (? = '' OR exchange = ?)
+			AND (? = '' OR side = ?)
+			AND ` + normalizedScopedSymbolSQL + ` = ?
 		ORDER BY closed_at DESC
 		LIMIT ?
 	`
@@ -556,8 +587,16 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		normalizedAction,
 		normalizedAction,
 	}
-	if limit > 0 && normalizedSymbol == "" {
-		query = scopedExpectancyLimitedQuery
+	if normalizedSymbol != "" {
+		query = scopedExpectancyBySymbolQuery
+		args = append(args, normalizedSymbol)
+	}
+	if limit > 0 {
+		if normalizedSymbol != "" {
+			query = scopedExpectancyBySymbolLimitedQuery
+		} else {
+			query = scopedExpectancyLimitedQuery
+		}
 		args = append(args, limit)
 	}
 
@@ -573,19 +612,10 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	stats := &TradeExpectancyStats{}
 	sumWin := decimal.Zero
 	sumLoss := decimal.Zero
-	matchedRows := 0
 	for rows.Next() {
 		var pnlRaw string
-		var symbolRaw string
-		if err := rows.Scan(&pnlRaw, &symbolRaw); err != nil {
+		if err := rows.Scan(&pnlRaw); err != nil {
 			return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
-		}
-		if normalizedSymbol != "" && normalizeSymbolForComparison(symbolRaw) != normalizedSymbol {
-			continue
-		}
-		matchedRows++
-		if limit > 0 && matchedRows > limit {
-			break
 		}
 		pnl, err := decimal.NewFromString(strings.TrimSpace(pnlRaw))
 		if err != nil || pnl.IsZero() {

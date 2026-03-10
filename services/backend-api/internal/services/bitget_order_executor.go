@@ -92,6 +92,7 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 
 	var orderID string
 	var err error
+	details.ReduceOnly = isRiskReductionOrder(details)
 
 	// Try futures first. Spot fallback is explicit via AllowSpotFallback.
 	if details.MarketType == "futures" {
@@ -164,6 +165,10 @@ func bitgetFuturesMinUSDTNotional() decimal.Decimal {
 
 const bitgetFuturesOrderMarginMode = "isolated"
 
+func isRiskReductionOrder(details TradeDetails) bool {
+	return details.ReduceOnly || strings.EqualFold(strings.TrimSpace(details.TradeType), "risk_reduction")
+}
+
 // placeFuturesOrder places a futures market order
 func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, side string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
 	// Bitget v2 expects side=buy|sell (not open_long/open_short).
@@ -230,7 +235,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	if err != nil {
 		return "", err
 	}
-	isRiskReduction := strings.EqualFold(strings.TrimSpace(details.TradeType), "risk_reduction")
+	isRiskReduction := isRiskReductionOrder(details)
 	tradeSide := "open"
 	holdSide := "long"
 	if bitgetSide == "sell" {
@@ -331,7 +336,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	body := map[string]interface{}{
 		"symbol":      symbol,
 		"productType": "USDT-FUTURES",
-		"marginMode":  "isolated",
+		"marginMode":  bitgetFuturesOrderMarginMode,
 		"marginCoin":  "USDT",
 		"size":        size,
 		"side":        bitgetSide,
@@ -493,26 +498,23 @@ func (a bitgetFuturesAccount) effectiveLeverageForMarginMode(holdSide string, ma
 		}
 		return 0
 	}
+	if a.CrossedMarginLeverage > 0 {
+		return a.CrossedMarginLeverage
+	}
+	if a.CrossMarginLeverage > 0 {
+		return a.CrossMarginLeverage
+	}
 	switch holdSide {
 	case "short":
-		if a.IsolatedShortLeverage > 0 {
-			return a.IsolatedShortLeverage
-		}
 		if a.ShortLeverage > 0 {
 			return a.ShortLeverage
 		}
 	case "long":
-		if a.IsolatedLongLeverage > 0 {
-			return a.IsolatedLongLeverage
-		}
 		if a.LongLeverage > 0 {
 			return a.LongLeverage
 		}
 	}
-	if a.CrossedMarginLeverage > 0 {
-		return a.CrossedMarginLeverage
-	}
-	return a.CrossMarginLeverage
+	return 0
 }
 
 func (e *BitgetOrderExecutor) syncFuturesLeverageForDetails(
