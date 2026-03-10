@@ -56,13 +56,32 @@ func TestNewTradeMemory(t *testing.T) {
 }
 
 func TestResolveTradeMemoryConfigFromEnv(t *testing.T) {
-	t.Setenv("NEURATRADE_AI_MEMORY_LOOKBACK_HOURS", "168")
-	t.Setenv("NEURATRADE_AI_MEMORY_SAMPLE_LIMIT", "42")
+	defaults := DefaultTradeMemoryConfig()
+	tests := []struct {
+		name             string
+		lookback         string
+		sampleLimit      string
+		expectedLookback int
+		expectedLimit    int
+	}{
+		{name: "unset", expectedLookback: defaults.MemoryLookbackHoursDefault, expectedLimit: defaults.MemorySampleLimitDefault},
+		{name: "valid", lookback: "168", sampleLimit: "42", expectedLookback: 168, expectedLimit: 42},
+		{name: "invalid", lookback: "abc", sampleLimit: "oops", expectedLookback: defaults.MemoryLookbackHoursDefault, expectedLimit: defaults.MemorySampleLimitDefault},
+		{name: "zero", lookback: "0", sampleLimit: "0", expectedLookback: defaults.MemoryLookbackHoursDefault, expectedLimit: defaults.MemorySampleLimitDefault},
+		{name: "negative", lookback: "-5", sampleLimit: "-10", expectedLookback: defaults.MemoryLookbackHoursDefault, expectedLimit: defaults.MemorySampleLimitDefault},
+	}
 
-	cfg := ResolveTradeMemoryConfigFromEnv(DefaultTradeMemoryConfig())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("NEURATRADE_AI_MEMORY_LOOKBACK_HOURS", tt.lookback)
+			t.Setenv("NEURATRADE_AI_MEMORY_SAMPLE_LIMIT", tt.sampleLimit)
 
-	assert.Equal(t, 168, cfg.MemoryLookbackHoursDefault)
-	assert.Equal(t, 42, cfg.MemorySampleLimitDefault)
+			cfg := ResolveTradeMemoryConfigFromEnv(DefaultTradeMemoryConfig())
+
+			assert.Equal(t, tt.expectedLookback, cfg.MemoryLookbackHoursDefault)
+			assert.Equal(t, tt.expectedLimit, cfg.MemorySampleLimitDefault)
+		})
+	}
 }
 
 func TestTradeMemory_RecordDecision(t *testing.T) {
@@ -499,8 +518,9 @@ func TestTradeMemory_GetScopedExpectancyStats_DefaultLookbackAndLimit(t *testing
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotNil(t, stats)
-	assert.Equal(t, 250, stats.SampleSize)
-	assert.Equal(t, 250, stats.Wins)
+	defaults := DefaultTradeMemoryConfig()
+	assert.Equal(t, defaults.MemorySampleLimitDefault, stats.SampleSize)
+	assert.Equal(t, defaults.MemorySampleLimitDefault, stats.Wins)
 	assert.Zero(t, stats.Losses)
 }
 

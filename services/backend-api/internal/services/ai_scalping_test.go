@@ -93,8 +93,8 @@ func (m *mockAIScalpingCCXT) FetchOrderBook(ctx context.Context, exchange, symbo
 	return m.orderBooks[normalizeSymbolForComparison(symbol)], nil
 }
 
-func decimalPointer(value float64) *decimal.Decimal {
-	amount := decimal.NewFromFloat(value)
+func decimalPointer(value string) *decimal.Decimal {
+	amount := decimal.RequireFromString(value)
 	return &amount
 }
 
@@ -505,6 +505,18 @@ func TestInferDecisionFromLooseText_ParsesSemicolonSeparatedFields(t *testing.T)
 	assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
 }
 
+func TestInferDecisionFromLooseText_ParsesLeadingDotDecimals(t *testing.T) {
+	decision, err := inferDecisionFromLooseText(
+		`action: buy; symbol: BTC/USDT; size_pct: .75; confidence: -.25; reasoning: probe entry`,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.InDelta(t, 0.75, decision.SizePercent, 0.0001)
+	assert.InDelta(t, 0.0, decision.Confidence, 0.0001)
+}
+
 func TestInferDecisionFromLooseText_SingleQuotedPseudoJSON(t *testing.T) {
 	decision, err := inferDecisionFromLooseText(
 		`{'action':'buy','symbol':'BTC/USDT','size_pct':'0.75','confidence':'68%','reason':'Breakout with tight spread','stop_loss':'41000','take_profit':'43000'}`,
@@ -614,8 +626,8 @@ func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testin
 		EffectiveMinConfidence:         0.65,
 		EffectiveMaxCapitalPct:         12.00,
 		MinExecutableSizePct:           12.00,
-		MinExecutableNotionalUSDT:      decimalPointer(6.00),
-		MinExecutableInitialMarginUSDT: decimalPointer(1.20),
+		MinExecutableNotionalUSDT:      decimalPointer("6.00"),
+		MinExecutableInitialMarginUSDT: decimalPointer("1.20"),
 	})
 
 	assert.Contains(t, prompt, "Effective Min Confidence (must obey): 0.65")
@@ -1350,6 +1362,7 @@ func TestClassifyExecutionBlockCode_MapsRetryableErrors(t *testing.T) {
 		{name: "connectivity", err: fmt.Errorf("request failed: timeout while placing order"), expected: appautonomy.CandidateRejectConnectivity},
 		{name: "cooldown", err: fmt.Errorf("symbol cooldown active for ADA/USDT"), expected: appautonomy.CandidateRejectRiskBudget},
 		{name: "fallback_runtime", err: fmt.Errorf("futures-only mode prevented spot fallback"), expected: appautonomy.CandidateRejectAutonomyRuntime},
+		{name: "connectivity_with_leverage_word", err: fmt.Errorf("connection reset while checking leverage metadata"), expected: appautonomy.CandidateRejectConnectivity},
 		{name: "nil", err: nil, expected: ""},
 	}
 

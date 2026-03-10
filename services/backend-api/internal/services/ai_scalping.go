@@ -711,10 +711,10 @@ func walletBasis(portfolio TradingPortfolio) decimal.Decimal {
 	switch {
 	case portfolio.USDTBalanceDecimal.GreaterThan(decimal.Zero):
 		return portfolio.USDTBalanceDecimal
-	case portfolio.TotalValueDecimal.GreaterThan(decimal.Zero):
-		return portfolio.TotalValueDecimal
 	case portfolio.USDTBalance > 0:
 		return decimalFromBalanceFloat(portfolio.USDTBalance)
+	case portfolio.TotalValueDecimal.GreaterThan(decimal.Zero):
+		return portfolio.TotalValueDecimal
 	case portfolio.TotalValue > 0:
 		return decimalFromBalanceFloat(portfolio.TotalValue)
 	default:
@@ -767,8 +767,8 @@ func positiveDecimalPointer(value decimal.Decimal) *decimal.Decimal {
 	if !value.GreaterThan(decimal.Zero) {
 		return nil
 	}
-	copy := value
-	return &copy
+	val := value
+	return &val
 }
 
 func (s *AIScalpingService) executableSizingConstraints(ctx context.Context, portfolio TradingPortfolio) appautonomy.ExecutableSizingConstraints {
@@ -2854,7 +2854,10 @@ func classifyExecutionBlockCode(err error) string {
 	switch {
 	case strings.Contains(lower, "missing orderbook"):
 		return appautonomy.CandidateRejectMissingOrderbookSignal
-	case strings.Contains(lower, "leverage"):
+	case strings.Contains(lower, "failed to sync futures leverage"),
+		strings.Contains(lower, "failed to get futures account"),
+		strings.Contains(lower, "failed to set futures leverage"),
+		strings.Contains(lower, "futures leverage verification mismatch"):
 		return appautonomy.CandidateRejectAutonomyRuntime
 	case strings.Contains(lower, "connectivity") ||
 		strings.Contains(lower, "connection") ||
@@ -3327,7 +3330,7 @@ func extractLooseNumericField(raw string, key string) (float64, bool) {
 			candidate = append(candidate, ch)
 		case ch == '-' && len(candidate) == 0:
 			candidate = append(candidate, ch)
-		case ch == '.' && !seenDot && len(candidate) > 0 && candidate[len(candidate)-1] != '-':
+		case ch == '.' && !seenDot:
 			candidate = append(candidate, ch)
 			seenDot = true
 		default:

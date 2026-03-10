@@ -530,7 +530,7 @@ func (tm *TradeMemory) getRealizedPnLWindowStats(
 		return nil, false, fmt.Errorf("query realized pnl stats window: %w", err)
 	}
 	if totalTrades == 0 {
-		return nil, false, nil
+		return stats, true, nil
 	}
 
 	stats.TotalTrades = totalTrades
@@ -580,47 +580,18 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		))
 	`
 
-	const scopedExpectancyQuery = `
+	const scopedExpectancyBaseQuery = `
 		SELECT realized_pnl
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND (? = '' OR COALESCE(chat_id, '') = ?)
 			AND (? = '' OR exchange = ?)
 			AND (? = '' OR side = ?)
+	`
+	const scopedExpectancyOrderClause = `
 		ORDER BY closed_at DESC, created_at DESC, id DESC
 	`
-	const scopedExpectancyLimitedQuery = `
-		SELECT realized_pnl
-		FROM realized_pnl_journal
-		WHERE closed_at >= ? AND closed_at <= ?
-			AND (? = '' OR COALESCE(chat_id, '') = ?)
-			AND (? = '' OR exchange = ?)
-			AND (? = '' OR side = ?)
-		ORDER BY closed_at DESC, created_at DESC, id DESC
-		LIMIT ?
-	`
-	const scopedExpectancyBySymbolQuery = `
-		SELECT realized_pnl
-		FROM realized_pnl_journal
-		WHERE closed_at >= ? AND closed_at <= ?
-			AND (? = '' OR COALESCE(chat_id, '') = ?)
-			AND (? = '' OR exchange = ?)
-			AND (? = '' OR side = ?)
-			AND ` + normalizedScopedSymbolSQL + ` = ?
-		ORDER BY closed_at DESC, created_at DESC, id DESC
-	`
-	const scopedExpectancyBySymbolLimitedQuery = `
-		SELECT realized_pnl
-		FROM realized_pnl_journal
-		WHERE closed_at >= ? AND closed_at <= ?
-			AND (? = '' OR COALESCE(chat_id, '') = ?)
-			AND (? = '' OR exchange = ?)
-			AND (? = '' OR side = ?)
-			AND ` + normalizedScopedSymbolSQL + ` = ?
-		ORDER BY closed_at DESC, created_at DESC, id DESC
-		LIMIT ?
-	`
-	query := scopedExpectancyQuery
+	query := scopedExpectancyBaseQuery
 	args := []interface{}{
 		windowTo.Add(-time.Duration(lookbackHours) * time.Hour),
 		windowTo,
@@ -632,15 +603,12 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		normalizedAction,
 	}
 	if normalizedSymbol != "" {
-		query = scopedExpectancyBySymbolQuery
+		query += "\n\t\t\tAND " + normalizedScopedSymbolSQL + " = ?"
 		args = append(args, normalizedSymbol)
 	}
+	query += scopedExpectancyOrderClause
 	if limit > 0 {
-		if normalizedSymbol != "" {
-			query = scopedExpectancyBySymbolLimitedQuery
-		} else {
-			query = scopedExpectancyLimitedQuery
-		}
+		query += "\n\t\tLIMIT ?"
 		args = append(args, limit)
 	}
 
