@@ -21,6 +21,27 @@ func setupTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func setupRealizedPnLJournal(t *testing.T, db *sql.DB) {
+	t.Helper()
+	_, err := db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+}
+
 func TestNewTradeMemory(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -215,23 +236,7 @@ func TestTradeMemory_GetPerformanceStatsWindow_UsesScopedJournalOnlyWhenScopeKey
 	tm, err := NewTradeMemory(db)
 	require.NoError(t, err)
 
-	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
-		id TEXT PRIMARY KEY,
-		order_id TEXT NOT NULL UNIQUE,
-		chat_id TEXT,
-		exchange TEXT NOT NULL,
-		symbol TEXT NOT NULL,
-		side TEXT NOT NULL,
-		filled_amount NUMERIC NOT NULL DEFAULT 0,
-		entry_price NUMERIC NOT NULL DEFAULT 0,
-		exit_price NUMERIC NOT NULL DEFAULT 0,
-		realized_pnl NUMERIC NOT NULL DEFAULT 0,
-		fees NUMERIC NOT NULL DEFAULT 0,
-		source TEXT NOT NULL DEFAULT 'autonomous',
-		closed_at TIMESTAMP NOT NULL,
-		created_at TIMESTAMP NOT NULL
-	)`)
-	require.NoError(t, err)
+	setupRealizedPnLJournal(t, db)
 
 	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
 		('mem_1', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'win', 2, 0.90),
@@ -355,23 +360,7 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 	tm, err := NewTradeMemory(db)
 	require.NoError(t, err)
 
-	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
-		id TEXT PRIMARY KEY,
-		order_id TEXT NOT NULL UNIQUE,
-		chat_id TEXT,
-		exchange TEXT NOT NULL,
-		symbol TEXT NOT NULL,
-		side TEXT NOT NULL,
-		filled_amount NUMERIC NOT NULL DEFAULT 0,
-		entry_price NUMERIC NOT NULL DEFAULT 0,
-		exit_price NUMERIC NOT NULL DEFAULT 0,
-		realized_pnl NUMERIC NOT NULL DEFAULT 0,
-		fees NUMERIC NOT NULL DEFAULT 0,
-		source TEXT NOT NULL DEFAULT 'autonomous',
-		closed_at TIMESTAMP NOT NULL,
-		created_at TIMESTAMP NOT NULL
-	)`)
-	require.NoError(t, err)
+	setupRealizedPnLJournal(t, db)
 
 	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
 		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
@@ -379,6 +368,7 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 		('rp_a', 'ord_a', 'chat-1', 'bitget', 'btc/usdt', 'buy', 1, 100, 102, 2, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_b', 'ord_b', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_suffix', 'ord_suffix', 'chat-1', 'bitget', 'BTC-USDT:USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', datetime('now'), datetime('now')),
+		-- rp_future uses datetime('now', '+2 hours') intentionally to verify future rows are excluded from expectancy calculations.
 		('rp_future', 'ord_future', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 140, 40, 0, 'autonomous', datetime('now', '+2 hours'), datetime('now', '+2 hours')),
 		('rp_c', 'ord_c', 'chat-2', 'bitget', 'BTC/USDT', 'buy', 1, 100, 109, 9, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_d', 'ord_d', 'chat-1', 'binance', 'BTC/USDT', 'buy', 1, 100, 108, 8, 0, 'autonomous', datetime('now'), datetime('now'))`)
@@ -434,23 +424,7 @@ func TestTradeMemory_GetScopedExpectancyStats_DefaultLookbackAndLimit(t *testing
 	tm, err := NewTradeMemory(db)
 	require.NoError(t, err)
 
-	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
-		id TEXT PRIMARY KEY,
-		order_id TEXT NOT NULL UNIQUE,
-		chat_id TEXT,
-		exchange TEXT NOT NULL,
-		symbol TEXT NOT NULL,
-		side TEXT NOT NULL,
-		filled_amount NUMERIC NOT NULL DEFAULT 0,
-		entry_price NUMERIC NOT NULL DEFAULT 0,
-		exit_price NUMERIC NOT NULL DEFAULT 0,
-		realized_pnl NUMERIC NOT NULL DEFAULT 0,
-		fees NUMERIC NOT NULL DEFAULT 0,
-		source TEXT NOT NULL DEFAULT 'autonomous',
-		closed_at TIMESTAMP NOT NULL,
-		created_at TIMESTAMP NOT NULL
-	)`)
-	require.NoError(t, err)
+	setupRealizedPnLJournal(t, db)
 
 	for i := 0; i < 300; i++ {
 		_, err = db.Exec(`INSERT INTO realized_pnl_journal (
@@ -516,23 +490,7 @@ func TestTradeMemory_GetScopedExpectancyStats_UsesConfiguredDefaultsAndDetermini
 	})
 	require.NoError(t, err)
 
-	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
-		id TEXT PRIMARY KEY,
-		order_id TEXT NOT NULL UNIQUE,
-		chat_id TEXT,
-		exchange TEXT NOT NULL,
-		symbol TEXT NOT NULL,
-		side TEXT NOT NULL,
-		filled_amount NUMERIC NOT NULL DEFAULT 0,
-		entry_price NUMERIC NOT NULL DEFAULT 0,
-		exit_price NUMERIC NOT NULL DEFAULT 0,
-		realized_pnl NUMERIC NOT NULL DEFAULT 0,
-		fees NUMERIC NOT NULL DEFAULT 0,
-		source TEXT NOT NULL DEFAULT 'autonomous',
-		closed_at TIMESTAMP NOT NULL,
-		created_at TIMESTAMP NOT NULL
-	)`)
-	require.NoError(t, err)
+	setupRealizedPnLJournal(t, db)
 
 	closedAt := time.Now().UTC().Truncate(time.Second)
 	olderCreatedAt := closedAt.Add(-2 * time.Minute)

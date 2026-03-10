@@ -101,6 +101,7 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 
 	// Try futures first. Spot fallback is explicit via AllowSpotFallback.
 	if details.MarketType == "futures" {
+		var leverageSyncErr error
 		if !details.ReduceOnly && details.Leverage > 0 {
 			orderID, err = func() (string, error) {
 				e.leverageMu.Lock()
@@ -108,6 +109,7 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 
 				effectiveLeverage, syncStatus, syncErr := e.syncFuturesLeverageForDetails(ctx, apiSymbol, details)
 				if syncErr != nil {
+					leverageSyncErr = syncErr
 					return "", syncErr
 				}
 
@@ -120,6 +122,9 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 		}
 		if err != nil {
 			fmt.Printf("[BITGET-ORDER] Futures order failed: %v\n", err)
+			if leverageSyncErr != nil {
+				return "", leverageSyncErr
+			}
 			if details.AllowSpotFallback && shouldFallbackToSpot(err) {
 				fmt.Printf("[BITGET-ORDER] Symbol %s not available on futures, trying spot...\n", apiSymbol)
 				spotSide, spotErr := normalizeSpotFallbackSide(details.Side)
@@ -530,7 +535,7 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 		return 0, "", fmt.Errorf("failed to get futures account for %s: %w", symbol, err)
 	}
 	current := account.effectiveLeverageForMarginMode(holdSide, marginMode)
-	if current == desiredLeverage {
+	if account.MarginMode == strings.ToLower(strings.TrimSpace(marginMode)) && current == desiredLeverage {
 		fmt.Printf("[BITGET-ORDER] Futures leverage already synced for %s: %dx (%s/%s)\n",
 			symbol, current, account.MarginMode, account.PosMode)
 		return current, "exchange confirmed", nil
@@ -545,12 +550,14 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 		return 0, "", fmt.Errorf("failed to verify futures leverage for %s: %w", symbol, err)
 	}
 	effective := verified.effectiveLeverageForMarginMode(holdSide, marginMode)
-	if effective != desiredLeverage {
+	if verified.MarginMode != strings.ToLower(strings.TrimSpace(marginMode)) || effective != desiredLeverage {
 		return 0, "", fmt.Errorf(
-			"futures leverage verification mismatch for %s: wanted %dx got %dx",
+			"futures leverage verification mismatch for %s: wanted %dx %s got %dx %s",
 			symbol,
 			desiredLeverage,
+			marginMode,
 			effective,
+			verified.MarginMode,
 		)
 	}
 
@@ -691,9 +698,7 @@ func shouldFallbackToSpot(err error) bool {
 		strings.Contains(errMsg, "instrument not exist") ||
 		strings.Contains(errMsg, "market does not exist") ||
 		strings.Contains(errMsg, "market not exist") ||
-		strings.Contains(errMsg, "removed") ||
-		strings.Contains(errMsg, "failed to get ticker") ||
-		strings.Contains(errMsg, "failed to get contract")
+		strings.Contains(errMsg, "removed")
 }
 
 func normalizeBitgetFuturesSide(side string) (string, error) {

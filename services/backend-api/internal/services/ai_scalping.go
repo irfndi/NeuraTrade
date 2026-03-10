@@ -2083,16 +2083,13 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 	}
 
 	if s.tradeMemory != nil {
-		const expectancyLookbackHours = 24 * 30
-		const expectancyQueryLimit = 250
-
 		var scopedFallback *TradeExpectancyStats
 		if scoped, found, err := s.tradeMemory.GetScopedExpectancyStats(
 			ctx,
 			normalizedSymbol,
 			normalizedAction,
-			expectancyLookbackHours,
-			expectancyQueryLimit,
+			0,
+			0,
 		); err != nil {
 			log.Printf(
 				"[AI-SCALPING] scoped expectancy unavailable for %s/%s: %v",
@@ -2100,7 +2097,6 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 				normalizedAction,
 				err,
 			)
-			return 0, 0, false
 		} else if found {
 			if scoped.SampleSize >= minSamples {
 				return scoped.NetExpectancy, scoped.SampleSize, true
