@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -149,7 +150,8 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_NoOpWhenAlreadySynced(t *test
 			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
 				"marginMode":"crossed",
 				"posMode":"one_way_mode",
-				"crossMarginLeverage":"5"
+				"crossMarginLeverage":"3",
+				"isolatedLongLever":"5"
 			}}`))
 		case "/api/v2/mix/account/set-leverage":
 			t.Fatalf("unexpected leverage mutation request")
@@ -162,14 +164,14 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_NoOpWhenAlreadySynced(t *test
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 	executor.baseURL = server.URL
 
-	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long")
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
 	require.NoError(t, err)
 	assert.Equal(t, 5, leverage)
 	assert.Equal(t, "exchange confirmed", status)
 	assert.Equal(t, 1, accountCalls)
 }
 
-func TestBitgetOrderExecutor_EnsureFuturesLeverage_SetsAndVerifies(t *testing.T) {
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_SetsAndVerifiesIntendedIsolatedMode(t *testing.T) {
 	accountCalls := 0
 	setCalls := 0
 	var setBody map[string]interface{}
@@ -178,14 +180,15 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_SetsAndVerifies(t *testing.T)
 		switch r.URL.Path {
 		case "/api/v2/mix/account/account":
 			accountCalls++
-			currentLeverage := "3"
+			currentIsolatedShort := "0"
 			if accountCalls > 1 {
-				currentLeverage = "5"
+				currentIsolatedShort = "5"
 			}
 			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
 				"marginMode":"crossed",
 				"posMode":"one_way_mode",
-				"crossMarginLeverage":"` + currentLeverage + `"
+				"crossMarginLeverage":"5",
+				"isolatedShortLever":"` + currentIsolatedShort + `"
 			}}`))
 		case "/api/v2/mix/account/set-leverage":
 			setCalls++
@@ -202,7 +205,7 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_SetsAndVerifies(t *testing.T)
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 	executor.baseURL = server.URL
 
-	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "short")
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "short", bitgetFuturesOrderMarginMode)
 	require.NoError(t, err)
 	assert.Equal(t, 5, leverage)
 	assert.Equal(t, "exchange synced", status)
@@ -213,8 +216,7 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_SetsAndVerifies(t *testing.T)
 	assert.Equal(t, "USDT-FUTURES", setBody["productType"])
 	assert.Equal(t, "USDT", setBody["marginCoin"])
 	assert.Equal(t, "5", setBody["leverage"])
-	_, hasHoldSide := setBody["holdSide"]
-	assert.False(t, hasHoldSide)
+	assert.Equal(t, "short", setBody["holdSide"])
 }
 
 func TestBitgetOrderExecutor_EnsureFuturesLeverage_RejectsNonPositiveDesiredLeverage(t *testing.T) {
@@ -226,11 +228,11 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_RejectsNonPositiveDesiredLeve
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 	executor.baseURL = server.URL
 
-	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 0, "long")
+	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 0, "long", bitgetFuturesOrderMarginMode)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "desired leverage must be positive")
 
-	_, _, err = executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", -5, "long")
+	_, _, err = executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", -5, "long", bitgetFuturesOrderMarginMode)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "desired leverage must be positive")
 }
@@ -267,7 +269,7 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_WrapsAccountFetchFailures(t *
 			executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 			executor.baseURL = server.URL
 
-			_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long")
+			_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "failed to get futures account")
 			assert.Equal(t, 1, accountCalls)
@@ -300,7 +302,7 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_WrapsSetLeverageFailures(t *t
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 	executor.baseURL = server.URL
 
-	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long")
+	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to set futures leverage")
 	assert.Equal(t, 1, accountCalls)
@@ -336,7 +338,7 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_ErrOnVerificationMismatch(t *
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 	executor.baseURL = server.URL
 
-	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long")
+	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "verification mismatch")
 	assert.Equal(t, 2, accountCalls)
@@ -370,6 +372,13 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksOnLeverageSyncFailure(t
 	require.Error(t, err)
 	assert.Empty(t, orderID)
 	assert.Contains(t, err.Error(), "failed to sync futures leverage")
+}
+
+func TestShouldFallbackToSpot_NarrowsMissingMarketDetection(t *testing.T) {
+	assert.True(t, shouldFallbackToSpot(errors.New("bitget futures account API error: symbol not exist (code: 40001)")))
+	assert.True(t, shouldFallbackToSpot(errors.New("failed to get contract info: contract does not exist")))
+	assert.False(t, shouldFallbackToSpot(errors.New("bitget API error: holdSide not exist")))
+	assert.False(t, shouldFallbackToSpot(errors.New("bitget API error: order not exist")))
 }
 
 func TestBitgetOrderExecutor_FormatTradeNotification_UsesEffectiveLeverage(t *testing.T) {

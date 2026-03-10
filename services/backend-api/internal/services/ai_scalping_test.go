@@ -473,6 +473,24 @@ func TestInferDecisionFromLooseText_ConfidenceNormalization(t *testing.T) {
 	}
 }
 
+func TestInferDecisionFromLooseText_SingleQuotedPseudoJSON(t *testing.T) {
+	decision, err := inferDecisionFromLooseText(
+		`{'action':'buy','symbol':'BTC/USDT','size_pct':'0.75','confidence':'68%','reason':'Breakout with tight spread','stop_loss':'41000','take_profit':'43000'}`,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+	assert.InDelta(t, 0.75, decision.SizePercent, 0.0001)
+	assert.InDelta(t, 0.68, decision.Confidence, 0.0001)
+	assert.True(t, decision.ConfidenceKnown)
+	require.NotNil(t, decision.StopLoss)
+	require.NotNil(t, decision.TakeProfit)
+	assert.True(t, decision.StopLoss.Equal(decimal.NewFromInt(41000)))
+	assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+}
+
 func TestInferDecisionFromLooseText_MissingMandatoryFields(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -752,6 +770,43 @@ func TestAIScalpingService_EstimateNetExpectancy_ScopedSampleBelowMinThresholdFa
 		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
 	) VALUES
 		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
+		('legacy_1', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'win', 2, 0.70),
+		('legacy_2', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'loss', -1, 0.70)`)
+	require.NoError(t, err)
+
+	svc := &AIScalpingService{
+		config:      AIScalpingConfig{MinExpectancyN: 2},
+		tradeMemory: tm,
+	}
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
+	assert.True(t, found)
+	assert.Equal(t, 2, sample)
+	assert.InDelta(t, 0.5, expectancy, 0.0001)
+}
+
+func TestAIScalpingService_EstimateNetExpectancy_ScopedQueryErrorFallsBackToLegacyHistory(t *testing.T) {
+	original := globalScalpingPerformance
+	globalScalpingPerformance = NewScalpingPerformance()
+	t.Cleanup(func() {
+		globalScalpingPerformance = original
+	})
+
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		closed_at TIMESTAMP NOT NULL,
+		side TEXT NOT NULL
+	)`)
 	require.NoError(t, err)
 
 	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES

@@ -2062,7 +2062,14 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 			normalizedAction,
 			expectancyLookbackHours,
 			expectancyQueryLimit,
-		); err == nil && found {
+		); err != nil {
+			log.Printf(
+				"[AI-SCALPING] scoped expectancy unavailable for %s/%s: %v",
+				normalizedSymbol,
+				normalizedAction,
+				err,
+			)
+		} else if found {
 			if scoped.SampleSize >= minSamples {
 				return scoped.NetExpectancy, scoped.SampleSize, true
 			}
@@ -3262,7 +3269,7 @@ func extractLooseStringField(raw string, key string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	value = strings.TrimSpace(strings.Trim(value, "\"`"))
+	value = strings.TrimSpace(strings.Trim(value, "\"'`"))
 	if value == "" || strings.EqualFold(value, "null") {
 		return "", false
 	}
@@ -3274,7 +3281,7 @@ func extractLooseNumericField(raw string, key string) (float64, bool) {
 	if !ok {
 		return 0, false
 	}
-	value = strings.TrimSpace(strings.Trim(value, "\"`"))
+	value = strings.TrimSpace(strings.Trim(value, "\"'`"))
 	if value == "" || strings.EqualFold(value, "null") {
 		return 0, false
 	}
@@ -3314,7 +3321,7 @@ func extractLooseDecimalField(raw string, key string) (decimal.Decimal, bool) {
 	if !ok {
 		return decimal.Zero, false
 	}
-	value = strings.TrimSpace(strings.Trim(value, "\"`"))
+	value = strings.TrimSpace(strings.Trim(value, "\"'`"))
 	if value == "" || strings.EqualFold(value, "null") {
 		return decimal.Zero, false
 	}
@@ -3333,6 +3340,9 @@ func extractLooseFieldValue(raw string, key string) (string, bool) {
 		return "", false
 	}
 	if value, ok := extractLooseFieldValueWithMarker(raw, `"`+normalizedKey+`"`, false); ok {
+		return value, true
+	}
+	if value, ok := extractLooseFieldValueWithMarker(raw, `'`+normalizedKey+`'`, false); ok {
 		return value, true
 	}
 	return extractLooseFieldValueWithMarker(raw, normalizedKey, true)
@@ -3380,8 +3390,8 @@ func extractLooseFieldValueWithMarker(raw string, marker string, requireBoundary
 		if remainder == "" {
 			return "", false
 		}
-		if remainder[0] == '"' {
-			return readLooseQuotedValue(remainder[1:]), true
+		if remainder[0] == '"' || remainder[0] == '\'' {
+			return readLooseQuotedValue(remainder[1:], rune(remainder[0])), true
 		}
 		return readLooseTokenValue(remainder), true
 	}
@@ -3392,7 +3402,7 @@ func isLooseFieldIdentifierRune(ch rune) bool {
 	return ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch)
 }
 
-func readLooseQuotedValue(raw string) string {
+func readLooseQuotedValue(raw string, quote rune) string {
 	var builder strings.Builder
 	escaped := false
 	for _, ch := range raw {
@@ -3404,7 +3414,7 @@ func readLooseQuotedValue(raw string) string {
 		switch ch {
 		case '\\':
 			escaped = true
-		case '"':
+		case quote:
 			return builder.String()
 		default:
 			builder.WriteRune(ch)

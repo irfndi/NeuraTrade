@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
@@ -32,6 +33,7 @@ type BitgetOrderExecutor struct {
 	chatID              string
 	walletBalance       float64
 	httpClient          *http.Client
+	leverageMu          sync.Mutex
 }
 
 // NewBitgetOrderExecutor creates a new Bitget order executor
@@ -94,15 +96,20 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	// Try futures first. Spot fallback is explicit via AllowSpotFallback.
 	if details.MarketType == "futures" {
 		if !details.ReduceOnly {
-			effectiveLeverage, syncStatus, syncErr := e.syncFuturesLeverageForDetails(ctx, apiSymbol, details)
-			if syncErr != nil {
-				err = syncErr
-			} else {
+			orderID, err = func() (string, error) {
+				e.leverageMu.Lock()
+				defer e.leverageMu.Unlock()
+
+				effectiveLeverage, syncStatus, syncErr := e.syncFuturesLeverageForDetails(ctx, apiSymbol, details)
+				if syncErr != nil {
+					return "", syncErr
+				}
+
 				details.EffectiveLeverage = effectiveLeverage
 				details.LeverageSyncStatus = syncStatus
-			}
-		}
-		if err == nil {
+				return e.placeFuturesOrderWithTPSL(ctx, apiSymbol, details)
+			}()
+		} else {
 			orderID, err = e.placeFuturesOrderWithTPSL(ctx, apiSymbol, details)
 		}
 		if err != nil {
@@ -154,6 +161,8 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 func bitgetFuturesMinUSDTNotional() decimal.Decimal {
 	return appautonomy.BitgetFuturesMinNotional()
 }
+
+const bitgetFuturesOrderMarginMode = "isolated"
 
 // placeFuturesOrder places a futures market order
 func (e *BitgetOrderExecutor) placeFuturesOrder(ctx context.Context, symbol, side string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
@@ -463,7 +472,31 @@ type bitgetFuturesAccount struct {
 }
 
 func (a bitgetFuturesAccount) effectiveLeverage(holdSide string) int {
+	return a.effectiveLeverageForMarginMode(holdSide, "")
+}
+
+func (a bitgetFuturesAccount) effectiveLeverageForMarginMode(holdSide string, marginMode string) int {
 	holdSide = strings.ToLower(strings.TrimSpace(holdSide))
+	marginMode = strings.ToLower(strings.TrimSpace(marginMode))
+	if marginMode == bitgetFuturesOrderMarginMode {
+		switch holdSide {
+		case "short":
+			if a.IsolatedShortLeverage > 0 {
+				return a.IsolatedShortLeverage
+			}
+			if a.ShortLeverage > 0 {
+				return a.ShortLeverage
+			}
+		case "long":
+			if a.IsolatedLongLeverage > 0 {
+				return a.IsolatedLongLeverage
+			}
+			if a.LongLeverage > 0 {
+				return a.LongLeverage
+			}
+		}
+		return 0
+	}
 	switch holdSide {
 	case "short":
 		if a.IsolatedShortLeverage > 0 {
@@ -495,7 +528,13 @@ func (e *BitgetOrderExecutor) syncFuturesLeverageForDetails(
 	if strings.EqualFold(strings.TrimSpace(details.Side), "sell") {
 		holdSide = "short"
 	}
-	effectiveLeverage, syncStatus, err := e.ensureFuturesLeverage(ctx, symbol, details.Leverage, holdSide)
+	effectiveLeverage, syncStatus, err := e.ensureFuturesLeverage(
+		ctx,
+		symbol,
+		details.Leverage,
+		holdSide,
+		bitgetFuturesOrderMarginMode,
+	)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to sync futures leverage for %s: %w", symbol, err)
 	}
@@ -507,6 +546,7 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 	symbol string,
 	desiredLeverage int,
 	holdSide string,
+	marginMode string,
 ) (int, string, error) {
 	if desiredLeverage <= 0 {
 		return 0, "", fmt.Errorf("desired leverage must be positive")
@@ -516,14 +556,14 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to get futures account for %s: %w", symbol, err)
 	}
-	current := account.effectiveLeverage(holdSide)
+	current := account.effectiveLeverageForMarginMode(holdSide, marginMode)
 	if current == desiredLeverage {
 		fmt.Printf("[BITGET-ORDER] Futures leverage already synced for %s: %dx (%s/%s)\n",
 			symbol, current, account.MarginMode, account.PosMode)
 		return current, "exchange confirmed", nil
 	}
 
-	if err := e.setFuturesLeverage(ctx, symbol, desiredLeverage, holdSide, account); err != nil {
+	if err := e.setFuturesLeverage(ctx, symbol, desiredLeverage, holdSide, marginMode); err != nil {
 		return 0, "", fmt.Errorf("failed to set futures leverage for %s to %dx: %w", symbol, desiredLeverage, err)
 	}
 
@@ -531,7 +571,7 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to verify futures leverage for %s: %w", symbol, err)
 	}
-	effective := verified.effectiveLeverage(holdSide)
+	effective := verified.effectiveLeverageForMarginMode(holdSide, marginMode)
 	if effective != desiredLeverage {
 		return 0, "", fmt.Errorf(
 			"futures leverage verification mismatch for %s: wanted %dx got %dx",
@@ -595,7 +635,7 @@ func (e *BitgetOrderExecutor) setFuturesLeverage(
 	symbol string,
 	desiredLeverage int,
 	holdSide string,
-	account *bitgetFuturesAccount,
+	marginMode string,
 ) error {
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -603,15 +643,14 @@ func (e *BitgetOrderExecutor) setFuturesLeverage(
 		"marginCoin":  "USDT",
 		"leverage":    strconv.Itoa(desiredLeverage),
 	}
-	if account != nil {
-		marginMode := strings.ToLower(strings.TrimSpace(account.MarginMode))
-		posMode := strings.ToLower(strings.TrimSpace(account.PosMode))
-		if (marginMode == "isolated" || strings.Contains(posMode, "hedge")) && strings.TrimSpace(holdSide) != "" {
-			body["holdSide"] = holdSide
-		}
+	if strings.EqualFold(strings.TrimSpace(marginMode), bitgetFuturesOrderMarginMode) && strings.TrimSpace(holdSide) != "" {
+		body["holdSide"] = holdSide
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal set leverage request body: %w", err)
+	}
 	resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/account/set-leverage", jsonBody)
 	if err != nil {
 		return err
@@ -671,8 +710,14 @@ func shouldFallbackToSpot(err error) bool {
 		return false
 	}
 	errMsg := strings.ToLower(err.Error())
-	return strings.Contains(errMsg, "does not exist") ||
-		strings.Contains(errMsg, "not exist") ||
+	return strings.Contains(errMsg, "symbol does not exist") ||
+		strings.Contains(errMsg, "symbol not exist") ||
+		strings.Contains(errMsg, "contract does not exist") ||
+		strings.Contains(errMsg, "contract not exist") ||
+		strings.Contains(errMsg, "instrument does not exist") ||
+		strings.Contains(errMsg, "instrument not exist") ||
+		strings.Contains(errMsg, "market does not exist") ||
+		strings.Contains(errMsg, "market not exist") ||
 		strings.Contains(errMsg, "removed") ||
 		strings.Contains(errMsg, "failed to get ticker") ||
 		strings.Contains(errMsg, "failed to get contract")
