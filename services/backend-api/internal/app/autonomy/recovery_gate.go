@@ -131,10 +131,6 @@ func EvaluateRecoveryGate(input RecoveryGateInput, cfg RecoveryConfig) RecoveryG
 	if driftBlocked {
 		state.EntryAllowed = false
 	}
-	if recoveryLossStreakExceeded(state, cfg) {
-		state.EntryAllowed = false
-	}
-
 	switch {
 	case input.Drawdown >= cfg.DeriskOnlyThreshold:
 		state.Mode = RecoveryModeDeriskOnly
@@ -158,19 +154,15 @@ func EvaluateRecoveryGate(input RecoveryGateInput, cfg RecoveryConfig) RecoveryG
 				cfg.RequiredCleanCycles,
 				state.CleanCycles,
 			)
-		} else if !state.EntryAllowed {
-			if recoveryLossStreakExceeded(state, cfg) {
-				applyRecentLossGate(&state, cfg)
-			} else {
-				applyDriftGate(&state, driftBlocked)
-			}
+		} else if recoveryLossStreakExceeded(state, cfg) {
+			state.EntryAllowed = false
+			applyRecentLossGate(&state, cfg)
+		} else if driftBlocked {
+			state.EntryAllowed = false
+			applyDriftGate(&state, driftBlocked)
 		}
 	default:
 		state.Mode = RecoveryModeNormal
-	}
-
-	if !state.EntryAllowed && state.GateReason == "" && recoveryLossStreakExceeded(state, cfg) {
-		applyRecentLossGate(&state, cfg)
 	}
 	if !state.EntryAllowed && state.GateReason == "" {
 		applyDriftGate(&state, driftBlocked)

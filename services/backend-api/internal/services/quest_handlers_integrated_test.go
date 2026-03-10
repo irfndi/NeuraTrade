@@ -817,6 +817,22 @@ func TestNormalizeAINotificationSemantics_StrategyHoldPreservedWhenConfidenceKno
 	assert.Equal(t, aiReasonStrategyHold, normalized.HoldCategory)
 }
 
+func TestStructuredHoldBlock_UsesDecisionPolicySpreadThreshold(t *testing.T) {
+	decision := &AITradingDecision{
+		Action:                 "hold",
+		ReasonCategory:         aiReasonStrategyHold,
+		MaxBidAskSpreadPct:     0.22,
+		ExecutionGate:          &appautonomy.ExecutionGateSnapshot{Allowed: false, BlockCode: appautonomy.CandidateRejectSpreadTooWide, BlockReason: "spread gate"},
+		ConfidenceKnown:        true,
+		EffectiveMinConfidence: 0.65,
+	}
+
+	code, next, human := structuredHoldBlock(decision)
+	assert.Equal(t, appautonomy.CandidateRejectSpreadTooWide, code)
+	assert.Equal(t, "spread gate", human)
+	assert.Contains(t, next, "0.22%")
+}
+
 func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_PersistsLegacyTradeClose(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-journal.db"))
 	require.NoError(t, err)

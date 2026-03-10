@@ -3550,6 +3550,7 @@ func decisionPolicy(decision *AITradingDecision) appautonomy.ScalpingCyclePolicy
 		AccountTier:            decision.AccountTier,
 		EffectiveMinConfidence: decision.EffectiveMinConfidence,
 		EffectiveMaxCapitalPct: decision.EffectiveMaxCapitalPct,
+		MaxBidAskSpreadPct:     decision.MaxBidAskSpreadPct,
 		MaxConcurrentPositions: decision.EffectiveMaxConcurrentPositions,
 	}
 }

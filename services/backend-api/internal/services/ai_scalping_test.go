@@ -626,6 +626,31 @@ No valid trade setups. No signals meet the 0.65 confidence threshold.`, known: f
 	}
 }
 
+func TestInferDecisionFromLooseText_ParsesNarrativeRecommendation(t *testing.T) {
+	decision, err := inferDecisionFromLooseText(`Let me analyze the market signals and make a trading decision.
+
+## Best Candidates:
+**PEPE/USDT**:
+- Strong ob_imbalance: 0.303 (> 0.2)
+- Signal: STRONG BUY - meets criteria!
+- Spread: 0.03% (well under 0.22%)
+- Confidence: This is a strong signal
+
+## Decision:
+Both are valid, but PEPE has better spread and volume.
+The PEPE signal has clear order book buy pressure.
+I would estimate confidence around 0.70-0.75 for this trade.
+Given the requirement to trade at size_pct of 12.7846%, with wallet of 46.93 USDT.
+`)
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "PEPE/USDT", decision.Symbol)
+	assert.InDelta(t, 12.7846, decision.SizePercent, 0.0001)
+	assert.InDelta(t, 0.70, decision.Confidence, 0.0001)
+}
+
 func TestAIScalpingService_GatherMarketSignals_FetchesOrderbookForFullSmallUniverse(t *testing.T) {
 	mockCCXT := &mockAIScalpingCCXT{
 		markets: &ccxt.MarketsResponse{
@@ -1897,6 +1922,39 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesConfigOverrides(t 
 	assert.False(t, ok)
 	assert.Nil(t, decision)
 	assert.Zero(t, confidence)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AlignsWithPolicySpreadAndImbalanceFloor(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.35,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				RangeAnchor:     55,
+				RangeOffset:     45,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(aiMarketSignal{
+		Symbol:             "BOME/USDT",
+		Price:              1,
+		High24h:            1.1,
+		Low24h:             0.9,
+		Volume24h:          1500000,
+		BidAskSpread:       0.19,
+		OrderBookImbalance: 0.28,
+		RangePosition24h:   18,
+	}, TradingPortfolio{EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.7847})
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_ClampsNegativeVolume(t *testing.T) {

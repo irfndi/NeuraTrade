@@ -2428,7 +2428,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		result["last_entry_attempt_at"] = lastEntryAttempt.Format(time.RFC3339)
 		result["minutes_since_entry_attempt"] = nowForAttempt.Sub(lastEntryAttempt).Minutes()
 	}
-	progressBlock := appautonomy.EvaluateProgressBlock(lastEntryAttempt, time.Now().UTC(), scalpingPolicyConfigFromEnv(appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()))
+	progressBlock := appautonomy.EvaluateProgressBlock(lastEntryAttempt, time.Now().UTC(), scalpingPolicyConfigFromEnv(0))
 	result["progress_blocked"] = progressBlock.Blocked
 	if strings.TrimSpace(progressBlock.Reason) != "" {
 		progressBlockReason = progressBlock.Reason

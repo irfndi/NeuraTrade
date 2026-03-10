@@ -102,10 +102,7 @@ func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
 	if c.SmallAccountMaxValue.LessThanOrEqual(c.MicroAccountMaxValue) {
 		c.SmallAccountMaxValue = decimal.NewFromFloat(DefaultSmallAccountMaxValue)
 	}
-	if c.MaxBidAskSpreadPct <= 0 {
-		c.MaxBidAskSpreadPct = ResolveScalpingMaxBidAskSpreadPctFromEnv()
-	}
-	if math.IsNaN(c.MaxBidAskSpreadPct) || math.IsInf(c.MaxBidAskSpreadPct, 0) {
+	if c.MaxBidAskSpreadPct <= 0 || math.IsNaN(c.MaxBidAskSpreadPct) || math.IsInf(c.MaxBidAskSpreadPct, 0) {
 		c.MaxBidAskSpreadPct = ResolveScalpingMaxBidAskSpreadPctFromEnv()
 	}
 	c.MaxBidAskSpreadPct = clampFloat(c.MaxBidAskSpreadPct, minScalpingMaxBidAskSpreadPct, maxScalpingMaxBidAskSpreadPct)

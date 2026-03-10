@@ -626,6 +626,7 @@ type AITradingDecision struct {
 	AccountTier                     string                              `json:"-"`
 	EffectiveMinConfidence          float64                             `json:"-"`
 	EffectiveMaxCapitalPct          float64                             `json:"-"`
+	MaxBidAskSpreadPct              float64                             `json:"-"`
 	EffectiveMaxConcurrentPositions int                                 `json:"-"`
 	PolicyAdjustments               []string                            `json:"-"`
 	CandidateFunnelKnown            bool                                `json:"-"`
@@ -2707,22 +2708,28 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	portfolio TradingPortfolio,
 ) (*AITradingDecision, float64, bool) {
 	fallbackCfg := s.config.DeterministicFallback.Normalized()
+	effectiveMaxSpread := fallbackCfg.MaxBidAskSpread
+	effectiveMinImbalance := fallbackCfg.MinImbalance
+	if portfolio.EffectiveMinConfidence > 0 || portfolio.EffectiveMaxCapitalPct > 0 {
+		effectiveMaxSpread = math.Max(effectiveMaxSpread, s.maxBidAskSpreadPct())
+		effectiveMinImbalance = math.Min(effectiveMinImbalance, 0.20)
+	}
 	if signal.Price <= 0 || signal.Symbol == "" {
 		return nil, 0, false
 	}
-	if signal.BidAskSpread <= 0 || signal.BidAskSpread > fallbackCfg.MaxBidAskSpread {
+	if signal.BidAskSpread <= 0 || signal.BidAskSpread > effectiveMaxSpread {
 		return nil, 0, false
 	}
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
-	if imbalance < fallbackCfg.MinImbalance {
+	if imbalance < effectiveMinImbalance {
 		return nil, 0, false
 	}
 
 	action := ""
 	rangeAlignment := 0.0
 	switch {
-	case signal.OrderBookImbalance >= fallbackCfg.MinImbalance &&
+	case signal.OrderBookImbalance >= effectiveMinImbalance &&
 		signal.RangePosition24h <= fallbackCfg.BuyRangeMax:
 		action = "buy"
 		rangeAlignment = clampFloat(
@@ -2730,7 +2737,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 			0,
 			1,
 		)
-	case signal.OrderBookImbalance <= -fallbackCfg.MinImbalance &&
+	case signal.OrderBookImbalance <= -effectiveMinImbalance &&
 		signal.RangePosition24h >= fallbackCfg.SellRangeMin:
 		action = "sell"
 		rangeAlignment = clampFloat(
@@ -2742,7 +2749,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		return nil, 0, false
 	}
 
-	liquidityScore := clampFloat(1-(signal.BidAskSpread/fallbackCfg.MaxBidAskSpread), 0, 1)
+	liquidityScore := clampFloat(1-(signal.BidAskSpread/effectiveMaxSpread), 0, 1)
 	volumeBasis := math.Max(signal.Volume24h, 0)
 	volumeScore := clampFloat(math.Log10(volumeBasis+1)/fallbackCfg.VolumeLogScale, 0, 1)
 	score := imbalance*fallbackCfg.ImbalanceWeight +
@@ -3329,10 +3336,19 @@ func inferDecisionFromLooseText(raw string) (*AITradingDecision, error) {
 	case "buy", "sell":
 		symbol, ok := extractLooseStringField(raw, "symbol")
 		if !ok || strings.TrimSpace(symbol) == "" {
-			return nil, fmt.Errorf("actionable local inference missing symbol")
+			symbol, ok = extractLooseRecommendedSymbol(raw, action)
+			if !ok || strings.TrimSpace(symbol) == "" {
+				return nil, fmt.Errorf("actionable local inference missing symbol")
+			}
 		}
 		sizePct, sizeKnown := extractLooseNumericField(raw, "size_pct")
+		if !sizeKnown {
+			sizePct, sizeKnown = extractLooseNarrativeSizePercent(raw)
+		}
 		confidence, confidenceKnown := extractLooseNumericField(raw, "confidence")
+		if !confidenceKnown {
+			confidence, confidenceKnown = extractLooseNarrativeConfidence(raw)
+		}
 		if !sizeKnown || !confidenceKnown {
 			return nil, fmt.Errorf("actionable local inference missing size_pct/confidence")
 		}
@@ -3399,11 +3415,88 @@ func extractLooseDecisionAction(raw string) string {
 		strings.Contains(lower, "preserve capital"):
 		return "hold"
 	default:
+		if action, ok := inferNarrativeDecisionAction(raw); ok {
+			return action
+		}
 		return ""
 	}
 }
 
 var analysisSummaryMarker = regexp.MustCompile(`(?i)analysis summary`)
+var looseConfidenceRegex = regexp.MustCompile(`(?i)confidence(?:\s+(?:could be|around|is|estimate(?:d)?(?:\s+around)?))?\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*[-–]\s*([0-9]+(?:\.[0-9]+)?))?%?`)
+var looseSizePctRegex = regexp.MustCompile(`(?i)size_pct(?:\s+of)?\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)%`)
+var looseNarrativeSymbolRegex = regexp.MustCompile(`(?i)(?:both are valid, but|the)\s+([A-Z0-9]+(?:/[A-Z0-9]+)?)\s+(?:has better|is the strongest|looks strongest)`)
+var looseCandidateHeadingRegex = regexp.MustCompile(`\*\*([A-Z0-9]+/[A-Z0-9]+)\*\*`)
+
+func inferNarrativeDecisionAction(raw string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case strings.Contains(lower, "strong buy"), strings.Contains(lower, "buy pressure"):
+		return "buy", true
+	case strings.Contains(lower, "strong sell"), strings.Contains(lower, "sell pressure"):
+		return "sell", true
+	default:
+		return "", false
+	}
+}
+
+func extractLooseRecommendedSymbol(raw string, action string) (string, bool) {
+	if match := looseNarrativeSymbolRegex.FindStringSubmatch(raw); len(match) == 2 {
+		return canonicalizeNarrativeSymbol(raw, match[1]), true
+	}
+	matches := looseCandidateHeadingRegex.FindAllStringSubmatchIndex(raw, -1)
+	for idx, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		symbol := raw[match[2]:match[3]]
+		sectionEnd := len(raw)
+		if idx+1 < len(matches) {
+			sectionEnd = matches[idx+1][0]
+		}
+		body := strings.ToUpper(raw[match[1]:sectionEnd])
+		if strings.Contains(body, "STRONG "+strings.ToUpper(action)) {
+			return canonicalizeNarrativeSymbol(raw, symbol), true
+		}
+	}
+	return "", false
+}
+
+func canonicalizeNarrativeSymbol(raw string, symbol string) string {
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	if strings.Contains(symbol, "/") {
+		return symbol
+	}
+	full := symbol + "/USDT"
+	if strings.Contains(strings.ToUpper(raw), full) {
+		return full
+	}
+	return symbol
+}
+
+func extractLooseNarrativeConfidence(raw string) (float64, bool) {
+	match := looseConfidenceRegex.FindStringSubmatch(raw)
+	if len(match) < 2 {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(match[1], 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func extractLooseNarrativeSizePercent(raw string) (float64, bool) {
+	match := looseSizePctRegex.FindStringSubmatch(raw)
+	if len(match) != 2 {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(match[1], 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
 
 func extractLooseReasoning(raw string) string {
 	if reasoning, ok := extractLooseStringField(raw, "reasoning"); ok && strings.TrimSpace(reasoning) != "" {
@@ -3881,6 +3974,7 @@ func applyDecisionPolicy(decision *AITradingDecision, policy appautonomy.Scalpin
 	decision.AccountTier = policy.AccountTier
 	decision.EffectiveMinConfidence = policy.EffectiveMinConfidence
 	decision.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct
+	decision.MaxBidAskSpreadPct = policy.MaxBidAskSpreadPct
 	decision.EffectiveMaxConcurrentPositions = policy.MaxConcurrentPositions
 	decision.PolicyAdjustments = append([]string(nil), policy.PolicyAdjustments...)
 }
