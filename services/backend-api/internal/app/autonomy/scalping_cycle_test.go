@@ -58,6 +58,22 @@ func TestEvaluateScalpingPolicy_BlocksWhenExecutableMinimumExceedsWallet(t *test
 	require.Contains(t, policy.PolicyAdjustments, "exchange_min_notional_block")
 }
 
+func TestEvaluateScalpingPolicy_BlocksWhenWalletIsExplicitlyNonExecutable(t *testing.T) {
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:               decimal.NewFromFloat(5),
+		BaseMinConfidence:        0.65,
+		BaseMaxCapitalPct:        5.0,
+		ExecutionMinCapitalPct:   decimal.Zero,
+		NonExecutableDueToWallet: true,
+		Phase:                    "bootstrap",
+		PhaseMinConfidence:       0.75,
+		PhaseMaxCapitalPct:       1.0,
+	}, DefaultScalpingPolicyConfig())
+
+	require.Zero(t, policy.EffectiveMaxCapitalPct)
+	require.Contains(t, policy.PolicyAdjustments, "exchange_min_notional_block")
+}
+
 func TestEvaluateScalpingPolicy_NoFillRecoveryAdjustments(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 

@@ -135,24 +135,25 @@ type PerformanceWindowInput struct {
 }
 
 type ScalpingCycleInput struct {
-	TotalValue             decimal.Decimal
-	OpenPositions          int
-	DriftActive            bool
-	BaseMinConfidence      float64
-	BaseMaxCapitalPct      float64
-	ExecutionMinCapitalPct decimal.Decimal
-	AdjustedMaxCapitalPct  float64
-	ConsecutiveLosses      int
-	Phase                  string
-	PhaseMinConfidence     float64
-	PhaseMaxCapitalPct     float64
-	MilestoneProgress      float64
-	NoFillMinutes          float64
-	RiskDrawdown           float64
-	RiskExpectancy         float64
-	RiskSampleSize         int
-	RecoveryMode           string
-	PerformanceWindow      PerformanceWindowInput
+	TotalValue               decimal.Decimal
+	OpenPositions            int
+	DriftActive              bool
+	BaseMinConfidence        float64
+	BaseMaxCapitalPct        float64
+	ExecutionMinCapitalPct   decimal.Decimal
+	NonExecutableDueToWallet bool
+	AdjustedMaxCapitalPct    float64
+	ConsecutiveLosses        int
+	Phase                    string
+	PhaseMinConfidence       float64
+	PhaseMaxCapitalPct       float64
+	MilestoneProgress        float64
+	NoFillMinutes            float64
+	RiskDrawdown             float64
+	RiskExpectancy           float64
+	RiskSampleSize           int
+	RecoveryMode             string
+	PerformanceWindow        PerformanceWindowInput
 }
 
 type ScalpingCyclePolicy struct {
@@ -293,11 +294,16 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		}
 		policy.MaxConcurrentPositions = cfg.MicroMaxConcurrent
 	}
-	if input.ExecutionMinCapitalPct.GreaterThan(decimal.NewFromInt(100)) {
+	if input.NonExecutableDueToWallet {
 		policy.EffectiveMaxCapitalPct = 0
 		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "exchange_min_notional_block")
 	}
-	if input.ExecutionMinCapitalPct.GreaterThan(decimal.Zero) &&
+	if !input.NonExecutableDueToWallet && input.ExecutionMinCapitalPct.GreaterThan(decimal.NewFromInt(100)) {
+		policy.EffectiveMaxCapitalPct = 0
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "exchange_min_notional_block")
+	}
+	if !input.NonExecutableDueToWallet &&
+		input.ExecutionMinCapitalPct.GreaterThan(decimal.Zero) &&
 		input.ExecutionMinCapitalPct.LessThanOrEqual(decimal.NewFromInt(100)) &&
 		input.ExecutionMinCapitalPct.GreaterThan(decimal.NewFromFloat(policy.EffectiveMaxCapitalPct)) {
 		policy.EffectiveMaxCapitalPct = input.ExecutionMinCapitalPct.InexactFloat64()

@@ -8,6 +8,39 @@ Beads is issue tracking that lives in your repo, making it a good fit for AI cod
 
 **Learn more:** [github.com/steveyegge/beads](https://github.com/steveyegge/beads)
 
+## Initial Setup
+
+Beads uses a Dolt SQL server under the hood and expects a `dolt` binary to be installed separately and available on your `PATH`; it is not bundled by this repository. A quick sanity check is:
+
+```bash
+dolt version
+bd dolt show
+```
+
+The basic Beads sync flow is:
+
+```bash
+bd dolt commit
+bd dolt push
+```
+
+If this repo does not have a remote yet, configure one before the first `bd dolt push`:
+
+```bash
+bd dolt remote add <name> <url>
+```
+
+Example filesystem remote:
+
+```bash
+bd dolt remote add origin file:///Users/you/.beads-remotes/neuratrade
+bd dolt push
+```
+
+For Dolt installation and remote configuration details, see the official docs:
+- [Installation](https://docs.dolthub.com/introduction/installation)
+- [Using Remotes](https://docs.dolthub.com/sql-reference/version-control/remotes)
+
 ## Quick Start
 
 ### Essential Commands

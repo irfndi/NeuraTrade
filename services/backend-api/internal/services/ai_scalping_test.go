@@ -546,6 +546,30 @@ func TestAIScalpingService_DynamicRiskThresholds_FloorsToExecutableMinimum(t *te
 	assert.GreaterOrEqual(t, minConf, 0.65)
 }
 
+func TestAIScalpingService_DynamicRiskThresholds_BlockNonExecutableWallet(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange:      "bitget",
+			Leverage:      5,
+			MinConfidence: 0.65,
+			MaxCapitalPct: 5.00,
+		},
+	}
+	sizing := appautonomy.ResolveExecutableSizingConstraints("bitget", decimal.NewFromFloat(5), 5)
+
+	minConf, maxCap := svc.dynamicRiskThresholds(context.Background(), TradingPortfolio{
+		USDTBalance:                    5,
+		TotalValue:                     5,
+		NonExecutableDueToWallet:       true,
+		MinExecutableSizePct:           0,
+		MinExecutableNotionalUSDT:      positiveDecimalPointer(sizing.MinOrderNotional),
+		MinExecutableInitialMarginUSDT: positiveDecimalPointer(sizing.MinInitialMargin),
+	})
+
+	assert.Zero(t, maxCap)
+	assert.GreaterOrEqual(t, minConf, 0.65)
+}
+
 func TestAIScalpingService_ExecuteDecision_BumpsSizeToExecutableMinimum(t *testing.T) {
 	orderExecutor := new(MockScalpingOrderExecutor)
 	svc := &AIScalpingService{
