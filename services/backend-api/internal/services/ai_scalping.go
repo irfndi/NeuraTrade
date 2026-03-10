@@ -9,12 +9,14 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
@@ -2053,6 +2055,7 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 		const expectancyLookbackHours = 24 * 30
 		const expectancyQueryLimit = 250
 
+		var scopedFallback *TradeExpectancyStats
 		if scoped, found, err := s.tradeMemory.GetScopedExpectancyStats(
 			ctx,
 			normalizedSymbol,
@@ -2060,18 +2063,10 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 			expectancyLookbackHours,
 			expectancyQueryLimit,
 		); err == nil && found {
-			return scoped.NetExpectancy, scoped.SampleSize, scoped.SampleSize >= minSamples
-		}
-		if normalizedAction != "" {
-			if scoped, found, err := s.tradeMemory.GetScopedExpectancyStats(
-				ctx,
-				normalizedSymbol,
-				"",
-				expectancyLookbackHours,
-				expectancyQueryLimit,
-			); err == nil && found {
-				return scoped.NetExpectancy, scoped.SampleSize, scoped.SampleSize >= minSamples
+			if scoped.SampleSize >= minSamples {
+				return scoped.NetExpectancy, scoped.SampleSize, true
 			}
+			scopedFallback = scoped
 		}
 
 		trades, err := s.tradeMemory.GetRecentTrades(ctx, 250)
@@ -2106,6 +2101,10 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 			if wins+losses >= minSamples {
 				return calculateNetExpectancy(wins, losses, sumWin, sumLoss), wins + losses, true
 			}
+		}
+
+		if scopedFallback != nil {
+			return scopedFallback.NetExpectancy, scopedFallback.SampleSize, false
 		}
 	}
 
@@ -3283,15 +3282,23 @@ func extractLooseNumericField(raw string, key string) (float64, bool) {
 		return number, true
 	}
 	candidate := make([]rune, 0, len(value))
+	seenDot := false
 	for _, ch := range value {
-		if (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' {
+		switch {
+		case ch >= '0' && ch <= '9':
 			candidate = append(candidate, ch)
-			continue
-		}
-		if len(candidate) > 0 {
-			break
+		case ch == '-' && len(candidate) == 0:
+			candidate = append(candidate, ch)
+		case ch == '.' && !seenDot && len(candidate) > 0 && candidate[len(candidate)-1] != '-':
+			candidate = append(candidate, ch)
+			seenDot = true
+		default:
+			if len(candidate) > 0 {
+				goto parseCandidate
+			}
 		}
 	}
+parseCandidate:
 	if len(candidate) == 0 {
 		return 0, false
 	}
@@ -3332,30 +3339,40 @@ func extractLooseFieldValue(raw string, key string) (string, bool) {
 }
 
 func extractLooseFieldValueWithMarker(raw string, marker string, requireBoundary bool) (string, bool) {
-	lowerRaw := strings.ToLower(raw)
+	if raw == "" || marker == "" {
+		return "", false
+	}
+
+	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(marker))
 	searchStart := 0
-	for searchStart < len(lowerRaw) {
-		relativeIdx := strings.Index(lowerRaw[searchStart:], marker)
-		if relativeIdx < 0 {
+	for searchStart < len(raw) {
+		loc := re.FindStringIndex(raw[searchStart:])
+		if loc == nil {
 			return "", false
 		}
-		idx := searchStart + relativeIdx
+		idx := searchStart + loc[0]
+		end := searchStart + loc[1]
 		if requireBoundary {
-			if idx > 0 && isLooseFieldIdentifierRune(rune(lowerRaw[idx-1])) {
-				searchStart = idx + len(marker)
-				continue
+			if idx > 0 {
+				prev, _ := utf8.DecodeLastRuneInString(raw[:idx])
+				if isLooseFieldIdentifierRune(prev) {
+					searchStart = end
+					continue
+				}
 			}
-			end := idx + len(marker)
-			if end < len(lowerRaw) && isLooseFieldIdentifierRune(rune(lowerRaw[end])) {
-				searchStart = end
-				continue
+			if end < len(raw) {
+				next, _ := utf8.DecodeRuneInString(raw[end:])
+				if isLooseFieldIdentifierRune(next) {
+					searchStart = end
+					continue
+				}
 			}
 		}
 
-		remainder := raw[idx+len(marker):]
+		remainder := raw[end:]
 		colon := strings.Index(remainder, ":")
 		if colon < 0 || strings.TrimSpace(remainder[:colon]) != "" {
-			searchStart = idx + len(marker)
+			searchStart = end
 			continue
 		}
 
@@ -3411,8 +3428,14 @@ func readLooseTokenValue(raw string) string {
 
 func sanitizeDecisionReasoning(raw string, maxLen int) string {
 	reasoning := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
-	if maxLen > 0 && len(reasoning) > maxLen {
-		reasoning = reasoning[:maxLen-3] + "..."
+	if maxLen > 0 {
+		runes := []rune(reasoning)
+		if len(runes) > maxLen {
+			if maxLen <= 3 {
+				return string(runes[:maxLen])
+			}
+			reasoning = string(runes[:maxLen-3]) + "..."
+		}
 	}
 	return reasoning
 }

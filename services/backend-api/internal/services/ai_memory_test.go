@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -339,7 +340,7 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
 		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
 	) VALUES
-		('rp_a', 'ord_a', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 102, 2, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_a', 'ord_a', 'chat-1', 'bitget', 'btc/usdt', 'buy', 1, 100, 102, 2, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_b', 'ord_b', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_c', 'ord_c', 'chat-2', 'bitget', 'BTC/USDT', 'buy', 1, 100, 109, 9, 0, 'autonomous', datetime('now'), datetime('now')),
 		('rp_d', 'ord_d', 'chat-1', 'binance', 'BTC/USDT', 'buy', 1, 100, 108, 8, 0, 'autonomous', datetime('now'), datetime('now'))`)
@@ -372,6 +373,101 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 		assert.False(t, found)
 		assert.Nil(t, stats)
 	})
+}
+
+func TestTradeMemory_GetScopedExpectancyStats_MissingTableReturnsNoData(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 24, 10)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Nil(t, stats)
+}
+
+func TestTradeMemory_GetScopedExpectancyStats_DefaultLookbackAndLimit(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	for i := 0; i < 300; i++ {
+		_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+			id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			fmt.Sprintf("rp_%03d", i),
+			fmt.Sprintf("ord_%03d", i),
+			"chat-1",
+			"bitget",
+			"BTC/USDT",
+			"buy",
+			1,
+			100,
+			101,
+			1,
+			0,
+			"autonomous",
+			time.Now().UTC(),
+			time.Now().UTC(),
+		)
+		require.NoError(t, err)
+	}
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"rp_old",
+		"ord_old",
+		"chat-1",
+		"bitget",
+		"BTC/USDT",
+		"buy",
+		1,
+		100,
+		101,
+		5,
+		0,
+		"autonomous",
+		time.Now().UTC().Add(-31*24*time.Hour),
+		time.Now().UTC().Add(-31*24*time.Hour),
+	)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 0, 0)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, stats)
+	assert.Equal(t, 250, stats.SampleSize)
+	assert.Equal(t, 250, stats.Wins)
+	assert.Zero(t, stats.Losses)
 }
 
 func TestTradeMemory_RecordLesson(t *testing.T) {
