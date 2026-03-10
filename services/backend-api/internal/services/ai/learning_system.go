@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -40,6 +41,9 @@ type OptimalStrategy struct {
 // NewInMemoryLearningSystem creates a new learning system
 func NewInMemoryLearningSystem() *InMemoryLearningSystem {
 	dataDir := filepath.Join("data", "ai_learning")
+	if configured := strings.TrimSpace(os.Getenv("NEURATRADE_AI_LEARNING_DATA_DIR")); configured != "" {
+		dataDir = configured
+	}
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		log.Printf("Failed to create AI learning data directory: %v", err)
 	}
