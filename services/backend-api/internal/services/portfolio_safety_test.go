@@ -624,7 +624,7 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 			maxPositionFloorPct: 0.20,
 			requestedNotional:   decimal.NewFromFloat(7.0),
 			wantAllowed:         false,
-			wantReasonSubstring: []string{"maximum allowed 6.00", "throttled to 128%"},
+			wantReasonSubstring: []string{"maximum allowed 6.00", "set to 128%"},
 		},
 		{
 			name:                "zero_floor_disables_notional_override",

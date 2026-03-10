@@ -49,6 +49,8 @@ const (
 	DefaultScalpingMaxBidAskSpreadPct  = 0.22
 	ScalpingMaxBidAskSpreadPctEnv      = "SCALPING_MAX_BID_ASK_SPREAD_PCT"
 	NeuraScalpingMaxBidAskSpreadPctEnv = "NEURATRADE_SCALPING_MAX_BID_ASK_SPREAD_PCT"
+	minScalpingMaxBidAskSpreadPct      = 0.0001
+	maxScalpingMaxBidAskSpreadPct      = 5.0
 	scalpingStrongImbalanceFloor       = 0.20
 	scalpingNeutralImbalanceFloor      = 0.10
 	scalpingBuyRangeMax                = 45.0
@@ -106,7 +108,7 @@ func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
 	if math.IsNaN(c.MaxBidAskSpreadPct) || math.IsInf(c.MaxBidAskSpreadPct, 0) {
 		c.MaxBidAskSpreadPct = ResolveScalpingMaxBidAskSpreadPctFromEnv()
 	}
-	c.MaxBidAskSpreadPct = clampFloat(c.MaxBidAskSpreadPct, 0.0001, 5)
+	c.MaxBidAskSpreadPct = clampFloat(c.MaxBidAskSpreadPct, minScalpingMaxBidAskSpreadPct, maxScalpingMaxBidAskSpreadPct)
 	if c.MicroMinConfidenceFloor <= 0 {
 		c.MicroMinConfidenceFloor = DefaultMicroMinConfidenceFloor
 	}
@@ -596,7 +598,7 @@ func invalidCandidateFloat(value float64) bool {
 
 func resolvePolicySpreadThreshold(policy ScalpingCyclePolicy) float64 {
 	if !math.IsNaN(policy.MaxBidAskSpreadPct) && !math.IsInf(policy.MaxBidAskSpreadPct, 0) && policy.MaxBidAskSpreadPct > 0 {
-		return policy.MaxBidAskSpreadPct
+		return clampFloat(policy.MaxBidAskSpreadPct, minScalpingMaxBidAskSpreadPct, maxScalpingMaxBidAskSpreadPct)
 	}
 	return ResolveScalpingMaxBidAskSpreadPctFromEnv()
 }
@@ -613,7 +615,7 @@ func ResolveScalpingMaxBidAskSpreadPctFromEnv() float64 {
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
 		return DefaultScalpingMaxBidAskSpreadPct
 	}
-	return clampFloat(value, 0.0001, 5)
+	return clampFloat(value, minScalpingMaxBidAskSpreadPct, maxScalpingMaxBidAskSpreadPct)
 }
 
 func clampFloat(value, minValue, maxValue float64) float64 {

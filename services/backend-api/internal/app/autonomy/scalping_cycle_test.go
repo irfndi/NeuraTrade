@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -378,6 +379,12 @@ func TestEvaluateCandidateSignal_RejectsInvalidMetrics(t *testing.T) {
 			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
 		})
 	}
+}
+
+func TestResolvePolicySpreadThreshold_ClampsDirectOverride(t *testing.T) {
+	assert.InDelta(t, 5.0, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: 99}), 0.000001)
+	assert.InDelta(t, 0.0001, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: 0.00001}), 0.000001)
+	assert.InDelta(t, DefaultScalpingMaxBidAskSpreadPct, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: math.NaN()}), 0.000001)
 }
 
 func TestEvaluateProgressBlock_AfterTwoHoursWithoutAttempt(t *testing.T) {

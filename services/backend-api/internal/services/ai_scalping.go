@@ -39,7 +39,10 @@ type AIScalpingConfig struct {
 	AllowSpotFallback     bool
 	MaxPairsToAnalyze     int
 	MaxCandidatePairs     int
+	MaxBidAskSpreadPct    float64
 	OrderBookPairs        int
+	AutoExpandOrderBooks  bool
+	AutoExpandThreshold   int
 	EnforceFutures        bool
 	SymbolCooldown        time.Duration
 	FailureBudget         int
@@ -55,6 +58,13 @@ type AIScalpingConfig struct {
 	RegimeLowBand         float64
 	DeterministicFallback DeterministicFallbackConfig
 }
+
+const (
+	minAIScalpingMaxBidAskSpreadPct = 0.0001
+	maxAIScalpingMaxBidAskSpreadPct = 5.0
+	defaultOrderBookPairsBase       = 4
+	defaultAutoExpandThreshold      = 12
+)
 
 type DeterministicFallbackConfig struct {
 	MaxBidAskSpread float64
@@ -206,7 +216,10 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		AllowSpotFallback:     false,
 		MaxPairsToAnalyze:     8,
 		MaxCandidatePairs:     120,
+		MaxBidAskSpreadPct:    appautonomy.DefaultScalpingMaxBidAskSpreadPct,
 		OrderBookPairs:        4,
+		AutoExpandOrderBooks:  false,
+		AutoExpandThreshold:   defaultAutoExpandThreshold,
 		EnforceFutures:        true,
 		SymbolCooldown:        90 * time.Second,
 		FailureBudget:         3,
@@ -264,8 +277,19 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if value := getEnvInt("NEURATRADE_SCALPING_MAX_CANDIDATES"); value > 0 {
 		cfg.MaxCandidatePairs = clampInt(value, cfg.MaxPairsToAnalyze, 2000)
 	}
+	if value, ok := getEnvFloat(appautonomy.NeuraScalpingMaxBidAskSpreadPctEnv); ok && value > 0 {
+		cfg.MaxBidAskSpreadPct = value
+	} else if value, ok := getEnvFloat(appautonomy.ScalpingMaxBidAskSpreadPctEnv); ok && value > 0 {
+		cfg.MaxBidAskSpreadPct = value
+	}
 	if value := getEnvInt("NEURATRADE_SCALPING_ORDERBOOK_PAIRS"); value > 0 {
 		cfg.OrderBookPairs = clampInt(value, 1, cfg.MaxPairsToAnalyze)
+	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_AUTO_EXPAND_ORDERBOOK_PAIRS"); ok {
+		cfg.AutoExpandOrderBooks = value
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_AUTO_EXPAND_ORDERBOOK_PAIRS_THRESHOLD"); value > 0 {
+		cfg.AutoExpandThreshold = value
 	}
 	if value, ok := getEnvBool("NEURATRADE_SCALPING_ENFORCE_FUTURES_UNIVERSE"); ok {
 		cfg.EnforceFutures = value
@@ -316,6 +340,14 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if cfg.OrderBookPairs <= 0 {
 		cfg.OrderBookPairs = 1
 	}
+	if cfg.MaxBidAskSpreadPct <= 0 || math.IsNaN(cfg.MaxBidAskSpreadPct) || math.IsInf(cfg.MaxBidAskSpreadPct, 0) {
+		cfg.MaxBidAskSpreadPct = appautonomy.DefaultScalpingMaxBidAskSpreadPct
+	}
+	cfg.MaxBidAskSpreadPct = clampFloat(cfg.MaxBidAskSpreadPct, minAIScalpingMaxBidAskSpreadPct, maxAIScalpingMaxBidAskSpreadPct)
+	if cfg.AutoExpandThreshold <= 0 {
+		cfg.AutoExpandThreshold = defaultAutoExpandThreshold
+	}
+	cfg.AutoExpandThreshold = clampInt(cfg.AutoExpandThreshold, 1, cfg.MaxPairsToAnalyze)
 	if cfg.RegimeLowBand >= cfg.RegimeHighBand {
 		cfg.RegimeLowBand = 15
 		cfg.RegimeHighBand = 85
@@ -323,7 +355,7 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	cfg.DeterministicFallback = applyDeterministicFallbackConfigFromEnv(cfg.DeterministicFallback).Normalized()
 
 	log.Printf(
-		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d orderbook_pairs=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d max_bid_ask_spread=%.4f orderbook_pairs=%d auto_expand_orderbooks=%t auto_expand_threshold=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
 		cfg.Exchange,
 		cfg.Model,
 		cfg.Leverage,
@@ -335,7 +367,10 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.AllowSpotFallback,
 		cfg.MaxPairsToAnalyze,
 		cfg.MaxCandidatePairs,
+		cfg.MaxBidAskSpreadPct,
 		cfg.OrderBookPairs,
+		cfg.AutoExpandOrderBooks,
+		cfg.AutoExpandThreshold,
 		cfg.EnforceFutures,
 		cfg.SymbolCooldown,
 		cfg.FailureBudget,
@@ -424,32 +459,35 @@ type aiScalpingFileConfig struct {
 	AI struct {
 		MinConfidence *float64 `json:"min_confidence"`
 		Scalping      struct {
-			Exchange          string   `json:"exchange"`
-			Model             string   `json:"model"`
-			Leverage          *int     `json:"leverage"`
-			MaxTokens         *int     `json:"max_tokens"`
-			MaxCapitalPct     *float64 `json:"max_capital_pct"`
-			MinConfidence     *float64 `json:"min_confidence"`
-			MaxIterations     *int     `json:"max_iterations"`
-			TimeoutSeconds    *int     `json:"timeout_seconds"`
-			AutoExecute       *bool    `json:"auto_execute"`
-			AllowSpotFallback *bool    `json:"allow_spot_fallback"`
-			MaxPairs          *int     `json:"max_pairs"`
-			MaxCandidates     *int     `json:"max_candidates"`
-			OrderBookPairs    *int     `json:"orderbook_pairs"`
-			EnforceFutures    *bool    `json:"enforce_futures_universe"`
-			SymbolCooldownSec *int     `json:"symbol_cooldown_seconds"`
-			FailureBudget     *int     `json:"symbol_failure_budget"`
-			FailureWindowSec  *int     `json:"symbol_failure_window_seconds"`
-			StructuredRetries *int     `json:"structured_retries"`
-			LossStreakBudget  *int     `json:"symbol_loss_streak_budget"`
-			LossCooldownSec   *int     `json:"symbol_loss_cooldown_seconds"`
-			LossWindowSec     *int     `json:"symbol_loss_window_seconds"`
-			PreTradeGate      *bool    `json:"pretrade_gate"`
-			MinExpectancyEdge *float64 `json:"min_expectancy_edge"`
-			MinExpectancyN    *int     `json:"min_expectancy_samples"`
-			RegimeHighBand    *float64 `json:"regime_high_band"`
-			RegimeLowBand     *float64 `json:"regime_low_band"`
+			Exchange             string   `json:"exchange"`
+			Model                string   `json:"model"`
+			Leverage             *int     `json:"leverage"`
+			MaxTokens            *int     `json:"max_tokens"`
+			MaxCapitalPct        *float64 `json:"max_capital_pct"`
+			MinConfidence        *float64 `json:"min_confidence"`
+			MaxIterations        *int     `json:"max_iterations"`
+			TimeoutSeconds       *int     `json:"timeout_seconds"`
+			AutoExecute          *bool    `json:"auto_execute"`
+			AllowSpotFallback    *bool    `json:"allow_spot_fallback"`
+			MaxPairs             *int     `json:"max_pairs"`
+			MaxCandidates        *int     `json:"max_candidates"`
+			MaxBidAskSpread      *float64 `json:"max_bid_ask_spread_pct"`
+			OrderBookPairs       *int     `json:"orderbook_pairs"`
+			AutoExpandOrderBooks *bool    `json:"auto_expand_orderbook_pairs"`
+			AutoExpandThreshold  *int     `json:"auto_expand_orderbook_pairs_threshold"`
+			EnforceFutures       *bool    `json:"enforce_futures_universe"`
+			SymbolCooldownSec    *int     `json:"symbol_cooldown_seconds"`
+			FailureBudget        *int     `json:"symbol_failure_budget"`
+			FailureWindowSec     *int     `json:"symbol_failure_window_seconds"`
+			StructuredRetries    *int     `json:"structured_retries"`
+			LossStreakBudget     *int     `json:"symbol_loss_streak_budget"`
+			LossCooldownSec      *int     `json:"symbol_loss_cooldown_seconds"`
+			LossWindowSec        *int     `json:"symbol_loss_window_seconds"`
+			PreTradeGate         *bool    `json:"pretrade_gate"`
+			MinExpectancyEdge    *float64 `json:"min_expectancy_edge"`
+			MinExpectancyN       *int     `json:"min_expectancy_samples"`
+			RegimeHighBand       *float64 `json:"regime_high_band"`
+			RegimeLowBand        *float64 `json:"regime_low_band"`
 		} `json:"scalping"`
 	} `json:"ai"`
 }
@@ -518,8 +556,17 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 	if fileConfig.AI.Scalping.MaxCandidates != nil {
 		cfg.MaxCandidatePairs = clampInt(*fileConfig.AI.Scalping.MaxCandidates, cfg.MaxPairsToAnalyze, 2000)
 	}
+	if fileConfig.AI.Scalping.MaxBidAskSpread != nil {
+		cfg.MaxBidAskSpreadPct = *fileConfig.AI.Scalping.MaxBidAskSpread
+	}
 	if fileConfig.AI.Scalping.OrderBookPairs != nil {
 		cfg.OrderBookPairs = clampInt(*fileConfig.AI.Scalping.OrderBookPairs, 1, cfg.MaxPairsToAnalyze)
+	}
+	if fileConfig.AI.Scalping.AutoExpandOrderBooks != nil {
+		cfg.AutoExpandOrderBooks = *fileConfig.AI.Scalping.AutoExpandOrderBooks
+	}
+	if fileConfig.AI.Scalping.AutoExpandThreshold != nil {
+		cfg.AutoExpandThreshold = *fileConfig.AI.Scalping.AutoExpandThreshold
 	}
 	if fileConfig.AI.Scalping.EnforceFutures != nil {
 		cfg.EnforceFutures = *fileConfig.AI.Scalping.EnforceFutures
@@ -1372,7 +1419,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		tradable bool
 	}
 	pairs := make([]pairScore, 0, len(scored))
-	maxSpreadPct := appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
+	maxSpreadPct := s.maxBidAskSpreadPct()
 	for _, t := range scored {
 		symbol := t.GetSymbol()
 		price := t.GetPrice()
@@ -1550,13 +1597,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		log.Printf("[AI-SCALPING] Bulk ticker fetch unavailable: %v", bulkErr)
 	}
 
-	orderBookPairs := s.config.OrderBookPairs
-	if orderBookPairs <= 0 {
-		orderBookPairs = 4
-	}
-	if len(pairs) > 0 && len(pairs) <= 12 && orderBookPairs < len(pairs) {
-		orderBookPairs = len(pairs)
-	}
+	orderBookPairs := s.effectiveOrderBookPairs(len(pairs))
 
 	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), exchange)
 	for idx, symbol := range pairs {
@@ -1769,7 +1810,7 @@ Return JSON only:
 - spread <= %.2f%%: tradable liquidity ceiling; anything wider must be treated as hold
 - range_pos_24h > 80: Price near daily high (avoid chasing late entries)
 - range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
-		`, s.config.Leverage, skillContent, appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv())
+		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct())
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
@@ -2074,7 +2115,7 @@ func (s *AIScalpingService) classifyScalpingRegime(signal aiMarketSignal, action
 		lowBand = 15
 	}
 
-	spreadThreshold := appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
+	spreadThreshold := s.maxBidAskSpreadPct()
 	if signal.BidAskSpread > spreadThreshold {
 		return "illiquid", 0, fmt.Sprintf("pre-trade regime gate blocked %s: spread %.3f%% too wide", signal.Symbol, signal.BidAskSpread)
 	}
@@ -2253,7 +2294,7 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		entry := decimal.NewFromFloat(resolved.Price)
 		decision.EntryPrice = &entry
 	}
-	spreadThreshold := appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
+	spreadThreshold := s.maxBidAskSpreadPct()
 	if resolved.BidAskSpread > spreadThreshold {
 		return fmt.Errorf("spread %.3f%% too wide for scalping on %s", resolved.BidAskSpread, decision.Symbol)
 	}
@@ -3639,7 +3680,7 @@ func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio
 }
 
 func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio TradingPortfolio) appautonomy.ScalpingCyclePolicy {
-	cfg := scalpingPolicyConfigFromEnv()
+	cfg := scalpingPolicyConfigFromEnv(s.maxBidAskSpreadPct())
 
 	performanceWindow := appautonomy.PerformanceWindowInput{}
 	if s.tradeMemory != nil {
@@ -3677,12 +3718,10 @@ func (s *AIScalpingService) scalpingCyclePolicy(ctx context.Context, portfolio T
 	}, cfg)
 }
 
-func scalpingPolicyConfigFromEnv() appautonomy.ScalpingPolicyConfig {
+func scalpingPolicyConfigFromEnv(maxBidAskSpreadPct float64) appautonomy.ScalpingPolicyConfig {
 	cfg := appautonomy.DefaultScalpingPolicyConfig()
-	if value, ok := getEnvFloat(appautonomy.NeuraScalpingMaxBidAskSpreadPctEnv); ok && value > 0 {
-		cfg.MaxBidAskSpreadPct = value
-	} else if value, ok := getEnvFloat(appautonomy.ScalpingMaxBidAskSpreadPctEnv); ok && value > 0 {
-		cfg.MaxBidAskSpreadPct = value
+	if maxBidAskSpreadPct > 0 && !math.IsNaN(maxBidAskSpreadPct) && !math.IsInf(maxBidAskSpreadPct, 0) {
+		cfg.MaxBidAskSpreadPct = maxBidAskSpreadPct
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_ACCOUNT_MAX_VALUE"); ok && value > 0 {
 		cfg.MicroAccountMaxValue = decimal.NewFromFloat(value)
@@ -3718,6 +3757,43 @@ func scalpingPolicyConfigFromEnv() appautonomy.ScalpingPolicyConfig {
 		cfg.ProgressBlockAfter = time.Duration(value) * time.Minute
 	}
 	return cfg.Normalized()
+}
+
+func (s *AIScalpingService) maxBidAskSpreadPct() float64 {
+	if s != nil && s.config.MaxBidAskSpreadPct > 0 && !math.IsNaN(s.config.MaxBidAskSpreadPct) && !math.IsInf(s.config.MaxBidAskSpreadPct, 0) {
+		return s.config.MaxBidAskSpreadPct
+	}
+	return appautonomy.ResolveScalpingMaxBidAskSpreadPctFromEnv()
+}
+
+func (s *AIScalpingService) effectiveOrderBookPairs(pairCount int) int {
+	capPairs := 1
+	if s != nil && s.config.OrderBookPairs > 0 {
+		capPairs = s.config.OrderBookPairs
+	}
+	if s == nil || !s.config.AutoExpandOrderBooks {
+		return capPairs
+	}
+
+	basePairs := capPairs
+	if basePairs > defaultOrderBookPairsBase {
+		basePairs = defaultOrderBookPairsBase
+	}
+	threshold := s.config.AutoExpandThreshold
+	if threshold <= 0 {
+		threshold = defaultAutoExpandThreshold
+	}
+	maxPairs := s.config.MaxPairsToAnalyze
+	if maxPairs > 0 {
+		threshold = clampInt(threshold, 1, maxPairs)
+	}
+	if pairCount > 0 && pairCount <= threshold {
+		if pairCount < capPairs {
+			return pairCount
+		}
+		return capPairs
+	}
+	return basePairs
 }
 
 func candidateSignalsFromMarketSignals(signals []aiMarketSignal) []appautonomy.CandidateSignal {

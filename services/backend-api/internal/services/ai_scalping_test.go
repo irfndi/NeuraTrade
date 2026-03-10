@@ -149,7 +149,10 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.False(t, config.AllowSpotFallback)
 	assert.Equal(t, 8, config.MaxPairsToAnalyze)
 	assert.Equal(t, 120, config.MaxCandidatePairs)
+	assert.Equal(t, appautonomy.DefaultScalpingMaxBidAskSpreadPct, config.MaxBidAskSpreadPct)
 	assert.Equal(t, 4, config.OrderBookPairs)
+	assert.False(t, config.AutoExpandOrderBooks)
+	assert.Equal(t, 12, config.AutoExpandThreshold)
 	assert.True(t, config.EnforceFutures)
 	assert.Equal(t, 90*time.Second, config.SymbolCooldown)
 	assert.Equal(t, 3, config.FailureBudget)
@@ -202,7 +205,10 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_ALLOW_SPOT_FALLBACK", "true")
 	t.Setenv("NEURATRADE_SCALPING_MAX_PAIRS", "11")
 	t.Setenv("NEURATRADE_SCALPING_MAX_CANDIDATES", "210")
+	t.Setenv(appautonomy.NeuraScalpingMaxBidAskSpreadPctEnv, "0.27")
 	t.Setenv("NEURATRADE_SCALPING_ORDERBOOK_PAIRS", "6")
+	t.Setenv("NEURATRADE_SCALPING_AUTO_EXPAND_ORDERBOOK_PAIRS", "true")
+	t.Setenv("NEURATRADE_SCALPING_AUTO_EXPAND_ORDERBOOK_PAIRS_THRESHOLD", "9")
 	t.Setenv("NEURATRADE_SCALPING_ENFORCE_FUTURES_UNIVERSE", "false")
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_COOLDOWN_SECONDS", "45")
 	t.Setenv("NEURATRADE_SCALPING_SYMBOL_FAILURE_BUDGET", "4")
@@ -232,7 +238,10 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	assert.True(t, cfg.AllowSpotFallback)
 	assert.Equal(t, 11, cfg.MaxPairsToAnalyze)
 	assert.Equal(t, 210, cfg.MaxCandidatePairs)
+	assert.Equal(t, 0.27, cfg.MaxBidAskSpreadPct)
 	assert.Equal(t, 6, cfg.OrderBookPairs)
+	assert.True(t, cfg.AutoExpandOrderBooks)
+	assert.Equal(t, 9, cfg.AutoExpandThreshold)
 	assert.False(t, cfg.EnforceFutures)
 	assert.Equal(t, 45*time.Second, cfg.SymbolCooldown)
 	assert.Equal(t, 4, cfg.FailureBudget)
@@ -627,11 +636,14 @@ func TestAIScalpingService_GatherMarketSignals_FetchesOrderbookForFullSmallUnive
 
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{
-			Exchange:          "bitget",
-			MaxPairsToAnalyze: 8,
-			MaxCandidatePairs: 8,
-			OrderBookPairs:    4,
-			EnforceFutures:    false,
+			Exchange:             "bitget",
+			MaxPairsToAnalyze:    8,
+			MaxCandidatePairs:    8,
+			MaxBidAskSpreadPct:   appautonomy.DefaultScalpingMaxBidAskSpreadPct,
+			OrderBookPairs:       8,
+			AutoExpandOrderBooks: true,
+			AutoExpandThreshold:  12,
+			EnforceFutures:       false,
 		},
 		ccxtService: mockCCXT,
 	}

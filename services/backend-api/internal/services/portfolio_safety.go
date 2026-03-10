@@ -489,15 +489,20 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 
 	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, symbol, snapshot, status.MaxPositionSize)
 	effectiveThrottlePct := resolveEffectiveThrottlePct(status.MaxPositionSize, effectiveMaxPosition)
+	throttleLabel := formatEffectiveThrottleLabel(effectiveThrottlePct)
 
 	if size.GreaterThan(effectiveMaxPosition) {
-		return false, fmt.Sprintf("Position size %s exceeds maximum allowed %s (throttled to %.0f%%)",
-			size.StringFixed(2), effectiveMaxPosition.StringFixed(2), effectiveThrottlePct), nil
+		return false, fmt.Sprintf("Position size %s exceeds maximum allowed %s (%s %.0f%%)",
+			size.StringFixed(2), effectiveMaxPosition.StringFixed(2), throttleLabel, effectiveThrottlePct), nil
 	}
 
 	return true, "", nil
 }
 
+// resolveEffectiveMaxPositionSize applies MaxPositionFloorPct as a guarded
+// override for exchange minimum notionals: when requiredPct for the exchange
+// minimum is less than or equal to floorCapPct, the effective max may exceed
+// defaultMax so the trade remains executable; otherwise defaultMax is preserved.
 func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, symbol string, snapshot *SafetyPortfolioSnapshot, defaultMax decimal.Decimal) decimal.Decimal {
 	if snapshot == nil || !defaultMax.GreaterThan(decimal.Zero) {
 		return defaultMax
@@ -617,6 +622,9 @@ func normalizePortfolioSafetyConfig(config PortfolioSafetyConfig) PortfolioSafet
 	if config.CacheTTL <= 0 {
 		config.CacheTTL = defaults.CacheTTL
 	}
+	// MaxPositionFloorPct differs intentionally: negative values normalize to
+	// default, while zero remains an explicit disable; see
+	// TestPortfolioSafetyService_SetConfig_NormalizesDefaultsButPreservesZeroFloor.
 	if config.MaxPositionFloorPct < 0 {
 		config.MaxPositionFloorPct = defaults.MaxPositionFloorPct
 	}
@@ -628,6 +636,13 @@ func resolveEffectiveThrottlePct(defaultMax decimal.Decimal, effectiveMax decima
 		return 0
 	}
 	return effectiveMax.Div(defaultMax).Mul(decimal.NewFromInt(100)).InexactFloat64()
+}
+
+func formatEffectiveThrottleLabel(pct float64) string {
+	if pct > 100 {
+		return "set to"
+	}
+	return "throttled to"
 }
 
 func normalizeRiskSignal(value, threshold float64) float64 {
