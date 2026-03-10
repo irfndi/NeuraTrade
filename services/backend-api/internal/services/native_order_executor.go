@@ -20,6 +20,7 @@ type TradeDetails struct {
 	Side               string
 	OrderType          string // market, limit
 	MarketType         string // spot, futures
+	MarginMode         string // crossed, isolated (futures only)
 	AllowSpotFallback  bool
 	Leverage           int // for futures
 	EffectiveLeverage  int

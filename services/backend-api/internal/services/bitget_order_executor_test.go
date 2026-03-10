@@ -571,7 +571,7 @@ func TestBitgetOrderExecutor_PlaceOrder_DelegatesToDetailsPath(t *testing.T) {
 	assert.Zero(t, accountCalls)
 	require.NotNil(t, orderBody)
 	assert.Equal(t, "BTCUSDT", orderBody["symbol"])
-	assert.Equal(t, bitgetFuturesOrderMarginMode, orderBody["marginMode"])
+	assert.Equal(t, "crossed", orderBody["marginMode"])
 }
 
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_RiskReductionSkipsLeverageSync(t *testing.T) {

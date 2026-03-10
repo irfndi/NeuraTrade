@@ -70,6 +70,7 @@ func (e *BitgetOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, 
 		Side:       side,
 		OrderType:  orderType,
 		MarketType: "futures",
+		MarginMode: "crossed",
 		AmountUSDT: amount,
 		EntryPrice: price,
 	})
@@ -179,6 +180,13 @@ func bitgetFuturesMinUSDTNotional() decimal.Decimal {
 
 const bitgetFuturesOrderMarginMode = "isolated"
 
+func resolveBitgetFuturesMarginMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), "crossed") {
+		return "crossed"
+	}
+	return bitgetFuturesOrderMarginMode
+}
+
 func isRiskReductionOrder(details TradeDetails) bool {
 	return details.ReduceOnly || strings.EqualFold(strings.TrimSpace(details.TradeType), "risk_reduction")
 }
@@ -200,6 +208,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	if err != nil {
 		return "", err
 	}
+	marginMode := resolveBitgetFuturesMarginMode(details.MarginMode)
 	isRiskReduction := isRiskReductionOrder(details)
 	tradeSide := "open"
 	holdSide := "long"
@@ -301,7 +310,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	body := map[string]interface{}{
 		"symbol":      symbol,
 		"productType": "USDT-FUTURES",
-		"marginMode":  bitgetFuturesOrderMarginMode,
+		"marginMode":  marginMode,
 		"marginCoin":  "USDT",
 		"size":        size,
 		"side":        bitgetSide,
@@ -495,12 +504,13 @@ func (e *BitgetOrderExecutor) syncFuturesLeverageForDetails(
 	if bitgetSide == "sell" {
 		holdSide = "short"
 	}
+	marginMode := resolveBitgetFuturesMarginMode(details.MarginMode)
 	effectiveLeverage, syncStatus, err := e.ensureFuturesLeverage(
 		ctx,
 		symbol,
 		details.Leverage,
 		holdSide,
-		bitgetFuturesOrderMarginMode,
+		marginMode,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to sync futures leverage for %s: %w", symbol, err)
