@@ -347,6 +347,73 @@ func TestAIScalpingService_ParseDecisionWithRetries_InvalidAction(t *testing.T) 
 	assert.Equal(t, 1, mockLLM.CallCount)
 }
 
+func TestAIScalpingService_ParseDecisionWithRetries_InfersHoldFromLooseText(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{Message: llm.Message{Content: `{"action":"hold","symbol":"","size_pct":0,"confidence":0.1,"reasoning":"unexpected remote repair"}`}},
+		},
+	}
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 2,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.parseDecisionWithRetries(
+		context.Background(),
+		`Recommended Action: hold
+Confidence: 35%
+Reason: Waiting for qualified setup until spread is executable.`,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "hold", decision.Action)
+	assert.Equal(t, "", decision.Symbol)
+	assert.True(t, decision.ConfidenceKnown)
+	assert.InDelta(t, 0.35, decision.Confidence, 0.0001)
+	assert.Equal(t, reasonCategoryStrategyHold, decision.ReasonCategory)
+	assert.Equal(t, 0, mockLLM.CallCount)
+}
+
+func TestAIScalpingService_ParseDecisionWithRetries_InfersActionableDecisionFromMalformedJSON(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{Message: llm.Message{Content: `{"action":"hold","symbol":"","size_pct":0,"confidence":0.1,"reasoning":"unexpected remote repair"}`}},
+		},
+	}
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 2,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.parseDecisionWithRetries(
+		context.Background(),
+		`{"action":"buy","symbol":"BTC/USDT","size_pct":"0.75","confidence":"68%","reason":"Breakout with tight spread","stop_loss":"41000","take_profit":"43000"`,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+	assert.InDelta(t, 0.75, decision.SizePercent, 0.0001)
+	assert.InDelta(t, 0.68, decision.Confidence, 0.0001)
+	assert.True(t, decision.ConfidenceKnown)
+	assert.Equal(t, "", decision.ReasonCategory)
+	require.NotNil(t, decision.StopLoss)
+	require.NotNil(t, decision.TakeProfit)
+	assert.True(t, decision.StopLoss.Equal(decimal.NewFromInt(41000)))
+	assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+	assert.Equal(t, 0, mockLLM.CallCount)
+}
+
 func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testing.T) {
 	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
 	prompt := svc.buildUserPrompt(context.Background(), []aiMarketSignal{{
@@ -402,6 +469,66 @@ func TestAIScalpingService_BuildSystemPrompt_AllowsFractionalSizePct(t *testing.
 
 	assert.Contains(t, prompt, `"size_pct": 0.01-100`)
 	assert.Contains(t, prompt, "size_pct is a direct percentage of wallet value converted into order notional")
+}
+
+func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO ai_trade_memory (id, timestamp, exchange, symbol, action, outcome, pnl, confidence) VALUES
+		('legacy_1', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'loss', -5, 0.60),
+		('legacy_2', datetime('now'), 'bitget', 'BTC/USDT', 'buy', 'loss', -3, 0.55)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_1', 'ord_1', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_2', 'ord_2', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 99, -1, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_3', 'ord_3', 'chat-foreign', 'bitget', 'BTC/USDT', 'buy', 1, 100, 110, 10, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	svc := &AIScalpingService{
+		config:      AIScalpingConfig{MinExpectancyN: 1},
+		tradeMemory: tm,
+	}
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	t.Run("action_scoped", func(t *testing.T) {
+		expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
+		assert.True(t, found)
+		assert.Equal(t, 2, sample)
+		assert.InDelta(t, 1.0, expectancy, 0.0001)
+	})
+
+	t.Run("symbol_fallback_when_action_misses", func(t *testing.T) {
+		expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "sell")
+		assert.True(t, found)
+		assert.Equal(t, 2, sample)
+		assert.InDelta(t, 1.0, expectancy, 0.0001)
+	})
 }
 
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {

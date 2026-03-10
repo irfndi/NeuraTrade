@@ -95,7 +95,18 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 
 	// Try futures first. Spot fallback is explicit via AllowSpotFallback.
 	if details.MarketType == "futures" {
-		orderID, err = e.placeFuturesOrderWithTPSL(ctx, apiSymbol, details)
+		if !details.ReduceOnly {
+			effectiveLeverage, syncStatus, syncErr := e.syncFuturesLeverageForDetails(ctx, apiSymbol, details)
+			if syncErr != nil {
+				err = syncErr
+			} else {
+				details.EffectiveLeverage = effectiveLeverage
+				details.LeverageSyncStatus = syncStatus
+			}
+		}
+		if err == nil {
+			orderID, err = e.placeFuturesOrderWithTPSL(ctx, apiSymbol, details)
+		}
 		if err != nil {
 			fmt.Printf("[BITGET-ORDER] Futures order failed: %v\n", err)
 			if details.AllowSpotFallback && shouldFallbackToSpot(err) {
@@ -436,6 +447,200 @@ func (e *BitgetOrderExecutor) getContractInfo(ctx context.Context, symbol string
 	return info, nil
 }
 
+type bitgetFuturesAccount struct {
+	MarginMode            string
+	PosMode               string
+	CrossMarginLeverage   int
+	CrossedMarginLeverage int
+	LongLeverage          int
+	ShortLeverage         int
+	IsolatedLongLeverage  int
+	IsolatedShortLeverage int
+}
+
+func (a bitgetFuturesAccount) effectiveLeverage(holdSide string) int {
+	holdSide = strings.ToLower(strings.TrimSpace(holdSide))
+	switch holdSide {
+	case "short":
+		if a.IsolatedShortLeverage > 0 {
+			return a.IsolatedShortLeverage
+		}
+		if a.ShortLeverage > 0 {
+			return a.ShortLeverage
+		}
+	case "long":
+		if a.IsolatedLongLeverage > 0 {
+			return a.IsolatedLongLeverage
+		}
+		if a.LongLeverage > 0 {
+			return a.LongLeverage
+		}
+	}
+	if a.CrossedMarginLeverage > 0 {
+		return a.CrossedMarginLeverage
+	}
+	return a.CrossMarginLeverage
+}
+
+func (e *BitgetOrderExecutor) syncFuturesLeverageForDetails(
+	ctx context.Context,
+	symbol string,
+	details TradeDetails,
+) (int, string, error) {
+	holdSide := "long"
+	if strings.EqualFold(strings.TrimSpace(details.Side), "sell") {
+		holdSide = "short"
+	}
+	effectiveLeverage, syncStatus, err := e.ensureFuturesLeverage(ctx, symbol, details.Leverage, holdSide)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to sync futures leverage for %s: %w", symbol, err)
+	}
+	return effectiveLeverage, syncStatus, nil
+}
+
+func (e *BitgetOrderExecutor) ensureFuturesLeverage(
+	ctx context.Context,
+	symbol string,
+	desiredLeverage int,
+	holdSide string,
+) (int, string, error) {
+	if desiredLeverage <= 0 {
+		return 0, "", fmt.Errorf("desired leverage must be positive")
+	}
+
+	account, err := e.getFuturesAccount(ctx, symbol)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to get futures account for %s: %w", symbol, err)
+	}
+	current := account.effectiveLeverage(holdSide)
+	if current == desiredLeverage {
+		fmt.Printf("[BITGET-ORDER] Futures leverage already synced for %s: %dx (%s/%s)\n",
+			symbol, current, account.MarginMode, account.PosMode)
+		return current, "exchange confirmed", nil
+	}
+
+	if err := e.setFuturesLeverage(ctx, symbol, desiredLeverage, holdSide, account); err != nil {
+		return 0, "", fmt.Errorf("failed to set futures leverage for %s to %dx: %w", symbol, desiredLeverage, err)
+	}
+
+	verified, err := e.getFuturesAccount(ctx, symbol)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to verify futures leverage for %s: %w", symbol, err)
+	}
+	effective := verified.effectiveLeverage(holdSide)
+	if effective != desiredLeverage {
+		return 0, "", fmt.Errorf(
+			"futures leverage verification mismatch for %s: wanted %dx got %dx",
+			symbol,
+			desiredLeverage,
+			effective,
+		)
+	}
+
+	fmt.Printf("[BITGET-ORDER] Futures leverage synced for %s: %dx (%s/%s)\n",
+		symbol, effective, verified.MarginMode, verified.PosMode)
+	return effective, "exchange synced", nil
+}
+
+func (e *BitgetOrderExecutor) getFuturesAccount(ctx context.Context, symbol string) (*bitgetFuturesAccount, error) {
+	endpoint := fmt.Sprintf(
+		"/api/v2/mix/account/account?symbol=%s&productType=USDT-FUTURES&marginCoin=USDT",
+		symbol,
+	)
+	resp, err := e.doRequest(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Code string `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			MarginMode            string `json:"marginMode"`
+			PosMode               string `json:"posMode"`
+			CrossMarginLeverage   string `json:"crossMarginLeverage"`
+			CrossedMarginLeverage string `json:"crossedMarginLeverage"`
+			LongLeverage          string `json:"longLeverage"`
+			ShortLeverage         string `json:"shortLeverage"`
+			IsolatedLongLever     string `json:"isolatedLongLever"`
+			IsolatedShortLever    string `json:"isolatedShortLever"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse futures account response: %w", err)
+	}
+	if result.Code != "00000" {
+		return nil, fmt.Errorf("bitget futures account API error: %s (code: %s)", result.Msg, result.Code)
+	}
+
+	account := &bitgetFuturesAccount{
+		MarginMode:            strings.ToLower(strings.TrimSpace(result.Data.MarginMode)),
+		PosMode:               strings.ToLower(strings.TrimSpace(result.Data.PosMode)),
+		CrossMarginLeverage:   parseBitgetLeverage(result.Data.CrossMarginLeverage),
+		CrossedMarginLeverage: parseBitgetLeverage(result.Data.CrossedMarginLeverage),
+		LongLeverage:          parseBitgetLeverage(result.Data.LongLeverage),
+		ShortLeverage:         parseBitgetLeverage(result.Data.ShortLeverage),
+		IsolatedLongLeverage:  parseBitgetLeverage(result.Data.IsolatedLongLever),
+		IsolatedShortLeverage: parseBitgetLeverage(result.Data.IsolatedShortLever),
+	}
+	return account, nil
+}
+
+func (e *BitgetOrderExecutor) setFuturesLeverage(
+	ctx context.Context,
+	symbol string,
+	desiredLeverage int,
+	holdSide string,
+	account *bitgetFuturesAccount,
+) error {
+	body := map[string]interface{}{
+		"symbol":      symbol,
+		"productType": "USDT-FUTURES",
+		"marginCoin":  "USDT",
+		"leverage":    strconv.Itoa(desiredLeverage),
+	}
+	if account != nil {
+		marginMode := strings.ToLower(strings.TrimSpace(account.MarginMode))
+		posMode := strings.ToLower(strings.TrimSpace(account.PosMode))
+		if (marginMode == "isolated" || strings.Contains(posMode, "hedge")) && strings.TrimSpace(holdSide) != "" {
+			body["holdSide"] = holdSide
+		}
+	}
+
+	jsonBody, _ := json.Marshal(body)
+	resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/account/set-leverage", jsonBody)
+	if err != nil {
+		return err
+	}
+
+	var result struct {
+		Code string `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return fmt.Errorf("failed to parse set leverage response: %w", err)
+	}
+	if result.Code != "00000" {
+		return fmt.Errorf("bitget set leverage API error: %s (code: %s)", result.Msg, result.Code)
+	}
+	return nil
+}
+
+func parseBitgetLeverage(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if integer, err := strconv.Atoi(value); err == nil {
+		return integer
+	}
+	parsed, err := decimal.NewFromString(value)
+	if err != nil {
+		return 0
+	}
+	return int(parsed.Round(0).IntPart())
+}
+
 func formatFuturesTriggerPrice(price decimal.Decimal, contractInfo *ContractInfo) string {
 	if contractInfo == nil {
 		return price.StringFixed(5)
@@ -463,6 +668,7 @@ func shouldFallbackToSpot(err error) bool {
 	}
 	errMsg := strings.ToLower(err.Error())
 	return strings.Contains(errMsg, "does not exist") ||
+		strings.Contains(errMsg, "not exist") ||
 		strings.Contains(errMsg, "removed") ||
 		strings.Contains(errMsg, "failed to get ticker") ||
 		strings.Contains(errMsg, "failed to get contract")
@@ -692,8 +898,12 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 	}
 
 	marketStr := "Spot"
+	effectiveLeverage := d.EffectiveLeverage
+	if effectiveLeverage <= 0 {
+		effectiveLeverage = d.Leverage
+	}
 	if d.MarketType == "futures" {
-		marketStr = fmt.Sprintf("Futures (%dx)", d.Leverage)
+		marketStr = fmt.Sprintf("Futures (%dx)", effectiveLeverage)
 	}
 
 	var lines []string
@@ -712,6 +922,13 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 	lines = append(lines, fmt.Sprintf("%s Type: %s", tradeEmoji, caser.String(d.TradeType)))
 	lines = append(lines, fmt.Sprintf("📍 Market: %s", marketStr))
 	lines = append(lines, "🏢 Exchange: Bitget")
+	if d.MarketType == "futures" && effectiveLeverage > 0 {
+		leverageLine := fmt.Sprintf("⚙️ Leverage: %dx", effectiveLeverage)
+		if strings.TrimSpace(d.LeverageSyncStatus) != "" {
+			leverageLine = fmt.Sprintf("%s (%s)", leverageLine, d.LeverageSyncStatus)
+		}
+		lines = append(lines, leverageLine)
+	}
 	lines = append(lines, "")
 
 	// Position size

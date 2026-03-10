@@ -100,8 +100,8 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmou
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/contracts"):
-			_, _ = w.Write([]byte(`{"code":"40001","msg":"contract does not exist","data":[]}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/account/account"):
+			_, _ = w.Write([]byte(`{"code":"40001","msg":"symbol not exist","data":{}}`))
 		case r.URL.Path == "/api/v2/spot/trade/place-order":
 			body, err := io.ReadAll(r.Body)
 			require.NoError(t, err)
@@ -122,6 +122,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmou
 		Side:              "buy",
 		MarketType:        "futures",
 		AllowSpotFallback: true,
+		Leverage:          5,
 		AmountUSDT:        decimal.NewFromInt(3),
 		EntryPrice:        &entryPrice,
 	})
@@ -130,6 +131,132 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmou
 	require.Equal(t, "spot-123", orderID)
 	require.NotNil(t, spotOrderBody)
 	assert.Equal(t, "3", spotOrderBody["size"])
+}
+
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_NoOpWhenAlreadySynced(t *testing.T) {
+	accountCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
+				"marginMode":"crossed",
+				"posMode":"one_way_mode",
+				"crossMarginLeverage":"5"
+			}}`))
+		case "/api/v2/mix/account/set-leverage":
+			t.Fatalf("unexpected leverage mutation request")
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long")
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "exchange confirmed", status)
+	assert.Equal(t, 1, accountCalls)
+}
+
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_SetsAndVerifies(t *testing.T) {
+	accountCalls := 0
+	setCalls := 0
+	var setBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			currentLeverage := "3"
+			if accountCalls > 1 {
+				currentLeverage = "5"
+			}
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
+				"marginMode":"crossed",
+				"posMode":"one_way_mode",
+				"crossMarginLeverage":"` + currentLeverage + `"
+			}}`))
+		case "/api/v2/mix/account/set-leverage":
+			setCalls++
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &setBody))
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "short")
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "exchange synced", status)
+	assert.Equal(t, 2, accountCalls)
+	assert.Equal(t, 1, setCalls)
+	require.NotNil(t, setBody)
+	assert.Equal(t, "BTCUSDT", setBody["symbol"])
+	assert.Equal(t, "USDT-FUTURES", setBody["productType"])
+	assert.Equal(t, "USDT", setBody["marginCoin"])
+	assert.Equal(t, "5", setBody["leverage"])
+	_, hasHoldSide := setBody["holdSide"]
+	assert.False(t, hasHoldSide)
+}
+
+func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksOnLeverageSyncFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			_, _ = w.Write([]byte(`{"code":"40001","msg":"permission denied","data":{}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	entryPrice := decimal.NewFromInt(1)
+	orderID, err := executor.PlaceOrderWithDetails(context.Background(), TradeDetails{
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		MarketType: "futures",
+		Leverage:   5,
+		AmountUSDT: decimal.NewFromInt(10),
+		EntryPrice: &entryPrice,
+	})
+
+	require.Error(t, err)
+	assert.Empty(t, orderID)
+	assert.Contains(t, err.Error(), "failed to sync futures leverage")
+}
+
+func TestBitgetOrderExecutor_FormatTradeNotification_UsesEffectiveLeverage(t *testing.T) {
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+
+	msg := executor.formatTradeNotification(TradeDetails{
+		Symbol:             "BTC/USDT",
+		Side:               "buy",
+		MarketType:         "futures",
+		TradeType:          "scalping",
+		Leverage:           5,
+		EffectiveLeverage:  7,
+		LeverageSyncStatus: "exchange synced",
+		AmountUSDT:         decimal.NewFromInt(100),
+	}, "ord-123")
+
+	assert.Contains(t, msg, "Futures (7x)")
+	assert.Contains(t, msg, "⚙️ Leverage: 7x (exchange synced)")
+	assert.NotContains(t, msg, "Futures (5x)")
 }
 
 func TestContractInfo(t *testing.T) {

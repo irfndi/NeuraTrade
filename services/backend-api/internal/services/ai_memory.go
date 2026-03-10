@@ -55,6 +55,13 @@ type TradePerformanceWindowStats struct {
 	AvgConfidence      float64
 }
 
+type TradeExpectancyStats struct {
+	SampleSize    int
+	Wins          int
+	Losses        int
+	NetExpectancy float64
+}
+
 func NewTradeMemory(db *sql.DB) (*TradeMemory, error) {
 	tm := &TradeMemory{db: db}
 	if err := tm.initTables(); err != nil {
@@ -496,6 +503,97 @@ func (tm *TradeMemory) getRealizedPnLWindowStats(
 	if stats.DecisiveTrades > 0 {
 		stats.DecisiveWinRatePct = (float64(stats.Wins) / float64(stats.DecisiveTrades)) * 100
 	}
+	return stats, true, nil
+}
+
+func (tm *TradeMemory) GetScopedExpectancyStats(
+	ctx context.Context,
+	symbol string,
+	action string,
+	lookbackHours int,
+	limit int,
+) (*TradeExpectancyStats, bool, error) {
+	scope, ok := scalpingAutonomyScopeFromContext(ctx)
+	if !ok || !hasRealizedPnLWindowScope(scope) {
+		return nil, false, nil
+	}
+	if lookbackHours <= 0 {
+		lookbackHours = 24 * 30
+	}
+	if limit <= 0 {
+		limit = 250
+	}
+
+	query := `
+		SELECT CAST(realized_pnl AS TEXT)
+		FROM realized_pnl_journal
+		WHERE closed_at >= $1
+	`
+	args := []interface{}{time.Now().UTC().Add(-time.Duration(lookbackHours) * time.Hour)}
+	if chatID := strings.TrimSpace(scope.ChatID); chatID != "" {
+		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
+		args = append(args, chatID)
+	}
+	if exchange := strings.TrimSpace(scope.Exchange); exchange != "" {
+		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
+		args = append(args, exchange)
+	}
+	if normalizedSymbol := normalizeSymbolForComparison(symbol); normalizedSymbol != "" {
+		query += fmt.Sprintf(" AND symbol = $%d", len(args)+1)
+		args = append(args, normalizedSymbol)
+	}
+	if normalizedAction := normalizeLifecycleSide(action); normalizedAction != "" {
+		query += fmt.Sprintf(" AND side = $%d", len(args)+1)
+		args = append(args, normalizedAction)
+	}
+	query += " ORDER BY closed_at DESC"
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := tm.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("query scoped expectancy stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	stats := &TradeExpectancyStats{}
+	sumWin := decimal.Zero
+	sumLoss := decimal.Zero
+	for rows.Next() {
+		var pnlRaw string
+		if err := rows.Scan(&pnlRaw); err != nil {
+			return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
+		}
+		pnl, err := decimal.NewFromString(strings.TrimSpace(pnlRaw))
+		if err != nil || pnl.IsZero() {
+			continue
+		}
+		if pnl.GreaterThan(decimal.Zero) {
+			stats.Wins++
+			sumWin = sumWin.Add(pnl)
+			continue
+		}
+		stats.Losses++
+		sumLoss = sumLoss.Add(pnl.Abs())
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("iterate scoped expectancy stats: %w", err)
+	}
+
+	stats.SampleSize = stats.Wins + stats.Losses
+	if stats.SampleSize == 0 {
+		return nil, false, nil
+	}
+	stats.NetExpectancy = calculateNetExpectancy(
+		stats.Wins,
+		stats.Losses,
+		sumWin.InexactFloat64(),
+		sumLoss.InexactFloat64(),
+	)
 	return stats, true, nil
 }
 

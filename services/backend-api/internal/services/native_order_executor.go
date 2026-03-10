@@ -15,25 +15,27 @@ import (
 
 // TradeDetails contains all information for a trade notification
 type TradeDetails struct {
-	Exchange          string
-	Symbol            string
-	Side              string
-	OrderType         string // market, limit
-	MarketType        string // spot, futures
-	AllowSpotFallback bool
-	Leverage          int // for futures
-	Amount            decimal.Decimal
-	AmountUSDT        decimal.Decimal
-	WalletPercent     float64
-	EntryPrice        *decimal.Decimal
-	TakeProfit        *decimal.Decimal
-	StopLoss          *decimal.Decimal
-	TradeType         string // scalping, arbitrage, swing, etc.
-	Confidence        float64
-	Reasoning         string
-	OrderID           string
-	IsPaperTrade      bool
-	ReduceOnly        bool // Must be true for PlaceRiskReductionOrderWithDetails
+	Exchange           string
+	Symbol             string
+	Side               string
+	OrderType          string // market, limit
+	MarketType         string // spot, futures
+	AllowSpotFallback  bool
+	Leverage           int // for futures
+	EffectiveLeverage  int
+	LeverageSyncStatus string
+	Amount             decimal.Decimal
+	AmountUSDT         decimal.Decimal
+	WalletPercent      float64
+	EntryPrice         *decimal.Decimal
+	TakeProfit         *decimal.Decimal
+	StopLoss           *decimal.Decimal
+	TradeType          string // scalping, arbitrage, swing, etc.
+	Confidence         float64
+	Reasoning          string
+	OrderID            string
+	IsPaperTrade       bool
+	ReduceOnly         bool // Must be true for PlaceRiskReductionOrderWithDetails
 }
 
 // NativeOrderExecutor implements ScalpingOrderExecutor using native CCXT service
@@ -134,8 +136,12 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 
 	// Market type string
 	marketStr := "Spot"
+	effectiveLeverage := d.EffectiveLeverage
+	if effectiveLeverage <= 0 {
+		effectiveLeverage = d.Leverage
+	}
 	if d.MarketType == "futures" {
-		marketStr = fmt.Sprintf("Futures (%dx)", d.Leverage)
+		marketStr = fmt.Sprintf("Futures (%dx)", effectiveLeverage)
 	}
 
 	var lines []string
@@ -158,6 +164,13 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 	lines = append(lines, fmt.Sprintf("%s Type: %s", tradeEmoji, caser.String(d.TradeType)))
 	lines = append(lines, fmt.Sprintf("📍 Market: %s", marketStr))
 	lines = append(lines, fmt.Sprintf("🏢 Exchange: %s", caser.String(d.Exchange)))
+	if d.MarketType == "futures" && effectiveLeverage > 0 {
+		leverageLine := fmt.Sprintf("⚙️ Leverage: %dx", effectiveLeverage)
+		if strings.TrimSpace(d.LeverageSyncStatus) != "" {
+			leverageLine = fmt.Sprintf("%s (%s)", leverageLine, d.LeverageSyncStatus)
+		}
+		lines = append(lines, leverageLine)
+	}
 	lines = append(lines, "")
 
 	// Position size

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
@@ -1681,6 +1682,9 @@ You analyze market data and make trading decisions. You have access to real-time
 4. Use futures with %dx leverage
 5. Always consider risk: set stop-loss and take-profit levels
 6. If uncertain, return action: "hold" with reasoning
+7. Never emit markdown, headings, bullets, or commentary outside the JSON object
+8. Keep reasoning concise (one short paragraph, <= 320 characters)
+9. For hold decisions, use symbol: "", size_pct: 0, stop_loss: null, take_profit: null
 
 ## Response Format
 Return JSON only:
@@ -2046,6 +2050,30 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 	}
 
 	if s.tradeMemory != nil {
+		const expectancyLookbackHours = 24 * 30
+		const expectancyQueryLimit = 250
+
+		if scoped, found, err := s.tradeMemory.GetScopedExpectancyStats(
+			ctx,
+			normalizedSymbol,
+			normalizedAction,
+			expectancyLookbackHours,
+			expectancyQueryLimit,
+		); err == nil && found {
+			return scoped.NetExpectancy, scoped.SampleSize, true
+		}
+		if normalizedAction != "" {
+			if scoped, found, err := s.tradeMemory.GetScopedExpectancyStats(
+				ctx,
+				normalizedSymbol,
+				"",
+				expectancyLookbackHours,
+				expectancyQueryLimit,
+			); err == nil && found {
+				return scoped.NetExpectancy, scoped.SampleSize, true
+			}
+		}
+
 		trades, err := s.tradeMemory.GetRecentTrades(ctx, 250)
 		if err == nil && len(trades) > 0 {
 			sumWin := 0.0
@@ -2789,6 +2817,8 @@ func classifyExecutionBlockCode(err error) string {
 	switch {
 	case strings.Contains(lower, "missing orderbook"):
 		return appautonomy.CandidateRejectMissingOrderbookSignal
+	case strings.Contains(lower, "leverage"):
+		return appautonomy.CandidateRejectAutonomyRuntime
 	case strings.Contains(lower, "connectivity") ||
 		strings.Contains(lower, "connection") ||
 		strings.Contains(lower, "disconnected") ||
@@ -2918,6 +2948,10 @@ func shouldDowngradeExecutionErrorToHold(err error) bool {
 		strings.Contains(msg, "parameter") && strings.Contains(msg, "does not exist") ||
 		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "request failed") ||
+		strings.Contains(msg, "failed to sync futures leverage") ||
+		strings.Contains(msg, "failed to get futures account") ||
+		strings.Contains(msg, "failed to set futures leverage") ||
+		strings.Contains(msg, "futures leverage verification mismatch") ||
 		strings.Contains(msg, "failed to get ticker") ||
 		strings.Contains(msg, "symbol cooldown active") ||
 		strings.Contains(msg, "symbol loss cooldown active") ||
@@ -2966,6 +3000,11 @@ Schema:
   "stop_loss": number|null,
   "take_profit": number|null
 }
+Rules:
+- Return exactly one JSON object and nothing else
+- Never include markdown, headings, commentary, or prose outside the object
+- For hold decisions use symbol:"", size_pct:0, stop_loss:null, take_profit:null
+- Keep reasoning concise and single-paragraph
 Do not include markdown or extra text.`,
 			},
 			{
@@ -3012,9 +3051,16 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 			return localDecision, nil
 		}
 	}
+	if inferred, inferErr := inferDecisionFromLooseText(raw); inferErr == nil {
+		log.Printf("[AI-SCALPING] Structured-output recovered via local decision inference")
+		return inferred, nil
+	}
 
 	lastErr := err
 	current := raw
+	if s.llmClient == nil {
+		return nil, lastErr
+	}
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		remaining, hasBudget := s.remainingRepairBudget(ctx)
 		if !hasBudget {
@@ -3031,6 +3077,10 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 		if parseErr == nil && isValidDecisionAction(decision.Action) {
 			log.Printf("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
 			return decision, nil
+		}
+		if inferred, inferErr := inferDecisionFromLooseText(repaired); inferErr == nil {
+			log.Printf("[AI-SCALPING] Structured-output retry recovered via local decision inference on attempt %d", attempt)
+			return inferred, nil
 		}
 		if parseErr == nil {
 			parseErr = fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
@@ -3103,6 +3153,268 @@ func repairDecisionJSONLocally(raw string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no JSON object candidate found in model response")
+}
+
+func inferDecisionFromLooseText(raw string) (*AITradingDecision, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("empty model response")
+	}
+
+	action := extractLooseDecisionAction(raw)
+	switch action {
+	case "hold":
+		confidence, confidenceKnown := extractLooseNumericField(raw, "confidence")
+		reasoning := extractLooseReasoning(raw)
+		decision := &AITradingDecision{
+			Action:          "hold",
+			Symbol:          "",
+			SizePercent:     0,
+			Confidence:      0,
+			Reasoning:       reasoning,
+			ReasonCategory:  normalizeHoldReasonCategory("", reasoning),
+			ConfidenceKnown: false,
+		}
+		if confidenceKnown {
+			decision.Confidence = normalizeLooseConfidence(confidence)
+			decision.ConfidenceKnown = true
+		}
+		return decision, nil
+	case "buy", "sell":
+		symbol, ok := extractLooseStringField(raw, "symbol")
+		if !ok || strings.TrimSpace(symbol) == "" {
+			return nil, fmt.Errorf("actionable local inference missing symbol")
+		}
+		sizePct, sizeKnown := extractLooseNumericField(raw, "size_pct")
+		confidence, confidenceKnown := extractLooseNumericField(raw, "confidence")
+		if !sizeKnown || !confidenceKnown {
+			return nil, fmt.Errorf("actionable local inference missing size_pct/confidence")
+		}
+		reasoning := extractLooseReasoning(raw)
+		decision := &AITradingDecision{
+			Action:          action,
+			Symbol:          symbol,
+			SizePercent:     sizePct,
+			Confidence:      normalizeLooseConfidence(confidence),
+			Reasoning:       reasoning,
+			ReasonCategory:  "",
+			ConfidenceKnown: true,
+		}
+		if stopLoss, ok := extractLooseDecimalField(raw, "stop_loss"); ok {
+			decision.StopLoss = &stopLoss
+		}
+		if takeProfit, ok := extractLooseDecimalField(raw, "take_profit"); ok {
+			decision.TakeProfit = &takeProfit
+		}
+		return decision, nil
+	default:
+		return nil, fmt.Errorf("no local action inference")
+	}
+}
+
+func normalizeLooseConfidence(value float64) float64 {
+	if value > 1 && value <= 100 {
+		value /= 100
+	}
+	return clampFloat(value, 0, 1)
+}
+
+func extractLooseDecisionAction(raw string) string {
+	if action, ok := extractLooseStringField(raw, "action"); ok {
+		action = strings.ToLower(strings.TrimSpace(action))
+		if isValidDecisionAction(action) {
+			return action
+		}
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case strings.Contains(lower, "recommended action: hold"),
+		strings.Contains(lower, "recommended action hold"),
+		strings.Contains(lower, "i should hold"),
+		strings.Contains(lower, "should hold"),
+		strings.Contains(lower, "return hold"),
+		strings.Contains(lower, "staying out"),
+		strings.Contains(lower, "stay out"),
+		strings.Contains(lower, "no trade"),
+		strings.Contains(lower, "i should wait"),
+		strings.Contains(lower, "waiting for stronger confirmation"),
+		strings.Contains(lower, "waiting for qualified setup"),
+		strings.Contains(lower, "i'm staying out"),
+		strings.Contains(lower, "preserve capital"):
+		return "hold"
+	default:
+		return ""
+	}
+}
+
+func extractLooseReasoning(raw string) string {
+	if reasoning, ok := extractLooseStringField(raw, "reasoning"); ok && strings.TrimSpace(reasoning) != "" {
+		return sanitizeDecisionReasoning(reasoning, 320)
+	}
+	if reasoning, ok := extractLooseStringField(raw, "reason"); ok && strings.TrimSpace(reasoning) != "" {
+		return sanitizeDecisionReasoning(reasoning, 320)
+	}
+	return sanitizeDecisionReasoning(raw, 320)
+}
+
+func extractLooseStringField(raw string, key string) (string, bool) {
+	value, ok := extractLooseFieldValue(raw, key)
+	if !ok {
+		return "", false
+	}
+	value = strings.TrimSpace(strings.Trim(value, "\"`"))
+	if value == "" || strings.EqualFold(value, "null") {
+		return "", false
+	}
+	return value, true
+}
+
+func extractLooseNumericField(raw string, key string) (float64, bool) {
+	value, ok := extractLooseFieldValue(raw, key)
+	if !ok {
+		return 0, false
+	}
+	value = strings.TrimSpace(strings.Trim(value, "\"`"))
+	if value == "" || strings.EqualFold(value, "null") {
+		return 0, false
+	}
+	if number, err := strconv.ParseFloat(value, 64); err == nil {
+		return number, true
+	}
+	candidate := make([]rune, 0, len(value))
+	for _, ch := range value {
+		if (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' {
+			candidate = append(candidate, ch)
+			continue
+		}
+		if len(candidate) > 0 {
+			break
+		}
+	}
+	if len(candidate) == 0 {
+		return 0, false
+	}
+	number, err := strconv.ParseFloat(string(candidate), 64)
+	if err != nil {
+		return 0, false
+	}
+	return number, true
+}
+
+func extractLooseDecimalField(raw string, key string) (decimal.Decimal, bool) {
+	value, ok := extractLooseFieldValue(raw, key)
+	if !ok {
+		return decimal.Zero, false
+	}
+	value = strings.TrimSpace(strings.Trim(value, "\"`"))
+	if value == "" || strings.EqualFold(value, "null") {
+		return decimal.Zero, false
+	}
+	if dec, err := decimal.NewFromString(value); err == nil {
+		return dec, true
+	}
+	if number, ok := extractLooseNumericField(raw, key); ok {
+		return decimal.NewFromFloat(number), true
+	}
+	return decimal.Zero, false
+}
+
+func extractLooseFieldValue(raw string, key string) (string, bool) {
+	normalizedKey := strings.ToLower(strings.TrimSpace(key))
+	if normalizedKey == "" {
+		return "", false
+	}
+	if value, ok := extractLooseFieldValueWithMarker(raw, `"`+normalizedKey+`"`, false); ok {
+		return value, true
+	}
+	return extractLooseFieldValueWithMarker(raw, normalizedKey, true)
+}
+
+func extractLooseFieldValueWithMarker(raw string, marker string, requireBoundary bool) (string, bool) {
+	lowerRaw := strings.ToLower(raw)
+	searchStart := 0
+	for searchStart < len(lowerRaw) {
+		relativeIdx := strings.Index(lowerRaw[searchStart:], marker)
+		if relativeIdx < 0 {
+			return "", false
+		}
+		idx := searchStart + relativeIdx
+		if requireBoundary {
+			if idx > 0 && isLooseFieldIdentifierRune(rune(lowerRaw[idx-1])) {
+				searchStart = idx + len(marker)
+				continue
+			}
+			end := idx + len(marker)
+			if end < len(lowerRaw) && isLooseFieldIdentifierRune(rune(lowerRaw[end])) {
+				searchStart = end
+				continue
+			}
+		}
+
+		remainder := raw[idx+len(marker):]
+		colon := strings.Index(remainder, ":")
+		if colon < 0 || strings.TrimSpace(remainder[:colon]) != "" {
+			searchStart = idx + len(marker)
+			continue
+		}
+
+		remainder = strings.TrimLeft(remainder[colon+1:], " \t\r\n")
+		if remainder == "" {
+			return "", false
+		}
+		if remainder[0] == '"' {
+			return readLooseQuotedValue(remainder[1:]), true
+		}
+		return readLooseTokenValue(remainder), true
+	}
+	return "", false
+}
+
+func isLooseFieldIdentifierRune(ch rune) bool {
+	return ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch)
+}
+
+func readLooseQuotedValue(raw string) string {
+	var builder strings.Builder
+	escaped := false
+	for _, ch := range raw {
+		if escaped {
+			builder.WriteRune(ch)
+			escaped = false
+			continue
+		}
+		switch ch {
+		case '\\':
+			escaped = true
+		case '"':
+			return builder.String()
+		default:
+			builder.WriteRune(ch)
+		}
+	}
+	return builder.String()
+}
+
+func readLooseTokenValue(raw string) string {
+	end := 0
+	for end < len(raw) {
+		switch raw[end] {
+		case ',', '}', '\n', '\r':
+			return strings.TrimSpace(raw[:end])
+		default:
+			end++
+		}
+	}
+	return strings.TrimSpace(raw)
+}
+
+func sanitizeDecisionReasoning(raw string, maxLen int) string {
+	reasoning := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if maxLen > 0 && len(reasoning) > maxLen {
+		reasoning = reasoning[:maxLen-3] + "..."
+	}
+	return reasoning
 }
 
 func extractBalancedJSONObject(raw string) (string, bool) {
