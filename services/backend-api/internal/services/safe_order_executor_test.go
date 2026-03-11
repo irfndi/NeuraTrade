@@ -71,6 +71,20 @@ func (m *mockSafetyChecker) CanExecuteTrade(ctx context.Context, chatID, exchang
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
+type mockLeverageSafetyChecker struct {
+	mock.Mock
+}
+
+func (m *mockLeverageSafetyChecker) CanExecuteTrade(ctx context.Context, chatID, exchange, symbol, marketType string, size decimal.Decimal) (bool, string, error) {
+	args := m.Called(ctx, chatID, exchange, symbol, marketType, size)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
+func (m *mockLeverageSafetyChecker) CanExecuteTradeWithLeverage(ctx context.Context, chatID, exchange, symbol, marketType string, leverage int, size decimal.Decimal) (bool, string, error) {
+	args := m.Called(ctx, chatID, exchange, symbol, marketType, leverage, size)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
 func TestSafeOrderExecutor_AllowsWhenNoSafetyService(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	safeExec := NewSafeOrderExecutor(mockExecutor, nil, "test-chat")
@@ -282,6 +296,80 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_BypassesZeroMaxSafetyForBitgetF
 	assert.Equal(t, "order-fallback", orderID)
 	mockExecutor.AssertExpectations(t)
 	mockSafety.AssertExpectations(t)
+}
+
+func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenAmountExceedsBoundedCap(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	details := TradeDetails{
+		Exchange:   "bitget",
+		MarketType: "futures",
+		Symbol:     "OPN/USDT:USDT",
+		AmountUSDT: decimal.NewFromFloat(100.0),
+	}
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", decimal.NewFromFloat(100.0)).
+		Return(false, "Position size 100.00 exceeds maximum allowed 0.00 (throttled to 0%)", nil)
+
+	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "portfolio safety blocked")
+	assert.Empty(t, orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrderWithDetails")
+	mockSafety.AssertExpectations(t)
+}
+
+func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenMaximumAllowedIsNonZero(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	details := TradeDetails{
+		Exchange:   "bitget",
+		MarketType: "futures",
+		Symbol:     "OPN/USDT:USDT",
+		AmountUSDT: decimal.NewFromFloat(6.0),
+	}
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", decimal.NewFromFloat(6.0)).
+		Return(false, "Position size 6.00 exceeds maximum allowed 0.50 (throttled to 0%)", nil)
+
+	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "portfolio safety blocked")
+	assert.Empty(t, orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrderWithDetails")
+	mockSafety.AssertExpectations(t)
+}
+
+func TestSafeOrderExecutor_PlaceOrderWithDetails_UsesLeverageAwareSafetyWithoutRedundantBaseCheck(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockLeverageSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	details := TradeDetails{
+		Exchange:   "bitget",
+		MarketType: "futures",
+		Symbol:     "ETH/USDT",
+		Leverage:   5,
+		AmountUSDT: decimal.NewFromFloat(75),
+	}
+
+	mockSafety.On("CanExecuteTradeWithLeverage", mock.Anything, "test-chat", "bitget", "ETH/USDT", "futures", 5, decimal.NewFromFloat(75)).
+		Return(true, "", nil)
+	mockExecutor.On("PlaceOrderWithDetails", mock.Anything, details).Return("order-789", nil)
+
+	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "order-789", orderID)
+	mockExecutor.AssertExpectations(t)
+	mockSafety.AssertExpectations(t)
+	mockSafety.AssertNotCalled(t, "CanExecuteTrade", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestSafeOrderExecutor_PlaceOrderWithDetails_AllowsWhenSafetyPasses(t *testing.T) {

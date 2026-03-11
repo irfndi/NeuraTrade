@@ -2357,6 +2357,12 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	result["risk_expectancy"] = riskExpectancy
 	result["risk_expectancy_gross"] = riskExpectancyGross
 	result["risk_fee_drag_expectancy"] = riskFeeDragExpectancy
+	result["risk_expectancy_summary"] = fmt.Sprintf(
+		"net %.6f | gross %.6f | fee drag %.6f",
+		riskExpectancy,
+		riskExpectancyGross,
+		riskFeeDragExpectancy,
+	)
 	result["runtime_ai_meta_hold_promotions"] = aiMetaHoldPromotions
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions

@@ -63,12 +63,14 @@ func shouldBypassZeroMaxSafety(details TradeDetails, reason string) bool {
 	if !strings.EqualFold(strings.TrimSpace(details.MarketType), "futures") {
 		return false
 	}
-	if details.AmountUSDT.LessThan(appautonomy.BitgetFuturesMinNotional()) {
+	minNotional := appautonomy.BitgetFuturesMinNotional()
+	maxBypassAmount := minNotional.Mul(decimal.NewFromFloat(1.5))
+	if details.AmountUSDT.LessThan(minNotional) || details.AmountUSDT.GreaterThan(maxBypassAmount) {
 		return false
 	}
 	lowerReason := strings.ToLower(strings.TrimSpace(reason))
-	hasZeroMax := strings.Contains(lowerReason, "maximum allowed 0")
-	hasZeroThrottle := strings.Contains(lowerReason, "throttled to 0")
+	hasZeroMax := strings.Contains(lowerReason, "maximum allowed 0.00")
+	hasZeroThrottle := strings.Contains(lowerReason, "throttled to 0%")
 	return hasZeroMax && hasZeroThrottle
 }
 
@@ -140,16 +142,25 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 		return "", fmt.Errorf("invalid order size: amount_usdt must be positive")
 	}
 
-	allowed, reason, err := s.checkSafety(ctx, details.Exchange, details.Symbol, details.MarketType, amount)
-	if leverageAware, ok := s.safetyService.(interface {
+	s.mu.RLock()
+	chatID := s.chatID
+	safetyService := s.safetyService
+	s.mu.RUnlock()
+	if scopedChatID := scalpingChatIDFromContext(ctx); scopedChatID != "" {
+		chatID = scopedChatID
+	}
+
+	if safetyService == nil {
+		return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+	}
+
+	allowed := false
+	reason := ""
+	var err error
+
+	if leverageAware, ok := safetyService.(interface {
 		CanExecuteTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (bool, string, error)
 	}); ok {
-		s.mu.RLock()
-		chatID := s.chatID
-		s.mu.RUnlock()
-		if scopedChatID := scalpingChatIDFromContext(ctx); scopedChatID != "" {
-			chatID = scopedChatID
-		}
 		allowed, reason, err = leverageAware.CanExecuteTradeWithLeverage(
 			ctx,
 			chatID,
@@ -159,6 +170,8 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 			details.Leverage,
 			amount,
 		)
+	} else {
+		allowed, reason, err = safetyService.CanExecuteTrade(ctx, chatID, details.Exchange, details.Symbol, details.MarketType, amount)
 	}
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
