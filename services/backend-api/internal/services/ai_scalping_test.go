@@ -1985,7 +1985,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RejectsIneligibleSigna
 	}
 
 	for _, signal := range tests {
-		_, _, ok := svc.deterministicFallbackCandidate(signal, TradingPortfolio{}, false)
+		_, _, ok := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, false)
 		assert.False(t, ok)
 	}
 }
@@ -2008,7 +2008,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RespectsConfidenceAndP
 		OrderBookImbalance: 0.36,
 		RangePosition24h:   50,
 	}
-	_, _, ok := svc.deterministicFallbackCandidate(lowConfidenceSignal, TradingPortfolio{}, false)
+	_, _, ok := svc.deterministicFallbackCandidate(context.Background(), lowConfidenceSignal, TradingPortfolio{}, false)
 	assert.False(t, ok)
 
 	eligibleSignal := aiMarketSignal{
@@ -2021,7 +2021,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RespectsConfidenceAndP
 		OrderBookImbalance: 0.58,
 		RangePosition24h:   18,
 	}
-	decision, _, ok := svc.deterministicFallbackCandidate(eligibleSignal, TradingPortfolio{
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), eligibleSignal, TradingPortfolio{
 		PhaseMaxCapitalPct: 0.25,
 	}, false)
 	assert.True(t, ok)
@@ -2085,7 +2085,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesConfigOverrides(t 
 		RangePosition24h:   18,
 	}
 
-	decision, confidence, ok := svc.deterministicFallbackCandidate(signal, TradingPortfolio{}, false)
+	decision, confidence, ok := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, false)
 	assert.False(t, ok)
 	assert.Nil(t, decision)
 	assert.Zero(t, confidence)
@@ -2107,7 +2107,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AlignsWithPolicySpread
 		},
 	}
 
-	decision, _, ok := svc.deterministicFallbackCandidate(aiMarketSignal{
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
 		Symbol:             "BOME/USDT",
 		Price:              1,
 		High24h:            1.1,
@@ -2138,7 +2138,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_BlocksWeakProjectedNet
 		},
 	}
 
-	decision, _, ok := svc.deterministicFallbackCandidate(aiMarketSignal{
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
 		Symbol:             "DOGE/USDT",
 		Price:              100,
 		High24h:            100.5,
@@ -2167,7 +2167,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsStrongProjectedN
 		},
 	}
 
-	decision, _, ok := svc.deterministicFallbackCandidate(aiMarketSignal{
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
 		Symbol:             "BOME/USDT",
 		Price:              1,
 		High24h:            1.1,
@@ -2189,6 +2189,68 @@ func TestFallbackProjectedNetEdgePct(t *testing.T) {
 	assert.InDelta(t, 0.06, fallbackProjectedNetEdgePct(0.22, 0.0040), 0.0001)
 }
 
+func TestAIScalpingService_DeterministicFallbackCandidate_BlocksNegativeSymbolExpectancyForMicro(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE realized_pnl_journal (
+		id TEXT PRIMARY KEY,
+		order_id TEXT NOT NULL UNIQUE,
+		chat_id TEXT,
+		exchange TEXT NOT NULL,
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		filled_amount NUMERIC NOT NULL DEFAULT 0,
+		entry_price NUMERIC NOT NULL DEFAULT 0,
+		exit_price NUMERIC NOT NULL DEFAULT 0,
+		realized_pnl NUMERIC NOT NULL DEFAULT 0,
+		fees NUMERIC NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT 'autonomous',
+		closed_at TIMESTAMP NOT NULL,
+		created_at TIMESTAMP NOT NULL
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_1', 'ord_1', 'chat-1', 'bitget', 'OPN/USDT', 'buy', 1, 100, 99, -1.0, -0.1, 'autonomous', datetime('now'), datetime('now')),
+		('rp_2', 'ord_2', 'chat-1', 'bitget', 'OPN/USDT', 'buy', 1, 100, 99, -0.8, -0.1, 'autonomous', datetime('now'), datetime('now')),
+		('rp_3', 'ord_3', 'chat-1', 'bitget', 'OPN/USDT', 'buy', 1, 100, 99, -0.6, -0.1, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			MinExpectancyN:     5,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+		tradeMemory: tm,
+	}
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{ChatID: "chat-1", Exchange: "bitget"})
+
+	decision, _, ok := svc.deterministicFallbackCandidate(ctx, aiMarketSignal{
+		Symbol:             "OPN/USDT",
+		Price:              1,
+		High24h:            1.1,
+		Low24h:             0.9,
+		Volume24h:          1500000,
+		BidAskSpread:       0.08,
+		OrderBookImbalance: 0.50,
+		RangePosition24h:   20,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	assert.False(t, ok)
+	assert.Nil(t, decision)
+}
+
 func TestAIScalpingService_DeterministicFallbackDecision_RelaxedPassSelectsCandidate(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{
@@ -2205,7 +2267,7 @@ func TestAIScalpingService_DeterministicFallbackDecision_RelaxedPassSelectsCandi
 		},
 	}
 
-	decision := svc.deterministicFallbackDecision([]aiMarketSignal{{
+	decision := svc.deterministicFallbackDecision(context.Background(), []aiMarketSignal{{
 		Symbol:             "BOME/USDT",
 		Price:              1,
 		High24h:            1.1,
@@ -2248,7 +2310,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_ClampsNegativeVolume(t
 		RangePosition24h:   5,
 	}
 
-	decision, confidence, ok := svc.deterministicFallbackCandidate(signal, TradingPortfolio{}, false)
+	decision, confidence, ok := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, false)
 	require.True(t, ok)
 	require.NotNil(t, decision)
 	assert.False(t, math.IsNaN(confidence) || math.IsInf(confidence, 0))
@@ -2305,7 +2367,7 @@ func TestAIScalpingService_GetAIDecision_ClassifiesUnsupportedActionAsParseContr
 
 func TestAIScalpingService_DeterministicFallbackDecision_NoCandidateUsesRuntimeHold(t *testing.T) {
 	svc := &AIScalpingService{}
-	decision := svc.deterministicFallbackDecision([]aiMarketSignal{
+	decision := svc.deterministicFallbackDecision(context.Background(), []aiMarketSignal{
 		{
 			Symbol:             "BTC/USDT",
 			Price:              100,

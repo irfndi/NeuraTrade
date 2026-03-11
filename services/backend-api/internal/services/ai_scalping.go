@@ -1128,7 +1128,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	if shouldPromoteGenericHoldToFallback(decision, funnel) {
 		log.Printf("[AI-SCALPING] Promoting generic hold into deterministic fallback because %d viable candidate(s) remain", funnel.CandidateViableCount)
 		s.recordMetaHoldPromotion()
-		decision = s.deterministicFallbackDecision(signals, portfolio)
+		decision = s.deterministicFallbackDecision(ctx, signals, portfolio)
 		decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
 		decision.Symbol = normalizeSymbolForComparison(decision.Symbol)
 	}
@@ -1728,7 +1728,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 			s.getLatestFailoverAttemptInfo(),
 		)
 		log.Printf("[AI-SCALPING] LLM completion failed: %v", err)
-		return s.deterministicFallbackDecision(signals, portfolio), nil
+		return s.deterministicFallbackDecision(ctx, signals, portfolio), nil
 	}
 
 	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
@@ -1750,7 +1750,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 				string(resp.Provider),
 				s.getLatestFailoverAttemptInfo(),
 			)
-			return s.deterministicFallbackDecision(signals, portfolio), nil
+			return s.deterministicFallbackDecision(ctx, signals, portfolio), nil
 		}
 	}
 	if decision.Action == "hold" {
@@ -2765,12 +2765,12 @@ func validateRecoveredDecisionContract(decision *AITradingDecision) error {
 	return nil
 }
 
-func (s *AIScalpingService) deterministicFallbackDecision(signals []aiMarketSignal, portfolio TradingPortfolio) *AITradingDecision {
+func (s *AIScalpingService) deterministicFallbackDecision(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) *AITradingDecision {
 	bestDecision := (*AITradingDecision)(nil)
 	bestScore := 0.0
 
 	for _, signal := range signals {
-		decision, score, ok := s.deterministicFallbackCandidate(signal, portfolio, false)
+		decision, score, ok := s.deterministicFallbackCandidate(ctx, signal, portfolio, false)
 		if !ok {
 			continue
 		}
@@ -2792,7 +2792,7 @@ func (s *AIScalpingService) deterministicFallbackDecision(signals []aiMarketSign
 	}
 
 	for _, signal := range signals {
-		decision, score, ok := s.deterministicFallbackCandidate(signal, portfolio, true)
+		decision, score, ok := s.deterministicFallbackCandidate(ctx, signal, portfolio, true)
 		if !ok {
 			continue
 		}
@@ -2819,6 +2819,7 @@ func (s *AIScalpingService) deterministicFallbackDecision(signals []aiMarketSign
 }
 
 func (s *AIScalpingService) deterministicFallbackCandidate(
+	ctx context.Context,
 	signal aiMarketSignal,
 	portfolio TradingPortfolio,
 	relaxed bool,
@@ -2902,6 +2903,9 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if confidence < clampFloat(minConfidenceFloor, 0.05, 0.99) {
 		return nil, 0, false
 	}
+	if !s.fallbackSymbolExpectancyAllowed(ctx, signal.Symbol, action, portfolio) {
+		return nil, 0, false
+	}
 	if portfolio.NonExecutableDueToWallet {
 		return nil, 0, false
 	}
@@ -2975,6 +2979,24 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		StopLoss:        &stopLoss,
 		TakeProfit:      &takeProfit,
 	}, score, true
+}
+
+func (s *AIScalpingService) fallbackSymbolExpectancyAllowed(ctx context.Context, symbol, action string, portfolio TradingPortfolio) bool {
+	if s.tradeMemory == nil {
+		return true
+	}
+	stats, found, err := s.tradeMemory.GetScopedExpectancyStats(ctx, symbol, action, 0, 0)
+	if err != nil || !found || stats == nil {
+		return true
+	}
+	minimumSample := 5
+	if strings.EqualFold(strings.TrimSpace(portfolio.AccountTier), appautonomy.AccountTierMicro) {
+		minimumSample = 3
+	}
+	if stats.SampleSize < minimumSample {
+		return true
+	}
+	return stats.NetExpectancy > 0
 }
 
 func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct float64) float64 {
