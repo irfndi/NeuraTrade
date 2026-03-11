@@ -2124,6 +2124,71 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AlignsWithPolicySpread
 	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
 }
 
+func TestAIScalpingService_DeterministicFallbackCandidate_BlocksWeakProjectedNetEdgeForMicro(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(aiMarketSignal{
+		Symbol:             "DOGE/USDT",
+		Price:              100,
+		High24h:            100.5,
+		Low24h:             99.5,
+		Volume24h:          1500000,
+		BidAskSpread:       0.22,
+		OrderBookImbalance: 0.60,
+		RangePosition24h:   18,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	assert.False(t, ok)
+	assert.Nil(t, decision)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsStrongProjectedNetEdgeForMicro(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(aiMarketSignal{
+		Symbol:             "BOME/USDT",
+		Price:              1,
+		High24h:            1.1,
+		Low24h:             0.9,
+		Volume24h:          1500000,
+		BidAskSpread:       0.139,
+		OrderBookImbalance: 0.368,
+		RangePosition24h:   44.2,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Contains(t, decision.Reasoning, "projected net edge")
+}
+
+func TestFallbackProjectedNetEdgePct(t *testing.T) {
+	assert.InDelta(t, 1.66, fallbackProjectedNetEdgePct(0.14, 0.0192), 0.0001)
+	assert.InDelta(t, 0.06, fallbackProjectedNetEdgePct(0.22, 0.0040), 0.0001)
+}
+
 func TestAIScalpingService_DeterministicFallbackDecision_RelaxedPassSelectsCandidate(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{

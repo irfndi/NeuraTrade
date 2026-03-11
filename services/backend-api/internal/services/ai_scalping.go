@@ -64,6 +64,9 @@ const (
 	maxAIScalpingMaxBidAskSpreadPct = 5.0
 	defaultOrderBookPairsBase       = 4
 	defaultAutoExpandThreshold      = 12
+	defaultFallbackRoundTripFeePct  = 0.12
+	microFallbackMinNetEdgePct      = 0.35
+	standardFallbackMinNetEdgePct   = 0.20
 )
 
 type DeterministicFallbackConfig struct {
@@ -2929,6 +2932,11 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		riskPct = clampFloat(rangePct*0.20, 0.004, 0.012)
 	}
 	rewardPct := clampFloat(riskPct*1.6, 0.006, 0.02)
+	projectedNetEdgePct := fallbackProjectedNetEdgePct(signal.BidAskSpread, rewardPct)
+	requiredNetEdgePct := fallbackRequiredNetEdgePct(portfolio, s.config.MinExpectancyEdge)
+	if projectedNetEdgePct < requiredNetEdgePct {
+		return nil, 0, false
+	}
 
 	stopLoss := decimal.Zero
 	takeProfit := decimal.Zero
@@ -2948,11 +2956,12 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	}
 
 	reason := fmt.Sprintf(
-		"deterministic fallback: %s pressure %.3f with spread %.3f%% and range position %.1f%%",
+		"deterministic fallback: %s pressure %.3f with spread %.3f%%, range position %.1f%%, projected net edge %.3f%%",
 		action,
 		signal.OrderBookImbalance,
 		signal.BidAskSpread,
 		signal.RangePosition24h,
+		projectedNetEdgePct,
 	)
 
 	return &AITradingDecision{
@@ -2966,6 +2975,21 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		StopLoss:        &stopLoss,
 		TakeProfit:      &takeProfit,
 	}, score, true
+}
+
+func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct float64) float64 {
+	return rewardPct*100 - spreadPct - defaultFallbackRoundTripFeePct
+}
+
+func fallbackRequiredNetEdgePct(portfolio TradingPortfolio, minExpectancyEdge float64) float64 {
+	required := standardFallbackMinNetEdgePct
+	if strings.EqualFold(strings.TrimSpace(portfolio.AccountTier), appautonomy.AccountTierMicro) {
+		required = microFallbackMinNetEdgePct
+	}
+	if minExpectancyEdge > required {
+		required = minExpectancyEdge
+	}
+	return required
 }
 
 func isDecisionContractValidationError(decision *AITradingDecision, err error) bool {
