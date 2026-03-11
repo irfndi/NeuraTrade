@@ -1582,6 +1582,8 @@ func TestAIScalpingService_ExecuteTradingCycle_PromotesGenericHoldToFallbackWhen
 	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
 	assert.True(t, decision.CandidateFunnelKnown)
 	assert.Equal(t, 1, decision.CandidateFunnel.CandidateViableCount)
+	diagnostics := svc.RuntimeDiagnostics()
+	assert.Equal(t, 1, diagnostics["meta_hold_promotions"])
 }
 
 func TestShouldPromoteGenericHoldToFallback_PlaceholderReasoning(t *testing.T) {

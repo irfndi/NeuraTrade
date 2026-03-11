@@ -4560,6 +4560,7 @@ func applyAIScalpingRuntimeSnapshot(quest *Quest, runtime map[string]interface{}
 	if raw, ok := runtime["last_error_at"].(string); ok {
 		quest.Checkpoint["runtime_ai_last_error_at"] = raw
 	}
+	quest.Checkpoint["runtime_ai_meta_hold_promotions"] = checkpointInt(runtime["meta_hold_promotions"])
 
 	failoverAttempted := checkpointBool(runtime["failover_attempted"])
 	failoverSucceeded := checkpointBool(runtime["failover_succeeded"])

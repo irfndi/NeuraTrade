@@ -912,6 +912,9 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if riskFeeDrag, ok := diagnostics["risk_fee_drag_expectancy"]; ok {
 			details["risk_fee_drag_expectancy"] = fmt.Sprintf("%v", riskFeeDrag)
 		}
+		if metaPromotions, ok := diagnostics["runtime_ai_meta_hold_promotions"]; ok {
+			details["runtime_ai_meta_hold_promotions"] = fmt.Sprintf("%v", metaPromotions)
+		}
 		details["candidate_viable_count"] = fmt.Sprintf("%d", candidateViableCount)
 		if rolloutStageCurrent != "" {
 			details["rollout_stage_current"] = rolloutStageCurrent

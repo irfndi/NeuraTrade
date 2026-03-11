@@ -392,6 +392,9 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if feeDrag, ok := chatRuntime["risk_fee_drag_expectancy"]; ok {
 			response["risk_fee_drag_expectancy"] = feeDrag
 		}
+		if metaPromotions, ok := chatRuntime["runtime_ai_meta_hold_promotions"]; ok {
+			response["runtime_ai_meta_hold_promotions"] = metaPromotions
+		}
 		if source, ok := chatRuntime["risk_lock_source"].(string); ok && strings.TrimSpace(source) != "" {
 			response["risk_lock_source"] = strings.TrimSpace(source)
 		}

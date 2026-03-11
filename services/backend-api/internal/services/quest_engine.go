@@ -1984,6 +1984,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		aiFailoverAttempts             int
 		aiFailoverSuccesses            int
 		aiFailoverFailures             int
+		aiMetaHoldPromotions           int
 		executionProgressAt            time.Time
 		executionStage                 string
 		executionLockHeld              bool
@@ -2262,6 +2263,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		aiFailoverAttempts = maxInt(aiFailoverAttempts, readQuestMetricInt(cp["runtime_ai_window_failover_attempts"]))
 		aiFailoverSuccesses = maxInt(aiFailoverSuccesses, readQuestMetricInt(cp["runtime_ai_window_failover_successes"]))
 		aiFailoverFailures = maxInt(aiFailoverFailures, readQuestMetricInt(cp["runtime_ai_window_failover_failures"]))
+		aiMetaHoldPromotions = maxInt(aiMetaHoldPromotions, readQuestMetricInt(cp["runtime_ai_meta_hold_promotions"]))
 		aiCircuitTrips = maxInt(aiCircuitTrips, readQuestMetricInt(cp["runtime_ai_circuit_trips"]))
 
 		if ts := readCheckpointTime(cp["runtime_ai_window_started_at"]); ts.After(aiWindowStarted) {
@@ -2355,6 +2357,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	result["risk_expectancy"] = riskExpectancy
 	result["risk_expectancy_gross"] = riskExpectancyGross
 	result["risk_fee_drag_expectancy"] = riskFeeDragExpectancy
+	result["runtime_ai_meta_hold_promotions"] = aiMetaHoldPromotions
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions
 	result["state_drift_count"] = stateDriftPositions

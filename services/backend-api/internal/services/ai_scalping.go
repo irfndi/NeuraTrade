@@ -716,6 +716,7 @@ type AIScalpingRuntimeState struct {
 	LastErrorAt            time.Time `json:"last_error_at"`
 	LastSuccessAt          time.Time `json:"last_success_at"`
 	LastReasonCategory     string    `json:"last_reason_category"`
+	MetaHoldPromotions     int       `json:"meta_hold_promotions"`
 	FailoverAttempted      bool      `json:"failover_attempted"`
 	FailoverSucceeded      bool      `json:"failover_succeeded"`
 	FailoverProviders      []string  `json:"failover_providers"`
@@ -875,6 +876,7 @@ func (s *AIScalpingService) RuntimeDiagnostics() map[string]interface{} {
 		"last_error_at":            "",
 		"last_success_at":          "",
 		"last_reason_category":     s.runtimeState.LastReasonCategory,
+		"meta_hold_promotions":     s.runtimeState.MetaHoldPromotions,
 		"failover_attempted":       s.runtimeState.FailoverAttempted,
 		"failover_succeeded":       s.runtimeState.FailoverSucceeded,
 		"failover_providers":       append([]string(nil), s.runtimeState.FailoverProviders...),
@@ -1015,6 +1017,12 @@ func (s *AIScalpingService) updateRuntimeState(
 	s.runtimeState.FailedProviders = append([]string(nil), failoverInfo.FailedProviders...)
 }
 
+func (s *AIScalpingService) recordMetaHoldPromotion() {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.runtimeState.MetaHoldPromotions++
+}
+
 func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptInfo {
 	type statsProvider interface {
 		Stats() llm.FailoverStats
@@ -1116,6 +1124,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	log.Printf("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
 	if shouldPromoteGenericHoldToFallback(decision, funnel) {
 		log.Printf("[AI-SCALPING] Promoting generic hold into deterministic fallback because %d viable candidate(s) remain", funnel.CandidateViableCount)
+		s.recordMetaHoldPromotion()
 		decision = s.deterministicFallbackDecision(signals, portfolio)
 		decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
 		decision.Symbol = normalizeSymbolForComparison(decision.Symbol)
