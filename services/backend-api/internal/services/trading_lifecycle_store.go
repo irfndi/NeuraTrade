@@ -75,6 +75,7 @@ type LifecyclePerformanceSummary struct {
 	Trades      int
 	Wins        int
 	Losses      int
+	Breakeven   int
 	RealizedPnL decimal.Decimal
 	BestTrade   decimal.Decimal
 	WorstTrade  decimal.Decimal
@@ -1268,11 +1269,12 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 	query := `
 		SELECT
 			COUNT(*),
-			COALESCE(SUM(realized_pnl), 0),
-			COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(MAX(realized_pnl), 0),
-			COALESCE(MIN(realized_pnl), 0)
+			COALESCE(SUM(realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END < 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(MAX(realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END), 0),
+			COALESCE(MIN(realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END), 0)
 		FROM realized_pnl_journal
 		WHERE closed_at >= $1
 	`
@@ -1289,11 +1291,13 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 	var summary LifecyclePerformanceSummary
 	var wins int64
 	var losses int64
+	var breakeven int64
 	if err := s.db.QueryRow(ctx, query, args...).Scan(
 		&summary.Trades,
 		&summary.RealizedPnL,
 		&wins,
 		&losses,
+		&breakeven,
 		&summary.BestTrade,
 		&summary.WorstTrade,
 	); err != nil {
@@ -1301,6 +1305,7 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 	}
 	summary.Wins = int(wins)
 	summary.Losses = int(losses)
+	summary.Breakeven = int(breakeven)
 	if summary.Trades == 0 {
 		summary.BestTrade = decimal.Zero
 		summary.WorstTrade = decimal.Zero

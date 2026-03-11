@@ -116,6 +116,7 @@ func TestTradingLifecycleStore_GetRealizedPerformanceAndOpenOrders(t *testing.T)
 		EntryPrice:  decimal.NewFromFloat(1.0),
 		ExitPrice:   decimal.NewFromFloat(1.03),
 		RealizedPnL: decimal.NewFromFloat(0.15),
+		Fees:        decimal.NewFromFloat(-0.01),
 		ClosedAt:    now.Add(-20 * time.Minute),
 	}))
 	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
@@ -129,7 +130,22 @@ func TestTradingLifecycleStore_GetRealizedPerformanceAndOpenOrders(t *testing.T)
 		EntryPrice:  decimal.NewFromFloat(0.2),
 		ExitPrice:   decimal.NewFromFloat(0.19),
 		RealizedPnL: decimal.NewFromFloat(-0.08),
+		Fees:        decimal.NewFromFloat(-0.02),
 		ClosedAt:    now.Add(-30 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "closed-ord-flat",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "XRP/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(5),
+		EntryPrice:  decimal.NewFromFloat(0.3),
+		ExitPrice:   decimal.NewFromFloat(0.3),
+		RealizedPnL: decimal.Zero,
+		Fees:        decimal.Zero,
+		ClosedAt:    now.Add(-25 * time.Minute),
 	}))
 	// Different chat, excluded by filter.
 	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
@@ -152,12 +168,13 @@ func TestTradingLifecycleStore_GetRealizedPerformanceAndOpenOrders(t *testing.T)
 
 	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
 	require.NoError(t, err)
-	assert.Equal(t, 2, perf.Trades)
+	assert.Equal(t, 3, perf.Trades)
 	assert.Equal(t, 1, perf.Wins)
 	assert.Equal(t, 1, perf.Losses)
-	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(0.07)))
-	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(0.15)))
-	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(-0.08)))
+	assert.Equal(t, 1, perf.Breakeven)
+	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(0.04)))
+	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(0.14)))
+	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(-0.10)))
 }
 
 func TestTradingLifecycleStore_GetRealizedReturnSeries(t *testing.T) {

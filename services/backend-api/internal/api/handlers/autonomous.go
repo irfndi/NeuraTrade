@@ -1201,8 +1201,9 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 	risk := services.ComputeRiskAdjustedMetrics(returns)
 
 	winRate := 0.0
-	if perf.Trades > 0 {
-		winRate = (float64(perf.Wins) / float64(perf.Trades)) * 100
+	decisiveTrades := perf.Wins + perf.Losses
+	if decisiveTrades > 0 {
+		winRate = (float64(perf.Wins) / float64(decisiveTrades)) * 100
 	}
 	return PerformanceSummaryResponse{
 		Timeframe:  window,
@@ -1214,7 +1215,7 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 		Trades:     perf.Trades,
 		BestTrade:  perf.BestTrade.String(),
 		WorstTrade: perf.WorstTrade.String(),
-		Note:       "Exchange-reconciled realized PnL (lifecycle journal)",
+		Note:       fmt.Sprintf("Exchange-reconciled net realized PnL (fees included); win rate excludes %d breakeven trade(s)", perf.Breakeven),
 	}, true
 }
 
