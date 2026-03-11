@@ -4061,15 +4061,19 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			losses,
 			breakeven,
 		)
-		h.notifyScalpingDecision(ctx, quest.Metadata["chat_id"], AIReasoningNotification{
-			DecisionType: "pnl_reconciliation",
-			Summary:      summary,
-			Confidence:   1,
-			Reasons: []string{
-				"Closed orders were synced from exchange state",
-			},
-			Action: "record",
-		})
+		now := time.Now().UTC()
+		if shouldNotifyPnLReconciliation(quest, summary, now) {
+			h.notifyScalpingDecision(ctx, quest.Metadata["chat_id"], AIReasoningNotification{
+				DecisionType: "pnl_reconciliation",
+				Summary:      summary,
+				Confidence:   1,
+				Reasons: []string{
+					"Closed orders were synced from exchange state",
+				},
+				Action: "record",
+			})
+			recordPnLReconciliationNotification(quest, summary, now)
+		}
 	}
 
 	ids := make([]string, 0, len(processed))
@@ -4099,6 +4103,50 @@ func getProcessedOrderIDs(raw interface{}) map[string]bool {
 		}
 	}
 	return processed
+}
+
+func shouldNotifyPnLReconciliation(quest *Quest, summary string, now time.Time) bool {
+	if quest == nil {
+		return true
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return false
+	}
+	if quest.Checkpoint == nil {
+		return true
+	}
+	lastSummary := checkpointString(quest.Checkpoint["last_pnl_reconciliation_summary"])
+	if !strings.EqualFold(lastSummary, summary) {
+		return true
+	}
+	lastSentRaw := checkpointString(quest.Checkpoint["last_pnl_reconciliation_sent_at"])
+	if strings.TrimSpace(lastSentRaw) == "" {
+		return true
+	}
+	lastSent, err := time.Parse(time.RFC3339, lastSentRaw)
+	if err != nil {
+		return true
+	}
+	return now.Sub(lastSent) >= pnlReconciliationNotificationCooldown()
+}
+
+func recordPnLReconciliationNotification(quest *Quest, summary string, now time.Time) {
+	if quest == nil {
+		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	quest.Checkpoint["last_pnl_reconciliation_summary"] = strings.TrimSpace(summary)
+	quest.Checkpoint["last_pnl_reconciliation_sent_at"] = now.UTC().Format(time.RFC3339)
+}
+
+func pnlReconciliationNotificationCooldown() time.Duration {
+	if seconds := getEnvInt("NEURATRADE_PNL_RECONCILIATION_NOTIFY_COOLDOWN_SECONDS"); seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return 15 * time.Minute
 }
 
 func getOrderID(order map[string]interface{}) string {

@@ -1021,6 +1021,26 @@ func TestNormalizeAINotificationSemantics_StrategyHoldPreservedWhenConfidenceKno
 	assert.Equal(t, aiReasonStrategyHold, normalized.HoldCategory)
 }
 
+func TestShouldNotifyPnLReconciliation(t *testing.T) {
+	now := time.Now().UTC()
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+
+	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-a", now))
+	recordPnLReconciliationNotification(quest, "summary-a", now)
+	assert.False(t, shouldNotifyPnLReconciliation(quest, "summary-a", now.Add(5*time.Minute)))
+	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-b", now.Add(5*time.Minute)))
+	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-a", now.Add(16*time.Minute)))
+}
+
+func TestRecordPnLReconciliationNotification_InitializesCheckpoint(t *testing.T) {
+	quest := &Quest{}
+	now := time.Now().UTC()
+	recordPnLReconciliationNotification(quest, "summary-a", now)
+	require.NotNil(t, quest.Checkpoint)
+	assert.Equal(t, "summary-a", quest.Checkpoint["last_pnl_reconciliation_summary"])
+	assert.Equal(t, now.Format(time.RFC3339), quest.Checkpoint["last_pnl_reconciliation_sent_at"])
+}
+
 func TestStructuredHoldBlock_UsesDecisionPolicySpreadThreshold(t *testing.T) {
 	decision := &AITradingDecision{
 		Action:                 "hold",
