@@ -1106,6 +1106,17 @@ func (s *TradingLifecycleStore) ListManagedOpenPositions(ctx context.Context, ch
 			protection_updated_at, opened_at, updated_at
 		FROM trading_positions
 		WHERE status = 'open'
+		  AND NOT (
+			(
+				COALESCE(source, '') IN ('bootstrap_positions', 'bootstrap_open_orders') OR
+				position_id LIKE 'sync-%'
+			) AND EXISTS (
+				SELECT 1
+				FROM trading_orders o
+				WHERE o.order_id = trading_positions.order_id
+				  AND LOWER(o.status) = 'closed'
+			)
+		  )
 	`
 	args := make([]interface{}, 0, 3)
 	if strings.TrimSpace(chatID) != "" {
