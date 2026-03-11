@@ -575,6 +575,10 @@ func (s *PortfolioSafetyService) CanExecuteTradeWithLeverage(ctx context.Context
 		size.LessThanOrEqual(minNotional) {
 		return true, "", nil
 	}
+	if strings.EqualFold(strings.TrimSpace(marketType), "futures") &&
+		futuresSizeWithinRoundedEffectiveMax(size, effectiveMaxPosition) {
+		return true, "", nil
+	}
 
 	if size.GreaterThan(effectiveMaxPosition) {
 		return false, fmt.Sprintf("Position size %s exceeds maximum allowed %s (%s %.0f%%)",
@@ -627,6 +631,13 @@ func decimalFromFloatMap(values map[string]float64, key string) decimal.Decimal 
 		return decimal.Zero
 	}
 	return decimal.NewFromFloat(v)
+}
+
+func futuresSizeWithinRoundedEffectiveMax(size, effectiveMax decimal.Decimal) bool {
+	if !size.GreaterThan(decimal.Zero) || !effectiveMax.GreaterThan(decimal.Zero) {
+		return false
+	}
+	return size.Round(2).LessThanOrEqual(effectiveMax.Round(2))
 }
 
 // resolveEffectiveMaxPositionSize applies MaxPositionFloorPct as a guarded

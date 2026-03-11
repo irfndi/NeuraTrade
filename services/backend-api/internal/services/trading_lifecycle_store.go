@@ -877,6 +877,9 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 		})
 
 		for _, localPos := range localOpen {
+			if !snapshot.PositionsFresh {
+				continue
+			}
 			localOrderID := strings.TrimSpace(localPos.OrderID)
 			if localOrderID != "" {
 				// When open-order snapshots are stale/unavailable, avoid force-closing rows tied to orders.

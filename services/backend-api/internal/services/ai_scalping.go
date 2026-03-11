@@ -2690,7 +2690,11 @@ func shouldPromoteGenericHoldToFallback(decision *AITradingDecision, funnel appa
 		return strings.Contains(reasoning, "strict json format") ||
 			strings.Contains(reasoning, "normalize this failed trading decision") ||
 			strings.Contains(reasoning, "let me analyze the market signals") ||
-			strings.Contains(reasoning, "key constraints to follow")
+			strings.Contains(reasoning, "key constraints to follow") ||
+			strings.Contains(reasoning, "incomplete analysis") ||
+			strings.Contains(reasoning, "analysis was truncated") ||
+			strings.Contains(reasoning, "incomplete meta-commentary") ||
+			strings.Contains(reasoning, "no explicit final trade action")
 	}
 }
 

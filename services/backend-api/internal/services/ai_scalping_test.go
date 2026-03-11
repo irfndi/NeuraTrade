@@ -1592,6 +1592,8 @@ func TestShouldPromoteGenericHoldToFallback_PlaceholderReasoning(t *testing.T) {
 	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "Let me analyze the market signals and make a trading decision. ## Key Constraints to Follow"}, appautonomy.CandidateFunnelSnapshot{CandidateViableCount: 1}))
 	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "Let me analyze the market signals and make a trading decision."}, appautonomy.CandidateFunnelSnapshot{CandidateViableCount: 0}))
 	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "The"}, appautonomy.CandidateFunnelSnapshot{}))
+	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "Incomplete analysis - output was cut off before reaching a final trading decision"}, appautonomy.CandidateFunnelSnapshot{}))
+	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "The response is incomplete meta-commentary about parsing a trading decision with no explicit final trade action specified."}, appautonomy.CandidateFunnelSnapshot{}))
 	assert.False(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "waiting for clearer setup"}, appautonomy.CandidateFunnelSnapshot{CandidateViableCount: 1}))
 }
 

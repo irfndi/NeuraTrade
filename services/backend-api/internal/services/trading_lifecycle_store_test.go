@@ -779,6 +779,47 @@ func TestTradingLifecycleStore_ReconcileExchangeSnapshot_DoesNotCloseOnStaleFetc
 	assert.Equal(t, "open", posStatus)
 }
 
+func TestTradingLifecycleStore_ReconcileExchangeSnapshot_DoesNotCloseWhenPositionsSnapshotIsStale(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-stale-positions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-open-stale-pos",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "SOL/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(100),
+		OpenedAt:   time.Now().UTC().Add(-20 * time.Minute),
+	}))
+
+	summary, err := store.ReconcileExchangeSnapshot(ctx, "chat-1", "bitget", LifecycleExchangeSnapshot{
+		OrdersFresh:    true,
+		PositionsFresh: false,
+	}, "bootstrap_reconciliation")
+	require.NoError(t, err)
+	assert.Equal(t, 0, summary.PositionsClosed)
+
+	var orderStatus string
+	var posStatus string
+	err = sqliteDB.QueryRow(ctx, `SELECT LOWER(status) FROM trading_orders WHERE order_id = $1`, "ord-open-stale-pos").Scan(&orderStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "open", orderStatus)
+	err = sqliteDB.QueryRow(ctx, `SELECT LOWER(status) FROM trading_positions WHERE order_id = $1`, "ord-open-stale-pos").Scan(&posStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "open", posStatus)
+}
+
 func TestTradingLifecycleStore_ReconcileExchangeSnapshot_KeepsRowsBackedByOpenOrders(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-open-order.db"))
 	require.NoError(t, err)

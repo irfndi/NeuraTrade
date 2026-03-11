@@ -846,6 +846,14 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesAllowsMinNotionalWh
 	assert.Empty(t, reason)
 }
 
+func TestFuturesSizeWithinRoundedEffectiveMax(t *testing.T) {
+	assert.True(t, futuresSizeWithinRoundedEffectiveMax(decimal.NewFromFloat(6.00), decimal.NewFromFloat(5.996)))
+	assert.True(t, futuresSizeWithinRoundedEffectiveMax(decimal.NewFromFloat(6.00), decimal.NewFromFloat(6.00)))
+	assert.False(t, futuresSizeWithinRoundedEffectiveMax(decimal.NewFromFloat(6.00), decimal.NewFromFloat(5.98)))
+	assert.False(t, futuresSizeWithinRoundedEffectiveMax(decimal.Zero, decimal.NewFromFloat(6.00)))
+	assert.False(t, futuresSizeWithinRoundedEffectiveMax(decimal.NewFromFloat(6.00), decimal.Zero))
+}
+
 func TestPortfolioSafetyService_SetConfig_NormalizesDefaultsButPreservesZeroFloor(t *testing.T) {
 	service := NewPortfolioSafetyService(DefaultPortfolioSafetyConfig(), nil, nil, nil, nil, nil, nil, nil, nil)
 
