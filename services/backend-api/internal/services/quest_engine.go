@@ -2008,6 +2008,8 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		walletBasisUSDT                float64
 		protectionMissingDetected      int
 		protectionMissingRecovered     int
+		managedOpenPositionsEffective  int
+		ghostPositionsCleaned          int
 	)
 
 	for _, quest := range e.quests {
@@ -2170,6 +2172,8 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		}
 		protectionMissingDetected = maxInt(protectionMissingDetected, readQuestMetricInt(cp["protection_missing_detected"]))
 		protectionMissingRecovered = maxInt(protectionMissingRecovered, readQuestMetricInt(cp["protection_missing_recovered"]))
+		managedOpenPositionsEffective = maxInt(managedOpenPositionsEffective, readQuestMetricInt(cp["managed_open_positions_effective"]))
+		ghostPositionsCleaned = maxInt(ghostPositionsCleaned, readQuestMetricInt(cp["ghost_positions_cleaned"]))
 		if _, exists := cp["autonomy_gate_open"]; exists {
 			autonomyGateOpen = readQuestMetricBool(cp["autonomy_gate_open"])
 		}
@@ -2364,6 +2368,8 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		riskFeeDragExpectancy,
 	)
 	result["runtime_ai_meta_hold_promotions"] = aiMetaHoldPromotions
+	result["managed_open_positions_effective"] = managedOpenPositionsEffective
+	result["ghost_positions_cleaned"] = ghostPositionsCleaned
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions
 	result["state_drift_count"] = stateDriftPositions

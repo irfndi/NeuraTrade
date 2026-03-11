@@ -1185,6 +1185,54 @@ func (s *TradingLifecycleStore) ListManagedOpenPositions(ctx context.Context, ch
 	return positions, nil
 }
 
+func (s *TradingLifecycleStore) CloseClosedOrderBackedGhostPositions(ctx context.Context, chatID, exchange string) (int, error) {
+	query := `
+		UPDATE trading_positions
+		SET
+			close_price = CASE
+				WHEN COALESCE(last_price, 0) > 0 THEN COALESCE(last_price, 0)
+				ELSE entry_price
+			END,
+			realized_pnl = COALESCE(unrealized_pnl, 0),
+			status = 'closed',
+			source = 'ghost_cleanup_order_closed',
+			closed_at = $1,
+			updated_at = $1
+		WHERE LOWER(status) = 'open'
+		  AND (
+			COALESCE(source, '') IN ('bootstrap_positions', 'bootstrap_open_orders') OR
+			position_id LIKE 'sync-%'
+		  )
+		  AND EXISTS (
+			SELECT 1
+			FROM trading_orders o
+			WHERE o.order_id = trading_positions.order_id
+			  AND LOWER(o.status) = 'closed'
+		  )
+	`
+	args := make([]interface{}, 0, 2)
+	now := time.Now().UTC()
+	args = append(args, now)
+	if strings.TrimSpace(chatID) != "" {
+		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(chatID))
+	}
+	if strings.TrimSpace(exchange) != "" {
+		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
+		args = append(args, strings.TrimSpace(exchange))
+	}
+
+	result, err := s.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("close ghost lifecycle positions failed: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected for ghost lifecycle cleanup failed: %w", err)
+	}
+	return int(affected), nil
+}
+
 func (s *TradingLifecycleStore) CountOpenOrders(ctx context.Context, chatID, exchange string) (int, error) {
 	query := `
 		SELECT COUNT(*)

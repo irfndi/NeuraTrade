@@ -395,6 +395,12 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if metaPromotions, ok := chatRuntime["runtime_ai_meta_hold_promotions"]; ok {
 			response["runtime_ai_meta_hold_promotions"] = metaPromotions
 		}
+		if effectiveOpen, ok := chatRuntime["managed_open_positions_effective"]; ok {
+			response["managed_open_positions_effective"] = effectiveOpen
+		}
+		if ghostCleaned, ok := chatRuntime["ghost_positions_cleaned"]; ok {
+			response["ghost_positions_cleaned"] = ghostCleaned
+		}
 		if source, ok := chatRuntime["risk_lock_source"].(string); ok && strings.TrimSpace(source) != "" {
 			response["risk_lock_source"] = strings.TrimSpace(source)
 		}

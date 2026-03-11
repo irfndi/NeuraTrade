@@ -2159,6 +2159,12 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	}
 
 	if h.lifecycleStore != nil {
+		ghostCleaned := 0
+		if cleaned, err := h.lifecycleStore.CloseClosedOrderBackedGhostPositions(ctx, chatID, exchange); err == nil {
+			ghostCleaned = cleaned
+		} else {
+			log.Printf("[SCALPING] Ghost lifecycle cleanup failed for chat %s exchange %s: %v", chatID, exchange, err)
+		}
 		positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 100)
 		if err == nil {
 			portfolio.OpenPositions = 0
@@ -2175,6 +2181,13 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 			portfolio.UnrealizedPnL = unrealized.InexactFloat64()
 			portfolio.TotalValue = portfolio.USDTBalance + portfolio.UnrealizedPnL
 			portfolio.TotalValueDecimal = portfolio.USDTBalanceDecimal.Add(unrealized)
+			if quest != nil {
+				if quest.Checkpoint == nil {
+					quest.Checkpoint = make(map[string]interface{})
+				}
+				quest.Checkpoint["managed_open_positions_effective"] = portfolio.OpenPositions
+				quest.Checkpoint["ghost_positions_cleaned"] = ghostCleaned
+			}
 		}
 	}
 
