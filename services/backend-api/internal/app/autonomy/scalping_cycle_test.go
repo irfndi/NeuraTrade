@@ -173,6 +173,24 @@ func TestEvaluateScalpingPolicy_MicroNoFillRecoveryOverridesWeakRecentWinRateTig
 	require.InDelta(t, config.MicroMinConfidenceFloor, policy.EffectiveMinConfidence, 0.0001)
 }
 
+func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyFive(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+		PerformanceWindow: PerformanceWindowInput{
+			DecisiveTrades:     30,
+			DecisiveWinRatePct: 15,
+		},
+	}, config)
+
+	require.Equal(t, AccountTierMicro, policy.AccountTier)
+	require.InDelta(t, 0.72, policy.EffectiveMinConfidence, 0.0001)
+	require.Contains(t, policy.PolicyAdjustments, "micro_confidence_cap")
+}
+
 func TestEvaluateScalpingPolicy_LossStreakAndNegativeExpectancyTightening(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 

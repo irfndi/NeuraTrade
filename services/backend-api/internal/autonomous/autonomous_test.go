@@ -151,6 +151,15 @@ func TestStrategyProposalEngine_GenerateProposal(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:        "realistic scalping drawdown remains below risk threshold",
+			confidence:  0.72,
+			maxDrawdown: decimal.NewFromFloat(1.9),
+			params: map[string]any{
+				"position_size_percent": json.Number("12.7845"),
+			},
+			expectError: false,
+		},
+		{
 			name:        "low confidence",
 			confidence:  0.3,
 			maxDrawdown: decimal.NewFromFloat(5),

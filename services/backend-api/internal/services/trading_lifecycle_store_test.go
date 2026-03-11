@@ -206,6 +206,44 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries(t *testing.T) {
 	assert.True(t, returns[1].Round(6).Equal(decimal.NewFromFloat(-0.01)))
 }
 
+func TestTradingLifecycleStore_GetRealizedReturnSeries_FeeAdjustedAndGross(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-returns-fees.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "ret-fee-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50500),
+		RealizedPnL: decimal.NewFromFloat(5),
+		Fees:        decimal.NewFromFloat(-1),
+		ClosedAt:    now.Add(-5 * time.Minute),
+	}))
+
+	netReturns, err := store.GetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, netReturns, 1)
+	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.008)))
+
+	grossReturns, err := store.GetGrossRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, grossReturns, 1)
+	assert.True(t, grossReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+}
+
 func TestTradingLifecycleStore_RecordClosedOrder_ClosesSyncRowInPlace(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-close.db"))
 	require.NoError(t, err)
@@ -285,6 +323,139 @@ func TestTradingLifecycleStore_RecordClosedOrder_ClosesSyncRowInPlace(t *testing
 	`).Scan(&rowCount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, rowCount)
+}
+
+func TestTradingLifecycleStore_SyncPosition_AssignsDefaultProtectionForNewSyncRows(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-default-protection.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.00),
+		MarkPrice:     decimal.NewFromFloat(1.02),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	var stopLoss decimal.Decimal
+	var takeProfit decimal.Decimal
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT stop_loss, take_profit
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&stopLoss, &takeProfit)
+	require.NoError(t, err)
+	assert.True(t, stopLoss.GreaterThan(decimal.Zero))
+	assert.True(t, takeProfit.GreaterThan(decimal.Zero))
+	assert.True(t, stopLoss.LessThan(decimal.NewFromFloat(1.00)))
+	assert.True(t, takeProfit.GreaterThan(decimal.NewFromFloat(1.00)))
+}
+
+func TestTradingLifecycleStore_SyncPosition_PreservesExistingProtection(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-preserve-protection.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.00),
+		MarkPrice:     decimal.NewFromFloat(1.02),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	require.NoError(t, store.UpdatePositionProtection(
+		ctx,
+		"sync-bitget-ada-usdt-long",
+		decimal.NewFromFloat(0.97),
+		decimal.NewFromFloat(1.04),
+		decimal.NewFromFloat(1.02),
+		decimal.NewFromFloat(0.10),
+		time.Now().UTC(),
+	))
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.00),
+		MarkPrice:     decimal.NewFromFloat(1.03),
+		UnrealizedPnl: decimal.NewFromFloat(0.15),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	var stopLoss decimal.Decimal
+	var takeProfit decimal.Decimal
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT stop_loss, take_profit
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&stopLoss, &takeProfit)
+	require.NoError(t, err)
+	assert.True(t, stopLoss.Equal(decimal.NewFromFloat(0.97)))
+	assert.True(t, takeProfit.Equal(decimal.NewFromFloat(1.04)))
+}
+
+func TestTradingLifecycleStore_SyncPosition_PreservesAutonomousSource(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-preserve-source.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-autonomous-src",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(5),
+		EntryPrice: decimal.NewFromFloat(1.0),
+		Source:     "autonomous",
+	}))
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.0),
+		MarkPrice:     decimal.NewFromFloat(1.01),
+		UnrealizedPnl: decimal.NewFromFloat(0.05),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	var source string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT source
+		FROM trading_positions
+		WHERE order_id = 'ord-autonomous-src'
+		  AND LOWER(status) = 'open'
+	`).Scan(&source)
+	require.NoError(t, err)
+	assert.Equal(t, "autonomous", source)
 }
 
 func TestTradingLifecycleStore_RecordClosedOrder_PrefersOpenSyncRowOverLegacyOrderMapping(t *testing.T) {

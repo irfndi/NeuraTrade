@@ -770,8 +770,8 @@ func TestShouldRecordEntryAttempt(t *testing.T) {
 		}, nil))
 	})
 
-	t.Run("execution error counts", func(t *testing.T) {
-		assert.True(t, shouldRecordEntryAttempt(&AITradingDecision{
+	t.Run("execution error does not count", func(t *testing.T) {
+		assert.False(t, shouldRecordEntryAttempt(&AITradingDecision{
 			Action: "sell",
 		}, assert.AnError))
 	})
@@ -779,6 +779,210 @@ func TestShouldRecordEntryAttempt(t *testing.T) {
 	t.Run("nil decision does not count", func(t *testing.T) {
 		assert.False(t, shouldRecordEntryAttempt(nil, assert.AnError))
 	})
+}
+
+func TestFilterManagedPositionsForEntryProtection_ExcludesBootstrapFallbackTargets(t *testing.T) {
+	positions := []ManagedOpenPosition{
+		{
+			PositionID: "sync-bitget-ada-usdt-long",
+			OrderID:    "",
+			Symbol:     "ADA/USDT",
+			Side:       "buy",
+			Source:     "bootstrap_positions",
+		},
+		{
+			PositionID: "manual-1",
+			OrderID:    "ord-manual-1",
+			Symbol:     "ADA/USDT",
+			Side:       "buy",
+			Source:     "manual_reconciliation",
+		},
+		{
+			PositionID: "autonomous-1",
+			OrderID:    "ord-autonomous-1",
+			Symbol:     "ADA/USDT",
+			Side:       "buy",
+			Source:     "autonomous",
+		},
+	}
+
+	filtered := filterManagedPositionsForEntryProtection(positions, "", "ADA/USDT", "buy")
+	require.Len(t, filtered, 1)
+	assert.Equal(t, "autonomous-1", filtered[0].PositionID)
+}
+
+func TestIsAutonomousManagedPosition(t *testing.T) {
+	assert.True(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "autonomous"}))
+	assert.True(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: ""}))
+	assert.False(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "manual_reconciliation"}))
+	assert.False(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "bootstrap_positions"}))
+	assert.False(t, isAutonomousManagedPosition(ManagedOpenPosition{PositionID: "sync-bitget-btc-usdt-long", Source: "autonomous"}))
+}
+
+func TestIntegratedQuestHandlers_ResetScalpingFailureState_ClearsCheckpointError(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{
+		"runtime_failure_streak":  3,
+		"runtime_last_failure":    "portfolio safety blocked: maximum allowed 0.00",
+		"runtime_last_failure_at": time.Now().UTC().Format(time.RFC3339),
+		"runtime_cooldown_until":  time.Now().UTC().Add(2 * time.Minute).Format(time.RFC3339),
+		"runtime_hold_cooldown":   true,
+		"error":                   "portfolio safety blocked: Position size 6.00 exceeds maximum allowed 0.00 (throttled to 0%)",
+	}}
+
+	handlers.resetScalpingFailureState(quest)
+
+	assert.NotContains(t, quest.Checkpoint, "runtime_failure_streak")
+	assert.NotContains(t, quest.Checkpoint, "runtime_last_failure")
+	assert.NotContains(t, quest.Checkpoint, "runtime_last_failure_at")
+	assert.NotContains(t, quest.Checkpoint, "runtime_cooldown_until")
+	assert.NotContains(t, quest.Checkpoint, "runtime_hold_cooldown")
+	assert.NotContains(t, quest.Checkpoint, "error")
+}
+
+func TestShouldSkipClosedOrderFeedback(t *testing.T) {
+	tests := []struct {
+		name                     string
+		order                    map[string]interface{}
+		pnl                      decimal.Decimal
+		symbol                   string
+		side                     string
+		openPositionBySymbolSide map[string]struct{}
+		expected                 bool
+	}{
+		{
+			name:   "skips probable entry fill when pnl zero and matching open position",
+			order:  map[string]interface{}{"tradeSide": "open"},
+			pnl:    decimal.Zero,
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: true,
+		},
+		{
+			name:   "does not skip when pnl is non-zero",
+			order:  map[string]interface{}{"tradeSide": "open"},
+			pnl:    decimal.NewFromFloat(0.01),
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: false,
+		},
+		{
+			name:                     "does not skip when open position is missing",
+			order:                    map[string]interface{}{"tradeSide": "open"},
+			pnl:                      decimal.Zero,
+			symbol:                   "ADA/USDT",
+			side:                     "buy",
+			openPositionBySymbolSide: map[string]struct{}{},
+			expected:                 false,
+		},
+		{
+			name:   "does not skip close semantic",
+			order:  map[string]interface{}{"tradeSide": "close_long"},
+			pnl:    decimal.Zero,
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: false,
+		},
+		{
+			name:   "does not skip reduce-only semantic",
+			order:  map[string]interface{}{"tradeSide": "open", "reduceOnly": true},
+			pnl:    decimal.Zero,
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := shouldSkipClosedOrderFeedback(tt.order, tt.pnl, tt.symbol, tt.side, tt.openPositionBySymbolSide)
+			assert.Equal(t, tt.expected, actual)
+		})
+	}
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFill(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-closed-feedback-skip-entry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "entry-1",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(2),
+		EntryPrice: decimal.NewFromFloat(1),
+		OpenedAt:   time.Now().UTC().Add(-30 * time.Second),
+	}))
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+	handlers.SetLifecycleStore(store)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-skip-probable-entry-fill",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "ADA/USDT", 20).
+		Return([]map[string]interface{}{
+			{
+				"orderId":      "entry-1",
+				"side":         "buy",
+				"tradeSide":    "open",
+				"avgOpenPrice": "1.0",
+				"avgPrice":     "1.0",
+				"filled":       "2.0",
+				"pnl":          "0",
+			},
+		}, nil).
+		Once()
+
+	handlers.ingestClosedOrderFeedback(ctx, quest, "bitget", "ADA/USDT")
+
+	var tradeRows int
+	err = sqliteDB.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM trades WHERE order_id = $1`, "entry-1").Scan(&tradeRows)
+	require.NoError(t, err)
+	assert.Equal(t, 0, tradeRows)
+
+	positions, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 20)
+	require.NoError(t, err)
+	require.Len(t, positions, 1)
+	assert.Equal(t, "entry-1", positions[0].OrderID)
+
+	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
+	assert.False(t, processed["entry-1"])
+
+	orderExecutor.AssertExpectations(t)
 }
 
 func TestNormalizeAINotificationSemantics_RuntimeDegradedNotStrategyHold(t *testing.T) {

@@ -670,6 +670,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		} else {
 			quest.Checkpoint["protection_positions_evaluated"] = protectionSummary.PositionsEvaluated
 			quest.Checkpoint["protection_updates"] = protectionSummary.ProtectionsUpdated
+			quest.Checkpoint["protection_missing_detected"] = protectionSummary.MissingProtection
+			quest.Checkpoint["protection_missing_recovered"] = protectionSummary.RecoveredProtection
 			quest.Checkpoint["protection_errors"] = protectionSummary.Errors
 			if protectionSummary.ProtectionsUpdated > 0 {
 				log.Printf(
@@ -710,11 +712,10 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			quest.Checkpoint["status"] = "hold"
 			return nil
 		} else {
-			if balanceSnapshot.Total != nil {
-				if v := balanceSnapshot.Total["USDT"]; v > 0 {
-					usdtBalance = v
-				}
-			}
+			usdtBalance = resolveScalpingFuturesWalletUSDT(balanceSnapshot)
+			quest.Checkpoint["wallet_basis_mode"] = "futures"
+			quest.Checkpoint["wallet_basis_source"] = resolveScalpingWalletBasisSource(balanceSnapshot)
+			quest.Checkpoint["wallet_basis_usdt"] = usdtBalance
 			if usdtBalance <= 0 {
 				log.Printf("[SCALPING] USDT balance is zero, using minimum balance for trading")
 				usdtBalance = 100.0 // Minimum balance
@@ -2178,10 +2179,15 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	}
 
 	returns := make([]decimal.Decimal, 0, 64)
+	grossReturns := make([]decimal.Decimal, 0, 64)
 	if h.lifecycleStore != nil {
 		series, err := h.lifecycleStore.GetRealizedReturnSeries(ctx, chatID, exchange, time.Now().UTC().Add(-30*24*time.Hour))
 		if err == nil {
 			returns = append(returns, series...)
+		}
+		grossSeries, grossErr := h.lifecycleStore.GetGrossRealizedReturnSeries(ctx, chatID, exchange, time.Now().UTC().Add(-30*24*time.Hour))
+		if grossErr == nil {
+			grossReturns = append(grossReturns, grossSeries...)
 		}
 	}
 	if len(returns) == 0 {
@@ -2189,10 +2195,13 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	}
 
 	riskMetrics := ComputeRiskAdjustedMetrics(returns)
+	grossRiskMetrics := ComputeRiskAdjustedMetrics(grossReturns)
 	portfolio.RiskSharpe = riskMetrics.Sharpe
 	portfolio.RiskSortino = riskMetrics.Sortino
 	portfolio.RiskMaxDrawdown = riskMetrics.MaxDrawdown
 	portfolio.RiskExpectancy = riskMetrics.Expectancy
+	portfolio.RiskExpectancyGross = grossRiskMetrics.Expectancy
+	portfolio.RiskFeeDragExpectancy = portfolio.RiskExpectancyGross - portfolio.RiskExpectancy
 	portfolio.RiskSampleSize = riskMetrics.SampleSize
 
 	rawEquity := portfolio.TotalValue
@@ -2295,6 +2304,8 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		quest.Checkpoint["risk_sortino"] = portfolio.RiskSortino
 		quest.Checkpoint["risk_max_drawdown"] = portfolio.RiskMaxDrawdown
 		quest.Checkpoint["risk_expectancy"] = portfolio.RiskExpectancy
+		quest.Checkpoint["risk_expectancy_gross"] = portfolio.RiskExpectancyGross
+		quest.Checkpoint["risk_fee_drag_expectancy"] = portfolio.RiskFeeDragExpectancy
 		quest.Checkpoint["risk_samples"] = portfolio.RiskSampleSize
 		quest.Checkpoint["strategy_phase"] = portfolio.StrategyPhase
 		quest.Checkpoint["phase_min_confidence"] = portfolio.PhaseMinConfidence
@@ -3179,7 +3190,10 @@ func (h *IntegratedQuestHandlers) recordEntryAttempt(quest *Quest, now time.Time
 	delete(quest.Checkpoint, "runtime_entry_attempt_block_reason")
 }
 
-func shouldRecordEntryAttempt(decision *AITradingDecision, _ error) bool {
+func shouldRecordEntryAttempt(decision *AITradingDecision, err error) bool {
+	if err != nil {
+		return false
+	}
 	if decision == nil {
 		return false
 	}
@@ -3277,6 +3291,9 @@ func filterManagedPositionsForEntryProtection(
 			filtered = append(filtered, pos)
 			continue
 		}
+		if !isAutonomousEntryProtectionFallbackCandidate(pos) {
+			continue
+		}
 		if symbol == "" {
 			continue
 		}
@@ -3289,6 +3306,24 @@ func filterManagedPositionsForEntryProtection(
 		filtered = append(filtered, pos)
 	}
 	return filtered
+}
+
+func isAutonomousEntryProtectionFallbackCandidate(pos ManagedOpenPosition) bool {
+	return isAutonomousManagedPosition(pos)
+}
+
+func isAutonomousManagedPosition(pos ManagedOpenPosition) bool {
+	if strings.HasPrefix(strings.TrimSpace(pos.PositionID), "sync-") {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(pos.Source))
+	if source == "" || source == "autonomous" {
+		return true
+	}
+	if source == "bootstrap_positions" || source == "bootstrap_open_orders" || source == "manual_reconciliation" {
+		return false
+	}
+	return false
 }
 
 func allManagedPositionsProtected(positions []ManagedOpenPosition) bool {
@@ -3735,6 +3770,55 @@ func normalizeLegacyTradeJournalCloseSide(side string) string {
 	}
 }
 
+func resolveScalpingFuturesWalletUSDT(balance *ccxt.BalanceResponse) float64 {
+	if balance == nil {
+		return 0
+	}
+	lookup := []struct {
+		book map[string]float64
+		key  string
+	}{
+		{book: balance.Free, key: "USDT_FUTURES_USDT"},
+		{book: balance.Total, key: "USDT_FUTURES_USDT"},
+		{book: balance.Free, key: "USDT"},
+		{book: balance.Total, key: "USDT"},
+	}
+	for _, candidate := range lookup {
+		if candidate.book == nil {
+			continue
+		}
+		if v := candidate.book[candidate.key]; v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func resolveScalpingWalletBasisSource(balance *ccxt.BalanceResponse) string {
+	if balance == nil {
+		return "none"
+	}
+	lookup := []struct {
+		bookName string
+		book     map[string]float64
+		key      string
+	}{
+		{bookName: "free", book: balance.Free, key: "USDT_FUTURES_USDT"},
+		{bookName: "total", book: balance.Total, key: "USDT_FUTURES_USDT"},
+		{bookName: "free", book: balance.Free, key: "USDT"},
+		{bookName: "total", book: balance.Total, key: "USDT"},
+	}
+	for _, candidate := range lookup {
+		if candidate.book == nil {
+			continue
+		}
+		if v := candidate.book[candidate.key]; v > 0 {
+			return candidate.bookName + ":" + candidate.key
+		}
+	}
+	return "none"
+}
+
 func (h *IntegratedQuestHandlers) persistLegacyTradeClose(
 	ctx context.Context,
 	quest *Quest,
@@ -3821,6 +3905,20 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 	losses := 0
 	breakeven := 0
 	totalPnL := decimal.Zero
+	openPositionBySymbolSide := make(map[string]struct{})
+	if h.lifecycleStore != nil {
+		positions, listErr := h.lifecycleStore.ListManagedOpenPositions(ctx, quest.Metadata["chat_id"], exchange, 200)
+		if listErr != nil {
+			log.Printf("[SCALPING] Failed to load managed open positions for closed-order filter (%s): %v", exchange, listErr)
+		} else {
+			for _, pos := range positions {
+				key := normalizeSymbolForComparison(pos.Symbol) + ":" + normalizeLifecycleSide(pos.Side)
+				if strings.TrimSpace(key) != ":" {
+					openPositionBySymbolSide[key] = struct{}{}
+				}
+			}
+		}
+	}
 
 	for _, order := range closedOrders {
 		orderID := getOrderID(order)
@@ -3836,6 +3934,9 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		side := "buy"
 		if rawSide, ok := stringFromOrder(order, "side", "tradeSide", "positionSide"); ok {
 			side = strings.ToLower(strings.TrimSpace(rawSide))
+		}
+		if shouldSkipClosedOrderFeedback(order, pnl, symbol, side, openPositionBySymbolSide) {
+			continue
 		}
 		exitPrice := decimal.Zero
 		if p, ok := decimalFromOrder(order, "priceAvg", "avgPrice", "price", "fillPrice"); ok {
@@ -4018,6 +4119,36 @@ func stringFromOrder(order map[string]interface{}, keys ...string) (string, bool
 		}
 	}
 	return "", false
+}
+
+func shouldSkipClosedOrderFeedback(
+	order map[string]interface{},
+	pnl decimal.Decimal,
+	symbol string,
+	side string,
+	openPositionBySymbolSide map[string]struct{},
+) bool {
+	if !pnl.IsZero() || len(openPositionBySymbolSide) == 0 {
+		return false
+	}
+	key := normalizeSymbolForComparison(symbol) + ":" + normalizeLifecycleSide(side)
+	if _, exists := openPositionBySymbolSide[key]; !exists {
+		return false
+	}
+
+	tradeSide, _ := stringFromOrder(order, "tradeSide", "offset", "positionEffect", "intent")
+	tradeSide = strings.ToLower(strings.TrimSpace(tradeSide))
+	if strings.Contains(tradeSide, "close") || strings.Contains(tradeSide, "reduce") {
+		return false
+	}
+
+	reduceOnly, _ := stringFromOrder(order, "reduceOnly", "reduce_only")
+	reduceOnly = strings.ToLower(strings.TrimSpace(reduceOnly))
+	if reduceOnly == "true" || reduceOnly == "1" || reduceOnly == "yes" {
+		return false
+	}
+
+	return true
 }
 
 func decimalFromOrder(order map[string]interface{}, keys ...string) (decimal.Decimal, bool) {
@@ -4319,6 +4450,7 @@ func (h *IntegratedQuestHandlers) resetScalpingFailureState(quest *Quest) {
 	delete(quest.Checkpoint, "runtime_last_failure_at")
 	delete(quest.Checkpoint, "runtime_cooldown_until")
 	delete(quest.Checkpoint, "runtime_hold_cooldown")
+	delete(quest.Checkpoint, "error")
 }
 
 func (h *IntegratedQuestHandlers) updateHoldStateCheckpoint(quest *Quest, held bool) {
@@ -4592,6 +4724,9 @@ func (h *IntegratedQuestHandlers) enforceAdaptiveTimeStop(
 	closed := 0
 
 	for _, position := range positions {
+		if !isAutonomousManagedPosition(position) {
+			continue
+		}
 		openedAt := position.OpenedAt
 		if openedAt.IsZero() {
 			openedAt = position.UpdatedAt
@@ -4694,6 +4829,9 @@ func (h *IntegratedQuestHandlers) trimWorstManagedPosition(
 	worstIdx := -1
 	worstPnL := decimal.Zero
 	for idx, position := range positions {
+		if !isAutonomousManagedPosition(position) {
+			continue
+		}
 		if position.Size.Abs().LessThanOrEqual(decimal.Zero) {
 			continue
 		}

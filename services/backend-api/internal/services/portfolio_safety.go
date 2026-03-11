@@ -97,6 +97,8 @@ type PortfolioSafetyService struct {
 	requestGroup     singleflight.Group
 }
 
+const staleSnapshotFallbackWindow = 10 * time.Minute
+
 func NewPortfolioSafetyService(
 	config PortfolioSafetyConfig,
 	ccxtService ccxt.CCXTService,
@@ -150,6 +152,23 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 	})
 
 	if err != nil {
+		s.mu.RLock()
+		canFallback := s.lastSnapshot != nil &&
+			s.lastSnapshotKey == key &&
+			time.Since(s.lastSnapshotTime) <= staleSnapshotFallbackWindow
+		if canFallback {
+			snapshot := *s.lastSnapshot
+			s.mu.RUnlock()
+			if s.logger != nil {
+				s.logger.Warn("Using stale portfolio snapshot after refresh failure",
+					"chat_id", chatID,
+					"exchanges", strings.Join(exchanges, ","),
+					"error", err,
+					"stale_age", time.Since(s.lastSnapshotTime).Round(time.Second).String())
+			}
+			return &snapshot, nil
+		}
+		s.mu.RUnlock()
 		return nil, err
 	}
 
@@ -176,6 +195,7 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 	totalBalance := decimal.Zero
 	totalAvailable := decimal.Zero
 	totalUsed := decimal.Zero
+	successfulBalanceFetches := 0
 
 	for _, exchange := range exchanges {
 		balance, err := s.ccxtService.FetchBalance(ctx, exchange)
@@ -187,6 +207,7 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 			}
 			continue
 		}
+		successfulBalanceFetches++
 
 		exchangeTotal := decimal.Zero
 		exchangeAvailable := decimal.Zero
@@ -196,7 +217,7 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 			if amount <= 0 {
 				continue
 			}
-			if currency == s.config.DefaultQuoteCurrency {
+			if isQuoteCurrency(currency, s.config.DefaultQuoteCurrency) {
 				exchangeTotal = exchangeTotal.Add(decimal.NewFromFloat(amount))
 			}
 		}
@@ -205,7 +226,7 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 			if amount <= 0 {
 				continue
 			}
-			if currency == s.config.DefaultQuoteCurrency {
+			if isQuoteCurrency(currency, s.config.DefaultQuoteCurrency) {
 				exchangeAvailable = exchangeAvailable.Add(decimal.NewFromFloat(amount))
 			}
 		}
@@ -214,7 +235,7 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 			if amount <= 0 {
 				continue
 			}
-			if currency == s.config.DefaultQuoteCurrency {
+			if isQuoteCurrency(currency, s.config.DefaultQuoteCurrency) {
 				exchangeUsed = exchangeUsed.Add(decimal.NewFromFloat(amount))
 			}
 		}
@@ -229,6 +250,10 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 			AvailableBalance: exchangeAvailable,
 			UsedBalance:      exchangeUsed,
 		})
+	}
+
+	if len(exchanges) > 0 && successfulBalanceFetches == 0 {
+		return nil, fmt.Errorf("failed to fetch balance from all requested exchanges")
 	}
 
 	trackerHasPositions := false
@@ -384,10 +409,6 @@ func (s *PortfolioSafetyService) CheckSafety(ctx context.Context, chatID string,
 		maxFromPct := snapshot.TotalEquity.Mul(decimal.NewFromFloat(s.config.MaxPositionSizePct))
 		maxAfterThrottle := maxFromPct.Mul(decimal.NewFromFloat(status.PositionThrottle))
 
-		if maxAfterThrottle.GreaterThan(snapshot.AvailableFunds) {
-			maxAfterThrottle = snapshot.AvailableFunds
-		}
-
 		status.MaxPositionSize = maxAfterThrottle
 		status.Details["max_position_pct"] = fmt.Sprintf("%.1f%%", s.config.MaxPositionSizePct*100)
 		status.Details["throttle_applied"] = fmt.Sprintf("%.1f%%", status.PositionThrottle*100)
@@ -465,6 +486,10 @@ func (s *PortfolioSafetyService) CheckSafety(ctx context.Context, chatID string,
 }
 
 func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID string, exchange string, symbol string, marketType string, size decimal.Decimal) (bool, string, error) {
+	return s.CanExecuteTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, 1, size)
+}
+
+func (s *PortfolioSafetyService) CanExecuteTradeWithLeverage(ctx context.Context, chatID string, exchange string, symbol string, marketType string, leverage int, size decimal.Decimal) (bool, string, error) {
 	exchanges := []string{}
 	if exchange != "" {
 		exchanges = []string{exchange}
@@ -482,14 +507,74 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 	if !status.TradingAllowed {
 		return false, fmt.Sprintf("Trading not allowed: %v", status.Reasons), nil
 	}
+
+	scopedTotal, scopedAvailable, hasScopedFunds := s.resolveScopedMarketFunds(ctx, exchange, marketType)
+	equityRef := snapshot.TotalEquity
+	availableRef := snapshot.AvailableFunds
+	if hasScopedFunds {
+		if scopedTotal.GreaterThan(decimal.Zero) {
+			equityRef = scopedTotal
+		}
+		if scopedAvailable.GreaterThan(decimal.Zero) {
+			availableRef = scopedAvailable
+		}
+	}
 	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol, marketType)
 	if minNotional.GreaterThan(decimal.Zero) && size.GreaterThan(decimal.Zero) && size.LessThan(minNotional) {
 		return false, fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)), nil
 	}
 
 	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, symbol, marketType, snapshot, status.MaxPositionSize)
+	if strings.EqualFold(strings.TrimSpace(marketType), "futures") {
+		if leverage <= 0 {
+			leverage = 1
+		}
+		if minNotional.GreaterThan(effectiveMaxPosition) &&
+			equityRef.GreaterThan(decimal.Zero) &&
+			s.config.MaxPositionFloorPct > 0 {
+			requiredPct := minNotional.Div(equityRef)
+			if requiredPct.LessThanOrEqual(decimal.NewFromFloat(s.config.MaxPositionFloorPct)) {
+				requiredMargin := minNotional.Div(decimal.NewFromInt(int64(leverage)))
+				if availableRef.GreaterThanOrEqual(requiredMargin) {
+					effectiveMaxPosition = minNotional
+				}
+			}
+		}
+		if availableRef.GreaterThan(decimal.Zero) {
+			liquidityCap := availableRef.Mul(decimal.NewFromInt(int64(leverage)))
+			if liquidityCap.GreaterThan(decimal.Zero) && effectiveMaxPosition.GreaterThan(liquidityCap) {
+				effectiveMaxPosition = liquidityCap
+			}
+		}
+	} else if availableRef.GreaterThan(decimal.Zero) && effectiveMaxPosition.GreaterThan(availableRef) {
+		effectiveMaxPosition = availableRef
+	}
+	if !effectiveMaxPosition.GreaterThan(decimal.Zero) &&
+		minNotional.GreaterThan(decimal.Zero) &&
+		snapshot != nil &&
+		equityRef.GreaterThanOrEqual(minNotional) {
+		effectiveMaxPosition = minNotional
+		if s.logger != nil {
+			s.logger.Warn("Applying exchange minimum notional fallback for zero max position",
+				"chat_id", chatID,
+				"exchange", exchange,
+				"symbol", symbol,
+				"market_type", marketType,
+				"min_notional", minNotional.StringFixed(2),
+				"total_equity", equityRef.StringFixed(2),
+				"available_funds", availableRef.StringFixed(2))
+		}
+	}
 	effectiveThrottlePct := resolveEffectiveThrottlePct(status.MaxPositionSize, effectiveMaxPosition)
 	throttleLabel := formatEffectiveThrottleLabel(effectiveThrottlePct)
+
+	if !effectiveMaxPosition.GreaterThan(decimal.Zero) &&
+		minNotional.GreaterThan(decimal.Zero) &&
+		strings.EqualFold(strings.TrimSpace(strings.ToLower(exchange)), "bitget") &&
+		strings.EqualFold(strings.TrimSpace(marketType), "futures") &&
+		size.LessThanOrEqual(minNotional) {
+		return true, "", nil
+	}
 
 	if size.GreaterThan(effectiveMaxPosition) {
 		return false, fmt.Sprintf("Position size %s exceeds maximum allowed %s (%s %.0f%%)",
@@ -497,6 +582,51 @@ func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID str
 	}
 
 	return true, "", nil
+}
+
+func (s *PortfolioSafetyService) resolveScopedMarketFunds(ctx context.Context, exchange string, marketType string) (decimal.Decimal, decimal.Decimal, bool) {
+	if s == nil || s.ccxtService == nil || strings.TrimSpace(exchange) == "" {
+		return decimal.Zero, decimal.Zero, false
+	}
+	balance, err := s.ccxtService.FetchBalance(ctx, exchange)
+	if err != nil || balance == nil {
+		return decimal.Zero, decimal.Zero, false
+	}
+
+	normalizedExchange := strings.ToLower(strings.TrimSpace(exchange))
+	normalizedMarketType := strings.ToLower(strings.TrimSpace(marketType))
+	keys := []string{"USDT"}
+	if normalizedExchange == "bitget" {
+		if normalizedMarketType == "futures" {
+			keys = []string{"USDT_FUTURES_USDT", "USDT"}
+		} else if normalizedMarketType == "spot" {
+			keys = []string{"SPOT_USDT", "USDT"}
+		}
+	}
+
+	for _, key := range keys {
+		total := decimalFromFloatMap(balance.Total, key)
+		free := decimalFromFloatMap(balance.Free, key)
+		if total.GreaterThan(decimal.Zero) || free.GreaterThan(decimal.Zero) {
+			if !free.GreaterThan(decimal.Zero) {
+				free = total
+			}
+			return total, free, true
+		}
+	}
+
+	return decimal.Zero, decimal.Zero, false
+}
+
+func decimalFromFloatMap(values map[string]float64, key string) decimal.Decimal {
+	if values == nil {
+		return decimal.Zero
+	}
+	v, ok := values[key]
+	if !ok || v <= 0 {
+		return decimal.Zero
+	}
+	return decimal.NewFromFloat(v)
 }
 
 // resolveEffectiveMaxPositionSize applies MaxPositionFloorPct as a guarded
@@ -666,4 +796,8 @@ func normalizeRiskSignal(value, threshold float64) float64 {
 	default:
 		return normalized
 	}
+}
+
+func isQuoteCurrency(currency string, quoteCurrency string) bool {
+	return strings.EqualFold(strings.TrimSpace(currency), strings.TrimSpace(quoteCurrency))
 }

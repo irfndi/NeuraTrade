@@ -368,6 +368,30 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if gateType, ok := chatRuntime["entry_gate_type"].(string); ok && strings.TrimSpace(gateType) != "" {
 			response["entry_gate_type"] = strings.TrimSpace(gateType)
 		}
+		if walletMode, ok := chatRuntime["wallet_basis_mode"].(string); ok && strings.TrimSpace(walletMode) != "" {
+			response["wallet_basis_mode"] = strings.TrimSpace(walletMode)
+		}
+		if walletSource, ok := chatRuntime["wallet_basis_source"].(string); ok && strings.TrimSpace(walletSource) != "" {
+			response["wallet_basis_source"] = strings.TrimSpace(walletSource)
+		}
+		if walletUSDT, ok := chatRuntime["wallet_basis_usdt"]; ok {
+			response["wallet_basis_usdt"] = walletUSDT
+		}
+		if missingDetected, ok := chatRuntime["protection_missing_detected"]; ok {
+			response["protection_missing_detected"] = missingDetected
+		}
+		if missingRecovered, ok := chatRuntime["protection_missing_recovered"]; ok {
+			response["protection_missing_recovered"] = missingRecovered
+		}
+		if expectancy, ok := chatRuntime["risk_expectancy"]; ok {
+			response["risk_expectancy"] = expectancy
+		}
+		if gross, ok := chatRuntime["risk_expectancy_gross"]; ok {
+			response["risk_expectancy_gross"] = gross
+		}
+		if feeDrag, ok := chatRuntime["risk_fee_drag_expectancy"]; ok {
+			response["risk_fee_drag_expectancy"] = feeDrag
+		}
 		if source, ok := chatRuntime["risk_lock_source"].(string); ok && strings.TrimSpace(source) != "" {
 			response["risk_lock_source"] = strings.TrimSpace(source)
 		}

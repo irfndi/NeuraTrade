@@ -1828,11 +1828,16 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 	}
 
 	totalUSDT := 0.0
+	freeUSDT := 0.0
+	usedUSDT := 0.0
+	usdtFromCoinList := false
 	for _, balanceData := range raw.Data {
+		accountPrefix := strings.ToUpper(strings.TrimSpace(balanceData.AccountType))
 		if strings.TrimSpace(balanceData.USDTBalance) != "" {
 			value, _ := strconv.ParseFloat(strings.TrimSpace(balanceData.USDTBalance), 64)
 			if value > 0 {
 				totalUSDT += value
+				freeUSDT += value
 				key := strings.ToUpper(strings.TrimSpace(balanceData.AccountType)) + "_USDT"
 				result.Total[key] = value
 				result.Free[key] = value
@@ -1849,20 +1854,37 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 			free, _ := strconv.ParseFloat(coin.Available, 64)
 			frozen, _ := strconv.ParseFloat(coin.Frozen, 64)
 			locked, _ := strconv.ParseFloat(coin.Lock, 64)
+			coinKey := strings.ToUpper(strings.TrimSpace(coin.Coin))
+			scopedKey := accountPrefix + "_" + coinKey
 
-			result.Total[coin.Coin] = total
-			result.Free[coin.Coin] = free
-			result.Used[coin.Coin] = frozen + locked
+			result.Total[coinKey] += total
+			result.Free[coinKey] += free
+			result.Used[coinKey] += frozen + locked
+
+			if strings.TrimSpace(scopedKey) != "_" {
+				result.Total[scopedKey] = total
+				result.Free[scopedKey] = free
+				result.Used[scopedKey] = frozen + locked
+			}
+
+			if coinKey == "USDT" {
+				usdtFromCoinList = true
+			}
 
 			if total > 0 {
 				log.Printf("[CCXT Native] Bitget balance: %s = %.8f (free: %.8f)", coin.Coin, total, free)
 			}
 		}
 	}
+	if usdtFromCoinList {
+		totalUSDT = result.Total["USDT"]
+		freeUSDT = result.Free["USDT"]
+		usedUSDT = result.Used["USDT"]
+	}
 	if totalUSDT > 0 {
 		result.Total["USDT"] = totalUSDT
-		result.Free["USDT"] = totalUSDT
-		result.Used["USDT"] = 0
+		result.Free["USDT"] = freeUSDT
+		result.Used["USDT"] = usedUSDT
 	}
 
 	log.Printf("[CCXT Native] Bitget balance fetched: %d assets", len(result.Total))

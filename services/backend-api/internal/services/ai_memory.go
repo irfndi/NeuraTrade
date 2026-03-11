@@ -581,7 +581,10 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	`
 
 	const scopedExpectancyBaseQuery = `
-		SELECT realized_pnl
+		SELECT realized_pnl + CASE
+			WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0)
+			ELSE COALESCE(fees, 0)
+		END AS net_realized_pnl
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND (? = '' OR COALESCE(chat_id, '') = ?)

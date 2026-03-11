@@ -493,6 +493,30 @@ func (a bitgetFuturesAccount) effectiveLeverageForMarginMode(holdSide string, ma
 	return 0
 }
 
+type bitgetLeverageField string
+
+func (f *bitgetLeverageField) UnmarshalJSON(data []byte) error {
+	if f == nil {
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		*f = bitgetLeverageField(str)
+		return nil
+	}
+	var num json.Number
+	if err := json.Unmarshal(data, &num); err == nil {
+		*f = bitgetLeverageField(num.String())
+		return nil
+	}
+	var integer int
+	if err := json.Unmarshal(data, &integer); err == nil {
+		*f = bitgetLeverageField(strconv.Itoa(integer))
+		return nil
+	}
+	return fmt.Errorf("unsupported leverage field payload: %s", string(data))
+}
+
 func (e *BitgetOrderExecutor) syncFuturesLeverageForDetails(
 	ctx context.Context,
 	symbol string,
@@ -550,12 +574,32 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 		return 0, "", fmt.Errorf("failed to verify futures leverage for %s: %w", symbol, err)
 	}
 	effective := verified.effectiveLeverageForMarginMode(holdSide, marginMode)
-	if verified.MarginMode != strings.ToLower(strings.TrimSpace(marginMode)) || effective != desiredLeverage {
+	expectedMarginMode := strings.ToLower(strings.TrimSpace(marginMode))
+	if verified.MarginMode != expectedMarginMode {
+		exchangeLeverage := verified.effectiveLeverageForMarginMode(holdSide, verified.MarginMode)
+		if exchangeLeverage <= 0 {
+			exchangeLeverage = effective
+		}
+		if exchangeLeverage > 0 {
+			fmt.Printf("[BITGET-ORDER] Futures leverage mode mismatch for %s: wanted %dx %s, using exchange %dx %s (%s)\n",
+				symbol, desiredLeverage, expectedMarginMode, exchangeLeverage, verified.MarginMode, verified.PosMode)
+			return exchangeLeverage, "exchange preserved", nil
+		}
 		return 0, "", fmt.Errorf(
 			"futures leverage verification mismatch for %s: wanted %dx %s got %dx %s",
 			symbol,
 			desiredLeverage,
-			marginMode,
+			expectedMarginMode,
+			effective,
+			verified.MarginMode,
+		)
+	}
+	if effective != desiredLeverage {
+		return 0, "", fmt.Errorf(
+			"futures leverage verification mismatch for %s: wanted %dx %s got %dx %s",
+			symbol,
+			desiredLeverage,
+			expectedMarginMode,
 			effective,
 			verified.MarginMode,
 		)
@@ -580,14 +624,14 @@ func (e *BitgetOrderExecutor) getFuturesAccount(ctx context.Context, symbol stri
 		Code string `json:"code"`
 		Msg  string `json:"msg"`
 		Data struct {
-			MarginMode            string `json:"marginMode"`
-			PosMode               string `json:"posMode"`
-			CrossMarginLeverage   string `json:"crossMarginLeverage"`
-			CrossedMarginLeverage string `json:"crossedMarginLeverage"`
-			LongLeverage          string `json:"longLeverage"`
-			ShortLeverage         string `json:"shortLeverage"`
-			IsolatedLongLever     string `json:"isolatedLongLever"`
-			IsolatedShortLever    string `json:"isolatedShortLever"`
+			MarginMode            string              `json:"marginMode"`
+			PosMode               string              `json:"posMode"`
+			CrossMarginLeverage   bitgetLeverageField `json:"crossMarginLeverage"`
+			CrossedMarginLeverage bitgetLeverageField `json:"crossedMarginLeverage"`
+			LongLeverage          bitgetLeverageField `json:"longLeverage"`
+			ShortLeverage         bitgetLeverageField `json:"shortLeverage"`
+			IsolatedLongLever     bitgetLeverageField `json:"isolatedLongLever"`
+			IsolatedShortLever    bitgetLeverageField `json:"isolatedShortLever"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
@@ -600,12 +644,12 @@ func (e *BitgetOrderExecutor) getFuturesAccount(ctx context.Context, symbol stri
 	account := &bitgetFuturesAccount{
 		MarginMode:            strings.ToLower(strings.TrimSpace(result.Data.MarginMode)),
 		PosMode:               strings.ToLower(strings.TrimSpace(result.Data.PosMode)),
-		CrossMarginLeverage:   parseBitgetLeverage(result.Data.CrossMarginLeverage),
-		CrossedMarginLeverage: parseBitgetLeverage(result.Data.CrossedMarginLeverage),
-		LongLeverage:          parseBitgetLeverage(result.Data.LongLeverage),
-		ShortLeverage:         parseBitgetLeverage(result.Data.ShortLeverage),
-		IsolatedLongLeverage:  parseBitgetLeverage(result.Data.IsolatedLongLever),
-		IsolatedShortLeverage: parseBitgetLeverage(result.Data.IsolatedShortLever),
+		CrossMarginLeverage:   parseBitgetLeverage(string(result.Data.CrossMarginLeverage)),
+		CrossedMarginLeverage: parseBitgetLeverage(string(result.Data.CrossedMarginLeverage)),
+		LongLeverage:          parseBitgetLeverage(string(result.Data.LongLeverage)),
+		ShortLeverage:         parseBitgetLeverage(string(result.Data.ShortLeverage)),
+		IsolatedLongLeverage:  parseBitgetLeverage(string(result.Data.IsolatedLongLever)),
+		IsolatedShortLeverage: parseBitgetLeverage(string(result.Data.IsolatedShortLever)),
 	}
 	return account, nil
 }

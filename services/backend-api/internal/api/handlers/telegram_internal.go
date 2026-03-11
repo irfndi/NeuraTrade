@@ -888,6 +888,30 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if effectiveMaxCapitalPct > 0 {
 			details["effective_max_capital_pct"] = fmt.Sprintf("%.2f", effectiveMaxCapitalPct)
 		}
+		if walletBasisMode, ok := diagnostics["wallet_basis_mode"].(string); ok && strings.TrimSpace(walletBasisMode) != "" {
+			details["wallet_basis_mode"] = strings.TrimSpace(walletBasisMode)
+		}
+		if walletBasisSource, ok := diagnostics["wallet_basis_source"].(string); ok && strings.TrimSpace(walletBasisSource) != "" {
+			details["wallet_basis_source"] = strings.TrimSpace(walletBasisSource)
+		}
+		if walletBasisUSDT, ok := diagnostics["wallet_basis_usdt"]; ok {
+			details["wallet_basis_usdt"] = fmt.Sprintf("%v", walletBasisUSDT)
+		}
+		if missingDetected, ok := diagnostics["protection_missing_detected"]; ok {
+			details["protection_missing_detected"] = fmt.Sprintf("%v", missingDetected)
+		}
+		if missingRecovered, ok := diagnostics["protection_missing_recovered"]; ok {
+			details["protection_missing_recovered"] = fmt.Sprintf("%v", missingRecovered)
+		}
+		if riskExpectancy, ok := diagnostics["risk_expectancy"]; ok {
+			details["risk_expectancy"] = fmt.Sprintf("%v", riskExpectancy)
+		}
+		if riskExpectancyGross, ok := diagnostics["risk_expectancy_gross"]; ok {
+			details["risk_expectancy_gross"] = fmt.Sprintf("%v", riskExpectancyGross)
+		}
+		if riskFeeDrag, ok := diagnostics["risk_fee_drag_expectancy"]; ok {
+			details["risk_fee_drag_expectancy"] = fmt.Sprintf("%v", riskFeeDrag)
+		}
 		details["candidate_viable_count"] = fmt.Sprintf("%d", candidateViableCount)
 		if rolloutStageCurrent != "" {
 			details["rollout_stage_current"] = rolloutStageCurrent

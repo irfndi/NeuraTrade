@@ -1962,6 +1962,9 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		hasActiveScalpingRisk          bool
 		hasRiskCurrentDrawdown         bool
 		riskMaxDrawdown                float64
+		riskExpectancy                 float64
+		riskExpectancyGross            float64
+		riskFeeDragExpectancy          float64
 		aiWindowTotal                  int
 		aiWindowSuccess                int
 		aiWindowErrors                 int
@@ -1999,6 +2002,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		recentLossStreak               int
 		recentLossActive               bool
 		recentLossWindowSec            int
+		walletBasisMode                string
+		walletBasisSource              string
+		walletBasisUSDT                float64
+		protectionMissingDetected      int
+		protectionMissingRecovered     int
 	)
 
 	for _, quest := range e.quests {
@@ -2116,6 +2124,15 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if drawdown := readQuestMetricFloat(cp["risk_max_drawdown"]); drawdown > riskMaxDrawdown {
 			riskMaxDrawdown = drawdown
 		}
+		if expectancy := readQuestMetricFloat(cp["risk_expectancy"]); expectancy != 0 || cp["risk_expectancy"] != nil {
+			riskExpectancy = expectancy
+		}
+		if gross := readQuestMetricFloat(cp["risk_expectancy_gross"]); gross != 0 || cp["risk_expectancy_gross"] != nil {
+			riskExpectancyGross = gross
+		}
+		if drag := readQuestMetricFloat(cp["risk_fee_drag_expectancy"]); drag != 0 || cp["risk_fee_drag_expectancy"] != nil {
+			riskFeeDragExpectancy = drag
+		}
 		recentLossStreak = maxInt(recentLossStreak, readQuestMetricInt(cp["recovery_recent_loss_streak"]))
 		if readQuestMetricBool(cp["recovery_recent_loss_active"]) {
 			recentLossActive = true
@@ -2141,6 +2158,17 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		if value := readQuestMetricString(cp["rollout_gate_reason_current"]); value != "" {
 			rolloutGateReason = value
 		}
+		if mode := readQuestMetricString(cp["wallet_basis_mode"]); mode != "" {
+			walletBasisMode = mode
+		}
+		if source := readQuestMetricString(cp["wallet_basis_source"]); source != "" {
+			walletBasisSource = source
+		}
+		if basis := readQuestMetricFloat(cp["wallet_basis_usdt"]); basis > walletBasisUSDT {
+			walletBasisUSDT = basis
+		}
+		protectionMissingDetected = maxInt(protectionMissingDetected, readQuestMetricInt(cp["protection_missing_detected"]))
+		protectionMissingRecovered = maxInt(protectionMissingRecovered, readQuestMetricInt(cp["protection_missing_recovered"]))
 		if _, exists := cp["autonomy_gate_open"]; exists {
 			autonomyGateOpen = readQuestMetricBool(cp["autonomy_gate_open"])
 		}
@@ -2297,6 +2325,17 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	if strings.TrimSpace(accountTier) != "" {
 		result["account_tier"] = strings.TrimSpace(accountTier)
 	}
+	if strings.TrimSpace(walletBasisMode) != "" {
+		result["wallet_basis_mode"] = strings.TrimSpace(walletBasisMode)
+	}
+	if strings.TrimSpace(walletBasisSource) != "" {
+		result["wallet_basis_source"] = strings.TrimSpace(walletBasisSource)
+	}
+	if walletBasisUSDT > 0 {
+		result["wallet_basis_usdt"] = walletBasisUSDT
+	}
+	result["protection_missing_detected"] = protectionMissingDetected
+	result["protection_missing_recovered"] = protectionMissingRecovered
 	if effectiveMinConfidence > 0 {
 		result["effective_min_confidence"] = effectiveMinConfidence
 	}
@@ -2313,6 +2352,9 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		result["risk_current_drawdown"] = riskCurrentDrawdown
 	}
 	result["risk_max_drawdown"] = riskMaxDrawdown
+	result["risk_expectancy"] = riskExpectancy
+	result["risk_expectancy_gross"] = riskExpectancyGross
+	result["risk_fee_drag_expectancy"] = riskFeeDragExpectancy
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions
 	result["state_drift_count"] = stateDriftPositions

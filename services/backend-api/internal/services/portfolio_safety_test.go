@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -211,6 +212,100 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_WithBalance(t *testing.T) {
 	assert.InDelta(t, 0.2, snapshot.ExposurePct, 0.00001)
 	assert.Len(t, snapshot.ExchangeExposures, 1)
 	assert.Equal(t, "binance", snapshot.ExchangeExposures[0].Exchange)
+}
+
+func TestPortfolioSafetyService_GetPortfolioSnapshot_WithLowercaseQuoteCurrency(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"usdt": 1000.0},
+			Free:      map[string]float64{"UsDt": 700.0},
+			Used:      map[string]float64{"USDT": 300.0},
+		},
+	}
+
+	service := NewPortfolioSafetyService(
+		config,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	snapshot, err := service.GetPortfolioSnapshot(context.Background(), "chat-case", []string{"bitget"})
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	assert.True(t, snapshot.TotalEquity.Equal(decimal.NewFromFloat(1000.0)))
+	assert.True(t, snapshot.AvailableFunds.Equal(decimal.NewFromFloat(700.0)))
+	assert.True(t, snapshot.TotalExposure.Equal(decimal.NewFromFloat(300.0)))
+}
+
+func TestPortfolioSafetyService_GetPortfolioSnapshot_AllExchangeBalancesFailWithoutCache_ReturnsError(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	mockCCXT := &mockCCXTForPortfolioSafety{err: errors.New("Too Many Requests")}
+
+	service := NewPortfolioSafetyService(
+		config,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	_, err := service.GetPortfolioSnapshot(context.Background(), "chat-rate-limit", []string{"bitget"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to fetch balance from all requested exchanges")
+}
+
+func TestPortfolioSafetyService_GetPortfolioSnapshot_UsesRecentStaleCacheOnRefreshFailure(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.CacheTTL = 10 * time.Millisecond
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"USDT": 46.93},
+			Free:      map[string]float64{"USDT": 46.93},
+			Used:      map[string]float64{"USDT": 0},
+		},
+	}
+
+	service := NewPortfolioSafetyService(
+		config,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	ctx := context.Background()
+	snapshot, err := service.GetPortfolioSnapshot(ctx, "chat-stale", []string{"bitget"})
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	assert.True(t, snapshot.TotalEquity.Equal(decimal.NewFromFloat(46.93)))
+
+	time.Sleep(20 * time.Millisecond)
+	mockCCXT.err = errors.New("Too Many Requests")
+
+	fallbackSnapshot, err := service.GetPortfolioSnapshot(ctx, "chat-stale", []string{"bitget"})
+	require.NoError(t, err)
+	require.NotNil(t, fallbackSnapshot)
+	assert.True(t, fallbackSnapshot.TotalEquity.Equal(decimal.NewFromFloat(46.93)))
+	assert.True(t, fallbackSnapshot.AvailableFunds.Equal(decimal.NewFromFloat(46.93)))
 }
 
 func TestPortfolioSafetyService_CheckSafety_Allowed(t *testing.T) {
@@ -692,6 +787,63 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 			}
 		})
 	}
+}
+
+func TestPortfolioSafetyService_CanExecuteTradeWithLeverage_BitgetFuturesAllowsMinNotionalWhenMarginSupportsIt(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.MaxPositionSizePct = 0.10
+	config.MaxPositionFloorPct = 0.20
+
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"USDT": 46.93},
+			Free:      map[string]float64{"USDT": 0.61},
+			Used:      map[string]float64{"USDT": 46.32},
+		},
+	}
+
+	service := NewPortfolioSafetyService(config, mockCCXT, nil, nil, nil, nil, nil, nil, nil)
+	allowed, reason, err := service.CanExecuteTradeWithLeverage(
+		context.Background(),
+		"chat-bitget",
+		"bitget",
+		"OPN/USDT:USDT",
+		"futures",
+		10,
+		decimal.NewFromFloat(6.0),
+	)
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Empty(t, reason)
+}
+
+func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesAllowsMinNotionalWhenBalanceSnapshotIsZero(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"USDT": 0},
+			Free:      map[string]float64{"USDT": 0},
+			Used:      map[string]float64{"USDT": 0},
+		},
+	}
+
+	service := NewPortfolioSafetyService(config, mockCCXT, nil, nil, nil, nil, nil, nil, nil)
+	allowed, reason, err := service.CanExecuteTrade(
+		context.Background(),
+		"chat-bitget",
+		"bitget",
+		"OPN/USDT:USDT",
+		"futures",
+		decimal.NewFromFloat(6.0),
+	)
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Empty(t, reason)
 }
 
 func TestPortfolioSafetyService_SetConfig_NormalizesDefaultsButPreservesZeroFloor(t *testing.T) {

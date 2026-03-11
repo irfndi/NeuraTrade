@@ -638,6 +638,11 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 		return nil
 	}
 	positionID := "sync-" + safeIDPart(strings.ToLower(strings.TrimSpace(exchange))+"-"+normalizeSymbolForComparison(position.Symbol)+"-"+strings.ToLower(strings.TrimSpace(position.Side)))
+	defaultStop, defaultTake := defaultExitLevels(position.EntryPrice.InexactFloat64(), normalizedSideForDefault(position.Side))
+	if defaultStop.LessThanOrEqual(decimal.Zero) || defaultTake.LessThanOrEqual(decimal.Zero) {
+		defaultStop = decimal.Zero
+		defaultTake = decimal.Zero
+	}
 	now := position.Timestamp.Time().UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -646,9 +651,9 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 	if _, err := s.db.Exec(ctx, `
 		INSERT INTO trading_positions (
 			position_id, order_id, chat_id, exchange, symbol, side, market_type,
-			size, entry_price, last_price, unrealized_pnl, close_price, realized_pnl,
-			status, source, opened_at, closed_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,$9,$10,0,0,'open','bootstrap_positions',$11,NULL,$12)
+			size, entry_price, stop_loss, take_profit, last_price, unrealized_pnl,
+			protection_updated_at, close_price, realized_pnl, status, source, opened_at, closed_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,$9,$10,$11,$12,$13,0,0,'open','bootstrap_positions',$14,NULL,$15)
 		ON CONFLICT (position_id) DO UPDATE SET
 			order_id = EXCLUDED.order_id,
 			chat_id = EXCLUDED.chat_id,
@@ -658,16 +663,33 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 			market_type = EXCLUDED.market_type,
 			size = EXCLUDED.size,
 			entry_price = EXCLUDED.entry_price,
+			stop_loss = CASE
+				WHEN trading_positions.stop_loss > 0 THEN trading_positions.stop_loss
+				ELSE EXCLUDED.stop_loss
+			END,
+			take_profit = CASE
+				WHEN trading_positions.take_profit > 0 THEN trading_positions.take_profit
+				ELSE EXCLUDED.take_profit
+			END,
 			last_price = EXCLUDED.last_price,
 			unrealized_pnl = EXCLUDED.unrealized_pnl,
+			protection_updated_at = CASE
+				WHEN trading_positions.stop_loss > 0 OR trading_positions.take_profit > 0 THEN trading_positions.protection_updated_at
+				ELSE EXCLUDED.protection_updated_at
+			END,
 			close_price = 0,
 			realized_pnl = 0,
 			status = 'open',
-			source = 'bootstrap_positions',
+			source = CASE
+				WHEN COALESCE(trading_positions.source, '') IN ('', 'bootstrap_positions', 'bootstrap_open_orders')
+					OR trading_positions.position_id LIKE 'sync-%'
+				THEN 'bootstrap_positions'
+				ELSE trading_positions.source
+			END,
 			closed_at = NULL,
 			updated_at = EXCLUDED.updated_at
 	`, positionID, positionID, strings.TrimSpace(chatID), strings.TrimSpace(exchange), strings.TrimSpace(position.Symbol),
-		normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, position.MarkPrice, position.UnrealizedPnl, now, now); err != nil {
+		normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, defaultStop, defaultTake, position.MarkPrice, position.UnrealizedPnl, now, now, now); err != nil {
 		return fmt.Errorf("sync position upsert failed: %w", err)
 	}
 	return nil
@@ -841,8 +863,8 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 		sort.SliceStable(localOpen, func(i, j int) bool {
 			leftSource := strings.TrimSpace(localOpen[i].Source)
 			rightSource := strings.TrimSpace(localOpen[j].Source)
-			leftBootstrap := strings.EqualFold(leftSource, "bootstrap_positions")
-			rightBootstrap := strings.EqualFold(rightSource, "bootstrap_positions")
+			leftBootstrap := isBootstrapLifecycleSource(leftSource)
+			rightBootstrap := isBootstrapLifecycleSource(rightSource)
 			if leftBootstrap != rightBootstrap {
 				return leftBootstrap
 			}
@@ -875,7 +897,8 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 					continue
 				}
 				// Preserve the snapshot-backed aggregate row for partial-size leftovers.
-				if strings.EqualFold(strings.TrimSpace(localPos.Source), "bootstrap_positions") ||
+				if isBootstrapLifecycleSource(strings.TrimSpace(localPos.Source)) ||
+					strings.EqualFold(strings.TrimSpace(localPos.Source), "manual_reconciliation") ||
 					strings.HasPrefix(strings.TrimSpace(localPos.PositionID), "sync-") {
 					remainingByKey[key] = decimal.Zero
 					continue
@@ -977,7 +1000,7 @@ func (s *TradingLifecycleStore) RepairMissingSyncPositions(
 		FROM trading_positions
 		WHERE LOWER(status) = 'open'
 		  AND (
-			COALESCE(source, '') = 'bootstrap_positions' OR
+			COALESCE(source, '') IN ('bootstrap_positions', 'bootstrap_open_orders') OR
 			position_id LIKE 'sync-%'
 		  )
 	`
@@ -1303,11 +1326,30 @@ func (s *TradingLifecycleStore) GetRealizedReturnSeries(
 	exchange string,
 	since time.Time,
 ) ([]decimal.Decimal, error) {
+	return s.getRealizedReturnSeries(ctx, chatID, exchange, since, true)
+}
+
+func (s *TradingLifecycleStore) GetGrossRealizedReturnSeries(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	since time.Time,
+) ([]decimal.Decimal, error) {
+	return s.getRealizedReturnSeries(ctx, chatID, exchange, since, false)
+}
+
+func (s *TradingLifecycleStore) getRealizedReturnSeries(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	since time.Time,
+	includeFees bool,
+) ([]decimal.Decimal, error) {
 	if since.IsZero() {
 		since = time.Now().UTC().Add(-24 * time.Hour)
 	}
 	query := `
-		SELECT realized_pnl, entry_price, filled_amount
+		SELECT realized_pnl, fees, entry_price, filled_amount
 		FROM realized_pnl_journal
 		WHERE closed_at >= $1
 	`
@@ -1331,10 +1373,15 @@ func (s *TradingLifecycleStore) GetRealizedReturnSeries(
 	series := make([]decimal.Decimal, 0, 64)
 	for rows.Next() {
 		var pnl decimal.Decimal
+		var fees decimal.Decimal
 		var entry decimal.Decimal
 		var filled decimal.Decimal
-		if err := rows.Scan(&pnl, &entry, &filled); err != nil {
+		if err := rows.Scan(&pnl, &fees, &entry, &filled); err != nil {
 			return nil, fmt.Errorf("scan realized return row failed: %w", err)
+		}
+		netPnL := pnl
+		if includeFees {
+			netPnL = netPnL.Add(normalizeLifecycleFeeAdjustment(fees))
 		}
 
 		notional := entry.Abs().Mul(filled.Abs())
@@ -1342,13 +1389,20 @@ func (s *TradingLifecycleStore) GetRealizedReturnSeries(
 			continue
 		}
 
-		ret := pnl.Div(notional)
+		ret := netPnL.Div(notional)
 		series = append(series, ret)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate realized return rows failed: %w", err)
 	}
 	return series, nil
+}
+
+func normalizeLifecycleFeeAdjustment(fees decimal.Decimal) decimal.Decimal {
+	if fees.GreaterThan(decimal.Zero) {
+		return fees.Neg()
+	}
+	return fees
 }
 
 func parseLifecycleTimestamp(raw interface{}) time.Time {
@@ -1508,6 +1562,11 @@ func normalizeLifecycleSource(source string) string {
 		return "autonomous"
 	}
 	return normalized
+}
+
+func isBootstrapLifecycleSource(source string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(source))
+	return normalized == "bootstrap_positions" || normalized == "bootstrap_open_orders"
 }
 
 func defaultPositionID(orderID, symbol, side string) string {

@@ -303,6 +303,11 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 	}
 
 	if policy.AccountTier == AccountTierMicro {
+		if !strings.EqualFold(strings.TrimSpace(input.RecoveryMode), RecoveryModeDeriskOnly) &&
+			policy.EffectiveMinConfidence > 0.72 {
+			policy.EffectiveMinConfidence = 0.72
+			policy.PolicyAdjustments = append(policy.PolicyAdjustments, "micro_confidence_cap")
+		}
 		if policy.EffectiveMaxCapitalPct > cfg.MicroMaxCapitalPct {
 			policy.EffectiveMaxCapitalPct = cfg.MicroMaxCapitalPct
 		}
@@ -595,9 +600,13 @@ func invalidCandidateFloat(value float64) bool {
 
 func resolvePolicySpreadThreshold(policy ScalpingCyclePolicy) float64 {
 	if !math.IsNaN(policy.MaxBidAskSpreadPct) && !math.IsInf(policy.MaxBidAskSpreadPct, 0) && policy.MaxBidAskSpreadPct > 0 {
-		return clampFloat(policy.MaxBidAskSpreadPct, minScalpingMaxBidAskSpreadPct, maxScalpingMaxBidAskSpreadPct)
+		return NormalizeScalpingMaxBidAskSpreadPct(policy.MaxBidAskSpreadPct)
 	}
 	return ResolveScalpingMaxBidAskSpreadPctFromEnv()
+}
+
+func NormalizeScalpingMaxBidAskSpreadPct(value float64) float64 {
+	return clampFloat(value, minScalpingMaxBidAskSpreadPct, maxScalpingMaxBidAskSpreadPct)
 }
 
 func ResolveScalpingMaxBidAskSpreadPctFromEnv() float64 {
@@ -612,7 +621,7 @@ func ResolveScalpingMaxBidAskSpreadPctFromEnv() float64 {
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
 		return DefaultScalpingMaxBidAskSpreadPct
 	}
-	return clampFloat(value, minScalpingMaxBidAskSpreadPct, maxScalpingMaxBidAskSpreadPct)
+	return NormalizeScalpingMaxBidAskSpreadPct(value)
 }
 
 func clampFloat(value, minValue, maxValue float64) float64 {

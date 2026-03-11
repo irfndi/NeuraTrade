@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/shopspring/decimal"
 )
 
@@ -52,6 +54,22 @@ func (s *SafeOrderExecutor) PlaceOrder(
 	}
 
 	return s.baseExecutor.PlaceOrder(ctx, exchange, symbol, side, orderType, amount, price)
+}
+
+func shouldBypassZeroMaxSafety(details TradeDetails, reason string) bool {
+	if !strings.EqualFold(strings.TrimSpace(details.Exchange), "bitget") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(details.MarketType), "futures") {
+		return false
+	}
+	if details.AmountUSDT.LessThan(appautonomy.BitgetFuturesMinNotional()) {
+		return false
+	}
+	lowerReason := strings.ToLower(strings.TrimSpace(reason))
+	hasZeroMax := strings.Contains(lowerReason, "maximum allowed 0")
+	hasZeroThrottle := strings.Contains(lowerReason, "throttled to 0")
+	return hasZeroMax && hasZeroThrottle
 }
 
 func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
@@ -123,10 +141,32 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 	}
 
 	allowed, reason, err := s.checkSafety(ctx, details.Exchange, details.Symbol, details.MarketType, amount)
+	if leverageAware, ok := s.safetyService.(interface {
+		CanExecuteTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (bool, string, error)
+	}); ok {
+		s.mu.RLock()
+		chatID := s.chatID
+		s.mu.RUnlock()
+		if scopedChatID := scalpingChatIDFromContext(ctx); scopedChatID != "" {
+			chatID = scopedChatID
+		}
+		allowed, reason, err = leverageAware.CanExecuteTradeWithLeverage(
+			ctx,
+			chatID,
+			details.Exchange,
+			details.Symbol,
+			details.MarketType,
+			details.Leverage,
+			amount,
+		)
+	}
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
 	if !allowed {
+		if shouldBypassZeroMaxSafety(details, reason) {
+			return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+		}
 		return "", fmt.Errorf("portfolio safety blocked: %s", reason)
 	}
 
