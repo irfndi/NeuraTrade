@@ -34,6 +34,22 @@ func TestNewInMemoryLearningSystem(t *testing.T) {
 	}
 }
 
+func TestSanitizeLearningDataDir(t *testing.T) {
+	configured := filepath.Join(t.TempDir(), "ai_learning")
+	resolved, ok := sanitizeLearningDataDir(configured)
+	if !ok {
+		t.Fatal("expected configured temp dir to be accepted")
+	}
+	if resolved != configured {
+		t.Fatalf("expected resolved dir %q, got %q", configured, resolved)
+	}
+
+	unsafePath := filepath.Join("..", "..", "etc", "neuratrade")
+	if _, ok := sanitizeLearningDataDir(unsafePath); ok {
+		t.Fatal("expected path traversal candidate to be rejected")
+	}
+}
+
 func TestInMemoryLearningSystem_RecordDecision(t *testing.T) {
 	ls := newTestLearningSystem(t)
 

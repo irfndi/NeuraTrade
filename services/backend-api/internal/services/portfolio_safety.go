@@ -601,9 +601,10 @@ func (s *PortfolioSafetyService) resolveScopedMarketFunds(ctx context.Context, e
 	normalizedMarketType := strings.ToLower(strings.TrimSpace(marketType))
 	keys := []string{"USDT"}
 	if normalizedExchange == "bitget" {
-		if normalizedMarketType == "futures" {
+		switch normalizedMarketType {
+		case "futures":
 			keys = []string{"USDT_FUTURES_USDT", "USDT"}
-		} else if normalizedMarketType == "spot" {
+		case "spot":
 			keys = []string{"SPOT_USDT", "USDT"}
 		}
 	}
