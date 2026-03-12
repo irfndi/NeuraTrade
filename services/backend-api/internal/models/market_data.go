@@ -54,46 +54,73 @@ type MarketPrice struct {
 
 // GetPrice returns the last traded price as a float64.
 func (mp *MarketPrice) GetPrice() float64 {
+	if mp == nil {
+		return 0
+	}
 	return mp.Price.InexactFloat64()
 }
 
 // GetVolume returns the trading volume as a float64.
 func (mp *MarketPrice) GetVolume() float64 {
+	if mp == nil {
+		return 0
+	}
 	return mp.Volume.InexactFloat64()
 }
 
 // GetTimestamp returns the time when the price data was recorded.
 func (mp *MarketPrice) GetTimestamp() time.Time {
+	if mp == nil {
+		return time.Time{}
+	}
 	return mp.Timestamp
 }
 
 // GetExchangeName returns the name of the exchange where the price originates.
 func (mp *MarketPrice) GetExchangeName() string {
+	if mp == nil {
+		return ""
+	}
 	return mp.ExchangeName
 }
 
 // GetSymbol returns the trading pair symbol.
 func (mp *MarketPrice) GetSymbol() string {
+	if mp == nil {
+		return ""
+	}
 	return mp.Symbol
 }
 
 // GetBid returns the best bid price as a float64.
 func (mp *MarketPrice) GetBid() float64 {
+	if mp == nil {
+		return 0
+	}
 	return mp.Bid.InexactFloat64()
 }
 
 // GetAsk returns the best ask price as a float64.
 func (mp *MarketPrice) GetAsk() float64 {
+	if mp == nil {
+		return 0
+	}
 	return mp.Ask.InexactFloat64()
 }
 
 // GetHigh returns the 24h high price as a float64.
 func (mp *MarketPrice) GetHigh() float64 {
+	if mp == nil {
+		return 0
+	}
 	return mp.High24h.InexactFloat64()
 }
 
 // GetLow returns the 24h low price as a float64.
 func (mp *MarketPrice) GetLow() float64 {
+	if mp == nil {
+		return 0
+	}
 	return mp.Low24h.InexactFloat64()
 }
 
