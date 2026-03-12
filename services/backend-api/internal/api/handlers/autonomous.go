@@ -1204,7 +1204,7 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 	}
 	note := fmt.Sprintf("Exchange-reconciled net realized PnL (fees included); win rate excludes %d breakeven trade(s)", perf.Breakeven)
 	if perf.Trades == 0 {
-		note = fmt.Sprintf("No realized lifecycle closes in %s (open positions and synthetic drift/bootstrap reconciliation rows are excluded)", window)
+		note = fmt.Sprintf("No realized lifecycle closes in %s (filled entry orders, open positions, and synthetic drift/bootstrap reconciliation rows are excluded until a close is recorded)", window)
 	}
 	return PerformanceSummaryResponse{
 		Timeframe:  window,
