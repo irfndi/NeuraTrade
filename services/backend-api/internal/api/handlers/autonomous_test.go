@@ -67,6 +67,33 @@ func TestAutonomousHandler_BuildLifecyclePerformanceSummary(t *testing.T) {
 	assert.Contains(t, summary.Note, "Exchange-reconciled")
 }
 
+func TestAutonomousHandler_BuildLifecyclePerformanceSummary_NoVisibleTradesStillUsesLifecycleSummary(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "autonomous-lifecycle-performance-empty.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := services.NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	handler := NewAutonomousHandler(nil, nil, nil)
+	handler.SetLifecycleStore(store)
+
+	summary, ok := handler.buildLifecyclePerformanceSummary(context.Background(), "chat-1", "24h")
+	require.True(t, ok)
+	assert.Equal(t, "24h", summary.Timeframe)
+	assert.Equal(t, "0", summary.PnL)
+	assert.Equal(t, "0.0%", summary.WinRate)
+	assert.Equal(t, "N/A", summary.Sharpe)
+	assert.Equal(t, "N/A", summary.Sortino)
+	assert.Equal(t, "N/A", summary.Drawdown)
+	assert.Equal(t, 0, summary.Trades)
+	assert.Equal(t, "0", summary.BestTrade)
+	assert.Equal(t, "0", summary.WorstTrade)
+	assert.Contains(t, summary.Note, "No realized lifecycle closes")
+}
+
 func TestAutonomousHandler_EnrichPortfolioWithLifecycle(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "autonomous-lifecycle-portfolio.db"))
 	require.NoError(t, err)

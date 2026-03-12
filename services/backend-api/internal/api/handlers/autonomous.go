@@ -161,7 +161,7 @@ type PerformanceSummaryResponse struct {
 	Sharpe     string `json:"sharpe,omitempty"`
 	Sortino    string `json:"sortino,omitempty"`
 	Drawdown   string `json:"drawdown,omitempty"`
-	Trades     int    `json:"trades,omitempty"`
+	Trades     int    `json:"trades"`
 	BestTrade  string `json:"best_trade,omitempty"`
 	WorstTrade string `json:"worst_trade,omitempty"`
 	Note       string `json:"note,omitempty"`
@@ -175,7 +175,7 @@ type StrategyPerformance struct {
 	Sharpe   string `json:"sharpe,omitempty"`
 	Sortino  string `json:"sortino,omitempty"`
 	Drawdown string `json:"drawdown,omitempty"`
-	Trades   int    `json:"trades,omitempty"`
+	Trades   int    `json:"trades"`
 }
 
 // PerformanceBreakdownResponse represents the response for /performance
@@ -1190,9 +1190,6 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 		log.Printf("Failed lifecycle performance query for chat %s: %v", chatID, err)
 		return PerformanceSummaryResponse{}, false
 	}
-	if perf.Trades == 0 {
-		return PerformanceSummaryResponse{}, false
-	}
 	returns, err := h.lifecycleStore.GetRealizedReturnSeries(ctx, chatID, "", since)
 	if err != nil {
 		log.Printf("Failed lifecycle return-series query for chat %s: %v", chatID, err)
@@ -1205,6 +1202,10 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 	if decisiveTrades > 0 {
 		winRate = (float64(perf.Wins) / float64(decisiveTrades)) * 100
 	}
+	note := fmt.Sprintf("Exchange-reconciled net realized PnL (fees included); win rate excludes %d breakeven trade(s)", perf.Breakeven)
+	if perf.Trades == 0 {
+		note = fmt.Sprintf("No realized lifecycle closes in %s (open positions and synthetic drift/bootstrap reconciliation rows are excluded)", window)
+	}
 	return PerformanceSummaryResponse{
 		Timeframe:  window,
 		PnL:        perf.RealizedPnL.String(),
@@ -1215,7 +1216,7 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 		Trades:     perf.Trades,
 		BestTrade:  perf.BestTrade.String(),
 		WorstTrade: perf.WorstTrade.String(),
-		Note:       fmt.Sprintf("Exchange-reconciled net realized PnL (fees included); win rate excludes %d breakeven trade(s)", perf.Breakeven),
+		Note:       note,
 	}, true
 }
 
