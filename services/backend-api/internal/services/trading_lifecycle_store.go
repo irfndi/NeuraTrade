@@ -1285,6 +1285,7 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 		WHERE closed_at >= $1
 	`, netPnLExpr)
 	args := []interface{}{since.UTC()}
+	query += " AND " + lifecycleUserVisibleCloseFilterSQL()
 	if strings.TrimSpace(chatID) != "" {
 		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
 		args = append(args, strings.TrimSpace(chatID))
@@ -1334,6 +1335,7 @@ func (s *TradingLifecycleStore) GetRecentLossStreak(
 		WHERE closed_at >= $1
 	`
 	args := []interface{}{since.UTC()}
+	query += " AND " + lifecycleUserVisibleCloseFilterSQL()
 	if strings.TrimSpace(chatID) != "" {
 		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
 		args = append(args, strings.TrimSpace(chatID))
@@ -1436,6 +1438,7 @@ func (s *TradingLifecycleStore) getRealizedReturnSeries(
 		WHERE closed_at >= $1
 	`
 	args := []interface{}{since.UTC()}
+	query += " AND " + lifecycleUserVisibleCloseFilterSQL()
 	if strings.TrimSpace(chatID) != "" {
 		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
 		args = append(args, strings.TrimSpace(chatID))
@@ -1500,6 +1503,15 @@ func lifecycleNetRealizedPnLSQL() string {
 		WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0)
 		ELSE COALESCE(fees, 0)
 	END`
+}
+
+func lifecycleUserVisibleCloseFilterSQL() string {
+	return `NOT (
+		LOWER(COALESCE(order_id, '')) LIKE 'sync-%' OR
+		LOWER(COALESCE(source, '')) LIKE '%drift%' OR
+		LOWER(COALESCE(source, '')) LIKE '%exchange_missing%' OR
+		LOWER(COALESCE(source, '')) LIKE '%bootstrap%'
+	)`
 }
 
 func parseLifecycleTimestamp(raw interface{}) time.Time {

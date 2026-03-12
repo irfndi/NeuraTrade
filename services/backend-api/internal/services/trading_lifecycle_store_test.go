@@ -177,6 +177,56 @@ func TestTradingLifecycleStore_GetRealizedPerformanceAndOpenOrders(t *testing.T)
 	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(-0.10)))
 }
 
+func TestTradingLifecycleStore_GetRealizedPerformance_ExcludesSyntheticLifecycleCloses(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-performance-filter.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "closed-real-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "DOGE/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(102),
+		RealizedPnL: decimal.NewFromFloat(2),
+		Fees:        decimal.Zero,
+		Source:      "exchange_reconciliation",
+		ClosedAt:    now.Add(-10 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "sync-bitget-doge-usdt-long",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "DOGE/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(100),
+		RealizedPnL: decimal.Zero,
+		Fees:        decimal.Zero,
+		Source:      "bootstrap_reconciliation",
+		ClosedAt:    now.Add(-5 * time.Minute),
+	}))
+
+	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 1, perf.Trades)
+	assert.Equal(t, 1, perf.Wins)
+	assert.Zero(t, perf.Losses)
+	assert.Zero(t, perf.Breakeven)
+	assert.True(t, perf.RealizedPnL.Equal(decimal.NewFromFloat(2)))
+}
+
 func TestTradingLifecycleStore_GetRealizedReturnSeries(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-returns.db"))
 	require.NoError(t, err)
