@@ -690,6 +690,9 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 			END,
 			closed_at = NULL,
 			updated_at = EXCLUDED.updated_at
+		WHERE LOWER(COALESCE(trading_positions.status, '')) <> 'closed'
+			OR trading_positions.closed_at IS NULL
+			OR EXCLUDED.updated_at > trading_positions.closed_at
 	`, positionID, positionID, strings.TrimSpace(chatID), strings.TrimSpace(exchange), strings.TrimSpace(position.Symbol),
 		normalizeLifecycleSide(position.Side), position.Size, position.EntryPrice, defaultStop, defaultTake, position.MarkPrice, position.UnrealizedPnl, now, now, now); err != nil {
 		return fmt.Errorf("sync position upsert failed: %w", err)
