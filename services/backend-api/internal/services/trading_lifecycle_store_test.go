@@ -1046,7 +1046,7 @@ func TestTradingLifecycleStore_ReconcileExchangeSnapshot_ClosesExcessRowsBySize(
 	assert.GreaterOrEqual(t, closedCount, 1)
 }
 
-func TestTradingLifecycleStore_ReconcileExchangeSnapshot_TreatsProvidedPositionsAsFresh(t *testing.T) {
+func TestTradingLifecycleStore_ReconcileExchangeSnapshot_SyncsProvidedPositionsWithoutClosingWhenNotFresh(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-provided-positions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1099,5 +1099,24 @@ func TestTradingLifecycleStore_ReconcileExchangeSnapshot_TreatsProvidedPositions
 	}, "bootstrap_reconciliation")
 	require.NoError(t, err)
 	assert.Equal(t, 1, summary.PositionsSynced)
-	assert.GreaterOrEqual(t, summary.PositionsClosed, 1)
+	assert.Equal(t, 0, summary.PositionsClosed)
+
+	var openCount int
+	err = sqliteDB.QueryRow(
+		ctx,
+		`SELECT COUNT(*) FROM trading_positions WHERE order_id IN ($1, $2) AND LOWER(status) = 'open'`,
+		"ord-provided-a",
+		"ord-provided-b",
+	).Scan(&openCount)
+	require.NoError(t, err)
+	assert.Equal(t, 2, openCount)
+
+	err = sqliteDB.QueryRow(
+		ctx,
+		`SELECT COUNT(*) FROM trading_positions WHERE exchange = $1 AND symbol = $2 AND LOWER(status) = 'open'`,
+		"bitget",
+		"BTC/USDT",
+	).Scan(&openCount)
+	require.NoError(t, err)
+	assert.Equal(t, 3, openCount)
 }

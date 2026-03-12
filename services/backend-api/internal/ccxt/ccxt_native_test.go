@@ -141,7 +141,7 @@ func TestNativeCCXTService_FetchBalance_BitgetMergesCoinListAndSummaryUSDT(t *te
 					{
 						"accountType":"spot",
 						"usdtBalance":"10.50",
-						"coin":[{"coin":"USDT","balance":"10.00","available":"9.50","frozen":"0.25","lock":"0.25"}]
+						"coinList":[{"coin":"USDT","balance":"10.00","available":"9.50","frozen":"0.25","lock":"0.25"}]
 					},
 					{
 						"accountType":"usdt_futures",
@@ -195,6 +195,58 @@ func TestNativeCCXTService_ParseBitgetTicker_PopulatesPercentage(t *testing.T) {
 	assert.Equal(t, -1.25, percentage)
 	adapter := &TickerMarketPriceAdapter{data: &TickerData{Exchange: "bitget", Ticker: *ticker}}
 	assert.Equal(t, -1.25, adapter.GetPriceChange24h())
+}
+
+func TestNativeCCXTService_ParseBybitTicker_PopulatesPercentage(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	ticker, err := service.parseBybitTicker("BTCUSDT", []byte(`{
+		"retCode":0,
+		"retMsg":"OK",
+		"result":{
+			"list":[{
+				"symbol":"BTCUSDT",
+				"lastPrice":"120635.50",
+				"bid1Price":"120635.40",
+				"ask1Price":"120635.60",
+				"highPrice24h":"131309.30",
+				"lowPrice24h":"102007.60",
+				"volume24h":"13713832.0000",
+				"price24hPcnt":"0.142425"
+			}]
+		}
+	}`))
+	require.NoError(t, err)
+	percentage, _ := ticker.Percentage.Float64()
+	assert.InDelta(t, 14.2425, percentage, 0.0001)
+	adapter := &TickerMarketPriceAdapter{data: &TickerData{Exchange: "bybit", Ticker: *ticker}}
+	assert.InDelta(t, 14.2425, adapter.GetPriceChange24h(), 0.0001)
+}
+
+func TestNativeCCXTService_ParseOKXTicker_PopulatesPercentage(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	ticker, err := service.parseOKXTicker("BTC-USDT", []byte(`{
+		"code":"0",
+		"msg":"",
+		"data":[{
+			"instId":"BTC-USDT",
+			"last":"51240",
+			"bidPx":"51239.9",
+			"askPx":"51240",
+			"open24h":"51695.6",
+			"high24h":"52080",
+			"low24h":"50936",
+			"vol24h":"10474.12353007"
+		}]
+	}`))
+	require.NoError(t, err)
+	percentage, _ := ticker.Percentage.Float64()
+	assert.InDelta(t, -0.8813129, percentage, 0.000001)
+	adapter := &TickerMarketPriceAdapter{data: &TickerData{Exchange: "okx", Ticker: *ticker}}
+	assert.InDelta(t, -0.8813129, adapter.GetPriceChange24h(), 0.000001)
 }
 
 func TestNativeCCXTService_FetchOpenOrders_Bitget(t *testing.T) {

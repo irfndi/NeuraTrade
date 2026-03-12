@@ -591,13 +591,14 @@ func (s *NativeCCXTService) parseBybitTicker(symbol string, body []byte) (*Ticke
 		RetMsg  string `json:"retMsg"`
 		Result  struct {
 			List []struct {
-				Symbol    string `json:"symbol"`
-				LastPrice string `json:"lastPrice"`
-				Bid1Price string `json:"bid1Price"`
-				Ask1Price string `json:"ask1Price"`
-				High24h   string `json:"highPrice24h"`
-				Low24h    string `json:"lowPrice24h"`
-				Volume24h string `json:"volume24h"`
+				Symbol        string `json:"symbol"`
+				LastPrice     string `json:"lastPrice"`
+				Bid1Price     string `json:"bid1Price"`
+				Ask1Price     string `json:"ask1Price"`
+				High24h       string `json:"highPrice24h"`
+				Low24h        string `json:"lowPrice24h"`
+				Volume24h     string `json:"volume24h"`
+				Price24hPcnt  string `json:"price24hPcnt"`
 			} `json:"list"`
 		} `json:"result"`
 	}
@@ -616,14 +617,15 @@ func (s *NativeCCXTService) parseBybitTicker(symbol string, body []byte) (*Ticke
 
 	t := raw.Result.List[0]
 	return &Ticker{
-		Symbol:    t.Symbol,
-		Last:      parseDecimal(t.LastPrice),
-		Bid:       parseDecimal(t.Bid1Price),
-		Ask:       parseDecimal(t.Ask1Price),
-		High:      parseDecimal(t.High24h),
-		Low:       parseDecimal(t.Low24h),
-		Volume:    parseDecimal(t.Volume24h),
-		Timestamp: UnixTimestamp(time.Now()),
+		Symbol:     t.Symbol,
+		Last:       parseDecimal(t.LastPrice),
+		Bid:        parseDecimal(t.Bid1Price),
+		Ask:        parseDecimal(t.Ask1Price),
+		High:       parseDecimal(t.High24h),
+		Low:        parseDecimal(t.Low24h),
+		Volume:     parseDecimal(t.Volume24h),
+		Percentage: parseDecimal(t.Price24hPcnt).Mul(decimal.NewFromInt(100)),
+		Timestamp:  UnixTimestamp(time.Now()),
 	}, nil
 }
 
@@ -633,13 +635,14 @@ func (s *NativeCCXTService) parseOKXTicker(symbol string, body []byte) (*Ticker,
 		Code string `json:"code"`
 		Msg  string `json:"msg"`
 		Data []struct {
-			InstID  string `json:"instId"`
-			Last    string `json:"last"`
-			BidPx   string `json:"bidPx"`
-			AskPx   string `json:"askPx"`
-			High24h string `json:"high24h"`
-			Low24h  string `json:"low24h"`
-			Vol24h  string `json:"vol24h"`
+			InstID   string `json:"instId"`
+			Last     string `json:"last"`
+			BidPx    string `json:"bidPx"`
+			AskPx    string `json:"askPx"`
+			Open24h  string `json:"open24h"`
+			High24h  string `json:"high24h"`
+			Low24h   string `json:"low24h"`
+			Vol24h   string `json:"vol24h"`
 		} `json:"data"`
 	}
 
@@ -657,14 +660,16 @@ func (s *NativeCCXTService) parseOKXTicker(symbol string, body []byte) (*Ticker,
 
 	t := raw.Data[0]
 	return &Ticker{
-		Symbol:    t.InstID,
-		Last:      parseDecimal(t.Last),
-		Bid:       parseDecimal(t.BidPx),
-		Ask:       parseDecimal(t.AskPx),
-		High:      parseDecimal(t.High24h),
-		Low:       parseDecimal(t.Low24h),
-		Volume:    parseDecimal(t.Vol24h),
-		Timestamp: UnixTimestamp(time.Now()),
+		Symbol:     t.InstID,
+		Last:       parseDecimal(t.Last),
+		Bid:        parseDecimal(t.BidPx),
+		Ask:        parseDecimal(t.AskPx),
+		Open:       parseDecimal(t.Open24h),
+		High:       parseDecimal(t.High24h),
+		Low:        parseDecimal(t.Low24h),
+		Volume:     parseDecimal(t.Vol24h),
+		Percentage: calculateTickerPercentage(parseDecimal(t.Last), parseDecimal(t.Open24h)),
+		Timestamp:  UnixTimestamp(time.Now()),
 	}, nil
 }
 
