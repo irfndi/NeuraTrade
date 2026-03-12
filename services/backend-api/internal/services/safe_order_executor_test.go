@@ -439,6 +439,31 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_UsesLeverageAwareSafetyWithoutR
 	mockSafety.AssertNotCalled(t, "CanExecuteTrade", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
+func TestSafeOrderExecutor_PlaceOrderWithDetails_LeverageAwareFallbackStillBlocksWithoutDetailedDecision(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockLeverageSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	details := TradeDetails{
+		Exchange:   "bitget",
+		MarketType: "futures",
+		Symbol:     "ETH/USDT",
+		Leverage:   5,
+		AmountUSDT: decimal.NewFromFloat(75),
+	}
+
+	mockSafety.On("CanExecuteTradeWithLeverage", mock.Anything, "test-chat", "bitget", "ETH/USDT", "futures", 5, decimal.NewFromFloat(75)).
+		Return(false, "below exchange minimum notional", nil)
+
+	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "portfolio safety blocked")
+	assert.Empty(t, orderID)
+	mockExecutor.AssertNotCalled(t, "PlaceOrderWithDetails")
+	mockSafety.AssertExpectations(t)
+}
+
 func TestSafeOrderExecutor_PlaceOrderWithDetails_AllowsWhenSafetyPasses(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	mockSafety := &mockSafetyChecker{}

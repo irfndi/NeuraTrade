@@ -138,12 +138,11 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 	allowed := false
 	reason := ""
 	var err error
-	var decision TradeSafetyDecision
 
 	if typedSafety, ok := safetyService.(interface {
 		EvaluateTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (TradeSafetyDecision, error)
 	}); ok {
-		decision, err = typedSafety.EvaluateTradeWithLeverage(
+		decision, decisionErr := typedSafety.EvaluateTradeWithLeverage(
 			ctx,
 			chatID,
 			details.Exchange,
@@ -152,6 +151,13 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 			details.Leverage,
 			amount,
 		)
+		err = decisionErr
+		if err != nil {
+			return "", fmt.Errorf("safety check failed: %w", err)
+		}
+		if decision.ZeroMaxMinNotionalBypass {
+			return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+		}
 		allowed = decision.Allowed
 		reason = decision.Reason
 	} else {
@@ -173,9 +179,6 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 	}
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
-	}
-	if decision.ZeroMaxMinNotionalBypass {
-		return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
 	}
 	if !allowed {
 		return "", fmt.Errorf("portfolio safety blocked: %s", reason)
