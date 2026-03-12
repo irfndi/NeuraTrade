@@ -1963,8 +1963,14 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		hasRiskCurrentDrawdown         bool
 		riskMaxDrawdown                float64
 		riskExpectancy                 float64
+		riskExpectancyAt               time.Time
+		hasRiskExpectancy              bool
 		riskExpectancyGross            float64
+		riskExpectancyGrossAt          time.Time
+		hasRiskExpectancyGross         bool
 		riskFeeDragExpectancy          float64
+		riskFeeDragExpectancyAt        time.Time
+		hasRiskFeeDragExpectancy       bool
 		aiWindowTotal                  int
 		aiWindowSuccess                int
 		aiWindowErrors                 int
@@ -2128,13 +2134,37 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			riskMaxDrawdown = drawdown
 		}
 		if expectancy := readQuestMetricFloat(cp["risk_expectancy"]); expectancy != 0 || cp["risk_expectancy"] != nil {
-			riskExpectancy = expectancy
+			switch {
+			case isActiveScalpingQuest && (!hasRiskExpectancy || selectionAt.After(riskExpectancyAt)):
+				riskExpectancy = expectancy
+				riskExpectancyAt = selectionAt
+				hasRiskExpectancy = true
+			case !hasRiskExpectancy && selectionAt.After(riskExpectancyAt):
+				riskExpectancy = expectancy
+				riskExpectancyAt = selectionAt
+			}
 		}
 		if gross := readQuestMetricFloat(cp["risk_expectancy_gross"]); gross != 0 || cp["risk_expectancy_gross"] != nil {
-			riskExpectancyGross = gross
+			switch {
+			case isActiveScalpingQuest && (!hasRiskExpectancyGross || selectionAt.After(riskExpectancyGrossAt)):
+				riskExpectancyGross = gross
+				riskExpectancyGrossAt = selectionAt
+				hasRiskExpectancyGross = true
+			case !hasRiskExpectancyGross && selectionAt.After(riskExpectancyGrossAt):
+				riskExpectancyGross = gross
+				riskExpectancyGrossAt = selectionAt
+			}
 		}
 		if drag := readQuestMetricFloat(cp["risk_fee_drag_expectancy"]); drag != 0 || cp["risk_fee_drag_expectancy"] != nil {
-			riskFeeDragExpectancy = drag
+			switch {
+			case isActiveScalpingQuest && (!hasRiskFeeDragExpectancy || selectionAt.After(riskFeeDragExpectancyAt)):
+				riskFeeDragExpectancy = drag
+				riskFeeDragExpectancyAt = selectionAt
+				hasRiskFeeDragExpectancy = true
+			case !hasRiskFeeDragExpectancy && selectionAt.After(riskFeeDragExpectancyAt):
+				riskFeeDragExpectancy = drag
+				riskFeeDragExpectancyAt = selectionAt
+			}
 		}
 		recentLossStreak = maxInt(recentLossStreak, readQuestMetricInt(cp["recovery_recent_loss_streak"]))
 		if readQuestMetricBool(cp["recovery_recent_loss_active"]) {
