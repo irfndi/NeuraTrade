@@ -80,6 +80,15 @@ type SafetyStatus struct {
 	Details          map[string]string `json:"details,omitempty"`
 }
 
+type TradeSafetyDecision struct {
+	Allowed                    bool
+	Reason                     string
+	EffectiveMaxPosition       decimal.Decimal
+	EffectiveThrottlePct       float64
+	MinNotional                decimal.Decimal
+	ZeroMaxMinNotionalBypass   bool
+}
+
 type PortfolioSafetyService struct {
 	config           PortfolioSafetyConfig
 	ccxtService      ccxt.CCXTService
@@ -489,26 +498,41 @@ func (s *PortfolioSafetyService) CheckSafety(ctx context.Context, chatID string,
 }
 
 func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID string, exchange string, symbol string, marketType string, size decimal.Decimal) (bool, string, error) {
-	return s.CanExecuteTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, 1, size)
+	decision, err := s.EvaluateTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, 1, size)
+	if err != nil {
+		return false, "", err
+	}
+	return decision.Allowed, decision.Reason, nil
 }
 
 func (s *PortfolioSafetyService) CanExecuteTradeWithLeverage(ctx context.Context, chatID string, exchange string, symbol string, marketType string, leverage int, size decimal.Decimal) (bool, string, error) {
+	decision, err := s.EvaluateTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, leverage, size)
+	if err != nil {
+		return false, "", err
+	}
+	return decision.Allowed, decision.Reason, nil
+}
+
+func (s *PortfolioSafetyService) EvaluateTradeWithLeverage(ctx context.Context, chatID string, exchange string, symbol string, marketType string, leverage int, size decimal.Decimal) (TradeSafetyDecision, error) {
 	exchanges := []string{}
 	if exchange != "" {
 		exchanges = []string{exchange}
 	}
 	snapshot, err := s.GetPortfolioSnapshot(ctx, chatID, exchanges)
 	if err != nil {
-		return false, "", fmt.Errorf("failed to get portfolio snapshot: %w", err)
+		return TradeSafetyDecision{}, fmt.Errorf("failed to get portfolio snapshot: %w", err)
 	}
 
 	status, err := s.CheckSafety(ctx, chatID, snapshot)
 	if err != nil {
-		return false, "", fmt.Errorf("failed to check safety: %w", err)
+		return TradeSafetyDecision{}, fmt.Errorf("failed to check safety: %w", err)
 	}
 
 	if !status.TradingAllowed {
-		return false, fmt.Sprintf("Trading not allowed: %v", status.Reasons), nil
+		return TradeSafetyDecision{
+			Allowed: false,
+			Reason:  fmt.Sprintf("Trading not allowed: %v", status.Reasons),
+		}, nil
 	}
 
 	scopedTotal, scopedAvailable, hasScopedFunds := s.resolveScopedMarketFunds(snapshot, exchange, marketType)
@@ -524,7 +548,11 @@ func (s *PortfolioSafetyService) CanExecuteTradeWithLeverage(ctx context.Context
 	}
 	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol, marketType)
 	if minNotional.GreaterThan(decimal.Zero) && size.GreaterThan(decimal.Zero) && size.LessThan(minNotional) {
-		return false, fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)), nil
+		return TradeSafetyDecision{
+			Allowed:      false,
+			Reason:       fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)),
+			MinNotional:  minNotional,
+		}, nil
 	}
 
 	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, symbol, marketType, equityRef, status.MaxPositionSize)
@@ -576,19 +604,43 @@ func (s *PortfolioSafetyService) CanExecuteTradeWithLeverage(ctx context.Context
 		strings.EqualFold(strings.TrimSpace(strings.ToLower(exchange)), "bitget") &&
 		strings.EqualFold(strings.TrimSpace(marketType), "futures") &&
 		size.LessThanOrEqual(minNotional) {
-		return true, "", nil
+		return TradeSafetyDecision{
+			Allowed:                  true,
+			Reason:                   "",
+			EffectiveMaxPosition:     effectiveMaxPosition,
+			EffectiveThrottlePct:     effectiveThrottlePct,
+			MinNotional:              minNotional,
+			ZeroMaxMinNotionalBypass: true,
+		}, nil
 	}
 	if strings.EqualFold(strings.TrimSpace(marketType), "futures") &&
 		futuresSizeWithinRoundedEffectiveMax(size, effectiveMaxPosition) {
-		return true, "", nil
+		return TradeSafetyDecision{
+			Allowed:              true,
+			Reason:               "",
+			EffectiveMaxPosition: effectiveMaxPosition,
+			EffectiveThrottlePct: effectiveThrottlePct,
+			MinNotional:          minNotional,
+		}, nil
 	}
 
 	if size.GreaterThan(effectiveMaxPosition) {
-		return false, fmt.Sprintf("Position size %s exceeds maximum allowed %s (%s %.0f%%)",
-			size.StringFixed(2), effectiveMaxPosition.StringFixed(2), throttleLabel, effectiveThrottlePct), nil
+		return TradeSafetyDecision{
+			Allowed:              false,
+			Reason:               fmt.Sprintf("Position size %s exceeds maximum allowed %s (%s %.0f%%)", size.StringFixed(2), effectiveMaxPosition.StringFixed(2), throttleLabel, effectiveThrottlePct),
+			EffectiveMaxPosition: effectiveMaxPosition,
+			EffectiveThrottlePct: effectiveThrottlePct,
+			MinNotional:          minNotional,
+		}, nil
 	}
 
-	return true, "", nil
+	return TradeSafetyDecision{
+		Allowed:              true,
+		Reason:               "",
+		EffectiveMaxPosition: effectiveMaxPosition,
+		EffectiveThrottlePct: effectiveThrottlePct,
+		MinNotional:          minNotional,
+	}, nil
 }
 
 func (s *PortfolioSafetyService) resolveScopedMarketFunds(snapshot *SafetyPortfolioSnapshot, exchange string, marketType string) (decimal.Decimal, decimal.Decimal, bool) {

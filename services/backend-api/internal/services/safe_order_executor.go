@@ -3,10 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
-	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/shopspring/decimal"
 )
 
@@ -54,24 +52,6 @@ func (s *SafeOrderExecutor) PlaceOrder(
 	}
 
 	return s.baseExecutor.PlaceOrder(ctx, exchange, symbol, side, orderType, amount, price)
-}
-
-func shouldBypassZeroMaxSafety(details TradeDetails, reason string) bool {
-	if !strings.EqualFold(strings.TrimSpace(details.Exchange), "bitget") {
-		return false
-	}
-	if !strings.EqualFold(strings.TrimSpace(details.MarketType), "futures") {
-		return false
-	}
-	minNotional := appautonomy.BitgetFuturesMinNotional()
-	maxBypassAmount := minNotional.Mul(decimal.NewFromFloat(1.5))
-	if details.AmountUSDT.LessThan(minNotional) || details.AmountUSDT.GreaterThan(maxBypassAmount) {
-		return false
-	}
-	lowerReason := strings.ToLower(strings.TrimSpace(reason))
-	hasZeroMax := strings.Contains(lowerReason, "maximum allowed 0.00")
-	hasZeroThrottle := strings.Contains(lowerReason, "throttled to 0%")
-	return hasZeroMax && hasZeroThrottle
 }
 
 func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
@@ -157,11 +137,12 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 	allowed := false
 	reason := ""
 	var err error
+	var decision TradeSafetyDecision
 
-	if leverageAware, ok := safetyService.(interface {
-		CanExecuteTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (bool, string, error)
+	if typedSafety, ok := safetyService.(interface {
+		EvaluateTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (TradeSafetyDecision, error)
 	}); ok {
-		allowed, reason, err = leverageAware.CanExecuteTradeWithLeverage(
+		decision, err = typedSafety.EvaluateTradeWithLeverage(
 			ctx,
 			chatID,
 			details.Exchange,
@@ -170,14 +151,30 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 			details.Leverage,
 			amount,
 		)
+		allowed = decision.Allowed
+		reason = decision.Reason
 	} else {
-		allowed, reason, err = safetyService.CanExecuteTrade(ctx, chatID, details.Exchange, details.Symbol, details.MarketType, amount)
+		if leverageAware, ok := safetyService.(interface {
+			CanExecuteTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (bool, string, error)
+		}); ok {
+			allowed, reason, err = leverageAware.CanExecuteTradeWithLeverage(
+				ctx,
+				chatID,
+				details.Exchange,
+				details.Symbol,
+				details.MarketType,
+				details.Leverage,
+				amount,
+			)
+		} else {
+			allowed, reason, err = safetyService.CanExecuteTrade(ctx, chatID, details.Exchange, details.Symbol, details.MarketType, amount)
+		}
 	}
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
 	if !allowed {
-		if shouldBypassZeroMaxSafety(details, reason) {
+		if decision.ZeroMaxMinNotionalBypass {
 			return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
 		}
 		return "", fmt.Errorf("portfolio safety blocked: %s", reason)

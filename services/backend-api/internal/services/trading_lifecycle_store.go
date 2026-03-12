@@ -1416,7 +1416,7 @@ func (s *TradingLifecycleStore) getRealizedReturnSeries(
 		since = time.Now().UTC().Add(-24 * time.Hour)
 	}
 	query := `
-		SELECT realized_pnl, fees, entry_price, filled_amount
+		SELECT realized_pnl, COALESCE(fees, 0), entry_price, filled_amount
 		FROM realized_pnl_journal
 		WHERE closed_at >= $1
 	`

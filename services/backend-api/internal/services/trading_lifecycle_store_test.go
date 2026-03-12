@@ -261,6 +261,54 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries_FeeAdjustedAndGross(t *te
 	assert.True(t, grossReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
 }
 
+func TestTradingLifecycleStore_GetRealizedReturnSeries_ToleratesNullFees(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-returns-null-fees.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	ctx := context.Background()
+	_, err = sqliteDB.Exec(ctx, `
+		CREATE TABLE realized_pnl_journal (
+			id TEXT PRIMARY KEY,
+			order_id TEXT NOT NULL UNIQUE,
+			chat_id TEXT,
+			exchange TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			filled_amount NUMERIC NOT NULL DEFAULT 0,
+			entry_price NUMERIC NOT NULL DEFAULT 0,
+			exit_price NUMERIC NOT NULL DEFAULT 0,
+			realized_pnl NUMERIC NOT NULL DEFAULT 0,
+			fees NUMERIC NULL,
+			source TEXT NOT NULL DEFAULT 'autonomous',
+			closed_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		)
+	`)
+	require.NoError(t, err)
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO realized_pnl_journal (
+			id, order_id, chat_id, exchange, symbol, side, filled_amount,
+			entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`, "null-fees-1", "null-fees-1", "chat-1", "bitget", "BTC/USDT", "buy",
+		decimal.NewFromFloat(0.01), decimal.NewFromFloat(50000), decimal.NewFromFloat(50500),
+		decimal.NewFromFloat(5), nil, "autonomous", now.Add(-5*time.Minute), now.Add(-5*time.Minute))
+	require.NoError(t, err)
+
+	returns, err := store.GetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, returns, 1)
+	assert.True(t, returns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+}
+
 func TestTradingLifecycleStore_RecordClosedOrder_ClosesSyncRowInPlace(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-close.db"))
 	require.NoError(t, err)

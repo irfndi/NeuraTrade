@@ -173,7 +173,7 @@ func TestEvaluateScalpingPolicy_MicroNoFillRecoveryOverridesWeakRecentWinRateTig
 	require.InDelta(t, config.MicroMinConfidenceFloor, policy.EffectiveMinConfidence, 0.0001)
 }
 
-func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyFive(t *testing.T) {
+func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyTwo(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 
 	policy := EvaluateScalpingPolicy(ScalpingCycleInput{

@@ -85,6 +85,20 @@ func (m *mockLeverageSafetyChecker) CanExecuteTradeWithLeverage(ctx context.Cont
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
+type mockDetailedSafetyChecker struct {
+	mock.Mock
+}
+
+func (m *mockDetailedSafetyChecker) CanExecuteTrade(ctx context.Context, chatID, exchange, symbol, marketType string, size decimal.Decimal) (bool, string, error) {
+	args := m.Called(ctx, chatID, exchange, symbol, marketType, size)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
+func (m *mockDetailedSafetyChecker) EvaluateTradeWithLeverage(ctx context.Context, chatID, exchange, symbol, marketType string, leverage int, size decimal.Decimal) (TradeSafetyDecision, error) {
+	args := m.Called(ctx, chatID, exchange, symbol, marketType, leverage, size)
+	return args.Get(0).(TradeSafetyDecision), args.Error(1)
+}
+
 func TestSafeOrderExecutor_AllowsWhenNoSafetyService(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	safeExec := NewSafeOrderExecutor(mockExecutor, nil, "test-chat")
@@ -276,7 +290,7 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_BlocksWhenSafetyFails(t *testin
 
 func TestSafeOrderExecutor_PlaceOrderWithDetails_BypassesZeroMaxSafetyForBitgetFutures(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
-	mockSafety := &mockSafetyChecker{}
+	mockSafety := &mockDetailedSafetyChecker{}
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
 	details := TradeDetails{
@@ -286,8 +300,12 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_BypassesZeroMaxSafetyForBitgetF
 		AmountUSDT: decimal.NewFromFloat(6.0),
 	}
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", decimal.NewFromFloat(6.0)).
-		Return(false, "Position size 6.00 exceeds maximum allowed 0.00 (throttled to 0%)", nil)
+	mockSafety.On("EvaluateTradeWithLeverage", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", 0, decimal.NewFromFloat(6.0)).
+		Return(TradeSafetyDecision{
+			Allowed:                  false,
+			Reason:                   "Position size 6.00 exceeds maximum allowed 0.00 (throttled to 0%)",
+			ZeroMaxMinNotionalBypass: true,
+		}, nil)
 	mockExecutor.On("PlaceOrderWithDetails", mock.Anything, details).Return("order-fallback", nil)
 
 	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
@@ -300,7 +318,7 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_BypassesZeroMaxSafetyForBitgetF
 
 func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenAmountExceedsBoundedCap(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
-	mockSafety := &mockSafetyChecker{}
+	mockSafety := &mockDetailedSafetyChecker{}
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
 	details := TradeDetails{
@@ -310,8 +328,12 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenAmountExceedsB
 		AmountUSDT: decimal.NewFromFloat(100.0),
 	}
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", decimal.NewFromFloat(100.0)).
-		Return(false, "Position size 100.00 exceeds maximum allowed 0.00 (throttled to 0%)", nil)
+	mockSafety.On("EvaluateTradeWithLeverage", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", 0, decimal.NewFromFloat(100.0)).
+		Return(TradeSafetyDecision{
+			Allowed:                  false,
+			Reason:                   "Position size 100.00 exceeds maximum allowed 0.00 (throttled to 0%)",
+			ZeroMaxMinNotionalBypass: false,
+		}, nil)
 
 	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
 
@@ -324,7 +346,7 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenAmountExceedsB
 
 func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenMaximumAllowedIsNonZero(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
-	mockSafety := &mockSafetyChecker{}
+	mockSafety := &mockDetailedSafetyChecker{}
 	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
 
 	details := TradeDetails{
@@ -334,8 +356,12 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenMaximumAllowed
 		AmountUSDT: decimal.NewFromFloat(6.0),
 	}
 
-	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", decimal.NewFromFloat(6.0)).
-		Return(false, "Position size 6.00 exceeds maximum allowed 0.50 (throttled to 0%)", nil)
+	mockSafety.On("EvaluateTradeWithLeverage", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", 0, decimal.NewFromFloat(6.0)).
+		Return(TradeSafetyDecision{
+			Allowed:                  false,
+			Reason:                   "Position size 6.00 exceeds maximum allowed 0.50 (throttled to 0%)",
+			ZeroMaxMinNotionalBypass: false,
+		}, nil)
 
 	orderID, err := safeExec.PlaceOrderWithDetails(context.Background(), details)
 
