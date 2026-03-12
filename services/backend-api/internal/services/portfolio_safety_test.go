@@ -309,6 +309,54 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_UsesRecentStaleCacheOnRefre
 	assert.True(t, fallbackSnapshot.AvailableFunds.Equal(decimal.NewFromFloat(46.93)))
 }
 
+func TestPortfolioSafetyService_GetPortfolioSnapshot_ReturnsDeepCloneFromCache(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.CacheTTL = time.Hour
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceByExch: map[string]*ccxt.BalanceResponse{
+			"bitget": {
+				Exchange:  "bitget",
+				Timestamp: time.Now(),
+				Total:     map[string]float64{"USDT": 1000},
+				Free:      map[string]float64{"USDT": 900},
+				Used:      map[string]float64{"USDT": 100},
+			},
+		},
+		positionsByExch: map[string]*ccxt.PositionsResponse{
+			"bitget": {
+				Exchange: "bitget",
+				Positions: []ccxt.Position{{
+					ID:            "pos-1",
+					Symbol:        "BTC/USDT:USDT",
+					Side:          "long",
+					Size:          decimal.NewFromInt(1),
+					EntryPrice:    decimal.NewFromInt(100),
+					MarkPrice:     decimal.NewFromInt(110),
+					UnrealizedPnl: decimal.NewFromInt(10),
+				}},
+			},
+		},
+	}
+
+	service := NewPortfolioSafetyService(config, mockCCXT, nil, nil, nil, nil, nil, nil, nil)
+
+	first, err := service.GetPortfolioSnapshot(context.Background(), "chat-cache", []string{"bitget"})
+	require.NoError(t, err)
+	require.Len(t, first.ExchangeExposures, 1)
+	require.Len(t, first.Positions, 1)
+
+	first.ExchangeExposures[0].Exchange = "mutated"
+	first.Positions[0].Symbol = "MUTATED/USDT"
+
+	second, err := service.GetPortfolioSnapshot(context.Background(), "chat-cache", []string{"bitget"})
+	require.NoError(t, err)
+	require.Len(t, second.ExchangeExposures, 1)
+	require.Len(t, second.Positions, 1)
+	assert.Equal(t, "bitget", second.ExchangeExposures[0].Exchange)
+	assert.Equal(t, "BTC/USDT:USDT", second.Positions[0].Symbol)
+	assert.Equal(t, 1, mockCCXT.fetchCalls)
+}
+
 func TestPortfolioSafetyService_CheckSafety_Allowed(t *testing.T) {
 	config := DefaultPortfolioSafetyConfig()
 	mockCCXT := &mockCCXTForPortfolioSafety{}
