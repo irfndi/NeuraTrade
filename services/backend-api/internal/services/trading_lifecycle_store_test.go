@@ -1005,3 +1005,59 @@ func TestTradingLifecycleStore_ReconcileExchangeSnapshot_ClosesExcessRowsBySize(
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, closedCount, 1)
 }
+
+func TestTradingLifecycleStore_ReconcileExchangeSnapshot_TreatsProvidedPositionsAsFresh(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-provided-positions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-provided-a",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(50000),
+		OpenedAt:   time.Now().UTC().Add(-30 * time.Minute),
+	}))
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-provided-b",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(51000),
+		OpenedAt:   time.Now().UTC().Add(-25 * time.Minute),
+	}))
+
+	summary, err := store.ReconcileExchangeSnapshot(ctx, "chat-1", "bitget", LifecycleExchangeSnapshot{
+		Positions: []ccxt.Position{
+			{
+				Symbol:        "BTC/USDT",
+				Side:          "long",
+				Size:          decimal.NewFromFloat(1),
+				EntryPrice:    decimal.NewFromFloat(50500),
+				MarkPrice:     decimal.NewFromFloat(50600),
+				UnrealizedPnl: decimal.NewFromFloat(100),
+				Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+			},
+		},
+		OrdersFresh:    true,
+		PositionsFresh: false,
+	}, "bootstrap_reconciliation")
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.PositionsSynced)
+	assert.GreaterOrEqual(t, summary.PositionsClosed, 1)
+}

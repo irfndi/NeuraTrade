@@ -708,6 +708,7 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 	chatID = strings.TrimSpace(chatID)
 	exchange = strings.TrimSpace(exchange)
 	now := time.Now().UTC()
+	positionsFresh := snapshot.PositionsFresh || len(snapshot.Positions) > 0
 	reconcileSource := normalizeLifecycleSource(source)
 	openOrderIDs := make(map[string]struct{}, len(snapshot.OpenOrders))
 	for _, order := range snapshot.OpenOrders {
@@ -776,7 +777,7 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 		}
 	}
 
-	if snapshot.PositionsFresh {
+	if positionsFresh {
 		for _, position := range snapshot.Positions {
 			if err := s.SyncPosition(ctx, chatID, exchange, position); err != nil {
 				return summary, fmt.Errorf("sync position %s failed: %w", strings.TrimSpace(position.Symbol), err)
@@ -879,7 +880,7 @@ func (s *TradingLifecycleStore) ReconcileExchangeSnapshot(
 		})
 
 		for _, localPos := range localOpen {
-			if !snapshot.PositionsFresh {
+			if !positionsFresh {
 				continue
 			}
 			localOrderID := strings.TrimSpace(localPos.OrderID)
