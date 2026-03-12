@@ -421,9 +421,12 @@ func (s *PortfolioSafetyService) CheckSafety(ctx context.Context, chatID string,
 		maxFromPct := snapshot.TotalEquity.Mul(decimal.NewFromFloat(s.config.MaxPositionSizePct))
 		maxAfterThrottle := maxFromPct.Mul(decimal.NewFromFloat(status.PositionThrottle))
 
+		// This is the policy cap before market-specific liquidity or leverage-aware
+		// execution checks are applied in EvaluateTradeWithLeverage.
 		status.MaxPositionSize = maxAfterThrottle
 		status.Details["max_position_pct"] = fmt.Sprintf("%.1f%%", s.config.MaxPositionSizePct*100)
 		status.Details["throttle_applied"] = fmt.Sprintf("%.1f%%", status.PositionThrottle*100)
+		status.Details["max_position_basis"] = "policy_pre_liquidity"
 	}
 
 	if snapshot != nil && snapshot.ExposurePct > s.config.MaxExposurePct {
@@ -604,6 +607,9 @@ func (s *PortfolioSafetyService) EvaluateTradeWithLeverage(ctx context.Context, 
 		strings.EqualFold(strings.TrimSpace(strings.ToLower(exchange)), "bitget") &&
 		strings.EqualFold(strings.TrimSpace(marketType), "futures") &&
 		size.LessThanOrEqual(minNotional) {
+		// Exchange-side margin/notional validation is treated as the final safety
+		// net when the balance snapshot is temporarily unreliable and produced a
+		// zero effective max for the smallest executable futures order.
 		return TradeSafetyDecision{
 			Allowed:                  true,
 			Reason:                   "",
@@ -697,9 +703,10 @@ func futuresSizeWithinRoundedEffectiveMax(size, effectiveMax decimal.Decimal) bo
 }
 
 // resolveEffectiveMaxPositionSize applies MaxPositionFloorPct as a guarded
-// override for exchange minimum notionals: when requiredPct for the exchange
-// minimum is less than or equal to floorCapPct, the effective max may exceed
-// defaultMax so the trade remains executable; otherwise defaultMax is preserved.
+// override for exchange minimum notionals. defaultMax and minNotional are both
+// absolute quote-currency amounts, while the floor comparison is percentage
+// based: requiredPct = minNotional / equityRef must stay within floorCapPct for
+// the exchange minimum to replace the smaller policy cap.
 func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, symbol string, marketType string, equityRef decimal.Decimal, defaultMax decimal.Decimal) decimal.Decimal {
 	if !defaultMax.GreaterThan(decimal.Zero) {
 		return defaultMax
@@ -825,7 +832,8 @@ func normalizePortfolioSafetyConfig(config PortfolioSafetyConfig) PortfolioSafet
 		config.CacheTTL = defaults.CacheTTL
 	}
 	// MaxPositionFloorPct differs intentionally: negative values normalize to
-	// default, while zero remains an explicit disable; see
+	// default, while zero remains an explicit disable of the min-notional floor
+	// override; see
 	// TestPortfolioSafetyService_SetConfig_NormalizesDefaultsButPreservesZeroFloor.
 	if config.MaxPositionFloorPct < 0 {
 		config.MaxPositionFloorPct = defaults.MaxPositionFloorPct
