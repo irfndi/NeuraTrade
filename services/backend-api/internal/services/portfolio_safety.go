@@ -18,20 +18,22 @@ import (
 )
 
 type PortfolioSafetyConfig struct {
-	MaxPositionSizePct   float64       `json:"max_position_size_pct"`
-	MaxPositionFloorPct  float64       `json:"max_position_floor_pct"`
-	MaxExposurePct       float64       `json:"max_exposure_pct"`
-	DefaultQuoteCurrency string        `json:"default_quote_currency"`
-	CacheTTL             time.Duration `json:"cache_ttl"`
+	MaxPositionSizePct        float64       `json:"max_position_size_pct"`
+	MaxPositionFloorPct       float64       `json:"max_position_floor_pct"`
+	MaxExposurePct            float64       `json:"max_exposure_pct"`
+	DefaultQuoteCurrency      string        `json:"default_quote_currency"`
+	CacheTTL                  time.Duration `json:"cache_ttl"`
+	StaleSnapshotFallbackTTL  time.Duration `json:"stale_snapshot_fallback_ttl"`
 }
 
 func DefaultPortfolioSafetyConfig() PortfolioSafetyConfig {
 	return PortfolioSafetyConfig{
-		MaxPositionSizePct:   0.10,
-		MaxPositionFloorPct:  0.20,
-		MaxExposurePct:       0.50,
-		DefaultQuoteCurrency: "USDT",
-		CacheTTL:             30 * time.Second,
+		MaxPositionSizePct:       0.10,
+		MaxPositionFloorPct:      0.20,
+		MaxExposurePct:           0.50,
+		DefaultQuoteCurrency:     "USDT",
+		CacheTTL:                 30 * time.Second,
+		StaleSnapshotFallbackTTL: 10 * time.Minute,
 	}
 }
 
@@ -107,8 +109,6 @@ type PortfolioSafetyService struct {
 	requestGroup     singleflight.Group
 }
 
-const staleSnapshotFallbackWindow = 10 * time.Minute
-
 func NewPortfolioSafetyService(
 	config PortfolioSafetyConfig,
 	ccxtService ccxt.CCXTService,
@@ -165,7 +165,7 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 		s.mu.RLock()
 		canFallback := s.lastSnapshot != nil &&
 			s.lastSnapshotKey == key &&
-			time.Since(s.lastSnapshotTime) <= staleSnapshotFallbackWindow
+			time.Since(s.lastSnapshotTime) <= s.config.StaleSnapshotFallbackTTL
 		if canFallback {
 			snapshot := *s.lastSnapshot
 			s.mu.RUnlock()
@@ -830,6 +830,9 @@ func normalizePortfolioSafetyConfig(config PortfolioSafetyConfig) PortfolioSafet
 	}
 	if config.CacheTTL <= 0 {
 		config.CacheTTL = defaults.CacheTTL
+	}
+	if config.StaleSnapshotFallbackTTL <= 0 {
+		config.StaleSnapshotFallbackTTL = defaults.StaleSnapshotFallbackTTL
 	}
 	// MaxPositionFloorPct differs intentionally: negative values normalize to
 	// default, while zero remains an explicit disable of the min-notional floor

@@ -509,11 +509,6 @@ func (f *bitgetLeverageField) UnmarshalJSON(data []byte) error {
 		*f = bitgetLeverageField(num.String())
 		return nil
 	}
-	var integer int
-	if err := json.Unmarshal(data, &integer); err == nil {
-		*f = bitgetLeverageField(strconv.Itoa(integer))
-		return nil
-	}
 	return fmt.Errorf("unsupported leverage field payload: %s", string(data))
 }
 

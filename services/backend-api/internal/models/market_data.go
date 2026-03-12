@@ -97,7 +97,9 @@ func (mp *MarketPrice) GetLow() float64 {
 	return mp.Low24h.InexactFloat64()
 }
 
-// GetPriceChange24h returns the 24h percentage change when derivable.
+// GetPriceChange24h returns a midpoint-based approximation when only high/low
+// data is available on MarketPrice. Ticker-backed implementations can provide a
+// truer exchange-reported 24h percentage.
 func (mp *MarketPrice) GetPriceChange24h() float64 {
 	if mp == nil || !mp.Low24h.GreaterThan(decimal.Zero) || !mp.High24h.GreaterThan(decimal.Zero) {
 		return 0

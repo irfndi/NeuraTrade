@@ -129,6 +129,7 @@ func TestDefaultPortfolioSafetyConfig(t *testing.T) {
 	assert.Equal(t, 0.50, config.MaxExposurePct)
 	assert.Equal(t, "USDT", config.DefaultQuoteCurrency)
 	assert.Equal(t, 30*time.Second, config.CacheTTL)
+	assert.Equal(t, 10*time.Minute, config.StaleSnapshotFallbackTTL)
 }
 
 func TestNewPortfolioSafetyService(t *testing.T) {
@@ -509,11 +510,12 @@ func TestPortfolioSafetyService_SetConfig(t *testing.T) {
 	)
 
 	newConfig := PortfolioSafetyConfig{
-		MaxPositionSizePct:   0.05,
-		MaxPositionFloorPct:  0.15,
-		MaxExposurePct:       0.30,
-		DefaultQuoteCurrency: "BTC",
-		CacheTTL:             1 * time.Minute,
+		MaxPositionSizePct:       0.05,
+		MaxPositionFloorPct:      0.15,
+		MaxExposurePct:           0.30,
+		DefaultQuoteCurrency:     "BTC",
+		CacheTTL:                 1 * time.Minute,
+		StaleSnapshotFallbackTTL: 2 * time.Minute,
 	}
 
 	service.SetConfig(newConfig)
@@ -901,11 +903,12 @@ func TestPortfolioSafetyService_SetConfig_NormalizesDefaultsButPreservesZeroFloo
 	service := NewPortfolioSafetyService(DefaultPortfolioSafetyConfig(), nil, nil, nil, nil, nil, nil, nil, nil)
 
 	service.SetConfig(PortfolioSafetyConfig{
-		MaxPositionSizePct:   0,
-		MaxPositionFloorPct:  0,
-		MaxExposurePct:       0,
-		DefaultQuoteCurrency: "",
-		CacheTTL:             0,
+		MaxPositionSizePct:       0,
+		MaxPositionFloorPct:      0,
+		MaxExposurePct:           0,
+		DefaultQuoteCurrency:     "",
+		CacheTTL:                 0,
+		StaleSnapshotFallbackTTL: 0,
 	})
 
 	cfg := service.GetConfig()
@@ -914,5 +917,46 @@ func TestPortfolioSafetyService_SetConfig_NormalizesDefaultsButPreservesZeroFloo
 	assert.Equal(t, defaults.MaxExposurePct, cfg.MaxExposurePct)
 	assert.Equal(t, defaults.DefaultQuoteCurrency, cfg.DefaultQuoteCurrency)
 	assert.Equal(t, defaults.CacheTTL, cfg.CacheTTL)
+	assert.Equal(t, defaults.StaleSnapshotFallbackTTL, cfg.StaleSnapshotFallbackTTL)
 	assert.Equal(t, 0.0, cfg.MaxPositionFloorPct)
+}
+
+func TestPortfolioSafetyService_GetPortfolioSnapshot_RejectsExpiredStaleCacheOnRefreshFailure(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.CacheTTL = 10 * time.Millisecond
+	config.StaleSnapshotFallbackTTL = 5 * time.Millisecond
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"USDT": 46.93},
+			Free:      map[string]float64{"USDT": 46.93},
+			Used:      map[string]float64{"USDT": 0},
+		},
+	}
+
+	service := NewPortfolioSafetyService(
+		config,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	ctx := context.Background()
+	snapshot, err := service.GetPortfolioSnapshot(ctx, "chat-stale-expired", []string{"bitget"})
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+
+	time.Sleep(20 * time.Millisecond)
+	mockCCXT.err = errors.New("Too Many Requests")
+
+	fallbackSnapshot, err := service.GetPortfolioSnapshot(ctx, "chat-stale-expired", []string{"bitget"})
+	require.Error(t, err)
+	assert.Nil(t, fallbackSnapshot)
+	assert.Contains(t, err.Error(), "Too Many Requests")
 }
