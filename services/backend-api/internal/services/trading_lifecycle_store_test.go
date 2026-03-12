@@ -250,15 +250,20 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries_FeeAdjustedAndGross(t *te
 		ClosedAt:    now.Add(-5 * time.Minute),
 	}))
 
-	netReturns, err := store.GetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	netReturns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
 	require.NoError(t, err)
 	require.Len(t, netReturns, 1)
 	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.008)))
 
-	grossReturns, err := store.GetGrossRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	grossReturns, err := store.GetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
 	require.NoError(t, err)
 	require.Len(t, grossReturns, 1)
 	assert.True(t, grossReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+
+	explicitGrossReturns, err := store.GetGrossRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, explicitGrossReturns, 1)
+	assert.True(t, explicitGrossReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
 }
 
 func TestTradingLifecycleStore_GetRealizedReturnSeries_ToleratesNullFees(t *testing.T) {
@@ -303,7 +308,7 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries_ToleratesNullFees(t *test
 		decimal.NewFromFloat(5), nil, "autonomous", now.Add(-5*time.Minute), now.Add(-5*time.Minute))
 	require.NoError(t, err)
 
-	returns, err := store.GetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	returns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
 	require.NoError(t, err)
 	require.Len(t, returns, 1)
 	assert.True(t, returns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))

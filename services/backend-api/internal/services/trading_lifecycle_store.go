@@ -213,6 +213,7 @@ func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
 	indexStatements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id ON trading_orders(position_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_trading_orders_chat_status ON trading_orders(chat_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_trading_orders_order_status ON trading_orders(order_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status ON trading_positions(symbol, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_trading_positions_chat_status ON trading_positions(chat_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed ON realized_pnl_journal(chat_id, closed_at)`,
@@ -1388,6 +1389,15 @@ func recentLossStreakQueryLimit() int {
 }
 
 func (s *TradingLifecycleStore) GetRealizedReturnSeries(
+	ctx context.Context,
+	chatID string,
+	exchange string,
+	since time.Time,
+) ([]decimal.Decimal, error) {
+	return s.getRealizedReturnSeries(ctx, chatID, exchange, since, false)
+}
+
+func (s *TradingLifecycleStore) GetNetRealizedReturnSeries(
 	ctx context.Context,
 	chatID string,
 	exchange string,

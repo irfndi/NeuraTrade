@@ -217,6 +217,7 @@ type ProgressBlockState struct {
 
 func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) ScalpingCyclePolicy {
 	cfg = cfg.Normalized()
+	recoveryMode := strings.ToLower(strings.TrimSpace(input.RecoveryMode))
 
 	policy := ScalpingCyclePolicy{
 		AccountTier:            ResolveAccountTier(input.TotalValue, cfg),
@@ -286,7 +287,7 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "drawdown_tightening")
 	}
 
-	switch strings.ToLower(strings.TrimSpace(input.RecoveryMode)) {
+	switch recoveryMode {
 	case RecoveryModeMicroEntry:
 		if policy.EffectiveMaxCapitalPct > cfg.RecoveryMicroEntryCapPct {
 			policy.EffectiveMaxCapitalPct = cfg.RecoveryMicroEntryCapPct
@@ -303,7 +304,7 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 	}
 
 	if policy.AccountTier == AccountTierMicro {
-		if !strings.EqualFold(strings.TrimSpace(input.RecoveryMode), RecoveryModeDeriskOnly) &&
+		if recoveryMode == "" &&
 			policy.EffectiveMinConfidence > 0.72 {
 			policy.EffectiveMinConfidence = 0.72
 			policy.PolicyAdjustments = append(policy.PolicyAdjustments, "micro_confidence_cap")
@@ -625,6 +626,15 @@ func ResolveScalpingMaxBidAskSpreadPctFromEnv() float64 {
 }
 
 func clampFloat(value, minValue, maxValue float64) float64 {
+	if math.IsNaN(value) {
+		return minValue
+	}
+	if math.IsInf(value, -1) {
+		return minValue
+	}
+	if math.IsInf(value, 1) {
+		return maxValue
+	}
 	if value < minValue {
 		return minValue
 	}

@@ -2194,7 +2194,7 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	returns := make([]decimal.Decimal, 0, 64)
 	grossReturns := make([]decimal.Decimal, 0, 64)
 	if h.lifecycleStore != nil {
-		series, err := h.lifecycleStore.GetRealizedReturnSeries(ctx, chatID, exchange, time.Now().UTC().Add(-30*24*time.Hour))
+		series, err := h.lifecycleStore.GetNetRealizedReturnSeries(ctx, chatID, exchange, time.Now().UTC().Add(-30*24*time.Hour))
 		if err == nil {
 			returns = append(returns, series...)
 		}

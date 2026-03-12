@@ -191,6 +191,40 @@ func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyTwo(t *testing.T) 
 	require.Contains(t, policy.PolicyAdjustments, "micro_confidence_cap")
 }
 
+func TestEvaluateScalpingPolicy_MicroRecoveryModesBypassConfidenceCap(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	microEntry := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+		PerformanceWindow: PerformanceWindowInput{
+			DecisiveTrades:     30,
+			DecisiveWinRatePct: 15,
+		},
+		RecoveryMode: RecoveryModeMicroEntry,
+	}, config)
+
+	require.Equal(t, AccountTierMicro, microEntry.AccountTier)
+	require.InDelta(t, 0.78, microEntry.EffectiveMinConfidence, 0.0001)
+	require.NotContains(t, microEntry.PolicyAdjustments, "micro_confidence_cap")
+
+	deriskOnly := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+		PerformanceWindow: PerformanceWindowInput{
+			DecisiveTrades:     30,
+			DecisiveWinRatePct: 15,
+		},
+		RecoveryMode: RecoveryModeDeriskOnly,
+	}, config)
+
+	require.Equal(t, AccountTierMicro, deriskOnly.AccountTier)
+	require.InDelta(t, 0.85, deriskOnly.EffectiveMinConfidence, 0.0001)
+	require.NotContains(t, deriskOnly.PolicyAdjustments, "micro_confidence_cap")
+}
+
 func TestEvaluateScalpingPolicy_LossStreakAndNegativeExpectancyTightening(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 
@@ -403,6 +437,12 @@ func TestResolvePolicySpreadThreshold_ClampsDirectOverride(t *testing.T) {
 	assert.InDelta(t, 5.0, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: 99}), 0.000001)
 	assert.InDelta(t, 0.0001, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: 0.00001}), 0.000001)
 	assert.InDelta(t, DefaultScalpingMaxBidAskSpreadPct, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: math.NaN()}), 0.000001)
+}
+
+func TestClampFloat_HandlesNaNAndInfinity(t *testing.T) {
+	assert.InDelta(t, 0.1, clampFloat(math.NaN(), 0.1, 0.9), 0.000001)
+	assert.InDelta(t, 0.1, clampFloat(math.Inf(-1), 0.1, 0.9), 0.000001)
+	assert.InDelta(t, 0.9, clampFloat(math.Inf(1), 0.1, 0.9), 0.000001)
 }
 
 func TestEvaluateProgressBlock_AfterTwoHoursWithoutAttempt(t *testing.T) {
