@@ -50,6 +50,50 @@ func TestNormalizeAdminAPIKey(t *testing.T) {
 	}
 }
 
+func TestConfigAdminAPIKey_PrefersSecurityThenTopLevelThenCCXT(t *testing.T) {
+	cfg := &localConfig{}
+	cfg.CCXT.AdminAPIKey = "ccxt-admin-key-1234567890123456789012"
+	if got := configAdminAPIKey(cfg); got != cfg.CCXT.AdminAPIKey {
+		t.Fatalf("expected ccxt key fallback, got %q", got)
+	}
+
+	cfg.AdminAPIKey = "top-level-admin-key-123456789012345"
+	if got := configAdminAPIKey(cfg); got != cfg.AdminAPIKey {
+		t.Fatalf("expected top-level key fallback, got %q", got)
+	}
+
+	cfg.Security.AdminAPIKey = "security-admin-key-12345678901234"
+	if got := configAdminAPIKey(cfg); got != cfg.Security.AdminAPIKey {
+		t.Fatalf("expected security key to win, got %q", got)
+	}
+}
+
+func TestConfigJWTSecret_PrefersSecurityThenAuth(t *testing.T) {
+	cfg := &localConfig{}
+	cfg.Auth.JWTSecret = "auth-jwt-secret-12345678901234567890"
+	if got := configJWTSecret(cfg); got != cfg.Auth.JWTSecret {
+		t.Fatalf("expected auth jwt fallback, got %q", got)
+	}
+
+	cfg.Security.JWTSecret = "security-jwt-secret-123456789012345678"
+	if got := configJWTSecret(cfg); got != cfg.Security.JWTSecret {
+		t.Fatalf("expected security jwt to win, got %q", got)
+	}
+}
+
+func TestNormalizeJWTSecret(t *testing.T) {
+	valid := "abcdefghijklmnopqrstuvwxyz123456"
+	if got := normalizeJWTSecret(valid); got != valid {
+		t.Fatalf("expected valid jwt secret to remain unchanged, got %s", got)
+	}
+
+	short := "short-secret"
+	generated := normalizeJWTSecret(short)
+	if len(generated) < 32 {
+		t.Fatalf("expected generated secret length >= 32, got %d", len(generated))
+	}
+}
+
 func TestDeriveGatewayMode(t *testing.T) {
 	tests := []struct {
 		name            string
