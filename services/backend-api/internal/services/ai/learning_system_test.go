@@ -48,6 +48,15 @@ func TestSanitizeLearningDataDir(t *testing.T) {
 	if _, ok := sanitizeLearningDataDir(unsafePath); ok {
 		t.Fatal("expected path traversal candidate to be rejected")
 	}
+
+	validDottedPath := filepath.Join("data..v2", "ai_learning")
+	resolved, ok = sanitizeLearningDataDir(validDottedPath)
+	if !ok {
+		t.Fatal("expected dotted directory name to be accepted")
+	}
+	if resolved != validDottedPath {
+		t.Fatalf("expected resolved dotted dir %q, got %q", validDottedPath, resolved)
+	}
 }
 
 func TestInMemoryLearningSystem_RecordDecision(t *testing.T) {

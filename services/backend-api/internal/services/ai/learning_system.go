@@ -75,8 +75,10 @@ func sanitizeLearningDataDir(raw string) (string, bool) {
 	if cleaned == "" || cleaned == "." {
 		return "", false
 	}
-	if strings.Contains(cleaned, "..") {
-		return "", false
+	for _, part := range strings.Split(cleaned, string(filepath.Separator)) {
+		if part == ".." {
+			return "", false
+		}
 	}
 	if !filepath.IsAbs(cleaned) {
 		return cleaned, true

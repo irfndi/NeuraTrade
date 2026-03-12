@@ -1268,18 +1268,19 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 	if since.IsZero() {
 		since = time.Now().UTC().Add(-24 * time.Hour)
 	}
-	query := `
+	netPnLExpr := lifecycleNetRealizedPnLSQL()
+	query := fmt.Sprintf(`
 		SELECT
 			COUNT(*),
-			COALESCE(SUM(realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END), 0),
-			COALESCE(SUM(CASE WHEN realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END < 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END = 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(MAX(realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END), 0),
-			COALESCE(MIN(realized_pnl + CASE WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0) ELSE COALESCE(fees, 0) END), 0)
+			COALESCE(SUM(%[1]s), 0),
+			COALESCE(SUM(CASE WHEN %[1]s > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN %[1]s < 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN %[1]s = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(MAX(%[1]s), 0),
+			COALESCE(MIN(%[1]s), 0)
 		FROM realized_pnl_journal
 		WHERE closed_at >= $1
-	`
+	`, netPnLExpr)
 	args := []interface{}{since.UTC()}
 	if strings.TrimSpace(chatID) != "" {
 		query += fmt.Sprintf(" AND COALESCE(chat_id, '') = $%d", len(args)+1)
@@ -1427,7 +1428,7 @@ func (s *TradingLifecycleStore) getRealizedReturnSeries(
 		since = time.Now().UTC().Add(-24 * time.Hour)
 	}
 	query := `
-		SELECT realized_pnl, COALESCE(fees, 0), entry_price, filled_amount
+		SELECT realized_pnl, COALESCE(fees, 0), entry_price, filled_amount, exchange, COALESCE(source, '')
 		FROM realized_pnl_journal
 		WHERE closed_at >= $1
 	`
@@ -1454,12 +1455,14 @@ func (s *TradingLifecycleStore) getRealizedReturnSeries(
 		var fees decimal.Decimal
 		var entry decimal.Decimal
 		var filled decimal.Decimal
-		if err := rows.Scan(&pnl, &fees, &entry, &filled); err != nil {
+		var rowExchange string
+		var rowSource string
+		if err := rows.Scan(&pnl, &fees, &entry, &filled, &rowExchange, &rowSource); err != nil {
 			return nil, fmt.Errorf("scan realized return row failed: %w", err)
 		}
 		netPnL := pnl
 		if includeFees {
-			netPnL = netPnL.Add(normalizeLifecycleFeeAdjustment(fees))
+			netPnL = adjustedLifecyclePnL(pnl, fees, rowExchange, rowSource)
 		}
 
 		notional := entry.Abs().Mul(filled.Abs())
@@ -1481,6 +1484,28 @@ func normalizeLifecycleFeeAdjustment(fees decimal.Decimal) decimal.Decimal {
 		return fees.Neg()
 	}
 	return fees
+}
+
+func adjustedLifecyclePnL(pnl, fees decimal.Decimal, exchange, source string) decimal.Decimal {
+	if shouldTreatLifecycleRealizedPnLAsNet(exchange, source) {
+		return pnl
+	}
+	return pnl.Add(normalizeLifecycleFeeAdjustment(fees))
+}
+
+func shouldTreatLifecycleRealizedPnLAsNet(exchange, source string) bool {
+	return strings.EqualFold(strings.TrimSpace(exchange), "bitget") &&
+		strings.EqualFold(strings.TrimSpace(source), "exchange_reconciliation")
+}
+
+func lifecycleNetRealizedPnLSQL() string {
+	return `CASE
+		WHEN LOWER(COALESCE(exchange, '')) = 'bitget' AND LOWER(COALESCE(source, '')) = 'exchange_reconciliation' THEN realized_pnl
+		ELSE realized_pnl + CASE
+			WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0)
+			ELSE COALESCE(fees, 0)
+		END
+	END`
 }
 
 func parseLifecycleTimestamp(raw interface{}) time.Time {

@@ -266,6 +266,46 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries_FeeAdjustedAndGross(t *te
 	assert.True(t, explicitGrossReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
 }
 
+func TestTradingLifecycleStore_BitgetExchangeReconciliationTreatsRealizedPnLAsNet(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-bitget-net-pnl.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "ret-bitget-net-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50500),
+		RealizedPnL: decimal.NewFromFloat(5),
+		Fees:        decimal.NewFromFloat(1),
+		Source:      "exchange_reconciliation",
+		ClosedAt:    now.Add(-5 * time.Minute),
+	}))
+
+	netReturns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, netReturns, 1)
+	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+
+	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(5)))
+	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(5)))
+	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(5)))
+}
+
 func TestTradingLifecycleStore_GetRealizedReturnSeries_ToleratesNullFees(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-returns-null-fees.db"))
 	require.NoError(t, err)

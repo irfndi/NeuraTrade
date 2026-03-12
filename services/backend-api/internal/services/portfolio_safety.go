@@ -163,9 +163,10 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 
 	if err != nil {
 		s.mu.RLock()
+		staleAge := time.Since(s.lastSnapshotTime)
 		canFallback := s.lastSnapshot != nil &&
 			s.lastSnapshotKey == key &&
-			time.Since(s.lastSnapshotTime) <= s.config.StaleSnapshotFallbackTTL
+			staleAge <= s.config.StaleSnapshotFallbackTTL
 		if canFallback {
 			snapshot := cloneSafetyPortfolioSnapshot(s.lastSnapshot)
 			s.mu.RUnlock()
@@ -174,7 +175,7 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 					"chat_id", chatID,
 					"exchanges", strings.Join(exchanges, ","),
 					"error", err,
-					"stale_age", time.Since(s.lastSnapshotTime).Round(time.Second).String())
+					"stale_age", staleAge.Round(time.Second).String())
 			}
 			return &snapshot, nil
 		}
@@ -609,7 +610,9 @@ func (s *PortfolioSafetyService) EvaluateTradeWithLeverage(ctx context.Context, 
 		size.LessThanOrEqual(minNotional) {
 		// Exchange-side margin/notional validation is treated as the final safety
 		// net when the balance snapshot is temporarily unreliable and produced a
-		// zero effective max for the smallest executable futures order.
+		// zero effective max for the smallest executable futures order. This path
+		// intentionally allows the minimum executable Bitget futures order even if
+		// the cached equity snapshot is still reading as zero.
 		return TradeSafetyDecision{
 			Allowed:                  true,
 			Reason:                   "",
@@ -790,7 +793,9 @@ func exchangeMinExecutableNotional(exchange string, symbol string, marketType st
 // It currently treats ':', 'PERP', and 'SWAP' patterns as futures-oriented,
 // primarily validated against Bitget conventions; it can still misclassify some
 // spot symbols or miss nonstandard futures tickers, so callers must not rely on
-// it for strict market-type correctness.
+// it for strict market-type correctness. Callers should pass the original
+// exchange symbol rather than a normalized comparison key when futures-specific
+// minimum-notional handling is required.
 func isLikelyFuturesInstrument(symbol string) bool {
 	normalized := strings.ToUpper(strings.TrimSpace(symbol))
 	if normalized == "" {

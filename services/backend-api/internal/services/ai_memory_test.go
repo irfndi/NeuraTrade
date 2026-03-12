@@ -444,6 +444,35 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 	})
 }
 
+func TestTradeMemory_GetScopedExpectancyStats_BitgetExchangeReconciliationTreatsPnLAsNet(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+
+	setupRealizedPnLJournal(t, db)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_net_a', 'ord_net_a', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 105, 5, 1, 'exchange_reconciliation', datetime('now'), datetime('now')),
+		('rp_net_b', 'ord_net_b', 'chat-1', 'bitget', 'BTC/USDT', 'buy', 1, 100, 95, -2, 0.5, 'exchange_reconciliation', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 24*30, 50)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, stats)
+	assert.Equal(t, 2, stats.SampleSize)
+	assert.Equal(t, 1, stats.Wins)
+	assert.Equal(t, 1, stats.Losses)
+	assert.InDelta(t, 1.5, stats.NetExpectancy, 0.0001)
+}
+
 func TestTradeMemory_GetScopedExpectancyStats_MissingTableReturnsNoData(t *testing.T) {
 	db := setupTestDB(t)
 	tm, err := NewTradeMemory(db)

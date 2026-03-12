@@ -1870,9 +1870,9 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 			result.Used[coinKey] += frozen + locked
 
 			if strings.TrimSpace(scopedKey) != "_" {
-				result.Total[scopedKey] = total
-				result.Free[scopedKey] = free
-				result.Used[scopedKey] = frozen + locked
+				result.Total[scopedKey] += total
+				result.Free[scopedKey] += free
+				result.Used[scopedKey] += frozen + locked
 			}
 
 			if coinKey == "USDT" {
@@ -1889,9 +1889,8 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 			totalUSDT += accountSummaryUSDT
 			freeUSDT += accountSummaryUSDT
 			key := accountPrefix + "_USDT"
-			result.Total[key] = accountSummaryUSDT
-			result.Free[key] = accountSummaryUSDT
-			result.Used[key] = 0
+			result.Total[key] += accountSummaryUSDT
+			result.Free[key] += accountSummaryUSDT
 			log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, accountSummaryUSDT)
 		}
 	}
