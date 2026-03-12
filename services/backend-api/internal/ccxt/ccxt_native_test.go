@@ -158,18 +158,62 @@ func TestNativeCCXTService_FetchBalance_BitgetMergesCoinListAndSummaryUSDT(t *te
 	}
 
 	balance, err := service.FetchBalance(context.Background(), "bitget")
-	if err != nil {
-		t.Fatalf("FetchBalance() returned error: %v", err)
+	require.NoError(t, err)
+	assert.InDelta(t, 10.0, balance.Total["SPOT_USDT"], 0.00000001)
+	assert.InDelta(t, 12.25, balance.Total["USDT"], 0.00000001)
+	assert.InDelta(t, 11.75, balance.Free["USDT"], 0.00000001)
+	assert.InDelta(t, 0.5, balance.Used["USDT"], 0.00000001)
+}
+
+func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_MergesCoinListAndSummaryAccounts(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:       "bitget",
+		BaseURL:    "https://api.bitget.com",
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
 	}
-	if balance.Total["SPOT_USDT"] != 10 {
-		t.Fatalf("unexpected SPOT_USDT balance: got %.8f", balance.Total["SPOT_USDT"])
+
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := `{
+				"code":"00000",
+				"msg":"success",
+				"data":[
+					{
+						"accountType":"usdt_futures",
+						"usdtBalance":"5.00",
+						"coinList":[
+							{"coin":"USDT","balance":"3.00","available":"2.00","frozen":"0.50","lock":"0.50"}
+						]
+					},
+					{
+						"accountType":"spot",
+						"usdtBalance":"10.50"
+					}
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
 	}
-	if balance.Total["USDT"] != 12.25 {
-		t.Fatalf("unexpected aggregated USDT balance: got %.8f", balance.Total["USDT"])
-	}
-	if balance.Free["USDT"] != 11.75 {
-		t.Fatalf("unexpected aggregated free USDT balance: got %.8f", balance.Free["USDT"])
-	}
+
+	balance, err := service.FetchBalance(context.Background(), "bitget")
+	require.NoError(t, err)
+	assert.InDelta(t, 13.5, balance.Total["USDT"], 0.00000001)
+	assert.InDelta(t, 12.5, balance.Free["USDT"], 0.00000001)
+	assert.InDelta(t, 1.0, balance.Used["USDT"], 0.00000001)
+	assert.InDelta(t, 3.0, balance.Total["USDT_FUTURES_USDT"], 0.00000001)
+	assert.InDelta(t, 2.0, balance.Free["USDT_FUTURES_USDT"], 0.00000001)
+	assert.InDelta(t, 1.0, balance.Used["USDT_FUTURES_USDT"], 0.00000001)
+	assert.InDelta(t, 10.5, balance.Total["SPOT_USDT"], 0.00000001)
+	assert.InDelta(t, 10.5, balance.Free["SPOT_USDT"], 0.00000001)
 }
 
 func TestNativeCCXTService_ParseBitgetTicker_PopulatesPercentage(t *testing.T) {

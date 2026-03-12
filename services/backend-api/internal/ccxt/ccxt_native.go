@@ -1847,14 +1847,16 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		Used:      make(map[string]float64),
 	}
 
-	totalUSDT := 0.0
-	freeUSDT := 0.0
-	usedUSDT := 0.0
-	usdtFromCoinList := false
+	totalUSDTFromSummary := 0.0
+	freeUSDTFromSummary := 0.0
+	usedUSDTFromSummary := 0.0
+	totalUSDTFromCoinList := 0.0
+	freeUSDTFromCoinList := 0.0
+	usedUSDTFromCoinList := 0.0
 	for _, balanceData := range raw.Data {
 		accountPrefix := strings.ToUpper(strings.TrimSpace(balanceData.AccountType))
-		accountSummaryUSDT := 0.0
 		accountHasCoinListUSDT := false
+		accountSummaryUSDT := 0.0
 		if strings.TrimSpace(balanceData.USDTBalance) != "" {
 			accountSummaryUSDT, _ = strconv.ParseFloat(strings.TrimSpace(balanceData.USDTBalance), 64)
 		}
@@ -1882,7 +1884,9 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 
 			if coinKey == "USDT" {
 				accountHasCoinListUSDT = true
-				usdtFromCoinList = true
+				totalUSDTFromCoinList += total
+				freeUSDTFromCoinList += free
+				usedUSDTFromCoinList += frozen + locked
 			}
 
 			if total > 0 {
@@ -1891,19 +1895,17 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		}
 
 		if accountSummaryUSDT > 0 && !accountHasCoinListUSDT {
-			totalUSDT += accountSummaryUSDT
-			freeUSDT += accountSummaryUSDT
+			totalUSDTFromSummary += accountSummaryUSDT
+			freeUSDTFromSummary += accountSummaryUSDT
 			key := accountPrefix + "_USDT"
 			result.Total[key] += accountSummaryUSDT
 			result.Free[key] += accountSummaryUSDT
 			log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, accountSummaryUSDT)
 		}
 	}
-	if usdtFromCoinList {
-		totalUSDT += result.Total["USDT"]
-		freeUSDT += result.Free["USDT"]
-		usedUSDT += result.Used["USDT"]
-	}
+	totalUSDT := totalUSDTFromCoinList + totalUSDTFromSummary
+	freeUSDT := freeUSDTFromCoinList + freeUSDTFromSummary
+	usedUSDT := usedUSDTFromCoinList + usedUSDTFromSummary
 	if totalUSDT > 0 {
 		result.Total["USDT"] = totalUSDT
 		result.Free["USDT"] = freeUSDT
