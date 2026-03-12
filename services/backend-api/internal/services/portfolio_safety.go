@@ -209,10 +209,12 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 	totalAvailable := decimal.Zero
 	totalUsed := decimal.Zero
 	successfulBalanceFetches := 0
+	var lastBalanceErr error
 
 	for _, exchange := range exchanges {
 		balance, err := s.ccxtService.FetchBalance(ctx, exchange)
 		if err != nil {
+			lastBalanceErr = err
 			if s.logger != nil {
 				s.logger.Warn("Failed to fetch balance from exchange",
 					"exchange", exchange,
@@ -267,6 +269,9 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 	}
 
 	if len(exchanges) > 0 && successfulBalanceFetches == 0 {
+		if lastBalanceErr != nil {
+			return nil, fmt.Errorf("failed to fetch balance from all requested exchanges: %w", lastBalanceErr)
+		}
 		return nil, fmt.Errorf("failed to fetch balance from all requested exchanges")
 	}
 
