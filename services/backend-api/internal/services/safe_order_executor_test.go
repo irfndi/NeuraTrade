@@ -130,6 +130,24 @@ func TestSafeOrderExecutor_BlocksWhenSafetyCheckFails(t *testing.T) {
 	mockExecutor.AssertNotCalled(t, "PlaceOrder")
 }
 
+func TestSafeOrderExecutor_PlaceOrder_InferFuturesMarketTypeFromSymbol(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "BTC/USDT:USDT", "futures", decimal.NewFromFloat(100)).
+		Return(true, "", nil)
+	mockExecutor.On("PlaceOrder", mock.Anything, "bitget", "BTC/USDT:USDT", "buy", "market", decimal.NewFromFloat(100), (*decimal.Decimal)(nil)).Return("order-futures", nil)
+
+	orderID, err := safeExec.PlaceOrder(context.Background(), "bitget", "BTC/USDT:USDT", "buy", "market", decimal.NewFromFloat(100), nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "order-futures", orderID)
+	mockExecutor.AssertExpectations(t)
+	mockSafety.AssertExpectations(t)
+}
+
 func TestSafeOrderExecutor_BlocksOnDailyLossLimit(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	mockSafety := &mockSafetyChecker{}
@@ -235,6 +253,29 @@ func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "Trading not allowed", result.Reason)
+}
+
+func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck_InferFuturesMarketTypeFromSymbol(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "ETH/USDT:USDT", "futures", decimal.NewFromFloat(25)).
+		Return(false, "below exchange minimum notional", nil)
+
+	orderID, result, err := safeExec.PlaceOrderWithSafetyCheck(
+		context.Background(),
+		"bitget", "ETH/USDT:USDT", "buy", "market",
+		decimal.NewFromFloat(25), nil,
+	)
+
+	assert.NoError(t, err)
+	assert.Empty(t, orderID)
+	assert.NotNil(t, result)
+	assert.False(t, result.Allowed)
+	assert.Equal(t, "below exchange minimum notional", result.Reason)
+	mockSafety.AssertExpectations(t)
 }
 
 func TestSafeOrderExecutor_SetChatID(t *testing.T) {

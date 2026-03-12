@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/shopspring/decimal"
@@ -42,7 +43,7 @@ func (s *SafeOrderExecutor) PlaceOrder(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, error) {
-	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, "", amount)
+	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, inferSafetyMarketType(symbol), amount)
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
@@ -60,7 +61,7 @@ func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, *SafetyCheckResult, error) {
-	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, "", amount)
+	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, inferSafetyMarketType(symbol), amount)
 	if err != nil {
 		return "", nil, fmt.Errorf("safety check failed: %w", err)
 	}
@@ -79,7 +80,7 @@ func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
 }
 
 func (s *SafeOrderExecutor) CheckSafety(ctx context.Context, exchange string, symbol string, amount decimal.Decimal) (bool, string, error) {
-	return s.checkSafety(ctx, exchange, symbol, "", amount)
+	return s.checkSafety(ctx, exchange, symbol, inferSafetyMarketType(symbol), amount)
 }
 
 func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol, marketType string, amount decimal.Decimal) (bool, string, error) {
@@ -229,6 +230,17 @@ func (s *SafeOrderExecutor) GetChatID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.chatID
+}
+
+func inferSafetyMarketType(symbol string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	if normalized == "" {
+		return ""
+	}
+	if strings.Contains(normalized, ":") || strings.Contains(normalized, "PERP") || strings.Contains(normalized, "SWAP") {
+		return "futures"
+	}
+	return ""
 }
 
 // IsPaperTrading delegates to the base executor
