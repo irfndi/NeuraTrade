@@ -683,7 +683,7 @@ func (s *TradingLifecycleStore) SyncPosition(ctx context.Context, chatID, exchan
 			realized_pnl = 0,
 			status = 'open',
 			source = CASE
-				WHEN COALESCE(trading_positions.source, '') IN ('', 'bootstrap_positions', 'bootstrap_open_orders')
+				WHEN LOWER(COALESCE(trading_positions.source, '')) IN ('', 'bootstrap_positions', 'bootstrap_open_orders')
 					OR trading_positions.position_id LIKE 'sync-%'
 				THEN 'bootstrap_positions'
 				ELSE trading_positions.source
@@ -1399,7 +1399,7 @@ func (s *TradingLifecycleStore) GetRealizedReturnSeries(
 	exchange string,
 	since time.Time,
 ) ([]decimal.Decimal, error) {
-	return s.getRealizedReturnSeries(ctx, chatID, exchange, since, false)
+	return s.GetGrossRealizedReturnSeries(ctx, chatID, exchange, since)
 }
 
 func (s *TradingLifecycleStore) GetNetRealizedReturnSeries(
@@ -1490,24 +1490,15 @@ func normalizeLifecycleFeeAdjustment(fees decimal.Decimal) decimal.Decimal {
 }
 
 func adjustedLifecyclePnL(pnl, fees decimal.Decimal, exchange, source string) decimal.Decimal {
-	if shouldTreatLifecycleRealizedPnLAsNet(exchange, source) {
-		return pnl
-	}
+	_ = exchange
+	_ = source
 	return pnl.Add(normalizeLifecycleFeeAdjustment(fees))
 }
 
-func shouldTreatLifecycleRealizedPnLAsNet(exchange, source string) bool {
-	return strings.EqualFold(strings.TrimSpace(exchange), "bitget") &&
-		strings.EqualFold(strings.TrimSpace(source), "exchange_reconciliation")
-}
-
 func lifecycleNetRealizedPnLSQL() string {
-	return `CASE
-		WHEN LOWER(COALESCE(exchange, '')) = 'bitget' AND LOWER(COALESCE(source, '')) = 'exchange_reconciliation' THEN realized_pnl
-		ELSE realized_pnl + CASE
-			WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0)
-			ELSE COALESCE(fees, 0)
-		END
+	return `realized_pnl + CASE
+		WHEN COALESCE(fees, 0) > 0 THEN -COALESCE(fees, 0)
+		ELSE COALESCE(fees, 0)
 	END`
 }
 

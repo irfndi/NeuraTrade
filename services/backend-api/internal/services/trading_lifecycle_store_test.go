@@ -264,9 +264,10 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries_FeeAdjustedAndGross(t *te
 	require.NoError(t, err)
 	require.Len(t, explicitGrossReturns, 1)
 	assert.True(t, explicitGrossReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+	assert.True(t, grossReturns[0].Equal(explicitGrossReturns[0]))
 }
 
-func TestTradingLifecycleStore_BitgetExchangeReconciliationTreatsRealizedPnLAsNet(t *testing.T) {
+func TestTradingLifecycleStore_BitgetExchangeReconciliationAppliesFeesToRealizedPnL(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-bitget-net-pnl.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -297,13 +298,13 @@ func TestTradingLifecycleStore_BitgetExchangeReconciliationTreatsRealizedPnLAsNe
 	netReturns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
 	require.NoError(t, err)
 	require.Len(t, netReturns, 1)
-	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.008)))
 
 	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
 	require.NoError(t, err)
-	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(5)))
-	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(5)))
-	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(5)))
+	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(4)))
+	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(4)))
+	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(4)))
 }
 
 func TestTradingLifecycleStore_GetRealizedReturnSeries_ToleratesNullFees(t *testing.T) {
@@ -566,6 +567,64 @@ func TestTradingLifecycleStore_SyncPosition_PreservesAutonomousSource(t *testing
 	`).Scan(&source)
 	require.NoError(t, err)
 	assert.Equal(t, "autonomous", source)
+}
+
+func TestTradingLifecycleStore_SyncPosition_PreservesBootstrapSourceCaseInsensitively(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-preserve-bootstrap-source.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO trading_positions (
+			position_id, order_id, chat_id, exchange, symbol, side, market_type,
+			size, entry_price, stop_loss, take_profit, last_price, unrealized_pnl,
+			protection_updated_at, close_price, realized_pnl, status, source, opened_at, closed_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,$9,$10,$11,$12,$13,0,0,'open',$14,$15,NULL,$16)
+	`,
+		"sync-bitget-ada-usdt-long",
+		"sync-bitget-ada-usdt-long",
+		"chat-1",
+		"bitget",
+		"ADA/USDT",
+		"buy",
+		decimal.NewFromFloat(5),
+		decimal.NewFromFloat(1.0),
+		decimal.NewFromFloat(0.95),
+		decimal.NewFromFloat(1.05),
+		decimal.NewFromFloat(1.01),
+		decimal.NewFromFloat(0.05),
+		now,
+		"Bootstrap_Positions",
+		now,
+		now,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.0),
+		MarkPrice:     decimal.NewFromFloat(1.02),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(now.Add(time.Minute)),
+	}))
+
+	var source string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT source
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&source)
+	require.NoError(t, err)
+	assert.Equal(t, "bootstrap_positions", source)
 }
 
 func TestTradingLifecycleStore_RecordClosedOrder_PrefersOpenSyncRowOverLegacyOrderMapping(t *testing.T) {

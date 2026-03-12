@@ -444,7 +444,7 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 	})
 }
 
-func TestTradeMemory_GetScopedExpectancyStats_BitgetExchangeReconciliationTreatsPnLAsNet(t *testing.T) {
+func TestTradeMemory_GetScopedExpectancyStats_BitgetExchangeReconciliationSubtractsFees(t *testing.T) {
 	db := setupTestDB(t)
 	tm, err := NewTradeMemory(db)
 	require.NoError(t, err)
@@ -470,7 +470,7 @@ func TestTradeMemory_GetScopedExpectancyStats_BitgetExchangeReconciliationTreats
 	assert.Equal(t, 2, stats.SampleSize)
 	assert.Equal(t, 1, stats.Wins)
 	assert.Equal(t, 1, stats.Losses)
-	assert.InDelta(t, 1.5, stats.NetExpectancy, 0.0001)
+	assert.InDelta(t, 0.75, stats.NetExpectancy, 0.0001)
 }
 
 func TestTradeMemory_GetScopedExpectancyStats_MissingTableReturnsNoData(t *testing.T) {
