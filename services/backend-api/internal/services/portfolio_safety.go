@@ -142,7 +142,7 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 		time.Since(s.lastSnapshotTime) < s.config.CacheTTL {
 		snapshot := cloneSafetyPortfolioSnapshot(s.lastSnapshot)
 		s.mu.RUnlock()
-		return snapshot, nil
+		return &snapshot, nil
 	}
 	s.mu.RUnlock()
 
@@ -177,13 +177,14 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 					"error", err,
 					"stale_age", staleAge.Round(time.Second).String())
 			}
-			return snapshot, nil
+			return &snapshot, nil
 		}
 		s.mu.RUnlock()
 		return nil, err
 	}
 
-	return cloneSafetyPortfolioSnapshot(result.(*SafetyPortfolioSnapshot)), nil
+	snapshot := cloneSafetyPortfolioSnapshot(result.(*SafetyPortfolioSnapshot))
+	return &snapshot, nil
 }
 
 func buildSnapshotCacheKey(chatID string, exchanges []string) string {
@@ -194,20 +195,6 @@ func buildSnapshotCacheKey(chatID string, exchanges []string) string {
 	exchangesCopy := append([]string(nil), exchanges...)
 	sort.Strings(exchangesCopy)
 	return "snapshot_" + chatID + "_" + strings.Join(exchangesCopy, ",")
-}
-
-func cloneSafetyPortfolioSnapshot(snapshot *SafetyPortfolioSnapshot) *SafetyPortfolioSnapshot {
-	if snapshot == nil {
-		return nil
-	}
-	cloned := *snapshot
-	if snapshot.ExchangeExposures != nil {
-		cloned.ExchangeExposures = append([]ExchangeExposure(nil), snapshot.ExchangeExposures...)
-	}
-	if snapshot.Positions != nil {
-		cloned.Positions = append([]SafetyPosition(nil), snapshot.Positions...)
-	}
-	return &cloned
 }
 
 func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID string, exchanges []string) (*SafetyPortfolioSnapshot, error) {
