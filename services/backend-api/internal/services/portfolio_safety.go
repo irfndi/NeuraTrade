@@ -18,12 +18,12 @@ import (
 )
 
 type PortfolioSafetyConfig struct {
-	MaxPositionSizePct        float64       `json:"max_position_size_pct"`
-	MaxPositionFloorPct       float64       `json:"max_position_floor_pct"`
-	MaxExposurePct            float64       `json:"max_exposure_pct"`
-	DefaultQuoteCurrency      string        `json:"default_quote_currency"`
-	CacheTTL                  time.Duration `json:"cache_ttl"`
-	StaleSnapshotFallbackTTL  time.Duration `json:"stale_snapshot_fallback_ttl"`
+	MaxPositionSizePct       float64       `json:"max_position_size_pct"`
+	MaxPositionFloorPct      float64       `json:"max_position_floor_pct"`
+	MaxExposurePct           float64       `json:"max_exposure_pct"`
+	DefaultQuoteCurrency     string        `json:"default_quote_currency"`
+	CacheTTL                 time.Duration `json:"cache_ttl"`
+	StaleSnapshotFallbackTTL time.Duration `json:"stale_snapshot_fallback_ttl"`
 }
 
 func DefaultPortfolioSafetyConfig() PortfolioSafetyConfig {
@@ -46,16 +46,16 @@ type ExchangeExposure struct {
 }
 
 type SafetyPortfolioSnapshot struct {
-	TotalEquity       decimal.Decimal    `json:"total_equity"`
-	AvailableFunds    decimal.Decimal    `json:"available_funds"`
-	TotalExposure     decimal.Decimal    `json:"total_exposure"`
-	ExposurePct       float64            `json:"exposure_pct"`
-	UnrealizedPnL     decimal.Decimal    `json:"unrealized_pnl"`
-	RealizedPnL       decimal.Decimal    `json:"realized_pnl"`
-	OpenPositions     int                `json:"open_positions"`
-	ExchangeExposures []ExchangeExposure `json:"exchange_exposures"`
-	Positions         []SafetyPosition   `json:"positions"`
-	CalculatedAt      time.Time          `json:"calculated_at"`
+	TotalEquity        decimal.Decimal    `json:"total_equity"`
+	AvailableFunds     decimal.Decimal    `json:"available_funds"`
+	TotalExposure      decimal.Decimal    `json:"total_exposure"`
+	ExposurePct        float64            `json:"exposure_pct"`
+	UnrealizedPnL      decimal.Decimal    `json:"unrealized_pnl"`
+	RealizedPnL        decimal.Decimal    `json:"realized_pnl"`
+	OpenPositions      int                `json:"open_positions"`
+	ExchangeExposures  []ExchangeExposure `json:"exchange_exposures"`
+	Positions          []SafetyPosition   `json:"positions"`
+	CalculatedAt       time.Time          `json:"calculated_at"`
 	balancesByExchange map[string]*ccxt.BalanceResponse
 }
 
@@ -83,12 +83,12 @@ type SafetyStatus struct {
 }
 
 type TradeSafetyDecision struct {
-	Allowed                    bool
-	Reason                     string
-	EffectiveMaxPosition       decimal.Decimal
-	EffectiveThrottlePct       float64
-	MinNotional                decimal.Decimal
-	ZeroMaxMinNotionalBypass   bool
+	Allowed                  bool
+	Reason                   string
+	EffectiveMaxPosition     decimal.Decimal
+	EffectiveThrottlePct     float64
+	MinNotional              decimal.Decimal
+	ZeroMaxMinNotionalBypass bool
 }
 
 type PortfolioSafetyService struct {
@@ -197,9 +197,9 @@ func buildSnapshotCacheKey(chatID string, exchanges []string) string {
 
 func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID string, exchanges []string) (*SafetyPortfolioSnapshot, error) {
 	snapshot := &SafetyPortfolioSnapshot{
-		CalculatedAt:      time.Now().UTC(),
-		ExchangeExposures: make([]ExchangeExposure, 0),
-		Positions:         make([]SafetyPosition, 0),
+		CalculatedAt:       time.Now().UTC(),
+		ExchangeExposures:  make([]ExchangeExposure, 0),
+		Positions:          make([]SafetyPosition, 0),
 		balancesByExchange: make(map[string]*ccxt.BalanceResponse),
 	}
 
@@ -552,9 +552,9 @@ func (s *PortfolioSafetyService) EvaluateTradeWithLeverage(ctx context.Context, 
 	minNotional := exchangeMinExecutableNotional(strings.TrimSpace(strings.ToLower(exchange)), symbol, marketType)
 	if minNotional.GreaterThan(decimal.Zero) && size.GreaterThan(decimal.Zero) && size.LessThan(minNotional) {
 		return TradeSafetyDecision{
-			Allowed:      false,
-			Reason:       fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)),
-			MinNotional:  minNotional,
+			Allowed:     false,
+			Reason:      fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)),
+			MinNotional: minNotional,
 		}, nil
 	}
 
