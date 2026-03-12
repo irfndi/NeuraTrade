@@ -54,6 +54,7 @@ type SafetyPortfolioSnapshot struct {
 	ExchangeExposures []ExchangeExposure `json:"exchange_exposures"`
 	Positions         []SafetyPosition   `json:"positions"`
 	CalculatedAt      time.Time          `json:"calculated_at"`
+	balancesByExchange map[string]*ccxt.BalanceResponse
 }
 
 type SafetyPosition struct {
@@ -190,6 +191,7 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 		CalculatedAt:      time.Now().UTC(),
 		ExchangeExposures: make([]ExchangeExposure, 0),
 		Positions:         make([]SafetyPosition, 0),
+		balancesByExchange: make(map[string]*ccxt.BalanceResponse),
 	}
 
 	totalBalance := decimal.Zero
@@ -208,6 +210,7 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 			continue
 		}
 		successfulBalanceFetches++
+		snapshot.balancesByExchange[exchange] = balance
 
 		exchangeTotal := decimal.Zero
 		exchangeAvailable := decimal.Zero
@@ -508,7 +511,7 @@ func (s *PortfolioSafetyService) CanExecuteTradeWithLeverage(ctx context.Context
 		return false, fmt.Sprintf("Trading not allowed: %v", status.Reasons), nil
 	}
 
-	scopedTotal, scopedAvailable, hasScopedFunds := s.resolveScopedMarketFunds(ctx, exchange, marketType)
+	scopedTotal, scopedAvailable, hasScopedFunds := s.resolveScopedMarketFunds(snapshot, exchange, marketType)
 	equityRef := snapshot.TotalEquity
 	availableRef := snapshot.AvailableFunds
 	if hasScopedFunds {
@@ -524,7 +527,7 @@ func (s *PortfolioSafetyService) CanExecuteTradeWithLeverage(ctx context.Context
 		return false, fmt.Sprintf("Position size %s is below exchange minimum notional %s", size.StringFixed(2), minNotional.StringFixed(2)), nil
 	}
 
-	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, symbol, marketType, snapshot, status.MaxPositionSize)
+	effectiveMaxPosition := s.resolveEffectiveMaxPositionSize(exchange, symbol, marketType, equityRef, status.MaxPositionSize)
 	if strings.EqualFold(strings.TrimSpace(marketType), "futures") {
 		if leverage <= 0 {
 			leverage = 1
@@ -588,12 +591,12 @@ func (s *PortfolioSafetyService) CanExecuteTradeWithLeverage(ctx context.Context
 	return true, "", nil
 }
 
-func (s *PortfolioSafetyService) resolveScopedMarketFunds(ctx context.Context, exchange string, marketType string) (decimal.Decimal, decimal.Decimal, bool) {
-	if s == nil || s.ccxtService == nil || strings.TrimSpace(exchange) == "" {
+func (s *PortfolioSafetyService) resolveScopedMarketFunds(snapshot *SafetyPortfolioSnapshot, exchange string, marketType string) (decimal.Decimal, decimal.Decimal, bool) {
+	if snapshot == nil || strings.TrimSpace(exchange) == "" {
 		return decimal.Zero, decimal.Zero, false
 	}
-	balance, err := s.ccxtService.FetchBalance(ctx, exchange)
-	if err != nil || balance == nil {
+	balance := snapshot.balancesByExchange[exchange]
+	if balance == nil {
 		return decimal.Zero, decimal.Zero, false
 	}
 
@@ -645,8 +648,8 @@ func futuresSizeWithinRoundedEffectiveMax(size, effectiveMax decimal.Decimal) bo
 // override for exchange minimum notionals: when requiredPct for the exchange
 // minimum is less than or equal to floorCapPct, the effective max may exceed
 // defaultMax so the trade remains executable; otherwise defaultMax is preserved.
-func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, symbol string, marketType string, snapshot *SafetyPortfolioSnapshot, defaultMax decimal.Decimal) decimal.Decimal {
-	if snapshot == nil || !defaultMax.GreaterThan(decimal.Zero) {
+func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string, symbol string, marketType string, equityRef decimal.Decimal, defaultMax decimal.Decimal) decimal.Decimal {
+	if !defaultMax.GreaterThan(decimal.Zero) {
 		return defaultMax
 	}
 
@@ -654,11 +657,11 @@ func (s *PortfolioSafetyService) resolveEffectiveMaxPositionSize(exchange string
 	if !minNotional.GreaterThan(decimal.Zero) || !minNotional.GreaterThan(defaultMax) {
 		return defaultMax
 	}
-	if !snapshot.AvailableFunds.GreaterThanOrEqual(minNotional) || !snapshot.TotalEquity.GreaterThan(decimal.Zero) {
+	if !equityRef.GreaterThan(decimal.Zero) {
 		return defaultMax
 	}
 
-	requiredPct := minNotional.Div(snapshot.TotalEquity)
+	requiredPct := minNotional.Div(equityRef)
 	floorCapPct := s.config.MaxPositionFloorPct
 	if floorCapPct <= 0 {
 		return defaultMax

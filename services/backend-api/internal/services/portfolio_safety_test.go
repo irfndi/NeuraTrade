@@ -817,6 +817,7 @@ func TestPortfolioSafetyService_CanExecuteTradeWithLeverage_BitgetFuturesAllowsM
 	require.NoError(t, err)
 	assert.True(t, allowed)
 	assert.Empty(t, reason)
+	assert.Equal(t, 1, mockCCXT.fetchCalls)
 }
 
 func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesAllowsMinNotionalWhenBalanceSnapshotIsZero(t *testing.T) {
@@ -844,6 +845,48 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesAllowsMinNotionalWh
 	require.NoError(t, err)
 	assert.True(t, allowed)
 	assert.Empty(t, reason)
+}
+
+func TestPortfolioSafetyService_ResolveEffectiveMaxPositionSize_UsesScopedEquityForFloorCap(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.MaxPositionFloorPct = 0.20
+
+	service := NewPortfolioSafetyService(config, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	effective := service.resolveEffectiveMaxPositionSize(
+		"bitget",
+		"OPN/USDT:USDT",
+		"futures",
+		decimal.NewFromFloat(3.0),
+		decimal.NewFromFloat(3.0),
+	)
+
+	assert.True(t, effective.Equal(decimal.NewFromFloat(3.0)))
+}
+
+func TestPortfolioSafetyService_ResolveScopedMarketFunds_UsesCachedSnapshotBalance(t *testing.T) {
+	service := NewPortfolioSafetyService(DefaultPortfolioSafetyConfig(), nil, nil, nil, nil, nil, nil, nil, nil)
+	snapshot := &SafetyPortfolioSnapshot{
+		balancesByExchange: map[string]*ccxt.BalanceResponse{
+			"bitget": {
+				Exchange: "bitget",
+				Total: map[string]float64{
+					"USDT":              100,
+					"USDT_FUTURES_USDT": 3,
+				},
+				Free: map[string]float64{
+					"USDT":              80,
+					"USDT_FUTURES_USDT": 2,
+				},
+			},
+		},
+	}
+
+	total, free, ok := service.resolveScopedMarketFunds(snapshot, "bitget", "futures")
+
+	assert.True(t, ok)
+	assert.True(t, total.Equal(decimal.NewFromFloat(3)))
+	assert.True(t, free.Equal(decimal.NewFromFloat(2)))
 }
 
 func TestFuturesSizeWithinRoundedEffectiveMax(t *testing.T) {
