@@ -174,10 +174,10 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
+	if decision.ZeroMaxMinNotionalBypass {
+		return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+	}
 	if !allowed {
-		if decision.ZeroMaxMinNotionalBypass {
-			return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
-		}
 		return "", fmt.Errorf("portfolio safety blocked: %s", reason)
 	}
 

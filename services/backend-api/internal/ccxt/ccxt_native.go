@@ -1892,9 +1892,9 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		}
 	}
 	if usdtFromCoinList {
-		totalUSDT = result.Total["USDT"]
-		freeUSDT = result.Free["USDT"]
-		usedUSDT = result.Used["USDT"]
+		totalUSDT += result.Total["USDT"]
+		freeUSDT += result.Free["USDT"]
+		usedUSDT += result.Used["USDT"]
 	}
 	if totalUSDT > 0 {
 		result.Total["USDT"] = totalUSDT

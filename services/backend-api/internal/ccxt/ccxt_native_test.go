@@ -120,6 +120,58 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 	}
 }
 
+func TestNativeCCXTService_FetchBalance_BitgetMergesCoinListAndSummaryUSDT(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:       "bitget",
+		BaseURL:    "https://api.bitget.com",
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := `{
+				"code":"00000",
+				"msg":"success",
+				"data":[
+					{
+						"accountType":"spot",
+						"usdtBalance":"10.50",
+						"coin":[{"coin":"USDT","balance":"10.00","available":"9.50","frozen":"0.25","lock":"0.25"}]
+					},
+					{
+						"accountType":"usdt_futures",
+						"usdtBalance":"2.25"
+					}
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	balance, err := service.FetchBalance(context.Background(), "bitget")
+	if err != nil {
+		t.Fatalf("FetchBalance() returned error: %v", err)
+	}
+	if balance.Total["SPOT_USDT"] != 10 {
+		t.Fatalf("unexpected SPOT_USDT balance: got %.8f", balance.Total["SPOT_USDT"])
+	}
+	if balance.Total["USDT"] != 12.25 {
+		t.Fatalf("unexpected aggregated USDT balance: got %.8f", balance.Total["USDT"])
+	}
+	if balance.Free["USDT"] != 11.75 {
+		t.Fatalf("unexpected aggregated free USDT balance: got %.8f", balance.Free["USDT"])
+	}
+}
+
 func TestNativeCCXTService_ParseBitgetTicker_PopulatesPercentage(t *testing.T) {
 	t.Parallel()
 

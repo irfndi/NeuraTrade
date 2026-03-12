@@ -167,7 +167,7 @@ func (s *PortfolioSafetyService) GetPortfolioSnapshot(ctx context.Context, chatI
 			s.lastSnapshotKey == key &&
 			time.Since(s.lastSnapshotTime) <= s.config.StaleSnapshotFallbackTTL
 		if canFallback {
-			snapshot := *s.lastSnapshot
+			snapshot := cloneSafetyPortfolioSnapshot(s.lastSnapshot)
 			s.mu.RUnlock()
 			if s.logger != nil {
 				s.logger.Warn("Using stale portfolio snapshot after refresh failure",
@@ -604,7 +604,7 @@ func (s *PortfolioSafetyService) EvaluateTradeWithLeverage(ctx context.Context, 
 
 	if !effectiveMaxPosition.GreaterThan(decimal.Zero) &&
 		minNotional.GreaterThan(decimal.Zero) &&
-		strings.EqualFold(strings.TrimSpace(strings.ToLower(exchange)), "bitget") &&
+		strings.EqualFold(strings.TrimSpace(exchange), "bitget") &&
 		strings.EqualFold(strings.TrimSpace(marketType), "futures") &&
 		size.LessThanOrEqual(minNotional) {
 		// Exchange-side margin/notional validation is treated as the final safety
@@ -693,6 +693,48 @@ func decimalFromFloatMap(values map[string]float64, key string) decimal.Decimal 
 		return decimal.Zero
 	}
 	return decimal.NewFromFloat(v)
+}
+
+func cloneSafetyPortfolioSnapshot(snapshot *SafetyPortfolioSnapshot) SafetyPortfolioSnapshot {
+	if snapshot == nil {
+		return SafetyPortfolioSnapshot{}
+	}
+	clone := *snapshot
+	if snapshot.ExchangeExposures != nil {
+		clone.ExchangeExposures = append([]ExchangeExposure(nil), snapshot.ExchangeExposures...)
+	}
+	if snapshot.Positions != nil {
+		clone.Positions = append([]SafetyPosition(nil), snapshot.Positions...)
+	}
+	if snapshot.balancesByExchange != nil {
+		clone.balancesByExchange = make(map[string]*ccxt.BalanceResponse, len(snapshot.balancesByExchange))
+		for exchange, balance := range snapshot.balancesByExchange {
+			clone.balancesByExchange[exchange] = cloneBalanceResponse(balance)
+		}
+	}
+	return clone
+}
+
+func cloneBalanceResponse(balance *ccxt.BalanceResponse) *ccxt.BalanceResponse {
+	if balance == nil {
+		return nil
+	}
+	clone := *balance
+	clone.Total = cloneFloatMap(balance.Total)
+	clone.Free = cloneFloatMap(balance.Free)
+	clone.Used = cloneFloatMap(balance.Used)
+	return &clone
+}
+
+func cloneFloatMap(values map[string]float64) map[string]float64 {
+	if values == nil {
+		return nil
+	}
+	clone := make(map[string]float64, len(values))
+	for key, value := range values {
+		clone[key] = value
+	}
+	return clone
 }
 
 func futuresSizeWithinRoundedEffectiveMax(size, effectiveMax decimal.Decimal) bool {

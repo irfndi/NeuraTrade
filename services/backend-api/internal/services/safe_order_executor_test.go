@@ -343,8 +343,8 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_BypassesZeroMaxSafetyForBitgetF
 
 	mockSafety.On("EvaluateTradeWithLeverage", mock.Anything, "test-chat", "bitget", "OPN/USDT:USDT", "futures", 0, decimal.NewFromFloat(6.0)).
 		Return(TradeSafetyDecision{
-			Allowed:                  false,
-			Reason:                   "Position size 6.00 exceeds maximum allowed 0.00 (throttled to 0%)",
+			Allowed:                  true,
+			Reason:                   "",
 			ZeroMaxMinNotionalBypass: true,
 		}, nil)
 	mockExecutor.On("PlaceOrderWithDetails", mock.Anything, details).Return("order-fallback", nil)
