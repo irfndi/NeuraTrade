@@ -591,14 +591,14 @@ func (s *NativeCCXTService) parseBybitTicker(symbol string, body []byte) (*Ticke
 		RetMsg  string `json:"retMsg"`
 		Result  struct {
 			List []struct {
-				Symbol        string `json:"symbol"`
-				LastPrice     string `json:"lastPrice"`
-				Bid1Price     string `json:"bid1Price"`
-				Ask1Price     string `json:"ask1Price"`
-				High24h       string `json:"highPrice24h"`
-				Low24h        string `json:"lowPrice24h"`
-				Volume24h     string `json:"volume24h"`
-				Price24hPcnt  string `json:"price24hPcnt"`
+				Symbol       string `json:"symbol"`
+				LastPrice    string `json:"lastPrice"`
+				Bid1Price    string `json:"bid1Price"`
+				Ask1Price    string `json:"ask1Price"`
+				High24h      string `json:"highPrice24h"`
+				Low24h       string `json:"lowPrice24h"`
+				Volume24h    string `json:"volume24h"`
+				Price24hPcnt string `json:"price24hPcnt"`
 			} `json:"list"`
 		} `json:"result"`
 	}
@@ -635,14 +635,14 @@ func (s *NativeCCXTService) parseOKXTicker(symbol string, body []byte) (*Ticker,
 		Code string `json:"code"`
 		Msg  string `json:"msg"`
 		Data []struct {
-			InstID   string `json:"instId"`
-			Last     string `json:"last"`
-			BidPx    string `json:"bidPx"`
-			AskPx    string `json:"askPx"`
-			Open24h  string `json:"open24h"`
-			High24h  string `json:"high24h"`
-			Low24h   string `json:"low24h"`
-			Vol24h   string `json:"vol24h"`
+			InstID  string `json:"instId"`
+			Last    string `json:"last"`
+			BidPx   string `json:"bidPx"`
+			AskPx   string `json:"askPx"`
+			Open24h string `json:"open24h"`
+			High24h string `json:"high24h"`
+			Low24h  string `json:"low24h"`
+			Vol24h  string `json:"vol24h"`
 		} `json:"data"`
 	}
 
