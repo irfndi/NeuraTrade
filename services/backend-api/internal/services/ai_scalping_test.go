@@ -2188,6 +2188,39 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumAlignedE
 	assert.Contains(t, decision.Reasoning, "24h change")
 }
 
+func TestAIScalpingService_DeterministicFallbackCandidate_UsesMomentumConfigOverride(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread:       0.08,
+				MinImbalance:          0.20,
+				BuyRangeMax:           45,
+				SellRangeMin:          55,
+				BuyMinPriceChangePct:  -5.0,
+				SellMaxPriceChangePct: 5.0,
+				SizeFraction:          0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "DOGE/USDT",
+		Price:              1,
+		High24h:            1.1,
+		Low24h:             0.9,
+		Volume24h:          1500000,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.60,
+		PriceChange24h:     -4.0,
+		RangePosition24h:   18,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+}
+
 func TestAIScalpingService_DeterministicFallbackCandidate_BlocksWeakProjectedNetEdgeForMicro(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{

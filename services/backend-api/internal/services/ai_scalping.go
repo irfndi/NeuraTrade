@@ -70,13 +70,15 @@ const (
 )
 
 type DeterministicFallbackConfig struct {
-	MaxBidAskSpread float64
-	MinImbalance    float64
-	BuyRangeMax     float64
-	SellRangeMin    float64
-	RangeAnchor     float64
-	RangeOffset     float64
-	rangeOffsetSet  bool
+	MaxBidAskSpread       float64
+	MinImbalance          float64
+	BuyRangeMax           float64
+	SellRangeMin          float64
+	BuyMinPriceChangePct  float64
+	SellMaxPriceChangePct float64
+	RangeAnchor           float64
+	RangeOffset           float64
+	rangeOffsetSet        bool
 
 	ImbalanceWeight float64
 	LiquidityWeight float64
@@ -96,24 +98,26 @@ type DeterministicFallbackConfig struct {
 
 func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
 	return DeterministicFallbackConfig{
-		MaxBidAskSpread: 0.08,
-		MinImbalance:    0.35,
-		BuyRangeMax:     45.0,
-		SellRangeMin:    55.0,
-		RangeAnchor:     55.0,
-		RangeOffset:     45.0,
-		ImbalanceWeight: 0.65,
-		LiquidityWeight: 0.20,
-		RangeWeight:     0.10,
-		VolumeWeight:    0.05,
-		BaseConfidence:  0.55,
-		ConfidenceScale: 0.35,
-		MinConfidence:   0.55,
-		MaxConfidence:   0.85,
-		ConfidenceFloor: 0.72,
-		SizeFraction:    0.50,
-		MinSizePct:      0.10,
-		VolumeLogScale:  8.0,
+		MaxBidAskSpread:       0.08,
+		MinImbalance:          0.35,
+		BuyRangeMax:           45.0,
+		SellRangeMin:          55.0,
+		BuyMinPriceChangePct:  -1.0,
+		SellMaxPriceChangePct: 1.0,
+		RangeAnchor:           55.0,
+		RangeOffset:           45.0,
+		ImbalanceWeight:       0.65,
+		LiquidityWeight:       0.20,
+		RangeWeight:           0.10,
+		VolumeWeight:          0.05,
+		BaseConfidence:        0.55,
+		ConfidenceScale:       0.35,
+		MinConfidence:         0.55,
+		MaxConfidence:         0.85,
+		ConfidenceFloor:       0.72,
+		SizeFraction:          0.50,
+		MinSizePct:            0.10,
+		VolumeLogScale:        8.0,
 	}
 }
 
@@ -132,6 +136,12 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	}
 	if cfg.SellRangeMin > 0 {
 		normalized.SellRangeMin = clampFloat(cfg.SellRangeMin, 1, 99)
+	}
+	if cfg.BuyMinPriceChangePct != 0 {
+		normalized.BuyMinPriceChangePct = clampFloat(cfg.BuyMinPriceChangePct, -50, 50)
+	}
+	if cfg.SellMaxPriceChangePct != 0 {
+		normalized.SellMaxPriceChangePct = clampFloat(cfg.SellMaxPriceChangePct, -50, 50)
 	}
 	if normalized.BuyRangeMax >= normalized.SellRangeMin {
 		normalized.BuyRangeMax = defaults.BuyRangeMax
@@ -410,6 +420,12 @@ func applyDeterministicFallbackConfigFromEnv(base DeterministicFallbackConfig) D
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_RANGE_MIN"); ok {
 		cfg.SellRangeMin = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BUY_MIN_PRICE_CHANGE_PCT"); ok {
+		cfg.BuyMinPriceChangePct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_MAX_PRICE_CHANGE_PCT"); ok {
+		cfg.SellMaxPriceChangePct = value
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RANGE_ANCHOR"); ok {
 		cfg.RangeAnchor = value
@@ -2860,7 +2876,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	case signal.OrderBookImbalance >= effectiveMinImbalance &&
 		signal.RangePosition24h <= buyRangeMax:
 		action = "buy"
-		momentumAligned = signal.PriceChange24h >= -1.0
+		momentumAligned = signal.PriceChange24h >= fallbackCfg.BuyMinPriceChangePct
 		rangeAlignment = clampFloat(
 			(buyRangeMax-signal.RangePosition24h)/math.Max(buyRangeMax, 1),
 			0,
@@ -2869,7 +2885,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	case signal.OrderBookImbalance <= -effectiveMinImbalance &&
 		signal.RangePosition24h >= sellRangeMin:
 		action = "sell"
-		momentumAligned = signal.PriceChange24h <= 1.0
+		momentumAligned = signal.PriceChange24h <= fallbackCfg.SellMaxPriceChangePct
 		rangeAlignment = clampFloat(
 			(signal.RangePosition24h-sellRangeMin)/math.Max(100-sellRangeMin, 1),
 			0,
