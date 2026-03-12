@@ -216,6 +216,55 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_MergesCoinListAn
 	assert.InDelta(t, 10.5, balance.Free["SPOT_USDT"], 0.00000001)
 }
 
+func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_PrefersFinalUSDTAggregation(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:       "bitget",
+		BaseURL:    "https://api.bitget.com",
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := `{
+				"code":"00000",
+				"msg":"success",
+				"data":[
+					{
+						"accountType":"spot",
+						"usdtBalance":"10.50",
+						"coinList":[
+							{"coin":"USDT","balance":"10.00","available":"9.50","frozen":"0.25","lock":"0.25"},
+							{"coin":"BTC","balance":"0.10","available":"0.10","frozen":"0","lock":"0"}
+						]
+					},
+					{
+						"accountType":"usdt_futures",
+						"usdtBalance":"2.25"
+					}
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	balance, err := service.FetchBalance(context.Background(), "bitget")
+	require.NoError(t, err)
+	assert.InDelta(t, 12.25, balance.Total["USDT"], 0.00000001)
+	assert.InDelta(t, 11.75, balance.Free["USDT"], 0.00000001)
+	assert.InDelta(t, 0.5, balance.Used["USDT"], 0.00000001)
+	assert.InDelta(t, 0.10, balance.Total["BTC"], 0.00000001)
+	assert.InDelta(t, 0.10, balance.Free["BTC"], 0.00000001)
+}
+
 func TestNativeCCXTService_ParseBitgetTicker_PopulatesPercentage(t *testing.T) {
 	t.Parallel()
 

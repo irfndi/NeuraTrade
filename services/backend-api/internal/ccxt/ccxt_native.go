@@ -1872,9 +1872,11 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 			coinKey := strings.ToUpper(strings.TrimSpace(coin.Coin))
 			scopedKey := accountPrefix + "_" + coinKey
 
-			result.Total[coinKey] += total
-			result.Free[coinKey] += free
-			result.Used[coinKey] += frozen + locked
+			if coinKey != "USDT" {
+				result.Total[coinKey] += total
+				result.Free[coinKey] += free
+				result.Used[coinKey] += frozen + locked
+			}
 
 			if strings.TrimSpace(scopedKey) != "_" {
 				result.Total[scopedKey] += total
