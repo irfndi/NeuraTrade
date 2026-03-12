@@ -157,7 +157,10 @@ func (e *StrategyProposalEngine) calculateRiskScore(parameters map[string]any, m
 
 	// Factor in max drawdown (higher drawdown = higher risk)
 	if !maxDrawdown.IsZero() {
-		drawdownFloat := maxDrawdown.Abs().Div(decimal.NewFromInt(100)).InexactFloat64()
+		// maxDrawdown is already represented as a percentage (for example, 1.9
+		// means 1.9%), so normalize it to a 0-1 risk contribution scale over a
+		// 10% drawdown band rather than shrinking it to a negligible fraction.
+		drawdownFloat := maxDrawdown.Abs().Div(decimal.NewFromInt(10)).InexactFloat64()
 		score += drawdownFloat * 0.4 // 40% weight on drawdown
 	}
 

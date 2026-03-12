@@ -178,6 +178,14 @@ func TestStrategyProposalEngine_GenerateProposal(t *testing.T) {
 			expectError: true,
 			expectedErr: ErrHighRisk,
 		},
+		{
+			name:        "elevated drawdown alone can exceed risk threshold",
+			confidence:  0.9,
+			maxDrawdown: decimal.NewFromFloat(20),
+			params:      map[string]any{},
+			expectError: true,
+			expectedErr: ErrHighRisk,
+		},
 	}
 
 	for _, tt := range tests {
