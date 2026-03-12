@@ -19,15 +19,16 @@ type stubTicker struct {
 	price  float64
 }
 
-func (t *stubTicker) GetPrice() float64       { return t.price }
-func (t *stubTicker) GetVolume() float64      { return 0 }
-func (t *stubTicker) GetTimestamp() time.Time { return time.Now().UTC() }
-func (t *stubTicker) GetExchangeName() string { return "bitget" }
-func (t *stubTicker) GetSymbol() string       { return t.symbol }
-func (t *stubTicker) GetBid() float64         { return t.price * 0.999 }
-func (t *stubTicker) GetAsk() float64         { return t.price * 1.001 }
-func (t *stubTicker) GetHigh() float64        { return t.price * 1.01 }
-func (t *stubTicker) GetLow() float64         { return t.price * 0.99 }
+func (t *stubTicker) GetPrice() float64          { return t.price }
+func (t *stubTicker) GetVolume() float64         { return 0 }
+func (t *stubTicker) GetTimestamp() time.Time    { return time.Now().UTC() }
+func (t *stubTicker) GetExchangeName() string    { return "bitget" }
+func (t *stubTicker) GetSymbol() string          { return t.symbol }
+func (t *stubTicker) GetBid() float64            { return t.price * 0.999 }
+func (t *stubTicker) GetAsk() float64            { return t.price * 1.001 }
+func (t *stubTicker) GetHigh() float64           { return t.price * 1.01 }
+func (t *stubTicker) GetLow() float64            { return t.price * 0.99 }
+func (t *stubTicker) GetPriceChange24h() float64 { return 0 }
 
 type stubTickerSource struct {
 	prices map[string]float64

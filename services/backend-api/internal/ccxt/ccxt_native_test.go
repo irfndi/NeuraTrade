@@ -14,6 +14,8 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type roundTripFunc func(req *http.Request) (*http.Response, error)
@@ -116,6 +118,31 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 	if balance.Total["USDT"] != 12.75 {
 		t.Fatalf("unexpected aggregated USDT balance: got %.8f", balance.Total["USDT"])
 	}
+}
+
+func TestNativeCCXTService_ParseBitgetTicker_PopulatesPercentage(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	ticker, err := service.parseBitgetTicker("DOGE/USDT", []byte(`{
+		"code":"00000",
+		"msg":"success",
+		"data":[{
+			"symbol":"DOGEUSDT",
+			"lastPr":"0.1000",
+			"bidPr":"0.0999",
+			"askPr":"0.1001",
+			"high24h":"0.1050",
+			"low24h":"0.0950",
+			"baseVolume":"1000000",
+			"change24h":"-1.25"
+		}]
+	}`))
+	require.NoError(t, err)
+	percentage, _ := ticker.Percentage.Float64()
+	assert.Equal(t, -1.25, percentage)
+	adapter := &TickerMarketPriceAdapter{data: &TickerData{Exchange: "bitget", Ticker: *ticker}}
+	assert.Equal(t, -1.25, adapter.GetPriceChange24h())
 }
 
 func TestNativeCCXTService_FetchOpenOrders_Bitget(t *testing.T) {

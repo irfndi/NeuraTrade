@@ -1646,11 +1646,12 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		}
 
 		signal := aiMarketSignal{
-			Symbol:    normalizeSymbolForComparison(tickerData.GetSymbol()),
-			Price:     tickerData.GetPrice(),
-			High24h:   tickerData.GetHigh(),
-			Low24h:    tickerData.GetLow(),
-			Volume24h: tickerData.GetVolume(),
+			Symbol:         normalizeSymbolForComparison(tickerData.GetSymbol()),
+			Price:          tickerData.GetPrice(),
+			High24h:        tickerData.GetHigh(),
+			Low24h:         tickerData.GetLow(),
+			Volume24h:      tickerData.GetVolume(),
+			PriceChange24h: tickerData.GetPriceChange24h(),
 		}
 		if signal.Symbol == "" {
 			signal.Symbol = normalizedSymbol
@@ -2854,10 +2855,12 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 
 	action := ""
 	rangeAlignment := 0.0
+	momentumAligned := false
 	switch {
 	case signal.OrderBookImbalance >= effectiveMinImbalance &&
 		signal.RangePosition24h <= buyRangeMax:
 		action = "buy"
+		momentumAligned = signal.PriceChange24h >= -1.0
 		rangeAlignment = clampFloat(
 			(buyRangeMax-signal.RangePosition24h)/math.Max(buyRangeMax, 1),
 			0,
@@ -2866,12 +2869,16 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	case signal.OrderBookImbalance <= -effectiveMinImbalance &&
 		signal.RangePosition24h >= sellRangeMin:
 		action = "sell"
+		momentumAligned = signal.PriceChange24h <= 1.0
 		rangeAlignment = clampFloat(
 			(signal.RangePosition24h-sellRangeMin)/math.Max(100-sellRangeMin, 1),
 			0,
 			1,
 		)
 	default:
+		return nil, 0, false
+	}
+	if !momentumAligned {
 		return nil, 0, false
 	}
 
@@ -2960,10 +2967,11 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	}
 
 	reason := fmt.Sprintf(
-		"deterministic fallback: %s pressure %.3f with spread %.3f%%, range position %.1f%%, projected net edge %.3f%%",
+		"deterministic fallback: %s pressure %.3f with spread %.3f%%, 24h change %.3f%%, range position %.1f%%, projected net edge %.3f%%",
 		action,
 		signal.OrderBookImbalance,
 		signal.BidAskSpread,
+		signal.PriceChange24h,
 		signal.RangePosition24h,
 		projectedNetEdgePct,
 	)

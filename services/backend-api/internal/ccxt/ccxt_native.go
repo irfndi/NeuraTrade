@@ -570,16 +570,17 @@ func (s *NativeCCXTService) parseBinanceTicker(symbol string, body []byte) (*Tic
 	}
 
 	return &Ticker{
-		Symbol:    symbol,
-		Last:      parseDecimal(raw.LastPrice),
-		Bid:       parseDecimal(raw.BidPrice),
-		Ask:       parseDecimal(raw.AskPrice),
-		High:      parseDecimal(raw.High24h),
-		Low:       parseDecimal(raw.Low24h),
-		Volume:    parseDecimal(raw.Volume24h),
-		Open:      parseDecimal(raw.OpenPrice),
-		Close:     parseDecimal(raw.PrevClosePrice),
-		Timestamp: UnixTimestamp(time.Now()),
+		Symbol:     symbol,
+		Last:       parseDecimal(raw.LastPrice),
+		Bid:        parseDecimal(raw.BidPrice),
+		Ask:        parseDecimal(raw.AskPrice),
+		High:       parseDecimal(raw.High24h),
+		Low:        parseDecimal(raw.Low24h),
+		Volume:     parseDecimal(raw.Volume24h),
+		Open:       parseDecimal(raw.OpenPrice),
+		Close:      parseDecimal(raw.PrevClosePrice),
+		Percentage: calculateTickerPercentage(parseDecimal(raw.LastPrice), parseDecimal(raw.OpenPrice)),
+		Timestamp:  UnixTimestamp(time.Now()),
 	}, nil
 }
 
@@ -697,14 +698,15 @@ func (s *NativeCCXTService) parseBitgetTicker(symbol string, body []byte) (*Tick
 
 	t := raw.Data[0]
 	return &Ticker{
-		Symbol:    symbol,
-		Last:      parseDecimal(t.LastPr),
-		Bid:       parseDecimal(t.BidPr),
-		Ask:       parseDecimal(t.AskPr),
-		High:      parseDecimal(t.High24h),
-		Low:       parseDecimal(t.Low24h),
-		Volume:    parseDecimal(t.BaseVolume),
-		Timestamp: UnixTimestamp(time.Now()),
+		Symbol:     symbol,
+		Last:       parseDecimal(t.LastPr),
+		Bid:        parseDecimal(t.BidPr),
+		Ask:        parseDecimal(t.AskPr),
+		High:       parseDecimal(t.High24h),
+		Low:        parseDecimal(t.Low24h),
+		Volume:     parseDecimal(t.BaseVolume),
+		Percentage: parseDecimal(t.Change24h),
+		Timestamp:  UnixTimestamp(time.Now()),
 	}, nil
 }
 
@@ -743,6 +745,10 @@ func (a *TickerMarketPriceAdapter) GetHigh() float64 {
 }
 func (a *TickerMarketPriceAdapter) GetLow() float64 {
 	v, _ := a.data.Ticker.Low.Float64()
+	return v
+}
+func (a *TickerMarketPriceAdapter) GetPriceChange24h() float64 {
+	v, _ := a.data.Ticker.Percentage.Float64()
 	return v
 }
 
@@ -945,6 +951,7 @@ func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols 
 			High24h    string `json:"high24h"`
 			Low24h     string `json:"low24h"`
 			BaseVolume string `json:"baseVolume"`
+			Change24h  string `json:"change24h"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -969,14 +976,15 @@ func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols 
 			data: &TickerData{
 				Exchange: "bitget",
 				Ticker: Ticker{
-					Symbol:    formattedSymbol,
-					Last:      parseDecimal(ticker.LastPr),
-					Bid:       parseDecimal(ticker.BidPr),
-					Ask:       parseDecimal(ticker.AskPr),
-					High:      parseDecimal(ticker.High24h),
-					Low:       parseDecimal(ticker.Low24h),
-					Volume:    parseDecimal(ticker.BaseVolume),
-					Timestamp: UnixTimestamp(time.Now()),
+					Symbol:     formattedSymbol,
+					Last:       parseDecimal(ticker.LastPr),
+					Bid:        parseDecimal(ticker.BidPr),
+					Ask:        parseDecimal(ticker.AskPr),
+					High:       parseDecimal(ticker.High24h),
+					Low:        parseDecimal(ticker.Low24h),
+					Volume:     parseDecimal(ticker.BaseVolume),
+					Percentage: parseDecimal(ticker.Change24h),
+					Timestamp:  UnixTimestamp(time.Now()),
 				},
 			},
 		})
@@ -1000,6 +1008,13 @@ func bitgetSymbolKey(symbol string) string {
 	normalized = strings.ReplaceAll(normalized, "-", "")
 	normalized = strings.ReplaceAll(normalized, "_", "")
 	return normalized
+}
+
+func calculateTickerPercentage(last decimal.Decimal, reference decimal.Decimal) decimal.Decimal {
+	if !last.GreaterThan(decimal.Zero) || !reference.GreaterThan(decimal.Zero) {
+		return decimal.Zero
+	}
+	return last.Sub(reference).Div(reference).Mul(decimal.NewFromInt(100))
 }
 
 func normalizeBitgetSpotSymbol(symbol string) string {

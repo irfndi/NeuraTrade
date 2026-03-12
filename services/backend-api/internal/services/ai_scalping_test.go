@@ -39,25 +39,27 @@ func (m *errorLLMClient) Close() error {
 }
 
 type mockMarketPrice struct {
-	symbol   string
-	price    float64
-	volume   float64
-	high24h  float64
-	low24h   float64
-	bid      float64
-	ask      float64
-	exchange string
+	symbol    string
+	price     float64
+	volume    float64
+	high24h   float64
+	low24h    float64
+	change24h float64
+	bid       float64
+	ask       float64
+	exchange  string
 }
 
-func (m mockMarketPrice) GetPrice() float64       { return m.price }
-func (m mockMarketPrice) GetVolume() float64      { return m.volume }
-func (m mockMarketPrice) GetTimestamp() time.Time { return time.Now().UTC() }
-func (m mockMarketPrice) GetExchangeName() string { return m.exchange }
-func (m mockMarketPrice) GetSymbol() string       { return m.symbol }
-func (m mockMarketPrice) GetBid() float64         { return m.bid }
-func (m mockMarketPrice) GetAsk() float64         { return m.ask }
-func (m mockMarketPrice) GetHigh() float64        { return m.high24h }
-func (m mockMarketPrice) GetLow() float64         { return m.low24h }
+func (m mockMarketPrice) GetPrice() float64          { return m.price }
+func (m mockMarketPrice) GetVolume() float64         { return m.volume }
+func (m mockMarketPrice) GetTimestamp() time.Time    { return time.Now().UTC() }
+func (m mockMarketPrice) GetExchangeName() string    { return m.exchange }
+func (m mockMarketPrice) GetSymbol() string          { return m.symbol }
+func (m mockMarketPrice) GetBid() float64            { return m.bid }
+func (m mockMarketPrice) GetAsk() float64            { return m.ask }
+func (m mockMarketPrice) GetHigh() float64           { return m.high24h }
+func (m mockMarketPrice) GetLow() float64            { return m.low24h }
+func (m mockMarketPrice) GetPriceChange24h() float64 { return m.change24h }
 
 type mockAIScalpingCCXT struct {
 	mockCCXTForPortfolioSafety
@@ -2122,6 +2124,68 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AlignsWithPolicySpread
 	require.NotNil(t, decision)
 	assert.Equal(t, "buy", decision.Action)
 	assert.Equal(t, reasonCategoryDeterministicFallback, decision.ReasonCategory)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_BlocksAgainstNegativeMomentum(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "DOGE/USDT",
+		Price:              1,
+		High24h:            1.1,
+		Low24h:             0.9,
+		Volume24h:          1500000,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.60,
+		PriceChange24h:     -4.0,
+		RangePosition24h:   18,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	assert.False(t, ok)
+	assert.Nil(t, decision)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumAlignedEntry(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "DOGE/USDT",
+		Price:              1,
+		High24h:            1.1,
+		Low24h:             0.9,
+		Volume24h:          1500000,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.60,
+		PriceChange24h:     -0.2,
+		RangePosition24h:   18,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Contains(t, decision.Reasoning, "24h change")
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_BlocksWeakProjectedNetEdgeForMicro(t *testing.T) {

@@ -97,6 +97,18 @@ func (mp *MarketPrice) GetLow() float64 {
 	return mp.Low24h.InexactFloat64()
 }
 
+// GetPriceChange24h returns the 24h percentage change when derivable.
+func (mp *MarketPrice) GetPriceChange24h() float64 {
+	if mp == nil || !mp.Low24h.GreaterThan(decimal.Zero) || !mp.High24h.GreaterThan(decimal.Zero) {
+		return 0
+	}
+	reference := mp.High24h.Add(mp.Low24h).Div(decimal.NewFromInt(2))
+	if !reference.GreaterThan(decimal.Zero) {
+		return 0
+	}
+	return mp.Price.Sub(reference).Div(reference).Mul(decimal.NewFromInt(100)).InexactFloat64()
+}
+
 // TickerData represents real-time ticker information retrieved from the CCXT library.
 type TickerData struct {
 	Symbol    string          `json:"symbol"`
