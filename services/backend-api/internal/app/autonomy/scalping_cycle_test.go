@@ -178,6 +178,20 @@ func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyTwo(t *testing.T) 
 
 	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
 		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.80,
+		BaseMaxCapitalPct: 5.0,
+	}, config)
+
+	require.Equal(t, AccountTierMicro, policy.AccountTier)
+	require.InDelta(t, 0.72, policy.EffectiveMinConfidence, 0.0001)
+	require.Contains(t, policy.PolicyAdjustments, "micro_confidence_cap")
+}
+
+func TestEvaluateScalpingPolicy_MicroRiskTighteningPreservesHigherConfidence(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
 		BaseMinConfidence: 0.65,
 		BaseMaxCapitalPct: 5.0,
 		PerformanceWindow: PerformanceWindowInput{
@@ -187,8 +201,9 @@ func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyTwo(t *testing.T) 
 	}, config)
 
 	require.Equal(t, AccountTierMicro, policy.AccountTier)
-	require.InDelta(t, 0.72, policy.EffectiveMinConfidence, 0.0001)
-	require.Contains(t, policy.PolicyAdjustments, "micro_confidence_cap")
+	require.InDelta(t, 0.78, policy.EffectiveMinConfidence, 0.0001)
+	require.NotContains(t, policy.PolicyAdjustments, "micro_confidence_cap")
+	require.Contains(t, policy.PolicyAdjustments, "critical_recent_win_rate")
 }
 
 func TestEvaluateScalpingPolicy_MicroRecoveryModesBypassConfidenceCap(t *testing.T) {

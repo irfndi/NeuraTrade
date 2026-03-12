@@ -305,7 +305,13 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 
 	if policy.AccountTier == AccountTierMicro {
 		if recoveryMode == "" &&
-			policy.EffectiveMinConfidence > 0.72 {
+			policy.EffectiveMinConfidence > 0.72 &&
+			!hasAnyPolicyAdjustment(policy.PolicyAdjustments,
+				"weak_recent_win_rate",
+				"critical_recent_win_rate",
+				"loss_streak_confidence_tightening",
+				"drawdown_tightening",
+			) {
 			policy.EffectiveMinConfidence = 0.72
 			policy.PolicyAdjustments = append(policy.PolicyAdjustments, "micro_confidence_cap")
 		}
@@ -642,4 +648,15 @@ func clampFloat(value, minValue, maxValue float64) float64 {
 		return maxValue
 	}
 	return value
+}
+
+func hasAnyPolicyAdjustment(adjustments []string, targets ...string) bool {
+	for _, adjustment := range adjustments {
+		for _, target := range targets {
+			if adjustment == target {
+				return true
+			}
+		}
+	}
+	return false
 }
