@@ -227,6 +227,110 @@ func TestTradingLifecycleStore_GetRealizedPerformance_ExcludesSyntheticLifecycle
 	assert.True(t, perf.RealizedPnL.Equal(decimal.NewFromFloat(2)))
 }
 
+func TestTradingLifecycleStore_GetRecentLossStreak_UsesFeeAdjustedNetPnL(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-loss-streak-fees.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-net-loss-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50010),
+		RealizedPnL: decimal.NewFromFloat(1),
+		Fees:        decimal.NewFromFloat(2),
+		ClosedAt:    now.Add(-2 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-net-loss-2",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ETH/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.5),
+		EntryPrice:  decimal.NewFromFloat(2000),
+		ExitPrice:   decimal.NewFromFloat(2000),
+		RealizedPnL: decimal.Zero,
+		Fees:        decimal.NewFromFloat(-1),
+		ClosedAt:    now.Add(-4 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-older-win",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "SOL/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(103),
+		RealizedPnL: decimal.NewFromFloat(3),
+		Fees:        decimal.NewFromFloat(1),
+		ClosedAt:    now.Add(-6 * time.Minute),
+	}))
+
+	summary, err := store.GetRecentLossStreak(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 2, summary.ConsecutiveLosses)
+	assert.WithinDuration(t, now.Add(-2*time.Minute), summary.LastTradeAt, time.Second)
+}
+
+func TestTradingLifecycleStore_GetRecentLossStreak_StopsAtLatestNetNonLoss(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-loss-streak-stop.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-latest-net-win",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50005),
+		RealizedPnL: decimal.NewFromFloat(2),
+		Fees:        decimal.NewFromFloat(1),
+		ClosedAt:    now.Add(-2 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-older-net-loss",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ETH/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.5),
+		EntryPrice:  decimal.NewFromFloat(2000),
+		ExitPrice:   decimal.NewFromFloat(2000),
+		RealizedPnL: decimal.Zero,
+		Fees:        decimal.NewFromFloat(-1),
+		ClosedAt:    now.Add(-4 * time.Minute),
+	}))
+
+	summary, err := store.GetRecentLossStreak(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Zero(t, summary.ConsecutiveLosses)
+	assert.WithinDuration(t, now.Add(-2*time.Minute), summary.LastTradeAt, time.Second)
+}
+
 func TestTradingLifecycleStore_GetRealizedReturnSeries(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-returns.db"))
 	require.NoError(t, err)

@@ -1332,11 +1332,11 @@ func (s *TradingLifecycleStore) GetRecentLossStreak(
 	if since.IsZero() {
 		since = time.Now().UTC().Add(-24 * time.Hour)
 	}
-	query := `
-		SELECT CAST(realized_pnl AS TEXT), closed_at
+	query := fmt.Sprintf(`
+		SELECT CAST((%s) AS TEXT), closed_at
 		FROM realized_pnl_journal
 		WHERE closed_at >= $1
-	`
+	`, lifecycleNetRealizedPnLSQL())
 	args := []interface{}{since.UTC()}
 	query += " AND " + lifecycleUserVisibleCloseFilterSQL()
 	if strings.TrimSpace(chatID) != "" {
