@@ -576,6 +576,16 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 			exchangeLeverage = effective
 		}
 		if exchangeLeverage > 0 {
+			if exchangeLeverage > desiredLeverage {
+				return 0, "", fmt.Errorf(
+					"futures leverage verification mismatch for %s: wanted %dx %s but exchange preserved higher %dx %s",
+					symbol,
+					desiredLeverage,
+					expectedMarginMode,
+					exchangeLeverage,
+					verified.MarginMode,
+				)
+			}
 			fmt.Printf("[BITGET-ORDER] Futures leverage mode mismatch for %s: wanted %dx %s, using exchange %dx %s (%s)\n",
 				symbol, desiredLeverage, expectedMarginMode, exchangeLeverage, verified.MarginMode, verified.PosMode)
 			return exchangeLeverage, "exchange preserved", nil

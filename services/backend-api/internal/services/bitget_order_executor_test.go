@@ -470,6 +470,38 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_UsesExchangeModeOnMarginModeM
 	assert.Equal(t, 1, setCalls)
 }
 
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_RejectsHigherExchangePreservedLeverage(t *testing.T) {
+	accountCalls := 0
+	setCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
+				"marginMode":"crossed",
+				"posMode":"one_way_mode",
+				"crossMarginLeverage":"10"
+			}}`))
+		case "/api/v2/mix/account/set-leverage":
+			setCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exchange preserved higher 10x crossed")
+	assert.Equal(t, 2, accountCalls)
+	assert.Equal(t, 1, setCalls)
+}
+
 func TestBitgetOrderExecutor_SyncFuturesLeverageForDetails_NormalizesSideAliases(t *testing.T) {
 	accountCalls := 0
 	setCalls := 0
