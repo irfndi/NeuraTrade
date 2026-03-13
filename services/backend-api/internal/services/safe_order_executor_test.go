@@ -278,6 +278,37 @@ func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck_InferFuturesMarketTypeFromS
 	mockSafety.AssertExpectations(t)
 }
 
+func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck_UsesScopedLeverageAwareSafety(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockLeverageSafetyChecker{}
+
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "test-chat",
+		Exchange: "bitget",
+		Leverage: 5,
+	})
+
+	mockSafety.On("CanExecuteTradeWithLeverage", mock.Anything, "test-chat", "bitget", "ETH/USDT:USDT", "futures", 5, decimal.NewFromFloat(25)).
+		Return(true, "", nil)
+	mockExecutor.On("PlaceOrder", mock.Anything, "bitget", "ETH/USDT:USDT", "buy", "market", decimal.NewFromFloat(25), (*decimal.Decimal)(nil)).Return("order-123", nil)
+
+	orderID, result, err := safeExec.PlaceOrderWithSafetyCheck(
+		ctx,
+		"bitget", "ETH/USDT:USDT", "buy", "market",
+		decimal.NewFromFloat(25), nil,
+	)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "order-123", orderID)
+	assert.NotNil(t, result)
+	assert.True(t, result.Allowed)
+	assert.Empty(t, result.Reason)
+	mockExecutor.AssertExpectations(t)
+	mockSafety.AssertExpectations(t)
+	mockSafety.AssertNotCalled(t, "CanExecuteTrade", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestSafeOrderExecutor_SetChatID(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	safeExec := NewSafeOrderExecutor(mockExecutor, nil, "original-chat")

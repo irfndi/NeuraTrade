@@ -96,6 +96,30 @@ func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol, m
 		return true, "", nil
 	}
 
+	if leverage := scalpingLeverageFromContext(ctx); leverage > 0 {
+		if typedSafety, ok := safetyService.(interface {
+			EvaluateTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (TradeSafetyDecision, error)
+		}); ok {
+			decision, err := typedSafety.EvaluateTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, leverage, amount)
+			if err != nil {
+				return false, fmt.Sprintf("safety check error: %v", err), err
+			}
+			if decision.ZeroMaxMinNotionalBypass {
+				return true, "", nil
+			}
+			return decision.Allowed, decision.Reason, nil
+		}
+		if typedSafety, ok := safetyService.(interface {
+			CanExecuteTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (bool, string, error)
+		}); ok {
+			allowed, reason, err := typedSafety.CanExecuteTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, leverage, amount)
+			if err != nil {
+				return false, fmt.Sprintf("safety check error: %v", err), err
+			}
+			return allowed, reason, nil
+		}
+	}
+
 	allowed, reason, err := safetyService.CanExecuteTrade(ctx, chatID, exchange, symbol, marketType, amount)
 	if err != nil {
 		return false, fmt.Sprintf("safety check error: %v", err), err
