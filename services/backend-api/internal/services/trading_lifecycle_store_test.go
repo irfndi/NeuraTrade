@@ -904,6 +904,72 @@ func TestTradingLifecycleStore_SyncPosition_ReopensClosedRowWhenSnapshotIsNewer(
 	assert.Nil(t, rowClosedAt)
 }
 
+func TestTradingLifecycleStore_SyncPosition_DoesNotReopenClosedRowWhenClosedAtMissing(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-null-closed-at.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO trading_positions (
+			position_id, order_id, chat_id, exchange, symbol, side, market_type,
+			size, entry_price, stop_loss, take_profit, last_price, unrealized_pnl,
+			protection_updated_at, close_price, realized_pnl, status, source, opened_at, closed_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,$9,$10,$11,$12,$13,$14,$15,'closed',$16,$17,NULL,$18)
+	`,
+		"sync-bitget-ada-usdt-long",
+		"sync-bitget-ada-usdt-long",
+		"chat-1",
+		"bitget",
+		"ADA/USDT",
+		"buy",
+		decimal.NewFromFloat(5),
+		decimal.NewFromFloat(1.0),
+		decimal.NewFromFloat(0.95),
+		decimal.NewFromFloat(1.05),
+		decimal.NewFromFloat(1.01),
+		decimal.NewFromFloat(0.05),
+		now,
+		decimal.NewFromFloat(0.99),
+		decimal.NewFromFloat(-0.05),
+		"manual_reconciliation",
+		now.Add(-10*time.Minute),
+		now,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(6),
+		EntryPrice:    decimal.NewFromFloat(1.02),
+		MarkPrice:     decimal.NewFromFloat(1.03),
+		UnrealizedPnl: decimal.NewFromFloat(0.06),
+		Timestamp:     ccxt.UnixTimestamp(now.Add(time.Minute)),
+	}))
+
+	var status string
+	var size decimal.Decimal
+	var entryPrice decimal.Decimal
+	var rowClosedAt *time.Time
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT LOWER(status), size, entry_price, closed_at
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&status, &size, &entryPrice, &rowClosedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", status)
+	assert.True(t, size.Equal(decimal.NewFromFloat(5)))
+	assert.True(t, entryPrice.Equal(decimal.NewFromFloat(1.0)))
+	assert.Nil(t, rowClosedAt)
+}
+
 func TestTradingLifecycleStore_RecordClosedOrder_PrefersOpenSyncRowOverLegacyOrderMapping(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-ordermap.db"))
 	require.NoError(t, err)
