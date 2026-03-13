@@ -1193,7 +1193,7 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 	if perf.Trades == 0 {
 		return PerformanceSummaryResponse{}, false
 	}
-	returns, err := h.lifecycleStore.GetRealizedReturnSeries(ctx, chatID, "", since)
+	returns, err := h.lifecycleStore.GetNetRealizedReturnSeries(ctx, chatID, "", since)
 	if err != nil {
 		log.Printf("Failed lifecycle return-series query for chat %s: %v", chatID, err)
 		returns = nil
