@@ -509,6 +509,81 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries_ToleratesNullFees(t *test
 	assert.True(t, returns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
 }
 
+func TestTradingLifecycleStore_FeeNormalizationParityAcrossGoAndSQL(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-fee-normalization-parity.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	t.Run("go helper normalizes fee signs consistently", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			fees     decimal.Decimal
+			expected decimal.Decimal
+		}{
+			{name: "positive cost becomes negative adjustment", fees: decimal.NewFromFloat(1), expected: decimal.NewFromFloat(-1)},
+			{name: "negative cost stays negative", fees: decimal.NewFromFloat(-1), expected: decimal.NewFromFloat(-1)},
+			{name: "zero stays zero", fees: decimal.Zero, expected: decimal.Zero},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.True(t, normalizeLifecycleFeeAdjustment(tc.fees).Equal(tc.expected))
+				assert.True(t, adjustedLifecyclePnL(decimal.NewFromFloat(5), tc.fees, "bitget", "exchange_reconciliation").Equal(decimal.NewFromFloat(5).Add(tc.expected)))
+			})
+		}
+	})
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "fee-parity-positive",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50500),
+		RealizedPnL: decimal.NewFromFloat(5),
+		Fees:        decimal.NewFromFloat(1),
+		Source:      "exchange_reconciliation",
+		ClosedAt:    now.Add(-5 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "fee-parity-negative",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ETH/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.5),
+		EntryPrice:  decimal.NewFromFloat(2000),
+		ExitPrice:   decimal.NewFromFloat(2010),
+		RealizedPnL: decimal.NewFromFloat(5),
+		Fees:        decimal.NewFromFloat(-1),
+		Source:      "exchange_reconciliation",
+		ClosedAt:    now.Add(-3 * time.Minute),
+	}))
+
+	netReturns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, netReturns, 2)
+	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.008)))
+	assert.True(t, netReturns[1].Round(6).Equal(decimal.NewFromFloat(0.004)))
+
+	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.True(t, perf.RealizedPnL.Equal(decimal.NewFromFloat(8)))
+	assert.True(t, perf.BestTrade.Equal(decimal.NewFromFloat(4)))
+	assert.True(t, perf.WorstTrade.Equal(decimal.NewFromFloat(4)))
+}
+
 func TestTradingLifecycleStore_RecordClosedOrder_ClosesSyncRowInPlace(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-close.db"))
 	require.NoError(t, err)
