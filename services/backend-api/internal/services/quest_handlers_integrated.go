@@ -3330,7 +3330,7 @@ func isAutonomousManagedPosition(pos ManagedOpenPosition) bool {
 		return false
 	}
 	source := strings.ToLower(strings.TrimSpace(pos.Source))
-	if source == "" || source == "autonomous" {
+	if source == "" || strings.HasPrefix(source, "autonomous") {
 		return true
 	}
 	if source == "bootstrap_positions" || source == "bootstrap_open_orders" || source == "manual_reconciliation" {

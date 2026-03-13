@@ -813,6 +813,7 @@ func TestFilterManagedPositionsForEntryProtection_ExcludesBootstrapFallbackTarge
 
 func TestIsAutonomousManagedPosition(t *testing.T) {
 	assert.True(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "autonomous"}))
+	assert.True(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "autonomous_scalping"}))
 	assert.True(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: ""}))
 	assert.False(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "manual_reconciliation"}))
 	assert.False(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "bootstrap_positions"}))
