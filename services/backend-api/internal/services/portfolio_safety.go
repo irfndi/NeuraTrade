@@ -508,7 +508,7 @@ func (s *PortfolioSafetyService) CheckSafety(ctx context.Context, chatID string,
 }
 
 func (s *PortfolioSafetyService) CanExecuteTrade(ctx context.Context, chatID string, exchange string, symbol string, marketType string, size decimal.Decimal) (bool, string, error) {
-	decision, err := s.EvaluateTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, 1, size)
+	decision, err := s.EvaluateTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, scalpingLeverageFromContext(ctx), size)
 	if err != nil {
 		return false, "", err
 	}

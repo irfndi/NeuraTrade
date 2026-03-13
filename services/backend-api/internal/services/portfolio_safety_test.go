@@ -870,6 +870,54 @@ func TestPortfolioSafetyService_CanExecuteTradeWithLeverage_BitgetFuturesAllowsM
 	assert.Equal(t, 1, mockCCXT.fetchCalls)
 }
 
+func TestPortfolioSafetyService_CanExecuteTrade_UsesScopedLeverageForBitgetFutures(t *testing.T) {
+	config := DefaultPortfolioSafetyConfig()
+	config.MaxPositionSizePct = 0.10
+	config.MaxPositionFloorPct = 0.20
+
+	mockCCXT := &mockCCXTForPortfolioSafety{
+		balanceResponse: &ccxt.BalanceResponse{
+			Exchange:  "bitget",
+			Timestamp: time.Now(),
+			Total:     map[string]float64{"USDT": 46.93},
+			Free:      map[string]float64{"USDT": 0.61},
+			Used:      map[string]float64{"USDT": 46.32},
+		},
+	}
+
+	service := NewPortfolioSafetyService(config, mockCCXT, nil, nil, nil, nil, nil, nil, nil)
+
+	blocked, reason, err := service.CanExecuteTrade(
+		context.Background(),
+		"chat-bitget",
+		"bitget",
+		"OPN/USDT:USDT",
+		"futures",
+		decimal.NewFromFloat(6.0),
+	)
+	require.NoError(t, err)
+	assert.False(t, blocked)
+	assert.Contains(t, reason, "maximum allowed")
+
+	allowedCtx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-bitget",
+		Exchange: "bitget",
+		Leverage: 10,
+	})
+	allowed, reason, err := service.CanExecuteTrade(
+		allowedCtx,
+		"chat-bitget",
+		"bitget",
+		"OPN/USDT:USDT",
+		"futures",
+		decimal.NewFromFloat(6.0),
+	)
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Empty(t, reason)
+	assert.Equal(t, 1, mockCCXT.fetchCalls)
+}
+
 func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesAllowsMinNotionalWhenBalanceSnapshotIsZero(t *testing.T) {
 	config := DefaultPortfolioSafetyConfig()
 
