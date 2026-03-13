@@ -454,6 +454,24 @@ func TestResolvePolicySpreadThreshold_ClampsDirectOverride(t *testing.T) {
 	assert.InDelta(t, DefaultScalpingMaxBidAskSpreadPct, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: math.NaN()}), 0.000001)
 }
 
+func TestDefaultScalpingPolicyConfig_SnapshotsEnvAtConstruction(t *testing.T) {
+	t.Setenv(NeuraScalpingMaxBidAskSpreadPctEnv, "0.31")
+	cfg := DefaultScalpingPolicyConfig()
+
+	t.Setenv(NeuraScalpingMaxBidAskSpreadPctEnv, "0.47")
+	normalized := cfg.Normalized()
+
+	assert.InDelta(t, 0.31, cfg.MaxBidAskSpreadPct, 0.000001)
+	assert.InDelta(t, 0.31, normalized.MaxBidAskSpreadPct, 0.000001)
+}
+
+func TestResolvePolicySpreadThreshold_InvalidPolicyReadsCurrentEnv(t *testing.T) {
+	t.Setenv(NeuraScalpingMaxBidAskSpreadPctEnv, "0.47")
+
+	assert.InDelta(t, 0.47, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: math.NaN()}), 0.000001)
+	assert.InDelta(t, 0.47, resolvePolicySpreadThreshold(ScalpingCyclePolicy{}), 0.000001)
+}
+
 func TestClampFloat_HandlesNaNAndInfinity(t *testing.T) {
 	assert.InDelta(t, 0.1, clampFloat(math.NaN(), 0.1, 0.9), 0.000001)
 	assert.InDelta(t, 0.1, clampFloat(math.Inf(-1), 0.1, 0.9), 0.000001)
