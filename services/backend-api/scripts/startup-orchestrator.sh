@@ -43,6 +43,80 @@ ensure_dirs() {
   mkdir -p "${LOG_DIR}" "${NEURATRADE_HOME}/pids" "${NEURATRADE_HOME}/data"
 }
 
+run_sqlite_migrations() {
+  local driver
+  driver="$(printf '%s' "${DATABASE_DRIVER:-sqlite}" | tr '[:upper:]' '[:lower:]')"
+  if [ "$driver" != "sqlite" ]; then
+    return 0
+  fi
+
+  local migrator
+  migrator="${BACKEND_ROOT}/database/sqlite-migrate.sh"
+  if [ ! -x "$migrator" ]; then
+    log_warn "SQLite migrator not found at ${migrator}; skipping schema upgrade"
+    return 0
+  fi
+
+  local sqlite_db_path
+  sqlite_db_path="${SQLITE_PATH:-${SQLITE_DB_PATH:-${NEURATRADE_HOME}/data/neuratrade.db}}"
+  log_info "Applying SQLite migrations to ${sqlite_db_path}"
+  SQLITE_PATH="$sqlite_db_path" "$migrator" run >>"${LOG_DIR}/sqlite-migrate.log" 2>&1
+  ensure_legacy_sqlite_user_schema "$sqlite_db_path"
+}
+
+sqlite_table_exists() {
+  local db_path="$1"
+  local table_name="$2"
+  sqlite3 "$db_path" ".schema ${table_name}" 2>/dev/null | grep -q "CREATE TABLE"
+}
+
+sqlite_column_exists() {
+  local db_path="$1"
+  local table_name="$2"
+  local column_name="$3"
+  sqlite3 "$db_path" "PRAGMA table_info(${table_name});" 2>/dev/null | cut -d'|' -f2 | grep -qx "$column_name"
+}
+
+ensure_legacy_sqlite_user_schema() {
+  local db_path="$1"
+  if [ ! -f "$db_path" ] || ! sqlite_table_exists "$db_path" "users"; then
+    return 0
+  fi
+
+  local changed=0
+  ensure_column() {
+    local column_name="$1"
+    local column_def="$2"
+    if ! sqlite_column_exists "$db_path" "users" "$column_name"; then
+      sqlite3 "$db_path" "ALTER TABLE users ADD COLUMN ${column_def};"
+      changed=1
+    fi
+  }
+
+  ensure_column "email" "email TEXT NOT NULL DEFAULT ''"
+  ensure_column "password_hash" "password_hash TEXT NOT NULL DEFAULT ''"
+  ensure_column "telegram_chat_id" "telegram_chat_id TEXT"
+  ensure_column "subscription_tier" "subscription_tier TEXT NOT NULL DEFAULT 'free'"
+  ensure_column "updated_at" "updated_at DATETIME"
+  ensure_column "selected_ai_model" "selected_ai_model TEXT"
+  ensure_column "telegram_blocked" "telegram_blocked INTEGER DEFAULT 0"
+  ensure_column "telegram_blocked_at" "telegram_blocked_at DATETIME"
+
+  if sqlite_column_exists "$db_path" "users" "telegram_id" && sqlite_column_exists "$db_path" "users" "telegram_chat_id"; then
+    sqlite3 "$db_path" "UPDATE users SET telegram_chat_id = telegram_id, updated_at = CURRENT_TIMESTAMP WHERE COALESCE(telegram_chat_id, '') = '' AND COALESCE(telegram_id, '') != '';"
+  fi
+  if sqlite_column_exists "$db_path" "users" "updated_at"; then
+    sqlite3 "$db_path" "UPDATE users SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP);"
+  fi
+
+  sqlite3 "$db_path" "CREATE INDEX IF NOT EXISTS idx_users_telegram_chat_id ON users(telegram_chat_id);"
+  sqlite3 "$db_path" "CREATE INDEX IF NOT EXISTS idx_users_telegram_blocked ON users(telegram_blocked) WHERE telegram_blocked = 1;"
+
+  if [ "$changed" -eq 1 ]; then
+    log_info "Applied legacy SQLite users schema compatibility upgrades"
+  fi
+}
+
 find_gateway_cmd() {
   if [ -x "${REPO_ROOT}/bin/neuratrade" ]; then
     echo "${REPO_ROOT}/bin/neuratrade gateway start"
@@ -91,6 +165,7 @@ wait_backend_health() {
 
 start_gateway() {
   ensure_dirs
+  run_sqlite_migrations
 
   local current_pid
   current_pid="$(gateway_pid || true)"

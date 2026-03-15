@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/jackc/pgx/v5"
 )
 
 // TelegramInternalHandler handles internal API requests from the Telegram service.
@@ -980,25 +982,41 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 	}
 
+	selectedModel := ""
 	if err := h.db.QueryRow(c.Request.Context(), `
-		SELECT COALESCE(MAX(selected_ai_model), '')
+		SELECT COALESCE(selected_ai_model, '')
 		FROM users
 		WHERE COALESCE(telegram_chat_id, '') = $1 OR COALESCE(telegram_id, '') = $1
-	`, chatID).Scan(new(string)); err != nil {
-		checks = append(checks, gin.H{
-			"name":     "ai-snapshot",
-			"status":   "warning",
-			"impact":   "optional",
-			"optional": true,
-			"message":  "AI snapshot probe unavailable",
-		})
+		LIMIT 1
+	`, chatID).Scan(&selectedModel); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			checks = append(checks, gin.H{
+				"name":     "ai-snapshot",
+				"status":   "healthy",
+				"impact":   "optional",
+				"optional": true,
+				"message":  "No AI model selected",
+			})
+		} else {
+			checks = append(checks, gin.H{
+				"name":     "ai-snapshot",
+				"status":   "warning",
+				"impact":   "optional",
+				"optional": true,
+				"message":  "AI snapshot probe unavailable",
+			})
+		}
 	} else {
+		message := "AI snapshot probe successful"
+		if strings.TrimSpace(selectedModel) == "" {
+			message = "No AI model selected"
+		}
 		checks = append(checks, gin.H{
 			"name":     "ai-snapshot",
 			"status":   "healthy",
 			"impact":   "optional",
 			"optional": true,
-			"message":  "AI snapshot probe successful",
+			"message":  message,
 		})
 	}
 

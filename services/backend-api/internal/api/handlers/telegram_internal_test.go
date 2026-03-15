@@ -590,7 +590,7 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 	mockDB.ExpectQuery(`SELECT COALESCE\(\(SELECT autonomous_enabled FROM telegram_operator_state WHERE chat_id = \$1 LIMIT 1\), false\)`).
 		WithArgs("777").
 		WillReturnRows(pgxmock.NewRows([]string{"autonomous_enabled"}).AddRow(true))
-	mockDB.ExpectQuery(`SELECT COALESCE\(MAX\(selected_ai_model\), ''\)`).
+	mockDB.ExpectQuery(`SELECT COALESCE\(selected_ai_model, ''\)`).
 		WithArgs("777").
 		WillReturnRows(pgxmock.NewRows([]string{"selected_ai_model"}).AddRow("gpt-4o-mini"))
 
@@ -604,5 +604,58 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 	checks, ok := response["checks"].([]interface{})
 	assert.True(t, ok)
 	assert.Len(t, checks, 6)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestTelegramInternalHandler_GetDoctor_NoSelectedAIModelDoesNotWarnProbeUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockDB, err := pgxmock.NewPool()
+	assert.NoError(t, err)
+	defer mockDB.Close()
+	dbPool := database.NewMockDBPool(mockDB)
+
+	handler := NewTelegramInternalHandler(dbPool, nil, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/internal/telegram/doctor?chat_id=777", nil)
+
+	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mockDB.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = 'polymarket' AND status = 'connected'`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	mockDB.ExpectQuery(`SELECT COALESCE\(\(SELECT autonomous_enabled FROM telegram_operator_state WHERE chat_id = \$1 LIMIT 1\), false\)`).
+		WithArgs("777").
+		WillReturnRows(pgxmock.NewRows([]string{"autonomous_enabled"}).AddRow(true))
+	mockDB.ExpectQuery(`SELECT COALESCE\(selected_ai_model, ''\)`).
+		WithArgs("777").
+		WillReturnError(pgx.ErrNoRows)
+
+	handler.GetDoctor(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	checks, ok := response["checks"].([]interface{})
+	assert.True(t, ok)
+
+	var aiSnapshot map[string]interface{}
+	for _, item := range checks {
+		check, ok := item.(map[string]interface{})
+		if ok && check["name"] == "ai-snapshot" {
+			aiSnapshot = check
+			break
+		}
+	}
+	if assert.NotNil(t, aiSnapshot) {
+		assert.Equal(t, "healthy", aiSnapshot["status"])
+		assert.Equal(t, "No AI model selected", aiSnapshot["message"])
+	}
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
