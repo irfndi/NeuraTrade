@@ -3993,6 +3993,8 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			side = strings.ToLower(strings.TrimSpace(rawSide))
 		}
 		if shouldSkipClosedOrderFeedback(order, pnl, symbol, side, openPositionBySymbolSide) {
+			processed[orderID] = true
+			updatedProcessed = true
 			quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"] = checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]) + 1
 			log.Printf("[SCALPING] Skipped closed-order feedback as probable entry fill: order=%s symbol=%s side=%s pnl=%s tradeSide=%s reduceOnly=%s",
 				orderID,

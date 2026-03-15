@@ -1011,7 +1011,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFil
 	assert.Equal(t, "entry-1", positions[0].OrderID)
 
 	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
-	assert.False(t, processed["entry-1"])
+	assert.True(t, processed["entry-1"])
 	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
 
 	orderExecutor.AssertExpectations(t)
@@ -1084,8 +1084,81 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFil
 	assert.Equal(t, "entry-pos-side-1", positions[0].OrderID)
 
 	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
-	assert.False(t, processed["entry-pos-side-1"])
+	assert.True(t, processed["entry-pos-side-1"])
 	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
+
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_DoesNotReprocessSkippedEntryFillAfterPositionDisappears(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-closed-feedback-dedupe-skipped-entry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "entry-repeat-1",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "BERA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(1),
+		OpenedAt:   time.Now().UTC().Add(-time.Minute),
+	}))
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+	handlers.SetLifecycleStore(store)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-repeat-skipped-entry-fill",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	closedOrder := map[string]interface{}{
+		"orderId":      "entry-repeat-1",
+		"side":         "buy",
+		"tradeSide":    "open",
+		"avgOpenPrice": "1.0",
+		"avgPrice":     "1.0",
+		"filled":       "1.0",
+		"pnl":          "0",
+	}
+
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "BERA/USDT", 20).
+		Return([]map[string]interface{}{closedOrder}, nil).
+		Twice()
+
+	handlers.ingestClosedOrderFeedback(ctx, quest, "bitget", "BERA/USDT")
+
+	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
+	assert.True(t, processed["entry-repeat-1"])
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
+
+	handlers.SetLifecycleStore(nil)
+	handlers.ingestClosedOrderFeedback(ctx, quest, "bitget", "BERA/USDT")
+
+	var tradeRows int
+	err = sqliteDB.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM trades WHERE order_id = $1`, "entry-repeat-1").Scan(&tradeRows)
+	require.NoError(t, err)
+	assert.Equal(t, 0, tradeRows)
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
+	assert.Empty(t, checkpointString(quest.Checkpoint["last_pnl_reconciliation_summary"]))
 
 	orderExecutor.AssertExpectations(t)
 }
