@@ -3936,8 +3936,11 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeClose(
 }
 
 func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context, quest *Quest, exchange, symbol string) {
-	if h.orderExecutor == nil || strings.TrimSpace(symbol) == "" {
+	if h.orderExecutor == nil || quest == nil || strings.TrimSpace(symbol) == "" {
 		return
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
 	}
 
 	closedOrders, err := h.orderExecutor.GetClosedOrders(ctx, exchange, symbol, 20)
@@ -3976,11 +3979,17 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 
 		pnl, ok := decimalFromOrder(order, "totalProfits", "totalProfit", "pnl", "profit", "realizedPnl", "achievedProfits")
 		if !ok {
+			quest.Checkpoint["closed_order_feedback_missing_pnl"] = checkpointInt(quest.Checkpoint["closed_order_feedback_missing_pnl"]) + 1
+			log.Printf("[SCALPING] Skipped closed-order feedback due to missing pnl: order=%s symbol=%s keys=%v",
+				orderID,
+				symbol,
+				sortedOrderKeys(order),
+			)
 			continue
 		}
 
 		side := "buy"
-		if rawSide, ok := stringFromOrder(order, "side", "tradeSide", "positionSide"); ok {
+		if rawSide, ok := stringFromOrder(order, "side", "positionSide", "posSide", "tradeSide"); ok {
 			side = strings.ToLower(strings.TrimSpace(rawSide))
 		}
 		if shouldSkipClosedOrderFeedback(order, pnl, symbol, side, openPositionBySymbolSide) {
@@ -4254,6 +4263,18 @@ func shouldSkipClosedOrderFeedback(
 	}
 
 	return true
+}
+
+func sortedOrderKeys(order map[string]interface{}) []string {
+	if len(order) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(order))
+	for key := range order {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func decimalFromOrder(order map[string]interface{}, keys ...string) (decimal.Decimal, bool) {
