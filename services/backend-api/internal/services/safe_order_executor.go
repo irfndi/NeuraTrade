@@ -282,7 +282,7 @@ func inferSafetyMarketType(exchange, symbol string) string {
 		return "futures"
 	}
 	if strings.EqualFold(strings.TrimSpace(exchange), "bitget") && strings.Contains(normalized, "/") {
-		return "futures"
+		return "spot"
 	}
 	return ""
 }

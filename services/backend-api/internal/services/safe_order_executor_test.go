@@ -278,14 +278,34 @@ func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck_InferFuturesMarketTypeFromS
 	mockSafety.AssertExpectations(t)
 }
 
-func TestSafeOrderExecutor_CheckSafety_InferFuturesMarketTypeForBitgetPlainSymbol(t *testing.T) {
+func TestSafeOrderExecutor_CheckSafety_InfersSpotMarketTypeForBitgetPlainSymbolWithoutContext(t *testing.T) {
 	mockSafety := &mockSafetyChecker{}
 	safeExec := NewSafeOrderExecutor(nil, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "DOGE/USDT", "spot", decimal.NewFromFloat(15)).
+		Return(true, "", nil)
+
+	allowed, reason, err := safeExec.CheckSafety(context.Background(), "bitget", "DOGE/USDT", decimal.NewFromFloat(15))
+
+	assert.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Empty(t, reason)
+	mockSafety.AssertExpectations(t)
+}
+
+func TestSafeOrderExecutor_CheckSafety_UsesScopedFuturesMarketTypeForBitgetPlainSymbol(t *testing.T) {
+	mockSafety := &mockSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(nil, mockSafety, "test-chat")
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:     "test-chat",
+		Exchange:   "bitget",
+		MarketType: "futures",
+	})
 
 	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "DOGE/USDT", "futures", decimal.NewFromFloat(15)).
 		Return(false, "below exchange minimum notional", nil)
 
-	allowed, reason, err := safeExec.CheckSafety(context.Background(), "bitget", "DOGE/USDT", decimal.NewFromFloat(15))
+	allowed, reason, err := safeExec.CheckSafety(ctx, "bitget", "DOGE/USDT", decimal.NewFromFloat(15))
 
 	assert.NoError(t, err)
 	assert.False(t, allowed)
