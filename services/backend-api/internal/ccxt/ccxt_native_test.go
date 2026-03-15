@@ -118,6 +118,11 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 	if balance.Total["USDT"] != 12.75 {
 		t.Fatalf("unexpected aggregated USDT balance: got %.8f", balance.Total["USDT"])
 	}
+	assert.Zero(t, balance.Free["USDT_FUTURES_USDT"])
+	require.NotNil(t, balance.Raw)
+	marked, ok := balance.Raw["summary_only_balance_keys"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, marked["USDT_FUTURES_USDT"])
 }
 
 func TestNativeCCXTService_FetchBalance_BitgetMergesCoinListAndSummaryUSDT(t *testing.T) {
@@ -161,7 +166,7 @@ func TestNativeCCXTService_FetchBalance_BitgetMergesCoinListAndSummaryUSDT(t *te
 	require.NoError(t, err)
 	assert.InDelta(t, 10.0, balance.Total["SPOT_USDT"], 0.00000001)
 	assert.InDelta(t, 12.25, balance.Total["USDT"], 0.00000001)
-	assert.InDelta(t, 11.75, balance.Free["USDT"], 0.00000001)
+	assert.InDelta(t, 9.5, balance.Free["USDT"], 0.00000001)
 	assert.InDelta(t, 0.5, balance.Used["USDT"], 0.00000001)
 }
 
@@ -259,7 +264,7 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_PrefersFinalUSDT
 	balance, err := service.FetchBalance(context.Background(), "bitget")
 	require.NoError(t, err)
 	assert.InDelta(t, 12.25, balance.Total["USDT"], 0.00000001)
-	assert.InDelta(t, 11.75, balance.Free["USDT"], 0.00000001)
+	assert.InDelta(t, 9.5, balance.Free["USDT"], 0.00000001)
 	assert.InDelta(t, 0.5, balance.Used["USDT"], 0.00000001)
 	assert.InDelta(t, 0.10, balance.Total["BTC"], 0.00000001)
 	assert.InDelta(t, 0.10, balance.Free["BTC"], 0.00000001)

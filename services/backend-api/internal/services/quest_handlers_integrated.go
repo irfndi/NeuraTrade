@@ -716,6 +716,12 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			quest.Checkpoint["wallet_basis_mode"] = "futures"
 			quest.Checkpoint["wallet_basis_source"] = resolveScalpingWalletBasisSource(balanceSnapshot)
 			quest.Checkpoint["wallet_basis_usdt"] = usdtBalance
+			if strings.HasPrefix(checkpointString(quest.Checkpoint["wallet_basis_source"]), "summary:") {
+				log.Printf("[SCALPING] Futures wallet basis for %s is summary-only; available funds unknown, skipping this cycle", userExchange)
+				quest.Checkpoint["balance_warning"] = "summary-only futures wallet balance lacks free-funds breakdown"
+				quest.Checkpoint["status"] = "hold"
+				return nil
+			}
 			if usdtBalance <= 0 {
 				log.Printf("[SCALPING] USDT balance is zero, using minimum balance for trading")
 				usdtBalance = 100.0 // Minimum balance
@@ -3787,20 +3793,29 @@ func resolveScalpingFuturesWalletUSDT(balance *ccxt.BalanceResponse) float64 {
 	if balance == nil {
 		return 0
 	}
-	lookup := []struct {
-		book map[string]float64
-		key  string
-	}{
-		{book: balance.Free, key: "USDT_FUTURES_USDT"},
-		{book: balance.Total, key: "USDT_FUTURES_USDT"},
-		{book: balance.Free, key: "USDT"},
-		{book: balance.Total, key: "USDT"},
-	}
-	for _, candidate := range lookup {
-		if candidate.book == nil {
-			continue
+	if balance.Free != nil {
+		if v := balance.Free["USDT_FUTURES_USDT"]; v > 0 {
+			return v
 		}
-		if v := candidate.book[candidate.key]; v > 0 {
+	}
+	if isSummaryOnlyBalanceKey(balance, "USDT_FUTURES_USDT") {
+		return 0
+	}
+	if balance.Total != nil {
+		if v := balance.Total["USDT_FUTURES_USDT"]; v > 0 {
+			return v
+		}
+	}
+	if balance.Free != nil {
+		if v := balance.Free["USDT"]; v > 0 {
+			return v
+		}
+	}
+	if isSummaryOnlyBalanceKey(balance, "USDT") {
+		return 0
+	}
+	if balance.Total != nil {
+		if v := balance.Total["USDT"]; v > 0 {
 			return v
 		}
 	}
@@ -3826,8 +3841,17 @@ func resolveScalpingWalletBasisSource(balance *ccxt.BalanceResponse) string {
 			continue
 		}
 		if v := candidate.book[candidate.key]; v > 0 {
+			if candidate.bookName == "total" && isSummaryOnlyBalanceKey(balance, candidate.key) {
+				return "summary:" + candidate.key
+			}
 			return candidate.bookName + ":" + candidate.key
 		}
+	}
+	if isSummaryOnlyBalanceKey(balance, "USDT_FUTURES_USDT") {
+		return "summary:USDT_FUTURES_USDT"
+	}
+	if isSummaryOnlyBalanceKey(balance, "USDT") {
+		return "summary:USDT"
 	}
 	return "none"
 }
@@ -3949,6 +3973,15 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			side = strings.ToLower(strings.TrimSpace(rawSide))
 		}
 		if shouldSkipClosedOrderFeedback(order, pnl, symbol, side, openPositionBySymbolSide) {
+			quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"] = checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]) + 1
+			log.Printf("[SCALPING] Skipped closed-order feedback as probable entry fill: order=%s symbol=%s side=%s pnl=%s tradeSide=%s reduceOnly=%s",
+				orderID,
+				symbol,
+				side,
+				pnl.String(),
+				checkpointString(order["tradeSide"]),
+				checkpointString(order["reduceOnly"]),
+			)
 			continue
 		}
 		exitPrice := decimal.Zero

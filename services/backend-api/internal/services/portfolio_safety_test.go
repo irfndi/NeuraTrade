@@ -987,6 +987,29 @@ func TestPortfolioSafetyService_ResolveScopedMarketFunds_UsesCachedSnapshotBalan
 	assert.True(t, free.Equal(decimal.NewFromFloat(2)))
 }
 
+func TestPortfolioSafetyService_ResolveScopedMarketFunds_DoesNotPromoteSummaryOnlyTotalToFree(t *testing.T) {
+	service := NewPortfolioSafetyService(DefaultPortfolioSafetyConfig(), nil, nil, nil, nil, nil, nil, nil, nil)
+	snapshot := &SafetyPortfolioSnapshot{
+		balancesByExchange: map[string]*ccxt.BalanceResponse{
+			"bitget": {
+				Exchange: "bitget",
+				Total: map[string]float64{
+					"USDT_FUTURES_USDT": 3,
+				},
+				Raw: map[string]interface{}{
+					"summary_only_balance_keys": map[string]interface{}{"USDT_FUTURES_USDT": true},
+				},
+			},
+		},
+	}
+
+	total, free, ok := service.resolveScopedMarketFunds(snapshot, "bitget", "futures")
+
+	assert.True(t, ok)
+	assert.True(t, total.Equal(decimal.NewFromFloat(3)))
+	assert.True(t, free.Equal(decimal.Zero))
+}
+
 func TestFuturesSizeWithinRoundedEffectiveMax(t *testing.T) {
 	assert.True(t, futuresSizeWithinRoundedEffectiveMax(decimal.NewFromFloat(6.00), decimal.NewFromFloat(5.996)))
 	assert.True(t, futuresSizeWithinRoundedEffectiveMax(decimal.NewFromFloat(6.00), decimal.NewFromFloat(6.00)))

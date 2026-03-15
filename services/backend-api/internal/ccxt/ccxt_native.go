@@ -1845,6 +1845,7 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		Total:     make(map[string]float64),
 		Free:      make(map[string]float64),
 		Used:      make(map[string]float64),
+		Raw:       make(map[string]interface{}),
 	}
 
 	totalUSDTFromSummary := 0.0
@@ -1898,10 +1899,15 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 
 		if accountSummaryUSDT > 0 && !accountHasCoinListUSDT {
 			totalUSDTFromSummary += accountSummaryUSDT
-			freeUSDTFromSummary += accountSummaryUSDT
 			key := accountPrefix + "_USDT"
 			result.Total[key] += accountSummaryUSDT
-			result.Free[key] += accountSummaryUSDT
+			if accountPrefix == "USDT_FUTURES" {
+				markSummaryOnlyBalanceKey(result, key)
+				markSummaryOnlyBalanceKey(result, "USDT")
+			} else {
+				freeUSDTFromSummary += accountSummaryUSDT
+				result.Free[key] += accountSummaryUSDT
+			}
 			log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, accountSummaryUSDT)
 		}
 	}
@@ -1916,6 +1922,21 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 
 	log.Printf("[CCXT Native] Bitget balance fetched: %d assets", len(result.Total))
 	return result, nil
+}
+
+func markSummaryOnlyBalanceKey(balance *BalanceResponse, key string) {
+	if balance == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	if balance.Raw == nil {
+		balance.Raw = make(map[string]interface{})
+	}
+	rawMap, ok := balance.Raw["summary_only_balance_keys"].(map[string]interface{})
+	if !ok || rawMap == nil {
+		rawMap = make(map[string]interface{})
+	}
+	rawMap[key] = true
+	balance.Raw["summary_only_balance_keys"] = rawMap
 }
 
 // fetchBinanceBalance fetches balance from Binance exchange

@@ -683,7 +683,7 @@ func (s *PortfolioSafetyService) resolveScopedMarketFunds(snapshot *SafetyPortfo
 		total := decimalFromFloatMap(balance.Total, key)
 		free := decimalFromFloatMap(balance.Free, key)
 		if total.GreaterThan(decimal.Zero) || free.GreaterThan(decimal.Zero) {
-			if !free.GreaterThan(decimal.Zero) {
+			if !free.GreaterThan(decimal.Zero) && !isSummaryOnlyBalanceKey(balance, key) {
 				free = total
 			}
 			return total, free, true
@@ -732,6 +732,7 @@ func cloneBalanceResponse(balance *ccxt.BalanceResponse) *ccxt.BalanceResponse {
 	clone.Total = cloneFloatMap(balance.Total)
 	clone.Free = cloneFloatMap(balance.Free)
 	clone.Used = cloneFloatMap(balance.Used)
+	clone.Raw = cloneRawMap(balance.Raw)
 	return &clone
 }
 
@@ -744,6 +745,42 @@ func cloneFloatMap(values map[string]float64) map[string]float64 {
 		clone[key] = value
 	}
 	return clone
+}
+
+func cloneRawMap(values map[string]interface{}) map[string]interface{} {
+	if values == nil {
+		return nil
+	}
+	clone := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		switch typed := value.(type) {
+		case map[string]interface{}:
+			nested := make(map[string]interface{}, len(typed))
+			for nestedKey, nestedValue := range typed {
+				nested[nestedKey] = nestedValue
+			}
+			clone[key] = nested
+		default:
+			clone[key] = value
+		}
+	}
+	return clone
+}
+
+func isSummaryOnlyBalanceKey(balance *ccxt.BalanceResponse, key string) bool {
+	if balance == nil || balance.Raw == nil || strings.TrimSpace(key) == "" {
+		return false
+	}
+	rawMap, ok := balance.Raw["summary_only_balance_keys"].(map[string]interface{})
+	if !ok || rawMap == nil {
+		return false
+	}
+	v, exists := rawMap[key]
+	if !exists {
+		return false
+	}
+	b, ok := v.(bool)
+	return ok && b
 }
 
 func futuresSizeWithinRoundedEffectiveMax(size, effectiveMax decimal.Decimal) bool {

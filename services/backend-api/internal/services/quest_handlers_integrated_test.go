@@ -914,6 +914,25 @@ func TestShouldSkipClosedOrderFeedback(t *testing.T) {
 	}
 }
 
+func TestResolveScalpingFuturesWalletUSDT_SummaryOnlyBalanceReturnsZero(t *testing.T) {
+	balance := &ccxt.BalanceResponse{
+		Exchange: "bitget",
+		Total: map[string]float64{
+			"USDT_FUTURES_USDT": 2.25,
+			"USDT":              12.75,
+		},
+		Raw: map[string]interface{}{
+			"summary_only_balance_keys": map[string]interface{}{
+				"USDT_FUTURES_USDT": true,
+				"USDT":              true,
+			},
+		},
+	}
+
+	assert.Zero(t, resolveScalpingFuturesWalletUSDT(balance))
+	assert.Equal(t, "summary:USDT_FUTURES_USDT", resolveScalpingWalletBasisSource(balance))
+}
+
 func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFill(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-closed-feedback-skip-entry.db"))
 	require.NoError(t, err)
@@ -982,6 +1001,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFil
 
 	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
 	assert.False(t, processed["entry-1"])
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
 
 	orderExecutor.AssertExpectations(t)
 }
