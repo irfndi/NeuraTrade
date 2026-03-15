@@ -22,6 +22,7 @@ type ScalpingAutonomyScope struct {
 	ChatID            string
 	StrategyID        string
 	Exchange          string
+	MarketType        string
 	Leverage          int
 	SafeModeEnabled   bool
 	KillSwitchEngaged bool
@@ -77,6 +78,14 @@ func scalpingLeverageFromContext(ctx context.Context) int {
 		return 0
 	}
 	return scope.Leverage
+}
+
+func scalpingMarketTypeFromContext(ctx context.Context) string {
+	scope, ok := scalpingAutonomyScopeFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(scope.MarketType))
 }
 
 func withScalpingAutonomyEvalInput(ctx context.Context, input scalpingAutonomyEvalInput) context.Context {

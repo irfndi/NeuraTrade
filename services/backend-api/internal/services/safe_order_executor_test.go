@@ -278,6 +278,21 @@ func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck_InferFuturesMarketTypeFromS
 	mockSafety.AssertExpectations(t)
 }
 
+func TestSafeOrderExecutor_CheckSafety_InferFuturesMarketTypeForBitgetPlainSymbol(t *testing.T) {
+	mockSafety := &mockSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(nil, mockSafety, "test-chat")
+
+	mockSafety.On("CanExecuteTrade", mock.Anything, "test-chat", "bitget", "DOGE/USDT", "futures", decimal.NewFromFloat(15)).
+		Return(false, "below exchange minimum notional", nil)
+
+	allowed, reason, err := safeExec.CheckSafety(context.Background(), "bitget", "DOGE/USDT", decimal.NewFromFloat(15))
+
+	assert.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Equal(t, "below exchange minimum notional", reason)
+	mockSafety.AssertExpectations(t)
+}
+
 func TestSafeOrderExecutor_PlaceOrderWithSafetyCheck_UsesScopedLeverageAwareSafety(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	mockSafety := &mockLeverageSafetyChecker{}

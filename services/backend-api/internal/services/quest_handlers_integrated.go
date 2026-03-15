@@ -1129,6 +1129,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		ChatID:            chatID,
 		StrategyID:        strategyID,
 		Exchange:          userExchange,
+		MarketType:        "futures",
 		SafeModeEnabled:   safeMode,
 		KillSwitchEngaged: killSwitchEngaged,
 		ExchangeConnected: exchangeConnected,
@@ -3798,7 +3799,13 @@ func resolveScalpingFuturesWalletUSDT(balance *ccxt.BalanceResponse) float64 {
 			return v
 		}
 	}
-	if isSummaryOnlyBalanceKey(balance, "USDT_FUTURES_USDT") {
+	futuresSummaryOnly := isSummaryOnlyBalanceKey(balance, "USDT_FUTURES_USDT")
+	if futuresSummaryOnly {
+		if balance.Free != nil {
+			if v := balance.Free["USDT"]; v > 0 {
+				return v
+			}
+		}
 		return 0
 	}
 	if balance.Total != nil {
@@ -3826,6 +3833,7 @@ func resolveScalpingWalletBasisSource(balance *ccxt.BalanceResponse) string {
 	if balance == nil {
 		return "none"
 	}
+	futuresSummaryOnly := isSummaryOnlyBalanceKey(balance, "USDT_FUTURES_USDT")
 	lookup := []struct {
 		bookName string
 		book     map[string]float64
@@ -3840,14 +3848,17 @@ func resolveScalpingWalletBasisSource(balance *ccxt.BalanceResponse) string {
 		if candidate.book == nil {
 			continue
 		}
+		if futuresSummaryOnly && candidate.key == "USDT" && candidate.bookName == "total" {
+			continue
+		}
 		if v := candidate.book[candidate.key]; v > 0 {
 			if candidate.bookName == "total" && isSummaryOnlyBalanceKey(balance, candidate.key) {
-				return "summary:" + candidate.key
+				continue
 			}
 			return candidate.bookName + ":" + candidate.key
 		}
 	}
-	if isSummaryOnlyBalanceKey(balance, "USDT_FUTURES_USDT") {
+	if futuresSummaryOnly {
 		return "summary:USDT_FUTURES_USDT"
 	}
 	if isSummaryOnlyBalanceKey(balance, "USDT") {

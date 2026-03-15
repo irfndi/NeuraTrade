@@ -1059,12 +1059,14 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	effectiveExchange := s.exchangeForContext(ctx)
 	if scope, ok := scalpingAutonomyScopeFromContext(ctx); ok {
 		scope.Exchange = effectiveExchange
+		scope.MarketType = "futures"
 		scope.Leverage = s.config.Leverage
 		ctx = WithScalpingAutonomyScope(ctx, scope)
 	} else if effectiveExchange != "" {
 		ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
-			Exchange: effectiveExchange,
-			Leverage: s.config.Leverage,
+			Exchange:   effectiveExchange,
+			MarketType: "futures",
+			Leverage:   s.config.Leverage,
 		})
 	}
 

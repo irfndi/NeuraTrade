@@ -43,7 +43,7 @@ func (s *SafeOrderExecutor) PlaceOrder(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, error) {
-	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, inferSafetyMarketType(symbol), amount)
+	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, resolveSafetyMarketType(ctx, exchange, symbol), amount)
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
@@ -61,7 +61,7 @@ func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, *SafetyCheckResult, error) {
-	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, inferSafetyMarketType(symbol), amount)
+	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, resolveSafetyMarketType(ctx, exchange, symbol), amount)
 	if err != nil {
 		return "", nil, fmt.Errorf("safety check failed: %w", err)
 	}
@@ -80,7 +80,7 @@ func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
 }
 
 func (s *SafeOrderExecutor) CheckSafety(ctx context.Context, exchange string, symbol string, amount decimal.Decimal) (bool, string, error) {
-	return s.checkSafety(ctx, exchange, symbol, inferSafetyMarketType(symbol), amount)
+	return s.checkSafety(ctx, exchange, symbol, resolveSafetyMarketType(ctx, exchange, symbol), amount)
 }
 
 func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol, marketType string, amount decimal.Decimal) (bool, string, error) {
@@ -259,12 +259,29 @@ func (s *SafeOrderExecutor) GetChatID() string {
 	return s.chatID
 }
 
-func inferSafetyMarketType(symbol string) string {
+func resolveSafetyMarketType(ctx context.Context, exchange, symbol string) string {
+	if scopedMarketType := scalpingMarketTypeFromContext(ctx); scopedMarketType != "" {
+		return scopedMarketType
+	}
+	inferred := inferSafetyMarketType(exchange, symbol)
+	if inferred != "" {
+		return inferred
+	}
+	if scalpingLeverageFromContext(ctx) > 0 {
+		return "futures"
+	}
+	return ""
+}
+
+func inferSafetyMarketType(exchange, symbol string) string {
 	normalized := strings.ToUpper(strings.TrimSpace(symbol))
 	if normalized == "" {
 		return ""
 	}
 	if strings.Contains(normalized, ":") || strings.Contains(normalized, "PERP") || strings.Contains(normalized, "SWAP") {
+		return "futures"
+	}
+	if strings.EqualFold(strings.TrimSpace(exchange), "bitget") && strings.Contains(normalized, "/") {
 		return "futures"
 	}
 	return ""
