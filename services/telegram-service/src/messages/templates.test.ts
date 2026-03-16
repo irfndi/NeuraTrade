@@ -64,7 +64,9 @@ describe("message templates", () => {
       phase: "Growth",
     });
 
-    expect(output).toBe("🎯 Fund Milestone Reached\n\nAmount: $500\nPhase: Growth");
+    expect(output).toBe(
+      "🎯 Fund Milestone Reached\n\nAmount: $500\nPhase: Growth",
+    );
   });
 
   test("formats risk event with sorted detail keys", () => {
