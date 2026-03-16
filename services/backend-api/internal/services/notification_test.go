@@ -2308,11 +2308,36 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 		}(),
 		Action: "Proceed cautiously",
 	}
-	expectedFallback := formatNotificationCodeBlockWithLimit(
-		buildAIReasoningMessageLines(fallbackReasoning, "", true, 0),
-		telegramMaxMessageUnits,
-	)
-	assert.Equal(t, expectedFallback, ns.formatAIReasoningMessage(fallbackReasoning))
+	fallbackMessage := ns.formatAIReasoningMessage(fallbackReasoning)
+	assert.LessOrEqual(t, telegramMessageUnits(fallbackMessage), telegramMaxMessageUnits)
+	assert.Contains(t, fallbackMessage, "AI Trading Decision")
+	assert.Contains(t, fallbackMessage, "**Summary:**")
+	assert.Contains(t, fallbackMessage, "**Recommended Action:** Proceed cautiously")
+	assert.Contains(t, fallbackMessage, "...")
+	assert.NotContains(t, fallbackMessage, "Long factor 1")
+
+	foundSixteenFactorBoundary := false
+	for repeat := 1; repeat <= 240; repeat++ {
+		candidate := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType: "trade_entry",
+			Summary:      "Boundary search",
+			Confidence:   0.80,
+			Reasons: func() []string {
+				reasons := make([]string, 17)
+				for i := 0; i < 17; i++ {
+					reasons[i] = fmt.Sprintf("Factor %d %s", i+1, strings.Repeat("detail ", repeat))
+				}
+				return reasons
+			}(),
+		})
+
+		if strings.Contains(candidate, "Factor 16") && !strings.Contains(candidate, "Factor 17") {
+			foundSixteenFactorBoundary = true
+			assert.LessOrEqual(t, telegramMessageUnits(candidate), telegramMaxMessageUnits)
+			break
+		}
+	}
+	assert.True(t, foundSixteenFactorBoundary)
 }
 
 // =============================================================================

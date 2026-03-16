@@ -11,7 +11,6 @@ import (
 
 const (
 	telegramMaxMessageUnits = 3900
-	maxKeyFactorsDisplay    = 15
 )
 
 // NotifyQuestProgress sends a quest progress notification to a user
@@ -261,10 +260,6 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		return message
 	}
 
-	if reasonsToShow > maxKeyFactorsDisplay {
-		reasonsToShow = maxKeyFactorsDisplay
-	}
-
 	for reasonsToShow >= 0 {
 		candidateLines := buildAIReasoningMessageLines(reasoning, category, confidenceKnown, reasonsToShow)
 		mostCompactLines = candidateLines
@@ -274,6 +269,10 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		}
 
 		reasonsToShow--
+	}
+
+	if reasoning.Action != "" {
+		return formatNotificationCodeBlockWithTailPriority(mostCompactLines[:len(mostCompactLines)-2], mostCompactLines[len(mostCompactLines)-2:], telegramMaxMessageUnits)
 	}
 
 	return formatNotificationCodeBlockWithLimit(mostCompactLines, telegramMaxMessageUnits)
@@ -371,16 +370,53 @@ func formatNotificationCodeBlockWithLimit(lines []string, maxUnits int) string {
 		return "```\n...\n```"
 	}
 
-	content := joinNotificationLines(lines)
-	truncated := truncateToTelegramUnits(content, contentLimit)
-	if truncated != content {
-		ellipsisUnits := telegramMessageUnits("...")
-		if contentLimit > ellipsisUnits {
-			truncated = truncateToTelegramUnits(content, contentLimit-ellipsisUnits) + "..."
-		}
-	}
+	truncated := truncateToTelegramUnitsWithEllipsis(joinNotificationLines(lines), contentLimit)
 
 	return prefix + truncated + suffix
+}
+
+func formatNotificationCodeBlockWithTailPriority(lines, tail []string, maxUnits int) string {
+	const (
+		prefix = "```\n"
+		suffix = "\n```"
+	)
+
+	contentLimit := maxUnits - telegramMessageUnits(prefix) - telegramMessageUnits(suffix)
+	if contentLimit <= 0 {
+		return "```\n...\n```"
+	}
+
+	tailContent := joinNotificationLines(tail)
+	tailUnits := telegramMessageUnits(tailContent)
+	if tailUnits >= contentLimit {
+		return prefix + truncateToTelegramUnitsWithEllipsis(tailContent, contentLimit) + suffix
+	}
+
+	bodyLimit := contentLimit - tailUnits
+	if len(lines) > 0 && len(tail) > 0 {
+		bodyLimit--
+	}
+	bodyContent := truncateToTelegramUnitsWithEllipsis(joinNotificationLines(lines), bodyLimit)
+	if bodyContent == "" {
+		return prefix + tailContent + suffix
+	}
+
+	return prefix + bodyContent + "\n" + tailContent + suffix
+}
+
+func truncateToTelegramUnitsWithEllipsis(message string, maxUnits int) string {
+	truncated := truncateToTelegramUnits(message, maxUnits)
+	if truncated == message {
+		return truncated
+	}
+
+	ellipsisUnits := telegramMessageUnits("...")
+	if maxUnits <= ellipsisUnits {
+		return truncateToTelegramUnits("...", maxUnits)
+	}
+
+	return truncateToTelegramUnits(message, maxUnits-ellipsisUnits) + "..."
+
 }
 
 func telegramMessageUnits(message string) int {
