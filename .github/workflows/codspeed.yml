@@ -18,7 +18,7 @@ permissions:
 jobs:
   codspeed:
     name: Run benchmarks
-    runs-on: codspeed-macro
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: services/backend-api
