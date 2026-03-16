@@ -354,6 +354,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
+	scalpingBacktestHandler := handlers.NewScalpingBacktestHandler(db)
 
 	// Sentiment handler - initialize with config from environment
 	sentimentConfig := services.DefaultSentimentServiceConfig()
@@ -1159,6 +1160,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			budget.GET("/status", budgetHandler.GetBudgetStatus)
 			budget.GET("/check", budgetHandler.CheckBudget)
 		}
+
+		backtestGroup := v1.Group("/backtest")
+		scalpingBacktest := backtestGroup.Group("/scalping")
+		scalpingBacktest.POST("/run", scalpingBacktestHandler.RunScalpingBacktest)
+		scalpingBacktest.GET("/:run_id", scalpingBacktestHandler.GetScalpingBacktest)
+		scalpingBacktest.GET("/", scalpingBacktestHandler.ListScalpingBacktests)
+		scalpingBacktest.POST("/compare", scalpingBacktestHandler.CompareScalpingBacktests)
 
 		// AI model routes
 		ai := v1.Group("/ai")
