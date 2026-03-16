@@ -120,6 +120,7 @@ type CostMetrics struct {
 
 // ClientConfig holds configuration for LLM clients
 type ClientConfig struct {
+	Provider    Provider
 	APIKey      string
 	BaseURL     string
 	HTTPTimeout time.Duration

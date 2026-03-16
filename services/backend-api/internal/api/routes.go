@@ -94,7 +94,7 @@ func parseAIProviderChain(primary string) []string {
 
 	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
 	if raw == "" {
-		raw = "zhipu,minimax"
+		raw = "zhipu"
 	}
 
 	parts := strings.Split(raw, ",")
@@ -119,7 +119,7 @@ func providerBaseURL(provider string) string {
 	case "anthropic":
 		return "https://api.anthropic.com/v1"
 	case "minimax":
-		return "https://api.minimax.chat/v1"
+		return "https://api.minimax.io/anthropic/v1"
 	case "zhipu":
 		return "https://open.bigmodel.cn/api/coding/paas/v4"
 	case "mlx":
@@ -161,6 +161,7 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 
 func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, maxRetries int) llm.Client {
 	config := llm.ClientConfig{
+		Provider:    llm.Provider(node.Provider),
 		APIKey:      node.APIKey,
 		BaseURL:     node.BaseURL,
 		HTTPTimeout: timeout,
