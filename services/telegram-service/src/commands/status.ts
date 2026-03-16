@@ -407,13 +407,11 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         }
         // When no hard gate is active, show just "none" without confusing parenthetical.
         // Candidate-level rejections are displayed in the separate "Entry attempt block" line.
-        if (entryGatePriority === "none") {
-          lines.push(`• Entry blocker: none`);
-        } else {
-          lines.push(
-            `• Entry blocker: ${entryGatePriority} (${blockerReason})`,
-          );
+        let blockerDisplay = "none";
+        if (entryGatePriority !== "none") {
+          blockerDisplay = `${entryGatePriority}${blockerReason ? ` (${blockerReason})` : ""}`;
         }
+        lines.push(`• Entry blocker: ${blockerDisplay}`);
         if (rolloutStageCurrent || rolloutStatusCurrent) {
           lines.push(
             `• Rollout: ${rolloutStageCurrent || "unknown"}/${rolloutStatusCurrent || "unknown"}`,
