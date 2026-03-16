@@ -9,6 +9,10 @@ import (
 	"github.com/irfndi/neuratrade/internal/observability"
 )
 
+const (
+	telegramMaxMessageUnits = 3900
+)
+
 // NotifyQuestProgress sends a quest progress notification to a user
 func (ns *NotificationService) NotifyQuestProgress(ctx context.Context, chatID int64, progress QuestProgressNotification) error {
 	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyQuestProgress", map[string]string{
@@ -225,13 +229,11 @@ func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int
 	return nil
 }
 
-// formatAIReasoningMessage formats an AI reasoning notification message
 func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNotification) string {
 	confidenceKnown := reasoning.ConfidenceKnown
 	if !confidenceKnown &&
 		strings.TrimSpace(reasoning.ReasonCategory) == "" &&
 		strings.TrimSpace(reasoning.HoldCategory) == "" {
-		// Backward-compatible fallback for legacy callers.
 		confidenceKnown = true
 	}
 	category := strings.TrimSpace(reasoning.ReasonCategory)
@@ -249,6 +251,34 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		category = "execution_unavailable"
 	}
 
+	reasonsToShow := len(reasoning.Reasons)
+	lines := buildAIReasoningMessageLines(reasoning, category, confidenceKnown, reasonsToShow)
+	mostCompactLines := lines
+
+	message := formatNotificationCodeBlock(lines)
+	if telegramMessageUnits(message) <= telegramMaxMessageUnits {
+		return message
+	}
+
+	for reasonsToShow >= 0 {
+		candidateLines := buildAIReasoningMessageLines(reasoning, category, confidenceKnown, reasonsToShow)
+		mostCompactLines = candidateLines
+		message = formatNotificationCodeBlock(candidateLines)
+		if telegramMessageUnits(message) <= telegramMaxMessageUnits {
+			return message
+		}
+
+		reasonsToShow--
+	}
+
+	if reasoning.Action != "" {
+		return formatNotificationCodeBlockWithTailPriority(mostCompactLines[:len(mostCompactLines)-2], mostCompactLines[len(mostCompactLines)-2:], telegramMaxMessageUnits)
+	}
+
+	return formatNotificationCodeBlockWithLimit(mostCompactLines, telegramMaxMessageUnits)
+}
+
+func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category string, confidenceKnown bool, maxReasons int) []string {
 	lines := []string{
 		"🤖 **AI Trading Decision**",
 		"",
@@ -285,23 +315,142 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		lines = append(lines, fmt.Sprintf("**Attempt Window:** %s", strings.TrimSpace(reasoning.AttemptWindowProgress)))
 	}
 
-	if len(reasoning.Reasons) > 0 {
-		lines = append(lines, "", "**Key Factors:**")
-		for i, reason := range reasoning.Reasons {
-			if i < 5 {
-				lines = append(lines, fmt.Sprintf("• %s", reason))
-			}
-		}
-		if len(reasoning.Reasons) > 5 {
-			lines = append(lines, fmt.Sprintf("• ... and %d more factors", len(reasoning.Reasons)-5))
-		}
-	}
-
+	lines = append(lines, buildAIReasoningFactorLines(reasoning.Reasons, maxReasons)...)
 	if reasoning.Action != "" {
 		lines = append(lines, "", fmt.Sprintf("**Recommended Action:** %s", reasoning.Action))
 	}
 
+	return lines
+}
+
+func buildAIReasoningFactorLines(reasons []string, maxReasons int) []string {
+	if len(reasons) == 0 {
+		return nil
+	}
+
+	limit := len(reasons)
+	if maxReasons < limit {
+		limit = maxReasons
+	}
+
+	factorLines := []string{"", "**Key Factors:**"}
+	for i := 0; i < limit; i++ {
+		factorLines = append(factorLines, fmt.Sprintf("• %s", reasons[i]))
+	}
+
+	omitted := len(reasons) - limit
+	if omitted > 0 {
+		if limit > 0 {
+			factorLines = append(factorLines, fmt.Sprintf("• ... and %d more factors", omitted))
+		} else {
+			factorLines = append(factorLines, fmt.Sprintf("• %d factors omitted due to message length", omitted))
+		}
+	}
+
+	return factorLines
+}
+
+func formatNotificationCodeBlock(lines []string) string {
 	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+}
+
+func formatNotificationCodeBlockWithLimit(lines []string, maxUnits int) string {
+	message := formatNotificationCodeBlock(lines)
+	if telegramMessageUnits(message) <= maxUnits {
+		return message
+	}
+
+	const (
+		prefix = "```\n"
+		suffix = "\n```"
+	)
+
+	contentLimit := maxUnits - telegramMessageUnits(prefix) - telegramMessageUnits(suffix)
+	if contentLimit <= 0 {
+		return "```\n...\n```"
+	}
+
+	truncated := truncateToTelegramUnitsWithEllipsis(joinNotificationLines(lines), contentLimit)
+
+	return prefix + truncated + suffix
+}
+
+func formatNotificationCodeBlockWithTailPriority(lines, tail []string, maxUnits int) string {
+	const (
+		prefix = "```\n"
+		suffix = "\n```"
+	)
+
+	contentLimit := maxUnits - telegramMessageUnits(prefix) - telegramMessageUnits(suffix)
+	if contentLimit <= 0 {
+		return "```\n...\n```"
+	}
+
+	tailContent := joinNotificationLines(tail)
+	tailUnits := telegramMessageUnits(tailContent)
+	if tailUnits >= contentLimit {
+		return prefix + truncateToTelegramUnitsWithEllipsis(tailContent, contentLimit) + suffix
+	}
+
+	bodyLimit := contentLimit - tailUnits
+	if len(lines) > 0 && len(tail) > 0 {
+		bodyLimit--
+	}
+	bodyContent := truncateToTelegramUnitsWithEllipsis(joinNotificationLines(lines), bodyLimit)
+	if bodyContent == "" {
+		return prefix + tailContent + suffix
+	}
+
+	return prefix + bodyContent + "\n" + tailContent + suffix
+}
+
+func truncateToTelegramUnitsWithEllipsis(message string, maxUnits int) string {
+	truncated := truncateToTelegramUnits(message, maxUnits)
+	if truncated == message {
+		return truncated
+	}
+
+	ellipsisUnits := telegramMessageUnits("...")
+	if maxUnits <= ellipsisUnits {
+		return truncateToTelegramUnits("...", maxUnits)
+	}
+
+	return truncateToTelegramUnits(message, maxUnits-ellipsisUnits) + "..."
+
+}
+
+func telegramMessageUnits(message string) int {
+	units := 0
+	for _, r := range message {
+		if r > 0xFFFF {
+			units += 2
+		} else {
+			units++
+		}
+	}
+	return units
+}
+
+func truncateToTelegramUnits(message string, maxUnits int) string {
+	if maxUnits <= 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	units := 0
+	for _, r := range message {
+		runeUnits := 1
+		if r > 0xFFFF {
+			runeUnits = 2
+		}
+		if units+runeUnits > maxUnits {
+			break
+		}
+		builder.WriteRune(r)
+		units += runeUnits
+	}
+
+	return builder.String()
 }
 
 func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {
