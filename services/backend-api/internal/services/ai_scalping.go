@@ -2718,7 +2718,13 @@ func shouldPromoteGenericHoldToFallback(decision *AITradingDecision, funnel appa
 			strings.Contains(reasoning, "incomplete analysis") ||
 			strings.Contains(reasoning, "analysis was truncated") ||
 			strings.Contains(reasoning, "incomplete meta-commentary") ||
-			strings.Contains(reasoning, "no explicit final trade action")
+			strings.Contains(reasoning, "no explicit final trade action") ||
+			strings.Contains(reasoning, "i'm torn") ||
+			strings.Contains(reasoning, "i am torn") ||
+			strings.Contains(reasoning, "torn between") ||
+			strings.Contains(reasoning, "indecisive") ||
+			strings.Contains(reasoning, "without committing to a trade") ||
+			strings.Contains(reasoning, "without committing to trade")
 	}
 }
 
@@ -3260,6 +3266,13 @@ func classifyRuntimeReasoning(reasoning string) string {
 		strings.Contains(lower, "invalid model decision contract"),
 		strings.Contains(lower, "failed to parse ai decision"),
 		strings.Contains(lower, "invalid character"),
+		strings.Contains(lower, "incomplete and indecisive"),
+		strings.Contains(lower, "i'm torn"),
+		strings.Contains(lower, "i am torn"),
+		strings.Contains(lower, "torn between"),
+		strings.Contains(lower, "without committing to a trade"),
+		strings.Contains(lower, "without committing to trade"),
+		strings.Contains(lower, "no explicit trade action"),
 		strings.Contains(lower, "json"):
 		return reasonCategoryLLMParseContract
 	case strings.Contains(lower, "execution unavailable"),

@@ -2637,6 +2637,30 @@ func normalizeAINotificationSemantics(notif AIReasoningNotification) AIReasoning
 	return notif
 }
 
+func holdDigestSummary(decision *AITradingDecision, reasonCategory string) string {
+	reasonCategory = strings.ToLower(strings.TrimSpace(reasonCategory))
+	reasoning := ""
+	if decision != nil {
+		reasoning = strings.ToLower(strings.TrimSpace(decision.Reasoning))
+	}
+
+	switch reasonCategory {
+	case aiReasonLLMParseContract:
+		return "Hold digest: AI output incomplete, no reliable trade decision"
+	case aiReasonLLMTimeout:
+		return "Hold digest: AI response timed out, no reliable trade decision"
+	case aiReasonExecutionUnavailable:
+		return "Hold digest: AI runtime degraded, waiting for stable decisioning"
+	case reasonCategoryDeterministicFallback:
+		if strings.Contains(reasoning, "no eligible candidate") || strings.Contains(reasoning, "no qualified setup") {
+			return "Hold digest: fallback found no qualified setup"
+		}
+		return "Hold digest: AI fallback selected hold"
+	default:
+		return "Hold digest: waiting for qualified setup"
+	}
+}
+
 func (h *IntegratedQuestHandlers) notifyScalpingDecision(ctx context.Context, chatID string, notif AIReasoningNotification) {
 	if h.notificationService == nil {
 		return
@@ -2828,7 +2852,7 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 		DecisionType:          "scalping_digest",
-		Summary:               "Hold digest: waiting for qualified setup",
+		Summary:               holdDigestSummary(decision, reasonCategory),
 		Confidence:            decision.Confidence,
 		ConfidenceKnown:       confidenceKnown,
 		ReasonCategory:        reasonCategory,
@@ -5249,6 +5273,9 @@ func isRuntimeHoldReason(reason string) bool {
 }
 
 func classifyAIRuntimeReason(reason string, fallback string) string {
+	if classified := classifyRuntimeReasoning(reason); classified != "" {
+		return classified
+	}
 	lower := strings.ToLower(strings.TrimSpace(reason))
 	switch {
 	case strings.Contains(lower, "context deadline exceeded"),

@@ -1248,6 +1248,9 @@ func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
 
 	category = normalizeHoldReasonCategory("", "waiting for qualified setup")
 	assert.Equal(t, reasonCategoryStrategyHold, category)
+
+	category = normalizeHoldReasonCategory("", "Model output was incomplete and indecisive, ending with 'I'm torn' without committing to a trade.")
+	assert.Equal(t, reasonCategoryLLMParseContract, category)
 }
 
 func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackOnLLMError(t *testing.T) {
@@ -1596,6 +1599,7 @@ func TestShouldPromoteGenericHoldToFallback_PlaceholderReasoning(t *testing.T) {
 	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "The"}, appautonomy.CandidateFunnelSnapshot{}))
 	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "Incomplete analysis - output was cut off before reaching a final trading decision"}, appautonomy.CandidateFunnelSnapshot{}))
 	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "The response is incomplete meta-commentary about parsing a trading decision with no explicit final trade action specified."}, appautonomy.CandidateFunnelSnapshot{}))
+	assert.True(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "Model output was incomplete and indecisive, ending with I'm torn without committing to a trade."}, appautonomy.CandidateFunnelSnapshot{CandidateViableCount: 1}))
 	assert.False(t, shouldPromoteGenericHoldToFallback(&AITradingDecision{Action: "hold", Reasoning: "waiting for clearer setup"}, appautonomy.CandidateFunnelSnapshot{CandidateViableCount: 1}))
 }
 

@@ -1199,6 +1199,31 @@ func TestNormalizeAINotificationSemantics_StrategyHoldPreservedWhenConfidenceKno
 	assert.Equal(t, aiReasonStrategyHold, normalized.HoldCategory)
 }
 
+func TestNormalizeAINotificationSemantics_IndecisiveRuntimeEvidenceUsesParseContract(t *testing.T) {
+	notif := AIReasoningNotification{
+		DecisionType:    "scalping_digest",
+		Summary:         "Hold digest: waiting for qualified setup",
+		ConfidenceKnown: false,
+		ReasonCategory:  aiReasonStrategyHold,
+		Reasons: []string{
+			"Model output was incomplete and indecisive, ending with 'I'm torn' without committing to a trade.",
+		},
+		Action: "hold",
+	}
+
+	normalized := normalizeAINotificationSemantics(notif)
+	assert.False(t, normalized.ConfidenceKnown)
+	assert.Equal(t, aiReasonLLMParseContract, normalized.ReasonCategory)
+	assert.Equal(t, aiReasonLLMParseContract, normalized.HoldCategory)
+}
+
+func TestHoldDigestSummary_RuntimeParseContractUsesRuntimeSummary(t *testing.T) {
+	summary := holdDigestSummary(&AITradingDecision{
+		Reasoning: "Model output was incomplete and indecisive, ending with 'I'm torn' without committing to a trade.",
+	}, aiReasonLLMParseContract)
+	assert.Equal(t, "Hold digest: AI output incomplete, no reliable trade decision", summary)
+}
+
 func TestShouldNotifyPnLReconciliation(t *testing.T) {
 	now := time.Now().UTC()
 	quest := &Quest{Checkpoint: map[string]interface{}{}}
