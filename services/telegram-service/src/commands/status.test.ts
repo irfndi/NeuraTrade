@@ -308,6 +308,41 @@ describe("Status command", () => {
     );
   });
 
+  test("prefers explicit recovery gate over persisted rollout hints", async () => {
+    const bot = new MockBot();
+    const api = createApiMock({
+      async getQuestDiagnostics() {
+        return {
+          quest_runtime: {
+            cadence_mode: "active_risk",
+            risk_lock_active: false,
+          },
+          chat_runtime: {
+            entry_gate_reason_current:
+              "drawdown 37.28% in recovery band: waiting for clean cycles before micro-entry",
+            entry_gate_type: "recovery_gate",
+            rollout_stage_current: "shadow",
+            rollout_status_current: "active",
+            rollout_gate_reason_current:
+              "strategy_not_live (stage: shadow, status: active)",
+          },
+        };
+      },
+    });
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(667, 778);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain(
+      "Entry blocker: recovery_gate (drawdown 37.28% in recovery band: waiting for clean cycles before micro-entry)",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Rollout gate: strategy_not_live (stage: shadow, status: active)",
+    );
+    expect(ctx.replies[0]).not.toContain("Entry blocker: rollout_gate");
+  });
+
   test("renders rollout gate without relying on attempt block code", async () => {
     const bot = new MockBot();
     const api = createApiMock({
