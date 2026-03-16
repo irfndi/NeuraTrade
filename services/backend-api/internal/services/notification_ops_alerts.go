@@ -9,6 +9,13 @@ import (
 	"github.com/irfndi/neuratrade/internal/observability"
 )
 
+const (
+	// Telegram message character limit is 4096, use buffer for safety
+	telegramMaxMessageChars = 3900
+	// maxKeyFactorsDisplay is the fallback limit if message would exceed Telegram limit
+	maxKeyFactorsDisplay = 15
+)
+
 // NotifyQuestProgress sends a quest progress notification to a user
 func (ns *NotificationService) NotifyQuestProgress(ctx context.Context, chatID int64, progress QuestProgressNotification) error {
 	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyQuestProgress", map[string]string{
@@ -225,13 +232,14 @@ func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int
 	return nil
 }
 
-// formatAIReasoningMessage formats an AI reasoning notification message
+// formatAIReasoningMessage formats an AI reasoning notification message for Telegram.
+// It displays all key factors by default, but falls back to a limited display
+// if the message would exceed Telegram's character limit.
 func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNotification) string {
 	confidenceKnown := reasoning.ConfidenceKnown
 	if !confidenceKnown &&
 		strings.TrimSpace(reasoning.ReasonCategory) == "" &&
 		strings.TrimSpace(reasoning.HoldCategory) == "" {
-		// Backward-compatible fallback for legacy callers.
 		confidenceKnown = true
 	}
 	category := strings.TrimSpace(reasoning.ReasonCategory)
@@ -285,18 +293,29 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		lines = append(lines, fmt.Sprintf("**Attempt Window:** %s", strings.TrimSpace(reasoning.AttemptWindowProgress)))
 	}
 
-	if len(reasoning.Reasons) > 0 {
-		lines = append(lines, "", "**Key Factors:**")
-		for _, reason := range reasoning.Reasons {
-			lines = append(lines, fmt.Sprintf("• %s", reason))
-		}
+	lines = append(lines, "", "**Key Factors:**")
+	for _, reason := range reasoning.Reasons {
+		lines = append(lines, fmt.Sprintf("• %s", reason))
 	}
 
 	if reasoning.Action != "" {
 		lines = append(lines, "", fmt.Sprintf("**Recommended Action:** %s", reasoning.Action))
 	}
 
-	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+	message := fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+
+	if len(reasoning.Reasons) > maxKeyFactorsDisplay && len(message) > telegramMaxMessageChars {
+		lines = lines[:len(lines)-len(reasoning.Reasons)]
+		for i, reason := range reasoning.Reasons {
+			if i < maxKeyFactorsDisplay {
+				lines = append(lines, fmt.Sprintf("• %s", reason))
+			}
+		}
+		lines = append(lines, fmt.Sprintf("• ... and %d more factors", len(reasoning.Reasons)-maxKeyFactorsDisplay))
+		message = fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+	}
+
+	return message
 }
 
 func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {

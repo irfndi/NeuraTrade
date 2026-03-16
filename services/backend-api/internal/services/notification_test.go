@@ -2126,9 +2126,10 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 	ns := NewNotificationService(nil, nil, "", "", "")
 
 	tests := []struct {
-		name      string
-		reasoning AIReasoningNotification
-		contains  []string
+		name        string
+		reasoning   AIReasoningNotification
+		contains    []string
+		notContains []string
 	}{
 		{
 			name: "high confidence decision",
@@ -2213,6 +2214,11 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 			message := ns.formatAIReasoningMessage(tt.reasoning)
 			for _, expected := range tt.contains {
 				assert.Contains(t, message, expected, "Message should contain %s", expected)
+			}
+			if tt.notContains != nil {
+				for _, notExpected := range tt.notContains {
+					assert.NotContains(t, message, notExpected, "Message should NOT contain %s", notExpected)
+				}
 			}
 		})
 	}
