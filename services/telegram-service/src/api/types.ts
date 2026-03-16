@@ -203,6 +203,7 @@ export interface QuestDiagnosticsResponse {
     | "risk_lock"
     | "state_drift"
     | "runtime_circuit"
+    | "rollout_gate"
     | "recovery_gate"
     | string;
   readonly risk_lock_source?:

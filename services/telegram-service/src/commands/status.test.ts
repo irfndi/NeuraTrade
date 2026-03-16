@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Bot } from "grammy";
+import type { QuestDiagnosticsResponse } from "../api/types";
 import { registerStatusCommand } from "./status";
 
 type CommandHandler = (ctx: MockContext) => Promise<void> | void;
@@ -17,6 +18,50 @@ interface MockContext {
   from?: { id: string | number };
   readonly replies: string[];
   reply(text: string): Promise<void>;
+}
+
+interface StatusApiMock {
+  getUserByChatId(chatId: string): Promise<{
+    user: {
+      id: string;
+      subscription_tier: string;
+      created_at: string;
+    };
+  }>;
+  getNotificationPreference(userId: string): Promise<{ enabled: boolean }>;
+  getDoctor(chatId: string): Promise<{
+    overall_status: string;
+    checked_at: string;
+    checks: Array<{ name: string; status: string }>;
+  }>;
+  getTradingMode(chatId: string): Promise<{
+    mode: string;
+    confirmations: number;
+    required_confirmations: number;
+  }>;
+  getPortfolio(chatId: string): Promise<{
+    total_equity: string;
+    exposure: string;
+    open_orders?: number;
+    positions: unknown[];
+  }>;
+  getAIStatus(userId: string): Promise<{
+    selected_model: string;
+    provider: string;
+    daily_budget_exceeded: boolean;
+  }>;
+  getLogs(
+    chatId: string,
+    limit: number,
+  ): Promise<{
+    logs: Array<{
+      timestamp: string;
+      level: string;
+      source?: string;
+      message?: string;
+    }>;
+  }>;
+  getQuestDiagnostics(chatId: string): Promise<QuestDiagnosticsResponse>;
 }
 
 function createContext(
@@ -45,11 +90,69 @@ async function runCommand(
   await handler(ctx);
 }
 
+function createApiMock(overrides: Partial<StatusApiMock> = {}): StatusApiMock {
+  return {
+    async getUserByChatId() {
+      return {
+        user: {
+          id: "user-default",
+          subscription_tier: "free",
+          created_at: "2026-02-20T10:00:00Z",
+        },
+      };
+    },
+    async getNotificationPreference() {
+      return { enabled: true };
+    },
+    async getDoctor() {
+      return {
+        overall_status: "healthy",
+        checked_at: "2026-02-26T07:00:00Z",
+        checks: [
+          { name: "autonomous-mode", status: "healthy" },
+          { name: "exchange-connection", status: "healthy" },
+        ],
+      };
+    },
+    async getTradingMode() {
+      return {
+        mode: "dry",
+        confirmations: 0,
+        required_confirmations: 2,
+      };
+    },
+    async getPortfolio() {
+      return {
+        total_equity: "46.93",
+        exposure: "0.00",
+        positions: [],
+      };
+    },
+    async getAIStatus() {
+      return {
+        selected_model: "",
+        provider: "",
+        daily_budget_exceeded: false,
+      };
+    },
+    async getLogs() {
+      return { logs: [] };
+    },
+    async getQuestDiagnostics() {
+      return {
+        quest_runtime: {},
+        chat_runtime: {},
+      };
+    },
+    ...overrides,
+  };
+}
+
 describe("Status command", () => {
   test("renders account + runtime + trading + AI snapshot", async () => {
     const bot = new MockBot();
     let capturedAIUserId = "";
-    const api = {
+    const api = createApiMock({
       async getUserByChatId() {
         return {
           user: {
@@ -107,7 +210,7 @@ describe("Status command", () => {
           ],
         };
       },
-    };
+    });
 
     registerStatusCommand(bot as unknown as Bot, api as unknown as never);
     const ctx = createContext(555, 999);
@@ -125,7 +228,7 @@ describe("Status command", () => {
 
   test("degrades gracefully when optional status probes fail", async () => {
     const bot = new MockBot();
-    const api = {
+    const api = createApiMock({
       async getUserByChatId() {
         return {
           user: {
@@ -153,7 +256,10 @@ describe("Status command", () => {
       async getLogs() {
         throw new Error("logs unavailable");
       },
-    };
+      async getQuestDiagnostics() {
+        throw new Error("quest diagnostics unavailable");
+      },
+    });
 
     registerStatusCommand(bot as unknown as Bot, api as unknown as never);
     const ctx = createContext();
@@ -170,53 +276,7 @@ describe("Status command", () => {
 
   test("renders recovery diagnostics using *_current fields", async () => {
     const bot = new MockBot();
-    const api = {
-      async getUserByChatId() {
-        return {
-          user: {
-            id: "user-3",
-            subscription_tier: "free",
-            created_at: "2026-02-20T10:00:00Z",
-          },
-        };
-      },
-      async getNotificationPreference() {
-        return { enabled: true };
-      },
-      async getDoctor() {
-        return {
-          overall_status: "healthy",
-          checked_at: "2026-02-26T07:00:00Z",
-          checks: [
-            { name: "autonomous-mode", status: "healthy" },
-            { name: "exchange-connection", status: "healthy" },
-          ],
-        };
-      },
-      async getTradingMode() {
-        return {
-          mode: "dry",
-          confirmations: 0,
-          required_confirmations: 2,
-        };
-      },
-      async getPortfolio() {
-        return {
-          total_equity: "46.93",
-          exposure: "0.00",
-          positions: [],
-        };
-      },
-      async getAIStatus() {
-        return {
-          selected_model: "",
-          provider: "",
-          daily_budget_exceeded: false,
-        };
-      },
-      async getLogs() {
-        return { logs: [] };
-      },
+    const api = createApiMock({
       async getQuestDiagnostics() {
         return {
           quest_runtime: {
@@ -238,7 +298,7 @@ describe("Status command", () => {
           },
         };
       },
-    };
+    });
 
     registerStatusCommand(bot as unknown as Bot, api as unknown as never);
     const ctx = createContext(666, 777);
@@ -253,5 +313,115 @@ describe("Status command", () => {
     expect(ctx.replies[0]).toContain(
       "Recovery gate eval: 2026-03-05T10:20:13Z",
     );
+  });
+
+  test("prefers explicit recovery gate over persisted rollout hints", async () => {
+    const bot = new MockBot();
+    const api = createApiMock({
+      async getQuestDiagnostics() {
+        return {
+          quest_runtime: {
+            cadence_mode: "active_risk",
+            risk_lock_active: false,
+          },
+          chat_runtime: {
+            entry_gate_reason_current:
+              "drawdown 37.28% in recovery band: waiting for clean cycles before micro-entry",
+            entry_gate_type: "recovery_gate",
+            rollout_stage_current: "shadow",
+            rollout_status_current: "active",
+            rollout_gate_reason_current:
+              "strategy_not_live (stage: shadow, status: active)",
+          },
+        };
+      },
+    });
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(667, 778);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain(
+      "Entry blocker: recovery_gate (drawdown 37.28% in recovery band: waiting for clean cycles before micro-entry)",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Rollout gate: strategy_not_live (stage: shadow, status: active)",
+    );
+    expect(ctx.replies[0]).not.toContain("Entry blocker: rollout_gate");
+  });
+
+  test("renders rollout gate without relying on attempt block code", async () => {
+    const bot = new MockBot();
+    const api = createApiMock({
+      async getUserByChatId() {
+        return {
+          user: {
+            id: "user-4",
+            subscription_tier: "pro",
+            created_at: "2026-02-20T10:00:00Z",
+          },
+        };
+      },
+      async getQuestDiagnostics() {
+        return {
+          quest_runtime: {
+            cadence_mode: "active_risk",
+            risk_lock_active: false,
+          },
+          chat_runtime: {
+            candidate_viable_count: 2,
+            rollout_stage_current: "shadow",
+            rollout_status_current: "active",
+            rollout_gate_reason_current:
+              "strategy_not_live (stage: shadow, status: active)",
+          },
+        };
+      },
+    });
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(777, 888);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain(
+      "Entry blocker: rollout_gate (strategy_not_live (stage: shadow, status: active))",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Rollout gate: strategy_not_live (stage: shadow, status: active)",
+    );
+  });
+
+  test("renders rollout gate when viable count is zero", async () => {
+    const bot = new MockBot();
+    const api = createApiMock({
+      async getQuestDiagnostics() {
+        return {
+          quest_runtime: {
+            cadence_mode: "active_risk",
+            risk_lock_active: false,
+          },
+          chat_runtime: {
+            candidate_viable_count: 0,
+            entry_attempt_block_reason: "rollout_shadow_block",
+            rollout_stage_current: "shadow",
+            rollout_status_current: "active",
+            rollout_gate_reason_current:
+              "strategy_not_live (stage: shadow, status: active)",
+          },
+        };
+      },
+    });
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(778, 889);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain(
+      "Entry blocker: rollout_gate (strategy_not_live (stage: shadow, status: active))",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Entry attempt block: rollout_shadow_block",
+    );
+    expect(ctx.replies[0]).not.toContain("Entry blocker: none");
   });
 });
