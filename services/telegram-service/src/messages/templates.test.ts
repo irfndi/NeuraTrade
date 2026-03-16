@@ -24,7 +24,7 @@ describe("message templates", () => {
     });
 
     expect(output).toBe(
-      "🤖 ACTION: BUY\n" +
+      "🤖 Action: BUY\n" +
         "Time: 2026-02-12T03:00:00Z\n" +
         "Asset: BTC/USDT\n" +
         "Exchange: Binance\n" +
@@ -49,10 +49,12 @@ describe("message templates", () => {
     });
 
     expect(output).toBe(
-      "📋 Quest: Volume Sprint\n" +
+      "📋 Quest Progress\n" +
+        "\n" +
+        "Volume Sprint\n" +
         "ID: q-1\n" +
         "Progress: 3/8 (38%)\n" +
-        "Time Remaining: 2h 10m",
+        "Time remaining: 2h 10m",
     );
   });
 
@@ -62,7 +64,7 @@ describe("message templates", () => {
       phase: "Growth",
     });
 
-    expect(output).toBe("🎯 Milestone Reached: $500\nPhase: Growth");
+    expect(output).toBe("🎯 Fund Milestone Reached\n\nAmount: $500\nPhase: Growth");
   });
 
   test("formats risk event with sorted detail keys", () => {
@@ -79,7 +81,9 @@ describe("message templates", () => {
     });
 
     expect(output).toBe(
-      "🚨 CRITICAL: kill_switch\n" +
+      "🚨 CRITICAL\n" +
+        "\n" +
+        "Type: kill_switch\n" +
         "\n" +
         "All positions were closed automatically.\n" +
         "\n" +
@@ -101,7 +105,9 @@ describe("message templates", () => {
     });
 
     expect(output).toBe(
-      "📊 Performance Summary (24h)\n" +
+      "📊 Performance Summary\n" +
+        "\n" +
+        "Timeframe: 24h\n" +
         "PnL: +$127.80\n" +
         "Sharpe: 1.42\n" +
         "Trades: 16",
@@ -133,8 +139,10 @@ describe("message templates", () => {
     });
 
     expect(output).toBe(
-      "⚠️ Doctor: WARNING\n" +
-        "Checked At: 2026-02-12T03:10:00Z\n" +
+      "⚠️ Doctor\n" +
+        "\n" +
+        "Status: WARNING\n" +
+        "Checked at: 2026-02-12T03:10:00Z\n" +
         "Summary: One subsystem degraded\n" +
         "\n" +
         "Checks:\n" +
