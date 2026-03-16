@@ -50,6 +50,7 @@ type IntegratedQuestHandlers struct {
 	opModeService        *OperationalModeService
 	autonomyStore        *AutonomousRolloutStore
 	autonomyCoordinator  *ScalpingAutonomyCoordinator
+	shadowCoordinator    *ShadowEvaluationCoordinator
 	stalePositionMu      sync.Mutex
 	stalePositionWindow  map[string]time.Time
 	tradeJournalMu       sync.Mutex
@@ -300,8 +301,28 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 		h.orderExecutor,
 		h.tradeMemory,
 	)
+	if h.shadowCoordinator != nil {
+		h.aiScalpingService.SetShadowEvaluationCoordinator(h.shadowCoordinator)
+	}
 	h.configureScalpingAutonomy()
 	log.Printf("[SCALPING] AI-driven scalping service initialized")
+}
+
+func (h *IntegratedQuestHandlers) SetShadowEvaluationCoordinator(coordinator *ShadowEvaluationCoordinator) {
+	if h == nil {
+		return
+	}
+	h.shadowCoordinator = coordinator
+	if h.aiScalpingService != nil {
+		h.aiScalpingService.SetShadowEvaluationCoordinator(coordinator)
+	}
+}
+
+func (h *IntegratedQuestHandlers) ShadowEvaluationCoordinator() *ShadowEvaluationCoordinator {
+	if h == nil {
+		return nil
+	}
+	return h.shadowCoordinator
 }
 
 func (h *IntegratedQuestHandlers) configureScalpingAutonomy() {

@@ -86,6 +86,15 @@ type llmProviderNodeConfig struct {
 	ModelOverride string
 }
 
+type routeNoopServiceLogger struct{}
+
+func (routeNoopServiceLogger) WithFields(_ map[string]interface{}) services.Logger {
+	return routeNoopServiceLogger{}
+}
+func (routeNoopServiceLogger) Info(_ string)  {}
+func (routeNoopServiceLogger) Warn(_ string)  {}
+func (routeNoopServiceLogger) Error(_ string) {}
+
 func parseAIProviderChain(primary string) []string {
 	primary = strings.ToLower(strings.TrimSpace(primary))
 	if primary == "" {
@@ -704,6 +713,19 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 	}
 
+	var shadowRecorder *services.PaperTradeRecorder
+	if db != nil {
+		shadowRecorder = services.NewPaperTradeRecorder(db, routeNoopServiceLogger{})
+	}
+	shadowCoordinator := services.NewShadowEvaluationCoordinator(
+		db,
+		nil,
+		nil,
+		shadowRecorder,
+		nil,
+	)
+	integratedHandlers.SetShadowEvaluationCoordinator(shadowCoordinator)
+
 	if sqlDB != nil {
 		tradeMemory, err := services.NewTradeMemoryWithConfig(
 			sqlDB,
@@ -975,6 +997,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	agentControlHandler := handlers.NewAgentControlHandler(integratedHandlers.AutonomyCoordinator())
+	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())
 
 	// API v1 routes with telemetry
 	v1 := router.Group("/api/v1")
@@ -1122,6 +1145,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			agent.POST("/kill-switch", agentControlHandler.EngageKillSwitch)
 			agent.POST("/cancel-all-orders", agentControlHandler.CancelAllOrders)
 			agent.POST("/strategy-mode", agentControlHandler.SetStrategyMode)
+		}
+
+		scalpingShadow := v1.Group("/scalping/shadow")
+		scalpingShadow.Use(adminMiddleware.RequireAdminAuth())
+		{
+			scalpingShadow.GET("/variants", shadowHandler.ListVariants)
+			scalpingShadow.GET("/variants/:id/diagnostics", shadowHandler.VariantDiagnostics)
+			scalpingShadow.GET("/comparison", shadowHandler.Comparison)
+			scalpingShadow.POST("/variants", shadowHandler.CreateVariant)
+			scalpingShadow.DELETE("/variants/:id", shadowHandler.DeleteVariant)
 		}
 
 		adminRisk := v1.Group("/admin/risk")
