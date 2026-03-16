@@ -254,4 +254,82 @@ describe("Status command", () => {
       "Recovery gate eval: 2026-03-05T10:20:13Z",
     );
   });
+
+  test("renders rollout gate without relying on attempt block code", async () => {
+    const bot = new MockBot();
+    const api = {
+      async getUserByChatId() {
+        return {
+          user: {
+            id: "user-4",
+            subscription_tier: "pro",
+            created_at: "2026-02-20T10:00:00Z",
+          },
+        };
+      },
+      async getNotificationPreference() {
+        return { enabled: true };
+      },
+      async getDoctor() {
+        return {
+          overall_status: "healthy",
+          checked_at: "2026-02-26T07:00:00Z",
+          checks: [
+            { name: "autonomous-mode", status: "healthy" },
+            { name: "exchange-connection", status: "healthy" },
+          ],
+        };
+      },
+      async getTradingMode() {
+        return {
+          mode: "dry",
+          confirmations: 0,
+          required_confirmations: 2,
+        };
+      },
+      async getPortfolio() {
+        return {
+          total_equity: "46.93",
+          exposure: "0.00",
+          positions: [],
+        };
+      },
+      async getAIStatus() {
+        return {
+          selected_model: "",
+          provider: "",
+          daily_budget_exceeded: false,
+        };
+      },
+      async getLogs() {
+        return { logs: [] };
+      },
+      async getQuestDiagnostics() {
+        return {
+          quest_runtime: {
+            cadence_mode: "active_risk",
+            risk_lock_active: false,
+          },
+          chat_runtime: {
+            candidate_viable_count: 2,
+            rollout_stage_current: "shadow",
+            rollout_status_current: "active",
+            rollout_gate_reason_current:
+              "strategy_not_live (stage: shadow, status: active)",
+          },
+        };
+      },
+    };
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(777, 888);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain(
+      "Entry blocker: rollout_gate (strategy_not_live (stage: shadow, status: active))",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Rollout gate: strategy_not_live (stage: shadow, status: active)",
+    );
+  });
 });
