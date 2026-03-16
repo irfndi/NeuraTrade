@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ type AutonomousHandler struct {
 	configuredExchanges []string
 	reconciler          *services.ExchangePositionReconciler
 	lifecycleStore      *services.TradingLifecycleStore
+	telemetryStore      *services.ScalpingTelemetryStore
 }
 
 // NewAutonomousHandler creates a new autonomous handler
@@ -49,6 +51,10 @@ func NewAutonomousHandlerWithReconciler(questEngine *services.QuestEngine, portf
 
 func (h *AutonomousHandler) SetLifecycleStore(store *services.TradingLifecycleStore) {
 	h.lifecycleStore = store
+}
+
+func (h *AutonomousHandler) SetTelemetryStore(store *services.ScalpingTelemetryStore) {
+	h.telemetryStore = store
 }
 
 // BeginRequest represents the request body for /begin
@@ -527,6 +533,96 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
+	chatID := c.Query("chat_id")
+	if chatID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -7)
+	if sinceStr := strings.TrimSpace(c.Query("since")); sinceStr != "" {
+		if parsed, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			since = parsed.UTC()
+		} else if parsed, err := time.Parse("2006-01-02", sinceStr); err == nil {
+			since = parsed.UTC()
+		}
+	}
+
+	bucketMinutes := 60
+	if bm, err := strconv.Atoi(c.DefaultQuery("bucket_minutes", "60")); err == nil && bm > 0 {
+		bucketMinutes = bm
+	}
+
+	if h.telemetryStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "telemetry store not available"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	histogram, err := h.telemetryStore.GetRejectionHistogram(ctx, chatID, since)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load rejection histogram: " + err.Error()})
+		return
+	}
+
+	gateBlocks, err := h.telemetryStore.GetGateBlockSummary(ctx, chatID, since)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load gate block summary: " + err.Error()})
+		return
+	}
+
+	regimeOutcomes, err := h.telemetryStore.GetRegimeOutcomeCorrelation(ctx, chatID, since)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load regime outcomes: " + err.Error()})
+		return
+	}
+
+	policyImpact, err := h.telemetryStore.GetPolicyAdjustmentImpact(ctx, chatID, since)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load policy adjustment impact: " + err.Error()})
+		return
+	}
+
+	winRateTrend, err := h.telemetryStore.GetCycleWinRateTrend(ctx, chatID, since, bucketMinutes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load win rate trend: " + err.Error()})
+		return
+	}
+
+	totalCycles := 0
+	totalWins := 0
+	executedCycles := 0
+	for _, ro := range regimeOutcomes {
+		totalCycles += ro.Count
+		totalWins += int(float64(ro.Count) * ro.WinRate)
+	}
+	for _, gb := range gateBlocks {
+		executedCycles += gb.TotalTrades
+	}
+
+	overallWinRate := 0.0
+	if totalCycles > 0 {
+		overallWinRate = float64(totalWins) / float64(totalCycles)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"rejection_histogram":      histogram,
+		"gate_block_summary":       gateBlocks,
+		"regime_outcomes":          regimeOutcomes,
+		"policy_adjustment_impact": policyImpact,
+		"win_rate_trend":           winRateTrend,
+		"metadata": gin.H{
+			"total_cycles":    totalCycles,
+			"executed_cycles": executedCycles,
+			"win_rate":        overallWinRate,
+			"period_start":    since.Format(time.RFC3339),
+			"period_end":      time.Now().UTC().Format(time.RFC3339),
+		},
+	})
 }
 
 func heartbeatDiagnostics(heartbeat *services.TradingHeartbeat) gin.H {
