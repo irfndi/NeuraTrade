@@ -412,8 +412,7 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		}
 	}
 
-	risk := decimal.Zero
-	reward := decimal.Zero
+	var risk, reward decimal.Decimal
 	if decision.Action == "buy" {
 		risk = entryPrice.Sub(*stopLoss)
 		reward = takeProfit.Sub(entryPrice)
@@ -460,7 +459,7 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		exitPrice = exitPrice.Mul(one.Add(slippage))
 	}
 
-	grossPnL := decimal.Zero
+	var grossPnL decimal.Decimal
 	if decision.Action == "buy" {
 		grossPnL = exitPrice.Sub(entryPrice).Mul(quantity)
 	} else {
