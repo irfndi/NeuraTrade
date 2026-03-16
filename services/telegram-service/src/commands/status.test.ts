@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Bot } from "grammy";
+import type { QuestDiagnosticsResponse } from "../api/types";
 import { registerStatusCommand } from "./status";
 
 type CommandHandler = (ctx: MockContext) => Promise<void> | void;
@@ -60,7 +61,7 @@ interface StatusApiMock {
       message?: string;
     }>;
   }>;
-  getQuestDiagnostics?(chatId: string): Promise<Record<string, unknown>>;
+  getQuestDiagnostics(chatId: string): Promise<QuestDiagnosticsResponse>;
 }
 
 function createContext(
@@ -138,7 +139,10 @@ function createApiMock(overrides: Partial<StatusApiMock> = {}): StatusApiMock {
       return { logs: [] };
     },
     async getQuestDiagnostics() {
-      throw new Error("quest diagnostics unavailable");
+      return {
+        quest_runtime: {},
+        chat_runtime: {},
+      };
     },
     ...overrides,
   };
@@ -251,6 +255,9 @@ describe("Status command", () => {
       },
       async getLogs() {
         throw new Error("logs unavailable");
+      },
+      async getQuestDiagnostics() {
+        throw new Error("quest diagnostics unavailable");
       },
     });
 
