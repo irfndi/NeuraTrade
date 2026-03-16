@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2207,6 +2208,62 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 				"Reason 7",
 			},
 		},
+		{
+			name: "no key factors header when reasons empty",
+			reasoning: AIReasoningNotification{
+				DecisionType: "market_analysis",
+				Summary:      "No extra factors available",
+				Confidence:   0.51,
+				Reasons:      nil,
+				Action:       "Hold",
+			},
+			contains: []string{
+				"No extra factors available",
+				"Recommended Action",
+			},
+			notContains: []string{
+				"**Key Factors:**",
+			},
+		},
+		{
+			name: "truncates key factors safely and preserves action",
+			reasoning: AIReasoningNotification{
+				DecisionType: "trade_entry",
+				Summary:      strings.Repeat("summary ", 240),
+				Confidence:   0.82,
+				Reasons: func() []string {
+					reasons := make([]string, 20)
+					for i := 0; i < 20; i++ {
+						reasons[i] = fmt.Sprintf("Factor %d %s", i+1, strings.Repeat("detail ", 90))
+					}
+					return reasons
+				}(),
+				Action: "Execute with tight risk controls",
+			},
+			contains: []string{
+				"**Recommended Action:** Execute with tight risk controls",
+				"... and",
+			},
+			notContains: []string{
+				"Factor 20",
+			},
+		},
+		{
+			name: "runtime degraded confidence path",
+			reasoning: AIReasoningNotification{
+				DecisionType:    "market_analysis",
+				Summary:         "Model runtime fallback activated",
+				ConfidenceKnown: false,
+				ReasonCategory:  "execution_unavailable",
+				Reasons:         []string{"Runtime unavailable"},
+			},
+			contains: []string{
+				"**Confidence:** ⚪ N/A (runtime-degraded)",
+			},
+			notContains: []string{
+				"0%",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2222,6 +2279,21 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 			}
 		})
 	}
+
+	message := ns.formatAIReasoningMessage(AIReasoningNotification{
+		DecisionType: "trade_entry",
+		Summary:      strings.Repeat("summary ", 260),
+		Confidence:   0.80,
+		Reasons: func() []string {
+			reasons := make([]string, 25)
+			for i := 0; i < 25; i++ {
+				reasons[i] = fmt.Sprintf("Long factor %d %s", i+1, strings.Repeat("reason ", 120))
+			}
+			return reasons
+		}(),
+		Action: "Proceed cautiously",
+	})
+	assert.LessOrEqual(t, telegramMessageUnits(message), telegramMaxMessageUnits)
 }
 
 // =============================================================================
