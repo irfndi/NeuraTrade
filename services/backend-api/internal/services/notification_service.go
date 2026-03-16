@@ -151,10 +151,11 @@ func (ns *NotificationService) sendTelegramMessageWithResult(ctx context.Context
 		}
 	}
 
+	// Send as plain text - messages are formatted without Markdown to avoid parse errors
+	// from special characters in interpolated values (underscores, asterisks, etc.)
 	payload := map[string]interface{}{
-		"chatId":    fmt.Sprintf("%d", chatID),
-		"text":      text,
-		"parseMode": "Markdown",
+		"chatId": fmt.Sprintf("%d", chatID),
+		"text":   text,
 	}
 
 	jsonData, err := json.Marshal(payload)

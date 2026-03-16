@@ -72,7 +72,7 @@ func TestNotificationService_formatArbitrageMessage(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(opportunities)
-	assert.Contains(t, message, "🚀 *True Arbitrage Opportunities*")
+	assert.Contains(t, message, "🚀 True Arbitrage Opportunities")
 	assert.Contains(t, message, "BTC/USDT")
 	assert.Contains(t, message, "1.00%")
 	assert.Contains(t, message, "binance")
@@ -92,7 +92,7 @@ func TestNotificationService_formatArbitrageMessage(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(technicalOpps)
-	assert.Contains(t, message, "📊 *Technical Analysis Signals*")
+	assert.Contains(t, message, "📊 Technical Analysis Signals")
 	assert.Contains(t, message, "ETH/USDT")
 
 	// Test with AI-generated opportunity
@@ -109,7 +109,7 @@ func TestNotificationService_formatArbitrageMessage(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(aiOpps)
-	assert.Contains(t, message, "🤖 *AI-Generated Opportunities*")
+	assert.Contains(t, message, "🤖 AI-Generated Opportunities")
 	assert.Contains(t, message, "ADA/USDT")
 
 	// Test with more than 3 opportunities
@@ -237,7 +237,7 @@ func TestNotificationService_formatArbitrageMessage_EdgeCases(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(emptyOpp)
-	assert.Contains(t, message, "🚨 *Arbitrage Alert!*") // Default header
+	assert.Contains(t, message, "🚨 Arbitrage Alert!") // Default header
 	assert.Contains(t, message, "Found 1 profitable opportunities")
 
 	// Test with unknown opportunity type
@@ -254,7 +254,7 @@ func TestNotificationService_formatArbitrageMessage_EdgeCases(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(unknownOpp)
-	assert.Contains(t, message, "🚨 *Arbitrage Alert!*") // Default header for unknown type
+	assert.Contains(t, message, "🚨 Arbitrage Alert!") // Default header for unknown type
 	assert.Contains(t, message, "TEST/USDT")
 }
 
@@ -453,7 +453,7 @@ func TestNotificationService_formatTechnicalSignalMessage(t *testing.T) {
 	}
 
 	message = ns.formatTechnicalSignalMessage(signals)
-	assert.Contains(t, message, "📊 *Technical Analysis Signals*")
+	assert.Contains(t, message, "📊 Technical Analysis Signals")
 	assert.Contains(t, message, "BTC/USDT")
 	assert.Contains(t, message, "RSI oversold")
 	assert.Contains(t, message, "85.0%")
@@ -1237,11 +1237,11 @@ func TestNotificationService_formatArbitrageMessage_AllTypes(t *testing.T) {
 		oppType        string
 		expectedHeader string
 	}{
-		{"arbitrage", "🚀 *True Arbitrage Opportunities*"},
-		{"technical", "📊 *Technical Analysis Signals*"},
-		{"ai_generated", "🤖 *AI-Generated Opportunities*"},
-		{"", "🚨 *Arbitrage Alert!*"},
-		{"unknown", "🚨 *Arbitrage Alert!*"},
+		{"arbitrage", "🚀 True Arbitrage Opportunities"},
+		{"technical", "📊 Technical Analysis Signals"},
+		{"ai_generated", "🤖 AI-Generated Opportunities"},
+		{"", "🚨 Arbitrage Alert!"},
+		{"unknown", "🚨 Arbitrage Alert!"},
 	}
 
 	for _, tc := range types {
@@ -1370,7 +1370,7 @@ func TestNotificationService_TechnicalSignalMessage_AllScenarios(t *testing.T) {
 			name:    "Single buy signal",
 			signals: []TechnicalSignalNotification{{Symbol: "BTC/USDT", Action: "buy", SignalText: "RSI oversold", Confidence: 0.85}},
 			expectedParts: []string{
-				"📊 *Technical Analysis Signals*",
+				"📊 Technical Analysis Signals",
 				"BTC/USDT",
 				"RSI oversold",
 				"85.0%",
@@ -1380,7 +1380,7 @@ func TestNotificationService_TechnicalSignalMessage_AllScenarios(t *testing.T) {
 			name:    "Sell signal with targets",
 			signals: []TechnicalSignalNotification{{Symbol: "ETH/USDT", Action: "sell", SignalText: "MACD crossover", Confidence: 0.75, Targets: []Target{{Price: 3000.0, Profit: 5.0}}}},
 			expectedParts: []string{
-				"📊 *Technical Analysis Signals*",
+				"📊 Technical Analysis Signals",
 				"ETH/USDT",
 				"MACD crossover",
 			},
@@ -1389,7 +1389,7 @@ func TestNotificationService_TechnicalSignalMessage_AllScenarios(t *testing.T) {
 			name:    "Signal with stop loss",
 			signals: []TechnicalSignalNotification{{Symbol: "ADA/USDT", Action: "buy", SignalText: "Support bounce", Confidence: 0.65, StopLoss: StopLoss{Price: 0.45, Risk: 2.0}}},
 			expectedParts: []string{
-				"📊 *Technical Analysis Signals*",
+				"📊 Technical Analysis Signals",
 				"ADA/USDT",
 			},
 		},
