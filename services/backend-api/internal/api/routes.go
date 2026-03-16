@@ -1161,12 +1161,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			budget.GET("/check", budgetHandler.CheckBudget)
 		}
 
-		backtestGroup := v1.Group("/backtest")
-		scalpingBacktest := backtestGroup.Group("/scalping")
-		scalpingBacktest.POST("/run", scalpingBacktestHandler.RunScalpingBacktest)
-		scalpingBacktest.GET("/:run_id", scalpingBacktestHandler.GetScalpingBacktest)
-		scalpingBacktest.GET("/", scalpingBacktestHandler.ListScalpingBacktests)
-		scalpingBacktest.POST("/compare", scalpingBacktestHandler.CompareScalpingBacktests)
+		backtest := v1.Group("/backtest")
+		backtest.Use(authMiddleware.RequireAuth())
+		{
+			scalpingBacktest := backtest.Group("/scalping")
+			scalpingBacktest.POST("/run", scalpingBacktestHandler.RunScalpingBacktest)
+			scalpingBacktest.GET("/:run_id", scalpingBacktestHandler.GetScalpingBacktest)
+			scalpingBacktest.GET("/", scalpingBacktestHandler.ListScalpingBacktests)
+			scalpingBacktest.POST("/compare", scalpingBacktestHandler.CompareScalpingBacktests)
+		}
 
 		// AI model routes
 		ai := v1.Group("/ai")

@@ -133,14 +133,6 @@ type compareScalpingBacktestsResponse struct {
 	BestRunID string                        `json:"best_run_id,omitempty"`
 }
 
-type scalpingBacktestEngine struct {
-	db DBPool
-}
-
-func newScalpingBacktestEngine(db DBPool) *scalpingBacktestEngine {
-	return &scalpingBacktestEngine{db: db}
-}
-
 func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 	if h.db == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database is not available"})
@@ -153,7 +145,7 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 		return
 	}
 
-	config, err := parseScalpingBacktestConfig(req)
+	svcConfig, err := parseToServiceConfig(req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -161,21 +153,24 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 
 	runID := uuid.NewString()
 	now := time.Now().UTC()
-	if err := h.insertBacktestRun(c.Request.Context(), runID, "running", config, ScalpingBacktestSummary{}, now, nil); err != nil {
+	apiConfig := serviceConfigToAPI(svcConfig)
+	emptySummary := ScalpingBacktestSummary{}
+	if err := h.insertBacktestRun(c.Request.Context(), runID, "running", apiConfig, emptySummary, now, nil); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initialize backtest run"})
 		return
 	}
 
-	engine := newScalpingBacktestEngine(h.db)
-	result, err := engine.Run(c.Request.Context(), config)
+	engine := services.NewScalpingBacktestEngine(h.db, svcConfig)
+	result, err := engine.Run(c.Request.Context())
 	if err != nil {
-		_ = h.updateBacktestRun(c.Request.Context(), runID, "failed", ScalpingBacktestSummary{}, time.Now().UTC())
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to run scalping backtest"})
+		_ = h.updateBacktestRun(c.Request.Context(), runID, "failed", emptySummary, time.Now().UTC())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to run scalping backtest: " + err.Error()})
 		return
 	}
 
-	if err := h.persistBacktestResult(c.Request.Context(), runID, config, result); err != nil {
-		_ = h.updateBacktestRun(c.Request.Context(), runID, "failed", ScalpingBacktestSummary{}, time.Now().UTC())
+	apiResult := serviceResultToAPI(result)
+	if err := h.persistBacktestResult(c.Request.Context(), runID, apiConfig, apiResult); err != nil {
+		_ = h.updateBacktestRun(c.Request.Context(), runID, "failed", emptySummary, time.Now().UTC())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist scalping backtest results"})
 		return
 	}
@@ -183,10 +178,10 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 	c.JSON(http.StatusOK, RunScalpingBacktestResponse{
 		RunID:       runID,
 		Status:      "completed",
-		Summary:     result.Summary,
-		Signals:     result.Signals,
-		Trades:      result.Trades,
-		GateSummary: result.GateSummary,
+		Summary:     apiResult.Summary,
+		Signals:     apiResult.Signals,
+		Trades:      apiResult.Trades,
+		GateSummary: apiResult.GateSummary,
 	})
 }
 
@@ -278,12 +273,12 @@ func (h *ScalpingBacktestHandler) CompareScalpingBacktests(c *gin.Context) {
 
 	pl := make([]string, 0, len(req.RunIDs))
 	args := make([]any, 0, len(req.RunIDs))
-	for i, id := range req.RunIDs {
+	for _, id := range req.RunIDs {
 		id = strings.TrimSpace(id)
 		if id == "" {
 			continue
 		}
-		pl = append(pl, fmt.Sprintf("$%d", i+1))
+		pl = append(pl, fmt.Sprintf("$%d", len(args)+1))
 		args = append(args, id)
 	}
 	if len(pl) < 2 {
@@ -324,270 +319,31 @@ func (h *ScalpingBacktestHandler) CompareScalpingBacktests(c *gin.Context) {
 			continue
 		}
 		runs = append(runs, run)
-
 		if pnl, parseErr := decimal.NewFromString(run.Summary.TotalPnL); parseErr == nil {
-			if bestRunID == "" || pnl.GreaterThan(bestPnL) {
-				bestRunID = run.RunID
+			if pnl.GreaterThan(bestPnL) {
 				bestPnL = pnl
+				bestRunID = id
 			}
 		}
 	}
 
-	c.JSON(http.StatusOK, compareScalpingBacktestsResponse{
-		Runs:      runs,
-		BestRunID: bestRunID,
-	})
+	c.JSON(http.StatusOK, compareScalpingBacktestsResponse{Runs: runs, BestRunID: bestRunID})
 }
 
-type scalpingBacktestResult struct {
-	Summary     ScalpingBacktestSummary
-	Signals     []ScalpingBacktestSignal
-	Trades      []ScalpingBacktestTrade
-	GateSummary []GateSummaryEntry
-}
-
-func (e *scalpingBacktestEngine) Run(ctx context.Context, config ScalpingBacktestConfig) (scalpingBacktestResult, error) {
-	if e.db == nil {
-		return scalpingBacktestResult{}, fmt.Errorf("database is not available")
-	}
-
-	symbols := append([]string(nil), config.Symbols...)
-	if len(symbols) == 0 {
-		rows, err := e.db.Query(ctx, `
-			SELECT DISTINCT symbol
-			FROM futures_arbitrage_opportunities
-			WHERE detected_at >= $1
-			  AND detected_at <= $2
-			  AND (LOWER(long_exchange) = LOWER($3) OR LOWER(short_exchange) = LOWER($3))
-			ORDER BY symbol
-			LIMIT 10
-		`, config.StartTime, config.EndTime, config.Exchange)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var symbol string
-				if scanErr := rows.Scan(&symbol); scanErr == nil {
-					symbol = strings.TrimSpace(strings.ToUpper(symbol))
-					if symbol != "" {
-						symbols = append(symbols, symbol)
-					}
-				}
-			}
-		}
-	}
-
-	if len(symbols) == 0 {
-		summary := ScalpingBacktestSummary{
-			TotalSignals:    0,
-			AcceptedSignals: 0,
-			RejectedSignals: 0,
-			TotalTrades:     0,
-			WinningTrades:   0,
-			LosingTrades:    0,
-			WinRate:         "0",
-			TotalPnL:        "0",
-			TotalPnLPct:     "0",
-			MaxDrawdownPct:  "0",
-		}
-		return scalpingBacktestResult{Summary: summary, Signals: nil, Trades: nil, GateSummary: []GateSummaryEntry{}}, nil
-	}
-
-	feeRate, _ := decimal.NewFromString(config.FeeRate)
-	initialCapital, _ := decimal.NewFromString(config.InitialCapital)
-	notional := initialCapital.Mul(decimal.NewFromFloat(0.05))
-	if notional.IsZero() {
-		notional = decimal.NewFromInt(100)
-	}
-
-	baseTime := config.StartTime
-	if baseTime.IsZero() {
-		baseTime = time.Now().UTC()
-	}
-
-	signals := make([]ScalpingBacktestSignal, 0, len(symbols))
-	trades := make([]ScalpingBacktestTrade, 0, len(symbols))
-
-	spreadGate := GateSummaryEntry{GateName: "spread", BreakdownBySymbol: map[string]int{}, BreakdownByRegime: map[string]int{}, TopRejectionReasons: []string{}}
-	confidenceGate := GateSummaryEntry{GateName: "confidence", BreakdownBySymbol: map[string]int{}, BreakdownByRegime: map[string]int{}, TopRejectionReasons: []string{}}
-
-	totalPnL := decimal.Zero
-	winning := 0
-	losing := 0
-	accepted := 0
-	rejected := 0
-
-	for idx, symbol := range symbols {
-		timestamp := baseTime.Add(time.Duration(idx) * 15 * time.Minute)
-		if timestamp.After(config.EndTime) {
-			timestamp = config.EndTime
-		}
-
-		spread := 0.04 + float64(idx%5)*0.02
-		confidence := 0.55 + float64((idx+1)%5)*0.08
-		regime := "ranging"
-		volatility := "normal"
-		if idx%3 == 0 {
-			regime = "trending"
-		}
-		if idx%4 == 0 {
-			volatility = "high"
-		}
-
-		passesSpread := spread <= config.MaxBidAskSpreadPct
-		passesConfidence := confidence >= config.MinConfidence
-		funnelStage := "accepted"
-		rejectionReason := ""
-
-		if passesSpread {
-			spreadGate.PassCount++
-		} else {
-			spreadGate.RejectCount++
-			spreadGate.BreakdownBySymbol[symbol]++
-			spreadGate.BreakdownByRegime[regime]++
-			spreadGate.TopRejectionReasons = appendUnique(spreadGate.TopRejectionReasons, "spread_above_threshold")
-		}
-
-		if passesConfidence {
-			confidenceGate.PassCount++
-		} else {
-			confidenceGate.RejectCount++
-			confidenceGate.BreakdownBySymbol[symbol]++
-			confidenceGate.BreakdownByRegime[regime]++
-			confidenceGate.TopRejectionReasons = appendUnique(confidenceGate.TopRejectionReasons, "confidence_below_threshold")
-		}
-
-		if !passesSpread || !passesConfidence {
-			funnelStage = "rejected"
-			rejected++
-			if !passesSpread {
-				rejectionReason = "spread_above_threshold"
-			} else {
-				rejectionReason = "confidence_below_threshold"
-			}
-		} else {
-			accepted++
-		}
-
-		signalID := uuid.NewString()
-		signals = append(signals, ScalpingBacktestSignal{
-			SignalID:         signalID,
-			Timestamp:        timestamp,
-			Symbol:           symbol,
-			Exchange:         config.Exchange,
-			Regime:           regime,
-			RegimeVolatility: volatility,
-			FunnelStage:      funnelStage,
-			RejectionReason:  rejectionReason,
-			Signal: map[string]interface{}{
-				"confidence": confidence,
-				"side":       "buy",
-				"spread_pct": spread,
-			},
-			GateResults: map[string]interface{}{
-				"spread": map[string]interface{}{
-					"passed":       passesSpread,
-					"actual_value": spread,
-					"threshold":    config.MaxBidAskSpreadPct,
-				},
-				"confidence": map[string]interface{}{
-					"passed":       passesConfidence,
-					"actual_value": confidence,
-					"threshold":    config.MinConfidence,
-				},
-			},
-		})
-
-		if funnelStage != "accepted" {
-			continue
-		}
-
-		holdSeconds := 300 + (idx % 5 * 90)
-		exitTimestamp := timestamp.Add(time.Duration(holdSeconds) * time.Second)
-		entryPrice := decimal.NewFromFloat(100 + float64(idx))
-		returnPct := decimal.NewFromFloat(0.002 + float64((idx%4)-1)*0.001)
-		pnl := notional.Mul(returnPct)
-		fees := notional.Mul(feeRate)
-		netPnL := pnl.Sub(fees)
-		if netPnL.IsPositive() {
-			winning++
-		} else {
-			losing++
-		}
-		totalPnL = totalPnL.Add(netPnL)
-
-		exitPrice := entryPrice
-		if !notional.IsZero() {
-			priceMove := netPnL.Div(notional)
-			exitPrice = entryPrice.Mul(decimal.NewFromInt(1).Add(priceMove))
-		}
-
-		trade := ScalpingBacktestTrade{
-			TradeID:             uuid.NewString(),
-			SignalID:            signalID,
-			Symbol:              symbol,
-			Side:                "buy",
-			Size:                decimal.NewFromFloat(1).String(),
-			Notional:            notional.String(),
-			EntryPrice:          entryPrice.String(),
-			ExitPrice:           exitPrice.String(),
-			EntryTimestamp:      timestamp,
-			ExitTimestamp:       exitTimestamp,
-			PnL:                 netPnL.String(),
-			PnLPct:              returnPct.Mul(decimal.NewFromInt(100)).String(),
-			Fees:                fees.String(),
-			Outcome:             outcomeFromPnL(netPnL),
-			ExitReason:          "time_exit",
-			RegimeAtEntry:       regime,
-			RegimeAtExit:        regime,
-			HoldDurationSeconds: holdSeconds,
-		}
-		trades = append(trades, trade)
-	}
-
-	winRate := decimal.Zero
-	if len(trades) > 0 {
-		winRate = decimal.NewFromInt(int64(winning)).Div(decimal.NewFromInt(int64(len(trades)))).Mul(decimal.NewFromInt(100))
-	}
-	totalPnLPct := decimal.Zero
-	if initialCapital.GreaterThan(decimal.Zero) {
-		totalPnLPct = totalPnL.Div(initialCapital).Mul(decimal.NewFromInt(100))
-	}
-
-	result := scalpingBacktestResult{
-		Summary: ScalpingBacktestSummary{
-			TotalSignals:    len(signals),
-			AcceptedSignals: accepted,
-			RejectedSignals: rejected,
-			TotalTrades:     len(trades),
-			WinningTrades:   winning,
-			LosingTrades:    losing,
-			WinRate:         winRate.StringFixed(2),
-			TotalPnL:        totalPnL.String(),
-			TotalPnLPct:     totalPnLPct.StringFixed(4),
-			MaxDrawdownPct:  "0",
-		},
-		Signals:     signals,
-		Trades:      trades,
-		GateSummary: []GateSummaryEntry{spreadGate, confidenceGate},
-	}
-
-	return result, nil
-}
-
-func parseScalpingBacktestConfig(req RunScalpingBacktestRequest) (ScalpingBacktestConfig, error) {
+func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBacktestConfig, error) {
 	start, err := time.Parse(time.RFC3339, strings.TrimSpace(req.StartTime))
 	if err != nil {
-		return ScalpingBacktestConfig{}, fmt.Errorf("start_time must be RFC3339")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("start_time must be RFC3339")
 	}
 	end, err := time.Parse(time.RFC3339, strings.TrimSpace(req.EndTime))
 	if err != nil {
-		return ScalpingBacktestConfig{}, fmt.Errorf("end_time must be RFC3339")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("end_time must be RFC3339")
 	}
 	if !start.Before(end) {
-		return ScalpingBacktestConfig{}, fmt.Errorf("start_time must be before end_time")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("start_time must be before end_time")
 	}
 	if end.Sub(start) > 90*24*time.Hour {
-		return ScalpingBacktestConfig{}, fmt.Errorf("date range must not exceed 90 days")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("date range must not exceed 90 days")
 	}
 
 	initialCapitalRaw := strings.TrimSpace(req.InitialCapital)
@@ -596,10 +352,10 @@ func parseScalpingBacktestConfig(req RunScalpingBacktestRequest) (ScalpingBackte
 	}
 	initialCapital, err := decimal.NewFromString(initialCapitalRaw)
 	if err != nil {
-		return ScalpingBacktestConfig{}, fmt.Errorf("initial_capital must be a valid decimal string")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("initial_capital must be a valid decimal string")
 	}
 	if !initialCapital.GreaterThan(decimal.Zero) {
-		return ScalpingBacktestConfig{}, fmt.Errorf("initial_capital must be greater than zero")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("initial_capital must be greater than zero")
 	}
 
 	exchange := strings.TrimSpace(strings.ToLower(req.Exchange))
@@ -612,7 +368,7 @@ func parseScalpingBacktestConfig(req RunScalpingBacktestRequest) (ScalpingBackte
 		maxBidAskSpreadPct = *req.MaxBidAskSpreadPct
 	}
 	if maxBidAskSpreadPct <= 0 {
-		return ScalpingBacktestConfig{}, fmt.Errorf("max_bid_ask_spread_pct must be greater than zero")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("max_bid_ask_spread_pct must be greater than zero")
 	}
 
 	minConfidence := 0.60
@@ -620,7 +376,7 @@ func parseScalpingBacktestConfig(req RunScalpingBacktestRequest) (ScalpingBackte
 		minConfidence = *req.MinConfidence
 	}
 	if minConfidence < 0 || minConfidence > 1 {
-		return ScalpingBacktestConfig{}, fmt.Errorf("min_confidence must be between 0 and 1")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("min_confidence must be between 0 and 1")
 	}
 
 	feeRate := "0.001"
@@ -629,63 +385,160 @@ func parseScalpingBacktestConfig(req RunScalpingBacktestRequest) (ScalpingBackte
 	}
 	feeRateDecimal, err := decimal.NewFromString(feeRate)
 	if err != nil {
-		return ScalpingBacktestConfig{}, fmt.Errorf("fee_rate must be a valid decimal string")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("fee_rate must be a valid decimal string")
 	}
 	if feeRateDecimal.IsNegative() {
-		return ScalpingBacktestConfig{}, fmt.Errorf("fee_rate must be non-negative")
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("fee_rate must be non-negative")
 	}
 
 	symbols := normalizeSymbols(req.Symbols)
 
-	return ScalpingBacktestConfig{
+	return services.ScalpingBacktestConfig{
 		StartTime:          start.UTC(),
 		EndTime:            end.UTC(),
 		Symbols:            symbols,
 		Exchange:           exchange,
-		InitialCapital:     initialCapital.String(),
+		InitialCapital:     initialCapital,
 		MaxBidAskSpreadPct: maxBidAskSpreadPct,
 		MinConfidence:      minConfidence,
-		FeeRate:            feeRateDecimal.String(),
+		FeeRate:            feeRateDecimal,
+		SlippagePct:        decimal.NewFromFloat(defaultScalpingBacktestSlippage),
+		MaxCapitalPct:      defaultScalpingBacktestMaxCapitalPct,
+		DefaultHoldPeriod:  defaultScalpingBacktestHoldPeriod,
 	}, nil
 }
 
-func normalizeSymbols(symbols []string) []string {
-	if len(symbols) == 0 {
-		return nil
+func serviceConfigToAPI(cfg services.ScalpingBacktestConfig) ScalpingBacktestConfig {
+	return ScalpingBacktestConfig{
+		StartTime:          cfg.StartTime,
+		EndTime:            cfg.EndTime,
+		Symbols:            cfg.Symbols,
+		Exchange:           cfg.Exchange,
+		InitialCapital:     cfg.InitialCapital.String(),
+		MaxBidAskSpreadPct: cfg.MaxBidAskSpreadPct,
+		MinConfidence:      cfg.MinConfidence,
+		FeeRate:            cfg.FeeRate.String(),
 	}
-	seen := make(map[string]struct{}, len(symbols))
-	normalized := make([]string, 0, len(symbols))
-	for _, s := range symbols {
-		symbol := strings.TrimSpace(strings.ToUpper(s))
-		if symbol == "" {
-			continue
-		}
-		if _, exists := seen[symbol]; exists {
-			continue
-		}
-		seen[symbol] = struct{}{}
-		normalized = append(normalized, symbol)
-	}
-	return normalized
 }
 
-func appendUnique(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
+type apiBacktestResult struct {
+	Summary     ScalpingBacktestSummary
+	Signals     []ScalpingBacktestSignal
+	Trades      []ScalpingBacktestTrade
+	GateSummary []GateSummaryEntry
 }
 
-func outcomeFromPnL(pnl decimal.Decimal) string {
-	if pnl.IsPositive() {
-		return "win"
+func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResult {
+	summary := serviceSummaryToAPI(result.Summary)
+	signals := make([]ScalpingBacktestSignal, 0, len(result.Signals))
+	for i, s := range result.Signals {
+		signal := ScalpingBacktestSignal{
+			SignalID:        uuid.NewString(),
+			Timestamp:       s.Timestamp,
+			Symbol:          s.Symbol,
+			Exchange:        result.Config.Exchange,
+			Regime:          s.Regime,
+			FunnelStage:     s.FunnelStage,
+			RejectionReason: s.RejectionReason,
+			GateResults:     boolMapToInterfaceMap(s.GateResults),
+		}
+		signal.Signal = map[string]interface{}{
+			"symbol":    s.Symbol,
+			"timestamp": s.Timestamp.Format(time.RFC3339),
+		}
+		if i < len(result.Signals) {
+			signal.Exchange = result.Config.Exchange
+		}
+		signals = append(signals, signal)
 	}
-	if pnl.IsNegative() {
-		return "loss"
+
+	trades := make([]ScalpingBacktestTrade, 0, len(result.Trades))
+	for _, t := range result.Trades {
+		holdDuration := int(t.ExitTime.Sub(t.EntryTime).Seconds())
+		trade := ScalpingBacktestTrade{
+			TradeID:             uuid.NewString(),
+			Symbol:              t.Symbol,
+			Side:                t.Side,
+			Size:                t.Size.String(),
+			Notional:            t.Notional.String(),
+			EntryPrice:          t.EntryPrice.String(),
+			ExitPrice:           t.ExitPrice.String(),
+			EntryTimestamp:      t.EntryTime,
+			ExitTimestamp:       t.ExitTime,
+			PnL:                 t.PnL.String(),
+			PnLPct:              t.PnLPct.String(),
+			Fees:                t.Fees.String(),
+			Outcome:             t.Outcome,
+			ExitReason:          t.ExitReason,
+			RegimeAtEntry:       t.RegimeAtEntry,
+			RegimeAtExit:        t.RegimeAtExit,
+			HoldDurationSeconds: holdDuration,
+		}
+		trades = append(trades, trade)
 	}
-	return "breakeven"
+
+	gateSummary := make([]GateSummaryEntry, 0, len(result.GateSummary))
+	for _, g := range result.GateSummary {
+		reasons := make([]string, 0, len(g.TopRejectionReasons))
+		for _, r := range g.TopRejectionReasons {
+			reasons = append(reasons, r.Reason)
+		}
+		gateSummary = append(gateSummary, GateSummaryEntry{
+			GateName:            g.GateName,
+			PassCount:           g.PassCount,
+			RejectCount:         g.RejectCount,
+			TopRejectionReasons: reasons,
+			BreakdownBySymbol:   g.BreakdownBySymbol,
+			BreakdownByRegime:   g.BreakdownByRegime,
+		})
+	}
+
+	return apiBacktestResult{
+		Summary:     summary,
+		Signals:     signals,
+		Trades:      trades,
+		GateSummary: gateSummary,
+	}
+}
+
+func serviceSummaryToAPI(s services.ScalpingBacktestSummary) ScalpingBacktestSummary {
+	winRate := "0.00"
+	if !s.WinRate.IsZero() {
+		winRate = s.WinRate.StringFixed(2)
+	}
+	totalPnL := "0"
+	if !s.TotalPnL.IsZero() {
+		totalPnL = s.TotalPnL.String()
+	}
+	totalPnLPct := "0.0000"
+	if !s.TotalReturnPct.IsZero() {
+		totalPnLPct = s.TotalReturnPct.StringFixed(4)
+	}
+	maxDD := "0.0000"
+	if !s.MaxDrawdownPct.IsZero() {
+		maxDD = s.MaxDrawdownPct.StringFixed(4)
+	}
+
+	return ScalpingBacktestSummary{
+		TotalSignals:    s.TotalSignals,
+		AcceptedSignals: s.EligibleSignals - s.RejectedSignals,
+		RejectedSignals: s.RejectedSignals,
+		TotalTrades:     s.TotalTrades,
+		WinningTrades:   s.WinningTrades,
+		LosingTrades:    s.LosingTrades,
+		WinRate:         winRate,
+		TotalPnL:        totalPnL,
+		TotalPnLPct:     totalPnLPct,
+		MaxDrawdownPct:  maxDD,
+	}
+}
+
+func boolMapToInterfaceMap(m map[string]bool) map[string]interface{} {
+	result := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		result[k] = map[string]interface{}{"passed": v}
+	}
+	return result
 }
 
 func (h *ScalpingBacktestHandler) insertBacktestRun(ctx context.Context, runID, status string, config ScalpingBacktestConfig, summary ScalpingBacktestSummary, createdAt time.Time, completedAt *time.Time) error {
@@ -720,7 +573,7 @@ func (h *ScalpingBacktestHandler) updateBacktestRun(ctx context.Context, runID, 
 	return err
 }
 
-func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, runID string, config ScalpingBacktestConfig, result scalpingBacktestResult) error {
+func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, runID string, config ScalpingBacktestConfig, result apiBacktestResult) error {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -905,3 +758,29 @@ func nullString(v string) any {
 	}
 	return v
 }
+
+func normalizeSymbols(symbols []string) []string {
+	if len(symbols) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(symbols))
+	normalized := make([]string, 0, len(symbols))
+	for _, s := range symbols {
+		symbol := strings.TrimSpace(strings.ToUpper(s))
+		if symbol == "" {
+			continue
+		}
+		if _, exists := seen[symbol]; exists {
+			continue
+		}
+		seen[symbol] = struct{}{}
+		normalized = append(normalized, symbol)
+	}
+	return normalized
+}
+
+const (
+	defaultScalpingBacktestSlippage      = 0.001
+	defaultScalpingBacktestHoldPeriod    = 5 * time.Minute
+	defaultScalpingBacktestMaxCapitalPct = 5.0
+)
