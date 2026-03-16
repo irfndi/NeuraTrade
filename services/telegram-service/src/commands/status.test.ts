@@ -49,7 +49,10 @@ interface StatusApiMock {
     provider: string;
     daily_budget_exceeded: boolean;
   }>;
-  getLogs(chatId: string, limit: number): Promise<{
+  getLogs(
+    chatId: string,
+    limit: number,
+  ): Promise<{
     logs: Array<{
       timestamp: string;
       level: string;
@@ -86,9 +89,7 @@ async function runCommand(
   await handler(ctx);
 }
 
-function createApiMock(
-  overrides: Partial<StatusApiMock> = {},
-): StatusApiMock {
+function createApiMock(overrides: Partial<StatusApiMock> = {}): StatusApiMock {
   return {
     async getUserByChatId() {
       return {

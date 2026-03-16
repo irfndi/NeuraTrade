@@ -356,10 +356,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           if (runtimeCircuitActive || entryGateType === "runtime_circuit") {
             return "runtime_circuit";
           }
-          if (
-            entryGateType === "rollout_gate" ||
-            rolloutGateReasonCurrent
-          ) {
+          if (entryGateType === "rollout_gate" || rolloutGateReasonCurrent) {
             return "rollout_gate";
           }
           if (entryGateType === "recovery_gate") {
