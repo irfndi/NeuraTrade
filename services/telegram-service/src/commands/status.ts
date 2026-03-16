@@ -357,9 +357,8 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
             return "runtime_circuit";
           }
           if (
-            rolloutGateReasonCurrent &&
-            typeof candidateViableCount === "number" &&
-            candidateViableCount > 0
+            entryGateType === "rollout_gate" ||
+            rolloutGateReasonCurrent
           ) {
             return "rollout_gate";
           }
