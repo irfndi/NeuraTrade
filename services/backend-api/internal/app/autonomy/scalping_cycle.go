@@ -198,6 +198,7 @@ type CandidateFunnelSnapshot struct {
 	CandidateUniverseCount int                  `json:"candidate_universe_count"`
 	CandidateRankedCount   int                  `json:"candidate_ranked_count"`
 	CandidateViableCount   int                  `json:"candidate_viable_count"`
+	RejectionCounts        map[string]int       `json:"rejection_counts,omitempty"`
 	TopCandidateRejections []CandidateRejection `json:"top_candidate_rejections,omitempty"`
 }
 
@@ -358,6 +359,7 @@ func ResolveAccountTier(totalValue decimal.Decimal, cfg ScalpingPolicyConfig) st
 func BuildCandidateFunnel(signals []CandidateSignal, policy ScalpingCyclePolicy) CandidateFunnelSnapshot {
 	snapshot := CandidateFunnelSnapshot{
 		CandidateUniverseCount: len(signals),
+		RejectionCounts:        make(map[string]int),
 	}
 	if len(signals) == 0 {
 		return snapshot
@@ -378,6 +380,7 @@ func BuildCandidateFunnel(signals []CandidateSignal, policy ScalpingCyclePolicy)
 			snapshot.CandidateViableCount++
 			continue
 		}
+		snapshot.RejectionCounts[rejection.Reason]++
 		rejections = append(rejections, evaluatedCandidate{
 			rejection: rejection,
 			ranked:    ranked,

@@ -651,6 +651,9 @@ type AITradingDecision struct {
 	CandidateFunnelKnown            bool                                `json:"-"`
 	CandidateFunnel                 appautonomy.CandidateFunnelSnapshot `json:"-"`
 	ExecutionGate                   *appautonomy.ExecutionGateSnapshot  `json:"-"`
+	PreTradeRegime                  string                              `json:"-"`
+	PreTradeExpectancy              float64                             `json:"-"`
+	PreTradeExpectancySampleSize    int                                 `json:"-"`
 }
 
 type TradingPortfolio struct {
@@ -1197,6 +1200,9 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			BlockReason: gate.Reason,
 			BlockCode:   classifyPreTradeBlockCode(gate.Reason),
 		}
+		decision.PreTradeRegime = gate.Regime
+		decision.PreTradeExpectancy = gate.NetExpectancy
+		decision.PreTradeExpectancySampleSize = gate.SampleSize
 		return decision, nil
 	}
 	if gate.CapitalMultiplier > 0 && gate.CapitalMultiplier < 1 {
@@ -1205,6 +1211,9 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			effectiveMaxCapital = 0.1
 		}
 	}
+	decision.PreTradeRegime = gate.Regime
+	decision.PreTradeExpectancy = gate.NetExpectancy
+	decision.PreTradeExpectancySampleSize = gate.SampleSize
 	log.Printf(
 		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d phase=%s risk_drawdown=%.4f",
 		effectiveMinConfidence,
