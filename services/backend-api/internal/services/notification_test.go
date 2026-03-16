@@ -2294,6 +2294,25 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 		Action: "Proceed cautiously",
 	})
 	assert.LessOrEqual(t, telegramMessageUnits(message), telegramMaxMessageUnits)
+
+	fallbackReasoning := AIReasoningNotification{
+		DecisionType: "trade_entry",
+		Summary:      strings.Repeat("summary ", 520),
+		Confidence:   0.80,
+		Reasons: func() []string {
+			reasons := make([]string, 20)
+			for i := 0; i < 20; i++ {
+				reasons[i] = fmt.Sprintf("Long factor %d %s", i+1, strings.Repeat("reason ", 180))
+			}
+			return reasons
+		}(),
+		Action: "Proceed cautiously",
+	}
+	expectedFallback := formatNotificationCodeBlockWithLimit(
+		buildAIReasoningMessageLines(fallbackReasoning, "", true, 0),
+		telegramMaxMessageUnits,
+	)
+	assert.Equal(t, expectedFallback, ns.formatAIReasoningMessage(fallbackReasoning))
 }
 
 // =============================================================================

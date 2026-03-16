@@ -254,6 +254,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 
 	reasonsToShow := len(reasoning.Reasons)
 	lines := buildAIReasoningMessageLines(reasoning, category, confidenceKnown, reasonsToShow)
+	mostCompactLines := lines
 
 	message := formatNotificationCodeBlock(lines)
 	if telegramMessageUnits(message) <= telegramMaxMessageUnits {
@@ -266,6 +267,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 
 	for reasonsToShow >= 0 {
 		candidateLines := buildAIReasoningMessageLines(reasoning, category, confidenceKnown, reasonsToShow)
+		mostCompactLines = candidateLines
 		message = formatNotificationCodeBlock(candidateLines)
 		if telegramMessageUnits(message) <= telegramMaxMessageUnits {
 			return message
@@ -274,7 +276,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		reasonsToShow--
 	}
 
-	return formatNotificationCodeBlockWithLimit(lines, telegramMaxMessageUnits)
+	return formatNotificationCodeBlockWithLimit(mostCompactLines, telegramMaxMessageUnits)
 }
 
 func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category string, confidenceKnown bool, maxReasons int) []string {
