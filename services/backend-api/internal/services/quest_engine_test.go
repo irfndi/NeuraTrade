@@ -971,6 +971,44 @@ func TestGetChatRuntimeDiagnostics_UsesLatestNonActiveGateFieldsWhenNoActiveScal
 	assert.Equal(t, "runtime_circuit", diag["entry_gate_type"])
 }
 
+func TestGetChatRuntimeDiagnostics_PrefersNewestExpectancyFields(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-older"] = &Quest{
+		ID:        "q-older",
+		Status:    QuestStatusPaused,
+		UpdatedAt: now.Add(-20 * time.Minute),
+		Metadata: map[string]string{
+			"chat_id":       "chat-expectancy",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"risk_expectancy":          0.11,
+			"risk_expectancy_gross":    0.15,
+			"risk_fee_drag_expectancy": 0.04,
+		},
+	}
+	engine.quests["q-newer"] = &Quest{
+		ID:        "q-newer",
+		Status:    QuestStatusPaused,
+		UpdatedAt: now,
+		Metadata: map[string]string{
+			"chat_id":       "chat-expectancy",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"risk_expectancy":          0.21,
+			"risk_expectancy_gross":    0.26,
+			"risk_fee_drag_expectancy": 0.05,
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-expectancy")
+	assert.Equal(t, 0.21, diag["risk_expectancy"])
+	assert.Equal(t, 0.26, diag["risk_expectancy_gross"])
+	assert.Equal(t, 0.05, diag["risk_fee_drag_expectancy"])
+}
+
 func TestQuestEngine_ExecuteQuestPersistsFinalLocalCheckpointSnapshot(t *testing.T) {
 	store := &recordingQuestStore{}
 	engine := NewQuestEngine(store)

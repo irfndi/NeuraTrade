@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -172,6 +173,73 @@ func TestEvaluateScalpingPolicy_MicroNoFillRecoveryOverridesWeakRecentWinRateTig
 	require.InDelta(t, config.MicroMinConfidenceFloor, policy.EffectiveMinConfidence, 0.0001)
 }
 
+func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyTwo(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.80,
+		BaseMaxCapitalPct: 5.0,
+	}, config)
+
+	require.Equal(t, AccountTierMicro, policy.AccountTier)
+	require.InDelta(t, 0.72, policy.EffectiveMinConfidence, 0.0001)
+	require.Contains(t, policy.PolicyAdjustments, "micro_confidence_cap")
+}
+
+func TestEvaluateScalpingPolicy_MicroRiskTighteningPreservesHigherConfidence(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+		PerformanceWindow: PerformanceWindowInput{
+			DecisiveTrades:     30,
+			DecisiveWinRatePct: 15,
+		},
+	}, config)
+
+	require.Equal(t, AccountTierMicro, policy.AccountTier)
+	require.InDelta(t, 0.78, policy.EffectiveMinConfidence, 0.0001)
+	require.NotContains(t, policy.PolicyAdjustments, "micro_confidence_cap")
+	require.Contains(t, policy.PolicyAdjustments, "critical_recent_win_rate")
+}
+
+func TestEvaluateScalpingPolicy_MicroRecoveryModesBypassConfidenceCap(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	microEntry := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+		PerformanceWindow: PerformanceWindowInput{
+			DecisiveTrades:     30,
+			DecisiveWinRatePct: 15,
+		},
+		RecoveryMode: RecoveryModeMicroEntry,
+	}, config)
+
+	require.Equal(t, AccountTierMicro, microEntry.AccountTier)
+	require.InDelta(t, 0.78, microEntry.EffectiveMinConfidence, 0.0001)
+	require.NotContains(t, microEntry.PolicyAdjustments, "micro_confidence_cap")
+
+	deriskOnly := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromFloat(46.93),
+		BaseMinConfidence: 0.65,
+		BaseMaxCapitalPct: 5.0,
+		PerformanceWindow: PerformanceWindowInput{
+			DecisiveTrades:     30,
+			DecisiveWinRatePct: 15,
+		},
+		RecoveryMode: RecoveryModeDeriskOnly,
+	}, config)
+
+	require.Equal(t, AccountTierMicro, deriskOnly.AccountTier)
+	require.InDelta(t, 0.85, deriskOnly.EffectiveMinConfidence, 0.0001)
+	require.NotContains(t, deriskOnly.PolicyAdjustments, "micro_confidence_cap")
+}
+
 func TestEvaluateScalpingPolicy_LossStreakAndNegativeExpectancyTightening(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 
@@ -279,11 +347,21 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			OrderBookImbalance: 0.02,
 			RangePosition24h:   40,
 		},
+		{
+			Symbol:             "BND/USDT",
+			Price:              decimal.NewFromFloat(1.0),
+			High24h:            decimal.NewFromFloat(1.1),
+			Low24h:             decimal.NewFromFloat(0.9),
+			Volume24h:          decimal.NewFromInt(1000000),
+			BidAskSpread:       0.22,
+			OrderBookImbalance: 0.02,
+			RangePosition24h:   40,
+		},
 	}, policy)
 
-	require.Equal(t, 3, snapshot.CandidateUniverseCount)
-	require.Equal(t, 3, snapshot.CandidateRankedCount)
-	require.Equal(t, 0, snapshot.CandidateViableCount)
+	require.Equal(t, 4, snapshot.CandidateUniverseCount)
+	require.Equal(t, 4, snapshot.CandidateRankedCount)
+	require.Equal(t, 1, snapshot.CandidateViableCount)
 	require.Len(t, snapshot.TopCandidateRejections, 3)
 	reasons := []string{
 		snapshot.TopCandidateRejections[0].Reason,
@@ -291,8 +369,16 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 		snapshot.TopCandidateRejections[2].Reason,
 	}
 	require.Contains(t, reasons, CandidateRejectSpreadTooWide)
-	require.Contains(t, reasons, CandidateRejectConfidenceBelowThreshold)
 	require.Contains(t, reasons, CandidateRejectMissingOrderbookSignal)
+
+	bndSeen := false
+	for _, rejection := range snapshot.TopCandidateRejections {
+		if rejection.Symbol == "BND/USDT" {
+			bndSeen = true
+			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
+		}
+	}
+	require.True(t, bndSeen)
 }
 
 func TestEvaluateCandidateSignal_RejectsInvalidMetrics(t *testing.T) {
@@ -360,6 +446,36 @@ func TestEvaluateCandidateSignal_RejectsInvalidMetrics(t *testing.T) {
 			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
 		})
 	}
+}
+
+func TestResolvePolicySpreadThreshold_ClampsDirectOverride(t *testing.T) {
+	assert.InDelta(t, 5.0, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: 99}), 0.000001)
+	assert.InDelta(t, 0.0001, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: 0.00001}), 0.000001)
+	assert.InDelta(t, DefaultScalpingMaxBidAskSpreadPct, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: math.NaN()}), 0.000001)
+}
+
+func TestDefaultScalpingPolicyConfig_SnapshotsEnvAtConstruction(t *testing.T) {
+	t.Setenv(NeuraScalpingMaxBidAskSpreadPctEnv, "0.31")
+	cfg := DefaultScalpingPolicyConfig()
+
+	t.Setenv(NeuraScalpingMaxBidAskSpreadPctEnv, "0.47")
+	normalized := cfg.Normalized()
+
+	assert.InDelta(t, 0.31, cfg.MaxBidAskSpreadPct, 0.000001)
+	assert.InDelta(t, 0.31, normalized.MaxBidAskSpreadPct, 0.000001)
+}
+
+func TestResolvePolicySpreadThreshold_InvalidPolicyReadsCurrentEnv(t *testing.T) {
+	t.Setenv(NeuraScalpingMaxBidAskSpreadPctEnv, "0.47")
+
+	assert.InDelta(t, 0.47, resolvePolicySpreadThreshold(ScalpingCyclePolicy{MaxBidAskSpreadPct: math.NaN()}), 0.000001)
+	assert.InDelta(t, 0.47, resolvePolicySpreadThreshold(ScalpingCyclePolicy{}), 0.000001)
+}
+
+func TestClampFloat_HandlesNaNAndInfinity(t *testing.T) {
+	assert.InDelta(t, 0.1, clampFloat(math.NaN(), 0.1, 0.9), 0.000001)
+	assert.InDelta(t, 0.1, clampFloat(math.Inf(-1), 0.1, 0.9), 0.000001)
+	assert.InDelta(t, 0.9, clampFloat(math.Inf(1), 0.1, 0.9), 0.000001)
 }
 
 func TestEvaluateProgressBlock_AfterTwoHoursWithoutAttempt(t *testing.T) {

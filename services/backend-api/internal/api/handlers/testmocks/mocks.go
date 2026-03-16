@@ -36,6 +36,83 @@ type MockRedisClient struct {
 	mock.Mock
 }
 
+type marketPriceModelAdapter struct {
+	data *models.MarketPrice
+}
+
+func (a *marketPriceModelAdapter) GetPrice() float64 {
+	if a == nil || a.data == nil {
+		return 0
+	}
+	v, _ := a.data.Price.Float64()
+	return v
+}
+
+func (a *marketPriceModelAdapter) GetVolume() float64 {
+	if a == nil || a.data == nil {
+		return 0
+	}
+	v, _ := a.data.Volume.Float64()
+	return v
+}
+
+func (a *marketPriceModelAdapter) GetTimestamp() time.Time {
+	if a == nil || a.data == nil {
+		return time.Time{}
+	}
+	return a.data.Timestamp
+}
+
+func (a *marketPriceModelAdapter) GetExchangeName() string {
+	if a == nil || a.data == nil {
+		return ""
+	}
+	return a.data.ExchangeName
+}
+
+func (a *marketPriceModelAdapter) GetSymbol() string {
+	if a == nil || a.data == nil {
+		return ""
+	}
+	return a.data.Symbol
+}
+
+func (a *marketPriceModelAdapter) GetBid() float64 {
+	if a == nil || a.data == nil {
+		return 0
+	}
+	v, _ := a.data.Bid.Float64()
+	return v
+}
+
+func (a *marketPriceModelAdapter) GetAsk() float64 {
+	if a == nil || a.data == nil {
+		return 0
+	}
+	v, _ := a.data.Ask.Float64()
+	return v
+}
+
+func (a *marketPriceModelAdapter) GetHigh() float64 {
+	if a == nil || a.data == nil {
+		return 0
+	}
+	v, _ := a.data.High24h.Float64()
+	return v
+}
+
+func (a *marketPriceModelAdapter) GetLow() float64 {
+	if a == nil || a.data == nil {
+		return 0
+	}
+	v, _ := a.data.Low24h.Float64()
+	return v
+}
+
+func (a *marketPriceModelAdapter) GetPriceChange24h() float64 {
+	return 0
+}
+
 func (m *MockRedisClient) Get(ctx context.Context, key string) *redis.StringCmd {
 	args := m.Called(ctx, key)
 	return args.Get(0).(*redis.StringCmd)
@@ -263,13 +340,13 @@ func (m *MockCCXTService) FetchMarketData(ctx context.Context, exchanges []strin
 	case []models.MarketPrice:
 		converted := make([]ccxt.MarketPriceInterface, len(v))
 		for i := range v {
-			converted[i] = &v[i]
+			converted[i] = &marketPriceModelAdapter{data: &v[i]}
 		}
 		return converted, args.Error(1)
 	case []*models.MarketPrice:
 		converted := make([]ccxt.MarketPriceInterface, len(v))
 		for i := range v {
-			converted[i] = v[i]
+			converted[i] = &marketPriceModelAdapter{data: v[i]}
 		}
 		return converted, args.Error(1)
 	default:
@@ -281,6 +358,9 @@ func (m *MockCCXTService) FetchSingleTicker(ctx context.Context, exchange, symbo
 	args := m.Called(ctx, exchange, symbol)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
+	}
+	if ticker, ok := args.Get(0).(*models.MarketPrice); ok {
+		return &marketPriceModelAdapter{data: ticker}, args.Error(1)
 	}
 	return args.Get(0).(ccxt.MarketPriceInterface), args.Error(1)
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,6 +66,107 @@ func TestAutonomousHandler_BuildLifecyclePerformanceSummary(t *testing.T) {
 	assert.NotEqual(t, "N/A", summary.Drawdown)
 	assert.Equal(t, 2, summary.Trades)
 	assert.Contains(t, summary.Note, "Exchange-reconciled")
+}
+
+func TestAutonomousHandler_BuildLifecyclePerformanceSummary_UsesNetReturnsForRiskMetrics(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "autonomous-lifecycle-performance-net-risk.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := services.NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	ctx := context.Background()
+	require.NoError(t, store.RecordClosedOrder(ctx, services.LifecycleCloseRecord{
+		OrderID:     "ord-net-win",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ADA/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(2),
+		EntryPrice:  decimal.NewFromFloat(1),
+		ExitPrice:   decimal.NewFromFloat(1.05),
+		RealizedPnL: decimal.NewFromFloat(0.10),
+		Fees:        decimal.NewFromFloat(0.01),
+		ClosedAt:    now.Add(-30 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, services.LifecycleCloseRecord{
+		OrderID:     "ord-fee-flipped-loss",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "DOGE/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(5),
+		EntryPrice:  decimal.NewFromFloat(0.2),
+		ExitPrice:   decimal.NewFromFloat(0.202),
+		RealizedPnL: decimal.NewFromFloat(0.01),
+		Fees:        decimal.NewFromFloat(0.03),
+		ClosedAt:    now.Add(-15 * time.Minute),
+	}))
+
+	handler := NewAutonomousHandler(nil, nil, nil)
+	handler.SetLifecycleStore(store)
+
+	netSeries, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	grossSeries, err := store.GetGrossRealizedReturnSeries(ctx, "chat-1", "", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+
+	netRisk := services.ComputeRiskAdjustedMetrics(netSeries)
+	grossRisk := services.ComputeRiskAdjustedMetrics(grossSeries)
+	require.NotEqual(t, formatRiskRatio(netRisk.Sharpe, netRisk.SampleSize), formatRiskRatio(grossRisk.Sharpe, grossRisk.SampleSize))
+
+	summary, ok := handler.buildLifecyclePerformanceSummary(ctx, "chat-1", "24h")
+	require.True(t, ok)
+	assert.Equal(t, formatRiskRatio(netRisk.Sharpe, netRisk.SampleSize), summary.Sharpe)
+	assert.Equal(t, formatRiskRatio(netRisk.Sortino, netRisk.SampleSize), summary.Sortino)
+	assert.Equal(t, formatDrawdown(netRisk.MaxDrawdown, netRisk.SampleSize), summary.Drawdown)
+}
+
+func TestAutonomousHandler_BuildLifecyclePerformanceSummary_NoVisibleTradesReturnsFalse(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "autonomous-lifecycle-performance-empty.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := services.NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	handler := NewAutonomousHandler(nil, nil, nil)
+	handler.SetLifecycleStore(store)
+
+	summary, ok := handler.buildLifecyclePerformanceSummary(context.Background(), "chat-1", "24h")
+	assert.False(t, ok)
+	assert.Equal(t, PerformanceSummaryResponse{}, summary)
+}
+
+func TestPerformanceResponses_OmitZeroTrades(t *testing.T) {
+	summaryPayload, err := json.Marshal(PerformanceSummaryResponse{
+		Timeframe: "24h",
+		PnL:       "0",
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, string(summaryPayload), "\"trades\"")
+
+	breakdownPayload, err := json.Marshal(PerformanceBreakdownResponse{
+		Timeframe: "24h",
+		Overall: PerformanceSummaryResponse{
+			Timeframe: "24h",
+			PnL:       "0",
+		},
+		Strategies: []StrategyPerformance{{
+			Strategy: "scalping",
+			PnL:      "0",
+		}},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, string(breakdownPayload), "\"trades\"")
 }
 
 func TestAutonomousHandler_EnrichPortfolioWithLifecycle(t *testing.T) {

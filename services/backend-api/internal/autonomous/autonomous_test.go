@@ -151,6 +151,15 @@ func TestStrategyProposalEngine_GenerateProposal(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:        "realistic scalping drawdown remains below risk threshold",
+			confidence:  0.72,
+			maxDrawdown: decimal.NewFromFloat(1.9),
+			params: map[string]any{
+				"position_size_percent": json.Number("12.7845"),
+			},
+			expectError: false,
+		},
+		{
 			name:        "low confidence",
 			confidence:  0.3,
 			maxDrawdown: decimal.NewFromFloat(5),
@@ -166,6 +175,14 @@ func TestStrategyProposalEngine_GenerateProposal(t *testing.T) {
 				"leverage":              int64(20),
 				"position_size_percent": decimal.NewFromFloat(100),
 			},
+			expectError: true,
+			expectedErr: ErrHighRisk,
+		},
+		{
+			name:        "elevated drawdown alone can exceed risk threshold",
+			confidence:  0.9,
+			maxDrawdown: decimal.NewFromFloat(20),
+			params:      map[string]any{},
 			expectError: true,
 			expectedErr: ErrHighRisk,
 		},

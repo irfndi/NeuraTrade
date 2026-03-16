@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/database"
@@ -243,4 +244,75 @@ func TestIntegratedQuestHandlersExecuteAIScalping_HoldsOnModeSyncFailure(t *test
 	assert.Equal(t, "hold", quest.Checkpoint["status"])
 	assert.Equal(t, "failed to synchronize scalping rollout mode", quest.Checkpoint["runtime_entry_gate_reason"])
 	assert.NotEmpty(t, quest.Checkpoint["autonomy_mode_sync_error"])
+}
+
+func TestIntegratedQuestHandlersExecuteAIScalping_PaperModeUsesVirtualBalanceAndPaperMetadata(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Message: llm.Message{
+					Content: `{"action":"hold","symbol":"","size_pct":0,"confidence":0.41,"reasoning":"No valid trade setup; waiting for qualified setup.","stop_loss":null,"take_profit":null}`,
+				},
+			},
+		},
+	}
+	mockCCXT := &mockAIScalpingCCXT{
+		markets: &ccxt.MarketsResponse{
+			Exchange: "bitget",
+			Symbols:  []string{"AAA/USDT", "BBB/USDT"},
+			Count:    2,
+		},
+		marketData: []ccxt.MarketPriceInterface{
+			mockMarketPrice{symbol: "AAA/USDT", price: 1, volume: 1000, high24h: 1.05, low24h: 0.95, bid: 0.999, ask: 1.001, exchange: "bitget"},
+			mockMarketPrice{symbol: "BBB/USDT", price: 1, volume: 900, high24h: 1.04, low24h: 0.96, bid: 0.999, ask: 1.001, exchange: "bitget"},
+		},
+		orderBooks: map[string]*ccxt.OrderBookResponse{
+			"AAA/USDT": {OrderBook: ccxt.OrderBook{Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(0.999), Amount: decimal.NewFromInt(5)}}, Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(1.001), Amount: decimal.NewFromInt(4)}}}},
+			"BBB/USDT": {OrderBook: ccxt.OrderBook{Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(0.999), Amount: decimal.NewFromInt(6)}}, Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(1.001), Amount: decimal.NewFromInt(5)}}}},
+		},
+	}
+	aiSvc := NewAIScalpingService(
+		AIScalpingConfig{
+			Exchange:          "bitget",
+			Model:             "glm-5",
+			Timeout:           2 * time.Second,
+			MaxTokens:         600,
+			AutoExecute:       false,
+			MaxPairsToAnalyze: 2,
+			MaxCandidatePairs: 2,
+			OrderBookPairs:    2,
+			EnforceFutures:    false,
+			MinConfidence:     0.65,
+			MaxCapitalPct:     5,
+			PreTradeGate:      true,
+			StructuredRetries: 1,
+		},
+		mockLLM,
+		nil,
+		mockCCXT,
+		nil,
+		nil,
+	)
+
+	handlers := &IntegratedQuestHandlers{
+		ccxtService:       mockCCXT,
+		opModeService:     &OperationalModeService{config: DefaultOperationalModeConfig(), states: map[string]*OperationalModeState{"paper-chat": {ChatID: "paper-chat", Mode: ModePaper}}},
+		aiScalpingService: aiSvc,
+	}
+
+	quest := &Quest{
+		Metadata:   map[string]string{"chat_id": "paper-chat"},
+		Checkpoint: map[string]interface{}{},
+	}
+
+	err := handlers.executeAIScalping(context.Background(), quest, "paper-chat")
+	require.NoError(t, err)
+	assert.Equal(t, "true", quest.Metadata["paper_trading"])
+	assert.Equal(t, "true", quest.Metadata["dry_run"])
+	assert.Equal(t, true, quest.Checkpoint["dry_run"])
+	assert.Equal(t, 1000.0, quest.Checkpoint["virtual_balance"])
+	assert.Equal(t, "hold", quest.Checkpoint["status"])
+	assert.Equal(t, "hold", quest.Checkpoint["ai_action"])
+	assert.Equal(t, 1, mockLLM.CallCount)
+	assert.Zero(t, mockCCXT.fetchCalls, "paper mode should not fetch live balance")
 }

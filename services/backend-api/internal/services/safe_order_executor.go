@@ -3,13 +3,14 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/shopspring/decimal"
 )
 
 type PortfolioSafetyChecker interface {
-	CanExecuteTrade(ctx context.Context, chatID, exchange, symbol string, size decimal.Decimal) (bool, string, error)
+	CanExecuteTrade(ctx context.Context, chatID, exchange, symbol, marketType string, size decimal.Decimal) (bool, string, error)
 }
 
 type SafeOrderExecutor struct {
@@ -42,7 +43,7 @@ func (s *SafeOrderExecutor) PlaceOrder(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, error) {
-	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, amount)
+	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, resolveSafetyMarketType(ctx, exchange, symbol), amount)
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
@@ -60,7 +61,7 @@ func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, *SafetyCheckResult, error) {
-	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, amount)
+	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, resolveSafetyMarketType(ctx, exchange, symbol), amount)
 	if err != nil {
 		return "", nil, fmt.Errorf("safety check failed: %w", err)
 	}
@@ -79,10 +80,10 @@ func (s *SafeOrderExecutor) PlaceOrderWithSafetyCheck(
 }
 
 func (s *SafeOrderExecutor) CheckSafety(ctx context.Context, exchange string, symbol string, amount decimal.Decimal) (bool, string, error) {
-	return s.checkSafety(ctx, exchange, symbol, amount)
+	return s.checkSafety(ctx, exchange, symbol, resolveSafetyMarketType(ctx, exchange, symbol), amount)
 }
 
-func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol string, amount decimal.Decimal) (bool, string, error) {
+func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol, marketType string, amount decimal.Decimal) (bool, string, error) {
 	s.mu.RLock()
 	chatID := s.chatID
 	safetyService := s.safetyService
@@ -95,7 +96,31 @@ func (s *SafeOrderExecutor) checkSafety(ctx context.Context, exchange, symbol st
 		return true, "", nil
 	}
 
-	allowed, reason, err := safetyService.CanExecuteTrade(ctx, chatID, exchange, symbol, amount)
+	if leverage := scalpingLeverageFromContext(ctx); leverage > 0 {
+		if typedSafety, ok := safetyService.(interface {
+			EvaluateTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (TradeSafetyDecision, error)
+		}); ok {
+			decision, err := typedSafety.EvaluateTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, leverage, amount)
+			if err != nil {
+				return false, fmt.Sprintf("safety check error: %v", err), err
+			}
+			if decision.ZeroMaxMinNotionalBypass {
+				return true, "", nil
+			}
+			return decision.Allowed, decision.Reason, nil
+		}
+		if typedSafety, ok := safetyService.(interface {
+			CanExecuteTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (bool, string, error)
+		}); ok {
+			allowed, reason, err := typedSafety.CanExecuteTradeWithLeverage(ctx, chatID, exchange, symbol, marketType, leverage, amount)
+			if err != nil {
+				return false, fmt.Sprintf("safety check error: %v", err), err
+			}
+			return allowed, reason, nil
+		}
+	}
+
+	allowed, reason, err := safetyService.CanExecuteTrade(ctx, chatID, exchange, symbol, marketType, amount)
 	if err != nil {
 		return false, fmt.Sprintf("safety check error: %v", err), err
 	}
@@ -122,7 +147,60 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 		return "", fmt.Errorf("invalid order size: amount_usdt must be positive")
 	}
 
-	allowed, reason, err := s.checkSafety(ctx, details.Exchange, details.Symbol, amount)
+	s.mu.RLock()
+	chatID := s.chatID
+	safetyService := s.safetyService
+	s.mu.RUnlock()
+	if scopedChatID := scalpingChatIDFromContext(ctx); scopedChatID != "" {
+		chatID = scopedChatID
+	}
+
+	if safetyService == nil {
+		return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+	}
+
+	allowed := false
+	reason := ""
+	var err error
+
+	if typedSafety, ok := safetyService.(interface {
+		EvaluateTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (TradeSafetyDecision, error)
+	}); ok {
+		decision, decisionErr := typedSafety.EvaluateTradeWithLeverage(
+			ctx,
+			chatID,
+			details.Exchange,
+			details.Symbol,
+			details.MarketType,
+			details.Leverage,
+			amount,
+		)
+		err = decisionErr
+		if err != nil {
+			return "", fmt.Errorf("safety check failed: %w", err)
+		}
+		if decision.ZeroMaxMinNotionalBypass {
+			return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
+		}
+		allowed = decision.Allowed
+		reason = decision.Reason
+	} else {
+		if leverageAware, ok := safetyService.(interface {
+			CanExecuteTradeWithLeverage(context.Context, string, string, string, string, int, decimal.Decimal) (bool, string, error)
+		}); ok {
+			allowed, reason, err = leverageAware.CanExecuteTradeWithLeverage(
+				ctx,
+				chatID,
+				details.Exchange,
+				details.Symbol,
+				details.MarketType,
+				details.Leverage,
+				amount,
+			)
+		} else {
+			allowed, reason, err = safetyService.CanExecuteTrade(ctx, chatID, details.Exchange, details.Symbol, details.MarketType, amount)
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("safety check failed: %w", err)
 	}
@@ -179,6 +257,34 @@ func (s *SafeOrderExecutor) GetChatID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.chatID
+}
+
+func resolveSafetyMarketType(ctx context.Context, exchange, symbol string) string {
+	if scopedMarketType := scalpingMarketTypeFromContext(ctx); scopedMarketType != "" {
+		return scopedMarketType
+	}
+	inferred := inferSafetyMarketType(exchange, symbol)
+	if inferred != "" {
+		return inferred
+	}
+	if scalpingLeverageFromContext(ctx) > 0 {
+		return "futures"
+	}
+	return ""
+}
+
+func inferSafetyMarketType(exchange, symbol string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	if normalized == "" {
+		return ""
+	}
+	if strings.Contains(normalized, ":") || strings.Contains(normalized, "PERP") || strings.Contains(normalized, "SWAP") {
+		return "futures"
+	}
+	if strings.EqualFold(strings.TrimSpace(exchange), "bitget") && strings.Contains(normalized, "/") {
+		return "spot"
+	}
+	return ""
 }
 
 // IsPaperTrading delegates to the base executor

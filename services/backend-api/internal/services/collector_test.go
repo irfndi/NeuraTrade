@@ -739,7 +739,7 @@ func TestCollectorService_CollectTickerDataDirect_CCXErrorWithBlacklist(t *testi
 
 	// Mock the CCXT service to return an error that should trigger blacklisting
 	ccxtError := fmt.Errorf("invalid symbol: symbol not found")
-	mockCCXT.On("FetchSingleTicker", mock.Anything, "binance", "INVALID/USDT").Return((*models.MarketPrice)(nil), ccxtError)
+	mockCCXT.On("FetchSingleTicker", mock.Anything, "binance", "INVALID/USDT").Return(nil, ccxtError)
 
 	// Test with invalid symbol (should be blacklisted)
 	err := collector.collectTickerDataDirect("binance", "INVALID/USDT")
@@ -1451,6 +1451,10 @@ func (m *MockMarketPriceInterface) GetHigh() float64 {
 
 func (m *MockMarketPriceInterface) GetLow() float64 {
 	return m.low
+}
+
+func (m *MockMarketPriceInterface) GetPriceChange24h() float64 {
+	return 0
 }
 
 func (m *MockMarketPriceInterface) GetTimestamp() time.Time {

@@ -7,9 +7,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
+
+const learningDataDirEnv = "NEURATRADE_AI_LEARNING_DATA_DIR"
 
 // InMemoryLearningSystem implements LearningSystem with in-memory storage
 type InMemoryLearningSystem struct {
@@ -39,7 +42,7 @@ type OptimalStrategy struct {
 
 // NewInMemoryLearningSystem creates a new learning system
 func NewInMemoryLearningSystem() *InMemoryLearningSystem {
-	dataDir := filepath.Join("data", "ai_learning")
+	dataDir := resolveLearningDataDir()
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		log.Printf("Failed to create AI learning data directory: %v", err)
 	}
@@ -51,6 +54,53 @@ func NewInMemoryLearningSystem() *InMemoryLearningSystem {
 		},
 		dataDir: dataDir,
 	}
+}
+
+func resolveLearningDataDir() string {
+	defaultDir := filepath.Clean(filepath.Join("data", "ai_learning"))
+	configured := strings.TrimSpace(os.Getenv(learningDataDirEnv))
+	if configured == "" {
+		return defaultDir
+	}
+	resolved, ok := sanitizeLearningDataDir(configured)
+	if !ok {
+		log.Printf("Ignoring unsafe AI learning data directory override: %q", configured)
+		return defaultDir
+	}
+	return resolved
+}
+
+func sanitizeLearningDataDir(raw string) (string, bool) {
+	cleaned := filepath.Clean(strings.TrimSpace(raw))
+	if cleaned == "" || cleaned == "." {
+		return "", false
+	}
+	for _, part := range strings.Split(cleaned, string(filepath.Separator)) {
+		if part == ".." {
+			return "", false
+		}
+	}
+	if !filepath.IsAbs(cleaned) {
+		return cleaned, true
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	if isWithinPath(cleaned, wd) || isWithinPath(cleaned, os.TempDir()) {
+		return cleaned, true
+	}
+	return "", false
+}
+
+func isWithinPath(target string, root string) bool {
+	target = filepath.Clean(target)
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != "..")
 }
 
 // RecordDecision stores a trading decision

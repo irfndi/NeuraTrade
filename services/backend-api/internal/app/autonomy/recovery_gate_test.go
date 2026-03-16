@@ -130,7 +130,7 @@ func TestEvaluateRecoveryGate_RecentLossStreakGatesMicroEntry(t *testing.T) {
 	}
 }
 
-func TestEvaluateRecoveryGate_RecentLossStreakBlocksNormalMode(t *testing.T) {
+func TestEvaluateRecoveryGate_RecentLossStreakDoesNotBlockNormalMode(t *testing.T) {
 	cfg := DefaultRecoveryConfig()
 
 	state := EvaluateRecoveryGate(RecoveryGateInput{
@@ -144,11 +144,11 @@ func TestEvaluateRecoveryGate_RecentLossStreakBlocksNormalMode(t *testing.T) {
 	if state.Mode != RecoveryModeNormal {
 		t.Fatalf("expected normal mode, got %q", state.Mode)
 	}
-	if state.EntryAllowed {
-		t.Fatal("expected normal mode to remain blocked while recent loss streak is active")
+	if !state.EntryAllowed {
+		t.Fatalf("expected normal mode to stay eligible and rely on policy tightening, reason=%q", state.GateReason)
 	}
-	if !strings.Contains(state.GateReason, "recent loss streak") {
-		t.Fatalf("expected recent loss gate reason, got %q", state.GateReason)
+	if state.GateReason != "" {
+		t.Fatalf("expected no hard recovery gate reason in normal mode, got %q", state.GateReason)
 	}
 }
 

@@ -28,6 +28,8 @@ type MarketPriceInterface interface {
 	GetHigh() float64
 	// GetLow retrieves the 24h low price.
 	GetLow() float64
+	// GetPriceChange24h retrieves the 24h percentage change.
+	GetPriceChange24h() float64
 }
 
 // ArbitrageOpportunityInterface defines the interface for arbitrage opportunity data.

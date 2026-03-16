@@ -570,16 +570,17 @@ func (s *NativeCCXTService) parseBinanceTicker(symbol string, body []byte) (*Tic
 	}
 
 	return &Ticker{
-		Symbol:    symbol,
-		Last:      parseDecimal(raw.LastPrice),
-		Bid:       parseDecimal(raw.BidPrice),
-		Ask:       parseDecimal(raw.AskPrice),
-		High:      parseDecimal(raw.High24h),
-		Low:       parseDecimal(raw.Low24h),
-		Volume:    parseDecimal(raw.Volume24h),
-		Open:      parseDecimal(raw.OpenPrice),
-		Close:     parseDecimal(raw.PrevClosePrice),
-		Timestamp: UnixTimestamp(time.Now()),
+		Symbol:     symbol,
+		Last:       parseDecimal(raw.LastPrice),
+		Bid:        parseDecimal(raw.BidPrice),
+		Ask:        parseDecimal(raw.AskPrice),
+		High:       parseDecimal(raw.High24h),
+		Low:        parseDecimal(raw.Low24h),
+		Volume:     parseDecimal(raw.Volume24h),
+		Open:       parseDecimal(raw.OpenPrice),
+		Close:      parseDecimal(raw.PrevClosePrice),
+		Percentage: calculateTickerPercentage(parseDecimal(raw.LastPrice), parseDecimal(raw.OpenPrice)),
+		Timestamp:  UnixTimestamp(time.Now()),
 	}, nil
 }
 
@@ -590,13 +591,14 @@ func (s *NativeCCXTService) parseBybitTicker(symbol string, body []byte) (*Ticke
 		RetMsg  string `json:"retMsg"`
 		Result  struct {
 			List []struct {
-				Symbol    string `json:"symbol"`
-				LastPrice string `json:"lastPrice"`
-				Bid1Price string `json:"bid1Price"`
-				Ask1Price string `json:"ask1Price"`
-				High24h   string `json:"highPrice24h"`
-				Low24h    string `json:"lowPrice24h"`
-				Volume24h string `json:"volume24h"`
+				Symbol       string `json:"symbol"`
+				LastPrice    string `json:"lastPrice"`
+				Bid1Price    string `json:"bid1Price"`
+				Ask1Price    string `json:"ask1Price"`
+				High24h      string `json:"highPrice24h"`
+				Low24h       string `json:"lowPrice24h"`
+				Volume24h    string `json:"volume24h"`
+				Price24hPcnt string `json:"price24hPcnt"`
 			} `json:"list"`
 		} `json:"result"`
 	}
@@ -615,14 +617,15 @@ func (s *NativeCCXTService) parseBybitTicker(symbol string, body []byte) (*Ticke
 
 	t := raw.Result.List[0]
 	return &Ticker{
-		Symbol:    t.Symbol,
-		Last:      parseDecimal(t.LastPrice),
-		Bid:       parseDecimal(t.Bid1Price),
-		Ask:       parseDecimal(t.Ask1Price),
-		High:      parseDecimal(t.High24h),
-		Low:       parseDecimal(t.Low24h),
-		Volume:    parseDecimal(t.Volume24h),
-		Timestamp: UnixTimestamp(time.Now()),
+		Symbol:     t.Symbol,
+		Last:       parseDecimal(t.LastPrice),
+		Bid:        parseDecimal(t.Bid1Price),
+		Ask:        parseDecimal(t.Ask1Price),
+		High:       parseDecimal(t.High24h),
+		Low:        parseDecimal(t.Low24h),
+		Volume:     parseDecimal(t.Volume24h),
+		Percentage: parseDecimal(t.Price24hPcnt).Mul(decimal.NewFromInt(100)),
+		Timestamp:  UnixTimestamp(time.Now()),
 	}, nil
 }
 
@@ -636,6 +639,7 @@ func (s *NativeCCXTService) parseOKXTicker(symbol string, body []byte) (*Ticker,
 			Last    string `json:"last"`
 			BidPx   string `json:"bidPx"`
 			AskPx   string `json:"askPx"`
+			Open24h string `json:"open24h"`
 			High24h string `json:"high24h"`
 			Low24h  string `json:"low24h"`
 			Vol24h  string `json:"vol24h"`
@@ -656,14 +660,16 @@ func (s *NativeCCXTService) parseOKXTicker(symbol string, body []byte) (*Ticker,
 
 	t := raw.Data[0]
 	return &Ticker{
-		Symbol:    t.InstID,
-		Last:      parseDecimal(t.Last),
-		Bid:       parseDecimal(t.BidPx),
-		Ask:       parseDecimal(t.AskPx),
-		High:      parseDecimal(t.High24h),
-		Low:       parseDecimal(t.Low24h),
-		Volume:    parseDecimal(t.Vol24h),
-		Timestamp: UnixTimestamp(time.Now()),
+		Symbol:     t.InstID,
+		Last:       parseDecimal(t.Last),
+		Bid:        parseDecimal(t.BidPx),
+		Ask:        parseDecimal(t.AskPx),
+		Open:       parseDecimal(t.Open24h),
+		High:       parseDecimal(t.High24h),
+		Low:        parseDecimal(t.Low24h),
+		Volume:     parseDecimal(t.Vol24h),
+		Percentage: calculateTickerPercentage(parseDecimal(t.Last), parseDecimal(t.Open24h)),
+		Timestamp:  UnixTimestamp(time.Now()),
 	}, nil
 }
 
@@ -697,14 +703,15 @@ func (s *NativeCCXTService) parseBitgetTicker(symbol string, body []byte) (*Tick
 
 	t := raw.Data[0]
 	return &Ticker{
-		Symbol:    symbol,
-		Last:      parseDecimal(t.LastPr),
-		Bid:       parseDecimal(t.BidPr),
-		Ask:       parseDecimal(t.AskPr),
-		High:      parseDecimal(t.High24h),
-		Low:       parseDecimal(t.Low24h),
-		Volume:    parseDecimal(t.BaseVolume),
-		Timestamp: UnixTimestamp(time.Now()),
+		Symbol:     symbol,
+		Last:       parseDecimal(t.LastPr),
+		Bid:        parseDecimal(t.BidPr),
+		Ask:        parseDecimal(t.AskPr),
+		High:       parseDecimal(t.High24h),
+		Low:        parseDecimal(t.Low24h),
+		Volume:     parseDecimal(t.BaseVolume),
+		Percentage: parseDecimal(t.Change24h),
+		Timestamp:  UnixTimestamp(time.Now()),
 	}, nil
 }
 
@@ -743,6 +750,10 @@ func (a *TickerMarketPriceAdapter) GetHigh() float64 {
 }
 func (a *TickerMarketPriceAdapter) GetLow() float64 {
 	v, _ := a.data.Ticker.Low.Float64()
+	return v
+}
+func (a *TickerMarketPriceAdapter) GetPriceChange24h() float64 {
+	v, _ := a.data.Ticker.Percentage.Float64()
 	return v
 }
 
@@ -945,6 +956,7 @@ func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols 
 			High24h    string `json:"high24h"`
 			Low24h     string `json:"low24h"`
 			BaseVolume string `json:"baseVolume"`
+			Change24h  string `json:"change24h"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -969,14 +981,15 @@ func (s *NativeCCXTService) fetchBitgetBulkTickers(ctx context.Context, symbols 
 			data: &TickerData{
 				Exchange: "bitget",
 				Ticker: Ticker{
-					Symbol:    formattedSymbol,
-					Last:      parseDecimal(ticker.LastPr),
-					Bid:       parseDecimal(ticker.BidPr),
-					Ask:       parseDecimal(ticker.AskPr),
-					High:      parseDecimal(ticker.High24h),
-					Low:       parseDecimal(ticker.Low24h),
-					Volume:    parseDecimal(ticker.BaseVolume),
-					Timestamp: UnixTimestamp(time.Now()),
+					Symbol:     formattedSymbol,
+					Last:       parseDecimal(ticker.LastPr),
+					Bid:        parseDecimal(ticker.BidPr),
+					Ask:        parseDecimal(ticker.AskPr),
+					High:       parseDecimal(ticker.High24h),
+					Low:        parseDecimal(ticker.Low24h),
+					Volume:     parseDecimal(ticker.BaseVolume),
+					Percentage: parseDecimal(ticker.Change24h),
+					Timestamp:  UnixTimestamp(time.Now()),
 				},
 			},
 		})
@@ -1000,6 +1013,13 @@ func bitgetSymbolKey(symbol string) string {
 	normalized = strings.ReplaceAll(normalized, "-", "")
 	normalized = strings.ReplaceAll(normalized, "_", "")
 	return normalized
+}
+
+func calculateTickerPercentage(last decimal.Decimal, reference decimal.Decimal) decimal.Decimal {
+	if !last.GreaterThan(decimal.Zero) || !reference.GreaterThan(decimal.Zero) {
+		return decimal.Zero
+	}
+	return last.Sub(reference).Div(reference).Mul(decimal.NewFromInt(100))
 }
 
 func normalizeBitgetSpotSymbol(symbol string) string {
@@ -1825,20 +1845,21 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		Total:     make(map[string]float64),
 		Free:      make(map[string]float64),
 		Used:      make(map[string]float64),
+		Raw:       make(map[string]interface{}),
 	}
 
-	totalUSDT := 0.0
+	totalUSDTFromSummary := 0.0
+	freeUSDTFromSummary := 0.0
+	usedUSDTFromSummary := 0.0
+	totalUSDTFromCoinList := 0.0
+	freeUSDTFromCoinList := 0.0
+	usedUSDTFromCoinList := 0.0
 	for _, balanceData := range raw.Data {
+		accountPrefix := strings.ToUpper(strings.TrimSpace(balanceData.AccountType))
+		accountHasCoinListUSDT := false
+		accountSummaryUSDT := 0.0
 		if strings.TrimSpace(balanceData.USDTBalance) != "" {
-			value, _ := strconv.ParseFloat(strings.TrimSpace(balanceData.USDTBalance), 64)
-			if value > 0 {
-				totalUSDT += value
-				key := strings.ToUpper(strings.TrimSpace(balanceData.AccountType)) + "_USDT"
-				result.Total[key] = value
-				result.Free[key] = value
-				result.Used[key] = 0
-				log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, value)
-			}
+			accountSummaryUSDT, _ = strconv.ParseFloat(strings.TrimSpace(balanceData.USDTBalance), 64)
 		}
 
 		for _, coin := range balanceData.Coin {
@@ -1849,24 +1870,91 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 			free, _ := strconv.ParseFloat(coin.Available, 64)
 			frozen, _ := strconv.ParseFloat(coin.Frozen, 64)
 			locked, _ := strconv.ParseFloat(coin.Lock, 64)
+			coinKey := strings.ToUpper(strings.TrimSpace(coin.Coin))
+			scopedKey := accountPrefix + "_" + coinKey
 
-			result.Total[coin.Coin] = total
-			result.Free[coin.Coin] = free
-			result.Used[coin.Coin] = frozen + locked
+			if coinKey != "USDT" {
+				result.Total[coinKey] += total
+				result.Free[coinKey] += free
+				result.Used[coinKey] += frozen + locked
+			}
+
+			if strings.TrimSpace(scopedKey) != "_" {
+				result.Total[scopedKey] += total
+				result.Free[scopedKey] += free
+				result.Used[scopedKey] += frozen + locked
+			}
+
+			if coinKey == "USDT" {
+				accountHasCoinListUSDT = true
+				totalUSDTFromCoinList += total
+				freeUSDTFromCoinList += free
+				usedUSDTFromCoinList += frozen + locked
+			}
 
 			if total > 0 {
 				log.Printf("[CCXT Native] Bitget balance: %s = %.8f (free: %.8f)", coin.Coin, total, free)
 			}
 		}
+
+		if accountSummaryUSDT > 0 && !accountHasCoinListUSDT {
+			totalUSDTFromSummary += accountSummaryUSDT
+			key := accountPrefix + "_USDT"
+			result.Total[key] += accountSummaryUSDT
+			if accountPrefix == "USDT_FUTURES" {
+				markSummaryOnlyBalanceKey(result, key)
+			} else {
+				freeUSDTFromSummary += accountSummaryUSDT
+				result.Free[key] += accountSummaryUSDT
+			}
+			log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, accountSummaryUSDT)
+		}
 	}
+	totalUSDT := totalUSDTFromCoinList + totalUSDTFromSummary
+	freeUSDT := freeUSDTFromCoinList + freeUSDTFromSummary
+	usedUSDT := usedUSDTFromCoinList + usedUSDTFromSummary
 	if totalUSDT > 0 {
 		result.Total["USDT"] = totalUSDT
-		result.Free["USDT"] = totalUSDT
-		result.Used["USDT"] = 0
+		result.Free["USDT"] = freeUSDT
+		result.Used["USDT"] = usedUSDT
+	}
+	if freeUSDTFromCoinList > 0 {
+		clearSummaryOnlyBalanceKey(result, "USDT")
 	}
 
 	log.Printf("[CCXT Native] Bitget balance fetched: %d assets", len(result.Total))
 	return result, nil
+}
+
+func markSummaryOnlyBalanceKey(balance *BalanceResponse, key string) {
+	if balance == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	if balance.Raw == nil {
+		balance.Raw = make(map[string]interface{})
+	}
+	rawMap, ok := balance.Raw["summary_only_balance_keys"].(map[string]interface{})
+	if !ok || rawMap == nil {
+		rawMap = make(map[string]interface{})
+	}
+	rawMap[key] = true
+	balance.Raw["summary_only_balance_keys"] = rawMap
+}
+
+func clearSummaryOnlyBalanceKey(balance *BalanceResponse, key string) {
+	if balance == nil || balance.Raw == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	rawMap, ok := balance.Raw["summary_only_balance_keys"].(map[string]interface{})
+	if !ok || rawMap == nil {
+		return
+	}
+	delete(rawMap, key)
+	if len(rawMap) == 0 {
+		delete(balance.Raw, "summary_only_balance_keys")
+		return
+	}
+	balance.Raw["summary_only_balance_keys"] = rawMap
 }
 
 // fetchBinanceBalance fetches balance from Binance exchange

@@ -8,12 +8,20 @@ import (
 	"time"
 )
 
+var fixedLearningFixtureTime = time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+func newTestLearningSystem(t *testing.T) *InMemoryLearningSystem {
+	t.Helper()
+	t.Setenv("NEURATRADE_AI_LEARNING_DATA_DIR", filepath.Join(t.TempDir(), "ai_learning"))
+	return NewInMemoryLearningSystem()
+}
+
 func TestNewInMemoryLearningSystem(t *testing.T) {
 	// Use temp directory for testing
 	tmpDir := filepath.Join(os.TempDir(), "ai_learning_test")
 	defer os.RemoveAll(tmpDir)
 
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	if ls == nil {
 		t.Fatal("Expected non-nil learning system")
@@ -26,17 +34,42 @@ func TestNewInMemoryLearningSystem(t *testing.T) {
 	}
 }
 
+func TestSanitizeLearningDataDir(t *testing.T) {
+	configured := filepath.Join(t.TempDir(), "ai_learning")
+	resolved, ok := sanitizeLearningDataDir(configured)
+	if !ok {
+		t.Fatal("expected configured temp dir to be accepted")
+	}
+	if resolved != configured {
+		t.Fatalf("expected resolved dir %q, got %q", configured, resolved)
+	}
+
+	unsafePath := filepath.Join("..", "..", "etc", "neuratrade")
+	if _, ok := sanitizeLearningDataDir(unsafePath); ok {
+		t.Fatal("expected path traversal candidate to be rejected")
+	}
+
+	validDottedPath := filepath.Join("data..v2", "ai_learning")
+	resolved, ok = sanitizeLearningDataDir(validDottedPath)
+	if !ok {
+		t.Fatal("expected dotted directory name to be accepted")
+	}
+	if resolved != validDottedPath {
+		t.Fatalf("expected resolved dotted dir %q, got %q", validDottedPath, resolved)
+	}
+}
+
 func TestInMemoryLearningSystem_RecordDecision(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	record := &DecisionRecord{
 		ID:        "test-decision-1",
-		Timestamp: time.Now(),
+		Timestamp: fixedLearningFixtureTime,
 		Strategy:  "scalping",
 		MarketState: MarketState{
 			Symbol:    "BTC/USDT",
 			Price:     45000.00,
-			Timestamp: time.Now(),
+			Timestamp: fixedLearningFixtureTime,
 		},
 		Decision: TradingDecision{
 			ID:         "test-decision-1",
@@ -69,7 +102,7 @@ func TestInMemoryLearningSystem_RecordDecision(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_RecordDecision_Concurrent(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	// Record multiple decisions concurrently
 	done := make(chan bool)
@@ -77,11 +110,11 @@ func TestInMemoryLearningSystem_RecordDecision_Concurrent(t *testing.T) {
 		go func(id int) {
 			record := &DecisionRecord{
 				ID:        string(rune('A' + id)),
-				Timestamp: time.Now(),
+				Timestamp: fixedLearningFixtureTime,
 				Strategy:  "scalping",
 				MarketState: MarketState{
 					Symbol:    "BTC/USDT",
-					Timestamp: time.Now(),
+					Timestamp: fixedLearningFixtureTime,
 				},
 			}
 			ls.RecordDecision(context.Background(), record)
@@ -100,7 +133,7 @@ func TestInMemoryLearningSystem_RecordDecision_Concurrent(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_GetSimilarDecisions(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	// Add decisions with different symbols and outcomes
 	decisions := []*DecisionRecord{
@@ -171,7 +204,7 @@ func TestInMemoryLearningSystem_GetSimilarDecisions(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_GetSimilarDecisions_Limit(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	// Add 5 decisions for BTC/USDT
 	for i := 0; i < 5; i++ {
@@ -200,16 +233,16 @@ func TestInMemoryLearningSystem_GetSimilarDecisions_Limit(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_RecordOutcome(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	// First record a decision
 	ls.decisions["test-id"] = &DecisionRecord{
 		ID:        "test-id",
-		Timestamp: time.Now(),
+		Timestamp: fixedLearningFixtureTime,
 		Strategy:  "scalping",
 		MarketState: MarketState{
 			Symbol:    "BTC/USDT",
-			Timestamp: time.Now(),
+			Timestamp: fixedLearningFixtureTime,
 		},
 	}
 
@@ -240,7 +273,7 @@ func TestInMemoryLearningSystem_RecordOutcome(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_RecordOutcome_NotFound(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	outcome := &TradeOutcome{
 		DecisionID: "nonexistent",
@@ -255,7 +288,7 @@ func TestInMemoryLearningSystem_RecordOutcome_NotFound(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_GetOptimalStrategy(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	// Add optimal strategy
 	key := "scalping_BTC/USDT"
@@ -278,7 +311,7 @@ func TestInMemoryLearningSystem_GetOptimalStrategy(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_GetOptimalStrategy_NotFound(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	strategy := ls.GetOptimalStrategy("nonexistent", "XXX/USDT")
 
@@ -288,7 +321,7 @@ func TestInMemoryLearningSystem_GetOptimalStrategy_NotFound(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_GenerateInsights(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	// Add decisions with outcomes
 	ls.decisions["dec-1"] = &DecisionRecord{
@@ -347,7 +380,7 @@ func TestInMemoryLearningSystem_GenerateInsights(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_GenerateInsights_NoHistory(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	insights := ls.GenerateInsights("UNKNOWN/USDT")
 
@@ -406,7 +439,7 @@ func TestInMemoryLearningSystem_generateRecommendation(t *testing.T) {
 }
 
 func TestInMemoryLearningSystem_updateOptimalStrategy(t *testing.T) {
-	ls := NewInMemoryLearningSystem()
+	ls := newTestLearningSystem(t)
 
 	// Record a winning decision
 	decision := &DecisionRecord{

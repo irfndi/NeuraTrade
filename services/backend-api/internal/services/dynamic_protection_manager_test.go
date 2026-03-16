@@ -19,15 +19,16 @@ type stubTicker struct {
 	price  float64
 }
 
-func (t *stubTicker) GetPrice() float64       { return t.price }
-func (t *stubTicker) GetVolume() float64      { return 0 }
-func (t *stubTicker) GetTimestamp() time.Time { return time.Now().UTC() }
-func (t *stubTicker) GetExchangeName() string { return "bitget" }
-func (t *stubTicker) GetSymbol() string       { return t.symbol }
-func (t *stubTicker) GetBid() float64         { return t.price * 0.999 }
-func (t *stubTicker) GetAsk() float64         { return t.price * 1.001 }
-func (t *stubTicker) GetHigh() float64        { return t.price * 1.01 }
-func (t *stubTicker) GetLow() float64         { return t.price * 0.99 }
+func (t *stubTicker) GetPrice() float64          { return t.price }
+func (t *stubTicker) GetVolume() float64         { return 0 }
+func (t *stubTicker) GetTimestamp() time.Time    { return time.Now().UTC() }
+func (t *stubTicker) GetExchangeName() string    { return "bitget" }
+func (t *stubTicker) GetSymbol() string          { return t.symbol }
+func (t *stubTicker) GetBid() float64            { return t.price * 0.999 }
+func (t *stubTicker) GetAsk() float64            { return t.price * 1.001 }
+func (t *stubTicker) GetHigh() float64           { return t.price * 1.01 }
+func (t *stubTicker) GetLow() float64            { return t.price * 0.99 }
+func (t *stubTicker) GetPriceChange24h() float64 { return 0 }
 
 type stubTickerSource struct {
 	prices map[string]float64
@@ -240,4 +241,112 @@ func TestDynamicProtectionManager_ReconcileOpenPositions_SkipsDBUpdateWhenExchan
 	require.Len(t, after, 1)
 	assert.True(t, after[0].StopLoss.Equal(originalStop))
 	assert.True(t, after[0].TakeProfit.Equal(originalTake))
+}
+
+func TestDynamicProtectionManager_ReconcileOpenPositions_SkipsTinyProtectionAdjustments(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "dynamic-protection-min-adjustment.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	entry := decimal.NewFromFloat(100.0)
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "order-long-min-adjustment",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: entry,
+		StopLoss:   decimal.NewFromFloat(100.20),
+		TakeProfit: decimal.NewFromFloat(100.22),
+		OpenedAt:   time.Now().UTC().Add(-2 * time.Minute),
+	}))
+
+	manager := NewDynamicProtectionManager(
+		DynamicProtectionConfig{
+			Enabled:               true,
+			MaxPositions:          10,
+			UpdateCooldown:        0,
+			ProfitActivationPct:   0,
+			BreakevenBufferPct:    0,
+			TrailingStopPct:       0,
+			TakeProfitDistancePct: 0,
+			MinAdjustmentPct:      1.0,
+		},
+		store,
+		&stubTickerSource{prices: map[string]float64{"ADA/USDT": 100.21}},
+		nil,
+	)
+
+	summary, err := manager.ReconcileOpenPositions(ctx, "chat-1", "bitget")
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.PositionsEvaluated)
+	assert.Equal(t, 0, summary.ProtectionsUpdated)
+	assert.Equal(t, 0, summary.Errors)
+
+	positions, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 5)
+	require.NoError(t, err)
+	require.Len(t, positions, 1)
+	assert.True(t, positions[0].StopLoss.Equal(decimal.NewFromFloat(100.20)))
+	assert.True(t, positions[0].TakeProfit.Equal(decimal.NewFromFloat(100.22)))
+}
+
+func TestDynamicProtectionManager_ReconcileOpenPositions_SkipsManualReconciliationPositions(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "dynamic-protection-skip-manual.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "manual-pos-1",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(5),
+		EntryPrice: decimal.NewFromFloat(1.00),
+		Source:     "manual_reconciliation",
+		OpenedAt:   time.Now().UTC().Add(-2 * time.Minute),
+	}))
+
+	manager := NewDynamicProtectionManager(
+		DynamicProtectionConfig{
+			Enabled:               true,
+			MaxPositions:          10,
+			UpdateCooldown:        0,
+			ProfitActivationPct:   0,
+			BreakevenBufferPct:    0,
+			TrailingStopPct:       0,
+			TakeProfitDistancePct: 0,
+		},
+		store,
+		&stubTickerSource{prices: map[string]float64{"ADA/USDT": 1.03}},
+		nil,
+	)
+
+	summary, err := manager.ReconcileOpenPositions(ctx, "chat-1", "bitget")
+	require.NoError(t, err)
+	assert.Equal(t, 0, summary.PositionsEvaluated)
+	assert.Equal(t, 0, summary.ProtectionsUpdated)
+
+	positions, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 10)
+	require.NoError(t, err)
+	require.Len(t, positions, 1)
+	assert.True(t, positions[0].StopLoss.IsZero())
+	assert.True(t, positions[0].TakeProfit.IsZero())
 }

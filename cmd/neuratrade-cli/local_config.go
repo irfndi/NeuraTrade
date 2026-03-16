@@ -8,7 +8,11 @@ import (
 )
 
 type localConfig struct {
+	AdminAPIKey        string `json:"admin_api_key"`
 	TelegramTestChatID string `json:"telegram_test_chat_id"`
+	Auth               struct {
+		JWTSecret string `json:"jwt_secret"`
+	} `json:"auth"`
 	Server struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -34,6 +38,7 @@ type localConfig struct {
 	} `json:"services"`
 	Security struct {
 		AdminAPIKey string `json:"admin_api_key"`
+		JWTSecret   string `json:"jwt_secret"`
 	} `json:"security"`
 	AI struct {
 		APIKey   string `json:"api_key"`
@@ -80,7 +85,20 @@ func configAdminAPIKey(cfg *localConfig) string {
 	if cfg.Security.AdminAPIKey != "" {
 		return cfg.Security.AdminAPIKey
 	}
+	if cfg.AdminAPIKey != "" {
+		return cfg.AdminAPIKey
+	}
 	return cfg.CCXT.AdminAPIKey
+}
+
+func configJWTSecret(cfg *localConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	if cfg.Security.JWTSecret != "" {
+		return cfg.Security.JWTSecret
+	}
+	return cfg.Auth.JWTSecret
 }
 
 func configChatID(cfg *localConfig) string {

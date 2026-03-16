@@ -14,6 +14,8 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type roundTripFunc func(req *http.Request) (*http.Response, error)
@@ -116,6 +118,233 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 	if balance.Total["USDT"] != 12.75 {
 		t.Fatalf("unexpected aggregated USDT balance: got %.8f", balance.Total["USDT"])
 	}
+	assert.Zero(t, balance.Free["USDT_FUTURES_USDT"])
+	require.NotNil(t, balance.Raw)
+	marked, ok := balance.Raw["summary_only_balance_keys"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, marked["USDT_FUTURES_USDT"])
+}
+
+func TestNativeCCXTService_FetchBalance_BitgetMergesCoinListAndSummaryUSDT(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:       "bitget",
+		BaseURL:    "https://api.bitget.com",
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := `{
+				"code":"00000",
+				"msg":"success",
+				"data":[
+					{
+						"accountType":"spot",
+						"usdtBalance":"10.50",
+						"coinList":[{"coin":"USDT","balance":"10.00","available":"9.50","frozen":"0.25","lock":"0.25"}]
+					},
+					{
+						"accountType":"usdt_futures",
+						"usdtBalance":"2.25"
+					}
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	balance, err := service.FetchBalance(context.Background(), "bitget")
+	require.NoError(t, err)
+	assert.InDelta(t, 10.0, balance.Total["SPOT_USDT"], 0.00000001)
+	assert.InDelta(t, 12.25, balance.Total["USDT"], 0.00000001)
+	assert.InDelta(t, 9.5, balance.Free["USDT"], 0.00000001)
+	assert.InDelta(t, 0.5, balance.Used["USDT"], 0.00000001)
+}
+
+func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_MergesCoinListAndSummaryAccounts(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:       "bitget",
+		BaseURL:    "https://api.bitget.com",
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := `{
+				"code":"00000",
+				"msg":"success",
+				"data":[
+					{
+						"accountType":"usdt_futures",
+						"usdtBalance":"5.00",
+						"coinList":[
+							{"coin":"USDT","balance":"3.00","available":"2.00","frozen":"0.50","lock":"0.50"}
+						]
+					},
+					{
+						"accountType":"spot",
+						"usdtBalance":"10.50"
+					}
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	balance, err := service.FetchBalance(context.Background(), "bitget")
+	require.NoError(t, err)
+	assert.InDelta(t, 13.5, balance.Total["USDT"], 0.00000001)
+	assert.InDelta(t, 12.5, balance.Free["USDT"], 0.00000001)
+	assert.InDelta(t, 1.0, balance.Used["USDT"], 0.00000001)
+	assert.InDelta(t, 3.0, balance.Total["USDT_FUTURES_USDT"], 0.00000001)
+	assert.InDelta(t, 2.0, balance.Free["USDT_FUTURES_USDT"], 0.00000001)
+	assert.InDelta(t, 1.0, balance.Used["USDT_FUTURES_USDT"], 0.00000001)
+	assert.InDelta(t, 10.5, balance.Total["SPOT_USDT"], 0.00000001)
+	assert.InDelta(t, 10.5, balance.Free["SPOT_USDT"], 0.00000001)
+}
+
+func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_PrefersFinalUSDTAggregation(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:       "bitget",
+		BaseURL:    "https://api.bitget.com",
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := `{
+				"code":"00000",
+				"msg":"success",
+				"data":[
+					{
+						"accountType":"spot",
+						"usdtBalance":"10.50",
+						"coinList":[
+							{"coin":"USDT","balance":"10.00","available":"9.50","frozen":"0.25","lock":"0.25"},
+							{"coin":"BTC","balance":"0.10","available":"0.10","frozen":"0","lock":"0"}
+						]
+					},
+					{
+						"accountType":"usdt_futures",
+						"usdtBalance":"2.25"
+					}
+				]
+			}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	balance, err := service.FetchBalance(context.Background(), "bitget")
+	require.NoError(t, err)
+	assert.InDelta(t, 12.25, balance.Total["USDT"], 0.00000001)
+	assert.InDelta(t, 9.5, balance.Free["USDT"], 0.00000001)
+	assert.InDelta(t, 0.5, balance.Used["USDT"], 0.00000001)
+	assert.InDelta(t, 0.10, balance.Total["BTC"], 0.00000001)
+	assert.InDelta(t, 0.10, balance.Free["BTC"], 0.00000001)
+}
+
+func TestNativeCCXTService_ParseBitgetTicker_PopulatesPercentage(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	ticker, err := service.parseBitgetTicker("DOGE/USDT", []byte(`{
+		"code":"00000",
+		"msg":"success",
+		"data":[{
+			"symbol":"DOGEUSDT",
+			"lastPr":"0.1000",
+			"bidPr":"0.0999",
+			"askPr":"0.1001",
+			"high24h":"0.1050",
+			"low24h":"0.0950",
+			"baseVolume":"1000000",
+			"change24h":"-1.25"
+		}]
+	}`))
+	require.NoError(t, err)
+	percentage, _ := ticker.Percentage.Float64()
+	assert.Equal(t, -1.25, percentage)
+	adapter := &TickerMarketPriceAdapter{data: &TickerData{Exchange: "bitget", Ticker: *ticker}}
+	assert.Equal(t, -1.25, adapter.GetPriceChange24h())
+}
+
+func TestNativeCCXTService_ParseBybitTicker_PopulatesPercentage(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	ticker, err := service.parseBybitTicker("BTCUSDT", []byte(`{
+		"retCode":0,
+		"retMsg":"OK",
+		"result":{
+			"list":[{
+				"symbol":"BTCUSDT",
+				"lastPrice":"120635.50",
+				"bid1Price":"120635.40",
+				"ask1Price":"120635.60",
+				"highPrice24h":"131309.30",
+				"lowPrice24h":"102007.60",
+				"volume24h":"13713832.0000",
+				"price24hPcnt":"0.142425"
+			}]
+		}
+	}`))
+	require.NoError(t, err)
+	percentage, _ := ticker.Percentage.Float64()
+	assert.InDelta(t, 14.2425, percentage, 0.0001)
+	adapter := &TickerMarketPriceAdapter{data: &TickerData{Exchange: "bybit", Ticker: *ticker}}
+	assert.InDelta(t, 14.2425, adapter.GetPriceChange24h(), 0.0001)
+}
+
+func TestNativeCCXTService_ParseOKXTicker_PopulatesPercentage(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	ticker, err := service.parseOKXTicker("BTC-USDT", []byte(`{
+		"code":"0",
+		"msg":"",
+		"data":[{
+			"instId":"BTC-USDT",
+			"last":"51240",
+			"bidPx":"51239.9",
+			"askPx":"51240",
+			"open24h":"51695.6",
+			"high24h":"52080",
+			"low24h":"50936",
+			"vol24h":"10474.12353007"
+		}]
+	}`))
+	require.NoError(t, err)
+	percentage, _ := ticker.Percentage.Float64()
+	assert.InDelta(t, -0.8813129, percentage, 0.000001)
+	adapter := &TickerMarketPriceAdapter{data: &TickerData{Exchange: "okx", Ticker: *ticker}}
+	assert.InDelta(t, -0.8813129, adapter.GetPriceChange24h(), 0.000001)
 }
 
 func TestNativeCCXTService_FetchOpenOrders_Bitget(t *testing.T) {

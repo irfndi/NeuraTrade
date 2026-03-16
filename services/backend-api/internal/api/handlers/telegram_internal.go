@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/jackc/pgx/v5"
 )
 
 // TelegramInternalHandler handles internal API requests from the Telegram service.
@@ -888,6 +890,39 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if effectiveMaxCapitalPct > 0 {
 			details["effective_max_capital_pct"] = fmt.Sprintf("%.2f", effectiveMaxCapitalPct)
 		}
+		if walletBasisMode, ok := diagnostics["wallet_basis_mode"].(string); ok && strings.TrimSpace(walletBasisMode) != "" {
+			details["wallet_basis_mode"] = strings.TrimSpace(walletBasisMode)
+		}
+		if walletBasisSource, ok := diagnostics["wallet_basis_source"].(string); ok && strings.TrimSpace(walletBasisSource) != "" {
+			details["wallet_basis_source"] = strings.TrimSpace(walletBasisSource)
+		}
+		if walletBasisUSDT, ok := diagnostics["wallet_basis_usdt"]; ok {
+			details["wallet_basis_usdt"] = fmt.Sprintf("%v", walletBasisUSDT)
+		}
+		if missingDetected, ok := diagnostics["protection_missing_detected"]; ok {
+			details["protection_missing_detected"] = fmt.Sprintf("%v", missingDetected)
+		}
+		if missingRecovered, ok := diagnostics["protection_missing_recovered"]; ok {
+			details["protection_missing_recovered"] = fmt.Sprintf("%v", missingRecovered)
+		}
+		if riskExpectancy, ok := diagnostics["risk_expectancy"]; ok {
+			details["risk_expectancy"] = fmt.Sprintf("%v", riskExpectancy)
+		}
+		if riskExpectancyGross, ok := diagnostics["risk_expectancy_gross"]; ok {
+			details["risk_expectancy_gross"] = fmt.Sprintf("%v", riskExpectancyGross)
+		}
+		if riskFeeDrag, ok := diagnostics["risk_fee_drag_expectancy"]; ok {
+			details["risk_fee_drag_expectancy"] = fmt.Sprintf("%v", riskFeeDrag)
+		}
+		if metaPromotions, ok := diagnostics["runtime_ai_meta_hold_promotions"]; ok {
+			details["runtime_ai_meta_hold_promotions"] = fmt.Sprintf("%v", metaPromotions)
+		}
+		if effectiveOpen, ok := diagnostics["managed_open_positions_effective"]; ok {
+			details["managed_open_positions_effective"] = fmt.Sprintf("%v", effectiveOpen)
+		}
+		if ghostCleaned, ok := diagnostics["ghost_positions_cleaned"]; ok {
+			details["ghost_positions_cleaned"] = fmt.Sprintf("%v", ghostCleaned)
+		}
 		details["candidate_viable_count"] = fmt.Sprintf("%d", candidateViableCount)
 		if rolloutStageCurrent != "" {
 			details["rollout_stage_current"] = rolloutStageCurrent
@@ -947,25 +982,41 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 	}
 
+	selectedModel := ""
 	if err := h.db.QueryRow(c.Request.Context(), `
-		SELECT COALESCE(MAX(selected_ai_model), '')
+		SELECT COALESCE(selected_ai_model, '')
 		FROM users
 		WHERE COALESCE(telegram_chat_id, '') = $1 OR COALESCE(telegram_id, '') = $1
-	`, chatID).Scan(new(string)); err != nil {
-		checks = append(checks, gin.H{
-			"name":     "ai-snapshot",
-			"status":   "warning",
-			"impact":   "optional",
-			"optional": true,
-			"message":  "AI snapshot probe unavailable",
-		})
+		LIMIT 1
+	`, chatID).Scan(&selectedModel); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			checks = append(checks, gin.H{
+				"name":     "ai-snapshot",
+				"status":   "healthy",
+				"impact":   "optional",
+				"optional": true,
+				"message":  "No AI model selected",
+			})
+		} else {
+			checks = append(checks, gin.H{
+				"name":     "ai-snapshot",
+				"status":   "warning",
+				"impact":   "optional",
+				"optional": true,
+				"message":  "AI snapshot probe unavailable",
+			})
+		}
 	} else {
+		message := "AI snapshot probe successful"
+		if strings.TrimSpace(selectedModel) == "" {
+			message = "No AI model selected"
+		}
 		checks = append(checks, gin.H{
 			"name":     "ai-snapshot",
 			"status":   "healthy",
 			"impact":   "optional",
 			"optional": true,
-			"message":  "AI snapshot probe successful",
+			"message":  message,
 		})
 	}
 

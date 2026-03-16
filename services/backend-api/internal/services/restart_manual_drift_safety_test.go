@@ -146,3 +146,116 @@ func TestTradingLifecycleStore_ListManagedOpenPositions_ScopesByChatAndExchange(
 	assert.Equal(t, "bitget", positions[0].Exchange)
 	assert.Equal(t, "chat1-bitget", positions[0].OrderID)
 }
+
+func TestTradingLifecycleStore_ListManagedOpenPositions_ExcludesClosedOrderBackedSyncGhost(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "restart-drift-ghost-filter.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "DOGE/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(10),
+		EntryPrice:    decimal.NewFromFloat(0.20),
+		MarkPrice:     decimal.NewFromFloat(0.21),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO trading_orders (
+			order_id, position_id, chat_id, exchange, symbol, side, type, market_type,
+			amount, price, filled_amount, status, source, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'market','futures',$7,$8,$9,'closed',$10,$11,$12)
+		ON CONFLICT(order_id) DO UPDATE SET
+			status = EXCLUDED.status,
+			source = EXCLUDED.source,
+			updated_at = EXCLUDED.updated_at
+	`,
+		"sync-bitget-doge-usdt-long",
+		"sync-bitget-doge-usdt-long",
+		"chat-1",
+		"bitget",
+		"DOGE/USDT",
+		"buy",
+		decimal.NewFromFloat(10),
+		decimal.NewFromFloat(0.20),
+		decimal.NewFromFloat(10),
+		"adaptive_time_stop_close_exchange_missing",
+		time.Now().UTC().Add(-2*time.Minute),
+		time.Now().UTC(),
+	)
+	require.NoError(t, err)
+
+	positions, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 10)
+	require.NoError(t, err)
+	assert.Empty(t, positions)
+}
+
+func TestTradingLifecycleStore_CloseClosedOrderBackedGhostPositions(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "restart-drift-ghost-cleanup.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "DOGE/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(10),
+		EntryPrice:    decimal.NewFromFloat(0.20),
+		MarkPrice:     decimal.NewFromFloat(0.21),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO trading_orders (
+			order_id, position_id, chat_id, exchange, symbol, side, type, market_type,
+			amount, price, filled_amount, status, source, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'market','futures',$7,$8,$9,'closed',$10,$11,$12)
+		ON CONFLICT(order_id) DO UPDATE SET
+			status = EXCLUDED.status,
+			source = EXCLUDED.source,
+			updated_at = EXCLUDED.updated_at
+	`,
+		"sync-bitget-doge-usdt-long",
+		"sync-bitget-doge-usdt-long",
+		"chat-1",
+		"bitget",
+		"DOGE/USDT",
+		"buy",
+		decimal.NewFromFloat(10),
+		decimal.NewFromFloat(0.20),
+		decimal.NewFromFloat(10),
+		"adaptive_time_stop_close_exchange_missing",
+		time.Now().UTC().Add(-2*time.Minute),
+		time.Now().UTC(),
+	)
+	require.NoError(t, err)
+
+	closed, err := store.CloseClosedOrderBackedGhostPositions(ctx, "chat-1", "bitget")
+	require.NoError(t, err)
+	assert.Equal(t, 1, closed)
+
+	var status string
+	var source string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT LOWER(status), COALESCE(source, '')
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-doge-usdt-long'
+	`).Scan(&status, &source)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", status)
+	assert.Equal(t, "ghost_cleanup_order_closed", source)
+}

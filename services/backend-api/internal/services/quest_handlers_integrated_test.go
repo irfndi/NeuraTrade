@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
@@ -769,8 +770,8 @@ func TestShouldRecordEntryAttempt(t *testing.T) {
 		}, nil))
 	})
 
-	t.Run("execution error counts", func(t *testing.T) {
-		assert.True(t, shouldRecordEntryAttempt(&AITradingDecision{
+	t.Run("execution error does not count", func(t *testing.T) {
+		assert.False(t, shouldRecordEntryAttempt(&AITradingDecision{
 			Action: "sell",
 		}, assert.AnError))
 	})
@@ -778,6 +779,388 @@ func TestShouldRecordEntryAttempt(t *testing.T) {
 	t.Run("nil decision does not count", func(t *testing.T) {
 		assert.False(t, shouldRecordEntryAttempt(nil, assert.AnError))
 	})
+}
+
+func TestFilterManagedPositionsForEntryProtection_ExcludesBootstrapFallbackTargets(t *testing.T) {
+	positions := []ManagedOpenPosition{
+		{
+			PositionID: "sync-bitget-ada-usdt-long",
+			OrderID:    "",
+			Symbol:     "ADA/USDT",
+			Side:       "buy",
+			Source:     "bootstrap_positions",
+		},
+		{
+			PositionID: "manual-1",
+			OrderID:    "ord-manual-1",
+			Symbol:     "ADA/USDT",
+			Side:       "buy",
+			Source:     "manual_reconciliation",
+		},
+		{
+			PositionID: "autonomous-1",
+			OrderID:    "ord-autonomous-1",
+			Symbol:     "ADA/USDT",
+			Side:       "buy",
+			Source:     "autonomous",
+		},
+	}
+
+	filtered := filterManagedPositionsForEntryProtection(positions, "", "ADA/USDT", "buy")
+	require.Len(t, filtered, 1)
+	assert.Equal(t, "autonomous-1", filtered[0].PositionID)
+}
+
+func TestIsAutonomousManagedPosition(t *testing.T) {
+	assert.True(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "autonomous"}))
+	assert.True(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "autonomous_scalping"}))
+	assert.True(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: ""}))
+	assert.False(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "manual_reconciliation"}))
+	assert.False(t, isAutonomousManagedPosition(ManagedOpenPosition{Source: "bootstrap_positions"}))
+	assert.False(t, isAutonomousManagedPosition(ManagedOpenPosition{PositionID: "sync-bitget-btc-usdt-long", Source: "autonomous"}))
+}
+
+func TestIntegratedQuestHandlers_ResetScalpingFailureState_ClearsCheckpointError(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{
+		"runtime_failure_streak":  3,
+		"runtime_last_failure":    "portfolio safety blocked: maximum allowed 0.00",
+		"runtime_last_failure_at": time.Now().UTC().Format(time.RFC3339),
+		"runtime_cooldown_until":  time.Now().UTC().Add(2 * time.Minute).Format(time.RFC3339),
+		"runtime_hold_cooldown":   true,
+		"error":                   "portfolio safety blocked: Position size 6.00 exceeds maximum allowed 0.00 (throttled to 0%)",
+	}}
+
+	handlers.resetScalpingFailureState(quest)
+
+	assert.NotContains(t, quest.Checkpoint, "runtime_failure_streak")
+	assert.NotContains(t, quest.Checkpoint, "runtime_last_failure")
+	assert.NotContains(t, quest.Checkpoint, "runtime_last_failure_at")
+	assert.NotContains(t, quest.Checkpoint, "runtime_cooldown_until")
+	assert.NotContains(t, quest.Checkpoint, "runtime_hold_cooldown")
+	assert.NotContains(t, quest.Checkpoint, "error")
+}
+
+func TestShouldSkipClosedOrderFeedback(t *testing.T) {
+	tests := []struct {
+		name                     string
+		order                    map[string]interface{}
+		pnl                      decimal.Decimal
+		symbol                   string
+		side                     string
+		openPositionBySymbolSide map[string]struct{}
+		expected                 bool
+	}{
+		{
+			name:   "skips probable entry fill when pnl zero and matching open position",
+			order:  map[string]interface{}{"tradeSide": "open"},
+			pnl:    decimal.Zero,
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: true,
+		},
+		{
+			name:   "does not skip when pnl is non-zero",
+			order:  map[string]interface{}{"tradeSide": "open"},
+			pnl:    decimal.NewFromFloat(0.01),
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: false,
+		},
+		{
+			name:                     "does not skip when open position is missing",
+			order:                    map[string]interface{}{"tradeSide": "open"},
+			pnl:                      decimal.Zero,
+			symbol:                   "ADA/USDT",
+			side:                     "buy",
+			openPositionBySymbolSide: map[string]struct{}{},
+			expected:                 false,
+		},
+		{
+			name:   "does not skip close semantic",
+			order:  map[string]interface{}{"tradeSide": "close_long"},
+			pnl:    decimal.Zero,
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: false,
+		},
+		{
+			name:   "does not skip reduce-only semantic",
+			order:  map[string]interface{}{"tradeSide": "open", "reduceOnly": true},
+			pnl:    decimal.Zero,
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: false,
+		},
+		{
+			name:   "does not skip reduce-only semantic when exchange returns uppercase yes",
+			order:  map[string]interface{}{"tradeSide": "open", "reduceOnly": "YES"},
+			pnl:    decimal.Zero,
+			symbol: "ADA/USDT",
+			side:   "buy",
+			openPositionBySymbolSide: map[string]struct{}{
+				"ADA/USDT:buy": {},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := shouldSkipClosedOrderFeedback(tt.order, tt.pnl, tt.symbol, tt.side, tt.openPositionBySymbolSide)
+			assert.Equal(t, tt.expected, actual)
+		})
+	}
+}
+
+func TestResolveScalpingFuturesWalletUSDT_SummaryOnlyBalanceReturnsZero(t *testing.T) {
+	balance := &ccxt.BalanceResponse{
+		Exchange: "bitget",
+		Total: map[string]float64{
+			"USDT_FUTURES_USDT": 2.25,
+			"USDT":              12.75,
+		},
+		Raw: map[string]interface{}{
+			"summary_only_balance_keys": map[string]interface{}{
+				"USDT_FUTURES_USDT": true,
+				"USDT":              true,
+			},
+		},
+	}
+
+	assert.Zero(t, resolveScalpingFuturesWalletUSDT(balance))
+	assert.Equal(t, "summary:USDT_FUTURES_USDT", resolveScalpingWalletBasisSource(balance))
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFill(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-closed-feedback-skip-entry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "entry-1",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(2),
+		EntryPrice: decimal.NewFromFloat(1),
+		OpenedAt:   time.Now().UTC().Add(-30 * time.Second),
+	}))
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+	handlers.SetLifecycleStore(store)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-skip-probable-entry-fill",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "ADA/USDT", 20).
+		Return([]map[string]interface{}{
+			{
+				"orderId":      "entry-1",
+				"side":         "buy",
+				"tradeSide":    "open",
+				"avgOpenPrice": "1.0",
+				"avgPrice":     "1.0",
+				"filled":       "2.0",
+				"pnl":          "0",
+			},
+		}, nil).
+		Once()
+
+	handlers.ingestClosedOrderFeedback(ctx, quest, "bitget", "ADA/USDT")
+
+	var tradeRows int
+	err = sqliteDB.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM trades WHERE order_id = $1`, "entry-1").Scan(&tradeRows)
+	require.NoError(t, err)
+	assert.Equal(t, 0, tradeRows)
+
+	positions, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 20)
+	require.NoError(t, err)
+	require.Len(t, positions, 1)
+	assert.Equal(t, "entry-1", positions[0].OrderID)
+
+	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
+	assert.True(t, processed["entry-1"])
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
+
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFillWhenSideMissingButPositionSidePresent(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-closed-feedback-skip-entry-position-side.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "entry-pos-side-1",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(2),
+		EntryPrice: decimal.NewFromFloat(1),
+		OpenedAt:   time.Now().UTC().Add(-30 * time.Second),
+	}))
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+	handlers.SetLifecycleStore(store)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-skip-probable-entry-fill-position-side",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "ADA/USDT", 20).
+		Return([]map[string]interface{}{
+			{
+				"orderId":      "entry-pos-side-1",
+				"tradeSide":    "open",
+				"positionSide": "long",
+				"avgOpenPrice": "1.0",
+				"avgPrice":     "1.0",
+				"filled":       "2.0",
+				"pnl":          "0",
+			},
+		}, nil).
+		Once()
+
+	handlers.ingestClosedOrderFeedback(ctx, quest, "bitget", "ADA/USDT")
+
+	var tradeRows int
+	err = sqliteDB.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM trades WHERE order_id = $1`, "entry-pos-side-1").Scan(&tradeRows)
+	require.NoError(t, err)
+	assert.Equal(t, 0, tradeRows)
+
+	positions, err := store.ListManagedOpenPositions(ctx, "chat-1", "bitget", 20)
+	require.NoError(t, err)
+	require.Len(t, positions, 1)
+	assert.Equal(t, "entry-pos-side-1", positions[0].OrderID)
+
+	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
+	assert.True(t, processed["entry-pos-side-1"])
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
+
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_DoesNotReprocessSkippedEntryFillAfterPositionDisappears(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-closed-feedback-dedupe-skipped-entry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "entry-repeat-1",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "BERA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(1),
+		OpenedAt:   time.Now().UTC().Add(-time.Minute),
+	}))
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+	handlers.SetLifecycleStore(store)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID:         "quest-repeat-skipped-entry-fill",
+		Checkpoint: map[string]interface{}{},
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	closedOrder := map[string]interface{}{
+		"orderId":      "entry-repeat-1",
+		"side":         "buy",
+		"tradeSide":    "open",
+		"avgOpenPrice": "1.0",
+		"avgPrice":     "1.0",
+		"filled":       "1.0",
+		"pnl":          "0",
+	}
+
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "BERA/USDT", 20).
+		Return([]map[string]interface{}{closedOrder}, nil).
+		Twice()
+
+	handlers.ingestClosedOrderFeedback(ctx, quest, "bitget", "BERA/USDT")
+
+	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
+	assert.True(t, processed["entry-repeat-1"])
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
+
+	handlers.SetLifecycleStore(nil)
+	handlers.ingestClosedOrderFeedback(ctx, quest, "bitget", "BERA/USDT")
+
+	var tradeRows int
+	err = sqliteDB.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM trades WHERE order_id = $1`, "entry-repeat-1").Scan(&tradeRows)
+	require.NoError(t, err)
+	assert.Equal(t, 0, tradeRows)
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]))
+	assert.Empty(t, checkpointString(quest.Checkpoint["last_pnl_reconciliation_summary"]))
+
+	orderExecutor.AssertExpectations(t)
 }
 
 func TestNormalizeAINotificationSemantics_RuntimeDegradedNotStrategyHold(t *testing.T) {
@@ -816,6 +1199,67 @@ func TestNormalizeAINotificationSemantics_StrategyHoldPreservedWhenConfidenceKno
 	assert.Equal(t, aiReasonStrategyHold, normalized.HoldCategory)
 }
 
+func TestNormalizeAINotificationSemantics_IndecisiveRuntimeEvidenceUsesParseContract(t *testing.T) {
+	notif := AIReasoningNotification{
+		DecisionType:    "scalping_digest",
+		Summary:         "Hold digest: waiting for qualified setup",
+		ConfidenceKnown: false,
+		ReasonCategory:  aiReasonStrategyHold,
+		Reasons: []string{
+			"Model output was incomplete and indecisive, ending with 'I'm torn' without committing to a trade.",
+		},
+		Action: "hold",
+	}
+
+	normalized := normalizeAINotificationSemantics(notif)
+	assert.False(t, normalized.ConfidenceKnown)
+	assert.Equal(t, aiReasonLLMParseContract, normalized.ReasonCategory)
+	assert.Equal(t, aiReasonLLMParseContract, normalized.HoldCategory)
+}
+
+func TestHoldDigestSummary_RuntimeParseContractUsesRuntimeSummary(t *testing.T) {
+	summary := holdDigestSummary(&AITradingDecision{
+		Reasoning: "Model output was incomplete and indecisive, ending with 'I'm torn' without committing to a trade.",
+	}, aiReasonLLMParseContract)
+	assert.Equal(t, "Hold digest: AI output incomplete, no reliable trade decision", summary)
+}
+
+func TestShouldNotifyPnLReconciliation(t *testing.T) {
+	now := time.Now().UTC()
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+
+	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-a", now))
+	recordPnLReconciliationNotification(quest, "summary-a", now)
+	assert.False(t, shouldNotifyPnLReconciliation(quest, "summary-a", now.Add(5*time.Minute)))
+	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-b", now.Add(5*time.Minute)))
+	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-a", now.Add(16*time.Minute)))
+}
+
+func TestRecordPnLReconciliationNotification_InitializesCheckpoint(t *testing.T) {
+	quest := &Quest{}
+	now := time.Now().UTC()
+	recordPnLReconciliationNotification(quest, "summary-a", now)
+	require.NotNil(t, quest.Checkpoint)
+	assert.Equal(t, "summary-a", quest.Checkpoint["last_pnl_reconciliation_summary"])
+	assert.Equal(t, now.Format(time.RFC3339), quest.Checkpoint["last_pnl_reconciliation_sent_at"])
+}
+
+func TestStructuredHoldBlock_UsesDecisionPolicySpreadThreshold(t *testing.T) {
+	decision := &AITradingDecision{
+		Action:                 "hold",
+		ReasonCategory:         aiReasonStrategyHold,
+		MaxBidAskSpreadPct:     0.22,
+		ExecutionGate:          &appautonomy.ExecutionGateSnapshot{Allowed: false, BlockCode: appautonomy.CandidateRejectSpreadTooWide, BlockReason: "spread gate"},
+		ConfidenceKnown:        true,
+		EffectiveMinConfidence: 0.65,
+	}
+
+	code, next, human := structuredHoldBlock(decision)
+	assert.Equal(t, appautonomy.CandidateRejectSpreadTooWide, code)
+	assert.Equal(t, "spread gate", human)
+	assert.Contains(t, next, "0.22%")
+}
+
 func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_PersistsLegacyTradeClose(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-trade-journal.db"))
 	require.NoError(t, err)
@@ -830,8 +1274,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_PersistsLegacyTradeCl
 	handlers.SetOrderExecutor(orderExecutor)
 
 	quest := &Quest{
-		ID:         "quest-1",
-		Checkpoint: map[string]interface{}{},
+		ID: "quest-1",
 		Metadata: map[string]string{
 			"chat_id": "chat-1",
 		},
@@ -882,6 +1325,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_PersistsLegacyTradeCl
 	assert.InDelta(t, 1.05, exitPrice, 0.0001)
 	assert.InDelta(t, 0.10, pnl, 0.0001)
 	assert.InDelta(t, 0.01, fees, 0.0001)
+	require.NotNil(t, quest.Checkpoint)
 	assert.Contains(t, quest.Checkpoint["processed_closed_order_ids"], "ord-1")
 
 	orderExecutor.AssertExpectations(t)
@@ -1001,6 +1445,53 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_LegacyCloseWithoutOpt
 	require.NoError(t, err)
 	assert.Equal(t, "closed", status)
 	assert.Contains(t, quest.Checkpoint["processed_closed_order_ids"], "ord-no-optional")
+
+	orderExecutor.AssertExpectations(t)
+}
+
+func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_TracksMissingPnL(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-closed-feedback-missing-pnl.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers.SetDB(sqliteDB.DB)
+
+	orderExecutor := new(MockScalpingOrderExecutor)
+	handlers.SetOrderExecutor(orderExecutor)
+
+	quest := &Quest{
+		ID: "quest-missing-pnl",
+		Metadata: map[string]string{
+			"chat_id": "chat-1",
+		},
+	}
+
+	orderExecutor.
+		On("GetClosedOrders", mock.Anything, "bitget", "BTC/USDT", 20).
+		Return([]map[string]interface{}{
+			{
+				"orderId":  "ord-missing-pnl",
+				"side":     "buy",
+				"avgPrice": "101.0",
+				"filled":   "0.25",
+			},
+		}, nil).
+		Once()
+
+	handlers.ingestClosedOrderFeedback(context.Background(), quest, "bitget", "BTC/USDT")
+
+	var tradeRows int
+	err = sqliteDB.DB.QueryRowContext(context.Background(), `SELECT COUNT(1) FROM trades WHERE order_id = $1`, "ord-missing-pnl").Scan(&tradeRows)
+	require.NoError(t, err)
+	assert.Equal(t, 0, tradeRows)
+
+	require.NotNil(t, quest.Checkpoint)
+	processed := getProcessedOrderIDs(quest.Checkpoint["processed_closed_order_ids"])
+	assert.False(t, processed["ord-missing-pnl"])
+	assert.Equal(t, 1, checkpointInt(quest.Checkpoint["closed_order_feedback_missing_pnl"]))
 
 	orderExecutor.AssertExpectations(t)
 }
@@ -1134,18 +1625,20 @@ func TestIntegratedQuestHandlers_SetDB_RetriesTradeJournalInitAfterDBReplacement
 func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsStaleDecisionMetadata(t *testing.T) {
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{
-		"account_tier":                       "micro",
-		"effective_min_confidence":           0.72,
-		"effective_max_capital_pct":          1.25,
-		"effective_max_concurrent_positions": 1,
-		"effective_policy_adjustments":       []string{"recovery_cap"},
-		"candidate_universe_count":           8,
-		"candidate_ranked_count":             3,
-		"candidate_viable_count":             1,
-		"top_candidate_rejections":           []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "spread_too_wide"}},
-		"rollout_stage_current":              "paper",
-		"rollout_status_current":             "paused",
-		"rollout_gate_reason_current":        "safe mode",
+		"account_tier":                          "micro",
+		"effective_min_confidence":              0.72,
+		"effective_max_capital_pct":             1.25,
+		"effective_max_concurrent_positions":    1,
+		"effective_policy_adjustments":          []string{"recovery_cap"},
+		"effective_policy_adjustment_counts":    map[string]int{"recovery_cap": 1},
+		"candidate_universe_count":              8,
+		"candidate_ranked_count":                3,
+		"candidate_viable_count":                1,
+		"top_candidate_rejections":              []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "spread_too_wide"}},
+		"top_candidate_rejection_reason_counts": map[string]int{"spread_too_wide": 1},
+		"rollout_stage_current":                 "paper",
+		"rollout_status_current":                "paused",
+		"rollout_gate_reason_current":           "safe mode",
 	}}
 
 	handlers.applyScalpingCycleDecisionDiagnostics(quest, &AITradingDecision{})
@@ -1156,10 +1649,12 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsSta
 		"effective_max_capital_pct",
 		"effective_max_concurrent_positions",
 		"effective_policy_adjustments",
+		"effective_policy_adjustment_counts",
 		"candidate_universe_count",
 		"candidate_ranked_count",
 		"candidate_viable_count",
 		"top_candidate_rejections",
+		"top_candidate_rejection_reason_counts",
 		"rollout_stage_current",
 		"rollout_status_current",
 		"rollout_gate_reason_current",
@@ -1172,11 +1667,13 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsSta
 func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsNilDecisionMetadata(t *testing.T) {
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{
-		"account_tier":                       "small",
-		"effective_min_confidence":           0.70,
-		"effective_max_capital_pct":          2.5,
-		"effective_max_concurrent_positions": 3,
-		"effective_policy_adjustments":       []string{"performance_cap_applied"},
+		"account_tier":                          "small",
+		"effective_min_confidence":              0.70,
+		"effective_max_capital_pct":             2.5,
+		"effective_max_concurrent_positions":    3,
+		"effective_policy_adjustments":          []string{"performance_cap_applied"},
+		"effective_policy_adjustment_counts":    map[string]int{"performance_cap_applied": 1},
+		"top_candidate_rejection_reason_counts": map[string]int{"spread_too_wide": 1},
 	}}
 
 	handlers.applyScalpingCycleDecisionDiagnostics(quest, nil)
@@ -1187,10 +1684,47 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsNil
 		"effective_max_capital_pct",
 		"effective_max_concurrent_positions",
 		"effective_policy_adjustments",
+		"effective_policy_adjustment_counts",
+		"top_candidate_rejection_reason_counts",
 	} {
 		_, ok := quest.Checkpoint[key]
 		assert.False(t, ok, key)
 	}
+}
+
+func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_PopulatesCountMetadata(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+	decision := &AITradingDecision{
+		PolicyAdjustments: []string{
+			"weak_recent_win_rate",
+			"weak_recent_win_rate",
+			"negative_expectancy_cap",
+		},
+		CandidateFunnelKnown: true,
+		CandidateFunnel: appautonomy.CandidateFunnelSnapshot{
+			CandidateUniverseCount: 4,
+			CandidateRankedCount:   3,
+			CandidateViableCount:   1,
+			TopCandidateRejections: []appautonomy.CandidateRejection{
+				{Symbol: "AAA/USDT", Reason: appautonomy.CandidateRejectSpreadTooWide},
+				{Symbol: "BBB/USDT", Reason: appautonomy.CandidateRejectSpreadTooWide},
+				{Symbol: "CCC/USDT", Reason: appautonomy.CandidateRejectMissingOrderbookSignal},
+			},
+		},
+	}
+
+	handlers.applyScalpingCycleDecisionDiagnostics(quest, decision)
+
+	adjCounts, ok := quest.Checkpoint["effective_policy_adjustment_counts"].(map[string]int)
+	require.True(t, ok)
+	assert.Equal(t, 2, adjCounts["weak_recent_win_rate"])
+	assert.Equal(t, 1, adjCounts["negative_expectancy_cap"])
+
+	rejectCounts, ok := quest.Checkpoint["top_candidate_rejection_reason_counts"].(map[string]int)
+	require.True(t, ok)
+	assert.Equal(t, 2, rejectCounts[appautonomy.CandidateRejectSpreadTooWide])
+	assert.Equal(t, 1, rejectCounts[appautonomy.CandidateRejectMissingOrderbookSignal])
 }
 
 func TestIntegratedQuestHandlers_RecordTradeDecision_DoesNotSynthesizeTradeMemoryID(t *testing.T) {

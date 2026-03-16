@@ -400,7 +400,7 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_WrapsSetLeverageFailures(t *t
 	assert.Equal(t, 1, setCalls)
 }
 
-func TestBitgetOrderExecutor_EnsureFuturesLeverage_ErrOnVerificationMismatch(t *testing.T) {
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_UsesExchangeModeOnVerificationMismatch(t *testing.T) {
 	accountCalls := 0
 	setCalls := 0
 
@@ -429,14 +429,15 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_ErrOnVerificationMismatch(t *
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 	executor.baseURL = server.URL
 
-	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "verification mismatch")
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+	assert.Equal(t, 4, leverage)
+	assert.Equal(t, "exchange preserved", status)
 	assert.Equal(t, 2, accountCalls)
 	assert.Equal(t, 1, setCalls)
 }
 
-func TestBitgetOrderExecutor_EnsureFuturesLeverage_ErrOnMarginModeMismatch(t *testing.T) {
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_UsesExchangeModeOnMarginModeMismatch(t *testing.T) {
 	accountCalls := 0
 	setCalls := 0
 
@@ -461,11 +462,42 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_ErrOnMarginModeMismatch(t *te
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 	executor.baseURL = server.URL
 
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "exchange preserved", status)
+	assert.Equal(t, 2, accountCalls)
+	assert.Equal(t, 1, setCalls)
+}
+
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_RejectsHigherExchangePreservedLeverage(t *testing.T) {
+	accountCalls := 0
+	setCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
+				"marginMode":"crossed",
+				"posMode":"one_way_mode",
+				"crossMarginLeverage":"10"
+			}}`))
+		case "/api/v2/mix/account/set-leverage":
+			setCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
 	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "verification mismatch")
-	assert.Contains(t, err.Error(), "isolated")
-	assert.Contains(t, err.Error(), "crossed")
+	assert.Contains(t, err.Error(), "exchange preserved higher 10x crossed")
 	assert.Equal(t, 2, accountCalls)
 	assert.Equal(t, 1, setCalls)
 }
@@ -533,6 +565,38 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksOnLeverageSyncFailure(t
 	require.Error(t, err)
 	assert.Empty(t, orderID)
 	assert.Contains(t, err.Error(), "failed to sync futures leverage")
+}
+
+func TestBitgetOrderExecutor_PlaceOrderWithDetails_AcceptsNumericLeverageFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"marginMode":"isolated","posMode":"one_way_mode","crossMarginLeverage":5,"crossedMarginLeverage":5,"longLeverage":5,"shortLeverage":5,"isolatedLongLever":5,"isolatedShortLever":5}}`))
+		case "/api/v2/mix/market/contracts":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{"sizeMultiplier":"1","minTradeNum":"1","volumePlace":"0","pricePlace":"2"}]}`))
+		case "/api/v2/mix/order/place-order":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"futures-123"}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	entryPrice := decimal.NewFromInt(1)
+	orderID, err := executor.PlaceOrderWithDetails(context.Background(), TradeDetails{
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		MarketType: "futures",
+		Leverage:   5,
+		AmountUSDT: decimal.NewFromInt(10),
+		EntryPrice: &entryPrice,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "futures-123", orderID)
 }
 
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_DoesNotSpotFallbackOnLeverageSyncMissingSymbol(t *testing.T) {

@@ -96,7 +96,7 @@ func gatewayStart(cCtx *cli.Context) error {
 	supervised := cCtx.Bool("supervised") || getEnvBoolDefault("NEURATRADE_GATEWAY_SUPERVISED", false)
 	healthTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", 90)
 	adminAPIKey := normalizeAdminAPIKey(getEnvOrDefault("ADMIN_API_KEY", configAdminAPIKey(cfg)))
-	jwtSecret := normalizeJWTSecret(getEnvOrDefault("JWT_SECRET", ""))
+	jwtSecret := normalizeJWTSecret(getEnvOrDefault("JWT_SECRET", configJWTSecret(cfg)))
 
 	sqlitePath := getEnvOrDefault("SQLITE_PATH", "")
 	if sqlitePath == "" && cfg != nil && cfg.Database.SQLitePath != "" {

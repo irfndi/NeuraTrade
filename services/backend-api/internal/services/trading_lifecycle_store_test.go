@@ -116,6 +116,7 @@ func TestTradingLifecycleStore_GetRealizedPerformanceAndOpenOrders(t *testing.T)
 		EntryPrice:  decimal.NewFromFloat(1.0),
 		ExitPrice:   decimal.NewFromFloat(1.03),
 		RealizedPnL: decimal.NewFromFloat(0.15),
+		Fees:        decimal.NewFromFloat(-0.01),
 		ClosedAt:    now.Add(-20 * time.Minute),
 	}))
 	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
@@ -129,7 +130,22 @@ func TestTradingLifecycleStore_GetRealizedPerformanceAndOpenOrders(t *testing.T)
 		EntryPrice:  decimal.NewFromFloat(0.2),
 		ExitPrice:   decimal.NewFromFloat(0.19),
 		RealizedPnL: decimal.NewFromFloat(-0.08),
+		Fees:        decimal.NewFromFloat(-0.02),
 		ClosedAt:    now.Add(-30 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "closed-ord-flat",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "XRP/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(5),
+		EntryPrice:  decimal.NewFromFloat(0.3),
+		ExitPrice:   decimal.NewFromFloat(0.3),
+		RealizedPnL: decimal.Zero,
+		Fees:        decimal.Zero,
+		ClosedAt:    now.Add(-25 * time.Minute),
 	}))
 	// Different chat, excluded by filter.
 	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
@@ -152,12 +168,167 @@ func TestTradingLifecycleStore_GetRealizedPerformanceAndOpenOrders(t *testing.T)
 
 	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
 	require.NoError(t, err)
-	assert.Equal(t, 2, perf.Trades)
+	assert.Equal(t, 3, perf.Trades)
 	assert.Equal(t, 1, perf.Wins)
 	assert.Equal(t, 1, perf.Losses)
-	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(0.07)))
-	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(0.15)))
-	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(-0.08)))
+	assert.Equal(t, 1, perf.Breakeven)
+	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(0.04)))
+	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(0.14)))
+	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(-0.10)))
+}
+
+func TestTradingLifecycleStore_GetRealizedPerformance_ExcludesSyntheticLifecycleCloses(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-performance-filter.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "closed-real-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "DOGE/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(102),
+		RealizedPnL: decimal.NewFromFloat(2),
+		Fees:        decimal.Zero,
+		Source:      "exchange_reconciliation",
+		ClosedAt:    now.Add(-10 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "sync-bitget-doge-usdt-long",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "DOGE/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(100),
+		RealizedPnL: decimal.Zero,
+		Fees:        decimal.Zero,
+		Source:      "bootstrap_reconciliation",
+		ClosedAt:    now.Add(-5 * time.Minute),
+	}))
+
+	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 1, perf.Trades)
+	assert.Equal(t, 1, perf.Wins)
+	assert.Zero(t, perf.Losses)
+	assert.Zero(t, perf.Breakeven)
+	assert.True(t, perf.RealizedPnL.Equal(decimal.NewFromFloat(2)))
+}
+
+func TestTradingLifecycleStore_GetRecentLossStreak_UsesFeeAdjustedNetPnL(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-loss-streak-fees.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-net-loss-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50010),
+		RealizedPnL: decimal.NewFromFloat(1),
+		Fees:        decimal.NewFromFloat(2),
+		ClosedAt:    now.Add(-2 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-net-loss-2",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ETH/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.5),
+		EntryPrice:  decimal.NewFromFloat(2000),
+		ExitPrice:   decimal.NewFromFloat(2000),
+		RealizedPnL: decimal.Zero,
+		Fees:        decimal.NewFromFloat(-1),
+		ClosedAt:    now.Add(-4 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-older-win",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "SOL/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(1),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(103),
+		RealizedPnL: decimal.NewFromFloat(3),
+		Fees:        decimal.NewFromFloat(1),
+		ClosedAt:    now.Add(-6 * time.Minute),
+	}))
+
+	summary, err := store.GetRecentLossStreak(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 2, summary.ConsecutiveLosses)
+	assert.WithinDuration(t, now.Add(-2*time.Minute), summary.LastTradeAt, time.Second)
+}
+
+func TestTradingLifecycleStore_GetRecentLossStreak_StopsAtLatestNetNonLoss(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-loss-streak-stop.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-latest-net-win",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50005),
+		RealizedPnL: decimal.NewFromFloat(2),
+		Fees:        decimal.NewFromFloat(1),
+		ClosedAt:    now.Add(-2 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "loss-streak-older-net-loss",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ETH/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.5),
+		EntryPrice:  decimal.NewFromFloat(2000),
+		ExitPrice:   decimal.NewFromFloat(2000),
+		RealizedPnL: decimal.Zero,
+		Fees:        decimal.NewFromFloat(-1),
+		ClosedAt:    now.Add(-4 * time.Minute),
+	}))
+
+	summary, err := store.GetRecentLossStreak(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Zero(t, summary.ConsecutiveLosses)
+	assert.WithinDuration(t, now.Add(-2*time.Minute), summary.LastTradeAt, time.Second)
 }
 
 func TestTradingLifecycleStore_GetRealizedReturnSeries(t *testing.T) {
@@ -204,6 +375,213 @@ func TestTradingLifecycleStore_GetRealizedReturnSeries(t *testing.T) {
 	require.Len(t, returns, 2)
 	assert.True(t, returns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
 	assert.True(t, returns[1].Round(6).Equal(decimal.NewFromFloat(-0.01)))
+}
+
+func TestTradingLifecycleStore_GetRealizedReturnSeries_FeeAdjustedAndGross(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-returns-fees.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "ret-fee-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50500),
+		RealizedPnL: decimal.NewFromFloat(5),
+		Fees:        decimal.NewFromFloat(-1),
+		ClosedAt:    now.Add(-5 * time.Minute),
+	}))
+
+	netReturns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, netReturns, 1)
+	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.008)))
+
+	grossReturns, err := store.GetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, grossReturns, 1)
+	assert.True(t, grossReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+
+	explicitGrossReturns, err := store.GetGrossRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, explicitGrossReturns, 1)
+	assert.True(t, explicitGrossReturns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+	assert.True(t, grossReturns[0].Equal(explicitGrossReturns[0]))
+}
+
+func TestTradingLifecycleStore_BitgetExchangeReconciliationAppliesFeesToRealizedPnL(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-bitget-net-pnl.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "ret-bitget-net-1",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50500),
+		RealizedPnL: decimal.NewFromFloat(5),
+		Fees:        decimal.NewFromFloat(1),
+		Source:      "exchange_reconciliation",
+		ClosedAt:    now.Add(-5 * time.Minute),
+	}))
+
+	netReturns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, netReturns, 1)
+	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.008)))
+
+	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(4)))
+	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(4)))
+	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(4)))
+}
+
+func TestTradingLifecycleStore_GetRealizedReturnSeries_ToleratesNullFees(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-returns-null-fees.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	ctx := context.Background()
+	_, err = sqliteDB.Exec(ctx, `
+		CREATE TABLE realized_pnl_journal (
+			id TEXT PRIMARY KEY,
+			order_id TEXT NOT NULL UNIQUE,
+			chat_id TEXT,
+			exchange TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			filled_amount NUMERIC NOT NULL DEFAULT 0,
+			entry_price NUMERIC NOT NULL DEFAULT 0,
+			exit_price NUMERIC NOT NULL DEFAULT 0,
+			realized_pnl NUMERIC NOT NULL DEFAULT 0,
+			fees NUMERIC NULL,
+			source TEXT NOT NULL DEFAULT 'autonomous',
+			closed_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		)
+	`)
+	require.NoError(t, err)
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO realized_pnl_journal (
+			id, order_id, chat_id, exchange, symbol, side, filled_amount,
+			entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`, "null-fees-1", "null-fees-1", "chat-1", "bitget", "BTC/USDT", "buy",
+		decimal.NewFromFloat(0.01), decimal.NewFromFloat(50000), decimal.NewFromFloat(50500),
+		decimal.NewFromFloat(5), nil, "autonomous", now.Add(-5*time.Minute), now.Add(-5*time.Minute))
+	require.NoError(t, err)
+
+	returns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, returns, 1)
+	assert.True(t, returns[0].Round(6).Equal(decimal.NewFromFloat(0.01)))
+}
+
+func TestTradingLifecycleStore_FeeNormalizationParityAcrossGoAndSQL(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-fee-normalization-parity.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	t.Run("go helper normalizes fee signs consistently", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			fees     decimal.Decimal
+			expected decimal.Decimal
+		}{
+			{name: "positive cost becomes negative adjustment", fees: decimal.NewFromFloat(1), expected: decimal.NewFromFloat(-1)},
+			{name: "negative cost stays negative", fees: decimal.NewFromFloat(-1), expected: decimal.NewFromFloat(-1)},
+			{name: "zero stays zero", fees: decimal.Zero, expected: decimal.Zero},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.True(t, normalizeLifecycleFeeAdjustment(tc.fees).Equal(tc.expected))
+				assert.True(t, adjustedLifecyclePnL(decimal.NewFromFloat(5), tc.fees, "bitget", "exchange_reconciliation").Equal(decimal.NewFromFloat(5).Add(tc.expected)))
+			})
+		}
+	})
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "fee-parity-positive",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(50000),
+		ExitPrice:   decimal.NewFromFloat(50500),
+		RealizedPnL: decimal.NewFromFloat(5),
+		Fees:        decimal.NewFromFloat(1),
+		Source:      "exchange_reconciliation",
+		ClosedAt:    now.Add(-5 * time.Minute),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "fee-parity-negative",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ETH/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.5),
+		EntryPrice:  decimal.NewFromFloat(2000),
+		ExitPrice:   decimal.NewFromFloat(2010),
+		RealizedPnL: decimal.NewFromFloat(5),
+		Fees:        decimal.NewFromFloat(-1),
+		Source:      "exchange_reconciliation",
+		ClosedAt:    now.Add(-3 * time.Minute),
+	}))
+
+	netReturns, err := store.GetNetRealizedReturnSeries(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.Len(t, netReturns, 2)
+	assert.True(t, netReturns[0].Round(6).Equal(decimal.NewFromFloat(0.008)))
+	assert.True(t, netReturns[1].Round(6).Equal(decimal.NewFromFloat(0.004)))
+
+	perf, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.True(t, perf.RealizedPnL.Equal(decimal.NewFromFloat(8)))
+	assert.True(t, perf.BestTrade.Equal(decimal.NewFromFloat(4)))
+	assert.True(t, perf.WorstTrade.Equal(decimal.NewFromFloat(4)))
 }
 
 func TestTradingLifecycleStore_RecordClosedOrder_ClosesSyncRowInPlace(t *testing.T) {
@@ -285,6 +663,386 @@ func TestTradingLifecycleStore_RecordClosedOrder_ClosesSyncRowInPlace(t *testing
 	`).Scan(&rowCount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, rowCount)
+}
+
+func TestTradingLifecycleStore_SyncPosition_AssignsDefaultProtectionForNewSyncRows(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-default-protection.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.00),
+		MarkPrice:     decimal.NewFromFloat(1.02),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	var stopLoss decimal.Decimal
+	var takeProfit decimal.Decimal
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT stop_loss, take_profit
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&stopLoss, &takeProfit)
+	require.NoError(t, err)
+	assert.True(t, stopLoss.GreaterThan(decimal.Zero))
+	assert.True(t, takeProfit.GreaterThan(decimal.Zero))
+	assert.True(t, stopLoss.LessThan(decimal.NewFromFloat(1.00)))
+	assert.True(t, takeProfit.GreaterThan(decimal.NewFromFloat(1.00)))
+}
+
+func TestTradingLifecycleStore_SyncPosition_PreservesExistingProtection(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-preserve-protection.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.00),
+		MarkPrice:     decimal.NewFromFloat(1.02),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	require.NoError(t, store.UpdatePositionProtection(
+		ctx,
+		"sync-bitget-ada-usdt-long",
+		decimal.NewFromFloat(0.97),
+		decimal.NewFromFloat(1.04),
+		decimal.NewFromFloat(1.02),
+		decimal.NewFromFloat(0.10),
+		time.Now().UTC(),
+	))
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.00),
+		MarkPrice:     decimal.NewFromFloat(1.03),
+		UnrealizedPnl: decimal.NewFromFloat(0.15),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	var stopLoss decimal.Decimal
+	var takeProfit decimal.Decimal
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT stop_loss, take_profit
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&stopLoss, &takeProfit)
+	require.NoError(t, err)
+	assert.True(t, stopLoss.Equal(decimal.NewFromFloat(0.97)))
+	assert.True(t, takeProfit.Equal(decimal.NewFromFloat(1.04)))
+}
+
+func TestTradingLifecycleStore_SyncPosition_PreservesAutonomousSource(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-preserve-source.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-autonomous-src",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(5),
+		EntryPrice: decimal.NewFromFloat(1.0),
+		Source:     "autonomous",
+	}))
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.0),
+		MarkPrice:     decimal.NewFromFloat(1.01),
+		UnrealizedPnl: decimal.NewFromFloat(0.05),
+		Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+	}))
+
+	var source string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT source
+		FROM trading_positions
+		WHERE order_id = 'ord-autonomous-src'
+		  AND LOWER(status) = 'open'
+	`).Scan(&source)
+	require.NoError(t, err)
+	assert.Equal(t, "autonomous", source)
+}
+
+func TestTradingLifecycleStore_SyncPosition_PreservesBootstrapSourceCaseInsensitively(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-preserve-bootstrap-source.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO trading_positions (
+			position_id, order_id, chat_id, exchange, symbol, side, market_type,
+			size, entry_price, stop_loss, take_profit, last_price, unrealized_pnl,
+			protection_updated_at, close_price, realized_pnl, status, source, opened_at, closed_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,$9,$10,$11,$12,$13,0,0,'open',$14,$15,NULL,$16)
+	`,
+		"sync-bitget-ada-usdt-long",
+		"sync-bitget-ada-usdt-long",
+		"chat-1",
+		"bitget",
+		"ADA/USDT",
+		"buy",
+		decimal.NewFromFloat(5),
+		decimal.NewFromFloat(1.0),
+		decimal.NewFromFloat(0.95),
+		decimal.NewFromFloat(1.05),
+		decimal.NewFromFloat(1.01),
+		decimal.NewFromFloat(0.05),
+		now,
+		"Bootstrap_Positions",
+		now,
+		now,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.0),
+		MarkPrice:     decimal.NewFromFloat(1.02),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(now.Add(time.Minute)),
+	}))
+
+	var source string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT source
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&source)
+	require.NoError(t, err)
+	assert.Equal(t, "bootstrap_positions", source)
+}
+
+func TestTradingLifecycleStore_SyncPosition_DoesNotReopenClosedRowFromStaleSnapshot(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-stale-reopen.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	openedAt := time.Now().UTC().Add(-10 * time.Minute)
+	closedAt := openedAt.Add(5 * time.Minute)
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.0),
+		MarkPrice:     decimal.NewFromFloat(1.01),
+		UnrealizedPnl: decimal.NewFromFloat(0.05),
+		Timestamp:     ccxt.UnixTimestamp(openedAt),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "sync-bitget-ada-usdt-long",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ADA/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(5),
+		EntryPrice:  decimal.NewFromFloat(1.0),
+		ExitPrice:   decimal.NewFromFloat(0.99),
+		RealizedPnL: decimal.NewFromFloat(-0.05),
+		Source:      "startup_drift_repair_exchange_missing",
+		ClosedAt:    closedAt,
+	}))
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.0),
+		MarkPrice:     decimal.NewFromFloat(1.02),
+		UnrealizedPnl: decimal.NewFromFloat(0.10),
+		Timestamp:     ccxt.UnixTimestamp(closedAt.Add(-time.Minute)),
+	}))
+
+	var status string
+	var rowClosedAt time.Time
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT LOWER(status), closed_at
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&status, &rowClosedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", status)
+	assert.True(t, rowClosedAt.Equal(closedAt))
+}
+
+func TestTradingLifecycleStore_SyncPosition_ReopensClosedRowWhenSnapshotIsNewer(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-reopen-newer.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	openedAt := time.Now().UTC().Add(-10 * time.Minute)
+	closedAt := openedAt.Add(5 * time.Minute)
+	reopenedAt := closedAt.Add(2 * time.Minute)
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(5),
+		EntryPrice:    decimal.NewFromFloat(1.0),
+		MarkPrice:     decimal.NewFromFloat(1.01),
+		UnrealizedPnl: decimal.NewFromFloat(0.05),
+		Timestamp:     ccxt.UnixTimestamp(openedAt),
+	}))
+	require.NoError(t, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "sync-bitget-ada-usdt-long",
+		ChatID:      "chat-1",
+		Exchange:    "bitget",
+		Symbol:      "ADA/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(5),
+		EntryPrice:  decimal.NewFromFloat(1.0),
+		ExitPrice:   decimal.NewFromFloat(0.99),
+		RealizedPnL: decimal.NewFromFloat(-0.05),
+		Source:      "manual_reconciliation",
+		ClosedAt:    closedAt,
+	}))
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(6),
+		EntryPrice:    decimal.NewFromFloat(1.02),
+		MarkPrice:     decimal.NewFromFloat(1.03),
+		UnrealizedPnl: decimal.NewFromFloat(0.06),
+		Timestamp:     ccxt.UnixTimestamp(reopenedAt),
+	}))
+
+	var status string
+	var size decimal.Decimal
+	var entryPrice decimal.Decimal
+	var rowClosedAt *time.Time
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT LOWER(status), size, entry_price, closed_at
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&status, &size, &entryPrice, &rowClosedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "open", status)
+	assert.True(t, size.Equal(decimal.NewFromFloat(6)))
+	assert.True(t, entryPrice.Equal(decimal.NewFromFloat(1.02)))
+	assert.Nil(t, rowClosedAt)
+}
+
+func TestTradingLifecycleStore_SyncPosition_DoesNotReopenClosedRowWhenClosedAtMissing(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-sync-null-closed-at.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO trading_positions (
+			position_id, order_id, chat_id, exchange, symbol, side, market_type,
+			size, entry_price, stop_loss, take_profit, last_price, unrealized_pnl,
+			protection_updated_at, close_price, realized_pnl, status, source, opened_at, closed_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'futures',$7,$8,$9,$10,$11,$12,$13,$14,$15,'closed',$16,$17,NULL,$18)
+	`,
+		"sync-bitget-ada-usdt-long",
+		"sync-bitget-ada-usdt-long",
+		"chat-1",
+		"bitget",
+		"ADA/USDT",
+		"buy",
+		decimal.NewFromFloat(5),
+		decimal.NewFromFloat(1.0),
+		decimal.NewFromFloat(0.95),
+		decimal.NewFromFloat(1.05),
+		decimal.NewFromFloat(1.01),
+		decimal.NewFromFloat(0.05),
+		now,
+		decimal.NewFromFloat(0.99),
+		decimal.NewFromFloat(-0.05),
+		"manual_reconciliation",
+		now.Add(-10*time.Minute),
+		now,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, store.SyncPosition(ctx, "chat-1", "bitget", ccxt.Position{
+		Symbol:        "ADA/USDT",
+		Side:          "long",
+		Size:          decimal.NewFromFloat(6),
+		EntryPrice:    decimal.NewFromFloat(1.02),
+		MarkPrice:     decimal.NewFromFloat(1.03),
+		UnrealizedPnl: decimal.NewFromFloat(0.06),
+		Timestamp:     ccxt.UnixTimestamp(now.Add(time.Minute)),
+	}))
+
+	var status string
+	var size decimal.Decimal
+	var entryPrice decimal.Decimal
+	var rowClosedAt *time.Time
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT LOWER(status), size, entry_price, closed_at
+		FROM trading_positions
+		WHERE position_id = 'sync-bitget-ada-usdt-long'
+	`).Scan(&status, &size, &entryPrice, &rowClosedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", status)
+	assert.True(t, size.Equal(decimal.NewFromFloat(5)))
+	assert.True(t, entryPrice.Equal(decimal.NewFromFloat(1.0)))
+	assert.Nil(t, rowClosedAt)
 }
 
 func TestTradingLifecycleStore_RecordClosedOrder_PrefersOpenSyncRowOverLegacyOrderMapping(t *testing.T) {
@@ -608,6 +1366,47 @@ func TestTradingLifecycleStore_ReconcileExchangeSnapshot_DoesNotCloseOnStaleFetc
 	assert.Equal(t, "open", posStatus)
 }
 
+func TestTradingLifecycleStore_ReconcileExchangeSnapshot_DoesNotCloseWhenPositionsSnapshotIsStale(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-stale-positions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-open-stale-pos",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "SOL/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(100),
+		OpenedAt:   time.Now().UTC().Add(-20 * time.Minute),
+	}))
+
+	summary, err := store.ReconcileExchangeSnapshot(ctx, "chat-1", "bitget", LifecycleExchangeSnapshot{
+		OrdersFresh:    true,
+		PositionsFresh: false,
+	}, "bootstrap_reconciliation")
+	require.NoError(t, err)
+	assert.Equal(t, 0, summary.PositionsClosed)
+
+	var orderStatus string
+	var posStatus string
+	err = sqliteDB.QueryRow(ctx, `SELECT LOWER(status) FROM trading_orders WHERE order_id = $1`, "ord-open-stale-pos").Scan(&orderStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "open", orderStatus)
+	err = sqliteDB.QueryRow(ctx, `SELECT LOWER(status) FROM trading_positions WHERE order_id = $1`, "ord-open-stale-pos").Scan(&posStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "open", posStatus)
+}
+
 func TestTradingLifecycleStore_ReconcileExchangeSnapshot_KeepsRowsBackedByOpenOrders(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-open-order.db"))
 	require.NoError(t, err)
@@ -722,4 +1521,79 @@ func TestTradingLifecycleStore_ReconcileExchangeSnapshot_ClosesExcessRowsBySize(
 	).Scan(&closedCount)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, closedCount, 1)
+}
+
+func TestTradingLifecycleStore_ReconcileExchangeSnapshot_SyncsProvidedPositionsWithoutClosingWhenNotFresh(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-reconcile-provided-positions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-provided-a",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(50000),
+		OpenedAt:   time.Now().UTC().Add(-30 * time.Minute),
+	}))
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "ord-provided-b",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(1),
+		EntryPrice: decimal.NewFromFloat(51000),
+		OpenedAt:   time.Now().UTC().Add(-25 * time.Minute),
+	}))
+
+	summary, err := store.ReconcileExchangeSnapshot(ctx, "chat-1", "bitget", LifecycleExchangeSnapshot{
+		Positions: []ccxt.Position{
+			{
+				Symbol:        "BTC/USDT",
+				Side:          "long",
+				Size:          decimal.NewFromFloat(1),
+				EntryPrice:    decimal.NewFromFloat(50500),
+				MarkPrice:     decimal.NewFromFloat(50600),
+				UnrealizedPnl: decimal.NewFromFloat(100),
+				Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+			},
+		},
+		OrdersFresh:    true,
+		PositionsFresh: false,
+	}, "bootstrap_reconciliation")
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.PositionsSynced)
+	assert.Equal(t, 0, summary.PositionsClosed)
+
+	var openCount int
+	err = sqliteDB.QueryRow(
+		ctx,
+		`SELECT COUNT(*) FROM trading_positions WHERE order_id IN ($1, $2) AND LOWER(status) = 'open'`,
+		"ord-provided-a",
+		"ord-provided-b",
+	).Scan(&openCount)
+	require.NoError(t, err)
+	assert.Equal(t, 2, openCount)
+
+	err = sqliteDB.QueryRow(
+		ctx,
+		`SELECT COUNT(*) FROM trading_positions WHERE exchange = $1 AND symbol = $2 AND LOWER(status) = 'open'`,
+		"bitget",
+		"BTC/USDT",
+	).Scan(&openCount)
+	require.NoError(t, err)
+	assert.Equal(t, 3, openCount)
 }

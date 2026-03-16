@@ -35,6 +35,7 @@ type DynamicProtectionConfig struct {
 	BreakevenBufferPct    float64
 	TrailingStopPct       float64
 	TakeProfitDistancePct float64
+	MinAdjustmentPct      float64
 }
 
 var ErrProtectionSyncUnsupported = errors.New("exchange-side protection sync unsupported")
@@ -48,14 +49,17 @@ func DefaultDynamicProtectionConfig() DynamicProtectionConfig {
 		BreakevenBufferPct:    0.05,
 		TrailingStopPct:       0.45,
 		TakeProfitDistancePct: 0.60,
+		MinAdjustmentPct:      0.05,
 	}
 }
 
 type DynamicProtectionSummary struct {
-	Exchange           string
-	PositionsEvaluated int
-	ProtectionsUpdated int
-	Errors             int
+	Exchange            string
+	PositionsEvaluated  int
+	ProtectionsUpdated  int
+	MissingProtection   int
+	RecoveredProtection int
+	Errors              int
 }
 
 type DynamicProtectionManager struct {
@@ -111,7 +115,14 @@ func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, c
 	}
 	now := time.Now().UTC()
 	for _, pos := range positions {
+		if !isAutonomousManagedPosition(pos) {
+			continue
+		}
 		summary.PositionsEvaluated++
+		missingProtection := pos.StopLoss.LessThanOrEqual(decimal.Zero) || pos.TakeProfit.LessThanOrEqual(decimal.Zero)
+		if missingProtection {
+			summary.MissingProtection++
+		}
 		ticker, fetchErr := m.tickerSource.FetchSingleTicker(ctx, pos.Exchange, pos.Symbol)
 		if fetchErr != nil {
 			summary.Errors++
@@ -174,6 +185,9 @@ func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, c
 		}
 		if changed {
 			summary.ProtectionsUpdated++
+			if missingProtection {
+				summary.RecoveredProtection++
+			}
 		}
 	}
 
@@ -221,11 +235,11 @@ func (m *DynamicProtectionManager) computeTargets(pos ManagedOpenPosition, curre
 		trailingStop := currentPrice.Mul(decimal.NewFromInt(1).Sub(trail))
 		candidateStop := maxDecimal(stop, breakEvenStop, trailingStop)
 		candidateTake := maxDecimal(take, currentPrice.Mul(decimal.NewFromInt(1).Add(tpDist)))
-		if candidateStop.GreaterThan(stop) {
+		if candidateStop.GreaterThan(stop) && shouldApplyProtectionAdjustment(stop, candidateStop, m.config.MinAdjustmentPct) {
 			stop = candidateStop
 			changed = true
 		}
-		if candidateTake.GreaterThan(take) {
+		if candidateTake.GreaterThan(take) && shouldApplyProtectionAdjustment(take, candidateTake, m.config.MinAdjustmentPct) {
 			take = candidateTake
 			changed = true
 		}
@@ -242,11 +256,11 @@ func (m *DynamicProtectionManager) computeTargets(pos ManagedOpenPosition, curre
 	trailingStop := currentPrice.Mul(decimal.NewFromInt(1).Add(trail))
 	candidateStop := minDecimal(stop, breakEvenStop, trailingStop)
 	candidateTake := minDecimal(take, currentPrice.Mul(decimal.NewFromInt(1).Sub(tpDist)))
-	if candidateStop.LessThan(stop) {
+	if candidateStop.LessThan(stop) && shouldApplyProtectionAdjustment(stop, candidateStop, m.config.MinAdjustmentPct) {
 		stop = candidateStop
 		changed = true
 	}
-	if candidateTake.LessThan(take) {
+	if candidateTake.LessThan(take) && shouldApplyProtectionAdjustment(take, candidateTake, m.config.MinAdjustmentPct) {
 		take = candidateTake
 		changed = true
 	}
@@ -315,6 +329,17 @@ func minDecimal(values ...decimal.Decimal) decimal.Decimal {
 		}
 	}
 	return best
+}
+
+func shouldApplyProtectionAdjustment(current, next decimal.Decimal, minAdjustmentPct float64) bool {
+	if minAdjustmentPct <= 0 {
+		return true
+	}
+	if current.LessThanOrEqual(decimal.Zero) {
+		return true
+	}
+	deltaPct := next.Sub(current).Abs().Div(current).Mul(decimal.NewFromInt(100)).InexactFloat64()
+	return deltaPct >= minAdjustmentPct
 }
 
 func isPositionMissingProtectionError(err error) bool {
