@@ -287,13 +287,8 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 
 	if len(reasoning.Reasons) > 0 {
 		lines = append(lines, "", "**Key Factors:**")
-		for i, reason := range reasoning.Reasons {
-			if i < 5 {
-				lines = append(lines, fmt.Sprintf("• %s", reason))
-			}
-		}
-		if len(reasoning.Reasons) > 5 {
-			lines = append(lines, fmt.Sprintf("• ... and %d more factors", len(reasoning.Reasons)-5))
+		for _, reason := range reasoning.Reasons {
+			lines = append(lines, fmt.Sprintf("• %s", reason))
 		}
 	}
 

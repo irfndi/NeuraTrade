@@ -2181,7 +2181,7 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 			},
 		},
 		{
-			name: "many reasons truncated to 5",
+			name: "all reasons shown without truncation",
 			reasoning: AIReasoningNotification{
 				DecisionType: "complex_decision",
 				Summary:      "Multi-factor analysis",
@@ -2197,8 +2197,13 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 				},
 			},
 			contains: []string{
+				"Reason 1",
+				"Reason 2",
+				"Reason 3",
+				"Reason 4",
 				"Reason 5",
-				"and 2 more factors",
+				"Reason 6",
+				"Reason 7",
 			},
 		},
 	}
