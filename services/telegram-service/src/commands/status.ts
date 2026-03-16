@@ -410,7 +410,9 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         if (entryGatePriority === "none") {
           lines.push(`• Entry blocker: none`);
         } else {
-          lines.push(`• Entry blocker: ${entryGatePriority} (${blockerReason})`);
+          lines.push(
+            `• Entry blocker: ${entryGatePriority} (${blockerReason})`,
+          );
         }
         if (rolloutStageCurrent || rolloutStatusCurrent) {
           lines.push(
