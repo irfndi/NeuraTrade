@@ -111,7 +111,7 @@ describe("TelegramGrpcServer", () => {
     expect(result.error).toBeNull();
     expect(result.response?.ok).toBe(true);
     expect(sentMessages).toHaveLength(1);
-    expect(sentMessages[0].text).toContain("ACTION: BUY");
+    expect(sentMessages[0].text).toContain("Action: BUY");
 
     expect(stream.written).toHaveLength(1);
     expect(stream.written[0].type).toBe("action");
