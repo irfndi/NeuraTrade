@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -389,7 +390,7 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 		return nil
 	} else if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+		if (errors.As(err, &pgErr) && pgErr.Code == "42P01") || strings.Contains(strings.ToLower(err.Error()), "no such table") {
 			c.logger.Info("Funding rates table does not exist, skipping cache warm")
 			return nil
 		}

@@ -355,10 +355,19 @@ func gatewayStart(cCtx *cli.Context) error {
 	fmt.Println()
 	fmt.Println("🛑 Shutting down services...")
 
-	// Graceful shutdown
-	signalAndWait(backendCmd, gracefulTimeout)
-	signalAndWait(telegramCmd, gracefulTimeout)
-	signalAndWait(ccxtCmd, gracefulTimeout)
+	// Graceful shutdown: signal all processes in parallel, then wait sequentially
+	if backendCmd != nil && backendCmd.Process != nil {
+		backendCmd.Process.Signal(syscall.SIGTERM)
+	}
+	if telegramCmd != nil && telegramCmd.Process != nil {
+		telegramCmd.Process.Signal(syscall.SIGTERM)
+	}
+	if ccxtCmd != nil && ccxtCmd.Process != nil {
+		ccxtCmd.Process.Signal(syscall.SIGTERM)
+	}
+	waitForExit(backendCmd, gracefulTimeout)
+	waitForExit(telegramCmd, gracefulTimeout)
+	waitForExit(ccxtCmd, gracefulTimeout)
 	cleanupGatewayRuntimeArtifacts(statePath, "gateway stopped", servicePIDFiles...)
 
 	fmt.Println("✅ All services stopped")
@@ -845,7 +854,7 @@ func monitorGatewayHealth(
 			writeGatewayServiceState(statePath, "telegram", serviceRuntimeState(telegramUp, telegramHealthy), "", telegramURL)
 
 			if embeddedCCXT {
-				ccxtUp = backendUp && backendHealthy
+				ccxtUp = backendUp
 				writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(ccxtUp, backendHealthy), "embedded", "")
 			} else {
 				ccxtUp = processRunning(ccxtCmd)
@@ -897,6 +906,22 @@ func signalAndWait(cmd *exec.Cmd, shutdownTimeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(shutdownTimeout):
+		cmd.Process.Kill()
+		<-done
+	}
+}
+
+func waitForExit(cmd *exec.Cmd, timeout time.Duration) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
 		cmd.Process.Kill()
 		<-done
 	}
