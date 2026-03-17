@@ -472,7 +472,7 @@ func (ns *NotificationService) formatAggregatedArbitrageMessage(signals []*Aggre
 	})
 
 	var message strings.Builder
-	message.WriteString("🚀 *Aggregated Arbitrage Opportunities*\n\n")
+	message.WriteString("🚀 Aggregated Arbitrage Opportunities\n\n")
 
 	// Limit to top 5 opportunities to keep message manageable
 	maxSignals := len(signals)
@@ -481,7 +481,7 @@ func (ns *NotificationService) formatAggregatedArbitrageMessage(signals []*Aggre
 	}
 
 	for i, signal := range signals[:maxSignals] {
-		fmt.Fprintf(&message, "*%d. %s*\n", i+1, signal.Symbol)
+		fmt.Fprintf(&message, "%d. %s\n", i+1, signal.Symbol)
 		fmt.Fprintf(&message, "💰 Profit: %.2f%%\n", signal.ProfitPotential.InexactFloat64())
 		fmt.Fprintf(&message, "🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64())
 		fmt.Fprintf(&message, "⚡ Action: %s\n", strings.ToUpper(signal.Action))
@@ -506,7 +506,7 @@ func (ns *NotificationService) formatAggregatedArbitrageMessage(signals []*Aggre
 
 	message.WriteString("⏰ Generated: ")
 	message.WriteString(time.Now().Format("15:04:05 MST"))
-	message.WriteString("\n\n⚠️ *Trade at your own risk*")
+	message.WriteString("\n\n⚠️ Trade at your own risk")
 
 	return message.String()
 }
@@ -523,7 +523,7 @@ func (ns *NotificationService) formatAggregatedTechnicalMessage(signals []*Aggre
 	})
 
 	var message strings.Builder
-	message.WriteString("📊 *Aggregated Technical Analysis*\n\n")
+	message.WriteString("📊 Aggregated Technical Analysis\n\n")
 
 	// Limit to top 5 signals to keep message manageable
 	maxSignals := len(signals)
@@ -532,7 +532,7 @@ func (ns *NotificationService) formatAggregatedTechnicalMessage(signals []*Aggre
 	}
 
 	for i, signal := range signals[:maxSignals] {
-		fmt.Fprintf(&message, "*%d. %s*\n", i+1, signal.Symbol)
+		fmt.Fprintf(&message, "%d. %s\n", i+1, signal.Symbol)
 		fmt.Fprintf(&message, "📈 Signal: %s\n", strings.ToUpper(signal.Action))
 		fmt.Fprintf(&message, "💪 Strength: %s\n", signal.Strength)
 		fmt.Fprintf(&message, "🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64())
@@ -567,7 +567,7 @@ func (ns *NotificationService) formatAggregatedTechnicalMessage(signals []*Aggre
 
 	message.WriteString("⏰ Generated: ")
 	message.WriteString(time.Now().Format("15:04:05 MST"))
-	message.WriteString("\n\n⚠️ *Trade at your own risk*")
+	message.WriteString("\n\n⚠️ Trade at your own risk")
 
 	return message.String()
 }

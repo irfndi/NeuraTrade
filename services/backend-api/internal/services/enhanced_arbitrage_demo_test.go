@@ -57,13 +57,13 @@ func TestEnhancedArbitrageSignalFormatting(t *testing.T) {
 	message := notificationService.formatEnhancedArbitrageMessage(signal)
 
 	// Verify the message contains expected elements
-	assert.Contains(t, message, "🔄 *ARBITRAGE ALERT: BTC/USDT*")
-	assert.Contains(t, message, "💰 Profit: *0.80% - 1.40%* ($160 - $280 on $20000)")
+	assert.Contains(t, message, "🔄 ARBITRAGE ALERT: BTC/USDT")
+	assert.Contains(t, message, "💰 Profit: 0.80% - 1.40% ($160 - $280 on $20000)")
 	assert.Contains(t, message, "📈 BUY: $41750.5000 - $41850.7500 (Binance, Kraken, OKX, Bybit, KuCoin)")
 	assert.Contains(t, message, "📉 SELL: $42250.8000 - $42350.9000 (Coinbase, Gate.io, MEXC)")
-	assert.Contains(t, message, "⏰ Valid for: *5 minutes*")
-	assert.Contains(t, message, "🎯 Min Volume: *$10000*")
-	assert.Contains(t, message, "🎯 Confidence: *85.0%*")
+	assert.Contains(t, message, "⏰ Valid for: 5 minutes")
+	assert.Contains(t, message, "🎯 Min Volume: $10000")
+	assert.Contains(t, message, "🎯 Confidence: 85.0%")
 
 	// Print the formatted message for visual verification
 	fmt.Println("\n=== Enhanced Arbitrage Signal Format ===")

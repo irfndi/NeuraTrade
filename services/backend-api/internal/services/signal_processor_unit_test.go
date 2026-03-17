@@ -242,11 +242,10 @@ func TestSignalProcessor_ErrorScenarios(t *testing.T) {
 	assert.Equal(t, context.Canceled, ctx.Err())
 
 	// Test timeout context
-	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), time.Millisecond)
+	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer timeoutCancel()
 
-	// Wait for timeout
-	time.Sleep(time.Millisecond * 2)
+	time.Sleep(60 * time.Millisecond)
 	assert.Error(t, timeoutCtx.Err())
 	assert.Equal(t, context.DeadlineExceeded, timeoutCtx.Err())
 }

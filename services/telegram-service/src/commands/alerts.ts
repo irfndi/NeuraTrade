@@ -22,16 +22,16 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
 
       if (!response.data || response.data.length === 0) {
         const msg =
-          "🔔 *Your Alerts*\n\n" +
+          "🔔 Your Alerts\n\n" +
           "No alerts configured yet.\n\n" +
-          "*Available Alert Types:*\n" +
+          "Available Alert Types:\n" +
           ALERT_TYPES.map((a) => `${a.emoji} ${a.label}`).join("\n") +
-          "\n\n*To create an alert:*\n" +
+          "\n\nTo create an alert:\n" +
           "/alert_add arbitrage 1.0\n" +
           "(Creates arbitrage alert with 1% min profit)\n\n" +
           "Use /help for more commands.";
 
-        await ctx.reply(msg, { parse_mode: "Markdown" });
+        await ctx.reply(msg);
         return;
       }
 
@@ -40,19 +40,19 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
           const typeInfo = ALERT_TYPES.find((t) => t.type === alert.alert_type);
           const emoji = typeInfo?.emoji || "🔔";
           const status = alert.is_active ? "✅" : "❌";
-          return `${i + 1}. ${emoji} *${typeInfo?.label || alert.alert_type}*\n   Status: ${status}\n   ID: \`${alert.id.slice(0, 8)}\``;
+          return `${i + 1}. ${emoji} ${typeInfo?.label || alert.alert_type}\n   Status: ${status}\n   ID: ${alert.id}`;
         })
         .join("\n\n");
 
       const msg =
-        `🔔 *Your Alerts* (${response.data.length})\n\n` +
+        `🔔 Your Alerts (${response.data.length})\n\n` +
         alertList +
-        "\n\n*Commands:*\n" +
+        "\n\nCommands:\n" +
         "/alert_add [type] [min_profit]\n" +
         "/alert_toggle [id]\n" +
         "/alert_del [id]";
 
-      await ctx.reply(msg, { parse_mode: "Markdown" });
+      await ctx.reply(msg);
     } catch {
       await ctx.reply("Unable to fetch alerts. Please try again.");
     }
@@ -84,13 +84,13 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
 
       const typeInfo = ALERT_TYPES.find((t) => t.type === alertType);
       const msg =
-        `✅ *Alert Created*\n\n` +
+        `✅ Alert Created\n\n` +
         `Type: ${typeInfo?.emoji || "🔔"} ${typeInfo?.label || alertType}\n` +
         `Min Profit: ${minProfit}%\n` +
-        `ID: \`${response.data.id.slice(0, 8)}\`\n\n` +
+        `ID: ${response.data.id}\n\n` +
         `Use /alerts to view all your alerts.`;
 
-      await ctx.reply(msg, { parse_mode: "Markdown" });
+      await ctx.reply(msg);
     } catch {
       await ctx.reply("Failed to create alert. Please try again.");
     }

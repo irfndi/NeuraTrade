@@ -21,7 +21,7 @@ const formatSortedDetails = (
   return Object.keys(details)
     .sort((a, b) => a.localeCompare(b))
     .filter((key) => hasValue(details[key]))
-    .map((key) => `- ${key}: ${details[key]}`);
+    .map((key) => `• ${key}: ${details[key]}`);
 };
 
 const statusIcon = (status: "healthy" | "warning" | "critical"): string => {
@@ -80,7 +80,7 @@ const formatDoctorCheck = (check: DoctorCheck): string[] => {
 export const formatActionAlertMessage = (
   input: ActionAlertTemplateInput,
 ): string => {
-  const lines: string[] = [`🤖 ACTION: ${input.action}`];
+  const lines: string[] = [`🤖 Action: ${input.action}`];
 
   if (hasValue(input.timestamp)) {
     lines.push(`Time: ${input.timestamp}`);
@@ -118,13 +118,15 @@ export const formatQuestProgressMessage = (
 ): string => {
   const percent = normalizePercent(input);
   const lines = [
-    `📋 Quest: ${input.questName}`,
+    `📋 Quest Progress`,
+    ``,
+    `${input.questName}`,
     `ID: ${input.questId}`,
     `Progress: ${input.current}/${input.target} (${percent}%)`,
   ];
 
   if (hasValue(input.timeRemaining)) {
-    lines.push(`Time Remaining: ${input.timeRemaining}`);
+    lines.push(`Time remaining: ${input.timeRemaining}`);
   }
 
   if (hasValue(input.status)) {
@@ -138,7 +140,9 @@ export const formatMilestoneAlertMessage = (
   input: MilestoneAlertTemplateInput,
 ): string => {
   const lines = [
-    `🎯 Milestone Reached: $${input.amount}`,
+    `🎯 Fund Milestone Reached`,
+    ``,
+    `Amount: $${input.amount}`,
     `Phase: ${input.phase}`,
   ];
 
@@ -162,8 +166,10 @@ export const formatRiskEventMessage = (
   input: RiskEventAlertTemplateInput,
 ): string => {
   const lines = [
-    `${riskIcon(input.severity)} ${input.severity.toUpperCase()}: ${input.eventType}`,
-    "",
+    `${riskIcon(input.severity)} ${input.severity.toUpperCase()}`,
+    ``,
+    `Type: ${input.eventType}`,
+    ``,
     input.message,
   ];
 
@@ -190,7 +196,9 @@ export const formatPerformanceSummaryMessage = (
   input: PerformanceSummaryTemplateInput,
 ): string => {
   const lines = [
-    `📊 Performance Summary (${input.timeframe})`,
+    `📊 Performance Summary`,
+    ``,
+    `Timeframe: ${input.timeframe}`,
     `PnL: ${input.pnl}`,
   ];
 
@@ -230,11 +238,13 @@ export const formatDoctorDiagnosticsMessage = (
   input: DoctorDiagnosticsTemplateInput,
 ): string => {
   const lines = [
-    `${statusIcon(input.overallStatus)} Doctor: ${input.overallStatus.toUpperCase()}`,
+    `${statusIcon(input.overallStatus)} Doctor`,
+    ``,
+    `Status: ${input.overallStatus.toUpperCase()}`,
   ];
 
   if (hasValue(input.checkedAt)) {
-    lines.push(`Checked At: ${input.checkedAt}`);
+    lines.push(`Checked at: ${input.checkedAt}`);
   }
 
   if (hasValue(input.summary)) {

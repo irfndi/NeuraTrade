@@ -181,29 +181,26 @@ func (a *Adapter) formatMessage(n ports.Notification) string {
 
 	// Add title
 	if n.Title != "" {
-		buf.WriteString("*")
 		buf.WriteString(n.Title)
-		buf.WriteString("*\n\n")
+		buf.WriteString("\n\n")
 	}
 
 	// Add message
 	buf.WriteString(n.Message)
 
 	// Add context info
-
-	// Add context info
 	if n.Exchange != "" || n.Symbol != "" || n.StrategyID != "" {
-		buf.WriteString("\n\n_")
+		buf.WriteString("\n\n")
 		if n.Exchange != "" {
-			fmt.Fprintf(&buf, "Exchange: %s ", n.Exchange)
+			fmt.Fprintf(&buf, "Exchange: %s\n", n.Exchange)
 		}
 		if n.Symbol != "" {
-			fmt.Fprintf(&buf, "Symbol: %s ", n.Symbol)
+			fmt.Fprintf(&buf, "Symbol: %s\n", n.Symbol)
 		}
 		if n.StrategyID != "" {
-			fmt.Fprintf(&buf, "Strategy: %s", n.StrategyID)
+			fmt.Fprintf(&buf, "Strategy: %s\n", n.StrategyID)
 		}
-		buf.WriteString("_")
+		buf.Truncate(buf.Len() - 1)
 	}
 
 	return buf.String()
@@ -213,10 +210,10 @@ func (a *Adapter) formatMessage(n ports.Notification) string {
 func (a *Adapter) sendMessage(ctx context.Context, chatID, text string) error {
 	url := fmt.Sprintf("%s/send-message", a.config.BaseURL)
 
+	// Send as plain text - consistent with notification_service.go
 	payload := map[string]interface{}{
-		"chatId":    chatID,
-		"text":      text,
-		"parseMode": "Markdown",
+		"chatId": chatID,
+		"text":   text,
 	}
 
 	body, err := json.Marshal(payload)
