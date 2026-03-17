@@ -198,8 +198,9 @@ func (a *Adapter) formatMessage(n ports.Notification) string {
 			fmt.Fprintf(&buf, "Symbol: %s\n", n.Symbol)
 		}
 		if n.StrategyID != "" {
-			fmt.Fprintf(&buf, "Strategy: %s", n.StrategyID)
+			fmt.Fprintf(&buf, "Strategy: %s\n", n.StrategyID)
 		}
+		buf.Truncate(buf.Len() - 1)
 	}
 
 	return buf.String()

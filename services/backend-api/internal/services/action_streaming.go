@@ -264,7 +264,7 @@ func (as *ActionStreamer) formatActionMessage(action StreamingAction) string {
 	}
 
 	lines := []string{
-		fmt.Sprintf("%s%s **%s**", emoji, priorityEmoji, action.Title),
+		fmt.Sprintf("%s%s %s", emoji, priorityEmoji, action.Title),
 		"",
 		fmt.Sprintf("Status: %s", action.Status),
 		fmt.Sprintf("Time: %s", action.Timestamp.Format(time.RFC3339)),
@@ -276,13 +276,13 @@ func (as *ActionStreamer) formatActionMessage(action StreamingAction) string {
 
 	// Add type-specific data
 	if len(action.Data) > 0 {
-		lines = append(lines, "", "**Details:**")
+		lines = append(lines, "", "Details:")
 		for key, value := range action.Data {
 			lines = append(lines, fmt.Sprintf("• %s: %v", key, value))
 		}
 	}
 
-	return fmt.Sprintf("```\n%s\n```", joinLines(lines))
+	return joinLines(lines)
 }
 
 // GetHistory returns recent action history
