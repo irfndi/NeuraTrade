@@ -87,6 +87,21 @@ func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager Er
 		opts.PoolTimeout = time.Duration(cfg.PoolTimeout) * time.Second
 	}
 
+	// Configure automatic reconnection
+	if cfg.MaxRetries > 0 {
+		opts.MaxRetries = cfg.MaxRetries
+	} else {
+		opts.MaxRetries = 3
+	}
+	opts.MinRetryBackoff = 100 * time.Millisecond
+	opts.MaxRetryBackoff = 2 * time.Second
+
+	// Set sensible idle connection default so the pool stays warm.
+	// PoolSize inherits go-redis default (10 * GOMAXPROCS).
+	if opts.MinIdleConns <= 0 {
+		opts.MinIdleConns = 2
+	}
+
 	rdb := redis.NewClient(opts)
 
 	// Add Sentry hook for error tracking

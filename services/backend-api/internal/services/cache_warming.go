@@ -2,15 +2,20 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/irfndi/neuratrade/internal/telemetry"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -378,6 +383,21 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 		return err
 	}
 
+	// Check if funding_rates table exists before attempting the query
+	var dummy int
+	if err := c.db.QueryRow(ctx, "SELECT 1 FROM funding_rates LIMIT 1").Scan(&dummy); errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+		c.logger.Info("Funding rates table is empty, skipping cache warm")
+		return nil
+	} else if err != nil {
+		var pgErr *pgconn.PgError
+		if (errors.As(err, &pgErr) && pgErr.Code == "42P01") || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			c.logger.Info("Funding rates table does not exist, skipping cache warm")
+			return nil
+		}
+		c.logger.Warn("Funding rates table not queryable, skipping cache warm", "error", err)
+		return nil
+	}
+
 	// Use a cross-database query shape (SQLite + Postgres compatible) by joining
 	// the latest timestamp per exchange/trading pair.
 	// Note: funding_rates table may not exist in all database setups, so we handle errors gracefully.
@@ -405,7 +425,7 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 
 	rows, err := c.db.Query(ctx, query)
 	if err != nil {
-		c.logger.Warn("Failed to warm funding rates cache - table may not exist", "error", err)
+		c.logger.Warn("Failed to warm funding rates cache", "error", err)
 		return nil
 	}
 	defer rows.Close()

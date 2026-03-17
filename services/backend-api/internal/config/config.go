@@ -129,6 +129,8 @@ type RedisConfig struct {
 	PoolTimeout int `mapstructure:"pool_timeout"`
 	// DefaultTTL is the default TTL for cached items in seconds.
 	DefaultTTL int `mapstructure:"default_ttl"`
+	// MaxRetries is the maximum number of command retries on network errors.
+	MaxRetries int `mapstructure:"max_retries"`
 }
 
 // CCXTConfig defines settings for interacting with the CCXT microservice.
@@ -504,6 +506,7 @@ func setDefaults() {
 	viper.SetDefault("redis.port", 6379)
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
+	viper.SetDefault("redis.max_retries", 3)
 
 	// CCXT defaults for native deployment. Explicit env vars still take precedence.
 	viper.SetDefault("ccxt.service_url", "http://localhost:3001")
