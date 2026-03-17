@@ -378,6 +378,16 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 		return err
 	}
 
+	// Check if funding_rates table exists before attempting the query
+	var tableExists bool
+	tableCheckQuery := `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='funding_rates')`
+	if err := c.db.QueryRow(ctx, tableCheckQuery).Scan(&tableExists); err != nil {
+		c.logger.Debug("Could not check funding_rates table existence, attempting query anyway", "error", err)
+	} else if !tableExists {
+		c.logger.Info("Funding rates table does not exist, skipping cache warm")
+		return nil
+	}
+
 	// Use a cross-database query shape (SQLite + Postgres compatible) by joining
 	// the latest timestamp per exchange/trading pair.
 	// Note: funding_rates table may not exist in all database setups, so we handle errors gracefully.
@@ -405,7 +415,7 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 
 	rows, err := c.db.Query(ctx, query)
 	if err != nil {
-		c.logger.Warn("Failed to warm funding rates cache - table may not exist", "error", err)
+		c.logger.Warn("Failed to warm funding rates cache", "error", err)
 		return nil
 	}
 	defer rows.Close()

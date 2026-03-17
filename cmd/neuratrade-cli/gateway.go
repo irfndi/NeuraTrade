@@ -79,6 +79,20 @@ func newAllowedGatewayServiceBinaries() map[string]struct{} {
 	return customSet
 }
 
+// isNativeCCXTMode returns true if the gateway should skip launching the external
+// ccxt-service process because CCXT is embedded natively in the backend server.
+func isNativeCCXTMode() bool {
+	// If CCXT_SERVICE_URL or CCXT_GRPC_ADDRESS is explicitly set, the user
+	// wants external CCXT service mode.
+	if os.Getenv("CCXT_SERVICE_URL") != "" {
+		return false
+	}
+	if os.Getenv("CCXT_GRPC_ADDRESS") != "" {
+		return false
+	}
+	return true
+}
+
 // gatewayStart starts all NeuraTrade services
 func gatewayStart(cCtx *cli.Context) error {
 	fmt.Println("🚀 Starting NeuraTrade Gateway...")
@@ -170,26 +184,32 @@ func gatewayStart(cCtx *cli.Context) error {
 	}
 	execDir = filepath.Dir(execDir)
 
-	// Start CCXT Service
-	fmt.Println("📊 Starting CCXT Service...")
-	ccxtCmd, err := startService(
-		filepath.Join(execDir, "ccxt-service"),
-		"CCXT Service",
-		filepath.Join(home, "logs", "ccxt.log"),
-		map[string]string{
-			"PORT":          ccxtPort,
-			"BIND_HOST":     bindHost,
-			"NODE_ENV":      "production",
-			"ADMIN_API_KEY": adminAPIKey,
-		},
-		filepath.Join(home, "pids", "ccxt.pid"),
-	)
-	if err != nil {
-		writeGatewayStateMode(statePath, "down", "ccxt failed to start")
-		cleanupGatewayRuntimeArtifacts(statePath, "ccxt failed to start", servicePIDFiles...)
-		return fmt.Errorf("failed to start CCXT service: %w", err)
+	// Start CCXT Service (skip if using native embedded CCXT mode)
+	var ccxtCmd *exec.Cmd
+	if isNativeCCXTMode() {
+		fmt.Println("📊 CCXT: Using native embedded mode (skipping external service)")
+	} else {
+		fmt.Println("📊 Starting CCXT Service...")
+		var startErr error
+		ccxtCmd, startErr = startService(
+			filepath.Join(execDir, "ccxt-service"),
+			"CCXT Service",
+			filepath.Join(home, "logs", "ccxt.log"),
+			map[string]string{
+				"PORT":          ccxtPort,
+				"BIND_HOST":     bindHost,
+				"NODE_ENV":      "production",
+				"ADMIN_API_KEY": adminAPIKey,
+			},
+			filepath.Join(home, "pids", "ccxt.pid"),
+		)
+		if startErr != nil {
+			writeGatewayStateMode(statePath, "down", "ccxt failed to start")
+			cleanupGatewayRuntimeArtifacts(statePath, "ccxt failed to start", servicePIDFiles...)
+			return fmt.Errorf("failed to start CCXT service: %w", startErr)
+		}
+		fmt.Println("✅ CCXT Service started")
 	}
-	fmt.Println("✅ CCXT Service started")
 
 	// Start Backend API
 	fmt.Println("🔧 Starting Backend API...")
@@ -223,7 +243,9 @@ func gatewayStart(cCtx *cli.Context) error {
 		filepath.Join(home, "pids", "backend.pid"),
 	)
 	if err != nil {
-		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		if ccxtCmd != nil && ccxtCmd.Process != nil {
+			ccxtCmd.Process.Signal(syscall.SIGTERM)
+		}
 		cleanupGatewayRuntimeArtifacts(statePath, "backend failed to start", servicePIDFiles...)
 		return fmt.Errorf("failed to start backend API: %w", err)
 	}
@@ -238,7 +260,9 @@ func gatewayStart(cCtx *cli.Context) error {
 		writeGatewayStateMode(statePath, "warming", "backend warming up")
 	} else {
 		backendCmd.Process.Signal(syscall.SIGTERM)
-		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		if ccxtCmd != nil && ccxtCmd.Process != nil {
+			ccxtCmd.Process.Signal(syscall.SIGTERM)
+		}
 		writeGatewayServiceState(statePath, "backend", "down", backendProbe.detail, backendHealthURL)
 		cleanupGatewayRuntimeArtifacts(statePath, "backend health check failed", servicePIDFiles...)
 		return fmt.Errorf("%s", backendProbe.detail)
@@ -264,7 +288,9 @@ func gatewayStart(cCtx *cli.Context) error {
 	)
 	if err != nil {
 		backendCmd.Process.Signal(syscall.SIGTERM)
-		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		if ccxtCmd != nil && ccxtCmd.Process != nil {
+			ccxtCmd.Process.Signal(syscall.SIGTERM)
+		}
 		cleanupGatewayRuntimeArtifacts(statePath, "telegram failed to start", servicePIDFiles...)
 		return fmt.Errorf("failed to start Telegram service: %w", err)
 	}
@@ -280,13 +306,19 @@ func gatewayStart(cCtx *cli.Context) error {
 	} else {
 		telegramCmd.Process.Signal(syscall.SIGTERM)
 		backendCmd.Process.Signal(syscall.SIGTERM)
-		ccxtCmd.Process.Signal(syscall.SIGTERM)
+		if ccxtCmd != nil && ccxtCmd.Process != nil {
+			ccxtCmd.Process.Signal(syscall.SIGTERM)
+		}
 		writeGatewayServiceState(statePath, "telegram", "down", telegramProbe.detail, telegramHealthURL)
 		cleanupGatewayRuntimeArtifacts(statePath, "telegram health check failed", servicePIDFiles...)
 		return fmt.Errorf("%s", telegramProbe.detail)
 	}
 
-	writeGatewayServiceState(statePath, "ccxt", "healthy", "process started", fmt.Sprintf("http://%s:%s/health", bindHost, ccxtPort))
+	if ccxtCmd != nil {
+		writeGatewayServiceState(statePath, "ccxt", "healthy", "process started", fmt.Sprintf("http://%s:%s/health", bindHost, ccxtPort))
+	} else {
+		writeGatewayServiceState(statePath, "ccxt", "embedded", "native mode (embedded in backend)", "")
+	}
 
 	initialMode := "healthy"
 	if !backendProbe.healthy || !telegramProbe.healthy {
@@ -320,12 +352,16 @@ func gatewayStart(cCtx *cli.Context) error {
 	// Graceful shutdown
 	backendCmd.Process.Signal(syscall.SIGTERM)
 	telegramCmd.Process.Signal(syscall.SIGTERM)
-	ccxtCmd.Process.Signal(syscall.SIGTERM)
+	if ccxtCmd != nil && ccxtCmd.Process != nil {
+		ccxtCmd.Process.Signal(syscall.SIGTERM)
+	}
 
 	// Wait for processes to exit
 	backendCmd.Wait()
 	telegramCmd.Wait()
-	ccxtCmd.Wait()
+	if ccxtCmd != nil {
+		ccxtCmd.Wait()
+	}
 	cleanupGatewayRuntimeArtifacts(statePath, "gateway stopped", servicePIDFiles...)
 
 	fmt.Println("✅ All services stopped")
@@ -802,7 +838,7 @@ func monitorGatewayHealth(
 		case <-ticker.C:
 			backendUp := processRunning(backendCmd)
 			telegramUp := processRunning(telegramCmd)
-			ccxtUp := processRunning(ccxtCmd)
+			ccxtUp := ccxtCmd == nil || processRunning(ccxtCmd)
 
 			backendHealthy := probeHTTPHealthy(httpClient, backendURL)
 			telegramHealthy := probeHTTPHealthy(httpClient, telegramURL)

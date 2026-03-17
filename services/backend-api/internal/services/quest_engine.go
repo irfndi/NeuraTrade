@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -195,6 +196,8 @@ type QuestEngine struct {
 	notificationService *NotificationService
 	// chatIDForQuest maps quest IDs to their owner's chat ID
 	chatIDForQuest map[string]int64
+	// lastRedisErrorLog tracks the last time a Redis error was logged (rate-limiting)
+	lastRedisErrorLog atomic.Int64
 }
 
 // QuestProgressNotifier defines the interface for sending quest progress notifications
@@ -1240,13 +1243,19 @@ func (e *QuestEngine) refreshQuestLockOwnerHeartbeatCycle(runCtx context.Context
 
 	if !running && executing == 0 {
 		if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
-			log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+			if time.Since(time.Unix(0, e.lastRedisErrorLog.Load())) > 60*time.Second {
+				log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+				e.lastRedisErrorLog.Store(time.Now().UnixNano())
+			}
 		}
 		return true
 	}
 
 	if err := redisClient.Set(ctx, questLockOwnerHeartbeatKey(ownerID), time.Now().UTC().Format(time.RFC3339), questLockOwnerHeartbeatTTL).Err(); err != nil {
-		log.Printf("[QUEST] Failed to refresh quest lock owner heartbeat: %v", err)
+		if time.Since(time.Unix(0, e.lastRedisErrorLog.Load())) > 60*time.Second {
+			log.Printf("[QUEST] Failed to refresh quest lock owner heartbeat: %v", err)
+			e.lastRedisErrorLog.Store(time.Now().UnixNano())
+		}
 	}
 
 	return false
@@ -1267,7 +1276,10 @@ func (e *QuestEngine) clearQuestLockOwnerHeartbeatIfIdle() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
-		log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+		if time.Since(time.Unix(0, e.lastRedisErrorLog.Load())) > 60*time.Second {
+			log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+			e.lastRedisErrorLog.Store(time.Now().UnixNano())
+		}
 	}
 }
 
@@ -1508,7 +1520,10 @@ func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Dura
 		return true
 	}
 	if err := e.refreshQuestLockOwnerHeartbeat(ctx); err != nil {
-		log.Printf("Failed to refresh quest lock owner heartbeat: %v", err)
+		if time.Since(time.Unix(0, e.lastRedisErrorLog.Load())) > 60*time.Second {
+			log.Printf("Failed to refresh quest lock owner heartbeat: %v", err)
+			e.lastRedisErrorLog.Store(time.Now().UnixNano())
+		}
 		return false
 	}
 	ok, err := e.redis.SetNX(ctx, key, e.lockOwnerID, ttl).Result()
