@@ -40,7 +40,7 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
           const typeInfo = ALERT_TYPES.find((t) => t.type === alert.alert_type);
           const emoji = typeInfo?.emoji || "🔔";
           const status = alert.is_active ? "✅" : "❌";
-          return `${i + 1}. ${emoji} ${typeInfo?.label || alert.alert_type}\n   Status: ${status}\n   ID: ${alert.id.slice(0, 8)}`;
+          return `${i + 1}. ${emoji} ${typeInfo?.label || alert.alert_type}\n   Status: ${status}\n   ID: ${alert.id}`;
         })
         .join("\n\n");
 
@@ -87,7 +87,7 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
         `✅ Alert Created\n\n` +
         `Type: ${typeInfo?.emoji || "🔔"} ${typeInfo?.label || alertType}\n` +
         `Min Profit: ${minProfit}%\n` +
-        `ID: ${response.data.id.slice(0, 8)}\n\n` +
+        `ID: ${response.data.id}\n\n` +
         `Use /alerts to view all your alerts.`;
 
       await ctx.reply(msg);

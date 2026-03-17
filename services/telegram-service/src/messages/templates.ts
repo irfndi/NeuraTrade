@@ -21,7 +21,7 @@ const formatSortedDetails = (
   return Object.keys(details)
     .sort((a, b) => a.localeCompare(b))
     .filter((key) => hasValue(details[key]))
-    .map((key) => `- ${key}: ${details[key]}`);
+    .map((key) => `• ${key}: ${details[key]}`);
 };
 
 const statusIcon = (status: "healthy" | "warning" | "critical"): string => {

@@ -93,8 +93,8 @@ describe("message templates", () => {
         "Time: 2026-02-12T03:05:00Z\n" +
         "\n" +
         "Details:\n" +
-        "- alpha: triggered\n" +
-        "- zeta: 18%",
+        "• alpha: triggered\n" +
+        "• zeta: 18%",
     );
   });
 
@@ -153,8 +153,8 @@ describe("message templates", () => {
         "⚠️ Redis [CORE]: WARNING\n" +
         "   Latency elevated\n" +
         "   Latency: 78ms\n" +
-        "   - pool: at-capacity\n" +
-        "   - region: sg-1",
+        "   • pool: at-capacity\n" +
+        "   • region: sg-1",
     );
   });
 });
