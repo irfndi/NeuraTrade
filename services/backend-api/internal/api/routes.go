@@ -134,7 +134,7 @@ func providerBaseURL(provider string) string {
 	case "zai":
 		return "https://api.z.ai/api/paas/v4"
 	case "zhipu":
-		return "https://open.bigmodel.cn/api/coding/paas/v4"
+		return "https://api.z.ai/api/paas/v4"
 	case "mlx":
 		return "http://localhost:8080/v1"
 	default:

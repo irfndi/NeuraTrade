@@ -2279,6 +2279,10 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
 
 	message := ns.formatAIReasoningMessage(AIReasoningNotification{
 		DecisionType: "trade_entry",
