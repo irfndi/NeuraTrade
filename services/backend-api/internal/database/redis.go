@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -97,10 +96,8 @@ func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager Er
 	opts.MinRetryBackoff = 100 * time.Millisecond
 	opts.MaxRetryBackoff = 2 * time.Second
 
-	// Set sensible connection pool defaults
-	if opts.PoolSize <= 0 {
-		opts.PoolSize = 10 * runtime.GOMAXPROCS(0)
-	}
+	// Set sensible idle connection default so the pool stays warm.
+	// PoolSize inherits go-redis default (10 * GOMAXPROCS).
 	if opts.MinIdleConns <= 0 {
 		opts.MinIdleConns = 2
 	}

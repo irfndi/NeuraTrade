@@ -186,7 +186,8 @@ func gatewayStart(cCtx *cli.Context) error {
 
 	// Start CCXT Service (skip if using native embedded CCXT mode)
 	var ccxtCmd *exec.Cmd
-	if isNativeCCXTMode() {
+	nativeCCXT := isNativeCCXTMode()
+	if nativeCCXT {
 		fmt.Println("📊 CCXT: Using native embedded mode (skipping external service)")
 	} else {
 		fmt.Println("📊 Starting CCXT Service...")
@@ -235,7 +236,7 @@ func gatewayStart(cCtx *cli.Context) error {
 		"AI_PROVIDER":           aiProvider,
 		"AI_MODEL":              aiModel,
 	}
-	if !isNativeCCXTMode() {
+	if !nativeCCXT {
 		if os.Getenv("CCXT_SERVICE_URL") == "" {
 			backendEnv["CCXT_SERVICE_URL"] = fmt.Sprintf("http://%s:%s", bindHost, ccxtPort)
 		}
@@ -833,7 +834,7 @@ func monitorGatewayHealth(
 			backendUp := processRunning(backendCmd)
 			telegramUp := processRunning(telegramCmd)
 			embeddedCCXT := ccxtCmd == nil
-			ccxtUp := embeddedCCXT || processRunning(ccxtCmd)
+			var ccxtUp bool
 
 			backendHealthy := probeHTTPHealthy(httpClient, backendURL)
 			telegramHealthy := probeHTTPHealthy(httpClient, telegramURL)
@@ -845,6 +846,7 @@ func monitorGatewayHealth(
 				ccxtUp = backendUp && backendHealthy
 				writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(ccxtUp, backendHealthy), "embedded", "")
 			} else {
+				ccxtUp = processRunning(ccxtCmd)
 				writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(ccxtUp, true), "", "")
 			}
 
