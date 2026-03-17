@@ -25,7 +25,9 @@ func TestAdapter_Send_Smoke(t *testing.T) {
 		require.Equal(t, "/send-message", r.URL.Path)
 		require.Equal(t, "test-api-key", r.Header.Get("X-API-Key"))
 
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		require.NoError(t, decoder.Decode(&payload))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()

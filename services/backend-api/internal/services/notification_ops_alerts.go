@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -130,8 +131,13 @@ func (ns *NotificationService) formatRiskEventMessage(event RiskEventNotificatio
 
 	if len(event.Details) > 0 {
 		lines = append(lines, "", "Details:")
-		for key, value := range event.Details {
-			lines = append(lines, fmt.Sprintf("• %s: %s", key, value))
+		keys := make([]string, 0, len(event.Details))
+		for key := range event.Details {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			lines = append(lines, fmt.Sprintf("• %s: %s", key, event.Details[key]))
 		}
 	}
 

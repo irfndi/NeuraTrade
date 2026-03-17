@@ -793,7 +793,7 @@ func TestNotificationService_formatAggregatedArbitrageMessage(t *testing.T) {
 	}
 
 	message = ns.formatAggregatedArbitrageMessage(signals)
-	assert.Contains(t, message, "🚀 *Aggregated Arbitrage Opportunities*")
+	assert.Contains(t, message, "🚀 Aggregated Arbitrage Opportunities")
 	assert.Contains(t, message, "BTC/USDT")
 	assert.Contains(t, message, "ETH/USDT")
 	assert.Contains(t, message, "2.50%")
@@ -841,7 +841,7 @@ func TestNotificationService_formatAggregatedTechnicalMessage(t *testing.T) {
 	}
 
 	message = ns.formatAggregatedTechnicalMessage(signals)
-	assert.Contains(t, message, "📊 *Aggregated Technical Analysis*")
+	assert.Contains(t, message, "📊 Aggregated Technical Analysis")
 	assert.Contains(t, message, "BTC/USDT")
 	assert.Contains(t, message, "ETH/USDT")
 	assert.Contains(t, message, "strong")

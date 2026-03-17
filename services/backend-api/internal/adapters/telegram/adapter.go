@@ -192,10 +192,10 @@ func (a *Adapter) formatMessage(n ports.Notification) string {
 	if n.Exchange != "" || n.Symbol != "" || n.StrategyID != "" {
 		buf.WriteString("\n\n")
 		if n.Exchange != "" {
-			fmt.Fprintf(&buf, "Exchange: %s ", n.Exchange)
+			fmt.Fprintf(&buf, "Exchange: %s\n", n.Exchange)
 		}
 		if n.Symbol != "" {
-			fmt.Fprintf(&buf, "Symbol: %s ", n.Symbol)
+			fmt.Fprintf(&buf, "Symbol: %s\n", n.Symbol)
 		}
 		if n.StrategyID != "" {
 			fmt.Fprintf(&buf, "Strategy: %s", n.StrategyID)
