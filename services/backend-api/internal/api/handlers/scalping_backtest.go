@@ -186,6 +186,10 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 }
 
 func (h *ScalpingBacktestHandler) GetScalpingBacktest(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database is not available"})
+		return
+	}
 	runID := strings.TrimSpace(c.Param("run_id"))
 	if runID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "run_id is required"})
@@ -206,6 +210,10 @@ func (h *ScalpingBacktestHandler) GetScalpingBacktest(c *gin.Context) {
 }
 
 func (h *ScalpingBacktestHandler) ListScalpingBacktests(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database is not available"})
+		return
+	}
 	limit := 20
 	if raw := strings.TrimSpace(c.DefaultQuery("limit", "20")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -257,6 +265,10 @@ func (h *ScalpingBacktestHandler) ListScalpingBacktests(c *gin.Context) {
 }
 
 func (h *ScalpingBacktestHandler) CompareScalpingBacktests(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database is not available"})
+		return
+	}
 	var req compareScalpingBacktestsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
@@ -441,14 +453,15 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 		id := uuid.NewString()
 		signalIDMap[signalKey{s.Symbol, s.Timestamp}] = id
 		signals = append(signals, ScalpingBacktestSignal{
-			SignalID:        id,
-			Timestamp:       s.Timestamp,
-			Symbol:          s.Symbol,
-			Exchange:        result.Config.Exchange,
-			Regime:          s.Regime,
-			FunnelStage:     s.FunnelStage,
-			RejectionReason: s.RejectionReason,
-			GateResults:     boolMapToInterfaceMap(s.GateResults),
+			SignalID:         id,
+			Timestamp:        s.Timestamp,
+			Symbol:           s.Symbol,
+			Exchange:         result.Config.Exchange,
+			Regime:           s.Regime,
+			RegimeVolatility: s.RegimeVolatility,
+			FunnelStage:      s.FunnelStage,
+			RejectionReason:  s.RejectionReason,
+			GateResults:      boolMapToInterfaceMap(s.GateResults),
 			Signal: map[string]interface{}{
 				"symbol":    s.Symbol,
 				"timestamp": s.Timestamp.Format(time.RFC3339),
@@ -636,7 +649,8 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 		}
 		signalID := strings.TrimSpace(trade.SignalID)
 		if signalID == "" {
-			continue
+			return fmt.Errorf("trade %s (symbol=%s, entry=%s) has no linked signal_id; run cannot be persisted with partial data",
+				tradeID, trade.Symbol, trade.EntryTimestamp.Format(time.RFC3339))
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO scalping_backtest_trades (

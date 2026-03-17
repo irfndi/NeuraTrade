@@ -124,6 +124,9 @@ CREATE INDEX IF NOT EXISTS idx_scalping_backtest_runs_created_at
 CREATE INDEX IF NOT EXISTS idx_scalping_backtest_runs_status
     ON scalping_backtest_runs(status);
 
+CREATE INDEX IF NOT EXISTS idx_scalping_backtest_runs_status_created_at
+    ON scalping_backtest_runs(status, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_scalping_backtest_signals_run_id
     ON scalping_backtest_signals(run_id);
 

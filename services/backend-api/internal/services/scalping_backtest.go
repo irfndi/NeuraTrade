@@ -82,13 +82,14 @@ type ScalpingBacktestSummary struct {
 }
 
 type ScalpingBacktestSignal struct {
-	Timestamp       time.Time
-	Symbol          string
-	Signal          MarketSignal
-	Regime          string
-	FunnelStage     string
-	RejectionReason string
-	GateResults     map[string]bool
+	Timestamp        time.Time
+	Symbol           string
+	Signal           MarketSignal
+	Regime           string
+	RegimeVolatility string
+	FunnelStage      string
+	RejectionReason  string
+	GateResults      map[string]bool
 }
 
 type ScalpingBacktestTrade struct {
@@ -238,13 +239,14 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 		}
 
 		recorded := ScalpingBacktestSignal{
-			Timestamp:       signal.Timestamp,
-			Symbol:          signal.Symbol,
-			Signal:          signal.Signal,
-			Regime:          evaluation.Regime,
-			FunnelStage:     evaluation.FunnelStage,
-			RejectionReason: evaluation.RejectionReason,
-			GateResults:     toGateBoolMap(evaluation.GateResults),
+			Timestamp:        signal.Timestamp,
+			Symbol:           signal.Symbol,
+			Signal:           signal.Signal,
+			Regime:           evaluation.Regime,
+			RegimeVolatility: e.classifyRegimeVolatility(signal.Signal),
+			FunnelStage:      evaluation.FunnelStage,
+			RejectionReason:  evaluation.RejectionReason,
+			GateResults:      toGateBoolMap(evaluation.GateResults),
 		}
 		e.signalHistory = append(e.signalHistory, recorded)
 
@@ -518,6 +520,16 @@ func (e *ScalpingBacktestEngine) classifyRegime(signal MarketSignal) string {
 		return "chop"
 	}
 	return "neutral"
+}
+
+func (e *ScalpingBacktestEngine) classifyRegimeVolatility(signal MarketSignal) string {
+	if signal.BidAskSpread > e.config.MaxBidAskSpreadPct*2 {
+		return "high"
+	}
+	if signal.BidAskSpread > e.config.MaxBidAskSpreadPct {
+		return "elevated"
+	}
+	return "normal"
 }
 
 func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AITradingDecision) map[string]GateResult {
