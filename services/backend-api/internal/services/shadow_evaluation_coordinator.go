@@ -16,6 +16,7 @@ import (
 const shadowRecorderUserID = "00000000-0000-0000-0000-000000000000"
 
 type shadowVariantRuntime struct {
+	mu             sync.Mutex
 	engine         *ShadowModeEngine
 	lastRealized   decimal.Decimal
 	tradeCount     int64
@@ -24,6 +25,7 @@ type shadowVariantRuntime struct {
 	gateRejections map[string]int64
 	openDecisions  map[string]int64
 	lastEntryPrice map[string]decimal.Decimal
+	openedAt       map[string]time.Time
 }
 
 type ShadowEvaluationCoordinator struct {
@@ -116,8 +118,10 @@ func (c *ShadowEvaluationCoordinator) RecordShadowOutcome(
 		if action != "sell" || symbol == "" {
 			continue
 		}
+		runtime.mu.Lock()
 		decisionID, ok := runtime.openDecisions[symbol]
 		if !ok {
+			runtime.mu.Unlock()
 			continue
 		}
 		portfolioSnapshot := runtime.engine.GetPortfolio()
@@ -127,14 +131,82 @@ func (c *ShadowEvaluationCoordinator) RecordShadowOutcome(
 		if !exitPrice.GreaterThan(decimal.Zero) {
 			exitPrice = runtime.lastEntryPrice[symbol]
 		}
-		if err := c.insertShadowOutcome(ctx, decisionID, exitPrice, realized); err != nil {
-			c.logger.Warn("shadow outcome persistence failed", zap.String("variant_id", variant.VariantID), zap.Error(err))
-		}
 		if realized.GreaterThan(decimal.Zero) {
 			runtime.winningTrades++
 		}
 		delete(runtime.openDecisions, symbol)
 		delete(runtime.lastEntryPrice, symbol)
+		delete(runtime.openedAt, symbol)
+		runtime.mu.Unlock()
+		if err := c.insertShadowOutcome(ctx, decisionID, exitPrice, realized); err != nil {
+			c.logger.Warn("shadow outcome persistence failed", zap.String("variant_id", variant.VariantID), zap.Error(err))
+		}
+	}
+}
+
+const defaultShadowMaxPositionAge = 4 * time.Hour
+
+// CloseStaleShadowPositions force-closes shadow positions that have been open
+// longer than maxAge. This prevents memory leaks in openDecisions when the
+// live system never sells a symbol that shadow entered. Call from periodic
+// reconciliation or diagnostic sweeps.
+func (c *ShadowEvaluationCoordinator) CloseStaleShadowPositions(
+	ctx context.Context,
+	marketPrices map[string]decimal.Decimal,
+	maxAge time.Time,
+) {
+	if c == nil {
+		return
+	}
+	if maxAge.IsZero() {
+		maxAge = time.Now().UTC().Add(-defaultShadowMaxPositionAge)
+	}
+	variants := c.variants.List()
+	for _, variant := range variants {
+		runtime := c.runtimeForVariant(variant.VariantID)
+		runtime.mu.Lock()
+		var stale []string
+		for symbol, openedAt := range runtime.openedAt {
+			if openedAt.Before(maxAge) {
+				stale = append(stale, symbol)
+			}
+		}
+		if len(stale) == 0 {
+			runtime.mu.Unlock()
+			continue
+		}
+		portfolioSnapshot := runtime.engine.GetPortfolio()
+		for _, symbol := range stale {
+			decisionID := runtime.openDecisions[symbol]
+			openedAt := runtime.openedAt[symbol]
+			exitPrice := marketPrices[symbol]
+			if !exitPrice.GreaterThan(decimal.Zero) {
+				exitPrice = runtime.lastEntryPrice[symbol]
+			}
+			if exitPrice.GreaterThan(decimal.Zero) && portfolioSnapshot.Positions != nil {
+				if pos, hasPos := portfolioSnapshot.Positions[symbol]; hasPos && pos.Quantity.GreaterThan(decimal.Zero) {
+					_, _ = runtime.engine.ExecuteTrade(
+						context.Background(), symbol, "sell",
+						pos.Quantity, exitPrice,
+					)
+				}
+			}
+			realized := portfolioSnapshot.RealizedPNL.Sub(runtime.lastRealized)
+			runtime.lastRealized = portfolioSnapshot.RealizedPNL
+			if realized.GreaterThan(decimal.Zero) {
+				runtime.winningTrades++
+			}
+			c.logger.Info("shadow stale position closed",
+				zap.String("variant_id", variant.VariantID),
+				zap.String("symbol", symbol),
+				zap.Duration("age", time.Since(openedAt)),
+			)
+			_ = decisionID
+			delete(runtime.openDecisions, symbol)
+			delete(runtime.lastEntryPrice, symbol)
+			delete(runtime.openedAt, symbol)
+		}
+		runtime.mu.Unlock()
 	}
 }
 
@@ -154,34 +226,30 @@ func (c *ShadowEvaluationCoordinator) CompareLiveVsShadow(
 	}
 	live := c.liveMetricsSnapshot()
 	variantMetrics := c.shadowMetricsSnapshot()
-	report := c.comparison.BuildReport(start, end, live, variantMetrics)
-	for _, item := range report.Comparisons {
-		if err := c.insertComparisonSnapshot(ctx, report.WindowStart, report.WindowEnd, item); err != nil {
-			c.logger.Warn("live-shadow comparison persistence failed", zap.String("variant_id", item.VariantID), zap.Error(err))
-		}
-	}
-	return report, nil
+	return c.comparison.BuildReport(start, end, live, variantMetrics), nil
 }
 
-func (c *ShadowEvaluationCoordinator) GetShadowDiagnostics(ctx context.Context) map[string]interface{} {
-	report, _ := c.CompareLiveVsShadow(ctx, time.Now().UTC().Add(-24*time.Hour), time.Now().UTC())
+func (c *ShadowEvaluationCoordinator) GetShadowDiagnostics(_ context.Context) map[string]interface{} {
 	variants := c.variants.List()
 	variantStats := make([]map[string]interface{}, 0, len(variants))
 	for _, variant := range variants {
 		runtime := c.runtimeForVariant(variant.VariantID)
+		runtime.mu.Lock()
 		stats := runtime.engine.GetStats()
+		rejectionCount := runtime.rejectionCount
+		tradeCount := runtime.tradeCount
+		runtime.mu.Unlock()
 		stats["variant_id"] = variant.VariantID
 		stats["variant_name"] = variant.Name
 		stats["description"] = variant.Description
 		stats["policy_overrides"] = variant.PolicyOverrides
-		stats["shadow_rejection_count"] = runtime.rejectionCount
-		stats["shadow_trade_count"] = runtime.tradeCount
+		stats["shadow_rejection_count"] = rejectionCount
+		stats["shadow_trade_count"] = tradeCount
 		variantStats = append(variantStats, stats)
 	}
 	return map[string]interface{}{
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
 		"variants":     variantStats,
-		"comparison":   report,
 	}
 }
 
@@ -232,22 +300,41 @@ func (c *ShadowEvaluationCoordinator) VariantDiagnostics(ctx context.Context, va
 	}
 	report, _ := c.CompareLiveVsShadow(ctx, time.Now().UTC().Add(-24*time.Hour), time.Now().UTC())
 	runtime := c.runtimeForVariant(variant.VariantID)
+	runtime.mu.Lock()
 	result := map[string]interface{}{
 		"variant":        variant,
 		"portfolio":      runtime.engine.GetPortfolio(),
 		"stats":          runtime.engine.GetStats(),
 		"trade_count":    runtime.tradeCount,
 		"rejections":     runtime.rejectionCount,
-		"gate_reasons":   runtime.gateRejections,
+		"gate_reasons":   copyGateMap(runtime.gateRejections),
 		"comparison_24h": map[string]interface{}{},
 	}
+	runtime.mu.Unlock()
 	for _, cmp := range report.Comparisons {
-		if cmp.VariantID == variant.VariantID {
+		if cmp.VariantID == variantID {
 			result["comparison_24h"] = cmp
 			break
 		}
 	}
 	return result, nil
+}
+
+func (c *ShadowEvaluationCoordinator) PersistComparisonSnapshot(
+	ctx context.Context,
+	start time.Time,
+	end time.Time,
+) error {
+	report, err := c.CompareLiveVsShadow(ctx, start, end)
+	if err != nil {
+		return err
+	}
+	for _, item := range report.Comparisons {
+		if err := c.insertComparisonSnapshot(ctx, report.WindowStart, report.WindowEnd, item); err != nil {
+			c.logger.Warn("live-shadow comparison persistence failed", zap.String("variant_id", item.VariantID), zap.Error(err))
+		}
+	}
+	return nil
 }
 
 func newShadowVariantRuntime(logger *zap.Logger) *shadowVariantRuntime {
@@ -260,6 +347,7 @@ func newShadowVariantRuntime(logger *zap.Logger) *shadowVariantRuntime {
 		gateRejections: make(map[string]int64),
 		openDecisions:  make(map[string]int64),
 		lastEntryPrice: make(map[string]decimal.Decimal),
+		openedAt:       make(map[string]time.Time),
 	}
 }
 
@@ -288,6 +376,8 @@ func (c *ShadowEvaluationCoordinator) recordRejection(runtime *shadowVariantRunt
 	if mirrored.GateAllowed {
 		return
 	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
 	runtime.rejectionCount++
 	code := strings.TrimSpace(mirrored.GateCode)
 	if code == "" {
@@ -340,6 +430,8 @@ func (c *ShadowEvaluationCoordinator) executeShadowDecision(
 	if err != nil {
 		return err
 	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
 	if filled.Status == PaperOrderStatusRejected || filled.Status == PaperOrderStatusCancelled || filled.Status == PaperOrderStatusExpired {
 		runtime.rejectionCount++
 		runtime.gateRejections["shadow_execution_rejected"]++
@@ -356,6 +448,7 @@ func (c *ShadowEvaluationCoordinator) executeShadowDecision(
 	if action == "buy" {
 		runtime.openDecisions[mirrored.Symbol] = decisionID
 		runtime.lastEntryPrice[mirrored.Symbol] = filled.AvgFillPrice
+		runtime.openedAt[mirrored.Symbol] = time.Now().UTC()
 	}
 	c.recordPaperTradeOpen(ctx, mirrored, filled)
 	return nil
@@ -494,22 +587,28 @@ func (c *ShadowEvaluationCoordinator) shadowMetricsSnapshot() []ShadowVariantMet
 	result := make([]ShadowVariantMetrics, 0, len(variants))
 	for _, variant := range variants {
 		runtime := c.runtimeForVariant(variant.VariantID)
+		runtime.mu.Lock()
 		portfolio := runtime.engine.GetPortfolio()
+		tradeCount := runtime.tradeCount
+		winningTrades := runtime.winningTrades
+		rejectionCount := runtime.rejectionCount
+		gateRejections := copyGateMap(runtime.gateRejections)
+		runtime.mu.Unlock()
 		winRate := decimal.Zero
-		if runtime.tradeCount > 0 {
-			winRate = decimal.NewFromInt(runtime.winningTrades).Div(decimal.NewFromInt(runtime.tradeCount)).Mul(decimal.NewFromInt(100))
+		if tradeCount > 0 {
+			winRate = decimal.NewFromInt(winningTrades).Div(decimal.NewFromInt(tradeCount)).Mul(decimal.NewFromInt(100))
 		}
 		result = append(result, ShadowVariantMetrics{
 			VariantID:       variant.VariantID,
 			VariantName:     variant.Name,
 			PnL:             portfolio.RealizedPNL,
 			WinRate:         winRate,
-			TradeCount:      runtime.tradeCount,
-			RejectionCount:  runtime.rejectionCount,
+			TradeCount:      tradeCount,
+			RejectionCount:  rejectionCount,
 			EntryTimingBps:  decimal.Zero,
 			ExitTimingBps:   decimal.Zero,
 			OpportunityCost: decimal.Zero,
-			GateRejections:  copyGateMap(runtime.gateRejections),
+			GateRejections:  gateRejections,
 		})
 	}
 	return result

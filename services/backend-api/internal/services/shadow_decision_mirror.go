@@ -97,15 +97,21 @@ func (m *ShadowDecisionMirror) MirrorDecision(
 		}
 		if canOverrideLiveHold(liveDecision, effectivePolicy) {
 			result.DivergenceSignals = append(result.DivergenceSignals, "live_skip_shadow_opportunity")
+			result.ShadowAction = "buy"
 			result.GateAllowed = true
 			result.GateReason = "shadow policy allows confidence threshold"
 			if result.GateCode == "" {
 				result.GateCode = appautonomy.CandidateRejectConfidenceBelowThreshold
 			}
-		}
-		if result.ShadowAction == "hold" {
+			if result.EntryPrice == nil || !result.EntryPrice.GreaterThan(decimal.Zero) {
+				return result
+			}
+			if result.SizePercent <= 0 {
+				result.SizePercent = effectivePolicy.EffectiveMaxCapitalPct
+			}
 			return result
 		}
+		return result
 	}
 
 	if action != "buy" && action != "sell" {

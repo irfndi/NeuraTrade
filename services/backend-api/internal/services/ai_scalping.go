@@ -2800,13 +2800,14 @@ func (s *AIScalpingService) mirrorShadowDecisionAsync(
 		defer cancel()
 		if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
 			log.Printf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
-			return
 		}
 		prices := make(map[string]decimal.Decimal)
 		if decisionSnapshot.EntryPrice != nil && strings.TrimSpace(decisionSnapshot.Symbol) != "" {
 			prices[strings.TrimSpace(decisionSnapshot.Symbol)] = *decisionSnapshot.EntryPrice
 		}
-		coordinator.RecordShadowOutcome(ctx, decisionSnapshot, prices)
+		outcomeCtx, outcomeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer outcomeCancel()
+		coordinator.RecordShadowOutcome(outcomeCtx, decisionSnapshot, prices)
 	}()
 }
 

@@ -86,14 +86,14 @@ type llmProviderNodeConfig struct {
 	ModelOverride string
 }
 
-type routeNoopServiceLogger struct{}
+type zapNopServiceLogger struct{}
 
-func (routeNoopServiceLogger) WithFields(_ map[string]interface{}) services.Logger {
-	return routeNoopServiceLogger{}
+func (zapNopServiceLogger) WithFields(_ map[string]interface{}) services.Logger {
+	return zapNopServiceLogger{}
 }
-func (routeNoopServiceLogger) Info(_ string)  {}
-func (routeNoopServiceLogger) Warn(_ string)  {}
-func (routeNoopServiceLogger) Error(_ string) {}
+func (zapNopServiceLogger) Info(_ string)  {}
+func (zapNopServiceLogger) Warn(_ string)  {}
+func (zapNopServiceLogger) Error(_ string) {}
 
 func parseAIProviderChain(primary string) []string {
 	primary = strings.ToLower(strings.TrimSpace(primary))
@@ -715,7 +715,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	var shadowRecorder *services.PaperTradeRecorder
 	if db != nil {
-		shadowRecorder = services.NewPaperTradeRecorder(db, routeNoopServiceLogger{})
+		shadowRecorder = services.NewPaperTradeRecorder(db, zapNopServiceLogger{})
 	}
 	shadowCoordinator := services.NewShadowEvaluationCoordinator(
 		db,
