@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -277,8 +278,13 @@ func (as *ActionStreamer) formatActionMessage(action StreamingAction) string {
 	// Add type-specific data
 	if len(action.Data) > 0 {
 		lines = append(lines, "", "Details:")
-		for key, value := range action.Data {
-			lines = append(lines, fmt.Sprintf("• %s: %v", key, value))
+		keys := make([]string, 0, len(action.Data))
+		for key := range action.Data {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			lines = append(lines, fmt.Sprintf("• %s: %v", key, action.Data[key]))
 		}
 	}
 

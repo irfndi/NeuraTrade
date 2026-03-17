@@ -218,7 +218,7 @@ describe("BD command handlers", () => {
     await runCommand(bot, "doctor", ctx);
 
     expect(ctx.replies).toHaveLength(1);
-    expect(ctx.replies[0]).toContain("Doctor");
+    expect(ctx.replies[0]).toMatch(/Status:\s*WARNING/);
     expect(ctx.replies[0]).toContain("redis");
     expect(ctx.replies[0]).toContain("exchange-bridge");
   });
