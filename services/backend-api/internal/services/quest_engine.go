@@ -1182,6 +1182,31 @@ func questLockReleaseTimeout() time.Duration {
 	return timeout
 }
 
+const defaultRedisErrorLogInterval = 60 * time.Second
+
+func redisErrorLogInterval() time.Duration {
+	seconds := getEnvInt("NEURATRADE_REDIS_ERROR_LOG_INTERVAL_SEC")
+	if seconds <= 0 {
+		return defaultRedisErrorLogInterval
+	}
+	interval := time.Duration(seconds) * time.Second
+	if interval < time.Second {
+		return time.Second
+	}
+	return interval
+}
+
+// shouldLogRedisError uses CAS to ensure only one goroutine logs within the interval.
+func (e *QuestEngine) shouldLogRedisError() bool {
+	cutoff := time.Now().Add(-redisErrorLogInterval()).UnixNano()
+	old := e.lastRedisErrorLog.Load()
+	if old > cutoff {
+		return false
+	}
+	now := time.Now().UnixNano()
+	return e.lastRedisErrorLog.CompareAndSwap(old, now)
+}
+
 func questExecutionHeartbeatInterval() time.Duration {
 	seconds := getEnvInt("NEURATRADE_QUEST_EXECUTION_HEARTBEAT_SECONDS")
 	if seconds <= 0 {
@@ -1243,18 +1268,16 @@ func (e *QuestEngine) refreshQuestLockOwnerHeartbeatCycle(runCtx context.Context
 
 	if !running && executing == 0 {
 		if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
-			if time.Since(time.Unix(0, e.lastRedisErrorLog.Load())) > 60*time.Second {
+			if e.shouldLogRedisError() {
 				log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
-				e.lastRedisErrorLog.Store(time.Now().UnixNano())
 			}
 		}
 		return true
 	}
 
 	if err := redisClient.Set(ctx, questLockOwnerHeartbeatKey(ownerID), time.Now().UTC().Format(time.RFC3339), questLockOwnerHeartbeatTTL).Err(); err != nil {
-		if time.Since(time.Unix(0, e.lastRedisErrorLog.Load())) > 60*time.Second {
+		if e.shouldLogRedisError() {
 			log.Printf("[QUEST] Failed to refresh quest lock owner heartbeat: %v", err)
-			e.lastRedisErrorLog.Store(time.Now().UnixNano())
 		}
 	}
 
@@ -1276,9 +1299,8 @@ func (e *QuestEngine) clearQuestLockOwnerHeartbeatIfIdle() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
-		if time.Since(time.Unix(0, e.lastRedisErrorLog.Load())) > 60*time.Second {
+		if e.shouldLogRedisError() {
 			log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
-			e.lastRedisErrorLog.Store(time.Now().UnixNano())
 		}
 	}
 }
@@ -1520,9 +1542,8 @@ func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Dura
 		return true
 	}
 	if err := e.refreshQuestLockOwnerHeartbeat(ctx); err != nil {
-		if time.Since(time.Unix(0, e.lastRedisErrorLog.Load())) > 60*time.Second {
+		if e.shouldLogRedisError() {
 			log.Printf("Failed to refresh quest lock owner heartbeat: %v", err)
-			e.lastRedisErrorLog.Store(time.Now().UnixNano())
 		}
 		return false
 	}

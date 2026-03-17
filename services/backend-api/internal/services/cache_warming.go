@@ -380,10 +380,8 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 
 	// Check if funding_rates table exists before attempting the query
 	var tableExists bool
-	tableCheckQuery := `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='funding_rates')`
-	if err := c.db.QueryRow(ctx, tableCheckQuery).Scan(&tableExists); err != nil {
-		c.logger.Debug("Could not check funding_rates table existence, attempting query anyway", "error", err)
-	} else if !tableExists {
+	_ = c.db.QueryRow(ctx, "SELECT 1 FROM funding_rates LIMIT 1").Scan(&tableExists)
+	if !tableExists {
 		c.logger.Info("Funding rates table does not exist, skipping cache warm")
 		return nil
 	}

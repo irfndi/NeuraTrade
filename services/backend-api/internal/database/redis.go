@@ -88,7 +88,11 @@ func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager Er
 	}
 
 	// Configure automatic reconnection
-	opts.MaxRetries = 3
+	if cfg.MaxRetries > 0 {
+		opts.MaxRetries = cfg.MaxRetries
+	} else {
+		opts.MaxRetries = 3
+	}
 	opts.MinRetryBackoff = 100 * time.Millisecond
 	opts.MaxRetryBackoff = 2 * time.Second
 
