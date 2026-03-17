@@ -15,9 +15,8 @@ import (
 
 func TestAdapter_Send_Smoke(t *testing.T) {
 	type requestBody struct {
-		ChatID    string `json:"chatId"`
-		Text      string `json:"text"`
-		ParseMode string `json:"parseMode"`
+		ChatID string `json:"chatId"`
+		Text   string `json:"text"`
 	}
 
 	var payload requestBody
@@ -51,8 +50,7 @@ func TestAdapter_Send_Smoke(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "123456", payload.ChatID)
-	assert.Equal(t, "Markdown", payload.ParseMode)
-	assert.Contains(t, payload.Text, "*Order Filled*")
+	assert.Contains(t, payload.Text, "Order Filled")
 	assert.Contains(t, payload.Text, "Bought BTC")
 	assert.Contains(t, payload.Text, "Exchange: binance")
 }

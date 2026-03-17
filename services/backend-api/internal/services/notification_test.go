@@ -2222,7 +2222,7 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 				"Recommended Action",
 			},
 			notContains: []string{
-				"**Key Factors:**",
+				"Key Factors:",
 			},
 		},
 		{
@@ -2241,7 +2241,7 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 				Action: "Execute with tight risk controls",
 			},
 			contains: []string{
-				"**Recommended Action:** Execute with tight risk controls",
+				"Recommended Action: Execute with tight risk controls",
 				"... and",
 			},
 			notContains: []string{
@@ -2258,7 +2258,7 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 				Reasons:         []string{"Runtime unavailable"},
 			},
 			contains: []string{
-				"**Confidence:** ⚪ N/A (runtime-degraded)",
+				"Confidence: ⚪ N/A (runtime-degraded)",
 			},
 			notContains: []string{
 				"0%",
@@ -2311,8 +2311,8 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 	fallbackMessage := ns.formatAIReasoningMessage(fallbackReasoning)
 	assert.LessOrEqual(t, telegramMessageUnits(fallbackMessage), telegramMaxMessageUnits)
 	assert.Contains(t, fallbackMessage, "AI Trading Decision")
-	assert.Contains(t, fallbackMessage, "**Summary:**")
-	assert.Contains(t, fallbackMessage, "**Recommended Action:** Proceed cautiously")
+	assert.Contains(t, fallbackMessage, "Summary:")
+	assert.Contains(t, fallbackMessage, "Recommended Action: Proceed cautiously")
 	assert.Contains(t, fallbackMessage, "...")
 	assert.NotContains(t, fallbackMessage, "Long factor 1")
 
