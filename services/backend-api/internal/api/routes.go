@@ -120,6 +120,10 @@ func providerBaseURL(provider string) string {
 		return "https://api.anthropic.com/v1"
 	case "minimax":
 		return "https://api.minimax.io/anthropic/v1"
+	case "zai-coding-plan":
+		return "https://api.z.ai/api/coding/paas/v4"
+	case "zai":
+		return "https://api.z.ai/api/paas/v4"
 	case "zhipu":
 		return "https://open.bigmodel.cn/api/coding/paas/v4"
 	case "mlx":
@@ -176,6 +180,9 @@ func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, m
 	case "minimax":
 		// MiniMax exposes an Anthropic-compatible endpoint.
 		return llm.NewAnthropicClient(config)
+	case "zai-coding-plan", "zai":
+		// ZAI (models.dev) exposes an OpenAI-compatible endpoint.
+		return llm.NewOpenAIClient(config)
 	case "zhipu":
 		// Zhipu exposes an OpenAI-compatible endpoint.
 		return llm.NewOpenAIClient(config)
