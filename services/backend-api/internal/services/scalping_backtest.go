@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	defaultScalpingBacktestSlippage      = 0.001
-	defaultScalpingBacktestHoldPeriod    = 5 * time.Minute
-	defaultScalpingBacktestMaxCapitalPct = 5.0
+	DefaultScalpingBacktestSlippage      = 0.001
+	DefaultScalpingBacktestHoldPeriod    = 5 * time.Minute
+	DefaultScalpingBacktestMaxCapitalPct = 5.0
 )
 
 var defaultScalpingBacktestUniverse = []string{
@@ -345,7 +345,13 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 
 	eval.Decision = decision
 	eval.GateResults = e.evaluateGates(signal.Signal, decision)
-	for gateName, gateResult := range eval.GateResults {
+	sortedGates := make([]string, 0, len(eval.GateResults))
+	for gateName := range eval.GateResults {
+		sortedGates = append(sortedGates, gateName)
+	}
+	sort.Strings(sortedGates)
+	for _, gateName := range sortedGates {
+		gateResult := eval.GateResults[gateName]
 		e.updateGateStats(gateName, gateResult, signal.Symbol, regime)
 		if !gateResult.Allowed && eval.RejectionReason == "" {
 			eval.RejectionReason = gateResult.Reason
@@ -475,7 +481,7 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 
 	holdFor := e.config.DefaultHoldPeriod
 	if holdFor <= 0 {
-		holdFor = defaultScalpingBacktestHoldPeriod
+		holdFor = DefaultScalpingBacktestHoldPeriod
 	}
 
 	trade := ScalpingBacktestTrade{
@@ -715,11 +721,11 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.InitialCapital.LessThanOrEqual(decimal.Zero) {
 		config.InitialCapital = decimal.NewFromInt(10000)
 	}
-	if config.FeeRate.LessThanOrEqual(decimal.Zero) {
+	if config.FeeRate.IsNegative() {
 		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct / 200)
 	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
-		config.SlippagePct = decimal.NewFromFloat(defaultScalpingBacktestSlippage)
+		config.SlippagePct = decimal.NewFromFloat(DefaultScalpingBacktestSlippage)
 	}
 	if config.MaxBidAskSpreadPct <= 0 {
 		config.MaxBidAskSpreadPct = appautonomy.DefaultScalpingMaxBidAskSpreadPct
@@ -731,10 +737,10 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 		config.MinExpectancyN = defaults.MinExpectancyN
 	}
 	if config.MaxCapitalPct <= 0 {
-		config.MaxCapitalPct = defaultScalpingBacktestMaxCapitalPct
+		config.MaxCapitalPct = DefaultScalpingBacktestMaxCapitalPct
 	}
 	if config.DefaultHoldPeriod <= 0 {
-		config.DefaultHoldPeriod = defaultScalpingBacktestHoldPeriod
+		config.DefaultHoldPeriod = DefaultScalpingBacktestHoldPeriod
 	}
 	if len(config.Symbols) == 0 {
 		config.Symbols = append([]string(nil), defaultScalpingBacktestUniverse...)

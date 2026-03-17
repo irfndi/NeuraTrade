@@ -53,7 +53,7 @@ func TestNewScalpingBacktestEngine(t *testing.T) {
 			assert.NotNil(t, engine.positions)
 			assert.NotNil(t, engine.gateStats)
 			assert.True(t, engine.config.InitialCapital.GreaterThan(decimal.Zero))
-			assert.True(t, engine.config.FeeRate.GreaterThan(decimal.Zero))
+			assert.True(t, engine.config.FeeRate.GreaterThanOrEqual(decimal.Zero))
 			assert.True(t, engine.config.SlippagePct.GreaterThan(decimal.Zero))
 			assert.Greater(t, engine.config.MaxBidAskSpreadPct, 0.0)
 			assert.Greater(t, engine.config.MinConfidence, 0.0)
@@ -239,7 +239,7 @@ func TestNormalizeScalpingBacktestConfig(t *testing.T) {
 			result := normalizeScalpingBacktestConfig(tt.input)
 
 			assert.True(t, result.InitialCapital.GreaterThan(decimal.Zero))
-			assert.True(t, result.FeeRate.GreaterThan(decimal.Zero))
+			assert.True(t, result.FeeRate.GreaterThanOrEqual(decimal.Zero))
 			assert.True(t, result.SlippagePct.GreaterThan(decimal.Zero))
 			assert.Greater(t, result.MaxBidAskSpreadPct, 0.0)
 			assert.Greater(t, result.MinConfidence, 0.0)

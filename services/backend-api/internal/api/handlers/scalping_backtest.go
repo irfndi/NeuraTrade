@@ -402,9 +402,9 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		MaxBidAskSpreadPct: maxBidAskSpreadPct,
 		MinConfidence:      minConfidence,
 		FeeRate:            feeRateDecimal,
-		SlippagePct:        decimal.NewFromFloat(defaultScalpingBacktestSlippage),
-		MaxCapitalPct:      defaultScalpingBacktestMaxCapitalPct,
-		DefaultHoldPeriod:  defaultScalpingBacktestHoldPeriod,
+		SlippagePct:        decimal.NewFromFloat(services.DefaultScalpingBacktestSlippage),
+		MaxCapitalPct:      services.DefaultScalpingBacktestMaxCapitalPct,
+		DefaultHoldPeriod:  services.DefaultScalpingBacktestHoldPeriod,
 	}, nil
 }
 
@@ -430,10 +430,18 @@ type apiBacktestResult struct {
 
 func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResult {
 	summary := serviceSummaryToAPI(result.Summary)
+
+	type signalKey struct {
+		symbol string
+		time   time.Time
+	}
+	signalIDMap := make(map[signalKey]string, len(result.Signals))
 	signals := make([]ScalpingBacktestSignal, 0, len(result.Signals))
-	for i, s := range result.Signals {
-		signal := ScalpingBacktestSignal{
-			SignalID:        uuid.NewString(),
+	for _, s := range result.Signals {
+		id := uuid.NewString()
+		signalIDMap[signalKey{s.Symbol, s.Timestamp}] = id
+		signals = append(signals, ScalpingBacktestSignal{
+			SignalID:        id,
 			Timestamp:       s.Timestamp,
 			Symbol:          s.Symbol,
 			Exchange:        result.Config.Exchange,
@@ -441,22 +449,18 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 			FunnelStage:     s.FunnelStage,
 			RejectionReason: s.RejectionReason,
 			GateResults:     boolMapToInterfaceMap(s.GateResults),
-		}
-		signal.Signal = map[string]interface{}{
-			"symbol":    s.Symbol,
-			"timestamp": s.Timestamp.Format(time.RFC3339),
-		}
-		if i < len(result.Signals) {
-			signal.Exchange = result.Config.Exchange
-		}
-		signals = append(signals, signal)
+			Signal: map[string]interface{}{
+				"symbol":    s.Symbol,
+				"timestamp": s.Timestamp.Format(time.RFC3339),
+			},
+		})
 	}
 
 	trades := make([]ScalpingBacktestTrade, 0, len(result.Trades))
 	for _, t := range result.Trades {
 		holdDuration := int(t.ExitTime.Sub(t.EntryTime).Seconds())
 		trade := ScalpingBacktestTrade{
-			TradeID:             uuid.NewString(),
+			SignalID:            signalIDMap[signalKey{t.Symbol, t.EntryTime}],
 			Symbol:              t.Symbol,
 			Side:                t.Side,
 			Size:                t.Size.String(),
@@ -521,7 +525,7 @@ func serviceSummaryToAPI(s services.ScalpingBacktestSummary) ScalpingBacktestSum
 
 	return ScalpingBacktestSummary{
 		TotalSignals:    s.TotalSignals,
-		AcceptedSignals: s.EligibleSignals - s.RejectedSignals,
+		AcceptedSignals: s.EligibleSignals,
 		RejectedSignals: s.RejectedSignals,
 		TotalTrades:     s.TotalTrades,
 		WinningTrades:   s.WinningTrades,
@@ -778,9 +782,3 @@ func normalizeSymbols(symbols []string) []string {
 	}
 	return normalized
 }
-
-const (
-	defaultScalpingBacktestSlippage      = 0.001
-	defaultScalpingBacktestHoldPeriod    = 5 * time.Minute
-	defaultScalpingBacktestMaxCapitalPct = 5.0
-)
