@@ -133,6 +133,7 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_chat_id ON scalping_cycle_telemetry(chat_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_cycle_at ON scalping_cycle_telemetry(cycle_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_chat_id_cycle_at ON scalping_cycle_telemetry(chat_id, cycle_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id ON scalping_cycle_telemetry(order_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_outcome ON scalping_cycle_telemetry(outcome)`,
 	}
@@ -203,30 +204,27 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 	return nil
 }
 
-func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, chatID string, cycleAt time.Time, orderID string) error {
+func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID string, orderID string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("scalping telemetry store unavailable")
 	}
 
-	if strings.TrimSpace(chatID) == "" || strings.TrimSpace(orderID) == "" || cycleAt.IsZero() {
+	if strings.TrimSpace(cycleID) == "" || strings.TrimSpace(orderID) == "" {
 		return nil
 	}
 
-	_, err := s.db.Exec(ctx, `
+	result, err := s.db.Exec(ctx, `
 		UPDATE scalping_cycle_telemetry
 		SET order_id = $1
-		WHERE id = (
-			SELECT id
-			FROM scalping_cycle_telemetry
-			WHERE chat_id = $2
-				AND cycle_at = $3
-				AND (order_id IS NULL OR order_id = '')
-			ORDER BY cycle_at DESC
-			LIMIT 1
-		)
-	`, strings.TrimSpace(orderID), strings.TrimSpace(chatID), cycleAt.UTC())
+		WHERE id = $2
+			AND (order_id IS NULL OR order_id = '')
+	`, strings.TrimSpace(orderID), strings.TrimSpace(cycleID))
 	if err != nil {
 		return fmt.Errorf("link order to cycle: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("link order to cycle: no matching cycle found for id=%s", strings.TrimSpace(cycleID))
 	}
 
 	return nil
@@ -319,8 +317,6 @@ func (s *ScalpingTelemetryStore) GetGateBlockSummary(ctx context.Context, chatID
 		FROM scalping_cycle_telemetry
 		WHERE chat_id = $1
 			AND cycle_at >= $2
-			AND order_id IS NOT NULL
-			AND order_id != ''
 		GROUP BY gate_block_code
 		ORDER BY cycle_count DESC
 	`, strings.TrimSpace(chatID), since.UTC())

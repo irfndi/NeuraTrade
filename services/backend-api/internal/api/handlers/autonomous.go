@@ -535,80 +535,94 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
-	chatID := c.Query("chat_id")
+func parseQuestInvestigationParams(c *gin.Context) (chatID string, since time.Time, bucketMinutes int, err error) {
+	chatID = c.Query("chat_id")
 	if chatID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		err = fmt.Errorf("chat_id is required")
 		return
 	}
-
-	since := time.Now().UTC().AddDate(0, 0, -7)
+	since = time.Now().UTC().AddDate(0, 0, -7)
 	if sinceStr := strings.TrimSpace(c.Query("since")); sinceStr != "" {
-		if parsed, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+		if parsed, parseErr := time.Parse(time.RFC3339, sinceStr); parseErr == nil {
 			since = parsed.UTC()
-		} else if parsed, err := time.Parse("2006-01-02", sinceStr); err == nil {
+		} else if parsed, parseErr := time.Parse("2006-01-02", sinceStr); parseErr == nil {
 			since = parsed.UTC()
+		} else {
+			err = fmt.Errorf("invalid 'since' format, use RFC3339 or YYYY-MM-DD")
+			return
 		}
 	}
-
-	bucketMinutes := 60
-	if bm, err := strconv.Atoi(c.DefaultQuery("bucket_minutes", "60")); err == nil && bm > 0 {
+	bucketMinutes = 60
+	if bmStr := c.Query("bucket_minutes"); bmStr != "" {
+		var bm int
+		bm, err = strconv.Atoi(bmStr)
+		if err != nil || bm <= 0 {
+			err = fmt.Errorf("invalid 'bucket_minutes', must be a positive integer")
+			return
+		}
 		bucketMinutes = bm
 	}
+	return
+}
 
-	if h.telemetryStore == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "telemetry store not available"})
-		return
-	}
-
-	ctx := c.Request.Context()
-
+func (h *AutonomousHandler) loadQuestInvestigationData(ctx context.Context, chatID string, since time.Time, bucketMinutes int) (map[string]int, []services.GateBlockStat, []services.RegimeOutcomeStat, []services.AdjustmentImpactStat, []services.WinRateBucket, error) {
 	histogram, err := h.telemetryStore.GetRejectionHistogram(ctx, chatID, since)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load rejection histogram: " + err.Error()})
-		return
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load rejection histogram: %w", err)
 	}
-
 	gateBlocks, err := h.telemetryStore.GetGateBlockSummary(ctx, chatID, since)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load gate block summary: " + err.Error()})
-		return
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load gate block summary: %w", err)
 	}
-
 	regimeOutcomes, err := h.telemetryStore.GetRegimeOutcomeCorrelation(ctx, chatID, since)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load regime outcomes: " + err.Error()})
-		return
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load regime outcomes: %w", err)
 	}
-
 	policyImpact, err := h.telemetryStore.GetPolicyAdjustmentImpact(ctx, chatID, since)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load policy adjustment impact: " + err.Error()})
-		return
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load policy adjustment impact: %w", err)
 	}
-
 	winRateTrend, err := h.telemetryStore.GetCycleWinRateTrend(ctx, chatID, since, bucketMinutes)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load win rate trend: " + err.Error()})
-		return
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load win rate trend: %w", err)
 	}
+	return histogram, gateBlocks, regimeOutcomes, policyImpact, winRateTrend, nil
+}
 
+func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, gateBlocks []services.GateBlockStat) (int, int, float64) {
 	totalCycles := 0
-	totalWins := 0
+	totalWeightedWins := 0.0
 	executedCycles := 0
 	for _, ro := range regimeOutcomes {
 		totalCycles += ro.Count
-		totalWins += int(float64(ro.Count) * ro.WinRate)
+		totalWeightedWins += float64(ro.Count) * ro.WinRate
 	}
 	for _, gb := range gateBlocks {
 		executedCycles += gb.TotalTrades
 	}
-
 	overallWinRate := 0.0
 	if totalCycles > 0 {
-		overallWinRate = float64(totalWins) / float64(totalCycles)
+		overallWinRate = totalWeightedWins / float64(totalCycles)
 	}
+	return totalCycles, executedCycles, overallWinRate
+}
 
+func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
+	chatID, since, bucketMinutes, err := parseQuestInvestigationParams(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if h.telemetryStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "telemetry store not available"})
+		return
+	}
+	histogram, gateBlocks, regimeOutcomes, policyImpact, winRateTrend, err := h.loadQuestInvestigationData(c.Request.Context(), chatID, since, bucketMinutes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	totalCycles, executedCycles, overallWinRate := summarizeQuestInvestigation(regimeOutcomes, gateBlocks)
 	c.JSON(http.StatusOK, gin.H{
 		"rejection_histogram":      histogram,
 		"gate_block_summary":       gateBlocks,

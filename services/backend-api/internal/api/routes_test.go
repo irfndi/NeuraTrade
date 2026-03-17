@@ -929,6 +929,6 @@ func TestProviderBaseURL(t *testing.T) {
 	})
 
 	t.Run("zhipu uses configured default base path", func(t *testing.T) {
-		assert.Equal(t, "https://open.bigmodel.cn/api/coding/paas/v4", providerBaseURL("zhipu"))
+		assert.Equal(t, "https://api.z.ai/api/paas/v4", providerBaseURL("zhipu"))
 	})
 }

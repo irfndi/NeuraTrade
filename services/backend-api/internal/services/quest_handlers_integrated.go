@@ -263,17 +263,6 @@ func (h *IntegratedQuestHandlers) SetTradeMemory(memory *TradeMemory) {
 
 func (h *IntegratedQuestHandlers) SetLifecycleStore(store *TradingLifecycleStore) {
 	h.lifecycleStore = store
-	if store != nil && h.db != nil {
-		ts := NewScalpingTelemetryStoreFromSQLDB(h.db)
-		if ts == nil {
-			return
-		}
-		if err := ts.EnsureSchema(context.Background()); err != nil {
-			log.Printf("[TELEMETRY] Failed to initialize scalping telemetry schema: %v", err)
-			return
-		}
-		h.telemetryStore = ts
-	}
 }
 
 func (h *IntegratedQuestHandlers) SetTelemetryStore(store *ScalpingTelemetryStore) {
@@ -1155,16 +1144,24 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	decision, err := h.aiScalpingService.ExecuteTradingCycle(cycleCtx, portfolio)
 	h.applyAutonomyCheckpoint(quest)
 	h.applyScalpingCycleDecisionDiagnostics(quest, decision)
+	cycleID := fmt.Sprintf("scalp-%s-%d", chatID, nowUTC.UnixNano())
 	if decision != nil && h.telemetryStore != nil {
-		rejectionJSON, _ := json.Marshal(decision.CandidateFunnel.RejectionCounts)
-		policyJSON, _ := json.Marshal(decision.PolicyAdjustments)
+		rejectionJSON, marshalErr := json.Marshal(decision.CandidateFunnel.RejectionCounts)
+		if marshalErr != nil {
+			log.Printf("[TELEMETRY] Failed to marshal rejection counts: %v", marshalErr)
+			rejectionJSON = []byte("{}")
+		}
+		policyJSON, marshalErr := json.Marshal(decision.PolicyAdjustments)
+		if marshalErr != nil {
+			log.Printf("[TELEMETRY] Failed to marshal policy adjustments: %v", marshalErr)
+			policyJSON = []byte("[]")
+		}
 		gateBlockCode := ""
 		gateBlockReason := ""
 		if decision.ExecutionGate != nil {
 			gateBlockCode = decision.ExecutionGate.BlockCode
 			gateBlockReason = decision.ExecutionGate.BlockReason
 		}
-		cycleID := fmt.Sprintf("scalp-%s-%d", chatID, nowUTC.UnixNano())
 		cycleRec := CycleRecord{
 			ID:                     cycleID,
 			ChatID:                 chatID,
@@ -1392,7 +1389,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 	h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
 	if h.telemetryStore != nil && strings.TrimSpace(decision.OrderID) != "" {
-		if err := h.telemetryStore.LinkOrderToCycle(ctx, chatID, nowUTC, strings.TrimSpace(decision.OrderID)); err != nil {
+		if err := h.telemetryStore.LinkOrderToCycle(ctx, cycleID, strings.TrimSpace(decision.OrderID)); err != nil {
 			log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
 		}
 	}
@@ -4194,7 +4191,11 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 						"SELECT opened_at FROM trading_positions WHERE order_id = ? ORDER BY opened_at DESC LIMIT 1",
 						orderID,
 					).Scan(&openedAt); err == nil && !openedAt.IsZero() {
-						holdSeconds = int(closedAt.Sub(openedAt).Seconds())
+						secs := int(closedAt.Sub(openedAt).Seconds())
+						if secs < 0 {
+							secs = 0
+						}
+						holdSeconds = secs
 					}
 				}
 
