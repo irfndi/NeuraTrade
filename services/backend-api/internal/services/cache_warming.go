@@ -14,6 +14,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/irfndi/neuratrade/internal/telemetry"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -387,6 +388,11 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 		c.logger.Info("Funding rates table is empty, skipping cache warm")
 		return nil
 	} else if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			c.logger.Info("Funding rates table does not exist, skipping cache warm")
+			return nil
+		}
 		c.logger.Warn("Funding rates table not queryable, skipping cache warm", "error", err)
 		return nil
 	}

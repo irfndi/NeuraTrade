@@ -114,6 +114,8 @@ func gatewayStart(cCtx *cli.Context) error {
 	bindHost := getEnvOrDefault("BIND_HOST", "127.0.0.1")
 	supervised := cCtx.Bool("supervised") || getEnvBoolDefault("NEURATRADE_GATEWAY_SUPERVISED", false)
 	healthTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", 90)
+	signalTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_SIGNAL_TIMEOUT_SECONDS", 5)
+	gracefulTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_GRACEFUL_TIMEOUT_SECONDS", 10)
 	adminAPIKey := normalizeAdminAPIKey(getEnvOrDefault("ADMIN_API_KEY", configAdminAPIKey(cfg)))
 	jwtSecret := normalizeJWTSecret(getEnvOrDefault("JWT_SECRET", configJWTSecret(cfg)))
 
@@ -255,7 +257,7 @@ func gatewayStart(cCtx *cli.Context) error {
 		filepath.Join(home, "pids", "backend.pid"),
 	)
 	if err != nil {
-		signalAndWait(ccxtCmd, 5*time.Second)
+		signalAndWait(ccxtCmd, signalTimeout)
 		cleanupGatewayRuntimeArtifacts(statePath, "backend failed to start", servicePIDFiles...)
 		return fmt.Errorf("failed to start backend API: %w", err)
 	}
@@ -269,8 +271,8 @@ func gatewayStart(cCtx *cli.Context) error {
 		writeGatewayServiceState(statePath, "backend", "warming", backendProbe.detail, backendHealthURL)
 		writeGatewayStateMode(statePath, "warming", "backend warming up")
 	} else {
-		signalAndWait(backendCmd, 5*time.Second)
-		signalAndWait(ccxtCmd, 5*time.Second)
+		signalAndWait(backendCmd, signalTimeout)
+		signalAndWait(ccxtCmd, signalTimeout)
 		writeGatewayServiceState(statePath, "backend", "down", backendProbe.detail, backendHealthURL)
 		cleanupGatewayRuntimeArtifacts(statePath, "backend health check failed", servicePIDFiles...)
 		return fmt.Errorf("%s", backendProbe.detail)
@@ -295,8 +297,8 @@ func gatewayStart(cCtx *cli.Context) error {
 		filepath.Join(home, "pids", "telegram.pid"),
 	)
 	if err != nil {
-		signalAndWait(backendCmd, 5*time.Second)
-		signalAndWait(ccxtCmd, 5*time.Second)
+		signalAndWait(backendCmd, signalTimeout)
+		signalAndWait(ccxtCmd, signalTimeout)
 		cleanupGatewayRuntimeArtifacts(statePath, "telegram failed to start", servicePIDFiles...)
 		return fmt.Errorf("failed to start Telegram service: %w", err)
 	}
@@ -310,9 +312,9 @@ func gatewayStart(cCtx *cli.Context) error {
 		writeGatewayServiceState(statePath, "telegram", "warming", telegramProbe.detail, telegramHealthURL)
 		writeGatewayStateMode(statePath, "warming", "telegram warming up")
 	} else {
-		signalAndWait(telegramCmd, 5*time.Second)
-		signalAndWait(backendCmd, 5*time.Second)
-		signalAndWait(ccxtCmd, 5*time.Second)
+		signalAndWait(telegramCmd, signalTimeout)
+		signalAndWait(backendCmd, signalTimeout)
+		signalAndWait(ccxtCmd, signalTimeout)
 		writeGatewayServiceState(statePath, "telegram", "down", telegramProbe.detail, telegramHealthURL)
 		cleanupGatewayRuntimeArtifacts(statePath, "telegram health check failed", servicePIDFiles...)
 		return fmt.Errorf("%s", telegramProbe.detail)
@@ -354,9 +356,9 @@ func gatewayStart(cCtx *cli.Context) error {
 	fmt.Println("🛑 Shutting down services...")
 
 	// Graceful shutdown
-	signalAndWait(backendCmd, 10*time.Second)
-	signalAndWait(telegramCmd, 10*time.Second)
-	signalAndWait(ccxtCmd, 10*time.Second)
+	signalAndWait(backendCmd, gracefulTimeout)
+	signalAndWait(telegramCmd, gracefulTimeout)
+	signalAndWait(ccxtCmd, gracefulTimeout)
 	cleanupGatewayRuntimeArtifacts(statePath, "gateway stopped", servicePIDFiles...)
 
 	fmt.Println("✅ All services stopped")
