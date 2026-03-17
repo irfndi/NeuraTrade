@@ -236,8 +236,12 @@ func gatewayStart(cCtx *cli.Context) error {
 		"AI_MODEL":              aiModel,
 	}
 	if !isNativeCCXTMode() {
-		backendEnv["CCXT_SERVICE_URL"] = fmt.Sprintf("http://%s:%s", bindHost, ccxtPort)
-		backendEnv["CCXT_GRPC_ADDRESS"] = fmt.Sprintf("%s:%s", bindHost, getEnvOrDefault("CCXT_GRPC_PORT", "50051"))
+		if os.Getenv("CCXT_SERVICE_URL") == "" {
+			backendEnv["CCXT_SERVICE_URL"] = fmt.Sprintf("http://%s:%s", bindHost, ccxtPort)
+		}
+		if os.Getenv("CCXT_GRPC_ADDRESS") == "" {
+			backendEnv["CCXT_GRPC_ADDRESS"] = fmt.Sprintf("%s:%s", bindHost, getEnvOrDefault("CCXT_GRPC_PORT", "50051"))
+		}
 	}
 
 	// Start Backend API
@@ -828,7 +832,8 @@ func monitorGatewayHealth(
 		case <-ticker.C:
 			backendUp := processRunning(backendCmd)
 			telegramUp := processRunning(telegramCmd)
-			ccxtUp := ccxtCmd == nil || processRunning(ccxtCmd)
+			embeddedCCXT := ccxtCmd == nil
+			ccxtUp := embeddedCCXT || processRunning(ccxtCmd)
 
 			backendHealthy := probeHTTPHealthy(httpClient, backendURL)
 			telegramHealthy := probeHTTPHealthy(httpClient, telegramURL)
@@ -836,8 +841,9 @@ func monitorGatewayHealth(
 			writeGatewayServiceState(statePath, "backend", serviceRuntimeState(backendUp, backendHealthy), "", backendURL)
 			writeGatewayServiceState(statePath, "telegram", serviceRuntimeState(telegramUp, telegramHealthy), "", telegramURL)
 
-			if ccxtCmd == nil {
-				writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(backendUp, backendHealthy), "embedded", "")
+			if embeddedCCXT {
+				ccxtUp = backendUp && backendHealthy
+				writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(ccxtUp, backendHealthy), "embedded", "")
 			} else {
 				writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(ccxtUp, true), "", "")
 			}

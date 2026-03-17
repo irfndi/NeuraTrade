@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -379,10 +380,12 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 	}
 
 	// Check if funding_rates table exists before attempting the query
-	var tableExists bool
-	_ = c.db.QueryRow(ctx, "SELECT 1 FROM funding_rates LIMIT 1").Scan(&tableExists)
-	if !tableExists {
-		c.logger.Info("Funding rates table does not exist, skipping cache warm")
+	var dummy int
+	if err := c.db.QueryRow(ctx, "SELECT 1 FROM funding_rates LIMIT 1").Scan(&dummy); err == sql.ErrNoRows {
+		c.logger.Info("Funding rates table is empty, skipping cache warm")
+		return nil
+	} else if err != nil {
+		c.logger.Warn("Funding rates table not queryable, skipping cache warm", "error", err)
 		return nil
 	}
 

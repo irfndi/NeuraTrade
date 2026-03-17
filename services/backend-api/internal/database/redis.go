@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -98,7 +99,7 @@ func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager Er
 
 	// Set sensible connection pool defaults
 	if opts.PoolSize <= 0 {
-		opts.PoolSize = 10
+		opts.PoolSize = 10 * runtime.GOMAXPROCS(0)
 	}
 	if opts.MinIdleConns <= 0 {
 		opts.MinIdleConns = 2
