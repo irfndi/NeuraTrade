@@ -323,8 +323,11 @@ func (h *IntegratedQuestHandlers) SetShadowEvaluationCoordinator(coordinator *Sh
 	h.shadowCoordinatorMu.Lock()
 	h.shadowCoordinator = coordinator
 	h.shadowCoordinatorMu.Unlock()
-	if h.aiScalpingService != nil {
-		h.aiScalpingService.SetShadowEvaluationCoordinator(coordinator)
+	h.aiScalpingMu.RLock()
+	aiSvc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	if aiSvc != nil {
+		aiSvc.SetShadowEvaluationCoordinator(coordinator)
 	}
 }
 

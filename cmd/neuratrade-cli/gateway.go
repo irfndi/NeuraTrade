@@ -189,6 +189,9 @@ func gatewayStart(cCtx *cli.Context) error {
 	// When neither is set, the backend uses its own embedded CCXT client
 	// and the gateway skips launching a separate ccxt-service process.
 	ccxtMode := ccxtModeNative
+	if isExternalCCXTMode() {
+		ccxtMode = ccxtModeExternal
+	}
 	switch ccxtMode {
 	case ccxtModeNative:
 		fmt.Println("📊 CCXT: Using native embedded mode (skipping external service)")
