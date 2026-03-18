@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -25,12 +26,8 @@ const (
 	backtestSpreadMultiplier = 8
 )
 
-var defaultScalpingBacktestUniverse = []string{
-	"BTC/USDT",
-	"ETH/USDT",
-	"SOL/USDT",
-	"BNB/USDT",
-	"XRP/USDT",
+func defaultScalpingBacktestUniverse() []string {
+	return []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"}
 }
 
 type ScalpingCyclePolicy = appautonomy.ScalpingCyclePolicy
@@ -303,12 +300,15 @@ func (e *ScalpingBacktestEngine) loadHistoricalSignals(ctx context.Context, star
 	}
 
 	if len(symbolFilter) == 0 {
-		for _, symbol := range defaultScalpingBacktestUniverse {
+		for _, symbol := range defaultScalpingBacktestUniverse() {
 			symbolFilter[normalizeSymbolForComparison(symbol)] = struct{}{}
 		}
 	}
 
 	signals, err := e.loadSignalsFromOHLCV(ctx, startTime, endTime, symbolFilter)
+	if err != nil {
+		log.Printf("[BACKTEST] OHLCV signal load failed (falling back to market_data): %v", err)
+	}
 	if err == nil && len(signals) > 0 {
 		return signals, nil
 	}
@@ -600,7 +600,7 @@ func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AI
 			if riskRewardAllowed {
 				riskRewardReason = ""
 			} else {
-				riskRewardReason = "risk_reward_below_1_10"
+				riskRewardReason = "insufficient_risk_reward_ratio"
 			}
 		}
 	}
@@ -744,7 +744,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 		config.InitialCapital = decimal.NewFromInt(10000)
 	}
 	if config.FeeRate.IsNegative() {
-		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct / 200)
+		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct).Div(decimal.NewFromInt(200))
 	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
 		config.SlippagePct = decimal.NewFromFloat(DefaultScalpingBacktestSlippage)
@@ -765,7 +765,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 		config.DefaultHoldPeriod = DefaultScalpingBacktestHoldPeriod
 	}
 	if len(config.Symbols) == 0 {
-		config.Symbols = append([]string(nil), defaultScalpingBacktestUniverse...)
+		config.Symbols = defaultScalpingBacktestUniverse()
 	}
 	return config
 }
@@ -830,6 +830,26 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	}
 }
 
+func computeExpectancy(wins, losses int, winSum, lossSum decimal.Decimal) float64 {
+	sample := wins + losses
+	if sample == 0 {
+		return 0
+	}
+	avgWin := decimal.Zero
+	avgLoss := decimal.Zero
+	if wins > 0 {
+		avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
+	}
+	if losses > 0 {
+		avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
+	}
+	winRate := float64(wins) / float64(sample)
+	expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
+		Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
+	expectancy, _ := expectancyDec.Float64()
+	return expectancy
+}
+
 func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expectancy float64, sample int, scoped bool) {
 	var wins int
 	var losses int
@@ -854,19 +874,7 @@ func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expect
 
 	sample = wins + losses
 	if sample >= e.config.MinExpectancyN {
-		avgWin := decimal.Zero
-		avgLoss := decimal.Zero
-		if wins > 0 {
-			avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
-		}
-		if losses > 0 {
-			avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
-		}
-		winRate := float64(wins) / float64(sample)
-		expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
-			Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
-		expectancy, _ = expectancyDec.Float64()
-		return expectancy, sample, true
+		return computeExpectancy(wins, losses, winSum, lossSum), sample, true
 	}
 
 	wins = 0
@@ -889,19 +897,7 @@ func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expect
 	if sample == 0 {
 		return 0, 0, false
 	}
-	avgWin := decimal.Zero
-	avgLoss := decimal.Zero
-	if wins > 0 {
-		avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
-	}
-	if losses > 0 {
-		avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
-	}
-	winRate := float64(wins) / float64(sample)
-	expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
-		Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
-	expectancy, _ = expectancyDec.Float64()
-	return expectancy, sample, false
+	return computeExpectancy(wins, losses, winSum, lossSum), sample, false
 }
 
 func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
