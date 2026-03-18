@@ -2,8 +2,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -219,4 +222,96 @@ func TestAlertService_RunHealthCheckWithAlerts(t *testing.T) {
 	}
 
 	alertService.RunHealthCheck(ctx, config)
+}
+
+func TestAlertService_SetAlertChatID(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	alertService := NewAlertService(nil, nil, logger)
+
+	alertService.SetAlertChatID(123456)
+
+	alertService.mu.RLock()
+	defer alertService.mu.RUnlock()
+	assert.Equal(t, int64(123456), alertService.alertChatID)
+}
+
+func TestAlertService_DispatchSkippedWithoutChatID(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	alertService := NewAlertService(nil, nil, logger)
+	ns := NewNotificationService(nil, nil, "", "", "")
+	alertService.SetNotificationService(ns)
+
+	ctx := context.Background()
+	alertService.alertThrottler = NewAlertThrottler(1 * time.Millisecond)
+
+	err := alertService.SendAlert(ctx, AlertLevelCritical, "test", "Critical alert", nil)
+	assert.NoError(t, err)
+}
+
+func TestAlertService_DispatchWithNotificationService(t *testing.T) {
+	var receivedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	alertService := NewAlertService(nil, nil, logger)
+	ns := NewNotificationService(nil, nil, server.URL, "", "")
+	alertService.SetNotificationService(ns)
+	alertService.SetAlertChatID(123456)
+	alertService.alertThrottler = NewAlertThrottler(1 * time.Millisecond)
+
+	ctx := context.Background()
+	err := alertService.SendAlert(ctx, AlertLevelCritical, "test-source", "Critical event", map[string]any{"key": "val"})
+	assert.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	assert.NotNil(t, receivedBody)
+	assert.Contains(t, receivedBody["text"], "Critical")
+	assert.Contains(t, receivedBody["text"], "test-source")
+}
+
+func TestAlertService_DispatchFailureLogged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"ok":false,"error":"internal error","errorCode":"INTERNAL_ERROR"}`))
+	}))
+	defer server.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	alertService := NewAlertService(nil, nil, logger)
+	ns := NewNotificationService(nil, nil, server.URL, "", "")
+	alertService.SetNotificationService(ns)
+	alertService.SetAlertChatID(123456)
+	alertService.alertThrottler = NewAlertThrottler(1 * time.Millisecond)
+
+	ctx := context.Background()
+	err := alertService.SendAlert(ctx, AlertLevelError, "test", "Error event", nil)
+	assert.NoError(t, err)
+}
+
+func TestAlertService_InfoLevelNotDispatched(t *testing.T) {
+	dispatched := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dispatched = true
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	alertService := NewAlertService(nil, nil, logger)
+	ns := NewNotificationService(nil, nil, server.URL, "", "")
+	alertService.SetNotificationService(ns)
+	alertService.SetAlertChatID(123456)
+	alertService.alertThrottler = NewAlertThrottler(1 * time.Millisecond)
+
+	ctx := context.Background()
+	err := alertService.SendAlert(ctx, AlertLevelInfo, "test", "Info event", nil)
+	assert.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+	assert.False(t, dispatched)
 }

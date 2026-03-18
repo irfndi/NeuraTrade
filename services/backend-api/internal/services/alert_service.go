@@ -39,6 +39,7 @@ type AlertService struct {
 	handlers            []AlertHandler
 	alertThrottler      *AlertThrottler
 	notificationService *NotificationService
+	alertChatID         int64
 	mu                  sync.RWMutex
 }
 
@@ -81,6 +82,12 @@ func NewAlertService(db DBPool, redis *database.RedisClient, logger *slog.Logger
 		handlers:       make([]AlertHandler, 0),
 		alertThrottler: NewAlertThrottler(5 * time.Minute),
 	}
+}
+
+func (s *AlertService) SetAlertChatID(chatID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.alertChatID = chatID
 }
 
 func (s *AlertService) RegisterHandler(handler AlertHandler) {
@@ -131,9 +138,32 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 
 	if ns != nil && (level == AlertLevelError || level == AlertLevelCritical) {
 		go func() {
-			// TODO: Implement actual notification dispatch via NotificationService
-			// Currently logs only - integrate with Telegram or other notification channels
-			s.logger.Info(fmt.Sprintf("[%s] %s: %s", level, source, message))
+			dispatchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			s.mu.RLock()
+			chatID := s.alertChatID
+			s.mu.RUnlock()
+
+			if chatID == 0 {
+				s.logger.Warn("Alert dispatch skipped: no alert chat ID configured",
+					"level", level, "source", source)
+				return
+			}
+
+			err := ns.DispatchSystemAlert(dispatchCtx, chatID, SystemAlertNotification{
+				Level:   string(level),
+				Source:  source,
+				Message: message,
+				Details: details,
+			})
+			if err != nil {
+				s.logger.Error("Failed to dispatch alert notification",
+					"level", level,
+					"source", source,
+					"error", err,
+				)
+			}
 		}()
 	}
 

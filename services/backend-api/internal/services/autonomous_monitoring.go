@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -202,14 +204,28 @@ func (m *AutonomousMonitoring) computeAlertsLocked() []string {
 
 // sendAlert sends an alert notification
 func (m *AutonomousMonitoring) sendAlert(message string) {
-	log.Printf("🚨 ALERT [%s]: %s", m.chatID, message)
+	log.Printf("ALERT [%s]: %s", m.chatID, message)
 
 	if m.notificationService == nil {
 		return
 	}
-	// TODO: Send actual notification
-	// ctx := context.Background()
-	// m.notificationService.SendAlert(ctx, m.chatID, message)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	chatID, err := strconv.ParseInt(m.chatID, 10, 64)
+	if err != nil {
+		log.Printf("Failed to parse chatID %q for alert dispatch: %v", m.chatID, err)
+		return
+	}
+
+	if err := m.notificationService.DispatchSystemAlert(ctx, chatID, SystemAlertNotification{
+		Level:   "warning",
+		Source:  "autonomous_monitoring",
+		Message: message,
+	}); err != nil {
+		log.Printf("Failed to dispatch autonomous monitoring alert: %v", err)
+	}
 }
 
 // EnableAlerts enables alert notifications

@@ -242,3 +242,106 @@ func TestWebhookChannel_Disabled(t *testing.T) {
 
 	assert.False(t, channel.IsEnabled())
 }
+
+func TestDispatchSystemAlert_Success(t *testing.T) {
+	var receivedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.Write([]byte(`{"ok":true,"message_id":"123"}`))
+	}))
+	defer server.Close()
+
+	ns := NewNotificationService(nil, nil, server.URL, "", "")
+
+	ctx := context.Background()
+	err := ns.DispatchSystemAlert(ctx, 123456, SystemAlertNotification{
+		Level:   "critical",
+		Source:  "test-source",
+		Message: "Something went wrong",
+		Details: map[string]any{"host": "db-1"},
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, receivedBody)
+	assert.Equal(t, "123456", receivedBody["chatId"])
+	assert.Contains(t, receivedBody["text"].(string), "CRITICAL")
+	assert.Contains(t, receivedBody["text"].(string), "test-source")
+	assert.Contains(t, receivedBody["text"].(string), "Something went wrong")
+	assert.Contains(t, receivedBody["text"].(string), "host")
+}
+
+func TestDispatchSystemAlert_Failure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"ok":false,"error":"bad request","errorCode":"INVALID_REQUEST"}`))
+	}))
+	defer server.Close()
+
+	ns := NewNotificationService(nil, nil, server.URL, "", "")
+
+	ctx := context.Background()
+	err := ns.DispatchSystemAlert(ctx, 123456, SystemAlertNotification{
+		Level:   "error",
+		Source:  "db",
+		Message: "connection lost",
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "INVALID_REQUEST")
+}
+
+func TestDispatchSystemAlert_NoTelegramURL(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	ctx := context.Background()
+	err := ns.DispatchSystemAlert(ctx, 123456, SystemAlertNotification{
+		Level:   "critical",
+		Source:  "test",
+		Message: "no url configured",
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not configured")
+}
+
+func TestFormatSystemAlertMessage_AllLevels(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	levels := []struct {
+		level    string
+		contains string
+	}{
+		{"critical", "CRITICAL"},
+		{"error", "ERROR"},
+		{"warning", "WARNING"},
+		{"info", "INFO"},
+	}
+
+	for _, tc := range levels {
+		t.Run(tc.level, func(t *testing.T) {
+			msg := ns.formatSystemAlertMessage(SystemAlertNotification{
+				Level:   tc.level,
+				Source:  "src",
+				Message: "test msg",
+				Details: map[string]any{"k": "v"},
+			})
+			assert.Contains(t, msg, tc.contains)
+			assert.Contains(t, msg, "src")
+			assert.Contains(t, msg, "test msg")
+		})
+	}
+}
+
+func TestFormatSystemAlertMessage_NoDetails(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	msg := ns.formatSystemAlertMessage(SystemAlertNotification{
+		Level:   "error",
+		Source:  "src",
+		Message: "simple alert",
+	})
+
+	assert.NotContains(t, msg, "Details:")
+	assert.Contains(t, msg, "simple alert")
+}
