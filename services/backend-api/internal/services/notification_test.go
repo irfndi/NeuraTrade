@@ -2344,6 +2344,28 @@ func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.
 	assert.True(t, foundSixteenFactorBoundary)
 }
 
+func TestTelegramMessageUnits_Unicode(t *testing.T) {
+	bmp := "hello world"
+	assert.Equal(t, 11, telegramMessageUnits(bmp))
+
+	mixed := "trade \U0001F4CA signal" // 6 BMP runes + 1 astral emoji (2 units) = 21 + 2 = 23
+	assert.Equal(t, len([]rune(mixed))+1, telegramMessageUnits(mixed))
+
+	truncated := truncateToTelegramUnits(mixed, 15)
+	truncatedUnits := telegramMessageUnits(truncated)
+	assert.LessOrEqual(t, truncatedUnits, 15)
+	assert.True(t, len([]rune(truncated)) <= len([]rune(mixed)))
+	runes := []rune(truncated)
+	if len(runes) > 0 {
+		first := runes[0]
+		if first > 0xFFFF {
+			assert.Equal(t, 2, telegramMessageUnits(string(first)))
+		} else {
+			assert.Equal(t, 1, telegramMessageUnits(string(first)))
+		}
+	}
+}
+
 // =============================================================================
 // Integration Tests for Notification Triggers
 // =============================================================================

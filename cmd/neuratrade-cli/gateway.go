@@ -208,7 +208,6 @@ func gatewayStart(cCtx *cli.Context) error {
 			filepath.Join(home, "pids", "ccxt.pid"),
 		)
 		if startErr != nil {
-			writeGatewayStateMode(statePath, "down", "ccxt failed to start")
 			cleanupGatewayRuntimeArtifacts(statePath, "ccxt failed to start", servicePIDFiles...)
 			return fmt.Errorf("failed to start CCXT service: %w", startErr)
 		}

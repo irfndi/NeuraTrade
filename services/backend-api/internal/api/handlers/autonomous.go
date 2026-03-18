@@ -591,18 +591,18 @@ func (h *AutonomousHandler) loadQuestInvestigationData(ctx context.Context, chat
 
 func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, gateBlocks []services.GateBlockStat) (int, int, float64) {
 	totalCycles := 0
-	totalWeightedWins := 0.0
+	totalWins := 0
 	executedCycles := 0
 	for _, ro := range regimeOutcomes {
 		totalCycles += ro.Count
-		totalWeightedWins += float64(ro.Count) * ro.WinRate
+		totalWins += ro.Wins
 	}
 	for _, gb := range gateBlocks {
 		executedCycles += gb.TotalTrades
 	}
 	overallWinRate := 0.0
 	if totalCycles > 0 {
-		overallWinRate = totalWeightedWins / float64(totalCycles)
+		overallWinRate = float64(totalWins) / float64(totalCycles)
 	}
 	return totalCycles, executedCycles, overallWinRate
 }
