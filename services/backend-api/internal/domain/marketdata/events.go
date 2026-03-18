@@ -36,6 +36,21 @@ type MarketCandleEvent struct {
 	CollectedAt time.Time
 }
 
+// OrderBookMetricsEvent is published when order book metrics are collected.
+type OrderBookMetricsEvent struct {
+	TraceID        string
+	Exchange       string
+	Symbol         string
+	BidAskSpread   decimal.Decimal
+	MidPrice       decimal.Decimal
+	BestBid        decimal.Decimal
+	BestAsk        decimal.Decimal
+	Imbalance1Pct  decimal.Decimal
+	LiquidityScore decimal.Decimal
+	Timestamp      time.Time
+	CollectedAt    time.Time
+}
+
 // FundingRateEvent is published when funding rate data is collected.
 type FundingRateEvent struct {
 	TraceID         string

@@ -14,6 +14,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
+	"github.com/shopspring/decimal"
 )
 
 const CollectorActorID = "marketdata-collector"
@@ -460,6 +461,85 @@ func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID str
 		}); err != nil {
 			a.logger.WithError(err).Warnf("failed to publish market tick for %s:%s", exchangeID, symbol)
 		}
+
+		a.collectOHLCV(ctx, gw, exchangeID, symbol)
+		a.collectOrderBook(ctx, gw, exchangeID, symbol)
+	}
+}
+
+func (a *CollectorActor) collectOHLCV(ctx context.Context, gw ports.MarketDataGateway, exchangeID, symbol string) {
+	candles, err := gw.FetchOHLCV(ctx, exchangeID, symbol, "1m", time.Time{}, 60)
+	if err != nil {
+		a.logger.WithError(fmt.Errorf("fetch ohlcv for %s:%s: %w", exchangeID, symbol, err)).
+			Warn("collector fetch ohlcv failed")
+		return
+	}
+	if len(candles) == 0 {
+		return
+	}
+	latest := candles[len(candles)-1]
+	if err := a.publishEvent(ctx, "market.candle", "market.candle", marketdata.MarketCandleEvent{
+		TraceID:     uuid.New().String(),
+		Exchange:    exchangeID,
+		Symbol:      symbol,
+		Timeframe:   "1m",
+		Open:        latest.Open,
+		High:        latest.High,
+		Low:         latest.Low,
+		Close:       latest.Close,
+		Volume:      latest.Volume,
+		Timestamp:   latest.Timestamp,
+		CollectedAt: time.Now(),
+	}); err != nil {
+		a.logger.WithError(err).Warnf("failed to publish market candle for %s:%s", exchangeID, symbol)
+	}
+}
+
+func (a *CollectorActor) collectOrderBook(ctx context.Context, gw ports.MarketDataGateway, exchangeID, symbol string) {
+	ob, err := gw.FetchOrderBook(ctx, exchangeID, symbol, 10)
+	if err != nil {
+		a.logger.WithError(fmt.Errorf("fetch orderbook for %s:%s: %w", exchangeID, symbol, err)).
+			Warn("collector fetch orderbook failed")
+		return
+	}
+	if len(ob.Bids) == 0 || len(ob.Asks) == 0 {
+		return
+	}
+	bestBid := ob.Bids[0].Price
+	bestAsk := ob.Asks[0].Price
+	spread := bestAsk.Sub(bestBid)
+	midPrice := bestBid.Add(bestAsk).Div(decimal.NewFromInt(2))
+	bidDepth := decimal.Zero
+	askDepth := decimal.Zero
+	for _, lvl := range ob.Bids {
+		bidDepth = bidDepth.Add(lvl.Amount)
+	}
+	for _, lvl := range ob.Asks {
+		askDepth = askDepth.Add(lvl.Amount)
+	}
+	totalDepth := bidDepth.Add(askDepth)
+	var imbalance decimal.Decimal
+	if !totalDepth.IsZero() {
+		imbalance = bidDepth.Sub(askDepth).Div(totalDepth)
+	}
+	var spreadPct decimal.Decimal
+	if !midPrice.IsZero() {
+		spreadPct = spread.Div(midPrice).Mul(decimal.NewFromInt(100))
+	}
+	if err := a.publishEvent(ctx, "market.orderbook", "market.orderbook", marketdata.OrderBookMetricsEvent{
+		TraceID:        uuid.New().String(),
+		Exchange:       exchangeID,
+		Symbol:         symbol,
+		BidAskSpread:   spreadPct,
+		MidPrice:       midPrice,
+		BestBid:        bestBid,
+		BestAsk:        bestAsk,
+		Imbalance1Pct:  imbalance,
+		LiquidityScore: totalDepth,
+		Timestamp:      ob.Timestamp,
+		CollectedAt:    time.Now(),
+	}); err != nil {
+		a.logger.WithError(err).Warnf("failed to publish orderbook metrics for %s:%s", exchangeID, symbol)
 	}
 }
 
