@@ -163,14 +163,18 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 	engine := services.NewScalpingBacktestEngine(h.db, svcConfig)
 	result, err := engine.Run(c.Request.Context())
 	if err != nil {
-		_ = h.updateBacktestRun(c.Request.Context(), runID, "failed", emptySummary, time.Now().UTC())
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = h.updateBacktestRun(cleanupCtx, runID, "failed", emptySummary, time.Now().UTC())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to run scalping backtest: " + err.Error()})
 		return
 	}
 
 	apiResult := serviceResultToAPI(result)
 	if err := h.persistBacktestResult(c.Request.Context(), runID, apiConfig, apiResult); err != nil {
-		_ = h.updateBacktestRun(c.Request.Context(), runID, "failed", emptySummary, time.Now().UTC())
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = h.updateBacktestRun(cleanupCtx, runID, "failed", emptySummary, time.Now().UTC())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist scalping backtest results"})
 		return
 	}
@@ -252,13 +256,21 @@ func (h *ScalpingBacktestHandler) ListScalpingBacktests(c *gin.Context) {
 			completedAtNS sql.NullTime
 		)
 		if err := rows.Scan(&id, &status, &configRaw, &summaryRaw, &createdAt, &completedAtNS); err != nil {
-			continue
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan backtest run"})
+			return
 		}
 		run, err := decodeScalpingBacktestRow(id, status, configRaw, summaryRaw, createdAt, completedAtNS)
 		if err != nil {
-			continue
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode backtest run"})
+			return
 		}
 		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to iterate backtest runs"})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"runs": runs})
@@ -324,11 +336,15 @@ func (h *ScalpingBacktestHandler) CompareScalpingBacktests(c *gin.Context) {
 			completedAtNS sql.NullTime
 		)
 		if err := rows.Scan(&id, &status, &configRaw, &summaryRaw, &createdAt, &completedAtNS); err != nil {
-			continue
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan backtest run for comparison"})
+			return
 		}
 		run, err := decodeScalpingBacktestRow(id, status, configRaw, summaryRaw, createdAt, completedAtNS)
 		if err != nil {
-			continue
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode backtest run for comparison"})
+			return
 		}
 		runs = append(runs, run)
 		if pnl, parseErr := decimal.NewFromString(run.Summary.TotalPnL); parseErr == nil {
@@ -337,6 +353,10 @@ func (h *ScalpingBacktestHandler) CompareScalpingBacktests(c *gin.Context) {
 				bestRunID = id
 			}
 		}
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to iterate backtest runs for comparison"})
+		return
 	}
 
 	c.JSON(http.StatusOK, compareScalpingBacktestsResponse{Runs: runs, BestRunID: bestRunID})
@@ -561,24 +581,27 @@ func boolMapToInterfaceMap(m map[string]bool) map[string]interface{} {
 func (h *ScalpingBacktestHandler) insertBacktestRun(ctx context.Context, runID, status string, config ScalpingBacktestConfig, summary ScalpingBacktestSummary, createdAt time.Time, completedAt *time.Time) error {
 	configRaw, err := json.Marshal(config)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal backtest config for insert: %w", err)
 	}
 	summaryRaw, err := json.Marshal(summary)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal backtest summary for insert: %w", err)
 	}
 	query := `
 		INSERT INTO scalping_backtest_runs (id, created_at, completed_at, config, status, summary)
 		VALUES ($1, $2, $3, $4, $5, $6)
 	`
 	_, err = h.db.Exec(ctx, query, runID, createdAt, completedAt, configRaw, status, summaryRaw)
-	return err
+	if err != nil {
+		return fmt.Errorf("insert backtest run %s: %w", runID, err)
+	}
+	return nil
 }
 
 func (h *ScalpingBacktestHandler) updateBacktestRun(ctx context.Context, runID, status string, summary ScalpingBacktestSummary, completedAt time.Time) error {
 	summaryRaw, err := json.Marshal(summary)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal backtest summary for update: %w", err)
 	}
 	_, err = h.db.Exec(ctx, `
 		UPDATE scalping_backtest_runs
@@ -587,13 +610,16 @@ func (h *ScalpingBacktestHandler) updateBacktestRun(ctx context.Context, runID, 
 		    summary = $4
 		WHERE id = $1
 	`, runID, status, completedAt, summaryRaw)
-	return err
+	if err != nil {
+		return fmt.Errorf("update backtest run %s: %w", runID, err)
+	}
+	return nil
 }
 
 func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, runID string, config ScalpingBacktestConfig, result apiBacktestResult) error {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin transaction for run %s: %w", runID, err)
 	}
 	defer func() {
 		_ = tx.Rollback(context.Background())
@@ -602,11 +628,11 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 	completedAt := time.Now().UTC()
 	summaryRaw, err := json.Marshal(result.Summary)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal backtest summary for persist: %w", err)
 	}
 	configRaw, err := json.Marshal(config)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal backtest config for persist: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE scalping_backtest_runs
@@ -616,7 +642,7 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 		    summary = $4
 		WHERE id = $1
 	`, runID, completedAt, configRaw, summaryRaw); err != nil {
-		return err
+		return fmt.Errorf("update run %s status in transaction: %w", runID, err)
 	}
 
 	for _, signal := range result.Signals {
@@ -626,11 +652,11 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 		}
 		signalRaw, err := json.Marshal(signal.Signal)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal signal %s: %w", signalID, err)
 		}
 		gateRaw, err := json.Marshal(signal.GateResults)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal gate results for signal %s: %w", signalID, err)
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO scalping_backtest_signals (
@@ -638,7 +664,7 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 				funnel_stage, rejection_reason, gate_results
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		`, signalID, runID, signal.Timestamp, signal.Symbol, signal.Exchange, signalRaw, signal.Regime, signal.RegimeVolatility, signal.FunnelStage, nullString(signal.RejectionReason), gateRaw); err != nil {
-			return err
+			return fmt.Errorf("insert signal %s for run %s: %w", signalID, runID, err)
 		}
 	}
 
@@ -685,22 +711,22 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 			trade.RegimeAtExit,
 			trade.HoldDurationSeconds,
 		); err != nil {
-			return err
+			return fmt.Errorf("insert trade %s for run %s: %w", tradeID, runID, err)
 		}
 	}
 
 	for _, gate := range result.GateSummary {
 		reasonsRaw, err := json.Marshal(gate.TopRejectionReasons)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal top rejection reasons for gate %s: %w", gate.GateName, err)
 		}
 		bySymbolRaw, err := json.Marshal(gate.BreakdownBySymbol)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal symbol breakdown for gate %s: %w", gate.GateName, err)
 		}
 		byRegimeRaw, err := json.Marshal(gate.BreakdownByRegime)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal regime breakdown for gate %s: %w", gate.GateName, err)
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO scalping_backtest_gate_summary (
@@ -708,12 +734,12 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 				top_rejection_reasons, breakdown_by_symbol, breakdown_by_regime
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		`, uuid.NewString(), runID, gate.GateName, gate.PassCount, gate.RejectCount, reasonsRaw, bySymbolRaw, byRegimeRaw); err != nil {
-			return err
+			return fmt.Errorf("insert gate summary %s for run %s: %w", gate.GateName, runID, err)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return err
+		return fmt.Errorf("commit transaction for run %s: %w", runID, err)
 	}
 	return nil
 }
@@ -741,13 +767,13 @@ func decodeScalpingBacktestRow(runID, status string, configRaw, summaryRaw []byt
 	var config ScalpingBacktestConfig
 	if len(configRaw) > 0 {
 		if err := json.Unmarshal(configRaw, &config); err != nil {
-			return GetScalpingBacktestResponse{}, err
+			return GetScalpingBacktestResponse{}, fmt.Errorf("unmarshal backtest config for run %s: %w", runID, err)
 		}
 	}
 	var summary ScalpingBacktestSummary
 	if len(summaryRaw) > 0 {
 		if err := json.Unmarshal(summaryRaw, &summary); err != nil {
-			return GetScalpingBacktestResponse{}, err
+			return GetScalpingBacktestResponse{}, fmt.Errorf("unmarshal backtest summary for run %s: %w", runID, err)
 		}
 	}
 
