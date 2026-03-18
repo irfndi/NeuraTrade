@@ -626,58 +626,102 @@ func (sqs *SignalQualityScorer) refreshExchangeReliabilityCache(ctx context.Cont
 	return nil
 }
 
-// fetchExchangeStatistics retrieves raw exchange statistics from the database (or mock data).
 func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (map[string]*ExchangeMetrics, error) {
-	// Query database for exchange statistics
+	if isNilDBPool(sqs.db) {
+		return sqs.defaultExchangeStats(), nil
+	}
+
 	stats := make(map[string]*ExchangeMetrics)
 
-	// In a real implementation, this would query the database
-	// For now, we'll use default values for common exchanges
-	defaultStats := map[string]*ExchangeMetrics{
+	query := `
+		SELECT e.name,
+		       COALESCE(SUM(md.volume_24h), 0),
+		       COUNT(md.id),
+		       MAX(md.timestamp),
+		       COUNT(DISTINCT md.trading_pair_id)
+		FROM exchanges e
+		LEFT JOIN market_data md ON md.exchange_id = e.id AND md.timestamp > NOW() - INTERVAL '24 hours'
+		GROUP BY e.name
+	`
+	rows, err := sqs.db.Query(ctx, query)
+	if err != nil {
+		sqs.logger.WithError(err).Warn("Failed to query exchange statistics from DB, using defaults")
+		return sqs.defaultExchangeStats(), nil
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		var totalVolume decimal.Decimal
+		var dataPointCount int64
+		var lastUpdate time.Time
+		var pairCount int
+
+		if err := rows.Scan(&name, &totalVolume, &dataPointCount, &lastUpdate, &pairCount); err != nil {
+			sqs.logger.WithError(err).Warn("Failed to scan exchange statistics row")
+			continue
+		}
+
+		stats[name] = &ExchangeMetrics{
+			TotalTrades:      dataPointCount,
+			AvgDailyVolume:   totalVolume,
+			AvgSpread:        decimal.NewFromFloat(0.001),
+			AvgLatency:       100 * time.Millisecond,
+			UptimePercentage: decimal.NewFromFloat(0.995),
+			DataGaps:         0,
+			LastDataUpdate:   lastUpdate,
+			SupportedPairs:   pairCount,
+			APIResponseTime:  100 * time.Millisecond,
+			ErrorRate:        decimal.NewFromFloat(0.002),
+		}
+	}
+
+	if len(stats) == 0 {
+		return sqs.defaultExchangeStats(), nil
+	}
+
+	return stats, nil
+}
+
+func (sqs *SignalQualityScorer) defaultExchangeStats() map[string]*ExchangeMetrics {
+	return map[string]*ExchangeMetrics{
 		"binance": {
 			TotalTrades:      1000000,
-			AvgDailyVolume:   decimal.NewFromFloat(1000000000), // $1B
-			AvgSpread:        decimal.NewFromFloat(0.001),      // 0.1%
+			AvgDailyVolume:   decimal.NewFromFloat(1000000000),
+			AvgSpread:        decimal.NewFromFloat(0.001),
 			AvgLatency:       50 * time.Millisecond,
-			UptimePercentage: decimal.NewFromFloat(0.999), // 99.9%
+			UptimePercentage: decimal.NewFromFloat(0.999),
 			DataGaps:         5,
 			LastDataUpdate:   time.Now().Add(-1 * time.Minute),
 			SupportedPairs:   500,
 			APIResponseTime:  100 * time.Millisecond,
-			ErrorRate:        decimal.NewFromFloat(0.001), // 0.1%
+			ErrorRate:        decimal.NewFromFloat(0.001),
 		},
 		"coinbase": {
 			TotalTrades:      500000,
-			AvgDailyVolume:   decimal.NewFromFloat(500000000), // $500M
-			AvgSpread:        decimal.NewFromFloat(0.002),     // 0.2%
+			AvgDailyVolume:   decimal.NewFromFloat(500000000),
+			AvgSpread:        decimal.NewFromFloat(0.002),
 			AvgLatency:       100 * time.Millisecond,
-			UptimePercentage: decimal.NewFromFloat(0.995), // 99.5%
+			UptimePercentage: decimal.NewFromFloat(0.995),
 			DataGaps:         10,
 			LastDataUpdate:   time.Now().Add(-2 * time.Minute),
 			SupportedPairs:   200,
 			APIResponseTime:  150 * time.Millisecond,
-			ErrorRate:        decimal.NewFromFloat(0.002), // 0.2%
+			ErrorRate:        decimal.NewFromFloat(0.002),
 		},
 		"kraken": {
 			TotalTrades:      300000,
-			AvgDailyVolume:   decimal.NewFromFloat(200000000), // $200M
-			AvgSpread:        decimal.NewFromFloat(0.003),     // 0.3%
+			AvgDailyVolume:   decimal.NewFromFloat(200000000),
+			AvgSpread:        decimal.NewFromFloat(0.003),
 			AvgLatency:       200 * time.Millisecond,
-			UptimePercentage: decimal.NewFromFloat(0.990), // 99.0%
+			UptimePercentage: decimal.NewFromFloat(0.990),
 			DataGaps:         15,
 			LastDataUpdate:   time.Now().Add(-3 * time.Minute),
 			SupportedPairs:   150,
 			APIResponseTime:  200 * time.Millisecond,
-			ErrorRate:        decimal.NewFromFloat(0.005), // 0.5%
+			ErrorRate:        decimal.NewFromFloat(0.005),
 		},
 	}
-
-	// Copy default stats to the return map
-	for exchange, metrics := range defaultStats {
-		stats[exchange] = metrics
-	}
-
-	return stats, nil
 }
 
 // calculateExchangeReliability calculates a normalized reliability score from raw exchange metrics.
