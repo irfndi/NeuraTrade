@@ -246,3 +246,74 @@ func (m *MockCollectorService) GetStatus() map[string]interface{} {
 	args := m.Called()
 	return args.Get(0).(map[string]interface{})
 }
+
+type MockExchangeController struct {
+	mock.Mock
+}
+
+func (m *MockExchangeController) PauseExchange(exchangeID string) error {
+	args := m.Called(exchangeID)
+	return args.Error(0)
+}
+
+func (m *MockExchangeController) ResumeExchange(exchangeID string) error {
+	args := m.Called(exchangeID)
+	return args.Error(0)
+}
+
+func (m *MockExchangeController) IsPaused(exchangeID string) bool {
+	args := m.Called(exchangeID)
+	return args.Bool(0)
+}
+
+type MockSafeModeController struct {
+	EnableErr  error
+	DisableErr error
+	Enabled    bool
+}
+
+func (m *MockSafeModeController) Enable(_ context.Context) error {
+	return m.EnableErr
+}
+
+func (m *MockSafeModeController) Disable(_ context.Context) error {
+	return m.DisableErr
+}
+
+func (m *MockSafeModeController) IsEnabled() bool {
+	return m.Enabled
+}
+
+type MockKillSwitchController struct {
+	EngageErr    error
+	DisengageErr error
+	Engaged      bool
+}
+
+func (m *MockKillSwitchController) Engage(_ context.Context, _ string) error {
+	if m.EngageErr != nil {
+		return m.EngageErr
+	}
+	m.Engaged = true
+	return nil
+}
+
+func (m *MockKillSwitchController) Disengage(_ context.Context) error {
+	if m.DisengageErr != nil {
+		return m.DisengageErr
+	}
+	m.Engaged = false
+	return nil
+}
+
+func (m *MockKillSwitchController) IsEngaged() bool {
+	return m.Engaged
+}
+
+type MockOrderCanceller struct {
+	CancelErr error
+}
+
+func (m *MockOrderCanceller) CancelAllOrders(_ context.Context, _, _ string) error {
+	return m.CancelErr
+}

@@ -1079,7 +1079,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		Autonomy:  integratedHandlers.AutonomyCoordinator(),
 		Collector: handlers.NewCollectorController(collectorService),
 		Risk:      handlers.NewRiskControllerAdapter(sharedKillSwitch, sharedSafeMode),
-		Orders:    handlers.NewOrderController(ccxtService),
+		Orders:    handlers.NewCCXTOrderCanceller(ccxtService),
 	})
 	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())
 
