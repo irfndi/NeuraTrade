@@ -958,7 +958,10 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	symbolFilter map[string]struct{},
 ) ([]HistoricalSignal, error) {
 	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), md.price, md.bid, md.ask, md.high_24h, md.low_24h, md.volume_24h, md.timestamp
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), md.price,
+			COALESCE(md.bid, 0), COALESCE(md.ask, 0),
+			COALESCE(md.high_24h, 0), COALESCE(md.low_24h, 0), COALESCE(md.volume_24h, 0),
+			md.timestamp
 		FROM market_data md
 		JOIN trading_pairs tp ON tp.id = md.trading_pair_id
 		JOIN exchanges e ON e.id = md.exchange_id
