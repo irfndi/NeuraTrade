@@ -183,6 +183,7 @@ func (c *ShadowEvaluationCoordinator) CloseStaleShadowPositions(
 			runtime.mu.Unlock()
 			continue
 		}
+		var outcomes []*shadowOutcomeRecord
 		for _, symbol := range stale {
 			decisionID := runtime.openDecisions[symbol]
 			openedAt := runtime.openedAt[symbol]
@@ -206,18 +207,25 @@ func (c *ShadowEvaluationCoordinator) CloseStaleShadowPositions(
 				if realized.GreaterThan(decimal.Zero) {
 					runtime.winningTrades++
 				}
+				outcomes = append(outcomes, &shadowOutcomeRecord{
+					decisionID: decisionID,
+					exitPrice:  exitPrice,
+					realized:   realized,
+				})
 			}
 			c.logger.Info("shadow stale position closed",
 				zap.String("variant_id", variant.VariantID),
 				zap.String("symbol", symbol),
 				zap.Duration("age", time.Since(openedAt)),
 			)
-			_ = decisionID
 			delete(runtime.openDecisions, symbol)
 			delete(runtime.lastEntryPrice, symbol)
 			delete(runtime.openedAt, symbol)
 		}
 		runtime.mu.Unlock()
+		for _, outcome := range outcomes {
+			c.persistShadowOutcome(ctx, outcome)
+		}
 	}
 }
 
@@ -442,31 +450,64 @@ func (c *ShadowEvaluationCoordinator) executeShadowDecision(
 		return err
 	}
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
 	if filled.Status == PaperOrderStatusRejected || filled.Status == PaperOrderStatusCancelled || filled.Status == PaperOrderStatusExpired {
 		runtime.rejectionCount++
 		runtime.gateRejections["shadow_execution_rejected"]++
+		runtime.mu.Unlock()
 		return nil
 	}
 	if !filled.FilledSize.GreaterThan(decimal.Zero) {
+		runtime.mu.Unlock()
 		return nil
 	}
 	_, err = runtime.engine.ExecuteTrade(ctx, mirrored.Symbol, action, filled.FilledSize, filled.AvgFillPrice)
 	if err != nil {
+		runtime.mu.Unlock()
 		return err
 	}
 	runtime.tradeCount++
-	if action == "buy" {
+	var outcomeRecord *shadowOutcomeRecord
+	switch action {
+	case "buy":
 		runtime.openDecisions[mirrored.Symbol] = decisionID
 		runtime.lastEntryPrice[mirrored.Symbol] = filled.AvgFillPrice
 		runtime.openedAt[mirrored.Symbol] = time.Now().UTC()
-	} else if action == "sell" {
+	case "sell":
+		portfolioSnapshot := runtime.engine.GetPortfolio()
+		realized := portfolioSnapshot.RealizedPNL.Sub(runtime.lastRealized)
+		runtime.lastRealized = portfolioSnapshot.RealizedPNL
+		if realized.GreaterThan(decimal.Zero) {
+			runtime.winningTrades++
+		}
+		savedDecisionID := runtime.openDecisions[mirrored.Symbol]
 		delete(runtime.openDecisions, mirrored.Symbol)
 		delete(runtime.lastEntryPrice, mirrored.Symbol)
 		delete(runtime.openedAt, mirrored.Symbol)
+		outcomeRecord = &shadowOutcomeRecord{
+			decisionID: savedDecisionID,
+			exitPrice:  filled.AvgFillPrice,
+			realized:   realized,
+		}
 	}
+	runtime.mu.Unlock()
+	c.persistShadowOutcome(ctx, outcomeRecord)
 	c.recordPaperTradeOpen(ctx, mirrored, filled)
 	return nil
+}
+
+type shadowOutcomeRecord struct {
+	decisionID int64
+	exitPrice  decimal.Decimal
+	realized   decimal.Decimal
+}
+
+func (c *ShadowEvaluationCoordinator) persistShadowOutcome(ctx context.Context, record *shadowOutcomeRecord) {
+	if record == nil || record.decisionID <= 0 {
+		return
+	}
+	if err := c.insertShadowOutcome(ctx, record.decisionID, record.exitPrice, record.realized); err != nil {
+		c.logger.Warn("shadow outcome persistence failed", zap.Int64("decision_id", record.decisionID), zap.Error(err))
+	}
 }
 
 func (c *ShadowEvaluationCoordinator) recordPaperTradeOpen(ctx context.Context, mirrored ShadowMirroredDecision, order *PaperOrder) {
