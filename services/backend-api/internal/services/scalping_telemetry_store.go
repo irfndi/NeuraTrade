@@ -65,6 +65,7 @@ type GateBlockStat struct {
 type RegimeOutcomeStat struct {
 	Regime  string  `json:"regime"`
 	Count   int     `json:"count"`
+	Wins    int     `json:"wins"`
 	WinRate float64 `json:"win_rate"`
 	AvgPnL  float64 `json:"avg_pnl"`
 }
@@ -369,11 +370,10 @@ func (s *ScalpingTelemetryStore) GetRegimeOutcomeCorrelation(ctx context.Context
 	stats := make([]RegimeOutcomeStat, 0)
 	for rows.Next() {
 		var stat RegimeOutcomeStat
-		var wins int
-		if scanErr := rows.Scan(&stat.Regime, &stat.Count, &wins, &stat.AvgPnL); scanErr != nil {
+		if scanErr := rows.Scan(&stat.Regime, &stat.Count, &stat.Wins, &stat.AvgPnL); scanErr != nil {
 			return nil, fmt.Errorf("scan regime outcome row: %w", scanErr)
 		}
-		stat.WinRate = safeRate(wins, stat.Count)
+		stat.WinRate = safeRate(stat.Wins, stat.Count)
 		stats = append(stats, stat)
 	}
 	if rows.Err() != nil {
@@ -395,6 +395,8 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 			AND cycle_at >= $2
 			AND policy_adjustments IS NOT NULL
 			AND policy_adjustments != ''
+			AND outcome IS NOT NULL
+			AND outcome != ''
 	`, strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("query policy adjustment impact: %w", err)
