@@ -78,6 +78,21 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 		WithArgs(1).
 		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
 
+	// 6. getExchangeName (called inside generateTechnicalSignals)
+	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+
+	// 7. OHLCV candles query (called inside generateTechnicalSignals)
+	ohlcvRows := pgxmock.NewRows([]string{"open", "high", "low", "close", "volume", "timestamp"})
+	for i := 0; i < 60; i++ {
+		price := 50000.0 + float64(i)*10.0
+		ohlcvRows.AddRow(price, price+50, price-50, price+20, 1000.0, time.Now().Add(-time.Duration(60-i)*time.Minute))
+	}
+	mockPool.ExpectQuery("SELECT open, high, low, close, volume, timestamp").
+		WithArgs(1, 1).
+		WillReturnRows(ohlcvRows)
+
 	// Mock Aggregator expectations
 	// Expect AggregateTechnicalSignals because we have no arbitrage opportunities
 	mockAggregator.On("AggregateTechnicalSignals", mock.Anything, mock.Anything).

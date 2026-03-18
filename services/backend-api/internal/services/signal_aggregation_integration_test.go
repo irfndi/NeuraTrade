@@ -88,7 +88,9 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Test 1: Signal Processing Pipeline
 	t.Run("SignalProcessingPipeline", func(t *testing.T) {
-		// Since getActiveTradingPairs is stubbed to return empty, this should run without DB queries
+		mockPool.ExpectQuery("SELECT tp.symbol, e.name").
+			WillReturnRows(pgxmock.NewRows([]string{"symbol", "name"}))
+
 		err := signalProcessor.processSignalBatch()
 		assert.NoError(t, err, "Signal processing should not fail (even with empty data)")
 

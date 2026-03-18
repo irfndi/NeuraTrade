@@ -806,17 +806,57 @@ func (sp *SignalProcessor) getArbitrageOpportunities(symbol string) ([]models.Ar
 	return opportunities, nil
 }
 
-// generateTechnicalSignals prepares technical signal input from market data.
 func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]TechnicalSignalInput, error) {
-	// Get trading pair symbol and exchange name
 	symbol, err := sp.getTradingPairSymbol(data.TradingPairID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get trading pair symbol: %w", err)
 	}
 
+	exchangeName, err := sp.getExchangeName(data.ExchangeID)
+	if err != nil {
+		exchangeName = ""
+	}
+
+	query := `
+		SELECT open, high, low, close, volume, timestamp
+		FROM ohlcv_candles
+		WHERE trading_pair_id = $1 AND exchange_id = $2
+		ORDER BY timestamp ASC
+		LIMIT 200
+	`
+	ctx, cancel := context.WithTimeout(sp.ctx, sp.config.TimeoutDuration)
+	defer cancel()
+
+	rows, err := sp.db.Query(ctx, query, data.TradingPairID, data.ExchangeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OHLCV candles: %w", err)
+	}
+	defer rows.Close()
+
+	var prices, volumes []decimal.Decimal
+	var timestamps []time.Time
+	for rows.Next() {
+		var o, h, l, c, v decimal.Decimal
+		var ts time.Time
+		if err := rows.Scan(&o, &h, &l, &c, &v, &ts); err != nil {
+			return nil, fmt.Errorf("failed to scan OHLCV candle: %w", err)
+		}
+		prices = append(prices, c)
+		volumes = append(volumes, v)
+		timestamps = append(timestamps, ts)
+	}
+
+	if len(prices) < 20 {
+		return nil, fmt.Errorf("insufficient OHLCV data for %s: need 20, got %d", symbol, len(prices))
+	}
+
 	return []TechnicalSignalInput{
 		{
-			Symbol: symbol,
+			Symbol:     symbol,
+			Exchange:   exchangeName,
+			Prices:     prices,
+			Volumes:    volumes,
+			Timestamps: timestamps,
 		},
 	}, nil
 }
@@ -1039,13 +1079,35 @@ func (sp *SignalProcessor) metricsLoop() {
 	// Metric collection logic
 }
 
-// getActiveTradingPairs Mock/Stub
-func (sp *SignalProcessor) getActiveTradingPairs() ([]struct {
+type tradingPairWithExchange struct {
 	Symbol   string
 	Exchange struct{ Name string }
-}, error) {
-	return []struct {
-		Symbol   string
-		Exchange struct{ Name string }
-	}{}, nil
+}
+
+func (sp *SignalProcessor) getActiveTradingPairs() ([]tradingPairWithExchange, error) {
+	query := `
+		SELECT tp.symbol, e.name
+		FROM trading_pairs tp
+		JOIN exchanges e ON e.id = tp.exchange_id
+		WHERE tp.is_active = true
+		ORDER BY tp.symbol
+	`
+	ctx, cancel := context.WithTimeout(sp.ctx, sp.config.TimeoutDuration)
+	defer cancel()
+
+	rows, err := sp.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active trading pairs: %w", err)
+	}
+	defer rows.Close()
+
+	var pairs []tradingPairWithExchange
+	for rows.Next() {
+		var p tradingPairWithExchange
+		if err := rows.Scan(&p.Symbol, &p.Exchange.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan trading pair: %w", err)
+		}
+		pairs = append(pairs, p)
+	}
+	return pairs, rows.Err()
 }

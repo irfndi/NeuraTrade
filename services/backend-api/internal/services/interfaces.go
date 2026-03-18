@@ -12,6 +12,7 @@ type DBPool = database.DBPool
 type SignalAggregatorInterface interface {
 	AggregateArbitrageSignals(ctx context.Context, input ArbitrageSignalInput) ([]*AggregatedSignal, error)
 	AggregateTechnicalSignals(ctx context.Context, input TechnicalSignalInput) ([]*AggregatedSignal, error)
+	AggregateMicrostructureSignals(ctx context.Context, input MicrostructureSignalInput) ([]*AggregatedSignal, error)
 	DeduplicateSignals(ctx context.Context, signals []*AggregatedSignal) ([]*AggregatedSignal, error)
 }
 

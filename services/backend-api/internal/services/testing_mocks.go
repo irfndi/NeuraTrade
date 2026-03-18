@@ -34,3 +34,11 @@ func (m *MockSignalAggregator) DeduplicateSignals(ctx context.Context, signals [
 	}
 	return args.Get(0).([]*AggregatedSignal), args.Error(1)
 }
+
+func (m *MockSignalAggregator) AggregateMicrostructureSignals(ctx context.Context, input MicrostructureSignalInput) ([]*AggregatedSignal, error) {
+	args := m.Called(ctx, input)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*AggregatedSignal), args.Error(1)
+}
