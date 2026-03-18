@@ -136,4 +136,6 @@ type AIReasoningNotification struct {
 	AttemptWindowProgress string
 	Reasons               []string
 	Action                string
+	RuntimeStatus         string
+	RuntimeDetails        map[string]string
 }
