@@ -2801,13 +2801,6 @@ func (s *AIScalpingService) mirrorShadowDecisionAsync(
 		if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
 			log.Printf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
 		}
-		prices := make(map[string]decimal.Decimal)
-		if decisionSnapshot.EntryPrice != nil && strings.TrimSpace(decisionSnapshot.Symbol) != "" {
-			prices[strings.TrimSpace(decisionSnapshot.Symbol)] = *decisionSnapshot.EntryPrice
-		}
-		outcomeCtx, outcomeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer outcomeCancel()
-		coordinator.RecordShadowOutcome(outcomeCtx, decisionSnapshot, prices)
 	}()
 }
 
@@ -4158,6 +4151,9 @@ func scalpingPolicyConfigFromEnv(maxBidAskSpreadPct float64) appautonomy.Scalpin
 	}
 	if value := getEnvInt("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES"); value > 0 {
 		cfg.ProgressBlockAfter = time.Duration(value) * time.Minute
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET"); value > 0 {
+		cfg.LossStreakBudget = clampInt(value, 1, 20)
 	}
 	return cfg.Normalized()
 }

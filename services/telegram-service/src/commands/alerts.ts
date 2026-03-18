@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { BackendApiClient } from "../api/client";
+import { splitIntoTelegramMessages } from "../utils";
 
 const ALERT_TYPES = [
   { type: "arbitrage", label: "Arbitrage Opportunities", emoji: "📈" },
@@ -52,7 +53,9 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
         "/alert_toggle [id]\n" +
         "/alert_del [id]";
 
-      await ctx.reply(msg);
+      for (const chunk of splitIntoTelegramMessages(msg)) {
+        await ctx.reply(chunk);
+      }
     } catch {
       await ctx.reply("Unable to fetch alerts. Please try again.");
     }
