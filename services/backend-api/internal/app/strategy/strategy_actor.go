@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/irfndi/neuratrade/internal/domain/marketdata"
 	"github.com/irfndi/neuratrade/internal/domain/signals"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -41,6 +43,43 @@ func DefaultConfig() Config {
 	}
 }
 
+type ScalpingSignalComposer interface {
+	ComposeSignal(ctx context.Context, ohlcv ScalpingOHLCVData, obMetrics ScalpingOrderBookMetrics) (*ScalpingSignalResult, error)
+}
+
+type ScalpingOHLCVData struct {
+	Exchange  string
+	Symbol    string
+	Timeframe string
+	Candles   []ScalpingCandle
+}
+
+type ScalpingCandle struct {
+	Timestamp time.Time
+	Open      decimal.Decimal
+	High      decimal.Decimal
+	Low       decimal.Decimal
+	Close     decimal.Decimal
+	Volume    decimal.Decimal
+}
+
+type ScalpingOrderBookMetrics struct {
+	SpreadPct      decimal.Decimal
+	Imbalance1Pct  decimal.Decimal
+	MidPrice       decimal.Decimal
+	BestBid        decimal.Decimal
+	BestAsk        decimal.Decimal
+	LiquidityScore decimal.Decimal
+}
+
+type ScalpingSignalResult struct {
+	ID         string
+	Direction  string
+	Confidence decimal.Decimal
+	Components []string
+	Quality    decimal.Decimal
+}
+
 // IngestMarketTickMessage is forwarded from market.tick events to strategy logic.
 type IngestMarketTickMessage struct {
 	Tick marketdata.MarketTickEvent
@@ -51,13 +90,14 @@ func (*IngestMarketTickMessage) MessageType() string { return "strategy.ingest_m
 
 // StrategyActor consumes market ticks and emits SignalProposed events.
 type StrategyActor struct {
-	id         string
-	strategyID string
-	windowSize int
-	engine     *signals.Engine
-	eventBus   *eventbus.Bus
-	windows    map[string][]signals.Tick
-	logger     *slog.Logger
+	id               string
+	strategyID       string
+	windowSize       int
+	engine           *signals.Engine
+	eventBus         *eventbus.Bus
+	windows          map[string][]signals.Tick
+	logger           *slog.Logger
+	scalpingComposer ScalpingSignalComposer
 }
 
 // NewStrategyActor creates a strategy actor with deterministic signal logic.
@@ -91,6 +131,10 @@ func NewStrategyActor(cfg Config, bus *eventbus.Bus, logger *slog.Logger) *Strat
 
 // ID returns the actor identifier.
 func (s *StrategyActor) ID() string { return s.id }
+
+func (s *StrategyActor) SetScalpingComposer(composer ScalpingSignalComposer) {
+	s.scalpingComposer = composer
+}
 
 // Receive handles strategy actor messages.
 func (s *StrategyActor) Receive(ctx context.Context, env actor.Envelope) error {
@@ -150,10 +194,82 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 	if err := s.eventBus.PublishSync(ctx, event); err != nil {
 		return fmt.Errorf("publish SignalProposed event: %w", err)
 	}
+
+	if s.scalpingComposer != nil {
+		s.tryComposeScalpingSignal(ctx, env.TraceID, tick)
+	}
+
 	return nil
 }
 
 // SubscribeMarketTicks forwards market.tick events from event bus into the strategy actor mailbox.
+func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID string, tick marketdata.MarketTickEvent) {
+	ohlcv := ScalpingOHLCVData{
+		Exchange: tick.Exchange,
+		Symbol:   tick.Symbol,
+		Candles: []ScalpingCandle{
+			{
+				Timestamp: tick.Timestamp,
+				Open:      tick.Last,
+				High:      tick.Last,
+				Low:       tick.Last,
+				Close:     tick.Last,
+				Volume:    tick.Volume,
+			},
+		},
+	}
+
+	spread := tick.Ask.Sub(tick.Bid)
+	midPrice := tick.Bid.Add(tick.Ask).Div(decimal.NewFromInt(2))
+	var spreadPct decimal.Decimal
+	if !midPrice.IsZero() {
+		spreadPct = spread.Div(midPrice).Mul(decimal.NewFromInt(100))
+	}
+
+	obMetrics := ScalpingOrderBookMetrics{
+		SpreadPct: spreadPct,
+		MidPrice:  midPrice,
+		BestBid:   tick.Bid,
+		BestAsk:   tick.Ask,
+	}
+
+	result, err := s.scalpingComposer.ComposeSignal(ctx, ohlcv, obMetrics)
+	if err != nil || result == nil {
+		return
+	}
+
+	payload := signals.ScalpingSignalProposedEvent{
+		BaseEvent: ports.BaseEvent{
+			Type:       ports.EventTypeScalpingSignalProposed,
+			Aggregate:  s.strategyID,
+			OccurredAt: time.Now().Unix(),
+		},
+		SignalID:     result.ID,
+		Exchange:     tick.Exchange,
+		Symbol:       tick.Symbol,
+		Direction:    result.Direction,
+		Confidence:   result.Confidence,
+		Components:   result.Components,
+		QualityScore: result.Quality,
+	}
+
+	event := eventbus.NewEvent(ports.EventTypeScalpingSignalProposed, ports.EventTypeScalpingSignalProposed, payload).
+		WithSource(s.id)
+	if traceID != "" {
+		event = event.WithTraceID(traceID)
+	}
+
+	s.logger.Debug("proposed scalping signal",
+		"signal_id", payload.SignalID,
+		"symbol", payload.Symbol,
+		"direction", payload.Direction,
+		"confidence", payload.Confidence.String())
+
+	if err := s.eventBus.PublishSync(ctx, event); err != nil {
+		s.logger.Warn("failed to publish scalping signal", "error", err)
+	}
+}
+
 func SubscribeMarketTicks(ctx context.Context, bus *eventbus.Bus, ref *actor.Ref) (*eventbus.Subscription, error) {
 	if bus == nil {
 		return nil, ErrNilEventBus

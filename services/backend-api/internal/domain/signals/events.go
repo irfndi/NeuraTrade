@@ -38,3 +38,14 @@ func NewSignalProposedEvent(signal ProposedSignal) SignalProposedEvent {
 		Metadata:   metadataCopy,
 	}
 }
+
+type ScalpingSignalProposedEvent struct {
+	ports.BaseEvent
+	SignalID     string
+	Exchange     string
+	Symbol       string
+	Direction    string
+	Confidence   decimal.Decimal
+	Components   []string
+	QualityScore decimal.Decimal
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
 	"github.com/irfndi/neuratrade/internal/app/marketdata"
 	"github.com/irfndi/neuratrade/internal/app/risk"
+	"github.com/irfndi/neuratrade/internal/app/strategy"
 	ccxtservice "github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
@@ -21,6 +22,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/platform/timeout"
 	"github.com/irfndi/neuratrade/internal/ports"
 	"github.com/shopspring/decimal"
+	"log/slog"
 )
 
 // Config holds bootstrap configuration.
@@ -112,6 +114,8 @@ type Application struct {
 	RiskRef           *risk.RiskActorRef
 	CollectorActor    *marketdata.CollectorActor
 	CollectorActorRef *actor.Ref
+	StrategyActor     *strategy.StrategyActor
+	StrategyActorRef  *actor.Ref
 }
 
 // Builder builds an Application.
@@ -124,6 +128,7 @@ type Builder struct {
 	killSwitch ports.KillSwitch
 	safeMode   *risk.SafeModeImpl
 	collector  *marketdata.CollectorActor
+	strategy   *strategy.StrategyActor
 }
 
 // NewBuilder creates a new Builder.
@@ -181,6 +186,11 @@ func (b *Builder) WithCollector(collector *marketdata.CollectorActor) *Builder {
 	return b
 }
 
+func (b *Builder) WithStrategy(actor *strategy.StrategyActor) *Builder {
+	b.strategy = actor
+	return b
+}
+
 // Build builds the Application.
 func (b *Builder) Build() (*Application, error) {
 	app := &Application{
@@ -198,6 +208,10 @@ func (b *Builder) Build() (*Application, error) {
 	// Build risk components if not provided
 	if err := app.buildRiskComponents(b); err != nil {
 		return nil, fmt.Errorf("build risk components: %w", err)
+	}
+
+	if err := app.buildStrategyComponents(b); err != nil {
+		return nil, fmt.Errorf("build strategy components: %w", err)
 	}
 
 	return app, nil
@@ -356,6 +370,70 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 			ref.Stop()
 			if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
 				return fmt.Errorf("run risk actor: %w", runErr)
+			}
+			return nil
+		}
+	})
+
+	return nil
+}
+
+func (a *Application) buildStrategyComponents(b *Builder) error {
+	if b.strategy == nil {
+		cfg := strategy.DefaultConfig()
+		b.strategy = strategy.NewStrategyActor(cfg, a.EventBus, slog.Default())
+	}
+
+	a.StrategyActor = b.strategy
+
+	ref, err := a.ActorSystem.Spawn(a.StrategyActor, actor.DefaultConfig())
+	if err != nil {
+		return fmt.Errorf("spawn StrategyActor: %w", err)
+	}
+
+	runErrCh := make(chan error, 1)
+	actorRunCtx, actorRunCancel := context.WithCancel(context.Background())
+	go func() {
+		runErrCh <- ref.Run(actorRunCtx)
+	}()
+
+	startTimeout := time.NewTimer(5 * time.Second)
+	startTicker := time.NewTicker(10 * time.Millisecond)
+	defer startTimeout.Stop()
+	defer startTicker.Stop()
+
+	for !ref.IsRunning() {
+		select {
+		case runErr := <-runErrCh:
+			actorRunCancel()
+			ref.Stop()
+			if runErr != nil && !errors.Is(runErr, context.Canceled) {
+				return fmt.Errorf("run StrategyActor: %w", runErr)
+			}
+			return fmt.Errorf("strategy actor stopped before assignment")
+		case <-startTimeout.C:
+			actorRunCancel()
+			ref.Stop()
+			return fmt.Errorf("timeout waiting for StrategyActor to start")
+		case <-startTicker.C:
+		}
+	}
+
+	a.StrategyActorRef = ref
+	a.Supervisor.AddFunc(strategy.DefaultActorID, func(ctx context.Context) error {
+		select {
+		case runErr := <-runErrCh:
+			actorRunCancel()
+			ref.Stop()
+			if runErr != nil && !errors.Is(runErr, context.Canceled) {
+				return fmt.Errorf("run strategy actor: %w", runErr)
+			}
+			return nil
+		case <-ctx.Done():
+			actorRunCancel()
+			ref.Stop()
+			if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
+				return fmt.Errorf("run strategy actor: %w", runErr)
 			}
 			return nil
 		}
