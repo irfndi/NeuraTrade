@@ -14,6 +14,83 @@ const (
 	telegramMaxMessageUnits = 3900
 )
 
+// SystemAlertNotification represents a system-level alert for dispatch.
+type SystemAlertNotification struct {
+	Level   string
+	Source  string
+	Message string
+	Details map[string]any
+}
+
+// DispatchSystemAlert sends a formatted system alert to a Telegram chat.
+func (ns *NotificationService) DispatchSystemAlert(ctx context.Context, chatID int64, alert SystemAlertNotification) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.DispatchSystemAlert", map[string]string{
+		"chat_id": fmt.Sprintf("%d", chatID),
+		"level":   alert.Level,
+		"source":  alert.Source,
+	})
+	defer observability.FinishSpan(span, nil)
+
+	message := ns.formatSystemAlertMessage(alert)
+
+	result := ns.sendTelegramMessageWithResult(spanCtx, chatID, message)
+	if result.OK {
+		ns.logger.Info("Dispatched system alert",
+			"chat_id", chatID,
+			"level", alert.Level,
+			"source", alert.Source,
+		)
+		return nil
+	}
+
+	ns.logger.Error("Failed to dispatch system alert",
+		"chat_id", chatID,
+		"level", alert.Level,
+		"source", alert.Source,
+		"error_code", result.ErrorCode,
+		"error", result.Error,
+	)
+
+	return fmt.Errorf("%s: %s", result.ErrorCode, result.Error)
+}
+
+func (ns *NotificationService) formatSystemAlertMessage(alert SystemAlertNotification) string {
+	var levelEmoji string
+	switch strings.ToUpper(alert.Level) {
+	case "CRITICAL":
+		levelEmoji = "🔴"
+	case "ERROR":
+		levelEmoji = "🟠"
+	case "WARNING":
+		levelEmoji = "🟡"
+	default:
+		levelEmoji = "🔵"
+	}
+
+	lines := []string{
+		fmt.Sprintf("%s System Alert [%s]", levelEmoji, strings.ToUpper(alert.Level)),
+		"",
+		fmt.Sprintf("Source: %s", alert.Source),
+		fmt.Sprintf("Message: %s", alert.Message),
+	}
+
+	if len(alert.Details) > 0 {
+		lines = append(lines, "", "Details:")
+		keys := make([]string, 0, len(alert.Details))
+		for key := range alert.Details {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			lines = append(lines, fmt.Sprintf("  %s: %v", key, alert.Details[key]))
+		}
+	}
+
+	lines = append(lines, "", fmt.Sprintf("Time: %s", time.Now().UTC().Format(time.RFC3339)))
+
+	return joinNotificationLines(lines)
+}
+
 // NotifyQuestProgress sends a quest progress notification to a user
 func (ns *NotificationService) NotifyQuestProgress(ctx context.Context, chatID int64, progress QuestProgressNotification) error {
 	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyQuestProgress", map[string]string{
