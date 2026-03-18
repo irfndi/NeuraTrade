@@ -223,6 +223,12 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 		return nil, err
 	}
 
+	e.capital = e.config.InitialCapital
+	e.positions = make(map[string]*SimulatedPosition)
+	e.tradeHistory = make([]ScalpingBacktestTrade, 0)
+	e.signalHistory = make([]ScalpingBacktestSignal, 0)
+	e.gateStats = make(map[string]*GateStats)
+
 	runID := uuid.NewString()
 	historicalSignals, err := e.loadHistoricalSignals(ctx, e.config.StartTime, e.config.EndTime)
 	if err != nil {
@@ -256,7 +262,7 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 
 		trade, simErr := e.simulateExecution(ctx, signal, evaluation.Decision)
 		if simErr != nil {
-			continue
+			return nil, fmt.Errorf("simulate execution for %s at %s: %w", signal.Symbol, signal.Timestamp.Format(time.RFC3339), simErr)
 		}
 		e.tradeHistory = append(e.tradeHistory, trade.Trade)
 		e.capital = e.capital.Add(trade.Trade.PnL)
