@@ -174,6 +174,7 @@ type ScalpingCyclePolicy struct {
 	EffectiveMaxCapitalPct float64
 	MaxBidAskSpreadPct     float64
 	MaxConcurrentPositions int
+	LossStreakBudget       int
 	PolicyAdjustments      []string
 }
 
