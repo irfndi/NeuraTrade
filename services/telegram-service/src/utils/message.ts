@@ -1,6 +1,9 @@
 const TELEGRAM_MAX_MESSAGE_CHARS = 3900;
 
 export function splitIntoTelegramMessages(text: string): string[] {
+  if (!text || text.length === 0) {
+    return [];
+  }
   if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) {
     return [text];
   }

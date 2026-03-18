@@ -79,7 +79,7 @@ func (c ShadowVariantConfig) ParsedPolicy() ShadowVariantPolicy {
 		policy.MaxSpreadPct = &v
 	}
 	if value, ok := readShadowInt(c.PolicyOverrides, ShadowPolicyLossStreakLimit); ok {
-		v := clampShadowInt(value, 1, 50)
+		v := clampShadowInt(value, 1, 20)
 		policy.LossStreakLimit = &v
 	}
 	return policy

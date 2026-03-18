@@ -300,6 +300,9 @@ func (c *CacheWarmingService) warmTradingPairs(ctx context.Context) (err error) 
 			"set_errors":     setErrors,
 		})
 	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		c.logger.Warn("Trading pairs row iteration error", "error", rowsErr)
+	}
 	c.logger.Info("Trading pairs cache warmed successfully", "count", count)
 	return nil
 }
@@ -361,11 +364,13 @@ func (c *CacheWarmingService) warmExchanges(ctx context.Context) (err error) {
 			"set_errors":  setErrors,
 		})
 	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		c.logger.Warn("Exchanges row iteration error", "error", rowsErr)
+	}
 	c.logger.Info("Exchanges cache warmed successfully", "count", count)
 	return nil
 }
 
-// warmFundingRates warms the funding rates cache
 func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) {
 	spanCtx, span := observability.StartSpan(ctx, "cache.warm.funding_rates", "CacheWarmingService.warmFundingRates")
 	defer func() {
@@ -479,6 +484,9 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 			"marshal_errors": marshalErrors,
 			"set_errors":     setErrors,
 		})
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		c.logger.Warn("Funding rates row iteration error", "error", rowsErr)
 	}
 	c.logger.Info("Funding rates cache warmed successfully", "count", count)
 	return nil

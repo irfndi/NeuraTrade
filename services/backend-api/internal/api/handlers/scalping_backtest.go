@@ -166,7 +166,7 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = h.updateBacktestRun(cleanupCtx, runID, "failed", emptySummary, time.Now().UTC())
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to run scalping backtest: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to run scalping backtest"})
 		return
 	}
 

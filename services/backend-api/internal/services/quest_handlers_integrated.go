@@ -43,6 +43,7 @@ type IntegratedQuestHandlers struct {
 	drawdownHalt         *MaxDrawdownHalt
 	orderExecutor        ScalpingOrderExecutor
 	aiScalpingService    *AIScalpingService
+	aiScalpingMu         sync.RWMutex
 	tradeMemory          *TradeMemory
 	lifecycleStore       *TradingLifecycleStore
 	protectionManager    *DynamicProtectionManager
@@ -294,7 +295,7 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 
 	scalpingConfig := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
 
-	h.aiScalpingService = NewAIScalpingService(
+	svc := NewAIScalpingService(
 		scalpingConfig,
 		llmClient,
 		skillRegistry,
@@ -306,8 +307,11 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 	shadowCoord := h.shadowCoordinator
 	h.shadowCoordinatorMu.RUnlock()
 	if shadowCoord != nil {
-		h.aiScalpingService.SetShadowEvaluationCoordinator(shadowCoord)
+		svc.SetShadowEvaluationCoordinator(shadowCoord)
 	}
+	h.aiScalpingMu.Lock()
+	h.aiScalpingService = svc
+	h.aiScalpingMu.Unlock()
 	h.configureScalpingAutonomy()
 	log.Printf("[SCALPING] AI-driven scalping service initialized")
 }
@@ -334,18 +338,25 @@ func (h *IntegratedQuestHandlers) ShadowEvaluationCoordinator() *ShadowEvaluatio
 }
 
 func (h *IntegratedQuestHandlers) configureScalpingAutonomy() {
-	if h.aiScalpingService == nil || h.autonomyStore == nil {
+	h.aiScalpingMu.RLock()
+	aiSvc := h.aiScalpingService
+	store := h.autonomyStore
+	h.aiScalpingMu.RUnlock()
+	if aiSvc == nil || store == nil {
 		h.clearScalpingAutonomyCoordinator()
 		return
 	}
-	h.autonomyCoordinator = NewScalpingAutonomyCoordinator(h.autonomyStore, h.aiScalpingService.config)
-	h.aiScalpingService.SetAutonomyCoordinator(h.autonomyCoordinator)
+	h.autonomyCoordinator = NewScalpingAutonomyCoordinator(store, aiSvc.config)
+	aiSvc.SetAutonomyCoordinator(h.autonomyCoordinator)
 }
 
 func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
 	h.autonomyCoordinator = nil
-	if h.aiScalpingService != nil {
-		h.aiScalpingService.SetAutonomyCoordinator(nil)
+	h.aiScalpingMu.RLock()
+	aiSvc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	if aiSvc != nil {
+		aiSvc.SetAutonomyCoordinator(nil)
 	}
 }
 
@@ -631,7 +642,10 @@ func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, q
 
 	chatID := quest.Metadata["chat_id"]
 
-	if h.aiScalpingService != nil {
+	h.aiScalpingMu.RLock()
+	aiSvc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	if aiSvc != nil {
 		return h.executeAIScalping(ctx, quest, chatID)
 	}
 
