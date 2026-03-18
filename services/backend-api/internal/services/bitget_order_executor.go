@@ -1058,12 +1058,7 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 
 	// Reasoning
 	if d.Reasoning != "" {
-		maxLen := 150
-		reasoning := d.Reasoning
-		if len(reasoning) > maxLen {
-			reasoning = reasoning[:maxLen] + "..."
-		}
-		lines = append(lines, fmt.Sprintf("💭 %s", reasoning))
+		lines = append(lines, fmt.Sprintf("💭 %s", d.Reasoning))
 	}
 
 	lines = append(lines, "")

@@ -483,7 +483,7 @@ func (ns *NotificationService) formatAggregatedArbitrageMessage(signals []*Aggre
 	for i, signal := range signals[:maxSignals] {
 		fmt.Fprintf(&message, "%d. %s\n", i+1, signal.Symbol)
 		fmt.Fprintf(&message, "💰 Profit: %.2f%%\n", signal.ProfitPotential.InexactFloat64())
-		fmt.Fprintf(&message, "🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64())
+		fmt.Fprintf(&message, "🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64()*100)
 		fmt.Fprintf(&message, "⚡ Action: %s\n", strings.ToUpper(signal.Action))
 		fmt.Fprintf(&message, "🏪 Exchanges: %s\n", strings.Join(signal.Exchanges, ", "))
 
@@ -535,7 +535,7 @@ func (ns *NotificationService) formatAggregatedTechnicalMessage(signals []*Aggre
 		fmt.Fprintf(&message, "%d. %s\n", i+1, signal.Symbol)
 		fmt.Fprintf(&message, "📈 Signal: %s\n", strings.ToUpper(signal.Action))
 		fmt.Fprintf(&message, "💪 Strength: %s\n", signal.Strength)
-		fmt.Fprintf(&message, "🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64())
+		fmt.Fprintf(&message, "🎯 Confidence: %.1f%%\n", signal.Confidence.InexactFloat64()*100)
 		fmt.Fprintf(&message, "⚠️ Risk: %.2f%%\n", signal.RiskLevel.InexactFloat64())
 
 		// Add indicators if available
