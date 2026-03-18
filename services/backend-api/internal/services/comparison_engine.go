@@ -98,10 +98,12 @@ func (e *LiveShadowComparisonEngine) BuildReport(
 			ShadowTradeCount:     metric.TradeCount,
 			LiveRejectionCount:   live.RejectionCount,
 			ShadowRejectionCount: metric.RejectionCount,
-			EntryTimingDiffBps:   metric.EntryTimingBps,
-			ExitTimingDiffBps:    metric.ExitTimingBps,
-			OpportunityCost:      metric.OpportunityCost,
-			GateRejectionDelta:   gateRejectionDelta(metric.GateRejections, live.RejectionCount, metric.RejectionCount),
+			// EntryTimingDiffBps and ExitTimingDiffBps require per-trade
+			// timestamps for both live and shadow which are not available in
+			// the aggregated metrics. Leaving as zero until timestamp tracking
+			// is added to the live pipeline.
+			OpportunityCost:    metric.OpportunityCost,
+			GateRejectionDelta: gateRejectionDelta(metric.GateRejections, live.RejectionCount, metric.RejectionCount),
 		}
 		comparison.OutperformingBaseline = comparison.PnLDivergence.GreaterThan(decimal.Zero)
 		comparison.OperatorSummary = buildOperatorSummary(comparison)
@@ -116,9 +118,12 @@ func (e *LiveShadowComparisonEngine) BuildReport(
 	return report
 }
 
-func gateRejectionDelta(gates map[string]int64, liveCount int64, shadowCount int64) map[string]int64 {
-	result := make(map[string]int64, len(gates)+1)
-	for code, count := range gates {
+func gateRejectionDelta(shadowGates map[string]int64, liveCount int64, shadowCount int64) map[string]int64 {
+	result := make(map[string]int64, len(shadowGates)+1)
+	// Per-gate values are shadow-only since live metrics only expose an
+	// aggregate RejectionCount. The "total_delta" field provides the
+	// overall shadow-vs-live difference.
+	for code, count := range shadowGates {
 		result[code] = count
 	}
 	result["total_delta"] = shadowCount - liveCount

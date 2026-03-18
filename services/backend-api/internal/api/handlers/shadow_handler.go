@@ -72,7 +72,11 @@ func (h *ShadowHandler) VariantDiagnostics(c *gin.Context) {
 	}
 	diagnostics, err := h.coordinator.VariantDiagnostics(c.Request.Context(), variantID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, diagnostics)
@@ -100,6 +104,10 @@ func (h *ShadowHandler) Comparison(c *gin.Context) {
 			return
 		}
 		end = parsed.UTC()
+	}
+	if start.After(end) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "start must be before end"})
+		return
 	}
 	report, err := h.coordinator.CompareLiveVsShadow(c.Request.Context(), start, end)
 	if err != nil {

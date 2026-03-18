@@ -125,12 +125,20 @@ func (c *ShadowEvaluationCoordinator) RecordShadowOutcome(
 			continue
 		}
 		portfolioSnapshot := runtime.engine.GetPortfolio()
-		realized := portfolioSnapshot.RealizedPNL.Sub(runtime.lastRealized)
-		runtime.lastRealized = portfolioSnapshot.RealizedPNL
 		exitPrice := marketPrices[symbol]
 		if !exitPrice.GreaterThan(decimal.Zero) {
 			exitPrice = runtime.lastEntryPrice[symbol]
 		}
+		if exitPrice.GreaterThan(decimal.Zero) && portfolioSnapshot.Positions != nil {
+			if pos, hasPos := portfolioSnapshot.Positions[symbol]; hasPos && pos.Quantity.GreaterThan(decimal.Zero) {
+				_, _ = runtime.engine.ExecuteTrade(
+					ctx, symbol, "sell", pos.Quantity, exitPrice,
+				)
+			}
+		}
+		portfolioSnapshot = runtime.engine.GetPortfolio()
+		realized := portfolioSnapshot.RealizedPNL.Sub(runtime.lastRealized)
+		runtime.lastRealized = portfolioSnapshot.RealizedPNL
 		if realized.GreaterThan(decimal.Zero) {
 			runtime.winningTrades++
 		}
@@ -175,7 +183,6 @@ func (c *ShadowEvaluationCoordinator) CloseStaleShadowPositions(
 			runtime.mu.Unlock()
 			continue
 		}
-		portfolioSnapshot := runtime.engine.GetPortfolio()
 		for _, symbol := range stale {
 			decisionID := runtime.openDecisions[symbol]
 			openedAt := runtime.openedAt[symbol]
@@ -183,18 +190,22 @@ func (c *ShadowEvaluationCoordinator) CloseStaleShadowPositions(
 			if !exitPrice.GreaterThan(decimal.Zero) {
 				exitPrice = runtime.lastEntryPrice[symbol]
 			}
-			if exitPrice.GreaterThan(decimal.Zero) && portfolioSnapshot.Positions != nil {
-				if pos, hasPos := portfolioSnapshot.Positions[symbol]; hasPos && pos.Quantity.GreaterThan(decimal.Zero) {
-					_, _ = runtime.engine.ExecuteTrade(
-						context.Background(), symbol, "sell",
-						pos.Quantity, exitPrice,
-					)
+			if exitPrice.GreaterThan(decimal.Zero) {
+				portfolioSnapshot := runtime.engine.GetPortfolio()
+				if portfolioSnapshot.Positions != nil {
+					if pos, hasPos := portfolioSnapshot.Positions[symbol]; hasPos && pos.Quantity.GreaterThan(decimal.Zero) {
+						_, _ = runtime.engine.ExecuteTrade(
+							context.Background(), symbol, "sell",
+							pos.Quantity, exitPrice,
+						)
+					}
 				}
-			}
-			realized := portfolioSnapshot.RealizedPNL.Sub(runtime.lastRealized)
-			runtime.lastRealized = portfolioSnapshot.RealizedPNL
-			if realized.GreaterThan(decimal.Zero) {
-				runtime.winningTrades++
+				portfolioSnapshot = runtime.engine.GetPortfolio()
+				realized := portfolioSnapshot.RealizedPNL.Sub(runtime.lastRealized)
+				runtime.lastRealized = portfolioSnapshot.RealizedPNL
+				if realized.GreaterThan(decimal.Zero) {
+					runtime.winningTrades++
+				}
 			}
 			c.logger.Info("shadow stale position closed",
 				zap.String("variant_id", variant.VariantID),
@@ -312,7 +323,7 @@ func (c *ShadowEvaluationCoordinator) VariantDiagnostics(ctx context.Context, va
 	}
 	runtime.mu.Unlock()
 	for _, cmp := range report.Comparisons {
-		if cmp.VariantID == variantID {
+		if cmp.VariantID == variant.VariantID {
 			result["comparison_24h"] = cmp
 			break
 		}
@@ -449,6 +460,10 @@ func (c *ShadowEvaluationCoordinator) executeShadowDecision(
 		runtime.openDecisions[mirrored.Symbol] = decisionID
 		runtime.lastEntryPrice[mirrored.Symbol] = filled.AvgFillPrice
 		runtime.openedAt[mirrored.Symbol] = time.Now().UTC()
+	} else if action == "sell" {
+		delete(runtime.openDecisions, mirrored.Symbol)
+		delete(runtime.lastEntryPrice, mirrored.Symbol)
+		delete(runtime.openedAt, mirrored.Symbol)
 	}
 	c.recordPaperTradeOpen(ctx, mirrored, filled)
 	return nil

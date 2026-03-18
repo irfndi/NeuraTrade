@@ -24,7 +24,7 @@ CREATE INDEX IF NOT EXISTS idx_shadow_decisions_symbol_created_at
 
 CREATE TABLE IF NOT EXISTS shadow_outcomes (
     id BIGSERIAL PRIMARY KEY,
-    shadow_decision_id BIGINT REFERENCES shadow_decisions(id) ON DELETE CASCADE,
+    shadow_decision_id BIGINT NOT NULL REFERENCES shadow_decisions(id) ON DELETE CASCADE,
     exit_price NUMERIC(20, 8),
     realized_pnl NUMERIC(20, 8),
     max_favor NUMERIC(20, 8),

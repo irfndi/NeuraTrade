@@ -50,13 +50,16 @@ func (c ShadowVariantConfig) Normalize() (ShadowVariantConfig, error) {
 		name = variantID
 	}
 	description := strings.TrimSpace(c.Description)
-	if c.PolicyOverrides == nil {
-		c.PolicyOverrides = map[string]interface{}{}
+	overrides := c.PolicyOverrides
+	if overrides == nil {
+		overrides = map[string]interface{}{}
+	} else {
+		overrides = copyStringInterfaceMap(overrides)
 	}
 	return ShadowVariantConfig{
 		VariantID:       variantID,
 		Name:            name,
-		PolicyOverrides: c.PolicyOverrides,
+		PolicyOverrides: overrides,
 		Description:     description,
 	}, nil
 }
@@ -93,6 +96,9 @@ func (c ShadowVariantConfig) ApplyToPolicy(base appautonomy.ScalpingCyclePolicy)
 	}
 	if overrides.MaxSpreadPct != nil {
 		result.MaxBidAskSpreadPct = *overrides.MaxSpreadPct
+	}
+	if overrides.LossStreakLimit != nil {
+		result.LossStreakBudget = *overrides.LossStreakLimit
 	}
 	return result
 }
@@ -239,4 +245,15 @@ func clampShadowInt(value, minValue, maxValue int) int {
 		return maxValue
 	}
 	return value
+}
+
+func copyStringInterfaceMap(source map[string]interface{}) map[string]interface{} {
+	if len(source) == 0 {
+		return map[string]interface{}{}
+	}
+	result := make(map[string]interface{}, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
