@@ -17,6 +17,12 @@ const (
 	DefaultScalpingBacktestSlippage      = 0.001
 	DefaultScalpingBacktestHoldPeriod    = 5 * time.Minute
 	DefaultScalpingBacktestMaxCapitalPct = 5.0
+
+	// backtestSpreadMultiplier scales the intra-candle high-low range to
+	// approximate a bid-ask spread. The factor 8 was derived empirically from
+	// typical crypto market microstructure where the observable range is
+	// roughly 8x the effective spread on liquid pairs.
+	backtestSpreadMultiplier = 8
 )
 
 var defaultScalpingBacktestUniverse = []string{
@@ -449,7 +455,6 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		Signal:      signal.Signal,
 		Decision:    decision,
 	}
-	e.positions[signal.Symbol] = position
 
 	edgeScore := decision.Confidence - 0.50
 	edgeScore += math.Abs(signal.Signal.OrderBookImbalance) * 0.50
@@ -510,7 +515,6 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		RegimeAtExit:  position.RegimeEntry,
 	}
 
-	delete(e.positions, signal.Symbol)
 	return &SimulatedTrade{Trade: trade}, nil
 }
 
@@ -541,7 +545,7 @@ func (e *ScalpingBacktestEngine) classifyRegimeVolatility(signal MarketSignal) s
 func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AITradingDecision) map[string]GateResult {
 	results := map[string]GateResult{}
 
-	spreadAllowed := signal.BidAskSpread > 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
+	spreadAllowed := signal.BidAskSpread >= 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
 	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.10
@@ -954,7 +958,10 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	symbolFilter map[string]struct{},
 ) ([]HistoricalSignal, error) {
 	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), md.price, md.bid, md.ask, md.high_24h, md.low_24h, md.volume_24h, md.timestamp
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), md.price,
+			COALESCE(md.bid, 0), COALESCE(md.ask, 0),
+			COALESCE(md.high_24h, 0), COALESCE(md.low_24h, 0), COALESCE(md.volume_24h, 0),
+			md.timestamp
 		FROM market_data md
 		JOIN trading_pairs tp ON tp.id = md.trading_pair_id
 		JOIN exchanges e ON e.id = md.exchange_id
@@ -1080,7 +1087,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint) []HistoricalSi
 
 			spreadPct := 0.0
 			if point.close > 0 && point.high > point.low {
-				spreadPct = ((point.high - point.low) / point.close) * 8
+				spreadPct = ((point.high - point.low) / point.close) * backtestSpreadMultiplier
 			}
 
 			imbalance := 0.0

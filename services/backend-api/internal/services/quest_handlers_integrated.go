@@ -43,14 +43,17 @@ type IntegratedQuestHandlers struct {
 	drawdownHalt         *MaxDrawdownHalt
 	orderExecutor        ScalpingOrderExecutor
 	aiScalpingService    *AIScalpingService
+	aiScalpingMu         sync.RWMutex
 	tradeMemory          *TradeMemory
 	lifecycleStore       *TradingLifecycleStore
 	protectionManager    *DynamicProtectionManager
 	db                   *sql.DB // Database for user settings
 	opModeService        *OperationalModeService
 	autonomyStore        *AutonomousRolloutStore
+	autonomyStoreMu      sync.RWMutex
 	autonomyCoordinator  *ScalpingAutonomyCoordinator
 	shadowCoordinator    *ShadowEvaluationCoordinator
+	shadowCoordinatorMu  sync.RWMutex
 	stalePositionMu      sync.Mutex
 	stalePositionWindow  map[string]time.Time
 	tradeJournalMu       sync.Mutex
@@ -129,7 +132,9 @@ func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, 
 	}
 	if store == nil {
 		if h.db == nil {
+			h.autonomyStoreMu.Lock()
 			h.autonomyStore = nil
+			h.autonomyStoreMu.Unlock()
 			h.clearScalpingAutonomyCoordinator()
 			return fmt.Errorf("autonomy store requires sql db")
 		}
@@ -147,11 +152,15 @@ func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, 
 	defer cancel()
 
 	if err := store.InitSchema(initCtx); err != nil {
+		h.autonomyStoreMu.Lock()
 		h.autonomyStore = nil
+		h.autonomyStoreMu.Unlock()
 		h.clearScalpingAutonomyCoordinator()
 		return fmt.Errorf("initialize autonomous rollout schema: %w", err)
 	}
+	h.autonomyStoreMu.Lock()
 	h.autonomyStore = store
+	h.autonomyStoreMu.Unlock()
 	h.configureScalpingAutonomy()
 	return nil
 }
@@ -293,7 +302,7 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 
 	scalpingConfig := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
 
-	h.aiScalpingService = NewAIScalpingService(
+	svc := NewAIScalpingService(
 		scalpingConfig,
 		llmClient,
 		skillRegistry,
@@ -301,9 +310,15 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 		h.orderExecutor,
 		h.tradeMemory,
 	)
-	if h.shadowCoordinator != nil {
-		h.aiScalpingService.SetShadowEvaluationCoordinator(h.shadowCoordinator)
+	h.shadowCoordinatorMu.RLock()
+	shadowCoord := h.shadowCoordinator
+	h.shadowCoordinatorMu.RUnlock()
+	if shadowCoord != nil {
+		svc.SetShadowEvaluationCoordinator(shadowCoord)
 	}
+	h.aiScalpingMu.Lock()
+	h.aiScalpingService = svc
+	h.aiScalpingMu.Unlock()
 	h.configureScalpingAutonomy()
 	log.Printf("[SCALPING] AI-driven scalping service initialized")
 }
@@ -312,9 +327,14 @@ func (h *IntegratedQuestHandlers) SetShadowEvaluationCoordinator(coordinator *Sh
 	if h == nil {
 		return
 	}
+	h.shadowCoordinatorMu.Lock()
 	h.shadowCoordinator = coordinator
-	if h.aiScalpingService != nil {
-		h.aiScalpingService.SetShadowEvaluationCoordinator(coordinator)
+	h.shadowCoordinatorMu.Unlock()
+	h.aiScalpingMu.RLock()
+	aiSvc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	if aiSvc != nil {
+		aiSvc.SetShadowEvaluationCoordinator(coordinator)
 	}
 }
 
@@ -322,22 +342,33 @@ func (h *IntegratedQuestHandlers) ShadowEvaluationCoordinator() *ShadowEvaluatio
 	if h == nil {
 		return nil
 	}
+	h.shadowCoordinatorMu.RLock()
+	defer h.shadowCoordinatorMu.RUnlock()
 	return h.shadowCoordinator
 }
 
 func (h *IntegratedQuestHandlers) configureScalpingAutonomy() {
-	if h.aiScalpingService == nil || h.autonomyStore == nil {
+	h.aiScalpingMu.RLock()
+	aiSvc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	h.autonomyStoreMu.RLock()
+	store := h.autonomyStore
+	h.autonomyStoreMu.RUnlock()
+	if aiSvc == nil || store == nil {
 		h.clearScalpingAutonomyCoordinator()
 		return
 	}
-	h.autonomyCoordinator = NewScalpingAutonomyCoordinator(h.autonomyStore, h.aiScalpingService.config)
-	h.aiScalpingService.SetAutonomyCoordinator(h.autonomyCoordinator)
+	h.autonomyCoordinator = NewScalpingAutonomyCoordinator(store, aiSvc.config)
+	aiSvc.SetAutonomyCoordinator(h.autonomyCoordinator)
 }
 
 func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
 	h.autonomyCoordinator = nil
-	if h.aiScalpingService != nil {
-		h.aiScalpingService.SetAutonomyCoordinator(nil)
+	h.aiScalpingMu.RLock()
+	aiSvc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	if aiSvc != nil {
+		aiSvc.SetAutonomyCoordinator(nil)
 	}
 }
 
@@ -623,15 +654,21 @@ func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, q
 
 	chatID := quest.Metadata["chat_id"]
 
-	if h.aiScalpingService != nil {
-		return h.executeAIScalping(ctx, quest, chatID)
+	h.aiScalpingMu.RLock()
+	aiSvc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	if aiSvc != nil {
+		return h.executeAIScalping(ctx, quest, chatID, aiSvc)
 	}
 
 	log.Printf("[SCALPING] AI scalping service not available, using fallback")
 	return h.executeFallbackScalping(ctx, quest, chatID)
 }
 
-func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *Quest, chatID string) error {
+func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *Quest, chatID string, aiSvc *AIScalpingService) error {
+	if aiSvc == nil {
+		return fmt.Errorf("ai scalping service not available")
+	}
 	if cooldownRemaining := h.scalpingCooldownRemaining(quest, time.Now().UTC()); cooldownRemaining > 0 {
 		quest.Checkpoint["status"] = "runtime_cooldown"
 		quest.Checkpoint["cooldown_remaining_seconds"] = int(cooldownRemaining.Seconds())
@@ -1157,7 +1194,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		ConnectionChecked: connectionChecked,
 	})
 
-	decision, err := h.aiScalpingService.ExecuteTradingCycle(cycleCtx, portfolio)
+	decision, err := aiSvc.ExecuteTradingCycle(cycleCtx, portfolio)
 	h.applyAutonomyCheckpoint(quest)
 	h.applyScalpingCycleDecisionDiagnostics(quest, decision)
 	if shouldRecordEntryAttempt(decision, err) {
@@ -2734,8 +2771,13 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 	holdStreak := checkpointInt(quest.Checkpoint["runtime_hold_streak"])
 	minConfidence := checkpointFloat(quest.Checkpoint["effective_min_confidence"])
 	maxCapital := checkpointFloat(quest.Checkpoint["effective_max_capital_pct"])
-	if (minConfidence <= 0 || maxCapital <= 0) && h.aiScalpingService != nil {
-		minConfidence, maxCapital = h.aiScalpingService.dynamicRiskThresholds(ctx, portfolio)
+	if minConfidence <= 0 || maxCapital <= 0 {
+		h.aiScalpingMu.RLock()
+		svc := h.aiScalpingService
+		h.aiScalpingMu.RUnlock()
+		if svc != nil {
+			minConfidence, maxCapital = svc.dynamicRiskThresholds(ctx, portfolio)
+		}
 	}
 	runtimeHold := isRuntimeHoldReason(decision.Reasoning)
 	reasonCategory := strings.TrimSpace(decision.ReasonCategory)
@@ -3427,17 +3469,26 @@ func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
 }
 
 func (h *IntegratedQuestHandlers) getAIScalpingRuntimeSnapshot() map[string]interface{} {
-	if h.aiScalpingService == nil {
+	h.aiScalpingMu.RLock()
+	svc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	if svc == nil {
 		return map[string]interface{}{}
 	}
-	return h.aiScalpingService.RuntimeDiagnostics()
+	return svc.RuntimeDiagnostics()
 }
 
 func (h *IntegratedQuestHandlers) applyAutonomyCheckpoint(quest *Quest) {
-	if quest == nil || quest.Checkpoint == nil || h.aiScalpingService == nil {
+	if quest == nil || quest.Checkpoint == nil {
 		return
 	}
-	diag := h.aiScalpingService.AutonomyDiagnostics()
+	h.aiScalpingMu.RLock()
+	svc := h.aiScalpingService
+	h.aiScalpingMu.RUnlock()
+	if svc == nil {
+		return
+	}
+	diag := svc.AutonomyDiagnostics()
 	canonicalFields := []struct {
 		diagKey       string
 		checkpointKey string
@@ -4088,8 +4139,11 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		}
 		totalPnL = totalPnL.Add(pnl)
 		processedCount++
-		if h.aiScalpingService != nil {
-			h.aiScalpingService.ReportTradeOutcome(symbol, pnl)
+		h.aiScalpingMu.RLock()
+		reportSvc := h.aiScalpingService
+		h.aiScalpingMu.RUnlock()
+		if reportSvc != nil {
+			reportSvc.ReportTradeOutcome(symbol, pnl)
 		}
 		GetScalpingPerformance().RecordTrade(TradeRecord{
 			Timestamp:  time.Now().UTC(),
