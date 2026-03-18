@@ -1084,7 +1084,15 @@ func (s *NativeCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol
 }
 
 func (s *NativeCCXTService) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*OrderBookMetrics, error) {
-	return &OrderBookMetrics{}, nil
+	ob, err := s.FetchOrderBook(ctx, exchange, symbol, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fetch order book for metrics: %w", err)
+	}
+	if ob == nil || len(ob.OrderBook.Bids) == 0 || len(ob.OrderBook.Asks) == 0 {
+		return nil, fmt.Errorf("empty order book for %s:%s", exchange, symbol)
+	}
+	client := &Client{}
+	return client.CalculateOrderBookMetrics(ob), nil
 }
 
 func (s *NativeCCXTService) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
