@@ -396,11 +396,25 @@ func main() {
 						Name:   "models",
 						Usage:  "List available AI models",
 						Action: listAIModels,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:  "provider",
+								Usage: "Filter models by provider ID",
+							},
+						},
 					},
 					{
 						Name:   "providers",
 						Usage:  "List available AI providers",
 						Action: listAIProviders,
+					},
+					{
+						Name:   "status",
+						Usage:  "Show AI runtime readiness and model status",
+						Action: aiStatus,
+						Flags: []cli.Flag{
+							chatIDFlag(true),
+						},
 					},
 				},
 			},
@@ -1200,9 +1214,10 @@ func (c *APIClient) GetAIModels() (*AIModelsResponse, error) {
 
 // AIProvider represents an AI provider
 type AIProvider struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	IsActive bool   `json:"is_active"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IsActive   bool   `json:"is_active"`
+	ModelCount int    `json:"model_count"`
 }
 
 // AIProvidersResponse represents the response from the AI providers endpoint
@@ -1301,9 +1316,17 @@ func listAIModels(cCtx *cli.Context) error {
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	response, err := client.GetAIModels()
+	providerFilter := cCtx.String("provider")
+
+	var endpoint string
+	if providerFilter != "" {
+		endpoint = fmt.Sprintf("/api/v1/ai/providers/%s/models", providerFilter)
+	} else {
+		endpoint = "/api/v1/ai/models"
+	}
+
+	respBody, err := client.makeRequest("GET", endpoint, nil)
 	if err != nil {
-		// API call failed - show error and exit
 		fmt.Printf("Error: Could not reach API: %v\n", err)
 		fmt.Println("\nMake sure the NeuraTrade backend is running:")
 		fmt.Println("  neuratrade gateway start")
@@ -1312,9 +1335,25 @@ func listAIModels(cCtx *cli.Context) error {
 		return err
 	}
 
+	var response struct {
+		Models []AIModel `json:"models"`
+	}
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
 	if len(response.Models) == 0 {
-		fmt.Println("No AI models available.")
+		if providerFilter != "" {
+			fmt.Printf("No AI models found for provider '%s'.\n", providerFilter)
+			fmt.Println("Use 'neuratrade ai providers' to list available providers.")
+		} else {
+			fmt.Println("No AI models available.")
+		}
 		return nil
+	}
+
+	if providerFilter != "" {
+		fmt.Printf("Models from provider: %s\n\n", providerFilter)
 	}
 
 	for _, model := range response.Models {
@@ -1360,8 +1399,102 @@ func listAIProviders(cCtx *cli.Context) error {
 		if !provider.IsActive {
 			status = "inactive"
 		}
-		fmt.Printf("- %s (%s) [%s]\n", provider.Name, provider.ID, status)
+		fmt.Printf("- %s (%s) [%s] - %d models\n", provider.Name, provider.ID, status, provider.ModelCount)
 	}
+
+	fmt.Println("\nUse 'neuratrade ai models --provider <id>' to list models for a provider.")
+	fmt.Println("Use 'neuratrade ai status' to check AI runtime readiness.")
+
+	return nil
+}
+
+func aiStatus(cCtx *cli.Context) error {
+	chatID := cCtx.String("chat-id")
+	if chatID == "" {
+		return cli.Exit("Error: chat-id is required", 1)
+	}
+
+	fmt.Println("AI Runtime Status")
+	fmt.Println("=================")
+
+	baseURL := getBaseURL()
+	apiKey := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKey)
+
+	respBody, err := client.makeRequest("GET", withChatID("/api/v1/telegram/internal/ai/status", chatID), nil)
+	if err != nil {
+		fmt.Printf("Error: Could not reach API: %v\n", err)
+		fmt.Println("\nMake sure the NeuraTrade backend is running:")
+		fmt.Println("  neuratrade gateway start")
+		return err
+	}
+
+	var status map[string]interface{}
+	if err := json.Unmarshal(respBody, &status); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	readiness := "unavailable"
+	if v, ok := status["readiness"].(string); ok {
+		readiness = v
+	}
+
+	fmt.Printf("Readiness: %s\n", readiness)
+
+	switch readiness {
+	case "ready":
+		fmt.Println("  AI is ready with pinned model.")
+		selectedModel := ""
+		if v, ok := status["selected_model"].(string); ok {
+			selectedModel = v
+		}
+		provider := ""
+		if v, ok := status["provider"].(string); ok {
+			provider = v
+		}
+		fmt.Printf("  Selected Model: %s\n", selectedModel)
+		fmt.Printf("  Provider: %s\n", provider)
+	case "ready_auto_route":
+		fmt.Println("  AI is ready via provider-chain (auto-routing active).")
+		effectiveProvider := ""
+		if v, ok := status["effective_provider"].(string); ok {
+			effectiveProvider = v
+		}
+		effectiveModel := ""
+		if v, ok := status["effective_model"].(string); ok {
+			effectiveModel = v
+		}
+		if effectiveProvider != "" {
+			fmt.Printf("  Effective Provider: %s\n", effectiveProvider)
+		}
+		if effectiveModel != "" {
+			fmt.Printf("  Effective Model: %s\n", effectiveModel)
+		}
+		fmt.Println("  Pin a model with 'neuratrade ai select' or let auto-route decide.")
+	case "degraded":
+		fmt.Println("  AI is degraded (provider chain has issues).")
+		if v, ok := status["provider_chain_usable"].(float64); ok {
+			if v2, ok2 := status["provider_chain_configured"].(float64); ok2 {
+				fmt.Printf("  Provider Chain: %d/%d usable\n", int(v), int(v2))
+			}
+		}
+	default:
+		fmt.Println("  AI is not available.")
+		fmt.Println("  Configure an AI provider in ~/.neuratrade/config.json")
+	}
+
+	if v, ok := status["daily_spend"].(string); ok {
+		fmt.Printf("  Daily Spend: $%s\n", v)
+	}
+	if v, ok := status["monthly_spend"].(string); ok {
+		fmt.Printf("  Monthly Spend: $%s\n", v)
+	}
+	budgetLimit := "Unlimited"
+	if v, ok := status["budget_limit"].(string); ok {
+		budgetLimit = v
+	}
+	fmt.Printf("  Budget Limit: %s\n", budgetLimit)
 
 	return nil
 }

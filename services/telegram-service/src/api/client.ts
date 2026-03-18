@@ -282,6 +282,26 @@ export class BackendApiClient {
     });
   }
 
+  async getAIProviders(): Promise<import("./types").AIProvidersResponse> {
+    return this.fetch<import("./types").AIProvidersResponse>(
+      API_ENDPOINTS.GET_AI_PROVIDERS,
+      {
+        requireAdmin: false,
+      },
+    );
+  }
+
+  async getAIProviderModels(
+    providerId: string,
+  ): Promise<import("./types").AIModelsResponse> {
+    return this.fetch<import("./types").AIModelsResponse>(
+      API_ENDPOINTS.GET_AI_PROVIDER_MODELS(providerId),
+      {
+        requireAdmin: false,
+      },
+    );
+  }
+
   async selectAIModel(
     userId: string,
     modelId: string,

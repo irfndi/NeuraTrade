@@ -323,6 +323,17 @@ export interface AIModelSelectResponse {
   readonly message?: string;
 }
 
+export interface AIProviderInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly is_active: boolean;
+  readonly model_count?: number;
+}
+
+export interface AIProvidersResponse {
+  readonly providers: readonly AIProviderInfo[];
+}
+
 export interface AIStatusResponse {
   readonly selected_model?: string;
   readonly provider?: string;
@@ -330,6 +341,17 @@ export interface AIStatusResponse {
   readonly monthly_spend?: string;
   readonly budget_limit?: string;
   readonly daily_budget_exceeded?: boolean;
+  readonly runtime_ready?: boolean;
+  readonly provider_chain_configured?: number;
+  readonly provider_chain_usable?: number;
+  readonly effective_provider?: string;
+  readonly effective_model?: string;
+  readonly auto_routing?: boolean;
+  readonly readiness?:
+    | "ready"
+    | "ready_auto_route"
+    | "degraded"
+    | "unavailable";
 }
 
 export interface AIRouteRequest {
@@ -393,6 +415,9 @@ export const API_ENDPOINTS = {
   GET_DOCTOR: (chatId: string) =>
     `/internal/telegram/doctor?chat_id=${encodeURIComponent(chatId)}`,
   GET_AI_MODELS: "/api/v1/ai/models",
+  GET_AI_PROVIDERS: "/api/v1/ai/providers",
+  GET_AI_PROVIDER_MODELS: (providerId: string) =>
+    `/api/v1/ai/providers/${encodeURIComponent(providerId)}/models`,
   SELECT_AI_MODEL: (userId: string) =>
     `/api/v1/ai/select/${encodeURIComponent(userId)}`,
   GET_AI_STATUS: (chatId: string) =>

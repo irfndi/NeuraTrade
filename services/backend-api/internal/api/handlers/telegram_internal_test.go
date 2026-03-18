@@ -655,7 +655,7 @@ func TestTelegramInternalHandler_GetDoctor_NoSelectedAIModelDoesNotWarnProbeUnav
 	}
 	if assert.NotNil(t, aiSnapshot) {
 		assert.Equal(t, "healthy", aiSnapshot["status"])
-		assert.Equal(t, "No AI model selected", aiSnapshot["message"])
+		assert.Equal(t, "No user record found", aiSnapshot["message"])
 	}
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
