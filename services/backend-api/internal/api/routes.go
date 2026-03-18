@@ -134,7 +134,7 @@ func providerBaseURL(provider string) string {
 	case "zai":
 		return "https://api.z.ai/api/paas/v4"
 	case "zhipu":
-		return "https://open.bigmodel.cn/api/coding/paas/v4"
+		return "https://api.z.ai/api/paas/v4"
 	case "mlx":
 		return "http://localhost:8080/v1"
 	default:
@@ -972,6 +972,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if lifecycleStore != nil {
 		autonomousHandler.SetLifecycleStore(lifecycleStore)
 	}
+	if sqlDB != nil {
+		telemetryStore := services.NewScalpingTelemetryStoreFromSQLDB(sqlDB)
+		if telemetryStore == nil {
+			log.Printf("Warning: scalping telemetry store unavailable due to nil SQL database")
+		} else if err := telemetryStore.EnsureSchema(context.Background()); err != nil {
+			log.Printf("Warning: failed to initialize scalping telemetry store: %v", err)
+		} else {
+			autonomousHandler.SetTelemetryStore(telemetryStore)
+			integratedHandlers.SetTelemetryStore(telemetryStore)
+		}
+	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
 	// Internal service-to-service routes (no auth, restricted to trusted internal callers)
@@ -1080,6 +1091,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			{
 				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
 				telegramInternal.GET("/quests/diagnostics", autonomousHandler.GetQuestDiagnostics)
+				telegramInternal.GET("/quests/investigation", autonomousHandler.GetQuestInvestigation)
 				telegramInternal.GET("/portfolio", autonomousHandler.GetPortfolio)
 				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
 				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)

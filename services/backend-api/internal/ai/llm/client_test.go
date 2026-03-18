@@ -10,6 +10,7 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/ai"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewOpenAIClient(t *testing.T) {
@@ -29,15 +30,42 @@ func TestNewOpenAIClient(t *testing.T) {
 	}
 }
 
-func TestNewOpenAIClient_CustomProvider(t *testing.T) {
-	client := NewOpenAIClient(ClientConfig{
-		Provider: Provider("zhipu"),
-		APIKey:   "test-key",
-		BaseURL:  "https://api.z.ai/api/paas/v4",
-	})
+func TestNewClient_CustomProvider(t *testing.T) {
+	tests := []struct {
+		name      string
+		newClient func(ClientConfig) Client
+		provider  Provider
+		baseURL   string
+	}{
+		{
+			name:      "OpenAI with zhipu provider",
+			newClient: func(config ClientConfig) Client { return NewOpenAIClient(config) },
+			provider:  Provider("zhipu"),
+			baseURL:   "https://api.z.ai/api/paas/v4",
+		},
+		{
+			name:      "OpenAI with custom provider",
+			newClient: func(config ClientConfig) Client { return NewOpenAIClient(config) },
+			provider:  Provider("custom-provider"),
+			baseURL:   "https://custom.example.com/v1",
+		},
+		{
+			name:      "Anthropic with custom provider",
+			newClient: func(config ClientConfig) Client { return NewAnthropicClient(config) },
+			provider:  Provider("custom-anthropic"),
+			baseURL:   "https://custom-anthropic.example.com",
+		},
+	}
 
-	if client.Provider() != Provider("zhipu") {
-		t.Fatalf("Expected provider zhipu, got %s", client.Provider())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := tt.newClient(ClientConfig{
+				Provider: tt.provider,
+				APIKey:   "test-key",
+				BaseURL:  tt.baseURL,
+			})
+			require.Equal(t, tt.provider, client.Provider())
+		})
 	}
 }
 
@@ -229,18 +257,6 @@ func TestNewAnthropicClient(t *testing.T) {
 
 	if client.Provider() != ProviderAnthropic {
 		t.Errorf("Expected provider %s, got %s", ProviderAnthropic, client.Provider())
-	}
-}
-
-func TestNewAnthropicClient_CustomProvider(t *testing.T) {
-	client := NewAnthropicClient(ClientConfig{
-		Provider: Provider("minimax"),
-		APIKey:   "test-key",
-		BaseURL:  "https://api.minimax.io/anthropic/v1",
-	})
-
-	if client.Provider() != Provider("minimax") {
-		t.Fatalf("Expected provider minimax, got %s", client.Provider())
 	}
 }
 

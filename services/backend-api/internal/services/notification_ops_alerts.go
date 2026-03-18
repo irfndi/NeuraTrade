@@ -3,16 +3,25 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/observability"
 )
 
-const (
-	telegramMaxMessageUnits = 3900
-)
+var telegramMaxMessageUnits = loadTelegramMaxMessageUnits()
+
+func loadTelegramMaxMessageUnits() int {
+	if v := os.Getenv("TELEGRAM_MAX_MESSAGE_UNITS"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 3900
+}
 
 // NotifyQuestProgress sends a quest progress notification to a user
 func (ns *NotificationService) NotifyQuestProgress(ctx context.Context, chatID int64, progress QuestProgressNotification) error {

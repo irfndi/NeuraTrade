@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -1007,12 +1008,47 @@ func writeGatewayServiceState(path, serviceName, status, detail, endpoint string
 
 func cleanupGatewayRuntimeArtifacts(statePath, detail string, pidFiles ...string) {
 	markGatewayStopped(statePath, detail)
+	var errs []error
 	for _, pidFile := range pidFiles {
 		if strings.TrimSpace(pidFile) == "" {
 			continue
 		}
-		_ = os.Remove(pidFile)
+		if err := removePIDFileIfProcessExited(pidFile); err != nil {
+			errs = append(errs, fmt.Errorf("cleanup %s: %w", pidFile, err))
+		}
 	}
+	if len(errs) > 0 {
+		log.Printf("[GATEWAY] cleanup errors: %v", errs)
+	}
+}
+
+func removePIDFileIfProcessExited(pidFile string) error {
+	content, err := os.ReadFile(pidFile)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read pid file: %w", err)
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil {
+		return os.Remove(pidFile)
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("find process %d: %w", pid, err)
+	}
+
+	if err := process.Signal(syscall.Signal(0)); err == nil {
+		return fmt.Errorf("process %d is still alive, keeping pid file", pid)
+	}
+
+	if removeErr := os.Remove(pidFile); removeErr != nil && !os.IsNotExist(removeErr) {
+		return fmt.Errorf("remove pid file: %w", removeErr)
+	}
+	return nil
 }
 
 func markGatewayStopped(statePath, detail string) {
