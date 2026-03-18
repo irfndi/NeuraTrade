@@ -392,6 +392,45 @@ describe("Status command", () => {
     );
   });
 
+  test("live mode omits confirmation progress from status display", async () => {
+    const bot = new MockBot();
+    const api = createApiMock({
+      async getTradingMode() {
+        return {
+          mode: "live",
+          confirmations: 2,
+          required_confirmations: 2,
+        };
+      },
+    });
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(900, 901);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain("Mode: LIVE");
+    expect(ctx.replies[0]).not.toContain("confirmations");
+  });
+
+  test("dry mode shows confirmation progress in status display", async () => {
+    const bot = new MockBot();
+    const api = createApiMock({
+      async getTradingMode() {
+        return {
+          mode: "dry",
+          confirmations: 1,
+          required_confirmations: 2,
+        };
+      },
+    });
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(901, 902);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain("Mode: DRY (1/2 confirmations)");
+  });
+
   test("renders rollout gate when viable count is zero", async () => {
     const bot = new MockBot();
     const api = createApiMock({

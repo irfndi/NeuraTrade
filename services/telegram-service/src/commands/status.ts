@@ -52,6 +52,9 @@ function summarizeCheck(
 
 function summarizeMode(mode: TradingModeResponse): string {
   const modeLabel = mode.mode?.toUpperCase() || "DRY";
+  if (mode.mode === "live") {
+    return modeLabel;
+  }
   return `${modeLabel} (${mode.confirmations}/${mode.required_confirmations} confirmations)`;
 }
 
