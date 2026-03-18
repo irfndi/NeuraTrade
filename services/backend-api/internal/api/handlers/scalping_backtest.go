@@ -295,18 +295,25 @@ func (h *ScalpingBacktestHandler) CompareScalpingBacktests(c *gin.Context) {
 		return
 	}
 
+	seen := make(map[string]bool, len(req.RunIDs))
 	pl := make([]string, 0, len(req.RunIDs))
 	args := make([]any, 0, len(req.RunIDs))
 	for _, id := range req.RunIDs {
 		id = strings.TrimSpace(id)
 		if id == "" {
-			continue
+			c.JSON(http.StatusBadRequest, gin.H{"error": "run_ids must not be empty"})
+			return
 		}
+		if seen[id] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "duplicate run_id: " + id})
+			return
+		}
+		seen[id] = true
 		pl = append(pl, fmt.Sprintf("$%d", len(args)+1))
 		args = append(args, id)
 	}
 	if len(pl) < 2 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "at least 2 valid run_ids are required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at least 2 distinct run_ids are required"})
 		return
 	}
 

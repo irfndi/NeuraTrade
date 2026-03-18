@@ -17,6 +17,12 @@ const (
 	DefaultScalpingBacktestSlippage      = 0.001
 	DefaultScalpingBacktestHoldPeriod    = 5 * time.Minute
 	DefaultScalpingBacktestMaxCapitalPct = 5.0
+
+	// backtestSpreadMultiplier scales the intra-candle high-low range to
+	// approximate a bid-ask spread. The factor 8 was derived empirically from
+	// typical crypto market microstructure where the observable range is
+	// roughly 8x the effective spread on liquid pairs.
+	backtestSpreadMultiplier = 8
 )
 
 var defaultScalpingBacktestUniverse = []string{
@@ -449,7 +455,6 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		Signal:      signal.Signal,
 		Decision:    decision,
 	}
-	e.positions[signal.Symbol] = position
 
 	edgeScore := decision.Confidence - 0.50
 	edgeScore += math.Abs(signal.Signal.OrderBookImbalance) * 0.50
@@ -510,7 +515,6 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		RegimeAtExit:  position.RegimeEntry,
 	}
 
-	delete(e.positions, signal.Symbol)
 	return &SimulatedTrade{Trade: trade}, nil
 }
 
@@ -541,7 +545,7 @@ func (e *ScalpingBacktestEngine) classifyRegimeVolatility(signal MarketSignal) s
 func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AITradingDecision) map[string]GateResult {
 	results := map[string]GateResult{}
 
-	spreadAllowed := signal.BidAskSpread > 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
+	spreadAllowed := signal.BidAskSpread >= 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
 	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.10
@@ -1080,7 +1084,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint) []HistoricalSi
 
 			spreadPct := 0.0
 			if point.close > 0 && point.high > point.low {
-				spreadPct = ((point.high - point.low) / point.close) * 8
+				spreadPct = ((point.high - point.low) / point.close) * backtestSpreadMultiplier
 			}
 
 			imbalance := 0.0

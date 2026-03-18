@@ -104,7 +104,10 @@ func (m *ShadowDecisionMirror) MirrorDecision(
 				result.GateCode = appautonomy.CandidateRejectConfidenceBelowThreshold
 			}
 			if result.EntryPrice == nil || !result.EntryPrice.GreaterThan(decimal.Zero) {
-				return result
+				result.GateAllowed = false
+				result.ShadowAction = "hold"
+				result.GateReason = "no executable entry price for shadow override"
+				result.GateCode = "no_entry_price"
 			}
 			if result.SizePercent <= 0 {
 				result.SizePercent = effectivePolicy.EffectiveMaxCapitalPct

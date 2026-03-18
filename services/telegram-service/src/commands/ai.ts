@@ -3,10 +3,10 @@ import { ApiClientError } from "../api/client";
 import type { BackendApiClient } from "../api/client";
 import type { AIModelInfo } from "../api/types";
 import { logger } from "../utils/logger";
+import { splitIntoTelegramMessages } from "../utils";
 
 const MAX_PROVIDERS_IN_AI_MODELS = 15;
 const MAX_MODELS_PER_PROVIDER = 4;
-const TELEGRAM_MAX_MESSAGE_CHARS = 3900;
 
 function resolveTelegramIdentity(ctx: {
   chat?: { id?: string | number };
@@ -21,27 +21,6 @@ function resolveTelegramIdentity(ctx: {
     return String(fromId);
   }
   return null;
-}
-
-function splitIntoTelegramMessages(text: string): string[] {
-  if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) {
-    return [text];
-  }
-
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > TELEGRAM_MAX_MESSAGE_CHARS) {
-    let splitAt = remaining.lastIndexOf("\n", TELEGRAM_MAX_MESSAGE_CHARS);
-    if (splitAt <= 0) {
-      splitAt = TELEGRAM_MAX_MESSAGE_CHARS;
-    }
-    chunks.push(remaining.slice(0, splitAt).trimEnd());
-    remaining = remaining.slice(splitAt).trimStart();
-  }
-  if (remaining.length > 0) {
-    chunks.push(remaining);
-  }
-  return chunks;
 }
 
 function getErrorContext(error: unknown): { status?: number; detail: string } {

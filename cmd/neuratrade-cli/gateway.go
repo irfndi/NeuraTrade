@@ -81,16 +81,20 @@ func newAllowedGatewayServiceBinaries() map[string]struct{} {
 
 // isNativeCCXTMode returns true if the gateway should skip launching the external
 // ccxt-service process because CCXT is embedded natively in the backend server.
+// Returns false if the user has configured an external CCXT endpoint (via
+// CCXT_SERVICE_URL or CCXT_GRPC_ADDRESS).
 func isNativeCCXTMode() bool {
-	// If CCXT_SERVICE_URL or CCXT_GRPC_ADDRESS is explicitly set, the user
-	// wants external CCXT service mode.
-	if os.Getenv("CCXT_SERVICE_URL") != "" {
-		return false
-	}
-	if os.Getenv("CCXT_GRPC_ADDRESS") != "" {
+	if os.Getenv("CCXT_SERVICE_URL") != "" || os.Getenv("CCXT_GRPC_ADDRESS") != "" {
 		return false
 	}
 	return true
+}
+
+// isExternalCCXTMode returns true if the user has explicitly configured an
+// external CCXT endpoint, meaning the gateway should not spawn a local
+// ccxt-service process.
+func isExternalCCXTMode() bool {
+	return os.Getenv("CCXT_SERVICE_URL") != "" || os.Getenv("CCXT_GRPC_ADDRESS") != ""
 }
 
 // gatewayStart starts all NeuraTrade services
@@ -189,9 +193,13 @@ func gatewayStart(cCtx *cli.Context) error {
 	// Start CCXT Service (skip if using native embedded CCXT mode)
 	var ccxtCmd *exec.Cmd
 	nativeCCXT := isNativeCCXTMode()
-	if nativeCCXT {
+	externalCCXT := isExternalCCXTMode()
+	switch {
+	case nativeCCXT:
 		fmt.Println("📊 CCXT: Using native embedded mode (skipping external service)")
-	} else {
+	case externalCCXT:
+		fmt.Println("📊 CCXT: Using external endpoint (skipping local service)")
+	default:
 		fmt.Println("📊 Starting CCXT Service...")
 		var startErr error
 		ccxtCmd, startErr = startService(
@@ -238,7 +246,7 @@ func gatewayStart(cCtx *cli.Context) error {
 		"AI_PROVIDER":           aiProvider,
 		"AI_MODEL":              aiModel,
 	}
-	if !nativeCCXT {
+	if !nativeCCXT && !externalCCXT {
 		if os.Getenv("CCXT_SERVICE_URL") == "" {
 			backendEnv["CCXT_SERVICE_URL"] = fmt.Sprintf("http://%s:%s", bindHost, ccxtPort)
 		}
@@ -344,30 +352,26 @@ func gatewayStart(cCtx *cli.Context) error {
 	fmt.Println("Press Ctrl+C to stop all services")
 
 	monitorStop := make(chan struct{})
-	go monitorGatewayHealth(statePath, bindHost, backendPort, telegramPort, backendCmd, telegramCmd, ccxtCmd, monitorStop)
+	monitorDone := make(chan struct{})
+	go func() {
+		monitorGatewayHealth(statePath, bindHost, backendPort, telegramPort, backendCmd, telegramCmd, ccxtCmd, monitorStop)
+		close(monitorDone)
+	}()
 
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 	close(monitorStop)
+	<-monitorDone
 
 	fmt.Println()
 	fmt.Println("🛑 Shutting down services...")
 
-	// Graceful shutdown: signal all processes in parallel, then wait sequentially
-	if backendCmd != nil && backendCmd.Process != nil {
-		backendCmd.Process.Signal(syscall.SIGTERM)
-	}
-	if telegramCmd != nil && telegramCmd.Process != nil {
-		telegramCmd.Process.Signal(syscall.SIGTERM)
-	}
-	if ccxtCmd != nil && ccxtCmd.Process != nil {
-		ccxtCmd.Process.Signal(syscall.SIGTERM)
-	}
-	waitForExit(backendCmd, gracefulTimeout)
-	waitForExit(telegramCmd, gracefulTimeout)
-	waitForExit(ccxtCmd, gracefulTimeout)
+	// Graceful shutdown: signal and wait for all processes.
+	signalAndWait(backendCmd, gracefulTimeout)
+	signalAndWait(telegramCmd, gracefulTimeout)
+	signalAndWait(ccxtCmd, gracefulTimeout)
 	cleanupGatewayRuntimeArtifacts(statePath, "gateway stopped", servicePIDFiles...)
 
 	fmt.Println("✅ All services stopped")
@@ -906,22 +910,6 @@ func signalAndWait(cmd *exec.Cmd, shutdownTimeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(shutdownTimeout):
-		cmd.Process.Kill()
-		<-done
-	}
-}
-
-func waitForExit(cmd *exec.Cmd, timeout time.Duration) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-	select {
-	case <-done:
-	case <-time.After(timeout):
 		cmd.Process.Kill()
 		<-done
 	}

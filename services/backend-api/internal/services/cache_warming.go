@@ -385,7 +385,7 @@ func (c *CacheWarmingService) warmFundingRates(ctx context.Context) (err error) 
 
 	// Check if funding_rates table exists before attempting the query
 	var dummy int
-	if err := c.db.QueryRow(ctx, "SELECT 1 FROM funding_rates LIMIT 1").Scan(&dummy); errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+	if err = c.db.QueryRow(ctx, "SELECT 1 FROM funding_rates LIMIT 1").Scan(&dummy); errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
 		c.logger.Info("Funding rates table is empty, skipping cache warm")
 		return nil
 	} else if err != nil {
