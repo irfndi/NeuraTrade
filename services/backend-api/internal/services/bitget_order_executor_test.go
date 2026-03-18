@@ -956,6 +956,115 @@ func TestTradeDetails(t *testing.T) {
 	assert.False(t, details.IsPaperTrade)
 }
 
+func TestBitgetOrderExecutor_PlaceFuturesOrderWithTPSL_UsesCorrectPresetFieldNames(t *testing.T) {
+	var orderBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/market/contracts":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{
+				"sizeMultiplier":"0.001",
+				"minTradeNum":"0.1",
+				"volumePlace":"1",
+				"pricePlace":"2"
+			}]}`))
+		case "/api/v2/mix/order/place-order":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &orderBody))
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"tpsl-field-123"}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	entryPrice := decimal.NewFromFloat(48000)
+	tpPrice := decimal.NewFromFloat(52000)
+	slPrice := decimal.NewFromFloat(46000)
+
+	details := &TradeDetails{
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		MarketType: "futures",
+		AmountUSDT: decimal.NewFromInt(10),
+		EntryPrice: &entryPrice,
+		TakeProfit: &tpPrice,
+		StopLoss:   &slPrice,
+	}
+
+	orderID, err := executor.placeFuturesOrderWithTPSL(context.Background(), "BTCUSDT", details)
+
+	require.NoError(t, err)
+	assert.Equal(t, "tpsl-field-123", orderID)
+	require.NotNil(t, orderBody)
+
+	assert.Equal(t, "52000.00", orderBody["presetStopSurplusPrice"], "TP must use presetStopSurplusPrice")
+	assert.Equal(t, "52000.00", orderBody["presetStopSurplusExecutePrice"], "TP must set execute price")
+	assert.Equal(t, "46000.00", orderBody["presetStopLossPrice"], "SL must use presetStopLossPrice")
+	assert.Equal(t, "46000.00", orderBody["presetStopLossExecutePrice"], "SL must set execute price")
+
+	_, hasInvalidTP := orderBody["presetTakeProfitPrice"]
+	assert.False(t, hasInvalidTP, "presetTakeProfitPrice must not be sent (invalid Bitget API field)")
+}
+
+func TestBitgetOrderExecutor_PlaceFuturesOrderWithTPSL_SkipsTPSLForRiskReduction(t *testing.T) {
+	var orderBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/market/contracts":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{
+				"sizeMultiplier":"0.001",
+				"minTradeNum":"0.1",
+				"volumePlace":"1",
+				"pricePlace":"2"
+			}]}`))
+		case "/api/v2/mix/order/place-order":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &orderBody))
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"risk-reduce-123"}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	entryPrice := decimal.NewFromFloat(48000)
+	tpPrice := decimal.NewFromFloat(52000)
+	slPrice := decimal.NewFromFloat(46000)
+
+	details := &TradeDetails{
+		Symbol:     "BTC/USDT",
+		Side:       "sell",
+		MarketType: "futures",
+		Amount:     decimal.NewFromInt(1),
+		AmountUSDT: decimal.NewFromInt(10),
+		EntryPrice: &entryPrice,
+		TakeProfit: &tpPrice,
+		StopLoss:   &slPrice,
+		ReduceOnly: true,
+		TradeType:  "risk_reduction",
+	}
+
+	_, err := executor.placeFuturesOrderWithTPSL(context.Background(), "BTCUSDT", details)
+
+	require.NoError(t, err)
+	require.NotNil(t, orderBody)
+	_, hasTP := orderBody["presetStopSurplusPrice"]
+	_, hasSL := orderBody["presetStopLossPrice"]
+	assert.False(t, hasTP, "risk reduction orders must not include TP")
+	assert.False(t, hasSL, "risk reduction orders must not include SL")
+	assert.Equal(t, "close", orderBody["tradeSide"])
+}
+
 func TestFormatPrice(t *testing.T) {
 	tests := []struct {
 		price    decimal.Decimal
