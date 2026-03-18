@@ -324,7 +324,8 @@ func (h *ScalpingBacktestHandler) CompareScalpingBacktests(c *gin.Context) {
 
 	runs := make([]GetScalpingBacktestResponse, 0, len(req.RunIDs))
 	bestRunID := ""
-	bestPnL := decimal.NewFromInt(-1).Mul(decimal.NewFromInt(1_000_000_000))
+	bestPnL := decimal.Decimal{}
+	firstBestSet := false
 
 	for rows.Next() {
 		var (
@@ -348,9 +349,10 @@ func (h *ScalpingBacktestHandler) CompareScalpingBacktests(c *gin.Context) {
 		}
 		runs = append(runs, run)
 		if pnl, parseErr := decimal.NewFromString(run.Summary.TotalPnL); parseErr == nil {
-			if pnl.GreaterThan(bestPnL) {
+			if !firstBestSet || pnl.GreaterThan(bestPnL) {
 				bestPnL = pnl
 				bestRunID = id
+				firstBestSet = true
 			}
 		}
 	}
@@ -463,15 +465,18 @@ type apiBacktestResult struct {
 func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResult {
 	summary := serviceSummaryToAPI(result.Summary)
 
-	type signalKey struct {
+	type signalLookupKey struct {
 		symbol string
 		time   time.Time
 	}
-	signalIDMap := make(map[signalKey]string, len(result.Signals))
+	tradeLookup := make(map[signalLookupKey]string)
 	signals := make([]ScalpingBacktestSignal, 0, len(result.Signals))
 	for _, s := range result.Signals {
 		id := uuid.NewString()
-		signalIDMap[signalKey{s.Symbol, s.Timestamp}] = id
+		lookupKey := signalLookupKey{s.Symbol, s.Timestamp}
+		if _, exists := tradeLookup[lookupKey]; !exists {
+			tradeLookup[lookupKey] = id
+		}
 		signals = append(signals, ScalpingBacktestSignal{
 			SignalID:         id,
 			Timestamp:        s.Timestamp,
@@ -493,7 +498,7 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 	for _, t := range result.Trades {
 		holdDuration := int(t.ExitTime.Sub(t.EntryTime).Seconds())
 		trade := ScalpingBacktestTrade{
-			SignalID:            signalIDMap[signalKey{t.Symbol, t.EntryTime}],
+			SignalID:            tradeLookup[signalLookupKey{t.Symbol, t.EntryTime}],
 			Symbol:              t.Symbol,
 			Side:                t.Side,
 			Size:                t.Size.String(),
