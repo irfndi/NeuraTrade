@@ -200,23 +200,17 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       switch (readiness) {
         case "ready":
           lines.push("✅ AI Ready");
-          lines.push(
-            `📊 Selected Model: ${result.selected_model || "None"}`,
-          );
+          lines.push(`📊 Selected Model: ${result.selected_model || "None"}`);
           lines.push(`🔗 Provider: ${result.provider || "N/A"}`);
           break;
         case "ready_auto_route":
           lines.push("✅ AI Ready (auto-routing)");
           lines.push(`📊 Selected Model: none (auto-routing active)`);
           if (result.effective_provider) {
-            lines.push(
-              `🔗 Effective Provider: ${result.effective_provider}`,
-            );
+            lines.push(`🔗 Effective Provider: ${result.effective_provider}`);
           }
           if (result.effective_model) {
-            lines.push(
-              `🤖 Effective Model: ${result.effective_model}`,
-            );
+            lines.push(`🤖 Effective Model: ${result.effective_model}`);
           }
           lines.push(
             "\n💡 AI is available via provider-chain. Pin a model with /ai_select or let the system auto-route.",
@@ -224,12 +218,8 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
           break;
         case "degraded":
           lines.push("⚠️ AI Degraded");
-          lines.push(
-            `📊 Selected Model: ${result.selected_model || "None"}`,
-          );
-          lines.push(
-            `🔗 Provider: ${result.provider || "N/A"}`,
-          );
+          lines.push(`📊 Selected Model: ${result.selected_model || "None"}`);
+          lines.push(`🔗 Provider: ${result.provider || "N/A"}`);
           lines.push(
             `⚡ Provider chain: ${result.provider_chain_usable}/${result.provider_chain_configured} usable`,
           );
@@ -302,7 +292,9 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       }
 
       lines.push("");
-      lines.push("Use /ai_provider_models <provider_id> to see models for a provider.");
+      lines.push(
+        "Use /ai_provider_models <provider_id> to see models for a provider.",
+      );
       lines.push("Use /ai_select <model_id> to pin a model directly.");
 
       await ctx.reply(lines.join("\n"));
@@ -317,9 +309,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
           fromId: ctx.from?.id,
         },
       );
-      await ctx.reply(
-        "Failed to fetch AI providers. Please try again later.",
-      );
+      await ctx.reply("Failed to fetch AI providers. Please try again later.");
     }
   });
 
@@ -356,9 +346,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       for (const m of result.models.slice(0, MAX_MODELS_PER_PROVIDER * 2)) {
         const tools = m.supports_tools ? "🔧" : "";
         const vision = m.supports_vision ? "👁" : "";
-        lines.push(
-          `- ${m.model_id} ${tools}${vision}`.trimEnd(),
-        );
+        lines.push(`- ${m.model_id} ${tools}${vision}`.trimEnd());
       }
       if (result.models.length > MAX_MODELS_PER_PROVIDER * 2) {
         lines.push(
