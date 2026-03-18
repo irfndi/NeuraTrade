@@ -355,14 +355,23 @@ type IndicatorsConfig struct {
 
 // AIConfig holds AI-driven trading configuration.
 type AIConfig struct {
-	Provider      string  `mapstructure:"provider"`
-	Model         string  `mapstructure:"model"`
-	APIKey        string  `mapstructure:"api_key"`
-	BaseURL       string  `mapstructure:"base_url"`
-	Temperature   float64 `mapstructure:"temperature"`
-	MaxTokens     int     `mapstructure:"max_tokens"`
-	MinConfidence float64 `mapstructure:"min_confidence"`
-	DailyBudget   float64 `mapstructure:"daily_budget"`
+	Provider         string         `mapstructure:"provider"`
+	Model            string         `mapstructure:"model"`
+	APIKey           string         `mapstructure:"api_key"`
+	BaseURL          string         `mapstructure:"base_url"`
+	Temperature      float64        `mapstructure:"temperature"`
+	MaxTokens        int            `mapstructure:"max_tokens"`
+	MinConfidence    float64        `mapstructure:"min_confidence"`
+	DailyBudget      float64        `mapstructure:"daily_budget"`
+	RoutingMode      string         `mapstructure:"routing_mode"`
+	AdditionalModels []AIModelEntry `mapstructure:"additional_models"`
+}
+
+type AIModelEntry struct {
+	ProviderID string `mapstructure:"provider_id"`
+	ModelID    string `mapstructure:"model_id"`
+	APIKey     string `mapstructure:"api_key"`
+	BaseURL    string `mapstructure:"base_url"`
 }
 
 // FeaturesConfig holds feature flags.
@@ -619,6 +628,7 @@ func setDefaults() {
 	viper.SetDefault("ai.max_tokens", 4096)
 	viper.SetDefault("ai.min_confidence", 0.7)
 	viper.SetDefault("ai.daily_budget", 10.0)
+	viper.SetDefault("ai.routing_mode", "primary")
 
 	// Features config defaults
 	viper.SetDefault("features.enable_ai", true)
