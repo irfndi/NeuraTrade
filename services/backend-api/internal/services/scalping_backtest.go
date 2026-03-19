@@ -907,8 +907,8 @@ func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
 	symbolFilter map[string]struct{},
 ) ([]HistoricalSignal, error) {
 	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), od.open_price, od.high_price, od.low_price, od.close_price, od.volume, od.timestamp
-		FROM ohlcv_data od
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), od.open, od.high, od.low, od.close, od.volume, od.timestamp
+		FROM ohlcv_candles od
 		JOIN trading_pairs tp ON tp.id = od.trading_pair_id
 		JOIN exchanges e ON e.id = od.exchange_id
 		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
@@ -1083,7 +1083,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint) []HistoricalSi
 
 			spreadPct := 0.0
 			if point.close > 0 && point.high > point.low {
-				spreadPct = ((point.high - point.low) / point.close) * backtestSpreadMultiplier
+				spreadPct = ((point.high - point.low) / point.close) * 100 / backtestSpreadMultiplier
 			}
 
 			imbalance := 0.0

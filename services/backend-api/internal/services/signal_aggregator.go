@@ -416,9 +416,10 @@ func (sa *SignalAggregator) AggregateMicrostructureSignals(ctx context.Context, 
 		}
 
 		action := "hold"
-		if obi.Direction == "bullish" {
+		switch obi.Direction {
+		case "bullish":
 			action = "buy"
-		} else if obi.Direction == "bearish" {
+		case "bearish":
 			action = "sell"
 		}
 

@@ -131,3 +131,48 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 	mockAggregator.AssertExpectations(t)
 	mockScorer.AssertExpectations(t)
 }
+
+func TestSignalProcessor_GenerateTechnicalSignals_RequiresFiftyCandles(t *testing.T) {
+	mockPool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockPool.Close()
+
+	dbPool := database.NewMockDBPool(mockPool)
+	var logger logging.Logger = logging.NewStandardLogger("info", "test")
+	sp := NewSignalProcessor(
+		dbPool,
+		logger,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+
+	ohlcvRows := pgxmock.NewRows([]string{"open", "high", "low", "close", "volume", "timestamp"})
+	for i := 0; i < 49; i++ {
+		price := 50000.0 + float64(i)*10.0
+		ohlcvRows.AddRow(price, price+50, price-50, price+20, 1000.0, time.Now().Add(-time.Duration(49-i)*time.Minute))
+	}
+	mockPool.ExpectQuery("SELECT open, high, low, close, volume, timestamp").
+		WithArgs(1, 1).
+		WillReturnRows(ohlcvRows)
+
+	_, err = sp.generateTechnicalSignals(models.MarketData{TradingPairID: 1, ExchangeID: 1})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "need 50, got 49")
+
+	if err := mockPool.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
