@@ -45,6 +45,12 @@ func TestSQLiteConnection_WithExtension(t *testing.T) {
 	assert.Nil(t, db2)
 }
 
+func TestSQLiteDSN_EnablesForeignKeys(t *testing.T) {
+	assert.Equal(t, "neuratrade.db?_foreign_keys=on", sqliteDSN("neuratrade.db"))
+	assert.Equal(t, "neuratrade.db?mode=ro&_foreign_keys=on", sqliteDSN("neuratrade.db?mode=ro"))
+	assert.Equal(t, "neuratrade.db?_foreign_keys=off", sqliteDSN("neuratrade.db?_foreign_keys=off"))
+}
+
 // TestSQLiteConnection_EmptyPath tests SQLite connection with empty path
 func TestSQLiteConnection_EmptyPath(t *testing.T) {
 	db, err := NewSQLiteConnection("")
