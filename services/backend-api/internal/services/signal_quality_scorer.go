@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -633,24 +634,32 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 
 	stats := make(map[string]*ExchangeMetrics)
 	defaultStats := sqs.defaultExchangeStats()
+	cutoff := time.Now().Add(-24 * time.Hour)
 
 	query := `
+		WITH latest_market_data AS (
+			SELECT md.id, md.exchange_id, md.trading_pair_id, md.volume_24h, md.timestamp
+			FROM market_data md
+			JOIN (
+				SELECT exchange_id, trading_pair_id, MAX(timestamp) AS max_timestamp
+				FROM market_data
+				WHERE timestamp > $1
+				GROUP BY exchange_id, trading_pair_id
+			) latest
+			  ON latest.exchange_id = md.exchange_id
+			 AND latest.trading_pair_id = md.trading_pair_id
+			 AND latest.max_timestamp = md.timestamp
+		)
 		SELECT e.name,
 		       COALESCE(SUM(md.volume_24h), 0),
 		       COUNT(md.id),
-		       COALESCE(MAX(md.timestamp), NOW()),
+		       MAX(md.timestamp),
 		       COUNT(DISTINCT md.trading_pair_id)
 		FROM exchanges e
-		LEFT JOIN (
-			SELECT DISTINCT ON (exchange_id, trading_pair_id)
-			       id, volume_24h, timestamp, exchange_id, trading_pair_id
-			FROM market_data
-			WHERE timestamp > NOW() - INTERVAL '24 hours'
-			ORDER BY exchange_id, trading_pair_id, timestamp DESC
-		) md ON md.exchange_id = e.id
-		GROUP BY e.name
+		LEFT JOIN latest_market_data md ON md.exchange_id = e.id
+		GROUP BY e.id, e.name
 	`
-	rows, err := sqs.db.Query(ctx, query)
+	rows, err := sqs.db.Query(ctx, query, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("query exchange statistics: %w", err)
 	}
@@ -660,12 +669,17 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 		var name string
 		var totalVolume decimal.Decimal
 		var dataPointCount int64
-		var lastUpdate time.Time
+		var lastUpdateNS sql.NullTime
 		var pairCount int
 
-		if err := rows.Scan(&name, &totalVolume, &dataPointCount, &lastUpdate, &pairCount); err != nil {
+		if err := rows.Scan(&name, &totalVolume, &dataPointCount, &lastUpdateNS, &pairCount); err != nil {
 			sqs.logger.WithError(err).Warn("Failed to scan exchange statistics row, skipping")
 			continue
+		}
+
+		lastUpdate := time.Now()
+		if lastUpdateNS.Valid {
+			lastUpdate = lastUpdateNS.Time
 		}
 
 		avgSpread := decimal.Zero
