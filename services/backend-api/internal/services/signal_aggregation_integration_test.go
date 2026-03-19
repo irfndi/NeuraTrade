@@ -88,7 +88,7 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Test 1: Signal Processing Pipeline
 	t.Run("SignalProcessingPipeline", func(t *testing.T) {
-		mockPool.ExpectQuery("SELECT tp.symbol, e.name").
+		mockPool.ExpectQuery("SELECT tp.symbol, COALESCE\\(ce.ccxt_id, e.ccxt_id, e.name\\)").
 			WillReturnRows(pgxmock.NewRows([]string{"symbol", "name"}))
 
 		err := signalProcessor.processSignalBatch()
@@ -139,6 +139,11 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Test 3: Signal Aggregation
 	t.Run("SignalAggregation", func(t *testing.T) {
+		mockPool.ExpectQuery("SELECT e.name,").
+			WillReturnRows(pgxmock.NewRows([]string{"name", "total_volume", "data_point_count", "last_update", "pair_count"}).
+				AddRow("binance", decimal.NewFromFloat(1500000), int64(25), time.Now(), 5).
+				AddRow("coinbase", decimal.NewFromFloat(900000), int64(15), time.Now(), 3))
+
 		// Create test arbitrage opportunities
 		opportunities := []models.ArbitrageOpportunity{
 			{
@@ -185,6 +190,7 @@ func TestSignalAggregationIntegration(t *testing.T) {
 			assert.True(t, signal.Confidence.GreaterThan(decimal.Zero), "Signal should have confidence")
 			assert.NotEmpty(t, signal.Exchanges, "Signal should have exchanges")
 		}
+		assert.NoError(t, mockPool.ExpectationsWereMet(), "all expected SQL queries should be executed")
 	})
 
 	// Test 4: Circuit Breaker Integration
