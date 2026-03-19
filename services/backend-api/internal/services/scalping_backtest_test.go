@@ -276,6 +276,52 @@ func TestBuildHistoricalSignalsFromOHLCV_SpreadUsesEffectiveSpreadEstimate(t *te
 	assert.InDelta(t, 0.03, signals[0].Signal.BidAskSpread, 1e-9)
 }
 
+func TestCompute24hWindowMetrics(t *testing.T) {
+	base := time.Unix(0, 0).UTC()
+	metrics := compute24hWindowMetrics([]scalpingOHLCVPoint{
+		{symbol: "BTC/USDT", high: 101, low: 99, volume: 10, timestamp: base},
+		{symbol: "BTC/USDT", high: 102, low: 98, volume: 20, timestamp: base.Add(12 * time.Hour)},
+		{symbol: "BTC/USDT", high: 103, low: 97, volume: 30, timestamp: base.Add(25 * time.Hour)},
+	})
+
+	require.Len(t, metrics, 3)
+	assert.Equal(t, 101.0, metrics[0].High24h)
+	assert.Equal(t, 99.0, metrics[0].Low24h)
+	assert.Equal(t, 10.0, metrics[0].Volume24h)
+	assert.Equal(t, 102.0, metrics[1].High24h)
+	assert.Equal(t, 98.0, metrics[1].Low24h)
+	assert.Equal(t, 30.0, metrics[1].Volume24h)
+	assert.Equal(t, 103.0, metrics[2].High24h)
+	assert.Equal(t, 97.0, metrics[2].Low24h)
+	assert.Equal(t, 50.0, metrics[2].Volume24h)
+}
+
+func TestMapPointToHistoricalSignal(t *testing.T) {
+	point := scalpingOHLCVPoint{
+		symbol:    "BTC/USDT",
+		exchange:  "binance",
+		open:      100,
+		high:      100.12,
+		low:       99.88,
+		close:     100,
+		volume:    1000,
+		timestamp: time.Unix(0, 0).UTC(),
+	}
+	metrics := scalping24hWindowMetrics{High24h: 101, Low24h: 99, Volume24h: 2400}
+
+	signal := mapPointToHistoricalSignal(point, metrics, 1.25, DefaultScalpingBacktestSpreadMultiplier)
+
+	assert.Equal(t, point.timestamp, signal.Timestamp)
+	assert.Equal(t, point.symbol, signal.Symbol)
+	assert.InDelta(t, 0.03, signal.Signal.BidAskSpread, 1e-9)
+	assert.Equal(t, 101.0, signal.Signal.High24h)
+	assert.Equal(t, 99.0, signal.Signal.Low24h)
+	assert.Equal(t, 2400.0, signal.Signal.Volume24h)
+	assert.Equal(t, 1.25, signal.Signal.PriceChange24h)
+	assert.InDelta(t, 50.0, signal.Signal.RangePosition24h, 1e-9)
+	assert.InDelta(t, 0.0, signal.Signal.OrderBookImbalance, 1e-9)
+}
+
 func TestClampFloat(t *testing.T) {
 	tests := []struct {
 		name     string
