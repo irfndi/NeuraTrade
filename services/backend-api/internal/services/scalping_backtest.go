@@ -1303,15 +1303,6 @@ func calculateBacktestSharpe(returns []float64) float64 {
 	return mean / std
 }
 
-func exchangeMatches(want string, got string) bool {
-	want = strings.TrimSpace(strings.ToLower(want))
-	got = strings.TrimSpace(strings.ToLower(got))
-	if want == "" || got == "" {
-		return true
-	}
-	return want == got
-}
-
 func toGateBoolMap(input map[string]GateResult) map[string]bool {
 	output := make(map[string]bool, len(input))
 	for name, result := range input {
