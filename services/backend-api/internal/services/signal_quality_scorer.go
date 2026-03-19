@@ -696,6 +696,9 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 			ErrorRate:        errorRate,
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate exchange statistics rows: %w", err)
+	}
 
 	if len(stats) == 0 {
 		return sqs.defaultExchangeStats(), nil
