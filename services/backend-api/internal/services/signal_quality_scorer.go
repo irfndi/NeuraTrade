@@ -632,6 +632,7 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 	}
 
 	stats := make(map[string]*ExchangeMetrics)
+	defaultStats := sqs.defaultExchangeStats()
 
 	query := `
 		SELECT e.name,
@@ -667,17 +668,32 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 			continue
 		}
 
+		avgSpread := decimal.Zero
+		avgLatency := time.Duration(0)
+		uptimePercentage := decimal.NewFromFloat(0.95)
+		dataGaps := 0
+		apiResponseTime := 100 * time.Millisecond
+		errorRate := decimal.NewFromFloat(0.01)
+		if fallback, ok := defaultStats[name]; ok && fallback != nil {
+			avgSpread = fallback.AvgSpread
+			avgLatency = fallback.AvgLatency
+			uptimePercentage = fallback.UptimePercentage
+			dataGaps = fallback.DataGaps
+			apiResponseTime = fallback.APIResponseTime
+			errorRate = fallback.ErrorRate
+		}
+
 		stats[name] = &ExchangeMetrics{
 			TotalTrades:      dataPointCount,
 			AvgDailyVolume:   totalVolume,
-			AvgSpread:        decimal.Zero,
-			AvgLatency:       0,
-			UptimePercentage: decimal.Zero,
-			DataGaps:         0,
+			AvgSpread:        avgSpread,
+			AvgLatency:       avgLatency,
+			UptimePercentage: uptimePercentage,
+			DataGaps:         dataGaps,
 			LastDataUpdate:   lastUpdate,
 			SupportedPairs:   pairCount,
-			APIResponseTime:  0,
-			ErrorRate:        decimal.Zero,
+			APIResponseTime:  apiResponseTime,
+			ErrorRate:        errorRate,
 		}
 	}
 
