@@ -23,8 +23,9 @@ import (
 type SignalType string
 
 const (
-	SignalTypeArbitrage SignalType = "arbitrage"
-	SignalTypeTechnical SignalType = "technical"
+	SignalTypeArbitrage      SignalType = "arbitrage"
+	SignalTypeTechnical      SignalType = "technical"
+	SignalTypeMicrostructure SignalType = "microstructure"
 )
 
 // SignalStrength represents the strength of a trading signal
@@ -74,6 +75,9 @@ type TechnicalSignalInput struct {
 	Symbol     string
 	Exchange   string
 	Prices     []decimal.Decimal
+	Opens      []decimal.Decimal
+	Highs      []decimal.Decimal
+	Lows       []decimal.Decimal
 	Volumes    []decimal.Decimal
 	Timestamps []time.Time
 }
@@ -323,6 +327,9 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 	ohlcv := &indicators.OHLCVData{
 		Symbol:   input.Symbol,
 		Exchange: input.Exchange,
+		Open:     input.Opens,
+		High:     input.Highs,
+		Low:      input.Lows,
 		Close:    input.Prices,
 		Volume:   input.Volumes,
 	}
@@ -442,7 +449,7 @@ func (sa *SignalAggregator) AggregateMicrostructureSignals(ctx context.Context, 
 		}
 
 		signal := sa.createAggregatedTechnicalSignal(input.Symbol, input.Exchange, action, components)
-		signal.SignalType = "microstructure"
+		signal.SignalType = SignalTypeMicrostructure
 		signal.Indicators = []string{"orderbook_imbalance"}
 		signal.Metadata["imbalance_pct"] = obi.ImbalancePct.String()
 		signal.Metadata["obi_score"] = obi.Score.String()
@@ -661,9 +668,21 @@ func (sa *SignalAggregator) removeDuplicateStrings(slice []string) []string {
 
 // calculateTechnicalIndicators computes various technical indicators from price history.
 func (sa *SignalAggregator) convertStackResultsToSignals(symbol, exchange string, stackResult *indicators.MultiIndicatorResult) []*AggregatedSignal {
-	buyComponents := make([]SignalComponent, 0)
-	sellComponents := make([]SignalComponent, 0)
+	if stackResult.OverallSignal == indicators.SignalHold {
+		return nil
+	}
 
+	var overallAction string
+	switch stackResult.OverallSignal {
+	case indicators.SignalBuy:
+		overallAction = "buy"
+	case indicators.SignalSell:
+		overallAction = "sell"
+	default:
+		return nil
+	}
+
+	var components []SignalComponent
 	for _, ind := range stackResult.Indicators {
 		var action string
 		switch ind.Signal {
@@ -675,40 +694,28 @@ func (sa *SignalAggregator) convertStackResultsToSignals(symbol, exchange string
 			continue
 		}
 
-		component := SignalComponent{
+		if action != overallAction {
+			continue
+		}
+
+		components = append(components, SignalComponent{
 			Indicator:   ind.Name,
 			Description: fmt.Sprintf("%s %s signal (strength %.2f)", ind.Name, ind.Signal, ind.Strength.InexactFloat64()),
 			Confidence:  ind.Strength,
 			Strength:    ind.Strength.InexactFloat64(),
-		}
-
-		if action == "buy" {
-			buyComponents = append(buyComponents, component)
-		} else {
-			sellComponents = append(sellComponents, component)
-		}
+		})
 	}
 
-	var signals []*AggregatedSignal
-	if len(buyComponents) > 0 {
-		signals = append(signals, sa.createAggregatedTechnicalSignal(symbol, exchange, "buy", buyComponents))
-	}
-	if len(sellComponents) > 0 {
-		signals = append(signals, sa.createAggregatedTechnicalSignal(symbol, exchange, "sell", sellComponents))
-	}
-
-	if len(signals) == 0 && stackResult.OverallSignal != indicators.SignalHold {
-		overallAction := string(stackResult.OverallSignal)
-		overallComponent := SignalComponent{
+	if len(components) == 0 {
+		components = []SignalComponent{{
 			Indicator:   "stack_overall",
 			Description: fmt.Sprintf("Stack overall %s (confidence %.2f)", stackResult.OverallSignal, stackResult.Confidence.InexactFloat64()),
 			Confidence:  stackResult.Confidence,
 			Strength:    stackResult.Confidence.InexactFloat64(),
-		}
-		signals = append(signals, sa.createAggregatedTechnicalSignal(symbol, exchange, overallAction, []SignalComponent{overallComponent}))
+		}}
 	}
 
-	return signals
+	return []*AggregatedSignal{sa.createAggregatedTechnicalSignal(symbol, exchange, overallAction, components)}
 }
 
 // createAggregatedTechnicalSignal combines multiple signal components into a single aggregated signal.
