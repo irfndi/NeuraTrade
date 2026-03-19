@@ -258,6 +258,24 @@ func TestNormalizeScalpingBacktestConfig(t *testing.T) {
 	}
 }
 
+func TestBuildHistoricalSignalsFromOHLCV_SpreadUsesEffectiveSpreadEstimate(t *testing.T) {
+	signals := buildHistoricalSignalsFromOHLCV([]scalpingOHLCVPoint{
+		{
+			symbol:    "BTC/USDT",
+			exchange:  "binance",
+			open:      100,
+			high:      100.12,
+			low:       99.88,
+			close:     100,
+			volume:    1000,
+			timestamp: time.Unix(0, 0).UTC(),
+		},
+	})
+
+	require.Len(t, signals, 1)
+	assert.InDelta(t, 0.03, signals[0].Signal.BidAskSpread, 1e-9)
+}
+
 func TestClampFloat(t *testing.T) {
 	tests := []struct {
 		name     string

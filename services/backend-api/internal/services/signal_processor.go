@@ -846,8 +846,8 @@ func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]T
 		timestamps = append(timestamps, ts)
 	}
 
-	if len(prices) < 20 {
-		return nil, fmt.Errorf("insufficient OHLCV data for %s: need 20, got %d", symbol, len(prices))
+	if len(prices) < 50 {
+		return nil, fmt.Errorf("insufficient OHLCV data for %s: need 50, got %d", symbol, len(prices))
 	}
 
 	return []TechnicalSignalInput{
