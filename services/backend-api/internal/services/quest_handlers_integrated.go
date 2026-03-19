@@ -133,8 +133,8 @@ func (h *IntegratedQuestHandlers) setAutonomyStoreWithInit(ctx context.Context, 
 	if store == nil {
 		if h.db == nil {
 			h.autonomyStoreMu.Lock()
+			defer h.autonomyStoreMu.Unlock()
 			h.autonomyStore = nil
-			h.autonomyStoreMu.Unlock()
 			h.clearScalpingAutonomyCoordinator()
 			return fmt.Errorf("autonomy store requires sql db")
 		}
