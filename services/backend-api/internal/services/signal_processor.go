@@ -16,6 +16,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/observability"
 )
 
+var errInsufficientOHLCVData = errors.New("insufficient ohlcv data")
+
 // SignalProcessorConfig holds configuration settings for the signal processor service.
 type SignalProcessorConfig struct {
 	BatchSize            int                  `json:"batch_size"`
@@ -573,7 +575,8 @@ func (sp *SignalProcessor) getRecentMarketDataFromDB(symbol, exchange string, du
 		FROM market_data md
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
 		JOIN exchanges e ON md.exchange_id = e.id
-		WHERE tp.symbol = $1 AND e.ccxt_id = $2 AND md.timestamp >= $3
+		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
+		WHERE tp.symbol = $1 AND COALESCE(ce.ccxt_id, e.ccxt_id, e.name) = $2 AND md.timestamp >= $3
 		ORDER BY md.timestamp DESC
 		LIMIT 100
 	`
@@ -714,10 +717,21 @@ func (sp *SignalProcessor) processSignal(data models.MarketData) ProcessingResul
 	// Generate technical signals
 	technicalSignals, err := sp.generateTechnicalSignals(data)
 	if err != nil {
-		_ = fmt.Sprintf("Technical signal generation failed: %v", err)
-		result.Error = fmt.Errorf("technical signal generation failed: %w", err)
-		result.ProcessingTime = time.Since(startTime)
-		return result
+		if errors.Is(err, errInsufficientOHLCVData) {
+			if sp.logger != nil {
+				sp.logger.WithError(err).WithFields(map[string]interface{}{
+					"symbol":          symbol,
+					"trading_pair_id": data.TradingPairID,
+					"exchange_id":     data.ExchangeID,
+				}).Warn("Skipping technical signals for this data point due to limited OHLCV history")
+			}
+			technicalSignals = nil
+		} else {
+			_ = fmt.Sprintf("Technical signal generation failed: %v", err)
+			result.Error = fmt.Errorf("technical signal generation failed: %w", err)
+			result.ProcessingTime = time.Since(startTime)
+			return result
+		}
 	}
 
 	// Aggregate signals
@@ -810,6 +824,9 @@ func (sp *SignalProcessor) getArbitrageOpportunities(symbol string) ([]models.Ar
 		}
 		opportunities = append(opportunities, opp)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate arbitrage opportunities: %w", err)
+	}
 
 	return opportunities, nil
 }
@@ -882,7 +899,7 @@ func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]T
 		minOHLCV = 50
 	}
 	if len(prices) < minOHLCV {
-		return nil, fmt.Errorf("insufficient OHLCV data for %s: need %d, got %d", symbol, minOHLCV, len(prices))
+		return nil, fmt.Errorf("%w for %s: need %d, got %d", errInsufficientOHLCVData, symbol, minOHLCV, len(prices))
 	}
 
 	return []TechnicalSignalInput{
@@ -1149,7 +1166,7 @@ func (sp *SignalProcessor) getActiveTradingPairs() ([]tradingPairWithExchange, e
 		pairs = append(pairs, p)
 	}
 	if err := rows.Err(); err != nil {
-		return pairs, fmt.Errorf("signal_processor: failed reading active trading pairs rows: %w", err)
+		return nil, fmt.Errorf("signal_processor: failed reading active trading pairs rows: %w", err)
 	}
 
 	return pairs, nil
