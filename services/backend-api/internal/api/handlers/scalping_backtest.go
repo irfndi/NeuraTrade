@@ -100,6 +100,7 @@ type ScalpingBacktestTrade struct {
 	TradeID             string    `json:"trade_id,omitempty"`
 	SignalID            string    `json:"signal_id,omitempty"`
 	Symbol              string    `json:"symbol"`
+	Exchange            string    `json:"exchange"`
 	Side                string    `json:"side"`
 	Size                string    `json:"size"`
 	Notional            string    `json:"notional"`
@@ -485,14 +486,15 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 	summary := serviceSummaryToAPI(result.Summary)
 
 	type signalLookupKey struct {
-		symbol string
-		time   time.Time
+		symbol   string
+		exchange string
+		time     time.Time
 	}
 	tradeLookup := make(map[signalLookupKey]string)
 	signals := make([]ScalpingBacktestSignal, 0, len(result.Signals))
 	for _, s := range result.Signals {
 		id := uuid.NewString()
-		lookupKey := signalLookupKey{s.Symbol, s.Timestamp}
+		lookupKey := signalLookupKey{s.Symbol, s.Exchange, s.Timestamp}
 		if _, exists := tradeLookup[lookupKey]; !exists {
 			tradeLookup[lookupKey] = id
 		}
@@ -500,7 +502,7 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 			SignalID:         id,
 			Timestamp:        s.Timestamp,
 			Symbol:           s.Symbol,
-			Exchange:         result.Config.Exchange,
+			Exchange:         s.Exchange,
 			Regime:           s.Regime,
 			RegimeVolatility: s.RegimeVolatility,
 			FunnelStage:      s.FunnelStage,
@@ -517,8 +519,9 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 	for _, t := range result.Trades {
 		holdDuration := int(t.ExitTime.Sub(t.EntryTime).Seconds())
 		trade := ScalpingBacktestTrade{
-			SignalID:            tradeLookup[signalLookupKey{t.Symbol, t.EntryTime}],
+			SignalID:            tradeLookup[signalLookupKey{t.Symbol, t.Exchange, t.EntryTime}],
 			Symbol:              t.Symbol,
+			Exchange:            t.Exchange,
 			Side:                t.Side,
 			Size:                t.Size.String(),
 			Notional:            t.Notional.String(),

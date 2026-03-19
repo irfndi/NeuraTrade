@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -320,6 +322,47 @@ func TestMapPointToHistoricalSignal(t *testing.T) {
 	assert.Equal(t, 1.25, signal.Signal.PriceChange24h)
 	assert.InDelta(t, 50.0, signal.Signal.RangePosition24h, 1e-9)
 	assert.InDelta(t, 0.0, signal.Signal.OrderBookImbalance, 1e-9)
+}
+
+func TestBuildHistoricalSignalsFromOHLCV_SeparatesExchangeSeriesAndUses24hReference(t *testing.T) {
+	base := time.Unix(0, 0).UTC()
+	signals := buildHistoricalSignalsFromOHLCV([]scalpingOHLCVPoint{
+		{symbol: "BTC/USDT", exchange: "binance", open: 100, high: 101, low: 99, close: 100, volume: 10, timestamp: base},
+		{symbol: "BTC/USDT", exchange: "bybit", open: 200, high: 201, low: 199, close: 200, volume: 12, timestamp: base},
+		{symbol: "BTC/USDT", exchange: "binance", open: 109, high: 111, low: 108, close: 110, volume: 14, timestamp: base.Add(24 * time.Hour)},
+		{symbol: "BTC/USDT", exchange: "bybit", open: 189, high: 191, low: 188, close: 190, volume: 16, timestamp: base.Add(24 * time.Hour)},
+	}, DefaultScalpingBacktestSpreadMultiplier)
+
+	require.Len(t, signals, 4)
+	require.Equal(t, "binance", signals[0].Exchange)
+	require.Equal(t, "bybit", signals[1].Exchange)
+	require.Equal(t, "binance", signals[2].Exchange)
+	require.Equal(t, "bybit", signals[3].Exchange)
+	assert.Equal(t, 0.0, signals[0].Signal.PriceChange24h)
+	assert.Equal(t, 0.0, signals[1].Signal.PriceChange24h)
+	assert.InDelta(t, 10.0, signals[2].Signal.PriceChange24h, 1e-9)
+	assert.InDelta(t, -5.0, signals[3].Signal.PriceChange24h, 1e-9)
+}
+
+func TestResolveTradingPairIDs_AllowsInactiveHistoricalSymbols(t *testing.T) {
+	mockPool, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mockPool.Close()
+
+	engine := NewScalpingBacktestEngine(database.NewMockDBPool(mockPool), ScalpingBacktestConfig{})
+	mockPool.ExpectQuery("SELECT id, symbol FROM trading_pairs").
+		WillReturnRows(
+			pgxmock.NewRows([]string{"id", "symbol"}).
+				AddRow(1, "BTC/USDT").
+				AddRow(2, "FTM/USDT"),
+		)
+
+	ids, err := engine.resolveTradingPairIDs(context.Background(), map[string]struct{}{
+		normalizeSymbolForComparison("FTM/USDT"): {},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{2}, ids)
+	assert.NoError(t, mockPool.ExpectationsWereMet())
 }
 
 func TestClampFloat(t *testing.T) {

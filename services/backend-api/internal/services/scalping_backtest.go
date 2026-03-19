@@ -90,6 +90,7 @@ type ScalpingBacktestSummary struct {
 type ScalpingBacktestSignal struct {
 	Timestamp        time.Time
 	Symbol           string
+	Exchange         string
 	Signal           MarketSignal
 	Regime           string
 	RegimeVolatility string
@@ -100,6 +101,7 @@ type ScalpingBacktestSignal struct {
 
 type ScalpingBacktestTrade struct {
 	Symbol        string
+	Exchange      string
 	Side          string
 	Size          decimal.Decimal
 	Notional      decimal.Decimal
@@ -146,6 +148,7 @@ type ReasonCount struct {
 type HistoricalSignal struct {
 	Timestamp time.Time
 	Symbol    string
+	Exchange  string
 	Signal    MarketSignal
 }
 
@@ -253,6 +256,7 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 		recorded := ScalpingBacktestSignal{
 			Timestamp:        signal.Timestamp,
 			Symbol:           signal.Symbol,
+			Exchange:         signal.Exchange,
 			Signal:           signal.Signal,
 			Regime:           evaluation.Regime,
 			RegimeVolatility: e.classifyRegimeVolatility(signal.Signal),
@@ -502,6 +506,7 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 
 	trade := ScalpingBacktestTrade{
 		Symbol:        signal.Symbol,
+		Exchange:      signal.Exchange,
 		Side:          decision.Action,
 		Size:          quantity,
 		Notional:      notional,
@@ -992,7 +997,7 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	defer rows.Close()
 
 	signals := make([]HistoricalSignal, 0)
-	lastPriceBySymbol := map[string]float64{}
+	lastPriceBySeries := map[string]float64{}
 	for rows.Next() {
 		var symbol string
 		var exchange string
@@ -1020,11 +1025,11 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 		}
 
 		imbalance := 0.0
-		norm := normalizeSymbolForComparison(symbol)
-		if last, ok := lastPriceBySymbol[norm]; ok && price > 0 {
+		seriesKey := scalpingSeriesKey(symbol, exchange)
+		if last, ok := lastPriceBySeries[seriesKey]; ok && price > 0 {
 			imbalance = clampFloat((price-last)/price, -1, 1)
 		}
-		lastPriceBySymbol[norm] = price
+		lastPriceBySeries[seriesKey] = price
 
 		rangePos := 50.0
 		if high24 > low24 {
@@ -1039,6 +1044,7 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 		signals = append(signals, HistoricalSignal{
 			Timestamp: ts,
 			Symbol:    symbol,
+			Exchange:  exchange,
 			Signal: MarketSignal{
 				Symbol:             symbol,
 				Price:              price,
@@ -1066,7 +1072,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 
 	bySymbol := make(map[string][]scalpingOHLCVPoint)
 	for _, point := range points {
-		norm := normalizeSymbolForComparison(point.symbol)
+		norm := scalpingSeriesKey(point.symbol, point.exchange)
 		bySymbol[norm] = append(bySymbol[norm], point)
 	}
 
@@ -1083,8 +1089,8 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 
 		for i, point := range series {
 			priceChange24h := 0.0
-			if i > 0 && series[i-1].close > 0 {
-				priceChange24h = ((point.close - series[i-1].close) / series[i-1].close) * 100
+			if windowMetrics[i].HasReferenceClose && windowMetrics[i].ReferenceClose24h > 0 {
+				priceChange24h = ((point.close - windowMetrics[i].ReferenceClose24h) / windowMetrics[i].ReferenceClose24h) * 100
 			}
 
 			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier))
@@ -1093,6 +1099,9 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 
 	sort.Slice(signals, func(i, j int) bool {
 		if signals[i].Timestamp.Equal(signals[j].Timestamp) {
+			if signals[i].Symbol == signals[j].Symbol {
+				return signals[i].Exchange < signals[j].Exchange
+			}
 			return signals[i].Symbol < signals[j].Symbol
 		}
 		return signals[i].Timestamp.Before(signals[j].Timestamp)
@@ -1102,9 +1111,11 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 }
 
 type scalping24hWindowMetrics struct {
-	High24h   float64
-	Low24h    float64
-	Volume24h float64
+	High24h           float64
+	Low24h            float64
+	Volume24h         float64
+	ReferenceClose24h float64
+	HasReferenceClose bool
 }
 
 func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMetrics {
@@ -1115,6 +1126,7 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 	metrics := make([]scalping24hWindowMetrics, len(series))
 	for i, point := range series {
 		windowStart := point.timestamp.Add(-24 * time.Hour)
+		oldestIncludedIdx := -1
 		metrics[i] = scalping24hWindowMetrics{
 			High24h: point.high,
 			Low24h:  point.low,
@@ -1123,6 +1135,7 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 			if series[j].timestamp.Before(windowStart) {
 				break
 			}
+			oldestIncludedIdx = j
 			if series[j].high > metrics[i].High24h {
 				metrics[i].High24h = series[j].high
 			}
@@ -1130,6 +1143,13 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 				metrics[i].Low24h = series[j].low
 			}
 			metrics[i].Volume24h += math.Max(series[j].volume, 0)
+		}
+		if oldestIncludedIdx >= 0 && series[oldestIncludedIdx].close > 0 {
+			has24hReference := oldestIncludedIdx > 0 || !series[oldestIncludedIdx].timestamp.After(windowStart)
+			if has24hReference {
+				metrics[i].ReferenceClose24h = series[oldestIncludedIdx].close
+				metrics[i].HasReferenceClose = true
+			}
 		}
 	}
 
@@ -1150,6 +1170,7 @@ func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWin
 	return HistoricalSignal{
 		Timestamp: point.timestamp,
 		Symbol:    point.symbol,
+		Exchange:  point.exchange,
 		Signal: MarketSignal{
 			Symbol:             point.symbol,
 			Price:              point.close,
@@ -1197,7 +1218,7 @@ func (e *ScalpingBacktestEngine) resolveTradingPairIDs(ctx context.Context, symb
 		return nil, nil
 	}
 
-	rows, err := e.db.Query(ctx, `SELECT id, symbol FROM trading_pairs WHERE is_active = true`)
+	rows, err := e.db.Query(ctx, `SELECT id, symbol FROM trading_pairs`)
 	if err != nil {
 		return nil, fmt.Errorf("query trading pairs: %w", err)
 	}
@@ -1219,6 +1240,15 @@ func (e *ScalpingBacktestEngine) resolveTradingPairIDs(ctx context.Context, symb
 	}
 
 	return ids, nil
+}
+
+func scalpingSeriesKey(symbol, exchange string) string {
+	normSymbol := normalizeSymbolForComparison(symbol)
+	normExchange := strings.TrimSpace(strings.ToLower(exchange))
+	if normExchange == "" {
+		return normSymbol
+	}
+	return normSymbol + "@" + normExchange
 }
 
 func (e *ScalpingBacktestEngine) updateGateStats(gateName string, result GateResult, symbol, regime string) {
