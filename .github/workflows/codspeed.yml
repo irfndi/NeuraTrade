@@ -1,0 +1,47 @@
+name: CodSpeed
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - development
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  codspeed:
+    name: Run benchmarks
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/backend-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+          cache: true
+          cache-dependency-path: services/backend-api/go.sum
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: walltime
+          run: >
+            cd services/backend-api &&
+            go test -bench=. -run=^$
+            ./test/benchmark/
+            ./internal/crypto/
+            ./internal/utils/
+            ./internal/database/
