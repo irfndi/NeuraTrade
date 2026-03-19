@@ -270,7 +270,7 @@ func TestBuildHistoricalSignalsFromOHLCV_SpreadUsesEffectiveSpreadEstimate(t *te
 			volume:    1000,
 			timestamp: time.Unix(0, 0).UTC(),
 		},
-	})
+	}, backtestSpreadMultiplier)
 
 	require.Len(t, signals, 1)
 	assert.InDelta(t, 0.03, signals[0].Signal.BidAskSpread, 1e-9)
