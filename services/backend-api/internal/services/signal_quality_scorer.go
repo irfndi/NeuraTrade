@@ -637,16 +637,21 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 		SELECT e.name,
 		       COALESCE(SUM(md.volume_24h), 0),
 		       COUNT(md.id),
-		       MAX(md.timestamp),
+		       COALESCE(MAX(md.timestamp), NOW()),
 		       COUNT(DISTINCT md.trading_pair_id)
 		FROM exchanges e
-		LEFT JOIN market_data md ON md.exchange_id = e.id AND md.timestamp > NOW() - INTERVAL '24 hours'
+		LEFT JOIN (
+			SELECT DISTINCT ON (exchange_id, trading_pair_id)
+			       id, volume_24h, timestamp, exchange_id, trading_pair_id
+			FROM market_data
+			WHERE timestamp > NOW() - INTERVAL '24 hours'
+			ORDER BY exchange_id, trading_pair_id, timestamp DESC
+		) md ON md.exchange_id = e.id
 		GROUP BY e.name
 	`
 	rows, err := sqs.db.Query(ctx, query)
 	if err != nil {
-		sqs.logger.WithError(err).Warn("Failed to query exchange statistics from DB, using defaults")
-		return sqs.defaultExchangeStats(), nil
+		return nil, fmt.Errorf("query exchange statistics: %w", err)
 	}
 	defer rows.Close()
 
@@ -658,21 +663,21 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 		var pairCount int
 
 		if err := rows.Scan(&name, &totalVolume, &dataPointCount, &lastUpdate, &pairCount); err != nil {
-			sqs.logger.WithError(err).Warn("Failed to scan exchange statistics row")
+			sqs.logger.WithError(err).Warn("Failed to scan exchange statistics row, skipping")
 			continue
 		}
 
 		stats[name] = &ExchangeMetrics{
 			TotalTrades:      dataPointCount,
 			AvgDailyVolume:   totalVolume,
-			AvgSpread:        decimal.NewFromFloat(0.001),
-			AvgLatency:       100 * time.Millisecond,
-			UptimePercentage: decimal.NewFromFloat(0.995),
+			AvgSpread:        decimal.Zero,
+			AvgLatency:       0,
+			UptimePercentage: decimal.Zero,
 			DataGaps:         0,
 			LastDataUpdate:   lastUpdate,
 			SupportedPairs:   pairCount,
-			APIResponseTime:  100 * time.Millisecond,
-			ErrorRate:        decimal.NewFromFloat(0.002),
+			APIResponseTime:  0,
+			ErrorRate:        decimal.Zero,
 		}
 	}
 
