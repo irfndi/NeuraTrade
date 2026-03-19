@@ -10,6 +10,21 @@ const ALERT_TYPES = [
   { type: "risk", label: "Risk Events", emoji: "⚠️" },
 ];
 
+/**
+ * Register Telegram commands for managing user alerts.
+ *
+ * Registers handlers for the following commands:
+ * - /alerts: lists the caller's alerts or shows available alert types and creation example when none exist.
+ * - /alert_add: creates a new alert with a type and minimum profit (defaults applied and type validated).
+ * - /alert_toggle: toggles an alert's active state by alert id prefix.
+ * - /alert_del: deletes an alert by alert id prefix.
+ *
+ * Handlers communicate results and errors back to the user via chat replies and use the provided
+ * BackendApiClient to perform backend operations.
+ *
+ * @param bot - The Telegram Bot instance to attach command handlers to.
+ * @param api - Backend API client used to list, create, update, and delete alerts.
+ */
 export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
   bot.command("alerts", async (ctx) => {
     const userId = String(ctx.from?.id);

@@ -1803,7 +1803,13 @@ func prettyPrint(data interface{}) {
 	fmt.Println(string(prettyJSON))
 }
 
-// configInit initializes the configuration file with defaults
+// configInit initializes the default configuration file at $HOME/.neuratrade/config.json.
+// It creates the ~/.neuratrade directory if needed, populates a sensible default configuration
+// (server, database, redis, ccxt, telegram, ai, security, features, logging), and injects
+// values provided via CLI flags `--binance-key`, `--binance-secret`, `--telegram-token`,
+// and `--ai-key`. The file is written with restricted permissions. If a non-empty configuration
+// file already exists, the function leaves it intact and prints guidance instead of overwriting.
+// An error is returned for directory creation, JSON marshaling, or file write failures.
 func configInit(cCtx *cli.Context) error {
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
 

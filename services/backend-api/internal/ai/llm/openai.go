@@ -26,6 +26,9 @@ type OpenAIClient struct {
 	logger     *zap.Logger
 }
 
+// NewOpenAIClient creates and returns a configured OpenAIClient.
+// It uses config values and applies sensible defaults: if HTTPTimeout is zero it uses OpenAIDefaultTimeout, and if BaseURL is empty it uses OpenAIDefaultBaseURL.
+// The returned client contains a sanitized ClientConfig (propagating Provider, APIKey, BaseURL, HTTPTimeout, MaxRetries, and ModelInfo), an http.Client configured with the resolved timeout, and a no-op logger.
 func NewOpenAIClient(config ClientConfig) *OpenAIClient {
 	timeout := config.HTTPTimeout
 	if timeout == 0 {
