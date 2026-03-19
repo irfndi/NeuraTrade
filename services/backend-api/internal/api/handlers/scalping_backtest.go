@@ -707,21 +707,22 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO scalping_backtest_trades (
-				id, run_id, signal_id, symbol, side, size, notional,
+				id, run_id, signal_id, symbol, exchange, side, size, notional,
 				entry_price, exit_price, entry_timestamp, exit_timestamp,
 				pnl, pnl_pct, fees, outcome, exit_reason,
 				regime_at_entry, regime_at_exit, hold_duration_seconds
 			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7,
-				$8, $9, $10, $11,
-				$12, $13, $14, $15, $16,
-				$17, $18, $19
+				$1, $2, $3, $4, $5, $6, $7, $8,
+				$9, $10, $11, $12,
+				$13, $14, $15, $16, $17,
+				$18, $19, $20
 			)
 		`,
 			tradeID,
 			runID,
 			signalID,
 			trade.Symbol,
+			trade.Exchange,
 			trade.Side,
 			trade.Size,
 			trade.Notional,
