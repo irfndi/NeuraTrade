@@ -106,6 +106,13 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Test 2: Signal Quality Assessment
 	t.Run("SignalQualityAssessment", func(t *testing.T) {
+		qualityScorer.cacheExpiry = time.Time{}
+		mockPool.ExpectQuery("WITH latest_market_data AS").
+			WithArgs(pgxmock.AnyArg()).
+			WillReturnRows(pgxmock.NewRows([]string{"name", "total_volume", "data_point_count", "last_update", "pair_count"}).
+				AddRow("binance", decimal.NewFromFloat(1500000), int64(25), time.Now(), 5).
+				AddRow("coinbase", decimal.NewFromFloat(900000), int64(15), time.Now(), 3))
+
 		// Create test signal quality input
 		qualityInput := &SignalQualityInput{
 			SignalType:      "technical",
@@ -139,7 +146,9 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Test 3: Signal Aggregation
 	t.Run("SignalAggregation", func(t *testing.T) {
-		mockPool.ExpectQuery("SELECT e.name,").
+		qualityScorer.cacheExpiry = time.Time{}
+		mockPool.ExpectQuery("WITH latest_market_data AS").
+			WithArgs(pgxmock.AnyArg()).
 			WillReturnRows(pgxmock.NewRows([]string{"name", "total_volume", "data_point_count", "last_update", "pair_count"}).
 				AddRow("binance", decimal.NewFromFloat(1500000), int64(25), time.Now(), 5).
 				AddRow("coinbase", decimal.NewFromFloat(900000), int64(15), time.Now(), 3))
