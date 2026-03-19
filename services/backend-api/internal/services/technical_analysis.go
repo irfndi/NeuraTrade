@@ -873,7 +873,7 @@ func (tas *TechnicalAnalysisService) fetchPriceData(ctx context.Context, symbol,
 	query := `SELECT open, high, low, close, volume, timestamp FROM ohlcv_candles
 			 WHERE trading_pair_id IN (SELECT id FROM trading_pairs WHERE symbol = $1)
 			 AND exchange_id IN (SELECT id FROM exchanges WHERE name = $2)
-			 ORDER BY timestamp ASC LIMIT 200`
+			 ORDER BY timestamp DESC LIMIT 200`
 	rows, err := tas.db.Query(ctx, query, symbol, exchange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OHLCV candles: %w", err)
@@ -898,7 +898,17 @@ func (tas *TechnicalAnalysisService) fetchPriceData(ctx context.Context, symbol,
 	}
 
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("error iterating OHLCV candle rows: %w", rowsErr)
+		return nil, fmt.Errorf("error iterating OHLCV rows for %s: %w", symbol, rowsErr)
+	}
+
+	// Reverse to chronological order (queried DESC for newest, indicators need ASC)
+	for i, j := 0, len(closeVals)-1; i < j; i, j = i+1, j-1 {
+		openVals[i], openVals[j] = openVals[j], openVals[i]
+		highVals[i], highVals[j] = highVals[j], highVals[i]
+		lowVals[i], lowVals[j] = lowVals[j], lowVals[i]
+		closeVals[i], closeVals[j] = closeVals[j], closeVals[i]
+		volVals[i], volVals[j] = volVals[j], volVals[i]
+		timestamps[i], timestamps[j] = timestamps[j], timestamps[i]
 	}
 
 	if len(closeVals) == 0 {

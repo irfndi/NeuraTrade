@@ -23,6 +23,7 @@ const (
 	// approximate a bid-ask spread. The factor 8 was derived empirically from
 	// typical crypto market microstructure where the observable range is
 	// roughly 8x the effective spread on liquid pairs.
+	// Used as the default when SpreadMultiplier is not set in config.
 	backtestSpreadMultiplier = 8
 )
 
@@ -48,6 +49,7 @@ type ScalpingBacktestConfig struct {
 	MinExpectancyEdge  float64
 	MaxCapitalPct      float64
 	DefaultHoldPeriod  time.Duration
+	SpreadMultiplier   float64
 }
 
 type ScalpingBacktestResult struct {
@@ -764,6 +766,9 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.DefaultHoldPeriod <= 0 {
 		config.DefaultHoldPeriod = DefaultScalpingBacktestHoldPeriod
 	}
+	if config.SpreadMultiplier <= 0 {
+		config.SpreadMultiplier = backtestSpreadMultiplier
+	}
 	if len(config.Symbols) == 0 {
 		config.Symbols = defaultScalpingBacktestUniverse()
 	}
@@ -928,13 +933,6 @@ func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
 		if scanErr := rows.Scan(&p.symbol, &p.exchange, &p.open, &p.high, &p.low, &p.close, &p.volume, &p.timestamp); scanErr != nil {
 			return nil, fmt.Errorf("scan ohlcv signal row: %w", scanErr)
 		}
-		if !exchangeMatches(e.config.Exchange, p.exchange) {
-			continue
-		}
-		norm := normalizeSymbolForComparison(p.symbol)
-		if _, ok := symbolFilter[norm]; !ok {
-			continue
-		}
 		if p.close <= 0 {
 			continue
 		}
@@ -944,7 +942,24 @@ func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
 		return nil, fmt.Errorf("iterate ohlcv signals: %w", err)
 	}
 
-	return buildHistoricalSignalsFromOHLCV(points), nil
+	filtered := points
+	if len(symbolFilter) > 0 || strings.TrimSpace(e.config.Exchange) != "" {
+		filtered = make([]scalpingOHLCVPoint, 0, len(points))
+		for _, point := range points {
+			if len(symbolFilter) > 0 {
+				norm := normalizeSymbolForComparison(point.symbol)
+				if _, ok := symbolFilter[norm]; !ok {
+					continue
+				}
+			}
+			if strings.TrimSpace(e.config.Exchange) != "" && !exchangeMatches(e.config.Exchange, point.exchange) {
+				continue
+			}
+			filtered = append(filtered, point)
+		}
+	}
+
+	return buildHistoricalSignalsFromOHLCV(filtered, e.config.SpreadMultiplier), nil
 }
 
 func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
@@ -1046,7 +1061,7 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	return signals, nil
 }
 
-func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint) []HistoricalSignal {
+func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultiplier float64) []HistoricalSignal {
 	if len(points) == 0 {
 		return nil
 	}
@@ -1058,6 +1073,10 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint) []HistoricalSi
 	}
 
 	signals := make([]HistoricalSignal, 0, len(points))
+	multiplier := spreadMultiplier
+	if multiplier <= 0 {
+		multiplier = backtestSpreadMultiplier
+	}
 	for _, series := range bySymbol {
 		sort.Slice(series, func(i, j int) bool {
 			return series[i].timestamp.Before(series[j].timestamp)
@@ -1083,7 +1102,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint) []HistoricalSi
 
 			spreadPct := 0.0
 			if point.close > 0 && point.high > point.low {
-				spreadPct = ((point.high - point.low) / point.close) * 100 / backtestSpreadMultiplier
+				spreadPct = ((point.high - point.low) / point.close) * 100 / multiplier
 			}
 
 			imbalance := 0.0

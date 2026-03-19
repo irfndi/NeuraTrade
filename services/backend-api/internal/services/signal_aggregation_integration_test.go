@@ -93,6 +93,7 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 		err := signalProcessor.processSignalBatch()
 		assert.NoError(t, err, "Signal processing should not fail (even with empty data)")
+		assert.NoError(t, mockPool.ExpectationsWereMet(), "all expected SQL queries should be executed")
 
 		// Verify metrics were updated (even if empty run)
 		metrics := signalProcessor.GetMetrics()
