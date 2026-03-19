@@ -27,6 +27,7 @@ type SignalProcessorConfig struct {
 	RetryAttempts        int                  `json:"retry_attempts"`
 	RetryDelay           time.Duration        `json:"retry_delay"`
 	TimeoutDuration      time.Duration        `json:"timeout_duration"`
+	MinOHLCVCount        int                  `json:"min_ohlcv_count"`
 	SignalTTL            time.Duration        `json:"signal_ttl"`
 	NotificationEnabled  bool                 `json:"notification_enabled"`
 	CircuitBreakerConfig CircuitBreakerConfig `json:"circuit_breaker"`
@@ -116,6 +117,7 @@ func NewSignalProcessor(
 		RetryAttempts:       3,
 		RetryDelay:          30 * time.Second,
 		TimeoutDuration:     30 * time.Second, // Default timeout for database operations
+		MinOHLCVCount:       0,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -821,7 +823,7 @@ func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]T
 		SELECT open, high, low, close, volume, timestamp
 		FROM ohlcv_candles
 		WHERE trading_pair_id = $1 AND exchange_id = $2
-		ORDER BY timestamp ASC
+		ORDER BY timestamp DESC
 		LIMIT 200
 	`
 	ctx, cancel := context.WithTimeout(sp.ctx, sp.config.TimeoutDuration)
@@ -833,7 +835,7 @@ func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]T
 	}
 	defer rows.Close()
 
-	var prices, volumes []decimal.Decimal
+	var prices, volumes, opens, highs, lows []decimal.Decimal
 	var timestamps []time.Time
 	for rows.Next() {
 		var o, h, l, c, v decimal.Decimal
@@ -842,12 +844,32 @@ func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]T
 			return nil, fmt.Errorf("failed to scan OHLCV candle: %w", err)
 		}
 		prices = append(prices, c)
+		opens = append(opens, o)
+		highs = append(highs, h)
+		lows = append(lows, l)
 		volumes = append(volumes, v)
 		timestamps = append(timestamps, ts)
 	}
 
-	if len(prices) < 50 {
-		return nil, fmt.Errorf("insufficient OHLCV data for %s: need 50, got %d", symbol, len(prices))
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating OHLCV rows for %s: %w", symbol, err)
+	}
+
+	for i, j := 0, len(prices)-1; i < j; i, j = i+1, j-1 {
+		prices[i], prices[j] = prices[j], prices[i]
+		opens[i], opens[j] = opens[j], opens[i]
+		highs[i], highs[j] = highs[j], highs[i]
+		lows[i], lows[j] = lows[j], lows[i]
+		volumes[i], volumes[j] = volumes[j], volumes[i]
+		timestamps[i], timestamps[j] = timestamps[j], timestamps[i]
+	}
+
+	minOHLCV := sp.config.MinOHLCVCount
+	if minOHLCV <= 0 {
+		minOHLCV = 50
+	}
+	if len(prices) < minOHLCV {
+		return nil, fmt.Errorf("insufficient OHLCV data for %s: need %d, got %d", symbol, minOHLCV, len(prices))
 	}
 
 	return []TechnicalSignalInput{
@@ -855,6 +877,9 @@ func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]T
 			Symbol:     symbol,
 			Exchange:   exchangeName,
 			Prices:     prices,
+			Opens:      opens,
+			Highs:      highs,
+			Lows:       lows,
 			Volumes:    volumes,
 			Timestamps: timestamps,
 		},
@@ -1086,9 +1111,10 @@ type tradingPairWithExchange struct {
 
 func (sp *SignalProcessor) getActiveTradingPairs() ([]tradingPairWithExchange, error) {
 	query := `
-		SELECT tp.symbol, e.name
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name)
 		FROM trading_pairs tp
 		JOIN exchanges e ON e.id = tp.exchange_id
+		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
 		WHERE tp.is_active = true
 		ORDER BY tp.symbol
 	`
