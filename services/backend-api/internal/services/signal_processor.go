@@ -682,6 +682,12 @@ func (sp *SignalProcessor) processSignal(data models.MarketData) ProcessingResul
 	// Get exchange name from database
 	exchangeName, err := sp.getExchangeName(data.ExchangeID)
 	if err != nil {
+		if sp.logger != nil {
+			sp.logger.WithError(err).WithFields(map[string]interface{}{
+				"exchange_id": data.ExchangeID,
+				"symbol":      symbol,
+			}).Warn("Failed to resolve exchange name, using fallback value")
+		}
 		exchangeName = "unknown"
 	}
 
@@ -816,6 +822,13 @@ func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]T
 
 	exchangeName, err := sp.getExchangeName(data.ExchangeID)
 	if err != nil {
+		if sp.logger != nil {
+			sp.logger.WithError(err).WithFields(map[string]interface{}{
+				"exchange_id":     data.ExchangeID,
+				"trading_pair_id": data.TradingPairID,
+				"symbol":          symbol,
+			}).Warn("Failed to resolve exchange name for technical signal generation, using empty fallback")
+		}
 		exchangeName = ""
 	}
 
@@ -1111,7 +1124,7 @@ type tradingPairWithExchange struct {
 
 func (sp *SignalProcessor) getActiveTradingPairs() ([]tradingPairWithExchange, error) {
 	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name)
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name)
 		FROM trading_pairs tp
 		JOIN exchanges e ON e.id = tp.exchange_id
 		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
@@ -1135,5 +1148,9 @@ func (sp *SignalProcessor) getActiveTradingPairs() ([]tradingPairWithExchange, e
 		}
 		pairs = append(pairs, p)
 	}
-	return pairs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return pairs, fmt.Errorf("signal_processor: failed reading active trading pairs rows: %w", err)
+	}
+
+	return pairs, nil
 }
