@@ -3,10 +3,15 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/observability"
+)
+
+const (
+	telegramMaxMessageUnits = 3900
 )
 
 // NotifyQuestProgress sends a quest progress notification to a user
@@ -52,9 +57,9 @@ func (ns *NotificationService) formatQuestProgressMessage(progress QuestProgress
 	}
 
 	lines := []string{
-		fmt.Sprintf("%s **Quest Progress Update**", statusEmoji),
+		fmt.Sprintf("%s Quest Progress Update", statusEmoji),
 		"",
-		fmt.Sprintf("**%s**", progress.QuestName),
+		progress.QuestName,
 		fmt.Sprintf("Progress: %d/%d (%d%%)", progress.Current, progress.Target, progress.Percent),
 	}
 
@@ -67,7 +72,7 @@ func (ns *NotificationService) formatQuestProgressMessage(progress QuestProgress
 	progressBar := ns.generateProgressBar(progress.Percent, 10)
 	lines = append(lines, "", progressBar)
 
-	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+	return joinNotificationLines(lines)
 }
 
 // NotifyRiskEvent sends a risk event notification to a user
@@ -116,24 +121,29 @@ func (ns *NotificationService) formatRiskEventMessage(event RiskEventNotificatio
 	}
 
 	lines := []string{
-		fmt.Sprintf("%s **Risk Event Alert**", severityEmoji),
+		fmt.Sprintf("%s Risk Event Alert", severityEmoji),
 		"",
-		fmt.Sprintf("**Type:** %s", event.EventType),
-		fmt.Sprintf("**Severity:** %s", event.Severity),
+		fmt.Sprintf("Type: %s", event.EventType),
+		fmt.Sprintf("Severity: %s", event.Severity),
 		"",
 		event.Message,
 	}
 
 	if len(event.Details) > 0 {
-		lines = append(lines, "", "**Details:**")
-		for key, value := range event.Details {
-			lines = append(lines, fmt.Sprintf("• %s: %s", key, value))
+		lines = append(lines, "", "Details:")
+		keys := make([]string, 0, len(event.Details))
+		for key := range event.Details {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			lines = append(lines, fmt.Sprintf("• %s: %s", key, event.Details[key]))
 		}
 	}
 
-	lines = append(lines, "", fmt.Sprintf("_Time: %s_", time.Now().UTC().Format(time.RFC3339)))
+	lines = append(lines, "", fmt.Sprintf("Time: %s", time.Now().UTC().Format(time.RFC3339)))
 
-	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+	return joinNotificationLines(lines)
 }
 
 // NotifyFundMilestone sends a fund milestone notification to a user
@@ -167,9 +177,9 @@ func (ns *NotificationService) NotifyFundMilestone(ctx context.Context, chatID i
 // formatFundMilestoneMessage formats a fund milestone notification message
 func (ns *NotificationService) formatFundMilestoneMessage(milestone FundMilestoneNotification) string {
 	lines := []string{
-		"💰 **Fund Milestone Reached!**",
+		"💰 Fund Milestone Reached!",
 		"",
-		fmt.Sprintf("**%s**", milestone.Achievement),
+		milestone.Achievement,
 		"",
 		fmt.Sprintf("Current: %s", milestone.CurrentValue),
 		fmt.Sprintf("Target: %s", milestone.TargetValue),
@@ -179,7 +189,7 @@ func (ns *NotificationService) formatFundMilestoneMessage(milestone FundMileston
 	progressBar := ns.generateProgressBar(milestone.PercentReached, 20)
 	lines = append(lines, "", progressBar)
 
-	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+	return joinNotificationLines(lines)
 }
 
 // NotifyAIReasoning sends an AI reasoning notification to a user
@@ -225,13 +235,11 @@ func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int
 	return nil
 }
 
-// formatAIReasoningMessage formats an AI reasoning notification message
 func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNotification) string {
 	confidenceKnown := reasoning.ConfidenceKnown
 	if !confidenceKnown &&
 		strings.TrimSpace(reasoning.ReasonCategory) == "" &&
 		strings.TrimSpace(reasoning.HoldCategory) == "" {
-		// Backward-compatible fallback for legacy callers.
 		confidenceKnown = true
 	}
 	category := strings.TrimSpace(reasoning.ReasonCategory)
@@ -249,10 +257,38 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		category = "execution_unavailable"
 	}
 
+	reasonsToShow := len(reasoning.Reasons)
+	lines := buildAIReasoningMessageLines(reasoning, category, confidenceKnown, reasonsToShow)
+	mostCompactLines := lines
+
+	message := formatNotificationCodeBlock(lines)
+	if telegramMessageUnits(message) <= telegramMaxMessageUnits {
+		return message
+	}
+
+	for reasonsToShow >= 0 {
+		candidateLines := buildAIReasoningMessageLines(reasoning, category, confidenceKnown, reasonsToShow)
+		mostCompactLines = candidateLines
+		message = formatNotificationCodeBlock(candidateLines)
+		if telegramMessageUnits(message) <= telegramMaxMessageUnits {
+			return message
+		}
+
+		reasonsToShow--
+	}
+
+	if reasoning.Action != "" {
+		return formatNotificationCodeBlockWithTailPriority(mostCompactLines[:len(mostCompactLines)-2], mostCompactLines[len(mostCompactLines)-2:], telegramMaxMessageUnits)
+	}
+
+	return formatNotificationCodeBlockWithLimit(mostCompactLines, telegramMaxMessageUnits)
+}
+
+func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category string, confidenceKnown bool, maxReasons int) []string {
 	lines := []string{
-		"🤖 **AI Trading Decision**",
+		"🤖 AI Trading Decision",
 		"",
-		fmt.Sprintf("**Type:** %s", reasoning.DecisionType),
+		fmt.Sprintf("Type: %s", reasoning.DecisionType),
 	}
 
 	if confidenceKnown {
@@ -266,42 +302,141 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		default:
 			confidenceEmoji = "🔴"
 		}
-		lines = append(lines, fmt.Sprintf("**Confidence:** %s %d%%", confidenceEmoji, confidencePercent))
+		lines = append(lines, fmt.Sprintf("Confidence: %s %d%%", confidenceEmoji, confidencePercent))
 	} else {
-		lines = append(lines, "**Confidence:** ⚪ N/A (runtime-degraded)")
+		lines = append(lines, "Confidence: ⚪ N/A (runtime-degraded)")
 	}
 
 	lines = append(lines,
 		"",
-		fmt.Sprintf("**Summary:** %s", reasoning.Summary),
+		fmt.Sprintf("Summary: %s", reasoning.Summary),
 	)
 	if category != "" {
-		lines = append(lines, fmt.Sprintf("**Reason Category:** %s", category))
+		lines = append(lines, fmt.Sprintf("Reason Category: %s", category))
 	}
 	if strings.TrimSpace(reasoning.UnblockCondition) != "" {
-		lines = append(lines, fmt.Sprintf("**Unblock Condition:** %s", strings.TrimSpace(reasoning.UnblockCondition)))
+		lines = append(lines, fmt.Sprintf("Unblock Condition: %s", strings.TrimSpace(reasoning.UnblockCondition)))
 	}
 	if strings.TrimSpace(reasoning.AttemptWindowProgress) != "" {
-		lines = append(lines, fmt.Sprintf("**Attempt Window:** %s", strings.TrimSpace(reasoning.AttemptWindowProgress)))
+		lines = append(lines, fmt.Sprintf("Attempt Window: %s", strings.TrimSpace(reasoning.AttemptWindowProgress)))
 	}
 
-	if len(reasoning.Reasons) > 0 {
-		lines = append(lines, "", "**Key Factors:**")
-		for i, reason := range reasoning.Reasons {
-			if i < 5 {
-				lines = append(lines, fmt.Sprintf("• %s", reason))
-			}
-		}
-		if len(reasoning.Reasons) > 5 {
-			lines = append(lines, fmt.Sprintf("• ... and %d more factors", len(reasoning.Reasons)-5))
-		}
-	}
-
+	lines = append(lines, buildAIReasoningFactorLines(reasoning.Reasons, maxReasons)...)
 	if reasoning.Action != "" {
-		lines = append(lines, "", fmt.Sprintf("**Recommended Action:** %s", reasoning.Action))
+		lines = append(lines, "", fmt.Sprintf("Recommended Action: %s", reasoning.Action))
 	}
 
-	return fmt.Sprintf("```\n%s\n```", joinNotificationLines(lines))
+	return lines
+}
+
+func buildAIReasoningFactorLines(reasons []string, maxReasons int) []string {
+	if len(reasons) == 0 {
+		return nil
+	}
+
+	limit := len(reasons)
+	if maxReasons < limit {
+		limit = maxReasons
+	}
+
+	factorLines := []string{"", "Key Factors:"}
+	for i := 0; i < limit; i++ {
+		factorLines = append(factorLines, fmt.Sprintf("• %s", reasons[i]))
+	}
+
+	omitted := len(reasons) - limit
+	if omitted > 0 {
+		if limit > 0 {
+			factorLines = append(factorLines, fmt.Sprintf("• ... and %d more factors", omitted))
+		} else {
+			factorLines = append(factorLines, fmt.Sprintf("• %d factors omitted due to message length", omitted))
+		}
+	}
+
+	return factorLines
+}
+
+func formatNotificationCodeBlock(lines []string) string {
+	return joinNotificationLines(lines)
+}
+
+func formatNotificationCodeBlockWithLimit(lines []string, maxUnits int) string {
+	message := formatNotificationCodeBlock(lines)
+	if telegramMessageUnits(message) <= maxUnits {
+		return message
+	}
+
+	truncated := truncateToTelegramUnitsWithEllipsis(joinNotificationLines(lines), maxUnits)
+
+	return truncated
+}
+
+func formatNotificationCodeBlockWithTailPriority(lines, tail []string, maxUnits int) string {
+	tailContent := joinNotificationLines(tail)
+	tailUnits := telegramMessageUnits(tailContent)
+	if tailUnits >= maxUnits {
+		return truncateToTelegramUnitsWithEllipsis(tailContent, maxUnits)
+	}
+
+	bodyLimit := maxUnits - tailUnits
+	if len(lines) > 0 && len(tail) > 0 {
+		bodyLimit--
+	}
+	bodyContent := truncateToTelegramUnitsWithEllipsis(joinNotificationLines(lines), bodyLimit)
+	if bodyContent == "" {
+		return tailContent
+	}
+
+	return bodyContent + "\n" + tailContent
+}
+
+func truncateToTelegramUnitsWithEllipsis(message string, maxUnits int) string {
+	truncated := truncateToTelegramUnits(message, maxUnits)
+	if truncated == message {
+		return truncated
+	}
+
+	ellipsisUnits := telegramMessageUnits("...")
+	if maxUnits <= ellipsisUnits {
+		return truncateToTelegramUnits("...", maxUnits)
+	}
+
+	return truncateToTelegramUnits(message, maxUnits-ellipsisUnits) + "..."
+
+}
+
+func telegramMessageUnits(message string) int {
+	units := 0
+	for _, r := range message {
+		if r > 0xFFFF {
+			units += 2
+		} else {
+			units++
+		}
+	}
+	return units
+}
+
+func truncateToTelegramUnits(message string, maxUnits int) string {
+	if maxUnits <= 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	units := 0
+	for _, r := range message {
+		runeUnits := 1
+		if r > 0xFFFF {
+			runeUnits = 2
+		}
+		if units+runeUnits > maxUnits {
+			break
+		}
+		builder.WriteRune(r)
+		units += runeUnits
+	}
+
+	return builder.String()
 }
 
 func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {

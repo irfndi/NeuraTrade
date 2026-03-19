@@ -111,33 +111,33 @@ func (ns *NotificationService) formatTechnicalSignalMessage(signals []TechnicalS
 		topSignals = signals[:3]
 	}
 
-	header := "📊 *Technical Analysis Signals*\n\n"
+	header := "📊 Technical Analysis Signals\n\n"
 	message := header
 	message += fmt.Sprintf("Found %d high-confidence signals:\n\n", len(signals))
 
 	for i, signal := range topSignals {
-		message += fmt.Sprintf("📊 *TA SIGNAL: %s*\n", signal.Symbol)
-		message += fmt.Sprintf("🎯 *Signal:* %s\n", signal.SignalText)
-		message += fmt.Sprintf("💲 *Current Price:* $%.4f\n", signal.CurrentPrice)
-		message += fmt.Sprintf("📈 *Entry:* %s\n", signal.EntryRange)
+		message += fmt.Sprintf("📊 TA SIGNAL: %s\n", signal.Symbol)
+		message += fmt.Sprintf("Signal: %s\n", signal.SignalText)
+		message += fmt.Sprintf("Current Price: $%.4f\n", signal.CurrentPrice)
+		message += fmt.Sprintf("Entry: %s\n", signal.EntryRange)
 
 		// Add targets
 		for j, target := range signal.Targets {
-			message += fmt.Sprintf("🎯 *Target %d:* $%.4f (%.1f%% profit)\n", j+1, target.Price, target.Profit)
+			message += fmt.Sprintf("Target %d: $%.4f (%.1f%% profit)\n", j+1, target.Price, target.Profit)
 		}
 
 		// Add stop loss
-		message += fmt.Sprintf("🛑 *Stop Loss:* $%.4f (%.1f%% risk)\n", signal.StopLoss.Price, signal.StopLoss.Risk)
-		message += fmt.Sprintf("📊 *Risk/Reward:* %s\n", signal.RiskReward)
+		message += fmt.Sprintf("Stop Loss: $%.4f (%.1f%% risk)\n", signal.StopLoss.Price, signal.StopLoss.Risk)
+		message += fmt.Sprintf("Risk/Reward: %s\n", signal.RiskReward)
 
 		// Add exchanges
 		if len(signal.Exchanges) > 0 {
 			exchangeList := strings.Join(signal.Exchanges, ", ")
-			message += fmt.Sprintf("🏪 *Exchanges:* %s\n", exchangeList)
+			message += fmt.Sprintf("Exchanges: %s\n", exchangeList)
 		}
 
-		message += fmt.Sprintf("⏰ *Timeframe:* %s\n", signal.Timeframe)
-		message += fmt.Sprintf("🎯 *Confidence:* %.1f%%\n", signal.Confidence*100)
+		message += fmt.Sprintf("Timeframe: %s\n", signal.Timeframe)
+		message += fmt.Sprintf("Confidence: %.1f%%\n", signal.Confidence*100)
 
 		if i < len(topSignals)-1 {
 			message += "\n---\n\n"
@@ -148,7 +148,7 @@ func (ns *NotificationService) formatTechnicalSignalMessage(signals []TechnicalS
 		message += fmt.Sprintf("\n...and %d more signals\n\n", len(signals)-3)
 	}
 
-	message += "\n⚡ *Trade wisely!* Always manage your risk and position size.\n\n"
+	message += "\n⚡ Trade wisely! Always manage your risk and position size.\n\n"
 	message += "Use /signals to see all current technical signals\n"
 	message += "Use /stop to pause these alerts"
 
@@ -331,15 +331,15 @@ func (ns *NotificationService) formatArbitrageMessage(opportunities []ArbitrageO
 	}
 
 	// Determine message header based on opportunity type
-	header := "🚨 *Arbitrage Alert!*\n\n"
+	header := "🚨 Arbitrage Alert!\n\n"
 	if len(opportunities) > 0 {
 		switch opportunities[0].OpportunityType {
 		case "arbitrage":
-			header = "🚀 *True Arbitrage Opportunities*\n\n"
+			header = "🚀 True Arbitrage Opportunities\n\n"
 		case "technical":
-			header = "📊 *Technical Analysis Signals*\n\n"
+			header = "📊 Technical Analysis Signals\n\n"
 		case "ai_generated":
-			header = "🤖 *AI-Generated Opportunities*\n\n"
+			header = "🤖 AI-Generated Opportunities\n\n"
 		}
 	}
 
@@ -347,8 +347,8 @@ func (ns *NotificationService) formatArbitrageMessage(opportunities []ArbitrageO
 	message += fmt.Sprintf("Found %d profitable opportunities:\n\n", len(opportunities))
 
 	for i, opp := range topOpportunities {
-		message += fmt.Sprintf("*%d. %s*\n", i+1, opp.Symbol)
-		message += fmt.Sprintf("💰 Profit: *%.2f%%*\n", opp.ProfitPercent)
+		message += fmt.Sprintf("%d. %s\n", i+1, opp.Symbol)
+		message += fmt.Sprintf("💰 Profit: %.2f%%\n", opp.ProfitPercent)
 		message += fmt.Sprintf("📈 Buy: %s @ $%.4f\n", opp.BuyExchange, opp.BuyPrice)
 		message += fmt.Sprintf("📉 Sell: %s @ $%.4f\n", opp.SellExchange, opp.SellPrice)
 		message += "\n"
@@ -358,7 +358,7 @@ func (ns *NotificationService) formatArbitrageMessage(opportunities []ArbitrageO
 		message += fmt.Sprintf("...and %d more opportunities\n\n", len(opportunities)-3)
 	}
 
-	message += "⚡ *Act fast!* These opportunities may disappear quickly.\n\n"
+	message += "⚡ Act fast! These opportunities may disappear quickly.\n\n"
 	message += "Use /opportunities to see all current opportunities\n"
 	message += "Use /stop to pause these alerts"
 
@@ -383,7 +383,7 @@ func (ns *NotificationService) formatEnhancedArbitrageMessage(signal *Aggregated
 	validityMinutes, _ := metadata["validity_minutes"].(int)
 
 	// Build the message
-	message := fmt.Sprintf("🔄 *ARBITRAGE ALERT: %s*\n\n", signal.Symbol)
+	message := fmt.Sprintf("🔄 ARBITRAGE ALERT: %s\n\n", signal.Symbol)
 
 	// Profit range
 	if profitRange != nil {
@@ -394,10 +394,10 @@ func (ns *NotificationService) formatEnhancedArbitrageMessage(signal *Aggregated
 		baseAmount, _ := profitRange["base_amount"].(decimal.Decimal)
 
 		if minPercent.Equal(maxPercent) {
-			message += fmt.Sprintf("💰 Profit: *%.2f%%* ($%.0f on $%.0f)\n",
+			message += fmt.Sprintf("💰 Profit: %.2f%% ($%.0f on $%.0f)\n",
 				minPercent.InexactFloat64(), minDollar.InexactFloat64(), baseAmount.InexactFloat64())
 		} else {
-			message += fmt.Sprintf("💰 Profit: *%.2f%% - %.2f%%* ($%.0f - $%.0f on $%.0f)\n",
+			message += fmt.Sprintf("💰 Profit: %.2f%% - %.2f%% ($%.0f - $%.0f on $%.0f)\n",
 				minPercent.InexactFloat64(), maxPercent.InexactFloat64(),
 				minDollar.InexactFloat64(), maxDollar.InexactFloat64(), baseAmount.InexactFloat64())
 		}
@@ -433,22 +433,22 @@ func (ns *NotificationService) formatEnhancedArbitrageMessage(signal *Aggregated
 
 	// Validity and volume info
 	if validityMinutes > 0 {
-		message += fmt.Sprintf("⏰ Valid for: *%d minutes*\n", validityMinutes)
+		message += fmt.Sprintf("⏰ Valid for: %d minutes\n", validityMinutes)
 	}
 
 	if !minVolume.IsZero() {
-		message += fmt.Sprintf("🎯 Min Volume: *$%.0f*\n", minVolume.InexactFloat64())
+		message += fmt.Sprintf("🎯 Min Volume: $%.0f\n", minVolume.InexactFloat64())
 	}
 
 	// Additional info
 	if opportunityCount > 1 {
-		message += fmt.Sprintf("📊 Opportunities: *%d*\n", opportunityCount)
+		message += fmt.Sprintf("📊 Opportunities: %d\n", opportunityCount)
 	}
 
-	message += fmt.Sprintf("🎯 Confidence: *%.1f%%*\n", signal.Confidence.Mul(decimal.NewFromFloat(100)).InexactFloat64())
+	message += fmt.Sprintf("🎯 Confidence: %.1f%%\n", signal.Confidence.Mul(decimal.NewFromFloat(100)).InexactFloat64())
 
-	message += "\n⚡ *Act fast!* Arbitrage opportunities disappear quickly.\n"
-	message += "💡 *Min Volume* helps filter out low-liquidity fake signals."
+	message += "\n⚡ Act fast! Arbitrage opportunities disappear quickly.\n"
+	message += "💡 Min Volume helps filter out low-liquidity fake signals."
 
 	return message
 }

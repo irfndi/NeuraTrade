@@ -1866,9 +1866,10 @@ func configInit(cCtx *cli.Context) error {
 			"api_base_url":     "http://localhost:8080",
 		},
 		"ai": map[string]interface{}{
-			"provider":     "minimax",
+			"provider":     "zhipu",
+			"model":        "glm-5-turbo",
 			"api_key":      aiKey,
-			"base_url":     "https://api.minimax.chat/v1",
+			"base_url":     "https://api.z.ai/api/paas/v4",
 			"daily_budget": "10.00",
 		},
 		"security": map[string]interface{}{
@@ -1884,7 +1885,6 @@ func configInit(cCtx *cli.Context) error {
 			"full_mode":                    true,
 			"run_migrations":               true,
 			"enable_binance":               binanceKey != "",
-			"enable_minimax":               aiKey != "",
 		},
 		"logging": map[string]interface{}{
 			"level":       "info",

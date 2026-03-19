@@ -129,6 +129,8 @@ type RedisConfig struct {
 	PoolTimeout int `mapstructure:"pool_timeout"`
 	// DefaultTTL is the default TTL for cached items in seconds.
 	DefaultTTL int `mapstructure:"default_ttl"`
+	// MaxRetries is the maximum number of command retries on network errors.
+	MaxRetries int `mapstructure:"max_retries"`
 }
 
 // CCXTConfig defines settings for interacting with the CCXT microservice.
@@ -504,6 +506,7 @@ func setDefaults() {
 	viper.SetDefault("redis.port", 6379)
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
+	viper.SetDefault("redis.max_retries", 3)
 
 	// CCXT defaults for native deployment. Explicit env vars still take precedence.
 	viper.SetDefault("ccxt.service_url", "http://localhost:3001")
@@ -608,10 +611,10 @@ func setDefaults() {
 	viper.SetDefault("indicators.provider", "talib")
 
 	// AI config defaults
-	viper.SetDefault("ai.provider", "minimax")
-	viper.SetDefault("ai.model", "")
+	viper.SetDefault("ai.provider", "zhipu")
+	viper.SetDefault("ai.model", "glm-5-turbo")
 	viper.SetDefault("ai.api_key", "")
-	viper.SetDefault("ai.base_url", "https://api.minimax.chat/v1")
+	viper.SetDefault("ai.base_url", "https://api.z.ai/api/paas/v4")
 	viper.SetDefault("ai.temperature", 0.7)
 	viper.SetDefault("ai.max_tokens", 4096)
 	viper.SetDefault("ai.min_confidence", 0.7)

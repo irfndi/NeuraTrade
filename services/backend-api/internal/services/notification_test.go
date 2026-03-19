@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func TestNotificationService_formatArbitrageMessage(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(opportunities)
-	assert.Contains(t, message, "🚀 *True Arbitrage Opportunities*")
+	assert.Contains(t, message, "🚀 True Arbitrage Opportunities")
 	assert.Contains(t, message, "BTC/USDT")
 	assert.Contains(t, message, "1.00%")
 	assert.Contains(t, message, "binance")
@@ -91,7 +92,7 @@ func TestNotificationService_formatArbitrageMessage(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(technicalOpps)
-	assert.Contains(t, message, "📊 *Technical Analysis Signals*")
+	assert.Contains(t, message, "📊 Technical Analysis Signals")
 	assert.Contains(t, message, "ETH/USDT")
 
 	// Test with AI-generated opportunity
@@ -108,7 +109,7 @@ func TestNotificationService_formatArbitrageMessage(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(aiOpps)
-	assert.Contains(t, message, "🤖 *AI-Generated Opportunities*")
+	assert.Contains(t, message, "🤖 AI-Generated Opportunities")
 	assert.Contains(t, message, "ADA/USDT")
 
 	// Test with more than 3 opportunities
@@ -236,7 +237,7 @@ func TestNotificationService_formatArbitrageMessage_EdgeCases(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(emptyOpp)
-	assert.Contains(t, message, "🚨 *Arbitrage Alert!*") // Default header
+	assert.Contains(t, message, "🚨 Arbitrage Alert!") // Default header
 	assert.Contains(t, message, "Found 1 profitable opportunities")
 
 	// Test with unknown opportunity type
@@ -253,7 +254,7 @@ func TestNotificationService_formatArbitrageMessage_EdgeCases(t *testing.T) {
 	}
 
 	message = ns.formatArbitrageMessage(unknownOpp)
-	assert.Contains(t, message, "🚨 *Arbitrage Alert!*") // Default header for unknown type
+	assert.Contains(t, message, "🚨 Arbitrage Alert!") // Default header for unknown type
 	assert.Contains(t, message, "TEST/USDT")
 }
 
@@ -452,7 +453,7 @@ func TestNotificationService_formatTechnicalSignalMessage(t *testing.T) {
 	}
 
 	message = ns.formatTechnicalSignalMessage(signals)
-	assert.Contains(t, message, "📊 *Technical Analysis Signals*")
+	assert.Contains(t, message, "📊 Technical Analysis Signals")
 	assert.Contains(t, message, "BTC/USDT")
 	assert.Contains(t, message, "RSI oversold")
 	assert.Contains(t, message, "85.0%")
@@ -792,13 +793,13 @@ func TestNotificationService_formatAggregatedArbitrageMessage(t *testing.T) {
 	}
 
 	message = ns.formatAggregatedArbitrageMessage(signals)
-	assert.Contains(t, message, "🚀 *Aggregated Arbitrage Opportunities*")
+	assert.Contains(t, message, "🚀 Aggregated Arbitrage Opportunities")
 	assert.Contains(t, message, "BTC/USDT")
 	assert.Contains(t, message, "ETH/USDT")
 	assert.Contains(t, message, "2.50%")
 	assert.Contains(t, message, "1.80%")
-	assert.Contains(t, message, "0.8%")
-	// Both confidence values might round to 0.8% due to InexactFloat64()
+	assert.Contains(t, message, "85.0%")
+	assert.Contains(t, message, "75.0%")
 }
 
 func TestNotificationService_formatAggregatedTechnicalMessage(t *testing.T) {
@@ -840,7 +841,7 @@ func TestNotificationService_formatAggregatedTechnicalMessage(t *testing.T) {
 	}
 
 	message = ns.formatAggregatedTechnicalMessage(signals)
-	assert.Contains(t, message, "📊 *Aggregated Technical Analysis*")
+	assert.Contains(t, message, "📊 Aggregated Technical Analysis")
 	assert.Contains(t, message, "BTC/USDT")
 	assert.Contains(t, message, "ETH/USDT")
 	assert.Contains(t, message, "strong")
@@ -1236,11 +1237,11 @@ func TestNotificationService_formatArbitrageMessage_AllTypes(t *testing.T) {
 		oppType        string
 		expectedHeader string
 	}{
-		{"arbitrage", "🚀 *True Arbitrage Opportunities*"},
-		{"technical", "📊 *Technical Analysis Signals*"},
-		{"ai_generated", "🤖 *AI-Generated Opportunities*"},
-		{"", "🚨 *Arbitrage Alert!*"},
-		{"unknown", "🚨 *Arbitrage Alert!*"},
+		{"arbitrage", "🚀 True Arbitrage Opportunities"},
+		{"technical", "📊 Technical Analysis Signals"},
+		{"ai_generated", "🤖 AI-Generated Opportunities"},
+		{"", "🚨 Arbitrage Alert!"},
+		{"unknown", "🚨 Arbitrage Alert!"},
 	}
 
 	for _, tc := range types {
@@ -1369,7 +1370,7 @@ func TestNotificationService_TechnicalSignalMessage_AllScenarios(t *testing.T) {
 			name:    "Single buy signal",
 			signals: []TechnicalSignalNotification{{Symbol: "BTC/USDT", Action: "buy", SignalText: "RSI oversold", Confidence: 0.85}},
 			expectedParts: []string{
-				"📊 *Technical Analysis Signals*",
+				"📊 Technical Analysis Signals",
 				"BTC/USDT",
 				"RSI oversold",
 				"85.0%",
@@ -1379,7 +1380,7 @@ func TestNotificationService_TechnicalSignalMessage_AllScenarios(t *testing.T) {
 			name:    "Sell signal with targets",
 			signals: []TechnicalSignalNotification{{Symbol: "ETH/USDT", Action: "sell", SignalText: "MACD crossover", Confidence: 0.75, Targets: []Target{{Price: 3000.0, Profit: 5.0}}}},
 			expectedParts: []string{
-				"📊 *Technical Analysis Signals*",
+				"📊 Technical Analysis Signals",
 				"ETH/USDT",
 				"MACD crossover",
 			},
@@ -1388,7 +1389,7 @@ func TestNotificationService_TechnicalSignalMessage_AllScenarios(t *testing.T) {
 			name:    "Signal with stop loss",
 			signals: []TechnicalSignalNotification{{Symbol: "ADA/USDT", Action: "buy", SignalText: "Support bounce", Confidence: 0.65, StopLoss: StopLoss{Price: 0.45, Risk: 2.0}}},
 			expectedParts: []string{
-				"📊 *Technical Analysis Signals*",
+				"📊 Technical Analysis Signals",
 				"ADA/USDT",
 			},
 		},
@@ -2126,9 +2127,10 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 	ns := NewNotificationService(nil, nil, "", "", "")
 
 	tests := []struct {
-		name      string
-		reasoning AIReasoningNotification
-		contains  []string
+		name        string
+		reasoning   AIReasoningNotification
+		contains    []string
+		notContains []string
 	}{
 		{
 			name: "high confidence decision",
@@ -2181,7 +2183,7 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 			},
 		},
 		{
-			name: "many reasons truncated to 5",
+			name: "all reasons shown without truncation",
 			reasoning: AIReasoningNotification{
 				DecisionType: "complex_decision",
 				Summary:      "Multi-factor analysis",
@@ -2197,8 +2199,69 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 				},
 			},
 			contains: []string{
+				"Reason 1",
+				"Reason 2",
+				"Reason 3",
+				"Reason 4",
 				"Reason 5",
-				"and 2 more factors",
+				"Reason 6",
+				"Reason 7",
+			},
+		},
+		{
+			name: "no key factors header when reasons empty",
+			reasoning: AIReasoningNotification{
+				DecisionType: "market_analysis",
+				Summary:      "No extra factors available",
+				Confidence:   0.51,
+				Reasons:      nil,
+				Action:       "Hold",
+			},
+			contains: []string{
+				"No extra factors available",
+				"Recommended Action",
+			},
+			notContains: []string{
+				"Key Factors:",
+			},
+		},
+		{
+			name: "truncates key factors safely and preserves action",
+			reasoning: AIReasoningNotification{
+				DecisionType: "trade_entry",
+				Summary:      strings.Repeat("summary ", 240),
+				Confidence:   0.82,
+				Reasons: func() []string {
+					reasons := make([]string, 20)
+					for i := 0; i < 20; i++ {
+						reasons[i] = fmt.Sprintf("Factor %d %s", i+1, strings.Repeat("detail ", 90))
+					}
+					return reasons
+				}(),
+				Action: "Execute with tight risk controls",
+			},
+			contains: []string{
+				"Recommended Action: Execute with tight risk controls",
+				"... and",
+			},
+			notContains: []string{
+				"Factor 20",
+			},
+		},
+		{
+			name: "runtime degraded confidence path",
+			reasoning: AIReasoningNotification{
+				DecisionType:    "market_analysis",
+				Summary:         "Model runtime fallback activated",
+				ConfidenceKnown: false,
+				ReasonCategory:  "execution_unavailable",
+				Reasons:         []string{"Runtime unavailable"},
+			},
+			contains: []string{
+				"Confidence: ⚪ N/A (runtime-degraded)",
+			},
+			notContains: []string{
+				"0%",
 			},
 		},
 	}
@@ -2209,8 +2272,72 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 			for _, expected := range tt.contains {
 				assert.Contains(t, message, expected, "Message should contain %s", expected)
 			}
+			if tt.notContains != nil {
+				for _, notExpected := range tt.notContains {
+					assert.NotContains(t, message, notExpected, "Message should NOT contain %s", notExpected)
+				}
+			}
 		})
 	}
+
+	message := ns.formatAIReasoningMessage(AIReasoningNotification{
+		DecisionType: "trade_entry",
+		Summary:      strings.Repeat("summary ", 260),
+		Confidence:   0.80,
+		Reasons: func() []string {
+			reasons := make([]string, 25)
+			for i := 0; i < 25; i++ {
+				reasons[i] = fmt.Sprintf("Long factor %d %s", i+1, strings.Repeat("reason ", 120))
+			}
+			return reasons
+		}(),
+		Action: "Proceed cautiously",
+	})
+	assert.LessOrEqual(t, telegramMessageUnits(message), telegramMaxMessageUnits)
+
+	fallbackReasoning := AIReasoningNotification{
+		DecisionType: "trade_entry",
+		Summary:      strings.Repeat("summary ", 520),
+		Confidence:   0.80,
+		Reasons: func() []string {
+			reasons := make([]string, 20)
+			for i := 0; i < 20; i++ {
+				reasons[i] = fmt.Sprintf("Long factor %d %s", i+1, strings.Repeat("reason ", 180))
+			}
+			return reasons
+		}(),
+		Action: "Proceed cautiously",
+	}
+	fallbackMessage := ns.formatAIReasoningMessage(fallbackReasoning)
+	assert.LessOrEqual(t, telegramMessageUnits(fallbackMessage), telegramMaxMessageUnits)
+	assert.Contains(t, fallbackMessage, "AI Trading Decision")
+	assert.Contains(t, fallbackMessage, "Summary:")
+	assert.Contains(t, fallbackMessage, "Recommended Action: Proceed cautiously")
+	assert.Contains(t, fallbackMessage, "...")
+	assert.NotContains(t, fallbackMessage, "Long factor 1")
+
+	foundSixteenFactorBoundary := false
+	for repeat := 1; repeat <= 240; repeat++ {
+		candidate := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType: "trade_entry",
+			Summary:      "Boundary search",
+			Confidence:   0.80,
+			Reasons: func() []string {
+				reasons := make([]string, 17)
+				for i := 0; i < 17; i++ {
+					reasons[i] = fmt.Sprintf("Factor %d %s", i+1, strings.Repeat("detail ", repeat))
+				}
+				return reasons
+			}(),
+		})
+
+		if strings.Contains(candidate, "Factor 16") && !strings.Contains(candidate, "Factor 17") {
+			foundSixteenFactorBoundary = true
+			assert.LessOrEqual(t, telegramMessageUnits(candidate), telegramMaxMessageUnits)
+			break
+		}
+	}
+	assert.True(t, foundSixteenFactorBoundary)
 }
 
 // =============================================================================

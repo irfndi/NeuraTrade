@@ -357,10 +357,8 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
             return "runtime_circuit";
           }
           if (
-            entryAttemptBlockReason === "rollout_shadow_block" ||
-            (rolloutGateReasonCurrent &&
-              typeof candidateViableCount === "number" &&
-              candidateViableCount > 0)
+            entryGateType === "rollout_gate" ||
+            (entryGateType === "none" && rolloutGateReasonCurrent)
           ) {
             return "rollout_gate";
           }
@@ -372,7 +370,9 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         if (entryGateReason) {
           lines.push(`• Entry gate reason: ${entryGateReason}`);
         }
-        let blockerReason = entryGateReason || entryAttemptBlockReason || "";
+        // blockerReason is derived ONLY from hard gate priority, not candidate-level rejections.
+        // Candidate rejections (entryAttemptBlockReason) are shown separately below.
+        let blockerReason = entryGateReason || "";
         if (!blockerReason) {
           switch (entryGatePriority) {
             case "risk_lock":
@@ -399,11 +399,17 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
               blockerReason = "recovery clean-cycle gate active";
               break;
             default:
-              blockerReason = "none";
+              blockerReason = "";
               break;
           }
         }
-        lines.push(`• Entry blocker: ${entryGatePriority} (${blockerReason})`);
+        // When no hard gate is active, show just "none" without confusing parenthetical.
+        // Candidate-level rejections are displayed in the separate "Entry attempt block" line.
+        let blockerDisplay = "none";
+        if (entryGatePriority !== "none") {
+          blockerDisplay = `${entryGatePriority}${blockerReason ? ` (${blockerReason})` : ""}`;
+        }
+        lines.push(`• Entry blocker: ${blockerDisplay}`);
         if (rolloutStageCurrent || rolloutStatusCurrent) {
           lines.push(
             `• Rollout: ${rolloutStageCurrent || "unknown"}/${rolloutStatusCurrent || "unknown"}`,

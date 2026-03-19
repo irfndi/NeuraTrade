@@ -988,11 +988,11 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 	var lines []string
 
 	// Header - REAL TRADE
-	lines = append(lines, "✅ **TRADE EXECUTED**")
+	lines = append(lines, "✅ TRADE EXECUTED")
 	lines = append(lines, "")
 
 	// Main info
-	lines = append(lines, fmt.Sprintf("%s **%s %s**", actionEmoji, strings.ToUpper(d.Side), d.Symbol))
+	lines = append(lines, fmt.Sprintf("%s %s %s", actionEmoji, strings.ToUpper(d.Side), d.Symbol))
 	lines = append(lines, "")
 
 	// Trade details table
@@ -1011,7 +1011,7 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 	lines = append(lines, "")
 
 	// Position size
-	lines = append(lines, "💰 **Position Size**")
+	lines = append(lines, "💰 Position Size")
 	lines = append(lines, fmt.Sprintf("   Amount: %.2f USDT", d.AmountUSDT.InexactFloat64()))
 	if d.WalletPercent > 0 {
 		lines = append(lines, fmt.Sprintf("   Wallet: %.1f%%", d.WalletPercent))
@@ -1023,7 +1023,7 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 
 	// Risk management
 	if d.TakeProfit != nil || d.StopLoss != nil {
-		lines = append(lines, "🎯 **Risk Management**")
+		lines = append(lines, "🎯 Risk Management")
 		if d.TakeProfit != nil {
 			tpPercent := 0.0
 			if d.EntryPrice != nil && !d.EntryPrice.IsZero() {
@@ -1054,16 +1054,11 @@ func (e *BitgetOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 
 	// Reasoning
 	if d.Reasoning != "" {
-		maxLen := 150
-		reasoning := d.Reasoning
-		if len(reasoning) > maxLen {
-			reasoning = reasoning[:maxLen] + "..."
-		}
-		lines = append(lines, fmt.Sprintf("💭 _%s_", reasoning))
+		lines = append(lines, fmt.Sprintf("💭 %s", d.Reasoning))
 	}
 
 	lines = append(lines, "")
-	lines = append(lines, fmt.Sprintf("🎫 Order: `%s`", orderID))
+	lines = append(lines, fmt.Sprintf("🎫 Order: %s", orderID))
 
 	return strings.Join(lines, "\n")
 }

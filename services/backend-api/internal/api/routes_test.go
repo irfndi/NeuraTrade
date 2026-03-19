@@ -892,8 +892,7 @@ func TestParseAIProviderChain(t *testing.T) {
 		t.Cleanup(func() { restoreEnv(t, key, old, existed) })
 
 		result := parseAIProviderChain("")
-		assert.Contains(t, result, "zhipu")
-		assert.GreaterOrEqual(t, len(result), 1)
+		assert.Equal(t, []string{"zhipu"}, result)
 	})
 
 	t.Run("uses primary provider", func(t *testing.T) {
@@ -921,5 +920,15 @@ func TestParseAIProviderChain(t *testing.T) {
 		for provider, count := range counts {
 			assert.LessOrEqual(t, count, 1, "provider %s appears %d times", provider, count)
 		}
+	})
+}
+
+func TestProviderBaseURL(t *testing.T) {
+	t.Run("minimax uses anthropic compatible base path", func(t *testing.T) {
+		assert.Equal(t, "https://api.minimax.io/anthropic/v1", providerBaseURL("minimax"))
+	})
+
+	t.Run("zhipu uses configured default base path", func(t *testing.T) {
+		assert.Equal(t, "https://open.bigmodel.cn/api/coding/paas/v4", providerBaseURL("zhipu"))
 	})
 }

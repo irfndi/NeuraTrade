@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestResolveBackendPort_Priority(t *testing.T) {
 	t.Setenv("SERVER_PORT", "8080")
@@ -148,5 +152,56 @@ func TestDeriveGatewayMode(t *testing.T) {
 				t.Fatalf("unexpected mode: got %s want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCleanupGatewayRuntimeArtifacts_RemovesPIDFilesAndMarksStateDown(t *testing.T) {
+	tempDir := t.TempDir()
+	statePath := filepath.Join(tempDir, "gateway-state.json")
+	backendPID := filepath.Join(tempDir, "backend.pid")
+	ccxtPID := filepath.Join(tempDir, "ccxt.pid")
+	telegramPID := filepath.Join(tempDir, "telegram.pid")
+
+	for _, pidFile := range []string{backendPID, ccxtPID, telegramPID} {
+		if err := os.WriteFile(pidFile, []byte("123"), 0644); err != nil {
+			t.Fatalf("write %s: %v", pidFile, err)
+		}
+	}
+
+	writeGatewayState(statePath, gatewayRuntimeState{
+		Mode: "healthy",
+		Services: map[string]gatewayServiceRuntime{
+			"backend":  {Status: "healthy", Endpoint: "http://127.0.0.1:8080/health"},
+			"ccxt":     {Status: "healthy"},
+			"telegram": {Status: "healthy", Endpoint: "http://127.0.0.1:3002/health"},
+		},
+	})
+
+	cleanupGatewayRuntimeArtifacts(statePath, "gateway stopped", backendPID, ccxtPID, telegramPID)
+
+	for _, pidFile := range []string{backendPID, ccxtPID, telegramPID} {
+		if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be removed, got err=%v", pidFile, err)
+		}
+	}
+
+	state, ok := readGatewayState(statePath)
+	if !ok {
+		t.Fatal("expected gateway state to be readable")
+	}
+	if state.Mode != "down" {
+		t.Fatalf("expected mode down, got %s", state.Mode)
+	}
+	for _, serviceName := range []string{"gateway", "backend", "ccxt", "telegram"} {
+		service, exists := state.Services[serviceName]
+		if !exists {
+			t.Fatalf("expected service %s in gateway state", serviceName)
+		}
+		if service.Status != "down" {
+			t.Fatalf("expected %s status down, got %s", serviceName, service.Status)
+		}
+		if service.Detail != "gateway stopped" {
+			t.Fatalf("expected %s detail to be propagated, got %q", serviceName, service.Detail)
+		}
 	}
 }

@@ -29,6 +29,18 @@ func TestNewOpenAIClient(t *testing.T) {
 	}
 }
 
+func TestNewOpenAIClient_CustomProvider(t *testing.T) {
+	client := NewOpenAIClient(ClientConfig{
+		Provider: Provider("zhipu"),
+		APIKey:   "test-key",
+		BaseURL:  "https://api.z.ai/api/paas/v4",
+	})
+
+	if client.Provider() != Provider("zhipu") {
+		t.Fatalf("Expected provider zhipu, got %s", client.Provider())
+	}
+}
+
 func TestOpenAIClientComplete(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
@@ -171,6 +183,38 @@ func TestOpenAIClientToolCalls(t *testing.T) {
 	}
 }
 
+func TestOpenAIClientComplete_UsesConfiguredProviderInErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"Insufficient balance","type":"insufficient_balance","code":"1113"}}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(ClientConfig{
+		Provider: Provider("zhipu"),
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	})
+
+	_, err := client.Complete(context.Background(), &CompletionRequest{
+		Model: "glm-5-turbo",
+		Messages: []Message{
+			{Role: RoleUser, Content: "ping"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	rateErr, ok := err.(RateLimitedError)
+	if !ok {
+		t.Fatalf("expected RateLimitedError, got %T (%v)", err, err)
+	}
+	if rateErr.Provider != Provider("zhipu") {
+		t.Fatalf("expected provider zhipu, got %s", rateErr.Provider)
+	}
+}
+
 func TestNewAnthropicClient(t *testing.T) {
 	config := ClientConfig{
 		APIKey:  "test-key",
@@ -185,6 +229,18 @@ func TestNewAnthropicClient(t *testing.T) {
 
 	if client.Provider() != ProviderAnthropic {
 		t.Errorf("Expected provider %s, got %s", ProviderAnthropic, client.Provider())
+	}
+}
+
+func TestNewAnthropicClient_CustomProvider(t *testing.T) {
+	client := NewAnthropicClient(ClientConfig{
+		Provider: Provider("minimax"),
+		APIKey:   "test-key",
+		BaseURL:  "https://api.minimax.io/anthropic/v1",
+	})
+
+	if client.Provider() != Provider("minimax") {
+		t.Fatalf("Expected provider minimax, got %s", client.Provider())
 	}
 }
 

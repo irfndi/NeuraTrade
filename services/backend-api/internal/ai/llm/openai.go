@@ -39,6 +39,7 @@ func NewOpenAIClient(config ClientConfig) *OpenAIClient {
 
 	return &OpenAIClient{
 		config: ClientConfig{
+			Provider:    config.Provider,
 			APIKey:      config.APIKey,
 			BaseURL:     baseURL,
 			HTTPTimeout: timeout,
@@ -57,6 +58,9 @@ func (c *OpenAIClient) SetLogger(logger *zap.Logger) {
 }
 
 func (c *OpenAIClient) Provider() Provider {
+	if strings.TrimSpace(string(c.config.Provider)) != "" {
+		return c.config.Provider
+	}
 	return ProviderOpenAI
 }
 
@@ -416,7 +420,7 @@ func (c *OpenAIClient) convertResponse(resp *openAIResponse, latencyMs int64) *C
 		return &CompletionResponse{
 			ID:        resp.ID,
 			Model:     resp.Model,
-			Provider:  ProviderOpenAI,
+			Provider:  c.Provider(),
 			Created:   time.Unix(resp.Created, 0),
 			LatencyMs: latencyMs,
 			Usage: UsageMetrics{
@@ -457,7 +461,7 @@ func (c *OpenAIClient) convertResponse(resp *openAIResponse, latencyMs int64) *C
 	return &CompletionResponse{
 		ID:           resp.ID,
 		Model:        resp.Model,
-		Provider:     ProviderOpenAI,
+		Provider:     c.Provider(),
 		Created:      time.Unix(resp.Created, 0),
 		Message:      message,
 		ToolCalls:    toolCalls,
@@ -485,10 +489,11 @@ func (c *OpenAIClient) calculateCost(usage UsageMetrics) CostMetrics {
 }
 
 func (c *OpenAIClient) handleErrorResponse(statusCode int, headers http.Header, body []byte) error {
+	provider := c.Provider()
 	var apiErr openAIError
 	if err := json.Unmarshal(body, &apiErr); err != nil {
 		return ProviderAPIError{
-			Provider:   ProviderOpenAI,
+			Provider:   provider,
 			StatusCode: statusCode,
 			Message:    string(body),
 		}
@@ -500,19 +505,19 @@ func (c *OpenAIClient) handleErrorResponse(statusCode int, headers http.Header, 
 		if retryAfter <= 0 {
 			retryAfter = 30 * time.Second
 		}
-		return RateLimitedError{Provider: ProviderOpenAI, RetryAfter: retryAfter}
+		return RateLimitedError{Provider: provider, RetryAfter: retryAfter}
 	case http.StatusBadRequest:
 		if apiErr.Error.Code == "context_length_exceeded" {
-			return ContextLengthExceededError{Provider: ProviderOpenAI}
+			return ContextLengthExceededError{Provider: provider}
 		}
 	case http.StatusForbidden:
 		if apiErr.Error.Type == "content_filter" {
-			return ContentFilteredError{Provider: ProviderOpenAI, Reason: apiErr.Error.Message}
+			return ContentFilteredError{Provider: provider, Reason: apiErr.Error.Message}
 		}
 	}
 
 	return ProviderAPIError{
-		Provider:   ProviderOpenAI,
+		Provider:   provider,
 		StatusCode: statusCode,
 		Message:    apiErr.Error.Message,
 		Type:       apiErr.Error.Type,

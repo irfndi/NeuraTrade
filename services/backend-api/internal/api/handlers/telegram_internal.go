@@ -809,9 +809,8 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 			case "recovery_gate":
 				entryGateReason = "entry blocked by recovery clean-cycle gate"
 			case "none":
-				if entryAttemptBlockReason != "" {
-					entryGateReason = entryAttemptBlockReason
-				}
+				// Do not merge entryAttemptBlockReason into entryGateReason.
+				// Candidate-level rejections are surfaced separately via entry_attempt_block_reason.
 			}
 		}
 		if entryGateReason == "" && rolloutGateReason != "" && candidateViableCount > 0 {

@@ -15,9 +15,8 @@ import (
 
 func TestAdapter_Send_Smoke(t *testing.T) {
 	type requestBody struct {
-		ChatID    string `json:"chatId"`
-		Text      string `json:"text"`
-		ParseMode string `json:"parseMode"`
+		ChatID string `json:"chatId"`
+		Text   string `json:"text"`
 	}
 
 	var payload requestBody
@@ -26,7 +25,9 @@ func TestAdapter_Send_Smoke(t *testing.T) {
 		require.Equal(t, "/send-message", r.URL.Path)
 		require.Equal(t, "test-api-key", r.Header.Get("X-API-Key"))
 
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		require.NoError(t, decoder.Decode(&payload))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -51,8 +52,7 @@ func TestAdapter_Send_Smoke(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "123456", payload.ChatID)
-	assert.Equal(t, "Markdown", payload.ParseMode)
-	assert.Contains(t, payload.Text, "*Order Filled*")
+	assert.Contains(t, payload.Text, "Order Filled")
 	assert.Contains(t, payload.Text, "Bought BTC")
 	assert.Contains(t, payload.Text, "Exchange: binance")
 }

@@ -35,7 +35,9 @@
   },
 
   "ai": {
-    "provider": "minimax",
+    "provider": "zhipu",
+    "model": "glm-5-turbo",
+    "base_url": "https://api.z.ai/api/paas/v4",
     "api_key": "YOUR_AI_API_KEY_HERE",
     "daily_budget": "10.00"
   },

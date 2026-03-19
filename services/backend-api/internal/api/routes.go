@@ -86,6 +86,15 @@ type llmProviderNodeConfig struct {
 	ModelOverride string
 }
 
+type zapNopServiceLogger struct{}
+
+func (zapNopServiceLogger) WithFields(_ map[string]interface{}) services.Logger {
+	return zapNopServiceLogger{}
+}
+func (zapNopServiceLogger) Info(_ string)  {}
+func (zapNopServiceLogger) Warn(_ string)  {}
+func (zapNopServiceLogger) Error(_ string) {}
+
 func parseAIProviderChain(primary string) []string {
 	primary = strings.ToLower(strings.TrimSpace(primary))
 	if primary == "" {
@@ -94,7 +103,7 @@ func parseAIProviderChain(primary string) []string {
 
 	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
 	if raw == "" {
-		raw = "zhipu,minimax"
+		raw = "zhipu"
 	}
 
 	parts := strings.Split(raw, ",")
@@ -119,7 +128,11 @@ func providerBaseURL(provider string) string {
 	case "anthropic":
 		return "https://api.anthropic.com/v1"
 	case "minimax":
-		return "https://api.minimax.chat/v1"
+		return "https://api.minimax.io/anthropic/v1"
+	case "zai-coding-plan":
+		return "https://api.z.ai/api/coding/paas/v4"
+	case "zai":
+		return "https://api.z.ai/api/paas/v4"
 	case "zhipu":
 		return "https://open.bigmodel.cn/api/coding/paas/v4"
 	case "mlx":
@@ -161,6 +174,7 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 
 func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, maxRetries int) llm.Client {
 	config := llm.ClientConfig{
+		Provider:    llm.Provider(node.Provider),
 		APIKey:      node.APIKey,
 		BaseURL:     node.BaseURL,
 		HTTPTimeout: timeout,
@@ -175,6 +189,9 @@ func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, m
 	case "minimax":
 		// MiniMax exposes an Anthropic-compatible endpoint.
 		return llm.NewAnthropicClient(config)
+	case "zai-coding-plan", "zai":
+		// ZAI (models.dev) exposes an OpenAI-compatible endpoint.
+		return llm.NewOpenAIClient(config)
 	case "zhipu":
 		// Zhipu exposes an OpenAI-compatible endpoint.
 		return llm.NewOpenAIClient(config)
@@ -354,6 +371,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	circuitBreakerHandler := handlers.NewCircuitBreakerHandler(collectorService)
 
 	analysisHandler := handlers.NewAnalysisHandler(db, ccxtService, analyticsService)
+	scalpingBacktestHandler := handlers.NewScalpingBacktestHandler(db)
 
 	// Sentiment handler - initialize with config from environment
 	sentimentConfig := services.DefaultSentimentServiceConfig()
@@ -704,6 +722,19 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 	}
 
+	var shadowRecorder *services.PaperTradeRecorder
+	if db != nil {
+		shadowRecorder = services.NewPaperTradeRecorder(db, zapNopServiceLogger{})
+	}
+	shadowCoordinator := services.NewShadowEvaluationCoordinator(
+		db,
+		nil,
+		nil,
+		shadowRecorder,
+		nil,
+	)
+	integratedHandlers.SetShadowEvaluationCoordinator(shadowCoordinator)
+
 	if sqlDB != nil {
 		tradeMemory, err := services.NewTradeMemoryWithConfig(
 			sqlDB,
@@ -975,6 +1006,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	agentControlHandler := handlers.NewAgentControlHandler(integratedHandlers.AutonomyCoordinator())
+	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())
 
 	// API v1 routes with telemetry
 	v1 := router.Group("/api/v1")
@@ -1124,6 +1156,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			agent.POST("/strategy-mode", agentControlHandler.SetStrategyMode)
 		}
 
+		scalpingShadow := v1.Group("/scalping/shadow")
+		scalpingShadow.Use(adminMiddleware.RequireAdminAuth())
+		{
+			scalpingShadow.GET("/variants", shadowHandler.ListVariants)
+			scalpingShadow.GET("/variants/:id/diagnostics", shadowHandler.VariantDiagnostics)
+			scalpingShadow.GET("/comparison", shadowHandler.Comparison)
+			scalpingShadow.POST("/variants", shadowHandler.CreateVariant)
+			scalpingShadow.DELETE("/variants/:id", shadowHandler.DeleteVariant)
+		}
+
 		adminRisk := v1.Group("/admin/risk")
 		adminRisk.Use(adminMiddleware.RequireAdminAuth())
 		{
@@ -1158,6 +1200,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			budget.GET("/status", budgetHandler.GetBudgetStatus)
 			budget.GET("/check", budgetHandler.CheckBudget)
+		}
+
+		backtest := v1.Group("/backtest")
+		backtest.Use(authMiddleware.RequireAuth())
+		{
+			scalpingBacktest := backtest.Group("/scalping")
+			scalpingBacktest.POST("/run", scalpingBacktestHandler.RunScalpingBacktest)
+			scalpingBacktest.GET("/:run_id", scalpingBacktestHandler.GetScalpingBacktest)
+			scalpingBacktest.GET("/", scalpingBacktestHandler.ListScalpingBacktests)
+			scalpingBacktest.POST("/compare", scalpingBacktestHandler.CompareScalpingBacktests)
 		}
 
 		// AI model routes

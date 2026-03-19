@@ -709,6 +709,8 @@ type AIScalpingService struct {
 	autonomyMu    sync.RWMutex
 	autonomy      *ScalpingAutonomyCoordinator
 	autonomyState AIScalpingAutonomyState
+	shadowMu      sync.RWMutex
+	shadow        *ShadowEvaluationCoordinator
 }
 
 type symbolExecutionGuard struct {
@@ -924,6 +926,18 @@ func (s *AIScalpingService) autonomyCoordinator() *ScalpingAutonomyCoordinator {
 	return s.autonomy
 }
 
+func (s *AIScalpingService) SetShadowEvaluationCoordinator(coordinator *ShadowEvaluationCoordinator) {
+	s.shadowMu.Lock()
+	defer s.shadowMu.Unlock()
+	s.shadow = coordinator
+}
+
+func (s *AIScalpingService) shadowCoordinator() *ShadowEvaluationCoordinator {
+	s.shadowMu.RLock()
+	defer s.shadowMu.RUnlock()
+	return s.shadow
+}
+
 // AutonomyDiagnostics returns latest rollout/gate status captured during scalping evaluation.
 func (s *AIScalpingService) AutonomyDiagnostics() map[string]interface{} {
 	s.autonomyMu.RLock()
@@ -1082,6 +1096,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	var funnel appautonomy.CandidateFunnelSnapshot
 	defer func() {
 		finalizeDecisionMetadata(decision, &policy, effectiveMinConfidence, effectiveMaxCapital, funnel)
+		s.mirrorShadowDecisionAsync(decision, portfolio, policy)
 	}()
 	if !walletBasis(portfolio).GreaterThan(decimal.Zero) {
 		reason := "wallet basis is zero; waiting for funded balance before autonomous execution"
@@ -2768,6 +2783,51 @@ func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecis
 	}
 }
 
+func (s *AIScalpingService) mirrorShadowDecisionAsync(
+	decision *AITradingDecision,
+	portfolio TradingPortfolio,
+	policy appautonomy.ScalpingCyclePolicy,
+) {
+	coordinator := s.shadowCoordinator()
+	if coordinator == nil || decision == nil {
+		return
+	}
+	decisionSnapshot := cloneAITradingDecision(decision)
+	portfolioSnapshot := portfolio
+	policySnapshot := policy
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
+			log.Printf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
+		}
+	}()
+}
+
+func cloneAITradingDecision(decision *AITradingDecision) *AITradingDecision {
+	if decision == nil {
+		return nil
+	}
+	copyValue := *decision
+	copyValue.EntryPrice = cloneDecimalPtr(decision.EntryPrice)
+	copyValue.StopLoss = cloneDecimalPtr(decision.StopLoss)
+	copyValue.TakeProfit = cloneDecimalPtr(decision.TakeProfit)
+	if len(decision.PolicyAdjustments) > 0 {
+		copyValue.PolicyAdjustments = append([]string(nil), decision.PolicyAdjustments...)
+	}
+	if len(decision.CandidateFunnel.TopCandidateRejections) > 0 {
+		copyValue.CandidateFunnel.TopCandidateRejections = append(
+			[]appautonomy.CandidateRejection(nil),
+			decision.CandidateFunnel.TopCandidateRejections...,
+		)
+	}
+	if decision.ExecutionGate != nil {
+		gateCopy := *decision.ExecutionGate
+		copyValue.ExecutionGate = &gateCopy
+	}
+	return &copyValue
+}
+
 func validateRecoveredDecisionContract(decision *AITradingDecision) error {
 	if decision == nil {
 		return fmt.Errorf("decision missing")
@@ -4091,6 +4151,9 @@ func scalpingPolicyConfigFromEnv(maxBidAskSpreadPct float64) appautonomy.Scalpin
 	}
 	if value := getEnvInt("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES"); value > 0 {
 		cfg.ProgressBlockAfter = time.Duration(value) * time.Minute
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET"); value > 0 {
+		cfg.LossStreakBudget = clampInt(value, 1, 20)
 	}
 	return cfg.Normalized()
 }

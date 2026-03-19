@@ -40,6 +40,7 @@ func NewAnthropicClient(config ClientConfig) *AnthropicClient {
 
 	return &AnthropicClient{
 		config: ClientConfig{
+			Provider:    config.Provider,
 			APIKey:      config.APIKey,
 			BaseURL:     baseURL,
 			HTTPTimeout: timeout,
@@ -58,6 +59,9 @@ func (c *AnthropicClient) SetLogger(logger *zap.Logger) {
 }
 
 func (c *AnthropicClient) Provider() Provider {
+	if strings.TrimSpace(string(c.config.Provider)) != "" {
+		return c.config.Provider
+	}
 	return ProviderAnthropic
 }
 
@@ -454,7 +458,7 @@ func (c *AnthropicClient) convertResponse(resp *anthropicResponse, latencyMs int
 	return &CompletionResponse{
 		ID:           resp.ID,
 		Model:        resp.Model,
-		Provider:     ProviderAnthropic,
+		Provider:     c.Provider(),
 		Created:      time.Now(),
 		Message:      message,
 		ToolCalls:    toolCalls,
@@ -482,10 +486,11 @@ func (c *AnthropicClient) calculateCost(usage UsageMetrics) CostMetrics {
 }
 
 func (c *AnthropicClient) handleErrorResponse(statusCode int, headers http.Header, body []byte) error {
+	provider := c.Provider()
 	var apiErr anthropicError
 	if err := json.Unmarshal(body, &apiErr); err != nil {
 		return ProviderAPIError{
-			Provider:   ProviderAnthropic,
+			Provider:   provider,
 			StatusCode: statusCode,
 			Message:    string(body),
 		}
@@ -497,11 +502,11 @@ func (c *AnthropicClient) handleErrorResponse(statusCode int, headers http.Heade
 		if retryAfter <= 0 {
 			retryAfter = 30 * time.Second
 		}
-		return RateLimitedError{Provider: ProviderAnthropic, RetryAfter: retryAfter}
+		return RateLimitedError{Provider: provider, RetryAfter: retryAfter}
 	case http.StatusBadRequest:
 		if apiErr.Error.Type == "invalid_request_error" {
 			return ProviderAPIError{
-				Provider:   ProviderAnthropic,
+				Provider:   provider,
 				StatusCode: statusCode,
 				Message:    apiErr.Error.Message,
 				Type:       apiErr.Error.Type,
@@ -510,7 +515,7 @@ func (c *AnthropicClient) handleErrorResponse(statusCode int, headers http.Heade
 	}
 
 	return ProviderAPIError{
-		Provider:   ProviderAnthropic,
+		Provider:   provider,
 		StatusCode: statusCode,
 		Message:    apiErr.Error.Message,
 		Type:       apiErr.Error.Type,
