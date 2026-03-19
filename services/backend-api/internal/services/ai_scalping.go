@@ -2764,6 +2764,11 @@ func shouldApplyMicroConfidenceGrace(
 	return decision.Confidence >= threshold-0.05
 }
 
+// runtimeDegradedHoldDecision creates a hold AITradingDecision representing a runtime-degraded fallback.
+//
+// The returned decision has Action "hold", Confidence 0, ConfidenceKnown false and SizePercent 0.
+// If reason is empty, Reasoning is set to "runtime-degraded decision fallback". If category is empty,
+// ReasonCategory is set to the execution-unavailable runtime category.
 func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecision {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -2804,6 +2809,13 @@ func (s *AIScalpingService) mirrorShadowDecisionAsync(
 	}()
 }
 
+// cloneAITradingDecision returns an independent copy of the provided AITradingDecision.
+//
+// cloneAITradingDecision produces a deep copy of mutable subfields (pointered decimals, slices
+// such as PolicyAdjustments and CandidateFunnel.TopCandidateRejections, and the ExecutionGate),
+// ensuring the returned decision can be modified without affecting the original.
+//
+// It returns a pointer to the cloned decision, or nil if the input is nil.
 func cloneAITradingDecision(decision *AITradingDecision) *AITradingDecision {
 	if decision == nil {
 		return nil
@@ -2828,6 +2840,14 @@ func cloneAITradingDecision(decision *AITradingDecision) *AITradingDecision {
 	return &copyValue
 }
 
+// validateRecoveredDecisionContract validates that a recovered AITradingDecision is well-formed and actionable.
+// It accepts nil and hold decisions, and returns an error for any actionable decision that fails checks:
+// - decision must be non-nil (unless hold is intended),
+// - Action must be one of the supported actions (buy, sell, hold),
+// - Symbol must be non-empty and contain a '/' separator (e.g., "BTC/USDT"),
+// - SizePercent must be > 0 for actionable decisions,
+// - Confidence must be greater than 0 and less than or equal to 1.
+// Returns nil when the decision is valid or represents a hold.
 func validateRecoveredDecisionContract(decision *AITradingDecision) error {
 	if decision == nil {
 		return fmt.Errorf("decision missing")

@@ -1170,6 +1170,8 @@ func envFloatOrDefault(key string, fallback, min, max float64) float64 {
 	return value
 }
 
+// questLockReleaseTimeout returns the configured lock release timeout for quest locks.
+// It reads NEURATRADE_QUEST_LOCK_RELEASE_TIMEOUT_SECONDS and uses the default when unset or <= 0, and never exceeds maxQuestLockReleaseTimeout.
 func questLockReleaseTimeout() time.Duration {
 	seconds := getEnvInt("NEURATRADE_QUEST_LOCK_RELEASE_TIMEOUT_SECONDS")
 	if seconds <= 0 {
@@ -1184,6 +1186,9 @@ func questLockReleaseTimeout() time.Duration {
 
 const defaultRedisErrorLogInterval = 60 * time.Second
 
+// redisErrorLogInterval returns the configured interval for rate-limited Redis error logging.
+// It reads NEURATRADE_REDIS_ERROR_LOG_INTERVAL_SEC and returns defaultRedisErrorLogInterval when
+// the value is unset or non-positive; the returned duration is never less than one second.
 func redisErrorLogInterval() time.Duration {
 	seconds := getEnvInt("NEURATRADE_REDIS_ERROR_LOG_INTERVAL_SEC")
 	if seconds <= 0 {
@@ -1207,6 +1212,8 @@ func (e *QuestEngine) shouldLogRedisError() bool {
 	return e.lastRedisErrorLog.CompareAndSwap(old, now)
 }
 
+// questExecutionHeartbeatInterval returns the heartbeat interval for quest execution.
+// It reads NEURATRADE_QUEST_EXECUTION_HEARTBEAT_SECONDS and uses the default when the value is missing or <= 0; the resulting interval is clamped to be at least 5s and at most 1m.
 func questExecutionHeartbeatInterval() time.Duration {
 	seconds := getEnvInt("NEURATRADE_QUEST_EXECUTION_HEARTBEAT_SECONDS")
 	if seconds <= 0 {
