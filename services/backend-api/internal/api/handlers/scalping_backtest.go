@@ -36,6 +36,7 @@ type RunScalpingBacktestRequest struct {
 	InitialCapital     string   `json:"initial_capital"`
 	MaxBidAskSpreadPct *float64 `json:"max_bid_ask_spread_pct"`
 	MinConfidence      *float64 `json:"min_confidence"`
+	SpreadMultiplier   *float64 `json:"spread_multiplier"`
 	FeeRate            *string  `json:"fee_rate"`
 }
 
@@ -65,6 +66,7 @@ type ScalpingBacktestConfig struct {
 	InitialCapital     string    `json:"initial_capital"`
 	MaxBidAskSpreadPct float64   `json:"max_bid_ask_spread_pct"`
 	MinConfidence      float64   `json:"min_confidence"`
+	SpreadMultiplier   float64   `json:"spread_multiplier"`
 	FeeRate            string    `json:"fee_rate"`
 }
 
@@ -420,6 +422,14 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		return services.ScalpingBacktestConfig{}, fmt.Errorf("min_confidence must be between 0 and 1")
 	}
 
+	spreadMultiplier := float64(services.DefaultScalpingBacktestSpreadMultiplier)
+	if req.SpreadMultiplier != nil {
+		spreadMultiplier = *req.SpreadMultiplier
+	}
+	if spreadMultiplier <= 0 {
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("spread_multiplier must be greater than zero")
+	}
+
 	feeRate := "0.001"
 	if req.FeeRate != nil && strings.TrimSpace(*req.FeeRate) != "" {
 		feeRate = strings.TrimSpace(*req.FeeRate)
@@ -442,6 +452,7 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		InitialCapital:     initialCapital,
 		MaxBidAskSpreadPct: maxBidAskSpreadPct,
 		MinConfidence:      minConfidence,
+		SpreadMultiplier:   spreadMultiplier,
 		FeeRate:            feeRateDecimal,
 		SlippagePct:        decimal.NewFromFloat(services.DefaultScalpingBacktestSlippage),
 		MaxCapitalPct:      services.DefaultScalpingBacktestMaxCapitalPct,
@@ -458,6 +469,7 @@ func serviceConfigToAPI(cfg services.ScalpingBacktestConfig) ScalpingBacktestCon
 		InitialCapital:     cfg.InitialCapital.String(),
 		MaxBidAskSpreadPct: cfg.MaxBidAskSpreadPct,
 		MinConfidence:      cfg.MinConfidence,
+		SpreadMultiplier:   cfg.SpreadMultiplier,
 		FeeRate:            cfg.FeeRate.String(),
 	}
 }
