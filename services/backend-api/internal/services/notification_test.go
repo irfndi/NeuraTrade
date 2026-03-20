@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -2344,17 +2345,22 @@ func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.
 	assert.True(t, foundSixteenFactorBoundary)
 }
 
-func TestTelegramMessageUnits_Unicode(t *testing.T) {
-	bmp := "hello world"
-	assert.Equal(t, 11, telegramMessageUnits(bmp))
+func TestTelegramMessageUnits_UnicodeAndEmoji(t *testing.T) {
+	// BMP-only strings count 1 unit per rune
+	assert.Equal(t, 11, telegramMessageUnits("hello world"))
+	assert.Equal(t, 3, telegramMessageUnits("日本語"))
 
-	mixed := "trade \U0001F4CA signal" // 6 BMP runes + 1 astral emoji (2 units) = 21 + 2 = 23
-	assert.Equal(t, len([]rune(mixed))+1, telegramMessageUnits(mixed))
+	// Astral-plane emoji count as 2 units each
+	assert.Equal(t, 6, telegramMessageUnits("🔥test"))
+	assert.Equal(t, 4, telegramMessageUnits("🚀🚀"))
+	assert.Equal(t, 4, telegramMessageUnits("A📈B"))
 
-	truncated := truncateToTelegramUnits(mixed, 15)
-	truncatedUnits := telegramMessageUnits(truncated)
-	assert.LessOrEqual(t, truncatedUnits, 15)
-	assert.True(t, len([]rune(truncated)) <= len([]rune(mixed)))
+	// Truncation must never split a multi-unit rune
+	mixed := "abc📊def" // 6 BMP runes + 1 astral emoji = 6 + 2 = 8 units
+	assert.Equal(t, 8, telegramMessageUnits(mixed))
+
+	truncated := truncateToTelegramUnits(mixed, 5)
+	assert.LessOrEqual(t, telegramMessageUnits(truncated), 5)
 	runes := []rune(truncated)
 	if len(runes) > 0 {
 		first := runes[0]
@@ -2364,6 +2370,18 @@ func TestTelegramMessageUnits_Unicode(t *testing.T) {
 			assert.Equal(t, 1, telegramMessageUnits(string(first)))
 		}
 	}
+
+	// Pure-emoji truncation at exact boundary
+	longEmoji := strings.Repeat("😀", 50) // 100 units
+	assert.Equal(t, 100, telegramMessageUnits(longEmoji))
+	exact := truncateToTelegramUnits(longEmoji, 10)
+	assert.Equal(t, 10, telegramMessageUnits(exact))
+	assert.Equal(t, 5, utf8.RuneCountInString(exact))
+
+	// Edge cases
+	assert.Equal(t, 0, telegramMessageUnits(""))
+	assert.Equal(t, 1, telegramMessageUnits("x"))
+	assert.Equal(t, 2, telegramMessageUnits("🔥"))
 }
 
 // =============================================================================
