@@ -27,6 +27,7 @@ type AnthropicClient struct {
 	logger     *zap.Logger
 }
 
+// It copies the provided ClientConfig while normalizing unset fields (uses AnthropicDefaultTimeout when HTTPTimeout is zero and AnthropicDefaultBaseURL when BaseURL is empty), constructs an http.Client with the resolved timeout, and initializes a no-op logger.
 func NewAnthropicClient(config ClientConfig) *AnthropicClient {
 	timeout := config.HTTPTimeout
 	if timeout == 0 {

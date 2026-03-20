@@ -284,6 +284,16 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 	return formatNotificationCodeBlockWithLimit(mostCompactLines, telegramMaxMessageUnits)
 }
 
+// buildAIReasoningMessageLines builds a slice of plain-text lines representing an AI reasoning notification.
+//
+// The produced lines include a header ("🤖 AI Trading Decision"), the decision type, a confidence line
+// (an emoji and percentage when `confidenceKnown` is true, otherwise an "N/A (runtime-degraded)" note),
+// a summary, and optional fields: reason category, unblock condition, and attempt window progress.
+// It appends a "Key Factors" section generated from `reasoning.Reasons`, showing up to `maxReasons` items
+// (omitted factors are represented with a summary line). If `reasoning.Action` is non-empty, a
+// "Recommended Action" line is appended.
+//
+// Returns the assembled slice of message lines ready for joining into a notification body.
 func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category string, confidenceKnown bool, maxReasons int) []string {
 	lines := []string{
 		"🤖 AI Trading Decision",
@@ -329,6 +339,12 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 	return lines
 }
 
+// buildAIReasoningFactorLines builds lines describing key factors from the provided reasons.
+// It returns nil when there are no reasons. The output begins with a blank line and the
+// header "Key Factors:" followed by up to maxReasons bullet lines (one per reason).
+// If some reasons are omitted, a trailing bullet indicates how many factors were omitted;
+// when no reasons are shown (maxReasons <= 0) the omission line explains they were
+// omitted due to message length.
 func buildAIReasoningFactorLines(reasons []string, maxReasons int) []string {
 	if len(reasons) == 0 {
 		return nil
@@ -356,10 +372,13 @@ func buildAIReasoningFactorLines(reasons []string, maxReasons int) []string {
 	return factorLines
 }
 
+// formatNotificationCodeBlock joins the provided lines into a single notification message separated by newlines.
 func formatNotificationCodeBlock(lines []string) string {
 	return joinNotificationLines(lines)
 }
 
+// formatNotificationCodeBlockWithLimit formats the provided lines into a single notification message and ensures the result does not exceed maxUnits Telegram message units.
+// If the formatted message fits within maxUnits it is returned unchanged; otherwise the message is truncated to maxUnits and an ellipsis ("...") is appended.
 func formatNotificationCodeBlockWithLimit(lines []string, maxUnits int) string {
 	message := formatNotificationCodeBlock(lines)
 	if telegramMessageUnits(message) <= maxUnits {
@@ -371,6 +390,10 @@ func formatNotificationCodeBlockWithLimit(lines []string, maxUnits int) string {
 	return truncated
 }
 
+// formatNotificationCodeBlockWithTailPriority prepares a notification message that prioritizes the tail content when enforcing a maximum telegram unit limit.
+// If the tail alone exceeds maxUnits it is truncated with an ellipsis and returned. Otherwise the body is truncated as needed to fit the remaining units
+// (reserving one unit between body and tail when both are present). If truncating the body yields an empty string, the tail is returned; otherwise the
+// function returns the body, a newline, then the tail.
 func formatNotificationCodeBlockWithTailPriority(lines, tail []string, maxUnits int) string {
 	tailContent := joinNotificationLines(tail)
 	tailUnits := telegramMessageUnits(tailContent)
@@ -390,6 +413,10 @@ func formatNotificationCodeBlockWithTailPriority(lines, tail []string, maxUnits 
 	return bodyContent + "\n" + tailContent
 }
 
+// truncateToTelegramUnitsWithEllipsis truncates message to at most maxUnits Telegram units and appends "..." when truncation occurs.
+// If the message already fits within maxUnits, it is returned unchanged. When truncation is needed, the function reserves space
+// for the ellipsis and returns the truncated message followed by "...". If maxUnits is too small to include the full ellipsis,
+// it returns a truncated ellipsis that fits within maxUnits.
 func truncateToTelegramUnitsWithEllipsis(message string, maxUnits int) string {
 	truncated := truncateToTelegramUnits(message, maxUnits)
 	if truncated == message {
@@ -405,6 +432,9 @@ func truncateToTelegramUnitsWithEllipsis(message string, maxUnits int) string {
 
 }
 
+// telegramMessageUnits reports the length of message measured in Telegram "units".
+// It counts each rune with code point > 0xFFFF as 2 units and all other runes as 1 unit.
+// This metric is used to evaluate message size against Telegram's unit-based limits.
 func telegramMessageUnits(message string) int {
 	units := 0
 	for _, r := range message {
@@ -417,6 +447,12 @@ func telegramMessageUnits(message string) int {
 	return units
 }
 
+// truncateToTelegramUnits truncates the message to at most maxUnits Telegram units.
+//
+// A rune with code point > 0xFFFF counts as 2 units; all other runes count as 1 unit.
+// Truncation preserves whole runes and stops before adding a rune that would exceed
+// maxUnits. If maxUnits is less than or equal to zero, an empty string is returned.
+// This function does not append ellipsis or any other marker when truncation occurs.
 func truncateToTelegramUnits(message string, maxUnits int) string {
 	if maxUnits <= 0 {
 		return ""
@@ -439,6 +475,7 @@ func truncateToTelegramUnits(message string, maxUnits int) string {
 	return builder.String()
 }
 
+// - The summary contains any of the phrases: "runtime error", "skipped due to ai/runtime error", "returned no trade decision", or "paused temporarily after repeated runtime failures".
 func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {
 	action := strings.ToLower(strings.TrimSpace(reasoning.Action))
 	summary := strings.ToLower(strings.TrimSpace(reasoning.Summary))

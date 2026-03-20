@@ -565,6 +565,11 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 	}
 }
 
+// serviceSummaryToAPI converts a services.ScalpingBacktestSummary into an API-ready ScalpingBacktestSummary.
+//
+// Numeric and decimal metrics are formatted as strings: win rate with two decimal places, total PnL as a plain decimal
+// string, total PnL percentage and max drawdown percentage with four decimal places. Zero-valued decimals are represented
+// by sensible string defaults ("0.00", "0", or "0.0000") while integer counters are copied directly.
 func serviceSummaryToAPI(s services.ScalpingBacktestSummary) ScalpingBacktestSummary {
 	winRate := "0.00"
 	if !s.WinRate.IsZero() {
@@ -791,6 +796,10 @@ func (h *ScalpingBacktestHandler) fetchBacktestRun(ctx context.Context, runID st
 	return decodeScalpingBacktestRow(runID, status, configRaw, summaryRaw, createdAt, completedAtNS)
 }
 
+// decodeScalpingBacktestRow decodes raw JSON config and summary bytes from a scalping backtest row and builds a GetScalpingBacktestResponse.
+//
+// If configRaw or summaryRaw contain valid JSON they are unmarshaled into the corresponding API types; invalid JSON yields an error that wraps the run ID.
+// The `completedAtNS` sql.NullTime is converted to a *time.Time when valid, otherwise `CompletedAt` is nil. The returned response contains the provided run ID, status, created timestamp, and the decoded config and summary.
 func decodeScalpingBacktestRow(runID, status string, configRaw, summaryRaw []byte, createdAt time.Time, completedAtNS sql.NullTime) (GetScalpingBacktestResponse, error) {
 	var config ScalpingBacktestConfig
 	if len(configRaw) > 0 {

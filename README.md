@@ -1,5 +1,7 @@
 # NeuraTrade
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/irfndi/NeuraTrade?utm_source=badge)
+
 NeuraTrade is a multi-service crypto trading platform with a Go backend and Bun sidecar services for exchange and Telegram integrations.
 
 ## Core Services
