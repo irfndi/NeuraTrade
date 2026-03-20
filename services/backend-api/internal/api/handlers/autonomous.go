@@ -589,17 +589,14 @@ func (h *AutonomousHandler) loadQuestInvestigationData(ctx context.Context, chat
 	return histogram, gateBlocks, regimeOutcomes, policyImpact, winRateTrend, nil
 }
 
-func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, gateBlocks []services.GateBlockStat) (int, int, float64) {
+func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, _ []services.GateBlockStat) (int, int, float64) {
 	totalCycles := 0
 	totalWins := 0
-	executedCycles := 0
 	for _, ro := range regimeOutcomes {
 		totalCycles += ro.Count
 		totalWins += ro.Wins
 	}
-	for _, gb := range gateBlocks {
-		executedCycles += gb.Count
-	}
+	executedCycles := totalCycles
 	overallWinRate := 0.0
 	if totalCycles > 0 {
 		overallWinRate = float64(totalWins) / float64(totalCycles)
