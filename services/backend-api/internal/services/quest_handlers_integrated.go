@@ -1207,8 +1207,11 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			cycleRec.EffectiveMaxCapitalPct = decision.EffectiveMaxCapitalPct
 			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
 		}
-		if err := h.telemetryStore.InsertCycleRecord(ctx, cycleRec); err != nil {
-			log.Printf("[TELEMETRY] Failed to insert cycle record: %v", err)
+		insertedCycleID, insertErr := h.telemetryStore.InsertCycleRecord(ctx, cycleRec)
+		if insertErr != nil {
+			log.Printf("[TELEMETRY] Failed to insert cycle record: %v", insertErr)
+		} else {
+			_ = insertedCycleID
 		}
 	}
 	if shouldRecordEntryAttempt(decision, err) {
