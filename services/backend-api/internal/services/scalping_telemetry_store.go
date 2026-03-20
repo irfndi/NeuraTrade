@@ -170,10 +170,10 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 			account_tier, effective_min_confidence, effective_max_capital_pct,
 			policy_adjustments
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,
-			$9,$10,$11,$12,$13,
-			$14,$15,$16,$17,
-			$18,$19,$20,$21
+			?,?,?,?,?,?,?,?,
+			?,?,?,?,?,
+			?,?,?,?,
+			?,?,?,?
 		)
 	`,
 		cycleID,
@@ -216,8 +216,8 @@ func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID s
 
 	result, err := s.db.Exec(ctx, `
 		UPDATE scalping_cycle_telemetry
-		SET order_id = $1
-		WHERE id = $2
+		SET order_id = ?
+		WHERE id = ?
 			AND (order_id IS NULL OR order_id = '')
 	`, strings.TrimSpace(orderID), strings.TrimSpace(cycleID))
 	if err != nil {
@@ -248,12 +248,12 @@ func (s *ScalpingTelemetryStore) UpdateCycleOutcome(ctx context.Context, orderID
 
 	_, err := s.db.Exec(ctx, `
 		UPDATE scalping_cycle_telemetry
-		SET outcome = $2,
-			pnl = $3,
-			hold_duration_seconds = $4,
-			closed_at = $5
-		WHERE order_id = $1
-	`, orderID, strings.TrimSpace(record.Outcome), record.PnL, record.HoldDurationSeconds, closedAt)
+		SET outcome = ?,
+			pnl = ?,
+			hold_duration_seconds = ?,
+			closed_at = ?
+		WHERE order_id = ?
+	`, strings.TrimSpace(record.Outcome), record.PnL, record.HoldDurationSeconds, closedAt, orderID)
 	if err != nil {
 		return fmt.Errorf("update cycle outcome: %w", err)
 	}
@@ -269,7 +269,7 @@ func (s *ScalpingTelemetryStore) GetRejectionHistogram(ctx context.Context, chat
 	rows, err := s.db.Query(ctx, `
 		SELECT rejection_counts
 		FROM scalping_cycle_telemetry
-		WHERE chat_id = $1 AND cycle_at >= $2
+		WHERE chat_id = ? AND cycle_at >= ?
 	`, strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("query rejection histogram: %w", err)
@@ -316,8 +316,8 @@ func (s *ScalpingTelemetryStore) GetGateBlockSummary(ctx context.Context, chatID
 			SUM(CASE WHEN outcome = 'win' THEN 1 ELSE 0 END) AS wins,
 			COALESCE(AVG(CASE WHEN outcome IS NOT NULL AND outcome != '' THEN pnl END), 0) AS avg_pnl
 		FROM scalping_cycle_telemetry
-		WHERE chat_id = $1
-			AND cycle_at >= $2
+		WHERE chat_id = ?
+			AND cycle_at >= ?
 		GROUP BY gate_block_code
 		ORDER BY cycle_count DESC
 	`, strings.TrimSpace(chatID), since.UTC())
@@ -355,8 +355,8 @@ func (s *ScalpingTelemetryStore) GetRegimeOutcomeCorrelation(ctx context.Context
 			SUM(CASE WHEN outcome = 'win' THEN 1 ELSE 0 END) AS wins,
 			COALESCE(AVG(pnl), 0) AS avg_pnl
 		FROM scalping_cycle_telemetry
-		WHERE chat_id = $1
-			AND cycle_at >= $2
+		WHERE chat_id = ?
+			AND cycle_at >= ?
 			AND outcome IS NOT NULL
 			AND outcome != ''
 		GROUP BY regime
@@ -391,8 +391,8 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 	rows, err := s.db.Query(ctx, `
 		SELECT policy_adjustments, outcome, pnl
 		FROM scalping_cycle_telemetry
-		WHERE chat_id = $1
-			AND cycle_at >= $2
+		WHERE chat_id = ?
+			AND cycle_at >= ?
 			AND policy_adjustments IS NOT NULL
 			AND policy_adjustments != ''
 			AND outcome IS NOT NULL
@@ -489,7 +489,7 @@ func (s *ScalpingTelemetryStore) GetCycleWinRateTrend(ctx context.Context, chatI
 	rows, err := s.db.Query(ctx, `
 		SELECT cycle_at, outcome
 		FROM scalping_cycle_telemetry
-		WHERE chat_id = $1 AND cycle_at >= $2
+		WHERE chat_id = ? AND cycle_at >= ?
 		ORDER BY cycle_at ASC
 	`, strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
