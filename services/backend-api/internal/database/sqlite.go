@@ -30,7 +30,7 @@ func NewSQLiteConnectionWithExtension(path, extensionPath string) (*SQLiteDB, er
 		return nil, fmt.Errorf("sqlite database path is required")
 	}
 
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite3", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
@@ -76,6 +76,21 @@ func NewSQLiteConnectionWithExtension(path, extensionPath string) (*SQLiteDB, er
 
 	zaplogrus.Infof("Successfully connected to SQLite database: %s", path)
 	return &SQLiteDB{DB: db}, nil
+}
+
+func sqliteDSN(path string) string {
+	if path == "" {
+		return path
+	}
+	lower := strings.ToLower(path)
+	if strings.Contains(lower, "_foreign_keys=") || strings.Contains(lower, "_fk=") {
+		return path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + "_foreign_keys=on"
 }
 
 // Close closes the SQLite database connection.

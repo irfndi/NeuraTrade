@@ -95,6 +95,11 @@ func (zapNopServiceLogger) Info(_ string)  {}
 func (zapNopServiceLogger) Warn(_ string)  {}
 func (zapNopServiceLogger) Error(_ string) {}
 
+// parseAIProviderChain builds an ordered list of AI provider identifiers using the given
+// primary provider and the NEURATRADE_AI_PROVIDER_CHAIN environment variable.
+// The input and environment values are normalized to lowercase and trimmed; empty entries
+// are ignored, duplicates are removed, and the primary provider is guaranteed to be the first
+// element. If neither primary nor the environment variable is provided, "zhipu" is used.
 func parseAIProviderChain(primary string) []string {
 	primary = strings.ToLower(strings.TrimSpace(primary))
 	if primary == "" {
@@ -123,6 +128,7 @@ func parseAIProviderChain(primary string) []string {
 	return chain
 }
 
+// are mapped to their vendor-specific endpoints, and unknown providers default to the OpenAI API.
 func providerBaseURL(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "anthropic":
@@ -172,6 +178,8 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 	return node
 }
 
+// buildLLMProviderClient creates an llm.Client configured for the given provider node.
+// It selects the client implementation appropriate for node.Provider (e.g., "anthropic", "mlx", "minimax", "zai"/"zai-coding-plan", "zhipu") and applies the provided HTTP timeout and max retries; unknown providers use an OpenAI-compatible client by default.
 func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, maxRetries int) llm.Client {
 	config := llm.ClientConfig{
 		Provider:    llm.Provider(node.Provider),
@@ -330,7 +338,8 @@ func riskLockSourcePriority(source string) int {
 	}
 }
 
-// Returns a cleanup function that should be called on shutdown.
+// SetupRoutes configures HTTP routes, middleware, and application handlers, and initializes runtime services used by the API.
+// It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()

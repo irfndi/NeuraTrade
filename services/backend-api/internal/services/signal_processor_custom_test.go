@@ -78,6 +78,21 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 		WithArgs(1).
 		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
 
+	// 6. getExchangeName (called inside generateTechnicalSignals)
+	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+
+	// 7. OHLCV candles query (called inside generateTechnicalSignals)
+	ohlcvRows := pgxmock.NewRows([]string{"open", "high", "low", "close", "volume", "timestamp"})
+	for i := 0; i < 60; i++ {
+		price := 50000.0 + float64(i)*10.0
+		ohlcvRows.AddRow(price, price+50, price-50, price+20, 1000.0, time.Now().Add(-time.Duration(60-i)*time.Minute))
+	}
+	mockPool.ExpectQuery("SELECT open, high, low, close, volume, timestamp").
+		WithArgs(1, 1).
+		WillReturnRows(ohlcvRows)
+
 	// Mock Aggregator expectations
 	// Expect AggregateTechnicalSignals because we have no arbitrage opportunities
 	mockAggregator.On("AggregateTechnicalSignals", mock.Anything, mock.Anything).
@@ -110,6 +125,149 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 	assert.Equal(t, 0.85, result.QualityScore)
 
 	// Verify mocks
+	if err := mockPool.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+	mockAggregator.AssertExpectations(t)
+	mockScorer.AssertExpectations(t)
+}
+
+func TestSignalProcessor_GenerateTechnicalSignals_RequiresFiftyCandles(t *testing.T) {
+	mockPool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockPool.Close()
+
+	dbPool := database.NewMockDBPool(mockPool)
+	var logger logging.Logger = logging.NewStandardLogger("info", "test")
+	sp := NewSignalProcessor(
+		dbPool,
+		logger,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+
+	ohlcvRows := pgxmock.NewRows([]string{"open", "high", "low", "close", "volume", "timestamp"})
+	for i := 0; i < 49; i++ {
+		price := 50000.0 + float64(i)*10.0
+		ohlcvRows.AddRow(price, price+50, price-50, price+20, 1000.0, time.Now().Add(-time.Duration(49-i)*time.Minute))
+	}
+	mockPool.ExpectQuery("SELECT open, high, low, close, volume, timestamp").
+		WithArgs(1, 1).
+		WillReturnRows(ohlcvRows)
+
+	_, err = sp.generateTechnicalSignals(models.MarketData{TradingPairID: 1, ExchangeID: 1})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "need 50, got 49")
+
+	if err := mockPool.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestSignalProcessor_ProcessSignal_AllowsArbitrageWhenOHLCVHistoryIsShort(t *testing.T) {
+	mockPool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockPool.Close()
+
+	mockAggregator := &MockSignalAggregator{}
+	mockScorer := &MockSignalQualityScorer{}
+	var logger logging.Logger = logging.NewStandardLogger("info", "test")
+
+	dbPool := database.NewMockDBPool(mockPool)
+	sp := NewSignalProcessor(
+		dbPool,
+		logger,
+		mockAggregator,
+		mockScorer,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	marketData := models.MarketData{
+		TradingPairID: 1,
+		ExchangeID:    1,
+		LastPrice:     decimal.NewFromFloat(50000),
+		Volume24h:     decimal.NewFromFloat(1000),
+		Timestamp:     time.Now(),
+	}
+
+	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+
+	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+
+	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+
+	arbRows := pgxmock.NewRows([]string{
+		"id", "trading_pair_id", "buy_exchange_id", "sell_exchange_id",
+		"buy_price", "sell_price", "profit_percentage", "detected_at", "expires_at",
+	}).AddRow(
+		"arb-1", 1, 1, 2,
+		decimal.NewFromFloat(49900), decimal.NewFromFloat(50150), decimal.NewFromFloat(0.8),
+		time.Now(), time.Now().Add(time.Minute),
+	)
+	mockPool.ExpectQuery("SELECT .* FROM arbitrage_opportunities .*").
+		WithArgs("BTC/USDT", pgxmock.AnyArg()).
+		WillReturnRows(arbRows)
+
+	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+
+	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+
+	ohlcvRows := pgxmock.NewRows([]string{"open", "high", "low", "close", "volume", "timestamp"})
+	for i := 0; i < 49; i++ {
+		price := 50000.0 + float64(i)*10.0
+		ohlcvRows.AddRow(price, price+50, price-50, price+20, 1000.0, time.Now().Add(-time.Duration(49-i)*time.Minute))
+	}
+	mockPool.ExpectQuery("SELECT open, high, low, close, volume, timestamp").
+		WithArgs(1, 1).
+		WillReturnRows(ohlcvRows)
+
+	mockAggregator.On("AggregateArbitrageSignals", mock.Anything, mock.Anything).
+		Return([]*AggregatedSignal{{
+			SignalType:      SignalTypeArbitrage,
+			Symbol:          "BTC/USDT",
+			Confidence:      decimal.NewFromFloat(0.85),
+			ProfitPotential: decimal.NewFromFloat(0.05),
+			CreatedAt:       time.Now(),
+		}}, nil)
+
+	mockScorer.On("AssessSignalQuality", mock.Anything, mock.Anything).
+		Return(&SignalQualityMetrics{OverallScore: decimal.NewFromFloat(0.9)}, nil)
+
+	result := sp.processSignal(marketData)
+
+	assert.NoError(t, result.Error)
+	assert.True(t, result.Processed)
+	assert.Equal(t, SignalTypeArbitrage, result.SignalType)
+	assert.Equal(t, 0.9, result.QualityScore)
+
 	if err := mockPool.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)
 	}

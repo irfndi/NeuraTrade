@@ -14,7 +14,6 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/irfndi/neuratrade/internal/config"
-	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/observability"
 )
 
@@ -866,64 +865,66 @@ func (tas *TechnicalAnalysisService) determineOverallSignal(indicators []*Indica
 
 // Helper functions
 
-// fetchPriceData retrieves historical price and volume data for a symbol from the database.
+// fetchPriceData retrieves historical OHLCV candle data for a symbol from the database.
+// It requires the ohlcv_candles table to contain real open/high/low/close values.
+// Using synthetic OHLC (setting all to last_price) is explicitly rejected for production
+// scalping-futures signal generation, as it produces meaningless indicator calculations.
 func (tas *TechnicalAnalysisService) fetchPriceData(ctx context.Context, symbol, exchange string) (*PriceData, error) {
-	// Fetch market data from database
-	var marketData []models.MarketData
-	query := `SELECT last_price, volume_24h, timestamp FROM market_data 
-			 WHERE trading_pair_id IN (SELECT id FROM trading_pairs WHERE symbol = $1) 
-			 AND exchange_id IN (SELECT id FROM exchanges WHERE name = $2) 
+	query := `SELECT open, high, low, close, volume, timestamp FROM ohlcv_candles
+			 WHERE trading_pair_id IN (SELECT id FROM trading_pairs WHERE symbol = $1)
+			 AND exchange_id IN (SELECT id FROM exchanges WHERE name = $2)
 			 ORDER BY timestamp DESC LIMIT 200`
 	rows, err := tas.db.Query(ctx, query, symbol, exchange)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch market data: %w", err)
+		return nil, fmt.Errorf("failed to fetch OHLCV candles: %w", err)
 	}
 	defer rows.Close()
 
+	var openVals, highVals, lowVals, closeVals, volVals []decimal.Decimal
+	var timestamps []time.Time
+
 	for rows.Next() {
-		var md models.MarketData
-		scanErr := rows.Scan(&md.LastPrice, &md.Volume24h, &md.Timestamp)
-		if scanErr != nil {
-			return nil, fmt.Errorf("failed to scan market data: %w", scanErr)
+		var o, h, l, c, v decimal.Decimal
+		var ts time.Time
+		if scanErr := rows.Scan(&o, &h, &l, &c, &v, &ts); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan OHLCV candle: %w", scanErr)
 		}
-		marketData = append(marketData, md)
+		openVals = append(openVals, o)
+		highVals = append(highVals, h)
+		lowVals = append(lowVals, l)
+		closeVals = append(closeVals, c)
+		volVals = append(volVals, v)
+		timestamps = append(timestamps, ts)
 	}
 
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("error iterating market data rows: %w", rowsErr)
+		return nil, fmt.Errorf("error iterating OHLCV rows for %s: %w", symbol, rowsErr)
 	}
 
-	if len(marketData) == 0 {
-		return nil, fmt.Errorf("no market data found for %s on %s", symbol, exchange)
+	// Reverse to chronological order (queried DESC for newest, indicators need ASC)
+	for i, j := 0, len(closeVals)-1; i < j; i, j = i+1, j-1 {
+		openVals[i], openVals[j] = openVals[j], openVals[i]
+		highVals[i], highVals[j] = highVals[j], highVals[i]
+		lowVals[i], lowVals[j] = lowVals[j], lowVals[i]
+		closeVals[i], closeVals[j] = closeVals[j], closeVals[i]
+		volVals[i], volVals[j] = volVals[j], volVals[i]
+		timestamps[i], timestamps[j] = timestamps[j], timestamps[i]
 	}
 
-	// Reverse to get chronological order
-	for i, j := 0, len(marketData)-1; i < j; i, j = i+1, j-1 {
-		marketData[i], marketData[j] = marketData[j], marketData[i]
+	if len(closeVals) == 0 {
+		return nil, fmt.Errorf("no OHLCV candle data found for %s on %s", symbol, exchange)
 	}
 
-	// Convert to PriceData
-	priceData := &PriceData{
+	return &PriceData{
 		Symbol:     symbol,
 		Exchange:   exchange,
-		Open:       make([]decimal.Decimal, len(marketData)),
-		High:       make([]decimal.Decimal, len(marketData)),
-		Low:        make([]decimal.Decimal, len(marketData)),
-		Close:      make([]decimal.Decimal, len(marketData)),
-		Volume:     make([]decimal.Decimal, len(marketData)),
-		Timestamps: make([]time.Time, len(marketData)),
-	}
-
-	for i, data := range marketData {
-		priceData.Open[i] = data.LastPrice // Using last price as OHLC for now
-		priceData.High[i] = data.LastPrice
-		priceData.Low[i] = data.LastPrice
-		priceData.Close[i] = data.LastPrice
-		priceData.Volume[i] = data.Volume24h
-		priceData.Timestamps[i] = data.Timestamp
-	}
-
-	return priceData, nil
+		Open:       openVals,
+		High:       highVals,
+		Low:        lowVals,
+		Close:      closeVals,
+		Volume:     volVals,
+		Timestamps: timestamps,
+	}, nil
 }
 
 // convertToSnapshots adapts the internal PriceData format to the format required by the indicator library.

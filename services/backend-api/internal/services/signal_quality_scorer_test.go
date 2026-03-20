@@ -7,6 +7,7 @@ import (
 	"time"
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,6 +93,32 @@ func TestAssessSignalQuality(t *testing.T) {
 	assert.True(t, metrics.ConfidenceScore.Equal(decimal.NewFromFloat(0.8)))
 	assert.True(t, metrics.DataFreshnessScore.GreaterThan(decimal.Zero))
 	assert.True(t, metrics.MarketConditionScore.GreaterThan(decimal.Zero))
+}
+
+func TestFetchExchangeStatistics_UsesPortableLatestRowQuery(t *testing.T) {
+	dbPool, mockPool, err := database.NewMockDBPoolFromNewPool()
+	require.NoError(t, err)
+	defer mockPool.Close()
+
+	scorer := NewSignalQualityScorer(&config.Config{}, dbPool, zaplogrus.New())
+	now := time.Now().UTC()
+
+	mockPool.ExpectQuery("WITH latest_market_data AS").
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(
+			pgxmock.NewRows([]string{"name", "total_volume", "data_point_count", "last_update", "pair_count"}).
+				AddRow("binance", decimal.NewFromFloat(1500), int64(2), now, 2).
+				AddRow("coinbase", decimal.NewFromFloat(0), int64(0), nil, 0),
+		)
+
+	stats, err := scorer.fetchExchangeStatistics(context.Background())
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+	assert.Equal(t, int64(2), stats["binance"].TotalTrades)
+	assert.True(t, stats["binance"].AvgDailyVolume.Equal(decimal.NewFromFloat(1500)))
+	assert.Equal(t, 2, stats["binance"].SupportedPairs)
+	assert.False(t, stats["coinbase"].LastDataUpdate.IsZero())
+	assert.NoError(t, mockPool.ExpectationsWereMet())
 }
 
 func TestIsSignalQualityAcceptable(t *testing.T) {

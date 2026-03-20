@@ -56,11 +56,8 @@ type ScalpingOutcomeRecord struct {
 }
 
 type GateBlockStat struct {
-	BlockCode   string  `json:"block_code"`
-	Count       int     `json:"count"`
-	WinRate     float64 `json:"win_rate"`
-	AvgPnL      float64 `json:"avg_pnl"`
-	TotalTrades int     `json:"total_trades"`
+	BlockCode string `json:"block_code"`
+	Count     int    `json:"count"`
 }
 
 type RegimeOutcomeStat struct {
@@ -330,10 +327,7 @@ func (s *ScalpingTelemetryStore) GetGateBlockSummary(ctx context.Context, chatID
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			COALESCE(gate_block_code, '') AS block_code,
-			COUNT(*) AS cycle_count,
-			SUM(CASE WHEN outcome IS NOT NULL AND outcome != '' THEN 1 ELSE 0 END) AS total_trades,
-			SUM(CASE WHEN outcome = 'win' THEN 1 ELSE 0 END) AS wins,
-			COALESCE(AVG(CASE WHEN outcome IS NOT NULL AND outcome != '' THEN pnl END), 0) AS avg_pnl
+			COUNT(*) AS cycle_count
 		FROM scalping_cycle_telemetry
 		WHERE chat_id = ?
 			AND cycle_at >= ?
@@ -350,11 +344,9 @@ func (s *ScalpingTelemetryStore) GetGateBlockSummary(ctx context.Context, chatID
 	stats := make([]GateBlockStat, 0)
 	for rows.Next() {
 		var stat GateBlockStat
-		var wins int
-		if scanErr := rows.Scan(&stat.BlockCode, &stat.Count, &stat.TotalTrades, &wins, &stat.AvgPnL); scanErr != nil {
+		if scanErr := rows.Scan(&stat.BlockCode, &stat.Count); scanErr != nil {
 			return nil, fmt.Errorf("scan gate block summary row: %w", scanErr)
 		}
-		stat.WinRate = safeRate(wins, stat.TotalTrades)
 		stats = append(stats, stat)
 	}
 	if rows.Err() != nil {

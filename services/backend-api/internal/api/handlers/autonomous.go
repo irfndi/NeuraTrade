@@ -589,19 +589,18 @@ func (h *AutonomousHandler) loadQuestInvestigationData(ctx context.Context, chat
 	return histogram, gateBlocks, regimeOutcomes, policyImpact, winRateTrend, nil
 }
 
-func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, _ []services.GateBlockStat) (int, int, float64) {
+func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, _ []services.GateBlockStat) (int, float64) {
 	totalCycles := 0
 	totalWins := 0
 	for _, ro := range regimeOutcomes {
 		totalCycles += ro.Count
 		totalWins += ro.Wins
 	}
-	executedCycles := totalCycles
 	overallWinRate := 0.0
 	if totalCycles > 0 {
 		overallWinRate = float64(totalWins) / float64(totalCycles)
 	}
-	return totalCycles, executedCycles, overallWinRate
+	return totalCycles, overallWinRate
 }
 
 func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
@@ -619,7 +618,7 @@ func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	totalCycles, executedCycles, overallWinRate := summarizeQuestInvestigation(regimeOutcomes, gateBlocks)
+	totalCycles, overallWinRate := summarizeQuestInvestigation(regimeOutcomes, gateBlocks)
 	c.JSON(http.StatusOK, gin.H{
 		"rejection_histogram":      histogram,
 		"gate_block_summary":       gateBlocks,
@@ -627,11 +626,10 @@ func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
 		"policy_adjustment_impact": policyImpact,
 		"win_rate_trend":           winRateTrend,
 		"metadata": gin.H{
-			"total_cycles":    totalCycles,
-			"executed_cycles": executedCycles,
-			"win_rate":        overallWinRate,
-			"period_start":    since.Format(time.RFC3339),
-			"period_end":      time.Now().UTC().Format(time.RFC3339),
+			"total_cycles": totalCycles,
+			"win_rate":     overallWinRate,
+			"period_start": since.Format(time.RFC3339),
+			"period_end":   time.Now().UTC().Format(time.RFC3339),
 		},
 	})
 }

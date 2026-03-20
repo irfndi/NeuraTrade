@@ -33,7 +33,8 @@ func (sp *TestSignalProcessor) getRecentMarketDataFromDB(symbol, exchange string
 		FROM market_data md
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
 		JOIN exchanges e ON md.exchange_id = e.id
-		WHERE tp.symbol = $1 AND e.ccxt_id = $2 AND md.timestamp >= $3
+		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
+		WHERE tp.symbol = $1 AND COALESCE(ce.ccxt_id, e.ccxt_id, e.name) = $2 AND md.timestamp >= $3
 		ORDER BY md.timestamp DESC
 		LIMIT 100
 	`
@@ -113,7 +114,8 @@ func TestSignalProcessor_GetRecentMarketDataFromDB_Success(t *testing.T) {
 		FROM market_data md
 		JOIN trading_pairs tp ON md\.trading_pair_id = tp\.id
 		JOIN exchanges e ON md\.exchange_id = e\.id
-		WHERE tp\.symbol = \$1 AND e\.ccxt_id = \$2 AND md\.timestamp >= \$3
+		LEFT JOIN ccxt_exchanges ce ON ce\.exchange_id = e\.id
+		WHERE tp\.symbol = \$1 AND COALESCE\(ce\.ccxt_id, e\.ccxt_id, e\.name\) = \$2 AND md\.timestamp >= \$3
 		ORDER BY md\.timestamp DESC
 		LIMIT 100
 	`).WithArgs(symbol, exchange, pgxmock.AnyArg()).WillReturnRows(expectedRows)
@@ -161,7 +163,8 @@ func TestSignalProcessor_GetRecentMarketDataFromDB_MissingVolume24hColumn(t *tes
 		FROM market_data md
 		JOIN trading_pairs tp ON md\.trading_pair_id = tp\.id
 		JOIN exchanges e ON md\.exchange_id = e\.id
-		WHERE tp\.symbol = \$1 AND e\.ccxt_id = \$2 AND md\.timestamp >= \$3
+		LEFT JOIN ccxt_exchanges ce ON ce\.exchange_id = e\.id
+		WHERE tp\.symbol = \$1 AND COALESCE\(ce\.ccxt_id, e\.ccxt_id, e\.name\) = \$2 AND md\.timestamp >= \$3
 		ORDER BY md\.timestamp DESC
 		LIMIT 100
 	`).WithArgs(symbol, exchange, pgxmock.AnyArg()).WillReturnRows(expectedRows)
@@ -197,7 +200,8 @@ func TestSignalProcessor_GetRecentMarketDataFromDB_QueryError(t *testing.T) {
 		FROM market_data md
 		JOIN trading_pairs tp ON md\.trading_pair_id = tp\.id
 		JOIN exchanges e ON md\.exchange_id = e\.id
-		WHERE tp\.symbol = \$1 AND e\.ccxt_id = \$2 AND md\.timestamp >= \$3
+		LEFT JOIN ccxt_exchanges ce ON ce\.exchange_id = e\.id
+		WHERE tp\.symbol = \$1 AND COALESCE\(ce\.ccxt_id, e\.ccxt_id, e\.name\) = \$2 AND md\.timestamp >= \$3
 		ORDER BY md\.timestamp DESC
 		LIMIT 100
 	`).WithArgs(symbol, exchange, pgxmock.AnyArg()).WillReturnError(errors.New("connection timeout"))
@@ -239,7 +243,8 @@ func TestSignalProcessor_GetRecentMarketDataFromDB_EmptyResult(t *testing.T) {
 		FROM market_data md
 		JOIN trading_pairs tp ON md\.trading_pair_id = tp\.id
 		JOIN exchanges e ON md\.exchange_id = e\.id
-		WHERE tp\.symbol = \$1 AND e\.ccxt_id = \$2 AND md\.timestamp >= \$3
+		LEFT JOIN ccxt_exchanges ce ON ce\.exchange_id = e\.id
+		WHERE tp\.symbol = \$1 AND COALESCE\(ce\.ccxt_id, e\.ccxt_id, e\.name\) = \$2 AND md\.timestamp >= \$3
 		ORDER BY md\.timestamp DESC
 		LIMIT 100
 	`).WithArgs(symbol, exchange, pgxmock.AnyArg()).WillReturnRows(expectedRows)
@@ -282,7 +287,8 @@ func TestSignalProcessor_GetRecentMarketDataFromDB_ScanError(t *testing.T) {
 		FROM market_data md
 		JOIN trading_pairs tp ON md\.trading_pair_id = tp\.id
 		JOIN exchanges e ON md\.exchange_id = e\.id
-		WHERE tp\.symbol = \$1 AND e\.ccxt_id = \$2 AND md\.timestamp >= \$3
+		LEFT JOIN ccxt_exchanges ce ON ce\.exchange_id = e\.id
+		WHERE tp\.symbol = \$1 AND COALESCE\(ce\.ccxt_id, e\.ccxt_id, e\.name\) = \$2 AND md\.timestamp >= \$3
 		ORDER BY md\.timestamp DESC
 		LIMIT 100
 	`).WithArgs(symbol, exchange, pgxmock.AnyArg()).WillReturnRows(expectedRows)
