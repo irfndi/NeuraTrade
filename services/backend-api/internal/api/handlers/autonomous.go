@@ -598,7 +598,7 @@ func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, ga
 		totalWins += ro.Wins
 	}
 	for _, gb := range gateBlocks {
-		executedCycles += gb.TotalTrades
+		executedCycles += gb.Count
 	}
 	overallWinRate := 0.0
 	if totalCycles > 0 {

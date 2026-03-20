@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -135,7 +136,7 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_chat_id ON scalping_cycle_telemetry(chat_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_cycle_at ON scalping_cycle_telemetry(cycle_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_chat_id_cycle_at ON scalping_cycle_telemetry(chat_id, cycle_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id ON scalping_cycle_telemetry(order_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id ON scalping_cycle_telemetry(order_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_outcome ON scalping_cycle_telemetry(outcome)`,
 	}
 
@@ -148,15 +149,16 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record CycleRecord) error {
+func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record CycleRecord) (string, error) {
 	if s == nil || s.db == nil {
-		return fmt.Errorf("scalping telemetry store unavailable")
+		return "", fmt.Errorf("scalping telemetry store unavailable")
 	}
 
 	cycleID := strings.TrimSpace(record.ID)
 	if cycleID == "" {
 		cycleID = fmt.Sprintf("scalp-%d", time.Now().UTC().UnixNano())
 	}
+	record.ID = cycleID
 	cycleAt := record.CycleAt.UTC()
 	if cycleAt.IsZero() {
 		cycleAt = time.Now().UTC()
@@ -199,10 +201,10 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 		record.PolicyAdjustmentsJSON,
 	)
 	if err != nil {
-		return fmt.Errorf("insert cycle telemetry: %w", err)
+		return "", fmt.Errorf("insert cycle telemetry: %w", err)
 	}
 
-	return nil
+	return cycleID, nil
 }
 
 func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID string, orderID string) error {
@@ -229,6 +231,9 @@ func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID s
 	}
 	if affected == 0 {
 		return fmt.Errorf("link order to cycle: no matching cycle found for id=%s", strings.TrimSpace(cycleID))
+	}
+	if affected > 1 {
+		return fmt.Errorf("link order to cycle: multiple cycles matched for id=%s, expected unique order_id", strings.TrimSpace(cycleID))
 	}
 
 	return nil
@@ -267,6 +272,9 @@ func (s *ScalpingTelemetryStore) UpdateCycleOutcome(ctx context.Context, orderID
 	if affected == 0 {
 		return fmt.Errorf("update cycle outcome: no matching cycle found for order_id=%s", orderID)
 	}
+	if affected > 1 {
+		return fmt.Errorf("update cycle outcome: multiple cycles matched for order_id=%s, expected unique order_id", orderID)
+	}
 
 	return nil
 }
@@ -297,6 +305,7 @@ func (s *ScalpingTelemetryStore) GetRejectionHistogram(ctx context.Context, chat
 		}
 		counts := make(map[string]int)
 		if jsonErr := json.Unmarshal([]byte(raw.String), &counts); jsonErr != nil {
+			log.Printf("[TELEMETRY] malformed rejection_counts JSON for row: %v", jsonErr)
 			continue
 		}
 		for key, value := range counts {
@@ -434,6 +443,7 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 		}
 		adjustments := make([]string, 0)
 		if jsonErr := json.Unmarshal([]byte(adjustmentsRaw.String), &adjustments); jsonErr != nil {
+			log.Printf("[TELEMETRY] malformed policy_adjustments JSON for row: %v", jsonErr)
 			continue
 		}
 
@@ -501,7 +511,7 @@ func (s *ScalpingTelemetryStore) GetCycleWinRateTrend(ctx context.Context, chatI
 	rows, err := s.db.Query(ctx, `
 		SELECT cycle_at, outcome
 		FROM scalping_cycle_telemetry
-		WHERE chat_id = ? AND cycle_at >= ?
+		WHERE chat_id = ? AND cycle_at >= ? AND outcome IS NOT NULL AND outcome != ''
 		ORDER BY cycle_at ASC
 	`, strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
@@ -537,11 +547,9 @@ func (s *ScalpingTelemetryStore) GetCycleWinRateTrend(ctx context.Context, chatI
 			orderedStarts = append(orderedStarts, bucketStartUnix)
 		}
 
-		if outcome.Valid && strings.TrimSpace(outcome.String) != "" {
-			bucket.TotalTrades++
-			if strings.EqualFold(strings.TrimSpace(outcome.String), "win") {
-				bucket.Wins++
-			}
+		bucket.TotalTrades++
+		if strings.EqualFold(strings.TrimSpace(outcome.String), "win") {
+			bucket.Wins++
 		}
 	}
 	if rows.Err() != nil {
