@@ -976,11 +976,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		telemetryStore := services.NewScalpingTelemetryStoreFromSQLDB(sqlDB)
 		if telemetryStore == nil {
 			log.Printf("Warning: scalping telemetry store unavailable due to nil SQL database")
-		} else if err := telemetryStore.EnsureSchema(context.Background()); err != nil {
-			log.Printf("Warning: failed to initialize scalping telemetry store: %v", err)
 		} else {
-			autonomousHandler.SetTelemetryStore(telemetryStore)
-			integratedHandlers.SetTelemetryStore(telemetryStore)
+			schemaCtx, schemaCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := telemetryStore.EnsureSchema(schemaCtx)
+			schemaCancel()
+			if err != nil {
+				log.Printf("Warning: failed to initialize scalping telemetry store: %v", err)
+			} else {
+				autonomousHandler.SetTelemetryStore(telemetryStore)
+				integratedHandlers.SetTelemetryStore(telemetryStore)
+			}
 		}
 	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)

@@ -223,7 +223,10 @@ func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID s
 	if err != nil {
 		return fmt.Errorf("link order to cycle: %w", err)
 	}
-	affected, _ := result.RowsAffected()
+	affected, rowsErr := result.RowsAffected()
+	if rowsErr != nil {
+		return fmt.Errorf("link order to cycle: check affected rows: %w", rowsErr)
+	}
 	if affected == 0 {
 		return fmt.Errorf("link order to cycle: no matching cycle found for id=%s", strings.TrimSpace(cycleID))
 	}
@@ -246,7 +249,7 @@ func (s *ScalpingTelemetryStore) UpdateCycleOutcome(ctx context.Context, orderID
 		closedAt = time.Now().UTC()
 	}
 
-	_, err := s.db.Exec(ctx, `
+	result, err := s.db.Exec(ctx, `
 		UPDATE scalping_cycle_telemetry
 		SET outcome = ?,
 			pnl = ?,
@@ -256,6 +259,13 @@ func (s *ScalpingTelemetryStore) UpdateCycleOutcome(ctx context.Context, orderID
 	`, strings.TrimSpace(record.Outcome), record.PnL, record.HoldDurationSeconds, closedAt, orderID)
 	if err != nil {
 		return fmt.Errorf("update cycle outcome: %w", err)
+	}
+	affected, rowsErr := result.RowsAffected()
+	if rowsErr != nil {
+		return fmt.Errorf("update cycle outcome: check affected rows: %w", rowsErr)
+	}
+	if affected == 0 {
+		return fmt.Errorf("update cycle outcome: no matching cycle found for order_id=%s", orderID)
 	}
 
 	return nil
@@ -318,6 +328,8 @@ func (s *ScalpingTelemetryStore) GetGateBlockSummary(ctx context.Context, chatID
 		FROM scalping_cycle_telemetry
 		WHERE chat_id = ?
 			AND cycle_at >= ?
+			AND gate_block_code IS NOT NULL
+			AND gate_block_code != ''
 		GROUP BY gate_block_code
 		ORDER BY cycle_count DESC
 	`, strings.TrimSpace(chatID), since.UTC())

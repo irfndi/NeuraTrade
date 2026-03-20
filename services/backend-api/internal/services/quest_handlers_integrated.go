@@ -1166,44 +1166,46 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	h.applyAutonomyCheckpoint(quest)
 	h.applyScalpingCycleDecisionDiagnostics(quest, decision)
 	cycleID := fmt.Sprintf("scalp-%s-%d", chatID, nowUTC.UnixNano())
-	if decision != nil && h.telemetryStore != nil {
-		rejectionJSON, marshalErr := json.Marshal(decision.CandidateFunnel.RejectionCounts)
-		if marshalErr != nil {
-			log.Printf("[TELEMETRY] Failed to marshal rejection counts: %v", marshalErr)
-			rejectionJSON = []byte("{}")
-		}
-		policyJSON, marshalErr := json.Marshal(decision.PolicyAdjustments)
-		if marshalErr != nil {
-			log.Printf("[TELEMETRY] Failed to marshal policy adjustments: %v", marshalErr)
-			policyJSON = []byte("[]")
-		}
-		gateBlockCode := ""
-		gateBlockReason := ""
-		if decision.ExecutionGate != nil {
-			gateBlockCode = decision.ExecutionGate.BlockCode
-			gateBlockReason = decision.ExecutionGate.BlockReason
-		}
+	if h.telemetryStore != nil {
 		cycleRec := CycleRecord{
-			ID:                     cycleID,
-			ChatID:                 chatID,
-			Exchange:               userExchange,
-			CycleAt:                nowUTC,
-			Symbol:                 decision.Symbol,
-			Action:                 decision.Action,
-			Confidence:             decision.Confidence,
-			UniverseCount:          decision.CandidateFunnel.CandidateUniverseCount,
-			RankedCount:            decision.CandidateFunnel.CandidateRankedCount,
-			ViableCount:            decision.CandidateFunnel.CandidateViableCount,
-			RejectionCountsJSON:    string(rejectionJSON),
-			Regime:                 decision.PreTradeRegime,
-			Expectancy:             decision.PreTradeExpectancy,
-			ExpectancySampleSize:   decision.PreTradeExpectancySampleSize,
-			GateBlockCode:          gateBlockCode,
-			GateBlockReason:        gateBlockReason,
-			AccountTier:            decision.AccountTier,
-			EffectiveMinConfidence: decision.EffectiveMinConfidence,
-			EffectiveMaxCapitalPct: decision.EffectiveMaxCapitalPct,
-			PolicyAdjustmentsJSON:  string(policyJSON),
+			ID:       cycleID,
+			ChatID:   chatID,
+			Exchange: userExchange,
+			CycleAt:  nowUTC,
+		}
+		if decision != nil {
+			rejectionJSON, marshalErr := json.Marshal(decision.CandidateFunnel.RejectionCounts)
+			if marshalErr != nil {
+				log.Printf("[TELEMETRY] Failed to marshal rejection counts: %v", marshalErr)
+				rejectionJSON = []byte("{}")
+			}
+			policyJSON, marshalErr := json.Marshal(decision.PolicyAdjustments)
+			if marshalErr != nil {
+				log.Printf("[TELEMETRY] Failed to marshal policy adjustments: %v", marshalErr)
+				policyJSON = []byte("[]")
+			}
+			gateBlockCode := ""
+			gateBlockReason := ""
+			if decision.ExecutionGate != nil {
+				gateBlockCode = decision.ExecutionGate.BlockCode
+				gateBlockReason = decision.ExecutionGate.BlockReason
+			}
+			cycleRec.Symbol = decision.Symbol
+			cycleRec.Action = decision.Action
+			cycleRec.Confidence = decision.Confidence
+			cycleRec.UniverseCount = decision.CandidateFunnel.CandidateUniverseCount
+			cycleRec.RankedCount = decision.CandidateFunnel.CandidateRankedCount
+			cycleRec.ViableCount = decision.CandidateFunnel.CandidateViableCount
+			cycleRec.RejectionCountsJSON = string(rejectionJSON)
+			cycleRec.Regime = decision.PreTradeRegime
+			cycleRec.Expectancy = decision.PreTradeExpectancy
+			cycleRec.ExpectancySampleSize = decision.PreTradeExpectancySampleSize
+			cycleRec.GateBlockCode = gateBlockCode
+			cycleRec.GateBlockReason = gateBlockReason
+			cycleRec.AccountTier = decision.AccountTier
+			cycleRec.EffectiveMinConfidence = decision.EffectiveMinConfidence
+			cycleRec.EffectiveMaxCapitalPct = decision.EffectiveMaxCapitalPct
+			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
 		}
 		if err := h.telemetryStore.InsertCycleRecord(ctx, cycleRec); err != nil {
 			log.Printf("[TELEMETRY] Failed to insert cycle record: %v", err)
@@ -4196,38 +4198,39 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 				ClosedAt:    closedAt,
 			}); err != nil {
 				log.Printf("[SCALPING] Failed to persist closed-order lifecycle for %s: %v", orderID, err)
-			} else if h.telemetryStore != nil {
-				outcome := "breakeven"
-				if profitable {
-					outcome = "win"
-				} else if pnl.LessThan(decimal.Zero) {
-					outcome = "loss"
-				}
+			}
+		}
+		if h.telemetryStore != nil {
+			outcome := "breakeven"
+			if profitable {
+				outcome = "win"
+			} else if pnl.LessThan(decimal.Zero) {
+				outcome = "loss"
+			}
 
-				holdSeconds := 0
-				if h.db != nil {
-					var openedAt time.Time
-					if err := h.db.QueryRowContext(
-						ctx,
-						"SELECT opened_at FROM trading_positions WHERE order_id = ? ORDER BY opened_at DESC LIMIT 1",
-						orderID,
-					).Scan(&openedAt); err == nil && !openedAt.IsZero() {
-						secs := int(closedAt.Sub(openedAt).Seconds())
-						if secs < 0 {
-							secs = 0
-						}
-						holdSeconds = secs
+			holdSeconds := 0
+			if h.db != nil {
+				var openedAt time.Time
+				if err := h.db.QueryRowContext(
+					ctx,
+					"SELECT opened_at FROM trading_positions WHERE order_id = ? ORDER BY opened_at DESC LIMIT 1",
+					orderID,
+				).Scan(&openedAt); err == nil && !openedAt.IsZero() {
+					secs := int(closedAt.Sub(openedAt).Seconds())
+					if secs < 0 {
+						secs = 0
 					}
+					holdSeconds = secs
 				}
+			}
 
-				if err := h.telemetryStore.UpdateCycleOutcome(ctx, orderID, ScalpingOutcomeRecord{
-					Outcome:             outcome,
-					PnL:                 pnl.InexactFloat64(),
-					HoldDurationSeconds: holdSeconds,
-					ClosedAt:            closedAt,
-				}); err != nil {
-					log.Printf("[TELEMETRY] Failed to update outcome for order %s: %v", orderID, err)
-				}
+			if err := h.telemetryStore.UpdateCycleOutcome(ctx, orderID, ScalpingOutcomeRecord{
+				Outcome:             outcome,
+				PnL:                 pnl.InexactFloat64(),
+				HoldDurationSeconds: holdSeconds,
+				ClosedAt:            closedAt,
+			}); err != nil {
+				log.Printf("[TELEMETRY] Failed to update outcome for order %s: %v", orderID, err)
 			}
 		}
 	}
