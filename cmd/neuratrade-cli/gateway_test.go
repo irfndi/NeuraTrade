@@ -165,7 +165,7 @@ func TestCleanupGatewayRuntimeArtifacts_RemovesPIDFilesAndMarksStateDown(t *test
 	telegramPID := filepath.Join(tempDir, "telegram.pid")
 
 	for _, pidFile := range []string{backendPID, ccxtPID, telegramPID} {
-		err := os.WriteFile(pidFile, []byte("123"), 0644)
+		err := os.WriteFile(pidFile, []byte("999999999"), 0644)
 		require.NoError(t, err, "write %s", pidFile)
 	}
 

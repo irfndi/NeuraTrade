@@ -989,7 +989,7 @@ func removePIDFileIfProcessExited(pidFile string) error {
 	}
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
-	if err != nil {
+	if err != nil || pid <= 0 {
 		return os.Remove(pidFile)
 	}
 
@@ -1003,7 +1003,7 @@ func removePIDFileIfProcessExited(pidFile string) error {
 	}
 
 	if removeErr := os.Remove(pidFile); removeErr != nil && !os.IsNotExist(removeErr) {
-		return fmt.Errorf("remove pid file: %w", removeErr)
+		return fmt.Errorf("removing pid file %s: %w", pidFile, removeErr)
 	}
 	return nil
 }
