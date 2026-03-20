@@ -76,6 +76,7 @@ type ScalpingPolicyConfig struct {
 	NoFillMaxCapitalPctCap   float64
 	RecoveryMicroEntryCapPct float64
 	ProgressBlockAfter       time.Duration
+	LossStreakBudget         int
 }
 
 func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
@@ -92,6 +93,7 @@ func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
 		NoFillMaxCapitalPctCap:   1.50,
 		RecoveryMicroEntryCapPct: DefaultRecoveryMicroEntryCapPct,
 		ProgressBlockAfter:       DefaultScalpingProgressBlockAfter,
+		LossStreakBudget:         DefaultRecoveryLossStreakBudget,
 	}
 }
 
@@ -138,6 +140,10 @@ func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
 	if c.ProgressBlockAfter <= 0 {
 		c.ProgressBlockAfter = DefaultScalpingProgressBlockAfter
 	}
+	if c.LossStreakBudget <= 0 {
+		c.LossStreakBudget = DefaultRecoveryLossStreakBudget
+	}
+	c.LossStreakBudget = clampInt(c.LossStreakBudget, 1, 20)
 	return c
 }
 
@@ -227,6 +233,7 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		EffectiveMaxCapitalPct: clampFloat(input.BaseMaxCapitalPct, 0.10, 100.0),
 		MaxBidAskSpreadPct:     cfg.MaxBidAskSpreadPct,
 		MaxConcurrentPositions: cfg.MaxConcurrentPositions,
+		LossStreakBudget:       cfg.LossStreakBudget,
 	}
 	if policy.EffectiveMaxCapitalPct <= 0 {
 		policy.EffectiveMaxCapitalPct = 0.10

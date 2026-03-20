@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -8,6 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/services"
 )
+
+const maxShadowQueryWindow = 7 * 24 * time.Hour
 
 type ShadowHandler struct {
 	coordinator *services.ShadowEvaluationCoordinator
@@ -72,7 +75,7 @@ func (h *ShadowHandler) VariantDiagnostics(c *gin.Context) {
 	}
 	diagnostics, err := h.coordinator.VariantDiagnostics(c.Request.Context(), variantID)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, services.ErrVariantNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -107,6 +110,10 @@ func (h *ShadowHandler) Comparison(c *gin.Context) {
 	}
 	if start.After(end) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "start must be before end"})
+		return
+	}
+	if end.Sub(start) > maxShadowQueryWindow {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "time range too large, limit is 168h (7 days)"})
 		return
 	}
 	report, err := h.coordinator.CompareLiveVsShadow(c.Request.Context(), start, end)

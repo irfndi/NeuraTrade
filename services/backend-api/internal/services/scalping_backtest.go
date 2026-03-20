@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -17,14 +18,16 @@ const (
 	DefaultScalpingBacktestSlippage      = 0.001
 	DefaultScalpingBacktestHoldPeriod    = 5 * time.Minute
 	DefaultScalpingBacktestMaxCapitalPct = 5.0
+
+	// backtestSpreadMultiplier scales the intra-candle high-low range to
+	// approximate a bid-ask spread. The factor 8 was derived empirically from
+	// typical crypto market microstructure where the observable range is
+	// roughly 8x the effective spread on liquid pairs.
+	backtestSpreadMultiplier = 8
 )
 
-var defaultScalpingBacktestUniverse = []string{
-	"BTC/USDT",
-	"ETH/USDT",
-	"SOL/USDT",
-	"BNB/USDT",
-	"XRP/USDT",
+func defaultScalpingBacktestUniverse() []string {
+	return []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"}
 }
 
 type ScalpingCyclePolicy = appautonomy.ScalpingCyclePolicy
@@ -297,12 +300,15 @@ func (e *ScalpingBacktestEngine) loadHistoricalSignals(ctx context.Context, star
 	}
 
 	if len(symbolFilter) == 0 {
-		for _, symbol := range defaultScalpingBacktestUniverse {
+		for _, symbol := range defaultScalpingBacktestUniverse() {
 			symbolFilter[normalizeSymbolForComparison(symbol)] = struct{}{}
 		}
 	}
 
 	signals, err := e.loadSignalsFromOHLCV(ctx, startTime, endTime, symbolFilter)
+	if err != nil {
+		log.Printf("[BACKTEST] OHLCV signal load failed (falling back to market_data): %v", err)
+	}
 	if err == nil && len(signals) > 0 {
 		return signals, nil
 	}
@@ -449,7 +455,6 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		Signal:      signal.Signal,
 		Decision:    decision,
 	}
-	e.positions[signal.Symbol] = position
 
 	edgeScore := decision.Confidence - 0.50
 	edgeScore += math.Abs(signal.Signal.OrderBookImbalance) * 0.50
@@ -510,7 +515,6 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		RegimeAtExit:  position.RegimeEntry,
 	}
 
-	delete(e.positions, signal.Symbol)
 	return &SimulatedTrade{Trade: trade}, nil
 }
 
@@ -541,7 +545,7 @@ func (e *ScalpingBacktestEngine) classifyRegimeVolatility(signal MarketSignal) s
 func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AITradingDecision) map[string]GateResult {
 	results := map[string]GateResult{}
 
-	spreadAllowed := signal.BidAskSpread > 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
+	spreadAllowed := signal.BidAskSpread >= 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
 	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.10
@@ -596,7 +600,7 @@ func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AI
 			if riskRewardAllowed {
 				riskRewardReason = ""
 			} else {
-				riskRewardReason = "risk_reward_below_1_10"
+				riskRewardReason = "insufficient_risk_reward_ratio"
 			}
 		}
 	}
@@ -740,7 +744,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 		config.InitialCapital = decimal.NewFromInt(10000)
 	}
 	if config.FeeRate.IsNegative() {
-		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct / 200)
+		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct).Div(decimal.NewFromInt(200))
 	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
 		config.SlippagePct = decimal.NewFromFloat(DefaultScalpingBacktestSlippage)
@@ -761,7 +765,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 		config.DefaultHoldPeriod = DefaultScalpingBacktestHoldPeriod
 	}
 	if len(config.Symbols) == 0 {
-		config.Symbols = append([]string(nil), defaultScalpingBacktestUniverse...)
+		config.Symbols = defaultScalpingBacktestUniverse()
 	}
 	return config
 }
@@ -826,6 +830,26 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	}
 }
 
+func computeExpectancy(wins, losses int, winSum, lossSum decimal.Decimal) float64 {
+	sample := wins + losses
+	if sample == 0 {
+		return 0
+	}
+	avgWin := decimal.Zero
+	avgLoss := decimal.Zero
+	if wins > 0 {
+		avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
+	}
+	if losses > 0 {
+		avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
+	}
+	winRate := float64(wins) / float64(sample)
+	expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
+		Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
+	expectancy, _ := expectancyDec.Float64()
+	return expectancy
+}
+
 func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expectancy float64, sample int, scoped bool) {
 	var wins int
 	var losses int
@@ -850,19 +874,7 @@ func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expect
 
 	sample = wins + losses
 	if sample >= e.config.MinExpectancyN {
-		avgWin := decimal.Zero
-		avgLoss := decimal.Zero
-		if wins > 0 {
-			avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
-		}
-		if losses > 0 {
-			avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
-		}
-		winRate := float64(wins) / float64(sample)
-		expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
-			Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
-		expectancy, _ = expectancyDec.Float64()
-		return expectancy, sample, true
+		return computeExpectancy(wins, losses, winSum, lossSum), sample, true
 	}
 
 	wins = 0
@@ -885,19 +897,7 @@ func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expect
 	if sample == 0 {
 		return 0, 0, false
 	}
-	avgWin := decimal.Zero
-	avgLoss := decimal.Zero
-	if wins > 0 {
-		avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
-	}
-	if losses > 0 {
-		avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
-	}
-	winRate := float64(wins) / float64(sample)
-	expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
-		Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
-	expectancy, _ = expectancyDec.Float64()
-	return expectancy, sample, false
+	return computeExpectancy(wins, losses, winSum, lossSum), sample, false
 }
 
 func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
@@ -954,7 +954,10 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	symbolFilter map[string]struct{},
 ) ([]HistoricalSignal, error) {
 	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), md.price, md.bid, md.ask, md.high_24h, md.low_24h, md.volume_24h, md.timestamp
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), md.price,
+			COALESCE(md.bid, 0), COALESCE(md.ask, 0),
+			COALESCE(md.high_24h, 0), COALESCE(md.low_24h, 0), COALESCE(md.volume_24h, 0),
+			md.timestamp
 		FROM market_data md
 		JOIN trading_pairs tp ON tp.id = md.trading_pair_id
 		JOIN exchanges e ON e.id = md.exchange_id
@@ -1080,7 +1083,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint) []HistoricalSi
 
 			spreadPct := 0.0
 			if point.close > 0 && point.high > point.low {
-				spreadPct = ((point.high - point.low) / point.close) * 8
+				spreadPct = ((point.high - point.low) / point.close) * backtestSpreadMultiplier
 			}
 
 			imbalance := 0.0

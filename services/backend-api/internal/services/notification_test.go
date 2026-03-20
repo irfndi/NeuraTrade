@@ -799,8 +799,8 @@ func TestNotificationService_formatAggregatedArbitrageMessage(t *testing.T) {
 	assert.Contains(t, message, "ETH/USDT")
 	assert.Contains(t, message, "2.50%")
 	assert.Contains(t, message, "1.80%")
-	assert.Contains(t, message, "0.8%")
-	// Both confidence values might round to 0.8% due to InexactFloat64()
+	assert.Contains(t, message, "85.0%")
+	assert.Contains(t, message, "75.0%")
 }
 
 func TestNotificationService_formatAggregatedTechnicalMessage(t *testing.T) {
