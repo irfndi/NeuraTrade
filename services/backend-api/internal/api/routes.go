@@ -95,12 +95,17 @@ func (zapNopServiceLogger) Info(_ string)  {}
 func (zapNopServiceLogger) Warn(_ string)  {}
 func (zapNopServiceLogger) Error(_ string) {}
 
-// parseAIProviderChain builds an ordered list of AI provider identifiers using the given
-// primary provider and the NEURATRADE_AI_PROVIDER_CHAIN environment variable.
-// The input and environment values are normalized to lowercase and trimmed; empty entries
-// are ignored, duplicates are removed, and the primary provider is guaranteed to be the first
-// element. If neither primary nor the environment variable is provided, "zhipu" is used.
-func parseAIProviderChain(primary string) []string {
+var supportedAIProviders = map[string]struct{}{
+	string(llm.ProviderOpenAI):    {},
+	string(llm.ProviderAnthropic): {},
+	string(llm.ProviderMLX):       {},
+	"minimax":                     {},
+	"zai":                         {},
+	"zai-coding-plan":             {},
+	"zhipu":                       {},
+}
+
+func parseAIProviderChain(primary string) ([]string, error) {
 	primary = strings.ToLower(strings.TrimSpace(primary))
 	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
 	parts := []string{}
@@ -114,6 +119,9 @@ func parseAIProviderChain(primary string) []string {
 	seen := make(map[string]struct{})
 	chain := make([]string, 0, len(parts)+1)
 	if primary != "" {
+		if err := validateAIProviderName(primary); err != nil {
+			return nil, err
+		}
 		seen[primary] = struct{}{}
 		chain = append(chain, primary)
 	}
@@ -122,13 +130,27 @@ func parseAIProviderChain(primary string) []string {
 		if provider == "" {
 			continue
 		}
+		if err := validateAIProviderName(provider); err != nil {
+			return nil, err
+		}
 		if _, exists := seen[provider]; exists {
 			continue
 		}
 		seen[provider] = struct{}{}
 		chain = append(chain, provider)
 	}
-	return chain
+	return chain, nil
+}
+
+func validateAIProviderName(provider string) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return nil
+	}
+	if _, ok := supportedAIProviders[provider]; ok {
+		return nil
+	}
+	return fmt.Errorf("unsupported ai provider %q in parseAIProviderChain", provider)
 }
 
 // are mapped to their vendor-specific endpoints, and unknown providers default to the OpenAI API.
@@ -143,7 +165,7 @@ func providerBaseURL(provider string) string {
 	case "zai":
 		return "https://api.z.ai/api/paas/v4"
 	case "zhipu":
-		return "https://api.z.ai/api/paas/v4"
+		return "https://open.bigmodel.cn/api/paas/v4"
 	case "mlx":
 		return "http://localhost:8080/v1"
 	default:
@@ -807,7 +829,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			}
 		}
 
-		providerChain := parseAIProviderChain(aiProvider)
+		providerChain, chainErr := parseAIProviderChain(aiProvider)
+		if chainErr != nil {
+			log.Printf("AI provider chain invalid; AI scalping disabled: %v", chainErr)
+			questEngine.SetAIProviderChainStats(0, 0)
+			providerChain = nil
+		}
 		failoverNodes := make([]llm.FailoverNode, 0, len(providerChain))
 		for _, provider := range providerChain {
 			nodeConfig := resolveProviderNode(aiProvider, aiAPIKey, aiBaseURL, provider)

@@ -1882,7 +1882,7 @@ func configInit(cCtx *cli.Context) error {
 			"provider":     "zhipu",
 			"model":        "glm-5-turbo",
 			"api_key":      aiKey,
-			"base_url":     "https://api.z.ai/api/paas/v4",
+			"base_url":     "https://open.bigmodel.cn/api/paas/v4",
 			"daily_budget": "10.00",
 		},
 		"security": map[string]interface{}{
