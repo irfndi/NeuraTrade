@@ -611,8 +611,8 @@ func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, to
 		totalWins += ro.Wins
 	}
 	overallWinRate := 0.0
-	if totalCyclesAll > 0 {
-		overallWinRate = float64(totalWins) / float64(totalCyclesAll)
+	if executedCycles > 0 {
+		overallWinRate = float64(totalWins) / float64(executedCycles)
 	}
 	return totalCyclesAll, executedCycles, overallWinRate
 }

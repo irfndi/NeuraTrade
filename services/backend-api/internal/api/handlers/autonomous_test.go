@@ -128,6 +128,17 @@ func TestAutonomousHandler_BuildLifecyclePerformanceSummary_UsesNetReturnsForRis
 	assert.Equal(t, formatDrawdown(netRisk.MaxDrawdown, netRisk.SampleSize), summary.Drawdown)
 }
 
+func TestSummarizeQuestInvestigation_UsesExecutedCyclesForWinRate(t *testing.T) {
+	totalCycles, executedCycles, winRate := summarizeQuestInvestigation([]services.RegimeOutcomeStat{
+		{Regime: "trend", Count: 4, Wins: 3},
+		{Regime: "range", Count: 6, Wins: 4},
+	}, 100)
+
+	assert.Equal(t, 100, totalCycles)
+	assert.Equal(t, 10, executedCycles)
+	assert.InDelta(t, 0.7, winRate, 1e-9)
+}
+
 func TestAutonomousHandler_BuildLifecyclePerformanceSummary_NoVisibleTradesReturnsFalse(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "autonomous-lifecycle-performance-empty.db"))
 	require.NoError(t, err)
