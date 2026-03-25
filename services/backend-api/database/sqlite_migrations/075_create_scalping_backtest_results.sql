@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS scalping_backtest_signals (
     funnel_stage TEXT NOT NULL,
     rejection_reason TEXT,
     gate_results TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (id, run_id),
     FOREIGN KEY (run_id) REFERENCES scalping_backtest_runs(id) ON DELETE CASCADE
 );
 
@@ -45,7 +46,7 @@ CREATE TABLE IF NOT EXISTS scalping_backtest_trades (
     regime_at_exit TEXT NOT NULL,
     hold_duration_seconds INTEGER NOT NULL,
     FOREIGN KEY (run_id) REFERENCES scalping_backtest_runs(id) ON DELETE CASCADE,
-    FOREIGN KEY (signal_id) REFERENCES scalping_backtest_signals(id) ON DELETE CASCADE
+    FOREIGN KEY (signal_id, run_id) REFERENCES scalping_backtest_signals(id, run_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS scalping_backtest_gate_summary (

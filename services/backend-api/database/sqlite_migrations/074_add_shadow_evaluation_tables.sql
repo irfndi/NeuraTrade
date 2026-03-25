@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS shadow_outcomes (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_shadow_outcomes_shadow_decision_id
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shadow_outcomes_shadow_decision_id_unique
     ON shadow_outcomes (shadow_decision_id);
 CREATE INDEX IF NOT EXISTS idx_shadow_outcomes_closed_at
     ON shadow_outcomes (closed_at DESC);
