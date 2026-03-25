@@ -12,8 +12,6 @@ import (
 	"github.com/irfndi/neuratrade/internal/observability"
 )
 
-var telegramMaxMessageUnits = loadTelegramMaxMessageUnits()
-
 func loadTelegramMaxMessageUnits() int {
 	if v := os.Getenv("TELEGRAM_MAX_MESSAGE_UNITS"); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
@@ -271,7 +269,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 	mostCompactLines := lines
 
 	message := formatNotificationCodeBlock(lines)
-	if telegramMessageUnits(message) <= telegramMaxMessageUnits {
+	if telegramMessageUnits(message) <= ns.telegramMaxMessageUnits {
 		return message
 	}
 
@@ -279,7 +277,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 		candidateLines := buildAIReasoningMessageLines(reasoning, category, confidenceKnown, reasonsToShow)
 		mostCompactLines = candidateLines
 		message = formatNotificationCodeBlock(candidateLines)
-		if telegramMessageUnits(message) <= telegramMaxMessageUnits {
+		if telegramMessageUnits(message) <= ns.telegramMaxMessageUnits {
 			return message
 		}
 
@@ -287,10 +285,11 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 	}
 
 	if reasoning.Action != "" {
-		return formatNotificationCodeBlockWithTailPriority(mostCompactLines[:len(mostCompactLines)-2], mostCompactLines[len(mostCompactLines)-2:], telegramMaxMessageUnits)
+		bodyLines, actionTail := splitAIReasoningActionTail(mostCompactLines)
+		return formatNotificationCodeBlockWithTailPriority(bodyLines, actionTail, ns.telegramMaxMessageUnits)
 	}
 
-	return formatNotificationCodeBlockWithLimit(mostCompactLines, telegramMaxMessageUnits)
+	return formatNotificationCodeBlockWithLimit(mostCompactLines, ns.telegramMaxMessageUnits)
 }
 
 // buildAIReasoningMessageLines builds a slice of plain-text lines representing an AI reasoning notification.
@@ -360,7 +359,9 @@ func buildAIReasoningFactorLines(reasons []string, maxReasons int) []string {
 	}
 
 	limit := len(reasons)
-	if maxReasons < limit {
+	if maxReasons < 0 {
+		limit = 0
+	} else if maxReasons < limit {
 		limit = maxReasons
 	}
 
@@ -379,6 +380,13 @@ func buildAIReasoningFactorLines(reasons []string, maxReasons int) []string {
 	}
 
 	return factorLines
+}
+
+func splitAIReasoningActionTail(lines []string) ([]string, []string) {
+	if len(lines) < 2 {
+		return lines, nil
+	}
+	return lines[:len(lines)-2], lines[len(lines)-2:]
 }
 
 // formatNotificationCodeBlock joins the provided lines into a single notification message separated by newlines.
@@ -484,7 +492,6 @@ func truncateToTelegramUnits(message string, maxUnits int) string {
 	return builder.String()
 }
 
-// - The summary contains any of the phrases: "runtime error", "skipped due to ai/runtime error", "returned no trade decision", or "paused temporarily after repeated runtime failures".
 func shouldThrottleAIReasoning(reasoning AIReasoningNotification) bool {
 	action := strings.ToLower(strings.TrimSpace(reasoning.Action))
 	summary := strings.ToLower(strings.TrimSpace(reasoning.Summary))

@@ -2283,6 +2283,7 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 }
 
 func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.T) {
+	t.Setenv("TELEGRAM_MAX_MESSAGE_UNITS", "3900")
 	ns := NewNotificationService(nil, nil, "", "", "")
 
 	message := ns.formatAIReasoningMessage(AIReasoningNotification{
@@ -2298,7 +2299,7 @@ func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.
 		}(),
 		Action: "Proceed cautiously",
 	})
-	assert.LessOrEqual(t, telegramMessageUnits(message), telegramMaxMessageUnits)
+	assert.LessOrEqual(t, telegramMessageUnits(message), ns.telegramMaxMessageUnits)
 
 	fallbackReasoning := AIReasoningNotification{
 		DecisionType: "trade_entry",
@@ -2314,7 +2315,7 @@ func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.
 		Action: "Proceed cautiously",
 	}
 	fallbackMessage := ns.formatAIReasoningMessage(fallbackReasoning)
-	assert.LessOrEqual(t, telegramMessageUnits(fallbackMessage), telegramMaxMessageUnits)
+	assert.LessOrEqual(t, telegramMessageUnits(fallbackMessage), ns.telegramMaxMessageUnits)
 	assert.Contains(t, fallbackMessage, "AI Trading Decision")
 	assert.Contains(t, fallbackMessage, "Summary:")
 	assert.Contains(t, fallbackMessage, "Recommended Action: Proceed cautiously")
@@ -2338,7 +2339,7 @@ func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.
 
 		if strings.Contains(candidate, "Factor 16") && !strings.Contains(candidate, "Factor 17") {
 			foundSixteenFactorBoundary = true
-			assert.LessOrEqual(t, telegramMessageUnits(candidate), telegramMaxMessageUnits)
+			assert.LessOrEqual(t, telegramMessageUnits(candidate), ns.telegramMaxMessageUnits)
 			break
 		}
 	}
