@@ -1181,9 +1181,11 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				"",
 				s.getLatestFailoverAttemptInfo(),
 			)
-			return runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), nil
+			return copyPreTradeTelemetry(runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), decision), nil
 		}
+		sourceDecision := decision
 		decision = strategyHoldDecision(err.Error(), decision.Confidence)
+		decision = copyPreTradeTelemetry(decision, sourceDecision)
 		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 			Allowed:     false,
 			BlockReason: err.Error(),
@@ -1253,6 +1255,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	}
 
 	if policy.MaxConcurrentPositions > 0 && portfolio.OpenPositions >= policy.MaxConcurrentPositions {
+		sourceDecision := decision
 		decision = strategyHoldDecision(
 			fmt.Sprintf(
 				"account tier %s allows at most %d concurrent position(s); current %d",
@@ -1262,6 +1265,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			),
 			decision.Confidence,
 		)
+		decision = copyPreTradeTelemetry(decision, sourceDecision)
 		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 			Allowed:     false,
 			BlockReason: decision.Reasoning,
@@ -1275,11 +1279,13 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			decision.Confidence = effectiveMinConfidence
 			decision.PolicyAdjustments = append(decision.PolicyAdjustments, "micro_confidence_grace")
 		} else {
+			sourceDecision := decision
 			log.Printf("[AI-SCALPING] Confidence %.2f below minimum %.2f, skipping", decision.Confidence, effectiveMinConfidence)
 			decision = strategyHoldDecision(
 				fmt.Sprintf("confidence %.2f below dynamic threshold %.2f", decision.Confidence, effectiveMinConfidence),
 				decision.Confidence,
 			)
+			decision = copyPreTradeTelemetry(decision, sourceDecision)
 			decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 				Allowed:     false,
 				BlockReason: decision.Reasoning,
@@ -1318,7 +1324,9 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			if gateErr != nil {
 				log.Printf("[AI-SCALPING] Autonomous gate evaluation failed: %v", gateErr)
 				reason := fmt.Sprintf("autonomy gate evaluation failed: %v", gateErr)
+				sourceDecision := decision
 				decision = runtimeDegradedHoldDecision(reason, reasonCategoryExecutionUnavailable)
+				decision = copyPreTradeTelemetry(decision, sourceDecision)
 				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 					Allowed:              false,
 					BlockReason:          reason,
@@ -1335,10 +1343,12 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 					reason = "autonomy live gate closed"
 				}
 				log.Printf("[AI-SCALPING] Autonomous live gate blocked execution for %s: %s", scope.StrategyID, reason)
+				sourceDecision := decision
 				decision = strategyHoldDecision(
 					fmt.Sprintf("autonomy live gate closed: %s", reason),
 					decision.Confidence,
 				)
+				decision = copyPreTradeTelemetry(decision, sourceDecision)
 				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 					Allowed:              false,
 					BlockReason:          reason,
@@ -2713,6 +2723,16 @@ func strategyHoldDecision(reason string, confidence float64) *AITradingDecision 
 	}
 }
 
+func copyPreTradeTelemetry(target *AITradingDecision, source *AITradingDecision) *AITradingDecision {
+	if target == nil || source == nil {
+		return target
+	}
+	target.PreTradeRegime = source.PreTradeRegime
+	target.PreTradeExpectancy = source.PreTradeExpectancy
+	target.PreTradeExpectancySampleSize = source.PreTradeExpectancySampleSize
+	return target
+}
+
 func shouldPromoteGenericHoldToFallback(decision *AITradingDecision, funnel appautonomy.CandidateFunnelSnapshot) bool {
 	_ = funnel
 	if decision == nil {
@@ -2841,6 +2861,12 @@ func cloneAITradingDecision(decision *AITradingDecision) *AITradingDecision {
 			[]appautonomy.CandidateRejection(nil),
 			decision.CandidateFunnel.TopCandidateRejections...,
 		)
+	}
+	if len(decision.CandidateFunnel.RejectionCounts) > 0 {
+		copyValue.CandidateFunnel.RejectionCounts = make(map[string]int, len(decision.CandidateFunnel.RejectionCounts))
+		for key, value := range decision.CandidateFunnel.RejectionCounts {
+			copyValue.CandidateFunnel.RejectionCounts[key] = value
+		}
 	}
 	if decision.ExecutionGate != nil {
 		gateCopy := *decision.ExecutionGate
