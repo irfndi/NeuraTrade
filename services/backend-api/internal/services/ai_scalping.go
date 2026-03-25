@@ -1181,7 +1181,13 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				"",
 				s.getLatestFailoverAttemptInfo(),
 			)
-			return copyPreTradeTelemetry(runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), decision), nil
+			degraded := copyPreTradeTelemetry(runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), decision)
+			degraded.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+				Allowed:     false,
+				BlockReason: reasonCategoryLLMParseContract,
+				BlockCode:   appautonomy.CandidateRejectAutonomyRuntime,
+			}
+			return degraded, nil
 		}
 		sourceDecision := decision
 		decision = strategyHoldDecision(err.Error(), decision.Confidence)
@@ -2879,7 +2885,7 @@ func cloneAITradingDecision(decision *AITradingDecision) *AITradingDecision {
 // It accepts nil and hold decisions, and returns an error for any actionable decision that fails checks:
 // - decision must be non-nil (unless hold is intended),
 // - Action must be one of the supported actions (buy, sell, hold),
-// - Symbol must be non-empty and contain a '/' separator (e.g., "BTC/USDT"),
+// - Symbol must be non-empty after normalization,
 // - SizePercent must be > 0 for actionable decisions,
 // - Confidence must be greater than 0 and less than or equal to 1.
 // Returns nil when the decision is valid or represents a hold.
@@ -2895,7 +2901,7 @@ func validateRecoveredDecisionContract(decision *AITradingDecision) error {
 		return fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
 	}
 	normalizedSymbol := normalizeSymbolForComparison(decision.Symbol)
-	if normalizedSymbol == "" || !strings.Contains(normalizedSymbol, "/") {
+	if normalizedSymbol == "" {
 		return fmt.Errorf("actionable decision symbol malformed: %q", strings.TrimSpace(decision.Symbol))
 	}
 	if decision.SizePercent <= 0 {
