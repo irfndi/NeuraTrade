@@ -119,7 +119,7 @@ func NewSignalProcessor(
 		RetryAttempts:       3,
 		RetryDelay:          30 * time.Second,
 		TimeoutDuration:     30 * time.Second, // Default timeout for database operations
-		MinOHLCVCount:       0,
+		MinOHLCVCount:       50,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -895,9 +895,6 @@ func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]T
 	}
 
 	minOHLCV := sp.config.MinOHLCVCount
-	if minOHLCV <= 0 {
-		minOHLCV = 50
-	}
 	if len(prices) < minOHLCV {
 		return nil, fmt.Errorf("%w for %s: need %d, got %d", errInsufficientOHLCVData, symbol, minOHLCV, len(prices))
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/irfndi/neuratrade/internal/logging"
 	"github.com/irfndi/neuratrade/internal/models"
@@ -132,145 +133,113 @@ func TestSignalProcessor_ProcessSignal(t *testing.T) {
 	mockScorer.AssertExpectations(t)
 }
 
-func TestSignalProcessor_GenerateTechnicalSignals_RequiresFiftyCandles(t *testing.T) {
-	mockPool, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
-	}
-	defer mockPool.Close()
-
-	dbPool := database.NewMockDBPool(mockPool)
-	var logger logging.Logger = logging.NewStandardLogger("info", "test")
-	sp := NewSignalProcessor(
-		dbPool,
-		logger,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
-
-	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
-		WithArgs(1).
-		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
-	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
-		WithArgs(1).
-		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
-
-	ohlcvRows := pgxmock.NewRows([]string{"open", "high", "low", "close", "volume", "timestamp"})
-	for i := 0; i < 49; i++ {
-		price := 50000.0 + float64(i)*10.0
-		ohlcvRows.AddRow(price, price+50, price-50, price+20, 1000.0, time.Now().Add(-time.Duration(49-i)*time.Minute))
-	}
-	mockPool.ExpectQuery("SELECT open, high, low, close, volume, timestamp").
-		WithArgs(1, 1).
-		WillReturnRows(ohlcvRows)
-
-	_, err = sp.generateTechnicalSignals(models.MarketData{TradingPairID: 1, ExchangeID: 1})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "need 50, got 49")
-
-	if err := mockPool.ExpectationsWereMet(); err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
-	}
-}
-
-func TestSignalProcessor_ProcessSignal_AllowsArbitrageWhenOHLCVHistoryIsShort(t *testing.T) {
-	mockPool, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
-	}
-	defer mockPool.Close()
-
-	mockAggregator := &MockSignalAggregator{}
-	mockScorer := &MockSignalQualityScorer{}
-	var logger logging.Logger = logging.NewStandardLogger("info", "test")
-
-	dbPool := database.NewMockDBPool(mockPool)
-	sp := NewSignalProcessor(
-		dbPool,
-		logger,
-		mockAggregator,
-		mockScorer,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
-
-	marketData := models.MarketData{
-		TradingPairID: 1,
-		ExchangeID:    1,
-		LastPrice:     decimal.NewFromFloat(50000),
-		Volume24h:     decimal.NewFromFloat(1000),
-		Timestamp:     time.Now(),
+func TestSignalProcessor_OHLCVBoundaryCases(t *testing.T) {
+	tests := []struct {
+		name       string
+		arbitrage  bool
+		assertions func(t *testing.T, sp *SignalProcessor, marketData models.MarketData)
+	}{
+		{
+			name:      "generate technical signals requires fifty candles",
+			arbitrage: false,
+			assertions: func(t *testing.T, sp *SignalProcessor, marketData models.MarketData) {
+				_, err := sp.generateTechnicalSignals(marketData)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "need 50, got 49")
+			},
+		},
+		{
+			name:      "process signal allows arbitrage when ohlcv history is short",
+			arbitrage: true,
+			assertions: func(t *testing.T, sp *SignalProcessor, marketData models.MarketData) {
+				result := sp.processSignal(marketData)
+				assert.NoError(t, result.Error)
+				assert.True(t, result.Processed)
+				assert.Equal(t, SignalTypeArbitrage, result.SignalType)
+				assert.Equal(t, 0.9, result.QualityScore)
+			},
+		},
 	}
 
-	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
-		WithArgs(1).
-		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockPool, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			defer mockPool.Close()
 
-	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
-		WithArgs(1).
-		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+			var aggregator SignalAggregatorInterface
+			var scorer SignalQualityScorerInterface
+			if tt.arbitrage {
+				mockAggregator := &MockSignalAggregator{}
+				mockScorer := &MockSignalQualityScorer{}
+				aggregator = mockAggregator
+				scorer = mockScorer
+				mockAggregator.On("AggregateArbitrageSignals", mock.Anything, mock.Anything).
+					Return([]*AggregatedSignal{{
+						SignalType:      SignalTypeArbitrage,
+						Symbol:          "BTC/USDT",
+						Confidence:      decimal.NewFromFloat(0.85),
+						ProfitPotential: decimal.NewFromFloat(0.05),
+						CreatedAt:       time.Now(),
+					}}, nil)
+				mockScorer.On("AssessSignalQuality", mock.Anything, mock.Anything).
+					Return(&SignalQualityMetrics{OverallScore: decimal.NewFromFloat(0.9)}, nil)
+				defer mockAggregator.AssertExpectations(t)
+				defer mockScorer.AssertExpectations(t)
+			}
 
-	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
-		WithArgs(1).
-		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+			dbPool := database.NewMockDBPool(mockPool)
+			var logger logging.Logger = logging.NewStandardLogger("info", "test")
+			sp := NewSignalProcessor(dbPool, logger, aggregator, scorer, nil, nil, nil, nil)
+			marketData := models.MarketData{
+				TradingPairID: 1,
+				ExchangeID:    1,
+				LastPrice:     decimal.NewFromFloat(50000),
+				Volume24h:     decimal.NewFromFloat(1000),
+				Timestamp:     time.Now(),
+			}
 
-	arbRows := pgxmock.NewRows([]string{
-		"id", "trading_pair_id", "buy_exchange_id", "sell_exchange_id",
-		"buy_price", "sell_price", "profit_percentage", "detected_at", "expires_at",
-	}).AddRow(
-		"arb-1", 1, 1, 2,
-		decimal.NewFromFloat(49900), decimal.NewFromFloat(50150), decimal.NewFromFloat(0.8),
-		time.Now(), time.Now().Add(time.Minute),
-	)
-	mockPool.ExpectQuery("SELECT .* FROM arbitrage_opportunities .*").
-		WithArgs("BTC/USDT", pgxmock.AnyArg()).
-		WillReturnRows(arbRows)
+			mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
+				WithArgs(1).
+				WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+			mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
+				WithArgs(1).
+				WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
 
-	mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
-		WithArgs(1).
-		WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+			if tt.arbitrage {
+				mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
+					WithArgs(1).
+					WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+				arbRows := pgxmock.NewRows([]string{
+					"id", "trading_pair_id", "buy_exchange_id", "sell_exchange_id",
+					"buy_price", "sell_price", "profit_percentage", "detected_at", "expires_at",
+				}).AddRow(
+					"arb-1", 1, 1, 2,
+					decimal.NewFromFloat(49900), decimal.NewFromFloat(50150), decimal.NewFromFloat(0.8),
+					time.Now(), time.Now().Add(time.Minute),
+				)
+				mockPool.ExpectQuery("SELECT .* FROM arbitrage_opportunities .*").
+					WithArgs("BTC/USDT", pgxmock.AnyArg()).
+					WillReturnRows(arbRows)
+				mockPool.ExpectQuery("SELECT symbol FROM trading_pairs WHERE id = \\$1").
+					WithArgs(1).
+					WillReturnRows(pgxmock.NewRows([]string{"symbol"}).AddRow("BTC/USDT"))
+				mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
+					WithArgs(1).
+					WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+			}
 
-	mockPool.ExpectQuery("SELECT name FROM exchanges WHERE id = \\$1").
-		WithArgs(1).
-		WillReturnRows(pgxmock.NewRows([]string{"name"}).AddRow("binance"))
+			ohlcvRows := pgxmock.NewRows([]string{"open", "high", "low", "close", "volume", "timestamp"})
+			for i := 0; i < 49; i++ {
+				price := 50000.0 + float64(i)*10.0
+				ohlcvRows.AddRow(price, price+50, price-50, price+20, 1000.0, time.Now().Add(-time.Duration(49-i)*time.Minute))
+			}
+			mockPool.ExpectQuery("SELECT open, high, low, close, volume, timestamp").
+				WithArgs(1, 1).
+				WillReturnRows(ohlcvRows)
 
-	ohlcvRows := pgxmock.NewRows([]string{"open", "high", "low", "close", "volume", "timestamp"})
-	for i := 0; i < 49; i++ {
-		price := 50000.0 + float64(i)*10.0
-		ohlcvRows.AddRow(price, price+50, price-50, price+20, 1000.0, time.Now().Add(-time.Duration(49-i)*time.Minute))
+			tt.assertions(t, sp, marketData)
+			assert.NoError(t, mockPool.ExpectationsWereMet())
+		})
 	}
-	mockPool.ExpectQuery("SELECT open, high, low, close, volume, timestamp").
-		WithArgs(1, 1).
-		WillReturnRows(ohlcvRows)
-
-	mockAggregator.On("AggregateArbitrageSignals", mock.Anything, mock.Anything).
-		Return([]*AggregatedSignal{{
-			SignalType:      SignalTypeArbitrage,
-			Symbol:          "BTC/USDT",
-			Confidence:      decimal.NewFromFloat(0.85),
-			ProfitPotential: decimal.NewFromFloat(0.05),
-			CreatedAt:       time.Now(),
-		}}, nil)
-
-	mockScorer.On("AssessSignalQuality", mock.Anything, mock.Anything).
-		Return(&SignalQualityMetrics{OverallScore: decimal.NewFromFloat(0.9)}, nil)
-
-	result := sp.processSignal(marketData)
-
-	assert.NoError(t, result.Error)
-	assert.True(t, result.Processed)
-	assert.Equal(t, SignalTypeArbitrage, result.SignalType)
-	assert.Equal(t, 0.9, result.QualityScore)
-
-	if err := mockPool.ExpectationsWereMet(); err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
-	}
-	mockAggregator.AssertExpectations(t)
-	mockScorer.AssertExpectations(t)
 }
