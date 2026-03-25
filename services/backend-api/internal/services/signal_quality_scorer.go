@@ -677,17 +677,13 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 			continue
 		}
 
-		lastUpdate := time.Now()
-		if lastUpdateNS.Valid {
-			lastUpdate = lastUpdateNS.Time
-		}
-
 		avgSpread := decimal.Zero
 		avgLatency := time.Duration(0)
 		uptimePercentage := decimal.NewFromFloat(0.95)
 		dataGaps := 0
 		apiResponseTime := 100 * time.Millisecond
 		errorRate := decimal.NewFromFloat(0.01)
+		lastUpdate := time.Time{}
 		if fallback, ok := defaultStats[name]; ok && fallback != nil {
 			avgSpread = fallback.AvgSpread
 			avgLatency = fallback.AvgLatency
@@ -695,6 +691,10 @@ func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (ma
 			dataGaps = fallback.DataGaps
 			apiResponseTime = fallback.APIResponseTime
 			errorRate = fallback.ErrorRate
+			lastUpdate = fallback.LastDataUpdate
+		}
+		if lastUpdateNS.Valid {
+			lastUpdate = lastUpdateNS.Time
 		}
 
 		stats[name] = &ExchangeMetrics{

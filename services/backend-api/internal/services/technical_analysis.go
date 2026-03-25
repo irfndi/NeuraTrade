@@ -872,7 +872,12 @@ func (tas *TechnicalAnalysisService) determineOverallSignal(indicators []*Indica
 func (tas *TechnicalAnalysisService) fetchPriceData(ctx context.Context, symbol, exchange string) (*PriceData, error) {
 	query := `SELECT open, high, low, close, volume, timestamp FROM ohlcv_candles
 			 WHERE trading_pair_id IN (SELECT id FROM trading_pairs WHERE symbol = $1)
-			 AND exchange_id IN (SELECT id FROM exchanges WHERE name = $2)
+			 AND exchange_id IN (
+			 	SELECT e.id
+			 	FROM exchanges e
+			 	LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
+			 	WHERE COALESCE(ce.ccxt_id, e.ccxt_id, e.name) = $2
+			 )
 			 ORDER BY timestamp DESC LIMIT 200`
 	rows, err := tas.db.Query(ctx, query, symbol, exchange)
 	if err != nil {

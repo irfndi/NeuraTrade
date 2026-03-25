@@ -440,11 +440,16 @@ func (sa *SignalAggregator) AggregateMicrostructureSignals(ctx context.Context, 
 		}
 
 		if obi.SpreadPct.GreaterThan(decimal.Zero) {
+			spreadPct := obi.SpreadPct.InexactFloat64()
+			minThreshold := 0.01
+			maxThreshold := 0.50
+			normalizedConfidence := clampFloat((spreadPct-minThreshold)/(maxThreshold-minThreshold), 0, 1)
+			spreadConfidence := 0.2 + (normalizedConfidence * 0.7)
 			components = append(components, SignalComponent{
 				Indicator:   "spread",
 				Description: fmt.Sprintf("Spread %.4f%%", obi.SpreadPct.InexactFloat64()),
-				Confidence:  decimal.NewFromFloat(0.6),
-				Strength:    0.6,
+				Confidence:  decimal.NewFromFloat(spreadConfidence),
+				Strength:    spreadConfidence,
 			})
 		}
 
