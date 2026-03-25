@@ -1023,10 +1023,7 @@ func removePIDFileIfProcessExited(pidFile string) error {
 		return os.Remove(pidFile)
 	}
 
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("find process %d: %w", pid, err)
-	}
+	process, _ := os.FindProcess(pid)
 
 	if err := process.Signal(syscall.Signal(0)); err == nil {
 		return fmt.Errorf("process %d is still alive, keeping pid file", pid)

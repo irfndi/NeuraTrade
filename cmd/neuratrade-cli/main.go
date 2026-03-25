@@ -451,6 +451,10 @@ func main() {
 								Name:  "ai-key",
 								Usage: "AI provider API key",
 							},
+							&cli.BoolFlag{
+								Name:  "force",
+								Usage: "Overwrite an existing non-empty configuration file",
+							},
 						},
 					},
 					{
@@ -1812,15 +1816,18 @@ func prettyPrint(data interface{}) {
 // An error is returned for directory creation, JSON marshaling, or file write failures.
 func configInit(cCtx *cli.Context) error {
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	force := cCtx.Bool("force")
 
 	// Check if config already exists
-	if _, err := os.Stat(configPath); err == nil {
-		content, _ := os.ReadFile(configPath)
-		if string(content) != "{}" && len(content) > 5 {
-			fmt.Printf("Configuration file already exists: %s\n", configPath)
-			fmt.Println("Use 'neuratrade config show' to view current configuration.")
-			fmt.Println("Use 'neuratrade config init --force' to overwrite.")
-			return nil
+	if !force {
+		if _, err := os.Stat(configPath); err == nil {
+			content, _ := os.ReadFile(configPath)
+			if string(content) != "{}" && len(content) > 5 {
+				fmt.Printf("Configuration file already exists: %s\n", configPath)
+				fmt.Println("Use 'neuratrade config show' to view current configuration.")
+				fmt.Println("Use 'neuratrade config init --force' to overwrite.")
+				return nil
+			}
 		}
 	}
 
