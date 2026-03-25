@@ -897,7 +897,7 @@ func TestParseAIProviderChain(t *testing.T) {
 
 	t.Run("uses primary provider", func(t *testing.T) {
 		result := parseAIProviderChain("openai")
-		assert.Equal(t, "openai", result[0])
+		assert.Equal(t, []string{"openai"}, result)
 	})
 
 	t.Run("parses chain from env", func(t *testing.T) {

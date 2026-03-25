@@ -102,18 +102,21 @@ func (zapNopServiceLogger) Error(_ string) {}
 // element. If neither primary nor the environment variable is provided, "zhipu" is used.
 func parseAIProviderChain(primary string) []string {
 	primary = strings.ToLower(strings.TrimSpace(primary))
-	if primary == "" {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
+	parts := []string{}
+	if raw != "" {
+		parts = strings.Split(raw, ",")
+	}
+	if primary == "" && len(parts) == 0 {
 		primary = "zhipu"
 	}
 
-	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
-	if raw == "" {
-		raw = "zhipu"
+	seen := make(map[string]struct{})
+	chain := make([]string, 0, len(parts)+1)
+	if primary != "" {
+		seen[primary] = struct{}{}
+		chain = append(chain, primary)
 	}
-
-	parts := strings.Split(raw, ",")
-	seen := map[string]struct{}{primary: {}}
-	chain := []string{primary}
 	for _, part := range parts {
 		provider := strings.ToLower(strings.TrimSpace(part))
 		if provider == "" {
@@ -654,6 +657,24 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		integratedHandlers = autonomyruntime.BuildLocalIntegratedHandlers(runtimeDeps)
 	}
 
+	var telemetryStore *services.ScalpingTelemetryStore
+	if sqlDB != nil {
+		telemetryStore = services.NewScalpingTelemetryStoreFromSQLDB(sqlDB, nil)
+		if telemetryStore == nil {
+			log.Printf("Warning: scalping telemetry store unavailable due to nil SQL database")
+		} else {
+			schemaCtx, schemaCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := telemetryStore.EnsureSchema(schemaCtx)
+			schemaCancel()
+			if err != nil {
+				log.Printf("Warning: failed to initialize scalping telemetry store: %v", err)
+				telemetryStore = nil
+			} else {
+				integratedHandlers.SetTelemetryStore(telemetryStore)
+			}
+		}
+	}
+
 	// Wire order executor to integrated handlers for scalping execution
 	adminAPIKey := os.Getenv("ADMIN_API_KEY")
 	if adminAPIKey == "" {
@@ -981,21 +1002,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if lifecycleStore != nil {
 		autonomousHandler.SetLifecycleStore(lifecycleStore)
 	}
-	if sqlDB != nil {
-		telemetryStore := services.NewScalpingTelemetryStoreFromSQLDB(sqlDB)
-		if telemetryStore == nil {
-			log.Printf("Warning: scalping telemetry store unavailable due to nil SQL database")
-		} else {
-			schemaCtx, schemaCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := telemetryStore.EnsureSchema(schemaCtx)
-			schemaCancel()
-			if err != nil {
-				log.Printf("Warning: failed to initialize scalping telemetry store: %v", err)
-			} else {
-				autonomousHandler.SetTelemetryStore(telemetryStore)
-				integratedHandlers.SetTelemetryStore(telemetryStore)
-			}
-		}
+	if telemetryStore != nil {
+		autonomousHandler.SetTelemetryStore(telemetryStore)
 	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 

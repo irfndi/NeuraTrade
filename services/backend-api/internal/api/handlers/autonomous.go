@@ -536,12 +536,14 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 }
 
 func parseQuestInvestigationParams(c *gin.Context) (chatID string, since time.Time, bucketMinutes int, err error) {
-	chatID = c.Query("chat_id")
+	now := time.Now().UTC()
+	maxLookback := now.Add(-30 * 24 * time.Hour)
+	chatID = strings.TrimSpace(c.Query("chat_id"))
 	if chatID == "" {
 		err = fmt.Errorf("chat_id is required")
 		return
 	}
-	since = time.Now().UTC().AddDate(0, 0, -7)
+	since = now.AddDate(0, 0, -7)
 	if sinceStr := strings.TrimSpace(c.Query("since")); sinceStr != "" {
 		if parsed, parseErr := time.Parse(time.RFC3339, sinceStr); parseErr == nil {
 			since = parsed.UTC()
@@ -552,12 +554,24 @@ func parseQuestInvestigationParams(c *gin.Context) (chatID string, since time.Ti
 			return
 		}
 	}
+	if since.After(now) {
+		err = fmt.Errorf("since must not be in the future")
+		return
+	}
+	if since.Before(maxLookback) {
+		err = fmt.Errorf("since must be within the last 30 days")
+		return
+	}
 	bucketMinutes = 60
-	if bmStr := c.Query("bucket_minutes"); bmStr != "" {
+	if bmStr := strings.TrimSpace(c.Query("bucket_minutes")); bmStr != "" {
 		var bm int
 		bm, err = strconv.Atoi(bmStr)
-		if err != nil || bm <= 0 {
-			err = fmt.Errorf("invalid 'bucket_minutes', must be a positive integer")
+		if err != nil {
+			err = fmt.Errorf("bucket_minutes must be an integer between 5 and 1440")
+			return
+		}
+		if bm < 5 || bm > 1440 {
+			err = fmt.Errorf("bucket_minutes must be between 5 and 1440")
 			return
 		}
 		bucketMinutes = bm
@@ -589,19 +603,18 @@ func (h *AutonomousHandler) loadQuestInvestigationData(ctx context.Context, chat
 	return histogram, gateBlocks, regimeOutcomes, policyImpact, winRateTrend, nil
 }
 
-func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, _ []services.GateBlockStat) (int, int, float64) {
-	totalCycles := 0
+func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, totalCyclesAll int) (int, int, float64) {
 	totalWins := 0
+	executedCycles := 0
 	for _, ro := range regimeOutcomes {
-		totalCycles += ro.Count
+		executedCycles += ro.Count
 		totalWins += ro.Wins
 	}
-	executedCycles := totalCycles
 	overallWinRate := 0.0
-	if totalCycles > 0 {
-		overallWinRate = float64(totalWins) / float64(totalCycles)
+	if totalCyclesAll > 0 {
+		overallWinRate = float64(totalWins) / float64(totalCyclesAll)
 	}
-	return totalCycles, executedCycles, overallWinRate
+	return totalCyclesAll, executedCycles, overallWinRate
 }
 
 func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
@@ -619,7 +632,12 @@ func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	totalCycles, executedCycles, overallWinRate := summarizeQuestInvestigation(regimeOutcomes, gateBlocks)
+	totalCyclesAll, err := h.telemetryStore.GetCycleCount(c.Request.Context(), chatID, since)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to load total_cycles: %v", err)})
+		return
+	}
+	totalCycles, executedCycles, overallWinRate := summarizeQuestInvestigation(regimeOutcomes, totalCyclesAll)
 	c.JSON(http.StatusOK, gin.H{
 		"rejection_histogram":      histogram,
 		"gate_block_summary":       gateBlocks,

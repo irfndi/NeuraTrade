@@ -11,18 +11,28 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 )
 
 type ScalpingTelemetryStore struct {
-	db database.DBPool
+	db          database.DBPool
+	logger      *slog.Logger
+	placeholder placeholderStyle
 }
+
+type placeholderStyle int
+
+const (
+	placeholderQuestion placeholderStyle = iota
+	placeholderDollar
+)
 
 type CycleRecord struct {
 	ID                     string
@@ -86,18 +96,25 @@ type WinRateBucket struct {
 	WinRate     float64   `json:"win_rate"`
 }
 
-func NewScalpingTelemetryStore(db database.DBPool) *ScalpingTelemetryStore {
+func NewScalpingTelemetryStore(db database.DBPool, logger *slog.Logger) *ScalpingTelemetryStore {
 	if db == nil {
 		return nil
 	}
-	return &ScalpingTelemetryStore{db: db}
+	if logger == nil {
+		logger = telemetry.Logger()
+	}
+	return &ScalpingTelemetryStore{
+		db:          db,
+		logger:      logger,
+		placeholder: detectPlaceholderStyle(db),
+	}
 }
 
-func NewScalpingTelemetryStoreFromSQLDB(db *sql.DB) *ScalpingTelemetryStore {
+func NewScalpingTelemetryStoreFromSQLDB(db *sql.DB, logger *slog.Logger) *ScalpingTelemetryStore {
 	if db == nil {
 		return nil
 	}
-	return NewScalpingTelemetryStore(sqlDBPool{db: db})
+	return NewScalpingTelemetryStore(sqlDBPool{db: db}, logger)
 }
 
 func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
@@ -164,7 +181,7 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 		cycleAt = time.Now().UTC()
 	}
 
-	_, err := s.db.Exec(ctx, `
+	_, err := s.db.Exec(ctx, s.bindQuery(`
 		INSERT INTO scalping_cycle_telemetry (
 			id, chat_id, exchange, order_id, cycle_at, symbol, action, confidence,
 			universe_count, ranked_count, viable_count, rejection_counts, regime,
@@ -177,7 +194,7 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 			?,?,?,?,
 			?,?,?,?
 		)
-	`,
+	`),
 		cycleID,
 		strings.TrimSpace(record.ChatID),
 		strings.TrimSpace(record.Exchange),
@@ -216,12 +233,12 @@ func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID s
 		return nil
 	}
 
-	result, err := s.db.Exec(ctx, `
+	result, err := s.db.Exec(ctx, s.bindQuery(`
 		UPDATE scalping_cycle_telemetry
 		SET order_id = ?
 		WHERE id = ?
 			AND (order_id IS NULL OR order_id = '')
-	`, strings.TrimSpace(orderID), strings.TrimSpace(cycleID))
+	`), strings.TrimSpace(orderID), strings.TrimSpace(cycleID))
 	if err != nil {
 		return fmt.Errorf("link order to cycle: %w", err)
 	}
@@ -254,14 +271,14 @@ func (s *ScalpingTelemetryStore) UpdateCycleOutcome(ctx context.Context, orderID
 		closedAt = time.Now().UTC()
 	}
 
-	result, err := s.db.Exec(ctx, `
+	result, err := s.db.Exec(ctx, s.bindQuery(`
 		UPDATE scalping_cycle_telemetry
 		SET outcome = ?,
 			pnl = ?,
 			hold_duration_seconds = ?,
 			closed_at = ?
 		WHERE order_id = ?
-	`, strings.TrimSpace(record.Outcome), record.PnL, record.HoldDurationSeconds, closedAt, orderID)
+	`), strings.TrimSpace(record.Outcome), record.PnL, record.HoldDurationSeconds, closedAt, orderID)
 	if err != nil {
 		return fmt.Errorf("update cycle outcome: %w", err)
 	}
@@ -284,11 +301,11 @@ func (s *ScalpingTelemetryStore) GetRejectionHistogram(ctx context.Context, chat
 		return nil, fmt.Errorf("scalping telemetry store unavailable")
 	}
 
-	rows, err := s.db.Query(ctx, `
+	rows, err := s.db.Query(ctx, s.bindQuery(`
 		SELECT rejection_counts
 		FROM scalping_cycle_telemetry
 		WHERE chat_id = ? AND cycle_at >= ?
-	`, strings.TrimSpace(chatID), since.UTC())
+	`), strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("query rejection histogram: %w", err)
 	}
@@ -305,7 +322,7 @@ func (s *ScalpingTelemetryStore) GetRejectionHistogram(ctx context.Context, chat
 		}
 		counts := make(map[string]int)
 		if jsonErr := json.Unmarshal([]byte(raw.String), &counts); jsonErr != nil {
-			log.Printf("[TELEMETRY] malformed rejection_counts JSON for row: %v", jsonErr)
+			s.logger.Error("malformed rejection_counts JSON", "error", jsonErr, "row", raw.String)
 			continue
 		}
 		for key, value := range counts {
@@ -327,7 +344,7 @@ func (s *ScalpingTelemetryStore) GetGateBlockSummary(ctx context.Context, chatID
 		return nil, fmt.Errorf("scalping telemetry store unavailable")
 	}
 
-	rows, err := s.db.Query(ctx, `
+	rows, err := s.db.Query(ctx, s.bindQuery(`
 		SELECT
 			COALESCE(gate_block_code, '') AS block_code,
 			COUNT(*) AS cycle_count,
@@ -341,7 +358,7 @@ func (s *ScalpingTelemetryStore) GetGateBlockSummary(ctx context.Context, chatID
 			AND gate_block_code != ''
 		GROUP BY gate_block_code
 		ORDER BY cycle_count DESC
-	`, strings.TrimSpace(chatID), since.UTC())
+	`), strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("query gate block summary: %w", err)
 	}
@@ -369,7 +386,7 @@ func (s *ScalpingTelemetryStore) GetRegimeOutcomeCorrelation(ctx context.Context
 		return nil, fmt.Errorf("scalping telemetry store unavailable")
 	}
 
-	rows, err := s.db.Query(ctx, `
+	rows, err := s.db.Query(ctx, s.bindQuery(`
 		SELECT
 			COALESCE(regime, '') AS regime,
 			COUNT(*) AS sample_count,
@@ -382,7 +399,7 @@ func (s *ScalpingTelemetryStore) GetRegimeOutcomeCorrelation(ctx context.Context
 			AND outcome != ''
 		GROUP BY regime
 		ORDER BY sample_count DESC
-	`, strings.TrimSpace(chatID), since.UTC())
+	`), strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("query regime outcome correlation: %w", err)
 	}
@@ -409,7 +426,7 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 		return nil, fmt.Errorf("scalping telemetry store unavailable")
 	}
 
-	rows, err := s.db.Query(ctx, `
+	rows, err := s.db.Query(ctx, s.bindQuery(`
 		SELECT policy_adjustments, outcome, pnl
 		FROM scalping_cycle_telemetry
 		WHERE chat_id = ?
@@ -418,7 +435,7 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 			AND policy_adjustments != ''
 			AND outcome IS NOT NULL
 			AND outcome != ''
-	`, strings.TrimSpace(chatID), since.UTC())
+	`), strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("query policy adjustment impact: %w", err)
 	}
@@ -443,7 +460,7 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 		}
 		adjustments := make([]string, 0)
 		if jsonErr := json.Unmarshal([]byte(adjustmentsRaw.String), &adjustments); jsonErr != nil {
-			log.Printf("[TELEMETRY] malformed policy_adjustments JSON for row: %v", jsonErr)
+			s.logger.Error("malformed policy_adjustments JSON", "error", jsonErr, "row", adjustmentsRaw.String)
 			continue
 		}
 
@@ -508,12 +525,12 @@ func (s *ScalpingTelemetryStore) GetCycleWinRateTrend(ctx context.Context, chatI
 		bucketMinutes = 60
 	}
 
-	rows, err := s.db.Query(ctx, `
+	rows, err := s.db.Query(ctx, s.bindQuery(`
 		SELECT cycle_at, outcome
 		FROM scalping_cycle_telemetry
 		WHERE chat_id = ? AND cycle_at >= ? AND outcome IS NOT NULL AND outcome != ''
 		ORDER BY cycle_at ASC
-	`, strings.TrimSpace(chatID), since.UTC())
+	`), strings.TrimSpace(chatID), since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("query cycle win rate trend: %w", err)
 	}
@@ -570,6 +587,23 @@ func (s *ScalpingTelemetryStore) GetCycleWinRateTrend(ctx context.Context, chatI
 	return buckets, nil
 }
 
+func (s *ScalpingTelemetryStore) GetCycleCount(ctx context.Context, chatID string, since time.Time) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("scalping telemetry store unavailable")
+	}
+
+	var totalCycles int
+	err := s.db.QueryRow(ctx, s.bindQuery(`
+		SELECT COUNT(*)
+		FROM scalping_cycle_telemetry
+		WHERE chat_id = ? AND cycle_at >= ?
+	`), strings.TrimSpace(chatID), since.UTC()).Scan(&totalCycles)
+	if err != nil {
+		return 0, fmt.Errorf("query cycle count: %w", err)
+	}
+	return totalCycles, nil
+}
+
 func safeRate(wins, total int) float64 {
 	if total <= 0 {
 		return 0
@@ -579,6 +613,49 @@ func safeRate(wins, total int) float64 {
 
 type sqlDBPool struct {
 	db *sql.DB
+}
+
+func detectPlaceholderStyle(db database.DBPool) placeholderStyle {
+	switch concrete := db.(type) {
+	case *database.SQLiteDB:
+		return placeholderQuestion
+	case *database.PostgresDB:
+		return placeholderDollar
+	case sqlDBPool:
+		return detectPlaceholderStyleFromSQLDB(concrete.db)
+	case *sqlDBPool:
+		return detectPlaceholderStyleFromSQLDB(concrete.db)
+	default:
+		return placeholderDollar
+	}
+}
+
+func detectPlaceholderStyleFromSQLDB(db *sql.DB) placeholderStyle {
+	if db == nil {
+		return placeholderDollar
+	}
+	driverType := strings.ToLower(fmt.Sprintf("%T", db.Driver()))
+	if strings.Contains(driverType, "sqlite") {
+		return placeholderQuestion
+	}
+	return placeholderDollar
+}
+
+func (s *ScalpingTelemetryStore) bindQuery(query string) string {
+	if s == nil || s.placeholder == placeholderQuestion {
+		return query
+	}
+	var builder strings.Builder
+	index := 1
+	for _, r := range query {
+		if r == '?' {
+			builder.WriteString(fmt.Sprintf("$%d", index))
+			index++
+			continue
+		}
+		builder.WriteRune(r)
+	}
+	return builder.String()
 }
 
 func (p sqlDBPool) Query(ctx context.Context, query string, args ...any) (database.Rows, error) {
