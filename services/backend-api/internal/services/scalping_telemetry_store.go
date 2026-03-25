@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -649,7 +650,8 @@ func (s *ScalpingTelemetryStore) bindQuery(query string) string {
 	index := 1
 	for _, r := range query {
 		if r == '?' {
-			builder.WriteString(fmt.Sprintf("$%d", index))
+			builder.WriteByte('$')
+			builder.WriteString(strconv.Itoa(index))
 			index++
 			continue
 		}
