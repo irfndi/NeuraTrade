@@ -281,21 +281,27 @@ func TestBuildHistoricalSignalsFromOHLCV_SpreadUsesEffectiveSpreadEstimate(t *te
 func TestCompute24hWindowMetrics(t *testing.T) {
 	base := time.Unix(0, 0).UTC()
 	metrics := compute24hWindowMetrics([]scalpingOHLCVPoint{
-		{symbol: "BTC/USDT", high: 101, low: 99, volume: 10, timestamp: base},
-		{symbol: "BTC/USDT", high: 102, low: 98, volume: 20, timestamp: base.Add(12 * time.Hour)},
-		{symbol: "BTC/USDT", high: 103, low: 97, volume: 30, timestamp: base.Add(25 * time.Hour)},
+		{symbol: "BTC/USDT", close: 100, high: 101, low: 99, volume: 10, timestamp: base},
+		{symbol: "BTC/USDT", close: 101, high: 102, low: 98, volume: 20, timestamp: base.Add(12 * time.Hour)},
+		{symbol: "BTC/USDT", close: 110, high: 103, low: 97, volume: 30, timestamp: base.Add(25 * time.Hour)},
 	})
 
 	require.Len(t, metrics, 3)
 	assert.Equal(t, 101.0, metrics[0].High24h)
 	assert.Equal(t, 99.0, metrics[0].Low24h)
 	assert.Equal(t, 10.0, metrics[0].Volume24h)
+	assert.Equal(t, 100.0, metrics[0].ReferenceClose24h)
+	assert.True(t, metrics[0].HasReferenceClose)
 	assert.Equal(t, 102.0, metrics[1].High24h)
 	assert.Equal(t, 98.0, metrics[1].Low24h)
 	assert.Equal(t, 30.0, metrics[1].Volume24h)
+	assert.Equal(t, 100.0, metrics[1].ReferenceClose24h)
+	assert.True(t, metrics[1].HasReferenceClose)
 	assert.Equal(t, 103.0, metrics[2].High24h)
 	assert.Equal(t, 97.0, metrics[2].Low24h)
 	assert.Equal(t, 50.0, metrics[2].Volume24h)
+	assert.Equal(t, 100.0, metrics[2].ReferenceClose24h)
+	assert.True(t, metrics[2].HasReferenceClose)
 }
 
 func TestMapPointToHistoricalSignal(t *testing.T) {
@@ -350,8 +356,8 @@ func TestResolveTradingPairIDs_AllowsInactiveHistoricalSymbols(t *testing.T) {
 	defer mockPool.Close()
 
 	engine := NewScalpingBacktestEngine(database.NewMockDBPool(mockPool), ScalpingBacktestConfig{})
-	mockPool.ExpectQuery("SELECT id FROM trading_pairs WHERE LOWER(symbol) IN ($1)").
-		WithArgs("ftm/usdt").
+	mockPool.ExpectQuery("SELECT id\n\t\tFROM trading_pairs\n\t\tWHERE UPPER(REPLACE(\n\t\t\tCASE\n\t\t\t\tWHEN POSITION(':' IN symbol) > 0 THEN SUBSTRING(symbol FROM 1 FOR POSITION(':' IN symbol) - 1)\n\t\t\t\tELSE symbol\n\t\t\tEND,\n\t\t\t'-',\n\t\t\t'/'\n\t\t)) IN ($1)").
+		WithArgs("FTM/USDT").
 		WillReturnRows(
 			pgxmock.NewRows([]string{"id"}).
 				AddRow(2),

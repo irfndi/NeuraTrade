@@ -1144,6 +1144,8 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 
 		for start <= i && series[start].timestamp.Before(windowStart) {
 			runningVolume -= math.Max(series[start].volume, 0)
+			// Any entry equal to start can only survive at the deque front; less-extreme
+			// candidates were already evicted during insertion when a newer point dominated them.
 			if len(highDeque) > 0 && highDeque[0] == start {
 				highDeque = highDeque[1:]
 			}
@@ -1158,10 +1160,13 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 			Low24h:    series[lowDeque[0]].low,
 			Volume24h: runningVolume,
 		}
-		if start <= i && series[start].close > 0 {
-			has24hReference := start > 0 || !series[start].timestamp.After(windowStart)
-			if has24hReference {
-				metrics[i].ReferenceClose24h = series[start].close
+		if start <= i {
+			referenceIdx := start
+			if series[start].timestamp.After(windowStart) && start > 0 {
+				referenceIdx = start - 1
+			}
+			if referenceIdx >= 0 && series[referenceIdx].close > 0 {
+				metrics[i].ReferenceClose24h = series[referenceIdx].close
 				metrics[i].HasReferenceClose = true
 			}
 		}
@@ -1238,7 +1243,7 @@ func (e *ScalpingBacktestEngine) resolveTradingPairIDs(ctx context.Context, symb
 		if normalized == "" {
 			continue
 		}
-		normalizedSymbols = append(normalizedSymbols, strings.ToLower(normalized))
+		normalizedSymbols = append(normalizedSymbols, normalized)
 	}
 	if len(normalizedSymbols) == 0 {
 		return nil, nil
@@ -1249,7 +1254,16 @@ func (e *ScalpingBacktestEngine) resolveTradingPairIDs(ctx context.Context, symb
 		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
 		args = append(args, symbol)
 	}
-	query := fmt.Sprintf("SELECT id FROM trading_pairs WHERE LOWER(symbol) IN (%s)", strings.Join(placeholders, ", "))
+	query := fmt.Sprintf(`SELECT id
+		FROM trading_pairs
+		WHERE UPPER(REPLACE(
+			CASE
+				WHEN POSITION(':' IN symbol) > 0 THEN SUBSTRING(symbol FROM 1 FOR POSITION(':' IN symbol) - 1)
+				ELSE symbol
+			END,
+			'-',
+			'/'
+		)) IN (%s)`, strings.Join(placeholders, ", "))
 	rows, err := e.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query trading pairs: %w", err)
