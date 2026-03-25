@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,26 @@ func TestSQLiteDSN_EnablesForeignKeys(t *testing.T) {
 	assert.Equal(t, "neuratrade.db?_foreign_keys=on", sqliteDSN("neuratrade.db"))
 	assert.Equal(t, "neuratrade.db?mode=ro&_foreign_keys=on", sqliteDSN("neuratrade.db?mode=ro"))
 	assert.Equal(t, "neuratrade.db?_foreign_keys=off", sqliteDSN("neuratrade.db?_foreign_keys=off"))
+	assert.Equal(t, "neuratrade.db?_fk=off", sqliteDSN("neuratrade.db?_fk=off"))
+}
+
+func TestSQLiteConnection_EnforcesForeignKeys(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "fk-enforcement.db")
+
+	db, err := NewSQLiteConnection(dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+	_, err = db.Exec(ctx, `CREATE TABLE parents (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	_, err = db.Exec(ctx, `CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL, FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(ctx, "INSERT INTO children (id, parent_id) VALUES (?, ?)", 1, 999)
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "foreign key")
 }
 
 // TestSQLiteConnection_EmptyPath tests SQLite connection with empty path

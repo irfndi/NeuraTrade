@@ -1,11 +1,11 @@
 PRAGMA foreign_keys = ON;
 
-ALTER TABLE scalping_backtest_trades ADD COLUMN exchange TEXT;
+ALTER TABLE scalping_backtest_trades ADD COLUMN exchange TEXT NOT NULL DEFAULT 'unknown';
 
 UPDATE scalping_backtest_trades
 SET exchange = COALESCE(
     (
-        SELECT s.exchange
+        SELECT NULLIF(s.exchange, '')
         FROM scalping_backtest_signals s
         WHERE s.id = scalping_backtest_trades.signal_id
     ),
