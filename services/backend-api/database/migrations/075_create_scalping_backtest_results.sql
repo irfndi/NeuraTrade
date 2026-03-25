@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS scalping_backtest_signals (
     funnel_stage TEXT NOT NULL,
     rejection_reason TEXT,
     gate_results JSONB NOT NULL DEFAULT '{}',
-    CONSTRAINT uq_scalping_backtest_signals_id_run UNIQUE (id, run_id),
     CONSTRAINT fk_scalping_backtest_signals_run
         FOREIGN KEY (run_id) REFERENCES scalping_backtest_runs(id) ON DELETE CASCADE
 );
@@ -50,8 +49,8 @@ CREATE TABLE IF NOT EXISTS scalping_backtest_trades (
     hold_duration_seconds INTEGER NOT NULL,
     CONSTRAINT fk_scalping_backtest_trades_run
         FOREIGN KEY (run_id) REFERENCES scalping_backtest_runs(id) ON DELETE CASCADE,
-    CONSTRAINT fk_scalping_backtest_trades_signal_run
-        FOREIGN KEY (signal_id, run_id) REFERENCES scalping_backtest_signals(id, run_id) ON DELETE CASCADE
+    CONSTRAINT fk_scalping_backtest_trades_signal
+        FOREIGN KEY (signal_id) REFERENCES scalping_backtest_signals(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS scalping_backtest_gate_summary (
@@ -98,11 +97,11 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1
         FROM pg_constraint
-        WHERE conname = 'fk_scalping_backtest_trades_signal_run'
+        WHERE conname = 'fk_scalping_backtest_trades_signal'
     ) THEN
         ALTER TABLE scalping_backtest_trades
-        ADD CONSTRAINT fk_scalping_backtest_trades_signal_run
-        FOREIGN KEY (signal_id, run_id) REFERENCES scalping_backtest_signals(id, run_id) ON DELETE CASCADE;
+        ADD CONSTRAINT fk_scalping_backtest_trades_signal
+        FOREIGN KEY (signal_id) REFERENCES scalping_backtest_signals(id) ON DELETE CASCADE;
     END IF;
 END $$;
 
