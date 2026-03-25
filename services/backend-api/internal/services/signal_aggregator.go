@@ -130,6 +130,8 @@ func NewSignalAggregator(cfg *config.Config, db DBPool, logger *zaplogrus.Logger
 		if providerType != "" {
 			if p, err := indicators.NewProvider(&indicators.ProviderConfig{Type: providerType}); err == nil {
 				provider = p
+			} else if logger != nil {
+				logger.WithError(err).WithField("provider_type", providerType).Warn("Failed to initialize configured indicator provider; falling back to default provider")
 			}
 		}
 	}

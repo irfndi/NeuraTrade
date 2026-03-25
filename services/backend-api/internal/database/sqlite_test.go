@@ -47,10 +47,22 @@ func TestSQLiteConnection_WithExtension(t *testing.T) {
 }
 
 func TestSQLiteDSN_EnablesForeignKeys(t *testing.T) {
-	assert.Equal(t, "neuratrade.db?_foreign_keys=on", sqliteDSN("neuratrade.db"))
-	assert.Equal(t, "neuratrade.db?mode=ro&_foreign_keys=on", sqliteDSN("neuratrade.db?mode=ro"))
-	assert.Equal(t, "neuratrade.db?_foreign_keys=off", sqliteDSN("neuratrade.db?_foreign_keys=off"))
-	assert.Equal(t, "neuratrade.db?_fk=off", sqliteDSN("neuratrade.db?_fk=off"))
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "default on empty query", input: "neuratrade.db", expected: "neuratrade.db?_foreign_keys=on"},
+		{name: "preserves existing query", input: "neuratrade.db?mode=ro", expected: "neuratrade.db?mode=ro&_foreign_keys=on"},
+		{name: "preserves explicit foreign_keys off", input: "neuratrade.db?_foreign_keys=off", expected: "neuratrade.db?_foreign_keys=off"},
+		{name: "preserves fk alias off", input: "neuratrade.db?_fk=off", expected: "neuratrade.db?_fk=off"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, sqliteDSN(tt.input))
+		})
+	}
 }
 
 func TestSQLiteConnection_EnforcesForeignKeys(t *testing.T) {
