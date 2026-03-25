@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -33,6 +34,13 @@ func TestParseToServiceConfig_UsesSpreadMultiplier(t *testing.T) {
 	assert.Equal(t, 0.002, cfg.FeeRate.InexactFloat64())
 	assert.Equal(t, services.DefaultScalpingBacktestSlippage, cfg.SlippagePct.InexactFloat64())
 	assert.Equal(t, []string{"BTC/USDT"}, cfg.Symbols)
+}
+
+func TestDecodeScalpingBacktestRow_DefaultsZeroSpreadMultiplier(t *testing.T) {
+	configRaw := []byte(`{"spread_multiplier":0}`)
+	run, err := decodeScalpingBacktestRow("run-1", "completed", configRaw, nil, time.Unix(0, 0).UTC(), sql.NullTime{})
+	require.NoError(t, err)
+	assert.Equal(t, float64(services.DefaultScalpingBacktestSpreadMultiplier), run.Config.SpreadMultiplier)
 }
 
 func TestParseToServiceConfig_RejectsNonPositiveSpreadMultiplier(t *testing.T) {

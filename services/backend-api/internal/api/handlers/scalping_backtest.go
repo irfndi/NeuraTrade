@@ -806,6 +806,7 @@ func decodeScalpingBacktestRow(runID, status string, configRaw, summaryRaw []byt
 		if err := json.Unmarshal(configRaw, &config); err != nil {
 			return GetScalpingBacktestResponse{}, fmt.Errorf("unmarshal backtest config for run %s: %w", runID, err)
 		}
+		config = normalizeDecodedScalpingBacktestConfig(config)
 	}
 	var summary ScalpingBacktestSummary
 	if len(summaryRaw) > 0 {
@@ -826,6 +827,13 @@ func decodeScalpingBacktestRow(runID, status string, configRaw, summaryRaw []byt
 		CreatedAt:   createdAt,
 		CompletedAt: completedAt,
 	}, nil
+}
+
+func normalizeDecodedScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBacktestConfig {
+	if config.SpreadMultiplier <= 0 {
+		config.SpreadMultiplier = float64(services.DefaultScalpingBacktestSpreadMultiplier)
+	}
+	return config
 }
 
 func isNoRowsBacktestError(err error) bool {
