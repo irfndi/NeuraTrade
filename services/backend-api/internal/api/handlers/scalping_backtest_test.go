@@ -30,6 +30,7 @@ func TestParseToServiceConfig_UsesSpreadMultiplier(t *testing.T) {
 	assert.Equal(t, 0.72, cfg.MinConfidence)
 	assert.Equal(t, 0.09, cfg.MaxBidAskSpreadPct)
 	assert.Equal(t, spreadMultiplier, cfg.SpreadMultiplier)
+	assert.Equal(t, 0.002, cfg.FeeRate.InexactFloat64())
 	assert.Equal(t, services.DefaultScalpingBacktestSlippage, cfg.SlippagePct.InexactFloat64())
 	assert.Equal(t, []string{"BTC/USDT"}, cfg.Symbols)
 }

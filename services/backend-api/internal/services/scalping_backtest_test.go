@@ -345,16 +345,16 @@ func TestBuildHistoricalSignalsFromOHLCV_SeparatesExchangeSeriesAndUses24hRefere
 }
 
 func TestResolveTradingPairIDs_AllowsInactiveHistoricalSymbols(t *testing.T) {
-	mockPool, err := pgxmock.NewPool()
+	mockPool, err := pgxmock.NewPool(pgxmock.QueryMatcherOption(pgxmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	defer mockPool.Close()
 
 	engine := NewScalpingBacktestEngine(database.NewMockDBPool(mockPool), ScalpingBacktestConfig{})
-	mockPool.ExpectQuery("SELECT id, symbol FROM trading_pairs").
+	mockPool.ExpectQuery("SELECT id FROM trading_pairs WHERE LOWER(symbol) IN ($1)").
+		WithArgs("ftm/usdt").
 		WillReturnRows(
-			pgxmock.NewRows([]string{"id", "symbol"}).
-				AddRow(1, "BTC/USDT").
-				AddRow(2, "FTM/USDT"),
+			pgxmock.NewRows([]string{"id"}).
+				AddRow(2),
 		)
 
 	ids, err := engine.resolveTradingPairIDs(context.Background(), map[string]struct{}{

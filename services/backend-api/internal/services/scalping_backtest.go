@@ -1124,30 +1124,44 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 	}
 
 	metrics := make([]scalping24hWindowMetrics, len(series))
+	start := 0
+	runningVolume := 0.0
+	highDeque := make([]int, 0, len(series))
+	lowDeque := make([]int, 0, len(series))
 	for i, point := range series {
 		windowStart := point.timestamp.Add(-24 * time.Hour)
-		oldestIncludedIdx := -1
+		runningVolume += math.Max(point.volume, 0)
+
+		for len(highDeque) > 0 && series[highDeque[len(highDeque)-1]].high <= point.high {
+			highDeque = highDeque[:len(highDeque)-1]
+		}
+		highDeque = append(highDeque, i)
+
+		for len(lowDeque) > 0 && series[lowDeque[len(lowDeque)-1]].low >= point.low {
+			lowDeque = lowDeque[:len(lowDeque)-1]
+		}
+		lowDeque = append(lowDeque, i)
+
+		for start <= i && series[start].timestamp.Before(windowStart) {
+			runningVolume -= math.Max(series[start].volume, 0)
+			if len(highDeque) > 0 && highDeque[0] == start {
+				highDeque = highDeque[1:]
+			}
+			if len(lowDeque) > 0 && lowDeque[0] == start {
+				lowDeque = lowDeque[1:]
+			}
+			start++
+		}
+
 		metrics[i] = scalping24hWindowMetrics{
-			High24h: point.high,
-			Low24h:  point.low,
+			High24h:   series[highDeque[0]].high,
+			Low24h:    series[lowDeque[0]].low,
+			Volume24h: runningVolume,
 		}
-		for j := i; j >= 0; j-- {
-			if series[j].timestamp.Before(windowStart) {
-				break
-			}
-			oldestIncludedIdx = j
-			if series[j].high > metrics[i].High24h {
-				metrics[i].High24h = series[j].high
-			}
-			if series[j].low < metrics[i].Low24h {
-				metrics[i].Low24h = series[j].low
-			}
-			metrics[i].Volume24h += math.Max(series[j].volume, 0)
-		}
-		if oldestIncludedIdx >= 0 && series[oldestIncludedIdx].close > 0 {
-			has24hReference := oldestIncludedIdx > 0 || !series[oldestIncludedIdx].timestamp.After(windowStart)
+		if start <= i && series[start].close > 0 {
+			has24hReference := start > 0 || !series[start].timestamp.After(windowStart)
 			if has24hReference {
-				metrics[i].ReferenceClose24h = series[oldestIncludedIdx].close
+				metrics[i].ReferenceClose24h = series[start].close
 				metrics[i].HasReferenceClose = true
 			}
 		}
@@ -1218,22 +1232,37 @@ func (e *ScalpingBacktestEngine) resolveTradingPairIDs(ctx context.Context, symb
 		return nil, nil
 	}
 
-	rows, err := e.db.Query(ctx, `SELECT id, symbol FROM trading_pairs`)
+	normalizedSymbols := make([]string, 0, len(symbolFilter))
+	for symbol := range symbolFilter {
+		normalized := normalizeSymbolForComparison(symbol)
+		if normalized == "" {
+			continue
+		}
+		normalizedSymbols = append(normalizedSymbols, strings.ToLower(normalized))
+	}
+	if len(normalizedSymbols) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, 0, len(normalizedSymbols))
+	args := make([]any, 0, len(normalizedSymbols))
+	for i, symbol := range normalizedSymbols {
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
+		args = append(args, symbol)
+	}
+	query := fmt.Sprintf("SELECT id FROM trading_pairs WHERE LOWER(symbol) IN (%s)", strings.Join(placeholders, ", "))
+	rows, err := e.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query trading pairs: %w", err)
 	}
 	defer rows.Close()
 
-	ids := make([]int, 0, len(symbolFilter))
+	ids := make([]int, 0, len(normalizedSymbols))
 	for rows.Next() {
 		var id int
-		var symbol string
-		if scanErr := rows.Scan(&id, &symbol); scanErr != nil {
+		if scanErr := rows.Scan(&id); scanErr != nil {
 			return nil, fmt.Errorf("scan trading pair row: %w", scanErr)
 		}
-		if _, ok := symbolFilter[normalizeSymbolForComparison(symbol)]; ok {
-			ids = append(ids, id)
-		}
+		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate trading pair rows: %w", err)
