@@ -894,7 +894,9 @@ func signalAndWait(cmd *exec.Cmd, shutdownTimeout time.Duration) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	cmd.Process.Signal(syscall.SIGTERM)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		log.Printf("[GATEWAY] failed to send SIGTERM to pid %d: %v", cmd.Process.Pid, err)
+	}
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
@@ -1023,6 +1025,8 @@ func removePIDFileIfProcessExited(pidFile string) error {
 		return os.Remove(pidFile)
 	}
 
+	// On Unix, FindProcess returns a handle for any positive pid; liveness is
+	// determined by the Signal(0) probe below rather than by FindProcess itself.
 	process, _ := os.FindProcess(pid)
 
 	if err := process.Signal(syscall.Signal(0)); err == nil {
