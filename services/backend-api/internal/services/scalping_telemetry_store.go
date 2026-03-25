@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -18,8 +19,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/telemetry"
+	"github.com/jackc/pgx/v5"
 )
 
 type ScalpingTelemetryStore struct {
@@ -61,7 +64,7 @@ type CycleRecord struct {
 
 type ScalpingOutcomeRecord struct {
 	Outcome             string
-	PnL                 float64
+	PnL                 string
 	HoldDurationSeconds int
 	ClosedAt            time.Time
 }
@@ -147,7 +150,7 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 			effective_max_capital_pct REAL,
 			policy_adjustments TEXT,
 			outcome TEXT,
-			pnl REAL,
+			pnl NUMERIC,
 			hold_duration_seconds INT,
 			closed_at TIMESTAMP
 		)`,
@@ -156,6 +159,24 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_chat_id_cycle_at ON scalping_cycle_telemetry(chat_id, cycle_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id ON scalping_cycle_telemetry(order_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_outcome ON scalping_cycle_telemetry(outcome)`,
+		`DELETE FROM scalping_cycle_telemetry
+		 WHERE id IN (
+		 	SELECT id FROM (
+		 		SELECT id,
+		 			ROW_NUMBER() OVER (
+		 				PARTITION BY order_id
+		 				ORDER BY CASE WHEN outcome IS NOT NULL AND outcome != '' THEN 0 ELSE 1 END,
+		 					cycle_at DESC,
+		 					id DESC
+		 			) AS rn
+		 		FROM scalping_cycle_telemetry
+		 		WHERE order_id IS NOT NULL AND order_id != ''
+		 	) ranked
+		 	WHERE rn > 1
+		 )`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id_unique
+			ON scalping_cycle_telemetry(order_id)
+			WHERE order_id IS NOT NULL AND order_id != ''`,
 	}
 
 	for _, stmt := range statements {
@@ -174,7 +195,7 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 
 	cycleID := strings.TrimSpace(record.ID)
 	if cycleID == "" {
-		cycleID = fmt.Sprintf("scalp-%d", time.Now().UTC().UnixNano())
+		cycleID = "scalp-" + uuid.NewString()
 	}
 	record.ID = cycleID
 	cycleAt := record.CycleAt.UTC()
@@ -248,7 +269,22 @@ func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID s
 		return fmt.Errorf("link order to cycle: check affected rows: %w", rowsErr)
 	}
 	if affected == 0 {
-		return fmt.Errorf("link order to cycle: no matching cycle found for id=%s", strings.TrimSpace(cycleID))
+		var existingOrderID sql.NullString
+		queryErr := s.db.QueryRow(ctx, s.bindQuery(`
+			SELECT order_id
+			FROM scalping_cycle_telemetry
+			WHERE id = ?
+		`), strings.TrimSpace(cycleID)).Scan(&existingOrderID)
+		if queryErr == nil && strings.TrimSpace(existingOrderID.String) == strings.TrimSpace(orderID) {
+			return nil
+		}
+		if errors.Is(queryErr, sql.ErrNoRows) || errors.Is(queryErr, pgx.ErrNoRows) {
+			return fmt.Errorf("link order to cycle: no matching cycle found for id=%s", strings.TrimSpace(cycleID))
+		}
+		if queryErr != nil {
+			return fmt.Errorf("link order to cycle: lookup existing order link: %w", queryErr)
+		}
+		return fmt.Errorf("link order to cycle: cycle id=%s already linked to order_id=%s", strings.TrimSpace(cycleID), strings.TrimSpace(existingOrderID.String))
 	}
 	if affected > 1 {
 		return fmt.Errorf("link order to cycle: multiple cycles matched for id=%s, expected unique order_id", strings.TrimSpace(cycleID))
@@ -275,7 +311,7 @@ func (s *ScalpingTelemetryStore) UpdateCycleOutcome(ctx context.Context, orderID
 	result, err := s.db.Exec(ctx, s.bindQuery(`
 		UPDATE scalping_cycle_telemetry
 		SET outcome = ?,
-			pnl = ?,
+			pnl = CAST(? AS NUMERIC),
 			hold_duration_seconds = ?,
 			closed_at = ?
 		WHERE order_id = ?
@@ -442,12 +478,7 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 	}
 	defer rows.Close()
 
-	type adjustmentAgg struct {
-		count int
-		wins  int
-		pnl   float64
-	}
-	agg := make(map[string]*adjustmentAgg)
+	aggregator := newPolicyAggregator()
 
 	for rows.Next() {
 		var adjustmentsRaw sql.NullString
@@ -465,37 +496,65 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 			continue
 		}
 
-		seen := make(map[string]struct{}, len(adjustments))
-		for _, adj := range adjustments {
-			adj = strings.TrimSpace(adj)
-			if adj == "" {
-				continue
-			}
-			if _, exists := seen[adj]; exists {
-				continue
-			}
-			seen[adj] = struct{}{}
-
-			entry := agg[adj]
-			if entry == nil {
-				entry = &adjustmentAgg{}
-				agg[adj] = entry
-			}
-			entry.count++
-			if outcome.Valid && strings.EqualFold(strings.TrimSpace(outcome.String), "win") {
-				entry.wins++
-			}
-			if pnl.Valid {
-				entry.pnl += pnl.Float64
-			}
-		}
+		aggregator.add(adjustments, outcome, pnl)
 	}
 	if rows.Err() != nil {
 		return nil, fmt.Errorf("iterate policy adjustment rows: %w", rows.Err())
 	}
 
-	stats := make([]AdjustmentImpactStat, 0, len(agg))
-	for adjustment, entry := range agg {
+	return aggregator.stats(), nil
+}
+
+type adjustmentAgg struct {
+	count int
+	wins  int
+	pnl   float64
+}
+
+type policyAggregator struct {
+	entries map[string]*adjustmentAgg
+}
+
+func newPolicyAggregator() *policyAggregator {
+	return &policyAggregator{entries: make(map[string]*adjustmentAgg)}
+}
+
+func (p *policyAggregator) add(adjustments []string, outcome sql.NullString, pnl sql.NullFloat64) {
+	if p == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(adjustments))
+	for _, adjustment := range adjustments {
+		adjustment = strings.TrimSpace(adjustment)
+		if adjustment == "" {
+			continue
+		}
+		if _, exists := seen[adjustment]; exists {
+			continue
+		}
+		seen[adjustment] = struct{}{}
+
+		entry := p.entries[adjustment]
+		if entry == nil {
+			entry = &adjustmentAgg{}
+			p.entries[adjustment] = entry
+		}
+		entry.count++
+		if outcome.Valid && strings.EqualFold(strings.TrimSpace(outcome.String), "win") {
+			entry.wins++
+		}
+		if pnl.Valid {
+			entry.pnl += pnl.Float64
+		}
+	}
+}
+
+func (p *policyAggregator) stats() []AdjustmentImpactStat {
+	if p == nil {
+		return nil
+	}
+	stats := make([]AdjustmentImpactStat, 0, len(p.entries))
+	for adjustment, entry := range p.entries {
 		avgPnL := 0.0
 		if entry.count > 0 {
 			avgPnL = entry.pnl / float64(entry.count)
@@ -507,15 +566,13 @@ func (s *ScalpingTelemetryStore) GetPolicyAdjustmentImpact(ctx context.Context, 
 			AvgPnL:     avgPnL,
 		})
 	}
-
 	sort.Slice(stats, func(i, j int) bool {
 		if stats[i].Count == stats[j].Count {
 			return stats[i].Adjustment < stats[j].Adjustment
 		}
 		return stats[i].Count > stats[j].Count
 	})
-
-	return stats, nil
+	return stats
 }
 
 func (s *ScalpingTelemetryStore) GetCycleWinRateTrend(ctx context.Context, chatID string, since time.Time, bucketMinutes int) ([]WinRateBucket, error) {

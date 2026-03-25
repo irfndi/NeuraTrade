@@ -1203,6 +1203,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	h.applyAutonomyCheckpoint(quest)
 	h.applyScalpingCycleDecisionDiagnostics(quest, decision)
 	cycleID := fmt.Sprintf("scalp-%s-%d", chatID, nowUTC.UnixNano())
+	telemetryInserted := false
 	if h.telemetryStore != nil {
 		cycleRec := CycleRecord{
 			ID:       cycleID,
@@ -1249,6 +1250,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		writeCancel()
 		if insertErr != nil {
 			log.Printf("[TELEMETRY] Failed to insert cycle record: %v", insertErr)
+		} else {
+			telemetryInserted = true
 		}
 	}
 	if shouldRecordEntryAttempt(decision, err) {
@@ -1451,7 +1454,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		}
 	}
 	h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
-	if h.telemetryStore != nil && strings.TrimSpace(decision.OrderID) != "" {
+	if h.telemetryStore != nil && telemetryInserted && strings.TrimSpace(decision.OrderID) != "" {
 		writeCtx, writeCancel := telemetryWriteContext()
 		err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
 		writeCancel()
@@ -4271,8 +4274,9 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			holdSeconds := 0
 			if h.db != nil {
 				var openedAt time.Time
+				lookupCtx, lookupCancel := telemetryWriteContext()
 				if err := h.db.QueryRowContext(
-					ctx,
+					lookupCtx,
 					"SELECT opened_at FROM trading_positions WHERE order_id = $1 ORDER BY opened_at DESC LIMIT 1",
 					orderID,
 				).Scan(&openedAt); err == nil && !openedAt.IsZero() {
@@ -4282,12 +4286,13 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 					}
 					holdSeconds = secs
 				}
+				lookupCancel()
 			}
 
 			writeCtx, writeCancel := telemetryWriteContext()
 			err := h.telemetryStore.UpdateCycleOutcome(writeCtx, orderID, ScalpingOutcomeRecord{
 				Outcome:             outcome,
-				PnL:                 pnl.InexactFloat64(),
+				PnL:                 pnl.String(),
 				HoldDurationSeconds: holdSeconds,
 				ClosedAt:            closedAt,
 			})
