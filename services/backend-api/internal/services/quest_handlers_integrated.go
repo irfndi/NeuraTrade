@@ -1244,7 +1244,10 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			cycleRec.EffectiveMaxCapitalPct = decision.EffectiveMaxCapitalPct
 			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
 		}
-		if _, insertErr := h.telemetryStore.InsertCycleRecord(ctx, cycleRec); insertErr != nil {
+		writeCtx, writeCancel := telemetryWriteContext()
+		_, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
+		writeCancel()
+		if insertErr != nil {
 			log.Printf("[TELEMETRY] Failed to insert cycle record: %v", insertErr)
 		}
 	}
@@ -1449,7 +1452,10 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 	h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
 	if h.telemetryStore != nil && strings.TrimSpace(decision.OrderID) != "" {
-		if err := h.telemetryStore.LinkOrderToCycle(ctx, cycleID, strings.TrimSpace(decision.OrderID)); err != nil {
+		writeCtx, writeCancel := telemetryWriteContext()
+		err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
+		writeCancel()
+		if err != nil {
 			log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
 		}
 	}
@@ -4267,7 +4273,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 				var openedAt time.Time
 				if err := h.db.QueryRowContext(
 					ctx,
-					"SELECT opened_at FROM trading_positions WHERE order_id = ? ORDER BY opened_at DESC LIMIT 1",
+					"SELECT opened_at FROM trading_positions WHERE order_id = $1 ORDER BY opened_at DESC LIMIT 1",
 					orderID,
 				).Scan(&openedAt); err == nil && !openedAt.IsZero() {
 					secs := int(closedAt.Sub(openedAt).Seconds())
@@ -4278,12 +4284,15 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 				}
 			}
 
-			if err := h.telemetryStore.UpdateCycleOutcome(ctx, orderID, ScalpingOutcomeRecord{
+			writeCtx, writeCancel := telemetryWriteContext()
+			err := h.telemetryStore.UpdateCycleOutcome(writeCtx, orderID, ScalpingOutcomeRecord{
 				Outcome:             outcome,
 				PnL:                 pnl.InexactFloat64(),
 				HoldDurationSeconds: holdSeconds,
 				ClosedAt:            closedAt,
-			}); err != nil {
+			})
+			writeCancel()
+			if err != nil {
 				log.Printf("[TELEMETRY] Failed to update outcome for order %s: %v", orderID, err)
 			}
 		}
@@ -4327,6 +4336,10 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		ids = ids[len(ids)-200:]
 	}
 	quest.Checkpoint["processed_closed_order_ids"] = ids
+}
+
+func telemetryWriteContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 2*time.Second)
 }
 
 func getProcessedOrderIDs(raw interface{}) map[string]bool {
