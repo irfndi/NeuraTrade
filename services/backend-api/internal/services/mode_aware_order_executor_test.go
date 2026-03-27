@@ -11,9 +11,10 @@ import (
 )
 
 type stubModeExecutor struct {
-	orderID string
-	err     error
-	calls   int
+	orderID     string
+	err         error
+	calls       int
+	lastDetails TradeDetails
 }
 
 func (s *stubModeExecutor) PlaceOrder(context.Context, string, string, string, string, decimal.Decimal, *decimal.Decimal) (string, error) {
@@ -21,8 +22,9 @@ func (s *stubModeExecutor) PlaceOrder(context.Context, string, string, string, s
 	return s.orderID, s.err
 }
 
-func (s *stubModeExecutor) PlaceOrderWithDetails(context.Context, TradeDetails) (string, error) {
+func (s *stubModeExecutor) PlaceOrderWithDetails(_ context.Context, details TradeDetails) (string, error) {
 	s.calls++
+	s.lastDetails = details
 	return s.orderID, s.err
 }
 
@@ -44,22 +46,53 @@ func (s *stubModeExecutor) CancelOrder(context.Context, string, string) error {
 func (s *stubModeExecutor) IsPaperTrading() bool { return false }
 
 func TestModeAwareOrderExecutor_RoutesByOperationalMode(t *testing.T) {
-	liveExec := &stubModeExecutor{orderID: "live-1"}
-	paperExec := &stubModeExecutor{orderID: "paper-1"}
-	exec := NewModeAwareOrderExecutor(liveExec, paperExec, nil)
+	tests := []struct {
+		name               string
+		ctx                context.Context
+		expectedOrderID    string
+		expectedLiveCalls  int
+		expectedPaperCalls int
+		expectedPaperFlag  bool
+		checkPaperDetails  bool
+	}{
+		{
+			name:               "live mode forwards live execution details",
+			ctx:                WithOperationalMode(context.Background(), OpModeLive),
+			expectedOrderID:    "live-1",
+			expectedLiveCalls:  1,
+			expectedPaperCalls: 0,
+			expectedPaperFlag:  false,
+		},
+		{
+			name:               "paper mode forwards paper execution details",
+			ctx:                WithOperationalMode(context.Background(), ModePaper),
+			expectedOrderID:    "paper-1",
+			expectedLiveCalls:  0,
+			expectedPaperCalls: 1,
+			expectedPaperFlag:  true,
+			checkPaperDetails:  true,
+		},
+	}
 
-	liveCtx := WithOperationalMode(context.Background(), OpModeLive)
-	orderID, err := exec.PlaceOrderWithDetails(liveCtx, TradeDetails{Symbol: "BTC/USDT"})
-	require.NoError(t, err)
-	assert.Equal(t, "live-1", orderID)
-	assert.Equal(t, 1, liveExec.calls)
-	assert.Zero(t, paperExec.calls)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			liveExec := &stubModeExecutor{orderID: "live-1"}
+			paperExec := &stubModeExecutor{orderID: "paper-1"}
+			exec := NewModeAwareOrderExecutor(liveExec, paperExec, nil)
 
-	paperCtx := WithOperationalMode(context.Background(), ModePaper)
-	orderID, err = exec.PlaceOrderWithDetails(paperCtx, TradeDetails{Symbol: "BTC/USDT"})
-	require.NoError(t, err)
-	assert.Equal(t, "paper-1", orderID)
-	assert.Equal(t, 1, paperExec.calls)
+			orderID, err := exec.PlaceOrderWithDetails(tt.ctx, TradeDetails{Symbol: "BTC/USDT"})
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedOrderID, orderID)
+			assert.Equal(t, tt.expectedLiveCalls, liveExec.calls)
+			assert.Equal(t, tt.expectedPaperCalls, paperExec.calls)
+			if tt.expectedLiveCalls > 0 {
+				assert.Equal(t, tt.expectedPaperFlag, liveExec.lastDetails.IsPaperTrade)
+			}
+			if tt.checkPaperDetails {
+				assert.Equal(t, tt.expectedPaperFlag, paperExec.lastDetails.IsPaperTrade)
+			}
+		})
+	}
 }
 
 func TestModeAwareOrderExecutor_BlocksLiveModeWithoutLiveExecutor(t *testing.T) {
@@ -89,6 +122,7 @@ func TestModeAwareOrderExecutor_UsesOperationalModeServiceWhenContextMissing(t *
 	assert.Equal(t, "paper-1", orderID)
 	assert.Equal(t, 1, paperExec.calls)
 	assert.Zero(t, liveExec.calls)
+	assert.True(t, paperExec.lastDetails.IsPaperTrade)
 }
 
 func TestModeAwareOrderExecutor_PropagatesDelegateErrors(t *testing.T) {

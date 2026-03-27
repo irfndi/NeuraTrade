@@ -92,10 +92,11 @@ func (e *ModeAwareOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbo
 }
 
 func (e *ModeAwareOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
-	executor, _, err := e.executorForContext(ctx)
+	executor, mode, err := e.executorForContext(ctx)
 	if err != nil {
 		return "", err
 	}
+	details.IsPaperTrade = mode != OpModeLive
 	return executor.PlaceOrderWithDetails(ctx, details)
 }
 
