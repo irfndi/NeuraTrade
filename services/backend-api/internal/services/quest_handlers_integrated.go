@@ -1248,11 +1248,14 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
 		}
 		writeCtx, writeCancel := telemetryWriteContext()
-		_, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
+		persistedCycleID, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
 		writeCancel()
 		if insertErr != nil {
 			log.Printf("[TELEMETRY] Failed to insert cycle record: %v", insertErr)
 		} else {
+			if strings.TrimSpace(persistedCycleID) != "" {
+				cycleID = strings.TrimSpace(persistedCycleID)
+			}
 			telemetryInserted = true
 		}
 	}
