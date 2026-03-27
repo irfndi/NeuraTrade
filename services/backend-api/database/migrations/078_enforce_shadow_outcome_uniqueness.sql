@@ -1,3 +1,7 @@
+BEGIN;
+
+LOCK TABLE shadow_outcomes IN SHARE ROW EXCLUSIVE MODE;
+
 WITH duplicate_rows AS (
     SELECT id
     FROM (
@@ -17,3 +21,5 @@ DROP INDEX IF EXISTS idx_shadow_outcomes_shadow_decision_id;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_shadow_outcomes_shadow_decision_id_unique
     ON shadow_outcomes (shadow_decision_id);
+
+COMMIT;
