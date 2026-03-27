@@ -726,8 +726,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
 	}
 
-	// Use BitgetOrderExecutor for real order execution
 	var orderExecutor services.ScalpingOrderExecutor
+	var liveOrderExecutor services.ScalpingOrderExecutor
 	canUseBitgetCreds := bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase != ""
 	if bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase == "" {
 		log.Printf("⚠️ Bitget API key/secret detected but passphrase is missing; falling back to paper trading")
@@ -740,16 +740,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		bitgetExec := services.NewBitgetOrderExecutor(bitgetAPIKey, bitgetSecret, bitgetPassphrase)
 		bitgetExec.SetNotificationService(notificationService)
 		bitgetExec.SetChatID(chatID)
-		orderExecutor = bitgetExec
+		liveOrderExecutor = bitgetExec
 		log.Printf("✅ Real order execution enabled on Bitget")
-	} else {
-		// Fallback to paper trading if no API keys
-		nativeOrderExec := services.NewNativeOrderExecutor(ccxtService, bitgetAPIKey, bitgetSecret)
-		nativeOrderExec.SetNotificationService(notificationService)
-		nativeOrderExec.SetChatID(chatID)
-		orderExecutor = nativeOrderExec
-		log.Printf("⚠️ Paper trading mode (no Bitget API keys configured)")
 	}
+	paperOrderExec := services.NewNativeOrderExecutor(ccxtService, bitgetAPIKey, bitgetSecret)
+	paperOrderExec.SetNotificationService(notificationService)
+	paperOrderExec.SetChatID(chatID)
+	if liveOrderExecutor == nil {
+		log.Printf("⚠️ Real order execution unavailable at startup; live mode will be blocked until Bitget credentials and wallet mapping are valid")
+	}
+	orderExecutor = services.NewModeAwareOrderExecutor(liveOrderExecutor, paperOrderExec, opModeService)
 
 	orderExecutor = services.NewSafeOrderExecutor(orderExecutor, portfolioSafety, chatID)
 	log.Printf("Portfolio safety gate enabled for scalping order execution")
