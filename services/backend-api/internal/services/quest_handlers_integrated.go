@@ -706,11 +706,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
 	currentMode := h.resolveOperationalMode(chatID, quest)
 	isDryRun := currentMode != OpModeLive
+	ctx = WithOperationalMode(ctx, currentMode)
 	if quest.Metadata == nil {
 		quest.Metadata = make(map[string]string)
 	}
 	quest.Metadata["dry_run"] = strconv.FormatBool(isDryRun)
 	quest.Metadata["paper_trading"] = strconv.FormatBool(currentMode == ModePaper)
+	quest.Metadata["execution_mode"] = string(currentMode)
 	ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
 		ChatID:     chatID,
 		StrategyID: ScalpingStrategyID(chatID),
@@ -1430,7 +1432,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
-	if h.lifecycleStore != nil && strings.TrimSpace(decision.OrderID) != "" {
+	if currentMode == OpModeLive && h.lifecycleStore != nil && strings.TrimSpace(decision.OrderID) != "" {
 		entryPrice := decimal.Zero
 		if decision.EntryPrice != nil {
 			entryPrice = *decision.EntryPrice
@@ -1453,8 +1455,10 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
 		}
 	}
-	h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
-	if h.telemetryStore != nil && telemetryInserted && strings.TrimSpace(decision.OrderID) != "" {
+	if currentMode == OpModeLive {
+		h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
+	}
+	if currentMode == OpModeLive && h.telemetryStore != nil && telemetryInserted && strings.TrimSpace(decision.OrderID) != "" {
 		writeCtx, writeCancel := telemetryWriteContext()
 		err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
 		writeCancel()
@@ -1462,24 +1466,28 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
 		}
 	}
-	h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
+	if currentMode == OpModeLive {
+		h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
+	}
 	recordAIRuntimeEvent(quest, time.Now().UTC(), aiReasonStrategyHold, true, h.getAIScalpingRuntimeSnapshot())
-	if !isDryRun {
+	if currentMode == OpModeLive {
 		h.assertPostEntryProtectionAsync(chatID, userExchange, decision.OrderID, decision.Symbol, decision.Action)
 	}
 
 	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
 		decision.Action, decision.Symbol, decision.Confidence*100)
 
-	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
-		DecisionType:    "scalping",
-		Summary:         fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
-		Confidence:      decision.Confidence,
-		ConfidenceKnown: true,
-		ReasonCategory:  aiReasonStrategyHold,
-		Reasons:         []string{decision.Reasoning},
-		Action:          decision.Action,
-	})
+	if currentMode == OpModeLive {
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType:    "scalping",
+			Summary:         fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
+			Confidence:      decision.Confidence,
+			ConfidenceKnown: true,
+			ReasonCategory:  aiReasonStrategyHold,
+			Reasons:         []string{decision.Reasoning},
+			Action:          decision.Action,
+		})
+	}
 
 	return nil
 }
@@ -1552,7 +1560,7 @@ func (h *IntegratedQuestHandlers) autoDeriskBlockedExposure(
 			TradeType:    "risk_reduction",
 			Confidence:   1.0,
 			Reasoning:    fmt.Sprintf("Auto de-risk due to safety block: %s", safetyError),
-			IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+			IsPaperTrade: paperTradeFlagForContext(ctx, h.orderExecutor.IsPaperTrading()),
 			ReduceOnly:   true,
 		}
 		if details.Leverage <= 0 {
@@ -1772,7 +1780,7 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 			TradeType:    "risk_reduction",
 			Confidence:   1,
 			Reasoning:    "Startup/resume spot unwind to flatten non-core balances before autonomous entries",
-			IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+			IsPaperTrade: paperTradeFlagForContext(ctx, h.orderExecutor.IsPaperTrading()),
 			ReduceOnly:   true,
 		}
 
@@ -5240,7 +5248,7 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 		TradeType:    "risk_reduction",
 		Confidence:   1,
 		Reasoning:    source,
-		IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+		IsPaperTrade: paperTradeFlagForContext(ctx, h.orderExecutor.IsPaperTrading()),
 		ReduceOnly:   true,
 	}
 
