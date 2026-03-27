@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
+	internaldb "github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
 )
 
@@ -1256,14 +1257,7 @@ func (e *ScalpingBacktestEngine) resolveTradingPairIDs(ctx context.Context, symb
 	}
 	query := fmt.Sprintf(`SELECT id
 		FROM trading_pairs
-		WHERE UPPER(REPLACE(
-			CASE
-				WHEN POSITION(':' IN symbol) > 0 THEN SUBSTRING(symbol FROM 1 FOR POSITION(':' IN symbol) - 1)
-				ELSE symbol
-			END,
-			'-',
-			'/'
-		)) IN (%s)`, strings.Join(placeholders, ", "))
+		WHERE %s IN (%s)`, normalizedTradingPairSymbolExpr(e.db), strings.Join(placeholders, ", "))
 	rows, err := e.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query trading pairs: %w", err)
@@ -1283,6 +1277,36 @@ func (e *ScalpingBacktestEngine) resolveTradingPairIDs(ctx context.Context, symb
 	}
 
 	return ids, nil
+}
+
+func normalizedTradingPairSymbolExpr(db DBPool) string {
+	if isSQLiteTradingPairDB(db) {
+		return `UPPER(REPLACE(
+			CASE
+				WHEN INSTR(symbol, ':') > 0 THEN SUBSTR(symbol, 1, INSTR(symbol, ':') - 1)
+				ELSE symbol
+			END,
+			'-',
+			'/'
+		))`
+	}
+	return `UPPER(REPLACE(
+		CASE
+			WHEN POSITION(':' IN symbol) > 0 THEN SUBSTRING(symbol FROM 1 FOR POSITION(':' IN symbol) - 1)
+			ELSE symbol
+		END,
+		'-',
+		'/'
+	))`
+}
+
+func isSQLiteTradingPairDB(db DBPool) bool {
+	switch db.(type) {
+	case *internaldb.SQLiteDB:
+		return true
+	default:
+		return false
+	}
 }
 
 func scalpingSeriesKey(symbol, exchange string) string {
