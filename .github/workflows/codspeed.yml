@@ -18,7 +18,7 @@ permissions:
 jobs:
   codspeed:
     name: Run benchmarks
-    runs-on: codspeed-macro
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: services/backend-api
@@ -38,7 +38,7 @@ jobs:
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v4
         with:
-          mode: walltime
+          mode: simulation
           run: >
             cd services/backend-api &&
             go test -bench=. -run=^$
