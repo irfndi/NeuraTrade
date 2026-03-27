@@ -1184,7 +1184,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			degraded := copyPreTradeTelemetry(runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), decision)
 			degraded.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 				Allowed:     false,
-				BlockReason: reasonCategoryLLMParseContract,
+				BlockReason: runtimeErr.Error(),
 				BlockCode:   appautonomy.CandidateRejectAutonomyRuntime,
 			}
 			return degraded, nil
@@ -2902,6 +2902,14 @@ func validateRecoveredDecisionContract(decision *AITradingDecision) error {
 	}
 	normalizedSymbol := normalizeSymbolForComparison(decision.Symbol)
 	if normalizedSymbol == "" {
+		return fmt.Errorf("actionable decision symbol malformed: %q", strings.TrimSpace(decision.Symbol))
+	}
+	if strings.Contains(normalizedSymbol, "/") {
+		parts := strings.Split(normalizedSymbol, "/")
+		if len(parts) != 2 || len(strings.TrimSpace(parts[0])) < 2 || parts[1] != "USDT" {
+			return fmt.Errorf("actionable decision symbol malformed: %q", strings.TrimSpace(decision.Symbol))
+		}
+	} else if !strings.HasSuffix(normalizedSymbol, "USDT") || len(strings.TrimSuffix(normalizedSymbol, "USDT")) < 2 {
 		return fmt.Errorf("actionable decision symbol malformed: %q", strings.TrimSpace(decision.Symbol))
 	}
 	if decision.SizePercent <= 0 {

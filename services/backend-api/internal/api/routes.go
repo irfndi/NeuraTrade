@@ -831,9 +831,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 		providerChain, chainErr := parseAIProviderChain(aiProvider)
 		if chainErr != nil {
-			log.Printf("AI provider chain invalid; AI scalping disabled: %v", chainErr)
+			log.Printf("AI provider chain invalid; falling back to primary provider only: %v", chainErr)
 			questEngine.SetAIProviderChainStats(0, 0)
 			providerChain = nil
+			if validateAIProviderName(aiProvider) == nil {
+				providerChain = []string{strings.ToLower(strings.TrimSpace(aiProvider))}
+			}
 		}
 		failoverNodes := make([]llm.FailoverNode, 0, len(providerChain))
 		for _, provider := range providerChain {
