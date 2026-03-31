@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -1031,6 +1032,11 @@ func removePIDFileIfProcessExited(pidFile string) error {
 
 	if err := process.Signal(syscall.Signal(0)); err == nil {
 		return fmt.Errorf("process %d is still alive, keeping pid file", pid)
+	}
+
+	// EPERM means the process exists but is owned by another user — treat as alive.
+	if errors.Is(err, syscall.EPERM) {
+		return fmt.Errorf("process %d is alive (EPERM: owned by another user), keeping pid file", pid)
 	}
 
 	if removeErr := os.Remove(pidFile); removeErr != nil && !os.IsNotExist(removeErr) {
