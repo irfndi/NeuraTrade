@@ -126,7 +126,7 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 		return fmt.Errorf("scalping telemetry store requires database")
 	}
 
-	statements := []string{
+	preDedup := []string{
 		`CREATE TABLE IF NOT EXISTS scalping_cycle_telemetry (
 			id TEXT PRIMARY KEY,
 			chat_id TEXT,
@@ -159,14 +159,23 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_chat_id_cycle_at ON scalping_cycle_telemetry(chat_id, cycle_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id ON scalping_cycle_telemetry(order_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_outcome ON scalping_cycle_telemetry(outcome)`,
+	}
+
+	for _, stmt := range preDedup {
+		if _, err := s.db.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("scalping telemetry schema statement failed: %w", err)
+		}
+	}
+
+	s.deduplicateOrderIDs(ctx)
+
+	postDedup := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id_unique
 			ON scalping_cycle_telemetry(order_id)
 			WHERE order_id IS NOT NULL AND order_id != ''`,
 	}
 
-	s.deduplicateOrderIDs(ctx)
-
-	for _, stmt := range statements {
+	for _, stmt := range postDedup {
 		if _, err := s.db.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("scalping telemetry schema statement failed: %w", err)
 		}
@@ -181,7 +190,7 @@ func (s *ScalpingTelemetryStore) deduplicateOrderIDs(ctx context.Context) {
 		SELECT order_id FROM scalping_cycle_telemetry
 		WHERE order_id IS NOT NULL AND order_id != ''
 		GROUP BY order_id HAVING COUNT(*) > 1
-	)`)).Scan(&dupCount)
+	) AS dup`)).Scan(&dupCount)
 	if err != nil || dupCount == 0 {
 		return
 	}
