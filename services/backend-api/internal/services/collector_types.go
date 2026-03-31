@@ -137,6 +137,7 @@ type Worker struct {
 	ErrorCount int
 	// MaxErrors is the maximum allowed consecutive errors.
 	MaxErrors int
+	Paused    bool
 }
 
 // BackfillJob represents a single symbol backfill task

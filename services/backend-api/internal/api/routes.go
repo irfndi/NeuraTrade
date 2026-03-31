@@ -1068,7 +1068,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
-	agentControlHandler := handlers.NewAgentControlHandler(integratedHandlers.AutonomyCoordinator())
+	agentControlHandler := handlers.NewAgentControlHandler(handlers.AgentControlDeps{
+		Autonomy:  integratedHandlers.AutonomyCoordinator(),
+		Collector: handlers.NewCollectorController(collectorService),
+		Risk:      handlers.NewRiskControllerAdapter(),
+		Orders:    handlers.NewOrderController(ccxtService),
+	})
 	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())
 
 	// API v1 routes with telemetry

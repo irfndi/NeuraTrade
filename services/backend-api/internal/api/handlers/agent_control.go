@@ -2,6 +2,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,18 +16,47 @@ import (
 	"github.com/irfndi/neuratrade/internal/services"
 )
 
+type CollectorController interface {
+	PauseExchange(exchangeID string) error
+	ResumeExchange(exchangeID string) error
+}
+
+type RiskController interface {
+	EnableSafeMode(ctx context.Context, reason string) error
+	DisableSafeMode(ctx context.Context) error
+	EngageKillSwitch(ctx context.Context, reason string) error
+	DisengageKillSwitch(ctx context.Context) error
+}
+
+type OrderController interface {
+	CancelAllOrders(ctx context.Context, exchange, symbol string) error
+}
+
+type AgentControlDeps struct {
+	Autonomy  *services.ScalpingAutonomyCoordinator
+	Collector CollectorController
+	Risk      RiskController
+	Orders    OrderController
+}
+
 // AgentControlHandler handles agent control API requests.
 type AgentControlHandler struct {
 	mu          sync.RWMutex
 	subscribers map[chan AgentEvent]struct{}
 	autonomy    *services.ScalpingAutonomyCoordinator
+	collector   CollectorController
+	risk        RiskController
+	orders      OrderController
 }
 
 // NewAgentControlHandler creates a new agent control handler.
-func NewAgentControlHandler(autonomy *services.ScalpingAutonomyCoordinator) *AgentControlHandler {
+func NewAgentControlHandler(deps AgentControlDeps) *AgentControlHandler {
 	return &AgentControlHandler{
 		subscribers: make(map[chan AgentEvent]struct{}),
-		autonomy:    autonomy,
+		autonomy:    deps.Autonomy,
+		collector:   deps.Collector,
+		risk:        deps.Risk,
+		orders:      deps.Orders,
 	}
 }
 
@@ -69,9 +99,19 @@ func (h *AgentControlHandler) PauseExchange(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-
-	// TODO: Wire to actual collector service
-	// For now, just acknowledge the command
+	if req.ExchangeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exchange_id is required"})
+		return
+	}
+	if h.collector == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "collector service unavailable"})
+		return
+	}
+	if err := h.collector.PauseExchange(req.ExchangeID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "pause_exchange"})
+		return
+	}
+	log.Printf("agent_control: exchange %s collection paused", req.ExchangeID)
 	c.JSON(http.StatusOK, gin.H{
 		"status":      "ok",
 		"action":      "pause_exchange",
@@ -94,8 +134,19 @@ func (h *AgentControlHandler) ResumeExchange(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-
-	// TODO: Wire to actual collector service
+	if req.ExchangeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exchange_id is required"})
+		return
+	}
+	if h.collector == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "collector service unavailable"})
+		return
+	}
+	if err := h.collector.ResumeExchange(req.ExchangeID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "resume_exchange"})
+		return
+	}
+	log.Printf("agent_control: exchange %s collection resumed", req.ExchangeID)
 	c.JSON(http.StatusOK, gin.H{
 		"status":      "ok",
 		"action":      "resume_exchange",
@@ -112,7 +163,15 @@ func (h *AgentControlHandler) ResumeExchange(c *gin.Context) {
 // @Success 200 {object} map[string]string
 // @Router /api/v1/agent/enable-safe-mode [post]
 func (h *AgentControlHandler) EnableSafeMode(c *gin.Context) {
-	// TODO: Wire to actual risk service
+	if h.risk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "risk service unavailable"})
+		return
+	}
+	if err := h.risk.EnableSafeMode(c.Request.Context(), "operator request"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "enable_safe_mode"})
+		return
+	}
+	log.Printf("agent_control: safe mode enabled")
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "enable_safe_mode",
@@ -128,7 +187,15 @@ func (h *AgentControlHandler) EnableSafeMode(c *gin.Context) {
 // @Success 200 {object} map[string]string
 // @Router /api/v1/agent/disable-safe-mode [post]
 func (h *AgentControlHandler) DisableSafeMode(c *gin.Context) {
-	// TODO: Wire to actual risk service
+	if h.risk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "risk service unavailable"})
+		return
+	}
+	if err := h.risk.DisableSafeMode(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "disable_safe_mode"})
+		return
+	}
+	log.Printf("agent_control: safe mode disabled")
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "disable_safe_mode",
@@ -151,7 +218,19 @@ func (h *AgentControlHandler) EngageKillSwitch(c *gin.Context) {
 		return
 	}
 
-	// TODO: Wire to actual risk service
+	if h.risk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "risk service unavailable"})
+		return
+	}
+	reason := "operator request"
+	if req.Scope != "" {
+		reason = req.Scope
+	}
+	if err := h.risk.EngageKillSwitch(c.Request.Context(), reason); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "kill_switch"})
+		return
+	}
+	log.Printf("agent_control: kill switch engaged")
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "kill_switch",
@@ -175,7 +254,15 @@ func (h *AgentControlHandler) CancelAllOrders(c *gin.Context) {
 		return
 	}
 
-	// TODO: Wire to actual execution service
+	if h.orders == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "order execution service unavailable"})
+		return
+	}
+	if err := h.orders.CancelAllOrders(c.Request.Context(), req.ExchangeID, req.Scope); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "cancel_all_orders"})
+		return
+	}
+	log.Printf("agent_control: all orders cancelled (exchange=%s, scope=%s)", req.ExchangeID, req.Scope)
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "cancel_all_orders",

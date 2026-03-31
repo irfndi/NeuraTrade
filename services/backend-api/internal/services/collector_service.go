@@ -445,6 +445,32 @@ func (c *CollectorService) Stop() {
 	c.logger.Info("Market data collector service stopped")
 }
 
+func (c *CollectorService) PauseExchange(exchangeID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	worker, ok := c.workers[exchangeID]
+	if !ok {
+		return fmt.Errorf("exchange %q not found", exchangeID)
+	}
+	worker.Paused = true
+	c.logger.Info("Exchange collection paused", "exchange", exchangeID)
+	return nil
+}
+
+func (c *CollectorService) ResumeExchange(exchangeID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	worker, ok := c.workers[exchangeID]
+	if !ok {
+		return fmt.Errorf("exchange %q not found", exchangeID)
+	}
+	worker.Paused = false
+	c.logger.Info("Exchange collection resumed", "exchange", exchangeID)
+	return nil
+}
+
 // IsInitialized returns true if the collector service has been initialized.
 //
 // Returns:
