@@ -73,7 +73,7 @@ func TestAutonomousMonitoring_SendAlert(t *testing.T) {
 		})
 	})
 
-	t.Run("valid chatID with nil deps returns error from dispatch", func(t *testing.T) {
+	t.Run("valid chatID with nil deps does not panic", func(t *testing.T) {
 		ns := NewNotificationService(nil, nil, "", "", "")
 		monitor := NewAutonomousMonitoring("12345", ns)
 		assert.NotPanics(t, func() {

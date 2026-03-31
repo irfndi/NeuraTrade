@@ -231,6 +231,7 @@ func TestAlertService_SendAlert_Dispatch(t *testing.T) {
 		ctx := context.Background()
 		err := alertService.SendAlert(ctx, AlertLevelInfo, "test", "Info message", nil)
 		assert.NoError(t, err)
+		alertService.WaitForBroadcasts()
 	})
 
 	t.Run("warning level does not dispatch via notification service", func(t *testing.T) {
@@ -242,9 +243,10 @@ func TestAlertService_SendAlert_Dispatch(t *testing.T) {
 		ctx := context.Background()
 		err := alertService.SendAlert(ctx, AlertLevelWarning, "test", "Warning message", nil)
 		assert.NoError(t, err)
+		alertService.WaitForBroadcasts()
 	})
 
-	t.Run("error level dispatches via notification service", func(t *testing.T) {
+	t.Run("error level dispatches via notification service and completes", func(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		alertService := NewAlertService(nil, nil, logger)
 		ns := NewNotificationService(nil, nil, "", "", "")
@@ -253,9 +255,20 @@ func TestAlertService_SendAlert_Dispatch(t *testing.T) {
 		ctx := context.Background()
 		err := alertService.SendAlert(ctx, AlertLevelError, "test", "Error message", nil)
 		assert.NoError(t, err)
+
+		done := make(chan struct{})
+		go func() {
+			alertService.WaitForBroadcasts()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("WaitForBroadcasts timed out — BroadcastSystemAlert goroutine may not have run")
+		}
 	})
 
-	t.Run("critical level dispatches via notification service", func(t *testing.T) {
+	t.Run("critical level dispatches via notification service and completes", func(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		alertService := NewAlertService(nil, nil, logger)
 		ns := NewNotificationService(nil, nil, "", "", "")
@@ -264,6 +277,17 @@ func TestAlertService_SendAlert_Dispatch(t *testing.T) {
 		ctx := context.Background()
 		err := alertService.SendAlert(ctx, AlertLevelCritical, "test", "Critical message", nil)
 		assert.NoError(t, err)
+
+		done := make(chan struct{})
+		go func() {
+			alertService.WaitForBroadcasts()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("WaitForBroadcasts timed out — BroadcastSystemAlert goroutine may not have run")
+		}
 	})
 
 	t.Run("nil notification service does not panic on error level", func(t *testing.T) {

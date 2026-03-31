@@ -39,6 +39,7 @@ type AlertService struct {
 	handlers            []AlertHandler
 	alertThrottler      *AlertThrottler
 	notificationService *NotificationService
+	broadcastWg         sync.WaitGroup
 	mu                  sync.RWMutex
 }
 
@@ -130,9 +131,19 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 	}
 
 	if ns != nil && (level == AlertLevelError || level == AlertLevelCritical) {
+		s.broadcastWg.Add(1)
 		go func() {
-			bgCtx := context.Background()
-			if err := ns.BroadcastSystemAlert(bgCtx, alert); err != nil {
+			defer s.broadcastWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Panic in alert broadcast goroutine",
+						"panic", r,
+						"level", level,
+						"source", source,
+					)
+				}
+			}()
+			if err := ns.BroadcastSystemAlert(ctx, alert); err != nil {
 				s.logger.Error("Failed to broadcast system alert via notification service",
 					"level", level,
 					"source", source,
@@ -255,4 +266,8 @@ func (s *AlertService) RunHealthCheck(ctx context.Context, config HealthAlertCon
 			map[string]any{"error": err.Error()})
 		s.logger.Error("Database health check failed", "error", err)
 	}
+}
+
+func (s *AlertService) WaitForBroadcasts() {
+	s.broadcastWg.Wait()
 }

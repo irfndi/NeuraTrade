@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	userModels "github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/observability"
 )
 
@@ -564,24 +566,24 @@ func (ns *NotificationService) generateProgressBar(percent, width int) string {
 // NotifySystemAlert sends a system alert notification to a specific chat via Telegram.
 // It formats the alert with severity-appropriate emoji and dispatches it through the
 // existing Telegram delivery pipeline (gRPC first, HTTP fallback).
-func (ns *NotificationService) NotifySystemAlert(ctx context.Context, chatID int64, alert SystemAlert) error {
+func (ns *NotificationService) NotifySystemAlert(ctx context.Context, chatID int64, alert SystemAlert) (err error) {
 	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifySystemAlert", map[string]string{
 		"chat_id": fmt.Sprintf("%d", chatID),
 		"level":   string(alert.Level),
 		"source":  alert.Source,
 	})
-	defer observability.FinishSpan(span, nil)
+	defer observability.FinishSpan(span, err)
 
 	message := ns.formatSystemAlertMessage(alert)
 
-	if err := ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
+	if err = ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
 		ns.logger.Error("Failed to send system alert notification",
 			"chat_id", chatID,
 			"level", alert.Level,
 			"source", alert.Source,
 			"error", err,
 		)
-		return err
+		return
 	}
 
 	ns.logger.Info("Sent system alert notification",
@@ -590,35 +592,45 @@ func (ns *NotificationService) NotifySystemAlert(ctx context.Context, chatID int
 		"source", alert.Source,
 	)
 
-	return nil
+	return
 }
 
 // BroadcastSystemAlert sends a system alert to all eligible users (those with Telegram
 // chat IDs configured and not blocked). It is used by AlertService to fan-out error and
 // critical alerts to operators.
-func (ns *NotificationService) BroadcastSystemAlert(ctx context.Context, alert SystemAlert) error {
+func (ns *NotificationService) BroadcastSystemAlert(ctx context.Context, alert SystemAlert) (err error) {
 	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.BroadcastSystemAlert", map[string]string{
 		"level":  string(alert.Level),
 		"source": alert.Source,
 	})
-	defer observability.FinishSpan(span, nil)
+	defer observability.FinishSpan(span, err)
 
-	users, err := ns.getEligibleUsers(spanCtx)
-	if err != nil {
-		ns.logger.Error("Failed to get eligible users for system alert broadcast",
-			"error", err,
+	if ns.db == nil {
+		ns.logger.Error("Cannot broadcast system alert: database not available",
+			"level", alert.Level,
+			"source", alert.Source,
 		)
-		return fmt.Errorf("failed to get eligible users for alert broadcast: %w", err)
+		err = fmt.Errorf("cannot broadcast system alert: database not available")
+		return
+	}
+
+	users, queryErr := ns.getSystemAlertRecipients(spanCtx)
+	if queryErr != nil {
+		ns.logger.Error("Failed to get recipients for system alert broadcast",
+			"error", queryErr,
+		)
+		err = fmt.Errorf("failed to get recipients for alert broadcast: %w", queryErr)
+		return
 	}
 
 	if len(users) == 0 {
-		ns.logger.Info("No eligible users found for system alert broadcast")
-		return nil
+		ns.logger.Info("No eligible recipients found for system alert broadcast")
+		return
 	}
 
 	message := ns.formatSystemAlertMessage(alert)
 
-	var lastErr error
+	var sendErrs []error
 	sentCount := 0
 	for _, user := range users {
 		if user.TelegramChatID == nil {
@@ -631,6 +643,7 @@ func (ns *NotificationService) BroadcastSystemAlert(ctx context.Context, alert S
 				"chat_id", *user.TelegramChatID,
 				"error", parseErr,
 			)
+			sendErrs = append(sendErrs, fmt.Errorf("user %s: invalid chat ID: %w", user.ID, parseErr))
 			continue
 		}
 
@@ -640,7 +653,7 @@ func (ns *NotificationService) BroadcastSystemAlert(ctx context.Context, alert S
 				"chat_id", chatID,
 				"error", sendErr,
 			)
-			lastErr = sendErr
+			sendErrs = append(sendErrs, fmt.Errorf("user %s: send failed: %w", user.ID, sendErr))
 			continue
 		}
 		sentCount++
@@ -651,34 +664,78 @@ func (ns *NotificationService) BroadcastSystemAlert(ctx context.Context, alert S
 		"source", alert.Source,
 		"total_users", len(users),
 		"sent_count", sentCount,
+		"failed_count", len(sendErrs),
 	)
 
-	return lastErr
+	if len(sendErrs) > 0 {
+		err = fmt.Errorf("broadcast completed with %d failures: %w",
+			len(sendErrs), errors.Join(sendErrs...))
+	}
+	return
 }
 
 // NotifyMonitoringAlert sends an autonomous monitoring alert to a specific chat via Telegram.
 // It formats the alert message with a monitoring-specific header.
-func (ns *NotificationService) NotifyMonitoringAlert(ctx context.Context, chatID int64, message string) error {
+func (ns *NotificationService) NotifyMonitoringAlert(ctx context.Context, chatID int64, message string) (err error) {
 	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyMonitoringAlert", map[string]string{
 		"chat_id": fmt.Sprintf("%d", chatID),
 	})
-	defer observability.FinishSpan(span, nil)
+	defer observability.FinishSpan(span, err)
 
-	formatted := fmt.Sprintf("🚨 AUTONOMOUS MONITORING ALERT\n\n%s\n\nTime: %s", message, time.Now().UTC().Format(time.RFC3339))
+	formatted := formatMonitoringAlertMessage(message)
 
-	if err := ns.sendTelegramMessage(spanCtx, chatID, formatted); err != nil {
+	if err = ns.sendTelegramMessage(spanCtx, chatID, formatted); err != nil {
 		ns.logger.Error("Failed to send monitoring alert notification",
 			"chat_id", chatID,
 			"error", err,
 		)
-		return err
+		return
 	}
 
 	ns.logger.Info("Sent monitoring alert notification",
 		"chat_id", chatID,
 	)
 
-	return nil
+	return
+}
+
+func formatMonitoringAlertMessage(message string) string {
+	return fmt.Sprintf("🚨 AUTONOMOUS MONITORING ALERT\n\n%s\n\nTime: %s", message, time.Now().UTC().Format(time.RFC3339))
+}
+
+// getSystemAlertRecipients returns all users with Telegram configured and not blocked.
+// Unlike getEligibleUsers (which is arbitrage-specific), this method does not filter
+// by user alert preferences — system-level error/critical alerts are always sent.
+func (ns *NotificationService) getSystemAlertRecipients(ctx context.Context) ([]userModels.User, error) {
+	if ns.db == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+
+	query := `
+		SELECT id, email, telegram_chat_id, subscription_tier, created_at, updated_at
+		FROM users
+		WHERE telegram_chat_id IS NOT NULL
+		  AND telegram_chat_id != ''
+		  AND (telegram_blocked IS NULL OR telegram_blocked = false)
+	`
+
+	rows, err := ns.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query system alert recipients: %w", err)
+	}
+	defer rows.Close()
+
+	var users []userModels.User
+	for rows.Next() {
+		var user userModels.User
+		if err := rows.Scan(&user.ID, &user.Email, &user.TelegramChatID, &user.SubscriptionTier, &user.CreatedAt, &user.UpdatedAt); err != nil {
+			ns.logger.Error("Failed to scan user row", "error", err)
+			continue
+		}
+		users = append(users, user)
+	}
+
+	return users, nil
 }
 
 // formatSystemAlertMessage formats a SystemAlert into a human-readable Telegram message.

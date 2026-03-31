@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,9 +143,9 @@ func TestFormatSystemAlertMessage_DetailsSorting(t *testing.T) {
 	}
 
 	message := ns.formatSystemAlertMessage(alert)
-	alphaIdx := indexOf(message, "alpha: first")
-	middleIdx := indexOf(message, "middle: mid")
-	zebraIdx := indexOf(message, "zebra: last")
+	alphaIdx := strings.Index(message, "alpha: first")
+	middleIdx := strings.Index(message, "middle: mid")
+	zebraIdx := strings.Index(message, "zebra: last")
 	assert.Less(t, alphaIdx, middleIdx)
 	assert.Less(t, middleIdx, zebraIdx)
 }
@@ -173,13 +174,6 @@ func TestNotifyMonitoringAlert(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestNotifyMonitoringAlert_FormatsHeader(t *testing.T) {
-	ns := NewNotificationService(nil, nil, "", "", "")
-	ctx := context.Background()
-
-	_ = ns.NotifyMonitoringAlert(ctx, 12345, "test message")
-}
-
 func TestBroadcastSystemAlert_NilDB(t *testing.T) {
 	ns := NewNotificationService(nil, nil, "", "", "")
 	ctx := context.Background()
@@ -192,16 +186,14 @@ func TestBroadcastSystemAlert_NilDB(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	assert.Panics(t, func() {
-		_ = ns.BroadcastSystemAlert(ctx, alert)
-	})
+	err := ns.BroadcastSystemAlert(ctx, alert)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "database not available")
 }
 
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
+func TestFormatMonitoringAlertMessage(t *testing.T) {
+	result := formatMonitoringAlertMessage("drawdown exceeded threshold")
+	assert.Contains(t, result, "🚨 AUTONOMOUS MONITORING ALERT")
+	assert.Contains(t, result, "drawdown exceeded threshold")
+	assert.Contains(t, result, "Time:")
 }

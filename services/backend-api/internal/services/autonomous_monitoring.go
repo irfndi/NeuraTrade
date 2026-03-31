@@ -3,11 +3,12 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/telemetry"
 	"github.com/shopspring/decimal"
 )
 
@@ -28,6 +29,7 @@ type AutonomousMonitoring struct {
 	alertsEnabled       bool
 	alertThresholds     MonitoringThresholds
 	notificationService *NotificationService
+	logger              *slog.Logger
 }
 
 // MonitoringThresholds defines alert thresholds
@@ -74,6 +76,7 @@ func NewAutonomousMonitoring(chatID string, notifService *NotificationService) *
 		alertsEnabled:       true,
 		alertThresholds:     DefaultMonitoringThresholds(),
 		notificationService: notifService,
+		logger:              telemetry.Logger(),
 	}
 }
 
@@ -204,7 +207,10 @@ func (m *AutonomousMonitoring) computeAlertsLocked() []string {
 
 // sendAlert sends an alert notification
 func (m *AutonomousMonitoring) sendAlert(message string) {
-	log.Printf("🚨 ALERT [%s]: %s", m.chatID, message)
+	m.logger.Info("Monitoring alert triggered",
+		"chat_id", m.chatID,
+		"message", message,
+	)
 
 	if m.notificationService == nil {
 		return
@@ -212,12 +218,18 @@ func (m *AutonomousMonitoring) sendAlert(message string) {
 
 	chatID, err := strconv.ParseInt(m.chatID, 10, 64)
 	if err != nil {
-		log.Printf("🚨 ALERT [%s]: invalid chat ID, skipping notification dispatch: %v", m.chatID, err)
+		m.logger.Error("Invalid chat ID, skipping notification dispatch",
+			"chat_id", m.chatID,
+			"error", err,
+		)
 		return
 	}
 
 	if err := m.notificationService.NotifyMonitoringAlert(context.Background(), chatID, message); err != nil {
-		log.Printf("🚨 ALERT [%s]: failed to dispatch monitoring notification: %v", m.chatID, err)
+		m.logger.Error("Failed to dispatch monitoring notification",
+			"chat_id", m.chatID,
+			"error", err,
+		)
 	}
 }
 
