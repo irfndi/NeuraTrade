@@ -143,7 +143,7 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 					)
 				}
 			}()
-			if err := ns.BroadcastSystemAlert(ctx, alert); err != nil {
+			if err := ns.BroadcastSystemAlert(context.WithoutCancel(ctx), alert); err != nil {
 				s.logger.Error("Failed to broadcast system alert via notification service",
 					"level", level,
 					"source", source,

@@ -264,10 +264,18 @@ func (m *AutonomousMonitoring) GetPerformanceMetrics() map[string]interface{} {
 	metrics["total_quests"] = m.totalQuests
 	metrics["successful_quests"] = m.successfulQuests
 	metrics["failed_quests"] = m.failedQuests
-	metrics["success_rate"] = float64(m.successfulQuests) / float64(m.totalQuests)
+	if m.totalQuests > 0 {
+		metrics["success_rate"] = float64(m.successfulQuests) / float64(m.totalQuests)
+	} else {
+		metrics["success_rate"] = 0.0
+	}
 	metrics["total_trades"] = m.totalTrades
 	metrics["profitable_trades"] = m.profitableTrades
-	metrics["win_rate"] = float64(m.profitableTrades) / float64(m.totalTrades)
+	if m.totalTrades > 0 {
+		metrics["win_rate"] = float64(m.profitableTrades) / float64(m.totalTrades)
+	} else {
+		metrics["win_rate"] = 0.0
+	}
 	metrics["total_pnl"] = m.totalPnL.String()
 	metrics["max_drawdown"] = m.maxDrawdown.String()
 	metrics["current_drawdown"] = m.currentDrawdown.String()

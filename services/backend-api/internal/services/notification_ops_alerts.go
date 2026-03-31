@@ -575,6 +575,7 @@ func (ns *NotificationService) NotifySystemAlert(ctx context.Context, chatID int
 	defer observability.FinishSpan(span, err)
 
 	message := ns.formatSystemAlertMessage(alert)
+	message = truncateToTelegramUnitsWithEllipsis(message, ns.telegramMaxMessageUnits)
 
 	if err = ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
 		ns.logger.Error("Failed to send system alert notification",
@@ -629,6 +630,7 @@ func (ns *NotificationService) BroadcastSystemAlert(ctx context.Context, alert S
 	}
 
 	message := ns.formatSystemAlertMessage(alert)
+	message = truncateToTelegramUnitsWithEllipsis(message, ns.telegramMaxMessageUnits)
 
 	var sendErrs []error
 	sentCount := 0
@@ -683,6 +685,7 @@ func (ns *NotificationService) NotifyMonitoringAlert(ctx context.Context, chatID
 	defer observability.FinishSpan(span, err)
 
 	formatted := formatMonitoringAlertMessage(message)
+	formatted = truncateToTelegramUnitsWithEllipsis(formatted, ns.telegramMaxMessageUnits)
 
 	if err = ns.sendTelegramMessage(spanCtx, chatID, formatted); err != nil {
 		ns.logger.Error("Failed to send monitoring alert notification",
@@ -733,6 +736,11 @@ func (ns *NotificationService) getSystemAlertRecipients(ctx context.Context) ([]
 			continue
 		}
 		users = append(users, user)
+	}
+
+	if err := rows.Err(); err != nil {
+		ns.logger.Error("Error iterating user rows for system alert recipients", "error", err)
+		return users, fmt.Errorf("partial results retrieving system alert recipients: %w", err)
 	}
 
 	return users, nil
