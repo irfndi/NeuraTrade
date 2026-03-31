@@ -159,21 +159,6 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_chat_id_cycle_at ON scalping_cycle_telemetry(chat_id, cycle_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id ON scalping_cycle_telemetry(order_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_outcome ON scalping_cycle_telemetry(outcome)`,
-		`DELETE FROM scalping_cycle_telemetry
-		 WHERE id IN (
-		 	SELECT id FROM (
-		 		SELECT id,
-		 			ROW_NUMBER() OVER (
-		 				PARTITION BY order_id
-		 				ORDER BY CASE WHEN outcome IS NOT NULL AND outcome != '' THEN 0 ELSE 1 END,
-		 					cycle_at DESC,
-		 					id DESC
-		 			) AS rn
-		 		FROM scalping_cycle_telemetry
-		 		WHERE order_id IS NOT NULL AND order_id != ''
-		 	) ranked
-		 	WHERE rn > 1
-		 )`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scalping_cycle_telemetry_order_id_unique
 			ON scalping_cycle_telemetry(order_id)
 			WHERE order_id IS NOT NULL AND order_id != ''`,
@@ -185,7 +170,37 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 		}
 	}
 
+	s.deduplicateOrderIDs(ctx)
+
 	return nil
+}
+
+func (s *ScalpingTelemetryStore) deduplicateOrderIDs(ctx context.Context) {
+	var dupCount int
+	err := s.db.QueryRow(ctx, s.bindQuery(`SELECT COUNT(*) FROM (
+		SELECT order_id FROM scalping_cycle_telemetry
+		WHERE order_id IS NOT NULL AND order_id != ''
+		GROUP BY order_id HAVING COUNT(*) > 1
+	)`)).Scan(&dupCount)
+	if err != nil || dupCount == 0 {
+		return
+	}
+	s.logger.Warn("deduplicating order_id rows in telemetry", "duplicates", dupCount)
+	_, _ = s.db.Exec(ctx, s.bindQuery(`DELETE FROM scalping_cycle_telemetry
+	 WHERE id IN (
+	 	SELECT id FROM (
+	 		SELECT id,
+	 			ROW_NUMBER() OVER (
+	 				PARTITION BY order_id
+	 				ORDER BY CASE WHEN outcome IS NOT NULL AND outcome != '' THEN 0 ELSE 1 END,
+	 					cycle_at DESC,
+	 					id DESC
+	 			) AS rn
+	 		FROM scalping_cycle_telemetry
+	 		WHERE order_id IS NOT NULL AND order_id != ''
+	 	) ranked
+	 	WHERE rn > 1
+	 )`))
 }
 
 func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record CycleRecord) (string, error) {
