@@ -605,7 +605,10 @@ func (tas *TechnicalAnalysisService) analyzeSMASignal(prices, sma []float64, per
 	prevSMA := sma[len(sma)-2]
 
 	// Calculate distance from SMA as percentage
-	distanceFromSMA := math.Abs(currentPrice-currentSMA) / currentSMA
+	distanceFromSMA := 0.0
+	if currentSMA != 0 {
+		distanceFromSMA = math.Abs(currentPrice-currentSMA) / currentSMA
+	}
 
 	// Adjust signal strength based on period (longer periods = stronger signals)
 	periodMultiplier := math.Min(1.5, float64(period)/20.0) // Scale based on period
@@ -648,7 +651,10 @@ func (tas *TechnicalAnalysisService) analyzeEMASignal(prices, ema []float64, per
 	prevEMA := ema[len(ema)-2]
 
 	// Calculate distance from EMA as percentage
-	distanceFromEMA := math.Abs(currentPrice-currentEMA) / currentEMA
+	distanceFromEMA := 0.0
+	if currentEMA != 0 {
+		distanceFromEMA = math.Abs(currentPrice-currentEMA) / currentEMA
+	}
 
 	// EMA is more sensitive than SMA, so use higher base strength
 	// Adjust signal strength based on period
@@ -745,6 +751,9 @@ func (tas *TechnicalAnalysisService) analyzeBollingerBandsSignal(prices, smaValu
 
 	// Calculate band width and position
 	bandWidth := currentUpper - currentLower
+	if bandWidth == 0 {
+		return "hold", decimal.NewFromFloat(0.5)
+	}
 	distanceFromSMA := math.Abs(currentPrice - currentSMA)
 	positionInBand := (currentPrice - currentLower) / bandWidth
 

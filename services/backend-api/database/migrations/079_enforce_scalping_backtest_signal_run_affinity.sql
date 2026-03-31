@@ -22,6 +22,15 @@ BEGIN
     END IF;
 END $$;
 
+DELETE FROM scalping_backtest_trades t
+WHERE signal_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM scalping_backtest_signals s
+      WHERE s.id = t.signal_id
+        AND s.run_id = t.run_id
+  );
+
 DO $$
 BEGIN
     IF NOT EXISTS (

@@ -531,23 +531,24 @@ func (sp *SignalProcessor) processSignalsConcurrently(marketData []models.Market
 	}()
 
 	// Collect results with context awareness
-	var allResults []ProcessingResult
-	collectDone := make(chan struct{})
+	allResultsCh := make(chan []ProcessingResult, 1)
 	go func() {
+		allResults := make([]ProcessingResult, 0, len(marketData))
 		for result := range results {
 			allResults = append(allResults, result)
 		}
-		close(collectDone)
+		allResultsCh <- allResults
+		close(allResultsCh)
 	}()
 
 	// Wait for collection to complete or context to be cancelled
+	var allResults []ProcessingResult
 	select {
-	case <-collectDone:
+	case allResults = <-allResultsCh:
 		// Collection completed successfully
 	case <-sp.ctx.Done():
-		// Context cancelled, log and return partial results
-		sp.logger.Warn("Context cancelled during result collection, returning partial results")
-		return allResults
+		sp.logger.Warn("Context cancelled during result collection, returning empty results")
+		return nil
 	}
 
 	// Add result tracking
@@ -796,6 +797,10 @@ func (sp *SignalProcessor) generateArbitrageSignals(data models.MarketData) ([]A
 // getArbitrageOpportunities queries the database for active arbitrage opportunities for a symbol.
 func (sp *SignalProcessor) getArbitrageOpportunities(symbol string) ([]models.ArbitrageOpportunity, error) {
 	now := time.Now().UTC()
+	ctx := sp.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Query the database for arbitrage opportunities
 	query := `
@@ -808,7 +813,7 @@ func (sp *SignalProcessor) getArbitrageOpportunities(symbol string) ([]models.Ar
 		LIMIT 10
 	`
 
-	rows, err := sp.db.Query(context.Background(), query, symbol, now)
+	rows, err := sp.db.Query(ctx, query, symbol, now)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query arbitrage opportunities: %w", err)
 	}
