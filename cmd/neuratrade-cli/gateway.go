@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -49,6 +51,12 @@ type serviceProbeResult struct {
 
 var allowedGatewayServiceBinaries = newAllowedGatewayServiceBinaries()
 
+// newAllowedGatewayServiceBinaries returns a set of allowed service binary basenames.
+// By default it includes "neuratrade-server", "telegram-service", and "ccxt-service".
+// If the GATEWAY_ALLOWED_BINARIES environment variable is set, its comma-separated
+// values (trimmed and reduced to their basenames) are used instead; empty entries
+// and invalid basenames are ignored. If parsing yields no valid entries, the
+// default set is returned.
 func newAllowedGatewayServiceBinaries() map[string]struct{} {
 	defaults := []string{"neuratrade-server", "telegram-service", "ccxt-service"}
 	defaultSet := make(map[string]struct{}, len(defaults))
@@ -91,7 +99,11 @@ func isExternalCCXTMode() bool {
 	return os.Getenv("CCXT_SERVICE_URL") != "" || os.Getenv("CCXT_GRPC_ADDRESS") != ""
 }
 
-// gatewayStart starts all NeuraTrade services
+// gatewayStart starts NeuraTrade gateway services (backend, CCXT, and Telegram), writes initial runtime state, launches a health monitor, waits for an interrupt, and performs a graceful shutdown.
+//
+// It creates required runtime directories and PID/log artifacts, respects native CCXT mode (skips launching an external ccxt-service when embedded CCXT is configured), and updates the persisted gateway state with per-service statuses and endpoints. The function blocks until an OS interrupt (SIGINT/SIGTERM) is received, at which point it signals running services to stop, waits for their exit within configured timeouts, and cleans up runtime artifacts.
+//
+// The cli.Context parameter controls invocation flags (for example, supervised mode). The function returns an error if service startup or critical initialization fails.
 func gatewayStart(cCtx *cli.Context) error {
 	fmt.Println("🚀 Starting NeuraTrade Gateway...")
 	fmt.Println()
@@ -798,6 +810,15 @@ func waitForServiceHealthy(name, url string, timeout time.Duration) serviceProbe
 	}
 }
 
+// monitorGatewayHealth periodically probes backend and telegram health endpoints,
+// determines CCXT mode/status, and updates the persisted gateway runtime state.
+//
+// It polls every 15 seconds, performs HTTP health checks for backend and telegram,
+// and treats CCXT as embedded when `ccxtCmd` is nil (in which case CCXT status is
+// derived from the backend). For an external CCXT process the function checks its
+// process liveness. The function writes per-service runtime state and the overall
+// gateway mode to the file at `statePath`. It returns when a value is received on
+// the `stop` channel.
 func monitorGatewayHealth(
 	statePath, bindHost, backendPort, telegramPort string,
 	backendCmd, telegramCmd *exec.Cmd,
@@ -854,6 +875,8 @@ func deriveGatewayMode(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHe
 	return "degraded"
 }
 
+// serviceRuntimeState determines the runtime status for a service based on whether its process is running and whether its health probe succeeded.
+// It returns "down" if the process is not running, "healthy" if the process is running and the probe succeeded, and "warming" otherwise.
 func serviceRuntimeState(processUp, healthy bool) string {
 	switch {
 	case !processUp:
@@ -865,13 +888,16 @@ func serviceRuntimeState(processUp, healthy bool) string {
 	}
 }
 
-// signalAndWait sends SIGTERM to a process and waits up to shutdownTimeout
-// for it to exit. If the process is nil, it is a no-op.
+// signalAndWait sends SIGTERM to the process represented by cmd and waits for it to exit.
+// If the process does not exit within shutdownTimeout, it is killed.
+// If cmd or cmd.Process is nil, the function does nothing.
 func signalAndWait(cmd *exec.Cmd, shutdownTimeout time.Duration) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	cmd.Process.Signal(syscall.SIGTERM)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		log.Printf("[GATEWAY] failed to send SIGTERM to pid %d: %v", cmd.Process.Pid, err)
+	}
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
@@ -884,6 +910,8 @@ func signalAndWait(cmd *exec.Cmd, shutdownTimeout time.Duration) {
 	}
 }
 
+// processRunning reports whether the process associated with the provided exec.Cmd is running.
+// It returns false if cmd or cmd.Process is nil; otherwise true if the process exists and can be signaled.
 func processRunning(cmd *exec.Cmd) bool {
 	if cmd == nil || cmd.Process == nil {
 		return false
@@ -944,6 +972,10 @@ func writeGatewayStateMode(path, mode, detail string) {
 	writeGatewayState(path, state)
 }
 
+// writeGatewayServiceState updates the runtime state entry for a single gateway service and persists it to the given path.
+//
+// It ensures a gatewayRuntimeState exists (creating a state with a Services map if necessary), sets the service's
+// Status, Detail, and Endpoint fields for serviceName, and writes the updated state back to path.
 func writeGatewayServiceState(path, serviceName, status, detail, endpoint string) {
 	state, ok := readGatewayState(path)
 	if !ok {
@@ -962,16 +994,59 @@ func writeGatewayServiceState(path, serviceName, status, detail, endpoint string
 	writeGatewayState(path, state)
 }
 
+// cleanupGatewayRuntimeArtifacts marks the gateway runtime as stopped with the provided detail and removes the given PID files.
+// It updates the persisted state at statePath via markGatewayStopped and attempts to remove each non-empty pidFile, ignoring any removal errors.
 func cleanupGatewayRuntimeArtifacts(statePath, detail string, pidFiles ...string) {
 	markGatewayStopped(statePath, detail)
+	var errs []error
 	for _, pidFile := range pidFiles {
 		if strings.TrimSpace(pidFile) == "" {
 			continue
 		}
-		_ = os.Remove(pidFile)
+		if err := removePIDFileIfProcessExited(pidFile); err != nil {
+			errs = append(errs, fmt.Errorf("cleanup %s: %w", pidFile, err))
+		}
+	}
+	if len(errs) > 0 {
+		log.Printf("[GATEWAY] cleanup errors: %v", errs)
 	}
 }
 
+func removePIDFileIfProcessExited(pidFile string) error {
+	content, err := os.ReadFile(pidFile)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read pid file: %w", err)
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil || pid <= 0 {
+		return os.Remove(pidFile)
+	}
+
+	// On Unix, FindProcess returns a handle for any positive pid; liveness is
+	// determined by the Signal(0) probe below rather than by FindProcess itself.
+	process, _ := os.FindProcess(pid)
+
+	sigErr := process.Signal(syscall.Signal(0))
+	if sigErr == nil {
+		return fmt.Errorf("process %d is still alive, keeping pid file", pid)
+	}
+	if errors.Is(sigErr, syscall.EPERM) {
+		return fmt.Errorf("process %d is alive (EPERM: owned by another user), keeping pid file", pid)
+	}
+
+	if removeErr := os.Remove(pidFile); removeErr != nil && !os.IsNotExist(removeErr) {
+		return fmt.Errorf("removing pid file %s: %w", pidFile, removeErr)
+	}
+	return nil
+}
+
+// markGatewayStopped updates the gateway runtime state at statePath to indicate the gateway and all known services are stopped.
+// It ensures a valid state file exists (initializing if necessary), sets Mode to "down", sets the "gateway", "backend", "ccxt",
+// and "telegram" service statuses to "down" with the provided detail, and writes the updated state back to disk.
 func markGatewayStopped(statePath, detail string) {
 	state, ok := readGatewayState(statePath)
 	if !ok {

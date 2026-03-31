@@ -46,6 +46,7 @@ type IntegratedQuestHandlers struct {
 	aiScalpingMu         sync.RWMutex
 	tradeMemory          *TradeMemory
 	lifecycleStore       *TradingLifecycleStore
+	telemetryStore       *ScalpingTelemetryStore
 	protectionManager    *DynamicProtectionManager
 	db                   *sql.DB // Database for user settings
 	opModeService        *OperationalModeService
@@ -272,6 +273,10 @@ func (h *IntegratedQuestHandlers) SetTradeMemory(memory *TradeMemory) {
 
 func (h *IntegratedQuestHandlers) SetLifecycleStore(store *TradingLifecycleStore) {
 	h.lifecycleStore = store
+}
+
+func (h *IntegratedQuestHandlers) SetTelemetryStore(store *ScalpingTelemetryStore) {
+	h.telemetryStore = store
 }
 
 func (h *IntegratedQuestHandlers) SetDynamicProtectionManager(manager *DynamicProtectionManager) {
@@ -701,11 +706,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
 	currentMode := h.resolveOperationalMode(chatID, quest)
 	isDryRun := currentMode != OpModeLive
+	ctx = WithOperationalMode(ctx, currentMode)
 	if quest.Metadata == nil {
 		quest.Metadata = make(map[string]string)
 	}
 	quest.Metadata["dry_run"] = strconv.FormatBool(isDryRun)
 	quest.Metadata["paper_trading"] = strconv.FormatBool(currentMode == ModePaper)
+	quest.Metadata["execution_mode"] = string(currentMode)
 	ctx = WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
 		ChatID:     chatID,
 		StrategyID: ScalpingStrategyID(chatID),
@@ -1197,6 +1204,61 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	decision, err := aiSvc.ExecuteTradingCycle(cycleCtx, portfolio)
 	h.applyAutonomyCheckpoint(quest)
 	h.applyScalpingCycleDecisionDiagnostics(quest, decision)
+	cycleID := fmt.Sprintf("scalp-%s-%d", chatID, nowUTC.UnixNano())
+	telemetryInserted := false
+	if h.telemetryStore != nil {
+		cycleRec := CycleRecord{
+			ID:       cycleID,
+			ChatID:   chatID,
+			Exchange: userExchange,
+			CycleAt:  nowUTC,
+		}
+		if decision != nil {
+			rejectionJSON, marshalErr := json.Marshal(decision.CandidateFunnel.RejectionCounts)
+			if marshalErr != nil {
+				log.Printf("[TELEMETRY] Failed to marshal rejection counts: %v", marshalErr)
+				rejectionJSON = []byte("{}")
+			}
+			policyJSON, marshalErr := json.Marshal(decision.PolicyAdjustments)
+			if marshalErr != nil {
+				log.Printf("[TELEMETRY] Failed to marshal policy adjustments: %v", marshalErr)
+				policyJSON = []byte("[]")
+			}
+			gateBlockCode := ""
+			gateBlockReason := ""
+			if decision.ExecutionGate != nil {
+				gateBlockCode = decision.ExecutionGate.BlockCode
+				gateBlockReason = decision.ExecutionGate.BlockReason
+			}
+			cycleRec.Symbol = decision.Symbol
+			cycleRec.Action = decision.Action
+			cycleRec.Confidence = decision.Confidence
+			cycleRec.UniverseCount = decision.CandidateFunnel.CandidateUniverseCount
+			cycleRec.RankedCount = decision.CandidateFunnel.CandidateRankedCount
+			cycleRec.ViableCount = decision.CandidateFunnel.CandidateViableCount
+			cycleRec.RejectionCountsJSON = string(rejectionJSON)
+			cycleRec.Regime = decision.PreTradeRegime
+			cycleRec.Expectancy = decision.PreTradeExpectancy
+			cycleRec.ExpectancySampleSize = decision.PreTradeExpectancySampleSize
+			cycleRec.GateBlockCode = gateBlockCode
+			cycleRec.GateBlockReason = gateBlockReason
+			cycleRec.AccountTier = decision.AccountTier
+			cycleRec.EffectiveMinConfidence = decision.EffectiveMinConfidence
+			cycleRec.EffectiveMaxCapitalPct = decision.EffectiveMaxCapitalPct
+			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
+		}
+		writeCtx, writeCancel := telemetryWriteContext()
+		persistedCycleID, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
+		writeCancel()
+		if insertErr != nil {
+			log.Printf("[TELEMETRY] Failed to insert cycle record: %v", insertErr)
+		} else {
+			if strings.TrimSpace(persistedCycleID) != "" {
+				cycleID = strings.TrimSpace(persistedCycleID)
+			}
+			telemetryInserted = true
+		}
+	}
 	if shouldRecordEntryAttempt(decision, err) {
 		h.recordEntryAttempt(quest, nowUTC, livenessGate)
 	}
@@ -1373,7 +1435,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
-	if h.lifecycleStore != nil && strings.TrimSpace(decision.OrderID) != "" {
+	if currentMode == OpModeLive && h.lifecycleStore != nil && strings.TrimSpace(decision.OrderID) != "" {
 		entryPrice := decimal.Zero
 		if decision.EntryPrice != nil {
 			entryPrice = *decision.EntryPrice
@@ -1396,25 +1458,39 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
 		}
 	}
-	h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
-	h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
+	if currentMode == OpModeLive {
+		h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
+	}
+	if currentMode == OpModeLive && h.telemetryStore != nil && telemetryInserted && strings.TrimSpace(decision.OrderID) != "" {
+		writeCtx, writeCancel := telemetryWriteContext()
+		err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
+		writeCancel()
+		if err != nil {
+			log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
+		}
+	}
+	if currentMode == OpModeLive {
+		h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
+	}
 	recordAIRuntimeEvent(quest, time.Now().UTC(), aiReasonStrategyHold, true, h.getAIScalpingRuntimeSnapshot())
-	if !isDryRun {
+	if currentMode == OpModeLive {
 		h.assertPostEntryProtectionAsync(chatID, userExchange, decision.OrderID, decision.Symbol, decision.Action)
 	}
 
 	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
 		decision.Action, decision.Symbol, decision.Confidence*100)
 
-	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
-		DecisionType:    "scalping",
-		Summary:         fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
-		Confidence:      decision.Confidence,
-		ConfidenceKnown: true,
-		ReasonCategory:  aiReasonStrategyHold,
-		Reasons:         []string{decision.Reasoning},
-		Action:          decision.Action,
-	})
+	if currentMode == OpModeLive {
+		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+			DecisionType:    "scalping",
+			Summary:         fmt.Sprintf("AI decided to %s %s", decision.Action, decision.Symbol),
+			Confidence:      decision.Confidence,
+			ConfidenceKnown: true,
+			ReasonCategory:  aiReasonStrategyHold,
+			Reasons:         []string{decision.Reasoning},
+			Action:          decision.Action,
+		})
+	}
 
 	return nil
 }
@@ -1487,7 +1563,7 @@ func (h *IntegratedQuestHandlers) autoDeriskBlockedExposure(
 			TradeType:    "risk_reduction",
 			Confidence:   1.0,
 			Reasoning:    fmt.Sprintf("Auto de-risk due to safety block: %s", safetyError),
-			IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+			IsPaperTrade: paperTradeFlagForContext(ctx, h.orderExecutor.IsPaperTrading()),
 			ReduceOnly:   true,
 		}
 		if details.Leverage <= 0 {
@@ -1707,7 +1783,7 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 			TradeType:    "risk_reduction",
 			Confidence:   1,
 			Reasoning:    "Startup/resume spot unwind to flatten non-core balances before autonomous entries",
-			IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+			IsPaperTrade: paperTradeFlagForContext(ctx, h.orderExecutor.IsPaperTrading()),
 			ReduceOnly:   true,
 		}
 
@@ -4198,6 +4274,44 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 				log.Printf("[SCALPING] Failed to persist closed-order lifecycle for %s: %v", orderID, err)
 			}
 		}
+		if h.telemetryStore != nil {
+			outcome := "breakeven"
+			if profitable {
+				outcome = "win"
+			} else if pnl.LessThan(decimal.Zero) {
+				outcome = "loss"
+			}
+
+			holdSeconds := 0
+			if h.db != nil {
+				var openedAt time.Time
+				lookupCtx, lookupCancel := telemetryWriteContext()
+				if err := h.db.QueryRowContext(
+					lookupCtx,
+					"SELECT opened_at FROM trading_positions WHERE order_id = $1 ORDER BY opened_at DESC LIMIT 1",
+					orderID,
+				).Scan(&openedAt); err == nil && !openedAt.IsZero() {
+					secs := int(closedAt.Sub(openedAt).Seconds())
+					if secs < 0 {
+						secs = 0
+					}
+					holdSeconds = secs
+				}
+				lookupCancel()
+			}
+
+			writeCtx, writeCancel := telemetryWriteContext()
+			err := h.telemetryStore.UpdateCycleOutcome(writeCtx, orderID, ScalpingOutcomeRecord{
+				Outcome:             outcome,
+				PnL:                 pnl.String(),
+				HoldDurationSeconds: holdSeconds,
+				ClosedAt:            closedAt,
+			})
+			writeCancel()
+			if err != nil {
+				log.Printf("[TELEMETRY] Failed to update outcome for order %s: %v", orderID, err)
+			}
+		}
 	}
 
 	if !updatedProcessed {
@@ -4238,6 +4352,10 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		ids = ids[len(ids)-200:]
 	}
 	quest.Checkpoint["processed_closed_order_ids"] = ids
+}
+
+func telemetryWriteContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 2*time.Second)
 }
 
 func getProcessedOrderIDs(raw interface{}) map[string]bool {
@@ -5133,7 +5251,7 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 		TradeType:    "risk_reduction",
 		Confidence:   1,
 		Reasoning:    source,
-		IsPaperTrade: h.orderExecutor.IsPaperTrading(),
+		IsPaperTrade: paperTradeFlagForContext(ctx, h.orderExecutor.IsPaperTrading()),
 		ReduceOnly:   true,
 	}
 

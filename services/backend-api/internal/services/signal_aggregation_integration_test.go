@@ -88,9 +88,12 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Test 1: Signal Processing Pipeline
 	t.Run("SignalProcessingPipeline", func(t *testing.T) {
-		// Since getActiveTradingPairs is stubbed to return empty, this should run without DB queries
+		mockPool.ExpectQuery("SELECT tp.symbol, COALESCE\\(ce.ccxt_id, e.ccxt_id, e.name\\)").
+			WillReturnRows(pgxmock.NewRows([]string{"symbol", "name"}))
+
 		err := signalProcessor.processSignalBatch()
 		assert.NoError(t, err, "Signal processing should not fail (even with empty data)")
+		assert.NoError(t, mockPool.ExpectationsWereMet(), "all expected SQL queries should be executed")
 
 		// Verify metrics were updated (even if empty run)
 		metrics := signalProcessor.GetMetrics()
@@ -103,6 +106,13 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Test 2: Signal Quality Assessment
 	t.Run("SignalQualityAssessment", func(t *testing.T) {
+		qualityScorer.cacheExpiry = time.Time{}
+		mockPool.ExpectQuery("WITH latest_market_data AS").
+			WithArgs(pgxmock.AnyArg()).
+			WillReturnRows(pgxmock.NewRows([]string{"name", "total_volume", "data_point_count", "last_update", "pair_count"}).
+				AddRow("binance", decimal.NewFromFloat(1500000), int64(25), time.Now(), 5).
+				AddRow("coinbase", decimal.NewFromFloat(900000), int64(15), time.Now(), 3))
+
 		// Create test signal quality input
 		qualityInput := &SignalQualityInput{
 			SignalType:      "technical",
@@ -136,6 +146,13 @@ func TestSignalAggregationIntegration(t *testing.T) {
 
 	// Test 3: Signal Aggregation
 	t.Run("SignalAggregation", func(t *testing.T) {
+		qualityScorer.cacheExpiry = time.Time{}
+		mockPool.ExpectQuery("WITH latest_market_data AS").
+			WithArgs(pgxmock.AnyArg()).
+			WillReturnRows(pgxmock.NewRows([]string{"name", "total_volume", "data_point_count", "last_update", "pair_count"}).
+				AddRow("binance", decimal.NewFromFloat(1500000), int64(25), time.Now(), 5).
+				AddRow("coinbase", decimal.NewFromFloat(900000), int64(15), time.Now(), 3))
+
 		// Create test arbitrage opportunities
 		opportunities := []models.ArbitrageOpportunity{
 			{
@@ -182,6 +199,7 @@ func TestSignalAggregationIntegration(t *testing.T) {
 			assert.True(t, signal.Confidence.GreaterThan(decimal.Zero), "Signal should have confidence")
 			assert.NotEmpty(t, signal.Exchanges, "Signal should have exchanges")
 		}
+		assert.NoError(t, mockPool.ExpectationsWereMet(), "all expected SQL queries should be executed")
 	})
 
 	// Test 4: Circuit Breaker Integration

@@ -620,3 +620,19 @@ func TestAnalyzeSignalsWithEmptyData(t *testing.T) {
 	assert.Equal(t, "hold", signal)
 	assert.Equal(t, decimal.NewFromFloat(0.5), strength)
 }
+
+func TestAnalyzeSignalsWithZeroDivisors(t *testing.T) {
+	service, _ := setupTestService()
+
+	signal, strength := service.analyzeSMASignal([]float64{100, 101}, []float64{0, 0}, 10)
+	assert.Equal(t, "buy", signal)
+	assert.True(t, strength.GreaterThan(decimal.Zero))
+
+	signal, strength = service.analyzeEMASignal([]float64{100, 101}, []float64{0, 0}, 10)
+	assert.Equal(t, "buy", signal)
+	assert.True(t, strength.GreaterThan(decimal.Zero))
+
+	signal, strength = service.analyzeBollingerBandsSignal([]float64{100}, []float64{100}, []float64{100}, []float64{100}, 20)
+	assert.Equal(t, "hold", signal)
+	assert.Equal(t, decimal.NewFromFloat(0.5), strength)
+}

@@ -180,6 +180,9 @@ func NewClientFactory(registry *ai.Registry) *ClientFactory {
 
 // Configure sets configuration for a provider
 func (f *ClientFactory) Configure(provider Provider, config ClientConfig) {
+	if config.Provider == "" {
+		config.Provider = provider
+	}
 	f.configs[provider] = config
 }
 

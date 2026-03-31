@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   codspeed:
@@ -36,13 +35,9 @@ jobs:
         run: go mod download
 
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@v4
-        with:
-          mode: walltime
-          run: >
-            cd services/backend-api &&
-            go test -bench=. -run=^$
-            ./test/benchmark/
-            ./internal/crypto/
-            ./internal/utils/
-            ./internal/database/
+        run: >
+          go test -bench=. -run=^$
+          ./test/benchmark/
+          ./internal/crypto/
+          ./internal/utils/
+          ./internal/database/

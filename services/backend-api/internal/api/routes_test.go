@@ -891,26 +891,30 @@ func TestParseAIProviderChain(t *testing.T) {
 		mustUnsetEnv(t, key)
 		t.Cleanup(func() { restoreEnv(t, key, old, existed) })
 
-		result := parseAIProviderChain("")
+		result, err := parseAIProviderChain("")
+		require.NoError(t, err)
 		assert.Equal(t, []string{"zhipu"}, result)
 	})
 
 	t.Run("uses primary provider", func(t *testing.T) {
-		result := parseAIProviderChain("openai")
-		assert.Equal(t, "openai", result[0])
+		result, err := parseAIProviderChain("openai")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"openai"}, result)
 	})
 
 	t.Run("parses chain from env", func(t *testing.T) {
 		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "anthropic,openai")
-		result := parseAIProviderChain("primary")
-		assert.Equal(t, "primary", result[0])
+		result, err := parseAIProviderChain("zhipu")
+		require.NoError(t, err)
+		assert.Equal(t, "zhipu", result[0])
 		assert.Contains(t, result, "anthropic")
 		assert.Contains(t, result, "openai")
 	})
 
 	t.Run("deduplicates providers", func(t *testing.T) {
 		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,openai,anthropic")
-		result := parseAIProviderChain("primary")
+		result, err := parseAIProviderChain("zhipu")
+		require.NoError(t, err)
 		// Count occurrences of each provider
 		counts := make(map[string]int)
 		for _, p := range result {
@@ -921,6 +925,13 @@ func TestParseAIProviderChain(t *testing.T) {
 			assert.LessOrEqual(t, count, 1, "provider %s appears %d times", provider, count)
 		}
 	})
+
+	t.Run("rejects unsupported providers", func(t *testing.T) {
+		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,google")
+		_, err := parseAIProviderChain("zhipu")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported ai provider")
+	})
 }
 
 func TestProviderBaseURL(t *testing.T) {
@@ -929,6 +940,6 @@ func TestProviderBaseURL(t *testing.T) {
 	})
 
 	t.Run("zhipu uses configured default base path", func(t *testing.T) {
-		assert.Equal(t, "https://open.bigmodel.cn/api/coding/paas/v4", providerBaseURL("zhipu"))
+		assert.Equal(t, "https://open.bigmodel.cn/api/paas/v4", providerBaseURL("zhipu"))
 	})
 }

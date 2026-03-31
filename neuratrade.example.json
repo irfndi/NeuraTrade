@@ -37,7 +37,7 @@
   "ai": {
     "provider": "zhipu",
     "model": "glm-5-turbo",
-    "base_url": "https://api.z.ai/api/paas/v4",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
     "api_key": "YOUR_AI_API_KEY_HERE",
     "daily_budget": "10.00"
   },

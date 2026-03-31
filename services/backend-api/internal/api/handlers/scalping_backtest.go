@@ -36,6 +36,7 @@ type RunScalpingBacktestRequest struct {
 	InitialCapital     string   `json:"initial_capital"`
 	MaxBidAskSpreadPct *float64 `json:"max_bid_ask_spread_pct"`
 	MinConfidence      *float64 `json:"min_confidence"`
+	SpreadMultiplier   *float64 `json:"spread_multiplier"`
 	FeeRate            *string  `json:"fee_rate"`
 }
 
@@ -65,6 +66,7 @@ type ScalpingBacktestConfig struct {
 	InitialCapital     string    `json:"initial_capital"`
 	MaxBidAskSpreadPct float64   `json:"max_bid_ask_spread_pct"`
 	MinConfidence      float64   `json:"min_confidence"`
+	SpreadMultiplier   float64   `json:"spread_multiplier"`
 	FeeRate            string    `json:"fee_rate"`
 }
 
@@ -98,6 +100,7 @@ type ScalpingBacktestTrade struct {
 	TradeID             string    `json:"trade_id,omitempty"`
 	SignalID            string    `json:"signal_id,omitempty"`
 	Symbol              string    `json:"symbol"`
+	Exchange            string    `json:"exchange"`
 	Side                string    `json:"side"`
 	Size                string    `json:"size"`
 	Notional            string    `json:"notional"`
@@ -420,6 +423,14 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		return services.ScalpingBacktestConfig{}, fmt.Errorf("min_confidence must be between 0 and 1")
 	}
 
+	spreadMultiplier := float64(services.DefaultScalpingBacktestSpreadMultiplier)
+	if req.SpreadMultiplier != nil {
+		spreadMultiplier = *req.SpreadMultiplier
+	}
+	if spreadMultiplier <= 0 {
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("spread_multiplier must be greater than zero")
+	}
+
 	feeRate := "0.001"
 	if req.FeeRate != nil && strings.TrimSpace(*req.FeeRate) != "" {
 		feeRate = strings.TrimSpace(*req.FeeRate)
@@ -442,6 +453,7 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		InitialCapital:     initialCapital,
 		MaxBidAskSpreadPct: maxBidAskSpreadPct,
 		MinConfidence:      minConfidence,
+		SpreadMultiplier:   spreadMultiplier,
 		FeeRate:            feeRateDecimal,
 		SlippagePct:        decimal.NewFromFloat(services.DefaultScalpingBacktestSlippage),
 		MaxCapitalPct:      services.DefaultScalpingBacktestMaxCapitalPct,
@@ -458,6 +470,7 @@ func serviceConfigToAPI(cfg services.ScalpingBacktestConfig) ScalpingBacktestCon
 		InitialCapital:     cfg.InitialCapital.String(),
 		MaxBidAskSpreadPct: cfg.MaxBidAskSpreadPct,
 		MinConfidence:      cfg.MinConfidence,
+		SpreadMultiplier:   cfg.SpreadMultiplier,
 		FeeRate:            cfg.FeeRate.String(),
 	}
 }
@@ -473,14 +486,15 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 	summary := serviceSummaryToAPI(result.Summary)
 
 	type signalLookupKey struct {
-		symbol string
-		time   time.Time
+		symbol   string
+		exchange string
+		time     time.Time
 	}
 	tradeLookup := make(map[signalLookupKey]string)
 	signals := make([]ScalpingBacktestSignal, 0, len(result.Signals))
 	for _, s := range result.Signals {
 		id := uuid.NewString()
-		lookupKey := signalLookupKey{s.Symbol, s.Timestamp}
+		lookupKey := signalLookupKey{s.Symbol, s.Exchange, s.Timestamp}
 		if _, exists := tradeLookup[lookupKey]; !exists {
 			tradeLookup[lookupKey] = id
 		}
@@ -488,7 +502,7 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 			SignalID:         id,
 			Timestamp:        s.Timestamp,
 			Symbol:           s.Symbol,
-			Exchange:         result.Config.Exchange,
+			Exchange:         s.Exchange,
 			Regime:           s.Regime,
 			RegimeVolatility: s.RegimeVolatility,
 			FunnelStage:      s.FunnelStage,
@@ -505,8 +519,9 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 	for _, t := range result.Trades {
 		holdDuration := int(t.ExitTime.Sub(t.EntryTime).Seconds())
 		trade := ScalpingBacktestTrade{
-			SignalID:            tradeLookup[signalLookupKey{t.Symbol, t.EntryTime}],
+			SignalID:            tradeLookup[signalLookupKey{t.Symbol, t.Exchange, t.EntryTime}],
 			Symbol:              t.Symbol,
+			Exchange:            t.Exchange,
 			Side:                t.Side,
 			Size:                t.Size.String(),
 			Notional:            t.Notional.String(),
@@ -550,6 +565,11 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 	}
 }
 
+// serviceSummaryToAPI converts a services.ScalpingBacktestSummary into an API-ready ScalpingBacktestSummary.
+//
+// Numeric and decimal metrics are formatted as strings: win rate with two decimal places, total PnL as a plain decimal
+// string, total PnL percentage and max drawdown percentage with four decimal places. Zero-valued decimals are represented
+// by sensible string defaults ("0.00", "0", or "0.0000") while integer counters are copied directly.
 func serviceSummaryToAPI(s services.ScalpingBacktestSummary) ScalpingBacktestSummary {
 	winRate := "0.00"
 	if !s.WinRate.IsZero() {
@@ -692,21 +712,22 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO scalping_backtest_trades (
-				id, run_id, signal_id, symbol, side, size, notional,
+				id, run_id, signal_id, symbol, exchange, side, size, notional,
 				entry_price, exit_price, entry_timestamp, exit_timestamp,
 				pnl, pnl_pct, fees, outcome, exit_reason,
 				regime_at_entry, regime_at_exit, hold_duration_seconds
 			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7,
-				$8, $9, $10, $11,
-				$12, $13, $14, $15, $16,
-				$17, $18, $19
+				$1, $2, $3, $4, $5, $6, $7, $8,
+				$9, $10, $11, $12,
+				$13, $14, $15, $16, $17,
+				$18, $19, $20
 			)
 		`,
 			tradeID,
 			runID,
 			signalID,
 			trade.Symbol,
+			trade.Exchange,
 			trade.Side,
 			trade.Size,
 			trade.Notional,
@@ -775,12 +796,17 @@ func (h *ScalpingBacktestHandler) fetchBacktestRun(ctx context.Context, runID st
 	return decodeScalpingBacktestRow(runID, status, configRaw, summaryRaw, createdAt, completedAtNS)
 }
 
+// decodeScalpingBacktestRow decodes raw JSON config and summary bytes from a scalping backtest row and builds a GetScalpingBacktestResponse.
+//
+// If configRaw or summaryRaw contain valid JSON they are unmarshaled into the corresponding API types; invalid JSON yields an error that wraps the run ID.
+// The `completedAtNS` sql.NullTime is converted to a *time.Time when valid, otherwise `CompletedAt` is nil. The returned response contains the provided run ID, status, created timestamp, and the decoded config and summary.
 func decodeScalpingBacktestRow(runID, status string, configRaw, summaryRaw []byte, createdAt time.Time, completedAtNS sql.NullTime) (GetScalpingBacktestResponse, error) {
 	var config ScalpingBacktestConfig
 	if len(configRaw) > 0 {
 		if err := json.Unmarshal(configRaw, &config); err != nil {
 			return GetScalpingBacktestResponse{}, fmt.Errorf("unmarshal backtest config for run %s: %w", runID, err)
 		}
+		config = normalizeDecodedScalpingBacktestConfig(config)
 	}
 	var summary ScalpingBacktestSummary
 	if len(summaryRaw) > 0 {
@@ -801,6 +827,13 @@ func decodeScalpingBacktestRow(runID, status string, configRaw, summaryRaw []byt
 		CreatedAt:   createdAt,
 		CompletedAt: completedAt,
 	}, nil
+}
+
+func normalizeDecodedScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBacktestConfig {
+	if config.SpreadMultiplier <= 0 {
+		config.SpreadMultiplier = float64(services.DefaultScalpingBacktestSpreadMultiplier)
+	}
+	return config
 }
 
 func isNoRowsBacktestError(err error) bool {

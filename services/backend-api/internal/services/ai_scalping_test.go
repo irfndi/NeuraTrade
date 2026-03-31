@@ -1536,6 +1536,16 @@ func TestAIScalpingService_ExecuteTradingCycle_HoldsWhenWalletBasisIsZero(t *tes
 	assert.Zero(t, decision.EffectiveMaxCapitalPct)
 }
 
+func TestValidateRecoveredDecisionContract_AllowsCompactSymbols(t *testing.T) {
+	err := validateRecoveredDecisionContract(&AITradingDecision{
+		Action:      "buy",
+		Symbol:      "BTCUSDT",
+		SizePercent: 5,
+		Confidence:  0.8,
+	})
+	require.NoError(t, err)
+}
+
 func TestAIScalpingService_ExecuteTradingCycle_PromotesGenericHoldToFallbackWhenViableCandidatesExist(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		Responses: []*llm.CompletionResponse{{
