@@ -132,3 +132,16 @@ func TestModeAwareOrderExecutor_PropagatesDelegateErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, expected)
 }
+
+func TestModeAwareOrderExecutor_DefaultsToPaperWithoutContextOrModeService(t *testing.T) {
+	liveExec := &stubModeExecutor{orderID: "live-1"}
+	paperExec := &stubModeExecutor{orderID: "paper-1"}
+	exec := NewModeAwareOrderExecutor(liveExec, paperExec, nil)
+
+	orderID, err := exec.PlaceOrderWithDetails(context.Background(), TradeDetails{Symbol: "BTC/USDT"})
+	require.NoError(t, err)
+	assert.Equal(t, "paper-1", orderID)
+	assert.Zero(t, liveExec.calls)
+	assert.Equal(t, 1, paperExec.calls)
+	assert.True(t, paperExec.lastDetails.IsPaperTrade)
+}
