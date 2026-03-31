@@ -1030,12 +1030,11 @@ func removePIDFileIfProcessExited(pidFile string) error {
 	// determined by the Signal(0) probe below rather than by FindProcess itself.
 	process, _ := os.FindProcess(pid)
 
-	if err := process.Signal(syscall.Signal(0)); err == nil {
+	sigErr := process.Signal(syscall.Signal(0))
+	if sigErr == nil {
 		return fmt.Errorf("process %d is still alive, keeping pid file", pid)
 	}
-
-	// EPERM means the process exists but is owned by another user — treat as alive.
-	if errors.Is(err, syscall.EPERM) {
+	if errors.Is(sigErr, syscall.EPERM) {
 		return fmt.Errorf("process %d is alive (EPERM: owned by another user), keeping pid file", pid)
 	}
 
