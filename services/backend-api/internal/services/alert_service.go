@@ -131,9 +131,14 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 
 	if ns != nil && (level == AlertLevelError || level == AlertLevelCritical) {
 		go func() {
-			// TODO: Implement actual notification dispatch via NotificationService
-			// Currently logs only - integrate with Telegram or other notification channels
-			s.logger.Info(fmt.Sprintf("[%s] %s: %s", level, source, message))
+			bgCtx := context.Background()
+			if err := ns.BroadcastSystemAlert(bgCtx, alert); err != nil {
+				s.logger.Error("Failed to broadcast system alert via notification service",
+					"level", level,
+					"source", source,
+					"error", err,
+				)
+			}
 		}()
 	}
 

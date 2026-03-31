@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -207,9 +209,16 @@ func (m *AutonomousMonitoring) sendAlert(message string) {
 	if m.notificationService == nil {
 		return
 	}
-	// TODO: Send actual notification
-	// ctx := context.Background()
-	// m.notificationService.SendAlert(ctx, m.chatID, message)
+
+	chatID, err := strconv.ParseInt(m.chatID, 10, 64)
+	if err != nil {
+		log.Printf("🚨 ALERT [%s]: invalid chat ID, skipping notification dispatch: %v", m.chatID, err)
+		return
+	}
+
+	if err := m.notificationService.NotifyMonitoringAlert(context.Background(), chatID, message); err != nil {
+		log.Printf("🚨 ALERT [%s]: failed to dispatch monitoring notification: %v", m.chatID, err)
+	}
 }
 
 // EnableAlerts enables alert notifications

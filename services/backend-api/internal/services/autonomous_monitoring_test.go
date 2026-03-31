@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestAutonomousMonitoring_RecordQuestExecution_DoesNotDeadlock(t *testing.T) {
@@ -54,6 +55,31 @@ func TestAutonomousMonitoring_ComputeAlertsLocked_DrawdownThreshold(t *testing.T
 	if !found {
 		t.Fatalf("expected drawdown alert, got %#v", alerts)
 	}
+}
+
+func TestAutonomousMonitoring_SendAlert(t *testing.T) {
+	t.Run("nil notification service does not panic", func(t *testing.T) {
+		monitor := NewAutonomousMonitoring("12345", nil)
+		assert.NotPanics(t, func() {
+			monitor.sendAlert("test alert message")
+		})
+	})
+
+	t.Run("invalid chatID logs error and does not panic", func(t *testing.T) {
+		ns := NewNotificationService(nil, nil, "", "", "")
+		monitor := NewAutonomousMonitoring("not-a-number", ns)
+		assert.NotPanics(t, func() {
+			monitor.sendAlert("test alert message")
+		})
+	})
+
+	t.Run("valid chatID with nil deps returns error from dispatch", func(t *testing.T) {
+		ns := NewNotificationService(nil, nil, "", "", "")
+		monitor := NewAutonomousMonitoring("12345", ns)
+		assert.NotPanics(t, func() {
+			monitor.sendAlert("test alert message")
+		})
+	})
 }
 
 func TestAutonomousMonitoring_ComputeAlertsLocked_LowWinRateThreshold(t *testing.T) {

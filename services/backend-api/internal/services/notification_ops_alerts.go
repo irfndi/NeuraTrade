@@ -561,6 +561,166 @@ func (ns *NotificationService) generateProgressBar(percent, width int) string {
 	return fmt.Sprintf("[%s] %d%%", bar, percent)
 }
 
+// NotifySystemAlert sends a system alert notification to a specific chat via Telegram.
+// It formats the alert with severity-appropriate emoji and dispatches it through the
+// existing Telegram delivery pipeline (gRPC first, HTTP fallback).
+func (ns *NotificationService) NotifySystemAlert(ctx context.Context, chatID int64, alert SystemAlert) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifySystemAlert", map[string]string{
+		"chat_id": fmt.Sprintf("%d", chatID),
+		"level":   string(alert.Level),
+		"source":  alert.Source,
+	})
+	defer observability.FinishSpan(span, nil)
+
+	message := ns.formatSystemAlertMessage(alert)
+
+	if err := ns.sendTelegramMessage(spanCtx, chatID, message); err != nil {
+		ns.logger.Error("Failed to send system alert notification",
+			"chat_id", chatID,
+			"level", alert.Level,
+			"source", alert.Source,
+			"error", err,
+		)
+		return err
+	}
+
+	ns.logger.Info("Sent system alert notification",
+		"chat_id", chatID,
+		"level", alert.Level,
+		"source", alert.Source,
+	)
+
+	return nil
+}
+
+// BroadcastSystemAlert sends a system alert to all eligible users (those with Telegram
+// chat IDs configured and not blocked). It is used by AlertService to fan-out error and
+// critical alerts to operators.
+func (ns *NotificationService) BroadcastSystemAlert(ctx context.Context, alert SystemAlert) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.BroadcastSystemAlert", map[string]string{
+		"level":  string(alert.Level),
+		"source": alert.Source,
+	})
+	defer observability.FinishSpan(span, nil)
+
+	users, err := ns.getEligibleUsers(spanCtx)
+	if err != nil {
+		ns.logger.Error("Failed to get eligible users for system alert broadcast",
+			"error", err,
+		)
+		return fmt.Errorf("failed to get eligible users for alert broadcast: %w", err)
+	}
+
+	if len(users) == 0 {
+		ns.logger.Info("No eligible users found for system alert broadcast")
+		return nil
+	}
+
+	message := ns.formatSystemAlertMessage(alert)
+
+	var lastErr error
+	sentCount := 0
+	for _, user := range users {
+		if user.TelegramChatID == nil {
+			continue
+		}
+		chatID, parseErr := strconv.ParseInt(*user.TelegramChatID, 10, 64)
+		if parseErr != nil {
+			ns.logger.Error("Invalid chat ID for user during alert broadcast",
+				"user_id", user.ID,
+				"chat_id", *user.TelegramChatID,
+				"error", parseErr,
+			)
+			continue
+		}
+
+		if sendErr := ns.sendTelegramMessage(spanCtx, chatID, message); sendErr != nil {
+			ns.logger.Error("Failed to send system alert to user",
+				"user_id", user.ID,
+				"chat_id", chatID,
+				"error", sendErr,
+			)
+			lastErr = sendErr
+			continue
+		}
+		sentCount++
+	}
+
+	ns.logger.Info("Broadcast system alert completed",
+		"level", alert.Level,
+		"source", alert.Source,
+		"total_users", len(users),
+		"sent_count", sentCount,
+	)
+
+	return lastErr
+}
+
+// NotifyMonitoringAlert sends an autonomous monitoring alert to a specific chat via Telegram.
+// It formats the alert message with a monitoring-specific header.
+func (ns *NotificationService) NotifyMonitoringAlert(ctx context.Context, chatID int64, message string) error {
+	spanCtx, span := observability.StartSpanWithTags(ctx, observability.SpanOpNotification, "NotificationService.NotifyMonitoringAlert", map[string]string{
+		"chat_id": fmt.Sprintf("%d", chatID),
+	})
+	defer observability.FinishSpan(span, nil)
+
+	formatted := fmt.Sprintf("🚨 AUTONOMOUS MONITORING ALERT\n\n%s\n\nTime: %s", message, time.Now().UTC().Format(time.RFC3339))
+
+	if err := ns.sendTelegramMessage(spanCtx, chatID, formatted); err != nil {
+		ns.logger.Error("Failed to send monitoring alert notification",
+			"chat_id", chatID,
+			"error", err,
+		)
+		return err
+	}
+
+	ns.logger.Info("Sent monitoring alert notification",
+		"chat_id", chatID,
+	)
+
+	return nil
+}
+
+// formatSystemAlertMessage formats a SystemAlert into a human-readable Telegram message.
+func (ns *NotificationService) formatSystemAlertMessage(alert SystemAlert) string {
+	var levelEmoji string
+	switch alert.Level {
+	case AlertLevelInfo:
+		levelEmoji = "ℹ️"
+	case AlertLevelWarning:
+		levelEmoji = "⚠️"
+	case AlertLevelError:
+		levelEmoji = "🔴"
+	case AlertLevelCritical:
+		levelEmoji = "🚨"
+	default:
+		levelEmoji = "⚠️"
+	}
+
+	lines := []string{
+		fmt.Sprintf("%s System Alert [%s]", levelEmoji, strings.ToUpper(string(alert.Level))),
+		"",
+		fmt.Sprintf("Source: %s", alert.Source),
+		fmt.Sprintf("Message: %s", alert.Message),
+	}
+
+	if len(alert.Details) > 0 {
+		lines = append(lines, "", "Details:")
+		keys := make([]string, 0, len(alert.Details))
+		for key := range alert.Details {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			lines = append(lines, fmt.Sprintf("• %s: %v", key, alert.Details[key]))
+		}
+	}
+
+	lines = append(lines, "", fmt.Sprintf("Time: %s", alert.Timestamp.UTC().Format(time.RFC3339)))
+
+	return joinNotificationLines(lines)
+}
+
 // joinNotificationLines joins lines with newlines
 func joinNotificationLines(lines []string) string {
 	result := ""
