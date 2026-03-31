@@ -164,13 +164,13 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 			WHERE order_id IS NOT NULL AND order_id != ''`,
 	}
 
+	s.deduplicateOrderIDs(ctx)
+
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("scalping telemetry schema statement failed: %w", err)
 		}
 	}
-
-	s.deduplicateOrderIDs(ctx)
 
 	return nil
 }
