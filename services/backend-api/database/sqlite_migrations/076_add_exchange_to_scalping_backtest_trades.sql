@@ -1,7 +1,11 @@
 PRAGMA foreign_keys = ON;
 
-ALTER TABLE scalping_backtest_trades ADD COLUMN exchange TEXT NOT NULL DEFAULT 'unknown';
+-- Add column as nullable first so the UPDATE below can match existing rows.
+-- SQLite does not support ALTER COLUMN ... SET NOT NULL, so the column remains
+-- nullable here (application code always provides exchange on insert).
+ALTER TABLE scalping_backtest_trades ADD COLUMN exchange TEXT;
 
+-- Backfill from linked signal or fall back to 'unknown'.
 UPDATE scalping_backtest_trades
 SET exchange = COALESCE(
     (
