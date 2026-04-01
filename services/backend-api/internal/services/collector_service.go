@@ -454,7 +454,7 @@ func (c *CollectorService) PauseExchange(exchangeID string) error {
 		return fmt.Errorf("exchange %q not found", exchangeID)
 	}
 	worker.Paused = true
-	c.logger.Info("Exchange collection paused", "exchange", exchangeID)
+	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange collection paused")
 	return nil
 }
 
@@ -467,7 +467,7 @@ func (c *CollectorService) ResumeExchange(exchangeID string) error {
 		return fmt.Errorf("exchange %q not found", exchangeID)
 	}
 	worker.Paused = false
-	c.logger.Info("Exchange collection resumed", "exchange", exchangeID)
+	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange collection resumed")
 	return nil
 }
 

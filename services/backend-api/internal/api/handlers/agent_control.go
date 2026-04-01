@@ -63,6 +63,7 @@ func NewAgentControlHandler(deps AgentControlDeps) *AgentControlHandler {
 // AgentCommandRequest represents an agent command request.
 type AgentCommandRequest struct {
 	ExchangeID string `json:"exchange_id,omitempty"`
+	Symbol     string `json:"symbol,omitempty"`
 	Scope      string `json:"scope,omitempty"`
 	Engage     *bool  `json:"engage,omitempty"`
 }
@@ -202,9 +203,9 @@ func (h *AgentControlHandler) DisableSafeMode(c *gin.Context) {
 	})
 }
 
-// EngageKillSwitch handles requests to engage the kill switch.
+// EngageKillSwitch handles requests to engage or disengage the kill switch.
 // @Summary Engage kill switch
-// @Description Engage kill switch (hard stop all trading)
+// @Description Engage kill switch (hard stop all trading). Set engage=false to disengage.
 // @Tags agent
 // @Accept json
 // @Produce json
@@ -222,19 +223,37 @@ func (h *AgentControlHandler) EngageKillSwitch(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "risk service unavailable"})
 		return
 	}
+
+	engageVal := true
+	if req.Engage != nil {
+		engageVal = *req.Engage
+	}
+
 	reason := "operator request"
 	if req.Scope != "" {
 		reason = req.Scope
 	}
-	if err := h.risk.EngageKillSwitch(c.Request.Context(), reason); err != nil {
+
+	var err error
+	if engageVal {
+		err = h.risk.EngageKillSwitch(c.Request.Context(), reason)
+	} else {
+		err = h.risk.DisengageKillSwitch(c.Request.Context())
+	}
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "kill_switch"})
 		return
 	}
-	log.Printf("agent_control: kill switch engaged")
+
+	action := "engage_kill_switch"
+	if !engageVal {
+		action = "disengage_kill_switch"
+	}
+	log.Printf("agent_control: kill switch %s", action)
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "kill_switch",
-		"engage": req.Engage,
+		"engage": engageVal,
 	})
 }
 
@@ -258,15 +277,15 @@ func (h *AgentControlHandler) CancelAllOrders(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "order execution service unavailable"})
 		return
 	}
-	if err := h.orders.CancelAllOrders(c.Request.Context(), req.ExchangeID, req.Scope); err != nil {
+	if err := h.orders.CancelAllOrders(c.Request.Context(), req.ExchangeID, req.Symbol); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "cancel_all_orders"})
 		return
 	}
-	log.Printf("agent_control: all orders cancelled (exchange=%s, scope=%s)", req.ExchangeID, req.Scope)
+	log.Printf("agent_control: all orders cancelled (exchange=%s, symbol=%s)", req.ExchangeID, req.Symbol)
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "cancel_all_orders",
-		"scope":  req.Scope,
+		"symbol": req.Symbol,
 	})
 }
 

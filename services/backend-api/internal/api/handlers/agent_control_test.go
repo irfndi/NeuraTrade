@@ -297,6 +297,36 @@ func TestAgentControlHandler_EngageKillSwitch_Success(t *testing.T) {
 	response := decodeResponseBody(t, w.Body.Bytes())
 	assert.Equal(t, "ok", response["status"])
 	assert.Equal(t, "kill_switch", response["action"])
+	assert.Equal(t, true, response["engage"])
+	assert.True(t, riskController.killSwitchEngaged)
+}
+
+func TestAgentControlHandler_EngageKillSwitch_Disengage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	riskController := &mockRiskController{killSwitchEngaged: true}
+	handler := NewAgentControlHandler(AgentControlDeps{Risk: riskController})
+	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/kill-switch", `{"engage":false}`)
+
+	handler.EngageKillSwitch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	response := decodeResponseBody(t, w.Body.Bytes())
+	assert.Equal(t, "ok", response["status"])
+	assert.Equal(t, false, response["engage"])
+	assert.False(t, riskController.killSwitchEngaged)
+}
+
+func TestAgentControlHandler_EngageKillSwitch_NilEngageDefaultsToTrue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	riskController := &mockRiskController{}
+	handler := NewAgentControlHandler(AgentControlDeps{Risk: riskController})
+	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/kill-switch", `{}`)
+
+	handler.EngageKillSwitch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	response := decodeResponseBody(t, w.Body.Bytes())
+	assert.Equal(t, true, response["engage"])
 	assert.True(t, riskController.killSwitchEngaged)
 }
 
@@ -316,7 +346,7 @@ func TestAgentControlHandler_CancelAllOrders_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	orders := &mockOrderController{}
 	handler := NewAgentControlHandler(AgentControlDeps{Orders: orders})
-	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/cancel-all-orders", `{"exchange_id":"binance","scope":"BTC/USDT"}`)
+	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/cancel-all-orders", `{"exchange_id":"binance","symbol":"BTC/USDT"}`)
 
 	handler.CancelAllOrders(c)
 
@@ -324,7 +354,7 @@ func TestAgentControlHandler_CancelAllOrders_Success(t *testing.T) {
 	response := decodeResponseBody(t, w.Body.Bytes())
 	assert.Equal(t, "ok", response["status"])
 	assert.Equal(t, "cancel_all_orders", response["action"])
-	assert.Equal(t, "BTC/USDT", response["scope"])
+	assert.Equal(t, "BTC/USDT", response["symbol"])
 	assert.True(t, orders.cancelled)
 }
 
@@ -338,4 +368,44 @@ func TestAgentControlHandler_CancelAllOrders_ServiceUnavailable(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 	response := decodeResponseBody(t, w.Body.Bytes())
 	assert.Equal(t, "order execution service unavailable", response["error"])
+}
+
+func TestAgentControlHandler_ResumeExchange_MissingExchangeID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewAgentControlHandler(AgentControlDeps{Collector: &mockCollectorController{}})
+	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/resume-exchange", `{}`)
+
+	handler.ResumeExchange(c)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	response := decodeResponseBody(t, w.Body.Bytes())
+	assert.Equal(t, "exchange_id is required", response["error"])
+}
+
+func TestAgentControlHandler_DisableSafeMode_Error(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	riskController := &mockRiskController{err: errors.New("safe mode unavailable")}
+	handler := NewAgentControlHandler(AgentControlDeps{Risk: riskController})
+	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/disable-safe-mode", `{}`)
+
+	handler.DisableSafeMode(c)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	response := decodeResponseBody(t, w.Body.Bytes())
+	assert.Equal(t, "safe mode unavailable", response["error"])
+	assert.Equal(t, "disable_safe_mode", response["action"])
+}
+
+func TestAgentControlHandler_CancelAllOrders_Error(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	orders := &mockOrderController{err: errors.New("exchange unreachable")}
+	handler := NewAgentControlHandler(AgentControlDeps{Orders: orders})
+	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/cancel-all-orders", `{"exchange_id":"binance","symbol":"BTC/USDT"}`)
+
+	handler.CancelAllOrders(c)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	response := decodeResponseBody(t, w.Body.Bytes())
+	assert.Equal(t, "exchange unreachable", response["error"])
+	assert.Equal(t, "cancel_all_orders", response["action"])
 }

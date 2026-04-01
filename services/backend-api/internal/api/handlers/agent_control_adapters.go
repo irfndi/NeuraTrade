@@ -14,21 +14,21 @@ type collectorAdapter struct {
 	service *services.CollectorService
 }
 
+// NewCollectorController wraps a CollectorService behind the CollectorController
+// interface. Returns nil when svc is nil so that handler nil-guards (503) fire
+// correctly instead of falling through to a generic 500.
 func NewCollectorController(svc *services.CollectorService) CollectorController {
+	if svc == nil {
+		return nil
+	}
 	return &collectorAdapter{service: svc}
 }
 
 func (a *collectorAdapter) PauseExchange(exchangeID string) error {
-	if a == nil || a.service == nil {
-		return errors.New("collector service is nil")
-	}
 	return a.service.PauseExchange(exchangeID)
 }
 
 func (a *collectorAdapter) ResumeExchange(exchangeID string) error {
-	if a == nil || a.service == nil {
-		return errors.New("collector service is nil")
-	}
 	return a.service.ResumeExchange(exchangeID)
 }
 
@@ -37,10 +37,14 @@ type riskAdapter struct {
 	safeMode   *risk.SafeModeImpl
 }
 
-func NewRiskControllerAdapter() RiskController {
+// NewRiskControllerAdapter creates a RiskController backed by the given shared
+// KillSwitch and SafeMode instances. Pass the same instances that are registered
+// with the policy engine / RiskActor so that operator API changes propagate to
+// order-blocking enforcement.
+func NewRiskControllerAdapter(killSwitch *risk.KillSwitchImpl, safeMode *risk.SafeModeImpl) RiskController {
 	return &riskAdapter{
-		killSwitch: risk.NewKillSwitch(),
-		safeMode:   risk.NewSafeMode(risk.DefaultSafeModeConfig()),
+		killSwitch: killSwitch,
+		safeMode:   safeMode,
 	}
 }
 
@@ -64,15 +68,16 @@ type orderAdapter struct {
 	ccxtService ccxt.CCXTService
 }
 
+// NewOrderController wraps a CCXTService behind the OrderController interface.
+// Returns nil when ccxtSvc is nil so that handler nil-guards (503) fire correctly.
 func NewOrderController(ccxtSvc ccxt.CCXTService) OrderController {
+	if ccxtSvc == nil {
+		return nil
+	}
 	return &orderAdapter{ccxtService: ccxtSvc}
 }
 
 func (a *orderAdapter) CancelAllOrders(ctx context.Context, exchange, symbol string) error {
-	if a == nil || a.ccxtService == nil {
-		return errors.New("ccxt service unavailable")
-	}
-
 	if exchange != "" {
 		return a.cancelExchangeOrders(ctx, exchange, symbol)
 	}
@@ -84,6 +89,10 @@ func (a *orderAdapter) CancelAllOrders(ctx context.Context, exchange, symbol str
 
 	var errs []error
 	for _, ex := range exchanges {
+		// Abort promptly when the caller cancels the request.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("cancelled while iterating exchanges: %w", err)
+		}
 		if err := a.cancelExchangeOrders(ctx, ex, symbol); err != nil {
 			errs = append(errs, err)
 		}
