@@ -732,8 +732,8 @@ func (ns *NotificationService) getSystemAlertRecipients(ctx context.Context) ([]
 	for rows.Next() {
 		var user userModels.User
 		if err := rows.Scan(&user.ID, &user.Email, &user.TelegramChatID, &user.SubscriptionTier, &user.CreatedAt, &user.UpdatedAt); err != nil {
-			ns.logger.Error("Failed to scan user row", "error", err)
-			continue
+			ns.logger.Error("Failed to scan user row for system alert recipients", "error", err)
+			return nil, fmt.Errorf("failed to scan user row: %w", err)
 		}
 		users = append(users, user)
 	}
