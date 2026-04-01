@@ -1,15 +1,20 @@
 package services
 
 import (
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 )
 
+var testMonitorLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
 func TestAutonomousMonitoring_RecordQuestExecution_DoesNotDeadlock(t *testing.T) {
-	monitor := NewAutonomousMonitoring("chat-1", nil)
+	monitor := NewAutonomousMonitoring("chat-1", nil, testMonitorLogger)
 
 	done := make(chan struct{})
 	go func() {
@@ -33,7 +38,7 @@ func TestAutonomousMonitoring_RecordQuestExecution_DoesNotDeadlock(t *testing.T)
 }
 
 func TestAutonomousMonitoring_ComputeAlertsLocked_DrawdownThreshold(t *testing.T) {
-	monitor := NewAutonomousMonitoring("chat-1", nil)
+	monitor := NewAutonomousMonitoring("chat-1", nil, testMonitorLogger)
 	monitor.alertThresholds.MaxDrawdownPercent = 0.10
 	monitor.alertThresholds.MinWinRate = 0
 	monitor.alertThresholds.MaxConsecutiveLosses = 99
@@ -56,8 +61,33 @@ func TestAutonomousMonitoring_ComputeAlertsLocked_DrawdownThreshold(t *testing.T
 	}
 }
 
+func TestAutonomousMonitoring_SendAlert(t *testing.T) {
+	t.Run("nil notification service does not panic", func(t *testing.T) {
+		monitor := NewAutonomousMonitoring("12345", nil, testMonitorLogger)
+		assert.NotPanics(t, func() {
+			monitor.sendAlert("test alert message")
+		})
+	})
+
+	t.Run("invalid chatID logs error and does not panic", func(t *testing.T) {
+		ns := NewNotificationService(nil, nil, "", "", "")
+		monitor := NewAutonomousMonitoring("not-a-number", ns, testMonitorLogger)
+		assert.NotPanics(t, func() {
+			monitor.sendAlert("test alert message")
+		})
+	})
+
+	t.Run("valid chatID with nil deps does not panic", func(t *testing.T) {
+		ns := NewNotificationService(nil, nil, "", "", "")
+		monitor := NewAutonomousMonitoring("12345", ns, testMonitorLogger)
+		assert.NotPanics(t, func() {
+			monitor.sendAlert("test alert message")
+		})
+	})
+}
+
 func TestAutonomousMonitoring_ComputeAlertsLocked_LowWinRateThreshold(t *testing.T) {
-	monitor := NewAutonomousMonitoring("chat-2", nil)
+	monitor := NewAutonomousMonitoring("chat-2", nil, testMonitorLogger)
 	monitor.alertThresholds.MaxDrawdownPercent = 1.0
 	monitor.alertThresholds.MinWinRate = 0.50
 	monitor.alertThresholds.MaxConsecutiveLosses = 99

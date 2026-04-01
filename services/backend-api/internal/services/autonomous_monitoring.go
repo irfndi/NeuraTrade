@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,6 +28,7 @@ type AutonomousMonitoring struct {
 	alertsEnabled       bool
 	alertThresholds     MonitoringThresholds
 	notificationService *NotificationService
+	logger              *slog.Logger
 }
 
 // MonitoringThresholds defines alert thresholds
@@ -65,13 +68,14 @@ type MonitoringSnapshot struct {
 }
 
 // NewAutonomousMonitoring creates a new monitoring instance
-func NewAutonomousMonitoring(chatID string, notifService *NotificationService) *AutonomousMonitoring {
+func NewAutonomousMonitoring(chatID string, notifService *NotificationService, logger *slog.Logger) *AutonomousMonitoring {
 	return &AutonomousMonitoring{
 		chatID:              chatID,
 		startTime:           time.Now(),
 		alertsEnabled:       true,
 		alertThresholds:     DefaultMonitoringThresholds(),
 		notificationService: notifService,
+		logger:              logger,
 	}
 }
 
@@ -150,7 +154,7 @@ func (m *AutonomousMonitoring) GetSnapshot() MonitoringSnapshot {
 	if m.failedQuests > m.successfulQuests {
 		healthStatus = "warning"
 	}
-	if float64(m.failedQuests)/float64(m.totalQuests) > 0.5 {
+	if m.totalQuests > 0 && float64(m.failedQuests)/float64(m.totalQuests) > 0.5 {
 		healthStatus = "critical"
 	}
 
@@ -202,14 +206,34 @@ func (m *AutonomousMonitoring) computeAlertsLocked() []string {
 
 // sendAlert sends an alert notification
 func (m *AutonomousMonitoring) sendAlert(message string) {
-	log.Printf("🚨 ALERT [%s]: %s", m.chatID, message)
+	m.logger.Info("Monitoring alert triggered",
+		"chat_id", m.chatID,
+		"message", message,
+	)
 
 	if m.notificationService == nil {
 		return
 	}
-	// TODO: Send actual notification
-	// ctx := context.Background()
-	// m.notificationService.SendAlert(ctx, m.chatID, message)
+
+	chatID, err := strconv.ParseInt(m.chatID, 10, 64)
+	if err != nil {
+		m.logger.Error("Invalid chat ID, skipping notification dispatch",
+			"chat_id", m.chatID,
+			"error", err,
+		)
+		return
+	}
+
+	if err := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return m.notificationService.NotifyMonitoringAlert(ctx, chatID, message)
+	}(); err != nil {
+		m.logger.Error("Failed to dispatch monitoring notification",
+			"chat_id", m.chatID,
+			"error", err,
+		)
+	}
 }
 
 // EnableAlerts enables alert notifications
@@ -243,10 +267,18 @@ func (m *AutonomousMonitoring) GetPerformanceMetrics() map[string]interface{} {
 	metrics["total_quests"] = m.totalQuests
 	metrics["successful_quests"] = m.successfulQuests
 	metrics["failed_quests"] = m.failedQuests
-	metrics["success_rate"] = float64(m.successfulQuests) / float64(m.totalQuests)
+	if m.totalQuests > 0 {
+		metrics["success_rate"] = float64(m.successfulQuests) / float64(m.totalQuests)
+	} else {
+		metrics["success_rate"] = 0.0
+	}
 	metrics["total_trades"] = m.totalTrades
 	metrics["profitable_trades"] = m.profitableTrades
-	metrics["win_rate"] = float64(m.profitableTrades) / float64(m.totalTrades)
+	if m.totalTrades > 0 {
+		metrics["win_rate"] = float64(m.profitableTrades) / float64(m.totalTrades)
+	} else {
+		metrics["win_rate"] = 0.0
+	}
 	metrics["total_pnl"] = m.totalPnL.String()
 	metrics["max_drawdown"] = m.maxDrawdown.String()
 	metrics["current_drawdown"] = m.currentDrawdown.String()
@@ -259,13 +291,14 @@ type AutonomousMonitorManager struct {
 	mu           sync.RWMutex
 	monitors     map[string]*AutonomousMonitoring
 	notifService *NotificationService
+	logger       *slog.Logger
 }
 
-// NewAutonomousMonitorManager creates a new monitor manager
-func NewAutonomousMonitorManager(notifService *NotificationService) *AutonomousMonitorManager {
+func NewAutonomousMonitorManager(notifService *NotificationService, logger *slog.Logger) *AutonomousMonitorManager {
 	return &AutonomousMonitorManager{
 		monitors:     make(map[string]*AutonomousMonitoring),
 		notifService: notifService,
+		logger:       logger,
 	}
 }
 
@@ -278,7 +311,7 @@ func (m *AutonomousMonitorManager) GetOrCreateMonitor(chatID string) *Autonomous
 		return monitor
 	}
 
-	monitor := NewAutonomousMonitoring(chatID, m.notifService)
+	monitor := NewAutonomousMonitoring(chatID, m.notifService, m.logger)
 	m.monitors[chatID] = monitor
 	return monitor
 }

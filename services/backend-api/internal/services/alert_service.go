@@ -39,6 +39,7 @@ type AlertService struct {
 	handlers            []AlertHandler
 	alertThrottler      *AlertThrottler
 	notificationService *NotificationService
+	broadcastWg         sync.WaitGroup
 	mu                  sync.RWMutex
 }
 
@@ -130,10 +131,33 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 	}
 
 	if ns != nil && (level == AlertLevelError || level == AlertLevelCritical) {
+		alertCopy := alert
+		if alert.Details != nil {
+			alertCopy.Details = make(map[string]any, len(alert.Details))
+			for k, v := range alert.Details {
+				alertCopy.Details[k] = v
+			}
+		}
+
+		s.broadcastWg.Add(1)
 		go func() {
-			// TODO: Implement actual notification dispatch via NotificationService
-			// Currently logs only - integrate with Telegram or other notification channels
-			s.logger.Info(fmt.Sprintf("[%s] %s: %s", level, source, message))
+			defer s.broadcastWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Panic recovered in alert broadcast goroutine",
+						"panic", r,
+						"level", level,
+						"source", source,
+					)
+				}
+			}()
+			if err := ns.BroadcastSystemAlert(context.Background(), alertCopy); err != nil {
+				s.logger.Error("Failed to broadcast system alert via notification service",
+					"level", level,
+					"source", source,
+					"error", err,
+				)
+			}
 		}()
 	}
 
@@ -250,4 +274,8 @@ func (s *AlertService) RunHealthCheck(ctx context.Context, config HealthAlertCon
 			map[string]any{"error": err.Error()})
 		s.logger.Error("Database health check failed", "error", err)
 	}
+}
+
+func (s *AlertService) WaitForBroadcasts() {
+	s.broadcastWg.Wait()
 }

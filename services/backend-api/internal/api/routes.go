@@ -25,6 +25,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/irfndi/neuratrade/internal/services/risk"
 	"github.com/irfndi/neuratrade/internal/skill"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 	redisv9 "github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
@@ -650,7 +651,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Create autonomous monitoring for tracking quest execution
-	autonomousMonitoring := services.NewAutonomousMonitorManager(notificationService)
+	autonomousMonitoring := services.NewAutonomousMonitorManager(notificationService, telemetry.Logger())
 
 	var sqlDB *sql.DB
 	switch concreteDB := db.(type) {
