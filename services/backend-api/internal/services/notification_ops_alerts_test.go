@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFormatSystemAlertMessage(t *testing.T) {
@@ -146,6 +147,9 @@ func TestFormatSystemAlertMessage_DetailsSorting(t *testing.T) {
 	alphaIdx := strings.Index(message, "alpha: first")
 	middleIdx := strings.Index(message, "middle: mid")
 	zebraIdx := strings.Index(message, "zebra: last")
+	require.NotEqual(t, -1, alphaIdx, "alpha: first not found in message")
+	require.NotEqual(t, -1, middleIdx, "middle: mid not found in message")
+	require.NotEqual(t, -1, zebraIdx, "zebra: last not found in message")
 	assert.Less(t, alphaIdx, middleIdx)
 	assert.Less(t, middleIdx, zebraIdx)
 }
@@ -187,7 +191,7 @@ func TestBroadcastSystemAlert_NilDB(t *testing.T) {
 	}
 
 	err := ns.BroadcastSystemAlert(ctx, alert)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "database not available")
 }
 

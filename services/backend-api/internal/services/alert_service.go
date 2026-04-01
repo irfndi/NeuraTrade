@@ -131,19 +131,29 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 	}
 
 	if ns != nil && (level == AlertLevelError || level == AlertLevelCritical) {
+		alertCopy := alert
+		if alert.Details != nil {
+			alertCopy.Details = make(map[string]any, len(alert.Details))
+			for k, v := range alert.Details {
+				alertCopy.Details[k] = v
+			}
+		}
+
 		s.broadcastWg.Add(1)
 		go func() {
 			defer s.broadcastWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					s.logger.Error("Panic in alert broadcast goroutine",
+					s.logger.Error("Panic recovered in alert broadcast goroutine",
 						"panic", r,
 						"level", level,
 						"source", source,
 					)
 				}
 			}()
-			if err := ns.BroadcastSystemAlert(context.WithoutCancel(ctx), alert); err != nil {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := ns.BroadcastSystemAlert(bgCtx, alertCopy); err != nil {
 				s.logger.Error("Failed to broadcast system alert via notification service",
 					"level", level,
 					"source", source,

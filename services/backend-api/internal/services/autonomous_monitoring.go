@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/irfndi/neuratrade/internal/telemetry"
 	"github.com/shopspring/decimal"
 )
 
@@ -69,14 +68,14 @@ type MonitoringSnapshot struct {
 }
 
 // NewAutonomousMonitoring creates a new monitoring instance
-func NewAutonomousMonitoring(chatID string, notifService *NotificationService) *AutonomousMonitoring {
+func NewAutonomousMonitoring(chatID string, notifService *NotificationService, logger *slog.Logger) *AutonomousMonitoring {
 	return &AutonomousMonitoring{
 		chatID:              chatID,
 		startTime:           time.Now(),
 		alertsEnabled:       true,
 		alertThresholds:     DefaultMonitoringThresholds(),
 		notificationService: notifService,
-		logger:              telemetry.Logger(),
+		logger:              logger,
 	}
 }
 
@@ -155,7 +154,7 @@ func (m *AutonomousMonitoring) GetSnapshot() MonitoringSnapshot {
 	if m.failedQuests > m.successfulQuests {
 		healthStatus = "warning"
 	}
-	if float64(m.failedQuests)/float64(m.totalQuests) > 0.5 {
+	if m.totalQuests > 0 && float64(m.failedQuests)/float64(m.totalQuests) > 0.5 {
 		healthStatus = "critical"
 	}
 
@@ -225,7 +224,11 @@ func (m *AutonomousMonitoring) sendAlert(message string) {
 		return
 	}
 
-	if err := m.notificationService.NotifyMonitoringAlert(context.Background(), chatID, message); err != nil {
+	if err := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return m.notificationService.NotifyMonitoringAlert(ctx, chatID, message)
+	}(); err != nil {
 		m.logger.Error("Failed to dispatch monitoring notification",
 			"chat_id", m.chatID,
 			"error", err,
@@ -288,13 +291,14 @@ type AutonomousMonitorManager struct {
 	mu           sync.RWMutex
 	monitors     map[string]*AutonomousMonitoring
 	notifService *NotificationService
+	logger       *slog.Logger
 }
 
-// NewAutonomousMonitorManager creates a new monitor manager
-func NewAutonomousMonitorManager(notifService *NotificationService) *AutonomousMonitorManager {
+func NewAutonomousMonitorManager(notifService *NotificationService, logger *slog.Logger) *AutonomousMonitorManager {
 	return &AutonomousMonitorManager{
 		monitors:     make(map[string]*AutonomousMonitoring),
 		notifService: notifService,
+		logger:       logger,
 	}
 }
 
@@ -307,7 +311,7 @@ func (m *AutonomousMonitorManager) GetOrCreateMonitor(chatID string) *Autonomous
 		return monitor
 	}
 
-	monitor := NewAutonomousMonitoring(chatID, m.notifService)
+	monitor := NewAutonomousMonitoring(chatID, m.notifService, m.logger)
 	m.monitors[chatID] = monitor
 	return monitor
 }

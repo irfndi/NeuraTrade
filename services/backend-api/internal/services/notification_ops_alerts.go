@@ -572,7 +572,7 @@ func (ns *NotificationService) NotifySystemAlert(ctx context.Context, chatID int
 		"level":   string(alert.Level),
 		"source":  alert.Source,
 	})
-	defer observability.FinishSpan(span, err)
+	defer func() { observability.FinishSpan(span, err) }()
 
 	message := ns.formatSystemAlertMessage(alert)
 	message = truncateToTelegramUnitsWithEllipsis(message, ns.telegramMaxMessageUnits)
@@ -604,7 +604,7 @@ func (ns *NotificationService) BroadcastSystemAlert(ctx context.Context, alert S
 		"level":  string(alert.Level),
 		"source": alert.Source,
 	})
-	defer observability.FinishSpan(span, err)
+	defer func() { observability.FinishSpan(span, err) }()
 
 	if ns.db == nil {
 		ns.logger.Error("Cannot broadcast system alert: database not available",
@@ -740,7 +740,7 @@ func (ns *NotificationService) getSystemAlertRecipients(ctx context.Context) ([]
 
 	if err := rows.Err(); err != nil {
 		ns.logger.Error("Error iterating user rows for system alert recipients", "error", err)
-		return users, fmt.Errorf("partial results retrieving system alert recipients: %w", err)
+		return nil, fmt.Errorf("failed iterating system alert recipients: %w", err)
 	}
 
 	return users, nil
