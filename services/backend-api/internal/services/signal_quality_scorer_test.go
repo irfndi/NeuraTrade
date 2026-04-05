@@ -226,11 +226,12 @@ func TestIsSignalQualityAcceptable(t *testing.T) {
 		{
 			name: "Overall score at exact boundary",
 			metrics: &SignalQualityMetrics{
-				OverallScore:   decimal.NewFromFloat(0.6),
-				ExchangeScore:  decimal.NewFromFloat(0.7),
-				VolumeScore:    decimal.NewFromFloat(0.5),
-				LiquidityScore: decimal.NewFromFloat(0.5),
-				RiskScore:      decimal.NewFromFloat(0.3),
+				OverallScore:       decimal.NewFromFloat(0.6),
+				ExchangeScore:      decimal.NewFromFloat(0.7),
+				VolumeScore:        decimal.NewFromFloat(0.5),
+				LiquidityScore:     decimal.NewFromFloat(0.5),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.9),
 			},
 			expected: true,
 		},

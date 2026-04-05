@@ -40,6 +40,7 @@ type AlertService struct {
 	alertThrottler      *AlertThrottler
 	notificationService *NotificationService
 	broadcastWg         sync.WaitGroup
+	broadcastTimeout    time.Duration
 	mu                  sync.RWMutex
 }
 
@@ -76,11 +77,12 @@ func (t *AlertThrottler) ShouldSend(alertKey string) bool {
 
 func NewAlertService(db DBPool, redis *database.RedisClient, logger *slog.Logger) *AlertService {
 	return &AlertService{
-		db:             db,
-		redis:          redis,
-		logger:         logger,
-		handlers:       make([]AlertHandler, 0),
-		alertThrottler: NewAlertThrottler(5 * time.Minute),
+		db:               db,
+		redis:            redis,
+		logger:           logger,
+		handlers:         make([]AlertHandler, 0),
+		alertThrottler:   NewAlertThrottler(5 * time.Minute),
+		broadcastTimeout: 5 * time.Second,
 	}
 }
 
@@ -139,7 +141,9 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 			}
 		}
 
+		s.mu.Lock()
 		s.broadcastWg.Add(1)
+		s.mu.Unlock()
 		go func() {
 			defer s.broadcastWg.Done()
 			defer func() {
@@ -151,7 +155,7 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 					)
 				}
 			}()
-			broadcastCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			broadcastCtx, cancel := context.WithTimeout(context.Background(), s.broadcastTimeout)
 			defer cancel()
 			if err := ns.BroadcastSystemAlert(broadcastCtx, alertCopy); err != nil {
 				s.logger.Error("Failed to broadcast system alert via notification service",
@@ -279,5 +283,7 @@ func (s *AlertService) RunHealthCheck(ctx context.Context, config HealthAlertCon
 }
 
 func (s *AlertService) WaitForBroadcasts() {
+	s.mu.Lock()
 	s.broadcastWg.Wait()
+	s.mu.Unlock()
 }

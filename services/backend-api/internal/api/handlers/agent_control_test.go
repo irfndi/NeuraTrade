@@ -361,7 +361,7 @@ func TestAgentControlHandler_CancelAllOrders_Success(t *testing.T) {
 func TestAgentControlHandler_CancelAllOrders_ServiceUnavailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := NewAgentControlHandler(AgentControlDeps{})
-	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/cancel-all-orders", `{}`)
+	c, w := makeJSONContext(http.MethodPost, "/api/v1/agent/cancel-all-orders", `{"confirm_all":true}`)
 
 	handler.CancelAllOrders(c)
 

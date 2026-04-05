@@ -215,7 +215,15 @@ func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID st
 	obMetrics := s.obMetricsCache[key]
 
 	result, err := s.scalpingComposer.ComposeSignal(ctx, ohlcv, obMetrics)
-	if err != nil || result == nil {
+	if err != nil {
+		s.logger.Warn("scalping signal composition failed",
+			"exchange", tick.Exchange,
+			"symbol", tick.Symbol,
+			"error", err,
+		)
+		return
+	}
+	if result == nil {
 		return
 	}
 
