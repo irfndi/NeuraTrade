@@ -22,7 +22,7 @@ func NewOrderBookSnapshotRepository(db DBPool) ports.OrderBookSnapshotRepository
 
 func (r *orderBookSnapshotRepo) SaveSnapshot(ctx context.Context, snap ports.OrderBookSnapshot) error {
 	if r.db == nil {
-		return nil
+		return fmt.Errorf("cannot save order book snapshot: database connection is nil")
 	}
 
 	query := `

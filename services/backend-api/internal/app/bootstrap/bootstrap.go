@@ -381,13 +381,17 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 }
 
 func (a *Application) buildStrategyComponents(b *Builder) error {
+	createdStrategy := false
 	if b.strategy == nil {
 		cfg := strategy.DefaultConfig()
 		b.strategy = strategy.NewStrategyActor(cfg, a.EventBus, slog.Default())
+		createdStrategy = true
 	}
 
-	scalpingComposer := scalping.NewScalpingComposer(nil)
-	b.strategy.SetScalpingComposer(scalpingComposer)
+	if createdStrategy {
+		scalpingComposer := scalping.NewScalpingComposer(nil)
+		b.strategy.SetScalpingComposer(scalpingComposer)
+	}
 
 	a.StrategyActor = b.strategy
 

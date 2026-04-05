@@ -118,13 +118,19 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 		lastCandle := ohlcv.Candles[len(ohlcv.Candles)-1]
 		prevCandle := ohlcv.Candles[len(ohlcv.Candles)-2]
 		trendDir, trendStrength := classifyTrend(prevCandle, lastCandle)
+		var trendValue decimal.Decimal
+		if !prevCandle.Close.IsZero() {
+			trendValue = lastCandle.Close.Sub(prevCandle.Close).Div(prevCandle.Close)
+		} else {
+			trendValue = decimal.Zero
+		}
 		components = append(components, SignalComponent{
 			Name:        "trend",
 			Description: "short-term price trend",
-			Value:       lastCandle.Close.Sub(prevCandle.Close).Div(prevCandle.Close).Mul(decimal.NewFromInt(100)),
+			Value:       trendValue,
 			Signal:      trendDir,
 			Strength:    trendStrength,
-			Weight:      decimal.NewFromFloat(0.50),
+			Weight:      decimal.NewFromFloat(0.40),
 		})
 	}
 
@@ -249,8 +255,11 @@ func calculateVolatility(candles []OHLCVCandle) decimal.Decimal {
 	}
 	last := candles[len(candles)-1]
 	prev := candles[len(candles)-2]
+	if prev.Close.IsZero() {
+		return decimal.Zero
+	}
 	priceChange := last.Close.Sub(prev.Close).Div(prev.Close).Abs()
-	return priceChange.Mul(decimal.NewFromInt(100))
+	return priceChange
 }
 
 func classifyVolatility(vol decimal.Decimal) (Direction, SignalStrength) {

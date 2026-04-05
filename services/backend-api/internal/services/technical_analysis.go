@@ -438,18 +438,22 @@ func (tas *TechnicalAnalysisService) calculateMACD(prices []float64, fastPeriod,
 	}
 
 	dp := float64SliceToDecimal(prices)
-	macdLine, _, _ := tas.indicatorProvider.MACD(dp, fastPeriod, slowPeriod, signalPeriod)
+	macdLine, signalLine, _ := tas.indicatorProvider.MACD(dp, fastPeriod, slowPeriod, signalPeriod)
 	if len(macdLine) == 0 {
 		return nil
 	}
 	fr := decimalSliceToFloat64(macdLine)
+	var frSignal []float64
+	if len(signalLine) > 0 {
+		frSignal = decimalSliceToFloat64(signalLine)
+	}
 
 	values := make([]decimal.Decimal, len(macdLine))
 	for i, val := range macdLine {
 		values[i] = val
 	}
 
-	signal, strength := tas.analyzeMACDSignal(fr)
+	signal, strength := tas.analyzeMACDSignal(fr, frSignal)
 
 	return &IndicatorResult{
 		Name:      "MACD",
@@ -737,27 +741,37 @@ func (tas *TechnicalAnalysisService) analyzeRSISignal(rsi []float64) (string, de
 }
 
 // analyzeMACDSignal determines the signal based on MACD crossovers and position.
-func (tas *TechnicalAnalysisService) analyzeMACDSignal(macd []float64) (string, decimal.Decimal) {
+func (tas *TechnicalAnalysisService) analyzeMACDSignal(macd, signalLine []float64) (string, decimal.Decimal) {
 	if len(macd) < 2 {
 		return "hold", decimal.NewFromFloat(0.5)
+	}
+
+	if len(signalLine) >= 2 {
+		currentMACD := macd[len(macd)-1]
+		currentSignal := signalLine[len(signalLine)-1]
+		prevMACD := macd[len(macd)-2]
+		prevSignal := signalLine[len(signalLine)-2]
+
+		if currentMACD > currentSignal && prevMACD <= prevSignal {
+			return "buy", decimal.NewFromFloat(0.8)
+		}
+		if currentMACD < currentSignal && prevMACD >= prevSignal {
+			return "sell", decimal.NewFromFloat(0.8)
+		}
 	}
 
 	current := macd[len(macd)-1]
 	previous := macd[len(macd)-2]
 
-	// MACD crossing above zero
 	if current > 0 && previous <= 0 {
 		return "buy", decimal.NewFromFloat(0.8)
 	}
-	// MACD crossing below zero
 	if current < 0 && previous >= 0 {
 		return "sell", decimal.NewFromFloat(0.8)
 	}
-	// MACD above zero (bullish)
 	if current > 0 {
 		return "buy", decimal.NewFromFloat(0.6)
 	}
-	// MACD below zero (bearish)
 	if current < 0 {
 		return "sell", decimal.NewFromFloat(0.6)
 	}

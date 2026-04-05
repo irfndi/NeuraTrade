@@ -331,6 +331,16 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 		return nil, err
 	}
 
+	if len(input.Volumes) < 50 {
+		sa.logger.WithFields(zaplogrus.Fields{
+			"required_volume_points": 50,
+			"actual_volume_points":   len(input.Volumes),
+		}).Error("Insufficient volume data for technical analysis")
+		err := fmt.Errorf("insufficient volume data for technical analysis: need at least 50 points, got %d", len(input.Volumes))
+		observability.AddBreadcrumb(spanCtx, "signal_aggregator", "Insufficient volume data for analysis", sentry.LevelWarning)
+		return nil, err
+	}
+
 	signals := make([]*AggregatedSignal, 0)
 	if sa.indicatorStack != nil && len(input.Opens) == len(input.Prices) && len(input.Highs) == len(input.Prices) && len(input.Lows) == len(input.Prices) {
 		ohlcv := &indicators.OHLCVData{
@@ -760,26 +770,26 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 		}
 	}
 
-	// Moving Average crossover
-	if sma, exists := indicators["sma_20"]; exists && len(sma) > 1 {
-		if ema, emaExists := indicators["ema_12"]; emaExists && len(ema) > 1 {
-			currentSMA := sma[len(sma)-1]
-			currentEMA := ema[len(ema)-1]
-			prevSMA := sma[len(sma)-2]
-			prevEMA := ema[len(ema)-2]
+	// Moving Average crossover (Golden/Death Cross: SMA20 vs SMA50)
+	if sma20, exists := indicators["sma_20"]; exists && len(sma20) > 1 {
+		if sma50, sma50Exists := indicators["sma_50"]; sma50Exists && len(sma50) > 1 {
+			currentSMA20 := sma20[len(sma20)-1]
+			currentSMA50 := sma50[len(sma50)-1]
+			prevSMA20 := sma20[len(sma20)-2]
+			prevSMA50 := sma50[len(sma50)-2]
 
-			if currentEMA > currentSMA && prevEMA <= prevSMA {
+			if currentSMA20 > currentSMA50 && prevSMA20 <= prevSMA50 {
 				buySignals = append(buySignals, SignalComponent{
 					Indicator:   "golden_cross",
-					Description: "MA20 crossed above MA50 (Golden Cross)",
+					Description: "SMA20 crossed above SMA50 (Golden Cross)",
 					Confidence:  decimal.NewFromFloat(0.8),
 					Strength:    0.8,
 				})
 			}
-			if currentEMA < currentSMA && prevEMA >= prevSMA {
+			if currentSMA20 < currentSMA50 && prevSMA20 >= prevSMA50 {
 				sellSignals = append(sellSignals, SignalComponent{
 					Indicator:   "death_cross",
-					Description: "MA20 crossed below MA50 (Death Cross)",
+					Description: "SMA20 crossed below SMA50 (Death Cross)",
 					Confidence:  decimal.NewFromFloat(0.8),
 					Strength:    0.8,
 				})

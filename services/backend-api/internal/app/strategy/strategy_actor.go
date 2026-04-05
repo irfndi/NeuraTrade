@@ -167,6 +167,11 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 	s.windows[tick.Symbol] = window
 
 	signal, ok := s.engine.Evaluate(s.strategyID, window)
+
+	if s.scalpingComposer != nil {
+		s.tryComposeScalpingSignal(ctx, env.TraceID, tick)
+	}
+
 	if !ok {
 		return nil
 	}
@@ -189,10 +194,6 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 
 	if err := s.eventBus.PublishSync(ctx, event); err != nil {
 		return fmt.Errorf("publish SignalProposed event: %w", err)
-	}
-
-	if s.scalpingComposer != nil {
-		s.tryComposeScalpingSignal(ctx, env.TraceID, tick)
 	}
 
 	return nil
