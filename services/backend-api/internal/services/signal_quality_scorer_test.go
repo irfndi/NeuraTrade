@@ -223,6 +223,17 @@ func TestIsSignalQualityAcceptable(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			name: "Overall score at exact boundary",
+			metrics: &SignalQualityMetrics{
+				OverallScore:   decimal.NewFromFloat(0.6),
+				ExchangeScore:  decimal.NewFromFloat(0.7),
+				VolumeScore:    decimal.NewFromFloat(0.5),
+				LiquidityScore: decimal.NewFromFloat(0.5),
+				RiskScore:      decimal.NewFromFloat(0.3),
+			},
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {

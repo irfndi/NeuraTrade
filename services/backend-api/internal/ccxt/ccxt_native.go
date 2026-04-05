@@ -1040,12 +1040,7 @@ func (s *NativeCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol
 		return nil, fmt.Errorf("exchange %s not initialized", exchange)
 	}
 
-	// Build orderbook URL
-	// Convert symbol format for Bitget (BTC/USDT -> BTCUSDT)
-	apiSymbol := symbol
-	if exchange == "bitget" {
-		apiSymbol = strings.ReplaceAll(symbol, "/", "")
-	}
+	apiSymbol := strings.ReplaceAll(symbol, "/", "")
 	url := s.buildOrderBookURL(exchange, symbol, apiSymbol, limit)
 	if url == "" {
 		return nil, fmt.Errorf("orderbook endpoint not supported for %s", exchange)

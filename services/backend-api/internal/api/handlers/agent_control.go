@@ -66,6 +66,7 @@ type AgentCommandRequest struct {
 	Symbol     string `json:"symbol,omitempty"`
 	Scope      string `json:"scope,omitempty"`
 	Engage     *bool  `json:"engage,omitempty"`
+	ConfirmAll bool   `json:"confirm_all,omitempty"`
 }
 
 type StrategyModeRequest struct {
@@ -270,6 +271,13 @@ func (h *AgentControlHandler) CancelAllOrders(c *gin.Context) {
 	var req AgentCommandRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	if req.ExchangeID == "" && !req.ConfirmAll {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "exchange_id is required for targeted cancel; set confirm_all=true to cancel across all exchanges",
+		})
 		return
 	}
 
