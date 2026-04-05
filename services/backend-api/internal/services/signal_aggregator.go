@@ -413,6 +413,10 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 			Indicators:       signal.Metadata,
 			SignalCount:      signalCount,
 			SignalComponents: signalComponents,
+			MarketData: &MarketDataSnapshot{
+				Price:         signal.ProfitPotential,
+				LastTradeTime: signal.CreatedAt,
+			},
 		}
 
 		qualityMetrics, err := sa.qualityScorer.AssessSignalQuality(ctx, &qualityInput)
