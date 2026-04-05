@@ -265,8 +265,8 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 				SignalCount:      len(validOpps),
 				SignalComponents: []string{"arbitrage"},
 				MarketData: &MarketDataSnapshot{
-					Price:         signal.ProfitPotential,
-					LastTradeTime: signal.CreatedAt,
+					Price:         validOpps[0].BuyPrice,
+					LastTradeTime: validOpps[0].DetectedAt,
 				},
 			}
 
@@ -402,6 +402,11 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 			avgVolume = totalVolume.Div(decimal.NewFromInt(int64(len(input.Volumes))))
 		}
 
+		lastPrice := decimal.Zero
+		if len(input.Prices) > 0 {
+			lastPrice = input.Prices[len(input.Prices)-1]
+		}
+
 		qualityInput := SignalQualityInput{
 			SignalType:       string(signal.SignalType),
 			Symbol:           signal.Symbol,
@@ -414,7 +419,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 			SignalCount:      signalCount,
 			SignalComponents: signalComponents,
 			MarketData: &MarketDataSnapshot{
-				Price:         signal.ProfitPotential,
+				Price:         lastPrice,
 				LastTradeTime: signal.CreatedAt,
 			},
 		}
