@@ -135,9 +135,10 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 	if ns != nil && (level == AlertLevelError || level == AlertLevelCritical) {
 		alertCopy := alert
 		if alert.Details != nil {
-			alertCopy.Details = make(map[string]any, len(alert.Details))
-			for k, v := range alert.Details {
-				alertCopy.Details[k] = v
+			raw, err := json.Marshal(alert.Details)
+			if err == nil {
+				alertCopy.Details = make(map[string]any)
+				_ = json.Unmarshal(raw, &alertCopy.Details)
 			}
 		}
 
@@ -284,6 +285,6 @@ func (s *AlertService) RunHealthCheck(ctx context.Context, config HealthAlertCon
 
 func (s *AlertService) WaitForBroadcasts() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.broadcastWg.Wait()
-	s.mu.Unlock()
 }
