@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
+
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
 	"github.com/irfndi/neuratrade/internal/app/marketdata"
 	"github.com/irfndi/neuratrade/internal/app/risk"
@@ -23,7 +25,6 @@ import (
 	"github.com/irfndi/neuratrade/internal/ports"
 	scalping "github.com/irfndi/neuratrade/internal/services/scalping"
 	"github.com/shopspring/decimal"
-	"log/slog"
 )
 
 // Config holds bootstrap configuration.
