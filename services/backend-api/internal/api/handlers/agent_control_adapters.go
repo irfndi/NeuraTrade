@@ -92,9 +92,9 @@ func (a *orderAdapter) CancelAllOrders(ctx context.Context, exchange, symbol str
 
 	var errs []error
 	for _, ex := range exchanges {
-		// Abort promptly when the caller cancels the request.
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("cancelled while iterating exchanges: %w", err)
+			errs = append(errs, fmt.Errorf("cancelled while iterating exchanges: %w", err))
+			break
 		}
 		if err := a.cancelExchangeOrders(ctx, ex, symbol); err != nil {
 			errs = append(errs, err)

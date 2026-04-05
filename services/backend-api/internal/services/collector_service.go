@@ -453,6 +453,9 @@ func (c *CollectorService) PauseExchange(exchangeID string) error {
 	if !ok {
 		return fmt.Errorf("exchange %q not found", exchangeID)
 	}
+	if !worker.IsRunning {
+		return fmt.Errorf("exchange %q worker is not running; nothing to pause", exchangeID)
+	}
 	worker.Paused = true
 	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange collection paused")
 	return nil
