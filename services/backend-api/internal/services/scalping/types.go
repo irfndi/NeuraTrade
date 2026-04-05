@@ -35,8 +35,8 @@ type MicrostructureContext struct {
 	SpreadPct      decimal.Decimal `json:"spread_pct"`
 	Imbalance1Pct  decimal.Decimal `json:"imbalance_1pct"`
 	Imbalance2Pct  decimal.Decimal `json:"imbalance_2pct"`
-	BidDepthUSD    decimal.Decimal `json:"bid_depth_usd"`
-	AskDepthUSD    decimal.Decimal `json:"ask_depth_usd"`
+	BidDepth1Pct   decimal.Decimal `json:"bid_depth_1pct"`
+	AskDepth1Pct   decimal.Decimal `json:"ask_depth_1pct"`
 	MidPrice       decimal.Decimal `json:"mid_price"`
 	BestBid        decimal.Decimal `json:"best_bid"`
 	BestAsk        decimal.Decimal `json:"best_ask"`

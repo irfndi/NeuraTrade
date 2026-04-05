@@ -198,7 +198,22 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 
 	// Build attribution weights
 	for _, comp := range components {
-		signal.AttributionWeights[comp.Name] = comp.Weight
+		strengthValue := decimal.NewFromFloat(0.3)
+		switch comp.Strength {
+		case StrengthMedium:
+			strengthValue = decimal.NewFromFloat(0.6)
+		case StrengthStrong:
+			strengthValue = decimal.NewFromFloat(0.9)
+		}
+
+		contribution := comp.Weight.Mul(strengthValue)
+		switch comp.Signal {
+		case DirectionSell:
+			contribution = contribution.Neg()
+		case DirectionHold:
+			contribution = decimal.Zero
+		}
+		signal.AttributionWeights[comp.Name] = contribution
 	}
 
 	// Build microstructure context
@@ -210,8 +225,8 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 			BestBid:        obMetrics.GetBestBid(),
 			BestAsk:        obMetrics.GetBestAsk(),
 			LiquidityScore: obMetrics.GetLiquidityScore(),
-			BidDepthUSD:    obMetrics.GetBidDepth1Pct(),
-			AskDepthUSD:    obMetrics.GetAskDepth1Pct(),
+			BidDepth1Pct:   obMetrics.GetBidDepth1Pct(),
+			AskDepth1Pct:   obMetrics.GetAskDepth1Pct(),
 		}
 	}
 
