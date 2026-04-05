@@ -181,6 +181,14 @@ func (c *CollectorService) runWorker(worker *Worker) {
 			}
 			c.logger.WithFields(map[string]interface{}{"exchange": worker.Exchange}).Info("Resource optimization triggered")
 		case <-ticker.C:
+			c.mu.RLock()
+			paused := worker.Paused
+			c.mu.RUnlock()
+			if paused {
+				c.logger.WithFields(map[string]interface{}{"exchange": worker.Exchange}).Info("Worker paused, skipping collection cycle")
+				continue
+			}
+
 			c.logger.WithFields(map[string]interface{}{"exchange": worker.Exchange}).Info("Worker tick - starting collection cycle")
 
 			// Create operation context with timeout

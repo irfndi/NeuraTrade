@@ -18,6 +18,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/api/handlers"
 	autonomyruntime "github.com/irfndi/neuratrade/internal/app/autonomy/runtime"
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
@@ -1069,7 +1070,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
-	agentControlHandler := handlers.NewAgentControlHandler(integratedHandlers.AutonomyCoordinator())
+	sharedKillSwitch := apprisk.NewKillSwitch()
+	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+
+	agentControlHandler := handlers.NewAgentControlHandler(handlers.AgentControlDeps{
+		Autonomy:  integratedHandlers.AutonomyCoordinator(),
+		Collector: handlers.NewCollectorController(collectorService),
+		Risk:      handlers.NewRiskControllerAdapter(sharedKillSwitch, sharedSafeMode),
+		Orders:    handlers.NewOrderController(ccxtService),
+	})
 	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())
 
 	// API v1 routes with telemetry
