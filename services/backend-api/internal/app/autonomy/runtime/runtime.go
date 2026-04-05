@@ -11,7 +11,7 @@ import (
 )
 
 type Dependencies struct {
-	TechnicalAnalysis   *services.TechnicalAnalysisService
+	TechnicalAnalysis   *services.TechnicalAnalysisService //nolint:staticcheck // SA1019: deprecated, backward compat until scalping migration
 	CCXTService         interface{}
 	ArbitrageService    interface{}
 	FuturesArbService   interface{}

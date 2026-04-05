@@ -115,11 +115,12 @@ func TestFetchExchangeStatistics_UsesPortableLatestRowQuery(t *testing.T) {
 			},
 			assertions: func(t *testing.T, stats map[string]*ExchangeMetrics, err error) {
 				require.NoError(t, err)
-				require.Len(t, stats, 2)
+				require.Len(t, stats, 3)
 				assert.Equal(t, int64(2), stats["binance"].TotalTrades)
 				assert.True(t, stats["binance"].AvgDailyVolume.Equal(decimal.NewFromFloat(1500)))
 				assert.Equal(t, 2, stats["binance"].SupportedPairs)
 				assert.False(t, stats["coinbase"].LastDataUpdate.IsZero())
+				assert.NotNil(t, stats["kraken"], "kraken should be present from default metrics")
 			},
 		},
 		{
@@ -177,33 +178,48 @@ func TestIsSignalQualityAcceptable(t *testing.T) {
 		{
 			name: "High quality signal",
 			metrics: &SignalQualityMetrics{
-				OverallScore:   decimal.NewFromFloat(0.8),
-				ExchangeScore:  decimal.NewFromFloat(0.9),
-				VolumeScore:    decimal.NewFromFloat(0.7),
-				LiquidityScore: decimal.NewFromFloat(0.8),
-				RiskScore:      decimal.NewFromFloat(0.3),
+				OverallScore:       decimal.NewFromFloat(0.8),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.9),
 			},
 			expected: true,
 		},
 		{
 			name: "Low overall score",
 			metrics: &SignalQualityMetrics{
-				OverallScore:   decimal.NewFromFloat(0.5),
-				ExchangeScore:  decimal.NewFromFloat(0.9),
-				VolumeScore:    decimal.NewFromFloat(0.7),
-				LiquidityScore: decimal.NewFromFloat(0.8),
-				RiskScore:      decimal.NewFromFloat(0.3),
+				OverallScore:       decimal.NewFromFloat(0.5),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.9),
 			},
 			expected: false,
 		},
 		{
 			name: "High risk score",
 			metrics: &SignalQualityMetrics{
-				OverallScore:   decimal.NewFromFloat(0.8),
-				ExchangeScore:  decimal.NewFromFloat(0.9),
-				VolumeScore:    decimal.NewFromFloat(0.7),
-				LiquidityScore: decimal.NewFromFloat(0.8),
-				RiskScore:      decimal.NewFromFloat(0.6),
+				OverallScore:       decimal.NewFromFloat(0.8),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.6),
+				DataFreshnessScore: decimal.NewFromFloat(0.9),
+			},
+			expected: false,
+		},
+		{
+			name: "Low data freshness score",
+			metrics: &SignalQualityMetrics{
+				OverallScore:       decimal.NewFromFloat(0.8),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.89),
 			},
 			expected: false,
 		},

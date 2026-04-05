@@ -367,6 +367,8 @@ func riskLockSourcePriority(source string) int {
 
 // SetupRoutes configures HTTP routes, middleware, and application handlers, and initializes runtime services used by the API.
 // It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
+//
+//nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
