@@ -210,6 +210,18 @@ func TestIsSignalQualityAcceptable(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			name: "Low data freshness score",
+			metrics: &SignalQualityMetrics{
+				OverallScore:       decimal.NewFromFloat(0.8),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.89),
+			},
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

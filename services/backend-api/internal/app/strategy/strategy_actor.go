@@ -293,8 +293,11 @@ func (a *orderBookMetricsAdapter) GetMidPrice() decimal.Decimal       { return a
 func (a *orderBookMetricsAdapter) GetBestBid() decimal.Decimal        { return a.event.BestBid }
 func (a *orderBookMetricsAdapter) GetBestAsk() decimal.Decimal        { return a.event.BestAsk }
 func (a *orderBookMetricsAdapter) GetLiquidityScore() decimal.Decimal { return a.event.LiquidityScore }
-func (a *orderBookMetricsAdapter) GetBidDepth1Pct() decimal.Decimal   { return decimal.Zero }
-func (a *orderBookMetricsAdapter) GetAskDepth1Pct() decimal.Decimal   { return decimal.Zero }
+
+// GetBidDepth1Pct and GetAskDepth1Pct return zero until OrderBookMetricsEvent
+// is extended with BidDepthUSD/AskDepthUSD fields.
+func (a *orderBookMetricsAdapter) GetBidDepth1Pct() decimal.Decimal { return decimal.Zero }
+func (a *orderBookMetricsAdapter) GetAskDepth1Pct() decimal.Decimal { return decimal.Zero }
 
 // SubscribeMarketTicks forwards market.tick events from event bus into the strategy actor mailbox.
 

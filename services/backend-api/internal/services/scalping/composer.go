@@ -223,10 +223,11 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 }
 
 func classifySpread(spread decimal.Decimal) (Direction, SignalStrength) {
-	if spread.LessThan(decimal.NewFromFloat(0.0005)) {
+	// spread is in percentage form (e.g., 0.05 means 0.05%), matching GetSpreadPct output
+	if spread.LessThan(decimal.NewFromFloat(0.05)) {
 		return DirectionBuy, StrengthStrong
 	}
-	if spread.LessThan(decimal.NewFromFloat(0.002)) {
+	if spread.LessThan(decimal.NewFromFloat(0.2)) {
 		return DirectionBuy, StrengthMedium
 	}
 	return DirectionHold, StrengthWeak

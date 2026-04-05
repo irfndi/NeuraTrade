@@ -28,7 +28,6 @@ type TechnicalAnalysisService struct {
 	resourceManager      *ResourceManager
 	performanceMonitor   *PerformanceMonitor
 	indicatorProvider    indicators.IndicatorProvider
-	useSyntheticOHLC     bool
 }
 
 // IndicatorResult represents the result of a single technical indicator calculation.
@@ -127,7 +126,6 @@ func NewTechnicalAnalysisService(
 		resourceManager:      resourceManager,
 		performanceMonitor:   performanceMonitor,
 		indicatorProvider:    provider,
-		useSyntheticOHLC:     false,
 	}
 }
 

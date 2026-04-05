@@ -342,7 +342,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 	}
 
 	signals := make([]*AggregatedSignal, 0)
-	if sa.indicatorStack != nil && len(input.Opens) == len(input.Prices) && len(input.Highs) == len(input.Prices) && len(input.Lows) == len(input.Prices) {
+	if sa.indicatorStack != nil && len(input.Opens) == len(input.Prices) && len(input.Highs) == len(input.Prices) && len(input.Lows) == len(input.Prices) && len(input.Volumes) == len(input.Prices) {
 		ohlcv := &indicators.OHLCVData{
 			Symbol:   input.Symbol,
 			Exchange: input.Exchange,

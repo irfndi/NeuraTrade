@@ -547,14 +547,25 @@ func (a *CollectorActor) collectOrderBook(ctx context.Context, gw ports.MarketDa
 		askDepth = askDepth.Add(lvl.Amount)
 	}
 	totalDepth := bidDepth.Add(askDepth)
+
 	var imbalance decimal.Decimal
 	if !totalDepth.IsZero() {
 		imbalance = bidDepth.Sub(askDepth).Div(totalDepth)
 	}
+
 	var spreadPct decimal.Decimal
 	if !midPrice.IsZero() {
 		spreadPct = spread.Div(midPrice).Mul(decimal.NewFromInt(100))
 	}
+
+	var liquidityScore decimal.Decimal
+	if !midPrice.IsZero() {
+		liquidityScore = totalDepth.Div(midPrice).Mul(decimal.NewFromInt(10000)).Mul(decimal.NewFromFloat(0.1))
+	}
+	if liquidityScore.GreaterThan(decimal.NewFromInt(100)) {
+		liquidityScore = decimal.NewFromInt(100)
+	}
+
 	if err := a.publishEvent(ctx, "market.orderbook", "market.orderbook", domainmarketdata.OrderBookMetricsEvent{
 		TraceID:        uuid.New().String(),
 		Exchange:       exchangeID,
@@ -564,7 +575,7 @@ func (a *CollectorActor) collectOrderBook(ctx context.Context, gw ports.MarketDa
 		BestBid:        bestBid,
 		BestAsk:        bestAsk,
 		Imbalance1Pct:  imbalance,
-		LiquidityScore: totalDepth,
+		LiquidityScore: liquidityScore,
 		Timestamp:      ob.Timestamp,
 		CollectedAt:    time.Now(),
 	}); err != nil {
