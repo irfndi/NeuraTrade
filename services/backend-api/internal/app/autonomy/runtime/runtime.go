@@ -10,7 +10,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/services"
 )
 
-type Dependencies struct {
+type Dependencies struct { //nolint:staticcheck // SA1019: TechnicalAnalysisService deprecated but required for backward compat
 	TechnicalAnalysis   *services.TechnicalAnalysisService
 	CCXTService         interface{}
 	ArbitrageService    interface{}

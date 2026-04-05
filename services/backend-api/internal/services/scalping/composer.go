@@ -166,9 +166,10 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 		}
 
 		totalWeight = totalWeight.Add(comp.Weight)
-		if comp.Signal == DirectionBuy {
+		switch comp.Signal {
+		case DirectionBuy:
 			buyScore = buyScore.Add(comp.Weight.Mul(strengthValue))
-		} else if comp.Signal == DirectionSell {
+		case DirectionSell:
 			sellScore = sellScore.Add(comp.Weight.Mul(strengthValue))
 		}
 	}

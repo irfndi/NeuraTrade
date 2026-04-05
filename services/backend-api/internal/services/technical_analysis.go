@@ -356,9 +356,7 @@ func (tas *TechnicalAnalysisService) calculateSMA(prices []float64, period int) 
 
 	// Convert to decimal and determine signal
 	values := make([]decimal.Decimal, len(result))
-	for i, val := range result {
-		values[i] = val
-	}
+	copy(values, result)
 
 	signal, strength := tas.analyzeSMASignal(prices, fr, period)
 
@@ -385,9 +383,7 @@ func (tas *TechnicalAnalysisService) calculateEMA(prices []float64, period int) 
 	fr := decimalSliceToFloat64(result)
 
 	values := make([]decimal.Decimal, len(result))
-	for i, val := range result {
-		values[i] = val
-	}
+	copy(values, result)
 
 	signal, strength := tas.analyzeEMASignal(prices, fr, period)
 
@@ -414,9 +410,7 @@ func (tas *TechnicalAnalysisService) calculateRSI(prices []float64, period int) 
 	fr := decimalSliceToFloat64(result)
 
 	values := make([]decimal.Decimal, len(result))
-	for i, val := range result {
-		values[i] = val
-	}
+	copy(values, result)
 
 	signal, strength := tas.analyzeRSISignal(fr)
 
@@ -447,9 +441,7 @@ func (tas *TechnicalAnalysisService) calculateMACD(prices []float64, fastPeriod,
 	}
 
 	values := make([]decimal.Decimal, len(macdLine))
-	for i, val := range macdLine {
-		values[i] = val
-	}
+	copy(values, macdLine)
 
 	signal, strength := tas.analyzeMACDSignal(fr, frSignal)
 
@@ -478,9 +470,7 @@ func (tas *TechnicalAnalysisService) calculateBollingerBands(prices []float64, p
 	fLower := decimalSliceToFloat64(lowerBand)
 
 	values := make([]decimal.Decimal, len(middleBand))
-	for i, val := range middleBand {
-		values[i] = val
-	}
+	copy(values, middleBand)
 
 	signal, strength := tas.analyzeBollingerBandsSignal(prices, fMiddle, fUpper, fLower, period)
 
@@ -529,9 +519,7 @@ func (tas *TechnicalAnalysisService) calculateATR(high, low, close []float64, pe
 	}
 
 	values := make([]decimal.Decimal, len(result))
-	for i, val := range result {
-		values[i] = val
-	}
+	copy(values, result)
 
 	return &IndicatorResult{
 		Name:      fmt.Sprintf("ATR_%d", period),
@@ -558,9 +546,7 @@ func (tas *TechnicalAnalysisService) calculateStochastic(high, low, close []floa
 	fd := decimalSliceToFloat64(d)
 
 	values := make([]decimal.Decimal, len(d))
-	for i, val := range d {
-		values[i] = val
-	}
+	copy(values, d)
 
 	signal, strength := tas.analyzeStochasticSignal(fd)
 
@@ -588,9 +574,7 @@ func (tas *TechnicalAnalysisService) calculateOBV(prices, volumes []float64) *In
 	fr := decimalSliceToFloat64(result)
 
 	values := make([]decimal.Decimal, len(result))
-	for i, val := range result {
-		values[i] = val
-	}
+	copy(values, result)
 
 	signal, strength := tas.analyzeOBVSignal(fr, prices)
 
@@ -979,41 +963,6 @@ func (tas *TechnicalAnalysisService) fetchPriceData(ctx context.Context, symbol,
 		Volume:     volVals,
 		Timestamps: timestamps,
 	}, nil
-}
-
-// priceSnapshot holds candle data for indicator calculations.
-type priceSnapshot struct {
-	Date   time.Time
-	Open   float64
-	High   float64
-	Low    float64
-	Close  float64
-	Volume float64
-}
-
-// convertToSnapshots adapts the internal PriceData format to the format required by the indicator library.
-// nolint:unused // used in tests (technical_analysis_test.go:519), but tests excluded from linting
-func (tas *TechnicalAnalysisService) convertToSnapshots(priceData *PriceData) []*priceSnapshot {
-	snapshots := make([]*priceSnapshot, len(priceData.Close))
-
-	for i := range priceData.Close {
-		open, _ := priceData.Open[i].Float64()
-		high, _ := priceData.High[i].Float64()
-		low, _ := priceData.Low[i].Float64()
-		close, _ := priceData.Close[i].Float64()
-		volume, _ := priceData.Volume[i].Float64()
-
-		snapshots[i] = &priceSnapshot{
-			Date:   priceData.Timestamps[i],
-			Open:   open,
-			High:   high,
-			Low:    low,
-			Close:  close,
-			Volume: volume,
-		}
-	}
-
-	return snapshots
 }
 
 func float64SliceToDecimal(vals []float64) []decimal.Decimal {
