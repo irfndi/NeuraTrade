@@ -257,13 +257,17 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 				SignalType:       string(signal.SignalType),
 				Symbol:           signal.Symbol,
 				Exchanges:        signal.Exchanges,
-				Volume:           minVolume, // Use minimum volume requirement
+				Volume:           minVolume,
 				ProfitPotential:  signal.ProfitPotential,
 				Confidence:       signal.Confidence,
 				Timestamp:        signal.CreatedAt,
 				Indicators:       map[string]interface{}{"arbitrage": true, "opportunity_count": len(validOpps)},
 				SignalCount:      len(validOpps),
 				SignalComponents: []string{"arbitrage"},
+				MarketData: &MarketDataSnapshot{
+					Price:         signal.ProfitPotential,
+					LastTradeTime: signal.CreatedAt,
+				},
 			}
 
 			qualityMetrics, err := sa.qualityScorer.AssessSignalQuality(ctx, &qualityInput)

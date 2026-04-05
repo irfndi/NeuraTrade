@@ -115,11 +115,12 @@ func TestFetchExchangeStatistics_UsesPortableLatestRowQuery(t *testing.T) {
 			},
 			assertions: func(t *testing.T, stats map[string]*ExchangeMetrics, err error) {
 				require.NoError(t, err)
-				require.Len(t, stats, 2)
+				require.Len(t, stats, 3)
 				assert.Equal(t, int64(2), stats["binance"].TotalTrades)
 				assert.True(t, stats["binance"].AvgDailyVolume.Equal(decimal.NewFromFloat(1500)))
 				assert.Equal(t, 2, stats["binance"].SupportedPairs)
 				assert.False(t, stats["coinbase"].LastDataUpdate.IsZero())
+				assert.NotNil(t, stats["kraken"], "kraken should be present from default metrics")
 			},
 		},
 		{
