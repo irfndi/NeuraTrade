@@ -40,6 +40,7 @@ type AlertService struct {
 	alertThrottler      *AlertThrottler
 	notificationService *NotificationService
 	broadcastWg         sync.WaitGroup
+	broadcastMu         sync.Mutex
 	broadcastTimeout    time.Duration
 	mu                  sync.RWMutex
 }
@@ -139,12 +140,17 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 			if err == nil {
 				alertCopy.Details = make(map[string]any)
 				_ = json.Unmarshal(raw, &alertCopy.Details)
+			} else {
+				alertCopy.Details = make(map[string]any, len(alert.Details))
+				for k, v := range alert.Details {
+					alertCopy.Details[k] = v
+				}
 			}
 		}
 
-		s.mu.Lock()
+		s.broadcastMu.Lock()
+		defer s.broadcastMu.Unlock()
 		s.broadcastWg.Add(1)
-		s.mu.Unlock()
 		go func() {
 			defer s.broadcastWg.Done()
 			defer func() {
@@ -284,7 +290,7 @@ func (s *AlertService) RunHealthCheck(ctx context.Context, config HealthAlertCon
 }
 
 func (s *AlertService) WaitForBroadcasts() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.broadcastMu.Lock()
+	defer s.broadcastMu.Unlock()
 	s.broadcastWg.Wait()
 }
