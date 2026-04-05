@@ -342,7 +342,9 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 	}
 
 	signals := make([]*AggregatedSignal, 0)
-	if sa.indicatorStack != nil && len(input.Opens) == len(input.Prices) && len(input.Highs) == len(input.Prices) && len(input.Lows) == len(input.Prices) && len(input.Volumes) == len(input.Prices) {
+	useFallback := sa.indicatorStack == nil
+
+	if !useFallback && len(input.Opens) == len(input.Prices) && len(input.Highs) == len(input.Prices) && len(input.Lows) == len(input.Prices) && len(input.Volumes) == len(input.Prices) {
 		ohlcv := &indicators.OHLCVData{
 			Symbol:   input.Symbol,
 			Exchange: input.Exchange,
@@ -360,12 +362,15 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 		stackResult, err := sa.indicatorStack.Analyze(spanCtx, ohlcv)
 		if err != nil {
 			sa.logger.WithError(err).Warn("Indicator stack analysis failed; falling back to provider-based indicators")
+			useFallback = true
 		} else {
 			signals = sa.convertStackResultsToSignals(input.Symbol, input.Exchange, stackResult)
 		}
+	} else if !useFallback {
+		useFallback = true
 	}
 
-	if len(signals) == 0 {
+	if useFallback {
 		indicatorValues := sa.calculateTechnicalIndicators(input.Prices)
 		signals = sa.generateTechnicalSignals(input.Symbol, input.Exchange, indicatorValues)
 	}

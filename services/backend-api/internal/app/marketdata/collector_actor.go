@@ -560,7 +560,32 @@ func (a *CollectorActor) collectOrderBook(ctx context.Context, gw ports.MarketDa
 
 	var liquidityScore decimal.Decimal
 	if !midPrice.IsZero() {
-		liquidityScore = totalDepth.Div(midPrice).Mul(decimal.NewFromInt(10000)).Mul(decimal.NewFromFloat(0.1))
+		// USD-weighted depth: totalDepth is in base currency (e.g., BTC),
+		// multiply by midPrice to get USD-denominated depth.
+		// Formula mirrors client.CalculateOrderBookMetrics.calculateLiquidityScore:
+		//   spreadScore(40%) + depthScore(50%) - imbalancePenalty(10%)
+		totalDepthUSD := totalDepth.Mul(midPrice)
+
+		// Spread score: 0.01% spread → 100, 1% spread → 0
+		spreadScore := decimal.NewFromInt(100).Sub(spreadPct.Mul(decimal.NewFromInt(100)))
+		if spreadScore.LessThan(decimal.Zero) {
+			spreadScore = decimal.Zero
+		}
+
+		// Depth score: $1M depth → 100, $10k depth → 10
+		depthScore := totalDepthUSD.Div(decimal.NewFromInt(10000)).Mul(decimal.NewFromInt(10))
+		if depthScore.GreaterThan(decimal.NewFromInt(100)) {
+			depthScore = decimal.NewFromInt(100)
+		}
+
+		imbalancePenalty := imbalance.Abs().Mul(decimal.NewFromInt(20))
+
+		liquidityScore = spreadScore.Mul(decimal.NewFromFloat(0.4)).
+			Add(depthScore.Mul(decimal.NewFromFloat(0.5))).
+			Sub(imbalancePenalty.Mul(decimal.NewFromFloat(0.1)))
+	}
+	if liquidityScore.LessThan(decimal.Zero) {
+		liquidityScore = decimal.Zero
 	}
 	if liquidityScore.GreaterThan(decimal.NewFromInt(100)) {
 		liquidityScore = decimal.NewFromInt(100)
