@@ -44,22 +44,15 @@ type SignalQualityScorer interface {
 	Score(ctx context.Context, signal *ScalpingSignal) *QualityAssessment
 }
 
-// ImbalanceDetector detects order book imbalances.
-type ImbalanceDetector interface {
-	Detect(ctx context.Context, exchange, symbol string) (Direction, SignalStrength, decimal.Decimal, error)
-}
-
 // ScalpingSignalComposer composes scalping signals from OHLCV data and order book metrics.
 type ScalpingSignalComposer struct {
-	qualityScorer     SignalQualityScorer
-	imbalanceDetector ImbalanceDetector
+	qualityScorer SignalQualityScorer
 }
 
 // NewScalpingSignalComposer creates a new composer.
-func NewScalpingComposer(qualityScorer SignalQualityScorer, imbalanceDetector ImbalanceDetector) *ScalpingSignalComposer {
+func NewScalpingComposer(qualityScorer SignalQualityScorer) *ScalpingSignalComposer {
 	return &ScalpingSignalComposer{
-		qualityScorer:     qualityScorer,
-		imbalanceDetector: imbalanceDetector,
+		qualityScorer: qualityScorer,
 	}
 }
 
@@ -121,9 +114,9 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 	})
 
 	// 4. Trend factor
-	lastCandle := ohlcv.Candles[len(ohlcv.Candles)-1]
-	prevCandle := ohlcv.Candles[len(ohlcv.Candles)-2]
 	if len(ohlcv.Candles) >= 2 {
+		lastCandle := ohlcv.Candles[len(ohlcv.Candles)-1]
+		prevCandle := ohlcv.Candles[len(ohlcv.Candles)-2]
 		trendDir, trendStrength := classifyTrend(prevCandle, lastCandle)
 		components = append(components, SignalComponent{
 			Name:        "trend",
@@ -149,17 +142,28 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 		})
 	}
 
-	// Aggregate direction and confidence
 	totalWeight := decimal.Zero
-	buyWeight := decimal.Zero
-	sellWeight := decimal.Zero
+	buyScore := decimal.Zero
+	sellScore := decimal.Zero
 	for _, comp := range components {
+		if comp.Signal == DirectionHold {
+			totalWeight = totalWeight.Add(comp.Weight)
+			continue
+		}
+
+		strengthValue := decimal.NewFromFloat(0.3)
+		switch comp.Strength {
+		case StrengthMedium:
+			strengthValue = decimal.NewFromFloat(0.6)
+		case StrengthStrong:
+			strengthValue = decimal.NewFromFloat(0.9)
+		}
+
 		totalWeight = totalWeight.Add(comp.Weight)
-		switch comp.Signal {
-		case DirectionBuy:
-			buyWeight = buyWeight.Add(comp.Weight.Mul(comp.Value))
-		case DirectionSell:
-			sellWeight = sellWeight.Add(comp.Weight.Mul(comp.Value))
+		if comp.Signal == DirectionBuy {
+			buyScore = buyScore.Add(comp.Weight.Mul(strengthValue))
+		} else if comp.Signal == DirectionSell {
+			sellScore = sellScore.Add(comp.Weight.Mul(strengthValue))
 		}
 	}
 
@@ -167,12 +171,15 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 		signal.Direction = DirectionHold
 		signal.Confidence = decimal.NewFromFloat(0.3)
 	} else {
-		if buyWeight.GreaterThan(sellWeight) {
+		if buyScore.GreaterThan(sellScore) {
 			signal.Direction = DirectionBuy
-			signal.Confidence = buyWeight.Div(totalWeight)
-		} else {
+			signal.Confidence = buyScore.Div(totalWeight)
+		} else if sellScore.GreaterThan(buyScore) {
 			signal.Direction = DirectionSell
-			signal.Confidence = sellWeight.Div(totalWeight)
+			signal.Confidence = sellScore.Div(totalWeight)
+		} else {
+			signal.Direction = DirectionHold
+			signal.Confidence = decimal.Zero
 		}
 	}
 
@@ -224,10 +231,13 @@ func classifyImbalance(imbalance decimal.Decimal) (Direction, SignalStrength) {
 	if imbalance.GreaterThan(threshold) {
 		return DirectionBuy, StrengthStrong
 	}
-	if imbalance.GreaterThan(threshold.Neg()) {
+	if imbalance.GreaterThan(decimal.NewFromFloat(0.05)) {
 		return DirectionBuy, StrengthMedium
 	}
 	if imbalance.LessThan(threshold.Neg()) {
+		return DirectionSell, StrengthStrong
+	}
+	if imbalance.LessThan(decimal.NewFromFloat(-0.05)) {
 		return DirectionSell, StrengthMedium
 	}
 	return DirectionHold, StrengthWeak
@@ -258,16 +268,38 @@ func classifyVolatility(vol decimal.Decimal) (Direction, SignalStrength) {
 
 func classifyTrend(prev, curr OHLCVCandle) (Direction, SignalStrength) {
 	change := curr.Close.Sub(prev.Close)
+
+	if change.IsZero() {
+		return DirectionHold, StrengthWeak
+	}
+
+	var magnitude decimal.Decimal
+	if !prev.Close.IsZero() {
+		magnitude = change.Div(prev.Close).Abs()
+	} else {
+		magnitude = change.Abs()
+	}
+
+	strongThreshold := decimal.NewFromFloat(0.005)
+	mediumThreshold := decimal.NewFromFloat(0.001)
+
 	if change.IsPositive() {
-		if change.GreaterThan(decimal.NewFromFloat(0)) {
+		if magnitude.GreaterThanOrEqual(strongThreshold) {
 			return DirectionBuy, StrengthStrong
 		}
-		return DirectionBuy, StrengthMedium
+		if magnitude.GreaterThanOrEqual(mediumThreshold) {
+			return DirectionBuy, StrengthMedium
+		}
+		return DirectionBuy, StrengthWeak
 	}
-	if change.IsNegative() {
+
+	if magnitude.GreaterThanOrEqual(strongThreshold) {
+		return DirectionSell, StrengthStrong
+	}
+	if magnitude.GreaterThanOrEqual(mediumThreshold) {
 		return DirectionSell, StrengthMedium
 	}
-	return DirectionHold, StrengthWeak
+	return DirectionSell, StrengthWeak
 }
 
 func classifyLiquidity(score decimal.Decimal) (Direction, SignalStrength) {

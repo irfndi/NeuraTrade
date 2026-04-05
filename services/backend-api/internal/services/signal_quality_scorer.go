@@ -237,7 +237,7 @@ func (sqs *SignalQualityScorer) AssessSignalQuality(ctx context.Context, input *
 // Returns:
 //   - True if acceptable, false otherwise.
 func (sqs *SignalQualityScorer) IsSignalQualityAcceptable(metrics *SignalQualityMetrics, thresholds *QualityThresholds) bool {
-	if thresholds.MinDataFreshness > 0 && metrics.DataFreshnessScore.LessThan(decimal.NewFromFloat(0.5)) {
+	if thresholds.MinDataFreshness > 0 && metrics.DataFreshnessScore.LessThan(sqs.minimumFreshnessScore(thresholds.MinDataFreshness)) {
 		return false
 	}
 	return metrics.OverallScore.GreaterThanOrEqual(thresholds.MinOverallScore) &&
@@ -415,6 +415,25 @@ func (sqs *SignalQualityScorer) calculateDataFreshnessScore(input *SignalQuality
 	} else if age < 30*time.Minute {
 		return decimal.NewFromFloat(0.5)
 	} else {
+		return decimal.NewFromFloat(0.2)
+	}
+}
+
+func (sqs *SignalQualityScorer) minimumFreshnessScore(maxAge time.Duration) decimal.Decimal {
+	if maxAge <= 0 {
+		return decimal.Zero
+	}
+
+	switch {
+	case maxAge <= time.Minute:
+		return decimal.NewFromFloat(1.0)
+	case maxAge <= 5*time.Minute:
+		return decimal.NewFromFloat(0.9)
+	case maxAge <= 15*time.Minute:
+		return decimal.NewFromFloat(0.7)
+	case maxAge <= 30*time.Minute:
+		return decimal.NewFromFloat(0.5)
+	default:
 		return decimal.NewFromFloat(0.2)
 	}
 }
@@ -643,7 +662,7 @@ func (sqs *SignalQualityScorer) refreshExchangeReliabilityCache(ctx context.Cont
 func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (map[string]*ExchangeMetrics, error) {
 	stats := make(map[string]*ExchangeMetrics)
 	defaults := sqs.defaultExchangeMetrics()
-	knownExchanges := []string{"binance", "bybit", "okx", "bitget", "kucoin", "gate", "coinbase", "kraken"}
+	knownExchanges := []string{"binance", "bybit", "okx", "bitget", "kucoin", "gateio", "coinbase", "kraken"}
 
 	if sqs.exchangeStatsProvider != nil {
 		for _, exchange := range knownExchanges {

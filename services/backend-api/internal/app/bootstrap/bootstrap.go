@@ -21,6 +21,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/platform/supervisor"
 	"github.com/irfndi/neuratrade/internal/platform/timeout"
 	"github.com/irfndi/neuratrade/internal/ports"
+	scalping "github.com/irfndi/neuratrade/internal/services/scalping"
 	"github.com/shopspring/decimal"
 	"log/slog"
 )
@@ -384,6 +385,9 @@ func (a *Application) buildStrategyComponents(b *Builder) error {
 		b.strategy = strategy.NewStrategyActor(cfg, a.EventBus, slog.Default())
 	}
 
+	scalpingComposer := scalping.NewScalpingComposer(nil)
+	b.strategy.SetScalpingComposer(scalpingComposer)
+
 	a.StrategyActor = b.strategy
 
 	ref, err := a.ActorSystem.Spawn(a.StrategyActor, actor.DefaultConfig())
@@ -420,6 +424,48 @@ func (a *Application) buildStrategyComponents(b *Builder) error {
 	}
 
 	a.StrategyActorRef = ref
+
+	tickSub, err := strategy.SubscribeMarketTicks(context.Background(), a.EventBus, ref)
+	if err != nil {
+		actorRunCancel()
+		ref.Stop()
+		if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
+			return fmt.Errorf("subscribe strategy actor to market ticks after run failure: %w", runErr)
+		}
+		return fmt.Errorf("subscribe strategy actor to market ticks: %w", err)
+	}
+
+	candleSub, err := strategy.SubscribeCandleEvents(context.Background(), a.EventBus, ref)
+	if err != nil {
+		tickSub.Unsubscribe()
+		actorRunCancel()
+		ref.Stop()
+		if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
+			return fmt.Errorf("subscribe strategy actor to candle events after run failure: %w", runErr)
+		}
+		return fmt.Errorf("subscribe strategy actor to candle events: %w", err)
+	}
+
+	orderBookSub, err := strategy.SubscribeOrderBookMetricsEvents(context.Background(), a.EventBus, ref)
+	if err != nil {
+		candleSub.Unsubscribe()
+		tickSub.Unsubscribe()
+		actorRunCancel()
+		ref.Stop()
+		if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
+			return fmt.Errorf("subscribe strategy actor to order book events after run failure: %w", runErr)
+		}
+		return fmt.Errorf("subscribe strategy actor to order book events: %w", err)
+	}
+
+	a.Supervisor.AddFunc("strategy-event-subscriptions", func(ctx context.Context) error {
+		<-ctx.Done()
+		orderBookSub.Unsubscribe()
+		candleSub.Unsubscribe()
+		tickSub.Unsubscribe()
+		return nil
+	})
+
 	a.Supervisor.AddFunc(strategy.DefaultActorID, func(ctx context.Context) error {
 		select {
 		case runErr := <-runErrCh:

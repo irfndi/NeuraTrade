@@ -2,11 +2,12 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ports"
-	"github.com/shopspring/decimal"
+	"github.com/jackc/pgx/v5"
 )
 
 // orderBookSnapshotRepo implements ports.OrderBookSnapshotRepository.
@@ -69,7 +70,10 @@ func (r *orderBookSnapshotRepo) GetLatestSnapshot(ctx context.Context, exchange,
 		&snap.BidLevels, &snap.AskLevels, &snap.LiquidityScore, &snap.SnapshotAt,
 	)
 	if err != nil {
-		return nil, nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest order book snapshot for %s:%s: %w", exchange, symbol, err)
 	}
 	return &snap, nil
 }
@@ -109,18 +113,13 @@ func (r *orderBookSnapshotRepo) GetSnapshotsInRange(ctx context.Context, exchang
 			&snap.BidDepth2Pct, &snap.AskDepth2Pct, &snap.Imbalance1Pct, &snap.Imbalance2Pct,
 			&snap.BidLevels, &snap.AskLevels, &snap.LiquidityScore, &snap.SnapshotAt,
 		); err != nil {
-			continue
+			return nil, fmt.Errorf("scan order book snapshot row for %s:%s: %w", exchange, symbol, err)
 		}
 		results = append(results, snap)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate order book snapshots for %s:%s: %w", exchange, symbol, err)
+	}
 
 	return results, nil
-}
-
-// decimalPtrToDecimal converts a *decimal.Decimal to decimal.Decimal (zero if nil).
-func decimalPtrToDecimal(d *decimal.Decimal) decimal.Decimal {
-	if d == nil {
-		return decimal.Zero
-	}
-	return *d
 }

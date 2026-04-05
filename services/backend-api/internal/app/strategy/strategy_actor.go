@@ -12,6 +12,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
+	scalping "github.com/irfndi/neuratrade/internal/services/scalping"
 	"github.com/shopspring/decimal"
 )
 
@@ -44,40 +45,7 @@ func DefaultConfig() Config {
 }
 
 type ScalpingSignalComposer interface {
-	ComposeSignal(ctx context.Context, ohlcv ScalpingOHLCVData, obMetrics ScalpingOrderBookMetrics) (*ScalpingSignalResult, error)
-}
-
-type ScalpingOHLCVData struct {
-	Exchange  string
-	Symbol    string
-	Timeframe string
-	Candles   []ScalpingCandle
-}
-
-type ScalpingCandle struct {
-	Timestamp time.Time
-	Open      decimal.Decimal
-	High      decimal.Decimal
-	Low       decimal.Decimal
-	Close     decimal.Decimal
-	Volume    decimal.Decimal
-}
-
-type ScalpingOrderBookMetrics struct {
-	SpreadPct      decimal.Decimal
-	Imbalance1Pct  decimal.Decimal
-	MidPrice       decimal.Decimal
-	BestBid        decimal.Decimal
-	BestAsk        decimal.Decimal
-	LiquidityScore decimal.Decimal
-}
-
-type ScalpingSignalResult struct {
-	ID         string
-	Direction  string
-	Confidence decimal.Decimal
-	Components []string
-	Quality    decimal.Decimal
+	ComposeSignal(ctx context.Context, ohlcv scalping.OHLCVData, obMetrics scalping.OrderBookMetrics) (*scalping.ScalpingSignal, error)
 }
 
 // IngestMarketTickMessage is forwarded from market.tick events to strategy logic.
@@ -88,6 +56,20 @@ type IngestMarketTickMessage struct {
 // MessageType identifies IngestMarketTickMessage for actor routing.
 func (*IngestMarketTickMessage) MessageType() string { return "strategy.ingest_market_tick" }
 
+type IngestCandleMessage struct {
+	Candle marketdata.MarketCandleEvent
+}
+
+func (*IngestCandleMessage) MessageType() string { return "strategy.ingest_candle" }
+
+type IngestOrderBookMetricsMessage struct {
+	Metrics marketdata.OrderBookMetricsEvent
+}
+
+func (*IngestOrderBookMetricsMessage) MessageType() string {
+	return "strategy.ingest_orderbook_metrics"
+}
+
 // StrategyActor consumes market ticks and emits SignalProposed events.
 type StrategyActor struct {
 	id               string
@@ -96,6 +78,8 @@ type StrategyActor struct {
 	engine           *signals.Engine
 	eventBus         *eventbus.Bus
 	windows          map[string][]signals.Tick
+	candleBuffer     map[string][]scalping.OHLCVCandle
+	obMetricsCache   map[string]scalping.OrderBookMetrics
 	logger           *slog.Logger
 	scalpingComposer ScalpingSignalComposer
 }
@@ -119,13 +103,15 @@ func NewStrategyActor(cfg Config, bus *eventbus.Bus, logger *slog.Logger) *Strat
 	}
 
 	return &StrategyActor{
-		id:         cfg.ActorID,
-		strategyID: cfg.StrategyID,
-		windowSize: cfg.WindowSize,
-		engine:     signals.NewEngine(cfg.Signal),
-		eventBus:   bus,
-		windows:    make(map[string][]signals.Tick),
-		logger:     logger,
+		id:             cfg.ActorID,
+		strategyID:     cfg.StrategyID,
+		windowSize:     cfg.WindowSize,
+		engine:         signals.NewEngine(cfg.Signal),
+		eventBus:       bus,
+		windows:        make(map[string][]signals.Tick),
+		candleBuffer:   make(map[string][]scalping.OHLCVCandle),
+		obMetricsCache: make(map[string]scalping.OrderBookMetrics),
+		logger:         logger,
 	}
 }
 
@@ -144,6 +130,16 @@ func (s *StrategyActor) Receive(ctx context.Context, env actor.Envelope) error {
 			return nil
 		}
 		return s.handleTick(ctx, env, msg.Tick)
+	case *IngestCandleMessage:
+		if msg != nil {
+			s.handleCandle(msg.Candle)
+		}
+		return nil
+	case *IngestOrderBookMetricsMessage:
+		if msg != nil {
+			s.handleOBMetrics(msg.Metrics)
+		}
+		return nil
 	default:
 		return fmt.Errorf("strategy actor: unknown message type %T", msg)
 	}
@@ -202,40 +198,34 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 	return nil
 }
 
-// SubscribeMarketTicks forwards market.tick events from event bus into the strategy actor mailbox.
 func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID string, tick marketdata.MarketTickEvent) {
-	ohlcv := ScalpingOHLCVData{
+	key := tick.Exchange + ":" + tick.Symbol
+	candles := s.candleBuffer[key]
+	if len(candles) == 0 {
+		return
+	}
+
+	ohlcv := scalping.OHLCVData{
 		Exchange: tick.Exchange,
 		Symbol:   tick.Symbol,
-		Candles: []ScalpingCandle{
-			{
-				Timestamp: tick.Timestamp,
-				Open:      tick.Last,
-				High:      tick.Last,
-				Low:       tick.Last,
-				Close:     tick.Last,
-				Volume:    tick.Volume,
-			},
-		},
+		Candles:  candles,
 	}
 
-	spread := tick.Ask.Sub(tick.Bid)
-	midPrice := tick.Bid.Add(tick.Ask).Div(decimal.NewFromInt(2))
-	var spreadPct decimal.Decimal
-	if !midPrice.IsZero() {
-		spreadPct = spread.Div(midPrice).Mul(decimal.NewFromInt(100))
-	}
-
-	obMetrics := ScalpingOrderBookMetrics{
-		SpreadPct: spreadPct,
-		MidPrice:  midPrice,
-		BestBid:   tick.Bid,
-		BestAsk:   tick.Ask,
-	}
+	obMetrics := s.obMetricsCache[key]
 
 	result, err := s.scalpingComposer.ComposeSignal(ctx, ohlcv, obMetrics)
 	if err != nil || result == nil {
 		return
+	}
+
+	compNames := make([]string, len(result.Components))
+	for i, component := range result.Components {
+		compNames[i] = component.Name
+	}
+
+	var qualityScore decimal.Decimal
+	if result.Quality != nil {
+		qualityScore = result.Quality.OverallScore
 	}
 
 	payload := signals.ScalpingSignalProposedEvent{
@@ -247,10 +237,10 @@ func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID st
 		SignalID:     result.ID,
 		Exchange:     tick.Exchange,
 		Symbol:       tick.Symbol,
-		Direction:    result.Direction,
+		Direction:    string(result.Direction),
 		Confidence:   result.Confidence,
-		Components:   result.Components,
-		QualityScore: result.Quality,
+		Components:   compNames,
+		QualityScore: qualityScore,
 	}
 
 	event := eventbus.NewEvent(ports.EventTypeScalpingSignalProposed, ports.EventTypeScalpingSignalProposed, payload).
@@ -269,6 +259,43 @@ func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID st
 		s.logger.Warn("failed to publish scalping signal", "error", err)
 	}
 }
+
+func (s *StrategyActor) handleCandle(candle marketdata.MarketCandleEvent) {
+	key := candle.Exchange + ":" + candle.Symbol
+	sc := scalping.OHLCVCandle{
+		Timestamp: candle.Timestamp,
+		Open:      candle.Open,
+		High:      candle.High,
+		Low:       candle.Low,
+		Close:     candle.Close,
+		Volume:    candle.Volume,
+	}
+	buf := append(s.candleBuffer[key], sc)
+	if len(buf) > 60 {
+		buf = buf[len(buf)-60:]
+	}
+	s.candleBuffer[key] = buf
+}
+
+func (s *StrategyActor) handleOBMetrics(metrics marketdata.OrderBookMetricsEvent) {
+	key := metrics.Exchange + ":" + metrics.Symbol
+	s.obMetricsCache[key] = &orderBookMetricsAdapter{event: metrics}
+}
+
+type orderBookMetricsAdapter struct {
+	event marketdata.OrderBookMetricsEvent
+}
+
+func (a *orderBookMetricsAdapter) GetSpreadPct() decimal.Decimal      { return a.event.BidAskSpread }
+func (a *orderBookMetricsAdapter) GetImbalance1Pct() decimal.Decimal  { return a.event.Imbalance1Pct }
+func (a *orderBookMetricsAdapter) GetMidPrice() decimal.Decimal       { return a.event.MidPrice }
+func (a *orderBookMetricsAdapter) GetBestBid() decimal.Decimal        { return a.event.BestBid }
+func (a *orderBookMetricsAdapter) GetBestAsk() decimal.Decimal        { return a.event.BestAsk }
+func (a *orderBookMetricsAdapter) GetLiquidityScore() decimal.Decimal { return a.event.LiquidityScore }
+func (a *orderBookMetricsAdapter) GetBidDepth1Pct() decimal.Decimal   { return decimal.Zero }
+func (a *orderBookMetricsAdapter) GetAskDepth1Pct() decimal.Decimal   { return decimal.Zero }
+
+// SubscribeMarketTicks forwards market.tick events from event bus into the strategy actor mailbox.
 
 func SubscribeMarketTicks(ctx context.Context, bus *eventbus.Bus, ref *actor.Ref) (*eventbus.Subscription, error) {
 	if bus == nil {
@@ -301,6 +328,68 @@ func SubscribeMarketTicks(ctx context.Context, bus *eventbus.Bus, ref *actor.Ref
 	return sub, nil
 }
 
+func SubscribeCandleEvents(ctx context.Context, bus *eventbus.Bus, ref *actor.Ref) (*eventbus.Subscription, error) {
+	if bus == nil {
+		return nil, ErrNilEventBus
+	}
+	if ref == nil {
+		return nil, ErrNilActorRef
+	}
+
+	handler := func(ctx context.Context, event eventbus.Event) error {
+		candle, ok := payloadToMarketCandle(event.Payload)
+		if !ok {
+			return nil
+		}
+
+		env := actor.Envelope{
+			Message: &IngestCandleMessage{Candle: candle},
+			TraceID: event.TraceID,
+		}
+		if err := ref.SendEnvelope(ctx, env); err != nil {
+			return fmt.Errorf("send candle envelope: %w", err)
+		}
+		return nil
+	}
+
+	sub, err := bus.Subscribe(ctx, ports.EventTypeMarketCandle, handler)
+	if err != nil {
+		return nil, fmt.Errorf("subscribe to %s: %w", ports.EventTypeMarketCandle, err)
+	}
+	return sub, nil
+}
+
+func SubscribeOrderBookMetricsEvents(ctx context.Context, bus *eventbus.Bus, ref *actor.Ref) (*eventbus.Subscription, error) {
+	if bus == nil {
+		return nil, ErrNilEventBus
+	}
+	if ref == nil {
+		return nil, ErrNilActorRef
+	}
+
+	handler := func(ctx context.Context, event eventbus.Event) error {
+		metrics, ok := payloadToOrderBookMetrics(event.Payload)
+		if !ok {
+			return nil
+		}
+
+		env := actor.Envelope{
+			Message: &IngestOrderBookMetricsMessage{Metrics: metrics},
+			TraceID: event.TraceID,
+		}
+		if err := ref.SendEnvelope(ctx, env); err != nil {
+			return fmt.Errorf("send orderbook metrics envelope: %w", err)
+		}
+		return nil
+	}
+
+	sub, err := bus.Subscribe(ctx, ports.EventTypeOrderBook, handler)
+	if err != nil {
+		return nil, fmt.Errorf("subscribe to %s: %w", ports.EventTypeOrderBook, err)
+	}
+	return sub, nil
+}
+
 func payloadToMarketTick(payload any) (marketdata.MarketTickEvent, bool) {
 	switch tick := payload.(type) {
 	case marketdata.MarketTickEvent:
@@ -312,5 +401,33 @@ func payloadToMarketTick(payload any) (marketdata.MarketTickEvent, bool) {
 		return *tick, true
 	default:
 		return marketdata.MarketTickEvent{}, false
+	}
+}
+
+func payloadToMarketCandle(payload any) (marketdata.MarketCandleEvent, bool) {
+	switch candle := payload.(type) {
+	case marketdata.MarketCandleEvent:
+		return candle, true
+	case *marketdata.MarketCandleEvent:
+		if candle == nil {
+			return marketdata.MarketCandleEvent{}, false
+		}
+		return *candle, true
+	default:
+		return marketdata.MarketCandleEvent{}, false
+	}
+}
+
+func payloadToOrderBookMetrics(payload any) (marketdata.OrderBookMetricsEvent, bool) {
+	switch metrics := payload.(type) {
+	case marketdata.OrderBookMetricsEvent:
+		return metrics, true
+	case *marketdata.OrderBookMetricsEvent:
+		if metrics == nil {
+			return marketdata.OrderBookMetricsEvent{}, false
+		}
+		return *metrics, true
+	default:
+		return marketdata.OrderBookMetricsEvent{}, false
 	}
 }
