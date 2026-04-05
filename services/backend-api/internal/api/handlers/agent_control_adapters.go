@@ -37,11 +37,14 @@ type riskAdapter struct {
 	safeMode   *risk.SafeModeImpl
 }
 
-// NewRiskControllerAdapter creates a RiskController backed by the given shared
-// KillSwitch and SafeMode instances. Pass the same instances that are registered
-// with the policy engine / RiskActor so that operator API changes propagate to
-// order-blocking enforcement.
+// NewRiskControllerAdapter creates a RiskController backed by the given
+// KillSwitch and SafeMode. Returns nil when either dependency is nil so that
+// handler nil-guards produce proper 503 responses — consistent with
+// NewCollectorController and NewOrderController.
 func NewRiskControllerAdapter(killSwitch *risk.KillSwitchImpl, safeMode *risk.SafeModeImpl) RiskController {
+	if killSwitch == nil || safeMode == nil {
+		return nil
+	}
 	return &riskAdapter{
 		killSwitch: killSwitch,
 		safeMode:   safeMode,
@@ -126,6 +129,10 @@ func (a *orderAdapter) cancelExchangeOrders(ctx context.Context, exchange, symbo
 
 	var cancelErrs []error
 	for _, order := range resp.Orders {
+		if err := ctx.Err(); err != nil {
+			cancelErrs = append(cancelErrs, fmt.Errorf("cancellation aborted: %w", err))
+			break
+		}
 		if err := a.ccxtService.CancelOrder(ctx, exchange, order.ID, order.Symbol); err != nil {
 			cancelErrs = append(cancelErrs, fmt.Errorf("cancel order %s on %s failed: %w", order.ID, exchange, err))
 		}

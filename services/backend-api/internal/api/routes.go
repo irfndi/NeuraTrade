@@ -1069,9 +1069,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
-	// Shared risk state instances — created once so that operator API changes
-	// (enable-safe-mode, kill-switch) propagate to the policy engine and
-	// order-blocking enforcement.
 	sharedKillSwitch := apprisk.NewKillSwitch()
 	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
 

@@ -466,6 +466,9 @@ func (c *CollectorService) ResumeExchange(exchangeID string) error {
 	if !ok {
 		return fmt.Errorf("exchange %q not found", exchangeID)
 	}
+	if !worker.IsRunning {
+		return fmt.Errorf("exchange %q worker is not running; use restart instead", exchangeID)
+	}
 	worker.Paused = false
 	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange collection resumed")
 	return nil
