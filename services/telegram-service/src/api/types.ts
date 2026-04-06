@@ -317,6 +317,11 @@ export interface AIModelsResponse {
   readonly last_sync?: string;
 }
 
+export interface AIProviderModelsResponse {
+  readonly provider: string;
+  readonly models: readonly AIModelInfo[];
+}
+
 export interface AIModelSelectResponse {
   readonly success: boolean;
   readonly model?: AIModelInfo;

@@ -2017,6 +2017,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		aiLastCategory                 string
 		aiLastProvider                 string
 		aiLastSuccessProvider          string
+		aiLastSuccessModel             string
 		aiLastError                    string
 		aiLastErrorAt                  time.Time
 		aiLastSuccessAt                time.Time
@@ -2600,6 +2601,7 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		"last_category":             aiLastCategory,
 		"last_provider":             aiLastProvider,
 		"last_success_provider":     aiLastSuccessProvider,
+		"last_success_model":        aiLastSuccessModel,
 		"last_error":                aiLastError,
 		"last_error_at":             "",
 		"last_success_at":           "",

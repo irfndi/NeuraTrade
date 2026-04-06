@@ -236,9 +236,9 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       lines.push("");
       lines.push(`💰 Daily Spend: $${result.daily_spend || "0.00"}`);
       lines.push(`📅 Monthly Spend: $${result.monthly_spend || "0.00"}`);
-      lines.push(`🎯 Budget Limit: $${result.budget_limit || "Unlimited"}`);
+      lines.push(`🎯 Budget Limit: $${result.budget_limit ?? "Unlimited"}`);
 
-      if (result.provider_chain_configured != null) {
+      if (result.provider_chain_configured != null && readiness !== "degraded") {
         lines.push(
           `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
         );
@@ -252,7 +252,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       lines.push("  /ai_providers - List available providers");
       lines.push("  /ai_models - List all models");
       lines.push("  /ai_select <model> - Pin a specific model");
-      lines.push("  /ai_route [fast|accurate] - Auto-route to best model");
+      lines.push("  /ai_route [fast|balanced|accurate] [tools|vision|reasoning] - Auto-route to best model");
 
       await ctx.reply(lines.join("\n"));
     } catch (error) {
@@ -297,7 +297,9 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       );
       lines.push("Use /ai_select <model_id> to pin a model directly.");
 
-      await ctx.reply(lines.join("\n"));
+      for (const chunk of splitIntoTelegramMessages(lines.join("\n"))) {
+        await ctx.reply(chunk);
+      }
     } catch (error) {
       const errorContext = getErrorContext(error);
       logger.error(
@@ -360,7 +362,9 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
         `\nUse /ai_select <model_id> to pin a model from this provider.`,
       );
 
-      await ctx.reply(lines.join("\n"));
+      for (const chunk of splitIntoTelegramMessages(lines.join("\n"))) {
+        await ctx.reply(chunk);
+      }
     } catch (error) {
       const errorContext = getErrorContext(error);
       logger.error(

@@ -1043,6 +1043,7 @@ func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
 	}
 
 	selectedModel := ""
+	lookupError := false
 	query := `
 		SELECT COALESCE(selected_ai_model, '')
 		FROM users
@@ -1051,6 +1052,9 @@ func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
 		LIMIT 1
 	`
 	if err := h.db.QueryRow(c.Request.Context(), query, chatID).Scan(&selectedModel); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			lookupError = true
+		}
 		selectedModel = ""
 	}
 
@@ -1080,6 +1084,13 @@ func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
 		if rawRuntime != nil {
 			providerChainConfigured = readIntFromRecord(rawRuntime, "provider_chain_configured")
 			providerChainUsable = readIntFromRecord(rawRuntime, "provider_chain_usable")
+
+			if lastProvider, ok := rawRuntime["last_success_provider"].(string); ok && strings.TrimSpace(lastProvider) != "" {
+				effectiveProvider = strings.TrimSpace(lastProvider)
+			}
+			if lastModel, ok := rawRuntime["last_success_model"].(string); ok && strings.TrimSpace(lastModel) != "" {
+				effectiveModel = strings.TrimSpace(lastModel)
+			}
 		} else {
 			providerChainConfigured = readIntFromRecord(diagnostics, "provider_chain_configured")
 			providerChainUsable = readIntFromRecord(diagnostics, "provider_chain_usable")
@@ -1088,20 +1099,16 @@ func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
 		if providerChainUsable > 0 {
 			runtimeReady = true
 		}
-		if lastProvider, ok := rawRuntime["last_success_provider"].(string); ok && strings.TrimSpace(lastProvider) != "" {
-			effectiveProvider = strings.TrimSpace(lastProvider)
-		}
-		if lastModel, ok := rawRuntime["last_success_model"].(string); ok && strings.TrimSpace(lastModel) != "" {
-			effectiveModel = strings.TrimSpace(lastModel)
-		}
 	}
 
-	if selectedModel == "" && runtimeReady {
+	if selectedModel == "" && runtimeReady && !lookupError {
 		autoRouting = true
 	}
 
 	readiness := "unavailable"
 	switch {
+	case lookupError:
+		readiness = "unavailable"
 	case providerChainUsable > 0 && selectedModel != "":
 		readiness = "ready"
 	case providerChainUsable > 0 && selectedModel == "":

@@ -378,7 +378,10 @@ func (h *AIHandler) GetProviderModels(c *gin.Context) {
 
 	models, err := h.registry.GetModelsByProvider(ctx, providerID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get models for provider"})
+		c.JSON(http.StatusOK, gin.H{
+			"provider": providerID,
+			"models":   []AIModelInfo{},
+		})
 		return
 	}
 

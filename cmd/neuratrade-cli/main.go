@@ -1184,7 +1184,7 @@ func getQuests(cCtx *cli.Context) error {
 
 // AIModel represents an AI model
 type AIModel struct {
-	ID             string `json:"id"`
+	ID             string `json:"model_id"`
 	DisplayName    string `json:"display_name"`
 	Provider       string `json:"provider"`
 	Cost           string `json:"cost"`
@@ -1422,7 +1422,7 @@ func aiStatus(cCtx *cli.Context) error {
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	respBody, err := client.makeRequest("GET", withChatID("/api/v1/telegram/internal/ai/status", chatID), nil)
+	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/ai/status/%s", url.PathEscape(chatID)), nil)
 	if err != nil {
 		fmt.Printf("Error: Could not reach API: %v\n", err)
 		fmt.Println("\nMake sure the NeuraTrade backend is running:")
