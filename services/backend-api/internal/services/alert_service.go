@@ -141,15 +141,11 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 				alertCopy.Details = make(map[string]any)
 				_ = json.Unmarshal(raw, &alertCopy.Details)
 			} else {
-				alertCopy.Details = make(map[string]any, len(alert.Details))
-				for k, v := range alert.Details {
-					alertCopy.Details[k] = v
-				}
+				alertCopy.Details = nil
 			}
 		}
 
 		s.broadcastMu.Lock()
-		defer s.broadcastMu.Unlock()
 		s.broadcastWg.Add(1)
 		go func() {
 			defer s.broadcastWg.Done()
@@ -172,6 +168,7 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 				)
 			}
 		}()
+		s.broadcastMu.Unlock()
 	}
 
 	return s.persistAlert(ctx, alert)
