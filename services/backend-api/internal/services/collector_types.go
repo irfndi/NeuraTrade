@@ -137,6 +137,9 @@ type Worker struct {
 	ErrorCount int
 	// MaxErrors is the maximum allowed consecutive errors.
 	MaxErrors int
+	// Paused indicates whether the worker is temporarily paused;
+	// when true the collection loop skips ticks but preserves worker state.
+	Paused bool
 }
 
 // BackfillJob represents a single symbol backfill task

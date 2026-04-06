@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -16,10 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var testLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
 // TestIntegratedQuestHandlers_MarketScanWithTA tests market scanning with TA
 func TestIntegratedQuestHandlers_MarketScanWithTA(t *testing.T) {
 	mockNotif := &NotificationService{}
-	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 
 	handlers := NewIntegratedQuestHandlers(
 		nil, nil, nil, nil, mockNotif, mockMonitoring,
@@ -48,7 +52,7 @@ func TestIntegratedQuestHandlers_MarketScanWithTA(t *testing.T) {
 // TestIntegratedQuestHandlers_FundingRateScan tests funding rate scanning
 func TestIntegratedQuestHandlers_FundingRateScan(t *testing.T) {
 	mockNotif := &NotificationService{}
-	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 
 	handlers := NewIntegratedQuestHandlers(
 		nil, nil, nil, nil, mockNotif, mockMonitoring,
@@ -76,7 +80,7 @@ func TestIntegratedQuestHandlers_FundingRateScan(t *testing.T) {
 // TestIntegratedQuestHandlers_PortfolioHealthWithRisk tests portfolio health checks
 func TestIntegratedQuestHandlers_PortfolioHealthWithRisk(t *testing.T) {
 	mockNotif := &NotificationService{}
-	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 
 	handlers := NewIntegratedQuestHandlers(
 		nil, nil, nil, nil, mockNotif, mockMonitoring,
@@ -105,7 +109,7 @@ func TestIntegratedQuestHandlers_PortfolioHealthWithRisk(t *testing.T) {
 // TestIntegratedQuestHandlers_GetMonitoringSnapshot tests monitoring snapshot retrieval
 func TestIntegratedQuestHandlers_GetMonitoringSnapshot(t *testing.T) {
 	mockNotif := &NotificationService{}
-	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 
 	handlers := NewIntegratedQuestHandlers(
 		nil, nil, nil, nil, mockNotif, mockMonitoring,
@@ -121,7 +125,7 @@ func TestIntegratedQuestHandlers_GetMonitoringSnapshot(t *testing.T) {
 
 func TestIntegratedQuestHandlers_ExecuteRoutineUnknownDefinition(t *testing.T) {
 	mockNotif := &NotificationService{}
-	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
 
 	quest := &Quest{
@@ -143,7 +147,7 @@ func TestIntegratedQuestHandlers_ExecuteRoutineUnknownDefinition(t *testing.T) {
 
 func TestIntegratedQuestHandlers_ExecuteRoutine_VolatilityWatchUsesPortfolioHealthFlow(t *testing.T) {
 	mockNotif := &NotificationService{}
-	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
 
 	quest := &Quest{
@@ -168,7 +172,7 @@ func TestIntegratedQuestHandlers_ExecuteRoutine_VolatilityWatchUsesPortfolioHeal
 
 func TestIntegratedQuestHandlers_ExecuteRoutine_FundGrowthGoalUpdatesCheckpoint(t *testing.T) {
 	mockNotif := &NotificationService{}
-	mockMonitoring := NewAutonomousMonitorManager(mockNotif)
+	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
 
 	quest := &Quest{

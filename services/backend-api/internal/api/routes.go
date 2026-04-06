@@ -18,6 +18,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/api/handlers"
 	autonomyruntime "github.com/irfndi/neuratrade/internal/app/autonomy/runtime"
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
@@ -25,6 +26,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/irfndi/neuratrade/internal/services/risk"
 	"github.com/irfndi/neuratrade/internal/skill"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 	redisv9 "github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
@@ -365,6 +367,8 @@ func riskLockSourcePriority(source string) int {
 
 // SetupRoutes configures HTTP routes, middleware, and application handlers, and initializes runtime services used by the API.
 // It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
+//
+//nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
@@ -650,7 +654,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Create autonomous monitoring for tracking quest execution
-	autonomousMonitoring := services.NewAutonomousMonitorManager(notificationService)
+	autonomousMonitoring := services.NewAutonomousMonitorManager(notificationService, telemetry.Logger())
 
 	var sqlDB *sql.DB
 	switch concreteDB := db.(type) {
@@ -1068,7 +1072,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
-	agentControlHandler := handlers.NewAgentControlHandler(integratedHandlers.AutonomyCoordinator())
+	sharedKillSwitch := apprisk.NewKillSwitch()
+	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+
+	agentControlHandler := handlers.NewAgentControlHandler(handlers.AgentControlDeps{
+		Autonomy:  integratedHandlers.AutonomyCoordinator(),
+		Collector: handlers.NewCollectorController(collectorService),
+		Risk:      handlers.NewRiskControllerAdapter(sharedKillSwitch, sharedSafeMode),
+		Orders:    handlers.NewOrderController(ccxtService),
+	})
 	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())
 
 	// API v1 routes with telemetry

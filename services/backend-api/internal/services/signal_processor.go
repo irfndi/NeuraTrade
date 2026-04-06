@@ -35,8 +35,10 @@ type SignalProcessorConfig struct {
 	CircuitBreakerConfig CircuitBreakerConfig `json:"circuit_breaker"`
 }
 
-// SignalProcessor orchestrates the entire signal processing pipeline.
-// It retrieves market data, generates signals, aggregates them, assesses quality, and triggers notifications.
+// Deprecated: SignalProcessor is the legacy signal pipeline coordinator.
+// New code should use the scalping.StrategyActor → ScalpingSignalComposer flow
+// for futures scalping signals. This service remains for backward compatibility
+// with spot-based strategies and will be removed in a future release.
 type SignalProcessor struct {
 	config              *SignalProcessorConfig
 	db                  DBPool

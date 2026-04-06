@@ -462,14 +462,14 @@ func (s *NativeCCXTService) buildTickerURL(exchange, symbol string) string {
 }
 
 // buildOrderBookURL builds the orderbook URL for an exchange
-func (s *NativeCCXTService) buildOrderBookURL(exchange, symbol, apiSymbol string, limit int) string {
+func (s *NativeCCXTService) buildOrderBookURL(exchange, symbol, apiSymbol, okxSymbol string, limit int) string {
 	switch exchange {
 	case "binance":
 		return fmt.Sprintf("https://api.binance.com/api/v3/depth?symbol=%s&limit=%d", apiSymbol, limit)
 	case "bybit":
 		return fmt.Sprintf("https://api.bybit.com/v5/market/orderbook?category=linear&symbol=%s&limit=%d", apiSymbol, limit)
 	case "okx":
-		return fmt.Sprintf("https://www.okx.com/api/v5/market/books?instId=%s&sz=%d", apiSymbol, limit)
+		return fmt.Sprintf("https://www.okx.com/api/v5/market/books?instId=%s&sz=%d", okxSymbol, limit)
 	case "bitget":
 		return fmt.Sprintf("https://api.bitget.com/api/v2/spot/market/orderbook?symbol=%s&limit=%d", apiSymbol, limit)
 	default:
@@ -1040,13 +1040,9 @@ func (s *NativeCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol
 		return nil, fmt.Errorf("exchange %s not initialized", exchange)
 	}
 
-	// Build orderbook URL
-	// Convert symbol format for Bitget (BTC/USDT -> BTCUSDT)
-	apiSymbol := symbol
-	if exchange == "bitget" {
-		apiSymbol = strings.ReplaceAll(symbol, "/", "")
-	}
-	url := s.buildOrderBookURL(exchange, symbol, apiSymbol, limit)
+	apiSymbol := strings.ReplaceAll(symbol, "/", "")
+	okxSymbol := strings.ReplaceAll(symbol, "/", "-")
+	url := s.buildOrderBookURL(exchange, symbol, apiSymbol, okxSymbol, limit)
 	if url == "" {
 		return nil, fmt.Errorf("orderbook endpoint not supported for %s", exchange)
 	}
@@ -1084,7 +1080,15 @@ func (s *NativeCCXTService) FetchOrderBook(ctx context.Context, exchange, symbol
 }
 
 func (s *NativeCCXTService) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*OrderBookMetrics, error) {
-	return &OrderBookMetrics{}, nil
+	ob, err := s.FetchOrderBook(ctx, exchange, symbol, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fetch order book for metrics: %w", err)
+	}
+	if ob == nil || len(ob.OrderBook.Bids) == 0 || len(ob.OrderBook.Asks) == 0 {
+		return nil, fmt.Errorf("empty order book for %s:%s", exchange, symbol)
+	}
+	client := &Client{}
+	return client.CalculateOrderBookMetrics(ob), nil
 }
 
 func (s *NativeCCXTService) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {

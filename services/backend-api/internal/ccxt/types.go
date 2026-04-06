@@ -193,7 +193,15 @@ func (s *Service) FetchOrderBook(ctx context.Context, exchange, symbol string, l
 }
 
 func (s *Service) CalculateOrderBookMetrics(ctx context.Context, exchange, symbol string, limit int) (*OrderBookMetrics, error) {
-	return &OrderBookMetrics{}, nil // TODO: Implement
+	ob, err := s.nativeClient.FetchOrderBook(ctx, exchange, symbol, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fetch order book for metrics: %w", err)
+	}
+	if ob == nil || len(ob.OrderBook.Bids) == 0 || len(ob.OrderBook.Asks) == 0 {
+		return nil, fmt.Errorf("empty order book for %s:%s", exchange, symbol)
+	}
+	client := &Client{}
+	return client.CalculateOrderBookMetrics(ob), nil
 }
 
 // FetchOHLCV fetches OHLCV data for technical analysis.
@@ -211,7 +219,7 @@ func (s *Service) CalculateOrderBookMetrics(ctx context.Context, exchange, symbo
 //	*OHLCVResponse: OHLCV data.
 //	error: Error if fetch fails.
 func (s *Service) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, limit int) (*OHLCVResponse, error) {
-	return &OHLCVResponse{}, nil // TODO: Implement
+	return s.nativeClient.FetchOHLCV(ctx, exchange, symbol, timeframe, limit)
 }
 
 // FetchTrades fetches recent trades for a specific exchange and symbol.
