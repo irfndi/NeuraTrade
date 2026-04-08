@@ -15,7 +15,7 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: "1.26.1"
+  GO_VERSION: "1.26.2"
 
 jobs:
   backend-security-deep:
