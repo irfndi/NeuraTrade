@@ -219,31 +219,36 @@ func (syncFailureBalanceFetcher) FetchBalance(context.Context, string) (*ccxt.Ba
 	return &ccxt.BalanceResponse{}, nil
 }
 
-func TestIntegratedQuestHandlersExecuteAIScalping_HoldsOnModeSyncFailure(t *testing.T) {
-	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "rollout-sync-fail.db"))
-	require.NoError(t, err)
-
-	store := NewAutonomousRolloutStore(sqliteDB.DB)
-	require.NoError(t, store.InitSchema(context.Background()))
-
+func TestIntegratedQuestHandlersExecuteAIScalping_ReturnsErrorWhenServiceNil(t *testing.T) {
 	handlers := &IntegratedQuestHandlers{
-		ccxtService:         syncFailureBalanceFetcher{},
-		opModeService:       &OperationalModeService{config: DefaultOperationalModeConfig(), states: map[string]*OperationalModeState{}},
-		autonomyCoordinator: NewScalpingAutonomyCoordinator(store, AIScalpingConfig{}),
+		ccxtService:   syncFailureBalanceFetcher{},
+		opModeService: &OperationalModeService{config: DefaultOperationalModeConfig(), states: map[string]*OperationalModeState{}},
 	}
-
-	require.NoError(t, sqliteDB.Close())
 
 	quest := &Quest{
 		Metadata:   map[string]string{"chat_id": "1082762347"},
 		Checkpoint: map[string]interface{}{},
 	}
 
-	err = handlers.executeAIScalping(context.Background(), quest, "1082762347")
+	err := handlers.executeAIScalping(context.Background(), quest, "1082762347", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not available")
+}
+
+func TestIntegratedQuestHandlersHandleScalpingExecution_FallsBackWhenNoAIService(t *testing.T) {
+	handlers := &IntegratedQuestHandlers{
+		ccxtService:   syncFailureBalanceFetcher{},
+		opModeService: &OperationalModeService{config: DefaultOperationalModeConfig(), states: map[string]*OperationalModeState{}},
+	}
+
+	quest := &Quest{
+		Metadata:   map[string]string{"chat_id": "1082762347"},
+		Checkpoint: map[string]interface{}{},
+	}
+
+	err := handlers.handleScalpingExecution(context.Background(), quest)
 	require.NoError(t, err)
-	assert.Equal(t, "hold", quest.Checkpoint["status"])
-	assert.Equal(t, "failed to synchronize scalping rollout mode", quest.Checkpoint["runtime_entry_gate_reason"])
-	assert.NotEmpty(t, quest.Checkpoint["autonomy_mode_sync_error"])
+	assert.Equal(t, "ai_unavailable_hold", quest.Checkpoint["status"])
 }
 
 func TestIntegratedQuestHandlersExecuteAIScalping_PaperModeUsesVirtualBalanceAndPaperMetadata(t *testing.T) {
@@ -305,7 +310,7 @@ func TestIntegratedQuestHandlersExecuteAIScalping_PaperModeUsesVirtualBalanceAnd
 		Checkpoint: map[string]interface{}{},
 	}
 
-	err := handlers.executeAIScalping(context.Background(), quest, "paper-chat")
+	err := handlers.executeAIScalping(context.Background(), quest, "paper-chat", aiSvc)
 	require.NoError(t, err)
 	assert.Equal(t, "true", quest.Metadata["paper_trading"])
 	assert.Equal(t, "true", quest.Metadata["dry_run"])

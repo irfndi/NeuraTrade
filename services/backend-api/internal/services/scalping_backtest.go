@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -10,21 +11,26 @@ import (
 
 	"github.com/google/uuid"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
+	internaldb "github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
 )
 
 const (
-	DefaultScalpingBacktestSlippage      = 0.001
-	DefaultScalpingBacktestHoldPeriod    = 5 * time.Minute
-	DefaultScalpingBacktestMaxCapitalPct = 5.0
+	DefaultScalpingBacktestSlippage         = 0.001
+	DefaultScalpingBacktestHoldPeriod       = 5 * time.Minute
+	DefaultScalpingBacktestMaxCapitalPct    = 5.0
+	DefaultScalpingBacktestSpreadMultiplier = 8
+
+	// backtestSpreadMultiplier scales the intra-candle high-low range to
+	// approximate a bid-ask spread. The factor 8 was derived empirically from
+	// typical crypto market microstructure where the observable range is
+	// roughly 8x the effective spread on liquid pairs.
+	// Used as the default when SpreadMultiplier is not set in config.
+	backtestSpreadMultiplier = DefaultScalpingBacktestSpreadMultiplier
 )
 
-var defaultScalpingBacktestUniverse = []string{
-	"BTC/USDT",
-	"ETH/USDT",
-	"SOL/USDT",
-	"BNB/USDT",
-	"XRP/USDT",
+func defaultScalpingBacktestUniverse() []string {
+	return []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"}
 }
 
 type ScalpingCyclePolicy = appautonomy.ScalpingCyclePolicy
@@ -45,6 +51,7 @@ type ScalpingBacktestConfig struct {
 	MinExpectancyEdge  float64
 	MaxCapitalPct      float64
 	DefaultHoldPeriod  time.Duration
+	SpreadMultiplier   float64
 }
 
 type ScalpingBacktestResult struct {
@@ -84,6 +91,7 @@ type ScalpingBacktestSummary struct {
 type ScalpingBacktestSignal struct {
 	Timestamp        time.Time
 	Symbol           string
+	Exchange         string
 	Signal           MarketSignal
 	Regime           string
 	RegimeVolatility string
@@ -94,6 +102,7 @@ type ScalpingBacktestSignal struct {
 
 type ScalpingBacktestTrade struct {
 	Symbol        string
+	Exchange      string
 	Side          string
 	Size          decimal.Decimal
 	Notional      decimal.Decimal
@@ -140,6 +149,7 @@ type ReasonCount struct {
 type HistoricalSignal struct {
 	Timestamp time.Time
 	Symbol    string
+	Exchange  string
 	Signal    MarketSignal
 }
 
@@ -247,6 +257,7 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 		recorded := ScalpingBacktestSignal{
 			Timestamp:        signal.Timestamp,
 			Symbol:           signal.Symbol,
+			Exchange:         signal.Exchange,
 			Signal:           signal.Signal,
 			Regime:           evaluation.Regime,
 			RegimeVolatility: e.classifyRegimeVolatility(signal.Signal),
@@ -297,12 +308,15 @@ func (e *ScalpingBacktestEngine) loadHistoricalSignals(ctx context.Context, star
 	}
 
 	if len(symbolFilter) == 0 {
-		for _, symbol := range defaultScalpingBacktestUniverse {
+		for _, symbol := range defaultScalpingBacktestUniverse() {
 			symbolFilter[normalizeSymbolForComparison(symbol)] = struct{}{}
 		}
 	}
 
 	signals, err := e.loadSignalsFromOHLCV(ctx, startTime, endTime, symbolFilter)
+	if err != nil {
+		log.Printf("[BACKTEST] OHLCV signal load failed (falling back to market_data): %v", err)
+	}
 	if err == nil && len(signals) > 0 {
 		return signals, nil
 	}
@@ -449,7 +463,6 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		Signal:      signal.Signal,
 		Decision:    decision,
 	}
-	e.positions[signal.Symbol] = position
 
 	edgeScore := decision.Confidence - 0.50
 	edgeScore += math.Abs(signal.Signal.OrderBookImbalance) * 0.50
@@ -494,6 +507,7 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 
 	trade := ScalpingBacktestTrade{
 		Symbol:        signal.Symbol,
+		Exchange:      signal.Exchange,
 		Side:          decision.Action,
 		Size:          quantity,
 		Notional:      notional,
@@ -510,7 +524,6 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		RegimeAtExit:  position.RegimeEntry,
 	}
 
-	delete(e.positions, signal.Symbol)
 	return &SimulatedTrade{Trade: trade}, nil
 }
 
@@ -541,7 +554,7 @@ func (e *ScalpingBacktestEngine) classifyRegimeVolatility(signal MarketSignal) s
 func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AITradingDecision) map[string]GateResult {
 	results := map[string]GateResult{}
 
-	spreadAllowed := signal.BidAskSpread > 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
+	spreadAllowed := signal.BidAskSpread >= 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
 	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.10
@@ -596,7 +609,7 @@ func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AI
 			if riskRewardAllowed {
 				riskRewardReason = ""
 			} else {
-				riskRewardReason = "risk_reward_below_1_10"
+				riskRewardReason = "insufficient_risk_reward_ratio"
 			}
 		}
 	}
@@ -740,7 +753,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 		config.InitialCapital = decimal.NewFromInt(10000)
 	}
 	if config.FeeRate.IsNegative() {
-		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct / 200)
+		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct).Div(decimal.NewFromInt(200))
 	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
 		config.SlippagePct = decimal.NewFromFloat(DefaultScalpingBacktestSlippage)
@@ -760,8 +773,11 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.DefaultHoldPeriod <= 0 {
 		config.DefaultHoldPeriod = DefaultScalpingBacktestHoldPeriod
 	}
+	if config.SpreadMultiplier <= 0 {
+		config.SpreadMultiplier = backtestSpreadMultiplier
+	}
 	if len(config.Symbols) == 0 {
-		config.Symbols = append([]string(nil), defaultScalpingBacktestUniverse...)
+		config.Symbols = defaultScalpingBacktestUniverse()
 	}
 	return config
 }
@@ -826,6 +842,26 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	}
 }
 
+func computeExpectancy(wins, losses int, winSum, lossSum decimal.Decimal) float64 {
+	sample := wins + losses
+	if sample == 0 {
+		return 0
+	}
+	avgWin := decimal.Zero
+	avgLoss := decimal.Zero
+	if wins > 0 {
+		avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
+	}
+	if losses > 0 {
+		avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
+	}
+	winRate := float64(wins) / float64(sample)
+	expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
+		Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
+	expectancy, _ := expectancyDec.Float64()
+	return expectancy
+}
+
 func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expectancy float64, sample int, scoped bool) {
 	var wins int
 	var losses int
@@ -850,19 +886,7 @@ func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expect
 
 	sample = wins + losses
 	if sample >= e.config.MinExpectancyN {
-		avgWin := decimal.Zero
-		avgLoss := decimal.Zero
-		if wins > 0 {
-			avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
-		}
-		if losses > 0 {
-			avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
-		}
-		winRate := float64(wins) / float64(sample)
-		expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
-			Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
-		expectancy, _ = expectancyDec.Float64()
-		return expectancy, sample, true
+		return computeExpectancy(wins, losses, winSum, lossSum), sample, true
 	}
 
 	wins = 0
@@ -885,19 +909,7 @@ func (e *ScalpingBacktestEngine) scopedExpectancy(symbol, action string) (expect
 	if sample == 0 {
 		return 0, 0, false
 	}
-	avgWin := decimal.Zero
-	avgLoss := decimal.Zero
-	if wins > 0 {
-		avgWin = winSum.Div(decimal.NewFromInt(int64(wins)))
-	}
-	if losses > 0 {
-		avgLoss = lossSum.Div(decimal.NewFromInt(int64(losses)))
-	}
-	winRate := float64(wins) / float64(sample)
-	expectancyDec := decimal.NewFromFloat(winRate).Mul(avgWin).
-		Sub(decimal.NewFromFloat(1 - winRate).Mul(avgLoss))
-	expectancy, _ = expectancyDec.Float64()
-	return expectancy, sample, false
+	return computeExpectancy(wins, losses, winSum, lossSum), sample, false
 }
 
 func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
@@ -906,17 +918,27 @@ func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
 	endTime time.Time,
 	symbolFilter map[string]struct{},
 ) ([]HistoricalSignal, error) {
+	tradingPairIDs, err := e.resolveTradingPairIDs(ctx, symbolFilter)
+	if err != nil {
+		return nil, fmt.Errorf("resolve trading pairs for ohlcv signals: %w", err)
+	}
+	if len(tradingPairIDs) == 0 {
+		return nil, nil
+	}
+
 	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), od.open_price, od.high_price, od.low_price, od.close_price, od.volume, od.timestamp
-		FROM ohlcv_data od
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name), od.open, od.high, od.low, od.close, od.volume, od.timestamp
+		FROM ohlcv_candles od
 		JOIN trading_pairs tp ON tp.id = od.trading_pair_id
 		JOIN exchanges e ON e.id = od.exchange_id
 		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
 		WHERE od.timestamp >= $1 AND od.timestamp <= $2
-		ORDER BY od.timestamp ASC
 	`
+	args := []any{startTime, endTime}
+	query, args = appendScalpingBacktestFilters(query, args, "od.trading_pair_id", tradingPairIDs, strings.TrimSpace(strings.ToLower(e.config.Exchange)))
+	query += " ORDER BY od.timestamp ASC"
 
-	rows, err := e.db.Query(ctx, query, startTime, endTime)
+	rows, err := e.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load ohlcv signals: %w", err)
 	}
@@ -928,13 +950,6 @@ func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
 		if scanErr := rows.Scan(&p.symbol, &p.exchange, &p.open, &p.high, &p.low, &p.close, &p.volume, &p.timestamp); scanErr != nil {
 			return nil, fmt.Errorf("scan ohlcv signal row: %w", scanErr)
 		}
-		if !exchangeMatches(e.config.Exchange, p.exchange) {
-			continue
-		}
-		norm := normalizeSymbolForComparison(p.symbol)
-		if _, ok := symbolFilter[norm]; !ok {
-			continue
-		}
 		if p.close <= 0 {
 			continue
 		}
@@ -944,7 +959,7 @@ func (e *ScalpingBacktestEngine) loadSignalsFromOHLCV(
 		return nil, fmt.Errorf("iterate ohlcv signals: %w", err)
 	}
 
-	return buildHistoricalSignalsFromOHLCV(points), nil
+	return buildHistoricalSignalsFromOHLCV(points, e.config.SpreadMultiplier), nil
 }
 
 func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
@@ -953,24 +968,37 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	endTime time.Time,
 	symbolFilter map[string]struct{},
 ) ([]HistoricalSignal, error) {
+	tradingPairIDs, err := e.resolveTradingPairIDs(ctx, symbolFilter)
+	if err != nil {
+		return nil, fmt.Errorf("resolve trading pairs for market data signals: %w", err)
+	}
+	if len(tradingPairIDs) == 0 {
+		return nil, nil
+	}
+
 	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.name), md.price, md.bid, md.ask, md.high_24h, md.low_24h, md.volume_24h, md.timestamp
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name), md.price,
+			COALESCE(md.bid, 0), COALESCE(md.ask, 0),
+			COALESCE(md.high_24h, 0), COALESCE(md.low_24h, 0), COALESCE(md.volume_24h, 0),
+			md.timestamp
 		FROM market_data md
 		JOIN trading_pairs tp ON tp.id = md.trading_pair_id
 		JOIN exchanges e ON e.id = md.exchange_id
 		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
 		WHERE md.timestamp >= $1 AND md.timestamp <= $2
-		ORDER BY md.timestamp ASC
 	`
+	args := []any{startTime, endTime}
+	query, args = appendScalpingBacktestFilters(query, args, "md.trading_pair_id", tradingPairIDs, strings.TrimSpace(strings.ToLower(e.config.Exchange)))
+	query += " ORDER BY md.timestamp ASC"
 
-	rows, err := e.db.Query(ctx, query, startTime, endTime)
+	rows, err := e.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load market_data fallback signals: %w", err)
 	}
 	defer rows.Close()
 
 	signals := make([]HistoricalSignal, 0)
-	lastPriceBySymbol := map[string]float64{}
+	lastPriceBySeries := map[string]float64{}
 	for rows.Next() {
 		var symbol string
 		var exchange string
@@ -985,13 +1013,6 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 		if scanErr := rows.Scan(&symbol, &exchange, &price, &bid, &ask, &high24, &low24, &volume24, &ts); scanErr != nil {
 			return nil, fmt.Errorf("scan market_data signal row: %w", scanErr)
 		}
-		if !exchangeMatches(e.config.Exchange, exchange) {
-			continue
-		}
-		norm := normalizeSymbolForComparison(symbol)
-		if _, ok := symbolFilter[norm]; !ok {
-			continue
-		}
 		if price <= 0 {
 			continue
 		}
@@ -1001,14 +1022,15 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 			spread = ((ask - bid) / price) * 100
 		}
 		if spread <= 0 && high24 > low24 {
-			spread = ((high24 - low24) / price) * 10
+			spread = estimateEffectiveSpreadPct(high24, low24, price, e.config.SpreadMultiplier)
 		}
 
 		imbalance := 0.0
-		if last, ok := lastPriceBySymbol[norm]; ok && price > 0 {
+		seriesKey := scalpingSeriesKey(symbol, exchange)
+		if last, ok := lastPriceBySeries[seriesKey]; ok && price > 0 {
 			imbalance = clampFloat((price-last)/price, -1, 1)
 		}
-		lastPriceBySymbol[norm] = price
+		lastPriceBySeries[seriesKey] = price
 
 		rangePos := 50.0
 		if high24 > low24 {
@@ -1023,6 +1045,7 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 		signals = append(signals, HistoricalSignal{
 			Timestamp: ts,
 			Symbol:    symbol,
+			Exchange:  exchange,
 			Signal: MarketSignal{
 				Symbol:             symbol,
 				Price:              price,
@@ -1043,87 +1066,256 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	return signals, nil
 }
 
-func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint) []HistoricalSignal {
+func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultiplier float64) []HistoricalSignal {
 	if len(points) == 0 {
 		return nil
 	}
 
 	bySymbol := make(map[string][]scalpingOHLCVPoint)
 	for _, point := range points {
-		norm := normalizeSymbolForComparison(point.symbol)
+		norm := scalpingSeriesKey(point.symbol, point.exchange)
 		bySymbol[norm] = append(bySymbol[norm], point)
 	}
 
 	signals := make([]HistoricalSignal, 0, len(points))
+	multiplier := spreadMultiplier
+	if multiplier <= 0 {
+		multiplier = backtestSpreadMultiplier
+	}
 	for _, series := range bySymbol {
 		sort.Slice(series, func(i, j int) bool {
 			return series[i].timestamp.Before(series[j].timestamp)
 		})
+		windowMetrics := compute24hWindowMetrics(series)
 
 		for i, point := range series {
-			windowStart := point.timestamp.Add(-24 * time.Hour)
-			high24 := point.high
-			low24 := point.low
-			volume24 := 0.0
-			for j := i; j >= 0; j-- {
-				if series[j].timestamp.Before(windowStart) {
-					break
-				}
-				if series[j].high > high24 {
-					high24 = series[j].high
-				}
-				if series[j].low < low24 {
-					low24 = series[j].low
-				}
-				volume24 += math.Max(series[j].volume, 0)
-			}
-
-			spreadPct := 0.0
-			if point.close > 0 && point.high > point.low {
-				spreadPct = ((point.high - point.low) / point.close) * 8
-			}
-
-			imbalance := 0.0
-			if point.high > point.low {
-				imbalance = clampFloat((point.close-point.open)/(point.high-point.low), -1, 1)
-			}
-
-			rangePos := 50.0
-			if high24 > low24 {
-				rangePos = clampFloat(((point.close-low24)/(high24-low24))*100, 0, 100)
-			}
-
 			priceChange24h := 0.0
-			if i > 0 && series[i-1].close > 0 {
-				priceChange24h = ((point.close - series[i-1].close) / series[i-1].close) * 100
+			if windowMetrics[i].HasReferenceClose && windowMetrics[i].ReferenceClose24h > 0 {
+				priceChange24h = ((point.close - windowMetrics[i].ReferenceClose24h) / windowMetrics[i].ReferenceClose24h) * 100
 			}
 
-			signals = append(signals, HistoricalSignal{
-				Timestamp: point.timestamp,
-				Symbol:    point.symbol,
-				Signal: MarketSignal{
-					Symbol:             point.symbol,
-					Price:              point.close,
-					High24h:            high24,
-					Low24h:             low24,
-					Volume24h:          volume24,
-					BidAskSpread:       math.Max(spreadPct, 0),
-					OrderBookImbalance: imbalance,
-					PriceChange24h:     priceChange24h,
-					RangePosition24h:   rangePos,
-				},
-			})
+			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier))
 		}
 	}
 
 	sort.Slice(signals, func(i, j int) bool {
 		if signals[i].Timestamp.Equal(signals[j].Timestamp) {
+			if signals[i].Symbol == signals[j].Symbol {
+				return signals[i].Exchange < signals[j].Exchange
+			}
 			return signals[i].Symbol < signals[j].Symbol
 		}
 		return signals[i].Timestamp.Before(signals[j].Timestamp)
 	})
 
 	return signals
+}
+
+type scalping24hWindowMetrics struct {
+	High24h           float64
+	Low24h            float64
+	Volume24h         float64
+	ReferenceClose24h float64
+	HasReferenceClose bool
+}
+
+func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMetrics {
+	if len(series) == 0 {
+		return nil
+	}
+
+	metrics := make([]scalping24hWindowMetrics, len(series))
+	start := 0
+	runningVolume := 0.0
+	highDeque := make([]int, 0, len(series))
+	lowDeque := make([]int, 0, len(series))
+	for i, point := range series {
+		windowStart := point.timestamp.Add(-24 * time.Hour)
+		runningVolume += math.Max(point.volume, 0)
+
+		for len(highDeque) > 0 && series[highDeque[len(highDeque)-1]].high <= point.high {
+			highDeque = highDeque[:len(highDeque)-1]
+		}
+		highDeque = append(highDeque, i)
+
+		for len(lowDeque) > 0 && series[lowDeque[len(lowDeque)-1]].low >= point.low {
+			lowDeque = lowDeque[:len(lowDeque)-1]
+		}
+		lowDeque = append(lowDeque, i)
+
+		for start <= i && series[start].timestamp.Before(windowStart) {
+			runningVolume -= math.Max(series[start].volume, 0)
+			// Any entry equal to start can only survive at the deque front; less-extreme
+			// candidates were already evicted during insertion when a newer point dominated them.
+			if len(highDeque) > 0 && highDeque[0] == start {
+				highDeque = highDeque[1:]
+			}
+			if len(lowDeque) > 0 && lowDeque[0] == start {
+				lowDeque = lowDeque[1:]
+			}
+			start++
+		}
+
+		metrics[i] = scalping24hWindowMetrics{
+			High24h:   series[highDeque[0]].high,
+			Low24h:    series[lowDeque[0]].low,
+			Volume24h: runningVolume,
+		}
+		if start <= i {
+			referenceIdx := start
+			if series[start].timestamp.After(windowStart) && start > 0 {
+				referenceIdx = start - 1
+			}
+			if referenceIdx >= 0 && series[referenceIdx].close > 0 {
+				metrics[i].ReferenceClose24h = series[referenceIdx].close
+				metrics[i].HasReferenceClose = true
+			}
+		}
+	}
+
+	return metrics
+}
+
+func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64) HistoricalSignal {
+	imbalance := 0.0
+	if point.high > point.low {
+		imbalance = clampFloat((point.close-point.open)/(point.high-point.low), -1, 1)
+	}
+
+	rangePos := 50.0
+	if metrics.High24h > metrics.Low24h {
+		rangePos = clampFloat(((point.close-metrics.Low24h)/(metrics.High24h-metrics.Low24h))*100, 0, 100)
+	}
+
+	return HistoricalSignal{
+		Timestamp: point.timestamp,
+		Symbol:    point.symbol,
+		Exchange:  point.exchange,
+		Signal: MarketSignal{
+			Symbol:             point.symbol,
+			Price:              point.close,
+			High24h:            metrics.High24h,
+			Low24h:             metrics.Low24h,
+			Volume24h:          metrics.Volume24h,
+			BidAskSpread:       estimateEffectiveSpreadPct(point.high, point.low, point.close, spreadMultiplier),
+			OrderBookImbalance: imbalance,
+			PriceChange24h:     priceChange24h,
+			RangePosition24h:   rangePos,
+		},
+	}
+}
+
+func estimateEffectiveSpreadPct(high, low, price, spreadMultiplier float64) float64 {
+	if price <= 0 || high <= low {
+		return 0
+	}
+	multiplier := spreadMultiplier
+	if multiplier <= 0 {
+		multiplier = backtestSpreadMultiplier
+	}
+	return math.Max(((high-low)/price)*100/multiplier, 0)
+}
+
+func appendScalpingBacktestFilters(baseQuery string, args []any, tradingPairColumn string, tradingPairIDs []int, exchangeFilter string) (string, []any) {
+	query := baseQuery
+	if len(tradingPairIDs) > 0 {
+		placeholders := make([]string, len(tradingPairIDs))
+		for i, id := range tradingPairIDs {
+			placeholders[i] = fmt.Sprintf("$%d", len(args)+1)
+			args = append(args, id)
+		}
+		query += fmt.Sprintf(" AND %s IN (%s)", tradingPairColumn, strings.Join(placeholders, ", "))
+	}
+	if exchangeFilter != "" {
+		query += fmt.Sprintf(" AND LOWER(COALESCE(ce.ccxt_id, e.ccxt_id, e.name)) = $%d", len(args)+1)
+		args = append(args, exchangeFilter)
+	}
+	return query, args
+}
+
+func (e *ScalpingBacktestEngine) resolveTradingPairIDs(ctx context.Context, symbolFilter map[string]struct{}) ([]int, error) {
+	if len(symbolFilter) == 0 {
+		return nil, nil
+	}
+
+	normalizedSymbols := make([]string, 0, len(symbolFilter))
+	for symbol := range symbolFilter {
+		normalized := normalizeSymbolForComparison(symbol)
+		if normalized == "" {
+			continue
+		}
+		normalizedSymbols = append(normalizedSymbols, normalized)
+	}
+	if len(normalizedSymbols) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, 0, len(normalizedSymbols))
+	args := make([]any, 0, len(normalizedSymbols))
+	for i, symbol := range normalizedSymbols {
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
+		args = append(args, symbol)
+	}
+	query := fmt.Sprintf(`SELECT id
+		FROM trading_pairs
+		WHERE %s IN (%s)`, normalizedTradingPairSymbolExpr(e.db), strings.Join(placeholders, ", "))
+	rows, err := e.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query trading pairs: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]int, 0, len(normalizedSymbols))
+	for rows.Next() {
+		var id int
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, fmt.Errorf("scan trading pair row: %w", scanErr)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate trading pair rows: %w", err)
+	}
+
+	return ids, nil
+}
+
+func normalizedTradingPairSymbolExpr(db DBPool) string {
+	if isSQLiteTradingPairDB(db) {
+		return `UPPER(REPLACE(
+			CASE
+				WHEN INSTR(symbol, ':') > 0 THEN SUBSTR(symbol, 1, INSTR(symbol, ':') - 1)
+				ELSE symbol
+			END,
+			'-',
+			'/'
+		))`
+	}
+	return `UPPER(REPLACE(
+		CASE
+			WHEN POSITION(':' IN symbol) > 0 THEN SUBSTRING(symbol FROM 1 FOR POSITION(':' IN symbol) - 1)
+			ELSE symbol
+		END,
+		'-',
+		'/'
+	))`
+}
+
+func isSQLiteTradingPairDB(db DBPool) bool {
+	switch db.(type) {
+	case *internaldb.SQLiteDB:
+		return true
+	default:
+		return false
+	}
+}
+
+func scalpingSeriesKey(symbol, exchange string) string {
+	normSymbol := normalizeSymbolForComparison(symbol)
+	normExchange := strings.TrimSpace(strings.ToLower(exchange))
+	if normExchange == "" {
+		return normSymbol
+	}
+	return normSymbol + "@" + normExchange
 }
 
 func (e *ScalpingBacktestEngine) updateGateStats(gateName string, result GateResult, symbol, regime string) {
@@ -1206,15 +1398,6 @@ func calculateBacktestSharpe(returns []float64) float64 {
 		return 0
 	}
 	return mean / std
-}
-
-func exchangeMatches(want string, got string) bool {
-	want = strings.TrimSpace(strings.ToLower(want))
-	got = strings.TrimSpace(strings.ToLower(got))
-	if want == "" || got == "" {
-		return true
-	}
-	return want == got
 }
 
 func toGateBoolMap(input map[string]GateResult) map[string]bool {

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -16,13 +17,22 @@ import (
 // SignalQualityScorer provides signal quality assessment capabilities, evaluating signals based on
 // exchange reliability, market conditions, and technical indicators.
 type SignalQualityScorer struct {
-	config *config.Config
-	db     DBPool
-	logger *zaplogrus.Logger
-
-	// Cached exchange reliability scores
+	config                   *config.Config
+	db                       DBPool
+	logger                   *zaplogrus.Logger
 	exchangeReliabilityCache map[string]*ExchangeReliability
 	cacheExpiry              time.Time
+	exchangeStatsProvider    ExchangeStatsProvider
+}
+
+// ExchangeStatsProvider decouples SignalQualityScorer from direct database access for exchange statistics.
+type ExchangeStatsProvider interface {
+	GetExchangeMetrics(ctx context.Context, exchange string) (*ExchangeMetrics, error)
+}
+
+// SetExchangeStatsProvider sets the exchange statistics provider.
+func (sqs *SignalQualityScorer) SetExchangeStatsProvider(provider ExchangeStatsProvider) {
+	sqs.exchangeStatsProvider = provider
 }
 
 // ExchangeReliability represents reliability metrics for an exchange, used in scoring signals.
@@ -227,6 +237,9 @@ func (sqs *SignalQualityScorer) AssessSignalQuality(ctx context.Context, input *
 // Returns:
 //   - True if acceptable, false otherwise.
 func (sqs *SignalQualityScorer) IsSignalQualityAcceptable(metrics *SignalQualityMetrics, thresholds *QualityThresholds) bool {
+	if thresholds.MinDataFreshness > 0 && metrics.DataFreshnessScore.LessThan(sqs.minimumFreshnessScore(thresholds.MinDataFreshness)) {
+		return false
+	}
 	return metrics.OverallScore.GreaterThanOrEqual(thresholds.MinOverallScore) &&
 		metrics.ExchangeScore.GreaterThanOrEqual(thresholds.MinExchangeScore) &&
 		metrics.VolumeScore.GreaterThanOrEqual(thresholds.MinVolumeScore) &&
@@ -406,6 +419,25 @@ func (sqs *SignalQualityScorer) calculateDataFreshnessScore(input *SignalQuality
 	}
 }
 
+func (sqs *SignalQualityScorer) minimumFreshnessScore(maxAge time.Duration) decimal.Decimal {
+	if maxAge <= 0 {
+		return decimal.Zero
+	}
+
+	switch {
+	case maxAge <= time.Minute:
+		return decimal.NewFromFloat(1.0)
+	case maxAge <= 5*time.Minute:
+		return decimal.NewFromFloat(0.9)
+	case maxAge <= 15*time.Minute:
+		return decimal.NewFromFloat(0.7)
+	case maxAge <= 30*time.Minute:
+		return decimal.NewFromFloat(0.5)
+	default:
+		return decimal.NewFromFloat(0.2)
+	}
+}
+
 // calculateMarketConditionScore assesses the overall stability and favorability of market conditions.
 func (sqs *SignalQualityScorer) calculateMarketConditionScore(input *SignalQualityInput) decimal.Decimal {
 	if input.MarketData == nil {
@@ -486,10 +518,11 @@ func (sqs *SignalQualityScorer) calculateOverallScore(scores map[string]decimal.
 		"liquidity":        decimal.NewFromFloat(0.15),
 		"volatility":       decimal.NewFromFloat(0.10),
 		"timing":           decimal.NewFromFloat(0.15),
-		"confidence":       decimal.NewFromFloat(0.10),
+		"confidence":       decimal.NewFromFloat(0.08),
 		"risk":             decimal.NewFromFloat(0.10),
-		"data_freshness":   decimal.NewFromFloat(0.03),
-		"market_condition": decimal.NewFromFloat(0.02),
+		"data_freshness":   decimal.NewFromFloat(0.02),
+		"market_condition": decimal.NewFromFloat(0.00),
+		"multi_signal":     decimal.NewFromFloat(0.05),
 	}
 
 	weightedSum := decimal.Zero
@@ -626,58 +659,154 @@ func (sqs *SignalQualityScorer) refreshExchangeReliabilityCache(ctx context.Cont
 	return nil
 }
 
-// fetchExchangeStatistics retrieves raw exchange statistics from the database (or mock data).
 func (sqs *SignalQualityScorer) fetchExchangeStatistics(ctx context.Context) (map[string]*ExchangeMetrics, error) {
-	// Query database for exchange statistics
 	stats := make(map[string]*ExchangeMetrics)
+	defaults := sqs.defaultExchangeMetrics()
+	knownExchanges := []string{"binance", "bybit", "okx", "bitget", "kucoin", "gateio", "coinbase", "kraken"}
 
-	// In a real implementation, this would query the database
-	// For now, we'll use default values for common exchanges
-	defaultStats := map[string]*ExchangeMetrics{
+	if sqs.exchangeStatsProvider != nil {
+		for _, exchange := range knownExchanges {
+			metrics, err := sqs.exchangeStatsProvider.GetExchangeMetrics(ctx, exchange)
+			if err != nil {
+				sqs.logger.WithError(err).Warnf("failed to fetch exchange stats for %s, using defaults", exchange)
+				continue
+			}
+			if metrics != nil {
+				stats[exchange] = metrics
+			}
+		}
+	}
+
+	if !isNilDBPool(sqs.db) {
+		cutoff := time.Now().Add(-24 * time.Hour)
+
+		query := `
+			WITH latest_market_data AS (
+				SELECT md.id, md.exchange_id, md.trading_pair_id, md.volume_24h, md.timestamp
+				FROM market_data md
+				JOIN (
+					SELECT exchange_id, trading_pair_id, MAX(timestamp) AS max_timestamp
+					FROM market_data
+					WHERE timestamp > $1
+					GROUP BY exchange_id, trading_pair_id
+				) latest
+				  ON latest.exchange_id = md.exchange_id
+				 AND latest.trading_pair_id = md.trading_pair_id
+				 AND latest.max_timestamp = md.timestamp
+			)
+			SELECT e.name,
+			       COALESCE(SUM(md.volume_24h), 0),
+			       COUNT(md.id),
+			       MAX(md.timestamp),
+			       COUNT(DISTINCT md.trading_pair_id)
+			FROM exchanges e
+			LEFT JOIN latest_market_data md ON md.exchange_id = e.id
+			GROUP BY e.id, e.name
+		`
+		rows, err := sqs.db.Query(ctx, query, cutoff)
+		if err != nil {
+			return nil, fmt.Errorf("query exchange statistics: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var name string
+			var totalVolume decimal.Decimal
+			var dataPointCount int64
+			var lastUpdateNS sql.NullTime
+			var pairCount int
+
+			if err := rows.Scan(&name, &totalVolume, &dataPointCount, &lastUpdateNS, &pairCount); err != nil {
+				sqs.logger.WithError(err).Warn("Failed to scan exchange statistics row, skipping")
+				continue
+			}
+
+			baseMetrics := defaults[name]
+			if existing, ok := stats[name]; ok && existing != nil {
+				baseMetrics = existing
+			}
+			if baseMetrics == nil {
+				baseMetrics = &ExchangeMetrics{
+					AvgSpread:        decimal.Zero,
+					AvgLatency:       0,
+					UptimePercentage: decimal.NewFromFloat(0.95),
+					DataGaps:         0,
+					APIResponseTime:  100 * time.Millisecond,
+					ErrorRate:        decimal.NewFromFloat(0.01),
+				}
+			}
+
+			lastUpdate := baseMetrics.LastDataUpdate
+			if lastUpdateNS.Valid {
+				lastUpdate = lastUpdateNS.Time
+			}
+
+			stats[name] = &ExchangeMetrics{
+				TotalTrades:      dataPointCount,
+				AvgDailyVolume:   totalVolume,
+				AvgSpread:        baseMetrics.AvgSpread,
+				AvgLatency:       baseMetrics.AvgLatency,
+				UptimePercentage: baseMetrics.UptimePercentage,
+				DataGaps:         baseMetrics.DataGaps,
+				LastDataUpdate:   lastUpdate,
+				SupportedPairs:   pairCount,
+				APIResponseTime:  baseMetrics.APIResponseTime,
+				ErrorRate:        baseMetrics.ErrorRate,
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate exchange statistics rows: %w", err)
+		}
+	}
+
+	for exchange, defaultMetrics := range defaults {
+		if _, exists := stats[exchange]; !exists {
+			stats[exchange] = defaultMetrics
+		}
+	}
+
+	return stats, nil
+}
+
+func (sqs *SignalQualityScorer) defaultExchangeMetrics() map[string]*ExchangeMetrics {
+	return map[string]*ExchangeMetrics{
 		"binance": {
 			TotalTrades:      1000000,
-			AvgDailyVolume:   decimal.NewFromFloat(1000000000), // $1B
-			AvgSpread:        decimal.NewFromFloat(0.001),      // 0.1%
+			AvgDailyVolume:   decimal.NewFromFloat(1000000000),
+			AvgSpread:        decimal.NewFromFloat(0.001),
 			AvgLatency:       50 * time.Millisecond,
-			UptimePercentage: decimal.NewFromFloat(0.999), // 99.9%
+			UptimePercentage: decimal.NewFromFloat(0.999),
 			DataGaps:         5,
 			LastDataUpdate:   time.Now().Add(-1 * time.Minute),
 			SupportedPairs:   500,
 			APIResponseTime:  100 * time.Millisecond,
-			ErrorRate:        decimal.NewFromFloat(0.001), // 0.1%
+			ErrorRate:        decimal.NewFromFloat(0.001),
 		},
 		"coinbase": {
 			TotalTrades:      500000,
-			AvgDailyVolume:   decimal.NewFromFloat(500000000), // $500M
-			AvgSpread:        decimal.NewFromFloat(0.002),     // 0.2%
+			AvgDailyVolume:   decimal.NewFromFloat(500000000),
+			AvgSpread:        decimal.NewFromFloat(0.002),
 			AvgLatency:       100 * time.Millisecond,
-			UptimePercentage: decimal.NewFromFloat(0.995), // 99.5%
+			UptimePercentage: decimal.NewFromFloat(0.995),
 			DataGaps:         10,
 			LastDataUpdate:   time.Now().Add(-2 * time.Minute),
 			SupportedPairs:   200,
 			APIResponseTime:  150 * time.Millisecond,
-			ErrorRate:        decimal.NewFromFloat(0.002), // 0.2%
+			ErrorRate:        decimal.NewFromFloat(0.002),
 		},
 		"kraken": {
 			TotalTrades:      300000,
-			AvgDailyVolume:   decimal.NewFromFloat(200000000), // $200M
-			AvgSpread:        decimal.NewFromFloat(0.003),     // 0.3%
+			AvgDailyVolume:   decimal.NewFromFloat(200000000),
+			AvgSpread:        decimal.NewFromFloat(0.003),
 			AvgLatency:       200 * time.Millisecond,
-			UptimePercentage: decimal.NewFromFloat(0.990), // 99.0%
+			UptimePercentage: decimal.NewFromFloat(0.990),
 			DataGaps:         15,
 			LastDataUpdate:   time.Now().Add(-3 * time.Minute),
 			SupportedPairs:   150,
 			APIResponseTime:  200 * time.Millisecond,
-			ErrorRate:        decimal.NewFromFloat(0.005), // 0.5%
+			ErrorRate:        decimal.NewFromFloat(0.005),
 		},
 	}
-
-	// Copy default stats to the return map
-	for exchange, metrics := range defaultStats {
-		stats[exchange] = metrics
-	}
-
-	return stats, nil
 }
 
 // calculateExchangeReliability calculates a normalized reliability score from raw exchange metrics.

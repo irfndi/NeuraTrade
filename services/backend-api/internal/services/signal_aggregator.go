@@ -8,13 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cinar/indicator/v2/asset"
-	"github.com/cinar/indicator/v2/helper"
-	"github.com/cinar/indicator/v2/momentum"
-	"github.com/cinar/indicator/v2/trend"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/pkg/indicators"
 	"github.com/shopspring/decimal"
 
 	"github.com/irfndi/neuratrade/internal/config"
@@ -26,8 +23,9 @@ import (
 type SignalType string
 
 const (
-	SignalTypeArbitrage SignalType = "arbitrage"
-	SignalTypeTechnical SignalType = "technical"
+	SignalTypeArbitrage      SignalType = "arbitrage"
+	SignalTypeTechnical      SignalType = "technical"
+	SignalTypeMicrostructure SignalType = "microstructure"
 )
 
 // SignalStrength represents the strength of a trading signal
@@ -77,6 +75,9 @@ type TechnicalSignalInput struct {
 	Symbol     string
 	Exchange   string
 	Prices     []decimal.Decimal
+	Opens      []decimal.Decimal
+	Highs      []decimal.Decimal
+	Lows       []decimal.Decimal
 	Volumes    []decimal.Decimal
 	Timestamps []time.Time
 }
@@ -85,7 +86,13 @@ type TechnicalSignalInput struct {
 type ArbitrageSignalInput struct {
 	Opportunities []models.ArbitrageOpportunity
 	MinVolume     decimal.Decimal `json:"min_volume"`
-	BaseAmount    decimal.Decimal `json:"base_amount"` // For profit calculation (e.g., $20,000)
+	BaseAmount    decimal.Decimal `json:"base_amount"`
+}
+
+type MicrostructureSignalInput struct {
+	Symbol           string
+	Exchange         string
+	ImbalanceSignals []*OrderBookImbalanceSignal
 }
 
 // SignalQualityScorerInterface defines the contract for assessing the quality of trading signals.
@@ -105,40 +112,53 @@ type SignalAggregatorConfig struct {
 	MaxSignalsPerSymbol int             `json:"max_signals_per_symbol"`
 }
 
-// SignalAggregator handles the aggregation, processing, and deduplication of trading signals.
+// Deprecated: SignalAggregator is the legacy signal aggregation service.
+// New code should use scalping.ScalpingSignalComposer for microstructure-aware
+// signal composition with per-factor attribution. This service remains for
+// backward compatibility and will be removed in a future release.
 type SignalAggregator struct {
-	config        *config.Config
-	db            DBPool
-	logger        *zaplogrus.Logger
-	sigConfig     SignalAggregatorConfig
-	qualityScorer SignalQualityScorerInterface
-	cache         map[string]*AggregatedSignal
+	config            *config.Config
+	db                DBPool
+	logger            *zaplogrus.Logger
+	sigConfig         SignalAggregatorConfig
+	qualityScorer     SignalQualityScorerInterface
+	cache             map[string]*AggregatedSignal
+	indicatorStack    *indicators.MultiIndicatorStack
+	indicatorProvider indicators.IndicatorProvider
 }
 
-// NewSignalAggregator creates a new instance of SignalAggregator.
-//
-// Parameters:
-//   - cfg: The application configuration.
-//   - db: The database connection pool.
-//   - logger: The logger instance.
-//
-// Returns:
-//   - A pointer to the initialized SignalAggregator.
 func NewSignalAggregator(cfg *config.Config, db DBPool, logger *zaplogrus.Logger) *SignalAggregator {
+	var provider indicators.IndicatorProvider
+	if cfg != nil {
+		providerType := indicators.ProviderType(cfg.Indicators.Provider)
+		if providerType != "" {
+			if p, err := indicators.NewProvider(&indicators.ProviderConfig{Type: providerType}); err == nil {
+				provider = p
+			} else if logger != nil {
+				logger.WithError(err).WithField("provider_type", providerType).Warn("Failed to initialize configured indicator provider; falling back to default provider")
+			}
+		}
+	}
+	if provider == nil {
+		provider = indicators.NewDefaultProvider()
+	}
+
 	return &SignalAggregator{
 		config: cfg,
 		db:     db,
 		logger: logger,
 		sigConfig: SignalAggregatorConfig{
 			MinConfidence:       decimal.NewFromFloat(0.6),
-			MinProfitThreshold:  decimal.NewFromFloat(0.5), // 0.5%
-			MaxRiskLevel:        decimal.NewFromFloat(0.3), // 30%
+			MinProfitThreshold:  decimal.NewFromFloat(0.5),
+			MaxRiskLevel:        decimal.NewFromFloat(0.3),
 			SignalTTL:           15 * time.Minute,
 			DeduplicationWindow: 5 * time.Minute,
 			MaxSignalsPerSymbol: 3,
 		},
-		qualityScorer: NewSignalQualityScorer(cfg, db, logger),
-		cache:         make(map[string]*AggregatedSignal),
+		qualityScorer:     NewSignalQualityScorer(cfg, db, logger),
+		cache:             make(map[string]*AggregatedSignal),
+		indicatorStack:    indicators.NewMultiIndicatorStack(provider, indicators.DefaultIndicatorConfig(), nil),
+		indicatorProvider: provider,
 	}
 }
 
@@ -237,13 +257,17 @@ func (sa *SignalAggregator) AggregateArbitrageSignals(ctx context.Context, input
 				SignalType:       string(signal.SignalType),
 				Symbol:           signal.Symbol,
 				Exchanges:        signal.Exchanges,
-				Volume:           minVolume, // Use minimum volume requirement
+				Volume:           minVolume,
 				ProfitPotential:  signal.ProfitPotential,
 				Confidence:       signal.Confidence,
 				Timestamp:        signal.CreatedAt,
 				Indicators:       map[string]interface{}{"arbitrage": true, "opportunity_count": len(validOpps)},
 				SignalCount:      len(validOpps),
 				SignalComponents: []string{"arbitrage"},
+				MarketData: &MarketDataSnapshot{
+					Price:         validOpps[0].BuyPrice,
+					LastTradeTime: validOpps[0].DetectedAt,
+				},
 			}
 
 			qualityMetrics, err := sa.qualityScorer.AssessSignalQuality(ctx, &qualityInput)
@@ -301,51 +325,59 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 
 	sa.logger.WithFields(map[string]interface{}{"symbol": input.Symbol}).Info("Aggregating technical signals")
 
-	if len(input.Prices) < 20 {
-		// Stub telemetry - log insufficient data error
+	if len(input.Prices) < 50 {
 		sa.logger.WithFields(zaplogrus.Fields{
-			"required_points": 20,
+			"required_points": 50,
 			"actual_points":   len(input.Prices),
 		}).Error("Insufficient price data for technical analysis")
-		err := fmt.Errorf("insufficient price data for technical analysis: need at least 20 points, got %d", len(input.Prices))
+		err := fmt.Errorf("insufficient price data for technical analysis: need at least 50 points, got %d", len(input.Prices))
 		observability.AddBreadcrumb(spanCtx, "signal_aggregator", "Insufficient data for analysis", sentry.LevelWarning)
 		return nil, err
 	}
 
-	// Convert decimal prices to float64 for cinar/indicator
-	prices := make([]float64, len(input.Prices))
-	volumes := make([]float64, len(input.Volumes))
-	for i, price := range input.Prices {
-		prices[i], _ = price.Float64()
-		if i < len(input.Volumes) {
-			volumes[i], _ = input.Volumes[i].Float64()
+	if len(input.Volumes) < 50 {
+		sa.logger.WithFields(zaplogrus.Fields{
+			"required_volume_points": 50,
+			"actual_volume_points":   len(input.Volumes),
+		}).Error("Insufficient volume data for technical analysis")
+		err := fmt.Errorf("insufficient volume data for technical analysis: need at least 50 points, got %d", len(input.Volumes))
+		observability.AddBreadcrumb(spanCtx, "signal_aggregator", "Insufficient volume data for analysis", sentry.LevelWarning)
+		return nil, err
+	}
+
+	signals := make([]*AggregatedSignal, 0)
+	useFallback := sa.indicatorStack == nil
+
+	if !useFallback && len(input.Opens) == len(input.Prices) && len(input.Highs) == len(input.Prices) && len(input.Lows) == len(input.Prices) && len(input.Volumes) == len(input.Prices) {
+		ohlcv := &indicators.OHLCVData{
+			Symbol:   input.Symbol,
+			Exchange: input.Exchange,
+			Open:     input.Opens,
+			High:     input.Highs,
+			Low:      input.Lows,
+			Close:    input.Prices,
+			Volume:   input.Volumes,
 		}
-	}
 
-	// Create asset snapshots for cinar/indicator
-	snapshots := make([]*asset.Snapshot, len(prices))
-	for i := range prices {
-		snapshots[i] = &asset.Snapshot{
-			Date:   input.Timestamps[i],
-			Open:   prices[i],
-			High:   prices[i],
-			Low:    prices[i],
-			Close:  prices[i],
-			Volume: volumes[i],
+		if len(input.Timestamps) == len(input.Prices) {
+			ohlcv.Timestamps = input.Timestamps
 		}
+
+		stackResult, err := sa.indicatorStack.Analyze(spanCtx, ohlcv)
+		if err != nil {
+			sa.logger.WithError(err).Warn("Indicator stack analysis failed; falling back to provider-based indicators")
+			useFallback = true
+		} else {
+			signals = sa.convertStackResultsToSignals(input.Symbol, input.Exchange, stackResult)
+		}
+	} else if !useFallback {
+		useFallback = true
 	}
 
-	// Extract prices from snapshots
-	prices = make([]float64, len(snapshots))
-	for i, snapshot := range snapshots {
-		prices[i] = snapshot.Close
+	if useFallback {
+		indicatorValues := sa.calculateTechnicalIndicators(input.Prices)
+		signals = sa.generateTechnicalSignals(input.Symbol, input.Exchange, indicatorValues)
 	}
-
-	// Calculate technical indicators
-	indicators := sa.calculateTechnicalIndicators(prices)
-
-	// Generate signals based on indicators
-	signals := sa.generateTechnicalSignals(input.Symbol, input.Exchange, indicators)
 
 	// Assess quality for each technical signal
 	var qualitySignals []*AggregatedSignal
@@ -370,6 +402,11 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 			avgVolume = totalVolume.Div(decimal.NewFromInt(int64(len(input.Volumes))))
 		}
 
+		lastPrice := decimal.Zero
+		if len(input.Prices) > 0 {
+			lastPrice = input.Prices[len(input.Prices)-1]
+		}
+
 		qualityInput := SignalQualityInput{
 			SignalType:       string(signal.SignalType),
 			Symbol:           signal.Symbol,
@@ -381,6 +418,10 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 			Indicators:       signal.Metadata,
 			SignalCount:      signalCount,
 			SignalComponents: signalComponents,
+			MarketData: &MarketDataSnapshot{
+				Price:         lastPrice,
+				LastTradeTime: signal.CreatedAt,
+			},
 		}
 
 		qualityMetrics, err := sa.qualityScorer.AssessSignalQuality(ctx, &qualityInput)
@@ -404,15 +445,77 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 	return qualitySignals, nil
 }
 
-// DeduplicateSignals filters out signals that are considered duplicates of recently processed signals.
-// It uses a fingerprinting mechanism based on signal characteristics to identify duplicates within a configured time window.
-//
-// Parameters:
-//   - ctx: The context for the operation.
-//   - signals: The list of signals to deduplicate.
-//
-// Returns:
-//   - A slice of unique signals, or an error if deduplication fails.
+func (sa *SignalAggregator) AggregateMicrostructureSignals(ctx context.Context, input MicrostructureSignalInput) ([]*AggregatedSignal, error) {
+	if len(input.ImbalanceSignals) == 0 {
+		return nil, nil
+	}
+
+	_, span := observability.StartSpanWithTags(ctx, observability.SpanOpSignalProcessing, "SignalAggregator.AggregateMicrostructureSignals", map[string]string{
+		"signal_type": "microstructure",
+		"symbol":      input.Symbol,
+		"exchange":    input.Exchange,
+		"count":       fmt.Sprintf("%d", len(input.ImbalanceSignals)),
+	})
+	defer observability.FinishSpan(span, nil)
+
+	var signals []*AggregatedSignal
+	for _, obi := range input.ImbalanceSignals {
+		if !obi.IsValid() {
+			continue
+		}
+
+		action := "hold"
+		switch obi.Direction {
+		case "bullish":
+			action = "buy"
+		case "bearish":
+			action = "sell"
+		}
+
+		components := []SignalComponent{
+			{
+				Indicator:   "orderbook_imbalance",
+				Description: fmt.Sprintf("OB imbalance %s %.2f%% (score %.0f)", obi.Direction, obi.ImbalancePct.InexactFloat64(), obi.Score.InexactFloat64()),
+				Confidence:  obi.Confidence,
+				Strength:    obi.Score.InexactFloat64() / 100.0,
+			},
+		}
+
+		if obi.SpreadPct.GreaterThan(decimal.Zero) {
+			spreadPct := obi.SpreadPct.InexactFloat64()
+			minThreshold := 0.01
+			maxThreshold := 0.50
+			normalizedConfidence := clampFloat((spreadPct-minThreshold)/(maxThreshold-minThreshold), 0, 1)
+			spreadConfidence := 0.2 + (normalizedConfidence * 0.7)
+			components = append(components, SignalComponent{
+				Indicator:   "spread",
+				Description: fmt.Sprintf("Spread %.4f%%", obi.SpreadPct.InexactFloat64()),
+				Confidence:  decimal.NewFromFloat(spreadConfidence),
+				Strength:    spreadConfidence,
+			})
+		}
+
+		signal := sa.createAggregatedTechnicalSignal(input.Symbol, input.Exchange, action, components)
+		signal.SignalType = SignalTypeMicrostructure
+		signal.Indicators = []string{"orderbook_imbalance"}
+		signal.Metadata["imbalance_pct"] = obi.ImbalancePct.String()
+		signal.Metadata["obi_score"] = obi.Score.String()
+		signal.Metadata["bid_depth_usd"] = obi.BidDepthUSD.String()
+		signal.Metadata["ask_depth_usd"] = obi.AskDepthUSD.String()
+		signal.Metadata["spread_pct"] = obi.SpreadPct.String()
+
+		signals = append(signals, signal)
+	}
+
+	sa.logger.WithFields(zaplogrus.Fields{
+		"symbol":            input.Symbol,
+		"exchange":          input.Exchange,
+		"signals_generated": len(signals),
+	}).Info("Microstructure signal aggregation completed")
+
+	return signals, nil
+}
+
 func (sa *SignalAggregator) DeduplicateSignals(ctx context.Context, signals []*AggregatedSignal) ([]*AggregatedSignal, error) {
 	// Stub telemetry - log deduplication start
 	sa.logger.WithFields(zaplogrus.Fields{
@@ -611,45 +714,50 @@ func (sa *SignalAggregator) removeDuplicateStrings(slice []string) []string {
 }
 
 // calculateTechnicalIndicators computes various technical indicators from price history.
-func (sa *SignalAggregator) calculateTechnicalIndicators(prices []float64) map[string][]float64 {
+func (sa *SignalAggregator) calculateTechnicalIndicators(prices []decimal.Decimal) map[string][]float64 {
 	indicators := make(map[string][]float64)
 
-	if len(prices) < 50 {
+	if len(prices) < 50 || sa.indicatorProvider == nil {
 		return indicators
 	}
 
-	// Calculate SMA 20 and 50
-	sma20Indicator := trend.NewSmaWithPeriod[float64](20)
-	sma50Indicator := trend.NewSmaWithPeriod[float64](50)
-	sma20 := helper.ChanToSlice(sma20Indicator.Compute(helper.SliceToChan(prices)))
-	sma50 := helper.ChanToSlice(sma50Indicator.Compute(helper.SliceToChan(prices)))
+	sma20 := sa.indicatorProvider.SMA(prices, 20)
+	if len(sma20) > 0 {
+		indicators["sma_20"] = decimalSliceToFloat64(sma20)
+	}
 
-	// Calculate EMA 12
-	ema12Indicator := trend.NewEmaWithPeriod[float64](12)
-	ema12 := helper.ChanToSlice(ema12Indicator.Compute(helper.SliceToChan(prices)))
+	sma50 := sa.indicatorProvider.SMA(prices, 50)
+	if len(sma50) > 0 {
+		indicators["sma_50"] = decimalSliceToFloat64(sma50)
+	}
 
-	// Calculate RSI 14
-	rsiIndicator := momentum.NewRsiWithPeriod[float64](14)
-	rsi := helper.ChanToSlice(rsiIndicator.Compute(helper.SliceToChan(prices)))
+	ema12 := sa.indicatorProvider.EMA(prices, 12)
+	if len(ema12) > 0 {
+		indicators["ema_12"] = decimalSliceToFloat64(ema12)
+	}
 
-	// Calculate MACD
-	macdIndicator := trend.NewMacdWithPeriod[float64](12, 26, 9)
-	macdLine, signalLine := macdIndicator.Compute(helper.SliceToChan(prices))
-	signalDone := make(chan struct{})
-	go func() {
-		_ = helper.ChanToSlice(signalLine)
-		close(signalDone)
-	}()
-	macd := helper.ChanToSlice(macdLine)
-	<-signalDone
+	rsi14 := sa.indicatorProvider.RSI(prices, 14)
+	if len(rsi14) > 0 {
+		indicators["rsi_14"] = decimalSliceToFloat64(rsi14)
+	}
 
-	indicators["sma_20"] = sma20
-	indicators["sma_50"] = sma50
-	indicators["ema_12"] = ema12
-	indicators["rsi_14"] = rsi
-	indicators["macd_line"] = macd
+	macdLine, signalLine, _ := sa.indicatorProvider.MACD(prices, 12, 26, 9)
+	if len(macdLine) > 0 {
+		indicators["macd_line"] = decimalSliceToFloat64(macdLine)
+	}
+	if len(signalLine) > 0 {
+		indicators["macd_signal"] = decimalSliceToFloat64(signalLine)
+	}
 
 	return indicators
+}
+
+func decimalSliceToFloat64(vals []decimal.Decimal) []float64 {
+	result := make([]float64, len(vals))
+	for i, v := range vals {
+		result[i], _ = v.Float64()
+	}
+	return result
 }
 
 // generateTechnicalSignals interprets technical indicators to generate buy/sell signals.
@@ -680,28 +788,26 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 		}
 	}
 
-	// Moving Average Crossover
-	if sma, exists := indicators["sma_20"]; exists && len(sma) > 1 {
-		if ema, emaExists := indicators["ema_12"]; emaExists && len(ema) > 1 {
-			currentSMA := sma[len(sma)-1]
-			currentEMA := ema[len(ema)-1]
-			prevSMA := sma[len(sma)-2]
-			prevEMA := ema[len(ema)-2]
+	// Moving Average crossover (Golden/Death Cross: SMA20 vs SMA50)
+	if sma20, exists := indicators["sma_20"]; exists && len(sma20) > 1 {
+		if sma50, sma50Exists := indicators["sma_50"]; sma50Exists && len(sma50) > 1 {
+			currentSMA20 := sma20[len(sma20)-1]
+			currentSMA50 := sma50[len(sma50)-1]
+			prevSMA20 := sma20[len(sma20)-2]
+			prevSMA50 := sma50[len(sma50)-2]
 
-			// Golden Cross (EMA crosses above SMA)
-			if currentEMA > currentSMA && prevEMA <= prevSMA {
+			if currentSMA20 > currentSMA50 && prevSMA20 <= prevSMA50 {
 				buySignals = append(buySignals, SignalComponent{
 					Indicator:   "golden_cross",
-					Description: "MA20 crossed above MA50 (Golden Cross)",
+					Description: "SMA20 crossed above SMA50 (Golden Cross)",
 					Confidence:  decimal.NewFromFloat(0.8),
 					Strength:    0.8,
 				})
 			}
-			// Death Cross (EMA crosses below SMA)
-			if currentEMA < currentSMA && prevEMA >= prevSMA {
+			if currentSMA20 < currentSMA50 && prevSMA20 >= prevSMA50 {
 				sellSignals = append(sellSignals, SignalComponent{
 					Indicator:   "death_cross",
-					Description: "MA20 crossed below MA50 (Death Cross)",
+					Description: "SMA20 crossed below SMA50 (Death Cross)",
 					Confidence:  decimal.NewFromFloat(0.8),
 					Strength:    0.8,
 				})
@@ -709,7 +815,7 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 		}
 	}
 
-	// MACD signals
+	// MACD crossover
 	if macdLine, exists := indicators["macd_line"]; exists && len(macdLine) > 1 {
 		if macdSignal, signalExists := indicators["macd_signal"]; signalExists && len(macdSignal) > 1 {
 			currentMACD := macdLine[len(macdLine)-1]
@@ -717,7 +823,6 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 			prevMACD := macdLine[len(macdLine)-2]
 			prevSignal := macdSignal[len(macdSignal)-2]
 
-			// MACD bullish crossover (MACD line crosses above signal line)
 			if currentMACD > currentSignal && prevMACD <= prevSignal {
 				buySignals = append(buySignals, SignalComponent{
 					Indicator:   "macd_bullish",
@@ -726,7 +831,6 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 					Strength:    0.75,
 				})
 			}
-			// MACD bearish crossover
 			if currentMACD < currentSignal && prevMACD >= prevSignal {
 				sellSignals = append(sellSignals, SignalComponent{
 					Indicator:   "macd_bearish",
@@ -738,22 +842,66 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 		}
 	}
 
-	// Aggregate signals
 	var aggregatedSignals []*AggregatedSignal
-
-	// Create aggregated buy signal if we have buy components
 	if len(buySignals) > 0 {
-		aggregatedSignal := sa.createAggregatedTechnicalSignal(symbol, exchange, "buy", buySignals)
-		aggregatedSignals = append(aggregatedSignals, aggregatedSignal)
+		aggregatedSignals = append(aggregatedSignals, sa.createAggregatedTechnicalSignal(symbol, exchange, "buy", buySignals))
 	}
-
-	// Create aggregated sell signal if we have sell components
 	if len(sellSignals) > 0 {
-		aggregatedSignal := sa.createAggregatedTechnicalSignal(symbol, exchange, "sell", sellSignals)
-		aggregatedSignals = append(aggregatedSignals, aggregatedSignal)
+		aggregatedSignals = append(aggregatedSignals, sa.createAggregatedTechnicalSignal(symbol, exchange, "sell", sellSignals))
 	}
 
 	return aggregatedSignals
+}
+
+func (sa *SignalAggregator) convertStackResultsToSignals(symbol, exchange string, stackResult *indicators.MultiIndicatorResult) []*AggregatedSignal {
+	if stackResult == nil || stackResult.OverallSignal == indicators.SignalHold {
+		return nil
+	}
+
+	var overallAction string
+	switch stackResult.OverallSignal {
+	case indicators.SignalBuy:
+		overallAction = "buy"
+	case indicators.SignalSell:
+		overallAction = "sell"
+	default:
+		return nil
+	}
+
+	var components []SignalComponent
+	for _, ind := range stackResult.Indicators {
+		var action string
+		switch ind.Signal {
+		case indicators.SignalBuy:
+			action = "buy"
+		case indicators.SignalSell:
+			action = "sell"
+		default:
+			continue
+		}
+
+		if action != overallAction {
+			continue
+		}
+
+		components = append(components, SignalComponent{
+			Indicator:   ind.Name,
+			Description: fmt.Sprintf("%s %s signal (strength %.2f)", ind.Name, ind.Signal, ind.Strength.InexactFloat64()),
+			Confidence:  ind.Strength,
+			Strength:    ind.Strength.InexactFloat64(),
+		})
+	}
+
+	if len(components) == 0 {
+		components = []SignalComponent{{
+			Indicator:   "stack_overall",
+			Description: fmt.Sprintf("Stack overall %s (confidence %.2f)", stackResult.OverallSignal, stackResult.Confidence.InexactFloat64()),
+			Confidence:  stackResult.Confidence,
+			Strength:    stackResult.Confidence.InexactFloat64(),
+		}}
+	}
+
+	return []*AggregatedSignal{sa.createAggregatedTechnicalSignal(symbol, exchange, overallAction, components)}
 }
 
 // createAggregatedTechnicalSignal combines multiple signal components into a single aggregated signal.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,6 +95,77 @@ func TestAssessSignalQuality(t *testing.T) {
 	assert.True(t, metrics.MarketConditionScore.GreaterThan(decimal.Zero))
 }
 
+func TestFetchExchangeStatistics_UsesPortableLatestRowQuery(t *testing.T) {
+	now := time.Now().UTC()
+	tests := []struct {
+		name       string
+		setup      func(mockPool pgxmock.PgxPoolIface)
+		assertions func(t *testing.T, stats map[string]*ExchangeMetrics, err error)
+	}{
+		{
+			name: "last update present and fallback used for nil row",
+			setup: func(mockPool pgxmock.PgxPoolIface) {
+				mockPool.ExpectQuery("WITH latest_market_data AS").
+					WithArgs(pgxmock.AnyArg()).
+					WillReturnRows(
+						pgxmock.NewRows([]string{"name", "total_volume", "data_point_count", "last_update", "pair_count"}).
+							AddRow("binance", decimal.NewFromFloat(1500), int64(2), now, 2).
+							AddRow("coinbase", decimal.NewFromFloat(0), int64(0), nil, 0),
+					)
+			},
+			assertions: func(t *testing.T, stats map[string]*ExchangeMetrics, err error) {
+				require.NoError(t, err)
+				require.Len(t, stats, 3)
+				assert.Equal(t, int64(2), stats["binance"].TotalTrades)
+				assert.True(t, stats["binance"].AvgDailyVolume.Equal(decimal.NewFromFloat(1500)))
+				assert.Equal(t, 2, stats["binance"].SupportedPairs)
+				assert.False(t, stats["coinbase"].LastDataUpdate.IsZero())
+				assert.NotNil(t, stats["kraken"], "kraken should be present from default metrics")
+			},
+		},
+		{
+			name: "no rows returns default stats",
+			setup: func(mockPool pgxmock.PgxPoolIface) {
+				mockPool.ExpectQuery("WITH latest_market_data AS").
+					WithArgs(pgxmock.AnyArg()).
+					WillReturnRows(pgxmock.NewRows([]string{"name", "total_volume", "data_point_count", "last_update", "pair_count"}))
+			},
+			assertions: func(t *testing.T, stats map[string]*ExchangeMetrics, err error) {
+				require.NoError(t, err)
+				assert.NotEmpty(t, stats)
+				assert.Contains(t, stats, "binance")
+			},
+		},
+		{
+			name: "query error returns error",
+			setup: func(mockPool pgxmock.PgxPoolIface) {
+				mockPool.ExpectQuery("WITH latest_market_data AS").
+					WithArgs(pgxmock.AnyArg()).
+					WillReturnError(assert.AnError)
+			},
+			assertions: func(t *testing.T, stats map[string]*ExchangeMetrics, err error) {
+				require.Error(t, err)
+				assert.Nil(t, stats)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPool, mockPool, err := database.NewMockDBPoolFromNewPool()
+			require.NoError(t, err)
+			defer mockPool.Close()
+
+			scorer := NewSignalQualityScorer(&config.Config{}, dbPool, zaplogrus.New())
+			tt.setup(mockPool)
+
+			stats, err := scorer.fetchExchangeStatistics(context.Background())
+			tt.assertions(t, stats, err)
+			assert.NoError(t, mockPool.ExpectationsWereMet())
+		})
+	}
+}
+
 func TestIsSignalQualityAcceptable(t *testing.T) {
 	scorer := createTestScorer()
 	thresholds := scorer.GetDefaultQualityThresholds()
@@ -106,35 +178,62 @@ func TestIsSignalQualityAcceptable(t *testing.T) {
 		{
 			name: "High quality signal",
 			metrics: &SignalQualityMetrics{
-				OverallScore:   decimal.NewFromFloat(0.8),
-				ExchangeScore:  decimal.NewFromFloat(0.9),
-				VolumeScore:    decimal.NewFromFloat(0.7),
-				LiquidityScore: decimal.NewFromFloat(0.8),
-				RiskScore:      decimal.NewFromFloat(0.3),
+				OverallScore:       decimal.NewFromFloat(0.8),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.9),
 			},
 			expected: true,
 		},
 		{
 			name: "Low overall score",
 			metrics: &SignalQualityMetrics{
-				OverallScore:   decimal.NewFromFloat(0.5),
-				ExchangeScore:  decimal.NewFromFloat(0.9),
-				VolumeScore:    decimal.NewFromFloat(0.7),
-				LiquidityScore: decimal.NewFromFloat(0.8),
-				RiskScore:      decimal.NewFromFloat(0.3),
+				OverallScore:       decimal.NewFromFloat(0.5),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.9),
 			},
 			expected: false,
 		},
 		{
 			name: "High risk score",
 			metrics: &SignalQualityMetrics{
-				OverallScore:   decimal.NewFromFloat(0.8),
-				ExchangeScore:  decimal.NewFromFloat(0.9),
-				VolumeScore:    decimal.NewFromFloat(0.7),
-				LiquidityScore: decimal.NewFromFloat(0.8),
-				RiskScore:      decimal.NewFromFloat(0.6),
+				OverallScore:       decimal.NewFromFloat(0.8),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.6),
+				DataFreshnessScore: decimal.NewFromFloat(0.9),
 			},
 			expected: false,
+		},
+		{
+			name: "Low data freshness score",
+			metrics: &SignalQualityMetrics{
+				OverallScore:       decimal.NewFromFloat(0.8),
+				ExchangeScore:      decimal.NewFromFloat(0.9),
+				VolumeScore:        decimal.NewFromFloat(0.7),
+				LiquidityScore:     decimal.NewFromFloat(0.8),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.89),
+			},
+			expected: false,
+		},
+		{
+			name: "Overall score at exact boundary",
+			metrics: &SignalQualityMetrics{
+				OverallScore:       decimal.NewFromFloat(0.6),
+				ExchangeScore:      decimal.NewFromFloat(0.7),
+				VolumeScore:        decimal.NewFromFloat(0.5),
+				LiquidityScore:     decimal.NewFromFloat(0.5),
+				RiskScore:          decimal.NewFromFloat(0.3),
+				DataFreshnessScore: decimal.NewFromFloat(0.9),
+			},
+			expected: true,
 		},
 	}
 

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveBackendPort_Priority(t *testing.T) {
@@ -163,9 +165,8 @@ func TestCleanupGatewayRuntimeArtifacts_RemovesPIDFilesAndMarksStateDown(t *test
 	telegramPID := filepath.Join(tempDir, "telegram.pid")
 
 	for _, pidFile := range []string{backendPID, ccxtPID, telegramPID} {
-		if err := os.WriteFile(pidFile, []byte("123"), 0644); err != nil {
-			t.Fatalf("write %s: %v", pidFile, err)
-		}
+		err := os.WriteFile(pidFile, []byte("999999999"), 0644)
+		require.NoError(t, err, "write %s", pidFile)
 	}
 
 	writeGatewayState(statePath, gatewayRuntimeState{
@@ -180,28 +181,17 @@ func TestCleanupGatewayRuntimeArtifacts_RemovesPIDFilesAndMarksStateDown(t *test
 	cleanupGatewayRuntimeArtifacts(statePath, "gateway stopped", backendPID, ccxtPID, telegramPID)
 
 	for _, pidFile := range []string{backendPID, ccxtPID, telegramPID} {
-		if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
-			t.Fatalf("expected %s to be removed, got err=%v", pidFile, err)
-		}
+		_, err := os.Stat(pidFile)
+		require.True(t, os.IsNotExist(err), "expected %s to be removed, got err=%v", pidFile, err)
 	}
 
 	state, ok := readGatewayState(statePath)
-	if !ok {
-		t.Fatal("expected gateway state to be readable")
-	}
-	if state.Mode != "down" {
-		t.Fatalf("expected mode down, got %s", state.Mode)
-	}
+	require.True(t, ok, "expected gateway state to be readable")
+	require.Equal(t, "down", state.Mode)
 	for _, serviceName := range []string{"gateway", "backend", "ccxt", "telegram"} {
 		service, exists := state.Services[serviceName]
-		if !exists {
-			t.Fatalf("expected service %s in gateway state", serviceName)
-		}
-		if service.Status != "down" {
-			t.Fatalf("expected %s status down, got %s", serviceName, service.Status)
-		}
-		if service.Detail != "gateway stopped" {
-			t.Fatalf("expected %s detail to be propagated, got %q", serviceName, service.Detail)
-		}
+		require.True(t, exists, "expected service %s in gateway state", serviceName)
+		require.Equal(t, "down", service.Status, "expected %s status down", serviceName)
+		require.Equal(t, "gateway stopped", service.Detail, "expected %s detail to be propagated", serviceName)
 	}
 }

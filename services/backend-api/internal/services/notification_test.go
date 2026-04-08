@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -798,8 +799,8 @@ func TestNotificationService_formatAggregatedArbitrageMessage(t *testing.T) {
 	assert.Contains(t, message, "ETH/USDT")
 	assert.Contains(t, message, "2.50%")
 	assert.Contains(t, message, "1.80%")
-	assert.Contains(t, message, "0.8%")
-	// Both confidence values might round to 0.8% due to InexactFloat64()
+	assert.Contains(t, message, "85.0%")
+	assert.Contains(t, message, "75.0%")
 }
 
 func TestNotificationService_formatAggregatedTechnicalMessage(t *testing.T) {
@@ -2279,6 +2280,11 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.T) {
+	t.Setenv("TELEGRAM_MAX_MESSAGE_UNITS", "3900")
+	ns := NewNotificationService(nil, nil, "", "", "")
 
 	message := ns.formatAIReasoningMessage(AIReasoningNotification{
 		DecisionType: "trade_entry",
@@ -2293,7 +2299,7 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 		}(),
 		Action: "Proceed cautiously",
 	})
-	assert.LessOrEqual(t, telegramMessageUnits(message), telegramMaxMessageUnits)
+	assert.LessOrEqual(t, telegramMessageUnits(message), ns.telegramMaxMessageUnits)
 
 	fallbackReasoning := AIReasoningNotification{
 		DecisionType: "trade_entry",
@@ -2309,7 +2315,7 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 		Action: "Proceed cautiously",
 	}
 	fallbackMessage := ns.formatAIReasoningMessage(fallbackReasoning)
-	assert.LessOrEqual(t, telegramMessageUnits(fallbackMessage), telegramMaxMessageUnits)
+	assert.LessOrEqual(t, telegramMessageUnits(fallbackMessage), ns.telegramMaxMessageUnits)
 	assert.Contains(t, fallbackMessage, "AI Trading Decision")
 	assert.Contains(t, fallbackMessage, "Summary:")
 	assert.Contains(t, fallbackMessage, "Recommended Action: Proceed cautiously")
@@ -2333,11 +2339,50 @@ func TestNotificationService_formatAIReasoningMessage(t *testing.T) {
 
 		if strings.Contains(candidate, "Factor 16") && !strings.Contains(candidate, "Factor 17") {
 			foundSixteenFactorBoundary = true
-			assert.LessOrEqual(t, telegramMessageUnits(candidate), telegramMaxMessageUnits)
+			assert.LessOrEqual(t, telegramMessageUnits(candidate), ns.telegramMaxMessageUnits)
 			break
 		}
 	}
 	assert.True(t, foundSixteenFactorBoundary)
+}
+
+func TestTelegramMessageUnits_UnicodeAndEmoji(t *testing.T) {
+	// BMP-only strings count 1 unit per rune
+	assert.Equal(t, 11, telegramMessageUnits("hello world"))
+	assert.Equal(t, 3, telegramMessageUnits("日本語"))
+
+	// Astral-plane emoji count as 2 units each
+	assert.Equal(t, 6, telegramMessageUnits("🔥test"))
+	assert.Equal(t, 4, telegramMessageUnits("🚀🚀"))
+	assert.Equal(t, 4, telegramMessageUnits("A📈B"))
+
+	// Truncation must never split a multi-unit rune
+	mixed := "abc📊def" // 6 BMP runes + 1 astral emoji = 6 + 2 = 8 units
+	assert.Equal(t, 8, telegramMessageUnits(mixed))
+
+	truncated := truncateToTelegramUnits(mixed, 5)
+	assert.LessOrEqual(t, telegramMessageUnits(truncated), 5)
+	runes := []rune(truncated)
+	if len(runes) > 0 {
+		first := runes[0]
+		if first > 0xFFFF {
+			assert.Equal(t, 2, telegramMessageUnits(string(first)))
+		} else {
+			assert.Equal(t, 1, telegramMessageUnits(string(first)))
+		}
+	}
+
+	// Pure-emoji truncation at exact boundary
+	longEmoji := strings.Repeat("😀", 50) // 100 units
+	assert.Equal(t, 100, telegramMessageUnits(longEmoji))
+	exact := truncateToTelegramUnits(longEmoji, 10)
+	assert.Equal(t, 10, telegramMessageUnits(exact))
+	assert.Equal(t, 5, utf8.RuneCountInString(exact))
+
+	// Edge cases
+	assert.Equal(t, 0, telegramMessageUnits(""))
+	assert.Equal(t, 1, telegramMessageUnits("x"))
+	assert.Equal(t, 2, telegramMessageUnits("🔥"))
 }
 
 // =============================================================================

@@ -16,6 +16,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/observability"
 )
 
+var errInsufficientOHLCVData = errors.New("insufficient ohlcv data")
+
 // SignalProcessorConfig holds configuration settings for the signal processor service.
 type SignalProcessorConfig struct {
 	BatchSize            int                  `json:"batch_size"`
@@ -27,13 +29,16 @@ type SignalProcessorConfig struct {
 	RetryAttempts        int                  `json:"retry_attempts"`
 	RetryDelay           time.Duration        `json:"retry_delay"`
 	TimeoutDuration      time.Duration        `json:"timeout_duration"`
+	MinOHLCVCount        int                  `json:"min_ohlcv_count"`
 	SignalTTL            time.Duration        `json:"signal_ttl"`
 	NotificationEnabled  bool                 `json:"notification_enabled"`
 	CircuitBreakerConfig CircuitBreakerConfig `json:"circuit_breaker"`
 }
 
-// SignalProcessor orchestrates the entire signal processing pipeline.
-// It retrieves market data, generates signals, aggregates them, assesses quality, and triggers notifications.
+// Deprecated: SignalProcessor is the legacy signal pipeline coordinator.
+// New code should use the scalping.StrategyActor → ScalpingSignalComposer flow
+// for futures scalping signals. This service remains for backward compatibility
+// with spot-based strategies and will be removed in a future release.
 type SignalProcessor struct {
 	config              *SignalProcessorConfig
 	db                  DBPool
@@ -116,6 +121,7 @@ func NewSignalProcessor(
 		RetryAttempts:       3,
 		RetryDelay:          30 * time.Second,
 		TimeoutDuration:     30 * time.Second, // Default timeout for database operations
+		MinOHLCVCount:       50,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -527,23 +533,24 @@ func (sp *SignalProcessor) processSignalsConcurrently(marketData []models.Market
 	}()
 
 	// Collect results with context awareness
-	var allResults []ProcessingResult
-	collectDone := make(chan struct{})
+	allResultsCh := make(chan []ProcessingResult, 1)
 	go func() {
+		allResults := make([]ProcessingResult, 0, len(marketData))
 		for result := range results {
 			allResults = append(allResults, result)
 		}
-		close(collectDone)
+		allResultsCh <- allResults
+		close(allResultsCh)
 	}()
 
 	// Wait for collection to complete or context to be cancelled
+	var allResults []ProcessingResult
 	select {
-	case <-collectDone:
+	case allResults = <-allResultsCh:
 		// Collection completed successfully
 	case <-sp.ctx.Done():
-		// Context cancelled, log and return partial results
-		sp.logger.Warn("Context cancelled during result collection, returning partial results")
-		return allResults
+		sp.logger.Warn("Context cancelled during result collection, returning empty results")
+		return nil
 	}
 
 	// Add result tracking
@@ -571,7 +578,8 @@ func (sp *SignalProcessor) getRecentMarketDataFromDB(symbol, exchange string, du
 		FROM market_data md
 		JOIN trading_pairs tp ON md.trading_pair_id = tp.id
 		JOIN exchanges e ON md.exchange_id = e.id
-		WHERE tp.symbol = $1 AND e.ccxt_id = $2 AND md.timestamp >= $3
+		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
+		WHERE tp.symbol = $1 AND COALESCE(ce.ccxt_id, e.ccxt_id, e.name) = $2 AND md.timestamp >= $3
 		ORDER BY md.timestamp DESC
 		LIMIT 100
 	`
@@ -680,6 +688,12 @@ func (sp *SignalProcessor) processSignal(data models.MarketData) ProcessingResul
 	// Get exchange name from database
 	exchangeName, err := sp.getExchangeName(data.ExchangeID)
 	if err != nil {
+		if sp.logger != nil {
+			sp.logger.WithError(err).WithFields(map[string]interface{}{
+				"exchange_id": data.ExchangeID,
+				"symbol":      symbol,
+			}).Warn("Failed to resolve exchange name, using fallback value")
+		}
 		exchangeName = "unknown"
 	}
 
@@ -706,10 +720,21 @@ func (sp *SignalProcessor) processSignal(data models.MarketData) ProcessingResul
 	// Generate technical signals
 	technicalSignals, err := sp.generateTechnicalSignals(data)
 	if err != nil {
-		_ = fmt.Sprintf("Technical signal generation failed: %v", err)
-		result.Error = fmt.Errorf("technical signal generation failed: %w", err)
-		result.ProcessingTime = time.Since(startTime)
-		return result
+		if errors.Is(err, errInsufficientOHLCVData) {
+			if sp.logger != nil {
+				sp.logger.WithError(err).WithFields(map[string]interface{}{
+					"symbol":          symbol,
+					"trading_pair_id": data.TradingPairID,
+					"exchange_id":     data.ExchangeID,
+				}).Warn("Skipping technical signals for this data point due to limited OHLCV history")
+			}
+			technicalSignals = nil
+		} else {
+			_ = fmt.Sprintf("Technical signal generation failed: %v", err)
+			result.Error = fmt.Errorf("technical signal generation failed: %w", err)
+			result.ProcessingTime = time.Since(startTime)
+			return result
+		}
 	}
 
 	// Aggregate signals
@@ -774,6 +799,10 @@ func (sp *SignalProcessor) generateArbitrageSignals(data models.MarketData) ([]A
 // getArbitrageOpportunities queries the database for active arbitrage opportunities for a symbol.
 func (sp *SignalProcessor) getArbitrageOpportunities(symbol string) ([]models.ArbitrageOpportunity, error) {
 	now := time.Now().UTC()
+	ctx := sp.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Query the database for arbitrage opportunities
 	query := `
@@ -786,7 +815,7 @@ func (sp *SignalProcessor) getArbitrageOpportunities(symbol string) ([]models.Ar
 		LIMIT 10
 	`
 
-	rows, err := sp.db.Query(context.Background(), query, symbol, now)
+	rows, err := sp.db.Query(ctx, query, symbol, now)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query arbitrage opportunities: %w", err)
 	}
@@ -802,21 +831,91 @@ func (sp *SignalProcessor) getArbitrageOpportunities(symbol string) ([]models.Ar
 		}
 		opportunities = append(opportunities, opp)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate arbitrage opportunities: %w", err)
+	}
 
 	return opportunities, nil
 }
 
-// generateTechnicalSignals prepares technical signal input from market data.
 func (sp *SignalProcessor) generateTechnicalSignals(data models.MarketData) ([]TechnicalSignalInput, error) {
-	// Get trading pair symbol and exchange name
 	symbol, err := sp.getTradingPairSymbol(data.TradingPairID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get trading pair symbol: %w", err)
 	}
 
+	exchangeName, err := sp.getExchangeName(data.ExchangeID)
+	if err != nil {
+		if sp.logger != nil {
+			sp.logger.WithError(err).WithFields(map[string]interface{}{
+				"exchange_id":     data.ExchangeID,
+				"trading_pair_id": data.TradingPairID,
+				"symbol":          symbol,
+			}).Warn("Failed to resolve exchange name for technical signal generation, using empty fallback")
+		}
+		exchangeName = ""
+	}
+
+	query := `
+		SELECT open, high, low, close, volume, timestamp
+		FROM ohlcv_candles
+		WHERE trading_pair_id = $1 AND exchange_id = $2
+		ORDER BY timestamp DESC
+		LIMIT 200
+	`
+	ctx, cancel := context.WithTimeout(sp.ctx, sp.config.TimeoutDuration)
+	defer cancel()
+
+	rows, err := sp.db.Query(ctx, query, data.TradingPairID, data.ExchangeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OHLCV candles: %w", err)
+	}
+	defer rows.Close()
+
+	var prices, volumes, opens, highs, lows []decimal.Decimal
+	var timestamps []time.Time
+	for rows.Next() {
+		var o, h, l, c, v decimal.Decimal
+		var ts time.Time
+		if err := rows.Scan(&o, &h, &l, &c, &v, &ts); err != nil {
+			return nil, fmt.Errorf("failed to scan OHLCV candle: %w", err)
+		}
+		prices = append(prices, c)
+		opens = append(opens, o)
+		highs = append(highs, h)
+		lows = append(lows, l)
+		volumes = append(volumes, v)
+		timestamps = append(timestamps, ts)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating OHLCV rows for %s: %w", symbol, err)
+	}
+
+	for i, j := 0, len(prices)-1; i < j; i, j = i+1, j-1 {
+		prices[i], prices[j] = prices[j], prices[i]
+		opens[i], opens[j] = opens[j], opens[i]
+		highs[i], highs[j] = highs[j], highs[i]
+		lows[i], lows[j] = lows[j], lows[i]
+		volumes[i], volumes[j] = volumes[j], volumes[i]
+		timestamps[i], timestamps[j] = timestamps[j], timestamps[i]
+	}
+
+	minOHLCV := sp.config.MinOHLCVCount
+	if len(prices) < minOHLCV {
+		return nil, fmt.Errorf("%w for %s: need %d, got %d", errInsufficientOHLCVData, symbol, minOHLCV, len(prices))
+	}
+
 	return []TechnicalSignalInput{
 		{
-			Symbol: symbol,
+			Symbol:     symbol,
+			Exchange:   exchangeName,
+			Prices:     prices,
+			Opens:      opens,
+			Highs:      highs,
+			Lows:       lows,
+			Volumes:    volumes,
+			Timestamps: timestamps,
 		},
 	}, nil
 }
@@ -1039,13 +1138,40 @@ func (sp *SignalProcessor) metricsLoop() {
 	// Metric collection logic
 }
 
-// getActiveTradingPairs Mock/Stub
-func (sp *SignalProcessor) getActiveTradingPairs() ([]struct {
+type tradingPairWithExchange struct {
 	Symbol   string
 	Exchange struct{ Name string }
-}, error) {
-	return []struct {
-		Symbol   string
-		Exchange struct{ Name string }
-	}{}, nil
+}
+
+func (sp *SignalProcessor) getActiveTradingPairs() ([]tradingPairWithExchange, error) {
+	query := `
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name)
+		FROM trading_pairs tp
+		JOIN exchanges e ON e.id = tp.exchange_id
+		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
+		WHERE tp.is_active = true
+		ORDER BY tp.symbol
+	`
+	ctx, cancel := context.WithTimeout(sp.ctx, sp.config.TimeoutDuration)
+	defer cancel()
+
+	rows, err := sp.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active trading pairs: %w", err)
+	}
+	defer rows.Close()
+
+	var pairs []tradingPairWithExchange
+	for rows.Next() {
+		var p tradingPairWithExchange
+		if err := rows.Scan(&p.Symbol, &p.Exchange.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan trading pair: %w", err)
+		}
+		pairs = append(pairs, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("signal_processor: failed reading active trading pairs rows: %w", err)
+	}
+
+	return pairs, nil
 }

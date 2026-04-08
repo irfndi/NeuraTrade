@@ -64,10 +64,11 @@ const (
 
 // Signal Events
 const (
-	EventTypeSignalProposed = "signal.proposed"
-	EventTypeSignalApproved = "signal.approved"
-	EventTypeSignalRejected = "signal.rejected"
-	EventTypeSignalSkipped  = "signal.skipped"
+	EventTypeSignalProposed         = "signal.proposed"
+	EventTypeSignalApproved         = "signal.approved"
+	EventTypeSignalRejected         = "signal.rejected"
+	EventTypeSignalSkipped          = "signal.skipped"
+	EventTypeScalpingSignalProposed = "signal.scalping_proposed"
 )
 
 // Order Events

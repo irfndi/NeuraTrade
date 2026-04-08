@@ -39,6 +39,9 @@ type AlertService struct {
 	handlers            []AlertHandler
 	alertThrottler      *AlertThrottler
 	notificationService *NotificationService
+	broadcastWg         sync.WaitGroup
+	broadcastMu         sync.Mutex
+	broadcastTimeout    time.Duration
 	mu                  sync.RWMutex
 }
 
@@ -75,11 +78,12 @@ func (t *AlertThrottler) ShouldSend(alertKey string) bool {
 
 func NewAlertService(db DBPool, redis *database.RedisClient, logger *slog.Logger) *AlertService {
 	return &AlertService{
-		db:             db,
-		redis:          redis,
-		logger:         logger,
-		handlers:       make([]AlertHandler, 0),
-		alertThrottler: NewAlertThrottler(5 * time.Minute),
+		db:               db,
+		redis:            redis,
+		logger:           logger,
+		handlers:         make([]AlertHandler, 0),
+		alertThrottler:   NewAlertThrottler(5 * time.Minute),
+		broadcastTimeout: 5 * time.Second,
 	}
 }
 
@@ -130,11 +134,41 @@ func (s *AlertService) SendAlert(ctx context.Context, level AlertLevel, source, 
 	}
 
 	if ns != nil && (level == AlertLevelError || level == AlertLevelCritical) {
+		alertCopy := alert
+		if alert.Details != nil {
+			raw, err := json.Marshal(alert.Details)
+			if err == nil {
+				alertCopy.Details = make(map[string]any)
+				_ = json.Unmarshal(raw, &alertCopy.Details)
+			} else {
+				alertCopy.Details = nil
+			}
+		}
+
+		s.broadcastMu.Lock()
+		s.broadcastWg.Add(1)
 		go func() {
-			// TODO: Implement actual notification dispatch via NotificationService
-			// Currently logs only - integrate with Telegram or other notification channels
-			s.logger.Info(fmt.Sprintf("[%s] %s: %s", level, source, message))
+			defer s.broadcastWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Panic recovered in alert broadcast goroutine",
+						"panic", r,
+						"level", level,
+						"source", source,
+					)
+				}
+			}()
+			broadcastCtx, cancel := context.WithTimeout(context.Background(), s.broadcastTimeout)
+			defer cancel()
+			if err := ns.BroadcastSystemAlert(broadcastCtx, alertCopy); err != nil {
+				s.logger.Error("Failed to broadcast system alert via notification service",
+					"level", level,
+					"source", source,
+					"error", err,
+				)
+			}
 		}()
+		s.broadcastMu.Unlock()
 	}
 
 	return s.persistAlert(ctx, alert)
@@ -250,4 +284,10 @@ func (s *AlertService) RunHealthCheck(ctx context.Context, config HealthAlertCon
 			map[string]any{"error": err.Error()})
 		s.logger.Error("Database health check failed", "error", err)
 	}
+}
+
+func (s *AlertService) WaitForBroadcasts() {
+	s.broadcastMu.Lock()
+	defer s.broadcastMu.Unlock()
+	s.broadcastWg.Wait()
 }

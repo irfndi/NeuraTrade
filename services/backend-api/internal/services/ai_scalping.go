@@ -651,6 +651,9 @@ type AITradingDecision struct {
 	CandidateFunnelKnown            bool                                `json:"-"`
 	CandidateFunnel                 appautonomy.CandidateFunnelSnapshot `json:"-"`
 	ExecutionGate                   *appautonomy.ExecutionGateSnapshot  `json:"-"`
+	PreTradeRegime                  string                              `json:"-"`
+	PreTradeExpectancy              float64                             `json:"-"`
+	PreTradeExpectancySampleSize    int                                 `json:"-"`
 }
 
 type TradingPortfolio struct {
@@ -1178,9 +1181,17 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				"",
 				s.getLatestFailoverAttemptInfo(),
 			)
-			return runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), nil
+			degraded := copyPreTradeTelemetry(runtimeDegradedHoldDecision(runtimeErr.Error(), reasonCategoryLLMParseContract), decision)
+			degraded.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
+				Allowed:     false,
+				BlockReason: runtimeErr.Error(),
+				BlockCode:   appautonomy.CandidateRejectAutonomyRuntime,
+			}
+			return degraded, nil
 		}
+		sourceDecision := decision
 		decision = strategyHoldDecision(err.Error(), decision.Confidence)
+		decision = copyPreTradeTelemetry(decision, sourceDecision)
 		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 			Allowed:     false,
 			BlockReason: err.Error(),
@@ -1212,6 +1223,9 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			BlockReason: gate.Reason,
 			BlockCode:   classifyPreTradeBlockCode(gate.Reason),
 		}
+		decision.PreTradeRegime = gate.Regime
+		decision.PreTradeExpectancy = gate.NetExpectancy
+		decision.PreTradeExpectancySampleSize = gate.SampleSize
 		return decision, nil
 	}
 	if gate.CapitalMultiplier > 0 && gate.CapitalMultiplier < 1 {
@@ -1220,6 +1234,9 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			effectiveMaxCapital = 0.1
 		}
 	}
+	decision.PreTradeRegime = gate.Regime
+	decision.PreTradeExpectancy = gate.NetExpectancy
+	decision.PreTradeExpectancySampleSize = gate.SampleSize
 	log.Printf(
 		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d phase=%s risk_drawdown=%.4f",
 		effectiveMinConfidence,
@@ -1244,6 +1261,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	}
 
 	if policy.MaxConcurrentPositions > 0 && portfolio.OpenPositions >= policy.MaxConcurrentPositions {
+		sourceDecision := decision
 		decision = strategyHoldDecision(
 			fmt.Sprintf(
 				"account tier %s allows at most %d concurrent position(s); current %d",
@@ -1253,6 +1271,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			),
 			decision.Confidence,
 		)
+		decision = copyPreTradeTelemetry(decision, sourceDecision)
 		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 			Allowed:     false,
 			BlockReason: decision.Reasoning,
@@ -1266,11 +1285,13 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			decision.Confidence = effectiveMinConfidence
 			decision.PolicyAdjustments = append(decision.PolicyAdjustments, "micro_confidence_grace")
 		} else {
+			sourceDecision := decision
 			log.Printf("[AI-SCALPING] Confidence %.2f below minimum %.2f, skipping", decision.Confidence, effectiveMinConfidence)
 			decision = strategyHoldDecision(
 				fmt.Sprintf("confidence %.2f below dynamic threshold %.2f", decision.Confidence, effectiveMinConfidence),
 				decision.Confidence,
 			)
+			decision = copyPreTradeTelemetry(decision, sourceDecision)
 			decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 				Allowed:     false,
 				BlockReason: decision.Reasoning,
@@ -1309,7 +1330,9 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			if gateErr != nil {
 				log.Printf("[AI-SCALPING] Autonomous gate evaluation failed: %v", gateErr)
 				reason := fmt.Sprintf("autonomy gate evaluation failed: %v", gateErr)
+				sourceDecision := decision
 				decision = runtimeDegradedHoldDecision(reason, reasonCategoryExecutionUnavailable)
+				decision = copyPreTradeTelemetry(decision, sourceDecision)
 				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 					Allowed:              false,
 					BlockReason:          reason,
@@ -1326,10 +1349,12 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 					reason = "autonomy live gate closed"
 				}
 				log.Printf("[AI-SCALPING] Autonomous live gate blocked execution for %s: %s", scope.StrategyID, reason)
+				sourceDecision := decision
 				decision = strategyHoldDecision(
 					fmt.Sprintf("autonomy live gate closed: %s", reason),
 					decision.Confidence,
 				)
+				decision = copyPreTradeTelemetry(decision, sourceDecision)
 				decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 					Allowed:              false,
 					BlockReason:          reason,
@@ -2059,7 +2084,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		Confidence:        decision.Confidence,
 		Reasoning:         decision.Reasoning,
 		EntryPrice:        decision.EntryPrice,
-		IsPaperTrade:      s.orderExecutor.IsPaperTrading(),
+		IsPaperTrade:      paperTradeFlagForContext(ctx, s.orderExecutor.IsPaperTrading()),
 	}
 
 	// Use PlaceOrderWithDetails for rich notifications
@@ -2704,6 +2729,16 @@ func strategyHoldDecision(reason string, confidence float64) *AITradingDecision 
 	}
 }
 
+func copyPreTradeTelemetry(target *AITradingDecision, source *AITradingDecision) *AITradingDecision {
+	if target == nil || source == nil {
+		return target
+	}
+	target.PreTradeRegime = source.PreTradeRegime
+	target.PreTradeExpectancy = source.PreTradeExpectancy
+	target.PreTradeExpectancySampleSize = source.PreTradeExpectancySampleSize
+	return target
+}
+
 func shouldPromoteGenericHoldToFallback(decision *AITradingDecision, funnel appautonomy.CandidateFunnelSnapshot) bool {
 	_ = funnel
 	if decision == nil {
@@ -2764,6 +2799,11 @@ func shouldApplyMicroConfidenceGrace(
 	return decision.Confidence >= threshold-0.05
 }
 
+// runtimeDegradedHoldDecision creates a hold AITradingDecision representing a runtime-degraded fallback.
+//
+// The returned decision has Action "hold", Confidence 0, ConfidenceKnown false and SizePercent 0.
+// If reason is empty, Reasoning is set to "runtime-degraded decision fallback". If category is empty,
+// ReasonCategory is set to the execution-unavailable runtime category.
 func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecision {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -2801,16 +2841,16 @@ func (s *AIScalpingService) mirrorShadowDecisionAsync(
 		if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
 			log.Printf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
 		}
-		prices := make(map[string]decimal.Decimal)
-		if decisionSnapshot.EntryPrice != nil && strings.TrimSpace(decisionSnapshot.Symbol) != "" {
-			prices[strings.TrimSpace(decisionSnapshot.Symbol)] = *decisionSnapshot.EntryPrice
-		}
-		outcomeCtx, outcomeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer outcomeCancel()
-		coordinator.RecordShadowOutcome(outcomeCtx, decisionSnapshot, prices)
 	}()
 }
 
+// cloneAITradingDecision returns an independent copy of the provided AITradingDecision.
+//
+// cloneAITradingDecision produces a deep copy of mutable subfields (pointered decimals, slices
+// such as PolicyAdjustments and CandidateFunnel.TopCandidateRejections, and the ExecutionGate),
+// ensuring the returned decision can be modified without affecting the original.
+//
+// It returns a pointer to the cloned decision, or nil if the input is nil.
 func cloneAITradingDecision(decision *AITradingDecision) *AITradingDecision {
 	if decision == nil {
 		return nil
@@ -2828,6 +2868,12 @@ func cloneAITradingDecision(decision *AITradingDecision) *AITradingDecision {
 			decision.CandidateFunnel.TopCandidateRejections...,
 		)
 	}
+	if len(decision.CandidateFunnel.RejectionCounts) > 0 {
+		copyValue.CandidateFunnel.RejectionCounts = make(map[string]int, len(decision.CandidateFunnel.RejectionCounts))
+		for key, value := range decision.CandidateFunnel.RejectionCounts {
+			copyValue.CandidateFunnel.RejectionCounts[key] = value
+		}
+	}
 	if decision.ExecutionGate != nil {
 		gateCopy := *decision.ExecutionGate
 		copyValue.ExecutionGate = &gateCopy
@@ -2835,6 +2881,14 @@ func cloneAITradingDecision(decision *AITradingDecision) *AITradingDecision {
 	return &copyValue
 }
 
+// validateRecoveredDecisionContract validates that a recovered AITradingDecision is well-formed and actionable.
+// It accepts nil and hold decisions, and returns an error for any actionable decision that fails checks:
+// - decision must be non-nil (unless hold is intended),
+// - Action must be one of the supported actions (buy, sell, hold),
+// - Symbol must be non-empty after normalization,
+// - SizePercent must be > 0 for actionable decisions,
+// - Confidence must be greater than 0 and less than or equal to 1.
+// Returns nil when the decision is valid or represents a hold.
 func validateRecoveredDecisionContract(decision *AITradingDecision) error {
 	if decision == nil {
 		return fmt.Errorf("decision missing")
@@ -2847,7 +2901,15 @@ func validateRecoveredDecisionContract(decision *AITradingDecision) error {
 		return fmt.Errorf("unsupported action: %s", strings.TrimSpace(decision.Action))
 	}
 	normalizedSymbol := normalizeSymbolForComparison(decision.Symbol)
-	if normalizedSymbol == "" || !strings.Contains(normalizedSymbol, "/") {
+	if normalizedSymbol == "" {
+		return fmt.Errorf("actionable decision symbol malformed: %q", strings.TrimSpace(decision.Symbol))
+	}
+	if strings.Contains(normalizedSymbol, "/") {
+		parts := strings.Split(normalizedSymbol, "/")
+		if len(parts) != 2 || len(strings.TrimSpace(parts[0])) < 2 || parts[1] != "USDT" {
+			return fmt.Errorf("actionable decision symbol malformed: %q", strings.TrimSpace(decision.Symbol))
+		}
+	} else if !strings.HasSuffix(normalizedSymbol, "USDT") || len(strings.TrimSuffix(normalizedSymbol, "USDT")) < 2 {
 		return fmt.Errorf("actionable decision symbol malformed: %q", strings.TrimSpace(decision.Symbol))
 	}
 	if decision.SizePercent <= 0 {
@@ -4158,6 +4220,9 @@ func scalpingPolicyConfigFromEnv(maxBidAskSpreadPct float64) appautonomy.Scalpin
 	}
 	if value := getEnvInt("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES"); value > 0 {
 		cfg.ProgressBlockAfter = time.Duration(value) * time.Minute
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET"); value > 0 {
+		cfg.LossStreakBudget = clampInt(value, 1, 20)
 	}
 	return cfg.Normalized()
 }

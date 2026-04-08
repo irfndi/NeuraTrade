@@ -56,7 +56,16 @@ func NewRedisConnection(cfg config.RedisConfig) (*RedisClient, error) {
 // Returns:
 //
 //	*RedisClient: The initialized client.
-//	error: Error if connection fails.
+//
+// NewRedisConnectionWithRetry creates and returns a RedisClient configured from cfg and optionally
+// verifies the connection using the provided ErrorRecoveryManager.
+//
+// It applies pool and timeout settings from cfg when positive, sets automatic reconnection defaults
+// (MaxRetries from cfg or 3, MinRetryBackoff 100ms, MaxRetryBackoff 2s), ensures a sensible
+// MinIdleConns default of at least 2, and attaches the RedisSentryHook for error tracking.
+// If errorRecoveryManager is non-nil, the client Ping is executed via its retry logic; otherwise
+// a direct Ping is performed. Returns a configured RedisClient on success or an error if the
+// connection check fails.
 func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager ErrorRecoveryManager) (*RedisClient, error) {
 	logger := zaplogrus.New()
 
@@ -90,7 +99,7 @@ func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager Er
 	// Configure automatic reconnection
 	if cfg.MaxRetries > 0 {
 		opts.MaxRetries = cfg.MaxRetries
-	} else {
+	} else if cfg.MaxRetries < 0 {
 		opts.MaxRetries = 3
 	}
 	opts.MinRetryBackoff = 100 * time.Millisecond

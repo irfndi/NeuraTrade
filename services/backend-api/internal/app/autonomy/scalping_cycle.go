@@ -76,6 +76,7 @@ type ScalpingPolicyConfig struct {
 	NoFillMaxCapitalPctCap   float64
 	RecoveryMicroEntryCapPct float64
 	ProgressBlockAfter       time.Duration
+	LossStreakBudget         int
 }
 
 func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
@@ -92,6 +93,7 @@ func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
 		NoFillMaxCapitalPctCap:   1.50,
 		RecoveryMicroEntryCapPct: DefaultRecoveryMicroEntryCapPct,
 		ProgressBlockAfter:       DefaultScalpingProgressBlockAfter,
+		LossStreakBudget:         DefaultRecoveryLossStreakBudget,
 	}
 }
 
@@ -138,6 +140,10 @@ func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
 	if c.ProgressBlockAfter <= 0 {
 		c.ProgressBlockAfter = DefaultScalpingProgressBlockAfter
 	}
+	if c.LossStreakBudget <= 0 {
+		c.LossStreakBudget = DefaultRecoveryLossStreakBudget
+	}
+	c.LossStreakBudget = clampInt(c.LossStreakBudget, 1, 20)
 	return c
 }
 
@@ -199,6 +205,7 @@ type CandidateFunnelSnapshot struct {
 	CandidateUniverseCount int                  `json:"candidate_universe_count"`
 	CandidateRankedCount   int                  `json:"candidate_ranked_count"`
 	CandidateViableCount   int                  `json:"candidate_viable_count"`
+	RejectionCounts        map[string]int       `json:"rejection_counts,omitempty"`
 	TopCandidateRejections []CandidateRejection `json:"top_candidate_rejections,omitempty"`
 }
 
@@ -226,6 +233,7 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		EffectiveMaxCapitalPct: clampFloat(input.BaseMaxCapitalPct, 0.10, 100.0),
 		MaxBidAskSpreadPct:     cfg.MaxBidAskSpreadPct,
 		MaxConcurrentPositions: cfg.MaxConcurrentPositions,
+		LossStreakBudget:       cfg.LossStreakBudget,
 	}
 	if policy.EffectiveMaxCapitalPct <= 0 {
 		policy.EffectiveMaxCapitalPct = 0.10
@@ -359,6 +367,7 @@ func ResolveAccountTier(totalValue decimal.Decimal, cfg ScalpingPolicyConfig) st
 func BuildCandidateFunnel(signals []CandidateSignal, policy ScalpingCyclePolicy) CandidateFunnelSnapshot {
 	snapshot := CandidateFunnelSnapshot{
 		CandidateUniverseCount: len(signals),
+		RejectionCounts:        make(map[string]int),
 	}
 	if len(signals) == 0 {
 		return snapshot
@@ -379,6 +388,7 @@ func BuildCandidateFunnel(signals []CandidateSignal, policy ScalpingCyclePolicy)
 			snapshot.CandidateViableCount++
 			continue
 		}
+		snapshot.RejectionCounts[rejection.Reason]++
 		rejections = append(rejections, evaluatedCandidate{
 			rejection: rejection,
 			ranked:    ranked,

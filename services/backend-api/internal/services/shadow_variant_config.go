@@ -79,7 +79,7 @@ func (c ShadowVariantConfig) ParsedPolicy() ShadowVariantPolicy {
 		policy.MaxSpreadPct = &v
 	}
 	if value, ok := readShadowInt(c.PolicyOverrides, ShadowPolicyLossStreakLimit); ok {
-		v := clampShadowInt(value, 1, 50)
+		v := clampShadowInt(value, 1, 20)
 		policy.LossStreakLimit = &v
 	}
 	return policy
@@ -124,6 +124,10 @@ func NewShadowVariantStore(seed []ShadowVariantConfig) *ShadowVariantStore {
 		defaultVariant, _ := NewDefaultShadowVariant().Normalize()
 		store.variants[defaultVariant.VariantID] = defaultVariant
 	}
+	if _, hasBaseline := store.variants["baseline"]; !hasBaseline {
+		defaultVariant, _ := NewDefaultShadowVariant().Normalize()
+		store.variants[defaultVariant.VariantID] = defaultVariant
+	}
 	return store
 }
 
@@ -135,7 +139,9 @@ func (s *ShadowVariantStore) List() []ShadowVariantConfig {
 	defer s.mu.RUnlock()
 	result := make([]ShadowVariantConfig, 0, len(s.variants))
 	for _, variant := range s.variants {
-		result = append(result, variant)
+		clone := variant
+		clone.PolicyOverrides = copyStringInterfaceMap(variant.PolicyOverrides)
+		result = append(result, clone)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].VariantID < result[j].VariantID
@@ -152,9 +158,13 @@ func (s *ShadowVariantStore) Get(variantID string) (ShadowVariantConfig, bool) {
 		return ShadowVariantConfig{}, false
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	variant, ok := s.variants[key]
-	return variant, ok
+	s.mu.RUnlock()
+	if !ok {
+		return ShadowVariantConfig{}, false
+	}
+	variant.PolicyOverrides = copyStringInterfaceMap(variant.PolicyOverrides)
+	return variant, true
 }
 
 func (s *ShadowVariantStore) Upsert(config ShadowVariantConfig) (ShadowVariantConfig, error) {

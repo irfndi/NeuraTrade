@@ -18,6 +18,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/api/handlers"
 	autonomyruntime "github.com/irfndi/neuratrade/internal/app/autonomy/runtime"
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
@@ -25,6 +26,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/irfndi/neuratrade/internal/services/risk"
 	"github.com/irfndi/neuratrade/internal/skill"
+	"github.com/irfndi/neuratrade/internal/telemetry"
 	redisv9 "github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
@@ -95,24 +97,43 @@ func (zapNopServiceLogger) Info(_ string)  {}
 func (zapNopServiceLogger) Warn(_ string)  {}
 func (zapNopServiceLogger) Error(_ string) {}
 
-func parseAIProviderChain(primary string) []string {
+var supportedAIProviders = map[string]struct{}{
+	string(llm.ProviderOpenAI):    {},
+	string(llm.ProviderAnthropic): {},
+	string(llm.ProviderMLX):       {},
+	"minimax":                     {},
+	"zai":                         {},
+	"zai-coding-plan":             {},
+	"zhipu":                       {},
+}
+
+func parseAIProviderChain(primary string) ([]string, error) {
 	primary = strings.ToLower(strings.TrimSpace(primary))
-	if primary == "" {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
+	parts := []string{}
+	if raw != "" {
+		parts = strings.Split(raw, ",")
+	}
+	if primary == "" && len(parts) == 0 {
 		primary = "zhipu"
 	}
 
-	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
-	if raw == "" {
-		raw = "zhipu"
+	seen := make(map[string]struct{})
+	chain := make([]string, 0, len(parts)+1)
+	if primary != "" {
+		if err := validateAIProviderName(primary); err != nil {
+			return nil, err
+		}
+		seen[primary] = struct{}{}
+		chain = append(chain, primary)
 	}
-
-	parts := strings.Split(raw, ",")
-	seen := map[string]struct{}{primary: {}}
-	chain := []string{primary}
 	for _, part := range parts {
 		provider := strings.ToLower(strings.TrimSpace(part))
 		if provider == "" {
 			continue
+		}
+		if err := validateAIProviderName(provider); err != nil {
+			return nil, err
 		}
 		if _, exists := seen[provider]; exists {
 			continue
@@ -120,9 +141,21 @@ func parseAIProviderChain(primary string) []string {
 		seen[provider] = struct{}{}
 		chain = append(chain, provider)
 	}
-	return chain
+	return chain, nil
 }
 
+func validateAIProviderName(provider string) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return nil
+	}
+	if _, ok := supportedAIProviders[provider]; ok {
+		return nil
+	}
+	return fmt.Errorf("unsupported ai provider %q in parseAIProviderChain", provider)
+}
+
+// are mapped to their vendor-specific endpoints, and unknown providers default to the OpenAI API.
 func providerBaseURL(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "anthropic":
@@ -134,7 +167,7 @@ func providerBaseURL(provider string) string {
 	case "zai":
 		return "https://api.z.ai/api/paas/v4"
 	case "zhipu":
-		return "https://open.bigmodel.cn/api/coding/paas/v4"
+		return "https://open.bigmodel.cn/api/paas/v4"
 	case "mlx":
 		return "http://localhost:8080/v1"
 	default:
@@ -172,6 +205,8 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 	return node
 }
 
+// buildLLMProviderClient creates an llm.Client configured for the given provider node.
+// It selects the client implementation appropriate for node.Provider (e.g., "anthropic", "mlx", "minimax", "zai"/"zai-coding-plan", "zhipu") and applies the provided HTTP timeout and max retries; unknown providers use an OpenAI-compatible client by default.
 func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, maxRetries int) llm.Client {
 	config := llm.ClientConfig{
 		Provider:    llm.Provider(node.Provider),
@@ -330,7 +365,10 @@ func riskLockSourcePriority(source string) int {
 	}
 }
 
-// Returns a cleanup function that should be called on shutdown.
+// SetupRoutes configures HTTP routes, middleware, and application handlers, and initializes runtime services used by the API.
+// It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
+//
+//nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
@@ -616,7 +654,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Create autonomous monitoring for tracking quest execution
-	autonomousMonitoring := services.NewAutonomousMonitorManager(notificationService)
+	autonomousMonitoring := services.NewAutonomousMonitorManager(notificationService, telemetry.Logger())
 
 	var sqlDB *sql.DB
 	switch concreteDB := db.(type) {
@@ -643,6 +681,24 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if integratedHandlersErr != nil {
 		log.Printf("Warning: autonomy runtime rollout store unavailable, using local fallback handlers: %v", integratedHandlersErr)
 		integratedHandlers = autonomyruntime.BuildLocalIntegratedHandlers(runtimeDeps)
+	}
+
+	var telemetryStore *services.ScalpingTelemetryStore
+	if sqlDB != nil {
+		telemetryStore = services.NewScalpingTelemetryStoreFromSQLDB(sqlDB, nil)
+		if telemetryStore == nil {
+			log.Printf("Warning: scalping telemetry store unavailable due to nil SQL database")
+		} else {
+			schemaCtx, schemaCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := telemetryStore.EnsureSchema(schemaCtx)
+			schemaCancel()
+			if err != nil {
+				log.Printf("Warning: failed to initialize scalping telemetry store: %v", err)
+				telemetryStore = nil
+			} else {
+				integratedHandlers.SetTelemetryStore(telemetryStore)
+			}
+		}
 	}
 
 	// Wire order executor to integrated handlers for scalping execution
@@ -674,8 +730,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
 	}
 
-	// Use BitgetOrderExecutor for real order execution
 	var orderExecutor services.ScalpingOrderExecutor
+	var liveOrderExecutor services.ScalpingOrderExecutor
 	canUseBitgetCreds := bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase != ""
 	if bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase == "" {
 		log.Printf("⚠️ Bitget API key/secret detected but passphrase is missing; falling back to paper trading")
@@ -688,16 +744,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		bitgetExec := services.NewBitgetOrderExecutor(bitgetAPIKey, bitgetSecret, bitgetPassphrase)
 		bitgetExec.SetNotificationService(notificationService)
 		bitgetExec.SetChatID(chatID)
-		orderExecutor = bitgetExec
+		liveOrderExecutor = bitgetExec
 		log.Printf("✅ Real order execution enabled on Bitget")
-	} else {
-		// Fallback to paper trading if no API keys
-		nativeOrderExec := services.NewNativeOrderExecutor(ccxtService, bitgetAPIKey, bitgetSecret)
-		nativeOrderExec.SetNotificationService(notificationService)
-		nativeOrderExec.SetChatID(chatID)
-		orderExecutor = nativeOrderExec
-		log.Printf("⚠️ Paper trading mode (no Bitget API keys configured)")
 	}
+	paperOrderExec := services.NewNativeOrderExecutor(ccxtService, bitgetAPIKey, bitgetSecret)
+	paperOrderExec.SetNotificationService(notificationService)
+	paperOrderExec.SetChatID(chatID)
+	if liveOrderExecutor == nil {
+		log.Printf("⚠️ Real order execution unavailable at startup; live mode will be blocked until Bitget credentials and wallet mapping are valid")
+	}
+	orderExecutor = services.NewModeAwareOrderExecutor(liveOrderExecutor, paperOrderExec, opModeService)
 
 	orderExecutor = services.NewSafeOrderExecutor(orderExecutor, portfolioSafety, chatID)
 	log.Printf("Portfolio safety gate enabled for scalping order execution")
@@ -777,7 +833,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			}
 		}
 
-		providerChain := parseAIProviderChain(aiProvider)
+		providerChain, chainErr := parseAIProviderChain(aiProvider)
+		if chainErr != nil {
+			log.Printf("AI provider chain invalid; falling back to primary provider only: %v", chainErr)
+			questEngine.SetAIProviderChainStats(0, 0)
+			providerChain = nil
+			if validateAIProviderName(aiProvider) == nil {
+				providerChain = []string{strings.ToLower(strings.TrimSpace(aiProvider))}
+			}
+		}
 		failoverNodes := make([]llm.FailoverNode, 0, len(providerChain))
 		for _, provider := range providerChain {
 			nodeConfig := resolveProviderNode(aiProvider, aiAPIKey, aiBaseURL, provider)
@@ -972,6 +1036,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if lifecycleStore != nil {
 		autonomousHandler.SetLifecycleStore(lifecycleStore)
 	}
+	if telemetryStore != nil {
+		autonomousHandler.SetTelemetryStore(telemetryStore)
+	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
 	// Internal service-to-service routes (no auth, restricted to trusted internal callers)
@@ -1005,7 +1072,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
-	agentControlHandler := handlers.NewAgentControlHandler(integratedHandlers.AutonomyCoordinator())
+	sharedKillSwitch := apprisk.NewKillSwitch()
+	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+
+	agentControlHandler := handlers.NewAgentControlHandler(handlers.AgentControlDeps{
+		Autonomy:  integratedHandlers.AutonomyCoordinator(),
+		Collector: handlers.NewCollectorController(collectorService),
+		Risk:      handlers.NewRiskControllerAdapter(sharedKillSwitch, sharedSafeMode),
+		Orders:    handlers.NewOrderController(ccxtService),
+	})
 	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())
 
 	// API v1 routes with telemetry
@@ -1080,6 +1155,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			{
 				telegramInternal.GET("/quests", autonomousHandler.GetQuests)
 				telegramInternal.GET("/quests/diagnostics", autonomousHandler.GetQuestDiagnostics)
+				telegramInternal.GET("/quests/investigation", autonomousHandler.GetQuestInvestigation)
 				telegramInternal.GET("/portfolio", autonomousHandler.GetPortfolio)
 				telegramInternal.GET("/logs", autonomousHandler.GetLogs)
 				telegramInternal.GET("/performance/summary", autonomousHandler.GetPerformanceSummary)

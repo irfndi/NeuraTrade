@@ -155,6 +155,14 @@ function readRecordArrayField(
   );
 }
 
+/**
+ * Register a "/status" command handler on the provided bot that composes and sends a multi-section status summary.
+ *
+ * The registered handler queries backend services for account, runtime, trading, AI, logs, and diagnostics data, then formats a human-readable status report and replies in-chat. Partial data is tolerated (the handler will include available information and log warnings for any backend failures). The handler also replies with user-facing error messages when chat or user records are missing or when an unexpected error occurs.
+ *
+ * @param bot - Bot instance to register the command on
+ * @param api - Backend API client used to fetch user, doctor, trading mode, portfolio, AI status, logs, and diagnostics
+ */
 export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
   bot.command("status", async (ctx) => {
     const chatId = ctx.chat?.id;

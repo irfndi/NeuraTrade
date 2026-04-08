@@ -97,7 +97,7 @@ func (e *NativeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	if scopedChatID := strings.TrimSpace(scalpingChatIDFromContext(ctx)); scopedChatID != "" {
 		chatID = scopedChatID
 	}
-	if e.notificationService != nil && chatID != "" {
+	if !details.IsPaperTrade && e.notificationService != nil && chatID != "" {
 		msg := e.formatTradeNotification(details, orderID)
 		chatIDInt, err := strconv.ParseInt(chatID, 10, 64)
 		if err != nil {

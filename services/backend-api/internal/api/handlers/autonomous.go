@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ type AutonomousHandler struct {
 	configuredExchanges []string
 	reconciler          *services.ExchangePositionReconciler
 	lifecycleStore      *services.TradingLifecycleStore
+	telemetryStore      *services.ScalpingTelemetryStore
 }
 
 // NewAutonomousHandler creates a new autonomous handler
@@ -49,6 +51,10 @@ func NewAutonomousHandlerWithReconciler(questEngine *services.QuestEngine, portf
 
 func (h *AutonomousHandler) SetLifecycleStore(store *services.TradingLifecycleStore) {
 	h.lifecycleStore = store
+}
+
+func (h *AutonomousHandler) SetTelemetryStore(store *services.ScalpingTelemetryStore) {
+	h.telemetryStore = store
 }
 
 // BeginRequest represents the request body for /begin
@@ -527,6 +533,125 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func parseQuestInvestigationParams(c *gin.Context) (chatID string, since time.Time, bucketMinutes int, err error) {
+	now := time.Now().UTC()
+	maxLookback := now.Add(-30 * 24 * time.Hour)
+	chatID = strings.TrimSpace(c.Query("chat_id"))
+	if chatID == "" {
+		err = fmt.Errorf("chat_id is required")
+		return
+	}
+	since = now.AddDate(0, 0, -7)
+	if sinceStr := strings.TrimSpace(c.Query("since")); sinceStr != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339, sinceStr); parseErr == nil {
+			since = parsed.UTC()
+		} else if parsed, parseErr := time.Parse("2006-01-02", sinceStr); parseErr == nil {
+			since = parsed.UTC()
+		} else {
+			err = fmt.Errorf("invalid 'since' format, use RFC3339 or YYYY-MM-DD")
+			return
+		}
+	}
+	if since.After(now) {
+		err = fmt.Errorf("since must not be in the future")
+		return
+	}
+	if since.Before(maxLookback) {
+		err = fmt.Errorf("since must be within the last 30 days")
+		return
+	}
+	bucketMinutes = 60
+	if bmStr := strings.TrimSpace(c.Query("bucket_minutes")); bmStr != "" {
+		var bm int
+		bm, err = strconv.Atoi(bmStr)
+		if err != nil {
+			err = fmt.Errorf("bucket_minutes must be an integer between 5 and 1440")
+			return
+		}
+		if bm < 5 || bm > 1440 {
+			err = fmt.Errorf("bucket_minutes must be between 5 and 1440")
+			return
+		}
+		bucketMinutes = bm
+	}
+	return
+}
+
+func (h *AutonomousHandler) loadQuestInvestigationData(ctx context.Context, chatID string, since time.Time, bucketMinutes int) (map[string]int, []services.GateBlockStat, []services.RegimeOutcomeStat, []services.AdjustmentImpactStat, []services.WinRateBucket, error) {
+	histogram, err := h.telemetryStore.GetRejectionHistogram(ctx, chatID, since)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load rejection histogram: %w", err)
+	}
+	gateBlocks, err := h.telemetryStore.GetGateBlockSummary(ctx, chatID, since)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load gate block summary: %w", err)
+	}
+	regimeOutcomes, err := h.telemetryStore.GetRegimeOutcomeCorrelation(ctx, chatID, since)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load regime outcomes: %w", err)
+	}
+	policyImpact, err := h.telemetryStore.GetPolicyAdjustmentImpact(ctx, chatID, since)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load policy adjustment impact: %w", err)
+	}
+	winRateTrend, err := h.telemetryStore.GetCycleWinRateTrend(ctx, chatID, since, bucketMinutes)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to load win rate trend: %w", err)
+	}
+	return histogram, gateBlocks, regimeOutcomes, policyImpact, winRateTrend, nil
+}
+
+func summarizeQuestInvestigation(regimeOutcomes []services.RegimeOutcomeStat, totalCyclesAll int) (int, int, float64) {
+	totalWins := 0
+	executedCycles := 0
+	for _, ro := range regimeOutcomes {
+		executedCycles += ro.Count
+		totalWins += ro.Wins
+	}
+	overallWinRate := 0.0
+	if executedCycles > 0 {
+		overallWinRate = float64(totalWins) / float64(executedCycles)
+	}
+	return totalCyclesAll, executedCycles, overallWinRate
+}
+
+func (h *AutonomousHandler) GetQuestInvestigation(c *gin.Context) {
+	chatID, since, bucketMinutes, err := parseQuestInvestigationParams(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if h.telemetryStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "telemetry store not available"})
+		return
+	}
+	histogram, gateBlocks, regimeOutcomes, policyImpact, winRateTrend, err := h.loadQuestInvestigationData(c.Request.Context(), chatID, since, bucketMinutes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	totalCyclesAll, err := h.telemetryStore.GetCycleCount(c.Request.Context(), chatID, since)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to load total_cycles: %v", err)})
+		return
+	}
+	totalCycles, executedCycles, overallWinRate := summarizeQuestInvestigation(regimeOutcomes, totalCyclesAll)
+	c.JSON(http.StatusOK, gin.H{
+		"rejection_histogram":      histogram,
+		"gate_block_summary":       gateBlocks,
+		"regime_outcomes":          regimeOutcomes,
+		"policy_adjustment_impact": policyImpact,
+		"win_rate_trend":           winRateTrend,
+		"metadata": gin.H{
+			"total_cycles":    totalCycles,
+			"executed_cycles": executedCycles,
+			"win_rate":        overallWinRate,
+			"period_start":    since.Format(time.RFC3339),
+			"period_end":      time.Now().UTC().Format(time.RFC3339),
+		},
+	})
 }
 
 func heartbeatDiagnostics(heartbeat *services.TradingHeartbeat) gin.H {
