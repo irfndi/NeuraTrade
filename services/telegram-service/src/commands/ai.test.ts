@@ -58,6 +58,7 @@ describe("AI commands", () => {
       async getAIStatus(userId: string) {
         capturedUserId = userId;
         return {
+          readiness: "ready",
           selected_model: "gpt-4o-mini",
           provider: "openai",
           daily_spend: "0.00",
@@ -74,7 +75,7 @@ describe("AI commands", () => {
 
     expect(capturedUserId).toBe("-100123");
     expect(ctx.replies).toHaveLength(1);
-    expect(ctx.replies[0]).toContain("AI Configuration");
+    expect(ctx.replies[0]).toContain("AI Status");
   });
 
   test("/ai_models splits oversized payload into multiple Telegram messages", async () => {
