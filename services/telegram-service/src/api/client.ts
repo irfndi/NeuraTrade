@@ -285,12 +285,9 @@ export class BackendApiClient {
   }
 
   async getAIProviders(): Promise<AIProvidersResponse> {
-    return this.fetch<AIProvidersResponse>(
-      API_ENDPOINTS.GET_AI_PROVIDERS,
-      {
-        requireAdmin: false,
-      },
-    );
+    return this.fetch<AIProvidersResponse>(API_ENDPOINTS.GET_AI_PROVIDERS, {
+      requireAdmin: false,
+    });
   }
 
   async getAIProviderModels(
