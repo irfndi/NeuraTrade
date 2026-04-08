@@ -238,10 +238,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       lines.push(`📅 Monthly Spend: $${result.monthly_spend || "0.00"}`);
       lines.push(`🎯 Budget Limit: $${result.budget_limit ?? "Unlimited"}`);
 
-      if (
-        result.provider_chain_configured != null &&
-        readiness !== "degraded"
-      ) {
+      if (result.provider_chain_configured != null && readiness !== "degraded") {
         lines.push(
           `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
         );
@@ -255,9 +252,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       lines.push("  /ai_providers - List available providers");
       lines.push("  /ai_models - List all models");
       lines.push("  /ai_select <model> - Pin a specific model");
-      lines.push(
-        "  /ai_route [fast|balanced|accurate] [tools|vision|reasoning] - Auto-route to best model",
-      );
+      lines.push("  /ai_route [fast|balanced|accurate] [tools|vision|reasoning] - Auto-route to best model");
 
       await ctx.reply(lines.join("\n"));
     } catch (error) {

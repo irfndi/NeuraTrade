@@ -1471,7 +1471,7 @@ func aiStatus(cCtx *cli.Context) error {
 		if effectiveModel != "" {
 			fmt.Printf("  Effective Model: %s\n", effectiveModel)
 		}
-		fmt.Println("  Use 'neuratrade ai models' to browse available models or let auto-route decide.")
+		fmt.Println("  Browse models with 'neuratrade ai models' or let auto-route decide.")
 	case "degraded":
 		fmt.Println("  AI is degraded (provider chain has issues).")
 		if v, ok := status["provider_chain_usable"].(float64); ok {
