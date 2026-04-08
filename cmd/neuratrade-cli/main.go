@@ -1320,7 +1320,7 @@ func listAIModels(cCtx *cli.Context) error {
 
 	var endpoint string
 	if providerFilter != "" {
-		endpoint = fmt.Sprintf("/api/v1/ai/providers/%s/models", providerFilter)
+		endpoint = fmt.Sprintf("/api/v1/ai/providers/%s/models", url.PathEscape(providerFilter))
 	} else {
 		endpoint = "/api/v1/ai/models"
 	}
@@ -1471,7 +1471,7 @@ func aiStatus(cCtx *cli.Context) error {
 		if effectiveModel != "" {
 			fmt.Printf("  Effective Model: %s\n", effectiveModel)
 		}
-		fmt.Println("  Pin a model with 'neuratrade ai select' or let auto-route decide.")
+		fmt.Println("  Use 'neuratrade ai models' to browse available models or let auto-route decide.")
 	case "degraded":
 		fmt.Println("  AI is degraded (provider chain has issues).")
 		if v, ok := status["provider_chain_usable"].(float64); ok {

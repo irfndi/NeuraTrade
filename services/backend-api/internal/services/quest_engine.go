@@ -2351,6 +2351,9 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 			if provider, ok := cp["runtime_ai_last_success_provider"].(string); ok {
 				aiLastSuccessProvider = strings.TrimSpace(provider)
 			}
+			if model, ok := cp["runtime_ai_last_success_model"].(string); ok {
+				aiLastSuccessModel = strings.TrimSpace(model)
+			}
 			if msg, ok := cp["runtime_ai_last_error"].(string); ok {
 				aiLastError = strings.TrimSpace(msg)
 			}
