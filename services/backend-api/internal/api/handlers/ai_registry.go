@@ -356,11 +356,17 @@ func (h *AIHandler) GetProviders(c *gin.Context) {
 
 	result := make([]ProviderSummary, 0, len(providers))
 	for _, p := range providers {
+		activeCount := 0
+		for _, m := range p.Models {
+			if m.Status == "active" {
+				activeCount++
+			}
+		}
 		result = append(result, ProviderSummary{
 			ID:         p.ID,
 			Name:       p.Name,
 			IsActive:   true,
-			ModelCount: len(p.Models),
+			ModelCount: activeCount,
 		})
 	}
 

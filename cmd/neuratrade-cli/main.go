@@ -1192,26 +1192,6 @@ type AIModel struct {
 	SupportsVision bool   `json:"supports_vision"`
 }
 
-// AIModelsResponse represents the response from the AI models endpoint
-type AIModelsResponse struct {
-	Models []AIModel `json:"models"`
-}
-
-// GetAIModels retrieves available AI models from the API
-func (c *APIClient) GetAIModels() (*AIModelsResponse, error) {
-	respBody, err := c.makeRequest("GET", "/api/v1/ai/models", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var response AIModelsResponse
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &response, nil
-}
-
 // AIProvider represents an AI provider
 type AIProvider struct {
 	ID         string `json:"id"`

@@ -1061,13 +1061,15 @@ func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
 	provider := ""
 	modelLower := strings.ToLower(strings.TrimSpace(selectedModel))
 	switch {
-	case strings.HasPrefix(modelLower, "gpt"):
+	case strings.HasPrefix(modelLower, "gpt") || strings.HasPrefix(modelLower, "o1") || strings.HasPrefix(modelLower, "o3") || strings.HasPrefix(modelLower, "o4"):
 		provider = "openai"
 	case strings.HasPrefix(modelLower, "claude"):
 		provider = "anthropic"
+	case strings.Contains(modelLower, "gemini"):
+		provider = "google"
 	case strings.Contains(modelLower, "glm"):
 		provider = "zhipu"
-	case strings.Contains(modelLower, "mini"):
+	case strings.HasPrefix(modelLower, "minimax") || strings.HasPrefix(modelLower, "abab"):
 		provider = "minimax"
 	}
 

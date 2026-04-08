@@ -202,7 +202,9 @@ func TestListAIModels(t *testing.T) {
 		assert.Equal(t, "/api/v1/ai/models", r.URL.Path)
 		assert.Equal(t, "GET", r.Method)
 
-		response := AIModelsResponse{
+		response := struct {
+			Models []AIModel `json:"models"`
+		}{
 			Models: []AIModel{
 				{
 					ID:             "gpt-4-turbo",

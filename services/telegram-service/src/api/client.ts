@@ -26,6 +26,7 @@ import type {
   CreateAlertRequest,
   CreateAlertResponse,
   AIProviderModelsResponse,
+  AIProvidersResponse,
 } from "./types";
 import { API_ENDPOINTS } from "./types";
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./rate-limiter";
@@ -283,8 +284,8 @@ export class BackendApiClient {
     });
   }
 
-  async getAIProviders(): Promise<import("./types").AIProvidersResponse> {
-    return this.fetch<import("./types").AIProvidersResponse>(
+  async getAIProviders(): Promise<AIProvidersResponse> {
+    return this.fetch<AIProvidersResponse>(
       API_ENDPOINTS.GET_AI_PROVIDERS,
       {
         requireAdmin: false,
