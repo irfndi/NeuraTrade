@@ -1293,6 +1293,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		{
 			// Public read/routing endpoints used by external clients.
 			ai.GET("/models", aiHandler.GetModels)
+			ai.GET("/providers", aiHandler.GetProviders)
+			ai.GET("/providers/:providerId/models", aiHandler.GetProviderModels)
 			ai.POST("/route", aiHandler.RouteModel)
 
 			// User-specific model operations require authentication.

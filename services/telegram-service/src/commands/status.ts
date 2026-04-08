@@ -59,6 +59,19 @@ function summarizeAI(ai: AIStatusResponse): string {
   const model = ai.selected_model || "none selected";
   const provider = ai.provider || "n/a";
   const budget = ai.daily_budget_exceeded ? "budget exceeded" : "budget ok";
+  const readiness = ai.readiness || "unavailable";
+
+  if (readiness === "ready_auto_route") {
+    const effectiveProvider = ai.effective_provider || provider;
+    const effectiveModel = ai.effective_model || "auto";
+    return `${effectiveModel} (${effectiveProvider}, auto-route, ${budget})`;
+  }
+  if (readiness === "ready") {
+    return `${model} (${provider}, ${budget})`;
+  }
+  if (readiness === "degraded") {
+    return `${model} (${provider}, degraded, ${budget})`;
+  }
   return `${model} (${provider}, ${budget})`;
 }
 

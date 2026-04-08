@@ -501,7 +501,8 @@ func (c *ShadowEvaluationCoordinator) executeShadowDecision(
 		return err
 	}
 	runtime.tradeCount++
-	if action == "buy" {
+	switch action {
+	case "buy":
 		runtime.openDecisions[mirrored.Symbol] = decisionID
 		runtime.lastEntryPrice[mirrored.Symbol] = filled.AvgFillPrice
 		runtime.openedAt[mirrored.Symbol] = time.Now().UTC()
