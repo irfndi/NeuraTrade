@@ -217,7 +217,7 @@ jobs:
         run: cd services/backend-api && govulncheck ./cmd/... ./internal/... ./pkg/...
 
       - name: Run vulnerability scan (trivy)
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         env:
           TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         with:
@@ -226,7 +226,6 @@ jobs:
           format: table
           exit-code: "1"
           severity: HIGH,CRITICAL
-          version: v0.69.2
 
   frontend-security:
     name: Frontend Security (telegram-service)
