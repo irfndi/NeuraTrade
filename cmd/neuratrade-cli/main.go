@@ -1387,9 +1387,62 @@ func listAIProviders(cCtx *cli.Context) error {
 	}
 
 	fmt.Println("\nUse 'neuratrade ai models --provider <id>' to list models for a provider.")
-	fmt.Println("Use 'neuratrade ai status' to check AI runtime readiness.")
+	fmt.Println("Use 'neuratrade ai status --chat-id <id>' to check AI runtime readiness.")
 
 	return nil
+}
+
+type aiStatusResponse struct {
+	Readiness               string `json:"readiness"`
+	SelectedModel           string `json:"selected_model"`
+	Provider                string `json:"provider"`
+	EffectiveProvider       string `json:"effective_provider"`
+	EffectiveModel          string `json:"effective_model"`
+	ProviderChainUsable     int    `json:"provider_chain_usable"`
+	ProviderChainConfigured int    `json:"provider_chain_configured"`
+	DailySpend              string `json:"daily_spend"`
+	MonthlySpend            string `json:"monthly_spend"`
+	BudgetLimit             string `json:"budget_limit"`
+}
+
+func printAIStatus(s aiStatusResponse) {
+	fmt.Printf("Readiness: %s\n", s.Readiness)
+
+	switch s.Readiness {
+	case "ready":
+		fmt.Println("  AI is ready with pinned model.")
+		fmt.Printf("  Selected Model: %s\n", s.SelectedModel)
+		fmt.Printf("  Provider: %s\n", s.Provider)
+	case "ready_auto_route":
+		fmt.Println("  AI is ready via provider-chain (auto-routing active).")
+		if s.EffectiveProvider != "" {
+			fmt.Printf("  Effective Provider: %s\n", s.EffectiveProvider)
+		}
+		if s.EffectiveModel != "" {
+			fmt.Printf("  Effective Model: %s\n", s.EffectiveModel)
+		}
+		fmt.Println("  Browse models with 'neuratrade ai models' or let auto-route decide.")
+	case "degraded":
+		fmt.Println("  AI is degraded (provider chain has issues).")
+		if s.ProviderChainConfigured > 0 {
+			fmt.Printf("  Provider Chain: %d/%d usable\n", s.ProviderChainUsable, s.ProviderChainConfigured)
+		}
+	default:
+		fmt.Println("  AI is not available.")
+		fmt.Println("  Configure an AI provider in ~/.neuratrade/config.json")
+	}
+
+	if s.DailySpend != "" {
+		fmt.Printf("  Daily Spend: $%s\n", s.DailySpend)
+	}
+	if s.MonthlySpend != "" {
+		fmt.Printf("  Monthly Spend: $%s\n", s.MonthlySpend)
+	}
+	budgetLimit := s.BudgetLimit
+	if budgetLimit == "" {
+		budgetLimit = "Unlimited"
+	}
+	fmt.Printf("  Budget Limit: %s\n", budgetLimit)
 }
 
 func aiStatus(cCtx *cli.Context) error {
@@ -1414,72 +1467,12 @@ func aiStatus(cCtx *cli.Context) error {
 		return err
 	}
 
-	var status map[string]interface{}
+	var status aiStatusResponse
 	if err := json.Unmarshal(respBody, &status); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	readiness := "unavailable"
-	if v, ok := status["readiness"].(string); ok {
-		readiness = v
-	}
-
-	fmt.Printf("Readiness: %s\n", readiness)
-
-	switch readiness {
-	case "ready":
-		fmt.Println("  AI is ready with pinned model.")
-		selectedModel := ""
-		if v, ok := status["selected_model"].(string); ok {
-			selectedModel = v
-		}
-		provider := ""
-		if v, ok := status["provider"].(string); ok {
-			provider = v
-		}
-		fmt.Printf("  Selected Model: %s\n", selectedModel)
-		fmt.Printf("  Provider: %s\n", provider)
-	case "ready_auto_route":
-		fmt.Println("  AI is ready via provider-chain (auto-routing active).")
-		effectiveProvider := ""
-		if v, ok := status["effective_provider"].(string); ok {
-			effectiveProvider = v
-		}
-		effectiveModel := ""
-		if v, ok := status["effective_model"].(string); ok {
-			effectiveModel = v
-		}
-		if effectiveProvider != "" {
-			fmt.Printf("  Effective Provider: %s\n", effectiveProvider)
-		}
-		if effectiveModel != "" {
-			fmt.Printf("  Effective Model: %s\n", effectiveModel)
-		}
-		fmt.Println("  Browse models with 'neuratrade ai models' or let auto-route decide.")
-	case "degraded":
-		fmt.Println("  AI is degraded (provider chain has issues).")
-		if v, ok := status["provider_chain_usable"].(float64); ok {
-			if v2, ok2 := status["provider_chain_configured"].(float64); ok2 {
-				fmt.Printf("  Provider Chain: %d/%d usable\n", int(v), int(v2))
-			}
-		}
-	default:
-		fmt.Println("  AI is not available.")
-		fmt.Println("  Configure an AI provider in ~/.neuratrade/config.json")
-	}
-
-	if v, ok := status["daily_spend"].(string); ok {
-		fmt.Printf("  Daily Spend: $%s\n", v)
-	}
-	if v, ok := status["monthly_spend"].(string); ok {
-		fmt.Printf("  Monthly Spend: $%s\n", v)
-	}
-	budgetLimit := "Unlimited"
-	if v, ok := status["budget_limit"].(string); ok {
-		budgetLimit = v
-	}
-	fmt.Printf("  Budget Limit: %s\n", budgetLimit)
-
+	printAIStatus(status)
 	return nil
 }
 
