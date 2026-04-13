@@ -2,9 +2,9 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/ai"
@@ -385,7 +385,7 @@ func (h *AIHandler) GetProviderModels(c *gin.Context) {
 
 	models, err := h.registry.GetModelsByProvider(ctx, providerID)
 	if err != nil {
-		if strings.Contains(err.Error(), "no models found") {
+		if errors.Is(err, ai.ErrNoModels) {
 			c.JSON(http.StatusOK, gin.H{
 				"provider": providerID,
 				"models":   []AIModelInfo{},

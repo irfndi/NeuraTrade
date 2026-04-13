@@ -5,6 +5,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -14,6 +15,10 @@ import (
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 )
+
+// ErrNoModels is returned by GetModelsByProvider when the provider exists
+// but has no models registered in the registry.
+var ErrNoModels = errors.New("no models found for provider")
 
 const (
 	// ModelsDevAPIURL is the endpoint for models.dev API
@@ -415,7 +420,7 @@ func (r *Registry) GetModelsByProvider(ctx context.Context, providerID string) (
 	}
 
 	if len(models) == 0 {
-		return nil, fmt.Errorf("no models found for provider %s", providerID)
+		return nil, fmt.Errorf("%w: %s", ErrNoModels, providerID)
 	}
 
 	return models, nil
