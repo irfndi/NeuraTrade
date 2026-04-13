@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -281,19 +282,16 @@ func (h *AIHandler) GetModelStatus(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Get user's selected model (SQLite-compatible syntax)
 	var selectedModel string
 	if h.db != nil {
 		querier, ok := h.db.(dbQuerier)
 		if ok {
-			// Use ? placeholder for SQLite compatibility instead of $1
 			err := querier.QueryRow(ctx,
 				"SELECT selected_ai_model FROM users WHERE telegram_id = ?",
 				userID,
 			).Scan(&selectedModel)
 
 			if err != nil {
-				// User not found or no model selected
 				c.JSON(http.StatusOK, gin.H{
 					"selected_model": "",
 					"provider":       "",
@@ -318,7 +316,6 @@ func (h *AIHandler) GetModelStatus(c *gin.Context) {
 		return
 	}
 
-	// Get model info from registry
 	modelInfo, err := h.registry.FindModel(ctx, selectedModel)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -339,5 +336,90 @@ func (h *AIHandler) GetModelStatus(c *gin.Context) {
 		"monthly_spend":         "0.00",
 		"budget_limit":          "Unlimited",
 		"daily_budget_exceeded": false,
+	})
+}
+
+func (h *AIHandler) GetProviders(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	providers, err := h.registry.GetActiveProviders(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get providers"})
+		return
+	}
+
+	type ProviderSummary struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		IsActive   bool   `json:"is_active"`
+		ModelCount int    `json:"model_count"`
+	}
+
+	result := make([]ProviderSummary, 0, len(providers))
+	for _, p := range providers {
+		activeCount := 0
+		for _, m := range p.Models {
+			if m.Status == "active" {
+				activeCount++
+			}
+		}
+		result = append(result, ProviderSummary{
+			ID:         p.ID,
+			Name:       p.Name,
+			IsActive:   activeCount > 0,
+			ModelCount: activeCount,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"providers": result})
+}
+
+func (h *AIHandler) GetProviderModels(c *gin.Context) {
+	providerID := c.Param("providerId")
+	if providerID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provider_id is required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	models, err := h.registry.GetModelsByProvider(ctx, providerID)
+	if err != nil {
+		if errors.Is(err, ai.ErrNoModels) {
+			c.JSON(http.StatusOK, gin.H{
+				"provider": providerID,
+				"models":   []AIModelInfo{},
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":    fmt.Sprintf("failed to get models for provider %q", providerID),
+			"provider": providerID,
+			"models":   []AIModelInfo{},
+		})
+		return
+	}
+
+	result := []AIModelInfo{}
+	for _, m := range models {
+		if m.Status != "active" {
+			continue
+		}
+		cost := m.Cost.InputCost.Add(m.Cost.OutputCost)
+		result = append(result, AIModelInfo{
+			ModelID:        m.ModelID,
+			Provider:       m.ProviderID,
+			DisplayName:    m.DisplayName,
+			SupportsTools:  m.Capabilities.SupportsTools,
+			SupportsVision: m.Capabilities.SupportsVision,
+			Cost:           cost.StringFixed(2),
+			LatencyClass:   m.LatencyClass,
+			ContextLimit:   m.Limits.ContextLimit,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"provider": providerID,
+		"models":   result,
 	})
 }

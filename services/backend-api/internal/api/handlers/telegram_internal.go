@@ -994,7 +994,7 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 				"status":   "healthy",
 				"impact":   "optional",
 				"optional": true,
-				"message":  "No AI model selected",
+				"message":  "No user record found",
 			})
 		} else {
 			checks = append(checks, gin.H{
@@ -1007,8 +1007,8 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		}
 	} else {
 		message := "AI snapshot probe successful"
-		if strings.TrimSpace(selectedModel) == "" {
-			message = "No AI model selected"
+		if strings.TrimSpace(selectedModel) != "" {
+			message = fmt.Sprintf("Model selected: %s", selectedModel)
 		}
 		checks = append(checks, gin.H{
 			"name":     "ai-snapshot",
@@ -1043,6 +1043,7 @@ func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
 	}
 
 	selectedModel := ""
+	lookupError := false
 	query := `
 		SELECT COALESCE(selected_ai_model, '')
 		FROM users
@@ -1051,29 +1052,87 @@ func (h *TelegramInternalHandler) GetAIStatusByChatID(c *gin.Context) {
 		LIMIT 1
 	`
 	if err := h.db.QueryRow(c.Request.Context(), query, chatID).Scan(&selectedModel); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			lookupError = true
+		}
 		selectedModel = ""
 	}
 
 	provider := ""
 	modelLower := strings.ToLower(strings.TrimSpace(selectedModel))
 	switch {
-	case strings.HasPrefix(modelLower, "gpt"):
+	case strings.HasPrefix(modelLower, "gpt") || strings.HasPrefix(modelLower, "o1") || strings.HasPrefix(modelLower, "o3") || strings.HasPrefix(modelLower, "o4"):
 		provider = "openai"
 	case strings.HasPrefix(modelLower, "claude"):
 		provider = "anthropic"
+	case strings.Contains(modelLower, "gemini"):
+		provider = "google"
 	case strings.Contains(modelLower, "glm"):
 		provider = "zhipu"
-	case strings.Contains(modelLower, "mini"):
+	case strings.HasPrefix(modelLower, "minimax") || strings.HasPrefix(modelLower, "abab"):
 		provider = "minimax"
 	}
 
+	runtimeReady := false
+	providerChainConfigured := 0
+	providerChainUsable := 0
+	effectiveProvider := ""
+	effectiveModel := ""
+	autoRouting := false
+
+	if h.questEngine != nil {
+		diagnostics := h.questEngine.GetChatRuntimeDiagnostics(chatID)
+		rawRuntime, _ := diagnostics["ai_runtime"].(map[string]interface{})
+		if rawRuntime != nil {
+			providerChainConfigured = readIntFromRecord(rawRuntime, "provider_chain_configured")
+			providerChainUsable = readIntFromRecord(rawRuntime, "provider_chain_usable")
+
+			if lastProvider, ok := rawRuntime["last_success_provider"].(string); ok && strings.TrimSpace(lastProvider) != "" {
+				effectiveProvider = strings.TrimSpace(lastProvider)
+			}
+			if lastModel, ok := rawRuntime["last_success_model"].(string); ok && strings.TrimSpace(lastModel) != "" {
+				effectiveModel = strings.TrimSpace(lastModel)
+			}
+		} else {
+			providerChainConfigured = readIntFromRecord(diagnostics, "provider_chain_configured")
+			providerChainUsable = readIntFromRecord(diagnostics, "provider_chain_usable")
+		}
+
+		if providerChainUsable > 0 {
+			runtimeReady = true
+		}
+	}
+
+	if selectedModel == "" && runtimeReady && !lookupError {
+		autoRouting = true
+	}
+
+	readiness := "unavailable"
+	switch {
+	case lookupError:
+		readiness = "unavailable"
+	case providerChainUsable > 0 && selectedModel != "":
+		readiness = "ready"
+	case providerChainUsable > 0 && selectedModel == "":
+		readiness = "ready_auto_route"
+	case providerChainConfigured > 0 && providerChainUsable == 0:
+		readiness = "degraded"
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"selected_model":        selectedModel,
-		"provider":              provider,
-		"daily_spend":           "0.00",
-		"monthly_spend":         "0.00",
-		"budget_limit":          "Unlimited",
-		"daily_budget_exceeded": false,
+		"selected_model":            selectedModel,
+		"provider":                  provider,
+		"daily_spend":               "0.00",
+		"monthly_spend":             "0.00",
+		"budget_limit":              "Unlimited",
+		"daily_budget_exceeded":     false,
+		"runtime_ready":             runtimeReady,
+		"provider_chain_configured": providerChainConfigured,
+		"provider_chain_usable":     providerChainUsable,
+		"effective_provider":        effectiveProvider,
+		"effective_model":           effectiveModel,
+		"auto_routing":              autoRouting,
+		"readiness":                 readiness,
 	})
 }
 

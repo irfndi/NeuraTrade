@@ -396,11 +396,25 @@ func main() {
 						Name:   "models",
 						Usage:  "List available AI models",
 						Action: listAIModels,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:  "provider",
+								Usage: "Filter models by provider ID",
+							},
+						},
 					},
 					{
 						Name:   "providers",
 						Usage:  "List available AI providers",
 						Action: listAIProviders,
+					},
+					{
+						Name:   "status",
+						Usage:  "Show AI runtime readiness and model status",
+						Action: aiStatus,
+						Flags: []cli.Flag{
+							chatIDFlag(true),
+						},
 					},
 				},
 			},
@@ -1174,7 +1188,7 @@ func getQuests(cCtx *cli.Context) error {
 
 // AIModel represents an AI model
 type AIModel struct {
-	ID             string `json:"id"`
+	ID             string `json:"model_id"`
 	DisplayName    string `json:"display_name"`
 	Provider       string `json:"provider"`
 	Cost           string `json:"cost"`
@@ -1182,31 +1196,12 @@ type AIModel struct {
 	SupportsVision bool   `json:"supports_vision"`
 }
 
-// AIModelsResponse represents the response from the AI models endpoint
-type AIModelsResponse struct {
-	Models []AIModel `json:"models"`
-}
-
-// GetAIModels retrieves available AI models from the API
-func (c *APIClient) GetAIModels() (*AIModelsResponse, error) {
-	respBody, err := c.makeRequest("GET", "/api/v1/ai/models", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var response AIModelsResponse
-	if err := json.Unmarshal(respBody, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &response, nil
-}
-
 // AIProvider represents an AI provider
 type AIProvider struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	IsActive bool   `json:"is_active"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IsActive   bool   `json:"is_active"`
+	ModelCount int    `json:"model_count"`
 }
 
 // AIProvidersResponse represents the response from the AI providers endpoint
@@ -1305,9 +1300,17 @@ func listAIModels(cCtx *cli.Context) error {
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	response, err := client.GetAIModels()
+	providerFilter := strings.TrimSpace(cCtx.String("provider"))
+
+	var endpoint string
+	if providerFilter != "" {
+		endpoint = fmt.Sprintf("/api/v1/ai/providers/%s/models", url.PathEscape(providerFilter))
+	} else {
+		endpoint = "/api/v1/ai/models"
+	}
+
+	respBody, err := client.makeRequest("GET", endpoint, nil)
 	if err != nil {
-		// API call failed - show error and exit
 		fmt.Printf("Error: Could not reach API: %v\n", err)
 		fmt.Println("\nMake sure the NeuraTrade backend is running:")
 		fmt.Println("  neuratrade gateway start")
@@ -1316,9 +1319,25 @@ func listAIModels(cCtx *cli.Context) error {
 		return err
 	}
 
+	var response struct {
+		Models []AIModel `json:"models"`
+	}
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
 	if len(response.Models) == 0 {
-		fmt.Println("No AI models available.")
+		if providerFilter != "" {
+			fmt.Printf("No AI models found for provider '%s'.\n", providerFilter)
+			fmt.Println("Use 'neuratrade ai providers' to list available providers.")
+		} else {
+			fmt.Println("No AI models available.")
+		}
 		return nil
+	}
+
+	if providerFilter != "" {
+		fmt.Printf("Models from provider: %s\n\n", providerFilter)
 	}
 
 	for _, model := range response.Models {
@@ -1364,9 +1383,96 @@ func listAIProviders(cCtx *cli.Context) error {
 		if !provider.IsActive {
 			status = "inactive"
 		}
-		fmt.Printf("- %s (%s) [%s]\n", provider.Name, provider.ID, status)
+		fmt.Printf("- %s (%s) [%s] - %d models\n", provider.Name, provider.ID, status, provider.ModelCount)
 	}
 
+	fmt.Println("\nUse 'neuratrade ai models --provider <id>' to list models for a provider.")
+	fmt.Println("Use 'neuratrade ai status --chat-id <id>' to check AI runtime readiness.")
+
+	return nil
+}
+
+type aiStatusResponse struct {
+	Readiness               string `json:"readiness"`
+	SelectedModel           string `json:"selected_model"`
+	Provider                string `json:"provider"`
+	EffectiveProvider       string `json:"effective_provider"`
+	EffectiveModel          string `json:"effective_model"`
+	ProviderChainUsable     int    `json:"provider_chain_usable"`
+	ProviderChainConfigured int    `json:"provider_chain_configured"`
+	DailySpend              string `json:"daily_spend"`
+	MonthlySpend            string `json:"monthly_spend"`
+	BudgetLimit             string `json:"budget_limit"`
+}
+
+func printAIStatus(s aiStatusResponse) {
+	fmt.Printf("Readiness: %s\n", s.Readiness)
+
+	switch s.Readiness {
+	case "ready":
+		fmt.Println("  AI is ready with pinned model.")
+		fmt.Printf("  Selected Model: %s\n", s.SelectedModel)
+		fmt.Printf("  Provider: %s\n", s.Provider)
+	case "ready_auto_route":
+		fmt.Println("  AI is ready via provider-chain (auto-routing active).")
+		if s.EffectiveProvider != "" {
+			fmt.Printf("  Effective Provider: %s\n", s.EffectiveProvider)
+		}
+		if s.EffectiveModel != "" {
+			fmt.Printf("  Effective Model: %s\n", s.EffectiveModel)
+		}
+		fmt.Println("  Browse models with 'neuratrade ai models' or let auto-route decide.")
+	case "degraded":
+		fmt.Println("  AI is degraded (provider chain has issues).")
+		if s.ProviderChainConfigured > 0 {
+			fmt.Printf("  Provider Chain: %d/%d usable\n", s.ProviderChainUsable, s.ProviderChainConfigured)
+		}
+	default:
+		fmt.Println("  AI is not available.")
+		fmt.Println("  Configure an AI provider in ~/.neuratrade/config.json")
+	}
+
+	if s.DailySpend != "" {
+		fmt.Printf("  Daily Spend: $%s\n", s.DailySpend)
+	}
+	if s.MonthlySpend != "" {
+		fmt.Printf("  Monthly Spend: $%s\n", s.MonthlySpend)
+	}
+	budgetLimit := s.BudgetLimit
+	if budgetLimit == "" {
+		budgetLimit = "Unlimited"
+	}
+	fmt.Printf("  Budget Limit: %s\n", budgetLimit)
+}
+
+func aiStatus(cCtx *cli.Context) error {
+	chatID := cCtx.String("chat-id")
+	if chatID == "" {
+		return cli.Exit("Error: chat-id is required", 1)
+	}
+
+	fmt.Println("AI Runtime Status")
+	fmt.Println("=================")
+
+	baseURL := getBaseURL()
+	apiKey := getAPIKey()
+
+	client := NewAPIClient(baseURL, apiKey)
+
+	respBody, err := client.makeRequest("GET", fmt.Sprintf("/api/v1/telegram/internal/ai/status/%s", url.PathEscape(chatID)), nil)
+	if err != nil {
+		fmt.Printf("Error: Could not reach API: %v\n", err)
+		fmt.Println("\nMake sure the NeuraTrade backend is running:")
+		fmt.Println("  neuratrade gateway start")
+		return err
+	}
+
+	var status aiStatusResponse
+	if err := json.Unmarshal(respBody, &status); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	printAIStatus(status)
 	return nil
 }
 

@@ -193,6 +193,7 @@ describe("Status command", () => {
       async getAIStatus(userId: string) {
         capturedAIUserId = userId;
         return {
+          readiness: "ready",
           selected_model: "gpt-4o-mini",
           provider: "openai",
           daily_budget_exceeded: false,

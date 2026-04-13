@@ -51,31 +51,42 @@ async function runCommand(
 }
 
 describe("AI commands", () => {
-  test("/ai_status uses chat ID identity for backend calls", async () => {
-    const bot = new MockBot();
-    let capturedUserId = "";
-    const api = {
-      async getAIStatus(userId: string) {
-        capturedUserId = userId;
-        return {
-          selected_model: "gpt-4o-mini",
-          provider: "openai",
-          daily_spend: "0.00",
-          monthly_spend: "0.00",
-          budget_limit: "Unlimited",
-          daily_budget_exceeded: false,
-        };
-      },
-    };
+  const readinessCases = [
+    { readiness: "ready", label: "✅ AI Ready" },
+    { readiness: "ready_auto_route", label: "✅ AI Ready (auto-routing)" },
+    { readiness: "degraded", label: "⚠️ AI Degraded" },
+    { readiness: "unavailable", label: "❌ AI Unavailable" },
+  ] as const;
 
-    registerAICommands(bot as unknown as Bot, api as unknown as never);
-    const ctx = createContext({ chatId: -100123, fromId: 987654 });
-    await runCommand(bot, "ai_status", ctx);
+  for (const { readiness, label } of readinessCases) {
+    test(`/ai_status renders '${readiness}' readiness correctly`, async () => {
+      const bot = new MockBot();
+      let capturedUserId = "";
+      const api = {
+        async getAIStatus(userId: string) {
+          capturedUserId = userId;
+          return {
+            readiness,
+            selected_model: "gpt-4o-mini",
+            provider: "openai",
+            daily_spend: "0.00",
+            monthly_spend: "0.00",
+            budget_limit: "Unlimited",
+            daily_budget_exceeded: false,
+          };
+        },
+      };
 
-    expect(capturedUserId).toBe("-100123");
-    expect(ctx.replies).toHaveLength(1);
-    expect(ctx.replies[0]).toContain("AI Configuration");
-  });
+      registerAICommands(bot as unknown as Bot, api as unknown as never);
+      const ctx = createContext({ chatId: -100123, fromId: 987654 });
+      await runCommand(bot, "ai_status", ctx);
+
+      expect(capturedUserId).toBe("-100123");
+      expect(ctx.replies).toHaveLength(1);
+      expect(ctx.replies[0]).toContain("AI Status");
+      expect(ctx.replies[0]).toContain(label);
+    });
+  }
 
   test("/ai_models splits oversized payload into multiple Telegram messages", async () => {
     const bot = new MockBot();
