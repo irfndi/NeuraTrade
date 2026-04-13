@@ -365,7 +365,7 @@ func (h *AIHandler) GetProviders(c *gin.Context) {
 		result = append(result, ProviderSummary{
 			ID:         p.ID,
 			Name:       p.Name,
-			IsActive:   true,
+			IsActive:   activeCount > 0,
 			ModelCount: activeCount,
 		})
 	}
@@ -384,8 +384,15 @@ func (h *AIHandler) GetProviderModels(c *gin.Context) {
 
 	models, err := h.registry.GetModelsByProvider(ctx, providerID)
 	if err != nil {
+		if len(models) == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"provider": providerID,
+				"models":   []AIModelInfo{},
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":    fmt.Sprintf("failed to get models for provider %q: %s", providerID, err.Error()),
+			"error":    fmt.Sprintf("failed to get models for provider %q", providerID),
 			"provider": providerID,
 			"models":   []AIModelInfo{},
 		})

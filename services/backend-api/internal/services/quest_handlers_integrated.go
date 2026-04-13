@@ -4896,9 +4896,13 @@ func applyAIScalpingRuntimeSnapshot(quest *Quest, runtime map[string]interface{}
 	if provider, ok := runtime["last_successful_provider"].(string); ok {
 		quest.Checkpoint["runtime_ai_last_success_provider"] = provider
 	}
-	if model, ok := runtime["last_successful_model"].(string); ok {
-		quest.Checkpoint["runtime_ai_last_success_model"] = model
-	} else if model, ok := runtime["last_success_model"].(string); ok {
+	model := ""
+	if m, ok := runtime["last_successful_model"].(string); ok && strings.TrimSpace(m) != "" {
+		model = m
+	} else if m, ok := runtime["last_success_model"].(string); ok && strings.TrimSpace(m) != "" {
+		model = m
+	}
+	if model != "" {
 		quest.Checkpoint["runtime_ai_last_success_model"] = model
 	}
 	if raw, ok := runtime["last_success_at"].(string); ok {
