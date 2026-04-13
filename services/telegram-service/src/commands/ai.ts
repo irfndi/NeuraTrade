@@ -155,16 +155,15 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
   });
 
   bot.command("ai_status", async (ctx) => {
-    const userId = resolveTelegramIdentity(ctx);
+    const chatId = resolveTelegramIdentity(ctx);
 
-    if (!userId) {
+    if (!chatId) {
       await ctx.reply("Unable to identify user.");
       return;
     }
 
     try {
-      const chatId = String(userId);
-      const result = await api.getAIStatus(chatId);
+      const result = await api.getAIStatus(String(chatId));
 
       if (!result) {
         await ctx.reply(
@@ -276,7 +275,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       for (const provider of result.providers) {
         const status = provider.is_active ? "✅" : "❌";
         lines.push(
-          `${status} ${provider.name} (${provider.id}) - ${provider.model_count} models`,
+          `${status} ${provider.name} (${provider.id}) - ${provider.model_count ?? 0} models`,
         );
       }
 
