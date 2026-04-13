@@ -72,6 +72,9 @@ function summarizeAI(ai: AIStatusResponse): string {
   if (readiness === "degraded") {
     return `${model} (${provider}, degraded, ${budget})`;
   }
+  if (readiness === "unavailable") {
+    return `unavailable (n/a, ${budget})`;
+  }
   return `none selected (n/a, ${budget})`;
 }
 

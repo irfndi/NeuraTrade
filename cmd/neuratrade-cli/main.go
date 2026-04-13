@@ -1300,7 +1300,7 @@ func listAIModels(cCtx *cli.Context) error {
 
 	client := NewAPIClient(baseURL, apiKey)
 
-	providerFilter := cCtx.String("provider")
+	providerFilter := strings.TrimSpace(cCtx.String("provider"))
 
 	var endpoint string
 	if providerFilter != "" {

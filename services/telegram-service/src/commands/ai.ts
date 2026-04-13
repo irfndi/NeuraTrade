@@ -215,7 +215,12 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       lines.push("");
       lines.push(`💰 Daily Spend: $${result.daily_spend || "0.00"}`);
       lines.push(`📅 Monthly Spend: $${result.monthly_spend || "0.00"}`);
-      lines.push(`🎯 Budget Limit: $${result.budget_limit ?? "Unlimited"}`);
+      const budgetLimit = result.budget_limit ?? "Unlimited";
+      lines.push(
+        `🎯 Budget Limit: ${
+          budgetLimit === "Unlimited" ? budgetLimit : `$${budgetLimit}`
+        }`,
+      );
 
       if (
         result.provider_chain_configured != null &&
