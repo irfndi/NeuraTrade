@@ -223,7 +223,8 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
 
       if (
         result.provider_chain_configured != null &&
-        readiness !== "degraded"
+        readiness !== "degraded" &&
+        readiness !== "unavailable"
       ) {
         lines.push(
           `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
