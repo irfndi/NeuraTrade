@@ -216,7 +216,7 @@ func (ms *ModelSelector) SelectRoundRobin(ctx context.Context, constraints Selec
 	}
 
 	idx := atomic.AddUint64(&ms.rrCounter, 1)
-	selectedIdx := int(idx-1) % len(models)
+	selectedIdx := int(uint(idx-1) % uint(len(models)))
 
 	return &SelectionResult{
 		Model: models[selectedIdx],
