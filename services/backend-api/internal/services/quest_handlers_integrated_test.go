@@ -1293,6 +1293,20 @@ func TestHoldDigestSummary_TableDriven(t *testing.T) {
 			expected:       "Hold digest: waiting for clean reconcile passes",
 		},
 		{
+			name:           "circuit open runtime status",
+			decision:       &AITradingDecision{Reasoning: "circuit breaker active"},
+			reasonCategory: aiReasonExecutionUnavailable,
+			runtimeStatus:  runtimeStatusCircuitOpen,
+			expected:       "Hold digest: circuit breaker active, cooling down",
+		},
+		{
+			name:           "LLM degraded runtime status",
+			decision:       &AITradingDecision{Reasoning: "provider degraded"},
+			reasonCategory: aiReasonExecutionUnavailable,
+			runtimeStatus:  runtimeStatusLLMDegraded,
+			expected:       "Hold digest: AI provider degraded, awaiting recovery",
+		},
+		{
 			name:           "nil decision",
 			decision:       nil,
 			reasonCategory: aiReasonStrategyHold,
@@ -1398,6 +1412,47 @@ func TestRecordPnLReconciliationNotification_InitializesCheckpoint(t *testing.T)
 	require.NotNil(t, quest.Checkpoint)
 	assert.Equal(t, "summary-a", quest.Checkpoint["last_pnl_reconciliation_summary"])
 	assert.Equal(t, now.Format(time.RFC3339), quest.Checkpoint["last_pnl_reconciliation_sent_at"])
+}
+
+func TestShouldNotifyPnLReconciliation(t *testing.T) {
+	now := time.Now().UTC()
+
+	t.Run("nil quest returns true", func(t *testing.T) {
+		assert.True(t, shouldNotifyPnLReconciliation(nil, "summary", now))
+	})
+
+	t.Run("empty summary returns false", func(t *testing.T) {
+		assert.False(t, shouldNotifyPnLReconciliation(&Quest{}, "", now))
+	})
+
+	t.Run("nil checkpoint returns true", func(t *testing.T) {
+		assert.True(t, shouldNotifyPnLReconciliation(&Quest{}, "summary", now))
+	})
+
+	t.Run("different summary bypasses cooldown", func(t *testing.T) {
+		quest := &Quest{Checkpoint: map[string]interface{}{
+			"last_pnl_reconciliation_summary": "old-summary",
+			"last_pnl_reconciliation_sent_at": now.Format(time.RFC3339),
+		}}
+		assert.True(t, shouldNotifyPnLReconciliation(quest, "new-summary", now))
+	})
+
+	t.Run("same summary within cooldown suppresses", func(t *testing.T) {
+		quest := &Quest{Checkpoint: map[string]interface{}{
+			"last_pnl_reconciliation_summary": "same-summary",
+			"last_pnl_reconciliation_sent_at": now.Format(time.RFC3339),
+		}}
+		assert.False(t, shouldNotifyPnLReconciliation(quest, "same-summary", now))
+	})
+
+	t.Run("same summary after cooldown re-notifies", func(t *testing.T) {
+		past := now.Add(-2 * time.Hour)
+		quest := &Quest{Checkpoint: map[string]interface{}{
+			"last_pnl_reconciliation_summary": "same-summary",
+			"last_pnl_reconciliation_sent_at": past.Format(time.RFC3339),
+		}}
+		assert.True(t, shouldNotifyPnLReconciliation(quest, "same-summary", now))
+	})
 }
 
 func TestStructuredHoldBlock_UsesDecisionPolicySpreadThreshold(t *testing.T) {

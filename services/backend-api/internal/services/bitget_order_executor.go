@@ -333,7 +333,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	if !isRiskReduction && details.StopLoss != nil {
 		slPrice := formatFuturesTriggerPrice(*details.StopLoss, contractInfo)
 		body["presetStopLossPrice"] = slPrice
-		body["presetStopLossExecutePrice"] = slPrice
+		// Omit execute price: market execution guarantees SL fill even through price gaps.
 	}
 
 	fmt.Printf("[BITGET-ORDER] Placing futures order: %s %s (tradeSide=%s holdSide=%s size=%s @ %s)\n",

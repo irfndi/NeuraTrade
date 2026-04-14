@@ -1449,6 +1449,14 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			notifConfidence = decision.OriginalConfidence
 			notifConfidenceKnown = true
 		}
+		var cycleRuntimeStatus string
+		if checkpointBool(quest.Checkpoint["state_drift_active"]) {
+			cycleRuntimeStatus = runtimeStatusStateDrift
+		} else if rem := aiRuntimeCircuitRemaining(quest, time.Now().UTC()); rem > 0 {
+			cycleRuntimeStatus = runtimeStatusCircuitOpen
+		} else if errRate := checkpointFloat(quest.Checkpoint["runtime_ai_window_error_rate"]); errRate > 0.5 {
+			cycleRuntimeStatus = runtimeStatusLLMDegraded
+		}
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 			DecisionType:          "scalping_cycle",
 			Summary:               "AI held position this cycle",
@@ -1460,6 +1468,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			AttemptWindowProgress: checkpointString(quest.Checkpoint["runtime_entry_attempt_window_progress"]),
 			Reasons:               reasons,
 			Action:                "hold",
+			RuntimeStatus:         cycleRuntimeStatus,
 		})
 		h.maybeSendHoldDigest(ctx, quest, chatID, decision, portfolio)
 		return nil
@@ -2836,6 +2845,10 @@ func holdDigestSummary(decision *AITradingDecision, reasonCategory string, runti
 		return "Hold digest: paused for lifecycle reconciliation"
 	case runtimeStatus == runtimeStatusReconcileBlocked:
 		return "Hold digest: waiting for clean reconcile passes"
+	case runtimeStatus == runtimeStatusCircuitOpen:
+		return "Hold digest: circuit breaker active, cooling down"
+	case runtimeStatus == runtimeStatusLLMDegraded:
+		return "Hold digest: AI provider degraded, awaiting recovery"
 	case reasonCategory == aiReasonLLMParseContract:
 		return "Hold digest: AI output incomplete, no reliable trade decision"
 	case reasonCategory == aiReasonLLMTimeout:
@@ -2926,6 +2939,12 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 	confidenceKnown := !runtimeHold && !isRuntimeReasonCategory(reasonCategory) && decision.ConfidenceKnown
 	if !confidenceKnown && strings.EqualFold(reasonCategory, aiReasonStrategyHold) {
 		reasonCategory = classifyAIRuntimeReason(decision.Reasoning, aiReasonExecutionUnavailable)
+	}
+	notifConfidence := decision.Confidence
+	notifConfidenceKnown := confidenceKnown
+	if !confidenceKnown && decision.OriginalConfidenceKnown {
+		notifConfidence = decision.OriginalConfidence
+		notifConfidenceKnown = true
 	}
 	errorRate := checkpointFloat(quest.Checkpoint["runtime_ai_window_error_rate"])
 	circuitRemaining := aiRuntimeCircuitRemaining(quest, now)
@@ -3058,14 +3077,15 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 		DecisionType:          "scalping_digest",
 		Summary:               holdDigestSummary(decision, reasonCategory, digestRuntimeStatus),
-		Confidence:            decision.Confidence,
-		ConfidenceKnown:       confidenceKnown,
+		Confidence:            notifConfidence,
+		ConfidenceKnown:       notifConfidenceKnown,
 		ReasonCategory:        reasonCategory,
 		HoldCategory:          reasonCategory,
 		UnblockCondition:      unblockCondition,
 		AttemptWindowProgress: attemptWindowProgress,
 		Reasons:               reasons,
 		Action:                "hold",
+		RuntimeStatus:         digestRuntimeStatus,
 	})
 
 	quest.Checkpoint["runtime_last_hold_digest_at"] = now.Format(time.RFC3339)

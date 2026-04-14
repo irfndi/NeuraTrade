@@ -325,6 +325,8 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 		lines = append(lines, fmt.Sprintf("Confidence: 🟡 %d%% (gated)", confidencePercent))
 	case infraHold && !confidenceKnown && reasoning.Confidence == 0 && !reasoning.ConfidenceKnown:
 		lines = append(lines, "Confidence: ⏸️ (infrastructure hold)")
+	case infraHold && !confidenceKnown:
+		lines = append(lines, "Confidence: ⏸️ (infrastructure hold)")
 	case llmDegraded:
 		lines = append(lines, "Confidence: ⚪ N/A (runtime-degraded)")
 	case confidenceKnown:
