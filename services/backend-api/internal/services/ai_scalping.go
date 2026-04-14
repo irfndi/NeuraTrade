@@ -1168,6 +1168,8 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	if decision.Action == "hold" {
 		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
 		if isRuntimeReasonCategory(decision.ReasonCategory) {
+			decision.OriginalConfidence = decision.Confidence
+			decision.OriginalConfidenceKnown = true
 			decision.ConfidenceKnown = false
 			decision.Confidence = 0
 		} else if !decision.ConfidenceKnown {
@@ -1222,6 +1224,8 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	gate := s.evaluatePreTradeGate(ctx, decision, signals)
 	if !gate.Allowed {
 		attemptedAction := decision.Action
+		decision.OriginalConfidence = decision.Confidence
+		decision.OriginalConfidenceKnown = true
 		decision.Action = "hold"
 		decision.Confidence = 0
 		decision.OrderID = ""
@@ -1270,6 +1274,8 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	if decision.Action == "hold" {
 		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
 		if isRuntimeReasonCategory(decision.ReasonCategory) {
+			decision.OriginalConfidence = decision.Confidence
+			decision.OriginalConfidenceKnown = true
 			decision.ConfidenceKnown = false
 			decision.Confidence = 0
 		} else {
@@ -1408,6 +1414,8 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 		if executionErr != nil {
 			if shouldDowngradeExecutionErrorToHold(executionErr) {
+				decision.OriginalConfidence = decision.Confidence
+				decision.OriginalConfidenceKnown = true
 				decision.Action = "hold"
 				decision.Confidence = 0
 				decision.OrderID = ""
@@ -1836,6 +1844,8 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	if decision.Action == "hold" {
 		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
 		if isRuntimeReasonCategory(decision.ReasonCategory) {
+			decision.OriginalConfidence = decision.Confidence
+			decision.OriginalConfidenceKnown = true
 			decision.ConfidenceKnown = false
 			decision.Confidence = 0
 		}

@@ -352,12 +352,12 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 	}
 	if reasoning.RuntimeStatus != "" {
 		var statusEmoji string
-		switch {
-		case reasoning.RuntimeStatus == runtimeStatusStateDrift || reasoning.RuntimeStatus == runtimeStatusReconcileBlocked:
+		switch reasoning.RuntimeStatus {
+		case runtimeStatusStateDrift, runtimeStatusReconcileBlocked:
 			statusEmoji = "🔄"
-		case reasoning.RuntimeStatus == runtimeStatusCircuitOpen:
+		case runtimeStatusCircuitOpen:
 			statusEmoji = "⚠️"
-		case reasoning.RuntimeStatus == runtimeStatusLLMDegraded:
+		case runtimeStatusLLMDegraded:
 			statusEmoji = "🛑"
 		default:
 			statusEmoji = "ℹ️"

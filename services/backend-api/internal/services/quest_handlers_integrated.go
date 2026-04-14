@@ -1011,8 +1011,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		if checkpointBool(quest.Checkpoint["state_drift_deadlock_cleared"]) {
 			runtimeDetails["recovery_action"] = "deadlock_clear_triggered"
 		}
-		if deadlockCleared, ok := quest.Checkpoint["state_drift_deadlock_cleared"]; ok {
-			runtimeDetails["force_repair_eligible"] = fmt.Sprintf("%t", deadlockCleared != nil)
+		if _, ok := quest.Checkpoint["state_drift_deadlock_cleared"]; ok {
+			runtimeDetails["force_repair_eligible"] = fmt.Sprintf("%t", checkpointBool(quest.Checkpoint["state_drift_deadlock_cleared"]))
 		}
 		h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
 			DecisionType:     "scalping_cycle",
@@ -3046,9 +3046,18 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		reasons = append(reasons, fmt.Sprintf("Next condition: %s", unblockCondition))
 	}
 
+	var digestRuntimeStatus string
+	if checkpointBool(quest.Checkpoint["state_drift_active"]) {
+		digestRuntimeStatus = runtimeStatusStateDrift
+	} else if circuitRemaining > 0 {
+		digestRuntimeStatus = runtimeStatusCircuitOpen
+	} else if errorRate > 0.5 {
+		digestRuntimeStatus = runtimeStatusLLMDegraded
+	}
+
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 		DecisionType:          "scalping_digest",
-		Summary:               holdDigestSummary(decision, reasonCategory, ""),
+		Summary:               holdDigestSummary(decision, reasonCategory, digestRuntimeStatus),
 		Confidence:            decision.Confidence,
 		ConfidenceKnown:       confidenceKnown,
 		ReasonCategory:        reasonCategory,
