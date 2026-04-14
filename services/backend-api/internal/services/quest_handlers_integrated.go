@@ -976,22 +976,54 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		}
 
 		holdDecision := &AITradingDecision{
-			Action:          "hold",
-			Confidence:      0,
-			Reasoning:       "entry paused by state drift gate",
-			ReasonCategory:  aiReasonExecutionUnavailable,
-			ConfidenceKnown: false,
+			Action:         "hold",
+			Confidence:     0,
+			Reasoning:      "entry paused by state drift gate",
+			ReasonCategory: aiReasonExecutionUnavailable,
+		}
+		cleanPassesCurrent := checkpointInt(quest.Checkpoint["state_drift_clean_passes"])
+		cleanPassesRequired := stateDriftClearPassTarget()
+		stalePositionIDs := checkpointStringSlice(quest.Checkpoint["state_drift_stale_position_ids"])
+		runtimeDetails := map[string]string{
+			"drift_positions":       fmt.Sprintf("%d", checkpointInt(quest.Checkpoint["state_drift_positions"])),
+			"clean_passes_current":  fmt.Sprintf("%d", cleanPassesCurrent),
+			"clean_passes_required": fmt.Sprintf("%d", cleanPassesRequired),
+			"stale_position_ids":    strings.Join(stalePositionIDs, ","),
+		}
+		if repairAt, ok := quest.Checkpoint["state_drift_last_repair_at"].(string); ok && strings.TrimSpace(repairAt) != "" {
+			runtimeDetails["last_repair_at"] = repairAt
+		}
+		if cleanReconcileAt, ok := quest.Checkpoint["state_drift_last_clean_reconcile_at"].(string); ok && strings.TrimSpace(cleanReconcileAt) != "" {
+			runtimeDetails["last_clean_reconcile_at"] = cleanReconcileAt
+		}
+		persistenceCycles := checkpointInt(quest.Checkpoint["state_drift_persistence_cycles"])
+		forceThreshold := stateDriftPersistenceForceRepairCycles()
+		cooldownElapsed := h.shouldRunForcedDriftRepair(quest, time.Now().UTC())
+		if persistenceCycles >= forceThreshold {
+			if cooldownElapsed {
+				runtimeDetails["recovery_action"] = "force_repair_pending"
+				runtimeDetails["force_repair_eligible"] = "true"
+			} else {
+				runtimeDetails["recovery_action"] = "force_repair_cooling_down"
+				runtimeDetails["force_repair_eligible"] = "false"
+			}
+		}
+		if checkpointBool(quest.Checkpoint["state_drift_deadlock_cleared"]) {
+			runtimeDetails["recovery_action"] = "deadlock_clear_triggered"
+		}
+		if _, ok := quest.Checkpoint["state_drift_deadlock_cleared"]; ok {
+			runtimeDetails["force_repair_eligible"] = fmt.Sprintf("%t", checkpointBool(quest.Checkpoint["state_drift_deadlock_cleared"]))
 		}
 		h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
 			DecisionType:     "scalping_cycle",
 			Summary:          "State drift gate active: reconciling lifecycle with exchange before new entries",
-			Confidence:       0,
-			ConfidenceKnown:  false,
 			ReasonCategory:   aiReasonExecutionUnavailable,
 			HoldCategory:     aiReasonExecutionUnavailable,
 			UnblockCondition: checkpointString(quest.Checkpoint["runtime_next_unblock_condition"]),
 			Reasons:          reasons,
 			Action:           "hold",
+			RuntimeStatus:    runtimeStatusStateDrift,
+			RuntimeDetails:   runtimeDetails,
 		})
 		h.maybeSendHoldDigest(gateCtx, quest, chatID, holdDecision, portfolio)
 		return nil
@@ -1289,7 +1321,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			reasons = append(reasons, fmt.Sprintf("Cooldown applied: %s", cooldown.Round(time.Second).String()))
 		}
 		recordAIRuntimeEvent(quest, time.Now().UTC(), reasonCategory, false, h.getAIScalpingRuntimeSnapshot())
-		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+		notif := AIReasoningNotification{
 			DecisionType:    "scalping_cycle",
 			Summary:         "Scalping cycle skipped due to AI/runtime error",
 			Confidence:      0,
@@ -1298,7 +1330,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			HoldCategory:    reasonCategory,
 			Reasons:         reasons,
 			Action:          "hold",
-		})
+		}
+		h.notifyScalpingDecision(ctx, chatID, notif)
 		// Return nil instead of err to prevent panic - quest continues with hold status
 		return nil
 	}
@@ -1409,11 +1442,18 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			reasons = append(reasons, fmt.Sprintf("Attempt window: %s", strings.TrimSpace(raw)))
 		}
 		unblockCondition := checkpointString(quest.Checkpoint["runtime_next_unblock_condition"])
+		confidenceKnown := !runtimeHold && !runtimeCategory && decision.ConfidenceKnown
+		notifConfidence := decision.Confidence
+		notifConfidenceKnown := confidenceKnown
+		if !confidenceKnown && decision.OriginalConfidenceKnown {
+			notifConfidence = decision.OriginalConfidence
+			notifConfidenceKnown = true
+		}
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 			DecisionType:          "scalping_cycle",
 			Summary:               "AI held position this cycle",
-			Confidence:            decision.Confidence,
-			ConfidenceKnown:       !runtimeHold && !runtimeCategory && decision.ConfidenceKnown,
+			Confidence:            notifConfidence,
+			ConfidenceKnown:       notifConfidenceKnown,
 			ReasonCategory:        reasonCategory,
 			HoldCategory:          reasonCategory,
 			UnblockCondition:      unblockCondition,
@@ -2733,6 +2773,19 @@ func (h *IntegratedQuestHandlers) withGatePathContext(ctx context.Context) (cont
 }
 
 func normalizeAINotificationSemantics(notif AIReasoningNotification) AIReasoningNotification {
+	if notif.RuntimeStatus != "" && isInfrastructureRuntimeStatus(notif.RuntimeStatus) {
+		category := strings.TrimSpace(notif.ReasonCategory)
+		if category == "" {
+			category = strings.TrimSpace(notif.HoldCategory)
+		}
+		if category == "" {
+			category = aiReasonExecutionUnavailable
+		}
+		notif.ReasonCategory = category
+		notif.HoldCategory = category
+		return notif
+	}
+
 	category := strings.TrimSpace(notif.ReasonCategory)
 	if category == "" {
 		category = strings.TrimSpace(notif.HoldCategory)
@@ -2771,21 +2824,25 @@ func normalizeAINotificationSemantics(notif AIReasoningNotification) AIReasoning
 	return notif
 }
 
-func holdDigestSummary(decision *AITradingDecision, reasonCategory string) string {
+func holdDigestSummary(decision *AITradingDecision, reasonCategory string, runtimeStatus string) string {
 	reasonCategory = strings.ToLower(strings.TrimSpace(reasonCategory))
 	reasoning := ""
 	if decision != nil {
 		reasoning = strings.ToLower(strings.TrimSpace(decision.Reasoning))
 	}
 
-	switch reasonCategory {
-	case aiReasonLLMParseContract:
+	switch {
+	case runtimeStatus == runtimeStatusStateDrift:
+		return "Hold digest: paused for lifecycle reconciliation"
+	case runtimeStatus == runtimeStatusReconcileBlocked:
+		return "Hold digest: waiting for clean reconcile passes"
+	case reasonCategory == aiReasonLLMParseContract:
 		return "Hold digest: AI output incomplete, no reliable trade decision"
-	case aiReasonLLMTimeout:
+	case reasonCategory == aiReasonLLMTimeout:
 		return "Hold digest: AI response timed out, no reliable trade decision"
-	case aiReasonExecutionUnavailable:
+	case reasonCategory == aiReasonExecutionUnavailable:
 		return "Hold digest: AI runtime degraded, waiting for stable decisioning"
-	case reasonCategoryDeterministicFallback:
+	case reasonCategory == reasonCategoryDeterministicFallback:
 		if strings.Contains(reasoning, "no eligible candidate") || strings.Contains(reasoning, "no qualified setup") {
 			return "Hold digest: fallback found no qualified setup"
 		}
@@ -2989,9 +3046,18 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		reasons = append(reasons, fmt.Sprintf("Next condition: %s", unblockCondition))
 	}
 
+	var digestRuntimeStatus string
+	if checkpointBool(quest.Checkpoint["state_drift_active"]) {
+		digestRuntimeStatus = runtimeStatusStateDrift
+	} else if circuitRemaining > 0 {
+		digestRuntimeStatus = runtimeStatusCircuitOpen
+	} else if errorRate > 0.5 {
+		digestRuntimeStatus = runtimeStatusLLMDegraded
+	}
+
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 		DecisionType:          "scalping_digest",
-		Summary:               holdDigestSummary(decision, reasonCategory),
+		Summary:               holdDigestSummary(decision, reasonCategory, digestRuntimeStatus),
 		Confidence:            decision.Confidence,
 		ConfidenceKnown:       confidenceKnown,
 		ReasonCategory:        reasonCategory,
@@ -5458,6 +5524,26 @@ func checkpointString(v interface{}) string {
 		return strconv.FormatFloat(value, 'f', -1, 64)
 	default:
 		return ""
+	}
+}
+
+func checkpointStringSlice(v interface{}) []string {
+	switch value := v.(type) {
+	case []string:
+		return value
+	case []interface{}:
+		result := make([]string, 0, len(value))
+		for _, item := range value {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				result = append(result, s)
+			}
+		}
+		if len(result) == 0 {
+			return nil
+		}
+		return result
+	default:
+		return nil
 	}
 }
 

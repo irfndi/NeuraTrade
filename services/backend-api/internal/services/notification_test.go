@@ -2437,3 +2437,98 @@ func TestQuestProgressNotification_Integration(t *testing.T) {
 		assert.Equal(t, current*10, progress.Percent)
 	}
 }
+
+func TestNotificationService_RuntimeStatusRendering(t *testing.T) {
+	ns := NewNotificationService(nil, nil, "", "", "")
+
+	t.Run("state drift with runtime details", func(t *testing.T) {
+		message := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType:  "scalping_cycle",
+			Summary:       "State drift gate active",
+			RuntimeStatus: runtimeStatusStateDrift,
+			RuntimeDetails: map[string]string{
+				"drift_positions":       "3",
+				"clean_passes_current":  "1",
+				"clean_passes_required": "2",
+			},
+			Reasons: []string{"Drift detected"},
+			Action:  "hold",
+		})
+		assert.Contains(t, message, "Runtime Status:")
+		assert.Contains(t, message, "🔄")
+		assert.Contains(t, message, "Reconcile Progress: 1/2 clean passes")
+		assert.Contains(t, message, "Drift Positions: 3 stale")
+	})
+
+	t.Run("LLM degraded confidence", func(t *testing.T) {
+		message := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType:   "scalping_cycle",
+			Summary:        "LLM runtime degraded",
+			RuntimeStatus:  runtimeStatusLLMDegraded,
+			ReasonCategory: "execution_unavailable",
+			Reasons:        []string{"LLM timeout"},
+			Action:         "hold",
+		})
+		assert.Contains(t, message, "Confidence: ⚪ N/A (runtime-degraded)")
+		assert.Contains(t, message, "Runtime Status:")
+	})
+
+	t.Run("infrastructure hold with original confidence gated", func(t *testing.T) {
+		message := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType:    "scalping_cycle",
+			Summary:         "State drift gate active",
+			Confidence:      0.72,
+			ConfidenceKnown: true,
+			RuntimeStatus:   runtimeStatusStateDrift,
+			ReasonCategory:  "execution_unavailable",
+			Reasons:         []string{"Drift detected"},
+			Action:          "hold",
+		})
+		assert.Contains(t, message, "Confidence: 🟡 72% (gated)")
+	})
+
+	t.Run("infrastructure hold with no confidence ever produced", func(t *testing.T) {
+		message := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType:   "scalping_cycle",
+			Summary:        "State drift gate active",
+			RuntimeStatus:  runtimeStatusStateDrift,
+			ReasonCategory: "execution_unavailable",
+			Reasons:        []string{"Drift detected"},
+			Action:         "hold",
+		})
+		assert.Contains(t, message, "Confidence: ⏸️ (infrastructure hold)")
+	})
+
+	t.Run("circuit open with warning emoji", func(t *testing.T) {
+		message := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType:  "scalping_cycle",
+			Summary:       "Circuit breaker active",
+			RuntimeStatus: runtimeStatusCircuitOpen,
+			RuntimeDetails: map[string]string{
+				"recovery_action": "force_repair_pending",
+			},
+			Reasons: []string{"Circuit open"},
+			Action:  "hold",
+		})
+		assert.Contains(t, message, "Runtime Status:")
+		assert.Contains(t, message, "⚠️")
+		assert.Contains(t, message, "Recovery Action: force_repair_pending")
+	})
+
+	t.Run("reconcile blocked with progress emoji", func(t *testing.T) {
+		message := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType:  "scalping_cycle",
+			Summary:       "Reconcile in progress",
+			RuntimeStatus: runtimeStatusReconcileBlocked,
+			RuntimeDetails: map[string]string{
+				"clean_passes_current":  "0",
+				"clean_passes_required": "2",
+			},
+			Reasons: []string{"Waiting for reconcile"},
+			Action:  "hold",
+		})
+		assert.Contains(t, message, "Runtime Status:")
+		assert.Contains(t, message, "🔄")
+		assert.Contains(t, message, "Reconcile Progress: 0/2 clean passes")
+	})
+}
