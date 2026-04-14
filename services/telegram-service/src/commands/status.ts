@@ -52,7 +52,9 @@ function summarizeCheck(
 
 function summarizeMode(mode: TradingModeResponse): string {
   const modeLabel = mode.mode?.toUpperCase() || "DRY";
-  return `${modeLabel} (${mode.confirmations}/${mode.required_confirmations} confirmations)`;
+  return mode.mode === "live"
+    ? modeLabel
+    : `${modeLabel} (${mode.confirmations}/${mode.required_confirmations} confirmations)`;
 }
 
 function summarizeAI(ai: AIStatusResponse): string {
