@@ -247,7 +247,7 @@ AI_MODEL=%s
 AI_API_KEY=%s
 AI_BASE_URL=%s
 AI_ROUTING_MODE=primary
- `, timeNow(), config.Environment, config.DatabaseHost, config.DatabasePort,
+`, timeNow(), config.Environment, config.DatabaseHost, config.DatabasePort,
 		config.DatabaseName, config.DatabaseUser, config.DatabasePassword,
 		config.RedisHost, config.RedisPort, config.JWTSecret,
 		config.TelegramBotToken, config.SentryDSN, config.Environment,

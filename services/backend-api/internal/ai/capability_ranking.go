@@ -166,19 +166,22 @@ func (rs *RankingService) RankModels(ctx context.Context, models []ConfiguredMod
 		return models, nil
 	}
 
-	scoreMap := make(map[string]float64)
-	for _, r := range rankings.Rankings {
-		scoreMap[r.ModelID] = r.Score
+	if len(rankings.Rankings) == 0 {
+		for i := range models {
+			models[i].CapabilityScore = DefaultRankingScore(models[i].ModelID)
+		}
+		return models, nil
 	}
 
 	sorted := make([]ConfiguredModel, len(models))
 	copy(sorted, models)
 
 	for i := range sorted {
-		if score, ok := scoreMap[sorted[i].ModelID]; ok {
-			sorted[i].CapabilityScore = score
-		} else {
+		score, err := rs.GetRankingForModel(ctx, sorted[i].ModelID)
+		if err != nil {
 			sorted[i].CapabilityScore = DefaultRankingScore(sorted[i].ModelID)
+		} else {
+			sorted[i].CapabilityScore = score
 		}
 	}
 

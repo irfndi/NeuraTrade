@@ -260,6 +260,8 @@ func (ms *ModelSelector) selectWithFallback(ctx context.Context, models []Config
 	return nil, ErrNoModelsConfigured
 }
 
+// TODO: Implement constraint-based filtering (RequireTools, RequireReasoning, RequireVision)
+// once model capability metadata is available from the registry.
 func (ms *ModelSelector) matchesConstraints(model ConfiguredModel, constraints SelectionConstraints) bool {
 	return true
 }
