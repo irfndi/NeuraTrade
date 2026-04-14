@@ -903,6 +903,7 @@ func (c *CollectorService) GetWorkerStatus() map[string]*Worker {
 			IsRunning:  worker.IsRunning,
 			ErrorCount: worker.ErrorCount,
 			MaxErrors:  worker.MaxErrors,
+			Paused:     c.IsPaused(exchange),
 		}
 	}
 	return status
