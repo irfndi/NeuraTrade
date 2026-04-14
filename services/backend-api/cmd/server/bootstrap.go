@@ -154,32 +154,33 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 	fmt.Print("AI Provider [zhipu]: ")
 	config.AIProvider = b.readInput("zhipu")
 
-	switch config.AIProvider {
-	case "openai":
-		config.AIModel = "gpt-4o-mini"
-		config.AIBaseURL = "https://api.openai.com/v1"
-	case "anthropic":
-		config.AIModel = "claude-sonnet-4-20250514"
-		config.AIBaseURL = "https://api.anthropic.com/v1"
-	case "google":
-		config.AIModel = "gemini-2.5-flash"
-		config.AIBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
-	case "deepseek":
-		config.AIModel = "deepseek-v3"
-		config.AIBaseURL = "https://api.deepseek.com/v1"
-	case "minimax":
-		config.AIModel = "minimax-m2.5"
-		config.AIBaseURL = "https://api.minimax.io/anthropic/v1"
-	case "zhipu":
-		config.AIModel = "glm-5-turbo"
-		config.AIBaseURL = "https://api.z.ai/api/paas/v4"
-	default:
-		fmt.Printf("Unknown provider %q. Use: openai, anthropic, google, deepseek, minimax, zhipu\n", config.AIProvider)
-		fmt.Print("AI Provider [zhipu]: ")
-		config.AIProvider = b.readInput("zhipu")
-		fmt.Printf("AI Model [glm-5-turbo]: ")
-		config.AIModel = b.readInput("glm-5-turbo")
-		config.AIBaseURL = "https://api.z.ai/api/paas/v4"
+	for {
+		switch config.AIProvider {
+		case "openai":
+			config.AIModel = "gpt-4o-mini"
+			config.AIBaseURL = "https://api.openai.com/v1"
+		case "anthropic":
+			config.AIModel = "claude-sonnet-4-20250514"
+			config.AIBaseURL = "https://api.anthropic.com/v1"
+		case "google":
+			config.AIModel = "gemini-2.5-flash"
+			config.AIBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+		case "deepseek":
+			config.AIModel = "deepseek-v3"
+			config.AIBaseURL = "https://api.deepseek.com/v1"
+		case "minimax":
+			config.AIModel = "minimax-m2.5"
+			config.AIBaseURL = "https://api.minimax.io/anthropic/v1"
+		case "zhipu":
+			config.AIModel = "glm-5-turbo"
+			config.AIBaseURL = "https://api.z.ai/api/paas/v4"
+		default:
+			fmt.Printf("Unknown provider %q. Use: openai, anthropic, google, deepseek, minimax, zhipu\n", config.AIProvider)
+			fmt.Print("AI Provider [zhipu]: ")
+			config.AIProvider = b.readInput("zhipu")
+			continue
+		}
+		break
 	}
 
 	fmt.Printf("AI Model [%s]: ", config.AIModel)

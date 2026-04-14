@@ -216,6 +216,7 @@ func (ms *ModelSelector) SelectRoundRobin(ctx context.Context, constraints Selec
 	}
 
 	idx := atomic.AddUint64(&ms.rrCounter, 1)
+	// #nosec G115 -- modulo result always fits in int
 	selectedIdx := int(uint(idx-1) % uint(len(models)))
 
 	return &SelectionResult{
