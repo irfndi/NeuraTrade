@@ -450,46 +450,47 @@ func (c *CollectorService) Stop() {
 }
 
 func (c *CollectorService) PauseExchange(exchangeID string) error {
-	c.mu.RLock()
+	c.mu.Lock()
 	worker, exists := c.workers[exchangeID]
-	c.mu.RUnlock()
-
 	if !exists {
+		c.mu.Unlock()
 		return fmt.Errorf("worker for exchange %s not found", exchangeID)
 	}
-
-	c.mu.Lock()
 	worker.Paused = true
-	c.mu.Unlock()
 
 	c.pauseMu.Lock()
 	c.pausedExchanges[exchangeID] = true
 	c.pauseMu.Unlock()
+
+	c.mu.Unlock()
 
 	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange paused")
 	return nil
 }
 
 func (c *CollectorService) ResumeExchange(exchangeID string) error {
+	c.mu.Lock()
+
 	c.pauseMu.RLock()
 	paused := c.pausedExchanges[exchangeID]
 	c.pauseMu.RUnlock()
 
 	if !paused {
+		c.mu.Unlock()
 		return fmt.Errorf("exchange %s is not paused", exchangeID)
 	}
 
-	c.mu.Lock()
 	worker, exists := c.workers[exchangeID]
 	if exists {
 		worker.Paused = false
 		worker.ErrorCount = 0
 	}
-	c.mu.Unlock()
 
 	c.pauseMu.Lock()
 	delete(c.pausedExchanges, exchangeID)
 	c.pauseMu.Unlock()
+
+	c.mu.Unlock()
 
 	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange resumed")
 	return nil

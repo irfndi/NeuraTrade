@@ -2795,6 +2795,17 @@ func normalizeAINotificationSemantics(notif AIReasoningNotification) AIReasoning
 		return notif
 	}
 
+	if notif.RuntimeStatus == runtimeStatusLLMDegraded {
+		category := strings.TrimSpace(notif.ReasonCategory)
+		if category == "" {
+			category = aiReasonExecutionUnavailable
+		}
+		notif.ReasonCategory = category
+		notif.HoldCategory = category
+		notif.ConfidenceKnown = false
+		return notif
+	}
+
 	category := strings.TrimSpace(notif.ReasonCategory)
 	if category == "" {
 		category = strings.TrimSpace(notif.HoldCategory)
@@ -5550,7 +5561,16 @@ func checkpointString(v interface{}) string {
 func checkpointStringSlice(v interface{}) []string {
 	switch value := v.(type) {
 	case []string:
-		return value
+		result := make([]string, 0, len(value))
+		for _, s := range value {
+			if strings.TrimSpace(s) != "" {
+				result = append(result, s)
+			}
+		}
+		if len(result) == 0 {
+			return nil
+		}
+		return result
 	case []interface{}:
 		result := make([]string, 0, len(value))
 		for _, item := range value {

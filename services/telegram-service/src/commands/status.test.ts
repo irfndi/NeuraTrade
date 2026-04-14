@@ -409,7 +409,7 @@ describe("Status command", () => {
     await runCommand(bot, "status", ctx);
 
     expect(ctx.replies[0]).toContain("Mode: LIVE");
-    expect(ctx.replies[0]).not.toContain("(2/2 confirmations)");
+    expect(ctx.replies[0]).not.toContain("confirmations");
   });
 
   test("dry mode shows confirmation progress in status display", async () => {

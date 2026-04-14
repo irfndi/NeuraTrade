@@ -248,7 +248,8 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 	confidenceKnown := reasoning.ConfidenceKnown
 	if !confidenceKnown &&
 		strings.TrimSpace(reasoning.ReasonCategory) == "" &&
-		strings.TrimSpace(reasoning.HoldCategory) == "" {
+		strings.TrimSpace(reasoning.HoldCategory) == "" &&
+		!isInfrastructureRuntimeStatus(reasoning.RuntimeStatus) {
 		confidenceKnown = true
 	}
 	category := strings.TrimSpace(reasoning.ReasonCategory)
@@ -323,8 +324,6 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 	case confidenceKnown && infraHold:
 		confidencePercent := int(reasoning.Confidence * 100)
 		lines = append(lines, fmt.Sprintf("Confidence: 🟡 %d%% (gated)", confidencePercent))
-	case infraHold && !confidenceKnown && reasoning.Confidence == 0 && !reasoning.ConfidenceKnown:
-		lines = append(lines, "Confidence: ⏸️ (infrastructure hold)")
 	case infraHold && !confidenceKnown:
 		lines = append(lines, "Confidence: ⏸️ (infrastructure hold)")
 	case llmDegraded:

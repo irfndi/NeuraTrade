@@ -170,8 +170,15 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 	case "minimax":
 		config.AIModel = "minimax-m2.5"
 		config.AIBaseURL = "https://api.minimax.io/anthropic/v1"
-	default:
+	case "zhipu":
 		config.AIModel = "glm-5-turbo"
+		config.AIBaseURL = "https://api.z.ai/api/paas/v4"
+	default:
+		fmt.Printf("Unknown provider %q. Use: openai, anthropic, google, deepseek, minimax, zhipu\n", config.AIProvider)
+		fmt.Print("AI Provider [zhipu]: ")
+		config.AIProvider = b.readInput("zhipu")
+		fmt.Printf("AI Model [glm-5-turbo]: ")
+		config.AIModel = b.readInput("glm-5-turbo")
 		config.AIBaseURL = "https://api.z.ai/api/paas/v4"
 	}
 

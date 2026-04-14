@@ -1168,8 +1168,10 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	if decision.Action == "hold" {
 		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
 		if isRuntimeReasonCategory(decision.ReasonCategory) {
-			decision.OriginalConfidence = decision.Confidence
-			decision.OriginalConfidenceKnown = true
+			if decision.ConfidenceKnown {
+				decision.OriginalConfidence = decision.Confidence
+				decision.OriginalConfidenceKnown = true
+			}
 			decision.ConfidenceKnown = false
 			decision.Confidence = 0
 		} else if !decision.ConfidenceKnown {
@@ -1274,8 +1276,10 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	if decision.Action == "hold" {
 		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
 		if isRuntimeReasonCategory(decision.ReasonCategory) {
-			decision.OriginalConfidence = decision.Confidence
-			decision.OriginalConfidenceKnown = true
+			if decision.ConfidenceKnown {
+				decision.OriginalConfidence = decision.Confidence
+				decision.OriginalConfidenceKnown = true
+			}
 			decision.ConfidenceKnown = false
 			decision.Confidence = 0
 		} else {
@@ -1844,8 +1848,10 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	if decision.Action == "hold" {
 		decision.ReasonCategory = normalizeHoldReasonCategory(decision.ReasonCategory, decision.Reasoning)
 		if isRuntimeReasonCategory(decision.ReasonCategory) {
-			decision.OriginalConfidence = decision.Confidence
-			decision.OriginalConfidenceKnown = true
+			if decision.ConfidenceKnown {
+				decision.OriginalConfidence = decision.Confidence
+				decision.OriginalConfidenceKnown = true
+			}
 			decision.ConfidenceKnown = false
 			decision.Confidence = 0
 		}
