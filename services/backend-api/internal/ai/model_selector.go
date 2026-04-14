@@ -24,8 +24,9 @@ type ConfiguredModel struct {
 }
 
 type ModelConfig struct {
-	models []ConfiguredModel
-	mu     sync.RWMutex
+	models      []ConfiguredModel
+	routingMode RoutingMode
+	mu          sync.RWMutex
 }
 
 type RoutingMode string
@@ -119,6 +120,18 @@ func (mc *ModelConfig) SetModels(models []ConfiguredModel) {
 	copy(mc.models, models)
 }
 
+func (mc *ModelConfig) SetRoutingMode(mode RoutingMode) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	mc.routingMode = mode
+}
+
+func (mc *ModelConfig) RoutingMode() RoutingMode {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+	return mc.routingMode
+}
+
 func (mc *ModelConfig) FindModel(providerID, modelID string) (*ConfiguredModel, error) {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
@@ -133,15 +146,15 @@ func (mc *ModelConfig) FindModel(providerID, modelID string) (*ConfiguredModel, 
 }
 
 func (mc *ModelConfig) RequiresFallback() bool {
-	return mc.Count() > 1
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+	return mc.routingMode != RoutingModePrimary && len(mc.models) > 1
 }
 
 type ModelSelector struct {
 	config    *ModelConfig
 	ranking   *RankingService
-	mu        sync.Mutex
 	rrCounter uint64
-	rankingMu sync.RWMutex
 }
 
 func NewModelSelector(config *ModelConfig, ranking *RankingService) *ModelSelector {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -83,7 +84,7 @@ func (rs *RankingService) FetchRankings(ctx context.Context) (*CapabilityRanking
 	resp, err := rs.client.Do(req)
 	if err != nil {
 		rs.logger.Warn("Failed to fetch live rankings, using seed data", zap.Error(err))
-		return SeedCapabilityRanking(), nil
+		return rs.cacheSeedFallback()
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -91,17 +92,17 @@ func (rs *RankingService) FetchRankings(ctx context.Context) (*CapabilityRanking
 		rs.logger.Warn("Ranking source returned non-200, using seed data",
 			zap.Int("status", resp.StatusCode),
 		)
-		return SeedCapabilityRanking(), nil
+		return rs.cacheSeedFallback()
 	}
 
 	var liveRanking CapabilityRanking
 	if err := json.NewDecoder(resp.Body).Decode(&liveRanking); err != nil {
 		rs.logger.Warn("Failed to parse live rankings, using seed data", zap.Error(err))
-		return SeedCapabilityRanking(), nil
+		return rs.cacheSeedFallback()
 	}
 
 	if len(liveRanking.Rankings) == 0 {
-		return SeedCapabilityRanking(), nil
+		return rs.cacheSeedFallback()
 	}
 
 	liveRanking.FetchedAt = time.Now().UTC()
@@ -126,17 +127,26 @@ func (rs *RankingService) GetRankings(ctx context.Context) (*CapabilityRanking, 
 	return rs.FetchRankings(ctx)
 }
 
+func (rs *RankingService) cacheSeedFallback() (*CapabilityRanking, error) {
+	seed := SeedCapabilityRanking()
+	rs.mu.Lock()
+	rs.rankings = seed
+	rs.mu.Unlock()
+	return seed, nil
+}
+
 func (rs *RankingService) GetRankingForModel(ctx context.Context, modelID string) (float64, error) {
 	rankings, err := rs.GetRankings(ctx)
 	if err != nil {
 		return 0.0, err
 	}
 
+	canonicalID := resolveCanonicalModel(modelID)
 	for _, r := range rankings.Rankings {
-		if r.ModelID == modelID {
+		if r.ModelID == modelID || r.ModelID == canonicalID {
 			return r.Score, nil
 		}
-		for _, alias := range resolveModelAliases(modelID) {
+		for _, alias := range resolveModelAliases(canonicalID) {
 			if r.ModelID == alias {
 				return r.Score, nil
 			}
@@ -178,13 +188,9 @@ func (rs *RankingService) RankModels(ctx context.Context, models []ConfiguredMod
 }
 
 func sortByCapability(models []ConfiguredModel) {
-	for i := 0; i < len(models)-1; i++ {
-		for j := i + 1; j < len(models); j++ {
-			if models[j].CapabilityScore > models[i].CapabilityScore {
-				models[i], models[j] = models[j], models[i]
-			}
-		}
-	}
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].CapabilityScore > models[j].CapabilityScore
+	})
 }
 
 func resolveModelAliases(modelID string) []string {
@@ -200,6 +206,23 @@ func resolveModelAliases(modelID string) []string {
 		return aliases
 	}
 	return nil
+}
+
+func resolveCanonicalModel(modelID string) string {
+	aliasToCanonical := map[string]string{
+		"gpt-4o-2024-11-20":            "gpt-4o",
+		"gpt-4o-2024-08-06":            "gpt-4o",
+		"gpt-4o-mini-2024-07-18":       "gpt-4o-mini",
+		"claude-sonnet-4-20250514":     "claude-sonnet-4",
+		"claude-3-5-sonnet-20241022":   "claude-3.5-sonnet",
+		"claude-3-5-sonnet-20240620":   "claude-3.5-sonnet",
+		"claude-3-opus-20240229":       "claude-3-opus",
+		"gemini-2.5-pro-preview-05-06": "gemini-2.5-pro",
+	}
+	if canonical, ok := aliasToCanonical[modelID]; ok {
+		return canonical
+	}
+	return modelID
 }
 
 func DefaultRankingScore(modelID string) float64 {
@@ -231,7 +254,7 @@ func SeedCapabilityRanking() *CapabilityRanking {
 	return &CapabilityRanking{
 		BenchVersion: "vending-bench-2-seed",
 		SourceURL:    VendingBench2URL,
-		FetchedAt:    time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		FetchedAt:    time.Now().UTC(),
 		Rankings: []ModelRanking{
 			{ModelID: "claude-sonnet-4-20250514", ProviderID: "anthropic", Score: 95.0, Rank: 1, BenchVersion: "vending-bench-2"},
 			{ModelID: "claude-sonnet-4", ProviderID: "anthropic", Score: 95.0, Rank: 2, BenchVersion: "vending-bench-2"},
