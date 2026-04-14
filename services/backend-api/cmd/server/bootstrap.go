@@ -84,6 +84,10 @@ type Config struct {
 	JWTSecret        string
 	TelegramBotToken string
 	SentryDSN        string
+	AIProvider       string
+	AIModel          string
+	AIAPIKey         string
+	AIBaseURL        string
 }
 
 func (b *BootstrapCommand) collectConfiguration() *Config {
@@ -139,6 +143,43 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 
 	fmt.Print("Sentry DSN: ")
 	config.SentryDSN = b.readInput("")
+
+	// AI Model configuration (single-model-first)
+	fmt.Println()
+	fmt.Println("🤖 AI Model Configuration")
+	fmt.Println("Configure one AI provider to get started. You can add more later.")
+	fmt.Println("Providers: openai, anthropic, google, deepseek, minimax, zhipu")
+	fmt.Println()
+
+	fmt.Print("AI Provider [zhipu]: ")
+	config.AIProvider = b.readInput("zhipu")
+
+	switch config.AIProvider {
+	case "openai":
+		config.AIModel = "gpt-4o-mini"
+		config.AIBaseURL = "https://api.openai.com/v1"
+	case "anthropic":
+		config.AIModel = "claude-sonnet-4-20250514"
+		config.AIBaseURL = "https://api.anthropic.com/v1"
+	case "google":
+		config.AIModel = "gemini-2.5-flash"
+		config.AIBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+	case "deepseek":
+		config.AIModel = "deepseek-v3"
+		config.AIBaseURL = "https://api.deepseek.com/v1"
+	case "minimax":
+		config.AIModel = "minimax-m2.5"
+		config.AIBaseURL = "https://api.minimax.io/anthropic/v1"
+	default:
+		config.AIModel = "glm-5-turbo"
+		config.AIBaseURL = "https://api.z.ai/api/paas/v4"
+	}
+
+	fmt.Printf("AI Model [%s]: ", config.AIModel)
+	config.AIModel = b.readInput(config.AIModel)
+
+	fmt.Print("AI API Key: ")
+	config.AIAPIKey = b.readInput("")
 
 	return config
 }
@@ -199,10 +240,18 @@ SENTRY_ENVIRONMENT=%s
 MINIMUM_PROFIT_THRESHOLD=0.1
 MAX_TRADE_AMOUNT_USD=1000
 ENABLE_PAPER_TRADING=true
-`, timeNow(), config.Environment, config.DatabaseHost, config.DatabasePort,
+
+# AI Configuration (single-model-first)
+AI_PROVIDER=%s
+AI_MODEL=%s
+AI_API_KEY=%s
+AI_BASE_URL=%s
+AI_ROUTING_MODE=primary
+ `, timeNow(), config.Environment, config.DatabaseHost, config.DatabasePort,
 		config.DatabaseName, config.DatabaseUser, config.DatabasePassword,
 		config.RedisHost, config.RedisPort, config.JWTSecret,
-		config.TelegramBotToken, config.SentryDSN, config.Environment)
+		config.TelegramBotToken, config.SentryDSN, config.Environment,
+		config.AIProvider, config.AIModel, config.AIAPIKey, config.AIBaseURL)
 
 	return os.WriteFile(path, []byte(content), 0600)
 }
