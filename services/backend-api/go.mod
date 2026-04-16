@@ -4,7 +4,6 @@ go 1.26
 
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0
-	github.com/cinar/indicator/v2 v2.1.22
 	github.com/getsentry/sentry-go v0.40.0
 	github.com/getsentry/sentry-go/gin v0.40.0
 	github.com/gin-gonic/gin v1.11.0
@@ -12,7 +11,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/irfndi/goflux v0.0.5
-	github.com/jackc/pgx/v5 v5.7.6
+	github.com/jackc/pgx/v5 v5.9.0
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/pashagolub/pgxmock/v4 v4.9.0
 	github.com/redis/go-redis/v9 v9.17.2
