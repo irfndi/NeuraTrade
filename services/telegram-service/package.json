@@ -4,13 +4,13 @@
   "description": "Telegram bot service for NeuraTrade",
   "main": "./dist/index.js",
   "scripts": {
-    "start": "node ./dist/index.js",
+    "start": "bun ./dist/index.js",
     "start:bun": "bun run index.ts",
-    "dev": "npm run build && node --watch ./dist/index.js",
+    "dev": "bun run build && bun --watch ./dist/index.js",
     "dev:bun": "bun --watch index.ts",
-    "build": "tsgo && mkdir -p dist/",
+    "build": "tsgo && bun build index.ts --outdir ./dist --target bun",
     "build:bun": "bun build index.ts --outdir ./dist --target bun",
-    "build:legacy": "tsc && mkdir -p dist/",
+    "build:legacy": "tsc && bun build index.ts --outdir ./dist --target bun",
     "test": "bun test"
   },
   "dependencies": {
@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.3.12",
-    "@typescript/native-preview": "beta",
+    "@typescript/native-preview": "7.0.0-dev.20260421.2",
     "typescript": "^6.0.3"
   },
   "overrides": {
