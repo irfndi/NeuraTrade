@@ -82,8 +82,8 @@ jobs:
       - name: Run lint
         run: cd services/telegram-service && bunx oxlint .
 
-      - name: Run typecheck
-        run: cd services/telegram-service && bunx tsc --noEmit
+      - name: Run typecheck (tsgo)
+        run: cd services/telegram-service && bunx tsgo
 
   backend-tests:
     name: Backend Tests (native/sqlite)
