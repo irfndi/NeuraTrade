@@ -11,7 +11,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/irfndi/goflux v0.0.5
-	github.com/jackc/pgx/v5 v5.9.0
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/pashagolub/pgxmock/v4 v4.9.0
 	github.com/redis/go-redis/v9 v9.17.2
