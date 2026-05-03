@@ -167,7 +167,7 @@ func providerBaseURL(provider string) string {
 	case "zai":
 		return "https://api.z.ai/api/paas/v4"
 	case "zhipu":
-		return "https://open.bigmodel.cn/api/paas/v4"
+		return "https://api.z.ai/api/paas/v4"
 	case "mlx":
 		return "http://localhost:8080/v1"
 	default:
@@ -1079,7 +1079,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		Autonomy:  integratedHandlers.AutonomyCoordinator(),
 		Collector: handlers.NewCollectorController(collectorService),
 		Risk:      handlers.NewRiskControllerAdapter(sharedKillSwitch, sharedSafeMode),
-		Orders:    handlers.NewOrderController(ccxtService),
+		Orders:    handlers.NewCCXTOrderCanceller(ccxtService),
 	})
 	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())
 

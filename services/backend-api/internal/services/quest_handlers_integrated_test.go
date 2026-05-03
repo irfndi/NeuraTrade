@@ -1224,19 +1224,185 @@ func TestNormalizeAINotificationSemantics_IndecisiveRuntimeEvidenceUsesParseCont
 func TestHoldDigestSummary_RuntimeParseContractUsesRuntimeSummary(t *testing.T) {
 	summary := holdDigestSummary(&AITradingDecision{
 		Reasoning: "Model output was incomplete and indecisive, ending with 'I'm torn' without committing to a trade.",
-	}, aiReasonLLMParseContract)
+	}, aiReasonLLMParseContract, "")
 	assert.Equal(t, "Hold digest: AI output incomplete, no reliable trade decision", summary)
 }
 
-func TestShouldNotifyPnLReconciliation(t *testing.T) {
-	now := time.Now().UTC()
-	quest := &Quest{Checkpoint: map[string]interface{}{}}
+func TestHoldDigestSummary_TableDriven(t *testing.T) {
+	tests := []struct {
+		name           string
+		decision       *AITradingDecision
+		reasonCategory string
+		runtimeStatus  string
+		expected       string
+	}{
+		{
+			name:           "LLM timeout",
+			decision:       &AITradingDecision{Reasoning: "timeout occurred"},
+			reasonCategory: aiReasonLLMTimeout,
+			expected:       "Hold digest: AI response timed out, no reliable trade decision",
+		},
+		{
+			name:           "LLM parse contract",
+			decision:       &AITradingDecision{Reasoning: "parse failed"},
+			reasonCategory: aiReasonLLMParseContract,
+			expected:       "Hold digest: AI output incomplete, no reliable trade decision",
+		},
+		{
+			name:           "execution unavailable",
+			decision:       &AITradingDecision{Reasoning: "runtime degraded"},
+			reasonCategory: aiReasonExecutionUnavailable,
+			expected:       "Hold digest: AI runtime degraded, waiting for stable decisioning",
+		},
+		{
+			name:           "deterministic fallback no eligible candidate",
+			decision:       &AITradingDecision{Reasoning: "no eligible candidate passed filters"},
+			reasonCategory: reasonCategoryDeterministicFallback,
+			expected:       "Hold digest: fallback found no qualified setup",
+		},
+		{
+			name:           "deterministic fallback no qualified setup",
+			decision:       &AITradingDecision{Reasoning: "no qualified setup found"},
+			reasonCategory: reasonCategoryDeterministicFallback,
+			expected:       "Hold digest: fallback found no qualified setup",
+		},
+		{
+			name:           "deterministic fallback hold",
+			decision:       &AITradingDecision{Reasoning: "conditions not met"},
+			reasonCategory: reasonCategoryDeterministicFallback,
+			expected:       "Hold digest: AI fallback selected hold",
+		},
+		{
+			name:           "strategy hold",
+			decision:       &AITradingDecision{Reasoning: "holding"},
+			reasonCategory: aiReasonStrategyHold,
+			expected:       "Hold digest: waiting for qualified setup",
+		},
+		{
+			name:           "state drift runtime status",
+			decision:       &AITradingDecision{Reasoning: "drift detected"},
+			reasonCategory: aiReasonExecutionUnavailable,
+			runtimeStatus:  runtimeStatusStateDrift,
+			expected:       "Hold digest: paused for lifecycle reconciliation",
+		},
+		{
+			name:           "reconcile blocked runtime status",
+			decision:       &AITradingDecision{Reasoning: "reconcile in progress"},
+			reasonCategory: aiReasonExecutionUnavailable,
+			runtimeStatus:  runtimeStatusReconcileBlocked,
+			expected:       "Hold digest: waiting for clean reconcile passes",
+		},
+		{
+			name:           "circuit open runtime status",
+			decision:       &AITradingDecision{Reasoning: "circuit breaker active"},
+			reasonCategory: aiReasonExecutionUnavailable,
+			runtimeStatus:  runtimeStatusCircuitOpen,
+			expected:       "Hold digest: circuit breaker active, cooling down",
+		},
+		{
+			name:           "LLM degraded runtime status",
+			decision:       &AITradingDecision{Reasoning: "provider degraded"},
+			reasonCategory: aiReasonExecutionUnavailable,
+			runtimeStatus:  runtimeStatusLLMDegraded,
+			expected:       "Hold digest: AI provider degraded, awaiting recovery",
+		},
+		{
+			name:           "nil decision",
+			decision:       nil,
+			reasonCategory: aiReasonStrategyHold,
+			expected:       "Hold digest: waiting for qualified setup",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := holdDigestSummary(tt.decision, tt.reasonCategory, tt.runtimeStatus)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
 
-	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-a", now))
-	recordPnLReconciliationNotification(quest, "summary-a", now)
-	assert.False(t, shouldNotifyPnLReconciliation(quest, "summary-a", now.Add(5*time.Minute)))
-	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-b", now.Add(5*time.Minute)))
-	assert.True(t, shouldNotifyPnLReconciliation(quest, "summary-a", now.Add(16*time.Minute)))
+func TestNormalizeAINotificationSemantics_RuntimeStatusPreservesConfidence(t *testing.T) {
+	t.Run("infrastructure status state drift preserves ConfidenceKnown true", func(t *testing.T) {
+		notif := AIReasoningNotification{
+			DecisionType:    "scalping_cycle",
+			Summary:         "State drift gate active",
+			Confidence:      0.75,
+			ConfidenceKnown: true,
+			RuntimeStatus:   runtimeStatusStateDrift,
+			ReasonCategory:  aiReasonExecutionUnavailable,
+		}
+		normalized := normalizeAINotificationSemantics(notif)
+		assert.True(t, normalized.ConfidenceKnown, "ConfidenceKnown should remain true for infrastructure runtime status")
+		assert.Equal(t, aiReasonExecutionUnavailable, normalized.ReasonCategory)
+	})
+
+	t.Run("infrastructure status reconcile blocked preserves ConfidenceKnown true", func(t *testing.T) {
+		notif := AIReasoningNotification{
+			DecisionType:    "scalping_cycle",
+			Summary:         "Reconcile in progress",
+			Confidence:      0.65,
+			ConfidenceKnown: true,
+			RuntimeStatus:   runtimeStatusReconcileBlocked,
+			ReasonCategory:  aiReasonExecutionUnavailable,
+		}
+		normalized := normalizeAINotificationSemantics(notif)
+		assert.True(t, normalized.ConfidenceKnown)
+	})
+
+	t.Run("infrastructure status circuit open preserves ConfidenceKnown true", func(t *testing.T) {
+		notif := AIReasoningNotification{
+			DecisionType:    "scalping_cycle",
+			Summary:         "Circuit breaker active",
+			Confidence:      0.80,
+			ConfidenceKnown: true,
+			RuntimeStatus:   runtimeStatusCircuitOpen,
+			ReasonCategory:  aiReasonExecutionUnavailable,
+		}
+		normalized := normalizeAINotificationSemantics(notif)
+		assert.True(t, normalized.ConfidenceKnown)
+	})
+
+	t.Run("LLM degraded still forces ConfidenceKnown false", func(t *testing.T) {
+		notif := AIReasoningNotification{
+			DecisionType:    "scalping_cycle",
+			Summary:         "LLM runtime degraded",
+			Confidence:      0.70,
+			ConfidenceKnown: true,
+			RuntimeStatus:   runtimeStatusLLMDegraded,
+			ReasonCategory:  aiReasonExecutionUnavailable,
+		}
+		normalized := normalizeAINotificationSemantics(notif)
+		assert.False(t, normalized.ConfidenceKnown, "ConfidenceKnown should be forced to false for LLM degraded")
+	})
+
+	t.Run("no runtime status existing behavior preserved", func(t *testing.T) {
+		notif := AIReasoningNotification{
+			DecisionType:    "scalping_cycle",
+			Summary:         "Runtime error",
+			ConfidenceKnown: true,
+			ReasonCategory:  aiReasonExecutionUnavailable,
+		}
+		normalized := normalizeAINotificationSemantics(notif)
+		assert.False(t, normalized.ConfidenceKnown, "Existing behavior: runtime category forces ConfidenceKnown false")
+	})
+}
+
+func TestIsInfrastructureRuntimeStatus(t *testing.T) {
+	assert.True(t, isInfrastructureRuntimeStatus(runtimeStatusStateDrift))
+	assert.True(t, isInfrastructureRuntimeStatus(runtimeStatusReconcileBlocked))
+	assert.True(t, isInfrastructureRuntimeStatus(runtimeStatusCircuitOpen))
+	assert.False(t, isInfrastructureRuntimeStatus(runtimeStatusLLMDegraded))
+	assert.False(t, isInfrastructureRuntimeStatus(runtimeStatusHealthy))
+	assert.False(t, isInfrastructureRuntimeStatus(""))
+	assert.False(t, isInfrastructureRuntimeStatus("unknown_status"))
+}
+
+func TestCheckpointStringSlice(t *testing.T) {
+	assert.Equal(t, []string{"a", "b"}, checkpointStringSlice([]string{"a", "b"}))
+	assert.Equal(t, []string{"a", "b"}, checkpointStringSlice([]interface{}{"a", "", "b"}))
+	assert.Nil(t, checkpointStringSlice(nil))
+	assert.Nil(t, checkpointStringSlice(42))
+	assert.Nil(t, checkpointStringSlice([]interface{}{"", "  "}))
 }
 
 func TestRecordPnLReconciliationNotification_InitializesCheckpoint(t *testing.T) {
@@ -1246,6 +1412,47 @@ func TestRecordPnLReconciliationNotification_InitializesCheckpoint(t *testing.T)
 	require.NotNil(t, quest.Checkpoint)
 	assert.Equal(t, "summary-a", quest.Checkpoint["last_pnl_reconciliation_summary"])
 	assert.Equal(t, now.Format(time.RFC3339), quest.Checkpoint["last_pnl_reconciliation_sent_at"])
+}
+
+func TestShouldNotifyPnLReconciliation(t *testing.T) {
+	now := time.Now().UTC()
+
+	t.Run("nil quest returns true", func(t *testing.T) {
+		assert.True(t, shouldNotifyPnLReconciliation(nil, "summary", now))
+	})
+
+	t.Run("empty summary returns false", func(t *testing.T) {
+		assert.False(t, shouldNotifyPnLReconciliation(&Quest{}, "", now))
+	})
+
+	t.Run("nil checkpoint returns true", func(t *testing.T) {
+		assert.True(t, shouldNotifyPnLReconciliation(&Quest{}, "summary", now))
+	})
+
+	t.Run("different summary bypasses cooldown", func(t *testing.T) {
+		quest := &Quest{Checkpoint: map[string]interface{}{
+			"last_pnl_reconciliation_summary": "old-summary",
+			"last_pnl_reconciliation_sent_at": now.Format(time.RFC3339),
+		}}
+		assert.True(t, shouldNotifyPnLReconciliation(quest, "new-summary", now))
+	})
+
+	t.Run("same summary within cooldown suppresses", func(t *testing.T) {
+		quest := &Quest{Checkpoint: map[string]interface{}{
+			"last_pnl_reconciliation_summary": "same-summary",
+			"last_pnl_reconciliation_sent_at": now.Format(time.RFC3339),
+		}}
+		assert.False(t, shouldNotifyPnLReconciliation(quest, "same-summary", now))
+	})
+
+	t.Run("same summary after cooldown re-notifies", func(t *testing.T) {
+		past := now.Add(-2 * time.Hour)
+		quest := &Quest{Checkpoint: map[string]interface{}{
+			"last_pnl_reconciliation_summary": "same-summary",
+			"last_pnl_reconciliation_sent_at": past.Format(time.RFC3339),
+		}}
+		assert.True(t, shouldNotifyPnLReconciliation(quest, "same-summary", now))
+	})
 }
 
 func TestStructuredHoldBlock_UsesDecisionPolicySpreadThreshold(t *testing.T) {

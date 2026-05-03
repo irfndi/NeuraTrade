@@ -137,8 +137,7 @@ type Worker struct {
 	ErrorCount int
 	// MaxErrors is the maximum allowed consecutive errors.
 	MaxErrors int
-	// Paused indicates whether the worker is temporarily paused;
-	// when true the collection loop skips ticks but preserves worker state.
+	// Paused indicates the worker was explicitly paused via PauseExchange.
 	Paused bool
 }
 

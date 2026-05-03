@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -954,6 +955,116 @@ func TestTradeDetails(t *testing.T) {
 	assert.Equal(t, 0.85, details.Confidence)
 	assert.Equal(t, "Strong bullish momentum", details.Reasoning)
 	assert.False(t, details.IsPaperTrade)
+}
+
+func newBitgetFuturesTestServer(t *testing.T, orderID string) (*httptest.Server, *map[string]interface{}) {
+	t.Helper()
+	var orderBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/market/contracts":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{
+				"sizeMultiplier":"0.001",
+				"minTradeNum":"0.1",
+				"volumePlace":"1",
+				"pricePlace":"2"
+			}]}`))
+		case "/api/v2/mix/order/place-order":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &orderBody))
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"code":"00000","msg":"ok","data":{"orderId":"%s"}}`, orderID)))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	return server, &orderBody
+}
+
+func newBitgetFuturesTestExecutor(serverURL string) *BitgetOrderExecutor {
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = serverURL
+	return executor
+}
+
+func TestBitgetOrderExecutor_PlaceFuturesOrderWithTPSL_UsesCorrectPresetFieldNames(t *testing.T) {
+	server, orderBodyPtr := newBitgetFuturesTestServer(t, "tpsl-field-123")
+	defer server.Close()
+
+	executor := newBitgetFuturesTestExecutor(server.URL)
+
+	entryPrice := decimal.NewFromFloat(48000)
+	tpPrice := decimal.NewFromFloat(52000)
+	slPrice := decimal.NewFromFloat(46000)
+
+	details := &TradeDetails{
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		MarketType: "futures",
+		AmountUSDT: decimal.NewFromInt(10),
+		EntryPrice: &entryPrice,
+		TakeProfit: &tpPrice,
+		StopLoss:   &slPrice,
+	}
+
+	orderID, err := executor.placeFuturesOrderWithTPSL(context.Background(), "BTCUSDT", details)
+
+	require.NoError(t, err)
+	assert.Equal(t, "tpsl-field-123", orderID)
+	require.NotNil(t, *orderBodyPtr)
+	orderBody := *orderBodyPtr
+
+	assert.Equal(t, "52000.00", orderBody["presetStopSurplusPrice"], "TP must use presetStopSurplusPrice")
+	assert.Equal(t, "52000.00", orderBody["presetStopSurplusExecutePrice"], "TP must set execute price")
+	assert.Equal(t, "46000.00", orderBody["presetStopLossPrice"], "SL must use presetStopLossPrice")
+
+	_, hasSLExec := orderBody["presetStopLossExecutePrice"]
+	assert.False(t, hasSLExec, "SL must NOT set execute price (market execution for guaranteed fill)")
+
+	_, hasInvalidTP := orderBody["presetTakeProfitPrice"]
+	assert.False(t, hasInvalidTP, "presetTakeProfitPrice must not be sent (invalid Bitget API field)")
+}
+
+func TestBitgetOrderExecutor_PlaceFuturesOrderWithTPSL_SkipsTPSLForRiskReduction(t *testing.T) {
+	server, orderBodyPtr := newBitgetFuturesTestServer(t, "risk-reduce-123")
+	defer server.Close()
+
+	executor := newBitgetFuturesTestExecutor(server.URL)
+
+	entryPrice := decimal.NewFromFloat(48000)
+	tpPrice := decimal.NewFromFloat(52000)
+	slPrice := decimal.NewFromFloat(46000)
+
+	details := &TradeDetails{
+		Symbol:     "BTC/USDT",
+		Side:       "sell",
+		MarketType: "futures",
+		Amount:     decimal.NewFromInt(1),
+		AmountUSDT: decimal.NewFromInt(10),
+		EntryPrice: &entryPrice,
+		TakeProfit: &tpPrice,
+		StopLoss:   &slPrice,
+		ReduceOnly: true,
+		TradeType:  "risk_reduction",
+	}
+
+	_, err := executor.placeFuturesOrderWithTPSL(context.Background(), "BTCUSDT", details)
+
+	require.NoError(t, err)
+	require.NotNil(t, *orderBodyPtr)
+	orderBody := *orderBodyPtr
+
+	_, hasTP := orderBody["presetStopSurplusPrice"]
+	_, hasSL := orderBody["presetStopLossPrice"]
+	assert.False(t, hasTP, "risk reduction orders must not include TP")
+	assert.False(t, hasSL, "risk reduction orders must not include SL")
+
+	_, hasTPExec := orderBody["presetStopSurplusExecutePrice"]
+	_, hasSLExec := orderBody["presetStopLossExecutePrice"]
+	assert.False(t, hasTPExec, "risk reduction orders must not include TP execute price")
+	assert.False(t, hasSLExec, "risk reduction orders must not include SL execute price")
+
+	assert.Equal(t, "close", orderBody["tradeSide"])
 }
 
 func TestFormatPrice(t *testing.T) {

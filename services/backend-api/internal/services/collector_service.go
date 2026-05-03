@@ -64,6 +64,9 @@ type CollectorService struct {
 	resourceOptimizer *ResourceOptimizer
 	// Logging
 	logger logging.Logger
+	// Pause/resume state per exchange
+	pausedExchanges map[string]bool
+	pauseMu         sync.RWMutex
 }
 
 // getExchangeCCXTCircuitBreaker returns a per-exchange circuit breaker for CCXT operations.
@@ -220,7 +223,8 @@ func NewCollectorService(db DBPool, ccxtService ccxt.CCXTService, cfg *config.Co
 		// Initialize resource optimization
 		resourceOptimizer: resourceOptimizer,
 		// Initialize logging
-		logger: logger,
+		logger:          logger,
+		pausedExchanges: make(map[string]bool),
 	}
 }
 
@@ -447,34 +451,55 @@ func (c *CollectorService) Stop() {
 
 func (c *CollectorService) PauseExchange(exchangeID string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	worker, ok := c.workers[exchangeID]
-	if !ok {
-		return fmt.Errorf("exchange %q not found", exchangeID)
-	}
-	if !worker.IsRunning {
-		return fmt.Errorf("exchange %q worker is not running; nothing to pause", exchangeID)
+	worker, exists := c.workers[exchangeID]
+	if !exists {
+		c.mu.Unlock()
+		return fmt.Errorf("worker for exchange %s not found", exchangeID)
 	}
 	worker.Paused = true
-	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange collection paused")
+
+	c.pauseMu.Lock()
+	c.pausedExchanges[exchangeID] = true
+	c.pauseMu.Unlock()
+
+	c.mu.Unlock()
+
+	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange paused")
 	return nil
 }
 
 func (c *CollectorService) ResumeExchange(exchangeID string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
-	worker, ok := c.workers[exchangeID]
-	if !ok {
-		return fmt.Errorf("exchange %q not found", exchangeID)
+	c.pauseMu.RLock()
+	paused := c.pausedExchanges[exchangeID]
+	c.pauseMu.RUnlock()
+
+	if !paused {
+		c.mu.Unlock()
+		return fmt.Errorf("exchange %s is not paused", exchangeID)
 	}
-	if !worker.IsRunning {
-		return fmt.Errorf("exchange %q worker is not running; use restart instead", exchangeID)
+
+	worker, exists := c.workers[exchangeID]
+	if exists {
+		worker.Paused = false
+		worker.ErrorCount = 0
 	}
-	worker.Paused = false
-	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange collection resumed")
+
+	c.pauseMu.Lock()
+	delete(c.pausedExchanges, exchangeID)
+	c.pauseMu.Unlock()
+
+	c.mu.Unlock()
+
+	c.logger.WithFields(map[string]interface{}{"exchange": exchangeID}).Info("Exchange resumed")
 	return nil
+}
+
+func (c *CollectorService) IsPaused(exchangeID string) bool {
+	c.pauseMu.RLock()
+	defer c.pauseMu.RUnlock()
+	return c.pausedExchanges[exchangeID]
 }
 
 // IsInitialized returns true if the collector service has been initialized.

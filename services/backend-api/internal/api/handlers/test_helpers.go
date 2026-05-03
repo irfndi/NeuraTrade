@@ -246,3 +246,11 @@ func (m *MockCollectorService) GetStatus() map[string]interface{} {
 	args := m.Called()
 	return args.Get(0).(map[string]interface{})
 }
+
+type MockOrderCanceller struct {
+	CancelErr error
+}
+
+func (m *MockOrderCanceller) CancelAllOrders(_ context.Context, _, _ string) error {
+	return m.CancelErr
+}

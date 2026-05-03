@@ -248,22 +248,29 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 	confidenceKnown := reasoning.ConfidenceKnown
 	if !confidenceKnown &&
 		strings.TrimSpace(reasoning.ReasonCategory) == "" &&
-		strings.TrimSpace(reasoning.HoldCategory) == "" {
+		strings.TrimSpace(reasoning.HoldCategory) == "" &&
+		!isInfrastructureRuntimeStatus(reasoning.RuntimeStatus) {
 		confidenceKnown = true
 	}
 	category := strings.TrimSpace(reasoning.ReasonCategory)
 	if category == "" {
 		category = strings.TrimSpace(reasoning.HoldCategory)
 	}
-	if !confidenceKnown && (category == "" || strings.EqualFold(category, "strategy_hold")) {
-		evidence := strings.TrimSpace(reasoning.Summary + " " + strings.Join(reasoning.Reasons, " "))
-		category = classifyAIRuntimeReason(evidence, "execution_unavailable")
-	}
-	if isRuntimeReasonCategory(category) {
-		confidenceKnown = false
-	}
-	if !confidenceKnown && strings.EqualFold(category, "strategy_hold") {
-		category = "execution_unavailable"
+	if reasoning.RuntimeStatus != "" && isInfrastructureRuntimeStatus(reasoning.RuntimeStatus) {
+		if category == "" {
+			category = "execution_unavailable"
+		}
+	} else {
+		if !confidenceKnown && (category == "" || strings.EqualFold(category, "strategy_hold")) {
+			evidence := strings.TrimSpace(reasoning.Summary + " " + strings.Join(reasoning.Reasons, " "))
+			category = classifyAIRuntimeReason(evidence, "execution_unavailable")
+		}
+		if isRuntimeReasonCategory(category) {
+			confidenceKnown = false
+		}
+		if !confidenceKnown && strings.EqualFold(category, "strategy_hold") {
+			category = "execution_unavailable"
+		}
 	}
 
 	reasonsToShow := len(reasoning.Reasons)
@@ -311,7 +318,17 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 		fmt.Sprintf("Type: %s", reasoning.DecisionType),
 	}
 
-	if confidenceKnown {
+	infraHold := isInfrastructureRuntimeStatus(reasoning.RuntimeStatus)
+	llmDegraded := reasoning.RuntimeStatus == runtimeStatusLLMDegraded
+	switch {
+	case confidenceKnown && infraHold:
+		confidencePercent := int(reasoning.Confidence * 100)
+		lines = append(lines, fmt.Sprintf("Confidence: 🟡 %d%% (gated)", confidencePercent))
+	case infraHold && !confidenceKnown:
+		lines = append(lines, "Confidence: ⏸️ (infrastructure hold)")
+	case llmDegraded:
+		lines = append(lines, "Confidence: ⚪ N/A (runtime-degraded)")
+	case confidenceKnown:
 		confidencePercent := int(reasoning.Confidence * 100)
 		var confidenceEmoji string
 		switch {
@@ -323,7 +340,7 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 			confidenceEmoji = "🔴"
 		}
 		lines = append(lines, fmt.Sprintf("Confidence: %s %d%%", confidenceEmoji, confidencePercent))
-	} else {
+	default:
 		lines = append(lines, "Confidence: ⚪ N/A (runtime-degraded)")
 	}
 
@@ -333,6 +350,33 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 	)
 	if category != "" {
 		lines = append(lines, fmt.Sprintf("Reason Category: %s", category))
+	}
+	if reasoning.RuntimeStatus != "" {
+		var statusEmoji string
+		switch reasoning.RuntimeStatus {
+		case runtimeStatusStateDrift, runtimeStatusReconcileBlocked:
+			statusEmoji = "🔄"
+		case runtimeStatusCircuitOpen:
+			statusEmoji = "⚠️"
+		case runtimeStatusLLMDegraded:
+			statusEmoji = "🛑"
+		default:
+			statusEmoji = "ℹ️"
+		}
+		lines = append(lines, fmt.Sprintf("Runtime Status: %s %s", statusEmoji, reasoning.RuntimeStatus))
+	}
+	if reasoning.RuntimeDetails != nil {
+		if current, ok := reasoning.RuntimeDetails["clean_passes_current"]; ok {
+			if required, rok := reasoning.RuntimeDetails["clean_passes_required"]; rok {
+				lines = append(lines, fmt.Sprintf("Reconcile Progress: %s/%s clean passes", current, required))
+			}
+		}
+		if driftPos, ok := reasoning.RuntimeDetails["drift_positions"]; ok {
+			lines = append(lines, fmt.Sprintf("Drift Positions: %s stale", driftPos))
+		}
+		if recoveryAction, ok := reasoning.RuntimeDetails["recovery_action"]; ok {
+			lines = append(lines, fmt.Sprintf("Recovery Action: %s", recoveryAction))
+		}
 	}
 	if strings.TrimSpace(reasoning.UnblockCondition) != "" {
 		lines = append(lines, fmt.Sprintf("Unblock Condition: %s", strings.TrimSpace(reasoning.UnblockCondition)))
