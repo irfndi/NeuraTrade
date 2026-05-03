@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	VendingBench2URL = "https://andonlabs.com/evals/vending-bench-2"
+	VendingBench2URL   = "https://andonlabs.com/evals/vending-bench-2"
 	capabilityCacheTTL = 7 * 24 * time.Hour
 )
 
