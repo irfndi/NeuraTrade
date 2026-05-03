@@ -94,7 +94,7 @@ lint: ## Run lints
 typecheck: ## Run TypeScript type checks
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Running Telegram typecheck...$(NC)"; \
-		cd services/telegram-service && bunx tsc --noEmit; \
+		cd services/telegram-service && bunx tsgo; \
 	else \
 		echo "$(YELLOW)Skipping typecheck - telegram-service or bun missing$(NC)"; \
 	fi
