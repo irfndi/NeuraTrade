@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	VendingBench2URL   = "https://andonlabs.com/evals/vending-bench-2"
-	capabilityCacheKey = "ai:capability_ranking"
+	VendingBench2URL = "https://andonlabs.com/evals/vending-bench-2"
 	capabilityCacheTTL = 7 * 24 * time.Hour
 )
 
@@ -229,6 +228,7 @@ func resolveCanonicalModel(modelID string) string {
 }
 
 func DefaultRankingScore(modelID string) float64 {
+	canonicalID := resolveCanonicalModel(modelID)
 	knownScores := map[string]float64{
 		"claude-sonnet-4-20250514": 95.0,
 		"claude-sonnet-4":          95.0,
@@ -246,6 +246,9 @@ func DefaultRankingScore(modelID string) float64 {
 		"gpt-4o-mini":              78.0,
 		"deepseek-v3":              77.0,
 		"llama-4-maverick":         75.0,
+	}
+	if score, ok := knownScores[canonicalID]; ok {
+		return score
 	}
 	if score, ok := knownScores[modelID]; ok {
 		return score

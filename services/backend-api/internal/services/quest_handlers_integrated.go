@@ -1008,11 +1008,12 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 				runtimeDetails["force_repair_eligible"] = "false"
 			}
 		}
-		if checkpointBool(quest.Checkpoint["state_drift_deadlock_cleared"]) {
-			runtimeDetails["recovery_action"] = "deadlock_clear_triggered"
-		}
-		if _, ok := quest.Checkpoint["state_drift_deadlock_cleared"]; ok {
-			runtimeDetails["force_repair_eligible"] = fmt.Sprintf("%t", checkpointBool(quest.Checkpoint["state_drift_deadlock_cleared"]))
+		if dcVal, dcOk := quest.Checkpoint["state_drift_deadlock_cleared"]; dcOk {
+			dcBool := checkpointBool(dcVal)
+			if dcBool {
+				runtimeDetails["recovery_action"] = "deadlock_clear_triggered"
+			}
+			runtimeDetails["force_repair_eligible"] = fmt.Sprintf("%t", dcBool)
 		}
 		h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
 			DecisionType:     "scalping_cycle",
