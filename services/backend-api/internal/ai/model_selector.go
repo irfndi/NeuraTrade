@@ -184,14 +184,20 @@ func (ms *ModelSelector) Select(ctx context.Context, constraints SelectionConstr
 	}
 
 	if ms.config.RequiresFallback() {
-		return ms.selectWithFallback(ctx, models, constraints)
+		routingMode := ms.config.RoutingMode()
+		switch routingMode {
+		case RoutingModeRoundRobin:
+			return ms.SelectRoundRobin(ctx, constraints)
+		default:
+			return ms.selectWithFallback(ctx, models, constraints)
+		}
 	}
 
 	return &SelectionResult{
 		Model: models[0],
 		Mode:  RoutingModePrimary,
 		Rank:  1,
-		Total: 1,
+		Total: len(models),
 	}, nil
 }
 
