@@ -183,7 +183,7 @@ func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSixtyFive(t *testing.T) {
 	}, config)
 
 	require.Equal(t, AccountTierMicro, policy.AccountTier)
-	require.InDelta(t, 0.65, policy.EffectiveMinConfidence, 0.0001)
+	require.InDelta(t, config.MicroConfidenceCap, policy.EffectiveMinConfidence, 0.0001)
 	require.Contains(t, policy.PolicyAdjustments, "micro_confidence_cap")
 }
 

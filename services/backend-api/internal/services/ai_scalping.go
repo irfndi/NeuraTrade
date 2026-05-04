@@ -4232,6 +4232,9 @@ func scalpingPolicyConfigFromEnv(maxBidAskSpreadPct float64) appautonomy.Scalpin
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_MIN_CONFIDENCE_FLOOR"); ok && value > 0 {
 		cfg.MicroMinConfidenceFloor = value
 	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_CONFIDENCE_CAP"); ok && value > 0 {
+		cfg.MicroConfidenceCap = value
+	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_MAX_CAPITAL_PCT"); ok && value > 0 {
 		cfg.MicroMaxCapitalPct = value
 	}
