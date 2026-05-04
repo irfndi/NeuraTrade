@@ -11,6 +11,10 @@ import (
 )
 
 func TestSQLiteMigrationsCreateFundingArbitrageOpportunities(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skipf("sqlite3 CLI not available: %v", err)
+	}
+
 	backendRoot, err := filepath.Abs("..")
 	require.NoError(t, err)
 
@@ -59,6 +63,24 @@ func TestSQLiteMigrationsCreateFundingArbitrageOpportunities(t *testing.T) {
 		t,
 		dbPath,
 		"SELECT COUNT(*) FROM pragma_index_list('funding_arbitrage_opportunities') WHERE name = 'idx_funding_arbitrage_expires'",
+		"1",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM pragma_table_info('funding_arbitrage_opportunities') WHERE name IN ('trading_pair_id', 'long_exchange_id', 'short_exchange_id') AND \"notnull\" = 1",
+		"3",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM pragma_foreign_key_list('funding_arbitrage_opportunities') WHERE \"table\" = 'trading_pairs' AND \"from\" = 'trading_pair_id'",
+		"1",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM sqlite_master WHERE name = 'funding_arbitrage_opportunities' AND sql LIKE '%CHECK (long_exchange_id <> short_exchange_id)%'",
 		"1",
 	)
 }
