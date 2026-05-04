@@ -1091,6 +1091,12 @@ func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptIn
 
 func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (decision *AITradingDecision, err error) {
 	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", walletBasis(portfolio).InexactFloat64())
+
+	// Periodic self-learning feedback — every 20 trades
+	if perf := GetScalpingPerformance().GetPerformance(); readIntMetric(perf["total_trades"])%20 == 0 && readIntMetric(perf["total_trades"]) > 0 {
+		s.ApplyPerformanceFeedback()
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
 	effectiveExchange := s.exchangeForContext(ctx)
@@ -4583,6 +4589,84 @@ func (s *AIScalpingService) ReportTradeOutcome(symbol string, pnl decimal.Decima
 		state.LossStreak = 0
 	}
 	s.symbolGuards[normalized] = state
+
+	profitable := pnl.GreaterThan(decimal.Zero)
+	RecordScalpingTrade(context.Background(), symbol, "", decimal.Zero, decimal.Zero, decimal.Zero, profitable)
+}
+
+// ApplyPerformanceFeedback adjusts active scalping config based on tracked performance metrics.
+func (s *AIScalpingService) ApplyPerformanceFeedback() {
+	perf := GetScalpingPerformance()
+	adjusted := perf.GetAdjustedParameters()
+	perfData := perf.GetPerformance()
+	totalTrades := readIntMetric(perfData["total_trades"])
+	winRate := readFloatMetric(perfData["win_rate"])
+	consecutiveLosses := readIntMetric(perfData["consecutive_losses"])
+	consecutiveWins := readIntMetric(perfData["consecutive_wins"])
+
+	if totalTrades < 10 {
+		return
+	}
+
+	if winRate < 0.3 && totalTrades >= 20 {
+		newFloor := s.config.DeterministicFallback.ConfidenceFloor * 2
+		if newFloor > 0.90 {
+			newFloor = 0.90
+		}
+		if newFloor < 0.55 {
+			newFloor = 0.55
+		}
+		newSize := s.config.DeterministicFallback.SizeFraction * 0.5
+		if newSize < 0.10 {
+			newSize = 0.10
+		}
+		s.config.DeterministicFallback.ConfidenceFloor = newFloor
+		s.config.DeterministicFallback.SizeFraction = newSize
+		log.Printf("[AI-SCALPING] Self-learning: low win rate (%.1f%%) — tightened confidence floor to %.2f, size fraction to %.2f",
+			winRate*100, newFloor, newSize)
+	} else if winRate > 0.6 && totalTrades >= 20 {
+		newFloor := s.config.DeterministicFallback.ConfidenceFloor - 0.05
+		if newFloor < 0.55 {
+			newFloor = 0.55
+		}
+		newSize := s.config.DeterministicFallback.SizeFraction + 0.10
+		if newSize > 0.80 {
+			newSize = 0.80
+		}
+		s.config.DeterministicFallback.ConfidenceFloor = newFloor
+		s.config.DeterministicFallback.SizeFraction = newSize
+		log.Printf("[AI-SCALPING] Self-learning: high win rate (%.1f%%) — loosened confidence floor to %.2f, size fraction to %.2f",
+			winRate*100, newFloor, newSize)
+	}
+
+	if consecutiveLosses >= 3 {
+		newFloor := s.config.DeterministicFallback.ConfidenceFloor + 0.10
+		if newFloor > 0.90 {
+			newFloor = 0.90
+		}
+		newSize := s.config.DeterministicFallback.SizeFraction * 0.5
+		if newSize < 0.10 {
+			newSize = 0.10
+		}
+		s.config.DeterministicFallback.ConfidenceFloor = newFloor
+		s.config.DeterministicFallback.SizeFraction = newSize
+		log.Printf("[AI-SCALPING] Self-learning: %d consecutive losses — tightened to confidence=%.2f, size=%.2f",
+			consecutiveLosses, newFloor, newSize)
+	} else if consecutiveWins >= 3 {
+		newFloor := s.config.DeterministicFallback.ConfidenceFloor - 0.05
+		if newFloor < 0.55 {
+			newFloor = 0.55
+		}
+		newSize := s.config.DeterministicFallback.SizeFraction + 0.10
+		if newSize > 0.80 {
+			newSize = 0.80
+		}
+		s.config.DeterministicFallback.ConfidenceFloor = newFloor
+		s.config.DeterministicFallback.SizeFraction = newSize
+		log.Printf("[AI-SCALPING] Self-learning: %d consecutive wins — loosened to confidence=%.2f, size=%.2f",
+			consecutiveWins, newFloor, newSize)
+	}
+	_ = adjusted
 }
 
 func getEnvInt(key string) int {
