@@ -175,7 +175,9 @@ func TestPaperDryRunValidationFlowRecordsPerformanceAndProtectionExits(t *testin
 	assert.Equal(t, 1, stats["profitable_trades"])
 	assert.Equal(t, 1, stats["losing_trades"])
 	assert.Equal(t, 0.5, stats["win_rate"])
-	assert.Equal(t, "-0.04", stats["total_pnl"])
+	totalPnL, err := decimal.NewFromString(stats["total_pnl"].(string))
+	require.NoError(t, err)
+	assert.True(t, totalPnL.Equal(winPnL.Add(lossPnL)))
 	require.NoError(t, mockPool.ExpectationsWereMet())
 }
 
