@@ -21,7 +21,7 @@ const (
 const (
 	DefaultMicroAccountMaxValue       = 250.0
 	DefaultSmallAccountMaxValue       = 2500.0
-	DefaultMicroMinConfidenceFloor    = 0.65
+	DefaultMicroMinConfidenceFloor    = 0.55
 	DefaultMicroMaxCapitalPct         = 0.50
 	DefaultMaxConcurrentPositions     = 3
 	DefaultMicroMaxConcurrentPosition = 1
@@ -314,14 +314,14 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 
 	if policy.AccountTier == AccountTierMicro {
 		if recoveryMode == "" &&
-			policy.EffectiveMinConfidence > 0.72 &&
+			policy.EffectiveMinConfidence > 0.65 &&
 			!hasAnyPolicyAdjustment(policy.PolicyAdjustments,
 				"weak_recent_win_rate",
 				"critical_recent_win_rate",
 				"loss_streak_confidence_tightening",
 				"drawdown_tightening",
 			) {
-			policy.EffectiveMinConfidence = 0.72
+			policy.EffectiveMinConfidence = 0.65
 			policy.PolicyAdjustments = append(policy.PolicyAdjustments, "micro_confidence_cap")
 		}
 		if policy.EffectiveMaxCapitalPct > cfg.MicroMaxCapitalPct {
@@ -526,6 +526,9 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 		if policy.EffectiveMaxCapitalPct < cfg.NoFillMaxCapitalPctCap {
 			policy.EffectiveMaxCapitalPct = cfg.NoFillMaxCapitalPctCap
 		}
+	}
+	if policy.AccountTier == AccountTierMicro && policy.MaxConcurrentPositions < 1 {
+		policy.MaxConcurrentPositions = 1
 	}
 	policy.PolicyAdjustments = append(policy.PolicyAdjustments, "controlled_no_fill_recovery")
 }
