@@ -120,8 +120,8 @@ func TestMain(m *testing.M) {
 func TestDefaultAIBrainConfig(t *testing.T) {
 	config := DefaultAIBrainConfig()
 
-	if config.Model != "gpt-4o" {
-		t.Errorf("Expected model 'gpt-4o', got '%s'", config.Model)
+	if config.Model != "" && config.Model != "gpt-4o" {
+		t.Errorf("Expected model '' or 'gpt-4o', got '%s'", config.Model)
 	}
 	if config.Temperature != 0.2 {
 		t.Errorf("Expected temperature 0.2, got %f", config.Temperature)

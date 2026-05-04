@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"os"
 	"strings"
 	"time"
 
@@ -164,7 +165,7 @@ type AIBrainConfig struct {
 // DefaultAIBrainConfig returns default configuration
 func DefaultAIBrainConfig() AIBrainConfig {
 	return AIBrainConfig{
-		Model:          "gpt-4o",
+		Model:          strings.TrimSpace(os.Getenv("AI_MODEL")),
 		Temperature:    0.2, // Low temperature for consistent decisions
 		MaxTokens:      2000,
 		Timeout:        30 * time.Second,

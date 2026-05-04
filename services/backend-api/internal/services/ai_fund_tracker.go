@@ -27,7 +27,7 @@ func DefaultAIFundTrackerConfig() AIFundTrackerConfig {
 		TargetValue:     1000.0,
 		MinMilestoneGap: 0.05,
 		EnableAI:        true,
-		LLMModel:        "default",
+		LLMModel:        resolveEnvModel(),
 		MaxHistoryDays:  30,
 	}
 }

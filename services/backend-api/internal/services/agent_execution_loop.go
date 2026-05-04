@@ -409,7 +409,7 @@ func (l *AgentExecutionLoop) runLLMWithTools(ctx context.Context, symbol string,
 	for i := 0; i < l.config.MaxIterations; i++ {
 		req := &llm.CompletionRequest{
 			Messages: conversation.Build(),
-			Model:    "gpt-4", // TODO: Make configurable
+			Model:    resolveEnvModel(),
 			Tools:    tools,
 		}
 

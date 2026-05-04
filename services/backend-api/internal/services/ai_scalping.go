@@ -60,6 +60,8 @@ type AIScalpingConfig struct {
 }
 
 const (
+	defaultRuntimeAIModel = "deepseek-v4-pro"
+
 	minAIScalpingMaxBidAskSpreadPct = 0.0001
 	maxAIScalpingMaxBidAskSpreadPct = 5.0
 	defaultOrderBookPairsBase       = 4
@@ -230,10 +232,20 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	return normalized
 }
 
+func resolveEnvModel() string {
+	if m := strings.TrimSpace(os.Getenv("AI_MODEL")); m != "" {
+		return m
+	}
+	if m := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_MODEL")); m != "" {
+		return m
+	}
+	return defaultRuntimeAIModel
+}
+
 func DefaultAIScalpingConfig() AIScalpingConfig {
 	return AIScalpingConfig{
 		Exchange:              "bitget", // Default, will be overridden by user settings
-		Model:                 "glm-5",
+		Model:                 resolveEnvModel(),
 		Leverage:              5,
 		MaxTokens:             1200,
 		MaxCapitalPct:         5.0,
@@ -1823,7 +1835,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
 	}
 	if req.Model == "" {
-		req.Model = "glm-5"
+		req.Model = resolveEnvModel()
 	}
 	if req.MaxTokens <= 0 {
 		req.MaxTokens = 1200
@@ -3516,7 +3528,7 @@ func buildExecutionFallbackReason(err error) string {
 func (s *AIScalpingService) repairDecisionJSON(ctx context.Context, raw string) (string, error) {
 	modelID := strings.TrimSpace(s.config.Model)
 	if modelID == "" {
-		modelID = "glm-5"
+		modelID = resolveEnvModel()
 	}
 
 	maxTokens := 320
