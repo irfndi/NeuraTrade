@@ -9,6 +9,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const minComposerConfidenceSpread = 0.10
+
 // OHLCVData provides candlestick data for signal composition.
 type OHLCVData struct {
 	Exchange  string
@@ -190,7 +192,7 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 			buyConfidence = buyScore.Div(totalWeight)
 			sellConfidence = sellScore.Div(totalWeight)
 		}
-		marginThreshold := decimal.NewFromFloat(0.10)
+		marginThreshold := decimal.NewFromFloat(minComposerConfidenceSpread)
 		if buyScore.GreaterThan(sellScore) && buyConfidence.Sub(sellConfidence).GreaterThanOrEqual(marginThreshold) {
 			signal.Direction = DirectionBuy
 			signal.Confidence = buyConfidence
@@ -364,7 +366,7 @@ func calculateEMA(candles []OHLCVCandle, period int) decimal.Decimal {
 	sma := sum.Div(decimal.NewFromInt(int64(period)))
 	multiplier := decimal.NewFromFloat(2.0).Div(decimal.NewFromInt(int64(period + 1)))
 	ema := sma
-	for i := len(candles) - period; i < len(candles); i++ {
+	for i := start + 1; i < len(candles); i++ {
 		ema = candles[i].Close.Sub(ema).Mul(multiplier).Add(ema)
 	}
 	return ema
