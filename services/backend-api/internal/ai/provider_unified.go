@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -23,12 +22,7 @@ type UnifiedProviderClient struct {
 
 // NewUnifiedProviderClient creates a new unified provider client
 func NewUnifiedProviderClient(providerID, apiKey, baseURL, model string) *UnifiedProviderClient {
-	// MiniMax uses Anthropic format according to models.dev
-	// Force Anthropic format for MiniMax
-	useAnthropic := strings.Contains(baseURL, "minimax") || strings.Contains(baseURL, "anthropic")
-	// Zhipu uses OpenAI format
-	// DEBUG: Print detection result
-	fmt.Printf("[DEBUG] ProviderID=%s, baseURL=%s, useAnthropic=%v\n", providerID, baseURL, useAnthropic)
+	useAnthropic := ProviderUsesAnthropicFormat(providerID, baseURL)
 
 	return &UnifiedProviderClient{
 		providerID: providerID,

@@ -946,4 +946,26 @@ func TestProviderBaseURL(t *testing.T) {
 	t.Run("deepseek uses configured default base path", func(t *testing.T) {
 		assert.Equal(t, "https://api.deepseek.com/v1", providerBaseURL("deepseek"))
 	})
+
+	t.Run("unknown providers have no implicit transport default", func(t *testing.T) {
+		assert.Empty(t, providerBaseURL("unknown-provider"))
+	})
+}
+
+func TestResolveProviderNodeUsesCentralProviderEnvNames(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_API_KEY", "key")
+	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_BASE_URL", "https://override.example/v1")
+	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_MODEL", "model-override")
+
+	node := resolveProviderNode("deepseek", "primary-key", "https://primary.example/v1", "zai-coding-plan")
+
+	assert.Equal(t, "zai-coding-plan", node.Provider)
+	assert.Equal(t, "key", node.APIKey)
+	assert.Equal(t, "https://override.example/v1", node.BaseURL)
+	assert.Equal(t, "model-override", node.ModelOverride)
+}
+
+func TestProviderRequiresAPIKeyUsesProviderDefaults(t *testing.T) {
+	assert.False(t, providerRequiresAPIKey("mlx"))
+	assert.True(t, providerRequiresAPIKey("deepseek"))
 }
