@@ -408,7 +408,7 @@ func (c *Client) chatOpenAI(ctx context.Context, provider *ProviderInfo, req *Ch
 	if baseURL == "" {
 		return nil, fmt.Errorf("no base URL configured for provider: %s", provider.ID)
 	}
-	apiURL := baseURL + "/chat/completions"
+	apiURL := ProviderEndpointURL(baseURL, "/chat/completions")
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -492,7 +492,7 @@ func (c *Client) chatAnthropic(ctx context.Context, provider *ProviderInfo, req 
 	if baseURL == "" {
 		return nil, fmt.Errorf("no base URL configured for provider: %s", provider.ID)
 	}
-	apiURL := baseURL + "/messages"
+	apiURL := ProviderEndpointURL(baseURL, "/messages")
 
 	// Convert messages to Anthropic format
 	type AnthropicMessage struct {

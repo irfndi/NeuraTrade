@@ -76,15 +76,55 @@ func TestProviderEnvVarNames(t *testing.T) {
 	}, ProviderAPIKeyEnvVars("deepseek"))
 
 	assert.Equal(t, []string{
+		"NEURATRADE_AI_PROVIDER_DEEPSEEK_MODEL",
+		"DEEPSEEK_MODEL",
+	}, ProviderModelEnvVars("deepseek"))
+
+	assert.Equal(t, []string{
 		"NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_BASE_URL",
 		"ZAI_CODING_PLAN_BASE_URL",
 	}, ProviderBaseURLEnvVars("zai-coding-plan"))
+
+	assert.Equal(t, []string{
+		"NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_MODEL",
+		"ZAI_CODING_PLAN_MODEL",
+	}, ProviderModelEnvVars("zai-coding-plan"))
+
+	assert.Equal(t, []string{
+		"NEURATRADE_AI_PROVIDER_DEEPSEEK_API_KEY",
+		"DEEPSEEK_API_KEY",
+	}, ProviderAPIKeyEnvVars("  DeepSeek  "))
+
+	assert.Equal(t, []string{
+		"NEURATRADE_AI_PROVIDER_DEEPSEEK_MODEL",
+		"DEEPSEEK_MODEL",
+	}, ProviderModelEnvVars("  DeepSeek  "))
+
+	assert.Equal(t, []string{
+		"NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_BASE_URL",
+		"ZAI_CODING_PLAN_BASE_URL",
+	}, ProviderBaseURLEnvVars("  ZAI-Coding-Plan  "))
+
+	assert.Equal(t, []string{
+		"NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_TRANSPORT_FORMAT",
+		"ZAI_CODING_PLAN_TRANSPORT_FORMAT",
+	}, ProviderTransportFormatEnvVars("  ZAI-Coding-Plan  "))
 }
 
 func TestProviderUsesAnthropicFormat(t *testing.T) {
 	assert.True(t, ProviderUsesAnthropicFormat("minimax", ""))
 	assert.True(t, ProviderUsesAnthropicFormat("unknown", "https://example.com/anthropic/v1"))
+	assert.False(t, ProviderUsesAnthropicFormat("minimax", "https://openai-proxy.example/v1"))
 	assert.False(t, ProviderUsesAnthropicFormat("zhipu", "https://api.z.ai/api/paas/v4"))
+
+	t.Setenv("NEURATRADE_AI_PROVIDER_MINIMAX_TRANSPORT_FORMAT", "openai")
+	assert.False(t, ProviderUsesAnthropicFormat("minimax", "https://api.minimax.io/anthropic/v1"))
+}
+
+func TestProviderEndpointURL(t *testing.T) {
+	assert.Equal(t, "https://proxy.example/v1/chat/completions", ProviderEndpointURL("https://proxy.example/v1", "/chat/completions"))
+	assert.Equal(t, "https://proxy.example/v1/chat/completions", ProviderEndpointURL("https://proxy.example/v1/chat/completions", "/chat/completions"))
+	assert.Empty(t, ProviderEndpointURL("", "/messages"))
 }
 
 func TestClientProviderEndpointDefaults(t *testing.T) {

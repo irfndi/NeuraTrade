@@ -968,4 +968,5 @@ func TestResolveProviderNodeUsesCentralProviderEnvNames(t *testing.T) {
 func TestProviderRequiresAPIKeyUsesProviderDefaults(t *testing.T) {
 	assert.False(t, providerRequiresAPIKey("mlx"))
 	assert.True(t, providerRequiresAPIKey("deepseek"))
+	assert.True(t, providerRequiresAPIKey("unknown-provider"))
 }

@@ -53,10 +53,10 @@ func (c *UnifiedProviderClient) Chat(ctx context.Context, req *ChatRequest) (*Ch
 
 	apiURL := c.baseURL
 	if !c.useAnthropicFormat {
-		apiURL += "/chat/completions"
+		apiURL = ProviderEndpointURL(apiURL, "/chat/completions")
 	} else {
 		// Anthropic format uses /messages endpoint
-		apiURL += "/messages"
+		apiURL = ProviderEndpointURL(apiURL, "/messages")
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))

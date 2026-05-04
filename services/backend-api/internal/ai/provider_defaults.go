@@ -1,6 +1,9 @@
 package ai
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 type ProviderTransportFormat string
 
@@ -104,6 +107,14 @@ func ProviderModelEnvVars(providerID string) []string {
 	}
 }
 
+func ProviderTransportFormatEnvVars(providerID string) []string {
+	prefix := ProviderEnvPrefix(providerID)
+	return []string{
+		"NEURATRADE_AI_PROVIDER_" + prefix + "_TRANSPORT_FORMAT",
+		prefix + "_TRANSPORT_FORMAT",
+	}
+}
+
 func ProviderDefaults(providerID string) (ProviderTransportDefaults, bool) {
 	defaults, ok := providerTransportDefaults[NormalizeProviderID(providerID)]
 	return defaults, ok
@@ -131,9 +142,44 @@ func ProviderRequiresAPIKey(providerID string) bool {
 }
 
 func ProviderUsesAnthropicFormat(providerID string, baseURL string) bool {
+	if format, ok := providerTransportFormatOverride(providerID); ok {
+		return format == ProviderTransportAnthropic
+	}
+
+	baseURLNorm := strings.ToLower(strings.TrimSpace(baseURL))
+	if strings.Contains(baseURLNorm, "anthropic") || strings.Contains(baseURLNorm, "minimax") {
+		return true
+	}
+	if strings.Contains(baseURLNorm, "openai") {
+		return false
+	}
+
 	if defaults, ok := ProviderDefaults(providerID); ok {
 		return defaults.TransportFormat == ProviderTransportAnthropic
 	}
-	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
-	return strings.Contains(baseURL, "anthropic") || strings.Contains(baseURL, "minimax")
+	return false
+}
+
+func providerTransportFormatOverride(providerID string) (ProviderTransportFormat, bool) {
+	for _, envKey := range ProviderTransportFormatEnvVars(providerID) {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(envKey))) {
+		case string(ProviderTransportOpenAI):
+			return ProviderTransportOpenAI, true
+		case string(ProviderTransportAnthropic):
+			return ProviderTransportAnthropic, true
+		}
+	}
+	return "", false
+}
+
+func ProviderEndpointURL(baseURL string, path string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+	if baseURL == "" {
+		return ""
+	}
+	if strings.HasSuffix(baseURL, path) {
+		return baseURL
+	}
+	return baseURL + path
 }
