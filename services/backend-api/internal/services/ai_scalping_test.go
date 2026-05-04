@@ -1887,7 +1887,7 @@ func TestAIScalpingService_ApplyPerformanceFeedback_ClampsAndPersistsFallbackCon
 
 	svc.ApplyPerformanceFeedback()
 
-	fallbackCfg := svc.deterministicFallbackConfig()
+	fallbackCfg := svc.config.DeterministicFallback
 	assert.InDelta(t, scalpingFeedbackConfidenceMax, fallbackCfg.ConfidenceFloor, 0.0001)
 	assert.InDelta(t, 0.125, fallbackCfg.SizeFraction, 0.0001)
 }

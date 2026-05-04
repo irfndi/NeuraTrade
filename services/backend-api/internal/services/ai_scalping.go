@@ -1120,6 +1120,12 @@ func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptIn
 
 func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (decision *AITradingDecision, err error) {
 	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", walletBasis(portfolio).InexactFloat64())
+
+	// Periodic self-learning feedback, once per completed trade-count milestone.
+	if perf := GetScalpingPerformance().GetPerformance(); s.shouldApplyPerformanceFeedback(readIntMetric(perf["total_trades"])) {
+		s.ApplyPerformanceFeedback()
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
 	effectiveExchange := s.exchangeForContext(ctx)
@@ -3045,7 +3051,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	portfolio TradingPortfolio,
 	relaxed bool,
 ) (*AITradingDecision, float64, bool) {
-	fallbackCfg := s.deterministicFallbackConfig()
+	fallbackCfg := s.config.DeterministicFallback
 	effectiveMaxSpread := fallbackCfg.MaxBidAskSpread
 	effectiveMinImbalance := fallbackCfg.MinImbalance
 	buyRangeMax := fallbackCfg.BuyRangeMax
@@ -4612,6 +4618,70 @@ func (s *AIScalpingService) ReportTradeOutcome(symbol string, pnl decimal.Decima
 		state.LossStreak = 0
 	}
 	s.symbolGuards[normalized] = state
+
+}
+
+func (s *AIScalpingService) shouldApplyPerformanceFeedback(totalTrades int) bool {
+	if totalTrades <= 0 || totalTrades%scalpingFeedbackIntervalTrades != 0 {
+		return false
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	if s.lastPerformanceFeedbackTradeCount == totalTrades {
+		return false
+	}
+	s.lastPerformanceFeedbackTradeCount = totalTrades
+	return true
+}
+
+func (s *AIScalpingService) ApplyPerformanceFeedback() {
+	perf := GetScalpingPerformance()
+	perfData := perf.GetPerformance()
+	totalTrades := readIntMetric(perfData["total_trades"])
+	winRate := readFloatMetric(perfData["win_rate"])
+	if winRate > 1 {
+		winRate = winRate / 100
+	}
+	winRate = clampFloat(winRate, 0, 1)
+
+	if totalTrades < scalpingFeedbackMinTrades {
+		return
+	}
+
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	fallbackCfg := s.config.DeterministicFallback.Normalized()
+
+	if winRate < scalpingFeedbackLowWinRate && totalTrades >= scalpingFeedbackIntervalTrades {
+		newFloor := clampFloat(
+			fallbackCfg.ConfidenceFloor*scalpingFeedbackLowWinFloorFactor,
+			scalpingFeedbackConfidenceMin,
+			scalpingFeedbackConfidenceMax,
+		)
+		newSize := clampFloat(
+			fallbackCfg.SizeFraction*scalpingFeedbackTightenSizeFactor,
+			scalpingFeedbackSizeMin,
+			scalpingFeedbackSizeMax,
+		)
+		fallbackCfg.ConfidenceFloor = newFloor
+		fallbackCfg.SizeFraction = newSize
+	}
+
+	if winRate > scalpingFeedbackHighWinRate && totalTrades >= scalpingFeedbackIntervalTrades {
+		fallbackCfg.ConfidenceFloor = clampFloat(
+			fallbackCfg.ConfidenceFloor/scalpingFeedbackTightenFloorStep,
+			scalpingFeedbackConfidenceMin,
+			scalpingFeedbackConfidenceMax,
+		)
+		fallbackCfg.SizeFraction = clampFloat(
+			fallbackCfg.SizeFraction*scalpingFeedbackLoosenSizeStep,
+			scalpingFeedbackSizeMin,
+			scalpingFeedbackSizeMax,
+		)
+	}
+
+	s.config.DeterministicFallback = fallbackCfg
 }
 
 func getEnvInt(key string) int {
