@@ -1,6 +1,7 @@
 PRAGMA foreign_keys = OFF;
 
-DROP VIEW IF EXISTS ohlcv_candles;
+-- Migration 077 created ohlcv_candles as a compatibility table. Drop the
+-- table before replacing it with a view over the canonical ohlcv_data table.
 DROP TABLE IF EXISTS ohlcv_candles;
 
 CREATE INDEX IF NOT EXISTS idx_ohlcv_data_exchange_pair_timeframe_timestamp
