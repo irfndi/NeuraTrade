@@ -227,6 +227,8 @@ func resolveCanonicalModel(modelID string) string {
 	return modelID
 }
 
+// DefaultRankingScore provides an offline fallback ranking when models.dev or
+// vending-bench-2 is unreachable. Production should use RankingService.GetRankingForModel.
 func DefaultRankingScore(modelID string) float64 {
 	canonicalID := resolveCanonicalModel(modelID)
 	knownScores := map[string]float64{

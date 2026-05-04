@@ -144,15 +144,15 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 	fmt.Print("Sentry DSN: ")
 	config.SentryDSN = b.readInput("")
 
-	// AI Model configuration (single-model-first)
+	// AI Model configuration — defaults are suggestions; runtime resolves from models.dev registry
 	fmt.Println()
 	fmt.Println("🤖 AI Model Configuration")
 	fmt.Println("Configure one AI provider to get started. You can add more later.")
 	fmt.Println("Providers: openai, anthropic, google, deepseek, minimax, zhipu")
 	fmt.Println()
 
-	fmt.Print("AI Provider [zhipu]: ")
-	config.AIProvider = b.readInput("zhipu")
+	fmt.Print("AI Provider [deepseek]: ")
+	config.AIProvider = b.readInput("deepseek")
 
 	for {
 		switch config.AIProvider {
@@ -166,7 +166,7 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 			config.AIModel = "gemini-2.5-flash"
 			config.AIBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
 		case "deepseek":
-			config.AIModel = "deepseek-v3"
+			config.AIModel = "deepseek-v4-pro"
 			config.AIBaseURL = "https://api.deepseek.com/v1"
 		case "minimax":
 			config.AIModel = "minimax-m2.5"
@@ -175,9 +175,11 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 			config.AIModel = "glm-5-turbo"
 			config.AIBaseURL = "https://api.z.ai/api/paas/v4"
 		default:
+			config.AIModel = ""
+			config.AIBaseURL = ""
 			fmt.Printf("Unknown provider %q. Use: openai, anthropic, google, deepseek, minimax, zhipu\n", config.AIProvider)
-			fmt.Print("AI Provider [zhipu]: ")
-			config.AIProvider = b.readInput("zhipu")
+			fmt.Print("AI Provider [deepseek]: ")
+			config.AIProvider = b.readInput("deepseek")
 			continue
 		}
 		break
