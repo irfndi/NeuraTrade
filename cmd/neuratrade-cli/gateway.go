@@ -92,6 +92,7 @@ const (
 	ccxtModeExternal = "external"
 
 	gatewayDefaultHealthTimeoutSeconds = 150
+	telegramDisabledPaperRuntimeDetail = "Telegram disabled for paper-only runtime"
 )
 
 // isExternalCCXTMode returns true if the user has explicitly configured an
@@ -187,7 +188,7 @@ func gatewayStart(cCtx *cli.Context) error {
 	if telegramEnabled {
 		servicesState["telegram"] = gatewayServiceRuntime{Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)}
 	} else {
-		servicesState["telegram"] = gatewayServiceRuntime{Status: "disabled", Detail: "Telegram disabled for paper-only runtime"}
+		servicesState["telegram"] = gatewayServiceRuntime{Status: "disabled", Detail: telegramDisabledPaperRuntimeDetail}
 	}
 	writeGatewayState(statePath, gatewayRuntimeState{
 		Mode:                 "starting",
@@ -279,7 +280,7 @@ func gatewayStart(cCtx *cli.Context) error {
 	telegramHealthURL := fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)
 	telegramProbe := serviceProbeResult{
 		healthy: true,
-		detail:  "Telegram disabled for paper-only runtime",
+		detail:  telegramDisabledPaperRuntimeDetail,
 	}
 	if telegramEnabled {
 		// Start Telegram Service
@@ -879,7 +880,7 @@ func monitorGatewayHealth(
 			if telegramEnabled {
 				writeGatewayServiceState(statePath, "telegram", serviceRuntimeState(telegramUp, telegramHealthy), "", telegramURL)
 			} else {
-				writeGatewayServiceState(statePath, "telegram", "disabled", "Telegram disabled for paper-only runtime", "")
+				writeGatewayServiceState(statePath, "telegram", "disabled", telegramDisabledPaperRuntimeDetail, "")
 			}
 
 			if ccxtMode == ccxtModeNative {
@@ -901,27 +902,21 @@ func deriveGatewayMode(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHe
 }
 
 func deriveGatewayModeForServices(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy, telegramEnabled bool) string {
-	if !telegramEnabled {
-		if !backendUp && !ccxtUp {
-			return "down"
-		}
-		if backendUp && ccxtUp && backendHealthy {
-			return "healthy"
-		}
-		if backendUp && !backendHealthy {
-			return "warming"
-		}
-		return "degraded"
-	}
+	effectiveTelegramUp := telegramEnabled && telegramUp
+	effectiveTelegramHealthy := !telegramEnabled || telegramHealthy
+	anyProcessUp := backendUp || effectiveTelegramUp || ccxtUp
+	allRequiredProcessesUp := backendUp && ccxtUp && (!telegramEnabled || telegramUp)
+	allRequiredHealthChecksPassing := backendHealthy && effectiveTelegramHealthy
+	healthCheckedProcessWarming := (backendUp || effectiveTelegramUp) && !backendHealthy && (!telegramEnabled || !telegramHealthy)
 
-	if !backendUp && !telegramUp && !ccxtUp {
+	if !anyProcessUp {
 		return "down"
 	}
-	if backendUp && telegramUp && backendHealthy && telegramHealthy {
+	if allRequiredProcessesUp && allRequiredHealthChecksPassing {
 		return "healthy"
 	}
 	// Services are up but probes are not yet passing: treat as startup warming.
-	if (backendUp || telegramUp) && !backendHealthy && !telegramHealthy {
+	if healthCheckedProcessWarming {
 		return "warming"
 	}
 	return "degraded"
