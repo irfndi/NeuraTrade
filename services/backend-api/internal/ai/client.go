@@ -176,13 +176,13 @@ func (c *Client) Chat(ctx context.Context, providerID, modelID string, messages 
 	c.mu.RUnlock()
 
 	apiKey := c.getAPIKey(providerID)
-	if apiKey == "" {
+	if apiKey == "" && ProviderRequiresAPIKey(providerID) {
 		return nil, fmt.Errorf("no API key for provider: %s", providerID)
 	}
 
 	baseURL := c.getBaseURL(providerID)
 	if baseURL == "" {
-		return nil, fmt.Errorf("no base URL configured for provider: %s", providerID)
+		return nil, fmt.Errorf("no base URL configured or found in defaults for provider: %s", providerID)
 	}
 	model := c.resolveModel(ctx, providerID, modelID)
 	if model == "" {

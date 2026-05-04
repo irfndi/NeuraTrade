@@ -150,7 +150,7 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 	fmt.Println()
 	fmt.Println("🤖 AI Model Configuration")
 	fmt.Println("Configure one AI provider to get started. You can add more later.")
-	fmt.Println("Providers: openai, anthropic, google, deepseek, minimax, zhipu")
+	fmt.Printf("Providers: %s\n", strings.Join(ai.ProviderIDs(), ", "))
 	fmt.Println()
 
 	fmt.Print("AI Provider [deepseek]: ")
@@ -161,7 +161,7 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 		if !ok {
 			config.AIModel = ""
 			config.AIBaseURL = ""
-			fmt.Printf("Unknown provider %q. Use: openai, anthropic, google, deepseek, minimax, zhipu\n", config.AIProvider)
+			fmt.Printf("Unknown provider %q. Use: %s\n", config.AIProvider, strings.Join(ai.ProviderIDs(), ", "))
 			fmt.Print("AI Provider [deepseek]: ")
 			config.AIProvider = b.readInput("deepseek")
 			continue

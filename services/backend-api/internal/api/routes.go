@@ -158,7 +158,10 @@ func validateAIProviderName(provider string) error {
 }
 
 func providerBaseURL(provider string) string {
-	baseURL, _ := ai.ProviderDefaultBaseURL(provider)
+	if baseURL, ok := ai.ProviderDefaultBaseURL(provider); ok {
+		return baseURL
+	}
+	baseURL, _ := ai.ProviderDefaultBaseURL(string(llm.ProviderOpenAI))
 	return baseURL
 }
 
@@ -195,6 +198,11 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 			break
 		}
 		node.ModelOverride = strings.TrimSpace(os.Getenv(envKey))
+	}
+	if node.ModelOverride == "" {
+		if model, ok := ai.ProviderDefaultModel(provider); ok {
+			node.ModelOverride = model
+		}
 	}
 
 	return node

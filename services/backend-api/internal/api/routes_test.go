@@ -947,8 +947,8 @@ func TestProviderBaseURL(t *testing.T) {
 		assert.Equal(t, "https://api.deepseek.com/v1", providerBaseURL("deepseek"))
 	})
 
-	t.Run("unknown providers have no implicit transport default", func(t *testing.T) {
-		assert.Empty(t, providerBaseURL("unknown-provider"))
+	t.Run("unknown providers use openai-compatible transport fallback", func(t *testing.T) {
+		assert.Equal(t, "https://api.openai.com/v1", providerBaseURL("unknown-provider"))
 	})
 }
 
@@ -963,6 +963,9 @@ func TestResolveProviderNodeUsesCentralProviderEnvNames(t *testing.T) {
 	assert.Equal(t, "key", node.APIKey)
 	assert.Equal(t, "https://override.example/v1", node.BaseURL)
 	assert.Equal(t, "model-override", node.ModelOverride)
+
+	defaultNode := resolveProviderNode("deepseek", "primary-key", "https://primary.example/v1", "anthropic")
+	assert.Equal(t, "claude-sonnet-4-20250514", defaultNode.ModelOverride)
 }
 
 func TestProviderRequiresAPIKeyUsesProviderDefaults(t *testing.T) {

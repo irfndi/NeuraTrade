@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,6 +69,17 @@ func TestProviderDefaultLookupNormalizesProviderID(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "https://api.z.ai/api/coding/paas/v4", baseURL)
 	assert.Equal(t, "ZAI_CODING_PLAN", ProviderEnvPrefix("zai-coding-plan"))
+	assert.Equal(t, []string{
+		"anthropic",
+		"deepseek",
+		"google",
+		"minimax",
+		"mlx",
+		"openai",
+		"zai",
+		"zai-coding-plan",
+		"zhipu",
+	}, ProviderIDs())
 }
 
 func TestProviderEnvVarNames(t *testing.T) {
@@ -106,6 +119,11 @@ func TestProviderEnvVarNames(t *testing.T) {
 	}, ProviderBaseURLEnvVars("  ZAI-Coding-Plan  "))
 
 	assert.Equal(t, []string{
+		"NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_MODEL",
+		"ZAI_CODING_PLAN_MODEL",
+	}, ProviderModelEnvVars("  ZAI-Coding-Plan  "))
+
+	assert.Equal(t, []string{
 		"NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_TRANSPORT_FORMAT",
 		"ZAI_CODING_PLAN_TRANSPORT_FORMAT",
 	}, ProviderTransportFormatEnvVars("  ZAI-Coding-Plan  "))
@@ -140,4 +158,30 @@ func TestClientProviderEndpointDefaults(t *testing.T) {
 
 	assert.Empty(t, client.getBaseURL("unknown-provider"))
 	assert.Empty(t, client.resolveModel(context.Background(), "unknown-provider", ""))
+}
+
+func TestClientChatAllowsKeylessProviderDefaults(t *testing.T) {
+	chatServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/chat/completions", r.URL.Path)
+		assert.Empty(t, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"mlx-test-model","choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer chatServer.Close()
+
+	registryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"mlx":{"name":"MLX","models":{}}}`))
+	}))
+	defer registryServer.Close()
+
+	t.Setenv("NEURATRADE_AI_PROVIDER_MLX_BASE_URL", chatServer.URL)
+	t.Setenv("NEURATRADE_AI_PROVIDER_MLX_MODEL", "mlx-test-model")
+
+	client := NewClient(NewRegistry(WithModelsDevURL(registryServer.URL)))
+	resp, err := client.Chat(context.Background(), "mlx", "", []Message{{Role: "user", Content: "ping"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok", resp.Content)
+	assert.Equal(t, "mlx-test-model", resp.Model)
 }

@@ -65,11 +65,15 @@ func (c *UnifiedProviderClient) Chat(ctx context.Context, req *ChatRequest) (*Ch
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	if c.useAnthropicFormat {
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
-		httpReq.Header.Set("x-api-key", c.apiKey)
+		if c.apiKey != "" {
+			httpReq.Header.Set("x-api-key", c.apiKey)
+		}
 	}
 
 	resp, err := c.httpClient.Do(httpReq)

@@ -2,6 +2,7 @@ package ai
 
 import (
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -118,6 +119,15 @@ func ProviderTransportFormatEnvVars(providerID string) []string {
 func ProviderDefaults(providerID string) (ProviderTransportDefaults, bool) {
 	defaults, ok := providerTransportDefaults[NormalizeProviderID(providerID)]
 	return defaults, ok
+}
+
+func ProviderIDs() []string {
+	providers := make([]string, 0, len(providerTransportDefaults))
+	for providerID := range providerTransportDefaults {
+		providers = append(providers, providerID)
+	}
+	sort.Strings(providers)
+	return providers
 }
 
 func ProviderDefaultBaseURL(providerID string) (string, bool) {
