@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestSQLiteMigrationsRunFreshThroughPortfolioSnapshots(t *testing.T) {
@@ -18,9 +20,7 @@ func TestSQLiteMigrationsRunFreshThroughPortfolioSnapshots(t *testing.T) {
 	cmd.Env = append(os.Environ(), "SQLITE_PATH="+dbPath)
 
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("sqlite migrations failed: %v\n%s", err, output)
-	}
+	require.NoErrorf(t, err, "sqlite migrations failed\n%s", output)
 
 	assertSQLiteScalar(t, dbPath,
 		"SELECT type FROM sqlite_master WHERE name = 'ohlcv_candles';",
@@ -41,11 +41,6 @@ func assertSQLiteScalar(t *testing.T, dbPath, query, want string) {
 
 	cmd := exec.Command("sqlite3", dbPath, query)
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("sqlite query failed: %v\nquery: %s\n%s", err, query, output)
-	}
-
-	if got := strings.TrimSpace(string(output)); got != want {
-		t.Fatalf("sqlite query mismatch for %q: got %q, want %q", query, got, want)
-	}
+	require.NoErrorf(t, err, "sqlite query failed\nquery: %s\n%s", query, output)
+	require.Equalf(t, want, strings.TrimSpace(string(output)), "sqlite query mismatch for %q", query)
 }
