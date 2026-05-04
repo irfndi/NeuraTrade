@@ -312,7 +312,7 @@ func (s *PaperExecutionSimulator) CreateOrder(req PaperOrderRequest) (*PaperOrde
 
 	now := s.clock.Now()
 	order := &PaperOrder{
-		ID:         fmt.Sprintf("paper-%s", uuid.New().String()),
+		ID:         fmt.Sprintf("paper_%s", uuid.New().String()),
 		UserID:     req.UserID,
 		Exchange:   req.Exchange,
 		Symbol:     req.Symbol,
