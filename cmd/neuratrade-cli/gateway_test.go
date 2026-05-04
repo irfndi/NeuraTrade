@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -98,6 +99,45 @@ func TestNormalizeJWTSecret(t *testing.T) {
 	if len(generated) < 32 {
 		t.Fatalf("expected generated secret length >= 32, got %d", len(generated))
 	}
+}
+
+func TestGatewayDefaultHealthTimeoutExceedsBackendMarketDataWarmup(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", "")
+
+	got := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
+	require.GreaterOrEqual(t, got, 150*time.Second)
+}
+
+func TestGatewayHealthTimeoutEnvOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", "12")
+
+	got := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
+	require.Equal(t, 12*time.Second, got)
+}
+
+func TestShouldSkipTelegramGatewayForPaperOnlyRuntime(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
+	t.Setenv("FEATURES_PAPER_TRADING", "true")
+	t.Setenv("FEATURES_REAL_TRADING", "false")
+
+	require.True(t, shouldSkipTelegramGateway(""))
+	require.False(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
+func TestShouldSkipTelegramGatewayRequiresExplicitPaperOnlyMode(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+
+	require.False(t, shouldSkipTelegramGateway(""))
+}
+
+func TestShouldSkipTelegramGatewayOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "true")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+
+	require.True(t, shouldSkipTelegramGateway("telegram-token"))
 }
 
 func TestDeriveGatewayMode(t *testing.T) {

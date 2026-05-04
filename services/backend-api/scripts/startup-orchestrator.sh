@@ -12,6 +12,7 @@ LOG_DIR="${NEURATRADE_HOME}/logs"
 PID_FILE="${NEURATRADE_HOME}/pids/gateway.pid"
 GATEWAY_LOG="${LOG_DIR}/gateway.log"
 BACKEND_PORT="${BACKEND_HOST_PORT:-${PORT:-8080}}"
+STARTUP_HEALTH_TIMEOUT_SECONDS="${NEURATRADE_STARTUP_HEALTH_TIMEOUT_SECONDS:-${NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS:-150}}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -201,7 +202,7 @@ start_gateway() {
     return 1
   fi
 
-  if wait_backend_health 60; then
+  if wait_backend_health "${STARTUP_HEALTH_TIMEOUT_SECONDS}"; then
     if pid_running "$pid"; then
       log_success "Gateway is running and backend health endpoint is reachable"
     else

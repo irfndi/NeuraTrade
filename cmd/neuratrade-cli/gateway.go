@@ -90,6 +90,8 @@ func newAllowedGatewayServiceBinaries() map[string]struct{} {
 const (
 	ccxtModeNative   = "native"
 	ccxtModeExternal = "external"
+
+	gatewayDefaultHealthTimeoutSeconds = 150
 )
 
 // isExternalCCXTMode returns true if the user has explicitly configured an
@@ -123,7 +125,7 @@ func gatewayStart(cCtx *cli.Context) error {
 	telegramPort := getEnvOrDefault("TELEGRAM_PORT", "3002")
 	bindHost := getEnvOrDefault("BIND_HOST", "127.0.0.1")
 	supervised := cCtx.Bool("supervised") || getEnvBoolDefault("NEURATRADE_GATEWAY_SUPERVISED", false)
-	healthTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", 90)
+	healthTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
 	signalTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_SIGNAL_TIMEOUT_SECONDS", 5)
 	gracefulTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_GRACEFUL_TIMEOUT_SECONDS", 10)
 	adminAPIKey := normalizeAdminAPIKey(getEnvOrDefault("ADMIN_API_KEY", configAdminAPIKey(cfg)))
@@ -160,6 +162,7 @@ func gatewayStart(cCtx *cli.Context) error {
 			aiModel = cfg.AI.Model
 		}
 	}
+	telegramEnabled := !shouldSkipTelegramGateway(telegramToken)
 
 	fmt.Printf("📁 NeuraTrade Home: %s\n", home)
 	fmt.Printf("⚙️  Config File: %s\n", filepath.Join(home, "config.json"))
@@ -267,46 +270,56 @@ func gatewayStart(cCtx *cli.Context) error {
 		return fmt.Errorf("%s", backendProbe.detail)
 	}
 
-	// Start Telegram Service
-	fmt.Println("📞 Starting Telegram Service...")
-	telegramCmd, err := startService(
-		filepath.Join(execDir, "telegram-service"),
-		"Telegram Service",
-		filepath.Join(home, "logs", "telegram.log"),
-		map[string]string{
-			"PORT":                  telegramPort,
-			"BIND_HOST":             bindHost,
-			"TELEGRAM_BOT_TOKEN":    telegramToken,
-			"TELEGRAM_USE_POLLING":  getEnvOrDefault("TELEGRAM_USE_POLLING", "true"),
-			"TELEGRAM_API_BASE_URL": fmt.Sprintf("http://%s:%s", bindHost, backendPort),
-			"BACKEND_HOST_PORT":     backendPort,
-			"NODE_ENV":              "production",
-			"ADMIN_API_KEY":         adminAPIKey,
-		},
-		filepath.Join(home, "pids", "telegram.pid"),
-	)
-	if err != nil {
-		signalAndWait(backendCmd, signalTimeout)
-		signalAndWait(nil, signalTimeout)
-		cleanupGatewayRuntimeArtifacts(statePath, "telegram failed to start", servicePIDFiles...)
-		return fmt.Errorf("failed to start Telegram service: %w", err)
-	}
+	var telegramCmd *exec.Cmd
 	telegramHealthURL := fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)
-	telegramProbe := waitForServiceHealthy("Telegram Service", telegramHealthURL, healthTimeout)
-	if telegramProbe.healthy {
-		fmt.Println("✅ Telegram Service started")
-		writeGatewayServiceState(statePath, "telegram", "healthy", telegramProbe.detail, telegramHealthURL)
-	} else if supervised {
-		fmt.Printf("⚠️  Telegram service still warming: %s\n", telegramProbe.detail)
-		writeGatewayServiceState(statePath, "telegram", "warming", telegramProbe.detail, telegramHealthURL)
-		writeGatewayStateMode(statePath, "warming", "telegram warming up")
+	telegramProbe := serviceProbeResult{
+		healthy: true,
+		detail:  "Telegram disabled for paper-only runtime",
+	}
+	if telegramEnabled {
+		// Start Telegram Service
+		fmt.Println("📞 Starting Telegram Service...")
+		telegramCmd, err = startService(
+			filepath.Join(execDir, "telegram-service"),
+			"Telegram Service",
+			filepath.Join(home, "logs", "telegram.log"),
+			map[string]string{
+				"PORT":                  telegramPort,
+				"BIND_HOST":             bindHost,
+				"TELEGRAM_BOT_TOKEN":    telegramToken,
+				"TELEGRAM_USE_POLLING":  getEnvOrDefault("TELEGRAM_USE_POLLING", "true"),
+				"TELEGRAM_API_BASE_URL": fmt.Sprintf("http://%s:%s", bindHost, backendPort),
+				"BACKEND_HOST_PORT":     backendPort,
+				"NODE_ENV":              "production",
+				"ADMIN_API_KEY":         adminAPIKey,
+			},
+			filepath.Join(home, "pids", "telegram.pid"),
+		)
+		if err != nil {
+			signalAndWait(backendCmd, signalTimeout)
+			signalAndWait(nil, signalTimeout)
+			cleanupGatewayRuntimeArtifacts(statePath, "telegram failed to start", servicePIDFiles...)
+			return fmt.Errorf("failed to start Telegram service: %w", err)
+		}
+		telegramProbe = waitForServiceHealthy("Telegram Service", telegramHealthURL, healthTimeout)
+		if telegramProbe.healthy {
+			fmt.Println("✅ Telegram Service started")
+			writeGatewayServiceState(statePath, "telegram", "healthy", telegramProbe.detail, telegramHealthURL)
+		} else if supervised {
+			fmt.Printf("⚠️  Telegram service still warming: %s\n", telegramProbe.detail)
+			writeGatewayServiceState(statePath, "telegram", "warming", telegramProbe.detail, telegramHealthURL)
+			writeGatewayStateMode(statePath, "warming", "telegram warming up")
+		} else {
+			signalAndWait(telegramCmd, signalTimeout)
+			signalAndWait(backendCmd, signalTimeout)
+			signalAndWait(nil, signalTimeout)
+			writeGatewayServiceState(statePath, "telegram", "down", telegramProbe.detail, telegramHealthURL)
+			cleanupGatewayRuntimeArtifacts(statePath, "telegram health check failed", servicePIDFiles...)
+			return fmt.Errorf("%s", telegramProbe.detail)
+		}
 	} else {
-		signalAndWait(telegramCmd, signalTimeout)
-		signalAndWait(backendCmd, signalTimeout)
-		signalAndWait(nil, signalTimeout)
-		writeGatewayServiceState(statePath, "telegram", "down", telegramProbe.detail, telegramHealthURL)
-		cleanupGatewayRuntimeArtifacts(statePath, "telegram health check failed", servicePIDFiles...)
-		return fmt.Errorf("%s", telegramProbe.detail)
+		fmt.Println("📞 Telegram: disabled for paper-only runtime")
+		writeGatewayServiceState(statePath, "telegram", "disabled", telegramProbe.detail, "")
 	}
 
 	if ccxtMode == ccxtModeNative {
@@ -335,7 +348,7 @@ func gatewayStart(cCtx *cli.Context) error {
 	monitorStop := make(chan struct{})
 	monitorDone := make(chan struct{})
 	go func() {
-		monitorGatewayHealth(statePath, bindHost, backendPort, telegramPort, backendCmd, telegramCmd, ccxtMode, monitorStop)
+		monitorGatewayHealth(statePath, bindHost, backendPort, telegramPort, backendCmd, telegramCmd, telegramEnabled, ccxtMode, monitorStop)
 		close(monitorDone)
 	}()
 
@@ -729,6 +742,15 @@ func getEnvDurationSeconds(key string, defaultSeconds int) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+func shouldSkipTelegramGateway(telegramToken string) bool {
+	if getEnvBoolDefault("NEURATRADE_GATEWAY_SKIP_TELEGRAM", false) {
+		return true
+	}
+	return strings.TrimSpace(telegramToken) == "" &&
+		getEnvBoolDefault("FEATURES_PAPER_TRADING", false) &&
+		!getEnvBoolDefault("FEATURES_REAL_TRADING", true)
+}
+
 func resolveBackendPort(cfg *localConfig) string {
 	candidates := []string{
 		os.Getenv("SERVER_PORT"),
@@ -822,6 +844,7 @@ func waitForServiceHealthy(name, url string, timeout time.Duration) serviceProbe
 func monitorGatewayHealth(
 	statePath, bindHost, backendPort, telegramPort string,
 	backendCmd, telegramCmd *exec.Cmd,
+	telegramEnabled bool,
 	ccxtMode string,
 	stop <-chan struct{},
 ) {
@@ -838,14 +861,18 @@ func monitorGatewayHealth(
 			return
 		case <-ticker.C:
 			backendUp := processRunning(backendCmd)
-			telegramUp := processRunning(telegramCmd)
+			telegramUp := !telegramEnabled || processRunning(telegramCmd)
 			var ccxtUp bool
 
 			backendHealthy := probeHTTPHealthy(httpClient, backendURL)
-			telegramHealthy := probeHTTPHealthy(httpClient, telegramURL)
+			telegramHealthy := !telegramEnabled || probeHTTPHealthy(httpClient, telegramURL)
 
 			writeGatewayServiceState(statePath, "backend", serviceRuntimeState(backendUp, backendHealthy), "", backendURL)
-			writeGatewayServiceState(statePath, "telegram", serviceRuntimeState(telegramUp, telegramHealthy), "", telegramURL)
+			if telegramEnabled {
+				writeGatewayServiceState(statePath, "telegram", serviceRuntimeState(telegramUp, telegramHealthy), "", telegramURL)
+			} else {
+				writeGatewayServiceState(statePath, "telegram", "disabled", "Telegram disabled for paper-only runtime", "")
+			}
 
 			if ccxtMode == ccxtModeNative {
 				ccxtUp = backendUp
