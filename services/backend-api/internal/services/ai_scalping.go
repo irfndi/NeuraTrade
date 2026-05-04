@@ -222,7 +222,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		Leverage:              5,
 		MaxTokens:             1200,
 		MaxCapitalPct:         5.0,
-		MinConfidence:         0.65,
+		MinConfidence:         0.55,
 		MaxIterations:         3,
 		Timeout:               90 * time.Second,
 		AutoExecute:           true,
@@ -242,7 +242,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		LossCooldown:          20 * time.Minute,
 		LossWindow:            90 * time.Minute,
 		PreTradeGate:          true,
-		MinExpectancyEdge:     0,
+		MinExpectancyEdge:     0.001,
 		MinExpectancyN:        8,
 		RegimeHighBand:        85,
 		RegimeLowBand:         15,
@@ -4232,6 +4232,9 @@ func scalpingPolicyConfigFromEnv(maxBidAskSpreadPct float64) appautonomy.Scalpin
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_MIN_CONFIDENCE_FLOOR"); ok && value > 0 {
 		cfg.MicroMinConfidenceFloor = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_CONFIDENCE_CAP"); ok && value > 0 {
+		cfg.MicroConfidenceCap = value
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_MICRO_MAX_CAPITAL_PCT"); ok && value > 0 {
 		cfg.MicroMaxCapitalPct = value
