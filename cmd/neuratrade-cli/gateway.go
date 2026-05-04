@@ -180,16 +180,21 @@ func gatewayStart(cCtx *cli.Context) error {
 	if err := os.MkdirAll(filepath.Join(home, "pids"), 0755); err != nil {
 		return fmt.Errorf("failed to create pids directory: %w", err)
 	}
+	servicesState := map[string]gatewayServiceRuntime{
+		"backend": {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, backendPort)},
+		"ccxt":    {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, ccxtPort)},
+	}
+	if telegramEnabled {
+		servicesState["telegram"] = gatewayServiceRuntime{Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)}
+	} else {
+		servicesState["telegram"] = gatewayServiceRuntime{Status: "disabled", Detail: "Telegram disabled for paper-only runtime"}
+	}
 	writeGatewayState(statePath, gatewayRuntimeState{
 		Mode:                 "starting",
 		Supervised:           supervised,
 		UpdatedAt:            time.Now().UTC().Format(time.RFC3339),
 		HealthTimeoutSeconds: int(healthTimeout.Seconds()),
-		Services: map[string]gatewayServiceRuntime{
-			"backend":  {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, backendPort)},
-			"telegram": {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, telegramPort)},
-			"ccxt":     {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, ccxtPort)},
-		},
+		Services:             servicesState,
 	})
 
 	// Get executable directory
@@ -861,11 +866,14 @@ func monitorGatewayHealth(
 			return
 		case <-ticker.C:
 			backendUp := processRunning(backendCmd)
-			telegramUp := !telegramEnabled || processRunning(telegramCmd)
+			telegramUp := processRunning(telegramCmd)
 			var ccxtUp bool
 
 			backendHealthy := probeHTTPHealthy(httpClient, backendURL)
-			telegramHealthy := !telegramEnabled || probeHTTPHealthy(httpClient, telegramURL)
+			telegramHealthy := false
+			if telegramEnabled {
+				telegramHealthy = probeHTTPHealthy(httpClient, telegramURL)
+			}
 
 			writeGatewayServiceState(statePath, "backend", serviceRuntimeState(backendUp, backendHealthy), "", backendURL)
 			if telegramEnabled {
@@ -882,13 +890,30 @@ func monitorGatewayHealth(
 				writeGatewayServiceState(statePath, "ccxt", serviceRuntimeState(ccxtUp, backendHealthy), "external", "")
 			}
 
-			mode := deriveGatewayMode(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy)
+			mode := deriveGatewayModeForServices(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy, telegramEnabled)
 			writeGatewayStateMode(statePath, mode, "runtime monitor")
 		}
 	}
 }
 
 func deriveGatewayMode(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy bool) string {
+	return deriveGatewayModeForServices(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy, true)
+}
+
+func deriveGatewayModeForServices(backendUp, telegramUp, ccxtUp, backendHealthy, telegramHealthy, telegramEnabled bool) string {
+	if !telegramEnabled {
+		if !backendUp && !ccxtUp {
+			return "down"
+		}
+		if backendUp && ccxtUp && backendHealthy {
+			return "healthy"
+		}
+		if backendUp && !backendHealthy {
+			return "warming"
+		}
+		return "degraded"
+	}
+
 	if !backendUp && !telegramUp && !ccxtUp {
 		return "down"
 	}

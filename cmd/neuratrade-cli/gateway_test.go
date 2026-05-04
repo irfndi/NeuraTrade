@@ -197,6 +197,47 @@ func TestDeriveGatewayMode(t *testing.T) {
 	}
 }
 
+func TestDeriveGatewayModeForServices_TelegramDisabled(t *testing.T) {
+	tests := []struct {
+		name           string
+		backendUp      bool
+		ccxtUp         bool
+		backendHealthy bool
+		want           string
+	}{
+		{
+			name: "all required services down",
+			want: "down",
+		},
+		{
+			name:           "required services healthy",
+			backendUp:      true,
+			ccxtUp:         true,
+			backendHealthy: true,
+			want:           "healthy",
+		},
+		{
+			name:      "backend process warming",
+			backendUp: true,
+			ccxtUp:    true,
+			want:      "warming",
+		},
+		{
+			name:           "backend healthy but ccxt unavailable",
+			backendUp:      true,
+			backendHealthy: true,
+			want:           "degraded",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveGatewayModeForServices(tc.backendUp, false, tc.ccxtUp, tc.backendHealthy, false, false)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestCleanupGatewayRuntimeArtifacts_RemovesPIDFilesAndMarksStateDown(t *testing.T) {
 	tempDir := t.TempDir()
 	statePath := filepath.Join(tempDir, "gateway-state.json")
