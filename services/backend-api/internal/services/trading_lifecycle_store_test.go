@@ -222,16 +222,37 @@ func TestTradingLifecycleStore_RecordScalpingPortfolioSnapshot(t *testing.T) {
 	var openPositions int
 	var driftActive bool
 	var riskSampleSize int
+	var usdtBalance decimal.Decimal
+	var riskSharpe decimal.Decimal
+	var noFillMinutes decimal.Decimal
+	var strategyPhase string
+	var snapshotAtDB time.Time
 	err = sqliteDB.QueryRow(ctx, `
-		SELECT total_value, open_positions, drift_active, risk_sample_size
+		SELECT total_value, open_positions, drift_active, risk_sample_size,
+			usdt_balance, risk_sharpe, no_fill_minutes, strategy_phase, snapshot_at
 		FROM scalping_portfolio_snapshots
 		WHERE chat_id = $1 AND exchange = $2
-	`, "chat-1", "bitget").Scan(&totalValue, &openPositions, &driftActive, &riskSampleSize)
+	`, "chat-1", "bitget").Scan(
+		&totalValue,
+		&openPositions,
+		&driftActive,
+		&riskSampleSize,
+		&usdtBalance,
+		&riskSharpe,
+		&noFillMinutes,
+		&strategyPhase,
+		&snapshotAtDB,
+	)
 	require.NoError(t, err)
 	assert.True(t, totalValue.Equal(decimal.RequireFromString("47.98")))
 	assert.Equal(t, 2, openPositions)
 	assert.True(t, driftActive)
 	assert.Equal(t, 57, riskSampleSize)
+	assert.True(t, usdtBalance.Equal(decimal.RequireFromString("48.11")))
+	assert.True(t, riskSharpe.Equal(decimal.RequireFromString("-0.12")))
+	assert.True(t, noFillMinutes.Equal(decimal.RequireFromString("17.5")))
+	assert.Equal(t, "micro", strategyPhase)
+	assert.WithinDuration(t, snapshotAt, snapshotAtDB, time.Second)
 }
 
 func BenchmarkTradingLifecycleStore_GetRealizedPerformance(b *testing.B) {

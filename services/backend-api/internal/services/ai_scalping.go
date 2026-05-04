@@ -665,6 +665,7 @@ type TradingPortfolio struct {
 	TotalValueDecimal               decimal.Decimal  `json:"-"`
 	OpenPositions                   int              `json:"open_positions"`
 	UnrealizedPnL                   float64          `json:"unrealized_pnl"`
+	UnrealizedPnLDecimal            decimal.Decimal  `json:"-"`
 	CurrentDrawdown                 float64          `json:"current_drawdown"`
 	RiskSharpe                      float64          `json:"risk_sharpe"`
 	RiskSortino                     float64          `json:"risk_sortino"`

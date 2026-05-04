@@ -886,6 +886,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		recoveryState = h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
 		h.applyRecoveryStateCheckpoint(quest, &portfolio, recoveryState, time.Now().UTC())
 	}
+	h.recordScalpingPortfolioSnapshot(ctx, chatID, userExchange, portfolio)
 
 	log.Printf("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
 
@@ -2370,6 +2371,7 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 				unrealized = unrealized.Add(pos.UnrealizedPnL)
 			}
 			portfolio.UnrealizedPnL = unrealized.InexactFloat64()
+			portfolio.UnrealizedPnLDecimal = unrealized
 			portfolio.TotalValue = portfolio.USDTBalance + portfolio.UnrealizedPnL
 			portfolio.TotalValueDecimal = portfolio.USDTBalanceDecimal.Add(unrealized)
 			if quest != nil {
@@ -2516,8 +2518,6 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		quest.Checkpoint["phase_max_capital_pct"] = portfolio.PhaseMaxCapitalPct
 		quest.Checkpoint["milestone_progress_pct"] = portfolio.MilestoneProgress
 	}
-
-	h.recordScalpingPortfolioSnapshot(ctx, chatID, exchange, *portfolio)
 }
 
 func (h *IntegratedQuestHandlers) recordScalpingPortfolioSnapshot(
@@ -2536,6 +2536,10 @@ func (h *IntegratedQuestHandlers) recordScalpingPortfolioSnapshot(
 	if usdtBalance.LessThanOrEqual(decimal.Zero) {
 		usdtBalance = finiteDecimalFromFloat(portfolio.USDTBalance)
 	}
+	unrealizedPnL := portfolio.UnrealizedPnLDecimal
+	if unrealizedPnL.IsZero() && portfolio.UnrealizedPnL != 0 {
+		unrealizedPnL = finiteDecimalFromFloat(portfolio.UnrealizedPnL)
+	}
 	err := h.lifecycleStore.RecordScalpingPortfolioSnapshot(ctx, ScalpingPortfolioSnapshotRecord{
 		ChatID:                  chatID,
 		Exchange:                exchange,
@@ -2543,7 +2547,7 @@ func (h *IntegratedQuestHandlers) recordScalpingPortfolioSnapshot(
 		USDTBalance:             usdtBalance,
 		TotalValue:              totalValue,
 		OpenPositions:           portfolio.OpenPositions,
-		UnrealizedPnL:           finiteDecimalFromFloat(portfolio.UnrealizedPnL),
+		UnrealizedPnL:           unrealizedPnL,
 		CurrentDrawdown:         finiteDecimalFromFloat(portfolio.CurrentDrawdown),
 		RiskSharpe:              finiteDecimalFromFloat(portfolio.RiskSharpe),
 		RiskSortino:             finiteDecimalFromFloat(portfolio.RiskSortino),
