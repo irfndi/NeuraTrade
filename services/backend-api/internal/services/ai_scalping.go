@@ -4640,7 +4640,15 @@ func (s *AIScalpingService) deterministicFallbackConfig() DeterministicFallbackC
 	}
 	s.configMu.RLock()
 	defer s.configMu.RUnlock()
+	return s.deterministicFallbackConfigLocked()
+}
+
+func (s *AIScalpingService) deterministicFallbackConfigLocked() DeterministicFallbackConfig {
 	return s.config.DeterministicFallback.Normalized()
+}
+
+func (s *AIScalpingService) setDeterministicFallbackConfigLocked(fallbackCfg DeterministicFallbackConfig) {
+	s.config.DeterministicFallback = fallbackCfg.Normalized()
 }
 
 func (s *AIScalpingService) ApplyPerformanceFeedback() {
@@ -4662,7 +4670,7 @@ func (s *AIScalpingService) ApplyPerformanceFeedback() {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
-	fallbackCfg := s.config.DeterministicFallback.Normalized()
+	fallbackCfg := s.deterministicFallbackConfigLocked()
 
 	if winRate < scalpingFeedbackLowWinRate && totalTrades >= scalpingFeedbackIntervalTrades {
 		newFloor := clampFloat(
@@ -4728,7 +4736,7 @@ func (s *AIScalpingService) ApplyPerformanceFeedback() {
 			consecutiveWins, newFloor, newSize)
 	}
 
-	s.config.DeterministicFallback = fallbackCfg.Normalized()
+	s.setDeterministicFallbackConfigLocked(fallbackCfg)
 }
 
 func getEnvInt(key string) int {

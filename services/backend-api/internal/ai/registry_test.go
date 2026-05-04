@@ -180,6 +180,11 @@ func TestFetchModels_AttachesProviderModelsAndParsesCapabilities(t *testing.T) {
 						"tool_call": true,
 						"reasoning": false,
 						"status": "degraded"
+					},
+					"deepseek-vision-attachment": {
+						"id": "deepseek-vision-attachment",
+						"name": "DeepSeek Vision Attachment",
+						"attachment": true
 					}
 				}
 			}
@@ -192,8 +197,8 @@ func TestFetchModels_AttachesProviderModelsAndParsesCapabilities(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, models.Providers, 1)
-	require.Len(t, models.Models, 2)
-	require.Len(t, models.Providers[0].Models, 2)
+	require.Len(t, models.Models, 3)
+	require.Len(t, models.Providers[0].Models, 3)
 	byID := make(map[string]ModelInfo, len(models.Providers[0].Models))
 	for _, model := range models.Providers[0].Models {
 		byID[model.ModelID] = model
@@ -204,6 +209,18 @@ func TestFetchModels_AttachesProviderModelsAndParsesCapabilities(t *testing.T) {
 	assert.True(t, pro.Capabilities.SupportsVision)
 	assert.Equal(t, "active", pro.Status)
 	assert.Equal(t, "degraded", byID["deepseek-chat"].Status)
+
+	for _, tc := range []struct {
+		name    string
+		modelID string
+	}{
+		{name: "image modality", modelID: "deepseek-v4-pro"},
+		{name: "attachment flag", modelID: "deepseek-vision-attachment"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.True(t, byID[tc.modelID].Capabilities.SupportsVision)
+		})
+	}
 }
 
 func TestFindModel(t *testing.T) {
