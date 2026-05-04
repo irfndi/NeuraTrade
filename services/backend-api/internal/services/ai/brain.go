@@ -13,6 +13,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 )
 
+const defaultAIBrainModel = "deepseek-v4-pro"
+
 // TradingAction represents the action AI decides to take
 type TradingAction string
 
@@ -165,7 +167,7 @@ type AIBrainConfig struct {
 // DefaultAIBrainConfig returns default configuration
 func DefaultAIBrainConfig() AIBrainConfig {
 	return AIBrainConfig{
-		Model:          strings.TrimSpace(os.Getenv("AI_MODEL")),
+		Model:          resolveAIBrainModel(),
 		Temperature:    0.2, // Low temperature for consistent decisions
 		MaxTokens:      2000,
 		Timeout:        30 * time.Second,
@@ -173,6 +175,13 @@ func DefaultAIBrainConfig() AIBrainConfig {
 		MaxDailyTrades: 50,
 		EnableLearning: true,
 	}
+}
+
+func resolveAIBrainModel() string {
+	if model := strings.TrimSpace(os.Getenv("AI_MODEL")); model != "" {
+		return model
+	}
+	return defaultAIBrainModel
 }
 
 // NewAITradingBrain creates a new AI trading brain

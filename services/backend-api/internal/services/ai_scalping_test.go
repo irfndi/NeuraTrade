@@ -140,9 +140,13 @@ func TestTradingPortfolio(t *testing.T) {
 }
 
 func TestAIScalpingConfig_Default(t *testing.T) {
+	t.Setenv("AI_MODEL", "")
+	t.Setenv("NEURATRADE_SCALPING_MODEL", "")
+
 	config := DefaultAIScalpingConfig()
 
 	assert.Equal(t, "bitget", config.Exchange)
+	assert.Equal(t, defaultRuntimeAIModel, config.Model)
 	assert.Equal(t, 5, config.Leverage)
 	assert.Equal(t, 5.0, config.MaxCapitalPct)
 	assert.Equal(t, 0.55, config.MinConfidence)
@@ -169,6 +173,18 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 0.35, config.DeterministicFallback.MinImbalance)
 	assert.Equal(t, 0.72, config.DeterministicFallback.ConfidenceFloor)
 	assert.Equal(t, 0.50, config.DeterministicFallback.SizeFraction)
+}
+
+func TestResolveEnvModel(t *testing.T) {
+	t.Setenv("AI_MODEL", "")
+	t.Setenv("NEURATRADE_SCALPING_MODEL", "")
+	assert.Equal(t, defaultRuntimeAIModel, resolveEnvModel())
+
+	t.Setenv("NEURATRADE_SCALPING_MODEL", "scalping-model")
+	assert.Equal(t, "scalping-model", resolveEnvModel())
+
+	t.Setenv("AI_MODEL", "global-model")
+	assert.Equal(t, "global-model", resolveEnvModel())
 }
 
 func TestAIScalpingConfig_Custom(t *testing.T) {
