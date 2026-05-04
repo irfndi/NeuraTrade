@@ -1,11 +1,14 @@
 package services
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
@@ -191,7 +194,10 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 		cachedID, err := c.redisClient.Get(c.ctx, cacheKey).Result()
 		if err == nil {
 			if tradingPairID, parseErr := strconv.Atoi(cachedID); parseErr == nil {
-				return tradingPairID, nil
+				if c.cachedTradingPairIDExists(exchangeID, symbol, tradingPairID) {
+					return tradingPairID, nil
+				}
+				c.redisClient.Del(c.ctx, cacheKey)
 			}
 		}
 	}
@@ -249,7 +255,10 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 	if c.redisClient != nil {
 		if cachedID, err := c.redisClient.Get(c.ctx, cacheKey).Result(); err == nil {
 			if exchangeID, err := strconv.Atoi(cachedID); err == nil {
-				return exchangeID, nil
+				if c.cachedExchangeIDExists(ccxtID, exchangeID) {
+					return exchangeID, nil
+				}
+				c.redisClient.Del(c.ctx, cacheKey)
 			}
 		}
 	}
@@ -274,7 +283,9 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 			"exchange_id": exchangeID,
 		}).Info("Found existing exchange by name")
 		// Cache the result
-		c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+		if c.redisClient != nil {
+			c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+		}
 		return exchangeID, nil
 	}
 
@@ -297,11 +308,68 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 	}
 
 	// Cache the newly created/updated exchange
-	c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+	if c.redisClient != nil {
+		c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+	}
 
 	c.logger.WithFields(map[string]interface{}{
 		"ccxt_id":     ccxtID,
 		"exchange_id": exchangeID,
 	}).Info("Created or updated exchange")
 	return exchangeID, nil
+}
+
+func (c *CollectorService) cachedTradingPairIDExists(exchangeID int, symbol string, tradingPairID int) bool {
+	if c.db == nil {
+		return false
+	}
+	var exists int
+	err := c.db.QueryRow(
+		c.ctx,
+		"SELECT 1 FROM trading_pairs WHERE id = ? AND exchange_id = ? AND symbol = ?",
+		tradingPairID,
+		exchangeID,
+		symbol,
+	).Scan(&exists)
+	if err == nil {
+		return true
+	}
+	if !isCollectorNoRows(err) {
+		c.logger.WithFields(map[string]interface{}{
+			"exchange_id":      exchangeID,
+			"symbol":           symbol,
+			"trading_pair_id":  tradingPairID,
+			"cache_validation": "trading_pair",
+		}).WithError(err).Warn("Failed to validate cached trading pair ID")
+	}
+	return false
+}
+
+func (c *CollectorService) cachedExchangeIDExists(ccxtID string, exchangeID int) bool {
+	if c.db == nil {
+		return false
+	}
+	var exists int
+	err := c.db.QueryRow(
+		c.ctx,
+		"SELECT 1 FROM exchanges WHERE id = ? AND (ccxt_id = ? OR name = ?)",
+		exchangeID,
+		ccxtID,
+		strings.ToLower(ccxtID),
+	).Scan(&exists)
+	if err == nil {
+		return true
+	}
+	if !isCollectorNoRows(err) {
+		c.logger.WithFields(map[string]interface{}{
+			"ccxt_id":          ccxtID,
+			"exchange_id":      exchangeID,
+			"cache_validation": "exchange",
+		}).WithError(err).Warn("Failed to validate cached exchange ID")
+	}
+	return false
+}
+
+func isCollectorNoRows(err error) bool {
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)
 }
