@@ -101,6 +101,8 @@ var supportedAIProviders = map[string]struct{}{
 	string(llm.ProviderOpenAI):    {},
 	string(llm.ProviderAnthropic): {},
 	string(llm.ProviderMLX):       {},
+	"deepseek":                    {},
+	"google":                      {},
 	"minimax":                     {},
 	"zai":                         {},
 	"zai-coding-plan":             {},
@@ -115,7 +117,7 @@ func parseAIProviderChain(primary string) ([]string, error) {
 		parts = strings.Split(raw, ",")
 	}
 	if primary == "" && len(parts) == 0 {
-		primary = "zhipu"
+		primary = "deepseek"
 	}
 
 	seen := make(map[string]struct{})
@@ -162,6 +164,10 @@ func providerBaseURL(provider string) string {
 		return "https://api.anthropic.com/v1"
 	case "minimax":
 		return "https://api.minimax.io/anthropic/v1"
+	case "deepseek":
+		return "https://api.deepseek.com/v1"
+	case "google":
+		return "https://generativelanguage.googleapis.com/v1beta/openai"
 	case "zai-coding-plan":
 		return "https://api.z.ai/api/coding/paas/v4"
 	case "zai":
@@ -813,7 +819,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 		aiProvider = aiConfig.Provider
 		if aiProvider == "" {
-			aiProvider = "zhipu"
+			aiProvider = "deepseek"
 		}
 	}
 

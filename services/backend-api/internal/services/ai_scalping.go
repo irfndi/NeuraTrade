@@ -60,6 +60,8 @@ type AIScalpingConfig struct {
 }
 
 const (
+	defaultRuntimeAIModel = "deepseek-v4-pro"
+
 	minAIScalpingMaxBidAskSpreadPct = 0.0001
 	maxAIScalpingMaxBidAskSpreadPct = 5.0
 	defaultOrderBookPairsBase       = 4
@@ -67,6 +69,21 @@ const (
 	defaultFallbackRoundTripFeePct  = 0.12
 	microFallbackMinNetEdgePct      = 0.35
 	standardFallbackMinNetEdgePct   = 0.20
+
+	scalpingFeedbackIntervalTrades       = 20
+	scalpingFeedbackMinTrades            = 10
+	scalpingFeedbackLowWinRate           = 0.30
+	scalpingFeedbackHighWinRate          = 0.60
+	scalpingFeedbackConfidenceMin        = 0.55
+	scalpingFeedbackConfidenceMax        = 0.90
+	scalpingFeedbackSizeMin              = 0.10
+	scalpingFeedbackSizeMax              = 0.80
+	scalpingFeedbackLowWinFloorFactor    = 2.0
+	scalpingFeedbackTightenFloorStep     = 0.10
+	scalpingFeedbackLoosenFloorStep      = 0.05
+	scalpingFeedbackTightenSizeFactor    = 0.50
+	scalpingFeedbackLoosenSizeStep       = 0.10
+	scalpingFeedbackConsecutiveThreshold = 3
 )
 
 type DeterministicFallbackConfig struct {
@@ -215,10 +232,20 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	return normalized
 }
 
+func resolveEnvModel() string {
+	if m := strings.TrimSpace(os.Getenv("AI_MODEL")); m != "" {
+		return m
+	}
+	if m := strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_MODEL")); m != "" {
+		return m
+	}
+	return defaultRuntimeAIModel
+}
+
 func DefaultAIScalpingConfig() AIScalpingConfig {
 	return AIScalpingConfig{
 		Exchange:              "bitget", // Default, will be overridden by user settings
-		Model:                 "glm-5",
+		Model:                 resolveEnvModel(),
 		Leverage:              5,
 		MaxTokens:             1200,
 		MaxCapitalPct:         5.0,
@@ -697,26 +724,28 @@ type TradingPortfolio struct {
 }
 
 type AIScalpingService struct {
-	config        AIScalpingConfig
-	exchangeMu    sync.RWMutex
-	llmClient     llm.Client
-	skillRegistry *skill.Registry
-	ccxtService   ccxt.CCXTService
-	orderExecutor ScalpingOrderExecutor
-	tradeMemory   *TradeMemory
-	runtimeMu     sync.RWMutex
-	runtimeState  AIScalpingRuntimeState
-	pairCacheMu   sync.RWMutex
-	cachedPairs   []string
-	cacheExchange string
-	cacheUpdated  time.Time
-	symbolGuardMu sync.Mutex
-	symbolGuards  map[string]symbolExecutionGuard
-	autonomyMu    sync.RWMutex
-	autonomy      *ScalpingAutonomyCoordinator
-	autonomyState AIScalpingAutonomyState
-	shadowMu      sync.RWMutex
-	shadow        *ShadowEvaluationCoordinator
+	config                            AIScalpingConfig
+	configMu                          sync.RWMutex
+	lastPerformanceFeedbackTradeCount int
+	exchangeMu                        sync.RWMutex
+	llmClient                         llm.Client
+	skillRegistry                     *skill.Registry
+	ccxtService                       ccxt.CCXTService
+	orderExecutor                     ScalpingOrderExecutor
+	tradeMemory                       *TradeMemory
+	runtimeMu                         sync.RWMutex
+	runtimeState                      AIScalpingRuntimeState
+	pairCacheMu                       sync.RWMutex
+	cachedPairs                       []string
+	cacheExchange                     string
+	cacheUpdated                      time.Time
+	symbolGuardMu                     sync.Mutex
+	symbolGuards                      map[string]symbolExecutionGuard
+	autonomyMu                        sync.RWMutex
+	autonomy                          *ScalpingAutonomyCoordinator
+	autonomyState                     AIScalpingAutonomyState
+	shadowMu                          sync.RWMutex
+	shadow                            *ShadowEvaluationCoordinator
 }
 
 type symbolExecutionGuard struct {
@@ -1091,6 +1120,12 @@ func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptIn
 
 func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (decision *AITradingDecision, err error) {
 	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", walletBasis(portfolio).InexactFloat64())
+
+	// Periodic self-learning feedback, once per completed trade-count milestone.
+	if perf := GetScalpingPerformance().GetPerformance(); s.shouldApplyPerformanceFeedback(readIntMetric(perf["total_trades"])) {
+		s.ApplyPerformanceFeedback()
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
 	effectiveExchange := s.exchangeForContext(ctx)
@@ -1800,7 +1835,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
 	}
 	if req.Model == "" {
-		req.Model = "glm-5"
+		req.Model = resolveEnvModel()
 	}
 	if req.MaxTokens <= 0 {
 		req.MaxTokens = 1200
@@ -3016,7 +3051,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	portfolio TradingPortfolio,
 	relaxed bool,
 ) (*AITradingDecision, float64, bool) {
-	fallbackCfg := s.config.DeterministicFallback.Normalized()
+	fallbackCfg := s.deterministicFallbackConfig()
 	effectiveMaxSpread := fallbackCfg.MaxBidAskSpread
 	effectiveMinImbalance := fallbackCfg.MinImbalance
 	buyRangeMax := fallbackCfg.BuyRangeMax
@@ -3493,7 +3528,7 @@ func buildExecutionFallbackReason(err error) string {
 func (s *AIScalpingService) repairDecisionJSON(ctx context.Context, raw string) (string, error) {
 	modelID := strings.TrimSpace(s.config.Model)
 	if modelID == "" {
-		modelID = "glm-5"
+		modelID = resolveEnvModel()
 	}
 
 	maxTokens := 320
@@ -4583,6 +4618,118 @@ func (s *AIScalpingService) ReportTradeOutcome(symbol string, pnl decimal.Decima
 		state.LossStreak = 0
 	}
 	s.symbolGuards[normalized] = state
+
+}
+
+func (s *AIScalpingService) shouldApplyPerformanceFeedback(totalTrades int) bool {
+	if totalTrades <= 0 || totalTrades%scalpingFeedbackIntervalTrades != 0 {
+		return false
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	if s.lastPerformanceFeedbackTradeCount == totalTrades {
+		return false
+	}
+	s.lastPerformanceFeedbackTradeCount = totalTrades
+	return true
+}
+
+func (s *AIScalpingService) deterministicFallbackConfig() DeterministicFallbackConfig {
+	if s == nil {
+		return DefaultDeterministicFallbackConfig()
+	}
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.config.DeterministicFallback.Normalized()
+}
+
+// ApplyPerformanceFeedback adjusts active scalping config based on tracked performance metrics.
+func (s *AIScalpingService) ApplyPerformanceFeedback() {
+	perf := GetScalpingPerformance()
+	perfData := perf.GetPerformance()
+	totalTrades := readIntMetric(perfData["total_trades"])
+	winRate := readFloatMetric(perfData["win_rate"])
+	if winRate > 1 {
+		winRate = winRate / 100
+	}
+	winRate = clampFloat(winRate, 0, 1)
+	consecutiveLosses := readIntMetric(perfData["consecutive_losses"])
+	consecutiveWins := readIntMetric(perfData["consecutive_wins"])
+
+	if totalTrades < scalpingFeedbackMinTrades {
+		return
+	}
+
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	fallbackCfg := s.config.DeterministicFallback.Normalized()
+
+	if winRate < scalpingFeedbackLowWinRate && totalTrades >= scalpingFeedbackIntervalTrades {
+		newFloor := clampFloat(
+			fallbackCfg.ConfidenceFloor*scalpingFeedbackLowWinFloorFactor,
+			scalpingFeedbackConfidenceMin,
+			scalpingFeedbackConfidenceMax,
+		)
+		newSize := clampFloat(
+			fallbackCfg.SizeFraction*scalpingFeedbackTightenSizeFactor,
+			scalpingFeedbackSizeMin,
+			scalpingFeedbackSizeMax,
+		)
+		fallbackCfg.ConfidenceFloor = newFloor
+		fallbackCfg.SizeFraction = newSize
+		log.Printf("[AI-SCALPING] Self-learning: low win rate (%.1f%%) — tightened confidence floor to %.2f, size fraction to %.2f",
+			winRate*100, newFloor, newSize)
+	} else if winRate > scalpingFeedbackHighWinRate && totalTrades >= scalpingFeedbackIntervalTrades {
+		newFloor := clampFloat(
+			fallbackCfg.ConfidenceFloor-scalpingFeedbackLoosenFloorStep,
+			scalpingFeedbackConfidenceMin,
+			scalpingFeedbackConfidenceMax,
+		)
+		newSize := clampFloat(
+			fallbackCfg.SizeFraction+scalpingFeedbackLoosenSizeStep,
+			scalpingFeedbackSizeMin,
+			scalpingFeedbackSizeMax,
+		)
+		fallbackCfg.ConfidenceFloor = newFloor
+		fallbackCfg.SizeFraction = newSize
+		log.Printf("[AI-SCALPING] Self-learning: high win rate (%.1f%%) — loosened confidence floor to %.2f, size fraction to %.2f",
+			winRate*100, newFloor, newSize)
+	}
+
+	if consecutiveLosses >= scalpingFeedbackConsecutiveThreshold {
+		newFloor := clampFloat(
+			fallbackCfg.ConfidenceFloor+scalpingFeedbackTightenFloorStep,
+			scalpingFeedbackConfidenceMin,
+			scalpingFeedbackConfidenceMax,
+		)
+		newSize := clampFloat(
+			fallbackCfg.SizeFraction*scalpingFeedbackTightenSizeFactor,
+			scalpingFeedbackSizeMin,
+			scalpingFeedbackSizeMax,
+		)
+		fallbackCfg.ConfidenceFloor = newFloor
+		fallbackCfg.SizeFraction = newSize
+		log.Printf("[AI-SCALPING] Self-learning: %d consecutive losses — tightened to confidence=%.2f, size=%.2f",
+			consecutiveLosses, newFloor, newSize)
+	} else if consecutiveWins >= scalpingFeedbackConsecutiveThreshold {
+		newFloor := clampFloat(
+			fallbackCfg.ConfidenceFloor-scalpingFeedbackLoosenFloorStep,
+			scalpingFeedbackConfidenceMin,
+			scalpingFeedbackConfidenceMax,
+		)
+		newSize := clampFloat(
+			fallbackCfg.SizeFraction+scalpingFeedbackLoosenSizeStep,
+			scalpingFeedbackSizeMin,
+			scalpingFeedbackSizeMax,
+		)
+		fallbackCfg.ConfidenceFloor = newFloor
+		fallbackCfg.SizeFraction = newSize
+		log.Printf("[AI-SCALPING] Self-learning: %d consecutive wins — loosened to confidence=%.2f, size=%.2f",
+			consecutiveWins, newFloor, newSize)
+	}
+
+	s.config.DeterministicFallback = fallbackCfg.Normalized()
 }
 
 func getEnvInt(key string) int {

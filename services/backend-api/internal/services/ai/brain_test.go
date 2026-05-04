@@ -118,10 +118,12 @@ func TestMain(m *testing.M) {
 }
 
 func TestDefaultAIBrainConfig(t *testing.T) {
+	t.Setenv("AI_MODEL", "")
+
 	config := DefaultAIBrainConfig()
 
-	if config.Model != "gpt-4o" {
-		t.Errorf("Expected model 'gpt-4o', got '%s'", config.Model)
+	if config.Model != defaultAIBrainModel {
+		t.Errorf("Expected model '%s', got '%s'", defaultAIBrainModel, config.Model)
 	}
 	if config.Temperature != 0.2 {
 		t.Errorf("Expected temperature 0.2, got %f", config.Temperature)
@@ -140,6 +142,16 @@ func TestDefaultAIBrainConfig(t *testing.T) {
 	}
 	if !config.EnableLearning {
 		t.Error("Expected learning to be enabled by default")
+	}
+}
+
+func TestDefaultAIBrainConfig_UsesAIModelEnv(t *testing.T) {
+	t.Setenv("AI_MODEL", "custom-model")
+
+	config := DefaultAIBrainConfig()
+
+	if config.Model != "custom-model" {
+		t.Errorf("Expected model from AI_MODEL, got '%s'", config.Model)
 	}
 }
 

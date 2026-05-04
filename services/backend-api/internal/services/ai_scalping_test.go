@@ -140,9 +140,13 @@ func TestTradingPortfolio(t *testing.T) {
 }
 
 func TestAIScalpingConfig_Default(t *testing.T) {
+	t.Setenv("AI_MODEL", "")
+	t.Setenv("NEURATRADE_SCALPING_MODEL", "")
+
 	config := DefaultAIScalpingConfig()
 
 	assert.Equal(t, "bitget", config.Exchange)
+	assert.Equal(t, defaultRuntimeAIModel, config.Model)
 	assert.Equal(t, 5, config.Leverage)
 	assert.Equal(t, 5.0, config.MaxCapitalPct)
 	assert.Equal(t, 0.55, config.MinConfidence)
@@ -169,6 +173,18 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 0.35, config.DeterministicFallback.MinImbalance)
 	assert.Equal(t, 0.72, config.DeterministicFallback.ConfidenceFloor)
 	assert.Equal(t, 0.50, config.DeterministicFallback.SizeFraction)
+}
+
+func TestResolveEnvModel(t *testing.T) {
+	t.Setenv("AI_MODEL", "")
+	t.Setenv("NEURATRADE_SCALPING_MODEL", "")
+	assert.Equal(t, defaultRuntimeAIModel, resolveEnvModel())
+
+	t.Setenv("NEURATRADE_SCALPING_MODEL", "scalping-model")
+	assert.Equal(t, "scalping-model", resolveEnvModel())
+
+	t.Setenv("AI_MODEL", "global-model")
+	assert.Equal(t, "global-model", resolveEnvModel())
 }
 
 func TestAIScalpingConfig_Custom(t *testing.T) {
@@ -1811,6 +1827,69 @@ func TestAIScalpingService_SymbolLossCooldown(t *testing.T) {
 	svc.ReportTradeOutcome("ADA/USDT", decimal.NewFromFloat(0.05))
 	err = svc.enforceSymbolGuard("ADA/USDT")
 	assert.NoError(t, err)
+}
+
+func TestAIScalpingService_ReportTradeOutcome_DoesNotRecordGlobalPerformance(t *testing.T) {
+	original := globalScalpingPerformance
+	globalScalpingPerformance = NewScalpingPerformance()
+	t.Cleanup(func() {
+		globalScalpingPerformance = original
+	})
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			LossWindow: 90 * time.Minute,
+		},
+		symbolGuards: make(map[string]symbolExecutionGuard),
+	}
+
+	svc.ReportTradeOutcome("ADA/USDT", decimal.NewFromFloat(-0.1))
+
+	perf := globalScalpingPerformance.GetPerformance()
+	assert.Equal(t, 0, readIntMetric(perf["total_trades"]))
+}
+
+func TestAIScalpingService_ShouldApplyPerformanceFeedbackOncePerMilestone(t *testing.T) {
+	svc := &AIScalpingService{}
+
+	assert.False(t, svc.shouldApplyPerformanceFeedback(0))
+	assert.False(t, svc.shouldApplyPerformanceFeedback(19))
+	assert.True(t, svc.shouldApplyPerformanceFeedback(20))
+	assert.False(t, svc.shouldApplyPerformanceFeedback(20))
+	assert.False(t, svc.shouldApplyPerformanceFeedback(21))
+	assert.True(t, svc.shouldApplyPerformanceFeedback(40))
+	assert.False(t, svc.shouldApplyPerformanceFeedback(40))
+}
+
+func TestAIScalpingService_ApplyPerformanceFeedback_ClampsAndPersistsFallbackConfig(t *testing.T) {
+	original := globalScalpingPerformance
+	globalScalpingPerformance = NewScalpingPerformance()
+	t.Cleanup(func() {
+		globalScalpingPerformance = original
+	})
+
+	for i := 0; i < scalpingFeedbackIntervalTrades; i++ {
+		globalScalpingPerformance.RecordTrade(TradeRecord{
+			Timestamp:  time.Now().UTC(),
+			PnL:        decimal.NewFromFloat(-1),
+			Profitable: false,
+		})
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			DeterministicFallback: DeterministicFallbackConfig{
+				ConfidenceFloor: 0.72,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	svc.ApplyPerformanceFeedback()
+
+	fallbackCfg := svc.deterministicFallbackConfig()
+	assert.InDelta(t, scalpingFeedbackConfidenceMax, fallbackCfg.ConfidenceFloor, 0.0001)
+	assert.InDelta(t, 0.125, fallbackCfg.SizeFraction, 0.0001)
 }
 
 func TestAIScalpingService_PreTradeGate_RegimeBlock(t *testing.T) {
