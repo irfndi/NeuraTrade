@@ -32,6 +32,7 @@ func TestDefaultRankingScore(t *testing.T) {
 		wantMin float64
 	}{
 		{"claude-sonnet-4-20250514", 90.0},
+		{"deepseek-v4-pro", 90.0},
 		{"gpt-4o", 80.0},
 		{"gpt-4o-mini", 70.0},
 		{"unknown-model", 40.0},

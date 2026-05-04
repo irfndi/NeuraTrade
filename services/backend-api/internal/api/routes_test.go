@@ -893,7 +893,7 @@ func TestParseAIProviderChain(t *testing.T) {
 
 		result, err := parseAIProviderChain("")
 		require.NoError(t, err)
-		assert.Equal(t, []string{"zhipu"}, result)
+		assert.Equal(t, []string{"deepseek"}, result)
 	})
 
 	t.Run("uses primary provider", func(t *testing.T) {
@@ -927,7 +927,7 @@ func TestParseAIProviderChain(t *testing.T) {
 	})
 
 	t.Run("rejects unsupported providers", func(t *testing.T) {
-		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,google")
+		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,unknown-provider")
 		_, err := parseAIProviderChain("zhipu")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported ai provider")
@@ -941,5 +941,9 @@ func TestProviderBaseURL(t *testing.T) {
 
 	t.Run("zhipu uses configured default base path", func(t *testing.T) {
 		assert.Equal(t, "https://api.z.ai/api/paas/v4", providerBaseURL("zhipu"))
+	})
+
+	t.Run("deepseek uses configured default base path", func(t *testing.T) {
+		assert.Equal(t, "https://api.deepseek.com/v1", providerBaseURL("deepseek"))
 	})
 }

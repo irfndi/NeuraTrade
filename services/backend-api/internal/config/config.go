@@ -620,10 +620,10 @@ func setDefaults() {
 	viper.SetDefault("indicators.provider", "talib")
 
 	// AI config defaults
-	viper.SetDefault("ai.provider", "zhipu")
-	viper.SetDefault("ai.model", "glm-5-turbo")
+	viper.SetDefault("ai.provider", "deepseek")
+	viper.SetDefault("ai.model", "deepseek-v4-pro")
 	viper.SetDefault("ai.api_key", "")
-	viper.SetDefault("ai.base_url", "https://api.z.ai/api/paas/v4")
+	viper.SetDefault("ai.base_url", "")
 	viper.SetDefault("ai.temperature", 0.7)
 	viper.SetDefault("ai.max_tokens", 4096)
 	viper.SetDefault("ai.min_confidence", 0.7)

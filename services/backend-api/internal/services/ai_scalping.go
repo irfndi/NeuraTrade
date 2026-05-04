@@ -4649,6 +4649,10 @@ func (s *AIScalpingService) ApplyPerformanceFeedback() {
 	perfData := perf.GetPerformance()
 	totalTrades := readIntMetric(perfData["total_trades"])
 	winRate := readFloatMetric(perfData["win_rate"])
+	if winRate > 1 {
+		winRate = winRate / 100
+	}
+	winRate = clampFloat(winRate, 0, 1)
 	consecutiveLosses := readIntMetric(perfData["consecutive_losses"])
 	consecutiveWins := readIntMetric(perfData["consecutive_wins"])
 

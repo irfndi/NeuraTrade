@@ -175,8 +175,6 @@ func (c *Client) Chat(ctx context.Context, providerID, modelID string, messages 
 	}
 	c.mu.RUnlock()
 
-	// Use unified provider client for all providers
-	fmt.Printf("[DEBUG CLIENT] providerID=%s\n", providerID)
 	apiKey := c.getAPIKey(providerID)
 	if apiKey == "" {
 		return nil, fmt.Errorf("no API key for provider: %s", providerID)
@@ -184,6 +182,10 @@ func (c *Client) Chat(ctx context.Context, providerID, modelID string, messages 
 
 	baseURL := c.getBaseURL(providerID)
 	model := c.resolveModel(ctx, providerID, modelID)
+	if model == "" {
+		return nil, fmt.Errorf("no model configured for provider: %s", providerID)
+	}
+	req.Model = model
 
 	client := NewUnifiedProviderClient(providerID, apiKey, baseURL, model)
 	return client.Chat(ctx, req)
@@ -225,23 +227,44 @@ func (c *Client) getBaseURL(providerID string) string {
 
 // resolveModel determines the model to use for a provider.
 // Priority: 1) explicit modelID, 2) <PROVIDER>_MODEL env var, 3) AI_MODEL env var,
-// 4) registry lookup (first active model for provider), 5) hardcoded last-resort fallback.
+// 4) registry lookup (first active model for provider), 5) provider-specific fallback.
 func (c *Client) resolveModel(ctx context.Context, providerID string, explicitModel string) string {
-	if explicitModel != "" {
+	if explicitModel = strings.TrimSpace(explicitModel); explicitModel != "" {
 		return explicitModel
 	}
 	envKey := strings.ToUpper(providerID) + "_MODEL"
-	if envModel := os.Getenv(envKey); envModel != "" {
+	if envModel := strings.TrimSpace(os.Getenv(envKey)); envModel != "" {
 		return envModel
 	}
-	if envModel := os.Getenv("AI_MODEL"); envModel != "" {
+	if envModel := strings.TrimSpace(os.Getenv("AI_MODEL")); envModel != "" {
 		return envModel
 	}
-	models, err := c.registry.GetModelsByProvider(ctx, providerID)
-	if err == nil && len(models) > 0 {
-		return models[0].ModelID
+	if c.registry != nil {
+		models, err := c.registry.GetModelsByProvider(ctx, providerID)
+		if err == nil && len(models) > 0 {
+			return models[0].ModelID
+		}
 	}
-	return "deepseek-v4-pro"
+	return defaultModelForProvider(providerID)
+}
+
+func defaultModelForProvider(providerID string) string {
+	switch strings.ToLower(strings.TrimSpace(providerID)) {
+	case "openai":
+		return "gpt-4o-mini"
+	case "anthropic":
+		return "claude-sonnet-4-20250514"
+	case "google":
+		return "gemini-2.5-flash"
+	case "deepseek":
+		return "deepseek-v4-pro"
+	case "minimax":
+		return "minimax-m2.5"
+	case "zai", "zai-coding-plan", "zhipu":
+		return "glm-5-turbo"
+	default:
+		return ""
+	}
 }
 
 // ChatOption modifies a chat request.
