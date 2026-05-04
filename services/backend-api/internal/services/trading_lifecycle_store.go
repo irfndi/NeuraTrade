@@ -72,18 +72,50 @@ type ManagedOpenPosition struct {
 }
 
 type LifecyclePerformanceSummary struct {
-	Trades      int
-	Wins        int
-	Losses      int
-	Breakeven   int
-	RealizedPnL decimal.Decimal
-	BestTrade   decimal.Decimal
-	WorstTrade  decimal.Decimal
+	Trades         int
+	Wins           int
+	Losses         int
+	Breakeven      int
+	RealizedPnL    decimal.Decimal
+	GrossPnL       decimal.Decimal
+	Fees           decimal.Decimal
+	AvgNetPnL      decimal.Decimal
+	WinRate        decimal.Decimal
+	FeeDragPct     decimal.Decimal
+	BestTrade      decimal.Decimal
+	WorstTrade     decimal.Decimal
+	AvgGrossPnL    decimal.Decimal
+	AvgFeePerTrade decimal.Decimal
 }
 
 type RecentLossStreakSummary struct {
 	ConsecutiveLosses int
 	LastTradeAt       time.Time
+}
+
+type ScalpingPortfolioSnapshotRecord struct {
+	ChatID                  string
+	Exchange                string
+	SnapshotAt              time.Time
+	USDTBalance             decimal.Decimal
+	TotalValue              decimal.Decimal
+	OpenPositions           int
+	UnrealizedPnL           decimal.Decimal
+	CurrentDrawdown         decimal.Decimal
+	RiskSharpe              decimal.Decimal
+	RiskSortino             decimal.Decimal
+	RiskDrawdown            decimal.Decimal
+	RiskMaxDrawdown         decimal.Decimal
+	RiskExpectancy          decimal.Decimal
+	RiskExpectancyGross     decimal.Decimal
+	RiskFeeDragExpectancy   decimal.Decimal
+	RiskSampleSize          int
+	StrategyPhase           string
+	AccountTier             string
+	RecentConsecutiveLosses int
+	RecoveryMode            string
+	DriftActive             bool
+	NoFillMinutes           decimal.Decimal
 }
 
 type LifecycleExchangeSnapshot struct {
@@ -179,6 +211,32 @@ func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
 			closed_at TIMESTAMP NOT NULL,
 			created_at TIMESTAMP NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS scalping_portfolio_snapshots (
+			id TEXT PRIMARY KEY,
+			chat_id TEXT,
+			exchange TEXT,
+			snapshot_at TIMESTAMP NOT NULL,
+			usdt_balance NUMERIC NOT NULL DEFAULT 0,
+			total_value NUMERIC NOT NULL DEFAULT 0,
+			open_positions INT NOT NULL DEFAULT 0,
+			unrealized_pnl NUMERIC NOT NULL DEFAULT 0,
+			current_drawdown NUMERIC NOT NULL DEFAULT 0,
+			risk_sharpe NUMERIC NOT NULL DEFAULT 0,
+			risk_sortino NUMERIC NOT NULL DEFAULT 0,
+			risk_drawdown NUMERIC NOT NULL DEFAULT 0,
+			risk_max_drawdown NUMERIC NOT NULL DEFAULT 0,
+			risk_expectancy NUMERIC NOT NULL DEFAULT 0,
+			risk_expectancy_gross NUMERIC NOT NULL DEFAULT 0,
+			risk_fee_drag_expectancy NUMERIC NOT NULL DEFAULT 0,
+			risk_sample_size INT NOT NULL DEFAULT 0,
+			strategy_phase TEXT,
+			account_tier TEXT,
+			recent_consecutive_losses INT NOT NULL DEFAULT 0,
+			recovery_mode TEXT,
+			drift_active BOOLEAN NOT NULL DEFAULT FALSE,
+			no_fill_minutes NUMERIC NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL
+		)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(ctx, stmt); err != nil {
@@ -219,6 +277,8 @@ func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed ON realized_pnl_journal(chat_id, closed_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_exchange_closed ON realized_pnl_journal(exchange, closed_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_symbol_closed ON realized_pnl_journal(symbol, closed_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_scalping_portfolio_snapshots_chat_time ON scalping_portfolio_snapshots(chat_id, snapshot_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_scalping_portfolio_snapshots_exchange_time ON scalping_portfolio_snapshots(exchange, snapshot_at DESC)`,
 	}
 	for _, stmt := range indexStatements {
 		if _, err := s.db.Exec(ctx, stmt); err != nil {
@@ -1281,6 +1341,8 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 		SELECT
 			COUNT(*),
 			COALESCE(SUM(%[1]s), 0),
+			COALESCE(SUM(realized_pnl), 0),
+			COALESCE(SUM(COALESCE(fees, 0)), 0),
 			COALESCE(SUM(CASE WHEN %[1]s > 0 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN %[1]s < 0 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN %[1]s = 0 THEN 1 ELSE 0 END), 0),
@@ -1307,6 +1369,8 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 	if err := s.db.QueryRow(ctx, query, args...).Scan(
 		&summary.Trades,
 		&summary.RealizedPnL,
+		&summary.GrossPnL,
+		&summary.Fees,
 		&wins,
 		&losses,
 		&breakeven,
@@ -1321,8 +1385,81 @@ func (s *TradingLifecycleStore) GetRealizedPerformance(
 	if summary.Trades == 0 {
 		summary.BestTrade = decimal.Zero
 		summary.WorstTrade = decimal.Zero
+		return summary, nil
+	}
+	trades := decimal.NewFromInt(int64(summary.Trades))
+	summary.AvgNetPnL = summary.RealizedPnL.Div(trades)
+	summary.AvgGrossPnL = summary.GrossPnL.Div(trades)
+	summary.AvgFeePerTrade = summary.Fees.Div(trades)
+	summary.WinRate = decimal.NewFromInt(int64(summary.Wins)).Div(trades)
+	if summary.GrossPnL.Abs().GreaterThan(decimal.Zero) {
+		summary.FeeDragPct = summary.GrossPnL.Sub(summary.RealizedPnL).Abs().Div(summary.GrossPnL.Abs())
 	}
 	return summary, nil
+}
+
+func (s *TradingLifecycleStore) RecordScalpingPortfolioSnapshot(
+	ctx context.Context,
+	rec ScalpingPortfolioSnapshotRecord,
+) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("lifecycle store unavailable")
+	}
+	snapshotAt := rec.SnapshotAt.UTC()
+	if snapshotAt.IsZero() {
+		snapshotAt = time.Now().UTC()
+	}
+	id := fmt.Sprintf(
+		"scalp-portfolio-%s-%s-%d",
+		safeIDPart(strings.TrimSpace(rec.ChatID)),
+		safeIDPart(strings.TrimSpace(rec.Exchange)),
+		snapshotAt.UnixNano(),
+	)
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO scalping_portfolio_snapshots (
+			id, chat_id, exchange, snapshot_at, usdt_balance, total_value,
+			open_positions, unrealized_pnl, current_drawdown, risk_sharpe,
+			risk_sortino, risk_drawdown, risk_max_drawdown, risk_expectancy,
+			risk_expectancy_gross, risk_fee_drag_expectancy, risk_sample_size,
+			strategy_phase, account_tier, recent_consecutive_losses, recovery_mode,
+			drift_active, no_fill_minutes, created_at
+		) VALUES (
+			$1,$2,$3,$4,$5,$6,
+			$7,$8,$9,$10,
+			$11,$12,$13,$14,
+			$15,$16,$17,
+			$18,$19,$20,$21,
+			$22,$23,$24
+		)
+	`, id,
+		strings.TrimSpace(rec.ChatID),
+		strings.TrimSpace(rec.Exchange),
+		snapshotAt,
+		rec.USDTBalance,
+		rec.TotalValue,
+		rec.OpenPositions,
+		rec.UnrealizedPnL,
+		rec.CurrentDrawdown,
+		rec.RiskSharpe,
+		rec.RiskSortino,
+		rec.RiskDrawdown,
+		rec.RiskMaxDrawdown,
+		rec.RiskExpectancy,
+		rec.RiskExpectancyGross,
+		rec.RiskFeeDragExpectancy,
+		rec.RiskSampleSize,
+		strings.TrimSpace(rec.StrategyPhase),
+		strings.TrimSpace(rec.AccountTier),
+		rec.RecentConsecutiveLosses,
+		strings.TrimSpace(rec.RecoveryMode),
+		rec.DriftActive,
+		rec.NoFillMinutes,
+		snapshotAt,
+	)
+	if err != nil {
+		return fmt.Errorf("record scalping portfolio snapshot failed: %w", err)
+	}
+	return nil
 }
 
 func (s *TradingLifecycleStore) GetRecentLossStreak(

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -173,8 +174,125 @@ func TestTradingLifecycleStore_GetRealizedPerformanceAndOpenOrders(t *testing.T)
 	assert.Equal(t, 1, perf.Losses)
 	assert.Equal(t, 1, perf.Breakeven)
 	assert.True(t, perf.RealizedPnL.Round(6).Equal(decimal.NewFromFloat(0.04)))
+	assert.True(t, perf.GrossPnL.Round(6).Equal(decimal.NewFromFloat(0.07)))
+	assert.True(t, perf.Fees.Round(6).Equal(decimal.NewFromFloat(-0.03)))
+	assert.True(t, perf.AvgNetPnL.Round(6).Equal(decimal.RequireFromString("0.013333")))
+	assert.True(t, perf.WinRate.Round(6).Equal(decimal.RequireFromString("0.333333")))
+	assert.True(t, perf.FeeDragPct.Round(6).Equal(decimal.RequireFromString("0.428571")))
 	assert.True(t, perf.BestTrade.Round(6).Equal(decimal.NewFromFloat(0.14)))
 	assert.True(t, perf.WorstTrade.Round(6).Equal(decimal.NewFromFloat(-0.10)))
+}
+
+func TestTradingLifecycleStore_RecordScalpingPortfolioSnapshot(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "portfolio-snapshots.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	snapshotAt := time.Now().UTC().Add(-time.Minute)
+	require.NoError(t, store.RecordScalpingPortfolioSnapshot(ctx, ScalpingPortfolioSnapshotRecord{
+		ChatID:                  "chat-1",
+		Exchange:                "bitget",
+		SnapshotAt:              snapshotAt,
+		USDTBalance:             decimal.RequireFromString("48.11"),
+		TotalValue:              decimal.RequireFromString("47.98"),
+		OpenPositions:           2,
+		UnrealizedPnL:           decimal.RequireFromString("-0.13"),
+		CurrentDrawdown:         decimal.RequireFromString("0.0042"),
+		RiskSharpe:              decimal.RequireFromString("-0.12"),
+		RiskSortino:             decimal.RequireFromString("-0.22"),
+		RiskDrawdown:            decimal.RequireFromString("0.0042"),
+		RiskMaxDrawdown:         decimal.RequireFromString("0.009"),
+		RiskExpectancy:          decimal.RequireFromString("-0.0007"),
+		RiskExpectancyGross:     decimal.RequireFromString("0.0002"),
+		RiskFeeDragExpectancy:   decimal.RequireFromString("0.0009"),
+		RiskSampleSize:          57,
+		StrategyPhase:           "micro",
+		AccountTier:             "micro",
+		RecentConsecutiveLosses: 5,
+		RecoveryMode:            "cooldown",
+		DriftActive:             true,
+		NoFillMinutes:           decimal.RequireFromString("17.5"),
+	}))
+
+	var totalValue decimal.Decimal
+	var openPositions int
+	var driftActive bool
+	var riskSampleSize int
+	var usdtBalance decimal.Decimal
+	var riskSharpe decimal.Decimal
+	var noFillMinutes decimal.Decimal
+	var strategyPhase string
+	var snapshotAtDB time.Time
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT total_value, open_positions, drift_active, risk_sample_size,
+			usdt_balance, risk_sharpe, no_fill_minutes, strategy_phase, snapshot_at
+		FROM scalping_portfolio_snapshots
+		WHERE chat_id = $1 AND exchange = $2
+	`, "chat-1", "bitget").Scan(
+		&totalValue,
+		&openPositions,
+		&driftActive,
+		&riskSampleSize,
+		&usdtBalance,
+		&riskSharpe,
+		&noFillMinutes,
+		&strategyPhase,
+		&snapshotAtDB,
+	)
+	require.NoError(t, err)
+	assert.True(t, totalValue.Equal(decimal.RequireFromString("47.98")))
+	assert.Equal(t, 2, openPositions)
+	assert.True(t, driftActive)
+	assert.Equal(t, 57, riskSampleSize)
+	assert.True(t, usdtBalance.Equal(decimal.RequireFromString("48.11")))
+	assert.True(t, riskSharpe.Equal(decimal.RequireFromString("-0.12")))
+	assert.True(t, noFillMinutes.Equal(decimal.RequireFromString("17.5")))
+	assert.Equal(t, "micro", strategyPhase)
+	assert.WithinDuration(t, snapshotAt, snapshotAtDB, time.Second)
+}
+
+func BenchmarkTradingLifecycleStore_GetRealizedPerformance(b *testing.B) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(b.TempDir(), "lifecycle-performance-bench.db"))
+	require.NoError(b, err)
+	b.Cleanup(func() { _ = sqliteDB.Close() })
+
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(b, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for i := 0; i < 1000; i++ {
+		pnl := decimal.RequireFromString("-0.003")
+		if i%5 == 0 {
+			pnl = decimal.RequireFromString("0.012")
+		}
+		require.NoError(b, store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+			OrderID:     "bench-ord-" + strconv.Itoa(i),
+			ChatID:      "chat-1",
+			Exchange:    "bitget",
+			Symbol:      "DOGE/USDT",
+			Side:        "buy",
+			MarketType:  "futures",
+			Filled:      decimal.NewFromInt(10),
+			EntryPrice:  decimal.RequireFromString("0.20"),
+			ExitPrice:   decimal.RequireFromString("0.201"),
+			RealizedPnL: pnl,
+			Fees:        decimal.RequireFromString("-0.001"),
+			Source:      "bench",
+			ClosedAt:    now.Add(-time.Duration(i) * time.Minute),
+		}))
+	}
+
+	since := now.Add(-30 * 24 * time.Hour)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := store.GetRealizedPerformance(ctx, "chat-1", "bitget", since); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestTradingLifecycleStore_GetRealizedPerformance_ExcludesSyntheticLifecycleCloses(t *testing.T) {
