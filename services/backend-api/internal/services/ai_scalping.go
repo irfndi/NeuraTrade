@@ -1120,12 +1120,6 @@ func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptIn
 
 func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (decision *AITradingDecision, err error) {
 	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", walletBasis(portfolio).InexactFloat64())
-
-	// Periodic self-learning feedback, once per completed trade-count milestone.
-	if perf := GetScalpingPerformance().GetPerformance(); s.shouldApplyPerformanceFeedback(readIntMetric(perf["total_trades"])) {
-		s.ApplyPerformanceFeedback()
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
 	effectiveExchange := s.exchangeForContext(ctx)
@@ -4618,118 +4612,6 @@ func (s *AIScalpingService) ReportTradeOutcome(symbol string, pnl decimal.Decima
 		state.LossStreak = 0
 	}
 	s.symbolGuards[normalized] = state
-
-}
-
-func (s *AIScalpingService) shouldApplyPerformanceFeedback(totalTrades int) bool {
-	if totalTrades <= 0 || totalTrades%scalpingFeedbackIntervalTrades != 0 {
-		return false
-	}
-	s.configMu.Lock()
-	defer s.configMu.Unlock()
-	if s.lastPerformanceFeedbackTradeCount == totalTrades {
-		return false
-	}
-	s.lastPerformanceFeedbackTradeCount = totalTrades
-	return true
-}
-
-func (s *AIScalpingService) deterministicFallbackConfig() DeterministicFallbackConfig {
-	if s == nil {
-		return DefaultDeterministicFallbackConfig()
-	}
-	s.configMu.RLock()
-	defer s.configMu.RUnlock()
-	return s.config.DeterministicFallback.Normalized()
-}
-
-// ApplyPerformanceFeedback adjusts active scalping config based on tracked performance metrics.
-func (s *AIScalpingService) ApplyPerformanceFeedback() {
-	perf := GetScalpingPerformance()
-	perfData := perf.GetPerformance()
-	totalTrades := readIntMetric(perfData["total_trades"])
-	winRate := readFloatMetric(perfData["win_rate"])
-	if winRate > 1 {
-		winRate = winRate / 100
-	}
-	winRate = clampFloat(winRate, 0, 1)
-	consecutiveLosses := readIntMetric(perfData["consecutive_losses"])
-	consecutiveWins := readIntMetric(perfData["consecutive_wins"])
-
-	if totalTrades < scalpingFeedbackMinTrades {
-		return
-	}
-
-	s.configMu.Lock()
-	defer s.configMu.Unlock()
-
-	fallbackCfg := s.config.DeterministicFallback.Normalized()
-
-	if winRate < scalpingFeedbackLowWinRate && totalTrades >= scalpingFeedbackIntervalTrades {
-		newFloor := clampFloat(
-			fallbackCfg.ConfidenceFloor*scalpingFeedbackLowWinFloorFactor,
-			scalpingFeedbackConfidenceMin,
-			scalpingFeedbackConfidenceMax,
-		)
-		newSize := clampFloat(
-			fallbackCfg.SizeFraction*scalpingFeedbackTightenSizeFactor,
-			scalpingFeedbackSizeMin,
-			scalpingFeedbackSizeMax,
-		)
-		fallbackCfg.ConfidenceFloor = newFloor
-		fallbackCfg.SizeFraction = newSize
-		log.Printf("[AI-SCALPING] Self-learning: low win rate (%.1f%%) — tightened confidence floor to %.2f, size fraction to %.2f",
-			winRate*100, newFloor, newSize)
-	} else if winRate > scalpingFeedbackHighWinRate && totalTrades >= scalpingFeedbackIntervalTrades {
-		newFloor := clampFloat(
-			fallbackCfg.ConfidenceFloor-scalpingFeedbackLoosenFloorStep,
-			scalpingFeedbackConfidenceMin,
-			scalpingFeedbackConfidenceMax,
-		)
-		newSize := clampFloat(
-			fallbackCfg.SizeFraction+scalpingFeedbackLoosenSizeStep,
-			scalpingFeedbackSizeMin,
-			scalpingFeedbackSizeMax,
-		)
-		fallbackCfg.ConfidenceFloor = newFloor
-		fallbackCfg.SizeFraction = newSize
-		log.Printf("[AI-SCALPING] Self-learning: high win rate (%.1f%%) — loosened confidence floor to %.2f, size fraction to %.2f",
-			winRate*100, newFloor, newSize)
-	}
-
-	if consecutiveLosses >= scalpingFeedbackConsecutiveThreshold {
-		newFloor := clampFloat(
-			fallbackCfg.ConfidenceFloor+scalpingFeedbackTightenFloorStep,
-			scalpingFeedbackConfidenceMin,
-			scalpingFeedbackConfidenceMax,
-		)
-		newSize := clampFloat(
-			fallbackCfg.SizeFraction*scalpingFeedbackTightenSizeFactor,
-			scalpingFeedbackSizeMin,
-			scalpingFeedbackSizeMax,
-		)
-		fallbackCfg.ConfidenceFloor = newFloor
-		fallbackCfg.SizeFraction = newSize
-		log.Printf("[AI-SCALPING] Self-learning: %d consecutive losses — tightened to confidence=%.2f, size=%.2f",
-			consecutiveLosses, newFloor, newSize)
-	} else if consecutiveWins >= scalpingFeedbackConsecutiveThreshold {
-		newFloor := clampFloat(
-			fallbackCfg.ConfidenceFloor-scalpingFeedbackLoosenFloorStep,
-			scalpingFeedbackConfidenceMin,
-			scalpingFeedbackConfidenceMax,
-		)
-		newSize := clampFloat(
-			fallbackCfg.SizeFraction+scalpingFeedbackLoosenSizeStep,
-			scalpingFeedbackSizeMin,
-			scalpingFeedbackSizeMax,
-		)
-		fallbackCfg.ConfidenceFloor = newFloor
-		fallbackCfg.SizeFraction = newSize
-		log.Printf("[AI-SCALPING] Self-learning: %d consecutive wins — loosened to confidence=%.2f, size=%.2f",
-			consecutiveWins, newFloor, newSize)
-	}
-
-	s.config.DeterministicFallback = fallbackCfg.Normalized()
 }
 
 func getEnvInt(key string) int {
