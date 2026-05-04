@@ -963,9 +963,11 @@ func TestResolveProviderNodeUsesCentralProviderEnvNames(t *testing.T) {
 	assert.Equal(t, "key", node.APIKey)
 	assert.Equal(t, "https://override.example/v1", node.BaseURL)
 	assert.Equal(t, "model-override", node.ModelOverride)
+	assert.Empty(t, node.DefaultModel)
 
 	defaultNode := resolveProviderNode("deepseek", "primary-key", "https://primary.example/v1", "anthropic")
-	assert.Equal(t, "claude-sonnet-4-20250514", defaultNode.ModelOverride)
+	assert.Empty(t, defaultNode.ModelOverride)
+	assert.Equal(t, "claude-sonnet-4-20250514", defaultNode.DefaultModel)
 }
 
 func TestProviderRequiresAPIKeyUsesProviderDefaults(t *testing.T) {

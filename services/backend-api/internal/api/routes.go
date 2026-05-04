@@ -86,6 +86,7 @@ type llmProviderNodeConfig struct {
 	APIKey        string
 	BaseURL       string
 	ModelOverride string
+	DefaultModel  string
 }
 
 type zapNopServiceLogger struct{}
@@ -201,7 +202,7 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 	}
 	if node.ModelOverride == "" {
 		if model, ok := ai.ProviderDefaultModel(provider); ok {
-			node.ModelOverride = model
+			node.DefaultModel = model
 		}
 	}
 
@@ -858,6 +859,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				Client:        client,
 				Provider:      llm.Provider(provider),
 				ModelOverride: nodeConfig.ModelOverride,
+				DefaultModel:  nodeConfig.DefaultModel,
 			})
 			overrideMsg := "none"
 			if strings.TrimSpace(nodeConfig.ModelOverride) != "" {
