@@ -276,7 +276,7 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// Also check by name in case exchange exists with different ccxt_id
 	name := strings.ToLower(ccxtID)
-	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE name = ?", name).Scan(&exchangeID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE LOWER(name) = ?", name).Scan(&exchangeID)
 	if err == nil {
 		c.logger.WithFields(map[string]interface{}{
 			"name":        name,
@@ -352,7 +352,7 @@ func (c *CollectorService) cachedExchangeIDExists(ccxtID string, exchangeID int)
 	var exists int
 	err := c.db.QueryRow(
 		c.ctx,
-		"SELECT 1 FROM exchanges WHERE id = ? AND (ccxt_id = ? OR name = ?)",
+		"SELECT 1 FROM exchanges WHERE id = ? AND (ccxt_id = ? OR LOWER(name) = ?)",
 		exchangeID,
 		ccxtID,
 		strings.ToLower(ccxtID),

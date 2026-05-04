@@ -71,6 +71,31 @@ func TestCollectorServiceSaveBulkTickerDataIgnoresStaleTradingPairCache(t *testi
 	assert.NotEqual(t, "999", cachedTradingPairID)
 }
 
+func TestCollectorServiceSaveBulkTickerDataReusesCachedExchangeWithMixedCaseName(t *testing.T) {
+	collector, db, redisClient := newCollectorWithSQLiteAndRedis(t)
+	ctx := context.Background()
+
+	_, err := db.Exec(ctx, `
+		INSERT INTO exchanges (id, name, display_name, ccxt_id, api_url, status, has_spot, has_futures)
+		VALUES (1, 'Bitget', 'Bitget', 'bitget', 'https://api.bitget.com', 'active', 1, 1)
+	`)
+	require.NoError(t, err)
+	require.NoError(t, redisClient.Set(ctx, "exchange:ccxt_id:bitget", "1", time.Hour).Err())
+
+	err = collector.saveBulkTickerData(models.MarketPrice{
+		ExchangeName: "bitget",
+		Symbol:       "BTC/USDT",
+		Price:        decimal.NewFromFloat(64000),
+		Volume:       decimal.NewFromFloat(2100),
+		Timestamp:    time.Now(),
+	})
+
+	require.NoError(t, err)
+	assertSQLiteScalar(t, db, "SELECT COUNT(*) FROM exchanges", 1)
+	assertSQLiteScalar(t, db, "SELECT COUNT(*) FROM trading_pairs WHERE exchange_id = 1 AND symbol = 'BTC/USDT'", 1)
+	assertSQLiteScalar(t, db, "SELECT COUNT(*) FROM market_data WHERE exchange_id = 1", 1)
+}
+
 func newCollectorWithSQLiteAndRedis(t *testing.T) (*CollectorService, *database.SQLiteDB, *redis.Client) {
 	t.Helper()
 
