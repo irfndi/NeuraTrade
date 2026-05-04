@@ -31,8 +31,8 @@ func TestPaperDryRunValidationFlowRecordsPerformanceAndProtectionExits(t *testin
 	entryPrice := decimal.NewFromInt(100)
 	takeProfitPrice := decimal.NewFromInt(102)
 	stopLossPrice := decimal.NewFromInt(98)
-	entryFees := decimal.NewFromFloat(0.01)
-	exitFees := decimal.NewFromFloat(0.02)
+	entryFees := decimal.New(1, -2)
+	exitFees := decimal.New(2, -2)
 
 	config := DefaultPaperExecutionConfig()
 	config.EnableRandomness = false
@@ -49,7 +49,7 @@ func TestPaperDryRunValidationFlowRecordsPerformanceAndProtectionExits(t *testin
 		Size:     size,
 	})
 	require.NoError(t, err)
-	assert.True(t, strings.HasPrefix(entryOrder.ID, "paper_"))
+	assert.True(t, strings.HasPrefix(entryOrder.ID, paperOrderIDPrefix))
 
 	filledEntry, err := simulator.SimulateFill(ctx, entryOrder, entryPrice)
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestPaperTradingSpawnerUsesSimulatorWithoutProductionExecutor(t *testing.T)
 	require.True(t, ok)
 	orderID, ok := data["order_id"].(string)
 	require.True(t, ok)
-	assert.True(t, strings.HasPrefix(orderID, "paper_"))
+	assert.True(t, strings.HasPrefix(orderID, paperOrderIDPrefix))
 	assert.Equal(t, true, data["paper_trading"])
 	assert.Equal(t, "binance-testnet", data["exchange"])
 }

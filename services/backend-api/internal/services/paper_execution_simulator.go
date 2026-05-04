@@ -74,6 +74,8 @@ const (
 	PaperOrderStatusExpired   PaperOrderStatus = "expired"
 )
 
+const paperOrderIDPrefix = "paper_"
+
 // PaperOrder represents a paper trading order.
 type PaperOrder struct {
 	ID           string           `json:"id"`
@@ -312,7 +314,7 @@ func (s *PaperExecutionSimulator) CreateOrder(req PaperOrderRequest) (*PaperOrde
 
 	now := s.clock.Now()
 	order := &PaperOrder{
-		ID:         fmt.Sprintf("paper_%s", uuid.New().String()),
+		ID:         fmt.Sprintf("%s%s", paperOrderIDPrefix, uuid.New().String()),
 		UserID:     req.UserID,
 		Exchange:   req.Exchange,
 		Symbol:     req.Symbol,
