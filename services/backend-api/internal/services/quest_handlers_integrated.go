@@ -942,6 +942,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Confidence: 0,
 			Reasoning:  "risk lock active",
 		}
+		h.recordScalpingGateCycle(
+			gateCtx,
+			chatID,
+			userExchange,
+			time.Now().UTC(),
+			"risk_lock",
+			checkpointString(quest.Checkpoint["runtime_entry_gate_reason"]),
+			portfolio,
+		)
 		h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
 			DecisionType:     "risk_reduction",
 			Summary:          "Risk lock active: entry scans paused, risk controls still running",
@@ -1016,6 +1025,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			}
 			runtimeDetails["force_repair_eligible"] = fmt.Sprintf("%t", dcBool)
 		}
+		h.recordScalpingGateCycle(
+			gateCtx,
+			chatID,
+			userExchange,
+			time.Now().UTC(),
+			"state_drift_gate",
+			checkpointString(quest.Checkpoint["runtime_entry_gate_reason"]),
+			portfolio,
+		)
 		h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
 			DecisionType:     "scalping_cycle",
 			Summary:          "State drift gate active: reconciling lifecycle with exchange before new entries",
@@ -2566,6 +2584,61 @@ func (h *IntegratedQuestHandlers) recordScalpingPortfolioSnapshot(
 	})
 	if err != nil {
 		log.Printf("[SCALPING] Portfolio snapshot persist failed for chat %s exchange %s: %v", chatID, exchange, err)
+	}
+}
+
+func (h *IntegratedQuestHandlers) recordScalpingGateCycle(
+	ctx context.Context,
+	chatID, exchange string,
+	cycleAt time.Time,
+	gateBlockCode, gateBlockReason string,
+	portfolio TradingPortfolio,
+) {
+	if h == nil || h.telemetryStore == nil {
+		return
+	}
+	chatID = strings.TrimSpace(chatID)
+	exchange = strings.TrimSpace(exchange)
+	gateBlockCode = strings.TrimSpace(gateBlockCode)
+	gateBlockReason = strings.TrimSpace(gateBlockReason)
+	if gateBlockCode == "" {
+		return
+	}
+	if cycleAt.IsZero() {
+		cycleAt = time.Now().UTC()
+	} else {
+		cycleAt = cycleAt.UTC()
+	}
+	rejectionJSON := "{}"
+	policyJSON, marshalErr := json.Marshal([]string{gateBlockCode})
+	if marshalErr != nil {
+		log.Printf("[TELEMETRY] Failed to marshal gate policy adjustments: %v", marshalErr)
+		policyJSON = []byte("[]")
+	}
+	cycleRec := CycleRecord{
+		ID:                     fmt.Sprintf("scalp-%s-%d", chatID, cycleAt.UnixNano()),
+		ChatID:                 chatID,
+		Exchange:               exchange,
+		CycleAt:                cycleAt,
+		Action:                 "hold",
+		Confidence:             0,
+		RejectionCountsJSON:    rejectionJSON,
+		Regime:                 portfolio.StrategyPhase,
+		GateBlockCode:          gateBlockCode,
+		GateBlockReason:        gateBlockReason,
+		AccountTier:            portfolio.AccountTier,
+		EffectiveMinConfidence: portfolio.PhaseMinConfidence,
+		EffectiveMaxCapitalPct: portfolio.PhaseMaxCapitalPct,
+		PolicyAdjustmentsJSON:  string(policyJSON),
+	}
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = ctx
+	}
+	writeCtx, writeCancel := withBoundedTimeoutContext(baseCtx, 2*time.Second)
+	defer writeCancel()
+	if _, err := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec); err != nil {
+		log.Printf("[TELEMETRY] Failed to insert gated scalping cycle: %v", err)
 	}
 }
 
