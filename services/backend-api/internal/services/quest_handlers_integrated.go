@@ -917,6 +917,28 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	log.Printf("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
 
+	if currentMode == ModePaper {
+		paperClosed, paperCloseErr := h.closeTriggeredPaperScalpingPositions(ctx, quest, chatID, userExchange)
+		if paperCloseErr != nil {
+			log.Printf("[SCALPING] Paper close check failed: %v", paperCloseErr)
+			quest.Checkpoint["paper_close_error"] = paperCloseErr.Error()
+		} else if paperClosed > 0 {
+			quest.Checkpoint["status"] = "paper_close"
+			quest.Checkpoint["paper_close_closed_positions"] = paperClosed
+			h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+				DecisionType: "paper_close",
+				Summary:      "Paper scalping closed positions at configured protection levels",
+				Confidence:   1,
+				Reasons: []string{
+					fmt.Sprintf("Closed %d paper position(s) after take-profit/stop-loss evaluation", paperClosed),
+					"Realized PnL and telemetry outcome were recorded without live exchange execution",
+				},
+				Action: "hold",
+			})
+			return nil
+		}
+	}
+
 	if !isDryRun {
 		timeStopClosed, timeStopErr := h.enforceAdaptiveTimeStop(ctx, quest, chatID, userExchange, portfolio.StrategyPhase)
 		if timeStopErr != nil {
@@ -5767,7 +5789,7 @@ func shouldSendScalpingDecisionNotification(notif AIReasoningNotification) bool 
 		return true
 	}
 	switch decisionType {
-	case "pnl_reconciliation", "risk_reduction", "scalping_digest":
+	case "pnl_reconciliation", "risk_reduction", "scalping_digest", "paper_close":
 		return true
 	default:
 		return false

@@ -517,6 +517,175 @@ func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrde
 	assert.Equal(t, "paper-order-aaa-buy", telemetryOrderID)
 }
 
+func TestIntegratedQuestHandlersCloseTriggeredPaperScalpingPositions_TakeProfitRecordsPnLAndTelemetry(t *testing.T) {
+	t.Setenv("NEURATRADE_PAPER_SCALPING_TAKER_FEE_RATE", "0.001")
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-scalping-close-tp.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	cycleID, err := telemetryStore.InsertCycleRecord(ctx, CycleRecord{
+		ID:         "paper-cycle-tp",
+		ChatID:     "paper-chat",
+		Exchange:   "bitget",
+		CycleAt:    time.Now().UTC().Add(-2 * time.Minute),
+		Symbol:     "AAA/USDT",
+		Action:     "buy",
+		Confidence: 0.91,
+	})
+	require.NoError(t, err)
+
+	openedAt := time.Now().UTC().Add(-2 * time.Minute)
+	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "paper-order-tp",
+		ChatID:     "paper-chat",
+		Exchange:   "bitget",
+		Symbol:     "AAA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromInt(1000),
+		EntryPrice: decimal.NewFromInt(100),
+		StopLoss:   decimal.NewFromInt(95),
+		TakeProfit: decimal.NewFromInt(110),
+		Source:     scalpingPaperLifecycleSource,
+		OpenedAt:   openedAt,
+	}))
+	require.NoError(t, telemetryStore.LinkOrderToCycle(ctx, cycleID, "paper-order-tp"))
+
+	handlers := &IntegratedQuestHandlers{
+		ccxtService: &mockAIScalpingCCXT{
+			singleTickers: map[string]ccxt.MarketPriceInterface{
+				"AAA/USDT": mockMarketPrice{symbol: "AAA/USDT", price: 111, exchange: "bitget"},
+			},
+		},
+		lifecycleStore: lifecycleStore,
+		telemetryStore: telemetryStore,
+	}
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+
+	closed, err := handlers.closeTriggeredPaperScalpingPositions(ctx, quest, "paper-chat", "bitget")
+	require.NoError(t, err)
+	assert.Equal(t, 1, closed)
+	assert.Equal(t, 1, quest.Checkpoint["paper_close_triggered_positions"])
+
+	var positionStatus string
+	var closePrice, grossPnL decimal.Decimal
+	require.NoError(t, sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT status, close_price, realized_pnl
+		FROM trading_positions
+		WHERE order_id = $1
+	`, "paper-order-tp").Scan(&positionStatus, &closePrice, &grossPnL))
+	assert.Equal(t, "closed", positionStatus)
+	assert.True(t, closePrice.Equal(decimal.NewFromInt(111)))
+	assert.True(t, grossPnL.Equal(decimal.NewFromInt(110)))
+
+	var source, outcome string
+	var fees, telemetryPnL decimal.Decimal
+	var holdSeconds int
+	require.NoError(t, sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT j.source, j.fees, t.outcome, t.pnl, t.hold_duration_seconds
+		FROM realized_pnl_journal j
+		JOIN scalping_cycle_telemetry t ON t.order_id = j.order_id
+		WHERE j.order_id = $1
+	`, "paper-order-tp").Scan(&source, &fees, &outcome, &telemetryPnL, &holdSeconds))
+	assert.Equal(t, scalpingPaperTakeProfitCloseSource, source)
+	assert.True(t, fees.Equal(decimal.RequireFromString("2.110")))
+	assert.Equal(t, "win", outcome)
+	assert.True(t, telemetryPnL.Equal(decimal.RequireFromString("107.890")))
+	assert.GreaterOrEqual(t, holdSeconds, 119)
+
+	perf, err := lifecycleStore.GetRealizedPerformance(ctx, "paper-chat", "bitget", time.Now().UTC().Add(-1*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 1, perf.Trades)
+	assert.Equal(t, 1, perf.Wins)
+	assert.True(t, perf.RealizedPnL.Equal(decimal.RequireFromString("107.890")))
+}
+
+func TestIntegratedQuestHandlersCloseTriggeredPaperScalpingPositions_StopLossRecordsLossAfterFees(t *testing.T) {
+	t.Setenv("NEURATRADE_PAPER_SCALPING_TAKER_FEE_RATE", "0.001")
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-scalping-close-sl.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	cycleID, err := telemetryStore.InsertCycleRecord(ctx, CycleRecord{
+		ID:         "paper-cycle-sl",
+		ChatID:     "paper-chat",
+		Exchange:   "bitget",
+		CycleAt:    time.Now().UTC().Add(-90 * time.Second),
+		Symbol:     "AAA/USDT",
+		Action:     "sell",
+		Confidence: 0.88,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "paper-order-sl",
+		ChatID:     "paper-chat",
+		Exchange:   "bitget",
+		Symbol:     "AAA/USDT",
+		Side:       "sell",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromInt(1000),
+		EntryPrice: decimal.NewFromInt(100),
+		StopLoss:   decimal.NewFromInt(105),
+		TakeProfit: decimal.NewFromInt(95),
+		Source:     scalpingPaperLifecycleSource,
+		OpenedAt:   time.Now().UTC().Add(-90 * time.Second),
+	}))
+	require.NoError(t, telemetryStore.LinkOrderToCycle(ctx, cycleID, "paper-order-sl"))
+
+	handlers := &IntegratedQuestHandlers{
+		ccxtService: &mockAIScalpingCCXT{
+			singleTickers: map[string]ccxt.MarketPriceInterface{
+				"AAA/USDT": mockMarketPrice{symbol: "AAA/USDT", price: 106, exchange: "bitget"},
+			},
+		},
+		lifecycleStore: lifecycleStore,
+		telemetryStore: telemetryStore,
+	}
+
+	closed, err := handlers.closeTriggeredPaperScalpingPositions(ctx, &Quest{Checkpoint: map[string]interface{}{}}, "paper-chat", "bitget")
+	require.NoError(t, err)
+	assert.Equal(t, 1, closed)
+
+	var source, outcome string
+	var grossPnL, fees, telemetryPnL decimal.Decimal
+	require.NoError(t, sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT j.source, j.realized_pnl, j.fees, t.outcome, t.pnl
+		FROM realized_pnl_journal j
+		JOIN scalping_cycle_telemetry t ON t.order_id = j.order_id
+		WHERE j.order_id = $1
+	`, "paper-order-sl").Scan(&source, &grossPnL, &fees, &outcome, &telemetryPnL))
+	assert.Equal(t, scalpingPaperStopLossCloseSource, source)
+	assert.True(t, grossPnL.Equal(decimal.NewFromInt(-60)))
+	assert.True(t, fees.Equal(decimal.RequireFromString("2.060")))
+	assert.Equal(t, "loss", outcome)
+	assert.True(t, telemetryPnL.Equal(decimal.RequireFromString("-62.060")))
+
+	perf, err := lifecycleStore.GetRealizedPerformance(ctx, "paper-chat", "bitget", time.Now().UTC().Add(-1*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 1, perf.Trades)
+	assert.Equal(t, 1, perf.Losses)
+	assert.True(t, perf.RealizedPnL.Equal(decimal.RequireFromString("-62.060")))
+}
+
 func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksLiveTelemetryWithoutLifecycleStore(t *testing.T) {
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "live-scalping-telemetry.db"))

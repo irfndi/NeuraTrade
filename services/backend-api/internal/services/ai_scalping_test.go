@@ -64,13 +64,14 @@ func (m mockMarketPrice) GetPriceChange24h() float64 { return m.change24h }
 
 type mockAIScalpingCCXT struct {
 	mockCCXTForPortfolioSafety
-	markets      *ccxt.MarketsResponse
-	marketData   []ccxt.MarketPriceInterface
-	orderBooks   map[string]*ccxt.OrderBookResponse
-	orderBookOps []string
-	marketsErr   error
-	marketErr    error
-	orderBookErr error
+	markets       *ccxt.MarketsResponse
+	marketData    []ccxt.MarketPriceInterface
+	singleTickers map[string]ccxt.MarketPriceInterface
+	orderBooks    map[string]*ccxt.OrderBookResponse
+	orderBookOps  []string
+	marketsErr    error
+	marketErr     error
+	orderBookErr  error
 }
 
 func (m *mockAIScalpingCCXT) FetchMarkets(ctx context.Context, exchange string) (*ccxt.MarketsResponse, error) {
@@ -85,6 +86,16 @@ func (m *mockAIScalpingCCXT) FetchMarketData(ctx context.Context, exchanges []st
 		return nil, m.marketErr
 	}
 	return m.marketData, nil
+}
+
+func (m *mockAIScalpingCCXT) FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error) {
+	if m.marketErr != nil {
+		return nil, m.marketErr
+	}
+	if m.singleTickers == nil {
+		return nil, nil
+	}
+	return m.singleTickers[normalizeSymbolForComparison(symbol)], nil
 }
 
 func (m *mockAIScalpingCCXT) FetchOrderBook(ctx context.Context, exchange, symbol string, limit int) (*ccxt.OrderBookResponse, error) {
