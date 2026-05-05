@@ -192,6 +192,7 @@ type QuestEngine struct {
 	riskLockReasons           []string
 	aiProviderChainConfigured int
 	aiProviderChainUsable     int
+	opModeService             *OperationalModeService
 	// notificationService is used to send quest progress notifications
 	notificationService *NotificationService
 	// chatIDForQuest maps quest IDs to their owner's chat ID
@@ -352,6 +353,16 @@ func NewQuestEngineWithNotification(store QuestStore, redisClient *redis.Client,
 	engine := NewQuestEngineWithRedis(store, redisClient)
 	engine.notificationService = notifier
 	return engine
+}
+
+// SetOperationalModeService wires operator trading mode lookup for quest startup metadata.
+func (e *QuestEngine) SetOperationalModeService(service *OperationalModeService) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.opModeService = service
 }
 
 // registerDefaultDefinitions registers the default quest templates
@@ -1629,13 +1640,21 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 			log.Printf("Failed to create quest %s: %v", defID, err)
 			continue
 		}
-		// Set dry-run mode from config (default to false for live trading)
+		currentMode := e.resolveBeginAutonomousMode(chatID, quest)
+		isDryRun := currentMode != OpModeLive
 		if quest.Metadata == nil {
 			quest.Metadata = make(map[string]string)
 		}
-		quest.Metadata["dry_run"] = "false"
-		quest.Metadata["paper_trading"] = "false"
-		log.Printf("[QUEST] Created quest %s with dry_run=false (LIVE TRADING MODE)", quest.ID)
+		quest.Metadata["dry_run"] = strconv.FormatBool(isDryRun)
+		quest.Metadata["paper_trading"] = strconv.FormatBool(currentMode == ModePaper)
+		quest.Metadata["execution_mode"] = string(currentMode)
+		log.Printf(
+			"[QUEST] Created quest %s with execution_mode=%s dry_run=%t paper_trading=%t",
+			quest.ID,
+			currentMode,
+			isDryRun,
+			currentMode == ModePaper,
+		)
 
 		quest.Status = QuestStatusActive
 		quest.UpdatedAt = time.Now()
@@ -1656,6 +1675,25 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 	}
 
 	return state, nil
+}
+
+func (e *QuestEngine) resolveBeginAutonomousMode(chatID string, quest *Quest) OperationalMode {
+	if e != nil && e.opModeService != nil {
+		switch mode := e.opModeService.GetMode(chatID); mode {
+		case OpModeLive:
+			return OpModeLive
+		case ModePaper:
+			return ModePaper
+		case OpModeDry, ModeConservative, ModeModerate, ModeAggressive:
+			return mode
+		}
+	}
+	if quest != nil && quest.Metadata != nil {
+		if strings.EqualFold(strings.TrimSpace(quest.Metadata["paper_trading"]), "true") {
+			return ModePaper
+		}
+	}
+	return OpModeDry
 }
 
 func (e *QuestEngine) ensureQuestForChatInternal(definitionID, chatID string) (*Quest, error) {
