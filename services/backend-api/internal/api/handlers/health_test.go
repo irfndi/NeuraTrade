@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,8 +12,11 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/services"
+	telegrampb "github.com/irfndi/neuratrade/pkg/pb/telegram"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 // DatabaseInterface for mocking database operations
@@ -43,6 +47,20 @@ type MockRedisHealthClient struct {
 func (m *MockRedisHealthClient) HealthCheck(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
+}
+
+type testTelegramHealthServer struct {
+	telegrampb.UnimplementedTelegramServiceServer
+	status  string
+	service string
+}
+
+func (s testTelegramHealthServer) HealthCheck(context.Context, *telegrampb.HealthCheckRequest) (*telegrampb.HealthCheckResponse, error) {
+	return &telegrampb.HealthCheckResponse{
+		Status:  s.status,
+		Service: s.service,
+		Version: "test",
+	}, nil
 }
 
 func TestNewHealthHandler(t *testing.T) {
@@ -311,6 +329,50 @@ func TestHealthHandler_TelegramDeliveryOutageDegradesHealth(t *testing.T) {
 	mockDB.AssertExpectations(t)
 	mockRedis.AssertExpectations(t)
 	mockCacheAnalytics.AssertExpectations(t)
+}
+
+func TestCheckTelegramGRPCRequiresHealthRPC(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local TCP listener unavailable: %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+	}()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			_ = conn.Close()
+		}
+	}()
+
+	err = checkTelegramGRPC(context.Background(), listener.Addr().String())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "health rpc")
+	<-done
+}
+
+func TestCheckTelegramGRPCHealthyResponse(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local TCP listener unavailable: %v", err)
+	}
+	server := grpc.NewServer()
+	telegrampb.RegisterTelegramServiceServer(server, testTelegramHealthServer{
+		status:  "serving",
+		service: "telegram-service",
+	})
+	defer server.Stop()
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	err = checkTelegramGRPC(context.Background(), listener.Addr().String())
+
+	require.NoError(t, err)
 }
 
 func TestTelegramHealthProbeTimeout(t *testing.T) {

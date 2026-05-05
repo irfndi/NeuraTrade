@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +13,9 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"github.com/irfndi/neuratrade/internal/services"
+	telegrampb "github.com/irfndi/neuratrade/pkg/pb/telegram"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // DatabaseHealthChecker interface for database health checks.
@@ -292,12 +294,28 @@ func (h *HealthHandler) checkTelegramDelivery(ctx context.Context) error {
 }
 
 func checkTelegramGRPC(ctx context.Context, address string) error {
-	dialer := net.Dialer{Timeout: telegramHealthProbeTimeout()}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	probeCtx, cancel := context.WithTimeout(ctx, telegramHealthProbeTimeout())
+	defer cancel()
+
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("%s: %w", address, err)
 	}
-	_ = conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
+
+	resp, err := telegrampb.NewTelegramServiceClient(conn).HealthCheck(probeCtx, &telegrampb.HealthCheckRequest{})
+	if err != nil {
+		return fmt.Errorf("%s health rpc: %w", address, err)
+	}
+	status := strings.TrimSpace(strings.ToLower(resp.GetStatus()))
+	if status != "serving" && status != "healthy" {
+		return fmt.Errorf("%s health status: %s", address, resp.GetStatus())
+	}
+	if service := strings.TrimSpace(resp.GetService()); service != "" && !strings.EqualFold(service, "telegram-service") {
+		return fmt.Errorf("%s health service: %s", address, service)
+	}
 	return nil
 }
 
