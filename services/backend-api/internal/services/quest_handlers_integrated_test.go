@@ -535,6 +535,50 @@ func TestIntegratedQuestHandlers_RecordsTelemetryWhenStateDriftGatesScalping(t *
 	assert.Equal(t, "bitget", exchange)
 }
 
+func TestIntegratedQuestHandlers_RecordsTelemetryWhenAIScalpingUnavailable(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-ai-unavailable-telemetry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	handlers := &IntegratedQuestHandlers{
+		telemetryStore: telemetryStore,
+	}
+	quest := &Quest{
+		ID: "ai-unavailable-scalping",
+		Metadata: map[string]string{
+			"chat_id":       "dry-chat",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{},
+	}
+
+	err = handlers.executeFallbackScalping(ctx, quest, "dry-chat")
+	require.NoError(t, err)
+	assert.Equal(t, "ai_unavailable_hold", quest.Checkpoint["status"])
+
+	var count int
+	var action, gateBlockCode, gateBlockReason, exchange string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT COUNT(1),
+		       COALESCE(MAX(action), ''),
+		       COALESCE(MAX(gate_block_code), ''),
+		       COALESCE(MAX(gate_block_reason), ''),
+		       COALESCE(MAX(exchange), '')
+		  FROM scalping_cycle_telemetry
+	`).Scan(&count, &action, &gateBlockCode, &gateBlockReason, &exchange)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Equal(t, "hold", action)
+	assert.Equal(t, "ai_unavailable", gateBlockCode)
+	assert.Contains(t, gateBlockReason, "AI scalping service is not initialized")
+	assert.Equal(t, "bitget", exchange)
+}
+
 func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing.T) {
 	t.Setenv("NEURATRADE_TELEGRAM_NOTIFY_AI_DECISIONS", "")
 	t.Setenv("NEURATRADE_TELEGRAM_ACTIONABLE_ONLY", "")

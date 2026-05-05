@@ -2669,6 +2669,15 @@ func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, q
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_check"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
+	h.recordScalpingGateCycle(
+		ctx,
+		chatID,
+		h.getUserExchange(chatID),
+		time.Now().UTC(),
+		"ai_unavailable",
+		"AI scalping service is not initialized",
+		TradingPortfolio{},
+	)
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 		DecisionType: "scalping_cycle",
 		Summary:      "Scalping engine unavailable; observe-only cycle",
