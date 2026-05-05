@@ -321,3 +321,83 @@ func TestIntegratedQuestHandlersExecuteAIScalping_PaperModeUsesVirtualBalanceAnd
 	assert.Equal(t, 1, mockLLM.CallCount)
 	assert.Zero(t, mockCCXT.fetchCalls, "paper mode should not fetch live balance")
 }
+
+func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrder(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-scalping-lifecycle.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	cycleID, err := telemetryStore.InsertCycleRecord(ctx, CycleRecord{
+		ID:         "paper-cycle-1",
+		ChatID:     "paper-chat",
+		Exchange:   "bitget",
+		CycleAt:    time.Now().UTC(),
+		Symbol:     "AAA/USDT",
+		Action:     "buy",
+		Confidence: 0.92,
+	})
+	require.NoError(t, err)
+
+	entry := decimal.NewFromFloat(1.23)
+	stop := decimal.NewFromFloat(1.20)
+	take := decimal.NewFromFloat(1.29)
+	handlers := &IntegratedQuestHandlers{
+		lifecycleStore: lifecycleStore,
+		telemetryStore: telemetryStore,
+	}
+
+	handlers.persistScalpingExecutionLifecycle(
+		ctx,
+		ModePaper,
+		&AITradingDecision{
+			Action:      "buy",
+			Symbol:      "AAA/USDT",
+			SizePercent: 2.5,
+			OrderID:     "paper-order-aaa-buy",
+			EntryPrice:  &entry,
+			StopLoss:    &stop,
+			TakeProfit:  &take,
+		},
+		"paper-chat",
+		"bitget",
+		TradingPortfolio{USDTBalance: 1000},
+		true,
+		cycleID,
+	)
+
+	var orderStatus, orderSource, positionStatus, telemetryOrderID string
+	var amount decimal.Decimal
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT status, source, amount
+		FROM trading_orders
+		WHERE order_id = ?
+	`, "paper-order-aaa-buy").Scan(&orderStatus, &orderSource, &amount)
+	require.NoError(t, err)
+	assert.Equal(t, "open", orderStatus)
+	assert.Equal(t, "autonomous_scalping", orderSource)
+	assert.True(t, amount.Equal(decimal.NewFromInt(25)), "amount should use paper portfolio size percentage")
+
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT status
+		FROM trading_positions
+		WHERE order_id = ?
+	`, "paper-order-aaa-buy").Scan(&positionStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "open", positionStatus)
+
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT order_id
+		FROM scalping_cycle_telemetry
+		WHERE id = ?
+	`, cycleID).Scan(&telemetryOrderID)
+	require.NoError(t, err)
+	assert.Equal(t, "paper-order-aaa-buy", telemetryOrderID)
+}

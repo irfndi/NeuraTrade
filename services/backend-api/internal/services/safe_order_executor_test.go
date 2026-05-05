@@ -423,6 +423,29 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_BypassesZeroMaxSafetyForBitgetF
 	mockSafety.AssertExpectations(t)
 }
 
+func TestSafeOrderExecutor_PlaceOrderWithDetails_BypassesSafetyForPaperMode(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	mockSafety := &mockDetailedSafetyChecker{}
+	safeExec := NewSafeOrderExecutor(mockExecutor, mockSafety, "test-chat")
+
+	details := TradeDetails{
+		Exchange:   "bitget",
+		MarketType: "futures",
+		Symbol:     "BTC/USDT",
+		AmountUSDT: decimal.NewFromFloat(8.5),
+	}
+
+	mockExecutor.On("PlaceOrderWithDetails", mock.Anything, details).Return("paper-order", nil)
+
+	orderID, err := safeExec.PlaceOrderWithDetails(WithOperationalMode(context.Background(), ModePaper), details)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "paper-order", orderID)
+	mockExecutor.AssertExpectations(t)
+	mockSafety.AssertNotCalled(t, "EvaluateTradeWithLeverage")
+	mockSafety.AssertNotCalled(t, "CanExecuteTrade")
+}
+
 func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenAmountExceedsBoundedCap(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	mockSafety := &mockDetailedSafetyChecker{}
