@@ -448,3 +448,52 @@ func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrde
 	require.NoError(t, err)
 	assert.Equal(t, "paper-order-aaa-buy", telemetryOrderID)
 }
+
+func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksLiveTelemetryWithoutLifecycleStore(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "live-scalping-telemetry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	cycleID, err := telemetryStore.InsertCycleRecord(ctx, CycleRecord{
+		ID:         "live-cycle-1",
+		ChatID:     "live-chat",
+		Exchange:   "bitget",
+		CycleAt:    time.Now().UTC(),
+		Symbol:     "AAA/USDT",
+		Action:     "buy",
+		Confidence: 0.92,
+	})
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{telemetryStore: telemetryStore}
+	handlers.persistScalpingExecutionLifecycle(
+		ctx,
+		OpModeLive,
+		&AITradingDecision{
+			Action:      "buy",
+			Symbol:      "AAA/USDT",
+			SizePercent: 2.5,
+			OrderID:     "live-order-aaa-buy",
+		},
+		"live-chat",
+		"bitget",
+		TradingPortfolio{USDTBalance: 1000},
+		true,
+		cycleID,
+	)
+
+	var telemetryOrderID string
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT order_id
+		FROM scalping_cycle_telemetry
+		WHERE id = $1
+	`, cycleID).Scan(&telemetryOrderID)
+	require.NoError(t, err)
+	assert.Equal(t, "live-order-aaa-buy", telemetryOrderID)
+}
