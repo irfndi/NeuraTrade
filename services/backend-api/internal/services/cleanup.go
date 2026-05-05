@@ -15,6 +15,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/telemetry"
 )
 
+const defaultScalpingTelemetryRetentionHours = 2160
+
 // CleanupService handles automatic cleanup of old data.
 type CleanupService struct {
 	db                   database.DatabasePool
@@ -287,7 +289,7 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 	// Clean up old scalping cycle telemetry with error recovery
 	scalpingRetention := config.ScalpingTelemetry.RetentionHours
 	if scalpingRetention <= 0 {
-		scalpingRetention = 2160 // default 90 days
+		scalpingRetention = defaultScalpingTelemetryRetentionHours
 	}
 	c.logger.Info("Cleaning up scalping cycle telemetry", "retention_hours", scalpingRetention)
 	err = c.executeWithRetry(spanCtx, "cleanup_scalping_telemetry", func() error {
@@ -314,7 +316,8 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 			"market_data_count", statsAfter["market_data_count"],
 			"funding_rates_count", statsAfter["funding_rates_count"],
 			"arbitrage_opportunities_count", statsAfter["arbitrage_opportunities_count"],
-			"funding_arbitrage_opportunities_count", statsAfter["funding_arbitrage_opportunities_count"])
+			"funding_arbitrage_opportunities_count", statsAfter["funding_arbitrage_opportunities_count"],
+			"scalping_cycle_telemetry_count", statsAfter["scalping_cycle_telemetry_count"])
 
 		// Log cleanup summary
 		if statsBefore != nil {
@@ -322,16 +325,19 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 			fundingRatesDeleted := statsBefore["funding_rates_count"] - statsAfter["funding_rates_count"]
 			arbitrageDeleted := statsBefore["arbitrage_opportunities_count"] - statsAfter["arbitrage_opportunities_count"]
 			fundingArbitrageDeleted := statsBefore["funding_arbitrage_opportunities_count"] - statsAfter["funding_arbitrage_opportunities_count"]
+			scalpingTelemetryDeleted := statsBefore["scalping_cycle_telemetry_count"] - statsAfter["scalping_cycle_telemetry_count"]
 
 			span.SetData("market_data_deleted", marketDataDeleted)
 			span.SetData("funding_rates_deleted", fundingRatesDeleted)
 			span.SetData("arbitrage_deleted", arbitrageDeleted)
 			span.SetData("funding_arbitrage_deleted", fundingArbitrageDeleted)
+			span.SetData("scalping_telemetry_deleted", scalpingTelemetryDeleted)
 			c.logger.Info("Cleanup summary",
 				"market_data_deleted", marketDataDeleted,
 				"funding_rates_deleted", fundingRatesDeleted,
 				"arbitrage_deleted", arbitrageDeleted,
-				"funding_arbitrage_deleted", fundingArbitrageDeleted)
+				"funding_arbitrage_deleted", fundingArbitrageDeleted,
+				"scalping_telemetry_deleted", scalpingTelemetryDeleted)
 		}
 	}
 
@@ -512,6 +518,9 @@ func (c *CleanupService) cleanupScalpingTelemetry(ctx context.Context, retention
 	if c.db == nil {
 		return fmt.Errorf("database pool is not available")
 	}
+	if retentionHours <= 0 {
+		return fmt.Errorf("scalping telemetry retention hours must be positive")
+	}
 
 	spanCtx, span := observability.TraceDBQuery(ctx, "DELETE", "scalping_cycle_telemetry")
 	defer func() {
@@ -597,10 +606,19 @@ func (c *CleanupService) GetDataStats(ctx context.Context) (stats map[string]int
 	}
 	stats["funding_arbitrage_opportunities_count"] = fundingArbitrageOpportunitiesCount
 
+	// Count scalping cycle telemetry
+	var scalpingCycleTelemetryCount int64
+	err = c.db.QueryRow(spanCtx, "SELECT COUNT(*) FROM scalping_cycle_telemetry").Scan(&scalpingCycleTelemetryCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count scalping cycle telemetry: %w", err)
+	}
+	stats["scalping_cycle_telemetry_count"] = scalpingCycleTelemetryCount
+
 	span.SetData("market_data_count", marketDataCount)
 	span.SetData("funding_rates_count", fundingRatesCount)
 	span.SetData("arbitrage_opportunities_count", arbitrageOpportunitiesCount)
 	span.SetData("funding_arbitrage_opportunities_count", fundingArbitrageOpportunitiesCount)
+	span.SetData("scalping_cycle_telemetry_count", scalpingCycleTelemetryCount)
 
 	return stats, nil
 }

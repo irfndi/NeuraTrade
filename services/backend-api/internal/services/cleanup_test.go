@@ -188,6 +188,36 @@ func TestCleanupService_GetDataStats_WithError(t *testing.T) {
 	assert.NoError(t, mockPool.ExpectationsWereMet())
 }
 
+func TestCleanupService_GetDataStats_IncludesScalpingTelemetry(t *testing.T) {
+	mockPool, err := pgxmock.NewPool()
+	assert.NoError(t, err)
+	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
+
+	mockPool.ExpectQuery("SELECT COUNT\\(\\*\\) FROM market_data").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(10)))
+	mockPool.ExpectQuery("SELECT COUNT\\(\\*\\) FROM funding_rates").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(20)))
+	mockPool.ExpectQuery("SELECT COUNT\\(\\*\\) FROM arbitrage_opportunities").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(30)))
+	mockPool.ExpectQuery("SELECT COUNT\\(\\*\\) FROM funding_arbitrage_opportunities").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(40)))
+	mockPool.ExpectQuery("SELECT COUNT\\(\\*\\) FROM scalping_cycle_telemetry").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(50)))
+
+	service := NewCleanupService(
+		dbPool,
+		NewErrorRecoveryManager(zaplogrus.New()),
+		nil,
+		nil,
+	)
+
+	stats, err := service.GetDataStats(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(50), stats["scalping_cycle_telemetry_count"])
+	assert.NoError(t, mockPool.ExpectationsWereMet())
+}
+
 // TestCleanupService_CleanupMarketDataSmart tests the cleanupMarketDataSmart method
 func TestCleanupService_CleanupMarketDataSmart(t *testing.T) {
 	// Create real ErrorRecoveryManager for testing
@@ -371,6 +401,47 @@ func TestCleanupService_CleanupFundingRates_WithRealDatabase(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Ensure all expectations were met
+	assert.NoError(t, mockPool.ExpectationsWereMet())
+}
+
+func TestCleanupService_CleanupScalpingTelemetryRejectsInvalidRetention(t *testing.T) {
+	mockPool, err := pgxmock.NewPool()
+	assert.NoError(t, err)
+	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
+
+	service := NewCleanupService(
+		dbPool,
+		NewErrorRecoveryManager(zaplogrus.New()),
+		nil,
+		nil,
+	)
+
+	err = service.cleanupScalpingTelemetry(context.Background(), 0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "retention hours must be positive")
+	assert.NoError(t, mockPool.ExpectationsWereMet())
+}
+
+func TestCleanupService_CleanupScalpingTelemetry_WithRealDatabase(t *testing.T) {
+	mockPool, err := pgxmock.NewPool()
+	assert.NoError(t, err)
+	defer mockPool.Close()
+	dbPool := database.NewMockDBPool(mockPool)
+
+	service := NewCleanupService(
+		dbPool,
+		NewErrorRecoveryManager(zaplogrus.New()),
+		nil,
+		nil,
+	)
+
+	mockPool.ExpectExec("DELETE FROM scalping_cycle_telemetry WHERE cycle_at < \\$1").
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("DELETE", 7))
+
+	err = service.cleanupScalpingTelemetry(context.Background(), 36)
+	assert.NoError(t, err)
 	assert.NoError(t, mockPool.ExpectationsWereMet())
 }
 
