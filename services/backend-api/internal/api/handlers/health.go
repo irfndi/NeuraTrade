@@ -273,21 +273,20 @@ func readTelegramTokenFromUserConfig() string {
 
 func (h *HealthHandler) checkTelegramDelivery(ctx context.Context) error {
 	var failures []string
+	checked := false
 	if grpcAddress := strings.TrimSpace(h.telegram.GrpcAddress); grpcAddress != "" {
-		if err := checkTelegramGRPC(ctx, grpcAddress); err == nil {
-			return nil
-		} else {
+		checked = true
+		if err := checkTelegramGRPC(ctx, grpcAddress); err != nil {
 			failures = append(failures, "grpc "+err.Error())
 		}
 	}
 	if serviceURL := strings.TrimSpace(h.telegram.ServiceURL); serviceURL != "" {
-		if err := checkTelegramHTTP(ctx, serviceURL); err == nil {
-			return nil
-		} else {
+		checked = true
+		if err := checkTelegramHTTP(ctx, serviceURL); err != nil {
 			failures = append(failures, "http "+err.Error())
 		}
 	}
-	if len(failures) == 0 {
+	if !checked || len(failures) == 0 {
 		return nil
 	}
 	return errors.New(strings.Join(failures, "; "))

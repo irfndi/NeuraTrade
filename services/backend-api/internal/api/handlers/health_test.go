@@ -375,6 +375,46 @@ func TestCheckTelegramGRPCHealthyResponse(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCheckTelegramDeliveryRequiresAllConfiguredEndpoints(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local TCP listener unavailable: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	telegrampb.RegisterTelegramServiceServer(grpcServer, testTelegramHealthServer{
+		status:  "serving",
+		service: "telegram-service",
+	})
+	defer grpcServer.Stop()
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+
+	httpServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/health", r.URL.Path)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"degraded","bot_active":false}`))
+	}))
+	if httpServer == nil {
+		return
+	}
+	defer httpServer.Close()
+
+	handler := &HealthHandler{
+		telegram: TelegramHealthConfig{
+			GrpcAddress: listener.Addr().String(),
+			ServiceURL:  httpServer.URL,
+			BotToken:    "test-token",
+		},
+	}
+
+	err = handler.checkTelegramDelivery(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "http ")
+	assert.Contains(t, err.Error(), "/health returned status: 503")
+}
+
 func TestTelegramHealthProbeTimeout(t *testing.T) {
 	t.Setenv("NEURATRADE_TELEGRAM_HEALTH_TIMEOUT", "750ms")
 	assert.Equal(t, 750*time.Millisecond, telegramHealthProbeTimeout())
