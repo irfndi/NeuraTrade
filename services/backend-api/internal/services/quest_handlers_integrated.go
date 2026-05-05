@@ -1477,6 +1477,10 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		} else if errRate := checkpointFloat(quest.Checkpoint["runtime_ai_window_error_rate"]); errRate > 0.5 {
 			cycleRuntimeStatus = runtimeStatusLLMDegraded
 		}
+		runtimeDetails := map[string]string(nil)
+		if cycleRuntimeStatus == runtimeStatusLLMDegraded {
+			runtimeDetails = aiRuntimeDetailsFromCheckpoint(quest.Checkpoint)
+		}
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 			DecisionType:          "scalping_cycle",
 			Summary:               "AI held position this cycle",
@@ -1489,6 +1493,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Reasons:               reasons,
 			Action:                "hold",
 			RuntimeStatus:         cycleRuntimeStatus,
+			RuntimeDetails:        runtimeDetails,
 		})
 		h.maybeSendHoldDigest(ctx, quest, chatID, decision, portfolio)
 		return nil
@@ -5792,10 +5797,50 @@ func shouldSendScalpingDecisionNotification(notif AIReasoningNotification) bool 
 	if action == "buy" || action == "sell" || action == "record" {
 		return true
 	}
+	if strings.EqualFold(strings.TrimSpace(notif.RuntimeStatus), runtimeStatusLLMDegraded) {
+		return true
+	}
 	switch decisionType {
 	case "pnl_reconciliation", "risk_reduction", "scalping_digest":
 		return true
 	default:
 		return false
+	}
+}
+
+func aiRuntimeDetailsFromCheckpoint(checkpoint map[string]interface{}) map[string]string {
+	if len(checkpoint) == 0 {
+		return nil
+	}
+
+	details := map[string]string{}
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_total", "ai_window_total")
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_errors", "ai_window_errors")
+	if rate := checkpointFloat(checkpoint["runtime_ai_window_error_rate"]); rate > 0 {
+		details["ai_error_rate"] = fmt.Sprintf("%.0f%%", rate*100)
+	}
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_timeouts", "ai_timeouts")
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_parse_fails", "ai_parse_fails")
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_failover_attempts", "ai_failover_attempts")
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_failover_failures", "ai_failover_failures")
+	if provider := checkpointString(checkpoint["runtime_ai_last_provider"]); provider != "" {
+		details["ai_last_provider"] = provider
+	}
+	if category := checkpointString(checkpoint["runtime_ai_last_category"]); category != "" {
+		details["ai_last_category"] = category
+	}
+	if failed := checkpointStringSlice(checkpoint["runtime_ai_failed_providers"]); len(failed) > 0 {
+		details["ai_failed_providers"] = strings.Join(failed, ",")
+	}
+
+	if len(details) == 0 {
+		return nil
+	}
+	return details
+}
+
+func addCheckpointIntDetail(details map[string]string, checkpoint map[string]interface{}, checkpointKey string, detailKey string) {
+	if value := checkpointInt(checkpoint[checkpointKey]); value > 0 {
+		details[detailKey] = strconv.Itoa(value)
 	}
 }
