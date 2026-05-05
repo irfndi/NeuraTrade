@@ -181,6 +181,9 @@ func gatewayStart(cCtx *cli.Context) error {
 	if err := os.MkdirAll(filepath.Join(home, "pids"), 0755); err != nil {
 		return fmt.Errorf("failed to create pids directory: %w", err)
 	}
+	if err := ensureSQLiteParentDir(sqlitePath); err != nil {
+		return err
+	}
 	servicesState := map[string]gatewayServiceRuntime{
 		"backend": {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, backendPort)},
 		"ccxt":    {Status: "starting", Endpoint: fmt.Sprintf("http://%s:%s/health", bindHost, ccxtPort)},
@@ -755,6 +758,20 @@ func shouldSkipTelegramGateway(telegramToken string) bool {
 	return strings.TrimSpace(telegramToken) == "" &&
 		getEnvBoolDefault("FEATURES_PAPER_TRADING", false) &&
 		!getEnvBoolDefault("FEATURES_REAL_TRADING", true)
+}
+
+func ensureSQLiteParentDir(sqlitePath string) error {
+	if strings.TrimSpace(sqlitePath) == "" {
+		return nil
+	}
+	dir := filepath.Dir(sqlitePath)
+	if dir == "." || dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create sqlite data directory: %w", err)
+	}
+	return nil
 }
 
 func resolveBackendPort(cfg *localConfig) string {

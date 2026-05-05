@@ -140,6 +140,16 @@ func TestShouldSkipTelegramGatewayOverride(t *testing.T) {
 	require.True(t, shouldSkipTelegramGateway("telegram-token"))
 }
 
+func TestEnsureSQLiteParentDirCreatesConfiguredDataDirectory(t *testing.T) {
+	sqlitePath := filepath.Join(t.TempDir(), "runtime", "data", "neuratrade.db")
+
+	require.NoError(t, ensureSQLiteParentDir(sqlitePath))
+
+	info, err := os.Stat(filepath.Dir(sqlitePath))
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+}
+
 func TestDeriveGatewayMode(t *testing.T) {
 	tests := []struct {
 		name            string
