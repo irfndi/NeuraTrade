@@ -170,9 +170,9 @@ func (h *HealthHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 		servicesStatus["telegram"] = "unhealthy: telegram token not configured"
 		span.SetTag("telegram.status", "not_configured")
 	} else if err := h.checkTelegramDelivery(ctx); err != nil {
-		servicesStatus["telegram"] = "unhealthy: delivery unavailable: " + err.Error()
+		servicesStatus["telegram"] = "unhealthy: delivery unavailable"
 		span.SetTag("telegram.status", "unhealthy")
-		sentry.CaptureException(err)
+		sentry.CaptureException(fmt.Errorf("telegram delivery unavailable"))
 	} else {
 		servicesStatus["telegram"] = "healthy"
 		span.SetTag("telegram.status", "healthy")
@@ -273,20 +273,22 @@ func readTelegramTokenFromUserConfig() string {
 
 func (h *HealthHandler) checkTelegramDelivery(ctx context.Context) error {
 	var failures []string
-	checked := false
+	grpcConfigured := strings.TrimSpace(h.telegram.GrpcAddress) != ""
+	httpConfigured := strings.TrimSpace(h.telegram.ServiceURL) != ""
+	if grpcConfigured && !httpConfigured {
+		failures = append(failures, "http health probe not configured")
+	}
 	if grpcAddress := strings.TrimSpace(h.telegram.GrpcAddress); grpcAddress != "" {
-		checked = true
 		if err := checkTelegramGRPC(ctx, grpcAddress); err != nil {
 			failures = append(failures, "grpc "+err.Error())
 		}
 	}
 	if serviceURL := strings.TrimSpace(h.telegram.ServiceURL); serviceURL != "" {
-		checked = true
 		if err := checkTelegramHTTP(ctx, serviceURL); err != nil {
 			failures = append(failures, "http "+err.Error())
 		}
 	}
-	if !checked || len(failures) == 0 {
+	if (!grpcConfigured && !httpConfigured) || len(failures) == 0 {
 		return nil
 	}
 	return errors.New(strings.Join(failures, "; "))

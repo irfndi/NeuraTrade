@@ -324,7 +324,8 @@ func TestHealthHandler_TelegramDeliveryOutageDegradesHealth(t *testing.T) {
 	assert.Equal(t, "degraded", response["status"])
 	services, ok := response["services"].(map[string]interface{})
 	assert.True(t, ok)
-	assert.Contains(t, services["telegram"].(string), "unhealthy: delivery unavailable")
+	assert.Equal(t, "unhealthy: delivery unavailable", services["telegram"])
+	assert.NotContains(t, services["telegram"].(string), telegramURL)
 
 	mockDB.AssertExpectations(t)
 	mockRedis.AssertExpectations(t)
@@ -413,6 +414,34 @@ func TestCheckTelegramDeliveryRequiresAllConfiguredEndpoints(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "http ")
 	assert.Contains(t, err.Error(), "/health returned status: 503")
+}
+
+func TestCheckTelegramDeliveryRequiresHTTPProbeWhenGRPCConfigured(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local TCP listener unavailable: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	telegrampb.RegisterTelegramServiceServer(grpcServer, testTelegramHealthServer{
+		status:  "serving",
+		service: "telegram-service",
+	})
+	defer grpcServer.Stop()
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+
+	handler := &HealthHandler{
+		telegram: TelegramHealthConfig{
+			GrpcAddress: listener.Addr().String(),
+			BotToken:    "test-token",
+		},
+	}
+
+	err = handler.checkTelegramDelivery(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "http health probe not configured")
 }
 
 func TestTelegramHealthProbeTimeout(t *testing.T) {
