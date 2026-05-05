@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/irfndi/neuratrade/internal/telemetry"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const defaultScalpingTelemetryRetentionHours = 2160
@@ -534,6 +537,10 @@ func (c *CleanupService) cleanupScalpingTelemetry(ctx context.Context, retention
 		"DELETE FROM scalping_cycle_telemetry WHERE cycle_at < $1",
 		cutoffTime)
 	if err != nil {
+		if isMissingCleanupTableError(err) {
+			c.logger.Info("Skipping scalping telemetry cleanup because table is not initialized")
+			return nil
+		}
 		return fmt.Errorf("failed to delete old scalping telemetry records: %w", err)
 	}
 
@@ -610,7 +617,11 @@ func (c *CleanupService) GetDataStats(ctx context.Context) (stats map[string]int
 	var scalpingCycleTelemetryCount int64
 	err = c.db.QueryRow(spanCtx, "SELECT COUNT(*) FROM scalping_cycle_telemetry").Scan(&scalpingCycleTelemetryCount)
 	if err != nil {
-		return nil, fmt.Errorf("failed to count scalping cycle telemetry: %w", err)
+		if isMissingCleanupTableError(err) {
+			scalpingCycleTelemetryCount = 0
+		} else {
+			return nil, fmt.Errorf("failed to count scalping cycle telemetry: %w", err)
+		}
 	}
 	stats["scalping_cycle_telemetry_count"] = scalpingCycleTelemetryCount
 
@@ -621,4 +632,20 @@ func (c *CleanupService) GetDataStats(ctx context.Context) (stats map[string]int
 	span.SetData("scalping_cycle_telemetry_count", scalpingCycleTelemetryCount)
 
 	return stats, nil
+}
+
+func isMissingCleanupTableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such table") ||
+		strings.Contains(msg, "undefined_table") ||
+		strings.Contains(msg, "does not exist")
 }
