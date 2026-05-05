@@ -171,8 +171,19 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 		break
 	}
 
-	fmt.Printf("AI Model [%s]: ", config.AIModel)
-	config.AIModel = b.readInput(config.AIModel)
+	if config.AIModel == "" {
+		for {
+			fmt.Printf("AI Model (required for %s): ", config.AIProvider)
+			config.AIModel = strings.TrimSpace(b.readInput(""))
+			if config.AIModel != "" {
+				break
+			}
+			fmt.Printf("AI Model is required for provider %q because it has no default model.\n", config.AIProvider)
+		}
+	} else {
+		fmt.Printf("AI Model [%s]: ", config.AIModel)
+		config.AIModel = b.readInput(config.AIModel)
+	}
 
 	fmt.Print("AI API Key: ")
 	config.AIAPIKey = b.readInput("")
