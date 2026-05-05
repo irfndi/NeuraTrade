@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +207,63 @@ func TestPaperTradingSpawnerUsesSimulatorWithoutProductionExecutor(t *testing.T)
 	assert.True(t, strings.HasPrefix(orderID, paperOrderIDPrefix))
 	assert.Equal(t, true, data["paper_trading"])
 	assert.Equal(t, "binance-testnet", data["exchange"])
+}
+
+func TestPaperTradeRecorderWorksWithSQLiteMigrationSchema(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-trades.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqliteDB.Close()) })
+
+	migrationPath := filepath.Join("..", "..", "database", "sqlite_migrations", "012_create_paper_trades_table.sql")
+	migrationSQL, err := os.ReadFile(migrationPath)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, string(migrationSQL))
+	require.NoError(t, err)
+
+	recorder := NewPaperTradeRecorder(sqliteDB, noopPaperDryRunLogger{})
+	questID := int64(7)
+	opened, err := recorder.RecordOpenTrade(ctx, &PaperTrade{
+		UserID:     "paper-runtime-user",
+		QuestID:    &questID,
+		StrategyID: "scalping-paper-runtime",
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		EntryPrice: decimal.NewFromInt(100),
+		Size:       decimal.NewFromInt(1),
+		Fees:       decimal.New(1, -2),
+		CostBasis:  decimal.NewFromInt(100),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "open", opened.Status)
+	require.True(t, opened.EntryPrice.Equal(decimal.NewFromInt(100)))
+
+	closed, err := recorder.RecordCloseTrade(ctx, opened.ID, decimal.NewFromInt(102), decimal.New(2, -2))
+	require.NoError(t, err)
+	require.Equal(t, "closed", closed.Status)
+	require.True(t, closed.PnL.Equal(decimal.NewFromFloat(1.98)))
+
+	cancellable, err := recorder.RecordOpenTrade(ctx, &PaperTrade{
+		UserID:     "paper-runtime-user",
+		StrategyID: "scalping-paper-runtime",
+		Exchange:   "bitget",
+		Symbol:     "ETH/USDT",
+		Side:       "sell",
+		EntryPrice: decimal.NewFromInt(50),
+		Size:       decimal.NewFromInt(1),
+		CostBasis:  decimal.NewFromInt(50),
+	})
+	require.NoError(t, err)
+	cancelled, err := recorder.CancelTrade(ctx, cancellable.ID)
+	require.NoError(t, err)
+	require.Equal(t, "cancelled", cancelled.Status)
+
+	summary, err := recorder.GetUserSummary(ctx, "paper-runtime-user")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), summary.TotalTrades)
+	require.True(t, summary.TotalPnL.Equal(decimal.NewFromFloat(1.98)))
+	require.True(t, summary.WinRate.Equal(decimal.NewFromInt(100)))
 }
 
 func expectPaperOpenTrade(
