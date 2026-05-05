@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,7 +33,15 @@ type HealthHandler struct {
 	db             DatabaseHealthChecker
 	redis          RedisHealthChecker
 	ccxtURL        string
+	telegram       TelegramHealthConfig
 	cacheAnalytics CacheAnalyticsInterface
+}
+
+// TelegramHealthConfig contains backend-to-Telegram delivery endpoints checked by /health.
+type TelegramHealthConfig struct {
+	ServiceURL  string
+	GrpcAddress string
+	BotToken    string
 }
 
 // HealthResponse represents the health status response.
@@ -73,10 +83,16 @@ type ServiceStatus struct {
 //
 //	*HealthHandler: Initialized handler.
 func NewHealthHandler(db DatabaseHealthChecker, redis RedisHealthChecker, ccxtURL string, cacheAnalytics CacheAnalyticsInterface) *HealthHandler {
+	return NewHealthHandlerWithTelegram(db, redis, ccxtURL, TelegramHealthConfig{}, cacheAnalytics)
+}
+
+// NewHealthHandlerWithTelegram creates a health handler with Telegram delivery endpoint probing enabled.
+func NewHealthHandlerWithTelegram(db DatabaseHealthChecker, redis RedisHealthChecker, ccxtURL string, telegram TelegramHealthConfig, cacheAnalytics CacheAnalyticsInterface) *HealthHandler {
 	return &HealthHandler{
 		db:             db,
 		redis:          redis,
 		ccxtURL:        ccxtURL,
+		telegram:       telegram,
 		cacheAnalytics: cacheAnalytics,
 	}
 }
@@ -147,30 +163,14 @@ func (h *HealthHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	servicesStatus["ccxt"] = ccxtStatus
 
 	// Check Telegram bot configuration - support both TELEGRAM_BOT_TOKEN and TELEGRAM_TOKEN
-	telegramToken := os.Getenv("TELEGRAM_BOT_TOKEN")
-	// Also check config.json for Telegram token
+	telegramToken := h.resolveTelegramToken()
 	if telegramToken == "" {
-		if configPath, err := os.UserHomeDir(); err == nil {
-			configPath = filepath.Join(configPath, ".neuratrade", "config.json")
-			// #nosec G304 -- fixed operator config path under user home directory
-			if data, err := os.ReadFile(configPath); err == nil {
-				var config map[string]interface{}
-				if json.Unmarshal(data, &config) == nil {
-					if telegram, ok := config["telegram"].(map[string]interface{}); ok {
-						if token, ok := telegram["bot_token"].(string); ok && token != "" {
-							telegramToken = token
-						}
-					}
-				}
-			}
-		}
-	}
-	if telegramToken == "" {
-		telegramToken = os.Getenv("TELEGRAM_TOKEN")
-	}
-	if telegramToken == "" {
-		servicesStatus["telegram"] = "unhealthy: TELEGRAM_BOT_TOKEN not set"
+		servicesStatus["telegram"] = "unhealthy: telegram token not configured"
 		span.SetTag("telegram.status", "not_configured")
+	} else if err := h.checkTelegramDelivery(ctx); err != nil {
+		servicesStatus["telegram"] = "unhealthy: delivery unavailable: " + err.Error()
+		span.SetTag("telegram.status", "unhealthy")
+		sentry.CaptureException(err)
 	} else {
 		servicesStatus["telegram"] = "healthy"
 		span.SetTag("telegram.status", "healthy")
@@ -231,6 +231,117 @@ func (h *HealthHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 		span.Status = sentry.SpanStatusInternalError
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
+}
+
+func (h *HealthHandler) resolveTelegramToken() string {
+	if token := strings.TrimSpace(h.telegram.BotToken); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")); token != "" {
+		return token
+	}
+	if token := readTelegramTokenFromUserConfig(); token != "" {
+		return token
+	}
+	return strings.TrimSpace(os.Getenv("TELEGRAM_TOKEN"))
+}
+
+func readTelegramTokenFromUserConfig() string {
+	configPath, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	configPath = filepath.Join(configPath, ".neuratrade", "config.json")
+	// #nosec G304 -- fixed operator config path under user home directory
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+	var config map[string]interface{}
+	if json.Unmarshal(data, &config) != nil {
+		return ""
+	}
+	telegram, ok := config["telegram"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	token, _ := telegram["bot_token"].(string)
+	return strings.TrimSpace(token)
+}
+
+func (h *HealthHandler) checkTelegramDelivery(ctx context.Context) error {
+	var failures []string
+	if grpcAddress := strings.TrimSpace(h.telegram.GrpcAddress); grpcAddress != "" {
+		if err := checkTelegramGRPC(ctx, grpcAddress); err == nil {
+			return nil
+		} else {
+			failures = append(failures, "grpc "+err.Error())
+		}
+	}
+	if serviceURL := strings.TrimSpace(h.telegram.ServiceURL); serviceURL != "" {
+		if err := checkTelegramHTTP(ctx, serviceURL); err == nil {
+			return nil
+		} else {
+			failures = append(failures, "http "+err.Error())
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(failures, "; "))
+}
+
+func checkTelegramGRPC(ctx context.Context, address string) error {
+	dialer := net.Dialer{Timeout: telegramHealthProbeTimeout()}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return fmt.Errorf("%s: %w", address, err)
+	}
+	_ = conn.Close()
+	return nil
+}
+
+func checkTelegramHTTP(ctx context.Context, serviceURL string) error {
+	if !strings.HasPrefix(serviceURL, "http://") && !strings.HasPrefix(serviceURL, "https://") {
+		return fmt.Errorf("%s is not an HTTP URL", serviceURL)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(serviceURL, "/")+"/health", nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: telegramHealthProbeTimeout()}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s/health: %w", strings.TrimRight(serviceURL, "/"), err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s/health returned status: %d", strings.TrimRight(serviceURL, "/"), resp.StatusCode)
+	}
+	var healthResp struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&healthResp); err != nil {
+		return fmt.Errorf("failed to parse Telegram health response: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(healthResp.Status), "healthy") {
+		return fmt.Errorf("%s/health status: %s", strings.TrimRight(serviceURL, "/"), healthResp.Status)
+	}
+	return nil
+}
+
+func telegramHealthProbeTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_TELEGRAM_HEALTH_TIMEOUT"))
+	if raw == "" {
+		return 2 * time.Second
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return 2 * time.Second
+	}
+	return timeout
 }
 
 // CCXTHealthResponse represents the detailed health response from CCXT service.

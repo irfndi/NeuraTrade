@@ -380,7 +380,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	adminMiddleware := middleware.NewAdminMiddleware()
 
 	// Initialize health handler
-	healthHandler := handlers.NewHealthHandler(db, redis, ccxtService.GetServiceURL(), cacheAnalyticsService)
+	telegramHealth := handlers.TelegramHealthConfig{}
+	if telegramConfig != nil {
+		telegramHealth = handlers.TelegramHealthConfig{
+			ServiceURL:  telegramConfig.ServiceURL,
+			GrpcAddress: telegramConfig.GrpcAddress,
+			BotToken:    telegramConfig.BotToken,
+		}
+	}
+	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService)
 
 	// Health check endpoints with telemetry
 	healthGroup := router.Group("/")

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/stretchr/testify/assert"
@@ -202,6 +203,122 @@ func TestHealthHandler_DegradedNonCriticalService(t *testing.T) {
 	mockDB.AssertExpectations(t)
 	mockRedis.AssertExpectations(t)
 	mockCacheAnalytics.AssertExpectations(t)
+}
+
+func TestHealthHandler_TelegramDeliveryHealthyWhenConfiguredServiceResponds(t *testing.T) {
+	mockCCXTServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy","exchanges_count":50,"exchange_connectivity":"configured"}`))
+	}))
+	if mockCCXTServer == nil {
+		return
+	}
+	defer mockCCXTServer.Close()
+
+	mockTelegramServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/health", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy","service":"telegram-service","bot_active":true}`))
+	}))
+	if mockTelegramServer == nil {
+		return
+	}
+	defer mockTelegramServer.Close()
+
+	mockDB := &MockDatabase{}
+	mockRedis := &MockRedisHealthClient{}
+	mockCacheAnalytics := NewMockCacheAnalyticsService()
+	mockDB.On("HealthCheck", mock.Anything).Return(nil)
+	mockRedis.On("HealthCheck", mock.Anything).Return(nil)
+	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
+	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
+
+	handler := NewHealthHandlerWithTelegram(
+		mockDB,
+		mockRedis,
+		mockCCXTServer.URL,
+		TelegramHealthConfig{ServiceURL: mockTelegramServer.URL, BotToken: "test-token"},
+		mockCacheAnalytics,
+	)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	handler.HealthCheck(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "healthy", response["status"])
+	services, ok := response["services"].(map[string]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, "healthy", services["telegram"])
+
+	mockDB.AssertExpectations(t)
+	mockRedis.AssertExpectations(t)
+	mockCacheAnalytics.AssertExpectations(t)
+}
+
+func TestHealthHandler_TelegramDeliveryOutageDegradesHealth(t *testing.T) {
+	mockCCXTServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy","exchanges_count":50,"exchange_connectivity":"configured"}`))
+	}))
+	if mockCCXTServer == nil {
+		return
+	}
+	defer mockCCXTServer.Close()
+
+	mockTelegramServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy"}`))
+	}))
+	if mockTelegramServer == nil {
+		return
+	}
+	telegramURL := mockTelegramServer.URL
+	mockTelegramServer.Close()
+
+	mockDB := &MockDatabase{}
+	mockRedis := &MockRedisHealthClient{}
+	mockCacheAnalytics := NewMockCacheAnalyticsService()
+	mockDB.On("HealthCheck", mock.Anything).Return(nil)
+	mockRedis.On("HealthCheck", mock.Anything).Return(nil)
+	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
+	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
+
+	handler := NewHealthHandlerWithTelegram(
+		mockDB,
+		mockRedis,
+		mockCCXTServer.URL,
+		TelegramHealthConfig{ServiceURL: telegramURL, BotToken: "test-token"},
+		mockCacheAnalytics,
+	)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	handler.HealthCheck(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "degraded", response["status"])
+	services, ok := response["services"].(map[string]interface{})
+	assert.True(t, ok)
+	assert.Contains(t, services["telegram"].(string), "unhealthy: delivery unavailable")
+
+	mockDB.AssertExpectations(t)
+	mockRedis.AssertExpectations(t)
+	mockCacheAnalytics.AssertExpectations(t)
+}
+
+func TestTelegramHealthProbeTimeout(t *testing.T) {
+	t.Setenv("NEURATRADE_TELEGRAM_HEALTH_TIMEOUT", "750ms")
+	assert.Equal(t, 750*time.Millisecond, telegramHealthProbeTimeout())
+
+	t.Setenv("NEURATRADE_TELEGRAM_HEALTH_TIMEOUT", "invalid")
+	assert.Equal(t, 2*time.Second, telegramHealthProbeTimeout())
 }
 
 func TestHealthHandler_ReadinessCheck(t *testing.T) {
