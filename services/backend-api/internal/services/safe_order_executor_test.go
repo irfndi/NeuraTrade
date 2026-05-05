@@ -446,6 +446,16 @@ func TestSafeOrderExecutor_PlaceOrderWithDetails_BypassesSafetyForPaperMode(t *t
 	mockSafety.AssertNotCalled(t, "CanExecuteTrade")
 }
 
+func TestSafeOrderExecutor_ShouldNotBypassSafetyForPaperFlagWithoutPaperExecutor(t *testing.T) {
+	mockExecutor := new(MockScalpingOrderExecutor)
+	safeExec := NewSafeOrderExecutor(mockExecutor, nil, "test-chat")
+
+	mockExecutor.On("IsPaperTrading").Return(false)
+
+	assert.False(t, safeExec.shouldBypassPaperSafety(context.Background(), true))
+	mockExecutor.AssertExpectations(t)
+}
+
 func TestSafeOrderExecutor_PlaceOrderWithDetails_DoesNotBypassWhenAmountExceedsBoundedCap(t *testing.T) {
 	mockExecutor := new(MockScalpingOrderExecutor)
 	mockSafety := &mockDetailedSafetyChecker{}

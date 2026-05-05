@@ -2187,8 +2187,11 @@ func shouldAllowPaperModeAutonomyExecution(ctx context.Context, rolloutState *au
 		!gateState.Checks.ExchangeConnected {
 		return false
 	}
+	if gateState.Checks.StrategyLive {
+		return false
+	}
 	if len(gateState.BlockReasons) == 0 {
-		return !gateState.Checks.StrategyLive
+		return true
 	}
 	for _, reason := range gateState.BlockReasons {
 		lower := strings.ToLower(strings.TrimSpace(reason))

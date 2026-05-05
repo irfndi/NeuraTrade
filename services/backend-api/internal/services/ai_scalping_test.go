@@ -1792,6 +1792,23 @@ func TestShouldAllowPaperModeAutonomyExecution(t *testing.T) {
 		paperRollout,
 		paperGate,
 	))
+
+	emptyReasonsGate := *paperGate
+	emptyReasonsGate.BlockReasons = nil
+	assert.True(t, shouldAllowPaperModeAutonomyExecution(
+		WithOperationalMode(context.Background(), ModePaper),
+		paperRollout,
+		&emptyReasonsGate,
+	))
+
+	strategyLiveGate := *paperGate
+	strategyLiveGate.Checks.StrategyLive = true
+	assert.False(t, shouldAllowPaperModeAutonomyExecution(
+		WithOperationalMode(context.Background(), ModePaper),
+		paperRollout,
+		&strategyLiveGate,
+	))
+
 	assert.False(t, shouldAllowPaperModeAutonomyExecution(
 		WithOperationalMode(context.Background(), OpModeDry),
 		paperRollout,

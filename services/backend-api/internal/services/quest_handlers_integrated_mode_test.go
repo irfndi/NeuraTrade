@@ -378,7 +378,7 @@ func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrde
 	err = sqliteDB.DB.QueryRowContext(ctx, `
 		SELECT status, source, amount
 		FROM trading_orders
-		WHERE order_id = ?
+		WHERE order_id = $1
 	`, "paper-order-aaa-buy").Scan(&orderStatus, &orderSource, &amount)
 	require.NoError(t, err)
 	assert.Equal(t, "open", orderStatus)
@@ -388,7 +388,7 @@ func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrde
 	err = sqliteDB.DB.QueryRowContext(ctx, `
 		SELECT status
 		FROM trading_positions
-		WHERE order_id = ?
+		WHERE order_id = $1
 	`, "paper-order-aaa-buy").Scan(&positionStatus)
 	require.NoError(t, err)
 	assert.Equal(t, "open", positionStatus)
@@ -396,7 +396,7 @@ func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrde
 	err = sqliteDB.DB.QueryRowContext(ctx, `
 		SELECT order_id
 		FROM scalping_cycle_telemetry
-		WHERE id = ?
+		WHERE id = $1
 	`, cycleID).Scan(&telemetryOrderID)
 	require.NoError(t, err)
 	assert.Equal(t, "paper-order-aaa-buy", telemetryOrderID)

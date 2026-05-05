@@ -43,7 +43,7 @@ func (s *SafeOrderExecutor) PlaceOrder(
 	amount decimal.Decimal,
 	price *decimal.Decimal,
 ) (string, error) {
-	if isPaperSafetyBypass(ctx, false) {
+	if s.shouldBypassPaperSafety(ctx, false) {
 		return s.baseExecutor.PlaceOrder(ctx, exchange, symbol, side, orderType, amount, price)
 	}
 	allowed, reason, err := s.checkSafety(ctx, exchange, symbol, resolveSafetyMarketType(ctx, exchange, symbol), amount)
@@ -149,7 +149,7 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return "", fmt.Errorf("invalid order size: amount_usdt must be positive")
 	}
-	if isPaperSafetyBypass(ctx, details.IsPaperTrade) {
+	if s.shouldBypassPaperSafety(ctx, details.IsPaperTrade) {
 		return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
 	}
 
@@ -217,12 +217,12 @@ func (s *SafeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details T
 	return s.baseExecutor.PlaceOrderWithDetails(ctx, details)
 }
 
-func isPaperSafetyBypass(ctx context.Context, isPaperTrade bool) bool {
-	if isPaperTrade {
-		return true
+func (s *SafeOrderExecutor) shouldBypassPaperSafety(ctx context.Context, isPaperTrade bool) bool {
+	mode, hasMode := operationalModeFromContext(ctx)
+	if hasMode {
+		return mode == ModePaper
 	}
-	mode, ok := operationalModeFromContext(ctx)
-	return ok && mode == ModePaper
+	return isPaperTrade && s.baseExecutor != nil && s.baseExecutor.IsPaperTrading()
 }
 
 // PlaceRiskReductionOrderWithDetails bypasses pre-trade safety checks for forced de-risking actions.

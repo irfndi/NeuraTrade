@@ -1534,28 +1534,31 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 		return
 	}
 
-	if h.lifecycleStore != nil {
-		entryPrice := decimal.Zero
-		if decision.EntryPrice != nil {
-			entryPrice = *decision.EntryPrice
-		}
-		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
-			OrderID:    decision.OrderID,
-			ChatID:     chatID,
-			Exchange:   userExchange,
-			Symbol:     decision.Symbol,
-			Side:       decision.Action,
-			OrderType:  "market",
-			MarketType: "futures",
-			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)),
-			EntryPrice: entryPrice,
-			StopLoss:   decimalValueOrZero(decision.StopLoss),
-			TakeProfit: decimalValueOrZero(decision.TakeProfit),
-			Source:     "autonomous_scalping",
-			OpenedAt:   time.Now().UTC(),
-		}); err != nil {
-			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
-		}
+	if h.lifecycleStore == nil {
+		return
+	}
+
+	entryPrice := decimal.Zero
+	if decision.EntryPrice != nil {
+		entryPrice = *decision.EntryPrice
+	}
+	if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    decision.OrderID,
+		ChatID:     chatID,
+		Exchange:   userExchange,
+		Symbol:     decision.Symbol,
+		Side:       decision.Action,
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)).Round(2),
+		EntryPrice: entryPrice,
+		StopLoss:   decimalValueOrZero(decision.StopLoss),
+		TakeProfit: decimalValueOrZero(decision.TakeProfit),
+		Source:     "autonomous_scalping",
+		OpenedAt:   time.Now().UTC(),
+	}); err != nil {
+		log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+		return
 	}
 
 	if h.telemetryStore == nil || !telemetryInserted {
