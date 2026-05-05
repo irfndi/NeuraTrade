@@ -284,6 +284,19 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 		return fmt.Errorf("failed to cleanup funding arbitrage opportunities: %w", err)
 	}
 
+	// Clean up old scalping cycle telemetry with error recovery
+	scalpingRetention := config.ScalpingTelemetry.RetentionHours
+	if scalpingRetention <= 0 {
+		scalpingRetention = 2160 // default 90 days
+	}
+	c.logger.Info("Cleaning up scalping cycle telemetry", "retention_hours", scalpingRetention)
+	err = c.executeWithRetry(spanCtx, "cleanup_scalping_telemetry", func() error {
+		return c.cleanupScalpingTelemetry(spanCtx, scalpingRetention)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to cleanup scalping telemetry: %w", err)
+	}
+
 	// Get data statistics after cleanup with error recovery
 	var statsAfter map[string]int64
 	err = c.executeWithRetry(spanCtx, "get_stats_after", func() error {
@@ -486,6 +499,41 @@ func (c *CleanupService) cleanupFundingArbitrageOpportunities(ctx context.Contex
 	}
 	if rowsAffected > 0 {
 		c.logger.Info("Cleaned up old funding arbitrage opportunity records",
+			"records_deleted", rowsAffected,
+			"retention_hours", retentionHours)
+		span.SetData("records_deleted", rowsAffected)
+	}
+
+	return nil
+}
+
+// cleanupScalpingTelemetry removes old scalping cycle telemetry records.
+func (c *CleanupService) cleanupScalpingTelemetry(ctx context.Context, retentionHours int) (err error) {
+	if c.db == nil {
+		return fmt.Errorf("database pool is not available")
+	}
+
+	spanCtx, span := observability.TraceDBQuery(ctx, "DELETE", "scalping_cycle_telemetry")
+	defer func() {
+		span.SetData("retention_hours", retentionHours)
+		observability.FinishSpan(span, err)
+	}()
+
+	cutoffTime := time.Now().Add(-time.Duration(retentionHours) * time.Hour)
+
+	result, err := c.db.Exec(spanCtx,
+		"DELETE FROM scalping_cycle_telemetry WHERE cycle_at < $1",
+		cutoffTime)
+	if err != nil {
+		return fmt.Errorf("failed to delete old scalping telemetry records: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected > 0 {
+		c.logger.Info("Cleaned up old scalping cycle telemetry records",
 			"records_deleted", rowsAffected,
 			"retention_hours", retentionHours)
 		span.SetData("records_deleted", rowsAffected)

@@ -194,7 +194,6 @@ func (c *CollectorService) runWorker(worker *Worker) {
 			// Create operation context with timeout
 			operationID := fmt.Sprintf("worker_collection_%s_%d", worker.Exchange, time.Now().UnixNano())
 			operationCtx := c.timeoutManager.CreateOperationContext("worker_collection", operationID)
-			cancel := operationCtx.Cancel
 			ctx := operationCtx.Ctx
 
 			// Collect market data for active trading pairs with error recovery
@@ -202,7 +201,7 @@ func (c *CollectorService) runWorker(worker *Worker) {
 				return c.collectTickerDataOnly(worker)
 			})
 
-			cancel() // Clean up operation context
+			c.timeoutManager.CancelOperation(operationID) // Clean up operation context AND remove from activeContexts
 
 			if err != nil {
 				worker.ErrorCount++

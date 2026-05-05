@@ -174,7 +174,7 @@ func (s *PaperTradingService) InitializePaperAccount(ctx context.Context, userID
 		account.UpdatedAt.Format(time.RFC3339),
 	)
 
-	err = s.redisClient.Set(ctx, key, data, 0).Err()
+	err = s.redisClient.Set(ctx, key, data, 90*24*time.Hour).Err()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize paper account: %w", err)
 	}
@@ -239,7 +239,7 @@ func (s *PaperTradingService) UpdatePaperBalance(ctx context.Context, userID str
 		account.UpdatedAt.Format(time.RFC3339),
 	)
 
-	err = s.redisClient.Set(ctx, key, data, 0).Err()
+	err = s.redisClient.Set(ctx, key, data, 90*24*time.Hour).Err()
 	if err != nil {
 		return fmt.Errorf("failed to update paper account: %w", err)
 	}

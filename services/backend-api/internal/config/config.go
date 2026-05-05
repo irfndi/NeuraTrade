@@ -213,6 +213,8 @@ type CleanupConfig struct {
 	FundingRates CleanupDataConfig `mapstructure:"funding_rates"`
 	// ArbitrageOpportunities configures retention for arbitrage opportunity records.
 	ArbitrageOpportunities CleanupArbitrageConfig `mapstructure:"arbitrage_opportunities"`
+	// ScalpingTelemetry configures retention for scalping cycle telemetry records.
+	ScalpingTelemetry CleanupArbitrageConfig `mapstructure:"scalping_telemetry"`
 	// IntervalMinutes is the frequency of cleanup job execution.
 	IntervalMinutes int `mapstructure:"interval"`
 	// EnableSmartCleanup enables more intelligent cleanup strategies.
@@ -555,6 +557,7 @@ func setDefaults() {
 	viper.SetDefault("cleanup.funding_rates.retention_hours", 36)
 	viper.SetDefault("cleanup.funding_rates.deletion_hours", 12)
 	viper.SetDefault("cleanup.arbitrage_opportunities.retention_hours", 72)
+	viper.SetDefault("cleanup.scalping_telemetry.retention_hours", 2160)
 	viper.SetDefault("cleanup.interval", 60)
 	viper.SetDefault("cleanup.enable_smart_cleanup", true)
 

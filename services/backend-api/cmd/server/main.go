@@ -218,6 +218,11 @@ func run() error {
 	// Start historical data backfill in background only when explicitly enabled.
 	if cfg.Backfill.Enabled && collectorService != nil {
 		go func() {
+			// Check if context is cancelled before/during long backfill operation
+			if ctx.Err() != nil {
+				logger.Info("Backfill skipped: context cancelled")
+				return
+			}
 			logger.Info("Checking for historical data backfill requirements")
 			if err := collectorService.PerformBackfillIfNeeded(); err != nil {
 				logger.WithError(err).Warn("Backfill failed")
