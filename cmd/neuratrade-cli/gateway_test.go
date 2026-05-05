@@ -148,6 +148,7 @@ func TestEnsureSQLiteParentDirCreatesConfiguredDataDirectory(t *testing.T) {
 	info, err := os.Stat(filepath.Dir(sqlitePath))
 	require.NoError(t, err)
 	require.True(t, info.IsDir())
+	require.Equal(t, os.FileMode(0700), info.Mode().Perm())
 }
 
 func TestDeriveGatewayMode(t *testing.T) {

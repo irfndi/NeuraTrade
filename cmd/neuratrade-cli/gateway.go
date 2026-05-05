@@ -768,8 +768,11 @@ func ensureSQLiteParentDir(sqlitePath string) error {
 	if dir == "." || dir == "" {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("failed to create sqlite data directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return fmt.Errorf("failed to secure sqlite data directory: %w", err)
 	}
 	return nil
 }
