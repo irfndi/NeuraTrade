@@ -201,7 +201,7 @@ func (c *CollectorService) runWorker(worker *Worker) {
 				return c.collectTickerDataOnly(worker)
 			})
 
-			c.timeoutManager.CancelOperation(operationID) // Clean up operation context AND remove from activeContexts
+			c.timeoutManager.CompleteOperation(operationID) // Clean up operation context AND remove from activeContexts
 
 			if err != nil {
 				worker.ErrorCount++

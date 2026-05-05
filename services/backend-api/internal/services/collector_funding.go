@@ -30,12 +30,12 @@ func (c *CollectorService) collectFundingRatesBulk(worker *Worker) error {
 	operationID := fmt.Sprintf("ccxt_funding_rates_%s_%d", worker.Exchange, time.Now().UnixNano())
 	operationCtx := c.timeoutManager.CreateOperationContext("ccxt_funding_rates", operationID)
 	ctx := operationCtx.Ctx
-	defer c.timeoutManager.CancelOperation(operationID) // Clean up context AND remove from activeContexts
+	defer operationCtx.Cancel()
 
 	// Register the operation with resource manager
 	resourceID := fmt.Sprintf("funding_rates_%s_%d", worker.Exchange, time.Now().UnixNano())
 	c.resourceManager.RegisterResource(resourceID, GoroutineResource, func() error {
-		c.timeoutManager.CancelOperation(operationID)
+		operationCtx.Cancel()
 		return nil
 	}, map[string]interface{}{"exchange": worker.Exchange, "operation": "funding_rates"})
 	defer func() {
