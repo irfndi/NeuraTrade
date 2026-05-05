@@ -430,7 +430,7 @@ func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx co
 	}
 
 	exchange := strings.TrimSpace(scalpingExchangeFromContext(ctx))
-	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 20)
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 0)
 	if err != nil {
 		return fmt.Errorf("check managed positions before non-live transition for %s: %w", strategyID, err)
 	}

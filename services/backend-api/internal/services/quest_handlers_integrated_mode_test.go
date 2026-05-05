@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -258,6 +259,73 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyMode_IgnoresPaperLifecycleEx
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Equal(t, autonomous.StagePaper, state.CurrentStage)
+}
+
+func TestIntegratedQuestHandlersSyncScalpingStrategyMode_DetectsLiveExposureHiddenBehindPaperLimit(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "rollout-sync-live-hidden-by-paper.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{
+		autonomyCoordinator: NewScalpingAutonomyCoordinator(store, AIScalpingConfig{}),
+		lifecycleStore:      lifecycleStore,
+	}
+
+	chatID := "1082762347"
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:     chatID,
+		StrategyID: ScalpingStrategyID(chatID),
+		Exchange:   "bitget",
+	})
+
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, OpModeLive))
+	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "live-hidden-behind-paper",
+		ChatID:     chatID,
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(0.01),
+		EntryPrice: decimal.NewFromFloat(50000),
+		Source:     scalpingLifecycleSource,
+		OpenedAt:   time.Now().UTC().Add(-time.Hour),
+	}))
+	_, err = sqliteDB.DB.ExecContext(ctx, `
+		UPDATE trading_orders
+		SET status = 'closed'
+		WHERE order_id = $1
+	`, "live-hidden-behind-paper")
+	require.NoError(t, err)
+
+	for i := 0; i < 25; i++ {
+		require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+			OrderID:    fmt.Sprintf("paper-ord-hidden-%02d", i),
+			ChatID:     chatID,
+			Exchange:   "bitget",
+			Symbol:     fmt.Sprintf("PAPER%02d/USDT", i),
+			Side:       "buy",
+			OrderType:  "market",
+			MarketType: "futures",
+			Amount:     decimal.NewFromFloat(0.01),
+			EntryPrice: decimal.NewFromFloat(1 + float64(i)),
+			Source:     scalpingPaperLifecycleSource,
+			OpenedAt:   time.Now().UTC(),
+		}))
+	}
+
+	err = handlers.syncScalpingStrategyMode(ctx, chatID, ModePaper)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot switch scalping:1082762347:default to non-live mode")
 }
 
 type syncFailureBalanceFetcher struct{}
