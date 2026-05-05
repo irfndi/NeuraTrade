@@ -587,6 +587,11 @@ func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing
 		DecisionType: "scalping_cycle",
 		Action:       "hold",
 	}))
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType:  "scalping_cycle",
+		Action:        "hold",
+		RuntimeStatus: runtimeStatusLLMDegraded,
+	}), "LLM-degraded hold cycles must alert even when actionable-only filtering is enabled")
 
 	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
 		DecisionType: "scalping",
@@ -622,6 +627,29 @@ func TestShouldSendScalpingDecisionNotification_EnvOverrides(t *testing.T) {
 		DecisionType: "scalping_cycle",
 		Action:       "hold",
 	}))
+}
+
+func TestAIRuntimeDetailsFromCheckpoint(t *testing.T) {
+	details := aiRuntimeDetailsFromCheckpoint(map[string]interface{}{
+		"runtime_ai_window_total":             8,
+		"runtime_ai_window_errors":            5,
+		"runtime_ai_window_error_rate":        0.63,
+		"runtime_ai_window_failover_attempts": 4,
+		"runtime_ai_window_failover_failures": 3,
+		"runtime_ai_last_provider":            "zai",
+		"runtime_ai_last_category":            aiReasonExecutionUnavailable,
+		"runtime_ai_failed_providers":         []string{"zai", "minimax"},
+	})
+
+	require.NotNil(t, details)
+	assert.Equal(t, "8", details["ai_window_total"])
+	assert.Equal(t, "5", details["ai_window_errors"])
+	assert.Equal(t, "63%", details["ai_error_rate"])
+	assert.Equal(t, "4", details["ai_failover_attempts"])
+	assert.Equal(t, "3", details["ai_failover_failures"])
+	assert.Equal(t, "zai", details["ai_last_provider"])
+	assert.Equal(t, aiReasonExecutionUnavailable, details["ai_last_category"])
+	assert.Equal(t, "zai,minimax", details["ai_failed_providers"])
 }
 
 func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testing.T) {

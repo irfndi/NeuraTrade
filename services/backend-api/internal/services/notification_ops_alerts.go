@@ -377,6 +377,28 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 		if recoveryAction, ok := reasoning.RuntimeDetails["recovery_action"]; ok {
 			lines = append(lines, fmt.Sprintf("Recovery Action: %s", recoveryAction))
 		}
+		if total, ok := reasoning.RuntimeDetails["ai_window_total"]; ok {
+			if errors, eok := reasoning.RuntimeDetails["ai_window_errors"]; eok {
+				if rate, rok := reasoning.RuntimeDetails["ai_error_rate"]; rok {
+					lines = append(lines, fmt.Sprintf("AI Runtime Window: %s/%s errors (%s)", errors, total, rate))
+				} else {
+					lines = append(lines, fmt.Sprintf("AI Runtime Window: %s/%s errors", errors, total))
+				}
+			}
+		}
+		if attempts, ok := reasoning.RuntimeDetails["ai_failover_attempts"]; ok {
+			if failures, fok := reasoning.RuntimeDetails["ai_failover_failures"]; fok {
+				lines = append(lines, fmt.Sprintf("AI Failover: %s attempts, %s failures", attempts, failures))
+			} else {
+				lines = append(lines, fmt.Sprintf("AI Failover: %s attempts", attempts))
+			}
+		}
+		if failedProviders, ok := reasoning.RuntimeDetails["ai_failed_providers"]; ok {
+			lines = append(lines, fmt.Sprintf("AI Failed Providers: %s", failedProviders))
+		}
+		if category, ok := reasoning.RuntimeDetails["ai_last_category"]; ok {
+			lines = append(lines, fmt.Sprintf("AI Last Category: %s", category))
+		}
 	}
 	if strings.TrimSpace(reasoning.UnblockCondition) != "" {
 		lines = append(lines, fmt.Sprintf("Unblock Condition: %s", strings.TrimSpace(reasoning.UnblockCondition)))

@@ -2473,6 +2473,29 @@ func TestNotificationService_RuntimeStatusRendering(t *testing.T) {
 		assert.Contains(t, message, "Runtime Status:")
 	})
 
+	t.Run("LLM degraded runtime details", func(t *testing.T) {
+		message := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType:  "scalping_cycle",
+			Summary:       "LLM runtime degraded",
+			RuntimeStatus: runtimeStatusLLMDegraded,
+			RuntimeDetails: map[string]string{
+				"ai_window_total":      "8",
+				"ai_window_errors":     "5",
+				"ai_error_rate":        "63%",
+				"ai_failover_attempts": "4",
+				"ai_failover_failures": "3",
+				"ai_failed_providers":  "zai,minimax",
+				"ai_last_category":     "execution_unavailable",
+			},
+			Reasons: []string{"LLM completion failed"},
+			Action:  "hold",
+		})
+		assert.Contains(t, message, "AI Runtime Window: 5/8 errors (63%)")
+		assert.Contains(t, message, "AI Failover: 4 attempts, 3 failures")
+		assert.Contains(t, message, "AI Failed Providers: zai,minimax")
+		assert.Contains(t, message, "AI Last Category: execution_unavailable")
+	})
+
 	t.Run("infrastructure hold with original confidence gated", func(t *testing.T) {
 		message := ns.formatAIReasoningMessage(AIReasoningNotification{
 			DecisionType:    "scalping_cycle",
