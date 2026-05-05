@@ -35,7 +35,7 @@ func (c *CollectorService) collectFundingRatesBulk(worker *Worker) error {
 	// Register the operation with resource manager
 	resourceID := fmt.Sprintf("funding_rates_%s_%d", worker.Exchange, time.Now().UnixNano())
 	c.resourceManager.RegisterResource(resourceID, GoroutineResource, func() error {
-		cancel()
+		c.timeoutManager.CancelOperation(operationID)
 		return nil
 	}, map[string]interface{}{"exchange": worker.Exchange, "operation": "funding_rates"})
 	defer func() {
