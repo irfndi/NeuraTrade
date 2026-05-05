@@ -434,7 +434,8 @@ func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx co
 	if err != nil {
 		return fmt.Errorf("check managed positions before non-live transition for %s: %w", strategyID, err)
 	}
-	openOrders, err := h.lifecycleStore.CountOpenOrders(ctx, chatID, exchange)
+	positions = nonPaperManagedPositions(positions)
+	openOrders, err := h.lifecycleStore.CountOpenOrdersExcludingSources(ctx, chatID, exchange, []string{scalpingPaperLifecycleSource})
 	if err != nil {
 		return fmt.Errorf("check open orders before non-live transition for %s: %w", strategyID, err)
 	}
@@ -453,6 +454,32 @@ func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx co
 		openOrders,
 		targetExchange,
 	)
+}
+
+const (
+	scalpingLifecycleSource      = "autonomous_scalping"
+	scalpingPaperLifecycleSource = "autonomous_scalping_paper"
+)
+
+func scalpingExecutionLifecycleSource(mode OperationalMode) string {
+	if mode == ModePaper {
+		return scalpingPaperLifecycleSource
+	}
+	return scalpingLifecycleSource
+}
+
+func nonPaperManagedPositions(positions []ManagedOpenPosition) []ManagedOpenPosition {
+	if len(positions) == 0 {
+		return positions
+	}
+	filtered := positions[:0]
+	for _, position := range positions {
+		if strings.EqualFold(strings.TrimSpace(position.Source), scalpingPaperLifecycleSource) {
+			continue
+		}
+		filtered = append(filtered, position)
+	}
+	return filtered
 }
 
 // recordQuestResult records quest execution result for monitoring
@@ -1554,7 +1581,7 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 		EntryPrice: entryPrice,
 		StopLoss:   decimalValueOrZero(decision.StopLoss),
 		TakeProfit: decimalValueOrZero(decision.TakeProfit),
-		Source:     "autonomous_scalping",
+		Source:     scalpingExecutionLifecycleSource(currentMode),
 		OpenedAt:   time.Now().UTC(),
 	}); err != nil {
 		log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)

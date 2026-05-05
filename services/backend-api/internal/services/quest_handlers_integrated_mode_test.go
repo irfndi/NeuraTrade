@@ -213,6 +213,53 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyMode_BlocksNonLiveTransition
 	assert.Equal(t, autonomous.StageLive, state.CurrentStage)
 }
 
+func TestIntegratedQuestHandlersSyncScalpingStrategyMode_IgnoresPaperLifecycleExposure(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "rollout-sync-paper-exposure.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{
+		autonomyCoordinator: NewScalpingAutonomyCoordinator(store, AIScalpingConfig{}),
+		lifecycleStore:      lifecycleStore,
+	}
+
+	chatID := "1082762347"
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:     chatID,
+		StrategyID: ScalpingStrategyID(chatID),
+		Exchange:   "bitget",
+	})
+
+	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "paper-ord-exposure",
+		ChatID:     chatID,
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(0.01),
+		EntryPrice: decimal.NewFromFloat(50000),
+		Source:     scalpingPaperLifecycleSource,
+		OpenedAt:   time.Now().UTC(),
+	}))
+
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, ModePaper))
+
+	state, err := store.GetRolloutState(ctx, ScalpingStrategyID(chatID))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, autonomous.StagePaper, state.CurrentStage)
+}
+
 type syncFailureBalanceFetcher struct{}
 
 func (syncFailureBalanceFetcher) FetchBalance(context.Context, string) (*ccxt.BalanceResponse, error) {
@@ -382,7 +429,7 @@ func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrde
 	`, "paper-order-aaa-buy").Scan(&orderStatus, &orderSource, &amount)
 	require.NoError(t, err)
 	assert.Equal(t, "open", orderStatus)
-	assert.Equal(t, "autonomous_scalping", orderSource)
+	assert.Equal(t, scalpingPaperLifecycleSource, orderSource)
 	assert.True(t, amount.Equal(decimal.NewFromInt(25)), "amount should use paper portfolio size percentage")
 
 	err = sqliteDB.DB.QueryRowContext(ctx, `
