@@ -20,6 +20,14 @@ import (
 
 var testLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
+type scalpingGateBalanceOnlyCCXT struct {
+	balance *ccxt.BalanceResponse
+}
+
+func (m *scalpingGateBalanceOnlyCCXT) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	return m.balance, nil
+}
+
 // TestIntegratedQuestHandlers_MarketScanWithTA tests market scanning with TA
 func TestIntegratedQuestHandlers_MarketScanWithTA(t *testing.T) {
 	mockNotif := &NotificationService{}
@@ -376,6 +384,199 @@ func TestIntegratedQuestHandlers_GetUserExchange_SQLiteLookup(t *testing.T) {
 
 	assert.Equal(t, "bitget", handlers.getUserExchange("chat-1"))
 	assert.Equal(t, "bitget", handlers.getUserExchange("chat-missing"))
+}
+
+func TestIntegratedQuestHandlers_RecordsTelemetryWhenRiskLockGatesScalping(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-risk-lock-telemetry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	mockCCXT := &mockAIScalpingCCXT{
+		mockCCXTForPortfolioSafety: mockCCXTForPortfolioSafety{
+			balanceResponse: &ccxt.BalanceResponse{
+				Exchange: "bitget",
+				Free: map[string]float64{
+					"USDT_FUTURES_USDT": 48,
+				},
+				Total: map[string]float64{
+					"USDT_FUTURES_USDT": 48,
+				},
+			},
+		},
+	}
+	aiSvc := NewAIScalpingService(AIScalpingConfig{}, nil, nil, mockCCXT, nil, nil)
+	handlers := &IntegratedQuestHandlers{
+		ccxtService:       mockCCXT,
+		aiScalpingService: aiSvc,
+		telemetryStore:    telemetryStore,
+		opModeService: &OperationalModeService{
+			config: DefaultOperationalModeConfig(),
+			states: map[string]*OperationalModeState{
+				"live-chat": {
+					ChatID: "live-chat",
+					Mode:   OpModeLive,
+				},
+			},
+		},
+	}
+	quest := &Quest{
+		ID: "risk-lock-scalping",
+		Metadata: map[string]string{
+			"chat_id":       "live-chat",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"runtime_entry_blocked_by_risk_lock": true,
+			"runtime_entry_blocked_at":           time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	err = handlers.executeAIScalping(ctx, quest, "live-chat", aiSvc)
+	require.NoError(t, err)
+	assert.Equal(t, "risk_lock", quest.Checkpoint["status"])
+
+	var count int
+	var action, gateBlockCode, gateBlockReason, exchange string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT COUNT(1),
+		       COALESCE(MAX(action), ''),
+		       COALESCE(MAX(gate_block_code), ''),
+		       COALESCE(MAX(gate_block_reason), ''),
+		       COALESCE(MAX(exchange), '')
+		  FROM scalping_cycle_telemetry
+	`).Scan(&count, &action, &gateBlockCode, &gateBlockReason, &exchange)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Equal(t, "hold", action)
+	assert.Equal(t, "risk_lock", gateBlockCode)
+	assert.Contains(t, gateBlockReason, "risk lock active")
+	assert.Equal(t, "bitget", exchange)
+}
+
+func TestIntegratedQuestHandlers_RecordsTelemetryWhenStateDriftGatesScalping(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-state-drift-telemetry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	balanceOnlyCCXT := &scalpingGateBalanceOnlyCCXT{
+		balance: &ccxt.BalanceResponse{
+			Exchange: "bitget",
+			Free: map[string]float64{
+				"USDT_FUTURES_USDT": 48,
+			},
+			Total: map[string]float64{
+				"USDT_FUTURES_USDT": 48,
+			},
+		},
+	}
+	aiSvc := &AIScalpingService{}
+	handlers := &IntegratedQuestHandlers{
+		ccxtService:       balanceOnlyCCXT,
+		aiScalpingService: aiSvc,
+		lifecycleStore:    lifecycleStore,
+		telemetryStore:    telemetryStore,
+		opModeService: &OperationalModeService{
+			config: DefaultOperationalModeConfig(),
+			states: map[string]*OperationalModeState{
+				"live-chat": {
+					ChatID: "live-chat",
+					Mode:   OpModeLive,
+				},
+			},
+		},
+	}
+	quest := &Quest{
+		ID: "state-drift-scalping",
+		Metadata: map[string]string{
+			"chat_id":       "live-chat",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"runtime_entry_blocked_by_state_drift": true,
+			"runtime_entry_blocked_at":             time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+			"runtime_entry_gate_reason":            "state drift detected: reconcile/repair pending",
+			"state_drift_active":                   true,
+			"state_drift_positions":                2,
+			"state_drift_clean_passes":             0,
+		},
+	}
+
+	err = handlers.executeAIScalping(ctx, quest, "live-chat", aiSvc)
+	require.NoError(t, err)
+	assert.Equal(t, "state_drift_gate", quest.Checkpoint["status"])
+
+	var count int
+	var action, gateBlockCode, gateBlockReason, exchange string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT COUNT(1),
+		       COALESCE(MAX(action), ''),
+		       COALESCE(MAX(gate_block_code), ''),
+		       COALESCE(MAX(gate_block_reason), ''),
+		       COALESCE(MAX(exchange), '')
+		  FROM scalping_cycle_telemetry
+	`).Scan(&count, &action, &gateBlockCode, &gateBlockReason, &exchange)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Equal(t, "hold", action)
+	assert.Equal(t, "state_drift_gate", gateBlockCode)
+	assert.Contains(t, gateBlockReason, "state drift")
+	assert.Equal(t, "bitget", exchange)
+}
+
+func TestIntegratedQuestHandlers_RecordsTelemetryWhenAIScalpingUnavailable(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "quest-ai-unavailable-telemetry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	handlers := &IntegratedQuestHandlers{
+		telemetryStore: telemetryStore,
+	}
+	quest := &Quest{
+		ID: "ai-unavailable-scalping",
+		Metadata: map[string]string{
+			"chat_id":       "dry-chat",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{},
+	}
+
+	err = handlers.executeFallbackScalping(ctx, quest, "dry-chat")
+	require.NoError(t, err)
+	assert.Equal(t, "ai_unavailable_hold", quest.Checkpoint["status"])
+
+	var count int
+	var action, gateBlockCode, gateBlockReason, exchange string
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT COUNT(1),
+		       COALESCE(MAX(action), ''),
+		       COALESCE(MAX(gate_block_code), ''),
+		       COALESCE(MAX(gate_block_reason), ''),
+		       COALESCE(MAX(exchange), '')
+		  FROM scalping_cycle_telemetry
+	`).Scan(&count, &action, &gateBlockCode, &gateBlockReason, &exchange)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Equal(t, "hold", action)
+	assert.Equal(t, "ai_unavailable", gateBlockCode)
+	assert.Contains(t, gateBlockReason, "AI scalping service is not initialized")
+	assert.Equal(t, "bitget", exchange)
 }
 
 func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing.T) {
