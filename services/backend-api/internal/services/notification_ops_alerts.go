@@ -399,6 +399,9 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 		if category, ok := reasoning.RuntimeDetails["ai_last_category"]; ok {
 			lines = append(lines, fmt.Sprintf("AI Last Category: %s", category))
 		}
+		if lastError, ok := reasoning.RuntimeDetails["ai_last_error"]; ok {
+			lines = append(lines, fmt.Sprintf("AI Last Error: %s", lastError))
+		}
 	}
 	if strings.TrimSpace(reasoning.UnblockCondition) != "" {
 		lines = append(lines, fmt.Sprintf("Unblock Condition: %s", strings.TrimSpace(reasoning.UnblockCondition)))

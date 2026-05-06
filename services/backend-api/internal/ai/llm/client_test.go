@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -234,12 +235,146 @@ func TestOpenAIClientComplete_UsesConfiguredProviderInErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+	var apiErr ProviderAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected ProviderAPIError, got %T (%v)", err, err)
+	}
+	if apiErr.Provider != Provider("zhipu") {
+		t.Fatalf("expected provider zhipu, got %s", apiErr.Provider)
+	}
+	if apiErr.Type != "insufficient_balance" {
+		t.Fatalf("expected insufficient_balance type, got %q", apiErr.Type)
+	}
+	if apiErr.Code != "1113" {
+		t.Fatalf("expected code 1113, got %q", apiErr.Code)
+	}
+	if !apiErr.Retryable() {
+		t.Fatal("expected exhausted-balance 429 to remain retryable for provider failover")
+	}
+}
+
+func TestOpenAIClientComplete_RateLimitWithoutBalanceExhaustionUsesRateLimitedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"too many requests","type":"rate_limit_error","code":"rate_limit"}}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(ClientConfig{
+		Provider: Provider("zhipu"),
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	})
+
+	_, err := client.Complete(context.Background(), &CompletionRequest{
+		Model: "glm-5-turbo",
+		Messages: []Message{
+			{Role: RoleUser, Content: "ping"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
 	rateErr, ok := err.(RateLimitedError)
 	if !ok {
 		t.Fatalf("expected RateLimitedError, got %T (%v)", err, err)
 	}
 	if rateErr.Provider != Provider("zhipu") {
 		t.Fatalf("expected provider zhipu, got %s", rateErr.Provider)
+	}
+	if rateErr.RetryAfter != 7*time.Second {
+		t.Fatalf("expected retry-after 7s, got %s", rateErr.RetryAfter)
+	}
+}
+
+func TestIsProviderBalanceExhausted(t *testing.T) {
+	tests := []struct {
+		name      string
+		message   string
+		errorType string
+		code      string
+		want      bool
+	}{
+		{
+			name:    "insufficient balance message",
+			message: "Insufficient balance",
+			want:    true,
+		},
+		{
+			name:      "insufficient balance type",
+			errorType: "insufficient_balance",
+			want:      true,
+		},
+		{
+			name:    "insufficient quota message",
+			message: "Insufficient quota",
+			want:    true,
+		},
+		{
+			name:      "insufficient quota type",
+			errorType: "insufficient_quota",
+			want:      true,
+		},
+		{
+			name: "bare 1113 code",
+			code: "1113",
+			want: true,
+		},
+		{
+			name:    "quota exceeded",
+			message: "Quota exceeded for this model",
+			want:    true,
+		},
+		{
+			name:    "credit exhausted",
+			message: "Account credit exhausted",
+			want:    true,
+		},
+		{
+			name:    "credit balance",
+			message: "Low credit balance",
+			want:    true,
+		},
+		{
+			name:    "resource package exhausted",
+			message: "resource package exhausted",
+			want:    true,
+		},
+		{
+			name:    "billing limit",
+			message: "billing_limit reached",
+			want:    true,
+		},
+		{
+			name:    "billing exceeded",
+			message: "Billing exceeded for account",
+			want:    true,
+		},
+		{
+			name:      "plain provider rate limit",
+			message:   "too many requests",
+			errorType: "rate_limit_error",
+			code:      "rate_limit",
+			want:      false,
+		},
+		{
+			name:    "credentials notice is not balance exhaustion",
+			message: "credentials validation failed",
+			want:    false,
+		},
+		{
+			name:    "billing address notice is not balance exhaustion",
+			message: "billing address update required",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isProviderBalanceExhausted(tt.message, tt.errorType, tt.code))
+		})
 	}
 }
 
@@ -313,6 +448,47 @@ func TestAnthropicClientComplete(t *testing.T) {
 
 	if resp.Usage.InputTokens != 15 {
 		t.Errorf("Expected 15 input tokens, got %d", resp.Usage.InputTokens)
+	}
+}
+
+func TestAnthropicClientComplete_PreservesBalanceExhaustion429(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"insufficient_balance","message":"resource package exhausted"}}`))
+	}))
+	defer server.Close()
+
+	client := NewAnthropicClient(ClientConfig{
+		Provider: Provider("minimax"),
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	})
+
+	_, err := client.Complete(context.Background(), &CompletionRequest{
+		Model: "abab6.5",
+		Messages: []Message{
+			{Role: RoleUser, Content: "ping"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr ProviderAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected ProviderAPIError, got %T (%v)", err, err)
+	}
+	if apiErr.Provider != Provider("minimax") {
+		t.Fatalf("expected provider minimax, got %s", apiErr.Provider)
+	}
+	if apiErr.Type != "insufficient_balance" {
+		t.Fatalf("expected insufficient_balance type, got %q", apiErr.Type)
+	}
+	if apiErr.Message != "resource package exhausted" {
+		t.Fatalf("expected resource package message, got %q", apiErr.Message)
+	}
+	if !apiErr.Retryable() {
+		t.Fatal("expected exhausted-balance 429 to remain retryable for provider failover")
 	}
 }
 

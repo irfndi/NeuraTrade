@@ -308,3 +308,19 @@ func (e ProviderAPIError) Error() string {
 func (e ProviderAPIError) Retryable() bool {
 	return e.StatusCode == 408 || e.StatusCode == 429 || (e.StatusCode >= 500 && e.StatusCode <= 599)
 }
+
+func isProviderBalanceExhausted(message string, errorType string, code string) bool {
+	text := strings.ToLower(strings.Join([]string{message, errorType, code}, " "))
+	return strings.Contains(text, "insufficient balance") ||
+		strings.Contains(text, "insufficient_balance") ||
+		strings.Contains(text, "insufficient quota") ||
+		strings.Contains(text, "insufficient_quota") ||
+		strings.Contains(text, "quota exceeded") ||
+		strings.Contains(text, "resource package") ||
+		strings.Contains(text, "credit exhausted") ||
+		strings.Contains(text, "credit balance") ||
+		strings.Contains(text, "billing_issue") ||
+		strings.Contains(text, "billing_limit") ||
+		strings.Contains(text, "billing exceeded") ||
+		strings.Contains(text, "1113")
+}

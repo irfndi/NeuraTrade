@@ -2486,6 +2486,7 @@ func TestNotificationService_RuntimeStatusRendering(t *testing.T) {
 				"ai_failover_failures": "3",
 				"ai_failed_providers":  "zai,minimax",
 				"ai_last_category":     "execution_unavailable",
+				"ai_last_error":        "zai-coding-plan API error (status 429): resource package exhausted, type: insufficient_balance, code: 1113",
 			},
 			Reasons: []string{"LLM completion failed"},
 			Action:  "hold",
@@ -2494,6 +2495,7 @@ func TestNotificationService_RuntimeStatusRendering(t *testing.T) {
 		assert.Contains(t, message, "AI Failover: 4 attempts, 3 failures")
 		assert.Contains(t, message, "AI Failed Providers: zai,minimax")
 		assert.Contains(t, message, "AI Last Category: execution_unavailable")
+		assert.Contains(t, message, "AI Last Error: zai-coding-plan API error (status 429): resource package exhausted")
 	})
 
 	t.Run("infrastructure hold with original confidence gated", func(t *testing.T) {
