@@ -29,14 +29,13 @@ func (c *CollectorService) collectFundingRatesBulk(worker *Worker) error {
 	// Create timeout context for the operation
 	operationID := fmt.Sprintf("ccxt_funding_rates_%s_%d", worker.Exchange, time.Now().UnixNano())
 	operationCtx := c.timeoutManager.CreateOperationContext("ccxt_funding_rates", operationID)
-	cancel := operationCtx.Cancel
 	ctx := operationCtx.Ctx
-	defer cancel()
+	defer operationCtx.Cancel()
 
 	// Register the operation with resource manager
 	resourceID := fmt.Sprintf("funding_rates_%s_%d", worker.Exchange, time.Now().UnixNano())
 	c.resourceManager.RegisterResource(resourceID, GoroutineResource, func() error {
-		cancel()
+		operationCtx.Cancel()
 		return nil
 	}, map[string]interface{}{"exchange": worker.Exchange, "operation": "funding_rates"})
 	defer func() {

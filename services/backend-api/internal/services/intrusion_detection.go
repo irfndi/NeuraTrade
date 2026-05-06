@@ -10,6 +10,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const paperAccountTTL = 90 * 24 * time.Hour
+
 // IntrusionDetectionService monitors and detects potential security threats
 type IntrusionDetectionService struct {
 	redisClient      *redis.Client
@@ -174,7 +176,7 @@ func (s *PaperTradingService) InitializePaperAccount(ctx context.Context, userID
 		account.UpdatedAt.Format(time.RFC3339),
 	)
 
-	err = s.redisClient.Set(ctx, key, data, 0).Err()
+	err = s.redisClient.Set(ctx, key, data, paperAccountTTL).Err()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize paper account: %w", err)
 	}
@@ -239,7 +241,7 @@ func (s *PaperTradingService) UpdatePaperBalance(ctx context.Context, userID str
 		account.UpdatedAt.Format(time.RFC3339),
 	)
 
-	err = s.redisClient.Set(ctx, key, data, 0).Err()
+	err = s.redisClient.Set(ctx, key, data, paperAccountTTL).Err()
 	if err != nil {
 		return fmt.Errorf("failed to update paper account: %w", err)
 	}
