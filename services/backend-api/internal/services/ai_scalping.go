@@ -1408,7 +1408,9 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				}
 				return decision, nil
 			}
-			if gateState != nil && !gateState.IsOpen {
+			if shouldAllowPaperModeAutonomyExecution(ctx, rolloutState, gateState) {
+				log.Printf("[AI-SCALPING] Paper mode permits simulated execution for %s while rollout stage is paper", scope.StrategyID)
+			} else if gateState != nil && !gateState.IsOpen {
 				reason := strings.Join(gateState.BlockReasons, "; ")
 				if strings.TrimSpace(reason) == "" {
 					reason = "autonomy live gate closed"
@@ -2169,6 +2171,35 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	s.recordSymbolGuardResult(decision.Symbol, nil)
 	log.Printf("[AI-SCALPING] Order placed: %s", orderID)
 	return nil
+}
+
+func shouldAllowPaperModeAutonomyExecution(ctx context.Context, rolloutState *autonomous.RolloutState, gateState *autonomous.GateState) bool {
+	mode, ok := operationalModeFromContext(ctx)
+	if !ok || mode != ModePaper || rolloutState == nil || gateState == nil || gateState.IsOpen {
+		return false
+	}
+	if rolloutState.CurrentStage != autonomous.StagePaper || rolloutState.Status != autonomous.StatusActive {
+		return false
+	}
+	if !gateState.Checks.SafeModeOff ||
+		!gateState.Checks.KillSwitchOff ||
+		!gateState.Checks.RiskBudgetAvailable ||
+		!gateState.Checks.ExchangeConnected {
+		return false
+	}
+	if gateState.Checks.StrategyLive {
+		return false
+	}
+	if len(gateState.BlockReasons) == 0 {
+		return true
+	}
+	for _, reason := range gateState.BlockReasons {
+		lower := strings.ToLower(strings.TrimSpace(reason))
+		if !strings.Contains(lower, "strategy_not_live") || !strings.Contains(lower, "stage: paper") {
+			return false
+		}
+	}
+	return true
 }
 
 func sumDecimalOrderVolume(orders []ccxt.OrderBookEntry, limit int) float64 {

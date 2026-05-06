@@ -11,6 +11,7 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
+	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -1767,6 +1768,64 @@ func TestAutonomyGateBlockCode_MapsOperatorActionableReasons(t *testing.T) {
 			assert.Equal(t, tc.expected, autonomyGateBlockCode(tc.reason))
 		})
 	}
+}
+
+func TestShouldAllowPaperModeAutonomyExecution(t *testing.T) {
+	paperRollout := &autonomous.RolloutState{
+		CurrentStage: autonomous.StagePaper,
+		Status:       autonomous.StatusActive,
+	}
+	paperGate := &autonomous.GateState{
+		IsOpen:       false,
+		BlockReasons: []string{"strategy_not_live (stage: paper, status: active)"},
+		Checks: autonomous.GateChecks{
+			SafeModeOff:         true,
+			KillSwitchOff:       true,
+			RiskBudgetAvailable: true,
+			ExchangeConnected:   true,
+			StrategyLive:        false,
+		},
+	}
+
+	assert.True(t, shouldAllowPaperModeAutonomyExecution(
+		WithOperationalMode(context.Background(), ModePaper),
+		paperRollout,
+		paperGate,
+	))
+
+	emptyReasonsGate := *paperGate
+	emptyReasonsGate.BlockReasons = nil
+	assert.True(t, shouldAllowPaperModeAutonomyExecution(
+		WithOperationalMode(context.Background(), ModePaper),
+		paperRollout,
+		&emptyReasonsGate,
+	))
+
+	strategyLiveGate := *paperGate
+	strategyLiveGate.Checks.StrategyLive = true
+	assert.False(t, shouldAllowPaperModeAutonomyExecution(
+		WithOperationalMode(context.Background(), ModePaper),
+		paperRollout,
+		&strategyLiveGate,
+	))
+
+	assert.False(t, shouldAllowPaperModeAutonomyExecution(
+		WithOperationalMode(context.Background(), OpModeDry),
+		paperRollout,
+		paperGate,
+	))
+
+	connectivityBlocked := *paperGate
+	connectivityBlocked.Checks.ExchangeConnected = false
+	connectivityBlocked.BlockReasons = []string{
+		"strategy_not_live (stage: paper, status: active)",
+		"exchange_not_connected",
+	}
+	assert.False(t, shouldAllowPaperModeAutonomyExecution(
+		WithOperationalMode(context.Background(), ModePaper),
+		paperRollout,
+		&connectivityBlocked,
+	))
 }
 
 func TestClassifyExecutionBlockCode_MapsRetryableErrors(t *testing.T) {

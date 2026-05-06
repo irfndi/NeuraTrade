@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -213,6 +214,120 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyMode_BlocksNonLiveTransition
 	assert.Equal(t, autonomous.StageLive, state.CurrentStage)
 }
 
+func TestIntegratedQuestHandlersSyncScalpingStrategyMode_IgnoresPaperLifecycleExposure(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "rollout-sync-paper-exposure.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{
+		autonomyCoordinator: NewScalpingAutonomyCoordinator(store, AIScalpingConfig{}),
+		lifecycleStore:      lifecycleStore,
+	}
+
+	chatID := "1082762347"
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:     chatID,
+		StrategyID: ScalpingStrategyID(chatID),
+		Exchange:   "bitget",
+	})
+
+	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "paper-ord-exposure",
+		ChatID:     chatID,
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(0.01),
+		EntryPrice: decimal.NewFromFloat(50000),
+		Source:     scalpingPaperLifecycleSource,
+		OpenedAt:   time.Now().UTC(),
+	}))
+
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, ModePaper))
+
+	state, err := store.GetRolloutState(ctx, ScalpingStrategyID(chatID))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, autonomous.StagePaper, state.CurrentStage)
+}
+
+func TestIntegratedQuestHandlersSyncScalpingStrategyMode_DetectsLiveExposureHiddenBehindPaperLimit(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "rollout-sync-live-hidden-by-paper.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{
+		autonomyCoordinator: NewScalpingAutonomyCoordinator(store, AIScalpingConfig{}),
+		lifecycleStore:      lifecycleStore,
+	}
+
+	chatID := "1082762347"
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:     chatID,
+		StrategyID: ScalpingStrategyID(chatID),
+		Exchange:   "bitget",
+	})
+
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, OpModeLive))
+	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "live-hidden-behind-paper",
+		ChatID:     chatID,
+		Exchange:   "bitget",
+		Symbol:     "BTC/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(0.01),
+		EntryPrice: decimal.NewFromFloat(50000),
+		Source:     scalpingLifecycleSource,
+		OpenedAt:   time.Now().UTC().Add(-time.Hour),
+	}))
+	_, err = sqliteDB.DB.ExecContext(ctx, `
+		UPDATE trading_orders
+		SET status = 'closed'
+		WHERE order_id = $1
+	`, "live-hidden-behind-paper")
+	require.NoError(t, err)
+
+	for i := 0; i < 25; i++ {
+		require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+			OrderID:    fmt.Sprintf("paper-ord-hidden-%02d", i),
+			ChatID:     chatID,
+			Exchange:   "bitget",
+			Symbol:     fmt.Sprintf("PAPER%02d/USDT", i),
+			Side:       "buy",
+			OrderType:  "market",
+			MarketType: "futures",
+			Amount:     decimal.NewFromFloat(0.01),
+			EntryPrice: decimal.NewFromFloat(1 + float64(i)),
+			Source:     scalpingPaperLifecycleSource,
+			OpenedAt:   time.Now().UTC(),
+		}))
+	}
+
+	err = handlers.syncScalpingStrategyMode(ctx, chatID, ModePaper)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot switch scalping:1082762347:default to non-live mode")
+}
+
 type syncFailureBalanceFetcher struct{}
 
 func (syncFailureBalanceFetcher) FetchBalance(context.Context, string) (*ccxt.BalanceResponse, error) {
@@ -320,4 +435,133 @@ func TestIntegratedQuestHandlersExecuteAIScalping_PaperModeUsesVirtualBalanceAnd
 	assert.Equal(t, "hold", quest.Checkpoint["ai_action"])
 	assert.Equal(t, 1, mockLLM.CallCount)
 	assert.Zero(t, mockCCXT.fetchCalls, "paper mode should not fetch live balance")
+}
+
+func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrder(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-scalping-lifecycle.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	cycleID, err := telemetryStore.InsertCycleRecord(ctx, CycleRecord{
+		ID:         "paper-cycle-1",
+		ChatID:     "paper-chat",
+		Exchange:   "bitget",
+		CycleAt:    time.Now().UTC(),
+		Symbol:     "AAA/USDT",
+		Action:     "buy",
+		Confidence: 0.92,
+	})
+	require.NoError(t, err)
+
+	entry := decimal.NewFromFloat(1.23)
+	stop := decimal.NewFromFloat(1.20)
+	take := decimal.NewFromFloat(1.29)
+	handlers := &IntegratedQuestHandlers{
+		lifecycleStore: lifecycleStore,
+		telemetryStore: telemetryStore,
+	}
+
+	handlers.persistScalpingExecutionLifecycle(
+		ctx,
+		ModePaper,
+		&AITradingDecision{
+			Action:      "buy",
+			Symbol:      "AAA/USDT",
+			SizePercent: 2.5,
+			OrderID:     "paper-order-aaa-buy",
+			EntryPrice:  &entry,
+			StopLoss:    &stop,
+			TakeProfit:  &take,
+		},
+		"paper-chat",
+		"bitget",
+		TradingPortfolio{USDTBalance: 1000},
+		true,
+		cycleID,
+	)
+
+	var orderStatus, orderSource, positionStatus, telemetryOrderID string
+	var amount decimal.Decimal
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT status, source, amount
+		FROM trading_orders
+		WHERE order_id = $1
+	`, "paper-order-aaa-buy").Scan(&orderStatus, &orderSource, &amount)
+	require.NoError(t, err)
+	assert.Equal(t, "open", orderStatus)
+	assert.Equal(t, scalpingPaperLifecycleSource, orderSource)
+	assert.True(t, amount.Equal(decimal.NewFromInt(25)), "amount should use paper portfolio size percentage")
+
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT status
+		FROM trading_positions
+		WHERE order_id = $1
+	`, "paper-order-aaa-buy").Scan(&positionStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "open", positionStatus)
+
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT order_id
+		FROM scalping_cycle_telemetry
+		WHERE id = $1
+	`, cycleID).Scan(&telemetryOrderID)
+	require.NoError(t, err)
+	assert.Equal(t, "paper-order-aaa-buy", telemetryOrderID)
+}
+
+func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksLiveTelemetryWithoutLifecycleStore(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "live-scalping-telemetry.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	cycleID, err := telemetryStore.InsertCycleRecord(ctx, CycleRecord{
+		ID:         "live-cycle-1",
+		ChatID:     "live-chat",
+		Exchange:   "bitget",
+		CycleAt:    time.Now().UTC(),
+		Symbol:     "AAA/USDT",
+		Action:     "buy",
+		Confidence: 0.92,
+	})
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{telemetryStore: telemetryStore}
+	handlers.persistScalpingExecutionLifecycle(
+		ctx,
+		OpModeLive,
+		&AITradingDecision{
+			Action:      "buy",
+			Symbol:      "AAA/USDT",
+			SizePercent: 2.5,
+			OrderID:     "live-order-aaa-buy",
+		},
+		"live-chat",
+		"bitget",
+		TradingPortfolio{USDTBalance: 1000},
+		true,
+		cycleID,
+	)
+
+	var telemetryOrderID string
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT order_id
+		FROM scalping_cycle_telemetry
+		WHERE id = $1
+	`, cycleID).Scan(&telemetryOrderID)
+	require.NoError(t, err)
+	assert.Equal(t, "live-order-aaa-buy", telemetryOrderID)
 }
