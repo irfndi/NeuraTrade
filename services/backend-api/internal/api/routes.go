@@ -86,6 +86,7 @@ type llmProviderNodeConfig struct {
 	APIKey        string
 	BaseURL       string
 	ModelOverride string
+	DefaultModel  string
 }
 
 type zapNopServiceLogger struct{}
@@ -157,28 +158,12 @@ func validateAIProviderName(provider string) error {
 	return fmt.Errorf("unsupported ai provider %q in parseAIProviderChain", provider)
 }
 
-// are mapped to their vendor-specific endpoints, and unknown providers default to the OpenAI API.
 func providerBaseURL(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
-	case "minimax":
-		return "https://api.minimax.io/anthropic/v1"
-	case "deepseek":
-		return "https://api.deepseek.com/v1"
-	case "google":
-		return "https://generativelanguage.googleapis.com/v1beta/openai"
-	case "zai-coding-plan":
-		return "https://api.z.ai/api/coding/paas/v4"
-	case "zai":
-		return "https://api.z.ai/api/paas/v4"
-	case "zhipu":
-		return "https://api.z.ai/api/paas/v4"
-	case "mlx":
-		return "http://localhost:8080/v1"
-	default:
-		return "https://api.openai.com/v1"
+	if baseURL, ok := ai.ProviderDefaultBaseURL(provider); ok {
+		return baseURL
 	}
+	baseURL, _ := ai.ProviderDefaultBaseURL(string(llm.ProviderOpenAI))
+	return baseURL
 }
 
 func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBaseURL string, provider string) llmProviderNodeConfig {
@@ -192,22 +177,35 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 		node.BaseURL = strings.TrimSpace(primaryBaseURL)
 	}
 
-	upper := strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))
-	if node.APIKey == "" {
-		node.APIKey = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_API_KEY", upper)))
-	}
-	if node.APIKey == "" {
-		node.APIKey = strings.TrimSpace(os.Getenv(fmt.Sprintf("%s_API_KEY", upper)))
+	for _, envKey := range ai.ProviderAPIKeyEnvVars(provider) {
+		if node.APIKey != "" {
+			break
+		}
+		node.APIKey = strings.TrimSpace(os.Getenv(envKey))
 	}
 
-	if node.BaseURL == "" {
-		node.BaseURL = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_BASE_URL", upper)))
+	for _, envKey := range ai.ProviderBaseURLEnvVars(provider) {
+		if node.BaseURL != "" {
+			break
+		}
+		node.BaseURL = strings.TrimSpace(os.Getenv(envKey))
 	}
 	if node.BaseURL == "" {
 		node.BaseURL = providerBaseURL(provider)
 	}
 
-	node.ModelOverride = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_MODEL", upper)))
+	for _, envKey := range ai.ProviderModelEnvVars(provider) {
+		if node.ModelOverride != "" {
+			break
+		}
+		node.ModelOverride = strings.TrimSpace(os.Getenv(envKey))
+	}
+	if node.ModelOverride == "" {
+		if model, ok := ai.ProviderDefaultModel(provider); ok {
+			node.DefaultModel = model
+		}
+	}
+
 	return node
 }
 
@@ -242,7 +240,7 @@ func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, m
 }
 
 func providerRequiresAPIKey(provider string) bool {
-	return strings.ToLower(strings.TrimSpace(provider)) != "mlx"
+	return ai.ProviderRequiresAPIKey(provider)
 }
 
 type routeRuntimeConfigFile struct {
@@ -861,6 +859,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				Client:        client,
 				Provider:      llm.Provider(provider),
 				ModelOverride: nodeConfig.ModelOverride,
+				DefaultModel:  nodeConfig.DefaultModel,
 			})
 			overrideMsg := "none"
 			if strings.TrimSpace(nodeConfig.ModelOverride) != "" {

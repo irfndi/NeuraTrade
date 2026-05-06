@@ -14,6 +14,7 @@ type FailoverNode struct {
 	Client        Client
 	Provider      Provider
 	ModelOverride string
+	DefaultModel  string
 }
 
 // FailoverAttemptInfo captures details for the last failover attempt.
@@ -61,6 +62,7 @@ func NewFailoverClient(nodes []FailoverNode, maxHops int) *FailoverClient {
 			Client:        node.Client,
 			Provider:      provider,
 			ModelOverride: strings.TrimSpace(node.ModelOverride),
+			DefaultModel:  strings.TrimSpace(node.DefaultModel),
 		})
 	}
 
@@ -111,9 +113,7 @@ func (c *FailoverClient) Complete(ctx context.Context, req *CompletionRequest) (
 	for idx, node := range nodes {
 		attemptInfo.AttemptedProviders = append(attemptInfo.AttemptedProviders, string(node.Provider))
 		attemptReq := cloneCompletionRequest(req)
-		if strings.TrimSpace(node.ModelOverride) != "" {
-			attemptReq.Model = strings.TrimSpace(node.ModelOverride)
-		}
+		attemptReq.Model = resolveFailoverModel(attemptReq.Model, node.ModelOverride, node.DefaultModel)
 
 		resp, err := node.Client.Complete(ctx, attemptReq)
 		if err == nil {
@@ -167,9 +167,7 @@ func (c *FailoverClient) Stream(ctx context.Context, req *CompletionRequest) (<-
 	var lastErr error
 	for idx, node := range nodes {
 		attemptReq := cloneCompletionRequest(req)
-		if strings.TrimSpace(node.ModelOverride) != "" {
-			attemptReq.Model = strings.TrimSpace(node.ModelOverride)
-		}
+		attemptReq.Model = resolveFailoverModel(attemptReq.Model, node.ModelOverride, node.DefaultModel)
 		stream, err := node.Client.Stream(ctx, attemptReq)
 		if err == nil {
 			return stream, nil
@@ -267,6 +265,16 @@ func cloneCompletionRequest(req *CompletionRequest) *CompletionRequest {
 	}
 
 	return &copied
+}
+
+func resolveFailoverModel(requestModel, modelOverride, defaultModel string) string {
+	if override := strings.TrimSpace(modelOverride); override != "" {
+		return override
+	}
+	if strings.TrimSpace(requestModel) == "" {
+		return strings.TrimSpace(defaultModel)
+	}
+	return requestModel
 }
 
 func isRetryableFailoverError(err error) bool {

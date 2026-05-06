@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/irfndi/neuratrade/internal/ai"
 )
 
 // BootstrapCommand handles the bootstrap/setup process for NeuraTrade.
@@ -148,45 +150,40 @@ func (b *BootstrapCommand) collectConfiguration() *Config {
 	fmt.Println()
 	fmt.Println("🤖 AI Model Configuration")
 	fmt.Println("Configure one AI provider to get started. You can add more later.")
-	fmt.Println("Providers: openai, anthropic, google, deepseek, minimax, zhipu")
+	fmt.Printf("Providers: %s\n", strings.Join(ai.ProviderIDs(), ", "))
 	fmt.Println()
 
 	fmt.Print("AI Provider [deepseek]: ")
 	config.AIProvider = b.readInput("deepseek")
 
 	for {
-		switch config.AIProvider {
-		case "openai":
-			config.AIModel = "gpt-4o-mini"
-			config.AIBaseURL = "https://api.openai.com/v1"
-		case "anthropic":
-			config.AIModel = "claude-sonnet-4-20250514"
-			config.AIBaseURL = "https://api.anthropic.com/v1"
-		case "google":
-			config.AIModel = "gemini-2.5-flash"
-			config.AIBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
-		case "deepseek":
-			config.AIModel = "deepseek-v4-pro"
-			config.AIBaseURL = "https://api.deepseek.com/v1"
-		case "minimax":
-			config.AIModel = "minimax-m2.5"
-			config.AIBaseURL = "https://api.minimax.io/anthropic/v1"
-		case "zhipu":
-			config.AIModel = "glm-5-turbo"
-			config.AIBaseURL = "https://api.z.ai/api/paas/v4"
-		default:
+		defaults, ok := ai.ProviderDefaults(config.AIProvider)
+		if !ok {
 			config.AIModel = ""
 			config.AIBaseURL = ""
-			fmt.Printf("Unknown provider %q. Use: openai, anthropic, google, deepseek, minimax, zhipu\n", config.AIProvider)
+			fmt.Printf("Unknown provider %q. Use: %s\n", config.AIProvider, strings.Join(ai.ProviderIDs(), ", "))
 			fmt.Print("AI Provider [deepseek]: ")
 			config.AIProvider = b.readInput("deepseek")
 			continue
 		}
+		config.AIModel = defaults.DefaultModel
+		config.AIBaseURL = defaults.BaseURL
 		break
 	}
 
-	fmt.Printf("AI Model [%s]: ", config.AIModel)
-	config.AIModel = b.readInput(config.AIModel)
+	if config.AIModel == "" {
+		for {
+			fmt.Printf("AI Model (required for %s): ", config.AIProvider)
+			config.AIModel = strings.TrimSpace(b.readInput(""))
+			if config.AIModel != "" {
+				break
+			}
+			fmt.Printf("AI Model is required for provider %q because it has no default model.\n", config.AIProvider)
+		}
+	} else {
+		fmt.Printf("AI Model [%s]: ", config.AIModel)
+		config.AIModel = b.readInput(config.AIModel)
+	}
 
 	fmt.Print("AI API Key: ")
 	config.AIAPIKey = b.readInput("")

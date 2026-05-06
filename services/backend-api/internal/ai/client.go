@@ -176,11 +176,14 @@ func (c *Client) Chat(ctx context.Context, providerID, modelID string, messages 
 	c.mu.RUnlock()
 
 	apiKey := c.getAPIKey(providerID)
-	if apiKey == "" {
+	if apiKey == "" && ProviderRequiresAPIKey(providerID) {
 		return nil, fmt.Errorf("no API key for provider: %s", providerID)
 	}
 
 	baseURL := c.getBaseURL(providerID)
+	if baseURL == "" {
+		return nil, fmt.Errorf("no base URL configured or found in defaults for provider: %s", providerID)
+	}
 	model := c.resolveModel(ctx, providerID, modelID)
 	if model == "" {
 		return nil, fmt.Errorf("no model configured for provider: %s", providerID)
@@ -193,48 +196,36 @@ func (c *Client) Chat(ctx context.Context, providerID, modelID string, messages 
 
 // getAPIKey returns the API key for a provider
 func (c *Client) getAPIKey(providerID string) string {
-	switch providerID {
-	case "openai":
-		return os.Getenv("OPENAI_API_KEY")
-	case "anthropic":
-		return os.Getenv("ANTHROPIC_API_KEY")
-	case "minimax":
-		return os.Getenv("MINIMAX_API_KEY")
-	default:
-		return os.Getenv(providerID + "_API_KEY")
+	for _, envKey := range ProviderAPIKeyEnvVars(providerID) {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			return value
+		}
 	}
+	return ""
 }
 
 // getBaseURL returns the base URL for a provider
 func (c *Client) getBaseURL(providerID string) string {
-	switch providerID {
-	case "openai":
-		if envURL := os.Getenv("OPENAI_BASE_URL"); envURL != "" {
-			return envURL
+	for _, envKey := range ProviderBaseURLEnvVars(providerID) {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			return value
 		}
-		return "https://api.openai.com/v1"
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
-	case "minimax":
-		return "https://api.minimax.io/anthropic/v1"
-	default:
-		if envURL := os.Getenv(providerID + "_BASE_URL"); envURL != "" {
-			return envURL
-		}
-		return "https://api.models.dev/v1"
 	}
+	baseURL, _ := ProviderDefaultBaseURL(providerID)
+	return baseURL
 }
 
 // resolveModel determines the model to use for a provider.
-// Priority: 1) explicit modelID, 2) <PROVIDER>_MODEL env var, 3) AI_MODEL env var,
+// Priority: 1) explicit modelID, 2) provider-specific model env var, 3) AI_MODEL env var,
 // 4) registry lookup (first active model for provider), 5) provider-specific fallback.
 func (c *Client) resolveModel(ctx context.Context, providerID string, explicitModel string) string {
 	if explicitModel = strings.TrimSpace(explicitModel); explicitModel != "" {
 		return explicitModel
 	}
-	envKey := strings.ToUpper(providerID) + "_MODEL"
-	if envModel := strings.TrimSpace(os.Getenv(envKey)); envModel != "" {
-		return envModel
+	for _, envKey := range ProviderModelEnvVars(providerID) {
+		if envModel := strings.TrimSpace(os.Getenv(envKey)); envModel != "" {
+			return envModel
+		}
 	}
 	if envModel := strings.TrimSpace(os.Getenv("AI_MODEL")); envModel != "" {
 		return envModel
@@ -245,26 +236,8 @@ func (c *Client) resolveModel(ctx context.Context, providerID string, explicitMo
 			return models[0].ModelID
 		}
 	}
-	return defaultModelForProvider(providerID)
-}
-
-func defaultModelForProvider(providerID string) string {
-	switch strings.ToLower(strings.TrimSpace(providerID)) {
-	case "openai":
-		return "gpt-4o-mini"
-	case "anthropic":
-		return "claude-sonnet-4-20250514"
-	case "google":
-		return "gemini-2.5-flash"
-	case "deepseek":
-		return "deepseek-v4-pro"
-	case "minimax":
-		return "minimax-m2.5"
-	case "zai", "zai-coding-plan", "zhipu":
-		return "glm-5-turbo"
-	default:
-		return ""
-	}
+	model, _ := ProviderDefaultModel(providerID)
+	return model
 }
 
 // ChatOption modifies a chat request.
@@ -426,15 +399,16 @@ func (c *Client) buildToolsJSON() ([]json.RawMessage, error) {
 // chatOpenAI is deprecated - use provider_unified.go instead
 // nolint:unused,deadcode
 func (c *Client) chatOpenAI(ctx context.Context, provider *ProviderInfo, req *ChatRequest) (*ChatResponse, error) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := c.getAPIKey(provider.ID)
 	if apiKey == "" {
 		return nil, fmt.Errorf("no API key for provider: %s", provider.ID)
 	}
 
-	apiURL := "https://api.openai.com/v1/chat/completions"
-	if envURL := os.Getenv("OPENAI_BASE_URL"); envURL != "" {
-		apiURL = envURL + "/chat/completions"
+	baseURL := c.getBaseURL(provider.ID)
+	if baseURL == "" {
+		return nil, fmt.Errorf("no base URL configured for provider: %s", provider.ID)
 	}
+	apiURL := ProviderEndpointURL(baseURL, "/chat/completions")
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -509,15 +483,16 @@ func (c *Client) chatOpenAI(ctx context.Context, provider *ProviderInfo, req *Ch
 // chatAnthropic is deprecated - use provider_unified.go instead
 // nolint:unused,deadcode
 func (c *Client) chatAnthropic(ctx context.Context, provider *ProviderInfo, req *ChatRequest) (*ChatResponse, error) {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	apiKey := c.getAPIKey(provider.ID)
 	if apiKey == "" {
 		return nil, fmt.Errorf("no API key for provider: %s", provider.ID)
 	}
 
-	apiURL := "https://api.anthropic.com/v1/messages"
-	if envURL := os.Getenv("ANTHROPIC_BASE_URL"); envURL != "" {
-		apiURL = envURL
+	baseURL := c.getBaseURL(provider.ID)
+	if baseURL == "" {
+		return nil, fmt.Errorf("no base URL configured for provider: %s", provider.ID)
 	}
+	apiURL := ProviderEndpointURL(baseURL, "/messages")
 
 	// Convert messages to Anthropic format
 	type AnthropicMessage struct {
