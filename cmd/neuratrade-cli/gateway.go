@@ -699,6 +699,10 @@ func readCommandLineForPID(pid string) (string, error) {
 	if strings.TrimSpace(pid) == "" {
 		return "", fmt.Errorf("empty pid")
 	}
+	// Validate PID is purely numeric to prevent command injection
+	if _, err := strconv.Atoi(pid); err != nil {
+		return "", fmt.Errorf("invalid pid (non-numeric): %s", pid)
+	}
 	cmd := exec.Command("ps", "-p", pid, "-o", "command=")
 	output, err := cmd.Output()
 	if err != nil {
