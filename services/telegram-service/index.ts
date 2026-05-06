@@ -126,11 +126,15 @@ if (!config.usePolling && bot) {
       );
     }
 
-    if (config.webhookSecret) {
-      const provided = c.req.header("X-Telegram-Bot-Api-Secret-Token");
-      if (!provided || provided !== config.webhookSecret) {
-        return c.json({ error: "Unauthorized" }, 401);
-      }
+    if (!config.webhookSecret) {
+      return c.json(
+        { error: "Webhook secret not configured" },
+        500,
+      );
+    }
+    const provided = c.req.header("X-Telegram-Bot-Api-Secret-Token");
+    if (!provided || provided !== config.webhookSecret) {
+      return c.json({ error: "Unauthorized" }, 401);
     }
 
     const update = await c.req.json();

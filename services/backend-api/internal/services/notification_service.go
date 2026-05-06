@@ -12,6 +12,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/observability"
@@ -111,6 +112,7 @@ func (ns *NotificationService) sendTelegramMessageWithResult(ctx context.Context
 	// Try gRPC first
 	if ns.grpcClient != nil {
 		grpcCtx, grpcSpan := observability.StartSpan(spanCtx, observability.SpanOpGRPC, "telegram.SendMessage")
+		grpcCtx = metadata.AppendToOutgoingContext(grpcCtx, "x-api-key", ns.adminAPIKey)
 		resp, err := ns.grpcClient.SendMessage(grpcCtx, &pb.SendMessageRequest{
 			ChatId: fmt.Sprintf("%d", chatID),
 			Text:   text,

@@ -26,6 +26,7 @@ import {
   type RiskSeverity,
 } from "./src/messages";
 import { logger } from "./src/utils/logger";
+import { config } from "./src/config";
 
 type ParseMode = "HTML" | "Markdown" | "MarkdownV2";
 
@@ -412,14 +413,35 @@ export function startGrpcServer(bot: Bot, port: number) {
   const server = new grpc.Server();
   const service = new TelegramGrpcServer(bot);
 
+  // Auth interceptor: require x-api-key metadata for all RPCs except HealthCheck
+  const authInterceptor: grpc.ServerInterceptor = (call, callback) => {
+    const methodPath = call.getPath();
+    if (methodPath.includes("HealthCheck")) {
+      return callback(null, undefined);
+    }
+    const metadata = call.metadata;
+    const apiKey = metadata.get("x-api-key")[0];
+    if (!apiKey || apiKey.toString() !== config.adminApiKey) {
+      return callback({
+        code: grpc.status.UNAUTHENTICATED,
+        message: "Invalid or missing x-api-key metadata",
+      }, undefined);
+    }
+    callback(null, undefined);
+  };
+
   server.addService(
     TelegramServiceService,
     service as unknown as TelegramServiceServer,
+    {
+      interceptors: [authInterceptor],
+    } as grpc.ServiceDefinition<grpc.UntypedServiceImplementation>,
   );
 
-  const bindAddr = `0.0.0.0:${port}`;
+  const bindAddr = process.env.GRPC_BIND_ADDR || "127.0.0.1";
+  const fullAddr = `${bindAddr}:${port}`;
   server.bindAsync(
-    bindAddr,
+    fullAddr,
     grpc.ServerCredentials.createInsecure(),
     (err, boundPort) => {
       if (err) {

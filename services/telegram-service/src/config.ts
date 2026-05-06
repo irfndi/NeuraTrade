@@ -144,6 +144,13 @@ export const loadConfig = Effect.try((): TelegramConfig => {
   const usePolling =
     usePollingEnv === "true" || usePollingEnv === "1" || webhookUrl === null;
 
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
+  if (!usePolling && !webhookSecret) {
+    throw new Error(
+      "TELEGRAM_WEBHOOK_SECRET must be set when webhook mode is enabled (TELEGRAM_USE_POLLING is not true)",
+    );
+  }
+
   const grpcPort = process.env.TELEGRAM_GRPC_PORT
     ? parseInt(process.env.TELEGRAM_GRPC_PORT, 10)
     : 50052;
@@ -156,7 +163,7 @@ export const loadConfig = Effect.try((): TelegramConfig => {
     webhookPath: resolvedWebhookPath.startsWith("/")
       ? resolvedWebhookPath
       : `/${resolvedWebhookPath}`,
-    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || null,
+    webhookSecret,
     usePolling,
     port: resolvePort(process.env.TELEGRAM_PORT, 3002),
     apiBaseUrl,
