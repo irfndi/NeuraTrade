@@ -126,8 +126,8 @@ jobs:
     name: Frontend Tests (telegram-service)
     runs-on: ubuntu-latest
     env:
-      ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY || 'test-admin-api-key-for-ci' }}
-      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET || 'test-webhook-secret-for-ci' }}
+      ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
