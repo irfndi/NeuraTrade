@@ -5829,6 +5829,9 @@ func aiRuntimeDetailsFromCheckpoint(checkpoint map[string]interface{}) map[strin
 	if category := checkpointString(checkpoint["runtime_ai_last_category"]); category != "" {
 		details["ai_last_category"] = category
 	}
+	if lastError := truncateAIRuntimeDetail(checkpointString(checkpoint["runtime_ai_last_error"])); lastError != "" {
+		details["ai_last_error"] = lastError
+	}
 	if failed := checkpointStringSlice(checkpoint["runtime_ai_failed_providers"]); len(failed) > 0 {
 		details["ai_failed_providers"] = strings.Join(failed, ",")
 	}
@@ -5843,4 +5846,13 @@ func addCheckpointIntDetail(details map[string]string, checkpoint map[string]int
 	if value := checkpointInt(checkpoint[checkpointKey]); value > 0 {
 		details[detailKey] = strconv.Itoa(value)
 	}
+}
+
+func truncateAIRuntimeDetail(value string) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	runes := []rune(value)
+	if len(runes) <= 180 {
+		return value
+	}
+	return string(runes[:177]) + "..."
 }

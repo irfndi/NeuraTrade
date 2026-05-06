@@ -5,9 +5,11 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/ccxt"
@@ -638,6 +640,7 @@ func TestAIRuntimeDetailsFromCheckpoint(t *testing.T) {
 		"runtime_ai_window_failover_failures": 3,
 		"runtime_ai_last_provider":            "zai",
 		"runtime_ai_last_category":            aiReasonExecutionUnavailable,
+		"runtime_ai_last_error":               "zai-coding-plan API error (status 429): resource package exhausted, type: insufficient_balance, code: 1113",
 		"runtime_ai_failed_providers":         []string{"zai", "minimax"},
 	})
 
@@ -649,7 +652,48 @@ func TestAIRuntimeDetailsFromCheckpoint(t *testing.T) {
 	assert.Equal(t, "3", details["ai_failover_failures"])
 	assert.Equal(t, "zai", details["ai_last_provider"])
 	assert.Equal(t, aiReasonExecutionUnavailable, details["ai_last_category"])
+	assert.Contains(t, details["ai_last_error"], "resource package exhausted")
 	assert.Equal(t, "zai,minimax", details["ai_failed_providers"])
+}
+
+func TestTruncateAIRuntimeDetail_PreservesUTF8(t *testing.T) {
+	input := strings.Repeat("資", 181)
+
+	got := truncateAIRuntimeDetail(input)
+
+	require.True(t, utf8.ValidString(got))
+	assert.True(t, strings.HasSuffix(got, "..."))
+	assert.Equal(t, 180, utf8.RuneCountInString(got))
+}
+
+func TestTruncateAIRuntimeDetail_Boundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "trims and collapses whitespace",
+			input: "  provider\tbalance\n\nexhausted  ",
+			want:  "provider balance exhausted",
+		},
+		{
+			name:  "preserves exactly 180 runes",
+			input: strings.Repeat("a", 180),
+			want:  strings.Repeat("a", 180),
+		},
+		{
+			name:  "truncates over 180 runes",
+			input: strings.Repeat("b", 181),
+			want:  strings.Repeat("b", 177) + "...",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, truncateAIRuntimeDetail(tt.input))
+		})
+	}
 }
 
 func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testing.T) {
