@@ -422,10 +422,13 @@ export function startGrpcServer(bot: Bot, port: number) {
     const metadata = call.metadata;
     const apiKey = metadata.get("x-api-key")[0];
     if (!apiKey || apiKey.toString() !== config.adminApiKey) {
-      return callback({
-        code: grpc.status.UNAUTHENTICATED,
-        message: "Invalid or missing x-api-key metadata",
-      }, undefined);
+      return callback(
+        {
+          code: grpc.status.UNAUTHENTICATED,
+          message: "Invalid or missing x-api-key metadata",
+        },
+        undefined,
+      );
     }
     callback(null, undefined);
   };

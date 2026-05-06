@@ -127,10 +127,7 @@ if (!config.usePolling && bot) {
     }
 
     if (!config.webhookSecret) {
-      return c.json(
-        { error: "Webhook secret not configured" },
-        500,
-      );
+      return c.json({ error: "Webhook secret not configured" }, 500);
     }
     const provided = c.req.header("X-Telegram-Bot-Api-Secret-Token");
     if (!provided || provided !== config.webhookSecret) {
