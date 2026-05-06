@@ -36,6 +36,81 @@ func TestSQLiteMigrationsRunFreshThroughPortfolioSnapshots(t *testing.T) {
 	)
 }
 
+func TestSQLiteMigrationsCreateFundingArbitrageOpportunities(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skipf("sqlite3 CLI not available: %v", err)
+	}
+
+	backendRoot, err := filepath.Abs("..")
+	require.NoError(t, err)
+
+	sourceDir := filepath.Join(backendRoot, "database", "sqlite_migrations")
+	migrationsDir := filepath.Join(t.TempDir(), "sqlite_migrations")
+	require.NoError(t, os.Mkdir(migrationsDir, 0o755))
+
+	for _, name := range []string{
+		"001_initial_schema.sql",
+		"002_add_semantic_memory.sql",
+		"003_add_missing_tables.sql",
+		"004_add_ccxt_exchanges.sql",
+		"005_add_blacklist_columns.sql",
+		"006_add_blacklist_active.sql",
+		"007_add_market_data.sql",
+		"008_add_funding_rates.sql",
+		"009_add_arbitrage_tables.sql",
+		"010_add_multi_leg_arbitrage.sql",
+		"011_create_funding_arbitrage_opportunities.sql",
+	} {
+		copySQLiteMigrationForTest(t, filepath.Join(sourceDir, name), filepath.Join(migrationsDir, name))
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "neuratrade.db")
+	cmd := exec.Command("bash", filepath.Join(backendRoot, "database", "sqlite-migrate.sh"), "run")
+	cmd.Env = append(os.Environ(),
+		"SQLITE_PATH="+dbPath,
+		"SQLITE_MIGRATIONS_DIR="+migrationsDir,
+	)
+	output, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "sqlite migrations failed:\n%s", output)
+
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT type FROM sqlite_master WHERE name = 'funding_arbitrage_opportunities'",
+		"table",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM schema_migrations WHERE filename = '011_create_funding_arbitrage_opportunities.sql'",
+		"1",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM pragma_index_list('funding_arbitrage_opportunities') WHERE name = 'idx_funding_arbitrage_expires'",
+		"1",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM pragma_table_info('funding_arbitrage_opportunities') WHERE name IN ('trading_pair_id', 'long_exchange_id', 'short_exchange_id') AND \"notnull\" = 1",
+		"3",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM pragma_foreign_key_list('funding_arbitrage_opportunities') WHERE \"table\" = 'trading_pairs' AND \"from\" = 'trading_pair_id'",
+		"1",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM sqlite_master WHERE name = 'funding_arbitrage_opportunities' AND sql LIKE '%CHECK (long_exchange_id <> short_exchange_id)%'",
+		"1",
+	)
+}
+
 func assertSQLiteScalar(t *testing.T, dbPath, query, want string) {
 	t.Helper()
 
