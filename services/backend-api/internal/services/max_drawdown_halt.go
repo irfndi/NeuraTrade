@@ -386,6 +386,7 @@ func (h *MaxDrawdownHalt) ResumeTrading(ctx context.Context, chatID string) erro
 
 	state.TradingHalted = false
 	state.Status = DrawdownStatusNormal
+	state.resetActiveDrawdownBaseline()
 	now := time.Now().UTC()
 	state.RecoveredAt = &now
 	h.metrics.IncrementRecovery()
@@ -497,6 +498,7 @@ func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
 		if state.TradingHalted {
 			state.TradingHalted = false
 			state.Status = DrawdownStatusNormal
+			state.resetActiveDrawdownBaseline()
 			state.RecoveredAt = &now
 			h.metrics.IncrementRecovery()
 			resumed = append(resumed, chatID)
@@ -508,6 +510,16 @@ func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
 	}
 
 	return resumed
+}
+
+func (state *DrawdownState) resetActiveDrawdownBaseline() {
+	if state == nil {
+		return
+	}
+	if state.CurrentValue.GreaterThan(decimal.Zero) {
+		state.PeakValue = state.CurrentValue
+	}
+	state.CurrentDrawdown = decimal.Zero
 }
 
 // ResolveMaxDrawdownConfigFromEnv overrides default config with environment variables.

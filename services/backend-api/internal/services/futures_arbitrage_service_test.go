@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockErrorRecoveryManager is a mock implementation of ErrorRecoveryManager
@@ -300,6 +302,139 @@ func TestFuturesArbitrageService_storeOpportunity(t *testing.T) {
 	err := service.storeOpportunity(ctx, opportunity)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database pool is not available")
+}
+
+func TestFuturesArbitrageService_storeOpportunity_SQLiteMigrationSchema(t *testing.T) {
+	_ = telemetry.Logger()
+
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "futures-arb.db"))
+	if err != nil {
+		t.Fatalf("failed to open sqlite db: %v", err)
+	}
+	defer func() {
+		_ = sqliteDB.Close()
+	}()
+
+	applySQLiteMigrationBySuffix(t, sqliteDB, "add_arbitrage_tables.sql")
+	_, err = sqliteDB.Exec(context.Background(), `
+		INSERT INTO futures_arbitrage_opportunities (
+			id, symbol, buy_exchange_id, sell_exchange_id,
+			funding_rate_buy, funding_rate_sell, rate_difference,
+			apy, risk_score, detected_at, expires_at
+		) VALUES
+			('legacy-1', 'ETH/USDT', 1, 2, 0.0001, -0.0002, 0.0003, 0.3, 1.0, datetime('now'), datetime('now', '+1 hour')),
+			('legacy-2', 'ETH/USDT', 1, 2, 0.0002, -0.0003, 0.0005, 0.5, 1.2, datetime('now'), datetime('now', '+1 hour'))
+	`)
+	require.NoError(t, err, "failed to seed legacy rows")
+
+	applySQLiteMigrationBySuffix(t, sqliteDB, "expand_futures_arbitrage_opportunities.sql")
+
+	service := NewFuturesArbitrageService(
+		sqliteDB,
+		nil,
+		&config.Config{Database: config.DatabaseConfig{Driver: "sqlite"}},
+		nil,
+		nil,
+		nil,
+		logging.NewStandardLogger("info", "test"),
+	)
+
+	now := time.Now().UTC()
+	opportunity := &models.FuturesArbitrageOpportunity{
+		Symbol:                    "BTC/USDT",
+		BaseCurrency:              "BTC",
+		QuoteCurrency:             "USDT",
+		LongExchange:              "binance",
+		ShortExchange:             "bybit",
+		LongFundingRate:           decimal.NewFromFloat(0.0001),
+		ShortFundingRate:          decimal.NewFromFloat(-0.0002),
+		NetFundingRate:            decimal.NewFromFloat(0.0003),
+		FundingInterval:           8,
+		LongMarkPrice:             decimal.NewFromFloat(50000),
+		ShortMarkPrice:            decimal.NewFromFloat(50100),
+		PriceDifference:           decimal.NewFromFloat(100),
+		PriceDifferencePercentage: decimal.NewFromFloat(0.2),
+		HourlyRate:                decimal.NewFromFloat(0.0000375),
+		DailyRate:                 decimal.NewFromFloat(0.0009),
+		APY:                       decimal.NewFromFloat(0.3285),
+		EstimatedProfit8h:         decimal.NewFromFloat(0.024),
+		EstimatedProfitDaily:      decimal.NewFromFloat(0.072),
+		EstimatedProfitWeekly:     decimal.NewFromFloat(0.504),
+		EstimatedProfitMonthly:    decimal.NewFromFloat(2.16),
+		RiskScore:                 decimal.NewFromFloat(1.5),
+		VolatilityScore:           decimal.NewFromFloat(0.8),
+		LiquidityScore:            decimal.NewFromFloat(0.9),
+		RecommendedPositionSize:   decimal.NewFromFloat(10000),
+		MaxLeverage:               decimal.NewFromFloat(20),
+		RecommendedLeverage:       decimal.NewFromFloat(5),
+		StopLossPercentage:        decimal.NewFromFloat(3),
+		MinPositionSize:           decimal.NewFromFloat(100),
+		MaxPositionSize:           decimal.NewFromFloat(25000),
+		OptimalPositionSize:       decimal.NewFromFloat(5000),
+		DetectedAt:                now,
+		ExpiresAt:                 now.Add(time.Hour),
+		NextFundingTime:           now.Add(30 * time.Minute),
+		TimeToNextFunding:         30,
+		IsActive:                  true,
+	}
+
+	err = service.storeOpportunity(context.Background(), opportunity)
+	require.NoError(t, err, "first storeOpportunity failed")
+
+	var count int
+	err = sqliteDB.QueryRow(
+		context.Background(),
+		`SELECT COUNT(*) FROM futures_arbitrage_opportunities
+		 WHERE symbol = $1 AND base_currency = $2 AND quote_currency = $3
+		   AND long_exchange = $4 AND short_exchange = $5`,
+		"BTC/USDT",
+		"BTC",
+		"USDT",
+		"binance",
+		"bybit",
+	).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	err = sqliteDB.QueryRow(
+		context.Background(),
+		`SELECT COUNT(*) FROM futures_arbitrage_opportunities
+		 WHERE symbol = $1 AND long_exchange = $2 AND short_exchange = $3`,
+		"ETH/USDT",
+		"1",
+		"2",
+	).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count, "migration should dedupe legacy rows before enforcing unique upserts")
+
+	opportunity.APY = decimal.NewFromFloat(0.42)
+	err = service.storeOpportunity(context.Background(), opportunity)
+	require.NoError(t, err, "second storeOpportunity failed")
+
+	err = sqliteDB.QueryRow(
+		context.Background(),
+		`SELECT COUNT(*) FROM futures_arbitrage_opportunities
+		 WHERE symbol = $1 AND long_exchange = $2 AND short_exchange = $3`,
+		"BTC/USDT",
+		"binance",
+		"bybit",
+	).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count, "unique upsert should update the existing opportunity")
+
+	var updatedAPYStr string
+	err = sqliteDB.QueryRow(
+		context.Background(),
+		`SELECT CAST(apy AS TEXT) FROM futures_arbitrage_opportunities
+		 WHERE symbol = $1 AND long_exchange = $2 AND short_exchange = $3`,
+		"BTC/USDT",
+		"binance",
+		"bybit",
+	).Scan(&updatedAPYStr)
+	assert.NoError(t, err)
+	updatedAPY, err := decimal.NewFromString(updatedAPYStr)
+	assert.NoError(t, err)
+	assert.True(t, updatedAPY.Equal(decimal.RequireFromString("0.42")), "apy mismatch: got %s", updatedAPYStr)
 }
 
 func TestFuturesArbitrageService_cleanupExpiredOpportunities(t *testing.T) {
