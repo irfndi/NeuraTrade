@@ -1466,6 +1466,100 @@ func TestBeginAutonomous_ReusesExistingScalpingQuest(t *testing.T) {
 	}
 }
 
+func TestBeginAutonomous_UsesStoredPaperModeMetadata(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.SetOperationalModeService(&OperationalModeService{
+		config: DefaultOperationalModeConfig(),
+		states: map[string]*OperationalModeState{
+			"paper-chat": {ChatID: "paper-chat", Mode: ModePaper},
+		},
+	})
+
+	state, err := engine.BeginAutonomous("paper-chat")
+	if err != nil {
+		t.Fatalf("BeginAutonomous returned error: %v", err)
+	}
+	quest := engine.quests[state.ActiveQuests[0]]
+	if quest.Metadata["execution_mode"] != string(ModePaper) {
+		t.Fatalf("expected execution_mode paper, got %q", quest.Metadata["execution_mode"])
+	}
+	if quest.Metadata["dry_run"] != "true" {
+		t.Fatalf("expected dry_run true, got %q", quest.Metadata["dry_run"])
+	}
+	if quest.Metadata["paper_trading"] != "true" {
+		t.Fatalf("expected paper_trading true, got %q", quest.Metadata["paper_trading"])
+	}
+}
+
+func TestBeginAutonomous_DefaultsToDryWhenModeUnavailable(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+
+	state, err := engine.BeginAutonomous("default-chat")
+	if err != nil {
+		t.Fatalf("BeginAutonomous returned error: %v", err)
+	}
+	quest := engine.quests[state.ActiveQuests[0]]
+	if quest.Metadata["execution_mode"] != string(OpModeDry) {
+		t.Fatalf("expected execution_mode dry, got %q", quest.Metadata["execution_mode"])
+	}
+	if quest.Metadata["dry_run"] != "true" {
+		t.Fatalf("expected dry_run true, got %q", quest.Metadata["dry_run"])
+	}
+	if quest.Metadata["paper_trading"] != "false" {
+		t.Fatalf("expected paper_trading false, got %q", quest.Metadata["paper_trading"])
+	}
+}
+
+func TestBeginAutonomous_PreservesStoredNonLiveModeMetadata(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.SetOperationalModeService(&OperationalModeService{
+		config: DefaultOperationalModeConfig(),
+		states: map[string]*OperationalModeState{
+			"conservative-chat": {ChatID: "conservative-chat", Mode: ModeConservative},
+		},
+	})
+
+	state, err := engine.BeginAutonomous("conservative-chat")
+	if err != nil {
+		t.Fatalf("BeginAutonomous returned error: %v", err)
+	}
+	quest := engine.quests[state.ActiveQuests[0]]
+	if quest.Metadata["execution_mode"] != string(ModeConservative) {
+		t.Fatalf("expected execution_mode conservative, got %q", quest.Metadata["execution_mode"])
+	}
+	if quest.Metadata["dry_run"] != "true" {
+		t.Fatalf("expected dry_run true, got %q", quest.Metadata["dry_run"])
+	}
+	if quest.Metadata["paper_trading"] != "false" {
+		t.Fatalf("expected paper_trading false, got %q", quest.Metadata["paper_trading"])
+	}
+}
+
+func TestBeginAutonomous_UsesStoredLiveModeMetadata(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	engine.SetOperationalModeService(&OperationalModeService{
+		config: DefaultOperationalModeConfig(),
+		states: map[string]*OperationalModeState{
+			"live-chat": {ChatID: "live-chat", Mode: OpModeLive},
+		},
+	})
+
+	state, err := engine.BeginAutonomous("live-chat")
+	if err != nil {
+		t.Fatalf("BeginAutonomous returned error: %v", err)
+	}
+	quest := engine.quests[state.ActiveQuests[0]]
+	if quest.Metadata["execution_mode"] != string(OpModeLive) {
+		t.Fatalf("expected execution_mode live, got %q", quest.Metadata["execution_mode"])
+	}
+	if quest.Metadata["dry_run"] != "false" {
+		t.Fatalf("expected dry_run false, got %q", quest.Metadata["dry_run"])
+	}
+	if quest.Metadata["paper_trading"] != "false" {
+		t.Fatalf("expected paper_trading false, got %q", quest.Metadata["paper_trading"])
+	}
+}
+
 func ptrTime(t time.Time) *time.Time {
 	return &t
 }
