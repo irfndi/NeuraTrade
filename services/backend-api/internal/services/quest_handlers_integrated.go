@@ -430,11 +430,12 @@ func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx co
 	}
 
 	exchange := strings.TrimSpace(scalpingExchangeFromContext(ctx))
-	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 20)
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 0)
 	if err != nil {
 		return fmt.Errorf("check managed positions before non-live transition for %s: %w", strategyID, err)
 	}
-	openOrders, err := h.lifecycleStore.CountOpenOrders(ctx, chatID, exchange)
+	positions = nonPaperManagedPositions(positions)
+	openOrders, err := h.lifecycleStore.CountOpenOrdersExcludingSources(ctx, chatID, exchange, []string{scalpingPaperLifecycleSource})
 	if err != nil {
 		return fmt.Errorf("check open orders before non-live transition for %s: %w", strategyID, err)
 	}
@@ -453,6 +454,32 @@ func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx co
 		openOrders,
 		targetExchange,
 	)
+}
+
+const (
+	scalpingLifecycleSource      = "autonomous_scalping"
+	scalpingPaperLifecycleSource = "autonomous_scalping_paper"
+)
+
+func scalpingExecutionLifecycleSource(mode OperationalMode) string {
+	if mode == ModePaper {
+		return scalpingPaperLifecycleSource
+	}
+	return scalpingLifecycleSource
+}
+
+func nonPaperManagedPositions(positions []ManagedOpenPosition) []ManagedOpenPosition {
+	if len(positions) == 0 {
+		return positions
+	}
+	filtered := positions[:0]
+	for _, position := range positions {
+		if strings.EqualFold(strings.TrimSpace(position.Source), scalpingPaperLifecycleSource) {
+			continue
+		}
+		filtered = append(filtered, position)
+	}
+	return filtered
 }
 
 // recordQuestResult records quest execution result for monitoring
@@ -1486,39 +1513,9 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
-	if currentMode == OpModeLive && h.lifecycleStore != nil && strings.TrimSpace(decision.OrderID) != "" {
-		entryPrice := decimal.Zero
-		if decision.EntryPrice != nil {
-			entryPrice = *decision.EntryPrice
-		}
-		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
-			OrderID:    decision.OrderID,
-			ChatID:     chatID,
-			Exchange:   userExchange,
-			Symbol:     decision.Symbol,
-			Side:       decision.Action,
-			OrderType:  "market",
-			MarketType: "futures",
-			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)),
-			EntryPrice: entryPrice,
-			StopLoss:   decimalValueOrZero(decision.StopLoss),
-			TakeProfit: decimalValueOrZero(decision.TakeProfit),
-			Source:     "autonomous_scalping",
-			OpenedAt:   time.Now().UTC(),
-		}); err != nil {
-			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
-		}
-	}
+	h.persistScalpingExecutionLifecycle(ctx, currentMode, decision, chatID, userExchange, portfolio, telemetryInserted, cycleID)
 	if currentMode == OpModeLive {
 		h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
-	}
-	if currentMode == OpModeLive && h.telemetryStore != nil && telemetryInserted && strings.TrimSpace(decision.OrderID) != "" {
-		writeCtx, writeCancel := telemetryWriteContext()
-		err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
-		writeCancel()
-		if err != nil {
-			log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
-		}
 	}
 	if currentMode == OpModeLive {
 		h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
@@ -1544,6 +1541,65 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 
 	return nil
+}
+
+func shouldPersistScalpingExecutionLifecycle(mode OperationalMode) bool {
+	return mode == OpModeLive || mode == ModePaper
+}
+
+func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
+	ctx context.Context,
+	currentMode OperationalMode,
+	decision *AITradingDecision,
+	chatID string,
+	userExchange string,
+	portfolio TradingPortfolio,
+	telemetryInserted bool,
+	cycleID string,
+) {
+	if decision == nil || !shouldPersistScalpingExecutionLifecycle(currentMode) || strings.TrimSpace(decision.OrderID) == "" {
+		return
+	}
+
+	lifecyclePersisted := false
+	if h.lifecycleStore != nil {
+		entryPrice := decimal.Zero
+		if decision.EntryPrice != nil {
+			entryPrice = *decision.EntryPrice
+		}
+		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+			OrderID:    decision.OrderID,
+			ChatID:     chatID,
+			Exchange:   userExchange,
+			Symbol:     decision.Symbol,
+			Side:       decision.Action,
+			OrderType:  "market",
+			MarketType: "futures",
+			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)).Round(2),
+			EntryPrice: entryPrice,
+			StopLoss:   decimalValueOrZero(decision.StopLoss),
+			TakeProfit: decimalValueOrZero(decision.TakeProfit),
+			Source:     scalpingExecutionLifecycleSource(currentMode),
+			OpenedAt:   time.Now().UTC(),
+		}); err != nil {
+			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+		} else {
+			lifecyclePersisted = true
+		}
+	}
+	if currentMode == ModePaper && !lifecyclePersisted {
+		return
+	}
+
+	if h.telemetryStore == nil || !telemetryInserted {
+		return
+	}
+	writeCtx, writeCancel := telemetryWriteContext()
+	err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
+	writeCancel()
+	if err != nil {
+		log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
+	}
 }
 
 func (h *IntegratedQuestHandlers) autoDeriskBlockedExposure(

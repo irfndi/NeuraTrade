@@ -1305,6 +1305,10 @@ func (s *TradingLifecycleStore) CloseClosedOrderBackedGhostPositions(ctx context
 }
 
 func (s *TradingLifecycleStore) CountOpenOrders(ctx context.Context, chatID, exchange string) (int, error) {
+	return s.CountOpenOrdersExcludingSources(ctx, chatID, exchange, nil)
+}
+
+func (s *TradingLifecycleStore) CountOpenOrdersExcludingSources(ctx context.Context, chatID, exchange string, excludedSources []string) (int, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM trading_orders
@@ -1318,6 +1322,20 @@ func (s *TradingLifecycleStore) CountOpenOrders(ctx context.Context, chatID, exc
 	if strings.TrimSpace(exchange) != "" {
 		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
 		args = append(args, strings.TrimSpace(exchange))
+	}
+	if len(excludedSources) > 0 {
+		placeholders := make([]string, 0, len(excludedSources))
+		for _, source := range excludedSources {
+			source = strings.TrimSpace(source)
+			if source == "" {
+				continue
+			}
+			args = append(args, source)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		if len(placeholders) > 0 {
+			query += fmt.Sprintf(" AND COALESCE(source, '') NOT IN (%s)", strings.Join(placeholders, ","))
+		}
 	}
 
 	var count int
