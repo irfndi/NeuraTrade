@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -100,6 +101,56 @@ func TestNormalizeJWTSecret(t *testing.T) {
 	}
 }
 
+func TestGatewayDefaultHealthTimeoutExceedsBackendMarketDataWarmup(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", "")
+
+	got := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
+	require.GreaterOrEqual(t, got, 150*time.Second)
+}
+
+func TestGatewayHealthTimeoutEnvOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", "12")
+
+	got := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
+	require.Equal(t, 12*time.Second, got)
+}
+
+func TestShouldSkipTelegramGatewayForPaperOnlyRuntime(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
+	t.Setenv("FEATURES_PAPER_TRADING", "true")
+	t.Setenv("FEATURES_REAL_TRADING", "false")
+
+	require.True(t, shouldSkipTelegramGateway(""))
+	require.False(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
+func TestShouldSkipTelegramGatewayRequiresExplicitPaperOnlyMode(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+
+	require.False(t, shouldSkipTelegramGateway(""))
+}
+
+func TestShouldSkipTelegramGatewayOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "true")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+
+	require.True(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
+func TestEnsureSQLiteParentDirCreatesConfiguredDataDirectory(t *testing.T) {
+	sqlitePath := filepath.Join(t.TempDir(), "runtime", "data", "neuratrade.db")
+
+	require.NoError(t, ensureSQLiteParentDir(sqlitePath))
+
+	info, err := os.Stat(filepath.Dir(sqlitePath))
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+	require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+}
+
 func TestDeriveGatewayMode(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -153,6 +204,47 @@ func TestDeriveGatewayMode(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("unexpected mode: got %s want %s", got, tc.want)
 			}
+		})
+	}
+}
+
+func TestDeriveGatewayModeForServices_TelegramDisabled(t *testing.T) {
+	tests := []struct {
+		name           string
+		backendUp      bool
+		ccxtUp         bool
+		backendHealthy bool
+		want           string
+	}{
+		{
+			name: "all required services down",
+			want: "down",
+		},
+		{
+			name:           "required services healthy",
+			backendUp:      true,
+			ccxtUp:         true,
+			backendHealthy: true,
+			want:           "healthy",
+		},
+		{
+			name:      "backend process warming",
+			backendUp: true,
+			ccxtUp:    true,
+			want:      "warming",
+		},
+		{
+			name:           "backend healthy but ccxt unavailable",
+			backendUp:      true,
+			backendHealthy: true,
+			want:           "degraded",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveGatewayModeForServices(tc.backendUp, false, tc.ccxtUp, tc.backendHealthy, false, false)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }

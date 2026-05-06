@@ -12,6 +12,7 @@ LOG_DIR="${NEURATRADE_HOME}/logs"
 PID_FILE="${NEURATRADE_HOME}/pids/gateway.pid"
 GATEWAY_LOG="${LOG_DIR}/gateway.log"
 BACKEND_PORT="${BACKEND_HOST_PORT:-${PORT:-8080}}"
+STARTUP_HEALTH_TIMEOUT_SECONDS="${NEURATRADE_STARTUP_HEALTH_TIMEOUT_SECONDS:-${NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS:-150}}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,6 +38,21 @@ log_warn() {
 
 log_error() {
   log "${RED}[ERROR]${NC} $1"
+}
+
+validated_positive_seconds() {
+  local value="${1:-}"
+  local default_value="${2:-150}"
+  local label="${3:-timeout}"
+
+  value="${value//[[:space:]]/}"
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -le 0 ]; then
+    log_warn "Invalid ${label} '${1:-}', defaulting to ${default_value}s" >&2
+    printf '%s\n' "$default_value"
+    return 0
+  fi
+
+  printf '%s\n' "$value"
 }
 
 ensure_dirs() {
@@ -192,6 +208,8 @@ start_gateway() {
   local pid
   pid="$(gateway_pid)"
   log_info "Gateway launched (pid=${pid}), waiting for backend health..."
+  local startup_timeout
+  startup_timeout="$(validated_positive_seconds "${STARTUP_HEALTH_TIMEOUT_SECONDS}" 150 "startup health timeout")"
 
   sleep 1
   if ! pid_running "$pid"; then
@@ -201,7 +219,7 @@ start_gateway() {
     return 1
   fi
 
-  if wait_backend_health 60; then
+  if wait_backend_health "${startup_timeout}"; then
     if pid_running "$pid"; then
       log_success "Gateway is running and backend health endpoint is reachable"
     else
