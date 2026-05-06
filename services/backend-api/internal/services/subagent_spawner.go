@@ -62,7 +62,7 @@ type PaperExecutorAdapter struct{}
 // PlaceOrder simulates order placement for paper trading.
 func (p *PaperExecutorAdapter) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
 	// Generate a simulated order ID (paper trading mode)
-	return fmt.Sprintf("paper-%s", uuid.New().String()[:8]), nil
+	return fmt.Sprintf("%s%s", paperOrderIDPrefix, uuid.New().String()), nil
 }
 
 // SubagentResult represents the result of a subagent execution.

@@ -62,7 +62,7 @@ func (r *PaperTradeRecorder) RecordOpenTrade(ctx context.Context, trade *PaperTr
 
 	query := `
 		INSERT INTO paper_trades (user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, size, fees, cost_basis, status, opened_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'open', NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'open', CURRENT_TIMESTAMP)
 		RETURNING id, user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, exit_price, size, fees, pnl, cost_basis, status, opened_at, closed_at, created_at, updated_at
 	`
 
@@ -144,7 +144,7 @@ func (r *PaperTradeRecorder) RecordCloseTrade(ctx context.Context, tradeID int64
 	now := time.Now()
 	query := `
 		UPDATE paper_trades
-		SET exit_price = $1, fees = fees + $2, pnl = $3, status = 'closed', closed_at = $4, updated_at = NOW()
+		SET exit_price = $1, fees = fees + $2, pnl = $3, status = 'closed', closed_at = $4, updated_at = CURRENT_TIMESTAMP
 		WHERE id = $5 AND status = 'open'
 		RETURNING id, user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, exit_price, size, fees, pnl, cost_basis, status, opened_at, closed_at, created_at, updated_at
 	`
@@ -374,7 +374,7 @@ type PaperTradeSummary struct {
 func (r *PaperTradeRecorder) CancelTrade(ctx context.Context, tradeID int64) (*PaperTrade, error) {
 	query := `
 		UPDATE paper_trades
-		SET status = 'cancelled', updated_at = NOW()
+		SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
 		WHERE id = $1 AND status = 'open'
 		RETURNING id, user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, exit_price, size, fees, pnl, cost_basis, status, opened_at, closed_at, created_at, updated_at
 	`
