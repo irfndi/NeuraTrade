@@ -4423,6 +4423,7 @@ func candidateSignalsFromMarketSignals(signals []aiMarketSignal) []appautonomy.C
 			BidAskSpread:       signal.BidAskSpread,
 			OrderBookImbalance: signal.OrderBookImbalance,
 			RangePosition24h:   signal.RangePosition24h,
+			PriceChange24hPct:  signal.PriceChange24h,
 		})
 	}
 	return candidates

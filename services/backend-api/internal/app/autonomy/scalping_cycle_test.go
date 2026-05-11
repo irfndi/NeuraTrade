@@ -326,6 +326,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			BidAskSpread:       0.36,
 			OrderBookImbalance: -0.30,
 			RangePosition24h:   60,
+			PriceChange24hPct:  -1.25,
 		},
 		{
 			Symbol:             "OPN/USDT",
@@ -336,6 +337,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			BidAskSpread:       0.19,
 			OrderBookImbalance: -0.20,
 			RangePosition24h:   56,
+			PriceChange24hPct:  -0.75,
 		},
 		{
 			Symbol:             "WIF/USDT",
@@ -346,6 +348,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			BidAskSpread:       0.08,
 			OrderBookImbalance: 0.02,
 			RangePosition24h:   40,
+			PriceChange24hPct:  1.20,
 		},
 		{
 			Symbol:             "BND/USDT",
@@ -356,6 +359,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			BidAskSpread:       0.22,
 			OrderBookImbalance: 0.02,
 			RangePosition24h:   40,
+			PriceChange24hPct:  0.90,
 		},
 	}, policy)
 
@@ -376,6 +380,10 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 		if rejection.Symbol == "BND/USDT" {
 			bndSeen = true
 			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
+			require.InDelta(t, 0.22, rejection.BidAskSpreadPct, 1e-9)
+			require.InDelta(t, 0.02, rejection.OrderBookImbalance, 1e-9)
+			require.InDelta(t, 40.0, rejection.RangePosition24h, 1e-9)
+			require.InDelta(t, 0.90, rejection.PriceChange24hPct, 1e-9)
 		}
 	}
 	require.True(t, bndSeen)

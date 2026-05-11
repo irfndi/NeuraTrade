@@ -337,6 +337,7 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 		BidAskSpread:       signal.Signal.BidAskSpread,
 		OrderBookImbalance: signal.Signal.OrderBookImbalance,
 		RangePosition24h:   signal.Signal.RangePosition24h,
+		PriceChange24hPct:  signal.Signal.PriceChange24h,
 	}
 	funnel := appautonomy.BuildCandidateFunnel([]appautonomy.CandidateSignal{candidate}, e.policy)
 

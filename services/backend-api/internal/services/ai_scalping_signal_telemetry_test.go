@@ -3,6 +3,7 @@ package services
 import (
 	"testing"
 
+	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -170,4 +171,33 @@ func TestApplyDecisionSignalQualityToCycleRecordSkipsUnknownSignalQuality(t *tes
 	require.Nil(t, record.OrderBookImbalance)
 	require.Nil(t, record.RangePosition24h)
 	require.Nil(t, record.PriceChange24hPct)
+}
+
+func TestApplyDecisionSignalQualityToCycleRecordUsesTopRejectionWhenSignalUnknown(t *testing.T) {
+	record := &CycleRecord{}
+	decision := &AITradingDecision{
+		CandidateFunnel: appautonomy.CandidateFunnelSnapshot{
+			TopCandidateRejections: []appautonomy.CandidateRejection{
+				{
+					Symbol:             "WIF/USDT",
+					Reason:             appautonomy.CandidateRejectSpreadTooWide,
+					BidAskSpreadPct:    0.31,
+					OrderBookImbalance: -0.18,
+					RangePosition24h:   63.5,
+					PriceChange24hPct:  -1.2,
+				},
+			},
+		},
+	}
+
+	applyDecisionSignalQualityToCycleRecord(record, decision)
+
+	require.NotNil(t, record.BidAskSpreadPct)
+	require.NotNil(t, record.OrderBookImbalance)
+	require.NotNil(t, record.RangePosition24h)
+	require.NotNil(t, record.PriceChange24hPct)
+	require.InDelta(t, 0.31, *record.BidAskSpreadPct, 1e-9)
+	require.InDelta(t, -0.18, *record.OrderBookImbalance, 1e-9)
+	require.InDelta(t, 63.5, *record.RangePosition24h, 1e-9)
+	require.InDelta(t, -1.2, *record.PriceChange24hPct, 1e-9)
 }
