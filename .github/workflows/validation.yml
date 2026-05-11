@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26.2"
+  GO_VERSION: "1.26.3"
   BUN_VERSION: "1.3.13"
 
 jobs:
@@ -126,8 +126,8 @@ jobs:
     name: Frontend Tests (telegram-service)
     runs-on: ubuntu-latest
     env:
-      ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY || 'test-admin-api-key-for-ci' }}
-      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET || 'test-webhook-secret-for-ci' }}
+      ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
@@ -148,6 +148,26 @@ jobs:
 
       - name: Install dependencies
         run: cd services/telegram-service && bun install --frozen-lockfile
+
+      - name: Prepare test credentials
+        run: |
+          admin_api_key="${ADMIN_API_KEY:-}"
+          webhook_secret="${TELEGRAM_WEBHOOK_SECRET:-}"
+
+          if [[ -z "$admin_api_key" ]]; then
+            admin_api_key="ci-admin-$(openssl rand -hex 32)"
+            echo "::notice::ADMIN_API_KEY secret is not configured; generated an ephemeral CI-only value."
+          fi
+
+          if [[ -z "$webhook_secret" ]]; then
+            webhook_secret="ci-webhook-$(openssl rand -hex 32)"
+            echo "::notice::TELEGRAM_WEBHOOK_SECRET secret is not configured; generated an ephemeral CI-only value."
+          fi
+
+          echo "::add-mask::$admin_api_key"
+          echo "::add-mask::$webhook_secret"
+          echo "ADMIN_API_KEY=$admin_api_key" >> "$GITHUB_ENV"
+          echo "TELEGRAM_WEBHOOK_SECRET=$webhook_secret" >> "$GITHUB_ENV"
 
       - name: Run tests
         run: cd services/telegram-service && bun test
