@@ -191,14 +191,15 @@ type SimulatedTrade struct {
 }
 
 type ScalpingBacktestEngine struct {
-	db            DBPool
-	config        ScalpingBacktestConfig
-	capital       decimal.Decimal
-	positions     map[string]*SimulatedPosition
-	tradeHistory  []ScalpingBacktestTrade
-	signalHistory []ScalpingBacktestSignal
-	gateStats     map[string]*GateStats
-	policy        ScalpingCyclePolicy
+	db                    DBPool
+	config                ScalpingBacktestConfig
+	capital               decimal.Decimal
+	positions             map[string]*SimulatedPosition
+	tradeHistory          []ScalpingBacktestTrade
+	signalHistory         []ScalpingBacktestSignal
+	gateStats             map[string]*GateStats
+	policy                ScalpingCyclePolicy
+	marketDataPriceColumn scalpingMarketDataPriceColumn
 }
 
 func NewScalpingBacktestEngine(db DBPool, config ScalpingBacktestConfig) *ScalpingBacktestEngine {
@@ -976,22 +977,19 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 		return nil, nil
 	}
 
-	query := buildScalpingMarketDataSignalQuery(
-		"md.price",
-		"COALESCE(md.high_24h, 0)",
-		"COALESCE(md.low_24h, 0)",
-	)
+	priceColumn := e.marketDataPriceColumn
+	if priceColumn == scalpingMarketDataPriceColumnUnknown {
+		priceColumn = scalpingMarketDataPriceColumnPrice
+	}
+	query := buildScalpingMarketDataSignalQuery(priceColumn)
 	args := []any{startTime, endTime}
 	query, args = appendScalpingBacktestFilters(query, args, "md.trading_pair_id", tradingPairIDs, strings.TrimSpace(strings.ToLower(e.config.Exchange)))
 	query += " ORDER BY md.timestamp ASC"
 
 	rows, err := e.db.Query(ctx, query, args...)
-	if err != nil && isMissingMarketDataPriceColumnError(err) {
-		query = buildScalpingMarketDataSignalQuery(
-			"md.last_price",
-			"CASE WHEN COALESCE(md.ask, 0) > 0 THEN md.ask ELSE md.last_price END",
-			"CASE WHEN COALESCE(md.bid, 0) > 0 THEN md.bid ELSE md.last_price END",
-		)
+	if err != nil && priceColumn == scalpingMarketDataPriceColumnPrice && isMissingMarketDataPriceColumnError(err) {
+		e.marketDataPriceColumn = scalpingMarketDataPriceColumnLastPrice
+		query = buildScalpingMarketDataSignalQuery(e.marketDataPriceColumn)
 		args = []any{startTime, endTime}
 		query, args = appendScalpingBacktestFilters(query, args, "md.trading_pair_id", tradingPairIDs, strings.TrimSpace(strings.ToLower(e.config.Exchange)))
 		query += " ORDER BY md.timestamp ASC"
@@ -999,6 +997,9 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load market_data fallback signals: %w", err)
+	}
+	if e.marketDataPriceColumn == scalpingMarketDataPriceColumnUnknown {
+		e.marketDataPriceColumn = priceColumn
 	}
 	defer rows.Close()
 
@@ -1071,7 +1072,24 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	return signals, nil
 }
 
-func buildScalpingMarketDataSignalQuery(priceExpr, highExpr, lowExpr string) string {
+type scalpingMarketDataPriceColumn int
+
+const (
+	scalpingMarketDataPriceColumnUnknown scalpingMarketDataPriceColumn = iota
+	scalpingMarketDataPriceColumnPrice
+	scalpingMarketDataPriceColumnLastPrice
+)
+
+func buildScalpingMarketDataSignalQuery(priceColumn scalpingMarketDataPriceColumn) string {
+	priceExpr := "md.price"
+	highExpr := "COALESCE(md.high_24h, 0)"
+	lowExpr := "COALESCE(md.low_24h, 0)"
+	if priceColumn == scalpingMarketDataPriceColumnLastPrice {
+		priceExpr = "md.last_price"
+		highExpr = "CASE WHEN COALESCE(md.ask, 0) > 0 THEN md.ask ELSE md.last_price END"
+		lowExpr = "CASE WHEN COALESCE(md.bid, 0) > 0 THEN md.bid ELSE md.last_price END"
+	}
+
 	return fmt.Sprintf(`
 		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name), %s,
 			COALESCE(md.bid, 0), COALESCE(md.ask, 0),

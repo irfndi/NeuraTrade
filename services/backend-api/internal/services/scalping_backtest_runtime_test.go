@@ -109,8 +109,7 @@ func prepareRuntimeSQLiteBacktest(tb testing.TB) (*database.SQLiteDB, ScalpingBa
 		SpreadMultiplier:   DefaultScalpingBacktestSpreadMultiplier,
 	}
 
-	engine := NewScalpingBacktestEngine(sqliteDB, config)
-	return sqliteDB, engine.config
+	return sqliteDB, normalizeScalpingBacktestConfig(config)
 }
 
 func runPreparedRuntimeSQLiteScalpingBacktest(tb testing.TB, sqliteDB *database.SQLiteDB, config ScalpingBacktestConfig) *ScalpingBacktestResult {
