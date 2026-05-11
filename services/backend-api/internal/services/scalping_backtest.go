@@ -976,22 +976,27 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 		return nil, nil
 	}
 
-	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name), md.price,
-			COALESCE(md.bid, 0), COALESCE(md.ask, 0),
-			COALESCE(md.high_24h, 0), COALESCE(md.low_24h, 0), COALESCE(md.volume_24h, 0),
-			md.timestamp
-		FROM market_data md
-		JOIN trading_pairs tp ON tp.id = md.trading_pair_id
-		JOIN exchanges e ON e.id = md.exchange_id
-		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
-		WHERE md.timestamp >= $1 AND md.timestamp <= $2
-	`
+	query := buildScalpingMarketDataSignalQuery(
+		"md.price",
+		"COALESCE(md.high_24h, 0)",
+		"COALESCE(md.low_24h, 0)",
+	)
 	args := []any{startTime, endTime}
 	query, args = appendScalpingBacktestFilters(query, args, "md.trading_pair_id", tradingPairIDs, strings.TrimSpace(strings.ToLower(e.config.Exchange)))
 	query += " ORDER BY md.timestamp ASC"
 
 	rows, err := e.db.Query(ctx, query, args...)
+	if err != nil && isMissingMarketDataPriceColumnError(err) {
+		query = buildScalpingMarketDataSignalQuery(
+			"md.last_price",
+			"CASE WHEN COALESCE(md.ask, 0) > 0 THEN md.ask ELSE md.last_price END",
+			"CASE WHEN COALESCE(md.bid, 0) > 0 THEN md.bid ELSE md.last_price END",
+		)
+		args = []any{startTime, endTime}
+		query, args = appendScalpingBacktestFilters(query, args, "md.trading_pair_id", tradingPairIDs, strings.TrimSpace(strings.ToLower(e.config.Exchange)))
+		query += " ORDER BY md.timestamp ASC"
+		rows, err = e.db.Query(ctx, query, args...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load market_data fallback signals: %w", err)
 	}
@@ -1064,6 +1069,29 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	}
 
 	return signals, nil
+}
+
+func buildScalpingMarketDataSignalQuery(priceExpr, highExpr, lowExpr string) string {
+	return fmt.Sprintf(`
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name), %s,
+			COALESCE(md.bid, 0), COALESCE(md.ask, 0),
+			%s, %s, COALESCE(md.volume_24h, 0),
+			md.timestamp
+		FROM market_data md
+		JOIN trading_pairs tp ON tp.id = md.trading_pair_id
+		JOIN exchanges e ON e.id = md.exchange_id
+		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
+		WHERE md.timestamp >= $1 AND md.timestamp <= $2
+	`, priceExpr, highExpr, lowExpr)
+}
+
+func isMissingMarketDataPriceColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such column: md.price") ||
+		strings.Contains(msg, "column md.price does not exist")
 }
 
 func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultiplier float64) []HistoricalSignal {
