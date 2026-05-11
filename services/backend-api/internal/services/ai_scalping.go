@@ -681,6 +681,10 @@ type AITradingDecision struct {
 	PreTradeRegime                  string                              `json:"-"`
 	PreTradeExpectancy              float64                             `json:"-"`
 	PreTradeExpectancySampleSize    int                                 `json:"-"`
+	SignalBidAskSpreadPct           float64                             `json:"-"`
+	SignalOrderBookImbalance        float64                             `json:"-"`
+	SignalRangePosition24h          float64                             `json:"-"`
+	SignalPriceChange24hPct         float64                             `json:"-"`
 	OriginalConfidence              float64                             `json:"-"`
 	OriginalConfidenceKnown         bool                                `json:"-"`
 }
@@ -1222,12 +1226,14 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 	}
 	log.Printf("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
+	annotateDecisionSignalTelemetry(decision, signals)
 	if shouldPromoteGenericHoldToFallback(decision, funnel) {
 		log.Printf("[AI-SCALPING] Promoting generic hold into deterministic fallback because %d viable candidate(s) remain", funnel.CandidateViableCount)
 		s.recordMetaHoldPromotion()
 		decision = s.deterministicFallbackDecision(ctx, signals, portfolio)
 		decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
 		decision.Symbol = normalizeSymbolForComparison(decision.Symbol)
+		annotateDecisionSignalTelemetry(decision, signals)
 	}
 
 	if err := s.validateDecision(decision, signals); err != nil {
@@ -2838,7 +2844,33 @@ func copyPreTradeTelemetry(target *AITradingDecision, source *AITradingDecision)
 	target.PreTradeRegime = source.PreTradeRegime
 	target.PreTradeExpectancy = source.PreTradeExpectancy
 	target.PreTradeExpectancySampleSize = source.PreTradeExpectancySampleSize
+	target.SignalBidAskSpreadPct = source.SignalBidAskSpreadPct
+	target.SignalOrderBookImbalance = source.SignalOrderBookImbalance
+	target.SignalRangePosition24h = source.SignalRangePosition24h
+	target.SignalPriceChange24hPct = source.SignalPriceChange24hPct
 	return target
+}
+
+func annotateDecisionSignalTelemetry(decision *AITradingDecision, signals []aiMarketSignal) {
+	if decision == nil || len(signals) == 0 {
+		return
+	}
+	symbol := normalizeSymbolForComparison(decision.Symbol)
+	if symbol == "" {
+		return
+	}
+	known := make(map[string]aiMarketSignal, len(signals))
+	for _, sig := range signals {
+		known[normalizeSymbolForComparison(sig.Symbol)] = sig
+	}
+	signal, ok := resolveDecisionSymbol(symbol, known)
+	if !ok {
+		return
+	}
+	decision.SignalBidAskSpreadPct = signal.BidAskSpread
+	decision.SignalOrderBookImbalance = signal.OrderBookImbalance
+	decision.SignalRangePosition24h = signal.RangePosition24h
+	decision.SignalPriceChange24hPct = signal.PriceChange24h
 }
 
 func shouldPromoteGenericHoldToFallback(decision *AITradingDecision, funnel appautonomy.CandidateFunnelSnapshot) bool {

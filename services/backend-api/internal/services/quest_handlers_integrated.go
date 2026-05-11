@@ -1325,6 +1325,10 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			cycleRec.EffectiveMinConfidence = decision.EffectiveMinConfidence
 			cycleRec.EffectiveMaxCapitalPct = decision.EffectiveMaxCapitalPct
 			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
+			cycleRec.BidAskSpreadPct = decision.SignalBidAskSpreadPct
+			cycleRec.OrderBookImbalance = decision.SignalOrderBookImbalance
+			cycleRec.RangePosition24h = decision.SignalRangePosition24h
+			cycleRec.PriceChange24hPct = decision.SignalPriceChange24hPct
 		}
 		writeCtx, writeCancel := telemetryWriteContext()
 		persistedCycleID, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
