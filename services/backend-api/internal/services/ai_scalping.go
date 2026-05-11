@@ -2855,13 +2855,13 @@ func annotateDecisionSignalTelemetry(decision *AITradingDecision, signals []aiMa
 	if decision == nil || len(signals) == 0 {
 		return
 	}
-	symbol := normalizeSymbolForComparison(decision.Symbol)
+	symbol := strings.TrimSpace(decision.Symbol)
 	if symbol == "" {
 		return
 	}
 	known := make(map[string]aiMarketSignal, len(signals))
 	for _, sig := range signals {
-		known[normalizeSymbolForComparison(sig.Symbol)] = sig
+		known[sig.Symbol] = sig
 	}
 	signal, ok := resolveDecisionSymbol(symbol, known)
 	if !ok {
