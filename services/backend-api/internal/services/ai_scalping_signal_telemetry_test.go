@@ -28,6 +28,7 @@ func TestAnnotateDecisionSignalTelemetry(t *testing.T) {
 
 		annotateDecisionSignalTelemetry(decision, signals)
 
+		require.True(t, decision.SignalQualityKnown)
 		require.InDelta(t, 0.031, decision.SignalBidAskSpreadPct, 1e-9)
 		require.InDelta(t, 0.42, decision.SignalOrderBookImbalance, 1e-9)
 		require.InDelta(t, 38.5, decision.SignalRangePosition24h, 1e-9)
@@ -48,10 +49,12 @@ func TestAnnotateDecisionSignalTelemetry(t *testing.T) {
 			SignalOrderBookImbalance: -0.456,
 			SignalRangePosition24h:   78.9,
 			SignalPriceChange24hPct:  1.23,
+			SignalQualityKnown:       true,
 		}
 
 		annotateDecisionSignalTelemetry(decision, nil)
 
+		require.True(t, decision.SignalQualityKnown)
 		require.InDelta(t, 0.123, decision.SignalBidAskSpreadPct, 1e-9)
 		require.InDelta(t, -0.456, decision.SignalOrderBookImbalance, 1e-9)
 		require.InDelta(t, 78.9, decision.SignalRangePosition24h, 1e-9)
@@ -71,6 +74,7 @@ func TestAnnotateDecisionSignalTelemetry(t *testing.T) {
 			},
 		})
 
+		require.False(t, decision.SignalQualityKnown)
 		require.Zero(t, decision.SignalBidAskSpreadPct)
 		require.Zero(t, decision.SignalOrderBookImbalance)
 		require.Zero(t, decision.SignalRangePosition24h)
@@ -83,6 +87,7 @@ func TestCopyPreTradeTelemetryCopiesSignalQuality(t *testing.T) {
 		PreTradeRegime:               "trend",
 		PreTradeExpectancy:           0.12,
 		PreTradeExpectancySampleSize: 18,
+		SignalQualityKnown:           true,
 		SignalBidAskSpreadPct:        0.025,
 		SignalOrderBookImbalance:     -0.37,
 		SignalRangePosition24h:       71,
@@ -95,6 +100,7 @@ func TestCopyPreTradeTelemetryCopiesSignalQuality(t *testing.T) {
 	require.Equal(t, source.PreTradeRegime, target.PreTradeRegime)
 	require.InDelta(t, source.PreTradeExpectancy, target.PreTradeExpectancy, 1e-9)
 	require.Equal(t, source.PreTradeExpectancySampleSize, target.PreTradeExpectancySampleSize)
+	require.True(t, target.SignalQualityKnown)
 	require.InDelta(t, source.SignalBidAskSpreadPct, target.SignalBidAskSpreadPct, 1e-9)
 	require.InDelta(t, source.SignalOrderBookImbalance, target.SignalOrderBookImbalance, 1e-9)
 	require.InDelta(t, source.SignalRangePosition24h, target.SignalRangePosition24h, 1e-9)
@@ -103,6 +109,7 @@ func TestCopyPreTradeTelemetryCopiesSignalQuality(t *testing.T) {
 
 func TestApplyDecisionSignalQualityToCycleRecord(t *testing.T) {
 	decision := &AITradingDecision{
+		SignalQualityKnown:       true,
 		SignalBidAskSpreadPct:    0.015,
 		SignalOrderBookImbalance: 0.27,
 		SignalRangePosition24h:   63.5,
@@ -112,8 +119,28 @@ func TestApplyDecisionSignalQualityToCycleRecord(t *testing.T) {
 
 	applyDecisionSignalQualityToCycleRecord(record, decision)
 
-	require.InDelta(t, decision.SignalBidAskSpreadPct, record.BidAskSpreadPct, 1e-9)
-	require.InDelta(t, decision.SignalOrderBookImbalance, record.OrderBookImbalance, 1e-9)
-	require.InDelta(t, decision.SignalRangePosition24h, record.RangePosition24h, 1e-9)
-	require.InDelta(t, decision.SignalPriceChange24hPct, record.PriceChange24hPct, 1e-9)
+	require.NotNil(t, record.BidAskSpreadPct)
+	require.NotNil(t, record.OrderBookImbalance)
+	require.NotNil(t, record.RangePosition24h)
+	require.NotNil(t, record.PriceChange24hPct)
+	require.InDelta(t, decision.SignalBidAskSpreadPct, *record.BidAskSpreadPct, 1e-9)
+	require.InDelta(t, decision.SignalOrderBookImbalance, *record.OrderBookImbalance, 1e-9)
+	require.InDelta(t, decision.SignalRangePosition24h, *record.RangePosition24h, 1e-9)
+	require.InDelta(t, decision.SignalPriceChange24hPct, *record.PriceChange24hPct, 1e-9)
+}
+
+func TestApplyDecisionSignalQualityToCycleRecordSkipsUnknownSignalQuality(t *testing.T) {
+	record := &CycleRecord{}
+
+	applyDecisionSignalQualityToCycleRecord(record, &AITradingDecision{
+		SignalBidAskSpreadPct:    0.015,
+		SignalOrderBookImbalance: 0.27,
+		SignalRangePosition24h:   63.5,
+		SignalPriceChange24hPct:  -1.9,
+	})
+
+	require.Nil(t, record.BidAskSpreadPct)
+	require.Nil(t, record.OrderBookImbalance)
+	require.Nil(t, record.RangePosition24h)
+	require.Nil(t, record.PriceChange24hPct)
 }

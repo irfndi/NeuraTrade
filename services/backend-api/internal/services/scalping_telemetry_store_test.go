@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"path/filepath"
 	"testing"
@@ -28,10 +29,10 @@ func TestScalpingTelemetryStore_InsertCycleRecordPersistsSignalQuality(t *testin
 		Symbol:                 "BTC/USDT",
 		Action:                 "buy",
 		Confidence:             0.81,
-		BidAskSpreadPct:        0.027,
-		OrderBookImbalance:     0.46,
-		RangePosition24h:       41.5,
-		PriceChange24hPct:      -0.64,
+		BidAskSpreadPct:        floatPtr(0.027),
+		OrderBookImbalance:     floatPtr(0.46),
+		RangePosition24h:       floatPtr(41.5),
+		PriceChange24hPct:      floatPtr(-0.64),
 		EffectiveMinConfidence: 0.65,
 		EffectiveMaxCapitalPct: 0.50,
 		PolicyAdjustmentsJSON:  "[]",
@@ -69,15 +70,15 @@ func TestScalpingTelemetryStore_InsertCycleRecordSanitizesNonFiniteSignalQuality
 		CycleAt:            time.Date(2026, 5, 11, 9, 5, 0, 0, time.UTC),
 		Symbol:             "BTC/USDT",
 		Action:             "buy",
-		BidAskSpreadPct:    math.NaN(),
-		OrderBookImbalance: math.Inf(1),
-		RangePosition24h:   math.Inf(-1),
-		PriceChange24hPct:  math.NaN(),
+		BidAskSpreadPct:    floatPtr(math.NaN()),
+		OrderBookImbalance: floatPtr(math.Inf(1)),
+		RangePosition24h:   floatPtr(math.Inf(-1)),
+		PriceChange24hPct:  floatPtr(math.NaN()),
 	})
 	require.NoError(t, err)
 	require.Equal(t, "cycle-quality-nonfinite", cycleID)
 
-	var spread, imbalance, rangePos, priceChange float64
+	var spread, imbalance, rangePos, priceChange sql.NullFloat64
 	err = sqliteDB.DB.QueryRowContext(ctx, `
 		SELECT bid_ask_spread_pct, order_book_imbalance, range_position_24h, price_change_24h_pct
 		FROM scalping_cycle_telemetry
@@ -85,10 +86,10 @@ func TestScalpingTelemetryStore_InsertCycleRecordSanitizesNonFiniteSignalQuality
 	`, cycleID).Scan(&spread, &imbalance, &rangePos, &priceChange)
 	require.NoError(t, err)
 
-	require.Zero(t, spread)
-	require.Zero(t, imbalance)
-	require.Zero(t, rangePos)
-	require.Zero(t, priceChange)
+	require.False(t, spread.Valid)
+	require.False(t, imbalance.Valid)
+	require.False(t, rangePos.Valid)
+	require.False(t, priceChange.Valid)
 }
 
 func TestScalpingTelemetryStore_EnsureSchemaAddsSignalQualityColumnsToLegacyTable(t *testing.T) {

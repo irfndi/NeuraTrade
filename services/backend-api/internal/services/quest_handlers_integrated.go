@@ -2703,10 +2703,13 @@ func applyDecisionSignalQualityToCycleRecord(record *CycleRecord, decision *AITr
 	if record == nil || decision == nil {
 		return
 	}
-	record.BidAskSpreadPct = decision.SignalBidAskSpreadPct
-	record.OrderBookImbalance = decision.SignalOrderBookImbalance
-	record.RangePosition24h = decision.SignalRangePosition24h
-	record.PriceChange24hPct = decision.SignalPriceChange24hPct
+	if !decision.SignalQualityKnown {
+		return
+	}
+	record.BidAskSpreadPct = finiteFloatPointer(decision.SignalBidAskSpreadPct)
+	record.OrderBookImbalance = finiteFloatPointer(decision.SignalOrderBookImbalance)
+	record.RangePosition24h = finiteFloatPointer(decision.SignalRangePosition24h)
+	record.PriceChange24hPct = finiteFloatPointer(decision.SignalPriceChange24hPct)
 }
 
 func finiteDecimalFromFloat(value float64) decimal.Decimal {

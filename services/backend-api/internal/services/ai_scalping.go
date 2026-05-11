@@ -681,6 +681,7 @@ type AITradingDecision struct {
 	PreTradeRegime                  string                              `json:"-"`
 	PreTradeExpectancy              float64                             `json:"-"`
 	PreTradeExpectancySampleSize    int                                 `json:"-"`
+	SignalQualityKnown              bool                                `json:"-"`
 	SignalBidAskSpreadPct           float64                             `json:"-"`
 	SignalOrderBookImbalance        float64                             `json:"-"`
 	SignalRangePosition24h          float64                             `json:"-"`
@@ -1231,8 +1232,6 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		log.Printf("[AI-SCALPING] Promoting generic hold into deterministic fallback because %d viable candidate(s) remain", funnel.CandidateViableCount)
 		s.recordMetaHoldPromotion()
 		decision = s.deterministicFallbackDecision(ctx, signals, portfolio)
-		decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
-		decision.Symbol = normalizeSymbolForComparison(decision.Symbol)
 		annotateDecisionSignalTelemetry(decision, signals)
 	}
 
@@ -2844,6 +2843,7 @@ func copyPreTradeTelemetry(target *AITradingDecision, source *AITradingDecision)
 	target.PreTradeRegime = source.PreTradeRegime
 	target.PreTradeExpectancy = source.PreTradeExpectancy
 	target.PreTradeExpectancySampleSize = source.PreTradeExpectancySampleSize
+	target.SignalQualityKnown = source.SignalQualityKnown
 	target.SignalBidAskSpreadPct = source.SignalBidAskSpreadPct
 	target.SignalOrderBookImbalance = source.SignalOrderBookImbalance
 	target.SignalRangePosition24h = source.SignalRangePosition24h
@@ -2867,6 +2867,7 @@ func annotateDecisionSignalTelemetry(decision *AITradingDecision, signals []aiMa
 	if !ok {
 		return
 	}
+	decision.SignalQualityKnown = true
 	decision.SignalBidAskSpreadPct = signal.BidAskSpread
 	decision.SignalOrderBookImbalance = signal.OrderBookImbalance
 	decision.SignalRangePosition24h = signal.RangePosition24h

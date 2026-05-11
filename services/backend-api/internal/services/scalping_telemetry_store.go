@@ -60,10 +60,10 @@ type CycleRecord struct {
 	EffectiveMinConfidence float64
 	EffectiveMaxCapitalPct float64
 	PolicyAdjustmentsJSON  string
-	BidAskSpreadPct        float64
-	OrderBookImbalance     float64
-	RangePosition24h       float64
-	PriceChange24hPct      float64
+	BidAskSpreadPct        *float64
+	OrderBookImbalance     *float64
+	RangePosition24h       *float64
+	PriceChange24hPct      *float64
 }
 
 type ScalpingOutcomeRecord struct {
@@ -285,10 +285,10 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 		record.EffectiveMinConfidence,
 		record.EffectiveMaxCapitalPct,
 		record.PolicyAdjustmentsJSON,
-		finiteFloatOrZero(record.BidAskSpreadPct),
-		finiteFloatOrZero(record.OrderBookImbalance),
-		finiteFloatOrZero(record.RangePosition24h),
-		finiteFloatOrZero(record.PriceChange24hPct),
+		nullableFiniteFloat(record.BidAskSpreadPct),
+		nullableFiniteFloat(record.OrderBookImbalance),
+		nullableFiniteFloat(record.RangePosition24h),
+		nullableFiniteFloat(record.PriceChange24hPct),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert cycle telemetry: %w", err)
@@ -300,7 +300,7 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 func (s *ScalpingTelemetryStore) ensureCycleTelemetryColumn(ctx context.Context, name, definition string) error {
 	name = strings.TrimSpace(name)
 	definition = strings.TrimSpace(definition)
-	if name == "" || definition == "" {
+	if !isSafeTelemetryColumnName(name) || definition != "REAL" {
 		return fmt.Errorf("invalid scalping telemetry column definition")
 	}
 	_, err := s.db.Exec(ctx, fmt.Sprintf("ALTER TABLE scalping_cycle_telemetry ADD COLUMN %s %s", name, definition))
@@ -310,11 +310,34 @@ func (s *ScalpingTelemetryStore) ensureCycleTelemetryColumn(ctx context.Context,
 	return fmt.Errorf("add scalping telemetry column %s: %w", name, err)
 }
 
-func finiteFloatOrZero(value float64) float64 {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0
+func isSafeTelemetryColumnName(name string) bool {
+	if name == "" {
+		return false
 	}
-	return value
+	for i, r := range name {
+		switch {
+		case r == '_':
+		case r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func finiteFloatPointer(value float64) *float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	return &value
+}
+
+func nullableFiniteFloat(value *float64) any {
+	if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
+		return nil
+	}
+	return *value
 }
 
 func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID string, orderID string) error {
