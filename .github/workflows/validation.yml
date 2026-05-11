@@ -149,15 +149,25 @@ jobs:
       - name: Install dependencies
         run: cd services/telegram-service && bun install --frozen-lockfile
 
-      - name: Verify required secrets are set
+      - name: Prepare test credentials
         run: |
-          missing=()
-          [[ -z "${ADMIN_API_KEY:-}" ]] && missing+=("ADMIN_API_KEY")
-          [[ -z "${TELEGRAM_WEBHOOK_SECRET:-}" ]] && missing+=("TELEGRAM_WEBHOOK_SECRET")
-          if (( ${#missing[@]} > 0 )); then
-            echo "::error::Required secrets not configured: ${missing[*]}. Authentication-dependent tests cannot run."
-            exit 1
+          admin_api_key="${ADMIN_API_KEY:-}"
+          webhook_secret="${TELEGRAM_WEBHOOK_SECRET:-}"
+
+          if [[ -z "$admin_api_key" ]]; then
+            admin_api_key="ci-admin-$(openssl rand -hex 32)"
+            echo "::notice::ADMIN_API_KEY secret is not configured; generated an ephemeral CI-only value."
           fi
+
+          if [[ -z "$webhook_secret" ]]; then
+            webhook_secret="ci-webhook-$(openssl rand -hex 32)"
+            echo "::notice::TELEGRAM_WEBHOOK_SECRET secret is not configured; generated an ephemeral CI-only value."
+          fi
+
+          echo "::add-mask::$admin_api_key"
+          echo "::add-mask::$webhook_secret"
+          echo "ADMIN_API_KEY=$admin_api_key" >> "$GITHUB_ENV"
+          echo "TELEGRAM_WEBHOOK_SECRET=$webhook_secret" >> "$GITHUB_ENV"
 
       - name: Run tests
         run: cd services/telegram-service && bun test
