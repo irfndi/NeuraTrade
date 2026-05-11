@@ -4,7 +4,7 @@ import * as grpc from "@grpc/grpc-js";
 import type { Bot } from "grammy";
 import {
   createAuthInterceptor,
-  createTelegramGrpcServer,
+  formatGrpcBindTarget,
   safeCredentialEqual,
   TelegramGrpcServer,
 } from "./grpc-server";
@@ -288,10 +288,7 @@ describe("TelegramGrpcServer", () => {
   });
 
   test("gRPC auth allows only exact HealthCheck path without API key", () => {
-    const { bot } = createBotMock();
     const adminApiKey = "test-admin-key-that-is-at-least-32-characters";
-    const server = createTelegramGrpcServer(bot, adminApiKey);
-    server.forceShutdown();
 
     const health = invokeAuthInterceptor(
       "/telegram.TelegramService/HealthCheck",
@@ -333,6 +330,12 @@ describe("TelegramGrpcServer", () => {
     );
     expect(valid.metadataForwarded).toBe(true);
     expect(valid.call.sentStatuses).toHaveLength(0);
+  });
+
+  test("formats IPv4 and IPv6 gRPC bind targets", () => {
+    expect(formatGrpcBindTarget("127.0.0.1", 50052)).toBe("127.0.0.1:50052");
+    expect(formatGrpcBindTarget("::1", 50052)).toBe("[::1]:50052");
+    expect(formatGrpcBindTarget("[::1]", 50052)).toBe("[::1]:50052");
   });
 
   test("credential comparison accepts only exact secret matches", () => {

@@ -38,6 +38,7 @@ export const resolvePort = (
  * @property apiBaseUrl - Base URL for backend API requests
  * @property adminApiKey - API key for admin-protected endpoints
  * @property grpcPort - Port for gRPC server
+ * @property grpcBindAddr - Host/interface for gRPC server binding
  */
 export interface TelegramConfig {
   botToken: string;
@@ -51,6 +52,7 @@ export interface TelegramConfig {
   apiBaseUrl: string;
   adminApiKey: string;
   grpcPort: number;
+  grpcBindAddr: string;
 }
 
 /**
@@ -66,6 +68,7 @@ export interface TelegramConfig {
  * - TELEGRAM_USE_POLLING: Force polling mode ("true" or "1")
  * - TELEGRAM_PORT: HTTP server port (default: 3002)
  * - TELEGRAM_GRPC_PORT: gRPC server port (default: 50052)
+ * - GRPC_BIND_ADDR: gRPC bind address (default: 127.0.0.1)
  * - NODE_ENV / SENTRY_ENVIRONMENT: Environment detection
  *
  * @returns Effect that yields a validated TelegramConfig
@@ -154,6 +157,7 @@ export const loadConfig = Effect.try((): TelegramConfig => {
   const grpcPort = process.env.TELEGRAM_GRPC_PORT
     ? parseInt(process.env.TELEGRAM_GRPC_PORT, 10)
     : 50052;
+  const grpcBindAddr = (process.env.GRPC_BIND_ADDR || "").trim();
 
   return {
     botToken,
@@ -169,6 +173,7 @@ export const loadConfig = Effect.try((): TelegramConfig => {
     apiBaseUrl,
     adminApiKey,
     grpcPort,
+    grpcBindAddr: grpcBindAddr || "127.0.0.1",
   };
 });
 
@@ -201,6 +206,7 @@ export const ENV_VARS = {
   TELEGRAM_USE_POLLING: "TELEGRAM_USE_POLLING",
   TELEGRAM_PORT: "TELEGRAM_PORT",
   TELEGRAM_GRPC_PORT: "TELEGRAM_GRPC_PORT",
+  GRPC_BIND_ADDR: "GRPC_BIND_ADDR",
   NODE_ENV: "NODE_ENV",
   SENTRY_ENVIRONMENT: "SENTRY_ENVIRONMENT",
 } as const;

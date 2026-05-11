@@ -94,7 +94,7 @@ app.post("/send-message", async (c) => {
   }
 
   const apiKey = c.req.header("X-API-Key");
-  if (!apiKey || apiKey !== config.adminApiKey) {
+  if (!apiKey || !safeCredentialEqual(apiKey, config.adminApiKey)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 

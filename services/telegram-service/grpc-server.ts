@@ -473,16 +473,25 @@ export function createTelegramGrpcServer(
   return server;
 }
 
+export function formatGrpcBindTarget(bindAddr: string, port: number): string {
+  const host =
+    bindAddr.includes(":") && !bindAddr.startsWith("[")
+      ? `[${bindAddr}]`
+      : bindAddr;
+
+  return `${host}:${port}`;
+}
+
 export function startGrpcServer(bot: Bot, port: number) {
   const server = createTelegramGrpcServer(bot);
 
-  const bindAddr = process.env.GRPC_BIND_ADDR || "127.0.0.1";
+  const bindAddr = config.grpcBindAddr;
   if (!["127.0.0.1", "::1", "localhost"].includes(bindAddr)) {
     logger.warn("Telegram gRPC service binding to a non-loopback address", {
       bindAddr,
     });
   }
-  const fullAddr = `${bindAddr}:${port}`;
+  const fullAddr = formatGrpcBindTarget(bindAddr, port);
   server.bindAsync(
     fullAddr,
     grpc.ServerCredentials.createInsecure(),
