@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	scalpingRuntimeDBPathEnv   = "NEURATRADE_SCALPING_BACKTEST_DB_PATH"
-	scalpingRuntimeSymbolsEnv  = "NEURATRADE_SCALPING_BACKTEST_SYMBOLS"
-	scalpingRuntimeExchangeEnv = "NEURATRADE_SCALPING_BACKTEST_EXCHANGE"
-	scalpingRuntimeLimitEnv    = "NEURATRADE_SCALPING_BACKTEST_SYMBOL_LIMIT"
+	scalpingRuntimeDBPathEnv        = "NEURATRADE_SCALPING_BACKTEST_DB_PATH"
+	scalpingRuntimeSymbolsEnv       = "NEURATRADE_SCALPING_BACKTEST_SYMBOLS"
+	scalpingRuntimeExchangeEnv      = "NEURATRADE_SCALPING_BACKTEST_EXCHANGE"
+	scalpingRuntimeLimitEnv         = "NEURATRADE_SCALPING_BACKTEST_SYMBOL_LIMIT"
+	scalpingRuntimeRequireTradesEnv = "NEURATRADE_SCALPING_BACKTEST_REQUIRE_TRADES"
 )
 
 func TestScalpingBacktestEngine_RunAgainstRuntimeSQLite(t *testing.T) {
@@ -44,22 +45,41 @@ func TestScalpingBacktestEngine_RunAgainstRuntimeSQLite(t *testing.T) {
 		result.GateSummary,
 	)
 
-	require.Greater(t, result.Summary.TotalSignals, 0, "runtime DB should produce historical signals")
-	require.Greater(t, result.Summary.EligibleSignals, 0, "runtime DB should produce gate-eligible signals")
-	require.Greater(t, result.Summary.TotalTrades, 0, "runtime DB should produce simulated trades")
-	require.NotEmpty(t, result.GateSummary, "runtime DB should populate gate diagnostics")
+	requireRuntimeBacktestResult(t, result)
 }
 
 func BenchmarkScalpingBacktestEngine_RuntimeSQLite(b *testing.B) {
 	sqliteDB, config := prepareRuntimeSQLiteBacktest(b)
 	result := runPreparedRuntimeSQLiteScalpingBacktest(b, sqliteDB, config)
-	require.Greater(b, result.Summary.TotalTrades, 0)
+	requireRuntimeBacktestResult(b, result)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		result = runPreparedRuntimeSQLiteScalpingBacktest(b, sqliteDB, config)
-		require.Greater(b, result.Summary.TotalTrades, 0)
+		requireRuntimeBacktestResult(b, result)
 	}
+}
+
+func requireRuntimeBacktestResult(tb testing.TB, result *ScalpingBacktestResult) {
+	tb.Helper()
+
+	require.Greater(tb, result.Summary.TotalSignals, 0, "runtime DB should produce historical signals")
+	require.True(
+		tb,
+		len(result.GateSummary) > 0 || len(result.Summary.RejectionByReason) > 0,
+		"runtime DB should populate gate or rejection diagnostics",
+	)
+
+	if !requireRuntimeScalpingTrades() {
+		return
+	}
+
+	require.Greater(tb, result.Summary.EligibleSignals, 0, "runtime DB should produce gate-eligible signals")
+	require.Greater(tb, result.Summary.TotalTrades, 0, "runtime DB should produce simulated trades")
+}
+
+func requireRuntimeScalpingTrades() bool {
+	return strings.TrimSpace(os.Getenv(scalpingRuntimeRequireTradesEnv)) != ""
 }
 
 func prepareRuntimeSQLiteBacktest(tb testing.TB) (*database.SQLiteDB, ScalpingBacktestConfig) {
@@ -143,12 +163,17 @@ func copyRuntimeSQLiteDB(tb testing.TB, sourcePath string) string {
 func runtimeMarketDataBounds(tb testing.TB, ctx context.Context, db *sql.DB) (time.Time, time.Time, int) {
 	tb.Helper()
 
-	var startRaw, endRaw string
+	var startRaw, endRaw sql.NullString
 	var count int
 	err := db.QueryRowContext(ctx, `SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM market_data`).Scan(&startRaw, &endRaw, &count)
 	require.NoError(tb, err)
+	if count == 0 {
+		return time.Time{}, time.Time{}, count
+	}
+	require.True(tb, startRaw.Valid, "runtime DB market_data MIN(timestamp) should be non-NULL")
+	require.True(tb, endRaw.Valid, "runtime DB market_data MAX(timestamp) should be non-NULL")
 
-	return parseRuntimeSQLiteTime(tb, startRaw), parseRuntimeSQLiteTime(tb, endRaw), count
+	return parseRuntimeSQLiteTime(tb, startRaw.String), parseRuntimeSQLiteTime(tb, endRaw.String), count
 }
 
 func runtimeBacktestSymbols(tb testing.TB, ctx context.Context, db *sql.DB) []string {

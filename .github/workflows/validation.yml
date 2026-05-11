@@ -166,8 +166,14 @@ jobs:
 
           echo "::add-mask::$admin_api_key"
           echo "::add-mask::$webhook_secret"
-          echo "ADMIN_API_KEY=$admin_api_key" >> "$GITHUB_ENV"
-          echo "TELEGRAM_WEBHOOK_SECRET=$webhook_secret" >> "$GITHUB_ENV"
+          {
+            echo "ADMIN_API_KEY<<EOF"
+            echo "$admin_api_key"
+            echo "EOF"
+            echo "TELEGRAM_WEBHOOK_SECRET<<EOF"
+            echo "$webhook_secret"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
       - name: Run tests
         run: cd services/telegram-service && bun test
