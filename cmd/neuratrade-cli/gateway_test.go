@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -113,6 +114,25 @@ func TestGatewayHealthTimeoutEnvOverride(t *testing.T) {
 
 	got := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
 	require.Equal(t, 12*time.Second, got)
+}
+
+func TestReadCommandLineForPIDTrimsWhitespace(t *testing.T) {
+	got, err := readCommandLineForPID(" \t" + strconv.Itoa(os.Getpid()) + "\n")
+
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+}
+
+func TestReadCommandLineForPIDRejectsInvalidPID(t *testing.T) {
+	tests := []string{"abc", "0", "-1"}
+
+	for _, pid := range tests {
+		t.Run(pid, func(t *testing.T) {
+			_, err := readCommandLineForPID(pid)
+
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestShouldSkipTelegramGatewayForPaperOnlyRuntime(t *testing.T) {
