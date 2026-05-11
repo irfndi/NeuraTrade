@@ -82,6 +82,53 @@ func TestAnnotateDecisionSignalTelemetry(t *testing.T) {
 		require.Zero(t, decision.SignalPriceChange24hPct)
 	})
 
+	t.Run("hold without symbol uses top orderbook-backed signal", func(t *testing.T) {
+		decision := &AITradingDecision{Action: "hold"}
+
+		annotateDecisionSignalTelemetry(decision, []aiMarketSignal{
+			{
+				Symbol:             "ETH/USDT",
+				PriceChange24h:     -0.12,
+				RangePosition24h:   44,
+				BidAskSpread:       0,
+				OrderBookImbalance: 0,
+			},
+			{
+				Symbol:             "SOL/USDT",
+				BidAskSpread:       0.044,
+				OrderBookImbalance: 0.31,
+				RangePosition24h:   57.5,
+				PriceChange24h:     2.1,
+			},
+		})
+
+		require.True(t, decision.SignalQualityKnown)
+		require.InDelta(t, 0.044, decision.SignalBidAskSpreadPct, 1e-9)
+		require.InDelta(t, 0.31, decision.SignalOrderBookImbalance, 1e-9)
+		require.InDelta(t, 57.5, decision.SignalRangePosition24h, 1e-9)
+		require.InDelta(t, 2.1, decision.SignalPriceChange24hPct, 1e-9)
+	})
+
+	t.Run("blank non-hold symbol leaves zero values", func(t *testing.T) {
+		decision := &AITradingDecision{Action: "buy"}
+
+		annotateDecisionSignalTelemetry(decision, []aiMarketSignal{
+			{
+				Symbol:             "BTC/USDT",
+				BidAskSpread:       0.031,
+				OrderBookImbalance: 0.42,
+				RangePosition24h:   38.5,
+				PriceChange24h:     -0.84,
+			},
+		})
+
+		require.False(t, decision.SignalQualityKnown)
+		require.Zero(t, decision.SignalBidAskSpreadPct)
+		require.Zero(t, decision.SignalOrderBookImbalance)
+		require.Zero(t, decision.SignalRangePosition24h)
+		require.Zero(t, decision.SignalPriceChange24hPct)
+	})
+
 	t.Run("perp symbol uses normalized exact match before fuzzy fallback", func(t *testing.T) {
 		decision := &AITradingDecision{Symbol: "BTC/USDT", Action: "buy"}
 

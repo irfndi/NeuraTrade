@@ -2855,15 +2855,7 @@ func annotateDecisionSignalTelemetry(decision *AITradingDecision, signals []aiMa
 	if decision == nil || len(signals) == 0 {
 		return
 	}
-	symbol := strings.TrimSpace(decision.Symbol)
-	if symbol == "" {
-		return
-	}
-	known := make(map[string]aiMarketSignal, len(signals))
-	for _, sig := range signals {
-		known[normalizeSymbolForComparison(sig.Symbol)] = sig
-	}
-	signal, ok := resolveDecisionSymbol(symbol, known)
+	signal, ok := resolveSignalForDecisionTelemetry(decision, signals)
 	if !ok {
 		return
 	}
@@ -2872,6 +2864,29 @@ func annotateDecisionSignalTelemetry(decision *AITradingDecision, signals []aiMa
 	decision.SignalOrderBookImbalance = signal.OrderBookImbalance
 	decision.SignalRangePosition24h = signal.RangePosition24h
 	decision.SignalPriceChange24hPct = signal.PriceChange24h
+}
+
+func resolveSignalForDecisionTelemetry(decision *AITradingDecision, signals []aiMarketSignal) (aiMarketSignal, bool) {
+	if decision == nil || len(signals) == 0 {
+		return aiMarketSignal{}, false
+	}
+	symbol := strings.TrimSpace(decision.Symbol)
+	if symbol != "" {
+		known := make(map[string]aiMarketSignal, len(signals))
+		for _, sig := range signals {
+			known[normalizeSymbolForComparison(sig.Symbol)] = sig
+		}
+		return resolveDecisionSymbol(symbol, known)
+	}
+	if !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		return aiMarketSignal{}, false
+	}
+	for _, sig := range signals {
+		if sig.BidAskSpread > 0 || sig.OrderBookImbalance != 0 {
+			return sig, true
+		}
+	}
+	return signals[0], true
 }
 
 func shouldPromoteGenericHoldToFallback(decision *AITradingDecision, funnel appautonomy.CandidateFunnelSnapshot) bool {
