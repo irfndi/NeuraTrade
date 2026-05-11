@@ -42,7 +42,9 @@ function safeCredentialEqual(provided: string, expected: string): boolean {
   return timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
-export function createAuthInterceptor(adminApiKey: string): grpc.ServerInterceptor {
+export function createAuthInterceptor(
+  adminApiKey: string,
+): grpc.ServerInterceptor {
   return (methodDescriptor, call) =>
     new grpc.ServerInterceptingCall(call, {
       start: (next) => {
