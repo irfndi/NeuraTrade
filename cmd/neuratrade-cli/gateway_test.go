@@ -124,7 +124,7 @@ func TestReadCommandLineForPIDTrimsWhitespace(t *testing.T) {
 }
 
 func TestReadCommandLineForPIDRejectsInvalidPID(t *testing.T) {
-	tests := []string{"abc", "0", "-1"}
+	tests := []string{"", "abc", "; rm -rf /", "123; malicious", "0", "-1"}
 
 	for _, pid := range tests {
 		t.Run(pid, func(t *testing.T) {
