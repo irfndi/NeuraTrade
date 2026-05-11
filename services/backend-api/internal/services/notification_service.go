@@ -109,8 +109,8 @@ func (ns *NotificationService) sendTelegramMessageWithResult(ctx context.Context
 	})
 	defer observability.FinishSpan(span, nil)
 
-	// Try gRPC first
-	if ns.grpcClient != nil {
+	// Try gRPC first when service-to-service auth is configured.
+	if ns.grpcClient != nil && ns.adminAPIKey != "" {
 		grpcCtx, grpcSpan := observability.StartSpan(spanCtx, observability.SpanOpGRPC, "telegram.SendMessage")
 		grpcCtx = metadata.AppendToOutgoingContext(grpcCtx, "x-api-key", ns.adminAPIKey)
 		resp, err := ns.grpcClient.SendMessage(grpcCtx, &pb.SendMessageRequest{
@@ -144,6 +144,8 @@ func (ns *NotificationService) sendTelegramMessageWithResult(ctx context.Context
 			ns.logger.Warn("Failed to send Telegram message via gRPC, falling back to HTTP", "error", err)
 			observability.AddBreadcrumb(spanCtx, "notification", "gRPC failed, falling back to HTTP", sentry.LevelWarning)
 		}
+	} else if ns.grpcClient != nil {
+		ns.logger.Warn("Telegram gRPC admin API key not configured, falling back to HTTP")
 	}
 
 	if ns.telegramServiceURL == "" {

@@ -9,7 +9,7 @@ import { registerAllCommands } from "./src/commands";
 import { registerTelegramCommandMenu } from "./src/commands/menu";
 import { SessionManager } from "./src/session";
 import { logger } from "./src/utils/logger";
-import { startGrpcServer } from "./grpc-server";
+import { safeCredentialEqual, startGrpcServer } from "./grpc-server";
 
 const bot = new Bot(config.botToken);
 
@@ -130,7 +130,7 @@ if (!config.usePolling && bot) {
       return c.json({ error: "Webhook secret not configured" }, 503);
     }
     const provided = c.req.header("X-Telegram-Bot-Api-Secret-Token");
-    if (!provided || provided !== config.webhookSecret) {
+    if (!provided || !safeCredentialEqual(provided, config.webhookSecret)) {
       return c.json({ error: "Unauthorized" }, 401);
     }
 

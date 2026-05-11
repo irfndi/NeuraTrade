@@ -1,4 +1,5 @@
 import * as grpc from "@grpc/grpc-js";
+import { createHash } from "node:crypto";
 import { timingSafeEqual } from "node:crypto";
 import {
   TelegramServiceService,
@@ -32,14 +33,14 @@ import { config } from "./src/config";
 type ParseMode = "HTML" | "Markdown" | "MarkdownV2";
 const HEALTH_CHECK_METHOD_PATH = "/telegram.TelegramService/HealthCheck";
 
-function safeCredentialEqual(provided: string, expected: string): boolean {
-  const providedBuffer = Buffer.from(provided);
-  const expectedBuffer = Buffer.from(expected);
-  if (providedBuffer.length !== expectedBuffer.length) {
-    return false;
-  }
+export function safeCredentialEqual(
+  provided: string,
+  expected: string,
+): boolean {
+  const providedDigest = createHash("sha256").update(provided, "utf8").digest();
+  const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
 
-  return timingSafeEqual(providedBuffer, expectedBuffer);
+  return timingSafeEqual(providedDigest, expectedDigest);
 }
 
 export function createAuthInterceptor(
@@ -476,6 +477,11 @@ export function startGrpcServer(bot: Bot, port: number) {
   const server = createTelegramGrpcServer(bot);
 
   const bindAddr = process.env.GRPC_BIND_ADDR || "127.0.0.1";
+  if (!["127.0.0.1", "::1", "localhost"].includes(bindAddr)) {
+    logger.warn("Telegram gRPC service binding to a non-loopback address", {
+      bindAddr,
+    });
+  }
   const fullAddr = `${bindAddr}:${port}`;
   server.bindAsync(
     fullAddr,

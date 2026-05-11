@@ -5,6 +5,7 @@ import type { Bot } from "grammy";
 import {
   createAuthInterceptor,
   createTelegramGrpcServer,
+  safeCredentialEqual,
   TelegramGrpcServer,
 } from "./grpc-server";
 import type {
@@ -332,5 +333,16 @@ describe("TelegramGrpcServer", () => {
     );
     expect(valid.metadataForwarded).toBe(true);
     expect(valid.call.sentStatuses).toHaveLength(0);
+  });
+
+  test("credential comparison accepts only exact secret matches", () => {
+    expect(safeCredentialEqual("secret-token", "secret-token")).toBe(true);
+    expect(safeCredentialEqual("secret-token", "secret-token-extra")).toBe(
+      false,
+    );
+    expect(safeCredentialEqual("secret-token-extra", "secret-token")).toBe(
+      false,
+    );
+    expect(safeCredentialEqual("", "secret-token")).toBe(false);
   });
 });
