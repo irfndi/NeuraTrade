@@ -50,7 +50,9 @@ func TestLoadSignalsFromMarketData_LegacyLastPriceSchema(t *testing.T) {
 		INSERT INTO market_data (exchange_id, trading_pair_id, bid, ask, last_price, volume_24h, timestamp)
 		VALUES
 			(1, 10, 99, 101, 100, 1000, '2026-05-04 20:15:45+07:00'),
-			(1, 10, 100, 103, 102, 1100, '2026-05-04 20:20:45+07:00');
+			(1, 10, 100, 103, 102, 1100, '2026-05-04 20:20:45+07:00'),
+			(1, 10, NULL, NULL, 98, 1200, '2026-05-04 20:25:45+07:00'),
+			(1, 10, 0, 0, 97, 1300, '2026-05-04 20:30:45+07:00');
 	`)
 	require.NoError(t, err)
 
@@ -73,11 +75,15 @@ func TestLoadSignalsFromMarketData_LegacyLastPriceSchema(t *testing.T) {
 
 	signals, err := engine.loadHistoricalSignals(ctx, engine.config.StartTime, engine.config.EndTime)
 	require.NoError(t, err)
-	require.Len(t, signals, 2)
+	require.Len(t, signals, 4)
 	assert.Equal(t, "TEST/USDT", signals[0].Symbol)
 	assert.Equal(t, "bitget", signals[0].Exchange)
 	assert.Equal(t, 100.0, signals[0].Signal.Price)
 	assert.Equal(t, 101.0, signals[0].Signal.High24h)
 	assert.Equal(t, 99.0, signals[0].Signal.Low24h)
 	assert.Greater(t, signals[0].Signal.BidAskSpread, 0.0)
+	assert.Equal(t, 98.0, signals[2].Signal.High24h)
+	assert.Equal(t, 98.0, signals[2].Signal.Low24h)
+	assert.Equal(t, 97.0, signals[3].Signal.High24h)
+	assert.Equal(t, 97.0, signals[3].Signal.Low24h)
 }

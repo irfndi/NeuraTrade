@@ -3,8 +3,6 @@ package services
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -130,18 +128,15 @@ func runPreparedRuntimeSQLiteScalpingBacktest(tb testing.TB, sqliteDB *database.
 func copyRuntimeSQLiteDB(tb testing.TB, sourcePath string) string {
 	tb.Helper()
 
-	source, err := os.Open(sourcePath)
+	sourceDB, err := sql.Open("sqlite3", sourcePath)
 	require.NoError(tb, err)
-	defer source.Close()
+	defer sourceDB.Close()
 
-	targetPath := filepath.Join(tb.TempDir(), filepath.Base(sourcePath))
-	target, err := os.Create(targetPath)
+	targetPath := filepath.Join(tb.TempDir(), "runtime-snapshot-"+filepath.Base(sourcePath))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err = sourceDB.ExecContext(ctx, "VACUUM INTO ?", targetPath)
 	require.NoError(tb, err)
-	if _, err = io.Copy(target, source); err != nil {
-		_ = target.Close()
-		require.NoError(tb, err)
-	}
-	require.NoError(tb, target.Close())
 
 	return targetPath
 }
@@ -222,5 +217,5 @@ func parseRuntimeSQLiteTime(tb testing.TB, raw string) time.Time {
 		}
 	}
 	tb.Fatalf("unsupported SQLite timestamp %q", raw)
-	panic(fmt.Sprintf("unsupported SQLite timestamp %q", raw))
+	return time.Time{}
 }
