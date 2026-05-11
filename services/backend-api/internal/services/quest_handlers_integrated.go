@@ -1325,10 +1325,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			cycleRec.EffectiveMinConfidence = decision.EffectiveMinConfidence
 			cycleRec.EffectiveMaxCapitalPct = decision.EffectiveMaxCapitalPct
 			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
-			cycleRec.BidAskSpreadPct = decision.SignalBidAskSpreadPct
-			cycleRec.OrderBookImbalance = decision.SignalOrderBookImbalance
-			cycleRec.RangePosition24h = decision.SignalRangePosition24h
-			cycleRec.PriceChange24hPct = decision.SignalPriceChange24hPct
+			applyDecisionSignalQualityToCycleRecord(&cycleRec, decision)
 		}
 		writeCtx, writeCancel := telemetryWriteContext()
 		persistedCycleID, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
@@ -2700,6 +2697,16 @@ func (h *IntegratedQuestHandlers) recordScalpingGateCycle(
 	if _, err := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec); err != nil {
 		log.Printf("[TELEMETRY] Failed to insert gated scalping cycle: %v", err)
 	}
+}
+
+func applyDecisionSignalQualityToCycleRecord(record *CycleRecord, decision *AITradingDecision) {
+	if record == nil || decision == nil {
+		return
+	}
+	record.BidAskSpreadPct = decision.SignalBidAskSpreadPct
+	record.OrderBookImbalance = decision.SignalOrderBookImbalance
+	record.RangePosition24h = decision.SignalRangePosition24h
+	record.PriceChange24hPct = decision.SignalPriceChange24hPct
 }
 
 func finiteDecimalFromFloat(value float64) decimal.Decimal {

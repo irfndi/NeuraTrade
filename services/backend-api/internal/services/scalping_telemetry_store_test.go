@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -50,6 +51,44 @@ func TestScalpingTelemetryStore_InsertCycleRecordPersistsSignalQuality(t *testin
 	require.InDelta(t, 0.46, imbalance, 1e-9)
 	require.InDelta(t, 41.5, rangePos, 1e-9)
 	require.InDelta(t, -0.64, priceChange, 1e-9)
+}
+
+func TestScalpingTelemetryStore_InsertCycleRecordSanitizesNonFiniteSignalQuality(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-telemetry-nonfinite.db"))
+	require.NoError(t, err)
+	defer sqliteDB.Close()
+
+	store := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, store.EnsureSchema(ctx))
+
+	cycleID, err := store.InsertCycleRecord(ctx, CycleRecord{
+		ID:                 "cycle-quality-nonfinite",
+		ChatID:             "chat-1",
+		Exchange:           "bitget",
+		CycleAt:            time.Date(2026, 5, 11, 9, 5, 0, 0, time.UTC),
+		Symbol:             "BTC/USDT",
+		Action:             "buy",
+		BidAskSpreadPct:    math.NaN(),
+		OrderBookImbalance: math.Inf(1),
+		RangePosition24h:   math.Inf(-1),
+		PriceChange24hPct:  math.NaN(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "cycle-quality-nonfinite", cycleID)
+
+	var spread, imbalance, rangePos, priceChange float64
+	err = sqliteDB.DB.QueryRowContext(ctx, `
+		SELECT bid_ask_spread_pct, order_book_imbalance, range_position_24h, price_change_24h_pct
+		FROM scalping_cycle_telemetry
+		WHERE id = ?
+	`, cycleID).Scan(&spread, &imbalance, &rangePos, &priceChange)
+	require.NoError(t, err)
+
+	require.Zero(t, spread)
+	require.Zero(t, imbalance)
+	require.Zero(t, rangePos)
+	require.Zero(t, priceChange)
 }
 
 func TestScalpingTelemetryStore_EnsureSchemaAddsSignalQualityColumnsToLegacyTable(t *testing.T) {
