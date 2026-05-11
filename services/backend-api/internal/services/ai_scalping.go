@@ -2861,7 +2861,7 @@ func annotateDecisionSignalTelemetry(decision *AITradingDecision, signals []aiMa
 	}
 	known := make(map[string]aiMarketSignal, len(signals))
 	for _, sig := range signals {
-		known[sig.Symbol] = sig
+		known[normalizeSymbolForComparison(sig.Symbol)] = sig
 	}
 	signal, ok := resolveDecisionSymbol(symbol, known)
 	if !ok {

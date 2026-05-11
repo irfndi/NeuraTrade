@@ -80,6 +80,33 @@ func TestAnnotateDecisionSignalTelemetry(t *testing.T) {
 		require.Zero(t, decision.SignalRangePosition24h)
 		require.Zero(t, decision.SignalPriceChange24hPct)
 	})
+
+	t.Run("perp symbol uses normalized exact match before fuzzy fallback", func(t *testing.T) {
+		decision := &AITradingDecision{Symbol: "BTC/USDT", Action: "buy"}
+
+		annotateDecisionSignalTelemetry(decision, []aiMarketSignal{
+			{
+				Symbol:             "BTCDOM/USDT:USDT",
+				BidAskSpread:       0.19,
+				OrderBookImbalance: -0.91,
+				RangePosition24h:   12,
+				PriceChange24h:     -3.4,
+			},
+			{
+				Symbol:             "BTC/USDT:USDT",
+				BidAskSpread:       0.031,
+				OrderBookImbalance: 0.42,
+				RangePosition24h:   38.5,
+				PriceChange24h:     -0.84,
+			},
+		})
+
+		require.True(t, decision.SignalQualityKnown)
+		require.InDelta(t, 0.031, decision.SignalBidAskSpreadPct, 1e-9)
+		require.InDelta(t, 0.42, decision.SignalOrderBookImbalance, 1e-9)
+		require.InDelta(t, 38.5, decision.SignalRangePosition24h, 1e-9)
+		require.InDelta(t, -0.84, decision.SignalPriceChange24hPct, 1e-9)
+	})
 }
 
 func TestCopyPreTradeTelemetryCopiesSignalQuality(t *testing.T) {
