@@ -112,6 +112,14 @@ func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T)
 			ok:       true,
 		},
 		{
+			name: "paper and real both enabled does not override persisted state",
+			env: map[string]string{
+				envFeaturePaperTrading: "true",
+				envFeatureRealTrading:  "true",
+			},
+			ok: false,
+		},
+		{
 			name: "unset env does not override persisted state",
 			env:  map[string]string{},
 			ok:   false,

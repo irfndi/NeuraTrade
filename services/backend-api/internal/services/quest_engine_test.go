@@ -1479,6 +1479,9 @@ func TestBeginAutonomous_UsesStoredPaperModeMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginAutonomous returned error: %v", err)
 	}
+	if len(state.ActiveQuests) == 0 {
+		t.Fatal("expected at least one active quest")
+	}
 	quest := engine.quests[state.ActiveQuests[0]]
 	if quest.Metadata["execution_mode"] != string(ModePaper) {
 		t.Fatalf("expected execution_mode paper, got %q", quest.Metadata["execution_mode"])
@@ -1506,6 +1509,9 @@ func TestBeginAutonomous_RuntimePaperEnvOverridesStoredLiveMode(t *testing.T) {
 	state, err := engine.BeginAutonomous("paper-env-chat")
 	if err != nil {
 		t.Fatalf("BeginAutonomous returned error: %v", err)
+	}
+	if len(state.ActiveQuests) == 0 {
+		t.Fatal("expected at least one active quest")
 	}
 	quest := engine.quests[state.ActiveQuests[0]]
 	if quest.Metadata["execution_mode"] != string(ModePaper) {
