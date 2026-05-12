@@ -610,6 +610,10 @@ func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing
 		DecisionType: "scalping_digest",
 		Action:       "hold",
 	}))
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "paper_close",
+		Action:       "hold",
+	}))
 }
 
 func TestShouldSendScalpingDecisionNotification_EnvOverrides(t *testing.T) {
