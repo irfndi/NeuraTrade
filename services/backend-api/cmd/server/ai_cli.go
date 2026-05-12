@@ -42,6 +42,9 @@ func runAICLI() error {
 	if command == "probe" {
 		return probeAIProvider(ctx, cfg.AI, args, os.Stdout)
 	}
+	if command == "scalping-probe" {
+		return probeAIScalpingDecision(ctx, cfg.AI, args, os.Stdout)
+	}
 
 	logrusLogger := zaplogrus.New()
 	errorRecoveryManager := services.NewErrorRecoveryManager(logrusLogger)
@@ -100,6 +103,7 @@ func printAIUsage() {
 	fmt.Println("  capabilities   List models by capabilities")
 	fmt.Println("  status         Show registry status")
 	fmt.Println("  probe          Send a tiny live completion to configured provider(s)")
+	fmt.Println("  scalping-probe Exercise the live scalping LLM decision contract without orders")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  neuratrade ai models --provider openai")
@@ -107,6 +111,7 @@ func printAIUsage() {
 	fmt.Println("  neuratrade ai show gpt-4-turbo")
 	fmt.Println("  neuratrade ai capabilities --tools --vision")
 	fmt.Println("  neuratrade ai probe --provider zai --json")
+	fmt.Println("  neuratrade ai scalping-probe --provider deepseek --json")
 }
 
 func listModels(ctx context.Context, registry *ai.Registry, args []string) error {
@@ -513,6 +518,21 @@ type aiProviderProbeResult struct {
 	Error               string           `json:"error,omitempty"`
 }
 
+type aiScalpingDecisionProbeOptions struct {
+	Provider         string
+	Model            string
+	BaseURL          string
+	OutputJSON       bool
+	Timeout          time.Duration
+	MaxRetries       int
+	FailoverMaxHops  int
+	Exchange         string
+	Capital          decimal.Decimal
+	RequireHealthy   bool
+	RequireValid     bool
+	MinSignalQuality decimal.Decimal
+}
+
 func probeAIProvider(ctx context.Context, cfg config.AIConfig, args []string, out io.Writer) error {
 	opts, err := parseAIProviderProbeOptions(args)
 	if err != nil {
@@ -595,6 +615,73 @@ func probeAIProvider(ctx context.Context, cfg config.AIConfig, args []string, ou
 	return writeAIProviderProbeResult(out, opts.OutputJSON, result)
 }
 
+func probeAIScalpingDecision(ctx context.Context, cfg config.AIConfig, args []string, out io.Writer) error {
+	opts, err := parseAIScalpingDecisionProbeOptions(args)
+	if err != nil {
+		return err
+	}
+	providerOpts := aiProviderProbeOptions{
+		Provider:        opts.Provider,
+		Model:           opts.Model,
+		BaseURL:         opts.BaseURL,
+		Timeout:         opts.Timeout,
+		MaxRetries:      opts.MaxRetries,
+		MaxTokens:       1200,
+		FailoverMaxHops: opts.FailoverMaxHops,
+	}
+	nodes, _, err := buildAIProviderProbeNodes(cfg, providerOpts)
+	if err != nil {
+		return err
+	}
+	client, closeFn := buildAIProviderProbeClient(nodes, providerOpts)
+	defer closeFn()
+
+	model := ""
+	if len(nodes) > 0 {
+		model = nodes[0].Model
+	}
+	portfolio := services.TradingPortfolio{
+		USDTBalance:        opts.Capital.InexactFloat64(),
+		USDTBalanceDecimal: opts.Capital,
+		TotalValue:         opts.Capital.InexactFloat64(),
+		TotalValueDecimal:  opts.Capital,
+		StrategyPhase:      "probe",
+		RecoveryEntryOK:    true,
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, aiProviderProbeOverallTimeout(nodes, providerOpts))
+	defer cancel()
+
+	result, runErr := services.RunPublicScalpingLLMDecisionProbe(probeCtx, client, services.ScalpingLLMDecisionProbeOptions{
+		Exchange:  opts.Exchange,
+		Model:     model,
+		Portfolio: portfolio,
+	})
+	if result != nil {
+		if writeErr := writeAIScalpingDecisionProbeResult(out, opts.OutputJSON, result); writeErr != nil {
+			if runErr != nil {
+				return errors.Join(runErr, writeErr)
+			}
+			return writeErr
+		}
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if result == nil {
+		return fmt.Errorf("scalping LLM decision probe returned nil result")
+	}
+	if opts.RequireHealthy && result.LLMDegraded {
+		return fmt.Errorf("scalping LLM decision probe degraded: %v", result.RuntimeDiagnostics["last_error"])
+	}
+	if opts.RequireValid && !result.ContractValid {
+		return fmt.Errorf("scalping LLM decision contract invalid: %s", result.ContractError)
+	}
+	if opts.MinSignalQuality.GreaterThan(decimal.Zero) && result.SignalQualityCoverage.LessThan(opts.MinSignalQuality) {
+		return fmt.Errorf("signal_quality_coverage=%s below minimum=%s", result.SignalQualityCoverage.String(), opts.MinSignalQuality.String())
+	}
+	return nil
+}
+
 func parseAIProviderProbeOptions(args []string) (aiProviderProbeOptions, error) {
 	opts := aiProviderProbeOptions{
 		Prompt:          "Reply with OK.",
@@ -643,6 +730,75 @@ func parseAIProviderProbeOptions(args []string) (aiProviderProbeOptions, error) 
 	opts.Expect = strings.TrimSpace(opts.Expect)
 	if opts.Prompt == "" {
 		opts.Prompt = "Reply with OK."
+	}
+	return opts, nil
+}
+
+func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbeOptions, error) {
+	opts := aiScalpingDecisionProbeOptions{
+		Timeout:          60 * time.Second,
+		FailoverMaxHops:  1,
+		Exchange:         "bitget",
+		Capital:          decimal.NewFromFloat(48),
+		RequireHealthy:   true,
+		RequireValid:     true,
+		MinSignalQuality: decimal.NewFromInt(1),
+	}
+
+	fs := flag.NewFlagSet("ai scalping-probe", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	timeoutSeconds := fs.Int("timeout-seconds", int(opts.Timeout/time.Second), "completion timeout in seconds")
+	capital := fs.String("capital", opts.Capital.String(), "paper wallet basis in USDT for the prompt")
+	minSignalQuality := fs.String("min-signal-quality", opts.MinSignalQuality.String(), "minimum signal quality coverage required")
+	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
+	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
+	fs.StringVar(&opts.Provider, "provider", "", "provider to probe; defaults to ai.provider and NEURATRADE_AI_PROVIDER_CHAIN")
+	fs.StringVar(&opts.Model, "model", "", "model override for the selected provider")
+	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
+	fs.StringVar(&opts.Exchange, "exchange", opts.Exchange, "public exchange to fetch market/order-book signals from")
+	fs.BoolVar(&opts.OutputJSON, "json", false, "write JSON output")
+	fs.IntVar(&opts.MaxRetries, "max-retries", 0, "HTTP retry count")
+	fs.IntVar(&opts.FailoverMaxHops, "failover-max-hops", opts.FailoverMaxHops, "number of fallback providers to try after the primary")
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if fs.NArg() > 0 {
+		return opts, fmt.Errorf("unexpected ai scalping-probe arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if timeoutSeconds == nil || *timeoutSeconds <= 0 {
+		return opts, fmt.Errorf("--timeout-seconds must be greater than zero")
+	}
+	if opts.MaxRetries < 0 {
+		return opts, fmt.Errorf("--max-retries must be zero or greater")
+	}
+	if opts.FailoverMaxHops < 0 {
+		return opts, fmt.Errorf("--failover-max-hops must be zero or greater")
+	}
+	parsedCapital, err := decimal.NewFromString(strings.TrimSpace(*capital))
+	if err != nil {
+		return opts, fmt.Errorf("parse --capital: %w", err)
+	}
+	if !parsedCapital.GreaterThan(decimal.Zero) {
+		return opts, fmt.Errorf("--capital must be greater than zero")
+	}
+	parsedSignalQuality, err := decimal.NewFromString(strings.TrimSpace(*minSignalQuality))
+	if err != nil {
+		return opts, fmt.Errorf("parse --min-signal-quality: %w", err)
+	}
+	if parsedSignalQuality.IsNegative() || parsedSignalQuality.GreaterThan(decimal.NewFromInt(1)) {
+		return opts, fmt.Errorf("--min-signal-quality must be between 0 and 1")
+	}
+	opts.Timeout = time.Duration(*timeoutSeconds) * time.Second
+	opts.Capital = parsedCapital
+	opts.MinSignalQuality = parsedSignalQuality
+	opts.RequireHealthy = !*allowDegraded
+	opts.RequireValid = !*allowInvalidContract
+	opts.Provider = ai.NormalizeProviderID(opts.Provider)
+	opts.Model = strings.TrimSpace(opts.Model)
+	opts.BaseURL = strings.TrimSpace(opts.BaseURL)
+	opts.Exchange = strings.TrimSpace(opts.Exchange)
+	if opts.Exchange == "" {
+		opts.Exchange = "bitget"
 	}
 	return opts, nil
 }
@@ -899,6 +1055,67 @@ func writeAIProviderProbeResult(out io.Writer, outputJSON bool, result aiProvide
 	}
 	if len(result.SkippedProviders) > 0 {
 		if err := writeProbeOutput("Skipped providers: %s\n", strings.Join(result.SkippedProviders, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeAIScalpingDecisionProbeResult(out io.Writer, outputJSON bool, result *services.ScalpingLLMDecisionProbeResult) error {
+	if result == nil {
+		return fmt.Errorf("scalping decision probe result is nil")
+	}
+	if outputJSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	writeProbeOutput := func(format string, args ...any) error {
+		if _, err := fmt.Fprintf(out, format, args...); err != nil {
+			return fmt.Errorf("writing scalping probe output: %w", err)
+		}
+		return nil
+	}
+	if err := writeProbeOutput("AI scalping decision probe completed\n"); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Exchange: %s\n", result.Exchange); err != nil {
+		return err
+	}
+	if result.Provider != "" {
+		if err := writeProbeOutput("Provider: %s\n", result.Provider); err != nil {
+			return err
+		}
+	}
+	if result.Model != "" {
+		if err := writeProbeOutput("Model: %s\n", result.Model); err != nil {
+			return err
+		}
+	}
+	if err := writeProbeOutput("Signals: %d\n", result.SignalCount); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Signal quality coverage: %s\n", result.SignalQualityCoverage.String()); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("LLM degraded: %t\n", result.LLMDegraded); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Contract valid: %t\n", result.ContractValid); err != nil {
+		return err
+	}
+	if result.ContractError != "" {
+		if err := writeProbeOutput("Contract error: %s\n", result.ContractError); err != nil {
+			return err
+		}
+	}
+	if result.Decision != nil {
+		if err := writeProbeOutput("Decision: %s %s confidence=%.4f reason_category=%s\n", result.Decision.Action, result.Decision.Symbol, result.Decision.Confidence, result.Decision.ReasonCategory); err != nil {
+			return err
+		}
+	}
+	if result.PreTradeGateReason != "" {
+		if err := writeProbeOutput("Pre-trade gate: allowed=%t reason=%s\n", result.PreTradeGateAllowed, result.PreTradeGateReason); err != nil {
 			return err
 		}
 	}
