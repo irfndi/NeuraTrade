@@ -2441,105 +2441,136 @@ func TestQuestProgressNotification_Integration(t *testing.T) {
 func TestNotificationService_RuntimeStatusRendering(t *testing.T) {
 	ns := NewNotificationService(nil, nil, "", "", "")
 
-	t.Run("state drift with runtime details", func(t *testing.T) {
-		message := ns.formatAIReasoningMessage(AIReasoningNotification{
-			DecisionType:  "scalping_cycle",
-			Summary:       "State drift gate active",
-			RuntimeStatus: runtimeStatusStateDrift,
-			RuntimeDetails: map[string]string{
-				"drift_positions":       "3",
-				"clean_passes_current":  "1",
-				"clean_passes_required": "2",
+	runtimeDetailTests := []struct {
+		name        string
+		reasoning   AIReasoningNotification
+		contains    []string
+		notContains []string
+	}{
+		{
+			name: "state drift with runtime details",
+			reasoning: AIReasoningNotification{
+				DecisionType:  "scalping_cycle",
+				Summary:       "State drift gate active",
+				RuntimeStatus: runtimeStatusStateDrift,
+				RuntimeDetails: map[string]string{
+					"drift_positions":       "3",
+					"clean_passes_current":  "1",
+					"clean_passes_required": "2",
+				},
+				Reasons: []string{"Drift detected"},
+				Action:  "hold",
 			},
-			Reasons: []string{"Drift detected"},
-			Action:  "hold",
-		})
-		assert.Contains(t, message, "Runtime Status:")
-		assert.Contains(t, message, "🔄")
-		assert.Contains(t, message, "Reconcile Progress: 1/2 clean passes")
-		assert.Contains(t, message, "Drift Positions: 3 stale")
-	})
-
-	t.Run("state drift renders stale lifecycle ids", func(t *testing.T) {
-		message := ns.formatAIReasoningMessage(AIReasoningNotification{
-			DecisionType:  "scalping_digest",
-			Summary:       "Hold digest: paused for lifecycle reconciliation",
-			RuntimeStatus: runtimeStatusStateDrift,
-			RuntimeDetails: map[string]string{
-				"drift_positions":       "2",
-				"clean_passes_current":  "0",
-				"clean_passes_required": "2",
-				"stale_position_ids":    "pos-a,pos-b",
+			contains: []string{
+				"Runtime Status:",
+				"🔄",
+				"Reconcile Progress: 1/2 clean passes",
+				"Drift Positions: 3 stale",
 			},
-			Reasons: []string{"State drift active"},
-			Action:  "hold",
-		})
-		assert.Contains(t, message, "Confidence: ⏸️ (infrastructure hold)")
-		assert.Contains(t, message, "Runtime Status:")
-		assert.Contains(t, message, "Reconcile Progress: 0/2 clean passes")
-		assert.Contains(t, message, "Drift Positions: 2 stale")
-		assert.Contains(t, message, "Stale Position IDs: pos-a,pos-b")
-	})
-
-	t.Run("state drift summarizes long stale lifecycle id lists", func(t *testing.T) {
-		message := ns.formatAIReasoningMessage(AIReasoningNotification{
-			DecisionType:  "scalping_digest",
-			Summary:       "Hold digest: paused for lifecycle reconciliation",
-			RuntimeStatus: runtimeStatusStateDrift,
-			RuntimeDetails: map[string]string{
-				"drift_positions":       "7",
-				"clean_passes_current":  "0",
-				"clean_passes_required": "2",
-				"stale_position_ids":    "pos-a,pos-b,pos-c,pos-d,pos-e,pos-f,pos-g",
+		},
+		{
+			name: "state drift renders stale lifecycle ids",
+			reasoning: AIReasoningNotification{
+				DecisionType:  "scalping_digest",
+				Summary:       "Hold digest: paused for lifecycle reconciliation",
+				RuntimeStatus: runtimeStatusStateDrift,
+				RuntimeDetails: map[string]string{
+					"drift_positions":       "2",
+					"clean_passes_current":  "0",
+					"clean_passes_required": "2",
+					"stale_position_ids":    "pos-a,pos-b",
+				},
+				Reasons: []string{"State drift active"},
+				Action:  "hold",
 			},
-			Reasons: []string{"State drift active"},
-			Action:  "hold",
-		})
-		assert.Contains(t, message, "Stale Position IDs: pos-a,pos-b,pos-c,pos-d,pos-e, ... (+2 more)")
-		assert.NotContains(t, message, "pos-f,pos-g")
-	})
-
-	t.Run("reconcile blocked renders runtime details", func(t *testing.T) {
-		message := ns.formatAIReasoningMessage(AIReasoningNotification{
-			DecisionType:  "scalping_digest",
-			Summary:       "Hold digest: waiting for clean reconcile passes",
-			RuntimeStatus: runtimeStatusReconcileBlocked,
-			RuntimeDetails: map[string]string{
-				"drift_positions":       "0",
-				"clean_passes_current":  "1",
-				"clean_passes_required": "3",
+			contains: []string{
+				"Confidence: ⏸️ (infrastructure hold)",
+				"Runtime Status:",
+				"Reconcile Progress: 0/2 clean passes",
+				"Drift Positions: 2 stale",
+				"Stale Position IDs: pos-a,pos-b",
 			},
-			Reasons: []string{"Reconcile blocked until clean-pass threshold met"},
-			Action:  "hold",
-		})
-		assert.Contains(t, message, "Confidence: ⏸️ (reconcile blocked)")
-		assert.Contains(t, message, "Runtime Status:")
-		assert.Contains(t, message, "Reconcile Progress: 1/3 clean passes")
-		assert.Contains(t, message, "Drift Positions: 0 stale")
-	})
-
-	t.Run("state drift force repair renders recovery action", func(t *testing.T) {
-		message := ns.formatAIReasoningMessage(AIReasoningNotification{
-			DecisionType:  "scalping_digest",
-			Summary:       "Hold digest: paused for lifecycle reconciliation",
-			RuntimeStatus: runtimeStatusStateDrift,
-			RuntimeDetails: map[string]string{
-				"drift_positions":       "1",
-				"clean_passes_current":  "2",
-				"clean_passes_required": "2",
-				"force_repair_eligible": "true",
-				"recovery_action":       "deadlock_clear_triggered",
-				"stale_position_ids":    "pos-deadlock",
+		},
+		{
+			name: "state drift summarizes long stale lifecycle id lists",
+			reasoning: AIReasoningNotification{
+				DecisionType:  "scalping_digest",
+				Summary:       "Hold digest: paused for lifecycle reconciliation",
+				RuntimeStatus: runtimeStatusStateDrift,
+				RuntimeDetails: map[string]string{
+					"drift_positions":       "7",
+					"clean_passes_current":  "0",
+					"clean_passes_required": "2",
+					"stale_position_ids":    "pos-a,pos-b,pos-c,pos-d,pos-e,pos-f,pos-g",
+				},
+				Reasons: []string{"State drift active"},
+				Action:  "hold",
 			},
-			Reasons: []string{"State drift active", "Force repair available"},
-			Action:  "hold",
+			contains: []string{
+				"Stale Position IDs: pos-a,pos-b,pos-c,pos-d,pos-e, ... (+2 more)",
+			},
+			notContains: []string{
+				"pos-f,pos-g",
+			},
+		},
+		{
+			name: "reconcile blocked renders runtime details",
+			reasoning: AIReasoningNotification{
+				DecisionType:  "scalping_digest",
+				Summary:       "Hold digest: waiting for clean reconcile passes",
+				RuntimeStatus: runtimeStatusReconcileBlocked,
+				RuntimeDetails: map[string]string{
+					"drift_positions":       "0",
+					"clean_passes_current":  "1",
+					"clean_passes_required": "3",
+				},
+				Reasons: []string{"Reconcile blocked until clean-pass threshold met"},
+				Action:  "hold",
+			},
+			contains: []string{
+				"Confidence: ⏸️ (reconcile blocked)",
+				"Runtime Status:",
+				"Reconcile Progress: 1/3 clean passes",
+				"Drift Positions: 0 stale",
+			},
+		},
+		{
+			name: "state drift force repair renders recovery action",
+			reasoning: AIReasoningNotification{
+				DecisionType:  "scalping_digest",
+				Summary:       "Hold digest: paused for lifecycle reconciliation",
+				RuntimeStatus: runtimeStatusStateDrift,
+				RuntimeDetails: map[string]string{
+					"drift_positions":       "1",
+					"clean_passes_current":  "2",
+					"clean_passes_required": "2",
+					"force_repair_eligible": "true",
+					"recovery_action":       "deadlock_clear_triggered",
+					"stale_position_ids":    "pos-deadlock",
+				},
+				Reasons: []string{"State drift active", "Force repair available"},
+				Action:  "hold",
+			},
+			contains: []string{
+				"Runtime Status:",
+				"Reconcile Progress: 2/2 clean passes",
+				"Drift Positions: 1 stale",
+				"Force Repair Eligible: true",
+				"Recovery Action: deadlock_clear_triggered",
+			},
+		},
+	}
+	for _, tt := range runtimeDetailTests {
+		t.Run(tt.name, func(t *testing.T) {
+			message := ns.formatAIReasoningMessage(tt.reasoning)
+			for _, expected := range tt.contains {
+				assert.Contains(t, message, expected)
+			}
+			for _, unexpected := range tt.notContains {
+				assert.NotContains(t, message, unexpected)
+			}
 		})
-		assert.Contains(t, message, "Runtime Status:")
-		assert.Contains(t, message, "Reconcile Progress: 2/2 clean passes")
-		assert.Contains(t, message, "Drift Positions: 1 stale")
-		assert.Contains(t, message, "Force Repair Eligible: true")
-		assert.Contains(t, message, "Recovery Action: deadlock_clear_triggered")
-	})
+	}
 
 	t.Run("LLM degraded confidence", func(t *testing.T) {
 		message := ns.formatAIReasoningMessage(AIReasoningNotification{
