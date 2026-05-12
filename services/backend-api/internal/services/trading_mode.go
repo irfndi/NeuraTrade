@@ -26,6 +26,13 @@ const (
 	ModePaper        OperationalMode = "paper"
 )
 
+const (
+	envFeaturesPaperTrading = "FEATURES_PAPER_TRADING"
+	envFeaturePaperTrading  = "FEATURE_PAPER_TRADING"
+	envFeaturesRealTrading  = "FEATURES_REAL_TRADING"
+	envFeatureRealTrading   = "FEATURE_REAL_TRADING"
+)
+
 // OperationalModeState represents the current operational mode state
 type OperationalModeState struct {
 	Mode          OperationalMode `json:"mode"`
@@ -53,8 +60,8 @@ func DefaultOperationalModeConfig() OperationalModeConfig {
 }
 
 func runtimeModeOverrideFromEnv() (OperationalMode, bool) {
-	paperEnabled, paperSet := boolEnvAny("FEATURES_PAPER_TRADING", "FEATURE_PAPER_TRADING")
-	realEnabled, realSet := boolEnvAny("FEATURES_REAL_TRADING", "FEATURE_REAL_TRADING")
+	paperEnabled, paperSet := boolEnvAny(envFeaturesPaperTrading, envFeaturePaperTrading)
+	realEnabled, realSet := boolEnvAny(envFeaturesRealTrading, envFeatureRealTrading)
 	if paperSet && paperEnabled && (!realSet || !realEnabled) {
 		return ModePaper, true
 	}
@@ -64,6 +71,8 @@ func runtimeModeOverrideFromEnv() (OperationalMode, bool) {
 	return "", false
 }
 
+// boolEnvAny treats unrecognized present values as explicit false so typoed
+// safety gates cannot silently preserve a persisted live mode.
 func boolEnvAny(names ...string) (bool, bool) {
 	for _, name := range names {
 		raw, ok := os.LookupEnv(name)
@@ -76,6 +85,7 @@ func boolEnvAny(names ...string) (bool, bool) {
 		case "0", "false", "no", "off":
 			return false, true
 		}
+		return false, true
 	}
 	return false, false
 }

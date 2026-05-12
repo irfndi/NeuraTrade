@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -79,8 +80,8 @@ func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T)
 		{
 			name: "singular paper enabled and real disabled",
 			env: map[string]string{
-				"FEATURE_PAPER_TRADING": "true",
-				"FEATURE_REAL_TRADING":  "false",
+				envFeaturePaperTrading: "true",
+				envFeatureRealTrading:  "false",
 			},
 			expected: ModePaper,
 			ok:       true,
@@ -88,8 +89,8 @@ func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T)
 		{
 			name: "plural paper enabled and real disabled",
 			env: map[string]string{
-				"FEATURES_PAPER_TRADING": "true",
-				"FEATURES_REAL_TRADING":  "false",
+				envFeaturesPaperTrading: "true",
+				envFeaturesRealTrading:  "false",
 			},
 			expected: ModePaper,
 			ok:       true,
@@ -97,7 +98,15 @@ func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T)
 		{
 			name: "real disabled without paper falls back to dry",
 			env: map[string]string{
-				"FEATURE_REAL_TRADING": "false",
+				envFeatureRealTrading: "false",
+			},
+			expected: OpModeDry,
+			ok:       true,
+		},
+		{
+			name: "invalid real trading value is treated as disabled",
+			env: map[string]string{
+				envFeatureRealTrading: "flase",
 			},
 			expected: OpModeDry,
 			ok:       true,
@@ -111,9 +120,7 @@ func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T)
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, key := range []string{"FEATURE_PAPER_TRADING", "FEATURES_PAPER_TRADING", "FEATURE_REAL_TRADING", "FEATURES_REAL_TRADING"} {
-				t.Setenv(key, "")
-			}
+			unsetRuntimeModeEnv(t)
 			for key, value := range tc.env {
 				t.Setenv(key, value)
 			}
@@ -121,6 +128,21 @@ func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T)
 			mode, ok := runtimeModeOverrideFromEnv()
 			assert.Equal(t, tc.ok, ok)
 			assert.Equal(t, tc.expected, mode)
+		})
+	}
+}
+
+func unsetRuntimeModeEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{envFeaturePaperTrading, envFeaturesPaperTrading, envFeatureRealTrading, envFeaturesRealTrading} {
+		previous, ok := os.LookupEnv(key)
+		require.NoError(t, os.Unsetenv(key))
+		t.Cleanup(func() {
+			if ok {
+				require.NoError(t, os.Setenv(key, previous))
+				return
+			}
+			require.NoError(t, os.Unsetenv(key))
 		})
 	}
 }
