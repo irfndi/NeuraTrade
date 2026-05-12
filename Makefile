@@ -14,7 +14,7 @@ NC=\033[0m
 
 .PHONY: help all go-env-setup proto-gen mod-download build services-setup telegram-setup \
 	test test-backend test-frontend lint fmt fmt-check typecheck coverage-check \
-	run logs logs-all bd-close-qa
+	run logs logs-all scalping-soak bd-close-qa
 
 all: build
 
@@ -52,6 +52,7 @@ build: mod-download services-setup ## Build backend binaries
 	@echo "$(GREEN)Building $(APP_NAME)...$(NC)"
 	@mkdir -p bin
 	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-server ./cmd/server
+	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-scalping-soak ./cmd/scalping-soak
 	@cd cmd/neuratrade-cli && $(GO_ENV) go build -o ../../bin/neuratrade .
 	@printf '%s\n' '#!/usr/bin/env bash' \
 		'# CCXT Service Stub' \
@@ -64,7 +65,7 @@ build: mod-download services-setup ## Build backend binaries
 		'cd "$$SCRIPT_DIR/../services/telegram-service"' \
 		'exec bun run index.ts "$$@"' > bin/telegram-service
 	@chmod +x bin/telegram-service
-	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade$(NC)"
+	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade, bin/neuratrade-scalping-soak$(NC)"
 
 fmt: ## Format backend + frontend code
 	@echo "$(GREEN)Formatting Go code...$(NC)"
@@ -134,6 +135,9 @@ logs: ## Show backend logs from NEURATRADE_HOME
 
 logs-all: ## Show gateway logs from NEURATRADE_HOME
 	@tail -f $${NEURATRADE_HOME:-$$HOME/.neuratrade}/logs/gateway.log
+
+scalping-soak: build ## Run no-order public-data scalping paper soak
+	@bash services/backend-api/scripts/scalping-soak.sh run
 
 bd-close-qa: ## Close bd issue with mandatory QA evidence
 	@test -n "$${ISSUE_ID:-}" || (echo "ISSUE_ID is required" && exit 1)

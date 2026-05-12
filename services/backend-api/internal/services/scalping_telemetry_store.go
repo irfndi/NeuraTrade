@@ -60,6 +60,10 @@ type CycleRecord struct {
 	EffectiveMinConfidence float64
 	EffectiveMaxCapitalPct float64
 	PolicyAdjustmentsJSON  string
+	BidAskSpreadPct        *float64
+	OrderBookImbalance     *float64
+	RangePosition24h       *float64
+	PriceChange24hPct      *float64
 }
 
 type ScalpingOutcomeRecord struct {
@@ -149,6 +153,10 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 			effective_min_confidence REAL,
 			effective_max_capital_pct REAL,
 			policy_adjustments TEXT,
+			bid_ask_spread_pct REAL,
+			order_book_imbalance REAL,
+			range_position_24h REAL,
+			price_change_24h_pct REAL,
 			outcome TEXT,
 			pnl NUMERIC,
 			hold_duration_seconds INT,
@@ -164,6 +172,20 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 	for _, stmt := range preDedup {
 		if _, err := s.db.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("scalping telemetry schema statement failed: %w", err)
+		}
+	}
+
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "bid_ask_spread_pct", definition: "REAL"},
+		{name: "order_book_imbalance", definition: "REAL"},
+		{name: "range_position_24h", definition: "REAL"},
+		{name: "price_change_24h_pct", definition: "REAL"},
+	} {
+		if err := s.ensureCycleTelemetryColumn(ctx, column.name, column.definition); err != nil {
+			return err
 		}
 	}
 
@@ -233,12 +255,13 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 			universe_count, ranked_count, viable_count, rejection_counts, regime,
 			expectancy, expectancy_sample_size, gate_block_code, gate_block_reason,
 			account_tier, effective_min_confidence, effective_max_capital_pct,
-			policy_adjustments
+			policy_adjustments, bid_ask_spread_pct, order_book_imbalance,
+			range_position_24h, price_change_24h_pct
 		) VALUES (
 			?,?,?,?,?,?,?,?,
 			?,?,?,?,?,
 			?,?,?,?,
-			?,?,?,?
+			?,?,?,?,?,?,?,?
 		)
 	`),
 		cycleID,
@@ -262,12 +285,59 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 		record.EffectiveMinConfidence,
 		record.EffectiveMaxCapitalPct,
 		record.PolicyAdjustmentsJSON,
+		nullableFiniteFloat(record.BidAskSpreadPct),
+		nullableFiniteFloat(record.OrderBookImbalance),
+		nullableFiniteFloat(record.RangePosition24h),
+		nullableFiniteFloat(record.PriceChange24hPct),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert cycle telemetry: %w", err)
 	}
 
 	return cycleID, nil
+}
+
+func (s *ScalpingTelemetryStore) ensureCycleTelemetryColumn(ctx context.Context, name, definition string) error {
+	name = strings.TrimSpace(name)
+	definition = strings.TrimSpace(definition)
+	if !isSafeTelemetryColumnName(name) || definition != "REAL" {
+		return fmt.Errorf("invalid scalping telemetry column definition")
+	}
+	_, err := s.db.Exec(ctx, fmt.Sprintf("ALTER TABLE scalping_cycle_telemetry ADD COLUMN %s %s", name, definition))
+	if err == nil || isDuplicateColumnError(err) {
+		return nil
+	}
+	return fmt.Errorf("add scalping telemetry column %s: %w", name, err)
+}
+
+func isSafeTelemetryColumnName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r == '_':
+		case r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func finiteFloatPointer(value float64) *float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	return &value
+}
+
+func nullableFiniteFloat(value *float64) any {
+	if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
+		return nil
+	}
+	return *value
 }
 
 func (s *ScalpingTelemetryStore) LinkOrderToCycle(ctx context.Context, cycleID string, orderID string) error {

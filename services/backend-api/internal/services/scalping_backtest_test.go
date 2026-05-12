@@ -439,3 +439,89 @@ func TestScalpingBacktestEngine_Run_InvalidConfig(t *testing.T) {
 	_, err := engine.Run(context.Background())
 	assert.Error(t, err)
 }
+
+func TestScalpingBacktestEngine_RunSignalsProducesPaperTradeMetrics(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 45, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+		runSignalsTestSignal(now.Add(30*time.Second), "BBB/USDT", 50, -0.45, 65),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Summary.TotalSignals)
+	require.Equal(t, 2, result.Summary.EligibleSignals)
+	require.Equal(t, 2, result.Summary.TotalTrades)
+	require.Equal(t, 2, result.Summary.WinningTrades)
+	require.Empty(t, result.Summary.RejectionByReason)
+	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+	require.True(t, result.Summary.ProfitFactor.GreaterThan(decimal.Zero))
+	require.Len(t, result.Trades, 2)
+	require.Equal(t, "take_profit", result.Trades[0].ExitReason)
+	require.Equal(t, "take_profit", result.Trades[1].ExitReason)
+}
+
+func TestScalpingBacktestEngine_RunSignalsSortsInputsChronologically(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 50, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now.Add(30*time.Second), "BBB/USDT", 50, -0.45, 65),
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Signals, 2)
+	require.True(t, result.Signals[0].Timestamp.Before(result.Signals[1].Timestamp))
+	require.Equal(t, "AAA/USDT", result.Signals[0].Symbol)
+}
+
+func TestScalpingBacktestEngine_RunSignalsRespectsCanceledContext(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 55, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := engine.RunSignals(ctx, []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func newRunSignalsTestEngine(now time.Time) *ScalpingBacktestEngine {
+	return NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
+		StartTime:          now.Add(-time.Minute),
+		EndTime:            now.Add(time.Minute),
+		Symbols:            []string{"AAA/USDT", "BBB/USDT"},
+		Exchange:           "bitget",
+		InitialCapital:     decimal.NewFromInt(48),
+		FeeRate:            decimal.NewFromFloat(0.0006),
+		SlippagePct:        decimal.NewFromFloat(DefaultScalpingBacktestSlippage),
+		MaxBidAskSpreadPct: 1,
+		MinConfidence:      0.55,
+		MinExpectancyN:     99,
+		MaxCapitalPct:      5,
+		DefaultHoldPeriod:  time.Minute,
+	})
+}
+
+func runSignalsTestSignal(timestamp time.Time, symbol string, price, imbalance, rangePosition float64) HistoricalSignal {
+	return HistoricalSignal{
+		Timestamp: timestamp,
+		Symbol:    symbol,
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             symbol,
+			Price:              price,
+			High24h:            price * 1.2,
+			Low24h:             price * 0.8,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: imbalance,
+			RangePosition24h:   rangePosition,
+			PriceChange24h:     2.5,
+		},
+	}
+}

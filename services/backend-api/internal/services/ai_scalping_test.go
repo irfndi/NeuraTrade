@@ -157,8 +157,8 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 8, config.MaxPairsToAnalyze)
 	assert.Equal(t, 120, config.MaxCandidatePairs)
 	assert.Equal(t, appautonomy.DefaultScalpingMaxBidAskSpreadPct, config.MaxBidAskSpreadPct)
-	assert.Equal(t, 4, config.OrderBookPairs)
-	assert.False(t, config.AutoExpandOrderBooks)
+	assert.Equal(t, 8, config.OrderBookPairs)
+	assert.True(t, config.AutoExpandOrderBooks)
 	assert.Equal(t, 12, config.AutoExpandThreshold)
 	assert.True(t, config.EnforceFutures)
 	assert.Equal(t, 90*time.Second, config.SymbolCooldown)
@@ -174,6 +174,14 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 0.35, config.DeterministicFallback.MinImbalance)
 	assert.Equal(t, 0.72, config.DeterministicFallback.ConfidenceFloor)
 	assert.Equal(t, 0.50, config.DeterministicFallback.SizeFraction)
+}
+
+func TestAIScalpingService_EffectiveOrderBookPairsDefaultCoversSmallUniverse(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+
+	assert.Equal(t, 8, svc.effectiveOrderBookPairs(8))
+	assert.Equal(t, 3, svc.effectiveOrderBookPairs(3))
+	assert.Equal(t, defaultOrderBookPairsBase, svc.effectiveOrderBookPairs(defaultAutoExpandThreshold+1))
 }
 
 func TestResolveEnvModel(t *testing.T) {

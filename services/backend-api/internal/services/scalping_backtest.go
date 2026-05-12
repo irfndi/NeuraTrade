@@ -20,6 +20,9 @@ const (
 	DefaultScalpingBacktestHoldPeriod       = 5 * time.Minute
 	DefaultScalpingBacktestMaxCapitalPct    = 5.0
 	DefaultScalpingBacktestSpreadMultiplier = 8
+	// maxProfitFactorNoLosses represents an effectively unbounded profit
+	// factor when a report has winning trades and no losing trades.
+	maxProfitFactorNoLosses = 999
 
 	// backtestSpreadMultiplier scales the intra-candle high-low range to
 	// approximate a bid-ask spread. The factor 8 was derived empirically from
@@ -191,14 +194,15 @@ type SimulatedTrade struct {
 }
 
 type ScalpingBacktestEngine struct {
-	db            DBPool
-	config        ScalpingBacktestConfig
-	capital       decimal.Decimal
-	positions     map[string]*SimulatedPosition
-	tradeHistory  []ScalpingBacktestTrade
-	signalHistory []ScalpingBacktestSignal
-	gateStats     map[string]*GateStats
-	policy        ScalpingCyclePolicy
+	db                    DBPool
+	config                ScalpingBacktestConfig
+	capital               decimal.Decimal
+	positions             map[string]*SimulatedPosition
+	tradeHistory          []ScalpingBacktestTrade
+	signalHistory         []ScalpingBacktestSignal
+	gateStats             map[string]*GateStats
+	policy                ScalpingCyclePolicy
+	marketDataPriceColumn scalpingMarketDataPriceColumn
 }
 
 func NewScalpingBacktestEngine(db DBPool, config ScalpingBacktestConfig) *ScalpingBacktestEngine {
@@ -233,6 +237,25 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 		return nil, err
 	}
 
+	historicalSignals, err := e.loadHistoricalSignals(ctx, e.config.StartTime, e.config.EndTime)
+	if err != nil {
+		return nil, fmt.Errorf("load historical scalping signals: %w", err)
+	}
+	result, err := e.RunSignals(ctx, historicalSignals)
+	if err != nil {
+		return nil, fmt.Errorf("run historical scalping signals: %w", err)
+	}
+	return result, nil
+}
+
+func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSignals []HistoricalSignal) (*ScalpingBacktestResult, error) {
+	if e == nil {
+		return nil, fmt.Errorf("scalping backtest engine is nil")
+	}
+	if err := e.validateConfig(); err != nil {
+		return nil, err
+	}
+
 	e.capital = e.config.InitialCapital
 	e.positions = make(map[string]*SimulatedPosition)
 	e.tradeHistory = make([]ScalpingBacktestTrade, 0)
@@ -240,18 +263,28 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 	e.gateStats = make(map[string]*GateStats)
 
 	runID := uuid.NewString()
-	historicalSignals, err := e.loadHistoricalSignals(ctx, e.config.StartTime, e.config.EndTime)
-	if err != nil {
-		return nil, err
-	}
 	if len(historicalSignals) == 0 {
 		return nil, fmt.Errorf("no historical signals found in range")
 	}
 
-	for _, signal := range historicalSignals {
+	signals := append([]HistoricalSignal(nil), historicalSignals...)
+	sort.SliceStable(signals, func(i, j int) bool {
+		if !signals[i].Timestamp.Equal(signals[j].Timestamp) {
+			return signals[i].Timestamp.Before(signals[j].Timestamp)
+		}
+		if signals[i].Symbol != signals[j].Symbol {
+			return signals[i].Symbol < signals[j].Symbol
+		}
+		return signals[i].Exchange < signals[j].Exchange
+	})
+
+	for _, signal := range signals {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("run scalping backtest signals: %w", err)
+		}
 		evaluation, evalErr := e.evaluateSignal(ctx, signal)
 		if evalErr != nil {
-			return nil, evalErr
+			return nil, fmt.Errorf("evaluate scalping backtest signal: %w", evalErr)
 		}
 
 		recorded := ScalpingBacktestSignal{
@@ -271,6 +304,9 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 			continue
 		}
 
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("run scalping backtest signals: %w", err)
+		}
 		trade, simErr := e.simulateExecution(ctx, signal, evaluation.Decision)
 		if simErr != nil {
 			return nil, fmt.Errorf("simulate execution for %s at %s: %w", signal.Symbol, signal.Timestamp.Format(time.RFC3339), simErr)
@@ -336,6 +372,7 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 		BidAskSpread:       signal.Signal.BidAskSpread,
 		OrderBookImbalance: signal.Signal.OrderBookImbalance,
 		RangePosition24h:   signal.Signal.RangePosition24h,
+		PriceChange24hPct:  signal.Signal.PriceChange24h,
 	}
 	funnel := appautonomy.BuildCandidateFunnel([]appautonomy.CandidateSignal{candidate}, e.policy)
 
@@ -716,7 +753,7 @@ func (e *ScalpingBacktestEngine) calculateSummary() ScalpingBacktestSummary {
 	if grossLoss.GreaterThan(decimal.Zero) {
 		summary.ProfitFactor = grossProfit.Div(grossLoss)
 	} else if grossProfit.GreaterThan(decimal.Zero) {
-		summary.ProfitFactor = decimal.NewFromInt(999)
+		summary.ProfitFactor = decimal.NewFromInt(maxProfitFactorNoLosses)
 	}
 
 	summary.MaxDrawdownPct = maxDrawdownPct
@@ -976,24 +1013,29 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 		return nil, nil
 	}
 
-	query := `
-		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name), md.price,
-			COALESCE(md.bid, 0), COALESCE(md.ask, 0),
-			COALESCE(md.high_24h, 0), COALESCE(md.low_24h, 0), COALESCE(md.volume_24h, 0),
-			md.timestamp
-		FROM market_data md
-		JOIN trading_pairs tp ON tp.id = md.trading_pair_id
-		JOIN exchanges e ON e.id = md.exchange_id
-		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
-		WHERE md.timestamp >= $1 AND md.timestamp <= $2
-	`
+	priceColumn := e.marketDataPriceColumn
+	if priceColumn == scalpingMarketDataPriceColumnUnknown {
+		priceColumn = scalpingMarketDataPriceColumnPrice
+	}
+	query := buildScalpingMarketDataSignalQuery(priceColumn)
 	args := []any{startTime, endTime}
 	query, args = appendScalpingBacktestFilters(query, args, "md.trading_pair_id", tradingPairIDs, strings.TrimSpace(strings.ToLower(e.config.Exchange)))
 	query += " ORDER BY md.timestamp ASC"
 
 	rows, err := e.db.Query(ctx, query, args...)
+	if err != nil && priceColumn == scalpingMarketDataPriceColumnPrice && isMissingMarketDataPriceColumnError(err) {
+		e.marketDataPriceColumn = scalpingMarketDataPriceColumnLastPrice
+		query = buildScalpingMarketDataSignalQuery(e.marketDataPriceColumn)
+		args = []any{startTime, endTime}
+		query, args = appendScalpingBacktestFilters(query, args, "md.trading_pair_id", tradingPairIDs, strings.TrimSpace(strings.ToLower(e.config.Exchange)))
+		query += " ORDER BY md.timestamp ASC"
+		rows, err = e.db.Query(ctx, query, args...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load market_data fallback signals: %w", err)
+	}
+	if e.marketDataPriceColumn == scalpingMarketDataPriceColumnUnknown {
+		e.marketDataPriceColumn = priceColumn
 	}
 	defer rows.Close()
 
@@ -1064,6 +1106,46 @@ func (e *ScalpingBacktestEngine) loadSignalsFromMarketData(
 	}
 
 	return signals, nil
+}
+
+type scalpingMarketDataPriceColumn int
+
+const (
+	scalpingMarketDataPriceColumnUnknown scalpingMarketDataPriceColumn = iota
+	scalpingMarketDataPriceColumnPrice
+	scalpingMarketDataPriceColumnLastPrice
+)
+
+func buildScalpingMarketDataSignalQuery(priceColumn scalpingMarketDataPriceColumn) string {
+	priceExpr := "md.price"
+	highExpr := "COALESCE(md.high_24h, 0)"
+	lowExpr := "COALESCE(md.low_24h, 0)"
+	if priceColumn == scalpingMarketDataPriceColumnLastPrice {
+		priceExpr = "md.last_price"
+		highExpr = "CASE WHEN COALESCE(md.ask, 0) > 0 THEN md.ask ELSE md.last_price END"
+		lowExpr = "CASE WHEN COALESCE(md.bid, 0) > 0 THEN md.bid ELSE md.last_price END"
+	}
+
+	return fmt.Sprintf(`
+		SELECT tp.symbol, COALESCE(ce.ccxt_id, e.ccxt_id, e.name), %s,
+			COALESCE(md.bid, 0), COALESCE(md.ask, 0),
+			%s, %s, COALESCE(md.volume_24h, 0),
+			md.timestamp
+		FROM market_data md
+		JOIN trading_pairs tp ON tp.id = md.trading_pair_id
+		JOIN exchanges e ON e.id = md.exchange_id
+		LEFT JOIN ccxt_exchanges ce ON ce.exchange_id = e.id
+		WHERE md.timestamp >= $1 AND md.timestamp <= $2
+	`, priceExpr, highExpr, lowExpr)
+}
+
+func isMissingMarketDataPriceColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such column: md.price") ||
+		strings.Contains(msg, "column md.price does not exist")
 }
 
 func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultiplier float64) []HistoricalSignal {
