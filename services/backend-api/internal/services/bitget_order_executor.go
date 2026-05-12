@@ -97,7 +97,6 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	var orderID string
 	var err error
 	details.ReduceOnly = isRiskReductionOrder(details)
-	originalAmountUSDT := details.AmountUSDT
 
 	// Try futures first. Spot fallback is explicit via AllowSpotFallback.
 	if details.MarketType == "futures" {
@@ -126,15 +125,7 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 				return "", leverageSyncErr
 			}
 			if details.AllowSpotFallback && shouldFallbackToSpot(err) {
-				fmt.Printf("[BITGET-ORDER] Symbol %s not available on futures, trying spot...\n", apiSymbol)
-				spotSide, spotErr := normalizeSpotFallbackSide(details.Side)
-				if spotErr != nil {
-					return "", spotErr
-				}
-				details.MarketType = "spot"
-				details.Side = spotSide
-				details.AmountUSDT = originalAmountUSDT
-				orderID, err = e.placeSpotOrder(ctx, apiSymbol, spotSide, originalAmountUSDT, details.EntryPrice)
+				return "", protectedSpotFallbackUnavailableError(apiSymbol, err)
 			} else if shouldFallbackToSpot(err) {
 				return "", fmt.Errorf("futures-only mode prevented spot fallback for %s: %w", apiSymbol, err)
 			}
@@ -186,6 +177,8 @@ func bitgetFuturesMinUSDTNotional() decimal.Decimal {
 
 const bitgetFuturesOrderMarginMode = "isolated"
 
+const protectedSpotFallbackUnavailableReason = "protected spot fallback unavailable"
+
 func isRiskReductionOrder(details TradeDetails) bool {
 	return details.ReduceOnly || strings.EqualFold(strings.TrimSpace(details.TradeType), "risk_reduction")
 }
@@ -199,6 +192,14 @@ func normalizeSpotFallbackSide(side string) (string, error) {
 	default:
 		return "", fmt.Errorf("spot fallback is unsupported for futures side %q", side)
 	}
+}
+
+func protectedSpotFallbackUnavailableError(symbol string, cause error) error {
+	msg := fmt.Sprintf("%s for %s: spot fallback would execute without exchange-side TP/SL protection", protectedSpotFallbackUnavailableReason, symbol)
+	if cause == nil {
+		return fmt.Errorf("%s", msg)
+	}
+	return fmt.Errorf("%s: %w", msg, cause)
 }
 
 // placeFuturesOrderWithTPSL places a futures order with TP/SL
