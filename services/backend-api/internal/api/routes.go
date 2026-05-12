@@ -1055,8 +1055,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
-	// Internal service-to-service routes (no auth, restricted to trusted internal callers)
-	internal := router.Group("/internal")
+	// Internal service-to-service routes (admin auth required for defense-in-depth)
+	internal := router.Group("/internal", adminMiddleware.RequireAdminAuth())
 	{
 		internalTelegram := internal.Group("/telegram")
 		{

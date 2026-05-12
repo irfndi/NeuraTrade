@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "events";
 import * as grpc from "@grpc/grpc-js";
 import type { Bot } from "grammy";
-import { TelegramGrpcServer } from "./grpc-server";
+import {
+  createAuthInterceptor,
+  formatGrpcBindTarget,
+  safeCredentialEqual,
+  TelegramGrpcServer,
+} from "./grpc-server";
 import type {
   SendActionAlertRequest,
   SendActionAlertResponse,
@@ -36,6 +41,71 @@ class MockStreamCall extends EventEmitter {
   end(): this {
     this.ended = true;
     return this;
+  }
+}
+
+class FakeInterceptingCall implements grpc.ServerInterceptingCallInterface {
+  listener?: {
+    onReceiveMetadata(metadata: grpc.Metadata): void;
+    onReceiveMessage(message: unknown): void;
+    onReceiveHalfClose(): void;
+    onCancel(): void;
+  };
+  sentMetadata: grpc.Metadata[] = [];
+  sentStatuses: Parameters<
+    grpc.ServerInterceptingCallInterface["sendStatus"]
+  >[0][] = [];
+
+  start(listener: NonNullable<FakeInterceptingCall["listener"]>): void {
+    this.listener = listener;
+  }
+
+  sendMetadata(metadata: grpc.Metadata): void {
+    this.sentMetadata.push(metadata);
+  }
+
+  sendMessage(_message: unknown, callback: () => void): void {
+    callback();
+  }
+
+  sendStatus(
+    status: Parameters<grpc.ServerInterceptingCallInterface["sendStatus"]>[0],
+  ): void {
+    this.sentStatuses.push(status);
+  }
+
+  startRead(): void {}
+
+  getPeer(): string {
+    return "test-peer";
+  }
+
+  getDeadline(): grpc.Deadline {
+    return Infinity;
+  }
+
+  getHost(): string {
+    return "localhost";
+  }
+
+  getAuthContext(): ReturnType<
+    grpc.ServerInterceptingCallInterface["getAuthContext"]
+  > {
+    return {};
+  }
+
+  getConnectionInfo(): ReturnType<
+    grpc.ServerInterceptingCallInterface["getConnectionInfo"]
+  > {
+    return {};
+  }
+
+  getMetricsRecorder(): ReturnType<
+    grpc.ServerInterceptingCallInterface["getMetricsRecorder"]
+  > {
+    return {} as ReturnType<
+      grpc.ServerInterceptingCallInterface["getMetricsRecorder"]
+    >;
   }
 }
 
@@ -76,6 +146,40 @@ function invokeUnary<Req, Res>(
       });
     });
   });
+}
+
+function invokeAuthInterceptor(
+  methodPath: string,
+  adminApiKey: string,
+  metadata: grpc.Metadata,
+): {
+  call: FakeInterceptingCall;
+  metadataForwarded: boolean;
+} {
+  const call = new FakeInterceptingCall();
+  const intercepted = createAuthInterceptor(adminApiKey)(
+    {
+      path: methodPath,
+      requestStream: false,
+      responseStream: false,
+      requestDeserialize: (value: Buffer) => value,
+      responseSerialize: (value: unknown) => Buffer.from(String(value)),
+    },
+    call,
+  );
+
+  let metadataForwarded = false;
+  intercepted.start({
+    onReceiveMetadata: () => {
+      metadataForwarded = true;
+    },
+    onReceiveMessage: () => {},
+    onReceiveHalfClose: () => {},
+    onCancel: () => {},
+  });
+  call.listener?.onReceiveMetadata(metadata);
+
+  return { call, metadataForwarded };
 }
 
 describe("TelegramGrpcServer", () => {
@@ -181,5 +285,67 @@ describe("TelegramGrpcServer", () => {
 
     expect(stream.ended).toBe(true);
     expect(stream.written).toHaveLength(0);
+  });
+
+  test("gRPC auth allows only exact HealthCheck path without API key", () => {
+    const adminApiKey = "test-admin-key-that-is-at-least-32-characters";
+
+    const health = invokeAuthInterceptor(
+      "/telegram.TelegramService/HealthCheck",
+      adminApiKey,
+      new grpc.Metadata(),
+    );
+    expect(health.metadataForwarded).toBe(true);
+    expect(health.call.sentStatuses).toHaveLength(0);
+
+    const healthLikeAdmin = invokeAuthInterceptor(
+      "/telegram.TelegramService/HealthCheckAdmin",
+      adminApiKey,
+      new grpc.Metadata(),
+    );
+    expect(healthLikeAdmin.metadataForwarded).toBe(false);
+    expect(healthLikeAdmin.call.sentStatuses[0].code).toBe(
+      grpc.status.UNAUTHENTICATED,
+    );
+  });
+
+  test("gRPC auth rejects invalid API key and accepts valid API key", () => {
+    const adminApiKey = "test-admin-key-that-is-at-least-32-characters";
+    const invalidMetadata = new grpc.Metadata();
+    invalidMetadata.set("x-api-key", "wrong-key");
+    const invalid = invokeAuthInterceptor(
+      "/telegram.TelegramService/SendMessage",
+      adminApiKey,
+      invalidMetadata,
+    );
+    expect(invalid.metadataForwarded).toBe(false);
+    expect(invalid.call.sentStatuses[0].code).toBe(grpc.status.UNAUTHENTICATED);
+
+    const validMetadata = new grpc.Metadata();
+    validMetadata.set("x-api-key", adminApiKey);
+    const valid = invokeAuthInterceptor(
+      "/telegram.TelegramService/SendMessage",
+      adminApiKey,
+      validMetadata,
+    );
+    expect(valid.metadataForwarded).toBe(true);
+    expect(valid.call.sentStatuses).toHaveLength(0);
+  });
+
+  test("formats IPv4 and IPv6 gRPC bind targets", () => {
+    expect(formatGrpcBindTarget("127.0.0.1", 50052)).toBe("127.0.0.1:50052");
+    expect(formatGrpcBindTarget("::1", 50052)).toBe("[::1]:50052");
+    expect(formatGrpcBindTarget("[::1]", 50052)).toBe("[::1]:50052");
+  });
+
+  test("credential comparison accepts only exact secret matches", () => {
+    expect(safeCredentialEqual("secret-token", "secret-token")).toBe(true);
+    expect(safeCredentialEqual("secret-token", "secret-token-extra")).toBe(
+      false,
+    );
+    expect(safeCredentialEqual("secret-token-extra", "secret-token")).toBe(
+      false,
+    );
+    expect(safeCredentialEqual("", "secret-token")).toBe(false);
   });
 });

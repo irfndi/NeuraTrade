@@ -26,7 +26,7 @@ async function getService() {
         // We can just make requests to http://localhost:PORT
 
         // Wait for service to be ready
-        const port = process.env.PORT || 3003;
+        const port = process.env.TELEGRAM_PORT || process.env.PORT || 3003;
         const timeout = 5000;
         const interval = 100;
         const startTime = Date.now();

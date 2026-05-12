@@ -5,7 +5,15 @@ process.env.TELEGRAM_BOT_TOKEN = "test-bot-token";
 process.env.ADMIN_API_KEY =
   "test-admin-key-that-is-at-least-32-characters-long-for-security";
 process.env.TELEGRAM_WEBHOOK_SECRET = "test-webhook-secret";
-process.env.TELEGRAM_PORT = "3003";
+const rawTelegramPort = process.env.TELEGRAM_PORT ?? "";
+const configuredTelegramPort = Number(rawTelegramPort);
+process.env.TELEGRAM_PORT =
+  /^\d+$/.test(rawTelegramPort) &&
+  Number.isInteger(configuredTelegramPort) &&
+  configuredTelegramPort > 0 &&
+  configuredTelegramPort < 65536
+    ? String(configuredTelegramPort)
+    : "3003";
 process.env.TELEGRAM_USE_POLLING = "false";
 process.env.TELEGRAM_WEBHOOK_URL = "https://example.com/webhook";
 
