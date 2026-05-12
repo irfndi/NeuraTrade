@@ -3,12 +3,14 @@ package services
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
@@ -181,8 +183,27 @@ func TestAIScalpingService_LivePaperSignalProbe(t *testing.T) {
 		result.Summary.TotalTrades,
 		"win/loss counts should not exceed total trades",
 	)
+
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "live-paper-soak.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sqliteDB.Close())
+	})
+	baseline := BrokenScalpingBaseline()
+	report, err := PersistScalpingPaperBacktestSoakReport(ctx, sqliteDB, result, ScalpingPaperSoakPersistenceOptions{
+		ChatID:      "live-paper-probe",
+		Exchange:    exchange,
+		Baseline:    &baseline,
+		OrderPrefix: "live-paper-probe",
+	})
+	require.NoError(t, err)
+	require.Equal(t, result.Summary.TotalSignals, report.TotalCycles)
+	require.Equal(t, result.Summary.TotalTrades, report.TradeSummary.ClosedTrades)
+	require.True(t, report.TradeSummary.NetPnL.Round(8).Equal(result.Summary.TotalPnL.Round(8)))
+	require.False(t, report.InsufficientTradeProof)
+
 	t.Logf(
-		"live paper scalping probe: exchange=%s signals=%d eligible=%d paper_trades=%d wins=%d losses=%d win_rate=%s net_pnl=%s fees=%s profit_factor=%s drawdown=%s rejections=%v gates=%v",
+		"live paper scalping probe: exchange=%s signals=%d eligible=%d paper_trades=%d wins=%d losses=%d win_rate=%s net_pnl=%s fees=%s profit_factor=%s drawdown=%s rejections=%v gates=%v persisted_cycles=%d persisted_trades=%d persisted_net_pnl=%s persisted_signal_quality=%s",
 		exchange,
 		result.Summary.TotalSignals,
 		result.Summary.EligibleSignals,
@@ -196,6 +217,10 @@ func TestAIScalpingService_LivePaperSignalProbe(t *testing.T) {
 		result.Summary.MaxDrawdownPct.StringFixed(4),
 		result.Summary.RejectionByReason,
 		result.GateSummary,
+		report.TotalCycles,
+		report.TradeSummary.ClosedTrades,
+		report.TradeSummary.NetPnL.StringFixed(8),
+		report.SignalQuality.Coverage.StringFixed(4),
 	)
 
 	require.Greater(t, result.Summary.TotalSignals, 0, "live paper probe should evaluate public signals")
