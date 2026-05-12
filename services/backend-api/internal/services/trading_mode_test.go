@@ -112,6 +112,24 @@ func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T)
 			ok:       true,
 		},
 		{
+			name: "paper aliases prefer non-live when conflicting",
+			env: map[string]string{
+				envFeaturesPaperTrading: "false",
+				envFeaturePaperTrading:  "true",
+			},
+			expected: ModePaper,
+			ok:       true,
+		},
+		{
+			name: "real aliases prefer disabled when conflicting",
+			env: map[string]string{
+				envFeaturesRealTrading: "true",
+				envFeatureRealTrading:  "false",
+			},
+			expected: OpModeDry,
+			ok:       true,
+		},
+		{
 			name: "paper and real both enabled does not override persisted state",
 			env: map[string]string{
 				envFeaturePaperTrading: "true",

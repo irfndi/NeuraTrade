@@ -60,8 +60,8 @@ func DefaultOperationalModeConfig() OperationalModeConfig {
 }
 
 func runtimeModeOverrideFromEnv() (OperationalMode, bool) {
-	paperEnabled, paperSet := boolEnvAny(envFeaturesPaperTrading, envFeaturePaperTrading)
-	realEnabled, realSet := boolEnvAny(envFeaturesRealTrading, envFeatureRealTrading)
+	paperEnabled, paperSet := boolEnvAny(true, envFeaturesPaperTrading, envFeaturePaperTrading)
+	realEnabled, realSet := boolEnvAny(false, envFeaturesRealTrading, envFeatureRealTrading)
 	if paperSet && paperEnabled && (!realSet || !realEnabled) {
 		return ModePaper, true
 	}
@@ -72,8 +72,11 @@ func runtimeModeOverrideFromEnv() (OperationalMode, bool) {
 }
 
 // boolEnvAny treats unrecognized present values as explicit false so typoed
-// safety gates cannot silently preserve a persisted live mode.
-func boolEnvAny(names ...string) (bool, bool) {
+// safety gates cannot silently preserve a persisted live mode. When aliases
+// conflict, preferSafeTrue selects the value that keeps execution non-live.
+func boolEnvAny(preferSafeTrue bool, names ...string) (bool, bool) {
+	seenTrue := false
+	seenFalse := false
 	for _, name := range names {
 		raw, ok := os.LookupEnv(name)
 		if !ok {
@@ -81,10 +84,20 @@ func boolEnvAny(names ...string) (bool, bool) {
 		}
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "1", "true", "yes", "on":
-			return true, true
+			seenTrue = true
 		case "0", "false", "no", "off":
-			return false, true
+			seenFalse = true
+		default:
+			seenFalse = true
 		}
+	}
+	if seenTrue && seenFalse {
+		return preferSafeTrue, true
+	}
+	if seenTrue {
+		return true, true
+	}
+	if seenFalse {
 		return false, true
 	}
 	return false, false
