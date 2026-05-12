@@ -527,10 +527,26 @@ type aiScalpingDecisionProbeOptions struct {
 	MaxRetries       int
 	FailoverMaxHops  int
 	Exchange         string
+	Cycles           int
+	Interval         time.Duration
 	Capital          decimal.Decimal
 	RequireHealthy   bool
 	RequireValid     bool
 	MinSignalQuality decimal.Decimal
+}
+
+type aiScalpingDecisionProbeSummary struct {
+	Cycles                int                                        `json:"cycles"`
+	CompletedCycles       int                                        `json:"completed_cycles"`
+	TotalSignals          int                                        `json:"total_signals"`
+	SignalQualityCount    int                                        `json:"signal_quality_count"`
+	SignalQualityCoverage decimal.Decimal                            `json:"signal_quality_coverage"`
+	ValidContractCycles   int                                        `json:"valid_contract_cycles"`
+	LLMDegradedCycles     int                                        `json:"llm_degraded_cycles"`
+	ActionCounts          map[string]int                             `json:"action_counts"`
+	ProviderCounts        map[string]int                             `json:"provider_counts"`
+	LastResult            *services.ScalpingLLMDecisionProbeResult   `json:"last_result,omitempty"`
+	Results               []*services.ScalpingLLMDecisionProbeResult `json:"results,omitempty"`
 }
 
 func probeAIProvider(ctx context.Context, cfg config.AIConfig, args []string, out io.Writer) error {
@@ -648,36 +664,105 @@ func probeAIScalpingDecision(ctx context.Context, cfg config.AIConfig, args []st
 		StrategyPhase:      "probe",
 		RecoveryEntryOK:    true,
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, aiProviderProbeOverallTimeout(nodes, providerOpts))
+	probeCtx, cancel := context.WithTimeout(ctx, aiScalpingDecisionProbeOverallTimeout(nodes, providerOpts, opts))
 	defer cancel()
 
-	result, runErr := services.RunPublicScalpingLLMDecisionProbe(probeCtx, client, services.ScalpingLLMDecisionProbeOptions{
-		Exchange:  opts.Exchange,
-		Model:     model,
-		Portfolio: portfolio,
-	})
-	if result != nil {
-		if writeErr := writeAIScalpingDecisionProbeResult(out, opts.OutputJSON, result); writeErr != nil {
-			if runErr != nil {
-				return errors.Join(runErr, writeErr)
-			}
-			return writeErr
+	results, runErr := runAIScalpingDecisionProbeCycles(probeCtx, client, opts, model, portfolio)
+	summary := buildAIScalpingDecisionProbeSummary(results, opts.Cycles)
+	if writeErr := writeAIScalpingDecisionProbeSummary(out, opts.OutputJSON, summary); writeErr != nil {
+		if runErr != nil {
+			return errors.Join(runErr, writeErr)
 		}
+		return writeErr
 	}
 	if runErr != nil {
 		return runErr
 	}
-	if result == nil {
-		return fmt.Errorf("scalping LLM decision probe returned nil result")
+	return validateAIScalpingDecisionProbeSummary(summary, opts)
+}
+
+func runAIScalpingDecisionProbeCycles(
+	ctx context.Context,
+	client llm.Client,
+	opts aiScalpingDecisionProbeOptions,
+	model string,
+	portfolio services.TradingPortfolio,
+) ([]*services.ScalpingLLMDecisionProbeResult, error) {
+	results := make([]*services.ScalpingLLMDecisionProbeResult, 0, opts.Cycles)
+	for cycle := 0; cycle < opts.Cycles; cycle++ {
+		if cycle > 0 && opts.Interval > 0 {
+			select {
+			case <-ctx.Done():
+				return results, fmt.Errorf("wait between scalping LLM probe cycles: %w", ctx.Err())
+			case <-time.After(opts.Interval):
+			}
+		}
+		result, err := services.RunPublicScalpingLLMDecisionProbe(ctx, client, services.ScalpingLLMDecisionProbeOptions{
+			Exchange:  opts.Exchange,
+			Model:     model,
+			Portfolio: portfolio,
+		})
+		if result != nil {
+			results = append(results, result)
+		}
+		if err != nil {
+			return results, err
+		}
 	}
-	if opts.RequireHealthy && result.LLMDegraded {
-		return fmt.Errorf("scalping LLM decision probe degraded: %v", result.RuntimeDiagnostics["last_error"])
+	return results, nil
+}
+
+func buildAIScalpingDecisionProbeSummary(
+	results []*services.ScalpingLLMDecisionProbeResult,
+	requestedCycles int,
+) aiScalpingDecisionProbeSummary {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:          requestedCycles,
+		CompletedCycles: len(results),
+		ActionCounts:    map[string]int{},
+		ProviderCounts:  map[string]int{},
+		Results:         results,
 	}
-	if opts.RequireValid && !result.ContractValid {
-		return fmt.Errorf("scalping LLM decision contract invalid: %s", result.ContractError)
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		summary.LastResult = result
+		summary.TotalSignals += result.SignalCount
+		summary.SignalQualityCount += result.SignalQualityCount
+		if result.ContractValid {
+			summary.ValidContractCycles++
+		}
+		if result.LLMDegraded {
+			summary.LLMDegradedCycles++
+		}
+		action := "unknown"
+		if result.Decision != nil && strings.TrimSpace(result.Decision.Action) != "" {
+			action = strings.ToLower(strings.TrimSpace(result.Decision.Action))
+		}
+		summary.ActionCounts[action]++
+		if provider := strings.TrimSpace(result.Provider); provider != "" {
+			summary.ProviderCounts[provider]++
+		}
 	}
-	if opts.MinSignalQuality.GreaterThan(decimal.Zero) && result.SignalQualityCoverage.LessThan(opts.MinSignalQuality) {
-		return fmt.Errorf("signal_quality_coverage=%s below minimum=%s", result.SignalQualityCoverage.String(), opts.MinSignalQuality.String())
+	if summary.TotalSignals > 0 {
+		summary.SignalQualityCoverage = decimal.NewFromInt(int64(summary.SignalQualityCount)).Div(decimal.NewFromInt(int64(summary.TotalSignals)))
+	}
+	return summary
+}
+
+func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSummary, opts aiScalpingDecisionProbeOptions) error {
+	if summary.CompletedCycles != opts.Cycles {
+		return fmt.Errorf("scalping LLM decision probe completed_cycles=%d below cycles=%d", summary.CompletedCycles, opts.Cycles)
+	}
+	if opts.RequireHealthy && summary.LLMDegradedCycles > 0 {
+		return fmt.Errorf("scalping LLM decision probe degraded_cycles=%d", summary.LLMDegradedCycles)
+	}
+	if opts.RequireValid && summary.ValidContractCycles != opts.Cycles {
+		return fmt.Errorf("scalping LLM decision valid_contract_cycles=%d below cycles=%d", summary.ValidContractCycles, opts.Cycles)
+	}
+	if opts.MinSignalQuality.GreaterThan(decimal.Zero) && summary.SignalQualityCoverage.LessThan(opts.MinSignalQuality) {
+		return fmt.Errorf("signal_quality_coverage=%s below minimum=%s", summary.SignalQualityCoverage.String(), opts.MinSignalQuality.String())
 	}
 	return nil
 }
@@ -739,6 +824,7 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 		Timeout:          60 * time.Second,
 		FailoverMaxHops:  1,
 		Exchange:         "bitget",
+		Cycles:           1,
 		Capital:          decimal.NewFromFloat(48),
 		RequireHealthy:   true,
 		RequireValid:     true,
@@ -750,12 +836,14 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	timeoutSeconds := fs.Int("timeout-seconds", int(opts.Timeout/time.Second), "completion timeout in seconds")
 	capital := fs.String("capital", opts.Capital.String(), "paper wallet basis in USDT for the prompt")
 	minSignalQuality := fs.String("min-signal-quality", opts.MinSignalQuality.String(), "minimum signal quality coverage required")
+	intervalMS := fs.Int("interval-ms", 0, "delay between scalping LLM probe cycles in milliseconds")
 	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
 	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
 	fs.StringVar(&opts.Provider, "provider", "", "provider to probe; defaults to ai.provider and NEURATRADE_AI_PROVIDER_CHAIN")
 	fs.StringVar(&opts.Model, "model", "", "model override for the selected provider")
 	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
 	fs.StringVar(&opts.Exchange, "exchange", opts.Exchange, "public exchange to fetch market/order-book signals from")
+	fs.IntVar(&opts.Cycles, "cycles", opts.Cycles, "number of no-order scalping LLM decision probe cycles")
 	fs.BoolVar(&opts.OutputJSON, "json", false, "write JSON output")
 	fs.IntVar(&opts.MaxRetries, "max-retries", 0, "HTTP retry count")
 	fs.IntVar(&opts.FailoverMaxHops, "failover-max-hops", opts.FailoverMaxHops, "number of fallback providers to try after the primary")
@@ -774,6 +862,15 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	if opts.FailoverMaxHops < 0 {
 		return opts, fmt.Errorf("--failover-max-hops must be zero or greater")
 	}
+	if opts.Cycles <= 0 {
+		return opts, fmt.Errorf("--cycles must be greater than zero")
+	}
+	if opts.Cycles > services.MaxScalpingLivePaperSoakCycles {
+		return opts, fmt.Errorf("--cycles must be %d or lower", services.MaxScalpingLivePaperSoakCycles)
+	}
+	if intervalMS == nil || *intervalMS < 0 {
+		return opts, fmt.Errorf("--interval-ms must be zero or greater")
+	}
 	parsedCapital, err := decimal.NewFromString(strings.TrimSpace(*capital))
 	if err != nil {
 		return opts, fmt.Errorf("parse --capital: %w", err)
@@ -789,6 +886,7 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 		return opts, fmt.Errorf("--min-signal-quality must be between 0 and 1")
 	}
 	opts.Timeout = time.Duration(*timeoutSeconds) * time.Second
+	opts.Interval = time.Duration(*intervalMS) * time.Millisecond
 	opts.Capital = parsedCapital
 	opts.MinSignalQuality = parsedSignalQuality
 	opts.RequireHealthy = !*allowDegraded
@@ -969,6 +1067,15 @@ func aiProviderProbeOverallTimeout(nodes []aiProviderProbeNode, opts aiProviderP
 	return time.Duration(attempts) * opts.Timeout
 }
 
+func aiScalpingDecisionProbeOverallTimeout(nodes []aiProviderProbeNode, providerOpts aiProviderProbeOptions, opts aiScalpingDecisionProbeOptions) time.Duration {
+	perCycle := aiProviderProbeOverallTimeout(nodes, providerOpts)
+	total := time.Duration(opts.Cycles) * perCycle
+	if opts.Cycles > 1 {
+		total += time.Duration(opts.Cycles-1) * opts.Interval
+	}
+	return total
+}
+
 func newAIProviderProbeNodeClient(node aiProviderProbeNode, opts aiProviderProbeOptions) llm.Client {
 	cfg := llm.ClientConfig{
 		Provider:    llm.Provider(node.Provider),
@@ -1061,14 +1168,11 @@ func writeAIProviderProbeResult(out io.Writer, outputJSON bool, result aiProvide
 	return nil
 }
 
-func writeAIScalpingDecisionProbeResult(out io.Writer, outputJSON bool, result *services.ScalpingLLMDecisionProbeResult) error {
-	if result == nil {
-		return fmt.Errorf("scalping decision probe result is nil")
-	}
+func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary aiScalpingDecisionProbeSummary) error {
 	if outputJSON {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return enc.Encode(summary)
 	}
 	writeProbeOutput := func(format string, args ...any) error {
 		if _, err := fmt.Fprintf(out, format, args...); err != nil {
@@ -1079,43 +1183,30 @@ func writeAIScalpingDecisionProbeResult(out io.Writer, outputJSON bool, result *
 	if err := writeProbeOutput("AI scalping decision probe completed\n"); err != nil {
 		return err
 	}
-	if err := writeProbeOutput("Exchange: %s\n", result.Exchange); err != nil {
+	if err := writeProbeOutput("Cycles: %d/%d\n", summary.CompletedCycles, summary.Cycles); err != nil {
 		return err
 	}
-	if result.Provider != "" {
-		if err := writeProbeOutput("Provider: %s\n", result.Provider); err != nil {
-			return err
-		}
-	}
-	if result.Model != "" {
-		if err := writeProbeOutput("Model: %s\n", result.Model); err != nil {
-			return err
-		}
-	}
-	if err := writeProbeOutput("Signals: %d\n", result.SignalCount); err != nil {
+	if err := writeProbeOutput("Signals: %d\n", summary.TotalSignals); err != nil {
 		return err
 	}
-	if err := writeProbeOutput("Signal quality coverage: %s\n", result.SignalQualityCoverage.String()); err != nil {
+	if err := writeProbeOutput("Signal quality coverage: %s\n", summary.SignalQualityCoverage.String()); err != nil {
 		return err
 	}
-	if err := writeProbeOutput("LLM degraded: %t\n", result.LLMDegraded); err != nil {
+	if err := writeProbeOutput("Valid contract cycles: %d\n", summary.ValidContractCycles); err != nil {
 		return err
 	}
-	if err := writeProbeOutput("Contract valid: %t\n", result.ContractValid); err != nil {
+	if err := writeProbeOutput("LLM degraded cycles: %d\n", summary.LLMDegradedCycles); err != nil {
 		return err
 	}
-	if result.ContractError != "" {
-		if err := writeProbeOutput("Contract error: %s\n", result.ContractError); err != nil {
-			return err
-		}
+	if err := writeProbeOutput("Actions: %v\n", summary.ActionCounts); err != nil {
+		return err
 	}
-	if result.Decision != nil {
-		if err := writeProbeOutput("Decision: %s %s confidence=%.4f reason_category=%s\n", result.Decision.Action, result.Decision.Symbol, result.Decision.Confidence, result.Decision.ReasonCategory); err != nil {
-			return err
-		}
+	if err := writeProbeOutput("Providers: %v\n", summary.ProviderCounts); err != nil {
+		return err
 	}
-	if result.PreTradeGateReason != "" {
-		if err := writeProbeOutput("Pre-trade gate: allowed=%t reason=%s\n", result.PreTradeGateAllowed, result.PreTradeGateReason); err != nil {
+	if summary.LastResult != nil && summary.LastResult.Decision != nil {
+		decision := summary.LastResult.Decision
+		if err := writeProbeOutput("Last decision: %s %s confidence=%.4f reason_category=%s\n", decision.Action, decision.Symbol, decision.Confidence, decision.ReasonCategory); err != nil {
 			return err
 		}
 	}
