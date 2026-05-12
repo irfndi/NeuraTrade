@@ -696,8 +696,17 @@ func checkProcess(displayName string, processPatterns ...string) {
 }
 
 func readCommandLineForPID(pid string) (string, error) {
-	if strings.TrimSpace(pid) == "" {
+	pid = strings.TrimSpace(pid)
+	if pid == "" {
 		return "", fmt.Errorf("empty pid")
+	}
+	// Validate PID is purely numeric to prevent command injection
+	parsedPID, err := strconv.Atoi(pid)
+	if err != nil {
+		return "", fmt.Errorf("invalid pid (non-numeric): %q", pid)
+	}
+	if parsedPID <= 0 {
+		return "", fmt.Errorf("invalid pid (must be positive): %q", pid)
 	}
 	cmd := exec.Command("ps", "-p", pid, "-o", "command=")
 	output, err := cmd.Output()
