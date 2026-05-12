@@ -1370,6 +1370,52 @@ func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackAfterParseExha
 	assert.Equal(t, 2, mockLLM.CallCount)
 }
 
+func TestAIScalpingService_GetAIDecision_DefaultsActionableLLMDecisionToEntryCategory(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Provider: llm.Provider("deepseek"),
+				Model:    "deepseek-chat",
+				Message:  llm.Message{Content: `{"action":"buy","symbol":"BTC/USDT","size_pct":5,"confidence":0.7,"reasoning":"Order book pressure supports a small entry.","stop_loss":98,"take_profit":104}`},
+			},
+		},
+	}
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:         "deepseek-chat",
+			MaxTokens:     1200,
+			MinConfidence: 0.55,
+			MaxCapitalPct: 5,
+		},
+		llmClient: mockLLM,
+	}
+
+	decision, err := svc.getAIDecision(context.Background(), []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			RangePosition24h:   18,
+		},
+	}, TradingPortfolio{})
+
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+	assert.Equal(t, reasonCategoryStrategyEntry, decision.ReasonCategory)
+	assert.NotEqual(t, reasonCategoryStrategyHold, decision.ReasonCategory)
+	assert.True(t, decision.ConfidenceKnown)
+
+	diagnostics := svc.RuntimeDiagnostics()
+	assert.Equal(t, reasonCategoryStrategyEntry, diagnostics["last_reason_category"])
+	assert.Equal(t, "deepseek", diagnostics["last_successful_provider"])
+}
+
 func TestParseAIDecisionJSONObject_DoesNotForceStrategyMetadata(t *testing.T) {
 	decision, err := parseAIDecisionJSONObject(`{"action":"hold","symbol":"BTC/USDT","size_pct":0,"confidence":0.1,"reasoning":"wait"}`)
 	assert.NoError(t, err)

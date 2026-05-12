@@ -768,6 +768,7 @@ const (
 	reasonCategoryExecutionUnavailable  = "execution_unavailable"
 	reasonCategoryDeterministicFallback = "deterministic_fallback"
 	reasonCategoryStrategyHold          = "strategy_hold"
+	reasonCategoryStrategyEntry         = "strategy_entry"
 )
 
 const (
@@ -1220,7 +1221,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 	} else {
 		if decision.ReasonCategory == "" {
-			decision.ReasonCategory = reasonCategoryStrategyHold
+			decision.ReasonCategory = reasonCategoryStrategyEntry
 		}
 		if !decision.ConfidenceKnown {
 			decision.ConfidenceKnown = true
@@ -1900,7 +1901,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		}
 	} else {
 		if decision.ReasonCategory == "" {
-			decision.ReasonCategory = reasonCategoryStrategyHold
+			decision.ReasonCategory = reasonCategoryStrategyEntry
 		}
 		if !decision.ConfidenceKnown {
 			decision.ConfidenceKnown = true

@@ -46,6 +46,37 @@ func TestRunScalpingLLMDecisionProbeWithServiceUsesStructuredLLMDecision(t *test
 	require.Equal(t, "hold", result.Decision.Action)
 }
 
+func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldCategory(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Provider:     llm.Provider("deepseek"),
+				Model:        "deepseek-chat",
+				LatencyMs:    120,
+				FinishReason: "stop",
+				Message: llm.Message{
+					Content: `{"action":"buy","symbol":"BTC/USDT","size_pct":5,"confidence":0.7,"reasoning":"Order book pressure supports a small entry.","stop_loss":98,"take_profit":104}`,
+				},
+			},
+		},
+	}
+	svc := newScalpingLLMDecisionProbeTestService(mockLLM)
+
+	result, err := runScalpingLLMDecisionProbeWithService(context.Background(), svc, ScalpingLLMDecisionProbeOptions{
+		RequireHealthy: true,
+		RequireValid:   true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.Decision)
+	require.Equal(t, "buy", result.Decision.Action)
+	require.Equal(t, reasonCategoryStrategyEntry, result.Decision.ReasonCategory)
+	require.NotEqual(t, reasonCategoryStrategyHold, result.Decision.ReasonCategory)
+	require.False(t, result.LLMDegraded)
+	require.Equal(t, reasonCategoryStrategyEntry, runtimeDiagnosticString(result.RuntimeDiagnostics, "last_reason_category"))
+}
+
 func TestRunScalpingLLMDecisionProbeWithServiceFlagsLLMDegradation(t *testing.T) {
 	svc := newScalpingLLMDecisionProbeTestService(&errorLLMClient{err: errors.New("provider exhausted")})
 
