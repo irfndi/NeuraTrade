@@ -1302,6 +1302,43 @@ func TestGetChatRuntimeDiagnostics_ActiveZeroConcurrencyCapSuppressesStaleCap(t 
 	assert.Equal(t, 0, diag["managed_open_positions_effective"])
 }
 
+func TestGetChatRuntimeDiagnostics_ActiveMissingConcurrencyCapSuppressesStaleCap(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-cycle-active-missing-cap"] = &Quest{
+		ID:        "q-cycle-active-missing-cap",
+		Status:    QuestStatusActive,
+		UpdatedAt: now,
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle-missing-cap",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"managed_open_positions_effective": 0,
+		},
+	}
+	engine.quests["q-cycle-stale-missing-cap"] = &Quest{
+		ID:        "q-cycle-stale-missing-cap",
+		Status:    QuestStatusCompleted,
+		UpdatedAt: now.Add(time.Hour),
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle-missing-cap",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"effective_max_concurrent_positions": 3,
+			"managed_open_positions_effective":   2,
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-cycle-missing-cap")
+
+	if _, ok := diag["effective_max_concurrent_positions"]; ok {
+		t.Fatalf("expected active missing cap to suppress stale cap, got %#v", diag["effective_max_concurrent_positions"])
+	}
+	assert.Equal(t, 0, diag["managed_open_positions_effective"])
+}
+
 func TestGetChatRuntimeDiagnostics_ProgressBlockUsesPolicyEnvOverride(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_PROGRESS_BLOCK_AFTER_MINUTES", "240")
 

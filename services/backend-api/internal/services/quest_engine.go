@@ -2312,6 +2312,10 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 				effectiveMaxConcurrent = value
 				capAt = selectionAt
 			}
+		} else if isActiveScalpingQuest && (!hasActiveCap || selectionAt.After(capAt)) {
+			effectiveMaxConcurrent = 0
+			capAt = selectionAt
+			hasActiveCap = true
 		}
 		ghostPositionsCleaned = maxInt(ghostPositionsCleaned, readQuestMetricInt(cp["ghost_positions_cleaned"]))
 		if _, exists := cp["autonomy_gate_open"]; exists {
