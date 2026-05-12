@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/shopspring/decimal"
 )
 
 func TestTruncate(t *testing.T) {
@@ -522,6 +524,9 @@ func TestParseAIScalpingDecisionProbeOptionsDefaults(t *testing.T) {
 	if opts.MinSignalQuality.String() != "1" {
 		t.Fatalf("expected full signal quality coverage by default, got %s", opts.MinSignalQuality.String())
 	}
+	if opts.Cycles != 1 {
+		t.Fatalf("expected one cycle by default, got %d", opts.Cycles)
+	}
 }
 
 func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testing.T) {
@@ -530,6 +535,8 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 		"--exchange", " bitget ",
 		"--capital", "50.5",
 		"--min-signal-quality", "0.5",
+		"--cycles", "3",
+		"--interval-ms", "250",
 		"--allow-degraded",
 		"--allow-invalid-contract",
 	})
@@ -554,6 +561,12 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	if opts.MinSignalQuality.String() != "0.5" {
 		t.Fatalf("expected parsed signal quality, got %s", opts.MinSignalQuality.String())
 	}
+	if opts.Cycles != 3 {
+		t.Fatalf("expected parsed cycles, got %d", opts.Cycles)
+	}
+	if opts.Interval != 250*time.Millisecond {
+		t.Fatalf("expected parsed interval, got %s", opts.Interval)
+	}
 }
 
 func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidQualityGate(t *testing.T) {
@@ -564,6 +577,78 @@ func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidQualityGate(t *testing
 	if !strings.Contains(err.Error(), "--min-signal-quality") {
 		t.Fatalf("expected min-signal-quality error, got %v", err)
 	}
+}
+
+func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
+	summary := buildAIScalpingDecisionProbeSummary([]*services.ScalpingLLMDecisionProbeResult{
+		{
+			SignalCount:           8,
+			SignalQualityCount:    8,
+			ContractValid:         true,
+			LLMDegraded:           false,
+			Provider:              "deepseek",
+			Decision:              &services.AITradingDecision{Action: "hold"},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+		{
+			SignalCount:           8,
+			SignalQualityCount:    6,
+			ContractValid:         false,
+			LLMDegraded:           true,
+			Provider:              "deepseek",
+			Decision:              &services.AITradingDecision{Action: "buy"},
+			SignalQualityCoverage: mustDecimal("0.75"),
+		},
+	}, 2)
+
+	if summary.CompletedCycles != 2 {
+		t.Fatalf("expected completed cycles, got %d", summary.CompletedCycles)
+	}
+	if summary.TotalSignals != 16 {
+		t.Fatalf("expected total signals, got %d", summary.TotalSignals)
+	}
+	if summary.SignalQualityCoverage.String() != "0.875" {
+		t.Fatalf("expected aggregate signal quality coverage, got %s", summary.SignalQualityCoverage.String())
+	}
+	if summary.ValidContractCycles != 1 {
+		t.Fatalf("expected one valid contract cycle, got %d", summary.ValidContractCycles)
+	}
+	if summary.LLMDegradedCycles != 1 {
+		t.Fatalf("expected one degraded cycle, got %d", summary.LLMDegradedCycles)
+	}
+	if summary.ActionCounts["hold"] != 1 || summary.ActionCounts["buy"] != 1 {
+		t.Fatalf("unexpected action counts: %#v", summary.ActionCounts)
+	}
+}
+
+func TestValidateAIScalpingDecisionProbeSummaryEnforcesHealthyValidQualityGates(t *testing.T) {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:                2,
+		CompletedCycles:       2,
+		ValidContractCycles:   1,
+		LLMDegradedCycles:     1,
+		SignalQualityCoverage: mustDecimal("0.5"),
+	}
+	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:           2,
+		RequireHealthy:   true,
+		RequireValid:     true,
+		MinSignalQuality: mustDecimal("1"),
+	})
+	if err == nil {
+		t.Fatal("expected summary gate error")
+	}
+	if !strings.Contains(err.Error(), "degraded_cycles") {
+		t.Fatalf("expected degraded cycle error first, got %v", err)
+	}
+}
+
+func mustDecimal(value string) decimal.Decimal {
+	parsed, err := decimal.NewFromString(value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }
 
 type failingWriter struct {
