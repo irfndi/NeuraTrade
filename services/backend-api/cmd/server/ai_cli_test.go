@@ -502,6 +502,70 @@ func TestAIProviderProbeOverallTimeoutCoversFailoverAttempts(t *testing.T) {
 	}
 }
 
+func TestParseAIScalpingDecisionProbeOptionsDefaults(t *testing.T) {
+	opts, err := parseAIScalpingDecisionProbeOptions(nil)
+	if err != nil {
+		t.Fatalf("parseAIScalpingDecisionProbeOptions returned error: %v", err)
+	}
+	if opts.Exchange != "bitget" {
+		t.Fatalf("expected default exchange bitget, got %q", opts.Exchange)
+	}
+	if opts.Capital.String() != "48" {
+		t.Fatalf("expected default capital 48, got %s", opts.Capital.String())
+	}
+	if !opts.RequireHealthy {
+		t.Fatalf("expected healthy runtime requirement by default")
+	}
+	if !opts.RequireValid {
+		t.Fatalf("expected valid contract requirement by default")
+	}
+	if opts.MinSignalQuality.String() != "1" {
+		t.Fatalf("expected full signal quality coverage by default, got %s", opts.MinSignalQuality.String())
+	}
+}
+
+func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testing.T) {
+	opts, err := parseAIScalpingDecisionProbeOptions([]string{
+		"--provider", "DeepSeek",
+		"--exchange", " bitget ",
+		"--capital", "50.5",
+		"--min-signal-quality", "0.5",
+		"--allow-degraded",
+		"--allow-invalid-contract",
+	})
+	if err != nil {
+		t.Fatalf("parseAIScalpingDecisionProbeOptions returned error: %v", err)
+	}
+	if opts.Provider != "deepseek" {
+		t.Fatalf("expected normalized provider, got %q", opts.Provider)
+	}
+	if opts.Exchange != "bitget" {
+		t.Fatalf("expected trimmed exchange, got %q", opts.Exchange)
+	}
+	if opts.RequireHealthy {
+		t.Fatalf("expected degraded runtime allowance")
+	}
+	if opts.RequireValid {
+		t.Fatalf("expected invalid contract allowance")
+	}
+	if opts.Capital.String() != "50.5" {
+		t.Fatalf("expected parsed capital, got %s", opts.Capital.String())
+	}
+	if opts.MinSignalQuality.String() != "0.5" {
+		t.Fatalf("expected parsed signal quality, got %s", opts.MinSignalQuality.String())
+	}
+}
+
+func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidQualityGate(t *testing.T) {
+	_, err := parseAIScalpingDecisionProbeOptions([]string{"--min-signal-quality", "1.1"})
+	if err == nil {
+		t.Fatal("expected invalid min-signal-quality error")
+	}
+	if !strings.Contains(err.Error(), "--min-signal-quality") {
+		t.Fatalf("expected min-signal-quality error, got %v", err)
+	}
+}
+
 type failingWriter struct {
 	err error
 }
