@@ -919,6 +919,9 @@ func (h *TelegramInternalHandler) GetDoctor(c *gin.Context) {
 		if effectiveOpen, ok := diagnostics["managed_open_positions_effective"]; ok {
 			details["managed_open_positions_effective"] = fmt.Sprintf("%v", effectiveOpen)
 		}
+		if effectiveMax, ok := diagnostics["effective_max_concurrent_positions"]; ok {
+			details["effective_max_concurrent_positions"] = fmt.Sprintf("%v", effectiveMax)
+		}
 		if ghostCleaned, ok := diagnostics["ghost_positions_cleaned"]; ok {
 			details["ghost_positions_cleaned"] = fmt.Sprintf("%v", ghostCleaned)
 		}

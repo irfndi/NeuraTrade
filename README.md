@@ -78,6 +78,8 @@ make coverage-check
 - `NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT=0.50`: Maximum position-size cap multiplier while micro-entry mode is active.
 - `NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR=5`: Maximum liveness-forced entry attempts allowed per rolling hour.
 - `NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET=2`: Consecutive per-symbol losses allowed before the symbol is temporarily paused.
+- `NEURATRADE_SCALPING_MAX_CONCURRENT_POSITIONS=3`: Default concurrent managed-position cap for scalping entries.
+- `NEURATRADE_SCALPING_MICRO_MAX_CONCURRENT_POSITIONS=1`: Micro-account concurrent managed-position cap. Keep this conservative unless paper/testnet soak and collateral checks support raising it.
 
 ## License
 

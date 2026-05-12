@@ -220,6 +220,8 @@ export interface QuestDiagnosticsResponse {
   readonly account_tier?: string;
   readonly effective_min_confidence?: number;
   readonly effective_max_capital_pct?: number;
+  readonly effective_max_concurrent_positions?: number;
+  readonly managed_open_positions_effective?: number;
   readonly candidate_universe_count?: number;
   readonly candidate_ranked_count?: number;
   readonly candidate_viable_count?: number;

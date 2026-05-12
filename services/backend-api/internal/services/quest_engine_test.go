@@ -1193,17 +1193,19 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 			"definition_id": "scalping_execution",
 		},
 		Checkpoint: map[string]interface{}{
-			"account_tier":                  "micro",
-			"effective_min_confidence":      0.65,
-			"effective_max_capital_pct":     0.50,
-			"candidate_universe_count":      12,
-			"candidate_ranked_count":        4,
-			"candidate_viable_count":        1,
-			"top_candidate_rejections":      []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "confidence_below_effective_threshold", "estimated_confidence": 0.55}},
-			"rollout_stage_current":         "shadow",
-			"rollout_status_current":        "active",
-			"rollout_gate_reason_current":   "strategy_not_live (stage: shadow, status: active)",
-			"runtime_last_entry_attempt_at": lastAttempt.Format(time.RFC3339),
+			"account_tier":                       "micro",
+			"effective_min_confidence":           0.65,
+			"effective_max_capital_pct":          0.50,
+			"effective_max_concurrent_positions": 1,
+			"managed_open_positions_effective":   1,
+			"candidate_universe_count":           12,
+			"candidate_ranked_count":             4,
+			"candidate_viable_count":             1,
+			"top_candidate_rejections":           []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "confidence_below_effective_threshold", "estimated_confidence": 0.55}},
+			"rollout_stage_current":              "shadow",
+			"rollout_status_current":             "active",
+			"rollout_gate_reason_current":        "strategy_not_live (stage: shadow, status: active)",
+			"runtime_last_entry_attempt_at":      lastAttempt.Format(time.RFC3339),
 		},
 	}
 
@@ -1217,6 +1219,12 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 	}
 	if maxCapital, _ := diag["effective_max_capital_pct"].(float64); maxCapital != 0.50 {
 		t.Fatalf("expected effective_max_capital_pct=0.50, got %v", maxCapital)
+	}
+	if maxConcurrent, _ := diag["effective_max_concurrent_positions"].(int); maxConcurrent != 1 {
+		t.Fatalf("expected effective_max_concurrent_positions=1, got %d", maxConcurrent)
+	}
+	if openPositions, _ := diag["managed_open_positions_effective"].(int); openPositions != 1 {
+		t.Fatalf("expected managed_open_positions_effective=1, got %d", openPositions)
 	}
 	if universe, _ := diag["candidate_universe_count"].(int); universe != 12 {
 		t.Fatalf("expected candidate_universe_count=12, got %d", universe)
