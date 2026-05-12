@@ -252,20 +252,60 @@ func TestStrategyActor_ScalpingSignalNilEventBusDoesNotPanic(t *testing.T) {
 	require.Equal(t, 0, composer.calls, "nil event bus should avoid composing an unpublishable scalping signal")
 }
 
-func TestStrategyActor_ScalpingSignalDeduplicatesPerSymbol(t *testing.T) {
+func TestStrategyActor_ScalpingSignalDeduplicatesEquivalentSignalsPerSymbol(t *testing.T) {
 	bus := eventbus.New(eventbus.DefaultConfig())
 	cfg := DefaultConfig()
 	cfg.Signal.Lookback = 3
 	actor := NewStrategyActor(cfg, bus, nil)
 	actor.SetScalpingComposer(&stubScalpingComposer{
-		signal: &scalping.ScalpingSignal{
-			ID:         "same-scalp-signal",
-			Exchange:   "bitget",
-			Symbol:     "BTC/USDT",
-			Direction:  scalping.DirectionBuy,
-			Confidence: decimal.RequireFromString("0.75"),
-			Components: []scalping.SignalComponent{
-				{Name: "spread", Signal: scalping.DirectionBuy},
+		signals: []*scalping.ScalpingSignal{
+			{
+				ID:         "scalp-signal-1",
+				Exchange:   "bitget",
+				Symbol:     "BTC/USDT",
+				Direction:  scalping.DirectionBuy,
+				Confidence: decimal.RequireFromString("0.75"),
+				Components: []scalping.SignalComponent{
+					{
+						Name:     "spread",
+						Value:    decimal.RequireFromString("0.04"),
+						Signal:   scalping.DirectionBuy,
+						Strength: scalping.StrengthMedium,
+						Weight:   decimal.RequireFromString("0.10"),
+					},
+				},
+			},
+			{
+				ID:         "scalp-signal-2",
+				Exchange:   "bitget",
+				Symbol:     "BTC/USDT",
+				Direction:  scalping.DirectionBuy,
+				Confidence: decimal.RequireFromString("0.75"),
+				Components: []scalping.SignalComponent{
+					{
+						Name:     "spread",
+						Value:    decimal.RequireFromString("0.04"),
+						Signal:   scalping.DirectionBuy,
+						Strength: scalping.StrengthMedium,
+						Weight:   decimal.RequireFromString("0.10"),
+					},
+				},
+			},
+			{
+				ID:         "scalp-signal-3",
+				Exchange:   "bitget",
+				Symbol:     "BTC/USDT",
+				Direction:  scalping.DirectionSell,
+				Confidence: decimal.RequireFromString("0.75"),
+				Components: []scalping.SignalComponent{
+					{
+						Name:     "spread",
+						Value:    decimal.RequireFromString("0.21"),
+						Signal:   scalping.DirectionSell,
+						Strength: scalping.StrengthWeak,
+						Weight:   decimal.RequireFromString("0.10"),
+					},
+				},
 			},
 		},
 	})
@@ -284,17 +324,25 @@ func TestStrategyActor_ScalpingSignalDeduplicatesPerSymbol(t *testing.T) {
 	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestCandleMessage{Candle: scalpingTestCandle()})))
 	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
 	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
+	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
 
 	select {
 	case event := <-published:
-		require.Equal(t, "same-scalp-signal", event.SignalID)
+		require.Equal(t, "scalp-signal-1", event.SignalID)
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for scalping signal")
 	}
 
 	select {
-	case duplicate := <-published:
-		t.Fatalf("unexpected duplicate scalping signal: %s", duplicate.SignalID)
+	case event := <-published:
+		require.Equal(t, "scalp-signal-3", event.SignalID)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for changed scalping signal")
+	}
+
+	select {
+	case event := <-published:
+		t.Fatalf("unexpected extra scalping signal: %s", event.SignalID)
 	case <-time.After(50 * time.Millisecond):
 	}
 }
@@ -333,9 +381,10 @@ func replayWithActor(ticks []marketdata.MarketTickEvent) ([]signals.SignalPropos
 }
 
 type stubScalpingComposer struct {
-	signal *scalping.ScalpingSignal
-	err    error
-	calls  int
+	signal  *scalping.ScalpingSignal
+	signals []*scalping.ScalpingSignal
+	err     error
+	calls   int
 }
 
 func (s *stubScalpingComposer) ComposeSignal(
@@ -344,6 +393,13 @@ func (s *stubScalpingComposer) ComposeSignal(
 	obMetrics scalping.OrderBookMetrics,
 ) (*scalping.ScalpingSignal, error) {
 	s.calls++
+	if len(s.signals) > 0 {
+		index := s.calls - 1
+		if index >= len(s.signals) {
+			index = len(s.signals) - 1
+		}
+		return s.signals[index], s.err
+	}
 	return s.signal, s.err
 }
 
