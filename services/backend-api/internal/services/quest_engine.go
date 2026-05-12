@@ -2301,7 +2301,8 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 				managedOpenAt = selectionAt
 			}
 		}
-		if value := readQuestMetricInt(cp["effective_max_concurrent_positions"]); value > 0 {
+		if _, exists := cp["effective_max_concurrent_positions"]; exists {
+			value := readQuestMetricInt(cp["effective_max_concurrent_positions"])
 			switch {
 			case isActiveScalpingQuest && (!hasActiveCap || selectionAt.After(capAt)):
 				effectiveMaxConcurrent = value
