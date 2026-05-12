@@ -537,6 +537,9 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 		"--min-signal-quality", "0.5",
 		"--cycles", "3",
 		"--interval-ms", "250",
+		"--min-paper-trades", "2",
+		"--min-paper-net-pnl", "0",
+		"--min-paper-avg-net-pnl", "0.001",
 		"--allow-degraded",
 		"--allow-invalid-contract",
 	})
@@ -567,6 +570,15 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	if opts.Interval != 250*time.Millisecond {
 		t.Fatalf("expected parsed interval, got %s", opts.Interval)
 	}
+	if opts.MinPaperTrades != 2 {
+		t.Fatalf("expected parsed min paper trades, got %d", opts.MinPaperTrades)
+	}
+	if !opts.RequirePaperNetPnL || opts.MinPaperNetPnL.String() != "0" {
+		t.Fatalf("expected parsed min paper net pnl gate, enabled=%t value=%s", opts.RequirePaperNetPnL, opts.MinPaperNetPnL.String())
+	}
+	if !opts.RequirePaperAvgNetPnL || opts.MinPaperAvgNetPnL.String() != "0.001" {
+		t.Fatalf("expected parsed min paper avg net pnl gate, enabled=%t value=%s", opts.RequirePaperAvgNetPnL, opts.MinPaperAvgNetPnL.String())
+	}
 }
 
 func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidQualityGate(t *testing.T) {
@@ -576,6 +588,20 @@ func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidQualityGate(t *testing
 	}
 	if !strings.Contains(err.Error(), "--min-signal-quality") {
 		t.Fatalf("expected min-signal-quality error, got %v", err)
+	}
+}
+
+func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidPaperGates(t *testing.T) {
+	cases := [][]string{
+		{"--min-paper-trades", "-1"},
+		{"--min-paper-net-pnl", "not-a-decimal"},
+		{"--min-paper-avg-net-pnl", "not-a-decimal"},
+	}
+	for _, args := range cases {
+		_, err := parseAIScalpingDecisionProbeOptions(args)
+		if err == nil {
+			t.Fatalf("expected invalid paper gate error for args %v", args)
+		}
 	}
 }
 
@@ -651,6 +677,52 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesHealthyValidQualityGates(
 	}
 	if !strings.Contains(err.Error(), "degraded_cycles") {
 		t.Fatalf("expected degraded cycle error first, got %v", err)
+	}
+}
+
+func TestValidateAIScalpingDecisionProbeSummaryEnforcesPaperTradeGates(t *testing.T) {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:                2,
+		CompletedCycles:       2,
+		ValidContractCycles:   2,
+		SignalQualityCoverage: mustDecimal("1"),
+		PaperTrades:           1,
+		PaperNetPnL:           mustDecimal("-0.01"),
+		PaperAvgNetPnL:        mustDecimal("-0.01"),
+	}
+	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:           2,
+		RequireHealthy:   true,
+		RequireValid:     true,
+		MinSignalQuality: mustDecimal("1"),
+		MinPaperTrades:   2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "paper_trades") {
+		t.Fatalf("expected paper trade count gate error, got %v", err)
+	}
+
+	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:             2,
+		RequireHealthy:     true,
+		RequireValid:       true,
+		MinSignalQuality:   mustDecimal("1"),
+		RequirePaperNetPnL: true,
+		MinPaperNetPnL:     mustDecimal("0"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "paper_net_pnl") {
+		t.Fatalf("expected paper net pnl gate error, got %v", err)
+	}
+
+	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:                2,
+		RequireHealthy:        true,
+		RequireValid:          true,
+		MinSignalQuality:      mustDecimal("1"),
+		RequirePaperAvgNetPnL: true,
+		MinPaperAvgNetPnL:     mustDecimal("0"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "paper_avg_net_pnl") {
+		t.Fatalf("expected paper avg net pnl gate error, got %v", err)
 	}
 }
 
