@@ -125,6 +125,20 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 	}
 }
 
+func TestIntegratedQuestHandlersResolveOperationalModeRuntimePaperEnvOverridesStoredLive(t *testing.T) {
+	t.Setenv("FEATURE_PAPER_TRADING", "true")
+	t.Setenv("FEATURE_REAL_TRADING", "false")
+
+	handlers := &IntegratedQuestHandlers{opModeService: &OperationalModeService{
+		config: DefaultOperationalModeConfig(),
+		states: map[string]*OperationalModeState{
+			"paper-env-chat": {ChatID: "paper-env-chat", Mode: OpModeLive},
+		},
+	}}
+
+	assert.Equal(t, ModePaper, handlers.resolveOperationalMode("paper-env-chat", &Quest{}))
+}
+
 func TestIntegratedQuestHandlersSyncScalpingStrategyModeFollowsOperatorMode(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "rollout-sync.db"))
 	require.NoError(t, err)

@@ -378,6 +378,9 @@ func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
 }
 
 func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Quest) OperationalMode {
+	if mode, ok := runtimeModeOverrideFromEnv(); ok {
+		return mode
+	}
 	if h != nil && h.opModeService != nil {
 		switch mode := h.opModeService.GetMode(chatID); mode {
 		case OpModeLive:

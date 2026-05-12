@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +50,34 @@ func DefaultOperationalModeConfig() OperationalModeConfig {
 		RequireConfirmation: true,
 		ConfirmationCount:   2, // Require 2 confirmations to switch to live mode
 	}
+}
+
+func runtimeModeOverrideFromEnv() (OperationalMode, bool) {
+	paperEnabled, paperSet := boolEnvAny("FEATURES_PAPER_TRADING", "FEATURE_PAPER_TRADING")
+	realEnabled, realSet := boolEnvAny("FEATURES_REAL_TRADING", "FEATURE_REAL_TRADING")
+	if paperSet && paperEnabled && (!realSet || !realEnabled) {
+		return ModePaper, true
+	}
+	if realSet && !realEnabled {
+		return OpModeDry, true
+	}
+	return "", false
+}
+
+func boolEnvAny(names ...string) (bool, bool) {
+	for _, name := range names {
+		raw, ok := os.LookupEnv(name)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "1", "true", "yes", "on":
+			return true, true
+		case "0", "false", "no", "off":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 // OperationalModeService manages the operational mode state

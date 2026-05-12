@@ -68,3 +68,59 @@ func TestOperationalModeService_GetModeInfo_UsesDistinctDryAndPaperLabels(t *tes
 	assert.Contains(t, paperInfo, "PAPER MODE (Simulated Orders)")
 	assert.Contains(t, paperInfo, "Orders are simulated through the autonomy paper stage")
 }
+
+func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T) {
+	testCases := []struct {
+		name     string
+		env      map[string]string
+		expected OperationalMode
+		ok       bool
+	}{
+		{
+			name: "singular paper enabled and real disabled",
+			env: map[string]string{
+				"FEATURE_PAPER_TRADING": "true",
+				"FEATURE_REAL_TRADING":  "false",
+			},
+			expected: ModePaper,
+			ok:       true,
+		},
+		{
+			name: "plural paper enabled and real disabled",
+			env: map[string]string{
+				"FEATURES_PAPER_TRADING": "true",
+				"FEATURES_REAL_TRADING":  "false",
+			},
+			expected: ModePaper,
+			ok:       true,
+		},
+		{
+			name: "real disabled without paper falls back to dry",
+			env: map[string]string{
+				"FEATURE_REAL_TRADING": "false",
+			},
+			expected: OpModeDry,
+			ok:       true,
+		},
+		{
+			name: "unset env does not override persisted state",
+			env:  map[string]string{},
+			ok:   false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range []string{"FEATURE_PAPER_TRADING", "FEATURES_PAPER_TRADING", "FEATURE_REAL_TRADING", "FEATURES_REAL_TRADING"} {
+				t.Setenv(key, "")
+			}
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+
+			mode, ok := runtimeModeOverrideFromEnv()
+			assert.Equal(t, tc.ok, ok)
+			assert.Equal(t, tc.expected, mode)
+		})
+	}
+}
