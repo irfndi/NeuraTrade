@@ -37,6 +37,8 @@ const (
 	SignalStrengthStrong SignalStrength = "strong"
 )
 
+const technicalAnalysisMinHistory = 50
+
 // AggregatedSignal represents a consolidated trading signal derived from multiple sources or indicators.
 type AggregatedSignal struct {
 	ID              string                 `json:"id" gorm:"primaryKey"`
@@ -325,24 +327,25 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 
 	sa.logger.WithFields(map[string]interface{}{"symbol": input.Symbol}).Info("Aggregating technical signals")
 
-	if len(input.Prices) < 50 {
+	if len(input.Prices) < technicalAnalysisMinHistory {
 		sa.logger.WithFields(zaplogrus.Fields{
-			"required_points": 50,
+			"required_points": technicalAnalysisMinHistory,
 			"actual_points":   len(input.Prices),
 		}).Error("Insufficient price data for technical analysis")
-		err := fmt.Errorf("insufficient price data for technical analysis: need at least 50 points, got %d", len(input.Prices))
+		err := fmt.Errorf("insufficient price data for technical analysis: need at least %d points, got %d", technicalAnalysisMinHistory, len(input.Prices))
 		observability.AddBreadcrumb(spanCtx, "signal_aggregator", "Insufficient data for analysis", sentry.LevelWarning)
 		return nil, err
 	}
 
-	if len(input.Volumes) < 50 {
+	if len(input.Volumes) < technicalAnalysisMinHistory {
 		sa.logger.WithFields(zaplogrus.Fields{
-			"required_volume_points": 50,
-			"actual_volume_points":   len(input.Volumes),
-		}).Error("Insufficient volume data for technical analysis")
-		err := fmt.Errorf("insufficient volume data for technical analysis: need at least 50 points, got %d", len(input.Volumes))
-		observability.AddBreadcrumb(spanCtx, "signal_aggregator", "Insufficient volume data for analysis", sentry.LevelWarning)
-		return nil, err
+			"symbol":          input.Symbol,
+			"exchange":        input.Exchange,
+			"required_points": technicalAnalysisMinHistory,
+			"actual_points":   len(input.Volumes),
+			"prices_count":    len(input.Prices),
+		}).Info("Volume history below technical threshold; continuing with fallback-capable aggregation")
+		observability.AddBreadcrumb(spanCtx, "signal_aggregator", "Volume history below technical threshold; using fallback-capable aggregation", sentry.LevelInfo)
 	}
 
 	signals := make([]*AggregatedSignal, 0)
@@ -394,6 +397,7 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 
 		// Calculate average volume for quality assessment
 		avgVolume := decimal.NewFromFloat(0)
+		volumeUnavailable := len(input.Volumes) < technicalAnalysisMinHistory
 		if len(input.Volumes) > 0 {
 			totalVolume := decimal.NewFromFloat(0)
 			for _, vol := range input.Volumes {
@@ -408,16 +412,17 @@ func (sa *SignalAggregator) AggregateTechnicalSignals(ctx context.Context, input
 		}
 
 		qualityInput := SignalQualityInput{
-			SignalType:       string(signal.SignalType),
-			Symbol:           signal.Symbol,
-			Exchanges:        signal.Exchanges,
-			Volume:           avgVolume,
-			ProfitPotential:  signal.ProfitPotential,
-			Confidence:       signal.Confidence,
-			Timestamp:        signal.CreatedAt,
-			Indicators:       signal.Metadata,
-			SignalCount:      signalCount,
-			SignalComponents: signalComponents,
+			SignalType:        string(signal.SignalType),
+			Symbol:            signal.Symbol,
+			Exchanges:         signal.Exchanges,
+			Volume:            avgVolume,
+			VolumeUnavailable: volumeUnavailable,
+			ProfitPotential:   signal.ProfitPotential,
+			Confidence:        signal.Confidence,
+			Timestamp:         signal.CreatedAt,
+			Indicators:        signal.Metadata,
+			SignalCount:       signalCount,
+			SignalComponents:  signalComponents,
 			MarketData: &MarketDataSnapshot{
 				Price:         lastPrice,
 				LastTradeTime: signal.CreatedAt,
@@ -717,7 +722,7 @@ func (sa *SignalAggregator) removeDuplicateStrings(slice []string) []string {
 func (sa *SignalAggregator) calculateTechnicalIndicators(prices []decimal.Decimal) map[string][]float64 {
 	indicators := make(map[string][]float64)
 
-	if len(prices) < 50 || sa.indicatorProvider == nil {
+	if len(prices) < technicalAnalysisMinHistory || sa.indicatorProvider == nil {
 		return indicators
 	}
 
