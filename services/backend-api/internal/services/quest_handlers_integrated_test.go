@@ -2119,7 +2119,14 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_Populates
 			CandidateRankedCount:   3,
 			CandidateViableCount:   1,
 			TopCandidateRejections: []appautonomy.CandidateRejection{
-				{Symbol: "AAA/USDT", Reason: appautonomy.CandidateRejectSpreadTooWide},
+				{
+					Symbol:             "AAA/USDT",
+					Reason:             appautonomy.CandidateRejectSpreadTooWide,
+					BidAskSpreadPct:    0.31,
+					OrderBookImbalance: -0.22,
+					RangePosition24h:   61,
+					PriceChange24hPct:  -1.4,
+				},
 				{Symbol: "BBB/USDT", Reason: appautonomy.CandidateRejectSpreadTooWide},
 				{Symbol: "CCC/USDT", Reason: appautonomy.CandidateRejectMissingOrderbookSignal},
 			},
@@ -2137,6 +2144,14 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_Populates
 	require.True(t, ok)
 	assert.Equal(t, 2, rejectCounts[appautonomy.CandidateRejectSpreadTooWide])
 	assert.Equal(t, 1, rejectCounts[appautonomy.CandidateRejectMissingOrderbookSignal])
+
+	topRejections, ok := quest.Checkpoint["top_candidate_rejections"].([]map[string]interface{})
+	require.True(t, ok)
+	require.NotEmpty(t, topRejections)
+	assert.Equal(t, 0.31, topRejections[0]["bid_ask_spread_pct"])
+	assert.Equal(t, -0.22, topRejections[0]["order_book_imbalance"])
+	assert.Equal(t, 61.0, topRejections[0]["range_position_24h"])
+	assert.Equal(t, -1.4, topRejections[0]["price_change_24h_pct"])
 }
 
 func TestIntegratedQuestHandlers_RecordTradeDecision_DoesNotSynthesizeTradeMemoryID(t *testing.T) {

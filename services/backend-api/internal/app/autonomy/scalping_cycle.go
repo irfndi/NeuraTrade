@@ -200,12 +200,17 @@ type CandidateSignal struct {
 	BidAskSpread       float64
 	OrderBookImbalance float64
 	RangePosition24h   float64
+	PriceChange24hPct  float64
 }
 
 type CandidateRejection struct {
 	Symbol              string  `json:"symbol"`
 	Reason              string  `json:"reason"`
 	EstimatedConfidence float64 `json:"estimated_confidence,omitempty"`
+	BidAskSpreadPct     float64 `json:"bid_ask_spread_pct"`
+	OrderBookImbalance  float64 `json:"order_book_imbalance"`
+	RangePosition24h    float64 `json:"range_position_24h"`
+	PriceChange24hPct   float64 `json:"price_change_24h_pct"`
 }
 
 type CandidateFunnelSnapshot struct {
@@ -540,7 +545,13 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy) (ranked bool, viable bool, rejection CandidateRejection) {
 	spreadThreshold := resolvePolicySpreadThreshold(policy)
 	symbol := strings.TrimSpace(signal.Symbol)
-	rejection.Symbol = symbol
+	rejection = CandidateRejection{
+		Symbol:             symbol,
+		BidAskSpreadPct:    signal.BidAskSpread,
+		OrderBookImbalance: signal.OrderBookImbalance,
+		RangePosition24h:   signal.RangePosition24h,
+		PriceChange24hPct:  signal.PriceChange24hPct,
+	}
 	if symbol == "" || signal.Price.LessThanOrEqual(decimal.Zero) {
 		rejection.Reason = CandidateRejectMissingOrderbookSignal
 		return false, false, rejection
@@ -614,6 +625,7 @@ func hasInvalidCandidateMetrics(signal CandidateSignal) bool {
 	return invalidCandidateFloat(signal.BidAskSpread) ||
 		invalidCandidateFloat(signal.OrderBookImbalance) ||
 		invalidCandidateFloat(signal.RangePosition24h) ||
+		invalidCandidateFloat(signal.PriceChange24hPct) ||
 		math.IsNaN(volume) ||
 		math.IsInf(volume, 0) ||
 		volume < 0

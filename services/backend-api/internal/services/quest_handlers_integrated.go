@@ -1325,6 +1325,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			cycleRec.EffectiveMinConfidence = decision.EffectiveMinConfidence
 			cycleRec.EffectiveMaxCapitalPct = decision.EffectiveMaxCapitalPct
 			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
+			applyDecisionSignalQualityToCycleRecord(&cycleRec, decision)
 		}
 		writeCtx, writeCancel := telemetryWriteContext()
 		persistedCycleID, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
@@ -2698,6 +2699,31 @@ func (h *IntegratedQuestHandlers) recordScalpingGateCycle(
 	}
 }
 
+func applyDecisionSignalQualityToCycleRecord(record *CycleRecord, decision *AITradingDecision) {
+	if record == nil || decision == nil {
+		return
+	}
+	if !decision.SignalQualityKnown {
+		applyTopCandidateRejectionSignalQualityToCycleRecord(record, decision)
+		return
+	}
+	record.BidAskSpreadPct = finiteFloatPointer(decision.SignalBidAskSpreadPct)
+	record.OrderBookImbalance = finiteFloatPointer(decision.SignalOrderBookImbalance)
+	record.RangePosition24h = finiteFloatPointer(decision.SignalRangePosition24h)
+	record.PriceChange24hPct = finiteFloatPointer(decision.SignalPriceChange24hPct)
+}
+
+func applyTopCandidateRejectionSignalQualityToCycleRecord(record *CycleRecord, decision *AITradingDecision) {
+	if record == nil || decision == nil || len(decision.CandidateFunnel.TopCandidateRejections) == 0 {
+		return
+	}
+	top := decision.CandidateFunnel.TopCandidateRejections[0]
+	record.BidAskSpreadPct = finiteFloatPointer(top.BidAskSpreadPct)
+	record.OrderBookImbalance = finiteFloatPointer(top.OrderBookImbalance)
+	record.RangePosition24h = finiteFloatPointer(top.RangePosition24h)
+	record.PriceChange24hPct = finiteFloatPointer(top.PriceChange24hPct)
+}
+
 func finiteDecimalFromFloat(value float64) decimal.Decimal {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return decimal.Zero
@@ -4023,6 +4049,18 @@ func encodeCandidateRejections(rejections []appautonomy.CandidateRejection) []ma
 		}
 		if rejection.EstimatedConfidence > 0 {
 			entry["estimated_confidence"] = rejection.EstimatedConfidence
+		}
+		if value := finiteFloatPointer(rejection.BidAskSpreadPct); value != nil {
+			entry["bid_ask_spread_pct"] = *value
+		}
+		if value := finiteFloatPointer(rejection.OrderBookImbalance); value != nil {
+			entry["order_book_imbalance"] = *value
+		}
+		if value := finiteFloatPointer(rejection.RangePosition24h); value != nil {
+			entry["range_position_24h"] = *value
+		}
+		if value := finiteFloatPointer(rejection.PriceChange24hPct); value != nil {
+			entry["price_change_24h_pct"] = *value
 		}
 		encoded = append(encoded, entry)
 	}
