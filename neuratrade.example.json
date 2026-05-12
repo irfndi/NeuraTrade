@@ -36,7 +36,7 @@
 
   "ai": {
     "provider": "deepseek",
-    "model": "deepseek-v4-pro",
+    "model": "deepseek-chat",
     "base_url": "",
     "api_key": "YOUR_AI_API_KEY_HERE",
     "daily_budget": "10.00"

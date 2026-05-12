@@ -751,16 +751,16 @@ func resolveAIProviderProbeNode(cfg config.AIConfig, opts aiProviderProbeOptions
 	}
 
 	for _, envKey := range ai.ProviderAPIKeyEnvVars(provider) {
-		if node.APIKey != "" {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.APIKey = value
 			break
 		}
-		node.APIKey = strings.TrimSpace(os.Getenv(envKey))
 	}
 	for _, envKey := range ai.ProviderBaseURLEnvVars(provider) {
-		if node.BaseURL != "" {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.BaseURL = value
 			break
 		}
-		node.BaseURL = strings.TrimSpace(os.Getenv(envKey))
 	}
 	if node.BaseURL == "" {
 		if baseURL, ok := ai.ProviderDefaultBaseURL(provider); ok {
@@ -768,10 +768,10 @@ func resolveAIProviderProbeNode(cfg config.AIConfig, opts aiProviderProbeOptions
 		}
 	}
 	for _, envKey := range ai.ProviderModelEnvVars(provider) {
-		if node.Model != "" {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.Model = value
 			break
 		}
-		node.Model = strings.TrimSpace(os.Getenv(envKey))
 	}
 	if node.Model == "" {
 		if model, ok := ai.ProviderDefaultModel(provider); ok {

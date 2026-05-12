@@ -60,7 +60,7 @@ type AIScalpingConfig struct {
 }
 
 const (
-	defaultRuntimeAIModel = "deepseek-v4-pro"
+	defaultRuntimeAIModel = "deepseek-chat"
 
 	minAIScalpingMaxBidAskSpreadPct = 0.0001
 	maxAIScalpingMaxBidAskSpreadPct = 5.0

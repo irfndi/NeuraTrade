@@ -30,6 +30,15 @@ func TestProviderDefaults(t *testing.T) {
 			modelKnown: true,
 		},
 		{
+			name:       "deepseek chat transport",
+			provider:   "deepseek",
+			baseURL:    "https://api.deepseek.com/v1",
+			model:      "deepseek-chat",
+			format:     ProviderTransportOpenAI,
+			apiKey:     true,
+			modelKnown: true,
+		},
+		{
 			name:       "zhipu openai compatible transport",
 			provider:   "zhipu",
 			baseURL:    "https://api.z.ai/api/paas/v4",

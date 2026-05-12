@@ -460,6 +460,35 @@ func TestBuildAIProviderProbeNodes_BaseURLOverrideAppliesToPrimaryProvider(t *te
 	}
 }
 
+func TestBuildAIProviderProbeNodes_ProviderEnvOverridesGenericPrimaryConfig(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "")
+	t.Setenv("DEEPSEEK_API_KEY", "provider-key")
+	t.Setenv("DEEPSEEK_BASE_URL", "https://deepseek.example/v1")
+	t.Setenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+	nodes, _, err := buildAIProviderProbeNodes(config.AIConfig{
+		Provider: "deepseek",
+		Model:    "stale-generic-model",
+		APIKey:   "stale-generic-key",
+		BaseURL:  "https://stale.example/v1",
+	}, aiProviderProbeOptions{})
+	if err != nil {
+		t.Fatalf("buildAIProviderProbeNodes returned error: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node, got %#v", nodes)
+	}
+	if nodes[0].APIKey != "provider-key" {
+		t.Fatalf("expected provider-specific API key, got %q", nodes[0].APIKey)
+	}
+	if nodes[0].BaseURL != "https://deepseek.example/v1" {
+		t.Fatalf("expected provider-specific base URL, got %q", nodes[0].BaseURL)
+	}
+	if nodes[0].Model != "deepseek-chat" {
+		t.Fatalf("expected provider-specific model, got %q", nodes[0].Model)
+	}
+}
+
 func TestAIProviderProbeOverallTimeoutCoversFailoverAttempts(t *testing.T) {
 	nodes := []aiProviderProbeNode{{Provider: "openai"}, {Provider: "anthropic"}, {Provider: "zai"}}
 	opts := aiProviderProbeOptions{Timeout: 2 * time.Second, FailoverMaxHops: 1}
