@@ -20,6 +20,9 @@ const (
 	DefaultScalpingBacktestHoldPeriod       = 5 * time.Minute
 	DefaultScalpingBacktestMaxCapitalPct    = 5.0
 	DefaultScalpingBacktestSpreadMultiplier = 8
+	// maxProfitFactorNoLosses represents an effectively unbounded profit
+	// factor when a report has winning trades and no losing trades.
+	maxProfitFactorNoLosses = 999
 
 	// backtestSpreadMultiplier scales the intra-candle high-low range to
 	// approximate a bid-ask spread. The factor 8 was derived empirically from
@@ -750,7 +753,7 @@ func (e *ScalpingBacktestEngine) calculateSummary() ScalpingBacktestSummary {
 	if grossLoss.GreaterThan(decimal.Zero) {
 		summary.ProfitFactor = grossProfit.Div(grossLoss)
 	} else if grossProfit.GreaterThan(decimal.Zero) {
-		summary.ProfitFactor = decimal.NewFromInt(999)
+		summary.ProfitFactor = decimal.NewFromInt(maxProfitFactorNoLosses)
 	}
 
 	summary.MaxDrawdownPct = maxDrawdownPct
