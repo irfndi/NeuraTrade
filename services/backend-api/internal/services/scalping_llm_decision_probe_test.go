@@ -75,6 +75,13 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 	require.NotEqual(t, reasonCategoryStrategyHold, result.Decision.ReasonCategory)
 	require.False(t, result.LLMDegraded)
 	require.Equal(t, reasonCategoryStrategyEntry, runtimeDiagnosticString(result.RuntimeDiagnostics, "last_reason_category"))
+	require.NotNil(t, result.PaperTrade)
+	require.Empty(t, result.PaperTradeError)
+	require.Equal(t, "BTC/USDT", result.PaperTrade.Symbol)
+	require.Equal(t, "buy", result.PaperTrade.Side)
+	require.True(t, result.PaperTrade.Fees.GreaterThan(decimal.Zero))
+	require.True(t, result.PaperTrade.NetPnL.GreaterThan(decimal.Zero))
+	require.Equal(t, "win", result.PaperTrade.Outcome)
 }
 
 func TestRunScalpingLLMDecisionProbeWithServiceFlagsLLMDegradation(t *testing.T) {
