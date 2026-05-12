@@ -103,7 +103,7 @@ main() {
     run)
       run_soak
       ;;
-    help|-h|--help)
+    help | -h | --help)
       usage
       ;;
     *)
