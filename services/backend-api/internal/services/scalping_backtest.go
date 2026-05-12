@@ -20,6 +20,9 @@ const (
 	DefaultScalpingBacktestHoldPeriod       = 5 * time.Minute
 	DefaultScalpingBacktestMaxCapitalPct    = 5.0
 	DefaultScalpingBacktestSpreadMultiplier = 8
+	// maxProfitFactorNoLosses represents an effectively unbounded profit
+	// factor when a report has winning trades and no losing trades.
+	maxProfitFactorNoLosses = 999
 
 	// backtestSpreadMultiplier scales the intra-candle high-low range to
 	// approximate a bid-ask spread. The factor 8 was derived empirically from
@@ -234,6 +237,25 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 		return nil, err
 	}
 
+	historicalSignals, err := e.loadHistoricalSignals(ctx, e.config.StartTime, e.config.EndTime)
+	if err != nil {
+		return nil, fmt.Errorf("load historical scalping signals: %w", err)
+	}
+	result, err := e.RunSignals(ctx, historicalSignals)
+	if err != nil {
+		return nil, fmt.Errorf("run historical scalping signals: %w", err)
+	}
+	return result, nil
+}
+
+func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSignals []HistoricalSignal) (*ScalpingBacktestResult, error) {
+	if e == nil {
+		return nil, fmt.Errorf("scalping backtest engine is nil")
+	}
+	if err := e.validateConfig(); err != nil {
+		return nil, err
+	}
+
 	e.capital = e.config.InitialCapital
 	e.positions = make(map[string]*SimulatedPosition)
 	e.tradeHistory = make([]ScalpingBacktestTrade, 0)
@@ -241,18 +263,28 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 	e.gateStats = make(map[string]*GateStats)
 
 	runID := uuid.NewString()
-	historicalSignals, err := e.loadHistoricalSignals(ctx, e.config.StartTime, e.config.EndTime)
-	if err != nil {
-		return nil, err
-	}
 	if len(historicalSignals) == 0 {
 		return nil, fmt.Errorf("no historical signals found in range")
 	}
 
-	for _, signal := range historicalSignals {
+	signals := append([]HistoricalSignal(nil), historicalSignals...)
+	sort.SliceStable(signals, func(i, j int) bool {
+		if !signals[i].Timestamp.Equal(signals[j].Timestamp) {
+			return signals[i].Timestamp.Before(signals[j].Timestamp)
+		}
+		if signals[i].Symbol != signals[j].Symbol {
+			return signals[i].Symbol < signals[j].Symbol
+		}
+		return signals[i].Exchange < signals[j].Exchange
+	})
+
+	for _, signal := range signals {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("run scalping backtest signals: %w", err)
+		}
 		evaluation, evalErr := e.evaluateSignal(ctx, signal)
 		if evalErr != nil {
-			return nil, evalErr
+			return nil, fmt.Errorf("evaluate scalping backtest signal: %w", evalErr)
 		}
 
 		recorded := ScalpingBacktestSignal{
@@ -272,6 +304,9 @@ func (e *ScalpingBacktestEngine) Run(ctx context.Context) (*ScalpingBacktestResu
 			continue
 		}
 
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("run scalping backtest signals: %w", err)
+		}
 		trade, simErr := e.simulateExecution(ctx, signal, evaluation.Decision)
 		if simErr != nil {
 			return nil, fmt.Errorf("simulate execution for %s at %s: %w", signal.Symbol, signal.Timestamp.Format(time.RFC3339), simErr)
@@ -718,7 +753,7 @@ func (e *ScalpingBacktestEngine) calculateSummary() ScalpingBacktestSummary {
 	if grossLoss.GreaterThan(decimal.Zero) {
 		summary.ProfitFactor = grossProfit.Div(grossLoss)
 	} else if grossProfit.GreaterThan(decimal.Zero) {
-		summary.ProfitFactor = decimal.NewFromInt(999)
+		summary.ProfitFactor = decimal.NewFromInt(maxProfitFactorNoLosses)
 	}
 
 	summary.MaxDrawdownPct = maxDrawdownPct
