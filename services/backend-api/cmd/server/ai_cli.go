@@ -519,20 +519,25 @@ type aiProviderProbeResult struct {
 }
 
 type aiScalpingDecisionProbeOptions struct {
-	Provider         string
-	Model            string
-	BaseURL          string
-	OutputJSON       bool
-	Timeout          time.Duration
-	MaxRetries       int
-	FailoverMaxHops  int
-	Exchange         string
-	Cycles           int
-	Interval         time.Duration
-	Capital          decimal.Decimal
-	RequireHealthy   bool
-	RequireValid     bool
-	MinSignalQuality decimal.Decimal
+	Provider              string
+	Model                 string
+	BaseURL               string
+	OutputJSON            bool
+	Timeout               time.Duration
+	MaxRetries            int
+	FailoverMaxHops       int
+	Exchange              string
+	Cycles                int
+	Interval              time.Duration
+	Capital               decimal.Decimal
+	RequireHealthy        bool
+	RequireValid          bool
+	MinSignalQuality      decimal.Decimal
+	MinPaperTrades        int
+	MinPaperNetPnL        decimal.Decimal
+	RequirePaperNetPnL    bool
+	MinPaperAvgNetPnL     decimal.Decimal
+	RequirePaperAvgNetPnL bool
 }
 
 type aiScalpingDecisionProbeSummary struct {
@@ -784,6 +789,15 @@ func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSumma
 	if opts.MinSignalQuality.GreaterThan(decimal.Zero) && summary.SignalQualityCoverage.LessThan(opts.MinSignalQuality) {
 		return fmt.Errorf("signal_quality_coverage=%s below minimum=%s", summary.SignalQualityCoverage.String(), opts.MinSignalQuality.String())
 	}
+	if opts.MinPaperTrades > 0 && summary.PaperTrades < opts.MinPaperTrades {
+		return fmt.Errorf("paper_trades=%d below minimum=%d", summary.PaperTrades, opts.MinPaperTrades)
+	}
+	if opts.RequirePaperNetPnL && summary.PaperNetPnL.LessThan(opts.MinPaperNetPnL) {
+		return fmt.Errorf("paper_net_pnl=%s below minimum=%s", summary.PaperNetPnL.String(), opts.MinPaperNetPnL.String())
+	}
+	if opts.RequirePaperAvgNetPnL && summary.PaperAvgNetPnL.LessThan(opts.MinPaperAvgNetPnL) {
+		return fmt.Errorf("paper_avg_net_pnl=%s below minimum=%s", summary.PaperAvgNetPnL.String(), opts.MinPaperAvgNetPnL.String())
+	}
 	return nil
 }
 
@@ -856,6 +870,8 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	timeoutSeconds := fs.Int("timeout-seconds", int(opts.Timeout/time.Second), "completion timeout in seconds")
 	capital := fs.String("capital", opts.Capital.String(), "paper wallet basis in USDT for the prompt")
 	minSignalQuality := fs.String("min-signal-quality", opts.MinSignalQuality.String(), "minimum signal quality coverage required")
+	minPaperNetPnL := fs.String("min-paper-net-pnl", "", "minimum aggregate simulated paper net PnL required; empty disables this gate")
+	minPaperAvgNetPnL := fs.String("min-paper-avg-net-pnl", "", "minimum average simulated paper net PnL per trade required; empty disables this gate")
 	intervalMS := fs.Int("interval-ms", 0, "delay between scalping LLM probe cycles in milliseconds")
 	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
 	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
@@ -864,6 +880,7 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
 	fs.StringVar(&opts.Exchange, "exchange", opts.Exchange, "public exchange to fetch market/order-book signals from")
 	fs.IntVar(&opts.Cycles, "cycles", opts.Cycles, "number of no-order scalping LLM decision probe cycles")
+	fs.IntVar(&opts.MinPaperTrades, "min-paper-trades", 0, "minimum simulated paper trades required from actionable LLM decisions")
 	fs.BoolVar(&opts.OutputJSON, "json", false, "write JSON output")
 	fs.IntVar(&opts.MaxRetries, "max-retries", 0, "HTTP retry count")
 	fs.IntVar(&opts.FailoverMaxHops, "failover-max-hops", opts.FailoverMaxHops, "number of fallback providers to try after the primary")
@@ -891,6 +908,9 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	if intervalMS == nil || *intervalMS < 0 {
 		return opts, fmt.Errorf("--interval-ms must be zero or greater")
 	}
+	if opts.MinPaperTrades < 0 {
+		return opts, fmt.Errorf("--min-paper-trades must be zero or greater")
+	}
 	parsedCapital, err := decimal.NewFromString(strings.TrimSpace(*capital))
 	if err != nil {
 		return opts, fmt.Errorf("parse --capital: %w", err)
@@ -905,10 +925,22 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	if parsedSignalQuality.IsNegative() || parsedSignalQuality.GreaterThan(decimal.NewFromInt(1)) {
 		return opts, fmt.Errorf("--min-signal-quality must be between 0 and 1")
 	}
+	parsedPaperNetPnL, requirePaperNetPnL, err := parseOptionalDecimalFlag("min-paper-net-pnl", *minPaperNetPnL)
+	if err != nil {
+		return opts, err
+	}
+	parsedPaperAvgNetPnL, requirePaperAvgNetPnL, err := parseOptionalDecimalFlag("min-paper-avg-net-pnl", *minPaperAvgNetPnL)
+	if err != nil {
+		return opts, err
+	}
 	opts.Timeout = time.Duration(*timeoutSeconds) * time.Second
 	opts.Interval = time.Duration(*intervalMS) * time.Millisecond
 	opts.Capital = parsedCapital
 	opts.MinSignalQuality = parsedSignalQuality
+	opts.MinPaperNetPnL = parsedPaperNetPnL
+	opts.RequirePaperNetPnL = requirePaperNetPnL
+	opts.MinPaperAvgNetPnL = parsedPaperAvgNetPnL
+	opts.RequirePaperAvgNetPnL = requirePaperAvgNetPnL
 	opts.RequireHealthy = !*allowDegraded
 	opts.RequireValid = !*allowInvalidContract
 	opts.Provider = ai.NormalizeProviderID(opts.Provider)
@@ -919,6 +951,18 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 		opts.Exchange = "bitget"
 	}
 	return opts, nil
+}
+
+func parseOptionalDecimalFlag(flagName string, rawValue string) (decimal.Decimal, bool, error) {
+	rawValue = strings.TrimSpace(rawValue)
+	if rawValue == "" {
+		return decimal.Zero, false, nil
+	}
+	parsed, err := decimal.NewFromString(rawValue)
+	if err != nil {
+		return decimal.Zero, false, fmt.Errorf("parse --%s: %w", flagName, err)
+	}
+	return parsed, true, nil
 }
 
 func buildAIProviderProbeNodes(cfg config.AIConfig, opts aiProviderProbeOptions) ([]aiProviderProbeNode, aiProviderProbeResult, error) {
