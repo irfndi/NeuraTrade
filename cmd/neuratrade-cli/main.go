@@ -27,6 +27,20 @@ var (
 	version = "dev"
 )
 
+type cliAIProviderDefault struct {
+	Provider string
+	Model    string
+	BaseURL  string
+}
+
+func defaultCLIAIProviderConfig() cliAIProviderDefault {
+	return cliAIProviderDefault{
+		Provider: "zhipu",
+		Model:    "glm-5-turbo",
+		BaseURL:  "https://api.z.ai/api/paas/v4",
+	}
+}
+
 func defaultChatID() string {
 	return configChatID(getConfigValue(defaultNeuraTradeHome()))
 }
@@ -1913,15 +1927,16 @@ func prettyPrint(data interface{}) {
 	fmt.Println(string(prettyJSON))
 }
 
-// configInit initializes the default configuration file at $HOME/.neuratrade/config.json.
-// It creates the ~/.neuratrade directory if needed, populates a sensible default configuration
+// configInit initializes the default configuration file under defaultNeuraTradeHome().
+// It creates the config directory if needed, populates a sensible default configuration
 // (server, database, redis, ccxt, telegram, ai, security, features, logging), and injects
 // values provided via CLI flags `--binance-key`, `--binance-secret`, `--telegram-token`,
 // and `--ai-key`. The file is written with restricted permissions. If a non-empty configuration
 // file already exists, the function leaves it intact and prints guidance instead of overwriting.
 // An error is returned for directory creation, JSON marshaling, or file write failures.
 func configInit(cCtx *cli.Context) error {
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	configHome := defaultNeuraTradeHome()
+	configPath := path.Join(configHome, "config.json")
 	force := cCtx.Bool("force")
 
 	// Check if config already exists
@@ -1942,6 +1957,7 @@ func configInit(cCtx *cli.Context) error {
 	binanceSecret := cCtx.String("binance-secret")
 	telegramToken := cCtx.String("telegram-token")
 	aiKey := cCtx.String("ai-key")
+	defaultAI := defaultCLIAIProviderConfig()
 
 	// Create default config
 	config := map[string]interface{}{
@@ -1953,7 +1969,7 @@ func configInit(cCtx *cli.Context) error {
 		},
 		"database": map[string]interface{}{
 			"driver":      "sqlite",
-			"sqlite_path": os.ExpandEnv("$HOME/.neuratrade/data/neuratrade.db"),
+			"sqlite_path": path.Join(configHome, "data", "neuratrade.db"),
 		},
 		"redis": map[string]interface{}{
 			"host": "localhost",
@@ -1985,10 +2001,10 @@ func configInit(cCtx *cli.Context) error {
 			"api_base_url":     "http://localhost:8080",
 		},
 		"ai": map[string]interface{}{
-			"provider":     "zhipu",
-			"model":        "glm-5-turbo",
+			"provider":     defaultAI.Provider,
+			"model":        defaultAI.Model,
 			"api_key":      aiKey,
-			"base_url":     "https://open.bigmodel.cn/api/paas/v4",
+			"base_url":     defaultAI.BaseURL,
 			"daily_budget": "10.00",
 		},
 		"security": map[string]interface{}{
@@ -2012,8 +2028,7 @@ func configInit(cCtx *cli.Context) error {
 	}
 
 	// Ensure directory exists
-	configDir := os.ExpandEnv("$HOME/.neuratrade")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configHome, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -2054,7 +2069,7 @@ func configInit(cCtx *cli.Context) error {
 
 // configStatus shows the configuration status
 func configStatus(cCtx *cli.Context) error {
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	configPath := path.Join(defaultNeuraTradeHome(), "config.json")
 
 	fmt.Println("NeuraTrade Configuration Status")
 	fmt.Println("================================")
@@ -2149,7 +2164,7 @@ func configStatus(cCtx *cli.Context) error {
 
 // configShow displays the full configuration with masked secrets
 func configShow(cCtx *cli.Context) error {
-	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json")
+	configPath := path.Join(defaultNeuraTradeHome(), "config.json")
 
 	content, err := os.ReadFile(configPath)
 	if err != nil {

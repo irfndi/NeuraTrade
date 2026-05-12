@@ -11,6 +11,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
+	scalping "github.com/irfndi/neuratrade/internal/services/scalping"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
@@ -229,6 +230,125 @@ func TestStrategyActor_DeterministicReplay(t *testing.T) {
 	}
 }
 
+func TestStrategyActor_ScalpingSignalNilEventBusDoesNotPanic(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Signal.Lookback = 3
+	strategyActor := NewStrategyActor(cfg, nil, nil)
+	composer := &stubScalpingComposer{
+		signal: &scalping.ScalpingSignal{
+			ID:         "scalp-1",
+			Exchange:   "bitget",
+			Symbol:     "BTC/USDT",
+			Direction:  scalping.DirectionBuy,
+			Confidence: decimal.RequireFromString("0.75"),
+		},
+	}
+	strategyActor.SetScalpingComposer(composer)
+
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestCandleMessage{Candle: scalpingTestCandle()})))
+	var receiveErr error
+	require.NotPanics(t, func() {
+		receiveErr = strategyActor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()}))
+	})
+	require.NoError(t, receiveErr)
+	require.Equal(t, 0, composer.calls, "nil event bus should avoid composing an unpublishable scalping signal")
+}
+
+func TestStrategyActor_ScalpingSignalDeduplicatesEquivalentSignalsPerSymbol(t *testing.T) {
+	bus := eventbus.New(eventbus.DefaultConfig())
+	cfg := DefaultConfig()
+	cfg.Signal.Lookback = 3
+	strategyActor := NewStrategyActor(cfg, bus, nil)
+	strategyActor.SetScalpingComposer(&stubScalpingComposer{
+		signals: []*scalping.ScalpingSignal{
+			{
+				ID:         "scalp-signal-1",
+				Exchange:   "bitget",
+				Symbol:     "BTC/USDT",
+				Direction:  scalping.DirectionBuy,
+				Confidence: decimal.RequireFromString("0.75"),
+				Components: []scalping.SignalComponent{
+					{
+						Name:     "spread",
+						Value:    decimal.RequireFromString("0.04"),
+						Signal:   scalping.DirectionBuy,
+						Strength: scalping.StrengthMedium,
+						Weight:   decimal.RequireFromString("0.10"),
+					},
+				},
+			},
+			{
+				ID:         "scalp-signal-2",
+				Exchange:   "bitget",
+				Symbol:     "BTC/USDT",
+				Direction:  scalping.DirectionBuy,
+				Confidence: decimal.RequireFromString("0.75"),
+				Components: []scalping.SignalComponent{
+					{
+						Name:     "spread",
+						Value:    decimal.RequireFromString("0.04"),
+						Signal:   scalping.DirectionBuy,
+						Strength: scalping.StrengthMedium,
+						Weight:   decimal.RequireFromString("0.10"),
+					},
+				},
+			},
+			{
+				ID:         "scalp-signal-3",
+				Exchange:   "bitget",
+				Symbol:     "BTC/USDT",
+				Direction:  scalping.DirectionSell,
+				Confidence: decimal.RequireFromString("0.75"),
+				Components: []scalping.SignalComponent{
+					{
+						Name:     "spread",
+						Value:    decimal.RequireFromString("0.21"),
+						Signal:   scalping.DirectionSell,
+						Strength: scalping.StrengthWeak,
+						Weight:   decimal.RequireFromString("0.10"),
+					},
+				},
+			},
+		},
+	})
+
+	published := make(chan signals.ScalpingSignalProposedEvent, 2)
+	sub, err := bus.Subscribe(context.Background(), ports.EventTypeScalpingSignalProposed, func(ctx context.Context, event eventbus.Event) error {
+		payload, ok := event.Payload.(signals.ScalpingSignalProposedEvent)
+		if ok {
+			published <- payload
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestCandleMessage{Candle: scalpingTestCandle()})))
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
+
+	select {
+	case event := <-published:
+		require.Equal(t, "scalp-signal-1", event.SignalID)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for scalping signal")
+	}
+
+	select {
+	case event := <-published:
+		require.Equal(t, "scalp-signal-3", event.SignalID)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for changed scalping signal")
+	}
+
+	select {
+	case event := <-published:
+		t.Fatalf("unexpected extra scalping signal: %s", event.SignalID)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func replayWithActor(ticks []marketdata.MarketTickEvent) ([]signals.SignalProposedEvent, error) {
 	bus := eventbus.New(eventbus.DefaultConfig())
 	cfg := DefaultConfig()
@@ -260,6 +380,58 @@ func replayWithActor(ticks []marketdata.MarketTickEvent) ([]signals.SignalPropos
 		}
 	}
 	return out, nil
+}
+
+type stubScalpingComposer struct {
+	signal  *scalping.ScalpingSignal
+	signals []*scalping.ScalpingSignal
+	err     error
+	calls   int
+}
+
+func (s *stubScalpingComposer) ComposeSignal(
+	ctx context.Context,
+	ohlcv scalping.OHLCVData,
+	obMetrics scalping.OrderBookMetrics,
+) (*scalping.ScalpingSignal, error) {
+	s.calls++
+	if len(s.signals) > 0 {
+		index := s.calls - 1
+		if index >= len(s.signals) {
+			index = len(s.signals) - 1
+		}
+		return s.signals[index], s.err
+	}
+	return s.signal, s.err
+}
+
+func actorEnvelope(message actor.Message) actor.Envelope {
+	return actor.Envelope{Message: message, TraceID: "test-trace"}
+}
+
+func scalpingTestCandle() marketdata.MarketCandleEvent {
+	return marketdata.MarketCandleEvent{
+		Exchange:  "bitget",
+		Symbol:    "BTC/USDT",
+		Timestamp: time.Unix(1700003000, 0),
+		Open:      decimal.RequireFromString("100"),
+		High:      decimal.RequireFromString("101"),
+		Low:       decimal.RequireFromString("99"),
+		Close:     decimal.RequireFromString("100.5"),
+		Volume:    decimal.RequireFromString("10"),
+	}
+}
+
+func scalpingTestTick() marketdata.MarketTickEvent {
+	return marketdata.MarketTickEvent{
+		Exchange:  "bitget",
+		Symbol:    "BTC/USDT",
+		Last:      decimal.RequireFromString("100.5"),
+		Bid:       decimal.RequireFromString("100.4"),
+		Ask:       decimal.RequireFromString("100.6"),
+		Volume:    decimal.RequireFromString("10"),
+		Timestamp: time.Unix(1700003001, 0),
+	}
 }
 
 func startActor(t *testing.T, ref *actor.Ref) (context.CancelFunc, chan error) {
