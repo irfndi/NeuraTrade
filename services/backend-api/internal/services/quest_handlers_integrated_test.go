@@ -612,6 +612,10 @@ func TestShouldSendScalpingDecisionNotification_DefaultActionableOnly(t *testing
 		DecisionType: "scalping_digest",
 		Action:       "hold",
 	}))
+	assert.True(t, shouldSendScalpingDecisionNotification(AIReasoningNotification{
+		DecisionType: "paper_close",
+		Action:       "hold",
+	}))
 }
 
 func TestShouldSendScalpingDecisionNotification_EnvOverrides(t *testing.T) {
@@ -695,7 +699,6 @@ func TestTruncateAIRuntimeDetail_Boundaries(t *testing.T) {
 		})
 	}
 }
-
 func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testing.T) {
 	t.Setenv("NEURATRADE_RECOVERY_CLEAN_CYCLES", "3")
 	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
