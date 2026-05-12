@@ -34,6 +34,10 @@ func run() error {
 		initialCapital  string
 		feeRate         string
 		includeBaseline bool
+		minTrades       int
+		minWinRate      string
+		minNetPnL       string
+		minAvgNetPnL    string
 	)
 
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
@@ -48,6 +52,10 @@ func run() error {
 	flags.StringVar(&initialCapital, "capital", "48", "initial paper capital in USDT")
 	flags.StringVar(&feeRate, "fee-rate", "0.0006", "round-trip fee-rate input used by the paper simulator")
 	flags.BoolVar(&includeBaseline, "baseline", true, "include the broken live scalping baseline comparison")
+	flags.IntVar(&minTrades, "min-trades", 0, "fail unless the soak produces at least this many closed paper trades")
+	flags.StringVar(&minWinRate, "min-win-rate", "", "fail unless report win_rate is at least this decimal value")
+	flags.StringVar(&minNetPnL, "min-net-pnl", "", "fail unless report net_pnl is at least this decimal value")
+	flags.StringVar(&minAvgNetPnL, "min-avg-net-pnl", "", "fail unless avg_net_pnl_per_trade is at least this decimal value")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -99,6 +107,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := validateAcceptanceGates(result, acceptanceGateOptions{
+		MinTrades:    minTrades,
+		MinWinRate:   minWinRate,
+		MinNetPnL:    minNetPnL,
+		MinAvgNetPnL: minAvgNetPnL,
+	}); err != nil {
+		return err
+	}
 
 	payload := struct {
 		DBPath string                                `json:"db_path"`
@@ -110,6 +126,47 @@ func run() error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(payload)
+}
+
+type acceptanceGateOptions struct {
+	MinTrades    int
+	MinWinRate   string
+	MinNetPnL    string
+	MinAvgNetPnL string
+}
+
+func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, options acceptanceGateOptions) error {
+	if result == nil {
+		return fmt.Errorf("acceptance gates require soak result")
+	}
+	report := result.Report
+	if options.MinTrades > 0 && report.TradeSummary.ClosedTrades < options.MinTrades {
+		return fmt.Errorf("acceptance gate failed: closed_trades=%d below min_trades=%d", report.TradeSummary.ClosedTrades, options.MinTrades)
+	}
+	if err := validateMinDecimalGate("min-win-rate", "win_rate", report.TradeSummary.WinRate, options.MinWinRate); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-net-pnl", "net_pnl", report.TradeSummary.NetPnL, options.MinNetPnL); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-avg-net-pnl", "avg_net_pnl_per_trade", report.TradeSummary.AvgNetPnLPerTrade, options.MinAvgNetPnL); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateMinDecimalGate(flagName string, metricName string, actual decimal.Decimal, rawMinimum string) error {
+	if rawMinimum == "" {
+		return nil
+	}
+	minimum, err := decimal.NewFromString(rawMinimum)
+	if err != nil {
+		return fmt.Errorf("parse --%s: %w", flagName, err)
+	}
+	if actual.LessThan(minimum) {
+		return fmt.Errorf("acceptance gate failed: %s=%s below minimum=%s", metricName, actual.String(), minimum.String())
+	}
+	return nil
 }
 
 func envString(key, fallback string) string {

@@ -19,6 +19,10 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 CAPITAL="${CAPITAL:-48}"
 FEE_RATE="${FEE_RATE:-0.0006}"
 REQUIRE_TRADES="${REQUIRE_TRADES:-true}"
+MIN_TRADES="${MIN_TRADES:-1}"
+MIN_WIN_RATE="${MIN_WIN_RATE:-0.123}"
+MIN_NET_PNL="${MIN_NET_PNL:-0}"
+MIN_AVG_NET_PNL="${MIN_AVG_NET_PNL:-0}"
 SOAK_CHAT_ID="${SOAK_CHAT_ID:-operator-scalping-soak}"
 SOAK_ORDER_PREFIX="${SOAK_ORDER_PREFIX:-operator-scalping-soak}"
 SOAK_DB_PATH="${SOAK_DB_PATH:-${NEURATRADE_HOME}/data/scalping-soak.db}"
@@ -58,6 +62,10 @@ Environment:
   CAPITAL         Initial paper capital in USDT (default: ${CAPITAL})
   FEE_RATE        Paper simulator fee rate (default: ${FEE_RATE})
   REQUIRE_TRADES  true/false; fail when no paper trades are produced (default: ${REQUIRE_TRADES})
+  MIN_TRADES      Minimum closed paper trades required (default: ${MIN_TRADES})
+  MIN_WIN_RATE    Minimum win rate required as decimal; empty disables (default: ${MIN_WIN_RATE})
+  MIN_NET_PNL     Minimum net PnL required; empty disables (default: ${MIN_NET_PNL})
+  MIN_AVG_NET_PNL Minimum avg net PnL per trade required; empty disables (default: ${MIN_AVG_NET_PNL})
   SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
   SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
 
@@ -92,6 +100,18 @@ run_soak() {
     "--capital" "$CAPITAL"
     "--fee-rate" "$FEE_RATE"
   )
+  if [ -n "$MIN_TRADES" ]; then
+    args+=("--min-trades" "$MIN_TRADES")
+  fi
+  if [ -n "$MIN_WIN_RATE" ]; then
+    args+=("--min-win-rate" "$MIN_WIN_RATE")
+  fi
+  if [ -n "$MIN_NET_PNL" ]; then
+    args+=("--min-net-pnl" "$MIN_NET_PNL")
+  fi
+  if [ -n "$MIN_AVG_NET_PNL" ]; then
+    args+=("--min-avg-net-pnl" "$MIN_AVG_NET_PNL")
+  fi
   if [ "$TIMEOUT_SECONDS" != "0" ]; then
     args+=("--timeout-seconds" "$TIMEOUT_SECONDS")
   fi
@@ -99,7 +119,7 @@ run_soak() {
     args+=("--require-trades")
   fi
 
-  log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH}"
+  log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled}"
   "$SOAK_BIN" "${args[@]}" | tee -a "$LOG_FILE"
   log "${GREEN}[OK]${NC} scalping paper soak complete"
 }
