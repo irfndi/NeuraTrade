@@ -25,6 +25,8 @@ type SignalQualityScorer struct {
 	exchangeStatsProvider    ExchangeStatsProvider
 }
 
+const missingVolumeNeutralScore = 0.5
+
 // ExchangeStatsProvider decouples SignalQualityScorer from direct database access for exchange statistics.
 type ExchangeStatsProvider interface {
 	GetExchangeMetrics(ctx context.Context, exchange string) (*ExchangeMetrics, error)
@@ -78,17 +80,18 @@ type SignalQualityMetrics struct {
 
 // SignalQualityInput contains all necessary input data for performing a quality assessment on a signal.
 type SignalQualityInput struct {
-	SignalType       string                 `json:"signal_type"` // "arbitrage" or "technical"
-	Symbol           string                 `json:"symbol"`
-	Exchanges        []string               `json:"exchanges"`
-	Volume           decimal.Decimal        `json:"volume"`
-	ProfitPotential  decimal.Decimal        `json:"profit_potential"`
-	Confidence       decimal.Decimal        `json:"confidence"`
-	Timestamp        time.Time              `json:"timestamp"`
-	Indicators       map[string]interface{} `json:"indicators,omitempty"`
-	MarketData       *MarketDataSnapshot    `json:"market_data,omitempty"`
-	SignalComponents []string               `json:"signal_components,omitempty"` // List of individual signal indicators for aggregated signals
-	SignalCount      int                    `json:"signal_count,omitempty"`      // Number of confirming signals
+	SignalType        string                 `json:"signal_type"` // "arbitrage" or "technical"
+	Symbol            string                 `json:"symbol"`
+	Exchanges         []string               `json:"exchanges"`
+	Volume            decimal.Decimal        `json:"volume"`
+	VolumeUnavailable bool                   `json:"volume_unavailable,omitempty"`
+	ProfitPotential   decimal.Decimal        `json:"profit_potential"`
+	Confidence        decimal.Decimal        `json:"confidence"`
+	Timestamp         time.Time              `json:"timestamp"`
+	Indicators        map[string]interface{} `json:"indicators,omitempty"`
+	MarketData        *MarketDataSnapshot    `json:"market_data,omitempty"`
+	SignalComponents  []string               `json:"signal_components,omitempty"` // List of individual signal indicators for aggregated signals
+	SignalCount       int                    `json:"signal_count,omitempty"`      // Number of confirming signals
 }
 
 // MarketDataSnapshot represents a snapshot of market conditions at the time of signal generation.
@@ -276,6 +279,9 @@ func (sqs *SignalQualityScorer) calculateExchangeScore(exchanges []string) decim
 
 // calculateVolumeScore evaluates if the trading volume is sufficient for the signal.
 func (sqs *SignalQualityScorer) calculateVolumeScore(input *SignalQualityInput) decimal.Decimal {
+	if input.VolumeUnavailable {
+		return decimal.NewFromFloat(missingVolumeNeutralScore)
+	}
 	if input.Volume.IsZero() {
 		return decimal.Zero
 	}
