@@ -1689,6 +1689,8 @@ func TestHoldDigestSummary_TableDriven(t *testing.T) {
 func TestStateDriftDigestRuntimeStatusAndDetails(t *testing.T) {
 	t.Setenv("NEURATRADE_DRIFT_CLEAR_CONSECUTIVE_PASSES", "2")
 
+	assert.Equal(t, runtimeStatusStateDrift, stateDriftDigestRuntimeStatus(nil))
+
 	activeCheckpoint := map[string]interface{}{
 		"state_drift_positions":          2,
 		"state_drift_clean_passes":       0,

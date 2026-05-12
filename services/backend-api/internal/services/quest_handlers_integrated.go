@@ -3357,6 +3357,9 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 }
 
 func stateDriftDigestRuntimeStatus(checkpoint map[string]interface{}) string {
+	if checkpoint == nil {
+		return runtimeStatusStateDrift
+	}
 	if checkpointInt(checkpoint["state_drift_positions"]) == 0 && checkpointInt(checkpoint["state_drift_clean_passes"]) > 0 {
 		return runtimeStatusReconcileBlocked
 	}

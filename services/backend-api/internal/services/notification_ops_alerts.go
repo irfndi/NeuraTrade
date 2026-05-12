@@ -324,6 +324,8 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 	case confidenceKnown && infraHold:
 		confidencePercent := int(reasoning.Confidence * 100)
 		lines = append(lines, fmt.Sprintf("Confidence: 🟡 %d%% (gated)", confidencePercent))
+	case reasoning.RuntimeStatus == runtimeStatusReconcileBlocked && !confidenceKnown:
+		lines = append(lines, "Confidence: ⏸️ (reconcile blocked)")
 	case infraHold && !confidenceKnown:
 		lines = append(lines, "Confidence: ⏸️ (infrastructure hold)")
 	case llmDegraded:
@@ -375,7 +377,10 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 			lines = append(lines, fmt.Sprintf("Drift Positions: %s stale", driftPos))
 		}
 		if staleIDs, ok := reasoning.RuntimeDetails["stale_position_ids"]; ok && strings.TrimSpace(staleIDs) != "" {
-			lines = append(lines, fmt.Sprintf("Stale Position IDs: %s", staleIDs))
+			lines = append(lines, fmt.Sprintf("Stale Position IDs: %s", formatRuntimeDetailList(staleIDs, 5)))
+		}
+		if forceEligible, ok := reasoning.RuntimeDetails["force_repair_eligible"]; ok {
+			lines = append(lines, fmt.Sprintf("Force Repair Eligible: %s", forceEligible))
 		}
 		if recoveryAction, ok := reasoning.RuntimeDetails["recovery_action"]; ok {
 			lines = append(lines, fmt.Sprintf("Recovery Action: %s", recoveryAction))
@@ -419,6 +424,26 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 	}
 
 	return lines
+}
+
+func formatRuntimeDetailList(value string, maxItems int) string {
+	if maxItems <= 0 {
+		maxItems = 1
+	}
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	if len(items) == 0 {
+		return strings.TrimSpace(value)
+	}
+	if len(items) <= maxItems {
+		return strings.Join(items, ",")
+	}
+	return fmt.Sprintf("%s, ... (+%d more)", strings.Join(items[:maxItems], ","), len(items)-maxItems)
 }
 
 // buildAIReasoningFactorLines builds lines describing key factors from the provided reasons.
