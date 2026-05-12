@@ -144,6 +144,17 @@ func TestShouldSkipTelegramGatewayForPaperOnlyRuntime(t *testing.T) {
 	require.False(t, shouldSkipTelegramGateway("telegram-token"))
 }
 
+func TestShouldSkipTelegramGatewayAcceptsLegacySingularFeatureEnv(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+	t.Setenv("FEATURE_PAPER_TRADING", "true")
+	t.Setenv("FEATURE_REAL_TRADING", "false")
+
+	require.True(t, shouldSkipTelegramGateway(""))
+	require.False(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
 func TestShouldSkipTelegramGatewayRequiresExplicitPaperOnlyMode(t *testing.T) {
 	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
 	t.Setenv("FEATURES_PAPER_TRADING", "")

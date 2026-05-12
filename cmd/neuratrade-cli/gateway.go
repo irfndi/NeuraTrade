@@ -748,6 +748,16 @@ func getEnvBoolDefault(key string, defaultValue bool) bool {
 	}
 }
 
+func getEnvBoolAnyDefault(keys []string, defaultValue bool) bool {
+	for _, key := range keys {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			continue
+		}
+		return getEnvBoolDefault(key, defaultValue)
+	}
+	return defaultValue
+}
+
 func getEnvDurationSeconds(key string, defaultSeconds int) time.Duration {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -765,8 +775,8 @@ func shouldSkipTelegramGateway(telegramToken string) bool {
 		return true
 	}
 	return strings.TrimSpace(telegramToken) == "" &&
-		getEnvBoolDefault("FEATURES_PAPER_TRADING", false) &&
-		!getEnvBoolDefault("FEATURES_REAL_TRADING", true)
+		getEnvBoolAnyDefault([]string{"FEATURES_PAPER_TRADING", "FEATURE_PAPER_TRADING"}, false) &&
+		!getEnvBoolAnyDefault([]string{"FEATURES_REAL_TRADING", "FEATURE_REAL_TRADING"}, true)
 }
 
 func ensureSQLiteParentDir(sqlitePath string) error {
