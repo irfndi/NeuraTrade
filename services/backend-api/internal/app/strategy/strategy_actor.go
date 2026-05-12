@@ -80,6 +80,7 @@ type StrategyActor struct {
 	windows          map[string][]signals.Tick
 	candleBuffer     map[string][]scalping.OHLCVCandle
 	obMetricsCache   map[string]scalping.OrderBookMetrics
+	lastScalpingIDs  map[string]string
 	logger           *slog.Logger
 	scalpingComposer ScalpingSignalComposer
 }
@@ -103,15 +104,16 @@ func NewStrategyActor(cfg Config, bus *eventbus.Bus, logger *slog.Logger) *Strat
 	}
 
 	return &StrategyActor{
-		id:             cfg.ActorID,
-		strategyID:     cfg.StrategyID,
-		windowSize:     cfg.WindowSize,
-		engine:         signals.NewEngine(cfg.Signal),
-		eventBus:       bus,
-		windows:        make(map[string][]signals.Tick),
-		candleBuffer:   make(map[string][]scalping.OHLCVCandle),
-		obMetricsCache: make(map[string]scalping.OrderBookMetrics),
-		logger:         logger,
+		id:              cfg.ActorID,
+		strategyID:      cfg.StrategyID,
+		windowSize:      cfg.WindowSize,
+		engine:          signals.NewEngine(cfg.Signal),
+		eventBus:        bus,
+		windows:         make(map[string][]signals.Tick),
+		candleBuffer:    make(map[string][]scalping.OHLCVCandle),
+		obMetricsCache:  make(map[string]scalping.OrderBookMetrics),
+		lastScalpingIDs: make(map[string]string),
+		logger:          logger,
 	}
 }
 
@@ -200,6 +202,10 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 }
 
 func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID string, tick marketdata.MarketTickEvent) {
+	if s.eventBus == nil {
+		return
+	}
+
 	key := tick.Exchange + ":" + tick.Symbol
 	candles := s.candleBuffer[key]
 	if len(candles) == 0 {
@@ -224,6 +230,13 @@ func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID st
 		return
 	}
 	if result == nil {
+		return
+	}
+	if result.ID != "" && s.lastScalpingIDs[key] == result.ID {
+		s.logger.Debug("skipping duplicate scalping signal",
+			"signal_id", result.ID,
+			"exchange", tick.Exchange,
+			"symbol", tick.Symbol)
 		return
 	}
 
@@ -266,6 +279,10 @@ func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID st
 
 	if err := s.eventBus.PublishSync(ctx, event); err != nil {
 		s.logger.Warn("failed to publish scalping signal", "error", err)
+		return
+	}
+	if result.ID != "" {
+		s.lastScalpingIDs[key] = result.ID
 	}
 }
 
