@@ -19,6 +19,8 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 CAPITAL="${CAPITAL:-48}"
 FEE_RATE="${FEE_RATE:-0.0006}"
 REQUIRE_TRADES="${REQUIRE_TRADES:-true}"
+SOAK_CHAT_ID="${SOAK_CHAT_ID:-operator-scalping-soak}"
+SOAK_ORDER_PREFIX="${SOAK_ORDER_PREFIX:-operator-scalping-soak}"
 SOAK_DB_PATH="${SOAK_DB_PATH:-${NEURATRADE_HOME}/data/scalping-soak.db}"
 SOAK_BIN="${SOAK_BIN:-${REPO_ROOT}/bin/neuratrade-scalping-soak}"
 
@@ -56,6 +58,8 @@ Environment:
   CAPITAL         Initial paper capital in USDT (default: ${CAPITAL})
   FEE_RATE        Paper simulator fee rate (default: ${FEE_RATE})
   REQUIRE_TRADES  true/false; fail when no paper trades are produced (default: ${REQUIRE_TRADES})
+  SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
+  SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
 
 Examples:
   make build
@@ -83,6 +87,8 @@ run_soak() {
     "--exchange" "$EXCHANGE"
     "--cycles" "$CYCLES"
     "--interval-ms" "$INTERVAL_MS"
+    "--chat-id" "$SOAK_CHAT_ID"
+    "--order-prefix" "$SOAK_ORDER_PREFIX"
     "--capital" "$CAPITAL"
     "--fee-rate" "$FEE_RATE"
   )

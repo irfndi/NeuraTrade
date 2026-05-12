@@ -25,6 +25,8 @@ func run() error {
 	var (
 		dbPath          string
 		exchange        string
+		chatID          string
+		orderPrefix     string
 		cycles          int
 		intervalMS      int
 		timeoutSeconds  int
@@ -37,6 +39,8 @@ func run() error {
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
 	flags.StringVar(&dbPath, "db", "", "SQLite database path for persisted soak telemetry")
 	flags.StringVar(&exchange, "exchange", "bitget", "public exchange to probe")
+	flags.StringVar(&chatID, "chat-id", envString("NEURATRADE_SCALPING_SOAK_CHAT_ID", "operator-scalping-soak"), "chat id for persisted soak telemetry")
+	flags.StringVar(&orderPrefix, "order-prefix", envString("NEURATRADE_SCALPING_SOAK_ORDER_PREFIX", "operator-scalping-soak"), "order prefix for persisted soak telemetry")
 	flags.IntVar(&cycles, "cycles", services.DefaultScalpingLivePaperSoakCycles, "number of public-data paper soak cycles")
 	flags.IntVar(&intervalMS, "interval-ms", 2000, "delay between cycles in milliseconds")
 	flags.IntVar(&timeoutSeconds, "timeout-seconds", 0, "overall timeout; defaults to cycles and interval")
@@ -85,8 +89,8 @@ func run() error {
 		Exchange:       exchange,
 		Cycles:         cycles,
 		Interval:       interval,
-		ChatID:         "operator-scalping-soak",
-		OrderPrefix:    "operator-scalping-soak",
+		ChatID:         chatID,
+		OrderPrefix:    orderPrefix,
 		RequireTrades:  requireTrades,
 		InitialCapital: capital,
 		FeeRate:        fees,
@@ -106,4 +110,12 @@ func run() error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(payload)
+}
+
+func envString(key, fallback string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	return value
 }

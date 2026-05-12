@@ -179,7 +179,7 @@ func (r *RedisClient) Close() {
 //
 //	error: Error if ping fails.
 func (r *RedisClient) HealthCheck(ctx context.Context) error {
-	if r.Client == nil {
+	if r == nil || r.Client == nil {
 		return fmt.Errorf("redis client is nil")
 	}
 	return r.Client.Ping(ctx).Err()

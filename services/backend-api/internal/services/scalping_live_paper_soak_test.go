@@ -8,19 +8,50 @@ import (
 )
 
 func TestScalpingLivePaperSoakOptionNormalization(t *testing.T) {
-	require.Equal(t, DefaultScalpingLivePaperSoakCycles, NormalizeScalpingLivePaperSoakCycles(0))
-	require.Equal(t, 3, NormalizeScalpingLivePaperSoakCycles(3))
-	require.Equal(t, MaxScalpingLivePaperSoakCycles, NormalizeScalpingLivePaperSoakCycles(MaxScalpingLivePaperSoakCycles+1))
+	cycleCases := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{name: "zero_defaults", in: 0, want: DefaultScalpingLivePaperSoakCycles},
+		{name: "passthrough", in: 3, want: 3},
+		{name: "cap_max", in: MaxScalpingLivePaperSoakCycles + 1, want: MaxScalpingLivePaperSoakCycles},
+	}
+	for _, tc := range cycleCases {
+		t.Run("cycles_"+tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, NormalizeScalpingLivePaperSoakCycles(tc.in))
+		})
+	}
 
-	require.Equal(t, time.Duration(0), NormalizeScalpingLivePaperSoakInterval(-time.Second))
-	require.Equal(t, 2*time.Second, NormalizeScalpingLivePaperSoakInterval(2*time.Second))
-	require.Equal(t, MaxScalpingLivePaperSoakInterval, NormalizeScalpingLivePaperSoakInterval(MaxScalpingLivePaperSoakInterval+time.Second))
+	intervalCases := []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{name: "negative_to_zero", in: -time.Second, want: 0},
+		{name: "passthrough", in: 2 * time.Second, want: 2 * time.Second},
+		{name: "cap_max", in: MaxScalpingLivePaperSoakInterval + time.Second, want: MaxScalpingLivePaperSoakInterval},
+	}
+	for _, tc := range intervalCases {
+		t.Run("interval_"+tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, NormalizeScalpingLivePaperSoakInterval(tc.in))
+		})
+	}
 }
 
 func TestScalpingLivePaperSoakTimeoutScalesWithCyclesAndInterval(t *testing.T) {
-	timeout := ScalpingLivePaperSoakTimeout(3, 2*time.Second)
-	require.Equal(t, 2*time.Minute+4*time.Second, timeout)
-
-	capped := ScalpingLivePaperSoakTimeout(MaxScalpingLivePaperSoakCycles+5, MaxScalpingLivePaperSoakInterval+time.Second)
-	require.Equal(t, 35*time.Minute+30*time.Second, capped)
+	cases := []struct {
+		name     string
+		cycles   int
+		interval time.Duration
+		want     time.Duration
+	}{
+		{name: "scales_with_cycles_and_interval", cycles: 3, interval: 2 * time.Second, want: 2*time.Minute + 4*time.Second},
+		{name: "caps_cycles_and_interval", cycles: MaxScalpingLivePaperSoakCycles + 5, interval: MaxScalpingLivePaperSoakInterval + time.Second, want: 35*time.Minute + 30*time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, ScalpingLivePaperSoakTimeout(tc.cycles, tc.interval))
+		})
+	}
 }
