@@ -397,7 +397,7 @@ func (c *Client) buildToolsJSON() ([]json.RawMessage, error) {
 
 // chatOpenAI makes a request to OpenAI API.
 // chatOpenAI is deprecated - use provider_unified.go instead
-// nolint:unused,deadcode
+// nolint:unused
 func (c *Client) chatOpenAI(ctx context.Context, provider *ProviderInfo, req *ChatRequest) (*ChatResponse, error) {
 	apiKey := c.getAPIKey(provider.ID)
 	if apiKey == "" {
@@ -481,7 +481,7 @@ func (c *Client) chatOpenAI(ctx context.Context, provider *ProviderInfo, req *Ch
 
 // chatAnthropic makes a request to Anthropic API.
 // chatAnthropic is deprecated - use provider_unified.go instead
-// nolint:unused,deadcode
+// nolint:unused
 func (c *Client) chatAnthropic(ctx context.Context, provider *ProviderInfo, req *ChatRequest) (*ChatResponse, error) {
 	apiKey := c.getAPIKey(provider.ID)
 	if apiKey == "" {

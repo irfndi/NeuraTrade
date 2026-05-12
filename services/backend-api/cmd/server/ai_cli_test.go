@@ -1,7 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/irfndi/neuratrade/internal/config"
 )
 
 func TestTruncate(t *testing.T) {
@@ -117,5 +128,266 @@ func TestTruncateEdgeCases(t *testing.T) {
 				t.Errorf("truncate(%q, %d) = %q; want %q", tt.input, tt.maxLen, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestProbeAIProvider_OpenAISuccess(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "")
+
+	handlerErrs := make(chan error, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			reportProbeHandlerError(handlerErrs, w, "unexpected path: %s", r.URL.Path)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			reportProbeHandlerError(handlerErrs, w, "unexpected authorization header: %q", got)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":1700000000,
+			"model":"gpt-test",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}
+		}`))
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	err := probeAIProvider(context.Background(), config.AIConfig{
+		Provider: "openai",
+		Model:    "gpt-test",
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	}, []string{"--json"}, &out)
+	if err != nil {
+		t.Fatalf("probeAIProvider returned error: %v", err)
+	}
+	assertNoProbeHandlerError(t, handlerErrs)
+
+	var result aiProviderProbeResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("failed to decode probe result: %v\n%s", err, out.String())
+	}
+	if !result.OK {
+		t.Fatalf("expected successful probe, got %#v", result)
+	}
+	if result.Provider != "openai" || result.Model != "gpt-test" {
+		t.Fatalf("unexpected provider/model: %#v", result)
+	}
+	if result.Usage.TotalTokens != 6 {
+		t.Fatalf("expected total token usage to be reported, got %#v", result.Usage)
+	}
+	if strings.Contains(out.String(), "test-key") {
+		t.Fatal("probe output leaked API key")
+	}
+}
+
+func TestProbeAIProvider_MissingAPIKeyFailsWithoutSecretOutput(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "")
+	t.Setenv("NEURATRADE_AI_PROVIDER_OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	var out bytes.Buffer
+	err := probeAIProvider(context.Background(), config.AIConfig{
+		Provider: "openai",
+		Model:    "gpt-test",
+		BaseURL:  "https://example.test/v1",
+	}, []string{"--json"}, &out)
+	if err == nil {
+		t.Fatal("expected missing API key to fail")
+	}
+
+	var result aiProviderProbeResult
+	if decodeErr := json.Unmarshal(out.Bytes(), &result); decodeErr != nil {
+		t.Fatalf("failed to decode probe result: %v\n%s", decodeErr, out.String())
+	}
+	if result.OK {
+		t.Fatalf("expected failed probe, got %#v", result)
+	}
+	if !strings.Contains(result.Error, "no usable AI provider probe nodes configured") {
+		t.Fatalf("expected no usable nodes error, got %q", result.Error)
+	}
+	if len(result.SkippedProviders) != 1 || !strings.Contains(result.SkippedProviders[0], "missing API key") {
+		t.Fatalf("expected missing-key skipped provider, got %#v", result.SkippedProviders)
+	}
+}
+
+func TestProbeAIProvider_FailoverUsesFundedFallback(t *testing.T) {
+	handlerErrs := make(chan error, 4)
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			reportProbeHandlerError(handlerErrs, w, "unexpected primary path: %s", r.URL.Path)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"insufficient balance/resource package","type":"insufficient_quota","code":"1113"}}`))
+	}))
+	defer primary.Close()
+
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/messages" {
+			reportProbeHandlerError(handlerErrs, w, "unexpected fallback path: %s", r.URL.Path)
+			return
+		}
+		if got := r.Header.Get("x-api-key"); got != "fallback-key" {
+			reportProbeHandlerError(handlerErrs, w, "unexpected fallback key header: %q", got)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"msg-test",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-test",
+			"content":[{"type":"text","text":"OK"}],
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":4,"output_tokens":1}
+		}`))
+	}))
+	defer fallback.Close()
+
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "anthropic")
+	t.Setenv("ANTHROPIC_API_KEY", "fallback-key")
+	t.Setenv("ANTHROPIC_BASE_URL", fallback.URL)
+	t.Setenv("ANTHROPIC_MODEL", "claude-test")
+
+	var out bytes.Buffer
+	err := probeAIProvider(context.Background(), config.AIConfig{
+		Provider: "openai",
+		Model:    "gpt-test",
+		APIKey:   "primary-key",
+		BaseURL:  primary.URL,
+	}, []string{"--json", "--max-retries", "0", "--failover-max-hops", "1"}, &out)
+	if err != nil {
+		t.Fatalf("probeAIProvider returned error: %v\n%s", err, out.String())
+	}
+	assertNoProbeHandlerError(t, handlerErrs)
+
+	var result aiProviderProbeResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("failed to decode probe result: %v\n%s", err, out.String())
+	}
+	if !result.OK {
+		t.Fatalf("expected fallback success, got %#v", result)
+	}
+	if result.Provider != "anthropic" || result.Model != "claude-test" {
+		t.Fatalf("unexpected fallback provider/model: %#v", result)
+	}
+	if strings.Join(result.AttemptedProviders, ",") != "openai,anthropic" {
+		t.Fatalf("unexpected attempted providers: %#v", result.AttemptedProviders)
+	}
+	if strings.Join(result.FailedProviders, ",") != "openai" {
+		t.Fatalf("unexpected failed providers: %#v", result.FailedProviders)
+	}
+	if !result.FailoverAttempted || !result.FailoverSucceeded {
+		t.Fatalf("expected failover to be reported, got %#v", result)
+	}
+	if strings.Contains(out.String(), "primary-key") || strings.Contains(out.String(), "fallback-key") {
+		t.Fatal("probe output leaked API key")
+	}
+}
+
+func TestProbeAIProvider_NoConfiguredProviderFails(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "")
+
+	var out bytes.Buffer
+	err := probeAIProvider(context.Background(), config.AIConfig{}, []string{"--json"}, &out)
+	if err == nil {
+		t.Fatal("expected missing provider configuration to fail")
+	}
+
+	var result aiProviderProbeResult
+	if decodeErr := json.Unmarshal(out.Bytes(), &result); decodeErr != nil {
+		t.Fatalf("failed to decode probe result: %v\n%s", decodeErr, out.String())
+	}
+	if result.OK {
+		t.Fatalf("expected failed probe, got %#v", result)
+	}
+	if !strings.Contains(result.Error, "ai provider is not configured") {
+		t.Fatalf("expected provider configuration error, got %q", result.Error)
+	}
+}
+
+func TestWriteAIProviderProbeResult_ReturnsTextWriteError(t *testing.T) {
+	writeErr := errors.New("write failed")
+	err := writeAIProviderProbeResult(failingWriter{err: writeErr}, false, aiProviderProbeResult{OK: true})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("expected write error to be returned, got %v", err)
+	}
+}
+
+func TestProbeAIProvider_ErrorPathReturnsWriteError(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "")
+
+	writeErr := errors.New("write failed")
+	err := probeAIProvider(context.Background(), config.AIConfig{}, nil, failingWriter{err: writeErr})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("expected write error to be joined, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ai provider is not configured") {
+		t.Fatalf("expected original probe error to be preserved, got %v", err)
+	}
+}
+
+func TestBuildAIProviderProbeNodes_BaseURLOverrideAppliesToPrimaryProvider(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "")
+	t.Setenv("NEURATRADE_AI_PROVIDER_OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+
+	nodes, _, err := buildAIProviderProbeNodes(config.AIConfig{
+		Provider: "openai",
+		Model:    "gpt-test",
+		APIKey:   "test-key",
+		BaseURL:  "https://configured.example/v1",
+	}, aiProviderProbeOptions{BaseURL: "https://override.example/v1"})
+	if err != nil {
+		t.Fatalf("buildAIProviderProbeNodes returned error: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node, got %#v", nodes)
+	}
+	if nodes[0].BaseURL != "https://override.example/v1" {
+		t.Fatalf("expected base URL override to apply to primary provider, got %q", nodes[0].BaseURL)
+	}
+}
+
+func TestAIProviderProbeOverallTimeoutCoversFailoverAttempts(t *testing.T) {
+	nodes := []aiProviderProbeNode{{Provider: "openai"}, {Provider: "anthropic"}, {Provider: "zai"}}
+	opts := aiProviderProbeOptions{Timeout: 2 * time.Second, FailoverMaxHops: 1}
+
+	if got := aiProviderProbeOverallTimeout(nodes, opts); got != 4*time.Second {
+		t.Fatalf("expected two attempt windows, got %s", got)
+	}
+	opts.FailoverMaxHops = 0
+	if got := aiProviderProbeOverallTimeout(nodes, opts); got != 2*time.Second {
+		t.Fatalf("expected single attempt window when failover disabled, got %s", got)
+	}
+}
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write(_ []byte) (int, error) {
+	return 0, w.err
+}
+
+func reportProbeHandlerError(errs chan<- error, w http.ResponseWriter, format string, args ...any) {
+	errs <- fmt.Errorf(format, args...)
+	http.Error(w, "handler validation failed", http.StatusInternalServerError)
+}
+
+func assertNoProbeHandlerError(t *testing.T, errs <-chan error) {
+	t.Helper()
+
+	select {
+	case err := <-errs:
+		t.Fatalf("handler validation failed: %v", err)
+	default:
 	}
 }
