@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -33,28 +34,75 @@ import (
 // main serves as the entry point for the application.
 // It delegates execution to the run function and handles exit codes based on success or failure.
 func main() {
-	// Check for CLI commands
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "seed":
-			if err := runSeeder(); err != nil {
-				fmt.Fprintf(os.Stderr, "Seeding failed: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		case "ai":
-			if err := runAICLI(); err != nil {
-				fmt.Fprintf(os.Stderr, "AI command failed: %v\n", err)
-				os.Exit(1)
-			}
-			return
+	if handled, exitCode := handleServerCommand(os.Args, os.Stdout, os.Stderr); handled {
+		if exitCode != 0 {
+			os.Exit(exitCode)
 		}
+		return
 	}
 
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Application failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func handleServerCommand(args []string, stdout io.Writer, stderr io.Writer) (bool, int) {
+	if len(args) <= 1 {
+		return false, 0
+	}
+
+	command := strings.TrimSpace(args[1])
+	switch command {
+	case "-h", "--help", "help":
+		printServerUsage(stdout)
+		return true, 0
+	case "seed":
+		if err := runSeeder(); err != nil {
+			writeServerUsagef(stderr, "Seeding failed: %v\n", err)
+			return true, 1
+		}
+		return true, 0
+	case "ai":
+		if err := runAICLI(); err != nil {
+			writeServerUsagef(stderr, "AI command failed: %v\n", err)
+			return true, 1
+		}
+		return true, 0
+	default:
+		if command == "" {
+			writeServerUsageln(stderr, "Unknown command: <empty>")
+			writeServerUsageln(stderr)
+			printServerUsage(stderr)
+			return true, 2
+		}
+		if strings.HasPrefix(command, "-") {
+			writeServerUsagef(stderr, "Unknown option: %s\n\n", command)
+			printServerUsage(stderr)
+			return true, 2
+		}
+		writeServerUsagef(stderr, "Unknown command: %s\n\n", command)
+		printServerUsage(stderr)
+		return true, 2
+	}
+}
+
+func printServerUsage(w io.Writer) {
+	writeServerUsageln(w, "NeuraTrade Backend API")
+	writeServerUsageln(w)
+	writeServerUsageln(w, "Usage:")
+	writeServerUsageln(w, "  neuratrade-server              Start the backend API server")
+	writeServerUsageln(w, "  neuratrade-server seed         Seed configured database data")
+	writeServerUsageln(w, "  neuratrade-server ai <command> Manage AI model registry")
+	writeServerUsageln(w, "  neuratrade-server -h, --help   Show this help")
+}
+
+func writeServerUsagef(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, args...)
+}
+
+func writeServerUsageln(w io.Writer, args ...any) {
+	_, _ = fmt.Fprintln(w, args...)
 }
 
 // run orchestrates the startup sequence of the server.

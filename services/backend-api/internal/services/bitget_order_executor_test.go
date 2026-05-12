@@ -103,9 +103,7 @@ func TestBitgetOrderExecutor_MinNotionalUsesDynamicEnv(t *testing.T) {
 	assert.True(t, bitgetFuturesMinUSDTNotional().Equal(decimal.NewFromFloat(7.25)))
 }
 
-func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmount(t *testing.T) {
-	var spotOrderBody map[string]interface{}
-
+func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksUnprotectedSpotFallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/contracts"):
@@ -118,10 +116,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmou
 		case r.URL.Path == "/api/v2/mix/order/place-order":
 			_, _ = w.Write([]byte(`{"code":"40001","msg":"symbol not exist","data":{}}`))
 		case r.URL.Path == "/api/v2/spot/trade/place-order":
-			body, err := io.ReadAll(r.Body)
-			require.NoError(t, err)
-			require.NoError(t, json.Unmarshal(body, &spotOrderBody))
-			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"spot-123"}}`))
+			t.Fatalf("unprotected spot fallback must not place a spot order")
 		default:
 			t.Fatalf("unexpected request path %s", r.URL.Path)
 		}
@@ -142,15 +137,13 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackKeepsOriginalAmou
 		EntryPrice:        &entryPrice,
 	})
 
-	require.NoError(t, err)
-	require.Equal(t, "spot-123", orderID)
-	require.NotNil(t, spotOrderBody)
-	assert.Equal(t, "3", spotOrderBody["size"])
+	require.Error(t, err)
+	assert.Empty(t, orderID)
+	assert.Contains(t, err.Error(), "protected spot fallback unavailable")
+	assert.Contains(t, err.Error(), "exchange-side TP/SL protection")
 }
 
-func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackNormalizesSupportedAlias(t *testing.T) {
-	var spotOrderBody map[string]interface{}
-
+func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksUnprotectedSpotFallbackForSupportedAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/contracts"):
@@ -163,10 +156,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackNormalizesSupport
 		case r.URL.Path == "/api/v2/mix/order/place-order":
 			_, _ = w.Write([]byte(`{"code":"40001","msg":"symbol not exist","data":{}}`))
 		case r.URL.Path == "/api/v2/spot/trade/place-order":
-			body, err := io.ReadAll(r.Body)
-			require.NoError(t, err)
-			require.NoError(t, json.Unmarshal(body, &spotOrderBody))
-			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"spot-alias-123"}}`))
+			t.Fatalf("unprotected spot fallback must not place a spot order")
 		default:
 			t.Fatalf("unexpected request path %s", r.URL.Path)
 		}
@@ -187,13 +177,12 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackNormalizesSupport
 		EntryPrice:        &entryPrice,
 	})
 
-	require.NoError(t, err)
-	require.Equal(t, "spot-alias-123", orderID)
-	require.NotNil(t, spotOrderBody)
-	assert.Equal(t, "buy", spotOrderBody["side"])
+	require.Error(t, err)
+	assert.Empty(t, orderID)
+	assert.Contains(t, err.Error(), "protected spot fallback unavailable")
 }
 
-func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackRejectsUnsupportedShortAlias(t *testing.T) {
+func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksUnprotectedSpotFallbackBeforeShortAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/contracts"):
@@ -227,7 +216,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SpotFallbackRejectsUnsupporte
 
 	require.Error(t, err)
 	assert.Empty(t, orderID)
-	assert.Contains(t, err.Error(), "spot fallback is unsupported")
+	assert.Contains(t, err.Error(), "protected spot fallback unavailable")
 }
 
 func TestBitgetOrderExecutor_EnsureFuturesLeverage_NoOpWhenAlreadySynced(t *testing.T) {

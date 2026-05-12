@@ -1845,6 +1845,7 @@ func TestClassifyExecutionBlockCode_MapsRetryableErrors(t *testing.T) {
 		{name: "missing_orderbook", err: fmt.Errorf("missing orderbook quality signals for ADA/USDT"), expected: appautonomy.CandidateRejectMissingOrderbookSignal},
 		{name: "connectivity", err: fmt.Errorf("request failed: timeout while placing order"), expected: appautonomy.CandidateRejectConnectivity},
 		{name: "cooldown", err: fmt.Errorf("symbol cooldown active for ADA/USDT"), expected: appautonomy.CandidateRejectRiskBudget},
+		{name: "protected_spot_fallback", err: fmt.Errorf("protected spot fallback unavailable for ADAUSDT"), expected: appautonomy.CandidateRejectAutonomyRuntime},
 		{name: "fallback_runtime", err: fmt.Errorf("futures-only mode prevented spot fallback"), expected: appautonomy.CandidateRejectAutonomyRuntime},
 		{name: "connectivity_with_leverage_word", err: fmt.Errorf("connection reset while checking leverage metadata"), expected: appautonomy.CandidateRejectConnectivity},
 		{name: "nil", err: nil, expected: ""},
@@ -1855,6 +1856,13 @@ func TestClassifyExecutionBlockCode_MapsRetryableErrors(t *testing.T) {
 			assert.Equal(t, tc.expected, classifyExecutionBlockCode(tc.err))
 		})
 	}
+}
+
+func TestShouldDowngradeExecutionErrorToHold_ProtectedSpotFallback(t *testing.T) {
+	err := fmt.Errorf("protected spot fallback unavailable for ADAUSDT")
+
+	assert.True(t, shouldDowngradeExecutionErrorToHold(err))
+	assert.Equal(t, reasonCategoryExecutionUnavailable, classifyRuntimeReasoning(err.Error()))
 }
 
 func TestAIScalpingService_ValidateDecision_HoldNormalization(t *testing.T) {

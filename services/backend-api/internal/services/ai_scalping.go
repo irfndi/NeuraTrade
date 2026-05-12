@@ -3556,6 +3556,7 @@ func classifyRuntimeReasoning(reasoning string) string {
 		return reasonCategoryLLMParseContract
 	case strings.Contains(lower, "execution unavailable"),
 		strings.Contains(lower, "request failed"),
+		strings.Contains(lower, protectedSpotFallbackUnavailableReason),
 		strings.Contains(lower, "futures-only mode prevented spot fallback"),
 		strings.Contains(lower, "failed to get ticker"),
 		strings.Contains(lower, "symbol cooldown active"),
@@ -3578,7 +3579,8 @@ func shouldDowngradeExecutionErrorToHold(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "futures-only mode prevented spot fallback") ||
+	return strings.Contains(msg, protectedSpotFallbackUnavailableReason) ||
+		strings.Contains(msg, "futures-only mode prevented spot fallback") ||
 		strings.Contains(msg, "parameter") && strings.Contains(msg, "does not exist") ||
 		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "request failed") ||

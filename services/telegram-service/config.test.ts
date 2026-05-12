@@ -7,33 +7,35 @@ import {
   describe,
   beforeEach,
 } from "bun:test";
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from "fs";
+import { writeFileSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import {
   getEnvWithNeuratradeFallback,
   resetNeuratradeConfigCache,
 } from "./config";
 
 describe("Neuratrade config fallback", () => {
-  const neuratradeDir = join(homedir(), ".neuratrade");
+  const neuratradeDir = join(
+    import.meta.dir,
+    ".tmp-test-neuratrade-home-config",
+  );
   const realConfigPath = join(neuratradeDir, "config.json");
-  let backupContent: string | null = null;
+  const originalNeuratradeHome = process.env.NEURATRADE_HOME;
   let originalEnv: Record<string, string | undefined>;
 
   beforeAll(() => {
-    if (!existsSync(neuratradeDir)) {
-      mkdirSync(neuratradeDir, { recursive: true });
-    }
-    if (existsSync(realConfigPath)) {
-      backupContent = readFileSync(realConfigPath, "utf-8");
-    }
+    rmSync(neuratradeDir, { recursive: true, force: true });
+    mkdirSync(neuratradeDir, { recursive: true });
+    process.env.NEURATRADE_HOME = neuratradeDir;
   });
 
   afterAll(() => {
-    if (backupContent !== null) {
-      writeFileSync(realConfigPath, backupContent, "utf-8");
+    if (originalNeuratradeHome === undefined) {
+      delete process.env.NEURATRADE_HOME;
+    } else {
+      process.env.NEURATRADE_HOME = originalNeuratradeHome;
     }
+    rmSync(neuratradeDir, { recursive: true, force: true });
   });
 
   beforeEach(() => {

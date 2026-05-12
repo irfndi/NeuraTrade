@@ -1,4 +1,6 @@
 import * as grpc from "@grpc/grpc-js";
+import { createHash } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import {
   TelegramServiceService,
   type TelegramServiceServer,
@@ -26,8 +28,54 @@ import {
   type RiskSeverity,
 } from "./src/messages";
 import { logger } from "./src/utils/logger";
+import { config } from "./src/config";
 
 type ParseMode = "HTML" | "Markdown" | "MarkdownV2";
+const HEALTH_CHECK_METHOD_PATH = "/telegram.TelegramService/HealthCheck";
+
+export function safeCredentialEqual(
+  provided: string,
+  expected: string,
+): boolean {
+  const providedDigest = createHash("sha256").update(provided, "utf8").digest();
+  const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
+
+  return timingSafeEqual(providedDigest, expectedDigest);
+}
+
+export function createAuthInterceptor(
+  adminApiKey: string,
+): grpc.ServerInterceptor {
+  return (methodDescriptor, call) =>
+    new grpc.ServerInterceptingCall(call, {
+      start: (next) => {
+        next({
+          onReceiveMetadata: (metadata, metadataNext) => {
+            if (methodDescriptor.path === HEALTH_CHECK_METHOD_PATH) {
+              metadataNext(metadata);
+              return;
+            }
+
+            const apiKey = metadata.get("x-api-key")[0]?.toString() ?? "";
+            if (
+              !adminApiKey ||
+              !apiKey ||
+              !safeCredentialEqual(apiKey, adminApiKey)
+            ) {
+              call.sendMetadata(new grpc.Metadata());
+              call.sendStatus({
+                code: grpc.status.UNAUTHENTICATED,
+                details: "Invalid or missing x-api-key metadata",
+              });
+              return;
+            }
+
+            metadataNext(metadata);
+          },
+        });
+      },
+    });
+}
 
 function toParseMode(parseMode: string): ParseMode | undefined {
   if (
@@ -408,8 +456,13 @@ export class TelegramGrpcServer {
   };
 }
 
-export function startGrpcServer(bot: Bot, port: number) {
-  const server = new grpc.Server();
+export function createTelegramGrpcServer(
+  bot: Bot,
+  adminApiKey = config.adminApiKey,
+): grpc.Server {
+  const server = new grpc.Server({
+    interceptors: [createAuthInterceptor(adminApiKey)],
+  });
   const service = new TelegramGrpcServer(bot);
 
   server.addService(
@@ -417,9 +470,30 @@ export function startGrpcServer(bot: Bot, port: number) {
     service as unknown as TelegramServiceServer,
   );
 
-  const bindAddr = `0.0.0.0:${port}`;
+  return server;
+}
+
+export function formatGrpcBindTarget(bindAddr: string, port: number): string {
+  const host =
+    bindAddr.includes(":") && !bindAddr.startsWith("[")
+      ? `[${bindAddr}]`
+      : bindAddr;
+
+  return `${host}:${port}`;
+}
+
+export function startGrpcServer(bot: Bot, port: number) {
+  const server = createTelegramGrpcServer(bot);
+
+  const bindAddr = config.grpcBindAddr;
+  if (!["127.0.0.1", "::1", "localhost"].includes(bindAddr)) {
+    logger.warn("Telegram gRPC service binding to a non-loopback address", {
+      bindAddr,
+    });
+  }
+  const fullAddr = formatGrpcBindTarget(bindAddr, port);
   server.bindAsync(
-    bindAddr,
+    fullAddr,
     grpc.ServerCredentials.createInsecure(),
     (err, boundPort) => {
       if (err) {
