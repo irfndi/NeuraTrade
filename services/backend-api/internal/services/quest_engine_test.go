@@ -1209,6 +1209,19 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 			"runtime_last_entry_attempt_at":      lastAttempt.Format(time.RFC3339),
 		},
 	}
+	engine.quests["q-cycle-previous"] = &Quest{
+		ID:        "q-cycle-previous",
+		Status:    QuestStatusCompleted,
+		UpdatedAt: time.Now().UTC().Add(time.Hour),
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"effective_max_concurrent_positions": 3,
+			"managed_open_positions_effective":   2,
+		},
+	}
 
 	diag := engine.GetChatRuntimeDiagnostics("chat-cycle")
 

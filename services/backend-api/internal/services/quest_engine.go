@@ -2097,7 +2097,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		protectionMissingDetected      int
 		protectionMissingRecovered     int
 		managedOpenPositionsEffective  int
+		managedOpenAt                  time.Time
+		hasActiveManagedOpen           bool
 		effectiveMaxConcurrent         int
+		capAt                          time.Time
+		hasActiveCap                   bool
 		ghostPositionsCleaned          int
 	)
 
@@ -2285,8 +2289,29 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		}
 		protectionMissingDetected = maxInt(protectionMissingDetected, readQuestMetricInt(cp["protection_missing_detected"]))
 		protectionMissingRecovered = maxInt(protectionMissingRecovered, readQuestMetricInt(cp["protection_missing_recovered"]))
-		managedOpenPositionsEffective = maxInt(managedOpenPositionsEffective, readQuestMetricInt(cp["managed_open_positions_effective"]))
-		effectiveMaxConcurrent = maxInt(effectiveMaxConcurrent, readQuestMetricInt(cp["effective_max_concurrent_positions"]))
+		if _, exists := cp["managed_open_positions_effective"]; exists {
+			value := readQuestMetricInt(cp["managed_open_positions_effective"])
+			switch {
+			case isActiveScalpingQuest && (!hasActiveManagedOpen || selectionAt.After(managedOpenAt)):
+				managedOpenPositionsEffective = value
+				managedOpenAt = selectionAt
+				hasActiveManagedOpen = true
+			case !hasActiveManagedOpen && selectionAt.After(managedOpenAt):
+				managedOpenPositionsEffective = value
+				managedOpenAt = selectionAt
+			}
+		}
+		if value := readQuestMetricInt(cp["effective_max_concurrent_positions"]); value > 0 {
+			switch {
+			case isActiveScalpingQuest && (!hasActiveCap || selectionAt.After(capAt)):
+				effectiveMaxConcurrent = value
+				capAt = selectionAt
+				hasActiveCap = true
+			case !hasActiveCap && selectionAt.After(capAt):
+				effectiveMaxConcurrent = value
+				capAt = selectionAt
+			}
+		}
 		ghostPositionsCleaned = maxInt(ghostPositionsCleaned, readQuestMetricInt(cp["ghost_positions_cleaned"]))
 		if _, exists := cp["autonomy_gate_open"]; exists {
 			autonomyGateOpen = readQuestMetricBool(cp["autonomy_gate_open"])
