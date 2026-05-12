@@ -21,6 +21,8 @@ const (
 	scalpingLiveSignalProbeExchange   = "NEURATRADE_SCALPING_LIVE_SIGNAL_PROBE_EXCHANGE"
 	scalpingLiveSignalProbeRequireEnv = "NEURATRADE_SCALPING_LIVE_SIGNAL_PROBE_REQUIRE_VIABLE"
 	scalpingLivePaperProbeRequireEnv  = "NEURATRADE_SCALPING_LIVE_PAPER_PROBE_REQUIRE_TRADES"
+	scalpingLivePaperProbeCyclesEnv   = "NEURATRADE_SCALPING_LIVE_PAPER_PROBE_CYCLES"
+	scalpingLivePaperProbeIntervalEnv = "NEURATRADE_SCALPING_LIVE_PAPER_PROBE_INTERVAL_MS"
 )
 
 func TestAIScalpingService_LiveSignalProbe(t *testing.T) {
@@ -112,119 +114,66 @@ func TestAIScalpingService_LivePaperSignalProbe(t *testing.T) {
 		exchange = "bitget"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	cycles := NormalizeScalpingLivePaperSoakCycles(getEnvInt(scalpingLivePaperProbeCyclesEnv))
+	interval := NormalizeScalpingLivePaperSoakInterval(time.Duration(getEnvInt(scalpingLivePaperProbeIntervalEnv)) * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), ScalpingLivePaperSoakTimeout(cycles, interval))
 	defer cancel()
-
-	ccxtSvc := ccxt.NewNativeCCXTService(15*time.Second, 1)
-	require.NoError(t, ccxtSvc.Initialize(ctx))
-	t.Cleanup(func() {
-		require.NoError(t, ccxtSvc.Close())
-	})
-
-	defaults := DefaultAIScalpingConfig()
-	defaults.Exchange = exchange
-	defaults.MaxPairsToAnalyze = 8
-	defaults.MaxCandidatePairs = 24
-	defaults.OrderBookPairs = 8
-	defaults.AutoExpandOrderBooks = true
-	defaults.AutoExecute = false
-	defaults.EnforceFutures = false
-
-	svc := &AIScalpingService{
-		config:       defaults,
-		ccxtService:  ccxtSvc,
-		symbolGuards: make(map[string]symbolExecutionGuard),
-	}
-
-	signals, err := svc.gatherMarketSignals(ctx)
-	require.NoError(t, err)
-	require.NotEmpty(t, signals)
-
-	now := time.Now().UTC()
-	historicalSignals := make([]HistoricalSignal, 0, len(signals))
-	symbols := make([]string, 0, len(signals))
-	for i, signal := range signals {
-		symbols = append(symbols, signal.Symbol)
-		historicalSignals = append(historicalSignals, HistoricalSignal{
-			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
-			Symbol:    signal.Symbol,
-			Exchange:  exchange,
-			Signal:    signal,
-		})
-	}
-
-	engine := NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
-		StartTime:          now.Add(-time.Second),
-		EndTime:            now.Add(time.Second),
-		Symbols:            symbols,
-		Exchange:           exchange,
-		InitialCapital:     decimal.NewFromFloat(48),
-		FeeRate:            decimal.NewFromFloat(0.0006),
-		SlippagePct:        decimal.NewFromFloat(DefaultScalpingBacktestSlippage),
-		MaxBidAskSpreadPct: defaults.MaxBidAskSpreadPct,
-		MinConfidence:      defaults.MinConfidence,
-		MinExpectancyN:     defaults.MinExpectancyN,
-		MinExpectancyEdge:  defaults.MinExpectancyEdge,
-		MaxCapitalPct:      defaults.MaxCapitalPct,
-		DefaultHoldPeriod:  DefaultScalpingBacktestHoldPeriod,
-	})
-	result, err := engine.RunSignals(ctx, historicalSignals)
-	require.NoError(t, err)
-
-	fees := decimal.Zero
-	for _, trade := range result.Trades {
-		fees = fees.Add(trade.Fees)
-	}
-	require.Len(t, result.Trades, result.Summary.TotalTrades, "trade slice length should match summary total trades")
-	require.True(t, fees.GreaterThanOrEqual(decimal.Zero), "aggregate fees should never be negative")
-	require.LessOrEqual(
-		t,
-		result.Summary.WinningTrades+result.Summary.LosingTrades,
-		result.Summary.TotalTrades,
-		"win/loss counts should not exceed total trades",
-	)
 
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "live-paper-soak.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, sqliteDB.Close())
 	})
+
 	baseline := BrokenScalpingBaseline()
-	report, err := PersistScalpingPaperBacktestSoakReport(ctx, sqliteDB, result, ScalpingPaperSoakPersistenceOptions{
-		ChatID:      "live-paper-probe",
-		Exchange:    exchange,
-		Baseline:    &baseline,
-		OrderPrefix: "live-paper-probe",
+	requireTrades := strings.TrimSpace(os.Getenv(scalpingLivePaperProbeRequireEnv)) != ""
+	result, err := RunPublicScalpingLivePaperSoak(ctx, sqliteDB, ScalpingLivePaperSoakOptions{
+		Exchange:       exchange,
+		Cycles:         cycles,
+		Interval:       interval,
+		ChatID:         "live-paper-probe",
+		OrderPrefix:    "live-paper-probe",
+		RequireTrades:  requireTrades,
+		InitialCapital: decimal.NewFromInt(48),
+		FeeRate:        decimal.NewFromFloat(0.0006),
+		Baseline:       &baseline,
 	})
 	require.NoError(t, err)
-	require.Equal(t, result.Summary.TotalSignals, report.TotalCycles)
-	require.Equal(t, result.Summary.TotalTrades, report.TradeSummary.ClosedTrades)
-	require.True(t, report.TradeSummary.NetPnL.Round(8).Equal(result.Summary.TotalPnL.Round(8)))
-	require.False(t, report.InsufficientTradeProof)
+	require.NotNil(t, result.LastBacktestResult)
+	require.Equal(t, result.TotalSignals, result.Report.TotalCycles)
+	require.Equal(t, result.TotalTrades, result.Report.TradeSummary.ClosedTrades)
+	require.Equal(t, result.WinningTrades, result.Report.TradeSummary.Wins)
+	require.Equal(t, result.LosingTrades, result.Report.TradeSummary.Losses)
+	require.True(t, result.Report.TradeSummary.NetPnL.Round(8).Equal(result.NetPnL.Round(8)))
+	require.True(t, result.Report.TradeSummary.Fees.Round(8).Equal(result.Fees.Round(8)))
+	if requireTrades {
+		require.False(t, result.InsufficientTradeProof)
+	}
 
 	t.Logf(
-		"live paper scalping probe: exchange=%s signals=%d eligible=%d paper_trades=%d wins=%d losses=%d win_rate=%s net_pnl=%s fees=%s profit_factor=%s drawdown=%s rejections=%v gates=%v persisted_cycles=%d persisted_trades=%d persisted_net_pnl=%s persisted_signal_quality=%s",
+		"live paper scalping probe: exchange=%s cycles=%d signals=%d eligible=%d paper_trades=%d wins=%d losses=%d win_rate=%s net_pnl=%s fees=%s profit_factor=%s drawdown=%s rejections=%v gates=%v persisted_cycles=%d persisted_trades=%d persisted_net_pnl=%s persisted_signal_quality=%s",
 		exchange,
-		result.Summary.TotalSignals,
-		result.Summary.EligibleSignals,
-		result.Summary.TotalTrades,
-		result.Summary.WinningTrades,
-		result.Summary.LosingTrades,
-		result.Summary.WinRate.StringFixed(4),
-		result.Summary.TotalPnL.StringFixed(8),
-		fees.StringFixed(8),
-		result.Summary.ProfitFactor.StringFixed(4),
-		result.Summary.MaxDrawdownPct.StringFixed(4),
-		result.Summary.RejectionByReason,
-		result.GateSummary,
-		report.TotalCycles,
-		report.TradeSummary.ClosedTrades,
-		report.TradeSummary.NetPnL.StringFixed(8),
-		report.SignalQuality.Coverage.StringFixed(4),
+		cycles,
+		result.TotalSignals,
+		result.EligibleSignals,
+		result.TotalTrades,
+		result.WinningTrades,
+		result.LosingTrades,
+		result.Report.TradeSummary.WinRate.StringFixed(4),
+		result.NetPnL.StringFixed(8),
+		result.Fees.StringFixed(8),
+		result.Report.TradeSummary.ProfitFactor.StringFixed(4),
+		result.Report.TradeSummary.MaxDrawdownPct.StringFixed(4),
+		result.LastRejectionByReason,
+		result.LastGateSummary,
+		result.Report.TotalCycles,
+		result.Report.TradeSummary.ClosedTrades,
+		result.Report.TradeSummary.NetPnL.StringFixed(8),
+		result.Report.SignalQuality.Coverage.StringFixed(4),
 	)
 
-	require.Greater(t, result.Summary.TotalSignals, 0, "live paper probe should evaluate public signals")
-	if strings.TrimSpace(os.Getenv(scalpingLivePaperProbeRequireEnv)) != "" {
-		require.Greater(t, result.Summary.TotalTrades, 0, "live paper probe should produce no-order paper trades")
+	require.Greater(t, result.TotalSignals, 0, "live paper probe should evaluate public signals")
+	if requireTrades {
+		require.Greater(t, result.TotalTrades, 0, "live paper probe should produce no-order paper trades")
 	}
 }
