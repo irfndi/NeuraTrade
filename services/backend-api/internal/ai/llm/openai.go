@@ -508,6 +508,16 @@ func (c *OpenAIClient) handleErrorResponse(statusCode int, headers http.Header, 
 		if retryAfter <= 0 {
 			retryAfter = 30 * time.Second
 		}
+		if isProviderBalanceExhausted(apiErr.Error.Message, apiErr.Error.Type, apiErr.Error.Code) {
+			return ProviderAPIError{
+				Provider:   provider,
+				StatusCode: statusCode,
+				Message:    apiErr.Error.Message,
+				Type:       apiErr.Error.Type,
+				Code:       apiErr.Error.Code,
+				RetryAfter: retryAfter,
+			}
+		}
 		return RateLimitedError{Provider: provider, RetryAfter: retryAfter}
 	case http.StatusBadRequest:
 		if apiErr.Error.Code == "context_length_exceeded" {
