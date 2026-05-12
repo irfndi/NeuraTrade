@@ -51,10 +51,15 @@ type ScalpingSoakReport struct {
 	BaselineComparison     *ScalpingSoakBaselineComparison `json:"baseline_comparison,omitempty"`
 	InsufficientTradeProof bool                            `json:"insufficient_trade_proof"`
 
-	cumulativeNetPnL decimal.Decimal
-	peakNetPnL       decimal.Decimal
-	grossWinningPnL  decimal.Decimal
-	grossLosingPnL   decimal.Decimal
+	cumulativeNetPnL  decimal.Decimal
+	peakNetPnL        decimal.Decimal
+	grossWinningPnL   decimal.Decimal
+	grossLosingPnL    decimal.Decimal
+	spreadCount       int
+	imbalanceCount    int
+	rangeCount        int
+	priceChangeCount  int
+	holdDurationCount int
 }
 
 type ScalpingSignalQualitySoakStats struct {
@@ -299,6 +304,7 @@ func (r *ScalpingSoakReport) addSignalQuality(row scalpingSoakCycleRow) {
 	r.SignalQuality.KnownCycles++
 	if row.bidAskSpreadPct.Valid {
 		r.SignalQuality.AvgBidAskSpreadPct = r.SignalQuality.AvgBidAskSpreadPct.Add(decimal.NewFromFloat(row.bidAskSpreadPct.Float64))
+		r.spreadCount++
 	}
 	if row.orderBookImbalance.Valid {
 		value := decimal.NewFromFloat(row.orderBookImbalance.Float64)
@@ -306,12 +312,15 @@ func (r *ScalpingSoakReport) addSignalQuality(row scalpingSoakCycleRow) {
 			value = value.Abs()
 		}
 		r.SignalQuality.AvgAbsOrderBookImbalance = r.SignalQuality.AvgAbsOrderBookImbalance.Add(value)
+		r.imbalanceCount++
 	}
 	if row.rangePosition24h.Valid {
 		r.SignalQuality.AvgRangePosition24h = r.SignalQuality.AvgRangePosition24h.Add(decimal.NewFromFloat(row.rangePosition24h.Float64))
+		r.rangeCount++
 	}
 	if row.priceChange24hPct.Valid {
 		r.SignalQuality.AvgPriceChange24hPct = r.SignalQuality.AvgPriceChange24hPct.Add(decimal.NewFromFloat(row.priceChange24hPct.Float64))
+		r.priceChangeCount++
 	}
 }
 
@@ -322,9 +331,9 @@ func (r *ScalpingSoakReport) addTrade(row scalpingSoakCycleRow) {
 	}
 	r.TradeSummary.ClosedTrades++
 	switch {
-	case outcome == "win" || row.netPnL.GreaterThan(decimal.Zero):
+	case row.netPnL.GreaterThan(decimal.Zero):
 		r.TradeSummary.Wins++
-	case outcome == "loss" || row.netPnL.LessThan(decimal.Zero):
+	case row.netPnL.LessThan(decimal.Zero):
 		r.TradeSummary.Losses++
 	default:
 		r.TradeSummary.Breakeven++
@@ -345,6 +354,7 @@ func (r *ScalpingSoakReport) addTrade(row scalpingSoakCycleRow) {
 	r.TradeSummary.Fees = r.TradeSummary.Fees.Add(row.fees)
 	if row.holdDurationSeconds.Valid {
 		r.TradeSummary.AvgHoldDurationSec = r.TradeSummary.AvgHoldDurationSec.Add(decimal.NewFromInt(row.holdDurationSeconds.Int64))
+		r.holdDurationCount++
 	}
 	r.cumulativeNetPnL = r.cumulativeNetPnL.Add(row.netPnL)
 	if r.TradeSummary.ClosedTrades == 1 || r.cumulativeNetPnL.GreaterThan(r.peakNetPnL) {
@@ -390,17 +400,16 @@ func (r *ScalpingSoakReport) finalize(baseline *ScalpingSoakBaseline) {
 		r.SignalQuality.MissingSignalQualityCycles = r.TotalCycles - r.SignalQuality.KnownCycles
 	}
 	if r.SignalQuality.KnownCycles > 0 {
-		denom := decimal.NewFromInt(int64(r.SignalQuality.KnownCycles))
-		r.SignalQuality.AvgBidAskSpreadPct = r.SignalQuality.AvgBidAskSpreadPct.Div(denom)
-		r.SignalQuality.AvgAbsOrderBookImbalance = r.SignalQuality.AvgAbsOrderBookImbalance.Div(denom)
-		r.SignalQuality.AvgRangePosition24h = r.SignalQuality.AvgRangePosition24h.Div(denom)
-		r.SignalQuality.AvgPriceChange24hPct = r.SignalQuality.AvgPriceChange24hPct.Div(denom)
+		r.SignalQuality.AvgBidAskSpreadPct = divideByCount(r.SignalQuality.AvgBidAskSpreadPct, r.spreadCount)
+		r.SignalQuality.AvgAbsOrderBookImbalance = divideByCount(r.SignalQuality.AvgAbsOrderBookImbalance, r.imbalanceCount)
+		r.SignalQuality.AvgRangePosition24h = divideByCount(r.SignalQuality.AvgRangePosition24h, r.rangeCount)
+		r.SignalQuality.AvgPriceChange24hPct = divideByCount(r.SignalQuality.AvgPriceChange24hPct, r.priceChangeCount)
 	}
 	if r.TradeSummary.ClosedTrades > 0 {
 		denom := decimal.NewFromInt(int64(r.TradeSummary.ClosedTrades))
 		r.TradeSummary.WinRate = decimal.NewFromInt(int64(r.TradeSummary.Wins)).Div(denom)
 		r.TradeSummary.AvgNetPnLPerTrade = r.TradeSummary.NetPnL.Div(denom)
-		r.TradeSummary.AvgHoldDurationSec = r.TradeSummary.AvgHoldDurationSec.Div(denom)
+		r.TradeSummary.AvgHoldDurationSec = divideByCount(r.TradeSummary.AvgHoldDurationSec, r.holdDurationCount)
 	}
 	r.computeDrawdownPct(baseline)
 	r.computeProfitFactor()
@@ -454,6 +463,13 @@ func ratioMap(counts map[string]int, total int) map[string]decimal.Decimal {
 		ratios[key] = decimal.NewFromInt(int64(count)).Div(denom)
 	}
 	return ratios
+}
+
+func divideByCount(value decimal.Decimal, count int) decimal.Decimal {
+	if count <= 0 {
+		return decimal.Zero
+	}
+	return value.Div(decimal.NewFromInt(int64(count)))
 }
 
 func normalizeSoakBucket(value, fallback string) string {

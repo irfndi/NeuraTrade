@@ -127,6 +127,64 @@ func TestBuildScalpingSoakReportSummarizesAcceptanceMetrics(t *testing.T) {
 	require.True(t, report.BaselineComparison.DeltaNetPnL.Round(6).Equal(decimal.NewFromFloat(0.20)))
 }
 
+func TestBuildScalpingSoakReportUsesPnLSignAndSparseAverageDenominators(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-soak-report-sparse.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sqliteDB.Close())
+	})
+
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 11, 14, 0, 0, 0, time.UTC)
+	insertSoakClosedTradeWithNullableHold(t, ctx, lifecycleStore, telemetryStore, now.Add(-2*time.Minute), CycleRecord{
+		ID:                  "cycle-negative-labelled-win",
+		ChatID:              "chat-1",
+		Exchange:            "bitget",
+		OrderID:             "ord-negative-labelled-win",
+		CycleAt:             now.Add(-2 * time.Minute),
+		Symbol:              "BTC/USDT",
+		Action:              "buy",
+		Regime:              "trend",
+		BidAskSpreadPct:     floatPtr(0.02),
+		RejectionCountsJSON: `{}`,
+	}, decimal.NewFromFloat(-0.04), decimal.Zero, "win", "-0.04", nil)
+
+	holdSeconds := 60
+	insertSoakClosedTradeWithNullableHold(t, ctx, lifecycleStore, telemetryStore, now.Add(-1*time.Minute), CycleRecord{
+		ID:                 "cycle-positive-labelled-loss",
+		ChatID:             "chat-1",
+		Exchange:           "bitget",
+		OrderID:            "ord-positive-labelled-loss",
+		CycleAt:            now.Add(-1 * time.Minute),
+		Symbol:             "ETH/USDT",
+		Action:             "sell",
+		Regime:             "range",
+		BidAskSpreadPct:    floatPtr(0.06),
+		OrderBookImbalance: floatPtr(-0.5),
+	}, decimal.NewFromFloat(0.06), decimal.Zero, "loss", "0.06", &holdSeconds)
+
+	report, err := BuildScalpingSoakReport(ctx, sqliteDB, ScalpingSoakReportFilter{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+		Since:    now.Add(-10 * time.Minute),
+		Until:    now.Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 2, report.TradeSummary.ClosedTrades)
+	require.Equal(t, 1, report.TradeSummary.Wins, "win count should follow net PnL sign, not stale outcome label")
+	require.Equal(t, 1, report.TradeSummary.Losses, "loss count should follow net PnL sign, not stale outcome label")
+	require.True(t, report.TradeSummary.ProfitFactor.Round(6).Equal(decimal.NewFromFloat(1.5)))
+	require.True(t, report.TradeSummary.AvgHoldDurationSec.Round(6).Equal(decimal.NewFromInt(60)))
+	require.True(t, report.SignalQuality.AvgBidAskSpreadPct.Round(6).Equal(decimal.NewFromFloat(0.04)))
+	require.True(t, report.SignalQuality.AvgAbsOrderBookImbalance.Round(6).Equal(decimal.NewFromFloat(0.5)))
+}
+
 func TestScalpingSoakReport_RunAgainstRuntimeSQLite(t *testing.T) {
 	sqliteDB, _ := prepareRuntimeSQLiteBacktest(t)
 
@@ -208,4 +266,49 @@ func insertSoakClosedTrade(
 		HoldDurationSeconds: holdDurationSeconds,
 		ClosedAt:            closedAt,
 	}))
+}
+
+func insertSoakClosedTradeWithNullableHold(
+	t *testing.T,
+	ctx context.Context,
+	lifecycleStore *TradingLifecycleStore,
+	telemetryStore *ScalpingTelemetryStore,
+	closedAt time.Time,
+	record CycleRecord,
+	grossPnL decimal.Decimal,
+	fees decimal.Decimal,
+	outcome string,
+	telemetryPnL string,
+	holdDurationSeconds *int,
+) {
+	t.Helper()
+	insertSoakCycle(t, ctx, telemetryStore, record)
+	require.NoError(t, lifecycleStore.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     record.OrderID,
+		ChatID:      record.ChatID,
+		Exchange:    record.Exchange,
+		Symbol:      record.Symbol,
+		Side:        record.Action,
+		MarketType:  "futures",
+		Filled:      decimal.NewFromFloat(0.01),
+		EntryPrice:  decimal.NewFromFloat(100),
+		ExitPrice:   decimal.NewFromFloat(101),
+		RealizedPnL: grossPnL,
+		Fees:        fees,
+		Source:      "autonomous_scalping",
+		ClosedAt:    closedAt,
+	}))
+	var holdDurationArg any
+	if holdDurationSeconds != nil {
+		holdDurationArg = *holdDurationSeconds
+	}
+	_, err := telemetryStore.db.Exec(ctx, telemetryStore.bindQuery(`
+		UPDATE scalping_cycle_telemetry
+		SET outcome = ?,
+			pnl = CAST(? AS NUMERIC),
+			hold_duration_seconds = ?,
+			closed_at = ?
+		WHERE order_id = ?
+	`), outcome, telemetryPnL, holdDurationArg, closedAt, record.OrderID)
+	require.NoError(t, err)
 }
