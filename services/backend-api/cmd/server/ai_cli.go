@@ -477,6 +477,7 @@ type aiProviderProbeOptions struct {
 	Model           string
 	BaseURL         string
 	Prompt          string
+	Expect          string
 	OutputJSON      bool
 	Timeout         time.Duration
 	MaxRetries      int
@@ -500,6 +501,8 @@ type aiProviderProbeResult struct {
 	Usage               llm.UsageMetrics `json:"usage,omitempty"`
 	FinishReason        string           `json:"finish_reason,omitempty"`
 	ContentPreview      string           `json:"content_preview,omitempty"`
+	ExpectedContent     string           `json:"expected_content,omitempty"`
+	ResponseMatched     bool             `json:"response_matched"`
 	ConfiguredProviders []string         `json:"configured_providers"`
 	UsableProviders     []string         `json:"usable_providers"`
 	SkippedProviders    []string         `json:"skipped_providers,omitempty"`
@@ -563,13 +566,15 @@ func probeAIProvider(ctx context.Context, cfg config.AIConfig, args []string, ou
 		return writeAIProviderProbeFailure(out, opts.OutputJSON, result, fmt.Errorf("ai provider probe failed: provider returned nil response"))
 	}
 
-	result.OK = true
 	result.Provider = string(resp.Provider)
 	result.Model = strings.TrimSpace(resp.Model)
 	result.LatencyMs = resp.LatencyMs
 	result.Usage = resp.Usage
 	result.FinishReason = strings.TrimSpace(resp.FinishReason)
-	result.ContentPreview = truncate(strings.TrimSpace(resp.Message.Content), 120)
+	responseContent := strings.TrimSpace(resp.Message.Content)
+	result.ContentPreview = truncate(responseContent, 120)
+	result.ExpectedContent = opts.Expect
+	result.ResponseMatched = aiProviderProbeResponseMatches(responseContent, opts.Expect)
 	for _, node := range nodes {
 		if node.Provider == result.Provider {
 			result.BaseURL = node.BaseURL
@@ -580,12 +585,20 @@ func probeAIProvider(ctx context.Context, cfg config.AIConfig, args []string, ou
 		result.BaseURL = nodes[0].BaseURL
 	}
 
+	if opts.Expect != "" && !result.ResponseMatched {
+		result.OK = false
+		result.Error = fmt.Sprintf("provider response did not match expected content %q", opts.Expect)
+		return writeAIProviderProbeFailure(out, opts.OutputJSON, result, fmt.Errorf("ai provider probe failed: %s", result.Error))
+	}
+
+	result.OK = true
 	return writeAIProviderProbeResult(out, opts.OutputJSON, result)
 }
 
 func parseAIProviderProbeOptions(args []string) (aiProviderProbeOptions, error) {
 	opts := aiProviderProbeOptions{
 		Prompt:          "Reply with OK.",
+		Expect:          "OK",
 		Timeout:         30 * time.Second,
 		MaxRetries:      0,
 		MaxTokens:       8,
@@ -599,6 +612,7 @@ func parseAIProviderProbeOptions(args []string) (aiProviderProbeOptions, error) 
 	fs.StringVar(&opts.Model, "model", "", "model override for the probe")
 	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
 	fs.StringVar(&opts.Prompt, "prompt", opts.Prompt, "probe prompt")
+	fs.StringVar(&opts.Expect, "expect", opts.Expect, "exact response content expected from the provider; empty disables content validation")
 	fs.BoolVar(&opts.OutputJSON, "json", false, "write JSON output")
 	fs.IntVar(&opts.MaxRetries, "max-retries", opts.MaxRetries, "HTTP retry count")
 	fs.IntVar(&opts.MaxTokens, "max-tokens", opts.MaxTokens, "maximum output tokens")
@@ -626,6 +640,7 @@ func parseAIProviderProbeOptions(args []string) (aiProviderProbeOptions, error) 
 	opts.Model = strings.TrimSpace(opts.Model)
 	opts.BaseURL = strings.TrimSpace(opts.BaseURL)
 	opts.Prompt = strings.TrimSpace(opts.Prompt)
+	opts.Expect = strings.TrimSpace(opts.Expect)
 	if opts.Prompt == "" {
 		opts.Prompt = "Reply with OK."
 	}
@@ -853,6 +868,14 @@ func writeAIProviderProbeResult(out io.Writer, outputJSON bool, result aiProvide
 		if err := writeProbeOutput("Usage: input=%d output=%d total=%d\n", result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.TotalTokens); err != nil {
 			return err
 		}
+		if result.ExpectedContent != "" {
+			if err := writeProbeOutput("Expected: %s\n", result.ExpectedContent); err != nil {
+				return err
+			}
+			if err := writeProbeOutput("Response matched: %t\n", result.ResponseMatched); err != nil {
+				return err
+			}
+		}
 		if result.ContentPreview != "" {
 			if err := writeProbeOutput("Content: %s\n", result.ContentPreview); err != nil {
 				return err
@@ -869,12 +892,25 @@ func writeAIProviderProbeResult(out io.Writer, outputJSON bool, result aiProvide
 			return err
 		}
 	}
+	if result.ContentPreview != "" {
+		if err := writeProbeOutput("Content: %s\n", result.ContentPreview); err != nil {
+			return err
+		}
+	}
 	if len(result.SkippedProviders) > 0 {
 		if err := writeProbeOutput("Skipped providers: %s\n", strings.Join(result.SkippedProviders, ", ")); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func aiProviderProbeResponseMatches(content string, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(content), expected)
 }
 
 func truncate(s string, maxLen int) string {

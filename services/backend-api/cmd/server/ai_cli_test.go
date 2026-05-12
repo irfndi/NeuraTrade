@@ -175,6 +175,9 @@ func TestProbeAIProvider_OpenAISuccess(t *testing.T) {
 	if !result.OK {
 		t.Fatalf("expected successful probe, got %#v", result)
 	}
+	if !result.ResponseMatched || result.ExpectedContent != "OK" {
+		t.Fatalf("expected default response validation to pass, got %#v", result)
+	}
 	if result.Provider != "openai" || result.Model != "gpt-test" {
 		t.Fatalf("unexpected provider/model: %#v", result)
 	}
@@ -183,6 +186,107 @@ func TestProbeAIProvider_OpenAISuccess(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "test-key") {
 		t.Fatal("probe output leaked API key")
+	}
+}
+
+func TestProbeAIProvider_ResponseMismatchFails(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":1700000000,
+			"model":"gpt-test",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"1. **Analyze the Request**"},"finish_reason":"length"}],
+			"usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}
+		}`))
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	err := probeAIProvider(context.Background(), config.AIConfig{
+		Provider: "openai",
+		Model:    "gpt-test",
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	}, []string{"--json"}, &out)
+	if err == nil {
+		t.Fatal("expected non-matching provider response to fail")
+	}
+
+	var result aiProviderProbeResult
+	if decodeErr := json.Unmarshal(out.Bytes(), &result); decodeErr != nil {
+		t.Fatalf("failed to decode probe result: %v\n%s", decodeErr, out.String())
+	}
+	if result.OK {
+		t.Fatalf("expected failed probe, got %#v", result)
+	}
+	if result.ResponseMatched {
+		t.Fatalf("expected response match to be false, got %#v", result)
+	}
+	if !strings.Contains(out.String(), `"response_matched": false`) {
+		t.Fatalf("expected failed JSON to include response_matched=false, got %s", out.String())
+	}
+	if result.ExpectedContent != "OK" {
+		t.Fatalf("expected default expected content to be reported, got %q", result.ExpectedContent)
+	}
+	if !strings.Contains(result.Error, "did not match expected content") {
+		t.Fatalf("expected content mismatch error, got %q", result.Error)
+	}
+	if result.ContentPreview != "1. **Analyze the Request**" {
+		t.Fatalf("expected content preview for diagnosis, got %q", result.ContentPreview)
+	}
+}
+
+func TestProbeAIProvider_EmptyExpectedContentAllowsTransportOnlyProbe(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":1700000000,
+			"model":"gpt-test",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"unexpected but reachable"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}
+		}`))
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	err := probeAIProvider(context.Background(), config.AIConfig{
+		Provider: "openai",
+		Model:    "gpt-test",
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	}, []string{"--json", "--expect", ""}, &out)
+	if err != nil {
+		t.Fatalf("probeAIProvider returned error: %v\n%s", err, out.String())
+	}
+
+	var result aiProviderProbeResult
+	if decodeErr := json.Unmarshal(out.Bytes(), &result); decodeErr != nil {
+		t.Fatalf("failed to decode probe result: %v\n%s", decodeErr, out.String())
+	}
+	if !result.OK || !result.ResponseMatched {
+		t.Fatalf("expected transport-only probe success, got %#v", result)
+	}
+	if !strings.Contains(out.String(), `"response_matched": true`) {
+		t.Fatalf("expected transport-only JSON to include response_matched=true, got %s", out.String())
+	}
+	if result.ExpectedContent != "" {
+		t.Fatalf("expected empty expected content, got %q", result.ExpectedContent)
 	}
 }
 
