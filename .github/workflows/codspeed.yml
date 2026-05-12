@@ -27,7 +27,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.2"
+          go-version: "1.26.3"
           cache: true
           cache-dependency-path: services/backend-api/go.sum
 
