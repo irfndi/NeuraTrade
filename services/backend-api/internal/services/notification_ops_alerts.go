@@ -304,7 +304,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 // buildAIReasoningMessageLines builds a slice of plain-text lines representing an AI reasoning notification.
 //
 // The produced lines include a header ("🤖 AI Trading Decision"), the decision type, a confidence line
-// (an emoji and percentage when `confidenceKnown` is true, otherwise an "N/A (runtime-degraded)" note),
+// (an emoji and percentage when `confidenceKnown` is true, otherwise runtime-health context),
 // a summary, and optional fields: reason category, unblock condition, and attempt window progress.
 // It appends a "Key Factors" section generated from `reasoning.Reasons`, showing up to `maxReasons` items
 // (omitted factors are represented with a summary line). If `reasoning.Action` is non-empty, a
@@ -373,6 +373,9 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 		}
 		if driftPos, ok := reasoning.RuntimeDetails["drift_positions"]; ok {
 			lines = append(lines, fmt.Sprintf("Drift Positions: %s stale", driftPos))
+		}
+		if staleIDs, ok := reasoning.RuntimeDetails["stale_position_ids"]; ok && strings.TrimSpace(staleIDs) != "" {
+			lines = append(lines, fmt.Sprintf("Stale Position IDs: %s", staleIDs))
 		}
 		if recoveryAction, ok := reasoning.RuntimeDetails["recovery_action"]; ok {
 			lines = append(lines, fmt.Sprintf("Recovery Action: %s", recoveryAction))

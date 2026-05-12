@@ -487,7 +487,7 @@ func (e *Engine) AddRule(rule ports.PolicyRule) error {
 	}
 	ruleValue := reflect.ValueOf(rule)
 	switch ruleValue.Kind() {
-	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Interface, reflect.Func:
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface, reflect.Func:
 		if ruleValue.IsNil() {
 			return fmt.Errorf("nil rule")
 		}

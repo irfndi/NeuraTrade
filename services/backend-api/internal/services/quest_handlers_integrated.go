@@ -3327,12 +3327,15 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 	}
 
 	var digestRuntimeStatus string
+	var digestRuntimeDetails map[string]string
 	if checkpointBool(quest.Checkpoint["state_drift_active"]) {
-		digestRuntimeStatus = runtimeStatusStateDrift
+		digestRuntimeStatus = stateDriftDigestRuntimeStatus(quest.Checkpoint)
+		digestRuntimeDetails = stateDriftRuntimeDetailsFromCheckpoint(quest.Checkpoint)
 	} else if circuitRemaining > 0 {
 		digestRuntimeStatus = runtimeStatusCircuitOpen
 	} else if errorRate > 0.5 {
 		digestRuntimeStatus = runtimeStatusLLMDegraded
+		digestRuntimeDetails = aiRuntimeDetailsFromCheckpoint(quest.Checkpoint)
 	}
 
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
@@ -3347,9 +3350,44 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		Reasons:               reasons,
 		Action:                "hold",
 		RuntimeStatus:         digestRuntimeStatus,
+		RuntimeDetails:        digestRuntimeDetails,
 	})
 
 	quest.Checkpoint["runtime_last_hold_digest_at"] = now.Format(time.RFC3339)
+}
+
+func stateDriftDigestRuntimeStatus(checkpoint map[string]interface{}) string {
+	if checkpointInt(checkpoint["state_drift_positions"]) == 0 && checkpointInt(checkpoint["state_drift_clean_passes"]) > 0 {
+		return runtimeStatusReconcileBlocked
+	}
+	return runtimeStatusStateDrift
+}
+
+func stateDriftRuntimeDetailsFromCheckpoint(checkpoint map[string]interface{}) map[string]string {
+	if checkpoint == nil {
+		return nil
+	}
+	details := map[string]string{
+		"drift_positions":       fmt.Sprintf("%d", checkpointInt(checkpoint["state_drift_positions"])),
+		"clean_passes_current":  fmt.Sprintf("%d", checkpointInt(checkpoint["state_drift_clean_passes"])),
+		"clean_passes_required": fmt.Sprintf("%d", stateDriftClearPassTarget()),
+	}
+	if staleIDs := checkpointStringSlice(checkpoint["state_drift_stale_position_ids"]); len(staleIDs) > 0 {
+		details["stale_position_ids"] = strings.Join(staleIDs, ",")
+	}
+	if repairAt := checkpointString(checkpoint["state_drift_last_repair_at"]); repairAt != "" {
+		details["last_repair_at"] = repairAt
+	}
+	if cleanAt := checkpointString(checkpoint["state_drift_last_clean_reconcile_at"]); cleanAt != "" {
+		details["last_clean_reconcile_at"] = cleanAt
+	}
+	if deadlockCleared, ok := checkpoint["state_drift_deadlock_cleared"]; ok {
+		details["force_repair_eligible"] = fmt.Sprintf("%t", checkpointBool(deadlockCleared))
+		if checkpointBool(deadlockCleared) {
+			details["recovery_action"] = "deadlock_clear_triggered"
+		}
+	}
+	return details
 }
 
 type recoveryGateState struct {

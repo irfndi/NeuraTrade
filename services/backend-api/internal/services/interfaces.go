@@ -22,7 +22,7 @@ func isNilDBPool(db DBPool) bool {
 	}
 
 	v := reflect.ValueOf(db)
-	if v.Kind() == reflect.Ptr && v.IsNil() {
+	if v.Kind() == reflect.Pointer && v.IsNil() {
 		return true
 	}
 

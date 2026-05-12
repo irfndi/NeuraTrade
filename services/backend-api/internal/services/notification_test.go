@@ -2460,6 +2460,27 @@ func TestNotificationService_RuntimeStatusRendering(t *testing.T) {
 		assert.Contains(t, message, "Drift Positions: 3 stale")
 	})
 
+	t.Run("state drift renders stale lifecycle ids", func(t *testing.T) {
+		message := ns.formatAIReasoningMessage(AIReasoningNotification{
+			DecisionType:  "scalping_digest",
+			Summary:       "Hold digest: paused for lifecycle reconciliation",
+			RuntimeStatus: runtimeStatusStateDrift,
+			RuntimeDetails: map[string]string{
+				"drift_positions":       "2",
+				"clean_passes_current":  "0",
+				"clean_passes_required": "2",
+				"stale_position_ids":    "pos-a,pos-b",
+			},
+			Reasons: []string{"State drift active"},
+			Action:  "hold",
+		})
+		assert.Contains(t, message, "Confidence: ⏸️ (infrastructure hold)")
+		assert.Contains(t, message, "Runtime Status:")
+		assert.Contains(t, message, "Reconcile Progress: 0/2 clean passes")
+		assert.Contains(t, message, "Drift Positions: 2 stale")
+		assert.Contains(t, message, "Stale Position IDs: pos-a,pos-b")
+	})
+
 	t.Run("LLM degraded confidence", func(t *testing.T) {
 		message := ns.formatAIReasoningMessage(AIReasoningNotification{
 			DecisionType:   "scalping_cycle",
