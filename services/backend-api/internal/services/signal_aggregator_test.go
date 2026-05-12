@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/irfndi/neuratrade/internal/models"
 )
@@ -45,6 +46,112 @@ func TestSignalAggregator_NewSignalAggregator(t *testing.T) {
 	assert.NotNil(t, sa.cache)
 	assert.Equal(t, decimal.NewFromFloat(0.6), sa.sigConfig.MinConfidence)
 	assert.Equal(t, decimal.NewFromFloat(0.5), sa.sigConfig.MinProfitThreshold)
+}
+
+func TestSignalAggregator_AggregateTechnicalSignals_AllowsMissingVolumeFallback(t *testing.T) {
+	logger := zaplogrus.New()
+	sa := NewSignalAggregator(nil, nil, logger)
+
+	mockScorer := &MockSignalQualityScorer{}
+	sa.qualityScorer = mockScorer
+
+	qualityMetrics := &SignalQualityMetrics{
+		OverallScore:         decimal.NewFromFloat(0.8),
+		ExchangeScore:        decimal.NewFromFloat(0.8),
+		VolumeScore:          decimal.NewFromFloat(0.5),
+		LiquidityScore:       decimal.NewFromFloat(0.8),
+		VolatilityScore:      decimal.NewFromFloat(0.7),
+		TimingScore:          decimal.NewFromFloat(0.9),
+		ConfidenceScore:      decimal.NewFromFloat(0.8),
+		RiskScore:            decimal.NewFromFloat(0.2),
+		DataFreshnessScore:   decimal.NewFromFloat(0.9),
+		MarketConditionScore: decimal.NewFromFloat(0.8),
+	}
+	thresholds := &QualityThresholds{
+		MinOverallScore:   decimal.NewFromFloat(0.6),
+		MinExchangeScore:  decimal.NewFromFloat(0.7),
+		MinVolumeScore:    decimal.NewFromFloat(0.5),
+		MinLiquidityScore: decimal.NewFromFloat(0.6),
+		MaxRiskScore:      decimal.NewFromFloat(0.4),
+		MinDataFreshness:  5 * time.Minute,
+	}
+	mockScorer.On("AssessSignalQuality", mock.Anything, mock.MatchedBy(func(input *SignalQualityInput) bool {
+		return input != nil && input.VolumeUnavailable && input.Volume.IsZero()
+	})).Return(qualityMetrics, nil).Once()
+	mockScorer.On("GetDefaultQualityThresholds").Return(thresholds).Once()
+	mockScorer.On("IsSignalQualityAcceptable", qualityMetrics, thresholds).Return(true).Once()
+
+	prices := make([]decimal.Decimal, 60)
+	for i := range prices {
+		prices[i] = decimal.NewFromInt(int64(100 + i))
+	}
+
+	signals, err := sa.AggregateTechnicalSignals(context.Background(), TechnicalSignalInput{
+		Symbol:   "BTC/USDT",
+		Exchange: "bitget",
+		Prices:   prices,
+		Volumes:  nil,
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, signals)
+	assert.Equal(t, "BTC/USDT", signals[0].Symbol)
+	assert.Equal(t, SignalTypeTechnical, signals[0].SignalType)
+	mockScorer.AssertExpectations(t)
+}
+
+func TestSignalAggregator_AggregateTechnicalSignals_TreatsSparseVolumeAsUnavailableForQuality(t *testing.T) {
+	logger := zaplogrus.New()
+	sa := NewSignalAggregator(nil, nil, logger)
+
+	mockScorer := &MockSignalQualityScorer{}
+	sa.qualityScorer = mockScorer
+
+	qualityMetrics := &SignalQualityMetrics{
+		OverallScore:         decimal.NewFromFloat(0.8),
+		ExchangeScore:        decimal.NewFromFloat(0.8),
+		VolumeScore:          decimal.NewFromFloat(missingVolumeNeutralScore),
+		LiquidityScore:       decimal.NewFromFloat(0.8),
+		VolatilityScore:      decimal.NewFromFloat(0.7),
+		TimingScore:          decimal.NewFromFloat(0.9),
+		ConfidenceScore:      decimal.NewFromFloat(0.8),
+		RiskScore:            decimal.NewFromFloat(0.2),
+		DataFreshnessScore:   decimal.NewFromFloat(0.9),
+		MarketConditionScore: decimal.NewFromFloat(0.8),
+	}
+	thresholds := &QualityThresholds{
+		MinOverallScore:   decimal.NewFromFloat(0.6),
+		MinExchangeScore:  decimal.NewFromFloat(0.7),
+		MinVolumeScore:    decimal.NewFromFloat(0.5),
+		MinLiquidityScore: decimal.NewFromFloat(0.6),
+		MaxRiskScore:      decimal.NewFromFloat(0.4),
+		MinDataFreshness:  5 * time.Minute,
+	}
+	mockScorer.On("AssessSignalQuality", mock.Anything, mock.MatchedBy(func(input *SignalQualityInput) bool {
+		return input != nil && input.VolumeUnavailable && input.Volume.Equal(decimal.NewFromInt(100))
+	})).Return(qualityMetrics, nil).Once()
+	mockScorer.On("GetDefaultQualityThresholds").Return(thresholds).Once()
+	mockScorer.On("IsSignalQualityAcceptable", qualityMetrics, thresholds).Return(true).Once()
+
+	prices := make([]decimal.Decimal, 60)
+	for i := range prices {
+		prices[i] = decimal.NewFromInt(int64(100 + i))
+	}
+	volumes := make([]decimal.Decimal, 10)
+	for i := range volumes {
+		volumes[i] = decimal.NewFromInt(100)
+	}
+
+	signals, err := sa.AggregateTechnicalSignals(context.Background(), TechnicalSignalInput{
+		Symbol:   "BTC/USDT",
+		Exchange: "bitget",
+		Prices:   prices,
+		Volumes:  volumes,
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, signals)
+	mockScorer.AssertExpectations(t)
 }
 
 // TestSignalAggregator_AggregateArbitrageSignals_Basic tests basic signal aggregation

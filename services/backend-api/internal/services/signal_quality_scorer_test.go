@@ -335,6 +335,15 @@ func TestCalculateVolumeScore(t *testing.T) {
 	}
 }
 
+func TestCalculateVolumeScore_MissingVolumeUsesNeutralScore(t *testing.T) {
+	scorer := createTestScorer()
+
+	input := &SignalQualityInput{VolumeUnavailable: true}
+	result := scorer.calculateVolumeScore(input)
+
+	assert.True(t, result.Equal(decimal.NewFromFloat(missingVolumeNeutralScore)))
+}
+
 func TestCalculateLiquidityScore(t *testing.T) {
 	scorer := createTestScorer()
 
