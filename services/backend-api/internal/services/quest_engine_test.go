@@ -1220,10 +1220,18 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 	if maxCapital, _ := diag["effective_max_capital_pct"].(float64); maxCapital != 0.50 {
 		t.Fatalf("expected effective_max_capital_pct=0.50, got %v", maxCapital)
 	}
-	if maxConcurrent, _ := diag["effective_max_concurrent_positions"].(int); maxConcurrent != 1 {
+	maxConcurrent, ok := diag["effective_max_concurrent_positions"].(int)
+	if !ok {
+		t.Fatalf("effective_max_concurrent_positions has unexpected type: %T", diag["effective_max_concurrent_positions"])
+	}
+	if maxConcurrent != 1 {
 		t.Fatalf("expected effective_max_concurrent_positions=1, got %d", maxConcurrent)
 	}
-	if openPositions, _ := diag["managed_open_positions_effective"].(int); openPositions != 1 {
+	openPositions, ok := diag["managed_open_positions_effective"].(int)
+	if !ok {
+		t.Fatalf("managed_open_positions_effective has unexpected type: %T", diag["managed_open_positions_effective"])
+	}
+	if openPositions != 1 {
 		t.Fatalf("expected managed_open_positions_effective=1, got %d", openPositions)
 	}
 	if universe, _ := diag["candidate_universe_count"].(int); universe != 12 {
