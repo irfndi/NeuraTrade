@@ -9,6 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type recordingQuestStore struct {
@@ -1220,20 +1221,12 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 	if maxCapital, _ := diag["effective_max_capital_pct"].(float64); maxCapital != 0.50 {
 		t.Fatalf("expected effective_max_capital_pct=0.50, got %v", maxCapital)
 	}
-	maxConcurrent, ok := diag["effective_max_concurrent_positions"].(int)
-	if !ok {
-		t.Fatalf("effective_max_concurrent_positions has unexpected type: %T", diag["effective_max_concurrent_positions"])
-	}
-	if maxConcurrent != 1 {
-		t.Fatalf("expected effective_max_concurrent_positions=1, got %d", maxConcurrent)
-	}
-	openPositions, ok := diag["managed_open_positions_effective"].(int)
-	if !ok {
-		t.Fatalf("managed_open_positions_effective has unexpected type: %T", diag["managed_open_positions_effective"])
-	}
-	if openPositions != 1 {
-		t.Fatalf("expected managed_open_positions_effective=1, got %d", openPositions)
-	}
+	require.IsType(t, 0, diag["effective_max_concurrent_positions"])
+	maxConcurrent := diag["effective_max_concurrent_positions"].(int)
+	assert.Equal(t, 1, maxConcurrent)
+	require.IsType(t, 0, diag["managed_open_positions_effective"])
+	openPositions := diag["managed_open_positions_effective"].(int)
+	assert.Equal(t, 1, openPositions)
 	if universe, _ := diag["candidate_universe_count"].(int); universe != 12 {
 		t.Fatalf("expected candidate_universe_count=12, got %d", universe)
 	}
