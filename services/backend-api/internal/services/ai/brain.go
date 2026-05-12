@@ -13,7 +13,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 )
 
-const defaultAIBrainModel = "deepseek-v4-pro"
+const defaultAIBrainModel = "deepseek-chat"
 
 // TradingAction represents the action AI decides to take
 type TradingAction string

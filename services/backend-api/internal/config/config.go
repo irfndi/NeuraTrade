@@ -624,7 +624,7 @@ func setDefaults() {
 
 	// AI config defaults
 	viper.SetDefault("ai.provider", "deepseek")
-	viper.SetDefault("ai.model", "deepseek-v4-pro")
+	viper.SetDefault("ai.model", "deepseek-chat")
 	viper.SetDefault("ai.api_key", "")
 	viper.SetDefault("ai.base_url", "")
 	viper.SetDefault("ai.temperature", 0.7)
