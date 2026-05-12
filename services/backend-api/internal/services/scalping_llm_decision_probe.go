@@ -35,6 +35,22 @@ type ScalpingLLMDecisionProbeResult struct {
 	PreTradeRegime        string                 `json:"pre_trade_regime,omitempty"`
 	RuntimeDiagnostics    map[string]interface{} `json:"runtime_diagnostics,omitempty"`
 	LLMDegraded           bool                   `json:"llm_degraded"`
+	PaperTrade            *ScalpingLLMProbeTrade `json:"paper_trade,omitempty"`
+	PaperTradeError       string                 `json:"paper_trade_error,omitempty"`
+}
+
+type ScalpingLLMProbeTrade struct {
+	Symbol     string          `json:"symbol"`
+	Side       string          `json:"side"`
+	Notional   decimal.Decimal `json:"notional"`
+	EntryPrice decimal.Decimal `json:"entry_price"`
+	ExitPrice  decimal.Decimal `json:"exit_price"`
+	GrossPnL   decimal.Decimal `json:"gross_pnl"`
+	Fees       decimal.Decimal `json:"fees"`
+	NetPnL     decimal.Decimal `json:"net_pnl"`
+	PnLPct     decimal.Decimal `json:"pnl_pct"`
+	Outcome    string          `json:"outcome"`
+	ExitReason string          `json:"exit_reason"`
 }
 
 func RunPublicScalpingLLMDecisionProbe(
@@ -134,6 +150,14 @@ func runScalpingLLMDecisionProbeWithService(
 		result.PreTradeGateAllowed = gate.Allowed
 		result.PreTradeGateReason = gate.Reason
 		result.PreTradeRegime = gate.Regime
+		if gate.Allowed && isActionableScalpingProbeDecision(decision) {
+			trade, tradeErr := simulateScalpingLLMProbePaperTrade(ctx, svc, decision, signals, portfolio)
+			if tradeErr != nil {
+				result.PaperTradeError = tradeErr.Error()
+			} else {
+				result.PaperTrade = trade
+			}
+		}
 	}
 
 	if options.RequireHealthy && result.LLMDegraded {
@@ -143,6 +167,99 @@ func runScalpingLLMDecisionProbeWithService(
 		return result, fmt.Errorf("scalping LLM decision contract invalid: %s", result.ContractError)
 	}
 	return result, nil
+}
+
+func isActionableScalpingProbeDecision(decision *AITradingDecision) bool {
+	if decision == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(decision.Action)) {
+	case "buy", "sell":
+		return true
+	default:
+		return false
+	}
+}
+
+func simulateScalpingLLMProbePaperTrade(
+	ctx context.Context,
+	svc *AIScalpingService,
+	decision *AITradingDecision,
+	signals []aiMarketSignal,
+	portfolio TradingPortfolio,
+) (*ScalpingLLMProbeTrade, error) {
+	if svc == nil {
+		return nil, fmt.Errorf("scalping LLM paper trade simulation requires scalping service")
+	}
+	if !isActionableScalpingProbeDecision(decision) {
+		return nil, fmt.Errorf("scalping LLM paper trade simulation requires buy/sell decision")
+	}
+	signal, ok := scalpingProbeSignalForDecision(decision, signals)
+	if !ok {
+		return nil, fmt.Errorf("decision symbol %q not found in probe signals", decision.Symbol)
+	}
+	capital := walletBasis(portfolio)
+	if !capital.GreaterThan(decimal.Zero) {
+		capital = decimal.NewFromFloat(48)
+	}
+	now := time.Now().UTC()
+	engine := NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
+		StartTime:          now.Add(-time.Second),
+		EndTime:            now.Add(time.Second),
+		Symbols:            []string{signal.Symbol},
+		Exchange:           strings.TrimSpace(svc.config.Exchange),
+		InitialCapital:     capital,
+		FeeRate:            decimal.NewFromFloat(0.0006),
+		SlippagePct:        decimal.NewFromFloat(DefaultScalpingBacktestSlippage),
+		MaxBidAskSpreadPct: svc.config.MaxBidAskSpreadPct,
+		MinConfidence:      svc.config.MinConfidence,
+		MinExpectancyN:     svc.config.MinExpectancyN,
+		MinExpectancyEdge:  svc.config.MinExpectancyEdge,
+		MaxCapitalPct:      svc.config.MaxCapitalPct,
+		DefaultHoldPeriod:  DefaultScalpingBacktestHoldPeriod,
+	})
+	if strings.TrimSpace(engine.config.Exchange) == "" {
+		engine.config.Exchange = defaultScalpingLivePaperSoakExchange
+	}
+	trade, err := engine.simulateExecution(ctx, HistoricalSignal{
+		Timestamp: now,
+		Symbol:    signal.Symbol,
+		Exchange:  engine.config.Exchange,
+		Signal:    signal,
+	}, decision)
+	if err != nil {
+		return nil, fmt.Errorf("simulate scalping LLM paper trade: %w", err)
+	}
+	result := trade.Trade
+	return &ScalpingLLMProbeTrade{
+		Symbol:     result.Symbol,
+		Side:       result.Side,
+		Notional:   result.Notional,
+		EntryPrice: result.EntryPrice,
+		ExitPrice:  result.ExitPrice,
+		GrossPnL:   paperSoakGrossPnL(result),
+		Fees:       result.Fees,
+		NetPnL:     result.PnL,
+		PnLPct:     result.PnLPct,
+		Outcome:    result.Outcome,
+		ExitReason: result.ExitReason,
+	}, nil
+}
+
+func scalpingProbeSignalForDecision(decision *AITradingDecision, signals []aiMarketSignal) (aiMarketSignal, bool) {
+	if decision == nil {
+		return aiMarketSignal{}, false
+	}
+	target := normalizeSymbolForComparison(decision.Symbol)
+	if target == "" {
+		return aiMarketSignal{}, false
+	}
+	for _, signal := range signals {
+		if normalizeSymbolForComparison(signal.Symbol) == target {
+			return signal, true
+		}
+	}
+	return aiMarketSignal{}, false
 }
 
 func defaultScalpingLLMProbePortfolio(cfg AIScalpingConfig) TradingPortfolio {

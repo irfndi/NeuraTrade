@@ -591,12 +591,17 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 			SignalQualityCoverage: mustDecimal("1"),
 		},
 		{
-			SignalCount:           8,
-			SignalQualityCount:    6,
-			ContractValid:         false,
-			LLMDegraded:           true,
-			Provider:              "deepseek",
-			Decision:              &services.AITradingDecision{Action: "buy"},
+			SignalCount:        8,
+			SignalQualityCount: 6,
+			ContractValid:      false,
+			LLMDegraded:        true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "buy"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:    mustDecimal("0.001"),
+				NetPnL:  mustDecimal("0.01"),
+				Outcome: "win",
+			},
 			SignalQualityCoverage: mustDecimal("0.75"),
 		},
 	}, 2)
@@ -618,6 +623,12 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 	}
 	if summary.ActionCounts["hold"] != 1 || summary.ActionCounts["buy"] != 1 {
 		t.Fatalf("unexpected action counts: %#v", summary.ActionCounts)
+	}
+	if summary.PaperTrades != 1 || summary.PaperWins != 1 || summary.PaperLosses != 0 {
+		t.Fatalf("unexpected paper trade counts: trades=%d wins=%d losses=%d", summary.PaperTrades, summary.PaperWins, summary.PaperLosses)
+	}
+	if summary.PaperNetPnL.String() != "0.01" || summary.PaperFees.String() != "0.001" || summary.PaperAvgNetPnL.String() != "0.01" {
+		t.Fatalf("unexpected paper pnl summary: net=%s fees=%s avg=%s", summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String())
 	}
 }
 

@@ -543,6 +543,12 @@ type aiScalpingDecisionProbeSummary struct {
 	SignalQualityCoverage decimal.Decimal                            `json:"signal_quality_coverage"`
 	ValidContractCycles   int                                        `json:"valid_contract_cycles"`
 	LLMDegradedCycles     int                                        `json:"llm_degraded_cycles"`
+	PaperTrades           int                                        `json:"paper_trades"`
+	PaperWins             int                                        `json:"paper_wins"`
+	PaperLosses           int                                        `json:"paper_losses"`
+	PaperNetPnL           decimal.Decimal                            `json:"paper_net_pnl"`
+	PaperFees             decimal.Decimal                            `json:"paper_fees"`
+	PaperAvgNetPnL        decimal.Decimal                            `json:"paper_avg_net_pnl"`
 	ActionCounts          map[string]int                             `json:"action_counts"`
 	ProviderCounts        map[string]int                             `json:"provider_counts"`
 	LastResult            *services.ScalpingLLMDecisionProbeResult   `json:"last_result,omitempty"`
@@ -736,6 +742,17 @@ func buildAIScalpingDecisionProbeSummary(
 		if result.LLMDegraded {
 			summary.LLMDegradedCycles++
 		}
+		if result.PaperTrade != nil {
+			summary.PaperTrades++
+			summary.PaperNetPnL = summary.PaperNetPnL.Add(result.PaperTrade.NetPnL)
+			summary.PaperFees = summary.PaperFees.Add(result.PaperTrade.Fees)
+			switch strings.ToLower(strings.TrimSpace(result.PaperTrade.Outcome)) {
+			case "win":
+				summary.PaperWins++
+			case "loss":
+				summary.PaperLosses++
+			}
+		}
 		action := "unknown"
 		if result.Decision != nil && strings.TrimSpace(result.Decision.Action) != "" {
 			action = strings.ToLower(strings.TrimSpace(result.Decision.Action))
@@ -747,6 +764,9 @@ func buildAIScalpingDecisionProbeSummary(
 	}
 	if summary.TotalSignals > 0 {
 		summary.SignalQualityCoverage = decimal.NewFromInt(int64(summary.SignalQualityCount)).Div(decimal.NewFromInt(int64(summary.TotalSignals)))
+	}
+	if summary.PaperTrades > 0 {
+		summary.PaperAvgNetPnL = summary.PaperNetPnL.Div(decimal.NewFromInt(int64(summary.PaperTrades)))
 	}
 	return summary
 }
@@ -1196,6 +1216,9 @@ func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary
 		return err
 	}
 	if err := writeProbeOutput("LLM degraded cycles: %d\n", summary.LLMDegradedCycles); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Paper trades: %d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s\n", summary.PaperTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String()); err != nil {
 		return err
 	}
 	if err := writeProbeOutput("Actions: %v\n", summary.ActionCounts); err != nil {
