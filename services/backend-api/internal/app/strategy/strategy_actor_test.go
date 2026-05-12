@@ -233,7 +233,7 @@ func TestStrategyActor_DeterministicReplay(t *testing.T) {
 func TestStrategyActor_ScalpingSignalNilEventBusDoesNotPanic(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Signal.Lookback = 3
-	actor := NewStrategyActor(cfg, nil, nil)
+	strategyActor := NewStrategyActor(cfg, nil, nil)
 	composer := &stubScalpingComposer{
 		signal: &scalping.ScalpingSignal{
 			ID:         "scalp-1",
@@ -243,12 +243,14 @@ func TestStrategyActor_ScalpingSignalNilEventBusDoesNotPanic(t *testing.T) {
 			Confidence: decimal.RequireFromString("0.75"),
 		},
 	}
-	actor.SetScalpingComposer(composer)
+	strategyActor.SetScalpingComposer(composer)
 
-	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestCandleMessage{Candle: scalpingTestCandle()})))
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestCandleMessage{Candle: scalpingTestCandle()})))
+	var receiveErr error
 	require.NotPanics(t, func() {
-		require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
+		receiveErr = strategyActor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()}))
 	})
+	require.NoError(t, receiveErr)
 	require.Equal(t, 0, composer.calls, "nil event bus should avoid composing an unpublishable scalping signal")
 }
 
@@ -256,8 +258,8 @@ func TestStrategyActor_ScalpingSignalDeduplicatesEquivalentSignalsPerSymbol(t *t
 	bus := eventbus.New(eventbus.DefaultConfig())
 	cfg := DefaultConfig()
 	cfg.Signal.Lookback = 3
-	actor := NewStrategyActor(cfg, bus, nil)
-	actor.SetScalpingComposer(&stubScalpingComposer{
+	strategyActor := NewStrategyActor(cfg, bus, nil)
+	strategyActor.SetScalpingComposer(&stubScalpingComposer{
 		signals: []*scalping.ScalpingSignal{
 			{
 				ID:         "scalp-signal-1",
@@ -321,10 +323,10 @@ func TestStrategyActor_ScalpingSignalDeduplicatesEquivalentSignalsPerSymbol(t *t
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestCandleMessage{Candle: scalpingTestCandle()})))
-	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
-	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
-	require.NoError(t, actor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestCandleMessage{Candle: scalpingTestCandle()})))
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
+	require.NoError(t, strategyActor.Receive(context.Background(), actorEnvelope(&IngestMarketTickMessage{Tick: scalpingTestTick()})))
 
 	select {
 	case event := <-published:

@@ -204,6 +204,10 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 
 func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID string, tick marketdata.MarketTickEvent) {
 	if s.eventBus == nil {
+		s.logger.Warn("skipping scalping signal composition because event bus is unavailable",
+			"exchange", tick.Exchange,
+			"symbol", tick.Symbol,
+		)
 		return
 	}
 
