@@ -519,45 +519,65 @@ type aiProviderProbeResult struct {
 }
 
 type aiScalpingDecisionProbeOptions struct {
-	Provider              string
-	Model                 string
-	BaseURL               string
-	OutputJSON            bool
-	Timeout               time.Duration
-	MaxRetries            int
-	FailoverMaxHops       int
-	Exchange              string
-	Cycles                int
-	Interval              time.Duration
-	Capital               decimal.Decimal
-	RequireHealthy        bool
-	RequireValid          bool
-	MinSignalQuality      decimal.Decimal
-	MinPaperTrades        int
-	MinPaperNetPnL        decimal.Decimal
-	RequirePaperNetPnL    bool
-	MinPaperAvgNetPnL     decimal.Decimal
-	RequirePaperAvgNetPnL bool
+	Provider                 string
+	Model                    string
+	BaseURL                  string
+	OutputJSON               bool
+	Timeout                  time.Duration
+	MaxRetries               int
+	FailoverMaxHops          int
+	Exchange                 string
+	Cycles                   int
+	Interval                 time.Duration
+	Capital                  decimal.Decimal
+	RequireHealthy           bool
+	RequireValid             bool
+	MinSignalQuality         decimal.Decimal
+	MinActionableCycles      int
+	MaxHoldRatio             decimal.Decimal
+	RequireMaxHoldRatio      bool
+	MinPaperTrades           int
+	MinPaperNetPnL           decimal.Decimal
+	RequirePaperNetPnL       bool
+	MinPaperAvgNetPnL        decimal.Decimal
+	RequirePaperAvgNetPnL    bool
+	MinPaperProfitFactor     decimal.Decimal
+	RequirePaperProfitFactor bool
+	MaxPaperDrawdown         decimal.Decimal
+	RequirePaperDrawdown     bool
+	MaxPaperDrawdownPct      decimal.Decimal
+	RequirePaperDrawdownPct  bool
 }
 
 type aiScalpingDecisionProbeSummary struct {
-	Cycles                int                                        `json:"cycles"`
-	CompletedCycles       int                                        `json:"completed_cycles"`
-	TotalSignals          int                                        `json:"total_signals"`
-	SignalQualityCount    int                                        `json:"signal_quality_count"`
-	SignalQualityCoverage decimal.Decimal                            `json:"signal_quality_coverage"`
-	ValidContractCycles   int                                        `json:"valid_contract_cycles"`
-	LLMDegradedCycles     int                                        `json:"llm_degraded_cycles"`
-	PaperTrades           int                                        `json:"paper_trades"`
-	PaperWins             int                                        `json:"paper_wins"`
-	PaperLosses           int                                        `json:"paper_losses"`
-	PaperNetPnL           decimal.Decimal                            `json:"paper_net_pnl"`
-	PaperFees             decimal.Decimal                            `json:"paper_fees"`
-	PaperAvgNetPnL        decimal.Decimal                            `json:"paper_avg_net_pnl"`
-	ActionCounts          map[string]int                             `json:"action_counts"`
-	ProviderCounts        map[string]int                             `json:"provider_counts"`
-	LastResult            *services.ScalpingLLMDecisionProbeResult   `json:"last_result,omitempty"`
-	Results               []*services.ScalpingLLMDecisionProbeResult `json:"results,omitempty"`
+	Cycles                     int                                        `json:"cycles"`
+	CompletedCycles            int                                        `json:"completed_cycles"`
+	TotalSignals               int                                        `json:"total_signals"`
+	SignalQualityCount         int                                        `json:"signal_quality_count"`
+	SignalQualityCoverage      decimal.Decimal                            `json:"signal_quality_coverage"`
+	ValidContractCycles        int                                        `json:"valid_contract_cycles"`
+	LLMDegradedCycles          int                                        `json:"llm_degraded_cycles"`
+	ActionableCycles           int                                        `json:"actionable_cycles"`
+	HoldRatio                  decimal.Decimal                            `json:"hold_ratio"`
+	PaperTrades                int                                        `json:"paper_trades"`
+	PaperWins                  int                                        `json:"paper_wins"`
+	PaperLosses                int                                        `json:"paper_losses"`
+	PaperNetPnL                decimal.Decimal                            `json:"paper_net_pnl"`
+	PaperFees                  decimal.Decimal                            `json:"paper_fees"`
+	PaperAvgNetPnL             decimal.Decimal                            `json:"paper_avg_net_pnl"`
+	PaperProfitFactor          decimal.Decimal                            `json:"paper_profit_factor"`
+	PaperProfitFactorUnbounded bool                                       `json:"paper_profit_factor_unbounded"`
+	PaperMaxDrawdown           decimal.Decimal                            `json:"paper_max_drawdown"`
+	PaperMaxDrawdownPct        decimal.Decimal                            `json:"paper_max_drawdown_pct"`
+	ActionCounts               map[string]int                             `json:"action_counts"`
+	ProviderCounts             map[string]int                             `json:"provider_counts"`
+	LastResult                 *services.ScalpingLLMDecisionProbeResult   `json:"last_result,omitempty"`
+	Results                    []*services.ScalpingLLMDecisionProbeResult `json:"results,omitempty"`
+
+	paperGrossWinningPnL  decimal.Decimal
+	paperGrossLosingPnL   decimal.Decimal
+	paperCumulativeNetPnL decimal.Decimal
+	paperPeakNetPnL       decimal.Decimal
 }
 
 func probeAIProvider(ctx context.Context, cfg config.AIConfig, args []string, out io.Writer) error {
@@ -679,7 +699,7 @@ func probeAIScalpingDecision(ctx context.Context, cfg config.AIConfig, args []st
 	defer cancel()
 
 	results, runErr := runAIScalpingDecisionProbeCycles(probeCtx, client, opts, model, portfolio)
-	summary := buildAIScalpingDecisionProbeSummary(results, opts.Cycles)
+	summary := buildAIScalpingDecisionProbeSummary(results, opts.Cycles, opts.Capital)
 	if writeErr := writeAIScalpingDecisionProbeSummary(out, opts.OutputJSON, summary); writeErr != nil {
 		if runErr != nil {
 			return errors.Join(runErr, writeErr)
@@ -726,6 +746,7 @@ func runAIScalpingDecisionProbeCycles(
 func buildAIScalpingDecisionProbeSummary(
 	results []*services.ScalpingLLMDecisionProbeResult,
 	requestedCycles int,
+	paperDrawdownBasis decimal.Decimal,
 ) aiScalpingDecisionProbeSummary {
 	summary := aiScalpingDecisionProbeSummary{
 		Cycles:          requestedCycles,
@@ -747,20 +768,35 @@ func buildAIScalpingDecisionProbeSummary(
 		if result.LLMDegraded {
 			summary.LLMDegradedCycles++
 		}
+		action := "unknown"
+		if result.Decision != nil && strings.TrimSpace(result.Decision.Action) != "" {
+			action = strings.ToLower(strings.TrimSpace(result.Decision.Action))
+		}
+		if action == "buy" || action == "sell" {
+			summary.ActionableCycles++
+		}
 		if result.PaperTrade != nil {
 			summary.PaperTrades++
 			summary.PaperNetPnL = summary.PaperNetPnL.Add(result.PaperTrade.NetPnL)
 			summary.PaperFees = summary.PaperFees.Add(result.PaperTrade.Fees)
+			if result.PaperTrade.NetPnL.GreaterThan(decimal.Zero) {
+				summary.paperGrossWinningPnL = summary.paperGrossWinningPnL.Add(result.PaperTrade.NetPnL)
+			} else if result.PaperTrade.NetPnL.LessThan(decimal.Zero) {
+				summary.paperGrossLosingPnL = summary.paperGrossLosingPnL.Add(result.PaperTrade.NetPnL.Abs())
+			}
+			summary.paperCumulativeNetPnL = summary.paperCumulativeNetPnL.Add(result.PaperTrade.NetPnL)
+			if summary.paperCumulativeNetPnL.GreaterThan(summary.paperPeakNetPnL) {
+				summary.paperPeakNetPnL = summary.paperCumulativeNetPnL
+			}
+			if drawdown := summary.paperPeakNetPnL.Sub(summary.paperCumulativeNetPnL); drawdown.GreaterThan(summary.PaperMaxDrawdown) {
+				summary.PaperMaxDrawdown = drawdown
+			}
 			switch strings.ToLower(strings.TrimSpace(result.PaperTrade.Outcome)) {
 			case "win":
 				summary.PaperWins++
 			case "loss":
 				summary.PaperLosses++
 			}
-		}
-		action := "unknown"
-		if result.Decision != nil && strings.TrimSpace(result.Decision.Action) != "" {
-			action = strings.ToLower(strings.TrimSpace(result.Decision.Action))
 		}
 		summary.ActionCounts[action]++
 		if provider := strings.TrimSpace(result.Provider); provider != "" {
@@ -772,6 +808,17 @@ func buildAIScalpingDecisionProbeSummary(
 	}
 	if summary.PaperTrades > 0 {
 		summary.PaperAvgNetPnL = summary.PaperNetPnL.Div(decimal.NewFromInt(int64(summary.PaperTrades)))
+	}
+	if summary.CompletedCycles > 0 {
+		summary.HoldRatio = decimal.NewFromInt(int64(summary.ActionCounts["hold"])).Div(decimal.NewFromInt(int64(summary.CompletedCycles)))
+	}
+	if summary.paperGrossLosingPnL.GreaterThan(decimal.Zero) {
+		summary.PaperProfitFactor = summary.paperGrossWinningPnL.Div(summary.paperGrossLosingPnL)
+	} else if summary.paperGrossWinningPnL.GreaterThan(decimal.Zero) {
+		summary.PaperProfitFactorUnbounded = true
+	}
+	if paperDrawdownBasis.GreaterThan(decimal.Zero) {
+		summary.PaperMaxDrawdownPct = summary.PaperMaxDrawdown.Div(paperDrawdownBasis)
 	}
 	return summary
 }
@@ -789,6 +836,12 @@ func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSumma
 	if opts.MinSignalQuality.GreaterThan(decimal.Zero) && summary.SignalQualityCoverage.LessThan(opts.MinSignalQuality) {
 		return fmt.Errorf("signal_quality_coverage=%s below minimum=%s", summary.SignalQualityCoverage.String(), opts.MinSignalQuality.String())
 	}
+	if opts.MinActionableCycles > 0 && summary.ActionableCycles < opts.MinActionableCycles {
+		return fmt.Errorf("actionable_cycles=%d below minimum=%d", summary.ActionableCycles, opts.MinActionableCycles)
+	}
+	if opts.RequireMaxHoldRatio && summary.HoldRatio.GreaterThan(opts.MaxHoldRatio) {
+		return fmt.Errorf("hold_ratio=%s above maximum=%s", summary.HoldRatio.String(), opts.MaxHoldRatio.String())
+	}
 	if opts.MinPaperTrades > 0 && summary.PaperTrades < opts.MinPaperTrades {
 		return fmt.Errorf("paper_trades=%d below minimum=%d", summary.PaperTrades, opts.MinPaperTrades)
 	}
@@ -797,6 +850,15 @@ func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSumma
 	}
 	if opts.RequirePaperAvgNetPnL && summary.PaperAvgNetPnL.LessThan(opts.MinPaperAvgNetPnL) {
 		return fmt.Errorf("paper_avg_net_pnl=%s below minimum=%s", summary.PaperAvgNetPnL.String(), opts.MinPaperAvgNetPnL.String())
+	}
+	if opts.RequirePaperProfitFactor && !summary.PaperProfitFactorUnbounded && summary.PaperProfitFactor.LessThan(opts.MinPaperProfitFactor) {
+		return fmt.Errorf("paper_profit_factor=%s below minimum=%s", summary.PaperProfitFactor.String(), opts.MinPaperProfitFactor.String())
+	}
+	if opts.RequirePaperDrawdown && summary.PaperMaxDrawdown.GreaterThan(opts.MaxPaperDrawdown) {
+		return fmt.Errorf("paper_max_drawdown=%s above maximum=%s", summary.PaperMaxDrawdown.String(), opts.MaxPaperDrawdown.String())
+	}
+	if opts.RequirePaperDrawdownPct && summary.PaperMaxDrawdownPct.GreaterThan(opts.MaxPaperDrawdownPct) {
+		return fmt.Errorf("paper_max_drawdown_pct=%s above maximum=%s", summary.PaperMaxDrawdownPct.String(), opts.MaxPaperDrawdownPct.String())
 	}
 	return nil
 }
@@ -870,8 +932,12 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	timeoutSeconds := fs.Int("timeout-seconds", int(opts.Timeout/time.Second), "completion timeout in seconds")
 	capital := fs.String("capital", opts.Capital.String(), "paper wallet basis in USDT for the prompt")
 	minSignalQuality := fs.String("min-signal-quality", opts.MinSignalQuality.String(), "minimum signal quality coverage required")
+	maxHoldRatio := fs.String("max-hold-ratio", "", "maximum hold cycles divided by completed cycles allowed; empty disables this gate")
 	minPaperNetPnL := fs.String("min-paper-net-pnl", "", "minimum aggregate simulated paper net PnL required; empty disables this gate")
 	minPaperAvgNetPnL := fs.String("min-paper-avg-net-pnl", "", "minimum average simulated paper net PnL per trade required; empty disables this gate")
+	minPaperProfitFactor := fs.String("min-paper-profit-factor", "", "minimum simulated paper profit factor required; empty disables this gate")
+	maxPaperDrawdown := fs.String("max-paper-drawdown", "", "maximum simulated paper drawdown allowed; empty disables this gate")
+	maxPaperDrawdownPct := fs.String("max-paper-drawdown-pct", "", "maximum simulated paper drawdown divided by --capital allowed; empty disables this gate")
 	intervalMS := fs.Int("interval-ms", 0, "delay between scalping LLM probe cycles in milliseconds")
 	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
 	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
@@ -880,6 +946,7 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
 	fs.StringVar(&opts.Exchange, "exchange", opts.Exchange, "public exchange to fetch market/order-book signals from")
 	fs.IntVar(&opts.Cycles, "cycles", opts.Cycles, "number of no-order scalping LLM decision probe cycles")
+	fs.IntVar(&opts.MinActionableCycles, "min-actionable-cycles", 0, "minimum buy/sell LLM decision cycles required")
 	fs.IntVar(&opts.MinPaperTrades, "min-paper-trades", 0, "minimum simulated paper trades required from actionable LLM decisions")
 	fs.BoolVar(&opts.OutputJSON, "json", false, "write JSON output")
 	fs.IntVar(&opts.MaxRetries, "max-retries", 0, "HTTP retry count")
@@ -911,6 +978,12 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	if opts.MinPaperTrades < 0 {
 		return opts, fmt.Errorf("--min-paper-trades must be zero or greater")
 	}
+	if opts.MinActionableCycles < 0 {
+		return opts, fmt.Errorf("--min-actionable-cycles must be zero or greater")
+	}
+	if opts.MinActionableCycles > opts.Cycles {
+		return opts, fmt.Errorf("--min-actionable-cycles must be less than or equal to --cycles")
+	}
 	parsedCapital, err := decimal.NewFromString(strings.TrimSpace(*capital))
 	if err != nil {
 		return opts, fmt.Errorf("parse --capital: %w", err)
@@ -925,6 +998,13 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	if parsedSignalQuality.IsNegative() || parsedSignalQuality.GreaterThan(decimal.NewFromInt(1)) {
 		return opts, fmt.Errorf("--min-signal-quality must be between 0 and 1")
 	}
+	parsedMaxHoldRatio, requireMaxHoldRatio, err := parseOptionalDecimalFlag("max-hold-ratio", *maxHoldRatio)
+	if err != nil {
+		return opts, err
+	}
+	if requireMaxHoldRatio && (parsedMaxHoldRatio.IsNegative() || parsedMaxHoldRatio.GreaterThan(decimal.NewFromInt(1))) {
+		return opts, fmt.Errorf("--max-hold-ratio must be between 0 and 1")
+	}
 	parsedPaperNetPnL, requirePaperNetPnL, err := parseOptionalDecimalFlag("min-paper-net-pnl", *minPaperNetPnL)
 	if err != nil {
 		return opts, err
@@ -933,14 +1013,34 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	if err != nil {
 		return opts, err
 	}
+	parsedPaperProfitFactor, requirePaperProfitFactor, err := parseOptionalNonNegativeDecimalFlag("min-paper-profit-factor", *minPaperProfitFactor)
+	if err != nil {
+		return opts, err
+	}
+	parsedPaperDrawdown, requirePaperDrawdown, err := parseOptionalNonNegativeDecimalFlag("max-paper-drawdown", *maxPaperDrawdown)
+	if err != nil {
+		return opts, err
+	}
+	parsedPaperDrawdownPct, requirePaperDrawdownPct, err := parseOptionalNonNegativeDecimalFlag("max-paper-drawdown-pct", *maxPaperDrawdownPct)
+	if err != nil {
+		return opts, err
+	}
 	opts.Timeout = time.Duration(*timeoutSeconds) * time.Second
 	opts.Interval = time.Duration(*intervalMS) * time.Millisecond
 	opts.Capital = parsedCapital
 	opts.MinSignalQuality = parsedSignalQuality
+	opts.MaxHoldRatio = parsedMaxHoldRatio
+	opts.RequireMaxHoldRatio = requireMaxHoldRatio
 	opts.MinPaperNetPnL = parsedPaperNetPnL
 	opts.RequirePaperNetPnL = requirePaperNetPnL
 	opts.MinPaperAvgNetPnL = parsedPaperAvgNetPnL
 	opts.RequirePaperAvgNetPnL = requirePaperAvgNetPnL
+	opts.MinPaperProfitFactor = parsedPaperProfitFactor
+	opts.RequirePaperProfitFactor = requirePaperProfitFactor
+	opts.MaxPaperDrawdown = parsedPaperDrawdown
+	opts.RequirePaperDrawdown = requirePaperDrawdown
+	opts.MaxPaperDrawdownPct = parsedPaperDrawdownPct
+	opts.RequirePaperDrawdownPct = requirePaperDrawdownPct
 	opts.RequireHealthy = !*allowDegraded
 	opts.RequireValid = !*allowInvalidContract
 	opts.Provider = ai.NormalizeProviderID(opts.Provider)
@@ -961,6 +1061,17 @@ func parseOptionalDecimalFlag(flagName string, rawValue string) (decimal.Decimal
 	parsed, err := decimal.NewFromString(rawValue)
 	if err != nil {
 		return decimal.Zero, false, fmt.Errorf("parse --%s: %w", flagName, err)
+	}
+	return parsed, true, nil
+}
+
+func parseOptionalNonNegativeDecimalFlag(flagName string, rawValue string) (decimal.Decimal, bool, error) {
+	parsed, required, err := parseOptionalDecimalFlag(flagName, rawValue)
+	if err != nil || !required {
+		return parsed, required, err
+	}
+	if parsed.IsNegative() {
+		return decimal.Zero, false, fmt.Errorf("--%s value %q must be zero or greater", flagName, rawValue)
 	}
 	return parsed, true, nil
 }
@@ -1262,7 +1373,10 @@ func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary
 	if err := writeProbeOutput("LLM degraded cycles: %d\n", summary.LLMDegradedCycles); err != nil {
 		return err
 	}
-	if err := writeProbeOutput("Paper trades: %d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s\n", summary.PaperTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String()); err != nil {
+	if err := writeProbeOutput("Actionable cycles: %d hold_ratio=%s\n", summary.ActionableCycles, summary.HoldRatio.String()); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Paper trades: %d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.PaperTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String(), summary.PaperProfitFactor.String(), summary.PaperProfitFactorUnbounded, summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String()); err != nil {
 		return err
 	}
 	if err := writeProbeOutput("Actions: %v\n", summary.ActionCounts); err != nil {

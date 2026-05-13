@@ -977,6 +977,16 @@ func TestAIScalpingService_BuildSystemPrompt_AllowsFractionalSizePct(t *testing.
 	assert.Contains(t, prompt, "size_pct is a direct percentage of wallet value converted into order notional")
 }
 
+func TestAIScalpingService_BuildSystemPrompt_GuardsSpreadThresholdReasoning(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5, MaxBidAskSpreadPct: 0.22}}
+
+	prompt := svc.buildSystemPrompt()
+
+	assert.Contains(t, prompt, "compare spread_pct directly to the liquidity ceiling")
+	assert.Contains(t, prompt, "never call a spread at or below the ceiling too wide")
+	assert.Contains(t, prompt, "spread <= 0.22%")
+}
+
 func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t *testing.T) {
 	original := globalScalpingPerformance
 	globalScalpingPerformance = NewScalpingPerformance()

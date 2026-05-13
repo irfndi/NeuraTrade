@@ -84,6 +84,35 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 	require.Equal(t, "win", result.PaperTrade.Outcome)
 }
 
+func TestRunScalpingLLMDecisionProbeWithServiceFlagsContradictoryHoldSpreadReasoning(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Provider:     llm.Provider("deepseek"),
+				Model:        "deepseek-chat",
+				LatencyMs:    120,
+				FinishReason: "stop",
+				Message: llm.Message{
+					Content: `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.","stop_loss":null,"take_profit":null}`,
+				},
+			},
+		},
+	}
+	svc := newScalpingLLMDecisionProbeTestService(mockLLM)
+
+	result, err := runScalpingLLMDecisionProbeWithService(context.Background(), svc, ScalpingLLMDecisionProbeOptions{
+		RequireHealthy: true,
+		RequireValid:   true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ContractValid)
+	require.NotEmpty(t, result.ReasoningDiagnostics)
+	require.Contains(t, result.ReasoningDiagnostics[0], "cites wide spread")
+	require.Contains(t, result.ReasoningDiagnostics[0], "BTC/USDT")
+}
+
 func TestRunScalpingLLMDecisionProbeWithServiceFlagsLLMDegradation(t *testing.T) {
 	svc := newScalpingLLMDecisionProbeTestService(&errorLLMClient{err: errors.New("provider exhausted")})
 

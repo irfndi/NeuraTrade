@@ -35,6 +35,7 @@ type ScalpingLLMDecisionProbeResult struct {
 	PreTradeRegime        string                 `json:"pre_trade_regime,omitempty"`
 	RuntimeDiagnostics    map[string]interface{} `json:"runtime_diagnostics,omitempty"`
 	LLMDegraded           bool                   `json:"llm_degraded"`
+	ReasoningDiagnostics  []string               `json:"reasoning_diagnostics,omitempty"`
 	PaperTrade            *ScalpingLLMProbeTrade `json:"paper_trade,omitempty"`
 	PaperTradeError       string                 `json:"paper_trade_error,omitempty"`
 }
@@ -130,6 +131,7 @@ func runScalpingLLMDecisionProbeWithService(
 		Model:                 strings.TrimSpace(svc.config.Model),
 		SignalQualityCoverage: decimal.NewFromInt(int64(countSignalsWithOrderBookQuality(signals))).Div(decimal.NewFromInt(int64(len(signals)))),
 	}
+	result.ReasoningDiagnostics = scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
 
 	if provider, ok := stringFromRuntimeDiagnostic(result.RuntimeDiagnostics, "last_successful_provider"); ok {
 		result.Provider = provider
@@ -179,6 +181,41 @@ func isActionableScalpingProbeDecision(decision *AITradingDecision) bool {
 	default:
 		return false
 	}
+}
+
+func scalpingProbeReasoningDiagnostics(decision *AITradingDecision, signals []aiMarketSignal, maxSpreadPct float64) []string {
+	if decision == nil || !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		return nil
+	}
+	reasoning := strings.ToLower(strings.TrimSpace(decision.Reasoning))
+	if reasoning == "" || !strings.Contains(reasoning, "spread") {
+		return nil
+	}
+	claimsWideSpread := strings.Contains(reasoning, ">") ||
+		strings.Contains(reasoning, "above") ||
+		strings.Contains(reasoning, "greater than") ||
+		strings.Contains(reasoning, "wider than") ||
+		strings.Contains(reasoning, "too wide") ||
+		strings.Contains(reasoning, "wide spread")
+	if !claimsWideSpread {
+		return nil
+	}
+	threshold := maxSpreadPct
+	if threshold <= 0 {
+		threshold = appautonomy.DefaultScalpingMaxBidAskSpreadPct
+	}
+	diagnostics := make([]string, 0, 1)
+	for _, signal := range signals {
+		if signal.BidAskSpread <= 0 || signal.BidAskSpread > threshold {
+			continue
+		}
+		symbol := strings.ToLower(strings.TrimSpace(signal.Symbol))
+		base := strings.ToLower(strings.TrimSpace(strings.Split(symbol, "/")[0]))
+		if symbol != "" && strings.Contains(reasoning, symbol) || base != "" && strings.Contains(reasoning, base) || strings.Contains(reasoning, "all signals") {
+			diagnostics = append(diagnostics, fmt.Sprintf("hold reasoning cites wide spread while %s spread %.3f%% is within %.3f%% threshold", signal.Symbol, signal.BidAskSpread, threshold))
+		}
+	}
+	return diagnostics
 }
 
 func simulateScalpingLLMProbePaperTrade(

@@ -535,11 +535,16 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 		"--exchange", " bitget ",
 		"--capital", "50.5",
 		"--min-signal-quality", "0.5",
+		"--max-hold-ratio", "0.75",
 		"--cycles", "3",
 		"--interval-ms", "250",
+		"--min-actionable-cycles", "1",
 		"--min-paper-trades", "2",
 		"--min-paper-net-pnl", "0",
 		"--min-paper-avg-net-pnl", "0.001",
+		"--min-paper-profit-factor", "1.25",
+		"--max-paper-drawdown", "0.25",
+		"--max-paper-drawdown-pct", "0.01",
 		"--allow-degraded",
 		"--allow-invalid-contract",
 	})
@@ -567,6 +572,12 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	if opts.Cycles != 3 {
 		t.Fatalf("expected parsed cycles, got %d", opts.Cycles)
 	}
+	if opts.MinActionableCycles != 1 {
+		t.Fatalf("expected parsed min actionable cycles, got %d", opts.MinActionableCycles)
+	}
+	if !opts.RequireMaxHoldRatio || opts.MaxHoldRatio.String() != "0.75" {
+		t.Fatalf("expected parsed max hold ratio gate, enabled=%t value=%s", opts.RequireMaxHoldRatio, opts.MaxHoldRatio.String())
+	}
 	if opts.Interval != 250*time.Millisecond {
 		t.Fatalf("expected parsed interval, got %s", opts.Interval)
 	}
@@ -578,6 +589,15 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	}
 	if !opts.RequirePaperAvgNetPnL || opts.MinPaperAvgNetPnL.String() != "0.001" {
 		t.Fatalf("expected parsed min paper avg net pnl gate, enabled=%t value=%s", opts.RequirePaperAvgNetPnL, opts.MinPaperAvgNetPnL.String())
+	}
+	if !opts.RequirePaperProfitFactor || opts.MinPaperProfitFactor.String() != "1.25" {
+		t.Fatalf("expected parsed paper profit factor gate, enabled=%t value=%s", opts.RequirePaperProfitFactor, opts.MinPaperProfitFactor.String())
+	}
+	if !opts.RequirePaperDrawdown || opts.MaxPaperDrawdown.String() != "0.25" {
+		t.Fatalf("expected parsed paper drawdown gate, enabled=%t value=%s", opts.RequirePaperDrawdown, opts.MaxPaperDrawdown.String())
+	}
+	if !opts.RequirePaperDrawdownPct || opts.MaxPaperDrawdownPct.String() != "0.01" {
+		t.Fatalf("expected parsed paper drawdown pct gate, enabled=%t value=%s", opts.RequirePaperDrawdownPct, opts.MaxPaperDrawdownPct.String())
 	}
 }
 
@@ -594,8 +614,19 @@ func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidQualityGate(t *testing
 func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidPaperGates(t *testing.T) {
 	cases := [][]string{
 		{"--min-paper-trades", "-1"},
+		{"--min-actionable-cycles", "-1"},
+		{"--cycles", "1", "--min-actionable-cycles", "2"},
+		{"--max-hold-ratio", "not-a-decimal"},
+		{"--max-hold-ratio", "-0.1"},
+		{"--max-hold-ratio", "1.1"},
 		{"--min-paper-net-pnl", "not-a-decimal"},
 		{"--min-paper-avg-net-pnl", "not-a-decimal"},
+		{"--min-paper-profit-factor", "not-a-decimal"},
+		{"--min-paper-profit-factor", "-1"},
+		{"--max-paper-drawdown", "not-a-decimal"},
+		{"--max-paper-drawdown", "-1"},
+		{"--max-paper-drawdown-pct", "not-a-decimal"},
+		{"--max-paper-drawdown-pct", "-1"},
 	}
 	for _, args := range cases {
 		_, err := parseAIScalpingDecisionProbeOptions(args)
@@ -630,31 +661,79 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 			},
 			SignalQualityCoverage: mustDecimal("0.75"),
 		},
-	}, 2)
+		{
+			SignalCount:        4,
+			SignalQualityCount: 4,
+			ContractValid:      true,
+			LLMDegraded:        false,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "sell"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:    mustDecimal("0.002"),
+				NetPnL:  mustDecimal("-0.02"),
+				Outcome: "loss",
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+	}, 3, mustDecimal("50"))
 
-	if summary.CompletedCycles != 2 {
+	if summary.CompletedCycles != 3 {
 		t.Fatalf("expected completed cycles, got %d", summary.CompletedCycles)
 	}
-	if summary.TotalSignals != 16 {
+	if summary.TotalSignals != 20 {
 		t.Fatalf("expected total signals, got %d", summary.TotalSignals)
 	}
-	if summary.SignalQualityCoverage.String() != "0.875" {
+	if summary.SignalQualityCoverage.String() != "0.9" {
 		t.Fatalf("expected aggregate signal quality coverage, got %s", summary.SignalQualityCoverage.String())
 	}
-	if summary.ValidContractCycles != 1 {
-		t.Fatalf("expected one valid contract cycle, got %d", summary.ValidContractCycles)
+	if summary.ValidContractCycles != 2 {
+		t.Fatalf("expected two valid contract cycles, got %d", summary.ValidContractCycles)
 	}
 	if summary.LLMDegradedCycles != 1 {
 		t.Fatalf("expected one degraded cycle, got %d", summary.LLMDegradedCycles)
 	}
-	if summary.ActionCounts["hold"] != 1 || summary.ActionCounts["buy"] != 1 {
+	if summary.ActionCounts["hold"] != 1 || summary.ActionCounts["buy"] != 1 || summary.ActionCounts["sell"] != 1 {
 		t.Fatalf("unexpected action counts: %#v", summary.ActionCounts)
 	}
-	if summary.PaperTrades != 1 || summary.PaperWins != 1 || summary.PaperLosses != 0 {
+	if summary.ActionableCycles != 2 || summary.HoldRatio.String() != "0.3333333333333333" {
+		t.Fatalf("unexpected actionability summary: actionable=%d hold_ratio=%s", summary.ActionableCycles, summary.HoldRatio.String())
+	}
+	if summary.PaperTrades != 2 || summary.PaperWins != 1 || summary.PaperLosses != 1 {
 		t.Fatalf("unexpected paper trade counts: trades=%d wins=%d losses=%d", summary.PaperTrades, summary.PaperWins, summary.PaperLosses)
 	}
-	if summary.PaperNetPnL.String() != "0.01" || summary.PaperFees.String() != "0.001" || summary.PaperAvgNetPnL.String() != "0.01" {
+	if summary.PaperNetPnL.String() != "-0.01" || summary.PaperFees.String() != "0.003" || summary.PaperAvgNetPnL.String() != "-0.005" {
 		t.Fatalf("unexpected paper pnl summary: net=%s fees=%s avg=%s", summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String())
+	}
+	if summary.PaperProfitFactor.String() != "0.5" || summary.PaperMaxDrawdown.String() != "0.02" || summary.PaperMaxDrawdownPct.String() != "0.0004" {
+		t.Fatalf("unexpected paper risk summary: profit_factor=%s max_drawdown=%s max_drawdown_pct=%s", summary.PaperProfitFactor.String(), summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String())
+	}
+	if summary.PaperProfitFactorUnbounded {
+		t.Fatal("did not expect bounded win/loss window to be marked unbounded")
+	}
+}
+
+func TestBuildAIScalpingDecisionProbeSummaryMarksNoLossProfitFactorUnbounded(t *testing.T) {
+	summary := buildAIScalpingDecisionProbeSummary([]*services.ScalpingLLMDecisionProbeResult{
+		{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "buy"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:    mustDecimal("0.001"),
+				NetPnL:  mustDecimal("0.01"),
+				Outcome: "win",
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+	}, 1, mustDecimal("50"))
+
+	if !summary.PaperProfitFactorUnbounded {
+		t.Fatal("expected no-loss paper profit factor to be marked unbounded")
+	}
+	if !summary.PaperProfitFactor.IsZero() {
+		t.Fatalf("expected unbounded paper profit factor numeric field to stay neutral, got %s", summary.PaperProfitFactor.String())
 	}
 }
 
@@ -680,6 +759,40 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesHealthyValidQualityGates(
 	}
 }
 
+func TestValidateAIScalpingDecisionProbeSummaryEnforcesActionabilityGates(t *testing.T) {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:                4,
+		CompletedCycles:       4,
+		ValidContractCycles:   4,
+		SignalQualityCoverage: mustDecimal("1"),
+		ActionableCycles:      1,
+		HoldRatio:             mustDecimal("0.75"),
+	}
+
+	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:              4,
+		RequireHealthy:      true,
+		RequireValid:        true,
+		MinSignalQuality:    mustDecimal("1"),
+		MinActionableCycles: 2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "actionable_cycles") {
+		t.Fatalf("expected actionable cycles gate error, got %v", err)
+	}
+
+	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:              4,
+		RequireHealthy:      true,
+		RequireValid:        true,
+		MinSignalQuality:    mustDecimal("1"),
+		RequireMaxHoldRatio: true,
+		MaxHoldRatio:        mustDecimal("0.5"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "hold_ratio") {
+		t.Fatalf("expected hold ratio gate error, got %v", err)
+	}
+}
+
 func TestValidateAIScalpingDecisionProbeSummaryEnforcesPaperTradeGates(t *testing.T) {
 	summary := aiScalpingDecisionProbeSummary{
 		Cycles:                2,
@@ -689,6 +802,9 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesPaperTradeGates(t *testin
 		PaperTrades:           1,
 		PaperNetPnL:           mustDecimal("-0.01"),
 		PaperAvgNetPnL:        mustDecimal("-0.01"),
+		PaperProfitFactor:     mustDecimal("0.5"),
+		PaperMaxDrawdown:      mustDecimal("0.02"),
+		PaperMaxDrawdownPct:   mustDecimal("0.0004"),
 	}
 	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
 		Cycles:           2,
@@ -723,6 +839,67 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesPaperTradeGates(t *testin
 	})
 	if err == nil || !strings.Contains(err.Error(), "paper_avg_net_pnl") {
 		t.Fatalf("expected paper avg net pnl gate error, got %v", err)
+	}
+
+	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:                   2,
+		RequireHealthy:           true,
+		RequireValid:             true,
+		MinSignalQuality:         mustDecimal("1"),
+		RequirePaperProfitFactor: true,
+		MinPaperProfitFactor:     mustDecimal("1"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "paper_profit_factor") {
+		t.Fatalf("expected paper profit factor gate error, got %v", err)
+	}
+
+	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:               2,
+		RequireHealthy:       true,
+		RequireValid:         true,
+		MinSignalQuality:     mustDecimal("1"),
+		RequirePaperDrawdown: true,
+		MaxPaperDrawdown:     mustDecimal("0.01"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "paper_max_drawdown") {
+		t.Fatalf("expected paper drawdown gate error, got %v", err)
+	}
+
+	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:                  2,
+		RequireHealthy:          true,
+		RequireValid:            true,
+		MinSignalQuality:        mustDecimal("1"),
+		RequirePaperDrawdownPct: true,
+		MaxPaperDrawdownPct:     mustDecimal("0.0001"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "paper_max_drawdown_pct") {
+		t.Fatalf("expected paper drawdown pct gate error, got %v", err)
+	}
+}
+
+func TestValidateAIScalpingDecisionProbeSummaryTreatsNoLossProfitFactorAsUnbounded(t *testing.T) {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:                     1,
+		CompletedCycles:            1,
+		ValidContractCycles:        1,
+		SignalQualityCoverage:      mustDecimal("1"),
+		PaperTrades:                1,
+		PaperWins:                  1,
+		PaperProfitFactor:          decimal.Zero,
+		PaperProfitFactorUnbounded: true,
+	}
+
+	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:                   1,
+		RequireHealthy:           true,
+		RequireValid:             true,
+		MinSignalQuality:         mustDecimal("1"),
+		RequirePaperProfitFactor: true,
+		MinPaperProfitFactor:     mustDecimal("10000"),
+	})
+	if err != nil {
+		t.Fatalf("expected no-loss profit factor to satisfy any minimum, got %v", err)
 	}
 }
 

@@ -14,7 +14,7 @@ NC=\033[0m
 
 .PHONY: help all go-env-setup proto-gen mod-download build services-setup telegram-setup \
 	test test-backend test-frontend lint fmt fmt-check typecheck coverage-check \
-	run logs logs-all scalping-soak bd-close-qa
+	run logs logs-all scalping-soak ai-scalping-probe bd-close-qa
 
 all: build
 
@@ -138,6 +138,9 @@ logs-all: ## Show gateway logs from NEURATRADE_HOME
 
 scalping-soak: build ## Run no-order public-data scalping paper soak
 	@bash services/backend-api/scripts/scalping-soak.sh run
+
+ai-scalping-probe: build ## Run real LLM no-order scalping probe with recovery gates
+	@bash services/backend-api/scripts/ai-scalping-probe.sh run
 
 bd-close-qa: ## Close bd issue with mandatory QA evidence
 	@test -n "$${ISSUE_ID:-}" || (echo "ISSUE_ID is required" && exit 1)
