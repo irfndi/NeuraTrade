@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
@@ -23,21 +24,25 @@ func main() {
 
 func run() error {
 	var (
-		dbPath          string
-		exchange        string
-		chatID          string
-		orderPrefix     string
-		cycles          int
-		intervalMS      int
-		timeoutSeconds  int
-		requireTrades   bool
-		initialCapital  string
-		feeRate         string
-		includeBaseline bool
-		minTrades       int
-		minWinRate      string
-		minNetPnL       string
-		minAvgNetPnL    string
+		dbPath                   string
+		exchange                 string
+		chatID                   string
+		orderPrefix              string
+		cycles                   int
+		intervalMS               int
+		timeoutSeconds           int
+		requireTrades            bool
+		initialCapital           string
+		feeRate                  string
+		includeBaseline          bool
+		minTrades                int
+		minWinRate               string
+		minNetPnL                string
+		minAvgNetPnL             string
+		minSignalQualityCoverage string
+		maxDrawdown              string
+		maxDrawdownPct           string
+		maxAIDegradedCycles      string
 	)
 
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
@@ -56,6 +61,10 @@ func run() error {
 	flags.StringVar(&minWinRate, "min-win-rate", "", "fail unless report win_rate is at least this decimal value")
 	flags.StringVar(&minNetPnL, "min-net-pnl", "", "fail unless report net_pnl is at least this decimal value")
 	flags.StringVar(&minAvgNetPnL, "min-avg-net-pnl", "", "fail unless avg_net_pnl_per_trade is at least this decimal value")
+	flags.StringVar(&minSignalQualityCoverage, "min-signal-quality-coverage", "", "fail unless signal_quality.coverage is at least this decimal value")
+	flags.StringVar(&maxDrawdown, "max-drawdown", "", "fail unless max_drawdown is at or below this decimal value")
+	flags.StringVar(&maxDrawdownPct, "max-drawdown-pct", "", "fail unless max_drawdown_pct is at or below this decimal value")
+	flags.StringVar(&maxAIDegradedCycles, "max-ai-provider-degraded-cycles", "", "maximum AI provider degraded cycles allowed; empty disables this gate")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -108,10 +117,14 @@ func run() error {
 		return err
 	}
 	if err := validateAcceptanceGates(result, acceptanceGateOptions{
-		MinTrades:    minTrades,
-		MinWinRate:   minWinRate,
-		MinNetPnL:    minNetPnL,
-		MinAvgNetPnL: minAvgNetPnL,
+		MinTrades:                minTrades,
+		MinWinRate:               minWinRate,
+		MinNetPnL:                minNetPnL,
+		MinAvgNetPnL:             minAvgNetPnL,
+		MinSignalQualityCoverage: minSignalQualityCoverage,
+		MaxDrawdown:              maxDrawdown,
+		MaxDrawdownPct:           maxDrawdownPct,
+		MaxAIDegradedCycles:      maxAIDegradedCycles,
 	}); err != nil {
 		return err
 	}
@@ -129,10 +142,14 @@ func run() error {
 }
 
 type acceptanceGateOptions struct {
-	MinTrades    int
-	MinWinRate   string
-	MinNetPnL    string
-	MinAvgNetPnL string
+	MinTrades                int
+	MinWinRate               string
+	MinNetPnL                string
+	MinAvgNetPnL             string
+	MinSignalQualityCoverage string
+	MaxDrawdown              string
+	MaxDrawdownPct           string
+	MaxAIDegradedCycles      string
 }
 
 func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, options acceptanceGateOptions) error {
@@ -152,6 +169,21 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 	if err := validateMinDecimalGate("min-avg-net-pnl", "avg_net_pnl_per_trade", report.TradeSummary.AvgNetPnLPerTrade, options.MinAvgNetPnL); err != nil {
 		return err
 	}
+	if err := validateMinDecimalGate("min-signal-quality-coverage", "signal_quality.coverage", report.SignalQuality.Coverage, options.MinSignalQualityCoverage); err != nil {
+		return err
+	}
+	if err := validateMaxDecimalGate("max-drawdown", "max_drawdown", report.TradeSummary.MaxDrawdown, options.MaxDrawdown); err != nil {
+		return err
+	}
+	if options.MaxDrawdownPct != "" && report.BaselineComparison == nil {
+		return fmt.Errorf("--max-drawdown-pct requires --baseline=true")
+	}
+	if err := validateMaxDecimalGate("max-drawdown-pct", "max_drawdown_pct", report.TradeSummary.MaxDrawdownPct, options.MaxDrawdownPct); err != nil {
+		return err
+	}
+	if err := validateMaxIntGate("max-ai-provider-degraded-cycles", "ai_provider_degraded_cycles", report.AIProviderDegradation.DegradedCycles, options.MaxAIDegradedCycles); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -165,6 +197,40 @@ func validateMinDecimalGate(flagName string, metricName string, actual decimal.D
 	}
 	if actual.LessThan(minimum) {
 		return fmt.Errorf("acceptance gate failed: %s=%s below minimum=%s", metricName, actual.String(), minimum.String())
+	}
+	return nil
+}
+
+func validateMaxDecimalGate(flagName string, metricName string, actual decimal.Decimal, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := decimal.NewFromString(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --%s value %q: %w", flagName, rawMaximum, err)
+	}
+	if maximum.IsNegative() {
+		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
+	}
+	if actual.GreaterThan(maximum) {
+		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, actual.String(), maximum.String())
+	}
+	return nil
+}
+
+func validateMaxIntGate(flagName string, metricName string, actual int, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := strconv.Atoi(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --%s value %q: %w", flagName, rawMaximum, err)
+	}
+	if maximum < 0 {
+		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
+	}
+	if actual > maximum {
+		return fmt.Errorf("acceptance gate failed: %s=%d above maximum=%d", metricName, actual, maximum)
 	}
 	return nil
 }

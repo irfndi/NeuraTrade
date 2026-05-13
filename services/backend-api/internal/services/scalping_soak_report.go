@@ -359,7 +359,7 @@ func (r *ScalpingSoakReport) addTrade(row scalpingSoakCycleRow) {
 		r.holdDurationCount++
 	}
 	r.cumulativeNetPnL = r.cumulativeNetPnL.Add(row.netPnL)
-	if r.TradeSummary.ClosedTrades == 1 || r.cumulativeNetPnL.GreaterThan(r.peakNetPnL) {
+	if r.cumulativeNetPnL.GreaterThan(r.peakNetPnL) {
 		r.peakNetPnL = r.cumulativeNetPnL
 	}
 	drawdown := r.peakNetPnL.Sub(r.cumulativeNetPnL)

@@ -11,15 +11,24 @@ import (
 func TestValidateAcceptanceGates(t *testing.T) {
 	result := &services.ScalpingLivePaperSoakResult{
 		Report: services.ScalpingSoakReport{
+			SignalQuality: services.ScalpingSignalQualitySoakStats{
+				Coverage: decimal.NewFromFloat(0.95),
+			},
 			TradeSummary: services.ScalpingSoakTradeSummary{
 				ClosedTrades:       12,
 				WinRate:            decimal.NewFromFloat(0.75),
 				NetPnL:             decimal.NewFromFloat(0.12),
 				AvgNetPnLPerTrade:  decimal.NewFromFloat(0.01),
-				MaxDrawdown:        decimal.Zero,
-				MaxDrawdownPct:     decimal.Zero,
+				MaxDrawdown:        decimal.NewFromFloat(0.03),
+				MaxDrawdownPct:     decimal.NewFromFloat(0.000625),
 				ProfitFactor:       decimal.NewFromInt(2),
 				AvgHoldDurationSec: decimal.NewFromInt(300),
+			},
+			AIProviderDegradation: services.ScalpingAIDegradationSoakStats{
+				DegradedCycles: 1,
+			},
+			BaselineComparison: &services.ScalpingSoakBaselineComparison{
+				BaselineName: "test",
 			},
 		},
 	}
@@ -32,10 +41,14 @@ func TestValidateAcceptanceGates(t *testing.T) {
 		{
 			name: "passes all configured gates",
 			options: acceptanceGateOptions{
-				MinTrades:    10,
-				MinWinRate:   "0.7",
-				MinNetPnL:    "0",
-				MinAvgNetPnL: "0.005",
+				MinTrades:                10,
+				MinWinRate:               "0.7",
+				MinNetPnL:                "0",
+				MinAvgNetPnL:             "0.005",
+				MinSignalQualityCoverage: "0.9",
+				MaxDrawdown:              "0.05",
+				MaxDrawdownPct:           "0.001",
+				MaxAIDegradedCycles:      "1",
 			},
 		},
 		{
@@ -63,6 +76,46 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			options: acceptanceGateOptions{MinWinRate: "not-a-decimal"},
 			wantErr: "parse --min-win-rate",
 		},
+		{
+			name:    "fails signal quality coverage",
+			options: acceptanceGateOptions{MinSignalQualityCoverage: "1"},
+			wantErr: "signal_quality.coverage=0.95 below minimum=1",
+		},
+		{
+			name:    "fails max drawdown",
+			options: acceptanceGateOptions{MaxDrawdown: "0.02"},
+			wantErr: `max_drawdown="0.03" above maximum="0.02"`,
+		},
+		{
+			name:    "fails max drawdown pct",
+			options: acceptanceGateOptions{MaxDrawdownPct: "0.0005"},
+			wantErr: `max_drawdown_pct="0.000625" above maximum="0.0005"`,
+		},
+		{
+			name:    "fails AI provider degraded cycles",
+			options: acceptanceGateOptions{MaxAIDegradedCycles: "0"},
+			wantErr: "ai_provider_degraded_cycles=1 above maximum=0",
+		},
+		{
+			name:    "rejects invalid AI provider degraded cycle threshold",
+			options: acceptanceGateOptions{MaxAIDegradedCycles: "not-an-int"},
+			wantErr: "parse --max-ai-provider-degraded-cycles",
+		},
+		{
+			name:    "rejects negative AI provider degraded cycle threshold",
+			options: acceptanceGateOptions{MaxAIDegradedCycles: "-1"},
+			wantErr: `invalid --max-ai-provider-degraded-cycles value "-1": must be zero or greater`,
+		},
+		{
+			name:    "invalid max decimal threshold",
+			options: acceptanceGateOptions{MaxDrawdownPct: "not-a-decimal"},
+			wantErr: "parse --max-drawdown-pct",
+		},
+		{
+			name:    "rejects negative max decimal threshold",
+			options: acceptanceGateOptions{MaxDrawdownPct: "-0.1"},
+			wantErr: `invalid --max-drawdown-pct value "-0.1": must be zero or greater`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -80,4 +133,18 @@ func TestValidateAcceptanceGates(t *testing.T) {
 func TestValidateAcceptanceGatesRequiresResult(t *testing.T) {
 	err := validateAcceptanceGates(nil, acceptanceGateOptions{MinTrades: 1})
 	require.ErrorContains(t, err, "acceptance gates require soak result")
+}
+
+func TestValidateAcceptanceGatesRequiresBaselineForMaxDrawdownPct(t *testing.T) {
+	result := &services.ScalpingLivePaperSoakResult{
+		Report: services.ScalpingSoakReport{
+			TradeSummary: services.ScalpingSoakTradeSummary{
+				ClosedTrades:   1,
+				MaxDrawdownPct: decimal.Zero,
+			},
+		},
+	}
+
+	err := validateAcceptanceGates(result, acceptanceGateOptions{MaxDrawdownPct: "0.01"})
+	require.ErrorContains(t, err, "--max-drawdown-pct requires --baseline=true")
 }
