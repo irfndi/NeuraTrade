@@ -152,6 +152,40 @@ find_gateway_cmd() {
   return 1
 }
 
+launch_gateway_detached() {
+  local gateway_cmd="$1"
+
+  if command -v setsid >/dev/null 2>&1; then
+    nohup setsid bash -lc "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
+    printf '%s\n' "$!"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    GATEWAY_CMD="$gateway_cmd" GATEWAY_LOG="$GATEWAY_LOG" python3 - <<'PY'
+import os
+import subprocess
+
+cmd = "exec " + os.environ["GATEWAY_CMD"]
+log_path = os.environ["GATEWAY_LOG"]
+log = open(log_path, "ab", buffering=0)
+process = subprocess.Popen(
+    ["bash", "-lc", cmd],
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=log,
+    close_fds=True,
+    start_new_session=True,
+)
+print(process.pid)
+PY
+    return 0
+  fi
+
+  nohup bash -lc "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
+  printf '%s\n' "$!"
+}
+
 pid_running() {
   local pid="$1"
   kill -0 "$pid" 2>/dev/null
@@ -198,12 +232,16 @@ start_gateway() {
   fi
 
   log_info "Starting gateway using: ${gateway_cmd}"
-  (
+  local launched_pid
+  if ! launched_pid="$(
     cd "$REPO_ROOT"
     export PATH="${REPO_ROOT}/bin:${PATH}"
-    nohup bash -c "$gateway_cmd" >>"${GATEWAY_LOG}" 2>&1 &
-    echo $! >"${PID_FILE}"
-  )
+    launch_gateway_detached "$gateway_cmd"
+  )"; then
+    log_error "Failed to launch gateway"
+    return 1
+  fi
+  printf '%s\n' "$launched_pid" >"${PID_FILE}"
 
   local pid
   pid="$(gateway_pid)"
