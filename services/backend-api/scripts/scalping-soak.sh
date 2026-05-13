@@ -31,6 +31,7 @@ SOAK_CHAT_ID="${SOAK_CHAT_ID:-operator-scalping-soak}"
 SOAK_ORDER_PREFIX="${SOAK_ORDER_PREFIX:-operator-scalping-soak}"
 SOAK_DB_PATH="${SOAK_DB_PATH:-${NEURATRADE_HOME}/data/scalping-soak.db}"
 SOAK_BIN="${SOAK_BIN:-${REPO_ROOT}/bin/neuratrade-scalping-soak}"
+SOAK_OUTPUT_FILE="${SOAK_OUTPUT_FILE:-}"
 
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -76,10 +77,12 @@ Environment:
   MAX_AI_PROVIDER_DEGRADED_CYCLES Maximum AI provider degraded cycles; empty disables (default: ${MAX_AI_PROVIDER_DEGRADED_CYCLES})
   SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
   SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
+  SOAK_OUTPUT_FILE Optional path for clean stdout artifact, usually JSON; empty disables (default: ${SOAK_OUTPUT_FILE:-disabled})
 
 Examples:
   make build
   bash services/backend-api/scripts/scalping-soak.sh run
+  SOAK_OUTPUT_FILE="\$HOME/.neuratrade/data/scalping-soak-latest.json" bash services/backend-api/scripts/scalping-soak.sh run
   SOAK_DB_PATH="\$HOME/.neuratrade/data/neuratrade.db" CYCLES=24 bash services/backend-api/scripts/scalping-soak.sh run
 USAGE
 }
@@ -143,7 +146,13 @@ run_soak() {
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
 min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
 max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled}"
-  "$SOAK_BIN" "${args[@]}" | tee -a "$LOG_FILE"
+  if [ -n "$SOAK_OUTPUT_FILE" ]; then
+    mkdir -p "$(dirname "$SOAK_OUTPUT_FILE")"
+    "$SOAK_BIN" "${args[@]}" | tee "$SOAK_OUTPUT_FILE" | tee -a "$LOG_FILE"
+    log "wrote clean soak stdout artifact to ${SOAK_OUTPUT_FILE}"
+  else
+    "$SOAK_BIN" "${args[@]}" | tee -a "$LOG_FILE"
+  fi
   log "${GREEN}[OK]${NC} scalping paper soak complete"
 }
 

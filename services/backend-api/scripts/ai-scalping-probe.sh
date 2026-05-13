@@ -98,11 +98,10 @@ ensure_binary() {
 }
 
 append_optional_arg() {
-  local -n target_args="$1"
-  local flag="$2"
-  local value="$3"
+  local flag="$1"
+  local value="$2"
   if [ -n "$value" ]; then
-    target_args+=("$flag" "$value")
+    args+=("$flag" "$value")
   fi
 }
 
@@ -122,18 +121,18 @@ run_probe() {
   if [ "$OUTPUT_JSON" = "true" ] || [ "$OUTPUT_JSON" = "1" ]; then
     args+=("--json")
   fi
-  append_optional_arg args "--provider" "$PROVIDER"
-  append_optional_arg args "--model" "$MODEL"
-  append_optional_arg args "--base-url" "$BASE_URL"
-  append_optional_arg args "--min-signal-quality" "$MIN_SIGNAL_QUALITY"
-  append_optional_arg args "--min-actionable-cycles" "$MIN_ACTIONABLE_CYCLES"
-  append_optional_arg args "--max-hold-ratio" "$MAX_HOLD_RATIO"
-  append_optional_arg args "--min-paper-trades" "$MIN_PAPER_TRADES"
-  append_optional_arg args "--min-paper-net-pnl" "$MIN_PAPER_NET_PNL"
-  append_optional_arg args "--min-paper-avg-net-pnl" "$MIN_PAPER_AVG_NET_PNL"
-  append_optional_arg args "--min-paper-profit-factor" "$MIN_PAPER_PROFIT_FACTOR"
-  append_optional_arg args "--max-paper-drawdown" "$MAX_PAPER_DRAWDOWN"
-  append_optional_arg args "--max-paper-drawdown-pct" "$MAX_PAPER_DRAWDOWN_PCT"
+  append_optional_arg "--provider" "$PROVIDER"
+  append_optional_arg "--model" "$MODEL"
+  append_optional_arg "--base-url" "$BASE_URL"
+  append_optional_arg "--min-signal-quality" "$MIN_SIGNAL_QUALITY"
+  append_optional_arg "--min-actionable-cycles" "$MIN_ACTIONABLE_CYCLES"
+  append_optional_arg "--max-hold-ratio" "$MAX_HOLD_RATIO"
+  append_optional_arg "--min-paper-trades" "$MIN_PAPER_TRADES"
+  append_optional_arg "--min-paper-net-pnl" "$MIN_PAPER_NET_PNL"
+  append_optional_arg "--min-paper-avg-net-pnl" "$MIN_PAPER_AVG_NET_PNL"
+  append_optional_arg "--min-paper-profit-factor" "$MIN_PAPER_PROFIT_FACTOR"
+  append_optional_arg "--max-paper-drawdown" "$MAX_PAPER_DRAWDOWN"
+  append_optional_arg "--max-paper-drawdown-pct" "$MAX_PAPER_DRAWDOWN_PCT"
 
   log "running real LLM scalping probe provider=${PROVIDER:-runtime-config} exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} \
 min_signal_quality=${MIN_SIGNAL_QUALITY:-disabled} min_actionable_cycles=${MIN_ACTIONABLE_CYCLES:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} \

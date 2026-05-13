@@ -156,7 +156,7 @@ launch_gateway_detached() {
   local gateway_cmd="$1"
 
   if command -v setsid >/dev/null 2>&1; then
-    nohup setsid bash -lc "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
+    nohup setsid bash -c "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
     printf '%s\n' "$!"
     return 0
   fi
@@ -170,7 +170,7 @@ cmd = "exec " + os.environ["GATEWAY_CMD"]
 log_path = os.environ["GATEWAY_LOG"]
 log = open(log_path, "ab", buffering=0)
 process = subprocess.Popen(
-    ["bash", "-lc", cmd],
+    ["bash", "-c", cmd],
     stdin=subprocess.DEVNULL,
     stdout=log,
     stderr=log,
@@ -182,13 +182,26 @@ PY
     return 0
   fi
 
-  nohup bash -lc "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
+  nohup bash -c "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
   printf '%s\n' "$!"
 }
 
 pid_running() {
   local pid="$1"
   kill -0 "$pid" 2>/dev/null
+}
+
+pid_command() {
+  local pid="$1"
+  ps -p "$pid" -o command= 2>/dev/null || true
+}
+
+pid_command_matches() {
+  local pid="$1"
+  local pattern="$2"
+  local command
+  command="$(pid_command "$pid")"
+  [ -n "$command" ] && printf '%s' "$command" | grep -Fq "$pattern"
 }
 
 gateway_pid() {
@@ -302,7 +315,55 @@ stop_gateway() {
   fi
 
   rm -f "${PID_FILE}"
+  stop_child_service "Backend API" "${NEURATRADE_HOME}/pids/backend.pid" "neuratrade-server"
+  stop_child_service "CCXT Service" "${NEURATRADE_HOME}/pids/ccxt.pid" "ccxt-service"
+  stop_child_service "Telegram Service" "${NEURATRADE_HOME}/pids/telegram.pid" "telegram-service"
   log_success "Gateway stopped"
+}
+
+stop_child_service() {
+  local name="$1"
+  local pid_file="$2"
+  local expected_pattern="$3"
+
+  if [ ! -f "$pid_file" ]; then
+    return 0
+  fi
+
+  local child_pid
+  child_pid="$(tr -d '[:space:]' <"$pid_file")"
+  if [ -z "$child_pid" ] || ! [[ "$child_pid" =~ ^[0-9]+$ ]]; then
+    log_warn "${name} pid file is invalid, removing: ${pid_file}"
+    rm -f "$pid_file"
+    return 0
+  fi
+
+  if ! pid_running "$child_pid"; then
+    rm -f "$pid_file"
+    return 0
+  fi
+
+  if ! pid_command_matches "$child_pid" "$expected_pattern"; then
+    log_warn "${name} pid ${child_pid} does not match ${expected_pattern}; leaving process running and removing stale pid file"
+    rm -f "$pid_file"
+    return 0
+  fi
+
+  log_info "Stopping ${name} (pid=${child_pid})"
+  kill "$child_pid" 2>/dev/null || true
+
+  local waited=0
+  while pid_running "$child_pid" && [ "$waited" -lt 20 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if pid_running "$child_pid"; then
+    log_warn "${name} still running after grace period, forcing kill"
+    kill -9 "$child_pid" 2>/dev/null || true
+  fi
+
+  rm -f "$pid_file"
 }
 
 status_gateway() {
