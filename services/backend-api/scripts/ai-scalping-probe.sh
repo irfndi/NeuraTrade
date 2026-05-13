@@ -124,7 +124,11 @@ run_probe() {
   append_optional_arg "--provider" "$PROVIDER"
   append_optional_arg "--model" "$MODEL"
   append_optional_arg "--base-url" "$BASE_URL"
-  append_optional_arg "--min-signal-quality" "$MIN_SIGNAL_QUALITY"
+  if [ -n "$MIN_SIGNAL_QUALITY" ]; then
+    args+=("--min-signal-quality" "$MIN_SIGNAL_QUALITY")
+  else
+    args+=("--min-signal-quality" "0")
+  fi
   append_optional_arg "--min-actionable-cycles" "$MIN_ACTIONABLE_CYCLES"
   append_optional_arg "--max-hold-ratio" "$MAX_HOLD_RATIO"
   append_optional_arg "--min-paper-trades" "$MIN_PAPER_TRADES"

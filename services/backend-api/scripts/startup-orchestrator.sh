@@ -317,14 +317,15 @@ stop_gateway() {
   rm -f "${PID_FILE}"
   stop_child_service "Backend API" "${NEURATRADE_HOME}/pids/backend.pid" "neuratrade-server"
   stop_child_service "CCXT Service" "${NEURATRADE_HOME}/pids/ccxt.pid" "ccxt-service"
-  stop_child_service "Telegram Service" "${NEURATRADE_HOME}/pids/telegram.pid" "telegram-service"
+  stop_child_service "Telegram Service" "${NEURATRADE_HOME}/pids/telegram.pid" "telegram-service" "bun run index.ts"
   log_success "Gateway stopped"
 }
 
 stop_child_service() {
   local name="$1"
   local pid_file="$2"
-  local expected_pattern="$3"
+  shift 2
+  local expected_patterns=("$@")
 
   if [ ! -f "$pid_file" ]; then
     return 0
@@ -343,8 +344,16 @@ stop_child_service() {
     return 0
   fi
 
-  if ! pid_command_matches "$child_pid" "$expected_pattern"; then
-    log_warn "${name} pid ${child_pid} does not match ${expected_pattern}; leaving process running and removing stale pid file"
+  local pattern
+  local matches=0
+  for pattern in "${expected_patterns[@]}"; do
+    if pid_command_matches "$child_pid" "$pattern"; then
+      matches=1
+      break
+    fi
+  done
+  if [ "$matches" -ne 1 ]; then
+    log_warn "${name} pid ${child_pid} does not match expected command patterns; leaving process running and removing stale pid file"
     rm -f "$pid_file"
     return 0
   fi
