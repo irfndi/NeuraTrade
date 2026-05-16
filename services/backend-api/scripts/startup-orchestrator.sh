@@ -340,7 +340,7 @@ stop_child_service() {
   fi
 
   local child_pid
-  child_pid="$(tr -d '[:space:]' <"$pid_file")"
+  IFS= read -r child_pid <"$pid_file" || child_pid=""
   if [ -z "$child_pid" ] || ! [[ "$child_pid" =~ ^[0-9]+$ ]]; then
     log_warn "${name} pid file is invalid, removing: ${pid_file}"
     rm -f "$pid_file"
