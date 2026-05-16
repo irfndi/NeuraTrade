@@ -44,6 +44,9 @@ func run() error {
 		maxDrawdown              string
 		maxDrawdownPct           string
 		maxAIDegradedCycles      string
+		minBaselineWinRateDelta  string
+		minBaselineNetPnLDelta   string
+		minBaselineAvgPnLDelta   string
 	)
 
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
@@ -66,6 +69,9 @@ func run() error {
 	flags.StringVar(&maxDrawdown, "max-drawdown", "", "fail unless max_drawdown is at or below this decimal value")
 	flags.StringVar(&maxDrawdownPct, "max-drawdown-pct", "", "fail unless max_drawdown_pct is at or below this decimal value")
 	flags.StringVar(&maxAIDegradedCycles, "max-ai-provider-degraded-cycles", "", "maximum AI provider degraded cycles allowed; empty disables this gate")
+	flags.StringVar(&minBaselineWinRateDelta, "min-baseline-win-rate-delta", "", "fail unless win-rate delta versus baseline is at least this decimal value")
+	flags.StringVar(&minBaselineNetPnLDelta, "min-baseline-net-pnl-delta", "", "fail unless net-PnL delta versus baseline is at least this decimal value")
+	flags.StringVar(&minBaselineAvgPnLDelta, "min-baseline-avg-pnl-delta", "", "fail unless avg-PnL-per-trade delta versus baseline is at least this decimal value")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -127,6 +133,9 @@ func run() error {
 		MaxDrawdown:              maxDrawdown,
 		MaxDrawdownPct:           maxDrawdownPct,
 		MaxAIDegradedCycles:      maxAIDegradedCycles,
+		MinBaselineWinRateDelta:  minBaselineWinRateDelta,
+		MinBaselineNetPnLDelta:   minBaselineNetPnLDelta,
+		MinBaselineAvgPnLDelta:   minBaselineAvgPnLDelta,
 	}); err != nil {
 		return err
 	}
@@ -152,6 +161,9 @@ type acceptanceGateOptions struct {
 	MaxDrawdown              string
 	MaxDrawdownPct           string
 	MaxAIDegradedCycles      string
+	MinBaselineWinRateDelta  string
+	MinBaselineNetPnLDelta   string
+	MinBaselineAvgPnLDelta   string
 }
 
 func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, options acceptanceGateOptions) error {
@@ -184,6 +196,28 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 		return err
 	}
 	if err := validateMaxIntGate("max-ai-provider-degraded-cycles", "ai_provider_degraded_cycles", report.AIProviderDegradation.DegradedCycles, options.MaxAIDegradedCycles); err != nil {
+		return err
+	}
+	if err := validateBaselineDeltaGates(report.BaselineComparison, options); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateBaselineDeltaGates(comparison *services.ScalpingSoakBaselineComparison, options acceptanceGateOptions) error {
+	if options.MinBaselineWinRateDelta == "" && options.MinBaselineNetPnLDelta == "" && options.MinBaselineAvgPnLDelta == "" {
+		return nil
+	}
+	if comparison == nil {
+		return fmt.Errorf("baseline delta gates require --baseline=true")
+	}
+	if err := validateMinDecimalGate("min-baseline-win-rate-delta", "baseline.delta_win_rate", comparison.DeltaWinRate, options.MinBaselineWinRateDelta); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-baseline-net-pnl-delta", "baseline.delta_net_pnl", comparison.DeltaNetPnL, options.MinBaselineNetPnLDelta); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-baseline-avg-pnl-delta", "baseline.delta_avg_pnl_per_trade", comparison.DeltaAvgPnLPerTrade, options.MinBaselineAvgPnLDelta); err != nil {
 		return err
 	}
 	return nil

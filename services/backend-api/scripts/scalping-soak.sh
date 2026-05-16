@@ -27,6 +27,9 @@ MIN_SIGNAL_QUALITY_COVERAGE="${MIN_SIGNAL_QUALITY_COVERAGE-1}"
 MAX_DRAWDOWN="${MAX_DRAWDOWN-}"
 MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT-0.01}"
 MAX_AI_PROVIDER_DEGRADED_CYCLES="${MAX_AI_PROVIDER_DEGRADED_CYCLES-0}"
+MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
+MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
+MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
 SOAK_CHAT_ID="${SOAK_CHAT_ID:-operator-scalping-soak}"
 SOAK_ORDER_PREFIX="${SOAK_ORDER_PREFIX:-operator-scalping-soak}"
 SOAK_DB_PATH="${SOAK_DB_PATH:-${NEURATRADE_HOME}/data/scalping-soak.db}"
@@ -75,6 +78,9 @@ Environment:
   MAX_DRAWDOWN    Maximum absolute drawdown; empty disables (default: ${MAX_DRAWDOWN:-disabled})
   MAX_DRAWDOWN_PCT Maximum drawdown as fraction of baseline balance; empty disables (default: ${MAX_DRAWDOWN_PCT})
   MAX_AI_PROVIDER_DEGRADED_CYCLES Maximum AI provider degraded cycles; empty disables (default: ${MAX_AI_PROVIDER_DEGRADED_CYCLES})
+  MIN_BASELINE_WIN_RATE_DELTA Minimum win-rate improvement versus baseline; empty disables (default: ${MIN_BASELINE_WIN_RATE_DELTA:-disabled})
+  MIN_BASELINE_NET_PNL_DELTA Minimum net-PnL improvement versus baseline; empty disables (default: ${MIN_BASELINE_NET_PNL_DELTA:-disabled})
+  MIN_BASELINE_AVG_PNL_DELTA Minimum avg-PnL/trade improvement versus baseline; empty disables (default: ${MIN_BASELINE_AVG_PNL_DELTA:-disabled})
   SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
   SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
   SOAK_OUTPUT_FILE Optional path for clean stdout artifact, usually JSON; empty disables (default: ${SOAK_OUTPUT_FILE:-disabled})
@@ -135,6 +141,15 @@ run_soak() {
   if [ -n "$MAX_AI_PROVIDER_DEGRADED_CYCLES" ]; then
     args+=("--max-ai-provider-degraded-cycles" "$MAX_AI_PROVIDER_DEGRADED_CYCLES")
   fi
+  if [ -n "$MIN_BASELINE_WIN_RATE_DELTA" ]; then
+    args+=("--min-baseline-win-rate-delta" "$MIN_BASELINE_WIN_RATE_DELTA")
+  fi
+  if [ -n "$MIN_BASELINE_NET_PNL_DELTA" ]; then
+    args+=("--min-baseline-net-pnl-delta" "$MIN_BASELINE_NET_PNL_DELTA")
+  fi
+  if [ -n "$MIN_BASELINE_AVG_PNL_DELTA" ]; then
+    args+=("--min-baseline-avg-pnl-delta" "$MIN_BASELINE_AVG_PNL_DELTA")
+  fi
   if [ "$TIMEOUT_SECONDS" != "0" ]; then
     args+=("--timeout-seconds" "$TIMEOUT_SECONDS")
   fi
@@ -145,7 +160,8 @@ run_soak() {
   log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
 min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
-max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled}"
+max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} min_baseline_win_rate_delta=${MIN_BASELINE_WIN_RATE_DELTA:-disabled} \
+min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled}"
   if [ -n "$SOAK_OUTPUT_FILE" ]; then
     mkdir -p "$(dirname "$SOAK_OUTPUT_FILE")"
     "$SOAK_BIN" "${args[@]}" | tee "$SOAK_OUTPUT_FILE" | tee -a "$LOG_FILE"
