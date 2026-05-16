@@ -73,23 +73,22 @@ type ScalpingSignalQualitySoakStats struct {
 }
 
 type ScalpingSoakTradeSummary struct {
-	ClosedTrades      int             `json:"closed_trades"`
-	Wins              int             `json:"wins"`
-	Losses            int             `json:"losses"`
-	Breakeven         int             `json:"breakeven"`
-	WinRate           decimal.Decimal `json:"win_rate"`
-	GrossPnL          decimal.Decimal `json:"gross_pnl"`
-	NetPnL            decimal.Decimal `json:"net_pnl"`
-	Fees              decimal.Decimal `json:"fees"`
-	AvgNetPnLPerTrade decimal.Decimal `json:"avg_net_pnl_per_trade"`
-	BestTradeNetPnL   decimal.Decimal `json:"best_trade_net_pnl"`
-	WorstTradeNetPnL  decimal.Decimal `json:"worst_trade_net_pnl"`
-	MaxDrawdown       decimal.Decimal `json:"max_drawdown"`
-	MaxDrawdownPct    decimal.Decimal `json:"max_drawdown_pct"`
-	// ProfitFactor uses maxProfitFactorNoLosses when the window has winning
-	// trades and no losses, matching the backtest path's bounded sentinel.
-	ProfitFactor       decimal.Decimal `json:"profit_factor"`
-	AvgHoldDurationSec decimal.Decimal `json:"avg_hold_duration_sec"`
+	ClosedTrades          int             `json:"closed_trades"`
+	Wins                  int             `json:"wins"`
+	Losses                int             `json:"losses"`
+	Breakeven             int             `json:"breakeven"`
+	WinRate               decimal.Decimal `json:"win_rate"`
+	GrossPnL              decimal.Decimal `json:"gross_pnl"`
+	NetPnL                decimal.Decimal `json:"net_pnl"`
+	Fees                  decimal.Decimal `json:"fees"`
+	AvgNetPnLPerTrade     decimal.Decimal `json:"avg_net_pnl_per_trade"`
+	BestTradeNetPnL       decimal.Decimal `json:"best_trade_net_pnl"`
+	WorstTradeNetPnL      decimal.Decimal `json:"worst_trade_net_pnl"`
+	MaxDrawdown           decimal.Decimal `json:"max_drawdown"`
+	MaxDrawdownPct        decimal.Decimal `json:"max_drawdown_pct"`
+	ProfitFactor          decimal.Decimal `json:"profit_factor"`
+	ProfitFactorUnbounded bool            `json:"profit_factor_unbounded"`
+	AvgHoldDurationSec    decimal.Decimal `json:"avg_hold_duration_sec"`
 }
 
 type ScalpingAIDegradationSoakStats struct {
@@ -436,7 +435,8 @@ func (r *ScalpingSoakReport) computeProfitFactor() {
 		r.TradeSummary.ProfitFactor = r.grossWinningPnL.Div(r.grossLosingPnL)
 		return
 	}
-	r.TradeSummary.ProfitFactor = decimal.NewFromInt(maxProfitFactorNoLosses)
+	r.TradeSummary.ProfitFactor = decimal.Zero
+	r.TradeSummary.ProfitFactorUnbounded = true
 }
 
 func compareScalpingSoakBaseline(baseline ScalpingSoakBaseline, report ScalpingSoakReport) *ScalpingSoakBaselineComparison {
