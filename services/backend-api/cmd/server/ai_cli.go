@@ -1060,7 +1060,7 @@ func parseOptionalDecimalFlag(flagName string, rawValue string) (decimal.Decimal
 	}
 	parsed, err := decimal.NewFromString(rawValue)
 	if err != nil {
-		return decimal.Zero, false, fmt.Errorf("parse --%s: %w", flagName, err)
+		return decimal.Zero, false, fmt.Errorf("parse --%s value %q: %w", flagName, rawValue, err)
 	}
 	return parsed, true, nil
 }

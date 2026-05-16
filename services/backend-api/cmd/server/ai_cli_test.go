@@ -614,27 +614,88 @@ func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidQualityGate(t *testing
 }
 
 func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidPaperGates(t *testing.T) {
-	cases := [][]string{
-		{"--min-paper-trades", "-1"},
-		{"--min-actionable-cycles", "-1"},
-		{"--cycles", "1", "--min-actionable-cycles", "2"},
-		{"--max-hold-ratio", "not-a-decimal"},
-		{"--max-hold-ratio", "-0.1"},
-		{"--max-hold-ratio", "1.1"},
-		{"--min-paper-net-pnl", "not-a-decimal"},
-		{"--min-paper-avg-net-pnl", "not-a-decimal"},
-		{"--min-paper-profit-factor", "not-a-decimal"},
-		{"--min-paper-profit-factor", "-1"},
-		{"--max-paper-drawdown", "not-a-decimal"},
-		{"--max-paper-drawdown", "-1"},
-		{"--max-paper-drawdown-pct", "not-a-decimal"},
-		{"--max-paper-drawdown-pct", "-1"},
+	cases := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "negative paper trade count",
+			args:    []string{"--min-paper-trades", "-1"},
+			wantErr: "--min-paper-trades",
+		},
+		{
+			name:    "negative actionable cycle count",
+			args:    []string{"--min-actionable-cycles", "-1"},
+			wantErr: "--min-actionable-cycles",
+		},
+		{
+			name:    "actionable cycles above total cycles",
+			args:    []string{"--cycles", "1", "--min-actionable-cycles", "2"},
+			wantErr: "--min-actionable-cycles",
+		},
+		{
+			name:    "invalid max hold ratio decimal",
+			args:    []string{"--max-hold-ratio", "not-a-decimal"},
+			wantErr: `--max-hold-ratio value "not-a-decimal"`,
+		},
+		{
+			name:    "negative max hold ratio",
+			args:    []string{"--max-hold-ratio", "-0.1"},
+			wantErr: "--max-hold-ratio",
+		},
+		{
+			name:    "max hold ratio above one",
+			args:    []string{"--max-hold-ratio", "1.1"},
+			wantErr: "--max-hold-ratio",
+		},
+		{
+			name:    "invalid paper net pnl decimal",
+			args:    []string{"--min-paper-net-pnl", "not-a-decimal"},
+			wantErr: `--min-paper-net-pnl value "not-a-decimal"`,
+		},
+		{
+			name:    "invalid paper average net pnl decimal",
+			args:    []string{"--min-paper-avg-net-pnl", "not-a-decimal"},
+			wantErr: `--min-paper-avg-net-pnl value "not-a-decimal"`,
+		},
+		{
+			name:    "invalid paper profit factor decimal",
+			args:    []string{"--min-paper-profit-factor", "not-a-decimal"},
+			wantErr: `--min-paper-profit-factor value "not-a-decimal"`,
+		},
+		{
+			name:    "negative paper profit factor",
+			args:    []string{"--min-paper-profit-factor", "-1"},
+			wantErr: `--min-paper-profit-factor value "-1"`,
+		},
+		{
+			name:    "invalid paper drawdown decimal",
+			args:    []string{"--max-paper-drawdown", "not-a-decimal"},
+			wantErr: `--max-paper-drawdown value "not-a-decimal"`,
+		},
+		{
+			name:    "negative paper drawdown",
+			args:    []string{"--max-paper-drawdown", "-1"},
+			wantErr: `--max-paper-drawdown value "-1"`,
+		},
+		{
+			name:    "invalid paper drawdown pct decimal",
+			args:    []string{"--max-paper-drawdown-pct", "not-a-decimal"},
+			wantErr: `--max-paper-drawdown-pct value "not-a-decimal"`,
+		},
+		{
+			name:    "negative paper drawdown pct",
+			args:    []string{"--max-paper-drawdown-pct", "-1"},
+			wantErr: `--max-paper-drawdown-pct value "-1"`,
+		},
 	}
-	for _, args := range cases {
-		_, err := parseAIScalpingDecisionProbeOptions(args)
-		if err == nil {
-			t.Fatalf("expected invalid paper gate error for args %v", args)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseAIScalpingDecisionProbeOptions(tc.args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
 	}
 }
 
