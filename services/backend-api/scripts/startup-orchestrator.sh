@@ -291,12 +291,16 @@ stop_gateway() {
 
   if [ -z "${pid:-}" ]; then
     log_warn "No gateway pid file found"
+    stop_gateway_child_services
+    log_success "Gateway stopped"
     return 0
   fi
 
   if ! pid_running "$pid"; then
     log_warn "Stale gateway pid file found (pid=${pid}), removing"
     rm -f "${PID_FILE}"
+    stop_gateway_child_services
+    log_success "Gateway stopped"
     return 0
   fi
 
@@ -315,10 +319,14 @@ stop_gateway() {
   fi
 
   rm -f "${PID_FILE}"
+  stop_gateway_child_services
+  log_success "Gateway stopped"
+}
+
+stop_gateway_child_services() {
   stop_child_service "Backend API" "${NEURATRADE_HOME}/pids/backend.pid" "neuratrade-server"
   stop_child_service "CCXT Service" "${NEURATRADE_HOME}/pids/ccxt.pid" "ccxt-service"
   stop_child_service "Telegram Service" "${NEURATRADE_HOME}/pids/telegram.pid" "telegram-service" "bun run index.ts"
-  log_success "Gateway stopped"
 }
 
 stop_child_service() {
