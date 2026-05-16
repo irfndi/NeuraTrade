@@ -15,6 +15,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTruncate(t *testing.T) {
@@ -769,27 +771,42 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesActionabilityGates(t *tes
 		HoldRatio:             mustDecimal("0.75"),
 	}
 
-	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:              4,
-		RequireHealthy:      true,
-		RequireValid:        true,
-		MinSignalQuality:    mustDecimal("1"),
-		MinActionableCycles: 2,
-	})
-	if err == nil || !strings.Contains(err.Error(), "actionable_cycles") {
-		t.Fatalf("expected actionable cycles gate error, got %v", err)
+	tests := []struct {
+		name    string
+		opts    aiScalpingDecisionProbeOptions
+		wantErr string
+	}{
+		{
+			name: "actionable cycles gate",
+			opts: aiScalpingDecisionProbeOptions{
+				Cycles:              4,
+				RequireHealthy:      true,
+				RequireValid:        true,
+				MinSignalQuality:    mustDecimal("1"),
+				MinActionableCycles: 2,
+			},
+			wantErr: "actionable_cycles",
+		},
+		{
+			name: "hold ratio gate",
+			opts: aiScalpingDecisionProbeOptions{
+				Cycles:              4,
+				RequireHealthy:      true,
+				RequireValid:        true,
+				MinSignalQuality:    mustDecimal("1"),
+				RequireMaxHoldRatio: true,
+				MaxHoldRatio:        mustDecimal("0.5"),
+			},
+			wantErr: "hold_ratio",
+		},
 	}
 
-	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:              4,
-		RequireHealthy:      true,
-		RequireValid:        true,
-		MinSignalQuality:    mustDecimal("1"),
-		RequireMaxHoldRatio: true,
-		MaxHoldRatio:        mustDecimal("0.5"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "hold_ratio") {
-		t.Fatalf("expected hold ratio gate error, got %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAIScalpingDecisionProbeSummary(summary, tt.opts)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
 	}
 }
 
@@ -806,75 +823,91 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesPaperTradeGates(t *testin
 		PaperMaxDrawdown:      mustDecimal("0.02"),
 		PaperMaxDrawdownPct:   mustDecimal("0.0004"),
 	}
-	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:           2,
-		RequireHealthy:   true,
-		RequireValid:     true,
-		MinSignalQuality: mustDecimal("1"),
-		MinPaperTrades:   2,
-	})
-	if err == nil || !strings.Contains(err.Error(), "paper_trades") {
-		t.Fatalf("expected paper trade count gate error, got %v", err)
+
+	tests := []struct {
+		name    string
+		opts    aiScalpingDecisionProbeOptions
+		wantErr string
+	}{
+		{
+			name: "paper trade count gate",
+			opts: aiScalpingDecisionProbeOptions{
+				Cycles:           2,
+				RequireHealthy:   true,
+				RequireValid:     true,
+				MinSignalQuality: mustDecimal("1"),
+				MinPaperTrades:   2,
+			},
+			wantErr: "paper_trades",
+		},
+		{
+			name: "paper net pnl gate",
+			opts: aiScalpingDecisionProbeOptions{
+				Cycles:             2,
+				RequireHealthy:     true,
+				RequireValid:       true,
+				MinSignalQuality:   mustDecimal("1"),
+				RequirePaperNetPnL: true,
+				MinPaperNetPnL:     mustDecimal("0"),
+			},
+			wantErr: "paper_net_pnl",
+		},
+		{
+			name: "paper average net pnl gate",
+			opts: aiScalpingDecisionProbeOptions{
+				Cycles:                2,
+				RequireHealthy:        true,
+				RequireValid:          true,
+				MinSignalQuality:      mustDecimal("1"),
+				RequirePaperAvgNetPnL: true,
+				MinPaperAvgNetPnL:     mustDecimal("0"),
+			},
+			wantErr: "paper_avg_net_pnl",
+		},
+		{
+			name: "paper profit factor gate",
+			opts: aiScalpingDecisionProbeOptions{
+				Cycles:                   2,
+				RequireHealthy:           true,
+				RequireValid:             true,
+				MinSignalQuality:         mustDecimal("1"),
+				RequirePaperProfitFactor: true,
+				MinPaperProfitFactor:     mustDecimal("1"),
+			},
+			wantErr: "paper_profit_factor",
+		},
+		{
+			name: "paper drawdown gate",
+			opts: aiScalpingDecisionProbeOptions{
+				Cycles:               2,
+				RequireHealthy:       true,
+				RequireValid:         true,
+				MinSignalQuality:     mustDecimal("1"),
+				RequirePaperDrawdown: true,
+				MaxPaperDrawdown:     mustDecimal("0.01"),
+			},
+			wantErr: "paper_max_drawdown",
+		},
+		{
+			name: "paper drawdown pct gate",
+			opts: aiScalpingDecisionProbeOptions{
+				Cycles:                  2,
+				RequireHealthy:          true,
+				RequireValid:            true,
+				MinSignalQuality:        mustDecimal("1"),
+				RequirePaperDrawdownPct: true,
+				MaxPaperDrawdownPct:     mustDecimal("0.0001"),
+			},
+			wantErr: "paper_max_drawdown_pct",
+		},
 	}
 
-	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:             2,
-		RequireHealthy:     true,
-		RequireValid:       true,
-		MinSignalQuality:   mustDecimal("1"),
-		RequirePaperNetPnL: true,
-		MinPaperNetPnL:     mustDecimal("0"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "paper_net_pnl") {
-		t.Fatalf("expected paper net pnl gate error, got %v", err)
-	}
-
-	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:                2,
-		RequireHealthy:        true,
-		RequireValid:          true,
-		MinSignalQuality:      mustDecimal("1"),
-		RequirePaperAvgNetPnL: true,
-		MinPaperAvgNetPnL:     mustDecimal("0"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "paper_avg_net_pnl") {
-		t.Fatalf("expected paper avg net pnl gate error, got %v", err)
-	}
-
-	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:                   2,
-		RequireHealthy:           true,
-		RequireValid:             true,
-		MinSignalQuality:         mustDecimal("1"),
-		RequirePaperProfitFactor: true,
-		MinPaperProfitFactor:     mustDecimal("1"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "paper_profit_factor") {
-		t.Fatalf("expected paper profit factor gate error, got %v", err)
-	}
-
-	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:               2,
-		RequireHealthy:       true,
-		RequireValid:         true,
-		MinSignalQuality:     mustDecimal("1"),
-		RequirePaperDrawdown: true,
-		MaxPaperDrawdown:     mustDecimal("0.01"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "paper_max_drawdown") {
-		t.Fatalf("expected paper drawdown gate error, got %v", err)
-	}
-
-	err = validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:                  2,
-		RequireHealthy:          true,
-		RequireValid:            true,
-		MinSignalQuality:        mustDecimal("1"),
-		RequirePaperDrawdownPct: true,
-		MaxPaperDrawdownPct:     mustDecimal("0.0001"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "paper_max_drawdown_pct") {
-		t.Fatalf("expected paper drawdown pct gate error, got %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAIScalpingDecisionProbeSummary(summary, tt.opts)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
 	}
 }
 
@@ -898,9 +931,7 @@ func TestValidateAIScalpingDecisionProbeSummaryTreatsNoLossProfitFactorAsUnbound
 		RequirePaperProfitFactor: true,
 		MinPaperProfitFactor:     mustDecimal("10000"),
 	})
-	if err != nil {
-		t.Fatalf("expected no-loss profit factor to satisfy any minimum, got %v", err)
-	}
+	require.NoError(t, err)
 }
 
 func mustDecimal(value string) decimal.Decimal {
