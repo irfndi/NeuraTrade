@@ -1499,6 +1499,9 @@ type aiMarketSignal struct {
 	OrderBookImbalance float64 `json:"ob_imbalance"`
 	PriceChange24h     float64 `json:"price_change_24h_pct"`
 	RangePosition24h   float64 `json:"range_pos_24h"`
+	SuggestedAction    string  `json:"suggested_action,omitempty"`
+	ConfidenceHint     float64 `json:"confidence_hint,omitempty"`
+	CandidateScore     float64 `json:"candidate_score,omitempty"`
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
@@ -1981,6 +1984,7 @@ Return JSON only:
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
+	signals = s.signalsWithDecisionHints(ctx, signals, portfolio)
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
 	walletBalance := walletBasis(portfolio)
 	usdtBalance := promptUSDTBalanceDecimal(portfolio)
@@ -2038,6 +2042,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - Effective Min Confidence (must obey): %.2f
 - Effective Max Capital %% (must obey): %.2f
 - Policy note: account-tier and recovery adjustments are already reflected in the effective values above; cite and enforce those effective values only
+- Signal guidance: suggested_action/confidence_hint/candidate_score are backend-computed from liquidity, imbalance, range, momentum, fee edge, and current effective thresholds; when confidence_hint meets Effective Min Confidence, prefer that action unless a listed risk field clearly invalidates it
 %s- Fund Milestone Progress: %.2f%%
 - No-fill Duration (minutes): %.1f
 - State Drift Active: %t
@@ -3296,6 +3301,36 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		StopLoss:        &stopLoss,
 		TakeProfit:      &takeProfit,
 	}, score, true
+}
+
+func (s *AIScalpingService) signalsWithDecisionHints(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) []aiMarketSignal {
+	if len(signals) == 0 {
+		return signals
+	}
+	enriched := make([]aiMarketSignal, len(signals))
+	copy(enriched, signals)
+	for i := range enriched {
+		decision, score, ok := s.deterministicFallbackCandidate(ctx, enriched[i], portfolio, false)
+		if !ok {
+			decision, score, ok = s.deterministicFallbackCandidate(ctx, enriched[i], portfolio, true)
+		}
+		if !ok || decision == nil || !isActionableScalpingHintAction(decision.Action) {
+			continue
+		}
+		enriched[i].SuggestedAction = decision.Action
+		enriched[i].ConfidenceHint = decision.Confidence
+		enriched[i].CandidateScore = score
+	}
+	return enriched
+}
+
+func isActionableScalpingHintAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "buy", "sell":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *AIScalpingService) fallbackSymbolExpectancyAllowed(ctx context.Context, symbol, action string, portfolio TradingPortfolio) bool {

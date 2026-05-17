@@ -2268,6 +2268,46 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RespectsConfidenceAndP
 	}
 }
 
+func TestAIScalpingService_SignalsWithDecisionHintsAnnotatesEligibleCandidates(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+
+	enriched := svc.signalsWithDecisionHints(context.Background(), signals, TradingPortfolio{
+		EffectiveMinConfidence: 0.55,
+		EffectiveMaxCapitalPct: 5,
+	})
+
+	require.Len(t, enriched, 2)
+	assert.Equal(t, "buy", enriched[0].SuggestedAction)
+	assert.GreaterOrEqual(t, enriched[0].ConfidenceHint, 0.55)
+	assert.Greater(t, enriched[0].CandidateScore, 0.0)
+	assert.Empty(t, enriched[1].SuggestedAction)
+	assert.Zero(t, signals[0].ConfidenceHint, "input signals should not be mutated")
+}
+
 func TestCandidateSignalsFromMarketSignals_SkipsNonFiniteDecimalInputs(t *testing.T) {
 	candidates := candidateSignalsFromMarketSignals([]aiMarketSignal{
 		{
