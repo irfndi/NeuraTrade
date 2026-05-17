@@ -56,10 +56,19 @@ CREATE TABLE futures_arbitrage_opportunities_new (
     open_interest NUMERIC
 );
 
+CREATE TABLE IF NOT EXISTS futures_arbitrage_opportunities_migration_duplicates AS
+SELECT *
+FROM futures_arbitrage_opportunities
+WHERE rowid NOT IN (
+    SELECT MIN(rowid)
+    FROM futures_arbitrage_opportunities
+    GROUP BY symbol, COALESCE(CAST(buy_exchange_id AS TEXT), ''), COALESCE(CAST(sell_exchange_id AS TEXT), '')
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_futures_arbitrage_unique
 ON futures_arbitrage_opportunities_new(symbol, long_exchange, short_exchange);
 
-INSERT OR REPLACE INTO futures_arbitrage_opportunities_new (
+INSERT INTO futures_arbitrage_opportunities_new (
     id, symbol, long_exchange, short_exchange, long_exchange_id, short_exchange_id,
     long_funding_rate, short_funding_rate, net_funding_rate,
     apy, risk_score, volume_24h, is_active, expires_at, detected_at
@@ -80,7 +89,12 @@ SELECT
     COALESCE(is_active, 1),
     expires_at,
     detected_at
-FROM futures_arbitrage_opportunities;
+FROM futures_arbitrage_opportunities
+WHERE rowid IN (
+    SELECT MIN(rowid)
+    FROM futures_arbitrage_opportunities
+    GROUP BY symbol, COALESCE(CAST(buy_exchange_id AS TEXT), ''), COALESCE(CAST(sell_exchange_id AS TEXT), '')
+);
 
 DROP TABLE futures_arbitrage_opportunities;
 ALTER TABLE futures_arbitrage_opportunities_new RENAME TO futures_arbitrage_opportunities;

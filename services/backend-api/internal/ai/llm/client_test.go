@@ -333,8 +333,18 @@ func TestIsProviderBalanceExhausted(t *testing.T) {
 			want:    true,
 		},
 		{
-			name:    "credit balance",
+			name:    "low credit balance",
 			message: "Low credit balance",
+			want:    true,
+		},
+		{
+			name:    "insufficient credit balance",
+			message: "insufficient credit balance for this request",
+			want:    true,
+		},
+		{
+			name:    "credit balance exhausted",
+			message: "credit balance exhausted",
 			want:    true,
 		},
 		{
@@ -367,6 +377,11 @@ func TestIsProviderBalanceExhausted(t *testing.T) {
 		{
 			name:    "billing address notice is not balance exhaustion",
 			message: "billing address update required",
+			want:    false,
+		},
+		{
+			name:    "sufficient credit balance is not balance exhaustion",
+			message: "Your remaining credit balance is: $100 - sufficient",
 			want:    false,
 		},
 	}

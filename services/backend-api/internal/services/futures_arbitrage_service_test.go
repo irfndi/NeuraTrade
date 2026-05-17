@@ -407,6 +407,17 @@ func TestFuturesArbitrageService_storeOpportunity_SQLiteMigrationSchema(t *testi
 	assert.NoError(t, err)
 	assert.Equal(t, 1, count, "migration should dedupe legacy rows before enforcing unique upserts")
 
+	err = sqliteDB.QueryRow(
+		context.Background(),
+		`SELECT COUNT(*) FROM futures_arbitrage_opportunities_migration_duplicates
+		 WHERE symbol = $1 AND buy_exchange_id = $2 AND sell_exchange_id = $3`,
+		"ETH/USDT",
+		1,
+		2,
+	).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count, "migration should preserve duplicate legacy rows for audit")
+
 	opportunity.APY = decimal.NewFromFloat(0.42)
 	err = service.storeOpportunity(context.Background(), opportunity)
 	require.NoError(t, err, "second storeOpportunity failed")

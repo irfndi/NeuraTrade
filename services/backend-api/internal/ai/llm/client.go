@@ -318,7 +318,9 @@ func isProviderBalanceExhausted(message string, errorType string, code string) b
 		strings.Contains(text, "quota exceeded") ||
 		strings.Contains(text, "resource package") ||
 		strings.Contains(text, "credit exhausted") ||
-		strings.Contains(text, "credit balance") ||
+		strings.Contains(text, "credit balance exhausted") ||
+		strings.Contains(text, "insufficient credit balance") ||
+		strings.Contains(text, "low credit balance") ||
 		strings.Contains(text, "billing_issue") ||
 		strings.Contains(text, "billing_limit") ||
 		strings.Contains(text, "billing exceeded") ||
