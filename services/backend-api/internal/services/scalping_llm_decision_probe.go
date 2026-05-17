@@ -206,13 +206,7 @@ func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSig
 	if reasoning == "" || !strings.Contains(reasoning, "spread") {
 		return nil
 	}
-	claimsWideSpread := strings.Contains(reasoning, ">") ||
-		strings.Contains(reasoning, "above") ||
-		strings.Contains(reasoning, "greater than") ||
-		strings.Contains(reasoning, "wider than") ||
-		strings.Contains(reasoning, "too wide") ||
-		strings.Contains(reasoning, "wide spread")
-	if !claimsWideSpread {
+	if !holdReasoningClaimsWideSpread(reasoning) {
 		return nil
 	}
 	threshold := maxSpreadPct
@@ -231,6 +225,38 @@ func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSig
 		}
 	}
 	return diagnostics
+}
+
+func holdReasoningClaimsWideSpread(reasoning string) bool {
+	reasoning = strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(reasoning))), " ")
+	if reasoning == "" {
+		return false
+	}
+	phrases := []string{
+		"wide spread",
+		"spread >",
+		"spread>",
+		"spread above",
+		"spread is above",
+		"spread was above",
+		"spread remains above",
+		"spread greater than",
+		"spread is greater than",
+		"spread wider than",
+		"spread is wider than",
+		"spread too wide",
+		"spread is too wide",
+		"spread exceeds",
+		"spread exceeded",
+		"spread over",
+		"spread beyond",
+	}
+	for _, phrase := range phrases {
+		if strings.Contains(reasoning, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func simulateScalpingLLMProbePaperTrade(

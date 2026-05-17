@@ -133,16 +133,32 @@ func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpread
 
 func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T) {
 	cases := []struct {
-		name      string
-		reasoning string
-		signals   []aiMarketSignal
-		ceiling   float64
+		name            string
+		reasoning       string
+		signals         []aiMarketSignal
+		ceiling         float64
+		wantDiagnostics bool
 	}{
 		{
-			name:      "blanket wide-spread claim contradicts tradable symbol",
-			reasoning: "All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.",
-			signals:   []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
-			ceiling:   0.22,
+			name:            "blanket wide-spread claim contradicts tradable symbol",
+			reasoning:       "All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.",
+			signals:         []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
+			ceiling:         0.22,
+			wantDiagnostics: true,
+		},
+		{
+			name:            "generic confidence threshold does not imply wide spread",
+			reasoning:       "BTC spread 0.02% is tradable, but confidence > floor is not enough for entry.",
+			signals:         []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
+			ceiling:         0.22,
+			wantDiagnostics: false,
+		},
+		{
+			name:            "generic momentum threshold does not imply wide spread",
+			reasoning:       "BTC spread is within the gate, but momentum remains above the neutral threshold.",
+			signals:         []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
+			ceiling:         0.22,
+			wantDiagnostics: false,
 		},
 	}
 
@@ -150,6 +166,10 @@ func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			diagnostics := scalpingHoldSpreadReasoningDiagnostics(tc.reasoning, tc.signals, tc.ceiling)
 
+			if !tc.wantDiagnostics {
+				require.Empty(t, diagnostics)
+				return
+			}
 			require.NotEmpty(t, diagnostics)
 			require.Contains(t, diagnostics[0], "cites wide spread")
 			require.Contains(t, diagnostics[0], "BTC/USDT")
