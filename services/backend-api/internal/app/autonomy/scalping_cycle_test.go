@@ -373,13 +373,13 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 		snapshot.TopCandidateRejections[2].Reason,
 	}
 	require.Contains(t, reasons, CandidateRejectSpreadTooWide)
-	require.Contains(t, reasons, CandidateRejectMissingOrderbookSignal)
+	require.Contains(t, reasons, CandidateRejectNoDirectionalEdge)
 
 	bndSeen := false
 	for _, rejection := range snapshot.TopCandidateRejections {
 		if rejection.Symbol == "BND/USDT" {
 			bndSeen = true
-			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
+			require.Equal(t, CandidateRejectNoDirectionalEdge, rejection.Reason)
 			require.InDelta(t, 0.22, rejection.BidAskSpreadPct, 1e-9)
 			require.InDelta(t, 0.02, rejection.OrderBookImbalance, 1e-9)
 			require.InDelta(t, 40.0, rejection.RangePosition24h, 1e-9)

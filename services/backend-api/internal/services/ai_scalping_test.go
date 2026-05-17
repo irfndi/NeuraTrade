@@ -2308,6 +2308,83 @@ func TestAIScalpingService_SignalsWithDecisionHintsAnnotatesEligibleCandidates(t
 	assert.Zero(t, signals[0].ConfidenceHint, "input signals should not be mutated")
 }
 
+func TestAIScalpingService_FocusActionableMarketSignalsKeepsDecisionReadySignals(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.04,
+			PriceChange24h:     0.1,
+			RangePosition24h:   50,
+		},
+		{
+			Symbol:             "SOL/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+
+	focused := svc.focusActionableMarketSignals(context.Background(), signals)
+
+	require.Len(t, focused, 1)
+	assert.Equal(t, "BTC/USDT", focused[0].Symbol)
+}
+
+func TestAIScalpingService_FocusActionableMarketSignalsKeepsDiagnosticsWhenNoCandidate(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.04,
+			PriceChange24h:     0.1,
+			RangePosition24h:   50,
+		},
+		{
+			Symbol:             "SOL/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+
+	focused := svc.focusActionableMarketSignals(context.Background(), signals)
+
+	require.Len(t, focused, 2)
+	assert.Equal(t, signals, focused)
+}
+
 func TestCandidateSignalsFromMarketSignals_SkipsNonFiniteDecimalInputs(t *testing.T) {
 	candidates := candidateSignalsFromMarketSignals([]aiMarketSignal{
 		{

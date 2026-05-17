@@ -569,11 +569,7 @@ func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy)
 	action, estimatedConfidence, ok := estimateCandidateConfidence(signal, spreadThreshold)
 	rejection.EstimatedConfidence = estimatedConfidence
 	if !ok {
-		if math.Abs(signal.OrderBookImbalance) < scalpingNeutralImbalanceFloor {
-			rejection.Reason = CandidateRejectMissingOrderbookSignal
-		} else {
-			rejection.Reason = CandidateRejectNoDirectionalEdge
-		}
+		rejection.Reason = CandidateRejectNoDirectionalEdge
 		return true, false, rejection
 	}
 	_ = action
