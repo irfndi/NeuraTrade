@@ -2300,6 +2300,10 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 				managedOpenPositionsEffective = value
 				managedOpenAt = selectionAt
 			}
+		} else if isActiveScalpingQuest && (!hasActiveManagedOpen || selectionAt.After(managedOpenAt)) {
+			managedOpenPositionsEffective = 0
+			managedOpenAt = selectionAt
+			hasActiveManagedOpen = true
 		}
 		if _, exists := cp["effective_max_concurrent_positions"]; exists {
 			value := readQuestMetricInt(cp["effective_max_concurrent_positions"])

@@ -1302,7 +1302,7 @@ func TestGetChatRuntimeDiagnostics_ActiveZeroConcurrencyCapSuppressesStaleCap(t 
 	assert.Equal(t, 0, diag["managed_open_positions_effective"])
 }
 
-func TestGetChatRuntimeDiagnostics_ActiveMissingConcurrencyCapSuppressesStaleCap(t *testing.T) {
+func TestGetChatRuntimeDiagnostics_ActiveMissingConcurrencyMetricsSuppressesStaleValues(t *testing.T) {
 	engine := NewQuestEngine(NewInMemoryQuestStore())
 	now := time.Now().UTC()
 	engine.quests["q-cycle-active-missing-cap"] = &Quest{
@@ -1313,9 +1313,7 @@ func TestGetChatRuntimeDiagnostics_ActiveMissingConcurrencyCapSuppressesStaleCap
 			"chat_id":       "chat-cycle-missing-cap",
 			"definition_id": "scalping_execution",
 		},
-		Checkpoint: map[string]interface{}{
-			"managed_open_positions_effective": 0,
-		},
+		Checkpoint: map[string]interface{}{},
 	}
 	engine.quests["q-cycle-stale-missing-cap"] = &Quest{
 		ID:        "q-cycle-stale-missing-cap",
