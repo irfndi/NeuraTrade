@@ -85,45 +85,75 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 }
 
 func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpreadReasoning(t *testing.T) {
-	mockLLM := &MockLLMClient{
-		Responses: []*llm.CompletionResponse{
-			{
-				Provider:     llm.Provider("deepseek"),
-				Model:        "deepseek-chat",
-				LatencyMs:    120,
-				FinishReason: "stop",
-				Message: llm.Message{
-					Content: `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.","stop_loss":null,"take_profit":null}`,
-				},
-			},
+	cases := []struct {
+		name                   string
+		mockResponseContent    string
+		expectedDecisionReason string
+	}{
+		{
+			name:                   "rewrites blanket wide-spread hold when a tradable signal exists",
+			mockResponseContent:    `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.","stop_loss":null,"take_profit":null}`,
+			expectedDecisionReason: "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason.",
 		},
 	}
-	svc := newScalpingLLMDecisionProbeTestService(mockLLM)
 
-	result, err := runScalpingLLMDecisionProbeWithService(context.Background(), svc, ScalpingLLMDecisionProbeOptions{
-		RequireHealthy: true,
-		RequireValid:   true,
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockLLM := &MockLLMClient{
+				Responses: []*llm.CompletionResponse{
+					{
+						Provider:     llm.Provider("deepseek"),
+						Model:        "deepseek-chat",
+						LatencyMs:    120,
+						FinishReason: "stop",
+						Message: llm.Message{
+							Content: tc.mockResponseContent,
+						},
+					},
+				},
+			}
+			svc := newScalpingLLMDecisionProbeTestService(mockLLM)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.NotNil(t, result.Decision)
-	require.True(t, result.ContractValid)
-	require.Empty(t, result.ReasoningDiagnostics)
-	require.Equal(t, "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason.", result.Decision.Reasoning)
-	require.LessOrEqual(t, len([]rune(result.Decision.Reasoning)), 320)
+			result, err := runScalpingLLMDecisionProbeWithService(context.Background(), svc, ScalpingLLMDecisionProbeOptions{
+				RequireHealthy: true,
+				RequireValid:   true,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, result.Decision)
+			require.True(t, result.ContractValid)
+			require.Empty(t, result.ReasoningDiagnostics)
+			require.Equal(t, tc.expectedDecisionReason, result.Decision.Reasoning)
+			require.LessOrEqual(t, len([]rune(result.Decision.Reasoning)), 320)
+		})
+	}
 }
 
 func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T) {
-	diagnostics := scalpingHoldSpreadReasoningDiagnostics(
-		"All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.",
-		[]aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
-		0.22,
-	)
+	cases := []struct {
+		name      string
+		reasoning string
+		signals   []aiMarketSignal
+		ceiling   float64
+	}{
+		{
+			name:      "blanket wide-spread claim contradicts tradable symbol",
+			reasoning: "All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.",
+			signals:   []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
+			ceiling:   0.22,
+		},
+	}
 
-	require.NotEmpty(t, diagnostics)
-	require.Contains(t, diagnostics[0], "cites wide spread")
-	require.Contains(t, diagnostics[0], "BTC/USDT")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			diagnostics := scalpingHoldSpreadReasoningDiagnostics(tc.reasoning, tc.signals, tc.ceiling)
+
+			require.NotEmpty(t, diagnostics)
+			require.Contains(t, diagnostics[0], "cites wide spread")
+			require.Contains(t, diagnostics[0], "BTC/USDT")
+		})
+	}
 }
 
 func TestRunScalpingLLMDecisionProbeWithServiceFlagsLLMDegradation(t *testing.T) {

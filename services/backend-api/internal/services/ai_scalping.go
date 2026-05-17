@@ -1977,7 +1977,7 @@ Return JSON only:
 - ob_imbalance > 0.2: Strong buy pressure (more bids)
 - ob_imbalance < -0.2: Strong sell pressure (more asks)
 
-- spread <= %.2f%%: tradable liquidity ceiling; anything wider must be treated as hold
+- spread <= %.4f%%: tradable liquidity ceiling; anything wider must be treated as hold
 - range_pos_24h > 80: Price near daily high (avoid chasing late entries)
 - range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
 		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct())

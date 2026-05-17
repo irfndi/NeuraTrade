@@ -984,7 +984,7 @@ func TestAIScalpingService_BuildSystemPrompt_GuardsSpreadThresholdReasoning(t *t
 
 	assert.Contains(t, prompt, "compare spread_pct directly to the liquidity ceiling")
 	assert.Contains(t, prompt, "never call a spread at or below the ceiling too wide")
-	assert.Contains(t, prompt, "spread <= 0.22%")
+	assert.Contains(t, prompt, "spread <= 0.2200%")
 }
 
 func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t *testing.T) {
@@ -2353,6 +2353,51 @@ func TestAIScalpingService_FocusActionableMarketSignalsKeepsDecisionReadySignals
 
 	require.Len(t, focused, 1)
 	assert.Equal(t, "BTC/USDT", focused[0].Symbol)
+}
+
+func TestAIScalpingService_FocusActionableMarketSignalsUsesEffectiveConfidenceThreshold(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		High24h:            104,
+		Low24h:             96,
+		Volume24h:          1,
+		BidAskSpread:       0.08,
+		OrderBookImbalance: 0.35,
+		PriceChange24h:     0,
+		RangePosition24h:   45,
+	}
+	signals := []aiMarketSignal{
+		signal,
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+	portfolio := TradingPortfolio{
+		EffectiveMinConfidence: 0.60,
+		EffectiveMaxCapitalPct: 5,
+	}
+
+	enriched := svc.signalsWithDecisionHints(context.Background(), signals, portfolio)
+	focused := svc.focusActionableMarketSignals(context.Background(), signals, portfolio)
+	_, _, eligibleWithDefaultFloor := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, false)
+
+	require.Len(t, enriched, 2)
+	require.Equal(t, "buy", enriched[0].SuggestedAction)
+	require.GreaterOrEqual(t, enriched[0].ConfidenceHint, portfolio.EffectiveMinConfidence)
+	require.Less(t, enriched[0].ConfidenceHint, svc.deterministicFallbackConfig().ConfidenceFloor)
+	require.Len(t, focused, 1)
+	require.Equal(t, "BTC/USDT", focused[0].Symbol)
+	require.False(t, eligibleWithDefaultFloor, "empty portfolio would incorrectly apply the fallback confidence floor")
 }
 
 func TestAIScalpingService_FocusActionableMarketSignalsKeepsDiagnosticsWhenNoCandidate(t *testing.T) {

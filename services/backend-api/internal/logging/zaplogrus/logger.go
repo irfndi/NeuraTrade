@@ -61,10 +61,6 @@ func (l *Logger) SetLevel(level Level) {
 	l.atomicLevel.SetLevel(toZapLevel(level))
 }
 
-func SetLevel(level Level) {
-	std.SetLevel(level)
-}
-
 func (l *Logger) GetLevel() Level {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

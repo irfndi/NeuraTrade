@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/shopspring/decimal"
 )
@@ -81,7 +80,6 @@ func run() error {
 	if dbPath == "" {
 		dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("neuratrade-scalping-soak-%d.db", time.Now().UnixNano()))
 	}
-	zaplogrus.SetLevel(zaplogrus.ErrorLevel)
 	db, err := database.NewSQLiteConnection(dbPath)
 	if err != nil {
 		return fmt.Errorf("open sqlite database %s: %w", dbPath, err)
