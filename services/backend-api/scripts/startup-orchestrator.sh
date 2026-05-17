@@ -267,15 +267,9 @@ start_gateway() {
   fi
   export PATH="${REPO_ROOT}/bin:${PATH}"
 
-  local launch_status=0
-  launch_gateway_detached "$gateway_cmd" >"$launched_pid_file" || launch_status=$?
+  launch_gateway_detached "$gateway_cmd" >"$launched_pid_file"
   if ! cd "$previous_dir"; then
     log_warn "Failed to restore previous directory: ${previous_dir}"
-  fi
-  if [ "$launch_status" -ne 0 ]; then
-    rm -f "$launched_pid_file"
-    log_error "Failed to launch gateway"
-    return 1
   fi
 
   IFS= read -r launched_pid <"$launched_pid_file" || launched_pid=""
