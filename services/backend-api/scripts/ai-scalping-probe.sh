@@ -139,7 +139,7 @@ run_probe() {
   append_optional_arg "--min-paper-profit-factor" "$MIN_PAPER_PROFIT_FACTOR"
   append_optional_arg "--max-paper-drawdown" "$MAX_PAPER_DRAWDOWN"
   append_optional_arg "--max-paper-drawdown-pct" "$MAX_PAPER_DRAWDOWN_PCT"
-  append_optional_arg "--max-reasoning-diagnostics" "$MAX_REASONING_DIAGNOSTICS"
+  args+=("--max-reasoning-diagnostics" "$MAX_REASONING_DIAGNOSTICS")
 
   log "running real LLM scalping probe provider=${PROVIDER:-runtime-config} exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} \
 min_signal_quality=${MIN_SIGNAL_QUALITY:-disabled} min_actionable_cycles=${MIN_ACTIONABLE_CYCLES:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} \
