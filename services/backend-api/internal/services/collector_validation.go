@@ -204,7 +204,7 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 
 	// First try to get existing trading pair for this exchange and symbol
 	var tradingPairID int
-	err := c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = ? AND symbol = ?", exchangeID, symbol).Scan(&tradingPairID)
+	err := c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = $1 AND symbol = $2", exchangeID, symbol).Scan(&tradingPairID)
 	if err == nil {
 		// Cache the result if Redis is available
 		if c.redisClient != nil {
@@ -222,14 +222,14 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 
 	// Insert new trading pair - SQLite compatible
 	_, err = c.db.Exec(c.ctx,
-		"INSERT OR IGNORE INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency, is_active) VALUES (?, ?, ?, ?, 1)",
+		"INSERT OR IGNORE INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency, is_active) VALUES ($1, $2, $3, $4, 1)",
 		exchangeID, symbol, baseCurrency, quoteCurrency)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create trading pair: %w", err)
 	}
 
 	// Get the trading pair ID
-	err = c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = ? AND symbol = ?", exchangeID, symbol).Scan(&tradingPairID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = $1 AND symbol = $2", exchangeID, symbol).Scan(&tradingPairID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get trading pair after insert: %w", err)
 	}
@@ -265,7 +265,7 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// First try to get existing exchange by ccxt_id
 	var exchangeID int
-	err := c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = ?", ccxtID).Scan(&exchangeID)
+	err := c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = $1", ccxtID).Scan(&exchangeID)
 	if err == nil {
 		// Cache the result
 		if c.redisClient != nil {
@@ -276,7 +276,7 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// Also check by name in case exchange exists with different ccxt_id
 	name := strings.ToLower(ccxtID)
-	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE LOWER(name) = ?", name).Scan(&exchangeID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE LOWER(name) = $1", name).Scan(&exchangeID)
 	if err == nil {
 		c.logger.WithFields(map[string]interface{}{
 			"name":        name,
@@ -295,14 +295,14 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// Insert new exchange - SQLite compatible (use INSERT OR IGNORE)
 	_, err = c.db.Exec(c.ctx,
-		"INSERT OR IGNORE INTO exchanges (name, display_name, ccxt_id, api_url, status, has_spot, has_futures) VALUES (?, ?, ?, ?, 'active', 1, 1)",
+		"INSERT OR IGNORE INTO exchanges (name, display_name, ccxt_id, api_url, status, has_spot, has_futures) VALUES ($1, $2, $3, $4, 'active', 1, 1)",
 		name, displayName, ccxtID, fmt.Sprintf("https://api.%s.com", strings.ToLower(ccxtID)))
 	if err != nil {
 		return 0, fmt.Errorf("failed to create exchange: %w", err)
 	}
 
 	// Get the exchange ID
-	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = ?", ccxtID).Scan(&exchangeID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = $1", ccxtID).Scan(&exchangeID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get exchange after insert: %w", err)
 	}
@@ -326,7 +326,7 @@ func (c *CollectorService) cachedTradingPairIDExists(exchangeID int, symbol stri
 	var exists int
 	err := c.db.QueryRow(
 		c.ctx,
-		"SELECT 1 FROM trading_pairs WHERE id = ? AND exchange_id = ? AND symbol = ?",
+		"SELECT 1 FROM trading_pairs WHERE id = $1 AND exchange_id = $2 AND symbol = $3",
 		tradingPairID,
 		exchangeID,
 		symbol,
@@ -352,7 +352,7 @@ func (c *CollectorService) cachedExchangeIDExists(ccxtID string, exchangeID int)
 	var exists int
 	err := c.db.QueryRow(
 		c.ctx,
-		"SELECT 1 FROM exchanges WHERE id = ? AND (ccxt_id = ? OR LOWER(name) = ?)",
+		"SELECT 1 FROM exchanges WHERE id = $1 AND (ccxt_id = $2 OR LOWER(name) = $3)",
 		exchangeID,
 		ccxtID,
 		strings.ToLower(ccxtID),

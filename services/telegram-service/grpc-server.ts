@@ -1,5 +1,5 @@
+import { Buffer } from "node:buffer";
 import * as grpc from "@grpc/grpc-js";
-import { createHash } from "node:crypto";
 import { timingSafeEqual } from "node:crypto";
 import {
   TelegramServiceService,
@@ -37,10 +37,17 @@ export function safeCredentialEqual(
   provided: string,
   expected: string,
 ): boolean {
-  const providedDigest = createHash("sha256").update(provided, "utf8").digest();
-  const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
+  const providedBytes = Buffer.from(provided, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  const compareLength = Math.max(providedBytes.length, expectedBytes.length, 1);
+  const providedPadded = Buffer.alloc(compareLength);
+  const expectedPadded = Buffer.alloc(compareLength);
 
-  return timingSafeEqual(providedDigest, expectedDigest);
+  providedBytes.copy(providedPadded);
+  expectedBytes.copy(expectedPadded);
+
+  const bytesMatch = timingSafeEqual(providedPadded, expectedPadded);
+  return providedBytes.length === expectedBytes.length && bytesMatch;
 }
 
 export function createAuthInterceptor(
