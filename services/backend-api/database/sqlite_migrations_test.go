@@ -119,3 +119,21 @@ func assertSQLiteScalar(t *testing.T, dbPath, query, want string) {
 	require.NoErrorf(t, err, "sqlite query failed\nquery: %s\n%s", query, output)
 	require.Equalf(t, want, strings.TrimSpace(string(output)), "sqlite query mismatch for %q", query)
 }
+
+func copySQLiteMigrationForTest(t *testing.T, src, dst string) {
+	t.Helper()
+
+	info, err := os.Stat(src)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+
+	contents, err := os.ReadFile(src)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(dst, contents, info.Mode().Perm()))
+}
+
+func assertSQLiteMigrationScalar(t *testing.T, dbPath, query, want string) {
+	t.Helper()
+
+	assertSQLiteScalar(t, dbPath, query, want)
+}
