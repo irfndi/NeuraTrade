@@ -32,6 +32,15 @@ import { config } from "./src/config";
 
 type ParseMode = "HTML" | "Markdown" | "MarkdownV2";
 const HEALTH_CHECK_METHOD_PATH = "/telegram.TelegramService/HealthCheck";
+const CREDENTIAL_COMPARE_BYTES = 4096;
+
+function copyCredentialToFixedBuffer(value: Buffer): Buffer {
+  const padded = Buffer.alloc(CREDENTIAL_COMPARE_BYTES);
+  for (let i = 0; i < CREDENTIAL_COMPARE_BYTES; i += 1) {
+    padded[i] = i < value.length ? value[i] : 0;
+  }
+  return padded;
+}
 
 export function safeCredentialEqual(
   provided: string,
@@ -39,15 +48,16 @@ export function safeCredentialEqual(
 ): boolean {
   const providedBytes = Buffer.from(provided, "utf8");
   const expectedBytes = Buffer.from(expected, "utf8");
-  const compareLength = Math.max(providedBytes.length, expectedBytes.length, 1);
-  const providedPadded = Buffer.alloc(compareLength);
-  const expectedPadded = Buffer.alloc(compareLength);
-
-  providedBytes.copy(providedPadded);
-  expectedBytes.copy(expectedPadded);
+  const providedPadded = copyCredentialToFixedBuffer(providedBytes);
+  const expectedPadded = copyCredentialToFixedBuffer(expectedBytes);
 
   const bytesMatch = timingSafeEqual(providedPadded, expectedPadded);
-  return providedBytes.length === expectedBytes.length && bytesMatch;
+  return (
+    providedBytes.length === expectedBytes.length &&
+    providedBytes.length <= CREDENTIAL_COMPARE_BYTES &&
+    expectedBytes.length <= CREDENTIAL_COMPARE_BYTES &&
+    bytesMatch
+  );
 }
 
 export function createAuthInterceptor(

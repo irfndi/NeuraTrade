@@ -348,4 +348,12 @@ describe("TelegramGrpcServer", () => {
     );
     expect(safeCredentialEqual("", "secret-token")).toBe(false);
   });
+
+  test("credential comparison rejects over-limit matching prefixes", () => {
+    const longSecret = "a".repeat(4097);
+    expect(safeCredentialEqual(longSecret, longSecret)).toBe(false);
+    expect(safeCredentialEqual(`${"a".repeat(4096)}b`, `${"a".repeat(4096)}c`)).toBe(
+      false,
+    );
+  });
 });
