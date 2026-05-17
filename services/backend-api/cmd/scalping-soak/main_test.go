@@ -27,6 +27,9 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			AIProviderDegradation: services.ScalpingAIDegradationSoakStats{
 				DegradedCycles: 1,
 			},
+			ActionSplit: map[string]decimal.Decimal{
+				"hold": decimal.NewFromFloat(0.5),
+			},
 			BaselineComparison: &services.ScalpingSoakBaselineComparison{
 				BaselineName:        "test",
 				DeltaWinRate:        decimal.NewFromFloat(0.627),
@@ -49,6 +52,7 @@ func TestValidateAcceptanceGates(t *testing.T) {
 				MinNetPnL:                "0",
 				MinAvgNetPnL:             "0.005",
 				MinSignalQualityCoverage: "0.9",
+				MaxHoldRatio:             "0.745",
 				MaxDrawdown:              "0.05",
 				MaxDrawdownPct:           "0.001",
 				MaxAIDegradedCycles:      "1",
@@ -86,6 +90,11 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			name:    "fails signal quality coverage",
 			options: acceptanceGateOptions{MinSignalQualityCoverage: "1"},
 			wantErr: "signal_quality.coverage=0.95 below minimum=1",
+		},
+		{
+			name:    "fails max hold ratio",
+			options: acceptanceGateOptions{MaxHoldRatio: "0.49"},
+			wantErr: `action_split.hold="0.5" above maximum="0.49"`,
 		},
 		{
 			name:    "fails max drawdown",
@@ -129,13 +138,13 @@ func TestValidateAcceptanceGates(t *testing.T) {
 		},
 		{
 			name:    "invalid max decimal threshold",
-			options: acceptanceGateOptions{MaxDrawdownPct: "not-a-decimal"},
-			wantErr: "parse --max-drawdown-pct",
+			options: acceptanceGateOptions{MaxHoldRatio: "not-a-decimal"},
+			wantErr: "parse --max-hold-ratio",
 		},
 		{
 			name:    "rejects negative max decimal threshold",
-			options: acceptanceGateOptions{MaxDrawdownPct: "-0.1"},
-			wantErr: `invalid --max-drawdown-pct value "-0.1": must be zero or greater`,
+			options: acceptanceGateOptions{MaxHoldRatio: "-0.1"},
+			wantErr: `invalid --max-hold-ratio value "-0.1": must be zero or greater`,
 		},
 	}
 

@@ -24,6 +24,7 @@ MIN_WIN_RATE="${MIN_WIN_RATE-0.123}"
 MIN_NET_PNL="${MIN_NET_PNL-0}"
 MIN_AVG_NET_PNL="${MIN_AVG_NET_PNL-0}"
 MIN_SIGNAL_QUALITY_COVERAGE="${MIN_SIGNAL_QUALITY_COVERAGE-1}"
+MAX_HOLD_RATIO="${MAX_HOLD_RATIO-0.745}"
 MAX_DRAWDOWN="${MAX_DRAWDOWN-}"
 MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT-0.01}"
 MAX_AI_PROVIDER_DEGRADED_CYCLES="${MAX_AI_PROVIDER_DEGRADED_CYCLES-0}"
@@ -75,6 +76,7 @@ Environment:
   MIN_NET_PNL     Minimum net PnL required; empty disables (default: ${MIN_NET_PNL})
   MIN_AVG_NET_PNL Minimum avg net PnL per trade required; empty disables (default: ${MIN_AVG_NET_PNL})
   MIN_SIGNAL_QUALITY_COVERAGE Minimum signal quality coverage; empty disables (default: ${MIN_SIGNAL_QUALITY_COVERAGE})
+  MAX_HOLD_RATIO  Maximum hold action split allowed; empty disables (default: ${MAX_HOLD_RATIO})
   MAX_DRAWDOWN    Maximum absolute drawdown; empty disables (default: ${MAX_DRAWDOWN:-disabled})
   MAX_DRAWDOWN_PCT Maximum drawdown as fraction of baseline balance; empty disables (default: ${MAX_DRAWDOWN_PCT})
   MAX_AI_PROVIDER_DEGRADED_CYCLES Maximum AI provider degraded cycles; empty disables (default: ${MAX_AI_PROVIDER_DEGRADED_CYCLES})
@@ -132,6 +134,9 @@ run_soak() {
   if [ -n "$MIN_SIGNAL_QUALITY_COVERAGE" ]; then
     args+=("--min-signal-quality-coverage" "$MIN_SIGNAL_QUALITY_COVERAGE")
   fi
+  if [ -n "$MAX_HOLD_RATIO" ]; then
+    args+=("--max-hold-ratio" "$MAX_HOLD_RATIO")
+  fi
   if [ -n "$MAX_DRAWDOWN" ]; then
     args+=("--max-drawdown" "$MAX_DRAWDOWN")
   fi
@@ -159,7 +164,7 @@ run_soak() {
 
   log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
-min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
+min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
 max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} min_baseline_win_rate_delta=${MIN_BASELINE_WIN_RATE_DELTA:-disabled} \
 min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled}"
   if [ -n "$SOAK_OUTPUT_FILE" ]; then

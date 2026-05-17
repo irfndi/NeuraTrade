@@ -41,6 +41,7 @@ func run() error {
 		minNetPnL                string
 		minAvgNetPnL             string
 		minSignalQualityCoverage string
+		maxHoldRatio             string
 		maxDrawdown              string
 		maxDrawdownPct           string
 		maxAIDegradedCycles      string
@@ -66,6 +67,7 @@ func run() error {
 	flags.StringVar(&minNetPnL, "min-net-pnl", "", "fail unless report net_pnl is at least this decimal value")
 	flags.StringVar(&minAvgNetPnL, "min-avg-net-pnl", "", "fail unless avg_net_pnl_per_trade is at least this decimal value")
 	flags.StringVar(&minSignalQualityCoverage, "min-signal-quality-coverage", "", "fail unless signal_quality.coverage is at least this decimal value")
+	flags.StringVar(&maxHoldRatio, "max-hold-ratio", "", "fail unless action_split.hold is at or below this decimal value")
 	flags.StringVar(&maxDrawdown, "max-drawdown", "", "fail unless max_drawdown is at or below this decimal value")
 	flags.StringVar(&maxDrawdownPct, "max-drawdown-pct", "", "fail unless max_drawdown_pct is at or below this decimal value")
 	flags.StringVar(&maxAIDegradedCycles, "max-ai-provider-degraded-cycles", "", "maximum AI provider degraded cycles allowed; empty disables this gate")
@@ -130,6 +132,7 @@ func run() error {
 		MinNetPnL:                minNetPnL,
 		MinAvgNetPnL:             minAvgNetPnL,
 		MinSignalQualityCoverage: minSignalQualityCoverage,
+		MaxHoldRatio:             maxHoldRatio,
 		MaxDrawdown:              maxDrawdown,
 		MaxDrawdownPct:           maxDrawdownPct,
 		MaxAIDegradedCycles:      maxAIDegradedCycles,
@@ -158,6 +161,7 @@ type acceptanceGateOptions struct {
 	MinNetPnL                string
 	MinAvgNetPnL             string
 	MinSignalQualityCoverage string
+	MaxHoldRatio             string
 	MaxDrawdown              string
 	MaxDrawdownPct           string
 	MaxAIDegradedCycles      string
@@ -184,6 +188,9 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 		return err
 	}
 	if err := validateMinDecimalGate("min-signal-quality-coverage", "signal_quality.coverage", report.SignalQuality.Coverage, options.MinSignalQualityCoverage); err != nil {
+		return err
+	}
+	if err := validateMaxDecimalGate("max-hold-ratio", "action_split.hold", decimalValueFromMap(report.ActionSplit, "hold"), options.MaxHoldRatio); err != nil {
 		return err
 	}
 	if err := validateMaxDecimalGate("max-drawdown", "max_drawdown", report.TradeSummary.MaxDrawdown, options.MaxDrawdown); err != nil {
@@ -269,6 +276,17 @@ func validateMaxIntGate(flagName string, metricName string, actual int, rawMaxim
 		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, strconv.Itoa(actual), strconv.Itoa(maximum))
 	}
 	return nil
+}
+
+func decimalValueFromMap(values map[string]decimal.Decimal, key string) decimal.Decimal {
+	if values == nil {
+		return decimal.Zero
+	}
+	value, ok := values[key]
+	if !ok {
+		return decimal.Zero
+	}
+	return value
 }
 
 func envString(key, fallback string) string {
