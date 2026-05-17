@@ -31,6 +31,7 @@ MIN_PAPER_AVG_NET_PNL="${MIN_PAPER_AVG_NET_PNL-0}"
 MIN_PAPER_PROFIT_FACTOR="${MIN_PAPER_PROFIT_FACTOR-1}"
 MAX_PAPER_DRAWDOWN="${MAX_PAPER_DRAWDOWN-}"
 MAX_PAPER_DRAWDOWN_PCT="${MAX_PAPER_DRAWDOWN_PCT-0.01}"
+MAX_REASONING_DIAGNOSTICS="${MAX_REASONING_DIAGNOSTICS-0}"
 OUTPUT_JSON="${OUTPUT_JSON:-true}"
 PROBE_OUTPUT_FILE="${PROBE_OUTPUT_FILE:-}"
 
@@ -76,6 +77,7 @@ Environment:
   MIN_PAPER_PROFIT_FACTOR Minimum paper profit factor; empty disables (default: ${MIN_PAPER_PROFIT_FACTOR})
   MAX_PAPER_DRAWDOWN Maximum absolute paper drawdown; empty disables (default: ${MAX_PAPER_DRAWDOWN:-disabled})
   MAX_PAPER_DRAWDOWN_PCT Maximum paper drawdown / CAPITAL; empty disables (default: ${MAX_PAPER_DRAWDOWN_PCT})
+  MAX_REASONING_DIAGNOSTICS Maximum reasoning diagnostics; empty disables (default: ${MAX_REASONING_DIAGNOSTICS})
   OUTPUT_JSON      true/false JSON output (default: ${OUTPUT_JSON})
   PROBE_OUTPUT_FILE Optional path for clean stdout artifact, usually JSON; empty disables (default: ${PROBE_OUTPUT_FILE:-disabled})
 
@@ -137,11 +139,13 @@ run_probe() {
   append_optional_arg "--min-paper-profit-factor" "$MIN_PAPER_PROFIT_FACTOR"
   append_optional_arg "--max-paper-drawdown" "$MAX_PAPER_DRAWDOWN"
   append_optional_arg "--max-paper-drawdown-pct" "$MAX_PAPER_DRAWDOWN_PCT"
+  append_optional_arg "--max-reasoning-diagnostics" "$MAX_REASONING_DIAGNOSTICS"
 
   log "running real LLM scalping probe provider=${PROVIDER:-runtime-config} exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} \
 min_signal_quality=${MIN_SIGNAL_QUALITY:-disabled} min_actionable_cycles=${MIN_ACTIONABLE_CYCLES:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} \
 min_paper_trades=${MIN_PAPER_TRADES:-disabled} min_paper_net_pnl=${MIN_PAPER_NET_PNL:-disabled} min_paper_avg_net_pnl=${MIN_PAPER_AVG_NET_PNL:-disabled} \
-min_paper_profit_factor=${MIN_PAPER_PROFIT_FACTOR:-disabled} max_paper_drawdown=${MAX_PAPER_DRAWDOWN:-disabled} max_paper_drawdown_pct=${MAX_PAPER_DRAWDOWN_PCT:-disabled}"
+min_paper_profit_factor=${MIN_PAPER_PROFIT_FACTOR:-disabled} max_paper_drawdown=${MAX_PAPER_DRAWDOWN:-disabled} max_paper_drawdown_pct=${MAX_PAPER_DRAWDOWN_PCT:-disabled} \
+max_reasoning_diagnostics=${MAX_REASONING_DIAGNOSTICS:-disabled}"
   if [ -n "$PROBE_OUTPUT_FILE" ]; then
     mkdir -p "$(dirname "$PROBE_OUTPUT_FILE")"
     "$PROBE_BIN" "${args[@]}" | tee "$PROBE_OUTPUT_FILE" | tee -a "$LOG_FILE"

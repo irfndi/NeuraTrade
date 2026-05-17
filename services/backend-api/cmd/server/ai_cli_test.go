@@ -526,6 +526,9 @@ func TestParseAIScalpingDecisionProbeOptionsDefaults(t *testing.T) {
 	if opts.MinSignalQuality.String() != "1" {
 		t.Fatalf("expected full signal quality coverage by default, got %s", opts.MinSignalQuality.String())
 	}
+	if !opts.RequireReasoningClean || opts.MaxReasoningDiagnostics != 0 {
+		t.Fatalf("expected zero reasoning diagnostics by default, enabled=%t max=%d", opts.RequireReasoningClean, opts.MaxReasoningDiagnostics)
+	}
 	if opts.Cycles != 1 {
 		t.Fatalf("expected one cycle by default, got %d", opts.Cycles)
 	}
@@ -547,6 +550,7 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 		"--min-paper-profit-factor", "1.25",
 		"--max-paper-drawdown", "0.25",
 		"--max-paper-drawdown-pct", "0.01",
+		"--max-reasoning-diagnostics", "2",
 		"--allow-degraded",
 		"--allow-invalid-contract",
 	})
@@ -600,6 +604,9 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	}
 	if !opts.RequirePaperDrawdownPct || opts.MaxPaperDrawdownPct.String() != "0.01" {
 		t.Fatalf("expected parsed paper drawdown pct gate, enabled=%t value=%s", opts.RequirePaperDrawdownPct, opts.MaxPaperDrawdownPct.String())
+	}
+	if !opts.RequireReasoningClean || opts.MaxReasoningDiagnostics != 2 {
+		t.Fatalf("expected parsed reasoning diagnostics gate, enabled=%t max=%d", opts.RequireReasoningClean, opts.MaxReasoningDiagnostics)
 	}
 }
 
@@ -689,6 +696,16 @@ func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidPaperGates(t *testing.
 			args:    []string{"--max-paper-drawdown-pct", "-1"},
 			wantErr: `--max-paper-drawdown-pct value "-1"`,
 		},
+		{
+			name:    "invalid reasoning diagnostic count",
+			args:    []string{"--max-reasoning-diagnostics", "not-an-int"},
+			wantErr: `--max-reasoning-diagnostics value "not-an-int"`,
+		},
+		{
+			name:    "negative reasoning diagnostic count",
+			args:    []string{"--max-reasoning-diagnostics", "-1"},
+			wantErr: `--max-reasoning-diagnostics value "-1"`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -709,6 +726,7 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 			Provider:              "deepseek",
 			Decision:              &services.AITradingDecision{Action: "hold"},
 			SignalQualityCoverage: mustDecimal("1"),
+			ReasoningDiagnostics:  []string{"wide spread claim contradicted by spread threshold"},
 		},
 		{
 			SignalCount:        8,
@@ -754,6 +772,9 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 	}
 	if summary.LLMDegradedCycles != 1 {
 		t.Fatalf("expected one degraded cycle, got %d", summary.LLMDegradedCycles)
+	}
+	if summary.ReasoningDiagnosticCycles != 1 || summary.ReasoningDiagnosticCount != 1 {
+		t.Fatalf("unexpected reasoning diagnostic summary: cycles=%d count=%d", summary.ReasoningDiagnosticCycles, summary.ReasoningDiagnosticCount)
 	}
 	if summary.ActionCounts["hold"] != 1 || summary.ActionCounts["buy"] != 1 || summary.ActionCounts["sell"] != 1 {
 		t.Fatalf("unexpected action counts: %#v", summary.ActionCounts)
@@ -993,6 +1014,27 @@ func TestValidateAIScalpingDecisionProbeSummaryTreatsNoLossProfitFactorAsUnbound
 		MinPaperProfitFactor:     mustDecimal("10000"),
 	})
 	require.NoError(t, err)
+}
+
+func TestValidateAIScalpingDecisionProbeSummaryEnforcesReasoningDiagnosticGate(t *testing.T) {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:                   2,
+		CompletedCycles:          2,
+		ValidContractCycles:      2,
+		SignalQualityCoverage:    mustDecimal("1"),
+		ReasoningDiagnosticCount: 1,
+	}
+
+	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:                  2,
+		RequireHealthy:          true,
+		RequireValid:            true,
+		MinSignalQuality:        mustDecimal("1"),
+		RequireReasoningClean:   true,
+		MaxReasoningDiagnostics: 0,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reasoning_diagnostic_count")
 }
 
 func mustDecimal(value string) decimal.Decimal {

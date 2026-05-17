@@ -2473,9 +2473,11 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 	if decision.Action == "hold" {
 		decision.Symbol = ""
 		decision.SizePercent = 0
+		decision.Reasoning = sanitizeDecisionReasoning(decision.Reasoning, 320)
 		if strings.TrimSpace(decision.Reasoning) == "" {
 			decision.Reasoning = "model selected hold (no detailed reasoning)"
 		}
+		normalizeContradictoryHoldSpreadReasoning(decision, signals, s.maxBidAskSpreadPct())
 		return nil
 	}
 	if decision.Symbol == "" {

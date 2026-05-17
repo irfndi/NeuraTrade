@@ -131,7 +131,6 @@ func runScalpingLLMDecisionProbeWithService(
 		Model:                 strings.TrimSpace(svc.config.Model),
 		SignalQualityCoverage: decimal.NewFromInt(int64(countSignalsWithOrderBookQuality(signals))).Div(decimal.NewFromInt(int64(len(signals)))),
 	}
-	result.ReasoningDiagnostics = scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
 
 	if provider, ok := stringFromRuntimeDiagnostic(result.RuntimeDiagnostics, "last_successful_provider"); ok {
 		result.Provider = provider
@@ -147,6 +146,7 @@ func runScalpingLLMDecisionProbeWithService(
 		result.ContractValid = false
 		result.ContractError = validationErr.Error()
 	}
+	result.ReasoningDiagnostics = scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
 	if result.ContractValid {
 		gate := svc.evaluatePreTradeGate(ctx, decision, signals)
 		result.PreTradeGateAllowed = gate.Allowed
@@ -187,7 +187,21 @@ func scalpingProbeReasoningDiagnostics(decision *AITradingDecision, signals []ai
 	if decision == nil || !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
 		return nil
 	}
-	reasoning := strings.ToLower(strings.TrimSpace(decision.Reasoning))
+	return scalpingHoldSpreadReasoningDiagnostics(decision.Reasoning, signals, maxSpreadPct)
+}
+
+func normalizeContradictoryHoldSpreadReasoning(decision *AITradingDecision, signals []aiMarketSignal, maxSpreadPct float64) {
+	if decision == nil || !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		return
+	}
+	if len(scalpingHoldSpreadReasoningDiagnostics(decision.Reasoning, signals, maxSpreadPct)) == 0 {
+		return
+	}
+	decision.Reasoning = "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason."
+}
+
+func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSignal, maxSpreadPct float64) []string {
+	reasoning := strings.ToLower(strings.TrimSpace(reason))
 	if reasoning == "" || !strings.Contains(reasoning, "spread") {
 		return nil
 	}

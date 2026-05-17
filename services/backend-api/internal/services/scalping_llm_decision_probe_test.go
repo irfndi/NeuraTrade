@@ -84,7 +84,7 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 	require.Equal(t, "win", result.PaperTrade.Outcome)
 }
 
-func TestRunScalpingLLMDecisionProbeWithServiceFlagsContradictoryHoldSpreadReasoning(t *testing.T) {
+func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpreadReasoning(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		Responses: []*llm.CompletionResponse{
 			{
@@ -108,9 +108,21 @@ func TestRunScalpingLLMDecisionProbeWithServiceFlagsContradictoryHoldSpreadReaso
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.ContractValid)
-	require.NotEmpty(t, result.ReasoningDiagnostics)
-	require.Contains(t, result.ReasoningDiagnostics[0], "cites wide spread")
-	require.Contains(t, result.ReasoningDiagnostics[0], "BTC/USDT")
+	require.Empty(t, result.ReasoningDiagnostics)
+	require.Equal(t, "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason.", result.Decision.Reasoning)
+	require.LessOrEqual(t, len([]rune(result.Decision.Reasoning)), 320)
+}
+
+func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T) {
+	diagnostics := scalpingHoldSpreadReasoningDiagnostics(
+		"All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.",
+		[]aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
+		0.22,
+	)
+
+	require.NotEmpty(t, diagnostics)
+	require.Contains(t, diagnostics[0], "cites wide spread")
+	require.Contains(t, diagnostics[0], "BTC/USDT")
 }
 
 func TestRunScalpingLLMDecisionProbeWithServiceFlagsLLMDegradation(t *testing.T) {

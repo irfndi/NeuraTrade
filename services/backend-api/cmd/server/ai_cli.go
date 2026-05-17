@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -547,6 +548,8 @@ type aiScalpingDecisionProbeOptions struct {
 	RequirePaperDrawdown     bool
 	MaxPaperDrawdownPct      decimal.Decimal
 	RequirePaperDrawdownPct  bool
+	MaxReasoningDiagnostics  int
+	RequireReasoningClean    bool
 }
 
 type aiScalpingDecisionProbeSummary struct {
@@ -569,6 +572,8 @@ type aiScalpingDecisionProbeSummary struct {
 	PaperProfitFactorUnbounded bool                                       `json:"paper_profit_factor_unbounded"`
 	PaperMaxDrawdown           decimal.Decimal                            `json:"paper_max_drawdown"`
 	PaperMaxDrawdownPct        decimal.Decimal                            `json:"paper_max_drawdown_pct"`
+	ReasoningDiagnosticCycles  int                                        `json:"reasoning_diagnostic_cycles"`
+	ReasoningDiagnosticCount   int                                        `json:"reasoning_diagnostic_count"`
 	ActionCounts               map[string]int                             `json:"action_counts"`
 	ProviderCounts             map[string]int                             `json:"provider_counts"`
 	LastResult                 *services.ScalpingLLMDecisionProbeResult   `json:"last_result,omitempty"`
@@ -802,6 +807,10 @@ func buildAIScalpingDecisionProbeSummary(
 		if provider := strings.TrimSpace(result.Provider); provider != "" {
 			summary.ProviderCounts[provider]++
 		}
+		if len(result.ReasoningDiagnostics) > 0 {
+			summary.ReasoningDiagnosticCycles++
+			summary.ReasoningDiagnosticCount += len(result.ReasoningDiagnostics)
+		}
 	}
 	if summary.TotalSignals > 0 {
 		summary.SignalQualityCoverage = decimal.NewFromInt(int64(summary.SignalQualityCount)).Div(decimal.NewFromInt(int64(summary.TotalSignals)))
@@ -860,6 +869,9 @@ func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSumma
 	if opts.RequirePaperDrawdownPct && summary.PaperMaxDrawdownPct.GreaterThan(opts.MaxPaperDrawdownPct) {
 		return fmt.Errorf("paper_max_drawdown_pct=%s above maximum=%s", summary.PaperMaxDrawdownPct.String(), opts.MaxPaperDrawdownPct.String())
 	}
+	if opts.RequireReasoningClean && summary.ReasoningDiagnosticCount > opts.MaxReasoningDiagnostics {
+		return fmt.Errorf("reasoning_diagnostic_count=%d above maximum=%d", summary.ReasoningDiagnosticCount, opts.MaxReasoningDiagnostics)
+	}
 	return nil
 }
 
@@ -917,14 +929,16 @@ func parseAIProviderProbeOptions(args []string) (aiProviderProbeOptions, error) 
 
 func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbeOptions, error) {
 	opts := aiScalpingDecisionProbeOptions{
-		Timeout:          60 * time.Second,
-		FailoverMaxHops:  1,
-		Exchange:         "bitget",
-		Cycles:           1,
-		Capital:          decimal.NewFromFloat(48),
-		RequireHealthy:   true,
-		RequireValid:     true,
-		MinSignalQuality: decimal.NewFromInt(1),
+		Timeout:                 60 * time.Second,
+		FailoverMaxHops:         1,
+		Exchange:                "bitget",
+		Cycles:                  1,
+		Capital:                 decimal.NewFromFloat(48),
+		RequireHealthy:          true,
+		RequireValid:            true,
+		MinSignalQuality:        decimal.NewFromInt(1),
+		RequireReasoningClean:   true,
+		MaxReasoningDiagnostics: 0,
 	}
 
 	fs := flag.NewFlagSet("ai scalping-probe", flag.ContinueOnError)
@@ -938,6 +952,7 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	minPaperProfitFactor := fs.String("min-paper-profit-factor", "", "minimum simulated paper profit factor required; empty disables this gate")
 	maxPaperDrawdown := fs.String("max-paper-drawdown", "", "maximum simulated paper drawdown allowed; empty disables this gate")
 	maxPaperDrawdownPct := fs.String("max-paper-drawdown-pct", "", "maximum simulated paper drawdown divided by --capital allowed; empty disables this gate")
+	maxReasoningDiagnostics := fs.String("max-reasoning-diagnostics", "0", "maximum reasoning diagnostics allowed; empty disables this gate")
 	intervalMS := fs.Int("interval-ms", 0, "delay between scalping LLM probe cycles in milliseconds")
 	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
 	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
@@ -1025,6 +1040,10 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	if err != nil {
 		return opts, err
 	}
+	parsedReasoningDiagnostics, requireReasoningClean, err := parseOptionalNonNegativeIntFlag("max-reasoning-diagnostics", *maxReasoningDiagnostics)
+	if err != nil {
+		return opts, err
+	}
 	opts.Timeout = time.Duration(*timeoutSeconds) * time.Second
 	opts.Interval = time.Duration(*intervalMS) * time.Millisecond
 	opts.Capital = parsedCapital
@@ -1041,6 +1060,8 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	opts.RequirePaperDrawdown = requirePaperDrawdown
 	opts.MaxPaperDrawdownPct = parsedPaperDrawdownPct
 	opts.RequirePaperDrawdownPct = requirePaperDrawdownPct
+	opts.MaxReasoningDiagnostics = parsedReasoningDiagnostics
+	opts.RequireReasoningClean = requireReasoningClean
 	opts.RequireHealthy = !*allowDegraded
 	opts.RequireValid = !*allowInvalidContract
 	opts.Provider = ai.NormalizeProviderID(opts.Provider)
@@ -1051,6 +1072,21 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 		opts.Exchange = "bitget"
 	}
 	return opts, nil
+}
+
+func parseOptionalNonNegativeIntFlag(flagName string, rawValue string) (int, bool, error) {
+	rawValue = strings.TrimSpace(rawValue)
+	if rawValue == "" {
+		return 0, false, nil
+	}
+	value, err := strconv.Atoi(rawValue)
+	if err != nil {
+		return 0, false, fmt.Errorf("--%s value %q: %w", flagName, rawValue, err)
+	}
+	if value < 0 {
+		return 0, false, fmt.Errorf("--%s value %q must be zero or greater", flagName, rawValue)
+	}
+	return value, true, nil
 }
 
 func parseOptionalDecimalFlag(flagName string, rawValue string) (decimal.Decimal, bool, error) {
@@ -1377,6 +1413,9 @@ func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary
 		return err
 	}
 	if err := writeProbeOutput("Paper trades: %d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.PaperTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String(), summary.PaperProfitFactor.String(), summary.PaperProfitFactorUnbounded, summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String()); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Reasoning diagnostics: cycles=%d count=%d\n", summary.ReasoningDiagnosticCycles, summary.ReasoningDiagnosticCount); err != nil {
 		return err
 	}
 	if err := writeProbeOutput("Actions: %v\n", summary.ActionCounts); err != nil {
