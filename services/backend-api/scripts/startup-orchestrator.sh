@@ -244,17 +244,27 @@ start_gateway() {
     return 1
   fi
 
-  log_info "Starting gateway using: ${gateway_cmd}"
-  local launched_pid
-  if ! launched_pid="$(
-    cd "$REPO_ROOT"
-    export PATH="${REPO_ROOT}/bin:${PATH}"
-    launch_gateway_detached "$gateway_cmd"
-  )"; then
-    log_error "Failed to launch gateway"
-    return 1
-  fi
-  printf '%s\n' "$launched_pid" >"${PID_FILE}"
+	log_info "Starting gateway using: ${gateway_cmd}"
+	local launched_pid
+	local launched_pid_file
+	launched_pid_file="$(mktemp /tmp/neuratrade-gateway-pid.XXXXXX)"
+	if ! (
+		set -e
+		cd "$REPO_ROOT"
+		export PATH="${REPO_ROOT}/bin:${PATH}"
+		launch_gateway_detached "$gateway_cmd" >"$launched_pid_file"
+	); then
+		rm -f "$launched_pid_file"
+		log_error "Failed to launch gateway"
+		return 1
+	fi
+	IFS= read -r launched_pid <"$launched_pid_file" || launched_pid=""
+	rm -f "$launched_pid_file"
+	if ! printf '%s' "$launched_pid" | grep -Eq '^[0-9]+$'; then
+		log_error "Failed to capture launched gateway pid"
+		return 1
+	fi
+	printf '%s\n' "$launched_pid" >"${PID_FILE}"
 
   local pid
   pid="$(gateway_pid)"
