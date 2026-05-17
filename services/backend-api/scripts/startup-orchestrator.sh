@@ -157,12 +157,16 @@ launch_gateway_detached() {
 
   if command -v setsid >/dev/null 2>&1; then
     nohup setsid bash -c "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
+    local launch_rc=$?
+    if [ "$launch_rc" -ne 0 ]; then
+      return "$launch_rc"
+    fi
     printf '%s\n' "$!"
     return 0
   fi
 
   if command -v python3 >/dev/null 2>&1; then
-    GATEWAY_CMD="$gateway_cmd" GATEWAY_LOG="$GATEWAY_LOG" python3 - <<'PY'
+    if ! GATEWAY_CMD="$gateway_cmd" GATEWAY_LOG="$GATEWAY_LOG" python3 - <<'PY'
 import os
 import subprocess
 
@@ -179,10 +183,17 @@ process = subprocess.Popen(
 )
 print(process.pid)
 PY
+    then
+      return 1
+    fi
     return 0
   fi
 
   nohup bash -c "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
+  local launch_rc=$?
+  if [ "$launch_rc" -ne 0 ]; then
+    return "$launch_rc"
+  fi
   printf '%s\n' "$!"
 }
 
@@ -247,17 +258,27 @@ start_gateway() {
   log_info "Starting gateway using: ${gateway_cmd}"
   local launched_pid
   local launched_pid_file
+  local previous_dir
   launched_pid_file="$(mktemp /tmp/neuratrade-gateway-pid.XXXXXX)"
-  if ! (
-    set -e
-    cd "$REPO_ROOT"
-    export PATH="${REPO_ROOT}/bin:${PATH}"
-    launch_gateway_detached "$gateway_cmd" >"$launched_pid_file"
-  ); then
+  previous_dir="$(pwd)"
+  if ! cd "$REPO_ROOT"; then
+    rm -f "$launched_pid_file"
+    log_error "Failed to enter repository root: ${REPO_ROOT}"
+    return 1
+  fi
+  export PATH="${REPO_ROOT}/bin:${PATH}"
+
+  local launch_status=0
+  launch_gateway_detached "$gateway_cmd" >"$launched_pid_file" || launch_status=$?
+  if ! cd "$previous_dir"; then
+    log_warn "Failed to restore previous directory: ${previous_dir}"
+  fi
+  if [ "$launch_status" -ne 0 ]; then
     rm -f "$launched_pid_file"
     log_error "Failed to launch gateway"
     return 1
   fi
+
   IFS= read -r launched_pid <"$launched_pid_file" || launched_pid=""
   rm -f "$launched_pid_file"
   if ! printf '%s' "$launched_pid" | grep -Eq '^[0-9]+$'; then
