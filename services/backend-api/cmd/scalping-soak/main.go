@@ -190,8 +190,14 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 	if err := validateMinDecimalGate("min-signal-quality-coverage", "signal_quality.coverage", report.SignalQuality.Coverage, options.MinSignalQualityCoverage); err != nil {
 		return err
 	}
-	if err := validateMaxDecimalGate("max-hold-ratio", "action_split.hold", decimalValueFromMap(report.ActionSplit, "hold"), options.MaxHoldRatio); err != nil {
-		return err
+	if options.MaxHoldRatio != "" {
+		holdRatio, ok := decimalValueFromMap(report.ActionSplit, "hold")
+		if !ok {
+			return fmt.Errorf("acceptance gate failed: action_split.hold is missing")
+		}
+		if err := validateMaxDecimalGate("max-hold-ratio", "action_split.hold", holdRatio, options.MaxHoldRatio); err != nil {
+			return err
+		}
 	}
 	if err := validateMaxDecimalGate("max-drawdown", "max_drawdown", report.TradeSummary.MaxDrawdown, options.MaxDrawdown); err != nil {
 		return err
@@ -278,15 +284,12 @@ func validateMaxIntGate(flagName string, metricName string, actual int, rawMaxim
 	return nil
 }
 
-func decimalValueFromMap(values map[string]decimal.Decimal, key string) decimal.Decimal {
+func decimalValueFromMap(values map[string]decimal.Decimal, key string) (decimal.Decimal, bool) {
 	if values == nil {
-		return decimal.Zero
+		return decimal.Zero, false
 	}
 	value, ok := values[key]
-	if !ok {
-		return decimal.Zero
-	}
-	return value
+	return value, ok
 }
 
 func envString(key, fallback string) string {

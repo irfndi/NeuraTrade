@@ -53,6 +53,8 @@ export function safeCredentialEqual(
 
   const bytesMatch = timingSafeEqual(providedPadded, expectedPadded);
   return (
+    providedBytes.length > 0 &&
+    expectedBytes.length > 0 &&
     providedBytes.length === expectedBytes.length &&
     providedBytes.length <= CREDENTIAL_COMPARE_BYTES &&
     expectedBytes.length <= CREDENTIAL_COMPARE_BYTES &&

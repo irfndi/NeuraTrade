@@ -2346,7 +2346,10 @@ func TestAIScalpingService_FocusActionableMarketSignalsKeepsDecisionReadySignals
 		},
 	}
 
-	focused := svc.focusActionableMarketSignals(context.Background(), signals)
+	focused := svc.focusActionableMarketSignals(context.Background(), signals, TradingPortfolio{
+		EffectiveMinConfidence: 0.55,
+		EffectiveMaxCapitalPct: 5,
+	})
 
 	require.Len(t, focused, 1)
 	assert.Equal(t, "BTC/USDT", focused[0].Symbol)
@@ -2379,7 +2382,10 @@ func TestAIScalpingService_FocusActionableMarketSignalsKeepsDiagnosticsWhenNoCan
 		},
 	}
 
-	focused := svc.focusActionableMarketSignals(context.Background(), signals)
+	focused := svc.focusActionableMarketSignals(context.Background(), signals, TradingPortfolio{
+		EffectiveMinConfidence: 0.55,
+		EffectiveMaxCapitalPct: 5,
+	})
 
 	require.Len(t, focused, 2)
 	assert.Equal(t, signals, focused)

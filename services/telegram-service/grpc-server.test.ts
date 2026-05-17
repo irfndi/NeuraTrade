@@ -347,6 +347,8 @@ describe("TelegramGrpcServer", () => {
       false,
     );
     expect(safeCredentialEqual("", "secret-token")).toBe(false);
+    expect(safeCredentialEqual("secret-token", "")).toBe(false);
+    expect(safeCredentialEqual("", "")).toBe(false);
   });
 
   test("credential comparison rejects over-limit matching prefixes", () => {

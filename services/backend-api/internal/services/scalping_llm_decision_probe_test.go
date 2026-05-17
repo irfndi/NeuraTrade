@@ -107,6 +107,7 @@ func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpread
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.NotNil(t, result.Decision)
 	require.True(t, result.ContractValid)
 	require.Empty(t, result.ReasoningDiagnostics)
 	require.Equal(t, "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason.", result.Decision.Reasoning)

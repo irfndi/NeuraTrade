@@ -212,6 +212,14 @@ func runPublicScalpingLivePaperSoakCycle(
 	if len(signals) == 0 {
 		return nil, decimal.Zero, fmt.Errorf("live paper scalping soak gathered no market signals")
 	}
+	signals = svc.focusActionableMarketSignals(ctx, signals, TradingPortfolio{
+		USDTBalance:            initialCapital.InexactFloat64(),
+		USDTBalanceDecimal:     initialCapital,
+		TotalValue:             initialCapital.InexactFloat64(),
+		TotalValueDecimal:      initialCapital,
+		EffectiveMinConfidence: defaults.MinConfidence,
+		EffectiveMaxCapitalPct: defaults.MaxCapitalPct,
+	})
 
 	now := time.Now().UTC()
 	historicalSignals := make([]HistoricalSignal, 0, len(signals))

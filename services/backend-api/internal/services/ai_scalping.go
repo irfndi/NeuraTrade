@@ -1824,7 +1824,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		return nil, fmt.Errorf("no market signals available from exchange")
 	}
 
-	return s.focusActionableMarketSignals(ctx, signals), nil
+	return signals, nil
 }
 
 func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) (*AITradingDecision, error) {
@@ -1984,6 +1984,7 @@ Return JSON only:
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
+	signals = s.focusActionableMarketSignals(ctx, signals, portfolio)
 	signals = s.signalsWithDecisionHints(ctx, signals, portfolio)
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
 	walletBalance := walletBasis(portfolio)
@@ -3324,16 +3325,16 @@ func (s *AIScalpingService) signalsWithDecisionHints(ctx context.Context, signal
 	return enriched
 }
 
-func (s *AIScalpingService) focusActionableMarketSignals(ctx context.Context, signals []aiMarketSignal) []aiMarketSignal {
+func (s *AIScalpingService) focusActionableMarketSignals(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) []aiMarketSignal {
 	if len(signals) <= 1 {
 		return signals
 	}
 
 	focused := make([]aiMarketSignal, 0, len(signals))
 	for _, signal := range signals {
-		decision, _, ok := s.deterministicFallbackCandidate(ctx, signal, TradingPortfolio{}, false)
+		decision, _, ok := s.deterministicFallbackCandidate(ctx, signal, portfolio, false)
 		if !ok {
-			decision, _, ok = s.deterministicFallbackCandidate(ctx, signal, TradingPortfolio{}, true)
+			decision, _, ok = s.deterministicFallbackCandidate(ctx, signal, portfolio, true)
 		}
 		if !ok || decision == nil || !isActionableScalpingHintAction(decision.Action) {
 			continue
