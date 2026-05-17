@@ -166,7 +166,7 @@ launch_gateway_detached() {
   fi
 
   if command -v python3 >/dev/null 2>&1; then
-    if ! GATEWAY_CMD="$gateway_cmd" GATEWAY_LOG="$GATEWAY_LOG" python3 - <<'PY'
+    if ! GATEWAY_CMD="$gateway_cmd" GATEWAY_LOG="$GATEWAY_LOG" python3 - <<'PY'; then
 import os
 import subprocess
 
@@ -183,7 +183,6 @@ process = subprocess.Popen(
 )
 print(process.pid)
 PY
-    then
       return 1
     fi
     return 0
