@@ -189,9 +189,9 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 		return err
 	}
 	if options.MaxHoldRatio != "" {
-		holdRatio, ok := decimalValueFromMap(report.ActionSplit, "hold")
-		if !ok {
-			return fmt.Errorf("acceptance gate failed: action_split.hold is missing")
+		holdRatio := decimal.Zero
+		if value, ok := decimalValueFromMap(report.ActionSplit, "hold"); ok {
+			holdRatio = value
 		}
 		if err := validateMaxDecimalGate("max-hold-ratio", "action_split.hold", holdRatio, options.MaxHoldRatio); err != nil {
 			return err

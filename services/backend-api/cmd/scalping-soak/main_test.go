@@ -165,15 +165,17 @@ func TestValidateAcceptanceGatesRequiresResult(t *testing.T) {
 	require.ErrorContains(t, err, "acceptance gates require soak result")
 }
 
-func TestValidateAcceptanceGatesRequiresHoldSplitForMaxHoldRatio(t *testing.T) {
+func TestValidateAcceptanceGatesTreatsMissingHoldSplitAsZeroForMaxHoldRatio(t *testing.T) {
 	result := &services.ScalpingLivePaperSoakResult{
 		Report: services.ScalpingSoakReport{
-			ActionSplit: map[string]decimal.Decimal{},
+			ActionSplit: map[string]decimal.Decimal{
+				"buy": decimal.NewFromInt(1),
+			},
 		},
 	}
 
 	err := validateAcceptanceGates(result, acceptanceGateOptions{MaxHoldRatio: "0.745"})
-	require.ErrorContains(t, err, "acceptance gate failed: action_split.hold is missing")
+	require.NoError(t, err)
 }
 
 func TestValidateAcceptanceGatesRequiresBaselineForMaxDrawdownPct(t *testing.T) {

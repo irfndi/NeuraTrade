@@ -119,6 +119,7 @@ func runScalpingLLMDecisionProbeWithService(
 		return nil, fmt.Errorf("get scalping LLM decision: %w", err)
 	}
 	normalizeProbeDecision(decision)
+	reasoningDiagnostics := scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
 
 	result := &ScalpingLLMDecisionProbeResult{
 		Exchange:              svc.config.Exchange,
@@ -146,7 +147,7 @@ func runScalpingLLMDecisionProbeWithService(
 		result.ContractValid = false
 		result.ContractError = validationErr.Error()
 	}
-	result.ReasoningDiagnostics = scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
+	result.ReasoningDiagnostics = reasoningDiagnostics
 	if result.ContractValid {
 		gate := svc.evaluatePreTradeGate(ctx, decision, signals)
 		result.PreTradeGateAllowed = gate.Allowed
