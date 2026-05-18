@@ -19,10 +19,17 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 fake_soak="${tmp_dir}/fake-scalping-soak.sh"
 fake_verifier="${tmp_dir}/fake-verifier.sh"
+fake_gateway="${tmp_dir}/fake-neuratrade"
+fake_bin_dir="${tmp_dir}/bin"
+curl_hits="${tmp_dir}/curl-hits.txt"
 artifact_path="${tmp_dir}/evidence/scalping-soak-acceptance-fixed.json"
 db_path="${tmp_dir}/evidence/scalping-soak-acceptance-fixed.db"
 manifest_path="${tmp_dir}/evidence/scalping-soak-acceptance-fixed.acceptance.json"
 log_path="${tmp_dir}/logs/acceptance.log"
+default_artifact_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-default.json"
+default_db_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-default.db"
+default_manifest_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-default.acceptance.json"
+default_log_path="${tmp_dir}/default-logs/acceptance.log"
 
 cat >"$fake_soak" <<'SH'
 #!/usr/bin/env bash
@@ -101,7 +108,44 @@ set -euo pipefail
 echo "fake verifier complete"
 SH
 
-chmod +x "$fake_soak" "$fake_verifier"
+cat >"$fake_gateway" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+[ "${1:-}" = "gateway" ] || {
+  echo "expected gateway command" >&2
+  exit 1
+}
+[ "${2:-}" = "status" ] || {
+  echo "expected gateway status command" >&2
+  exit 1
+}
+echo "Gateway Status: RUNNING"
+SH
+
+mkdir -p "$fake_bin_dir"
+cat >"${fake_bin_dir}/curl" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+last_arg=""
+for arg in "$@"; do
+  last_arg="$arg"
+done
+printf '%s\n' "$last_arg" >>"$CURL_HITS_FILE"
+
+case "$last_arg" in
+  */health | */ready)
+    exit 0
+    ;;
+  *)
+    echo "unexpected curl URL: $last_arg" >&2
+    exit 1
+    ;;
+esac
+SH
+
+chmod +x "$fake_soak" "$fake_verifier" "$fake_gateway" "${fake_bin_dir}/curl"
 
 RUN_HEALTH_PREFLIGHT=false \
   CHECK_GATEWAY_STATUS=false \
@@ -140,5 +184,48 @@ jq -e \
     and .report.trade_summary.closed_trades == 1
     and .report.insufficient_trade_proof == false' \
   "$manifest_path" >/dev/null
+
+env -u RUN_HEALTH_PREFLIGHT -u CHECK_GATEWAY_STATUS -u BACKEND_URL \
+  PATH="${fake_bin_dir}:$PATH" \
+  CURL_HITS_FILE="$curl_hits" \
+  GATEWAY_BIN="$fake_gateway" \
+  SCALPING_SOAK_SCRIPT="$fake_soak" \
+  SCALPING_SOAK_VERIFIER="$fake_verifier" \
+  DATA_DIR="${tmp_dir}/default-evidence" \
+  LOG_DIR="${tmp_dir}/default-logs" \
+  STAMP=default \
+  LOG_FILE="$default_log_path" \
+  bash "$ACCEPTANCE_SCRIPT" run
+
+[ -f "$default_artifact_path" ] || {
+  echo "expected default artifact was not created: $default_artifact_path" >&2
+  exit 1
+}
+[ -f "$default_db_path" ] || {
+  echo "expected default DB was not created: $default_db_path" >&2
+  exit 1
+}
+[ -f "$default_manifest_path" ] || {
+  echo "expected default manifest was not created: $default_manifest_path" >&2
+  exit 1
+}
+
+jq -e \
+  --arg artifact "$default_artifact_path" \
+  --arg db_path "$default_db_path" \
+  --arg log_file "$default_log_path" \
+  '.runtime.health_preflight == "true"
+    and .runtime.gateway_status_check == "true"
+    and .runtime.backend_url == "http://127.0.0.1:8080"
+    and .evidence.artifact == $artifact
+    and .evidence.db_path == $db_path
+    and .evidence.log_file == $log_file
+    and .gates.max_hold_ratio == "0.745"
+    and .report.trade_summary.closed_trades == 1
+    and .report.insufficient_trade_proof == false' \
+  "$default_manifest_path" >/dev/null
+
+grep -q 'http://127.0.0.1:8080/health' "$curl_hits"
+grep -q 'http://127.0.0.1:8080/ready' "$curl_hits"
 
 echo "scalping-soak-acceptance tests passed"
