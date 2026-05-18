@@ -165,4 +165,17 @@ if ! grep -q "gate/rejection reason" "$negative_output"; then
   exit 1
 fi
 
+invalid_regime_artifact="${tmp_dir}/invalid-regime-split.json"
+jq '.result.report.regime_split.neutral = "unknown"' "$artifact_path" >"$invalid_regime_artifact"
+if "$VERIFIER" "$invalid_regime_artifact" >"$negative_output" 2>&1; then
+  echo "expected verifier to fail when regime_split contains a nonnumeric value" >&2
+  exit 1
+fi
+
+if ! grep -q "numeric action/regime split" "$negative_output"; then
+  echo "negative verifier output did not mention numeric split values" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
 echo "verify-scalping-soak-artifact tests passed"
