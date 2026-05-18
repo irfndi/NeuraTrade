@@ -202,21 +202,6 @@ func RunPublicScalpingLivePaperSoak(
 	return soak, nil
 }
 
-func runPublicScalpingLivePaperSoakCycle(
-	ctx context.Context,
-	svc *AIScalpingService,
-	defaults AIScalpingConfig,
-	exchange string,
-	initialCapital decimal.Decimal,
-	feeRate decimal.Decimal,
-) (*ScalpingBacktestResult, decimal.Decimal, error) {
-	historicalSignals, err := gatherPublicScalpingLivePaperSoakSignals(ctx, svc, exchange)
-	if err != nil {
-		return nil, decimal.Zero, err
-	}
-	return runPublicScalpingLivePaperSoakSignals(ctx, defaults, exchange, initialCapital, feeRate, historicalSignals)
-}
-
 func gatherPublicScalpingLivePaperSoakSignals(
 	ctx context.Context,
 	svc *AIScalpingService,

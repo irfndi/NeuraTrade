@@ -95,14 +95,9 @@ func TestRunPublicScalpingLivePaperSoakCyclePreservesFullSignalUniverse(t *testi
 	}
 	svc := NewAIScalpingService(config, nil, nil, mockCCXT, nil, nil)
 
-	result, _, err := runPublicScalpingLivePaperSoakCycle(
-		context.Background(),
-		svc,
-		config,
-		config.Exchange,
-		decimal.NewFromInt(1000),
-		decimal.NewFromFloat(0.0006),
-	)
+	signals, err := gatherPublicScalpingLivePaperSoakSignals(context.Background(), svc, config.Exchange)
+	require.NoError(t, err)
+	result, _, err := runPublicScalpingLivePaperSoakSignals(context.Background(), config, config.Exchange, decimal.NewFromInt(1000), decimal.NewFromFloat(0.0006), signals)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
