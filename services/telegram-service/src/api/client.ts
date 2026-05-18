@@ -30,6 +30,7 @@ import type {
 } from "./types";
 import { API_ENDPOINTS } from "./types";
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./rate-limiter";
+import { logger } from "../utils/logger";
 
 export class ApiClientError extends Error {
   constructor(
@@ -84,7 +85,8 @@ export class BackendApiClient {
         { requireAdmin: false },
       );
       return response;
-    } catch {
+    } catch (error) {
+      logger.warn("Failed to get notification preference", { error });
       return { enabled: true };
     }
   }

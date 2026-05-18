@@ -8,7 +8,6 @@ export class RateLimiter {
   private readonly maxTokens: number;
   private readonly refillIntervalMs: number;
   private lastRefill: number;
-  private refillTimer: Timer | null = null;
 
   constructor(options: RateLimiterOptions) {
     this.maxTokens = options.maxTokens ?? options.tokensPerSecond;

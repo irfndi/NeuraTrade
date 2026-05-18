@@ -66,7 +66,7 @@ export function registerWalletCommands(
       await ctx.reply(response.message || `✅ Exchange connected: ${exchange}`);
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to connect exchange (${(error as Error).message}).`,
+        `❌ Failed to connect exchange (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
@@ -105,7 +105,7 @@ export function registerWalletCommands(
       await ctx.reply(response.message || "✅ Polymarket wallet connected.");
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to connect Polymarket wallet (${(error as Error).message}).`,
+        `❌ Failed to connect Polymarket wallet (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
@@ -145,7 +145,9 @@ export function registerWalletCommands(
       sessions.clearSession(chatId);
       await ctx.reply(response.message || "✅ Wallet added.");
     } catch (error) {
-      await ctx.reply(`❌ Failed to add wallet (${(error as Error).message}).`);
+      await ctx.reply(
+        `❌ Failed to add wallet (${error instanceof Error ? error.message : String(error)}).`,
+      );
     }
   });
 
@@ -170,7 +172,7 @@ export function registerWalletCommands(
       await ctx.reply(response.message || "✅ Wallet removed.");
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to remove wallet (${(error as Error).message}).`,
+        `❌ Failed to remove wallet (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
@@ -187,7 +189,7 @@ export function registerWalletCommands(
       await ctx.reply(formatWalletList(response.wallets ?? []));
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to fetch wallets (${(error as Error).message}).`,
+        `❌ Failed to fetch wallets (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
