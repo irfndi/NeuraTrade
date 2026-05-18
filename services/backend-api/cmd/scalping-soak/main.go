@@ -179,6 +179,7 @@ type acceptanceGateOptions struct {
 	MinBaselineAvgPnLDelta   string
 }
 
+// validateAcceptanceGates applies CLI-configured proof thresholds to a completed scalping soak report.
 func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, options acceptanceGateOptions) error {
 	if result == nil {
 		return fmt.Errorf("acceptance gates require soak result")
@@ -229,6 +230,7 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 	return nil
 }
 
+// validatePerfectWinRealismGate rejects high-sample paper results that report only wins with no drawdown.
 func validatePerfectWinRealismGate(summary services.ScalpingSoakTradeSummary, rawMaximum string) error {
 	if rawMaximum == "" {
 		return nil
