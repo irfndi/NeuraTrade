@@ -15,8 +15,11 @@ func TestSQLiteMigrationsRunFreshThroughPortfolioSnapshots(t *testing.T) {
 		t.Skip("sqlite3 is required for sqlite migration smoke test")
 	}
 
+	backendRoot, err := filepath.Abs("..")
+	require.NoError(t, err)
+
 	dbPath := filepath.Join(t.TempDir(), "neuratrade.db")
-	cmd := exec.Command("bash", "sqlite-migrate.sh", "run")
+	cmd := exec.Command("bash", filepath.Join(backendRoot, "database", "sqlite-migrate.sh"), "run")
 	cmd.Env = append(os.Environ(), "SQLITE_PATH="+dbPath)
 
 	output, err := cmd.CombinedOutput()

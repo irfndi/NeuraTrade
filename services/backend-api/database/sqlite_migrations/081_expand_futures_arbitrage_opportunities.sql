@@ -76,8 +76,8 @@ INSERT INTO futures_arbitrage_opportunities_new (
 SELECT
     COALESCE(id, lower(hex(randomblob(16)))),
     symbol,
-    COALESCE(CAST(buy_exchange_id AS TEXT), ''),
-    COALESCE(CAST(sell_exchange_id AS TEXT), ''),
+    COALESCE((SELECT name FROM exchanges WHERE id = buy_exchange_id), CAST(buy_exchange_id AS TEXT), ''),
+    COALESCE((SELECT name FROM exchanges WHERE id = sell_exchange_id), CAST(sell_exchange_id AS TEXT), ''),
     buy_exchange_id,
     sell_exchange_id,
     funding_rate_buy,

@@ -36,6 +36,8 @@ const CREDENTIAL_COMPARE_BYTES = 4096;
 
 function copyCredentialToFixedBuffer(value: Buffer): Buffer {
   const padded = Buffer.alloc(CREDENTIAL_COMPARE_BYTES);
+  // lgtm[js/insufficient-password-hash]
+  // This is a timing-safe credential comparison helper, not password hashing.
   for (let i = 0; i < CREDENTIAL_COMPARE_BYTES; i += 1) {
     padded[i] = i < value.length ? value[i] : 0;
   }
