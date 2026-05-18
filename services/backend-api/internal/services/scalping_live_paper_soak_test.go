@@ -50,7 +50,7 @@ func TestScalpingLivePaperSoakTimeoutScalesWithCyclesAndInterval(t *testing.T) {
 		want     time.Duration
 	}{
 		{name: "scales_with_cycles_and_interval", cycles: 3, interval: 2 * time.Second, want: 2*time.Minute + 4*time.Second},
-		{name: "caps_cycles_and_interval", cycles: MaxScalpingLivePaperSoakCycles + 5, interval: MaxScalpingLivePaperSoakInterval + time.Second, want: 35*time.Minute + 30*time.Second},
+		{name: "caps_cycles_and_interval", cycles: MaxScalpingLivePaperSoakCycles + 5, interval: MaxScalpingLivePaperSoakInterval + time.Second, want: scalpingLivePaperSoakBaseTimeout + time.Duration(MaxScalpingLivePaperSoakCycles)*scalpingLivePaperSoakPerCycleTimeout + time.Duration(MaxScalpingLivePaperSoakCycles-1)*MaxScalpingLivePaperSoakInterval},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestRunPublicScalpingLivePaperSoakCyclePreservesFullSignalUniverse(t *testi
 
 	signals, err := gatherPublicScalpingLivePaperSoakSignals(context.Background(), svc, config.Exchange)
 	require.NoError(t, err)
-	result, _, err := runPublicScalpingLivePaperSoakSignals(context.Background(), config, config.Exchange, decimal.NewFromInt(1000), decimal.NewFromFloat(0.0006), signals)
+	result, _, err := runPublicScalpingLivePaperSoakSignals(context.Background(), config, config.Exchange, decimal.NewFromInt(1000), decimal.NewFromFloat(0.0006), DefaultScalpingBacktestHoldPeriod, signals)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)

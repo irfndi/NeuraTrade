@@ -16,6 +16,7 @@ EXCHANGE="${EXCHANGE:-bitget}"
 CYCLES="${CYCLES:-12}"
 INTERVAL_MS="${INTERVAL_MS:-5000}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
+HOLD_PERIOD_SECONDS="${HOLD_PERIOD_SECONDS:-300}"
 CAPITAL="${CAPITAL:-48}"
 FEE_RATE="${FEE_RATE:-0.0006}"
 REQUIRE_TRADES="${REQUIRE_TRADES:-true}"
@@ -70,6 +71,7 @@ Environment:
   CYCLES          Number of probe cycles, capped by the binary (default: ${CYCLES})
   INTERVAL_MS     Delay between cycles in ms (default: ${INTERVAL_MS})
   TIMEOUT_SECONDS Overall timeout; 0 lets the binary calculate it (default: ${TIMEOUT_SECONDS})
+  HOLD_PERIOD_SECONDS Paper position hold period; 0 uses binary default (default: ${HOLD_PERIOD_SECONDS})
   CAPITAL         Initial paper capital in USDT (default: ${CAPITAL})
   FEE_RATE        Paper simulator fee rate (default: ${FEE_RATE})
   REQUIRE_TRADES  true/false; fail when no paper trades are produced (default: ${REQUIRE_TRADES})
@@ -119,6 +121,7 @@ run_soak() {
     "--exchange" "$EXCHANGE"
     "--cycles" "$CYCLES"
     "--interval-ms" "$INTERVAL_MS"
+    "--hold-period-seconds" "$HOLD_PERIOD_SECONDS"
     "--chat-id" "$SOAK_CHAT_ID"
     "--order-prefix" "$SOAK_ORDER_PREFIX"
     "--capital" "$CAPITAL"
@@ -175,7 +178,7 @@ run_soak() {
       ;;
   esac
 
-  log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} \
+  log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} hold_period_seconds=${HOLD_PERIOD_SECONDS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
 min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
 max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} max_perfect_win_trades=${MAX_PERFECT_WIN_TRADES:-disabled} min_baseline_win_rate_delta=${MIN_BASELINE_WIN_RATE_DELTA:-disabled} \

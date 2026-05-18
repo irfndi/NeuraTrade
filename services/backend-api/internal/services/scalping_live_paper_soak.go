@@ -12,7 +12,7 @@ import (
 
 const (
 	DefaultScalpingLivePaperSoakCycles      = 1
-	MaxScalpingLivePaperSoakCycles          = 24
+	MaxScalpingLivePaperSoakCycles          = 120
 	MaxScalpingLivePaperSoakInterval        = time.Minute
 	scalpingLivePaperSoakBaseTimeout        = 30 * time.Second
 	scalpingLivePaperSoakPerCycleTimeout    = 30 * time.Second
@@ -30,6 +30,7 @@ type ScalpingLivePaperSoakOptions struct {
 	RequireTrades  bool
 	InitialCapital decimal.Decimal
 	FeeRate        decimal.Decimal
+	HoldPeriod     time.Duration
 	Baseline       *ScalpingSoakBaseline
 }
 
@@ -107,6 +108,10 @@ func RunPublicScalpingLivePaperSoak(
 	if !feeRate.GreaterThan(decimal.Zero) {
 		feeRate = decimal.NewFromFloat(0.0006)
 	}
+	holdPeriod := options.HoldPeriod
+	if holdPeriod <= 0 {
+		holdPeriod = DefaultScalpingBacktestHoldPeriod
+	}
 	chatID := strings.TrimSpace(options.ChatID)
 	if chatID == "" {
 		chatID = defaultScalpingLivePaperSoakChatID
@@ -161,7 +166,7 @@ func RunPublicScalpingLivePaperSoak(
 		historicalSignals = append(historicalSignals, signals...)
 	}
 
-	result, fees, err := runPublicScalpingLivePaperSoakSignals(ctx, defaults, exchange, initialCapital, feeRate, historicalSignals)
+	result, fees, err := runPublicScalpingLivePaperSoakSignals(ctx, defaults, exchange, initialCapital, feeRate, holdPeriod, historicalSignals)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +244,7 @@ func runPublicScalpingLivePaperSoakSignals(
 	exchange string,
 	initialCapital decimal.Decimal,
 	feeRate decimal.Decimal,
+	holdPeriod time.Duration,
 	historicalSignals []HistoricalSignal,
 ) (*ScalpingBacktestResult, decimal.Decimal, error) {
 	if len(historicalSignals) == 0 {
@@ -277,7 +283,7 @@ func runPublicScalpingLivePaperSoakSignals(
 		MinExpectancyN:     defaults.MinExpectancyN,
 		MinExpectancyEdge:  defaults.MinExpectancyEdge,
 		MaxCapitalPct:      defaults.MaxCapitalPct,
-		DefaultHoldPeriod:  DefaultScalpingBacktestHoldPeriod,
+		DefaultHoldPeriod:  holdPeriod,
 	})
 	result, err := engine.RunSignals(ctx, historicalSignals)
 	if err != nil {

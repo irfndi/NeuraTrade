@@ -37,7 +37,8 @@ curl -fsS http://127.0.0.1:8080/ready
 
 The soak should pass these gates unless an operator records a deliberate waiver:
 
-- `MIN_TRADES=1`
+- `MIN_TRADES=20` when `REQUIRE_LIVE_TRIAL_READY=true`; otherwise `MIN_TRADES=1`
+- `HOLD_PERIOD_SECONDS=300`
 - `MIN_WIN_RATE=0.123`
 - `MIN_NET_PNL=0`
 - `MIN_AVG_NET_PNL=0`
@@ -85,11 +86,12 @@ For manual runs, use the same defaults explicitly:
 stamp="$(date +%Y%m%d%H%M%S)"
 export SOAK_DB_PATH="${HOME}/.neuratrade/data/scalping-soak-acceptance-${stamp}.db"
 export SOAK_OUTPUT_FILE="${HOME}/.neuratrade/data/scalping-soak-acceptance-${stamp}.json"
-export CYCLES=30
-export INTERVAL_MS=1000
-export TIMEOUT_SECONDS=120
+export CYCLES=60
+export INTERVAL_MS=15000
+export TIMEOUT_SECONDS=1800
+export HOLD_PERIOD_SECONDS=300
 export CAPITAL=48
-export MIN_TRADES=1
+export MIN_TRADES=20
 export MIN_WIN_RATE=0.123
 export MIN_NET_PNL=0
 export MIN_AVG_NET_PNL=0
@@ -101,15 +103,16 @@ export MAX_PERFECT_WIN_TRADES=20
 export MIN_BASELINE_WIN_RATE_DELTA=0
 export MIN_BASELINE_NET_PNL_DELTA=0
 export MIN_BASELINE_AVG_PNL_DELTA=0
-export REQUIRE_LIVE_TRIAL_READY=false
+export REQUIRE_LIVE_TRIAL_READY=true
 
 bash services/backend-api/scripts/scalping-soak.sh run
 bash services/backend-api/scripts/verify-scalping-soak-artifact.sh "$SOAK_OUTPUT_FILE"
 ```
 
-`CYCLES=30` intentionally requests more than the binary cap; the current binary
-normalizes to its configured maximum and records the effective cycle count in the
-artifact.
+`CYCLES=60`, `INTERVAL_MS=15000`, and `HOLD_PERIOD_SECONDS=300` give early
+positions enough later observations to close honestly while still keeping a
+single readiness run bounded. Short smoke soaks are useful for plumbing checks,
+but they must not be used to signal real-money readiness.
 
 ## Evidence To Record
 

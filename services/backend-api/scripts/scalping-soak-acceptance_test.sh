@@ -43,12 +43,32 @@ set -euo pipefail
   echo "expected run command" >&2
   exit 1
 }
-[ "$CYCLES" = "30" ] || {
+[ "$CYCLES" = "60" ] || {
   echo "unexpected CYCLES=$CYCLES" >&2
+  exit 1
+}
+[ "$INTERVAL_MS" = "15000" ] || {
+  echo "unexpected INTERVAL_MS=$INTERVAL_MS" >&2
+  exit 1
+}
+[ "$TIMEOUT_SECONDS" = "1800" ] || {
+  echo "unexpected TIMEOUT_SECONDS=$TIMEOUT_SECONDS" >&2
+  exit 1
+}
+[ "$HOLD_PERIOD_SECONDS" = "300" ] || {
+  echo "unexpected HOLD_PERIOD_SECONDS=$HOLD_PERIOD_SECONDS" >&2
   exit 1
 }
 [ "$CAPITAL" = "48" ] || {
   echo "unexpected CAPITAL=$CAPITAL" >&2
+  exit 1
+}
+[ "$MIN_TRADES" = "20" ] || {
+  echo "unexpected MIN_TRADES=$MIN_TRADES" >&2
+  exit 1
+}
+[ "$REQUIRE_LIVE_TRIAL_READY" = "true" ] || {
+  echo "unexpected REQUIRE_LIVE_TRIAL_READY=$REQUIRE_LIVE_TRIAL_READY" >&2
   exit 1
 }
 expected_max_hold_ratio="${EXPECTED_MAX_HOLD_RATIO-0.745}"
@@ -191,6 +211,9 @@ jq -e \
     and .evidence.artifact == $artifact
     and .evidence.db_path == $db_path
     and .evidence.log_file == $log_file
+    and .gates.min_trades == "20"
+    and .gates.hold_period_seconds == "300"
+    and .gates.require_live_trial_ready == "true"
     and .gates.max_hold_ratio == "0.745"
     and .gates.max_perfect_win_trades == "20"
     and .report.rejection_by_reason.no_directional_edge == 1
@@ -233,6 +256,9 @@ jq -e \
     and .evidence.artifact == $artifact
     and .evidence.db_path == $db_path
     and .evidence.log_file == $log_file
+    and .gates.min_trades == "20"
+    and .gates.hold_period_seconds == "300"
+    and .gates.require_live_trial_ready == "true"
     and .gates.max_hold_ratio == "0.745"
     and .gates.max_perfect_win_trades == "20"
     and .report.rejection_by_reason.no_directional_edge == 1

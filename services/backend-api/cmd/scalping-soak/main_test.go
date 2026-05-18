@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/irfndi/neuratrade/internal/services"
@@ -272,4 +273,14 @@ func TestValidateAcceptanceGatesRequiresBaselineForDeltaGates(t *testing.T) {
 
 	err := validateAcceptanceGates(result, acceptanceGateOptions{MinBaselineNetPnLDelta: "0"})
 	require.ErrorContains(t, err, "baseline delta gates require --baseline=true")
+}
+
+func TestRunRejectsNegativeHoldPeriod(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_SOAK_CHAT_ID", "test")
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+	os.Args = []string{"scalping-soak", "--hold-period-seconds", "-1"}
+
+	err := run()
+	require.ErrorContains(t, err, "invalid --hold-period-seconds value -1")
 }

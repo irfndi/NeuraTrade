@@ -31,6 +31,7 @@ func run() error {
 		cycles                   int
 		intervalMS               int
 		timeoutSeconds           int
+		holdPeriodSeconds        int
 		requireTrades            bool
 		initialCapital           string
 		feeRate                  string
@@ -59,6 +60,7 @@ func run() error {
 	flags.IntVar(&cycles, "cycles", services.DefaultScalpingLivePaperSoakCycles, "number of public-data paper soak cycles")
 	flags.IntVar(&intervalMS, "interval-ms", 2000, "delay between cycles in milliseconds")
 	flags.IntVar(&timeoutSeconds, "timeout-seconds", 0, "overall timeout; defaults to cycles and interval")
+	flags.IntVar(&holdPeriodSeconds, "hold-period-seconds", 0, "paper position hold period in seconds; 0 uses the default")
 	flags.BoolVar(&requireTrades, "require-trades", false, "fail if the paper soak produces zero closed paper trades")
 	flags.StringVar(&initialCapital, "capital", "48", "initial paper capital in USDT")
 	flags.StringVar(&feeRate, "fee-rate", "0.0006", "round-trip fee-rate input used by the paper simulator")
@@ -100,6 +102,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("parse --fee-rate: %w", err)
 	}
+	if holdPeriodSeconds < 0 {
+		return fmt.Errorf("invalid --hold-period-seconds value %d: must be zero or greater", holdPeriodSeconds)
+	}
+	holdPeriod := time.Duration(holdPeriodSeconds) * time.Second
 
 	interval := time.Duration(intervalMS) * time.Millisecond
 	timeout := services.ScalpingLivePaperSoakTimeout(cycles, interval)
@@ -123,6 +129,7 @@ func run() error {
 		RequireTrades:  requireTrades,
 		InitialCapital: capital,
 		FeeRate:        fees,
+		HoldPeriod:     holdPeriod,
 		Baseline:       baseline,
 	})
 	if err != nil {
