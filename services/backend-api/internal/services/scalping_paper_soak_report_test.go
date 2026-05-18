@@ -31,13 +31,8 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 2, result.Summary.TotalTrades)
 	require.NotEmpty(t, result.Summary.RejectionByReason)
-	var rejectionReason string
-	for reason, count := range result.Summary.RejectionByReason {
-		rejectionReason = reason
-		require.Equal(t, 1, count)
-		break
-	}
-	require.NotEmpty(t, rejectionReason)
+	require.Equal(t, 2, result.Summary.RejectionByReason["entry_without_close_signal"])
+	require.Equal(t, 1, result.Summary.RejectionByReason["no_directional_edge"])
 
 	baseline := BrokenScalpingBaseline()
 	report, err := PersistScalpingPaperBacktestSoakReport(ctx, sqliteDB, result, ScalpingPaperSoakPersistenceOptions{
@@ -60,7 +55,8 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	require.Equal(t, 1, report.ActionBreakdown["buy"])
 	require.Equal(t, 1, report.ActionBreakdown["sell"])
 	require.Equal(t, 3, report.ActionBreakdown["hold"])
-	require.Equal(t, 1, report.RejectionByReason[rejectionReason])
+	require.Equal(t, 2, report.RejectionByReason["entry_without_close_signal"])
+	require.Equal(t, 1, report.RejectionByReason["no_directional_edge"])
 	require.NotContains(t, report.RejectionByReason, "")
 	require.True(t, report.SignalQuality.Coverage.Equal(decimal.NewFromInt(1)))
 	require.True(t, report.TradeSummary.NetPnL.Round(8).Equal(result.Summary.TotalPnL.Round(8)))

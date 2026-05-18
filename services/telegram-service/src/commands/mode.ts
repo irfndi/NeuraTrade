@@ -19,6 +19,23 @@ function isApiErrorWithStatus(
   );
 }
 
+function isLiveProofGateMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("live mode proof gate blocked") ||
+    normalized.includes("scalping live paper proof not met")
+  );
+}
+
+function liveProofGateReply(): string {
+  return (
+    "⚠️ Cannot switch to LIVE MODE\n\n" +
+    "Paper trading has not met the live-readiness proof gate yet.\n" +
+    "Keep trading in safe mode until a paper soak shows enough closed trades, wins and losses, positive net PnL after fees, and observed drawdown.\n\n" +
+    "Real-money execution remains blocked."
+  );
+}
+
 async function handleModeAction(
   api: BackendApiClient,
   chatId: string,
@@ -66,7 +83,7 @@ async function handleModeAction(
       return;
     }
 
-    let result: { success: boolean; mode?: string };
+    let result: Awaited<ReturnType<typeof api.setTradingMode>>;
     try {
       result = await api.setTradingMode(chatId, "live");
     } catch (error) {
@@ -80,6 +97,14 @@ async function handleModeAction(
             "Real trading is currently active.\n" +
             "Use /mode dry to switch back to safe paper mode.",
         );
+        return;
+      }
+      if (
+        isApiErrorWithStatus(error) &&
+        error.status === 400 &&
+        isLiveProofGateMessage(error.message)
+      ) {
+        await reply(liveProofGateReply());
         return;
       }
       if (
@@ -100,6 +125,10 @@ async function handleModeAction(
     }
 
     if (result.success === false) {
+      if (result.error && isLiveProofGateMessage(result.error)) {
+        await reply(liveProofGateReply());
+        return;
+      }
       await reply(
         "⚠️ Cannot switch to LIVE MODE\n\n" +
           "Live mode requires multiple confirmations for safety.\n" +

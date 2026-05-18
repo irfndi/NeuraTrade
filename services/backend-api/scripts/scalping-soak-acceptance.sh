@@ -33,7 +33,7 @@ export SOAK_DB_PATH
 export SOAK_OUTPUT_FILE
 export CYCLES="${CYCLES:-60}"
 export INTERVAL_MS="${INTERVAL_MS:-15000}"
-export TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-1800}"
+export TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 export HOLD_PERIOD_SECONDS="${HOLD_PERIOD_SECONDS:-300}"
 export CAPITAL="${CAPITAL:-48}"
 export MIN_TRADES="${MIN_TRADES-20}"
@@ -204,6 +204,7 @@ run_acceptance() {
   require_file "$SCALPING_SOAK_VERIFIER"
   validate_boolean "RUN_HEALTH_PREFLIGHT" "$RUN_HEALTH_PREFLIGHT"
   validate_boolean "CHECK_GATEWAY_STATUS" "$CHECK_GATEWAY_STATUS"
+  validate_boolean "REQUIRE_LIVE_TRIAL_READY" "$REQUIRE_LIVE_TRIAL_READY"
   mkdir -p "$DATA_DIR" "$LOG_DIR"
 
   log "starting scalping soak acceptance branch=$(git_value unknown rev-parse --abbrev-ref HEAD) commit=$(git_value unknown rev-parse --short HEAD)"

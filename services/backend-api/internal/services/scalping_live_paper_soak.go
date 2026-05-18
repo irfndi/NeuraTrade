@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -139,9 +140,10 @@ func RunPublicScalpingLivePaperSoak(
 	defaults.EnforceFutures = false
 
 	svc := &AIScalpingService{
-		config:       defaults,
-		ccxtService:  ccxtSvc,
-		symbolGuards: make(map[string]symbolExecutionGuard),
+		config:             defaults,
+		ccxtService:        ccxtSvc,
+		symbolGuards:       make(map[string]symbolExecutionGuard),
+		signalObservations: make(map[string][]scalpingSignalObservation),
 	}
 
 	soak := &ScalpingLivePaperSoakResult{
@@ -270,20 +272,28 @@ func runPublicScalpingLivePaperSoakSignals(
 		}
 	}
 
+	fallbackConfig := defaults.DeterministicFallback.Normalized()
+	entryCutoffTime := endTime.Add(-holdPeriod)
+	if entryCutoffTime.Before(startTime) {
+		entryCutoffTime = time.Time{}
+	}
 	engine := NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
-		StartTime:          startTime.Add(-time.Second),
-		EndTime:            endTime.Add(time.Second),
-		Symbols:            symbols,
-		Exchange:           exchange,
-		InitialCapital:     initialCapital,
-		FeeRate:            feeRate,
-		SlippagePct:        decimal.NewFromFloat(DefaultScalpingBacktestSlippage),
-		MaxBidAskSpreadPct: defaults.MaxBidAskSpreadPct,
-		MinConfidence:      defaults.MinConfidence,
-		MinExpectancyN:     defaults.MinExpectancyN,
-		MinExpectancyEdge:  defaults.MinExpectancyEdge,
-		MaxCapitalPct:      defaults.MaxCapitalPct,
-		DefaultHoldPeriod:  holdPeriod,
+		StartTime:             startTime.Add(-time.Second),
+		EndTime:               endTime.Add(time.Second),
+		Symbols:               symbols,
+		Exchange:              exchange,
+		InitialCapital:        initialCapital,
+		FeeRate:               feeRate,
+		SlippagePct:           decimal.NewFromFloat(DefaultScalpingBacktestSlippage),
+		MaxBidAskSpreadPct:    math.Min(defaults.MaxBidAskSpreadPct, fallbackConfig.MaxBidAskSpread),
+		MinConfidence:         defaults.MinConfidence,
+		MinExpectancyN:        defaults.MinExpectancyN,
+		MinExpectancyEdge:     defaults.MinExpectancyEdge,
+		MaxCapitalPct:         defaults.MaxCapitalPct,
+		DefaultHoldPeriod:     holdPeriod,
+		EntryCutoffTime:       entryCutoffTime,
+		RequireRecentMomentum: true,
+		MinRecentMomentumPct:  0.05,
 	})
 	result, err := engine.RunSignals(ctx, historicalSignals)
 	if err != nil {

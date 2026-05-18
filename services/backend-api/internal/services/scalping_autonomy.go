@@ -369,7 +369,7 @@ func (c *ScalpingAutonomyCoordinator) RecordExecutionResult(
 		}
 	}
 
-	metrics := mergeRolloutMetrics(state.Metrics, decision, portfolio, executionErr)
+	metrics := mergeRolloutMetrics(state.Metrics, portfolio, executionErr)
 	if err := c.rollout.UpdateMetrics(ctx, strategyID, metrics); err != nil {
 		return fmt.Errorf("update rollout metrics: %w", err)
 	}
@@ -422,6 +422,11 @@ func (c *ScalpingAutonomyCoordinator) SetStrategyMode(
 			return nil, fmt.Errorf("initialize rollout state: %w", err)
 		}
 	}
+	if targetStage == autonomous.StageLive && state.CurrentStage != autonomous.StageLive {
+		if failures := scalpingLivePaperProofFailures(state); len(failures) > 0 {
+			return state, fmt.Errorf("scalping live paper proof not met: %s", strings.Join(failures, ", "))
+		}
+	}
 	for state.CurrentStage != targetStage {
 		switch {
 		case state.CurrentStage == autonomous.StageShadow && targetStage != autonomous.StageShadow:
@@ -444,6 +449,78 @@ func (c *ScalpingAutonomyCoordinator) SetStrategyMode(
 		}
 	}
 	return state, nil
+}
+
+// ValidateStrategyMode checks whether a requested strategy mode transition is
+// allowed without mutating rollout state.
+func (c *ScalpingAutonomyCoordinator) ValidateStrategyMode(
+	ctx context.Context,
+	strategyID string,
+	mode autonomous.StrategyMode,
+) error {
+	if c == nil || c.rollout == nil {
+		return fmt.Errorf("autonomy coordinator is unavailable")
+	}
+	strategyID = strings.TrimSpace(strategyID)
+	if strategyID == "" {
+		return fmt.Errorf("strategy_id is required")
+	}
+	targetStage, err := stageForMode(mode)
+	if err != nil {
+		return err
+	}
+	if targetStage != autonomous.StageLive {
+		return nil
+	}
+	state, err := c.rollout.GetRolloutState(ctx, strategyID)
+	if err != nil {
+		return fmt.Errorf("get rollout state: %w", err)
+	}
+	if state != nil && state.CurrentStage == autonomous.StageLive {
+		return nil
+	}
+	if failures := scalpingLivePaperProofFailures(state); len(failures) > 0 {
+		return fmt.Errorf("scalping live paper proof not met: %s", strings.Join(failures, ", "))
+	}
+	return nil
+}
+
+func scalpingLivePaperProofFailures(state *autonomous.RolloutState) []string {
+	if state == nil {
+		return []string{"rollout_state_missing"}
+	}
+	failures := make([]string, 0, 8)
+	if state.CurrentStage != autonomous.StagePaper || state.Status != autonomous.StatusActive {
+		failures = append(failures, fmt.Sprintf("strategy_not_active_paper (stage: %s, status: %s)", state.CurrentStage, state.Status))
+	}
+	metrics := state.Metrics
+	closedOutcomeTrades := metrics.WinningTrades + metrics.LosingTrades
+	closedTrades := metrics.TotalTrades
+	if closedOutcomeTrades > closedTrades {
+		closedTrades = closedOutcomeTrades
+	}
+	if closedTrades < DefaultScalpingLiveTrialMinClosedTrades {
+		failures = append(failures, "closed_trades_below_live_trial_minimum")
+	}
+	if metrics.WinningTrades == 0 {
+		failures = append(failures, "no_winning_trades")
+	}
+	if metrics.LosingTrades == 0 {
+		failures = append(failures, "no_losing_trades")
+	}
+	if !metrics.TotalPnL.GreaterThan(decimal.Zero) {
+		failures = append(failures, "net_pnl_not_positive")
+	}
+	if closedTrades == 0 || !metrics.TotalPnL.Div(decimal.NewFromInt(int64(max(closedTrades, 1)))).GreaterThan(decimal.Zero) {
+		failures = append(failures, "avg_net_pnl_not_positive")
+	}
+	if !metrics.MaxDrawdown.GreaterThan(decimal.Zero) {
+		failures = append(failures, "drawdown_not_observed")
+	}
+	if metrics.WinRate <= 0 {
+		failures = append(failures, "win_rate_not_positive")
+	}
+	return failures
 }
 
 func stageForMode(mode autonomous.StrategyMode) (autonomous.RolloutStage, error) {
@@ -595,7 +672,6 @@ func estimateDecisionReturnAndRisk(decision *AITradingDecision) (decimal.Decimal
 
 func mergeRolloutMetrics(
 	previous autonomous.RolloutMetrics,
-	decision *AITradingDecision,
 	portfolio TradingPortfolio,
 	executionErr error,
 ) autonomous.RolloutMetrics {
@@ -623,18 +699,13 @@ func mergeRolloutMetrics(
 		metrics.LosingTrades = losingTrades
 	}
 
-	attemptIncrement := 0
-	if decision != nil && !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
-		attemptIncrement = 1
-	}
-
 	perfTotal := readIntMetric(perf["total_trades"])
-	prevTotal := metrics.TotalTrades
 	if perfTotal > metrics.TotalTrades {
 		metrics.TotalTrades = perfTotal
 	}
-	if attemptIncrement > 0 && perfTotal <= prevTotal {
-		metrics.TotalTrades = prevTotal + attemptIncrement
+	closedOutcomes := metrics.WinningTrades + metrics.LosingTrades
+	if closedOutcomes > metrics.TotalTrades {
+		metrics.TotalTrades = closedOutcomes
 	}
 
 	if executionErr != nil {

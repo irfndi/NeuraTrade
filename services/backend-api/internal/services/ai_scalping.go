@@ -69,6 +69,17 @@ const (
 	defaultFallbackRoundTripFeePct  = 0.12
 	microFallbackMinNetEdgePct      = 0.35
 	standardFallbackMinNetEdgePct   = 0.20
+	scalpingSellBroadTrendMaxPct    = -0.05
+	scalpingPullbackBuyTrendMinPct  = 0.05
+	scalpingPullbackBuyRecentMaxPct = -0.30
+	scalpingPullbackBuyRangeMin     = 70.0
+	scalpingPullbackBuyRangeMax     = 84.0
+	scalpingBlowoffSellTrendMinPct  = 0.075
+	scalpingBlowoffSellRecentMinPct = 0.15
+	scalpingBlowoffSellRangeMin     = 95.0
+	scalpingBlowoffSellMaxImbalance = 0.25
+	scalpingRecentMomentumWindow    = 5 * time.Minute
+	scalpingRecentMomentumMinAge    = 30 * time.Second
 
 	scalpingFeedbackIntervalTrades       = 20
 	scalpingFeedbackMinTrades            = 10
@@ -682,10 +693,14 @@ type AITradingDecision struct {
 	PreTradeExpectancy              float64                             `json:"-"`
 	PreTradeExpectancySampleSize    int                                 `json:"-"`
 	SignalQualityKnown              bool                                `json:"-"`
+	SignalPrice                     float64                             `json:"-"`
 	SignalBidAskSpreadPct           float64                             `json:"-"`
 	SignalOrderBookImbalance        float64                             `json:"-"`
 	SignalRangePosition24h          float64                             `json:"-"`
 	SignalPriceChange24hPct         float64                             `json:"-"`
+	SignalRecentPriceChangePct      float64                             `json:"-"`
+	SignalRecentChangeAgeSec        float64                             `json:"-"`
+	SignalRecentChangeKnown         bool                                `json:"-"`
 	OriginalConfidence              float64                             `json:"-"`
 	OriginalConfidenceKnown         bool                                `json:"-"`
 }
@@ -746,6 +761,8 @@ type AIScalpingService struct {
 	cacheUpdated                      time.Time
 	symbolGuardMu                     sync.Mutex
 	symbolGuards                      map[string]symbolExecutionGuard
+	signalObservationMu               sync.Mutex
+	signalObservations                map[string][]scalpingSignalObservation
 	autonomyMu                        sync.RWMutex
 	autonomy                          *ScalpingAutonomyCoordinator
 	autonomyState                     AIScalpingAutonomyState
@@ -760,6 +777,11 @@ type symbolExecutionGuard struct {
 	LossWindowFrom    time.Time
 	LossStreak        int
 	LastLoss          time.Time
+}
+
+type scalpingSignalObservation struct {
+	At    time.Time
+	Price float64
 }
 
 const (
@@ -933,13 +955,14 @@ func NewAIScalpingService(
 	tradeMemory *TradeMemory,
 ) *AIScalpingService {
 	return &AIScalpingService{
-		config:        config,
-		llmClient:     llmClient,
-		skillRegistry: skillRegistry,
-		ccxtService:   ccxtService,
-		orderExecutor: orderExecutor,
-		tradeMemory:   tradeMemory,
-		symbolGuards:  make(map[string]symbolExecutionGuard),
+		config:             config,
+		llmClient:          llmClient,
+		skillRegistry:      skillRegistry,
+		ccxtService:        ccxtService,
+		orderExecutor:      orderExecutor,
+		tradeMemory:        tradeMemory,
+		symbolGuards:       make(map[string]symbolExecutionGuard),
+		signalObservations: make(map[string][]scalpingSignalObservation),
 	}
 }
 
@@ -1498,10 +1521,13 @@ type aiMarketSignal struct {
 	BidAskSpread       float64 `json:"spread_pct"`
 	OrderBookImbalance float64 `json:"ob_imbalance"`
 	PriceChange24h     float64 `json:"price_change_24h_pct"`
+	RecentPriceChange  float64 `json:"recent_price_change_pct,omitempty"`
+	RecentChangeAgeSec float64 `json:"recent_change_age_sec,omitempty"`
 	RangePosition24h   float64 `json:"range_pos_24h"`
 	SuggestedAction    string  `json:"suggested_action,omitempty"`
 	ConfidenceHint     float64 `json:"confidence_hint,omitempty"`
 	CandidateScore     float64 `json:"candidate_score,omitempty"`
+	RecentChangeKnown  bool    `json:"-"`
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
@@ -1512,6 +1538,10 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 
 	markets, err := s.ccxtService.FetchMarkets(ctx, exchange)
 	if err != nil {
+		if cached := s.getAnyCachedPairs(exchange); len(cached) > 0 {
+			log.Printf("[AI-SCALPING] Market discovery failed on %s (%v); reusing stale pair cache (%d symbols)", exchange, err, len(cached))
+			return cached, nil
+		}
 		return nil, fmt.Errorf("failed to fetch markets: %w", err)
 	}
 
@@ -1659,6 +1689,22 @@ func (s *AIScalpingService) getCachedPairs(exchange string) []string {
 		return nil
 	}
 	if time.Since(s.cacheUpdated) > 2*time.Minute {
+		return nil
+	}
+
+	result := make([]string, len(s.cachedPairs))
+	copy(result, s.cachedPairs)
+	return result
+}
+
+func (s *AIScalpingService) getAnyCachedPairs(exchange string) []string {
+	s.pairCacheMu.RLock()
+	defer s.pairCacheMu.RUnlock()
+
+	if len(s.cachedPairs) == 0 {
+		return nil
+	}
+	if s.cacheExchange != exchange {
 		return nil
 	}
 
@@ -1817,6 +1863,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 			}
 		}
 
+		s.annotateRecentSignalMomentum(time.Now().UTC(), &signal)
 		signals = append(signals, signal)
 	}
 
@@ -1825,6 +1872,51 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 	}
 
 	return signals, nil
+}
+
+func (s *AIScalpingService) annotateRecentSignalMomentum(now time.Time, signal *aiMarketSignal) {
+	if s == nil || signal == nil || signal.Price <= 0 || isNonFiniteFloat(signal.Price) {
+		return
+	}
+	symbol := normalizeSymbolForComparison(signal.Symbol)
+	if symbol == "" {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	s.signalObservationMu.Lock()
+	defer s.signalObservationMu.Unlock()
+
+	if s.signalObservations == nil {
+		s.signalObservations = make(map[string][]scalpingSignalObservation)
+	}
+	history := s.signalObservations[symbol]
+	cutoff := now.Add(-scalpingRecentMomentumWindow)
+	keepFrom := 0
+	for keepFrom < len(history) && history[keepFrom].At.Before(cutoff) {
+		keepFrom++
+	}
+	if keepFrom > 0 {
+		history = append([]scalpingSignalObservation(nil), history[keepFrom:]...)
+	}
+
+	if len(history) > 0 {
+		baseline := history[0]
+		age := now.Sub(baseline.At)
+		if age >= scalpingRecentMomentumMinAge && baseline.Price > 0 {
+			changePct := ((signal.Price - baseline.Price) / baseline.Price) * 100
+			if !isNonFiniteFloat(changePct) {
+				signal.RecentPriceChange = changePct
+				signal.RecentChangeAgeSec = age.Seconds()
+				signal.RecentChangeKnown = true
+			}
+		}
+	}
+
+	history = append(history, scalpingSignalObservation{At: now, Price: signal.Price})
+	s.signalObservations[symbol] = history
 }
 
 func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) (*AITradingDecision, error) {
@@ -2508,6 +2600,9 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 	if resolved.BidAskSpread == 0 && resolved.OrderBookImbalance == 0 {
 		return fmt.Errorf("missing orderbook quality signals for %s", decision.Symbol)
 	}
+	if decision.Action == "sell" && !scalpingSellTrendConfirmed(resolved) && !scalpingBlowoffSellTrendConfirmed(resolved) {
+		return fmt.Errorf("sell decision rejected without 24h downside confirmation on %s (price_change_24h=%.4f%%, required<=%.4f%%)", resolved.Symbol, resolved.PriceChange24h, scalpingSellBroadTrendMaxPct)
+	}
 	if decision.SizePercent <= 0 {
 		return fmt.Errorf("size_pct must be > 0")
 	}
@@ -2853,10 +2948,14 @@ func copyPreTradeTelemetry(target *AITradingDecision, source *AITradingDecision)
 	target.PreTradeExpectancy = source.PreTradeExpectancy
 	target.PreTradeExpectancySampleSize = source.PreTradeExpectancySampleSize
 	target.SignalQualityKnown = source.SignalQualityKnown
+	target.SignalPrice = source.SignalPrice
 	target.SignalBidAskSpreadPct = source.SignalBidAskSpreadPct
 	target.SignalOrderBookImbalance = source.SignalOrderBookImbalance
 	target.SignalRangePosition24h = source.SignalRangePosition24h
 	target.SignalPriceChange24hPct = source.SignalPriceChange24hPct
+	target.SignalRecentPriceChangePct = source.SignalRecentPriceChangePct
+	target.SignalRecentChangeAgeSec = source.SignalRecentChangeAgeSec
+	target.SignalRecentChangeKnown = source.SignalRecentChangeKnown
 	return target
 }
 
@@ -2869,10 +2968,14 @@ func annotateDecisionSignalTelemetry(decision *AITradingDecision, signals []aiMa
 		return
 	}
 	decision.SignalQualityKnown = true
+	decision.SignalPrice = signal.Price
 	decision.SignalBidAskSpreadPct = signal.BidAskSpread
 	decision.SignalOrderBookImbalance = signal.OrderBookImbalance
 	decision.SignalRangePosition24h = signal.RangePosition24h
 	decision.SignalPriceChange24hPct = signal.PriceChange24h
+	decision.SignalRecentPriceChangePct = signal.RecentPriceChange
+	decision.SignalRecentChangeAgeSec = signal.RecentChangeAgeSec
+	decision.SignalRecentChangeKnown = signal.RecentChangeKnown
 }
 
 func resolveSignalForDecisionTelemetry(decision *AITradingDecision, signals []aiMarketSignal) (aiMarketSignal, bool) {
@@ -3163,27 +3266,38 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	}
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
-	if imbalance < effectiveMinImbalance {
+	blowoffReversal := scalpingBlowoffSellTrendConfirmed(signal)
+	if imbalance < effectiveMinImbalance && !blowoffReversal {
 		return nil, 0, false
 	}
 
+	momentumPct := fallbackMomentumPct(signal)
+	buyMomentumMin := fallbackCfg.BuyMinPriceChangePct
+	sellMomentumMax := fallbackCfg.SellMaxPriceChangePct
+	if signal.RecentChangeKnown {
+		buyMomentumMin = math.Max(buyMomentumMin, 0.05)
+		sellMomentumMax = math.Min(sellMomentumMax, -0.05)
+	}
 	action := ""
 	rangeAlignment := 0.0
 	momentumAligned := false
+	pullbackContinuation := false
+	blowoffReversal = false
 	switch {
 	case signal.OrderBookImbalance >= effectiveMinImbalance &&
 		signal.RangePosition24h <= buyRangeMax:
 		action = "buy"
-		momentumAligned = signal.PriceChange24h >= fallbackCfg.BuyMinPriceChangePct
+		momentumAligned = momentumPct >= buyMomentumMin
 		rangeAlignment = clampFloat(
 			(buyRangeMax-signal.RangePosition24h)/math.Max(buyRangeMax, 1),
 			0,
 			1,
 		)
 	case signal.OrderBookImbalance <= -effectiveMinImbalance &&
+		scalpingSellTrendConfirmed(signal) &&
 		signal.RangePosition24h >= sellRangeMin:
 		action = "sell"
-		momentumAligned = signal.PriceChange24h <= fallbackCfg.SellMaxPriceChangePct
+		momentumAligned = momentumPct <= sellMomentumMax
 		rangeAlignment = clampFloat(
 			(signal.RangePosition24h-sellRangeMin)/math.Max(100-sellRangeMin, 1),
 			0,
@@ -3192,23 +3306,44 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	case signal.OrderBookImbalance >= effectiveMinImbalance &&
 		signal.RangePosition24h <= buyRangeMax+5:
 		action = "buy"
-		momentumAligned = signal.PriceChange24h >= fallbackCfg.BuyMinPriceChangePct
+		momentumAligned = momentumPct >= buyMomentumMin
 		rangeAlignment = clampFloat(
 			(buyRangeMax+5-signal.RangePosition24h)/math.Max(buyRangeMax+5, 1),
 			0,
 			1,
 		)
+	case scalpingPullbackBuyTrendConfirmed(signal):
+		action = "buy"
+		momentumAligned = true
+		pullbackContinuation = true
+		rangeAlignment = clampFloat(
+			(scalpingPullbackBuyRangeMax-signal.RangePosition24h)/
+				math.Max(scalpingPullbackBuyRangeMax-scalpingPullbackBuyRangeMin, 1),
+			0,
+			1,
+		)
 	case signal.OrderBookImbalance <= -effectiveMinImbalance &&
+		scalpingSellTrendConfirmed(signal) &&
 		signal.RangePosition24h >= sellRangeMin-5:
 		action = "sell"
-		momentumAligned = signal.PriceChange24h <= fallbackCfg.SellMaxPriceChangePct
+		momentumAligned = momentumPct <= sellMomentumMax
 		rangeAlignment = clampFloat(
 			(signal.RangePosition24h-(sellRangeMin-5))/math.Max(100-(sellRangeMin-5), 1),
 			0,
 			1,
 		)
+	case scalpingBlowoffSellTrendConfirmed(signal):
+		action = "sell"
+		momentumAligned = true
+		blowoffReversal = true
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-scalpingBlowoffSellRangeMin)/
+				math.Max(100-scalpingBlowoffSellRangeMin, 1),
+			0,
+			1,
+		)
 	case signal.OrderBookImbalance >= math.Max(effectiveMinImbalance, 0.20) &&
-		signal.PriceChange24h > 0 &&
+		momentumPct > buyMomentumMin &&
 		signal.RangePosition24h <= sellRangeMin+5:
 		action = "buy"
 		momentumAligned = true
@@ -3218,7 +3353,8 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 			1,
 		)
 	case signal.OrderBookImbalance <= -math.Max(effectiveMinImbalance, 0.20) &&
-		signal.PriceChange24h < 0 &&
+		scalpingSellTrendConfirmed(signal) &&
+		momentumPct < sellMomentumMax &&
 		signal.RangePosition24h >= buyRangeMax-5:
 		action = "sell"
 		momentumAligned = true
@@ -3231,6 +3367,9 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		return nil, 0, false
 	}
 	if !momentumAligned {
+		return nil, 0, false
+	}
+	if signal.RecentChangeKnown && action == "buy" && !pullbackContinuation && signal.RangePosition24h > buyRangeMax-5 {
 		return nil, 0, false
 	}
 
@@ -3289,23 +3428,16 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	sizeCap = math.Min(sizeCap, 100)
 	sizePct := clampFloat(sizeCap*fallbackCfg.SizeFraction, minSizePct, sizeCap)
 
-	riskPct := 0.006
-	if signal.High24h > signal.Low24h && signal.Price > 0 {
-		rangePct := (signal.High24h - signal.Low24h) / signal.Price
-		riskPct = clampFloat(rangePct*0.20, 0.004, 0.012)
-	}
-	rewardPct := clampFloat(riskPct*1.6, 0.006, 0.02)
-	projectedNetEdgePct := fallbackProjectedNetEdgePct(signal.BidAskSpread, rewardPct)
+	risk, reward := fallbackRiskRewardPct(signal)
+	projectedNetEdgePct := fallbackProjectedNetEdgePct(signal.BidAskSpread, reward)
 	requiredNetEdgePct := fallbackRequiredNetEdgePct(portfolio, s.config.MinExpectancyEdge)
-	if projectedNetEdgePct < requiredNetEdgePct {
+	if projectedNetEdgePct.LessThan(requiredNetEdgePct) {
 		return nil, 0, false
 	}
 
 	stopLoss := decimal.Zero
 	takeProfit := decimal.Zero
 	price := decimal.NewFromFloat(signal.Price)
-	risk := decimal.NewFromFloat(riskPct)
-	reward := decimal.NewFromFloat(rewardPct)
 	one := decimal.NewFromInt(1)
 	switch action {
 	case "buy":
@@ -3318,14 +3450,21 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		return nil, 0, false
 	}
 
+	setup := "directional"
+	if pullbackContinuation {
+		setup = "pullback continuation"
+	} else if blowoffReversal {
+		setup = "blowoff reversal"
+	}
 	reason := fmt.Sprintf(
-		"deterministic fallback: %s pressure %.3f with spread %.3f%%, 24h change %.3f%%, range position %.1f%%, projected net edge %.3f%%",
+		"deterministic fallback %s: %s pressure %.3f with spread %.3f%%, momentum %.3f%%, range position %.1f%%, projected net edge %s%%",
+		setup,
 		action,
 		signal.OrderBookImbalance,
 		signal.BidAskSpread,
-		signal.PriceChange24h,
+		momentumPct,
 		signal.RangePosition24h,
-		projectedNetEdgePct,
+		projectedNetEdgePct.StringFixed(3),
 	)
 
 	return &AITradingDecision{
@@ -3389,11 +3528,62 @@ func (s *AIScalpingService) fallbackSymbolExpectancyAllowed(ctx context.Context,
 	return stats.NetExpectancy > 0
 }
 
-func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct float64) float64 {
-	return rewardPct*100 - spreadPct - defaultFallbackRoundTripFeePct
+func fallbackMomentumPct(signal aiMarketSignal) float64 {
+	if signal.RecentChangeKnown {
+		return signal.RecentPriceChange
+	}
+	return signal.PriceChange24h
 }
 
-func fallbackRequiredNetEdgePct(portfolio TradingPortfolio, minExpectancyEdge float64) float64 {
+func scalpingSellTrendConfirmed(signal aiMarketSignal) bool {
+	return signal.PriceChange24h <= scalpingSellBroadTrendMaxPct
+}
+
+func scalpingPullbackBuyTrendConfirmed(signal aiMarketSignal) bool {
+	return signal.RecentChangeKnown &&
+		signal.PriceChange24h >= scalpingPullbackBuyTrendMinPct &&
+		signal.RecentPriceChange <= scalpingPullbackBuyRecentMaxPct &&
+		signal.RangePosition24h >= scalpingPullbackBuyRangeMin &&
+		signal.RangePosition24h <= scalpingPullbackBuyRangeMax
+}
+
+func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal) bool {
+	return signal.RecentChangeKnown &&
+		signal.PriceChange24h >= scalpingBlowoffSellTrendMinPct &&
+		signal.RecentPriceChange >= scalpingBlowoffSellRecentMinPct &&
+		signal.RangePosition24h >= scalpingBlowoffSellRangeMin &&
+		signal.OrderBookImbalance <= scalpingBlowoffSellMaxImbalance
+}
+
+func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Decimal) {
+	risk := decimal.NewFromFloat(0.006)
+	if signal.High24h > signal.Low24h && signal.Price > 0 {
+		rangePct := decimal.NewFromFloat(signal.High24h).
+			Sub(decimal.NewFromFloat(signal.Low24h)).
+			Div(decimal.NewFromFloat(signal.Price))
+		risk = clampDecimal(rangePct.Mul(decimal.NewFromFloat(0.20)), decimal.NewFromFloat(0.004), decimal.NewFromFloat(0.012))
+	}
+	reward := clampDecimal(risk.Mul(decimal.NewFromFloat(1.6)), decimal.NewFromFloat(0.006), decimal.NewFromFloat(0.02))
+	return risk, reward
+}
+
+func clampDecimal(value, minValue, maxValue decimal.Decimal) decimal.Decimal {
+	if value.LessThan(minValue) {
+		return minValue
+	}
+	if value.GreaterThan(maxValue) {
+		return maxValue
+	}
+	return value
+}
+
+func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct decimal.Decimal) decimal.Decimal {
+	return rewardPct.Mul(decimal.NewFromInt(100)).
+		Sub(decimal.NewFromFloat(spreadPct)).
+		Sub(decimal.NewFromFloat(defaultFallbackRoundTripFeePct))
+}
+
+func fallbackRequiredNetEdgePct(portfolio TradingPortfolio, minExpectancyEdge float64) decimal.Decimal {
 	required := standardFallbackMinNetEdgePct
 	if strings.EqualFold(strings.TrimSpace(portfolio.AccountTier), appautonomy.AccountTierMicro) {
 		required = microFallbackMinNetEdgePct
@@ -3401,7 +3591,7 @@ func fallbackRequiredNetEdgePct(portfolio TradingPortfolio, minExpectancyEdge fl
 	if minExpectancyEdge > required {
 		required = minExpectancyEdge
 	}
-	return required
+	return decimal.NewFromFloat(required)
 }
 
 func isDecisionContractValidationError(decision *AITradingDecision, err error) bool {

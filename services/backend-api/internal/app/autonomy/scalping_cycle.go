@@ -57,6 +57,7 @@ const (
 	scalpingBuyRangeMax                = 45.0
 	scalpingSellRangeMin               = 55.0
 	scalpingContinuationRangeBuffer    = 5.0
+	scalpingBreakdownSellRangeMin      = 20.0
 	scalpingConfidenceBase             = 0.50
 	scalpingConfidenceImbalanceW       = 0.55
 	scalpingConfidenceLiquidityW       = 0.20
@@ -625,6 +626,17 @@ func estimateCandidateConfidence(signal CandidateSignal, spreadThreshold float64
 		rangeAlignment = continuationRangeAlignment(
 			scalpingBuyRangeMax-scalpingContinuationRangeBuffer,
 			scalpingSellRangeMin,
+			signal.RangePosition24h,
+			true,
+		)
+	case signal.OrderBookImbalance <= -scalpingStrongImbalanceFloor &&
+		signal.PriceChange24hPct < 0 &&
+		signal.RangePosition24h >= scalpingBreakdownSellRangeMin &&
+		signal.RangePosition24h < scalpingBuyRangeMax-scalpingContinuationRangeBuffer:
+		action = "sell"
+		rangeAlignment = continuationRangeAlignment(
+			scalpingBreakdownSellRangeMin,
+			scalpingBuyRangeMax-scalpingContinuationRangeBuffer,
 			signal.RangePosition24h,
 			true,
 		)

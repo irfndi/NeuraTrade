@@ -801,6 +801,30 @@ func TestAIScalpingService_DiscoverTradingPairs_PrefersTradableSpreadCandidates(
 	assert.NotContains(t, pairs, "ILLIQ/USDT")
 }
 
+func TestAIScalpingService_DiscoverTradingPairs_ReusesStaleCacheWhenMarketDiscoveryFails(t *testing.T) {
+	mockCCXT := &mockAIScalpingCCXT{
+		marketsErr: fmt.Errorf("bitget market metadata timeout"),
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange:          "bitget",
+			MaxPairsToAnalyze: 2,
+			MaxCandidatePairs: 10,
+			EnforceFutures:    false,
+		},
+		ccxtService: mockCCXT,
+	}
+	svc.updatePairCache("bitget", []string{"ONDO/USDT", "CHZ/USDT"})
+	svc.pairCacheMu.Lock()
+	svc.cacheUpdated = time.Now().Add(-10 * time.Minute)
+	svc.pairCacheMu.Unlock()
+
+	pairs, err := svc.discoverTradingPairs(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ONDO/USDT", "CHZ/USDT"}, pairs)
+}
+
 func TestAIScalpingService_PreTradeGate_UsesVisibleSpreadThreshold(t *testing.T) {
 	t.Setenv(appautonomy.NeuraScalpingMaxBidAskSpreadPctEnv, "0.22")
 	svc := &AIScalpingService{config: AIScalpingConfig{PreTradeGate: true, RegimeLowBand: 15, RegimeHighBand: 85}}
@@ -877,6 +901,95 @@ func TestAIScalpingService_ValidateDecision_AdjustsLowRiskRewardForBuy(t *testin
 	require.NoError(t, err)
 	require.NotNil(t, decision.TakeProfit)
 	assert.Greater(t, decision.TakeProfit.InexactFloat64(), 0.09515)
+}
+
+func TestAIScalpingService_ValidateDecision_BlocksSellWhenBroadTrendIsPositive(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "sell",
+		Symbol:      "UNI/USDT",
+		SizePercent: 12,
+		Confidence:  0.72,
+		Reasoning:   "model sell with weak recent momentum but positive 24h trend",
+		StopLoss:    decimalPointer("3.62"),
+		TakeProfit:  decimalPointer("3.48"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "UNI/USDT",
+		Price:              3.568,
+		High24h:            3.60,
+		Low24h:             3.20,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.05605,
+		OrderBookImbalance: -0.60517,
+		RangePosition24h:   91.74,
+		PriceChange24h:     0.0366,
+		RecentPriceChange:  -0.112,
+		RecentChangeKnown:  true,
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "without 24h downside confirmation")
+}
+
+func TestAIScalpingService_ValidateDecision_BlocksSellWhenBroadDowntrendIsTooWeak(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "sell",
+		Symbol:      "DOGE/USDT",
+		SizePercent: 12,
+		Confidence:  0.72,
+		Reasoning:   "model sell with weak 24h downside and negative recent momentum",
+		StopLoss:    decimalPointer("0.1065"),
+		TakeProfit:  decimalPointer("0.1020"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "DOGE/USDT",
+		Price:              0.10508,
+		High24h:            0.107,
+		Low24h:             0.102,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.00952,
+		OrderBookImbalance: -0.50128,
+		RangePosition24h:   54.89,
+		PriceChange24h:     -0.0171,
+		RecentPriceChange:  -0.0666,
+		RecentChangeKnown:  true,
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required<=-0.0500%")
+}
+
+func TestAIScalpingService_ValidateDecision_AllowsBlowoffReversalSell(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "sell",
+		Symbol:      "CHZ/USDT",
+		SizePercent: 12,
+		Confidence:  0.72,
+		Reasoning:   "overextended blowoff reversal",
+		StopLoss:    decimalPointer("0.0504"),
+		TakeProfit:  decimalPointer("0.0487"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "CHZ/USDT",
+		Price:              0.04983,
+		High24h:            0.05,
+		Low24h:             0.045,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0602,
+		OrderBookImbalance: 0.1783,
+		RangePosition24h:   100,
+		PriceChange24h:     0.0774,
+		RecentPriceChange:  0.2817,
+		RecentChangeKnown:  true,
+	}})
+
+	require.NoError(t, err)
 }
 
 func TestExtractLooseFieldValueWithMarker_UnicodePrefixPreservesAlignment(t *testing.T) {
@@ -1418,6 +1531,7 @@ func TestAIScalpingService_GetAIDecision_UsesDeterministicFallbackAfterParseExha
 			BidAskSpread:       0.03,
 			OrderBookImbalance: -0.61,
 			RangePosition24h:   82,
+			PriceChange24h:     -0.8,
 		},
 	}, TradingPortfolio{})
 
@@ -2639,7 +2753,56 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumAlignedE
 	require.True(t, ok)
 	require.NotNil(t, decision)
 	assert.Equal(t, "buy", decision.Action)
-	assert.Contains(t, decision.Reasoning, "24h change")
+	assert.Contains(t, decision.Reasoning, "momentum")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_UsesRecentMomentumWhenKnown(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "DOGE/USDT",
+		Price:              1,
+		High24h:            1.1,
+		Low24h:             0.9,
+		Volume24h:          1500000,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.60,
+		PriceChange24h:     -4.0,
+		RecentPriceChange:  0.12,
+		RecentChangeKnown:  true,
+		RangePosition24h:   18,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Contains(t, decision.Reasoning, "momentum 0.120%")
+}
+
+func TestAIScalpingService_AnnotateRecentSignalMomentum(t *testing.T) {
+	svc := &AIScalpingService{}
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+
+	first := aiMarketSignal{Symbol: "DOGE/USDT", Price: 100}
+	svc.annotateRecentSignalMomentum(now, &first)
+	require.False(t, first.RecentChangeKnown)
+
+	second := aiMarketSignal{Symbol: "DOGE/USDT", Price: 101}
+	svc.annotateRecentSignalMomentum(now.Add(time.Minute), &second)
+	require.True(t, second.RecentChangeKnown)
+	assert.InDelta(t, 1.0, second.RecentPriceChange, 1e-9)
+	assert.InDelta(t, 60.0, second.RecentChangeAgeSec, 1e-9)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumContinuationSell(t *testing.T) {
@@ -2671,7 +2834,71 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumContinua
 	require.True(t, ok)
 	require.NotNil(t, decision)
 	assert.Equal(t, "sell", decision.Action)
-	assert.Contains(t, decision.Reasoning, "24h change")
+	assert.Contains(t, decision.Reasoning, "momentum")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_BlocksSellWhenBroadTrendIsPositive(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "ONDO/USDT",
+		Price:              0.3855,
+		High24h:            0.40,
+		Low24h:             0.30,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.05188,
+		OrderBookImbalance: -0.45264,
+		PriceChange24h:     0.1315,
+		RecentPriceChange:  -0.3103,
+		RecentChangeKnown:  true,
+		RangePosition24h:   96.32,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.False(t, ok)
+	require.Nil(t, decision)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_BlocksControlledBreakdownSellAfterObservedLosses(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "WIF/USDT",
+		Price:              1,
+		High24h:            1.2,
+		Low24h:             0.8,
+		Volume24h:          1500000,
+		BidAskSpread:       0.06,
+		OrderBookImbalance: -0.24,
+		PriceChange24h:     -0.8,
+		RecentPriceChange:  -0.12,
+		RecentChangeKnown:  true,
+		RangePosition24h:   24,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.False(t, ok)
+	require.Nil(t, decision)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBufferedMidRangeBuy(t *testing.T) {
@@ -2704,6 +2931,74 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBufferedMidRange
 	require.NotNil(t, decision)
 	assert.Equal(t, "buy", decision.Action)
 	assert.Contains(t, decision.Reasoning, "range position")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsPositiveTrendPullbackBuy(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "ONDO/USDT",
+		Price:              0.379,
+		High24h:            0.40,
+		Low24h:             0.30,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0264,
+		OrderBookImbalance: -0.4007,
+		PriceChange24h:     0.1043,
+		RecentPriceChange:  -0.551,
+		RecentChangeKnown:  true,
+		RangePosition24h:   75.95,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Contains(t, decision.Reasoning, "pullback")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBlowoffReversalSell(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "CHZ/USDT",
+		Price:              0.04983,
+		High24h:            0.05,
+		Low24h:             0.045,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0602,
+		OrderBookImbalance: 0.1783,
+		PriceChange24h:     0.0774,
+		RecentPriceChange:  0.2817,
+		RecentChangeKnown:  true,
+		RangePosition24h:   100,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "sell", decision.Action)
+	assert.Contains(t, decision.Reasoning, "blowoff")
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_UsesMomentumConfigOverride(t *testing.T) {
@@ -2800,8 +3095,10 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsStrongProjectedN
 }
 
 func TestFallbackProjectedNetEdgePct(t *testing.T) {
-	assert.InDelta(t, 1.66, fallbackProjectedNetEdgePct(0.14, 0.0192), 0.0001)
-	assert.InDelta(t, 0.06, fallbackProjectedNetEdgePct(0.22, 0.0040), 0.0001)
+	standardEdge, _ := fallbackProjectedNetEdgePct(0.14, decimal.NewFromFloat(0.0192)).Float64()
+	marginalEdge, _ := fallbackProjectedNetEdgePct(0.22, decimal.NewFromFloat(0.0040)).Float64()
+	assert.InDelta(t, 1.66, standardEdge, 0.0001)
+	assert.InDelta(t, 0.06, marginalEdge, 0.0001)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_BlocksNegativeSymbolExpectancyForMicro(t *testing.T) {

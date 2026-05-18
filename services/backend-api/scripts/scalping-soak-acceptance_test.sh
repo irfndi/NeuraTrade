@@ -51,7 +51,7 @@ set -euo pipefail
   echo "unexpected INTERVAL_MS=$INTERVAL_MS" >&2
   exit 1
 }
-[ "$TIMEOUT_SECONDS" = "1800" ] || {
+[ "$TIMEOUT_SECONDS" = "0" ] || {
   echo "unexpected TIMEOUT_SECONDS=$TIMEOUT_SECONDS" >&2
   exit 1
 }

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -132,6 +133,71 @@ func TestBuildScalpingSoakReportSummarizesAcceptanceMetrics(t *testing.T) {
 	require.True(t, report.BaselineComparison.DeltaNetPnL.Round(6).Equal(decimal.NewFromFloat(0.20)))
 }
 
+func TestBuildScalpingSoakReportSupportsLegacyTelemetryWithoutRecentMomentum(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "legacy-scalping-soak-report.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sqliteDB.Close())
+	})
+
+	_, err = sqliteDB.Exec(ctx, `
+		CREATE TABLE scalping_cycle_telemetry (
+			id TEXT PRIMARY KEY,
+			chat_id TEXT,
+			exchange TEXT,
+			order_id TEXT,
+			cycle_at TIMESTAMP,
+			symbol TEXT,
+			action TEXT,
+			regime TEXT,
+			gate_block_code TEXT,
+			rejection_counts TEXT,
+			bid_ask_spread_pct REAL,
+			order_book_imbalance REAL,
+			range_position_24h REAL,
+			price_change_24h_pct REAL,
+			outcome TEXT,
+			pnl NUMERIC,
+			hold_duration_seconds INT
+		)
+	`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `
+		CREATE TABLE realized_pnl_journal (
+			order_id TEXT,
+			realized_pnl NUMERIC,
+			fees NUMERIC
+		)
+	`)
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	_, err = sqliteDB.Exec(ctx, `
+		INSERT INTO scalping_cycle_telemetry (
+			id, chat_id, exchange, order_id, cycle_at, symbol, action, regime,
+			rejection_counts, bid_ask_spread_pct, order_book_imbalance,
+			range_position_24h, price_change_24h_pct, outcome, pnl, hold_duration_seconds
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "legacy-cycle-1", "chat-legacy", "bitget", "", now, "BTC/USDT", "hold", "neutral",
+		`{"no_directional_edge":1}`, 0.04, 0.22, 42.0, 0.3, "", "0", 0)
+	require.NoError(t, err)
+
+	report, err := BuildScalpingSoakReport(ctx, sqliteDB, ScalpingSoakReportFilter{
+		ChatID:   "chat-legacy",
+		Exchange: "bitget",
+		Since:    now.Add(-time.Minute),
+		Until:    now.Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, report.TotalCycles)
+	require.Equal(t, 1, report.SignalQuality.KnownCycles)
+	require.True(t, report.SignalQuality.Coverage.Equal(decimal.NewFromInt(1)))
+	require.True(t, report.SignalQuality.AvgRecentPriceChangePct.Equal(decimal.Zero))
+	require.Equal(t, 1, report.RejectionByReason["no_directional_edge"])
+}
+
 func TestBuildScalpingSoakReportUsesPnLSignAndSparseAverageDenominators(t *testing.T) {
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-soak-report-sparse.db"))
@@ -229,6 +295,63 @@ func TestBuildScalpingSoakReportCountsFirstTradeLossAsDrawdown(t *testing.T) {
 
 	require.True(t, report.TradeSummary.MaxDrawdown.Round(6).Equal(decimal.NewFromFloat(0.04)))
 	require.True(t, report.TradeSummary.MaxDrawdownPct.Round(6).Equal(decimal.NewFromFloat(0.000833)))
+}
+
+func TestBuildScalpingSoakReportExplainsMissingDrawdownBaseline(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-soak-report-no-baseline.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sqliteDB.Close())
+	})
+
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 11, 14, 0, 0, 0, time.UTC)
+	for i := 0; i < DefaultScalpingLiveTrialMinClosedTrades; i++ {
+		action := "buy"
+		if i%2 == 1 {
+			action = "sell"
+		}
+		holdSeconds := 45
+		grossPnL := decimal.NewFromFloat(0.20)
+		outcome := "win"
+		telemetryPnL := "0.19"
+		if i == DefaultScalpingLiveTrialMinClosedTrades-1 {
+			grossPnL = decimal.NewFromFloat(-0.01)
+			outcome = "loss"
+			telemetryPnL = "-0.02"
+		}
+		insertSoakClosedTradeWithNullableHold(t, ctx, lifecycleStore, telemetryStore, now.Add(time.Duration(i)*time.Second), CycleRecord{
+			ID:                 fmt.Sprintf("cycle-profitable-%02d", i),
+			ChatID:             "chat-1",
+			Exchange:           "bitget",
+			OrderID:            fmt.Sprintf("ord-profitable-%02d", i),
+			CycleAt:            now.Add(time.Duration(i) * time.Second),
+			Symbol:             "BTC/USDT",
+			Action:             action,
+			Regime:             "range",
+			BidAskSpreadPct:    floatPtr(0.02),
+			OrderBookImbalance: floatPtr(0.30),
+			RangePosition24h:   floatPtr(35),
+			PriceChange24hPct:  floatPtr(0.2),
+		}, grossPnL, decimal.NewFromFloat(-0.01), outcome, telemetryPnL, &holdSeconds)
+	}
+
+	report, err := BuildScalpingSoakReport(ctx, sqliteDB, ScalpingSoakReportFilter{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+		Since:    now.Add(-time.Minute),
+		Until:    now.Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	require.False(t, report.LiveTrialReadiness.Ready)
+	require.Contains(t, report.LiveTrialReadiness.Reasons, "drawdown_baseline_missing")
+	require.NotContains(t, report.LiveTrialReadiness.Reasons, "drawdown_not_observed")
 }
 
 func TestScalpingSoakReport_RunAgainstRuntimeSQLite(t *testing.T) {

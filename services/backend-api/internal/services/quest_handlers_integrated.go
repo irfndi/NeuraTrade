@@ -2737,10 +2737,13 @@ func applyDecisionSignalQualityToCycleRecord(record *CycleRecord, decision *AITr
 		applyTopCandidateRejectionSignalQualityToCycleRecord(record, decision)
 		return
 	}
+	record.SignalPrice = finiteFloatPointer(decision.SignalPrice)
 	record.BidAskSpreadPct = finiteFloatPointer(decision.SignalBidAskSpreadPct)
 	record.OrderBookImbalance = finiteFloatPointer(decision.SignalOrderBookImbalance)
 	record.RangePosition24h = finiteFloatPointer(decision.SignalRangePosition24h)
 	record.PriceChange24hPct = finiteFloatPointer(decision.SignalPriceChange24hPct)
+	record.RecentPriceChangePct = finiteFloatPointerIf(decision.SignalRecentPriceChangePct, decision.SignalRecentChangeKnown)
+	record.RecentChangeAgeSec = finiteFloatPointerIf(decision.SignalRecentChangeAgeSec, decision.SignalRecentChangeKnown)
 }
 
 func applyTopCandidateRejectionSignalQualityToCycleRecord(record *CycleRecord, decision *AITradingDecision) {

@@ -95,10 +95,19 @@ func PersistScalpingPaperBacktestSoakReport(
 			RejectionCountsJSON: rejectionCounts,
 			Regime:              signal.Regime,
 			GateBlockCode:       strings.TrimSpace(signal.RejectionReason),
+			SignalPrice:         finiteFloatPointer(signal.Signal.Price),
 			BidAskSpreadPct:     finiteFloatPointer(signal.Signal.BidAskSpread),
 			OrderBookImbalance:  finiteFloatPointer(signal.Signal.OrderBookImbalance),
 			RangePosition24h:    finiteFloatPointer(signal.Signal.RangePosition24h),
 			PriceChange24hPct:   finiteFloatPointer(signal.Signal.PriceChange24h),
+			RecentPriceChangePct: finiteFloatPointerIf(
+				signal.Signal.RecentPriceChange,
+				signal.Signal.RecentChangeKnown,
+			),
+			RecentChangeAgeSec: finiteFloatPointerIf(
+				signal.Signal.RecentChangeAgeSec,
+				signal.Signal.RecentChangeKnown,
+			),
 		})
 		if err != nil {
 			return ScalpingSoakReport{}, fmt.Errorf("insert paper soak cycle: %w", err)

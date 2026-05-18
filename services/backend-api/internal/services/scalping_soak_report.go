@@ -65,6 +65,7 @@ type ScalpingSoakReport struct {
 	imbalanceCount    int
 	rangeCount        int
 	priceChangeCount  int
+	recentChangeCount int
 	holdDurationCount int
 }
 
@@ -75,6 +76,7 @@ type ScalpingSignalQualitySoakStats struct {
 	AvgAbsOrderBookImbalance   decimal.Decimal `json:"avg_abs_order_book_imbalance"`
 	AvgRangePosition24h        decimal.Decimal `json:"avg_range_position_24h"`
 	AvgPriceChange24hPct       decimal.Decimal `json:"avg_price_change_24h_pct"`
+	AvgRecentPriceChangePct    decimal.Decimal `json:"avg_recent_price_change_pct"`
 	MissingSignalQualityCycles int             `json:"missing_signal_quality_cycles"`
 }
 
@@ -119,19 +121,20 @@ type ScalpingLiveTrialReadiness struct {
 }
 
 type scalpingSoakCycleRow struct {
-	action              string
-	regime              string
-	gateBlockCode       string
-	rejectionCountsJSON string
-	bidAskSpreadPct     sql.NullFloat64
-	orderBookImbalance  sql.NullFloat64
-	rangePosition24h    sql.NullFloat64
-	priceChange24hPct   sql.NullFloat64
-	outcome             string
-	grossPnL            decimal.Decimal
-	fees                decimal.Decimal
-	netPnL              decimal.Decimal
-	holdDurationSeconds sql.NullInt64
+	action               string
+	regime               string
+	gateBlockCode        string
+	rejectionCountsJSON  string
+	bidAskSpreadPct      sql.NullFloat64
+	orderBookImbalance   sql.NullFloat64
+	rangePosition24h     sql.NullFloat64
+	priceChange24hPct    sql.NullFloat64
+	recentPriceChangePct sql.NullFloat64
+	outcome              string
+	grossPnL             decimal.Decimal
+	fees                 decimal.Decimal
+	netPnL               decimal.Decimal
+	holdDurationSeconds  sql.NullInt64
 }
 
 func BrokenScalpingBaseline() ScalpingSoakBaseline {
@@ -201,16 +204,22 @@ func BuildScalpingSoakReport(ctx context.Context, db DBPool, filter ScalpingSoak
 
 func queryScalpingSoakRows(ctx context.Context, db DBPool, filter ScalpingSoakReportFilter) ([]scalpingSoakCycleRow, error) {
 	store := NewScalpingTelemetryStore(db, nil)
-	query := `
+	bidAskSpreadExpr := scalpingSoakTelemetryColumnExpr(ctx, db, store, "bid_ask_spread_pct")
+	orderBookImbalanceExpr := scalpingSoakTelemetryColumnExpr(ctx, db, store, "order_book_imbalance")
+	rangePositionExpr := scalpingSoakTelemetryColumnExpr(ctx, db, store, "range_position_24h")
+	priceChangeExpr := scalpingSoakTelemetryColumnExpr(ctx, db, store, "price_change_24h_pct")
+	recentPriceChangeExpr := scalpingSoakTelemetryColumnExpr(ctx, db, store, "recent_price_change_pct")
+	query := fmt.Sprintf(`
 		SELECT
 			COALESCE(c.action, ''),
 			COALESCE(c.regime, ''),
 			COALESCE(c.gate_block_code, ''),
 			COALESCE(c.rejection_counts, ''),
-			c.bid_ask_spread_pct,
-			c.order_book_imbalance,
-			c.range_position_24h,
-			c.price_change_24h_pct,
+			%s,
+			%s,
+			%s,
+			%s,
+			%s,
 			COALESCE(c.outcome, ''),
 			CAST(COALESCE(j.realized_pnl, c.pnl, 0) AS TEXT),
 			CAST(COALESCE(j.fees, 0) AS TEXT),
@@ -222,7 +231,7 @@ func queryScalpingSoakRows(ctx context.Context, db DBPool, filter ScalpingSoakRe
 		FROM scalping_cycle_telemetry c
 		LEFT JOIN realized_pnl_journal j ON j.order_id = c.order_id
 		WHERE c.cycle_at >= ? AND c.cycle_at <= ?
-	`
+	`, bidAskSpreadExpr, orderBookImbalanceExpr, rangePositionExpr, priceChangeExpr, recentPriceChangeExpr)
 	args := []any{filter.Since.UTC(), filter.Until.UTC()}
 	if strings.TrimSpace(filter.ChatID) != "" {
 		query += " AND COALESCE(c.chat_id, '') = ?"
@@ -255,6 +264,7 @@ func queryScalpingSoakRows(ctx context.Context, db DBPool, filter ScalpingSoakRe
 			&row.orderBookImbalance,
 			&row.rangePosition24h,
 			&row.priceChange24hPct,
+			&row.recentPriceChangePct,
 			&row.outcome,
 			&grossRaw,
 			&feesRaw,
@@ -272,6 +282,38 @@ func queryScalpingSoakRows(ctx context.Context, db DBPool, filter ScalpingSoakRe
 		return nil, fmt.Errorf("iterate scalping soak report rows: %w", err)
 	}
 	return rows, nil
+}
+
+func scalpingSoakTelemetryColumnExpr(ctx context.Context, db DBPool, store *ScalpingTelemetryStore, column string) string {
+	if scalpingSoakTelemetryColumnExists(ctx, db, store, column) {
+		return "c." + column
+	}
+	return "NULL"
+}
+
+func scalpingSoakTelemetryColumnExists(ctx context.Context, db DBPool, store *ScalpingTelemetryStore, column string) bool {
+	if db == nil || store == nil || !isSafeTelemetryColumnName(column) {
+		return false
+	}
+
+	var count int
+	var err error
+	switch store.placeholder {
+	case placeholderDollar:
+		err = db.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM information_schema.columns
+			WHERE table_name = 'scalping_cycle_telemetry'
+				AND column_name = $1
+		`, column).Scan(&count)
+	default:
+		err = db.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM pragma_table_info('scalping_cycle_telemetry')
+			WHERE name = ?
+		`, column).Scan(&count)
+	}
+	return err == nil && count > 0
 }
 
 func (r *ScalpingSoakReport) addCycle(row scalpingSoakCycleRow) {
@@ -311,7 +353,8 @@ func (r *ScalpingSoakReport) addSignalQuality(row scalpingSoakCycleRow) {
 	if !row.bidAskSpreadPct.Valid &&
 		!row.orderBookImbalance.Valid &&
 		!row.rangePosition24h.Valid &&
-		!row.priceChange24hPct.Valid {
+		!row.priceChange24hPct.Valid &&
+		!row.recentPriceChangePct.Valid {
 		return
 	}
 	r.SignalQuality.KnownCycles++
@@ -334,6 +377,10 @@ func (r *ScalpingSoakReport) addSignalQuality(row scalpingSoakCycleRow) {
 	if row.priceChange24hPct.Valid {
 		r.SignalQuality.AvgPriceChange24hPct = r.SignalQuality.AvgPriceChange24hPct.Add(decimal.NewFromFloat(row.priceChange24hPct.Float64))
 		r.priceChangeCount++
+	}
+	if row.recentPriceChangePct.Valid {
+		r.SignalQuality.AvgRecentPriceChangePct = r.SignalQuality.AvgRecentPriceChangePct.Add(decimal.NewFromFloat(row.recentPriceChangePct.Float64))
+		r.recentChangeCount++
 	}
 }
 
@@ -417,6 +464,7 @@ func (r *ScalpingSoakReport) finalize(baseline *ScalpingSoakBaseline) {
 		r.SignalQuality.AvgAbsOrderBookImbalance = divideByCount(r.SignalQuality.AvgAbsOrderBookImbalance, r.imbalanceCount)
 		r.SignalQuality.AvgRangePosition24h = divideByCount(r.SignalQuality.AvgRangePosition24h, r.rangeCount)
 		r.SignalQuality.AvgPriceChange24hPct = divideByCount(r.SignalQuality.AvgPriceChange24hPct, r.priceChangeCount)
+		r.SignalQuality.AvgRecentPriceChangePct = divideByCount(r.SignalQuality.AvgRecentPriceChangePct, r.recentChangeCount)
 	}
 	if r.TradeSummary.ClosedTrades > 0 {
 		denom := decimal.NewFromInt(int64(r.TradeSummary.ClosedTrades))
@@ -456,7 +504,9 @@ func (r *ScalpingSoakReport) computeLiveTrialReadiness() {
 	if !r.TradeSummary.AvgNetPnLPerTrade.GreaterThan(decimal.Zero) {
 		reasons = appendScalpingReadinessReason(reasons, "avg_net_pnl_not_positive")
 	}
-	if !r.TradeSummary.MaxDrawdownPct.GreaterThan(decimal.Zero) {
+	if r.BaselineComparison == nil {
+		reasons = appendScalpingReadinessReason(reasons, "drawdown_baseline_missing")
+	} else if !r.TradeSummary.MaxDrawdownPct.GreaterThan(decimal.Zero) {
 		reasons = appendScalpingReadinessReason(reasons, "drawdown_not_observed")
 	}
 	if r.SignalQuality.Coverage.LessThan(decimal.NewFromInt(1)) {

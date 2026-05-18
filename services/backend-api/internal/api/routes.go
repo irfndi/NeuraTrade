@@ -19,6 +19,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/api/handlers"
 	autonomyruntime "github.com/irfndi/neuratrade/internal/app/autonomy/runtime"
 	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
+	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
@@ -918,6 +919,20 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 	} else {
 		log.Printf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
+	}
+
+	if opModeService != nil {
+		scalpingLiveProofRequired := aiAPIKey != ""
+		opModeService.SetLiveModeGuard(func(ctx context.Context, chatID string) error {
+			coordinator := integratedHandlers.AutonomyCoordinator()
+			if coordinator == nil {
+				if scalpingLiveProofRequired {
+					return fmt.Errorf("scalping autonomy coordinator unavailable")
+				}
+				return nil
+			}
+			return coordinator.ValidateStrategyMode(ctx, services.ScalpingStrategyID(chatID), autonomous.ModeLive)
+		})
 	}
 
 	// Register quest runtime via app/autonomy entrypoint before scheduler start.

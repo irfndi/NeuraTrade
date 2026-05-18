@@ -20,20 +20,28 @@ func TestAnnotateDecisionSignalTelemetry(t *testing.T) {
 			},
 			{
 				Symbol:             "BTC/USDT",
+				Price:              42150.5,
 				BidAskSpread:       0.031,
 				OrderBookImbalance: 0.42,
 				RangePosition24h:   38.5,
 				PriceChange24h:     -0.84,
+				RecentPriceChange:  0.12,
+				RecentChangeAgeSec: 300,
+				RecentChangeKnown:  true,
 			},
 		}
 
 		annotateDecisionSignalTelemetry(decision, signals)
 
 		require.True(t, decision.SignalQualityKnown)
+		require.InDelta(t, 42150.5, decision.SignalPrice, 1e-9)
 		require.InDelta(t, 0.031, decision.SignalBidAskSpreadPct, 1e-9)
 		require.InDelta(t, 0.42, decision.SignalOrderBookImbalance, 1e-9)
 		require.InDelta(t, 38.5, decision.SignalRangePosition24h, 1e-9)
 		require.InDelta(t, -0.84, decision.SignalPriceChange24hPct, 1e-9)
+		require.InDelta(t, 0.12, decision.SignalRecentPriceChangePct, 1e-9)
+		require.InDelta(t, 300, decision.SignalRecentChangeAgeSec, 1e-9)
+		require.True(t, decision.SignalRecentChangeKnown)
 	})
 
 	t.Run("nil decision", func(t *testing.T) {
@@ -163,10 +171,14 @@ func TestCopyPreTradeTelemetryCopiesSignalQuality(t *testing.T) {
 		PreTradeExpectancy:           0.12,
 		PreTradeExpectancySampleSize: 18,
 		SignalQualityKnown:           true,
+		SignalPrice:                  42150.5,
 		SignalBidAskSpreadPct:        0.025,
 		SignalOrderBookImbalance:     -0.37,
 		SignalRangePosition24h:       71,
 		SignalPriceChange24hPct:      2.4,
+		SignalRecentPriceChangePct:   -0.14,
+		SignalRecentChangeAgeSec:     240,
+		SignalRecentChangeKnown:      true,
 	}
 	target := &AITradingDecision{}
 
@@ -176,32 +188,46 @@ func TestCopyPreTradeTelemetryCopiesSignalQuality(t *testing.T) {
 	require.InDelta(t, source.PreTradeExpectancy, target.PreTradeExpectancy, 1e-9)
 	require.Equal(t, source.PreTradeExpectancySampleSize, target.PreTradeExpectancySampleSize)
 	require.True(t, target.SignalQualityKnown)
+	require.InDelta(t, source.SignalPrice, target.SignalPrice, 1e-9)
 	require.InDelta(t, source.SignalBidAskSpreadPct, target.SignalBidAskSpreadPct, 1e-9)
 	require.InDelta(t, source.SignalOrderBookImbalance, target.SignalOrderBookImbalance, 1e-9)
 	require.InDelta(t, source.SignalRangePosition24h, target.SignalRangePosition24h, 1e-9)
 	require.InDelta(t, source.SignalPriceChange24hPct, target.SignalPriceChange24hPct, 1e-9)
+	require.InDelta(t, source.SignalRecentPriceChangePct, target.SignalRecentPriceChangePct, 1e-9)
+	require.InDelta(t, source.SignalRecentChangeAgeSec, target.SignalRecentChangeAgeSec, 1e-9)
+	require.True(t, target.SignalRecentChangeKnown)
 }
 
 func TestApplyDecisionSignalQualityToCycleRecord(t *testing.T) {
 	decision := &AITradingDecision{
-		SignalQualityKnown:       true,
-		SignalBidAskSpreadPct:    0.015,
-		SignalOrderBookImbalance: 0.27,
-		SignalRangePosition24h:   63.5,
-		SignalPriceChange24hPct:  -1.9,
+		SignalQualityKnown:         true,
+		SignalPrice:                42150.5,
+		SignalBidAskSpreadPct:      0.015,
+		SignalOrderBookImbalance:   0.27,
+		SignalRangePosition24h:     63.5,
+		SignalPriceChange24hPct:    -1.9,
+		SignalRecentPriceChangePct: 0.08,
+		SignalRecentChangeAgeSec:   180,
+		SignalRecentChangeKnown:    true,
 	}
 	record := &CycleRecord{}
 
 	applyDecisionSignalQualityToCycleRecord(record, decision)
 
+	require.NotNil(t, record.SignalPrice)
 	require.NotNil(t, record.BidAskSpreadPct)
 	require.NotNil(t, record.OrderBookImbalance)
 	require.NotNil(t, record.RangePosition24h)
 	require.NotNil(t, record.PriceChange24hPct)
+	require.NotNil(t, record.RecentPriceChangePct)
+	require.NotNil(t, record.RecentChangeAgeSec)
+	require.InDelta(t, decision.SignalPrice, *record.SignalPrice, 1e-9)
 	require.InDelta(t, decision.SignalBidAskSpreadPct, *record.BidAskSpreadPct, 1e-9)
 	require.InDelta(t, decision.SignalOrderBookImbalance, *record.OrderBookImbalance, 1e-9)
 	require.InDelta(t, decision.SignalRangePosition24h, *record.RangePosition24h, 1e-9)
 	require.InDelta(t, decision.SignalPriceChange24hPct, *record.PriceChange24hPct, 1e-9)
+	require.InDelta(t, decision.SignalRecentPriceChangePct, *record.RecentPriceChangePct, 1e-9)
+	require.InDelta(t, decision.SignalRecentChangeAgeSec, *record.RecentChangeAgeSec, 1e-9)
 }
 
 func TestApplyDecisionSignalQualityToCycleRecordSkipsUnknownSignalQuality(t *testing.T) {
