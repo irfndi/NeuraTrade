@@ -85,6 +85,18 @@ require_file() {
   [ -f "$1" ] || fail "required file not found: $1"
 }
 
+validate_boolean() {
+  local label="$1"
+  local value="$2"
+  case "$value" in
+    true | false)
+      ;;
+    *)
+      fail "${label} must be true or false, got ${value}"
+      ;;
+  esac
+}
+
 git_value() {
   local fallback="$1"
   shift
@@ -182,6 +194,8 @@ write_manifest() {
 run_acceptance() {
   require_file "$SCALPING_SOAK_SCRIPT"
   require_file "$SCALPING_SOAK_VERIFIER"
+  validate_boolean "RUN_HEALTH_PREFLIGHT" "$RUN_HEALTH_PREFLIGHT"
+  validate_boolean "CHECK_GATEWAY_STATUS" "$CHECK_GATEWAY_STATUS"
   mkdir -p "$DATA_DIR" "$LOG_DIR"
 
   log "starting scalping soak acceptance branch=$(git_value unknown rev-parse --abbrev-ref HEAD) commit=$(git_value unknown rev-parse --short HEAD)"

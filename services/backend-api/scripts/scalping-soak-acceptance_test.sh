@@ -30,6 +30,7 @@ default_artifact_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-defa
 default_db_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-default.db"
 default_manifest_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-default.acceptance.json"
 default_log_path="${tmp_dir}/default-logs/acceptance.log"
+invalid_output="${tmp_dir}/invalid.out"
 
 cat >"$fake_soak" <<'SH'
 #!/usr/bin/env bash
@@ -227,5 +228,19 @@ jq -e \
 
 grep -q 'http://127.0.0.1:8080/health' "$curl_hits"
 grep -q 'http://127.0.0.1:8080/ready' "$curl_hits"
+
+if RUN_HEALTH_PREFLIGHT=treu \
+  CHECK_GATEWAY_STATUS=false \
+  SCALPING_SOAK_SCRIPT="$fake_soak" \
+  SCALPING_SOAK_VERIFIER="$fake_verifier" \
+  DATA_DIR="${tmp_dir}/invalid-evidence" \
+  LOG_DIR="${tmp_dir}/invalid-logs" \
+  STAMP=invalid \
+  bash "$ACCEPTANCE_SCRIPT" run >"$invalid_output" 2>&1; then
+  echo "expected invalid RUN_HEALTH_PREFLIGHT value to fail" >&2
+  exit 1
+fi
+
+grep -q 'RUN_HEALTH_PREFLIGHT must be true or false, got treu' "$invalid_output"
 
 echo "scalping-soak-acceptance tests passed"
