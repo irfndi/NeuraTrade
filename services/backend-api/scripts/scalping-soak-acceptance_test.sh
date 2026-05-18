@@ -30,6 +30,9 @@ default_artifact_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-defa
 default_db_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-default.db"
 default_manifest_path="${tmp_dir}/default-evidence/scalping-soak-acceptance-default.acceptance.json"
 default_log_path="${tmp_dir}/default-logs/acceptance.log"
+empty_artifact_path="${tmp_dir}/empty-gate-evidence/scalping-soak-acceptance-empty-gate.json"
+empty_manifest_path="${tmp_dir}/empty-gate-evidence/scalping-soak-acceptance-empty-gate.acceptance.json"
+empty_log_path="${tmp_dir}/empty-gate-logs/acceptance.log"
 invalid_output="${tmp_dir}/invalid.out"
 
 cat >"$fake_soak" <<'SH'
@@ -48,8 +51,9 @@ set -euo pipefail
   echo "unexpected CAPITAL=$CAPITAL" >&2
   exit 1
 }
-[ "$MAX_HOLD_RATIO" = "0.745" ] || {
-  echo "unexpected MAX_HOLD_RATIO=$MAX_HOLD_RATIO" >&2
+expected_max_hold_ratio="${EXPECTED_MAX_HOLD_RATIO-0.745}"
+[ "$MAX_HOLD_RATIO" = "$expected_max_hold_ratio" ] || {
+  echo "unexpected MAX_HOLD_RATIO=$MAX_HOLD_RATIO expected=$expected_max_hold_ratio" >&2
   exit 1
 }
 
@@ -231,6 +235,29 @@ jq -e \
 
 grep -q 'http://127.0.0.1:8080/health' "$curl_hits"
 grep -q 'http://127.0.0.1:8080/ready' "$curl_hits"
+
+RUN_HEALTH_PREFLIGHT=false \
+  CHECK_GATEWAY_STATUS=false \
+  MAX_HOLD_RATIO= \
+  EXPECTED_MAX_HOLD_RATIO= \
+  SCALPING_SOAK_SCRIPT="$fake_soak" \
+  SCALPING_SOAK_VERIFIER="$fake_verifier" \
+  DATA_DIR="${tmp_dir}/empty-gate-evidence" \
+  LOG_DIR="${tmp_dir}/empty-gate-logs" \
+  STAMP=empty-gate \
+  LOG_FILE="$empty_log_path" \
+  bash "$ACCEPTANCE_SCRIPT" run
+
+[ -f "$empty_artifact_path" ] || {
+  echo "expected empty-gate artifact was not created: $empty_artifact_path" >&2
+  exit 1
+}
+[ -f "$empty_manifest_path" ] || {
+  echo "expected empty-gate manifest was not created: $empty_manifest_path" >&2
+  exit 1
+}
+
+jq -e '.gates.max_hold_ratio == ""' "$empty_manifest_path" >/dev/null
 
 if RUN_HEALTH_PREFLIGHT=treu \
   CHECK_GATEWAY_STATUS=false \
