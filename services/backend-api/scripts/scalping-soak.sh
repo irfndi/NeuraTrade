@@ -85,7 +85,7 @@ Environment:
   MIN_BASELINE_AVG_PNL_DELTA Minimum avg-PnL/trade improvement versus baseline; empty disables (default: ${MIN_BASELINE_AVG_PNL_DELTA:-disabled})
   SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
   SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
-  SOAK_OUTPUT_FILE Optional path for clean stdout artifact, usually JSON; empty disables (default: ${SOAK_OUTPUT_FILE:-disabled})
+  SOAK_OUTPUT_FILE Optional path for clean result JSON artifact; empty disables (default: ${SOAK_OUTPUT_FILE:-disabled})
 
 Examples:
   make build
