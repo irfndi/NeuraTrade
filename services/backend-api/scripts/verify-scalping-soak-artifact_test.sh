@@ -52,6 +52,10 @@ jq -n --arg db_path "$db_path" '{
       regime_split: {
         neutral: "1"
       },
+      rejection_by_reason: {
+        no_directional_edge: 1
+      },
+      gate_block_by_code: {},
       signal_quality: {
         known_cycles: 2,
         coverage: "1",
@@ -144,6 +148,19 @@ fi
 
 if ! grep -q "action/regime split" "$negative_output"; then
   echo "negative verifier output did not mention required regime split" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
+missing_rejection_artifact="${tmp_dir}/missing-rejection-reasons.json"
+jq 'del(.result.report.rejection_by_reason)' "$artifact_path" >"$missing_rejection_artifact"
+if "$VERIFIER" "$missing_rejection_artifact" >"$negative_output" 2>&1; then
+  echo "expected verifier to fail when rejection_by_reason is missing" >&2
+  exit 1
+fi
+
+if ! grep -q "gate/rejection reason" "$negative_output"; then
+  echo "negative verifier output did not mention required rejection reasons" >&2
   cat "$negative_output" >&2
   exit 1
 fi

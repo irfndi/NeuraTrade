@@ -158,12 +158,14 @@ jq -e '
   (.result.report.action_split | length) > 0 and
   (.result.report.regime_split | type) == "object" and
   (.result.report.regime_split | length) > 0 and
+  (.result.report.rejection_by_reason | type) == "object" and
+  (.result.report.gate_block_by_code | type) == "object" and
   (.result.report.signal_quality.missing_signal_quality_cycles | tonumber) == 0 and
   (.result.report.signal_quality.avg_bid_ask_spread_pct | tonumber) >= 0 and
   (.result.report.signal_quality.avg_abs_order_book_imbalance | tonumber) >= 0 and
   (.result.report.signal_quality.avg_range_position_24h | tonumber) >= 0 and
   (.result.report.signal_quality.avg_price_change_24h_pct | tonumber | type) == "number"
-' "$artifact" >/dev/null || fail "artifact is missing required action/regime split, signal-quality, or proof fields"
+' "$artifact" >/dev/null || fail "artifact is missing required action/regime split, gate/rejection reason, signal-quality, or proof fields"
 
 db_path="${2:-$(jq_string '.db_path')}"
 [ -n "$db_path" ] || fail "db_path is required for persisted SQLite evidence"
