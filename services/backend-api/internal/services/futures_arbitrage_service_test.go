@@ -315,6 +315,7 @@ func TestFuturesArbitrageService_storeOpportunity_SQLiteMigrationSchema(t *testi
 		_ = sqliteDB.Close()
 	}()
 
+	applySQLiteMigrationBySuffix(t, sqliteDB, "003_add_missing_tables.sql")
 	applySQLiteMigrationBySuffix(t, sqliteDB, "add_arbitrage_tables.sql")
 	_, err = sqliteDB.Exec(context.Background(), `
 		INSERT INTO futures_arbitrage_opportunities (
