@@ -175,11 +175,11 @@ if [ -n "$MAX_PERFECT_WIN_TRADES" ]; then
       fail "invalid max_perfect_win_trades maximum=${MAX_PERFECT_WIN_TRADES}: must be a non-negative integer"
       ;;
   esac
-  if [ "$closed_trades" -gt "$MAX_PERFECT_WIN_TRADES" ] &&
-    [ "$closed_trades" -gt 0 ] &&
-    [ "$wins" -eq "$closed_trades" ] &&
-    [ "$losses" -eq 0 ] &&
-    decimal_lte "$max_drawdown_pct" "0"; then
+  if [ "$closed_trades" -gt "$MAX_PERFECT_WIN_TRADES" ] \
+    && [ "$closed_trades" -gt 0 ] \
+    && [ "$wins" -eq "$closed_trades" ] \
+    && [ "$losses" -eq 0 ] \
+    && decimal_lte "$max_drawdown_pct" "0"; then
     fail "paper realism gate failed: closed_trades=${closed_trades} wins=${wins} losses=${losses} max_drawdown_pct=${max_drawdown_pct} exceeds max_perfect_win_trades=${MAX_PERFECT_WIN_TRADES}; perfect paper wins without drawdown are insufficient proof"
   fi
 fi

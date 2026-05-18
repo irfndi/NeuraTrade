@@ -337,7 +337,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           readRecordArrayField(chatRuntime, "top_candidate_rejections").length >
           0
             ? readRecordArrayField(chatRuntime, "top_candidate_rejections")
-            : diagnostics.top_candidate_rejections ?? [];
+            : (diagnostics.top_candidate_rejections ?? []);
         const progressBlocked =
           readBoolField(chatRuntime, "progress_blocked") ??
           diagnostics.progress_blocked ??
