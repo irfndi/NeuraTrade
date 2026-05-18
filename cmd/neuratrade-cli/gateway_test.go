@@ -318,3 +318,32 @@ func TestCleanupGatewayRuntimeArtifacts_RemovesPIDFilesAndMarksStateDown(t *test
 		require.Equal(t, "gateway stopped", service.Detail, "expected %s detail to be propagated", serviceName)
 	}
 }
+
+func TestGatewayStopMarksStaleStateDownWhenNoServicesRunning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NEURATRADE_HOME", home)
+	pidsDir := filepath.Join(home, "pids")
+	require.NoError(t, os.MkdirAll(pidsDir, 0700))
+	statePath := filepath.Join(pidsDir, "gateway-state.json")
+	writeGatewayState(statePath, gatewayRuntimeState{
+		Mode: "warming",
+		Services: map[string]gatewayServiceRuntime{
+			"backend":  {Status: "warming", Detail: "backend warming up"},
+			"ccxt":     {Status: "embedded", Detail: "native mode"},
+			"telegram": {Status: "disabled"},
+		},
+	})
+
+	err := gatewayStop(nil)
+	require.ErrorContains(t, err, "no services stopped")
+
+	state, ok := readGatewayState(statePath)
+	require.True(t, ok, "expected gateway state to remain readable")
+	require.Equal(t, "down", state.Mode)
+	for _, serviceName := range []string{"gateway", "backend", "ccxt", "telegram"} {
+		service, exists := state.Services[serviceName]
+		require.True(t, exists, "expected service %s in gateway state", serviceName)
+		require.Equal(t, "down", service.Status, "expected %s status down", serviceName)
+		require.Equal(t, "gateway stop found no running services", service.Detail)
+	}
+}
