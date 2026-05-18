@@ -49,6 +49,7 @@ The soak should pass these gates unless an operator records a deliberate waiver:
 - `MIN_BASELINE_WIN_RATE_DELTA=0`
 - `MIN_BASELINE_NET_PNL_DELTA=0`
 - `MIN_BASELINE_AVG_PNL_DELTA=0`
+- `REQUIRE_LIVE_TRIAL_READY=false`
 
 The artifact verifier enforces these same defaults.
 
@@ -57,6 +58,14 @@ than this many trades with 100% wins and zero drawdown, the evidence is treated
 as insufficient even when PnL is positive. Use `MAX_PERFECT_WIN_TRADES=` only
 for diagnostic runs where an operator explicitly accepts that perfect paper
 results are not proof of production profitability.
+
+`live_trial_readiness` is stricter than paper acceptance. It is only `ready=true`
+when the paper sample has at least 20 closed trades, both wins and losses,
+observed drawdown, complete signal-quality telemetry, no AI provider degradation,
+acceptable hold ratio, and positive net/average PnL after fees. Set
+`REQUIRE_LIVE_TRIAL_READY=true` only when a run is intended to approve a tightly
+capped live/testnet trial; normal paper runs may be profitable but still not
+ready for real-money signaling if the sample is too small or too clean.
 
 ## Run
 
@@ -92,6 +101,7 @@ export MAX_PERFECT_WIN_TRADES=20
 export MIN_BASELINE_WIN_RATE_DELTA=0
 export MIN_BASELINE_NET_PNL_DELTA=0
 export MIN_BASELINE_AVG_PNL_DELTA=0
+export REQUIRE_LIVE_TRIAL_READY=false
 
 bash services/backend-api/scripts/scalping-soak.sh run
 bash services/backend-api/scripts/verify-scalping-soak-artifact.sh "$SOAK_OUTPUT_FILE"
@@ -118,7 +128,8 @@ jq -r '
       trade_summary,
       ai_provider_degradation,
       baseline_comparison,
-      insufficient_trade_proof
+      insufficient_trade_proof,
+      live_trial_readiness
     }
 ' "$SOAK_OUTPUT_FILE"
 ```
@@ -151,6 +162,8 @@ The run can close the final scalping acceptance item only when:
 - AI provider degradation is zero.
 - The result comes from a merged/deployed paper/testnet/tightly capped live
   runtime.
+- `live_trial_readiness.ready=true` before any real-money or tiny live/testnet
+  approval signal is sent.
 
 If any criterion fails, keep the acceptance issue open and file a concrete
 follow-up with the failed metric, artifact path, database path, and command used.

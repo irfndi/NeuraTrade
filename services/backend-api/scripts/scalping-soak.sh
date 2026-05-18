@@ -32,6 +32,7 @@ MAX_PERFECT_WIN_TRADES="${MAX_PERFECT_WIN_TRADES-20}"
 MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
+REQUIRE_LIVE_TRIAL_READY="${REQUIRE_LIVE_TRIAL_READY:-false}"
 SOAK_CHAT_ID="${SOAK_CHAT_ID:-operator-scalping-soak}"
 SOAK_ORDER_PREFIX="${SOAK_ORDER_PREFIX:-operator-scalping-soak}"
 SOAK_DB_PATH="${SOAK_DB_PATH:-${NEURATRADE_HOME}/data/scalping-soak.db}"
@@ -85,6 +86,7 @@ Environment:
   MIN_BASELINE_WIN_RATE_DELTA Minimum win-rate improvement versus baseline; empty disables (default: ${MIN_BASELINE_WIN_RATE_DELTA:-disabled})
   MIN_BASELINE_NET_PNL_DELTA Minimum net-PnL improvement versus baseline; empty disables (default: ${MIN_BASELINE_NET_PNL_DELTA:-disabled})
   MIN_BASELINE_AVG_PNL_DELTA Minimum avg-PnL/trade improvement versus baseline; empty disables (default: ${MIN_BASELINE_AVG_PNL_DELTA:-disabled})
+  REQUIRE_LIVE_TRIAL_READY true/false; fail unless paper evidence can approve a tiny live/testnet trial (default: ${REQUIRE_LIVE_TRIAL_READY})
   SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
   SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
   SOAK_OUTPUT_FILE Optional path for clean result JSON artifact; empty disables (default: ${SOAK_OUTPUT_FILE:-disabled})
@@ -167,12 +169,15 @@ run_soak() {
   if [ "$REQUIRE_TRADES" = "true" ] || [ "$REQUIRE_TRADES" = "1" ]; then
     args+=("--require-trades")
   fi
+  if [ "$REQUIRE_LIVE_TRIAL_READY" = "true" ] || [ "$REQUIRE_LIVE_TRIAL_READY" = "1" ]; then
+    args+=("--require-live-trial-ready")
+  fi
 
   log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
 min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
 max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} max_perfect_win_trades=${MAX_PERFECT_WIN_TRADES:-disabled} min_baseline_win_rate_delta=${MIN_BASELINE_WIN_RATE_DELTA:-disabled} \
-min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled}"
+min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled} require_live_trial_ready=${REQUIRE_LIVE_TRIAL_READY}"
   if [ -n "$SOAK_OUTPUT_FILE" ]; then
     if ! command -v jq >/dev/null 2>&1; then
       fail "jq is required to write clean SOAK_OUTPUT_FILE artifacts"

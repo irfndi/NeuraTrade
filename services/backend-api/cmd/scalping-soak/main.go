@@ -48,6 +48,7 @@ func run() error {
 		minBaselineWinRateDelta  string
 		minBaselineNetPnLDelta   string
 		minBaselineAvgPnLDelta   string
+		requireLiveTrialReady    bool
 	)
 
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
@@ -75,6 +76,7 @@ func run() error {
 	flags.StringVar(&minBaselineWinRateDelta, "min-baseline-win-rate-delta", "", "fail unless win-rate delta versus baseline is at least this decimal value")
 	flags.StringVar(&minBaselineNetPnLDelta, "min-baseline-net-pnl-delta", "", "fail unless net-PnL delta versus baseline is at least this decimal value")
 	flags.StringVar(&minBaselineAvgPnLDelta, "min-baseline-avg-pnl-delta", "", "fail unless avg-PnL-per-trade delta versus baseline is at least this decimal value")
+	flags.BoolVar(&requireLiveTrialReady, "require-live-trial-ready", false, "fail unless paper evidence is ready for a tightly capped live/testnet trial")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -140,6 +142,7 @@ func run() error {
 		MinBaselineWinRateDelta:  minBaselineWinRateDelta,
 		MinBaselineNetPnLDelta:   minBaselineNetPnLDelta,
 		MinBaselineAvgPnLDelta:   minBaselineAvgPnLDelta,
+		RequireLiveTrialReady:    requireLiveTrialReady,
 	}); err != nil {
 		if encodeErr := writeResultPayload(os.Stdout, dbPath, result); encodeErr != nil {
 			return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
@@ -177,6 +180,7 @@ type acceptanceGateOptions struct {
 	MinBaselineWinRateDelta  string
 	MinBaselineNetPnLDelta   string
 	MinBaselineAvgPnLDelta   string
+	RequireLiveTrialReady    bool
 }
 
 // validateAcceptanceGates applies CLI-configured proof thresholds to a completed scalping soak report.
@@ -226,6 +230,9 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 	}
 	if err := validateBaselineDeltaGates(report.BaselineComparison, options); err != nil {
 		return err
+	}
+	if options.RequireLiveTrialReady && !report.LiveTrialReadiness.Ready {
+		return fmt.Errorf("acceptance gate failed: live_trial_readiness.ready=false reasons=%v", report.LiveTrialReadiness.Reasons)
 	}
 	return nil
 }

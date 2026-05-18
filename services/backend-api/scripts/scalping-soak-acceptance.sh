@@ -47,6 +47,7 @@ export MAX_PERFECT_WIN_TRADES="${MAX_PERFECT_WIN_TRADES-20}"
 export MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 export MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 export MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
+export REQUIRE_LIVE_TRIAL_READY="${REQUIRE_LIVE_TRIAL_READY:-false}"
 
 usage() {
   cat <<USAGE
@@ -176,7 +177,8 @@ write_manifest() {
         max_perfect_win_trades: env.MAX_PERFECT_WIN_TRADES,
         min_baseline_win_rate_delta: env.MIN_BASELINE_WIN_RATE_DELTA,
         min_baseline_net_pnl_delta: env.MIN_BASELINE_NET_PNL_DELTA,
-        min_baseline_avg_pnl_delta: env.MIN_BASELINE_AVG_PNL_DELTA
+        min_baseline_avg_pnl_delta: env.MIN_BASELINE_AVG_PNL_DELTA,
+        require_live_trial_ready: env.REQUIRE_LIVE_TRIAL_READY
       },
       report: {
         total_cycles: $report.total_cycles,
@@ -188,7 +190,8 @@ write_manifest() {
         trade_summary: $report.trade_summary,
         ai_provider_degradation: $report.ai_provider_degradation,
         baseline_comparison: $report.baseline_comparison,
-        insufficient_trade_proof: $report.insufficient_trade_proof
+        insufficient_trade_proof: $report.insufficient_trade_proof,
+        live_trial_readiness: $report.live_trial_readiness
       }
     }' >"$ACCEPTANCE_MANIFEST_FILE"
   log "wrote acceptance manifest to ${ACCEPTANCE_MANIFEST_FILE}"

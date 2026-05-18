@@ -484,12 +484,12 @@ func TestScalpingBacktestEngine_RunSignalsAllowsMomentumContinuationSell(t *test
 			PriceChange24h:     -0.8,
 		},
 	}, {
-		Timestamp: now.Add(30 * time.Second),
+		Timestamp: now.Add(time.Minute),
 		Symbol:    "WIF/USDT",
 		Exchange:  "bitget",
 		Signal: MarketSignal{
 			Symbol:             "WIF/USDT",
-			Price:              1.23,
+			Price:              1.22,
 			High24h:            1.50,
 			Low24h:             1.00,
 			Volume24h:          1_500_000,
@@ -526,12 +526,12 @@ func TestScalpingBacktestEngine_RunSignalsAllowsBufferedMidRangeBuy(t *testing.T
 			Low24h:             1.00,
 			Volume24h:          1_500_000,
 			BidAskSpread:       0.07,
-			OrderBookImbalance: 0.15,
+			OrderBookImbalance: 0.22,
 			RangePosition24h:   48,
-			PriceChange24h:     -0.8,
+			PriceChange24h:     0.8,
 		},
 	}, {
-		Timestamp: now.Add(30 * time.Second),
+		Timestamp: now.Add(time.Minute),
 		Symbol:    "FARTCOIN/USDT",
 		Exchange:  "bitget",
 		Signal: MarketSignal{
@@ -541,9 +541,9 @@ func TestScalpingBacktestEngine_RunSignalsAllowsBufferedMidRangeBuy(t *testing.T
 			Low24h:             1.00,
 			Volume24h:          1_500_000,
 			BidAskSpread:       0.07,
-			OrderBookImbalance: 0.15,
+			OrderBookImbalance: 0.22,
 			RangePosition24h:   48,
-			PriceChange24h:     -0.8,
+			PriceChange24h:     0.8,
 		},
 	}})
 
@@ -566,6 +566,23 @@ func TestScalpingBacktestEngine_RunSignalsDoesNotCloseSingleSignalAtSyntheticPro
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Summary.TotalSignals)
 	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Empty(t, result.Trades)
+	require.True(t, result.Summary.TotalPnL.IsZero())
+}
+
+func TestScalpingBacktestEngine_RunSignalsDoesNotCloseBeforeHoldPeriod(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 49, 30, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+		runSignalsTestSignal(now.Add(30*time.Second), "AAA/USDT", 103, 0.50, 35),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Summary.TotalSignals)
+	require.Equal(t, 2, result.Summary.EligibleSignals)
 	require.Equal(t, 0, result.Summary.TotalTrades)
 	require.Empty(t, result.Trades)
 	require.True(t, result.Summary.TotalPnL.IsZero())
@@ -630,7 +647,14 @@ func runSignalsTestSignal(timestamp time.Time, symbol string, price, imbalance, 
 			BidAskSpread:       0.05,
 			OrderBookImbalance: imbalance,
 			RangePosition24h:   rangePosition,
-			PriceChange24h:     2.5,
+			PriceChange24h:     runSignalsTestPriceChange(imbalance),
 		},
 	}
+}
+
+func runSignalsTestPriceChange(imbalance float64) float64 {
+	if imbalance < 0 {
+		return -2.5
+	}
+	return 2.5
 }

@@ -285,7 +285,7 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			return nil, fmt.Errorf("run scalping backtest signals: %w", err)
 		}
 		positionKey := simulatedPositionKey(signal.Exchange, signal.Symbol)
-		if position, ok := e.positions[positionKey]; ok && signal.Timestamp.After(position.EntryTime) {
+		if position, ok := e.positions[positionKey]; ok && e.positionCanCloseAt(signal.Timestamp, position) {
 			trade := e.closeSimulatedPosition(signal, position)
 			e.tradeHistory = append(e.tradeHistory, trade)
 			e.capital = e.capital.Add(trade.PnL)
@@ -597,6 +597,17 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 	}
 }
 
+func (e *ScalpingBacktestEngine) positionCanCloseAt(timestamp time.Time, position *SimulatedPosition) bool {
+	if position == nil || !timestamp.After(position.EntryTime) {
+		return false
+	}
+	holdFor := e.config.DefaultHoldPeriod
+	if holdFor <= 0 {
+		holdFor = DefaultScalpingBacktestHoldPeriod
+	}
+	return !timestamp.Before(position.EntryTime.Add(holdFor))
+}
+
 func simulatedPositionKey(exchange, symbol string) string {
 	return strings.ToLower(strings.TrimSpace(exchange)) + "|" + normalizeSymbolForComparison(symbol)
 }
@@ -867,32 +878,43 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	if signal.BidAskSpread <= 0 || signal.BidAskSpread > e.config.MaxBidAskSpreadPct {
 		return nil
 	}
-	if imbalance < 0.10 {
+	effectiveMinImbalance := math.Min(fallback.MinImbalance, 0.20)
+	if imbalance < effectiveMinImbalance {
 		return nil
 	}
 
 	action := ""
 	rangeAlignment := 0.0
+	momentumAligned := false
 	switch {
-	case signal.OrderBookImbalance >= 0.10 && signal.RangePosition24h <= 45:
+	case signal.OrderBookImbalance >= effectiveMinImbalance && signal.RangePosition24h <= fallback.BuyRangeMax:
 		action = "buy"
-		rangeAlignment = clampFloat((45-signal.RangePosition24h)/45.0, 0, 1)
-	case signal.OrderBookImbalance <= -0.10 && signal.RangePosition24h >= 55:
+		momentumAligned = signal.PriceChange24h >= fallback.BuyMinPriceChangePct
+		rangeAlignment = clampFloat((fallback.BuyRangeMax-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax, 1), 0, 1)
+	case signal.OrderBookImbalance <= -effectiveMinImbalance && signal.RangePosition24h >= fallback.SellRangeMin:
 		action = "sell"
-		rangeAlignment = clampFloat((signal.RangePosition24h-55)/45.0, 0, 1)
-	case signal.OrderBookImbalance >= 0.10 && signal.RangePosition24h <= 50:
+		momentumAligned = signal.PriceChange24h <= fallback.SellMaxPriceChangePct
+		rangeAlignment = clampFloat((signal.RangePosition24h-fallback.SellRangeMin)/math.Max(100-fallback.SellRangeMin, 1), 0, 1)
+	case signal.OrderBookImbalance >= effectiveMinImbalance && signal.RangePosition24h <= fallback.BuyRangeMax+5:
 		action = "buy"
-		rangeAlignment = clampFloat((50-signal.RangePosition24h)/50.0, 0, 1)
-	case signal.OrderBookImbalance <= -0.10 && signal.RangePosition24h >= 50:
+		momentumAligned = signal.PriceChange24h >= fallback.BuyMinPriceChangePct
+		rangeAlignment = clampFloat((fallback.BuyRangeMax+5-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax+5, 1), 0, 1)
+	case signal.OrderBookImbalance <= -effectiveMinImbalance && signal.RangePosition24h >= fallback.SellRangeMin-5:
 		action = "sell"
-		rangeAlignment = clampFloat((signal.RangePosition24h-50)/50.0, 0, 1)
-	case signal.OrderBookImbalance >= 0.20 && signal.PriceChange24h > 0 && signal.RangePosition24h <= 60:
+		momentumAligned = signal.PriceChange24h <= fallback.SellMaxPriceChangePct
+		rangeAlignment = clampFloat((signal.RangePosition24h-(fallback.SellRangeMin-5))/math.Max(100-(fallback.SellRangeMin-5), 1), 0, 1)
+	case signal.OrderBookImbalance >= math.Max(effectiveMinImbalance, 0.20) && signal.PriceChange24h > 0 && signal.RangePosition24h <= fallback.SellRangeMin+5:
 		action = "buy"
-		rangeAlignment = clampFloat((60-signal.RangePosition24h)/15.0, 0, 1)
-	case signal.OrderBookImbalance <= -0.20 && signal.PriceChange24h < 0 && signal.RangePosition24h >= 40:
+		momentumAligned = true
+		rangeAlignment = clampFloat((fallback.SellRangeMin+5-signal.RangePosition24h)/math.Max(fallback.SellRangeMin+5-fallback.BuyRangeMax, 1), 0, 1)
+	case signal.OrderBookImbalance <= -math.Max(effectiveMinImbalance, 0.20) && signal.PriceChange24h < 0 && signal.RangePosition24h >= fallback.BuyRangeMax-5:
 		action = "sell"
-		rangeAlignment = clampFloat((signal.RangePosition24h-40)/15.0, 0, 1)
+		momentumAligned = true
+		rangeAlignment = clampFloat((signal.RangePosition24h-(fallback.BuyRangeMax-5))/math.Max(fallback.SellRangeMin-(fallback.BuyRangeMax-5), 1), 0, 1)
 	default:
+		return nil
+	}
+	if !momentumAligned {
 		return nil
 	}
 
@@ -912,7 +934,31 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		return nil
 	}
 
-	stopLoss, takeProfit := defaultExitLevels(signal.Price, action)
+	riskPct := 0.006
+	if signal.High24h > signal.Low24h && signal.Price > 0 {
+		rangePct := (signal.High24h - signal.Low24h) / signal.Price
+		riskPct = clampFloat(rangePct*0.20, 0.004, 0.012)
+	}
+	rewardPct := clampFloat(riskPct*1.6, 0.006, 0.02)
+	projectedNetEdgePct := fallbackProjectedNetEdgePct(signal.BidAskSpread, rewardPct)
+	requiredNetEdgePct := fallbackRequiredNetEdgePct(TradingPortfolio{}, e.config.MinExpectancyEdge)
+	if projectedNetEdgePct < requiredNetEdgePct {
+		return nil
+	}
+
+	price := decimal.NewFromFloat(signal.Price)
+	risk := decimal.NewFromFloat(riskPct)
+	reward := decimal.NewFromFloat(rewardPct)
+	one := decimal.NewFromInt(1)
+	stopLoss := decimal.Zero
+	takeProfit := decimal.Zero
+	if action == "sell" {
+		stopLoss = price.Mul(one.Add(risk))
+		takeProfit = price.Mul(one.Sub(reward))
+	} else {
+		stopLoss = price.Mul(one.Sub(risk))
+		takeProfit = price.Mul(one.Add(reward))
+	}
 	sizePct := clampFloat(e.config.MaxCapitalPct*fallback.SizeFraction, fallback.MinSizePct, e.config.MaxCapitalPct)
 
 	return &AITradingDecision{

@@ -38,6 +38,10 @@ func TestValidateAcceptanceGates(t *testing.T) {
 				DeltaNetPnL:         decimal.NewFromFloat(0.30),
 				DeltaAvgPnLPerTrade: decimal.NewFromFloat(0.013),
 			},
+			LiveTrialReadiness: services.ScalpingLiveTrialReadiness{
+				Ready:           true,
+				MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades,
+			},
 		},
 	}
 
@@ -62,6 +66,7 @@ func TestValidateAcceptanceGates(t *testing.T) {
 				MinBaselineWinRateDelta:  "0.6",
 				MinBaselineNetPnLDelta:   "0.2",
 				MinBaselineAvgPnLDelta:   "0.01",
+				RequireLiveTrialReady:    true,
 			},
 		},
 		{
@@ -220,6 +225,25 @@ func TestValidateAcceptanceGatesTreatsMissingHoldSplitAsZeroForMaxHoldRatio(t *t
 
 	err := validateAcceptanceGates(result, acceptanceGateOptions{MaxHoldRatio: "0.745"})
 	require.NoError(t, err)
+}
+
+func TestValidateAcceptanceGatesCanRequireLiveTrialReadiness(t *testing.T) {
+	result := &services.ScalpingLivePaperSoakResult{
+		Report: services.ScalpingSoakReport{
+			LiveTrialReadiness: services.ScalpingLiveTrialReadiness{
+				Ready: false,
+				Reasons: []string{
+					"closed_trades_below_live_trial_minimum",
+					"drawdown_not_observed",
+				},
+				MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades,
+			},
+		},
+	}
+
+	err := validateAcceptanceGates(result, acceptanceGateOptions{RequireLiveTrialReady: true})
+	require.ErrorContains(t, err, "live_trial_readiness.ready=false")
+	require.ErrorContains(t, err, "closed_trades_below_live_trial_minimum")
 }
 
 func TestValidateAcceptanceGatesRequiresBaselineForMaxDrawdownPct(t *testing.T) {

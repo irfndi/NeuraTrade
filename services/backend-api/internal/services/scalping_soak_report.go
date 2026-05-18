@@ -11,6 +11,11 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const (
+	DefaultScalpingLiveTrialMinClosedTrades = 20
+	defaultScalpingLiveTrialMaxHoldRatio    = 0.745
+)
+
 type ScalpingSoakReportFilter struct {
 	ChatID   string
 	Exchange string
@@ -50,6 +55,7 @@ type ScalpingSoakReport struct {
 	AIProviderDegradation  ScalpingAIDegradationSoakStats  `json:"ai_provider_degradation"`
 	BaselineComparison     *ScalpingSoakBaselineComparison `json:"baseline_comparison,omitempty"`
 	InsufficientTradeProof bool                            `json:"insufficient_trade_proof"`
+	LiveTrialReadiness     ScalpingLiveTrialReadiness      `json:"live_trial_readiness"`
 
 	cumulativeNetPnL  decimal.Decimal
 	peakNetPnL        decimal.Decimal
@@ -104,6 +110,12 @@ type ScalpingSoakBaselineComparison struct {
 	DeltaFees           decimal.Decimal `json:"delta_fees"`
 	DeltaAvgPnLPerTrade decimal.Decimal `json:"delta_avg_pnl_per_trade"`
 	DeltaCycles         int             `json:"delta_cycles"`
+}
+
+type ScalpingLiveTrialReadiness struct {
+	Ready           bool     `json:"ready"`
+	Reasons         []string `json:"reasons,omitempty"`
+	MinClosedTrades int      `json:"min_closed_trades"`
 }
 
 type scalpingSoakCycleRow struct {
@@ -418,6 +430,47 @@ func (r *ScalpingSoakReport) finalize(baseline *ScalpingSoakBaseline) {
 	if baseline != nil {
 		r.BaselineComparison = compareScalpingSoakBaseline(*baseline, *r)
 	}
+	r.computeLiveTrialReadiness()
+}
+
+func (r *ScalpingSoakReport) computeLiveTrialReadiness() {
+	readiness := ScalpingLiveTrialReadiness{
+		MinClosedTrades: DefaultScalpingLiveTrialMinClosedTrades,
+	}
+	reasons := make([]string, 0, 8)
+	if r.InsufficientTradeProof {
+		reasons = append(reasons, "insufficient_trade_proof")
+	}
+	if r.TradeSummary.ClosedTrades < readiness.MinClosedTrades {
+		reasons = append(reasons, "closed_trades_below_live_trial_minimum")
+	}
+	if r.TradeSummary.Wins == 0 {
+		reasons = append(reasons, "no_winning_trades")
+	}
+	if r.TradeSummary.Losses == 0 {
+		reasons = append(reasons, "no_losing_trades")
+	}
+	if !r.TradeSummary.NetPnL.GreaterThan(decimal.Zero) {
+		reasons = append(reasons, "net_pnl_not_positive")
+	}
+	if !r.TradeSummary.AvgNetPnLPerTrade.GreaterThan(decimal.Zero) {
+		reasons = append(reasons, "avg_net_pnl_not_positive")
+	}
+	if !r.TradeSummary.MaxDrawdownPct.GreaterThan(decimal.Zero) {
+		reasons = append(reasons, "drawdown_not_observed")
+	}
+	if r.SignalQuality.Coverage.LessThan(decimal.NewFromInt(1)) {
+		reasons = append(reasons, "signal_quality_incomplete")
+	}
+	if r.AIProviderDegradation.DegradedCycles > 0 {
+		reasons = append(reasons, "ai_provider_degraded")
+	}
+	if holdRatio, ok := r.ActionSplit["hold"]; ok && holdRatio.GreaterThan(decimal.NewFromFloat(defaultScalpingLiveTrialMaxHoldRatio)) {
+		reasons = append(reasons, "hold_ratio_above_live_trial_maximum")
+	}
+	readiness.Ready = len(reasons) == 0
+	readiness.Reasons = reasons
+	r.LiveTrialReadiness = readiness
 }
 
 func (r *ScalpingSoakReport) computeDrawdownPct(baseline *ScalpingSoakBaseline) {

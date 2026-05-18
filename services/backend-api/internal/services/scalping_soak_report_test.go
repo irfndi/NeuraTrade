@@ -120,6 +120,11 @@ func TestBuildScalpingSoakReportSummarizesAcceptanceMetrics(t *testing.T) {
 	require.True(t, report.TradeSummary.MaxDrawdownPct.Round(6).Equal(decimal.NewFromFloat(0.00125)))
 	require.True(t, report.TradeSummary.ProfitFactor.Round(6).Equal(decimal.NewFromFloat(1.333333)))
 	require.False(t, report.InsufficientTradeProof)
+	require.False(t, report.LiveTrialReadiness.Ready)
+	require.Equal(t, DefaultScalpingLiveTrialMinClosedTrades, report.LiveTrialReadiness.MinClosedTrades)
+	require.Contains(t, report.LiveTrialReadiness.Reasons, "closed_trades_below_live_trial_minimum")
+	require.Contains(t, report.LiveTrialReadiness.Reasons, "signal_quality_incomplete")
+	require.Contains(t, report.LiveTrialReadiness.Reasons, "ai_provider_degraded")
 
 	require.Equal(t, 1, report.AIProviderDegradation.DegradedCycles)
 	require.Equal(t, 1, report.AIProviderDegradation.ByReason["ai_unavailable"])

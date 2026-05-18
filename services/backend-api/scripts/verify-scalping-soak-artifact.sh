@@ -17,6 +17,7 @@ MAX_PERFECT_WIN_TRADES="${MAX_PERFECT_WIN_TRADES-20}"
 MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
+REQUIRE_LIVE_TRIAL_READY="${REQUIRE_LIVE_TRIAL_READY:-false}"
 
 usage() {
   cat <<USAGE
@@ -39,6 +40,7 @@ Gate environment defaults:
   MIN_BASELINE_WIN_RATE_DELTA=${MIN_BASELINE_WIN_RATE_DELTA}
   MIN_BASELINE_NET_PNL_DELTA=${MIN_BASELINE_NET_PNL_DELTA}
   MIN_BASELINE_AVG_PNL_DELTA=${MIN_BASELINE_AVG_PNL_DELTA}
+  REQUIRE_LIVE_TRIAL_READY=${REQUIRE_LIVE_TRIAL_READY}
 USAGE
 }
 
@@ -186,6 +188,10 @@ fi
 validate_min_decimal "baseline.delta_win_rate" "$delta_win_rate" "$MIN_BASELINE_WIN_RATE_DELTA"
 validate_min_decimal "baseline.delta_net_pnl" "$delta_net_pnl" "$MIN_BASELINE_NET_PNL_DELTA"
 validate_min_decimal "baseline.delta_avg_pnl_per_trade" "$delta_avg_pnl" "$MIN_BASELINE_AVG_PNL_DELTA"
+if [ "$REQUIRE_LIVE_TRIAL_READY" = "true" ] || [ "$REQUIRE_LIVE_TRIAL_READY" = "1" ]; then
+  jq -e '.result.report.live_trial_readiness.ready == true' "$artifact" >/dev/null \
+    || fail "live_trial_readiness.ready=false"
+fi
 
 jq -e '
   .result.report.insufficient_trade_proof == false and

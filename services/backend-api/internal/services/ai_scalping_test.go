@@ -2632,7 +2632,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumAlignedE
 		Volume24h:          1500000,
 		BidAskSpread:       0.05,
 		OrderBookImbalance: 0.60,
-		PriceChange24h:     -0.2,
+		PriceChange24h:     0.2,
 		RangePosition24h:   18,
 	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
 
@@ -2696,7 +2696,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBufferedMidRange
 		Volume24h:          1500000,
 		BidAskSpread:       0.07,
 		OrderBookImbalance: 0.22,
-		PriceChange24h:     -0.8,
+		PriceChange24h:     0.8,
 		RangePosition24h:   48,
 	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
 
