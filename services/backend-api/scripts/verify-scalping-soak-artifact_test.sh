@@ -94,4 +94,15 @@ if ! grep -q "action_split.hold=0.5 above maximum=0.1" "$negative_output"; then
   exit 1
 fi
 
+if MAX_HOLD_RATIO=74.5 "$VERIFIER" "$artifact_path" >"$negative_output" 2>&1; then
+  echo "expected verifier to reject percent-style MAX_HOLD_RATIO values" >&2
+  exit 1
+fi
+
+if ! grep -q "invalid MAX_HOLD_RATIO=74.5: must be at most 1" "$negative_output"; then
+  echo "negative verifier output did not contain ratio-bound failure" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
 echo "verify-scalping-soak-artifact tests passed"

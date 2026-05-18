@@ -91,6 +91,18 @@ validate_max_int() {
   [ "$actual" -le "$maximum" ] || fail "${label}=${actual} above maximum=${maximum}"
 }
 
+validate_ratio_override() {
+  local label="$1"
+  local value="$2"
+  [ -z "$value" ] && return
+  jq -en --arg value "$value" '$value | tonumber' >/dev/null ||
+    fail "invalid ${label}=${value}: must be numeric"
+  decimal_gte "$value" "0" ||
+    fail "invalid ${label}=${value}: must be zero or greater"
+  decimal_lte "$value" "1" ||
+    fail "invalid ${label}=${value}: must be at most 1"
+}
+
 artifact="${1:-}"
 case "$artifact" in
   "" | -h | --help | help)
@@ -103,6 +115,8 @@ esac
 [ -f "$artifact" ] || fail "artifact not found: $artifact"
 require_binary jq
 require_binary awk
+
+validate_ratio_override "MAX_HOLD_RATIO" "$MAX_HOLD_RATIO"
 
 doc_count="$(jq -s 'length' "$artifact")"
 [ "$doc_count" = "1" ] || fail "expected exactly one JSON document, got ${doc_count}"
