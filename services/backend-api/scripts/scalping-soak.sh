@@ -91,6 +91,7 @@ Examples:
   make build
   bash services/backend-api/scripts/scalping-soak.sh run
   SOAK_OUTPUT_FILE="\$HOME/.neuratrade/data/scalping-soak-latest.json" bash services/backend-api/scripts/scalping-soak.sh run
+  bash services/backend-api/scripts/verify-scalping-soak-artifact.sh "\$HOME/.neuratrade/data/scalping-soak-latest.json"
   SOAK_DB_PATH="\$HOME/.neuratrade/data/neuratrade.db" CYCLES=24 bash services/backend-api/scripts/scalping-soak.sh run
 USAGE
 }
