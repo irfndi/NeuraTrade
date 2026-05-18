@@ -138,9 +138,16 @@ func run() error {
 		MinBaselineNetPnLDelta:   minBaselineNetPnLDelta,
 		MinBaselineAvgPnLDelta:   minBaselineAvgPnLDelta,
 	}); err != nil {
+		if encodeErr := writeResultPayload(os.Stdout, dbPath, result); encodeErr != nil {
+			return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
+		}
 		return err
 	}
 
+	return writeResultPayload(os.Stdout, dbPath, result)
+}
+
+func writeResultPayload(out *os.File, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
 	payload := struct {
 		DBPath string                                `json:"db_path"`
 		Result *services.ScalpingLivePaperSoakResult `json:"result"`
@@ -148,7 +155,7 @@ func run() error {
 		DBPath: dbPath,
 		Result: result,
 	}
-	encoder := json.NewEncoder(os.Stdout)
+	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(payload)
 }
