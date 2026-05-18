@@ -51,7 +51,8 @@ require_binary() {
 
 jq_number() {
   local filter="$1"
-  jq -er "$filter | tonumber" "$artifact"
+  jq -er "$filter | tonumber" "$artifact" \
+    || fail "artifact field ${filter} must be numeric"
 }
 
 jq_string() {
@@ -127,6 +128,7 @@ closed_trades="$(jq_number '.result.report.trade_summary.closed_trades')"
 wins="$(jq_number '.result.report.trade_summary.wins')"
 losses="$(jq_number '.result.report.trade_summary.losses')"
 win_rate="$(jq_number '.result.report.trade_summary.win_rate')"
+gross_pnl="$(jq_number '.result.report.trade_summary.gross_pnl')"
 net_pnl="$(jq_number '.result.report.trade_summary.net_pnl')"
 fees="$(jq_number '.result.report.trade_summary.fees')"
 avg_net_pnl="$(jq_number '.result.report.trade_summary.avg_net_pnl_per_trade')"
@@ -191,6 +193,7 @@ closed_trades: ${closed_trades}
 wins: ${wins}
 losses: ${losses}
 win_rate: ${win_rate}
+gross_pnl: ${gross_pnl}
 net_pnl: ${net_pnl}
 fees: ${fees}
 avg_net_pnl_per_trade: ${avg_net_pnl}

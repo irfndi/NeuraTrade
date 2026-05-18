@@ -63,6 +63,7 @@ jq -n --arg db_path "$db_path" '{
         wins: 1,
         losses: 0,
         win_rate: "1",
+        gross_pnl: "0.13",
         net_pnl: "0.12",
         fees: "0.01",
         avg_net_pnl_per_trade: "0.12",
@@ -101,6 +102,19 @@ fi
 
 if ! grep -q "invalid MAX_HOLD_RATIO=74.5: must be at most 1" "$negative_output"; then
   echo "negative verifier output did not contain ratio-bound failure" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
+missing_gross_artifact="${tmp_dir}/missing-gross-pnl.json"
+jq 'del(.result.report.trade_summary.gross_pnl)' "$artifact_path" >"$missing_gross_artifact"
+if "$VERIFIER" "$missing_gross_artifact" >"$negative_output" 2>&1; then
+  echo "expected verifier to fail when gross_pnl is missing" >&2
+  exit 1
+fi
+
+if ! grep -q "trade_summary.gross_pnl" "$negative_output"; then
+  echo "negative verifier output did not mention missing gross_pnl" >&2
   cat "$negative_output" >&2
   exit 1
 fi
