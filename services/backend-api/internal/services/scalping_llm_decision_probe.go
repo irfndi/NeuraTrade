@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
@@ -220,11 +221,39 @@ func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSig
 		}
 		symbol := strings.ToLower(strings.TrimSpace(signal.Symbol))
 		base := strings.ToLower(strings.TrimSpace(strings.Split(symbol, "/")[0]))
-		if symbol != "" && strings.Contains(reasoning, symbol) || base != "" && strings.Contains(reasoning, base) || strings.Contains(reasoning, "all signals") {
+		if (symbol != "" && strings.Contains(reasoning, symbol)) ||
+			(base != "" && containsScalpingSymbolToken(reasoning, base)) ||
+			strings.Contains(reasoning, "all signals") {
 			diagnostics = append(diagnostics, fmt.Sprintf("hold reasoning cites wide spread while %s spread %.3f%% is within %.3f%% threshold", signal.Symbol, signal.BidAskSpread, threshold))
 		}
 	}
 	return diagnostics
+}
+
+func containsScalpingSymbolToken(text, symbol string) bool {
+	symbol = strings.ToLower(strings.TrimSpace(symbol))
+	if symbol == "" {
+		return false
+	}
+	for start := 0; ; {
+		index := strings.Index(text[start:], symbol)
+		if index < 0 {
+			return false
+		}
+		index += start
+		end := index + len(symbol)
+		if scalpingSymbolBoundary(text, index-1) && scalpingSymbolBoundary(text, end) {
+			return true
+		}
+		start = end
+	}
+}
+
+func scalpingSymbolBoundary(text string, index int) bool {
+	if index < 0 || index >= len(text) {
+		return true
+	}
+	return !unicode.IsLetter(rune(text[index])) && !unicode.IsDigit(rune(text[index]))
 }
 
 func holdReasoningClaimsWideSpread(reasoning string) bool {

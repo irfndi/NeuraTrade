@@ -138,6 +138,7 @@ func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T)
 		signals         []aiMarketSignal
 		ceiling         float64
 		wantDiagnostics bool
+		wantSymbol      string
 	}{
 		{
 			name:            "blanket wide-spread claim contradicts tradable symbol",
@@ -145,6 +146,7 @@ func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T)
 			signals:         []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
 			ceiling:         0.22,
 			wantDiagnostics: true,
+			wantSymbol:      "BTC/USDT",
 		},
 		{
 			name:            "generic confidence threshold does not imply wide spread",
@@ -160,6 +162,21 @@ func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T)
 			ceiling:         0.22,
 			wantDiagnostics: false,
 		},
+		{
+			name:            "short symbol does not match unrelated word",
+			reasoning:       "Holding because consolidation remains broad and spread is above the comfort threshold.",
+			signals:         []aiMarketSignal{{Symbol: "SOL/USDT", BidAskSpread: 0.02}},
+			ceiling:         0.22,
+			wantDiagnostics: false,
+		},
+		{
+			name:            "short symbol matches whole token",
+			reasoning:       "SOL spread is above the comfort threshold.",
+			signals:         []aiMarketSignal{{Symbol: "SOL/USDT", BidAskSpread: 0.02}},
+			ceiling:         0.22,
+			wantDiagnostics: true,
+			wantSymbol:      "SOL/USDT",
+		},
 	}
 
 	for _, tc := range cases {
@@ -172,7 +189,7 @@ func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T)
 			}
 			require.NotEmpty(t, diagnostics)
 			require.Contains(t, diagnostics[0], "cites wide spread")
-			require.Contains(t, diagnostics[0], "BTC/USDT")
+			require.Contains(t, diagnostics[0], tc.wantSymbol)
 		})
 	}
 }
