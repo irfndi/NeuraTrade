@@ -349,6 +349,7 @@ stop_gateway() {
 
 stop_gateway_child_services() {
   stop_child_service "Backend API" "${NEURATRADE_HOME}/pids/backend.pid" "neuratrade-server"
+  stop_backend_port_listener_fallback
   stop_child_service "CCXT Service" "${NEURATRADE_HOME}/pids/ccxt.pid" "ccxt-service"
   stop_child_service "Telegram Service" "${NEURATRADE_HOME}/pids/telegram.pid" "telegram-service" "bun run index.ts"
 }
@@ -405,6 +406,42 @@ stop_child_service() {
   fi
 
   rm -f "$pid_file"
+}
+
+stop_backend_port_listener_fallback() {
+  command -v lsof >/dev/null 2>&1 || return 0
+
+  local pids
+  pids="$(lsof -nP -tiTCP:"${BACKEND_PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+  [ -n "$pids" ] || return 0
+
+  local pid
+  for pid in $pids; do
+    if ! printf '%s' "$pid" | grep -Eq '^[0-9]+$'; then
+      continue
+    fi
+    if ! pid_running "$pid"; then
+      continue
+    fi
+    if ! pid_command_matches "$pid" "neuratrade-server"; then
+      log_warn "Backend port ${BACKEND_PORT} listener pid ${pid} does not match neuratrade-server; leaving it running"
+      continue
+    fi
+
+    log_warn "Backend pid file missing or stale; stopping neuratrade-server listener on port ${BACKEND_PORT} (pid=${pid})"
+    kill "$pid" 2>/dev/null || true
+
+    local waited=0
+    while pid_running "$pid" && [ "$waited" -lt 20 ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+
+    if pid_running "$pid"; then
+      log_warn "Backend API port listener still running after grace period, forcing kill (pid=${pid})"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
 }
 
 status_gateway() {

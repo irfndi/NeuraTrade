@@ -124,6 +124,7 @@ test-frontend: ## Run Telegram service tests
 
 test-scripts: ## Run operational script tests
 	@echo "$(GREEN)Running script tests...$(NC)"
+	@bash services/backend-api/scripts/startup-orchestrator_test.sh
 	@bash services/backend-api/scripts/scalping-soak_test.sh
 	@bash services/backend-api/scripts/verify-scalping-soak-artifact_test.sh
 	@bash services/backend-api/scripts/scalping-soak-acceptance_test.sh
