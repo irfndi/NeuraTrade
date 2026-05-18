@@ -113,6 +113,17 @@ if ! grep -q "invalid MAX_HOLD_RATIO=74.5: must be at most 1" "$negative_output"
   exit 1
 fi
 
+if MAX_DRAWDOWN_PCT=abc "$VERIFIER" "$artifact_path" >"$negative_output" 2>&1; then
+  echo "expected verifier to reject nonnumeric MAX_DRAWDOWN_PCT values" >&2
+  exit 1
+fi
+
+if ! grep -q "invalid max_drawdown_pct maximum=abc: must be numeric" "$negative_output"; then
+  echo "negative verifier output did not contain max-gate numeric failure" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
 no_baseline_artifact="${tmp_dir}/no-baseline-comparison.json"
 jq 'del(.result.report.baseline_comparison)' "$artifact_path" >"$no_baseline_artifact"
 if "$VERIFIER" "$no_baseline_artifact" >"$negative_output" 2>&1; then

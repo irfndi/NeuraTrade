@@ -68,11 +68,19 @@ decimal_gte() {
   awk -v actual="$1" -v minimum="$2" 'BEGIN { exit !(actual >= minimum) }'
 }
 
+validate_numeric_override() {
+  local label="$1"
+  local value="$2"
+  jq -en --arg value "$value" '$value | tonumber' >/dev/null \
+    || fail "invalid ${label}=${value}: must be numeric"
+}
+
 validate_min_decimal() {
   local label="$1"
   local actual="$2"
   local minimum="$3"
   [ -z "$minimum" ] && return
+  validate_numeric_override "${label} minimum" "$minimum"
   decimal_gte "$actual" "$minimum" || fail "${label}=${actual} below minimum=${minimum}"
 }
 
@@ -81,6 +89,7 @@ validate_max_decimal() {
   local actual="$2"
   local maximum="$3"
   [ -z "$maximum" ] && return
+  validate_numeric_override "${label} maximum" "$maximum"
   decimal_lte "$actual" "$maximum" || fail "${label}=${actual} above maximum=${maximum}"
 }
 
@@ -89,6 +98,7 @@ validate_max_int() {
   local actual="$2"
   local maximum="$3"
   [ -z "$maximum" ] && return
+  validate_numeric_override "${label} maximum" "$maximum"
   [ "$actual" -le "$maximum" ] || fail "${label}=${actual} above maximum=${maximum}"
 }
 
