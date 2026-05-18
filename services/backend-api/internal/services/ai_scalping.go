@@ -3189,6 +3189,44 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 			0,
 			1,
 		)
+	case signal.OrderBookImbalance >= effectiveMinImbalance &&
+		signal.RangePosition24h <= buyRangeMax+5:
+		action = "buy"
+		momentumAligned = signal.PriceChange24h >= fallbackCfg.BuyMinPriceChangePct
+		rangeAlignment = clampFloat(
+			(buyRangeMax+5-signal.RangePosition24h)/math.Max(buyRangeMax+5, 1),
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance <= -effectiveMinImbalance &&
+		signal.RangePosition24h >= sellRangeMin-5:
+		action = "sell"
+		momentumAligned = signal.PriceChange24h <= fallbackCfg.SellMaxPriceChangePct
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-(sellRangeMin-5))/math.Max(100-(sellRangeMin-5), 1),
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance >= math.Max(effectiveMinImbalance, 0.20) &&
+		signal.PriceChange24h > 0 &&
+		signal.RangePosition24h <= sellRangeMin+5:
+		action = "buy"
+		momentumAligned = true
+		rangeAlignment = clampFloat(
+			(sellRangeMin+5-signal.RangePosition24h)/math.Max(sellRangeMin+5-buyRangeMax, 1),
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance <= -math.Max(effectiveMinImbalance, 0.20) &&
+		signal.PriceChange24h < 0 &&
+		signal.RangePosition24h >= buyRangeMax-5:
+		action = "sell"
+		momentumAligned = true
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-(buyRangeMax-5))/math.Max(sellRangeMin-(buyRangeMax-5), 1),
+			0,
+			1,
+		)
 	default:
 		return nil, 0, false
 	}

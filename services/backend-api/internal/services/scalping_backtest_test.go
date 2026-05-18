@@ -462,6 +462,67 @@ func TestScalpingBacktestEngine_RunSignalsProducesPaperTradeMetrics(t *testing.T
 	require.Equal(t, "take_profit", result.Trades[1].ExitReason)
 }
 
+func TestScalpingBacktestEngine_RunSignalsAllowsMomentumContinuationSell(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 47, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "WIF/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "WIF/USDT",
+			Price:              1.25,
+			High24h:            1.50,
+			Low24h:             1.00,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.06,
+			OrderBookImbalance: -0.23,
+			RangePosition24h:   50,
+			PriceChange24h:     -0.8,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Summary.TotalSignals)
+	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 1, result.Summary.TotalTrades)
+	require.Empty(t, result.Summary.RejectionByReason)
+	require.Len(t, result.Trades, 1)
+	require.Equal(t, "sell", result.Trades[0].Side)
+	require.Equal(t, "take_profit", result.Trades[0].ExitReason)
+	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
+func TestScalpingBacktestEngine_RunSignalsAllowsBufferedMidRangeBuy(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 48, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "FARTCOIN/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "FARTCOIN/USDT",
+			Price:              1.25,
+			High24h:            1.50,
+			Low24h:             1.00,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.07,
+			OrderBookImbalance: 0.15,
+			RangePosition24h:   48,
+			PriceChange24h:     -0.8,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 1, result.Summary.TotalTrades)
+	require.Len(t, result.Trades, 1)
+	require.Equal(t, "buy", result.Trades[0].Side)
+	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
 func TestScalpingBacktestEngine_RunSignalsSortsInputsChronologically(t *testing.T) {
 	now := time.Date(2026, 5, 12, 2, 50, 0, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)

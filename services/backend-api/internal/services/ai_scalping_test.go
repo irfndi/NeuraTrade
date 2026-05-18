@@ -2641,6 +2641,70 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumAlignedE
 	assert.Contains(t, decision.Reasoning, "24h change")
 }
 
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumContinuationSell(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "WIF/USDT",
+		Price:              1,
+		High24h:            1.2,
+		Low24h:             0.8,
+		Volume24h:          1500000,
+		BidAskSpread:       0.06,
+		OrderBookImbalance: -0.23,
+		PriceChange24h:     -0.8,
+		RangePosition24h:   50,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "sell", decision.Action)
+	assert.Contains(t, decision.Reasoning, "24h change")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBufferedMidRangeBuy(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "FARTCOIN/USDT",
+		Price:              1,
+		High24h:            1.2,
+		Low24h:             0.8,
+		Volume24h:          1500000,
+		BidAskSpread:       0.07,
+		OrderBookImbalance: 0.22,
+		PriceChange24h:     -0.8,
+		RangePosition24h:   48,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Contains(t, decision.Reasoning, "range position")
+}
+
 func TestAIScalpingService_DeterministicFallbackCandidate_UsesMomentumConfigOverride(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{
