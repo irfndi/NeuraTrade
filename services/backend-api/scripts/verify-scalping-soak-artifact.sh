@@ -162,28 +162,27 @@ jq -e '
 ' "$artifact" >/dev/null || fail "artifact is missing required signal-quality or proof fields"
 
 db_path="${2:-$(jq_string '.db_path')}"
-if [ -n "$db_path" ]; then
-  require_binary sqlite3
-  [ -f "$db_path" ] || fail "SQLite DB not found: $db_path"
+[ -n "$db_path" ] || fail "db_path is required for persisted SQLite evidence"
+require_binary sqlite3
+[ -f "$db_path" ] || fail "SQLite DB not found: $db_path"
 
-  telemetry_rows="$(sqlite3 "$db_path" 'select count(*) from scalping_cycle_telemetry;')"
-  realized_rows="$(sqlite3 "$db_path" 'select count(*) from realized_pnl_journal;')"
-  positive_realized="$(sqlite3 "$db_path" 'select count(*) from realized_pnl_journal where realized_pnl > 0;')"
-  negative_realized="$(sqlite3 "$db_path" 'select count(*) from realized_pnl_journal where realized_pnl < 0;')"
-  missing_quality_rows="$(sqlite3 "$db_path" "select count(*) from scalping_cycle_telemetry where bid_ask_spread_pct is null or order_book_imbalance is null or range_position_24h is null or price_change_24h_pct is null;")"
-  total_cycles="$(jq_number '.result.report.total_cycles')"
+telemetry_rows="$(sqlite3 "$db_path" 'select count(*) from scalping_cycle_telemetry;')"
+realized_rows="$(sqlite3 "$db_path" 'select count(*) from realized_pnl_journal;')"
+positive_realized="$(sqlite3 "$db_path" 'select count(*) from realized_pnl_journal where realized_pnl > 0;')"
+negative_realized="$(sqlite3 "$db_path" 'select count(*) from realized_pnl_journal where realized_pnl < 0;')"
+missing_quality_rows="$(sqlite3 "$db_path" "select count(*) from scalping_cycle_telemetry where bid_ask_spread_pct is null or order_book_imbalance is null or range_position_24h is null or price_change_24h_pct is null;")"
+total_cycles="$(jq_number '.result.report.total_cycles')"
 
-  [ "$telemetry_rows" -eq "$total_cycles" ] \
-    || fail "scalping_cycle_telemetry rows=${telemetry_rows} does not match total_cycles=${total_cycles}"
-  [ "$realized_rows" -eq "$closed_trades" ] \
-    || fail "realized_pnl_journal rows=${realized_rows} does not match closed_trades=${closed_trades}"
-  [ "$positive_realized" -eq "$wins" ] \
-    || fail "positive realized rows=${positive_realized} does not match wins=${wins}"
-  [ "$negative_realized" -eq "$losses" ] \
-    || fail "negative realized rows=${negative_realized} does not match losses=${losses}"
-  [ "$missing_quality_rows" -eq 0 ] \
-    || fail "scalping_cycle_telemetry has ${missing_quality_rows} rows missing signal-quality fields"
-fi
+[ "$telemetry_rows" -eq "$total_cycles" ] \
+  || fail "scalping_cycle_telemetry rows=${telemetry_rows} does not match total_cycles=${total_cycles}"
+[ "$realized_rows" -eq "$closed_trades" ] \
+  || fail "realized_pnl_journal rows=${realized_rows} does not match closed_trades=${closed_trades}"
+[ "$positive_realized" -eq "$wins" ] \
+  || fail "positive realized rows=${positive_realized} does not match wins=${wins}"
+[ "$negative_realized" -eq "$losses" ] \
+  || fail "negative realized rows=${negative_realized} does not match losses=${losses}"
+[ "$missing_quality_rows" -eq 0 ] \
+  || fail "scalping_cycle_telemetry has ${missing_quality_rows} rows missing signal-quality fields"
 
 cat <<SUMMARY
 scalping soak artifact verified

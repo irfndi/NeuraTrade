@@ -119,4 +119,17 @@ if ! grep -q "trade_summary.gross_pnl" "$negative_output"; then
   exit 1
 fi
 
+empty_db_artifact="${tmp_dir}/empty-db-path.json"
+jq '.db_path = ""' "$artifact_path" >"$empty_db_artifact"
+if "$VERIFIER" "$empty_db_artifact" >"$negative_output" 2>&1; then
+  echo "expected verifier to fail when db_path is empty" >&2
+  exit 1
+fi
+
+if ! grep -q "db_path is required for persisted SQLite evidence" "$negative_output"; then
+  echo "negative verifier output did not mention required db_path" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
 echo "verify-scalping-soak-artifact tests passed"
