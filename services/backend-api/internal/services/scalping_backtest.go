@@ -943,7 +943,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	}
 	rewardPct := clampFloat(riskPct*1.6, 0.006, 0.02)
 	projectedNetEdgePct := fallbackProjectedNetEdgePct(signal.BidAskSpread, rewardPct)
-	requiredNetEdgePct := fallbackRequiredNetEdgePct(TradingPortfolio{}, e.config.MinExpectancyEdge)
+	requiredNetEdgePct := fallbackRequiredNetEdgePct(TradingPortfolio{AccountTier: e.policy.AccountTier}, e.config.MinExpectancyEdge)
 	if projectedNetEdgePct < requiredNetEdgePct {
 		return nil
 	}

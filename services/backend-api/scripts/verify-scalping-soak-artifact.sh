@@ -188,10 +188,12 @@ fi
 validate_min_decimal "baseline.delta_win_rate" "$delta_win_rate" "$MIN_BASELINE_WIN_RATE_DELTA"
 validate_min_decimal "baseline.delta_net_pnl" "$delta_net_pnl" "$MIN_BASELINE_NET_PNL_DELTA"
 validate_min_decimal "baseline.delta_avg_pnl_per_trade" "$delta_avg_pnl" "$MIN_BASELINE_AVG_PNL_DELTA"
-if [ "$REQUIRE_LIVE_TRIAL_READY" = "true" ] || [ "$REQUIRE_LIVE_TRIAL_READY" = "1" ]; then
-  jq -e '.result.report.live_trial_readiness.ready == true' "$artifact" >/dev/null \
-    || fail "live_trial_readiness.ready=false"
-fi
+case "$(printf '%s' "$REQUIRE_LIVE_TRIAL_READY" | tr '[:upper:]' '[:lower:]')" in
+  true | 1 | yes | on)
+    jq -e '.result.report.live_trial_readiness.ready == true' "$artifact" >/dev/null \
+      || fail "live_trial_readiness.ready=false"
+    ;;
+esac
 
 jq -e '
   .result.report.insufficient_trade_proof == false and

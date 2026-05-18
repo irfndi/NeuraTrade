@@ -169,9 +169,11 @@ run_soak() {
   if [ "$REQUIRE_TRADES" = "true" ] || [ "$REQUIRE_TRADES" = "1" ]; then
     args+=("--require-trades")
   fi
-  if [ "$REQUIRE_LIVE_TRIAL_READY" = "true" ] || [ "$REQUIRE_LIVE_TRIAL_READY" = "1" ]; then
-    args+=("--require-live-trial-ready")
-  fi
+  case "$(printf '%s' "$REQUIRE_LIVE_TRIAL_READY" | tr '[:upper:]' '[:lower:]')" in
+    true | 1 | yes | on)
+      args+=("--require-live-trial-ready")
+      ;;
+  esac
 
   log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
