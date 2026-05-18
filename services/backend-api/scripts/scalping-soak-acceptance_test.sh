@@ -132,6 +132,7 @@ jq -e \
   --arg log_file "$log_path" \
   '.runtime.health_preflight == "false"
     and .runtime.gateway_status_check == "false"
+    and .runtime.backend_url == "http://127.0.0.1:8080"
     and .evidence.artifact == $artifact
     and .evidence.db_path == $db_path
     and .evidence.log_file == $log_file
