@@ -318,6 +318,12 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         const effectiveMaxCapitalPct =
           readNumberField(chatRuntime, "effective_max_capital_pct") ??
           diagnostics.effective_max_capital_pct;
+        const effectiveMaxConcurrentPositions =
+          readNumberField(chatRuntime, "effective_max_concurrent_positions") ??
+          diagnostics.effective_max_concurrent_positions;
+        const managedOpenPositionsEffective =
+          readNumberField(chatRuntime, "managed_open_positions_effective") ??
+          diagnostics.managed_open_positions_effective;
         const candidateUniverseCount =
           readNumberField(chatRuntime, "candidate_universe_count") ??
           diagnostics.candidate_universe_count;
@@ -461,6 +467,15 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         }
         if (accountTier) {
           lines.push(`• Account tier: ${accountTier}`);
+        }
+        if (typeof effectiveMaxConcurrentPositions === "number") {
+          const managedOpen =
+            typeof managedOpenPositionsEffective === "number"
+              ? managedOpenPositionsEffective
+              : "unknown";
+          lines.push(
+            `• Position cap: ${managedOpen}/${effectiveMaxConcurrentPositions} managed open`,
+          );
         }
         if (
           typeof effectiveMinConfidence === "number" &&

@@ -22,6 +22,7 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 		opModeService *OperationalModeService
 		quest         *Quest
 		chatID        string
+		env           map[string]string
 		expected      OperationalMode
 	}{
 		{
@@ -62,6 +63,25 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 			},
 			quest:    &Quest{Metadata: map[string]string{"dry_run": "false"}},
 			chatID:   "chat-paper",
+			expected: ModePaper,
+		},
+		{
+			name: "runtime_paper_env_overrides_stored_live_mode",
+			opModeService: &OperationalModeService{
+				config: DefaultOperationalModeConfig(),
+				states: map[string]*OperationalModeState{
+					"paper-env-chat": {
+						ChatID: "paper-env-chat",
+						Mode:   OpModeLive,
+					},
+				},
+			},
+			quest:  &Quest{},
+			chatID: "paper-env-chat",
+			env: map[string]string{
+				envFeaturePaperTrading: "true",
+				envFeatureRealTrading:  "false",
+			},
 			expected: ModePaper,
 		},
 		{
@@ -119,6 +139,10 @@ func TestIntegratedQuestHandlersResolveOperationalModePrefersStoredState(t *test
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			unsetRuntimeModeEnv(t)
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
 			handlers := &IntegratedQuestHandlers{opModeService: tc.opModeService}
 			assert.Equal(t, tc.expected, handlers.resolveOperationalMode(tc.chatID, tc.quest))
 		})
