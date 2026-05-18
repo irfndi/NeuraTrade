@@ -25,7 +25,7 @@ func matchOrigin(origin, allowed string) bool {
 	if errO != nil || errA != nil {
 		return false
 	}
-	return o.Scheme == a.Scheme && o.Hostname() == a.Hostname()
+	return o.Scheme == a.Scheme && o.Hostname() == a.Hostname() && o.Port() == a.Port()
 }
 
 func defaultUpgrader(allowedOrigins []string) websocket.Upgrader {
