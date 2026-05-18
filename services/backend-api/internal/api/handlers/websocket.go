@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
+	"net/url"
 	"sync"
 	"time"
 
@@ -15,6 +15,18 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/telemetry"
 )
+
+func matchOrigin(origin, allowed string) bool {
+	if origin == allowed {
+		return true
+	}
+	o, errO := url.Parse(origin)
+	a, errA := url.Parse(allowed)
+	if errO != nil || errA != nil {
+		return false
+	}
+	return o.Scheme == a.Scheme && o.Hostname() == a.Hostname()
+}
 
 func defaultUpgrader(allowedOrigins []string) websocket.Upgrader {
 	return websocket.Upgrader{
@@ -26,7 +38,7 @@ func defaultUpgrader(allowedOrigins []string) websocket.Upgrader {
 				return true // Allow same-origin requests
 			}
 			for _, allowed := range allowedOrigins {
-				if origin == allowed || strings.HasPrefix(origin, allowed) {
+				if matchOrigin(origin, allowed) {
 					return true
 				}
 			}

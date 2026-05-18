@@ -190,3 +190,6 @@ dist/
 
 # Dolt database files (added by bd init)
 .dolt/
+
+# clawpatch review state
+.clawpatch/
