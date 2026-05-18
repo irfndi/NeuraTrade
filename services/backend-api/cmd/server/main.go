@@ -132,7 +132,17 @@ func run() error {
 	if err := observability.InitSentry(cfg.Sentry, cfg.Telemetry.ServiceVersion, cfg.Environment); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize Sentry: %v\n", err)
 	}
-	defer observability.Flush(context.Background())
+	flushTimeout := 5 * time.Second
+	if d := os.Getenv("NEURATRADE_OBSERVABILITY_FLUSH_TIMEOUT"); d != "" {
+		if parsed, err := time.ParseDuration(d); err == nil {
+			flushTimeout = parsed
+		}
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), flushTimeout)
+		defer cancel()
+		observability.Flush(flushCtx)
+	}()
 
 	// Initialize standard logger
 	stdLogger := logging.NewStandardLogger(cfg.Telemetry.LogLevel, cfg.Environment)

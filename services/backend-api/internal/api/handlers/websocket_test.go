@@ -25,7 +25,7 @@ func setupWebSocketTest(t *testing.T) (*WebSocketHandler, *miniredis.Miniredis, 
 	})
 
 	redisClient := &database.RedisClient{Client: client}
-	handler := NewWebSocketHandler(redisClient)
+	handler := NewWebSocketHandler(redisClient, nil)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -42,7 +42,7 @@ func TestWebSocketHandler_NewHandler(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	redisClient := &database.RedisClient{Client: client}
 
-	handler := NewWebSocketHandler(redisClient)
+	handler := NewWebSocketHandler(redisClient, nil)
 	assert.NotNil(t, handler)
 	assert.Equal(t, 0, handler.GetClientCount())
 	handler.Stop()

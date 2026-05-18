@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -125,8 +126,9 @@ func (h *HealthHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	// Check database
 	if h.db != nil {
 		if err := h.db.HealthCheck(ctx); err != nil {
-			servicesStatus["database"] = "unhealthy: " + err.Error()
+			servicesStatus["database"] = "unhealthy"
 			span.SetTag("database.status", "unhealthy")
+			slog.Error("database health check failed", "error", err)
 			sentry.CaptureException(err)
 		} else {
 			servicesStatus["database"] = "healthy"
@@ -140,8 +142,9 @@ func (h *HealthHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	// Check Redis
 	if h.redis != nil {
 		if err := h.redis.HealthCheck(ctx); err != nil {
-			servicesStatus["redis"] = "unhealthy: " + err.Error()
+			servicesStatus["redis"] = "unhealthy"
 			span.SetTag("redis.status", "unhealthy")
+			slog.Error("redis health check failed", "error", err)
 			sentry.CaptureException(err)
 		} else {
 			servicesStatus["redis"] = "healthy"
@@ -155,8 +158,9 @@ func (h *HealthHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	// Check CCXT Service
 	var ccxtStatus string
 	if err := h.checkCCXTService(); err != nil {
-		ccxtStatus = "unhealthy: " + err.Error()
+		ccxtStatus = "unhealthy"
 		span.SetTag("ccxt.status", "unhealthy")
+		slog.Error("ccxt service health check failed", "error", err)
 		sentry.CaptureException(err)
 	} else {
 		ccxtStatus = "healthy"
