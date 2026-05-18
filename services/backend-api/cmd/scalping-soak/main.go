@@ -193,7 +193,7 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 		if value, ok := decimalValueFromMap(report.ActionSplit, "hold"); ok {
 			holdRatio = value
 		}
-		if err := validateMaxDecimalGate("max-hold-ratio", "action_split.hold", holdRatio, options.MaxHoldRatio); err != nil {
+		if err := validateMaxRatioGate("max-hold-ratio", "action_split.hold", holdRatio, options.MaxHoldRatio); err != nil {
 			return err
 		}
 	}
@@ -258,6 +258,26 @@ func validateMaxDecimalGate(flagName string, metricName string, actual decimal.D
 	}
 	if maximum.IsNegative() {
 		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
+	}
+	if actual.GreaterThan(maximum) {
+		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, actual.String(), maximum.String())
+	}
+	return nil
+}
+
+func validateMaxRatioGate(flagName string, metricName string, actual decimal.Decimal, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := decimal.NewFromString(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --%s value %q: %w", flagName, rawMaximum, err)
+	}
+	if maximum.IsNegative() {
+		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
+	}
+	if maximum.GreaterThan(decimal.NewFromInt(1)) {
+		return fmt.Errorf("invalid --%s value %q: must be at most 1", flagName, rawMaximum)
 	}
 	if actual.GreaterThan(maximum) {
 		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, actual.String(), maximum.String())

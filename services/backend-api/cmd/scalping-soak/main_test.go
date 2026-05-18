@@ -146,6 +146,11 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			options: acceptanceGateOptions{MaxHoldRatio: "-0.1"},
 			wantErr: `invalid --max-hold-ratio value "-0.1": must be zero or greater`,
 		},
+		{
+			name:    "rejects max hold ratio above one",
+			options: acceptanceGateOptions{MaxHoldRatio: "74.5"},
+			wantErr: `invalid --max-hold-ratio value "74.5": must be at most 1`,
+		},
 	}
 
 	for _, tt := range tests {
