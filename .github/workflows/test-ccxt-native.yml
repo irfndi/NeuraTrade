@@ -1,7 +1,6 @@
-# CCXT Native Tests - Skipped until rewritten
-# The native CCXT implementation is verified working in production
-# Unit tests need to be rewritten to use nativeClient instead of client
-name: CCXT Native Tests (DISABLED)
+# Lightweight native smoke tests for operational scripts that do not need
+# external exchange credentials or long-running backend services.
+name: Lightweight Native Tests
 permissions:
   contents: read
 on: push
@@ -12,5 +11,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Skip CCXT tests
-        run: echo "CCXT unit tests need rewrite for nativeClient. Integration tests pass."
+      - name: Run script tests
+        run: make test-scripts
