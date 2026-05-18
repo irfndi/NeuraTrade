@@ -30,6 +30,32 @@ func (m *scalpingGateBalanceOnlyCCXT) FetchBalance(ctx context.Context, exchange
 	return m.balance, nil
 }
 
+type scalpingStateDriftCCXT struct {
+	balance    *ccxt.BalanceResponse
+	positions  []ccxt.Position
+	openOrders []ccxt.Order
+}
+
+func (m *scalpingStateDriftCCXT) FetchBalance(ctx context.Context, exchange string) (*ccxt.BalanceResponse, error) {
+	return m.balance, nil
+}
+
+func (m *scalpingStateDriftCCXT) FetchPositions(ctx context.Context, exchange string) (*ccxt.PositionsResponse, error) {
+	return &ccxt.PositionsResponse{
+		Exchange:  exchange,
+		Positions: append([]ccxt.Position(nil), m.positions...),
+		Count:     len(m.positions),
+	}, nil
+}
+
+func (m *scalpingStateDriftCCXT) FetchOpenOrders(ctx context.Context, exchange string) (*ccxt.OpenOrdersResponse, error) {
+	return &ccxt.OpenOrdersResponse{
+		Exchange: exchange,
+		Orders:   append([]ccxt.Order(nil), m.openOrders...),
+		Count:    len(m.openOrders),
+	}, nil
+}
+
 // TestIntegratedQuestHandlers_MarketScanWithTA tests market scanning with TA
 func TestIntegratedQuestHandlers_MarketScanWithTA(t *testing.T) {
 	mockNotif := &NotificationService{}
@@ -535,6 +561,69 @@ func TestIntegratedQuestHandlers_RecordsTelemetryWhenStateDriftGatesScalping(t *
 	assert.Equal(t, "state_drift_gate", gateBlockCode)
 	assert.Contains(t, gateBlockReason, "state drift")
 	assert.Equal(t, "bitget", exchange)
+}
+
+func TestIntegratedQuestHandlers_StateDriftGateRequiresTwoCleanPassesToUnlock(t *testing.T) {
+	t.Setenv("NEURATRADE_DRIFT_CLEAR_CONSECUTIVE_PASSES", "2")
+	ctx := context.Background()
+	store := newLifecycleStoreForTest(t)
+	require.NoError(t, store.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+		OrderID:    "drift-entry-1",
+		ChatID:     "chat-1",
+		Exchange:   "bitget",
+		Symbol:     "ADA/USDT",
+		Side:       "buy",
+		OrderType:  "market",
+		MarketType: "futures",
+		Amount:     decimal.NewFromFloat(2),
+		EntryPrice: decimal.NewFromFloat(1),
+		OpenedAt:   time.Now().UTC().Add(-2 * time.Minute),
+	}))
+
+	ccxtSvc := &scalpingStateDriftCCXT{}
+	handlers := &IntegratedQuestHandlers{
+		ccxtService:    ccxtSvc,
+		lifecycleStore: store,
+	}
+	quest := &Quest{Checkpoint: map[string]interface{}{}}
+
+	state, err := handlers.refreshStateDriftGate(ctx, quest, "chat-1", "bitget")
+	require.NoError(t, err)
+	assert.True(t, state.Active)
+	assert.Equal(t, 1, state.DriftPositions)
+	assert.Equal(t, 0, state.CleanPasses)
+	assert.True(t, checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_state_drift"]))
+	require.NotEmpty(t, checkpointStringSlice(quest.Checkpoint["state_drift_stale_position_ids"]))
+
+	ccxtSvc.positions = []ccxt.Position{
+		{
+			Symbol:        "ADA/USDT",
+			Side:          "long",
+			Size:          decimal.NewFromFloat(2),
+			EntryPrice:    decimal.NewFromFloat(1),
+			MarkPrice:     decimal.NewFromFloat(1.01),
+			UnrealizedPnl: decimal.NewFromFloat(0.02),
+			Timestamp:     ccxt.UnixTimestamp(time.Now().UTC()),
+		},
+	}
+
+	state, err = handlers.refreshStateDriftGate(ctx, quest, "chat-1", "bitget")
+	require.NoError(t, err)
+	assert.True(t, state.Active)
+	assert.Equal(t, 0, state.DriftPositions)
+	assert.Equal(t, 1, state.CleanPasses)
+	assert.True(t, checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_state_drift"]))
+	assert.Contains(t, checkpointString(quest.Checkpoint["runtime_entry_gate_reason"]), "1/2 clean reconciliation")
+
+	state, err = handlers.refreshStateDriftGate(ctx, quest, "chat-1", "bitget")
+	require.NoError(t, err)
+	assert.False(t, state.Active)
+	assert.Equal(t, 0, state.DriftPositions)
+	assert.Equal(t, 2, state.CleanPasses)
+	assert.False(t, checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_state_drift"]))
+	_, stillBlocked := quest.Checkpoint["runtime_entry_blocked_by_state_drift"]
+	assert.False(t, stillBlocked)
+	assert.NotEmpty(t, checkpointString(quest.Checkpoint["state_drift_last_clean_reconcile_at"]))
 }
 
 func TestIntegratedQuestHandlers_RecordsTelemetryWhenAIScalpingUnavailable(t *testing.T) {
@@ -1595,6 +1684,34 @@ func TestHoldDigestSummary_TableDriven(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestStateDriftDigestRuntimeStatusAndDetails(t *testing.T) {
+	t.Setenv("NEURATRADE_DRIFT_CLEAR_CONSECUTIVE_PASSES", "2")
+
+	assert.Equal(t, runtimeStatusStateDrift, stateDriftDigestRuntimeStatus(nil))
+
+	activeCheckpoint := map[string]interface{}{
+		"state_drift_positions":          2,
+		"state_drift_clean_passes":       0,
+		"state_drift_stale_position_ids": []interface{}{"pos-a", "pos-b"},
+	}
+	assert.Equal(t, runtimeStatusStateDrift, stateDriftDigestRuntimeStatus(activeCheckpoint))
+	activeDetails := stateDriftRuntimeDetailsFromCheckpoint(activeCheckpoint)
+	assert.Equal(t, "2", activeDetails["drift_positions"])
+	assert.Equal(t, "0", activeDetails["clean_passes_current"])
+	assert.Equal(t, "2", activeDetails["clean_passes_required"])
+	assert.Equal(t, "pos-a,pos-b", activeDetails["stale_position_ids"])
+
+	reconcileCheckpoint := map[string]interface{}{
+		"state_drift_positions":    0,
+		"state_drift_clean_passes": 1,
+	}
+	assert.Equal(t, runtimeStatusReconcileBlocked, stateDriftDigestRuntimeStatus(reconcileCheckpoint))
+	reconcileDetails := stateDriftRuntimeDetailsFromCheckpoint(reconcileCheckpoint)
+	assert.Equal(t, "0", reconcileDetails["drift_positions"])
+	assert.Equal(t, "1", reconcileDetails["clean_passes_current"])
+	assert.Equal(t, "2", reconcileDetails["clean_passes_required"])
 }
 
 func TestNormalizeAINotificationSemantics_RuntimeStatusPreservesConfidence(t *testing.T) {
