@@ -136,9 +136,18 @@ max_drawdown_pct="$(jq_number '.result.report.trade_summary.max_drawdown_pct')"
 signal_quality_coverage="$(jq_number '.result.report.signal_quality.coverage')"
 hold_ratio="$(jq -er '(.result.report.action_split.hold // "0") | tonumber' "$artifact")"
 ai_provider_degraded_cycles="$(jq_number '.result.report.ai_provider_degradation.degraded_cycles')"
-delta_win_rate="$(jq_number '.result.report.baseline_comparison.delta_win_rate')"
-delta_net_pnl="$(jq_number '.result.report.baseline_comparison.delta_net_pnl')"
-delta_avg_pnl="$(jq_number '.result.report.baseline_comparison.delta_avg_pnl_per_trade')"
+delta_win_rate=""
+delta_net_pnl=""
+delta_avg_pnl=""
+if [ -n "$MIN_BASELINE_WIN_RATE_DELTA" ]; then
+  delta_win_rate="$(jq_number '.result.report.baseline_comparison.delta_win_rate')"
+fi
+if [ -n "$MIN_BASELINE_NET_PNL_DELTA" ]; then
+  delta_net_pnl="$(jq_number '.result.report.baseline_comparison.delta_net_pnl')"
+fi
+if [ -n "$MIN_BASELINE_AVG_PNL_DELTA" ]; then
+  delta_avg_pnl="$(jq_number '.result.report.baseline_comparison.delta_avg_pnl_per_trade')"
+fi
 
 validate_min_decimal "closed_trades" "$closed_trades" "$MIN_TRADES"
 validate_min_decimal "win_rate" "$win_rate" "$MIN_WIN_RATE"

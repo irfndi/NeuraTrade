@@ -113,6 +113,24 @@ if ! grep -q "invalid MAX_HOLD_RATIO=74.5: must be at most 1" "$negative_output"
   exit 1
 fi
 
+no_baseline_artifact="${tmp_dir}/no-baseline-comparison.json"
+jq 'del(.result.report.baseline_comparison)' "$artifact_path" >"$no_baseline_artifact"
+if "$VERIFIER" "$no_baseline_artifact" >"$negative_output" 2>&1; then
+  echo "expected verifier to fail without baseline_comparison when baseline gates use defaults" >&2
+  exit 1
+fi
+
+if ! grep -q "baseline_comparison.delta_win_rate" "$negative_output"; then
+  echo "negative verifier output did not mention missing baseline delta" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
+MIN_BASELINE_WIN_RATE_DELTA= \
+  MIN_BASELINE_NET_PNL_DELTA= \
+  MIN_BASELINE_AVG_PNL_DELTA= \
+  "$VERIFIER" "$no_baseline_artifact" >"${tmp_dir}/no-baseline-disabled.out"
+
 missing_gross_artifact="${tmp_dir}/missing-gross-pnl.json"
 jq 'del(.result.report.trade_summary.gross_pnl)' "$artifact_path" >"$missing_gross_artifact"
 if "$VERIFIER" "$missing_gross_artifact" >"$negative_output" 2>&1; then
