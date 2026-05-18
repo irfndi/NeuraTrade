@@ -49,6 +49,9 @@ jq -n --arg db_path "$db_path" '{
         buy: "0.5",
         hold: "0.5"
       },
+      regime_split: {
+        neutral: "1"
+      },
       signal_quality: {
         known_cycles: 2,
         coverage: "1",
@@ -128,6 +131,19 @@ fi
 
 if ! grep -q "db_path is required for persisted SQLite evidence" "$negative_output"; then
   echo "negative verifier output did not mention required db_path" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
+missing_regime_artifact="${tmp_dir}/missing-regime-split.json"
+jq 'del(.result.report.regime_split)' "$artifact_path" >"$missing_regime_artifact"
+if "$VERIFIER" "$missing_regime_artifact" >"$negative_output" 2>&1; then
+  echo "expected verifier to fail when regime_split is missing" >&2
+  exit 1
+fi
+
+if ! grep -q "action/regime split" "$negative_output"; then
+  echo "negative verifier output did not mention required regime split" >&2
   cat "$negative_output" >&2
   exit 1
 fi
