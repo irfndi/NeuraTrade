@@ -1678,6 +1678,9 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 }
 
 func (e *QuestEngine) resolveBeginAutonomousMode(chatID string, quest *Quest) OperationalMode {
+	if mode, ok := runtimeModeOverrideFromEnv(); ok {
+		return mode
+	}
 	if e != nil && e.opModeService != nil {
 		switch mode := e.opModeService.GetMode(chatID); mode {
 		case OpModeLive:

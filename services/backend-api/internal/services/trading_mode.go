@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,13 @@ const (
 	ModeModerate     OperationalMode = "moderate"
 	ModeAggressive   OperationalMode = "aggressive"
 	ModePaper        OperationalMode = "paper"
+)
+
+const (
+	envFeaturesPaperTrading = "FEATURES_PAPER_TRADING"
+	envFeaturePaperTrading  = "FEATURE_PAPER_TRADING"
+	envFeaturesRealTrading  = "FEATURES_REAL_TRADING"
+	envFeatureRealTrading   = "FEATURE_REAL_TRADING"
 )
 
 // OperationalModeState represents the current operational mode state
@@ -48,6 +57,50 @@ func DefaultOperationalModeConfig() OperationalModeConfig {
 		RequireConfirmation: true,
 		ConfirmationCount:   2, // Require 2 confirmations to switch to live mode
 	}
+}
+
+func runtimeModeOverrideFromEnv() (OperationalMode, bool) {
+	paperEnabled, paperSet := boolEnvAny(true, envFeaturesPaperTrading, envFeaturePaperTrading)
+	realEnabled, realSet := boolEnvAny(false, envFeaturesRealTrading, envFeatureRealTrading)
+	if paperSet && paperEnabled && (!realSet || !realEnabled) {
+		return ModePaper, true
+	}
+	if realSet && !realEnabled {
+		return OpModeDry, true
+	}
+	return "", false
+}
+
+// boolEnvAny treats unrecognized present values as explicit false so typoed
+// safety gates cannot silently preserve a persisted live mode. When aliases
+// conflict, preferSafeTrue selects the value that keeps execution non-live.
+func boolEnvAny(preferSafeTrue bool, names ...string) (bool, bool) {
+	seenTrue := false
+	seenFalse := false
+	for _, name := range names {
+		raw, ok := os.LookupEnv(name)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "1", "true", "yes", "on":
+			seenTrue = true
+		case "0", "false", "no", "off":
+			seenFalse = true
+		default:
+			seenFalse = true
+		}
+	}
+	if seenTrue && seenFalse {
+		return preferSafeTrue, true
+	}
+	if seenTrue {
+		return true, true
+	}
+	if seenFalse {
+		return false, true
+	}
+	return false, false
 }
 
 // OperationalModeService manages the operational mode state
