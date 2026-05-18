@@ -142,7 +142,7 @@ func RunPublicScalpingLivePaperSoak(
 		Exchange: exchange,
 		Cycles:   cycles,
 	}
-	var report ScalpingSoakReport
+	historicalSignals := make([]HistoricalSignal, 0, cycles*defaults.MaxPairsToAnalyze)
 
 	for cycle := 0; cycle < cycles; cycle++ {
 		if cycle > 0 && interval > 0 {
@@ -153,40 +153,45 @@ func RunPublicScalpingLivePaperSoak(
 			}
 		}
 
-		result, fees, err := runPublicScalpingLivePaperSoakCycle(ctx, svc, defaults, exchange, initialCapital, feeRate)
+		signals, err := gatherPublicScalpingLivePaperSoakSignals(ctx, svc, exchange)
 		if err != nil {
 			return nil, err
 		}
-		soak.LastBacktestResult = result
-		soak.LastRejectionByReason = result.Summary.RejectionByReason
-		soak.LastGateSummary = result.GateSummary
-		soak.TotalSignals += result.Summary.TotalSignals
-		soak.EligibleSignals += result.Summary.EligibleSignals
-		soak.TotalTrades += result.Summary.TotalTrades
-		soak.WinningTrades += result.Summary.WinningTrades
-		soak.LosingTrades += result.Summary.LosingTrades
-		soak.Fees = soak.Fees.Add(fees)
-		soak.NetPnL = soak.NetPnL.Add(result.Summary.TotalPnL)
+		historicalSignals = append(historicalSignals, signals...)
+	}
 
-		persisted, err := PersistScalpingPaperBacktestSoakReport(ctx, db, result, ScalpingPaperSoakPersistenceOptions{
-			ChatID:      chatID,
-			Exchange:    exchange,
-			Baseline:    options.Baseline,
-			OrderPrefix: orderPrefix,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("persist live paper scalping soak cycle %d: %w", cycle+1, err)
-		}
-		report = persisted
-		if report.TotalCycles != soak.TotalSignals {
-			return nil, fmt.Errorf("persisted cycle mismatch after cycle %d: got %d want %d", cycle+1, report.TotalCycles, soak.TotalSignals)
-		}
-		if report.TradeSummary.ClosedTrades != soak.TotalTrades {
-			return nil, fmt.Errorf("persisted trade mismatch after cycle %d: got %d want %d", cycle+1, report.TradeSummary.ClosedTrades, soak.TotalTrades)
-		}
-		if !report.TradeSummary.NetPnL.Round(8).Equal(soak.NetPnL.Round(8)) {
-			return nil, fmt.Errorf("persisted net pnl mismatch after cycle %d: got %s want %s", cycle+1, report.TradeSummary.NetPnL.String(), soak.NetPnL.String())
-		}
+	result, fees, err := runPublicScalpingLivePaperSoakSignals(ctx, defaults, exchange, initialCapital, feeRate, historicalSignals)
+	if err != nil {
+		return nil, err
+	}
+	soak.LastBacktestResult = result
+	soak.LastRejectionByReason = result.Summary.RejectionByReason
+	soak.LastGateSummary = result.GateSummary
+	soak.TotalSignals = result.Summary.TotalSignals
+	soak.EligibleSignals = result.Summary.EligibleSignals
+	soak.TotalTrades = result.Summary.TotalTrades
+	soak.WinningTrades = result.Summary.WinningTrades
+	soak.LosingTrades = result.Summary.LosingTrades
+	soak.Fees = fees
+	soak.NetPnL = result.Summary.TotalPnL
+
+	report, err := PersistScalpingPaperBacktestSoakReport(ctx, db, result, ScalpingPaperSoakPersistenceOptions{
+		ChatID:      chatID,
+		Exchange:    exchange,
+		Baseline:    options.Baseline,
+		OrderPrefix: orderPrefix,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("persist live paper scalping soak: %w", err)
+	}
+	if report.TotalCycles != soak.TotalSignals {
+		return nil, fmt.Errorf("persisted cycle mismatch: got %d want %d", report.TotalCycles, soak.TotalSignals)
+	}
+	if report.TradeSummary.ClosedTrades != soak.TotalTrades {
+		return nil, fmt.Errorf("persisted trade mismatch: got %d want %d", report.TradeSummary.ClosedTrades, soak.TotalTrades)
+	}
+	if !report.TradeSummary.NetPnL.Round(8).Equal(soak.NetPnL.Round(8)) {
+		return nil, fmt.Errorf("persisted net pnl mismatch: got %s want %s", report.TradeSummary.NetPnL.String(), soak.NetPnL.String())
 	}
 
 	soak.Report = report
@@ -205,18 +210,28 @@ func runPublicScalpingLivePaperSoakCycle(
 	initialCapital decimal.Decimal,
 	feeRate decimal.Decimal,
 ) (*ScalpingBacktestResult, decimal.Decimal, error) {
+	historicalSignals, err := gatherPublicScalpingLivePaperSoakSignals(ctx, svc, exchange)
+	if err != nil {
+		return nil, decimal.Zero, err
+	}
+	return runPublicScalpingLivePaperSoakSignals(ctx, defaults, exchange, initialCapital, feeRate, historicalSignals)
+}
+
+func gatherPublicScalpingLivePaperSoakSignals(
+	ctx context.Context,
+	svc *AIScalpingService,
+	exchange string,
+) ([]HistoricalSignal, error) {
 	signals, err := svc.gatherMarketSignals(ctx)
 	if err != nil {
-		return nil, decimal.Zero, fmt.Errorf("gather live scalping market signals: %w", err)
+		return nil, fmt.Errorf("gather live scalping market signals: %w", err)
 	}
 	if len(signals) == 0 {
-		return nil, decimal.Zero, fmt.Errorf("live paper scalping soak gathered no market signals")
+		return nil, fmt.Errorf("live paper scalping soak gathered no market signals")
 	}
 	now := time.Now().UTC()
 	historicalSignals := make([]HistoricalSignal, 0, len(signals))
-	symbols := make([]string, 0, len(signals))
 	for i, signal := range signals {
-		symbols = append(symbols, signal.Symbol)
 		historicalSignals = append(historicalSignals, HistoricalSignal{
 			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
 			Symbol:    signal.Symbol,
@@ -224,10 +239,43 @@ func runPublicScalpingLivePaperSoakCycle(
 			Signal:    signal,
 		})
 	}
+	return historicalSignals, nil
+}
+
+func runPublicScalpingLivePaperSoakSignals(
+	ctx context.Context,
+	defaults AIScalpingConfig,
+	exchange string,
+	initialCapital decimal.Decimal,
+	feeRate decimal.Decimal,
+	historicalSignals []HistoricalSignal,
+) (*ScalpingBacktestResult, decimal.Decimal, error) {
+	if len(historicalSignals) == 0 {
+		return nil, decimal.Zero, fmt.Errorf("live paper scalping soak gathered no market signals")
+	}
+	symbols := make([]string, 0, len(historicalSignals))
+	seenSymbols := make(map[string]struct{}, len(historicalSignals))
+	startTime := historicalSignals[0].Timestamp
+	endTime := historicalSignals[0].Timestamp
+	for _, signal := range historicalSignals {
+		key := normalizeSymbolForComparison(signal.Symbol)
+		if key != "" {
+			if _, exists := seenSymbols[key]; !exists {
+				seenSymbols[key] = struct{}{}
+				symbols = append(symbols, signal.Symbol)
+			}
+		}
+		if signal.Timestamp.Before(startTime) {
+			startTime = signal.Timestamp
+		}
+		if signal.Timestamp.After(endTime) {
+			endTime = signal.Timestamp
+		}
+	}
 
 	engine := NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
-		StartTime:          now.Add(-time.Second),
-		EndTime:            now.Add(time.Second),
+		StartTime:          startTime.Add(-time.Second),
+		EndTime:            endTime.Add(time.Second),
 		Symbols:            symbols,
 		Exchange:           exchange,
 		InitialCapital:     initialCapital,

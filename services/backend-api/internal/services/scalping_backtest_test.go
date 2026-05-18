@@ -447,11 +447,13 @@ func TestScalpingBacktestEngine_RunSignalsProducesPaperTradeMetrics(t *testing.T
 	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
 		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
 		runSignalsTestSignal(now.Add(30*time.Second), "BBB/USDT", 50, -0.45, 65),
+		runSignalsTestSignal(now.Add(60*time.Second), "AAA/USDT", 102, 0.50, 35),
+		runSignalsTestSignal(now.Add(90*time.Second), "BBB/USDT", 49, -0.45, 65),
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, 2, result.Summary.TotalSignals)
-	require.Equal(t, 2, result.Summary.EligibleSignals)
+	require.Equal(t, 4, result.Summary.TotalSignals)
+	require.Equal(t, 4, result.Summary.EligibleSignals)
 	require.Equal(t, 2, result.Summary.TotalTrades)
 	require.Equal(t, 2, result.Summary.WinningTrades)
 	require.Empty(t, result.Summary.RejectionByReason)
@@ -481,11 +483,26 @@ func TestScalpingBacktestEngine_RunSignalsAllowsMomentumContinuationSell(t *test
 			RangePosition24h:   50,
 			PriceChange24h:     -0.8,
 		},
+	}, {
+		Timestamp: now.Add(30 * time.Second),
+		Symbol:    "WIF/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "WIF/USDT",
+			Price:              1.23,
+			High24h:            1.50,
+			Low24h:             1.00,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.06,
+			OrderBookImbalance: -0.23,
+			RangePosition24h:   50,
+			PriceChange24h:     -0.8,
+		},
 	}})
 
 	require.NoError(t, err)
-	require.Equal(t, 1, result.Summary.TotalSignals)
-	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 2, result.Summary.TotalSignals)
+	require.Equal(t, 2, result.Summary.EligibleSignals)
 	require.Equal(t, 1, result.Summary.TotalTrades)
 	require.Empty(t, result.Summary.RejectionByReason)
 	require.Len(t, result.Trades, 1)
@@ -513,14 +530,45 @@ func TestScalpingBacktestEngine_RunSignalsAllowsBufferedMidRangeBuy(t *testing.T
 			RangePosition24h:   48,
 			PriceChange24h:     -0.8,
 		},
+	}, {
+		Timestamp: now.Add(30 * time.Second),
+		Symbol:    "FARTCOIN/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "FARTCOIN/USDT",
+			Price:              1.28,
+			High24h:            1.50,
+			Low24h:             1.00,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.07,
+			OrderBookImbalance: 0.15,
+			RangePosition24h:   48,
+			PriceChange24h:     -0.8,
+		},
 	}})
 
 	require.NoError(t, err)
-	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 2, result.Summary.EligibleSignals)
 	require.Equal(t, 1, result.Summary.TotalTrades)
 	require.Len(t, result.Trades, 1)
 	require.Equal(t, "buy", result.Trades[0].Side)
 	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
+func TestScalpingBacktestEngine_RunSignalsDoesNotCloseSingleSignalAtSyntheticProfit(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 49, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Summary.TotalSignals)
+	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Empty(t, result.Trades)
+	require.True(t, result.Summary.TotalPnL.IsZero())
 }
 
 func TestScalpingBacktestEngine_RunSignalsSortsInputsChronologically(t *testing.T) {

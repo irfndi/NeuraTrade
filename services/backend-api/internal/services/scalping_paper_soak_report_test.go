@@ -24,7 +24,9 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	result, err := engine.RunSignals(ctx, []HistoricalSignal{
 		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
 		runSignalsTestSignal(now.Add(30*time.Second), "BBB/USDT", 50, -0.45, 65),
-		runSignalsTestSignal(now.Add(60*time.Second), "CCC/USDT", 25, 0.01, 50),
+		runSignalsTestSignal(now.Add(60*time.Second), "AAA/USDT", 102, 0.50, 35),
+		runSignalsTestSignal(now.Add(90*time.Second), "BBB/USDT", 49, -0.45, 65),
+		runSignalsTestSignal(now.Add(120*time.Second), "CCC/USDT", 25, 0.01, 50),
 	})
 	require.NoError(t, err)
 	require.Equal(t, 2, result.Summary.TotalTrades)
@@ -57,7 +59,7 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	require.Equal(t, result.Summary.LosingTrades, report.TradeSummary.Losses)
 	require.Equal(t, 1, report.ActionBreakdown["buy"])
 	require.Equal(t, 1, report.ActionBreakdown["sell"])
-	require.Equal(t, 1, report.ActionBreakdown["hold"])
+	require.Equal(t, 3, report.ActionBreakdown["hold"])
 	require.Equal(t, 1, report.RejectionByReason[rejectionReason])
 	require.NotContains(t, report.RejectionByReason, "")
 	require.True(t, report.SignalQuality.Coverage.Equal(decimal.NewFromInt(1)))

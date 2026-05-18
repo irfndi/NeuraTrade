@@ -80,8 +80,9 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 	require.Equal(t, "BTC/USDT", result.PaperTrade.Symbol)
 	require.Equal(t, "buy", result.PaperTrade.Side)
 	require.True(t, result.PaperTrade.Fees.GreaterThan(decimal.Zero))
-	require.True(t, result.PaperTrade.NetPnL.GreaterThan(decimal.Zero))
-	require.Equal(t, "win", result.PaperTrade.Outcome)
+	require.True(t, result.PaperTrade.NetPnL.LessThan(decimal.Zero))
+	require.Equal(t, "loss", result.PaperTrade.Outcome)
+	require.Equal(t, "mark_to_market", result.PaperTrade.ExitReason)
 }
 
 func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpreadReasoning(t *testing.T) {

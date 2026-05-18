@@ -184,6 +184,8 @@ type SimulatedPosition struct {
 	Notional    decimal.Decimal
 	EntryPrice  decimal.Decimal
 	EntryTime   time.Time
+	StopLoss    decimal.Decimal
+	TakeProfit  decimal.Decimal
 	RegimeEntry string
 	Signal      MarketSignal
 	Decision    *AITradingDecision
@@ -282,6 +284,14 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("run scalping backtest signals: %w", err)
 		}
+		positionKey := simulatedPositionKey(signal.Exchange, signal.Symbol)
+		if position, ok := e.positions[positionKey]; ok && signal.Timestamp.After(position.EntryTime) {
+			trade := e.closeSimulatedPosition(signal, position)
+			e.tradeHistory = append(e.tradeHistory, trade)
+			e.capital = e.capital.Add(trade.PnL)
+			delete(e.positions, positionKey)
+		}
+
 		evaluation, evalErr := e.evaluateSignal(ctx, signal)
 		if evalErr != nil {
 			return nil, fmt.Errorf("evaluate scalping backtest signal: %w", evalErr)
@@ -307,12 +317,14 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("run scalping backtest signals: %w", err)
 		}
-		trade, simErr := e.simulateExecution(ctx, signal, evaluation.Decision)
+		if _, exists := e.positions[positionKey]; exists {
+			continue
+		}
+		position, simErr := e.openSimulatedPosition(ctx, signal, evaluation.Decision)
 		if simErr != nil {
 			return nil, fmt.Errorf("simulate execution for %s at %s: %w", signal.Symbol, signal.Timestamp.Format(time.RFC3339), simErr)
 		}
-		e.tradeHistory = append(e.tradeHistory, trade.Trade)
-		e.capital = e.capital.Add(trade.Trade.PnL)
+		e.positions[positionKey] = position
 	}
 
 	result := &ScalpingBacktestResult{
@@ -425,7 +437,7 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 	return eval, nil
 }
 
-func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal HistoricalSignal, decision *AITradingDecision) (*SimulatedTrade, error) {
+func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, signal HistoricalSignal, decision *AITradingDecision) (*SimulatedPosition, error) {
 	_ = ctx
 	if decision == nil {
 		return nil, fmt.Errorf("decision is nil")
@@ -496,72 +508,97 @@ func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal H
 		Notional:    notional,
 		EntryPrice:  entryPrice,
 		EntryTime:   signal.Timestamp,
+		StopLoss:    *stopLoss,
+		TakeProfit:  *takeProfit,
 		RegimeEntry: e.classifyRegime(signal.Signal),
 		Signal:      signal.Signal,
 		Decision:    decision,
 	}
 
-	edgeScore := decision.Confidence - 0.50
-	edgeScore += math.Abs(signal.Signal.OrderBookImbalance) * 0.50
-	if e.config.MaxBidAskSpreadPct > 0 {
-		edgeScore -= (signal.Signal.BidAskSpread / e.config.MaxBidAskSpreadPct) * 0.25
-	}
-	if strings.EqualFold(position.RegimeEntry, "chop") {
-		edgeScore -= 0.15
-	}
-	win := edgeScore >= 0
+	return position, nil
+}
 
-	exitPrice := *stopLoss
-	exitReason := "stop_loss"
-	if win {
-		exitPrice = *takeProfit
-		exitReason = "take_profit"
+func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal HistoricalSignal, decision *AITradingDecision) (*SimulatedTrade, error) {
+	position, err := e.openSimulatedPosition(ctx, signal, decision)
+	if err != nil {
+		return nil, err
 	}
-	if decision.Action == "buy" {
+	exitSignal := signal
+	holdFor := e.config.DefaultHoldPeriod
+	if holdFor <= 0 {
+		holdFor = DefaultScalpingBacktestHoldPeriod
+	}
+	exitSignal.Timestamp = signal.Timestamp.Add(holdFor)
+	return &SimulatedTrade{Trade: e.closeSimulatedPosition(exitSignal, position)}, nil
+}
+
+func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal, position *SimulatedPosition) ScalpingBacktestTrade {
+	markPrice := decimal.NewFromFloat(signal.Signal.Price)
+	exitPrice := markPrice
+	exitReason := "mark_to_market"
+	switch strings.ToLower(strings.TrimSpace(position.Side)) {
+	case "buy":
+		if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.TakeProfit) {
+			exitPrice = position.TakeProfit
+			exitReason = "take_profit"
+		} else if position.StopLoss.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.StopLoss) {
+			exitPrice = position.StopLoss
+			exitReason = "stop_loss"
+		}
+	case "sell":
+		if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.TakeProfit) {
+			exitPrice = position.TakeProfit
+			exitReason = "take_profit"
+		} else if position.StopLoss.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.StopLoss) {
+			exitPrice = position.StopLoss
+			exitReason = "stop_loss"
+		}
+	}
+
+	one := decimal.NewFromInt(1)
+	slippage := e.config.SlippagePct
+	if strings.EqualFold(position.Side, "buy") {
 		exitPrice = exitPrice.Mul(one.Sub(slippage))
 	} else {
 		exitPrice = exitPrice.Mul(one.Add(slippage))
 	}
 
 	var grossPnL decimal.Decimal
-	if decision.Action == "buy" {
-		grossPnL = exitPrice.Sub(entryPrice).Mul(quantity)
+	if strings.EqualFold(position.Side, "buy") {
+		grossPnL = exitPrice.Sub(position.EntryPrice).Mul(position.Size)
 	} else {
-		grossPnL = entryPrice.Sub(exitPrice).Mul(quantity)
+		grossPnL = position.EntryPrice.Sub(exitPrice).Mul(position.Size)
 	}
 
-	fees := notional.Mul(e.config.FeeRate).Mul(decimal.NewFromInt(2))
+	fees := position.Notional.Mul(e.config.FeeRate).Mul(decimal.NewFromInt(2))
 	netPnL := grossPnL.Sub(fees)
 	pnlPct := decimal.Zero
-	if !notional.IsZero() {
-		pnlPct = netPnL.Div(notional).Mul(decimal.NewFromInt(100))
+	if !position.Notional.IsZero() {
+		pnlPct = netPnL.Div(position.Notional).Mul(decimal.NewFromInt(100))
 	}
 
-	holdFor := e.config.DefaultHoldPeriod
-	if holdFor <= 0 {
-		holdFor = DefaultScalpingBacktestHoldPeriod
-	}
-
-	trade := ScalpingBacktestTrade{
-		Symbol:        signal.Symbol,
+	return ScalpingBacktestTrade{
+		Symbol:        position.Symbol,
 		Exchange:      signal.Exchange,
-		Side:          decision.Action,
-		Size:          quantity,
-		Notional:      notional,
-		EntryPrice:    entryPrice,
+		Side:          position.Side,
+		Size:          position.Size,
+		Notional:      position.Notional,
+		EntryPrice:    position.EntryPrice,
 		ExitPrice:     exitPrice,
-		EntryTime:     signal.Timestamp,
-		ExitTime:      signal.Timestamp.Add(holdFor),
+		EntryTime:     position.EntryTime,
+		ExitTime:      signal.Timestamp,
 		PnL:           netPnL,
 		PnLPct:        pnlPct,
 		Fees:          fees,
 		Outcome:       outcomeFromPnL(netPnL),
 		ExitReason:    exitReason,
 		RegimeAtEntry: position.RegimeEntry,
-		RegimeAtExit:  position.RegimeEntry,
+		RegimeAtExit:  e.classifyRegime(signal.Signal),
 	}
+}
 
-	return &SimulatedTrade{Trade: trade}, nil
+func simulatedPositionKey(exchange, symbol string) string {
+	return strings.ToLower(strings.TrimSpace(exchange)) + "|" + normalizeSymbolForComparison(symbol)
 }
 
 func (e *ScalpingBacktestEngine) classifyRegime(signal MarketSignal) string {
