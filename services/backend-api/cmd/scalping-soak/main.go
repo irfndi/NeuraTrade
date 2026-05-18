@@ -230,7 +230,7 @@ func validateMaxIntGate(flagName string, metricName string, actual int, rawMaxim
 		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
 	}
 	if actual > maximum {
-		return fmt.Errorf("acceptance gate failed: %s=%d above maximum=%d", metricName, actual, maximum)
+		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, strconv.Itoa(actual), strconv.Itoa(maximum))
 	}
 	return nil
 }

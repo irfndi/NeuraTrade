@@ -94,7 +94,7 @@ func TestValidateAcceptanceGates(t *testing.T) {
 		{
 			name:    "fails AI provider degraded cycles",
 			options: acceptanceGateOptions{MaxAIDegradedCycles: "0"},
-			wantErr: "ai_provider_degraded_cycles=1 above maximum=0",
+			wantErr: `ai_provider_degraded_cycles="1" above maximum="0"`,
 		},
 		{
 			name:    "rejects invalid AI provider degraded cycle threshold",
