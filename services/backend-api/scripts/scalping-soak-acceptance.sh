@@ -180,6 +180,7 @@ write_manifest() {
         total_cycles: $report.total_cycles,
         action_split: $report.action_split,
         regime_split: $report.regime_split,
+        rejection_by_reason: $report.rejection_by_reason,
         gate_block_by_code: $report.gate_block_by_code,
         signal_quality: $report.signal_quality,
         trade_summary: $report.trade_summary,

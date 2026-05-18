@@ -62,6 +62,7 @@ jq -n --arg db_path "$SOAK_DB_PATH" '{
       total_cycles: 2,
       action_split: {buy: "0.5", hold: "0.5"},
       regime_split: {neutral: "1"},
+      rejection_by_reason: {no_directional_edge: 1},
       gate_block_by_code: {},
       signal_quality: {
         coverage: "1",
@@ -182,6 +183,7 @@ jq -e \
     and .evidence.db_path == $db_path
     and .evidence.log_file == $log_file
     and .gates.max_hold_ratio == "0.745"
+    and .report.rejection_by_reason.no_directional_edge == 1
     and .report.trade_summary.closed_trades == 1
     and .report.insufficient_trade_proof == false' \
   "$manifest_path" >/dev/null
@@ -222,6 +224,7 @@ jq -e \
     and .evidence.db_path == $db_path
     and .evidence.log_file == $log_file
     and .gates.max_hold_ratio == "0.745"
+    and .report.rejection_by_reason.no_directional_edge == 1
     and .report.trade_summary.closed_trades == 1
     and .report.insufficient_trade_proof == false' \
   "$default_manifest_path" >/dev/null
