@@ -181,7 +181,7 @@ min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_
       rm -f "$raw_output" "$artifact_tmp"
       fail "jq is required to write clean SOAK_OUTPUT_FILE artifacts"
     fi
-    if ! jq -s 'map(select(.db_path? != null and .result? != null)) | if length == 1 then .[0] else error("expected exactly one soak result JSON document, got \(length)") end' "$raw_output" > "$artifact_tmp"; then
+    if ! jq -s 'map(select(.db_path? != null and .result? != null)) | if length == 1 then .[0] else error("expected exactly one soak result JSON document, got \(length)") end' "$raw_output" >"$artifact_tmp"; then
       rm -f "$raw_output" "$artifact_tmp"
       fail "failed to extract clean soak result artifact from stdout"
     fi
