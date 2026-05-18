@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { BackendApiClient } from "../api/client";
+import { logger } from "../utils/logger";
 
 export function registerSettingsCommands(
   bot: Bot,
@@ -38,8 +39,8 @@ export function registerSettingsCommands(
 
     try {
       await api.setNotificationPreference(String(userId), false);
-    } catch {
-      // Silently ignore errors to match original behavior
+    } catch (error) {
+      logger.warn("Settings operation failed", { error, userId });
     }
 
     const msg =
@@ -59,8 +60,8 @@ export function registerSettingsCommands(
 
     try {
       await api.setNotificationPreference(String(userId), true);
-    } catch {
-      // Silently ignore errors to match original behavior
+    } catch (error) {
+      logger.warn("Settings operation failed", { error, userId });
     }
 
     const msg =

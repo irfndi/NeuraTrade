@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/irfndi/neuratrade/internal/utils"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var (
@@ -263,6 +265,13 @@ func (s *APIKeyService) DeactivateAPIKey(ctx context.Context, userID, keyID stri
 }
 
 func isDuplicateKeyError(err error) bool {
-	return err != nil && (err.Error() == "pq: duplicate key value violates unique constraint \"unique_user_exchange_key\"" ||
-		err.Error() == "UNIQUE constraint failed: exchange_api_keys.user_id, exchange_api_keys.exchange_name, exchange_api_keys.key_name")
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return true
+	}
+	// SQLite unique constraint violation
+	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed:") {
+		return true
+	}
+	return false
 }

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -88,9 +89,9 @@ func (h *ExchangeHandler) GetExchangeConfig(c *gin.Context) {
 	// Cache miss or error, fetch from service
 	config, err := h.ccxtService.GetExchangeConfig(c.Request.Context())
 	if err != nil {
+		slog.Error("failed to get exchange configuration", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to get exchange configuration",
-			"message": err.Error(),
+			"error": "Failed to get exchange configuration",
 		})
 		return
 	}
@@ -122,9 +123,9 @@ func (h *ExchangeHandler) AddExchangeToBlacklist(c *gin.Context) {
 
 	response, err := h.ccxtService.AddExchangeToBlacklist(c.Request.Context(), exchange)
 	if err != nil {
+		slog.Error("failed to add exchange to blacklist", "exchange", exchange, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to add exchange to blacklist",
-			"message": err.Error(),
+			"error": "Failed to add exchange to blacklist",
 		})
 		return
 	}
@@ -165,9 +166,9 @@ func (h *ExchangeHandler) RemoveExchangeFromBlacklist(c *gin.Context) {
 
 	response, err := h.ccxtService.RemoveExchangeFromBlacklist(c.Request.Context(), exchange)
 	if err != nil {
+		slog.Error("failed to remove exchange from blacklist", "exchange", exchange, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to remove exchange from blacklist",
-			"message": err.Error(),
+			"error": "Failed to remove exchange from blacklist",
 		})
 		return
 	}
@@ -199,9 +200,9 @@ func (h *ExchangeHandler) RemoveExchangeFromBlacklist(c *gin.Context) {
 func (h *ExchangeHandler) RefreshExchanges(c *gin.Context) {
 	response, err := h.ccxtService.RefreshExchanges(c.Request.Context())
 	if err != nil {
+		slog.Error("failed to refresh exchanges", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to refresh exchanges",
-			"message": err.Error(),
+			"error": "Failed to refresh exchanges",
 		})
 		return
 	}
@@ -211,9 +212,9 @@ func (h *ExchangeHandler) RefreshExchanges(c *gin.Context) {
 		// Stop and restart the entire collector service
 		h.collectorService.Stop()
 		if err := h.collectorService.Start(); err != nil {
+			slog.Error("failed to restart collector service after refresh", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "Failed to restart collector service",
-				"message": err.Error(),
+				"error": "Failed to restart collector service",
 			})
 			return
 		}
@@ -246,9 +247,9 @@ func (h *ExchangeHandler) AddExchange(c *gin.Context) {
 
 	response, err := h.ccxtService.AddExchange(c.Request.Context(), exchange)
 	if err != nil {
+		slog.Error("failed to add exchange", "exchange", exchange, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to add exchange",
-			"message": err.Error(),
+			"error": "Failed to add exchange",
 		})
 		return
 	}
@@ -257,9 +258,9 @@ func (h *ExchangeHandler) AddExchange(c *gin.Context) {
 	if h.collectorService != nil {
 		h.collectorService.Stop()
 		if err := h.collectorService.Start(); err != nil {
+			slog.Error("failed to restart collector service after adding exchange", "exchange", exchange, "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "Failed to restart collector service",
-				"message": err.Error(),
+				"error": "Failed to restart collector service",
 			})
 			return
 		}
@@ -360,9 +361,9 @@ func (h *ExchangeHandler) RestartWorker(c *gin.Context) {
 	}
 
 	if err := h.collectorService.RestartWorker(exchange); err != nil {
+		slog.Error("failed to restart worker", "exchange", exchange, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to restart worker",
-			"message": err.Error(),
+			"error": "Failed to restart worker",
 		})
 		return
 	}

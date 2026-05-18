@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import type { BackendApiClient } from "../api/client";
 import { splitIntoTelegramMessages } from "../utils";
+import { logger } from "../utils/logger";
 
 const ALERT_TYPES = [
   { type: "arbitrage", label: "Arbitrage Opportunities", emoji: "📈" },
@@ -71,7 +72,8 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
       for (const chunk of splitIntoTelegramMessages(msg)) {
         await ctx.reply(chunk);
       }
-    } catch {
+    } catch (error) {
+      logger.warn("Alert operation failed", { error, userId });
       await ctx.reply("Unable to fetch alerts. Please try again.");
     }
   });
@@ -109,7 +111,8 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
         `Use /alerts to view all your alerts.`;
 
       await ctx.reply(msg);
-    } catch {
+    } catch (error) {
+      logger.warn("Alert operation failed", { error, userId });
       await ctx.reply("Failed to create alert. Please try again.");
     }
   });
@@ -138,7 +141,11 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
       const status = !alert.is_active ? "enabled" : "disabled";
 
       await ctx.reply(`✅ Alert ${status}.`);
-    } catch {
+    } catch (error) {
+      logger.warn("Alert operation failed", {
+        error,
+        userId: String(ctx.from?.id),
+      });
       await ctx.reply("Failed to update alert. Please try again.");
     }
   });
@@ -166,7 +173,11 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
       await api.deleteAlert(alert.id);
 
       await ctx.reply("✅ Alert deleted.");
-    } catch {
+    } catch (error) {
+      logger.warn("Alert operation failed", {
+        error,
+        userId: String(ctx.from?.id),
+      });
       await ctx.reply("Failed to delete alert. Please try again.");
     }
   });

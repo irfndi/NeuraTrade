@@ -654,7 +654,7 @@ func (h *ScalpingBacktestHandler) persistBacktestResult(ctx context.Context, run
 		return fmt.Errorf("begin transaction for run %s: %w", runID, err)
 	}
 	defer func() {
-		_ = tx.Rollback(context.Background())
+		_ = tx.Rollback(ctx)
 	}()
 
 	completedAt := time.Now().UTC()

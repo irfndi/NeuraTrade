@@ -30,7 +30,7 @@ func TestWebSocketHandler_ClientConnectionCleanup(t *testing.T) {
 	goroutinesBefore := getGoroutineCount()
 
 	// Create WebSocket handler
-	handler := handlers.NewWebSocketHandler(nil)
+	handler := handlers.NewWebSocketHandler(nil, nil)
 
 	// Create test HTTP server
 	gin.SetMode(gin.TestMode)
@@ -104,7 +104,7 @@ func TestWebSocketHandler_BroadcastChannelCleanup(t *testing.T) {
 	forceGC()
 	goroutinesBefore := getGoroutineCount()
 
-	handler := handlers.NewWebSocketHandler(nil)
+	handler := handlers.NewWebSocketHandler(nil, nil)
 
 	// Send multiple broadcast messages
 	for i := 0; i < 100; i++ {
@@ -137,7 +137,7 @@ func TestWebSocketHandler_ContextCancellation(t *testing.T) {
 	goroutinesBefore := getGoroutineCount()
 
 	// Create handler with context
-	handler := handlers.NewWebSocketHandler(nil)
+	handler := handlers.NewWebSocketHandler(nil, nil)
 
 	// Simulate some activity
 	msg := handlers.MarketDataMessage{

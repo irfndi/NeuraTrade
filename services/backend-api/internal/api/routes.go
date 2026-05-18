@@ -440,7 +440,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redisClientRaw)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
-	webSocketHandler := handlers.NewWebSocketHandler(redis)
+	wsOrigins := []string{"http://localhost", "https://localhost"}
+	if o := getEnvOrDefault("NEURATRADE_WS_ALLOWED_ORIGINS", ""); o != "" {
+		wsOrigins = strings.Split(o, ",")
+		for i := range wsOrigins {
+			wsOrigins[i] = strings.TrimSpace(wsOrigins[i])
+		}
+	}
+	webSocketHandler := handlers.NewWebSocketHandler(redis, wsOrigins)
 
 	// AI handler - uses registry from ai package
 	aiRegistry := ai.NewRegistry(

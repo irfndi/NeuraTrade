@@ -33,7 +33,7 @@ export function registerOpportunitiesCommand(
       await ctx.reply(formatOpportunitiesMessage(response.opportunities));
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to fetch opportunities. Please try again later. (${(error as Error).message})`,
+        `❌ Failed to fetch opportunities. Please try again later. (${error instanceof Error ? error.message : String(error)})`,
       );
     }
   });

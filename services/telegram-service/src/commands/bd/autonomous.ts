@@ -43,7 +43,7 @@ export function registerAutonomousCommands(
       );
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to start autonomous mode (${(error as Error).message}).\nRun /doctor and try again.`,
+        `❌ Failed to start autonomous mode (${error instanceof Error ? error.message : String(error)}).\nRun /doctor and try again.`,
       );
     }
   });
@@ -66,7 +66,7 @@ export function registerAutonomousCommands(
       );
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to pause autonomous mode (${(error as Error).message}).`,
+        `❌ Failed to pause autonomous mode (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
