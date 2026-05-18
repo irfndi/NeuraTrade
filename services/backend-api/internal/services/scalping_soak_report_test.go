@@ -185,6 +185,47 @@ func TestBuildScalpingSoakReportUsesPnLSignAndSparseAverageDenominators(t *testi
 	require.True(t, report.SignalQuality.AvgAbsOrderBookImbalance.Round(6).Equal(decimal.NewFromFloat(0.5)))
 }
 
+func TestBuildScalpingSoakReportCountsFirstTradeLossAsDrawdown(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-soak-report-first-loss.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sqliteDB.Close())
+	})
+
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 13, 1, 0, 0, 0, time.UTC)
+	insertSoakClosedTrade(t, ctx, lifecycleStore, telemetryStore, now, CycleRecord{
+		ID:                  "cycle-first-loss",
+		ChatID:              "chat-1",
+		Exchange:            "bitget",
+		OrderID:             "ord-first-loss",
+		CycleAt:             now,
+		Symbol:              "BTC/USDT",
+		Action:              "buy",
+		Regime:              "neutral",
+		BidAskSpreadPct:     floatPtr(0.02),
+		RejectionCountsJSON: `{}`,
+	}, decimal.NewFromFloat(-0.03), decimal.NewFromFloat(-0.01), "loss", "-0.04", 60)
+
+	baseline := BrokenScalpingBaseline()
+	report, err := BuildScalpingSoakReport(ctx, sqliteDB, ScalpingSoakReportFilter{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+		Since:    now.Add(-time.Minute),
+		Until:    now.Add(time.Minute),
+		Baseline: &baseline,
+	})
+	require.NoError(t, err)
+
+	require.True(t, report.TradeSummary.MaxDrawdown.Round(6).Equal(decimal.NewFromFloat(0.04)))
+	require.True(t, report.TradeSummary.MaxDrawdownPct.Round(6).Equal(decimal.NewFromFloat(0.000833)))
+}
+
 func TestScalpingSoakReport_RunAgainstRuntimeSQLite(t *testing.T) {
 	sqliteDB, _ := prepareRuntimeSQLiteBacktest(t)
 

@@ -19,10 +19,14 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 CAPITAL="${CAPITAL:-48}"
 FEE_RATE="${FEE_RATE:-0.0006}"
 REQUIRE_TRADES="${REQUIRE_TRADES:-true}"
-MIN_TRADES="${MIN_TRADES:-1}"
-MIN_WIN_RATE="${MIN_WIN_RATE:-0.123}"
-MIN_NET_PNL="${MIN_NET_PNL:-0}"
-MIN_AVG_NET_PNL="${MIN_AVG_NET_PNL:-0}"
+MIN_TRADES="${MIN_TRADES-1}"
+MIN_WIN_RATE="${MIN_WIN_RATE-0.123}"
+MIN_NET_PNL="${MIN_NET_PNL-0}"
+MIN_AVG_NET_PNL="${MIN_AVG_NET_PNL-0}"
+MIN_SIGNAL_QUALITY_COVERAGE="${MIN_SIGNAL_QUALITY_COVERAGE-1}"
+MAX_DRAWDOWN="${MAX_DRAWDOWN-}"
+MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT-0.01}"
+MAX_AI_PROVIDER_DEGRADED_CYCLES="${MAX_AI_PROVIDER_DEGRADED_CYCLES-0}"
 SOAK_CHAT_ID="${SOAK_CHAT_ID:-operator-scalping-soak}"
 SOAK_ORDER_PREFIX="${SOAK_ORDER_PREFIX:-operator-scalping-soak}"
 SOAK_DB_PATH="${SOAK_DB_PATH:-${NEURATRADE_HOME}/data/scalping-soak.db}"
@@ -66,6 +70,10 @@ Environment:
   MIN_WIN_RATE    Minimum win rate required as decimal; empty disables (default: ${MIN_WIN_RATE})
   MIN_NET_PNL     Minimum net PnL required; empty disables (default: ${MIN_NET_PNL})
   MIN_AVG_NET_PNL Minimum avg net PnL per trade required; empty disables (default: ${MIN_AVG_NET_PNL})
+  MIN_SIGNAL_QUALITY_COVERAGE Minimum signal quality coverage; empty disables (default: ${MIN_SIGNAL_QUALITY_COVERAGE})
+  MAX_DRAWDOWN    Maximum absolute drawdown; empty disables (default: ${MAX_DRAWDOWN:-disabled})
+  MAX_DRAWDOWN_PCT Maximum drawdown as fraction of baseline balance; empty disables (default: ${MAX_DRAWDOWN_PCT})
+  MAX_AI_PROVIDER_DEGRADED_CYCLES Maximum AI provider degraded cycles; empty disables (default: ${MAX_AI_PROVIDER_DEGRADED_CYCLES})
   SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
   SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
 
@@ -112,6 +120,18 @@ run_soak() {
   if [ -n "$MIN_AVG_NET_PNL" ]; then
     args+=("--min-avg-net-pnl" "$MIN_AVG_NET_PNL")
   fi
+  if [ -n "$MIN_SIGNAL_QUALITY_COVERAGE" ]; then
+    args+=("--min-signal-quality-coverage" "$MIN_SIGNAL_QUALITY_COVERAGE")
+  fi
+  if [ -n "$MAX_DRAWDOWN" ]; then
+    args+=("--max-drawdown" "$MAX_DRAWDOWN")
+  fi
+  if [ -n "$MAX_DRAWDOWN_PCT" ]; then
+    args+=("--max-drawdown-pct" "$MAX_DRAWDOWN_PCT")
+  fi
+  if [ -n "$MAX_AI_PROVIDER_DEGRADED_CYCLES" ]; then
+    args+=("--max-ai-provider-degraded-cycles" "$MAX_AI_PROVIDER_DEGRADED_CYCLES")
+  fi
   if [ "$TIMEOUT_SECONDS" != "0" ]; then
     args+=("--timeout-seconds" "$TIMEOUT_SECONDS")
   fi
@@ -119,7 +139,10 @@ run_soak() {
     args+=("--require-trades")
   fi
 
-  log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled}"
+  log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} \
+min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
+min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
+max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled}"
   "$SOAK_BIN" "${args[@]}" | tee -a "$LOG_FILE"
   log "${GREEN}[OK]${NC} scalping paper soak complete"
 }
