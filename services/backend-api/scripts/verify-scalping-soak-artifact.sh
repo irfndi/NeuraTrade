@@ -106,8 +106,8 @@ require_binary awk
 
 doc_count="$(jq -s 'length' "$artifact")"
 [ "$doc_count" = "1" ] || fail "expected exactly one JSON document, got ${doc_count}"
-jq -e '.db_path? != null and .result.report? != null' "$artifact" >/dev/null ||
-  fail "artifact must contain db_path and result.report"
+jq -e '.db_path? != null and .result.report? != null' "$artifact" >/dev/null \
+  || fail "artifact must contain db_path and result.report"
 
 closed_trades="$(jq_number '.result.report.trade_summary.closed_trades')"
 wins="$(jq_number '.result.report.trade_summary.wins')"
@@ -157,16 +157,16 @@ if [ -n "$db_path" ]; then
   missing_quality_rows="$(sqlite3 "$db_path" "select count(*) from scalping_cycle_telemetry where bid_ask_spread_pct is null or order_book_imbalance is null or range_position_24h is null or price_change_24h_pct is null;")"
   total_cycles="$(jq_number '.result.report.total_cycles')"
 
-  [ "$telemetry_rows" -eq "$total_cycles" ] ||
-    fail "scalping_cycle_telemetry rows=${telemetry_rows} does not match total_cycles=${total_cycles}"
-  [ "$realized_rows" -eq "$closed_trades" ] ||
-    fail "realized_pnl_journal rows=${realized_rows} does not match closed_trades=${closed_trades}"
-  [ "$positive_realized" -eq "$wins" ] ||
-    fail "positive realized rows=${positive_realized} does not match wins=${wins}"
-  [ "$negative_realized" -eq "$losses" ] ||
-    fail "negative realized rows=${negative_realized} does not match losses=${losses}"
-  [ "$missing_quality_rows" -eq 0 ] ||
-    fail "scalping_cycle_telemetry has ${missing_quality_rows} rows missing signal-quality fields"
+  [ "$telemetry_rows" -eq "$total_cycles" ] \
+    || fail "scalping_cycle_telemetry rows=${telemetry_rows} does not match total_cycles=${total_cycles}"
+  [ "$realized_rows" -eq "$closed_trades" ] \
+    || fail "realized_pnl_journal rows=${realized_rows} does not match closed_trades=${closed_trades}"
+  [ "$positive_realized" -eq "$wins" ] \
+    || fail "positive realized rows=${positive_realized} does not match wins=${wins}"
+  [ "$negative_realized" -eq "$losses" ] \
+    || fail "negative realized rows=${negative_realized} does not match losses=${losses}"
+  [ "$missing_quality_rows" -eq 0 ] \
+    || fail "scalping_cycle_telemetry has ${missing_quality_rows} rows missing signal-quality fields"
 fi
 
 cat <<SUMMARY
