@@ -1984,7 +1984,6 @@ Return JSON only:
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
-	signals = s.focusActionableMarketSignals(ctx, signals, portfolio)
 	signals = s.signalsWithDecisionHints(ctx, signals, portfolio)
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
 	walletBalance := walletBasis(portfolio)

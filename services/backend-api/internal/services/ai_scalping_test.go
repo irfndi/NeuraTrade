@@ -938,6 +938,56 @@ func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testin
 	assert.NotContains(t, prompt, "Phase Max Capital % (reference only)")
 }
 
+func TestAIScalpingService_BuildUserPrompt_PreservesFullSignalUniverse(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.04,
+			PriceChange24h:     0.1,
+			RangePosition24h:   50,
+		},
+		{
+			Symbol:             "SOL/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+
+	prompt := svc.buildUserPrompt(context.Background(), signals, TradingPortfolio{
+		EffectiveMinConfidence: 0.55,
+		EffectiveMaxCapitalPct: 5,
+	})
+
+	assert.Contains(t, prompt, `"symbol": "BTC/USDT"`)
+	assert.Contains(t, prompt, `"symbol": "ETH/USDT"`)
+	assert.Contains(t, prompt, `"symbol": "SOL/USDT"`)
+	assert.Contains(t, prompt, `"suggested_action": "buy"`)
+	assert.Contains(t, prompt, `"confidence_hint":`)
+}
+
 func TestAIScalpingService_BuildUserPrompt_SurfacesWalletBasisFallback(t *testing.T) {
 	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
 	prompt := svc.buildUserPrompt(context.Background(), nil, TradingPortfolio{
