@@ -95,12 +95,12 @@ validate_ratio_override() {
   local label="$1"
   local value="$2"
   [ -z "$value" ] && return
-  jq -en --arg value "$value" '$value | tonumber' >/dev/null ||
-    fail "invalid ${label}=${value}: must be numeric"
-  decimal_gte "$value" "0" ||
-    fail "invalid ${label}=${value}: must be zero or greater"
-  decimal_lte "$value" "1" ||
-    fail "invalid ${label}=${value}: must be at most 1"
+  jq -en --arg value "$value" '$value | tonumber' >/dev/null \
+    || fail "invalid ${label}=${value}: must be numeric"
+  decimal_gte "$value" "0" \
+    || fail "invalid ${label}=${value}: must be zero or greater"
+  decimal_lte "$value" "1" \
+    || fail "invalid ${label}=${value}: must be at most 1"
 }
 
 artifact="${1:-}"
