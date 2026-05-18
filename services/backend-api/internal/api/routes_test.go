@@ -970,6 +970,20 @@ func TestResolveProviderNodeUsesCentralProviderEnvNames(t *testing.T) {
 	assert.Equal(t, "claude-sonnet-4-20250514", defaultNode.DefaultModel)
 }
 
+func TestResolveProviderNodeProviderEnvOverridesGenericPrimaryConfig(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "provider-key")
+	t.Setenv("DEEPSEEK_BASE_URL", "https://deepseek.example/v1")
+	t.Setenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+	node := resolveProviderNode("deepseek", "stale-generic-key", "https://stale.example/v1", "deepseek")
+
+	assert.Equal(t, "deepseek", node.Provider)
+	assert.Equal(t, "provider-key", node.APIKey)
+	assert.Equal(t, "https://deepseek.example/v1", node.BaseURL)
+	assert.Equal(t, "deepseek-chat", node.ModelOverride)
+	assert.Empty(t, node.DefaultModel)
+}
+
 func TestProviderRequiresAPIKeyUsesProviderDefaults(t *testing.T) {
 	assert.False(t, providerRequiresAPIKey("mlx"))
 	assert.True(t, providerRequiresAPIKey("deepseek"))

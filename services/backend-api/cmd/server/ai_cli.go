@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai"
+	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
@@ -26,10 +30,20 @@ func runAICLI() error {
 		return fmt.Errorf("missing command")
 	}
 
+	command := os.Args[2]
+	args := os.Args[3:]
+
 	ctx := context.Background()
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if command == "probe" {
+		return probeAIProvider(ctx, cfg.AI, args, os.Stdout)
+	}
+	if command == "scalping-probe" {
+		return probeAIScalpingDecision(ctx, cfg.AI, args, os.Stdout)
 	}
 
 	logrusLogger := zaplogrus.New()
@@ -50,9 +64,6 @@ func runAICLI() error {
 		ai.WithRedis(redisClient),
 		ai.WithLogger(zap.NewNop()),
 	)
-
-	command := os.Args[2]
-	args := os.Args[3:]
 
 	switch command {
 	case "models":
@@ -91,12 +102,16 @@ func printAIUsage() {
 	fmt.Println("  route          Route to best model for task")
 	fmt.Println("  capabilities   List models by capabilities")
 	fmt.Println("  status         Show registry status")
+	fmt.Println("  probe          Send a tiny live completion to configured provider(s)")
+	fmt.Println("  scalping-probe Exercise the live scalping LLM decision contract without orders")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  neuratrade ai models --provider openai")
 	fmt.Println("  neuratrade ai search gpt-4")
 	fmt.Println("  neuratrade ai show gpt-4-turbo")
 	fmt.Println("  neuratrade ai capabilities --tools --vision")
+	fmt.Println("  neuratrade ai probe --provider zai --json")
+	fmt.Println("  neuratrade ai scalping-probe --provider deepseek --json")
 }
 
 func listModels(ctx context.Context, registry *ai.Registry, args []string) error {
@@ -460,6 +475,817 @@ func showStatus(ctx context.Context, registry *ai.Registry, args []string) error
 	fmt.Printf("Reasoning Capable: %d\n", reasoningCapable)
 
 	return nil
+}
+
+type aiProviderProbeOptions struct {
+	Provider        string
+	Model           string
+	BaseURL         string
+	Prompt          string
+	Expect          string
+	OutputJSON      bool
+	Timeout         time.Duration
+	MaxRetries      int
+	MaxTokens       int
+	FailoverMaxHops int
+}
+
+type aiProviderProbeNode struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"-"`
+}
+
+type aiProviderProbeResult struct {
+	OK                  bool             `json:"ok"`
+	Provider            string           `json:"provider,omitempty"`
+	Model               string           `json:"model,omitempty"`
+	BaseURL             string           `json:"base_url,omitempty"`
+	LatencyMs           int64            `json:"latency_ms,omitempty"`
+	Usage               llm.UsageMetrics `json:"usage,omitempty"`
+	FinishReason        string           `json:"finish_reason,omitempty"`
+	ContentPreview      string           `json:"content_preview,omitempty"`
+	ExpectedContent     string           `json:"expected_content,omitempty"`
+	ResponseMatched     bool             `json:"response_matched"`
+	ConfiguredProviders []string         `json:"configured_providers"`
+	UsableProviders     []string         `json:"usable_providers"`
+	SkippedProviders    []string         `json:"skipped_providers,omitempty"`
+	AttemptedProviders  []string         `json:"attempted_providers,omitempty"`
+	FailedProviders     []string         `json:"failed_providers,omitempty"`
+	FailoverAttempted   bool             `json:"failover_attempted,omitempty"`
+	FailoverSucceeded   bool             `json:"failover_succeeded,omitempty"`
+	Error               string           `json:"error,omitempty"`
+}
+
+type aiScalpingDecisionProbeOptions struct {
+	Provider              string
+	Model                 string
+	BaseURL               string
+	OutputJSON            bool
+	Timeout               time.Duration
+	MaxRetries            int
+	FailoverMaxHops       int
+	Exchange              string
+	Cycles                int
+	Interval              time.Duration
+	Capital               decimal.Decimal
+	RequireHealthy        bool
+	RequireValid          bool
+	MinSignalQuality      decimal.Decimal
+	MinPaperTrades        int
+	MinPaperNetPnL        decimal.Decimal
+	RequirePaperNetPnL    bool
+	MinPaperAvgNetPnL     decimal.Decimal
+	RequirePaperAvgNetPnL bool
+}
+
+type aiScalpingDecisionProbeSummary struct {
+	Cycles                int                                        `json:"cycles"`
+	CompletedCycles       int                                        `json:"completed_cycles"`
+	TotalSignals          int                                        `json:"total_signals"`
+	SignalQualityCount    int                                        `json:"signal_quality_count"`
+	SignalQualityCoverage decimal.Decimal                            `json:"signal_quality_coverage"`
+	ValidContractCycles   int                                        `json:"valid_contract_cycles"`
+	LLMDegradedCycles     int                                        `json:"llm_degraded_cycles"`
+	PaperTrades           int                                        `json:"paper_trades"`
+	PaperWins             int                                        `json:"paper_wins"`
+	PaperLosses           int                                        `json:"paper_losses"`
+	PaperNetPnL           decimal.Decimal                            `json:"paper_net_pnl"`
+	PaperFees             decimal.Decimal                            `json:"paper_fees"`
+	PaperAvgNetPnL        decimal.Decimal                            `json:"paper_avg_net_pnl"`
+	ActionCounts          map[string]int                             `json:"action_counts"`
+	ProviderCounts        map[string]int                             `json:"provider_counts"`
+	LastResult            *services.ScalpingLLMDecisionProbeResult   `json:"last_result,omitempty"`
+	Results               []*services.ScalpingLLMDecisionProbeResult `json:"results,omitempty"`
+}
+
+func probeAIProvider(ctx context.Context, cfg config.AIConfig, args []string, out io.Writer) error {
+	opts, err := parseAIProviderProbeOptions(args)
+	if err != nil {
+		return err
+	}
+
+	nodes, result, err := buildAIProviderProbeNodes(cfg, opts)
+	if err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		return writeAIProviderProbeFailure(out, opts.OutputJSON, result, err)
+	}
+
+	client, closeFn := buildAIProviderProbeClient(nodes, opts)
+	defer closeFn()
+
+	req := &llm.CompletionRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: "You are a NeuraTrade provider health probe. Reply with the exact token OK."},
+			{Role: llm.RoleUser, Content: opts.Prompt},
+		},
+		MaxTokens: opts.MaxTokens,
+		Metadata:  map[string]string{"purpose": "neuratrade_ai_provider_probe"},
+	}
+	if len(nodes) == 1 {
+		req.Model = nodes[0].Model
+	}
+	if opts.Model != "" {
+		req.Model = opts.Model
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, aiProviderProbeOverallTimeout(nodes, opts))
+	defer cancel()
+
+	resp, err := client.Complete(probeCtx, req)
+	if failover, ok := client.(*llm.FailoverClient); ok {
+		stats := failover.Stats()
+		result.AttemptedProviders = stats.LastAttempt.AttemptedProviders
+		result.FailedProviders = stats.LastAttempt.FailedProviders
+		result.FailoverAttempted = stats.LastAttempt.FailoverAttempted
+		result.FailoverSucceeded = stats.LastAttempt.FailoverSucceeded
+	}
+	if err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		return writeAIProviderProbeFailure(out, opts.OutputJSON, result, fmt.Errorf("ai provider probe failed: %w", err))
+	}
+	if resp == nil {
+		result.OK = false
+		result.Error = "provider returned nil response"
+		return writeAIProviderProbeFailure(out, opts.OutputJSON, result, fmt.Errorf("ai provider probe failed: provider returned nil response"))
+	}
+
+	result.Provider = string(resp.Provider)
+	result.Model = strings.TrimSpace(resp.Model)
+	result.LatencyMs = resp.LatencyMs
+	result.Usage = resp.Usage
+	result.FinishReason = strings.TrimSpace(resp.FinishReason)
+	responseContent := strings.TrimSpace(resp.Message.Content)
+	result.ContentPreview = truncate(responseContent, 120)
+	result.ExpectedContent = opts.Expect
+	result.ResponseMatched = aiProviderProbeResponseMatches(responseContent, opts.Expect)
+	for _, node := range nodes {
+		if node.Provider == result.Provider {
+			result.BaseURL = node.BaseURL
+			break
+		}
+	}
+	if result.BaseURL == "" && len(nodes) > 0 {
+		result.BaseURL = nodes[0].BaseURL
+	}
+
+	if opts.Expect != "" && !result.ResponseMatched {
+		result.OK = false
+		result.Error = fmt.Sprintf("provider response did not match expected content %q", opts.Expect)
+		return writeAIProviderProbeFailure(out, opts.OutputJSON, result, fmt.Errorf("ai provider probe failed: %s", result.Error))
+	}
+
+	result.OK = true
+	return writeAIProviderProbeResult(out, opts.OutputJSON, result)
+}
+
+func probeAIScalpingDecision(ctx context.Context, cfg config.AIConfig, args []string, out io.Writer) error {
+	opts, err := parseAIScalpingDecisionProbeOptions(args)
+	if err != nil {
+		return err
+	}
+	providerOpts := aiProviderProbeOptions{
+		Provider:        opts.Provider,
+		Model:           opts.Model,
+		BaseURL:         opts.BaseURL,
+		Timeout:         opts.Timeout,
+		MaxRetries:      opts.MaxRetries,
+		MaxTokens:       1200,
+		FailoverMaxHops: opts.FailoverMaxHops,
+	}
+	nodes, _, err := buildAIProviderProbeNodes(cfg, providerOpts)
+	if err != nil {
+		return err
+	}
+	client, closeFn := buildAIProviderProbeClient(nodes, providerOpts)
+	defer closeFn()
+
+	model := ""
+	if len(nodes) > 0 {
+		model = nodes[0].Model
+	}
+	portfolio := services.TradingPortfolio{
+		USDTBalance:        opts.Capital.InexactFloat64(),
+		USDTBalanceDecimal: opts.Capital,
+		TotalValue:         opts.Capital.InexactFloat64(),
+		TotalValueDecimal:  opts.Capital,
+		StrategyPhase:      "probe",
+		RecoveryEntryOK:    true,
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, aiScalpingDecisionProbeOverallTimeout(nodes, providerOpts, opts))
+	defer cancel()
+
+	results, runErr := runAIScalpingDecisionProbeCycles(probeCtx, client, opts, model, portfolio)
+	summary := buildAIScalpingDecisionProbeSummary(results, opts.Cycles)
+	if writeErr := writeAIScalpingDecisionProbeSummary(out, opts.OutputJSON, summary); writeErr != nil {
+		if runErr != nil {
+			return errors.Join(runErr, writeErr)
+		}
+		return writeErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	return validateAIScalpingDecisionProbeSummary(summary, opts)
+}
+
+func runAIScalpingDecisionProbeCycles(
+	ctx context.Context,
+	client llm.Client,
+	opts aiScalpingDecisionProbeOptions,
+	model string,
+	portfolio services.TradingPortfolio,
+) ([]*services.ScalpingLLMDecisionProbeResult, error) {
+	results := make([]*services.ScalpingLLMDecisionProbeResult, 0, opts.Cycles)
+	for cycle := 0; cycle < opts.Cycles; cycle++ {
+		if cycle > 0 && opts.Interval > 0 {
+			select {
+			case <-ctx.Done():
+				return results, fmt.Errorf("wait between scalping LLM probe cycles: %w", ctx.Err())
+			case <-time.After(opts.Interval):
+			}
+		}
+		result, err := services.RunPublicScalpingLLMDecisionProbe(ctx, client, services.ScalpingLLMDecisionProbeOptions{
+			Exchange:  opts.Exchange,
+			Model:     model,
+			Portfolio: portfolio,
+		})
+		if result != nil {
+			results = append(results, result)
+		}
+		if err != nil {
+			return results, err
+		}
+	}
+	return results, nil
+}
+
+func buildAIScalpingDecisionProbeSummary(
+	results []*services.ScalpingLLMDecisionProbeResult,
+	requestedCycles int,
+) aiScalpingDecisionProbeSummary {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:          requestedCycles,
+		CompletedCycles: len(results),
+		ActionCounts:    map[string]int{},
+		ProviderCounts:  map[string]int{},
+		Results:         results,
+	}
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		summary.LastResult = result
+		summary.TotalSignals += result.SignalCount
+		summary.SignalQualityCount += result.SignalQualityCount
+		if result.ContractValid {
+			summary.ValidContractCycles++
+		}
+		if result.LLMDegraded {
+			summary.LLMDegradedCycles++
+		}
+		if result.PaperTrade != nil {
+			summary.PaperTrades++
+			summary.PaperNetPnL = summary.PaperNetPnL.Add(result.PaperTrade.NetPnL)
+			summary.PaperFees = summary.PaperFees.Add(result.PaperTrade.Fees)
+			switch strings.ToLower(strings.TrimSpace(result.PaperTrade.Outcome)) {
+			case "win":
+				summary.PaperWins++
+			case "loss":
+				summary.PaperLosses++
+			}
+		}
+		action := "unknown"
+		if result.Decision != nil && strings.TrimSpace(result.Decision.Action) != "" {
+			action = strings.ToLower(strings.TrimSpace(result.Decision.Action))
+		}
+		summary.ActionCounts[action]++
+		if provider := strings.TrimSpace(result.Provider); provider != "" {
+			summary.ProviderCounts[provider]++
+		}
+	}
+	if summary.TotalSignals > 0 {
+		summary.SignalQualityCoverage = decimal.NewFromInt(int64(summary.SignalQualityCount)).Div(decimal.NewFromInt(int64(summary.TotalSignals)))
+	}
+	if summary.PaperTrades > 0 {
+		summary.PaperAvgNetPnL = summary.PaperNetPnL.Div(decimal.NewFromInt(int64(summary.PaperTrades)))
+	}
+	return summary
+}
+
+func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSummary, opts aiScalpingDecisionProbeOptions) error {
+	if summary.CompletedCycles != opts.Cycles {
+		return fmt.Errorf("scalping LLM decision probe completed_cycles=%d below cycles=%d", summary.CompletedCycles, opts.Cycles)
+	}
+	if opts.RequireHealthy && summary.LLMDegradedCycles > 0 {
+		return fmt.Errorf("scalping LLM decision probe degraded_cycles=%d", summary.LLMDegradedCycles)
+	}
+	if opts.RequireValid && summary.ValidContractCycles != opts.Cycles {
+		return fmt.Errorf("scalping LLM decision valid_contract_cycles=%d below cycles=%d", summary.ValidContractCycles, opts.Cycles)
+	}
+	if opts.MinSignalQuality.GreaterThan(decimal.Zero) && summary.SignalQualityCoverage.LessThan(opts.MinSignalQuality) {
+		return fmt.Errorf("signal_quality_coverage=%s below minimum=%s", summary.SignalQualityCoverage.String(), opts.MinSignalQuality.String())
+	}
+	if opts.MinPaperTrades > 0 && summary.PaperTrades < opts.MinPaperTrades {
+		return fmt.Errorf("paper_trades=%d below minimum=%d", summary.PaperTrades, opts.MinPaperTrades)
+	}
+	if opts.RequirePaperNetPnL && summary.PaperNetPnL.LessThan(opts.MinPaperNetPnL) {
+		return fmt.Errorf("paper_net_pnl=%s below minimum=%s", summary.PaperNetPnL.String(), opts.MinPaperNetPnL.String())
+	}
+	if opts.RequirePaperAvgNetPnL && summary.PaperAvgNetPnL.LessThan(opts.MinPaperAvgNetPnL) {
+		return fmt.Errorf("paper_avg_net_pnl=%s below minimum=%s", summary.PaperAvgNetPnL.String(), opts.MinPaperAvgNetPnL.String())
+	}
+	return nil
+}
+
+func parseAIProviderProbeOptions(args []string) (aiProviderProbeOptions, error) {
+	opts := aiProviderProbeOptions{
+		Prompt:          "Reply with OK.",
+		Expect:          "OK",
+		Timeout:         30 * time.Second,
+		MaxRetries:      0,
+		MaxTokens:       8,
+		FailoverMaxHops: 1,
+	}
+
+	fs := flag.NewFlagSet("ai probe", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	timeoutSeconds := fs.Int("timeout-seconds", int(opts.Timeout/time.Second), "completion timeout in seconds")
+	fs.StringVar(&opts.Provider, "provider", "", "provider to probe; defaults to ai.provider and NEURATRADE_AI_PROVIDER_CHAIN")
+	fs.StringVar(&opts.Model, "model", "", "model override for the probe")
+	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
+	fs.StringVar(&opts.Prompt, "prompt", opts.Prompt, "probe prompt")
+	fs.StringVar(&opts.Expect, "expect", opts.Expect, "exact response content expected from the provider; empty disables content validation")
+	fs.BoolVar(&opts.OutputJSON, "json", false, "write JSON output")
+	fs.IntVar(&opts.MaxRetries, "max-retries", opts.MaxRetries, "HTTP retry count")
+	fs.IntVar(&opts.MaxTokens, "max-tokens", opts.MaxTokens, "maximum output tokens")
+	fs.IntVar(&opts.FailoverMaxHops, "failover-max-hops", opts.FailoverMaxHops, "number of fallback providers to try after the primary")
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if fs.NArg() > 0 {
+		return opts, fmt.Errorf("unexpected ai probe arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if timeoutSeconds == nil || *timeoutSeconds <= 0 {
+		return opts, fmt.Errorf("--timeout-seconds must be greater than zero")
+	}
+	if opts.MaxRetries < 0 {
+		return opts, fmt.Errorf("--max-retries must be zero or greater")
+	}
+	if opts.MaxTokens <= 0 {
+		return opts, fmt.Errorf("--max-tokens must be greater than zero")
+	}
+	if opts.FailoverMaxHops < 0 {
+		return opts, fmt.Errorf("--failover-max-hops must be zero or greater")
+	}
+	opts.Timeout = time.Duration(*timeoutSeconds) * time.Second
+	opts.Provider = ai.NormalizeProviderID(opts.Provider)
+	opts.Model = strings.TrimSpace(opts.Model)
+	opts.BaseURL = strings.TrimSpace(opts.BaseURL)
+	opts.Prompt = strings.TrimSpace(opts.Prompt)
+	opts.Expect = strings.TrimSpace(opts.Expect)
+	if opts.Prompt == "" {
+		opts.Prompt = "Reply with OK."
+	}
+	return opts, nil
+}
+
+func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbeOptions, error) {
+	opts := aiScalpingDecisionProbeOptions{
+		Timeout:          60 * time.Second,
+		FailoverMaxHops:  1,
+		Exchange:         "bitget",
+		Cycles:           1,
+		Capital:          decimal.NewFromFloat(48),
+		RequireHealthy:   true,
+		RequireValid:     true,
+		MinSignalQuality: decimal.NewFromInt(1),
+	}
+
+	fs := flag.NewFlagSet("ai scalping-probe", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	timeoutSeconds := fs.Int("timeout-seconds", int(opts.Timeout/time.Second), "completion timeout in seconds")
+	capital := fs.String("capital", opts.Capital.String(), "paper wallet basis in USDT for the prompt")
+	minSignalQuality := fs.String("min-signal-quality", opts.MinSignalQuality.String(), "minimum signal quality coverage required")
+	minPaperNetPnL := fs.String("min-paper-net-pnl", "", "minimum aggregate simulated paper net PnL required; empty disables this gate")
+	minPaperAvgNetPnL := fs.String("min-paper-avg-net-pnl", "", "minimum average simulated paper net PnL per trade required; empty disables this gate")
+	intervalMS := fs.Int("interval-ms", 0, "delay between scalping LLM probe cycles in milliseconds")
+	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
+	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
+	fs.StringVar(&opts.Provider, "provider", "", "provider to probe; defaults to ai.provider and NEURATRADE_AI_PROVIDER_CHAIN")
+	fs.StringVar(&opts.Model, "model", "", "model override for the selected provider")
+	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
+	fs.StringVar(&opts.Exchange, "exchange", opts.Exchange, "public exchange to fetch market/order-book signals from")
+	fs.IntVar(&opts.Cycles, "cycles", opts.Cycles, "number of no-order scalping LLM decision probe cycles")
+	fs.IntVar(&opts.MinPaperTrades, "min-paper-trades", 0, "minimum simulated paper trades required from actionable LLM decisions")
+	fs.BoolVar(&opts.OutputJSON, "json", false, "write JSON output")
+	fs.IntVar(&opts.MaxRetries, "max-retries", 0, "HTTP retry count")
+	fs.IntVar(&opts.FailoverMaxHops, "failover-max-hops", opts.FailoverMaxHops, "number of fallback providers to try after the primary")
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if fs.NArg() > 0 {
+		return opts, fmt.Errorf("unexpected ai scalping-probe arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if timeoutSeconds == nil || *timeoutSeconds <= 0 {
+		return opts, fmt.Errorf("--timeout-seconds must be greater than zero")
+	}
+	if opts.MaxRetries < 0 {
+		return opts, fmt.Errorf("--max-retries must be zero or greater")
+	}
+	if opts.FailoverMaxHops < 0 {
+		return opts, fmt.Errorf("--failover-max-hops must be zero or greater")
+	}
+	if opts.Cycles <= 0 {
+		return opts, fmt.Errorf("--cycles must be greater than zero")
+	}
+	if opts.Cycles > services.MaxScalpingLivePaperSoakCycles {
+		return opts, fmt.Errorf("--cycles must be %d or lower", services.MaxScalpingLivePaperSoakCycles)
+	}
+	if intervalMS == nil || *intervalMS < 0 {
+		return opts, fmt.Errorf("--interval-ms must be zero or greater")
+	}
+	if opts.MinPaperTrades < 0 {
+		return opts, fmt.Errorf("--min-paper-trades must be zero or greater")
+	}
+	parsedCapital, err := decimal.NewFromString(strings.TrimSpace(*capital))
+	if err != nil {
+		return opts, fmt.Errorf("parse --capital: %w", err)
+	}
+	if !parsedCapital.GreaterThan(decimal.Zero) {
+		return opts, fmt.Errorf("--capital must be greater than zero")
+	}
+	parsedSignalQuality, err := decimal.NewFromString(strings.TrimSpace(*minSignalQuality))
+	if err != nil {
+		return opts, fmt.Errorf("parse --min-signal-quality: %w", err)
+	}
+	if parsedSignalQuality.IsNegative() || parsedSignalQuality.GreaterThan(decimal.NewFromInt(1)) {
+		return opts, fmt.Errorf("--min-signal-quality must be between 0 and 1")
+	}
+	parsedPaperNetPnL, requirePaperNetPnL, err := parseOptionalDecimalFlag("min-paper-net-pnl", *minPaperNetPnL)
+	if err != nil {
+		return opts, err
+	}
+	parsedPaperAvgNetPnL, requirePaperAvgNetPnL, err := parseOptionalDecimalFlag("min-paper-avg-net-pnl", *minPaperAvgNetPnL)
+	if err != nil {
+		return opts, err
+	}
+	opts.Timeout = time.Duration(*timeoutSeconds) * time.Second
+	opts.Interval = time.Duration(*intervalMS) * time.Millisecond
+	opts.Capital = parsedCapital
+	opts.MinSignalQuality = parsedSignalQuality
+	opts.MinPaperNetPnL = parsedPaperNetPnL
+	opts.RequirePaperNetPnL = requirePaperNetPnL
+	opts.MinPaperAvgNetPnL = parsedPaperAvgNetPnL
+	opts.RequirePaperAvgNetPnL = requirePaperAvgNetPnL
+	opts.RequireHealthy = !*allowDegraded
+	opts.RequireValid = !*allowInvalidContract
+	opts.Provider = ai.NormalizeProviderID(opts.Provider)
+	opts.Model = strings.TrimSpace(opts.Model)
+	opts.BaseURL = strings.TrimSpace(opts.BaseURL)
+	opts.Exchange = strings.TrimSpace(opts.Exchange)
+	if opts.Exchange == "" {
+		opts.Exchange = "bitget"
+	}
+	return opts, nil
+}
+
+func parseOptionalDecimalFlag(flagName string, rawValue string) (decimal.Decimal, bool, error) {
+	rawValue = strings.TrimSpace(rawValue)
+	if rawValue == "" {
+		return decimal.Zero, false, nil
+	}
+	parsed, err := decimal.NewFromString(rawValue)
+	if err != nil {
+		return decimal.Zero, false, fmt.Errorf("parse --%s: %w", flagName, err)
+	}
+	return parsed, true, nil
+}
+
+func buildAIProviderProbeNodes(cfg config.AIConfig, opts aiProviderProbeOptions) ([]aiProviderProbeNode, aiProviderProbeResult, error) {
+	configuredProviders, err := aiProbeProviderChain(cfg.Provider, opts.Provider)
+	result := aiProviderProbeResult{ConfiguredProviders: configuredProviders}
+	if err != nil {
+		return nil, result, err
+	}
+
+	nodes := make([]aiProviderProbeNode, 0, len(configuredProviders))
+	for i, provider := range configuredProviders {
+		node := resolveAIProviderProbeNode(cfg, opts, provider)
+		if i == 0 && opts.Provider == "" && opts.BaseURL != "" {
+			node.BaseURL = opts.BaseURL
+		}
+		if strings.TrimSpace(node.APIKey) == "" && ai.ProviderRequiresAPIKey(provider) {
+			result.SkippedProviders = append(result.SkippedProviders, provider+": missing API key")
+			continue
+		}
+		if node.Model == "" {
+			result.SkippedProviders = append(result.SkippedProviders, provider+": missing model")
+			continue
+		}
+		if node.BaseURL == "" {
+			result.SkippedProviders = append(result.SkippedProviders, provider+": missing base URL")
+			continue
+		}
+		nodes = append(nodes, node)
+		result.UsableProviders = append(result.UsableProviders, provider)
+	}
+
+	if len(nodes) == 0 {
+		return nil, result, fmt.Errorf("no usable AI provider probe nodes configured")
+	}
+	return nodes, result, nil
+}
+
+func aiProbeProviderChain(primary string, override string) ([]string, error) {
+	if override != "" {
+		if err := validateAIProbeProvider(override); err != nil {
+			return nil, err
+		}
+		return []string{override}, nil
+	}
+
+	primary = ai.NormalizeProviderID(primary)
+	raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_PROVIDER_CHAIN"))
+	parts := []string{}
+	if raw != "" {
+		parts = strings.Split(raw, ",")
+	}
+	if primary == "" && len(parts) == 0 {
+		return nil, fmt.Errorf("ai provider is not configured; set ai.provider, --provider, or NEURATRADE_AI_PROVIDER_CHAIN")
+	}
+
+	seen := map[string]struct{}{}
+	chain := make([]string, 0, len(parts)+1)
+	if primary != "" {
+		if err := validateAIProbeProvider(primary); err != nil {
+			return nil, err
+		}
+		seen[primary] = struct{}{}
+		chain = append(chain, primary)
+	}
+	for _, part := range parts {
+		provider := ai.NormalizeProviderID(part)
+		if provider == "" {
+			continue
+		}
+		if err := validateAIProbeProvider(provider); err != nil {
+			return nil, err
+		}
+		if _, exists := seen[provider]; exists {
+			continue
+		}
+		seen[provider] = struct{}{}
+		chain = append(chain, provider)
+	}
+	return chain, nil
+}
+
+func validateAIProbeProvider(provider string) error {
+	if provider == "" {
+		return fmt.Errorf("provider is required")
+	}
+	if _, ok := ai.ProviderDefaults(provider); ok {
+		return nil
+	}
+	return fmt.Errorf("unsupported ai provider %q", provider)
+}
+
+func resolveAIProviderProbeNode(cfg config.AIConfig, opts aiProviderProbeOptions, provider string) aiProviderProbeNode {
+	node := aiProviderProbeNode{Provider: provider}
+
+	if provider == ai.NormalizeProviderID(cfg.Provider) {
+		node.APIKey = strings.TrimSpace(cfg.APIKey)
+		node.BaseURL = strings.TrimSpace(cfg.BaseURL)
+		node.Model = strings.TrimSpace(cfg.Model)
+	}
+	if opts.Provider == provider {
+		if opts.BaseURL != "" {
+			node.BaseURL = opts.BaseURL
+		}
+	}
+
+	for _, envKey := range ai.ProviderAPIKeyEnvVars(provider) {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.APIKey = value
+			break
+		}
+	}
+	for _, envKey := range ai.ProviderBaseURLEnvVars(provider) {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.BaseURL = value
+			break
+		}
+	}
+	if node.BaseURL == "" {
+		if baseURL, ok := ai.ProviderDefaultBaseURL(provider); ok {
+			node.BaseURL = baseURL
+		}
+	}
+	for _, envKey := range ai.ProviderModelEnvVars(provider) {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.Model = value
+			break
+		}
+	}
+	if node.Model == "" {
+		if model, ok := ai.ProviderDefaultModel(provider); ok {
+			node.Model = model
+		}
+	}
+	if opts.Model != "" {
+		node.Model = opts.Model
+	}
+	return node
+}
+
+func buildAIProviderProbeClient(nodes []aiProviderProbeNode, opts aiProviderProbeOptions) (llm.Client, func()) {
+	if len(nodes) == 1 {
+		client := newAIProviderProbeNodeClient(nodes[0], opts)
+		return client, func() { _ = client.Close() }
+	}
+
+	failoverNodes := make([]llm.FailoverNode, 0, len(nodes))
+	for _, node := range nodes {
+		failoverNodes = append(failoverNodes, llm.FailoverNode{
+			Client:       newAIProviderProbeNodeClient(node, opts),
+			Provider:     llm.Provider(node.Provider),
+			DefaultModel: node.Model,
+		})
+	}
+	client := llm.NewFailoverClient(failoverNodes, opts.FailoverMaxHops)
+	return client, func() { _ = client.Close() }
+}
+
+func aiProviderProbeOverallTimeout(nodes []aiProviderProbeNode, opts aiProviderProbeOptions) time.Duration {
+	attempts := 1
+	if len(nodes) > 1 && opts.FailoverMaxHops > 0 {
+		attempts = len(nodes)
+		if maxAttempts := opts.FailoverMaxHops + 1; maxAttempts < attempts {
+			attempts = maxAttempts
+		}
+	}
+	return time.Duration(attempts) * opts.Timeout
+}
+
+func aiScalpingDecisionProbeOverallTimeout(nodes []aiProviderProbeNode, providerOpts aiProviderProbeOptions, opts aiScalpingDecisionProbeOptions) time.Duration {
+	perCycle := aiProviderProbeOverallTimeout(nodes, providerOpts)
+	total := time.Duration(opts.Cycles) * perCycle
+	if opts.Cycles > 1 {
+		total += time.Duration(opts.Cycles-1) * opts.Interval
+	}
+	return total
+}
+
+func newAIProviderProbeNodeClient(node aiProviderProbeNode, opts aiProviderProbeOptions) llm.Client {
+	cfg := llm.ClientConfig{
+		Provider:    llm.Provider(node.Provider),
+		APIKey:      node.APIKey,
+		BaseURL:     node.BaseURL,
+		HTTPTimeout: opts.Timeout,
+		MaxRetries:  opts.MaxRetries,
+	}
+	if node.Provider == "mlx" {
+		return llm.NewMLXClient(cfg)
+	}
+	if ai.ProviderUsesAnthropicFormat(node.Provider, node.BaseURL) {
+		return llm.NewAnthropicClient(cfg)
+	}
+	return llm.NewOpenAIClient(cfg)
+}
+
+func writeAIProviderProbeFailure(out io.Writer, outputJSON bool, result aiProviderProbeResult, probeErr error) error {
+	if writeErr := writeAIProviderProbeResult(out, outputJSON, result); writeErr != nil {
+		return errors.Join(probeErr, fmt.Errorf("writing probe result: %w", writeErr))
+	}
+	return probeErr
+}
+
+func writeAIProviderProbeResult(out io.Writer, outputJSON bool, result aiProviderProbeResult) error {
+	if outputJSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	writeProbeOutput := func(format string, args ...any) error {
+		if _, err := fmt.Fprintf(out, format, args...); err != nil {
+			return fmt.Errorf("writing probe output: %w", err)
+		}
+		return nil
+	}
+	if result.OK {
+		if err := writeProbeOutput("AI provider probe succeeded\n"); err != nil {
+			return err
+		}
+		if err := writeProbeOutput("Provider: %s\n", result.Provider); err != nil {
+			return err
+		}
+		if err := writeProbeOutput("Model: %s\n", result.Model); err != nil {
+			return err
+		}
+		if err := writeProbeOutput("Base URL: %s\n", result.BaseURL); err != nil {
+			return err
+		}
+		if err := writeProbeOutput("Latency: %d ms\n", result.LatencyMs); err != nil {
+			return err
+		}
+		if err := writeProbeOutput("Usage: input=%d output=%d total=%d\n", result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.TotalTokens); err != nil {
+			return err
+		}
+		if result.ExpectedContent != "" {
+			if err := writeProbeOutput("Expected: %s\n", result.ExpectedContent); err != nil {
+				return err
+			}
+			if err := writeProbeOutput("Response matched: %t\n", result.ResponseMatched); err != nil {
+				return err
+			}
+		}
+		if result.ContentPreview != "" {
+			if err := writeProbeOutput("Content: %s\n", result.ContentPreview); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := writeProbeOutput("AI provider probe failed\n"); err != nil {
+		return err
+	}
+	if result.Error != "" {
+		if err := writeProbeOutput("Error: %s\n", result.Error); err != nil {
+			return err
+		}
+	}
+	if result.ContentPreview != "" {
+		if err := writeProbeOutput("Content: %s\n", result.ContentPreview); err != nil {
+			return err
+		}
+	}
+	if len(result.SkippedProviders) > 0 {
+		if err := writeProbeOutput("Skipped providers: %s\n", strings.Join(result.SkippedProviders, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary aiScalpingDecisionProbeSummary) error {
+	if outputJSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(summary)
+	}
+	writeProbeOutput := func(format string, args ...any) error {
+		if _, err := fmt.Fprintf(out, format, args...); err != nil {
+			return fmt.Errorf("writing scalping probe output: %w", err)
+		}
+		return nil
+	}
+	if err := writeProbeOutput("AI scalping decision probe completed\n"); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Cycles: %d/%d\n", summary.CompletedCycles, summary.Cycles); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Signals: %d\n", summary.TotalSignals); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Signal quality coverage: %s\n", summary.SignalQualityCoverage.String()); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Valid contract cycles: %d\n", summary.ValidContractCycles); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("LLM degraded cycles: %d\n", summary.LLMDegradedCycles); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Paper trades: %d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s\n", summary.PaperTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String()); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Actions: %v\n", summary.ActionCounts); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Providers: %v\n", summary.ProviderCounts); err != nil {
+		return err
+	}
+	if summary.LastResult != nil && summary.LastResult.Decision != nil {
+		decision := summary.LastResult.Decision
+		if err := writeProbeOutput("Last decision: %s %s confidence=%.4f reason_category=%s\n", decision.Action, decision.Symbol, decision.Confidence, decision.ReasonCategory); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func aiProviderProbeResponseMatches(content string, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(content), expected)
 }
 
 func truncate(s string, maxLen int) string {

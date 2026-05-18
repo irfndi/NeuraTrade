@@ -29,7 +29,7 @@ var providerTransportDefaults = map[string]ProviderTransportDefaults{
 	},
 	"deepseek": {
 		BaseURL:         "https://api.deepseek.com/v1",
-		DefaultModel:    "deepseek-v4-pro",
+		DefaultModel:    "deepseek-chat",
 		TransportFormat: ProviderTransportOpenAI,
 		RequiresAPIKey:  true,
 	},

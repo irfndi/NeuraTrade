@@ -178,27 +178,27 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 	}
 
 	for _, envKey := range ai.ProviderAPIKeyEnvVars(provider) {
-		if node.APIKey != "" {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.APIKey = value
 			break
 		}
-		node.APIKey = strings.TrimSpace(os.Getenv(envKey))
 	}
 
 	for _, envKey := range ai.ProviderBaseURLEnvVars(provider) {
-		if node.BaseURL != "" {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.BaseURL = value
 			break
 		}
-		node.BaseURL = strings.TrimSpace(os.Getenv(envKey))
 	}
 	if node.BaseURL == "" {
 		node.BaseURL = providerBaseURL(provider)
 	}
 
 	for _, envKey := range ai.ProviderModelEnvVars(provider) {
-		if node.ModelOverride != "" {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.ModelOverride = value
 			break
 		}
-		node.ModelOverride = strings.TrimSpace(os.Getenv(envKey))
 	}
 	if node.ModelOverride == "" {
 		if model, ok := ai.ProviderDefaultModel(provider); ok {
