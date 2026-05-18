@@ -3362,28 +3362,6 @@ func (s *AIScalpingService) signalsWithDecisionHints(ctx context.Context, signal
 	return enriched
 }
 
-func (s *AIScalpingService) focusActionableMarketSignals(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) []aiMarketSignal {
-	if len(signals) <= 1 {
-		return signals
-	}
-
-	focused := make([]aiMarketSignal, 0, len(signals))
-	for _, signal := range signals {
-		decision, _, ok := s.deterministicFallbackCandidate(ctx, signal, portfolio, false)
-		if !ok {
-			decision, _, ok = s.deterministicFallbackCandidate(ctx, signal, portfolio, true)
-		}
-		if !ok || decision == nil || !isActionableScalpingHintAction(decision.Action) {
-			continue
-		}
-		focused = append(focused, signal)
-	}
-	if len(focused) == 0 {
-		return signals
-	}
-	return focused
-}
-
 func isActionableScalpingHintAction(action string) bool {
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "buy", "sell":

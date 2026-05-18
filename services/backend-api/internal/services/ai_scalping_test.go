@@ -2358,7 +2358,7 @@ func TestAIScalpingService_SignalsWithDecisionHintsAnnotatesEligibleCandidates(t
 	assert.Zero(t, signals[0].ConfidenceHint, "input signals should not be mutated")
 }
 
-func TestAIScalpingService_FocusActionableMarketSignalsKeepsDecisionReadySignals(t *testing.T) {
+func TestAIScalpingService_SignalsWithDecisionHintsKeepsDecisionReadySignals(t *testing.T) {
 	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
 	signals := []aiMarketSignal{
 		{
@@ -2396,16 +2396,20 @@ func TestAIScalpingService_FocusActionableMarketSignalsKeepsDecisionReadySignals
 		},
 	}
 
-	focused := svc.focusActionableMarketSignals(context.Background(), signals, TradingPortfolio{
+	enriched := svc.signalsWithDecisionHints(context.Background(), signals, TradingPortfolio{
 		EffectiveMinConfidence: 0.55,
 		EffectiveMaxCapitalPct: 5,
 	})
 
-	require.Len(t, focused, 1)
-	assert.Equal(t, "BTC/USDT", focused[0].Symbol)
+	require.Len(t, enriched, 3)
+	assert.Equal(t, "BTC/USDT", enriched[0].Symbol)
+	assert.Equal(t, "buy", enriched[0].SuggestedAction)
+	assert.GreaterOrEqual(t, enriched[0].ConfidenceHint, 0.55)
+	assert.Zero(t, enriched[1].SuggestedAction)
+	assert.Zero(t, enriched[2].SuggestedAction)
 }
 
-func TestAIScalpingService_FocusActionableMarketSignalsUsesEffectiveConfidenceThreshold(t *testing.T) {
+func TestAIScalpingService_SignalsWithDecisionHintsUsesEffectiveConfidenceThreshold(t *testing.T) {
 	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
 	signal := aiMarketSignal{
 		Symbol:             "BTC/USDT",
@@ -2438,19 +2442,16 @@ func TestAIScalpingService_FocusActionableMarketSignalsUsesEffectiveConfidenceTh
 	}
 
 	enriched := svc.signalsWithDecisionHints(context.Background(), signals, portfolio)
-	focused := svc.focusActionableMarketSignals(context.Background(), signals, portfolio)
 	_, _, eligibleWithDefaultFloor := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, false)
 
 	require.Len(t, enriched, 2)
 	require.Equal(t, "buy", enriched[0].SuggestedAction)
 	require.GreaterOrEqual(t, enriched[0].ConfidenceHint, portfolio.EffectiveMinConfidence)
 	require.Less(t, enriched[0].ConfidenceHint, svc.deterministicFallbackConfig().ConfidenceFloor)
-	require.Len(t, focused, 1)
-	require.Equal(t, "BTC/USDT", focused[0].Symbol)
 	require.False(t, eligibleWithDefaultFloor, "empty portfolio would incorrectly apply the fallback confidence floor")
 }
 
-func TestAIScalpingService_FocusActionableMarketSignalsKeepsDiagnosticsWhenNoCandidate(t *testing.T) {
+func TestAIScalpingService_SignalsWithDecisionHintsKeepsDiagnosticsWhenNoCandidate(t *testing.T) {
 	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
 	signals := []aiMarketSignal{
 		{
@@ -2477,13 +2478,13 @@ func TestAIScalpingService_FocusActionableMarketSignalsKeepsDiagnosticsWhenNoCan
 		},
 	}
 
-	focused := svc.focusActionableMarketSignals(context.Background(), signals, TradingPortfolio{
+	enriched := svc.signalsWithDecisionHints(context.Background(), signals, TradingPortfolio{
 		EffectiveMinConfidence: 0.55,
 		EffectiveMaxCapitalPct: 5,
 	})
 
-	require.Len(t, focused, 2)
-	assert.Equal(t, signals, focused)
+	require.Len(t, enriched, 2)
+	assert.Equal(t, signals, enriched)
 }
 
 func TestCandidateSignalsFromMarketSignals_SkipsNonFiniteDecimalInputs(t *testing.T) {
