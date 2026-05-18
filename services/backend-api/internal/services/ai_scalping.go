@@ -1499,6 +1499,9 @@ type aiMarketSignal struct {
 	OrderBookImbalance float64 `json:"ob_imbalance"`
 	PriceChange24h     float64 `json:"price_change_24h_pct"`
 	RangePosition24h   float64 `json:"range_pos_24h"`
+	SuggestedAction    string  `json:"suggested_action,omitempty"`
+	ConfidenceHint     float64 `json:"confidence_hint,omitempty"`
+	CandidateScore     float64 `json:"candidate_score,omitempty"`
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
@@ -1953,6 +1956,7 @@ You analyze market data and make trading decisions. You have access to real-time
 7. Never emit markdown, headings, bullets, or commentary outside the JSON object
 8. Keep reasoning concise (one short paragraph, <= 320 characters)
 9. For hold decisions, use symbol: "", size_pct: 0, stop_loss: null, take_profit: null
+10. When citing numeric signal values, compare spread_pct directly to the liquidity ceiling; never call a spread at or below the ceiling too wide
 
 ## Response Format
 Return JSON only:
@@ -1973,13 +1977,14 @@ Return JSON only:
 - ob_imbalance > 0.2: Strong buy pressure (more bids)
 - ob_imbalance < -0.2: Strong sell pressure (more asks)
 
-- spread <= %.2f%%: tradable liquidity ceiling; anything wider must be treated as hold
+- spread <= %.4f%%: tradable liquidity ceiling; anything wider must be treated as hold
 - range_pos_24h > 80: Price near daily high (avoid chasing late entries)
 - range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
 		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct())
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
+	signals = s.signalsWithDecisionHints(ctx, signals, portfolio)
 	signalsJSON, _ := json.MarshalIndent(signals, "", "  ")
 	walletBalance := walletBasis(portfolio)
 	usdtBalance := promptUSDTBalanceDecimal(portfolio)
@@ -2037,6 +2042,7 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - Effective Min Confidence (must obey): %.2f
 - Effective Max Capital %% (must obey): %.2f
 - Policy note: account-tier and recovery adjustments are already reflected in the effective values above; cite and enforce those effective values only
+- Signal guidance: suggested_action/confidence_hint/candidate_score are backend-computed from liquidity, imbalance, range, momentum, fee edge, and current effective thresholds; when confidence_hint meets Effective Min Confidence, prefer that action unless a listed risk field clearly invalidates it
 %s- Fund Milestone Progress: %.2f%%
 - No-fill Duration (minutes): %.1f
 - State Drift Active: %t
@@ -2472,9 +2478,11 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 	if decision.Action == "hold" {
 		decision.Symbol = ""
 		decision.SizePercent = 0
+		decision.Reasoning = sanitizeDecisionReasoning(decision.Reasoning, 320)
 		if strings.TrimSpace(decision.Reasoning) == "" {
 			decision.Reasoning = "model selected hold (no detailed reasoning)"
 		}
+		normalizeContradictoryHoldSpreadReasoning(decision, signals, s.maxBidAskSpreadPct())
 		return nil
 	}
 	if decision.Symbol == "" {
@@ -3181,6 +3189,44 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 			0,
 			1,
 		)
+	case signal.OrderBookImbalance >= effectiveMinImbalance &&
+		signal.RangePosition24h <= buyRangeMax+5:
+		action = "buy"
+		momentumAligned = signal.PriceChange24h >= fallbackCfg.BuyMinPriceChangePct
+		rangeAlignment = clampFloat(
+			(buyRangeMax+5-signal.RangePosition24h)/math.Max(buyRangeMax+5, 1),
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance <= -effectiveMinImbalance &&
+		signal.RangePosition24h >= sellRangeMin-5:
+		action = "sell"
+		momentumAligned = signal.PriceChange24h <= fallbackCfg.SellMaxPriceChangePct
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-(sellRangeMin-5))/math.Max(100-(sellRangeMin-5), 1),
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance >= math.Max(effectiveMinImbalance, 0.20) &&
+		signal.PriceChange24h > 0 &&
+		signal.RangePosition24h <= sellRangeMin+5:
+		action = "buy"
+		momentumAligned = true
+		rangeAlignment = clampFloat(
+			(sellRangeMin+5-signal.RangePosition24h)/math.Max(sellRangeMin+5-buyRangeMax, 1),
+			0,
+			1,
+		)
+	case signal.OrderBookImbalance <= -math.Max(effectiveMinImbalance, 0.20) &&
+		signal.PriceChange24h < 0 &&
+		signal.RangePosition24h >= buyRangeMax-5:
+		action = "sell"
+		momentumAligned = true
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-(buyRangeMax-5))/math.Max(sellRangeMin-(buyRangeMax-5), 1),
+			0,
+			1,
+		)
 	default:
 		return nil, 0, false
 	}
@@ -3293,6 +3339,36 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		StopLoss:        &stopLoss,
 		TakeProfit:      &takeProfit,
 	}, score, true
+}
+
+func (s *AIScalpingService) signalsWithDecisionHints(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) []aiMarketSignal {
+	if len(signals) == 0 {
+		return signals
+	}
+	enriched := make([]aiMarketSignal, len(signals))
+	copy(enriched, signals)
+	for i := range enriched {
+		decision, score, ok := s.deterministicFallbackCandidate(ctx, enriched[i], portfolio, false)
+		if !ok {
+			decision, score, ok = s.deterministicFallbackCandidate(ctx, enriched[i], portfolio, true)
+		}
+		if !ok || decision == nil || !isActionableScalpingHintAction(decision.Action) {
+			continue
+		}
+		enriched[i].SuggestedAction = decision.Action
+		enriched[i].ConfidenceHint = decision.Confidence
+		enriched[i].CandidateScore = score
+	}
+	return enriched
+}
+
+func isActionableScalpingHintAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "buy", "sell":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *AIScalpingService) fallbackSymbolExpectancyAllowed(ctx context.Context, symbol, action string, portfolio TradingPortfolio) bool {

@@ -14,7 +14,7 @@ NC=\033[0m
 
 .PHONY: help all go-env-setup proto-gen mod-download build services-setup telegram-setup \
 	test test-backend test-frontend lint fmt fmt-check typecheck coverage-check \
-	run logs logs-all scalping-soak bd-close-qa
+	test-scripts run logs logs-all scalping-soak ai-scalping-probe bd-close-qa
 
 all: build
 
@@ -100,7 +100,7 @@ typecheck: ## Run TypeScript type checks
 		echo "$(YELLOW)Skipping typecheck - telegram-service or bun missing$(NC)"; \
 	fi
 
-test: test-backend ## Run default tests
+test: test-backend test-scripts ## Run default tests
 
 test-backend: mod-download ## Run backend tests
 	@echo "$(GREEN)Running backend tests...$(NC)"
@@ -122,6 +122,13 @@ test-frontend: ## Run Telegram service tests
 		echo "$(YELLOW)Skipping frontend tests - telegram-service or bun missing$(NC)"; \
 	fi
 
+test-scripts: ## Run operational script tests
+	@echo "$(GREEN)Running script tests...$(NC)"
+	@bash services/backend-api/scripts/startup-orchestrator_test.sh
+	@bash services/backend-api/scripts/scalping-soak_test.sh
+	@bash services/backend-api/scripts/verify-scalping-soak-artifact_test.sh
+	@bash services/backend-api/scripts/scalping-soak-acceptance_test.sh
+
 coverage-check: ## Run coverage threshold checks
 	@echo "$(GREEN)Running coverage checks...$(NC)"
 	@cd services/backend-api && STRICT=$${STRICT:-false} ./scripts/coverage-check.sh
@@ -138,6 +145,9 @@ logs-all: ## Show gateway logs from NEURATRADE_HOME
 
 scalping-soak: build ## Run no-order public-data scalping paper soak
 	@bash services/backend-api/scripts/scalping-soak.sh run
+
+ai-scalping-probe: build ## Run real LLM no-order scalping probe with recovery gates
+	@bash services/backend-api/scripts/ai-scalping-probe.sh run
 
 bd-close-qa: ## Close bd issue with mandatory QA evidence
 	@test -n "$${ISSUE_ID:-}" || (echo "ISSUE_ID is required" && exit 1)

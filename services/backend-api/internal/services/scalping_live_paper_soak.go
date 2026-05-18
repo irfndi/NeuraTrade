@@ -212,7 +212,6 @@ func runPublicScalpingLivePaperSoakCycle(
 	if len(signals) == 0 {
 		return nil, decimal.Zero, fmt.Errorf("live paper scalping soak gathered no market signals")
 	}
-
 	now := time.Now().UTC()
 	historicalSignals := make([]HistoricalSignal, 0, len(signals))
 	symbols := make([]string, 0, len(signals))

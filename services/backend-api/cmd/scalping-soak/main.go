@@ -40,9 +40,13 @@ func run() error {
 		minNetPnL                string
 		minAvgNetPnL             string
 		minSignalQualityCoverage string
+		maxHoldRatio             string
 		maxDrawdown              string
 		maxDrawdownPct           string
 		maxAIDegradedCycles      string
+		minBaselineWinRateDelta  string
+		minBaselineNetPnLDelta   string
+		minBaselineAvgPnLDelta   string
 	)
 
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
@@ -62,9 +66,13 @@ func run() error {
 	flags.StringVar(&minNetPnL, "min-net-pnl", "", "fail unless report net_pnl is at least this decimal value")
 	flags.StringVar(&minAvgNetPnL, "min-avg-net-pnl", "", "fail unless avg_net_pnl_per_trade is at least this decimal value")
 	flags.StringVar(&minSignalQualityCoverage, "min-signal-quality-coverage", "", "fail unless signal_quality.coverage is at least this decimal value")
+	flags.StringVar(&maxHoldRatio, "max-hold-ratio", "", "fail unless action_split.hold is at or below this decimal value")
 	flags.StringVar(&maxDrawdown, "max-drawdown", "", "fail unless max_drawdown is at or below this decimal value")
 	flags.StringVar(&maxDrawdownPct, "max-drawdown-pct", "", "fail unless max_drawdown_pct is at or below this decimal value")
 	flags.StringVar(&maxAIDegradedCycles, "max-ai-provider-degraded-cycles", "", "maximum AI provider degraded cycles allowed; empty disables this gate")
+	flags.StringVar(&minBaselineWinRateDelta, "min-baseline-win-rate-delta", "", "fail unless win-rate delta versus baseline is at least this decimal value")
+	flags.StringVar(&minBaselineNetPnLDelta, "min-baseline-net-pnl-delta", "", "fail unless net-PnL delta versus baseline is at least this decimal value")
+	flags.StringVar(&minBaselineAvgPnLDelta, "min-baseline-avg-pnl-delta", "", "fail unless avg-PnL-per-trade delta versus baseline is at least this decimal value")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -122,13 +130,24 @@ func run() error {
 		MinNetPnL:                minNetPnL,
 		MinAvgNetPnL:             minAvgNetPnL,
 		MinSignalQualityCoverage: minSignalQualityCoverage,
+		MaxHoldRatio:             maxHoldRatio,
 		MaxDrawdown:              maxDrawdown,
 		MaxDrawdownPct:           maxDrawdownPct,
 		MaxAIDegradedCycles:      maxAIDegradedCycles,
+		MinBaselineWinRateDelta:  minBaselineWinRateDelta,
+		MinBaselineNetPnLDelta:   minBaselineNetPnLDelta,
+		MinBaselineAvgPnLDelta:   minBaselineAvgPnLDelta,
 	}); err != nil {
+		if encodeErr := writeResultPayload(os.Stdout, dbPath, result); encodeErr != nil {
+			return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
+		}
 		return err
 	}
 
+	return writeResultPayload(os.Stdout, dbPath, result)
+}
+
+func writeResultPayload(out *os.File, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
 	payload := struct {
 		DBPath string                                `json:"db_path"`
 		Result *services.ScalpingLivePaperSoakResult `json:"result"`
@@ -136,7 +155,7 @@ func run() error {
 		DBPath: dbPath,
 		Result: result,
 	}
-	encoder := json.NewEncoder(os.Stdout)
+	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(payload)
 }
@@ -147,9 +166,13 @@ type acceptanceGateOptions struct {
 	MinNetPnL                string
 	MinAvgNetPnL             string
 	MinSignalQualityCoverage string
+	MaxHoldRatio             string
 	MaxDrawdown              string
 	MaxDrawdownPct           string
 	MaxAIDegradedCycles      string
+	MinBaselineWinRateDelta  string
+	MinBaselineNetPnLDelta   string
+	MinBaselineAvgPnLDelta   string
 }
 
 func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, options acceptanceGateOptions) error {
@@ -172,6 +195,15 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 	if err := validateMinDecimalGate("min-signal-quality-coverage", "signal_quality.coverage", report.SignalQuality.Coverage, options.MinSignalQualityCoverage); err != nil {
 		return err
 	}
+	if options.MaxHoldRatio != "" {
+		holdRatio := decimal.Zero
+		if value, ok := decimalValueFromMap(report.ActionSplit, "hold"); ok {
+			holdRatio = value
+		}
+		if err := validateMaxRatioGate("max-hold-ratio", "action_split.hold", holdRatio, options.MaxHoldRatio); err != nil {
+			return err
+		}
+	}
 	if err := validateMaxDecimalGate("max-drawdown", "max_drawdown", report.TradeSummary.MaxDrawdown, options.MaxDrawdown); err != nil {
 		return err
 	}
@@ -182,6 +214,28 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 		return err
 	}
 	if err := validateMaxIntGate("max-ai-provider-degraded-cycles", "ai_provider_degraded_cycles", report.AIProviderDegradation.DegradedCycles, options.MaxAIDegradedCycles); err != nil {
+		return err
+	}
+	if err := validateBaselineDeltaGates(report.BaselineComparison, options); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateBaselineDeltaGates(comparison *services.ScalpingSoakBaselineComparison, options acceptanceGateOptions) error {
+	if options.MinBaselineWinRateDelta == "" && options.MinBaselineNetPnLDelta == "" && options.MinBaselineAvgPnLDelta == "" {
+		return nil
+	}
+	if comparison == nil {
+		return fmt.Errorf("baseline delta gates require --baseline=true")
+	}
+	if err := validateMinDecimalGate("min-baseline-win-rate-delta", "baseline.delta_win_rate", comparison.DeltaWinRate, options.MinBaselineWinRateDelta); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-baseline-net-pnl-delta", "baseline.delta_net_pnl", comparison.DeltaNetPnL, options.MinBaselineNetPnLDelta); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-baseline-avg-pnl-delta", "baseline.delta_avg_pnl_per_trade", comparison.DeltaAvgPnLPerTrade, options.MinBaselineAvgPnLDelta); err != nil {
 		return err
 	}
 	return nil
@@ -218,6 +272,26 @@ func validateMaxDecimalGate(flagName string, metricName string, actual decimal.D
 	return nil
 }
 
+func validateMaxRatioGate(flagName string, metricName string, actual decimal.Decimal, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := decimal.NewFromString(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --%s value %q: %w", flagName, rawMaximum, err)
+	}
+	if maximum.IsNegative() {
+		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
+	}
+	if maximum.GreaterThan(decimal.NewFromInt(1)) {
+		return fmt.Errorf("invalid --%s value %q: must be at most 1", flagName, rawMaximum)
+	}
+	if actual.GreaterThan(maximum) {
+		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, actual.String(), maximum.String())
+	}
+	return nil
+}
+
 func validateMaxIntGate(flagName string, metricName string, actual int, rawMaximum string) error {
 	if rawMaximum == "" {
 		return nil
@@ -233,6 +307,14 @@ func validateMaxIntGate(flagName string, metricName string, actual int, rawMaxim
 		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, strconv.Itoa(actual), strconv.Itoa(maximum))
 	}
 	return nil
+}
+
+func decimalValueFromMap(values map[string]decimal.Decimal, key string) (decimal.Decimal, bool) {
+	if values == nil {
+		return decimal.Zero, false
+	}
+	value, ok := values[key]
+	return value, ok
 }
 
 func envString(key, fallback string) string {

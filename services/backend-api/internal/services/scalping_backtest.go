@@ -843,6 +843,18 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	case signal.OrderBookImbalance <= -0.10 && signal.RangePosition24h >= 55:
 		action = "sell"
 		rangeAlignment = clampFloat((signal.RangePosition24h-55)/45.0, 0, 1)
+	case signal.OrderBookImbalance >= 0.10 && signal.RangePosition24h <= 50:
+		action = "buy"
+		rangeAlignment = clampFloat((50-signal.RangePosition24h)/50.0, 0, 1)
+	case signal.OrderBookImbalance <= -0.10 && signal.RangePosition24h >= 50:
+		action = "sell"
+		rangeAlignment = clampFloat((signal.RangePosition24h-50)/50.0, 0, 1)
+	case signal.OrderBookImbalance >= 0.20 && signal.PriceChange24h > 0 && signal.RangePosition24h <= 60:
+		action = "buy"
+		rangeAlignment = clampFloat((60-signal.RangePosition24h)/15.0, 0, 1)
+	case signal.OrderBookImbalance <= -0.20 && signal.PriceChange24h < 0 && signal.RangePosition24h >= 40:
+		action = "sell"
+		rangeAlignment = clampFloat((signal.RangePosition24h-40)/15.0, 0, 1)
 	default:
 		return nil
 	}

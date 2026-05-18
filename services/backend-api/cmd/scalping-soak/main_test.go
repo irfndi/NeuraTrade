@@ -27,8 +27,14 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			AIProviderDegradation: services.ScalpingAIDegradationSoakStats{
 				DegradedCycles: 1,
 			},
+			ActionSplit: map[string]decimal.Decimal{
+				"hold": decimal.NewFromFloat(0.5),
+			},
 			BaselineComparison: &services.ScalpingSoakBaselineComparison{
-				BaselineName: "test",
+				BaselineName:        "test",
+				DeltaWinRate:        decimal.NewFromFloat(0.627),
+				DeltaNetPnL:         decimal.NewFromFloat(0.30),
+				DeltaAvgPnLPerTrade: decimal.NewFromFloat(0.013),
 			},
 		},
 	}
@@ -46,9 +52,13 @@ func TestValidateAcceptanceGates(t *testing.T) {
 				MinNetPnL:                "0",
 				MinAvgNetPnL:             "0.005",
 				MinSignalQualityCoverage: "0.9",
+				MaxHoldRatio:             "0.745",
 				MaxDrawdown:              "0.05",
 				MaxDrawdownPct:           "0.001",
 				MaxAIDegradedCycles:      "1",
+				MinBaselineWinRateDelta:  "0.6",
+				MinBaselineNetPnLDelta:   "0.2",
+				MinBaselineAvgPnLDelta:   "0.01",
 			},
 		},
 		{
@@ -82,6 +92,11 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			wantErr: "signal_quality.coverage=0.95 below minimum=1",
 		},
 		{
+			name:    "fails max hold ratio",
+			options: acceptanceGateOptions{MaxHoldRatio: "0.49"},
+			wantErr: `action_split.hold="0.5" above maximum="0.49"`,
+		},
+		{
 			name:    "fails max drawdown",
 			options: acceptanceGateOptions{MaxDrawdown: "0.02"},
 			wantErr: `max_drawdown="0.03" above maximum="0.02"`,
@@ -107,14 +122,34 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			wantErr: `invalid --max-ai-provider-degraded-cycles value "-1": must be zero or greater`,
 		},
 		{
+			name:    "fails baseline win rate delta",
+			options: acceptanceGateOptions{MinBaselineWinRateDelta: "0.7"},
+			wantErr: "baseline.delta_win_rate=0.627 below minimum=0.7",
+		},
+		{
+			name:    "fails baseline net pnl delta",
+			options: acceptanceGateOptions{MinBaselineNetPnLDelta: "0.4"},
+			wantErr: "baseline.delta_net_pnl=0.3 below minimum=0.4",
+		},
+		{
+			name:    "fails baseline avg pnl delta",
+			options: acceptanceGateOptions{MinBaselineAvgPnLDelta: "0.02"},
+			wantErr: "baseline.delta_avg_pnl_per_trade=0.013 below minimum=0.02",
+		},
+		{
 			name:    "invalid max decimal threshold",
-			options: acceptanceGateOptions{MaxDrawdownPct: "not-a-decimal"},
-			wantErr: "parse --max-drawdown-pct",
+			options: acceptanceGateOptions{MaxHoldRatio: "not-a-decimal"},
+			wantErr: "parse --max-hold-ratio",
 		},
 		{
 			name:    "rejects negative max decimal threshold",
-			options: acceptanceGateOptions{MaxDrawdownPct: "-0.1"},
-			wantErr: `invalid --max-drawdown-pct value "-0.1": must be zero or greater`,
+			options: acceptanceGateOptions{MaxHoldRatio: "-0.1"},
+			wantErr: `invalid --max-hold-ratio value "-0.1": must be zero or greater`,
+		},
+		{
+			name:    "rejects max hold ratio above one",
+			options: acceptanceGateOptions{MaxHoldRatio: "74.5"},
+			wantErr: `invalid --max-hold-ratio value "74.5": must be at most 1`,
 		},
 	}
 
@@ -135,6 +170,19 @@ func TestValidateAcceptanceGatesRequiresResult(t *testing.T) {
 	require.ErrorContains(t, err, "acceptance gates require soak result")
 }
 
+func TestValidateAcceptanceGatesTreatsMissingHoldSplitAsZeroForMaxHoldRatio(t *testing.T) {
+	result := &services.ScalpingLivePaperSoakResult{
+		Report: services.ScalpingSoakReport{
+			ActionSplit: map[string]decimal.Decimal{
+				"buy": decimal.NewFromInt(1),
+			},
+		},
+	}
+
+	err := validateAcceptanceGates(result, acceptanceGateOptions{MaxHoldRatio: "0.745"})
+	require.NoError(t, err)
+}
+
 func TestValidateAcceptanceGatesRequiresBaselineForMaxDrawdownPct(t *testing.T) {
 	result := &services.ScalpingLivePaperSoakResult{
 		Report: services.ScalpingSoakReport{
@@ -147,4 +195,18 @@ func TestValidateAcceptanceGatesRequiresBaselineForMaxDrawdownPct(t *testing.T) 
 
 	err := validateAcceptanceGates(result, acceptanceGateOptions{MaxDrawdownPct: "0.01"})
 	require.ErrorContains(t, err, "--max-drawdown-pct requires --baseline=true")
+}
+
+func TestValidateAcceptanceGatesRequiresBaselineForDeltaGates(t *testing.T) {
+	result := &services.ScalpingLivePaperSoakResult{
+		Report: services.ScalpingSoakReport{
+			TradeSummary: services.ScalpingSoakTradeSummary{
+				ClosedTrades: 1,
+				NetPnL:       decimal.NewFromFloat(0.1),
+			},
+		},
+	}
+
+	err := validateAcceptanceGates(result, acceptanceGateOptions{MinBaselineNetPnLDelta: "0"})
+	require.ErrorContains(t, err, "baseline delta gates require --baseline=true")
 }

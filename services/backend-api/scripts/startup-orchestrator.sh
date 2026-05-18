@@ -11,7 +11,7 @@ NEURATRADE_HOME="${NEURATRADE_HOME:-$HOME/.neuratrade}"
 LOG_DIR="${NEURATRADE_HOME}/logs"
 PID_FILE="${NEURATRADE_HOME}/pids/gateway.pid"
 GATEWAY_LOG="${LOG_DIR}/gateway.log"
-BACKEND_PORT="${BACKEND_HOST_PORT:-${PORT:-8080}}"
+BACKEND_PORT="${SERVER_PORT:-${BACKEND_HOST_PORT:-${PORT:-8080}}}"
 STARTUP_HEALTH_TIMEOUT_SECONDS="${NEURATRADE_STARTUP_HEALTH_TIMEOUT_SECONDS:-${NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS:-150}}"
 
 RED='\033[0;31m'
@@ -152,9 +152,66 @@ find_gateway_cmd() {
   return 1
 }
 
+launch_gateway_detached() {
+  local gateway_cmd="$1"
+
+  if command -v setsid >/dev/null 2>&1; then
+    nohup setsid bash -c "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
+    local launch_rc=$?
+    if [ "$launch_rc" -ne 0 ]; then
+      return "$launch_rc"
+    fi
+    printf '%s\n' "$!"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    if ! GATEWAY_CMD="$gateway_cmd" GATEWAY_LOG="$GATEWAY_LOG" python3 - <<'PY'; then
+import os
+import subprocess
+
+cmd = "exec " + os.environ["GATEWAY_CMD"]
+log_path = os.environ["GATEWAY_LOG"]
+log = open(log_path, "ab", buffering=0)
+process = subprocess.Popen(
+    ["bash", "-c", cmd],
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=log,
+    close_fds=True,
+    start_new_session=True,
+)
+print(process.pid)
+PY
+      return 1
+    fi
+    return 0
+  fi
+
+  nohup bash -c "exec ${gateway_cmd}" >>"${GATEWAY_LOG}" 2>&1 </dev/null &
+  local launch_rc=$?
+  if [ "$launch_rc" -ne 0 ]; then
+    return "$launch_rc"
+  fi
+  printf '%s\n' "$!"
+}
+
 pid_running() {
   local pid="$1"
   kill -0 "$pid" 2>/dev/null
+}
+
+pid_command() {
+  local pid="$1"
+  ps -p "$pid" -o command= 2>/dev/null || true
+}
+
+pid_command_matches() {
+  local pid="$1"
+  local pattern="$2"
+  local command
+  command="$(pid_command "$pid")"
+  [ -n "$command" ] && printf '%s' "$command" | grep -Fq "$pattern"
 }
 
 gateway_pid() {
@@ -198,12 +255,30 @@ start_gateway() {
   fi
 
   log_info "Starting gateway using: ${gateway_cmd}"
-  (
-    cd "$REPO_ROOT"
-    export PATH="${REPO_ROOT}/bin:${PATH}"
-    nohup bash -c "$gateway_cmd" >>"${GATEWAY_LOG}" 2>&1 &
-    echo $! >"${PID_FILE}"
-  )
+  local launched_pid
+  local launched_pid_file
+  local previous_dir
+  launched_pid_file="$(mktemp /tmp/neuratrade-gateway-pid.XXXXXX)"
+  previous_dir="$(pwd)"
+  if ! cd "$REPO_ROOT"; then
+    rm -f "$launched_pid_file"
+    log_error "Failed to enter repository root: ${REPO_ROOT}"
+    return 1
+  fi
+  export PATH="${REPO_ROOT}/bin:${PATH}"
+
+  launch_gateway_detached "$gateway_cmd" >"$launched_pid_file"
+  if ! cd "$previous_dir"; then
+    log_warn "Failed to restore previous directory: ${previous_dir}"
+  fi
+
+  IFS= read -r launched_pid <"$launched_pid_file" || launched_pid=""
+  rm -f "$launched_pid_file"
+  if ! printf '%s' "$launched_pid" | grep -Eq '^[0-9]+$'; then
+    log_error "Failed to capture launched gateway pid"
+    return 1
+  fi
+  printf '%s\n' "$launched_pid" >"${PID_FILE}"
 
   local pid
   pid="$(gateway_pid)"
@@ -240,12 +315,16 @@ stop_gateway() {
 
   if [ -z "${pid:-}" ]; then
     log_warn "No gateway pid file found"
+    stop_gateway_child_services
+    log_success "Gateway stopped"
     return 0
   fi
 
   if ! pid_running "$pid"; then
     log_warn "Stale gateway pid file found (pid=${pid}), removing"
     rm -f "${PID_FILE}"
+    stop_gateway_child_services
+    log_success "Gateway stopped"
     return 0
   fi
 
@@ -264,7 +343,105 @@ stop_gateway() {
   fi
 
   rm -f "${PID_FILE}"
+  stop_gateway_child_services
   log_success "Gateway stopped"
+}
+
+stop_gateway_child_services() {
+  stop_child_service "Backend API" "${NEURATRADE_HOME}/pids/backend.pid" "neuratrade-server"
+  stop_backend_port_listener_fallback
+  stop_child_service "CCXT Service" "${NEURATRADE_HOME}/pids/ccxt.pid" "ccxt-service"
+  stop_child_service "Telegram Service" "${NEURATRADE_HOME}/pids/telegram.pid" "telegram-service" "bun run index.ts"
+}
+
+stop_child_service() {
+  local name="$1"
+  local pid_file="$2"
+  shift 2
+  local expected_patterns=("$@")
+
+  if [ ! -f "$pid_file" ]; then
+    return 0
+  fi
+
+  local child_pid
+  IFS= read -r child_pid <"$pid_file" || child_pid=""
+  if [ -z "$child_pid" ] || ! [[ "$child_pid" =~ ^[0-9]+$ ]]; then
+    log_warn "${name} pid file is invalid, removing: ${pid_file}"
+    rm -f "$pid_file"
+    return 0
+  fi
+
+  if ! pid_running "$child_pid"; then
+    rm -f "$pid_file"
+    return 0
+  fi
+
+  local pattern
+  local matches=0
+  for pattern in "${expected_patterns[@]}"; do
+    if pid_command_matches "$child_pid" "$pattern"; then
+      matches=1
+      break
+    fi
+  done
+  if [ "$matches" -ne 1 ]; then
+    log_warn "${name} pid ${child_pid} does not match expected command patterns; leaving process running and removing stale pid file"
+    rm -f "$pid_file"
+    return 0
+  fi
+
+  log_info "Stopping ${name} (pid=${child_pid})"
+  kill "$child_pid" 2>/dev/null || true
+
+  local waited=0
+  while pid_running "$child_pid" && [ "$waited" -lt 20 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if pid_running "$child_pid"; then
+    log_warn "${name} still running after grace period, forcing kill"
+    kill -9 "$child_pid" 2>/dev/null || true
+  fi
+
+  rm -f "$pid_file"
+}
+
+stop_backend_port_listener_fallback() {
+  command -v lsof >/dev/null 2>&1 || return 0
+
+  local pids
+  pids="$(lsof -nP -tiTCP:"${BACKEND_PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+  [ -n "$pids" ] || return 0
+
+  local pid
+  for pid in $pids; do
+    if ! printf '%s' "$pid" | grep -Eq '^[0-9]+$'; then
+      continue
+    fi
+    if ! pid_running "$pid"; then
+      continue
+    fi
+    if ! pid_command_matches "$pid" "neuratrade-server"; then
+      log_warn "Backend port ${BACKEND_PORT} listener pid ${pid} does not match neuratrade-server; leaving it running"
+      continue
+    fi
+
+    log_warn "Backend pid file missing or stale; stopping neuratrade-server listener on port ${BACKEND_PORT} (pid=${pid})"
+    kill "$pid" 2>/dev/null || true
+
+    local waited=0
+    while pid_running "$pid" && [ "$waited" -lt 20 ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+
+    if pid_running "$pid"; then
+      log_warn "Backend API port listener still running after grace period, forcing kill (pid=${pid})"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
 }
 
 status_gateway() {

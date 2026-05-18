@@ -24,13 +24,18 @@ MIN_WIN_RATE="${MIN_WIN_RATE-0.123}"
 MIN_NET_PNL="${MIN_NET_PNL-0}"
 MIN_AVG_NET_PNL="${MIN_AVG_NET_PNL-0}"
 MIN_SIGNAL_QUALITY_COVERAGE="${MIN_SIGNAL_QUALITY_COVERAGE-1}"
+MAX_HOLD_RATIO="${MAX_HOLD_RATIO-0.745}"
 MAX_DRAWDOWN="${MAX_DRAWDOWN-}"
 MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT-0.01}"
 MAX_AI_PROVIDER_DEGRADED_CYCLES="${MAX_AI_PROVIDER_DEGRADED_CYCLES-0}"
+MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
+MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
+MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
 SOAK_CHAT_ID="${SOAK_CHAT_ID:-operator-scalping-soak}"
 SOAK_ORDER_PREFIX="${SOAK_ORDER_PREFIX:-operator-scalping-soak}"
 SOAK_DB_PATH="${SOAK_DB_PATH:-${NEURATRADE_HOME}/data/scalping-soak.db}"
 SOAK_BIN="${SOAK_BIN:-${REPO_ROOT}/bin/neuratrade-scalping-soak}"
+SOAK_OUTPUT_FILE="${SOAK_OUTPUT_FILE:-}"
 
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -71,15 +76,22 @@ Environment:
   MIN_NET_PNL     Minimum net PnL required; empty disables (default: ${MIN_NET_PNL})
   MIN_AVG_NET_PNL Minimum avg net PnL per trade required; empty disables (default: ${MIN_AVG_NET_PNL})
   MIN_SIGNAL_QUALITY_COVERAGE Minimum signal quality coverage; empty disables (default: ${MIN_SIGNAL_QUALITY_COVERAGE})
+  MAX_HOLD_RATIO  Maximum hold action split allowed; empty disables (default: ${MAX_HOLD_RATIO})
   MAX_DRAWDOWN    Maximum absolute drawdown; empty disables (default: ${MAX_DRAWDOWN:-disabled})
   MAX_DRAWDOWN_PCT Maximum drawdown as fraction of baseline balance; empty disables (default: ${MAX_DRAWDOWN_PCT})
   MAX_AI_PROVIDER_DEGRADED_CYCLES Maximum AI provider degraded cycles; empty disables (default: ${MAX_AI_PROVIDER_DEGRADED_CYCLES})
+  MIN_BASELINE_WIN_RATE_DELTA Minimum win-rate improvement versus baseline; empty disables (default: ${MIN_BASELINE_WIN_RATE_DELTA:-disabled})
+  MIN_BASELINE_NET_PNL_DELTA Minimum net-PnL improvement versus baseline; empty disables (default: ${MIN_BASELINE_NET_PNL_DELTA:-disabled})
+  MIN_BASELINE_AVG_PNL_DELTA Minimum avg-PnL/trade improvement versus baseline; empty disables (default: ${MIN_BASELINE_AVG_PNL_DELTA:-disabled})
   SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
   SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
+  SOAK_OUTPUT_FILE Optional path for clean result JSON artifact; empty disables (default: ${SOAK_OUTPUT_FILE:-disabled})
 
 Examples:
   make build
   bash services/backend-api/scripts/scalping-soak.sh run
+  SOAK_OUTPUT_FILE="\$HOME/.neuratrade/data/scalping-soak-latest.json" bash services/backend-api/scripts/scalping-soak.sh run
+  bash services/backend-api/scripts/verify-scalping-soak-artifact.sh "\$HOME/.neuratrade/data/scalping-soak-latest.json"
   SOAK_DB_PATH="\$HOME/.neuratrade/data/neuratrade.db" CYCLES=24 bash services/backend-api/scripts/scalping-soak.sh run
 USAGE
 }
@@ -123,6 +135,9 @@ run_soak() {
   if [ -n "$MIN_SIGNAL_QUALITY_COVERAGE" ]; then
     args+=("--min-signal-quality-coverage" "$MIN_SIGNAL_QUALITY_COVERAGE")
   fi
+  if [ -n "$MAX_HOLD_RATIO" ]; then
+    args+=("--max-hold-ratio" "$MAX_HOLD_RATIO")
+  fi
   if [ -n "$MAX_DRAWDOWN" ]; then
     args+=("--max-drawdown" "$MAX_DRAWDOWN")
   fi
@@ -131,6 +146,15 @@ run_soak() {
   fi
   if [ -n "$MAX_AI_PROVIDER_DEGRADED_CYCLES" ]; then
     args+=("--max-ai-provider-degraded-cycles" "$MAX_AI_PROVIDER_DEGRADED_CYCLES")
+  fi
+  if [ -n "$MIN_BASELINE_WIN_RATE_DELTA" ]; then
+    args+=("--min-baseline-win-rate-delta" "$MIN_BASELINE_WIN_RATE_DELTA")
+  fi
+  if [ -n "$MIN_BASELINE_NET_PNL_DELTA" ]; then
+    args+=("--min-baseline-net-pnl-delta" "$MIN_BASELINE_NET_PNL_DELTA")
+  fi
+  if [ -n "$MIN_BASELINE_AVG_PNL_DELTA" ]; then
+    args+=("--min-baseline-avg-pnl-delta" "$MIN_BASELINE_AVG_PNL_DELTA")
   fi
   if [ "$TIMEOUT_SECONDS" != "0" ]; then
     args+=("--timeout-seconds" "$TIMEOUT_SECONDS")
@@ -141,9 +165,38 @@ run_soak() {
 
   log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
-min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
-max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled}"
-  "$SOAK_BIN" "${args[@]}" | tee -a "$LOG_FILE"
+min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
+max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} min_baseline_win_rate_delta=${MIN_BASELINE_WIN_RATE_DELTA:-disabled} \
+min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled}"
+  if [ -n "$SOAK_OUTPUT_FILE" ]; then
+    if ! command -v jq >/dev/null 2>&1; then
+      fail "jq is required to write clean SOAK_OUTPUT_FILE artifacts"
+    fi
+    local raw_output
+    local artifact_tmp
+    raw_output="$(mktemp "${TMPDIR:-/tmp}/neuratrade-scalping-soak-output.XXXXXX")"
+    artifact_tmp="${SOAK_OUTPUT_FILE}.tmp"
+    mkdir -p "$(dirname "$SOAK_OUTPUT_FILE")"
+    set +e
+    "$SOAK_BIN" "${args[@]}" | tee "$raw_output" | tee -a "$LOG_FILE"
+    local soak_status=${PIPESTATUS[0]}
+    set -e
+    if ! jq -s 'map(select(.db_path? != null and .result? != null)) | if length == 1 then .[0] else error("expected exactly one soak result JSON document, got \(length)") end' "$raw_output" >"$artifact_tmp"; then
+      rm -f "$raw_output" "$artifact_tmp"
+      if [ "$soak_status" -ne 0 ]; then
+        fail "scalping soak binary failed and no clean soak result artifact could be extracted"
+      fi
+      fail "failed to extract clean soak result artifact from stdout"
+    fi
+    mv "$artifact_tmp" "$SOAK_OUTPUT_FILE"
+    rm -f "$raw_output"
+    log "wrote clean soak result artifact to ${SOAK_OUTPUT_FILE}"
+    if [ "$soak_status" -ne 0 ]; then
+      fail "scalping soak binary failed; retained clean soak result artifact at ${SOAK_OUTPUT_FILE}"
+    fi
+  else
+    "$SOAK_BIN" "${args[@]}" | tee -a "$LOG_FILE"
+  fi
   log "${GREEN}[OK]${NC} scalping paper soak complete"
 }
 

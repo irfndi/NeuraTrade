@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
@@ -35,6 +36,7 @@ type ScalpingLLMDecisionProbeResult struct {
 	PreTradeRegime        string                 `json:"pre_trade_regime,omitempty"`
 	RuntimeDiagnostics    map[string]interface{} `json:"runtime_diagnostics,omitempty"`
 	LLMDegraded           bool                   `json:"llm_degraded"`
+	ReasoningDiagnostics  []string               `json:"reasoning_diagnostics,omitempty"`
 	PaperTrade            *ScalpingLLMProbeTrade `json:"paper_trade,omitempty"`
 	PaperTradeError       string                 `json:"paper_trade_error,omitempty"`
 }
@@ -118,6 +120,7 @@ func runScalpingLLMDecisionProbeWithService(
 		return nil, fmt.Errorf("get scalping LLM decision: %w", err)
 	}
 	normalizeProbeDecision(decision)
+	reasoningDiagnostics := scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
 
 	result := &ScalpingLLMDecisionProbeResult{
 		Exchange:              svc.config.Exchange,
@@ -145,6 +148,7 @@ func runScalpingLLMDecisionProbeWithService(
 		result.ContractValid = false
 		result.ContractError = validationErr.Error()
 	}
+	result.ReasoningDiagnostics = reasoningDiagnostics
 	if result.ContractValid {
 		gate := svc.evaluatePreTradeGate(ctx, decision, signals)
 		result.PreTradeGateAllowed = gate.Allowed
@@ -179,6 +183,109 @@ func isActionableScalpingProbeDecision(decision *AITradingDecision) bool {
 	default:
 		return false
 	}
+}
+
+func scalpingProbeReasoningDiagnostics(decision *AITradingDecision, signals []aiMarketSignal, maxSpreadPct float64) []string {
+	if decision == nil || !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		return nil
+	}
+	return scalpingHoldSpreadReasoningDiagnostics(decision.Reasoning, signals, maxSpreadPct)
+}
+
+func normalizeContradictoryHoldSpreadReasoning(decision *AITradingDecision, signals []aiMarketSignal, maxSpreadPct float64) {
+	if decision == nil || !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		return
+	}
+	if len(scalpingHoldSpreadReasoningDiagnostics(decision.Reasoning, signals, maxSpreadPct)) == 0 {
+		return
+	}
+	decision.Reasoning = "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason."
+}
+
+func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSignal, maxSpreadPct float64) []string {
+	reasoning := strings.ToLower(strings.TrimSpace(reason))
+	if reasoning == "" || !strings.Contains(reasoning, "spread") {
+		return nil
+	}
+	if !holdReasoningClaimsWideSpread(reasoning) {
+		return nil
+	}
+	threshold := maxSpreadPct
+	if threshold <= 0 {
+		threshold = appautonomy.DefaultScalpingMaxBidAskSpreadPct
+	}
+	diagnostics := make([]string, 0, 1)
+	for _, signal := range signals {
+		if signal.BidAskSpread <= 0 || signal.BidAskSpread > threshold {
+			continue
+		}
+		symbol := strings.ToLower(strings.TrimSpace(signal.Symbol))
+		base := strings.ToLower(strings.TrimSpace(strings.Split(symbol, "/")[0]))
+		if (symbol != "" && strings.Contains(reasoning, symbol)) ||
+			(base != "" && containsScalpingSymbolToken(reasoning, base)) ||
+			strings.Contains(reasoning, "all signals") {
+			diagnostics = append(diagnostics, fmt.Sprintf("hold reasoning cites wide spread while %s spread %.3f%% is within %.3f%% threshold", signal.Symbol, signal.BidAskSpread, threshold))
+		}
+	}
+	return diagnostics
+}
+
+func containsScalpingSymbolToken(text, symbol string) bool {
+	symbol = strings.ToLower(strings.TrimSpace(symbol))
+	if symbol == "" {
+		return false
+	}
+	for start := 0; ; {
+		index := strings.Index(text[start:], symbol)
+		if index < 0 {
+			return false
+		}
+		index += start
+		end := index + len(symbol)
+		if scalpingSymbolBoundary(text, index-1) && scalpingSymbolBoundary(text, end) {
+			return true
+		}
+		start = end
+	}
+}
+
+func scalpingSymbolBoundary(text string, index int) bool {
+	if index < 0 || index >= len(text) {
+		return true
+	}
+	return !unicode.IsLetter(rune(text[index])) && !unicode.IsDigit(rune(text[index]))
+}
+
+func holdReasoningClaimsWideSpread(reasoning string) bool {
+	reasoning = strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(reasoning))), " ")
+	if reasoning == "" {
+		return false
+	}
+	phrases := []string{
+		"wide spread",
+		"spread >",
+		"spread>",
+		"spread above",
+		"spread is above",
+		"spread was above",
+		"spread remains above",
+		"spread greater than",
+		"spread is greater than",
+		"spread wider than",
+		"spread is wider than",
+		"spread too wide",
+		"spread is too wide",
+		"spread exceeds",
+		"spread exceeded",
+		"spread over",
+		"spread beyond",
+	}
+	for _, phrase := range phrases {
+		if strings.Contains(reasoning, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func simulateScalpingLLMProbePaperTrade(

@@ -111,6 +111,75 @@ func TestSQLiteMigrationsCreateFundingArbitrageOpportunities(t *testing.T) {
 	)
 }
 
+func TestSQLiteMigrationsRepairLegacyFundingArbitrageOpportunities(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skipf("sqlite3 CLI not available: %v", err)
+	}
+
+	backendRoot, err := filepath.Abs("..")
+	require.NoError(t, err)
+
+	sourceDir := filepath.Join(backendRoot, "database", "sqlite_migrations")
+	migrationsDir := filepath.Join(t.TempDir(), "sqlite_migrations")
+	require.NoError(t, os.Mkdir(migrationsDir, 0o755))
+	copySQLiteMigrationForTest(
+		t,
+		filepath.Join(sourceDir, "011_create_funding_arbitrage_opportunities.sql"),
+		filepath.Join(migrationsDir, "011_create_funding_arbitrage_opportunities.sql"),
+	)
+
+	dbPath := filepath.Join(t.TempDir(), "neuratrade.db")
+	legacySchema := strings.Join([]string{
+		"CREATE TABLE funding_arbitrage_opportunities (",
+		"  id TEXT PRIMARY KEY,",
+		"  symbol TEXT NOT NULL,",
+		"  buy_exchange_id INTEGER NOT NULL,",
+		"  sell_exchange_id INTEGER NOT NULL,",
+		"  funding_rate_buy REAL NOT NULL,",
+		"  funding_rate_sell REAL NOT NULL,",
+		"  rate_difference REAL NOT NULL,",
+		"  apy REAL NOT NULL,",
+		"  risk_score REAL NOT NULL,",
+		"  is_active INTEGER DEFAULT 1,",
+		"  expires_at TEXT NOT NULL,",
+		"  detected_at TEXT NOT NULL,",
+		"  created_at TEXT DEFAULT CURRENT_TIMESTAMP",
+		");",
+		"CREATE INDEX idx_funding_arbitrage_active ON funding_arbitrage_opportunities(is_active, detected_at DESC) WHERE is_active = 1;",
+	}, "\n")
+	cmd := exec.Command("sqlite3", dbPath, legacySchema)
+	output, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "legacy schema setup failed:\n%s", output)
+
+	cmd = exec.Command("bash", filepath.Join(backendRoot, "database", "sqlite-migrate.sh"), "run")
+	cmd.Env = append(os.Environ(),
+		"SQLITE_PATH="+dbPath,
+		"SQLITE_MIGRATIONS_DIR="+migrationsDir,
+	)
+	output, err = cmd.CombinedOutput()
+	require.NoErrorf(t, err, "sqlite migrations failed:\n%s", output)
+	require.Contains(t, string(output), "repair funding_arbitrage_opportunities -> funding_arbitrage_opportunities_legacy_")
+
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'funding_arbitrage_opportunities_legacy_%'",
+		"1",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT COUNT(*) FROM pragma_table_info('funding_arbitrage_opportunities') WHERE name = 'estimated_profit_percentage'",
+		"1",
+	)
+	assertSQLiteMigrationScalar(
+		t,
+		dbPath,
+		"SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'idx_funding_arbitrage_profit'",
+		"funding_arbitrage_opportunities",
+	)
+}
+
 func assertSQLiteScalar(t *testing.T, dbPath, query, want string) {
 	t.Helper()
 

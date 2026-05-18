@@ -938,6 +938,56 @@ func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testin
 	assert.NotContains(t, prompt, "Phase Max Capital % (reference only)")
 }
 
+func TestAIScalpingService_BuildUserPrompt_PreservesFullSignalUniverse(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.04,
+			PriceChange24h:     0.1,
+			RangePosition24h:   50,
+		},
+		{
+			Symbol:             "SOL/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+
+	prompt := svc.buildUserPrompt(context.Background(), signals, TradingPortfolio{
+		EffectiveMinConfidence: 0.55,
+		EffectiveMaxCapitalPct: 5,
+	})
+
+	assert.Contains(t, prompt, `"symbol": "BTC/USDT"`)
+	assert.Contains(t, prompt, `"symbol": "ETH/USDT"`)
+	assert.Contains(t, prompt, `"symbol": "SOL/USDT"`)
+	assert.Contains(t, prompt, `"suggested_action": "buy"`)
+	assert.Contains(t, prompt, `"confidence_hint":`)
+}
+
 func TestAIScalpingService_BuildUserPrompt_SurfacesWalletBasisFallback(t *testing.T) {
 	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5}}
 	prompt := svc.buildUserPrompt(context.Background(), nil, TradingPortfolio{
@@ -975,6 +1025,16 @@ func TestAIScalpingService_BuildSystemPrompt_AllowsFractionalSizePct(t *testing.
 
 	assert.Contains(t, prompt, `"size_pct": 0.01-100`)
 	assert.Contains(t, prompt, "size_pct is a direct percentage of wallet value converted into order notional")
+}
+
+func TestAIScalpingService_BuildSystemPrompt_GuardsSpreadThresholdReasoning(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5, MaxBidAskSpreadPct: 0.22}}
+
+	prompt := svc.buildSystemPrompt()
+
+	assert.Contains(t, prompt, "compare spread_pct directly to the liquidity ceiling")
+	assert.Contains(t, prompt, "never call a spread at or below the ceiling too wide")
+	assert.Contains(t, prompt, "spread <= 0.2200%")
 }
 
 func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t *testing.T) {
@@ -2258,6 +2318,175 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RespectsConfidenceAndP
 	}
 }
 
+func TestAIScalpingService_SignalsWithDecisionHintsAnnotatesEligibleCandidates(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+
+	enriched := svc.signalsWithDecisionHints(context.Background(), signals, TradingPortfolio{
+		EffectiveMinConfidence: 0.55,
+		EffectiveMaxCapitalPct: 5,
+	})
+
+	require.Len(t, enriched, 2)
+	assert.Equal(t, "buy", enriched[0].SuggestedAction)
+	assert.GreaterOrEqual(t, enriched[0].ConfidenceHint, 0.55)
+	assert.Greater(t, enriched[0].CandidateScore, 0.0)
+	assert.Empty(t, enriched[1].SuggestedAction)
+	assert.Zero(t, signals[0].ConfidenceHint, "input signals should not be mutated")
+}
+
+func TestAIScalpingService_SignalsWithDecisionHintsKeepsDecisionReadySignals(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "BTC/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.04,
+			PriceChange24h:     0.1,
+			RangePosition24h:   50,
+		},
+		{
+			Symbol:             "SOL/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+
+	enriched := svc.signalsWithDecisionHints(context.Background(), signals, TradingPortfolio{
+		EffectiveMinConfidence: 0.55,
+		EffectiveMaxCapitalPct: 5,
+	})
+
+	require.Len(t, enriched, 3)
+	assert.Equal(t, "BTC/USDT", enriched[0].Symbol)
+	assert.Equal(t, "buy", enriched[0].SuggestedAction)
+	assert.GreaterOrEqual(t, enriched[0].ConfidenceHint, 0.55)
+	assert.Zero(t, enriched[1].SuggestedAction)
+	assert.Zero(t, enriched[2].SuggestedAction)
+}
+
+func TestAIScalpingService_SignalsWithDecisionHintsUsesEffectiveConfidenceThreshold(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		High24h:            104,
+		Low24h:             96,
+		Volume24h:          1,
+		BidAskSpread:       0.08,
+		OrderBookImbalance: 0.35,
+		PriceChange24h:     0,
+		RangePosition24h:   45,
+	}
+	signals := []aiMarketSignal{
+		signal,
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+	portfolio := TradingPortfolio{
+		EffectiveMinConfidence: 0.60,
+		EffectiveMaxCapitalPct: 5,
+	}
+
+	enriched := svc.signalsWithDecisionHints(context.Background(), signals, portfolio)
+	_, _, eligibleWithDefaultFloor := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, false)
+
+	require.Len(t, enriched, 2)
+	require.Equal(t, "buy", enriched[0].SuggestedAction)
+	require.GreaterOrEqual(t, enriched[0].ConfidenceHint, portfolio.EffectiveMinConfidence)
+	require.Less(t, enriched[0].ConfidenceHint, svc.deterministicFallbackConfig().ConfidenceFloor)
+	require.False(t, eligibleWithDefaultFloor, "empty portfolio would incorrectly apply the fallback confidence floor")
+}
+
+func TestAIScalpingService_SignalsWithDecisionHintsKeepsDiagnosticsWhenNoCandidate(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "ETH/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.02,
+			OrderBookImbalance: 0.04,
+			PriceChange24h:     0.1,
+			RangePosition24h:   50,
+		},
+		{
+			Symbol:             "SOL/USDT",
+			Price:              100,
+			High24h:            104,
+			Low24h:             96,
+			Volume24h:          2500000,
+			BidAskSpread:       0.35,
+			OrderBookImbalance: 0.58,
+			PriceChange24h:     1.2,
+			RangePosition24h:   18,
+		},
+	}
+
+	enriched := svc.signalsWithDecisionHints(context.Background(), signals, TradingPortfolio{
+		EffectiveMinConfidence: 0.55,
+		EffectiveMaxCapitalPct: 5,
+	})
+
+	require.Len(t, enriched, 2)
+	assert.Equal(t, signals, enriched)
+}
+
 func TestCandidateSignalsFromMarketSignals_SkipsNonFiniteDecimalInputs(t *testing.T) {
 	candidates := candidateSignalsFromMarketSignals([]aiMarketSignal{
 		{
@@ -2411,6 +2640,70 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumAlignedE
 	require.NotNil(t, decision)
 	assert.Equal(t, "buy", decision.Action)
 	assert.Contains(t, decision.Reasoning, "24h change")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumContinuationSell(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "WIF/USDT",
+		Price:              1,
+		High24h:            1.2,
+		Low24h:             0.8,
+		Volume24h:          1500000,
+		BidAskSpread:       0.06,
+		OrderBookImbalance: -0.23,
+		PriceChange24h:     -0.8,
+		RangePosition24h:   50,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "sell", decision.Action)
+	assert.Contains(t, decision.Reasoning, "24h change")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBufferedMidRangeBuy(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "FARTCOIN/USDT",
+		Price:              1,
+		High24h:            1.2,
+		Low24h:             0.8,
+		Volume24h:          1500000,
+		BidAskSpread:       0.07,
+		OrderBookImbalance: 0.22,
+		PriceChange24h:     -0.8,
+		RangePosition24h:   48,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Contains(t, decision.Reasoning, "range position")
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_UsesMomentumConfigOverride(t *testing.T) {

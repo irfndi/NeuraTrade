@@ -471,6 +471,7 @@ func gatewayStop(cCtx *cli.Context) error {
 
 	home := defaultNeuraTradeHome()
 	pidsDir := filepath.Join(home, "pids")
+	statePath := filepath.Join(pidsDir, "gateway-state.json")
 
 	services := []struct {
 		name            string
@@ -493,6 +494,7 @@ func gatewayStop(cCtx *cli.Context) error {
 	}
 
 	if stoppedCount == 0 {
+		markGatewayStopped(statePath, "gateway stop found no running services")
 		fmt.Println()
 		fmt.Println("No running services found.")
 		fmt.Println("Services may have been stopped already, or were not started via 'gateway start'.")
@@ -507,6 +509,7 @@ func gatewayStop(cCtx *cli.Context) error {
 
 	fmt.Println()
 	fmt.Printf("✅ Stopped %d service(s)\n", stoppedCount)
+	markGatewayStopped(statePath, "gateway stopped")
 	return nil
 }
 
