@@ -9,6 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type recordingQuestStore struct {
@@ -1193,17 +1194,32 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 			"definition_id": "scalping_execution",
 		},
 		Checkpoint: map[string]interface{}{
-			"account_tier":                  "micro",
-			"effective_min_confidence":      0.65,
-			"effective_max_capital_pct":     0.50,
-			"candidate_universe_count":      12,
-			"candidate_ranked_count":        4,
-			"candidate_viable_count":        1,
-			"top_candidate_rejections":      []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "confidence_below_effective_threshold", "estimated_confidence": 0.55}},
-			"rollout_stage_current":         "shadow",
-			"rollout_status_current":        "active",
-			"rollout_gate_reason_current":   "strategy_not_live (stage: shadow, status: active)",
-			"runtime_last_entry_attempt_at": lastAttempt.Format(time.RFC3339),
+			"account_tier":                       "micro",
+			"effective_min_confidence":           0.65,
+			"effective_max_capital_pct":          0.50,
+			"effective_max_concurrent_positions": 1,
+			"managed_open_positions_effective":   1,
+			"candidate_universe_count":           12,
+			"candidate_ranked_count":             4,
+			"candidate_viable_count":             1,
+			"top_candidate_rejections":           []map[string]interface{}{{"symbol": "OPN/USDT", "reason": "confidence_below_effective_threshold", "estimated_confidence": 0.55}},
+			"rollout_stage_current":              "shadow",
+			"rollout_status_current":             "active",
+			"rollout_gate_reason_current":        "strategy_not_live (stage: shadow, status: active)",
+			"runtime_last_entry_attempt_at":      lastAttempt.Format(time.RFC3339),
+		},
+	}
+	engine.quests["q-cycle-previous"] = &Quest{
+		ID:        "q-cycle-previous",
+		Status:    QuestStatusCompleted,
+		UpdatedAt: time.Now().UTC().Add(time.Hour),
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"effective_max_concurrent_positions": 3,
+			"managed_open_positions_effective":   2,
 		},
 	}
 
@@ -1218,6 +1234,12 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 	if maxCapital, _ := diag["effective_max_capital_pct"].(float64); maxCapital != 0.50 {
 		t.Fatalf("expected effective_max_capital_pct=0.50, got %v", maxCapital)
 	}
+	require.IsType(t, 0, diag["effective_max_concurrent_positions"])
+	maxConcurrent := diag["effective_max_concurrent_positions"].(int)
+	assert.Equal(t, 1, maxConcurrent)
+	require.IsType(t, 0, diag["managed_open_positions_effective"])
+	openPositions := diag["managed_open_positions_effective"].(int)
+	assert.Equal(t, 1, openPositions)
 	if universe, _ := diag["candidate_universe_count"].(int); universe != 12 {
 		t.Fatalf("expected candidate_universe_count=12, got %d", universe)
 	}
@@ -1240,6 +1262,79 @@ func TestGetChatRuntimeDiagnostics_IncludesScalpingCycleFields(t *testing.T) {
 	if reason, _ := diag["progress_block_reason"].(string); reason == "" {
 		t.Fatal("expected progress_block_reason to be populated")
 	}
+}
+
+func TestGetChatRuntimeDiagnostics_ActiveZeroConcurrencyCapSuppressesStaleCap(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-cycle-active-zero"] = &Quest{
+		ID:        "q-cycle-active-zero",
+		Status:    QuestStatusActive,
+		UpdatedAt: now,
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle-zero",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"effective_max_concurrent_positions": 0,
+			"managed_open_positions_effective":   0,
+		},
+	}
+	engine.quests["q-cycle-stale-cap"] = &Quest{
+		ID:        "q-cycle-stale-cap",
+		Status:    QuestStatusCompleted,
+		UpdatedAt: now.Add(time.Hour),
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle-zero",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"effective_max_concurrent_positions": 3,
+			"managed_open_positions_effective":   2,
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-cycle-zero")
+
+	if _, ok := diag["effective_max_concurrent_positions"]; ok {
+		t.Fatalf("expected active zero cap to suppress stale cap, got %#v", diag["effective_max_concurrent_positions"])
+	}
+	assert.Equal(t, 0, diag["managed_open_positions_effective"])
+}
+
+func TestGetChatRuntimeDiagnostics_ActiveMissingConcurrencyMetricsSuppressesStaleValues(t *testing.T) {
+	engine := NewQuestEngine(NewInMemoryQuestStore())
+	now := time.Now().UTC()
+	engine.quests["q-cycle-active-missing-cap"] = &Quest{
+		ID:        "q-cycle-active-missing-cap",
+		Status:    QuestStatusActive,
+		UpdatedAt: now,
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle-missing-cap",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{},
+	}
+	engine.quests["q-cycle-stale-missing-cap"] = &Quest{
+		ID:        "q-cycle-stale-missing-cap",
+		Status:    QuestStatusCompleted,
+		UpdatedAt: now.Add(time.Hour),
+		Metadata: map[string]string{
+			"chat_id":       "chat-cycle-missing-cap",
+			"definition_id": "scalping_execution",
+		},
+		Checkpoint: map[string]interface{}{
+			"effective_max_concurrent_positions": 3,
+			"managed_open_positions_effective":   2,
+		},
+	}
+
+	diag := engine.GetChatRuntimeDiagnostics("chat-cycle-missing-cap")
+
+	if _, ok := diag["effective_max_concurrent_positions"]; ok {
+		t.Fatalf("expected active missing cap to suppress stale cap, got %#v", diag["effective_max_concurrent_positions"])
+	}
+	assert.Equal(t, 0, diag["managed_open_positions_effective"])
 }
 
 func TestGetChatRuntimeDiagnostics_ProgressBlockUsesPolicyEnvOverride(t *testing.T) {

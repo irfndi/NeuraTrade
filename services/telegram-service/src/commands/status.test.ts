@@ -441,8 +441,11 @@ describe("Status command", () => {
             risk_lock_active: false,
           },
           chat_runtime: {
+            account_tier: "micro",
             candidate_viable_count: 0,
+            effective_max_concurrent_positions: 1,
             entry_attempt_block_reason: "rollout_shadow_block",
+            managed_open_positions_effective: 1,
             rollout_stage_current: "shadow",
             rollout_status_current: "active",
             rollout_gate_reason_current:
@@ -462,6 +465,8 @@ describe("Status command", () => {
     expect(ctx.replies[0]).toContain(
       "Entry attempt block: rollout_shadow_block",
     );
+    expect(ctx.replies[0]).toContain("Account tier: micro");
+    expect(ctx.replies[0]).toContain("Position cap: 1/1 managed open");
     expect(ctx.replies[0]).not.toContain("Entry blocker: none");
   });
 });
