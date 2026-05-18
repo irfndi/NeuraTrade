@@ -439,38 +439,47 @@ func (r *ScalpingSoakReport) computeLiveTrialReadiness() {
 	}
 	reasons := make([]string, 0, 8)
 	if r.InsufficientTradeProof {
-		reasons = append(reasons, "insufficient_trade_proof")
+		reasons = appendScalpingReadinessReason(reasons, "insufficient_trade_proof")
 	}
 	if r.TradeSummary.ClosedTrades < readiness.MinClosedTrades {
-		reasons = append(reasons, "closed_trades_below_live_trial_minimum")
+		reasons = appendScalpingReadinessReason(reasons, "closed_trades_below_live_trial_minimum")
 	}
 	if r.TradeSummary.Wins == 0 {
-		reasons = append(reasons, "no_winning_trades")
+		reasons = appendScalpingReadinessReason(reasons, "no_winning_trades")
 	}
 	if r.TradeSummary.Losses == 0 {
-		reasons = append(reasons, "no_losing_trades")
+		reasons = appendScalpingReadinessReason(reasons, "no_losing_trades")
 	}
 	if !r.TradeSummary.NetPnL.GreaterThan(decimal.Zero) {
-		reasons = append(reasons, "net_pnl_not_positive")
+		reasons = appendScalpingReadinessReason(reasons, "net_pnl_not_positive")
 	}
 	if !r.TradeSummary.AvgNetPnLPerTrade.GreaterThan(decimal.Zero) {
-		reasons = append(reasons, "avg_net_pnl_not_positive")
+		reasons = appendScalpingReadinessReason(reasons, "avg_net_pnl_not_positive")
 	}
 	if !r.TradeSummary.MaxDrawdownPct.GreaterThan(decimal.Zero) {
-		reasons = append(reasons, "drawdown_not_observed")
+		reasons = appendScalpingReadinessReason(reasons, "drawdown_not_observed")
 	}
 	if r.SignalQuality.Coverage.LessThan(decimal.NewFromInt(1)) {
-		reasons = append(reasons, "signal_quality_incomplete")
+		reasons = appendScalpingReadinessReason(reasons, "signal_quality_incomplete")
 	}
 	if r.AIProviderDegradation.DegradedCycles > 0 {
-		reasons = append(reasons, "ai_provider_degraded")
+		reasons = appendScalpingReadinessReason(reasons, "ai_provider_degraded")
 	}
 	if holdRatio, ok := r.ActionSplit["hold"]; ok && holdRatio.GreaterThan(decimal.NewFromFloat(defaultScalpingLiveTrialMaxHoldRatio)) {
-		reasons = append(reasons, "hold_ratio_above_live_trial_maximum")
+		reasons = appendScalpingReadinessReason(reasons, "hold_ratio_above_live_trial_maximum")
 	}
 	readiness.Ready = len(reasons) == 0
 	readiness.Reasons = reasons
 	r.LiveTrialReadiness = readiness
+}
+
+func appendScalpingReadinessReason(reasons []string, reason string) []string {
+	for _, existing := range reasons {
+		if existing == reason {
+			return reasons
+		}
+	}
+	return append(reasons, reason)
 }
 
 func (r *ScalpingSoakReport) computeDrawdownPct(baseline *ScalpingSoakBaseline) {

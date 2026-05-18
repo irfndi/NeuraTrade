@@ -73,6 +73,7 @@ type ScalpingBacktestSummary struct {
 	EligibleSignals        int                        `json:"eligible_signals"`
 	RejectedSignals        int                        `json:"rejected_signals"`
 	TotalTrades            int                        `json:"total_trades"`
+	OpenPositions          int                        `json:"open_positions"`
 	WinningTrades          int                        `json:"winning_trades"`
 	LosingTrades           int                        `json:"losing_trades"`
 	WinRate                decimal.Decimal            `json:"win_rate"`
@@ -707,6 +708,7 @@ func (e *ScalpingBacktestEngine) calculateSummary() ScalpingBacktestSummary {
 	summary := ScalpingBacktestSummary{
 		TotalSignals:           len(e.signalHistory),
 		TotalTrades:            len(e.tradeHistory),
+		OpenPositions:          len(e.positions),
 		RegimeBreakdown:        map[string]int{},
 		SymbolBreakdown:        map[string]int{},
 		RejectionByReason:      map[string]int{},

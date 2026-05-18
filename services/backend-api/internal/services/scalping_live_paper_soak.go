@@ -39,6 +39,7 @@ type ScalpingLivePaperSoakResult struct {
 	TotalSignals           int                     `json:"total_signals"`
 	EligibleSignals        int                     `json:"eligible_signals"`
 	TotalTrades            int                     `json:"total_trades"`
+	OpenPositions          int                     `json:"open_positions"`
 	WinningTrades          int                     `json:"winning_trades"`
 	LosingTrades           int                     `json:"losing_trades"`
 	NetPnL                 decimal.Decimal         `json:"net_pnl"`
@@ -170,6 +171,7 @@ func RunPublicScalpingLivePaperSoak(
 	soak.TotalSignals = result.Summary.TotalSignals
 	soak.EligibleSignals = result.Summary.EligibleSignals
 	soak.TotalTrades = result.Summary.TotalTrades
+	soak.OpenPositions = result.Summary.OpenPositions
 	soak.WinningTrades = result.Summary.WinningTrades
 	soak.LosingTrades = result.Summary.LosingTrades
 	soak.Fees = fees
@@ -192,6 +194,10 @@ func RunPublicScalpingLivePaperSoak(
 	}
 	if !report.TradeSummary.NetPnL.Round(8).Equal(soak.NetPnL.Round(8)) {
 		return nil, fmt.Errorf("persisted net pnl mismatch: got %s want %s", report.TradeSummary.NetPnL.String(), soak.NetPnL.String())
+	}
+	if result.Summary.OpenPositions > 0 {
+		report.LiveTrialReadiness.Ready = false
+		report.LiveTrialReadiness.Reasons = appendScalpingReadinessReason(report.LiveTrialReadiness.Reasons, "open_positions_unclosed")
 	}
 
 	soak.Report = report
