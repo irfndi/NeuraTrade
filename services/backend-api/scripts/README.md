@@ -20,6 +20,7 @@ Native operations scripts for starting, testing, monitoring, and webhook control
   - No-order public-data scalping paper soak with baseline acceptance gates
   - Usage: `SOAK_OUTPUT_FILE="$HOME/.neuratrade/data/scalping-soak-latest.json" ./scalping-soak.sh run`
   - Verify artifact: `./verify-scalping-soak-artifact.sh "$HOME/.neuratrade/data/scalping-soak-latest.json"`
+  - Final acceptance wrapper: `./scalping-soak-acceptance.sh run`
   - Runbook: `../docs/SCALPING_SOAK_ACCEPTANCE.md`
 
 - `webhook-control.sh`

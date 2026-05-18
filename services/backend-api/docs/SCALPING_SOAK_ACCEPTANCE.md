@@ -56,6 +56,16 @@ The artifact verifier enforces these same defaults.
 Use a timestamped artifact and database so the evidence can be retained:
 
 ```bash
+services/backend-api/scripts/scalping-soak-acceptance.sh run
+```
+
+The acceptance wrapper performs runtime health preflight, writes timestamped
+artifact and SQLite evidence paths, runs the artifact verifier, and emits a
+small `.acceptance.json` manifest next to the soak artifact.
+
+For manual runs, use the same defaults explicitly:
+
+```bash
 stamp="$(date +%Y%m%d%H%M%S)"
 export SOAK_DB_PATH="${HOME}/.neuratrade/data/scalping-soak-acceptance-${stamp}.db"
 export SOAK_OUTPUT_FILE="${HOME}/.neuratrade/data/scalping-soak-acceptance-${stamp}.json"
