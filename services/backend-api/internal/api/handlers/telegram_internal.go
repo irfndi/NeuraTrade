@@ -134,7 +134,7 @@ func (h *TelegramInternalHandler) SetNotificationPreferences(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to begin transaction"})
 		return
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { _ = tx.Rollback(c.Request.Context()) }()
 
 	if req.Enabled {
 		// To enable, we remove any disabling records for 'arbitrage'

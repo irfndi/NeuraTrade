@@ -156,11 +156,6 @@ func run() error {
 	warnLegacyHandlersPath(logrusLogger)
 
 	// Initialize database
-	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
-	if driver == "" {
-		_ = "sqlite" // Default to SQLite (used for logging/debugging)
-	}
-
 	db, err := database.NewDatabaseConnection(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)

@@ -506,9 +506,6 @@ func (sp *SignalProcessor) processSignalsConcurrently(marketData []models.Market
 		workerCount = 4 // Default worker count
 	}
 
-	_ = fmt.Sprintf("Concurrent processing: worker_count=%d, market_data_count=%d",
-		workerCount, len(marketData))
-
 	jobs := make(chan models.MarketData, len(marketData))
 	results := make(chan ProcessingResult, len(marketData))
 
@@ -560,10 +557,6 @@ func (sp *SignalProcessor) processSignalsConcurrently(marketData []models.Market
 			successfulCount++
 		}
 	}
-
-	// Stub logging for concurrent results
-	_ = fmt.Sprintf("All results: total=%d, successful=%d, failed=%d",
-		len(allResults), successfulCount, len(allResults)-successfulCount)
 
 	return allResults
 }
