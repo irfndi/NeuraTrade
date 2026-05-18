@@ -297,6 +297,6 @@ if ! grep -q "paper realism gate failed" "$negative_output"; then
   exit 1
 fi
 
-MAX_PERFECT_WIN_TRADES= "$VERIFIER" "$perfect_artifact" >"${tmp_dir}/perfect-disabled.out"
+MAX_PERFECT_WIN_TRADES='' "$VERIFIER" "$perfect_artifact" >"${tmp_dir}/perfect-disabled.out"
 
 echo "verify-scalping-soak-artifact tests passed"
