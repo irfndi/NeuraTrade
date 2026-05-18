@@ -13,6 +13,7 @@ MIN_SIGNAL_QUALITY_COVERAGE="${MIN_SIGNAL_QUALITY_COVERAGE-1}"
 MAX_HOLD_RATIO="${MAX_HOLD_RATIO-0.745}"
 MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT-0.01}"
 MAX_AI_PROVIDER_DEGRADED_CYCLES="${MAX_AI_PROVIDER_DEGRADED_CYCLES-0}"
+MAX_PERFECT_WIN_TRADES="${MAX_PERFECT_WIN_TRADES-20}"
 MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
@@ -34,6 +35,7 @@ Gate environment defaults:
   MAX_HOLD_RATIO=${MAX_HOLD_RATIO}
   MAX_DRAWDOWN_PCT=${MAX_DRAWDOWN_PCT}
   MAX_AI_PROVIDER_DEGRADED_CYCLES=${MAX_AI_PROVIDER_DEGRADED_CYCLES}
+  MAX_PERFECT_WIN_TRADES=${MAX_PERFECT_WIN_TRADES}
   MIN_BASELINE_WIN_RATE_DELTA=${MIN_BASELINE_WIN_RATE_DELTA}
   MIN_BASELINE_NET_PNL_DELTA=${MIN_BASELINE_NET_PNL_DELTA}
   MIN_BASELINE_AVG_PNL_DELTA=${MIN_BASELINE_AVG_PNL_DELTA}
@@ -167,6 +169,20 @@ validate_min_decimal "signal_quality.coverage" "$signal_quality_coverage" "$MIN_
 validate_max_decimal "action_split.hold" "$hold_ratio" "$MAX_HOLD_RATIO"
 validate_max_decimal "max_drawdown_pct" "$max_drawdown_pct" "$MAX_DRAWDOWN_PCT"
 validate_max_int "ai_provider_degraded_cycles" "$ai_provider_degraded_cycles" "$MAX_AI_PROVIDER_DEGRADED_CYCLES"
+if [ -n "$MAX_PERFECT_WIN_TRADES" ]; then
+  case "$MAX_PERFECT_WIN_TRADES" in
+    *[!0-9]*)
+      fail "invalid max_perfect_win_trades maximum=${MAX_PERFECT_WIN_TRADES}: must be a non-negative integer"
+      ;;
+  esac
+  if [ "$closed_trades" -gt "$MAX_PERFECT_WIN_TRADES" ] &&
+    [ "$closed_trades" -gt 0 ] &&
+    [ "$wins" -eq "$closed_trades" ] &&
+    [ "$losses" -eq 0 ] &&
+    decimal_lte "$max_drawdown_pct" "0"; then
+    fail "paper realism gate failed: closed_trades=${closed_trades} wins=${wins} losses=${losses} max_drawdown_pct=${max_drawdown_pct} exceeds max_perfect_win_trades=${MAX_PERFECT_WIN_TRADES}; perfect paper wins without drawdown are insufficient proof"
+  fi
+fi
 validate_min_decimal "baseline.delta_win_rate" "$delta_win_rate" "$MIN_BASELINE_WIN_RATE_DELTA"
 validate_min_decimal "baseline.delta_net_pnl" "$delta_net_pnl" "$MIN_BASELINE_NET_PNL_DELTA"
 validate_min_decimal "baseline.delta_avg_pnl_per_trade" "$delta_avg_pnl" "$MIN_BASELINE_AVG_PNL_DELTA"

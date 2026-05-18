@@ -220,4 +220,83 @@ if ! grep -q "action/regime split ratios" "$negative_output"; then
   exit 1
 fi
 
+perfect_db_path="${tmp_dir}/perfect-soak.db"
+perfect_artifact="${tmp_dir}/perfect-soak.json"
+sqlite3 "$perfect_db_path" <<'SQL'
+CREATE TABLE scalping_cycle_telemetry (
+  id TEXT PRIMARY KEY,
+  bid_ask_spread_pct REAL,
+  order_book_imbalance REAL,
+  range_position_24h REAL,
+  price_change_24h_pct REAL
+);
+CREATE TABLE realized_pnl_journal (
+  id TEXT PRIMARY KEY,
+  realized_pnl NUMERIC NOT NULL DEFAULT 0
+);
+SQL
+for i in $(seq 1 21); do
+  sqlite3 "$perfect_db_path" "INSERT INTO scalping_cycle_telemetry VALUES ('cycle-${i}', 0.05, 0.32, 28.5, 0.4);"
+  sqlite3 "$perfect_db_path" "INSERT INTO realized_pnl_journal VALUES ('trade-${i}', 0.12);"
+done
+
+jq -n --arg db_path "$perfect_db_path" '{
+  db_path: $db_path,
+  result: {
+    report: {
+      total_cycles: 21,
+      action_split: {
+        buy: "1"
+      },
+      regime_split: {
+        trend: "1"
+      },
+      rejection_by_reason: {},
+      gate_block_by_code: {},
+      signal_quality: {
+        known_cycles: 21,
+        coverage: "1",
+        avg_bid_ask_spread_pct: "0.05",
+        avg_abs_order_book_imbalance: "0.32",
+        avg_range_position_24h: "28.5",
+        avg_price_change_24h_pct: "0.4",
+        missing_signal_quality_cycles: 0
+      },
+      trade_summary: {
+        closed_trades: 21,
+        wins: 21,
+        losses: 0,
+        win_rate: "1",
+        gross_pnl: "2.73",
+        net_pnl: "2.52",
+        fees: "0.21",
+        avg_net_pnl_per_trade: "0.12",
+        max_drawdown_pct: "0"
+      },
+      ai_provider_degradation: {
+        degraded_cycles: 0
+      },
+      baseline_comparison: {
+        delta_win_rate: "0.877",
+        delta_net_pnl: "2.7",
+        delta_avg_pnl_per_trade: "0.123"
+      },
+      insufficient_trade_proof: false
+    }
+  }
+}' >"$perfect_artifact"
+
+if "$VERIFIER" "$perfect_artifact" >"$negative_output" 2>&1; then
+  echo "expected verifier to fail on high-sample perfect-win paper evidence" >&2
+  exit 1
+fi
+
+if ! grep -q "paper realism gate failed" "$negative_output"; then
+  echo "negative verifier output did not mention the paper realism gate" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
+MAX_PERFECT_WIN_TRADES= "$VERIFIER" "$perfect_artifact" >"${tmp_dir}/perfect-disabled.out"
+
 echo "verify-scalping-soak-artifact tests passed"

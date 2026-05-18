@@ -44,6 +44,7 @@ func run() error {
 		maxDrawdown              string
 		maxDrawdownPct           string
 		maxAIDegradedCycles      string
+		maxPerfectWinTrades      string
 		minBaselineWinRateDelta  string
 		minBaselineNetPnLDelta   string
 		minBaselineAvgPnLDelta   string
@@ -70,6 +71,7 @@ func run() error {
 	flags.StringVar(&maxDrawdown, "max-drawdown", "", "fail unless max_drawdown is at or below this decimal value")
 	flags.StringVar(&maxDrawdownPct, "max-drawdown-pct", "", "fail unless max_drawdown_pct is at or below this decimal value")
 	flags.StringVar(&maxAIDegradedCycles, "max-ai-provider-degraded-cycles", "", "maximum AI provider degraded cycles allowed; empty disables this gate")
+	flags.StringVar(&maxPerfectWinTrades, "max-perfect-win-trades", "", "maximum closed trades allowed with 100% wins and zero drawdown; empty disables this paper-realism gate")
 	flags.StringVar(&minBaselineWinRateDelta, "min-baseline-win-rate-delta", "", "fail unless win-rate delta versus baseline is at least this decimal value")
 	flags.StringVar(&minBaselineNetPnLDelta, "min-baseline-net-pnl-delta", "", "fail unless net-PnL delta versus baseline is at least this decimal value")
 	flags.StringVar(&minBaselineAvgPnLDelta, "min-baseline-avg-pnl-delta", "", "fail unless avg-PnL-per-trade delta versus baseline is at least this decimal value")
@@ -134,6 +136,7 @@ func run() error {
 		MaxDrawdown:              maxDrawdown,
 		MaxDrawdownPct:           maxDrawdownPct,
 		MaxAIDegradedCycles:      maxAIDegradedCycles,
+		MaxPerfectWinTrades:      maxPerfectWinTrades,
 		MinBaselineWinRateDelta:  minBaselineWinRateDelta,
 		MinBaselineNetPnLDelta:   minBaselineNetPnLDelta,
 		MinBaselineAvgPnLDelta:   minBaselineAvgPnLDelta,
@@ -170,6 +173,7 @@ type acceptanceGateOptions struct {
 	MaxDrawdown              string
 	MaxDrawdownPct           string
 	MaxAIDegradedCycles      string
+	MaxPerfectWinTrades      string
 	MinBaselineWinRateDelta  string
 	MinBaselineNetPnLDelta   string
 	MinBaselineAvgPnLDelta   string
@@ -216,8 +220,41 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 	if err := validateMaxIntGate("max-ai-provider-degraded-cycles", "ai_provider_degraded_cycles", report.AIProviderDegradation.DegradedCycles, options.MaxAIDegradedCycles); err != nil {
 		return err
 	}
+	if err := validatePerfectWinRealismGate(report.TradeSummary, options.MaxPerfectWinTrades); err != nil {
+		return err
+	}
 	if err := validateBaselineDeltaGates(report.BaselineComparison, options); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validatePerfectWinRealismGate(summary services.ScalpingSoakTradeSummary, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := strconv.Atoi(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --max-perfect-win-trades value %q: %w", rawMaximum, err)
+	}
+	if maximum < 0 {
+		return fmt.Errorf("invalid --max-perfect-win-trades value %q: must be zero or greater", rawMaximum)
+	}
+	if summary.ClosedTrades <= maximum || summary.ClosedTrades <= 0 {
+		return nil
+	}
+	if summary.Wins == summary.ClosedTrades &&
+		summary.Losses == 0 &&
+		summary.MaxDrawdown.IsZero() &&
+		summary.MaxDrawdownPct.IsZero() {
+		return fmt.Errorf(
+			"paper realism gate failed: closed_trades=%d wins=%d losses=%d max_drawdown_pct=%s exceeds max_perfect_win_trades=%d; perfect paper wins without drawdown are insufficient proof",
+			summary.ClosedTrades,
+			summary.Wins,
+			summary.Losses,
+			summary.MaxDrawdownPct.String(),
+			maximum,
+		)
 	}
 	return nil
 }

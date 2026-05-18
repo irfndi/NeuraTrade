@@ -28,6 +28,7 @@ MAX_HOLD_RATIO="${MAX_HOLD_RATIO-0.745}"
 MAX_DRAWDOWN="${MAX_DRAWDOWN-}"
 MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT-0.01}"
 MAX_AI_PROVIDER_DEGRADED_CYCLES="${MAX_AI_PROVIDER_DEGRADED_CYCLES-0}"
+MAX_PERFECT_WIN_TRADES="${MAX_PERFECT_WIN_TRADES-20}"
 MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
@@ -80,6 +81,7 @@ Environment:
   MAX_DRAWDOWN    Maximum absolute drawdown; empty disables (default: ${MAX_DRAWDOWN:-disabled})
   MAX_DRAWDOWN_PCT Maximum drawdown as fraction of baseline balance; empty disables (default: ${MAX_DRAWDOWN_PCT})
   MAX_AI_PROVIDER_DEGRADED_CYCLES Maximum AI provider degraded cycles; empty disables (default: ${MAX_AI_PROVIDER_DEGRADED_CYCLES})
+  MAX_PERFECT_WIN_TRADES Maximum closed trades allowed with 100% wins and zero drawdown; empty disables (default: ${MAX_PERFECT_WIN_TRADES:-disabled})
   MIN_BASELINE_WIN_RATE_DELTA Minimum win-rate improvement versus baseline; empty disables (default: ${MIN_BASELINE_WIN_RATE_DELTA:-disabled})
   MIN_BASELINE_NET_PNL_DELTA Minimum net-PnL improvement versus baseline; empty disables (default: ${MIN_BASELINE_NET_PNL_DELTA:-disabled})
   MIN_BASELINE_AVG_PNL_DELTA Minimum avg-PnL/trade improvement versus baseline; empty disables (default: ${MIN_BASELINE_AVG_PNL_DELTA:-disabled})
@@ -147,6 +149,9 @@ run_soak() {
   if [ -n "$MAX_AI_PROVIDER_DEGRADED_CYCLES" ]; then
     args+=("--max-ai-provider-degraded-cycles" "$MAX_AI_PROVIDER_DEGRADED_CYCLES")
   fi
+  if [ -n "$MAX_PERFECT_WIN_TRADES" ]; then
+    args+=("--max-perfect-win-trades" "$MAX_PERFECT_WIN_TRADES")
+  fi
   if [ -n "$MIN_BASELINE_WIN_RATE_DELTA" ]; then
     args+=("--min-baseline-win-rate-delta" "$MIN_BASELINE_WIN_RATE_DELTA")
   fi
@@ -166,7 +171,7 @@ run_soak() {
   log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
 min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
-max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} min_baseline_win_rate_delta=${MIN_BASELINE_WIN_RATE_DELTA:-disabled} \
+max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} max_perfect_win_trades=${MAX_PERFECT_WIN_TRADES:-disabled} min_baseline_win_rate_delta=${MIN_BASELINE_WIN_RATE_DELTA:-disabled} \
 min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled}"
   if [ -n "$SOAK_OUTPUT_FILE" ]; then
     if ! command -v jq >/dev/null 2>&1; then

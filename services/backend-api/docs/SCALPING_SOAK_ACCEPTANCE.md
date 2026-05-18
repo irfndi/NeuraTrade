@@ -45,11 +45,18 @@ The soak should pass these gates unless an operator records a deliberate waiver:
 - `MAX_HOLD_RATIO=0.745`
 - `MAX_DRAWDOWN_PCT=0.01`
 - `MAX_AI_PROVIDER_DEGRADED_CYCLES=0`
+- `MAX_PERFECT_WIN_TRADES=20`
 - `MIN_BASELINE_WIN_RATE_DELTA=0`
 - `MIN_BASELINE_NET_PNL_DELTA=0`
 - `MIN_BASELINE_AVG_PNL_DELTA=0`
 
 The artifact verifier enforces these same defaults.
+
+`MAX_PERFECT_WIN_TRADES` is a paper-realism guard. If a paper soak closes more
+than this many trades with 100% wins and zero drawdown, the evidence is treated
+as insufficient even when PnL is positive. Use `MAX_PERFECT_WIN_TRADES=` only
+for diagnostic runs where an operator explicitly accepts that perfect paper
+results are not proof of production profitability.
 
 ## Run
 
@@ -81,6 +88,7 @@ export MIN_SIGNAL_QUALITY_COVERAGE=1
 export MAX_HOLD_RATIO=0.745
 export MAX_DRAWDOWN_PCT=0.01
 export MAX_AI_PROVIDER_DEGRADED_CYCLES=0
+export MAX_PERFECT_WIN_TRADES=20
 export MIN_BASELINE_WIN_RATE_DELTA=0
 export MIN_BASELINE_NET_PNL_DELTA=0
 export MIN_BASELINE_AVG_PNL_DELTA=0

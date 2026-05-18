@@ -16,6 +16,8 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			},
 			TradeSummary: services.ScalpingSoakTradeSummary{
 				ClosedTrades:       12,
+				Wins:               9,
+				Losses:             3,
 				WinRate:            decimal.NewFromFloat(0.75),
 				NetPnL:             decimal.NewFromFloat(0.12),
 				AvgNetPnLPerTrade:  decimal.NewFromFloat(0.01),
@@ -56,6 +58,7 @@ func TestValidateAcceptanceGates(t *testing.T) {
 				MaxDrawdown:              "0.05",
 				MaxDrawdownPct:           "0.001",
 				MaxAIDegradedCycles:      "1",
+				MaxPerfectWinTrades:      "20",
 				MinBaselineWinRateDelta:  "0.6",
 				MinBaselineNetPnLDelta:   "0.2",
 				MinBaselineAvgPnLDelta:   "0.01",
@@ -122,6 +125,16 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			wantErr: `invalid --max-ai-provider-degraded-cycles value "-1": must be zero or greater`,
 		},
 		{
+			name:    "rejects invalid perfect win threshold",
+			options: acceptanceGateOptions{MaxPerfectWinTrades: "not-an-int"},
+			wantErr: "parse --max-perfect-win-trades",
+		},
+		{
+			name:    "rejects negative perfect win threshold",
+			options: acceptanceGateOptions{MaxPerfectWinTrades: "-1"},
+			wantErr: `invalid --max-perfect-win-trades value "-1": must be zero or greater`,
+		},
+		{
 			name:    "fails baseline win rate delta",
 			options: acceptanceGateOptions{MinBaselineWinRateDelta: "0.7"},
 			wantErr: "baseline.delta_win_rate=0.627 below minimum=0.7",
@@ -163,6 +176,32 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestValidateAcceptanceGatesFailsImplausiblePerfectPaperProof(t *testing.T) {
+	result := &services.ScalpingLivePaperSoakResult{
+		Report: services.ScalpingSoakReport{
+			TradeSummary: services.ScalpingSoakTradeSummary{
+				ClosedTrades:   21,
+				Wins:           21,
+				Losses:         0,
+				MaxDrawdown:    decimal.Zero,
+				MaxDrawdownPct: decimal.Zero,
+			},
+		},
+	}
+
+	err := validateAcceptanceGates(result, acceptanceGateOptions{MaxPerfectWinTrades: "20"})
+	require.ErrorContains(t, err, "paper realism gate failed")
+	require.ErrorContains(t, err, "perfect paper wins without drawdown are insufficient proof")
+
+	err = validateAcceptanceGates(result, acceptanceGateOptions{MaxPerfectWinTrades: ""})
+	require.NoError(t, err)
+
+	result.Report.TradeSummary.Losses = 1
+	result.Report.TradeSummary.Wins = 20
+	err = validateAcceptanceGates(result, acceptanceGateOptions{MaxPerfectWinTrades: "20"})
+	require.NoError(t, err)
 }
 
 func TestValidateAcceptanceGatesRequiresResult(t *testing.T) {

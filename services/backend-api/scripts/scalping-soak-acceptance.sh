@@ -43,6 +43,7 @@ export MIN_SIGNAL_QUALITY_COVERAGE="${MIN_SIGNAL_QUALITY_COVERAGE-1}"
 export MAX_HOLD_RATIO="${MAX_HOLD_RATIO-0.745}"
 export MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT-0.01}"
 export MAX_AI_PROVIDER_DEGRADED_CYCLES="${MAX_AI_PROVIDER_DEGRADED_CYCLES-0}"
+export MAX_PERFECT_WIN_TRADES="${MAX_PERFECT_WIN_TRADES-20}"
 export MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 export MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 export MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
@@ -172,6 +173,7 @@ write_manifest() {
         max_hold_ratio: env.MAX_HOLD_RATIO,
         max_drawdown_pct: env.MAX_DRAWDOWN_PCT,
         max_ai_provider_degraded_cycles: env.MAX_AI_PROVIDER_DEGRADED_CYCLES,
+        max_perfect_win_trades: env.MAX_PERFECT_WIN_TRADES,
         min_baseline_win_rate_delta: env.MIN_BASELINE_WIN_RATE_DELTA,
         min_baseline_net_pnl_delta: env.MIN_BASELINE_NET_PNL_DELTA,
         min_baseline_avg_pnl_delta: env.MIN_BASELINE_AVG_PNL_DELTA
