@@ -172,8 +172,21 @@ if "$VERIFIER" "$invalid_regime_artifact" >"$negative_output" 2>&1; then
   exit 1
 fi
 
-if ! grep -q "numeric action/regime split" "$negative_output"; then
+if ! grep -q "action/regime split ratios" "$negative_output"; then
   echo "negative verifier output did not mention numeric split values" >&2
+  cat "$negative_output" >&2
+  exit 1
+fi
+
+invalid_action_artifact="${tmp_dir}/invalid-action-split.json"
+jq '.result.report.action_split.buy = "1.5"' "$artifact_path" >"$invalid_action_artifact"
+if "$VERIFIER" "$invalid_action_artifact" >"$negative_output" 2>&1; then
+  echo "expected verifier to fail when action_split contains a value above 1" >&2
+  exit 1
+fi
+
+if ! grep -q "action/regime split ratios" "$negative_output"; then
+  echo "negative verifier output did not mention split ratio bounds" >&2
   cat "$negative_output" >&2
   exit 1
 fi
