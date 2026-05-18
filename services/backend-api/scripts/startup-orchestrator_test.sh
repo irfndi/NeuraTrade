@@ -82,8 +82,9 @@ lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null || {
 }
 
 NEURATRADE_HOME="$tmp_dir/home" \
-  PORT="$port" \
-  BACKEND_HOST_PORT="$port" \
+  SERVER_PORT="$port" \
+  BACKEND_HOST_PORT="1" \
+  PORT="2" \
   bash "$ORCHESTRATOR" stop >"$output_file" 2>&1
 
 for _ in $(seq 1 50); do
