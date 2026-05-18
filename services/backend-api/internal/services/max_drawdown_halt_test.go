@@ -116,15 +116,48 @@ func TestMaxDrawdownHalt_ForceHalt(t *testing.T) {
 func TestMaxDrawdownHalt_ResumeTrading(t *testing.T) {
 	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
 
-	_ = halt.ForceHalt(context.Background(), "chat-1", "test")
+	state, err := halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	if err != nil {
+		t.Fatalf("unexpected error on initial CheckDrawdown: %v", err)
+	}
+	if state.TradingHalted {
+		t.Error("expected trading to not be halted at initial peak")
+	}
 
-	err := halt.ResumeTrading(context.Background(), "chat-1")
+	state, err = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
+	if err != nil {
+		t.Fatalf("unexpected error on drawdown CheckDrawdown: %v", err)
+	}
+	if !state.TradingHalted {
+		t.Error("expected trading to be halted after drawdown before resume")
+	}
+
+	err = halt.ResumeTrading(context.Background(), "chat-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if halt.IsTradingHalted("chat-1") {
 		t.Error("expected chat-1 to not be halted after resume")
+	}
+
+	state, exists := halt.GetState("chat-1")
+	if !exists {
+		t.Fatal("expected drawdown state after resume")
+	}
+	if !state.PeakValue.Equal(decimal.NewFromInt(800)) {
+		t.Errorf("expected active peak reset to current value 800, got %s", state.PeakValue)
+	}
+	if !state.CurrentDrawdown.IsZero() {
+		t.Errorf("expected active drawdown reset to zero, got %s", state.CurrentDrawdown)
+	}
+	if !state.MaxDrawdownSeen.Equal(decimal.RequireFromString("0.2")) {
+		t.Errorf("expected historical max drawdown to remain 0.2, got %s", state.MaxDrawdownSeen)
+	}
+
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
+	if halt.IsTradingHalted("chat-1") {
+		t.Error("expected resumed chat not to immediately re-halt at the same current value")
 	}
 }
 
@@ -163,6 +196,90 @@ func TestMaxDrawdownHalt_ResetPeak(t *testing.T) {
 	state, _ := halt.GetState("chat-1")
 	if !state.PeakValue.Equal(decimal.NewFromInt(900)) {
 		t.Errorf("expected peak to be 900, got %s", state.PeakValue)
+	}
+}
+
+func TestMaxDrawdownHalt_ForceResumeAllResetsActiveBaseline(t *testing.T) {
+	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
+
+	state, err := halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(1000))
+	if err != nil {
+		t.Fatalf("unexpected error on initial CheckDrawdown: %v", err)
+	}
+	if state.TradingHalted {
+		t.Error("expected chat-1 to not be halted at initial peak")
+	}
+	state, err = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
+	if err != nil {
+		t.Fatalf("unexpected error on drawdown CheckDrawdown: %v", err)
+	}
+	if !state.TradingHalted {
+		t.Error("expected chat-1 to be halted before force resume")
+	}
+	state, err = halt.CheckDrawdown(context.Background(), "chat-2", decimal.NewFromInt(500))
+	if err != nil {
+		t.Fatalf("unexpected error on chat-2 CheckDrawdown: %v", err)
+	}
+	if state.TradingHalted {
+		t.Error("expected chat-2 to not be halted")
+	}
+
+	resumed := halt.ForceResumeAll(context.Background())
+	if len(resumed) != 1 || resumed[0] != "chat-1" {
+		t.Fatalf("expected only chat-1 to resume, got %#v", resumed)
+	}
+	if halt.IsTradingHalted("chat-1") {
+		t.Fatal("expected chat-1 to be resumed")
+	}
+
+	state, exists := halt.GetState("chat-1")
+	if !exists {
+		t.Fatal("expected drawdown state for chat-1")
+	}
+	if !state.PeakValue.Equal(decimal.NewFromInt(800)) {
+		t.Errorf("expected active peak reset to current value 800, got %s", state.PeakValue)
+	}
+	if !state.CurrentDrawdown.IsZero() {
+		t.Errorf("expected active drawdown reset to zero, got %s", state.CurrentDrawdown)
+	}
+	if !state.MaxDrawdownSeen.Equal(decimal.RequireFromString("0.2")) {
+		t.Errorf("expected historical max drawdown to remain 0.2, got %s", state.MaxDrawdownSeen)
+	}
+
+	_, _ = halt.CheckDrawdown(context.Background(), "chat-1", decimal.NewFromInt(800))
+	if halt.IsTradingHalted("chat-1") {
+		t.Error("expected force-resumed chat not to immediately re-halt at the same current value")
+	}
+}
+
+func TestMaxDrawdownHalt_ForceHaltFreshAccountResumeInitializesBaseline(t *testing.T) {
+	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
+
+	err := halt.ForceHalt(context.Background(), "chat-fresh", "manual")
+	if err != nil {
+		t.Fatalf("unexpected ForceHalt error: %v", err)
+	}
+
+	err = halt.ResumeTrading(context.Background(), "chat-fresh")
+	if err != nil {
+		t.Fatalf("unexpected ResumeTrading error: %v", err)
+	}
+
+	state, err := halt.CheckDrawdown(context.Background(), "chat-fresh", decimal.NewFromInt(1000))
+	if err != nil {
+		t.Fatalf("unexpected CheckDrawdown error after fresh resume: %v", err)
+	}
+	if halt.IsTradingHalted("chat-fresh") {
+		t.Error("expected fresh-resumed account not to re-halt on first check")
+	}
+	if !state.CurrentDrawdown.IsZero() {
+		t.Errorf("expected zero drawdown after fresh resume, got %s", state.CurrentDrawdown)
+	}
+	if !state.PeakValue.Equal(decimal.NewFromInt(1000)) {
+		t.Errorf("expected peak initialized to 1000, got %s", state.PeakValue)
+	}
+	if !state.CurrentValue.Equal(decimal.NewFromInt(1000)) {
+		t.Errorf("expected current value initialized to 1000, got %s", state.CurrentValue)
 	}
 }
 

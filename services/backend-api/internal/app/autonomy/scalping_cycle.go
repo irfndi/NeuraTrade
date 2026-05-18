@@ -21,7 +21,8 @@ const (
 const (
 	DefaultMicroAccountMaxValue       = 250.0
 	DefaultSmallAccountMaxValue       = 2500.0
-	DefaultMicroMinConfidenceFloor    = 0.65
+	DefaultMicroMinConfidenceFloor    = 0.55
+	DefaultMicroConfidenceCap         = 0.65
 	DefaultMicroMaxCapitalPct         = 0.50
 	DefaultMaxConcurrentPositions     = 3
 	DefaultMicroMaxConcurrentPosition = 1
@@ -55,6 +56,7 @@ const (
 	scalpingNeutralImbalanceFloor      = 0.10
 	scalpingBuyRangeMax                = 45.0
 	scalpingSellRangeMin               = 55.0
+	scalpingContinuationRangeBuffer    = 5.0
 	scalpingConfidenceBase             = 0.50
 	scalpingConfidenceImbalanceW       = 0.55
 	scalpingConfidenceLiquidityW       = 0.20
@@ -68,6 +70,7 @@ type ScalpingPolicyConfig struct {
 	SmallAccountMaxValue     decimal.Decimal
 	MaxBidAskSpreadPct       float64
 	MicroMinConfidenceFloor  float64
+	MicroConfidenceCap       float64
 	MicroMaxCapitalPct       float64
 	MaxConcurrentPositions   int
 	MicroMaxConcurrent       int
@@ -85,6 +88,7 @@ func DefaultScalpingPolicyConfig() ScalpingPolicyConfig {
 		SmallAccountMaxValue:     decimal.NewFromFloat(DefaultSmallAccountMaxValue),
 		MaxBidAskSpreadPct:       ResolveScalpingMaxBidAskSpreadPctFromEnv(),
 		MicroMinConfidenceFloor:  DefaultMicroMinConfidenceFloor,
+		MicroConfidenceCap:       DefaultMicroConfidenceCap,
 		MicroMaxCapitalPct:       DefaultMicroMaxCapitalPct,
 		MaxConcurrentPositions:   DefaultMaxConcurrentPositions,
 		MicroMaxConcurrent:       DefaultMicroMaxConcurrentPosition,
@@ -112,6 +116,10 @@ func (c ScalpingPolicyConfig) Normalized() ScalpingPolicyConfig {
 		c.MicroMinConfidenceFloor = DefaultMicroMinConfidenceFloor
 	}
 	c.MicroMinConfidenceFloor = clampFloat(c.MicroMinConfidenceFloor, 0.05, 0.95)
+	if c.MicroConfidenceCap <= 0 {
+		c.MicroConfidenceCap = DefaultMicroConfidenceCap
+	}
+	c.MicroConfidenceCap = clampFloat(c.MicroConfidenceCap, c.MicroMinConfidenceFloor, 0.95)
 	if c.MicroMaxCapitalPct <= 0 {
 		c.MicroMaxCapitalPct = DefaultMicroMaxCapitalPct
 	}
@@ -193,12 +201,17 @@ type CandidateSignal struct {
 	BidAskSpread       float64
 	OrderBookImbalance float64
 	RangePosition24h   float64
+	PriceChange24hPct  float64
 }
 
 type CandidateRejection struct {
 	Symbol              string  `json:"symbol"`
 	Reason              string  `json:"reason"`
 	EstimatedConfidence float64 `json:"estimated_confidence,omitempty"`
+	BidAskSpreadPct     float64 `json:"bid_ask_spread_pct"`
+	OrderBookImbalance  float64 `json:"order_book_imbalance"`
+	RangePosition24h    float64 `json:"range_position_24h"`
+	PriceChange24hPct   float64 `json:"price_change_24h_pct"`
 }
 
 type CandidateFunnelSnapshot struct {
@@ -314,14 +327,14 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 
 	if policy.AccountTier == AccountTierMicro {
 		if recoveryMode == "" &&
-			policy.EffectiveMinConfidence > 0.72 &&
+			policy.EffectiveMinConfidence > cfg.MicroConfidenceCap &&
 			!hasAnyPolicyAdjustment(policy.PolicyAdjustments,
 				"weak_recent_win_rate",
 				"critical_recent_win_rate",
 				"loss_streak_confidence_tightening",
 				"drawdown_tightening",
 			) {
-			policy.EffectiveMinConfidence = 0.72
+			policy.EffectiveMinConfidence = cfg.MicroConfidenceCap
 			policy.PolicyAdjustments = append(policy.PolicyAdjustments, "micro_confidence_cap")
 		}
 		if policy.EffectiveMaxCapitalPct > cfg.MicroMaxCapitalPct {
@@ -533,7 +546,13 @@ func applyNoFillRecovery(policy *ScalpingCyclePolicy, input ScalpingCycleInput, 
 func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy) (ranked bool, viable bool, rejection CandidateRejection) {
 	spreadThreshold := resolvePolicySpreadThreshold(policy)
 	symbol := strings.TrimSpace(signal.Symbol)
-	rejection.Symbol = symbol
+	rejection = CandidateRejection{
+		Symbol:             symbol,
+		BidAskSpreadPct:    signal.BidAskSpread,
+		OrderBookImbalance: signal.OrderBookImbalance,
+		RangePosition24h:   signal.RangePosition24h,
+		PriceChange24hPct:  signal.PriceChange24hPct,
+	}
 	if symbol == "" || signal.Price.LessThanOrEqual(decimal.Zero) {
 		rejection.Reason = CandidateRejectMissingOrderbookSignal
 		return false, false, rejection
@@ -551,11 +570,7 @@ func evaluateCandidateSignal(signal CandidateSignal, policy ScalpingCyclePolicy)
 	action, estimatedConfidence, ok := estimateCandidateConfidence(signal, spreadThreshold)
 	rejection.EstimatedConfidence = estimatedConfidence
 	if !ok {
-		if math.Abs(signal.OrderBookImbalance) < scalpingNeutralImbalanceFloor {
-			rejection.Reason = CandidateRejectMissingOrderbookSignal
-		} else {
-			rejection.Reason = CandidateRejectNoDirectionalEdge
-		}
+		rejection.Reason = CandidateRejectNoDirectionalEdge
 		return true, false, rejection
 	}
 	_ = action
@@ -587,6 +602,32 @@ func estimateCandidateConfidence(signal CandidateSignal, spreadThreshold float64
 	case signal.OrderBookImbalance < 0 && signal.RangePosition24h >= scalpingSellRangeMin:
 		action = "sell"
 		rangeAlignment = clampFloat((signal.RangePosition24h-scalpingSellRangeMin)/(100.0-scalpingSellRangeMin), 0, 1)
+	case signal.OrderBookImbalance > 0 && signal.RangePosition24h <= scalpingBuyRangeMax+scalpingContinuationRangeBuffer:
+		action = "buy"
+		rangeAlignment = clampFloat((scalpingBuyRangeMax+scalpingContinuationRangeBuffer-signal.RangePosition24h)/(scalpingBuyRangeMax+scalpingContinuationRangeBuffer), 0, 1)
+	case signal.OrderBookImbalance < 0 && signal.RangePosition24h >= scalpingSellRangeMin-scalpingContinuationRangeBuffer:
+		action = "sell"
+		rangeAlignment = clampFloat((signal.RangePosition24h-(scalpingSellRangeMin-scalpingContinuationRangeBuffer))/(100.0-(scalpingSellRangeMin-scalpingContinuationRangeBuffer)), 0, 1)
+	case signal.OrderBookImbalance >= scalpingStrongImbalanceFloor &&
+		signal.PriceChange24hPct > 0 &&
+		signal.RangePosition24h <= scalpingSellRangeMin+scalpingContinuationRangeBuffer:
+		action = "buy"
+		rangeAlignment = continuationRangeAlignment(
+			scalpingBuyRangeMax,
+			scalpingSellRangeMin+scalpingContinuationRangeBuffer,
+			signal.RangePosition24h,
+			false,
+		)
+	case signal.OrderBookImbalance <= -scalpingStrongImbalanceFloor &&
+		signal.PriceChange24hPct < 0 &&
+		signal.RangePosition24h >= scalpingBuyRangeMax-scalpingContinuationRangeBuffer:
+		action = "sell"
+		rangeAlignment = continuationRangeAlignment(
+			scalpingBuyRangeMax-scalpingContinuationRangeBuffer,
+			scalpingSellRangeMin,
+			signal.RangePosition24h,
+			true,
+		)
 	default:
 		return "", 0, false
 	}
@@ -602,11 +643,22 @@ func estimateCandidateConfidence(signal CandidateSignal, spreadThreshold float64
 	return action, confidence, true
 }
 
+func continuationRangeAlignment(low, high, value float64, rising bool) float64 {
+	if high <= low {
+		return 0
+	}
+	if rising {
+		return clampFloat((value-low)/(high-low), 0, 1)
+	}
+	return clampFloat((high-value)/(high-low), 0, 1)
+}
+
 func hasInvalidCandidateMetrics(signal CandidateSignal) bool {
 	volume := signal.Volume24h.InexactFloat64()
 	return invalidCandidateFloat(signal.BidAskSpread) ||
 		invalidCandidateFloat(signal.OrderBookImbalance) ||
 		invalidCandidateFloat(signal.RangePosition24h) ||
+		invalidCandidateFloat(signal.PriceChange24hPct) ||
 		math.IsNaN(volume) ||
 		math.IsInf(volume, 0) ||
 		volume < 0

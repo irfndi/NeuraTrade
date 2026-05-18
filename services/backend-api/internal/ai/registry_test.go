@@ -3,6 +3,8 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -150,6 +152,75 @@ func TestRegistryCacheOperations(t *testing.T) {
 			assert.Nil(t, refreshed)
 		}
 	})
+}
+
+func TestFetchModels_AttachesProviderModelsAndParsesCapabilities(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"deepseek": {
+				"id": "deepseek",
+				"name": "DeepSeek",
+				"env": ["DEEPSEEK_API_KEY"],
+				"models": {
+					"deepseek-v4-pro": {
+						"id": "deepseek-v4-pro",
+						"name": "DeepSeek V4 Pro",
+						"tool_call": true,
+						"reasoning": true,
+						"modalities": {"input": ["text", "image"], "output": ["text"]},
+						"cost": {"input": 0.2, "output": 0.8},
+						"limit": {"context": 128000, "output": 8192}
+					},
+					"deepseek-chat": {
+						"id": "deepseek-chat",
+						"name": "DeepSeek Chat",
+						"tool_call": true,
+						"reasoning": false,
+						"status": "degraded"
+					},
+					"deepseek-vision-attachment": {
+						"id": "deepseek-vision-attachment",
+						"name": "DeepSeek Vision Attachment",
+						"attachment": true
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	registry := NewRegistry(WithModelsDevURL(server.URL))
+	models, err := registry.FetchModels(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, models.Providers, 1)
+	require.Len(t, models.Models, 3)
+	require.Len(t, models.Providers[0].Models, 3)
+	byID := make(map[string]ModelInfo, len(models.Providers[0].Models))
+	for _, model := range models.Providers[0].Models {
+		byID[model.ModelID] = model
+	}
+	pro := byID["deepseek-v4-pro"]
+	assert.True(t, pro.Capabilities.SupportsTools)
+	assert.True(t, pro.Capabilities.SupportsReasoning)
+	assert.True(t, pro.Capabilities.SupportsVision)
+	assert.Equal(t, "active", pro.Status)
+	assert.Equal(t, "degraded", byID["deepseek-chat"].Status)
+
+	for _, tc := range []struct {
+		name    string
+		modelID string
+	}{
+		{name: "image modality", modelID: "deepseek-v4-pro"},
+		{name: "attachment flag", modelID: "deepseek-vision-attachment"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.True(t, byID[tc.modelID].Capabilities.SupportsVision)
+		})
+	}
 }
 
 func TestFindModel(t *testing.T) {

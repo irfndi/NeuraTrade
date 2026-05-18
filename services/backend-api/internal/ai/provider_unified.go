@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -23,12 +22,7 @@ type UnifiedProviderClient struct {
 
 // NewUnifiedProviderClient creates a new unified provider client
 func NewUnifiedProviderClient(providerID, apiKey, baseURL, model string) *UnifiedProviderClient {
-	// MiniMax uses Anthropic format according to models.dev
-	// Force Anthropic format for MiniMax
-	useAnthropic := strings.Contains(baseURL, "minimax") || strings.Contains(baseURL, "anthropic")
-	// Zhipu uses OpenAI format
-	// DEBUG: Print detection result
-	fmt.Printf("[DEBUG] ProviderID=%s, baseURL=%s, useAnthropic=%v\n", providerID, baseURL, useAnthropic)
+	useAnthropic := ProviderUsesAnthropicFormat(providerID, baseURL)
 
 	return &UnifiedProviderClient{
 		providerID: providerID,
@@ -59,10 +53,10 @@ func (c *UnifiedProviderClient) Chat(ctx context.Context, req *ChatRequest) (*Ch
 
 	apiURL := c.baseURL
 	if !c.useAnthropicFormat {
-		apiURL += "/chat/completions"
+		apiURL = ProviderEndpointURL(apiURL, "/chat/completions")
 	} else {
 		// Anthropic format uses /messages endpoint
-		apiURL += "/messages"
+		apiURL = ProviderEndpointURL(apiURL, "/messages")
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
@@ -71,11 +65,15 @@ func (c *UnifiedProviderClient) Chat(ctx context.Context, req *ChatRequest) (*Ch
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	if c.useAnthropicFormat {
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
-		httpReq.Header.Set("x-api-key", c.apiKey)
+		if c.apiKey != "" {
+			httpReq.Header.Set("x-api-key", c.apiKey)
+		}
 	}
 
 	resp, err := c.httpClient.Do(httpReq)

@@ -192,6 +192,7 @@ type QuestEngine struct {
 	riskLockReasons           []string
 	aiProviderChainConfigured int
 	aiProviderChainUsable     int
+	opModeService             *OperationalModeService
 	// notificationService is used to send quest progress notifications
 	notificationService *NotificationService
 	// chatIDForQuest maps quest IDs to their owner's chat ID
@@ -352,6 +353,16 @@ func NewQuestEngineWithNotification(store QuestStore, redisClient *redis.Client,
 	engine := NewQuestEngineWithRedis(store, redisClient)
 	engine.notificationService = notifier
 	return engine
+}
+
+// SetOperationalModeService wires operator trading mode lookup for quest startup metadata.
+func (e *QuestEngine) SetOperationalModeService(service *OperationalModeService) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.opModeService = service
 }
 
 // registerDefaultDefinitions registers the default quest templates
@@ -1629,13 +1640,21 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 			log.Printf("Failed to create quest %s: %v", defID, err)
 			continue
 		}
-		// Set dry-run mode from config (default to false for live trading)
+		currentMode := e.resolveBeginAutonomousMode(chatID, quest)
+		isDryRun := currentMode != OpModeLive
 		if quest.Metadata == nil {
 			quest.Metadata = make(map[string]string)
 		}
-		quest.Metadata["dry_run"] = "false"
-		quest.Metadata["paper_trading"] = "false"
-		log.Printf("[QUEST] Created quest %s with dry_run=false (LIVE TRADING MODE)", quest.ID)
+		quest.Metadata["dry_run"] = strconv.FormatBool(isDryRun)
+		quest.Metadata["paper_trading"] = strconv.FormatBool(currentMode == ModePaper)
+		quest.Metadata["execution_mode"] = string(currentMode)
+		log.Printf(
+			"[QUEST] Created quest %s with execution_mode=%s dry_run=%t paper_trading=%t",
+			quest.ID,
+			currentMode,
+			isDryRun,
+			currentMode == ModePaper,
+		)
 
 		quest.Status = QuestStatusActive
 		quest.UpdatedAt = time.Now()
@@ -1656,6 +1675,28 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 	}
 
 	return state, nil
+}
+
+func (e *QuestEngine) resolveBeginAutonomousMode(chatID string, quest *Quest) OperationalMode {
+	if mode, ok := runtimeModeOverrideFromEnv(); ok {
+		return mode
+	}
+	if e != nil && e.opModeService != nil {
+		switch mode := e.opModeService.GetMode(chatID); mode {
+		case OpModeLive:
+			return OpModeLive
+		case ModePaper:
+			return ModePaper
+		case OpModeDry, ModeConservative, ModeModerate, ModeAggressive:
+			return mode
+		}
+	}
+	if quest != nil && quest.Metadata != nil {
+		if strings.EqualFold(strings.TrimSpace(quest.Metadata["paper_trading"]), "true") {
+			return ModePaper
+		}
+	}
+	return OpModeDry
 }
 
 func (e *QuestEngine) ensureQuestForChatInternal(definitionID, chatID string) (*Quest, error) {
@@ -2059,6 +2100,11 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		protectionMissingDetected      int
 		protectionMissingRecovered     int
 		managedOpenPositionsEffective  int
+		managedOpenAt                  time.Time
+		hasActiveManagedOpen           bool
+		effectiveMaxConcurrent         int
+		capAt                          time.Time
+		hasActiveCap                   bool
 		ghostPositionsCleaned          int
 	)
 
@@ -2246,7 +2292,38 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 		}
 		protectionMissingDetected = maxInt(protectionMissingDetected, readQuestMetricInt(cp["protection_missing_detected"]))
 		protectionMissingRecovered = maxInt(protectionMissingRecovered, readQuestMetricInt(cp["protection_missing_recovered"]))
-		managedOpenPositionsEffective = maxInt(managedOpenPositionsEffective, readQuestMetricInt(cp["managed_open_positions_effective"]))
+		if _, exists := cp["managed_open_positions_effective"]; exists {
+			value := readQuestMetricInt(cp["managed_open_positions_effective"])
+			switch {
+			case isActiveScalpingQuest && (!hasActiveManagedOpen || selectionAt.After(managedOpenAt)):
+				managedOpenPositionsEffective = value
+				managedOpenAt = selectionAt
+				hasActiveManagedOpen = true
+			case !hasActiveManagedOpen && selectionAt.After(managedOpenAt):
+				managedOpenPositionsEffective = value
+				managedOpenAt = selectionAt
+			}
+		} else if isActiveScalpingQuest && (!hasActiveManagedOpen || selectionAt.After(managedOpenAt)) {
+			managedOpenPositionsEffective = 0
+			managedOpenAt = selectionAt
+			hasActiveManagedOpen = true
+		}
+		if _, exists := cp["effective_max_concurrent_positions"]; exists {
+			value := readQuestMetricInt(cp["effective_max_concurrent_positions"])
+			switch {
+			case isActiveScalpingQuest && (!hasActiveCap || selectionAt.After(capAt)):
+				effectiveMaxConcurrent = value
+				capAt = selectionAt
+				hasActiveCap = true
+			case !hasActiveCap && selectionAt.After(capAt):
+				effectiveMaxConcurrent = value
+				capAt = selectionAt
+			}
+		} else if isActiveScalpingQuest && (!hasActiveCap || selectionAt.After(capAt)) {
+			effectiveMaxConcurrent = 0
+			capAt = selectionAt
+			hasActiveCap = true
+		}
 		ghostPositionsCleaned = maxInt(ghostPositionsCleaned, readQuestMetricInt(cp["ghost_positions_cleaned"]))
 		if _, exists := cp["autonomy_gate_open"]; exists {
 			autonomyGateOpen = readQuestMetricBool(cp["autonomy_gate_open"])
@@ -2446,6 +2523,9 @@ func (e *QuestEngine) GetChatRuntimeDiagnostics(chatID string) map[string]interf
 	)
 	result["runtime_ai_meta_hold_promotions"] = aiMetaHoldPromotions
 	result["managed_open_positions_effective"] = managedOpenPositionsEffective
+	if effectiveMaxConcurrent > 0 {
+		result["effective_max_concurrent_positions"] = effectiveMaxConcurrent
+	}
 	result["ghost_positions_cleaned"] = ghostPositionsCleaned
 	result["state_drift_active"] = stateDriftActive
 	result["state_drift_positions"] = stateDriftPositions

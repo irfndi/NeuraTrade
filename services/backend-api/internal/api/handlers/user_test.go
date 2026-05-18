@@ -1923,7 +1923,7 @@ func TestUserHandler_UpdateUserProfile_Comprehensive(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Contains(t, response, "error")
-		assert.Contains(t, response["error"], "invalid character")
+		assert.Contains(t, response["error"], "Invalid request body")
 	})
 }
 

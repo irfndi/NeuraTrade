@@ -9,6 +9,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const minComposerConfidenceSpread = 0.10
+
 // OHLCVData provides candlestick data for signal composition.
 type OHLCVData struct {
 	Exchange  string
@@ -83,7 +85,7 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 			Value:       spread,
 			Signal:      spreadSignal,
 			Strength:    spreadStrength,
-			Weight:      decimal.NewFromFloat(0.15),
+			Weight:      decimal.NewFromFloat(0.10),
 		})
 	}
 
@@ -110,27 +112,19 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 		Value:       volatility,
 		Signal:      volDirection,
 		Strength:    volStrength,
-		Weight:      decimal.NewFromFloat(0.15),
+		Weight:      decimal.NewFromFloat(0.10),
 	})
 
-	// 4. Trend factor
-	if len(ohlcv.Candles) >= 2 {
-		lastCandle := ohlcv.Candles[len(ohlcv.Candles)-1]
-		prevCandle := ohlcv.Candles[len(ohlcv.Candles)-2]
-		trendDir, trendStrength := classifyTrend(prevCandle, lastCandle)
-		var trendValue decimal.Decimal
-		if !prevCandle.Close.IsZero() {
-			trendValue = lastCandle.Close.Sub(prevCandle.Close).Div(prevCandle.Close)
-		} else {
-			trendValue = decimal.Zero
-		}
+	// 4. Trend factor (EMA crossover with 5 candles)
+	if len(ohlcv.Candles) >= 5 {
+		trendDir, trendStrength, trendValue := classifyTrendEMA(ohlcv.Candles)
 		components = append(components, SignalComponent{
 			Name:        "trend",
-			Description: "short-term price trend",
+			Description: "EMA crossover trend (3/5 period)",
 			Value:       trendValue,
 			Signal:      trendDir,
 			Strength:    trendStrength,
-			Weight:      decimal.NewFromFloat(0.40),
+			Weight:      decimal.NewFromFloat(0.35),
 		})
 	}
 
@@ -145,6 +139,20 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 			Signal:      liqDir,
 			Strength:    liqStrength,
 			Weight:      decimal.NewFromFloat(0.10),
+		})
+	}
+
+	// 6. RSI factor (14-period)
+	if len(ohlcv.Candles) >= 15 {
+		rsi := calculateRSI(ohlcv.Candles)
+		rsiDir, rsiStrength := classifyRSI(rsi)
+		components = append(components, SignalComponent{
+			Name:        "rsi",
+			Description: "RSI (14-period)",
+			Value:       rsi,
+			Signal:      rsiDir,
+			Strength:    rsiStrength,
+			Weight:      decimal.NewFromFloat(0.15),
 		})
 	}
 
@@ -178,12 +186,19 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 		signal.Direction = DirectionHold
 		signal.Confidence = decimal.NewFromFloat(0.3)
 	} else {
-		if buyScore.GreaterThan(sellScore) {
+		buyConfidence := decimal.Zero
+		sellConfidence := decimal.Zero
+		if !totalWeight.IsZero() {
+			buyConfidence = buyScore.Div(totalWeight)
+			sellConfidence = sellScore.Div(totalWeight)
+		}
+		marginThreshold := decimal.NewFromFloat(minComposerConfidenceSpread)
+		if buyScore.GreaterThan(sellScore) && buyConfidence.Sub(sellConfidence).GreaterThanOrEqual(marginThreshold) {
 			signal.Direction = DirectionBuy
-			signal.Confidence = buyScore.Div(totalWeight)
-		} else if sellScore.GreaterThan(buyScore) {
+			signal.Confidence = buyConfidence
+		} else if sellScore.GreaterThan(buyScore) && sellConfidence.Sub(buyConfidence).GreaterThanOrEqual(marginThreshold) {
 			signal.Direction = DirectionSell
-			signal.Confidence = sellScore.Div(totalWeight)
+			signal.Confidence = sellConfidence
 		} else {
 			signal.Direction = DirectionHold
 			signal.Confidence = decimal.Zero
@@ -240,13 +255,18 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 
 func classifySpread(spread decimal.Decimal) (Direction, SignalStrength) {
 	// spread is in percentage form (e.g., 0.05 means 0.05%), matching GetSpreadPct output
+	// Tight spreads are favorable conditions (slight bullish lean) but NOT a strong directional signal.
+	// Wide spreads indicate unfavorable conditions for scalping.
 	if spread.LessThan(decimal.NewFromFloat(0.05)) {
-		return DirectionBuy, StrengthStrong
-	}
-	if spread.LessThan(decimal.NewFromFloat(0.2)) {
 		return DirectionBuy, StrengthMedium
 	}
-	return DirectionHold, StrengthWeak
+	if spread.LessThan(decimal.NewFromFloat(0.10)) {
+		return DirectionHold, StrengthWeak
+	}
+	if spread.LessThan(decimal.NewFromFloat(0.20)) {
+		return DirectionHold, StrengthWeak
+	}
+	return DirectionSell, StrengthWeak
 }
 
 func classifyImbalance(imbalance decimal.Decimal) (Direction, SignalStrength) {
@@ -280,6 +300,7 @@ func calculateVolatility(candles []OHLCVCandle) decimal.Decimal {
 }
 
 func classifyVolatility(vol decimal.Decimal) (Direction, SignalStrength) {
+	// Vol > 5% = dangerous for scalping; < 0.5% = too quiet
 	if vol.LessThan(decimal.NewFromFloat(0.005)) {
 		return DirectionHold, StrengthWeak
 	}
@@ -287,45 +308,9 @@ func classifyVolatility(vol decimal.Decimal) (Direction, SignalStrength) {
 		return DirectionBuy, StrengthMedium
 	}
 	if vol.LessThan(decimal.NewFromFloat(0.05)) {
-		return DirectionBuy, StrengthStrong
+		return DirectionHold, StrengthMedium
 	}
 	return DirectionSell, StrengthStrong
-}
-
-func classifyTrend(prev, curr OHLCVCandle) (Direction, SignalStrength) {
-	change := curr.Close.Sub(prev.Close)
-
-	if change.IsZero() {
-		return DirectionHold, StrengthWeak
-	}
-
-	var magnitude decimal.Decimal
-	if !prev.Close.IsZero() {
-		magnitude = change.Div(prev.Close).Abs()
-	} else {
-		magnitude = change.Abs()
-	}
-
-	strongThreshold := decimal.NewFromFloat(0.005)
-	mediumThreshold := decimal.NewFromFloat(0.001)
-
-	if change.IsPositive() {
-		if magnitude.GreaterThanOrEqual(strongThreshold) {
-			return DirectionBuy, StrengthStrong
-		}
-		if magnitude.GreaterThanOrEqual(mediumThreshold) {
-			return DirectionBuy, StrengthMedium
-		}
-		return DirectionBuy, StrengthWeak
-	}
-
-	if magnitude.GreaterThanOrEqual(strongThreshold) {
-		return DirectionSell, StrengthStrong
-	}
-	if magnitude.GreaterThanOrEqual(mediumThreshold) {
-		return DirectionSell, StrengthMedium
-	}
-	return DirectionSell, StrengthWeak
 }
 
 func classifyLiquidity(score decimal.Decimal) (Direction, SignalStrength) {
@@ -334,6 +319,103 @@ func classifyLiquidity(score decimal.Decimal) (Direction, SignalStrength) {
 	}
 	if score.GreaterThan(decimal.NewFromFloat(40)) {
 		return DirectionBuy, StrengthMedium
+	}
+	return DirectionHold, StrengthWeak
+}
+
+func classifyTrendEMA(candles []OHLCVCandle) (Direction, SignalStrength, decimal.Decimal) {
+	if len(candles) < 5 {
+		return DirectionHold, StrengthWeak, decimal.Zero
+	}
+	shortEMA := calculateEMA(candles, 3)
+	longEMA := calculateEMA(candles, 5)
+	if longEMA.IsZero() {
+		return DirectionHold, StrengthWeak, decimal.Zero
+	}
+	trendValue := shortEMA.Sub(longEMA).Div(longEMA)
+	magnitude := trendValue.Abs()
+	strongThreshold := decimal.NewFromFloat(0.005)
+	mediumThreshold := decimal.NewFromFloat(0.001)
+	if trendValue.IsPositive() {
+		if magnitude.GreaterThanOrEqual(strongThreshold) {
+			return DirectionBuy, StrengthStrong, trendValue
+		}
+		if magnitude.GreaterThanOrEqual(mediumThreshold) {
+			return DirectionBuy, StrengthMedium, trendValue
+		}
+		return DirectionBuy, StrengthWeak, trendValue
+	}
+	if magnitude.GreaterThanOrEqual(strongThreshold) {
+		return DirectionSell, StrengthStrong, trendValue
+	}
+	if magnitude.GreaterThanOrEqual(mediumThreshold) {
+		return DirectionSell, StrengthMedium, trendValue
+	}
+	return DirectionSell, StrengthWeak, trendValue
+}
+
+func calculateEMA(candles []OHLCVCandle, period int) decimal.Decimal {
+	if len(candles) < period {
+		return decimal.Zero
+	}
+	start := len(candles) - period
+	sum := decimal.Zero
+	for i := start; i < len(candles); i++ {
+		sum = sum.Add(candles[i].Close)
+	}
+	sma := sum.Div(decimal.NewFromInt(int64(period)))
+	multiplier := decimal.NewFromFloat(2.0).Div(decimal.NewFromInt(int64(period + 1)))
+	ema := sma
+	for i := start + 1; i < len(candles); i++ {
+		ema = candles[i].Close.Sub(ema).Mul(multiplier).Add(ema)
+	}
+	return ema
+}
+
+func calculateRSI(candles []OHLCVCandle) decimal.Decimal {
+	period := 14
+	if len(candles) < period+1 {
+		return decimal.NewFromFloat(50)
+	}
+	gains := decimal.Zero
+	losses := decimal.Zero
+	start := len(candles) - period
+	for i := start; i < len(candles); i++ {
+		change := candles[i].Close.Sub(candles[i-1].Close)
+		if change.IsPositive() {
+			gains = gains.Add(change)
+		} else {
+			losses = losses.Add(change.Abs())
+		}
+	}
+	avgGain := gains.Div(decimal.NewFromInt(int64(period)))
+	avgLoss := losses.Div(decimal.NewFromInt(int64(period)))
+	if avgLoss.IsZero() {
+		return decimal.NewFromFloat(100)
+	}
+	rs := avgGain.Div(avgLoss)
+	rsi := decimal.NewFromFloat(100).Sub(decimal.NewFromFloat(100).Div(decimal.NewFromInt(1).Add(rs)))
+	if rsi.GreaterThan(decimal.NewFromFloat(100)) {
+		return decimal.NewFromFloat(100)
+	}
+	if rsi.LessThan(decimal.Zero) {
+		return decimal.Zero
+	}
+	return rsi
+}
+
+func classifyRSI(rsi decimal.Decimal) (Direction, SignalStrength) {
+	if rsi.LessThan(decimal.NewFromFloat(30)) {
+		return DirectionBuy, StrengthStrong
+	}
+	if rsi.LessThan(decimal.NewFromFloat(40)) {
+		return DirectionBuy, StrengthMedium
+	}
+	if rsi.GreaterThan(decimal.NewFromFloat(70)) {
+		return DirectionSell, StrengthStrong
+	}
+	if rsi.GreaterThan(decimal.NewFromFloat(60)) {
+		return DirectionSell, StrengthMedium
 	}
 	return DirectionHold, StrengthWeak
 }

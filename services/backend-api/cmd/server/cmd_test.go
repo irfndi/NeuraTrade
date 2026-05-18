@@ -498,3 +498,17 @@ func TestBootstrapCommandCollectConfigurationDefaults(t *testing.T) {
 	assert.Equal(t, "", cfg.TelegramBotToken)
 	assert.Equal(t, "", cfg.SentryDSN)
 }
+
+func TestBootstrapCommandCollectConfigurationRequiresModelWhenProviderHasNoDefault(t *testing.T) {
+	input := strings.Repeat("\n", 11) + "mlx\n\nlocal-model\n\n"
+
+	cmd := &BootstrapCommand{
+		reader: bufio.NewReader(strings.NewReader(input)),
+	}
+
+	cfg := cmd.collectConfiguration()
+
+	assert.Equal(t, "mlx", cfg.AIProvider)
+	assert.Equal(t, "local-model", cfg.AIModel)
+	assert.Equal(t, "http://localhost:8080/v1", cfg.AIBaseURL)
+}

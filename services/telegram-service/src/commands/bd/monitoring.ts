@@ -177,7 +177,7 @@ export function registerMonitoringCommands(
       await ctx.reply(formatQuestRows(response.quests ?? []));
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to fetch quests (${(error as Error).message}).`,
+        `❌ Failed to fetch quests (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
@@ -204,7 +204,7 @@ export function registerMonitoringCommands(
       );
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to fetch portfolio (${(error as Error).message}).`,
+        `❌ Failed to fetch portfolio (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
@@ -220,7 +220,9 @@ export function registerMonitoringCommands(
       const response = await api.getLogs(chatId, 10);
       await ctx.reply(formatLogs(response.logs ?? []));
     } catch (error) {
-      await ctx.reply(`❌ Failed to fetch logs (${(error as Error).message}).`);
+      await ctx.reply(
+        `❌ Failed to fetch logs (${error instanceof Error ? error.message : String(error)}).`,
+      );
     }
   });
 
@@ -242,7 +244,7 @@ export function registerMonitoringCommands(
       await ctx.reply(message);
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to run doctor diagnostics (${(error as Error).message}).`,
+        `❌ Failed to run doctor diagnostics (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });

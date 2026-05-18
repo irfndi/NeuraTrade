@@ -9,7 +9,7 @@ import { registerAllCommands } from "./src/commands";
 import { registerTelegramCommandMenu } from "./src/commands/menu";
 import { SessionManager } from "./src/session";
 import { logger } from "./src/utils/logger";
-import { startGrpcServer } from "./grpc-server";
+import { safeCredentialEqual, startGrpcServer } from "./grpc-server";
 
 const bot = new Bot(config.botToken);
 
@@ -94,7 +94,7 @@ app.post("/send-message", async (c) => {
   }
 
   const apiKey = c.req.header("X-API-Key");
-  if (!apiKey || apiKey !== config.adminApiKey) {
+  if (!apiKey || !safeCredentialEqual(apiKey, config.adminApiKey)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -126,11 +126,12 @@ if (!config.usePolling && bot) {
       );
     }
 
-    if (config.webhookSecret) {
-      const provided = c.req.header("X-Telegram-Bot-Api-Secret-Token");
-      if (!provided || provided !== config.webhookSecret) {
-        return c.json({ error: "Unauthorized" }, 401);
-      }
+    if (!config.webhookSecret) {
+      return c.json({ error: "Webhook secret not configured" }, 500);
+    }
+    const provided = c.req.header("X-Telegram-Bot-Api-Secret-Token");
+    if (!provided || !safeCredentialEqual(provided, config.webhookSecret)) {
+      return c.json({ error: "Unauthorized" }, 401);
     }
 
     const update = await c.req.json();

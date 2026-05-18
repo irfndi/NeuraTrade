@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +15,10 @@ import (
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/irfndi/neuratrade/internal/telemetry"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+const defaultScalpingTelemetryRetentionHours = 2160
 
 // CleanupService handles automatic cleanup of old data.
 type CleanupService struct {
@@ -284,6 +289,19 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 		return fmt.Errorf("failed to cleanup funding arbitrage opportunities: %w", err)
 	}
 
+	// Clean up old scalping cycle telemetry with error recovery
+	scalpingRetention := config.ScalpingTelemetry.RetentionHours
+	if scalpingRetention <= 0 {
+		scalpingRetention = defaultScalpingTelemetryRetentionHours
+	}
+	c.logger.Info("Cleaning up scalping cycle telemetry", "retention_hours", scalpingRetention)
+	err = c.executeWithRetry(spanCtx, "cleanup_scalping_telemetry", func() error {
+		return c.cleanupScalpingTelemetry(spanCtx, scalpingRetention)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to cleanup scalping telemetry: %w", err)
+	}
+
 	// Get data statistics after cleanup with error recovery
 	var statsAfter map[string]int64
 	err = c.executeWithRetry(spanCtx, "get_stats_after", func() error {
@@ -301,7 +319,8 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 			"market_data_count", statsAfter["market_data_count"],
 			"funding_rates_count", statsAfter["funding_rates_count"],
 			"arbitrage_opportunities_count", statsAfter["arbitrage_opportunities_count"],
-			"funding_arbitrage_opportunities_count", statsAfter["funding_arbitrage_opportunities_count"])
+			"funding_arbitrage_opportunities_count", statsAfter["funding_arbitrage_opportunities_count"],
+			"scalping_cycle_telemetry_count", statsAfter["scalping_cycle_telemetry_count"])
 
 		// Log cleanup summary
 		if statsBefore != nil {
@@ -309,16 +328,19 @@ func (c *CleanupService) runCleanup(ctx context.Context, config CleanupConfig) (
 			fundingRatesDeleted := statsBefore["funding_rates_count"] - statsAfter["funding_rates_count"]
 			arbitrageDeleted := statsBefore["arbitrage_opportunities_count"] - statsAfter["arbitrage_opportunities_count"]
 			fundingArbitrageDeleted := statsBefore["funding_arbitrage_opportunities_count"] - statsAfter["funding_arbitrage_opportunities_count"]
+			scalpingTelemetryDeleted := statsBefore["scalping_cycle_telemetry_count"] - statsAfter["scalping_cycle_telemetry_count"]
 
 			span.SetData("market_data_deleted", marketDataDeleted)
 			span.SetData("funding_rates_deleted", fundingRatesDeleted)
 			span.SetData("arbitrage_deleted", arbitrageDeleted)
 			span.SetData("funding_arbitrage_deleted", fundingArbitrageDeleted)
+			span.SetData("scalping_telemetry_deleted", scalpingTelemetryDeleted)
 			c.logger.Info("Cleanup summary",
 				"market_data_deleted", marketDataDeleted,
 				"funding_rates_deleted", fundingRatesDeleted,
 				"arbitrage_deleted", arbitrageDeleted,
-				"funding_arbitrage_deleted", fundingArbitrageDeleted)
+				"funding_arbitrage_deleted", fundingArbitrageDeleted,
+				"scalping_telemetry_deleted", scalpingTelemetryDeleted)
 		}
 	}
 
@@ -494,6 +516,48 @@ func (c *CleanupService) cleanupFundingArbitrageOpportunities(ctx context.Contex
 	return nil
 }
 
+// cleanupScalpingTelemetry removes old scalping cycle telemetry records.
+func (c *CleanupService) cleanupScalpingTelemetry(ctx context.Context, retentionHours int) (err error) {
+	if c.db == nil {
+		return fmt.Errorf("database pool is not available")
+	}
+	if retentionHours <= 0 {
+		return fmt.Errorf("scalping telemetry retention hours must be positive")
+	}
+
+	spanCtx, span := observability.TraceDBQuery(ctx, "DELETE", "scalping_cycle_telemetry")
+	defer func() {
+		span.SetData("retention_hours", retentionHours)
+		observability.FinishSpan(span, err)
+	}()
+
+	cutoffTime := time.Now().Add(-time.Duration(retentionHours) * time.Hour)
+
+	result, err := c.db.Exec(spanCtx,
+		"DELETE FROM scalping_cycle_telemetry WHERE cycle_at < $1",
+		cutoffTime)
+	if err != nil {
+		if isMissingCleanupTableError(err) {
+			c.logger.Info("Skipping scalping telemetry cleanup because table is not initialized")
+			return nil
+		}
+		return fmt.Errorf("failed to delete old scalping telemetry records: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected > 0 {
+		c.logger.Info("Cleaned up old scalping cycle telemetry records",
+			"records_deleted", rowsAffected,
+			"retention_hours", retentionHours)
+		span.SetData("records_deleted", rowsAffected)
+	}
+
+	return nil
+}
+
 // GetDataStats returns statistics about current data storage.
 //
 // Parameters:
@@ -549,10 +613,39 @@ func (c *CleanupService) GetDataStats(ctx context.Context) (stats map[string]int
 	}
 	stats["funding_arbitrage_opportunities_count"] = fundingArbitrageOpportunitiesCount
 
+	// Count scalping cycle telemetry
+	var scalpingCycleTelemetryCount int64
+	err = c.db.QueryRow(spanCtx, "SELECT COUNT(*) FROM scalping_cycle_telemetry").Scan(&scalpingCycleTelemetryCount)
+	if err != nil {
+		if isMissingCleanupTableError(err) {
+			scalpingCycleTelemetryCount = 0
+		} else {
+			return nil, fmt.Errorf("failed to count scalping cycle telemetry: %w", err)
+		}
+	}
+	stats["scalping_cycle_telemetry_count"] = scalpingCycleTelemetryCount
+
 	span.SetData("market_data_count", marketDataCount)
 	span.SetData("funding_rates_count", fundingRatesCount)
 	span.SetData("arbitrage_opportunities_count", arbitrageOpportunitiesCount)
 	span.SetData("funding_arbitrage_opportunities_count", fundingArbitrageOpportunitiesCount)
+	span.SetData("scalping_cycle_telemetry_count", scalpingCycleTelemetryCount)
 
 	return stats, nil
+}
+
+func isMissingCleanupTableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such table") ||
+		strings.Contains(msg, "undefined_table") ||
+		strings.Contains(msg, "does not exist")
 }

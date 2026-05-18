@@ -64,7 +64,7 @@ export function registerLiquidationCommands(
       );
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to liquidate ${symbol} (${(error as Error).message}).`,
+        `❌ Failed to liquidate ${symbol} (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
@@ -102,7 +102,7 @@ export function registerLiquidationCommands(
       );
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to liquidate all positions (${(error as Error).message}).`,
+        `❌ Failed to liquidate all positions (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });

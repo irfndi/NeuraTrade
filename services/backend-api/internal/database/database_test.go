@@ -90,6 +90,16 @@ func TestRedisClient_HealthCheck_NilClient(t *testing.T) {
 	assert.Contains(t, err.Error(), "redis client is nil")
 }
 
+// Test RedisClient HealthCheck with nil receiver
+func TestRedisClient_HealthCheck_NilReceiver(t *testing.T) {
+	var client *RedisClient
+	ctx := context.Background()
+
+	err := client.HealthCheck(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "redis client is nil")
+}
+
 // Test RedisClient cache operations with nil client
 func TestRedisClient_Set_NilClient(t *testing.T) {
 	client := &RedisClient{Client: nil}

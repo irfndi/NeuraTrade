@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -15,16 +16,36 @@ import (
 	"github.com/irfndi/neuratrade/internal/telemetry"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true
-		}
+func matchOrigin(origin, allowed string) bool {
+	if origin == allowed {
 		return true
-	},
+	}
+	o, errO := url.Parse(origin)
+	a, errA := url.Parse(allowed)
+	if errO != nil || errA != nil {
+		return false
+	}
+	return o.Scheme == a.Scheme && o.Hostname() == a.Hostname() && o.Port() == a.Port()
+}
+
+func defaultUpgrader(allowedOrigins []string) websocket.Upgrader {
+	return websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true // Allow same-origin requests
+			}
+			for _, allowed := range allowedOrigins {
+				if matchOrigin(origin, allowed) {
+					return true
+				}
+			}
+			slog.Warn("websocket origin rejected", "origin", origin)
+			return false
+		},
+	}
 }
 
 type MarketDataMessage struct {
@@ -57,30 +78,35 @@ type WebSocketClient struct {
 }
 
 type WebSocketHandler struct {
-	redis      *database.RedisClient
-	clients    map[*WebSocketClient]bool
-	register   chan *WebSocketClient
-	unregister chan *WebSocketClient
-	broadcast  chan MarketDataMessage
-	mu         sync.RWMutex
-	logger     *slog.Logger
-	ctx        context.Context
-	cancel     context.CancelFunc
-	done       chan struct{}
+	redis          *database.RedisClient
+	allowedOrigins []string
+	clients        map[*WebSocketClient]bool
+	register       chan *WebSocketClient
+	unregister     chan *WebSocketClient
+	broadcast      chan MarketDataMessage
+	mu             sync.RWMutex
+	logger         *slog.Logger
+	ctx            context.Context
+	cancel         context.CancelFunc
+	done           chan struct{}
 }
 
-func NewWebSocketHandler(redis *database.RedisClient) *WebSocketHandler {
+func NewWebSocketHandler(redis *database.RedisClient, allowedOrigins []string) *WebSocketHandler {
+	if len(allowedOrigins) == 0 {
+		allowedOrigins = []string{"http://localhost", "https://localhost"}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &WebSocketHandler{
-		redis:      redis,
-		clients:    make(map[*WebSocketClient]bool),
-		register:   make(chan *WebSocketClient, 256),
-		unregister: make(chan *WebSocketClient, 256),
-		broadcast:  make(chan MarketDataMessage, 1024),
-		logger:     telemetry.Logger(),
-		ctx:        ctx,
-		cancel:     cancel,
-		done:       make(chan struct{}),
+		redis:          redis,
+		allowedOrigins: allowedOrigins,
+		clients:        make(map[*WebSocketClient]bool),
+		register:       make(chan *WebSocketClient, 256),
+		unregister:     make(chan *WebSocketClient, 256),
+		broadcast:      make(chan MarketDataMessage, 1024),
+		logger:         telemetry.Logger(),
+		ctx:            ctx,
+		cancel:         cancel,
+		done:           make(chan struct{}),
 	}
 	go h.run()
 	return h
@@ -160,6 +186,7 @@ func (h *WebSocketHandler) Stop() {
 }
 
 func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
+	upgrader := defaultUpgrader(h.allowedOrigins)
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		h.logger.Error("Failed to upgrade WebSocket connection", "error", err)

@@ -4,14 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/irfndi/neuratrade/internal/services"
+	telegrampb "github.com/irfndi/neuratrade/pkg/pb/telegram"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 // DatabaseInterface for mocking database operations
@@ -42,6 +47,20 @@ type MockRedisHealthClient struct {
 func (m *MockRedisHealthClient) HealthCheck(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
+}
+
+type testTelegramHealthServer struct {
+	telegrampb.UnimplementedTelegramServiceServer
+	status  string
+	service string
+}
+
+func (s testTelegramHealthServer) HealthCheck(context.Context, *telegrampb.HealthCheckRequest) (*telegrampb.HealthCheckResponse, error) {
+	return &telegrampb.HealthCheckResponse{
+		Status:  s.status,
+		Service: s.service,
+		Version: "test",
+	}, nil
 }
 
 func TestNewHealthHandler(t *testing.T) {
@@ -202,6 +221,235 @@ func TestHealthHandler_DegradedNonCriticalService(t *testing.T) {
 	mockDB.AssertExpectations(t)
 	mockRedis.AssertExpectations(t)
 	mockCacheAnalytics.AssertExpectations(t)
+}
+
+func TestHealthHandler_TelegramDeliveryHealthyWhenConfiguredServiceResponds(t *testing.T) {
+	mockCCXTServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy","exchanges_count":50,"exchange_connectivity":"configured"}`))
+	}))
+	if mockCCXTServer == nil {
+		return
+	}
+	defer mockCCXTServer.Close()
+
+	mockTelegramServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/health", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy","service":"telegram-service","bot_active":true}`))
+	}))
+	if mockTelegramServer == nil {
+		return
+	}
+	defer mockTelegramServer.Close()
+
+	mockDB := &MockDatabase{}
+	mockRedis := &MockRedisHealthClient{}
+	mockCacheAnalytics := NewMockCacheAnalyticsService()
+	mockDB.On("HealthCheck", mock.Anything).Return(nil)
+	mockRedis.On("HealthCheck", mock.Anything).Return(nil)
+	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
+	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
+
+	handler := NewHealthHandlerWithTelegram(
+		mockDB,
+		mockRedis,
+		mockCCXTServer.URL,
+		TelegramHealthConfig{ServiceURL: mockTelegramServer.URL, BotToken: "test-token"},
+		mockCacheAnalytics,
+	)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	handler.HealthCheck(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "healthy", response["status"])
+	services, ok := response["services"].(map[string]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, "healthy", services["telegram"])
+
+	mockDB.AssertExpectations(t)
+	mockRedis.AssertExpectations(t)
+	mockCacheAnalytics.AssertExpectations(t)
+}
+
+func TestHealthHandler_TelegramDeliveryOutageDegradesHealth(t *testing.T) {
+	mockCCXTServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy","exchanges_count":50,"exchange_connectivity":"configured"}`))
+	}))
+	if mockCCXTServer == nil {
+		return
+	}
+	defer mockCCXTServer.Close()
+
+	mockTelegramServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy"}`))
+	}))
+	if mockTelegramServer == nil {
+		return
+	}
+	telegramURL := mockTelegramServer.URL
+	mockTelegramServer.Close()
+
+	mockDB := &MockDatabase{}
+	mockRedis := &MockRedisHealthClient{}
+	mockCacheAnalytics := NewMockCacheAnalyticsService()
+	mockDB.On("HealthCheck", mock.Anything).Return(nil)
+	mockRedis.On("HealthCheck", mock.Anything).Return(nil)
+	mockCacheAnalytics.On("GetMetrics", mock.Anything).Return(&services.CacheMetrics{}, nil)
+	mockCacheAnalytics.On("GetAllStats").Return(map[string]services.CacheStats{})
+
+	handler := NewHealthHandlerWithTelegram(
+		mockDB,
+		mockRedis,
+		mockCCXTServer.URL,
+		TelegramHealthConfig{ServiceURL: telegramURL, BotToken: "test-token"},
+		mockCacheAnalytics,
+	)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	handler.HealthCheck(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "degraded", response["status"])
+	services, ok := response["services"].(map[string]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, "unhealthy: delivery unavailable", services["telegram"])
+	assert.NotContains(t, services["telegram"].(string), telegramURL)
+
+	mockDB.AssertExpectations(t)
+	mockRedis.AssertExpectations(t)
+	mockCacheAnalytics.AssertExpectations(t)
+}
+
+func TestCheckTelegramGRPCRequiresHealthRPC(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local TCP listener unavailable: %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+	}()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			_ = conn.Close()
+		}
+	}()
+
+	err = checkTelegramGRPC(context.Background(), listener.Addr().String())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "health rpc")
+	<-done
+}
+
+func TestCheckTelegramGRPCHealthyResponse(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local TCP listener unavailable: %v", err)
+	}
+	server := grpc.NewServer()
+	telegrampb.RegisterTelegramServiceServer(server, testTelegramHealthServer{
+		status:  "serving",
+		service: "telegram-service",
+	})
+	defer server.Stop()
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	err = checkTelegramGRPC(context.Background(), listener.Addr().String())
+
+	require.NoError(t, err)
+}
+
+func TestCheckTelegramDeliveryRequiresAllConfiguredEndpoints(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local TCP listener unavailable: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	telegrampb.RegisterTelegramServiceServer(grpcServer, testTelegramHealthServer{
+		status:  "serving",
+		service: "telegram-service",
+	})
+	defer grpcServer.Stop()
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+
+	httpServer := newTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/health", r.URL.Path)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"degraded","bot_active":false}`))
+	}))
+	if httpServer == nil {
+		return
+	}
+	defer httpServer.Close()
+
+	handler := &HealthHandler{
+		telegram: TelegramHealthConfig{
+			GrpcAddress: listener.Addr().String(),
+			ServiceURL:  httpServer.URL,
+			BotToken:    "test-token",
+		},
+	}
+
+	err = handler.checkTelegramDelivery(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "http ")
+	assert.Contains(t, err.Error(), "/health returned status: 503")
+}
+
+func TestCheckTelegramDeliveryRequiresHTTPProbeWhenGRPCConfigured(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local TCP listener unavailable: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	telegrampb.RegisterTelegramServiceServer(grpcServer, testTelegramHealthServer{
+		status:  "serving",
+		service: "telegram-service",
+	})
+	defer grpcServer.Stop()
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+
+	handler := &HealthHandler{
+		telegram: TelegramHealthConfig{
+			GrpcAddress: listener.Addr().String(),
+			BotToken:    "test-token",
+		},
+	}
+
+	err = handler.checkTelegramDelivery(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "http health probe not configured")
+}
+
+func TestTelegramHealthProbeTimeout(t *testing.T) {
+	t.Setenv("NEURATRADE_TELEGRAM_HEALTH_TIMEOUT", "750ms")
+	assert.Equal(t, 750*time.Millisecond, telegramHealthProbeTimeout())
+
+	t.Setenv("NEURATRADE_TELEGRAM_HEALTH_TIMEOUT", "invalid")
+	assert.Equal(t, 2*time.Second, telegramHealthProbeTimeout())
 }
 
 func TestHealthHandler_ReadinessCheck(t *testing.T) {

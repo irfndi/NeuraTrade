@@ -259,6 +259,19 @@ func (r *Registry) FetchModels(ctx context.Context) (*ModelRegistry, error) {
 				if reasoning, ok := md["reasoning"].(bool); ok {
 					model.Capabilities.SupportsReasoning = reasoning
 				}
+				if attachment, ok := md["attachment"].(bool); ok && attachment {
+					model.Capabilities.SupportsVision = true
+				}
+				if modalities, ok := md["modalities"].(map[string]interface{}); ok {
+					if inputs, ok := modalities["input"].([]interface{}); ok {
+						for _, input := range inputs {
+							if input == "image" {
+								model.Capabilities.SupportsVision = true
+								break
+							}
+						}
+					}
+				}
 
 				// Status - default to active if not specified
 				model.Status = "active"
@@ -299,6 +312,7 @@ func (r *Registry) FetchModels(ctx context.Context) (*ModelRegistry, error) {
 				model.LatencyClass = inferLatencyClass(providerID)
 
 				registry.Models = append(registry.Models, model)
+				provider.Models = append(provider.Models, model)
 			}
 		}
 

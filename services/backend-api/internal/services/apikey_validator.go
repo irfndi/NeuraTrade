@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -226,7 +227,10 @@ func (v *APIKeyPermissionValidator) ValidateStoredKey(ctx context.Context, keyID
 		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
 
-	permissions := parsePermissions(permissionsJSON)
+	permissions, err := parsePermissions(permissionsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse API key permissions: %w", err)
+	}
 	return v.ValidateKey(ctx, keyID, exchange, permissions)
 }
 
@@ -242,42 +246,32 @@ func (v *APIKeyPermissionValidator) GetConfig() APIKeyPermissionConfig {
 	return v.config
 }
 
-func parsePermissions(data []byte) []APIKeyPermission {
+func parsePermissions(data []byte) ([]APIKeyPermission, error) {
 	if len(data) == 0 {
-		return []APIKeyPermission{}
+		return []APIKeyPermission{}, nil
 	}
 
-	permissions := make([]APIKeyPermission, 0)
-	str := string(data)
-	if contains(str, "trade") {
-		permissions = append(permissions, PermissionTrade)
+	var raw []string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("invalid permissions JSON: %w", err)
 	}
-	if contains(str, "read") {
-		permissions = append(permissions, PermissionRead)
-	}
-	if contains(str, "withdraw") {
-		permissions = append(permissions, PermissionWithdraw)
-	}
-	if contains(str, "transfer") {
-		permissions = append(permissions, PermissionTransfer)
-	}
-	if contains(str, "deposit") {
-		permissions = append(permissions, PermissionDeposit)
-	}
-	return permissions
-}
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+	permissions := make([]APIKeyPermission, 0, len(raw))
+	for _, p := range raw {
+		switch p {
+		case "trade":
+			permissions = append(permissions, PermissionTrade)
+		case "read":
+			permissions = append(permissions, PermissionRead)
+		case "withdraw":
+			permissions = append(permissions, PermissionWithdraw)
+		case "transfer":
+			permissions = append(permissions, PermissionTransfer)
+		case "deposit":
+			permissions = append(permissions, PermissionDeposit)
 		}
 	}
-	return false
+	return permissions, nil
 }
 
 func (v *APIKeyPermissionValidator) QuickValidate(permissions []APIKeyPermission) bool {

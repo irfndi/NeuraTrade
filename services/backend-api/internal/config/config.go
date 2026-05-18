@@ -213,6 +213,8 @@ type CleanupConfig struct {
 	FundingRates CleanupDataConfig `mapstructure:"funding_rates"`
 	// ArbitrageOpportunities configures retention for arbitrage opportunity records.
 	ArbitrageOpportunities CleanupArbitrageConfig `mapstructure:"arbitrage_opportunities"`
+	// ScalpingTelemetry configures retention for scalping cycle telemetry records.
+	ScalpingTelemetry CleanupArbitrageConfig `mapstructure:"scalping_telemetry"`
 	// IntervalMinutes is the frequency of cleanup job execution.
 	IntervalMinutes int `mapstructure:"interval"`
 	// EnableSmartCleanup enables more intelligent cleanup strategies.
@@ -555,6 +557,7 @@ func setDefaults() {
 	viper.SetDefault("cleanup.funding_rates.retention_hours", 36)
 	viper.SetDefault("cleanup.funding_rates.deletion_hours", 12)
 	viper.SetDefault("cleanup.arbitrage_opportunities.retention_hours", 72)
+	viper.SetDefault("cleanup.scalping_telemetry.retention_hours", 2160)
 	viper.SetDefault("cleanup.interval", 60)
 	viper.SetDefault("cleanup.enable_smart_cleanup", true)
 
@@ -620,10 +623,10 @@ func setDefaults() {
 	viper.SetDefault("indicators.provider", "talib")
 
 	// AI config defaults
-	viper.SetDefault("ai.provider", "zhipu")
-	viper.SetDefault("ai.model", "glm-5-turbo")
+	viper.SetDefault("ai.provider", "deepseek")
+	viper.SetDefault("ai.model", "deepseek-chat")
 	viper.SetDefault("ai.api_key", "")
-	viper.SetDefault("ai.base_url", "https://api.z.ai/api/paas/v4")
+	viper.SetDefault("ai.base_url", "")
 	viper.SetDefault("ai.temperature", 0.7)
 	viper.SetDefault("ai.max_tokens", 4096)
 	viper.SetDefault("ai.min_confidence", 0.7)

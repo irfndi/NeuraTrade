@@ -404,6 +404,9 @@ func (h *AutonomousHandler) GetQuestDiagnostics(c *gin.Context) {
 		if effectiveOpen, ok := chatRuntime["managed_open_positions_effective"]; ok {
 			response["managed_open_positions_effective"] = effectiveOpen
 		}
+		if effectiveMax, ok := chatRuntime["effective_max_concurrent_positions"]; ok {
+			response["effective_max_concurrent_positions"] = effectiveMax
+		}
 		if ghostCleaned, ok := chatRuntime["ghost_positions_cleaned"]; ok {
 			response["ghost_positions_cleaned"] = ghostCleaned
 		}

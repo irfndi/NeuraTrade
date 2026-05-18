@@ -304,7 +304,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 // buildAIReasoningMessageLines builds a slice of plain-text lines representing an AI reasoning notification.
 //
 // The produced lines include a header ("🤖 AI Trading Decision"), the decision type, a confidence line
-// (an emoji and percentage when `confidenceKnown` is true, otherwise an "N/A (runtime-degraded)" note),
+// (an emoji and percentage when `confidenceKnown` is true, otherwise runtime-health context),
 // a summary, and optional fields: reason category, unblock condition, and attempt window progress.
 // It appends a "Key Factors" section generated from `reasoning.Reasons`, showing up to `maxReasons` items
 // (omitted factors are represented with a summary line). If `reasoning.Action` is non-empty, a
@@ -324,6 +324,8 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 	case confidenceKnown && infraHold:
 		confidencePercent := int(reasoning.Confidence * 100)
 		lines = append(lines, fmt.Sprintf("Confidence: 🟡 %d%% (gated)", confidencePercent))
+	case reasoning.RuntimeStatus == runtimeStatusReconcileBlocked && !confidenceKnown:
+		lines = append(lines, "Confidence: ⏸️ (reconcile blocked)")
 	case infraHold && !confidenceKnown:
 		lines = append(lines, "Confidence: ⏸️ (infrastructure hold)")
 	case llmDegraded:
@@ -374,8 +376,39 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 		if driftPos, ok := reasoning.RuntimeDetails["drift_positions"]; ok {
 			lines = append(lines, fmt.Sprintf("Drift Positions: %s stale", driftPos))
 		}
+		if staleIDs, ok := reasoning.RuntimeDetails["stale_position_ids"]; ok && strings.TrimSpace(staleIDs) != "" {
+			lines = append(lines, fmt.Sprintf("Stale Position IDs: %s", formatRuntimeDetailList(staleIDs, 5)))
+		}
+		if forceEligible, ok := reasoning.RuntimeDetails["force_repair_eligible"]; ok {
+			lines = append(lines, fmt.Sprintf("Force Repair Eligible: %s", forceEligible))
+		}
 		if recoveryAction, ok := reasoning.RuntimeDetails["recovery_action"]; ok {
 			lines = append(lines, fmt.Sprintf("Recovery Action: %s", recoveryAction))
+		}
+		if total, ok := reasoning.RuntimeDetails["ai_window_total"]; ok {
+			if errors, eok := reasoning.RuntimeDetails["ai_window_errors"]; eok {
+				if rate, rok := reasoning.RuntimeDetails["ai_error_rate"]; rok {
+					lines = append(lines, fmt.Sprintf("AI Runtime Window: %s/%s errors (%s)", errors, total, rate))
+				} else {
+					lines = append(lines, fmt.Sprintf("AI Runtime Window: %s/%s errors", errors, total))
+				}
+			}
+		}
+		if attempts, ok := reasoning.RuntimeDetails["ai_failover_attempts"]; ok {
+			if failures, fok := reasoning.RuntimeDetails["ai_failover_failures"]; fok {
+				lines = append(lines, fmt.Sprintf("AI Failover: %s attempts, %s failures", attempts, failures))
+			} else {
+				lines = append(lines, fmt.Sprintf("AI Failover: %s attempts", attempts))
+			}
+		}
+		if failedProviders, ok := reasoning.RuntimeDetails["ai_failed_providers"]; ok {
+			lines = append(lines, fmt.Sprintf("AI Failed Providers: %s", failedProviders))
+		}
+		if category, ok := reasoning.RuntimeDetails["ai_last_category"]; ok {
+			lines = append(lines, fmt.Sprintf("AI Last Category: %s", category))
+		}
+		if lastError, ok := reasoning.RuntimeDetails["ai_last_error"]; ok {
+			lines = append(lines, fmt.Sprintf("AI Last Error: %s", lastError))
 		}
 	}
 	if strings.TrimSpace(reasoning.UnblockCondition) != "" {
@@ -391,6 +424,26 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 	}
 
 	return lines
+}
+
+func formatRuntimeDetailList(value string, maxItems int) string {
+	if maxItems <= 0 {
+		maxItems = 1
+	}
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	if len(items) == 0 {
+		return strings.TrimSpace(value)
+	}
+	if len(items) <= maxItems {
+		return strings.Join(items, ",")
+	}
+	return fmt.Sprintf("%s, ... (+%d more)", strings.Join(items[:maxItems], ","), len(items)-maxItems)
 }
 
 // buildAIReasoningFactorLines builds lines describing key factors from the provided reasons.

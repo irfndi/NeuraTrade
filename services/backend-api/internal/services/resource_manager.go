@@ -291,6 +291,7 @@ func (rm *ResourceManager) DetectLeaks() {
 
 		// Consider it a leak if resource is very old and hasn't been used recently
 		if age > leakThreshold && idleTime > leakThreshold/2 {
+			leakCount++
 			atomic.AddInt64(&rm.stats[resource.Type].LeaksDetected, 1)
 			rm.logger.WithFields(zaplogrus.Fields{
 				"resource_id":   id,

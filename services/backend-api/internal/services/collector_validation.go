@@ -1,11 +1,14 @@
 package services
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
@@ -191,14 +194,17 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 		cachedID, err := c.redisClient.Get(c.ctx, cacheKey).Result()
 		if err == nil {
 			if tradingPairID, parseErr := strconv.Atoi(cachedID); parseErr == nil {
-				return tradingPairID, nil
+				if c.cachedTradingPairIDExists(exchangeID, symbol, tradingPairID) {
+					return tradingPairID, nil
+				}
+				c.redisClient.Del(c.ctx, cacheKey)
 			}
 		}
 	}
 
 	// First try to get existing trading pair for this exchange and symbol
 	var tradingPairID int
-	err := c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = ? AND symbol = ?", exchangeID, symbol).Scan(&tradingPairID)
+	err := c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = $1 AND symbol = $2", exchangeID, symbol).Scan(&tradingPairID)
 	if err == nil {
 		// Cache the result if Redis is available
 		if c.redisClient != nil {
@@ -216,14 +222,14 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 
 	// Insert new trading pair - SQLite compatible
 	_, err = c.db.Exec(c.ctx,
-		"INSERT OR IGNORE INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency, is_active) VALUES (?, ?, ?, ?, 1)",
+		"INSERT OR IGNORE INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency, is_active) VALUES ($1, $2, $3, $4, 1)",
 		exchangeID, symbol, baseCurrency, quoteCurrency)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create trading pair: %w", err)
 	}
 
 	// Get the trading pair ID
-	err = c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = ? AND symbol = ?", exchangeID, symbol).Scan(&tradingPairID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = $1 AND symbol = $2", exchangeID, symbol).Scan(&tradingPairID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get trading pair after insert: %w", err)
 	}
@@ -249,14 +255,17 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 	if c.redisClient != nil {
 		if cachedID, err := c.redisClient.Get(c.ctx, cacheKey).Result(); err == nil {
 			if exchangeID, err := strconv.Atoi(cachedID); err == nil {
-				return exchangeID, nil
+				if c.cachedExchangeIDExists(ccxtID, exchangeID) {
+					return exchangeID, nil
+				}
+				c.redisClient.Del(c.ctx, cacheKey)
 			}
 		}
 	}
 
 	// First try to get existing exchange by ccxt_id
 	var exchangeID int
-	err := c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = ?", ccxtID).Scan(&exchangeID)
+	err := c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = $1", ccxtID).Scan(&exchangeID)
 	if err == nil {
 		// Cache the result
 		if c.redisClient != nil {
@@ -267,14 +276,16 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// Also check by name in case exchange exists with different ccxt_id
 	name := strings.ToLower(ccxtID)
-	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE name = ?", name).Scan(&exchangeID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE LOWER(name) = $1", name).Scan(&exchangeID)
 	if err == nil {
 		c.logger.WithFields(map[string]interface{}{
 			"name":        name,
 			"exchange_id": exchangeID,
 		}).Info("Found existing exchange by name")
 		// Cache the result
-		c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+		if c.redisClient != nil {
+			c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+		}
 		return exchangeID, nil
 	}
 
@@ -284,24 +295,81 @@ func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 
 	// Insert new exchange - SQLite compatible (use INSERT OR IGNORE)
 	_, err = c.db.Exec(c.ctx,
-		"INSERT OR IGNORE INTO exchanges (name, display_name, ccxt_id, api_url, status, has_spot, has_futures) VALUES (?, ?, ?, ?, 'active', 1, 1)",
+		"INSERT OR IGNORE INTO exchanges (name, display_name, ccxt_id, api_url, status, has_spot, has_futures) VALUES ($1, $2, $3, $4, 'active', 1, 1)",
 		name, displayName, ccxtID, fmt.Sprintf("https://api.%s.com", strings.ToLower(ccxtID)))
 	if err != nil {
 		return 0, fmt.Errorf("failed to create exchange: %w", err)
 	}
 
 	// Get the exchange ID
-	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = ?", ccxtID).Scan(&exchangeID)
+	err = c.db.QueryRow(c.ctx, "SELECT id FROM exchanges WHERE ccxt_id = $1", ccxtID).Scan(&exchangeID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get exchange after insert: %w", err)
 	}
 
 	// Cache the newly created/updated exchange
-	c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+	if c.redisClient != nil {
+		c.redisClient.Set(c.ctx, cacheKey, exchangeID, 24*time.Hour)
+	}
 
 	c.logger.WithFields(map[string]interface{}{
 		"ccxt_id":     ccxtID,
 		"exchange_id": exchangeID,
 	}).Info("Created or updated exchange")
 	return exchangeID, nil
+}
+
+func (c *CollectorService) cachedTradingPairIDExists(exchangeID int, symbol string, tradingPairID int) bool {
+	if c.db == nil {
+		return false
+	}
+	var exists int
+	err := c.db.QueryRow(
+		c.ctx,
+		"SELECT 1 FROM trading_pairs WHERE id = $1 AND exchange_id = $2 AND symbol = $3",
+		tradingPairID,
+		exchangeID,
+		symbol,
+	).Scan(&exists)
+	if err == nil {
+		return true
+	}
+	if !isCollectorNoRows(err) {
+		c.logger.WithFields(map[string]interface{}{
+			"exchange_id":      exchangeID,
+			"symbol":           symbol,
+			"trading_pair_id":  tradingPairID,
+			"cache_validation": "trading_pair",
+		}).WithError(err).Warn("Failed to validate cached trading pair ID")
+	}
+	return false
+}
+
+func (c *CollectorService) cachedExchangeIDExists(ccxtID string, exchangeID int) bool {
+	if c.db == nil {
+		return false
+	}
+	var exists int
+	err := c.db.QueryRow(
+		c.ctx,
+		"SELECT 1 FROM exchanges WHERE id = $1 AND (ccxt_id = $2 OR LOWER(name) = $3)",
+		exchangeID,
+		ccxtID,
+		strings.ToLower(ccxtID),
+	).Scan(&exists)
+	if err == nil {
+		return true
+	}
+	if !isCollectorNoRows(err) {
+		c.logger.WithFields(map[string]interface{}{
+			"ccxt_id":          ccxtID,
+			"exchange_id":      exchangeID,
+			"cache_validation": "exchange",
+		}).WithError(err).Warn("Failed to validate cached exchange ID")
+	}
+	return false
+}
+
+func isCollectorNoRows(err error) bool {
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)
 }

@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import { ApiClientError } from "../api/client";
 import type { BackendApiClient } from "../api/client";
+import { logger } from "../utils/logger";
 
 function isApiErrorWithStatus(
   error: unknown,
@@ -30,7 +31,8 @@ async function handleModeAction(
     const state = await api.getTradingMode(chatId);
     currentMode = state.mode;
     requiredConfirmations = state.required_confirmations || 2;
-  } catch {
+  } catch (error) {
+    logger.warn("Failed to get trading mode", { error });
     // Continue with action handling even if state probe fails.
   }
 
@@ -126,7 +128,7 @@ async function handleModeAction(
       return;
     }
 
-    let result;
+    let result: Awaited<ReturnType<typeof api.addTradingModeConfirmation>>;
     try {
       result = await api.addTradingModeConfirmation(chatId);
     } catch (error) {
@@ -187,9 +189,10 @@ export function registerModeCommand(bot: Bot, api: BackendApiClient): void {
       return;
     }
 
+    let action = "";
     try {
       const parts = messageText.trim().split(/\s+/);
-      const action = parts[1]?.toLowerCase() || "";
+      action = parts[1]?.toLowerCase() || "";
       if (action !== "") {
         await handleModeAction(api, String(chatId), action, (text) =>
           ctx.reply(text),
@@ -225,7 +228,11 @@ export function registerModeCommand(bot: Bot, api: BackendApiClient): void {
 
       await ctx.reply(msg);
     } catch (error) {
-      console.error("[Mode] Unexpected error:", error);
+      logger.error(
+        "[Mode] Unexpected error",
+        error instanceof Error ? error : new Error(String(error)),
+        { chatId, action },
+      );
       await ctx.reply("❌ Failed to process /mode command. Please try again.");
     }
   });

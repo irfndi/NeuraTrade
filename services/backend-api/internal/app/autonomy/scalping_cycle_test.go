@@ -173,7 +173,7 @@ func TestEvaluateScalpingPolicy_MicroNoFillRecoveryOverridesWeakRecentWinRateTig
 	require.InDelta(t, config.MicroMinConfidenceFloor, policy.EffectiveMinConfidence, 0.0001)
 }
 
-func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyTwo(t *testing.T) {
+func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSixtyFive(t *testing.T) {
 	config := DefaultScalpingPolicyConfig()
 
 	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
@@ -183,7 +183,7 @@ func TestEvaluateScalpingPolicy_MicroConfidenceCappedAtSeventyTwo(t *testing.T) 
 	}, config)
 
 	require.Equal(t, AccountTierMicro, policy.AccountTier)
-	require.InDelta(t, 0.72, policy.EffectiveMinConfidence, 0.0001)
+	require.InDelta(t, config.MicroConfidenceCap, policy.EffectiveMinConfidence, 0.0001)
 	require.Contains(t, policy.PolicyAdjustments, "micro_confidence_cap")
 }
 
@@ -326,6 +326,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			BidAskSpread:       0.36,
 			OrderBookImbalance: -0.30,
 			RangePosition24h:   60,
+			PriceChange24hPct:  -1.25,
 		},
 		{
 			Symbol:             "OPN/USDT",
@@ -336,6 +337,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			BidAskSpread:       0.19,
 			OrderBookImbalance: -0.20,
 			RangePosition24h:   56,
+			PriceChange24hPct:  -0.75,
 		},
 		{
 			Symbol:             "WIF/USDT",
@@ -346,6 +348,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			BidAskSpread:       0.08,
 			OrderBookImbalance: 0.02,
 			RangePosition24h:   40,
+			PriceChange24hPct:  1.20,
 		},
 		{
 			Symbol:             "BND/USDT",
@@ -356,6 +359,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			BidAskSpread:       0.22,
 			OrderBookImbalance: 0.02,
 			RangePosition24h:   40,
+			PriceChange24hPct:  0.90,
 		},
 	}, policy)
 
@@ -369,13 +373,17 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 		snapshot.TopCandidateRejections[2].Reason,
 	}
 	require.Contains(t, reasons, CandidateRejectSpreadTooWide)
-	require.Contains(t, reasons, CandidateRejectMissingOrderbookSignal)
+	require.Contains(t, reasons, CandidateRejectNoDirectionalEdge)
 
 	bndSeen := false
 	for _, rejection := range snapshot.TopCandidateRejections {
 		if rejection.Symbol == "BND/USDT" {
 			bndSeen = true
-			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
+			require.Equal(t, CandidateRejectNoDirectionalEdge, rejection.Reason)
+			require.InDelta(t, 0.22, rejection.BidAskSpreadPct, 1e-9)
+			require.InDelta(t, 0.02, rejection.OrderBookImbalance, 1e-9)
+			require.InDelta(t, 40.0, rejection.RangePosition24h, 1e-9)
+			require.InDelta(t, 0.90, rejection.PriceChange24hPct, 1e-9)
 		}
 	}
 	require.True(t, bndSeen)
@@ -446,6 +454,78 @@ func TestEvaluateCandidateSignal_RejectsInvalidMetrics(t *testing.T) {
 			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
 		})
 	}
+}
+
+func TestEvaluateCandidateSignal_AllowsStrongMomentumContinuationSell(t *testing.T) {
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(48),
+		BaseMinConfidence: 0.55,
+		BaseMaxCapitalPct: 5.0,
+	}, DefaultScalpingPolicyConfig())
+
+	ranked, viable, rejection := evaluateCandidateSignal(CandidateSignal{
+		Symbol:             "WIF/USDT",
+		Price:              decimal.NewFromFloat(1.0),
+		High24h:            decimal.NewFromFloat(1.2),
+		Low24h:             decimal.NewFromFloat(0.8),
+		Volume24h:          decimal.NewFromInt(1_500_000),
+		BidAskSpread:       0.06,
+		OrderBookImbalance: -0.23,
+		RangePosition24h:   50,
+		PriceChange24hPct:  -0.8,
+	}, policy)
+
+	require.True(t, ranked)
+	require.True(t, viable)
+	require.Empty(t, rejection.Reason)
+}
+
+func TestEvaluateCandidateSignal_AllowsBufferedMidRangeBuy(t *testing.T) {
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(48),
+		BaseMinConfidence: 0.55,
+		BaseMaxCapitalPct: 5.0,
+	}, DefaultScalpingPolicyConfig())
+
+	ranked, viable, rejection := evaluateCandidateSignal(CandidateSignal{
+		Symbol:             "FARTCOIN/USDT",
+		Price:              decimal.NewFromFloat(1.0),
+		High24h:            decimal.NewFromFloat(1.2),
+		Low24h:             decimal.NewFromFloat(0.8),
+		Volume24h:          decimal.NewFromInt(1_500_000),
+		BidAskSpread:       0.07,
+		OrderBookImbalance: 0.15,
+		RangePosition24h:   48,
+		PriceChange24hPct:  -0.8,
+	}, policy)
+
+	require.True(t, ranked)
+	require.True(t, viable)
+	require.Empty(t, rejection.Reason)
+}
+
+func TestEvaluateCandidateSignal_RejectsMisalignedMidRangeSell(t *testing.T) {
+	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(48),
+		BaseMinConfidence: 0.55,
+		BaseMaxCapitalPct: 5.0,
+	}, DefaultScalpingPolicyConfig())
+
+	ranked, viable, rejection := evaluateCandidateSignal(CandidateSignal{
+		Symbol:             "ONDO/USDT",
+		Price:              decimal.NewFromFloat(1.0),
+		High24h:            decimal.NewFromFloat(1.2),
+		Low24h:             decimal.NewFromFloat(0.8),
+		Volume24h:          decimal.NewFromInt(1_500_000),
+		BidAskSpread:       0.03,
+		OrderBookImbalance: -0.23,
+		RangePosition24h:   29,
+		PriceChange24hPct:  -0.8,
+	}, policy)
+
+	require.True(t, ranked)
+	require.False(t, viable)
+	require.Equal(t, CandidateRejectNoDirectionalEdge, rejection.Reason)
 }
 
 func TestResolvePolicySpreadThreshold_ClampsDirectOverride(t *testing.T) {

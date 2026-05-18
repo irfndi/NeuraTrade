@@ -893,7 +893,7 @@ func TestParseAIProviderChain(t *testing.T) {
 
 		result, err := parseAIProviderChain("")
 		require.NoError(t, err)
-		assert.Equal(t, []string{"zhipu"}, result)
+		assert.Equal(t, []string{"deepseek"}, result)
 	})
 
 	t.Run("uses primary provider", func(t *testing.T) {
@@ -927,7 +927,7 @@ func TestParseAIProviderChain(t *testing.T) {
 	})
 
 	t.Run("rejects unsupported providers", func(t *testing.T) {
-		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,google")
+		t.Setenv("NEURATRADE_AI_PROVIDER_CHAIN", "openai,unknown-provider")
 		_, err := parseAIProviderChain("zhipu")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported ai provider")
@@ -942,4 +942,50 @@ func TestProviderBaseURL(t *testing.T) {
 	t.Run("zhipu uses configured default base path", func(t *testing.T) {
 		assert.Equal(t, "https://api.z.ai/api/paas/v4", providerBaseURL("zhipu"))
 	})
+
+	t.Run("deepseek uses configured default base path", func(t *testing.T) {
+		assert.Equal(t, "https://api.deepseek.com/v1", providerBaseURL("deepseek"))
+	})
+
+	t.Run("unknown providers use openai-compatible transport fallback", func(t *testing.T) {
+		assert.Equal(t, "https://api.openai.com/v1", providerBaseURL("unknown-provider"))
+	})
+}
+
+func TestResolveProviderNodeUsesCentralProviderEnvNames(t *testing.T) {
+	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_API_KEY", "key")
+	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_BASE_URL", "https://override.example/v1")
+	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_MODEL", "model-override")
+
+	node := resolveProviderNode("deepseek", "primary-key", "https://primary.example/v1", "zai-coding-plan")
+
+	assert.Equal(t, "zai-coding-plan", node.Provider)
+	assert.Equal(t, "key", node.APIKey)
+	assert.Equal(t, "https://override.example/v1", node.BaseURL)
+	assert.Equal(t, "model-override", node.ModelOverride)
+	assert.Empty(t, node.DefaultModel)
+
+	defaultNode := resolveProviderNode("deepseek", "primary-key", "https://primary.example/v1", "anthropic")
+	assert.Empty(t, defaultNode.ModelOverride)
+	assert.Equal(t, "claude-sonnet-4-20250514", defaultNode.DefaultModel)
+}
+
+func TestResolveProviderNodeProviderEnvOverridesGenericPrimaryConfig(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "provider-key")
+	t.Setenv("DEEPSEEK_BASE_URL", "https://deepseek.example/v1")
+	t.Setenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+	node := resolveProviderNode("deepseek", "stale-generic-key", "https://stale.example/v1", "deepseek")
+
+	assert.Equal(t, "deepseek", node.Provider)
+	assert.Equal(t, "provider-key", node.APIKey)
+	assert.Equal(t, "https://deepseek.example/v1", node.BaseURL)
+	assert.Equal(t, "deepseek-chat", node.ModelOverride)
+	assert.Empty(t, node.DefaultModel)
+}
+
+func TestProviderRequiresAPIKeyUsesProviderDefaults(t *testing.T) {
+	assert.False(t, providerRequiresAPIKey("mlx"))
+	assert.True(t, providerRequiresAPIKey("deepseek"))
+	assert.True(t, providerRequiresAPIKey("unknown-provider"))
 }

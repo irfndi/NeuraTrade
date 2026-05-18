@@ -1,0 +1,253 @@
+package services
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/shopspring/decimal"
+)
+
+const (
+	DefaultScalpingLivePaperSoakCycles      = 1
+	MaxScalpingLivePaperSoakCycles          = 24
+	MaxScalpingLivePaperSoakInterval        = time.Minute
+	scalpingLivePaperSoakBaseTimeout        = 30 * time.Second
+	scalpingLivePaperSoakPerCycleTimeout    = 30 * time.Second
+	defaultScalpingLivePaperSoakExchange    = "bitget"
+	defaultScalpingLivePaperSoakChatID      = "live-paper-probe"
+	defaultScalpingLivePaperSoakOrderPrefix = "live-paper-probe"
+)
+
+type ScalpingLivePaperSoakOptions struct {
+	Exchange       string
+	Cycles         int
+	Interval       time.Duration
+	ChatID         string
+	OrderPrefix    string
+	RequireTrades  bool
+	InitialCapital decimal.Decimal
+	FeeRate        decimal.Decimal
+	Baseline       *ScalpingSoakBaseline
+}
+
+type ScalpingLivePaperSoakResult struct {
+	Exchange               string                  `json:"exchange"`
+	Cycles                 int                     `json:"cycles"`
+	TotalSignals           int                     `json:"total_signals"`
+	EligibleSignals        int                     `json:"eligible_signals"`
+	TotalTrades            int                     `json:"total_trades"`
+	WinningTrades          int                     `json:"winning_trades"`
+	LosingTrades           int                     `json:"losing_trades"`
+	NetPnL                 decimal.Decimal         `json:"net_pnl"`
+	Fees                   decimal.Decimal         `json:"fees"`
+	Report                 ScalpingSoakReport      `json:"report"`
+	LastRejectionByReason  map[string]int          `json:"last_rejection_by_reason,omitempty"`
+	LastGateSummary        []GateSummaryEntry      `json:"last_gate_summary,omitempty"`
+	LastBacktestResult     *ScalpingBacktestResult `json:"-"`
+	InsufficientTradeProof bool                    `json:"insufficient_trade_proof"`
+}
+
+func NormalizeScalpingLivePaperSoakCycles(cycles int) int {
+	if cycles <= 0 {
+		return DefaultScalpingLivePaperSoakCycles
+	}
+	if cycles > MaxScalpingLivePaperSoakCycles {
+		return MaxScalpingLivePaperSoakCycles
+	}
+	return cycles
+}
+
+func NormalizeScalpingLivePaperSoakInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	if interval > MaxScalpingLivePaperSoakInterval {
+		return MaxScalpingLivePaperSoakInterval
+	}
+	return interval
+}
+
+func ScalpingLivePaperSoakTimeout(cycles int, interval time.Duration) time.Duration {
+	cycles = NormalizeScalpingLivePaperSoakCycles(cycles)
+	interval = NormalizeScalpingLivePaperSoakInterval(interval)
+	timeout := scalpingLivePaperSoakBaseTimeout + time.Duration(cycles)*scalpingLivePaperSoakPerCycleTimeout
+	if cycles > 1 {
+		timeout += time.Duration(cycles-1) * interval
+	}
+	if timeout < time.Minute {
+		return time.Minute
+	}
+	return timeout
+}
+
+func RunPublicScalpingLivePaperSoak(
+	ctx context.Context,
+	db DBPool,
+	options ScalpingLivePaperSoakOptions,
+) (*ScalpingLivePaperSoakResult, error) {
+	if isNilDBPool(db) {
+		return nil, fmt.Errorf("live paper scalping soak requires database")
+	}
+
+	exchange := strings.TrimSpace(options.Exchange)
+	if exchange == "" {
+		exchange = defaultScalpingLivePaperSoakExchange
+	}
+	cycles := NormalizeScalpingLivePaperSoakCycles(options.Cycles)
+	interval := NormalizeScalpingLivePaperSoakInterval(options.Interval)
+	initialCapital := options.InitialCapital
+	if !initialCapital.GreaterThan(decimal.Zero) {
+		initialCapital = decimal.NewFromFloat(48)
+	}
+	feeRate := options.FeeRate
+	if !feeRate.GreaterThan(decimal.Zero) {
+		feeRate = decimal.NewFromFloat(0.0006)
+	}
+	chatID := strings.TrimSpace(options.ChatID)
+	if chatID == "" {
+		chatID = defaultScalpingLivePaperSoakChatID
+	}
+	orderPrefix := strings.TrimSpace(options.OrderPrefix)
+	if orderPrefix == "" {
+		orderPrefix = defaultScalpingLivePaperSoakOrderPrefix
+	}
+
+	ccxtSvc := ccxt.NewNativeCCXTService(15*time.Second, 1)
+	if err := ccxtSvc.Initialize(ctx); err != nil {
+		return nil, fmt.Errorf("initialize native ccxt service: %w", err)
+	}
+	defer func() {
+		_ = ccxtSvc.Close()
+	}()
+
+	defaults := DefaultAIScalpingConfig()
+	defaults.Exchange = exchange
+	defaults.MaxPairsToAnalyze = 8
+	defaults.MaxCandidatePairs = 24
+	defaults.OrderBookPairs = 8
+	defaults.AutoExpandOrderBooks = true
+	defaults.AutoExecute = false
+	defaults.EnforceFutures = false
+
+	svc := &AIScalpingService{
+		config:       defaults,
+		ccxtService:  ccxtSvc,
+		symbolGuards: make(map[string]symbolExecutionGuard),
+	}
+
+	soak := &ScalpingLivePaperSoakResult{
+		Exchange: exchange,
+		Cycles:   cycles,
+	}
+	var report ScalpingSoakReport
+
+	for cycle := 0; cycle < cycles; cycle++ {
+		if cycle > 0 && interval > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("wait between live paper soak cycles: %w", ctx.Err())
+			case <-time.After(interval):
+			}
+		}
+
+		result, fees, err := runPublicScalpingLivePaperSoakCycle(ctx, svc, defaults, exchange, initialCapital, feeRate)
+		if err != nil {
+			return nil, err
+		}
+		soak.LastBacktestResult = result
+		soak.LastRejectionByReason = result.Summary.RejectionByReason
+		soak.LastGateSummary = result.GateSummary
+		soak.TotalSignals += result.Summary.TotalSignals
+		soak.EligibleSignals += result.Summary.EligibleSignals
+		soak.TotalTrades += result.Summary.TotalTrades
+		soak.WinningTrades += result.Summary.WinningTrades
+		soak.LosingTrades += result.Summary.LosingTrades
+		soak.Fees = soak.Fees.Add(fees)
+		soak.NetPnL = soak.NetPnL.Add(result.Summary.TotalPnL)
+
+		persisted, err := PersistScalpingPaperBacktestSoakReport(ctx, db, result, ScalpingPaperSoakPersistenceOptions{
+			ChatID:      chatID,
+			Exchange:    exchange,
+			Baseline:    options.Baseline,
+			OrderPrefix: orderPrefix,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("persist live paper scalping soak cycle %d: %w", cycle+1, err)
+		}
+		report = persisted
+		if report.TotalCycles != soak.TotalSignals {
+			return nil, fmt.Errorf("persisted cycle mismatch after cycle %d: got %d want %d", cycle+1, report.TotalCycles, soak.TotalSignals)
+		}
+		if report.TradeSummary.ClosedTrades != soak.TotalTrades {
+			return nil, fmt.Errorf("persisted trade mismatch after cycle %d: got %d want %d", cycle+1, report.TradeSummary.ClosedTrades, soak.TotalTrades)
+		}
+		if !report.TradeSummary.NetPnL.Round(8).Equal(soak.NetPnL.Round(8)) {
+			return nil, fmt.Errorf("persisted net pnl mismatch after cycle %d: got %s want %s", cycle+1, report.TradeSummary.NetPnL.String(), soak.NetPnL.String())
+		}
+	}
+
+	soak.Report = report
+	soak.InsufficientTradeProof = report.InsufficientTradeProof
+	if options.RequireTrades && soak.TotalTrades == 0 {
+		return nil, fmt.Errorf("live paper scalping soak produced no paper trades")
+	}
+	return soak, nil
+}
+
+func runPublicScalpingLivePaperSoakCycle(
+	ctx context.Context,
+	svc *AIScalpingService,
+	defaults AIScalpingConfig,
+	exchange string,
+	initialCapital decimal.Decimal,
+	feeRate decimal.Decimal,
+) (*ScalpingBacktestResult, decimal.Decimal, error) {
+	signals, err := svc.gatherMarketSignals(ctx)
+	if err != nil {
+		return nil, decimal.Zero, fmt.Errorf("gather live scalping market signals: %w", err)
+	}
+	if len(signals) == 0 {
+		return nil, decimal.Zero, fmt.Errorf("live paper scalping soak gathered no market signals")
+	}
+	now := time.Now().UTC()
+	historicalSignals := make([]HistoricalSignal, 0, len(signals))
+	symbols := make([]string, 0, len(signals))
+	for i, signal := range signals {
+		symbols = append(symbols, signal.Symbol)
+		historicalSignals = append(historicalSignals, HistoricalSignal{
+			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+			Symbol:    signal.Symbol,
+			Exchange:  exchange,
+			Signal:    signal,
+		})
+	}
+
+	engine := NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
+		StartTime:          now.Add(-time.Second),
+		EndTime:            now.Add(time.Second),
+		Symbols:            symbols,
+		Exchange:           exchange,
+		InitialCapital:     initialCapital,
+		FeeRate:            feeRate,
+		SlippagePct:        decimal.NewFromFloat(DefaultScalpingBacktestSlippage),
+		MaxBidAskSpreadPct: defaults.MaxBidAskSpreadPct,
+		MinConfidence:      defaults.MinConfidence,
+		MinExpectancyN:     defaults.MinExpectancyN,
+		MinExpectancyEdge:  defaults.MinExpectancyEdge,
+		MaxCapitalPct:      defaults.MaxCapitalPct,
+		DefaultHoldPeriod:  DefaultScalpingBacktestHoldPeriod,
+	})
+	result, err := engine.RunSignals(ctx, historicalSignals)
+	if err != nil {
+		return nil, decimal.Zero, fmt.Errorf("run live paper scalping signals: %w", err)
+	}
+
+	fees := decimal.Zero
+	for _, trade := range result.Trades {
+		fees = fees.Add(trade.Fees)
+	}
+	return result, fees, nil
+}

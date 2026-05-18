@@ -95,7 +95,7 @@ func (tm *TimeoutManager) CreateOperationContext(operationType string, operation
 
 	return &OperationContext{
 		Ctx:         ctx,
-		Cancel:      cancel,
+		Cancel:      func() { tm.CompleteOperation(operationID) },
 		OperationID: operationID,
 		StartTime:   time.Now(),
 		Timeout:     timeout,
@@ -122,7 +122,7 @@ func (tm *TimeoutManager) CreateOperationContextWithParent(parent context.Contex
 
 	return &OperationContext{
 		Ctx:         ctx,
-		Cancel:      cancel,
+		Cancel:      func() { tm.CompleteOperation(operationID) },
 		OperationID: operationID,
 		StartTime:   time.Now(),
 		Timeout:     timeout,
@@ -146,7 +146,7 @@ func (tm *TimeoutManager) CreateOperationContextWithCustomTimeout(operationID st
 
 	return &OperationContext{
 		Ctx:         ctx,
-		Cancel:      cancel,
+		Cancel:      func() { tm.CompleteOperation(operationID) },
 		OperationID: operationID,
 		StartTime:   time.Now(),
 		Timeout:     timeout,

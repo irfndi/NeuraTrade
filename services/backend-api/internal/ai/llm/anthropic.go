@@ -503,6 +503,15 @@ func (c *AnthropicClient) handleErrorResponse(statusCode int, headers http.Heade
 		if retryAfter <= 0 {
 			retryAfter = 30 * time.Second
 		}
+		if isProviderBalanceExhausted(apiErr.Error.Message, apiErr.Error.Type, "") {
+			return ProviderAPIError{
+				Provider:   provider,
+				StatusCode: statusCode,
+				Message:    apiErr.Error.Message,
+				Type:       apiErr.Error.Type,
+				RetryAfter: retryAfter,
+			}
+		}
 		return RateLimitedError{Provider: provider, RetryAfter: retryAfter}
 	case http.StatusBadRequest:
 		if apiErr.Error.Type == "invalid_request_error" {

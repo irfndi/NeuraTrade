@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/domain/marketdata"
@@ -80,6 +81,7 @@ type StrategyActor struct {
 	windows          map[string][]signals.Tick
 	candleBuffer     map[string][]scalping.OHLCVCandle
 	obMetricsCache   map[string]scalping.OrderBookMetrics
+	lastScalpingKeys map[string]string
 	logger           *slog.Logger
 	scalpingComposer ScalpingSignalComposer
 }
@@ -103,15 +105,16 @@ func NewStrategyActor(cfg Config, bus *eventbus.Bus, logger *slog.Logger) *Strat
 	}
 
 	return &StrategyActor{
-		id:             cfg.ActorID,
-		strategyID:     cfg.StrategyID,
-		windowSize:     cfg.WindowSize,
-		engine:         signals.NewEngine(cfg.Signal),
-		eventBus:       bus,
-		windows:        make(map[string][]signals.Tick),
-		candleBuffer:   make(map[string][]scalping.OHLCVCandle),
-		obMetricsCache: make(map[string]scalping.OrderBookMetrics),
-		logger:         logger,
+		id:               cfg.ActorID,
+		strategyID:       cfg.StrategyID,
+		windowSize:       cfg.WindowSize,
+		engine:           signals.NewEngine(cfg.Signal),
+		eventBus:         bus,
+		windows:          make(map[string][]signals.Tick),
+		candleBuffer:     make(map[string][]scalping.OHLCVCandle),
+		obMetricsCache:   make(map[string]scalping.OrderBookMetrics),
+		lastScalpingKeys: make(map[string]string),
+		logger:           logger,
 	}
 }
 
@@ -200,6 +203,14 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 }
 
 func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID string, tick marketdata.MarketTickEvent) {
+	if s.eventBus == nil {
+		s.logger.Warn("skipping scalping signal composition because event bus is unavailable",
+			"exchange", tick.Exchange,
+			"symbol", tick.Symbol,
+		)
+		return
+	}
+
 	key := tick.Exchange + ":" + tick.Symbol
 	candles := s.candleBuffer[key]
 	if len(candles) == 0 {
@@ -224,6 +235,14 @@ func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID st
 		return
 	}
 	if result == nil {
+		return
+	}
+	fingerprint := scalpingSignalFingerprint(result)
+	if fingerprint != "" && s.lastScalpingKeys[key] == fingerprint {
+		s.logger.Debug("skipping duplicate scalping signal",
+			"signal_id", result.ID,
+			"exchange", tick.Exchange,
+			"symbol", tick.Symbol)
 		return
 	}
 
@@ -266,7 +285,60 @@ func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID st
 
 	if err := s.eventBus.PublishSync(ctx, event); err != nil {
 		s.logger.Warn("failed to publish scalping signal", "error", err)
+		return
 	}
+	if fingerprint != "" {
+		s.lastScalpingKeys[key] = fingerprint
+	}
+}
+
+func scalpingSignalFingerprint(signal *scalping.ScalpingSignal) string {
+	if signal == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(signal.Exchange)
+	b.WriteByte('|')
+	b.WriteString(signal.Symbol)
+	b.WriteByte('|')
+	b.WriteString(string(signal.Direction))
+	b.WriteByte('|')
+	b.WriteString(signal.Confidence.String())
+	b.WriteByte('|')
+	b.WriteString(signal.StopLoss.String())
+	b.WriteByte('|')
+	b.WriteString(signal.TakeProfit.String())
+
+	if signal.Quality != nil {
+		b.WriteString("|q=")
+		b.WriteString(signal.Quality.OverallScore.String())
+		b.WriteByte('/')
+		b.WriteString(signal.Quality.DataFreshness.String())
+		b.WriteByte('/')
+		b.WriteString(signal.Quality.LiquidityScore.String())
+		b.WriteByte('/')
+		if signal.Quality.VolatilityOK {
+			b.WriteByte('1')
+		} else {
+			b.WriteByte('0')
+		}
+	}
+
+	for _, component := range signal.Components {
+		b.WriteString("|c=")
+		b.WriteString(component.Name)
+		b.WriteByte('/')
+		b.WriteString(component.Value.String())
+		b.WriteByte('/')
+		b.WriteString(string(component.Signal))
+		b.WriteByte('/')
+		b.WriteString(string(component.Strength))
+		b.WriteByte('/')
+		b.WriteString(component.Weight.String())
+	}
+
+	return b.String()
 }
 
 func (s *StrategyActor) handleCandle(candle marketdata.MarketCandleEvent) {

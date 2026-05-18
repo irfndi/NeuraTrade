@@ -318,6 +318,12 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         const effectiveMaxCapitalPct =
           readNumberField(chatRuntime, "effective_max_capital_pct") ??
           diagnostics.effective_max_capital_pct;
+        const effectiveMaxConcurrentPositions =
+          readNumberField(chatRuntime, "effective_max_concurrent_positions") ??
+          diagnostics.effective_max_concurrent_positions;
+        const managedOpenPositionsEffective =
+          readNumberField(chatRuntime, "managed_open_positions_effective") ??
+          diagnostics.managed_open_positions_effective;
         const candidateUniverseCount =
           readNumberField(chatRuntime, "candidate_universe_count") ??
           diagnostics.candidate_universe_count;
@@ -462,6 +468,15 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         if (accountTier) {
           lines.push(`• Account tier: ${accountTier}`);
         }
+        if (typeof effectiveMaxConcurrentPositions === "number") {
+          const managedOpen =
+            typeof managedOpenPositionsEffective === "number"
+              ? managedOpenPositionsEffective
+              : "unknown";
+          lines.push(
+            `• Position cap: ${managedOpen}/${effectiveMaxConcurrentPositions} managed open`,
+          );
+        }
         if (
           typeof effectiveMinConfidence === "number" &&
           typeof effectiveMaxCapitalPct === "number"
@@ -522,30 +537,24 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           );
         }
 
-        const diagnosticsFields = diagnostics as unknown as Readonly<
-          Record<string, unknown>
-        >;
         const recoveryMode =
-          readStringField(diagnosticsFields, "recovery_mode") ||
+          diagnostics.recovery_mode ||
           readStringField(chatRuntime, "recovery_mode") ||
           "normal";
         const recoveryCleanCycles =
-          readNumberField(diagnosticsFields, "recovery_clean_cycles_current") ??
+          diagnostics.recovery_clean_cycles_current ??
           readNumberField(chatRuntime, "recovery_clean_cycles_current") ??
           0;
         const recoveryCleanRequired =
-          readNumberField(
-            diagnosticsFields,
-            "recovery_clean_cycles_required",
-          ) ??
+          diagnostics.recovery_clean_cycles_required ??
           readNumberField(chatRuntime, "recovery_clean_cycles_required") ??
           1;
         const recoveryCyclesToEntry =
-          readNumberField(diagnosticsFields, "recovery_cycles_to_entry") ??
+          diagnostics.recovery_cycles_to_entry ??
           readNumberField(chatRuntime, "recovery_cycles_to_entry") ??
           0;
         const recoveryEntryAllowed =
-          readBoolField(diagnosticsFields, "recovery_entry_allowed") ??
+          diagnostics.recovery_entry_allowed ??
           readBoolField(chatRuntime, "recovery_entry_allowed") ??
           true;
         lines.push(
@@ -553,7 +562,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         );
         lines.push(`• Recovery cycles-to-entry: ${recoveryCyclesToEntry}`);
         const recoveryGateEvalAt =
-          readStringField(diagnosticsFields, "recovery_gate_eval_at") ||
+          diagnostics.recovery_gate_eval_at ||
           readStringField(chatRuntime, "recovery_gate_eval_at");
         if (recoveryGateEvalAt) {
           lines.push(`• Recovery gate eval: ${recoveryGateEvalAt}`);

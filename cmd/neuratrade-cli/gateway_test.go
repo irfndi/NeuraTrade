@@ -3,7 +3,9 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -100,6 +102,86 @@ func TestNormalizeJWTSecret(t *testing.T) {
 	}
 }
 
+func TestGatewayDefaultHealthTimeoutExceedsBackendMarketDataWarmup(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", "")
+
+	got := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
+	require.GreaterOrEqual(t, got, 150*time.Second)
+}
+
+func TestGatewayHealthTimeoutEnvOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", "12")
+
+	got := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
+	require.Equal(t, 12*time.Second, got)
+}
+
+func TestReadCommandLineForPIDTrimsWhitespace(t *testing.T) {
+	got, err := readCommandLineForPID(" \t" + strconv.Itoa(os.Getpid()) + "\n")
+
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+}
+
+func TestReadCommandLineForPIDRejectsInvalidPID(t *testing.T) {
+	tests := []string{"", "abc", "; rm -rf /", "123; malicious", "0", "-1"}
+
+	for _, pid := range tests {
+		t.Run(pid, func(t *testing.T) {
+			_, err := readCommandLineForPID(pid)
+
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestShouldSkipTelegramGatewayForPaperOnlyRuntime(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
+	t.Setenv("FEATURES_PAPER_TRADING", "true")
+	t.Setenv("FEATURES_REAL_TRADING", "false")
+
+	require.True(t, shouldSkipTelegramGateway(""))
+	require.False(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
+func TestShouldSkipTelegramGatewayAcceptsLegacySingularFeatureEnv(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+	t.Setenv("FEATURE_PAPER_TRADING", "true")
+	t.Setenv("FEATURE_REAL_TRADING", "false")
+
+	require.True(t, shouldSkipTelegramGateway(""))
+	require.False(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
+func TestShouldSkipTelegramGatewayRequiresExplicitPaperOnlyMode(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+
+	require.False(t, shouldSkipTelegramGateway(""))
+}
+
+func TestShouldSkipTelegramGatewayOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "true")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+
+	require.True(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
+func TestEnsureSQLiteParentDirCreatesConfiguredDataDirectory(t *testing.T) {
+	sqlitePath := filepath.Join(t.TempDir(), "runtime", "data", "neuratrade.db")
+
+	require.NoError(t, ensureSQLiteParentDir(sqlitePath))
+
+	info, err := os.Stat(filepath.Dir(sqlitePath))
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+	require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+}
+
 func TestDeriveGatewayMode(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -157,6 +239,47 @@ func TestDeriveGatewayMode(t *testing.T) {
 	}
 }
 
+func TestDeriveGatewayModeForServices_TelegramDisabled(t *testing.T) {
+	tests := []struct {
+		name           string
+		backendUp      bool
+		ccxtUp         bool
+		backendHealthy bool
+		want           string
+	}{
+		{
+			name: "all required services down",
+			want: "down",
+		},
+		{
+			name:           "required services healthy",
+			backendUp:      true,
+			ccxtUp:         true,
+			backendHealthy: true,
+			want:           "healthy",
+		},
+		{
+			name:      "backend process warming",
+			backendUp: true,
+			ccxtUp:    true,
+			want:      "warming",
+		},
+		{
+			name:           "backend healthy but ccxt unavailable",
+			backendUp:      true,
+			backendHealthy: true,
+			want:           "degraded",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveGatewayModeForServices(tc.backendUp, false, tc.ccxtUp, tc.backendHealthy, false, false)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestCleanupGatewayRuntimeArtifacts_RemovesPIDFilesAndMarksStateDown(t *testing.T) {
 	tempDir := t.TempDir()
 	statePath := filepath.Join(tempDir, "gateway-state.json")
@@ -193,5 +316,34 @@ func TestCleanupGatewayRuntimeArtifacts_RemovesPIDFilesAndMarksStateDown(t *test
 		require.True(t, exists, "expected service %s in gateway state", serviceName)
 		require.Equal(t, "down", service.Status, "expected %s status down", serviceName)
 		require.Equal(t, "gateway stopped", service.Detail, "expected %s detail to be propagated", serviceName)
+	}
+}
+
+func TestGatewayStopMarksStaleStateDownWhenNoServicesRunning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NEURATRADE_HOME", home)
+	pidsDir := filepath.Join(home, "pids")
+	require.NoError(t, os.MkdirAll(pidsDir, 0700))
+	statePath := filepath.Join(pidsDir, "gateway-state.json")
+	writeGatewayState(statePath, gatewayRuntimeState{
+		Mode: "warming",
+		Services: map[string]gatewayServiceRuntime{
+			"backend":  {Status: "warming", Detail: "backend warming up"},
+			"ccxt":     {Status: "embedded", Detail: "native mode"},
+			"telegram": {Status: "disabled"},
+		},
+	})
+
+	err := gatewayStop(nil)
+	require.ErrorContains(t, err, "no services stopped")
+
+	state, ok := readGatewayState(statePath)
+	require.True(t, ok, "expected gateway state to remain readable")
+	require.Equal(t, "down", state.Mode)
+	for _, serviceName := range []string{"gateway", "backend", "ccxt", "telegram"} {
+		service, exists := state.Services[serviceName]
+		require.True(t, exists, "expected service %s in gateway state", serviceName)
+		require.Equal(t, "down", service.Status, "expected %s status down", serviceName)
+		require.Equal(t, "gateway stop found no running services", service.Detail)
 	}
 }

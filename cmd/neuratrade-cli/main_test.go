@@ -3,14 +3,17 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v2"
 )
 
@@ -59,6 +62,92 @@ func TestGetAPIKey(t *testing.T) {
 	os.Unsetenv("NEURATRADE_API_KEY")
 	key = getAPIKey()
 	assert.Equal(t, "", key)
+}
+
+func TestConfigInitUsesCurrentZAIProviderDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("NEURATRADE_HOME", filepath.Join(home, ".neuratrade"))
+
+	flags := flag.NewFlagSet("config-init", flag.ContinueOnError)
+	flags.String("binance-key", "", "")
+	flags.String("binance-secret", "", "")
+	flags.String("telegram-token", "", "")
+	flags.String("ai-key", "test-ai-key", "")
+	flags.Bool("force", false, "")
+	require.NoError(t, flags.Parse([]string{}))
+
+	ctx := cli.NewContext(cli.NewApp(), flags, nil)
+	require.NoError(t, configInit(ctx))
+
+	configPath := filepath.Join(home, ".neuratrade", "config.json")
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	var config map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &config))
+	require.IsType(t, map[string]interface{}{}, config["ai"])
+	aiConfig := config["ai"].(map[string]interface{})
+
+	assert.Equal(t, "zhipu", aiConfig["provider"])
+	assert.Equal(t, "glm-5-turbo", aiConfig["model"])
+	assert.Equal(t, "https://api.z.ai/api/paas/v4", aiConfig["base_url"])
+	assert.Equal(t, "test-ai-key", aiConfig["api_key"])
+}
+
+func TestConfigInitRespectsNeuratradeHome(t *testing.T) {
+	home := t.TempDir()
+	configHome := filepath.Join(home, "custom-neuratrade-home")
+	t.Setenv("HOME", filepath.Join(home, "default-home"))
+	t.Setenv("NEURATRADE_HOME", configHome)
+
+	flags := flag.NewFlagSet("config-init", flag.ContinueOnError)
+	flags.String("binance-key", "", "")
+	flags.String("binance-secret", "", "")
+	flags.String("telegram-token", "", "")
+	flags.String("ai-key", "", "")
+	flags.Bool("force", false, "")
+	require.NoError(t, flags.Parse([]string{}))
+
+	ctx := cli.NewContext(cli.NewApp(), flags, nil)
+	require.NoError(t, configInit(ctx))
+
+	configPath := filepath.Join(configHome, "config.json")
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	require.NoFileExists(t, filepath.Join(home, "default-home", ".neuratrade", "config.json"))
+
+	var config map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &config))
+	databaseConfig, ok := config["database"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(configHome, "data", "neuratrade.db"), databaseConfig["sqlite_path"])
+}
+
+func TestConfigStatusAndShowRespectNeuratradeHome(t *testing.T) {
+	home := t.TempDir()
+	configHome := filepath.Join(home, "custom-neuratrade-home")
+	t.Setenv("HOME", filepath.Join(home, "default-home"))
+	t.Setenv("NEURATRADE_HOME", configHome)
+	require.NoError(t, os.MkdirAll(configHome, 0700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(configHome, "config.json"),
+		[]byte(`{"services":{"ccxt":{},"telegram":{}},"ai":{"api_key":"secret"},"security":{}}`),
+		0600,
+	))
+
+	ctx := cli.NewContext(cli.NewApp(), flag.NewFlagSet("config", flag.ContinueOnError), nil)
+	require.NoError(t, configStatus(ctx))
+	require.NoError(t, configShow(ctx))
+	require.NoFileExists(t, filepath.Join(home, "default-home", ".neuratrade", "config.json"))
+}
+
+func TestDefaultCLIAIProviderConfigReturnsCurrentZAIDefaults(t *testing.T) {
+	defaults := defaultCLIAIProviderConfig()
+
+	assert.Equal(t, "zhipu", defaults.Provider)
+	assert.Equal(t, "glm-5-turbo", defaults.Model)
+	assert.Equal(t, "https://api.z.ai/api/paas/v4", defaults.BaseURL)
 }
 
 func TestGenerateRandomString(t *testing.T) {

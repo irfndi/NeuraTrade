@@ -109,6 +109,21 @@ func TestTimeoutManager_CompleteOperation(t *testing.T) {
 	}
 }
 
+// TestTimeoutManager_OperationContextCancelCleansTracking tests operation-context cleanup.
+func TestTimeoutManager_OperationContextCancelCleansTracking(t *testing.T) {
+	tm := NewTimeoutManager(nil, zaplogrus.New())
+
+	opCtx := tm.CreateOperationContext("test", "op1")
+	opCtx.Cancel()
+
+	assert.Empty(t, tm.activeContexts)
+	select {
+	case <-opCtx.Ctx.Done():
+	default:
+		t.Error("Context should be cancelled after operation context cancel")
+	}
+}
+
 // TestTimeoutManager_CancelOperation tests operation cancellation
 func TestTimeoutManager_CancelOperation(t *testing.T) {
 	tm := NewTimeoutManager(nil, zaplogrus.New())

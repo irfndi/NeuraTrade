@@ -53,6 +53,62 @@ func TestServerConfiguration(t *testing.T) {
 	}
 }
 
+func TestHandleServerCommandNoArgsStartsServer(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	handled, exitCode := handleServerCommand([]string{"neuratrade-server"}, &stdout, &stderr)
+
+	assert.False(t, handled)
+	assert.Equal(t, 0, exitCode)
+	assert.Empty(t, stdout.String())
+	assert.Empty(t, stderr.String())
+}
+
+func TestHandleServerCommandHelpDoesNotStartServer(t *testing.T) {
+	for _, arg := range []string{"--help", "-h", "help"} {
+		t.Run(arg, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			handled, exitCode := handleServerCommand([]string{"neuratrade-server", arg}, &stdout, &stderr)
+
+			assert.True(t, handled)
+			assert.Equal(t, 0, exitCode)
+			assert.Contains(t, stdout.String(), "NeuraTrade Backend API")
+			assert.Contains(t, stdout.String(), "Start the backend API server")
+			assert.Empty(t, stderr.String())
+		})
+	}
+}
+
+func TestHandleServerCommandUnknownArgDoesNotStartServer(t *testing.T) {
+	tests := []struct {
+		name     string
+		arg      string
+		expected string
+	}{
+		{name: "empty command", arg: "   ", expected: "Unknown command: <empty>"},
+		{name: "unknown option", arg: "--wat", expected: "Unknown option: --wat"},
+		{name: "unknown command", arg: "wat", expected: "Unknown command: wat"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			handled, exitCode := handleServerCommand([]string{"neuratrade-server", tt.arg}, &stdout, &stderr)
+
+			assert.True(t, handled)
+			assert.Equal(t, 2, exitCode)
+			assert.Empty(t, stdout.String())
+			assert.Contains(t, stderr.String(), tt.expected)
+			assert.Contains(t, stderr.String(), "Usage:")
+		})
+	}
+}
+
 // Test HTTP server creation
 func TestHTTPServerCreation(t *testing.T) {
 	// Test server creation with Gin router
@@ -447,6 +503,7 @@ func BenchmarkContextCreation(b *testing.B) {
 func TestMainFunction(t *testing.T) {
 	if os.Getenv("TEST_MAIN_FUNCTION") == "1" {
 		// This is the child process that will call main()
+		os.Args = []string{"neuratrade-server"}
 		main()
 		return
 	}

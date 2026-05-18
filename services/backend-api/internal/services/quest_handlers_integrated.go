@@ -378,6 +378,9 @@ func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
 }
 
 func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Quest) OperationalMode {
+	if mode, ok := runtimeModeOverrideFromEnv(); ok {
+		return mode
+	}
 	if h != nil && h.opModeService != nil {
 		switch mode := h.opModeService.GetMode(chatID); mode {
 		case OpModeLive:
@@ -430,11 +433,12 @@ func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx co
 	}
 
 	exchange := strings.TrimSpace(scalpingExchangeFromContext(ctx))
-	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 20)
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 0)
 	if err != nil {
 		return fmt.Errorf("check managed positions before non-live transition for %s: %w", strategyID, err)
 	}
-	openOrders, err := h.lifecycleStore.CountOpenOrders(ctx, chatID, exchange)
+	positions = nonPaperManagedPositions(positions)
+	openOrders, err := h.lifecycleStore.CountOpenOrdersExcludingSources(ctx, chatID, exchange, []string{scalpingPaperLifecycleSource})
 	if err != nil {
 		return fmt.Errorf("check open orders before non-live transition for %s: %w", strategyID, err)
 	}
@@ -453,6 +457,32 @@ func (h *IntegratedQuestHandlers) rejectNonLiveModeTransitionWithExposure(ctx co
 		openOrders,
 		targetExchange,
 	)
+}
+
+const (
+	scalpingLifecycleSource      = "autonomous_scalping"
+	scalpingPaperLifecycleSource = "autonomous_scalping_paper"
+)
+
+func scalpingExecutionLifecycleSource(mode OperationalMode) string {
+	if mode == ModePaper {
+		return scalpingPaperLifecycleSource
+	}
+	return scalpingLifecycleSource
+}
+
+func nonPaperManagedPositions(positions []ManagedOpenPosition) []ManagedOpenPosition {
+	if len(positions) == 0 {
+		return positions
+	}
+	filtered := positions[:0]
+	for _, position := range positions {
+		if strings.EqualFold(strings.TrimSpace(position.Source), scalpingPaperLifecycleSource) {
+			continue
+		}
+		filtered = append(filtered, position)
+	}
+	return filtered
 }
 
 // recordQuestResult records quest execution result for monitoring
@@ -886,8 +916,31 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		recoveryState = h.evaluateRecoveryGateStateForScope(ctx, quest, portfolio, chatID, userExchange)
 		h.applyRecoveryStateCheckpoint(quest, &portfolio, recoveryState, time.Now().UTC())
 	}
+	h.recordScalpingPortfolioSnapshot(ctx, chatID, userExchange, portfolio)
 
 	log.Printf("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
+
+	if currentMode == ModePaper {
+		paperClosed, paperCloseErr := h.closeTriggeredPaperScalpingPositions(ctx, quest, chatID, userExchange)
+		if paperCloseErr != nil {
+			log.Printf("[SCALPING] Paper close check failed: %v", paperCloseErr)
+			quest.Checkpoint["paper_close_error"] = paperCloseErr.Error()
+		} else if paperClosed > 0 {
+			quest.Checkpoint["status"] = "paper_close"
+			quest.Checkpoint["paper_close_closed_positions"] = paperClosed
+			h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
+				DecisionType: "paper_close",
+				Summary:      "Paper scalping closed positions at configured protection levels",
+				Confidence:   1,
+				Reasons: []string{
+					fmt.Sprintf("Closed %d paper position(s) after take-profit/stop-loss evaluation", paperClosed),
+					"Realized PnL and telemetry outcome were recorded without live exchange execution",
+				},
+				Action: "hold",
+			})
+			return nil
+		}
+	}
 
 	if !isDryRun {
 		timeStopClosed, timeStopErr := h.enforceAdaptiveTimeStop(ctx, quest, chatID, userExchange, portfolio.StrategyPhase)
@@ -941,6 +994,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Confidence: 0,
 			Reasoning:  "risk lock active",
 		}
+		h.recordScalpingGateCycle(
+			gateCtx,
+			chatID,
+			userExchange,
+			time.Now().UTC(),
+			"risk_lock",
+			checkpointString(quest.Checkpoint["runtime_entry_gate_reason"]),
+			portfolio,
+		)
 		h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
 			DecisionType:     "risk_reduction",
 			Summary:          "Risk lock active: entry scans paused, risk controls still running",
@@ -1015,6 +1077,15 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			}
 			runtimeDetails["force_repair_eligible"] = fmt.Sprintf("%t", dcBool)
 		}
+		h.recordScalpingGateCycle(
+			gateCtx,
+			chatID,
+			userExchange,
+			time.Now().UTC(),
+			"state_drift_gate",
+			checkpointString(quest.Checkpoint["runtime_entry_gate_reason"]),
+			portfolio,
+		)
 		h.notifyScalpingDecision(gateCtx, chatID, AIReasoningNotification{
 			DecisionType:     "scalping_cycle",
 			Summary:          "State drift gate active: reconciling lifecycle with exchange before new entries",
@@ -1279,6 +1350,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			cycleRec.EffectiveMinConfidence = decision.EffectiveMinConfidence
 			cycleRec.EffectiveMaxCapitalPct = decision.EffectiveMaxCapitalPct
 			cycleRec.PolicyAdjustmentsJSON = string(policyJSON)
+			applyDecisionSignalQualityToCycleRecord(&cycleRec, decision)
 		}
 		writeCtx, writeCancel := telemetryWriteContext()
 		persistedCycleID, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
@@ -1458,6 +1530,10 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		} else if errRate := checkpointFloat(quest.Checkpoint["runtime_ai_window_error_rate"]); errRate > 0.5 {
 			cycleRuntimeStatus = runtimeStatusLLMDegraded
 		}
+		runtimeDetails := map[string]string(nil)
+		if cycleRuntimeStatus == runtimeStatusLLMDegraded {
+			runtimeDetails = aiRuntimeDetailsFromCheckpoint(quest.Checkpoint)
+		}
 		h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 			DecisionType:          "scalping_cycle",
 			Summary:               "AI held position this cycle",
@@ -1470,6 +1546,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			Reasons:               reasons,
 			Action:                "hold",
 			RuntimeStatus:         cycleRuntimeStatus,
+			RuntimeDetails:        runtimeDetails,
 		})
 		h.maybeSendHoldDigest(ctx, quest, chatID, decision, portfolio)
 		return nil
@@ -1485,39 +1562,9 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_time"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
-	if currentMode == OpModeLive && h.lifecycleStore != nil && strings.TrimSpace(decision.OrderID) != "" {
-		entryPrice := decimal.Zero
-		if decision.EntryPrice != nil {
-			entryPrice = *decision.EntryPrice
-		}
-		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
-			OrderID:    decision.OrderID,
-			ChatID:     chatID,
-			Exchange:   userExchange,
-			Symbol:     decision.Symbol,
-			Side:       decision.Action,
-			OrderType:  "market",
-			MarketType: "futures",
-			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)),
-			EntryPrice: entryPrice,
-			StopLoss:   decimalValueOrZero(decision.StopLoss),
-			TakeProfit: decimalValueOrZero(decision.TakeProfit),
-			Source:     "autonomous_scalping",
-			OpenedAt:   time.Now().UTC(),
-		}); err != nil {
-			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
-		}
-	}
+	h.persistScalpingExecutionLifecycle(ctx, currentMode, decision, chatID, userExchange, portfolio, telemetryInserted, cycleID)
 	if currentMode == OpModeLive {
 		h.recordTradeDecision(ctx, quest, decision, userExchange, portfolio)
-	}
-	if currentMode == OpModeLive && h.telemetryStore != nil && telemetryInserted && strings.TrimSpace(decision.OrderID) != "" {
-		writeCtx, writeCancel := telemetryWriteContext()
-		err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
-		writeCancel()
-		if err != nil {
-			log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
-		}
 	}
 	if currentMode == OpModeLive {
 		h.ingestClosedOrderFeedback(ctx, quest, userExchange, decision.Symbol)
@@ -1543,6 +1590,65 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 
 	return nil
+}
+
+func shouldPersistScalpingExecutionLifecycle(mode OperationalMode) bool {
+	return mode == OpModeLive || mode == ModePaper
+}
+
+func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
+	ctx context.Context,
+	currentMode OperationalMode,
+	decision *AITradingDecision,
+	chatID string,
+	userExchange string,
+	portfolio TradingPortfolio,
+	telemetryInserted bool,
+	cycleID string,
+) {
+	if decision == nil || !shouldPersistScalpingExecutionLifecycle(currentMode) || strings.TrimSpace(decision.OrderID) == "" {
+		return
+	}
+
+	lifecyclePersisted := false
+	if h.lifecycleStore != nil {
+		entryPrice := decimal.Zero
+		if decision.EntryPrice != nil {
+			entryPrice = *decision.EntryPrice
+		}
+		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+			OrderID:    decision.OrderID,
+			ChatID:     chatID,
+			Exchange:   userExchange,
+			Symbol:     decision.Symbol,
+			Side:       decision.Action,
+			OrderType:  "market",
+			MarketType: "futures",
+			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)).Round(2),
+			EntryPrice: entryPrice,
+			StopLoss:   decimalValueOrZero(decision.StopLoss),
+			TakeProfit: decimalValueOrZero(decision.TakeProfit),
+			Source:     scalpingExecutionLifecycleSource(currentMode),
+			OpenedAt:   time.Now().UTC(),
+		}); err != nil {
+			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+		} else {
+			lifecyclePersisted = true
+		}
+	}
+	if currentMode == ModePaper && !lifecyclePersisted {
+		return
+	}
+
+	if h.telemetryStore == nil || !telemetryInserted {
+		return
+	}
+	writeCtx, writeCancel := telemetryWriteContext()
+	err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
+	writeCancel()
+	if err != nil {
+		log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
+	}
 }
 
 func (h *IntegratedQuestHandlers) autoDeriskBlockedExposure(
@@ -2370,6 +2476,7 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 				unrealized = unrealized.Add(pos.UnrealizedPnL)
 			}
 			portfolio.UnrealizedPnL = unrealized.InexactFloat64()
+			portfolio.UnrealizedPnLDecimal = unrealized
 			portfolio.TotalValue = portfolio.USDTBalance + portfolio.UnrealizedPnL
 			portfolio.TotalValueDecimal = portfolio.USDTBalanceDecimal.Add(unrealized)
 			if quest != nil {
@@ -2518,6 +2625,142 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 	}
 }
 
+func (h *IntegratedQuestHandlers) recordScalpingPortfolioSnapshot(
+	ctx context.Context,
+	chatID, exchange string,
+	portfolio TradingPortfolio,
+) {
+	if h == nil || h.lifecycleStore == nil {
+		return
+	}
+	totalValue := portfolio.TotalValueDecimal
+	if totalValue.LessThanOrEqual(decimal.Zero) {
+		totalValue = finiteDecimalFromFloat(portfolio.TotalValue)
+	}
+	usdtBalance := portfolio.USDTBalanceDecimal
+	if usdtBalance.LessThanOrEqual(decimal.Zero) {
+		usdtBalance = finiteDecimalFromFloat(portfolio.USDTBalance)
+	}
+	unrealizedPnL := portfolio.UnrealizedPnLDecimal
+	if unrealizedPnL.IsZero() && portfolio.UnrealizedPnL != 0 {
+		unrealizedPnL = finiteDecimalFromFloat(portfolio.UnrealizedPnL)
+	}
+	err := h.lifecycleStore.RecordScalpingPortfolioSnapshot(ctx, ScalpingPortfolioSnapshotRecord{
+		ChatID:                  chatID,
+		Exchange:                exchange,
+		SnapshotAt:              time.Now().UTC(),
+		USDTBalance:             usdtBalance,
+		TotalValue:              totalValue,
+		OpenPositions:           portfolio.OpenPositions,
+		UnrealizedPnL:           unrealizedPnL,
+		CurrentDrawdown:         finiteDecimalFromFloat(portfolio.CurrentDrawdown),
+		RiskSharpe:              finiteDecimalFromFloat(portfolio.RiskSharpe),
+		RiskSortino:             finiteDecimalFromFloat(portfolio.RiskSortino),
+		RiskDrawdown:            finiteDecimalFromFloat(portfolio.RiskDrawdown),
+		RiskMaxDrawdown:         finiteDecimalFromFloat(portfolio.RiskMaxDrawdown),
+		RiskExpectancy:          finiteDecimalFromFloat(portfolio.RiskExpectancy),
+		RiskExpectancyGross:     finiteDecimalFromFloat(portfolio.RiskExpectancyGross),
+		RiskFeeDragExpectancy:   finiteDecimalFromFloat(portfolio.RiskFeeDragExpectancy),
+		RiskSampleSize:          portfolio.RiskSampleSize,
+		StrategyPhase:           portfolio.StrategyPhase,
+		AccountTier:             portfolio.AccountTier,
+		RecentConsecutiveLosses: portfolio.RecentConsecutiveLosses,
+		RecoveryMode:            portfolio.RecoveryMode,
+		DriftActive:             portfolio.DriftActive,
+		NoFillMinutes:           finiteDecimalFromFloat(portfolio.NoFillMinutes),
+	})
+	if err != nil {
+		log.Printf("[SCALPING] Portfolio snapshot persist failed for chat %s exchange %s: %v", chatID, exchange, err)
+	}
+}
+
+func (h *IntegratedQuestHandlers) recordScalpingGateCycle(
+	ctx context.Context,
+	chatID, exchange string,
+	cycleAt time.Time,
+	gateBlockCode, gateBlockReason string,
+	portfolio TradingPortfolio,
+) {
+	if h == nil || h.telemetryStore == nil {
+		return
+	}
+	chatID = strings.TrimSpace(chatID)
+	exchange = strings.TrimSpace(exchange)
+	gateBlockCode = strings.TrimSpace(gateBlockCode)
+	gateBlockReason = strings.TrimSpace(gateBlockReason)
+	if gateBlockCode == "" {
+		return
+	}
+	if cycleAt.IsZero() {
+		cycleAt = time.Now().UTC()
+	} else {
+		cycleAt = cycleAt.UTC()
+	}
+	rejectionJSON := "{}"
+	policyJSON, marshalErr := json.Marshal([]string{gateBlockCode})
+	if marshalErr != nil {
+		log.Printf("[TELEMETRY] Failed to marshal gate policy adjustments: %v", marshalErr)
+		policyJSON = []byte("[]")
+	}
+	cycleRec := CycleRecord{
+		ID:                     fmt.Sprintf("scalp-%s-%d", chatID, cycleAt.UnixNano()),
+		ChatID:                 chatID,
+		Exchange:               exchange,
+		CycleAt:                cycleAt,
+		Action:                 "hold",
+		Confidence:             0,
+		RejectionCountsJSON:    rejectionJSON,
+		Regime:                 portfolio.StrategyPhase,
+		GateBlockCode:          gateBlockCode,
+		GateBlockReason:        gateBlockReason,
+		AccountTier:            portfolio.AccountTier,
+		EffectiveMinConfidence: portfolio.PhaseMinConfidence,
+		EffectiveMaxCapitalPct: portfolio.PhaseMaxCapitalPct,
+		PolicyAdjustmentsJSON:  string(policyJSON),
+	}
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = ctx
+	}
+	writeCtx, writeCancel := withBoundedTimeoutContext(baseCtx, 2*time.Second)
+	defer writeCancel()
+	if _, err := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec); err != nil {
+		log.Printf("[TELEMETRY] Failed to insert gated scalping cycle: %v", err)
+	}
+}
+
+func applyDecisionSignalQualityToCycleRecord(record *CycleRecord, decision *AITradingDecision) {
+	if record == nil || decision == nil {
+		return
+	}
+	if !decision.SignalQualityKnown {
+		applyTopCandidateRejectionSignalQualityToCycleRecord(record, decision)
+		return
+	}
+	record.BidAskSpreadPct = finiteFloatPointer(decision.SignalBidAskSpreadPct)
+	record.OrderBookImbalance = finiteFloatPointer(decision.SignalOrderBookImbalance)
+	record.RangePosition24h = finiteFloatPointer(decision.SignalRangePosition24h)
+	record.PriceChange24hPct = finiteFloatPointer(decision.SignalPriceChange24hPct)
+}
+
+func applyTopCandidateRejectionSignalQualityToCycleRecord(record *CycleRecord, decision *AITradingDecision) {
+	if record == nil || decision == nil || len(decision.CandidateFunnel.TopCandidateRejections) == 0 {
+		return
+	}
+	top := decision.CandidateFunnel.TopCandidateRejections[0]
+	record.BidAskSpreadPct = finiteFloatPointer(top.BidAskSpreadPct)
+	record.OrderBookImbalance = finiteFloatPointer(top.OrderBookImbalance)
+	record.RangePosition24h = finiteFloatPointer(top.RangePosition24h)
+	record.PriceChange24hPct = finiteFloatPointer(top.PriceChange24hPct)
+}
+
+func finiteDecimalFromFloat(value float64) decimal.Decimal {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return decimal.Zero
+	}
+	return decimal.NewFromFloat(value)
+}
+
 func oppositeCloseSide(positionSide string) string {
 	side := strings.ToLower(strings.TrimSpace(positionSide))
 	switch side {
@@ -2538,6 +2781,15 @@ func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, q
 	quest.CurrentCount++
 	quest.Checkpoint["last_scalp_check"] = time.Now().UTC().Format(time.RFC3339)
 	quest.Checkpoint["chat_id"] = chatID
+	h.recordScalpingGateCycle(
+		ctx,
+		chatID,
+		h.getUserExchange(chatID),
+		time.Now().UTC(),
+		"ai_unavailable",
+		"AI scalping service is not initialized",
+		TradingPortfolio{},
+	)
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
 		DecisionType: "scalping_cycle",
 		Summary:      "Scalping engine unavailable; observe-only cycle",
@@ -3078,12 +3330,15 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 	}
 
 	var digestRuntimeStatus string
+	var digestRuntimeDetails map[string]string
 	if checkpointBool(quest.Checkpoint["state_drift_active"]) {
-		digestRuntimeStatus = runtimeStatusStateDrift
+		digestRuntimeStatus = stateDriftDigestRuntimeStatus(quest.Checkpoint)
+		digestRuntimeDetails = stateDriftRuntimeDetailsFromCheckpoint(quest.Checkpoint)
 	} else if circuitRemaining > 0 {
 		digestRuntimeStatus = runtimeStatusCircuitOpen
 	} else if errorRate > 0.5 {
 		digestRuntimeStatus = runtimeStatusLLMDegraded
+		digestRuntimeDetails = aiRuntimeDetailsFromCheckpoint(quest.Checkpoint)
 	}
 
 	h.notifyScalpingDecision(ctx, chatID, AIReasoningNotification{
@@ -3098,9 +3353,47 @@ func (h *IntegratedQuestHandlers) maybeSendHoldDigest(
 		Reasons:               reasons,
 		Action:                "hold",
 		RuntimeStatus:         digestRuntimeStatus,
+		RuntimeDetails:        digestRuntimeDetails,
 	})
 
 	quest.Checkpoint["runtime_last_hold_digest_at"] = now.Format(time.RFC3339)
+}
+
+func stateDriftDigestRuntimeStatus(checkpoint map[string]interface{}) string {
+	if checkpoint == nil {
+		return runtimeStatusStateDrift
+	}
+	if checkpointInt(checkpoint["state_drift_positions"]) == 0 && checkpointInt(checkpoint["state_drift_clean_passes"]) > 0 {
+		return runtimeStatusReconcileBlocked
+	}
+	return runtimeStatusStateDrift
+}
+
+func stateDriftRuntimeDetailsFromCheckpoint(checkpoint map[string]interface{}) map[string]string {
+	if checkpoint == nil {
+		return nil
+	}
+	details := map[string]string{
+		"drift_positions":       fmt.Sprintf("%d", checkpointInt(checkpoint["state_drift_positions"])),
+		"clean_passes_current":  fmt.Sprintf("%d", checkpointInt(checkpoint["state_drift_clean_passes"])),
+		"clean_passes_required": fmt.Sprintf("%d", stateDriftClearPassTarget()),
+	}
+	if staleIDs := checkpointStringSlice(checkpoint["state_drift_stale_position_ids"]); len(staleIDs) > 0 {
+		details["stale_position_ids"] = strings.Join(staleIDs, ",")
+	}
+	if repairAt := checkpointString(checkpoint["state_drift_last_repair_at"]); repairAt != "" {
+		details["last_repair_at"] = repairAt
+	}
+	if cleanAt := checkpointString(checkpoint["state_drift_last_clean_reconcile_at"]); cleanAt != "" {
+		details["last_clean_reconcile_at"] = cleanAt
+	}
+	if deadlockCleared, ok := checkpoint["state_drift_deadlock_cleared"]; ok {
+		details["force_repair_eligible"] = fmt.Sprintf("%t", checkpointBool(deadlockCleared))
+		if checkpointBool(deadlockCleared) {
+			details["recovery_action"] = "deadlock_clear_triggered"
+		}
+	}
+	return details
 }
 
 type recoveryGateState struct {
@@ -3827,6 +4120,18 @@ func encodeCandidateRejections(rejections []appautonomy.CandidateRejection) []ma
 		}
 		if rejection.EstimatedConfidence > 0 {
 			entry["estimated_confidence"] = rejection.EstimatedConfidence
+		}
+		if value := finiteFloatPointer(rejection.BidAskSpreadPct); value != nil {
+			entry["bid_ask_spread_pct"] = *value
+		}
+		if value := finiteFloatPointer(rejection.OrderBookImbalance); value != nil {
+			entry["order_book_imbalance"] = *value
+		}
+		if value := finiteFloatPointer(rejection.RangePosition24h); value != nil {
+			entry["range_position_24h"] = *value
+		}
+		if value := finiteFloatPointer(rejection.PriceChange24hPct); value != nil {
+			entry["price_change_24h_pct"] = *value
 		}
 		encoded = append(encoded, entry)
 	}
@@ -5652,10 +5957,62 @@ func shouldSendScalpingDecisionNotification(notif AIReasoningNotification) bool 
 	if action == "buy" || action == "sell" || action == "record" {
 		return true
 	}
+	if strings.EqualFold(strings.TrimSpace(notif.RuntimeStatus), runtimeStatusLLMDegraded) {
+		return true
+	}
 	switch decisionType {
-	case "pnl_reconciliation", "risk_reduction", "scalping_digest":
+	case "pnl_reconciliation", "risk_reduction", "scalping_digest", "paper_close":
 		return true
 	default:
 		return false
 	}
+}
+
+func aiRuntimeDetailsFromCheckpoint(checkpoint map[string]interface{}) map[string]string {
+	if len(checkpoint) == 0 {
+		return nil
+	}
+
+	details := map[string]string{}
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_total", "ai_window_total")
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_errors", "ai_window_errors")
+	if rate := checkpointFloat(checkpoint["runtime_ai_window_error_rate"]); rate > 0 {
+		details["ai_error_rate"] = fmt.Sprintf("%.0f%%", rate*100)
+	}
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_timeouts", "ai_timeouts")
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_parse_fails", "ai_parse_fails")
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_failover_attempts", "ai_failover_attempts")
+	addCheckpointIntDetail(details, checkpoint, "runtime_ai_window_failover_failures", "ai_failover_failures")
+	if provider := checkpointString(checkpoint["runtime_ai_last_provider"]); provider != "" {
+		details["ai_last_provider"] = provider
+	}
+	if category := checkpointString(checkpoint["runtime_ai_last_category"]); category != "" {
+		details["ai_last_category"] = category
+	}
+	if lastError := truncateAIRuntimeDetail(checkpointString(checkpoint["runtime_ai_last_error"])); lastError != "" {
+		details["ai_last_error"] = lastError
+	}
+	if failed := checkpointStringSlice(checkpoint["runtime_ai_failed_providers"]); len(failed) > 0 {
+		details["ai_failed_providers"] = strings.Join(failed, ",")
+	}
+
+	if len(details) == 0 {
+		return nil
+	}
+	return details
+}
+
+func addCheckpointIntDetail(details map[string]string, checkpoint map[string]interface{}, checkpointKey string, detailKey string) {
+	if value := checkpointInt(checkpoint[checkpointKey]); value > 0 {
+		details[detailKey] = strconv.Itoa(value)
+	}
+}
+
+func truncateAIRuntimeDetail(value string) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	runes := []rune(value)
+	if len(runes) <= 180 {
+		return value
+	}
+	return string(runes[:177]) + "..."
 }

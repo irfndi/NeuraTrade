@@ -27,7 +27,7 @@ func DefaultAIFundTrackerConfig() AIFundTrackerConfig {
 		TargetValue:     1000.0,
 		MinMilestoneGap: 0.05,
 		EnableAI:        true,
-		LLMModel:        "default",
+		LLMModel:        resolveEnvModel(),
 		MaxHistoryDays:  30,
 	}
 }
@@ -301,6 +301,7 @@ Generate 3-5 milestones. Respond with JSON only.`,
 		string(historyJSON))
 
 	req := &llm.CompletionRequest{
+		Model: t.config.LLMModel,
 		Messages: []llm.Message{
 			{Role: "system", Content: "You are an AI fund manager. Respond with valid JSON only."},
 			{Role: "user", Content: prompt},
@@ -471,6 +472,7 @@ Provide:
 Keep response under 200 words.`, string(statusJSON))
 
 	req := &llm.CompletionRequest{
+		Model: t.config.LLMModel,
 		Messages: []llm.Message{
 			{Role: "system", Content: "You are a fund management advisor. Be concise and actionable."},
 			{Role: "user", Content: prompt},

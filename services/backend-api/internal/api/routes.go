@@ -86,6 +86,7 @@ type llmProviderNodeConfig struct {
 	APIKey        string
 	BaseURL       string
 	ModelOverride string
+	DefaultModel  string
 }
 
 type zapNopServiceLogger struct{}
@@ -101,6 +102,8 @@ var supportedAIProviders = map[string]struct{}{
 	string(llm.ProviderOpenAI):    {},
 	string(llm.ProviderAnthropic): {},
 	string(llm.ProviderMLX):       {},
+	"deepseek":                    {},
+	"google":                      {},
 	"minimax":                     {},
 	"zai":                         {},
 	"zai-coding-plan":             {},
@@ -115,7 +118,7 @@ func parseAIProviderChain(primary string) ([]string, error) {
 		parts = strings.Split(raw, ",")
 	}
 	if primary == "" && len(parts) == 0 {
-		primary = "zhipu"
+		primary = "deepseek"
 	}
 
 	seen := make(map[string]struct{})
@@ -155,24 +158,12 @@ func validateAIProviderName(provider string) error {
 	return fmt.Errorf("unsupported ai provider %q in parseAIProviderChain", provider)
 }
 
-// are mapped to their vendor-specific endpoints, and unknown providers default to the OpenAI API.
 func providerBaseURL(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
-	case "minimax":
-		return "https://api.minimax.io/anthropic/v1"
-	case "zai-coding-plan":
-		return "https://api.z.ai/api/coding/paas/v4"
-	case "zai":
-		return "https://api.z.ai/api/paas/v4"
-	case "zhipu":
-		return "https://api.z.ai/api/paas/v4"
-	case "mlx":
-		return "http://localhost:8080/v1"
-	default:
-		return "https://api.openai.com/v1"
+	if baseURL, ok := ai.ProviderDefaultBaseURL(provider); ok {
+		return baseURL
 	}
+	baseURL, _ := ai.ProviderDefaultBaseURL(string(llm.ProviderOpenAI))
+	return baseURL
 }
 
 func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBaseURL string, provider string) llmProviderNodeConfig {
@@ -186,22 +177,35 @@ func resolveProviderNode(primaryProvider string, primaryAPIKey string, primaryBa
 		node.BaseURL = strings.TrimSpace(primaryBaseURL)
 	}
 
-	upper := strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))
-	if node.APIKey == "" {
-		node.APIKey = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_API_KEY", upper)))
-	}
-	if node.APIKey == "" {
-		node.APIKey = strings.TrimSpace(os.Getenv(fmt.Sprintf("%s_API_KEY", upper)))
+	for _, envKey := range ai.ProviderAPIKeyEnvVars(provider) {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.APIKey = value
+			break
+		}
 	}
 
-	if node.BaseURL == "" {
-		node.BaseURL = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_BASE_URL", upper)))
+	for _, envKey := range ai.ProviderBaseURLEnvVars(provider) {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.BaseURL = value
+			break
+		}
 	}
 	if node.BaseURL == "" {
 		node.BaseURL = providerBaseURL(provider)
 	}
 
-	node.ModelOverride = strings.TrimSpace(os.Getenv(fmt.Sprintf("NEURATRADE_AI_PROVIDER_%s_MODEL", upper)))
+	for _, envKey := range ai.ProviderModelEnvVars(provider) {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			node.ModelOverride = value
+			break
+		}
+	}
+	if node.ModelOverride == "" {
+		if model, ok := ai.ProviderDefaultModel(provider); ok {
+			node.DefaultModel = model
+		}
+	}
+
 	return node
 }
 
@@ -236,7 +240,7 @@ func buildLLMProviderClient(node llmProviderNodeConfig, timeout time.Duration, m
 }
 
 func providerRequiresAPIKey(provider string) bool {
-	return strings.ToLower(strings.TrimSpace(provider)) != "mlx"
+	return ai.ProviderRequiresAPIKey(provider)
 }
 
 type routeRuntimeConfigFile struct {
@@ -374,7 +378,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	adminMiddleware := middleware.NewAdminMiddleware()
 
 	// Initialize health handler
-	healthHandler := handlers.NewHealthHandler(db, redis, ccxtService.GetServiceURL(), cacheAnalyticsService)
+	telegramHealth := handlers.TelegramHealthConfig{}
+	if telegramConfig != nil {
+		telegramHealth = handlers.TelegramHealthConfig{
+			ServiceURL:  telegramConfig.ServiceURL,
+			GrpcAddress: telegramConfig.GrpcAddress,
+			BotToken:    telegramConfig.BotToken,
+		}
+	}
+	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService)
 
 	// Health check endpoints with telemetry
 	healthGroup := router.Group("/")
@@ -428,7 +440,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	cleanupHandler := handlers.NewCleanupHandler(cleanupService)
 	exchangeHandler := handlers.NewExchangeHandler(ccxtService, collectorService, redisClientRaw)
 	cacheHandler := handlers.NewCacheHandler(cacheAnalyticsService)
-	webSocketHandler := handlers.NewWebSocketHandler(redis)
+	wsOrigins := []string{"http://localhost", "https://localhost"}
+	if o := getEnvOrDefault("NEURATRADE_WS_ALLOWED_ORIGINS", ""); o != "" {
+		wsOrigins = strings.Split(o, ",")
+		for i := range wsOrigins {
+			wsOrigins[i] = strings.TrimSpace(wsOrigins[i])
+		}
+	}
+	webSocketHandler := handlers.NewWebSocketHandler(redis, wsOrigins)
 
 	// AI handler - uses registry from ai package
 	aiRegistry := ai.NewRegistry(
@@ -761,6 +780,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	integratedHandlers.SetDrawdownHalt(drawdownHalt)
 	integratedHandlers.SetOrderExecutor(orderExecutor)
 	integratedHandlers.SetOperationalModeService(opModeService)
+	questEngine.SetOperationalModeService(opModeService)
 
 	// Set database for user settings lookup
 	var lifecycleStore *services.TradingLifecycleStore
@@ -813,7 +833,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 		aiProvider = aiConfig.Provider
 		if aiProvider == "" {
-			aiProvider = "zhipu"
+			aiProvider = "deepseek"
 		}
 	}
 
@@ -855,6 +875,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				Client:        client,
 				Provider:      llm.Provider(provider),
 				ModelOverride: nodeConfig.ModelOverride,
+				DefaultModel:  nodeConfig.DefaultModel,
 			})
 			overrideMsg := "none"
 			if strings.TrimSpace(nodeConfig.ModelOverride) != "" {
@@ -1041,8 +1062,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
-	// Internal service-to-service routes (no auth, restricted to trusted internal callers)
-	internal := router.Group("/internal")
+	// Internal service-to-service routes (admin auth required for defense-in-depth)
+	internal := router.Group("/internal", adminMiddleware.RequireAdminAuth())
 	{
 		internalTelegram := internal.Group("/telegram")
 		{

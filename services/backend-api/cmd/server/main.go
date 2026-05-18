@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -33,28 +34,75 @@ import (
 // main serves as the entry point for the application.
 // It delegates execution to the run function and handles exit codes based on success or failure.
 func main() {
-	// Check for CLI commands
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "seed":
-			if err := runSeeder(); err != nil {
-				fmt.Fprintf(os.Stderr, "Seeding failed: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		case "ai":
-			if err := runAICLI(); err != nil {
-				fmt.Fprintf(os.Stderr, "AI command failed: %v\n", err)
-				os.Exit(1)
-			}
-			return
+	if handled, exitCode := handleServerCommand(os.Args, os.Stdout, os.Stderr); handled {
+		if exitCode != 0 {
+			os.Exit(exitCode)
 		}
+		return
 	}
 
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Application failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func handleServerCommand(args []string, stdout io.Writer, stderr io.Writer) (bool, int) {
+	if len(args) <= 1 {
+		return false, 0
+	}
+
+	command := strings.TrimSpace(args[1])
+	switch command {
+	case "-h", "--help", "help":
+		printServerUsage(stdout)
+		return true, 0
+	case "seed":
+		if err := runSeeder(); err != nil {
+			writeServerUsagef(stderr, "Seeding failed: %v\n", err)
+			return true, 1
+		}
+		return true, 0
+	case "ai":
+		if err := runAICLI(); err != nil {
+			writeServerUsagef(stderr, "AI command failed: %v\n", err)
+			return true, 1
+		}
+		return true, 0
+	default:
+		if command == "" {
+			writeServerUsageln(stderr, "Unknown command: <empty>")
+			writeServerUsageln(stderr)
+			printServerUsage(stderr)
+			return true, 2
+		}
+		if strings.HasPrefix(command, "-") {
+			writeServerUsagef(stderr, "Unknown option: %s\n\n", command)
+			printServerUsage(stderr)
+			return true, 2
+		}
+		writeServerUsagef(stderr, "Unknown command: %s\n\n", command)
+		printServerUsage(stderr)
+		return true, 2
+	}
+}
+
+func printServerUsage(w io.Writer) {
+	writeServerUsageln(w, "NeuraTrade Backend API")
+	writeServerUsageln(w)
+	writeServerUsageln(w, "Usage:")
+	writeServerUsageln(w, "  neuratrade-server              Start the backend API server")
+	writeServerUsageln(w, "  neuratrade-server seed         Seed configured database data")
+	writeServerUsageln(w, "  neuratrade-server ai <command> Manage AI model registry")
+	writeServerUsageln(w, "  neuratrade-server -h, --help   Show this help")
+}
+
+func writeServerUsagef(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, args...)
+}
+
+func writeServerUsageln(w io.Writer, args ...any) {
+	_, _ = fmt.Fprintln(w, args...)
 }
 
 // run orchestrates the startup sequence of the server.
@@ -84,7 +132,17 @@ func run() error {
 	if err := observability.InitSentry(cfg.Sentry, cfg.Telemetry.ServiceVersion, cfg.Environment); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize Sentry: %v\n", err)
 	}
-	defer observability.Flush(context.Background())
+	flushTimeout := 5 * time.Second
+	if d := os.Getenv("NEURATRADE_OBSERVABILITY_FLUSH_TIMEOUT"); d != "" {
+		if parsed, err := time.ParseDuration(d); err == nil {
+			flushTimeout = parsed
+		}
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), flushTimeout)
+		defer cancel()
+		observability.Flush(flushCtx)
+	}()
 
 	// Initialize standard logger
 	stdLogger := logging.NewStandardLogger(cfg.Telemetry.LogLevel, cfg.Environment)
@@ -98,11 +156,6 @@ func run() error {
 	warnLegacyHandlersPath(logrusLogger)
 
 	// Initialize database
-	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
-	if driver == "" {
-		_ = "sqlite" // Default to SQLite (used for logging/debugging)
-	}
-
 	db, err := database.NewDatabaseConnection(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
@@ -218,6 +271,11 @@ func run() error {
 	// Start historical data backfill in background only when explicitly enabled.
 	if cfg.Backfill.Enabled && collectorService != nil {
 		go func() {
+			// Check if context is cancelled before/during long backfill operation
+			if ctx.Err() != nil {
+				logger.Info("Backfill skipped: context cancelled")
+				return
+			}
 			logger.Info("Checking for historical data backfill requirements")
 			if err := collectorService.PerformBackfillIfNeeded(); err != nil {
 				logger.WithError(err).Warn("Backfill failed")

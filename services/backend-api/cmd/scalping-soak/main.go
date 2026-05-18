@@ -1,0 +1,326 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/shopspring/decimal"
+)
+
+func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "scalping-soak: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	var (
+		dbPath                   string
+		exchange                 string
+		chatID                   string
+		orderPrefix              string
+		cycles                   int
+		intervalMS               int
+		timeoutSeconds           int
+		requireTrades            bool
+		initialCapital           string
+		feeRate                  string
+		includeBaseline          bool
+		minTrades                int
+		minWinRate               string
+		minNetPnL                string
+		minAvgNetPnL             string
+		minSignalQualityCoverage string
+		maxHoldRatio             string
+		maxDrawdown              string
+		maxDrawdownPct           string
+		maxAIDegradedCycles      string
+		minBaselineWinRateDelta  string
+		minBaselineNetPnLDelta   string
+		minBaselineAvgPnLDelta   string
+	)
+
+	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
+	flags.StringVar(&dbPath, "db", "", "SQLite database path for persisted soak telemetry")
+	flags.StringVar(&exchange, "exchange", "bitget", "public exchange to probe")
+	flags.StringVar(&chatID, "chat-id", envString("NEURATRADE_SCALPING_SOAK_CHAT_ID", "operator-scalping-soak"), "chat id for persisted soak telemetry")
+	flags.StringVar(&orderPrefix, "order-prefix", envString("NEURATRADE_SCALPING_SOAK_ORDER_PREFIX", "operator-scalping-soak"), "order prefix for persisted soak telemetry")
+	flags.IntVar(&cycles, "cycles", services.DefaultScalpingLivePaperSoakCycles, "number of public-data paper soak cycles")
+	flags.IntVar(&intervalMS, "interval-ms", 2000, "delay between cycles in milliseconds")
+	flags.IntVar(&timeoutSeconds, "timeout-seconds", 0, "overall timeout; defaults to cycles and interval")
+	flags.BoolVar(&requireTrades, "require-trades", false, "fail if the paper soak produces zero closed paper trades")
+	flags.StringVar(&initialCapital, "capital", "48", "initial paper capital in USDT")
+	flags.StringVar(&feeRate, "fee-rate", "0.0006", "round-trip fee-rate input used by the paper simulator")
+	flags.BoolVar(&includeBaseline, "baseline", true, "include the broken live scalping baseline comparison")
+	flags.IntVar(&minTrades, "min-trades", 0, "fail unless the soak produces at least this many closed paper trades")
+	flags.StringVar(&minWinRate, "min-win-rate", "", "fail unless report win_rate is at least this decimal value")
+	flags.StringVar(&minNetPnL, "min-net-pnl", "", "fail unless report net_pnl is at least this decimal value")
+	flags.StringVar(&minAvgNetPnL, "min-avg-net-pnl", "", "fail unless avg_net_pnl_per_trade is at least this decimal value")
+	flags.StringVar(&minSignalQualityCoverage, "min-signal-quality-coverage", "", "fail unless signal_quality.coverage is at least this decimal value")
+	flags.StringVar(&maxHoldRatio, "max-hold-ratio", "", "fail unless action_split.hold is at or below this decimal value")
+	flags.StringVar(&maxDrawdown, "max-drawdown", "", "fail unless max_drawdown is at or below this decimal value")
+	flags.StringVar(&maxDrawdownPct, "max-drawdown-pct", "", "fail unless max_drawdown_pct is at or below this decimal value")
+	flags.StringVar(&maxAIDegradedCycles, "max-ai-provider-degraded-cycles", "", "maximum AI provider degraded cycles allowed; empty disables this gate")
+	flags.StringVar(&minBaselineWinRateDelta, "min-baseline-win-rate-delta", "", "fail unless win-rate delta versus baseline is at least this decimal value")
+	flags.StringVar(&minBaselineNetPnLDelta, "min-baseline-net-pnl-delta", "", "fail unless net-PnL delta versus baseline is at least this decimal value")
+	flags.StringVar(&minBaselineAvgPnLDelta, "min-baseline-avg-pnl-delta", "", "fail unless avg-PnL-per-trade delta versus baseline is at least this decimal value")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		return err
+	}
+
+	if dbPath == "" {
+		dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("neuratrade-scalping-soak-%d.db", time.Now().UnixNano()))
+	}
+	db, err := database.NewSQLiteConnection(dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite database %s: %w", dbPath, err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	capital, err := decimal.NewFromString(initialCapital)
+	if err != nil {
+		return fmt.Errorf("parse --capital: %w", err)
+	}
+	fees, err := decimal.NewFromString(feeRate)
+	if err != nil {
+		return fmt.Errorf("parse --fee-rate: %w", err)
+	}
+
+	interval := time.Duration(intervalMS) * time.Millisecond
+	timeout := services.ScalpingLivePaperSoakTimeout(cycles, interval)
+	if timeoutSeconds > 0 {
+		timeout = time.Duration(timeoutSeconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var baseline *services.ScalpingSoakBaseline
+	if includeBaseline {
+		value := services.BrokenScalpingBaseline()
+		baseline = &value
+	}
+	result, err := services.RunPublicScalpingLivePaperSoak(ctx, db, services.ScalpingLivePaperSoakOptions{
+		Exchange:       exchange,
+		Cycles:         cycles,
+		Interval:       interval,
+		ChatID:         chatID,
+		OrderPrefix:    orderPrefix,
+		RequireTrades:  requireTrades,
+		InitialCapital: capital,
+		FeeRate:        fees,
+		Baseline:       baseline,
+	})
+	if err != nil {
+		return err
+	}
+	if err := validateAcceptanceGates(result, acceptanceGateOptions{
+		MinTrades:                minTrades,
+		MinWinRate:               minWinRate,
+		MinNetPnL:                minNetPnL,
+		MinAvgNetPnL:             minAvgNetPnL,
+		MinSignalQualityCoverage: minSignalQualityCoverage,
+		MaxHoldRatio:             maxHoldRatio,
+		MaxDrawdown:              maxDrawdown,
+		MaxDrawdownPct:           maxDrawdownPct,
+		MaxAIDegradedCycles:      maxAIDegradedCycles,
+		MinBaselineWinRateDelta:  minBaselineWinRateDelta,
+		MinBaselineNetPnLDelta:   minBaselineNetPnLDelta,
+		MinBaselineAvgPnLDelta:   minBaselineAvgPnLDelta,
+	}); err != nil {
+		if encodeErr := writeResultPayload(os.Stdout, dbPath, result); encodeErr != nil {
+			return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
+		}
+		return err
+	}
+
+	return writeResultPayload(os.Stdout, dbPath, result)
+}
+
+func writeResultPayload(out *os.File, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
+	payload := struct {
+		DBPath string                                `json:"db_path"`
+		Result *services.ScalpingLivePaperSoakResult `json:"result"`
+	}{
+		DBPath: dbPath,
+		Result: result,
+	}
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(payload)
+}
+
+type acceptanceGateOptions struct {
+	MinTrades                int
+	MinWinRate               string
+	MinNetPnL                string
+	MinAvgNetPnL             string
+	MinSignalQualityCoverage string
+	MaxHoldRatio             string
+	MaxDrawdown              string
+	MaxDrawdownPct           string
+	MaxAIDegradedCycles      string
+	MinBaselineWinRateDelta  string
+	MinBaselineNetPnLDelta   string
+	MinBaselineAvgPnLDelta   string
+}
+
+func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, options acceptanceGateOptions) error {
+	if result == nil {
+		return fmt.Errorf("acceptance gates require soak result")
+	}
+	report := result.Report
+	if options.MinTrades > 0 && report.TradeSummary.ClosedTrades < options.MinTrades {
+		return fmt.Errorf("acceptance gate failed: closed_trades=%d below min_trades=%d", report.TradeSummary.ClosedTrades, options.MinTrades)
+	}
+	if err := validateMinDecimalGate("min-win-rate", "win_rate", report.TradeSummary.WinRate, options.MinWinRate); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-net-pnl", "net_pnl", report.TradeSummary.NetPnL, options.MinNetPnL); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-avg-net-pnl", "avg_net_pnl_per_trade", report.TradeSummary.AvgNetPnLPerTrade, options.MinAvgNetPnL); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-signal-quality-coverage", "signal_quality.coverage", report.SignalQuality.Coverage, options.MinSignalQualityCoverage); err != nil {
+		return err
+	}
+	if options.MaxHoldRatio != "" {
+		holdRatio := decimal.Zero
+		if value, ok := decimalValueFromMap(report.ActionSplit, "hold"); ok {
+			holdRatio = value
+		}
+		if err := validateMaxRatioGate("max-hold-ratio", "action_split.hold", holdRatio, options.MaxHoldRatio); err != nil {
+			return err
+		}
+	}
+	if err := validateMaxDecimalGate("max-drawdown", "max_drawdown", report.TradeSummary.MaxDrawdown, options.MaxDrawdown); err != nil {
+		return err
+	}
+	if options.MaxDrawdownPct != "" && report.BaselineComparison == nil {
+		return fmt.Errorf("--max-drawdown-pct requires --baseline=true")
+	}
+	if err := validateMaxDecimalGate("max-drawdown-pct", "max_drawdown_pct", report.TradeSummary.MaxDrawdownPct, options.MaxDrawdownPct); err != nil {
+		return err
+	}
+	if err := validateMaxIntGate("max-ai-provider-degraded-cycles", "ai_provider_degraded_cycles", report.AIProviderDegradation.DegradedCycles, options.MaxAIDegradedCycles); err != nil {
+		return err
+	}
+	if err := validateBaselineDeltaGates(report.BaselineComparison, options); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateBaselineDeltaGates(comparison *services.ScalpingSoakBaselineComparison, options acceptanceGateOptions) error {
+	if options.MinBaselineWinRateDelta == "" && options.MinBaselineNetPnLDelta == "" && options.MinBaselineAvgPnLDelta == "" {
+		return nil
+	}
+	if comparison == nil {
+		return fmt.Errorf("baseline delta gates require --baseline=true")
+	}
+	if err := validateMinDecimalGate("min-baseline-win-rate-delta", "baseline.delta_win_rate", comparison.DeltaWinRate, options.MinBaselineWinRateDelta); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-baseline-net-pnl-delta", "baseline.delta_net_pnl", comparison.DeltaNetPnL, options.MinBaselineNetPnLDelta); err != nil {
+		return err
+	}
+	if err := validateMinDecimalGate("min-baseline-avg-pnl-delta", "baseline.delta_avg_pnl_per_trade", comparison.DeltaAvgPnLPerTrade, options.MinBaselineAvgPnLDelta); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateMinDecimalGate(flagName string, metricName string, actual decimal.Decimal, rawMinimum string) error {
+	if rawMinimum == "" {
+		return nil
+	}
+	minimum, err := decimal.NewFromString(rawMinimum)
+	if err != nil {
+		return fmt.Errorf("parse --%s: %w", flagName, err)
+	}
+	if actual.LessThan(minimum) {
+		return fmt.Errorf("acceptance gate failed: %s=%s below minimum=%s", metricName, actual.String(), minimum.String())
+	}
+	return nil
+}
+
+func validateMaxDecimalGate(flagName string, metricName string, actual decimal.Decimal, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := decimal.NewFromString(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --%s value %q: %w", flagName, rawMaximum, err)
+	}
+	if maximum.IsNegative() {
+		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
+	}
+	if actual.GreaterThan(maximum) {
+		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, actual.String(), maximum.String())
+	}
+	return nil
+}
+
+func validateMaxRatioGate(flagName string, metricName string, actual decimal.Decimal, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := decimal.NewFromString(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --%s value %q: %w", flagName, rawMaximum, err)
+	}
+	if maximum.IsNegative() {
+		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
+	}
+	if maximum.GreaterThan(decimal.NewFromInt(1)) {
+		return fmt.Errorf("invalid --%s value %q: must be at most 1", flagName, rawMaximum)
+	}
+	if actual.GreaterThan(maximum) {
+		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, actual.String(), maximum.String())
+	}
+	return nil
+}
+
+func validateMaxIntGate(flagName string, metricName string, actual int, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := strconv.Atoi(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --%s value %q: %w", flagName, rawMaximum, err)
+	}
+	if maximum < 0 {
+		return fmt.Errorf("invalid --%s value %q: must be zero or greater", flagName, rawMaximum)
+	}
+	if actual > maximum {
+		return fmt.Errorf("acceptance gate failed: %s=%q above maximum=%q", metricName, strconv.Itoa(actual), strconv.Itoa(maximum))
+	}
+	return nil
+}
+
+func decimalValueFromMap(values map[string]decimal.Decimal, key string) (decimal.Decimal, bool) {
+	if values == nil {
+		return decimal.Zero, false
+	}
+	value, ok := values[key]
+	return value, ok
+}
+
+func envString(key, fallback string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	return value
+}

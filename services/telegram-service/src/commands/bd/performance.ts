@@ -85,7 +85,7 @@ export function registerPerformanceCommands(
       await ctx.reply(toTemplateSummary(summary, "24h"));
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to fetch 24h summary (${(error as Error).message}).`,
+        `❌ Failed to fetch 24h summary (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
@@ -108,7 +108,7 @@ export function registerPerformanceCommands(
       await ctx.reply(message);
     } catch (error) {
       await ctx.reply(
-        `❌ Failed to fetch performance breakdown (${(error as Error).message}).`,
+        `❌ Failed to fetch performance breakdown (${error instanceof Error ? error.message : String(error)}).`,
       );
     }
   });
