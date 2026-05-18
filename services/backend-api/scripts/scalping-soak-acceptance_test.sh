@@ -104,14 +104,14 @@ SH
 chmod +x "$fake_soak" "$fake_verifier"
 
 RUN_HEALTH_PREFLIGHT=false \
-CHECK_GATEWAY_STATUS=false \
-SCALPING_SOAK_SCRIPT="$fake_soak" \
-SCALPING_SOAK_VERIFIER="$fake_verifier" \
-DATA_DIR="${tmp_dir}/evidence" \
-LOG_DIR="${tmp_dir}/logs" \
-STAMP=fixed \
-LOG_FILE="$log_path" \
-bash "$ACCEPTANCE_SCRIPT" run
+  CHECK_GATEWAY_STATUS=false \
+  SCALPING_SOAK_SCRIPT="$fake_soak" \
+  SCALPING_SOAK_VERIFIER="$fake_verifier" \
+  DATA_DIR="${tmp_dir}/evidence" \
+  LOG_DIR="${tmp_dir}/logs" \
+  STAMP=fixed \
+  LOG_FILE="$log_path" \
+  bash "$ACCEPTANCE_SCRIPT" run
 
 [ -f "$artifact_path" ] || {
   echo "expected artifact was not created: $artifact_path" >&2
