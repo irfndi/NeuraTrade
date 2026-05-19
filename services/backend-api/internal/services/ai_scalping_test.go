@@ -2882,6 +2882,38 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RejectsRecentBuyInDown
 	assert.Nil(t, decision)
 }
 
+func TestAIScalpingService_DeterministicFallbackCandidate_RejectsRecentBuyWithoutPositiveTrend(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "DOGE/USDT",
+		Price:              0.10404,
+		High24h:            0.12,
+		Low24h:             0.094,
+		Volume24h:          1500000,
+		BidAskSpread:       0.00961,
+		OrderBookImbalance: 0.81364,
+		PriceChange24h:     0,
+		RecentPriceChange:  0.16367,
+		RecentChangeKnown:  true,
+		RangePosition24h:   38.89,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	assert.False(t, ok)
+	assert.Nil(t, decision)
+}
+
 func TestAIScalpingService_DeterministicFallbackCandidate_RejectsRecentBuyNearMaxSpread(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{

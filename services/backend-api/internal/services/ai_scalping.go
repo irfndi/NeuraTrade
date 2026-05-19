@@ -76,6 +76,8 @@ const (
 	scalpingBlowoffSellRangeMax     = 98.0
 	scalpingBlowoffSellMaxImbalance = -0.10
 	scalpingRecentBuyMaxSpreadPct   = 0.06
+	scalpingRecentBuyMinTrendPct    = 0.02
+	scalpingRecentBuyMaxRangePct    = 35.0
 	scalpingRecentMomentumWindow    = 5 * time.Minute
 	scalpingRecentMomentumMinAge    = 30 * time.Second
 
@@ -3359,10 +3361,10 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if signal.RecentChangeKnown && action == "buy" && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
 		return nil, 0, false
 	}
-	if signal.RecentChangeKnown && action == "buy" && signal.PriceChange24h < 0 {
+	if signal.RecentChangeKnown && action == "buy" && signal.PriceChange24h < scalpingRecentBuyMinTrendPct {
 		return nil, 0, false
 	}
-	if signal.RecentChangeKnown && action == "buy" && signal.RangePosition24h > buyRangeMax-5 {
+	if signal.RecentChangeKnown && action == "buy" && signal.RangePosition24h > scalpingRecentBuyMaxRangePct {
 		return nil, 0, false
 	}
 

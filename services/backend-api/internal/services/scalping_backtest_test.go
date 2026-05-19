@@ -811,6 +811,54 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsDowntrendBuy(
 	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
 }
 
+func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsFlatTrendRangeBuy(t *testing.T) {
+	now := time.Date(2026, 5, 19, 9, 31, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "DOGE/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "DOGE/USDT",
+			Price:              0.10404,
+			High24h:            0.12,
+			Low24h:             0.094,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.00961,
+			OrderBookImbalance: 0.81364,
+			RangePosition24h:   38.89,
+			PriceChange24h:     0,
+			RecentPriceChange:  0.16367,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "DOGE/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "DOGE/USDT",
+			Price:              0.10396,
+			High24h:            0.12,
+			Low24h:             0.094,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.00961,
+			OrderBookImbalance: 0.81364,
+			RangePosition24h:   38.4,
+			PriceChange24h:     0,
+			RecentPriceChange:  0.10,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
 func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumAllowsStrongBookBuy(t *testing.T) {
 	now := time.Date(2026, 5, 19, 8, 19, 0, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)

@@ -981,10 +981,10 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	if e.config.RequireRecentMomentum && action == "buy" && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
 		return nil
 	}
-	if e.config.RequireRecentMomentum && action == "buy" && signal.PriceChange24h < 0 {
+	if e.config.RequireRecentMomentum && action == "buy" && signal.PriceChange24h < scalpingRecentBuyMinTrendPct {
 		return nil
 	}
-	if e.config.RequireRecentMomentum && action == "buy" && signal.RangePosition24h > fallback.BuyRangeMax-5 {
+	if e.config.RequireRecentMomentum && action == "buy" && signal.RangePosition24h > scalpingRecentBuyMaxRangePct {
 		return nil
 	}
 
