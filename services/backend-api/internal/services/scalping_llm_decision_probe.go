@@ -158,11 +158,16 @@ func runScalpingLLMDecisionProbeWithService(
 	result.LLMDegraded = scalpingProbeRuntimeDegraded(result.RuntimeDiagnostics)
 
 	if validationErr := svc.validateDecision(decision, signals); validationErr != nil {
-		result.ContractValid = false
-		result.ContractError = validationErr.Error()
+		if isDecisionContractValidationError(decision, validationErr) {
+			result.ContractValid = false
+			result.ContractError = validationErr.Error()
+		} else {
+			result.PreTradeGateAllowed = false
+			result.PreTradeGateReason = validationErr.Error()
+		}
 	}
 	result.ReasoningDiagnostics = reasoningDiagnostics
-	if result.ContractValid {
+	if result.ContractValid && result.PreTradeGateAllowed {
 		gate := svc.evaluatePreTradeGate(ctx, decision, signals)
 		result.PreTradeGateAllowed = gate.Allowed
 		result.PreTradeGateReason = gate.Reason

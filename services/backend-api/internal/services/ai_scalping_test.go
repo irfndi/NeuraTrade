@@ -849,7 +849,7 @@ func TestAIScalpingService_PreTradeGate_UsesVisibleSpreadThreshold(t *testing.T)
 				Volume24h:          100000,
 				BidAskSpread:       tt.spread,
 				OrderBookImbalance: 0.76,
-				RangePosition24h:   50,
+				RangePosition24h:   18,
 			}
 			decision := &AITradingDecision{Action: "buy", Symbol: "GRASS/USDT", Confidence: 0.78}
 
@@ -895,12 +895,130 @@ func TestAIScalpingService_ValidateDecision_AdjustsLowRiskRewardForBuy(t *testin
 		Volume24h:          1_000_000,
 		BidAskSpread:       0.011,
 		OrderBookImbalance: 0.45,
-		RangePosition24h:   39.92,
+		RangePosition24h:   18.92,
 	}})
 
 	require.NoError(t, err)
 	require.NotNil(t, decision.TakeProfit)
 	assert.Greater(t, decision.TakeProfit.InexactFloat64(), 0.09515)
+}
+
+func TestAIScalpingService_ValidateDecision_BlocksRecentBuyAboveRangeCeiling(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "UNI/USDT",
+		SizePercent: 5,
+		Confidence:  0.78,
+		Reasoning:   "model buy in mid-range with recent momentum",
+		StopLoss:    decimalPointer("3.35"),
+		TakeProfit:  decimalPointer("3.60"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "UNI/USDT",
+		Price:              3.47,
+		High24h:            3.70,
+		Low24h:             3.22,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.029,
+		OrderBookImbalance: 0.63,
+		RangePosition24h:   47,
+		PriceChange24h:     0.25,
+		RecentPriceChange:  0.09,
+		RecentChangeKnown:  true,
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "above recent-buy range ceiling")
+}
+
+func TestAIScalpingService_ValidateDecision_BlocksRecentBuyWithoutMomentum(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "DOGE/USDT",
+		SizePercent: 5,
+		Confidence:  0.72,
+		Reasoning:   "model buy with stale/weak recent momentum",
+		StopLoss:    decimalPointer("0.1010"),
+		TakeProfit:  decimalPointer("0.1060"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "DOGE/USDT",
+		Price:              0.1037,
+		High24h:            0.108,
+		Low24h:             0.099,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.018,
+		OrderBookImbalance: 0.51,
+		RangePosition24h:   30,
+		PriceChange24h:     0.08,
+		RecentPriceChange:  0.01,
+		RecentChangeKnown:  true,
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "without recent momentum confirmation")
+}
+
+func TestAIScalpingService_ValidateDecision_BlocksNoRecentBuyAboveRangeCeiling(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "CHZ/USDT",
+		SizePercent: 5,
+		Confidence:  0.70,
+		Reasoning:   "model buy with only 24h/range hints",
+		StopLoss:    decimalPointer("0.0460"),
+		TakeProfit:  decimalPointer("0.0510"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "CHZ/USDT",
+		Price:              0.0485,
+		High24h:            0.051,
+		Low24h:             0.045,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.050,
+		OrderBookImbalance: 0.51,
+		RangePosition24h:   53,
+		PriceChange24h:     0.30,
+		RecentChangeKnown:  false,
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "without recent momentum confirmation above deep-low range ceiling")
+}
+
+func TestAIScalpingService_ValidateDecision_AllowsStrictRecentBuy(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "GOAT/USDT",
+		SizePercent: 5,
+		Confidence:  0.76,
+		Reasoning:   "strict recent buy with confirmed trend",
+		StopLoss:    decimalPointer("0.0177"),
+		TakeProfit:  decimalPointer("0.0189"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "GOAT/USDT",
+		Price:              0.0183,
+		High24h:            0.0200,
+		Low24h:             0.0175,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.020,
+		OrderBookImbalance: 0.51,
+		RangePosition24h:   32,
+		PriceChange24h:     0.20,
+		RecentPriceChange:  0.08,
+		RecentChangeKnown:  true,
+	}})
+
+	require.NoError(t, err)
 }
 
 func TestAIScalpingService_ValidateDecision_BlocksSellWhenBroadTrendIsPositive(t *testing.T) {
@@ -2351,7 +2469,7 @@ func TestAIScalpingService_ExecuteTradingCycle_AppliesGateAdjustedMaxCapitalToDe
 				price:    100,
 				volume:   250000,
 				high24h:  110,
-				low24h:   90,
+				low24h:   98,
 				bid:      99.97,
 				ask:      100.03,
 				exchange: "binance",
@@ -2594,7 +2712,7 @@ func TestAIScalpingService_SignalsWithDecisionHintsUsesEffectiveConfidenceThresh
 		BidAskSpread:       0.08,
 		OrderBookImbalance: 0.35,
 		PriceChange24h:     0,
-		RangePosition24h:   45,
+		RangePosition24h:   18,
 	}
 	signals := []aiMarketSignal{
 		signal,
@@ -2623,6 +2741,45 @@ func TestAIScalpingService_SignalsWithDecisionHintsUsesEffectiveConfidenceThresh
 	require.GreaterOrEqual(t, enriched[0].ConfidenceHint, portfolio.EffectiveMinConfidence)
 	require.Less(t, enriched[0].ConfidenceHint, svc.deterministicFallbackConfig().ConfidenceFloor)
 	require.False(t, eligibleWithDefaultFloor, "empty portfolio would incorrectly apply the fallback confidence floor")
+}
+
+func TestAIScalpingService_SignalsWithDecisionHintsDoesNotExposeRelaxedCandidates(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				RangeAnchor:     55,
+				RangeOffset:     45,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+	signal := aiMarketSignal{
+		Symbol:             "BOME/USDT",
+		Price:              1,
+		High24h:            1.1,
+		Low24h:             0.9,
+		Volume24h:          1500000,
+		BidAskSpread:       0.19,
+		OrderBookImbalance: 0.15,
+		RangePosition24h:   24,
+	}
+	portfolio := TradingPortfolio{EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.7847}
+
+	_, _, strictOK := svc.deterministicFallbackCandidate(context.Background(), signal, portfolio, false)
+	_, _, relaxedOK := svc.deterministicFallbackCandidate(context.Background(), signal, portfolio, true)
+	enriched := svc.signalsWithDecisionHints(context.Background(), []aiMarketSignal{signal}, portfolio)
+
+	require.False(t, strictOK)
+	require.True(t, relaxedOK)
+	require.Len(t, enriched, 1)
+	assert.Empty(t, enriched[0].SuggestedAction)
+	assert.Zero(t, enriched[0].ConfidenceHint)
+	assert.Zero(t, enriched[0].CandidateScore)
 }
 
 func TestAIScalpingService_SignalsWithDecisionHintsKeepsDiagnosticsWhenNoCandidate(t *testing.T) {

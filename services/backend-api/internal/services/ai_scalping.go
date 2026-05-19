@@ -78,6 +78,7 @@ const (
 	scalpingRecentBuyMaxSpreadPct   = 0.06
 	scalpingRecentBuyMinTrendPct    = 0.02
 	scalpingRecentBuyMaxRangePct    = 35.0
+	scalpingNoRecentBuyMaxRangePct  = 20.0
 	scalpingRecentMomentumWindow    = 5 * time.Minute
 	scalpingRecentMomentumMinAge    = 30 * time.Second
 
@@ -2629,6 +2630,9 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		if stopLoss >= resolved.Price || takeProfit <= resolved.Price {
 			return fmt.Errorf("buy decision requires stop_loss < price < take_profit")
 		}
+		if reason := s.scalpingBuySignalRejectionReason(resolved); reason != "" {
+			return fmt.Errorf("%s", reason)
+		}
 		if resolved.RangePosition24h >= 85 && decision.Confidence < 0.75 {
 			return fmt.Errorf("buy decision rejected near day high (range_pos_24h=%.1f)", resolved.RangePosition24h)
 		}
@@ -2661,6 +2665,28 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		}
 	}
 	return nil
+}
+
+func (s *AIScalpingService) scalpingBuySignalRejectionReason(signal aiMarketSignal) string {
+	buyMomentumMin := math.Max(s.deterministicFallbackConfig().BuyMinPriceChangePct, 0.05)
+	if !signal.RecentChangeKnown {
+		if signal.RangePosition24h > scalpingNoRecentBuyMaxRangePct {
+			return fmt.Sprintf("buy decision rejected without recent momentum confirmation above deep-low range ceiling on %s (range_pos_24h=%.1f%%, required<=%.1f%%)", signal.Symbol, signal.RangePosition24h, scalpingNoRecentBuyMaxRangePct)
+		}
+		return ""
+	}
+	switch {
+	case signal.RecentPriceChange < buyMomentumMin:
+		return fmt.Sprintf("buy decision rejected without recent momentum confirmation on %s (recent_price_change=%.4f%%, required>=%.4f%%)", signal.Symbol, signal.RecentPriceChange, buyMomentumMin)
+	case signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct:
+		return fmt.Sprintf("buy decision rejected with fee-fragile spread on %s (spread=%.4f%%, required<=%.4f%%)", signal.Symbol, signal.BidAskSpread, scalpingRecentBuyMaxSpreadPct)
+	case signal.PriceChange24h < scalpingRecentBuyMinTrendPct:
+		return fmt.Sprintf("buy decision rejected without positive 24h trend on %s (price_change_24h=%.4f%%, required>=%.4f%%)", signal.Symbol, signal.PriceChange24h, scalpingRecentBuyMinTrendPct)
+	case signal.RangePosition24h > scalpingRecentBuyMaxRangePct:
+		return fmt.Sprintf("buy decision rejected above recent-buy range ceiling on %s (range_pos_24h=%.1f%%, required<=%.1f%%)", signal.Symbol, signal.RangePosition24h, scalpingRecentBuyMaxRangePct)
+	default:
+		return ""
+	}
 }
 
 func normalizeSymbolForComparison(symbol string) string {
@@ -3481,10 +3507,10 @@ func (s *AIScalpingService) signalsWithDecisionHints(ctx context.Context, signal
 	copy(enriched, signals)
 	for i := range enriched {
 		decision, score, ok := s.deterministicFallbackCandidate(ctx, enriched[i], portfolio, false)
-		if !ok {
-			decision, score, ok = s.deterministicFallbackCandidate(ctx, enriched[i], portfolio, true)
-		}
 		if !ok || decision == nil || !isActionableScalpingHintAction(decision.Action) {
+			continue
+		}
+		if decision.Action == "buy" && s.scalpingBuySignalRejectionReason(enriched[i]) != "" {
 			continue
 		}
 		enriched[i].SuggestedAction = decision.Action
