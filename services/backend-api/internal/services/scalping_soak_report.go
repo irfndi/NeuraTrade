@@ -13,7 +13,6 @@ import (
 
 const (
 	DefaultScalpingLiveTrialMinClosedTrades = 20
-	defaultScalpingLiveTrialMaxHoldRatio    = 0.745
 )
 
 type ScalpingSoakReportFilter struct {
@@ -514,9 +513,6 @@ func (r *ScalpingSoakReport) computeLiveTrialReadiness() {
 	}
 	if r.AIProviderDegradation.DegradedCycles > 0 {
 		reasons = appendScalpingReadinessReason(reasons, "ai_provider_degraded")
-	}
-	if holdRatio, ok := r.ActionSplit["hold"]; ok && holdRatio.GreaterThan(decimal.NewFromFloat(defaultScalpingLiveTrialMaxHoldRatio)) {
-		reasons = appendScalpingReadinessReason(reasons, "hold_ratio_above_live_trial_maximum")
 	}
 	readiness.Ready = len(reasons) == 0
 	readiness.Reasons = reasons

@@ -75,7 +75,7 @@ jq -n --arg db_path "$db_path" '{
   }
 }'
 
-echo 'scalping-soak: acceptance gate failed: action_split.hold="0.7604166666666667" above maximum="0.745"' >&2
+echo 'scalping-soak: paper realism gate failed: closed_trades=46 wins=46 losses=0 max_drawdown_pct=0 exceeds max_perfect_win_trades=20; perfect paper wins without drawdown are insufficient proof' >&2
 exit 1
 SH
 

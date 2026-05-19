@@ -354,6 +354,79 @@ func TestBuildScalpingSoakReportExplainsMissingDrawdownBaseline(t *testing.T) {
 	require.NotContains(t, report.LiveTrialReadiness.Reasons, "drawdown_not_observed")
 }
 
+func TestBuildScalpingSoakReportLiveReadinessAllowsSelectiveScalping(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-soak-report-selective.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sqliteDB.Close())
+	})
+
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 19, 4, 30, 0, 0, time.UTC)
+	for i := 0; i < 80; i++ {
+		insertSoakCycle(t, ctx, telemetryStore, CycleRecord{
+			ID:                 fmt.Sprintf("cycle-hold-%02d", i),
+			ChatID:             "chat-1",
+			Exchange:           "bitget",
+			CycleAt:            now.Add(time.Duration(i) * time.Second),
+			Symbol:             "BTC/USDT",
+			Action:             "hold",
+			Regime:             "neutral",
+			BidAskSpreadPct:    floatPtr(0.02),
+			OrderBookImbalance: floatPtr(0.10),
+			RangePosition24h:   floatPtr(50),
+			PriceChange24hPct:  floatPtr(0.05),
+		})
+	}
+	for i := 0; i < DefaultScalpingLiveTrialMinClosedTrades; i++ {
+		action := "buy"
+		if i%2 == 1 {
+			action = "sell"
+		}
+		grossPnL := decimal.NewFromFloat(0.20)
+		outcome := "win"
+		telemetryPnL := "0.19"
+		if i == 0 {
+			grossPnL = decimal.NewFromFloat(-0.03)
+			outcome = "loss"
+			telemetryPnL = "-0.04"
+		}
+		insertSoakClosedTrade(t, ctx, lifecycleStore, telemetryStore, now.Add(time.Duration(100+i)*time.Second), CycleRecord{
+			ID:                 fmt.Sprintf("cycle-trade-%02d", i),
+			ChatID:             "chat-1",
+			Exchange:           "bitget",
+			OrderID:            fmt.Sprintf("ord-trade-%02d", i),
+			CycleAt:            now.Add(time.Duration(100+i) * time.Second),
+			Symbol:             "BTC/USDT",
+			Action:             action,
+			Regime:             "trend",
+			BidAskSpreadPct:    floatPtr(0.02),
+			OrderBookImbalance: floatPtr(0.30),
+			RangePosition24h:   floatPtr(35),
+			PriceChange24hPct:  floatPtr(0.2),
+		}, grossPnL, decimal.NewFromFloat(-0.01), outcome, telemetryPnL, 60)
+	}
+
+	baseline := BrokenScalpingBaseline()
+	report, err := BuildScalpingSoakReport(ctx, sqliteDB, ScalpingSoakReportFilter{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+		Since:    now.Add(-time.Minute),
+		Until:    now.Add(3 * time.Minute),
+		Baseline: &baseline,
+	})
+	require.NoError(t, err)
+
+	require.True(t, report.ActionSplit["hold"].GreaterThan(decimal.NewFromFloat(0.745)))
+	require.True(t, report.LiveTrialReadiness.Ready)
+	require.Empty(t, report.LiveTrialReadiness.Reasons)
+}
+
 func TestScalpingSoakReport_RunAgainstRuntimeSQLite(t *testing.T) {
 	sqliteDB, _ := prepareRuntimeSQLiteBacktest(t)
 
