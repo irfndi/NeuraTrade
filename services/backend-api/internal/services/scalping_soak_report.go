@@ -15,6 +15,8 @@ const (
 	DefaultScalpingLiveTrialMinClosedTrades = 20
 )
 
+var defaultScalpingLiveTrialMaxHoldRatio = decimal.RequireFromString("0.745")
+
 type ScalpingSoakReportFilter struct {
 	ChatID   string
 	Exchange string
@@ -510,6 +512,13 @@ func (r *ScalpingSoakReport) computeLiveTrialReadiness() {
 	}
 	if r.SignalQuality.Coverage.LessThan(decimal.NewFromInt(1)) {
 		reasons = appendScalpingReadinessReason(reasons, "signal_quality_incomplete")
+	}
+	holdRatio := decimal.Zero
+	if value, ok := r.ActionSplit["hold"]; ok {
+		holdRatio = value
+	}
+	if holdRatio.GreaterThan(defaultScalpingLiveTrialMaxHoldRatio) {
+		reasons = appendScalpingReadinessReason(reasons, "hold_ratio_above_live_trial_maximum")
 	}
 	if r.AIProviderDegradation.DegradedCycles > 0 {
 		reasons = appendScalpingReadinessReason(reasons, "ai_provider_degraded")

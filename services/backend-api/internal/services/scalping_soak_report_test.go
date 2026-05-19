@@ -423,8 +423,8 @@ func TestBuildScalpingSoakReportLiveReadinessAllowsSelectiveScalping(t *testing.
 	require.NoError(t, err)
 
 	require.True(t, report.ActionSplit["hold"].GreaterThan(decimal.NewFromFloat(0.745)))
-	require.True(t, report.LiveTrialReadiness.Ready)
-	require.Empty(t, report.LiveTrialReadiness.Reasons)
+	require.False(t, report.LiveTrialReadiness.Ready)
+	require.Contains(t, report.LiveTrialReadiness.Reasons, "hold_ratio_above_live_trial_maximum")
 }
 
 func TestScalpingSoakReport_RunAgainstRuntimeSQLite(t *testing.T) {
