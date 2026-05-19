@@ -982,7 +982,7 @@ func TestAIScalpingService_ValidateDecision_AllowsBlowoffReversalSell(t *testing
 		Low24h:             0.045,
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
-		OrderBookImbalance: 0.1783,
+		OrderBookImbalance: -0.1783,
 		RangePosition24h:   100,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
@@ -990,6 +990,36 @@ func TestAIScalpingService_ValidateDecision_AllowsBlowoffReversalSell(t *testing
 	}})
 
 	require.NoError(t, err)
+}
+
+func TestAIScalpingService_ValidateDecision_RejectsBlowoffSellWithPositiveBookPressure(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "sell",
+		Symbol:      "CHZ/USDT",
+		SizePercent: 12,
+		Confidence:  0.72,
+		Reasoning:   "overextended blowoff reversal",
+		StopLoss:    decimalPointer("0.0504"),
+		TakeProfit:  decimalPointer("0.0487"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "CHZ/USDT",
+		Price:              0.04983,
+		High24h:            0.05,
+		Low24h:             0.045,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0602,
+		OrderBookImbalance: 0.1783,
+		RangePosition24h:   100,
+		PriceChange24h:     0.0774,
+		RecentPriceChange:  0.2817,
+		RecentChangeKnown:  true,
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sell decision rejected without 24h downside confirmation")
 }
 
 func TestExtractLooseFieldValueWithMarker_UnicodePrefixPreservesAlignment(t *testing.T) {
@@ -2933,7 +2963,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBufferedMidRange
 	assert.Contains(t, decision.Reasoning, "range position")
 }
 
-func TestAIScalpingService_DeterministicFallbackCandidate_AllowsPositiveTrendPullbackBuy(t *testing.T) {
+func TestAIScalpingService_DeterministicFallbackCandidate_RejectsObservedPullbackBuy(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{
 			MaxBidAskSpreadPct: 0.22,
@@ -2961,10 +2991,8 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsPositiveTrendPul
 		RangePosition24h:   75.95,
 	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
 
-	require.True(t, ok)
-	require.NotNil(t, decision)
-	assert.Equal(t, "buy", decision.Action)
-	assert.Contains(t, decision.Reasoning, "pullback")
+	require.False(t, ok)
+	require.Nil(t, decision)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBlowoffReversalSell(t *testing.T) {
@@ -2988,7 +3016,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBlowoffReversalS
 		Low24h:             0.045,
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
-		OrderBookImbalance: 0.1783,
+		OrderBookImbalance: -0.1783,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
 		RecentChangeKnown:  true,

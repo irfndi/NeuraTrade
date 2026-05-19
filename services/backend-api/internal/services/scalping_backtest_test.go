@@ -532,7 +532,7 @@ func TestScalpingBacktestEngine_BuildDecisionBlocksSellWhenBroadTrendIsPositive(
 	require.Nil(t, decision)
 }
 
-func TestScalpingBacktestEngine_BuildDecisionAllowsPositiveTrendPullbackBuy(t *testing.T) {
+func TestScalpingBacktestEngine_BuildDecisionRejectsObservedPullbackBuy(t *testing.T) {
 	now := time.Date(2026, 5, 12, 2, 47, 45, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
@@ -550,8 +550,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsPositiveTrendPullbackBuy(t *t
 		RecentChangeKnown:  true,
 	})
 
-	require.NotNil(t, decision)
-	require.Equal(t, "buy", decision.Action)
+	require.Nil(t, decision)
 }
 
 func TestScalpingBacktestEngine_BuildDecisionAllowsBlowoffReversalSell(t *testing.T) {
@@ -565,7 +564,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsBlowoffReversalSell(t *testin
 		Low24h:             0.045,
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
-		OrderBookImbalance: 0.1783,
+		OrderBookImbalance: -0.1783,
 		RangePosition24h:   100,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,

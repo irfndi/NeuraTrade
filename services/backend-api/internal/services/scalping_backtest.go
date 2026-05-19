@@ -936,7 +936,6 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	action := ""
 	rangeAlignment := 0.0
 	momentumAligned := false
-	pullbackContinuation := false
 	switch {
 	case signal.OrderBookImbalance >= effectiveMinImbalance && signal.RangePosition24h <= fallback.BuyRangeMax:
 		action = "buy"
@@ -950,15 +949,6 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		action = "buy"
 		momentumAligned = momentumPct >= buyMomentumMin
 		rangeAlignment = clampFloat((fallback.BuyRangeMax+5-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax+5, 1), 0, 1)
-	case scalpingPullbackBuyTrendConfirmed(signal):
-		action = "buy"
-		momentumAligned = true
-		pullbackContinuation = true
-		rangeAlignment = clampFloat(
-			(scalpingPullbackBuyRangeMax-signal.RangePosition24h)/math.Max(scalpingPullbackBuyRangeMax-scalpingPullbackBuyRangeMin, 1),
-			0,
-			1,
-		)
 	case signal.OrderBookImbalance <= -effectiveMinImbalance && scalpingSellTrendConfirmed(signal) && signal.RangePosition24h >= fallback.SellRangeMin-5:
 		action = "sell"
 		momentumAligned = momentumPct <= sellMomentumMax
@@ -985,7 +975,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	if !momentumAligned {
 		return nil
 	}
-	if e.config.RequireRecentMomentum && action == "buy" && !pullbackContinuation && signal.RangePosition24h > fallback.BuyRangeMax-5 {
+	if e.config.RequireRecentMomentum && action == "buy" && signal.RangePosition24h > fallback.BuyRangeMax-5 {
 		return nil
 	}
 

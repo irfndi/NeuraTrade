@@ -70,14 +70,10 @@ const (
 	microFallbackMinNetEdgePct      = 0.35
 	standardFallbackMinNetEdgePct   = 0.20
 	scalpingSellBroadTrendMaxPct    = -0.05
-	scalpingPullbackBuyTrendMinPct  = 0.05
-	scalpingPullbackBuyRecentMaxPct = -0.30
-	scalpingPullbackBuyRangeMin     = 70.0
-	scalpingPullbackBuyRangeMax     = 84.0
 	scalpingBlowoffSellTrendMinPct  = 0.075
 	scalpingBlowoffSellRecentMinPct = 0.15
 	scalpingBlowoffSellRangeMin     = 95.0
-	scalpingBlowoffSellMaxImbalance = 0.25
+	scalpingBlowoffSellMaxImbalance = 0.0
 	scalpingRecentMomentumWindow    = 5 * time.Minute
 	scalpingRecentMomentumMinAge    = 30 * time.Second
 
@@ -3281,7 +3277,6 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	action := ""
 	rangeAlignment := 0.0
 	momentumAligned := false
-	pullbackContinuation := false
 	blowoffReversal = false
 	switch {
 	case signal.OrderBookImbalance >= effectiveMinImbalance &&
@@ -3309,16 +3304,6 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		momentumAligned = momentumPct >= buyMomentumMin
 		rangeAlignment = clampFloat(
 			(buyRangeMax+5-signal.RangePosition24h)/math.Max(buyRangeMax+5, 1),
-			0,
-			1,
-		)
-	case scalpingPullbackBuyTrendConfirmed(signal):
-		action = "buy"
-		momentumAligned = true
-		pullbackContinuation = true
-		rangeAlignment = clampFloat(
-			(scalpingPullbackBuyRangeMax-signal.RangePosition24h)/
-				math.Max(scalpingPullbackBuyRangeMax-scalpingPullbackBuyRangeMin, 1),
 			0,
 			1,
 		)
@@ -3369,7 +3354,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if !momentumAligned {
 		return nil, 0, false
 	}
-	if signal.RecentChangeKnown && action == "buy" && !pullbackContinuation && signal.RangePosition24h > buyRangeMax-5 {
+	if signal.RecentChangeKnown && action == "buy" && signal.RangePosition24h > buyRangeMax-5 {
 		return nil, 0, false
 	}
 
@@ -3451,9 +3436,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	}
 
 	setup := "directional"
-	if pullbackContinuation {
-		setup = "pullback continuation"
-	} else if blowoffReversal {
+	if blowoffReversal {
 		setup = "blowoff reversal"
 	}
 	reason := fmt.Sprintf(
@@ -3537,14 +3520,6 @@ func fallbackMomentumPct(signal aiMarketSignal) float64 {
 
 func scalpingSellTrendConfirmed(signal aiMarketSignal) bool {
 	return signal.PriceChange24h <= scalpingSellBroadTrendMaxPct
-}
-
-func scalpingPullbackBuyTrendConfirmed(signal aiMarketSignal) bool {
-	return signal.RecentChangeKnown &&
-		signal.PriceChange24h >= scalpingPullbackBuyTrendMinPct &&
-		signal.RecentPriceChange <= scalpingPullbackBuyRecentMaxPct &&
-		signal.RangePosition24h >= scalpingPullbackBuyRangeMin &&
-		signal.RangePosition24h <= scalpingPullbackBuyRangeMax
 }
 
 func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal) bool {
