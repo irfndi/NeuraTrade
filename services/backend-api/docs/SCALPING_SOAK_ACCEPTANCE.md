@@ -88,7 +88,7 @@ export SOAK_DB_PATH="${HOME}/.neuratrade/data/scalping-soak-acceptance-${stamp}.
 export SOAK_OUTPUT_FILE="${HOME}/.neuratrade/data/scalping-soak-acceptance-${stamp}.json"
 export CYCLES=60
 export INTERVAL_MS=15000
-export TIMEOUT_SECONDS=1800
+export TIMEOUT_SECONDS=0
 export HOLD_PERIOD_SECONDS=300
 export CAPITAL=48
 export MIN_TRADES=20
@@ -108,6 +108,11 @@ export REQUIRE_LIVE_TRIAL_READY=true
 bash services/backend-api/scripts/scalping-soak.sh run
 bash services/backend-api/scripts/verify-scalping-soak-artifact.sh "$SOAK_OUTPUT_FILE"
 ```
+
+`TIMEOUT_SECONDS=0` lets the soak binary compute a budget from the requested
+cycles and interval. If you need a fixed manual timeout for the defaults above,
+use at least `3000` seconds so slow exchange calls do not expire before the
+binary's computed budget.
 
 `CYCLES=60`, `INTERVAL_MS=15000`, and `HOLD_PERIOD_SECONDS=300` give early
 positions enough later observations to close honestly while still keeping a
