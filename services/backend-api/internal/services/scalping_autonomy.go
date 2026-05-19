@@ -539,6 +539,18 @@ func scalpingLiveProofMetricFailures(metrics autonomous.RolloutMetrics) []string
 	if metrics.WinRate <= 0 {
 		failures = append(failures, "win_rate_not_positive")
 	}
+	if metrics.SignalQualityCoverage.LessThan(decimal.NewFromInt(1)) {
+		failures = append(failures, "signal_quality_incomplete")
+	}
+	if metrics.AIProviderDegradedCycles > 0 {
+		failures = append(failures, "ai_provider_degraded")
+	}
+	if metrics.HoldRatio.GreaterThan(defaultScalpingLiveTrialMaxHoldRatio) {
+		failures = append(failures, "hold_ratio_above_live_trial_maximum")
+	}
+	if metrics.OpenPositions > 0 {
+		failures = append(failures, "open_positions_unclosed")
+	}
 	return failures
 }
 

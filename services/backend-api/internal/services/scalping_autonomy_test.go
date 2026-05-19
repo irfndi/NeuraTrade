@@ -156,19 +156,52 @@ func TestScalpingAutonomyCoordinator_SetStrategyMode_CountsBreakEvenClosedTrades
 	state, err := coordinator.SetStrategyMode(context.Background(), "strategy-live-proof-breakeven", autonomous.ModePaper)
 	require.NoError(t, err)
 	state.Metrics = autonomous.RolloutMetrics{
-		TotalTrades:   DefaultScalpingLiveTrialMinClosedTrades,
-		WinningTrades: 10,
-		LosingTrades:  9,
-		TotalPnL:      decimal.NewFromFloat(0.25),
-		WinRate:       0.5,
-		MaxDrawdown:   decimal.NewFromFloat(0.01),
-		UptimePercent: 100,
+		TotalTrades:           DefaultScalpingLiveTrialMinClosedTrades,
+		WinningTrades:         10,
+		LosingTrades:          9,
+		TotalPnL:              decimal.NewFromFloat(0.25),
+		WinRate:               0.5,
+		MaxDrawdown:           decimal.NewFromFloat(0.01),
+		SignalQualityCoverage: decimal.NewFromInt(1),
+		HoldRatio:             decimal.NewFromFloat(0.5),
+		UptimePercent:         100,
 	}
 	require.NoError(t, store.SaveRolloutState(context.Background(), state))
 
 	state, err = coordinator.SetStrategyMode(context.Background(), "strategy-live-proof-breakeven", autonomous.ModeLive)
 	require.NoError(t, err)
 	require.Equal(t, autonomous.StageLive, state.CurrentStage)
+}
+
+func TestScalpingAutonomyCoordinator_SetStrategyMode_BlocksLiveWithoutOperationalProofMetrics(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-autonomy-live-proof-operational.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	coordinator := NewScalpingAutonomyCoordinator(store, AIScalpingConfig{})
+	state, err := coordinator.SetStrategyMode(context.Background(), "strategy-live-proof-operational", autonomous.ModePaper)
+	require.NoError(t, err)
+	state.Metrics = scalpingLiveProofMetrics()
+	state.Metrics.SignalQualityCoverage = decimal.Zero
+	state.Metrics.AIProviderDegradedCycles = 1
+	state.Metrics.HoldRatio = decimal.NewFromFloat(0.8)
+	state.Metrics.OpenPositions = 1
+	require.NoError(t, store.SaveRolloutState(context.Background(), state))
+
+	state, err = coordinator.SetStrategyMode(context.Background(), "strategy-live-proof-operational", autonomous.ModeLive)
+
+	require.Error(t, err)
+	require.NotNil(t, state)
+	require.Contains(t, err.Error(), "signal_quality_incomplete")
+	require.Contains(t, err.Error(), "ai_provider_degraded")
+	require.Contains(t, err.Error(), "hold_ratio_above_live_trial_maximum")
+	require.Contains(t, err.Error(), "open_positions_unclosed")
+	require.Equal(t, autonomous.StagePaper, state.CurrentStage)
 }
 
 func TestScalpingAutonomyCoordinator_SetStrategyMode_BlocksPersistedLiveWithoutProofMetrics(t *testing.T) {
@@ -300,12 +333,14 @@ func TestScalpingAutonomyCoordinator_ValidateStrategyMode_AllowsPersistedLiveWit
 
 func scalpingLiveProofMetrics() autonomous.RolloutMetrics {
 	return autonomous.RolloutMetrics{
-		TotalTrades:   DefaultScalpingLiveTrialMinClosedTrades,
-		WinningTrades: DefaultScalpingLiveTrialMinClosedTrades - 1,
-		LosingTrades:  1,
-		TotalPnL:      decimal.NewFromFloat(0.25),
-		WinRate:       0.95,
-		MaxDrawdown:   decimal.NewFromFloat(0.01),
-		UptimePercent: 100,
+		TotalTrades:           DefaultScalpingLiveTrialMinClosedTrades,
+		WinningTrades:         DefaultScalpingLiveTrialMinClosedTrades - 1,
+		LosingTrades:          1,
+		TotalPnL:              decimal.NewFromFloat(0.25),
+		WinRate:               0.95,
+		MaxDrawdown:           decimal.NewFromFloat(0.01),
+		SignalQualityCoverage: decimal.NewFromInt(1),
+		HoldRatio:             decimal.NewFromFloat(0.5),
+		UptimePercent:         100,
 	}
 }

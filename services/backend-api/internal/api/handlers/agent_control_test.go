@@ -62,13 +62,15 @@ func TestAgentControlHandler_SetStrategyMode_ByChatID(t *testing.T) {
 
 func agentControlLiveProofMetrics() autonomous.RolloutMetrics {
 	return autonomous.RolloutMetrics{
-		TotalTrades:   services.DefaultScalpingLiveTrialMinClosedTrades,
-		WinningTrades: services.DefaultScalpingLiveTrialMinClosedTrades - 1,
-		LosingTrades:  1,
-		TotalPnL:      decimal.NewFromFloat(0.25),
-		WinRate:       0.95,
-		MaxDrawdown:   decimal.NewFromFloat(0.01),
-		UptimePercent: 100,
+		TotalTrades:           services.DefaultScalpingLiveTrialMinClosedTrades,
+		WinningTrades:         services.DefaultScalpingLiveTrialMinClosedTrades - 1,
+		LosingTrades:          1,
+		TotalPnL:              decimal.NewFromFloat(0.25),
+		WinRate:               0.95,
+		MaxDrawdown:           decimal.NewFromFloat(0.01),
+		SignalQualityCoverage: decimal.NewFromInt(1),
+		HoldRatio:             decimal.NewFromFloat(0.5),
+		UptimePercent:         100,
 	}
 }
 
