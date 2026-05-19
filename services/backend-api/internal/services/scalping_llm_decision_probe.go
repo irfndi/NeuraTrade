@@ -266,6 +266,7 @@ func scalpingProbeReasoningDiagnostics(decision *AITradingDecision, signals []ai
 		return nil
 	}
 	diagnostics := scalpingPctUnitReasoningDiagnostics(decision.Reasoning, signals)
+	diagnostics = append(diagnostics, scalpingHintReasoningDiagnostics(decision.Reasoning, signals)...)
 	if strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
 		diagnostics = append(diagnostics, scalpingHoldSpreadReasoningDiagnostics(decision.Reasoning, signals, maxSpreadPct)...)
 	}
@@ -333,6 +334,71 @@ func scalpingPctUnitReasoningDiagnostics(reason string, signals []aiMarketSignal
 		}
 	}
 	return diagnostics
+}
+
+func scalpingHintReasoningDiagnostics(reason string, signals []aiMarketSignal) []string {
+	reasoning := strings.ToLower(strings.TrimSpace(reason))
+	if reasoning == "" || !reasoningClaimsHintPresent(reasoning) {
+		return nil
+	}
+	diagnostics := make([]string, 0, 1)
+	for _, signal := range signals {
+		if !reasoningMentionsSignal(reasoning, signal) {
+			continue
+		}
+		if reasoningClaimsHintFieldPresent(reasoning, "confidence_hint", "confidence hint") && signal.ConfidenceHint <= 0 {
+			diagnostics = append(diagnostics, fmt.Sprintf("reasoning cites absent confidence_hint for %s", signal.Symbol))
+		}
+		if reasoningClaimsHintFieldPresent(reasoning, "candidate_score", "candidate score") && signal.CandidateScore <= 0 {
+			diagnostics = append(diagnostics, fmt.Sprintf("reasoning cites absent candidate_score for %s", signal.Symbol))
+		}
+		if reasoningClaimsHintFieldPresent(reasoning, "suggested_action", "suggested action") && strings.TrimSpace(signal.SuggestedAction) == "" {
+			diagnostics = append(diagnostics, fmt.Sprintf("reasoning cites absent suggested_action for %s", signal.Symbol))
+		}
+	}
+	return diagnostics
+}
+
+func reasoningClaimsHintPresent(reasoning string) bool {
+	return reasoningClaimsHintFieldPresent(reasoning, "confidence_hint", "confidence hint") ||
+		reasoningClaimsHintFieldPresent(reasoning, "candidate_score", "candidate score") ||
+		reasoningClaimsHintFieldPresent(reasoning, "suggested_action", "suggested action")
+}
+
+func reasoningClaimsHintFieldPresent(reasoning string, variants ...string) bool {
+	reasoning = strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(reasoning))), " ")
+	if reasoning == "" {
+		return false
+	}
+	for _, variant := range variants {
+		variant = strings.ToLower(strings.TrimSpace(variant))
+		if variant == "" || !strings.Contains(reasoning, variant) {
+			continue
+		}
+		negated := []string{
+			"no " + variant,
+			"without " + variant,
+			variant + " absent",
+			variant + " is absent",
+			variant + " missing",
+			variant + " is missing",
+			variant + " not provided",
+			variant + " is not provided",
+			variant + " not present",
+			variant + " is not present",
+		}
+		negatedMatch := false
+		for _, phrase := range negated {
+			if strings.Contains(reasoning, phrase) {
+				negatedMatch = true
+				break
+			}
+		}
+		if !negatedMatch {
+			return true
+		}
+	}
+	return false
 }
 
 func pctUnitInflationCitation(reasoning string, value float64) (string, bool) {

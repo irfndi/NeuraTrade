@@ -326,6 +326,40 @@ func TestScalpingPctUnitReasoningDiagnosticsAllowsCorrectPercentPoints(t *testin
 	require.Empty(t, diagnostics)
 }
 
+func TestScalpingHintReasoningDiagnosticsFlagsInventedHints(t *testing.T) {
+	signals := []aiMarketSignal{{
+		Symbol:             "ONDO/USDT",
+		OrderBookImbalance: 0.4,
+	}}
+
+	diagnostics := scalpingHintReasoningDiagnostics(
+		"ONDO confidence_hint suggests buy and candidate_score is strong, so take the setup.",
+		signals,
+	)
+
+	require.Len(t, diagnostics, 2)
+	require.Contains(t, diagnostics[0], "absent confidence_hint")
+	require.Contains(t, diagnostics[1], "absent candidate_score")
+}
+
+func TestScalpingHintReasoningDiagnosticsAllowsProvidedHintsAndNegatedMentions(t *testing.T) {
+	signals := []aiMarketSignal{{
+		Symbol:          "ONDO/USDT",
+		SuggestedAction: "buy",
+		ConfidenceHint:  0.65,
+		CandidateScore:  0.24,
+	}}
+
+	require.Empty(t, scalpingHintReasoningDiagnostics(
+		"ONDO confidence_hint 0.65 and suggested_action buy are present, but range blocks the setup.",
+		signals,
+	))
+	require.Empty(t, scalpingHintReasoningDiagnostics(
+		"ONDO confidence_hint not provided and candidate_score is missing, so hold.",
+		[]aiMarketSignal{{Symbol: "ONDO/USDT"}},
+	))
+}
+
 func TestRunScalpingLLMDecisionProbeWithServiceFlagsLLMDegradation(t *testing.T) {
 	svc := newScalpingLLMDecisionProbeTestService(&errorLLMClient{err: errors.New("provider exhausted")})
 
