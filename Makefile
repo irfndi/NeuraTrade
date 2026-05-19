@@ -128,6 +128,7 @@ test-scripts: ## Run operational script tests
 	@bash services/backend-api/scripts/scalping-soak_test.sh
 	@bash services/backend-api/scripts/verify-scalping-soak-artifact_test.sh
 	@bash services/backend-api/scripts/scalping-soak-acceptance_test.sh
+	@bash services/backend-api/scripts/validate-scalping-rule-candidate_test.sh
 
 coverage-check: ## Run coverage threshold checks
 	@echo "$(GREEN)Running coverage checks...$(NC)"

@@ -156,6 +156,24 @@ select 'negative_realized', count(*) from realized_pnl_journal where realized_pn
 "
 ```
 
+Before encoding a new deterministic entry rule, validate it against separate
+observed soak DBs instead of a single winning window. For example:
+
+```bash
+python3 services/backend-api/scripts/validate-scalping-rule-candidate.py \
+  --train-db /path/to/earlier-scalping-soak.db \
+  --validation-db /path/to/latest-scalping-soak.db \
+  --side buy \
+  --min-imbalance 0.35 \
+  --max-spread 0.06 \
+  --max-range 35 \
+  --min-recent 0.05 \
+  --min-24h 0.02
+```
+
+Do not promote a rule that fails validation profitability or depends on a single
+outlier trade after removing the best result.
+
 ## Pass Criteria
 
 The run can close the final scalping acceptance item only when:
