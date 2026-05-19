@@ -282,6 +282,9 @@ func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSig
 	if reasoning == "" || !strings.Contains(reasoning, "spread") {
 		return nil
 	}
+	if holdReasoningScopesSpreadToBuySafetyGate(reasoning) {
+		return nil
+	}
 	if !holdReasoningClaimsWideSpread(reasoning) {
 		return nil
 	}
@@ -303,6 +306,19 @@ func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSig
 		}
 	}
 	return diagnostics
+}
+
+func holdReasoningScopesSpreadToBuySafetyGate(reasoning string) bool {
+	reasoning = strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(reasoning))), " ")
+	if reasoning == "" {
+		return false
+	}
+	if !strings.Contains(reasoning, "buy safety gate") &&
+		!strings.Contains(reasoning, "buy-safety gate") &&
+		!strings.Contains(reasoning, "buy gate") {
+		return false
+	}
+	return strings.Contains(reasoning, "0.06")
 }
 
 func containsScalpingSymbolToken(text, symbol string) bool {

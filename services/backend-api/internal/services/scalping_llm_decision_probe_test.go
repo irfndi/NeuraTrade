@@ -243,6 +243,20 @@ func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T)
 			wantDiagnostics: false,
 		},
 		{
+			name:            "buy safety spread threshold does not imply liquidity ceiling contradiction",
+			reasoning:       "No signal meets all buy safety gates: BTC spread 0.07% exceeds 0.06%, so hold.",
+			signals:         []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.07}},
+			ceiling:         0.22,
+			wantDiagnostics: false,
+		},
+		{
+			name:            "buy gate shorthand spread threshold does not imply liquidity ceiling contradiction",
+			reasoning:       "No signal meets all buy gates: BTC has wide spread 0.11% above 0.06%, so hold.",
+			signals:         []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.11}},
+			ceiling:         0.22,
+			wantDiagnostics: false,
+		},
+		{
 			name:            "short symbol does not match unrelated word",
 			reasoning:       "Holding because consolidation remains broad and spread is above the comfort threshold.",
 			signals:         []aiMarketSignal{{Symbol: "SOL/USDT", BidAskSpread: 0.02}},

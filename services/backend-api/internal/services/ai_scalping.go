@@ -2033,6 +2033,7 @@ func (s *AIScalpingService) buildSystemPrompt() string {
 			skillContent = sk.Content
 		}
 	}
+	buyMomentumGate := math.Max(s.deterministicFallbackConfig().BuyMinPriceChangePct, 0.05)
 
 	return fmt.Sprintf(`You are an autonomous AI trading agent for cryptocurrency futures scalping.
 
@@ -2050,6 +2051,8 @@ You analyze market data and make trading decisions. You have access to real-time
 8. Keep reasoning concise (one short paragraph, <= 320 characters)
 9. For hold decisions, use symbol: "", size_pct: 0, stop_loss: null, take_profit: null
 10. When citing numeric signal values, compare spread_pct directly to the liquidity ceiling; never call a spread at or below the ceiling too wide
+11. Treat every *_pct market signal value as percentage points, not fractions; recent_price_change_pct 0.0276 means +0.0276%%, not +2.76%%, and price_change_24h_pct 0.04821 means +0.04821%%, not +4.821%%
+12. Never invent suggested_action, confidence_hint, or candidate_score; use them only when the field is present in that symbol's JSON, and never use them to override buy safety gates
 
 ## Response Format
 Return JSON only:
@@ -2071,9 +2074,11 @@ Return JSON only:
 - ob_imbalance < -0.2: Strong sell pressure (more asks)
 
 - spread <= %.4f%%: tradable liquidity ceiling; anything wider must be treated as hold
+- recent_price_change_pct is short-window momentum in percentage points; values below %.4f are below the buy momentum confirmation gate
+- Buy safety gates: when recent_price_change_pct is present, buy only if recent_price_change_pct >= %.4f, spread_pct <= %.4f, price_change_24h_pct >= %.4f, and range_pos_24h <= %.1f; if recent_price_change_pct is absent, buy only at deep-low range_pos_24h <= %.1f
 - range_pos_24h > 80: Price near daily high (avoid chasing late entries)
 - range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
-		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct())
+		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct(), buyMomentumGate, buyMomentumGate, scalpingRecentBuyMaxSpreadPct, scalpingRecentBuyMinTrendPct, scalpingRecentBuyMaxRangePct, scalpingNoRecentBuyMaxRangePct)
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
@@ -2135,7 +2140,9 @@ func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMar
 - Effective Min Confidence (must obey): %.2f
 - Effective Max Capital %% (must obey): %.2f
 - Policy note: account-tier and recovery adjustments are already reflected in the effective values above; cite and enforce those effective values only
-- Signal guidance: suggested_action/confidence_hint/candidate_score are backend-computed from liquidity, imbalance, range, momentum, fee edge, and current effective thresholds; when confidence_hint meets Effective Min Confidence, prefer that action unless a listed risk field clearly invalidates it
+- Signal guidance: suggested_action/confidence_hint/candidate_score are backend-computed from liquidity, imbalance, range, momentum, fee edge, and current effective thresholds; use them only when present in the JSON for that exact symbol, and never let them override buy safety gates
+- Percent-unit note: market fields ending in _pct are already percentage points; for example recent_price_change_pct=0.0276 is +0.0276%%, not +2.76%%, and price_change_24h_pct=0.04821 is +0.04821%%, not +4.821%%
+- Buy-safety note: a positive _pct value is not enough by itself; only buy when the signal clears the buy safety gates listed in the system prompt
 %s- Fund Milestone Progress: %.2f%%
 - No-fill Duration (minutes): %.1f
 - State Drift Active: %t

@@ -1224,6 +1224,11 @@ func TestAIScalpingService_BuildUserPrompt_UsesEffectiveThresholdsOnly(t *testin
 	assert.Contains(t, prompt, "Estimated Initial Margin @ 5x: 1.20 USDT")
 	assert.Contains(t, prompt, "do not multiply size_pct by leverage")
 	assert.Contains(t, prompt, "Policy note: account-tier and recovery adjustments are already reflected")
+	assert.Contains(t, prompt, "use them only when present in the JSON for that exact symbol")
+	assert.Contains(t, prompt, "never let them override buy safety gates")
+	assert.Contains(t, prompt, "recent_price_change_pct=0.0276 is +0.0276%")
+	assert.Contains(t, prompt, "price_change_24h_pct=0.04821 is +0.04821%")
+	assert.Contains(t, prompt, "only buy when the signal clears the buy safety gates")
 	assert.Contains(t, prompt, "Historical performance is already reflected in those effective thresholds")
 	assert.NotContains(t, prompt, "Phase Min Confidence (reference only)")
 	assert.NotContains(t, prompt, "Phase Max Capital % (reference only)")
@@ -1326,6 +1331,29 @@ func TestAIScalpingService_BuildSystemPrompt_GuardsSpreadThresholdReasoning(t *t
 	assert.Contains(t, prompt, "compare spread_pct directly to the liquidity ceiling")
 	assert.Contains(t, prompt, "never call a spread at or below the ceiling too wide")
 	assert.Contains(t, prompt, "spread <= 0.2200%")
+}
+
+func TestAIScalpingService_BuildSystemPrompt_ClarifiesPercentPointSignalUnits(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{
+		Leverage: 5,
+		DeterministicFallback: DeterministicFallbackConfig{
+			BuyMinPriceChangePct: 0.08,
+		},
+	}}
+
+	prompt := svc.buildSystemPrompt()
+
+	assert.Contains(t, prompt, "recent_price_change_pct 0.0276 means +0.0276%, not +2.76%")
+	assert.Contains(t, prompt, "price_change_24h_pct 0.04821 means +0.04821%, not +4.821%")
+	assert.Contains(t, prompt, "Never invent suggested_action, confidence_hint, or candidate_score")
+	assert.Contains(t, prompt, "never use them to override buy safety gates")
+	assert.Contains(t, prompt, "recent_price_change_pct is short-window momentum in percentage points")
+	assert.Contains(t, prompt, "values below 0.0800 are below the buy momentum confirmation gate")
+	assert.Contains(t, prompt, "buy only if recent_price_change_pct >= 0.0800")
+	assert.Contains(t, prompt, "spread_pct <= 0.0600")
+	assert.Contains(t, prompt, "price_change_24h_pct >= 0.0200")
+	assert.Contains(t, prompt, "range_pos_24h <= 35.0")
+	assert.Contains(t, prompt, "if recent_price_change_pct is absent, buy only at deep-low range_pos_24h <= 20.0")
 }
 
 func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t *testing.T) {
