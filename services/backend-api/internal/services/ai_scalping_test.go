@@ -983,7 +983,7 @@ func TestAIScalpingService_ValidateDecision_AllowsBlowoffReversalSell(t *testing
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
 		OrderBookImbalance: -0.1783,
-		RangePosition24h:   100,
+		RangePosition24h:   96.58,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
 		RecentChangeKnown:  true,
@@ -1012,9 +1012,39 @@ func TestAIScalpingService_ValidateDecision_RejectsBlowoffSellWithPositiveBookPr
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
 		OrderBookImbalance: 0.1783,
-		RangePosition24h:   100,
+		RangePosition24h:   96.58,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
+		RecentChangeKnown:  true,
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sell decision rejected without 24h downside confirmation")
+}
+
+func TestAIScalpingService_ValidateDecision_RejectsBlowoffSellWithWeakBookPressure(t *testing.T) {
+	svc := &AIScalpingService{}
+	decision := &AITradingDecision{
+		Action:      "sell",
+		Symbol:      "ONDO/USDT",
+		SizePercent: 12,
+		Confidence:  0.72,
+		Reasoning:   "overextended blowoff reversal",
+		StopLoss:    decimalPointer("0.4005"),
+		TakeProfit:  decimalPointer("0.3880"),
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "ONDO/USDT",
+		Price:              0.3954,
+		High24h:            0.3954,
+		Low24h:             0.35,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.05061,
+		OrderBookImbalance: -0.01196,
+		RangePosition24h:   98.55,
+		PriceChange24h:     0.1573,
+		RecentPriceChange:  0.4575,
 		RecentChangeKnown:  true,
 	}})
 
@@ -3020,7 +3050,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBlowoffReversalS
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
 		RecentChangeKnown:  true,
-		RangePosition24h:   100,
+		RangePosition24h:   96.58,
 	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
 
 	require.True(t, ok)

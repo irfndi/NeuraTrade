@@ -73,7 +73,8 @@ const (
 	scalpingBlowoffSellTrendMinPct  = 0.075
 	scalpingBlowoffSellRecentMinPct = 0.15
 	scalpingBlowoffSellRangeMin     = 95.0
-	scalpingBlowoffSellMaxImbalance = 0.0
+	scalpingBlowoffSellRangeMax     = 98.0
+	scalpingBlowoffSellMaxImbalance = -0.10
 	scalpingRecentMomentumWindow    = 5 * time.Minute
 	scalpingRecentMomentumMinAge    = 30 * time.Second
 
@@ -3323,7 +3324,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		blowoffReversal = true
 		rangeAlignment = clampFloat(
 			(signal.RangePosition24h-scalpingBlowoffSellRangeMin)/
-				math.Max(100-scalpingBlowoffSellRangeMin, 1),
+				math.Max(scalpingBlowoffSellRangeMax-scalpingBlowoffSellRangeMin, 1),
 			0,
 			1,
 		)
@@ -3527,6 +3528,7 @@ func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal) bool {
 		signal.PriceChange24h >= scalpingBlowoffSellTrendMinPct &&
 		signal.RecentPriceChange >= scalpingBlowoffSellRecentMinPct &&
 		signal.RangePosition24h >= scalpingBlowoffSellRangeMin &&
+		signal.RangePosition24h <= scalpingBlowoffSellRangeMax &&
 		signal.OrderBookImbalance <= scalpingBlowoffSellMaxImbalance
 }
 

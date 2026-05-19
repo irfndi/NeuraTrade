@@ -957,7 +957,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		action = "sell"
 		momentumAligned = true
 		rangeAlignment = clampFloat(
-			(signal.RangePosition24h-scalpingBlowoffSellRangeMin)/math.Max(100-scalpingBlowoffSellRangeMin, 1),
+			(signal.RangePosition24h-scalpingBlowoffSellRangeMin)/math.Max(scalpingBlowoffSellRangeMax-scalpingBlowoffSellRangeMin, 1),
 			0,
 			1,
 		)

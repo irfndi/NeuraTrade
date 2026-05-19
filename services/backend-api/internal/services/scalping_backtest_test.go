@@ -565,7 +565,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsBlowoffReversalSell(t *testin
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
 		OrderBookImbalance: -0.1783,
-		RangePosition24h:   100,
+		RangePosition24h:   96.58,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
 		RecentChangeKnown:  true,
