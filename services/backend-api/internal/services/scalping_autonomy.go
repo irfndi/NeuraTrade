@@ -476,10 +476,13 @@ func (c *ScalpingAutonomyCoordinator) ValidateStrategyMode(
 	if err != nil {
 		return fmt.Errorf("get rollout state: %w", err)
 	}
+	var failures []string
 	if state != nil && state.CurrentStage == autonomous.StageLive {
-		return nil
+		failures = scalpingActiveLiveProofFailures(state)
+	} else {
+		failures = scalpingLivePaperProofFailures(state)
 	}
-	if failures := scalpingLivePaperProofFailures(state); len(failures) > 0 {
+	if len(failures) > 0 {
 		return fmt.Errorf("scalping live paper proof not met: %s", strings.Join(failures, ", "))
 	}
 	return nil
@@ -493,7 +496,22 @@ func scalpingLivePaperProofFailures(state *autonomous.RolloutState) []string {
 	if state.CurrentStage != autonomous.StagePaper || state.Status != autonomous.StatusActive {
 		failures = append(failures, fmt.Sprintf("strategy_not_active_paper (stage: %s, status: %s)", state.CurrentStage, state.Status))
 	}
-	metrics := state.Metrics
+	return append(failures, scalpingLiveProofMetricFailures(state.Metrics)...)
+}
+
+func scalpingActiveLiveProofFailures(state *autonomous.RolloutState) []string {
+	if state == nil {
+		return []string{"rollout_state_missing"}
+	}
+	failures := make([]string, 0, 8)
+	if state.CurrentStage != autonomous.StageLive || state.Status != autonomous.StatusActive {
+		failures = append(failures, fmt.Sprintf("strategy_not_active_live (stage: %s, status: %s)", state.CurrentStage, state.Status))
+	}
+	return append(failures, scalpingLiveProofMetricFailures(state.Metrics)...)
+}
+
+func scalpingLiveProofMetricFailures(metrics autonomous.RolloutMetrics) []string {
+	failures := make([]string, 0, 8)
 	closedOutcomeTrades := metrics.WinningTrades + metrics.LosingTrades
 	closedTrades := metrics.TotalTrades
 	if closedOutcomeTrades > closedTrades {

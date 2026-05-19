@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/database"
@@ -191,6 +192,55 @@ func TestScalpingAutonomyCoordinator_ValidateStrategyMode_DoesNotPromoteLive(t *
 	persisted, err := store.GetRolloutState(context.Background(), "strategy-live-proof-validate")
 	require.NoError(t, err)
 	require.Equal(t, autonomous.StagePaper, persisted.CurrentStage)
+}
+
+func TestScalpingAutonomyCoordinator_ValidateStrategyMode_BlocksPersistedLiveWithoutProofMetrics(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-autonomy-live-proof-revalidate.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	require.NoError(t, store.SaveRolloutState(context.Background(), &autonomous.RolloutState{
+		StrategyID:   "strategy-live-proof-revalidate",
+		CurrentStage: autonomous.StageLive,
+		Status:       autonomous.StatusActive,
+		EnteredAt:    time.Now().UTC(),
+		Metrics:      autonomous.RolloutMetrics{},
+	}))
+
+	coordinator := NewScalpingAutonomyCoordinator(store, AIScalpingConfig{})
+	err = coordinator.ValidateStrategyMode(context.Background(), "strategy-live-proof-revalidate", autonomous.ModeLive)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "scalping live paper proof not met")
+	require.Contains(t, err.Error(), "closed_trades_below_live_trial_minimum")
+	require.Contains(t, err.Error(), "net_pnl_not_positive")
+}
+
+func TestScalpingAutonomyCoordinator_ValidateStrategyMode_AllowsPersistedLiveWithProofMetrics(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-autonomy-live-proof-revalidate-pass.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	require.NoError(t, store.SaveRolloutState(context.Background(), &autonomous.RolloutState{
+		StrategyID:   "strategy-live-proof-revalidate-pass",
+		CurrentStage: autonomous.StageLive,
+		Status:       autonomous.StatusActive,
+		EnteredAt:    time.Now().UTC(),
+		Metrics:      scalpingLiveProofMetrics(),
+	}))
+
+	coordinator := NewScalpingAutonomyCoordinator(store, AIScalpingConfig{})
+	require.NoError(t, coordinator.ValidateStrategyMode(context.Background(), "strategy-live-proof-revalidate-pass", autonomous.ModeLive))
 }
 
 func scalpingLiveProofMetrics() autonomous.RolloutMetrics {
