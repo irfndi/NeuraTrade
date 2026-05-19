@@ -861,6 +861,51 @@ func TestBuildAIScalpingDecisionProbeSummaryMarksPaperLiveTrialReady(t *testing.
 	require.True(t, summary.ObservedPaperMaxDrawdownPct.GreaterThan(decimal.Zero))
 }
 
+func TestBuildAIScalpingDecisionProbeSummaryBlocksLiveReadinessWhenHoldRatioTooHigh(t *testing.T) {
+	results := make([]*services.ScalpingLLMDecisionProbeResult, 0, 80)
+	for i := 0; i < services.DefaultScalpingLiveTrialMinClosedTrades; i++ {
+		outcome := "win"
+		netPnL := mustDecimal("0.02")
+		if i%5 == 0 {
+			outcome = "loss"
+			netPnL = mustDecimal("-0.01")
+		}
+		results = append(results, &services.ScalpingLLMDecisionProbeResult{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "buy"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:         mustDecimal("0.001"),
+				NetPnL:       netPnL,
+				Outcome:      outcome,
+				ExitObserved: true,
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		})
+	}
+	for i := len(results); i < 80; i++ {
+		results = append(results, &services.ScalpingLLMDecisionProbeResult{
+			SignalCount:           8,
+			SignalQualityCount:    8,
+			ContractValid:         true,
+			Provider:              "deepseek",
+			Decision:              &services.AITradingDecision{Action: "hold"},
+			SignalQualityCoverage: mustDecimal("1"),
+			ReasoningDiagnostics:  nil,
+		})
+	}
+
+	summary := buildAIScalpingDecisionProbeSummary(results, len(results), mustDecimal("50"), 0)
+
+	require.Equal(t, "0.75", summary.HoldRatio.String())
+	require.False(t, summary.PaperLiveTrialReadiness.Ready)
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "hold_ratio_above_live_trial_maximum")
+	require.True(t, summary.ObservedPaperNetPnL.GreaterThan(decimal.Zero))
+	require.True(t, summary.ObservedPaperMaxDrawdownPct.GreaterThan(decimal.Zero))
+}
+
 func TestBuildAIScalpingDecisionProbeSummaryClosesObservedPaperExit(t *testing.T) {
 	start := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
 	results := []*services.ScalpingLLMDecisionProbeResult{

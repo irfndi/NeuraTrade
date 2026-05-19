@@ -25,6 +25,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var aiScalpingLiveTrialMaxHoldRatio = decimal.RequireFromString("0.745")
+
 func runAICLI() error {
 	if len(os.Args) < 3 {
 		printAIUsage()
@@ -1122,6 +1124,9 @@ func buildAIScalpingProbeLiveTrialReadiness(summary aiScalpingDecisionProbeSumma
 	}
 	if summary.SignalQualityCoverage.LessThan(decimal.NewFromInt(1)) {
 		reasons = appendUniqueReadinessReason(reasons, "signal_quality_incomplete")
+	}
+	if summary.HoldRatio.GreaterThan(aiScalpingLiveTrialMaxHoldRatio) {
+		reasons = appendUniqueReadinessReason(reasons, "hold_ratio_above_live_trial_maximum")
 	}
 	if summary.LLMDegradedCycles > 0 {
 		reasons = appendUniqueReadinessReason(reasons, "llm_degraded")
