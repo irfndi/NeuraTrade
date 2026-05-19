@@ -23,16 +23,19 @@ const (
 )
 
 type ScalpingLivePaperSoakOptions struct {
-	Exchange       string
-	Cycles         int
-	Interval       time.Duration
-	ChatID         string
-	OrderPrefix    string
-	RequireTrades  bool
-	InitialCapital decimal.Decimal
-	FeeRate        decimal.Decimal
-	HoldPeriod     time.Duration
-	Baseline       *ScalpingSoakBaseline
+	Exchange          string
+	Cycles            int
+	Interval          time.Duration
+	ChatID            string
+	OrderPrefix       string
+	RequireTrades     bool
+	InitialCapital    decimal.Decimal
+	FeeRate           decimal.Decimal
+	HoldPeriod        time.Duration
+	MaxPairsToAnalyze int
+	MaxCandidatePairs int
+	OrderBookPairs    int
+	Baseline          *ScalpingSoakBaseline
 }
 
 type ScalpingLivePaperSoakResult struct {
@@ -130,14 +133,7 @@ func RunPublicScalpingLivePaperSoak(
 		_ = ccxtSvc.Close()
 	}()
 
-	defaults := DefaultAIScalpingConfig()
-	defaults.Exchange = exchange
-	defaults.MaxPairsToAnalyze = 8
-	defaults.MaxCandidatePairs = 24
-	defaults.OrderBookPairs = 8
-	defaults.AutoExpandOrderBooks = true
-	defaults.AutoExecute = false
-	defaults.EnforceFutures = false
+	defaults := resolveScalpingLivePaperSoakConfig(exchange, options)
 
 	svc := &AIScalpingService{
 		config:             defaults,
@@ -213,6 +209,35 @@ func RunPublicScalpingLivePaperSoak(
 		return nil, fmt.Errorf("live paper scalping soak produced no paper trades")
 	}
 	return soak, nil
+}
+
+func resolveScalpingLivePaperSoakConfig(exchange string, options ScalpingLivePaperSoakOptions) AIScalpingConfig {
+	defaults := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
+	defaults.Exchange = exchange
+	if options.MaxPairsToAnalyze > 0 {
+		defaults.MaxPairsToAnalyze = clampInt(options.MaxPairsToAnalyze, 1, 64)
+	}
+	if options.MaxCandidatePairs > 0 {
+		defaults.MaxCandidatePairs = clampInt(options.MaxCandidatePairs, defaults.MaxPairsToAnalyze, 2000)
+	}
+	if defaults.MaxCandidatePairs < defaults.MaxPairsToAnalyze {
+		defaults.MaxCandidatePairs = defaults.MaxPairsToAnalyze
+	}
+	if options.OrderBookPairs > 0 {
+		defaults.OrderBookPairs = clampInt(options.OrderBookPairs, 1, defaults.MaxPairsToAnalyze)
+		if defaults.OrderBookPairs > defaultOrderBookPairsBase {
+			defaults.AutoExpandOrderBooks = false
+		}
+	}
+	if defaults.OrderBookPairs > defaults.MaxPairsToAnalyze {
+		defaults.OrderBookPairs = defaults.MaxPairsToAnalyze
+	}
+	if defaults.OrderBookPairs <= 0 {
+		defaults.OrderBookPairs = clampInt(defaultOrderBookPairsBase, 1, defaults.MaxPairsToAnalyze)
+	}
+	defaults.AutoExecute = false
+	defaults.EnforceFutures = false
+	return defaults
 }
 
 func gatherPublicScalpingLivePaperSoakSignals(

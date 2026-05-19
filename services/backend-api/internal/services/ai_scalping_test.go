@@ -2838,7 +2838,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesRecentMomentumWhen
 		Volume24h:          1500000,
 		BidAskSpread:       0.05,
 		OrderBookImbalance: 0.60,
-		PriceChange24h:     -4.0,
+		PriceChange24h:     0.2,
 		RecentPriceChange:  0.12,
 		RecentChangeKnown:  true,
 		RangePosition24h:   18,
@@ -2848,6 +2848,70 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesRecentMomentumWhen
 	require.NotNil(t, decision)
 	assert.Equal(t, "buy", decision.Action)
 	assert.Contains(t, decision.Reasoning, "momentum 0.120%")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_RejectsRecentBuyInDowntrend(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "BILL/USDT",
+		Price:              0.118057,
+		High24h:            0.13,
+		Low24h:             0.118,
+		Volume24h:          1500000,
+		BidAskSpread:       0.03388,
+		OrderBookImbalance: 0.55583,
+		PriceChange24h:     -0.18599,
+		RecentPriceChange:  0.08817,
+		RecentChangeKnown:  true,
+		RangePosition24h:   1.96,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	assert.False(t, ok)
+	assert.Nil(t, decision)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_RejectsRecentBuyNearMaxSpread(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "PROS/USDT",
+		Price:              0.6286,
+		High24h:            0.75,
+		Low24h:             0.50,
+		Volume24h:          1500000,
+		BidAskSpread:       0.07954,
+		OrderBookImbalance: 0.63331,
+		PriceChange24h:     -0.08872,
+		RecentPriceChange:  0.12743,
+		RecentChangeKnown:  true,
+		RangePosition24h:   24.94,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	assert.False(t, ok)
+	assert.Nil(t, decision)
 }
 
 func TestAIScalpingService_AnnotateRecentSignalMomentum(t *testing.T) {

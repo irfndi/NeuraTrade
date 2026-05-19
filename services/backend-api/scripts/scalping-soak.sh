@@ -17,6 +17,9 @@ CYCLES="${CYCLES:-12}"
 INTERVAL_MS="${INTERVAL_MS:-5000}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 HOLD_PERIOD_SECONDS="${HOLD_PERIOD_SECONDS:-300}"
+MAX_PAIRS="${MAX_PAIRS:-${NEURATRADE_SCALPING_MAX_PAIRS:-0}}"
+MAX_CANDIDATES="${MAX_CANDIDATES:-${NEURATRADE_SCALPING_MAX_CANDIDATES:-0}}"
+ORDERBOOK_PAIRS="${ORDERBOOK_PAIRS:-${NEURATRADE_SCALPING_ORDERBOOK_PAIRS:-0}}"
 CAPITAL="${CAPITAL:-48}"
 FEE_RATE="${FEE_RATE:-0.0006}"
 REQUIRE_TRADES="${REQUIRE_TRADES:-true}"
@@ -72,6 +75,9 @@ Environment:
   INTERVAL_MS     Delay between cycles in ms (default: ${INTERVAL_MS})
   TIMEOUT_SECONDS Overall timeout; 0 lets the binary calculate it (default: ${TIMEOUT_SECONDS})
   HOLD_PERIOD_SECONDS Paper position hold period; 0 uses binary default (default: ${HOLD_PERIOD_SECONDS})
+  MAX_PAIRS       Maximum pairs to analyze per cycle; 0 uses scalping config default (default: ${MAX_PAIRS})
+  MAX_CANDIDATES  Maximum discovered candidates to score; 0 uses scalping config default (default: ${MAX_CANDIDATES})
+  ORDERBOOK_PAIRS Maximum pairs with orderbook quality per cycle; 0 uses scalping config default (default: ${ORDERBOOK_PAIRS})
   CAPITAL         Initial paper capital in USDT (default: ${CAPITAL})
   FEE_RATE        Paper simulator fee rate (default: ${FEE_RATE})
   REQUIRE_TRADES  true/false; fail when no paper trades are produced (default: ${REQUIRE_TRADES})
@@ -122,6 +128,9 @@ run_soak() {
     "--cycles" "$CYCLES"
     "--interval-ms" "$INTERVAL_MS"
     "--hold-period-seconds" "$HOLD_PERIOD_SECONDS"
+    "--max-pairs" "$MAX_PAIRS"
+    "--max-candidates" "$MAX_CANDIDATES"
+    "--orderbook-pairs" "$ORDERBOOK_PAIRS"
     "--chat-id" "$SOAK_CHAT_ID"
     "--order-prefix" "$SOAK_ORDER_PREFIX"
     "--capital" "$CAPITAL"

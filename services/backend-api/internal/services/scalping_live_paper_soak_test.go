@@ -42,6 +42,41 @@ func TestScalpingLivePaperSoakOptionNormalization(t *testing.T) {
 	}
 }
 
+func TestResolveScalpingLivePaperSoakConfigRespectsPairScaleEnv(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_MAX_PAIRS", "32")
+	t.Setenv("NEURATRADE_SCALPING_MAX_CANDIDATES", "96")
+	t.Setenv("NEURATRADE_SCALPING_ORDERBOOK_PAIRS", "24")
+
+	config := resolveScalpingLivePaperSoakConfig("bitget", ScalpingLivePaperSoakOptions{})
+
+	require.Equal(t, "bitget", config.Exchange)
+	require.Equal(t, 32, config.MaxPairsToAnalyze)
+	require.Equal(t, 96, config.MaxCandidatePairs)
+	require.Equal(t, 24, config.OrderBookPairs)
+	require.False(t, config.AutoExecute)
+	require.False(t, config.EnforceFutures)
+}
+
+func TestResolveScalpingLivePaperSoakConfigOptionsOverrideEnvAndClamp(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_MAX_PAIRS", "12")
+	t.Setenv("NEURATRADE_SCALPING_MAX_CANDIDATES", "12")
+	t.Setenv("NEURATRADE_SCALPING_ORDERBOOK_PAIRS", "12")
+
+	config := resolveScalpingLivePaperSoakConfig("okx", ScalpingLivePaperSoakOptions{
+		MaxPairsToAnalyze: 80,
+		MaxCandidatePairs: 10,
+		OrderBookPairs:    80,
+	})
+
+	require.Equal(t, "okx", config.Exchange)
+	require.Equal(t, 64, config.MaxPairsToAnalyze)
+	require.Equal(t, 64, config.MaxCandidatePairs)
+	require.Equal(t, 64, config.OrderBookPairs)
+	require.False(t, config.AutoExpandOrderBooks)
+	require.False(t, config.AutoExecute)
+	require.False(t, config.EnforceFutures)
+}
+
 func TestScalpingLivePaperSoakTimeoutScalesWithCyclesAndInterval(t *testing.T) {
 	cases := []struct {
 		name     string

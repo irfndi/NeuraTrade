@@ -284,3 +284,14 @@ func TestRunRejectsNegativeHoldPeriod(t *testing.T) {
 	err := run()
 	require.ErrorContains(t, err, "invalid --hold-period-seconds value -1")
 }
+
+func TestEnvInt(t *testing.T) {
+	t.Setenv("SCALPING_SOAK_TEST_INT", "17")
+	require.Equal(t, 17, envInt("SCALPING_SOAK_TEST_INT", 3))
+
+	t.Setenv("SCALPING_SOAK_TEST_INT", "not-an-int")
+	require.Equal(t, 3, envInt("SCALPING_SOAK_TEST_INT", 3))
+
+	t.Setenv("SCALPING_SOAK_TEST_INT", "")
+	require.Equal(t, 3, envInt("SCALPING_SOAK_TEST_INT", 3))
+}

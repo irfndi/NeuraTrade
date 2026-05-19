@@ -32,6 +32,9 @@ func run() error {
 		intervalMS               int
 		timeoutSeconds           int
 		holdPeriodSeconds        int
+		maxPairs                 int
+		maxCandidates            int
+		orderBookPairs           int
 		requireTrades            bool
 		initialCapital           string
 		feeRate                  string
@@ -61,6 +64,9 @@ func run() error {
 	flags.IntVar(&intervalMS, "interval-ms", 2000, "delay between cycles in milliseconds")
 	flags.IntVar(&timeoutSeconds, "timeout-seconds", 0, "overall timeout; defaults to cycles and interval")
 	flags.IntVar(&holdPeriodSeconds, "hold-period-seconds", 0, "paper position hold period in seconds; 0 uses the default")
+	flags.IntVar(&maxPairs, "max-pairs", envInt("NEURATRADE_SCALPING_MAX_PAIRS", 0), "maximum pairs to analyze per cycle; 0 uses scalping config default")
+	flags.IntVar(&maxCandidates, "max-candidates", envInt("NEURATRADE_SCALPING_MAX_CANDIDATES", 0), "maximum discovered candidates to score; 0 uses scalping config default")
+	flags.IntVar(&orderBookPairs, "orderbook-pairs", envInt("NEURATRADE_SCALPING_ORDERBOOK_PAIRS", 0), "maximum pairs with orderbook quality per cycle; 0 uses scalping config default")
 	flags.BoolVar(&requireTrades, "require-trades", false, "fail if the paper soak produces zero closed paper trades")
 	flags.StringVar(&initialCapital, "capital", "48", "initial paper capital in USDT")
 	flags.StringVar(&feeRate, "fee-rate", "0.0006", "round-trip fee-rate input used by the paper simulator")
@@ -121,16 +127,19 @@ func run() error {
 		baseline = &value
 	}
 	result, err := services.RunPublicScalpingLivePaperSoak(ctx, db, services.ScalpingLivePaperSoakOptions{
-		Exchange:       exchange,
-		Cycles:         cycles,
-		Interval:       interval,
-		ChatID:         chatID,
-		OrderPrefix:    orderPrefix,
-		RequireTrades:  requireTrades,
-		InitialCapital: capital,
-		FeeRate:        fees,
-		HoldPeriod:     holdPeriod,
-		Baseline:       baseline,
+		Exchange:          exchange,
+		Cycles:            cycles,
+		Interval:          interval,
+		ChatID:            chatID,
+		OrderPrefix:       orderPrefix,
+		RequireTrades:     requireTrades,
+		InitialCapital:    capital,
+		FeeRate:           fees,
+		HoldPeriod:        holdPeriod,
+		MaxPairsToAnalyze: maxPairs,
+		MaxCandidatePairs: maxCandidates,
+		OrderBookPairs:    orderBookPairs,
+		Baseline:          baseline,
 	})
 	if err != nil {
 		return err
@@ -376,4 +385,16 @@ func envString(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

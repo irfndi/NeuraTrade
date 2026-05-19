@@ -914,6 +914,9 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		return nil
 	}
 	effectiveMinImbalance := math.Min(fallback.MinImbalance, 0.20)
+	if e.config.RequireRecentMomentum {
+		effectiveMinImbalance = fallback.MinImbalance
+	}
 	if imbalance < effectiveMinImbalance && !scalpingBlowoffSellTrendConfirmed(signal) {
 		return nil
 	}
@@ -973,6 +976,12 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		return nil
 	}
 	if !momentumAligned {
+		return nil
+	}
+	if e.config.RequireRecentMomentum && action == "buy" && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
+		return nil
+	}
+	if e.config.RequireRecentMomentum && action == "buy" && signal.PriceChange24h < 0 {
 		return nil
 	}
 	if e.config.RequireRecentMomentum && action == "buy" && signal.RangePosition24h > fallback.BuyRangeMax-5 {

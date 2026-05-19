@@ -75,6 +75,7 @@ const (
 	scalpingBlowoffSellRangeMin     = 95.0
 	scalpingBlowoffSellRangeMax     = 98.0
 	scalpingBlowoffSellMaxImbalance = -0.10
+	scalpingRecentBuyMaxSpreadPct   = 0.06
 	scalpingRecentMomentumWindow    = 5 * time.Minute
 	scalpingRecentMomentumMinAge    = 30 * time.Second
 
@@ -3353,6 +3354,12 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		return nil, 0, false
 	}
 	if !momentumAligned {
+		return nil, 0, false
+	}
+	if signal.RecentChangeKnown && action == "buy" && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
+		return nil, 0, false
+	}
+	if signal.RecentChangeKnown && action == "buy" && signal.PriceChange24h < 0 {
 		return nil, 0, false
 	}
 	if signal.RecentChangeKnown && action == "buy" && signal.RangePosition24h > buyRangeMax-5 {
