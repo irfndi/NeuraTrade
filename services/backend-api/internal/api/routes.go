@@ -933,6 +933,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			}
 			return coordinator.ValidateStrategyMode(ctx, services.ScalpingStrategyID(chatID), autonomous.ModeLive)
 		})
+		for chatID, err := range opModeService.RevalidateLiveModeGuard(context.Background(), "startup_live_mode_guard") {
+			log.Printf("⚠️ Demoted persisted live mode after proof gate revalidation: chat_id=%s err=%v", chatID, err)
+		}
 	}
 
 	// Register quest runtime via app/autonomy entrypoint before scheduler start.

@@ -551,7 +551,6 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 		"--max-paper-drawdown", "0.25",
 		"--max-paper-drawdown-pct", "0.01",
 		"--max-reasoning-diagnostics", "2",
-		"--require-live-trial-ready",
 		"--allow-degraded",
 		"--allow-invalid-contract",
 	})
@@ -608,9 +607,6 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	}
 	if !opts.RequireReasoningClean || opts.MaxReasoningDiagnostics != 2 {
 		t.Fatalf("expected parsed reasoning diagnostics gate, enabled=%t max=%d", opts.RequireReasoningClean, opts.MaxReasoningDiagnostics)
-	}
-	if !opts.RequireLiveTrialReady {
-		t.Fatal("expected parsed live trial readiness gate")
 	}
 }
 
@@ -1087,32 +1083,6 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesReasoningDiagnosticGate(t
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reasoning_diagnostic_count")
-}
-
-func TestValidateAIScalpingDecisionProbeSummaryCanRequirePaperLiveTrialReadiness(t *testing.T) {
-	summary := aiScalpingDecisionProbeSummary{
-		Cycles:                     2,
-		CompletedCycles:            2,
-		ValidContractCycles:        2,
-		SignalQualityCoverage:      mustDecimal("1"),
-		PaperTrades:                1,
-		PaperWins:                  1,
-		PaperNetPnL:                mustDecimal("0.01"),
-		PaperAvgNetPnL:             mustDecimal("0.01"),
-		PaperLiveTrialReadiness:    services.ScalpingLiveTrialReadiness{Ready: false, Reasons: []string{"paper_trades_below_live_trial_minimum"}, MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades},
-		PaperProfitFactorUnbounded: true,
-	}
-
-	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
-		Cycles:                2,
-		RequireHealthy:        true,
-		RequireValid:          true,
-		MinSignalQuality:      mustDecimal("1"),
-		RequireLiveTrialReady: true,
-	})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "paper_live_trial_readiness.ready=false")
 }
 
 func mustDecimal(value string) decimal.Decimal {

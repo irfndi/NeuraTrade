@@ -550,7 +550,6 @@ type aiScalpingDecisionProbeOptions struct {
 	RequirePaperDrawdownPct  bool
 	MaxReasoningDiagnostics  int
 	RequireReasoningClean    bool
-	RequireLiveTrialReady    bool
 }
 
 type aiScalpingDecisionProbeSummary struct {
@@ -934,9 +933,6 @@ func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSumma
 	if opts.RequireReasoningClean && summary.ReasoningDiagnosticCount > opts.MaxReasoningDiagnostics {
 		return fmt.Errorf("reasoning_diagnostic_count=%d above maximum=%d", summary.ReasoningDiagnosticCount, opts.MaxReasoningDiagnostics)
 	}
-	if opts.RequireLiveTrialReady && !summary.PaperLiveTrialReadiness.Ready {
-		return fmt.Errorf("paper_live_trial_readiness.ready=false reasons=%v", summary.PaperLiveTrialReadiness.Reasons)
-	}
 	return nil
 }
 
@@ -1021,7 +1017,6 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	intervalMS := fs.Int("interval-ms", 0, "delay between scalping LLM probe cycles in milliseconds")
 	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
 	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
-	fs.BoolVar(&opts.RequireLiveTrialReady, "require-live-trial-ready", false, "require paper_live_trial_readiness.ready=true before returning success")
 	fs.StringVar(&opts.Provider, "provider", "", "provider to probe; defaults to ai.provider and NEURATRADE_AI_PROVIDER_CHAIN")
 	fs.StringVar(&opts.Model, "model", "", "model override for the selected provider")
 	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")

@@ -145,6 +145,41 @@ func (s *OperationalModeService) SetLiveModeGuard(guard OperationalLiveModeGuard
 	s.guard = guard
 }
 
+// RevalidateLiveModeGuard demotes persisted live states that no longer satisfy
+// the installed proof guard. It is intended for startup after loading state from
+// storage and wiring runtime proof gates.
+func (s *OperationalModeService) RevalidateLiveModeGuard(ctx context.Context, changedBy string) map[string]error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	guard := s.guard
+	liveChatIDs := make([]string, 0)
+	for chatID, state := range s.states {
+		if state != nil && state.Mode == OpModeLive {
+			liveChatIDs = append(liveChatIDs, chatID)
+		}
+	}
+	s.mu.RUnlock()
+	if guard == nil || len(liveChatIDs) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(changedBy) == "" {
+		changedBy = "live_mode_guard_revalidation"
+	}
+
+	failures := make(map[string]error)
+	for _, chatID := range liveChatIDs {
+		if err := guard(ctx, chatID); err != nil {
+			failures[chatID] = err
+			if demoteErr := s.SetMode(ctx, chatID, OpModeDry, changedBy); demoteErr != nil {
+				failures[chatID] = fmt.Errorf("%w; demote to dry failed: %v", err, demoteErr)
+			}
+		}
+	}
+	return failures
+}
+
 func (s *OperationalModeService) ensureStorage() {
 	if s.db == nil {
 		return
