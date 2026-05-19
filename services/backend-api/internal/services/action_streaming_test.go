@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -271,6 +272,23 @@ func TestActionStreaming_JSON(t *testing.T) {
 	assert.Equal(t, action.Priority, parsed.Priority)
 	assert.Equal(t, action.Title, parsed.Title)
 	assert.Equal(t, action.Description, parsed.Description)
+}
+
+func TestActionStreaming_FormatTradeMessageIncludesModeSafety(t *testing.T) {
+	streamer := NewActionStreamer(nil)
+	message := streamer.formatActionMessage(StreamingAction{
+		ID:          "trade-safety",
+		Type:        ActionTypeTrade,
+		Status:      StatusExecuted,
+		Timestamp:   time.Date(2026, 5, 19, 7, 0, 0, 0, time.UTC),
+		Title:       "Scalping BUY",
+		Description: "GOAT/USDT candidate",
+		Data:        map[string]interface{}{"symbol": "GOAT/USDT"},
+	})
+
+	assert.Contains(t, message, "Mode Safety: Treat as paper/informational")
+	assert.Contains(t, message, "backend proof gates have passed")
+	assert.Equal(t, 1, strings.Count(message, "Status: executed"))
 }
 
 func TestActionStreaming_HistoryLimit(t *testing.T) {

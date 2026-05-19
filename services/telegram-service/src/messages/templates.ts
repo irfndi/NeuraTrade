@@ -95,6 +95,9 @@ export const formatActionAlertMessage = (
   lines.push(`Price: ${input.price}`);
   lines.push(`Size: ${input.size}`);
   lines.push(`Strategy: ${input.strategy}`);
+  lines.push(
+    "Mode Safety: Treat as paper/informational unless /mode confirms LIVE and the backend proof gate has passed.",
+  );
 
   if (hasValue(input.reasoning)) {
     lines.push("");

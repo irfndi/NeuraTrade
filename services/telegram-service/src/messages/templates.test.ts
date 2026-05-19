@@ -31,6 +31,7 @@ describe("message templates", () => {
         "Price: 42100\n" +
         "Size: 0.25\n" +
         "Strategy: Scalping\n" +
+        "Mode Safety: Treat as paper/informational unless /mode confirms LIVE and the backend proof gate has passed.\n" +
         "\n" +
         "Reasoning: Momentum breakout confirmed\n" +
         "\n" +
