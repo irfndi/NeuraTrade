@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -19,6 +20,7 @@ type ScalpingLLMDecisionProbeOptions struct {
 	Portfolio      TradingPortfolio
 	RequireValid   bool
 	RequireHealthy bool
+	SignalHistory  []ScalpingLLMSignalSnapshot
 }
 
 type ScalpingLLMDecisionProbeResult struct {
@@ -98,7 +100,46 @@ func RunPublicScalpingLLMDecisionProbe(
 	cfg.Timeout = clampProbeTimeout(cfg.Timeout)
 
 	svc := NewAIScalpingService(cfg, llmClient, nil, ccxtSvc, nil, nil)
+	svc.seedScalpingSignalObservationHistory(options.SignalHistory)
 	return runScalpingLLMDecisionProbeWithService(ctx, svc, options)
+}
+
+func (s *AIScalpingService) seedScalpingSignalObservationHistory(history []ScalpingLLMSignalSnapshot) {
+	if s == nil || len(history) == 0 {
+		return
+	}
+	seeded := make(map[string][]scalpingSignalObservation)
+	for _, snapshot := range history {
+		symbol := normalizeSymbolForComparison(snapshot.Symbol)
+		if symbol == "" || snapshot.ObservedAt.IsZero() || !snapshot.Price.GreaterThan(decimal.Zero) {
+			continue
+		}
+		price := snapshot.Price.InexactFloat64()
+		if isNonFiniteFloat(price) || price <= 0 {
+			continue
+		}
+		seeded[symbol] = append(seeded[symbol], scalpingSignalObservation{
+			At:    snapshot.ObservedAt.UTC(),
+			Price: price,
+		})
+	}
+	if len(seeded) == 0 {
+		return
+	}
+	for symbol := range seeded {
+		sort.Slice(seeded[symbol], func(i, j int) bool {
+			return seeded[symbol][i].At.Before(seeded[symbol][j].At)
+		})
+	}
+
+	s.signalObservationMu.Lock()
+	defer s.signalObservationMu.Unlock()
+	if s.signalObservations == nil {
+		s.signalObservations = make(map[string][]scalpingSignalObservation)
+	}
+	for symbol, observations := range seeded {
+		s.signalObservations[symbol] = append(s.signalObservations[symbol], observations...)
+	}
 }
 
 func runScalpingLLMDecisionProbeWithService(
@@ -131,6 +172,7 @@ func runScalpingLLMDecisionProbeWithService(
 		return nil, fmt.Errorf("get scalping LLM decision: %w", err)
 	}
 	normalizeProbeDecision(decision)
+	annotateDecisionSignalTelemetry(decision, signals)
 	reasoningDiagnostics := scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
 
 	result := &ScalpingLLMDecisionProbeResult{

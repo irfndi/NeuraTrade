@@ -744,6 +744,7 @@ func runAIScalpingDecisionProbeCycles(
 	portfolio services.TradingPortfolio,
 ) ([]*services.ScalpingLLMDecisionProbeResult, error) {
 	results := make([]*services.ScalpingLLMDecisionProbeResult, 0, opts.Cycles)
+	signalHistory := make([]services.ScalpingLLMSignalSnapshot, 0, opts.Cycles*8)
 	for cycle := 0; cycle < opts.Cycles; cycle++ {
 		if cycle > 0 && opts.Interval > 0 {
 			select {
@@ -753,12 +754,14 @@ func runAIScalpingDecisionProbeCycles(
 			}
 		}
 		result, err := services.RunPublicScalpingLLMDecisionProbe(ctx, client, services.ScalpingLLMDecisionProbeOptions{
-			Exchange:  opts.Exchange,
-			Model:     model,
-			Portfolio: portfolio,
+			Exchange:      opts.Exchange,
+			Model:         model,
+			Portfolio:     portfolio,
+			SignalHistory: signalHistory,
 		})
 		if result != nil {
 			results = append(results, result)
+			signalHistory = append(signalHistory, result.SignalSnapshots...)
 		}
 		if err != nil {
 			return results, err

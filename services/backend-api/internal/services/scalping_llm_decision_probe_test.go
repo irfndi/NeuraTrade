@@ -86,6 +86,84 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 	require.False(t, result.PaperTrade.ExitObserved)
 }
 
+func TestRunScalpingLLMDecisionProbeWithServiceUsesSeededRecentMomentum(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Provider:     llm.Provider("deepseek"),
+				Model:        "deepseek-chat",
+				LatencyMs:    120,
+				FinishReason: "stop",
+				Message: llm.Message{
+					Content: `{"action":"buy","symbol":"BTC/USDT","size_pct":5,"confidence":0.7,"reasoning":"Recent momentum confirms the low-range buy.","stop_loss":98,"take_profit":104}`,
+				},
+			},
+		},
+	}
+	mockCCXT := &mockAIScalpingCCXT{
+		markets: &ccxt.MarketsResponse{
+			Exchange: "bitget",
+			Symbols:  []string{"BTC/USDT"},
+			Count:    1,
+		},
+		marketData: []ccxt.MarketPriceInterface{
+			mockMarketPrice{
+				symbol:    "BTC/USDT",
+				price:     100,
+				volume:    1_000_000,
+				high24h:   110,
+				low24h:    96,
+				change24h: 1.5,
+				bid:       99.99,
+				ask:       100.01,
+				exchange:  "bitget",
+			},
+		},
+		orderBooks: map[string]*ccxt.OrderBookResponse{
+			"BTC/USDT": {
+				OrderBook: ccxt.OrderBook{
+					Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(99.99), Amount: decimal.NewFromInt(5)}},
+					Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(100.01), Amount: decimal.NewFromInt(4)}},
+				},
+			},
+		},
+	}
+	svc := NewAIScalpingService(AIScalpingConfig{
+		Exchange:             "bitget",
+		Model:                "deepseek-chat",
+		MaxTokens:            1200,
+		Timeout:              10 * time.Second,
+		MinConfidence:        0.30,
+		MaxCapitalPct:        10,
+		MaxPairsToAnalyze:    1,
+		MaxCandidatePairs:    1,
+		OrderBookPairs:       1,
+		MaxBidAskSpreadPct:   0.25,
+		AutoExpandOrderBooks: true,
+		EnforceFutures:       false,
+		PreTradeGate:         true,
+	}, mockLLM, nil, mockCCXT, nil, nil)
+	svc.seedScalpingSignalObservationHistory([]ScalpingLLMSignalSnapshot{{
+		Symbol:     "BTC/USDT",
+		Price:      decimal.NewFromFloat(99),
+		ObservedAt: time.Now().UTC().Add(-time.Minute),
+	}})
+
+	result, err := runScalpingLLMDecisionProbeWithService(context.Background(), svc, ScalpingLLMDecisionProbeOptions{
+		RequireHealthy: true,
+		RequireValid:   true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ContractValid)
+	require.True(t, result.PreTradeGateAllowed)
+	require.NotNil(t, result.PaperTrade)
+	require.NotNil(t, result.Decision)
+	require.True(t, result.Decision.SignalRecentChangeKnown)
+	require.Greater(t, result.Decision.SignalRecentPriceChangePct, 0.05)
+}
+
 func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpreadReasoning(t *testing.T) {
 	cases := []struct {
 		name                   string
