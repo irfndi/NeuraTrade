@@ -49,6 +49,8 @@ export MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 export MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 export MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
 export REQUIRE_LIVE_TRIAL_READY="${REQUIRE_LIVE_TRIAL_READY:-true}"
+export RECORD_ROLLOUT_PROOF="${RECORD_ROLLOUT_PROOF:-false}"
+export STRATEGY_ID="${STRATEGY_ID:-}"
 
 usage() {
   cat <<USAGE
@@ -68,6 +70,8 @@ Environment:
   RUN_HEALTH_PREFLIGHT      true/false health preflight (default: ${RUN_HEALTH_PREFLIGHT})
   CHECK_GATEWAY_STATUS      true/false gateway status preflight (default: ${CHECK_GATEWAY_STATUS})
   BACKEND_URL               Backend base URL for /health and /ready (default: ${BACKEND_URL})
+  RECORD_ROLLOUT_PROOF      true/false rollout proof persistence (default: ${RECORD_ROLLOUT_PROOF})
+  STRATEGY_ID               Strategy id for rollout proof persistence (default: ${STRATEGY_ID:-derived})
 
 Gate defaults match SCALPING_SOAK_ACCEPTANCE.md and can be overridden with the
 same environment variables accepted by scalping-soak.sh and verify-scalping-soak-artifact.sh.
@@ -180,7 +184,9 @@ write_manifest() {
         min_baseline_win_rate_delta: env.MIN_BASELINE_WIN_RATE_DELTA,
         min_baseline_net_pnl_delta: env.MIN_BASELINE_NET_PNL_DELTA,
         min_baseline_avg_pnl_delta: env.MIN_BASELINE_AVG_PNL_DELTA,
-        require_live_trial_ready: env.REQUIRE_LIVE_TRIAL_READY
+        require_live_trial_ready: env.REQUIRE_LIVE_TRIAL_READY,
+        record_rollout_proof: env.RECORD_ROLLOUT_PROOF,
+        strategy_id: env.STRATEGY_ID
       },
       report: {
         total_cycles: $report.total_cycles,
@@ -205,6 +211,7 @@ run_acceptance() {
   validate_boolean "RUN_HEALTH_PREFLIGHT" "$RUN_HEALTH_PREFLIGHT"
   validate_boolean "CHECK_GATEWAY_STATUS" "$CHECK_GATEWAY_STATUS"
   validate_boolean "REQUIRE_LIVE_TRIAL_READY" "$REQUIRE_LIVE_TRIAL_READY"
+  validate_boolean "RECORD_ROLLOUT_PROOF" "$RECORD_ROLLOUT_PROOF"
   mkdir -p "$DATA_DIR" "$LOG_DIR"
 
   log "starting scalping soak acceptance branch=$(git_value unknown rev-parse --abbrev-ref HEAD) commit=$(git_value unknown rev-parse --short HEAD)"

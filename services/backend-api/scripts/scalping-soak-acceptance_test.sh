@@ -71,6 +71,16 @@ set -euo pipefail
   echo "unexpected REQUIRE_LIVE_TRIAL_READY=$REQUIRE_LIVE_TRIAL_READY" >&2
   exit 1
 }
+expected_record_rollout_proof="${EXPECTED_RECORD_ROLLOUT_PROOF-false}"
+[ "$RECORD_ROLLOUT_PROOF" = "$expected_record_rollout_proof" ] || {
+  echo "unexpected RECORD_ROLLOUT_PROOF=$RECORD_ROLLOUT_PROOF expected=$expected_record_rollout_proof" >&2
+  exit 1
+}
+expected_strategy_id="${EXPECTED_STRATEGY_ID-}"
+[ "$STRATEGY_ID" = "$expected_strategy_id" ] || {
+  echo "unexpected STRATEGY_ID=$STRATEGY_ID expected=$expected_strategy_id" >&2
+  exit 1
+}
 expected_max_hold_ratio="${EXPECTED_MAX_HOLD_RATIO-0.745}"
 [ "$MAX_HOLD_RATIO" = "$expected_max_hold_ratio" ] || {
   echo "unexpected MAX_HOLD_RATIO=$MAX_HOLD_RATIO expected=$expected_max_hold_ratio" >&2
@@ -180,6 +190,10 @@ chmod +x "$fake_soak" "$fake_verifier" "$fake_gateway" "${fake_bin_dir}/curl"
 
 RUN_HEALTH_PREFLIGHT=false \
   CHECK_GATEWAY_STATUS=false \
+  RECORD_ROLLOUT_PROOF=true \
+  STRATEGY_ID=scalping:acceptance-chat:default \
+  EXPECTED_RECORD_ROLLOUT_PROOF=true \
+  EXPECTED_STRATEGY_ID=scalping:acceptance-chat:default \
   SCALPING_SOAK_SCRIPT="$fake_soak" \
   SCALPING_SOAK_VERIFIER="$fake_verifier" \
   DATA_DIR="${tmp_dir}/evidence" \
@@ -214,6 +228,8 @@ jq -e \
     and .gates.min_trades == "20"
     and .gates.hold_period_seconds == "300"
     and .gates.require_live_trial_ready == "true"
+    and .gates.record_rollout_proof == "true"
+    and .gates.strategy_id == "scalping:acceptance-chat:default"
     and .gates.max_hold_ratio == "0.745"
     and .gates.max_perfect_win_trades == "20"
     and .report.rejection_by_reason.no_directional_edge == 1
@@ -259,6 +275,8 @@ jq -e \
     and .gates.min_trades == "20"
     and .gates.hold_period_seconds == "300"
     and .gates.require_live_trial_ready == "true"
+    and .gates.record_rollout_proof == "false"
+    and .gates.strategy_id == ""
     and .gates.max_hold_ratio == "0.745"
     and .gates.max_perfect_win_trades == "20"
     and .report.rejection_by_reason.no_directional_edge == 1
