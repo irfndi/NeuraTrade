@@ -78,27 +78,24 @@ func RecordScalpingLiveTrialProof(
 	if err != nil {
 		return nil, fmt.Errorf("get rollout state: %w", err)
 	}
+	now := time.Now().UTC()
 	if state == nil {
 		state = &autonomous.RolloutState{
 			StrategyID:        strategyID,
 			CurrentStage:      autonomous.StagePaper,
 			Status:            autonomous.StatusActive,
-			EnteredAt:         time.Now().UTC(),
+			EnteredAt:         now,
 			PromotionCriteria: autonomous.DefaultPromotionCriteria(),
 			Metrics:           metrics,
 			History:           nil,
 		}
 	} else {
 		state.Metrics = metrics
-	}
-	if state.CurrentStage == "" {
-		state.CurrentStage = autonomous.StagePaper
-	}
-	if state.Status == "" {
-		state.Status = autonomous.StatusActive
-	}
-	if state.EnteredAt.IsZero() {
-		state.EnteredAt = time.Now().UTC()
+		if state.CurrentStage != autonomous.StageLive {
+			state.CurrentStage = autonomous.StagePaper
+			state.Status = autonomous.StatusActive
+			state.EnteredAt = now
+		}
 	}
 	if err := store.SaveRolloutState(ctx, state); err != nil {
 		return nil, fmt.Errorf("save rollout state: %w", err)

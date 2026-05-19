@@ -45,6 +45,34 @@ func TestRecordScalpingLiveTrialProofPersistsRolloutMetrics(t *testing.T) {
 	require.True(t, persisted.Metrics.HoldRatio.Equal(decimal.NewFromFloat(0.5)))
 }
 
+func TestRecordScalpingLiveTrialProofPromotesExistingNonLiveStateToActivePaper(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-live-proof-existing.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sqliteDB.Close())
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(ctx))
+	require.NoError(t, store.SaveRolloutState(ctx, &autonomous.RolloutState{
+		StrategyID:        "scalping:chat-1:default",
+		CurrentStage:      autonomous.StageShadow,
+		Status:            autonomous.StatusPaused,
+		PromotionCriteria: autonomous.DefaultPromotionCriteria(),
+	}))
+
+	result := liveReadyScalpingSoakResultForRolloutProof()
+	state, err := RecordScalpingLiveTrialProof(ctx, sqliteDB.DB, "scalping:chat-1:default", result)
+
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Equal(t, autonomous.StagePaper, state.CurrentStage)
+	require.Equal(t, autonomous.StatusActive, state.Status)
+	require.NoError(t, NewScalpingAutonomyCoordinator(store, AIScalpingConfig{}).
+		ValidateStrategyMode(ctx, "scalping:chat-1:default", autonomous.ModeLive))
+}
+
 func TestRecordScalpingLiveTrialProofRejectsNotReadyResult(t *testing.T) {
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-live-proof-not-ready.db"))
