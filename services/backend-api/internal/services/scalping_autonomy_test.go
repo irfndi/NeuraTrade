@@ -171,6 +171,61 @@ func TestScalpingAutonomyCoordinator_SetStrategyMode_CountsBreakEvenClosedTrades
 	require.Equal(t, autonomous.StageLive, state.CurrentStage)
 }
 
+func TestScalpingAutonomyCoordinator_SetStrategyMode_BlocksPersistedLiveWithoutProofMetrics(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-autonomy-live-proof-set-revalidate.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	require.NoError(t, store.SaveRolloutState(context.Background(), &autonomous.RolloutState{
+		StrategyID:   "strategy-live-proof-set-revalidate",
+		CurrentStage: autonomous.StageLive,
+		Status:       autonomous.StatusActive,
+		EnteredAt:    time.Now().UTC(),
+		Metrics:      autonomous.RolloutMetrics{},
+	}))
+
+	coordinator := NewScalpingAutonomyCoordinator(store, AIScalpingConfig{})
+	state, err := coordinator.SetStrategyMode(context.Background(), "strategy-live-proof-set-revalidate", autonomous.ModeLive)
+
+	require.Error(t, err)
+	require.NotNil(t, state)
+	require.Contains(t, err.Error(), "scalping live paper proof not met")
+	require.Contains(t, err.Error(), "closed_trades_below_live_trial_minimum")
+	require.Contains(t, err.Error(), "net_pnl_not_positive")
+	require.Equal(t, autonomous.StageLive, state.CurrentStage)
+}
+
+func TestScalpingAutonomyCoordinator_SetStrategyMode_AllowsPersistedLiveWithProofMetrics(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-autonomy-live-proof-set-revalidate-pass.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	require.NoError(t, store.SaveRolloutState(context.Background(), &autonomous.RolloutState{
+		StrategyID:   "strategy-live-proof-set-revalidate-pass",
+		CurrentStage: autonomous.StageLive,
+		Status:       autonomous.StatusActive,
+		EnteredAt:    time.Now().UTC(),
+		Metrics:      scalpingLiveProofMetrics(),
+	}))
+
+	coordinator := NewScalpingAutonomyCoordinator(store, AIScalpingConfig{})
+	state, err := coordinator.SetStrategyMode(context.Background(), "strategy-live-proof-set-revalidate-pass", autonomous.ModeLive)
+
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Equal(t, autonomous.StageLive, state.CurrentStage)
+}
+
 func TestScalpingAutonomyCoordinator_ValidateStrategyMode_DoesNotPromoteLive(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-autonomy-live-proof-validate.db"))
 	require.NoError(t, err)

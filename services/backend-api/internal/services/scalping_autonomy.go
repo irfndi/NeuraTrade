@@ -422,8 +422,8 @@ func (c *ScalpingAutonomyCoordinator) SetStrategyMode(
 			return nil, fmt.Errorf("initialize rollout state: %w", err)
 		}
 	}
-	if targetStage == autonomous.StageLive && state.CurrentStage != autonomous.StageLive {
-		if failures := scalpingLivePaperProofFailures(state); len(failures) > 0 {
+	if targetStage == autonomous.StageLive {
+		if failures := scalpingLiveModeProofFailures(state); len(failures) > 0 {
 			return state, fmt.Errorf("scalping live paper proof not met: %s", strings.Join(failures, ", "))
 		}
 	}
@@ -476,16 +476,17 @@ func (c *ScalpingAutonomyCoordinator) ValidateStrategyMode(
 	if err != nil {
 		return fmt.Errorf("get rollout state: %w", err)
 	}
-	var failures []string
-	if state != nil && state.CurrentStage == autonomous.StageLive {
-		failures = scalpingActiveLiveProofFailures(state)
-	} else {
-		failures = scalpingLivePaperProofFailures(state)
-	}
-	if len(failures) > 0 {
+	if failures := scalpingLiveModeProofFailures(state); len(failures) > 0 {
 		return fmt.Errorf("scalping live paper proof not met: %s", strings.Join(failures, ", "))
 	}
 	return nil
+}
+
+func scalpingLiveModeProofFailures(state *autonomous.RolloutState) []string {
+	if state != nil && state.CurrentStage == autonomous.StageLive {
+		return scalpingActiveLiveProofFailures(state)
+	}
+	return scalpingLivePaperProofFailures(state)
 }
 
 func scalpingLivePaperProofFailures(state *autonomous.RolloutState) []string {
