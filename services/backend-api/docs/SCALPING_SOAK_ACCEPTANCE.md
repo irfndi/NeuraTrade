@@ -119,6 +119,13 @@ bash services/backend-api/scripts/scalping-soak.sh run
 bash services/backend-api/scripts/verify-scalping-soak-artifact.sh "$SOAK_OUTPUT_FILE"
 ```
 
+To seed scalping rollout proof metrics as part of an acceptance run, set
+`RECORD_ROLLOUT_PROOF=true` and point `SOAK_DB_PATH` at the runtime autonomy
+database. The write is refused unless `live_trial_readiness.ready=true`, and the
+stored metrics include closed trades, net PnL, win/loss counts, drawdown,
+signal-quality coverage, AI degradation cycles, hold ratio, and open paper
+positions.
+
 `TIMEOUT_SECONDS=0` lets the soak binary compute a budget from the requested
 cycles and interval. If you need a fixed manual timeout for the defaults above,
 use at least `3000` seconds so slow exchange calls do not expire before the

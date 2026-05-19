@@ -53,6 +53,8 @@ func run() error {
 		minBaselineNetPnLDelta   string
 		minBaselineAvgPnLDelta   string
 		requireLiveTrialReady    bool
+		recordRolloutProof       bool
+		strategyID               string
 	)
 
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
@@ -85,8 +87,13 @@ func run() error {
 	flags.StringVar(&minBaselineNetPnLDelta, "min-baseline-net-pnl-delta", "", "fail unless net-PnL delta versus baseline is at least this decimal value")
 	flags.StringVar(&minBaselineAvgPnLDelta, "min-baseline-avg-pnl-delta", "", "fail unless avg-PnL-per-trade delta versus baseline is at least this decimal value")
 	flags.BoolVar(&requireLiveTrialReady, "require-live-trial-ready", false, "fail unless paper evidence is ready for a tightly capped live/testnet trial")
+	flags.BoolVar(&recordRolloutProof, "record-rollout-proof", false, "persist live-ready paper proof metrics into the autonomy rollout state")
+	flags.StringVar(&strategyID, "strategy-id", "", "strategy id for --record-rollout-proof; empty uses the chat scalping strategy id")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
+	}
+	if strategyID == "" {
+		strategyID = services.ScalpingStrategyID(chatID)
 	}
 
 	if dbPath == "" {
@@ -164,6 +171,15 @@ func run() error {
 			return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
 		}
 		return err
+	}
+
+	if recordRolloutProof {
+		if _, err := services.RecordScalpingLiveTrialProof(ctx, db.DB, strategyID, result); err != nil {
+			if encodeErr := writeResultPayload(os.Stdout, dbPath, result); encodeErr != nil {
+				return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
+			}
+			return err
+		}
 	}
 
 	return writeResultPayload(os.Stdout, dbPath, result)

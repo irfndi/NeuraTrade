@@ -37,6 +37,8 @@ MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
 REQUIRE_LIVE_TRIAL_READY="${REQUIRE_LIVE_TRIAL_READY:-false}"
+RECORD_ROLLOUT_PROOF="${RECORD_ROLLOUT_PROOF:-false}"
+STRATEGY_ID="${STRATEGY_ID:-}"
 SOAK_CHAT_ID="${SOAK_CHAT_ID:-operator-scalping-soak}"
 SOAK_ORDER_PREFIX="${SOAK_ORDER_PREFIX:-operator-scalping-soak}"
 SOAK_DB_PATH="${SOAK_DB_PATH:-${NEURATRADE_HOME}/data/scalping-soak.db}"
@@ -95,6 +97,8 @@ Environment:
   MIN_BASELINE_NET_PNL_DELTA Minimum net-PnL improvement versus baseline; empty disables (default: ${MIN_BASELINE_NET_PNL_DELTA:-disabled})
   MIN_BASELINE_AVG_PNL_DELTA Minimum avg-PnL/trade improvement versus baseline; empty disables (default: ${MIN_BASELINE_AVG_PNL_DELTA:-disabled})
   REQUIRE_LIVE_TRIAL_READY true/false; fail unless paper evidence can approve a tiny live/testnet trial (default: ${REQUIRE_LIVE_TRIAL_READY})
+  RECORD_ROLLOUT_PROOF true/false; persist live-ready proof metrics into autonomy rollout state (default: ${RECORD_ROLLOUT_PROOF})
+  STRATEGY_ID      Strategy id for RECORD_ROLLOUT_PROOF; empty uses chat scalping strategy id (default: ${STRATEGY_ID:-derived})
   SOAK_CHAT_ID    Chat id label for persisted soak telemetry (default: ${SOAK_CHAT_ID})
   SOAK_ORDER_PREFIX Order prefix label for persisted soak telemetry (default: ${SOAK_ORDER_PREFIX})
   SOAK_OUTPUT_FILE Optional path for clean result JSON artifact; empty disables (default: ${SOAK_OUTPUT_FILE:-disabled})
@@ -186,12 +190,21 @@ run_soak() {
       args+=("--require-live-trial-ready")
       ;;
   esac
+  case "$(printf '%s' "$RECORD_ROLLOUT_PROOF" | tr '[:upper:]' '[:lower:]')" in
+    true | 1 | yes | on)
+      args+=("--record-rollout-proof")
+      if [ -n "$STRATEGY_ID" ]; then
+        args+=("--strategy-id" "$STRATEGY_ID")
+      fi
+      ;;
+  esac
 
   log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} hold_period_seconds=${HOLD_PERIOD_SECONDS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
 min_signal_quality_coverage=${MIN_SIGNAL_QUALITY_COVERAGE:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} max_drawdown=${MAX_DRAWDOWN:-disabled} max_drawdown_pct=${MAX_DRAWDOWN_PCT:-disabled} \
 max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} max_perfect_win_trades=${MAX_PERFECT_WIN_TRADES:-disabled} min_baseline_win_rate_delta=${MIN_BASELINE_WIN_RATE_DELTA:-disabled} \
-min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled} require_live_trial_ready=${REQUIRE_LIVE_TRIAL_READY}"
+min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled} require_live_trial_ready=${REQUIRE_LIVE_TRIAL_READY} \
+record_rollout_proof=${RECORD_ROLLOUT_PROOF} strategy_id=${STRATEGY_ID:-derived}"
   if [ -n "$SOAK_OUTPUT_FILE" ]; then
     if ! command -v jq >/dev/null 2>&1; then
       fail "jq is required to write clean SOAK_OUTPUT_FILE artifacts"
