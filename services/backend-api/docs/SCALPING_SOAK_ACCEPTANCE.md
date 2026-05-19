@@ -185,11 +185,15 @@ python3 services/backend-api/scripts/validate-scalping-rule-candidate.py \
   --max-spread 0.06 \
   --max-range 35 \
   --min-recent 0.05 \
-  --min-24h 0.02
+  --min-24h 0.02 \
+  --min-drawdown-pct 0.0001 \
+  --min-validation-drawdown-pct 0.0001
 ```
 
 Do not promote a rule that fails validation profitability or depends on a single
-outlier trade after removing the best result.
+outlier trade after removing the best result. A candidate also needs observed
+drawdown in both train and validation slices; perfect/no-drawdown windows are
+not enough evidence for real-money or tiny live/testnet signaling.
 
 ## Pass Criteria
 

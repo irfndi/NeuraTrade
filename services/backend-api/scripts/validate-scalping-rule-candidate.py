@@ -183,6 +183,9 @@ def evaluate(observations: list[Observation], rule: Rule, hold_seconds: int) -> 
     values: list[float] = []
     symbols: set[str] = set()
     next_allowed_by_symbol: dict[str, float] = {}
+    cumulative = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
 
     for obs in observations:
         if obs.timestamp < next_allowed_by_symbol.get(obs.symbol, -1):
@@ -190,9 +193,16 @@ def evaluate(observations: list[Observation], rule: Rule, hold_seconds: int) -> 
         if not rule.matches(obs):
             continue
 
-        values.append(rule.net_pct(obs))
+        net_pct = rule.net_pct(obs)
+        values.append(net_pct)
         symbols.add(obs.symbol)
         next_allowed_by_symbol[obs.symbol] = obs.timestamp + hold_seconds
+        cumulative += net_pct
+        if cumulative > peak:
+            peak = cumulative
+        drawdown = peak - cumulative
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
 
     wins = sum(1 for value in values if value > 0)
     losses = len(values) - wins
@@ -206,6 +216,7 @@ def evaluate(observations: list[Observation], rule: Rule, hold_seconds: int) -> 
         "net_pct": net,
         "avg_net_pct": net / len(values) if values else 0.0,
         "net_pct_excluding_best": net - best if values else 0.0,
+        "max_drawdown_pct": max_drawdown,
         "worst_trade_pct": min(values) if values else 0.0,
         "best_trade_pct": best,
         "symbols": len(symbols),
@@ -219,6 +230,7 @@ def validate_group(name: str, stats: dict[str, object], args: argparse.Namespace
     min_symbols = getattr(args, f"min_{prefix}symbols")
     min_net = getattr(args, f"min_{prefix}net_pct")
     min_net_ex_best = getattr(args, f"min_{prefix}net_pct_excluding_best")
+    min_drawdown = getattr(args, f"min_{prefix}drawdown_pct")
 
     if stats["trades"] < min_trades:
         failures.append(f"{name}.trades={stats['trades']} below minimum={min_trades}")
@@ -234,6 +246,11 @@ def validate_group(name: str, stats: dict[str, object], args: argparse.Namespace
         failures.append(
             f"{name}.net_pct_excluding_best={stats['net_pct_excluding_best']:.6f} "
             f"below minimum={min_net_ex_best:.6f}"
+        )
+    if stats["max_drawdown_pct"] < min_drawdown:
+        failures.append(
+            f"{name}.max_drawdown_pct={stats['max_drawdown_pct']:.6f} "
+            f"below minimum={min_drawdown:.6f}"
         )
     return failures
 
@@ -264,6 +281,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-validation-net-pct", type=float, default=0.0)
     parser.add_argument("--min-net-pct-excluding-best", type=float, default=0.0)
     parser.add_argument("--min-validation-net-pct-excluding-best", type=float, default=0.0)
+    parser.add_argument("--min-drawdown-pct", type=float, default=0.0)
+    parser.add_argument("--min-validation-drawdown-pct", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -273,6 +292,10 @@ def main() -> int:
         raise ValueError("--hold-seconds must be positive")
     if args.fee_pct < 0:
         raise ValueError("--fee-pct must be non-negative")
+    if args.min_drawdown_pct < 0:
+        raise ValueError("--min-drawdown-pct must be non-negative")
+    if args.min_validation_drawdown_pct < 0:
+        raise ValueError("--min-validation-drawdown-pct must be non-negative")
 
     rule = Rule(
         side=args.side,
