@@ -288,6 +288,44 @@ func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T)
 	}
 }
 
+func TestScalpingPctUnitReasoningDiagnosticsFlagsInflatedPercentPoints(t *testing.T) {
+	signals := []aiMarketSignal{{
+		Symbol:             "ONDO/USDT",
+		PriceChange24h:     0.04821,
+		RecentPriceChange:  0.0276,
+		RecentChangeKnown:  true,
+		OrderBookImbalance: 0.4,
+	}}
+
+	diagnostics := scalpingPctUnitReasoningDiagnostics(
+		"ONDO has positive 24h momentum of 4.821% and recent momentum of 2.76%, so buy.",
+		signals,
+	)
+
+	require.Len(t, diagnostics, 2)
+	require.Contains(t, diagnostics[0], "recent_price_change_pct")
+	require.Contains(t, diagnostics[0], "ONDO/USDT")
+	require.Contains(t, diagnostics[1], "price_change_24h_pct")
+	require.Contains(t, diagnostics[1], "ONDO/USDT")
+}
+
+func TestScalpingPctUnitReasoningDiagnosticsAllowsCorrectPercentPoints(t *testing.T) {
+	signals := []aiMarketSignal{{
+		Symbol:             "ONDO/USDT",
+		PriceChange24h:     0.04821,
+		RecentPriceChange:  0.0276,
+		RecentChangeKnown:  true,
+		OrderBookImbalance: 0.4,
+	}}
+
+	diagnostics := scalpingPctUnitReasoningDiagnostics(
+		"ONDO has price_change_24h_pct 0.04821% and recent_price_change_pct 0.0276%, below the buy gates.",
+		signals,
+	)
+
+	require.Empty(t, diagnostics)
+}
+
 func TestRunScalpingLLMDecisionProbeWithServiceFlagsLLMDegradation(t *testing.T) {
 	svc := newScalpingLLMDecisionProbeTestService(&errorLLMClient{err: errors.New("provider exhausted")})
 

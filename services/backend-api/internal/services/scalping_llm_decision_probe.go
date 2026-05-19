@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -261,10 +262,14 @@ func isActionableScalpingProbeDecision(decision *AITradingDecision) bool {
 }
 
 func scalpingProbeReasoningDiagnostics(decision *AITradingDecision, signals []aiMarketSignal, maxSpreadPct float64) []string {
-	if decision == nil || !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+	if decision == nil {
 		return nil
 	}
-	return scalpingHoldSpreadReasoningDiagnostics(decision.Reasoning, signals, maxSpreadPct)
+	diagnostics := scalpingPctUnitReasoningDiagnostics(decision.Reasoning, signals)
+	if strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		diagnostics = append(diagnostics, scalpingHoldSpreadReasoningDiagnostics(decision.Reasoning, signals, maxSpreadPct)...)
+	}
+	return diagnostics
 }
 
 func normalizeContradictoryHoldSpreadReasoning(decision *AITradingDecision, signals []aiMarketSignal, maxSpreadPct float64) {
@@ -306,6 +311,60 @@ func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSig
 		}
 	}
 	return diagnostics
+}
+
+func scalpingPctUnitReasoningDiagnostics(reason string, signals []aiMarketSignal) []string {
+	reasoning := strings.ToLower(strings.TrimSpace(reason))
+	if reasoning == "" {
+		return nil
+	}
+	diagnostics := make([]string, 0, 1)
+	for _, signal := range signals {
+		if !reasoningMentionsSignal(reasoning, signal) {
+			continue
+		}
+		if signal.RecentChangeKnown {
+			if citation, ok := pctUnitInflationCitation(reasoning, signal.RecentPriceChange); ok {
+				diagnostics = append(diagnostics, fmt.Sprintf("reasoning appears to scale recent_price_change_pct for %s by 100 (cited %s while signal is %.5f%%)", signal.Symbol, citation, signal.RecentPriceChange))
+			}
+		}
+		if citation, ok := pctUnitInflationCitation(reasoning, signal.PriceChange24h); ok {
+			diagnostics = append(diagnostics, fmt.Sprintf("reasoning appears to scale price_change_24h_pct for %s by 100 (cited %s while signal is %.5f%%)", signal.Symbol, citation, signal.PriceChange24h))
+		}
+	}
+	return diagnostics
+}
+
+func pctUnitInflationCitation(reasoning string, value float64) (string, bool) {
+	value = math.Abs(value)
+	if value < 0.01 || value >= 1 {
+		return "", false
+	}
+	inflated := value * 100
+	formats := []string{
+		fmt.Sprintf("%.5f%%", inflated),
+		fmt.Sprintf("%.4f%%", inflated),
+		fmt.Sprintf("%.3f%%", inflated),
+		fmt.Sprintf("%.2f%%", inflated),
+		fmt.Sprintf("%.1f%%", inflated),
+	}
+	for _, candidate := range formats {
+		candidate = strings.TrimSuffix(candidate, "%")
+		candidate = strings.TrimRight(strings.TrimRight(candidate, "0"), ".") + "%"
+		if strings.Contains(reasoning, candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func reasoningMentionsSignal(reasoning string, signal aiMarketSignal) bool {
+	symbol := strings.ToLower(strings.TrimSpace(signal.Symbol))
+	base := strings.ToLower(strings.TrimSpace(strings.Split(symbol, "/")[0]))
+	return (symbol != "" && strings.Contains(reasoning, symbol)) ||
+		(base != "" && containsScalpingSymbolToken(reasoning, base)) ||
+		strings.Contains(reasoning, "all signals") ||
+		strings.Contains(reasoning, "all symbols")
 }
 
 func holdReasoningScopesSpreadToBuySafetyGate(reasoning string) bool {
