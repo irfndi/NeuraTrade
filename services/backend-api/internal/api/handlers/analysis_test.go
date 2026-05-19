@@ -35,15 +35,17 @@ func TestTechnicalIndicator_Struct(t *testing.T) {
 
 func TestTradingSignal_Struct(t *testing.T) {
 	signal := TradingSignal{
-		Symbol:     "BTC/USDT",
-		Exchange:   "binance",
-		SignalType: "BUY",
-		Strength:   "STRONG",
-		Price:      50000.0,
-		Reason:     "RSI oversold",
-		Confidence: 0.8,
-		Timestamp:  time.Now(),
-		Indicators: []string{"RSI", "MACD"},
+		Symbol:            "BTC/USDT",
+		Exchange:          "binance",
+		SignalType:        "BUY",
+		Strength:          "STRONG",
+		Price:             50000.0,
+		Reason:            "RSI oversold",
+		Confidence:        0.8,
+		Timestamp:         time.Now(),
+		Indicators:        []string{"RSI", "MACD"},
+		ModeSafety:        analysisSignalModeSafety,
+		ExecutionEligible: false,
 	}
 
 	assert.Equal(t, "BTC/USDT", signal.Symbol)
@@ -56,6 +58,8 @@ func TestTradingSignal_Struct(t *testing.T) {
 	assert.NotZero(t, signal.Timestamp)
 	assert.Contains(t, signal.Indicators, "RSI")
 	assert.Contains(t, signal.Indicators, "MACD")
+	assert.False(t, signal.ExecutionEligible)
+	assert.Contains(t, signal.ModeSafety, "informational/paper-only")
 }
 
 func TestIndicatorsResponse_Struct(t *testing.T) {
@@ -94,33 +98,39 @@ func TestIndicatorsResponse_Struct(t *testing.T) {
 func TestSignalsResponse_Struct(t *testing.T) {
 	signals := []TradingSignal{
 		{
-			Symbol:     "BTC/USDT",
-			Exchange:   "binance",
-			SignalType: "BUY",
-			Strength:   "STRONG",
-			Price:      50000.0,
-			Reason:     "RSI oversold",
-			Confidence: 0.8,
-			Timestamp:  time.Now(),
-			Indicators: []string{"RSI"},
+			Symbol:            "BTC/USDT",
+			Exchange:          "binance",
+			SignalType:        "BUY",
+			Strength:          "STRONG",
+			Price:             50000.0,
+			Reason:            "RSI oversold",
+			Confidence:        0.8,
+			Timestamp:         time.Now(),
+			Indicators:        []string{"RSI"},
+			ModeSafety:        analysisSignalModeSafety,
+			ExecutionEligible: false,
 		},
 		{
-			Symbol:     "ETH/USDT",
-			Exchange:   "binance",
-			SignalType: "SELL",
-			Strength:   "MODERATE",
-			Price:      3000.0,
-			Reason:     "MACD bearish",
-			Confidence: 0.6,
-			Timestamp:  time.Now(),
-			Indicators: []string{"MACD"},
+			Symbol:            "ETH/USDT",
+			Exchange:          "binance",
+			SignalType:        "SELL",
+			Strength:          "MODERATE",
+			Price:             3000.0,
+			Reason:            "MACD bearish",
+			Confidence:        0.6,
+			Timestamp:         time.Now(),
+			Indicators:        []string{"MACD"},
+			ModeSafety:        analysisSignalModeSafety,
+			ExecutionEligible: false,
 		},
 	}
 
 	response := SignalsResponse{
-		Signals:   signals,
-		Count:     2,
-		Timestamp: time.Now(),
+		Signals:           signals,
+		Count:             2,
+		Timestamp:         time.Now(),
+		ModeSafety:        analysisSignalModeSafety,
+		ExecutionEligible: false,
 	}
 
 	assert.Len(t, response.Signals, 2)
@@ -130,6 +140,10 @@ func TestSignalsResponse_Struct(t *testing.T) {
 	assert.Equal(t, "BUY", response.Signals[0].SignalType)
 	assert.Equal(t, "ETH/USDT", response.Signals[1].Symbol)
 	assert.Equal(t, "SELL", response.Signals[1].SignalType)
+	assert.False(t, response.ExecutionEligible)
+	assert.Contains(t, response.ModeSafety, "backend proof gates")
+	assert.False(t, response.Signals[0].ExecutionEligible)
+	assert.Contains(t, response.Signals[0].ModeSafety, "informational/paper-only")
 }
 
 func TestOHLCV_Struct(t *testing.T) {
