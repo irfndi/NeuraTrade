@@ -68,6 +68,12 @@ acceptable hold ratio, and positive net/average PnL after fees. Set
 capped live/testnet trial; normal paper runs may be profitable but still not
 ready for real-money signaling if the sample is too small or too clean.
 
+For the real LLM no-order path, `services/backend-api/scripts/ai-scalping-probe.sh`
+emits `paper_live_trial_readiness` and supports
+`REQUIRE_LIVE_TRIAL_READY=true`. Use that gate when the probe artifact might be
+used to justify real-money or tightly capped live/testnet signaling; otherwise a
+short profitable LLM probe is provider/actionability evidence only.
+
 ## Run
 
 Use a timestamped artifact and database so the evidence can be retained:

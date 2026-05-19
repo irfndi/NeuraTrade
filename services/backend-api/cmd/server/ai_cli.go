@@ -550,6 +550,7 @@ type aiScalpingDecisionProbeOptions struct {
 	RequirePaperDrawdownPct  bool
 	MaxReasoningDiagnostics  int
 	RequireReasoningClean    bool
+	RequireLiveTrialReady    bool
 }
 
 type aiScalpingDecisionProbeSummary struct {
@@ -572,6 +573,7 @@ type aiScalpingDecisionProbeSummary struct {
 	PaperProfitFactorUnbounded bool                                       `json:"paper_profit_factor_unbounded"`
 	PaperMaxDrawdown           decimal.Decimal                            `json:"paper_max_drawdown"`
 	PaperMaxDrawdownPct        decimal.Decimal                            `json:"paper_max_drawdown_pct"`
+	PaperLiveTrialReadiness    services.ScalpingLiveTrialReadiness        `json:"paper_live_trial_readiness"`
 	ReasoningDiagnosticCycles  int                                        `json:"reasoning_diagnostic_cycles"`
 	ReasoningDiagnosticCount   int                                        `json:"reasoning_diagnostic_count"`
 	ActionCounts               map[string]int                             `json:"action_counts"`
@@ -829,7 +831,57 @@ func buildAIScalpingDecisionProbeSummary(
 	if paperDrawdownBasis.GreaterThan(decimal.Zero) {
 		summary.PaperMaxDrawdownPct = summary.PaperMaxDrawdown.Div(paperDrawdownBasis)
 	}
+	summary.PaperLiveTrialReadiness = buildAIScalpingProbeLiveTrialReadiness(summary)
 	return summary
+}
+
+func buildAIScalpingProbeLiveTrialReadiness(summary aiScalpingDecisionProbeSummary) services.ScalpingLiveTrialReadiness {
+	readiness := services.ScalpingLiveTrialReadiness{
+		MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades,
+	}
+	reasons := make([]string, 0, 10)
+	if summary.PaperTrades < readiness.MinClosedTrades {
+		reasons = appendUniqueReadinessReason(reasons, "paper_trades_below_live_trial_minimum")
+	}
+	if summary.PaperWins == 0 {
+		reasons = appendUniqueReadinessReason(reasons, "no_winning_paper_trades")
+	}
+	if summary.PaperLosses == 0 {
+		reasons = appendUniqueReadinessReason(reasons, "no_losing_paper_trades")
+	}
+	if !summary.PaperNetPnL.GreaterThan(decimal.Zero) {
+		reasons = appendUniqueReadinessReason(reasons, "paper_net_pnl_not_positive")
+	}
+	if !summary.PaperAvgNetPnL.GreaterThan(decimal.Zero) {
+		reasons = appendUniqueReadinessReason(reasons, "paper_avg_net_pnl_not_positive")
+	}
+	if !summary.PaperMaxDrawdownPct.GreaterThan(decimal.Zero) {
+		reasons = appendUniqueReadinessReason(reasons, "paper_drawdown_not_observed")
+	}
+	if summary.SignalQualityCoverage.LessThan(decimal.NewFromInt(1)) {
+		reasons = appendUniqueReadinessReason(reasons, "signal_quality_incomplete")
+	}
+	if summary.LLMDegradedCycles > 0 {
+		reasons = appendUniqueReadinessReason(reasons, "llm_degraded")
+	}
+	if summary.ValidContractCycles != summary.CompletedCycles {
+		reasons = appendUniqueReadinessReason(reasons, "invalid_contract_cycles")
+	}
+	if summary.ReasoningDiagnosticCount > 0 {
+		reasons = appendUniqueReadinessReason(reasons, "reasoning_diagnostics_present")
+	}
+	readiness.Ready = len(reasons) == 0
+	readiness.Reasons = reasons
+	return readiness
+}
+
+func appendUniqueReadinessReason(reasons []string, reason string) []string {
+	for _, existing := range reasons {
+		if existing == reason {
+			return reasons
+		}
+	}
+	return append(reasons, reason)
 }
 
 func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSummary, opts aiScalpingDecisionProbeOptions) error {
@@ -871,6 +923,9 @@ func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSumma
 	}
 	if opts.RequireReasoningClean && summary.ReasoningDiagnosticCount > opts.MaxReasoningDiagnostics {
 		return fmt.Errorf("reasoning_diagnostic_count=%d above maximum=%d", summary.ReasoningDiagnosticCount, opts.MaxReasoningDiagnostics)
+	}
+	if opts.RequireLiveTrialReady && !summary.PaperLiveTrialReadiness.Ready {
+		return fmt.Errorf("paper_live_trial_readiness.ready=false reasons=%v", summary.PaperLiveTrialReadiness.Reasons)
 	}
 	return nil
 }
@@ -956,6 +1011,7 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	intervalMS := fs.Int("interval-ms", 0, "delay between scalping LLM probe cycles in milliseconds")
 	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
 	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
+	fs.BoolVar(&opts.RequireLiveTrialReady, "require-live-trial-ready", false, "require paper_live_trial_readiness.ready=true before returning success")
 	fs.StringVar(&opts.Provider, "provider", "", "provider to probe; defaults to ai.provider and NEURATRADE_AI_PROVIDER_CHAIN")
 	fs.StringVar(&opts.Model, "model", "", "model override for the selected provider")
 	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
@@ -1413,6 +1469,9 @@ func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary
 		return err
 	}
 	if err := writeProbeOutput("Paper trades: %d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.PaperTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String(), summary.PaperProfitFactor.String(), summary.PaperProfitFactorUnbounded, summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String()); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Paper live trial readiness: ready=%t reasons=%v min_closed_trades=%d\n", summary.PaperLiveTrialReadiness.Ready, summary.PaperLiveTrialReadiness.Reasons, summary.PaperLiveTrialReadiness.MinClosedTrades); err != nil {
 		return err
 	}
 	if err := writeProbeOutput("Reasoning diagnostics: cycles=%d count=%d\n", summary.ReasoningDiagnosticCycles, summary.ReasoningDiagnosticCount); err != nil {

@@ -551,6 +551,7 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 		"--max-paper-drawdown", "0.25",
 		"--max-paper-drawdown-pct", "0.01",
 		"--max-reasoning-diagnostics", "2",
+		"--require-live-trial-ready",
 		"--allow-degraded",
 		"--allow-invalid-contract",
 	})
@@ -607,6 +608,9 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	}
 	if !opts.RequireReasoningClean || opts.MaxReasoningDiagnostics != 2 {
 		t.Fatalf("expected parsed reasoning diagnostics gate, enabled=%t max=%d", opts.RequireReasoningClean, opts.MaxReasoningDiagnostics)
+	}
+	if !opts.RequireLiveTrialReady {
+		t.Fatal("expected parsed live trial readiness gate")
 	}
 }
 
@@ -794,6 +798,50 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 	if summary.PaperProfitFactorUnbounded {
 		t.Fatal("did not expect bounded win/loss window to be marked unbounded")
 	}
+	if summary.PaperLiveTrialReadiness.Ready {
+		t.Fatalf("expected small lossy paper sample to fail live trial readiness: %+v", summary.PaperLiveTrialReadiness)
+	}
+	if summary.PaperLiveTrialReadiness.MinClosedTrades != services.DefaultScalpingLiveTrialMinClosedTrades {
+		t.Fatalf("unexpected min closed trades: %d", summary.PaperLiveTrialReadiness.MinClosedTrades)
+	}
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "paper_trades_below_live_trial_minimum")
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "paper_net_pnl_not_positive")
+}
+
+func TestBuildAIScalpingDecisionProbeSummaryMarksPaperLiveTrialReady(t *testing.T) {
+	results := make([]*services.ScalpingLLMDecisionProbeResult, 0, services.DefaultScalpingLiveTrialMinClosedTrades)
+	for i := 0; i < services.DefaultScalpingLiveTrialMinClosedTrades; i++ {
+		outcome := "win"
+		netPnL := mustDecimal("0.02")
+		if i%5 == 0 {
+			outcome = "loss"
+			netPnL = mustDecimal("-0.01")
+		}
+		results = append(results, &services.ScalpingLLMDecisionProbeResult{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "buy"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:    mustDecimal("0.001"),
+				NetPnL:  netPnL,
+				Outcome: outcome,
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		})
+	}
+
+	summary := buildAIScalpingDecisionProbeSummary(results, len(results), mustDecimal("50"))
+
+	require.True(t, summary.PaperLiveTrialReadiness.Ready)
+	require.Empty(t, summary.PaperLiveTrialReadiness.Reasons)
+	require.Equal(t, services.DefaultScalpingLiveTrialMinClosedTrades, summary.PaperLiveTrialReadiness.MinClosedTrades)
+	require.Equal(t, 20, summary.PaperTrades)
+	require.Equal(t, 16, summary.PaperWins)
+	require.Equal(t, 4, summary.PaperLosses)
+	require.True(t, summary.PaperNetPnL.GreaterThan(decimal.Zero))
+	require.True(t, summary.PaperMaxDrawdownPct.GreaterThan(decimal.Zero))
 }
 
 func TestBuildAIScalpingDecisionProbeSummaryMarksNoLossProfitFactorUnbounded(t *testing.T) {
@@ -1035,6 +1083,32 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesReasoningDiagnosticGate(t
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reasoning_diagnostic_count")
+}
+
+func TestValidateAIScalpingDecisionProbeSummaryCanRequirePaperLiveTrialReadiness(t *testing.T) {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:                     2,
+		CompletedCycles:            2,
+		ValidContractCycles:        2,
+		SignalQualityCoverage:      mustDecimal("1"),
+		PaperTrades:                1,
+		PaperWins:                  1,
+		PaperNetPnL:                mustDecimal("0.01"),
+		PaperAvgNetPnL:             mustDecimal("0.01"),
+		PaperLiveTrialReadiness:    services.ScalpingLiveTrialReadiness{Ready: false, Reasons: []string{"paper_trades_below_live_trial_minimum"}, MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades},
+		PaperProfitFactorUnbounded: true,
+	}
+
+	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:                2,
+		RequireHealthy:        true,
+		RequireValid:          true,
+		MinSignalQuality:      mustDecimal("1"),
+		RequireLiveTrialReady: true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "paper_live_trial_readiness.ready=false")
 }
 
 func mustDecimal(value string) decimal.Decimal {
