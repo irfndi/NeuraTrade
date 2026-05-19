@@ -71,7 +71,7 @@ set -euo pipefail
   echo "unexpected REQUIRE_LIVE_TRIAL_READY=$REQUIRE_LIVE_TRIAL_READY" >&2
   exit 1
 }
-expected_max_hold_ratio="${EXPECTED_MAX_HOLD_RATIO-}"
+expected_max_hold_ratio="${EXPECTED_MAX_HOLD_RATIO-0.745}"
 [ "$MAX_HOLD_RATIO" = "$expected_max_hold_ratio" ] || {
   echo "unexpected MAX_HOLD_RATIO=$MAX_HOLD_RATIO expected=$expected_max_hold_ratio" >&2
   exit 1
@@ -214,7 +214,7 @@ jq -e \
     and .gates.min_trades == "20"
     and .gates.hold_period_seconds == "300"
     and .gates.require_live_trial_ready == "true"
-    and .gates.max_hold_ratio == ""
+    and .gates.max_hold_ratio == "0.745"
     and .gates.max_perfect_win_trades == "20"
     and .report.rejection_by_reason.no_directional_edge == 1
     and .report.trade_summary.closed_trades == 1
@@ -259,7 +259,7 @@ jq -e \
     and .gates.min_trades == "20"
     and .gates.hold_period_seconds == "300"
     and .gates.require_live_trial_ready == "true"
-    and .gates.max_hold_ratio == ""
+    and .gates.max_hold_ratio == "0.745"
     and .gates.max_perfect_win_trades == "20"
     and .report.rejection_by_reason.no_directional_edge == 1
     and .report.trade_summary.closed_trades == 1
