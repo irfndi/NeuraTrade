@@ -21,8 +21,11 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 train_db="${tmp_dir}/train.db"
 validation_db="${tmp_dir}/validation.db"
+flat_train_db="${tmp_dir}/flat-train.db"
+flat_validation_db="${tmp_dir}/flat-validation.db"
 pass_output="${tmp_dir}/pass.json"
 fail_output="${tmp_dir}/fail.json"
+flat_output="${tmp_dir}/flat.json"
 
 create_schema() {
   sqlite3 "$1" <<'SQL'
@@ -60,6 +63,8 @@ SQL
 
 create_schema "$train_db"
 create_schema "$validation_db"
+create_schema "$flat_train_db"
+create_schema "$flat_validation_db"
 
 insert_row "$train_db" train-a-entry AAA/USDT '2026-05-19T00:00:00Z' 100
 insert_row "$train_db" train-a-exit AAA/USDT '2026-05-19T00:05:00Z' 101
@@ -73,6 +78,14 @@ insert_row "$validation_db" val-b-entry DDD/USDT '2026-05-19T00:00:00Z' 100
 insert_row "$validation_db" val-b-exit DDD/USDT '2026-05-19T00:05:00Z' 99.95
 insert_row "$validation_db" val-c-entry FFF/USDT '2026-05-19T00:00:00Z' 100
 insert_row "$validation_db" val-c-exit FFF/USDT '2026-05-19T00:05:00Z' 100.3
+insert_row "$flat_train_db" flat-train-a-entry AAA/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$flat_train_db" flat-train-a-exit AAA/USDT '2026-05-19T00:05:00Z' 101
+insert_row "$flat_train_db" flat-train-b-entry BBB/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$flat_train_db" flat-train-b-exit BBB/USDT '2026-05-19T00:05:00Z' 100
+insert_row "$flat_validation_db" flat-val-a-entry CCC/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$flat_validation_db" flat-val-a-exit CCC/USDT '2026-05-19T00:05:00Z' 101
+insert_row "$flat_validation_db" flat-val-b-entry DDD/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$flat_validation_db" flat-val-b-exit DDD/USDT '2026-05-19T00:05:00Z' 100
 
 python3 "$VALIDATOR" \
   --train-db "$train_db" \
@@ -96,12 +109,14 @@ jq -e \
     and .train.trades == 3
     and .train.wins == 2
     and .train.losses == 1
+    and .train.breakevens == 0
     and .train.net_pct > 0
     and .train.net_pct_excluding_best > 0
     and .train.max_drawdown_pct > 0
     and .validation.trades == 3
     and .validation.wins == 2
     and .validation.losses == 1
+    and .validation.breakevens == 0
     and .validation.net_pct > 0
     and .validation.net_pct_excluding_best > 0
     and .validation.max_drawdown_pct > 0
@@ -135,5 +150,36 @@ jq -e \
     and any(.failures[]; contains("train.max_drawdown_pct="))
     and any(.failures[]; contains("validation.max_drawdown_pct="))' \
   "$fail_output" >/dev/null
+
+if python3 "$VALIDATOR" \
+  --train-db "$flat_train_db" \
+  --validation-db "$flat_validation_db" \
+  --side buy \
+  --min-imbalance 0.35 \
+  --max-spread 0.06 \
+  --max-range 35 \
+  --min-recent 0.05 \
+  --min-24h 0.02 \
+  --fee-pct 0 \
+  --min-trades 2 \
+  --min-validation-trades 2 \
+  --min-symbols 2 \
+  --min-validation-symbols 2 \
+  >"$flat_output"; then
+  echo "expected candidate validator to reject breakevens as loss proof" >&2
+  exit 1
+fi
+
+jq -e \
+  '.passed == false
+    and .train.wins == 1
+    and .train.losses == 0
+    and .train.breakevens == 1
+    and .validation.wins == 1
+    and .validation.losses == 0
+    and .validation.breakevens == 1
+    and any(.failures[]; contains("train.losses=0 below minimum=1"))
+    and any(.failures[]; contains("validation.losses=0 below minimum=1"))' \
+  "$flat_output" >/dev/null
 
 echo "validate-scalping-rule-candidate tests passed"

@@ -205,13 +205,15 @@ def evaluate(observations: list[Observation], rule: Rule, hold_seconds: int) -> 
             max_drawdown = drawdown
 
     wins = sum(1 for value in values if value > 0)
-    losses = len(values) - wins
+    losses = sum(1 for value in values if value < 0)
+    breakevens = len(values) - wins - losses
     net = sum(values)
     best = max(values) if values else 0.0
     return {
         "trades": len(values),
         "wins": wins,
         "losses": losses,
+        "breakevens": breakevens,
         "win_rate": wins / len(values) if values else 0.0,
         "net_pct": net,
         "avg_net_pct": net / len(values) if values else 0.0,
