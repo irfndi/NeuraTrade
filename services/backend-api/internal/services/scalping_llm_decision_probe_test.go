@@ -83,6 +83,7 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 	require.True(t, result.PaperTrade.NetPnL.LessThan(decimal.Zero))
 	require.Equal(t, "loss", result.PaperTrade.Outcome)
 	require.Equal(t, "mark_to_market", result.PaperTrade.ExitReason)
+	require.False(t, result.PaperTrade.ExitObserved)
 }
 
 func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpreadReasoning(t *testing.T) {

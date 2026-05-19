@@ -786,8 +786,8 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 	if summary.ActionableCycles != 2 || summary.HoldRatio.String() != "0.3333333333333333" {
 		t.Fatalf("unexpected actionability summary: actionable=%d hold_ratio=%s", summary.ActionableCycles, summary.HoldRatio.String())
 	}
-	if summary.PaperTrades != 2 || summary.PaperWins != 1 || summary.PaperLosses != 1 {
-		t.Fatalf("unexpected paper trade counts: trades=%d wins=%d losses=%d", summary.PaperTrades, summary.PaperWins, summary.PaperLosses)
+	if summary.PaperTrades != 2 || summary.PaperObservedTrades != 0 || summary.PaperWins != 1 || summary.PaperLosses != 1 {
+		t.Fatalf("unexpected paper trade counts: trades=%d observed=%d wins=%d losses=%d", summary.PaperTrades, summary.PaperObservedTrades, summary.PaperWins, summary.PaperLosses)
 	}
 	if summary.PaperNetPnL.String() != "-0.01" || summary.PaperFees.String() != "0.003" || summary.PaperAvgNetPnL.String() != "-0.005" {
 		t.Fatalf("unexpected paper pnl summary: net=%s fees=%s avg=%s", summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String())
@@ -805,6 +805,8 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 		t.Fatalf("unexpected min closed trades: %d", summary.PaperLiveTrialReadiness.MinClosedTrades)
 	}
 	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "paper_trades_below_live_trial_minimum")
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "paper_observed_trades_below_live_trial_minimum")
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "synthetic_paper_exits")
 	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "paper_net_pnl_not_positive")
 }
 
@@ -824,9 +826,10 @@ func TestBuildAIScalpingDecisionProbeSummaryMarksPaperLiveTrialReady(t *testing.
 			Provider:           "deepseek",
 			Decision:           &services.AITradingDecision{Action: "buy"},
 			PaperTrade: &services.ScalpingLLMProbeTrade{
-				Fees:    mustDecimal("0.001"),
-				NetPnL:  netPnL,
-				Outcome: outcome,
+				Fees:         mustDecimal("0.001"),
+				NetPnL:       netPnL,
+				Outcome:      outcome,
+				ExitObserved: true,
 			},
 			SignalQualityCoverage: mustDecimal("1"),
 		})
@@ -838,6 +841,7 @@ func TestBuildAIScalpingDecisionProbeSummaryMarksPaperLiveTrialReady(t *testing.
 	require.Empty(t, summary.PaperLiveTrialReadiness.Reasons)
 	require.Equal(t, services.DefaultScalpingLiveTrialMinClosedTrades, summary.PaperLiveTrialReadiness.MinClosedTrades)
 	require.Equal(t, 20, summary.PaperTrades)
+	require.Equal(t, 20, summary.PaperObservedTrades)
 	require.Equal(t, 16, summary.PaperWins)
 	require.Equal(t, 4, summary.PaperLosses)
 	require.True(t, summary.PaperNetPnL.GreaterThan(decimal.Zero))

@@ -42,17 +42,18 @@ type ScalpingLLMDecisionProbeResult struct {
 }
 
 type ScalpingLLMProbeTrade struct {
-	Symbol     string          `json:"symbol"`
-	Side       string          `json:"side"`
-	Notional   decimal.Decimal `json:"notional"`
-	EntryPrice decimal.Decimal `json:"entry_price"`
-	ExitPrice  decimal.Decimal `json:"exit_price"`
-	GrossPnL   decimal.Decimal `json:"gross_pnl"`
-	Fees       decimal.Decimal `json:"fees"`
-	NetPnL     decimal.Decimal `json:"net_pnl"`
-	PnLPct     decimal.Decimal `json:"pnl_pct"`
-	Outcome    string          `json:"outcome"`
-	ExitReason string          `json:"exit_reason"`
+	Symbol       string          `json:"symbol"`
+	Side         string          `json:"side"`
+	Notional     decimal.Decimal `json:"notional"`
+	EntryPrice   decimal.Decimal `json:"entry_price"`
+	ExitPrice    decimal.Decimal `json:"exit_price"`
+	GrossPnL     decimal.Decimal `json:"gross_pnl"`
+	Fees         decimal.Decimal `json:"fees"`
+	NetPnL       decimal.Decimal `json:"net_pnl"`
+	PnLPct       decimal.Decimal `json:"pnl_pct"`
+	Outcome      string          `json:"outcome"`
+	ExitReason   string          `json:"exit_reason"`
+	ExitObserved bool            `json:"exit_observed"`
 }
 
 func RunPublicScalpingLLMDecisionProbe(
@@ -339,17 +340,18 @@ func simulateScalpingLLMProbePaperTrade(
 	}
 	result := trade.Trade
 	return &ScalpingLLMProbeTrade{
-		Symbol:     result.Symbol,
-		Side:       result.Side,
-		Notional:   result.Notional,
-		EntryPrice: result.EntryPrice,
-		ExitPrice:  result.ExitPrice,
-		GrossPnL:   paperSoakGrossPnL(result),
-		Fees:       result.Fees,
-		NetPnL:     result.PnL,
-		PnLPct:     result.PnLPct,
-		Outcome:    result.Outcome,
-		ExitReason: result.ExitReason,
+		Symbol:       result.Symbol,
+		Side:         result.Side,
+		Notional:     result.Notional,
+		EntryPrice:   result.EntryPrice,
+		ExitPrice:    result.ExitPrice,
+		GrossPnL:     paperSoakGrossPnL(result),
+		Fees:         result.Fees,
+		NetPnL:       result.PnL,
+		PnLPct:       result.PnLPct,
+		Outcome:      result.Outcome,
+		ExitReason:   result.ExitReason,
+		ExitObserved: false,
 	}, nil
 }
 

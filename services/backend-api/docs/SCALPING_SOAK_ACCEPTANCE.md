@@ -72,7 +72,10 @@ For the real LLM no-order path, `services/backend-api/scripts/ai-scalping-probe.
 emits `paper_live_trial_readiness` and supports
 `REQUIRE_LIVE_TRIAL_READY=true`. Use that gate when the probe artifact might be
 used to justify real-money or tightly capped live/testnet signaling; otherwise a
-short profitable LLM probe is provider/actionability evidence only.
+short profitable LLM probe is provider/actionability evidence only. The current
+single-cycle LLM probe marks its simulated exits as `exit_observed=false`, so
+`paper_observed_trades` must reach the live-trial minimum before the probe can
+be used as profitability proof.
 
 ## Run
 

@@ -564,6 +564,7 @@ type aiScalpingDecisionProbeSummary struct {
 	ActionableCycles           int                                        `json:"actionable_cycles"`
 	HoldRatio                  decimal.Decimal                            `json:"hold_ratio"`
 	PaperTrades                int                                        `json:"paper_trades"`
+	PaperObservedTrades        int                                        `json:"paper_observed_trades"`
 	PaperWins                  int                                        `json:"paper_wins"`
 	PaperLosses                int                                        `json:"paper_losses"`
 	PaperNetPnL                decimal.Decimal                            `json:"paper_net_pnl"`
@@ -784,6 +785,9 @@ func buildAIScalpingDecisionProbeSummary(
 		}
 		if result.PaperTrade != nil {
 			summary.PaperTrades++
+			if result.PaperTrade.ExitObserved {
+				summary.PaperObservedTrades++
+			}
 			summary.PaperNetPnL = summary.PaperNetPnL.Add(result.PaperTrade.NetPnL)
 			summary.PaperFees = summary.PaperFees.Add(result.PaperTrade.Fees)
 			if result.PaperTrade.NetPnL.GreaterThan(decimal.Zero) {
@@ -842,6 +846,12 @@ func buildAIScalpingProbeLiveTrialReadiness(summary aiScalpingDecisionProbeSumma
 	reasons := make([]string, 0, 10)
 	if summary.PaperTrades < readiness.MinClosedTrades {
 		reasons = appendUniqueReadinessReason(reasons, "paper_trades_below_live_trial_minimum")
+	}
+	if summary.PaperObservedTrades < readiness.MinClosedTrades {
+		reasons = appendUniqueReadinessReason(reasons, "paper_observed_trades_below_live_trial_minimum")
+	}
+	if summary.PaperTrades > 0 && summary.PaperObservedTrades < summary.PaperTrades {
+		reasons = appendUniqueReadinessReason(reasons, "synthetic_paper_exits")
 	}
 	if summary.PaperWins == 0 {
 		reasons = appendUniqueReadinessReason(reasons, "no_winning_paper_trades")
@@ -1468,7 +1478,7 @@ func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary
 	if err := writeProbeOutput("Actionable cycles: %d hold_ratio=%s\n", summary.ActionableCycles, summary.HoldRatio.String()); err != nil {
 		return err
 	}
-	if err := writeProbeOutput("Paper trades: %d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.PaperTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String(), summary.PaperProfitFactor.String(), summary.PaperProfitFactorUnbounded, summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String()); err != nil {
+	if err := writeProbeOutput("Paper trades: %d observed=%d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.PaperTrades, summary.PaperObservedTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String(), summary.PaperProfitFactor.String(), summary.PaperProfitFactorUnbounded, summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String()); err != nil {
 		return err
 	}
 	if err := writeProbeOutput("Paper live trial readiness: ready=%t reasons=%v min_closed_trades=%d\n", summary.PaperLiveTrialReadiness.Ready, summary.PaperLiveTrialReadiness.Reasons, summary.PaperLiveTrialReadiness.MinClosedTrades); err != nil {
