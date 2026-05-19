@@ -520,71 +520,88 @@ type aiProviderProbeResult struct {
 }
 
 type aiScalpingDecisionProbeOptions struct {
-	Provider                 string
-	Model                    string
-	BaseURL                  string
-	OutputJSON               bool
-	Timeout                  time.Duration
-	MaxRetries               int
-	FailoverMaxHops          int
-	Exchange                 string
-	Cycles                   int
-	Interval                 time.Duration
-	Capital                  decimal.Decimal
-	RequireHealthy           bool
-	RequireValid             bool
-	MinSignalQuality         decimal.Decimal
-	MinActionableCycles      int
-	MaxHoldRatio             decimal.Decimal
-	RequireMaxHoldRatio      bool
-	MinPaperTrades           int
-	MinPaperNetPnL           decimal.Decimal
-	RequirePaperNetPnL       bool
-	MinPaperAvgNetPnL        decimal.Decimal
-	RequirePaperAvgNetPnL    bool
-	MinPaperProfitFactor     decimal.Decimal
-	RequirePaperProfitFactor bool
-	MaxPaperDrawdown         decimal.Decimal
-	RequirePaperDrawdown     bool
-	MaxPaperDrawdownPct      decimal.Decimal
-	RequirePaperDrawdownPct  bool
-	MaxReasoningDiagnostics  int
-	RequireReasoningClean    bool
+	Provider                      string
+	Model                         string
+	BaseURL                       string
+	OutputJSON                    bool
+	Timeout                       time.Duration
+	MaxRetries                    int
+	FailoverMaxHops               int
+	Exchange                      string
+	Cycles                        int
+	Interval                      time.Duration
+	PaperHoldPeriod               time.Duration
+	Capital                       decimal.Decimal
+	RequireHealthy                bool
+	RequireValid                  bool
+	MinSignalQuality              decimal.Decimal
+	MinActionableCycles           int
+	MaxHoldRatio                  decimal.Decimal
+	RequireMaxHoldRatio           bool
+	MinPaperTrades                int
+	MinPaperNetPnL                decimal.Decimal
+	RequirePaperNetPnL            bool
+	MinPaperAvgNetPnL             decimal.Decimal
+	RequirePaperAvgNetPnL         bool
+	MinPaperProfitFactor          decimal.Decimal
+	RequirePaperProfitFactor      bool
+	MaxPaperDrawdown              decimal.Decimal
+	RequirePaperDrawdown          bool
+	MaxPaperDrawdownPct           decimal.Decimal
+	RequirePaperDrawdownPct       bool
+	MaxReasoningDiagnostics       int
+	RequireReasoningClean         bool
+	RequireObservedLiveTrialReady bool
 }
 
 type aiScalpingDecisionProbeSummary struct {
-	Cycles                     int                                        `json:"cycles"`
-	CompletedCycles            int                                        `json:"completed_cycles"`
-	TotalSignals               int                                        `json:"total_signals"`
-	SignalQualityCount         int                                        `json:"signal_quality_count"`
-	SignalQualityCoverage      decimal.Decimal                            `json:"signal_quality_coverage"`
-	ValidContractCycles        int                                        `json:"valid_contract_cycles"`
-	LLMDegradedCycles          int                                        `json:"llm_degraded_cycles"`
-	ActionableCycles           int                                        `json:"actionable_cycles"`
-	HoldRatio                  decimal.Decimal                            `json:"hold_ratio"`
-	PaperTrades                int                                        `json:"paper_trades"`
-	PaperObservedTrades        int                                        `json:"paper_observed_trades"`
-	PaperWins                  int                                        `json:"paper_wins"`
-	PaperLosses                int                                        `json:"paper_losses"`
-	PaperNetPnL                decimal.Decimal                            `json:"paper_net_pnl"`
-	PaperFees                  decimal.Decimal                            `json:"paper_fees"`
-	PaperAvgNetPnL             decimal.Decimal                            `json:"paper_avg_net_pnl"`
-	PaperProfitFactor          decimal.Decimal                            `json:"paper_profit_factor"`
-	PaperProfitFactorUnbounded bool                                       `json:"paper_profit_factor_unbounded"`
-	PaperMaxDrawdown           decimal.Decimal                            `json:"paper_max_drawdown"`
-	PaperMaxDrawdownPct        decimal.Decimal                            `json:"paper_max_drawdown_pct"`
-	PaperLiveTrialReadiness    services.ScalpingLiveTrialReadiness        `json:"paper_live_trial_readiness"`
-	ReasoningDiagnosticCycles  int                                        `json:"reasoning_diagnostic_cycles"`
-	ReasoningDiagnosticCount   int                                        `json:"reasoning_diagnostic_count"`
-	ActionCounts               map[string]int                             `json:"action_counts"`
-	ProviderCounts             map[string]int                             `json:"provider_counts"`
-	LastResult                 *services.ScalpingLLMDecisionProbeResult   `json:"last_result,omitempty"`
-	Results                    []*services.ScalpingLLMDecisionProbeResult `json:"results,omitempty"`
+	Cycles                             int                                        `json:"cycles"`
+	CompletedCycles                    int                                        `json:"completed_cycles"`
+	TotalSignals                       int                                        `json:"total_signals"`
+	SignalQualityCount                 int                                        `json:"signal_quality_count"`
+	SignalQualityCoverage              decimal.Decimal                            `json:"signal_quality_coverage"`
+	ValidContractCycles                int                                        `json:"valid_contract_cycles"`
+	LLMDegradedCycles                  int                                        `json:"llm_degraded_cycles"`
+	ActionableCycles                   int                                        `json:"actionable_cycles"`
+	HoldRatio                          decimal.Decimal                            `json:"hold_ratio"`
+	PaperTrades                        int                                        `json:"paper_trades"`
+	PaperObservedTrades                int                                        `json:"paper_observed_trades"`
+	PaperWins                          int                                        `json:"paper_wins"`
+	PaperLosses                        int                                        `json:"paper_losses"`
+	PaperNetPnL                        decimal.Decimal                            `json:"paper_net_pnl"`
+	PaperFees                          decimal.Decimal                            `json:"paper_fees"`
+	PaperAvgNetPnL                     decimal.Decimal                            `json:"paper_avg_net_pnl"`
+	PaperProfitFactor                  decimal.Decimal                            `json:"paper_profit_factor"`
+	PaperProfitFactorUnbounded         bool                                       `json:"paper_profit_factor_unbounded"`
+	PaperMaxDrawdown                   decimal.Decimal                            `json:"paper_max_drawdown"`
+	PaperMaxDrawdownPct                decimal.Decimal                            `json:"paper_max_drawdown_pct"`
+	ObservedPaperTrades                int                                        `json:"observed_paper_trades"`
+	ObservedPaperOpenPositions         int                                        `json:"observed_paper_open_positions"`
+	ObservedPaperWins                  int                                        `json:"observed_paper_wins"`
+	ObservedPaperLosses                int                                        `json:"observed_paper_losses"`
+	ObservedPaperNetPnL                decimal.Decimal                            `json:"observed_paper_net_pnl"`
+	ObservedPaperFees                  decimal.Decimal                            `json:"observed_paper_fees"`
+	ObservedPaperAvgNetPnL             decimal.Decimal                            `json:"observed_paper_avg_net_pnl"`
+	ObservedPaperProfitFactor          decimal.Decimal                            `json:"observed_paper_profit_factor"`
+	ObservedPaperProfitFactorUnbounded bool                                       `json:"observed_paper_profit_factor_unbounded"`
+	ObservedPaperMaxDrawdown           decimal.Decimal                            `json:"observed_paper_max_drawdown"`
+	ObservedPaperMaxDrawdownPct        decimal.Decimal                            `json:"observed_paper_max_drawdown_pct"`
+	PaperLiveTrialReadiness            services.ScalpingLiveTrialReadiness        `json:"paper_live_trial_readiness"`
+	ReasoningDiagnosticCycles          int                                        `json:"reasoning_diagnostic_cycles"`
+	ReasoningDiagnosticCount           int                                        `json:"reasoning_diagnostic_count"`
+	ActionCounts                       map[string]int                             `json:"action_counts"`
+	ProviderCounts                     map[string]int                             `json:"provider_counts"`
+	LastResult                         *services.ScalpingLLMDecisionProbeResult   `json:"last_result,omitempty"`
+	Results                            []*services.ScalpingLLMDecisionProbeResult `json:"results,omitempty"`
 
-	paperGrossWinningPnL  decimal.Decimal
-	paperGrossLosingPnL   decimal.Decimal
-	paperCumulativeNetPnL decimal.Decimal
-	paperPeakNetPnL       decimal.Decimal
+	paperGrossWinningPnL     decimal.Decimal
+	paperGrossLosingPnL      decimal.Decimal
+	paperCumulativeNetPnL    decimal.Decimal
+	paperPeakNetPnL          decimal.Decimal
+	observedGrossWinningPnL  decimal.Decimal
+	observedGrossLosingPnL   decimal.Decimal
+	observedCumulativeNetPnL decimal.Decimal
+	observedPeakNetPnL       decimal.Decimal
 }
 
 func probeAIProvider(ctx context.Context, cfg config.AIConfig, args []string, out io.Writer) error {
@@ -706,7 +723,7 @@ func probeAIScalpingDecision(ctx context.Context, cfg config.AIConfig, args []st
 	defer cancel()
 
 	results, runErr := runAIScalpingDecisionProbeCycles(probeCtx, client, opts, model, portfolio)
-	summary := buildAIScalpingDecisionProbeSummary(results, opts.Cycles, opts.Capital)
+	summary := buildAIScalpingDecisionProbeSummary(results, opts.Cycles, opts.Capital, opts.PaperHoldPeriod)
 	if writeErr := writeAIScalpingDecisionProbeSummary(out, opts.OutputJSON, summary); writeErr != nil {
 		if runErr != nil {
 			return errors.Join(runErr, writeErr)
@@ -750,17 +767,207 @@ func runAIScalpingDecisionProbeCycles(
 	return results, nil
 }
 
+type observedScalpingProbePosition struct {
+	result     *services.ScalpingLLMDecisionProbeResult
+	symbol     string
+	side       string
+	notional   decimal.Decimal
+	entryPrice decimal.Decimal
+	size       decimal.Decimal
+	stopLoss   decimal.Decimal
+	takeProfit decimal.Decimal
+	entryAt    time.Time
+}
+
+func applyObservedScalpingProbePaperExits(results []*services.ScalpingLLMDecisionProbeResult, holdPeriod time.Duration) int {
+	if holdPeriod < 0 {
+		holdPeriod = 0
+	}
+	if holdPeriod == 0 {
+		holdPeriod = services.DefaultScalpingBacktestHoldPeriod
+	}
+	openPositions := make([]observedScalpingProbePosition, 0)
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		snapshots := scalpingProbeSnapshotMap(result.SignalSnapshots)
+		stillOpen := openPositions[:0]
+		for _, position := range openPositions {
+			snapshot, ok := snapshots[position.symbol]
+			if !ok || !observedScalpingProbePositionCanClose(position, snapshot, holdPeriod) {
+				stillOpen = append(stillOpen, position)
+				continue
+			}
+			position.result.ObservedPaperTrade = closeObservedScalpingProbePosition(position, snapshot)
+		}
+		openPositions = stillOpen
+
+		position, ok := openObservedScalpingProbePosition(result)
+		if ok {
+			openPositions = append(openPositions, position)
+		}
+	}
+	return len(openPositions)
+}
+
+func scalpingProbeSnapshotMap(snapshots []services.ScalpingLLMSignalSnapshot) map[string]services.ScalpingLLMSignalSnapshot {
+	mapped := make(map[string]services.ScalpingLLMSignalSnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		symbol := strings.ToUpper(strings.TrimSpace(snapshot.Symbol))
+		if symbol == "" || !snapshot.Price.GreaterThan(decimal.Zero) {
+			continue
+		}
+		mapped[symbol] = snapshot
+	}
+	return mapped
+}
+
+func openObservedScalpingProbePosition(result *services.ScalpingLLMDecisionProbeResult) (observedScalpingProbePosition, bool) {
+	if result == nil || result.PaperTrade == nil || result.Decision == nil {
+		return observedScalpingProbePosition{}, false
+	}
+	action := strings.ToLower(strings.TrimSpace(result.Decision.Action))
+	if action != "buy" && action != "sell" {
+		return observedScalpingProbePosition{}, false
+	}
+	entryPrice := result.PaperTrade.EntryPrice
+	notional := result.PaperTrade.Notional
+	if !entryPrice.GreaterThan(decimal.Zero) || !notional.GreaterThan(decimal.Zero) {
+		return observedScalpingProbePosition{}, false
+	}
+	symbol := strings.ToUpper(strings.TrimSpace(result.PaperTrade.Symbol))
+	if symbol == "" {
+		symbol = strings.ToUpper(strings.TrimSpace(result.Decision.Symbol))
+	}
+	if symbol == "" {
+		return observedScalpingProbePosition{}, false
+	}
+	stopLoss := decimal.Zero
+	if result.Decision.StopLoss != nil {
+		stopLoss = *result.Decision.StopLoss
+	}
+	takeProfit := decimal.Zero
+	if result.Decision.TakeProfit != nil {
+		takeProfit = *result.Decision.TakeProfit
+	}
+	entryAt := result.ObservedAt
+	if entryAt.IsZero() {
+		entryAt = time.Now().UTC()
+	}
+	return observedScalpingProbePosition{
+		result:     result,
+		symbol:     symbol,
+		side:       action,
+		notional:   notional,
+		entryPrice: entryPrice,
+		size:       notional.Div(entryPrice),
+		stopLoss:   stopLoss,
+		takeProfit: takeProfit,
+		entryAt:    entryAt,
+	}, true
+}
+
+func observedScalpingProbePositionCanClose(position observedScalpingProbePosition, snapshot services.ScalpingLLMSignalSnapshot, holdPeriod time.Duration) bool {
+	if !snapshot.Price.GreaterThan(decimal.Zero) || !snapshot.ObservedAt.After(position.entryAt) {
+		return false
+	}
+	switch position.side {
+	case "buy":
+		if position.takeProfit.GreaterThan(decimal.Zero) && snapshot.Price.GreaterThanOrEqual(position.takeProfit) {
+			return true
+		}
+		if position.stopLoss.GreaterThan(decimal.Zero) && snapshot.Price.LessThanOrEqual(position.stopLoss) {
+			return true
+		}
+	case "sell":
+		if position.takeProfit.GreaterThan(decimal.Zero) && snapshot.Price.LessThanOrEqual(position.takeProfit) {
+			return true
+		}
+		if position.stopLoss.GreaterThan(decimal.Zero) && snapshot.Price.GreaterThanOrEqual(position.stopLoss) {
+			return true
+		}
+	}
+	return !snapshot.ObservedAt.Before(position.entryAt.Add(holdPeriod))
+}
+
+func closeObservedScalpingProbePosition(position observedScalpingProbePosition, snapshot services.ScalpingLLMSignalSnapshot) *services.ScalpingLLMProbeTrade {
+	exitPrice := snapshot.Price
+	exitReason := "mark_to_market"
+	switch position.side {
+	case "buy":
+		if position.takeProfit.GreaterThan(decimal.Zero) && snapshot.Price.GreaterThanOrEqual(position.takeProfit) {
+			exitPrice = position.takeProfit
+			exitReason = "take_profit"
+		} else if position.stopLoss.GreaterThan(decimal.Zero) && snapshot.Price.LessThanOrEqual(position.stopLoss) {
+			exitPrice = position.stopLoss
+			exitReason = "stop_loss"
+		}
+	case "sell":
+		if position.takeProfit.GreaterThan(decimal.Zero) && snapshot.Price.LessThanOrEqual(position.takeProfit) {
+			exitPrice = position.takeProfit
+			exitReason = "take_profit"
+		} else if position.stopLoss.GreaterThan(decimal.Zero) && snapshot.Price.GreaterThanOrEqual(position.stopLoss) {
+			exitPrice = position.stopLoss
+			exitReason = "stop_loss"
+		}
+	}
+	slippage := decimal.NewFromFloat(services.DefaultScalpingBacktestSlippage)
+	one := decimal.NewFromInt(1)
+	if position.side == "buy" {
+		exitPrice = exitPrice.Mul(one.Sub(slippage))
+	} else {
+		exitPrice = exitPrice.Mul(one.Add(slippage))
+	}
+
+	var grossPnL decimal.Decimal
+	if position.side == "buy" {
+		grossPnL = exitPrice.Sub(position.entryPrice).Mul(position.size)
+	} else {
+		grossPnL = position.entryPrice.Sub(exitPrice).Mul(position.size)
+	}
+	fees := position.notional.Mul(decimal.NewFromFloat(0.0006)).Mul(decimal.NewFromInt(2))
+	netPnL := grossPnL.Sub(fees)
+	pnlPct := decimal.Zero
+	if !position.notional.IsZero() {
+		pnlPct = netPnL.Div(position.notional).Mul(decimal.NewFromInt(100))
+	}
+	outcome := "breakeven"
+	if netPnL.GreaterThan(decimal.Zero) {
+		outcome = "win"
+	} else if netPnL.LessThan(decimal.Zero) {
+		outcome = "loss"
+	}
+	return &services.ScalpingLLMProbeTrade{
+		Symbol:       position.symbol,
+		Side:         position.side,
+		Notional:     position.notional,
+		EntryPrice:   position.entryPrice,
+		ExitPrice:    exitPrice,
+		GrossPnL:     grossPnL,
+		Fees:         fees,
+		NetPnL:       netPnL,
+		PnLPct:       pnlPct,
+		Outcome:      outcome,
+		ExitReason:   exitReason,
+		ExitObserved: true,
+	}
+}
+
 func buildAIScalpingDecisionProbeSummary(
 	results []*services.ScalpingLLMDecisionProbeResult,
 	requestedCycles int,
 	paperDrawdownBasis decimal.Decimal,
+	paperHoldPeriod time.Duration,
 ) aiScalpingDecisionProbeSummary {
+	observedOpenPositions := applyObservedScalpingProbePaperExits(results, paperHoldPeriod)
 	summary := aiScalpingDecisionProbeSummary{
-		Cycles:          requestedCycles,
-		CompletedCycles: len(results),
-		ActionCounts:    map[string]int{},
-		ProviderCounts:  map[string]int{},
-		Results:         results,
+		Cycles:                     requestedCycles,
+		CompletedCycles:            len(results),
+		ObservedPaperOpenPositions: observedOpenPositions,
+		ActionCounts:               map[string]int{},
+		ProviderCounts:             map[string]int{},
+		Results:                    results,
 	}
 	for _, result := range results {
 		if result == nil {
@@ -786,6 +993,7 @@ func buildAIScalpingDecisionProbeSummary(
 			summary.PaperTrades++
 			if result.PaperTrade.ExitObserved {
 				summary.PaperObservedTrades++
+				summary.addObservedPaperTrade(result.PaperTrade)
 			}
 			summary.PaperNetPnL = summary.PaperNetPnL.Add(result.PaperTrade.NetPnL)
 			summary.PaperFees = summary.PaperFees.Add(result.PaperTrade.Fees)
@@ -808,6 +1016,12 @@ func buildAIScalpingDecisionProbeSummary(
 				summary.PaperLosses++
 			}
 		}
+		if result.ObservedPaperTrade != nil && !result.ObservedPaperTrade.ExitObserved {
+			result.ObservedPaperTrade.ExitObserved = true
+		}
+		if result.ObservedPaperTrade != nil {
+			summary.addObservedPaperTrade(result.ObservedPaperTrade)
+		}
 		summary.ActionCounts[action]++
 		if provider := strings.TrimSpace(result.Provider); provider != "" {
 			summary.ProviderCounts[provider]++
@@ -823,6 +1037,9 @@ func buildAIScalpingDecisionProbeSummary(
 	if summary.PaperTrades > 0 {
 		summary.PaperAvgNetPnL = summary.PaperNetPnL.Div(decimal.NewFromInt(int64(summary.PaperTrades)))
 	}
+	if summary.ObservedPaperTrades > 0 {
+		summary.ObservedPaperAvgNetPnL = summary.ObservedPaperNetPnL.Div(decimal.NewFromInt(int64(summary.ObservedPaperTrades)))
+	}
 	if summary.CompletedCycles > 0 {
 		summary.HoldRatio = decimal.NewFromInt(int64(summary.ActionCounts["hold"])).Div(decimal.NewFromInt(int64(summary.CompletedCycles)))
 	}
@@ -833,9 +1050,42 @@ func buildAIScalpingDecisionProbeSummary(
 	}
 	if paperDrawdownBasis.GreaterThan(decimal.Zero) {
 		summary.PaperMaxDrawdownPct = summary.PaperMaxDrawdown.Div(paperDrawdownBasis)
+		summary.ObservedPaperMaxDrawdownPct = summary.ObservedPaperMaxDrawdown.Div(paperDrawdownBasis)
 	}
 	summary.PaperLiveTrialReadiness = buildAIScalpingProbeLiveTrialReadiness(summary)
 	return summary
+}
+
+func (summary *aiScalpingDecisionProbeSummary) addObservedPaperTrade(trade *services.ScalpingLLMProbeTrade) {
+	if summary == nil || trade == nil {
+		return
+	}
+	summary.ObservedPaperTrades++
+	summary.ObservedPaperNetPnL = summary.ObservedPaperNetPnL.Add(trade.NetPnL)
+	summary.ObservedPaperFees = summary.ObservedPaperFees.Add(trade.Fees)
+	if trade.NetPnL.GreaterThan(decimal.Zero) {
+		summary.observedGrossWinningPnL = summary.observedGrossWinningPnL.Add(trade.NetPnL)
+	} else if trade.NetPnL.LessThan(decimal.Zero) {
+		summary.observedGrossLosingPnL = summary.observedGrossLosingPnL.Add(trade.NetPnL.Abs())
+	}
+	summary.observedCumulativeNetPnL = summary.observedCumulativeNetPnL.Add(trade.NetPnL)
+	if summary.observedCumulativeNetPnL.GreaterThan(summary.observedPeakNetPnL) {
+		summary.observedPeakNetPnL = summary.observedCumulativeNetPnL
+	}
+	if drawdown := summary.observedPeakNetPnL.Sub(summary.observedCumulativeNetPnL); drawdown.GreaterThan(summary.ObservedPaperMaxDrawdown) {
+		summary.ObservedPaperMaxDrawdown = drawdown
+	}
+	switch strings.ToLower(strings.TrimSpace(trade.Outcome)) {
+	case "win":
+		summary.ObservedPaperWins++
+	case "loss":
+		summary.ObservedPaperLosses++
+	}
+	if summary.observedGrossLosingPnL.GreaterThan(decimal.Zero) {
+		summary.ObservedPaperProfitFactor = summary.observedGrossWinningPnL.Div(summary.observedGrossLosingPnL)
+	} else if summary.observedGrossWinningPnL.GreaterThan(decimal.Zero) {
+		summary.ObservedPaperProfitFactorUnbounded = true
+	}
 }
 
 func buildAIScalpingProbeLiveTrialReadiness(summary aiScalpingDecisionProbeSummary) services.ScalpingLiveTrialReadiness {
@@ -843,28 +1093,28 @@ func buildAIScalpingProbeLiveTrialReadiness(summary aiScalpingDecisionProbeSumma
 		MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades,
 	}
 	reasons := make([]string, 0, 10)
-	if summary.PaperTrades < readiness.MinClosedTrades {
-		reasons = appendUniqueReadinessReason(reasons, "paper_trades_below_live_trial_minimum")
-	}
-	if summary.PaperObservedTrades < readiness.MinClosedTrades {
+	if summary.ObservedPaperTrades < readiness.MinClosedTrades {
 		reasons = appendUniqueReadinessReason(reasons, "paper_observed_trades_below_live_trial_minimum")
 	}
-	if summary.PaperTrades > 0 && summary.PaperObservedTrades < summary.PaperTrades {
+	if summary.ObservedPaperOpenPositions > 0 {
+		reasons = appendUniqueReadinessReason(reasons, "paper_positions_still_open")
+	}
+	if summary.PaperTrades > 0 && summary.ObservedPaperTrades < summary.PaperTrades {
 		reasons = appendUniqueReadinessReason(reasons, "synthetic_paper_exits")
 	}
-	if summary.PaperWins == 0 {
+	if summary.ObservedPaperWins == 0 {
 		reasons = appendUniqueReadinessReason(reasons, "no_winning_paper_trades")
 	}
-	if summary.PaperLosses == 0 {
+	if summary.ObservedPaperLosses == 0 {
 		reasons = appendUniqueReadinessReason(reasons, "no_losing_paper_trades")
 	}
-	if !summary.PaperNetPnL.GreaterThan(decimal.Zero) {
+	if !summary.ObservedPaperNetPnL.GreaterThan(decimal.Zero) {
 		reasons = appendUniqueReadinessReason(reasons, "paper_net_pnl_not_positive")
 	}
-	if !summary.PaperAvgNetPnL.GreaterThan(decimal.Zero) {
+	if !summary.ObservedPaperAvgNetPnL.GreaterThan(decimal.Zero) {
 		reasons = appendUniqueReadinessReason(reasons, "paper_avg_net_pnl_not_positive")
 	}
-	if !summary.PaperMaxDrawdownPct.GreaterThan(decimal.Zero) {
+	if !summary.ObservedPaperMaxDrawdownPct.GreaterThan(decimal.Zero) {
 		reasons = appendUniqueReadinessReason(reasons, "paper_drawdown_not_observed")
 	}
 	if summary.SignalQualityCoverage.LessThan(decimal.NewFromInt(1)) {
@@ -933,6 +1183,9 @@ func validateAIScalpingDecisionProbeSummary(summary aiScalpingDecisionProbeSumma
 	if opts.RequireReasoningClean && summary.ReasoningDiagnosticCount > opts.MaxReasoningDiagnostics {
 		return fmt.Errorf("reasoning_diagnostic_count=%d above maximum=%d", summary.ReasoningDiagnosticCount, opts.MaxReasoningDiagnostics)
 	}
+	if opts.RequireObservedLiveTrialReady && !summary.PaperLiveTrialReadiness.Ready {
+		return fmt.Errorf("paper_live_trial_readiness.ready=false reasons=%v", summary.PaperLiveTrialReadiness.Reasons)
+	}
 	return nil
 }
 
@@ -994,6 +1247,7 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 		FailoverMaxHops:         1,
 		Exchange:                "bitget",
 		Cycles:                  1,
+		PaperHoldPeriod:         services.DefaultScalpingBacktestHoldPeriod,
 		Capital:                 decimal.NewFromFloat(48),
 		RequireHealthy:          true,
 		RequireValid:            true,
@@ -1015,8 +1269,10 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	maxPaperDrawdownPct := fs.String("max-paper-drawdown-pct", "", "maximum simulated paper drawdown divided by --capital allowed; empty disables this gate")
 	maxReasoningDiagnostics := fs.String("max-reasoning-diagnostics", "0", "maximum reasoning diagnostics allowed; empty disables this gate")
 	intervalMS := fs.Int("interval-ms", 0, "delay between scalping LLM probe cycles in milliseconds")
+	paperHoldPeriodSeconds := fs.Int("paper-hold-period-seconds", int(opts.PaperHoldPeriod/time.Second), "minimum observed hold period before mark-to-market paper exit; SL/TP can close earlier")
 	allowDegraded := fs.Bool("allow-degraded", false, "return success even when LLM runtime degrades to fallback")
 	allowInvalidContract := fs.Bool("allow-invalid-contract", false, "return success even when the LLM decision contract is invalid")
+	fs.BoolVar(&opts.RequireObservedLiveTrialReady, "require-observed-live-trial-ready", false, "require observed paper live-trial readiness before returning success")
 	fs.StringVar(&opts.Provider, "provider", "", "provider to probe; defaults to ai.provider and NEURATRADE_AI_PROVIDER_CHAIN")
 	fs.StringVar(&opts.Model, "model", "", "model override for the selected provider")
 	fs.StringVar(&opts.BaseURL, "base-url", "", "base URL override for the selected provider")
@@ -1050,6 +1306,9 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	}
 	if intervalMS == nil || *intervalMS < 0 {
 		return opts, fmt.Errorf("--interval-ms must be zero or greater")
+	}
+	if paperHoldPeriodSeconds == nil || *paperHoldPeriodSeconds < 0 {
+		return opts, fmt.Errorf("--paper-hold-period-seconds must be zero or greater")
 	}
 	if opts.MinPaperTrades < 0 {
 		return opts, fmt.Errorf("--min-paper-trades must be zero or greater")
@@ -1107,6 +1366,7 @@ func parseAIScalpingDecisionProbeOptions(args []string) (aiScalpingDecisionProbe
 	}
 	opts.Timeout = time.Duration(*timeoutSeconds) * time.Second
 	opts.Interval = time.Duration(*intervalMS) * time.Millisecond
+	opts.PaperHoldPeriod = time.Duration(*paperHoldPeriodSeconds) * time.Second
 	opts.Capital = parsedCapital
 	opts.MinSignalQuality = parsedSignalQuality
 	opts.MaxHoldRatio = parsedMaxHoldRatio
@@ -1474,6 +1734,9 @@ func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary
 		return err
 	}
 	if err := writeProbeOutput("Paper trades: %d observed=%d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.PaperTrades, summary.PaperObservedTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String(), summary.PaperProfitFactor.String(), summary.PaperProfitFactorUnbounded, summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String()); err != nil {
+		return err
+	}
+	if err := writeProbeOutput("Observed paper trades: %d open=%d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.ObservedPaperTrades, summary.ObservedPaperOpenPositions, summary.ObservedPaperWins, summary.ObservedPaperLosses, summary.ObservedPaperNetPnL.String(), summary.ObservedPaperFees.String(), summary.ObservedPaperAvgNetPnL.String(), summary.ObservedPaperProfitFactor.String(), summary.ObservedPaperProfitFactorUnbounded, summary.ObservedPaperMaxDrawdown.String(), summary.ObservedPaperMaxDrawdownPct.String()); err != nil {
 		return err
 	}
 	if err := writeProbeOutput("Paper live trial readiness: ready=%t reasons=%v min_closed_trades=%d\n", summary.PaperLiveTrialReadiness.Ready, summary.PaperLiveTrialReadiness.Reasons, summary.PaperLiveTrialReadiness.MinClosedTrades); err != nil {

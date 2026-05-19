@@ -21,6 +21,7 @@ EXCHANGE="${EXCHANGE:-bitget}"
 CYCLES="${CYCLES:-3}"
 INTERVAL_MS="${INTERVAL_MS:-1000}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-75}"
+PAPER_HOLD_PERIOD_SECONDS="${PAPER_HOLD_PERIOD_SECONDS:-300}"
 CAPITAL="${CAPITAL:-48}"
 MIN_SIGNAL_QUALITY="${MIN_SIGNAL_QUALITY-1}"
 MIN_ACTIONABLE_CYCLES="${MIN_ACTIONABLE_CYCLES-1}"
@@ -32,6 +33,7 @@ MIN_PAPER_PROFIT_FACTOR="${MIN_PAPER_PROFIT_FACTOR-1}"
 MAX_PAPER_DRAWDOWN="${MAX_PAPER_DRAWDOWN-}"
 MAX_PAPER_DRAWDOWN_PCT="${MAX_PAPER_DRAWDOWN_PCT-0.01}"
 MAX_REASONING_DIAGNOSTICS="${MAX_REASONING_DIAGNOSTICS-0}"
+REQUIRE_OBSERVED_LIVE_TRIAL_READY="${REQUIRE_OBSERVED_LIVE_TRIAL_READY:-false}"
 OUTPUT_JSON="${OUTPUT_JSON:-true}"
 PROBE_OUTPUT_FILE="${PROBE_OUTPUT_FILE:-}"
 
@@ -67,6 +69,7 @@ Environment:
   CYCLES          Number of LLM probe cycles (default: ${CYCLES})
   INTERVAL_MS     Delay between cycles in ms (default: ${INTERVAL_MS})
   TIMEOUT_SECONDS Overall timeout in seconds (default: ${TIMEOUT_SECONDS})
+  PAPER_HOLD_PERIOD_SECONDS Minimum observed hold period before mark-to-market paper exits; SL/TP can close earlier (default: ${PAPER_HOLD_PERIOD_SECONDS})
   CAPITAL         Paper wallet basis in USDT (default: ${CAPITAL})
   MIN_SIGNAL_QUALITY Minimum signal quality coverage; empty disables (default: ${MIN_SIGNAL_QUALITY})
   MIN_ACTIONABLE_CYCLES Minimum buy/sell cycles; empty disables (default: ${MIN_ACTIONABLE_CYCLES})
@@ -78,6 +81,7 @@ Environment:
   MAX_PAPER_DRAWDOWN Maximum absolute paper drawdown; empty disables (default: ${MAX_PAPER_DRAWDOWN:-disabled})
   MAX_PAPER_DRAWDOWN_PCT Maximum paper drawdown / CAPITAL; empty disables (default: ${MAX_PAPER_DRAWDOWN_PCT})
   MAX_REASONING_DIAGNOSTICS Maximum reasoning diagnostics; empty disables (default: ${MAX_REASONING_DIAGNOSTICS})
+  REQUIRE_OBSERVED_LIVE_TRIAL_READY true/false require observed paper live readiness before success (default: ${REQUIRE_OBSERVED_LIVE_TRIAL_READY})
   OUTPUT_JSON      true/false JSON output (default: ${OUTPUT_JSON})
   PROBE_OUTPUT_FILE Optional path for clean stdout artifact, usually JSON; empty disables (default: ${PROBE_OUTPUT_FILE:-disabled})
 
@@ -118,6 +122,7 @@ run_probe() {
     "--cycles" "$CYCLES"
     "--interval-ms" "$INTERVAL_MS"
     "--timeout-seconds" "$TIMEOUT_SECONDS"
+    "--paper-hold-period-seconds" "$PAPER_HOLD_PERIOD_SECONDS"
     "--capital" "$CAPITAL"
   )
   if [ "$OUTPUT_JSON" = "true" ] || [ "$OUTPUT_JSON" = "1" ]; then
@@ -140,12 +145,17 @@ run_probe() {
   append_optional_arg "--max-paper-drawdown" "$MAX_PAPER_DRAWDOWN"
   append_optional_arg "--max-paper-drawdown-pct" "$MAX_PAPER_DRAWDOWN_PCT"
   args+=("--max-reasoning-diagnostics" "$MAX_REASONING_DIAGNOSTICS")
+  case "$REQUIRE_OBSERVED_LIVE_TRIAL_READY" in
+    true | TRUE | 1 | yes | YES)
+      args+=("--require-observed-live-trial-ready")
+      ;;
+  esac
 
-  log "running real LLM scalping probe provider=${PROVIDER:-runtime-config} exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} \
+  log "running real LLM scalping probe provider=${PROVIDER:-runtime-config} exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} paper_hold_period_seconds=${PAPER_HOLD_PERIOD_SECONDS} \
 min_signal_quality=${MIN_SIGNAL_QUALITY:-disabled} min_actionable_cycles=${MIN_ACTIONABLE_CYCLES:-disabled} max_hold_ratio=${MAX_HOLD_RATIO:-disabled} \
 min_paper_trades=${MIN_PAPER_TRADES:-disabled} min_paper_net_pnl=${MIN_PAPER_NET_PNL:-disabled} min_paper_avg_net_pnl=${MIN_PAPER_AVG_NET_PNL:-disabled} \
 min_paper_profit_factor=${MIN_PAPER_PROFIT_FACTOR:-disabled} max_paper_drawdown=${MAX_PAPER_DRAWDOWN:-disabled} max_paper_drawdown_pct=${MAX_PAPER_DRAWDOWN_PCT:-disabled} \
-max_reasoning_diagnostics=${MAX_REASONING_DIAGNOSTICS:-disabled}"
+max_reasoning_diagnostics=${MAX_REASONING_DIAGNOSTICS:-disabled} require_observed_live_trial_ready=${REQUIRE_OBSERVED_LIVE_TRIAL_READY}"
   if [ -n "$PROBE_OUTPUT_FILE" ]; then
     mkdir -p "$(dirname "$PROBE_OUTPUT_FILE")"
     "$PROBE_BIN" "${args[@]}" | tee "$PROBE_OUTPUT_FILE" | tee -a "$LOG_FILE"

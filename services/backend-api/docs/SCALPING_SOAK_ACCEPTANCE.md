@@ -69,12 +69,14 @@ capped live/testnet trial; normal paper runs may be profitable but still not
 ready for real-money signaling if the sample is too small or too clean.
 
 For the real LLM no-order path, `services/backend-api/scripts/ai-scalping-probe.sh`
-emits `paper_live_trial_readiness`, but it must not be used to justify
-real-money or tightly capped live/testnet signaling on its own. The current
-single-cycle LLM probe marks its simulated exits as `exit_observed=false`, so a
-short profitable LLM probe is provider/actionability evidence only. Use the
-observed-price soak verifier for live-trial approval until a real LLM paper soak
-can carry positions across observed future market snapshots.
+emits both synthetic proposal PnL and observed-exit paper PnL. Single-cycle
+proposal exits remain `exit_observed=false`; observed paper trades close only
+when a later market snapshot reaches SL/TP or the configured
+`PAPER_HOLD_PERIOD_SECONDS` mark-to-market point. Treat short LLM probes as
+provider/actionability evidence unless `paper_live_trial_readiness.ready=true`
+is backed by `observed_paper_trades` reaching the live-trial minimum. Use
+`REQUIRE_OBSERVED_LIVE_TRIAL_READY=true` when an LLM probe artifact is intended
+to approve any real-money or tightly capped live/testnet signaling.
 
 ## Run
 

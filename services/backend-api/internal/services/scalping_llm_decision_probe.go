@@ -22,23 +22,32 @@ type ScalpingLLMDecisionProbeOptions struct {
 }
 
 type ScalpingLLMDecisionProbeResult struct {
-	Exchange              string                 `json:"exchange"`
-	SignalCount           int                    `json:"signal_count"`
-	SignalQualityCount    int                    `json:"signal_quality_count"`
-	SignalQualityCoverage decimal.Decimal        `json:"signal_quality_coverage"`
-	Provider              string                 `json:"provider,omitempty"`
-	Model                 string                 `json:"model,omitempty"`
-	Decision              *AITradingDecision     `json:"decision,omitempty"`
-	ContractValid         bool                   `json:"contract_valid"`
-	ContractError         string                 `json:"contract_error,omitempty"`
-	PreTradeGateAllowed   bool                   `json:"pre_trade_gate_allowed"`
-	PreTradeGateReason    string                 `json:"pre_trade_gate_reason,omitempty"`
-	PreTradeRegime        string                 `json:"pre_trade_regime,omitempty"`
-	RuntimeDiagnostics    map[string]interface{} `json:"runtime_diagnostics,omitempty"`
-	LLMDegraded           bool                   `json:"llm_degraded"`
-	ReasoningDiagnostics  []string               `json:"reasoning_diagnostics,omitempty"`
-	PaperTrade            *ScalpingLLMProbeTrade `json:"paper_trade,omitempty"`
-	PaperTradeError       string                 `json:"paper_trade_error,omitempty"`
+	Exchange              string                      `json:"exchange"`
+	ObservedAt            time.Time                   `json:"observed_at"`
+	SignalCount           int                         `json:"signal_count"`
+	SignalQualityCount    int                         `json:"signal_quality_count"`
+	SignalQualityCoverage decimal.Decimal             `json:"signal_quality_coverage"`
+	SignalSnapshots       []ScalpingLLMSignalSnapshot `json:"signal_snapshots,omitempty"`
+	Provider              string                      `json:"provider,omitempty"`
+	Model                 string                      `json:"model,omitempty"`
+	Decision              *AITradingDecision          `json:"decision,omitempty"`
+	ContractValid         bool                        `json:"contract_valid"`
+	ContractError         string                      `json:"contract_error,omitempty"`
+	PreTradeGateAllowed   bool                        `json:"pre_trade_gate_allowed"`
+	PreTradeGateReason    string                      `json:"pre_trade_gate_reason,omitempty"`
+	PreTradeRegime        string                      `json:"pre_trade_regime,omitempty"`
+	RuntimeDiagnostics    map[string]interface{}      `json:"runtime_diagnostics,omitempty"`
+	LLMDegraded           bool                        `json:"llm_degraded"`
+	ReasoningDiagnostics  []string                    `json:"reasoning_diagnostics,omitempty"`
+	PaperTrade            *ScalpingLLMProbeTrade      `json:"paper_trade,omitempty"`
+	PaperTradeError       string                      `json:"paper_trade_error,omitempty"`
+	ObservedPaperTrade    *ScalpingLLMProbeTrade      `json:"observed_paper_trade,omitempty"`
+}
+
+type ScalpingLLMSignalSnapshot struct {
+	Symbol     string          `json:"symbol"`
+	Price      decimal.Decimal `json:"price"`
+	ObservedAt time.Time       `json:"observed_at"`
 }
 
 type ScalpingLLMProbeTrade struct {
@@ -115,6 +124,7 @@ func runScalpingLLMDecisionProbeWithService(
 	if len(signals) == 0 {
 		return nil, fmt.Errorf("scalping LLM decision probe gathered no market signals")
 	}
+	observedAt := time.Now().UTC()
 
 	decision, err := svc.getAIDecision(ctx, signals, portfolio)
 	if err != nil {
@@ -125,8 +135,10 @@ func runScalpingLLMDecisionProbeWithService(
 
 	result := &ScalpingLLMDecisionProbeResult{
 		Exchange:              svc.config.Exchange,
+		ObservedAt:            observedAt,
 		SignalCount:           len(signals),
 		SignalQualityCount:    countSignalsWithOrderBookQuality(signals),
+		SignalSnapshots:       scalpingLLMSignalSnapshots(signals, observedAt),
 		Decision:              decision,
 		ContractValid:         true,
 		PreTradeGateAllowed:   true,
@@ -172,6 +184,21 @@ func runScalpingLLMDecisionProbeWithService(
 		return result, fmt.Errorf("scalping LLM decision contract invalid: %s", result.ContractError)
 	}
 	return result, nil
+}
+
+func scalpingLLMSignalSnapshots(signals []aiMarketSignal, observedAt time.Time) []ScalpingLLMSignalSnapshot {
+	snapshots := make([]ScalpingLLMSignalSnapshot, 0, len(signals))
+	for _, signal := range signals {
+		if strings.TrimSpace(signal.Symbol) == "" || signal.Price <= 0 {
+			continue
+		}
+		snapshots = append(snapshots, ScalpingLLMSignalSnapshot{
+			Symbol:     normalizeSymbolForComparison(signal.Symbol),
+			Price:      decimal.NewFromFloat(signal.Price),
+			ObservedAt: observedAt,
+		})
+	}
+	return snapshots
 }
 
 func isActionableScalpingProbeDecision(decision *AITradingDecision) bool {
