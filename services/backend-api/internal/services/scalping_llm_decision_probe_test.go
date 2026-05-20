@@ -259,6 +259,8 @@ func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpread
 			require.NotNil(t, result.Decision)
 			require.True(t, result.ContractValid)
 			require.Empty(t, result.ReasoningDiagnostics)
+			require.NotEmpty(t, result.RawReasoningDiagnostics)
+			require.Contains(t, result.RawReasoningDiagnostics[0], "cites wide spread")
 			require.Equal(t, tc.expectedDecisionReason, result.Decision.Reasoning)
 			require.LessOrEqual(t, len([]rune(result.Decision.Reasoning)), 320)
 		})

@@ -25,26 +25,27 @@ type ScalpingLLMDecisionProbeOptions struct {
 }
 
 type ScalpingLLMDecisionProbeResult struct {
-	Exchange              string                      `json:"exchange"`
-	ObservedAt            time.Time                   `json:"observed_at"`
-	SignalCount           int                         `json:"signal_count"`
-	SignalQualityCount    int                         `json:"signal_quality_count"`
-	SignalQualityCoverage decimal.Decimal             `json:"signal_quality_coverage"`
-	SignalSnapshots       []ScalpingLLMSignalSnapshot `json:"signal_snapshots,omitempty"`
-	Provider              string                      `json:"provider,omitempty"`
-	Model                 string                      `json:"model,omitempty"`
-	Decision              *AITradingDecision          `json:"decision,omitempty"`
-	ContractValid         bool                        `json:"contract_valid"`
-	ContractError         string                      `json:"contract_error,omitempty"`
-	PreTradeGateAllowed   bool                        `json:"pre_trade_gate_allowed"`
-	PreTradeGateReason    string                      `json:"pre_trade_gate_reason,omitempty"`
-	PreTradeRegime        string                      `json:"pre_trade_regime,omitempty"`
-	RuntimeDiagnostics    map[string]interface{}      `json:"runtime_diagnostics,omitempty"`
-	LLMDegraded           bool                        `json:"llm_degraded"`
-	ReasoningDiagnostics  []string                    `json:"reasoning_diagnostics,omitempty"`
-	PaperTrade            *ScalpingLLMProbeTrade      `json:"paper_trade,omitempty"`
-	PaperTradeError       string                      `json:"paper_trade_error,omitempty"`
-	ObservedPaperTrade    *ScalpingLLMProbeTrade      `json:"observed_paper_trade,omitempty"`
+	Exchange                string                      `json:"exchange"`
+	ObservedAt              time.Time                   `json:"observed_at"`
+	SignalCount             int                         `json:"signal_count"`
+	SignalQualityCount      int                         `json:"signal_quality_count"`
+	SignalQualityCoverage   decimal.Decimal             `json:"signal_quality_coverage"`
+	SignalSnapshots         []ScalpingLLMSignalSnapshot `json:"signal_snapshots,omitempty"`
+	Provider                string                      `json:"provider,omitempty"`
+	Model                   string                      `json:"model,omitempty"`
+	Decision                *AITradingDecision          `json:"decision,omitempty"`
+	ContractValid           bool                        `json:"contract_valid"`
+	ContractError           string                      `json:"contract_error,omitempty"`
+	PreTradeGateAllowed     bool                        `json:"pre_trade_gate_allowed"`
+	PreTradeGateReason      string                      `json:"pre_trade_gate_reason,omitempty"`
+	PreTradeRegime          string                      `json:"pre_trade_regime,omitempty"`
+	RuntimeDiagnostics      map[string]interface{}      `json:"runtime_diagnostics,omitempty"`
+	LLMDegraded             bool                        `json:"llm_degraded"`
+	ReasoningDiagnostics    []string                    `json:"reasoning_diagnostics,omitempty"`
+	RawReasoningDiagnostics []string                    `json:"raw_reasoning_diagnostics,omitempty"`
+	PaperTrade              *ScalpingLLMProbeTrade      `json:"paper_trade,omitempty"`
+	PaperTradeError         string                      `json:"paper_trade_error,omitempty"`
+	ObservedPaperTrade      *ScalpingLLMProbeTrade      `json:"observed_paper_trade,omitempty"`
 }
 
 type ScalpingLLMSignalSnapshot struct {
@@ -187,19 +188,21 @@ func runScalpingLLMDecisionProbeWithService(
 	}
 	normalizeProbeDecision(decision)
 	annotateDecisionSignalTelemetry(decision, signals)
+	rawReasoningDiagnostics := scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
 
 	result := &ScalpingLLMDecisionProbeResult{
-		Exchange:              svc.config.Exchange,
-		ObservedAt:            observedAt,
-		SignalCount:           len(signals),
-		SignalQualityCount:    countSignalsWithOrderBookQuality(signals),
-		SignalSnapshots:       scalpingLLMSignalSnapshots(signals, observedAt),
-		Decision:              decision,
-		ContractValid:         true,
-		PreTradeGateAllowed:   true,
-		RuntimeDiagnostics:    svc.RuntimeDiagnostics(),
-		Model:                 strings.TrimSpace(svc.config.Model),
-		SignalQualityCoverage: decimal.NewFromInt(int64(countSignalsWithOrderBookQuality(signals))).Div(decimal.NewFromInt(int64(len(signals)))),
+		Exchange:                svc.config.Exchange,
+		ObservedAt:              observedAt,
+		SignalCount:             len(signals),
+		SignalQualityCount:      countSignalsWithOrderBookQuality(signals),
+		SignalSnapshots:         scalpingLLMSignalSnapshots(signals, observedAt),
+		Decision:                decision,
+		ContractValid:           true,
+		PreTradeGateAllowed:     true,
+		RuntimeDiagnostics:      svc.RuntimeDiagnostics(),
+		Model:                   strings.TrimSpace(svc.config.Model),
+		SignalQualityCoverage:   decimal.NewFromInt(int64(countSignalsWithOrderBookQuality(signals))).Div(decimal.NewFromInt(int64(len(signals)))),
+		RawReasoningDiagnostics: rawReasoningDiagnostics,
 	}
 
 	if provider, ok := stringFromRuntimeDiagnostic(result.RuntimeDiagnostics, "last_successful_provider"); ok {
