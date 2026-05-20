@@ -9,6 +9,7 @@ it is considered evidence-backed.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import sqlite3
 import sys
@@ -20,6 +21,8 @@ from typing import Iterable
 
 ROUND_TRIP_FEE_PCT = 0.12
 DEFAULT_SEARCH_MAX_RESULTS = 20
+DEFAULT_PORTFOLIO_POOL_SIZE = 50
+DEFAULT_MAX_PORTFOLIO_RULES = 2
 
 BUY_SEARCH_GRIDS = {
     "max_spread": [0.02, 0.04, 0.06, 0.08, 0.10, 0.14, 0.22],
@@ -256,6 +259,56 @@ def evaluate(observations: list[Observation], rule: Rule, hold_seconds: int) -> 
     }
 
 
+def evaluate_portfolio(observations: list[Observation], rules: list[Rule], hold_seconds: int) -> dict[str, object]:
+    values: list[float] = []
+    symbols: set[str] = set()
+    side_counts: dict[str, int] = {}
+    next_allowed_by_symbol: dict[str, float] = {}
+    cumulative = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+
+    for obs in observations:
+        if obs.timestamp < next_allowed_by_symbol.get(obs.symbol, -1):
+            continue
+        matched_rule = next((rule for rule in rules if rule.matches(obs)), None)
+        if matched_rule is None:
+            continue
+
+        net_pct = matched_rule.net_pct(obs)
+        values.append(net_pct)
+        symbols.add(obs.symbol)
+        side_counts[matched_rule.side] = side_counts.get(matched_rule.side, 0) + 1
+        next_allowed_by_symbol[obs.symbol] = obs.timestamp + hold_seconds
+        cumulative += net_pct
+        if cumulative > peak:
+            peak = cumulative
+        drawdown = peak - cumulative
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+
+    wins = sum(1 for value in values if value > 0)
+    losses = sum(1 for value in values if value < 0)
+    breakevens = len(values) - wins - losses
+    net = sum(values)
+    best = max(values) if values else 0.0
+    return {
+        "trades": len(values),
+        "wins": wins,
+        "losses": losses,
+        "breakevens": breakevens,
+        "win_rate": wins / len(values) if values else 0.0,
+        "net_pct": net,
+        "avg_net_pct": net / len(values) if values else 0.0,
+        "net_pct_excluding_best": net - best if values else 0.0,
+        "max_drawdown_pct": max_drawdown,
+        "worst_trade_pct": min(values) if values else 0.0,
+        "best_trade_pct": best,
+        "symbols": len(symbols),
+        "side_counts": side_counts,
+    }
+
+
 def rule_payload(rule: Rule, hold_seconds: int, fee_pct: float) -> dict[str, object]:
     return {
         "side": rule.side,
@@ -271,6 +324,10 @@ def rule_payload(rule: Rule, hold_seconds: int, fee_pct: float) -> dict[str, obj
         "hold_seconds": hold_seconds,
         "fee_pct": fee_pct,
     }
+
+
+def portfolio_payload(rules: list[Rule], hold_seconds: int, fee_pct: float) -> list[dict[str, object]]:
+    return [rule_payload(rule, hold_seconds, fee_pct) for rule in rules]
 
 
 def validate_group(name: str, stats: dict[str, object], args: argparse.Namespace, validation: bool) -> list[str]:
@@ -303,6 +360,31 @@ def validate_group(name: str, stats: dict[str, object], args: argparse.Namespace
             f"below minimum={min_drawdown:.6f}"
         )
     return failures
+
+
+def rank_rule_candidates(
+    observations: list[Observation],
+    rules: list[Rule],
+    hold_seconds: int,
+    pool_size: int,
+) -> list[tuple[Rule, dict[str, object]]]:
+    ranked: list[tuple[Rule, dict[str, object]]] = []
+    for rule in rules:
+        stats = evaluate(observations, rule, hold_seconds)
+        if stats["trades"] == 0:
+            continue
+        ranked.append((rule, stats))
+
+    ranked.sort(
+        key=lambda item: (
+            item[1]["net_pct_excluding_best"],
+            item[1]["net_pct"],
+            item[1]["trades"],
+            item[1]["avg_net_pct"],
+        ),
+        reverse=True,
+    )
+    return ranked[:pool_size]
 
 
 def search_candidate_rules(side: str | None) -> list[Rule]:
@@ -370,6 +452,93 @@ def search_candidate_rules(side: str | None) -> list[Rule]:
     return rules
 
 
+def search_portfolio_candidates(
+    train_observations: list[Observation],
+    validation_observations: list[Observation],
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    pool_size = max(args.portfolio_pool_size, 1)
+    max_rules = max(args.max_portfolio_rules, 1)
+    base_rules = search_candidate_rules(args.side)
+    if args.side in (None, "both"):
+        ranked = []
+        ranked.extend(
+            rank_rule_candidates(train_observations, search_candidate_rules("buy"), args.hold_seconds, pool_size)
+        )
+        ranked.extend(
+            rank_rule_candidates(train_observations, search_candidate_rules("sell"), args.hold_seconds, pool_size)
+        )
+    else:
+        ranked = rank_rule_candidates(train_observations, base_rules, args.hold_seconds, pool_size)
+
+    rules = []
+    seen_rules: set[tuple[object, ...]] = set()
+    for rule, _ in ranked:
+        key = (
+            rule.side,
+            rule.min_imbalance,
+            rule.max_imbalance,
+            rule.max_spread,
+            rule.min_range,
+            rule.max_range,
+            rule.min_recent,
+            rule.max_recent,
+            rule.min_change_24h,
+            rule.max_change_24h,
+        )
+        if key in seen_rules:
+            continue
+        seen_rules.add(key)
+        rules.append(rule)
+
+    candidates: list[dict[str, object]] = []
+    evaluated_portfolios = 0
+    max_rules = min(max_rules, len(rules))
+    for rule_count in range(2, max_rules + 1):
+        for portfolio_rules in itertools.combinations(rules, rule_count):
+            evaluated_portfolios += 1
+            train_stats = evaluate_portfolio(train_observations, list(portfolio_rules), args.hold_seconds)
+            validation_stats = evaluate_portfolio(validation_observations, list(portfolio_rules), args.hold_seconds)
+            failures = validate_group("train", train_stats, args, validation=False)
+            failures.extend(validate_group("validation", validation_stats, args, validation=True))
+            if failures:
+                continue
+            candidates.append(
+                {
+                    "rules": portfolio_payload(list(portfolio_rules), args.hold_seconds, args.fee_pct),
+                    "train": train_stats,
+                    "validation": validation_stats,
+                }
+            )
+
+    candidates.sort(
+        key=lambda candidate: (
+            candidate["validation"]["net_pct"],
+            candidate["train"]["net_pct"],
+            candidate["validation"]["trades"],
+            candidate["train"]["trades"],
+            candidate["validation"]["avg_net_pct"],
+        ),
+        reverse=True,
+    )
+    max_results = max(args.max_results, 0)
+    if max_results > 0:
+        candidates = candidates[:max_results]
+    failures = [] if candidates else ["no_candidate_portfolio_passed_train_validation_gates"]
+    return {
+        "search_portfolio": True,
+        "side": args.side or "both",
+        "evaluated_rules": len(base_rules),
+        "portfolio_pool_size": len(rules),
+        "max_portfolio_rules": max_rules,
+        "evaluated_portfolios": evaluated_portfolios,
+        "candidate_count": len(candidates),
+        "passed": bool(candidates),
+        "candidates": candidates,
+        "failures": failures,
+    }
+
+
 def search_rule_candidates(
     train_observations: list[Observation],
     validation_observations: list[Observation],
@@ -427,7 +596,14 @@ def parse_args() -> argparse.Namespace:
         help="chronologically reserve this fraction of --train-db observations for validation",
     )
     parser.add_argument("--search-grid", action="store_true", help="search conservative buy/sell threshold grids")
+    parser.add_argument(
+        "--search-portfolio",
+        action="store_true",
+        help="search bounded multi-rule portfolios from the strongest train-set threshold rules",
+    )
     parser.add_argument("--max-results", type=int, default=DEFAULT_SEARCH_MAX_RESULTS)
+    parser.add_argument("--portfolio-pool-size", type=int, default=DEFAULT_PORTFOLIO_POOL_SIZE)
+    parser.add_argument("--max-portfolio-rules", type=int, default=DEFAULT_MAX_PORTFOLIO_RULES)
     parser.add_argument("--side", choices=("buy", "sell", "both"))
     parser.add_argument("--min-imbalance", type=float)
     parser.add_argument("--max-imbalance", type=float)
@@ -482,6 +658,20 @@ def main() -> int:
     else:
         train_observations = load_observations(args.train_db, args.hold_seconds, args.fee_pct)
         validation_observations = load_observations(args.validation_db, args.hold_seconds, args.fee_pct)
+
+    if args.search_grid and args.search_portfolio:
+        raise ValueError("--search-grid cannot be combined with --search-portfolio")
+
+    if args.search_portfolio:
+        if args.portfolio_pool_size <= 0:
+            raise ValueError("--portfolio-pool-size must be positive")
+        if args.max_portfolio_rules < 2:
+            raise ValueError("--max-portfolio-rules must be at least 2")
+        if args.max_portfolio_rules > 3:
+            raise ValueError("--max-portfolio-rules above 3 is intentionally unsupported")
+        payload = search_portfolio_candidates(train_observations, validation_observations, args)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if payload["passed"] else 1
 
     if args.search_grid:
         payload = search_rule_candidates(train_observations, validation_observations, args)

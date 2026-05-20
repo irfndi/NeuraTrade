@@ -23,9 +23,12 @@ train_db="${tmp_dir}/train.db"
 validation_db="${tmp_dir}/validation.db"
 flat_train_db="${tmp_dir}/flat-train.db"
 flat_validation_db="${tmp_dir}/flat-validation.db"
+portfolio_train_db="${tmp_dir}/portfolio-train.db"
+portfolio_validation_db="${tmp_dir}/portfolio-validation.db"
 split_db="${tmp_dir}/split.db"
 pass_output="${tmp_dir}/pass.json"
 search_output="${tmp_dir}/search.json"
+portfolio_output="${tmp_dir}/portfolio.json"
 split_search_output="${tmp_dir}/split-search.json"
 fail_output="${tmp_dir}/fail.json"
 flat_output="${tmp_dir}/flat.json"
@@ -34,6 +37,8 @@ missing_side_output="${tmp_dir}/missing-side.out"
 missing_validation_output="${tmp_dir}/missing-validation.out"
 split_conflict_output="${tmp_dir}/split-conflict.out"
 invalid_split_output="${tmp_dir}/invalid-split.out"
+portfolio_grid_conflict_output="${tmp_dir}/portfolio-grid-conflict.out"
+invalid_portfolio_rules_output="${tmp_dir}/invalid-portfolio-rules.out"
 
 create_schema() {
   sqlite3 "$1" <<'SQL'
@@ -69,10 +74,34 @@ INSERT INTO scalping_cycle_telemetry (
 SQL
 }
 
+insert_custom_row() {
+  local db="$1"
+  local id="$2"
+  local symbol="$3"
+  local cycle_at="$4"
+  local price="$5"
+  local spread="$6"
+  local imbalance="$7"
+  local range_pos="$8"
+  local change_24h="$9"
+  local recent="${10}"
+  sqlite3 "$db" <<SQL
+INSERT INTO scalping_cycle_telemetry (
+  id, exchange, symbol, cycle_at, signal_price, bid_ask_spread_pct,
+  order_book_imbalance, range_position_24h, price_change_24h_pct,
+  recent_price_change_pct
+) VALUES (
+  '${id}', 'bitget', '${symbol}', '${cycle_at}', ${price}, ${spread}, ${imbalance}, ${range_pos}, ${change_24h}, ${recent}
+);
+SQL
+}
+
 create_schema "$train_db"
 create_schema "$validation_db"
 create_schema "$flat_train_db"
 create_schema "$flat_validation_db"
+create_schema "$portfolio_train_db"
+create_schema "$portfolio_validation_db"
 create_schema "$split_db"
 
 insert_row "$train_db" train-a-entry AAA/USDT '2026-05-19T00:00:00Z' 100
@@ -107,6 +136,32 @@ insert_row "$split_db" split-val-b-entry DDD/USDT '2026-05-19T01:10:00Z' 100
 insert_row "$split_db" split-val-b-exit DDD/USDT '2026-05-19T01:15:00Z' 99.95
 insert_row "$split_db" split-val-c-entry FFF/USDT '2026-05-19T01:20:00Z' 100
 insert_row "$split_db" split-val-c-exit FFF/USDT '2026-05-19T01:25:00Z' 100.3
+
+insert_row "$portfolio_train_db" portfolio-train-buy-a-entry AAA/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$portfolio_train_db" portfolio-train-buy-a-exit AAA/USDT '2026-05-19T00:05:00Z' 101
+insert_row "$portfolio_train_db" portfolio-train-buy-b-entry BBB/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$portfolio_train_db" portfolio-train-buy-b-exit BBB/USDT '2026-05-19T00:05:00Z' 99.9
+insert_row "$portfolio_train_db" portfolio-train-buy-c-entry CCC/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$portfolio_train_db" portfolio-train-buy-c-exit CCC/USDT '2026-05-19T00:05:00Z' 100.5
+insert_custom_row "$portfolio_train_db" portfolio-train-sell-a-entry SAA/USDT '2026-05-19T00:10:00Z' 100 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_train_db" portfolio-train-sell-a-exit SAA/USDT '2026-05-19T00:15:00Z' 99 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_train_db" portfolio-train-sell-b-entry SBB/USDT '2026-05-19T00:10:00Z' 100 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_train_db" portfolio-train-sell-b-exit SBB/USDT '2026-05-19T00:15:00Z' 100.1 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_train_db" portfolio-train-sell-c-entry SCC/USDT '2026-05-19T00:10:00Z' 100 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_train_db" portfolio-train-sell-c-exit SCC/USDT '2026-05-19T00:15:00Z' 99.6 0.02 -0.45 85 -0.10 -0.08
+
+insert_row "$portfolio_validation_db" portfolio-val-buy-a-entry VAA/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$portfolio_validation_db" portfolio-val-buy-a-exit VAA/USDT '2026-05-19T00:05:00Z' 100.4
+insert_row "$portfolio_validation_db" portfolio-val-buy-b-entry VBB/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$portfolio_validation_db" portfolio-val-buy-b-exit VBB/USDT '2026-05-19T00:05:00Z' 99.95
+insert_row "$portfolio_validation_db" portfolio-val-buy-c-entry VCC/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$portfolio_validation_db" portfolio-val-buy-c-exit VCC/USDT '2026-05-19T00:05:00Z' 100.3
+insert_custom_row "$portfolio_validation_db" portfolio-val-sell-a-entry VSA/USDT '2026-05-19T00:10:00Z' 100 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_validation_db" portfolio-val-sell-a-exit VSA/USDT '2026-05-19T00:15:00Z' 99.7 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_validation_db" portfolio-val-sell-b-entry VSB/USDT '2026-05-19T00:10:00Z' 100 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_validation_db" portfolio-val-sell-b-exit VSB/USDT '2026-05-19T00:15:00Z' 100.05 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_validation_db" portfolio-val-sell-c-entry VSC/USDT '2026-05-19T00:10:00Z' 100 0.02 -0.45 85 -0.10 -0.08
+insert_custom_row "$portfolio_validation_db" portfolio-val-sell-c-exit VSC/USDT '2026-05-19T00:15:00Z' 99.7 0.02 -0.45 85 -0.10 -0.08
 
 python3 "$VALIDATOR" \
   --train-db "$train_db" \
@@ -171,6 +226,39 @@ jq -e \
     and all(.candidates[]; .validation.losses == 1)
     and (.failures | length) == 0' \
   "$search_output" >/dev/null
+
+python3 "$VALIDATOR" \
+  --train-db "$portfolio_train_db" \
+  --validation-db "$portfolio_validation_db" \
+  --search-portfolio \
+  --side both \
+  --max-results 2 \
+  --portfolio-pool-size 16 \
+  --max-portfolio-rules 2 \
+  --min-trades 6 \
+  --min-validation-trades 6 \
+  --min-symbols 6 \
+  --min-validation-symbols 6 \
+  --min-drawdown-pct 0.2 \
+  --min-validation-drawdown-pct 0.1 \
+  >"$portfolio_output"
+
+jq -e \
+  '.search_portfolio == true
+    and .passed == true
+    and .candidate_count >= 1
+    and .evaluated_rules > 0
+    and .portfolio_pool_size > 0
+    and .evaluated_portfolios > 0
+    and (.candidates | length) == 2
+    and all(.candidates[]; (.rules | length) == 2)
+    and all(.candidates[]; ([.rules[].side] | contains(["buy"]) and contains(["sell"])))
+    and all(.candidates[]; .train.trades == 6)
+    and all(.candidates[]; .validation.trades == 6)
+    and all(.candidates[]; .train.side_counts.buy == 3 and .train.side_counts.sell == 3)
+    and all(.candidates[]; .validation.side_counts.buy == 3 and .validation.side_counts.sell == 3)
+    and (.failures | length) == 0' \
+  "$portfolio_output" >/dev/null
 
 python3 "$VALIDATOR" \
   --train-db "$split_db" \
@@ -323,5 +411,29 @@ if python3 "$VALIDATOR" \
 fi
 
 grep -q -- "--validation-split-ratio must be greater than 0 and less than 1" "$invalid_split_output"
+
+if python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --validation-db "$validation_db" \
+  --search-grid \
+  --search-portfolio \
+  >"$portfolio_grid_conflict_output" 2>&1; then
+  echo "expected validator to reject grid plus portfolio search" >&2
+  exit 1
+fi
+
+grep -q -- "--search-grid cannot be combined with --search-portfolio" "$portfolio_grid_conflict_output"
+
+if python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --validation-db "$validation_db" \
+  --search-portfolio \
+  --max-portfolio-rules 1 \
+  >"$invalid_portfolio_rules_output" 2>&1; then
+  echo "expected validator to reject invalid max portfolio rule count" >&2
+  exit 1
+fi
+
+grep -q -- "--max-portfolio-rules must be at least 2" "$invalid_portfolio_rules_output"
 
 echo "validate-scalping-rule-candidate tests passed"
