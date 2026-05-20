@@ -278,7 +278,7 @@ func (as *ActionStreamer) formatActionMessage(action StreamingAction) string {
 		lines = append(
 			lines,
 			"",
-			"Mode Safety: Treat as paper/informational unless live mode is active and backend proof gates have passed.",
+			"Mode Safety: Execution follows the current /mode state; LIVE orders require backend proof-gate approval.",
 		)
 	}
 

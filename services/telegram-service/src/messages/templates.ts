@@ -96,7 +96,7 @@ export const formatActionAlertMessage = (
   lines.push(`Size: ${input.size}`);
   lines.push(`Strategy: ${input.strategy}`);
   lines.push(
-    "Mode Safety: Treat as paper/informational unless /mode confirms LIVE and the backend proof gate has passed.",
+    "Mode Safety: Execution follows the current /mode state; LIVE orders require backend proof-gate approval.",
   );
 
   if (hasValue(input.reasoning)) {

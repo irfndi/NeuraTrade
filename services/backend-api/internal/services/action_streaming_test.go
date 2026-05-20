@@ -286,8 +286,8 @@ func TestActionStreaming_FormatTradeMessageIncludesModeSafety(t *testing.T) {
 		Data:        map[string]interface{}{"symbol": "GOAT/USDT"},
 	})
 
-	assert.Contains(t, message, "Mode Safety: Treat as paper/informational")
-	assert.Contains(t, message, "backend proof gates have passed")
+	assert.Contains(t, message, "Mode Safety: Execution follows the current /mode state")
+	assert.Contains(t, message, "LIVE orders require backend proof-gate approval")
 	assert.Equal(t, 1, strings.Count(message, "Status: executed"))
 }
 
