@@ -77,6 +77,14 @@ func TestResolveScalpingLivePaperSoakConfigOptionsOverrideEnvAndClamp(t *testing
 	require.False(t, config.EnforceFutures)
 }
 
+func TestResolveScalpingLivePaperSoakConfigUsesExplicitExchangeAsEnvBase(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_EXCHANGE", "")
+
+	config := resolveScalpingLivePaperSoakConfig("bybit", ScalpingLivePaperSoakOptions{})
+
+	require.Equal(t, "bybit", config.Exchange)
+}
+
 func TestScalpingLivePaperSoakTimeoutScalesWithCyclesAndInterval(t *testing.T) {
 	cases := []struct {
 		name     string

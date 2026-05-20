@@ -218,7 +218,9 @@ func RunPublicScalpingLivePaperSoak(
 }
 
 func resolveScalpingLivePaperSoakConfig(exchange string, options ScalpingLivePaperSoakOptions) AIScalpingConfig {
-	defaults := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
+	base := DefaultAIScalpingConfig()
+	base.Exchange = exchange
+	defaults := ResolveAIScalpingConfigFromEnv(base)
 	defaults.Exchange = exchange
 	if options.MaxPairsToAnalyze > 0 {
 		defaults.MaxPairsToAnalyze = clampInt(options.MaxPairsToAnalyze, 1, 64)
