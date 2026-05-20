@@ -181,27 +181,28 @@ func runScalpingLLMDecisionProbeWithService(
 		return nil, fmt.Errorf("scalping LLM decision probe gathered no market signals")
 	}
 	observedAt := time.Now().UTC()
+	decisionSignals := svc.signalsWithDecisionHints(ctx, signals, portfolio)
 
-	decision, err := svc.getAIDecision(ctx, signals, portfolio)
+	decision, err := svc.getAIDecision(ctx, decisionSignals, portfolio)
 	if err != nil {
 		return nil, fmt.Errorf("get scalping LLM decision: %w", err)
 	}
 	normalizeProbeDecision(decision)
-	annotateDecisionSignalTelemetry(decision, signals)
-	rawReasoningDiagnostics := scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
+	annotateDecisionSignalTelemetry(decision, decisionSignals)
+	rawReasoningDiagnostics := scalpingProbeReasoningDiagnostics(decision, decisionSignals, svc.config.MaxBidAskSpreadPct)
 
 	result := &ScalpingLLMDecisionProbeResult{
 		Exchange:                svc.config.Exchange,
 		ObservedAt:              observedAt,
-		SignalCount:             len(signals),
-		SignalQualityCount:      countSignalsWithOrderBookQuality(signals),
-		SignalSnapshots:         scalpingLLMSignalSnapshots(signals, observedAt),
+		SignalCount:             len(decisionSignals),
+		SignalQualityCount:      countSignalsWithOrderBookQuality(decisionSignals),
+		SignalSnapshots:         scalpingLLMSignalSnapshots(decisionSignals, observedAt),
 		Decision:                decision,
 		ContractValid:           true,
 		PreTradeGateAllowed:     true,
 		RuntimeDiagnostics:      svc.RuntimeDiagnostics(),
 		Model:                   strings.TrimSpace(svc.config.Model),
-		SignalQualityCoverage:   decimal.NewFromInt(int64(countSignalsWithOrderBookQuality(signals))).Div(decimal.NewFromInt(int64(len(signals)))),
+		SignalQualityCoverage:   decimal.NewFromInt(int64(countSignalsWithOrderBookQuality(decisionSignals))).Div(decimal.NewFromInt(int64(len(decisionSignals)))),
 		RawReasoningDiagnostics: rawReasoningDiagnostics,
 	}
 
@@ -215,7 +216,7 @@ func runScalpingLLMDecisionProbeWithService(
 	}
 	result.LLMDegraded = scalpingProbeRuntimeDegraded(result.RuntimeDiagnostics)
 
-	if validationErr := svc.validateDecision(decision, signals); validationErr != nil {
+	if validationErr := svc.validateDecision(decision, decisionSignals); validationErr != nil {
 		if isDecisionContractValidationError(decision, validationErr) {
 			result.ContractValid = false
 			result.ContractError = validationErr.Error()
@@ -224,14 +225,14 @@ func runScalpingLLMDecisionProbeWithService(
 			result.PreTradeGateReason = validationErr.Error()
 		}
 	}
-	result.ReasoningDiagnostics = scalpingProbeReasoningDiagnostics(decision, signals, svc.config.MaxBidAskSpreadPct)
+	result.ReasoningDiagnostics = scalpingProbeReasoningDiagnostics(decision, decisionSignals, svc.config.MaxBidAskSpreadPct)
 	if result.ContractValid && result.PreTradeGateAllowed {
-		gate := svc.evaluatePreTradeGate(ctx, decision, signals)
+		gate := svc.evaluatePreTradeGate(ctx, decision, decisionSignals)
 		result.PreTradeGateAllowed = gate.Allowed
 		result.PreTradeGateReason = gate.Reason
 		result.PreTradeRegime = gate.Regime
 		if gate.Allowed && isActionableScalpingProbeDecision(decision) {
-			trade, tradeErr := simulateScalpingLLMProbePaperTrade(ctx, svc, decision, signals, portfolio)
+			trade, tradeErr := simulateScalpingLLMProbePaperTrade(ctx, svc, decision, decisionSignals, portfolio)
 			if tradeErr != nil {
 				result.PaperTradeError = tradeErr.Error()
 			} else {

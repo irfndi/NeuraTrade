@@ -101,6 +101,77 @@ func TestScalpingLLMSignalSnapshotsMarshalKnownZeroTelemetry(t *testing.T) {
 	require.Contains(t, string(payload), `"recent_change_known":true`)
 }
 
+func TestRunScalpingLLMDecisionProbeWithServiceSnapshotsDecisionHints(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Provider:     llm.Provider("deepseek"),
+				Model:        "deepseek-chat",
+				LatencyMs:    120,
+				FinishReason: "stop",
+				Message: llm.Message{
+					Content: `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"Waiting for a cleaner edge.","stop_loss":null,"take_profit":null}`,
+				},
+			},
+		},
+	}
+	mockCCXT := &mockAIScalpingCCXT{
+		markets: &ccxt.MarketsResponse{
+			Exchange: "bitget",
+			Symbols:  []string{"BTC/USDT"},
+			Count:    1,
+		},
+		marketData: []ccxt.MarketPriceInterface{
+			mockMarketPrice{
+				symbol:    "BTC/USDT",
+				price:     100,
+				volume:    2_500_000,
+				high24h:   110,
+				low24h:    98,
+				change24h: 1.5,
+				bid:       99.99,
+				ask:       100.01,
+				exchange:  "bitget",
+			},
+		},
+		orderBooks: map[string]*ccxt.OrderBookResponse{
+			"BTC/USDT": {
+				OrderBook: ccxt.OrderBook{
+					Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(99.99), Amount: decimal.NewFromInt(8)}},
+					Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(100.01), Amount: decimal.NewFromInt(1)}},
+				},
+			},
+		},
+	}
+	svc := NewAIScalpingService(AIScalpingConfig{
+		Exchange:             "bitget",
+		Model:                "deepseek-chat",
+		MaxTokens:            1200,
+		Timeout:              10 * time.Second,
+		MinConfidence:        0.30,
+		MaxCapitalPct:        10,
+		MaxPairsToAnalyze:    1,
+		MaxCandidatePairs:    1,
+		OrderBookPairs:       1,
+		MaxBidAskSpreadPct:   0.25,
+		AutoExpandOrderBooks: true,
+		EnforceFutures:       false,
+		PreTradeGate:         true,
+	}, mockLLM, nil, mockCCXT, nil, nil)
+
+	result, err := runScalpingLLMDecisionProbeWithService(context.Background(), svc, ScalpingLLMDecisionProbeOptions{
+		RequireHealthy: true,
+		RequireValid:   true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.SignalSnapshots, 1)
+	require.Equal(t, "buy", result.SignalSnapshots[0].SuggestedAction)
+	require.GreaterOrEqual(t, result.SignalSnapshots[0].ConfidenceHint, 0.30)
+	require.Greater(t, result.SignalSnapshots[0].CandidateScore, 0.0)
+}
+
 func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldCategory(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		Responses: []*llm.CompletionResponse{
