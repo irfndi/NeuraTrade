@@ -2584,6 +2584,7 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 			decision.Reasoning = "model selected hold (no detailed reasoning)"
 		}
 		normalizeContradictoryHoldSpreadReasoning(decision, signals, s.maxBidAskSpreadPct())
+		normalizeDiagnosticHoldReasoning(decision, signals)
 		return nil
 	}
 	if decision.Symbol == "" {

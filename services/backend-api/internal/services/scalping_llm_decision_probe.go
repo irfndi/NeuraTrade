@@ -311,6 +311,17 @@ func normalizeContradictoryHoldSpreadReasoning(decision *AITradingDecision, sign
 	decision.Reasoning = "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason."
 }
 
+func normalizeDiagnosticHoldReasoning(decision *AITradingDecision, signals []aiMarketSignal) {
+	if decision == nil || !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
+		return
+	}
+	if len(scalpingPctUnitReasoningDiagnostics(decision.Reasoning, signals)) == 0 &&
+		len(scalpingHintReasoningDiagnostics(decision.Reasoning, signals)) == 0 {
+		return
+	}
+	decision.Reasoning = "Holding because no analyzed setup cleared the effective confidence and risk gates."
+}
+
 func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSignal, maxSpreadPct float64) []string {
 	reasoning := strings.ToLower(strings.TrimSpace(reason))
 	if reasoning == "" || !strings.Contains(reasoning, "spread") {
@@ -443,11 +454,46 @@ func pctUnitInflationCitation(reasoning string, value float64) (string, bool) {
 	for _, candidate := range formats {
 		candidate = strings.TrimSuffix(candidate, "%")
 		candidate = strings.TrimRight(strings.TrimRight(candidate, "0"), ".") + "%"
-		if strings.Contains(reasoning, candidate) {
+		if containsStandalonePctCitation(reasoning, candidate) {
 			return candidate, true
 		}
 	}
 	return "", false
+}
+
+func containsStandalonePctCitation(reasoning, candidate string) bool {
+	if reasoning == "" || candidate == "" {
+		return false
+	}
+	searchFrom := 0
+	for {
+		idx := strings.Index(reasoning[searchFrom:], candidate)
+		if idx < 0 {
+			return false
+		}
+		start := searchFrom + idx
+		end := start + len(candidate)
+		if hasPctCitationBoundary(reasoning, start, end) {
+			return true
+		}
+		searchFrom = end
+	}
+}
+
+func hasPctCitationBoundary(reasoning string, start, end int) bool {
+	if start > 0 {
+		prev := rune(reasoning[start-1])
+		if unicode.IsDigit(prev) || prev == '.' {
+			return false
+		}
+	}
+	if end < len(reasoning) {
+		next := rune(reasoning[end])
+		if unicode.IsDigit(next) || next == '.' {
+			return false
+		}
+	}
+	return true
 }
 
 func reasoningMentionsSignal(reasoning string, signal aiMarketSignal) bool {

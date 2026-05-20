@@ -221,14 +221,22 @@ func TestRunScalpingLLMDecisionProbeWithServiceUsesSeededRecentMomentum(t *testi
 
 func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpreadReasoning(t *testing.T) {
 	cases := []struct {
-		name                   string
-		mockResponseContent    string
-		expectedDecisionReason string
+		name                          string
+		mockResponseContent           string
+		expectedDecisionReason        string
+		expectedRawDiagnosticContains string
 	}{
 		{
-			name:                   "rewrites blanket wide-spread hold when a tradable signal exists",
-			mockResponseContent:    `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.","stop_loss":null,"take_profit":null}`,
-			expectedDecisionReason: "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason.",
+			name:                          "rewrites blanket wide-spread hold when a tradable signal exists",
+			mockResponseContent:           `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.","stop_loss":null,"take_profit":null}`,
+			expectedDecisionReason:        "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason.",
+			expectedRawDiagnosticContains: "cites wide spread",
+		},
+		{
+			name:                          "rewrites diagnostic hold after preserving raw diagnostics",
+			mockResponseContent:           `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"BTC confidence_hint is strong, but holding anyway.","stop_loss":null,"take_profit":null}`,
+			expectedDecisionReason:        "Holding because no analyzed setup cleared the effective confidence and risk gates.",
+			expectedRawDiagnosticContains: "absent confidence_hint",
 		},
 	}
 
@@ -260,7 +268,7 @@ func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpread
 			require.True(t, result.ContractValid)
 			require.Empty(t, result.ReasoningDiagnostics)
 			require.NotEmpty(t, result.RawReasoningDiagnostics)
-			require.Contains(t, result.RawReasoningDiagnostics[0], "cites wide spread")
+			require.Contains(t, result.RawReasoningDiagnostics[0], tc.expectedRawDiagnosticContains)
 			require.Equal(t, tc.expectedDecisionReason, result.Decision.Reasoning)
 			require.LessOrEqual(t, len([]rune(result.Decision.Reasoning)), 320)
 		})
@@ -395,6 +403,37 @@ func TestScalpingPctUnitReasoningDiagnosticsAllowsCorrectPercentPoints(t *testin
 	)
 
 	require.Empty(t, diagnostics)
+}
+
+func TestScalpingPctUnitReasoningDiagnosticsIgnoresThresholdSubstrings(t *testing.T) {
+	signals := []aiMarketSignal{{
+		Symbol:         "CHZ/USDT",
+		PriceChange24h: -0.05973,
+	}}
+
+	diagnostics := scalpingPctUnitReasoningDiagnostics(
+		"CHZ spread 0.065% > 0.06% and price_change_24h_pct -0.060% fails the buy gate.",
+		signals,
+	)
+
+	require.Empty(t, diagnostics)
+}
+
+func TestNormalizeDiagnosticHoldReasoningRewritesPctUnitConfusion(t *testing.T) {
+	decision := &AITradingDecision{
+		Action:    "hold",
+		Reasoning: "CHZ price_change_24h_pct is -5.412%, then corrected to -0.05412%, so hold.",
+	}
+	signals := []aiMarketSignal{{
+		Symbol:         "CHZ/USDT",
+		PriceChange24h: -0.05412,
+	}}
+
+	require.NotEmpty(t, scalpingPctUnitReasoningDiagnostics(decision.Reasoning, signals))
+	normalizeDiagnosticHoldReasoning(decision, signals)
+
+	require.Equal(t, "Holding because no analyzed setup cleared the effective confidence and risk gates.", decision.Reasoning)
+	require.Empty(t, scalpingPctUnitReasoningDiagnostics(decision.Reasoning, signals))
 }
 
 func TestScalpingHintReasoningDiagnosticsFlagsInventedHints(t *testing.T) {
