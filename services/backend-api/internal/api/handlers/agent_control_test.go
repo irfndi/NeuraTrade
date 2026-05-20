@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/autonomous"
@@ -71,6 +72,7 @@ func agentControlLiveProofMetrics() autonomous.RolloutMetrics {
 		SignalQualityCoverage: decimal.NewFromInt(1),
 		HoldRatio:             decimal.NewFromFloat(0.5),
 		UptimePercent:         100,
+		LastUpdated:           time.Now().UTC(),
 	}
 }
 

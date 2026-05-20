@@ -17,6 +17,8 @@ import (
 type scalpingAutonomyContextKey struct{}
 type scalpingAutonomyEvalInputKey struct{}
 
+const defaultScalpingLiveTrialProofMaxAge = 24 * time.Hour
+
 // ScalpingAutonomyScope carries per-cycle gate context from quest runtime.
 type ScalpingAutonomyScope struct {
 	ChatID            string
@@ -550,6 +552,11 @@ func scalpingLiveProofMetricFailures(metrics autonomous.RolloutMetrics) []string
 	}
 	if metrics.OpenPositions > 0 {
 		failures = append(failures, "open_positions_unclosed")
+	}
+	if metrics.LastUpdated.IsZero() {
+		failures = append(failures, "paper_proof_timestamp_missing")
+	} else if age := time.Since(metrics.LastUpdated); age > defaultScalpingLiveTrialProofMaxAge {
+		failures = append(failures, "paper_proof_stale")
 	}
 	return failures
 }

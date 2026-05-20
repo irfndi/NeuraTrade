@@ -165,6 +165,7 @@ func TestScalpingAutonomyCoordinator_SetStrategyMode_CountsBreakEvenClosedTrades
 		SignalQualityCoverage: decimal.NewFromInt(1),
 		HoldRatio:             decimal.NewFromFloat(0.5),
 		UptimePercent:         100,
+		LastUpdated:           time.Now().UTC(),
 	}
 	require.NoError(t, store.SaveRolloutState(context.Background(), state))
 
@@ -201,6 +202,31 @@ func TestScalpingAutonomyCoordinator_SetStrategyMode_BlocksLiveWithoutOperationa
 	require.Contains(t, err.Error(), "ai_provider_degraded")
 	require.Contains(t, err.Error(), "hold_ratio_above_live_trial_maximum")
 	require.Contains(t, err.Error(), "open_positions_unclosed")
+	require.Equal(t, autonomous.StagePaper, state.CurrentStage)
+}
+
+func TestScalpingAutonomyCoordinator_SetStrategyMode_BlocksLiveWithStalePaperProof(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "scalping-autonomy-live-proof-stale.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	store := NewAutonomousRolloutStore(sqliteDB.DB)
+	require.NoError(t, store.InitSchema(context.Background()))
+
+	coordinator := NewScalpingAutonomyCoordinator(store, AIScalpingConfig{})
+	state, err := coordinator.SetStrategyMode(context.Background(), "strategy-live-proof-stale", autonomous.ModePaper)
+	require.NoError(t, err)
+	state.Metrics = scalpingLiveProofMetrics()
+	state.Metrics.LastUpdated = time.Now().UTC().Add(-defaultScalpingLiveTrialProofMaxAge - time.Minute)
+	require.NoError(t, store.SaveRolloutState(context.Background(), state))
+
+	state, err = coordinator.SetStrategyMode(context.Background(), "strategy-live-proof-stale", autonomous.ModeLive)
+
+	require.Error(t, err)
+	require.NotNil(t, state)
+	require.Contains(t, err.Error(), "paper_proof_stale")
 	require.Equal(t, autonomous.StagePaper, state.CurrentStage)
 }
 
@@ -342,5 +368,6 @@ func scalpingLiveProofMetrics() autonomous.RolloutMetrics {
 		SignalQualityCoverage: decimal.NewFromInt(1),
 		HoldRatio:             decimal.NewFromFloat(0.5),
 		UptimePercent:         100,
+		LastUpdated:           time.Now().UTC(),
 	}
 }
