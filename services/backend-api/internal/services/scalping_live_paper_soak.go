@@ -147,6 +147,7 @@ func RunPublicScalpingLivePaperSoak(
 		Cycles:   cycles,
 	}
 	historicalSignals := make([]HistoricalSignal, 0, cycles*defaults.MaxPairsToAnalyze)
+	nextSignalTime := time.Now().UTC()
 
 	for cycle := 0; cycle < cycles; cycle++ {
 		if cycle > 0 && interval > 0 {
@@ -157,11 +158,16 @@ func RunPublicScalpingLivePaperSoak(
 			}
 		}
 
-		signals, err := gatherPublicScalpingLivePaperSoakSignals(ctx, svc, exchange)
+		cycleStartTime := time.Now().UTC()
+		if cycleStartTime.Before(nextSignalTime) {
+			cycleStartTime = nextSignalTime
+		}
+		signals, err := gatherPublicScalpingLivePaperSoakSignals(ctx, svc, exchange, cycleStartTime)
 		if err != nil {
 			return nil, err
 		}
 		historicalSignals = append(historicalSignals, signals...)
+		nextSignalTime = signals[len(signals)-1].Timestamp.Add(time.Millisecond)
 	}
 
 	result, fees, err := runPublicScalpingLivePaperSoakSignals(ctx, defaults, exchange, initialCapital, feeRate, holdPeriod, historicalSignals)
@@ -244,6 +250,7 @@ func gatherPublicScalpingLivePaperSoakSignals(
 	ctx context.Context,
 	svc *AIScalpingService,
 	exchange string,
+	startTime time.Time,
 ) ([]HistoricalSignal, error) {
 	signals, err := svc.gatherMarketSignals(ctx)
 	if err != nil {
@@ -252,11 +259,14 @@ func gatherPublicScalpingLivePaperSoakSignals(
 	if len(signals) == 0 {
 		return nil, fmt.Errorf("live paper scalping soak gathered no market signals")
 	}
-	now := time.Now().UTC()
+	if startTime.IsZero() {
+		startTime = time.Now().UTC()
+	}
+	startTime = startTime.UTC()
 	historicalSignals := make([]HistoricalSignal, 0, len(signals))
 	for i, signal := range signals {
 		historicalSignals = append(historicalSignals, HistoricalSignal{
-			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+			Timestamp: startTime.Add(time.Duration(i) * time.Millisecond),
 			Symbol:    signal.Symbol,
 			Exchange:  exchange,
 			Signal:    signal,

@@ -130,7 +130,7 @@ func TestRunPublicScalpingLivePaperSoakCyclePreservesFullSignalUniverse(t *testi
 	}
 	svc := NewAIScalpingService(config, nil, nil, mockCCXT, nil, nil)
 
-	signals, err := gatherPublicScalpingLivePaperSoakSignals(context.Background(), svc, config.Exchange)
+	signals, err := gatherPublicScalpingLivePaperSoakSignals(context.Background(), svc, config.Exchange, time.Time{})
 	require.NoError(t, err)
 	result, _, err := runPublicScalpingLivePaperSoakSignals(context.Background(), config, config.Exchange, decimal.NewFromInt(1000), decimal.NewFromFloat(0.0006), DefaultScalpingBacktestHoldPeriod, signals)
 
@@ -141,4 +141,49 @@ func TestRunPublicScalpingLivePaperSoakCyclePreservesFullSignalUniverse(t *testi
 		result.Signals[0].Symbol,
 		result.Signals[1].Symbol,
 	})
+}
+
+func TestGatherPublicScalpingLivePaperSoakSignalsUsesExplicitCycleStart(t *testing.T) {
+	config := DefaultAIScalpingConfig()
+	config.Exchange = "binance"
+	config.MaxPairsToAnalyze = 2
+	config.MaxCandidatePairs = 2
+	config.OrderBookPairs = 2
+	config.AutoExpandOrderBooks = false
+	config.EnforceFutures = false
+
+	mockCCXT := &mockAIScalpingCCXT{
+		markets: &ccxt.MarketsResponse{
+			Exchange: "binance",
+			Symbols:  []string{"BTC/USDT", "ETH/USDT"},
+			Count:    2,
+		},
+		marketData: []ccxt.MarketPriceInterface{
+			mockMarketPrice{symbol: "BTC/USDT", price: 98, volume: 2_000_000, high24h: 104, low24h: 96, bid: 97.99, ask: 98.01, exchange: "binance"},
+			mockMarketPrice{symbol: "ETH/USDT", price: 100, volume: 1_500_000, high24h: 104, low24h: 96, bid: 99.99, ask: 100.01, exchange: "binance"},
+		},
+		orderBooks: map[string]*ccxt.OrderBookResponse{
+			"BTC/USDT": {
+				OrderBook: ccxt.OrderBook{
+					Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(97.99), Amount: decimal.NewFromInt(10)}},
+					Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(98.01), Amount: decimal.NewFromInt(1)}},
+				},
+			},
+			"ETH/USDT": {
+				OrderBook: ccxt.OrderBook{
+					Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(99.99), Amount: decimal.NewFromInt(5)}},
+					Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(100.01), Amount: decimal.NewFromInt(5)}},
+				},
+			},
+		},
+	}
+	svc := NewAIScalpingService(config, nil, nil, mockCCXT, nil, nil)
+	cycleStart := time.Date(2026, 5, 20, 9, 30, 0, 0, time.UTC)
+
+	signals, err := gatherPublicScalpingLivePaperSoakSignals(context.Background(), svc, config.Exchange, cycleStart)
+
+	require.NoError(t, err)
+	require.Len(t, signals, 2)
+	require.Equal(t, cycleStart, signals[0].Timestamp)
+	require.Equal(t, cycleStart.Add(time.Millisecond), signals[1].Timestamp)
 }
