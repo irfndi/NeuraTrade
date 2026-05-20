@@ -50,16 +50,16 @@ type ScalpingLLMDecisionProbeResult struct {
 type ScalpingLLMSignalSnapshot struct {
 	Symbol             string          `json:"symbol"`
 	Price              decimal.Decimal `json:"price"`
-	High24h            float64         `json:"high_24h,omitempty"`
-	Low24h             float64         `json:"low_24h,omitempty"`
-	Volume24h          float64         `json:"volume_24h,omitempty"`
-	BidAskSpread       float64         `json:"spread_pct,omitempty"`
-	OrderBookImbalance float64         `json:"ob_imbalance,omitempty"`
-	PriceChange24h     float64         `json:"price_change_24h_pct,omitempty"`
-	RecentPriceChange  float64         `json:"recent_price_change_pct,omitempty"`
-	RecentChangeAgeSec float64         `json:"recent_change_age_sec,omitempty"`
+	High24h            float64         `json:"high_24h"`
+	Low24h             float64         `json:"low_24h"`
+	Volume24h          float64         `json:"volume_24h"`
+	BidAskSpread       float64         `json:"spread_pct"`
+	OrderBookImbalance float64         `json:"ob_imbalance"`
+	PriceChange24h     float64         `json:"price_change_24h_pct"`
+	RecentPriceChange  float64         `json:"recent_price_change_pct"`
+	RecentChangeAgeSec float64         `json:"recent_change_age_sec"`
 	RecentChangeKnown  bool            `json:"recent_change_known"`
-	RangePosition24h   float64         `json:"range_pos_24h,omitempty"`
+	RangePosition24h   float64         `json:"range_pos_24h"`
 	SuggestedAction    string          `json:"suggested_action,omitempty"`
 	ConfidenceHint     float64         `json:"confidence_hint,omitempty"`
 	CandidateScore     float64         `json:"candidate_score,omitempty"`

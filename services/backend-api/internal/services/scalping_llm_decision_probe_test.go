@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -84,6 +85,20 @@ func TestScalpingLLMSignalSnapshotsIncludeDecisionTelemetry(t *testing.T) {
 	require.Equal(t, 0.68, snapshot.ConfidenceHint)
 	require.Equal(t, 0.74, snapshot.CandidateScore)
 	require.Equal(t, observedAt, snapshot.ObservedAt)
+}
+
+func TestScalpingLLMSignalSnapshotsMarshalKnownZeroTelemetry(t *testing.T) {
+	snapshots := scalpingLLMSignalSnapshots([]aiMarketSignal{{
+		Symbol:            "BTC/USDT",
+		Price:             100,
+		RecentChangeKnown: true,
+	}}, time.Now().UTC())
+
+	payload, err := json.Marshal(snapshots[0])
+	require.NoError(t, err)
+	require.Contains(t, string(payload), `"spread_pct":0`)
+	require.Contains(t, string(payload), `"recent_price_change_pct":0`)
+	require.Contains(t, string(payload), `"recent_change_known":true`)
 }
 
 func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldCategory(t *testing.T) {
