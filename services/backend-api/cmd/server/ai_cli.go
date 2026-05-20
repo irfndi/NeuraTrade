@@ -821,13 +821,27 @@ func applyObservedScalpingProbePaperExits(results []*services.ScalpingLLMDecisio
 func scalpingProbeSnapshotMap(snapshots []services.ScalpingLLMSignalSnapshot) map[string]services.ScalpingLLMSignalSnapshot {
 	mapped := make(map[string]services.ScalpingLLMSignalSnapshot, len(snapshots))
 	for _, snapshot := range snapshots {
-		symbol := strings.ToUpper(strings.TrimSpace(snapshot.Symbol))
+		symbol := scalpingProbeSymbolKey(snapshot.Symbol)
 		if symbol == "" || !snapshot.Price.GreaterThan(decimal.Zero) {
 			continue
 		}
 		mapped[symbol] = snapshot
 	}
 	return mapped
+}
+
+func scalpingProbeSymbolKey(symbol string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	if normalized == "" {
+		return ""
+	}
+	if idx := strings.Index(normalized, ":"); idx >= 0 {
+		normalized = normalized[:idx]
+	}
+	normalized = strings.ReplaceAll(normalized, "/", "")
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	return normalized
 }
 
 func openObservedScalpingProbePosition(result *services.ScalpingLLMDecisionProbeResult) (observedScalpingProbePosition, bool) {
@@ -843,9 +857,9 @@ func openObservedScalpingProbePosition(result *services.ScalpingLLMDecisionProbe
 	if !entryPrice.GreaterThan(decimal.Zero) || !notional.GreaterThan(decimal.Zero) {
 		return observedScalpingProbePosition{}, false
 	}
-	symbol := strings.ToUpper(strings.TrimSpace(result.PaperTrade.Symbol))
+	symbol := scalpingProbeSymbolKey(result.PaperTrade.Symbol)
 	if symbol == "" {
-		symbol = strings.ToUpper(strings.TrimSpace(result.Decision.Symbol))
+		symbol = scalpingProbeSymbolKey(result.Decision.Symbol)
 	}
 	if symbol == "" {
 		return observedScalpingProbePosition{}, false

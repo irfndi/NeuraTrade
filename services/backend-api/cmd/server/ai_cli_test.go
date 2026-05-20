@@ -923,7 +923,7 @@ func TestBuildAIScalpingDecisionProbeSummaryClosesObservedPaperExit(t *testing.T
 				TakeProfit: mustDecimalPtr("105"),
 			},
 			PaperTrade: &services.ScalpingLLMProbeTrade{
-				Symbol:     "BTC/USDT",
+				Symbol:     "BTC/USDT:USDT",
 				Side:       "buy",
 				Notional:   mustDecimal("10"),
 				EntryPrice: mustDecimal("100"),
@@ -944,7 +944,7 @@ func TestBuildAIScalpingDecisionProbeSummaryClosesObservedPaperExit(t *testing.T
 			Decision:              &services.AITradingDecision{Action: "hold"},
 			SignalQualityCoverage: mustDecimal("1"),
 			SignalSnapshots: []services.ScalpingLLMSignalSnapshot{{
-				Symbol:     "BTC/USDT",
+				Symbol:     "BTCUSDT",
 				Price:      mustDecimal("101"),
 				ObservedAt: start.Add(time.Minute),
 			}},
