@@ -288,13 +288,15 @@ func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSig
 	if reasoning == "" || !strings.Contains(reasoning, "spread") {
 		return nil
 	}
-	if holdReasoningScopesSpreadToBuySafetyGate(reasoning) {
-		return nil
-	}
 	if !holdReasoningClaimsWideSpread(reasoning) {
 		return nil
 	}
 	threshold := maxSpreadPct
+	thresholdName := "liquidity"
+	if holdReasoningScopesSpreadToBuySafetyGate(reasoning) {
+		threshold = scalpingRecentBuyMaxSpreadPct
+		thresholdName = "buy safety"
+	}
 	if threshold <= 0 {
 		threshold = appautonomy.DefaultScalpingMaxBidAskSpreadPct
 	}
@@ -303,12 +305,8 @@ func scalpingHoldSpreadReasoningDiagnostics(reason string, signals []aiMarketSig
 		if signal.BidAskSpread <= 0 || signal.BidAskSpread > threshold {
 			continue
 		}
-		symbol := strings.ToLower(strings.TrimSpace(signal.Symbol))
-		base := strings.ToLower(strings.TrimSpace(strings.Split(symbol, "/")[0]))
-		if (symbol != "" && strings.Contains(reasoning, symbol)) ||
-			(base != "" && containsScalpingSymbolToken(reasoning, base)) ||
-			strings.Contains(reasoning, "all signals") {
-			diagnostics = append(diagnostics, fmt.Sprintf("hold reasoning cites wide spread while %s spread %.3f%% is within %.3f%% threshold", signal.Symbol, signal.BidAskSpread, threshold))
+		if holdReasoningClaimsWideSpreadForSignal(reasoning, signal) {
+			diagnostics = append(diagnostics, fmt.Sprintf("hold reasoning cites wide spread while %s spread %.3f%% is within %.3f%% %s threshold", signal.Symbol, signal.BidAskSpread, threshold, thresholdName))
 		}
 	}
 	return diagnostics
@@ -438,12 +436,9 @@ func holdReasoningScopesSpreadToBuySafetyGate(reasoning string) bool {
 	if reasoning == "" {
 		return false
 	}
-	if !strings.Contains(reasoning, "buy safety gate") &&
-		!strings.Contains(reasoning, "buy-safety gate") &&
-		!strings.Contains(reasoning, "buy gate") {
-		return false
-	}
-	return strings.Contains(reasoning, "0.06")
+	return strings.Contains(reasoning, "buy safety gate") ||
+		strings.Contains(reasoning, "buy-safety gate") ||
+		strings.Contains(reasoning, "buy gate")
 }
 
 func containsScalpingSymbolToken(text, symbol string) bool {
@@ -502,6 +497,39 @@ func holdReasoningClaimsWideSpread(reasoning string) bool {
 		}
 	}
 	return false
+}
+
+func holdReasoningClaimsWideSpreadForSignal(reasoning string, signal aiMarketSignal) bool {
+	for _, clause := range splitScalpingReasoningClauses(reasoning) {
+		if !holdReasoningClaimsWideSpread(clause) {
+			continue
+		}
+		if strings.Contains(clause, "all signals") || strings.Contains(clause, "all symbols") {
+			return true
+		}
+		if reasoningMentionsSpecificSignal(clause, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitScalpingReasoningClauses(reasoning string) []string {
+	return strings.FieldsFunc(reasoning, func(r rune) bool {
+		switch r {
+		case '.', ';', ',', '\n':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func reasoningMentionsSpecificSignal(reasoning string, signal aiMarketSignal) bool {
+	symbol := strings.ToLower(strings.TrimSpace(signal.Symbol))
+	base := strings.ToLower(strings.TrimSpace(strings.Split(symbol, "/")[0]))
+	return (symbol != "" && strings.Contains(reasoning, symbol)) ||
+		(base != "" && containsScalpingSymbolToken(reasoning, base))
 }
 
 func simulateScalpingLLMProbePaperTrade(

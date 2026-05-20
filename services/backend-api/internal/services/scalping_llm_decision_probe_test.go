@@ -257,6 +257,21 @@ func TestScalpingHoldSpreadReasoningDiagnosticsFlagsContradictions(t *testing.T)
 			wantDiagnostics: false,
 		},
 		{
+			name:            "buy gate scoped symbol spread does not apply to unrelated symbol",
+			reasoning:       "No symbol meets all buy safety gates: BTC spread ok but range_pos_24h >35; ETH spread too wide.",
+			signals:         []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}, {Symbol: "ETH/USDT", BidAskSpread: 0.08}},
+			ceiling:         0.22,
+			wantDiagnostics: false,
+		},
+		{
+			name:            "buy gate blanket spread claim uses buy safety threshold",
+			reasoning:       "No symbols meet buy safety gates because all signals have spread too wide.",
+			signals:         []aiMarketSignal{{Symbol: "BTC/USDT", BidAskSpread: 0.02}},
+			ceiling:         0.22,
+			wantDiagnostics: true,
+			wantSymbol:      "BTC/USDT",
+		},
+		{
 			name:            "short symbol does not match unrelated word",
 			reasoning:       "Holding because consolidation remains broad and spread is above the comfort threshold.",
 			signals:         []aiMarketSignal{{Symbol: "SOL/USDT", BidAskSpread: 0.02}},
