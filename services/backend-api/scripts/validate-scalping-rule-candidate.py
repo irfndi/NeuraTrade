@@ -377,6 +377,43 @@ def validate_group(name: str, stats: dict[str, object], args: argparse.Namespace
     return failures
 
 
+def gate_deficit_value(actual: float, minimum: float) -> float:
+    if actual >= minimum:
+        return 0.0
+    if minimum > 0:
+        return (minimum - actual) / minimum
+    return minimum - actual
+
+
+def gate_deficit(stats: dict[str, object], args: argparse.Namespace, validation: bool) -> float:
+    prefix = "validation_" if validation else ""
+    min_trades = getattr(args, f"min_{prefix}trades")
+    min_symbols = getattr(args, f"min_{prefix}symbols")
+    min_net = getattr(args, f"min_{prefix}net_pct")
+    min_net_ex_best = getattr(args, f"min_{prefix}net_pct_excluding_best")
+    min_drawdown = getattr(args, f"min_{prefix}drawdown_pct")
+
+    return sum(
+        [
+            gate_deficit_value(float(stats["trades"]), float(min_trades)),
+            gate_deficit_value(float(stats["symbols"]), float(min_symbols)),
+            gate_deficit_value(float(stats["wins"]), float(args.min_wins)),
+            gate_deficit_value(float(stats["losses"]), float(args.min_losses)),
+            gate_deficit_value(float(stats["net_pct"]), float(min_net)),
+            gate_deficit_value(float(stats["net_pct_excluding_best"]), float(min_net_ex_best)),
+            gate_deficit_value(float(stats["max_drawdown_pct"]), float(min_drawdown)),
+        ]
+    )
+
+
+def candidate_gate_deficit(
+    train_stats: dict[str, object],
+    validation_stats: dict[str, object],
+    args: argparse.Namespace,
+) -> float:
+    return gate_deficit(train_stats, args, validation=False) + gate_deficit(validation_stats, args, validation=True)
+
+
 def rank_rule_candidates(
     observations: list[Observation],
     rules: list[Rule],
@@ -407,19 +444,21 @@ def search_result_rank_key(result: dict[str, object]) -> tuple[object, ...]:
     train = result["train"]
     failures = result.get("failures", [])
     return (
-        validation["net_pct"],
-        train["net_pct"],
-        validation["trades"],
-        train["trades"],
-        validation["avg_net_pct"],
-        -len(failures),
+        result.get("gate_deficit", float("inf")),
+        -validation["trades"],
+        -train["trades"],
+        -validation["symbols"],
+        -train["symbols"],
+        -validation["net_pct"],
+        -train["net_pct"],
+        len(failures),
     )
 
 
 def ranked_near_misses(near_misses: list[dict[str, object]], limit: int) -> list[dict[str, object]]:
     if limit <= 0:
         return []
-    near_misses.sort(key=search_result_rank_key, reverse=True)
+    near_misses.sort(key=search_result_rank_key)
     return near_misses[:limit]
 
 
@@ -546,6 +585,7 @@ def search_portfolio_candidates(
                             "train": train_stats,
                             "validation": validation_stats,
                             "failures": failures,
+                            "gate_deficit": candidate_gate_deficit(train_stats, validation_stats, args),
                         }
                     )
                 continue
@@ -609,6 +649,7 @@ def search_rule_candidates(
                         "train": train_stats,
                         "validation": validation_stats,
                         "failures": failures,
+                        "gate_deficit": candidate_gate_deficit(train_stats, validation_stats, args),
                     }
                 )
             continue

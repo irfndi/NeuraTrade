@@ -402,6 +402,8 @@ jq -e \
     and .candidate_count == 0
     and (.near_misses | length) == 2
     and all(.near_misses[]; (.failures | length) > 0)
+    and all(.near_misses[]; .gate_deficit >= 0)
+    and .near_misses[0].gate_deficit <= .near_misses[1].gate_deficit
     and any(.near_misses[].failures[]; contains("losses=0 below minimum=1"))
     and any(.failures[]; . == "no_candidate_rule_passed_train_validation_gates")' \
   "$flat_search_output" >/dev/null
