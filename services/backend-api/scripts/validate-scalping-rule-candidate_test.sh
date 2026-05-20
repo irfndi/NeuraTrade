@@ -23,12 +23,17 @@ train_db="${tmp_dir}/train.db"
 validation_db="${tmp_dir}/validation.db"
 flat_train_db="${tmp_dir}/flat-train.db"
 flat_validation_db="${tmp_dir}/flat-validation.db"
+split_db="${tmp_dir}/split.db"
 pass_output="${tmp_dir}/pass.json"
 search_output="${tmp_dir}/search.json"
+split_search_output="${tmp_dir}/split-search.json"
 fail_output="${tmp_dir}/fail.json"
 flat_output="${tmp_dir}/flat.json"
 flat_search_output="${tmp_dir}/flat-search.json"
 missing_side_output="${tmp_dir}/missing-side.out"
+missing_validation_output="${tmp_dir}/missing-validation.out"
+split_conflict_output="${tmp_dir}/split-conflict.out"
+invalid_split_output="${tmp_dir}/invalid-split.out"
 
 create_schema() {
   sqlite3 "$1" <<'SQL'
@@ -68,6 +73,7 @@ create_schema "$train_db"
 create_schema "$validation_db"
 create_schema "$flat_train_db"
 create_schema "$flat_validation_db"
+create_schema "$split_db"
 
 insert_row "$train_db" train-a-entry AAA/USDT '2026-05-19T00:00:00Z' 100
 insert_row "$train_db" train-a-exit AAA/USDT '2026-05-19T00:05:00Z' 101
@@ -89,6 +95,18 @@ insert_row "$flat_validation_db" flat-val-a-entry CCC/USDT '2026-05-19T00:00:00Z
 insert_row "$flat_validation_db" flat-val-a-exit CCC/USDT '2026-05-19T00:05:00Z' 101
 insert_row "$flat_validation_db" flat-val-b-entry DDD/USDT '2026-05-19T00:00:00Z' 100
 insert_row "$flat_validation_db" flat-val-b-exit DDD/USDT '2026-05-19T00:05:00Z' 100
+insert_row "$split_db" split-train-a-entry AAA/USDT '2026-05-19T00:00:00Z' 100
+insert_row "$split_db" split-train-a-exit AAA/USDT '2026-05-19T00:05:00Z' 101
+insert_row "$split_db" split-train-b-entry BBB/USDT '2026-05-19T00:10:00Z' 100
+insert_row "$split_db" split-train-b-exit BBB/USDT '2026-05-19T00:15:00Z' 99.9
+insert_row "$split_db" split-train-c-entry EEE/USDT '2026-05-19T00:20:00Z' 100
+insert_row "$split_db" split-train-c-exit EEE/USDT '2026-05-19T00:25:00Z' 100.5
+insert_row "$split_db" split-val-a-entry CCC/USDT '2026-05-19T01:00:00Z' 100
+insert_row "$split_db" split-val-a-exit CCC/USDT '2026-05-19T01:05:00Z' 100.4
+insert_row "$split_db" split-val-b-entry DDD/USDT '2026-05-19T01:10:00Z' 100
+insert_row "$split_db" split-val-b-exit DDD/USDT '2026-05-19T01:15:00Z' 99.95
+insert_row "$split_db" split-val-c-entry FFF/USDT '2026-05-19T01:20:00Z' 100
+insert_row "$split_db" split-val-c-exit FFF/USDT '2026-05-19T01:25:00Z' 100.3
 
 python3 "$VALIDATOR" \
   --train-db "$train_db" \
@@ -153,6 +171,29 @@ jq -e \
     and all(.candidates[]; .validation.losses == 1)
     and (.failures | length) == 0' \
   "$search_output" >/dev/null
+
+python3 "$VALIDATOR" \
+  --train-db "$split_db" \
+  --validation-split-ratio 0.5 \
+  --search-grid \
+  --side buy \
+  --max-results 2 \
+  --min-trades 3 \
+  --min-validation-trades 3 \
+  --min-symbols 3 \
+  --min-validation-symbols 3 \
+  --min-drawdown-pct 0.2 \
+  --min-validation-drawdown-pct 0.1 \
+  >"$split_search_output"
+
+jq -e \
+  '.search_grid == true
+    and .passed == true
+    and .candidate_count == 2
+    and (.candidates | length) == 2
+    and all(.candidates[]; .train.trades == 3)
+    and all(.candidates[]; .validation.trades == 3)' \
+  "$split_search_output" >/dev/null
 
 if python3 "$VALIDATOR" \
   --train-db "$train_db" \
@@ -245,5 +286,42 @@ if python3 "$VALIDATOR" \
 fi
 
 grep -q -- "--side buy|sell is required unless --search-grid is enabled" "$missing_side_output"
+
+if python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --side buy \
+  --min-imbalance 0.35 \
+  >"$missing_validation_output" 2>&1; then
+  echo "expected validator to require validation data" >&2
+  exit 1
+fi
+
+grep -q -- "--validation-db is required unless --validation-split-ratio is set" "$missing_validation_output"
+
+if python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --validation-db "$validation_db" \
+  --validation-split-ratio 0.5 \
+  --side buy \
+  --min-imbalance 0.35 \
+  >"$split_conflict_output" 2>&1; then
+  echo "expected validator to reject validation split plus validation DB" >&2
+  exit 1
+fi
+
+grep -q -- "--validation-split-ratio cannot be combined with --validation-db" "$split_conflict_output"
+
+if python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --validation-db "$validation_db" \
+  --validation-split-ratio -0.5 \
+  --side buy \
+  --min-imbalance 0.35 \
+  >"$invalid_split_output" 2>&1; then
+  echo "expected validator to reject invalid validation split ratio" >&2
+  exit 1
+fi
+
+grep -q -- "--validation-split-ratio must be greater than 0 and less than 1" "$invalid_split_output"
 
 echo "validate-scalping-rule-candidate tests passed"

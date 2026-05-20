@@ -120,6 +120,20 @@ def load_observations(paths: Iterable[Path], hold_seconds: int, fee_pct: float) 
     return observations
 
 
+def split_observations(observations: list[Observation], validation_split_ratio: float) -> tuple[list[Observation], list[Observation]]:
+    if validation_split_ratio <= 0 or validation_split_ratio >= 1:
+        raise ValueError("--validation-split-ratio must be greater than 0 and less than 1")
+    if len(observations) < 2:
+        raise ValueError("--validation-split-ratio requires at least two observations")
+
+    ordered = sorted(observations, key=lambda obs: (obs.timestamp, obs.symbol))
+    validation_count = max(1, int(round(len(ordered) * validation_split_ratio)))
+    if validation_count >= len(ordered):
+        validation_count = len(ordered) - 1
+    split_index = len(ordered) - validation_count
+    return ordered[:split_index], ordered[split_index:]
+
+
 def load_observations_from_db(path: Path, hold_seconds: int, fee_pct: float) -> list[Observation]:
     if not path.is_file():
         raise ValueError(f"database not found: {path}")
@@ -405,7 +419,13 @@ def search_rule_candidates(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-db", action="append", required=True, type=Path)
-    parser.add_argument("--validation-db", action="append", required=True, type=Path)
+    parser.add_argument("--validation-db", action="append", type=Path)
+    parser.add_argument(
+        "--validation-split-ratio",
+        type=float,
+        default=0.0,
+        help="chronologically reserve this fraction of --train-db observations for validation",
+    )
     parser.add_argument("--search-grid", action="store_true", help="search conservative buy/sell threshold grids")
     parser.add_argument("--max-results", type=int, default=DEFAULT_SEARCH_MAX_RESULTS)
     parser.add_argument("--side", choices=("buy", "sell", "both"))
@@ -447,10 +467,23 @@ def main() -> int:
         raise ValueError("--min-validation-drawdown-pct must be non-negative")
     if args.max_results < 0:
         raise ValueError("--max-results must be zero or greater")
+    if args.validation_split_ratio < 0 or args.validation_split_ratio >= 1:
+        raise ValueError("--validation-split-ratio must be greater than 0 and less than 1")
+    if args.validation_split_ratio > 0 and args.validation_db:
+        raise ValueError("--validation-split-ratio cannot be combined with --validation-db")
+    if args.validation_split_ratio <= 0 and not args.validation_db:
+        raise ValueError("--validation-db is required unless --validation-split-ratio is set")
 
-    if args.search_grid:
+    if args.validation_split_ratio > 0:
+        train_observations, validation_observations = split_observations(
+            load_observations(args.train_db, args.hold_seconds, args.fee_pct),
+            args.validation_split_ratio,
+        )
+    else:
         train_observations = load_observations(args.train_db, args.hold_seconds, args.fee_pct)
         validation_observations = load_observations(args.validation_db, args.hold_seconds, args.fee_pct)
+
+    if args.search_grid:
         payload = search_rule_candidates(train_observations, validation_observations, args)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0 if payload["passed"] else 1
@@ -470,12 +503,8 @@ def main() -> int:
         min_change_24h=args.min_change_24h,
         max_change_24h=args.max_change_24h,
     )
-    train_stats = evaluate(load_observations(args.train_db, args.hold_seconds, args.fee_pct), rule, args.hold_seconds)
-    validation_stats = evaluate(
-        load_observations(args.validation_db, args.hold_seconds, args.fee_pct),
-        rule,
-        args.hold_seconds,
-    )
+    train_stats = evaluate(train_observations, rule, args.hold_seconds)
+    validation_stats = evaluate(validation_observations, rule, args.hold_seconds)
     failures = validate_group("train", train_stats, args, validation=False)
     failures.extend(validate_group("validation", validation_stats, args, validation=True))
 
