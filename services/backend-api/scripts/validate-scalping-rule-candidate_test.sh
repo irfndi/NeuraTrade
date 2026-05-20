@@ -25,10 +25,13 @@ flat_train_db="${tmp_dir}/flat-train.db"
 flat_validation_db="${tmp_dir}/flat-validation.db"
 portfolio_train_db="${tmp_dir}/portfolio-train.db"
 portfolio_validation_db="${tmp_dir}/portfolio-validation.db"
+reversal_train_db="${tmp_dir}/reversal-train.db"
+reversal_validation_db="${tmp_dir}/reversal-validation.db"
 split_db="${tmp_dir}/split.db"
 pass_output="${tmp_dir}/pass.json"
 search_output="${tmp_dir}/search.json"
 portfolio_output="${tmp_dir}/portfolio.json"
+reversal_output="${tmp_dir}/reversal.json"
 hold_sweep_output="${tmp_dir}/hold-sweep.json"
 split_search_output="${tmp_dir}/split-search.json"
 fail_output="${tmp_dir}/fail.json"
@@ -105,6 +108,8 @@ create_schema "$flat_train_db"
 create_schema "$flat_validation_db"
 create_schema "$portfolio_train_db"
 create_schema "$portfolio_validation_db"
+create_schema "$reversal_train_db"
+create_schema "$reversal_validation_db"
 create_schema "$split_db"
 
 insert_row "$train_db" train-a-entry AAA/USDT '2026-05-19T00:00:00Z' 100
@@ -165,6 +170,19 @@ insert_custom_row "$portfolio_validation_db" portfolio-val-sell-b-entry VSB/USDT
 insert_custom_row "$portfolio_validation_db" portfolio-val-sell-b-exit VSB/USDT '2026-05-19T00:15:00Z' 100.05 0.02 -0.45 85 -0.10 -0.08
 insert_custom_row "$portfolio_validation_db" portfolio-val-sell-c-entry VSC/USDT '2026-05-19T00:10:00Z' 100 0.02 -0.45 85 -0.10 -0.08
 insert_custom_row "$portfolio_validation_db" portfolio-val-sell-c-exit VSC/USDT '2026-05-19T00:15:00Z' 99.7 0.02 -0.45 85 -0.10 -0.08
+
+insert_custom_row "$reversal_train_db" reversal-train-a-entry RAA/USDT '2026-05-19T00:00:00Z' 100 0.04 -0.20 15 -6.0 -0.10
+insert_custom_row "$reversal_train_db" reversal-train-a-exit RAA/USDT '2026-05-19T00:05:00Z' 101 0.04 -0.20 15 -6.0 -0.10
+insert_custom_row "$reversal_train_db" reversal-train-b-entry RBB/USDT '2026-05-19T00:00:00Z' 100 0.04 -0.10 15 -6.0 -0.10
+insert_custom_row "$reversal_train_db" reversal-train-b-exit RBB/USDT '2026-05-19T00:05:00Z' 99.9 0.04 -0.10 15 -6.0 -0.10
+insert_custom_row "$reversal_train_db" reversal-train-c-entry RCC/USDT '2026-05-19T00:00:00Z' 100 0.04 0.00 15 -6.0 -0.10
+insert_custom_row "$reversal_train_db" reversal-train-c-exit RCC/USDT '2026-05-19T00:05:00Z' 100.5 0.04 0.00 15 -6.0 -0.10
+insert_custom_row "$reversal_validation_db" reversal-val-a-entry RVA/USDT '2026-05-19T00:00:00Z' 100 0.04 -0.20 15 -6.0 -0.10
+insert_custom_row "$reversal_validation_db" reversal-val-a-exit RVA/USDT '2026-05-19T00:05:00Z' 100.4 0.04 -0.20 15 -6.0 -0.10
+insert_custom_row "$reversal_validation_db" reversal-val-b-entry RVB/USDT '2026-05-19T00:00:00Z' 100 0.04 -0.10 15 -6.0 -0.10
+insert_custom_row "$reversal_validation_db" reversal-val-b-exit RVB/USDT '2026-05-19T00:05:00Z' 99.95 0.04 -0.10 15 -6.0 -0.10
+insert_custom_row "$reversal_validation_db" reversal-val-c-entry RVC/USDT '2026-05-19T00:00:00Z' 100 0.04 0.00 15 -6.0 -0.10
+insert_custom_row "$reversal_validation_db" reversal-val-c-exit RVC/USDT '2026-05-19T00:05:00Z' 100.3 0.04 0.00 15 -6.0 -0.10
 
 python3 "$VALIDATOR" \
   --train-db "$train_db" \
@@ -275,6 +293,35 @@ jq -e \
     and all(.candidates[]; .validation.side_counts.buy == 3 and .validation.side_counts.sell == 3)
     and (.failures | length) == 0' \
   "$portfolio_output" >/dev/null
+
+python3 "$VALIDATOR" \
+  --train-db "$reversal_train_db" \
+  --validation-db "$reversal_validation_db" \
+  --search-grid \
+  --include-reversal-rules \
+  --side buy \
+  --max-results 1 \
+  --min-trades 3 \
+  --min-validation-trades 3 \
+  --min-symbols 3 \
+  --min-validation-symbols 3 \
+  --min-drawdown-pct 0.2 \
+  --min-validation-drawdown-pct 0.1 \
+  >"$reversal_output"
+
+jq -e \
+  '.search_grid == true
+    and .passed == true
+    and .candidate_count == 1
+    and .evaluated_rules > 2940
+    and .candidates[0].rule.side == "buy"
+    and .candidates[0].rule.family == "reversal"
+    and .candidates[0].rule.max_24h <= -5
+    and .candidates[0].train.trades == 3
+    and .candidates[0].train.losses == 1
+    and .candidates[0].validation.trades == 3
+    and .candidates[0].validation.losses == 1' \
+  "$reversal_output" >/dev/null
 
 python3 "$VALIDATOR" \
   --train-db "$portfolio_train_db" \

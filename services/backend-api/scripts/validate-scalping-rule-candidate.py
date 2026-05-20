@@ -40,6 +40,20 @@ SELL_SEARCH_GRIDS = {
     "max_change_24h": [-0.08, -0.05, -0.03, -0.01, 0.0, 0.03, 0.08],
 }
 
+BUY_REVERSAL_SEARCH_GRIDS = {
+    "max_spread": [0.04, 0.06, 0.08, 0.10, 0.14],
+    "max_range": [20.0, 35.0, 55.0, 75.0, 90.0],
+    "max_recent": [-0.15, -0.05, 0.0, 0.05],
+    "max_change_24h": [-8.0, -5.0, -3.0, -1.0, 0.0],
+}
+
+SELL_BLOWOFF_SEARCH_GRIDS = {
+    "max_spread": [0.04, 0.06, 0.08, 0.10, 0.14],
+    "min_range": [45.0, 65.0, 80.0, 90.0, 95.0],
+    "min_recent": [-0.05, 0.0, 0.05, 0.10, 0.20, 0.30],
+    "min_change_24h": [0.0, 0.5, 1.0, 3.0, 5.0, 8.0],
+}
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -66,6 +80,7 @@ class Rule:
     max_recent: float | None
     min_change_24h: float | None
     max_change_24h: float | None
+    family: str = "trend"
 
     def matches(self, obs: Observation) -> bool:
         return (
@@ -378,6 +393,7 @@ def attach_oracle_summary(
 def rule_payload(rule: Rule, hold_seconds: int, fee_pct: float) -> dict[str, object]:
     return {
         "side": rule.side,
+        "family": rule.family,
         "min_imbalance": rule.min_imbalance,
         "max_imbalance": rule.max_imbalance,
         "max_spread": rule.max_spread,
@@ -513,7 +529,7 @@ def ranked_near_misses(near_misses: list[dict[str, object]], limit: int) -> list
     return near_misses[:limit]
 
 
-def search_candidate_rules(side: str | None) -> list[Rule]:
+def search_candidate_rules(side: str | None, include_reversal_rules: bool = False) -> list[Rule]:
     sides = ("buy", "sell") if side in (None, "both") else (side,)
     rules: list[Rule] = []
     seen: set[tuple[object, ...]] = set()
@@ -521,6 +537,7 @@ def search_candidate_rules(side: str | None) -> list[Rule]:
     def append(rule: Rule) -> None:
         key = (
             rule.side,
+            rule.family,
             rule.min_imbalance,
             rule.max_imbalance,
             rule.max_spread,
@@ -575,6 +592,46 @@ def search_candidate_rules(side: str | None) -> list[Rule]:
                                     max_change_24h=max_change_24h,
                                 )
                             )
+    if include_reversal_rules and "buy" in sides:
+        for max_spread in BUY_REVERSAL_SEARCH_GRIDS["max_spread"]:
+            for max_range in BUY_REVERSAL_SEARCH_GRIDS["max_range"]:
+                for max_recent in BUY_REVERSAL_SEARCH_GRIDS["max_recent"]:
+                    for max_change_24h in BUY_REVERSAL_SEARCH_GRIDS["max_change_24h"]:
+                        append(
+                            Rule(
+                                side="buy",
+                                min_imbalance=None,
+                                max_imbalance=None,
+                                max_spread=max_spread,
+                                min_range=None,
+                                max_range=max_range,
+                                min_recent=None,
+                                max_recent=max_recent,
+                                min_change_24h=None,
+                                max_change_24h=max_change_24h,
+                                family="reversal",
+                            )
+                        )
+    if include_reversal_rules and "sell" in sides:
+        for max_spread in SELL_BLOWOFF_SEARCH_GRIDS["max_spread"]:
+            for min_range in SELL_BLOWOFF_SEARCH_GRIDS["min_range"]:
+                for min_recent in SELL_BLOWOFF_SEARCH_GRIDS["min_recent"]:
+                    for min_change_24h in SELL_BLOWOFF_SEARCH_GRIDS["min_change_24h"]:
+                        append(
+                            Rule(
+                                side="sell",
+                                min_imbalance=None,
+                                max_imbalance=None,
+                                max_spread=max_spread,
+                                min_range=min_range,
+                                max_range=None,
+                                min_recent=min_recent,
+                                max_recent=None,
+                                min_change_24h=min_change_24h,
+                                max_change_24h=None,
+                                family="blowoff",
+                            )
+                        )
     return rules
 
 
@@ -585,14 +642,24 @@ def search_portfolio_candidates(
 ) -> dict[str, object]:
     pool_size = max(args.portfolio_pool_size, 1)
     max_rules = max(args.max_portfolio_rules, 1)
-    base_rules = search_candidate_rules(args.side)
+    base_rules = search_candidate_rules(args.side, args.include_reversal_rules)
     if args.side in (None, "both"):
         ranked = []
         ranked.extend(
-            rank_rule_candidates(train_observations, search_candidate_rules("buy"), args.hold_seconds, pool_size)
+            rank_rule_candidates(
+                train_observations,
+                search_candidate_rules("buy", args.include_reversal_rules),
+                args.hold_seconds,
+                pool_size,
+            )
         )
         ranked.extend(
-            rank_rule_candidates(train_observations, search_candidate_rules("sell"), args.hold_seconds, pool_size)
+            rank_rule_candidates(
+                train_observations,
+                search_candidate_rules("sell", args.include_reversal_rules),
+                args.hold_seconds,
+                pool_size,
+            )
         )
     else:
         ranked = rank_rule_candidates(train_observations, base_rules, args.hold_seconds, pool_size)
@@ -602,6 +669,7 @@ def search_portfolio_candidates(
     for rule, _ in ranked:
         key = (
             rule.side,
+            rule.family,
             rule.min_imbalance,
             rule.max_imbalance,
             rule.max_spread,
@@ -687,7 +755,7 @@ def search_rule_candidates(
 ) -> dict[str, object]:
     candidates: list[dict[str, object]] = []
     near_misses: list[dict[str, object]] = []
-    for rule in search_candidate_rules(args.side):
+    for rule in search_candidate_rules(args.side, args.include_reversal_rules):
         train_stats = evaluate(train_observations, rule, args.hold_seconds)
         validation_stats = evaluate(validation_observations, rule, args.hold_seconds)
         failures = validate_group("train", train_stats, args, validation=False)
@@ -730,7 +798,7 @@ def search_rule_candidates(
         "search_grid": True,
         "side": args.side or "both",
         "hold_seconds": args.hold_seconds,
-        "evaluated_rules": len(search_candidate_rules(args.side)),
+        "evaluated_rules": len(search_candidate_rules(args.side, args.include_reversal_rules)),
         "candidate_count": len(candidates),
         "passed": bool(candidates),
         "candidates": candidates,
@@ -752,6 +820,11 @@ def parse_args() -> argparse.Namespace:
         help="chronologically reserve this fraction of --train-db observations for validation",
     )
     parser.add_argument("--search-grid", action="store_true", help="search conservative buy/sell threshold grids")
+    parser.add_argument(
+        "--include-reversal-rules",
+        action="store_true",
+        help="extend search with opt-in reversal buy and blowoff sell rule families",
+    )
     parser.add_argument(
         "--search-portfolio",
         action="store_true",
