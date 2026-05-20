@@ -46,6 +46,46 @@ func TestRunScalpingLLMDecisionProbeWithServiceUsesStructuredLLMDecision(t *test
 	require.Equal(t, "hold", result.Decision.Action)
 }
 
+func TestScalpingLLMSignalSnapshotsIncludeDecisionTelemetry(t *testing.T) {
+	observedAt := time.Now().UTC()
+	snapshots := scalpingLLMSignalSnapshots([]aiMarketSignal{{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		High24h:            110,
+		Low24h:             98,
+		Volume24h:          1_000_000,
+		BidAskSpread:       0.02,
+		OrderBookImbalance: 0.23,
+		PriceChange24h:     1.5,
+		RecentPriceChange:  0.08,
+		RecentChangeAgeSec: 60,
+		RecentChangeKnown:  true,
+		RangePosition24h:   16.7,
+		SuggestedAction:    "buy",
+		ConfidenceHint:     0.68,
+		CandidateScore:     0.74,
+	}}, observedAt)
+
+	require.Len(t, snapshots, 1)
+	snapshot := snapshots[0]
+	require.Equal(t, "BTC/USDT", snapshot.Symbol)
+	require.True(t, snapshot.Price.Equal(decimal.NewFromInt(100)))
+	require.Equal(t, 110.0, snapshot.High24h)
+	require.Equal(t, 98.0, snapshot.Low24h)
+	require.Equal(t, 1_000_000.0, snapshot.Volume24h)
+	require.Equal(t, 0.02, snapshot.BidAskSpread)
+	require.Equal(t, 0.23, snapshot.OrderBookImbalance)
+	require.Equal(t, 1.5, snapshot.PriceChange24h)
+	require.Equal(t, 0.08, snapshot.RecentPriceChange)
+	require.Equal(t, 60.0, snapshot.RecentChangeAgeSec)
+	require.True(t, snapshot.RecentChangeKnown)
+	require.Equal(t, 16.7, snapshot.RangePosition24h)
+	require.Equal(t, "buy", snapshot.SuggestedAction)
+	require.Equal(t, 0.68, snapshot.ConfidenceHint)
+	require.Equal(t, 0.74, snapshot.CandidateScore)
+	require.Equal(t, observedAt, snapshot.ObservedAt)
+}
+
 func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldCategory(t *testing.T) {
 	mockLLM := &MockLLMClient{
 		Responses: []*llm.CompletionResponse{

@@ -48,9 +48,22 @@ type ScalpingLLMDecisionProbeResult struct {
 }
 
 type ScalpingLLMSignalSnapshot struct {
-	Symbol     string          `json:"symbol"`
-	Price      decimal.Decimal `json:"price"`
-	ObservedAt time.Time       `json:"observed_at"`
+	Symbol             string          `json:"symbol"`
+	Price              decimal.Decimal `json:"price"`
+	High24h            float64         `json:"high_24h,omitempty"`
+	Low24h             float64         `json:"low_24h,omitempty"`
+	Volume24h          float64         `json:"volume_24h,omitempty"`
+	BidAskSpread       float64         `json:"spread_pct,omitempty"`
+	OrderBookImbalance float64         `json:"ob_imbalance,omitempty"`
+	PriceChange24h     float64         `json:"price_change_24h_pct,omitempty"`
+	RecentPriceChange  float64         `json:"recent_price_change_pct,omitempty"`
+	RecentChangeAgeSec float64         `json:"recent_change_age_sec,omitempty"`
+	RecentChangeKnown  bool            `json:"recent_change_known"`
+	RangePosition24h   float64         `json:"range_pos_24h,omitempty"`
+	SuggestedAction    string          `json:"suggested_action,omitempty"`
+	ConfidenceHint     float64         `json:"confidence_hint,omitempty"`
+	CandidateScore     float64         `json:"candidate_score,omitempty"`
+	ObservedAt         time.Time       `json:"observed_at"`
 }
 
 type ScalpingLLMProbeTrade struct {
@@ -241,9 +254,22 @@ func scalpingLLMSignalSnapshots(signals []aiMarketSignal, observedAt time.Time) 
 			continue
 		}
 		snapshots = append(snapshots, ScalpingLLMSignalSnapshot{
-			Symbol:     normalizeSymbolForComparison(signal.Symbol),
-			Price:      decimal.NewFromFloat(signal.Price),
-			ObservedAt: observedAt,
+			Symbol:             normalizeSymbolForComparison(signal.Symbol),
+			Price:              decimal.NewFromFloat(signal.Price),
+			High24h:            signal.High24h,
+			Low24h:             signal.Low24h,
+			Volume24h:          signal.Volume24h,
+			BidAskSpread:       signal.BidAskSpread,
+			OrderBookImbalance: signal.OrderBookImbalance,
+			PriceChange24h:     signal.PriceChange24h,
+			RecentPriceChange:  signal.RecentPriceChange,
+			RecentChangeAgeSec: signal.RecentChangeAgeSec,
+			RecentChangeKnown:  signal.RecentChangeKnown,
+			RangePosition24h:   signal.RangePosition24h,
+			SuggestedAction:    signal.SuggestedAction,
+			ConfidenceHint:     signal.ConfidenceHint,
+			CandidateScore:     signal.CandidateScore,
+			ObservedAt:         observedAt,
 		})
 	}
 	return snapshots
