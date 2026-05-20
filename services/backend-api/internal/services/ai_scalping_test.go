@@ -1356,6 +1356,22 @@ func TestAIScalpingService_BuildSystemPrompt_ClarifiesPercentPointSignalUnits(t 
 	assert.Contains(t, prompt, "if recent_price_change_pct is absent, buy only at deep-low range_pos_24h <= 20.0")
 }
 
+func TestAIScalpingService_BuildSystemPrompt_IncludesBackendSellSafetyGates(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5, MaxBidAskSpreadPct: 0.22}}
+
+	prompt := svc.buildSystemPrompt()
+
+	assert.Contains(t, prompt, "Sell safety gates")
+	assert.Contains(t, prompt, "spread_pct <= 0.2200%")
+	assert.Contains(t, prompt, "price_change_24h_pct <= -0.0500%")
+	assert.Contains(t, prompt, "range_pos_24h > 15.0")
+	assert.Contains(t, prompt, "ob_imbalance <= -0.20")
+	assert.Contains(t, prompt, "Blowoff reversal sells")
+	assert.Contains(t, prompt, "price_change_24h_pct >= 0.0750%")
+	assert.Contains(t, prompt, "recent_price_change_pct >= 0.1500%")
+	assert.Contains(t, prompt, "range_pos_24h is 95.0-98.0")
+}
+
 func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t *testing.T) {
 	original := globalScalpingPerformance
 	globalScalpingPerformance = NewScalpingPerformance()
