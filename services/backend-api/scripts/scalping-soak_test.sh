@@ -39,6 +39,13 @@ while [ "$#" -gt 0 ]; do
       output_path="$2"
       shift 2
       ;;
+    --min-baseline-win-rate-delta | --min-baseline-net-pnl-delta | --min-baseline-avg-pnl-delta)
+      if [ "${EXPECT_NO_BASELINE_ARGS:-false}" = "true" ]; then
+        echo "unexpected baseline gate arg: $1" >&2
+        exit 3
+      fi
+      shift 2
+      ;;
     *)
       shift
       ;;
@@ -87,7 +94,7 @@ if [ -n "$output_path" ]; then
 fi
 
 echo 'scalping-soak: paper realism gate failed: closed_trades=46 wins=46 losses=0 max_drawdown_pct=0 exceeds max_perfect_win_trades=20; perfect paper wins without drawdown are insufficient proof' >&2
-exit 1
+exit "${FAKE_EXIT_STATUS:-1}"
 SH
 
 chmod +x "$fake_bin"
@@ -118,5 +125,26 @@ jq -e \
   "$artifact_path" >/dev/null
 
 grep -q "retained clean soak result artifact" "$output_path"
+
+telemetry_artifact_path="${tmp_dir}/evidence/telemetry.json"
+telemetry_db_path="${tmp_dir}/evidence/telemetry.db"
+telemetry_output_path="${tmp_dir}/telemetry.out"
+
+EXPECT_NO_BASELINE_ARGS=true \
+  FAKE_EXIT_STATUS=0 \
+  SOAK_BIN="$fake_bin" \
+  SOAK_OUTPUT_FILE="$telemetry_artifact_path" \
+  SOAK_DB_PATH="$telemetry_db_path" \
+  NEURATRADE_HOME="$tmp_dir/home" \
+  LOG_DIR="$log_dir" \
+  REQUIRE_TRADES=false \
+  CYCLES=3 \
+  INTERVAL_MS=1000 \
+  bash "$SOAK_SCRIPT" run >"$telemetry_output_path" 2>&1
+
+[ -f "$telemetry_artifact_path" ] || {
+  echo "expected telemetry artifact to be written: $telemetry_artifact_path" >&2
+  exit 1
+}
 
 echo "scalping-soak tests passed"
