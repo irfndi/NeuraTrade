@@ -1100,7 +1100,7 @@ func TestAIScalpingService_ValidateDecision_AllowsBlowoffReversalSell(t *testing
 		Low24h:             0.045,
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
-		OrderBookImbalance: -0.1783,
+		OrderBookImbalance: -0.4513,
 		RangePosition24h:   96.58,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
@@ -3395,7 +3395,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBlowoffReversalS
 		Low24h:             0.045,
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
-		OrderBookImbalance: -0.1783,
+		OrderBookImbalance: -0.4513,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
 		RecentChangeKnown:  true,
@@ -3406,6 +3406,38 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBlowoffReversalS
 	require.NotNil(t, decision)
 	assert.Equal(t, "sell", decision.Action)
 	assert.Contains(t, decision.Reasoning, "blowoff")
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_BlocksWeakBlowoffSellPressure(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "DASH/USDT",
+		Price:              123.9,
+		High24h:            124.2,
+		Low24h:             100.0,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0423,
+		OrderBookImbalance: -0.2947,
+		PriceChange24h:     12.0436,
+		RecentPriceChange:  0.5104,
+		RecentChangeKnown:  true,
+		RangePosition24h:   95.16,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.False(t, ok)
+	require.Nil(t, decision)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_UsesMomentumConfigOverride(t *testing.T) {

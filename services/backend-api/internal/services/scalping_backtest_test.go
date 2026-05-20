@@ -616,7 +616,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsBlowoffReversalSell(t *testin
 		Low24h:             0.045,
 		Volume24h:          1_500_000,
 		BidAskSpread:       0.0602,
-		OrderBookImbalance: -0.1783,
+		OrderBookImbalance: -0.4513,
 		RangePosition24h:   96.58,
 		PriceChange24h:     0.0774,
 		RecentPriceChange:  0.2817,
@@ -625,6 +625,27 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsBlowoffReversalSell(t *testin
 
 	require.NotNil(t, decision)
 	require.Equal(t, "sell", decision.Action)
+}
+
+func TestScalpingBacktestEngine_BuildDecisionBlocksWeakBlowoffSellPressure(t *testing.T) {
+	now := time.Date(2026, 5, 20, 18, 2, 30, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "DASH/USDT",
+		Price:              123.9,
+		High24h:            124.2,
+		Low24h:             100.0,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0423,
+		OrderBookImbalance: -0.2947,
+		RangePosition24h:   95.16,
+		PriceChange24h:     12.0436,
+		RecentPriceChange:  0.5104,
+		RecentChangeKnown:  true,
+	})
+
+	require.Nil(t, decision)
 }
 
 func TestScalpingBacktestEngine_RunSignalsAllowsBufferedMidRangeBuy(t *testing.T) {

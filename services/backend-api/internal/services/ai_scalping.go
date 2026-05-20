@@ -74,7 +74,7 @@ const (
 	scalpingBlowoffSellRecentMinPct = 0.15
 	scalpingBlowoffSellRangeMin     = 95.0
 	scalpingBlowoffSellRangeMax     = 98.0
-	scalpingBlowoffSellMaxImbalance = -0.10
+	scalpingBlowoffSellMaxImbalance = -0.35
 	scalpingRecentBuyMaxSpreadPct   = 0.06
 	scalpingRecentBuyMinTrendPct    = 0.02
 	scalpingRecentBuyMaxRangePct    = 35.0
