@@ -408,7 +408,7 @@ func TestScalpingPctUnitReasoningDiagnosticsAllowsCorrectPercentPoints(t *testin
 func TestScalpingPctUnitReasoningDiagnosticsIgnoresThresholdSubstrings(t *testing.T) {
 	signals := []aiMarketSignal{{
 		Symbol:         "CHZ/USDT",
-		PriceChange24h: -0.05973,
+		PriceChange24h: -0.06,
 	}}
 
 	diagnostics := scalpingPctUnitReasoningDiagnostics(
@@ -417,6 +417,13 @@ func TestScalpingPctUnitReasoningDiagnosticsIgnoresThresholdSubstrings(t *testin
 	)
 
 	require.Empty(t, diagnostics)
+}
+
+func TestContainsStandalonePctCitationRejectsEmbeddedPercent(t *testing.T) {
+	require.False(t, containsStandalonePctCitation("spread threshold is 0.06%", "6%"))
+	require.False(t, containsStandalonePctCitation("range is 16%", "6%"))
+	require.True(t, containsStandalonePctCitation("momentum is 6%", "6%"))
+	require.True(t, containsStandalonePctCitation("momentum is -6%", "6%"))
 }
 
 func TestNormalizeDiagnosticHoldReasoningRewritesPctUnitConfusion(t *testing.T) {
