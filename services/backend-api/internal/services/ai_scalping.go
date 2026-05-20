@@ -2077,12 +2077,12 @@ Return JSON only:
 - spread <= %.4f%%: tradable liquidity ceiling; anything wider must be treated as hold
 - recent_price_change_pct is short-window momentum in percentage points; values below %.4f are below the buy momentum confirmation gate
 - Buy safety gates: when recent_price_change_pct is present, buy only if recent_price_change_pct >= %.4f, spread_pct <= %.4f, price_change_24h_pct >= %.4f, and range_pos_24h <= %.1f; if recent_price_change_pct is absent, buy only at deep-low range_pos_24h <= %.1f
-- Sell safety gates: sell only if spread_pct <= %.4f%%, price_change_24h_pct <= %.4f%%, range_pos_24h > 15.0, and ob_imbalance <= -0.20; Blowoff reversal sells are allowed only when price_change_24h_pct >= %.4f%%, recent_price_change_pct >= %.4f%%, range_pos_24h is %.1f-%.1f, and ob_imbalance <= %.2f
+- Sell safety gates: sell only if spread_pct <= %.4f%%, price_change_24h_pct <= %.4f%%, range_pos_24h > 15.0, and ob_imbalance <= -0.20
 - Before returning hold, evaluate every symbol against the sell safety gates; do not apply the %.4f%% buy spread gate to sell decisions, because sells use the %.4f%% liquidity ceiling
 - If one or more symbols clear sell safety gates and confidence can meet the effective threshold, choose the strongest sell instead of hold; hold only when both buy and sell gates fail
 - range_pos_24h > 80: Price near daily high (avoid chasing late entries)
 - range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
-		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct(), buyMomentumGate, buyMomentumGate, scalpingRecentBuyMaxSpreadPct, scalpingRecentBuyMinTrendPct, scalpingRecentBuyMaxRangePct, scalpingNoRecentBuyMaxRangePct, s.maxBidAskSpreadPct(), scalpingSellBroadTrendMaxPct, scalpingBlowoffSellTrendMinPct, scalpingBlowoffSellRecentMinPct, scalpingBlowoffSellRangeMin, scalpingBlowoffSellRangeMax, scalpingBlowoffSellMaxImbalance, scalpingRecentBuyMaxSpreadPct, s.maxBidAskSpreadPct())
+		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct(), buyMomentumGate, buyMomentumGate, scalpingRecentBuyMaxSpreadPct, scalpingRecentBuyMinTrendPct, scalpingRecentBuyMaxRangePct, scalpingNoRecentBuyMaxRangePct, s.maxBidAskSpreadPct(), scalpingSellBroadTrendMaxPct, scalpingRecentBuyMaxSpreadPct, s.maxBidAskSpreadPct())
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
@@ -3574,12 +3574,8 @@ func scalpingSellTrendConfirmed(signal aiMarketSignal) bool {
 }
 
 func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal) bool {
-	return signal.RecentChangeKnown &&
-		signal.PriceChange24h >= scalpingBlowoffSellTrendMinPct &&
-		signal.RecentPriceChange >= scalpingBlowoffSellRecentMinPct &&
-		signal.RangePosition24h >= scalpingBlowoffSellRangeMin &&
-		signal.RangePosition24h <= scalpingBlowoffSellRangeMax &&
-		signal.OrderBookImbalance <= scalpingBlowoffSellMaxImbalance
+	// Disabled until observed paper evidence shows counter-trend blowoff shorts can beat fees.
+	return false
 }
 
 func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Decimal) {

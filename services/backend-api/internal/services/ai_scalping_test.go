@@ -1081,7 +1081,7 @@ func TestAIScalpingService_ValidateDecision_BlocksSellWhenBroadDowntrendIsTooWea
 	assert.Contains(t, err.Error(), "required<=-0.0500%")
 }
 
-func TestAIScalpingService_ValidateDecision_AllowsBlowoffReversalSell(t *testing.T) {
+func TestAIScalpingService_ValidateDecision_RejectsCounterTrendBlowoffReversalSell(t *testing.T) {
 	svc := &AIScalpingService{}
 	decision := &AITradingDecision{
 		Action:      "sell",
@@ -1107,7 +1107,8 @@ func TestAIScalpingService_ValidateDecision_AllowsBlowoffReversalSell(t *testing
 		RecentChangeKnown:  true,
 	}})
 
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sell decision rejected without 24h downside confirmation")
 }
 
 func TestAIScalpingService_ValidateDecision_RejectsBlowoffSellWithPositiveBookPressure(t *testing.T) {
@@ -1369,10 +1370,7 @@ func TestAIScalpingService_BuildSystemPrompt_IncludesBackendSellSafetyGates(t *t
 	assert.Contains(t, prompt, "Before returning hold, evaluate every symbol against the sell safety gates")
 	assert.Contains(t, prompt, "do not apply the 0.0400% buy spread gate to sell decisions")
 	assert.Contains(t, prompt, "choose the strongest sell instead of hold")
-	assert.Contains(t, prompt, "Blowoff reversal sells")
-	assert.Contains(t, prompt, "price_change_24h_pct >= 0.0750%")
-	assert.Contains(t, prompt, "recent_price_change_pct >= 0.1500%")
-	assert.Contains(t, prompt, "range_pos_24h is 95.0-98.0")
+	assert.NotContains(t, prompt, "Blowoff reversal sells")
 }
 
 func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t *testing.T) {
@@ -3406,7 +3404,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RejectsObservedPullbac
 	require.Nil(t, decision)
 }
 
-func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBlowoffReversalSell(t *testing.T) {
+func TestAIScalpingService_DeterministicFallbackCandidate_BlocksCounterTrendBlowoffReversalSell(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{
 			MaxBidAskSpreadPct: 0.22,
@@ -3434,10 +3432,8 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBlowoffReversalS
 		RangePosition24h:   96.58,
 	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
 
-	require.True(t, ok)
-	require.NotNil(t, decision)
-	assert.Equal(t, "sell", decision.Action)
-	assert.Contains(t, decision.Reasoning, "blowoff")
+	require.False(t, ok)
+	require.Nil(t, decision)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_BlocksWeakBlowoffSellPressure(t *testing.T) {
