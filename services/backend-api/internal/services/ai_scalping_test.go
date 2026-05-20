@@ -1350,7 +1350,7 @@ func TestAIScalpingService_BuildSystemPrompt_ClarifiesPercentPointSignalUnits(t 
 	assert.Contains(t, prompt, "recent_price_change_pct is short-window momentum in percentage points")
 	assert.Contains(t, prompt, "values below 0.0800 are below the buy momentum confirmation gate")
 	assert.Contains(t, prompt, "buy only if recent_price_change_pct >= 0.0800")
-	assert.Contains(t, prompt, "spread_pct <= 0.0600")
+	assert.Contains(t, prompt, "spread_pct <= 0.0400")
 	assert.Contains(t, prompt, "price_change_24h_pct >= 0.0200")
 	assert.Contains(t, prompt, "range_pos_24h <= 35.0")
 	assert.Contains(t, prompt, "if recent_price_change_pct is absent, buy only at deep-low range_pos_24h <= 20.0")
@@ -1367,7 +1367,7 @@ func TestAIScalpingService_BuildSystemPrompt_IncludesBackendSellSafetyGates(t *t
 	assert.Contains(t, prompt, "range_pos_24h > 15.0")
 	assert.Contains(t, prompt, "ob_imbalance <= -0.20")
 	assert.Contains(t, prompt, "Before returning hold, evaluate every symbol against the sell safety gates")
-	assert.Contains(t, prompt, "do not apply the 0.0600% buy spread gate to sell decisions")
+	assert.Contains(t, prompt, "do not apply the 0.0400% buy spread gate to sell decisions")
 	assert.Contains(t, prompt, "choose the strongest sell instead of hold")
 	assert.Contains(t, prompt, "Blowoff reversal sells")
 	assert.Contains(t, prompt, "price_change_24h_pct >= 0.0750%")
@@ -2436,7 +2436,7 @@ func TestAIScalpingService_PreTradeGate_RegimeBlock(t *testing.T) {
 		{
 			Symbol:             "ADA/USDT",
 			Price:              1.0,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: -0.31,
 			RangePosition24h:   94,
 		},
@@ -2978,7 +2978,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_BlocksAgainstNegativeM
 		High24h:            1.1,
 		Low24h:             0.9,
 		Volume24h:          1500000,
-		BidAskSpread:       0.05,
+		BidAskSpread:       0.035,
 		OrderBookImbalance: 0.60,
 		PriceChange24h:     -4.0,
 		RangePosition24h:   18,
@@ -3008,7 +3008,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsMomentumAlignedE
 		High24h:            1.1,
 		Low24h:             0.9,
 		Volume24h:          1500000,
-		BidAskSpread:       0.05,
+		BidAskSpread:       0.035,
 		OrderBookImbalance: 0.60,
 		PriceChange24h:     0.2,
 		RangePosition24h:   18,
@@ -3040,7 +3040,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesRecentMomentumWhen
 		High24h:            1.1,
 		Low24h:             0.9,
 		Volume24h:          1500000,
-		BidAskSpread:       0.05,
+		BidAskSpread:       0.035,
 		OrderBookImbalance: 0.60,
 		PriceChange24h:     0.2,
 		RecentPriceChange:  0.12,
@@ -3148,6 +3148,38 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RejectsRecentBuyNearMa
 
 	assert.False(t, ok)
 	assert.Nil(t, decision)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_RejectsENJRecentBuyLossShape(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "ENJ/USDT",
+		Price:              0.0875,
+		High24h:            0.09,
+		Low24h:             0.079,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.04410,
+		OrderBookImbalance: 0.4130,
+		PriceChange24h:     3.7757,
+		RecentPriceChange:  0.1325,
+		RecentChangeKnown:  true,
+		RangePosition24h:   22.7160,
+	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+	require.False(t, ok)
+	require.Nil(t, decision)
 }
 
 func TestAIScalpingService_AnnotateRecentSignalMomentum(t *testing.T) {
@@ -3462,7 +3494,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesMomentumConfigOver
 		High24h:            1.1,
 		Low24h:             0.9,
 		Volume24h:          1500000,
-		BidAskSpread:       0.05,
+		BidAskSpread:       0.035,
 		OrderBookImbalance: 0.60,
 		PriceChange24h:     -4.0,
 		RangePosition24h:   18,

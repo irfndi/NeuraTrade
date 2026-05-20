@@ -707,7 +707,7 @@ func TestScalpingBacktestEngine_RunSignalsUsesRecentMomentumForFallback(t *testi
 			High24h:            1.1,
 			Low24h:             0.9,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: 0.60,
 			RangePosition24h:   18,
 			PriceChange24h:     -4.0,
@@ -724,7 +724,7 @@ func TestScalpingBacktestEngine_RunSignalsUsesRecentMomentumForFallback(t *testi
 			High24h:            1.1,
 			Low24h:             0.9,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: 0.60,
 			RangePosition24h:   18,
 			PriceChange24h:     -4.0,
@@ -756,7 +756,7 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRequiresDefaultImbal
 			High24h:            0.022,
 			Low24h:             0.015,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05144,
+			BidAskSpread:       0.03544,
 			OrderBookImbalance: 0.25456,
 			RangePosition24h:   38.36,
 			PriceChange24h:     0.05595,
@@ -773,7 +773,7 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRequiresDefaultImbal
 			High24h:            0.022,
 			Low24h:             0.015,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05144,
+			BidAskSpread:       0.03544,
 			OrderBookImbalance: 0.25456,
 			RangePosition24h:   38.0,
 			PriceChange24h:     0.05595,
@@ -834,6 +834,37 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsNearMaxSpread
 	require.Equal(t, 0, result.Summary.EligibleSignals)
 	require.Equal(t, 0, result.Summary.TotalTrades)
 	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
+func TestScalpingBacktestEngine_RunSignalsRejectsENJRecentBuyLossShape(t *testing.T) {
+	now := time.Date(2026, 5, 20, 18, 8, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "ENJ/USDT",
+		Exchange:  "binance",
+		Signal: MarketSignal{
+			Symbol:             "ENJ/USDT",
+			Price:              0.0875,
+			High24h:            0.09,
+			Low24h:             0.079,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.04410,
+			OrderBookImbalance: 0.4130,
+			RangePosition24h:   22.7160,
+			PriceChange24h:     3.7757,
+			RecentPriceChange:  0.1325,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 1, result.Summary.RejectionByReason["no_directional_edge"])
 }
 
 func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsDowntrendBuy(t *testing.T) {
@@ -948,7 +979,7 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumAllowsStrongBookBuy(
 			High24h:            0.022,
 			Low24h:             0.015,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05144,
+			BidAskSpread:       0.03544,
 			OrderBookImbalance: 0.40572,
 			RangePosition24h:   32.82,
 			PriceChange24h:     0.025,
@@ -965,7 +996,7 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumAllowsStrongBookBuy(
 			High24h:            0.022,
 			Low24h:             0.015,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05144,
+			BidAskSpread:       0.03544,
 			OrderBookImbalance: 0.40572,
 			RangePosition24h:   34.0,
 			PriceChange24h:     0.025,
@@ -1062,7 +1093,7 @@ func TestScalpingBacktestEngine_RunSignalsCanRequireRecentMomentum(t *testing.T)
 			High24h:            110,
 			Low24h:             90,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: 0.50,
 			RangePosition24h:   35,
 			PriceChange24h:     1.2,
@@ -1077,7 +1108,7 @@ func TestScalpingBacktestEngine_RunSignalsCanRequireRecentMomentum(t *testing.T)
 			High24h:            110,
 			Low24h:             90,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: 0.50,
 			RangePosition24h:   35,
 			PriceChange24h:     1.2,
@@ -1094,7 +1125,7 @@ func TestScalpingBacktestEngine_RunSignalsCanRequireRecentMomentum(t *testing.T)
 			High24h:            110,
 			Low24h:             90,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: 0.50,
 			RangePosition24h:   35,
 			PriceChange24h:     1.2,
@@ -1111,7 +1142,7 @@ func TestScalpingBacktestEngine_RunSignalsCanRequireRecentMomentum(t *testing.T)
 			High24h:            110,
 			Low24h:             90,
 			Volume24h:          1_500_000,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: 0.50,
 			RangePosition24h:   35,
 			PriceChange24h:     1.2,
@@ -1241,7 +1272,7 @@ func runSignalsTestSignal(timestamp time.Time, symbol string, price, imbalance, 
 			High24h:            price * 1.2,
 			Low24h:             price * 0.8,
 			Volume24h:          1_000_000,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: imbalance,
 			RangePosition24h:   rangePosition,
 			PriceChange24h:     runSignalsTestPriceChange(imbalance),
