@@ -987,6 +987,49 @@ func TestBuildAIScalpingDecisionProbeSummaryMarksNoLossProfitFactorUnbounded(t *
 	}
 }
 
+func TestBuildAIScalpingDecisionProbeSummaryCountsPaperOutcomesByNetPnLSign(t *testing.T) {
+	summary := buildAIScalpingDecisionProbeSummary([]*services.ScalpingLLMDecisionProbeResult{
+		{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "buy"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:         decimal.Zero,
+				NetPnL:       decimal.Zero,
+				Outcome:      "loss",
+				ExitObserved: true,
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+		{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "sell"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:         mustDecimal("0.001"),
+				NetPnL:       mustDecimal("-0.01"),
+				Outcome:      "win",
+				ExitObserved: true,
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+	}, 2, mustDecimal("50"), 0)
+
+	require.Equal(t, 2, summary.PaperTrades)
+	require.Equal(t, 0, summary.PaperWins)
+	require.Equal(t, 1, summary.PaperLosses)
+	require.Equal(t, 1, summary.PaperBreakevens)
+	require.Equal(t, 2, summary.ObservedPaperTrades)
+	require.Equal(t, 0, summary.ObservedPaperWins)
+	require.Equal(t, 1, summary.ObservedPaperLosses)
+	require.Equal(t, 1, summary.ObservedPaperBreakevens)
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "no_winning_paper_trades")
+}
+
 func TestValidateAIScalpingDecisionProbeSummaryEnforcesHealthyValidQualityGates(t *testing.T) {
 	summary := aiScalpingDecisionProbeSummary{
 		Cycles:                2,

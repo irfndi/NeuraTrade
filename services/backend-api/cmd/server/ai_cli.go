@@ -570,6 +570,7 @@ type aiScalpingDecisionProbeSummary struct {
 	PaperObservedTrades                int                                        `json:"paper_observed_trades"`
 	PaperWins                          int                                        `json:"paper_wins"`
 	PaperLosses                        int                                        `json:"paper_losses"`
+	PaperBreakevens                    int                                        `json:"paper_breakevens"`
 	PaperNetPnL                        decimal.Decimal                            `json:"paper_net_pnl"`
 	PaperFees                          decimal.Decimal                            `json:"paper_fees"`
 	PaperAvgNetPnL                     decimal.Decimal                            `json:"paper_avg_net_pnl"`
@@ -581,6 +582,7 @@ type aiScalpingDecisionProbeSummary struct {
 	ObservedPaperOpenPositions         int                                        `json:"observed_paper_open_positions"`
 	ObservedPaperWins                  int                                        `json:"observed_paper_wins"`
 	ObservedPaperLosses                int                                        `json:"observed_paper_losses"`
+	ObservedPaperBreakevens            int                                        `json:"observed_paper_breakevens"`
 	ObservedPaperNetPnL                decimal.Decimal                            `json:"observed_paper_net_pnl"`
 	ObservedPaperFees                  decimal.Decimal                            `json:"observed_paper_fees"`
 	ObservedPaperAvgNetPnL             decimal.Decimal                            `json:"observed_paper_avg_net_pnl"`
@@ -1014,11 +1016,13 @@ func buildAIScalpingDecisionProbeSummary(
 			if drawdown := summary.paperPeakNetPnL.Sub(summary.paperCumulativeNetPnL); drawdown.GreaterThan(summary.PaperMaxDrawdown) {
 				summary.PaperMaxDrawdown = drawdown
 			}
-			switch strings.ToLower(strings.TrimSpace(result.PaperTrade.Outcome)) {
-			case "win":
+			switch {
+			case result.PaperTrade.NetPnL.GreaterThan(decimal.Zero):
 				summary.PaperWins++
-			case "loss":
+			case result.PaperTrade.NetPnL.LessThan(decimal.Zero):
 				summary.PaperLosses++
+			default:
+				summary.PaperBreakevens++
 			}
 		}
 		if result.ObservedPaperTrade != nil && !result.ObservedPaperTrade.ExitObserved {
@@ -1080,11 +1084,13 @@ func (summary *aiScalpingDecisionProbeSummary) addObservedPaperTrade(trade *serv
 	if drawdown := summary.observedPeakNetPnL.Sub(summary.observedCumulativeNetPnL); drawdown.GreaterThan(summary.ObservedPaperMaxDrawdown) {
 		summary.ObservedPaperMaxDrawdown = drawdown
 	}
-	switch strings.ToLower(strings.TrimSpace(trade.Outcome)) {
-	case "win":
+	switch {
+	case trade.NetPnL.GreaterThan(decimal.Zero):
 		summary.ObservedPaperWins++
-	case "loss":
+	case trade.NetPnL.LessThan(decimal.Zero):
 		summary.ObservedPaperLosses++
+	default:
+		summary.ObservedPaperBreakevens++
 	}
 	if summary.observedGrossLosingPnL.GreaterThan(decimal.Zero) {
 		summary.ObservedPaperProfitFactor = summary.observedGrossWinningPnL.Div(summary.observedGrossLosingPnL)
@@ -1741,10 +1747,10 @@ func writeAIScalpingDecisionProbeSummary(out io.Writer, outputJSON bool, summary
 	if err := writeProbeOutput("Actionable cycles: %d hold_ratio=%s\n", summary.ActionableCycles, summary.HoldRatio.String()); err != nil {
 		return err
 	}
-	if err := writeProbeOutput("Paper trades: %d observed=%d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.PaperTrades, summary.PaperObservedTrades, summary.PaperWins, summary.PaperLosses, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String(), summary.PaperProfitFactor.String(), summary.PaperProfitFactorUnbounded, summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String()); err != nil {
+	if err := writeProbeOutput("Paper trades: %d observed=%d wins=%d losses=%d breakevens=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.PaperTrades, summary.PaperObservedTrades, summary.PaperWins, summary.PaperLosses, summary.PaperBreakevens, summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String(), summary.PaperProfitFactor.String(), summary.PaperProfitFactorUnbounded, summary.PaperMaxDrawdown.String(), summary.PaperMaxDrawdownPct.String()); err != nil {
 		return err
 	}
-	if err := writeProbeOutput("Observed paper trades: %d open=%d wins=%d losses=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.ObservedPaperTrades, summary.ObservedPaperOpenPositions, summary.ObservedPaperWins, summary.ObservedPaperLosses, summary.ObservedPaperNetPnL.String(), summary.ObservedPaperFees.String(), summary.ObservedPaperAvgNetPnL.String(), summary.ObservedPaperProfitFactor.String(), summary.ObservedPaperProfitFactorUnbounded, summary.ObservedPaperMaxDrawdown.String(), summary.ObservedPaperMaxDrawdownPct.String()); err != nil {
+	if err := writeProbeOutput("Observed paper trades: %d open=%d wins=%d losses=%d breakevens=%d net_pnl=%s fees=%s avg_net_pnl=%s profit_factor=%s unbounded_profit_factor=%t max_drawdown=%s max_drawdown_pct=%s\n", summary.ObservedPaperTrades, summary.ObservedPaperOpenPositions, summary.ObservedPaperWins, summary.ObservedPaperLosses, summary.ObservedPaperBreakevens, summary.ObservedPaperNetPnL.String(), summary.ObservedPaperFees.String(), summary.ObservedPaperAvgNetPnL.String(), summary.ObservedPaperProfitFactor.String(), summary.ObservedPaperProfitFactorUnbounded, summary.ObservedPaperMaxDrawdown.String(), summary.ObservedPaperMaxDrawdownPct.String()); err != nil {
 		return err
 	}
 	if err := writeProbeOutput("Paper live trial readiness: ready=%t reasons=%v min_closed_trades=%d\n", summary.PaperLiveTrialReadiness.Ready, summary.PaperLiveTrialReadiness.Reasons, summary.PaperLiveTrialReadiness.MinClosedTrades); err != nil {
