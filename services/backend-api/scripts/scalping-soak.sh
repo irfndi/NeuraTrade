@@ -198,6 +198,10 @@ run_soak() {
       fi
       ;;
   esac
+  if [ -n "$SOAK_OUTPUT_FILE" ]; then
+    args+=("--output" "$SOAK_OUTPUT_FILE")
+    mkdir -p "$(dirname "$SOAK_OUTPUT_FILE")"
+  fi
 
   log "running no-order scalping paper soak exchange=${EXCHANGE} cycles=${CYCLES} interval_ms=${INTERVAL_MS} hold_period_seconds=${HOLD_PERIOD_SECONDS} db=${SOAK_DB_PATH} \
 min_trades=${MIN_TRADES:-disabled} min_win_rate=${MIN_WIN_RATE:-disabled} min_net_pnl=${MIN_NET_PNL:-disabled} min_avg_net_pnl=${MIN_AVG_NET_PNL:-disabled} \
@@ -206,27 +210,11 @@ max_ai_provider_degraded_cycles=${MAX_AI_PROVIDER_DEGRADED_CYCLES:-disabled} max
 min_baseline_net_pnl_delta=${MIN_BASELINE_NET_PNL_DELTA:-disabled} min_baseline_avg_pnl_delta=${MIN_BASELINE_AVG_PNL_DELTA:-disabled} require_live_trial_ready=${REQUIRE_LIVE_TRIAL_READY} \
 record_rollout_proof=${RECORD_ROLLOUT_PROOF} strategy_id=${STRATEGY_ID:-derived}"
   if [ -n "$SOAK_OUTPUT_FILE" ]; then
-    if ! command -v jq >/dev/null 2>&1; then
-      fail "jq is required to write clean SOAK_OUTPUT_FILE artifacts"
-    fi
-    local raw_output
-    local artifact_tmp
-    raw_output="$(mktemp "${TMPDIR:-/tmp}/neuratrade-scalping-soak-output.XXXXXX")"
-    artifact_tmp="${SOAK_OUTPUT_FILE}.tmp"
-    mkdir -p "$(dirname "$SOAK_OUTPUT_FILE")"
     set +e
-    "$SOAK_BIN" "${args[@]}" | tee "$raw_output" | tee -a "$LOG_FILE"
+    "$SOAK_BIN" "${args[@]}" | tee -a "$LOG_FILE"
     local soak_status=${PIPESTATUS[0]}
     set -e
-    if ! jq -s 'map(select(.db_path? != null and .result? != null)) | if length == 1 then .[0] else error("expected exactly one soak result JSON document, got \(length)") end' "$raw_output" >"$artifact_tmp"; then
-      rm -f "$raw_output" "$artifact_tmp"
-      if [ "$soak_status" -ne 0 ]; then
-        fail "scalping soak binary failed and no clean soak result artifact could be extracted"
-      fi
-      fail "failed to extract clean soak result artifact from stdout"
-    fi
-    mv "$artifact_tmp" "$SOAK_OUTPUT_FILE"
-    rm -f "$raw_output"
+    [ -f "$SOAK_OUTPUT_FILE" ] || fail "scalping soak binary did not write clean result artifact to ${SOAK_OUTPUT_FILE}"
     log "wrote clean soak result artifact to ${SOAK_OUTPUT_FILE}"
     if [ "$soak_status" -ne 0 ]; then
       fail "scalping soak binary failed; retained clean soak result artifact at ${SOAK_OUTPUT_FILE}"

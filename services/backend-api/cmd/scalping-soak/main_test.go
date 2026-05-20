@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/irfndi/neuratrade/internal/services"
@@ -273,6 +275,36 @@ func TestValidateAcceptanceGatesRequiresBaselineForDeltaGates(t *testing.T) {
 
 	err := validateAcceptanceGates(result, acceptanceGateOptions{MinBaselineNetPnLDelta: "0"})
 	require.ErrorContains(t, err, "baseline delta gates require --baseline=true")
+}
+
+func TestWriteResultPayloadFileCreatesCleanArtifact(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "nested", "soak.json")
+	result := &services.ScalpingLivePaperSoakResult{
+		Exchange:     "bitget",
+		TotalSignals: 8,
+		Report: services.ScalpingSoakReport{
+			TradeSummary: services.ScalpingSoakTradeSummary{
+				ClosedTrades: 1,
+				NetPnL:       decimal.NewFromFloat(0.01),
+			},
+		},
+	}
+
+	err := writeResultPayloadFile(outputPath, "/tmp/soak.db", result)
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	var payload struct {
+		DBPath string                                `json:"db_path"`
+		Result *services.ScalpingLivePaperSoakResult `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	require.Equal(t, "/tmp/soak.db", payload.DBPath)
+	require.NotNil(t, payload.Result)
+	require.Equal(t, "bitget", payload.Result.Exchange)
+	require.Equal(t, 8, payload.Result.TotalSignals)
+	require.Equal(t, 1, payload.Result.Report.TradeSummary.ClosedTrades)
 }
 
 func TestRunRejectsNegativeHoldPeriod(t *testing.T) {

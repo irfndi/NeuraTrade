@@ -28,10 +28,15 @@ cat >"$fake_bin" <<'SH'
 set -euo pipefail
 
 db_path=""
+output_path=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --db)
       db_path="$2"
+      shift 2
+      ;;
+    --output)
+      output_path="$2"
       shift 2
       ;;
     *)
@@ -47,7 +52,7 @@ done
 mkdir -p "$(dirname "$db_path")"
 : >"$db_path"
 
-jq -n --arg db_path "$db_path" '{
+payload="$(jq -n --arg db_path "$db_path" '{
   db_path: $db_path,
   result: {
     report: {
@@ -73,7 +78,13 @@ jq -n --arg db_path "$db_path" '{
       insufficient_trade_proof: false
     }
   }
-}'
+}')"
+
+printf '%s\n' "$payload"
+if [ -n "$output_path" ]; then
+  mkdir -p "$(dirname "$output_path")"
+  printf '%s\n' "$payload" >"$output_path"
+fi
 
 echo 'scalping-soak: paper realism gate failed: closed_trades=46 wins=46 losses=0 max_drawdown_pct=0 exceeds max_perfect_win_trades=20; perfect paper wins without drawdown are insufficient proof' >&2
 exit 1

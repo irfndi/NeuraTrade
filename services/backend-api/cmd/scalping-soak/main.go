@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,7 @@ func main() {
 func run() error {
 	var (
 		dbPath                   string
+		outputPath               string
 		exchange                 string
 		chatID                   string
 		orderPrefix              string
@@ -59,6 +61,7 @@ func run() error {
 
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
 	flags.StringVar(&dbPath, "db", "", "SQLite database path for persisted soak telemetry")
+	flags.StringVar(&outputPath, "output", "", "optional path for a clean JSON result artifact")
 	flags.StringVar(&exchange, "exchange", "bitget", "public exchange to probe")
 	flags.StringVar(&chatID, "chat-id", envString("NEURATRADE_SCALPING_SOAK_CHAT_ID", "operator-scalping-soak"), "chat id for persisted soak telemetry")
 	flags.StringVar(&orderPrefix, "order-prefix", envString("NEURATRADE_SCALPING_SOAK_ORDER_PREFIX", "operator-scalping-soak"), "order prefix for persisted soak telemetry")
@@ -167,7 +170,7 @@ func run() error {
 		MinBaselineAvgPnLDelta:   minBaselineAvgPnLDelta,
 		RequireLiveTrialReady:    requireLiveTrialReady,
 	}); err != nil {
-		if encodeErr := writeResultPayload(os.Stdout, dbPath, result); encodeErr != nil {
+		if encodeErr := writeResultPayloads(dbPath, outputPath, result); encodeErr != nil {
 			return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
 		}
 		return err
@@ -175,17 +178,27 @@ func run() error {
 
 	if recordRolloutProof {
 		if _, err := services.RecordScalpingLiveTrialProof(ctx, db.DB, strategyID, result); err != nil {
-			if encodeErr := writeResultPayload(os.Stdout, dbPath, result); encodeErr != nil {
+			if encodeErr := writeResultPayloads(dbPath, outputPath, result); encodeErr != nil {
 				return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
 			}
 			return err
 		}
 	}
 
-	return writeResultPayload(os.Stdout, dbPath, result)
+	return writeResultPayloads(dbPath, outputPath, result)
 }
 
-func writeResultPayload(out *os.File, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
+func writeResultPayloads(dbPath, outputPath string, result *services.ScalpingLivePaperSoakResult) error {
+	if err := writeResultPayload(os.Stdout, dbPath, result); err != nil {
+		return err
+	}
+	if outputPath == "" {
+		return nil
+	}
+	return writeResultPayloadFile(outputPath, dbPath, result)
+}
+
+func writeResultPayload(out io.Writer, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
 	payload := struct {
 		DBPath string                                `json:"db_path"`
 		Result *services.ScalpingLivePaperSoakResult `json:"result"`
@@ -196,6 +209,41 @@ func writeResultPayload(out *os.File, dbPath string, result *services.ScalpingLi
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(payload)
+}
+
+func writeResultPayloadFile(outputPath, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
+	if outputPath == "" {
+		return nil
+	}
+	dir := filepath.Dir(outputPath)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create output directory %s: %w", dir, err)
+		}
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(outputPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create output temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := writeResultPayload(tmp, dbPath, result); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close output temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, outputPath); err != nil {
+		return fmt.Errorf("move output artifact into place: %w", err)
+	}
+	cleanup = false
+	return nil
 }
 
 type acceptanceGateOptions struct {
