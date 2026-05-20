@@ -207,6 +207,7 @@ python3 "$VALIDATOR" \
   --validation-db "$validation_db" \
   --search-grid \
   --side buy \
+  --include-oracle-summary \
   --max-results 3 \
   --min-trades 3 \
   --min-validation-trades 3 \
@@ -228,6 +229,17 @@ jq -e \
     and all(.candidates[]; .train.losses == 1)
     and all(.candidates[]; .validation.trades == 3)
     and all(.candidates[]; .validation.losses == 1)
+    and .oracle_summary.note == "hindsight upper bound; diagnostic only, not an admissible trading rule"
+    and .oracle_summary.train.observations == 3
+    and .oracle_summary.train.opportunities == 6
+    and .oracle_summary.train.top_reaches_min_trades == true
+    and .oracle_summary.train.top_net_positive == true
+    and .oracle_summary.train.top_trades == 3
+    and .oracle_summary.train.top_side_counts.buy == 2
+    and .oracle_summary.validation.observations == 3
+    and .oracle_summary.validation.opportunities == 6
+    and .oracle_summary.validation.top_reaches_min_trades == true
+    and .oracle_summary.validation.top_net_positive == true
     and (.failures | length) == 0' \
   "$search_output" >/dev/null
 

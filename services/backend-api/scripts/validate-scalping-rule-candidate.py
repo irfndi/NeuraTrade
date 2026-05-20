@@ -324,6 +324,57 @@ def evaluate_portfolio(observations: list[Observation], rules: list[Rule], hold_
     }
 
 
+def oracle_upper_bound_summary(observations: list[Observation], min_trades: int) -> dict[str, object]:
+    opportunities: list[tuple[float, str, str]] = []
+    profitable_opportunities = 0
+    for obs in observations:
+        for side, net_pct in (("buy", obs.buy_net_pct), ("sell", obs.sell_net_pct)):
+            opportunities.append((net_pct, side, obs.symbol))
+            if net_pct > 0:
+                profitable_opportunities += 1
+
+    opportunities.sort(key=lambda item: item[0], reverse=True)
+    top = opportunities[: min(max(min_trades, 0), len(opportunities))]
+    top_net = sum(item[0] for item in top)
+    top_side_counts: dict[str, int] = {}
+    top_symbols: set[str] = set()
+    for _, side, symbol in top:
+        top_side_counts[side] = top_side_counts.get(side, 0) + 1
+        top_symbols.add(symbol)
+
+    return {
+        "observations": len(observations),
+        "opportunities": len(opportunities),
+        "profitable_opportunities": profitable_opportunities,
+        "min_trades": min_trades,
+        "top_trades": len(top),
+        "top_wins": sum(1 for net_pct, _, _ in top if net_pct > 0),
+        "top_losses": sum(1 for net_pct, _, _ in top if net_pct < 0),
+        "top_net_pct": top_net,
+        "top_avg_net_pct": top_net / len(top) if top else 0.0,
+        "top_symbols": len(top_symbols),
+        "top_side_counts": top_side_counts,
+        "top_reaches_min_trades": len(top) >= min_trades,
+        "top_net_positive": top_net > 0,
+    }
+
+
+def attach_oracle_summary(
+    payload: dict[str, object],
+    train_observations: list[Observation],
+    validation_observations: list[Observation],
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    if not args.include_oracle_summary:
+        return payload
+    payload["oracle_summary"] = {
+        "note": "hindsight upper bound; diagnostic only, not an admissible trading rule",
+        "train": oracle_upper_bound_summary(train_observations, args.min_trades),
+        "validation": oracle_upper_bound_summary(validation_observations, args.min_validation_trades),
+    }
+    return payload
+
+
 def rule_payload(rule: Rule, hold_seconds: int, fee_pct: float) -> dict[str, object]:
     return {
         "side": rule.side,
@@ -710,6 +761,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--portfolio-pool-size", type=int, default=DEFAULT_PORTFOLIO_POOL_SIZE)
     parser.add_argument("--max-portfolio-rules", type=int, default=DEFAULT_MAX_PORTFOLIO_RULES)
     parser.add_argument("--near-misses", type=int, default=0, help="include this many top failing candidates")
+    parser.add_argument(
+        "--include-oracle-summary",
+        action="store_true",
+        help="include hindsight best-opportunity diagnostics; not admissible trading evidence",
+    )
     parser.add_argument("--side", choices=("buy", "sell", "both"))
     parser.add_argument("--min-imbalance", type=float)
     parser.add_argument("--max-imbalance", type=float)
@@ -768,9 +824,19 @@ def run_search_for_hold(args: argparse.Namespace, hold_seconds: int) -> dict[str
     hold_args.hold_seconds = hold_seconds
     train_observations, validation_observations = load_train_validation_observations(hold_args, hold_seconds)
     if hold_args.search_portfolio:
-        return search_portfolio_candidates(train_observations, validation_observations, hold_args)
+        return attach_oracle_summary(
+            search_portfolio_candidates(train_observations, validation_observations, hold_args),
+            train_observations,
+            validation_observations,
+            hold_args,
+        )
     if hold_args.search_grid:
-        return search_rule_candidates(train_observations, validation_observations, hold_args)
+        return attach_oracle_summary(
+            search_rule_candidates(train_observations, validation_observations, hold_args),
+            train_observations,
+            validation_observations,
+            hold_args,
+        )
     raise ValueError("--hold-seconds-candidates requires --search-grid or --search-portfolio")
 
 
@@ -832,11 +898,13 @@ def main() -> int:
         if args.max_portfolio_rules > 3:
             raise ValueError("--max-portfolio-rules above 3 is intentionally unsupported")
         payload = search_portfolio_candidates(train_observations, validation_observations, args)
+        payload = attach_oracle_summary(payload, train_observations, validation_observations, args)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0 if payload["passed"] else 1
 
     if args.search_grid:
         payload = search_rule_candidates(train_observations, validation_observations, args)
+        payload = attach_oracle_summary(payload, train_observations, validation_observations, args)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0 if payload["passed"] else 1
 
@@ -867,6 +935,7 @@ def main() -> int:
         "passed": not failures,
         "failures": failures,
     }
+    payload = attach_oracle_summary(payload, train_observations, validation_observations, args)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if not failures else 1
 
