@@ -812,10 +812,22 @@ func applyObservedScalpingProbePaperExits(results []*services.ScalpingLLMDecisio
 
 		position, ok := openObservedScalpingProbePosition(result)
 		if ok {
+			if observedScalpingProbeHasOpenSymbol(openPositions, position.symbol) {
+				continue
+			}
 			openPositions = append(openPositions, position)
 		}
 	}
 	return len(openPositions)
+}
+
+func observedScalpingProbeHasOpenSymbol(openPositions []observedScalpingProbePosition, symbol string) bool {
+	for _, position := range openPositions {
+		if position.symbol == symbol {
+			return true
+		}
+	}
+	return false
 }
 
 func scalpingProbeSnapshotMap(snapshots []services.ScalpingLLMSignalSnapshot) map[string]services.ScalpingLLMSignalSnapshot {

@@ -962,6 +962,63 @@ func TestBuildAIScalpingDecisionProbeSummaryClosesObservedPaperExit(t *testing.T
 	require.Equal(t, "mark_to_market", results[0].ObservedPaperTrade.ExitReason)
 }
 
+func TestBuildAIScalpingDecisionProbeSummarySkipsDuplicateObservedPaperPosition(t *testing.T) {
+	start := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+	results := []*services.ScalpingLLMDecisionProbeResult{
+		{
+			ObservedAt: start,
+			Decision: &services.AITradingDecision{
+				Action: "buy",
+				Symbol: "BTC/USDT",
+			},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Symbol:     "BTC/USDT",
+				Side:       "buy",
+				Notional:   mustDecimal("10"),
+				EntryPrice: mustDecimal("100"),
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+		{
+			ObservedAt: start.Add(time.Minute),
+			Decision: &services.AITradingDecision{
+				Action: "buy",
+				Symbol: "BTC/USDT",
+			},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Symbol:     "BTCUSDT",
+				Side:       "buy",
+				Notional:   mustDecimal("10"),
+				EntryPrice: mustDecimal("100"),
+			},
+			SignalSnapshots: []services.ScalpingLLMSignalSnapshot{{
+				Symbol:     "BTCUSDT",
+				Price:      mustDecimal("100.2"),
+				ObservedAt: start.Add(time.Minute),
+			}},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+		{
+			ObservedAt:            start.Add(6 * time.Minute),
+			Decision:              &services.AITradingDecision{Action: "hold"},
+			SignalQualityCoverage: mustDecimal("1"),
+			SignalSnapshots: []services.ScalpingLLMSignalSnapshot{{
+				Symbol:     "BTC/USDT",
+				Price:      mustDecimal("101"),
+				ObservedAt: start.Add(6 * time.Minute),
+			}},
+		},
+	}
+
+	summary := buildAIScalpingDecisionProbeSummary(results, len(results), mustDecimal("1000"), 5*time.Minute)
+
+	require.Equal(t, 2, summary.PaperTrades)
+	require.Equal(t, 1, summary.ObservedPaperTrades)
+	require.Equal(t, 0, summary.ObservedPaperOpenPositions)
+	require.NotNil(t, results[0].ObservedPaperTrade)
+	require.Nil(t, results[1].ObservedPaperTrade)
+}
+
 func TestBuildAIScalpingDecisionProbeSummaryMarksNoLossProfitFactorUnbounded(t *testing.T) {
 	summary := buildAIScalpingDecisionProbeSummary([]*services.ScalpingLLMDecisionProbeResult{
 		{
