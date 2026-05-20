@@ -123,6 +123,21 @@ def load_observations(paths: Iterable[Path], hold_seconds: int, fee_pct: float) 
     return observations
 
 
+def load_train_validation_observations(
+    args: argparse.Namespace,
+    hold_seconds: int,
+) -> tuple[list[Observation], list[Observation]]:
+    if args.validation_split_ratio > 0:
+        return split_observations(
+            load_observations(args.train_db, hold_seconds, args.fee_pct),
+            args.validation_split_ratio,
+        )
+    return (
+        load_observations(args.train_db, hold_seconds, args.fee_pct),
+        load_observations(args.validation_db, hold_seconds, args.fee_pct),
+    )
+
+
 def split_observations(observations: list[Observation], validation_split_ratio: float) -> tuple[list[Observation], list[Observation]]:
     if validation_split_ratio <= 0 or validation_split_ratio >= 1:
         raise ValueError("--validation-split-ratio must be greater than 0 and less than 1")
@@ -528,6 +543,7 @@ def search_portfolio_candidates(
     return {
         "search_portfolio": True,
         "side": args.side or "both",
+        "hold_seconds": args.hold_seconds,
         "evaluated_rules": len(base_rules),
         "portfolio_pool_size": len(rules),
         "max_portfolio_rules": max_rules,
@@ -577,6 +593,7 @@ def search_rule_candidates(
     return {
         "search_grid": True,
         "side": args.side or "both",
+        "hold_seconds": args.hold_seconds,
         "evaluated_rules": len(search_candidate_rules(args.side)),
         "candidate_count": len(candidates),
         "passed": bool(candidates),
@@ -615,6 +632,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-24h", dest="min_change_24h", type=float)
     parser.add_argument("--max-24h", dest="max_change_24h", type=float)
     parser.add_argument("--hold-seconds", type=int, default=300)
+    parser.add_argument(
+        "--hold-seconds-candidates",
+        help="comma-separated hold durations to sweep with --search-grid or --search-portfolio",
+    )
     parser.add_argument("--fee-pct", type=float, default=ROUND_TRIP_FEE_PCT)
     parser.add_argument("--min-trades", type=int, default=20)
     parser.add_argument("--min-validation-trades", type=int, default=1)
@@ -629,6 +650,55 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-drawdown-pct", type=float, default=0.0)
     parser.add_argument("--min-validation-drawdown-pct", type=float, default=0.0)
     return parser.parse_args()
+
+
+def parse_hold_seconds_candidates(raw: str) -> list[int]:
+    holds: list[int] = []
+    seen: set[int] = set()
+    for part in raw.split(","):
+        value = part.strip()
+        if not value:
+            continue
+        try:
+            hold = int(value)
+        except ValueError as exc:
+            raise ValueError("--hold-seconds-candidates must contain positive integers") from exc
+        if hold <= 0:
+            raise ValueError("--hold-seconds-candidates must contain positive integers")
+        if hold in seen:
+            continue
+        seen.add(hold)
+        holds.append(hold)
+    if not holds:
+        raise ValueError("--hold-seconds-candidates must contain at least one hold duration")
+    return holds
+
+
+def run_search_for_hold(args: argparse.Namespace, hold_seconds: int) -> dict[str, object]:
+    hold_args = argparse.Namespace(**vars(args))
+    hold_args.hold_seconds = hold_seconds
+    train_observations, validation_observations = load_train_validation_observations(hold_args, hold_seconds)
+    if hold_args.search_portfolio:
+        return search_portfolio_candidates(train_observations, validation_observations, hold_args)
+    if hold_args.search_grid:
+        return search_rule_candidates(train_observations, validation_observations, hold_args)
+    raise ValueError("--hold-seconds-candidates requires --search-grid or --search-portfolio")
+
+
+def run_hold_sweep(args: argparse.Namespace, holds: list[int]) -> dict[str, object]:
+    results = [run_search_for_hold(args, hold_seconds) for hold_seconds in holds]
+    passed = any(result["passed"] for result in results)
+    candidate_count = sum(int(result["candidate_count"]) for result in results)
+    failures = [] if passed else ["no_hold_candidate_passed_train_validation_gates"]
+    return {
+        "hold_sweep": True,
+        "search_mode": "portfolio" if args.search_portfolio else "grid",
+        "holds": holds,
+        "candidate_count": candidate_count,
+        "passed": passed,
+        "results": results,
+        "failures": failures,
+    }
 
 
 def main() -> int:
@@ -650,17 +720,18 @@ def main() -> int:
     if args.validation_split_ratio <= 0 and not args.validation_db:
         raise ValueError("--validation-db is required unless --validation-split-ratio is set")
 
-    if args.validation_split_ratio > 0:
-        train_observations, validation_observations = split_observations(
-            load_observations(args.train_db, args.hold_seconds, args.fee_pct),
-            args.validation_split_ratio,
-        )
-    else:
-        train_observations = load_observations(args.train_db, args.hold_seconds, args.fee_pct)
-        validation_observations = load_observations(args.validation_db, args.hold_seconds, args.fee_pct)
-
     if args.search_grid and args.search_portfolio:
         raise ValueError("--search-grid cannot be combined with --search-portfolio")
+
+    if args.hold_seconds_candidates:
+        if not args.search_grid and not args.search_portfolio:
+            raise ValueError("--hold-seconds-candidates requires --search-grid or --search-portfolio")
+        holds = parse_hold_seconds_candidates(args.hold_seconds_candidates)
+        payload = run_hold_sweep(args, holds)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if payload["passed"] else 1
+
+    train_observations, validation_observations = load_train_validation_observations(args, args.hold_seconds)
 
     if args.search_portfolio:
         if args.portfolio_pool_size <= 0:

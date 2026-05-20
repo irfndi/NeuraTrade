@@ -29,6 +29,7 @@ split_db="${tmp_dir}/split.db"
 pass_output="${tmp_dir}/pass.json"
 search_output="${tmp_dir}/search.json"
 portfolio_output="${tmp_dir}/portfolio.json"
+hold_sweep_output="${tmp_dir}/hold-sweep.json"
 split_search_output="${tmp_dir}/split-search.json"
 fail_output="${tmp_dir}/fail.json"
 flat_output="${tmp_dir}/flat.json"
@@ -39,6 +40,7 @@ split_conflict_output="${tmp_dir}/split-conflict.out"
 invalid_split_output="${tmp_dir}/invalid-split.out"
 portfolio_grid_conflict_output="${tmp_dir}/portfolio-grid-conflict.out"
 invalid_portfolio_rules_output="${tmp_dir}/invalid-portfolio-rules.out"
+invalid_hold_sweep_output="${tmp_dir}/invalid-hold-sweep.out"
 
 create_schema() {
   sqlite3 "$1" <<'SQL'
@@ -216,6 +218,7 @@ python3 "$VALIDATOR" \
 jq -e \
   '.search_grid == true
     and .passed == true
+    and .hold_seconds == 300
     and .candidate_count == 3
     and .evaluated_rules > 0
     and (.candidates | length) == 3
@@ -259,6 +262,39 @@ jq -e \
     and all(.candidates[]; .validation.side_counts.buy == 3 and .validation.side_counts.sell == 3)
     and (.failures | length) == 0' \
   "$portfolio_output" >/dev/null
+
+python3 "$VALIDATOR" \
+  --train-db "$portfolio_train_db" \
+  --validation-db "$portfolio_validation_db" \
+  --search-portfolio \
+  --side both \
+  --hold-seconds-candidates 60,300 \
+  --max-results 1 \
+  --portfolio-pool-size 16 \
+  --max-portfolio-rules 2 \
+  --min-trades 6 \
+  --min-validation-trades 6 \
+  --min-symbols 6 \
+  --min-validation-symbols 6 \
+  --min-drawdown-pct 0.2 \
+  --min-validation-drawdown-pct 0.1 \
+  >"$hold_sweep_output"
+
+jq -e \
+  '.hold_sweep == true
+    and .search_mode == "portfolio"
+    and .passed == true
+    and .candidate_count == 2
+    and .holds == [60, 300]
+    and (.results | length) == 2
+    and all(.results[]; .search_portfolio == true and .passed == true and .candidate_count == 1)
+    and all(.results[]; (.candidates[0].rules | length) == 2)
+    and (.results[0].hold_seconds == 60)
+    and (.results[1].hold_seconds == 300)
+    and (.results[0].candidates[0].rules[0].hold_seconds == 60)
+    and (.results[1].candidates[0].rules[0].hold_seconds == 300)
+    and (.failures | length) == 0' \
+  "$hold_sweep_output" >/dev/null
 
 python3 "$VALIDATOR" \
   --train-db "$split_db" \
@@ -435,5 +471,17 @@ if python3 "$VALIDATOR" \
 fi
 
 grep -q -- "--max-portfolio-rules must be at least 2" "$invalid_portfolio_rules_output"
+
+if python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --validation-db "$validation_db" \
+  --search-grid \
+  --hold-seconds-candidates 15,nope \
+  >"$invalid_hold_sweep_output" 2>&1; then
+  echo "expected validator to reject invalid hold sweep values" >&2
+  exit 1
+fi
+
+grep -q -- "--hold-seconds-candidates must contain positive integers" "$invalid_hold_sweep_output"
 
 echo "validate-scalping-rule-candidate tests passed"
