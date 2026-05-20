@@ -54,6 +54,16 @@ SELL_BLOWOFF_SEARCH_GRIDS = {
     "min_change_24h": [0.0, 0.5, 1.0, 3.0, 5.0, 8.0],
 }
 
+SELL_WINDOW_SEARCH_GRIDS = {
+    "max_spread": [0.08, 0.10, 0.14],
+    "max_imbalance": [-0.30, -0.40, -0.50],
+    "min_range": [25.0, 45.0, 65.0],
+    "min_recent": [-0.60, -0.40, -0.25],
+    "max_recent": [0.0, 0.10, 0.20],
+    "min_change_24h": [-1.0, 0.0],
+    "max_change_24h": [0.08, 0.50],
+}
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -412,6 +422,46 @@ def portfolio_payload(rules: list[Rule], hold_seconds: int, fee_pct: float) -> l
     return [rule_payload(rule, hold_seconds, fee_pct) for rule in rules]
 
 
+def parse_rule_payload(payload: dict[str, object]) -> Rule:
+    side = payload.get("side")
+    if side not in ("buy", "sell"):
+        raise ValueError("portfolio rule side must be buy or sell")
+    return Rule(
+        side=str(side),
+        min_imbalance=optional_float(payload.get("min_imbalance")),
+        max_imbalance=optional_float(payload.get("max_imbalance")),
+        max_spread=optional_float(payload.get("max_spread")),
+        min_range=optional_float(payload.get("min_range")),
+        max_range=optional_float(payload.get("max_range")),
+        min_recent=optional_float(payload.get("min_recent")),
+        max_recent=optional_float(payload.get("max_recent")),
+        min_change_24h=optional_float(payload.get("min_24h", payload.get("min_change_24h"))),
+        max_change_24h=optional_float(payload.get("max_24h", payload.get("max_change_24h"))),
+        family=str(payload.get("family") or "manual"),
+    )
+
+
+def optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def load_portfolio_rule_file(path: Path) -> list[Rule]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"read portfolio rule file: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"portfolio rule file must be JSON: {path}") from exc
+
+    if isinstance(payload, dict):
+        payload = payload.get("rules")
+    if not isinstance(payload, list) or len(payload) < 2:
+        raise ValueError("--portfolio-rule-file must contain at least two rule objects")
+    return [parse_rule_payload(rule) for rule in payload]
+
+
 def validate_group(name: str, stats: dict[str, object], args: argparse.Namespace, validation: bool) -> list[str]:
     prefix = "validation_" if validation else ""
     failures: list[str] = []
@@ -506,6 +556,25 @@ def rank_rule_candidates(
     return ranked[:pool_size]
 
 
+def rank_rule_candidates_by_family(
+    observations: list[Observation],
+    rules: list[Rule],
+    hold_seconds: int,
+    pool_size: int,
+) -> list[tuple[Rule, dict[str, object]]]:
+    if pool_size <= 0:
+        return []
+
+    by_family: dict[str, list[Rule]] = {}
+    for rule in rules:
+        by_family.setdefault(rule.family, []).append(rule)
+
+    ranked: list[tuple[Rule, dict[str, object]]] = []
+    for family_rules in by_family.values():
+        ranked.extend(rank_rule_candidates(observations, family_rules, hold_seconds, pool_size))
+    return ranked
+
+
 def search_result_rank_key(result: dict[str, object]) -> tuple[object, ...]:
     validation = result["validation"]
     train = result["train"]
@@ -529,7 +598,11 @@ def ranked_near_misses(near_misses: list[dict[str, object]], limit: int) -> list
     return near_misses[:limit]
 
 
-def search_candidate_rules(side: str | None, include_reversal_rules: bool = False) -> list[Rule]:
+def search_candidate_rules(
+    side: str | None,
+    include_reversal_rules: bool = False,
+    include_sell_window_rules: bool = False,
+) -> list[Rule]:
     sides = ("buy", "sell") if side in (None, "both") else (side,)
     rules: list[Rule] = []
     seen: set[tuple[object, ...]] = set()
@@ -632,6 +705,29 @@ def search_candidate_rules(side: str | None, include_reversal_rules: bool = Fals
                                 family="blowoff",
                             )
                         )
+    if include_sell_window_rules and "sell" in sides:
+        for max_spread in SELL_WINDOW_SEARCH_GRIDS["max_spread"]:
+            for max_imbalance in SELL_WINDOW_SEARCH_GRIDS["max_imbalance"]:
+                for min_range in SELL_WINDOW_SEARCH_GRIDS["min_range"]:
+                    for min_recent in SELL_WINDOW_SEARCH_GRIDS["min_recent"]:
+                        for max_recent in SELL_WINDOW_SEARCH_GRIDS["max_recent"]:
+                            for min_change_24h in SELL_WINDOW_SEARCH_GRIDS["min_change_24h"]:
+                                for max_change_24h in SELL_WINDOW_SEARCH_GRIDS["max_change_24h"]:
+                                    append(
+                                        Rule(
+                                            side="sell",
+                                            min_imbalance=None,
+                                            max_imbalance=max_imbalance,
+                                            max_spread=max_spread,
+                                            min_range=min_range,
+                                            max_range=None,
+                                            min_recent=min_recent,
+                                            max_recent=max_recent,
+                                            min_change_24h=min_change_24h,
+                                            max_change_24h=max_change_24h,
+                                            family="sell_window",
+                                        )
+                                    )
     return rules
 
 
@@ -642,27 +738,34 @@ def search_portfolio_candidates(
 ) -> dict[str, object]:
     pool_size = max(args.portfolio_pool_size, 1)
     max_rules = max(args.max_portfolio_rules, 1)
-    base_rules = search_candidate_rules(args.side, args.include_reversal_rules)
+    base_rules = search_candidate_rules(args.side, args.include_reversal_rules, args.include_sell_window_rules)
     if args.side in (None, "both"):
         ranked = []
-        ranked.extend(
-            rank_rule_candidates(
-                train_observations,
-                search_candidate_rules("buy", args.include_reversal_rules),
-                args.hold_seconds,
-                pool_size,
+        for ranked_side in ("buy", "sell"):
+            side_rules = search_candidate_rules(
+                ranked_side,
+                args.include_reversal_rules,
+                args.include_sell_window_rules,
             )
-        )
-        ranked.extend(
-            rank_rule_candidates(
-                train_observations,
-                search_candidate_rules("sell", args.include_reversal_rules),
-                args.hold_seconds,
-                pool_size,
+            ranked.extend(rank_rule_candidates(train_observations, side_rules, args.hold_seconds, pool_size))
+            ranked.extend(
+                rank_rule_candidates_by_family(
+                    train_observations,
+                    side_rules,
+                    args.hold_seconds,
+                    args.portfolio_family_pool_size,
+                )
             )
-        )
     else:
         ranked = rank_rule_candidates(train_observations, base_rules, args.hold_seconds, pool_size)
+        ranked.extend(
+            rank_rule_candidates_by_family(
+                train_observations,
+                base_rules,
+                args.hold_seconds,
+                args.portfolio_family_pool_size,
+            )
+        )
 
     rules = []
     seen_rules: set[tuple[object, ...]] = set()
@@ -755,7 +858,7 @@ def search_rule_candidates(
 ) -> dict[str, object]:
     candidates: list[dict[str, object]] = []
     near_misses: list[dict[str, object]] = []
-    for rule in search_candidate_rules(args.side, args.include_reversal_rules):
+    for rule in search_candidate_rules(args.side, args.include_reversal_rules, args.include_sell_window_rules):
         train_stats = evaluate(train_observations, rule, args.hold_seconds)
         validation_stats = evaluate(validation_observations, rule, args.hold_seconds)
         failures = validate_group("train", train_stats, args, validation=False)
@@ -798,7 +901,9 @@ def search_rule_candidates(
         "search_grid": True,
         "side": args.side or "both",
         "hold_seconds": args.hold_seconds,
-        "evaluated_rules": len(search_candidate_rules(args.side, args.include_reversal_rules)),
+        "evaluated_rules": len(
+            search_candidate_rules(args.side, args.include_reversal_rules, args.include_sell_window_rules)
+        ),
         "candidate_count": len(candidates),
         "passed": bool(candidates),
         "candidates": candidates,
@@ -826,12 +931,28 @@ def parse_args() -> argparse.Namespace:
         help="extend search with opt-in reversal buy and blowoff sell rule families",
     )
     parser.add_argument(
+        "--include-sell-window-rules",
+        action="store_true",
+        help="extend search with opt-in sell rules that require recent/24h momentum windows",
+    )
+    parser.add_argument(
         "--search-portfolio",
         action="store_true",
         help="search bounded multi-rule portfolios from the strongest train-set threshold rules",
     )
+    parser.add_argument(
+        "--portfolio-rule-file",
+        type=Path,
+        help="JSON file containing explicit portfolio rules to validate without searching",
+    )
     parser.add_argument("--max-results", type=int, default=DEFAULT_SEARCH_MAX_RESULTS)
     parser.add_argument("--portfolio-pool-size", type=int, default=DEFAULT_PORTFOLIO_POOL_SIZE)
+    parser.add_argument(
+        "--portfolio-family-pool-size",
+        type=int,
+        default=0,
+        help="add this many top rules per family to the portfolio search pool",
+    )
     parser.add_argument("--max-portfolio-rules", type=int, default=DEFAULT_MAX_PORTFOLIO_RULES)
     parser.add_argument("--near-misses", type=int, default=0, help="include this many top failing candidates")
     parser.add_argument(
@@ -943,6 +1064,8 @@ def main() -> int:
         raise ValueError("--max-results must be zero or greater")
     if args.near_misses < 0:
         raise ValueError("--near-misses must be zero or greater")
+    if args.portfolio_family_pool_size < 0:
+        raise ValueError("--portfolio-family-pool-size must be zero or greater")
     if args.validation_split_ratio < 0 or args.validation_split_ratio >= 1:
         raise ValueError("--validation-split-ratio must be greater than 0 and less than 1")
     if args.validation_split_ratio > 0 and args.validation_db:
@@ -952,6 +1075,8 @@ def main() -> int:
 
     if args.search_grid and args.search_portfolio:
         raise ValueError("--search-grid cannot be combined with --search-portfolio")
+    if args.portfolio_rule_file and (args.search_grid or args.search_portfolio):
+        raise ValueError("--portfolio-rule-file cannot be combined with search modes")
 
     if args.hold_seconds_candidates:
         if not args.search_grid and not args.search_portfolio:
@@ -962,6 +1087,23 @@ def main() -> int:
         return 0 if payload["passed"] else 1
 
     train_observations, validation_observations = load_train_validation_observations(args, args.hold_seconds)
+
+    if args.portfolio_rule_file:
+        rules = load_portfolio_rule_file(args.portfolio_rule_file)
+        train_stats = evaluate_portfolio(train_observations, rules, args.hold_seconds)
+        validation_stats = evaluate_portfolio(validation_observations, rules, args.hold_seconds)
+        failures = validate_group("train", train_stats, args, validation=False)
+        failures.extend(validate_group("validation", validation_stats, args, validation=True))
+        payload = {
+            "portfolio": portfolio_payload(rules, args.hold_seconds, args.fee_pct),
+            "train": train_stats,
+            "validation": validation_stats,
+            "passed": not failures,
+            "failures": failures,
+        }
+        payload = attach_oracle_summary(payload, train_observations, validation_observations, args)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if not failures else 1
 
     if args.search_portfolio:
         if args.portfolio_pool_size <= 0:
