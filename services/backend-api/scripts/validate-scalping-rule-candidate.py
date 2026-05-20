@@ -402,6 +402,27 @@ def rank_rule_candidates(
     return ranked[:pool_size]
 
 
+def search_result_rank_key(result: dict[str, object]) -> tuple[object, ...]:
+    validation = result["validation"]
+    train = result["train"]
+    failures = result.get("failures", [])
+    return (
+        validation["net_pct"],
+        train["net_pct"],
+        validation["trades"],
+        train["trades"],
+        validation["avg_net_pct"],
+        -len(failures),
+    )
+
+
+def ranked_near_misses(near_misses: list[dict[str, object]], limit: int) -> list[dict[str, object]]:
+    if limit <= 0:
+        return []
+    near_misses.sort(key=search_result_rank_key, reverse=True)
+    return near_misses[:limit]
+
+
 def search_candidate_rules(side: str | None) -> list[Rule]:
     sides = ("buy", "sell") if side in (None, "both") else (side,)
     rules: list[Rule] = []
@@ -507,6 +528,7 @@ def search_portfolio_candidates(
         rules.append(rule)
 
     candidates: list[dict[str, object]] = []
+    near_misses: list[dict[str, object]] = []
     evaluated_portfolios = 0
     max_rules = min(max_rules, len(rules))
     for rule_count in range(2, max_rules + 1):
@@ -517,6 +539,15 @@ def search_portfolio_candidates(
             failures = validate_group("train", train_stats, args, validation=False)
             failures.extend(validate_group("validation", validation_stats, args, validation=True))
             if failures:
+                if args.near_misses > 0:
+                    near_misses.append(
+                        {
+                            "rules": portfolio_payload(list(portfolio_rules), args.hold_seconds, args.fee_pct),
+                            "train": train_stats,
+                            "validation": validation_stats,
+                            "failures": failures,
+                        }
+                    )
                 continue
             candidates.append(
                 {
@@ -540,7 +571,7 @@ def search_portfolio_candidates(
     if max_results > 0:
         candidates = candidates[:max_results]
     failures = [] if candidates else ["no_candidate_portfolio_passed_train_validation_gates"]
-    return {
+    payload = {
         "search_portfolio": True,
         "side": args.side or "both",
         "hold_seconds": args.hold_seconds,
@@ -553,6 +584,9 @@ def search_portfolio_candidates(
         "candidates": candidates,
         "failures": failures,
     }
+    if args.near_misses > 0:
+        payload["near_misses"] = ranked_near_misses(near_misses, args.near_misses)
+    return payload
 
 
 def search_rule_candidates(
@@ -561,12 +595,22 @@ def search_rule_candidates(
     args: argparse.Namespace,
 ) -> dict[str, object]:
     candidates: list[dict[str, object]] = []
+    near_misses: list[dict[str, object]] = []
     for rule in search_candidate_rules(args.side):
         train_stats = evaluate(train_observations, rule, args.hold_seconds)
         validation_stats = evaluate(validation_observations, rule, args.hold_seconds)
         failures = validate_group("train", train_stats, args, validation=False)
         failures.extend(validate_group("validation", validation_stats, args, validation=True))
         if failures:
+            if args.near_misses > 0:
+                near_misses.append(
+                    {
+                        "rule": rule_payload(rule, args.hold_seconds, args.fee_pct),
+                        "train": train_stats,
+                        "validation": validation_stats,
+                        "failures": failures,
+                    }
+                )
             continue
         candidates.append(
             {
@@ -590,7 +634,7 @@ def search_rule_candidates(
     if max_results > 0:
         candidates = candidates[:max_results]
     failures = [] if candidates else ["no_candidate_rule_passed_train_validation_gates"]
-    return {
+    payload = {
         "search_grid": True,
         "side": args.side or "both",
         "hold_seconds": args.hold_seconds,
@@ -600,6 +644,9 @@ def search_rule_candidates(
         "candidates": candidates,
         "failures": failures,
     }
+    if args.near_misses > 0:
+        payload["near_misses"] = ranked_near_misses(near_misses, args.near_misses)
+    return payload
 
 
 def parse_args() -> argparse.Namespace:
@@ -621,6 +668,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-results", type=int, default=DEFAULT_SEARCH_MAX_RESULTS)
     parser.add_argument("--portfolio-pool-size", type=int, default=DEFAULT_PORTFOLIO_POOL_SIZE)
     parser.add_argument("--max-portfolio-rules", type=int, default=DEFAULT_MAX_PORTFOLIO_RULES)
+    parser.add_argument("--near-misses", type=int, default=0, help="include this many top failing candidates")
     parser.add_argument("--side", choices=("buy", "sell", "both"))
     parser.add_argument("--min-imbalance", type=float)
     parser.add_argument("--max-imbalance", type=float)
@@ -713,6 +761,8 @@ def main() -> int:
         raise ValueError("--min-validation-drawdown-pct must be non-negative")
     if args.max_results < 0:
         raise ValueError("--max-results must be zero or greater")
+    if args.near_misses < 0:
+        raise ValueError("--near-misses must be zero or greater")
     if args.validation_split_ratio < 0 or args.validation_split_ratio >= 1:
         raise ValueError("--validation-split-ratio must be greater than 0 and less than 1")
     if args.validation_split_ratio > 0 and args.validation_db:

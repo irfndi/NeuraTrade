@@ -41,6 +41,7 @@ invalid_split_output="${tmp_dir}/invalid-split.out"
 portfolio_grid_conflict_output="${tmp_dir}/portfolio-grid-conflict.out"
 invalid_portfolio_rules_output="${tmp_dir}/invalid-portfolio-rules.out"
 invalid_hold_sweep_output="${tmp_dir}/invalid-hold-sweep.out"
+invalid_near_misses_output="${tmp_dir}/invalid-near-misses.out"
 
 create_schema() {
   sqlite3 "$1" <<'SQL'
@@ -357,6 +358,7 @@ if python3 "$VALIDATOR" \
   --min-recent 0.05 \
   --min-24h 0.02 \
   --fee-pct 0 \
+  --near-misses 2 \
   --min-trades 2 \
   --min-validation-trades 2 \
   --min-symbols 2 \
@@ -384,6 +386,7 @@ if python3 "$VALIDATOR" \
   --search-grid \
   --side buy \
   --fee-pct 0 \
+  --near-misses 2 \
   --min-trades 2 \
   --min-validation-trades 2 \
   --min-symbols 2 \
@@ -397,6 +400,9 @@ jq -e \
   '.search_grid == true
     and .passed == false
     and .candidate_count == 0
+    and (.near_misses | length) == 2
+    and all(.near_misses[]; (.failures | length) > 0)
+    and any(.near_misses[].failures[]; contains("losses=0 below minimum=1"))
     and any(.failures[]; . == "no_candidate_rule_passed_train_validation_gates")' \
   "$flat_search_output" >/dev/null
 
@@ -483,5 +489,17 @@ if python3 "$VALIDATOR" \
 fi
 
 grep -q -- "--hold-seconds-candidates must contain positive integers" "$invalid_hold_sweep_output"
+
+if python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --validation-db "$validation_db" \
+  --search-grid \
+  --near-misses -1 \
+  >"$invalid_near_misses_output" 2>&1; then
+  echo "expected validator to reject invalid near-miss count" >&2
+  exit 1
+fi
+
+grep -q -- "--near-misses must be zero or greater" "$invalid_near_misses_output"
 
 echo "validate-scalping-rule-candidate tests passed"
