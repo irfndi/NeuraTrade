@@ -100,6 +100,7 @@ type ScalpingBacktestSignal struct {
 	Symbol           string
 	Exchange         string
 	Signal           MarketSignal
+	Decision         *AITradingDecision
 	Regime           string
 	RegimeVolatility string
 	FunnelStage      string
@@ -325,6 +326,7 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			Symbol:           signal.Symbol,
 			Exchange:         signal.Exchange,
 			Signal:           signal.Signal,
+			Decision:         evaluation.Decision,
 			Regime:           evaluation.Regime,
 			RegimeVolatility: e.classifyRegimeVolatility(signal.Signal),
 			FunnelStage:      evaluation.FunnelStage,

@@ -82,24 +82,27 @@ func PersistScalpingPaperBacktestSoakReport(
 			return ScalpingSoakReport{}, fmt.Errorf("encode paper soak rejection counts: %w", err)
 		}
 		cycleID, err := telemetryStore.InsertCycleRecord(ctx, CycleRecord{
-			ID:                  fmt.Sprintf("%s-cycle-%03d", runPrefix, i+1),
-			ChatID:              chatID,
-			Exchange:            exchange,
-			OrderID:             orderID,
-			CycleAt:             signal.Timestamp,
-			Symbol:              signal.Symbol,
-			Action:              action,
-			UniverseCount:       result.Summary.TotalSignals,
-			RankedCount:         result.Summary.TotalSignals,
-			ViableCount:         result.Summary.EligibleSignals,
-			RejectionCountsJSON: rejectionCounts,
-			Regime:              signal.Regime,
-			GateBlockCode:       strings.TrimSpace(signal.RejectionReason),
-			SignalPrice:         finiteFloatPointer(signal.Signal.Price),
-			BidAskSpreadPct:     finiteFloatPointer(signal.Signal.BidAskSpread),
-			OrderBookImbalance:  finiteFloatPointer(signal.Signal.OrderBookImbalance),
-			RangePosition24h:    finiteFloatPointer(signal.Signal.RangePosition24h),
-			PriceChange24hPct:   finiteFloatPointer(signal.Signal.PriceChange24h),
+			ID:                     fmt.Sprintf("%s-cycle-%03d", runPrefix, i+1),
+			ChatID:                 chatID,
+			Exchange:               exchange,
+			OrderID:                orderID,
+			CycleAt:                signal.Timestamp,
+			Symbol:                 signal.Symbol,
+			Action:                 action,
+			Confidence:             paperSoakSignalConfidence(signal),
+			UniverseCount:          result.Summary.TotalSignals,
+			RankedCount:            result.Summary.TotalSignals,
+			ViableCount:            result.Summary.EligibleSignals,
+			RejectionCountsJSON:    rejectionCounts,
+			Regime:                 signal.Regime,
+			GateBlockCode:          strings.TrimSpace(signal.RejectionReason),
+			EffectiveMinConfidence: result.Config.MinConfidence,
+			EffectiveMaxCapitalPct: result.Config.MaxCapitalPct,
+			SignalPrice:            finiteFloatPointer(signal.Signal.Price),
+			BidAskSpreadPct:        finiteFloatPointer(signal.Signal.BidAskSpread),
+			OrderBookImbalance:     finiteFloatPointer(signal.Signal.OrderBookImbalance),
+			RangePosition24h:       finiteFloatPointer(signal.Signal.RangePosition24h),
+			PriceChange24hPct:      finiteFloatPointer(signal.Signal.PriceChange24h),
 			RecentPriceChangePct: finiteFloatPointerIf(
 				signal.Signal.RecentPriceChange,
 				signal.Signal.RecentChangeKnown,
@@ -176,6 +179,13 @@ func popPaperSoakTrade(tradesBySignal map[string][]ScalpingBacktestTrade, key st
 		tradesBySignal[key] = trades[1:]
 	}
 	return trade, true
+}
+
+func paperSoakSignalConfidence(signal ScalpingBacktestSignal) float64 {
+	if signal.Decision != nil {
+		return signal.Decision.Confidence
+	}
+	return 0
 }
 
 func paperSoakRejectionCountsJSON(reason string) (string, error) {

@@ -66,6 +66,16 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	require.False(t, report.InsufficientTradeProof)
 	require.NotNil(t, report.BaselineComparison)
 
+	var minEntryConfidence, minEffectiveConfidence float64
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT MIN(confidence), MIN(effective_min_confidence)
+		FROM scalping_cycle_telemetry
+		WHERE action IN ('buy', 'sell')
+	`).Scan(&minEntryConfidence, &minEffectiveConfidence)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, minEntryConfidence, engine.config.MinConfidence)
+	require.Equal(t, engine.config.MinConfidence, minEffectiveConfidence)
+
 	secondReport, err := PersistScalpingPaperBacktestSoakReport(ctx, sqliteDB, result, ScalpingPaperSoakPersistenceOptions{
 		ChatID:      "paper-soak-chat",
 		Exchange:    "bitget",
