@@ -190,6 +190,20 @@ python3 services/backend-api/scripts/validate-scalping-rule-candidate.py \
   --min-validation-drawdown-pct 0.0001
 ```
 
+To search conservative buy/sell threshold grids before choosing a candidate:
+
+```bash
+python3 services/backend-api/scripts/validate-scalping-rule-candidate.py \
+  --train-db /path/to/earlier-scalping-soak.db \
+  --validation-db /path/to/latest-scalping-soak.db \
+  --search-grid \
+  --side both \
+  --min-trades 20 \
+  --min-validation-trades 5 \
+  --min-drawdown-pct 0.0001 \
+  --min-validation-drawdown-pct 0.0001
+```
+
 Do not promote a rule that fails validation profitability or depends on a single
 outlier trade after removing the best result. A candidate also needs observed
 drawdown in both train and validation slices; perfect/no-drawdown windows are

@@ -24,8 +24,11 @@ validation_db="${tmp_dir}/validation.db"
 flat_train_db="${tmp_dir}/flat-train.db"
 flat_validation_db="${tmp_dir}/flat-validation.db"
 pass_output="${tmp_dir}/pass.json"
+search_output="${tmp_dir}/search.json"
 fail_output="${tmp_dir}/fail.json"
 flat_output="${tmp_dir}/flat.json"
+flat_search_output="${tmp_dir}/flat-search.json"
+missing_side_output="${tmp_dir}/missing-side.out"
 
 create_schema() {
   sqlite3 "$1" <<'SQL'
@@ -123,6 +126,34 @@ jq -e \
     and (.failures | length) == 0' \
   "$pass_output" >/dev/null
 
+python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --validation-db "$validation_db" \
+  --search-grid \
+  --side buy \
+  --max-results 3 \
+  --min-trades 3 \
+  --min-validation-trades 3 \
+  --min-symbols 3 \
+  --min-validation-symbols 3 \
+  --min-drawdown-pct 0.2 \
+  --min-validation-drawdown-pct 0.1 \
+  >"$search_output"
+
+jq -e \
+  '.search_grid == true
+    and .passed == true
+    and .candidate_count == 3
+    and .evaluated_rules > 0
+    and (.candidates | length) == 3
+    and all(.candidates[]; .rule.side == "buy")
+    and all(.candidates[]; .train.trades == 3)
+    and all(.candidates[]; .train.losses == 1)
+    and all(.candidates[]; .validation.trades == 3)
+    and all(.candidates[]; .validation.losses == 1)
+    and (.failures | length) == 0' \
+  "$search_output" >/dev/null
+
 if python3 "$VALIDATOR" \
   --train-db "$train_db" \
   --validation-db "$validation_db" \
@@ -181,5 +212,38 @@ jq -e \
     and any(.failures[]; contains("train.losses=0 below minimum=1"))
     and any(.failures[]; contains("validation.losses=0 below minimum=1"))' \
   "$flat_output" >/dev/null
+
+if python3 "$VALIDATOR" \
+  --train-db "$flat_train_db" \
+  --validation-db "$flat_validation_db" \
+  --search-grid \
+  --side buy \
+  --fee-pct 0 \
+  --min-trades 2 \
+  --min-validation-trades 2 \
+  --min-symbols 2 \
+  --min-validation-symbols 2 \
+  >"$flat_search_output"; then
+  echo "expected search mode to reject no-loss flat candidates" >&2
+  exit 1
+fi
+
+jq -e \
+  '.search_grid == true
+    and .passed == false
+    and .candidate_count == 0
+    and any(.failures[]; . == "no_candidate_rule_passed_train_validation_gates")' \
+  "$flat_search_output" >/dev/null
+
+if python3 "$VALIDATOR" \
+  --train-db "$train_db" \
+  --validation-db "$validation_db" \
+  --min-imbalance 0.35 \
+  >"$missing_side_output" 2>&1; then
+  echo "expected validator to require --side outside search mode" >&2
+  exit 1
+fi
+
+grep -q -- "--side buy|sell is required unless --search-grid is enabled" "$missing_side_output"
 
 echo "validate-scalping-rule-candidate tests passed"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a scalping rule candidate against observed soak telemetry.
+"""Validate or search scalping rule candidates against observed soak telemetry.
 
 The script evaluates 5-minute forward returns from scalping_cycle_telemetry rows
 and requires a candidate rule to pass both training and validation DB sets before
@@ -19,6 +19,23 @@ from typing import Iterable
 
 
 ROUND_TRIP_FEE_PCT = 0.12
+DEFAULT_SEARCH_MAX_RESULTS = 20
+
+BUY_SEARCH_GRIDS = {
+    "max_spread": [0.02, 0.04, 0.06, 0.08, 0.10, 0.14, 0.22],
+    "min_imbalance": [0.10, 0.20, 0.30, 0.40, 0.50, 0.60],
+    "max_range": [35.0, 45.0, 55.0, 65.0, 75.0, 85.0, 100.0],
+    "min_recent": [-0.15, -0.05, 0.0, 0.03, 0.05, 0.10, 0.15],
+    "min_change_24h": [-0.06, -0.02, 0.0, 0.01, 0.02],
+}
+
+SELL_SEARCH_GRIDS = {
+    "max_spread": [0.02, 0.04, 0.06, 0.08, 0.10, 0.14, 0.22],
+    "max_imbalance": [-0.10, -0.20, -0.30, -0.40, -0.50, -0.60],
+    "min_range": [15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0, 95.0],
+    "max_recent": [-0.15, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20],
+    "max_change_24h": [-0.08, -0.05, -0.03, -0.01, 0.0, 0.03, 0.08],
+}
 
 
 @dataclass(frozen=True)
@@ -225,6 +242,23 @@ def evaluate(observations: list[Observation], rule: Rule, hold_seconds: int) -> 
     }
 
 
+def rule_payload(rule: Rule, hold_seconds: int, fee_pct: float) -> dict[str, object]:
+    return {
+        "side": rule.side,
+        "min_imbalance": rule.min_imbalance,
+        "max_imbalance": rule.max_imbalance,
+        "max_spread": rule.max_spread,
+        "min_range": rule.min_range,
+        "max_range": rule.max_range,
+        "min_recent": rule.min_recent,
+        "max_recent": rule.max_recent,
+        "min_24h": rule.min_change_24h,
+        "max_24h": rule.max_change_24h,
+        "hold_seconds": hold_seconds,
+        "fee_pct": fee_pct,
+    }
+
+
 def validate_group(name: str, stats: dict[str, object], args: argparse.Namespace, validation: bool) -> list[str]:
     prefix = "validation_" if validation else ""
     failures: list[str] = []
@@ -257,11 +291,124 @@ def validate_group(name: str, stats: dict[str, object], args: argparse.Namespace
     return failures
 
 
+def search_candidate_rules(side: str | None) -> list[Rule]:
+    sides = ("buy", "sell") if side in (None, "both") else (side,)
+    rules: list[Rule] = []
+    seen: set[tuple[object, ...]] = set()
+
+    def append(rule: Rule) -> None:
+        key = (
+            rule.side,
+            rule.min_imbalance,
+            rule.max_imbalance,
+            rule.max_spread,
+            rule.min_range,
+            rule.max_range,
+            rule.min_recent,
+            rule.max_recent,
+            rule.min_change_24h,
+            rule.max_change_24h,
+        )
+        if key not in seen:
+            seen.add(key)
+            rules.append(rule)
+
+    if "buy" in sides:
+        for max_spread in BUY_SEARCH_GRIDS["max_spread"]:
+            for min_imbalance in BUY_SEARCH_GRIDS["min_imbalance"]:
+                for max_range in BUY_SEARCH_GRIDS["max_range"]:
+                    for min_recent in BUY_SEARCH_GRIDS["min_recent"]:
+                        for min_change_24h in BUY_SEARCH_GRIDS["min_change_24h"]:
+                            append(
+                                Rule(
+                                    side="buy",
+                                    min_imbalance=min_imbalance,
+                                    max_imbalance=None,
+                                    max_spread=max_spread,
+                                    min_range=None,
+                                    max_range=max_range,
+                                    min_recent=min_recent,
+                                    max_recent=None,
+                                    min_change_24h=min_change_24h,
+                                    max_change_24h=None,
+                                )
+                            )
+    if "sell" in sides:
+        for max_spread in SELL_SEARCH_GRIDS["max_spread"]:
+            for max_imbalance in SELL_SEARCH_GRIDS["max_imbalance"]:
+                for min_range in SELL_SEARCH_GRIDS["min_range"]:
+                    for max_recent in SELL_SEARCH_GRIDS["max_recent"]:
+                        for max_change_24h in SELL_SEARCH_GRIDS["max_change_24h"]:
+                            append(
+                                Rule(
+                                    side="sell",
+                                    min_imbalance=None,
+                                    max_imbalance=max_imbalance,
+                                    max_spread=max_spread,
+                                    min_range=min_range,
+                                    max_range=None,
+                                    min_recent=None,
+                                    max_recent=max_recent,
+                                    min_change_24h=None,
+                                    max_change_24h=max_change_24h,
+                                )
+                            )
+    return rules
+
+
+def search_rule_candidates(
+    train_observations: list[Observation],
+    validation_observations: list[Observation],
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    candidates: list[dict[str, object]] = []
+    for rule in search_candidate_rules(args.side):
+        train_stats = evaluate(train_observations, rule, args.hold_seconds)
+        validation_stats = evaluate(validation_observations, rule, args.hold_seconds)
+        failures = validate_group("train", train_stats, args, validation=False)
+        failures.extend(validate_group("validation", validation_stats, args, validation=True))
+        if failures:
+            continue
+        candidates.append(
+            {
+                "rule": rule_payload(rule, args.hold_seconds, args.fee_pct),
+                "train": train_stats,
+                "validation": validation_stats,
+            }
+        )
+
+    candidates.sort(
+        key=lambda candidate: (
+            candidate["validation"]["net_pct"],
+            candidate["train"]["net_pct"],
+            candidate["validation"]["trades"],
+            candidate["train"]["trades"],
+            candidate["validation"]["avg_net_pct"],
+        ),
+        reverse=True,
+    )
+    max_results = max(args.max_results, 0)
+    if max_results > 0:
+        candidates = candidates[:max_results]
+    failures = [] if candidates else ["no_candidate_rule_passed_train_validation_gates"]
+    return {
+        "search_grid": True,
+        "side": args.side or "both",
+        "evaluated_rules": len(search_candidate_rules(args.side)),
+        "candidate_count": len(candidates),
+        "passed": bool(candidates),
+        "candidates": candidates,
+        "failures": failures,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-db", action="append", required=True, type=Path)
     parser.add_argument("--validation-db", action="append", required=True, type=Path)
-    parser.add_argument("--side", choices=("buy", "sell"), required=True)
+    parser.add_argument("--search-grid", action="store_true", help="search conservative buy/sell threshold grids")
+    parser.add_argument("--max-results", type=int, default=DEFAULT_SEARCH_MAX_RESULTS)
+    parser.add_argument("--side", choices=("buy", "sell", "both"))
     parser.add_argument("--min-imbalance", type=float)
     parser.add_argument("--max-imbalance", type=float)
     parser.add_argument("--max-spread", type=float)
@@ -298,6 +445,18 @@ def main() -> int:
         raise ValueError("--min-drawdown-pct must be non-negative")
     if args.min_validation_drawdown_pct < 0:
         raise ValueError("--min-validation-drawdown-pct must be non-negative")
+    if args.max_results < 0:
+        raise ValueError("--max-results must be zero or greater")
+
+    if args.search_grid:
+        train_observations = load_observations(args.train_db, args.hold_seconds, args.fee_pct)
+        validation_observations = load_observations(args.validation_db, args.hold_seconds, args.fee_pct)
+        payload = search_rule_candidates(train_observations, validation_observations, args)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if payload["passed"] else 1
+
+    if args.side in (None, "both"):
+        raise ValueError("--side buy|sell is required unless --search-grid is enabled")
 
     rule = Rule(
         side=args.side,
@@ -321,20 +480,7 @@ def main() -> int:
     failures.extend(validate_group("validation", validation_stats, args, validation=True))
 
     payload = {
-        "rule": {
-            "side": args.side,
-            "min_imbalance": args.min_imbalance,
-            "max_imbalance": args.max_imbalance,
-            "max_spread": args.max_spread,
-            "min_range": args.min_range,
-            "max_range": args.max_range,
-            "min_recent": args.min_recent,
-            "max_recent": args.max_recent,
-            "min_24h": args.min_change_24h,
-            "max_24h": args.max_change_24h,
-            "hold_seconds": args.hold_seconds,
-            "fee_pct": args.fee_pct,
-        },
+        "rule": rule_payload(rule, args.hold_seconds, args.fee_pct),
         "train": train_stats,
         "validation": validation_stats,
         "passed": not failures,
