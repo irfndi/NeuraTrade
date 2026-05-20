@@ -3261,6 +3261,55 @@ func TestAIScalpingService_DeterministicFallbackCandidate_BlocksControlledBreakd
 	require.Nil(t, decision)
 }
 
+func TestAIScalpingService_DeterministicFallbackCandidate_BlocksRecentMidRangeSellAfterObservedLosses(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct: 0.22,
+			DeterministicFallback: DeterministicFallbackConfig{
+				MaxBidAskSpread: 0.08,
+				MinImbalance:    0.20,
+				BuyRangeMax:     45,
+				SellRangeMin:    55,
+				SizeFraction:    0.50,
+			},
+		},
+	}
+
+	for _, signal := range []aiMarketSignal{
+		{
+			Symbol:             "AEVOUSDT",
+			Price:              0.02562,
+			High24h:            0.03,
+			Low24h:             0.022,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.03903,
+			OrderBookImbalance: -0.6375,
+			PriceChange24h:     -1.9517,
+			RecentPriceChange:  -0.078,
+			RecentChangeKnown:  true,
+			RangePosition24h:   45.24,
+		},
+		{
+			Symbol:             "1000LUNCUSDT",
+			Price:              0.07704,
+			High24h:            0.09,
+			Low24h:             0.05,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.01298,
+			OrderBookImbalance: -0.5356,
+			PriceChange24h:     -1.18,
+			RecentPriceChange:  -0.0519,
+			RecentChangeKnown:  true,
+			RangePosition24h:   65.05,
+		},
+	} {
+		decision, _, ok := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
+
+		require.False(t, ok, signal.Symbol)
+		require.Nil(t, decision, signal.Symbol)
+	}
+}
+
 func TestAIScalpingService_DeterministicFallbackCandidate_AllowsBufferedMidRangeBuy(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{

@@ -991,6 +991,10 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	if e.config.RequireRecentMomentum && action == "buy" && signal.RangePosition24h > scalpingRecentBuyMaxRangePct {
 		return nil
 	}
+	if e.config.RequireRecentMomentum && action == "sell" && !scalpingBlowoffSellTrendConfirmed(signal) &&
+		signal.RangePosition24h < scalpingRecentSellMinRangePct {
+		return nil
+	}
 
 	liquidityScore := clampFloat(1-(signal.BidAskSpread/math.Max(e.config.MaxBidAskSpreadPct, 0.0001)), 0, 1)
 	volumeScore := clampFloat(math.Log10(math.Max(signal.Volume24h, 0)+1)/fallback.VolumeLogScale, 0, 1)

@@ -480,8 +480,10 @@ func TestScalpingBacktestEngine_RunSignalsAllowsMomentumContinuationSell(t *test
 			Volume24h:          1_500_000,
 			BidAskSpread:       0.06,
 			OrderBookImbalance: -0.23,
-			RangePosition24h:   50,
+			RangePosition24h:   80,
 			PriceChange24h:     -0.8,
+			RecentPriceChange:  -0.10,
+			RecentChangeKnown:  true,
 		},
 	}, {
 		Timestamp: now.Add(time.Minute),
@@ -495,8 +497,10 @@ func TestScalpingBacktestEngine_RunSignalsAllowsMomentumContinuationSell(t *test
 			Volume24h:          1_500_000,
 			BidAskSpread:       0.06,
 			OrderBookImbalance: -0.23,
-			RangePosition24h:   50,
+			RangePosition24h:   80,
 			PriceChange24h:     -0.8,
+			RecentPriceChange:  -0.10,
+			RecentChangeKnown:  true,
 		},
 	}})
 
@@ -509,6 +513,54 @@ func TestScalpingBacktestEngine_RunSignalsAllowsMomentumContinuationSell(t *test
 	require.Equal(t, "sell", result.Trades[0].Side)
 	require.Equal(t, "take_profit", result.Trades[0].ExitReason)
 	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
+func TestScalpingBacktestEngine_RunSignalsBlocksRecentMidRangeSellAfterObservedLosses(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 47, 15, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		{
+			Timestamp: now,
+			Symbol:    "AEVOUSDT",
+			Exchange:  "bybit",
+			Signal: MarketSignal{
+				Symbol:             "AEVOUSDT",
+				Price:              0.02562,
+				High24h:            0.03,
+				Low24h:             0.022,
+				Volume24h:          1_500_000,
+				BidAskSpread:       0.03903,
+				OrderBookImbalance: -0.6375,
+				RangePosition24h:   45.24,
+				PriceChange24h:     -1.9517,
+				RecentPriceChange:  -0.078,
+				RecentChangeKnown:  true,
+			},
+		},
+		{
+			Timestamp: now.Add(30 * time.Second),
+			Symbol:    "AEVOUSDT",
+			Exchange:  "bybit",
+			Signal: MarketSignal{
+				Symbol:             "AEVOUSDT",
+				Price:              0.02572,
+				High24h:            0.03,
+				Low24h:             0.022,
+				Volume24h:          1_500_000,
+				BidAskSpread:       0.03903,
+				OrderBookImbalance: -0.6375,
+				RangePosition24h:   45.24,
+				PriceChange24h:     -1.9517,
+				RecentPriceChange:  -0.078,
+				RecentChangeKnown:  true,
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, result.Summary.EligibleSignals)
+	require.Zero(t, result.Summary.TotalTrades)
 }
 
 func TestScalpingBacktestEngine_BuildDecisionBlocksSellWhenBroadTrendIsPositive(t *testing.T) {
