@@ -1118,6 +1118,28 @@ func TestScalpingBacktestEngine_RunSignalsRespectsCanceledContext(t *testing.T) 
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestScalpingBacktestEngine_RunSignalsUsesConfiguredFallbackThresholds(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 58, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.DeterministicFallback = DeterministicFallbackConfig{
+		MinImbalance:          0.60,
+		MaxBidAskSpread:       0.08,
+		BuyRangeMax:           45,
+		BuyMinPriceChangePct:  0.05,
+		SellMaxPriceChangePct: -0.05,
+	}.Normalized()
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+		runSignalsTestSignal(now.Add(30*time.Second), "AAA/USDT", 101, 0.50, 35),
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, result.Summary.TotalTrades)
+	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
 func newRunSignalsTestEngine(now time.Time) *ScalpingBacktestEngine {
 	return NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
 		StartTime:          now.Add(-time.Minute),
@@ -1150,6 +1172,8 @@ func runSignalsTestSignal(timestamp time.Time, symbol string, price, imbalance, 
 			OrderBookImbalance: imbalance,
 			RangePosition24h:   rangePosition,
 			PriceChange24h:     runSignalsTestPriceChange(imbalance),
+			RecentPriceChange:  runSignalsTestPriceChange(imbalance),
+			RecentChangeKnown:  true,
 		},
 	}
 }

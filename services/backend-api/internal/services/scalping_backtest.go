@@ -58,6 +58,7 @@ type ScalpingBacktestConfig struct {
 	RequireRecentMomentum bool
 	MinRecentMomentumPct  float64
 	SpreadMultiplier      float64
+	DeterministicFallback DeterministicFallbackConfig
 }
 
 type ScalpingBacktestResult struct {
@@ -898,6 +899,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.SpreadMultiplier <= 0 {
 		config.SpreadMultiplier = backtestSpreadMultiplier
 	}
+	config.DeterministicFallback = config.DeterministicFallback.Normalized()
 	if len(config.Symbols) == 0 {
 		config.Symbols = defaultScalpingBacktestUniverse()
 	}
@@ -906,7 +908,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 
 func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, signal MarketSignal) *AITradingDecision {
 	_ = ctx
-	fallback := DefaultDeterministicFallbackConfig().Normalized()
+	fallback := e.config.DeterministicFallback.Normalized()
 	if signal.Price <= 0 || strings.TrimSpace(signal.Symbol) == "" {
 		return nil
 	}

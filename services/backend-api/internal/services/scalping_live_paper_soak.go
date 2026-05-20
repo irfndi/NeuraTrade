@@ -331,6 +331,7 @@ func runPublicScalpingLivePaperSoakSignals(
 		EntryCutoffTime:       entryCutoffTime,
 		RequireRecentMomentum: true,
 		MinRecentMomentumPct:  0.05,
+		DeterministicFallback: fallbackConfig,
 	})
 	result, err := engine.RunSignals(ctx, historicalSignals)
 	if err != nil {
