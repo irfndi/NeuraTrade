@@ -9,12 +9,30 @@ mistaken for real-money proof. It always writes:
 - `arbitrage_live_ready=false`
 - `arbitrage_readiness_status=blocked`
 - `arbitrage_readiness_blockers`
+- `arbitrage_lifecycle_storage_verified`
+- `arbitrage_readiness_evidence_metrics`
 - `arbitrage_no_trade_safety=false`
 
 The review captures lifecycle context over the previous 7 days, including
 closed opportunities, wins, losses, net PnL, average net PnL, fees, open
 positions, and inventory/exposure blockers. These metrics are diagnostic only
 until the arbitrage execution path has realistic market evidence.
+
+`arbitrage_readiness_evidence_metrics` mirrors the manifest proof fields:
+
+- `closed_trades`
+- `winning_trades`
+- `losing_trades`
+- `open_positions`
+- `net_pnl`
+- `avg_net_pnl`
+- `max_drawdown_pct`
+- `no_trade_safety`
+- `no_trade_reason`
+
+`max_drawdown_pct` remains `0.00` and `no_trade_safety` remains false until a
+real arbitrage exposure verifier or no-trade safety window supplies proof, so
+the generated metrics cannot satisfy the live-readiness manifest by accident.
 
 Minimum proof before the live-readiness manifest can mark `arbitrage` ready:
 
