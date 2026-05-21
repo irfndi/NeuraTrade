@@ -57,6 +57,25 @@ type routeDB interface {
 	HealthCheck(ctx context.Context) error
 }
 
+// RouteOptions supplies runtime-owned dependencies that must be shared between
+// route handlers and trading gates.
+type RouteOptions struct {
+	KillSwitch *apprisk.KillSwitchImpl
+	SafeMode   *apprisk.SafeModeImpl
+}
+
+func (o RouteOptions) riskControls() (*apprisk.KillSwitchImpl, *apprisk.SafeModeImpl) {
+	killSwitch := o.KillSwitch
+	if killSwitch == nil {
+		killSwitch = apprisk.NewKillSwitch()
+	}
+	safeMode := o.SafeMode
+	if safeMode == nil {
+		safeMode = apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+	}
+	return killSwitch, safeMode
+}
+
 func diagnosticFloat(metrics map[string]interface{}, key string) (float64, bool) {
 	value, ok := metrics[key]
 	if !ok {
@@ -404,6 +423,13 @@ func riskLockSourcePriority(source string) int {
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
+	return SetupRoutesWithOptions(router, db, redis, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, telegramConfig, aiConfig, featuresConfig, authMiddleware, walletValidator, opModeService, technicalAnalysisService, RouteOptions{})
+}
+
+// SetupRoutesWithOptions configures routes with explicit runtime controls supplied by the server startup path.
+//
+//nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
+func SetupRoutesWithOptions(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, options RouteOptions) func() {
 	configureLiveReadinessGuard(opModeService)
 
 	// Initialize admin middleware
@@ -717,6 +743,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("Warning: Unknown database type, AI learning disabled")
 	}
 
+	routeKillSwitch, routeSafeMode := options.riskControls()
+	riskStateProvider := handlers.NewScalpingRiskControlStateProvider(routeKillSwitch, routeSafeMode)
 	runtimeDeps := autonomyruntime.Dependencies{
 		TechnicalAnalysis:   technicalAnalysisService,
 		CCXTService:         ccxtService,
@@ -725,6 +753,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		NotificationService: notificationService,
 		MonitoringService:   autonomousMonitoring,
 		SQLDB:               sqlDB,
+		RiskControls:        riskStateProvider,
 	}
 
 	// Create integrated quest runtime handlers through app/autonomy module.
@@ -1125,13 +1154,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
-	sharedKillSwitch := apprisk.NewKillSwitch()
-	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
-
 	agentControlHandler := handlers.NewAgentControlHandler(handlers.AgentControlDeps{
 		Autonomy:  integratedHandlers.AutonomyCoordinator(),
 		Collector: handlers.NewCollectorController(collectorService),
-		Risk:      handlers.NewRiskControllerAdapter(sharedKillSwitch, sharedSafeMode),
+		Risk:      handlers.NewRiskControllerAdapter(routeKillSwitch, routeSafeMode),
 		Orders:    handlers.NewCCXTOrderCanceller(ccxtService),
 	})
 	shadowHandler := handlers.NewShadowHandler(integratedHandlers.ShadowEvaluationCoordinator())

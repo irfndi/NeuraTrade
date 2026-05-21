@@ -18,6 +18,7 @@ import (
 	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/api"
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/cache"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
@@ -473,9 +474,32 @@ func run() error {
 
 	// Create operational mode service
 	opModeService := services.NewOperationalModeService(db, services.DefaultOperationalModeConfig(), logger.WithComponent("operational_mode"))
+	runtimeKillSwitch := apprisk.NewKillSwitch()
+	runtimeSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
 
 	// Setup routes and get cleanup function
-	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService)
+	cleanupRoutes := api.SetupRoutesWithOptions(
+		router,
+		db,
+		redisClient,
+		ccxtService,
+		collectorService,
+		cleanupService,
+		cacheAnalyticsService,
+		signalAggregator,
+		analyticsService,
+		&cfg.Telegram,
+		&cfg.AI,
+		&cfg.Features,
+		authMiddleware,
+		walletValidator,
+		opModeService,
+		technicalAnalysisService,
+		api.RouteOptions{
+			KillSwitch: runtimeKillSwitch,
+			SafeMode:   runtimeSafeMode,
+		},
+	)
 	defer cleanupRoutes()
 	// Create HTTP server with security timeouts
 	srv := &http.Server{

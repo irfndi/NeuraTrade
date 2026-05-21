@@ -18,16 +18,18 @@ type Dependencies struct {
 	NotificationService *services.NotificationService
 	MonitoringService   *services.AutonomousMonitorManager
 	SQLDB               *sql.DB
+	RiskControls        services.ScalpingRiskControlStateProvider
 }
 
 func BuildLocalIntegratedHandlers(deps Dependencies) *services.IntegratedQuestHandlers {
-	handlers := services.NewIntegratedQuestHandlers(
+	handlers := services.NewIntegratedQuestHandlersWithRiskControls(
 		deps.TechnicalAnalysis,
 		deps.CCXTService,
 		deps.ArbitrageService,
 		deps.FuturesArbService,
 		deps.NotificationService,
 		deps.MonitoringService,
+		deps.RiskControls,
 	)
 	handlers.SetDB(deps.SQLDB)
 	return handlers
@@ -44,7 +46,7 @@ func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandle
 		return nil, fmt.Errorf("build integrated autonomy handlers: ensure autonomy schema: %w", err)
 	}
 
-	handlers, err := services.NewIntegratedQuestHandlersWithAutonomyStore(
+	handlers, err := services.NewIntegratedQuestHandlersWithAutonomyStoreAndRiskControls(
 		deps.TechnicalAnalysis,
 		deps.CCXTService,
 		deps.ArbitrageService,
@@ -53,6 +55,7 @@ func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandle
 		deps.MonitoringService,
 		deps.SQLDB,
 		nil,
+		deps.RiskControls,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build integrated autonomy handlers: %w", err)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/api/handlers/testmocks"
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
@@ -112,6 +114,89 @@ func restoreEnv(t *testing.T, key, value string, existed bool) {
 		return
 	}
 	mustUnsetEnv(t, key)
+}
+
+func TestSetupRoutesWithOptions_AgentRiskControlsUseProvidedInstances(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const adminKey = "test-admin-key-that-is-at-least-32-chars"
+	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
+	defer restoreEnv(t, "ADMIN_API_KEY", oldAdminKey, adminKeyExists)
+	mustSetEnv(t, "ADMIN_API_KEY", adminKey)
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
+
+	router := gin.New()
+	killSwitch := apprisk.NewKillSwitch()
+	safeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+
+	teardown := SetupRoutesWithOptions(
+		router,
+		setupMockDB(t),
+		nil,
+		mockCCXT,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		&config.TelegramConfig{},
+		nil,
+		nil,
+		mockAuthMiddleware,
+		nil,
+		nil,
+		nil,
+		RouteOptions{
+			KillSwitch: killSwitch,
+			SafeMode:   safeMode,
+		},
+	)
+	defer teardown()
+
+	require.False(t, safeMode.IsEnabled())
+	require.False(t, killSwitch.IsEngaged())
+
+	tests := []struct {
+		name   string
+		path   string
+		body   string
+		assert func(t *testing.T)
+	}{
+		{
+			name: "enable safe mode",
+			path: "/api/v1/agent/enable-safe-mode",
+			body: `{}`,
+			assert: func(t *testing.T) {
+				t.Helper()
+				require.True(t, safeMode.IsEnabled(), "agent safe-mode endpoint must toggle the provided runtime safe mode")
+			},
+		},
+		{
+			name: "engage kill switch",
+			path: "/api/v1/agent/kill-switch",
+			body: `{"engage":true}`,
+			assert: func(t *testing.T) {
+				t.Helper()
+				require.True(t, killSwitch.IsEngaged(), "agent kill-switch endpoint must toggle the provided runtime kill switch")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewBufferString(tt.body))
+			req.Header.Set("X-API-Key", adminKey)
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(recorder, req)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			tt.assert(t)
+		})
+	}
 }
 
 // Test HealthResponse struct

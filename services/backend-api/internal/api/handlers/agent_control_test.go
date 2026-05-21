@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/stretchr/testify/assert"
@@ -173,6 +174,34 @@ func decodeResponseBody(t *testing.T, body []byte) map[string]interface{} {
 	var response map[string]interface{}
 	require.NoError(t, json.Unmarshal(body, &response))
 	return response
+}
+
+func TestScalpingRiskControlStateProviderReflectsSharedControls(t *testing.T) {
+	ctx := context.Background()
+	killSwitch := apprisk.NewKillSwitch()
+	safeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+	provider := NewScalpingRiskControlStateProvider(killSwitch, safeMode)
+	require.NotNil(t, provider)
+
+	state := provider.ScalpingRiskControlState(ctx)
+	require.False(t, state.SafeModeEnabled)
+	require.False(t, state.KillSwitchEngaged)
+
+	require.NoError(t, safeMode.EnableWithReason(ctx, "operator request"))
+	require.NoError(t, killSwitch.Engage(ctx, "operator request"))
+
+	state = provider.ScalpingRiskControlState(ctx)
+	require.True(t, state.SafeModeEnabled)
+	require.True(t, state.KillSwitchEngaged)
+}
+
+func TestScalpingRiskControlStateProviderFailsClosedWithoutSharedControls(t *testing.T) {
+	provider := NewScalpingRiskControlStateProvider(nil, nil)
+	require.NotNil(t, provider)
+
+	state := provider.ScalpingRiskControlState(context.Background())
+	require.True(t, state.SafeModeEnabled)
+	require.True(t, state.KillSwitchEngaged)
 }
 
 func TestAgentControlHandler_PauseExchange_Success(t *testing.T) {

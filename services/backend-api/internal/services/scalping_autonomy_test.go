@@ -11,6 +11,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type staticScalpingRiskControls struct {
+	state ScalpingRiskControlState
+}
+
+func (s staticScalpingRiskControls) ScalpingRiskControlState(context.Context) ScalpingRiskControlState {
+	return s.state
+}
+
+func TestIntegratedQuestHandlers_ScalpingRiskControlStateUsesInjectedProvider(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+
+	assert.Equal(t, ScalpingRiskControlState{}, handlers.scalpingRiskControlState(context.Background()))
+
+	handlers = NewIntegratedQuestHandlersWithRiskControls(nil, nil, nil, nil, nil, nil, staticScalpingRiskControls{
+		state: ScalpingRiskControlState{
+			SafeModeEnabled:   true,
+			KillSwitchEngaged: true,
+		},
+	})
+
+	assert.Equal(t, ScalpingRiskControlState{
+		SafeModeEnabled:   true,
+		KillSwitchEngaged: true,
+	}, handlers.scalpingRiskControlState(context.Background()))
+}
+
 func TestScalpingAutonomyCoordinator_SetStrategyMode_IgnoresInitialStageOverrideForNewShadowStrategy(t *testing.T) {
 	t.Setenv("NEURATRADE_AUTONOMY_INITIAL_STAGE", "live")
 
