@@ -503,6 +503,8 @@ func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Que
 		err = h.handleVolatilityWatch(ctx, quest)
 	case "funding_rate_scan":
 		err = h.handleFundingRateScan(ctx, quest)
+	case "arbitrage_readiness_review":
+		err = h.handleArbitrageReadinessReview(ctx, quest)
 	case "portfolio_health":
 		err = h.handlePortfolioHealthWithRisk(ctx, quest)
 	case "swing_trading_review":
@@ -730,6 +732,104 @@ func (h *IntegratedQuestHandlers) handleFundingRateScan(ctx context.Context, que
 
 	log.Printf("Funding rate scan complete: %d exchanges, %d rates", len(exchanges), ratesCollected)
 	return nil
+}
+
+func (h *IntegratedQuestHandlers) handleArbitrageReadinessReview(ctx context.Context, quest *Quest) error {
+	if quest == nil {
+		return fmt.Errorf("quest is nil")
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	if quest.Metadata == nil {
+		quest.Metadata = make(map[string]string)
+	}
+
+	now := time.Now().UTC()
+	since := now.Add(-7 * 24 * time.Hour)
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+	exchange := strings.TrimSpace(quest.Metadata["exchange"])
+	if exchange == "" {
+		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	}
+
+	blockers := []string{
+		"arbitrage_execution_not_proven_safe",
+		"funding_rate_scan_uses_placeholder_data",
+		"missing_fee_slippage_funding_accounting_proof",
+		"missing_inventory_exposure_safety_proof",
+		"missing_no_trade_safety_window",
+	}
+	quest.Checkpoint["arbitrage_review_generated_at"] = now.Format(time.RFC3339)
+	quest.Checkpoint["arbitrage_review_window_start"] = since.Format(time.RFC3339)
+	quest.Checkpoint["arbitrage_review_window_end"] = now.Format(time.RFC3339)
+	quest.Checkpoint["arbitrage_review_chat_id"] = chatID
+	quest.Checkpoint["arbitrage_review_exchange"] = exchange
+	quest.Checkpoint["arbitrage_no_trade_safety"] = false
+	quest.Checkpoint["arbitrage_no_trade_reason"] = ""
+
+	if h.orderExecutor == nil {
+		blockers = append(blockers, "order_executor_unavailable")
+	}
+	if h.lifecycleStore == nil {
+		blockers = append(blockers, "lifecycle_store_unavailable")
+		writeArbitrageReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("arbitrage readiness review: lifecycle store unavailable")
+	}
+
+	summary, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, exchange, since)
+	if err != nil {
+		blockers = append(blockers, "realized_performance_query_failed")
+		writeArbitrageReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("arbitrage readiness review: realized performance: %w", err)
+	}
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 1000)
+	if err != nil {
+		blockers = append(blockers, "open_position_query_failed")
+		writeArbitrageReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("arbitrage readiness review: open positions: %w", err)
+	}
+
+	quest.Checkpoint["arbitrage_review_closed_trades"] = summary.Trades
+	quest.Checkpoint["arbitrage_review_wins"] = summary.Wins
+	quest.Checkpoint["arbitrage_review_losses"] = summary.Losses
+	quest.Checkpoint["arbitrage_review_breakeven"] = summary.Breakeven
+	quest.Checkpoint["arbitrage_review_net_pnl"] = summary.RealizedPnL.String()
+	quest.Checkpoint["arbitrage_review_gross_pnl"] = summary.GrossPnL.String()
+	quest.Checkpoint["arbitrage_review_fees"] = summary.Fees.String()
+	quest.Checkpoint["arbitrage_review_avg_net_pnl"] = summary.AvgNetPnL.String()
+	quest.Checkpoint["arbitrage_review_win_rate"] = summary.WinRate.String()
+	quest.Checkpoint["arbitrage_review_open_positions"] = len(positions)
+
+	if summary.Trades < 2 {
+		blockers = append(blockers, "no_representative_closed_opportunity_sample")
+	}
+	if summary.Wins == 0 {
+		blockers = append(blockers, "no_winning_opportunity_observed")
+	}
+	if summary.Losses == 0 {
+		blockers = append(blockers, "no_losing_opportunity_observed")
+	}
+	if summary.RealizedPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_net_pnl")
+	}
+	if summary.Trades > 0 && summary.AvgNetPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_avg_net_pnl")
+	}
+	if len(positions) > 0 {
+		blockers = append(blockers, "open_positions_need_inventory_review")
+	}
+
+	writeArbitrageReadinessCheckpoint(quest, blockers)
+	quest.CurrentCount++
+	return nil
+}
+
+func writeArbitrageReadinessCheckpoint(quest *Quest, blockers []string) {
+	quest.Checkpoint["arbitrage_live_ready"] = false
+	quest.Checkpoint["arbitrage_readiness_status"] = "blocked"
+	quest.Checkpoint["arbitrage_readiness_blockers"] = append([]string(nil), blockers...)
+	quest.Checkpoint["arbitrage_readiness_note"] = "arbitrage has no executable real-market proof or documented no-trade safety window; keep live-money use blocked"
 }
 
 // handlePortfolioHealthWithRisk checks portfolio health with risk management

@@ -417,6 +417,16 @@ func (e *QuestEngine) registerDefaultDefinitions() {
 		Prompt:      "Check funding rates across futures exchanges for arbitrage opportunities",
 	})
 
+	// Arbitrage readiness review - runs daily
+	e.RegisterDefinition(&QuestDefinition{
+		ID:          "arbitrage_readiness_review",
+		Name:        "Arbitrage Readiness Review",
+		Description: "Record arbitrage readiness blockers and execution safety context",
+		Type:        QuestTypeRoutine,
+		Cadence:     CadenceDaily,
+		Prompt:      "Review arbitrage lifecycle evidence, open exposure, and no-trade safety blockers",
+	})
+
 	// Volatility watch - triggered by market conditions
 	e.RegisterDefinition(&QuestDefinition{
 		ID:          "volatility_watch",
