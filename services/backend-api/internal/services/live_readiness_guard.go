@@ -188,7 +188,7 @@ func paperTradingReadinessEvidenceBlockers(metrics *StrategyReadinessEvidence) [
 		blockers = append(blockers, "paper_trading=lifecycle_storage_not_verified")
 	}
 	if metrics.ClosedTrades < 1 {
-		blockers = append(blockers, "paper_trading=no_persisted_closed_paper_trades")
+		blockers = append(blockers, "paper_trading=insufficient_closed_trades")
 	}
 	if metrics.OpenPositions != 0 {
 		blockers = append(blockers, fmt.Sprintf("paper_trading=open_positions_%d", metrics.OpenPositions))

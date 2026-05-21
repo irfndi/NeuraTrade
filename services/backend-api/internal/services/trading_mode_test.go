@@ -174,7 +174,7 @@ func TestManifestLiveModeGuardRequiresPaperTradingProofMetrics(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "paper_trading=runtime_probe_not_passed")
 	assert.Contains(t, err.Error(), "paper_trading=lifecycle_storage_not_verified")
-	assert.Contains(t, err.Error(), "paper_trading=no_persisted_closed_paper_trades")
+	assert.Contains(t, err.Error(), "paper_trading=insufficient_closed_trades")
 	assert.Contains(t, err.Error(), "paper_trading=open_positions_1")
 	assert.Contains(t, err.Error(), "paper_trading=non_positive_net_pnl")
 	assert.Contains(t, err.Error(), "paper_trading=non_positive_avg_net_pnl")
