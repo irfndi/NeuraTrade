@@ -82,6 +82,36 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+func configureLiveReadinessGuard(opModeService *services.OperationalModeService) {
+	if opModeService == nil {
+		return
+	}
+	if liveReadinessGuardDisabled(os.Getenv("NEURATRADE_REQUIRE_LIVE_READINESS_PROOF")) {
+		log.Printf("WARNING: real-money live readiness proof guard disabled by NEURATRADE_REQUIRE_LIVE_READINESS_PROOF")
+		opModeService.SetLiveModeGuard(nil)
+		return
+	}
+
+	requiredStrategies := services.DefaultLiveReadinessStrategies()
+	if raw := strings.TrimSpace(os.Getenv("NEURATRADE_LIVE_READINESS_STRATEGIES")); raw != "" {
+		requiredStrategies = strings.Split(raw, ",")
+	}
+	manifestPath := strings.TrimSpace(os.Getenv(services.LiveReadinessManifestEnv))
+	opModeService.SetLiveModeGuard(services.ManifestLiveModeGuard(manifestPath, requiredStrategies))
+	if manifestPath == "" {
+		log.Printf("Real-money live readiness proof guard enabled; live mode requires %s with strategy evidence", services.LiveReadinessManifestEnv)
+	}
+}
+
+func liveReadinessGuardDisabled(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "0", "false", "no", "off", "disabled":
+		return true
+	default:
+		return false
+	}
+}
+
 type llmProviderNodeConfig struct {
 	Provider      string
 	APIKey        string
@@ -375,6 +405,8 @@ func riskLockSourcePriority(source string) int {
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
+	configureLiveReadinessGuard(opModeService)
+
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
