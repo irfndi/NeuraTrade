@@ -5,7 +5,8 @@ manifest from `NEURATRADE_LIVE_READINESS_MANIFEST`.
 
 The manifest is intentionally a final gate, not proof by itself. Each entry must
 point to evidence produced by the relevant paper/live-market verifier for that
-strategy.
+strategy. Trading strategies also require structured `evidence_metrics`; a
+non-empty evidence path alone is not enough to permit live mode.
 
 ```json
 {
@@ -19,6 +20,15 @@ strategy.
     "scalping": {
       "ready": true,
       "evidence": "/path/to/scalping-live-trial-ready.json",
+      "evidence_metrics": {
+        "closed_trades": 20,
+        "winning_trades": 9,
+        "losing_trades": 11,
+        "open_positions": 0,
+        "net_pnl": "1.25",
+        "avg_net_pnl": "0.0625",
+        "max_drawdown_pct": "0.42"
+      },
       "verified_at": "2026-05-21T00:00:00Z"
     },
     "daily_trading": {
@@ -33,6 +43,28 @@ strategy.
       "ready": false,
       "reason": "paper/live-market proof missing"
     }
+  }
+}
+```
+
+Required trading-strategy metrics:
+
+- `closed_trades`: at least 20 for `scalping`; at least 2 for `daily_trading`, `swing_trading`, and `arbitrage` unless arbitrage uses documented no-trade safety.
+- `winning_trades` and `losing_trades`: both must be positive.
+- `open_positions`: must be 0.
+- `net_pnl`, `avg_net_pnl`, and `max_drawdown_pct`: decimal strings greater than 0.
+
+Arbitrage may use no-trade safety evidence instead of closed-trade metrics only
+when an observed window proves no executable spreads/opportunities after costs:
+
+```json
+{
+  "ready": true,
+  "evidence": "/path/to/arbitrage-no-trade-safety.json",
+  "evidence_metrics": {
+    "no_trade_safety": true,
+    "no_trade_reason": "no executable spreads after fees across observed window",
+    "open_positions": 0
   }
 }
 ```
