@@ -151,6 +151,15 @@ func evidenceArtifactBlockers(strategy string, evidence string, manifestDir stri
 	if info.Size() == 0 {
 		return []string{fmt.Sprintf("%s=evidence_empty_%q", strategy, evidence)}
 	}
+
+	raw, err := os.ReadFile(evidencePath)
+	if err != nil {
+		return []string{fmt.Sprintf("%s=evidence_unreadable_%q", strategy, evidence)}
+	}
+	var evidenceJSON interface{}
+	if err := json.Unmarshal(raw, &evidenceJSON); err != nil {
+		return []string{fmt.Sprintf("%s=evidence_invalid_json_%q", strategy, evidence)}
+	}
 	return nil
 }
 
