@@ -548,6 +548,12 @@ func (h *IntegratedQuestHandlers) handleDailyTradingReport(ctx context.Context, 
 	if exchange == "" {
 		exchange = "bitget"
 	}
+	if exchange == "" && chatID != "" {
+		exchange = h.getUserExchange(chatID)
+	}
+	if exchange == "" {
+		exchange = "bitget"
+	}
 
 	blockers := []string{
 		"daily_trading_strategy_not_implemented",
@@ -891,6 +897,12 @@ func (h *IntegratedQuestHandlers) handleSwingTradingReadinessReview(ctx context.
 	if exchange == "" {
 		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
 	}
+	if exchange == "" && chatID != "" {
+		exchange = h.getUserExchange(chatID)
+	}
+	if exchange == "" {
+		exchange = "bitget"
+	}
 
 	blockers := []string{
 		"swing_trading_strategy_not_implemented",
@@ -992,14 +1004,21 @@ func writeSwingTradingReadinessEvidenceMetrics(
 	openPositions int,
 ) {
 	quest.Checkpoint["swing_trading_lifecycle_storage_verified"] = lifecycleStorageVerified
+	quest.Checkpoint["swing_trading_drawdown_verified"] = false
+	quest.Checkpoint["swing_trading_readiness_evidence_metrics_status"] = "diagnostic_placeholder"
+	if lifecycleStorageVerified {
+		quest.Checkpoint["swing_trading_readiness_evidence_metrics_status"] = "diagnostic_lifecycle"
+	}
 	quest.Checkpoint["swing_trading_readiness_evidence_metrics"] = map[string]interface{}{
-		"closed_trades":    summary.Trades,
-		"winning_trades":   summary.Wins,
-		"losing_trades":    summary.Losses,
-		"open_positions":   openPositions,
-		"net_pnl":          summary.RealizedPnL.StringFixed(2),
-		"avg_net_pnl":      summary.AvgNetPnL.StringFixed(2),
-		"max_drawdown_pct": "0.00",
+		"closed_trades":     summary.Trades,
+		"winning_trades":    summary.Wins,
+		"losing_trades":     summary.Losses,
+		"open_positions":    openPositions,
+		"net_pnl":           summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":       summary.AvgNetPnL.StringFixed(2),
+		"max_drawdown_pct":  "0.00",
+		"drawdown_verified": false,
+		"diagnostic_only":   true,
 	}
 }
 

@@ -9,6 +9,8 @@ It always writes:
 - `swing_trading_live_ready=false`
 - `swing_trading_readiness_status=blocked`
 - `swing_trading_lifecycle_storage_verified`
+- `swing_trading_drawdown_verified=false`
+- `swing_trading_readiness_evidence_metrics_status`
 - `swing_trading_readiness_evidence_metrics`
 - `swing_trading_readiness_blockers`
 
@@ -28,8 +30,10 @@ signal path and paper/live-market hold-window proof exist.
 - `max_drawdown_pct`
 
 `max_drawdown_pct` remains `0.00` until a real swing drawdown verifier supplies
-proof, so the generated metrics cannot satisfy the live-readiness manifest by
-accident.
+proof, and the metrics include `diagnostic_only=true` and
+`drawdown_verified=false` so downstream consumers can distinguish placeholder
+diagnostics from a manifest-ready evidence artifact. These fields also keep the
+generated metrics from satisfying the live-readiness manifest by accident.
 
 Minimum proof before the live-readiness manifest can mark `swing_trading` ready:
 
