@@ -542,7 +542,7 @@ func (h *IntegratedQuestHandlers) handleDailyTradingReport(ctx context.Context, 
 	if exchange == "" {
 		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
 	}
-	if exchange == "" {
+	if exchange == "" && chatID != "" {
 		exchange = h.getUserExchange(chatID)
 	}
 	if exchange == "" {
@@ -563,6 +563,13 @@ func (h *IntegratedQuestHandlers) handleDailyTradingReport(ctx context.Context, 
 	quest.Checkpoint["daily_report_exchange"] = exchange
 	writeDailyTradingReadinessEvidenceMetrics(quest, false, LifecyclePerformanceSummary{}, 0)
 
+	if chatID == "" {
+		blockers = append(blockers, "missing_chat_id_metadata")
+		writeDailyTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+
 	if h.lifecycleStore == nil {
 		blockers = append(blockers, "lifecycle_store_unavailable")
 		writeDailyTradingReadinessCheckpoint(quest, blockers)
@@ -574,15 +581,13 @@ func (h *IntegratedQuestHandlers) handleDailyTradingReport(ctx context.Context, 
 	if err != nil {
 		blockers = append(blockers, "realized_performance_query_failed")
 		writeDailyTradingReadinessCheckpoint(quest, blockers)
-		quest.CurrentCount++
-		return nil
+		return fmt.Errorf("daily trading report: realized performance: %w", err)
 	}
 	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 1000)
 	if err != nil {
 		blockers = append(blockers, "open_position_query_failed")
 		writeDailyTradingReadinessCheckpoint(quest, blockers)
-		quest.CurrentCount++
-		return nil
+		return fmt.Errorf("daily trading report: open positions: %w", err)
 	}
 
 	quest.Checkpoint["daily_report_closed_trades"] = summary.Trades

@@ -53,6 +53,89 @@ func TestExecuteRoutineDailyReportRecordsBlockedReadinessWithoutLifecycleStore(t
 	assert.Contains(t, blockers, "lifecycle_store_unavailable")
 }
 
+func TestExecuteRoutineDailyReportBlocksMissingChatIDBeforeLifecycleQueries(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "daily-missing-chat.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, lifecycleStore.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "other-user-close",
+		ChatID:      "other-chat",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "spot",
+		Filled:      decimal.NewFromInt(1),
+		EntryPrice:  decimal.NewFromInt(100),
+		ExitPrice:   decimal.NewFromInt(103),
+		RealizedPnL: decimal.NewFromInt(3),
+		Fees:        decimal.New(1, -1),
+		Source:      "daily_trading",
+		ClosedAt:    time.Now().UTC().Add(-2 * time.Hour),
+	}))
+
+	handlers := &IntegratedQuestHandlers{lifecycleStore: lifecycleStore}
+	quest := &Quest{
+		Metadata: map[string]string{
+			"definition_id": "daily_report",
+			"chat_id":       "   ",
+			"exchange":      "bitget",
+		},
+		Checkpoint: map[string]interface{}{},
+	}
+
+	err = handlers.ExecuteRoutine(ctx, quest)
+
+	require.NoError(t, err)
+	assert.Equal(t, "", quest.Checkpoint["daily_report_chat_id"])
+	assert.Equal(t, false, quest.Checkpoint["daily_trading_lifecycle_storage_verified"])
+	assert.Equal(t, 1, quest.CurrentCount)
+
+	metrics, ok := quest.Checkpoint["daily_trading_readiness_evidence_metrics"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 0, metrics["closed_trades"])
+	assert.Equal(t, "0.00", metrics["net_pnl"])
+
+	blockers, ok := quest.Checkpoint["daily_trading_readiness_blockers"].([]string)
+	require.True(t, ok)
+	assert.Contains(t, blockers, "missing_chat_id_metadata")
+	assert.NotContains(t, blockers, "lifecycle_store_unavailable")
+}
+
+func TestExecuteRoutineDailyReportReturnsLifecycleQueryErrors(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "daily-query-error.db"))
+	require.NoError(t, err)
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	require.NoError(t, sqliteDB.Close())
+
+	handlers := &IntegratedQuestHandlers{lifecycleStore: lifecycleStore}
+	quest := &Quest{
+		Metadata: map[string]string{
+			"definition_id": "daily_report",
+			"chat_id":       "daily-chat",
+			"exchange":      "bitget",
+		},
+		Checkpoint: map[string]interface{}{},
+	}
+
+	err = handlers.ExecuteRoutine(ctx, quest)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daily trading report: realized performance")
+	assert.Equal(t, 0, quest.CurrentCount)
+
+	blockers, ok := quest.Checkpoint["daily_trading_readiness_blockers"].([]string)
+	require.True(t, ok)
+	assert.Contains(t, blockers, "realized_performance_query_failed")
+}
+
 func TestExecuteRoutineDailyReportRecordsLifecycleMetrics(t *testing.T) {
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "daily-readiness.db"))
