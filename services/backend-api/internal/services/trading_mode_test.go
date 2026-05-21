@@ -133,12 +133,16 @@ func TestManifestLiveModeGuardQuotesManifestPathErrors(t *testing.T) {
 }
 
 func TestManifestLiveModeGuardAllowsVerifiedStrategies(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-readiness.json")
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-soak/daily.json")
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-soak/swing.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
 			"paper_trading": {Ready: true, Evidence: "paper-readiness.json", EvidenceMetrics: passingPaperReadinessEvidence()},
-			"daily_trading": {Ready: true, Evidence: "paper-soak:daily.json", EvidenceMetrics: passingReadinessEvidence(2)},
-			"swing_trading": {Ready: true, Evidence: "paper-soak:swing.json", EvidenceMetrics: passingReadinessEvidence(2)},
+			"daily_trading": {Ready: true, Evidence: "paper-soak/daily.json", EvidenceMetrics: passingReadinessEvidence(2)},
+			"swing_trading": {Ready: true, Evidence: "paper-soak/swing.json", EvidenceMetrics: passingReadinessEvidence(2)},
 		},
 	}
 	raw, err := json.Marshal(manifest)
@@ -147,6 +151,23 @@ func TestManifestLiveModeGuardAllowsVerifiedStrategies(t *testing.T) {
 
 	guard := ManifestLiveModeGuard(manifestPath, []string{"paper_trading", "daily_trading", "swing_trading"})
 	require.NoError(t, guard(context.Background(), "chat-1", "tester"))
+}
+
+func TestManifestLiveModeGuardRequiresReadableEvidenceArtifact(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {Ready: true, Evidence: "missing-evidence.json", EvidenceMetrics: passingReadinessEvidence(2)},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `daily_trading=evidence_unreadable_"missing-evidence.json"`)
 }
 
 func TestManifestLiveModeGuardRequiresPaperTradingProofMetrics(t *testing.T) {
@@ -338,12 +359,14 @@ func TestManifestLiveModeGuardRequiresScalpingMinimumTradeProof(t *testing.T) {
 }
 
 func TestManifestLiveModeGuardAllowsArbitrageNoTradeSafetyEvidence(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-safety/arbitrage.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
 			"arbitrage": {
 				Ready:    true,
-				Evidence: "paper-safety:arbitrage.json",
+				Evidence: "paper-safety/arbitrage.json",
 				EvidenceMetrics: &StrategyReadinessEvidence{
 					NoTradeSafety:          true,
 					NoTradeReason:          "no executable spreads after fees across observed window",
@@ -388,6 +411,16 @@ func TestManifestLiveModeGuardQuotesArbitrageNoTradeSafetyBlockers(t *testing.T)
 	assert.Contains(t, err.Error(), "arbitrage=market_data_not_verified")
 	assert.Contains(t, err.Error(), "arbitrage=cost_accounting_not_verified")
 	assert.Contains(t, err.Error(), "arbitrage=exposure_safety_not_verified")
+}
+
+func writeReadinessEvidenceArtifact(t *testing.T, manifestDir string, evidence string) {
+	t.Helper()
+	path := evidence
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(manifestDir, path)
+	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(`{"verified":true}`), 0o600))
 }
 
 func passingReadinessEvidence(closedTrades int) *StrategyReadinessEvidence {
