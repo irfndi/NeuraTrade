@@ -8,6 +8,8 @@ instead of failing as an unknown routine. It always writes:
 - `daily_trading_live_ready=false`
 - `daily_trading_readiness_status=blocked`
 - `daily_trading_lifecycle_storage_verified`
+- `daily_trading_drawdown_verified=false`
+- `daily_trading_readiness_evidence_metrics_status`
 - `daily_trading_readiness_evidence_metrics`
 - `daily_trading_readiness_blockers`
 
@@ -27,7 +29,10 @@ executable daily strategy path, drawdown proof, and evidence artifact exist.
 - `max_drawdown_pct`
 
 `max_drawdown_pct` remains `0.00` until a real drawdown verifier supplies proof,
-so the generated metrics cannot satisfy the live-readiness manifest by accident.
+and the metrics include `diagnostic_only=true` and `drawdown_verified=false` so
+downstream consumers can distinguish placeholder diagnostics from a
+manifest-ready evidence artifact. These fields also keep the generated metrics
+from satisfying the live-readiness manifest by accident.
 
 Minimum proof before the live-readiness manifest can mark `daily_trading` ready:
 

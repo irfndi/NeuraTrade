@@ -646,14 +646,21 @@ func writeDailyTradingReadinessEvidenceMetrics(
 	openPositions int,
 ) {
 	quest.Checkpoint["daily_trading_lifecycle_storage_verified"] = lifecycleStorageVerified
+	quest.Checkpoint["daily_trading_drawdown_verified"] = false
+	quest.Checkpoint["daily_trading_readiness_evidence_metrics_status"] = "diagnostic_placeholder"
+	if lifecycleStorageVerified {
+		quest.Checkpoint["daily_trading_readiness_evidence_metrics_status"] = "diagnostic_lifecycle"
+	}
 	quest.Checkpoint["daily_trading_readiness_evidence_metrics"] = map[string]interface{}{
-		"closed_trades":    summary.Trades,
-		"winning_trades":   summary.Wins,
-		"losing_trades":    summary.Losses,
-		"open_positions":   openPositions,
-		"net_pnl":          summary.RealizedPnL.StringFixed(2),
-		"avg_net_pnl":      summary.AvgNetPnL.StringFixed(2),
-		"max_drawdown_pct": "0.00",
+		"closed_trades":     summary.Trades,
+		"winning_trades":    summary.Wins,
+		"losing_trades":     summary.Losses,
+		"open_positions":    openPositions,
+		"net_pnl":           summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":       summary.AvgNetPnL.StringFixed(2),
+		"max_drawdown_pct":  "0.00",
+		"drawdown_verified": false,
+		"diagnostic_only":   true,
 	}
 }
 
