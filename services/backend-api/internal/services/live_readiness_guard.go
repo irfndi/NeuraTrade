@@ -123,7 +123,7 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 			case strings.TrimSpace(status.Evidence) == "":
 				blockers = append(blockers, fmt.Sprintf("%s=missing_evidence", strategy))
 			default:
-				blockers = append(blockers, evidenceArtifactBlockers(strategy, status.Evidence, manifestDir)...)
+				blockers = append(blockers, evidenceArtifactBlockers(strategy, status.Evidence, manifestDir, status.EvidenceMetrics)...)
 				blockers = append(blockers, strategyReadinessEvidenceBlockers(strategy, status)...)
 			}
 		}
@@ -135,7 +135,7 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 	}
 }
 
-func evidenceArtifactBlockers(strategy string, evidence string, manifestDir string) []string {
+func evidenceArtifactBlockers(strategy string, evidence string, manifestDir string, expectedMetrics *StrategyReadinessEvidence) []string {
 	evidence = strings.TrimSpace(evidence)
 	evidencePath := evidence
 	if !filepath.IsAbs(evidencePath) {
@@ -167,7 +167,83 @@ func evidenceArtifactBlockers(strategy string, evidence string, manifestDir stri
 	if err := json.Unmarshal(raw, &evidenceObject); err != nil || evidenceObject == nil {
 		return []string{fmt.Sprintf("%s=evidence_not_json_object_%q", strategy, evidence)}
 	}
+	if expectedMetrics != nil {
+		return evidenceArtifactMetricsBlockers(strategy, evidence, evidenceObject, expectedMetrics)
+	}
 	return nil
+}
+
+func evidenceArtifactMetricsBlockers(
+	strategy string,
+	evidence string,
+	evidenceObject map[string]json.RawMessage,
+	expectedMetrics *StrategyReadinessEvidence,
+) []string {
+	actualMetrics, ok := evidenceArtifactMetrics(evidenceObject)
+	if !ok {
+		return []string{fmt.Sprintf("%s=evidence_missing_metrics_%q", strategy, evidence)}
+	}
+	if !readinessEvidenceMatches(*expectedMetrics, actualMetrics) {
+		return []string{fmt.Sprintf("%s=evidence_metrics_mismatch_%q", strategy, evidence)}
+	}
+	return nil
+}
+
+func readinessEvidenceMatches(expected StrategyReadinessEvidence, actual StrategyReadinessEvidence) bool {
+	if !matchingDecimalString(expected.NetPnL, actual.NetPnL) {
+		return false
+	}
+	if !matchingDecimalString(expected.AvgNetPnL, actual.AvgNetPnL) {
+		return false
+	}
+	if !matchingDecimalString(expected.MaxDrawdownPct, actual.MaxDrawdownPct) {
+		return false
+	}
+	expected.NetPnL = ""
+	actual.NetPnL = ""
+	expected.AvgNetPnL = ""
+	actual.AvgNetPnL = ""
+	expected.MaxDrawdownPct = ""
+	actual.MaxDrawdownPct = ""
+	return expected == actual
+}
+
+func matchingDecimalString(expected string, actual string) bool {
+	expected = strings.TrimSpace(expected)
+	actual = strings.TrimSpace(actual)
+	if expected == "" || actual == "" {
+		return expected == actual
+	}
+	expectedDecimal, expectedErr := decimal.NewFromString(expected)
+	actualDecimal, actualErr := decimal.NewFromString(actual)
+	if expectedErr != nil || actualErr != nil {
+		return expected == actual
+	}
+	return expectedDecimal.Equal(actualDecimal)
+}
+
+func evidenceArtifactMetrics(evidenceObject map[string]json.RawMessage) (StrategyReadinessEvidence, bool) {
+	if raw, ok := evidenceObject["evidence_metrics"]; ok {
+		var metrics StrategyReadinessEvidence
+		if err := json.Unmarshal(raw, &metrics); err == nil {
+			return metrics, true
+		}
+		return StrategyReadinessEvidence{}, false
+	}
+
+	var readiness struct {
+		ManifestEntry struct {
+			EvidenceMetrics *StrategyReadinessEvidence `json:"evidence_metrics"`
+		} `json:"manifest_entry"`
+	}
+	raw, ok := evidenceObject["live_readiness"]
+	if !ok {
+		return StrategyReadinessEvidence{}, false
+	}
+	if err := json.Unmarshal(raw, &readiness); err != nil || readiness.ManifestEntry.EvidenceMetrics == nil {
+		return StrategyReadinessEvidence{}, false
+	}
+	return *readiness.ManifestEntry.EvidenceMetrics, true
 }
 
 func normalizeReadinessStrategies(strategies []string) []string {

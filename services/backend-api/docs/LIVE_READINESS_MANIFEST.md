@@ -9,7 +9,10 @@ strategy. Required entries also require structured `evidence_metrics`; a
 non-empty evidence path alone is not enough to permit live mode.
 Evidence paths must resolve to readable, non-empty JSON object files. Relative
 evidence paths are resolved from the manifest file's directory. Evidence files
-larger than 1 MiB are rejected by the guard.
+larger than 1 MiB are rejected by the guard. When a manifest entry includes
+`evidence_metrics`, the evidence artifact must include matching metrics either
+as top-level `evidence_metrics` or as
+`live_readiness.manifest_entry.evidence_metrics`.
 
 ```json
 {
