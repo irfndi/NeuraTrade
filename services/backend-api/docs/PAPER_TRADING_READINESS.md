@@ -11,6 +11,7 @@ stop-loss, and position close PnL. The routine writes:
 - `paper_trading_readiness_status=blocked`
 - `paper_trading_runtime_probe_passed`
 - `paper_trading_lifecycle_storage_verified`
+- `paper_trading_readiness_evidence_metrics_status`
 - `paper_trading_readiness_evidence_metrics`
 - `paper_trading_readiness_blockers`
 
@@ -22,10 +23,16 @@ mark `paper_trading` ready in the live-readiness manifest.
 
 - `paper_runtime_probe_passed`
 - `lifecycle_storage_verified`
+- `diagnostic_only`
 - `closed_trades`
 - `open_positions`
 - `net_pnl`
 - `avg_net_pnl`
+
+Generated review metrics always include `diagnostic_only=true`. The
+live-readiness guard rejects diagnostic evidence, so operators must publish a
+separate concrete paper-trading evidence artifact before the manifest can mark
+`paper_trading` ready.
 
 Minimum proof before the live-readiness manifest can mark `paper_trading` ready:
 
