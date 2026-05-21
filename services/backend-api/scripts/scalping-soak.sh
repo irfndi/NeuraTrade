@@ -23,6 +23,13 @@ ORDERBOOK_PAIRS="${ORDERBOOK_PAIRS:-${NEURATRADE_SCALPING_ORDERBOOK_PAIRS:-0}}"
 CAPITAL="${CAPITAL:-48}"
 FEE_RATE="${FEE_RATE:-0.0006}"
 REQUIRE_TRADES="${REQUIRE_TRADES:-true}"
+MIN_TRADES_SET="${MIN_TRADES+x}"
+MIN_WIN_RATE_SET="${MIN_WIN_RATE+x}"
+MIN_NET_PNL_SET="${MIN_NET_PNL+x}"
+MIN_AVG_NET_PNL_SET="${MIN_AVG_NET_PNL+x}"
+MAX_DRAWDOWN_SET="${MAX_DRAWDOWN+x}"
+MAX_DRAWDOWN_PCT_SET="${MAX_DRAWDOWN_PCT+x}"
+MAX_PERFECT_WIN_TRADES_SET="${MAX_PERFECT_WIN_TRADES+x}"
 MIN_TRADES="${MIN_TRADES-1}"
 MIN_WIN_RATE="${MIN_WIN_RATE-0.123}"
 MIN_NET_PNL="${MIN_NET_PNL-0}"
@@ -51,8 +58,29 @@ SOAK_OUTPUT_FILE="${SOAK_OUTPUT_FILE:-}"
 
 case "$(printf '%s' "$REQUIRE_TRADES" | tr '[:upper:]' '[:lower:]')" in
   false | 0 | no | off)
+    if [ -z "$MIN_TRADES_SET" ]; then
+      MIN_TRADES=""
+    fi
+    if [ -z "$MIN_WIN_RATE_SET" ]; then
+      MIN_WIN_RATE=""
+    fi
+    if [ -z "$MIN_NET_PNL_SET" ]; then
+      MIN_NET_PNL=""
+    fi
+    if [ -z "$MIN_AVG_NET_PNL_SET" ]; then
+      MIN_AVG_NET_PNL=""
+    fi
     if [ -z "$MAX_HOLD_RATIO_SET" ]; then
       MAX_HOLD_RATIO=""
+    fi
+    if [ -z "$MAX_DRAWDOWN_SET" ]; then
+      MAX_DRAWDOWN=""
+    fi
+    if [ -z "$MAX_DRAWDOWN_PCT_SET" ]; then
+      MAX_DRAWDOWN_PCT=""
+    fi
+    if [ -z "$MAX_PERFECT_WIN_TRADES_SET" ]; then
+      MAX_PERFECT_WIN_TRADES=""
     fi
     if [ -z "$MIN_BASELINE_WIN_RATE_DELTA_SET" ]; then
       MIN_BASELINE_WIN_RATE_DELTA=""

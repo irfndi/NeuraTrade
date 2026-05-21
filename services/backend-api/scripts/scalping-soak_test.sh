@@ -48,6 +48,13 @@ while [ "$#" -gt 0 ]; do
       fi
       shift 2
       ;;
+    --min-trades | --min-win-rate | --min-net-pnl | --min-avg-net-pnl | --max-drawdown | --max-drawdown-pct | --max-perfect-win-trades)
+      if [ "${EXPECT_NO_TRADE_GATE_ARGS:-false}" = "true" ]; then
+        echo "unexpected trade gate arg: $1" >&2
+        exit 3
+      fi
+      shift 2
+      ;;
     --min-baseline-win-rate-delta | --min-baseline-net-pnl-delta | --min-baseline-avg-pnl-delta)
       if [ "${EXPECT_NO_BASELINE_ARGS:-false}" = "true" ]; then
         echo "unexpected baseline gate arg: $1" >&2
@@ -153,6 +160,7 @@ EXPECT_NO_BASELINE_ARGS=true \
   NEURATRADE_HOME="$tmp_dir/home" \
   LOG_DIR="$log_dir" \
   REQUIRE_TRADES=false \
+  EXPECT_NO_TRADE_GATE_ARGS=true \
   EXPECT_NO_MAX_HOLD_RATIO_ARGS=true \
   CYCLES=3 \
   INTERVAL_MS=1000 \
