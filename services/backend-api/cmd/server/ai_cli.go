@@ -1022,20 +1022,31 @@ func buildAIScalpingDecisionProbeSummary(
 		if action == "buy" || action == "sell" {
 			summary.ActionableCycles++
 		}
+		if result.ObservedPaperTrade != nil && !result.ObservedPaperTrade.ExitObserved {
+			result.ObservedPaperTrade.ExitObserved = true
+		}
+		observedPaperTrade := result.ObservedPaperTrade
+		if result.PaperTrade != nil && observedPaperTrade == nil && result.PaperTrade.ExitObserved {
+			observedPaperTrade = result.PaperTrade
+		}
+		if observedPaperTrade != nil {
+			summary.PaperObservedTrades++
+			summary.addObservedPaperTrade(observedPaperTrade)
+		}
 		if result.PaperTrade != nil {
 			summary.PaperTrades++
-			if result.PaperTrade.ExitObserved {
-				summary.PaperObservedTrades++
-				summary.addObservedPaperTrade(result.PaperTrade)
+			paperTrade := result.PaperTrade
+			if result.ObservedPaperTrade != nil {
+				paperTrade = result.ObservedPaperTrade
 			}
-			summary.PaperNetPnL = summary.PaperNetPnL.Add(result.PaperTrade.NetPnL)
-			summary.PaperFees = summary.PaperFees.Add(result.PaperTrade.Fees)
-			if result.PaperTrade.NetPnL.GreaterThan(decimal.Zero) {
-				summary.paperGrossWinningPnL = summary.paperGrossWinningPnL.Add(result.PaperTrade.NetPnL)
-			} else if result.PaperTrade.NetPnL.LessThan(decimal.Zero) {
-				summary.paperGrossLosingPnL = summary.paperGrossLosingPnL.Add(result.PaperTrade.NetPnL.Abs())
+			summary.PaperNetPnL = summary.PaperNetPnL.Add(paperTrade.NetPnL)
+			summary.PaperFees = summary.PaperFees.Add(paperTrade.Fees)
+			if paperTrade.NetPnL.GreaterThan(decimal.Zero) {
+				summary.paperGrossWinningPnL = summary.paperGrossWinningPnL.Add(paperTrade.NetPnL)
+			} else if paperTrade.NetPnL.LessThan(decimal.Zero) {
+				summary.paperGrossLosingPnL = summary.paperGrossLosingPnL.Add(paperTrade.NetPnL.Abs())
 			}
-			summary.paperCumulativeNetPnL = summary.paperCumulativeNetPnL.Add(result.PaperTrade.NetPnL)
+			summary.paperCumulativeNetPnL = summary.paperCumulativeNetPnL.Add(paperTrade.NetPnL)
 			if summary.paperCumulativeNetPnL.GreaterThan(summary.paperPeakNetPnL) {
 				summary.paperPeakNetPnL = summary.paperCumulativeNetPnL
 			}
@@ -1043,19 +1054,13 @@ func buildAIScalpingDecisionProbeSummary(
 				summary.PaperMaxDrawdown = drawdown
 			}
 			switch {
-			case result.PaperTrade.NetPnL.GreaterThan(decimal.Zero):
+			case paperTrade.NetPnL.GreaterThan(decimal.Zero):
 				summary.PaperWins++
-			case result.PaperTrade.NetPnL.LessThan(decimal.Zero):
+			case paperTrade.NetPnL.LessThan(decimal.Zero):
 				summary.PaperLosses++
 			default:
 				summary.PaperBreakevens++
 			}
-		}
-		if result.ObservedPaperTrade != nil && !result.ObservedPaperTrade.ExitObserved {
-			result.ObservedPaperTrade.ExitObserved = true
-		}
-		if result.ObservedPaperTrade != nil {
-			summary.addObservedPaperTrade(result.ObservedPaperTrade)
 		}
 		summary.ActionCounts[action]++
 		if provider := strings.TrimSpace(result.Provider); provider != "" {

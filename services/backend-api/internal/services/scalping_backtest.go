@@ -555,20 +555,6 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 	return position, nil
 }
 
-func (e *ScalpingBacktestEngine) simulateExecution(ctx context.Context, signal HistoricalSignal, decision *AITradingDecision) (*SimulatedTrade, error) {
-	position, err := e.openSimulatedPosition(ctx, signal, decision)
-	if err != nil {
-		return nil, err
-	}
-	exitSignal := signal
-	holdFor := e.config.DefaultHoldPeriod
-	if holdFor <= 0 {
-		holdFor = DefaultScalpingBacktestHoldPeriod
-	}
-	exitSignal.Timestamp = signal.Timestamp.Add(holdFor)
-	return &SimulatedTrade{Trade: e.closeSimulatedPosition(exitSignal, position)}, nil
-}
-
 func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal, position *SimulatedPosition) ScalpingBacktestTrade {
 	markPrice := decimal.NewFromFloat(signal.Signal.Price)
 	exitPrice := markPrice

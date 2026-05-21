@@ -205,10 +205,11 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 	require.Empty(t, result.PaperTradeError)
 	require.Equal(t, "BTC/USDT", result.PaperTrade.Symbol)
 	require.Equal(t, "buy", result.PaperTrade.Side)
-	require.True(t, result.PaperTrade.Fees.GreaterThan(decimal.Zero))
-	require.True(t, result.PaperTrade.NetPnL.LessThan(decimal.Zero))
-	require.Equal(t, "loss", result.PaperTrade.Outcome)
-	require.Equal(t, "mark_to_market", result.PaperTrade.ExitReason)
+	require.True(t, result.PaperTrade.EntryPrice.GreaterThan(decimal.NewFromInt(100)))
+	require.True(t, result.PaperTrade.Fees.IsZero())
+	require.True(t, result.PaperTrade.NetPnL.IsZero())
+	require.Equal(t, "open", result.PaperTrade.Outcome)
+	require.Equal(t, "exit_unobserved", result.PaperTrade.ExitReason)
 	require.False(t, result.PaperTrade.ExitObserved)
 }
 

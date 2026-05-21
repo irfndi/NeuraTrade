@@ -954,9 +954,12 @@ func TestBuildAIScalpingDecisionProbeSummaryClosesObservedPaperExit(t *testing.T
 	summary := buildAIScalpingDecisionProbeSummary(results, len(results), mustDecimal("1000"), 30*time.Second)
 
 	require.Equal(t, 1, summary.ObservedPaperTrades)
+	require.Equal(t, 1, summary.PaperObservedTrades)
 	require.Equal(t, 0, summary.ObservedPaperOpenPositions)
 	require.Equal(t, 1, summary.ObservedPaperWins)
 	require.True(t, summary.ObservedPaperNetPnL.GreaterThan(decimal.Zero))
+	require.Equal(t, 1, summary.PaperWins)
+	require.True(t, summary.PaperNetPnL.GreaterThan(decimal.Zero))
 	require.NotNil(t, results[0].ObservedPaperTrade)
 	require.True(t, results[0].ObservedPaperTrade.ExitObserved)
 	require.Equal(t, "mark_to_market", results[0].ObservedPaperTrade.ExitReason)

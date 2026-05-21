@@ -647,28 +647,22 @@ func simulateScalpingLLMProbePaperTrade(
 	if strings.TrimSpace(engine.config.Exchange) == "" {
 		engine.config.Exchange = defaultScalpingLivePaperSoakExchange
 	}
-	trade, err := engine.simulateExecution(ctx, HistoricalSignal{
+	position, err := engine.openSimulatedPosition(ctx, HistoricalSignal{
 		Timestamp: now,
 		Symbol:    signal.Symbol,
 		Exchange:  engine.config.Exchange,
 		Signal:    signal,
 	}, decision)
 	if err != nil {
-		return nil, fmt.Errorf("simulate scalping LLM paper trade: %w", err)
+		return nil, fmt.Errorf("open scalping LLM paper trade: %w", err)
 	}
-	result := trade.Trade
 	return &ScalpingLLMProbeTrade{
-		Symbol:       result.Symbol,
-		Side:         result.Side,
-		Notional:     result.Notional,
-		EntryPrice:   result.EntryPrice,
-		ExitPrice:    result.ExitPrice,
-		GrossPnL:     paperSoakGrossPnL(result),
-		Fees:         result.Fees,
-		NetPnL:       result.PnL,
-		PnLPct:       result.PnLPct,
-		Outcome:      result.Outcome,
-		ExitReason:   result.ExitReason,
+		Symbol:       position.Symbol,
+		Side:         position.Side,
+		Notional:     position.Notional,
+		EntryPrice:   position.EntryPrice,
+		Outcome:      "open",
+		ExitReason:   "exit_unobserved",
 		ExitObserved: false,
 	}, nil
 }
