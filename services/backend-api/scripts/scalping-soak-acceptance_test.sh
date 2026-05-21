@@ -187,6 +187,17 @@ jq -e \
     and .evidence.db_path == $db_path
     and .evidence.log_file == $log_file
     and .gates.max_hold_ratio == "0.745"
+    and .live_readiness.strategy == "scalping"
+    and .live_readiness.metrics_status == "verified_artifact_diagnostic"
+    and .live_readiness.manifest_entry.ready == false
+    and .live_readiness.manifest_entry.evidence == $artifact
+    and .live_readiness.manifest_entry.evidence_metrics.closed_trades == 1
+    and .live_readiness.manifest_entry.evidence_metrics.winning_trades == 1
+    and .live_readiness.manifest_entry.evidence_metrics.losing_trades == 0
+    and .live_readiness.manifest_entry.evidence_metrics.open_positions == 0
+    and .live_readiness.manifest_entry.evidence_metrics.net_pnl == "0.1"
+    and .live_readiness.manifest_entry.evidence_metrics.avg_net_pnl == "0.1"
+    and .live_readiness.manifest_entry.evidence_metrics.max_drawdown_pct == "0"
     and .report.rejection_by_reason.no_directional_edge == 1
     and .report.trade_summary.closed_trades == 1
     and .report.insufficient_trade_proof == false' \
@@ -228,6 +239,13 @@ jq -e \
     and .evidence.db_path == $db_path
     and .evidence.log_file == $log_file
     and .gates.max_hold_ratio == "0.745"
+    and .live_readiness.strategy == "scalping"
+    and .live_readiness.manifest_entry.ready == false
+    and .live_readiness.manifest_entry.evidence == $artifact
+    and .live_readiness.manifest_entry.evidence_metrics.closed_trades == 1
+    and .live_readiness.manifest_entry.evidence_metrics.winning_trades == 1
+    and .live_readiness.manifest_entry.evidence_metrics.losing_trades == 0
+    and .live_readiness.manifest_entry.evidence_metrics.open_positions == 0
     and .report.rejection_by_reason.no_directional_edge == 1
     and .report.trade_summary.closed_trades == 1
     and .report.insufficient_trade_proof == false' \
