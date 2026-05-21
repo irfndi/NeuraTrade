@@ -8,7 +8,8 @@ point to evidence produced by the relevant paper/live-market verifier for that
 strategy. Required entries also require structured `evidence_metrics`; a
 non-empty evidence path alone is not enough to permit live mode.
 Evidence paths must resolve to readable, non-empty JSON files. Relative
-evidence paths are resolved from the manifest file's directory.
+evidence paths are resolved from the manifest file's directory. Evidence files
+larger than 1 MiB are rejected by the guard.
 
 ```json
 {
