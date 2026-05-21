@@ -217,7 +217,7 @@ func paperTradingReadinessEvidenceBlockers(metrics *StrategyReadinessEvidence) [
 		blockers = append(blockers, "paper_trading=risk_limits_not_enforced")
 	}
 	if !metrics.BacktestComparisonVerified {
-		blockers = append(blockers, "paper_trading=backtest_comparison_missing")
+		blockers = append(blockers, "paper_trading=backtest_comparison_not_verified")
 	}
 	if metrics.OpenPositions != 0 {
 		blockers = append(blockers, fmt.Sprintf("paper_trading=open_positions_%d", metrics.OpenPositions))
