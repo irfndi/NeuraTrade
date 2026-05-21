@@ -1,0 +1,26 @@
+# Swing Trading Readiness
+
+Swing trading is not approved for real-money use.
+
+The `swing_trading_review` routine records explicit readiness status in its quest
+checkpoint so operators do not infer readiness from generic lifecycle activity.
+It always writes:
+
+- `swing_trading_live_ready=false`
+- `swing_trading_readiness_status=blocked`
+- `swing_trading_readiness_blockers`
+
+The review captures lifecycle context over the previous 14 days, including
+closed trades, wins, losses, net PnL, average net PnL, open positions, and stale
+open positions. These metrics are diagnostic only until an executable swing
+signal path and paper/live-market hold-window proof exist.
+
+Minimum proof before the live-readiness manifest can mark `swing_trading` ready:
+
+- executable swing signal path with documented entry and exit rules
+- paper/live-market lifecycle evidence over representative longer holds
+- at least two closed trades with both a win and a loss
+- no open positions at proof cutoff
+- positive net and average net PnL after fees
+- observed and bounded drawdown
+- stale-position handling demonstrated

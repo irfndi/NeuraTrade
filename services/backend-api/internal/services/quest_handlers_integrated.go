@@ -505,6 +505,8 @@ func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Que
 		err = h.handleFundingRateScan(ctx, quest)
 	case "portfolio_health":
 		err = h.handlePortfolioHealthWithRisk(ctx, quest)
+	case "swing_trading_review":
+		err = h.handleSwingTradingReadinessReview(ctx, quest)
 	case "fund_growth":
 		err = h.handleFundGrowthGoal(ctx, quest)
 	case "scalping_execution":
@@ -521,6 +523,109 @@ func (h *IntegratedQuestHandlers) ExecuteArbitrage(ctx context.Context, quest *Q
 	err := h.handleArbitrageExecution(ctx, quest)
 	h.recordQuestResult(quest, err == nil, decimal.Zero)
 	return err
+}
+
+func (h *IntegratedQuestHandlers) handleSwingTradingReadinessReview(ctx context.Context, quest *Quest) error {
+	if quest == nil {
+		return fmt.Errorf("quest is nil")
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	if quest.Metadata == nil {
+		quest.Metadata = make(map[string]string)
+	}
+
+	now := time.Now().UTC()
+	since := now.Add(-14 * 24 * time.Hour)
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+	exchange := strings.TrimSpace(quest.Metadata["exchange"])
+	if exchange == "" {
+		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	}
+
+	blockers := []string{
+		"swing_trading_strategy_not_implemented",
+		"swing_review_is_readiness_status_only",
+		"no_swing_signal_engine",
+		"missing_paper_live_market_hold_window_evidence",
+	}
+	quest.Checkpoint["swing_review_generated_at"] = now.Format(time.RFC3339)
+	quest.Checkpoint["swing_review_window_start"] = since.Format(time.RFC3339)
+	quest.Checkpoint["swing_review_window_end"] = now.Format(time.RFC3339)
+	quest.Checkpoint["swing_review_chat_id"] = chatID
+	quest.Checkpoint["swing_review_exchange"] = exchange
+
+	if h.lifecycleStore == nil {
+		blockers = append(blockers, "lifecycle_store_unavailable")
+		writeSwingTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+
+	summary, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, exchange, since)
+	if err != nil {
+		blockers = append(blockers, "realized_performance_query_failed")
+		writeSwingTradingReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("swing trading readiness review: realized performance: %w", err)
+	}
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 0)
+	if err != nil {
+		blockers = append(blockers, "open_position_query_failed")
+		writeSwingTradingReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("swing trading readiness review: open positions: %w", err)
+	}
+	staleOpenPositions := 0
+	for _, position := range positions {
+		if !position.OpenedAt.IsZero() && position.OpenedAt.Before(since) {
+			staleOpenPositions++
+		}
+	}
+
+	quest.Checkpoint["swing_review_closed_trades"] = summary.Trades
+	quest.Checkpoint["swing_review_wins"] = summary.Wins
+	quest.Checkpoint["swing_review_losses"] = summary.Losses
+	quest.Checkpoint["swing_review_breakeven"] = summary.Breakeven
+	quest.Checkpoint["swing_review_net_pnl"] = summary.RealizedPnL.String()
+	quest.Checkpoint["swing_review_gross_pnl"] = summary.GrossPnL.String()
+	quest.Checkpoint["swing_review_fees"] = summary.Fees.String()
+	quest.Checkpoint["swing_review_avg_net_pnl"] = summary.AvgNetPnL.String()
+	quest.Checkpoint["swing_review_win_rate"] = summary.WinRate.String()
+	quest.Checkpoint["swing_review_open_positions"] = len(positions)
+	quest.Checkpoint["swing_review_stale_open_positions"] = staleOpenPositions
+
+	if summary.Trades < 2 {
+		blockers = append(blockers, "no_representative_closed_trade_sample")
+	}
+	if summary.Wins == 0 {
+		blockers = append(blockers, "no_winning_trade_observed")
+	}
+	if summary.Losses == 0 {
+		blockers = append(blockers, "no_losing_trade_observed")
+	}
+	if summary.RealizedPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_net_pnl")
+	}
+	if summary.Trades > 0 && summary.AvgNetPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_avg_net_pnl")
+	}
+	if len(positions) > 0 {
+		blockers = append(blockers, "open_positions_need_lifecycle_review")
+	}
+	if staleOpenPositions > 0 {
+		blockers = append(blockers, "stale_open_positions_detected")
+	}
+
+	writeSwingTradingReadinessCheckpoint(quest, blockers)
+	quest.CurrentCount++
+	return nil
+}
+
+func writeSwingTradingReadinessCheckpoint(quest *Quest, blockers []string) {
+	quest.Checkpoint["swing_trading_live_ready"] = false
+	quest.Checkpoint["swing_trading_readiness_status"] = "blocked"
+	quest.Checkpoint["swing_trading_readiness_blockers"] = append([]string(nil), blockers...)
+	quest.Checkpoint["swing_trading_readiness_note"] = "swing trading has no executable strategy path or readiness evidence; keep live-money use blocked"
 }
 
 func (h *IntegratedQuestHandlers) handleVolatilityWatch(ctx context.Context, quest *Quest) error {
