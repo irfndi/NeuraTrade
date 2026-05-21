@@ -27,6 +27,7 @@ until the arbitrage execution path has realistic market evidence.
 - `net_pnl`
 - `avg_net_pnl`
 - `max_drawdown_pct`
+- `drawdown_verified`
 - `execution_path_verified`
 - `market_data_verified`
 - `risk_limits_enforced`
@@ -38,8 +39,9 @@ until the arbitrage execution path has realistic market evidence.
 
 `max_drawdown_pct` remains `0.00` and `no_trade_safety` remains false until a
 real arbitrage exposure verifier or no-trade safety window supplies proof. The
-generated metrics also keep all verifier booleans false so they cannot satisfy
-the live-readiness manifest by accident.
+generated metrics also keep all verifier booleans, including
+`drawdown_verified`, false so they cannot satisfy the live-readiness manifest by
+accident.
 
 Minimum proof before the live-readiness manifest can mark `arbitrage` ready:
 

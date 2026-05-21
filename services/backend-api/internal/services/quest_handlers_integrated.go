@@ -1278,6 +1278,7 @@ func writeArbitrageReadinessEvidenceMetrics(
 		"net_pnl":                      summary.RealizedPnL.StringFixed(2),
 		"avg_net_pnl":                  summary.AvgNetPnL.StringFixed(2),
 		"max_drawdown_pct":             "0.00",
+		"drawdown_verified":            false,
 		"execution_path_verified":      false,
 		"market_data_verified":         false,
 		"risk_limits_enforced":         false,
