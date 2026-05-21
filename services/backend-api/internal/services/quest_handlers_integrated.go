@@ -739,8 +739,8 @@ func writePaperTradingReadinessEvidenceMetrics(
 		"lifecycle_storage_verified": lifecycleStorageVerified,
 		"closed_trades":              summary.Trades,
 		"open_positions":             openPositions,
-		"net_pnl":                    summary.RealizedPnL.String(),
-		"avg_net_pnl":                summary.AvgNetPnL.String(),
+		"net_pnl":                    summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":                summary.AvgNetPnL.StringFixed(2),
 	}
 }
 

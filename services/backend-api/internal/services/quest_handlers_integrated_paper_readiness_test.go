@@ -43,8 +43,8 @@ func TestExecuteRoutinePaperTradingReviewBlocksUntilEvidenceArtifactExists(t *te
 	assert.Equal(t, false, metrics["lifecycle_storage_verified"])
 	assert.Equal(t, 0, metrics["closed_trades"])
 	assert.Equal(t, 0, metrics["open_positions"])
-	assert.Equal(t, "0", metrics["net_pnl"])
-	assert.Equal(t, "0", metrics["avg_net_pnl"])
+	assert.Equal(t, "0.00", metrics["net_pnl"])
+	assert.Equal(t, "0.00", metrics["avg_net_pnl"])
 
 	blockers, ok := quest.Checkpoint["paper_trading_readiness_blockers"].([]string)
 	require.True(t, ok)
