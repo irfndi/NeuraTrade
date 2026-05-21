@@ -282,6 +282,31 @@ func TestManifestLiveModeGuardAllowsArbitrageNoTradeSafetyEvidence(t *testing.T)
 	require.NoError(t, guard(context.Background(), "chat-1", "tester"))
 }
 
+func TestManifestLiveModeGuardQuotesArbitrageNoTradeSafetyBlockers(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"arbitrage": {
+				Ready:    true,
+				Evidence: "paper-safety:arbitrage.json",
+				EvidenceMetrics: &StrategyReadinessEvidence{
+					NoTradeSafety: true,
+					OpenPositions: 2,
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"arbitrage"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `arbitrage="missing_no_trade_reason"`)
+	assert.Contains(t, err.Error(), `arbitrage=open_positions_"2"`)
+}
+
 func passingReadinessEvidence(closedTrades int) *StrategyReadinessEvidence {
 	return &StrategyReadinessEvidence{
 		ClosedTrades:     closedTrades,

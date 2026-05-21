@@ -149,10 +149,10 @@ func strategyReadinessEvidenceBlockers(strategy string, status StrategyLiveReadi
 	}
 	if strategy == "arbitrage" && metrics.NoTradeSafety {
 		if strings.TrimSpace(metrics.NoTradeReason) == "" {
-			blockers = append(blockers, "arbitrage=missing_no_trade_reason")
+			blockers = append(blockers, fmt.Sprintf("%s=%q", strategy, "missing_no_trade_reason"))
 		}
 		if metrics.OpenPositions != 0 {
-			blockers = append(blockers, fmt.Sprintf("arbitrage=open_positions_%d", metrics.OpenPositions))
+			blockers = append(blockers, fmt.Sprintf("%s=open_positions_%q", strategy, fmt.Sprint(metrics.OpenPositions)))
 		}
 		return blockers
 	}
