@@ -88,11 +88,20 @@ func TestConfigInitUsesCurrentZAIProviderDefaults(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &config))
 	require.IsType(t, map[string]interface{}{}, config["ai"])
 	aiConfig := config["ai"].(map[string]interface{})
+	require.IsType(t, map[string]interface{}{}, config["ccxt"])
+	ccxtConfig := config["ccxt"].(map[string]interface{})
+	require.IsType(t, map[string]interface{}{}, config["security"])
+	securityConfig := config["security"].(map[string]interface{})
 
 	assert.Equal(t, "zhipu", aiConfig["provider"])
 	assert.Equal(t, "glm-5-turbo", aiConfig["model"])
 	assert.Equal(t, "https://api.z.ai/api/paas/v4", aiConfig["base_url"])
 	assert.Equal(t, "test-ai-key", aiConfig["api_key"])
+	assert.Len(t, ccxtConfig["admin_api_key"], 32)
+	assert.Len(t, securityConfig["jwt_secret"], 64)
+	assert.Len(t, securityConfig["admin_api_key"], 32)
+	assert.NotEqual(t, "change-me-in-production-use-random-32-chars", securityConfig["jwt_secret"])
+	assert.NotEqual(t, "change-me-in-production", ccxtConfig["admin_api_key"])
 }
 
 func TestConfigInitRespectsNeuratradeHome(t *testing.T) {

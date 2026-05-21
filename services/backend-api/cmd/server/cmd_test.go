@@ -184,6 +184,8 @@ func TestBootstrapCommandGenerateEnvFile(t *testing.T) {
 	assert.Contains(t, contentStr, "REDIS_HOST=localhost")
 	assert.Contains(t, contentStr, "REDIS_PORT=6379")
 	assert.Contains(t, contentStr, "JWT_SECRET=test-secret")
+	assert.Regexp(t, `(?m)^CCXT_ADMIN_API_KEY=.+$`, contentStr)
+	assert.NotContains(t, contentStr, "CCXT_ADMIN_API_KEY=change-me-in-production")
 	assert.Contains(t, contentStr, "TELEGRAM_BOT_TOKEN=test-token")
 }
 
@@ -220,8 +222,10 @@ func TestBootstrapCommandCreateDirectories(t *testing.T) {
 
 // TestGenerateRandomSecret tests the generateRandomSecret function
 func TestGenerateRandomSecret(t *testing.T) {
-	secret1 := generateRandomSecret()
-	secret2 := generateRandomSecret()
+	secret1, err := generateRandomSecret()
+	assert.NoError(t, err)
+	secret2, err := generateRandomSecret()
+	assert.NoError(t, err)
 
 	// Verify secrets are not empty
 	assert.NotEmpty(t, secret1)
@@ -484,7 +488,8 @@ func TestBootstrapCommandCollectConfigurationDefaults(t *testing.T) {
 		reader: bufio.NewReader(strings.NewReader(input)),
 	}
 
-	cfg := cmd.collectConfiguration()
+	cfg, err := cmd.collectConfiguration()
+	require.NoError(t, err)
 
 	assert.Equal(t, "development", cfg.Environment)
 	assert.Equal(t, "localhost", cfg.DatabaseHost)
@@ -506,7 +511,8 @@ func TestBootstrapCommandCollectConfigurationRequiresModelWhenProviderHasNoDefau
 		reader: bufio.NewReader(strings.NewReader(input)),
 	}
 
-	cfg := cmd.collectConfiguration()
+	cfg, err := cmd.collectConfiguration()
+	require.NoError(t, err)
 
 	assert.Equal(t, "mlx", cfg.AIProvider)
 	assert.Equal(t, "local-model", cfg.AIModel)
