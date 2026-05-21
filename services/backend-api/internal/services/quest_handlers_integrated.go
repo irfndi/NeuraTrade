@@ -1167,6 +1167,11 @@ func (h *IntegratedQuestHandlers) handleArbitrageReadinessReview(ctx context.Con
 		quest.CurrentCount++
 		return nil
 	}
+	if exchange == "" {
+		blockers = append(blockers, "missing_exchange_metadata")
+		writeArbitrageReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("arbitrage readiness review: missing exchange metadata for chat_id %q", chatID)
+	}
 
 	if h.orderExecutor == nil {
 		blockers = append(blockers, "order_executor_unavailable")

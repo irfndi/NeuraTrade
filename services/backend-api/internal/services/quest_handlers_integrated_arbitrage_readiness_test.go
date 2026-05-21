@@ -113,6 +113,39 @@ func TestExecuteRoutineArbitrageReadinessReviewBlocksMissingChatIDBeforeLifecycl
 	assert.NotContains(t, blockers, "lifecycle_store_unavailable")
 }
 
+func TestExecuteRoutineArbitrageReadinessReviewRequiresExchangeMetadata(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "arbitrage-missing-exchange.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{lifecycleStore: lifecycleStore}
+	quest := &Quest{
+		Metadata: map[string]string{
+			"definition_id": "arbitrage_readiness_review",
+			"chat_id":       "arb-chat",
+		},
+		Checkpoint: map[string]interface{}{},
+	}
+
+	err = handlers.ExecuteRoutine(ctx, quest)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `missing exchange metadata for chat_id "arb-chat"`)
+	assert.Equal(t, "", quest.Checkpoint["arbitrage_review_exchange"])
+	assert.Equal(t, false, quest.Checkpoint["arbitrage_lifecycle_storage_verified"])
+	assert.Equal(t, 0, quest.CurrentCount)
+
+	blockers, ok := quest.Checkpoint["arbitrage_readiness_blockers"].([]string)
+	require.True(t, ok)
+	assert.Contains(t, blockers, "missing_exchange_metadata")
+	assert.NotContains(t, blockers, "lifecycle_store_unavailable")
+}
+
 func TestExecuteRoutineArbitrageReadinessReviewRecordsLifecycleBlockers(t *testing.T) {
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "arbitrage-readiness.db"))
