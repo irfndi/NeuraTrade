@@ -157,10 +157,11 @@ func TestManifestLiveModeGuardRequiresPaperTradingProofMetrics(t *testing.T) {
 				Ready:    true,
 				Evidence: "paper-readiness.json",
 				EvidenceMetrics: &StrategyReadinessEvidence{
-					ClosedTrades:  0,
-					OpenPositions: 1,
-					NetPnL:        "0",
-					AvgNetPnL:     "-0.01",
+					ClosedTrades:   0,
+					OpenPositions:  1,
+					NetPnL:         "0",
+					AvgNetPnL:      "-0.01",
+					DiagnosticOnly: true,
 				},
 			},
 		},
@@ -178,6 +179,7 @@ func TestManifestLiveModeGuardRequiresPaperTradingProofMetrics(t *testing.T) {
 	assert.Contains(t, err.Error(), "paper_trading=open_positions_1")
 	assert.Contains(t, err.Error(), "paper_trading=non_positive_net_pnl")
 	assert.Contains(t, err.Error(), "paper_trading=non_positive_avg_net_pnl")
+	assert.Contains(t, err.Error(), "paper_trading=diagnostic_only")
 }
 
 func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
@@ -195,6 +197,7 @@ func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
 					NetPnL:         "-1.25",
 					AvgNetPnL:      "0",
 					MaxDrawdownPct: "0",
+					DiagnosticOnly: true,
 				},
 			},
 		},
@@ -212,6 +215,32 @@ func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
 	assert.Contains(t, err.Error(), "swing_trading=non_positive_net_pnl")
 	assert.Contains(t, err.Error(), "swing_trading=non_positive_avg_net_pnl")
 	assert.Contains(t, err.Error(), "swing_trading=missing_observed_drawdown")
+	assert.Contains(t, err.Error(), "swing_trading=drawdown_not_verified")
+	assert.Contains(t, err.Error(), "swing_trading=diagnostic_only")
+}
+
+func TestManifestLiveModeGuardRejectsUnverifiedDrawdownEvenWithPositiveMetric(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {Ready: true, Evidence: "paper-soak:daily.json", EvidenceMetrics: &StrategyReadinessEvidence{
+				ClosedTrades:   2,
+				WinningTrades:  1,
+				LosingTrades:   1,
+				NetPnL:         "1.25",
+				AvgNetPnL:      "0.10",
+				MaxDrawdownPct: "0.05",
+			}},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daily_trading=drawdown_not_verified")
 }
 
 func TestManifestLiveModeGuardRequiresScalpingMinimumTradeProof(t *testing.T) {
@@ -255,12 +284,13 @@ func TestManifestLiveModeGuardAllowsArbitrageNoTradeSafetyEvidence(t *testing.T)
 
 func passingReadinessEvidence(closedTrades int) *StrategyReadinessEvidence {
 	return &StrategyReadinessEvidence{
-		ClosedTrades:   closedTrades,
-		WinningTrades:  1,
-		LosingTrades:   1,
-		NetPnL:         "1.25",
-		AvgNetPnL:      "0.10",
-		MaxDrawdownPct: "0.05",
+		ClosedTrades:     closedTrades,
+		WinningTrades:    1,
+		LosingTrades:     1,
+		NetPnL:           "1.25",
+		AvgNetPnL:        "0.10",
+		MaxDrawdownPct:   "0.05",
+		DrawdownVerified: true,
 	}
 }
 

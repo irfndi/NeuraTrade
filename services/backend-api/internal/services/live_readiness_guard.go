@@ -32,15 +32,17 @@ type StrategyLiveReadiness struct {
 // StrategyReadinessEvidence records the minimum proof needed before a trading
 // strategy may be represented as live-ready in the operator manifest.
 type StrategyReadinessEvidence struct {
-	ClosedTrades   int    `json:"closed_trades,omitempty"`
-	WinningTrades  int    `json:"winning_trades,omitempty"`
-	LosingTrades   int    `json:"losing_trades,omitempty"`
-	OpenPositions  int    `json:"open_positions,omitempty"`
-	NetPnL         string `json:"net_pnl,omitempty"`
-	AvgNetPnL      string `json:"avg_net_pnl,omitempty"`
-	MaxDrawdownPct string `json:"max_drawdown_pct,omitempty"`
-	NoTradeSafety  bool   `json:"no_trade_safety,omitempty"`
-	NoTradeReason  string `json:"no_trade_reason,omitempty"`
+	ClosedTrades     int    `json:"closed_trades,omitempty"`
+	WinningTrades    int    `json:"winning_trades,omitempty"`
+	LosingTrades     int    `json:"losing_trades,omitempty"`
+	OpenPositions    int    `json:"open_positions,omitempty"`
+	NetPnL           string `json:"net_pnl,omitempty"`
+	AvgNetPnL        string `json:"avg_net_pnl,omitempty"`
+	MaxDrawdownPct   string `json:"max_drawdown_pct,omitempty"`
+	DrawdownVerified bool   `json:"drawdown_verified,omitempty"`
+	DiagnosticOnly   bool   `json:"diagnostic_only,omitempty"`
+	NoTradeSafety    bool   `json:"no_trade_safety,omitempty"`
+	NoTradeReason    string `json:"no_trade_reason,omitempty"`
 	// PaperRuntimeProbePassed and LifecycleStorageVerified are required only for
 	// paper_trading evidence, where simulator and persistence proof are the base
 	// readiness contract rather than strategy profitability.
@@ -138,20 +140,23 @@ func strategyReadinessEvidenceBlockers(strategy string, status StrategyLiveReadi
 	if metrics == nil {
 		return []string{fmt.Sprintf("%s=missing_evidence_metrics", strategy)}
 	}
+	var blockers []string
+	if metrics.DiagnosticOnly {
+		blockers = append(blockers, fmt.Sprintf("%s=diagnostic_only", strategy))
+	}
 	if strategy == "paper_trading" {
-		return paperTradingReadinessEvidenceBlockers(metrics)
+		return append(blockers, paperTradingReadinessEvidenceBlockers(metrics)...)
 	}
 	if strategy == "arbitrage" && metrics.NoTradeSafety {
 		if strings.TrimSpace(metrics.NoTradeReason) == "" {
-			return []string{"arbitrage=missing_no_trade_reason"}
+			blockers = append(blockers, "arbitrage=missing_no_trade_reason")
 		}
 		if metrics.OpenPositions != 0 {
-			return []string{fmt.Sprintf("arbitrage=open_positions_%d", metrics.OpenPositions)}
+			blockers = append(blockers, fmt.Sprintf("arbitrage=open_positions_%d", metrics.OpenPositions))
 		}
-		return nil
+		return blockers
 	}
 
-	var blockers []string
 	if metrics.ClosedTrades < minimumReadinessClosedTrades(strategy) {
 		blockers = append(blockers, fmt.Sprintf("%s=insufficient_closed_trades", strategy))
 	}
@@ -175,6 +180,9 @@ func strategyReadinessEvidenceBlockers(strategy string, status StrategyLiveReadi
 	}
 	if !positiveDecimalString(metrics.MaxDrawdownPct) {
 		blockers = append(blockers, fmt.Sprintf("%s=missing_observed_drawdown", strategy))
+	}
+	if !metrics.DrawdownVerified {
+		blockers = append(blockers, fmt.Sprintf("%s=drawdown_not_verified", strategy))
 	}
 	return blockers
 }
