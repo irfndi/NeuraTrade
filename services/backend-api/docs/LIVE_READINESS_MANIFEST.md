@@ -12,7 +12,10 @@ evidence paths are resolved from the manifest file's directory. Evidence files
 larger than 1 MiB are rejected by the guard. When a manifest entry includes
 `evidence_metrics`, the evidence artifact must include matching metrics either
 as top-level `evidence_metrics` or as
-`live_readiness.manifest_entry.evidence_metrics`.
+`live_readiness.manifest_entry.evidence_metrics`. Ready entries must include an
+RFC3339 `verified_at` timestamp, and the evidence artifact must carry the same
+timestamp either as top-level `verified_at` or as
+`live_readiness.manifest_entry.verified_at`.
 
 ```json
 {
@@ -70,7 +73,10 @@ as top-level `evidence_metrics` or as
 }
 ```
 
-Required paper-trading metrics:
+Required paper-trading readiness fields:
+
+- `verified_at`: must be an RFC3339 timestamp and must match the referenced
+  evidence artifact timestamp.
 
 - `paper_runtime_probe_passed`: must be true.
 - `lifecycle_storage_verified`: must be true.
@@ -84,7 +90,10 @@ Required paper-trading metrics:
 - `open_positions`: must be 0.
 - `net_pnl` and `avg_net_pnl`: decimal strings greater than 0.
 
-Required trading-strategy metrics:
+Required trading-strategy readiness fields:
+
+- `verified_at`: must be an RFC3339 timestamp and must match the referenced
+  evidence artifact timestamp.
 
 - `closed_trades`: at least 20 for `scalping`; at least 2 for `daily_trading`, `swing_trading`, and `arbitrage` unless arbitrage uses documented no-trade safety.
 - `winning_trades` and `losing_trades`: both must be positive.

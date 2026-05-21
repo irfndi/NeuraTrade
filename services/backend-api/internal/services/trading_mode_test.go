@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testReadinessVerifiedAt = "2026-05-21T00:00:00Z"
+
 func TestOperationalModeService_SQLitePersistence(t *testing.T) {
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "trading-mode.db"))
 	require.NoError(t, err)
@@ -146,9 +148,9 @@ func TestManifestLiveModeGuardAllowsVerifiedStrategies(t *testing.T) {
 	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
-			"paper_trading": {Ready: true, Evidence: "paper-readiness.json", EvidenceMetrics: paperMetrics},
-			"daily_trading": {Ready: true, Evidence: "paper-soak/daily.json", EvidenceMetrics: dailyMetrics},
-			"swing_trading": {Ready: true, Evidence: "paper-soak/swing.json", EvidenceMetrics: swingMetrics},
+			"paper_trading": {Ready: true, Evidence: "paper-readiness.json", EvidenceMetrics: paperMetrics, VerifiedAt: testReadinessVerifiedAt},
+			"daily_trading": {Ready: true, Evidence: "paper-soak/daily.json", EvidenceMetrics: dailyMetrics, VerifiedAt: testReadinessVerifiedAt},
+			"swing_trading": {Ready: true, Evidence: "paper-soak/swing.json", EvidenceMetrics: swingMetrics, VerifiedAt: testReadinessVerifiedAt},
 		},
 	}
 	raw, err := json.Marshal(manifest)
@@ -264,7 +266,141 @@ func TestManifestLiveModeGuardMatchesEvidenceArtifactDecimalMetricsByValue(t *te
 	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
-			"daily_trading": {Ready: true, Evidence: "daily.json", EvidenceMetrics: manifestMetrics},
+			"daily_trading": {Ready: true, Evidence: "daily.json", EvidenceMetrics: manifestMetrics, VerifiedAt: testReadinessVerifiedAt},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	require.NoError(t, guard(context.Background(), "chat-1", "tester"))
+}
+
+func TestManifestLiveModeGuardRequiresVerifiedAt(t *testing.T) {
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "daily.json", passingReadinessEvidence(2))
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {Ready: true, Evidence: "daily.json", EvidenceMetrics: passingReadinessEvidence(2)},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daily_trading=missing_verified_at")
+}
+
+func TestManifestLiveModeGuardRequiresValidVerifiedAt(t *testing.T) {
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "daily.json", passingReadinessEvidence(2))
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {
+				Ready:           true,
+				Evidence:        "daily.json",
+				EvidenceMetrics: passingReadinessEvidence(2),
+				VerifiedAt:      "not a timestamp",
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `daily_trading=invalid_verified_at_"not a timestamp"`)
+}
+
+func TestManifestLiveModeGuardRequiresEvidenceArtifactVerifiedAt(t *testing.T) {
+	manifestDir := t.TempDir()
+	evidencePath := filepath.Join(manifestDir, "daily.json")
+	rawEvidence, err := json.Marshal(map[string]interface{}{
+		"verified":         true,
+		"evidence_metrics": passingReadinessEvidence(2),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(evidencePath, rawEvidence, 0o600))
+
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {
+				Ready:           true,
+				Evidence:        "daily.json",
+				EvidenceMetrics: passingReadinessEvidence(2),
+				VerifiedAt:      testReadinessVerifiedAt,
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `daily_trading=evidence_missing_verified_at_"daily.json"`)
+}
+
+func TestManifestLiveModeGuardRequiresEvidenceArtifactVerifiedAtToMatch(t *testing.T) {
+	manifestDir := t.TempDir()
+	evidencePath := filepath.Join(manifestDir, "daily.json")
+	rawEvidence, err := json.Marshal(map[string]interface{}{
+		"verified_at":      "2026-05-20T00:00:00Z",
+		"evidence_metrics": passingReadinessEvidence(2),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(evidencePath, rawEvidence, 0o600))
+
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {
+				Ready:           true,
+				Evidence:        "daily.json",
+				EvidenceMetrics: passingReadinessEvidence(2),
+				VerifiedAt:      testReadinessVerifiedAt,
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `daily_trading=evidence_verified_at_mismatch_"daily.json"`)
+}
+
+func TestManifestLiveModeGuardMatchesFractionalVerifiedAtByInstant(t *testing.T) {
+	manifestDir := t.TempDir()
+	evidencePath := filepath.Join(manifestDir, "daily.json")
+	rawEvidence, err := json.Marshal(map[string]interface{}{
+		"verified_at":      "2026-05-21T00:00:00.000Z",
+		"evidence_metrics": passingReadinessEvidence(2),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(evidencePath, rawEvidence, 0o600))
+
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {
+				Ready:           true,
+				Evidence:        "daily.json",
+				EvidenceMetrics: passingReadinessEvidence(2),
+				VerifiedAt:      " 2026-05-21T00:00:00Z ",
+			},
 		},
 	}
 	raw, err := json.Marshal(manifest)
@@ -283,6 +419,7 @@ func TestManifestLiveModeGuardAllowsWrappedManifestEntryEvidenceMetrics(t *testi
 		"live_readiness": map[string]interface{}{
 			"manifest_entry": map[string]interface{}{
 				"evidence_metrics": metrics,
+				"verified_at":      testReadinessVerifiedAt,
 			},
 		},
 	})
@@ -292,7 +429,7 @@ func TestManifestLiveModeGuardAllowsWrappedManifestEntryEvidenceMetrics(t *testi
 	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
-			"daily_trading": {Ready: true, Evidence: "daily.json", EvidenceMetrics: metrics},
+			"daily_trading": {Ready: true, Evidence: "daily.json", EvidenceMetrics: metrics, VerifiedAt: testReadinessVerifiedAt},
 		},
 	}
 	raw, err := json.Marshal(manifest)
@@ -543,6 +680,7 @@ func TestManifestLiveModeGuardAllowsArbitrageNoTradeSafetyEvidence(t *testing.T)
 				Ready:           true,
 				Evidence:        "paper-safety/arbitrage.json",
 				EvidenceMetrics: metrics,
+				VerifiedAt:      testReadinessVerifiedAt,
 			},
 		},
 	}
@@ -591,7 +729,10 @@ func writeReadinessEvidenceArtifact(t *testing.T, manifestDir string, evidence s
 		path = filepath.Join(manifestDir, path)
 	}
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	payload := map[string]interface{}{"verified": true}
+	payload := map[string]interface{}{
+		"verified":    true,
+		"verified_at": testReadinessVerifiedAt,
+	}
 	if len(metrics) > 0 && metrics[0] != nil {
 		payload["evidence_metrics"] = metrics[0]
 	}
