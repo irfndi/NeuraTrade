@@ -29,6 +29,7 @@ set -euo pipefail
 
 db_path=""
 output_path=""
+saw_max_hold_ratio=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --db)
@@ -37,6 +38,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --output)
       output_path="$2"
+      shift 2
+      ;;
+    --max-hold-ratio)
+      saw_max_hold_ratio="$2"
+      if [ "${EXPECT_NO_MAX_HOLD_RATIO_ARGS:-false}" = "true" ]; then
+        echo "unexpected max hold ratio arg: $1" >&2
+        exit 3
+      fi
       shift 2
       ;;
     --min-baseline-win-rate-delta | --min-baseline-net-pnl-delta | --min-baseline-avg-pnl-delta)
@@ -51,6 +60,11 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "${EXPECT_DEFAULT_MAX_HOLD_RATIO:-false}" = "true" ] && [ "$saw_max_hold_ratio" != "0.745" ]; then
+  echo "expected default --max-hold-ratio 0.745, got ${saw_max_hold_ratio:-missing}" >&2
+  exit 3
+fi
 
 [ -n "$db_path" ] || {
   echo "missing --db" >&2
@@ -104,6 +118,7 @@ if SOAK_BIN="$fake_bin" \
   SOAK_DB_PATH="$db_path" \
   NEURATRADE_HOME="$tmp_dir/home" \
   LOG_DIR="$log_dir" \
+  EXPECT_DEFAULT_MAX_HOLD_RATIO=true \
   CYCLES=30 \
   INTERVAL_MS=1000 \
   bash "$SOAK_SCRIPT" run >"$output_path" 2>&1; then
@@ -138,6 +153,7 @@ EXPECT_NO_BASELINE_ARGS=true \
   NEURATRADE_HOME="$tmp_dir/home" \
   LOG_DIR="$log_dir" \
   REQUIRE_TRADES=false \
+  EXPECT_NO_MAX_HOLD_RATIO_ARGS=true \
   CYCLES=3 \
   INTERVAL_MS=1000 \
   bash "$SOAK_SCRIPT" run >"$telemetry_output_path" 2>&1
