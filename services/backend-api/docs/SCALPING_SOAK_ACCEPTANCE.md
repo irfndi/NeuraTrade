@@ -80,7 +80,7 @@ full proof window before copying or promoting the evidence into the live
 readiness manifest. `open_positions` is sourced from the retained
 `SOAK_DB_PATH` SQLite `trading_positions` rows with status `open`, `pending`, or
 `partial`; the wrapper fails instead of emitting a manifest if lifecycle
-position evidence is unavailable.
+position evidence is unavailable or any such open lifecycle positions remain.
 
 For manual runs, use the same defaults explicitly:
 

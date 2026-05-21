@@ -156,6 +156,8 @@ write_manifest() {
   git_commit="$(git_value unknown rev-parse HEAD)"
   git_status="$(git_value unknown status --short --branch)"
   open_positions="$(query_open_positions)"
+  [ "$open_positions" = "0" ] \
+    || fail "open_positions='${open_positions}'; scalping acceptance requires zero open lifecycle positions"
 
   mkdir -p "$(dirname "$ACCEPTANCE_MANIFEST_FILE")"
   jq -n \

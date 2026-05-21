@@ -35,6 +35,7 @@ empty_artifact_path="${tmp_dir}/empty-gate-evidence/scalping-soak-acceptance-emp
 empty_manifest_path="${tmp_dir}/empty-gate-evidence/scalping-soak-acceptance-empty-gate.acceptance.json"
 empty_log_path="${tmp_dir}/empty-gate-logs/acceptance.log"
 invalid_output="${tmp_dir}/invalid.out"
+open_positions_output="${tmp_dir}/open-positions.out"
 
 cat >"$fake_soak" <<'SH'
 #!/usr/bin/env bash
@@ -167,6 +168,7 @@ RUN_HEALTH_PREFLIGHT=false \
   CHECK_GATEWAY_STATUS=false \
   SCALPING_SOAK_SCRIPT="$fake_soak" \
   SCALPING_SOAK_VERIFIER="$fake_verifier" \
+  FAKE_OPEN_POSITIONS=0 \
   DATA_DIR="${tmp_dir}/evidence" \
   LOG_DIR="${tmp_dir}/logs" \
   STAMP=fixed \
@@ -205,7 +207,7 @@ jq -e \
     and .live_readiness.manifest_entry.evidence_metrics.closed_trades == 1
     and .live_readiness.manifest_entry.evidence_metrics.winning_trades == 1
     and .live_readiness.manifest_entry.evidence_metrics.losing_trades == 0
-    and .live_readiness.manifest_entry.evidence_metrics.open_positions == 1
+    and .live_readiness.manifest_entry.evidence_metrics.open_positions == 0
     and .live_readiness.manifest_entry.evidence_metrics.net_pnl == "0.1"
     and .live_readiness.manifest_entry.evidence_metrics.avg_net_pnl == "0.1"
     and .live_readiness.manifest_entry.evidence_metrics.max_drawdown_pct == "0"
@@ -290,6 +292,24 @@ RUN_HEALTH_PREFLIGHT=false \
 }
 
 jq -e '.gates.max_hold_ratio == ""' "$empty_manifest_path" >/dev/null
+
+if RUN_HEALTH_PREFLIGHT=false \
+  CHECK_GATEWAY_STATUS=false \
+  SCALPING_SOAK_SCRIPT="$fake_soak" \
+  SCALPING_SOAK_VERIFIER="$fake_verifier" \
+  DATA_DIR="${tmp_dir}/open-position-evidence" \
+  LOG_DIR="${tmp_dir}/open-position-logs" \
+  STAMP=open-position \
+  bash "$ACCEPTANCE_SCRIPT" run >"$open_positions_output" 2>&1; then
+  echo "expected open lifecycle positions to fail acceptance" >&2
+  exit 1
+fi
+
+grep -q "open_positions='1'; scalping acceptance requires zero open lifecycle positions" "$open_positions_output"
+[ ! -f "${tmp_dir}/open-position-evidence/scalping-soak-acceptance-open-position.acceptance.json" ] || {
+  echo "open-position failure should not write acceptance manifest" >&2
+  exit 1
+}
 
 if RUN_HEALTH_PREFLIGHT=treu \
   CHECK_GATEWAY_STATUS=false \
