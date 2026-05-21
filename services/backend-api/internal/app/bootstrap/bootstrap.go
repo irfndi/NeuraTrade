@@ -194,8 +194,8 @@ func (b *Builder) WithStrategy(actor *strategy.StrategyActor) *Builder {
 }
 
 // Build builds the Application.
-func (b *Builder) Build() (*Application, error) {
-	app := &Application{
+func (b *Builder) Build() (app *Application, err error) {
+	app = &Application{
 		Config:      b.config,
 		Supervisor:  supervisor.New(),
 		ActorSystem: actor.NewSystem(b.config.Actor),
@@ -206,17 +206,44 @@ func (b *Builder) Build() (*Application, error) {
 		State:       b.state,
 		Notifier:    b.notifier,
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		app.rollbackPartialBuild()
+		app = nil
+	}()
 
 	// Build risk components if not provided
-	if err := app.buildRiskComponents(b); err != nil {
-		return nil, fmt.Errorf("build risk components: %w", err)
+	if err = app.buildRiskComponents(b); err != nil {
+		return app, fmt.Errorf("build risk components: %w", err)
 	}
 
-	if err := app.buildStrategyComponents(b); err != nil {
-		return nil, fmt.Errorf("build strategy components: %w", err)
+	if err = app.buildStrategyComponents(b); err != nil {
+		return app, fmt.Errorf("build strategy components: %w", err)
 	}
 
 	return app, nil
+}
+
+func (a *Application) rollbackPartialBuild() {
+	if a == nil {
+		return
+	}
+	if a.ActorSystem != nil {
+		a.ActorSystem.StopAll()
+	}
+	if a.EventBus != nil {
+		a.EventBus.Stop()
+	}
+	a.ActorSystem = nil
+	a.EventBus = nil
+	a.RiskRef = nil
+	a.RiskActor = nil
+	a.StrategyActorRef = nil
+	a.StrategyActor = nil
+	a.CollectorActorRef = nil
+	a.CollectorActor = nil
 }
 
 // buildRiskComponents builds the risk system components.

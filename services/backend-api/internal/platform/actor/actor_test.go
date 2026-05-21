@@ -158,6 +158,7 @@ func TestMailboxExpiredMessage(t *testing.T) {
 func TestMailboxStop(t *testing.T) {
 	m := NewMailbox(DefaultConfig())
 	m.Stop()
+	m.Stop()
 
 	if !m.stopped.Load() {
 		t.Error("mailbox should be stopped")
@@ -166,6 +167,31 @@ func TestMailboxStop(t *testing.T) {
 	err := m.Send(context.Background(), Envelope{Message: testMessage{}})
 	if err != ErrActorStopped {
 		t.Errorf("expected ErrActorStopped, got %v", err)
+	}
+}
+
+func TestRefStopIsIdempotent(t *testing.T) {
+	actor := ActorFunc(func(ctx context.Context, env Envelope) error {
+		return nil
+	})
+
+	ref := NewRef(actor, DefaultConfig())
+	ctx := context.Background()
+
+	go ref.Run(ctx)
+
+	for i := 0; i < 100; i++ {
+		if ref.IsRunning() {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	ref.Stop()
+	ref.Stop()
+
+	if ref.IsRunning() {
+		t.Error("actor should not be running after repeated Stop")
 	}
 }
 
