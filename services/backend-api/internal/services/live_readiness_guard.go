@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -20,10 +22,25 @@ type LiveModeGuard func(ctx context.Context, chatID string, changedBy string) er
 
 // StrategyLiveReadiness records one strategy's live-readiness evidence.
 type StrategyLiveReadiness struct {
-	Ready      bool   `json:"ready"`
-	Evidence   string `json:"evidence,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	VerifiedAt string `json:"verified_at,omitempty"`
+	Ready           bool                       `json:"ready"`
+	Evidence        string                     `json:"evidence,omitempty"`
+	EvidenceMetrics *StrategyReadinessEvidence `json:"evidence_metrics,omitempty"`
+	Reason          string                     `json:"reason,omitempty"`
+	VerifiedAt      string                     `json:"verified_at,omitempty"`
+}
+
+// StrategyReadinessEvidence records the minimum proof needed before a trading
+// strategy may be represented as live-ready in the operator manifest.
+type StrategyReadinessEvidence struct {
+	ClosedTrades   int    `json:"closed_trades,omitempty"`
+	WinningTrades  int    `json:"winning_trades,omitempty"`
+	LosingTrades   int    `json:"losing_trades,omitempty"`
+	OpenPositions  int    `json:"open_positions,omitempty"`
+	NetPnL         string `json:"net_pnl,omitempty"`
+	AvgNetPnL      string `json:"avg_net_pnl,omitempty"`
+	MaxDrawdownPct string `json:"max_drawdown_pct,omitempty"`
+	NoTradeSafety  bool   `json:"no_trade_safety,omitempty"`
+	NoTradeReason  string `json:"no_trade_reason,omitempty"`
 }
 
 // LiveReadinessManifest is the file format consumed by ManifestLiveModeGuard.
@@ -81,6 +98,8 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 				blockers = append(blockers, fmt.Sprintf("%s=%s", strategy, reason))
 			case strings.TrimSpace(status.Evidence) == "":
 				blockers = append(blockers, fmt.Sprintf("%s=missing_evidence", strategy))
+			default:
+				blockers = append(blockers, strategyReadinessEvidenceBlockers(strategy, status)...)
 			}
 		}
 		if len(blockers) > 0 {
@@ -107,6 +126,69 @@ func normalizeReadinessStrategies(strategies []string) []string {
 	}
 	sort.Strings(normalized)
 	return normalized
+}
+
+func strategyReadinessEvidenceBlockers(strategy string, status StrategyLiveReadiness) []string {
+	if strategy == "paper_trading" {
+		return nil
+	}
+	metrics := status.EvidenceMetrics
+	if metrics == nil {
+		return []string{fmt.Sprintf("%s=missing_evidence_metrics", strategy)}
+	}
+	if strategy == "arbitrage" && metrics.NoTradeSafety {
+		if strings.TrimSpace(metrics.NoTradeReason) == "" {
+			return []string{"arbitrage=missing_no_trade_reason"}
+		}
+		if metrics.OpenPositions != 0 {
+			return []string{fmt.Sprintf("arbitrage=open_positions_%d", metrics.OpenPositions)}
+		}
+		return nil
+	}
+
+	var blockers []string
+	if metrics.ClosedTrades < minimumReadinessClosedTrades(strategy) {
+		blockers = append(blockers, fmt.Sprintf("%s=insufficient_closed_trades", strategy))
+	}
+	if metrics.ClosedTrades < metrics.WinningTrades+metrics.LosingTrades {
+		blockers = append(blockers, fmt.Sprintf("%s=inconsistent_trade_counts", strategy))
+	}
+	if metrics.WinningTrades <= 0 {
+		blockers = append(blockers, fmt.Sprintf("%s=no_winning_trades", strategy))
+	}
+	if metrics.LosingTrades <= 0 {
+		blockers = append(blockers, fmt.Sprintf("%s=no_losing_trades", strategy))
+	}
+	if metrics.OpenPositions != 0 {
+		blockers = append(blockers, fmt.Sprintf("%s=open_positions_%d", strategy, metrics.OpenPositions))
+	}
+	if !positiveDecimalString(metrics.NetPnL) {
+		blockers = append(blockers, fmt.Sprintf("%s=non_positive_net_pnl", strategy))
+	}
+	if !positiveDecimalString(metrics.AvgNetPnL) {
+		blockers = append(blockers, fmt.Sprintf("%s=non_positive_avg_net_pnl", strategy))
+	}
+	if !positiveDecimalString(metrics.MaxDrawdownPct) {
+		blockers = append(blockers, fmt.Sprintf("%s=missing_observed_drawdown", strategy))
+	}
+	return blockers
+}
+
+func minimumReadinessClosedTrades(strategy string) int {
+	switch strategy {
+	case "scalping":
+		return 20
+	default:
+		return 2
+	}
+}
+
+func positiveDecimalString(raw string) bool {
+	value, err := decimal.NewFromString(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return value.GreaterThan(decimal.Zero)
 }
 
 func normalizeReadinessManifestStrategies(strategies map[string]StrategyLiveReadiness) map[string]StrategyLiveReadiness {

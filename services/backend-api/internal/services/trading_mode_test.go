@@ -117,6 +117,7 @@ func TestManifestLiveModeGuardRequiresAllStrategyEvidence(t *testing.T) {
 	guard = ManifestLiveModeGuard(manifestPath, []string{"daily_trading", "swing_trading", "arbitrage"})
 	err = guard(context.Background(), "chat-1", "tester")
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daily_trading=missing_evidence_metrics")
 	assert.Contains(t, err.Error(), "swing_trading=paper_window_missing")
 	assert.Contains(t, err.Error(), "arbitrage=missing_evidence")
 }
@@ -135,8 +136,8 @@ func TestManifestLiveModeGuardAllowsVerifiedStrategies(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
-			"daily_trading": {Ready: true, Evidence: "paper-soak:daily.json"},
-			"swing_trading": {Ready: true, Evidence: "paper-soak:swing.json"},
+			"daily_trading": {Ready: true, Evidence: "paper-soak:daily.json", EvidenceMetrics: passingReadinessEvidence(2)},
+			"swing_trading": {Ready: true, Evidence: "paper-soak:swing.json", EvidenceMetrics: passingReadinessEvidence(2)},
 		},
 	}
 	raw, err := json.Marshal(manifest)
@@ -145,6 +146,90 @@ func TestManifestLiveModeGuardAllowsVerifiedStrategies(t *testing.T) {
 
 	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading", "swing_trading"})
 	require.NoError(t, guard(context.Background(), "chat-1", "tester"))
+}
+
+func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"swing_trading": {
+				Ready:    true,
+				Evidence: "paper-soak:swing.json",
+				EvidenceMetrics: &StrategyReadinessEvidence{
+					ClosedTrades:   1,
+					WinningTrades:  1,
+					LosingTrades:   1,
+					OpenPositions:  1,
+					NetPnL:         "-1.25",
+					AvgNetPnL:      "0",
+					MaxDrawdownPct: "0",
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"swing_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "swing_trading=insufficient_closed_trades")
+	assert.Contains(t, err.Error(), "swing_trading=inconsistent_trade_counts")
+	assert.Contains(t, err.Error(), "swing_trading=open_positions_1")
+	assert.Contains(t, err.Error(), "swing_trading=non_positive_net_pnl")
+	assert.Contains(t, err.Error(), "swing_trading=non_positive_avg_net_pnl")
+	assert.Contains(t, err.Error(), "swing_trading=missing_observed_drawdown")
+}
+
+func TestManifestLiveModeGuardRequiresScalpingMinimumTradeProof(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"scalping": {Ready: true, Evidence: "paper-soak:scalping.json", EvidenceMetrics: passingReadinessEvidence(19)},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"scalping"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scalping=insufficient_closed_trades")
+}
+
+func TestManifestLiveModeGuardAllowsArbitrageNoTradeSafetyEvidence(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"arbitrage": {
+				Ready:    true,
+				Evidence: "paper-safety:arbitrage.json",
+				EvidenceMetrics: &StrategyReadinessEvidence{
+					NoTradeSafety: true,
+					NoTradeReason: "no executable spreads after fees across observed window",
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"arbitrage"})
+	require.NoError(t, guard(context.Background(), "chat-1", "tester"))
+}
+
+func passingReadinessEvidence(closedTrades int) *StrategyReadinessEvidence {
+	return &StrategyReadinessEvidence{
+		ClosedTrades:   closedTrades,
+		WinningTrades:  1,
+		LosingTrades:   1,
+		NetPnL:         "1.25",
+		AvgNetPnL:      "0.10",
+		MaxDrawdownPct: "0.05",
+	}
 }
 
 func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T) {
