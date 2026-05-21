@@ -499,6 +499,8 @@ func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Que
 	switch quest.Metadata["definition_id"] {
 	case "market_scan":
 		err = h.handleMarketScanWithTA(ctx, quest)
+	case "daily_report":
+		err = h.handleDailyTradingReport(ctx, quest)
 	case "volatility_watch":
 		err = h.handleVolatilityWatch(ctx, quest)
 	case "paper_trading_review":
@@ -520,6 +522,128 @@ func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Que
 	}
 	h.recordQuestResult(quest, err == nil, decimal.Zero)
 	return err
+}
+
+func (h *IntegratedQuestHandlers) handleDailyTradingReport(ctx context.Context, quest *Quest) error {
+	if quest == nil {
+		return fmt.Errorf("quest is nil")
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	if quest.Metadata == nil {
+		quest.Metadata = make(map[string]string)
+	}
+
+	now := time.Now().UTC()
+	since := now.Add(-24 * time.Hour)
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+	exchange := strings.TrimSpace(quest.Metadata["exchange"])
+	if exchange == "" {
+		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	}
+	if exchange == "" {
+		exchange = h.getUserExchange(chatID)
+	}
+	if exchange == "" {
+		exchange = "bitget"
+	}
+
+	blockers := []string{
+		"daily_trading_strategy_not_implemented",
+		"daily_report_is_readiness_status_only",
+		"missing_daily_trading_evidence_artifact",
+		"missing_daily_strategy_signal_proof",
+		"missing_drawdown_evidence",
+	}
+	quest.Checkpoint["daily_report_generated_at"] = now.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_window_start"] = since.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_window_end"] = now.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_chat_id"] = chatID
+	quest.Checkpoint["daily_report_exchange"] = exchange
+	writeDailyTradingReadinessEvidenceMetrics(quest, false, LifecyclePerformanceSummary{}, 0)
+
+	if h.lifecycleStore == nil {
+		blockers = append(blockers, "lifecycle_store_unavailable")
+		writeDailyTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+
+	summary, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, exchange, since)
+	if err != nil {
+		blockers = append(blockers, "realized_performance_query_failed")
+		writeDailyTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 1000)
+	if err != nil {
+		blockers = append(blockers, "open_position_query_failed")
+		writeDailyTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+
+	quest.Checkpoint["daily_report_closed_trades"] = summary.Trades
+	quest.Checkpoint["daily_report_wins"] = summary.Wins
+	quest.Checkpoint["daily_report_losses"] = summary.Losses
+	quest.Checkpoint["daily_report_breakeven"] = summary.Breakeven
+	quest.Checkpoint["daily_report_net_pnl"] = summary.RealizedPnL.String()
+	quest.Checkpoint["daily_report_gross_pnl"] = summary.GrossPnL.String()
+	quest.Checkpoint["daily_report_fees"] = summary.Fees.String()
+	quest.Checkpoint["daily_report_avg_net_pnl"] = summary.AvgNetPnL.String()
+	quest.Checkpoint["daily_report_win_rate"] = summary.WinRate.String()
+	quest.Checkpoint["daily_report_open_positions"] = len(positions)
+	writeDailyTradingReadinessEvidenceMetrics(quest, true, summary, len(positions))
+
+	if summary.Trades < 2 {
+		blockers = append(blockers, "no_representative_closed_trade_sample")
+	}
+	if summary.Wins == 0 {
+		blockers = append(blockers, "no_winning_trade_observed")
+	}
+	if summary.Losses == 0 {
+		blockers = append(blockers, "no_losing_trade_observed")
+	}
+	if summary.RealizedPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_net_pnl")
+	}
+	if summary.Trades > 0 && summary.AvgNetPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_avg_net_pnl")
+	}
+	if len(positions) > 0 {
+		blockers = append(blockers, "open_positions_need_lifecycle_review")
+	}
+
+	writeDailyTradingReadinessCheckpoint(quest, blockers)
+	quest.CurrentCount++
+	return nil
+}
+
+func writeDailyTradingReadinessCheckpoint(quest *Quest, blockers []string) {
+	quest.Checkpoint["daily_trading_live_ready"] = false
+	quest.Checkpoint["daily_trading_readiness_status"] = "blocked"
+	quest.Checkpoint["daily_trading_readiness_blockers"] = append([]string(nil), blockers...)
+	quest.Checkpoint["daily_trading_readiness_note"] = "daily trading has no executable strategy path, drawdown proof, or evidence artifact; keep live-money use blocked"
+}
+
+func writeDailyTradingReadinessEvidenceMetrics(
+	quest *Quest,
+	lifecycleStorageVerified bool,
+	summary LifecyclePerformanceSummary,
+	openPositions int,
+) {
+	quest.Checkpoint["daily_trading_lifecycle_storage_verified"] = lifecycleStorageVerified
+	quest.Checkpoint["daily_trading_readiness_evidence_metrics"] = map[string]interface{}{
+		"closed_trades":    summary.Trades,
+		"winning_trades":   summary.Wins,
+		"losing_trades":    summary.Losses,
+		"open_positions":   openPositions,
+		"net_pnl":          summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":      summary.AvgNetPnL.StringFixed(2),
+		"max_drawdown_pct": "0.00",
+	}
 }
 
 // ExecuteArbitrage runs arbitrage quest execution and records monitoring outcomes.
