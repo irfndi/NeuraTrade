@@ -8,12 +8,28 @@ It always writes:
 
 - `swing_trading_live_ready=false`
 - `swing_trading_readiness_status=blocked`
+- `swing_trading_lifecycle_storage_verified`
+- `swing_trading_readiness_evidence_metrics`
 - `swing_trading_readiness_blockers`
 
 The review captures lifecycle context over the previous 14 days, including
 closed trades, wins, losses, net PnL, average net PnL, open positions, and stale
 open positions. These metrics are diagnostic only until an executable swing
 signal path and paper/live-market hold-window proof exist.
+
+`swing_trading_readiness_evidence_metrics` mirrors the manifest proof fields:
+
+- `closed_trades`
+- `winning_trades`
+- `losing_trades`
+- `open_positions`
+- `net_pnl`
+- `avg_net_pnl`
+- `max_drawdown_pct`
+
+`max_drawdown_pct` remains `0.00` until a real swing drawdown verifier supplies
+proof, so the generated metrics cannot satisfy the live-readiness manifest by
+accident.
 
 Minimum proof before the live-readiness manifest can mark `swing_trading` ready:
 
