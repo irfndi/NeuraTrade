@@ -80,6 +80,18 @@ const (
 	scalpingRecentBuyMaxRangePct    = 35.0
 	scalpingNoRecentBuyMaxRangePct  = 20.0
 	scalpingRecentSellMinRangePct   = 75.0
+	scalpingReversalBuyMaxSpreadPct = 0.06
+	scalpingReversalBuyMaxRangePct  = 20.0
+	scalpingReversalBuyMaxRecentPct = -0.15
+	scalpingReversalBuyMaxTrendPct  = 0.0
+	scalpingSellWindowMaxSpreadPct  = 0.10
+	scalpingSellWindowMaxImbalance  = -0.30
+	scalpingSellWindowMinRangePct   = 25.0
+	scalpingSellWindowMaxRangePct   = 75.0
+	scalpingSellWindowMinRecentPct  = -0.60
+	scalpingSellWindowMaxRecentPct  = 0.20
+	scalpingSellWindowMinTrendPct   = 0.0
+	scalpingSellWindowMaxTrendPct   = 0.50
 	scalpingRecentMomentumWindow    = 5 * time.Minute
 	scalpingRecentMomentumMinAge    = 30 * time.Second
 
@@ -2077,12 +2089,13 @@ Return JSON only:
 - spread <= %.4f%%: tradable liquidity ceiling; anything wider must be treated as hold
 - recent_price_change_pct is short-window momentum in percentage points; values below %.4f are below the buy momentum confirmation gate
 - Buy safety gates: when recent_price_change_pct is present, buy only if recent_price_change_pct >= %.4f, spread_pct <= %.4f, price_change_24h_pct >= %.4f, and range_pos_24h <= %.1f; if recent_price_change_pct is absent, buy only at deep-low range_pos_24h <= %.1f
-- Sell safety gates: sell only if spread_pct <= %.4f%%, price_change_24h_pct <= %.4f%%, range_pos_24h > 15.0, and ob_imbalance <= -0.20
+- Validated reversal-buy exception: buy may also be selected when spread_pct <= %.4f%%, range_pos_24h <= %.1f, recent_price_change_pct <= %.4f%%, and price_change_24h_pct <= %.4f%%
+- Sell safety gates: sell only if spread_pct <= %.4f%%, price_change_24h_pct <= %.4f%%, range_pos_24h > 15.0, and ob_imbalance <= -0.20; validated sell-window exception also allows sell when spread_pct <= %.4f%%, ob_imbalance <= %.2f, range_pos_24h is between %.1f and %.1f, recent_price_change_pct is between %.4f%% and %.4f%%, and price_change_24h_pct is between %.4f%% and %.4f%%
 - Before returning hold, evaluate every symbol against the sell safety gates; do not apply the %.4f%% buy spread gate to sell decisions, because sells use the %.4f%% liquidity ceiling
 - If one or more symbols clear sell safety gates and confidence can meet the effective threshold, choose the strongest sell instead of hold; hold only when both buy and sell gates fail
 - range_pos_24h > 80: Price near daily high (avoid chasing late entries)
 - range_pos_24h < 20: Price near daily low (avoid aggressive shorting into support)
-		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct(), buyMomentumGate, buyMomentumGate, scalpingRecentBuyMaxSpreadPct, scalpingRecentBuyMinTrendPct, scalpingRecentBuyMaxRangePct, scalpingNoRecentBuyMaxRangePct, s.maxBidAskSpreadPct(), scalpingSellBroadTrendMaxPct, scalpingRecentBuyMaxSpreadPct, s.maxBidAskSpreadPct())
+		`, s.config.Leverage, skillContent, s.maxBidAskSpreadPct(), buyMomentumGate, buyMomentumGate, scalpingRecentBuyMaxSpreadPct, scalpingRecentBuyMinTrendPct, scalpingRecentBuyMaxRangePct, scalpingNoRecentBuyMaxRangePct, scalpingReversalBuyMaxSpreadPct, scalpingReversalBuyMaxRangePct, scalpingReversalBuyMaxRecentPct, scalpingReversalBuyMaxTrendPct, s.maxBidAskSpreadPct(), scalpingSellBroadTrendMaxPct, scalpingSellWindowMaxSpreadPct, scalpingSellWindowMaxImbalance, scalpingSellWindowMinRangePct, scalpingSellWindowMaxRangePct, scalpingSellWindowMinRecentPct, scalpingSellWindowMaxRecentPct, scalpingSellWindowMinTrendPct, scalpingSellWindowMaxTrendPct, scalpingRecentBuyMaxSpreadPct, s.maxBidAskSpreadPct())
 }
 
 func (s *AIScalpingService) buildUserPrompt(ctx context.Context, signals []aiMarketSignal, portfolio TradingPortfolio) string {
@@ -2606,14 +2619,17 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		entry := decimal.NewFromFloat(resolved.Price)
 		decision.EntryPrice = &entry
 	}
-	spreadThreshold := s.maxBidAskSpreadPct()
+	spreadThreshold := s.decisionSpreadThreshold(decision.Action, resolved)
 	if resolved.BidAskSpread > spreadThreshold {
 		return fmt.Errorf("spread %.3f%% too wide for scalping on %s", resolved.BidAskSpread, decision.Symbol)
 	}
 	if resolved.BidAskSpread == 0 && resolved.OrderBookImbalance == 0 {
 		return fmt.Errorf("missing orderbook quality signals for %s", decision.Symbol)
 	}
-	if decision.Action == "sell" && !scalpingSellTrendConfirmed(resolved) && !scalpingBlowoffSellTrendConfirmed(resolved) {
+	if decision.Action == "sell" &&
+		!scalpingSellTrendConfirmed(resolved) &&
+		!scalpingBlowoffSellTrendConfirmed(resolved) &&
+		!scalpingSellWindowCandidate(resolved) {
 		return fmt.Errorf("sell decision rejected without 24h downside confirmation on %s (price_change_24h=%.4f%%, required<=%.4f%%)", resolved.Symbol, resolved.PriceChange24h, scalpingSellBroadTrendMaxPct)
 	}
 	if decision.SizePercent <= 0 {
@@ -2679,7 +2695,25 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 	return nil
 }
 
+func (s *AIScalpingService) decisionSpreadThreshold(action string, signal aiMarketSignal) float64 {
+	threshold := s.maxBidAskSpreadPct()
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "buy":
+		if scalpingReversalBuyCandidate(signal) {
+			threshold = math.Max(threshold, scalpingReversalBuyMaxSpreadPct)
+		}
+	case "sell":
+		if scalpingSellWindowCandidate(signal) {
+			threshold = math.Max(threshold, scalpingSellWindowMaxSpreadPct)
+		}
+	}
+	return threshold
+}
+
 func (s *AIScalpingService) scalpingBuySignalRejectionReason(signal aiMarketSignal) string {
+	if scalpingReversalBuyCandidate(signal) {
+		return ""
+	}
 	buyMomentumMin := math.Max(s.deterministicFallbackConfig().BuyMinPriceChangePct, 0.05)
 	if !signal.RecentChangeKnown {
 		if signal.RangePosition24h > scalpingNoRecentBuyMaxRangePct {
@@ -3299,13 +3333,15 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if signal.Price <= 0 || signal.Symbol == "" {
 		return nil, 0, false
 	}
-	if signal.BidAskSpread <= 0 || signal.BidAskSpread > effectiveMaxSpread {
+	reversalBuy := scalpingReversalBuyCandidate(signal)
+	sellWindow := scalpingSellWindowCandidate(signal)
+	if signal.BidAskSpread <= 0 || (signal.BidAskSpread > effectiveMaxSpread && !reversalBuy && !sellWindow) {
 		return nil, 0, false
 	}
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
 	blowoffReversal := scalpingBlowoffSellTrendConfirmed(signal)
-	if imbalance < effectiveMinImbalance && !blowoffReversal {
+	if imbalance < effectiveMinImbalance && !blowoffReversal && !reversalBuy && !sellWindow {
 		return nil, 0, false
 	}
 
@@ -3321,6 +3357,22 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	momentumAligned := false
 	blowoffReversal = false
 	switch {
+	case reversalBuy:
+		action = "buy"
+		momentumAligned = true
+		rangeAlignment = clampFloat(
+			(scalpingReversalBuyMaxRangePct-signal.RangePosition24h)/math.Max(scalpingReversalBuyMaxRangePct, 1),
+			0,
+			1,
+		)
+	case sellWindow:
+		action = "sell"
+		momentumAligned = true
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-scalpingSellWindowMinRangePct)/math.Max(100-scalpingSellWindowMinRangePct, 1),
+			0,
+			1,
+		)
 	case signal.OrderBookImbalance >= effectiveMinImbalance &&
 		signal.RangePosition24h <= buyRangeMax:
 		action = "buy"
@@ -3396,16 +3448,16 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if !momentumAligned {
 		return nil, 0, false
 	}
-	if signal.RecentChangeKnown && action == "buy" && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
+	if signal.RecentChangeKnown && action == "buy" && !reversalBuy && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
 		return nil, 0, false
 	}
-	if signal.RecentChangeKnown && action == "buy" && signal.PriceChange24h < scalpingRecentBuyMinTrendPct {
+	if signal.RecentChangeKnown && action == "buy" && !reversalBuy && signal.PriceChange24h < scalpingRecentBuyMinTrendPct {
 		return nil, 0, false
 	}
-	if signal.RecentChangeKnown && action == "buy" && signal.RangePosition24h > scalpingRecentBuyMaxRangePct {
+	if signal.RecentChangeKnown && action == "buy" && !reversalBuy && signal.RangePosition24h > scalpingRecentBuyMaxRangePct {
 		return nil, 0, false
 	}
-	if signal.RecentChangeKnown && action == "sell" && !blowoffReversal && signal.RangePosition24h < scalpingRecentSellMinRangePct {
+	if signal.RecentChangeKnown && action == "sell" && !blowoffReversal && !sellWindow && signal.RangePosition24h < scalpingRecentSellMinRangePct {
 		return nil, 0, false
 	}
 
@@ -3430,6 +3482,9 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	}
 	if minConfidenceFloor <= 0 {
 		minConfidenceFloor = fallbackCfg.ConfidenceFloor
+	}
+	if reversalBuy || sellWindow {
+		minConfidenceFloor = math.Min(minConfidenceFloor, s.config.MinConfidence)
 	}
 	if confidenceFloorOffset > 0 {
 		minConfidenceFloor -= confidenceFloorOffset
@@ -3489,6 +3544,10 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	setup := "directional"
 	if blowoffReversal {
 		setup = "blowoff reversal"
+	} else if reversalBuy {
+		setup = "validated reversal buy"
+	} else if sellWindow {
+		setup = "validated sell window"
 	}
 	reason := fmt.Sprintf(
 		"deterministic fallback %s: %s pressure %.3f with spread %.3f%%, momentum %.3f%%, range position %.1f%%, projected net edge %s%%",
@@ -3571,6 +3630,28 @@ func fallbackMomentumPct(signal aiMarketSignal) float64 {
 
 func scalpingSellTrendConfirmed(signal aiMarketSignal) bool {
 	return signal.PriceChange24h <= scalpingSellBroadTrendMaxPct
+}
+
+func scalpingReversalBuyCandidate(signal aiMarketSignal) bool {
+	return signal.RecentChangeKnown &&
+		signal.BidAskSpread > 0 &&
+		signal.BidAskSpread <= scalpingReversalBuyMaxSpreadPct &&
+		signal.RangePosition24h <= scalpingReversalBuyMaxRangePct &&
+		signal.RecentPriceChange <= scalpingReversalBuyMaxRecentPct &&
+		signal.PriceChange24h <= scalpingReversalBuyMaxTrendPct
+}
+
+func scalpingSellWindowCandidate(signal aiMarketSignal) bool {
+	return signal.RecentChangeKnown &&
+		signal.BidAskSpread > 0 &&
+		signal.BidAskSpread <= scalpingSellWindowMaxSpreadPct &&
+		signal.OrderBookImbalance <= scalpingSellWindowMaxImbalance &&
+		signal.RangePosition24h >= scalpingSellWindowMinRangePct &&
+		signal.RangePosition24h <= scalpingSellWindowMaxRangePct &&
+		signal.RecentPriceChange >= scalpingSellWindowMinRecentPct &&
+		signal.RecentPriceChange <= scalpingSellWindowMaxRecentPct &&
+		signal.PriceChange24h >= scalpingSellWindowMinTrendPct &&
+		signal.PriceChange24h <= scalpingSellWindowMaxTrendPct
 }
 
 func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal) bool {

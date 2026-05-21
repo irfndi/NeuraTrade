@@ -1373,6 +1373,22 @@ func TestAIScalpingService_BuildSystemPrompt_IncludesBackendSellSafetyGates(t *t
 	assert.NotContains(t, prompt, "Blowoff reversal sells")
 }
 
+func TestAIScalpingService_BuildSystemPrompt_UsesValidatedCandidateConstants(t *testing.T) {
+	svc := &AIScalpingService{config: AIScalpingConfig{Leverage: 5, MaxBidAskSpreadPct: 0.04}}
+
+	prompt := svc.buildSystemPrompt()
+
+	assert.Contains(t, prompt, "spread_pct <= 0.0600%")
+	assert.Contains(t, prompt, "range_pos_24h <= 20.0")
+	assert.Contains(t, prompt, "recent_price_change_pct <= -0.1500%")
+	assert.Contains(t, prompt, "price_change_24h_pct <= 0.0000%")
+	assert.Contains(t, prompt, "spread_pct <= 0.1000%")
+	assert.Contains(t, prompt, "ob_imbalance <= -0.30")
+	assert.Contains(t, prompt, "range_pos_24h is between 25.0 and 75.0")
+	assert.Contains(t, prompt, "recent_price_change_pct is between -0.6000% and 0.2000%")
+	assert.Contains(t, prompt, "price_change_24h_pct is between 0.0000% and 0.5000%")
+}
+
 func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t *testing.T) {
 	original := globalScalpingPerformance
 	globalScalpingPerformance = NewScalpingPerformance()
@@ -3566,6 +3582,110 @@ func TestFallbackProjectedNetEdgePct(t *testing.T) {
 	marginalEdge, _ := fallbackProjectedNetEdgePct(0.22, decimal.NewFromFloat(0.0040)).Float64()
 	assert.InDelta(t, 1.66, standardEdge, 0.0001)
 	assert.InDelta(t, 0.06, marginalEdge, 0.0001)
+}
+
+func TestAIScalpingService_ValidateDecisionAllowsValidatedReversalBuy(t *testing.T) {
+	cfg := DefaultAIScalpingConfig()
+	cfg.MaxBidAskSpreadPct = scalpingRecentBuyMaxSpreadPct
+	svc := &AIScalpingService{config: cfg}
+	stopLoss := decimal.NewFromFloat(99)
+	takeProfit := decimal.NewFromFloat(102)
+	decision := &AITradingDecision{
+		Action:      "buy",
+		Symbol:      "REV/USDT",
+		SizePercent: 5,
+		Confidence:  0.70,
+		StopLoss:    &stopLoss,
+		TakeProfit:  &takeProfit,
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "REV/USDT",
+		Price:              100,
+		High24h:            115,
+		Low24h:             95,
+		Volume24h:          5_000_000,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.05,
+		RangePosition24h:   18,
+		PriceChange24h:     -0.10,
+		RecentPriceChange:  -0.20,
+		RecentChangeKnown:  true,
+	}})
+
+	require.NoError(t, err)
+}
+
+func TestAIScalpingService_ValidateDecisionAllowsValidatedSellWindow(t *testing.T) {
+	cfg := DefaultAIScalpingConfig()
+	cfg.MaxBidAskSpreadPct = scalpingRecentBuyMaxSpreadPct
+	svc := &AIScalpingService{config: cfg}
+	stopLoss := decimal.NewFromFloat(101)
+	takeProfit := decimal.NewFromFloat(98)
+	decision := &AITradingDecision{
+		Action:      "sell",
+		Symbol:      "SW/USDT",
+		SizePercent: 5,
+		Confidence:  0.70,
+		StopLoss:    &stopLoss,
+		TakeProfit:  &takeProfit,
+	}
+
+	err := svc.validateDecision(decision, []aiMarketSignal{{
+		Symbol:             "SW/USDT",
+		Price:              100,
+		High24h:            115,
+		Low24h:             95,
+		Volume24h:          5_000_000,
+		BidAskSpread:       0.09,
+		OrderBookImbalance: -0.45,
+		RangePosition24h:   55,
+		PriceChange24h:     0.30,
+		RecentPriceChange:  -0.10,
+		RecentChangeKnown:  true,
+	}})
+
+	require.NoError(t, err)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsValidatedCandidateShapes(t *testing.T) {
+	svc := &AIScalpingService{config: DefaultAIScalpingConfig()}
+
+	buyDecision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "REV/USDT",
+		Price:              100,
+		High24h:            115,
+		Low24h:             95,
+		Volume24h:          5_000_000,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.05,
+		RangePosition24h:   18,
+		PriceChange24h:     -0.10,
+		RecentPriceChange:  -0.20,
+		RecentChangeKnown:  true,
+	}, TradingPortfolio{}, false)
+	require.True(t, ok)
+	require.NotNil(t, buyDecision)
+	require.Equal(t, "buy", buyDecision.Action)
+	require.Contains(t, buyDecision.Reasoning, "validated reversal buy")
+
+	sellDecision, _, ok := svc.deterministicFallbackCandidate(context.Background(), aiMarketSignal{
+		Symbol:             "SW/USDT",
+		Price:              100,
+		High24h:            115,
+		Low24h:             95,
+		Volume24h:          5_000_000,
+		BidAskSpread:       0.09,
+		OrderBookImbalance: -0.45,
+		RangePosition24h:   55,
+		PriceChange24h:     0.30,
+		RecentPriceChange:  -0.10,
+		RecentChangeKnown:  true,
+	}, TradingPortfolio{}, false)
+	require.True(t, ok)
+	require.NotNil(t, sellDecision)
+	require.Equal(t, "sell", sellDecision.Action)
+	require.Contains(t, sellDecision.Reasoning, "validated sell window")
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_BlocksNegativeSymbolExpectancyForMicro(t *testing.T) {

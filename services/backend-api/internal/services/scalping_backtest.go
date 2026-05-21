@@ -662,7 +662,10 @@ func (e *ScalpingBacktestEngine) classifyRegimeVolatility(signal MarketSignal) s
 func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AITradingDecision) map[string]GateResult {
 	results := map[string]GateResult{}
 
-	spreadAllowed := signal.BidAskSpread >= 0 && signal.BidAskSpread <= e.config.MaxBidAskSpreadPct
+	spreadAllowed := signal.BidAskSpread >= 0 &&
+		(signal.BidAskSpread <= e.config.MaxBidAskSpreadPct ||
+			scalpingReversalBuyCandidate(signal) ||
+			scalpingSellWindowCandidate(signal))
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
 	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.10
@@ -900,14 +903,16 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	}
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
-	if signal.BidAskSpread <= 0 || signal.BidAskSpread > e.config.MaxBidAskSpreadPct {
+	reversalBuy := scalpingReversalBuyCandidate(signal)
+	sellWindow := scalpingSellWindowCandidate(signal)
+	if signal.BidAskSpread <= 0 || (signal.BidAskSpread > e.config.MaxBidAskSpreadPct && !reversalBuy && !sellWindow) {
 		return nil
 	}
 	effectiveMinImbalance := math.Min(fallback.MinImbalance, 0.20)
 	if e.config.RequireRecentMomentum {
 		effectiveMinImbalance = fallback.MinImbalance
 	}
-	if imbalance < effectiveMinImbalance && !scalpingBlowoffSellTrendConfirmed(signal) {
+	if imbalance < effectiveMinImbalance && !scalpingBlowoffSellTrendConfirmed(signal) && !reversalBuy && !sellWindow {
 		return nil
 	}
 
@@ -930,6 +935,14 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	rangeAlignment := 0.0
 	momentumAligned := false
 	switch {
+	case reversalBuy:
+		action = "buy"
+		momentumAligned = true
+		rangeAlignment = clampFloat((scalpingReversalBuyMaxRangePct-signal.RangePosition24h)/math.Max(scalpingReversalBuyMaxRangePct, 1), 0, 1)
+	case sellWindow:
+		action = "sell"
+		momentumAligned = true
+		rangeAlignment = clampFloat((signal.RangePosition24h-scalpingSellWindowMinRangePct)/math.Max(100-scalpingSellWindowMinRangePct, 1), 0, 1)
 	case signal.OrderBookImbalance >= effectiveMinImbalance && signal.RangePosition24h <= fallback.BuyRangeMax:
 		action = "buy"
 		momentumAligned = momentumPct >= buyMomentumMin
@@ -968,17 +981,17 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	if !momentumAligned {
 		return nil
 	}
-	if e.config.RequireRecentMomentum && action == "buy" && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
+	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
 		return nil
 	}
-	if e.config.RequireRecentMomentum && action == "buy" && signal.PriceChange24h < scalpingRecentBuyMinTrendPct {
+	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.PriceChange24h < scalpingRecentBuyMinTrendPct {
 		return nil
 	}
-	if e.config.RequireRecentMomentum && action == "buy" && signal.RangePosition24h > scalpingRecentBuyMaxRangePct {
+	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.RangePosition24h > scalpingRecentBuyMaxRangePct {
 		return nil
 	}
 	if e.config.RequireRecentMomentum && action == "sell" && !scalpingBlowoffSellTrendConfirmed(signal) &&
-		signal.RangePosition24h < scalpingRecentSellMinRangePct {
+		!sellWindow && signal.RangePosition24h < scalpingRecentSellMinRangePct {
 		return nil
 	}
 
