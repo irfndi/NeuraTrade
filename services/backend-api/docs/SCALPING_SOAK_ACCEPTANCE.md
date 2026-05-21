@@ -77,7 +77,10 @@ the `NEURATRADE_LIVE_READINESS_MANIFEST` evidence shape:
 
 The generated entry always keeps `ready=false`; operators must still review the
 full proof window before copying or promoting the evidence into the live
-readiness manifest.
+readiness manifest. `open_positions` is sourced from the retained
+`SOAK_DB_PATH` SQLite `trading_positions` rows with status `open`, `pending`, or
+`partial`; the wrapper fails instead of emitting a manifest if lifecycle
+position evidence is unavailable.
 
 For manual runs, use the same defaults explicitly:
 
