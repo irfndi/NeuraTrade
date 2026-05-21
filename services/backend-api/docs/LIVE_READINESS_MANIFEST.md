@@ -5,7 +5,7 @@ manifest from `NEURATRADE_LIVE_READINESS_MANIFEST`.
 
 The manifest is intentionally a final gate, not proof by itself. Each entry must
 point to evidence produced by the relevant paper/live-market verifier for that
-strategy. Trading strategies also require structured `evidence_metrics`; a
+strategy. Required entries also require structured `evidence_metrics`; a
 non-empty evidence path alone is not enough to permit live mode.
 
 ```json
@@ -15,6 +15,14 @@ non-empty evidence path alone is not enough to permit live mode.
     "paper_trading": {
       "ready": true,
       "evidence": "/path/to/paper-trading-verification.json",
+      "evidence_metrics": {
+        "paper_runtime_probe_passed": true,
+        "lifecycle_storage_verified": true,
+        "closed_trades": 1,
+        "open_positions": 0,
+        "net_pnl": "1.25",
+        "avg_net_pnl": "1.25"
+      },
       "verified_at": "2026-05-21T00:00:00Z"
     },
     "scalping": {
@@ -46,6 +54,14 @@ non-empty evidence path alone is not enough to permit live mode.
   }
 }
 ```
+
+Required paper-trading metrics:
+
+- `paper_runtime_probe_passed`: must be true.
+- `lifecycle_storage_verified`: must be true.
+- `closed_trades`: at least 1 persisted closed paper trade.
+- `open_positions`: must be 0.
+- `net_pnl` and `avg_net_pnl`: decimal strings greater than 0.
 
 Required trading-strategy metrics:
 
