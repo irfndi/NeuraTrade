@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -68,6 +70,81 @@ func TestOperationalModeService_GetModeInfo_UsesDistinctDryAndPaperLabels(t *tes
 	assert.Contains(t, dryInfo, "Strategy runs stay in shadow observation mode")
 	assert.Contains(t, paperInfo, "PAPER MODE (Simulated Orders)")
 	assert.Contains(t, paperInfo, "Orders are simulated through the autonomy paper stage")
+}
+
+func TestOperationalModeService_LiveModeGuardBlocksLiveTransition(t *testing.T) {
+	logger := logging.NewStandardLogger("error", "development")
+	service := NewOperationalModeService(nil, DefaultOperationalModeConfig(), logger)
+	ctx := context.Background()
+	blocked := errors.New("live mode blocked: missing daily trading proof")
+	service.SetLiveModeGuard(func(context.Context, string, string) error {
+		return blocked
+	})
+
+	_, err := service.AddConfirmation(ctx, "chat-guard", "tester")
+	require.NoError(t, err)
+	_, err = service.AddConfirmation(ctx, "chat-guard", "tester")
+	require.NoError(t, err)
+
+	err = service.SetMode(ctx, "chat-guard", OpModeLive, "tester")
+	require.ErrorIs(t, err, blocked)
+	assert.Equal(t, OpModeDry, service.GetMode("chat-guard"))
+
+	require.NoError(t, service.SetMode(ctx, "chat-guard", ModePaper, "tester"))
+	assert.Equal(t, ModePaper, service.GetMode("chat-guard"))
+}
+
+func TestManifestLiveModeGuardRequiresAllStrategyEvidence(t *testing.T) {
+	guard := ManifestLiveModeGuard("", []string{"daily_trading", "swing_trading"})
+	err := guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), LiveReadinessManifestEnv)
+	assert.Contains(t, err.Error(), "daily_trading")
+	assert.Contains(t, err.Error(), "swing_trading")
+
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {Ready: true, Evidence: "paper-soak:daily.json"},
+			"swing_trading": {Ready: false, Reason: "paper_window_missing"},
+			"arbitrage":     {Ready: true},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard = ManifestLiveModeGuard(manifestPath, []string{"daily_trading", "swing_trading", "arbitrage"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "swing_trading=paper_window_missing")
+	assert.Contains(t, err.Error(), "arbitrage=missing_evidence")
+}
+
+func TestManifestLiveModeGuardQuotesManifestPathErrors(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live readiness.json")
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+
+	err := guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"`)
+	assert.Contains(t, err.Error(), "live readiness.json")
+}
+
+func TestManifestLiveModeGuardAllowsVerifiedStrategies(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {Ready: true, Evidence: "paper-soak:daily.json"},
+			"swing_trading": {Ready: true, Evidence: "paper-soak:swing.json"},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading", "swing_trading"})
+	require.NoError(t, guard(context.Background(), "chat-1", "tester"))
 }
 
 func TestRuntimeModeOverrideFromEnv_HonorsSingularAndPluralAliases(t *testing.T) {

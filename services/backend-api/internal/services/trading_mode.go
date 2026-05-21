@@ -105,11 +105,12 @@ func boolEnvAny(preferSafeTrue bool, names ...string) (bool, bool) {
 
 // OperationalModeService manages the operational mode state
 type OperationalModeService struct {
-	config OperationalModeConfig
-	db     DBPool
-	logger logging.Logger
-	mu     sync.RWMutex
-	states map[string]*OperationalModeState // chatID -> state
+	config        OperationalModeConfig
+	db            DBPool
+	logger        logging.Logger
+	mu            sync.RWMutex
+	states        map[string]*OperationalModeState // chatID -> state
+	liveModeGuard LiveModeGuard
 }
 
 // NewOperationalModeService creates a new operational mode service
@@ -190,28 +191,33 @@ func (s *OperationalModeService) GetState(chatID string) *OperationalModeState {
 	}
 }
 
+// SetLiveModeGuard installs an optional pre-flight check that must pass before
+// a chat can enter live mode.
+func (s *OperationalModeService) SetLiveModeGuard(guard LiveModeGuard) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.liveModeGuard = guard
+}
+
 // SetMode sets the operational mode for a chat
 func (s *OperationalModeService) SetMode(ctx context.Context, chatID string, mode OperationalMode, changedBy string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var previousMode OperationalMode
-	if state, ok := s.states[chatID]; ok {
-		previousMode = state.Mode
-	} else {
-		previousMode = s.config.DefaultMode
+	_, liveModeGuard, err := s.modeTransitionPreflightLocked(chatID, mode)
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if mode == OpModeLive && liveModeGuard != nil {
+		if err := liveModeGuard(ctx, chatID, changedBy); err != nil {
+			return err
+		}
 	}
 
-	// If switching to live mode and confirmation is required
-	if mode == OpModeLive && s.config.RequireConfirmation {
-		if state, ok := s.states[chatID]; ok {
-			if state.Confirmations < s.config.ConfirmationCount {
-				return fmt.Errorf("switching to live mode requires %d confirmations (current: %d)",
-					s.config.ConfirmationCount, state.Confirmations)
-			}
-		} else {
-			return fmt.Errorf("switching to live mode requires %d confirmations", s.config.ConfirmationCount)
-		}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previousMode, _, err := s.modeTransitionPreflightLocked(chatID, mode)
+	if err != nil {
+		return err
 	}
 
 	now := time.Now()
@@ -239,6 +245,29 @@ func (s *OperationalModeService) SetMode(ctx context.Context, chatID string, mod
 		"changed_by", changedBy)
 
 	return nil
+}
+
+func (s *OperationalModeService) modeTransitionPreflightLocked(chatID string, mode OperationalMode) (OperationalMode, LiveModeGuard, error) {
+	var previousMode OperationalMode
+	if state, ok := s.states[chatID]; ok {
+		previousMode = state.Mode
+	} else {
+		previousMode = s.config.DefaultMode
+	}
+
+	// If switching to live mode and confirmation is required
+	if mode == OpModeLive && s.config.RequireConfirmation {
+		if state, ok := s.states[chatID]; ok {
+			if state.Confirmations < s.config.ConfirmationCount {
+				return previousMode, nil, fmt.Errorf("switching to live mode requires %d confirmations (current: %d)",
+					s.config.ConfirmationCount, state.Confirmations)
+			}
+		} else {
+			return previousMode, nil, fmt.Errorf("switching to live mode requires %d confirmations", s.config.ConfirmationCount)
+		}
+	}
+
+	return previousMode, s.liveModeGuard, nil
 }
 
 // AddConfirmation adds a confirmation for switching to live mode
