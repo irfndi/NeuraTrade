@@ -505,6 +505,8 @@ func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Que
 		err = h.handleFundingRateScan(ctx, quest)
 	case "portfolio_health":
 		err = h.handlePortfolioHealthWithRisk(ctx, quest)
+	case "daily_report":
+		err = h.handleDailyPerformanceReport(ctx, quest)
 	case "fund_growth":
 		err = h.handleFundGrowthGoal(ctx, quest)
 	case "scalping_execution":
@@ -521,6 +523,90 @@ func (h *IntegratedQuestHandlers) ExecuteArbitrage(ctx context.Context, quest *Q
 	err := h.handleArbitrageExecution(ctx, quest)
 	h.recordQuestResult(quest, err == nil, decimal.Zero)
 	return err
+}
+
+func (h *IntegratedQuestHandlers) handleDailyPerformanceReport(ctx context.Context, quest *Quest) error {
+	if quest == nil {
+		return fmt.Errorf("quest is nil")
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	if quest.Metadata == nil {
+		quest.Metadata = make(map[string]string)
+	}
+
+	now := time.Now().UTC()
+	since := now.Add(-24 * time.Hour)
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+	exchange := strings.TrimSpace(quest.Metadata["exchange"])
+	if exchange == "" {
+		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	}
+
+	blockers := []string{
+		"daily_trading_strategy_not_implemented",
+		"daily_report_is_reporting_only",
+	}
+	quest.Checkpoint["daily_report_generated_at"] = now.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_window_start"] = since.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_window_end"] = now.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_chat_id"] = chatID
+	quest.Checkpoint["daily_report_exchange"] = exchange
+
+	if h.lifecycleStore == nil {
+		blockers = append(blockers, "lifecycle_store_unavailable")
+		writeDailyTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+
+	writeDailyTradingReadinessCheckpoint(quest, blockers)
+	summary, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, exchange, since)
+	if err != nil {
+		blockers = append(blockers, "realized_performance_query_failed")
+		writeDailyTradingReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("daily performance report: realized performance: %w", err)
+	}
+
+	quest.Checkpoint["daily_report_closed_trades"] = summary.Trades
+	quest.Checkpoint["daily_report_wins"] = summary.Wins
+	quest.Checkpoint["daily_report_losses"] = summary.Losses
+	quest.Checkpoint["daily_report_breakeven"] = summary.Breakeven
+	quest.Checkpoint["daily_report_net_pnl"] = summary.RealizedPnL.String()
+	quest.Checkpoint["daily_report_gross_pnl"] = summary.GrossPnL.String()
+	quest.Checkpoint["daily_report_fees"] = summary.Fees.String()
+	quest.Checkpoint["daily_report_avg_net_pnl"] = summary.AvgNetPnL.String()
+	quest.Checkpoint["daily_report_win_rate"] = summary.WinRate.String()
+	quest.Checkpoint["daily_report_best_trade"] = summary.BestTrade.String()
+	quest.Checkpoint["daily_report_worst_trade"] = summary.WorstTrade.String()
+
+	if summary.Trades == 0 {
+		blockers = append(blockers, "no_closed_trades_in_24h")
+	}
+	if summary.Wins == 0 {
+		blockers = append(blockers, "no_winning_trade_observed")
+	}
+	if summary.Losses == 0 {
+		blockers = append(blockers, "no_losing_trade_observed")
+	}
+	if summary.RealizedPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_net_pnl")
+	}
+	if summary.Trades > 0 && summary.AvgNetPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_avg_net_pnl")
+	}
+
+	writeDailyTradingReadinessCheckpoint(quest, blockers)
+	quest.CurrentCount++
+	return nil
+}
+
+func writeDailyTradingReadinessCheckpoint(quest *Quest, blockers []string) {
+	quest.Checkpoint["daily_trading_live_ready"] = false
+	quest.Checkpoint["daily_trading_readiness_status"] = "blocked"
+	quest.Checkpoint["daily_trading_readiness_blockers"] = append([]string(nil), blockers...)
+	quest.Checkpoint["daily_trading_readiness_note"] = "daily trading has no executable strategy path or readiness evidence; keep live-money use blocked"
 }
 
 func (h *IntegratedQuestHandlers) handleVolatilityWatch(ctx context.Context, quest *Quest) error {
