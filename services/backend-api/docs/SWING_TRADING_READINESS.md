@@ -28,17 +28,30 @@ signal path and paper/live-market hold-window proof exist.
 - `net_pnl`
 - `avg_net_pnl`
 - `max_drawdown_pct`
+- `drawdown_verified`
+- `execution_path_verified`
+- `market_data_verified`
+- `risk_limits_enforced`
+- `backtest_comparison_verified`
+- `hold_window_verified`
 
 `max_drawdown_pct` remains `0.00` until a real swing drawdown verifier supplies
-proof, and the metrics include `diagnostic_only=true` and
-`drawdown_verified=false` so downstream consumers can distinguish placeholder
-diagnostics from a manifest-ready evidence artifact. These fields also keep the
-generated metrics from satisfying the live-readiness manifest by accident.
+proof, and the metrics include `diagnostic_only=true`,
+`drawdown_verified=false`, `execution_path_verified=false`,
+`market_data_verified=false`, `risk_limits_enforced=false`,
+`backtest_comparison_verified=false`, and `hold_window_verified=false` so
+downstream consumers can distinguish placeholder diagnostics from a
+manifest-ready evidence artifact. These fields also keep the generated metrics
+from satisfying the live-readiness manifest by accident.
 
 Minimum proof before the live-readiness manifest can mark `swing_trading` ready:
 
 - executable swing signal path with documented entry and exit rules
+- real market data used by the verifier
+- risk-limit enforcement verified
+- paper/live-market results compared against the relevant backtest
 - paper/live-market lifecycle evidence over representative longer holds
+- hold-window behavior verified
 - at least two closed trades with both a win and a loss
 - no open positions at proof cutoff
 - positive net and average net PnL after fees

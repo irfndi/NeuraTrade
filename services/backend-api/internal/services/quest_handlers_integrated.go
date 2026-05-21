@@ -652,15 +652,19 @@ func writeDailyTradingReadinessEvidenceMetrics(
 		quest.Checkpoint["daily_trading_readiness_evidence_metrics_status"] = "diagnostic_lifecycle"
 	}
 	quest.Checkpoint["daily_trading_readiness_evidence_metrics"] = map[string]interface{}{
-		"closed_trades":     summary.Trades,
-		"winning_trades":    summary.Wins,
-		"losing_trades":     summary.Losses,
-		"open_positions":    openPositions,
-		"net_pnl":           summary.RealizedPnL.StringFixed(2),
-		"avg_net_pnl":       summary.AvgNetPnL.StringFixed(2),
-		"max_drawdown_pct":  "0.00",
-		"drawdown_verified": false,
-		"diagnostic_only":   true,
+		"closed_trades":                summary.Trades,
+		"winning_trades":               summary.Wins,
+		"losing_trades":                summary.Losses,
+		"open_positions":               openPositions,
+		"net_pnl":                      summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":                  summary.AvgNetPnL.StringFixed(2),
+		"max_drawdown_pct":             "0.00",
+		"drawdown_verified":            false,
+		"execution_path_verified":      false,
+		"market_data_verified":         false,
+		"risk_limits_enforced":         false,
+		"backtest_comparison_verified": false,
+		"diagnostic_only":              true,
 	}
 }
 
@@ -1026,15 +1030,20 @@ func writeSwingTradingReadinessEvidenceMetrics(
 		quest.Checkpoint["swing_trading_readiness_evidence_metrics_status"] = "diagnostic_lifecycle"
 	}
 	quest.Checkpoint["swing_trading_readiness_evidence_metrics"] = map[string]interface{}{
-		"closed_trades":     summary.Trades,
-		"winning_trades":    summary.Wins,
-		"losing_trades":     summary.Losses,
-		"open_positions":    openPositions,
-		"net_pnl":           summary.RealizedPnL.StringFixed(2),
-		"avg_net_pnl":       summary.AvgNetPnL.StringFixed(2),
-		"max_drawdown_pct":  "0.00",
-		"drawdown_verified": false,
-		"diagnostic_only":   true,
+		"closed_trades":                summary.Trades,
+		"winning_trades":               summary.Wins,
+		"losing_trades":                summary.Losses,
+		"open_positions":               openPositions,
+		"net_pnl":                      summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":                  summary.AvgNetPnL.StringFixed(2),
+		"max_drawdown_pct":             "0.00",
+		"drawdown_verified":            false,
+		"execution_path_verified":      false,
+		"market_data_verified":         false,
+		"risk_limits_enforced":         false,
+		"backtest_comparison_verified": false,
+		"hold_window_verified":         false,
+		"diagnostic_only":              true,
 	}
 }
 
@@ -1262,15 +1271,21 @@ func writeArbitrageReadinessEvidenceMetrics(
 ) {
 	quest.Checkpoint["arbitrage_lifecycle_storage_verified"] = lifecycleStorageVerified
 	quest.Checkpoint["arbitrage_readiness_evidence_metrics"] = map[string]interface{}{
-		"closed_trades":    summary.Trades,
-		"winning_trades":   summary.Wins,
-		"losing_trades":    summary.Losses,
-		"open_positions":   openPositions,
-		"net_pnl":          summary.RealizedPnL.StringFixed(2),
-		"avg_net_pnl":      summary.AvgNetPnL.StringFixed(2),
-		"max_drawdown_pct": "0.00",
-		"no_trade_safety":  false,
-		"no_trade_reason":  "",
+		"closed_trades":                summary.Trades,
+		"winning_trades":               summary.Wins,
+		"losing_trades":                summary.Losses,
+		"open_positions":               openPositions,
+		"net_pnl":                      summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":                  summary.AvgNetPnL.StringFixed(2),
+		"max_drawdown_pct":             "0.00",
+		"execution_path_verified":      false,
+		"market_data_verified":         false,
+		"risk_limits_enforced":         false,
+		"backtest_comparison_verified": false,
+		"cost_accounting_verified":     false,
+		"exposure_safety_verified":     false,
+		"no_trade_safety":              false,
+		"no_trade_reason":              "",
 	}
 }
 

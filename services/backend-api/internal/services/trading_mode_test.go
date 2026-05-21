@@ -248,6 +248,11 @@ func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
 	err = guard(context.Background(), "chat-1", "tester")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "swing_trading=insufficient_closed_trades")
+	assert.Contains(t, err.Error(), "swing_trading=execution_path_not_verified")
+	assert.Contains(t, err.Error(), "swing_trading=market_data_not_verified")
+	assert.Contains(t, err.Error(), "swing_trading=risk_limits_not_enforced")
+	assert.Contains(t, err.Error(), "swing_trading=backtest_comparison_not_verified")
+	assert.Contains(t, err.Error(), "swing_trading=hold_window_not_verified")
 	assert.Contains(t, err.Error(), "swing_trading=inconsistent_trade_counts")
 	assert.Contains(t, err.Error(), "swing_trading=open_positions_1")
 	assert.Contains(t, err.Error(), "swing_trading=non_positive_net_pnl")
@@ -255,6 +260,40 @@ func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
 	assert.Contains(t, err.Error(), "swing_trading=missing_observed_drawdown")
 	assert.Contains(t, err.Error(), "swing_trading=drawdown_not_verified")
 	assert.Contains(t, err.Error(), "swing_trading=diagnostic_only")
+}
+
+func TestManifestLiveModeGuardRequiresStrategyAcceptanceMetrics(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {
+				Ready:    true,
+				Evidence: "paper-soak:daily.json",
+				EvidenceMetrics: &StrategyReadinessEvidence{
+					ClosedTrades:     2,
+					WinningTrades:    1,
+					LosingTrades:     1,
+					NetPnL:           "1.25",
+					AvgNetPnL:        "0.10",
+					MaxDrawdownPct:   "0.05",
+					DrawdownVerified: true,
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daily_trading=execution_path_not_verified")
+	assert.Contains(t, err.Error(), "daily_trading=market_data_not_verified")
+	assert.Contains(t, err.Error(), "daily_trading=risk_limits_not_enforced")
+	assert.Contains(t, err.Error(), "daily_trading=backtest_comparison_not_verified")
+	assert.NotContains(t, err.Error(), "daily_trading=insufficient_closed_trades")
+	assert.NotContains(t, err.Error(), "daily_trading=drawdown_not_verified")
 }
 
 func TestManifestLiveModeGuardRejectsUnverifiedDrawdownEvenWithPositiveMetric(t *testing.T) {
@@ -306,8 +345,11 @@ func TestManifestLiveModeGuardAllowsArbitrageNoTradeSafetyEvidence(t *testing.T)
 				Ready:    true,
 				Evidence: "paper-safety:arbitrage.json",
 				EvidenceMetrics: &StrategyReadinessEvidence{
-					NoTradeSafety: true,
-					NoTradeReason: "no executable spreads after fees across observed window",
+					NoTradeSafety:          true,
+					NoTradeReason:          "no executable spreads after fees across observed window",
+					MarketDataVerified:     true,
+					CostAccountingVerified: true,
+					ExposureSafetyVerified: true,
 				},
 			},
 		},
@@ -343,17 +385,27 @@ func TestManifestLiveModeGuardQuotesArbitrageNoTradeSafetyBlockers(t *testing.T)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `arbitrage="missing_no_trade_reason"`)
 	assert.Contains(t, err.Error(), `arbitrage=open_positions_"2"`)
+	assert.Contains(t, err.Error(), "arbitrage=market_data_not_verified")
+	assert.Contains(t, err.Error(), "arbitrage=cost_accounting_not_verified")
+	assert.Contains(t, err.Error(), "arbitrage=exposure_safety_not_verified")
 }
 
 func passingReadinessEvidence(closedTrades int) *StrategyReadinessEvidence {
 	return &StrategyReadinessEvidence{
-		ClosedTrades:     closedTrades,
-		WinningTrades:    1,
-		LosingTrades:     1,
-		NetPnL:           "1.25",
-		AvgNetPnL:        "0.10",
-		MaxDrawdownPct:   "0.05",
-		DrawdownVerified: true,
+		ClosedTrades:               closedTrades,
+		WinningTrades:              1,
+		LosingTrades:               1,
+		NetPnL:                     "1.25",
+		AvgNetPnL:                  "0.10",
+		MaxDrawdownPct:             "0.05",
+		DrawdownVerified:           true,
+		ExecutionPathVerified:      true,
+		MarketDataVerified:         true,
+		RiskLimitsEnforced:         true,
+		BacktestComparisonVerified: true,
+		HoldWindowVerified:         true,
+		CostAccountingVerified:     true,
+		ExposureSafetyVerified:     true,
 	}
 }
 
