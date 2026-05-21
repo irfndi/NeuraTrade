@@ -15,7 +15,9 @@ as top-level `evidence_metrics` or as
 `live_readiness.manifest_entry.evidence_metrics`. Ready entries must include an
 RFC3339 `verified_at` timestamp, and the evidence artifact must carry the same
 timestamp either as top-level `verified_at` or as
-`live_readiness.manifest_entry.verified_at`.
+`live_readiness.manifest_entry.verified_at`. The evidence artifact must also
+identify the same strategy as the manifest entry, either as top-level `strategy`
+or as `live_readiness.strategy`.
 
 ```json
 {
@@ -77,6 +79,7 @@ Required paper-trading readiness fields:
 
 - `verified_at`: must be an RFC3339 timestamp and must match the referenced
   evidence artifact timestamp.
+- `strategy`: the referenced evidence artifact must identify `paper_trading`.
 
 - `paper_runtime_probe_passed`: must be true.
 - `lifecycle_storage_verified`: must be true.
@@ -94,6 +97,8 @@ Required trading-strategy readiness fields:
 
 - `verified_at`: must be an RFC3339 timestamp and must match the referenced
   evidence artifact timestamp.
+- `strategy`: the referenced evidence artifact must identify the same strategy
+  key as the manifest entry.
 
 - `closed_trades`: at least 20 for `scalping`; at least 2 for `daily_trading`, `swing_trading`, and `arbitrage` unless arbitrage uses documented no-trade safety.
 - `winning_trades` and `losing_trades`: both must be positive.

@@ -181,9 +181,11 @@ func evidenceArtifactBlockers(
 		}
 	}
 	if strings.TrimSpace(expectedVerifiedAt) != "" {
-		return evidenceArtifactVerifiedAtBlockers(strategy, evidence, evidenceObject, expectedVerifiedAt)
+		if blockers := evidenceArtifactVerifiedAtBlockers(strategy, evidence, evidenceObject, expectedVerifiedAt); len(blockers) > 0 {
+			return blockers
+		}
 	}
-	return nil
+	return evidenceArtifactStrategyBlockers(strategy, evidence, evidenceObject)
 }
 
 func readinessVerifiedAtBlockers(strategy string, status StrategyLiveReadiness) []string {
@@ -318,6 +320,46 @@ func evidenceArtifactVerifiedAt(evidenceObject map[string]json.RawMessage) (stri
 	}
 	verifiedAt := strings.TrimSpace(readiness.ManifestEntry.VerifiedAt)
 	return verifiedAt, verifiedAt != ""
+}
+
+func evidenceArtifactStrategyBlockers(
+	strategy string,
+	evidence string,
+	evidenceObject map[string]json.RawMessage,
+) []string {
+	actualStrategy, ok := evidenceArtifactStrategy(evidenceObject)
+	if !ok {
+		return []string{fmt.Sprintf("%s=evidence_missing_strategy_%q", strategy, evidence)}
+	}
+	actualStrategy = strings.ToLower(strings.TrimSpace(actualStrategy))
+	if actualStrategy != strategy {
+		return []string{fmt.Sprintf("%s=evidence_strategy_mismatch_%q_%q", strategy, actualStrategy, evidence)}
+	}
+	return nil
+}
+
+func evidenceArtifactStrategy(evidenceObject map[string]json.RawMessage) (string, bool) {
+	if raw, ok := evidenceObject["strategy"]; ok {
+		var strategy string
+		if err := json.Unmarshal(raw, &strategy); err != nil {
+			return "", false
+		}
+		strategy = strings.TrimSpace(strategy)
+		return strategy, strategy != ""
+	}
+
+	var readiness struct {
+		Strategy string `json:"strategy"`
+	}
+	raw, ok := evidenceObject["live_readiness"]
+	if !ok {
+		return "", false
+	}
+	if err := json.Unmarshal(raw, &readiness); err != nil {
+		return "", false
+	}
+	strategy := strings.TrimSpace(readiness.Strategy)
+	return strategy, strategy != ""
 }
 
 func normalizeReadinessStrategies(strategies []string) []string {
