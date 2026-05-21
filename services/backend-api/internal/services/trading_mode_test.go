@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/irfndi/neuratrade/internal/database"
@@ -102,10 +103,12 @@ func TestManifestLiveModeGuardRequiresAllStrategyEvidence(t *testing.T) {
 	assert.Contains(t, err.Error(), "daily_trading")
 	assert.Contains(t, err.Error(), "swing_trading")
 
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-soak/daily.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
-			"daily_trading": {Ready: true, Evidence: "paper-soak:daily.json"},
+			"daily_trading": {Ready: true, Evidence: "paper-soak/daily.json"},
 			"swing_trading": {Ready: false, Reason: "paper_window_missing"},
 			"arbitrage":     {Ready: true},
 		},
@@ -171,7 +174,9 @@ func TestManifestLiveModeGuardRequiresReadableEvidenceArtifact(t *testing.T) {
 }
 
 func TestManifestLiveModeGuardRequiresPaperTradingProofMetrics(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-readiness.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
 			"paper_trading": {
@@ -208,7 +213,9 @@ func TestManifestLiveModeGuardRequiresPaperTradingProofMetrics(t *testing.T) {
 }
 
 func TestManifestLiveModeGuardRequiresPaperTradingAcceptanceMetrics(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-readiness.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
 			"paper_trading": {
@@ -242,12 +249,14 @@ func TestManifestLiveModeGuardRequiresPaperTradingAcceptanceMetrics(t *testing.T
 }
 
 func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-soak/swing.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
 			"swing_trading": {
 				Ready:    true,
-				Evidence: "paper-soak:swing.json",
+				Evidence: "paper-soak/swing.json",
 				EvidenceMetrics: &StrategyReadinessEvidence{
 					ClosedTrades:   1,
 					WinningTrades:  1,
@@ -284,12 +293,14 @@ func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
 }
 
 func TestManifestLiveModeGuardRequiresStrategyAcceptanceMetrics(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-soak/daily.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
 			"daily_trading": {
 				Ready:    true,
-				Evidence: "paper-soak:daily.json",
+				Evidence: "paper-soak/daily.json",
 				EvidenceMetrics: &StrategyReadinessEvidence{
 					ClosedTrades:     2,
 					WinningTrades:    1,
@@ -318,10 +329,12 @@ func TestManifestLiveModeGuardRequiresStrategyAcceptanceMetrics(t *testing.T) {
 }
 
 func TestManifestLiveModeGuardRejectsUnverifiedDrawdownEvenWithPositiveMetric(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-soak/daily.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
-			"daily_trading": {Ready: true, Evidence: "paper-soak:daily.json", EvidenceMetrics: &StrategyReadinessEvidence{
+			"daily_trading": {Ready: true, Evidence: "paper-soak/daily.json", EvidenceMetrics: &StrategyReadinessEvidence{
 				ClosedTrades:   2,
 				WinningTrades:  1,
 				LosingTrades:   1,
@@ -342,10 +355,12 @@ func TestManifestLiveModeGuardRejectsUnverifiedDrawdownEvenWithPositiveMetric(t 
 }
 
 func TestManifestLiveModeGuardRequiresScalpingMinimumTradeProof(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-soak/scalping.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
-			"scalping": {Ready: true, Evidence: "paper-soak:scalping.json", EvidenceMetrics: passingReadinessEvidence(19)},
+			"scalping": {Ready: true, Evidence: "paper-soak/scalping.json", EvidenceMetrics: passingReadinessEvidence(19)},
 		},
 	}
 	raw, err := json.Marshal(manifest)
@@ -386,12 +401,14 @@ func TestManifestLiveModeGuardAllowsArbitrageNoTradeSafetyEvidence(t *testing.T)
 }
 
 func TestManifestLiveModeGuardQuotesArbitrageNoTradeSafetyBlockers(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifestDir := t.TempDir()
+	writeReadinessEvidenceArtifact(t, manifestDir, "paper-safety/arbitrage.json")
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
 	manifest := LiveReadinessManifest{
 		Strategies: map[string]StrategyLiveReadiness{
 			"arbitrage": {
 				Ready:    true,
-				Evidence: "paper-safety:arbitrage.json",
+				Evidence: "paper-safety/arbitrage.json",
 				EvidenceMetrics: &StrategyReadinessEvidence{
 					NoTradeSafety: true,
 					OpenPositions: 2,
@@ -415,7 +432,7 @@ func TestManifestLiveModeGuardQuotesArbitrageNoTradeSafetyBlockers(t *testing.T)
 
 func writeReadinessEvidenceArtifact(t *testing.T, manifestDir string, evidence string) {
 	t.Helper()
-	path := evidence
+	path := strings.TrimSpace(evidence)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(manifestDir, path)
 	}
