@@ -469,4 +469,39 @@ describe("Status command", () => {
     expect(ctx.replies[0]).toContain("Position cap: 1/1 managed open");
     expect(ctx.replies[0]).not.toContain("Entry blocker: none");
   });
+
+  test("renders entry attempt block as blocker when no hard gate is active", async () => {
+    const bot = new MockBot();
+    const api = createApiMock({
+      async getQuestDiagnostics() {
+        return {
+          quest_runtime: {
+            cadence_mode: "active_risk",
+            risk_lock_active: false,
+          },
+          chat_runtime: {
+            entry_gate_type: "none",
+            entry_attempt_block_reason: "missing_orderbook_signal",
+            entry_attempts_1h: 1,
+          },
+        };
+      },
+    });
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(778, 889);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain(
+      "Entry blocker: entry_attempt (missing_orderbook_signal)",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Entry attempt block: missing_orderbook_signal",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Next unblock: await candidate that passes entry-attempt filters",
+    );
+    expect(ctx.replies[0]).not.toContain("Entry blocker: none");
+    expect(ctx.replies[0]).not.toContain("entries currently eligible");
+  });
 });
