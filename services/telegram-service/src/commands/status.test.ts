@@ -467,6 +467,9 @@ describe("Status command", () => {
     );
     expect(ctx.replies[0]).toContain("Account tier: micro");
     expect(ctx.replies[0]).toContain("Position cap: 1/1 managed open");
+    expect(ctx.replies[0]).toContain(
+      "Next unblock: await gate condition recovery",
+    );
     expect(ctx.replies[0]).not.toContain("Entry blocker: none");
   });
 
@@ -493,7 +496,7 @@ describe("Status command", () => {
     await runCommand(bot, "status", ctx);
 
     expect(ctx.replies[0]).toContain(
-      "Entry blocker: entry_attempt (missing_orderbook_signal)",
+      "Entry blocker: entry-attempt (missing_orderbook_signal)",
     );
     expect(ctx.replies[0]).toContain(
       "Entry attempt block: missing_orderbook_signal",
