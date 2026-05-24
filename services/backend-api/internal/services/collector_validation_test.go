@@ -96,6 +96,45 @@ func TestCollectorServiceSaveBulkTickerDataReusesCachedExchangeWithMixedCaseName
 	assertSQLiteScalar(t, db, "SELECT COUNT(*) FROM market_data WHERE exchange_id = 1", 1)
 }
 
+func TestCollectorServiceGetPrioritizedExchangesUsesSQLiteInClause(t *testing.T) {
+	db, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "collector-priority.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	createCollectorSQLiteSchema(t, db)
+
+	ctx := context.Background()
+	_, err = db.Exec(ctx, `
+		INSERT INTO exchanges (name, display_name, ccxt_id, is_active, priority)
+		VALUES
+			('binance', 'Binance', 'binance', 1, 20),
+			('bybit', 'Bybit', 'bybit', 1, 10),
+			('kraken', 'Kraken', 'kraken', 0, 1)
+	`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(ctx, `
+		INSERT INTO ccxt_exchanges (exchange_id, ccxt_id)
+		SELECT id, 'bybit-linear' FROM exchanges WHERE name = 'bybit'
+	`)
+	require.NoError(t, err)
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance", "kraken", "bybit"}).Once()
+
+	collector := NewCollectorService(
+		db,
+		mockCCXT,
+		&config.Config{Database: config.DatabaseConfig{Driver: "sqlite"}},
+		nil,
+		cache.NewInMemoryBlacklistCache(),
+	)
+	defer collector.Stop()
+
+	got := collector.getPrioritizedExchanges()
+	require.Equal(t, []string{"bybit-linear", "binance"}, got)
+	mockCCXT.AssertExpectations(t)
+}
+
 func newCollectorWithSQLiteAndRedis(t *testing.T) (*CollectorService, *database.SQLiteDB, *redis.Client) {
 	t.Helper()
 
@@ -141,6 +180,14 @@ func createCollectorSQLiteSchema(t *testing.T, db *database.SQLiteDB) {
 			last_ping DATETIME,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE ccxt_exchanges (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			exchange_id INTEGER NOT NULL,
+			ccxt_id TEXT NOT NULL UNIQUE,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (exchange_id) REFERENCES exchanges(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE trading_pairs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
