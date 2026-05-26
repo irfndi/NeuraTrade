@@ -624,6 +624,78 @@ func TestTradeMemory_GetScopedExpectancyStats_UsesConfiguredDefaultsAndDetermini
 	assert.InDelta(t, 3.0, stats.NetExpectancy.InexactFloat64(), 0.0001)
 }
 
+func TestTradeMemory_GetScopedExpectancyStats_AppliesLimitAfterAppSymbolNormalization(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemoryWithConfig(db, TradeMemoryConfig{
+		MemoryLookbackHoursDefault: 24,
+		MemorySampleLimitDefault:   1,
+	})
+	require.NoError(t, err)
+
+	setupRealizedPnLJournal(t, db)
+
+	closedAt := time.Now().UTC().Truncate(time.Second)
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_newer_other_symbol', 'ord_newer_other_symbol', 'chat-1', 'bitget', 'ETH/USDT', 'buy', 1, 100, 120, 20, 0, 'autonomous', ?, ?),
+		('rp_matching_suffix', 'ord_matching_suffix', 'chat-1', 'bitget', 'BTC-USDT:USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', ?, ?)`,
+		closedAt, closedAt,
+		closedAt.Add(-time.Minute), closedAt.Add(-time.Minute),
+	)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 0, 0)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, stats)
+	assert.Equal(t, 1, stats.SampleSize)
+	assert.Equal(t, 1, stats.Wins)
+	assert.Zero(t, stats.Losses)
+	assert.InDelta(t, 3.0, stats.NetExpectancy.InexactFloat64(), 0.0001)
+}
+
+func TestTradeMemory_GetScopedExpectancyStats_SQLPrefilterKeepsLimitBounded(t *testing.T) {
+	db := setupTestDB(t)
+	tm, err := NewTradeMemoryWithConfig(db, TradeMemoryConfig{
+		MemoryLookbackHoursDefault: 24,
+		MemorySampleLimitDefault:   1,
+	})
+	require.NoError(t, err)
+
+	setupRealizedPnLJournal(t, db)
+
+	closedAt := time.Now().UTC().Truncate(time.Second)
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_newer_prefix_only', 'ord_newer_prefix_only', 'chat-1', 'bitget', 'BTC/USDT2', 'buy', 1, 100, 120, 20, 0, 'autonomous', ?, ?),
+		('rp_matching_suffix_limited', 'ord_matching_suffix_limited', 'chat-1', 'bitget', 'BTC-USDT:USDT', 'buy', 1, 100, 103, 3, 0, 'autonomous', ?, ?)`,
+		closedAt, closedAt,
+		closedAt.Add(-time.Minute), closedAt.Add(-time.Minute),
+	)
+	require.NoError(t, err)
+
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-1",
+		Exchange: "bitget",
+	})
+
+	stats, found, err := tm.GetScopedExpectancyStats(ctx, "BTC/USDT", "buy", 0, 0)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, stats)
+	assert.Equal(t, 1, stats.SampleSize)
+	assert.Equal(t, 1, stats.Wins)
+	assert.Zero(t, stats.Losses)
+	assert.InDelta(t, 3.0, stats.NetExpectancy.InexactFloat64(), 0.0001)
+}
+
 func TestTradeMemory_RecordLesson(t *testing.T) {
 	db := setupTestDB(t)
 	tm, err := NewTradeMemory(db)
