@@ -65,7 +65,7 @@ type TradeExpectancyStats struct {
 	SampleSize    int
 	Wins          int
 	Losses        int
-	NetExpectancy float64
+	NetExpectancy decimal.Decimal
 }
 
 func NewTradeMemory(db *sql.DB) (*TradeMemory, error) {
@@ -657,8 +657,8 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	stats.NetExpectancy = calculateNetExpectancy(
 		stats.Wins,
 		stats.Losses,
-		sumWin.InexactFloat64(),
-		sumLoss.InexactFloat64(),
+		sumWin,
+		sumLoss,
 	)
 	return stats, true, nil
 }

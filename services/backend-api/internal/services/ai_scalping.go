@@ -887,6 +887,13 @@ func decimalFromBalanceFloat(value float64) decimal.Decimal {
 	if value <= 0 {
 		return decimal.Zero
 	}
+	return decimalFromConfigFloat(value)
+}
+
+func decimalFromConfigFloat(value float64) decimal.Decimal {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return decimal.Zero
+	}
 	parsed, err := decimal.NewFromString(strconv.FormatFloat(value, 'f', -1, 64))
 	if err != nil {
 		return decimal.Zero
@@ -1281,7 +1288,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			attemptedAction,
 			decision.Symbol,
 			gate.Regime,
-			gate.NetExpectancy,
+			gate.NetExpectancy.InexactFloat64(),
 			gate.SampleSize,
 			gate.Reason,
 		)
@@ -1291,7 +1298,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			BlockCode:   classifyPreTradeBlockCode(gate.Reason),
 		}
 		decision.PreTradeRegime = gate.Regime
-		decision.PreTradeExpectancy = gate.NetExpectancy
+		decision.PreTradeExpectancy = gate.NetExpectancy.InexactFloat64()
 		decision.PreTradeExpectancySampleSize = gate.SampleSize
 		return decision, nil
 	}
@@ -1302,14 +1309,14 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		}
 	}
 	decision.PreTradeRegime = gate.Regime
-	decision.PreTradeExpectancy = gate.NetExpectancy
+	decision.PreTradeExpectancy = gate.NetExpectancy.InexactFloat64()
 	decision.PreTradeExpectancySampleSize = gate.SampleSize
 	log.Printf(
 		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d phase=%s risk_drawdown=%.4f",
 		effectiveMinConfidence,
 		effectiveMaxCapital,
 		gate.Regime,
-		gate.NetExpectancy,
+		gate.NetExpectancy.InexactFloat64(),
 		gate.SampleSize,
 		portfolio.StrategyPhase,
 		portfolio.RiskDrawdown,
@@ -2244,7 +2251,7 @@ const (
 type preTradeGateResult struct {
 	Allowed           bool
 	Regime            string
-	NetExpectancy     float64
+	NetExpectancy     decimal.Decimal
 	SampleSize        int
 	CapitalMultiplier float64
 	Reason            string
@@ -2287,12 +2294,13 @@ func (s *AIScalpingService) evaluatePreTradeGate(ctx context.Context, decision *
 	expectancy, sample, hasExpectancy := s.estimateNetExpectancy(ctx, signal.Symbol, decision.Action)
 	result.NetExpectancy = expectancy
 	result.SampleSize = sample
-	if hasExpectancy && sample >= s.config.MinExpectancyN && expectancy < s.config.MinExpectancyEdge {
+	minExpectancyEdge := decimalFromConfigFloat(s.config.MinExpectancyEdge)
+	if hasExpectancy && sample >= s.config.MinExpectancyN && expectancy.LessThan(minExpectancyEdge) {
 		result.Allowed = false
 		result.Reason = fmt.Sprintf(
 			"pre-trade expectancy gate blocked %s: net expectancy %.4f below minimum %.4f (%d samples)",
 			signal.Symbol,
-			expectancy,
+			expectancy.InexactFloat64(),
 			s.config.MinExpectancyEdge,
 			sample,
 		)
@@ -2300,7 +2308,7 @@ func (s *AIScalpingService) evaluatePreTradeGate(ctx context.Context, decision *
 	}
 
 	// In choppy/non-directional conditions require either strong confidence or proven edge.
-	if regime == "chop" && decision.Confidence < 0.65 && (!hasExpectancy || expectancy <= s.config.MinExpectancyEdge) {
+	if regime == "chop" && decision.Confidence < 0.65 && (!hasExpectancy || !expectancy.GreaterThan(minExpectancyEdge)) {
 		result.Allowed = false
 		result.Reason = fmt.Sprintf(
 			"pre-trade regime gate blocked %s: choppy market with low confidence (%.2f)",
@@ -2351,7 +2359,7 @@ func (s *AIScalpingService) classifyScalpingRegime(signal aiMarketSignal, action
 	return "neutral", 0.85, ""
 }
 
-func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, action string) (float64, int, bool) {
+func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, action string) (decimal.Decimal, int, bool) {
 	normalizedSymbol := normalizeSymbolForComparison(symbol)
 	normalizedAction := strings.ToLower(strings.TrimSpace(action))
 	minSamples := s.config.MinExpectancyN
@@ -2376,7 +2384,7 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 			)
 		} else if found {
 			if scoped.SampleSize == 0 {
-				return 0, 0, false
+				return decimal.Zero, 0, false
 			}
 			if scoped.SampleSize >= minSamples {
 				return scoped.NetExpectancy, scoped.SampleSize, true
@@ -2386,8 +2394,8 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 
 		trades, err := s.tradeMemory.GetRecentTrades(ctx, 250)
 		if err == nil && len(trades) > 0 {
-			sumWin := 0.0
-			sumLoss := 0.0
+			sumWin := decimal.Zero
+			sumLoss := decimal.Zero
 			wins := 0
 			losses := 0
 			for _, trade := range trades {
@@ -2401,16 +2409,16 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 				if outcome != "win" && outcome != "loss" {
 					continue
 				}
-				pnl := trade.PnL.Abs().InexactFloat64()
-				if pnl <= 0 {
+				pnl := trade.PnL.Abs()
+				if !pnl.GreaterThan(decimal.Zero) {
 					continue
 				}
 				if outcome == "win" {
 					wins++
-					sumWin += pnl
+					sumWin = sumWin.Add(pnl)
 				} else {
 					losses++
-					sumLoss += pnl
+					sumLoss = sumLoss.Add(pnl)
 				}
 			}
 			if wins+losses >= minSamples {
@@ -2426,7 +2434,7 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 	perf := GetScalpingPerformance().GetPerformance()
 	total := readIntMetric(perf["total_trades"])
 	if total <= 0 {
-		return 0, 0, false
+		return decimal.Zero, 0, false
 	}
 
 	winRate := readFloatMetric(perf["win_rate"])
@@ -2443,26 +2451,28 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 	avgWin := math.Abs(readFloatMetric(perf["avg_win"]))
 	avgLoss := math.Abs(readFloatMetric(perf["avg_loss"]))
 	if avgWin == 0 && avgLoss == 0 {
-		return 0, total, false
+		return decimal.Zero, total, false
 	}
-	return winRate*avgWin - (1-winRate)*avgLoss, total, true
+	return decimalFromConfigFloat(winRate).Mul(decimalFromConfigFloat(avgWin)).
+		Sub(decimalFromConfigFloat(1 - winRate).Mul(decimalFromConfigFloat(avgLoss))), total, true
 }
 
-func calculateNetExpectancy(wins, losses int, sumWin, sumLoss float64) float64 {
+func calculateNetExpectancy(wins, losses int, sumWin, sumLoss decimal.Decimal) decimal.Decimal {
 	total := wins + losses
 	if total == 0 {
-		return 0
+		return decimal.Zero
 	}
-	winRate := float64(wins) / float64(total)
-	avgWin := 0.0
+	totalDec := decimal.NewFromInt(int64(total))
+	winRate := decimal.NewFromInt(int64(wins)).Div(totalDec)
+	avgWin := decimal.Zero
 	if wins > 0 {
-		avgWin = sumWin / float64(wins)
+		avgWin = sumWin.Div(decimal.NewFromInt(int64(wins)))
 	}
-	avgLoss := 0.0
+	avgLoss := decimal.Zero
 	if losses > 0 {
-		avgLoss = sumLoss / float64(losses)
+		avgLoss = sumLoss.Div(decimal.NewFromInt(int64(losses)))
 	}
-	return winRate*avgWin - (1-winRate)*avgLoss
+	return winRate.Mul(avgWin).Sub(decimal.NewFromInt(1).Sub(winRate).Mul(avgLoss))
 }
 
 func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signals []aiMarketSignal) error {
@@ -3386,7 +3396,7 @@ func (s *AIScalpingService) fallbackSymbolExpectancyAllowed(ctx context.Context,
 	if stats.SampleSize < minimumSample {
 		return true
 	}
-	return stats.NetExpectancy > 0
+	return stats.NetExpectancy.GreaterThan(decimal.Zero)
 }
 
 func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct float64) float64 {

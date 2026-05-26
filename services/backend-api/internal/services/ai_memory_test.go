@@ -406,7 +406,7 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 		assert.Equal(t, 3, stats.SampleSize)
 		assert.Equal(t, 2, stats.Wins)
 		assert.Equal(t, 1, stats.Losses)
-		assert.InDelta(t, 1.3333333, stats.NetExpectancy, 0.0001)
+		assert.InDelta(t, 1.3333333, stats.NetExpectancy.InexactFloat64(), 0.0001)
 	})
 
 	t.Run("scoped_no_match_returns_false", func(t *testing.T) {
@@ -440,7 +440,7 @@ func TestTradeMemory_GetScopedExpectancyStats(t *testing.T) {
 		assert.Zero(t, stats.SampleSize)
 		assert.Zero(t, stats.Wins)
 		assert.Zero(t, stats.Losses)
-		assert.Zero(t, stats.NetExpectancy)
+		assert.True(t, stats.NetExpectancy.IsZero())
 	})
 }
 
@@ -470,7 +470,7 @@ func TestTradeMemory_GetScopedExpectancyStats_BitgetExchangeReconciliationSubtra
 	assert.Equal(t, 2, stats.SampleSize)
 	assert.Equal(t, 1, stats.Wins)
 	assert.Equal(t, 1, stats.Losses)
-	assert.InDelta(t, 0.75, stats.NetExpectancy, 0.0001)
+	assert.InDelta(t, 0.75, stats.NetExpectancy.InexactFloat64(), 0.0001)
 }
 
 func TestTradeMemory_GetScopedExpectancyStats_ExcludesSyntheticLifecycleCloses(t *testing.T) {
@@ -499,7 +499,7 @@ func TestTradeMemory_GetScopedExpectancyStats_ExcludesSyntheticLifecycleCloses(t
 	assert.Equal(t, 1, stats.SampleSize)
 	assert.Equal(t, 1, stats.Wins)
 	assert.Zero(t, stats.Losses)
-	assert.InDelta(t, 5.0, stats.NetExpectancy, 0.0001)
+	assert.InDelta(t, 5.0, stats.NetExpectancy.InexactFloat64(), 0.0001)
 }
 
 func TestTradeMemory_GetScopedExpectancyStats_MissingTableReturnsNoData(t *testing.T) {
@@ -621,7 +621,7 @@ func TestTradeMemory_GetScopedExpectancyStats_UsesConfiguredDefaultsAndDetermini
 	assert.Equal(t, 1, stats.SampleSize)
 	assert.Equal(t, 1, stats.Wins)
 	assert.Zero(t, stats.Losses)
-	assert.InDelta(t, 3.0, stats.NetExpectancy, 0.0001)
+	assert.InDelta(t, 3.0, stats.NetExpectancy.InexactFloat64(), 0.0001)
 }
 
 func TestTradeMemory_RecordLesson(t *testing.T) {

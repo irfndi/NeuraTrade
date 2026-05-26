@@ -1092,14 +1092,14 @@ func TestAIScalpingService_EstimateNetExpectancy_PrefersScopedRealizedJournal(t 
 		expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
 		assert.True(t, found)
 		assert.Equal(t, 2, sample)
-		assert.InDelta(t, 1.0, expectancy, 0.0001)
+		assert.InDelta(t, 1.0, expectancy.InexactFloat64(), 0.0001)
 	})
 
 	t.Run("action_miss_does_not_mix_opposite_side_scoped_results", func(t *testing.T) {
 		expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "sell")
 		assert.False(t, found)
 		assert.Zero(t, sample)
-		assert.Zero(t, expectancy)
+		assert.True(t, expectancy.IsZero())
 	})
 }
 
@@ -1150,7 +1150,7 @@ func TestAIScalpingService_EstimateNetExpectancy_ScopedSampleBelowMinThresholdDo
 	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
 	assert.False(t, found)
 	assert.Equal(t, 1, sample)
-	assert.InDelta(t, 3.0, expectancy, 0.0001)
+	assert.InDelta(t, 3.0, expectancy.InexactFloat64(), 0.0001)
 }
 
 func TestAIScalpingService_EstimateNetExpectancy_ScopedSampleBelowMinThresholdFallsBackToLegacyHistory(t *testing.T) {
@@ -1205,7 +1205,7 @@ func TestAIScalpingService_EstimateNetExpectancy_ScopedSampleBelowMinThresholdFa
 	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
 	assert.True(t, found)
 	assert.Equal(t, 2, sample)
-	assert.InDelta(t, 0.5, expectancy, 0.0001)
+	assert.InDelta(t, 0.5, expectancy.InexactFloat64(), 0.0001)
 }
 
 func TestAIScalpingService_EstimateNetExpectancy_ScopedJournalUsesFeeAdjustedNetPnL(t *testing.T) {
@@ -1256,7 +1256,7 @@ func TestAIScalpingService_EstimateNetExpectancy_ScopedJournalUsesFeeAdjustedNet
 	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
 	assert.True(t, found)
 	assert.Equal(t, 2, sample)
-	assert.InDelta(t, -0.2, expectancy, 0.0001)
+	assert.InDelta(t, -0.2, expectancy.InexactFloat64(), 0.0001)
 }
 
 func TestAIScalpingService_EstimateNetExpectancy_ScopedQueryErrorFallsBackToLegacyHistory(t *testing.T) {
@@ -1293,7 +1293,7 @@ func TestAIScalpingService_EstimateNetExpectancy_ScopedQueryErrorFallsBackToLega
 	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
 	assert.True(t, found)
 	assert.Equal(t, 2, sample)
-	assert.InDelta(t, 0.5, expectancy, 0.0001)
+	assert.InDelta(t, 0.5, expectancy.InexactFloat64(), 0.0001)
 }
 
 func TestAIScalpingService_EstimateNetExpectancy_BreakevenScopedHistoryDoesNotFallbackToLegacy(t *testing.T) {
@@ -1332,7 +1332,7 @@ func TestAIScalpingService_EstimateNetExpectancy_BreakevenScopedHistoryDoesNotFa
 	expectancy, sample, found := svc.estimateNetExpectancy(ctx, "BTC/USDT", "buy")
 	assert.False(t, found)
 	assert.Zero(t, sample)
-	assert.Zero(t, expectancy)
+	assert.True(t, expectancy.IsZero())
 }
 
 func TestNormalizeHoldReasonCategory_RuntimeSignals(t *testing.T) {
@@ -2153,6 +2153,60 @@ func TestAIScalpingService_PreTradeGate_ExpectancyBlock(t *testing.T) {
 	assert.False(t, result.Allowed)
 	assert.Contains(t, result.Reason, "expectancy gate")
 	assert.GreaterOrEqual(t, result.SampleSize, 5)
+}
+
+func TestAIScalpingService_PreTradeGate_AllowsExactDecimalExpectancyEdge(t *testing.T) {
+	original := globalScalpingPerformance
+	globalScalpingPerformance = NewScalpingPerformance()
+	t.Cleanup(func() {
+		globalScalpingPerformance = original
+	})
+
+	db := setupTestDB(t)
+	tm, err := NewTradeMemory(db)
+	require.NoError(t, err)
+	setupRealizedPnLJournal(t, db)
+
+	_, err = db.Exec(`INSERT INTO realized_pnl_journal (
+		id, order_id, chat_id, exchange, symbol, side, filled_amount, entry_price, exit_price, realized_pnl, fees, source, closed_at, created_at
+	) VALUES
+		('rp_edge_win', 'ord_edge_win', 'chat-edge', 'bitget', 'ADA/USDT', 'buy', 1, 100, 100.3, 0.3, 0, 'autonomous', datetime('now'), datetime('now')),
+		('rp_edge_loss', 'ord_edge_loss', 'chat-edge', 'bitget', 'ADA/USDT', 'buy', 1, 100, 99.9, -0.1, 0, 'autonomous', datetime('now'), datetime('now'))`)
+	require.NoError(t, err)
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			PreTradeGate:      true,
+			MinExpectancyEdge: 0.1,
+			MinExpectancyN:    2,
+			RegimeHighBand:    85,
+			RegimeLowBand:     15,
+		},
+		tradeMemory: tm,
+	}
+	decision := &AITradingDecision{
+		Action:     "buy",
+		Symbol:     "ADA/USDT",
+		Confidence: 0.75,
+	}
+	signals := []aiMarketSignal{
+		{
+			Symbol:             "ADA/USDT",
+			Price:              1.0,
+			BidAskSpread:       0.03,
+			OrderBookImbalance: 0.32,
+			RangePosition24h:   55,
+		},
+	}
+	ctx := WithScalpingAutonomyScope(context.Background(), ScalpingAutonomyScope{
+		ChatID:   "chat-edge",
+		Exchange: "bitget",
+	})
+
+	result := svc.evaluatePreTradeGate(ctx, decision, signals)
+	require.True(t, result.Allowed, result.Reason)
+	assert.Equal(t, 2, result.SampleSize)
+	assert.True(t, result.NetExpectancy.Equal(decimal.RequireFromString("0.1")), result.NetExpectancy.String())
 }
 
 func TestAIScalpingService_ExecuteTradingCycle_AppliesGateAdjustedMaxCapitalToDecision(t *testing.T) {
