@@ -199,6 +199,28 @@ func TestSetupRoutesWithOptions_AgentRiskControlsUseProvidedInstances(t *testing
 	}
 }
 
+func TestRouteOptionsLifecycleContextUsesProvidedContext(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctx, cleanup := (RouteOptions{Context: parent}).lifecycleContext()
+
+	cleanup()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.NoError(t, parent.Err())
+
+	cancel()
+	require.ErrorIs(t, parent.Err(), context.Canceled)
+}
+
+func TestRouteOptionsLifecycleContextCreatesOwnedContext(t *testing.T) {
+	ctx, cleanup := (RouteOptions{}).lifecycleContext()
+	require.NoError(t, ctx.Err())
+
+	cleanup()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+}
+
 // Test HealthResponse struct
 func TestHealthResponse_Struct(t *testing.T) {
 	now := time.Now()

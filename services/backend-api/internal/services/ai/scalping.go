@@ -116,6 +116,9 @@ func (s *AIScalpingService) Stop() {
 	s.logger.Println("[AI Scalping] Stopping service")
 	s.cancel()
 	s.wg.Wait()
+	if s.brain != nil {
+		s.brain.Close()
+	}
 }
 
 // GetActivePositions returns active positions

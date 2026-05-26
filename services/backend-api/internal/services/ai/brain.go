@@ -8,12 +8,14 @@ import (
 	"math/rand"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 )
 
 const defaultAIBrainModel = "deepseek-chat"
+const defaultLearningRecordTimeout = 5 * time.Second
 
 // TradingAction represents the action AI decides to take
 type TradingAction string
@@ -151,6 +153,11 @@ type AITradingBrain struct {
 	learningSystem LearningSystem
 	config         AIBrainConfig
 	logger         *log.Logger
+	lifecycleCtx   context.Context
+	cancel         context.CancelFunc
+	lifecycleMu    sync.Mutex
+	closed         bool
+	wg             sync.WaitGroup
 }
 
 // AIBrainConfig holds configuration for AI Brain
@@ -191,13 +198,46 @@ func NewAITradingBrain(
 	learningSystem LearningSystem,
 	config AIBrainConfig,
 ) *AITradingBrain {
+	return NewAITradingBrainWithContext(context.Background(), llmClient, toolRegistry, learningSystem, config)
+}
+
+// NewAITradingBrainWithContext creates an AI trading brain bound to a caller-owned lifecycle context.
+func NewAITradingBrainWithContext(
+	ctx context.Context,
+	llmClient llm.Client,
+	toolRegistry ToolRegistry,
+	learningSystem LearningSystem,
+	config AIBrainConfig,
+) *AITradingBrain {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lifecycleCtx, cancel := context.WithCancel(ctx)
 	return &AITradingBrain{
 		llmClient:      llmClient,
 		toolRegistry:   toolRegistry,
 		learningSystem: learningSystem,
 		config:         config,
 		logger:         log.Default(),
+		lifecycleCtx:   lifecycleCtx,
+		cancel:         cancel,
 	}
+}
+
+// Close cancels background learning work and waits for it to exit.
+func (brain *AITradingBrain) Close() {
+	if brain == nil {
+		return
+	}
+	brain.lifecycleMu.Lock()
+	if !brain.closed {
+		brain.closed = true
+		if brain.cancel != nil {
+			brain.cancel()
+		}
+	}
+	brain.lifecycleMu.Unlock()
+	brain.wg.Wait()
 }
 
 // Reason processes market data and makes trading decision
@@ -260,21 +300,18 @@ func (brain *AITradingBrain) Reason(ctx context.Context, req *ReasoningRequest) 
 
 	// Record decision for learning
 	if brain.config.EnableLearning {
-		go func() {
-			if err := brain.learningSystem.RecordDecision(context.Background(), &DecisionRecord{
-				ID:          decision.ID,
-				Timestamp:   time.Now(),
-				Strategy:    req.Strategy,
-				MarketState: req.MarketState,
-				Decision:    *decision,
-				Reasoning:   llmResp.Message.Content,
-				Confidence:  decision.Confidence,
-				ModelUsed:   brain.config.Model,
-				TokensUsed:  llmResp.Usage.TotalTokens,
-			}); err != nil {
-				log.Printf("Failed to record decision for learning: %v", err)
-			}
-		}()
+		record := &DecisionRecord{
+			ID:          decision.ID,
+			Timestamp:   time.Now(),
+			Strategy:    req.Strategy,
+			MarketState: req.MarketState,
+			Decision:    *decision,
+			Reasoning:   llmResp.Message.Content,
+			Confidence:  decision.Confidence,
+			ModelUsed:   brain.config.Model,
+			TokensUsed:  llmResp.Usage.TotalTokens,
+		}
+		brain.recordDecisionAsync(record)
 	}
 
 	executionTime := time.Since(startTime)
@@ -291,6 +328,29 @@ func (brain *AITradingBrain) Reason(ctx context.Context, req *ReasoningRequest) 
 		ModelUsed:     brain.config.Model,
 		TokensUsed:    llmResp.Usage.TotalTokens,
 	}, nil
+}
+
+func (brain *AITradingBrain) recordDecisionAsync(record *DecisionRecord) {
+	if brain == nil || brain.learningSystem == nil || record == nil {
+		return
+	}
+	brain.lifecycleMu.Lock()
+	if brain.closed || brain.lifecycleCtx == nil || brain.lifecycleCtx.Err() != nil {
+		brain.lifecycleMu.Unlock()
+		return
+	}
+	parentCtx := brain.lifecycleCtx
+	brain.wg.Add(1)
+	brain.lifecycleMu.Unlock()
+
+	go func() {
+		defer brain.wg.Done()
+		ctx, cancel := context.WithTimeout(parentCtx, defaultLearningRecordTimeout)
+		defer cancel()
+		if err := brain.learningSystem.RecordDecision(ctx, record); err != nil {
+			brain.logger.Printf("Failed to record decision for learning: %v", err)
+		}
+	}()
 }
 
 // buildSystemPrompt creates the system prompt based on strategy

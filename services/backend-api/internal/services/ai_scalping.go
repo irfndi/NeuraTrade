@@ -751,6 +751,8 @@ type AIScalpingService struct {
 	autonomyState                     AIScalpingAutonomyState
 	shadowMu                          sync.RWMutex
 	shadow                            *ShadowEvaluationCoordinator
+	shadowMirrorMu                    sync.Mutex
+	shadowMirrorSlots                 chan struct{}
 }
 
 type symbolExecutionGuard struct {
@@ -778,6 +780,8 @@ const (
 	runtimeStatusCircuitOpen      = "circuit_open"
 	runtimeStatusLLMDegraded      = "llm_degraded"
 )
+
+const defaultShadowMirrorConcurrency = 4
 
 func isInfrastructureRuntimeStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
@@ -1167,7 +1171,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	var funnel appautonomy.CandidateFunnelSnapshot
 	defer func() {
 		finalizeDecisionMetadata(decision, &policy, effectiveMinConfidence, effectiveMaxCapital, funnel)
-		s.mirrorShadowDecisionAsync(decision, portfolio, policy)
+		s.mirrorShadowDecisionAsync(context.WithoutCancel(ctx), decision, portfolio, policy)
 	}()
 	if !walletBasis(portfolio).GreaterThan(decimal.Zero) {
 		reason := "wallet basis is zero; waiting for funded balance before autonomous execution"
@@ -2993,6 +2997,7 @@ func runtimeDegradedHoldDecision(reason string, category string) *AITradingDecis
 }
 
 func (s *AIScalpingService) mirrorShadowDecisionAsync(
+	ctx context.Context,
 	decision *AITradingDecision,
 	portfolio TradingPortfolio,
 	policy appautonomy.ScalpingCyclePolicy,
@@ -3001,16 +3006,44 @@ func (s *AIScalpingService) mirrorShadowDecisionAsync(
 	if coordinator == nil || decision == nil {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	decisionSnapshot := cloneAITradingDecision(decision)
 	portfolioSnapshot := portfolio
 	policySnapshot := policy
+	release, ok := s.acquireShadowMirrorSlot()
+	if !ok {
+		log.Printf("[AI-SCALPING] Shadow mirror decision skipped: concurrency limit reached")
+		return
+	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer release()
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
 			log.Printf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
 		}
 	}()
+}
+
+func (s *AIScalpingService) acquireShadowMirrorSlot() (func(), bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.shadowMirrorMu.Lock()
+	if s.shadowMirrorSlots == nil {
+		s.shadowMirrorSlots = make(chan struct{}, defaultShadowMirrorConcurrency)
+	}
+	slots := s.shadowMirrorSlots
+	s.shadowMirrorMu.Unlock()
+
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, true
+	default:
+		return nil, false
+	}
 }
 
 // cloneAITradingDecision returns an independent copy of the provided AITradingDecision.

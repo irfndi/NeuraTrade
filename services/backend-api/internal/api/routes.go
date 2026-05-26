@@ -62,6 +62,7 @@ type routeDB interface {
 type RouteOptions struct {
 	KillSwitch *apprisk.KillSwitchImpl
 	SafeMode   *apprisk.SafeModeImpl
+	Context    context.Context
 }
 
 func (o RouteOptions) riskControls() (*apprisk.KillSwitchImpl, *apprisk.SafeModeImpl) {
@@ -74,6 +75,13 @@ func (o RouteOptions) riskControls() (*apprisk.KillSwitchImpl, *apprisk.SafeMode
 		safeMode = apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
 	}
 	return killSwitch, safeMode
+}
+
+func (o RouteOptions) lifecycleContext() (context.Context, context.CancelFunc) {
+	if o.Context != nil {
+		return context.WithCancel(o.Context)
+	}
+	return context.WithCancel(context.Background())
 }
 
 func diagnosticFloat(metrics map[string]interface{}, key string) (float64, bool) {
@@ -430,6 +438,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
 func SetupRoutesWithOptions(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, options RouteOptions) func() {
+	lifecycleCtx, cancelLifecycle := options.lifecycleContext()
 	configureLiveReadinessGuard(opModeService)
 
 	// Initialize admin middleware
@@ -1003,7 +1012,7 @@ func SetupRoutesWithOptions(router *gin.Engine, db routeDB, redis *database.Redi
 		} else {
 			// Mandatory startup reconciliation in non-test runtime.
 			// This runs before autonomous chat restore so resumability/protection is refreshed first.
-			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			ctx, cancel := context.WithTimeout(lifecycleCtx, 45*time.Second)
 			results, err := reconciler.ReconcileAll(ctx, services.ReconciliationStartup, "")
 			cancel()
 			if err != nil {
@@ -1033,12 +1042,18 @@ func SetupRoutesWithOptions(router *gin.Engine, db routeDB, redis *database.Redi
 		if periodicSeconds > 0 {
 			interval := time.Duration(periodicSeconds) * time.Second
 			log.Printf("Periodic reconciliation enabled (interval=%s)", interval)
-			go func() {
+			go func(ctx context.Context) {
 				ticker := time.NewTicker(interval)
 				defer ticker.Stop()
-				for range ticker.C {
-					ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-					results, err := reconciler.ReconcileAll(ctx, services.ReconciliationPeriodic, "")
+				for {
+					select {
+					case <-ctx.Done():
+						log.Printf("Periodic reconciliation stopped: %v", ctx.Err())
+						return
+					case <-ticker.C:
+					}
+					reconcileCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+					results, err := reconciler.ReconcileAll(reconcileCtx, services.ReconciliationPeriodic, "")
 					cancel()
 					if err != nil {
 						log.Printf("Periodic reconciliation error: %v", err)
@@ -1048,7 +1063,7 @@ func SetupRoutesWithOptions(router *gin.Engine, db routeDB, redis *database.Redi
 						log.Printf("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
 					}
 				}
-			}()
+			}(lifecycleCtx)
 		} else {
 			log.Printf("Periodic reconciliation disabled (NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=0)")
 		}
@@ -1100,11 +1115,11 @@ func SetupRoutesWithOptions(router *gin.Engine, db routeDB, redis *database.Redi
 	// It can be re-enabled only when AI arbitrage mode is explicitly turned on.
 	if featuresConfig != nil && featuresConfig.EnableAIArbitrage {
 		arbitrageBridge := services.NewArbitrageExecutionBridge(db, questEngine, signalAggregator, nil)
-		go func() {
-			if err := arbitrageBridge.Start(context.Background()); err != nil {
+		go func(ctx context.Context) {
+			if err := arbitrageBridge.Start(ctx); err != nil {
 				log.Printf("Arbitrage execution bridge error: %v", err)
 			}
-		}()
+		}(lifecycleCtx)
 		log.Printf("Arbitrage execution bridge enabled (features.enable_ai_arbitrage=true)")
 	} else {
 		log.Printf("Arbitrage execution bridge disabled in scalping-first mode")
@@ -1432,6 +1447,7 @@ func SetupRoutesWithOptions(router *gin.Engine, db routeDB, redis *database.Redi
 
 	// Return cleanup function for WebSocket handler and other resources
 	return func() {
+		cancelLifecycle()
 		if webSocketHandler != nil {
 			webSocketHandler.Stop()
 		}
