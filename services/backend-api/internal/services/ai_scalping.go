@@ -2453,8 +2453,11 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 	if avgWin == 0 && avgLoss == 0 {
 		return decimal.Zero, total, false
 	}
-	return decimalFromConfigFloat(winRate).Mul(decimalFromConfigFloat(avgWin)).
-		Sub(decimalFromConfigFloat(1 - winRate).Mul(decimalFromConfigFloat(avgLoss))), total, true
+	winRateDec := decimalFromConfigFloat(winRate)
+	avgWinDec := decimalFromConfigFloat(avgWin)
+	avgLossDec := decimalFromConfigFloat(avgLoss)
+	return winRateDec.Mul(avgWinDec).
+		Sub(decimal.NewFromInt(1).Sub(winRateDec).Mul(avgLossDec)), total, true
 }
 
 func calculateNetExpectancy(wins, losses int, sumWin, sumLoss decimal.Decimal) decimal.Decimal {
