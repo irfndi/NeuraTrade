@@ -111,6 +111,26 @@ func (m *MockLearningSystem) RecordOutcome(ctx context.Context, decisionID strin
 	return nil
 }
 
+type blockingLearningSystem struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+func (b *blockingLearningSystem) RecordDecision(ctx context.Context, record *DecisionRecord) error {
+	close(b.started)
+	<-ctx.Done()
+	close(b.done)
+	return ctx.Err()
+}
+
+func (b *blockingLearningSystem) GetSimilarDecisions(ctx context.Context, symbol string, limit int) ([]*DecisionRecord, error) {
+	return nil, nil
+}
+
+func (b *blockingLearningSystem) RecordOutcome(ctx context.Context, decisionID string, outcome *TradeOutcome) error {
+	return nil
+}
+
 func TestMain(m *testing.M) {
 	// Disable logging during tests
 	log.SetOutput(os.NewFile(0, os.DevNull))
@@ -229,6 +249,72 @@ func TestAITradingBrain_Reason_Success(t *testing.T) {
 	}
 	if resp.Confidence < 0 || resp.Confidence > 1 {
 		t.Errorf("Expected confidence between 0 and 1, got %f", resp.Confidence)
+	}
+}
+
+func TestAITradingBrain_CloseCancelsAsyncLearningRecord(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		response: &llm.CompletionResponse{
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: `{"action": "buy", "symbol": "BTC/USDT", "side": "buy", "size_percent": 1.5, "confidence": 0.85, "reasoning": "Strong uptrend"}`,
+			},
+			Usage: llm.UsageMetrics{TotalTokens: 100},
+		},
+	}
+	mockRegistry := NewMockToolRegistry()
+	learning := &blockingLearningSystem{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	config := DefaultAIBrainConfig()
+	brain := NewAITradingBrain(mockLLM, mockRegistry, learning, config)
+
+	req := &ReasoningRequest{
+		RequestID: "test-close",
+		Timestamp: time.Now(),
+		Strategy:  "scalping",
+		MarketState: MarketState{
+			Symbol:    "BTC/USDT",
+			Exchange:  "binance",
+			Price:     45000.00,
+			Volume24h: 1000000,
+			Timestamp: time.Now(),
+		},
+		PortfolioState: PortfolioState{
+			Balance:        10000.00,
+			AvailableFunds: 8000.00,
+		},
+	}
+
+	resp, err := brain.Reason(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("Expected non-nil response")
+	}
+	select {
+	case <-learning.started:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for async learning record to start")
+	}
+
+	closeReturned := make(chan struct{})
+	go func() {
+		brain.Close()
+		close(closeReturned)
+	}()
+
+	select {
+	case <-learning.done:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for async learning record cancellation")
+	}
+	select {
+	case <-closeReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for brain Close")
 	}
 }
 

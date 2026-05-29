@@ -498,6 +498,7 @@ func run() error {
 		api.RouteOptions{
 			KillSwitch: runtimeKillSwitch,
 			SafeMode:   runtimeSafeMode,
+			Context:    ctx,
 		},
 	)
 	defer cleanupRoutes()

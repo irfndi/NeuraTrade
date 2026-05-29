@@ -3068,3 +3068,27 @@ func TestAIScalpingService_ExchangeForContextPrefersScopedExchange(t *testing.T)
 	assert.Equal(t, "binance", svc.exchangeForContext(ctx))
 	assert.Equal(t, "bitget", svc.exchangeForContext(context.Background()))
 }
+
+func TestAIScalpingService_AcquireShadowMirrorSlotIsBounded(t *testing.T) {
+	svc := &AIScalpingService{}
+	releases := make([]func(), 0, defaultShadowMirrorConcurrency)
+	for i := 0; i < defaultShadowMirrorConcurrency; i++ {
+		release, ok := svc.acquireShadowMirrorSlot()
+		require.True(t, ok)
+		require.NotNil(t, release)
+		releases = append(releases, release)
+	}
+
+	release, ok := svc.acquireShadowMirrorSlot()
+	require.False(t, ok)
+	require.Nil(t, release)
+
+	releases[0]()
+	release, ok = svc.acquireShadowMirrorSlot()
+	require.True(t, ok)
+	require.NotNil(t, release)
+	release()
+	for _, release := range releases[1:] {
+		release()
+	}
+}
