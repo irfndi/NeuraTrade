@@ -27,16 +27,28 @@ until the arbitrage execution path has realistic market evidence.
 - `net_pnl`
 - `avg_net_pnl`
 - `max_drawdown_pct`
+- `drawdown_verified`
+- `execution_path_verified`
+- `market_data_verified`
+- `risk_limits_enforced`
+- `backtest_comparison_verified`
+- `cost_accounting_verified`
+- `exposure_safety_verified`
 - `no_trade_safety`
 - `no_trade_reason`
 
 `max_drawdown_pct` remains `0.00` and `no_trade_safety` remains false until a
-real arbitrage exposure verifier or no-trade safety window supplies proof, so
-the generated metrics cannot satisfy the live-readiness manifest by accident.
+real arbitrage exposure verifier or no-trade safety window supplies proof. The
+generated metrics also keep all verifier booleans, including
+`drawdown_verified`, false so they cannot satisfy the live-readiness manifest by
+accident.
 
 Minimum proof before the live-readiness manifest can mark `arbitrage` ready:
 
 - executable spread or funding signal path using real exchange quotes
+- real market data used by the verifier
+- risk-limit enforcement verified
+- paper/live-market results compared against the relevant backtest
 - fee, slippage, funding, and transfer-cost accounting
 - inventory and exposure safety for both legs
 - paper/live-market lifecycle evidence with at least two closed opportunities,
@@ -47,4 +59,5 @@ Minimum proof before the live-readiness manifest can mark `arbitrage` ready:
 
 The manifest may accept `no_trade_safety=true` for arbitrage only when an
 observed market window proves no executable spreads/opportunities after costs,
-includes a concrete `no_trade_reason`, and has zero open positions.
+includes a concrete `no_trade_reason`, uses verified real market data, verifies
+cost accounting and exposure safety, and has zero open positions.

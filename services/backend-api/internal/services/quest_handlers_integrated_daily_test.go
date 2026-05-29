@@ -45,6 +45,10 @@ func TestExecuteRoutineDailyReportRecordsBlockedReadinessWithoutLifecycleStore(t
 	assert.Equal(t, "0.00", metrics["avg_net_pnl"])
 	assert.Equal(t, "0.00", metrics["max_drawdown_pct"])
 	assert.Equal(t, false, metrics["drawdown_verified"])
+	assert.Equal(t, false, metrics["execution_path_verified"])
+	assert.Equal(t, false, metrics["market_data_verified"])
+	assert.Equal(t, false, metrics["risk_limits_enforced"])
+	assert.Equal(t, false, metrics["backtest_comparison_verified"])
 	assert.Equal(t, true, metrics["diagnostic_only"])
 
 	blockers, ok := quest.Checkpoint["daily_trading_readiness_blockers"].([]string)
@@ -217,6 +221,10 @@ func TestExecuteRoutineDailyReportRecordsLifecycleMetrics(t *testing.T) {
 	assert.Equal(t, "0.90", metrics["avg_net_pnl"])
 	assert.Equal(t, "0.00", metrics["max_drawdown_pct"])
 	assert.Equal(t, false, metrics["drawdown_verified"])
+	assert.Equal(t, false, metrics["execution_path_verified"])
+	assert.Equal(t, false, metrics["market_data_verified"])
+	assert.Equal(t, false, metrics["risk_limits_enforced"])
+	assert.Equal(t, false, metrics["backtest_comparison_verified"])
 	assert.Equal(t, true, metrics["diagnostic_only"])
 
 	blockers, ok := quest.Checkpoint["daily_trading_readiness_blockers"].([]string)

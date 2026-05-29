@@ -39,7 +39,12 @@ non-empty evidence path alone is not enough to permit live mode.
         "open_positions": 0,
         "net_pnl": "1.25",
         "avg_net_pnl": "0.0625",
-        "max_drawdown_pct": "0.42"
+        "max_drawdown_pct": "0.42",
+        "drawdown_verified": true,
+        "execution_path_verified": true,
+        "market_data_verified": true,
+        "risk_limits_enforced": true,
+        "backtest_comparison_verified": true
       },
       "verified_at": "2026-05-21T00:00:00Z"
     },
@@ -80,6 +85,13 @@ Required trading-strategy metrics:
 - `open_positions`: must be 0.
 - `net_pnl`, `avg_net_pnl`, and `max_drawdown_pct`: decimal strings greater than 0.
 - `drawdown_verified`: must be true.
+- `execution_path_verified`: must be true.
+- `market_data_verified`: must be true.
+- `risk_limits_enforced`: must be true.
+- `backtest_comparison_verified`: must be true.
+- `hold_window_verified`: must be true for `swing_trading`.
+- `cost_accounting_verified`: must be true for `arbitrage`.
+- `exposure_safety_verified`: must be true for `arbitrage`.
 - `diagnostic_only`: must be absent or false.
 
 Arbitrage may use no-trade safety evidence instead of closed-trade metrics only
@@ -92,6 +104,9 @@ when an observed window proves no executable spreads/opportunities after costs:
   "evidence_metrics": {
     "no_trade_safety": true,
     "no_trade_reason": "no executable spreads after fees across observed window",
+    "market_data_verified": true,
+    "cost_accounting_verified": true,
+    "exposure_safety_verified": true,
     "open_positions": 0
   }
 }

@@ -51,12 +51,17 @@ type StrategyReadinessEvidence struct {
 	// readiness contract rather than strategy profitability.
 	PaperRuntimeProbePassed  bool `json:"paper_runtime_probe_passed,omitempty"`
 	LifecycleStorageVerified bool `json:"lifecycle_storage_verified,omitempty"`
-	// ContinuousValidationHours, StrategyCount, RiskLimitsEnforced, and
-	// BacktestComparisonVerified are paper_trading acceptance proof fields.
+	// Remaining fields are explicit acceptance proof fields used by the live
+	// readiness guard so profitability metrics alone cannot approve real money.
 	ContinuousValidationHours  int  `json:"continuous_validation_hours,omitempty"`
 	StrategyCount              int  `json:"strategy_count,omitempty"`
+	ExecutionPathVerified      bool `json:"execution_path_verified,omitempty"`
+	MarketDataVerified         bool `json:"market_data_verified,omitempty"`
 	RiskLimitsEnforced         bool `json:"risk_limits_enforced,omitempty"`
 	BacktestComparisonVerified bool `json:"backtest_comparison_verified,omitempty"`
+	HoldWindowVerified         bool `json:"hold_window_verified,omitempty"`
+	CostAccountingVerified     bool `json:"cost_accounting_verified,omitempty"`
+	ExposureSafetyVerified     bool `json:"exposure_safety_verified,omitempty"`
 }
 
 // LiveReadinessManifest is the file format consumed by ManifestLiveModeGuard.
@@ -163,9 +168,14 @@ func strategyReadinessEvidenceBlockers(strategy string, status StrategyLiveReadi
 		if metrics.OpenPositions != 0 {
 			blockers = append(blockers, fmt.Sprintf("%s=open_positions_%q", strategy, fmt.Sprint(metrics.OpenPositions)))
 		}
+		if !metrics.MarketDataVerified {
+			blockers = append(blockers, fmt.Sprintf("%s=market_data_not_verified", strategy))
+		}
+		blockers = append(blockers, arbitrageSafetyEvidenceBlockers(strategy, metrics)...)
 		return blockers
 	}
 
+	blockers = append(blockers, strategyAcceptanceEvidenceBlockers(strategy, metrics)...)
 	if metrics.ClosedTrades < minimumReadinessClosedTrades(strategy) {
 		blockers = append(blockers, fmt.Sprintf("%s=insufficient_closed_trades", strategy))
 	}
@@ -192,6 +202,40 @@ func strategyReadinessEvidenceBlockers(strategy string, status StrategyLiveReadi
 	}
 	if !metrics.DrawdownVerified {
 		blockers = append(blockers, fmt.Sprintf("%s=drawdown_not_verified", strategy))
+	}
+	return blockers
+}
+
+func strategyAcceptanceEvidenceBlockers(strategy string, metrics *StrategyReadinessEvidence) []string {
+	var blockers []string
+	if !metrics.ExecutionPathVerified {
+		blockers = append(blockers, fmt.Sprintf("%s=execution_path_not_verified", strategy))
+	}
+	if !metrics.MarketDataVerified {
+		blockers = append(blockers, fmt.Sprintf("%s=market_data_not_verified", strategy))
+	}
+	if !metrics.RiskLimitsEnforced {
+		blockers = append(blockers, fmt.Sprintf("%s=risk_limits_not_enforced", strategy))
+	}
+	if !metrics.BacktestComparisonVerified {
+		blockers = append(blockers, fmt.Sprintf("%s=backtest_comparison_not_verified", strategy))
+	}
+	if strategy == "swing_trading" && !metrics.HoldWindowVerified {
+		blockers = append(blockers, "swing_trading=hold_window_not_verified")
+	}
+	if strategy == "arbitrage" {
+		blockers = append(blockers, arbitrageSafetyEvidenceBlockers(strategy, metrics)...)
+	}
+	return blockers
+}
+
+func arbitrageSafetyEvidenceBlockers(strategy string, metrics *StrategyReadinessEvidence) []string {
+	var blockers []string
+	if !metrics.CostAccountingVerified {
+		blockers = append(blockers, fmt.Sprintf("%s=cost_accounting_not_verified", strategy))
+	}
+	if !metrics.ExposureSafetyVerified {
+		blockers = append(blockers, fmt.Sprintf("%s=exposure_safety_not_verified", strategy))
 	}
 	return blockers
 }
