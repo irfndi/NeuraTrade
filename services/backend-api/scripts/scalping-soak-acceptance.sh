@@ -176,6 +176,25 @@ write_manifest() {
         min_baseline_net_pnl_delta: env.MIN_BASELINE_NET_PNL_DELTA,
         min_baseline_avg_pnl_delta: env.MIN_BASELINE_AVG_PNL_DELTA
       },
+      live_readiness: {
+        strategy: "scalping",
+        metrics_status: "verified_artifact_diagnostic",
+        note: "ready remains false until an operator references this evidence from NEURATRADE_LIVE_READINESS_MANIFEST after confirming the full live-readiness proof window",
+        manifest_entry: {
+          ready: false,
+          evidence: $artifact,
+          reason: "scalping acceptance evidence generated; operator review and live-readiness manifest promotion still required",
+          evidence_metrics: {
+            closed_trades: ($report.trade_summary.closed_trades // 0),
+            winning_trades: ($report.trade_summary.wins // 0),
+            losing_trades: ($report.trade_summary.losses // 0),
+            open_positions: 0,
+            net_pnl: (($report.trade_summary.net_pnl // "0") | tostring),
+            avg_net_pnl: (($report.trade_summary.avg_net_pnl_per_trade // "0") | tostring),
+            max_drawdown_pct: (($report.trade_summary.max_drawdown_pct // "0") | tostring)
+          }
+        }
+      },
       report: {
         total_cycles: $report.total_cycles,
         action_split: $report.action_split,

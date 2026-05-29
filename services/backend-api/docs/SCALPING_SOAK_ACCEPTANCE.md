@@ -63,6 +63,22 @@ The acceptance wrapper performs runtime health preflight, writes timestamped
 artifact and SQLite evidence paths, runs the artifact verifier, and emits a
 small `.acceptance.json` manifest next to the soak artifact.
 
+The acceptance manifest includes a non-authorizing
+`live_readiness.manifest_entry` block for the `scalping` strategy. It mirrors
+the `NEURATRADE_LIVE_READINESS_MANIFEST` evidence shape:
+
+- `closed_trades`
+- `winning_trades`
+- `losing_trades`
+- `open_positions`
+- `net_pnl`
+- `avg_net_pnl`
+- `max_drawdown_pct`
+
+The generated entry always keeps `ready=false`; operators must still review the
+full proof window before copying or promoting the evidence into the live
+readiness manifest.
+
 For manual runs, use the same defaults explicitly:
 
 ```bash
@@ -99,20 +115,20 @@ Record the verifier output and these artifact fields in the tracking issue:
 
 ```bash
 jq -r '
-  .result.report
-  | {
-      total_cycles,
-      action_split,
-      regime_split,
-      rejection_by_reason,
-      gate_block_by_code,
-      signal_quality,
-      trade_summary,
-      ai_provider_degradation,
-      baseline_comparison,
-      insufficient_trade_proof
-    }
-' "$SOAK_OUTPUT_FILE"
+  {
+    live_readiness,
+    total_cycles: .report.total_cycles,
+    action_split: .report.action_split,
+    regime_split: .report.regime_split,
+    rejection_by_reason: .report.rejection_by_reason,
+    gate_block_by_code: .report.gate_block_by_code,
+    signal_quality: .report.signal_quality,
+    trade_summary: .report.trade_summary,
+    ai_provider_degradation: .report.ai_provider_degradation,
+    baseline_comparison: .report.baseline_comparison,
+    insufficient_trade_proof: .report.insufficient_trade_proof
+  }
+' "${SOAK_OUTPUT_FILE%.json}.acceptance.json"
 ```
 
 Also verify persistence if the verifier did not already check the DB path:
