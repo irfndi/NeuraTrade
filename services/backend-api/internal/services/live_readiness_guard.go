@@ -41,6 +41,11 @@ type StrategyReadinessEvidence struct {
 	MaxDrawdownPct string `json:"max_drawdown_pct,omitempty"`
 	NoTradeSafety  bool   `json:"no_trade_safety,omitempty"`
 	NoTradeReason  string `json:"no_trade_reason,omitempty"`
+	// PaperRuntimeProbePassed and LifecycleStorageVerified are required only for
+	// paper_trading evidence, where simulator and persistence proof are the base
+	// readiness contract rather than strategy profitability.
+	PaperRuntimeProbePassed  bool `json:"paper_runtime_probe_passed,omitempty"`
+	LifecycleStorageVerified bool `json:"lifecycle_storage_verified,omitempty"`
 }
 
 // LiveReadinessManifest is the file format consumed by ManifestLiveModeGuard.
@@ -129,12 +134,12 @@ func normalizeReadinessStrategies(strategies []string) []string {
 }
 
 func strategyReadinessEvidenceBlockers(strategy string, status StrategyLiveReadiness) []string {
-	if strategy == "paper_trading" {
-		return nil
-	}
 	metrics := status.EvidenceMetrics
 	if metrics == nil {
 		return []string{fmt.Sprintf("%s=missing_evidence_metrics", strategy)}
+	}
+	if strategy == "paper_trading" {
+		return paperTradingReadinessEvidenceBlockers(metrics)
 	}
 	if strategy == "arbitrage" && metrics.NoTradeSafety {
 		if strings.TrimSpace(metrics.NoTradeReason) == "" {
@@ -170,6 +175,29 @@ func strategyReadinessEvidenceBlockers(strategy string, status StrategyLiveReadi
 	}
 	if !positiveDecimalString(metrics.MaxDrawdownPct) {
 		blockers = append(blockers, fmt.Sprintf("%s=missing_observed_drawdown", strategy))
+	}
+	return blockers
+}
+
+func paperTradingReadinessEvidenceBlockers(metrics *StrategyReadinessEvidence) []string {
+	var blockers []string
+	if !metrics.PaperRuntimeProbePassed {
+		blockers = append(blockers, "paper_trading=runtime_probe_not_passed")
+	}
+	if !metrics.LifecycleStorageVerified {
+		blockers = append(blockers, "paper_trading=lifecycle_storage_not_verified")
+	}
+	if metrics.ClosedTrades < 1 {
+		blockers = append(blockers, "paper_trading=insufficient_closed_trades")
+	}
+	if metrics.OpenPositions != 0 {
+		blockers = append(blockers, fmt.Sprintf("paper_trading=open_positions_%d", metrics.OpenPositions))
+	}
+	if !positiveDecimalString(metrics.NetPnL) {
+		blockers = append(blockers, "paper_trading=non_positive_net_pnl")
+	}
+	if !positiveDecimalString(metrics.AvgNetPnL) {
+		blockers = append(blockers, "paper_trading=non_positive_avg_net_pnl")
 	}
 	return blockers
 }
