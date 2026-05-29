@@ -102,6 +102,9 @@ func TestConfigInitUsesCurrentZAIProviderDefaults(t *testing.T) {
 	assert.Len(t, securityConfig["admin_api_key"], 32)
 	assert.NotEqual(t, "change-me-in-production-use-random-32-chars", securityConfig["jwt_secret"])
 	assert.NotEqual(t, "change-me-in-production", ccxtConfig["admin_api_key"])
+	assert.NotEqual(t, ccxtConfig["admin_api_key"], securityConfig["jwt_secret"])
+	assert.NotEqual(t, ccxtConfig["admin_api_key"], securityConfig["admin_api_key"])
+	assert.NotEqual(t, securityConfig["jwt_secret"], securityConfig["admin_api_key"])
 }
 
 func TestConfigInitRespectsNeuratradeHome(t *testing.T) {
