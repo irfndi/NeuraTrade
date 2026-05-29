@@ -397,6 +397,16 @@ func (e *QuestEngine) registerDefaultDefinitions() {
 		Prompt:      "Generate comprehensive daily report including PnL, win rate, and strategy performance",
 	})
 
+	// Swing trading readiness review - runs daily
+	e.RegisterDefinition(&QuestDefinition{
+		ID:          "swing_trading_review",
+		Name:        "Swing Trading Readiness Review",
+		Description: "Record swing trading readiness blockers and lifecycle context",
+		Type:        QuestTypeRoutine,
+		Cadence:     CadenceDaily,
+		Prompt:      "Review swing trading lifecycle evidence, open-position age, and readiness blockers",
+	})
+
 	// Funding rate check - runs every 5 minutes
 	e.RegisterDefinition(&QuestDefinition{
 		ID:          "funding_rate_scan",
