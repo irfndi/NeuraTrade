@@ -162,6 +162,7 @@ type Mailbox struct {
 	messages   chan Envelope
 	deadLetter func(Message)
 	stopped    atomic.Bool
+	stopOnce   sync.Once
 }
 
 // NewMailbox creates a new bounded mailbox.
@@ -242,8 +243,10 @@ func (m *Mailbox) Receive() <-chan Envelope {
 
 // Stop closes the mailbox and prevents further sends.
 func (m *Mailbox) Stop() {
-	m.stopped.Store(true)
-	close(m.messages)
+	m.stopOnce.Do(func() {
+		m.stopped.Store(true)
+		close(m.messages)
+	})
 }
 
 // Ref represents a reference to a running actor.
