@@ -13,19 +13,19 @@ import (
 
 // PaperTradingEvidence represents the readiness evidence artifact for paper trading.
 type PaperTradingEvidence struct {
-	Timestamp                time.Time       `json:"timestamp"`
-	ContinuousValidationHours decimal.Decimal `json:"continuous_validation_hours"`
-	StrategyCount            int             `json:"strategy_count"`
-	ClosedTrades             int             `json:"closed_trades"`
-	OpenPositions            int             `json:"open_positions"`
-	NetPnL                   decimal.Decimal `json:"net_pnl"`
-	AvgNetPnL                decimal.Decimal `json:"avg_net_pnl"`
-	WinRate                  decimal.Decimal `json:"win_rate"`
-	RiskLimitsEnforced       bool            `json:"risk_limits_enforced"`
-	BacktestComparisonVerified bool          `json:"backtest_comparison_verified"`
-	DiagnosticOnly           bool            `json:"diagnostic_only"`
-	Strategies               []string        `json:"strategies"`
-	EvidenceFilePath         string          `json:"evidence_file_path"`
+	Timestamp                  time.Time       `json:"timestamp"`
+	ContinuousValidationHours  decimal.Decimal `json:"continuous_validation_hours"`
+	StrategyCount              int             `json:"strategy_count"`
+	ClosedTrades               int             `json:"closed_trades"`
+	OpenPositions              int             `json:"open_positions"`
+	NetPnL                     decimal.Decimal `json:"net_pnl"`
+	AvgNetPnL                  decimal.Decimal `json:"avg_net_pnl"`
+	WinRate                    decimal.Decimal `json:"win_rate"`
+	RiskLimitsEnforced         bool            `json:"risk_limits_enforced"`
+	BacktestComparisonVerified bool            `json:"backtest_comparison_verified"`
+	DiagnosticOnly             bool            `json:"diagnostic_only"`
+	Strategies                 []string        `json:"strategies"`
+	EvidenceFilePath           string          `json:"evidence_file_path"`
 }
 
 // PaperTradingEvidenceGenerator generates readiness evidence artifacts.
@@ -94,7 +94,7 @@ func (g *PaperTradingEvidenceGenerator) GenerateEvidence(
 
 	evidence := &PaperTradingEvidence{
 		Timestamp:                  time.Now(),
-		ContinuousValidationHours: continuousHours,
+		ContinuousValidationHours:  continuousHours,
 		StrategyCount:              len(strategies),
 		ClosedTrades:               closedTrades,
 		OpenPositions:              openPositions,

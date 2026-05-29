@@ -72,18 +72,18 @@ func main() {
 	// Generate evidence
 	continuousHours := endTime.Sub(startTime).Hours()
 	evidence := map[string]interface{}{
-		"timestamp":                      time.Now().Format(time.RFC3339),
-		"continuous_validation_hours":    continuousHours,
-		"strategy_count":                 len(strategyList),
-		"closed_trades":                  0,
-		"open_positions":                 0,
-		"net_pnl":                        0.0,
-		"avg_net_pnl":                    0.0,
-		"win_rate":                       0.0,
-		"risk_limits_enforced":           true,
-		"backtest_comparison_verified":   false,
-		"diagnostic_only":                false,
-		"strategies":                     strategyList,
+		"timestamp":                    time.Now().Format(time.RFC3339),
+		"continuous_validation_hours":  continuousHours,
+		"strategy_count":               len(strategyList),
+		"closed_trades":                0,
+		"open_positions":               0,
+		"net_pnl":                      0.0,
+		"avg_net_pnl":                  0.0,
+		"win_rate":                     0.0,
+		"risk_limits_enforced":         true,
+		"backtest_comparison_verified": false,
+		"diagnostic_only":              false,
+		"strategies":                   strategyList,
 	}
 
 	// Print evidence
