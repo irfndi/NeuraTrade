@@ -463,10 +463,48 @@ describe("Status command", () => {
       "Entry blocker: rollout_gate (strategy_not_live (stage: shadow, status: active))",
     );
     expect(ctx.replies[0]).toContain(
-      "Entry attempt block: rollout_shadow_block",
+      "Entry attempt blocker: rollout_shadow_block",
     );
     expect(ctx.replies[0]).toContain("Account tier: micro");
     expect(ctx.replies[0]).toContain("Position cap: 1/1 managed open");
+    expect(ctx.replies[0]).toContain(
+      "Next unblock: await gate condition recovery",
+    );
     expect(ctx.replies[0]).not.toContain("Entry blocker: none");
+  });
+
+  test("renders entry attempt block as blocker when no hard gate is active", async () => {
+    const bot = new MockBot();
+    const api = createApiMock({
+      async getQuestDiagnostics() {
+        return {
+          quest_runtime: {
+            cadence_mode: "active_risk",
+            risk_lock_active: false,
+          },
+          chat_runtime: {
+            entry_gate_type: "none",
+            entry_attempt_block_reason: "missing_orderbook_signal",
+            entry_attempts_1h: 1,
+          },
+        };
+      },
+    });
+
+    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext(778, 889);
+    await runCommand(bot, "status", ctx);
+
+    expect(ctx.replies[0]).toContain(
+      "Entry blocker: entry_attempt (missing_orderbook_signal)",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Entry attempt blocker: missing_orderbook_signal",
+    );
+    expect(ctx.replies[0]).toContain(
+      "Next unblock: await candidate that passes entry_attempt filters",
+    );
+    expect(ctx.replies[0]).not.toContain("Entry blocker: none");
+    expect(ctx.replies[0]).not.toContain("entries currently eligible");
   });
 });

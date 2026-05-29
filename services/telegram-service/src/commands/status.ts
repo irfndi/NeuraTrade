@@ -435,11 +435,11 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
               break;
           }
         }
-        // When no hard gate is active, show just "none" without confusing parenthetical.
-        // Candidate-level rejections are displayed in the separate "Entry attempt block" line.
         let blockerDisplay = "none";
         if (entryGatePriority !== "none") {
           blockerDisplay = `${entryGatePriority}${blockerReason ? ` (${blockerReason})` : ""}`;
+        } else if (entryAttemptBlockReason) {
+          blockerDisplay = `entry_attempt (${entryAttemptBlockReason})`;
         }
         lines.push(`• Entry blocker: ${blockerDisplay}`);
         if (rolloutStageCurrent || rolloutStatusCurrent) {
@@ -454,13 +454,15 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           lines.push(`• Risk lock source: ${riskLockSource}`);
         }
         if (entryAttemptBlockReason) {
-          lines.push(`• Entry attempt block: ${entryAttemptBlockReason}`);
+          lines.push(`• Entry attempt blocker: ${entryAttemptBlockReason}`);
         }
         const resolvedUnblockCondition =
           nextUnblockCondition ||
-          (entryGatePriority === "none"
-            ? "none (entries currently eligible)"
-            : "await gate condition recovery");
+          (entryGatePriority !== "none"
+            ? "await gate condition recovery"
+            : entryAttemptBlockReason
+              ? "await candidate that passes entry_attempt filters"
+              : "none (entries currently eligible)");
         lines.push(`• Next unblock: ${resolvedUnblockCondition}`);
         if (typeof entryAttempts1h === "number") {
           lines.push(`• Entry attempts (1h): ${entryAttempts1h}`);
