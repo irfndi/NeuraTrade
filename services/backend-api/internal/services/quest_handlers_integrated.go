@@ -1159,6 +1159,19 @@ func (h *IntegratedQuestHandlers) handleArbitrageReadinessReview(ctx context.Con
 	quest.Checkpoint["arbitrage_review_exchange"] = exchange
 	quest.Checkpoint["arbitrage_no_trade_safety"] = false
 	quest.Checkpoint["arbitrage_no_trade_reason"] = ""
+	writeArbitrageReadinessEvidenceMetrics(quest, false, LifecyclePerformanceSummary{}, 0)
+
+	if chatID == "" {
+		blockers = append(blockers, "missing_chat_id_metadata")
+		writeArbitrageReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+	if exchange == "" {
+		blockers = append(blockers, "missing_exchange_metadata")
+		writeArbitrageReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("arbitrage readiness review: missing exchange metadata for chat_id %q", chatID)
+	}
 
 	if h.orderExecutor == nil {
 		blockers = append(blockers, "order_executor_unavailable")
@@ -1192,6 +1205,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageReadinessReview(ctx context.Con
 	quest.Checkpoint["arbitrage_review_avg_net_pnl"] = summary.AvgNetPnL.String()
 	quest.Checkpoint["arbitrage_review_win_rate"] = summary.WinRate.String()
 	quest.Checkpoint["arbitrage_review_open_positions"] = len(positions)
+	writeArbitrageReadinessEvidenceMetrics(quest, true, summary, len(positions))
 
 	if summary.Trades < 2 {
 		blockers = append(blockers, "no_representative_closed_opportunity_sample")
@@ -1222,6 +1236,26 @@ func writeArbitrageReadinessCheckpoint(quest *Quest, blockers []string) {
 	quest.Checkpoint["arbitrage_readiness_status"] = "blocked"
 	quest.Checkpoint["arbitrage_readiness_blockers"] = append([]string(nil), blockers...)
 	quest.Checkpoint["arbitrage_readiness_note"] = "arbitrage has no executable real-market proof or documented no-trade safety window; keep live-money use blocked"
+}
+
+func writeArbitrageReadinessEvidenceMetrics(
+	quest *Quest,
+	lifecycleStorageVerified bool,
+	summary LifecyclePerformanceSummary,
+	openPositions int,
+) {
+	quest.Checkpoint["arbitrage_lifecycle_storage_verified"] = lifecycleStorageVerified
+	quest.Checkpoint["arbitrage_readiness_evidence_metrics"] = map[string]interface{}{
+		"closed_trades":    summary.Trades,
+		"winning_trades":   summary.Wins,
+		"losing_trades":    summary.Losses,
+		"open_positions":   openPositions,
+		"net_pnl":          summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":      summary.AvgNetPnL.StringFixed(2),
+		"max_drawdown_pct": "0.00",
+		"no_trade_safety":  false,
+		"no_trade_reason":  "",
+	}
 }
 
 // handlePortfolioHealthWithRisk checks portfolio health with risk management
