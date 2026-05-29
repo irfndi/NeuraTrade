@@ -59,6 +59,7 @@ Required paper-trading metrics:
 
 - `paper_runtime_probe_passed`: must be true.
 - `lifecycle_storage_verified`: must be true.
+- `diagnostic_only`: must be absent or false.
 - `closed_trades`: at least 1 persisted closed paper trade.
 - `open_positions`: must be 0.
 - `net_pnl` and `avg_net_pnl`: decimal strings greater than 0.
@@ -69,6 +70,8 @@ Required trading-strategy metrics:
 - `winning_trades` and `losing_trades`: both must be positive.
 - `open_positions`: must be 0.
 - `net_pnl`, `avg_net_pnl`, and `max_drawdown_pct`: decimal strings greater than 0.
+- `drawdown_verified`: must be true.
+- `diagnostic_only`: must be absent or false.
 
 Arbitrage may use no-trade safety evidence instead of closed-trade metrics only
 when an observed window proves no executable spreads/opportunities after costs:
