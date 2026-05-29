@@ -397,6 +397,16 @@ func (e *QuestEngine) registerDefaultDefinitions() {
 		Prompt:      "Generate comprehensive daily report including PnL, win rate, and strategy performance",
 	})
 
+	// Paper trading readiness review - runs daily
+	e.RegisterDefinition(&QuestDefinition{
+		ID:          "paper_trading_review",
+		Name:        "Paper Trading Readiness Review",
+		Description: "Probe paper trading simulator and record readiness blockers",
+		Type:        QuestTypeRoutine,
+		Cadence:     CadenceDaily,
+		Prompt:      "Verify paper trading simulation, lifecycle storage, and readiness evidence",
+	})
+
 	// Swing trading readiness review - runs daily
 	e.RegisterDefinition(&QuestDefinition{
 		ID:          "swing_trading_review",
@@ -415,6 +425,16 @@ func (e *QuestEngine) registerDefaultDefinitions() {
 		Type:        QuestTypeRoutine,
 		Cadence:     CadenceMicro,
 		Prompt:      "Check funding rates across futures exchanges for arbitrage opportunities",
+	})
+
+	// Arbitrage readiness review - runs daily
+	e.RegisterDefinition(&QuestDefinition{
+		ID:          "arbitrage_readiness_review",
+		Name:        "Arbitrage Readiness Review",
+		Description: "Record arbitrage readiness blockers and execution safety context",
+		Type:        QuestTypeRoutine,
+		Cadence:     CadenceDaily,
+		Prompt:      "Review arbitrage lifecycle evidence, open exposure, and no-trade safety blockers",
 	})
 
 	// Volatility watch - triggered by market conditions
