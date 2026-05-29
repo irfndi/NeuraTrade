@@ -386,6 +386,7 @@ func TestManifestLiveModeGuardMatchesFractionalVerifiedAtByInstant(t *testing.T)
 	manifestDir := t.TempDir()
 	evidencePath := filepath.Join(manifestDir, "daily.json")
 	rawEvidence, err := json.Marshal(map[string]interface{}{
+		"strategy":         "daily_trading",
 		"verified_at":      "2026-05-21T00:00:00.000Z",
 		"evidence_metrics": passingReadinessEvidence(2),
 	})
@@ -411,12 +412,76 @@ func TestManifestLiveModeGuardMatchesFractionalVerifiedAtByInstant(t *testing.T)
 	require.NoError(t, guard(context.Background(), "chat-1", "tester"))
 }
 
+func TestManifestLiveModeGuardRequiresEvidenceArtifactStrategy(t *testing.T) {
+	manifestDir := t.TempDir()
+	evidencePath := filepath.Join(manifestDir, "daily.json")
+	rawEvidence, err := json.Marshal(map[string]interface{}{
+		"verified_at":      testReadinessVerifiedAt,
+		"evidence_metrics": passingReadinessEvidence(2),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(evidencePath, rawEvidence, 0o600))
+
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {
+				Ready:           true,
+				Evidence:        "daily.json",
+				EvidenceMetrics: passingReadinessEvidence(2),
+				VerifiedAt:      testReadinessVerifiedAt,
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `daily_trading=evidence_missing_strategy_"daily.json"`)
+}
+
+func TestManifestLiveModeGuardRequiresEvidenceArtifactStrategyToMatch(t *testing.T) {
+	manifestDir := t.TempDir()
+	evidencePath := filepath.Join(manifestDir, "daily.json")
+	rawEvidence, err := json.Marshal(map[string]interface{}{
+		"strategy":         "swing_trading",
+		"verified_at":      testReadinessVerifiedAt,
+		"evidence_metrics": passingReadinessEvidence(2),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(evidencePath, rawEvidence, 0o600))
+
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {
+				Ready:           true,
+				Evidence:        "daily.json",
+				EvidenceMetrics: passingReadinessEvidence(2),
+				VerifiedAt:      testReadinessVerifiedAt,
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `daily_trading=evidence_strategy_mismatch_"swing_trading"_"daily.json"`)
+}
+
 func TestManifestLiveModeGuardAllowsWrappedManifestEntryEvidenceMetrics(t *testing.T) {
 	manifestDir := t.TempDir()
 	metrics := passingReadinessEvidence(2)
 	evidencePath := filepath.Join(manifestDir, "daily.json")
 	rawEvidence, err := json.Marshal(map[string]interface{}{
 		"live_readiness": map[string]interface{}{
+			"strategy": "daily_trading",
 			"manifest_entry": map[string]interface{}{
 				"evidence_metrics": metrics,
 				"verified_at":      testReadinessVerifiedAt,
@@ -732,6 +797,7 @@ func writeReadinessEvidenceArtifact(t *testing.T, manifestDir string, evidence s
 	payload := map[string]interface{}{
 		"verified":    true,
 		"verified_at": testReadinessVerifiedAt,
+		"strategy":    readinessEvidenceStrategy(evidence),
 	}
 	if len(metrics) > 0 && metrics[0] != nil {
 		payload["evidence_metrics"] = metrics[0]
@@ -739,6 +805,24 @@ func writeReadinessEvidenceArtifact(t *testing.T, manifestDir string, evidence s
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
+}
+
+func readinessEvidenceStrategy(evidence string) string {
+	evidence = strings.ToLower(strings.TrimSpace(evidence))
+	switch {
+	case strings.Contains(evidence, "paper-readiness"):
+		return "paper_trading"
+	case strings.Contains(evidence, "scalping"):
+		return "scalping"
+	case strings.Contains(evidence, "daily"):
+		return "daily_trading"
+	case strings.Contains(evidence, "swing"):
+		return "swing_trading"
+	case strings.Contains(evidence, "arbitrage"):
+		return "arbitrage"
+	default:
+		return "daily_trading"
+	}
 }
 
 func passingReadinessEvidence(closedTrades int) *StrategyReadinessEvidence {
