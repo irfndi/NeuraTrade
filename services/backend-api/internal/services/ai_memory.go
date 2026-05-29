@@ -569,19 +569,9 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	exchange := strings.TrimSpace(scope.Exchange)
 	normalizedSymbol := normalizeSymbolForComparison(symbol)
 	normalizedAction := normalizeLifecycleSide(action)
-	const normalizedScopedSymbolSQL = `
-		UPPER(REPLACE(
-			CASE
-				WHEN INSTR(TRIM(symbol), ':') > 0 THEN SUBSTR(TRIM(symbol), 1, INSTR(TRIM(symbol), ':') - 1)
-				ELSE TRIM(symbol)
-			END,
-			'-',
-			'/'
-		))
-	`
 
 	scopedExpectancyBaseQuery := fmt.Sprintf(`
-		SELECT %s AS net_realized_pnl
+		SELECT symbol, %s AS net_realized_pnl
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND %s
@@ -604,8 +594,9 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		normalizedAction,
 	}
 	if normalizedSymbol != "" {
-		query += "\n\t\t\tAND " + normalizedScopedSymbolSQL + " = ?"
-		args = append(args, normalizedSymbol)
+		escapedSymbol := escapeSQLLikePattern(normalizedSymbol)
+		query += "\n\t\t\tAND (UPPER(REPLACE(TRIM(symbol), '-', '/')) = ? OR UPPER(REPLACE(TRIM(symbol), '-', '/')) LIKE ? ESCAPE '\\')"
+		args = append(args, normalizedSymbol, escapedSymbol+":%")
 	}
 	query += scopedExpectancyOrderClause
 	if limit > 0 {
@@ -627,21 +618,27 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	sumLoss := decimal.Zero
 	matchedRows := 0
 	for rows.Next() {
+		var rowSymbol string
 		var pnl decimal.Decimal
-		if err := rows.Scan(&pnl); err != nil {
+		if err := rows.Scan(&rowSymbol, &pnl); err != nil {
 			return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
 		}
-		matchedRows++
-		if pnl.IsZero() {
+		if normalizedSymbol != "" && normalizeSymbolForComparison(rowSymbol) != normalizedSymbol {
 			continue
 		}
-		if pnl.GreaterThan(decimal.Zero) {
+		matchedRows++
+		switch {
+		case pnl.IsZero():
+		case pnl.GreaterThan(decimal.Zero):
 			stats.Wins++
 			sumWin = sumWin.Add(pnl)
-			continue
+		default:
+			stats.Losses++
+			sumLoss = sumLoss.Add(pnl.Abs())
 		}
-		stats.Losses++
-		sumLoss = sumLoss.Add(pnl.Abs())
+		if limit > 0 && normalizedSymbol != "" && matchedRows >= limit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, fmt.Errorf("iterate scoped expectancy stats: %w", err)
@@ -661,6 +658,11 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		sumLoss,
 	)
 	return stats, true, nil
+}
+
+func escapeSQLLikePattern(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
 }
 
 func hasRealizedPnLWindowScope(scope ScalpingAutonomyScope) bool {
