@@ -501,7 +501,14 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 	if sizePercent <= 0 {
 		sizePercent = math.Min(e.config.MaxCapitalPct, 1)
 	}
-	notional := e.capital.Mul(decimal.NewFromFloat(sizePercent / 100))
+	remainingCapital := e.capital
+	for _, pos := range e.positions {
+		remainingCapital = remainingCapital.Sub(pos.Notional)
+	}
+	if remainingCapital.LessThanOrEqual(decimal.Zero) {
+		return nil, fmt.Errorf("insufficient capital")
+	}
+	notional := remainingCapital.Mul(decimal.NewFromFloat(sizePercent / 100))
 	if notional.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("insufficient capital")
 	}
