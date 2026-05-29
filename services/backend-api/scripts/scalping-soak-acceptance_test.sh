@@ -13,6 +13,7 @@ require_binary() {
 }
 
 require_binary jq
+require_binary sqlite3
 
 tmp_dir="$(mktemp -d /tmp/neuratrade-scalping-acceptance-test.XXXXXX)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -58,7 +59,16 @@ expected_max_hold_ratio="${EXPECTED_MAX_HOLD_RATIO-0.745}"
 }
 
 mkdir -p "$(dirname "$SOAK_OUTPUT_FILE")" "$(dirname "$SOAK_DB_PATH")"
-: >"$SOAK_DB_PATH"
+sqlite3 "$SOAK_DB_PATH" <<SQL
+CREATE TABLE trading_positions (
+  position_id TEXT PRIMARY KEY,
+  status TEXT
+);
+SQL
+if [ "${FAKE_OPEN_POSITIONS:-1}" != "0" ]; then
+  sqlite3 "$SOAK_DB_PATH" "INSERT INTO trading_positions(position_id, status) VALUES ('open-position-1', 'open');"
+fi
+sqlite3 "$SOAK_DB_PATH" "INSERT INTO trading_positions(position_id, status) VALUES ('closed-position-1', 'closed');"
 jq -n --arg db_path "$SOAK_DB_PATH" '{
   db_path: $db_path,
   result: {
@@ -189,12 +199,13 @@ jq -e \
     and .gates.max_hold_ratio == "0.745"
     and .live_readiness.strategy == "scalping"
     and .live_readiness.metrics_status == "verified_artifact_diagnostic"
+    and .live_readiness.open_positions_source == "SOAK_DB_PATH trading_positions rows with status open, pending, or partial"
     and .live_readiness.manifest_entry.ready == false
     and .live_readiness.manifest_entry.evidence == $artifact
     and .live_readiness.manifest_entry.evidence_metrics.closed_trades == 1
     and .live_readiness.manifest_entry.evidence_metrics.winning_trades == 1
     and .live_readiness.manifest_entry.evidence_metrics.losing_trades == 0
-    and .live_readiness.manifest_entry.evidence_metrics.open_positions == 0
+    and .live_readiness.manifest_entry.evidence_metrics.open_positions == 1
     and .live_readiness.manifest_entry.evidence_metrics.net_pnl == "0.1"
     and .live_readiness.manifest_entry.evidence_metrics.avg_net_pnl == "0.1"
     and .live_readiness.manifest_entry.evidence_metrics.max_drawdown_pct == "0"
@@ -209,6 +220,7 @@ env -u RUN_HEALTH_PREFLIGHT -u CHECK_GATEWAY_STATUS -u BACKEND_URL \
   GATEWAY_BIN="$fake_gateway" \
   SCALPING_SOAK_SCRIPT="$fake_soak" \
   SCALPING_SOAK_VERIFIER="$fake_verifier" \
+  FAKE_OPEN_POSITIONS=0 \
   DATA_DIR="${tmp_dir}/default-evidence" \
   LOG_DIR="${tmp_dir}/default-logs" \
   STAMP=default \
@@ -240,6 +252,7 @@ jq -e \
     and .evidence.log_file == $log_file
     and .gates.max_hold_ratio == "0.745"
     and .live_readiness.strategy == "scalping"
+    and .live_readiness.open_positions_source == "SOAK_DB_PATH trading_positions rows with status open, pending, or partial"
     and .live_readiness.manifest_entry.ready == false
     and .live_readiness.manifest_entry.evidence == $artifact
     and .live_readiness.manifest_entry.evidence_metrics.closed_trades == 1
@@ -260,6 +273,7 @@ RUN_HEALTH_PREFLIGHT=false \
   EXPECTED_MAX_HOLD_RATIO= \
   SCALPING_SOAK_SCRIPT="$fake_soak" \
   SCALPING_SOAK_VERIFIER="$fake_verifier" \
+  FAKE_OPEN_POSITIONS=0 \
   DATA_DIR="${tmp_dir}/empty-gate-evidence" \
   LOG_DIR="${tmp_dir}/empty-gate-logs" \
   STAMP=empty-gate \

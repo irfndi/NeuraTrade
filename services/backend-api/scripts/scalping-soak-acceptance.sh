@@ -73,7 +73,7 @@ USAGE
 
 log() {
   mkdir -p "$LOG_DIR"
-  printf '[%s] [SCALPING-SOAK-ACCEPTANCE] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
+  printf '[%s] [SCALPING-SOAK-ACCEPTANCE] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE" >&2
 }
 
 fail() {
@@ -83,6 +83,26 @@ fail() {
 
 require_file() {
   [ -f "$1" ] || fail "required file not found: $1"
+}
+
+query_open_positions() {
+  command -v sqlite3 >/dev/null 2>&1 || fail "sqlite3 is required to verify open positions"
+  require_file "$SOAK_DB_PATH"
+
+  local has_table
+  has_table="$(sqlite3 -noheader -list "$SOAK_DB_PATH" "select count(*) from sqlite_master where type = 'table' and name = 'trading_positions';")" \
+    || fail "failed to inspect trading_positions table in ${SOAK_DB_PATH}"
+  [ "$has_table" = "1" ] || fail "trading_positions table missing from ${SOAK_DB_PATH}; cannot prove open_positions"
+
+  local open_positions
+  open_positions="$(sqlite3 -noheader -list "$SOAK_DB_PATH" "select count(*) from trading_positions where lower(coalesce(status, '')) in ('open', 'pending', 'partial');")" \
+    || fail "failed to query open trading_positions in ${SOAK_DB_PATH}"
+  case "$open_positions" in
+    '' | *[!0-9]*)
+      fail "open position count from ${SOAK_DB_PATH} is not numeric: \"${open_positions}\""
+      ;;
+  esac
+  printf '%s\n' "$open_positions"
 }
 
 validate_boolean() {
@@ -131,9 +151,11 @@ write_manifest() {
   local git_branch
   local git_commit
   local git_status
+  local open_positions
   git_branch="$(git_value unknown rev-parse --abbrev-ref HEAD)"
   git_commit="$(git_value unknown rev-parse HEAD)"
   git_status="$(git_value unknown status --short --branch)"
+  open_positions="$(query_open_positions)"
 
   mkdir -p "$(dirname "$ACCEPTANCE_MANIFEST_FILE")"
   jq -n \
@@ -145,6 +167,7 @@ write_manifest() {
     --arg artifact "$SOAK_OUTPUT_FILE" \
     --arg db_path "$SOAK_DB_PATH" \
     --arg log_file "$LOG_FILE" \
+    --argjson open_positions "$open_positions" \
     --argjson report "$(jq '.result.report' "$SOAK_OUTPUT_FILE")" \
     '{
       created_at: $created_at,
@@ -179,6 +202,7 @@ write_manifest() {
       live_readiness: {
         strategy: "scalping",
         metrics_status: "verified_artifact_diagnostic",
+        open_positions_source: "SOAK_DB_PATH trading_positions rows with status open, pending, or partial",
         note: "ready remains false until an operator references this evidence from NEURATRADE_LIVE_READINESS_MANIFEST after confirming the full live-readiness proof window",
         manifest_entry: {
           ready: false,
@@ -188,7 +212,7 @@ write_manifest() {
             closed_trades: ($report.trade_summary.closed_trades // 0),
             winning_trades: ($report.trade_summary.wins // 0),
             losing_trades: ($report.trade_summary.losses // 0),
-            open_positions: 0,
+            open_positions: $open_positions,
             net_pnl: (($report.trade_summary.net_pnl // "0") | tostring),
             avg_net_pnl: (($report.trade_summary.avg_net_pnl_per_trade // "0") | tostring),
             max_drawdown_pct: (($report.trade_summary.max_drawdown_pct // "0") | tostring)
