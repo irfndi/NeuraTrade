@@ -439,7 +439,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         if (entryGatePriority !== "none") {
           blockerDisplay = `${entryGatePriority}${blockerReason ? ` (${blockerReason})` : ""}`;
         } else if (entryAttemptBlockReason) {
-          blockerDisplay = `entry-attempt (${entryAttemptBlockReason})`;
+          blockerDisplay = `entry_attempt (${entryAttemptBlockReason})`;
         }
         lines.push(`• Entry blocker: ${blockerDisplay}`);
         if (rolloutStageCurrent || rolloutStatusCurrent) {
@@ -454,14 +454,14 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
           lines.push(`• Risk lock source: ${riskLockSource}`);
         }
         if (entryAttemptBlockReason) {
-          lines.push(`• Entry attempt block: ${entryAttemptBlockReason}`);
+          lines.push(`• Entry attempt blocker: ${entryAttemptBlockReason}`);
         }
         const resolvedUnblockCondition =
           nextUnblockCondition ||
           (entryGatePriority !== "none"
             ? "await gate condition recovery"
             : entryAttemptBlockReason
-              ? "await candidate that passes entry-attempt filters"
+              ? "await candidate that passes entry_attempt filters"
               : "none (entries currently eligible)");
         lines.push(`• Next unblock: ${resolvedUnblockCondition}`);
         if (typeof entryAttempts1h === "number") {
