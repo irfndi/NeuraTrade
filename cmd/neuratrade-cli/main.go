@@ -1958,6 +1958,18 @@ func configInit(cCtx *cli.Context) error {
 	telegramToken := cCtx.String("telegram-token")
 	aiKey := cCtx.String("ai-key")
 	defaultAI := defaultCLIAIProviderConfig()
+	ccxtAdminKey, err := generateRandomKey(32)
+	if err != nil {
+		return fmt.Errorf("failed to generate CCXT admin API key: %w", err)
+	}
+	jwtSecret, err := generateRandomKey(64)
+	if err != nil {
+		return fmt.Errorf("failed to generate JWT secret: %w", err)
+	}
+	securityAdminKey, err := generateRandomKey(32)
+	if err != nil {
+		return fmt.Errorf("failed to generate security admin API key: %w", err)
+	}
 
 	// Create default config
 	config := map[string]interface{}{
@@ -1980,7 +1992,7 @@ func configInit(cCtx *cli.Context) error {
 		"ccxt": map[string]interface{}{
 			"service_url":   "http://localhost:3001",
 			"grpc_address":  "localhost:50051",
-			"admin_api_key": generateRandomKey(32),
+			"admin_api_key": ccxtAdminKey,
 			"exchanges": map[string]interface{}{
 				"binance": map[string]interface{}{
 					"enabled":    true,
@@ -2008,8 +2020,8 @@ func configInit(cCtx *cli.Context) error {
 			"daily_budget": "10.00",
 		},
 		"security": map[string]interface{}{
-			"jwt_secret":    "change-me-in-production-use-random-32-chars",
-			"admin_api_key": generateRandomKey(32),
+			"jwt_secret":    jwtSecret,
+			"admin_api_key": securityAdminKey,
 		},
 		"features": map[string]interface{}{
 			"external_connections_enabled": true,
@@ -2212,11 +2224,14 @@ func maskSecretsInConfig(m map[string]interface{}) {
 	}
 }
 
-// generateRandomKey generates a random hex string of specified length
-func generateRandomKey(length int) string {
+// generateRandomKey generates a random hex string of specified length.
+func generateRandomKey(length int) (string, error) {
+	if length <= 0 {
+		return "", fmt.Errorf("length must be positive")
+	}
 	bytes := make([]byte, length/2+1)
 	if _, err := rand.Read(bytes); err != nil {
-		return "change-me-in-production"
+		return "", fmt.Errorf("read cryptographic random bytes: %w", err)
 	}
-	return fmt.Sprintf("%x", bytes)[:length]
+	return fmt.Sprintf("%x", bytes)[:length], nil
 }
