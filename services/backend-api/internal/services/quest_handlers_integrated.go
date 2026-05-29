@@ -501,6 +501,8 @@ func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Que
 		err = h.handleMarketScanWithTA(ctx, quest)
 	case "volatility_watch":
 		err = h.handleVolatilityWatch(ctx, quest)
+	case "paper_trading_review":
+		err = h.handlePaperTradingReadinessReview(ctx, quest)
 	case "funding_rate_scan":
 		err = h.handleFundingRateScan(ctx, quest)
 	case "arbitrage_readiness_review":
@@ -525,6 +527,200 @@ func (h *IntegratedQuestHandlers) ExecuteArbitrage(ctx context.Context, quest *Q
 	err := h.handleArbitrageExecution(ctx, quest)
 	h.recordQuestResult(quest, err == nil, decimal.Zero)
 	return err
+}
+
+func (h *IntegratedQuestHandlers) handlePaperTradingReadinessReview(ctx context.Context, quest *Quest) error {
+	if quest == nil {
+		return fmt.Errorf("quest is nil")
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	if quest.Metadata == nil {
+		quest.Metadata = make(map[string]string)
+	}
+
+	now := time.Now().UTC()
+	since := now.Add(-7 * 24 * time.Hour)
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+	exchange := strings.TrimSpace(quest.Metadata["exchange"])
+	if exchange == "" {
+		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	}
+	if exchange == "" {
+		exchange = h.getUserExchange(chatID)
+	}
+	if exchange == "" {
+		exchange = "paper-simulator"
+	}
+
+	blockers := []string{
+		"missing_paper_trading_evidence_artifact",
+		"paper_review_is_diagnostic_only",
+	}
+	quest.Checkpoint["paper_trading_review_generated_at"] = now.Format(time.RFC3339)
+	quest.Checkpoint["paper_trading_review_window_start"] = since.Format(time.RFC3339)
+	quest.Checkpoint["paper_trading_review_window_end"] = now.Format(time.RFC3339)
+	quest.Checkpoint["paper_trading_review_chat_id"] = chatID
+	quest.Checkpoint["paper_trading_review_exchange"] = exchange
+
+	probe := runPaperTradingReadinessProbe(ctx, chatID, exchange)
+	for key, value := range probe {
+		quest.Checkpoint[key] = value
+	}
+	if passed, _ := probe["paper_trading_runtime_probe_passed"].(bool); !passed {
+		blockers = append(blockers, "paper_runtime_probe_failed")
+	}
+
+	if h.lifecycleStore == nil {
+		blockers = append(blockers, "lifecycle_store_unavailable")
+		writePaperTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+
+	summary, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, exchange, since)
+	if err != nil {
+		blockers = append(blockers, "realized_performance_query_failed")
+		writePaperTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 0)
+	if err != nil {
+		blockers = append(blockers, "open_position_query_failed")
+		writePaperTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+
+	quest.Checkpoint["paper_trading_review_closed_trades"] = summary.Trades
+	quest.Checkpoint["paper_trading_review_wins"] = summary.Wins
+	quest.Checkpoint["paper_trading_review_losses"] = summary.Losses
+	quest.Checkpoint["paper_trading_review_breakeven"] = summary.Breakeven
+	quest.Checkpoint["paper_trading_review_net_pnl"] = summary.RealizedPnL.String()
+	quest.Checkpoint["paper_trading_review_fees"] = summary.Fees.String()
+	quest.Checkpoint["paper_trading_review_avg_net_pnl"] = summary.AvgNetPnL.String()
+	quest.Checkpoint["paper_trading_review_open_positions"] = len(positions)
+
+	if summary.Trades == 0 {
+		blockers = append(blockers, "paper_trading=insufficient_closed_trades")
+	}
+	if len(positions) > 0 {
+		blockers = append(blockers, "open_paper_positions_need_review")
+	}
+
+	writePaperTradingReadinessCheckpoint(quest, blockers)
+	quest.CurrentCount++
+	return nil
+}
+
+func runPaperTradingReadinessProbe(ctx context.Context, chatID, exchange string) map[string]interface{} {
+	result := map[string]interface{}{
+		"paper_trading_runtime_probe_passed": false,
+	}
+	config := DefaultPaperExecutionConfig()
+	config.EnableRandomness = false
+	config.ExecutionDelayMs = 0
+	config.SlippagePercentage = decimal.Zero
+	simulator := NewPaperExecutionSimulator(config)
+	userID := strings.TrimSpace(chatID)
+	if userID == "" {
+		userID = "paper-readiness-probe"
+	}
+
+	entryPrice := decimal.NewFromInt(100)
+	size := decimal.NewFromInt(1)
+	entryOrder, err := simulator.CreateOrder(PaperOrderRequest{
+		UserID:   userID,
+		Exchange: exchange,
+		Symbol:   "BTC/USDT",
+		Type:     PaperOrderTypeMarket,
+		Side:     PaperOrderSideBuy,
+		Size:     size,
+	})
+	if err != nil {
+		result["paper_trading_runtime_probe_error"] = err.Error()
+		return result
+	}
+	entryFill, err := simulator.SimulateFill(ctx, entryOrder, entryPrice)
+	if err != nil {
+		result["paper_trading_runtime_probe_error"] = err.Error()
+		return result
+	}
+
+	takeProfitPrice := decimal.NewFromInt(102)
+	takeProfitOrder, err := simulator.CreateOrder(PaperOrderRequest{
+		UserID:   userID,
+		Exchange: exchange,
+		Symbol:   "BTC/USDT",
+		Type:     PaperOrderTypeLimit,
+		Side:     PaperOrderSideSell,
+		Size:     size,
+		Price:    takeProfitPrice,
+	})
+	if err != nil {
+		result["paper_trading_runtime_probe_error"] = err.Error()
+		return result
+	}
+	takeProfitFill, err := simulator.SimulateFill(ctx, takeProfitOrder, decimal.NewFromInt(103))
+	if err != nil {
+		result["paper_trading_runtime_probe_error"] = err.Error()
+		return result
+	}
+
+	stopLossPrice := decimal.NewFromInt(98)
+	stopLossOrder, err := simulator.CreateOrder(PaperOrderRequest{
+		UserID:    userID,
+		Exchange:  exchange,
+		Symbol:    "ETH/USDT",
+		Type:      PaperOrderTypeStop,
+		Side:      PaperOrderSideSell,
+		Size:      size,
+		StopPrice: stopLossPrice,
+	})
+	if err != nil {
+		result["paper_trading_runtime_probe_error"] = err.Error()
+		return result
+	}
+	stopLossFill, err := simulator.SimulateFill(ctx, stopLossOrder, stopLossPrice)
+	if err != nil {
+		result["paper_trading_runtime_probe_error"] = err.Error()
+		return result
+	}
+
+	position := PaperPosition{
+		ID:         "paper-readiness-position",
+		UserID:     userID,
+		Exchange:   exchange,
+		Symbol:     "BTC/USDT",
+		Side:       PaperOrderSideBuy,
+		Size:       entryFill.FilledSize,
+		EntryPrice: entryFill.AvgFillPrice,
+		OpenedAt:   time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	}
+	realizedPnL := position.ClosePosition(takeProfitFill.AvgFillPrice)
+
+	result["paper_trading_runtime_probe_passed"] = entryFill.Status == PaperOrderStatusFilled &&
+		takeProfitFill.Status == PaperOrderStatusFilled &&
+		stopLossFill.Status == PaperOrderStatusFilled &&
+		realizedPnL.GreaterThan(decimal.Zero)
+	result["paper_trading_probe_entry_status"] = string(entryFill.Status)
+	result["paper_trading_probe_take_profit_status"] = string(takeProfitFill.Status)
+	result["paper_trading_probe_stop_loss_status"] = string(stopLossFill.Status)
+	result["paper_trading_probe_entry_fill_price"] = entryFill.AvgFillPrice.String()
+	result["paper_trading_probe_take_profit_fill_price"] = takeProfitFill.AvgFillPrice.String()
+	result["paper_trading_probe_stop_loss_fill_price"] = stopLossFill.AvgFillPrice.String()
+	result["paper_trading_probe_realized_pnl"] = realizedPnL.String()
+	return result
+}
+
+func writePaperTradingReadinessCheckpoint(quest *Quest, blockers []string) {
+	quest.Checkpoint["paper_trading_ready"] = false
+	quest.Checkpoint["paper_trading_readiness_status"] = "blocked"
+	quest.Checkpoint["paper_trading_readiness_blockers"] = append([]string(nil), blockers...)
+	quest.Checkpoint["paper_trading_readiness_note"] = "paper trading simulator probe is diagnostic; publish a concrete evidence artifact before marking paper_trading ready in the live-readiness manifest"
 }
 
 func (h *IntegratedQuestHandlers) handleSwingTradingReadinessReview(ctx context.Context, quest *Quest) error {

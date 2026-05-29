@@ -397,6 +397,16 @@ func (e *QuestEngine) registerDefaultDefinitions() {
 		Prompt:      "Generate comprehensive daily report including PnL, win rate, and strategy performance",
 	})
 
+	// Paper trading readiness review - runs daily
+	e.RegisterDefinition(&QuestDefinition{
+		ID:          "paper_trading_review",
+		Name:        "Paper Trading Readiness Review",
+		Description: "Probe paper trading simulator and record readiness blockers",
+		Type:        QuestTypeRoutine,
+		Cadence:     CadenceDaily,
+		Prompt:      "Verify paper trading simulation, lifecycle storage, and readiness evidence",
+	})
+
 	// Swing trading readiness review - runs daily
 	e.RegisterDefinition(&QuestDefinition{
 		ID:          "swing_trading_review",
