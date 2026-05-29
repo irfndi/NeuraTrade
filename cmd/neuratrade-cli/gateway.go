@@ -50,6 +50,12 @@ type serviceProbeResult struct {
 }
 
 var allowedGatewayServiceBinaries = newAllowedGatewayServiceBinaries()
+var allowedGatewayProcessPatterns = newAllowedGatewayProcessPatterns(allowedGatewayServiceBinaries)
+
+type gatewayProcessInfo struct {
+	pid     string
+	command string
+}
 
 // newAllowedGatewayServiceBinaries returns a set of allowed service binary basenames.
 // By default it includes "neuratrade-server", "telegram-service", and "ccxt-service".
@@ -85,6 +91,15 @@ func newAllowedGatewayServiceBinaries() map[string]struct{} {
 		return defaultSet
 	}
 	return customSet
+}
+
+func newAllowedGatewayProcessPatterns(serviceBinaries map[string]struct{}) map[string]struct{} {
+	patterns := make(map[string]struct{}, len(serviceBinaries)+1)
+	for binary := range serviceBinaries {
+		patterns[binary] = struct{}{}
+	}
+	patterns["bun run index.ts"] = struct{}{}
+	return patterns
 }
 
 const (
@@ -562,7 +577,11 @@ func processMatchesAnyPattern(pid int, expectedPatterns ...string) (bool, error)
 	}
 	command := strings.ToLower(strings.TrimSpace(string(output)))
 	for _, pattern := range expectedPatterns {
-		if strings.Contains(command, strings.ToLower(pattern)) {
+		normalizedPattern, err := normalizeGatewayProcessPattern(pattern)
+		if err != nil {
+			return false, err
+		}
+		if strings.Contains(command, normalizedPattern) {
 			return true, nil
 		}
 	}
@@ -657,66 +676,85 @@ func gatewayStatus(cCtx *cli.Context) error {
 // checkProcess checks if a process is running
 func checkProcess(displayName string, processPatterns ...string) {
 	seen := make(map[string]struct{})
+	processes, err := listGatewayProcesses()
+	if err != nil {
+		fmt.Printf("❌ %s: Not running\n", displayName)
+		return
+	}
 
 	for _, pattern := range processPatterns {
-		cmd := exec.Command("pgrep", "-f", pattern)
-		output, err := cmd.Output()
-		if err != nil || len(output) == 0 {
+		normalizedPattern, err := normalizeGatewayProcessPattern(pattern)
+		if err != nil {
+			fmt.Printf("⚠️  %s: Ignoring invalid process pattern %q: %v\n", displayName, pattern, err)
 			continue
 		}
 
-		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-		for _, line := range lines {
-			pidField := strings.TrimSpace(strings.Fields(line)[0])
-			if pidField == "" {
+		for _, proc := range processes {
+			if _, exists := seen[proc.pid]; exists {
 				continue
 			}
 
-			if _, exists := seen[pidField]; exists {
+			cmdlineLower := strings.ToLower(strings.TrimSpace(proc.command))
+			if cmdlineLower == "" {
 				continue
 			}
-
-			cmdline, readErr := readCommandLineForPID(pidField)
-			if readErr != nil || strings.TrimSpace(cmdline) == "" {
-				continue
-			}
-			cmdlineLower := strings.ToLower(strings.TrimSpace(cmdline))
 			if strings.Contains(cmdlineLower, "pgrep -f") ||
 				strings.Contains(cmdlineLower, "pkill -f") ||
 				strings.Contains(cmdlineLower, "gateway status") {
 				continue
 			}
-			if !strings.Contains(cmdlineLower, strings.ToLower(pattern)) {
+			if !strings.Contains(cmdlineLower, normalizedPattern) {
 				continue
 			}
 
-			seen[pidField] = struct{}{}
-			fmt.Printf("✅ %s: Running (PID: %s)\n", displayName, pidField)
+			seen[proc.pid] = struct{}{}
+			fmt.Printf("✅ %s: Running (PID: %s)\n", displayName, proc.pid)
 			return
 		}
 	}
 	fmt.Printf("❌ %s: Not running\n", displayName)
 }
 
-func readCommandLineForPID(pid string) (string, error) {
-	pid = strings.TrimSpace(pid)
-	if pid == "" {
-		return "", fmt.Errorf("empty pid")
+func normalizeGatewayProcessPattern(pattern string) (string, error) {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	if _, ok := allowedGatewayProcessPatterns[pattern]; !ok {
+		return "", fmt.Errorf("process pattern %q is not allowlisted", pattern)
 	}
-	// Validate PID is purely numeric to prevent command injection
-	parsedPID, err := strconv.Atoi(pid)
-	if err != nil {
-		return "", fmt.Errorf("invalid pid (non-numeric): %q", pid)
-	}
-	if parsedPID <= 0 {
-		return "", fmt.Errorf("invalid pid (must be positive): %q", pid)
-	}
-	cmd := exec.Command("ps", "-p", pid, "-o", "command=")
+	return pattern, nil
+}
+
+func listGatewayProcesses() ([]gatewayProcessInfo, error) {
+	cmd := exec.Command("ps", "-axo", "pid=,command=")
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("ps command failed for PID %s: %w", pid, err)
+		return nil, fmt.Errorf("ps process listing failed: %w", err)
 	}
-	return strings.TrimSpace(string(output)), nil
+
+	return parseGatewayProcessList(output), nil
+}
+
+func parseGatewayProcessList(output []byte) []gatewayProcessInfo {
+	processes := make([]gatewayProcessInfo, 0)
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		pid := fields[0]
+		parsedPID, err := strconv.Atoi(pid)
+		if err != nil || parsedPID <= 0 {
+			continue
+		}
+		processes = append(processes, gatewayProcessInfo{
+			pid:     pid,
+			command: strings.TrimSpace(line[len(pid):]),
+		})
+	}
+	return processes
 }
 
 // printServiceStatus prints service health status

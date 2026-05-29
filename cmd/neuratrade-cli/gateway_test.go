@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -116,23 +115,78 @@ func TestGatewayHealthTimeoutEnvOverride(t *testing.T) {
 	require.Equal(t, 12*time.Second, got)
 }
 
-func TestReadCommandLineForPIDTrimsWhitespace(t *testing.T) {
-	got, err := readCommandLineForPID(" \t" + strconv.Itoa(os.Getpid()) + "\n")
+func TestNormalizeGatewayProcessPatternAllowsKnownPatterns(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "neuratrade-server", want: "neuratrade-server"},
+		{input: " CCXT-SERVICE ", want: "ccxt-service"},
+		{input: "telegram-service", want: "telegram-service"},
+		{input: "BUN RUN INDEX.TS", want: "bun run index.ts"},
+	}
 
-	require.NoError(t, err)
-	require.NotEmpty(t, got)
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := normalizeGatewayProcessPattern(tc.input)
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
-func TestReadCommandLineForPIDRejectsInvalidPID(t *testing.T) {
-	tests := []string{"", "abc", "; rm -rf /", "123; malicious", "0", "-1"}
+func TestAllowedGatewayProcessPatternsDerivesFromServiceBinaries(t *testing.T) {
+	patterns := newAllowedGatewayProcessPatterns(map[string]struct{}{
+		"custom-backend": {},
+		"custom-bridge":  {},
+	})
 
-	for _, pid := range tests {
-		t.Run(pid, func(t *testing.T) {
-			_, err := readCommandLineForPID(pid)
+	require.Contains(t, patterns, "custom-backend")
+	require.Contains(t, patterns, "custom-bridge")
+	require.Contains(t, patterns, "bun run index.ts")
+	require.NotContains(t, patterns, "neuratrade-server")
+}
+
+func TestNormalizeGatewayProcessPatternRejectsShellInput(t *testing.T) {
+	tests := []string{
+		"",
+		"neuratrade-server && id",
+		"telegram-service; rm -rf /",
+		"$(touch /tmp/owned)",
+		"../neuratrade-server",
+		"pgrep -f neuratrade-server",
+	}
+
+	for _, pattern := range tests {
+		t.Run(pattern, func(t *testing.T) {
+			_, err := normalizeGatewayProcessPattern(pattern)
 
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestProcessMatchesAnyPatternRejectsUnexpectedPattern(t *testing.T) {
+	matches, err := processMatchesAnyPattern(os.Getpid(), "neuratrade-server && id")
+
+	require.Error(t, err)
+	require.False(t, matches)
+}
+
+func TestParseGatewayProcessListValidatesPositiveNumericPID(t *testing.T) {
+	processes := parseGatewayProcessList([]byte(`
+	    123 /usr/local/bin/neuratrade-server --config config.yml
+	    0 /usr/local/bin/ccxt-service
+	   -10 /usr/local/bin/telegram-service
+	    abc /usr/local/bin/telegram-service
+	    456 bun run index.ts
+	`))
+
+	require.Equal(t, []gatewayProcessInfo{
+		{pid: "123", command: "/usr/local/bin/neuratrade-server --config config.yml"},
+		{pid: "456", command: "bun run index.ts"},
+	}, processes)
 }
 
 func TestShouldSkipTelegramGatewayForPaperOnlyRuntime(t *testing.T) {
