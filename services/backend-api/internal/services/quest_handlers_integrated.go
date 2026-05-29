@@ -568,7 +568,9 @@ func (h *IntegratedQuestHandlers) handlePaperTradingReadinessReview(ctx context.
 	for key, value := range probe {
 		quest.Checkpoint[key] = value
 	}
-	if passed, _ := probe["paper_trading_runtime_probe_passed"].(bool); !passed {
+	probePassed, _ := probe["paper_trading_runtime_probe_passed"].(bool)
+	writePaperTradingReadinessEvidenceMetrics(quest, probePassed, false, LifecyclePerformanceSummary{}, 0)
+	if !probePassed {
 		blockers = append(blockers, "paper_runtime_probe_failed")
 	}
 
@@ -586,7 +588,7 @@ func (h *IntegratedQuestHandlers) handlePaperTradingReadinessReview(ctx context.
 		quest.CurrentCount++
 		return nil
 	}
-	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 0)
+	positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 1000)
 	if err != nil {
 		blockers = append(blockers, "open_position_query_failed")
 		writePaperTradingReadinessCheckpoint(quest, blockers)
@@ -602,6 +604,7 @@ func (h *IntegratedQuestHandlers) handlePaperTradingReadinessReview(ctx context.
 	quest.Checkpoint["paper_trading_review_fees"] = summary.Fees.String()
 	quest.Checkpoint["paper_trading_review_avg_net_pnl"] = summary.AvgNetPnL.String()
 	quest.Checkpoint["paper_trading_review_open_positions"] = len(positions)
+	writePaperTradingReadinessEvidenceMetrics(quest, probePassed, true, summary, len(positions))
 
 	if summary.Trades == 0 {
 		blockers = append(blockers, "no_persisted_closed_paper_trades")
@@ -721,6 +724,24 @@ func writePaperTradingReadinessCheckpoint(quest *Quest, blockers []string) {
 	quest.Checkpoint["paper_trading_readiness_status"] = "blocked"
 	quest.Checkpoint["paper_trading_readiness_blockers"] = append([]string(nil), blockers...)
 	quest.Checkpoint["paper_trading_readiness_note"] = "paper trading simulator probe is diagnostic; publish a concrete evidence artifact before marking paper_trading ready in the live-readiness manifest"
+}
+
+func writePaperTradingReadinessEvidenceMetrics(
+	quest *Quest,
+	runtimeProbePassed bool,
+	lifecycleStorageVerified bool,
+	summary LifecyclePerformanceSummary,
+	openPositions int,
+) {
+	quest.Checkpoint["paper_trading_lifecycle_storage_verified"] = lifecycleStorageVerified
+	quest.Checkpoint["paper_trading_readiness_evidence_metrics"] = map[string]interface{}{
+		"paper_runtime_probe_passed": runtimeProbePassed,
+		"lifecycle_storage_verified": lifecycleStorageVerified,
+		"closed_trades":              summary.Trades,
+		"open_positions":             openPositions,
+		"net_pnl":                    summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":                summary.AvgNetPnL.StringFixed(2),
+	}
 }
 
 func (h *IntegratedQuestHandlers) handleSwingTradingReadinessReview(ctx context.Context, quest *Quest) error {
