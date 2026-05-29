@@ -176,10 +176,48 @@ func TestManifestLiveModeGuardRequiresPaperTradingProofMetrics(t *testing.T) {
 	assert.Contains(t, err.Error(), "paper_trading=runtime_probe_not_passed")
 	assert.Contains(t, err.Error(), "paper_trading=lifecycle_storage_not_verified")
 	assert.Contains(t, err.Error(), "paper_trading=insufficient_closed_trades")
+	assert.Contains(t, err.Error(), "paper_trading=insufficient_validation_window")
+	assert.Contains(t, err.Error(), "paper_trading=insufficient_strategy_coverage")
+	assert.Contains(t, err.Error(), "paper_trading=risk_limits_not_enforced")
+	assert.Contains(t, err.Error(), "paper_trading=backtest_comparison_not_verified")
 	assert.Contains(t, err.Error(), "paper_trading=open_positions_1")
 	assert.Contains(t, err.Error(), "paper_trading=non_positive_net_pnl")
 	assert.Contains(t, err.Error(), "paper_trading=non_positive_avg_net_pnl")
 	assert.Contains(t, err.Error(), "paper_trading=diagnostic_only")
+}
+
+func TestManifestLiveModeGuardRequiresPaperTradingAcceptanceMetrics(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"paper_trading": {
+				Ready:    true,
+				Evidence: "paper-readiness.json",
+				EvidenceMetrics: &StrategyReadinessEvidence{
+					ClosedTrades:             1,
+					OpenPositions:            0,
+					NetPnL:                   "1.25",
+					AvgNetPnL:                "1.25",
+					PaperRuntimeProbePassed:  true,
+					LifecycleStorageVerified: true,
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"paper_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "paper_trading=insufficient_validation_window")
+	assert.Contains(t, err.Error(), "paper_trading=insufficient_strategy_coverage")
+	assert.Contains(t, err.Error(), "paper_trading=risk_limits_not_enforced")
+	assert.Contains(t, err.Error(), "paper_trading=backtest_comparison_not_verified")
+	assert.NotContains(t, err.Error(), "paper_trading=runtime_probe_not_passed")
+	assert.NotContains(t, err.Error(), "paper_trading=lifecycle_storage_not_verified")
+	assert.NotContains(t, err.Error(), "paper_trading=insufficient_closed_trades")
 }
 
 func TestManifestLiveModeGuardRequiresTradingProofMetrics(t *testing.T) {
@@ -321,12 +359,16 @@ func passingReadinessEvidence(closedTrades int) *StrategyReadinessEvidence {
 
 func passingPaperReadinessEvidence() *StrategyReadinessEvidence {
 	return &StrategyReadinessEvidence{
-		ClosedTrades:             1,
-		OpenPositions:            0,
-		NetPnL:                   "1.25",
-		AvgNetPnL:                "1.25",
-		PaperRuntimeProbePassed:  true,
-		LifecycleStorageVerified: true,
+		ClosedTrades:               1,
+		OpenPositions:              0,
+		NetPnL:                     "1.25",
+		AvgNetPnL:                  "1.25",
+		PaperRuntimeProbePassed:    true,
+		LifecycleStorageVerified:   true,
+		ContinuousValidationHours:  minimumPaperTradingValidationHours,
+		StrategyCount:              minimumPaperTradingStrategyCount,
+		RiskLimitsEnforced:         true,
+		BacktestComparisonVerified: true,
 	}
 }
 

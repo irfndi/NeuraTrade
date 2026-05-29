@@ -881,13 +881,17 @@ func writePaperTradingReadinessEvidenceMetrics(
 		quest.Checkpoint["paper_trading_readiness_evidence_metrics_status"] = "diagnostic_lifecycle"
 	}
 	quest.Checkpoint["paper_trading_readiness_evidence_metrics"] = map[string]interface{}{
-		"paper_runtime_probe_passed": runtimeProbePassed,
-		"lifecycle_storage_verified": lifecycleStorageVerified,
-		"diagnostic_only":            true,
-		"closed_trades":              summary.Trades,
-		"open_positions":             openPositions,
-		"net_pnl":                    summary.RealizedPnL.StringFixed(2),
-		"avg_net_pnl":                summary.AvgNetPnL.StringFixed(2),
+		"paper_runtime_probe_passed":   runtimeProbePassed,
+		"lifecycle_storage_verified":   lifecycleStorageVerified,
+		"diagnostic_only":              true,
+		"continuous_validation_hours":  0,
+		"strategy_count":               0,
+		"risk_limits_enforced":         false,
+		"backtest_comparison_verified": false,
+		"closed_trades":                summary.Trades,
+		"open_positions":               openPositions,
+		"net_pnl":                      summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":                  summary.AvgNetPnL.StringFixed(2),
 	}
 }
 

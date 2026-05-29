@@ -24,6 +24,10 @@ mark `paper_trading` ready in the live-readiness manifest.
 - `paper_runtime_probe_passed`
 - `lifecycle_storage_verified`
 - `diagnostic_only`
+- `continuous_validation_hours`
+- `strategy_count`
+- `risk_limits_enforced`
+- `backtest_comparison_verified`
 - `closed_trades`
 - `open_positions`
 - `net_pnl`
@@ -40,6 +44,10 @@ Minimum proof before the live-readiness manifest can mark `paper_trading` ready:
 - lifecycle storage is available
 - paper order open, close, cancellation, take-profit, and stop-loss flows are
   persisted and queryable
+- at least 168 hours of continuous paper validation are represented
+- at least two strategy types are covered
+- risk-limit enforcement is verified
+- paper results are compared with backtest output
 - fees, cost basis, realized PnL, and open-position state are recorded
 - the evidence artifact is written and referenced by
   `NEURATRADE_LIVE_READINESS_MANIFEST`

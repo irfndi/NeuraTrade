@@ -18,6 +18,10 @@ non-empty evidence path alone is not enough to permit live mode.
       "evidence_metrics": {
         "paper_runtime_probe_passed": true,
         "lifecycle_storage_verified": true,
+        "continuous_validation_hours": 168,
+        "strategy_count": 2,
+        "risk_limits_enforced": true,
+        "backtest_comparison_verified": true,
         "closed_trades": 1,
         "open_positions": 0,
         "net_pnl": "1.25",
@@ -60,6 +64,11 @@ Required paper-trading metrics:
 - `paper_runtime_probe_passed`: must be true.
 - `lifecycle_storage_verified`: must be true.
 - `diagnostic_only`: must be absent or false.
+- `continuous_validation_hours`: at least 168 hours of continuous paper
+  validation.
+- `strategy_count`: at least 2 strategy types covered by the paper evidence.
+- `risk_limits_enforced`: must be true.
+- `backtest_comparison_verified`: must be true.
 - `closed_trades`: at least 1 persisted closed paper trade.
 - `open_positions`: must be 0.
 - `net_pnl` and `avg_net_pnl`: decimal strings greater than 0.

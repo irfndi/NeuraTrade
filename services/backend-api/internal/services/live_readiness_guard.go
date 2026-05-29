@@ -15,6 +15,9 @@ const (
 	// LiveReadinessManifestEnv is the path to the manifest that records which
 	// strategies have verified evidence before global live mode can be enabled.
 	LiveReadinessManifestEnv = "NEURATRADE_LIVE_READINESS_MANIFEST"
+
+	minimumPaperTradingValidationHours = 168
+	minimumPaperTradingStrategyCount   = 2
 )
 
 // LiveModeGuard blocks or permits a transition into real-money live mode.
@@ -48,6 +51,12 @@ type StrategyReadinessEvidence struct {
 	// readiness contract rather than strategy profitability.
 	PaperRuntimeProbePassed  bool `json:"paper_runtime_probe_passed,omitempty"`
 	LifecycleStorageVerified bool `json:"lifecycle_storage_verified,omitempty"`
+	// ContinuousValidationHours, StrategyCount, RiskLimitsEnforced, and
+	// BacktestComparisonVerified are paper_trading acceptance proof fields.
+	ContinuousValidationHours  int  `json:"continuous_validation_hours,omitempty"`
+	StrategyCount              int  `json:"strategy_count,omitempty"`
+	RiskLimitsEnforced         bool `json:"risk_limits_enforced,omitempty"`
+	BacktestComparisonVerified bool `json:"backtest_comparison_verified,omitempty"`
 }
 
 // LiveReadinessManifest is the file format consumed by ManifestLiveModeGuard.
@@ -197,6 +206,18 @@ func paperTradingReadinessEvidenceBlockers(metrics *StrategyReadinessEvidence) [
 	}
 	if metrics.ClosedTrades < 1 {
 		blockers = append(blockers, "paper_trading=insufficient_closed_trades")
+	}
+	if metrics.ContinuousValidationHours < minimumPaperTradingValidationHours {
+		blockers = append(blockers, "paper_trading=insufficient_validation_window")
+	}
+	if metrics.StrategyCount < minimumPaperTradingStrategyCount {
+		blockers = append(blockers, "paper_trading=insufficient_strategy_coverage")
+	}
+	if !metrics.RiskLimitsEnforced {
+		blockers = append(blockers, "paper_trading=risk_limits_not_enforced")
+	}
+	if !metrics.BacktestComparisonVerified {
+		blockers = append(blockers, "paper_trading=backtest_comparison_not_verified")
 	}
 	if metrics.OpenPositions != 0 {
 		blockers = append(blockers, fmt.Sprintf("paper_trading=open_positions_%d", metrics.OpenPositions))
