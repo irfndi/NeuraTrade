@@ -463,7 +463,7 @@ describe("Status command", () => {
       "Entry blocker: rollout_gate (strategy_not_live (stage: shadow, status: active))",
     );
     expect(ctx.replies[0]).toContain(
-      "Entry attempt block: rollout_shadow_block",
+      "Entry attempt blocker: rollout_shadow_block",
     );
     expect(ctx.replies[0]).toContain("Account tier: micro");
     expect(ctx.replies[0]).toContain("Position cap: 1/1 managed open");
@@ -496,13 +496,13 @@ describe("Status command", () => {
     await runCommand(bot, "status", ctx);
 
     expect(ctx.replies[0]).toContain(
-      "Entry blocker: entry-attempt (missing_orderbook_signal)",
+      "Entry blocker: entry_attempt (missing_orderbook_signal)",
     );
     expect(ctx.replies[0]).toContain(
-      "Entry attempt block: missing_orderbook_signal",
+      "Entry attempt blocker: missing_orderbook_signal",
     );
     expect(ctx.replies[0]).toContain(
-      "Next unblock: await candidate that passes entry-attempt filters",
+      "Next unblock: await candidate that passes entry_attempt filters",
     );
     expect(ctx.replies[0]).not.toContain("Entry blocker: none");
     expect(ctx.replies[0]).not.toContain("entries currently eligible");
