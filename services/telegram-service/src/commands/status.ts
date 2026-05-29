@@ -453,7 +453,9 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         if (entryGatePriority === "risk_lock") {
           lines.push(`• Risk lock source: ${riskLockSource}`);
         }
-        if (entryAttemptBlockReason) {
+        // When a hard gate is the primary blocker, suppress the candidate-level
+        // entry-attempt filter line — the gate takes precedence.
+        if (entryAttemptBlockReason && entryGatePriority === "none") {
           lines.push(`• Entry attempt block: ${entryAttemptBlockReason}`);
         }
         const resolvedUnblockCondition =
