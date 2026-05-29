@@ -424,10 +424,10 @@ func TestPaperTradingBackfillValidation_Manifests(t *testing.T) {
 	v := &PaperTradingBackfillValidation{}
 	result := &PaperTradingBackfillResult{
 		EvidenceArtifact: &PaperTradingValidationEvidence{
-			GeneratedAt:         time.Now(),
-			RunID:               "test-run",
+			GeneratedAt:          time.Now(),
+			RunID:                "test-run",
 			AllBlockersSatisfied: true,
-			NonDiagnostic:       true,
+			NonDiagnostic:        true,
 		},
 	}
 
@@ -667,20 +667,20 @@ func TestPaperTradingBackfillValidation_CollectRiskEvents(t *testing.T) {
 
 func TestPaperTradingBackfillValidation_EvidenceArtifact_JSON(t *testing.T) {
 	evidence := &PaperTradingValidationEvidence{
-		GeneratedAt:         time.Now(),
-		RunID:               "test-run-123",
-		StartTime:           time.Now().Add(-7 * 24 * time.Hour),
-		EndTime:             time.Now(),
-		ContinuousHours:     168,
-		StrategiesCovered:   []string{"scalping", "daily"},
-		TotalTrades:         100,
-		ClosedTrades:        80,
-		NetPnL:              decimal.NewFromFloat(250.75),
-		WinRate:             decimal.NewFromFloat(55.5),
-		MaxDrawdownPct:      decimal.NewFromFloat(12.3),
+		GeneratedAt:          time.Now(),
+		RunID:                "test-run-123",
+		StartTime:            time.Now().Add(-7 * 24 * time.Hour),
+		EndTime:              time.Now(),
+		ContinuousHours:      168,
+		StrategiesCovered:    []string{"scalping", "daily"},
+		TotalTrades:          100,
+		ClosedTrades:         80,
+		NetPnL:               decimal.NewFromFloat(250.75),
+		WinRate:              decimal.NewFromFloat(55.5),
+		MaxDrawdownPct:       decimal.NewFromFloat(12.3),
 		AllBlockersSatisfied: true,
-		NonDiagnostic:       true,
-		ArtifactDigest:      "backfill-test-r",
+		NonDiagnostic:        true,
+		ArtifactDigest:       "backfill-test-r",
 	}
 
 	jsonData, err := json.MarshalIndent(evidence, "", "  ")

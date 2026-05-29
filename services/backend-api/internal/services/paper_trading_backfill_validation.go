@@ -21,26 +21,26 @@ import (
 type PaperTradingBlockerID string
 
 const (
-	BlockerContinuousValidation        PaperTradingBlockerID = "continuous_validation"
-	BlockerMultiStrategyCoverage       PaperTradingBlockerID = "multi_strategy_coverage"
-	BlockerClosedTradeCount            PaperTradingBlockerID = "closed_trade_count"
-	BlockerWinRateThreshold            PaperTradingBlockerID = "win_rate_threshold"
-	BlockerMaxDrawdownLimit            PaperTradingBlockerID = "max_drawdown_limit"
-	BlockerRiskEnforcementEvidence     PaperTradingBlockerID = "risk_enforcement_evidence"
-	BlockerBacktestComparison          PaperTradingBlockerID = "backtest_comparison"
-	BlockerTradeDensity                PaperTradingBlockerID = "trade_density"
-	BlockerOrderExecutionPath          PaperTradingBlockerID = "order_execution_path"
-	BlockerPnLDistribution             PaperTradingBlockerID = "pnl_distribution"
-	BlockerNonDiagnosticManifest       PaperTradingBlockerID = "non_diagnostic_manifest"
+	BlockerContinuousValidation    PaperTradingBlockerID = "continuous_validation"
+	BlockerMultiStrategyCoverage   PaperTradingBlockerID = "multi_strategy_coverage"
+	BlockerClosedTradeCount        PaperTradingBlockerID = "closed_trade_count"
+	BlockerWinRateThreshold        PaperTradingBlockerID = "win_rate_threshold"
+	BlockerMaxDrawdownLimit        PaperTradingBlockerID = "max_drawdown_limit"
+	BlockerRiskEnforcementEvidence PaperTradingBlockerID = "risk_enforcement_evidence"
+	BlockerBacktestComparison      PaperTradingBlockerID = "backtest_comparison"
+	BlockerTradeDensity            PaperTradingBlockerID = "trade_density"
+	BlockerOrderExecutionPath      PaperTradingBlockerID = "order_execution_path"
+	BlockerPnLDistribution         PaperTradingBlockerID = "pnl_distribution"
+	BlockerNonDiagnosticManifest   PaperTradingBlockerID = "non_diagnostic_manifest"
 )
 
 // PaperTradingBlockerStatus represents the status of a single blocker.
 type PaperTradingBlockerStatus struct {
 	BlockerID    PaperTradingBlockerID `json:"blocker_id"`
 	Satisfied    bool                  `json:"satisfied"`
-	CurrentValue string               `json:"current_value"`
-	Required     string               `json:"required"`
-	Evidence     string               `json:"evidence"`
+	CurrentValue string                `json:"current_value"`
+	Required     string                `json:"required"`
+	Evidence     string                `json:"evidence"`
 }
 
 // ---------------------------------------------------------------------------
@@ -50,13 +50,13 @@ type PaperTradingBlockerStatus struct {
 // PaperTradingStrategy represents a trading strategy configuration for backfill
 // validation.
 type PaperTradingStrategy struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Symbols         []string        `json:"symbols"`
-	Timeframe       string          `json:"timeframe"`
-	MaxPositionPct  decimal.Decimal `json:"max_position_pct"`
-	MinConfidence   float64         `json:"min_confidence"`
-	HoldCandles     int             `json:"hold_candles"` // candles to hold position
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Symbols        []string        `json:"symbols"`
+	Timeframe      string          `json:"timeframe"`
+	MaxPositionPct decimal.Decimal `json:"max_position_pct"`
+	MinConfidence  float64         `json:"min_confidence"`
+	HoldCandles    int             `json:"hold_candles"` // candles to hold position
 }
 
 // DefaultPaperTradingStrategies returns the default set of strategies used for
@@ -108,11 +108,11 @@ func DefaultPaperTradingStrategies() []PaperTradingStrategy {
 
 // PaperTradingBackfillConfig holds configuration for the backfill validation run.
 type PaperTradingBackfillConfig struct {
-	StartTime      time.Time
-	EndTime        time.Time
-	Exchange       string
-	InitialCapital decimal.Decimal
-	Strategies     []PaperTradingStrategy
+	StartTime       time.Time
+	EndTime         time.Time
+	Exchange        string
+	InitialCapital  decimal.Decimal
+	Strategies      []PaperTradingStrategy
 	ExecutionConfig PaperExecutionConfig
 	// MinContinuousHours is the minimum hours required for validation (default 168).
 	MinContinuousHours float64
@@ -129,17 +129,17 @@ type PaperTradingBackfillConfig struct {
 // DefaultPaperTradingBackfillConfig returns a validated default configuration.
 func DefaultPaperTradingBackfillConfig() PaperTradingBackfillConfig {
 	return PaperTradingBackfillConfig{
-		StartTime:           time.Now().Add(-7 * 24 * time.Hour),
-		EndTime:             time.Now(),
-		Exchange:            "binance",
-		InitialCapital:      decimal.NewFromInt(10000),
-		Strategies:          DefaultPaperTradingStrategies(),
-		ExecutionConfig:     DefaultPaperExecutionConfig(),
-		MinContinuousHours:  168, // 7 days
-		MinStrategies:       2,
-		MinClosedTrades:     10,
-		MinWinRatePct:       0,
-		MaxDrawdownPct:      50,
+		StartTime:          time.Now().Add(-7 * 24 * time.Hour),
+		EndTime:            time.Now(),
+		Exchange:           "binance",
+		InitialCapital:     decimal.NewFromInt(10000),
+		Strategies:         DefaultPaperTradingStrategies(),
+		ExecutionConfig:    DefaultPaperExecutionConfig(),
+		MinContinuousHours: 168, // 7 days
+		MinStrategies:      2,
+		MinClosedTrades:    10,
+		MinWinRatePct:      0,
+		MaxDrawdownPct:     50,
 	}
 }
 
@@ -198,14 +198,14 @@ type backfillCandle struct {
 // ---------------------------------------------------------------------------
 
 type backfillOpenPosition struct {
-	TradeID      int64
-	Symbol       string
-	StrategyID   string
-	Side         PaperOrderSide
-	Size         decimal.Decimal
-	EntryPrice   decimal.Decimal
-	EntryTime    time.Time
-	HoldUntil    int // candle index when this should close
+	TradeID    int64
+	Symbol     string
+	StrategyID string
+	Side       PaperOrderSide
+	Size       decimal.Decimal
+	EntryPrice decimal.Decimal
+	EntryTime  time.Time
+	HoldUntil  int // candle index when this should close
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +252,7 @@ type StrategyStat struct {
 // PaperTradingRiskEvent records a risk-related event during backfill.
 type PaperTradingRiskEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
-	EventType   string    `json:"event_type"`   // "drawdown_warning", "loss_streak", "max_position"
+	EventType   string    `json:"event_type"` // "drawdown_warning", "loss_streak", "max_position"
 	StrategyID  string    `json:"strategy_id"`
 	Symbol      string    `json:"symbol"`
 	Description string    `json:"description"`
@@ -262,22 +262,22 @@ type PaperTradingRiskEvent struct {
 // PaperTradingValidationEvidence is the evidence artifact generated for readiness
 // validation.
 type PaperTradingValidationEvidence struct {
-	GeneratedAt         time.Time                    `json:"generated_at"`
-	RunID               string                       `json:"run_id"`
-	StartTime           time.Time                    `json:"start_time"`
-	EndTime             time.Time                    `json:"end_time"`
-	ContinuousHours     float64                      `json:"continuous_hours"`
-	StrategiesCovered   []string                     `json:"strategies_covered"`
-	TotalTrades         int64                        `json:"total_trades"`
-	ClosedTrades        int64                        `json:"closed_trades"`
-	NetPnL              decimal.Decimal              `json:"net_pnl"`
-	WinRate             decimal.Decimal              `json:"win_rate"`
-	MaxDrawdownPct      decimal.Decimal              `json:"max_drawdown_pct"`
-	RiskEvents          []PaperTradingRiskEvent      `json:"risk_events"`
-	BlockerStatus       []PaperTradingBlockerStatus  `json:"blocker_status"`
+	GeneratedAt          time.Time                   `json:"generated_at"`
+	RunID                string                      `json:"run_id"`
+	StartTime            time.Time                   `json:"start_time"`
+	EndTime              time.Time                   `json:"end_time"`
+	ContinuousHours      float64                     `json:"continuous_hours"`
+	StrategiesCovered    []string                    `json:"strategies_covered"`
+	TotalTrades          int64                       `json:"total_trades"`
+	ClosedTrades         int64                       `json:"closed_trades"`
+	NetPnL               decimal.Decimal             `json:"net_pnl"`
+	WinRate              decimal.Decimal             `json:"win_rate"`
+	MaxDrawdownPct       decimal.Decimal             `json:"max_drawdown_pct"`
+	RiskEvents           []PaperTradingRiskEvent     `json:"risk_events"`
+	BlockerStatus        []PaperTradingBlockerStatus `json:"blocker_status"`
 	AllBlockersSatisfied bool                        `json:"all_blockers_satisfied"`
-	NonDiagnostic       bool                         `json:"non_diagnostic"`
-	ArtifactDigest      string                       `json:"artifact_digest"`
+	NonDiagnostic        bool                        `json:"non_diagnostic"`
+	ArtifactDigest       string                      `json:"artifact_digest"`
 }
 
 // ---------------------------------------------------------------------------
@@ -1036,22 +1036,22 @@ func (v *PaperTradingBackfillValidation) buildEvidenceArtifact(
 	}
 
 	evidence := &PaperTradingValidationEvidence{
-		GeneratedAt:         time.Now(),
-		RunID:               runID,
-		StartTime:           result.Config.StartTime,
-		EndTime:             result.Config.EndTime,
-		ContinuousHours:     result.ContinuousValidationHours,
-		StrategiesCovered:   result.CoveredStrategies,
-		TotalTrades:         result.ClosedTrades + result.OpenTrades + result.CancelledTrades,
-		ClosedTrades:        result.ClosedTrades,
-		NetPnL:              result.NetPnL,
-		WinRate:             result.WinRate,
-		MaxDrawdownPct:      result.MaxDrawdownPct,
-		RiskEvents:          result.RiskEvents,
-		BlockerStatus:       result.BlockerStatuses,
+		GeneratedAt:          time.Now(),
+		RunID:                runID,
+		StartTime:            result.Config.StartTime,
+		EndTime:              result.Config.EndTime,
+		ContinuousHours:      result.ContinuousValidationHours,
+		StrategiesCovered:    result.CoveredStrategies,
+		TotalTrades:          result.ClosedTrades + result.OpenTrades + result.CancelledTrades,
+		ClosedTrades:         result.ClosedTrades,
+		NetPnL:               result.NetPnL,
+		WinRate:              result.WinRate,
+		MaxDrawdownPct:       result.MaxDrawdownPct,
+		RiskEvents:           result.RiskEvents,
+		BlockerStatus:        result.BlockerStatuses,
 		AllBlockersSatisfied: allSatisfied,
-		NonDiagnostic:       true,
-		ArtifactDigest:      fmt.Sprintf("backfill-%s", runID[:8]),
+		NonDiagnostic:        true,
+		ArtifactDigest:       fmt.Sprintf("backfill-%s", runID[:8]),
 	}
 	return evidence
 }
@@ -1090,6 +1090,6 @@ func PaperTradingReadinessEvidenceBlockers() []PaperTradingBlockerID {
 type backfillNopLogger struct{}
 
 func (n *backfillNopLogger) WithFields(map[string]interface{}) Logger { return n }
-func (n *backfillNopLogger) Info(msg string)                           {}
-func (n *backfillNopLogger) Warn(msg string)                           {}
-func (n *backfillNopLogger) Error(msg string)                          {}
+func (n *backfillNopLogger) Info(msg string)                          {}
+func (n *backfillNopLogger) Warn(msg string)                          {}
+func (n *backfillNopLogger) Error(msg string)                         {}
