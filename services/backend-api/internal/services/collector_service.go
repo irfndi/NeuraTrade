@@ -286,6 +286,11 @@ func (c *CollectorService) getPrioritizedExchanges() []string {
 		}
 	}
 
+	if len(allExchanges) == 0 {
+		c.logger.Warn("No exchanges available from CCXT, skipping priority query")
+		return allExchanges
+	}
+
 	if isNilDBPool(c.db) {
 		c.logger.Warn("Database not available, returning filtered exchanges")
 		return allExchanges
