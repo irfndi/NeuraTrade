@@ -31,6 +31,8 @@ func TestExecuteRoutineDailyReportRecordsBlockedReadinessWithoutLifecycleStore(t
 	assert.Equal(t, "daily-chat", quest.Checkpoint["daily_report_chat_id"])
 	assert.Equal(t, "bitget", quest.Checkpoint["daily_report_exchange"])
 	assert.Equal(t, false, quest.Checkpoint["daily_trading_lifecycle_storage_verified"])
+	assert.Equal(t, false, quest.Checkpoint["daily_trading_drawdown_verified"])
+	assert.Equal(t, "diagnostic_placeholder", quest.Checkpoint["daily_trading_readiness_evidence_metrics_status"])
 	assert.Equal(t, 1, quest.CurrentCount)
 
 	metrics, ok := quest.Checkpoint["daily_trading_readiness_evidence_metrics"].(map[string]interface{})
@@ -42,6 +44,8 @@ func TestExecuteRoutineDailyReportRecordsBlockedReadinessWithoutLifecycleStore(t
 	assert.Equal(t, "0.00", metrics["net_pnl"])
 	assert.Equal(t, "0.00", metrics["avg_net_pnl"])
 	assert.Equal(t, "0.00", metrics["max_drawdown_pct"])
+	assert.Equal(t, false, metrics["drawdown_verified"])
+	assert.Equal(t, true, metrics["diagnostic_only"])
 
 	blockers, ok := quest.Checkpoint["daily_trading_readiness_blockers"].([]string)
 	require.True(t, ok)
@@ -94,6 +98,8 @@ func TestExecuteRoutineDailyReportBlocksMissingChatIDBeforeLifecycleQueries(t *t
 	require.NoError(t, err)
 	assert.Equal(t, "", quest.Checkpoint["daily_report_chat_id"])
 	assert.Equal(t, false, quest.Checkpoint["daily_trading_lifecycle_storage_verified"])
+	assert.Equal(t, false, quest.Checkpoint["daily_trading_drawdown_verified"])
+	assert.Equal(t, "diagnostic_placeholder", quest.Checkpoint["daily_trading_readiness_evidence_metrics_status"])
 	assert.Equal(t, 1, quest.CurrentCount)
 
 	metrics, ok := quest.Checkpoint["daily_trading_readiness_evidence_metrics"].(map[string]interface{})
@@ -197,6 +203,8 @@ func TestExecuteRoutineDailyReportRecordsLifecycleMetrics(t *testing.T) {
 	assert.Equal(t, 1, quest.Checkpoint["daily_report_losses"])
 	assert.Equal(t, 0, quest.Checkpoint["daily_report_open_positions"])
 	assert.Equal(t, true, quest.Checkpoint["daily_trading_lifecycle_storage_verified"])
+	assert.Equal(t, false, quest.Checkpoint["daily_trading_drawdown_verified"])
+	assert.Equal(t, "diagnostic_lifecycle", quest.Checkpoint["daily_trading_readiness_evidence_metrics_status"])
 	assert.Equal(t, 1, quest.CurrentCount)
 
 	metrics, ok := quest.Checkpoint["daily_trading_readiness_evidence_metrics"].(map[string]interface{})
@@ -208,6 +216,8 @@ func TestExecuteRoutineDailyReportRecordsLifecycleMetrics(t *testing.T) {
 	assert.Equal(t, "1.80", metrics["net_pnl"])
 	assert.Equal(t, "0.90", metrics["avg_net_pnl"])
 	assert.Equal(t, "0.00", metrics["max_drawdown_pct"])
+	assert.Equal(t, false, metrics["drawdown_verified"])
+	assert.Equal(t, true, metrics["diagnostic_only"])
 
 	blockers, ok := quest.Checkpoint["daily_trading_readiness_blockers"].([]string)
 	require.True(t, ok)
