@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
@@ -123,7 +124,8 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 			case strings.TrimSpace(status.Evidence) == "":
 				blockers = append(blockers, fmt.Sprintf("%s=missing_evidence", strategy))
 			default:
-				blockers = append(blockers, evidenceArtifactBlockers(strategy, status.Evidence, manifestDir, status.EvidenceMetrics)...)
+				blockers = append(blockers, evidenceArtifactBlockers(strategy, status.Evidence, manifestDir, status.EvidenceMetrics, status.VerifiedAt)...)
+				blockers = append(blockers, readinessVerifiedAtBlockers(strategy, status)...)
 				blockers = append(blockers, strategyReadinessEvidenceBlockers(strategy, status)...)
 			}
 		}
@@ -135,7 +137,13 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 	}
 }
 
-func evidenceArtifactBlockers(strategy string, evidence string, manifestDir string, expectedMetrics *StrategyReadinessEvidence) []string {
+func evidenceArtifactBlockers(
+	strategy string,
+	evidence string,
+	manifestDir string,
+	expectedMetrics *StrategyReadinessEvidence,
+	expectedVerifiedAt string,
+) []string {
 	evidence = strings.TrimSpace(evidence)
 	evidencePath := evidence
 	if !filepath.IsAbs(evidencePath) {
@@ -168,7 +176,23 @@ func evidenceArtifactBlockers(strategy string, evidence string, manifestDir stri
 		return []string{fmt.Sprintf("%s=evidence_not_json_object_%q", strategy, evidence)}
 	}
 	if expectedMetrics != nil {
-		return evidenceArtifactMetricsBlockers(strategy, evidence, evidenceObject, expectedMetrics)
+		if blockers := evidenceArtifactMetricsBlockers(strategy, evidence, evidenceObject, expectedMetrics); len(blockers) > 0 {
+			return blockers
+		}
+	}
+	if strings.TrimSpace(expectedVerifiedAt) != "" {
+		return evidenceArtifactVerifiedAtBlockers(strategy, evidence, evidenceObject, expectedVerifiedAt)
+	}
+	return nil
+}
+
+func readinessVerifiedAtBlockers(strategy string, status StrategyLiveReadiness) []string {
+	verifiedAt := strings.TrimSpace(status.VerifiedAt)
+	if verifiedAt == "" {
+		return []string{fmt.Sprintf("%s=missing_verified_at", strategy)}
+	}
+	if _, err := time.Parse(time.RFC3339Nano, verifiedAt); err != nil {
+		return []string{fmt.Sprintf("%s=invalid_verified_at_%q", strategy, verifiedAt)}
 	}
 	return nil
 }
@@ -244,6 +268,56 @@ func evidenceArtifactMetrics(evidenceObject map[string]json.RawMessage) (Strateg
 		return StrategyReadinessEvidence{}, false
 	}
 	return *readiness.ManifestEntry.EvidenceMetrics, true
+}
+
+func evidenceArtifactVerifiedAtBlockers(
+	strategy string,
+	evidence string,
+	evidenceObject map[string]json.RawMessage,
+	expectedVerifiedAt string,
+) []string {
+	actualVerifiedAt, ok := evidenceArtifactVerifiedAt(evidenceObject)
+	if !ok {
+		return []string{fmt.Sprintf("%s=evidence_missing_verified_at_%q", strategy, evidence)}
+	}
+	expectedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(expectedVerifiedAt))
+	if err != nil {
+		return nil
+	}
+	actualAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(actualVerifiedAt))
+	if err != nil {
+		return []string{fmt.Sprintf("%s=evidence_invalid_verified_at_%q", strategy, actualVerifiedAt)}
+	}
+	if !expectedAt.Equal(actualAt) {
+		return []string{fmt.Sprintf("%s=evidence_verified_at_mismatch_%q", strategy, evidence)}
+	}
+	return nil
+}
+
+func evidenceArtifactVerifiedAt(evidenceObject map[string]json.RawMessage) (string, bool) {
+	if raw, ok := evidenceObject["verified_at"]; ok {
+		var verifiedAt string
+		if err := json.Unmarshal(raw, &verifiedAt); err != nil {
+			return "", false
+		}
+		verifiedAt = strings.TrimSpace(verifiedAt)
+		return verifiedAt, verifiedAt != ""
+	}
+
+	var readiness struct {
+		ManifestEntry struct {
+			VerifiedAt string `json:"verified_at"`
+		} `json:"manifest_entry"`
+	}
+	raw, ok := evidenceObject["live_readiness"]
+	if !ok {
+		return "", false
+	}
+	if err := json.Unmarshal(raw, &readiness); err != nil {
+		return "", false
+	}
+	verifiedAt := strings.TrimSpace(readiness.ManifestEntry.VerifiedAt)
+	return verifiedAt, verifiedAt != ""
 }
 
 func normalizeReadinessStrategies(strategies []string) []string {
