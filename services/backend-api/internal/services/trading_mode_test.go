@@ -192,6 +192,25 @@ func TestManifestLiveModeGuardRequiresJSONEvidenceArtifact(t *testing.T) {
 	assert.Contains(t, err.Error(), `daily_trading=evidence_invalid_json_"daily.txt"`)
 }
 
+func TestManifestLiveModeGuardRequiresObjectEvidenceArtifact(t *testing.T) {
+	manifestDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "daily.json"), []byte(`"verified"`), 0o600))
+	manifestPath := filepath.Join(manifestDir, "live-readiness.json")
+	manifest := LiveReadinessManifest{
+		Strategies: map[string]StrategyLiveReadiness{
+			"daily_trading": {Ready: true, Evidence: "daily.json", EvidenceMetrics: passingReadinessEvidence(2)},
+		},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, raw, 0o600))
+
+	guard := ManifestLiveModeGuard(manifestPath, []string{"daily_trading"})
+	err = guard(context.Background(), "chat-1", "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `daily_trading=evidence_not_json_object_"daily.json"`)
+}
+
 func TestManifestLiveModeGuardRejectsOversizedEvidenceArtifact(t *testing.T) {
 	manifestDir := t.TempDir()
 	require.NoError(t, os.WriteFile(

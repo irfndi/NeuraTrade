@@ -163,6 +163,10 @@ func evidenceArtifactBlockers(strategy string, evidence string, manifestDir stri
 	if !json.Valid(raw) {
 		return []string{fmt.Sprintf("%s=evidence_invalid_json_%q", strategy, evidence)}
 	}
+	var evidenceObject map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &evidenceObject); err != nil || evidenceObject == nil {
+		return []string{fmt.Sprintf("%s=evidence_not_json_object_%q", strategy, evidence)}
+	}
 	return nil
 }
 
