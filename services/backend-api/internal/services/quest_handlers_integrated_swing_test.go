@@ -18,7 +18,6 @@ func TestExecuteRoutineSwingTradingReviewBlocksLiveReadinessWithoutStrategyProof
 		Metadata: map[string]string{
 			"definition_id": "swing_trading_review",
 			"chat_id":       "swing-chat",
-			"exchange":      "bitget",
 		},
 		Checkpoint: map[string]interface{}{},
 	}
@@ -30,7 +29,22 @@ func TestExecuteRoutineSwingTradingReviewBlocksLiveReadinessWithoutStrategyProof
 	assert.Equal(t, "blocked", quest.Checkpoint["swing_trading_readiness_status"])
 	assert.Equal(t, "swing-chat", quest.Checkpoint["swing_review_chat_id"])
 	assert.Equal(t, "bitget", quest.Checkpoint["swing_review_exchange"])
+	assert.Equal(t, false, quest.Checkpoint["swing_trading_lifecycle_storage_verified"])
+	assert.Equal(t, false, quest.Checkpoint["swing_trading_drawdown_verified"])
+	assert.Equal(t, "diagnostic_placeholder", quest.Checkpoint["swing_trading_readiness_evidence_metrics_status"])
 	assert.Equal(t, 1, quest.CurrentCount)
+
+	metrics, ok := quest.Checkpoint["swing_trading_readiness_evidence_metrics"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 0, metrics["closed_trades"])
+	assert.Equal(t, 0, metrics["winning_trades"])
+	assert.Equal(t, 0, metrics["losing_trades"])
+	assert.Equal(t, 0, metrics["open_positions"])
+	assert.Equal(t, "0.00", metrics["net_pnl"])
+	assert.Equal(t, "0.00", metrics["avg_net_pnl"])
+	assert.Equal(t, "0.00", metrics["max_drawdown_pct"])
+	assert.Equal(t, false, metrics["drawdown_verified"])
+	assert.Equal(t, true, metrics["diagnostic_only"])
 
 	blockers, ok := quest.Checkpoint["swing_trading_readiness_blockers"].([]string)
 	require.True(t, ok)
@@ -39,6 +53,61 @@ func TestExecuteRoutineSwingTradingReviewBlocksLiveReadinessWithoutStrategyProof
 	assert.Contains(t, blockers, "no_swing_signal_engine")
 	assert.Contains(t, blockers, "missing_paper_live_market_hold_window_evidence")
 	assert.Contains(t, blockers, "lifecycle_store_unavailable")
+}
+
+func TestExecuteRoutineSwingTradingReviewBlocksMissingChatIDBeforeLifecycleQueries(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "swing-missing-chat.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, lifecycleStore.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "other-swing-close",
+		ChatID:      "other-chat",
+		Exchange:    "bitget",
+		Symbol:      "BTC/USDT",
+		Side:        "buy",
+		MarketType:  "spot",
+		Filled:      decimal.NewFromInt(1),
+		EntryPrice:  decimal.NewFromInt(100),
+		ExitPrice:   decimal.NewFromInt(103),
+		RealizedPnL: decimal.NewFromInt(3),
+		Fees:        decimal.New(1, -1),
+		Source:      "swing_trading",
+		ClosedAt:    time.Now().UTC().Add(-2 * time.Hour),
+	}))
+
+	handlers := &IntegratedQuestHandlers{lifecycleStore: lifecycleStore}
+	quest := &Quest{
+		Metadata: map[string]string{
+			"definition_id": "swing_trading_review",
+			"chat_id":       "   ",
+			"exchange":      "bitget",
+		},
+		Checkpoint: map[string]interface{}{},
+	}
+
+	err = handlers.ExecuteRoutine(ctx, quest)
+
+	require.NoError(t, err)
+	assert.Equal(t, "", quest.Checkpoint["swing_review_chat_id"])
+	assert.Equal(t, false, quest.Checkpoint["swing_trading_lifecycle_storage_verified"])
+	assert.Equal(t, "diagnostic_placeholder", quest.Checkpoint["swing_trading_readiness_evidence_metrics_status"])
+	assert.Equal(t, 1, quest.CurrentCount)
+
+	metrics, ok := quest.Checkpoint["swing_trading_readiness_evidence_metrics"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 0, metrics["closed_trades"])
+	assert.Equal(t, "0.00", metrics["net_pnl"])
+
+	blockers, ok := quest.Checkpoint["swing_trading_readiness_blockers"].([]string)
+	require.True(t, ok)
+	assert.Contains(t, blockers, "missing_chat_id_metadata")
+	assert.NotContains(t, blockers, "lifecycle_store_unavailable")
 }
 
 func TestExecuteRoutineSwingTradingReviewRecordsLifecycleBlockers(t *testing.T) {
@@ -100,7 +169,22 @@ func TestExecuteRoutineSwingTradingReviewRecordsLifecycleBlockers(t *testing.T) 
 	assert.Equal(t, 1, quest.Checkpoint["swing_review_losses"])
 	assert.Equal(t, 1, quest.Checkpoint["swing_review_open_positions"])
 	assert.Equal(t, 1, quest.Checkpoint["swing_review_stale_open_positions"])
+	assert.Equal(t, true, quest.Checkpoint["swing_trading_lifecycle_storage_verified"])
+	assert.Equal(t, false, quest.Checkpoint["swing_trading_drawdown_verified"])
+	assert.Equal(t, "diagnostic_lifecycle", quest.Checkpoint["swing_trading_readiness_evidence_metrics_status"])
 	assert.Equal(t, 1, quest.CurrentCount)
+
+	metrics, ok := quest.Checkpoint["swing_trading_readiness_evidence_metrics"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 1, metrics["closed_trades"])
+	assert.Equal(t, 0, metrics["winning_trades"])
+	assert.Equal(t, 1, metrics["losing_trades"])
+	assert.Equal(t, 1, metrics["open_positions"])
+	assert.Equal(t, "-1.10", metrics["net_pnl"])
+	assert.Equal(t, "-1.10", metrics["avg_net_pnl"])
+	assert.Equal(t, "0.00", metrics["max_drawdown_pct"])
+	assert.Equal(t, false, metrics["drawdown_verified"])
+	assert.Equal(t, true, metrics["diagnostic_only"])
 
 	blockers, ok := quest.Checkpoint["swing_trading_readiness_blockers"].([]string)
 	require.True(t, ok)

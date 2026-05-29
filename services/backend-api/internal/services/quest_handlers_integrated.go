@@ -487,7 +487,7 @@ func nonPaperManagedPositions(positions []ManagedOpenPosition) []ManagedOpenPosi
 
 // recordQuestResult records quest execution result for monitoring
 func (h *IntegratedQuestHandlers) recordQuestResult(quest *Quest, success bool, pnl decimal.Decimal) {
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 	if h.monitoring != nil && chatID != "" {
 		h.monitoring.RecordQuestExecution(chatID, success, pnl)
 	}
@@ -541,6 +541,12 @@ func (h *IntegratedQuestHandlers) handleDailyTradingReport(ctx context.Context, 
 	exchange := strings.TrimSpace(quest.Metadata["exchange"])
 	if exchange == "" {
 		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	}
+	if exchange == "" && chatID != "" {
+		exchange = h.getUserExchange(chatID)
+	}
+	if exchange == "" {
+		exchange = "bitget"
 	}
 	if exchange == "" && chatID != "" {
 		exchange = h.getUserExchange(chatID)
@@ -891,6 +897,12 @@ func (h *IntegratedQuestHandlers) handleSwingTradingReadinessReview(ctx context.
 	if exchange == "" {
 		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
 	}
+	if exchange == "" && chatID != "" {
+		exchange = h.getUserExchange(chatID)
+	}
+	if exchange == "" {
+		exchange = "bitget"
+	}
 
 	blockers := []string{
 		"swing_trading_strategy_not_implemented",
@@ -903,6 +915,14 @@ func (h *IntegratedQuestHandlers) handleSwingTradingReadinessReview(ctx context.
 	quest.Checkpoint["swing_review_window_end"] = now.Format(time.RFC3339)
 	quest.Checkpoint["swing_review_chat_id"] = chatID
 	quest.Checkpoint["swing_review_exchange"] = exchange
+	writeSwingTradingReadinessEvidenceMetrics(quest, false, LifecyclePerformanceSummary{}, 0)
+
+	if chatID == "" {
+		blockers = append(blockers, "missing_chat_id_metadata")
+		writeSwingTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
 
 	if h.lifecycleStore == nil {
 		blockers = append(blockers, "lifecycle_store_unavailable")
@@ -941,6 +961,7 @@ func (h *IntegratedQuestHandlers) handleSwingTradingReadinessReview(ctx context.
 	quest.Checkpoint["swing_review_win_rate"] = summary.WinRate.String()
 	quest.Checkpoint["swing_review_open_positions"] = len(positions)
 	quest.Checkpoint["swing_review_stale_open_positions"] = staleOpenPositions
+	writeSwingTradingReadinessEvidenceMetrics(quest, true, summary, len(positions))
 
 	if summary.Trades < 2 {
 		blockers = append(blockers, "no_representative_closed_trade_sample")
@@ -976,6 +997,31 @@ func writeSwingTradingReadinessCheckpoint(quest *Quest, blockers []string) {
 	quest.Checkpoint["swing_trading_readiness_note"] = "swing trading has no executable strategy path or readiness evidence; keep live-money use blocked"
 }
 
+func writeSwingTradingReadinessEvidenceMetrics(
+	quest *Quest,
+	lifecycleStorageVerified bool,
+	summary LifecyclePerformanceSummary,
+	openPositions int,
+) {
+	quest.Checkpoint["swing_trading_lifecycle_storage_verified"] = lifecycleStorageVerified
+	quest.Checkpoint["swing_trading_drawdown_verified"] = false
+	quest.Checkpoint["swing_trading_readiness_evidence_metrics_status"] = "diagnostic_placeholder"
+	if lifecycleStorageVerified {
+		quest.Checkpoint["swing_trading_readiness_evidence_metrics_status"] = "diagnostic_lifecycle"
+	}
+	quest.Checkpoint["swing_trading_readiness_evidence_metrics"] = map[string]interface{}{
+		"closed_trades":     summary.Trades,
+		"winning_trades":    summary.Wins,
+		"losing_trades":     summary.Losses,
+		"open_positions":    openPositions,
+		"net_pnl":           summary.RealizedPnL.StringFixed(2),
+		"avg_net_pnl":       summary.AvgNetPnL.StringFixed(2),
+		"max_drawdown_pct":  "0.00",
+		"drawdown_verified": false,
+		"diagnostic_only":   true,
+	}
+}
+
 func (h *IntegratedQuestHandlers) handleVolatilityWatch(ctx context.Context, quest *Quest) error {
 	return h.handlePortfolioHealthWithRisk(ctx, quest)
 }
@@ -1008,7 +1054,7 @@ func (h *IntegratedQuestHandlers) handleMarketScanWithTA(ctx context.Context, qu
 	symbolsWithSignals := 0
 
 	// Get chat ID from quest metadata
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 
 	// Scan major trading pairs
 	majorPairs := []string{
@@ -1051,7 +1097,7 @@ func (h *IntegratedQuestHandlers) handleFundingRateScan(ctx context.Context, que
 	negativeRates := 0
 
 	// Get chat ID from quest metadata
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 
 	// Track funding rate exchanges
 	exchanges := []string{"binance", "bybit", "okx"}
@@ -1185,7 +1231,7 @@ func (h *IntegratedQuestHandlers) handlePortfolioHealthWithRisk(ctx context.Cont
 	startTime := time.Now()
 
 	// Get chat ID from quest metadata
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 
 	// Initialize health metrics
 	healthStatus := "healthy"
@@ -1238,7 +1284,7 @@ func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, q
 		quest.Checkpoint = make(map[string]interface{})
 	}
 
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 
 	h.aiScalpingMu.RLock()
 	aiSvc := h.aiScalpingService
