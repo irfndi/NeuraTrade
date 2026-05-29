@@ -453,7 +453,7 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
         if (entryGatePriority === "risk_lock") {
           lines.push(`• Risk lock source: ${riskLockSource}`);
         }
-        if (entryAttemptBlockReason) {
+        if (entryAttemptBlockReason && entryGatePriority === "none") {
           lines.push(`• Entry attempt block: ${entryAttemptBlockReason}`);
         }
         const resolvedUnblockCondition =

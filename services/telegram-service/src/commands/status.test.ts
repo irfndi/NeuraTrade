@@ -462,9 +462,7 @@ describe("Status command", () => {
     expect(ctx.replies[0]).toContain(
       "Entry blocker: rollout_gate (strategy_not_live (stage: shadow, status: active))",
     );
-    expect(ctx.replies[0]).toContain(
-      "Entry attempt block: rollout_shadow_block",
-    );
+    expect(ctx.replies[0]).not.toContain("Entry attempt block");
     expect(ctx.replies[0]).toContain("Account tier: micro");
     expect(ctx.replies[0]).toContain("Position cap: 1/1 managed open");
     expect(ctx.replies[0]).toContain(
