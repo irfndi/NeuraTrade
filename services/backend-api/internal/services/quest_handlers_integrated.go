@@ -50,6 +50,7 @@ type IntegratedQuestHandlers struct {
 	protectionManager    *DynamicProtectionManager
 	db                   *sql.DB // Database for user settings
 	opModeService        *OperationalModeService
+	riskControls         ScalpingRiskControlStateProvider
 	autonomyStore        *AutonomousRolloutStore
 	autonomyStoreMu      sync.RWMutex
 	autonomyCoordinator  *ScalpingAutonomyCoordinator
@@ -98,6 +99,20 @@ func NewIntegratedQuestHandlers(
 	notif *NotificationService,
 	monitoring *AutonomousMonitorManager,
 ) *IntegratedQuestHandlers {
+	return NewIntegratedQuestHandlersWithRiskControls(ta, ccxt, arb, futuresArb, notif, monitoring, nil)
+}
+
+// NewIntegratedQuestHandlersWithRiskControls creates integrated quest handlers
+// with startup-owned scalping risk controls already wired.
+func NewIntegratedQuestHandlersWithRiskControls(
+	ta *TechnicalAnalysisService,
+	ccxt interface{},
+	arb interface{},
+	futuresArb interface{},
+	notif *NotificationService,
+	monitoring *AutonomousMonitorManager,
+	riskControls ScalpingRiskControlStateProvider,
+) *IntegratedQuestHandlers {
 	return &IntegratedQuestHandlers{
 		technicalAnalysis:   ta,
 		ccxtService:         ccxt,
@@ -105,7 +120,19 @@ func NewIntegratedQuestHandlers(
 		futuresArbService:   futuresArb,
 		notificationService: notif,
 		monitoring:          monitoring,
+		riskControls:        riskControls,
 	}
+}
+
+func (h *IntegratedQuestHandlers) scalpingRiskControlState(ctx context.Context) ScalpingRiskControlState {
+	if h == nil {
+		return ScalpingRiskControlState{}
+	}
+	provider := h.riskControls
+	if provider == nil {
+		return ScalpingRiskControlState{}
+	}
+	return provider.ScalpingRiskControlState(ctx)
 }
 
 // NewIntegratedQuestHandlersWithAutonomyStore creates handlers with deterministic autonomy wiring.
@@ -119,7 +146,24 @@ func NewIntegratedQuestHandlersWithAutonomyStore(
 	db *sql.DB,
 	store *AutonomousRolloutStore,
 ) (*IntegratedQuestHandlers, error) {
-	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring)
+	return NewIntegratedQuestHandlersWithAutonomyStoreAndRiskControls(ta, ccxt, arb, futuresArb, notif, monitoring, db, store, nil)
+}
+
+// NewIntegratedQuestHandlersWithAutonomyStoreAndRiskControls creates
+// integrated quest handlers with deterministic autonomy storage and
+// startup-owned scalping risk controls.
+func NewIntegratedQuestHandlersWithAutonomyStoreAndRiskControls(
+	ta *TechnicalAnalysisService,
+	ccxt interface{},
+	arb interface{},
+	futuresArb interface{},
+	notif *NotificationService,
+	monitoring *AutonomousMonitorManager,
+	db *sql.DB,
+	store *AutonomousRolloutStore,
+	riskControls ScalpingRiskControlStateProvider,
+) (*IntegratedQuestHandlers, error) {
+	handlers := NewIntegratedQuestHandlersWithRiskControls(ta, ccxt, arb, futuresArb, notif, monitoring, riskControls)
 	handlers.SetDB(db)
 	if err := handlers.setAutonomyStoreWithInit(context.Background(), store); err != nil {
 		return nil, fmt.Errorf("failed to set autonomy store in NewIntegratedQuestHandlersWithAutonomyStore: %w", err)
@@ -1956,6 +2000,9 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	} else if envKillSwitch, ok := getEnvBool("NEURATRADE_KILL_SWITCH"); ok {
 		killSwitchEngaged = envKillSwitch
 	}
+	riskControls := h.scalpingRiskControlState(ctx)
+	safeMode = safeMode || riskControls.SafeModeEnabled
+	killSwitchEngaged = killSwitchEngaged || riskControls.KillSwitchEngaged
 	strategyID := ScalpingStrategyID(chatID)
 	cycleCtx := WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
 		ChatID:            chatID,

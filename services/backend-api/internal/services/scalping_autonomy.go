@@ -30,6 +30,19 @@ type ScalpingAutonomyScope struct {
 	ConnectionChecked bool
 }
 
+// ScalpingRiskControlState reflects operator risk controls that must gate
+// autonomous scalping before any real order can be submitted.
+type ScalpingRiskControlState struct {
+	SafeModeEnabled   bool
+	KillSwitchEngaged bool
+}
+
+// ScalpingRiskControlStateProvider returns the current operator risk-control
+// state for autonomous scalping gate evaluation.
+type ScalpingRiskControlStateProvider interface {
+	ScalpingRiskControlState(ctx context.Context) ScalpingRiskControlState
+}
+
 type scalpingAutonomyEvalInput struct {
 	SafeModeEnabled   bool
 	KillSwitchEngaged bool

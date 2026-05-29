@@ -62,3 +62,40 @@ func (a *riskAdapter) EngageKillSwitch(ctx context.Context, reason string) error
 func (a *riskAdapter) DisengageKillSwitch(ctx context.Context) error {
 	return a.killSwitch.Disengage(ctx)
 }
+
+type riskStateAdapter struct {
+	killSwitch *risk.KillSwitchImpl
+	safeMode   *risk.SafeModeImpl
+}
+
+type staticRiskStateProvider struct {
+	state services.ScalpingRiskControlState
+}
+
+// NewScalpingRiskControlStateProvider exposes shared app risk controls to the
+// scalping live gate.
+func NewScalpingRiskControlStateProvider(killSwitch *risk.KillSwitchImpl, safeMode *risk.SafeModeImpl) services.ScalpingRiskControlStateProvider {
+	if killSwitch == nil || safeMode == nil {
+		return staticRiskStateProvider{state: services.ScalpingRiskControlState{
+			SafeModeEnabled:   true,
+			KillSwitchEngaged: true,
+		}}
+	}
+	return &riskStateAdapter{
+		killSwitch: killSwitch,
+		safeMode:   safeMode,
+	}
+}
+
+func (a staticRiskStateProvider) ScalpingRiskControlState(ctx context.Context) services.ScalpingRiskControlState {
+	_ = ctx
+	return a.state
+}
+
+func (a *riskStateAdapter) ScalpingRiskControlState(ctx context.Context) services.ScalpingRiskControlState {
+	_ = ctx
+	return services.ScalpingRiskControlState{
+		SafeModeEnabled:   a.safeMode.IsEnabled(),
+		KillSwitchEngaged: a.killSwitch.IsEngaged(),
+	}
+}
