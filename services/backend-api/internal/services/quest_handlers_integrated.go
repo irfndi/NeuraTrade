@@ -487,7 +487,7 @@ func nonPaperManagedPositions(positions []ManagedOpenPosition) []ManagedOpenPosi
 
 // recordQuestResult records quest execution result for monitoring
 func (h *IntegratedQuestHandlers) recordQuestResult(quest *Quest, success bool, pnl decimal.Decimal) {
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 	if h.monitoring != nil && chatID != "" {
 		h.monitoring.RecordQuestExecution(chatID, success, pnl)
 	}
@@ -1054,7 +1054,7 @@ func (h *IntegratedQuestHandlers) handleMarketScanWithTA(ctx context.Context, qu
 	symbolsWithSignals := 0
 
 	// Get chat ID from quest metadata
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 
 	// Scan major trading pairs
 	majorPairs := []string{
@@ -1097,7 +1097,7 @@ func (h *IntegratedQuestHandlers) handleFundingRateScan(ctx context.Context, que
 	negativeRates := 0
 
 	// Get chat ID from quest metadata
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 
 	// Track funding rate exchanges
 	exchanges := []string{"binance", "bybit", "okx"}
@@ -1231,7 +1231,7 @@ func (h *IntegratedQuestHandlers) handlePortfolioHealthWithRisk(ctx context.Cont
 	startTime := time.Now()
 
 	// Get chat ID from quest metadata
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 
 	// Initialize health metrics
 	healthStatus := "healthy"
@@ -1284,7 +1284,7 @@ func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, q
 		quest.Checkpoint = make(map[string]interface{})
 	}
 
-	chatID := quest.Metadata["chat_id"]
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
 
 	h.aiScalpingMu.RLock()
 	aiSvc := h.aiScalpingService
