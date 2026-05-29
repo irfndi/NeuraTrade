@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -105,6 +106,7 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 		}
 
 		strategies := normalizeReadinessManifestStrategies(manifest.Strategies)
+		manifestDir := filepath.Dir(path)
 		var blockers []string
 		for _, strategy := range required {
 			status, ok := strategies[strategy]
@@ -120,6 +122,7 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 			case strings.TrimSpace(status.Evidence) == "":
 				blockers = append(blockers, fmt.Sprintf("%s=missing_evidence", strategy))
 			default:
+				blockers = append(blockers, evidenceArtifactBlockers(strategy, status.Evidence, manifestDir)...)
 				blockers = append(blockers, strategyReadinessEvidenceBlockers(strategy, status)...)
 			}
 		}
@@ -129,6 +132,26 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 
 		return nil
 	}
+}
+
+func evidenceArtifactBlockers(strategy string, evidence string, manifestDir string) []string {
+	evidence = strings.TrimSpace(evidence)
+	evidencePath := evidence
+	if !filepath.IsAbs(evidencePath) {
+		evidencePath = filepath.Join(manifestDir, evidencePath)
+	}
+
+	info, err := os.Stat(evidencePath)
+	if err != nil {
+		return []string{fmt.Sprintf("%s=evidence_unreadable_%q", strategy, evidence)}
+	}
+	if info.IsDir() {
+		return []string{fmt.Sprintf("%s=evidence_not_file_%q", strategy, evidence)}
+	}
+	if info.Size() == 0 {
+		return []string{fmt.Sprintf("%s=evidence_empty_%q", strategy, evidence)}
+	}
+	return nil
 }
 
 func normalizeReadinessStrategies(strategies []string) []string {
