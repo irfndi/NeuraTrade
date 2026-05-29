@@ -36,6 +36,7 @@ type BitgetOrderExecutor struct {
 	httpClient          *http.Client
 	leverageMu          sync.Mutex
 	leverageCacheMu     sync.Mutex
+	leverageMetricsMu   sync.Mutex
 	leverageCache       map[bitgetLeverageCacheKey]bitgetLeverageCacheEntry
 	leverageMetrics     bitgetLeverageSyncMetrics
 	leverageCacheTTL    time.Duration
@@ -771,8 +772,8 @@ func (e *BitgetOrderExecutor) recordLeverageSyncMetrics(symbol string, status st
 		lastError = err.Error()
 	}
 	func() {
-		e.leverageCacheMu.Lock()
-		defer e.leverageCacheMu.Unlock()
+		e.leverageMetricsMu.Lock()
+		defer e.leverageMetricsMu.Unlock()
 		e.leverageMetrics.TotalCalls++
 		if cacheHit {
 			e.leverageMetrics.CacheHits++
@@ -799,32 +800,53 @@ func (e *BitgetOrderExecutor) recordLeverageSyncMetrics(symbol string, status st
 		symbol, duration, status, apiCalls, setCalls, cacheHit)
 }
 
+// LeverageSyncDiagnosticsResult is a typed struct for Bitget leverage-sync diagnostics.
+type LeverageSyncDiagnosticsResult struct {
+	TotalCalls      int64  `json:"total_calls"`
+	CacheHits       int64  `json:"cache_hits"`
+	CacheMisses     int64  `json:"cache_misses"`
+	TotalAPICalls   int64  `json:"total_api_calls"`
+	TotalSetCalls   int64  `json:"total_set_calls"`
+	CacheSize       int    `json:"cache_size"`
+	LastSymbol      string `json:"last_symbol"`
+	LastStatus      string `json:"last_status"`
+	LastError       string `json:"last_error"`
+	LastCacheHit    bool   `json:"last_cache_hit"`
+	LastAPICalls    int    `json:"last_api_calls"`
+	LastSetCalls    int    `json:"last_set_calls"`
+	LastDurationMs  int64  `json:"last_duration_ms"`
+	LastCompletedAt string `json:"last_completed_at"`
+}
+
 // LeverageSyncDiagnostics reports recent Bitget futures leverage-sync cache and API-call metrics.
-func (e *BitgetOrderExecutor) LeverageSyncDiagnostics() map[string]interface{} {
+func (e *BitgetOrderExecutor) LeverageSyncDiagnostics() *LeverageSyncDiagnosticsResult {
 	if e == nil {
-		return map[string]interface{}{}
+		return &LeverageSyncDiagnosticsResult{}
 	}
+	e.leverageMetricsMu.Lock()
+	defer e.leverageMetricsMu.Unlock()
 	e.leverageCacheMu.Lock()
-	defer e.leverageCacheMu.Unlock()
+	cacheSize := len(e.leverageCache)
+	e.leverageCacheMu.Unlock()
 	lastCompletedAt := ""
 	if !e.leverageMetrics.LastCompletedAt.IsZero() {
 		lastCompletedAt = e.leverageMetrics.LastCompletedAt.Format(time.RFC3339)
 	}
-	return map[string]interface{}{
-		"total_calls":       e.leverageMetrics.TotalCalls,
-		"cache_hits":        e.leverageMetrics.CacheHits,
-		"cache_misses":      e.leverageMetrics.CacheMisses,
-		"total_api_calls":   e.leverageMetrics.TotalAPICalls,
-		"total_set_calls":   e.leverageMetrics.TotalSetCalls,
-		"cache_size":        len(e.leverageCache),
-		"last_symbol":       e.leverageMetrics.LastSymbol,
-		"last_status":       e.leverageMetrics.LastStatus,
-		"last_error":        e.leverageMetrics.LastError,
-		"last_cache_hit":    e.leverageMetrics.LastCacheHit,
-		"last_api_calls":    e.leverageMetrics.LastAPICalls,
-		"last_set_calls":    e.leverageMetrics.LastSetCalls,
-		"last_duration_ms":  e.leverageMetrics.LastDuration.Milliseconds(),
-		"last_completed_at": lastCompletedAt,
+	return &LeverageSyncDiagnosticsResult{
+		TotalCalls:      e.leverageMetrics.TotalCalls,
+		CacheHits:       e.leverageMetrics.CacheHits,
+		CacheMisses:     e.leverageMetrics.CacheMisses,
+		TotalAPICalls:   e.leverageMetrics.TotalAPICalls,
+		TotalSetCalls:   e.leverageMetrics.TotalSetCalls,
+		CacheSize:       cacheSize,
+		LastSymbol:      e.leverageMetrics.LastSymbol,
+		LastStatus:      e.leverageMetrics.LastStatus,
+		LastError:       e.leverageMetrics.LastError,
+		LastCacheHit:    e.leverageMetrics.LastCacheHit,
+		LastAPICalls:    e.leverageMetrics.LastAPICalls,
+		LastSetCalls:    e.leverageMetrics.LastSetCalls,
+		LastDurationMs:  e.leverageMetrics.LastDuration.Milliseconds(),
+		LastCompletedAt: lastCompletedAt,
 	}
 }
 
