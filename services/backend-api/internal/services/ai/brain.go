@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -345,10 +346,32 @@ func (brain *AITradingBrain) recordDecisionAsync(record *DecisionRecord) {
 
 	go func() {
 		defer brain.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				brain.logger.Printf("Learning record goroutine panic recovered for decision %s: %v", record.ID, r)
+			}
+		}()
+
+		// Re-check lifecycle context after goroutine launch to avoid TOCTOU races
+		// where Close() cancels the context between Add(1) and goroutine execution.
+		select {
+		case <-parentCtx.Done():
+			brain.logger.Printf("Skipping learning record for decision %s: lifecycle context already done", record.ID)
+			return
+		default:
+		}
+
 		ctx, cancel := context.WithTimeout(parentCtx, defaultLearningRecordTimeout)
 		defer cancel()
 		if err := brain.learningSystem.RecordDecision(ctx, record); err != nil {
-			brain.logger.Printf("Failed to record decision for learning: %v", err)
+			switch {
+			case errors.Is(err, context.DeadlineExceeded):
+				brain.logger.Printf("Learning record timed out for decision %s: %v", record.ID, err)
+			case errors.Is(err, context.Canceled):
+				brain.logger.Printf("Learning record cancelled for decision %s: %v", record.ID, err)
+			default:
+				brain.logger.Printf("Failed to record decision for learning: %v", err)
+			}
 		}
 	}()
 }
