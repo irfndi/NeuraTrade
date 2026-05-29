@@ -647,6 +647,57 @@ func TestScalpingBacktestEngine_BuildDecisionBlocksWeakBlowoffSellPressure(t *te
 	require.Nil(t, decision)
 }
 
+func TestScalpingBacktestEngine_BuildDecisionAllowsValidatedReversalBuy(t *testing.T) {
+	now := time.Date(2026, 5, 21, 2, 25, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "REV/USDT",
+		Price:              100,
+		High24h:            115,
+		Low24h:             95,
+		Volume24h:          5_000_000,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.05,
+		RangePosition24h:   18,
+		PriceChange24h:     -0.10,
+		RecentPriceChange:  -0.20,
+		RecentChangeKnown:  true,
+	})
+
+	require.NotNil(t, decision)
+	require.Equal(t, "buy", decision.Action)
+	require.Equal(t, "REV/USDT", decision.Symbol)
+}
+
+func TestScalpingBacktestEngine_BuildDecisionAllowsValidatedSellWindow(t *testing.T) {
+	now := time.Date(2026, 5, 21, 2, 25, 30, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+	engine.config.MaxBidAskSpreadPct = 0.08
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "SW/USDT",
+		Price:              100,
+		High24h:            115,
+		Low24h:             95,
+		Volume24h:          5_000_000,
+		BidAskSpread:       0.09,
+		OrderBookImbalance: -0.45,
+		RangePosition24h:   55,
+		PriceChange24h:     0.30,
+		RecentPriceChange:  -0.10,
+		RecentChangeKnown:  true,
+	})
+
+	require.NotNil(t, decision)
+	require.Equal(t, "sell", decision.Action)
+	require.Equal(t, "SW/USDT", decision.Symbol)
+}
+
 func TestScalpingBacktestEngine_RunSignalsAllowsBufferedMidRangeBuy(t *testing.T) {
 	now := time.Date(2026, 5, 12, 2, 48, 0, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
