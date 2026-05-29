@@ -570,8 +570,14 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	normalizedSymbol := normalizeSymbolForComparison(symbol)
 	normalizedAction := normalizeLifecycleSide(action)
 
+	selectCols := "%s AS net_realized_pnl"
+	scanSymbol := false
+	if normalizedSymbol != "" {
+		selectCols = "symbol, " + selectCols
+		scanSymbol = true
+	}
 	scopedExpectancyBaseQuery := fmt.Sprintf(`
-		SELECT symbol, %s AS net_realized_pnl
+		SELECT `+selectCols+`
 		FROM realized_pnl_journal
 		WHERE closed_at >= ? AND closed_at <= ?
 			AND %s
@@ -594,9 +600,10 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 		normalizedAction,
 	}
 	if normalizedSymbol != "" {
-		escapedSymbol := escapeSQLLikePattern(normalizedSymbol)
-		query += "\n\t\t\tAND (UPPER(REPLACE(TRIM(symbol), '-', '/')) = ? OR UPPER(REPLACE(TRIM(symbol), '-', '/')) LIKE ? ESCAPE '\\')"
-		args = append(args, normalizedSymbol, escapedSymbol+":%")
+		escapedSym := escapeSQLLikePattern(normalizedSymbol)
+		dashSym := escapeSQLLikePattern(strings.ReplaceAll(normalizedSymbol, "/", "-"))
+		query += "\n\t\t\tAND (UPPER(symbol) = ? OR UPPER(symbol) LIKE ? ESCAPE '\\' OR UPPER(symbol) = ? OR UPPER(symbol) LIKE ? ESCAPE '\\')"
+		args = append(args, escapedSym, escapedSym+":%", dashSym, dashSym+":%")
 	}
 	query += scopedExpectancyOrderClause
 	if limit > 0 {
@@ -620,11 +627,17 @@ func (tm *TradeMemory) GetScopedExpectancyStats(
 	for rows.Next() {
 		var rowSymbol string
 		var pnl decimal.Decimal
-		if err := rows.Scan(&rowSymbol, &pnl); err != nil {
-			return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
-		}
-		if normalizedSymbol != "" && normalizeSymbolForComparison(rowSymbol) != normalizedSymbol {
-			continue
+		if scanSymbol {
+			if err := rows.Scan(&rowSymbol, &pnl); err != nil {
+				return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
+			}
+			if normalizeSymbolForComparison(rowSymbol) != normalizedSymbol {
+				continue
+			}
+		} else {
+			if err := rows.Scan(&pnl); err != nil {
+				return nil, false, fmt.Errorf("scan scoped expectancy stats: %w", err)
+			}
 		}
 		matchedRows++
 		switch {
