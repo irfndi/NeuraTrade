@@ -604,7 +604,7 @@ func (h *IntegratedQuestHandlers) handlePaperTradingReadinessReview(ctx context.
 	quest.Checkpoint["paper_trading_review_open_positions"] = len(positions)
 
 	if summary.Trades == 0 {
-		blockers = append(blockers, "no_persisted_closed_paper_trades")
+		blockers = append(blockers, "paper_trading=insufficient_closed_trades")
 	}
 	if len(positions) > 0 {
 		blockers = append(blockers, "open_paper_positions_need_review")

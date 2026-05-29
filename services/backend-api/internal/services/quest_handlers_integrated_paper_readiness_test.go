@@ -95,5 +95,5 @@ func TestExecuteRoutinePaperTradingReviewRecordsLifecycleDiagnostics(t *testing.
 	require.True(t, ok)
 	assert.Contains(t, blockers, "missing_paper_trading_evidence_artifact")
 	assert.NotContains(t, blockers, "lifecycle_store_unavailable")
-	assert.NotContains(t, blockers, "no_persisted_closed_paper_trades")
+	assert.NotContains(t, blockers, "paper_trading=insufficient_closed_trades")
 }
