@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,16 +35,26 @@ type BitgetOrderExecutor struct {
 	walletBalance       float64
 	httpClient          *http.Client
 	leverageMu          sync.Mutex
+	leverageCacheMu     sync.Mutex
+	leverageCache       map[bitgetLeverageCacheKey]bitgetLeverageCacheEntry
+	leverageMetrics     bitgetLeverageSyncMetrics
+	leverageCacheTTL    time.Duration
 }
+
+const (
+	defaultBitgetLeverageCacheTTL = 2 * time.Minute
+	bitgetLeverageCacheTTLEnv     = "NEURATRADE_BITGET_LEVERAGE_CACHE_TTL"
+)
 
 // NewBitgetOrderExecutor creates a new Bitget order executor
 func NewBitgetOrderExecutor(apiKey, apiSecret, passphrase string) *BitgetOrderExecutor {
 	return &BitgetOrderExecutor{
-		apiKey:     apiKey,
-		apiSecret:  apiSecret,
-		passphrase: passphrase,
-		baseURL:    "https://api.bitget.com",
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		apiKey:           apiKey,
+		apiSecret:        apiSecret,
+		passphrase:       passphrase,
+		baseURL:          "https://api.bitget.com",
+		httpClient:       &http.Client{Timeout: 30 * time.Second},
+		leverageCacheTTL: loadBitgetLeverageCacheTTL(),
 	}
 }
 
@@ -500,6 +511,35 @@ func (a bitgetFuturesAccount) effectiveLeverageForMarginMode(holdSide string, ma
 
 type bitgetLeverageField string
 
+type bitgetLeverageCacheKey struct {
+	Symbol          string
+	HoldSide        string
+	MarginMode      string
+	DesiredLeverage int
+}
+
+type bitgetLeverageCacheEntry struct {
+	EffectiveLeverage int
+	Status            string
+	ExpiresAt         time.Time
+}
+
+type bitgetLeverageSyncMetrics struct {
+	TotalCalls      int64
+	CacheHits       int64
+	CacheMisses     int64
+	TotalAPICalls   int64
+	TotalSetCalls   int64
+	LastSymbol      string
+	LastStatus      string
+	LastError       string
+	LastCacheHit    bool
+	LastAPICalls    int
+	LastSetCalls    int
+	LastDuration    time.Duration
+	LastCompletedAt time.Time
+}
+
 func (f *bitgetLeverageField) UnmarshalJSON(data []byte) error {
 	if f == nil {
 		return nil
@@ -549,29 +589,53 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 	desiredLeverage int,
 	holdSide string,
 	marginMode string,
-) (int, string, error) {
+) (effectiveLeverage int, syncStatus string, err error) {
+	if e == nil {
+		return 0, "", fmt.Errorf("executor is nil")
+	}
+	started := time.Now()
+	apiCalls := 0
+	setCalls := 0
+	cacheHit := false
+	defer func() {
+		e.recordLeverageSyncMetrics(symbol, syncStatus, cacheHit, apiCalls, setCalls, time.Since(started), err)
+	}()
+
 	if desiredLeverage <= 0 {
 		return 0, "", fmt.Errorf("desired leverage must be positive")
 	}
 
+	cacheKey := normalizeBitgetLeverageCacheKey(symbol, desiredLeverage, holdSide, marginMode)
+	if cached, ok := e.cachedFuturesLeverage(cacheKey, time.Now()); ok {
+		cacheHit = true
+		fmt.Printf("[BITGET-ORDER] Futures leverage cache hit for %s: %dx (%s/%s)\n",
+			symbol, cached.EffectiveLeverage, cacheKey.MarginMode, cacheKey.HoldSide)
+		return cached.EffectiveLeverage, "cache hit: " + cached.Status, nil
+	}
+
+	apiCalls++
 	account, err := e.getFuturesAccount(ctx, symbol)
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to get futures account for %s: %w", symbol, err)
+		return 0, "", fmt.Errorf("failed to get futures account for %q: %w", symbol, err)
 	}
 	current := account.effectiveLeverageForMarginMode(holdSide, marginMode)
 	if account.MarginMode == strings.ToLower(strings.TrimSpace(marginMode)) && current == desiredLeverage {
 		fmt.Printf("[BITGET-ORDER] Futures leverage already synced for %s: %dx (%s/%s)\n",
 			symbol, current, account.MarginMode, account.PosMode)
+		e.cacheFuturesLeverage(cacheKey, current, "exchange confirmed", time.Now())
 		return current, "exchange confirmed", nil
 	}
 
+	setCalls++
+	apiCalls++
 	if err := e.setFuturesLeverage(ctx, symbol, desiredLeverage, holdSide, marginMode); err != nil {
-		return 0, "", fmt.Errorf("failed to set futures leverage for %s to %dx: %w", symbol, desiredLeverage, err)
+		return 0, "", fmt.Errorf("failed to set futures leverage for %q to %dx: %w", symbol, desiredLeverage, err)
 	}
 
+	apiCalls++
 	verified, err := e.getFuturesAccount(ctx, symbol)
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to verify futures leverage for %s: %w", symbol, err)
+		return 0, "", fmt.Errorf("failed to verify futures leverage for %q: %w", symbol, err)
 	}
 	effective := verified.effectiveLeverageForMarginMode(holdSide, marginMode)
 	expectedMarginMode := strings.ToLower(strings.TrimSpace(marginMode))
@@ -617,7 +681,151 @@ func (e *BitgetOrderExecutor) ensureFuturesLeverage(
 
 	fmt.Printf("[BITGET-ORDER] Futures leverage synced for %s: %dx (%s/%s)\n",
 		symbol, effective, verified.MarginMode, verified.PosMode)
+	e.cacheFuturesLeverage(cacheKey, effective, "exchange synced", time.Now())
 	return effective, "exchange synced", nil
+}
+
+func normalizeBitgetLeverageCacheKey(symbol string, desiredLeverage int, holdSide string, marginMode string) bitgetLeverageCacheKey {
+	return bitgetLeverageCacheKey{
+		Symbol:          strings.ToUpper(strings.TrimSpace(symbol)),
+		HoldSide:        strings.ToLower(strings.TrimSpace(holdSide)),
+		MarginMode:      strings.ToLower(strings.TrimSpace(marginMode)),
+		DesiredLeverage: desiredLeverage,
+	}
+}
+
+func loadBitgetLeverageCacheTTL() time.Duration {
+	value := strings.TrimSpace(os.Getenv(bitgetLeverageCacheTTLEnv))
+	if value == "" {
+		return defaultBitgetLeverageCacheTTL
+	}
+	if ttl, err := time.ParseDuration(value); err == nil && ttl > 0 {
+		return ttl
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return defaultBitgetLeverageCacheTTL
+}
+
+func (e *BitgetOrderExecutor) futuresLeverageCacheTTL() time.Duration {
+	if e != nil && e.leverageCacheTTL > 0 {
+		return e.leverageCacheTTL
+	}
+	return defaultBitgetLeverageCacheTTL
+}
+
+func (e *BitgetOrderExecutor) cachedFuturesLeverage(key bitgetLeverageCacheKey, now time.Time) (bitgetLeverageCacheEntry, bool) {
+	if e == nil {
+		return bitgetLeverageCacheEntry{}, false
+	}
+	e.leverageCacheMu.Lock()
+	defer e.leverageCacheMu.Unlock()
+	if e.leverageCache == nil {
+		return bitgetLeverageCacheEntry{}, false
+	}
+	entry, ok := e.leverageCache[key]
+	if !ok {
+		return bitgetLeverageCacheEntry{}, false
+	}
+	if !entry.ExpiresAt.After(now) {
+		delete(e.leverageCache, key)
+		return bitgetLeverageCacheEntry{}, false
+	}
+	return entry, true
+}
+
+func (e *BitgetOrderExecutor) cacheFuturesLeverage(key bitgetLeverageCacheKey, effectiveLeverage int, status string, now time.Time) {
+	if e == nil || effectiveLeverage <= 0 {
+		return
+	}
+	e.leverageCacheMu.Lock()
+	defer e.leverageCacheMu.Unlock()
+	if e.leverageCache == nil {
+		e.leverageCache = make(map[bitgetLeverageCacheKey]bitgetLeverageCacheEntry)
+	}
+	for cachedKey := range e.leverageCache {
+		if cachedKey.Symbol == key.Symbol &&
+			cachedKey.HoldSide == key.HoldSide &&
+			cachedKey.MarginMode == key.MarginMode &&
+			cachedKey.DesiredLeverage != key.DesiredLeverage {
+			delete(e.leverageCache, cachedKey)
+		}
+	}
+	e.leverageCache[key] = bitgetLeverageCacheEntry{
+		EffectiveLeverage: effectiveLeverage,
+		Status:            status,
+		ExpiresAt:         now.Add(e.futuresLeverageCacheTTL()),
+	}
+}
+
+func (e *BitgetOrderExecutor) recordLeverageSyncMetrics(symbol string, status string, cacheHit bool, apiCalls int, setCalls int, duration time.Duration, err error) {
+	if e == nil {
+		return
+	}
+	if err != nil && strings.TrimSpace(status) == "" {
+		status = "failed"
+	}
+	lastError := ""
+	if err != nil {
+		lastError = err.Error()
+	}
+	func() {
+		e.leverageCacheMu.Lock()
+		defer e.leverageCacheMu.Unlock()
+		e.leverageMetrics.TotalCalls++
+		if cacheHit {
+			e.leverageMetrics.CacheHits++
+		} else {
+			e.leverageMetrics.CacheMisses++
+		}
+		e.leverageMetrics.TotalAPICalls += int64(apiCalls)
+		e.leverageMetrics.TotalSetCalls += int64(setCalls)
+		e.leverageMetrics.LastSymbol = strings.ToUpper(strings.TrimSpace(symbol))
+		e.leverageMetrics.LastStatus = status
+		e.leverageMetrics.LastError = lastError
+		e.leverageMetrics.LastCacheHit = cacheHit
+		e.leverageMetrics.LastAPICalls = apiCalls
+		e.leverageMetrics.LastSetCalls = setCalls
+		e.leverageMetrics.LastDuration = duration
+		e.leverageMetrics.LastCompletedAt = time.Now().UTC()
+	}()
+	if err != nil {
+		fmt.Printf("[BITGET-ORDER] Futures leverage sync failed for %s after %s (api_calls=%d set_calls=%d cache_hit=%t): %v\n",
+			symbol, duration, apiCalls, setCalls, cacheHit, err)
+		return
+	}
+	fmt.Printf("[BITGET-ORDER] Futures leverage sync completed for %s in %s (status=%s api_calls=%d set_calls=%d cache_hit=%t)\n",
+		symbol, duration, status, apiCalls, setCalls, cacheHit)
+}
+
+// LeverageSyncDiagnostics reports recent Bitget futures leverage-sync cache and API-call metrics.
+func (e *BitgetOrderExecutor) LeverageSyncDiagnostics() map[string]interface{} {
+	if e == nil {
+		return map[string]interface{}{}
+	}
+	e.leverageCacheMu.Lock()
+	defer e.leverageCacheMu.Unlock()
+	lastCompletedAt := ""
+	if !e.leverageMetrics.LastCompletedAt.IsZero() {
+		lastCompletedAt = e.leverageMetrics.LastCompletedAt.Format(time.RFC3339)
+	}
+	return map[string]interface{}{
+		"total_calls":       e.leverageMetrics.TotalCalls,
+		"cache_hits":        e.leverageMetrics.CacheHits,
+		"cache_misses":      e.leverageMetrics.CacheMisses,
+		"total_api_calls":   e.leverageMetrics.TotalAPICalls,
+		"total_set_calls":   e.leverageMetrics.TotalSetCalls,
+		"cache_size":        len(e.leverageCache),
+		"last_symbol":       e.leverageMetrics.LastSymbol,
+		"last_status":       e.leverageMetrics.LastStatus,
+		"last_error":        e.leverageMetrics.LastError,
+		"last_cache_hit":    e.leverageMetrics.LastCacheHit,
+		"last_api_calls":    e.leverageMetrics.LastAPICalls,
+		"last_set_calls":    e.leverageMetrics.LastSetCalls,
+		"last_duration_ms":  e.leverageMetrics.LastDuration.Milliseconds(),
+		"last_completed_at": lastCompletedAt,
+	}
 }
 
 func (e *BitgetOrderExecutor) getFuturesAccount(ctx context.Context, symbol string) (*bitgetFuturesAccount, error) {

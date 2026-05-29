@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -101,6 +102,22 @@ func TestBitgetOrderExecutor_MinNotionalUsesDynamicEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_BITGET_FUTURES_MIN_NOTIONAL_USDT", "7.25")
 
 	assert.True(t, bitgetFuturesMinUSDTNotional().Equal(decimal.NewFromFloat(7.25)))
+}
+
+func TestBitgetOrderExecutor_LeverageCacheTTLUsesDynamicEnv(t *testing.T) {
+	t.Setenv(bitgetLeverageCacheTTLEnv, "45s")
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+
+	assert.Equal(t, 45*time.Second, executor.futuresLeverageCacheTTL())
+}
+
+func TestBitgetOrderExecutor_LeverageCacheTTLInvalidEnvUsesDefault(t *testing.T) {
+	t.Setenv(bitgetLeverageCacheTTLEnv, "-1s")
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+
+	assert.Equal(t, defaultBitgetLeverageCacheTTL, executor.futuresLeverageCacheTTL())
 }
 
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksUnprotectedSpotFallback(t *testing.T) {
@@ -250,6 +267,186 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_NoOpWhenAlreadySynced(t *test
 	assert.Equal(t, 1, accountCalls)
 }
 
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_UsesRecentVerifiedCache(t *testing.T) {
+	accountCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
+				"marginMode":"isolated",
+				"posMode":"one_way_mode",
+				"isolatedLongLever":"5"
+			}}`))
+		case "/api/v2/mix/account/set-leverage":
+			t.Fatalf("unexpected leverage mutation request")
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "exchange confirmed", status)
+
+	leverage, status, err = executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "cache hit: exchange confirmed", status)
+	assert.Equal(t, 1, accountCalls)
+
+	diagnostics := executor.LeverageSyncDiagnostics()
+	assert.Equal(t, int64(2), diagnostics["total_calls"])
+	assert.Equal(t, int64(1), diagnostics["cache_hits"])
+	assert.Equal(t, int64(1), diagnostics["cache_misses"])
+	assert.Equal(t, int64(1), diagnostics["total_api_calls"])
+	assert.Equal(t, 0, diagnostics["last_api_calls"])
+	assert.Equal(t, true, diagnostics["last_cache_hit"])
+	assert.Equal(t, 1, diagnostics["cache_size"])
+}
+
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_ExpiredCacheRevalidates(t *testing.T) {
+	accountCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
+				"marginMode":"isolated",
+				"posMode":"one_way_mode",
+				"isolatedLongLever":"5"
+			}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+
+	key := normalizeBitgetLeverageCacheKey("BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	executor.leverageCacheMu.Lock()
+	entry := executor.leverageCache[key]
+	entry.ExpiresAt = time.Now().Add(-time.Second)
+	executor.leverageCache[key] = entry
+	executor.leverageCacheMu.Unlock()
+
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "exchange confirmed", status)
+	assert.Equal(t, 2, accountCalls)
+}
+
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_InvalidatesSameTupleWhenDesiredLeverageChanges(t *testing.T) {
+	accountCalls := 0
+	setCalls := 0
+	currentLeverage := "5"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{
+				"marginMode":"isolated",
+				"posMode":"one_way_mode",
+				"isolatedLongLever":"` + currentLeverage + `"
+			}}`))
+		case "/api/v2/mix/account/set-leverage":
+			setCalls++
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			var setBody map[string]interface{}
+			require.NoError(t, json.Unmarshal(body, &setBody))
+			currentLeverage = setBody["leverage"].(string)
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "exchange confirmed", status)
+
+	leverage, status, err = executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 3, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+	assert.Equal(t, 3, leverage)
+	assert.Equal(t, "exchange synced", status)
+	assert.Equal(t, 3, accountCalls)
+	assert.Equal(t, 1, setCalls)
+
+	key5x := normalizeBitgetLeverageCacheKey("BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	key3x := normalizeBitgetLeverageCacheKey("BTCUSDT", 3, "long", bitgetFuturesOrderMarginMode)
+	executor.leverageCacheMu.Lock()
+	_, has5x := executor.leverageCache[key5x]
+	_, has3x := executor.leverageCache[key3x]
+	executor.leverageCacheMu.Unlock()
+	assert.False(t, has5x)
+	assert.True(t, has3x)
+
+	leverage, status, err = executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.NoError(t, err)
+	assert.Equal(t, 5, leverage)
+	assert.Equal(t, "exchange synced", status)
+	assert.Equal(t, 5, accountCalls)
+	assert.Equal(t, 2, setCalls)
+}
+
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_DiagnosticsOnFailure(t *testing.T) {
+	accountCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/account/account":
+			accountCalls++
+			_, _ = w.Write([]byte(`{"code":"30001","msg":"rate limit","data":{}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	executor.baseURL = server.URL
+
+	leverage, status, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.Error(t, err)
+	assert.Equal(t, 0, leverage)
+	assert.Empty(t, status)
+	assert.Contains(t, err.Error(), "failed to get futures account")
+	assert.Equal(t, 1, accountCalls)
+
+	diagnostics := executor.LeverageSyncDiagnostics()
+	assert.Equal(t, int64(1), diagnostics["total_calls"])
+	assert.Equal(t, int64(0), diagnostics["cache_hits"])
+	assert.Equal(t, int64(1), diagnostics["cache_misses"])
+	assert.Equal(t, int64(1), diagnostics["total_api_calls"])
+	assert.Equal(t, int64(0), diagnostics["total_set_calls"])
+	assert.Equal(t, "BTCUSDT", diagnostics["last_symbol"])
+	assert.Equal(t, "failed", diagnostics["last_status"])
+	assert.Contains(t, diagnostics["last_error"], "failed to get futures account")
+	assert.Equal(t, false, diagnostics["last_cache_hit"])
+	assert.Equal(t, 1, diagnostics["last_api_calls"])
+	assert.Equal(t, 0, diagnostics["last_set_calls"])
+}
+
 func TestBitgetOrderExecutor_EnsureFuturesLeverage_SetsAndVerifiesIntendedIsolatedMode(t *testing.T) {
 	accountCalls := 0
 	setCalls := 0
@@ -316,6 +513,14 @@ func TestBitgetOrderExecutor_EnsureFuturesLeverage_RejectsNonPositiveDesiredLeve
 	_, _, err = executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", -5, "long", bitgetFuturesOrderMarginMode)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "desired leverage must be positive")
+}
+
+func TestBitgetOrderExecutor_EnsureFuturesLeverage_RejectsNilExecutor(t *testing.T) {
+	var executor *BitgetOrderExecutor
+
+	_, _, err := executor.ensureFuturesLeverage(context.Background(), "BTCUSDT", 5, "long", bitgetFuturesOrderMarginMode)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "executor is nil")
 }
 
 func TestBitgetOrderExecutor_EnsureFuturesLeverage_WrapsAccountFetchFailures(t *testing.T) {
