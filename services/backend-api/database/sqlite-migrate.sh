@@ -28,6 +28,32 @@ sqlite_column_exists() {
   sqlite3 "$DB_PATH" "SELECT 1 FROM pragma_table_info('$table_name') WHERE name = '$column_name' LIMIT 1;" | grep -q "1"
 }
 
+apply_paper_trades_column_migrations() {
+  sqlite_table_exists "paper_trades" || return 0
+
+  # Defensive migration: add missing columns only if they don't already exist.
+  # On fresh databases created after 012_create_paper_trades_table.sql, all
+  # columns are already present, so this becomes a no-op.
+  local -a cols=("strategy_id" "quest_id" "exchange" "symbol" "side" "size" "fees" "cost_basis" "updated_at")
+  local -a defs=(
+    "TEXT NOT NULL DEFAULT ''"
+    "INTEGER"
+    "TEXT NOT NULL DEFAULT ''"
+    "TEXT NOT NULL DEFAULT ''"
+    "TEXT NOT NULL DEFAULT 'buy'"
+    "DECIMAL(20, 8) NOT NULL DEFAULT 0"
+    "DECIMAL(20, 8) NOT NULL DEFAULT 0"
+    "DECIMAL(20, 8) NOT NULL DEFAULT 0"
+    "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+  )
+
+  for i in "${!cols[@]}"; do
+    if ! sqlite_column_exists "paper_trades" "${cols[$i]}"; then
+      sqlite3 "$DB_PATH" "ALTER TABLE paper_trades ADD COLUMN ${cols[$i]} ${defs[$i]};"
+    fi
+  done
+}
+
 repair_legacy_funding_arbitrage_opportunities() {
   sqlite_table_exists "funding_arbitrage_opportunities" || return 0
   sqlite_column_exists "funding_arbitrage_opportunities" "estimated_profit_percentage" && return 0
@@ -62,6 +88,13 @@ apply_file() {
 
   if [ "$name" = "011_create_funding_arbitrage_opportunities.sql" ]; then
     repair_legacy_funding_arbitrage_opportunities
+  fi
+
+  if [ "$name" = "015_alter_paper_trades_columns.sql" ]; then
+    apply_paper_trades_column_migrations
+    sqlite3 "$DB_PATH" "INSERT INTO schema_migrations(filename) VALUES('$name');"
+    printf "applied %s\n" "$name"
+    return 0
   fi
 
   sqlite3 "$DB_PATH" <"$file"
