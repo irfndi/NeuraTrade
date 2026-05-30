@@ -47,7 +47,7 @@ apply_paper_trades_column_migrations() {
     "DECIMAL(20, 8) NOT NULL DEFAULT 0"
     "DECIMAL(20, 8) NOT NULL DEFAULT 0"
     "DECIMAL(20, 8) NOT NULL DEFAULT 0"
-    "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'"
+    "DATETIME NOT NULL DEFAULT '1970-01-01T00:00:00Z'"
   )
 
   if [ ${#cols[@]} -ne ${#defs[@]} ]; then
