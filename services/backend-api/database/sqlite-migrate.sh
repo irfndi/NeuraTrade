@@ -107,7 +107,7 @@ apply_file() {
   # conditional check (pragma_table_info) so the migration is idempotent
   # on both fresh and legacy databases.
   if [ "$name" = "015_alter_paper_trades_columns.sql" ]; then
-    apply_paper_trades_column_migrations
+    apply_paper_trades_column_migrations || return $?
     sqlite3 "$DB_PATH" "INSERT INTO schema_migrations(filename) VALUES('$name');"
     printf "applied %s\n" "$name"
     return 0
