@@ -136,4 +136,74 @@ describe("Mode command", () => {
     expect(ctx.replies[0]).toContain("Cannot switch to LIVE MODE");
     expect(ctx.replies[0]).toContain("Use /mode confirm");
   });
+
+  test("/mode live blocked by paper proof gate explains readiness", async () => {
+    const bot = new MockBot();
+    const api = {
+      async getTradingMode() {
+        return {
+          mode: "dry" as const,
+          confirmations: 2,
+          required_confirmations: 2,
+        };
+      },
+      async setTradingMode() {
+        throw new ApiClientError(
+          "live mode proof gate blocked: scalping live paper proof not met: closed_trades_below_live_trial_minimum",
+          400,
+          "/mode/live",
+        );
+      },
+      async addTradingModeConfirmation() {
+        return {
+          confirmations: 2,
+          required: 2,
+        };
+      },
+    };
+
+    registerModeCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext("/mode live");
+    await runCommand(bot, "mode", ctx);
+
+    expect(ctx.replies).toHaveLength(1);
+    expect(ctx.replies[0]).toContain("live-readiness proof gate");
+    expect(ctx.replies[0]).toContain("positive net PnL after fees");
+    expect(ctx.replies[0]).toContain("Real-money execution remains blocked");
+  });
+
+  test("/mode live forwards proof gate message from unsuccessful response", async () => {
+    const bot = new MockBot();
+    const api = {
+      async getTradingMode() {
+        return {
+          mode: "dry" as const,
+          confirmations: 2,
+          required_confirmations: 2,
+        };
+      },
+      async setTradingMode() {
+        return {
+          success: false,
+          error:
+            "scalping live paper proof not met: closed_trades_below_live_trial_minimum",
+        };
+      },
+      async addTradingModeConfirmation() {
+        return {
+          confirmations: 2,
+          required: 2,
+        };
+      },
+    };
+
+    registerModeCommand(bot as unknown as Bot, api as unknown as never);
+    const ctx = createContext("/mode live");
+    await runCommand(bot, "mode", ctx);
+
+    expect(ctx.replies).toHaveLength(1);
+    expect(ctx.replies[0]).toContain("live-readiness proof gate");
+    expect(ctx.replies[0]).toContain("Real-money execution remains blocked");
+    expect(ctx.replies[0]).not.toContain("Use /mode confirm");
+  });
 });

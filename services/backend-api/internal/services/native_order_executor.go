@@ -75,7 +75,7 @@ func (e *NativeOrderExecutor) SetWalletBalance(balance float64) {
 // PlaceOrder places an order using the native CCXT service
 func (e *NativeOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
 	// For paper trading / testing, simulate order placement
-	orderID := fmt.Sprintf("paper-order-%s-%s-%s", exchange, symbol, side)
+	orderID := fmt.Sprintf("paper-order-%s-%s-%s-%d", exchange, symbol, side, time.Now().UnixNano())
 
 	fmt.Printf("[NATIVE-ORDER] Placing %s order for %s %s (amount: %s USDT)\n", side, exchange, symbol, amount.String())
 
@@ -84,9 +84,11 @@ func (e *NativeOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, 
 
 // PlaceOrderWithDetails places an order with full trade details and sends rich notification
 func (e *NativeOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
-	orderID := fmt.Sprintf("paper-order-%s-%s-%s", details.Exchange, details.Symbol, details.Side)
+	var orderID string
 	if details.IsPaperTrade {
-		orderID = fmt.Sprintf("paper-%s", orderID)
+		orderID = fmt.Sprintf("paper-order-%s-%s-%s-%d", details.Exchange, details.Symbol, details.Side, time.Now().UnixNano())
+	} else {
+		orderID = fmt.Sprintf("live-order-%s-%s-%s-%d", details.Exchange, details.Symbol, details.Side, time.Now().UnixNano())
 	}
 
 	fmt.Printf("[NATIVE-ORDER] Placing %s order for %s %s (amount: %s USDT)\n",

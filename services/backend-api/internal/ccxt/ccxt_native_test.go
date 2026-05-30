@@ -347,6 +347,23 @@ func TestNativeCCXTService_ParseOKXTicker_PopulatesPercentage(t *testing.T) {
 	assert.InDelta(t, -0.8813129, adapter.GetPriceChange24h(), 0.000001)
 }
 
+func TestNativeCCXTService_ParseOKXMarkets_UsesUSDTSwapInstID(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	symbols, err := service.parseOKXMarkets([]byte(`{
+		"code":"0",
+		"data":[
+			{"instId":"BTC-USD-SWAP","baseCcy":"","quoteCcy":"","ctValCcy":"USD","settleCcy":"BTC","state":"live"},
+			{"instId":"BTC-USDT-SWAP","baseCcy":"","quoteCcy":"","ctValCcy":"USDT","settleCcy":"USDT","state":"live"},
+			{"instId":"ETH-USDT-SWAP","baseCcy":"","quoteCcy":"","ctValCcy":"","settleCcy":"USDT","state":"live"},
+			{"instId":"SOL-USDT-SWAP","baseCcy":"SOL","quoteCcy":"","ctValCcy":"USDT","settleCcy":"USDT","state":"suspend"}
+		]
+	}`))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"BTC/USDT", "ETH/USDT"}, symbols)
+}
+
 func TestNativeCCXTService_FetchOpenOrders_Bitget(t *testing.T) {
 	t.Parallel()
 
@@ -521,7 +538,7 @@ func TestBuildTickerURL(t *testing.T) {
 		{"bitget", "bitget", "BTC/USDT", "https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTC/USDT"},
 		{"binance", "binance", "ETH/USDT", "https://api.binance.com/api/v3/ticker/24hr?symbol=ETH/USDT"},
 		{"bybit", "bybit", "BTC/USDT", "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTC/USDT"},
-		{"okx", "okx", "BTC/USDT", "https://www.okx.com/api/v5/market/ticker?instId=BTC/USDT"},
+		{"okx", "okx", "BTC/USDT", "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP"},
 	}
 
 	for _, tt := range tests {
@@ -570,6 +587,25 @@ func TestBuildFundingRateURL_Bitget(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNativeCCXTService_OKXSwapURLsUseInstrumentID(t *testing.T) {
+	t.Parallel()
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+
+	assert.Equal(t,
+		"https://www.okx.com/api/v5/market/books?instId=BTC-USDT-SWAP&sz=20",
+		service.buildOrderBookURL("okx", "BTC/USDT", "", "BTC-USDT", 20),
+	)
+	assert.Equal(t,
+		"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=1m&limit=100",
+		service.buildOHLCVURL("okx", "BTCUSDT", "1m", 100),
+	)
+	assert.Equal(t,
+		"https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP",
+		service.buildFundingRateURL("okx", []string{"BTC/USDT:USDT"}),
+	)
 }
 
 func TestParseBitgetFundingRate_V2Formats(t *testing.T) {

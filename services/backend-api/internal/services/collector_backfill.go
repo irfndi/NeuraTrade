@@ -9,8 +9,6 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/database"
-	"github.com/irfndi/neuratrade/internal/models"
-	"github.com/shopspring/decimal"
 )
 
 // PerformBackfillIfNeeded checks if backfill is needed and performs it
@@ -552,25 +550,21 @@ func (c *CollectorService) processBackfillJob(job BackfillJob, workerID int, ctx
 	return result
 }
 
-// generateHistoricalDataPoints creates synthetic historical data points for backfill
+// generateHistoricalDataPoints fetches real historical OHLCV data from exchanges via CCXT.
 func (c *CollectorService) generateHistoricalDataPoints(ctx context.Context, exchangeID, symbol string, startTime time.Time) error {
-	// Get current ticker data as baseline with circuit breaker
-	var ticker *models.MarketPrice
+	var ohlcvResp *ccxt.OHLCVResponse
 	err := c.errorRecoveryManager.ExecuteWithRetry(ctx, "api_call", func() error {
 		var fetchErr error
-		var resp ccxt.MarketPriceInterface
-		resp, fetchErr = c.ccxtService.FetchSingleTicker(ctx, exchangeID, symbol)
-		if fetchErr != nil {
-			return fetchErr
-		}
-		ticker = c.convertMarketPriceInterfaceToModel(resp)
-		return nil
+		ohlcvResp, fetchErr = c.ccxtService.FetchOHLCV(ctx, exchangeID, symbol, "1h", 168)
+		return fetchErr
 	})
 	if err != nil {
-		return fmt.Errorf("failed to fetch current ticker for baseline: %w", err)
+		return fmt.Errorf("failed to fetch real OHLCV data: %w", err)
+	}
+	if ohlcvResp == nil || len(ohlcvResp.OHLCV) == 0 {
+		return fmt.Errorf("no OHLCV data returned for %s:%s", exchangeID, symbol)
 	}
 
-	// Get exchange and trading pair IDs
 	exchangeDBID, err := c.getOrCreateExchange(exchangeID)
 	if err != nil {
 		return fmt.Errorf("failed to get exchange ID: %w", err)
@@ -581,51 +575,33 @@ func (c *CollectorService) generateHistoricalDataPoints(ctx context.Context, exc
 		return fmt.Errorf("failed to get trading pair ID: %w", err)
 	}
 
-	// Generate data points every 30 minutes for the backfill period
-	interval := 30 * time.Minute
-	currentTime := startTime
-	basePrice := ticker.Price
-	baseVolume := ticker.Volume
-	dataPointsGenerated := 0
+	dataPointsInserted := 0
 
-	c.logger.WithFields(map[string]interface{}{
-		"exchange":        exchangeID,
-		"symbol":          symbol,
-		"start_time":      startTime.Format("2006-01-02 15:04"),
-		"baseline_price":  basePrice,
-		"baseline_volume": baseVolume,
-	}).Info("Generating historical data")
+	for _, candle := range ohlcvResp.OHLCV {
+		candleTime := candle.Timestamp
+		if candleTime.Before(startTime) {
+			continue
+		}
 
-	for currentTime.Before(time.Now().Add(-interval)) {
-		// Add some realistic price variation (±2%)
-		variation := decimal.NewFromFloat(0.98 + (0.04 * float64(time.Now().UnixNano()%100) / 100))
-		historicalPrice := basePrice.Mul(variation)
-
-		// Add some volume variation (±50%)
-		volumeVariation := decimal.NewFromFloat(0.5 + (1.0 * float64(time.Now().UnixNano()%100) / 100))
-		historicalVolume := baseVolume.Mul(volumeVariation)
-
-		// Insert historical data point with error recovery
 		err := c.errorRecoveryManager.ExecuteWithRetry(ctx, "database_operation", func() error {
 			_, execErr := c.db.Exec(ctx,
 				`INSERT INTO market_data (exchange_id, trading_pair_id, last_price, volume_24h, timestamp, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
-				exchangeDBID, tradingPairID, historicalPrice, historicalVolume, currentTime, currentTime)
+				exchangeDBID, tradingPairID, candle.Close, candle.Volume, candleTime, candleTime)
 			return execErr
 		})
 		if err != nil {
-			return fmt.Errorf("failed to insert historical data: %w", err)
+			return fmt.Errorf("failed to insert OHLCV data: %w", err)
 		}
 
-		dataPointsGenerated++
-		currentTime = currentTime.Add(interval)
+		dataPointsInserted++
 	}
 
 	c.logger.WithFields(map[string]interface{}{
-		"data_points": dataPointsGenerated,
+		"data_points": dataPointsInserted,
 		"exchange":    exchangeID,
 		"symbol":      symbol,
-		"interval":    "30min",
-	}).Info("Generated historical data points")
+		"source":      "real_ohlcv",
+	}).Info("Inserted real OHLCV data points")
 	return nil
 }

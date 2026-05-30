@@ -9,10 +9,13 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +32,14 @@ func TestAgentControlHandler_SetStrategyMode_ByChatID(t *testing.T) {
 	store := services.NewAutonomousRolloutStore(sqliteDB.DB)
 	require.NoError(t, store.InitSchema(context.Background()))
 
-	handler := NewAgentControlHandler(AgentControlDeps{Autonomy: services.NewScalpingAutonomyCoordinator(store, services.AIScalpingConfig{})})
+	coordinator := services.NewScalpingAutonomyCoordinator(store, services.AIScalpingConfig{})
+	strategyID := services.ScalpingStrategyID("777")
+	state, err := coordinator.SetStrategyMode(context.Background(), strategyID, autonomous.ModePaper)
+	require.NoError(t, err)
+	state.Metrics = agentControlLiveProofMetrics()
+	require.NoError(t, store.SaveRolloutState(context.Background(), state))
+
+	handler := NewAgentControlHandler(AgentControlDeps{Autonomy: coordinator})
 
 	body := bytes.NewBufferString(`{"chat_id":"777","mode":"live"}`)
 	w := httptest.NewRecorder()
@@ -49,6 +59,21 @@ func TestAgentControlHandler_SetStrategyMode_ByChatID(t *testing.T) {
 	assert.Equal(t, "live", response["current_stage"])
 	assert.Equal(t, "active", response["current_status"])
 	assert.NotEmpty(t, response["entered_at"])
+}
+
+func agentControlLiveProofMetrics() autonomous.RolloutMetrics {
+	return autonomous.RolloutMetrics{
+		TotalTrades:           services.DefaultScalpingLiveTrialMinClosedTrades,
+		WinningTrades:         services.DefaultScalpingLiveTrialMinClosedTrades - 1,
+		LosingTrades:          1,
+		TotalPnL:              decimal.NewFromFloat(0.25),
+		WinRate:               0.95,
+		MaxDrawdown:           decimal.NewFromFloat(0.01),
+		SignalQualityCoverage: decimal.NewFromInt(1),
+		HoldRatio:             decimal.NewFromFloat(0.5),
+		UptimePercent:         100,
+		LastUpdated:           time.Now().UTC(),
+	}
 }
 
 func TestAgentControlHandler_SetStrategyMode_RejectsInvalidMode(t *testing.T) {

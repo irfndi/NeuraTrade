@@ -29,10 +29,13 @@ func TestScalpingTelemetryStore_InsertCycleRecordPersistsSignalQuality(t *testin
 		Symbol:                 "BTC/USDT",
 		Action:                 "buy",
 		Confidence:             0.81,
+		SignalPrice:            floatPtr(42150.5),
 		BidAskSpreadPct:        floatPtr(0.027),
 		OrderBookImbalance:     floatPtr(0.46),
 		RangePosition24h:       floatPtr(41.5),
 		PriceChange24hPct:      floatPtr(-0.64),
+		RecentPriceChangePct:   floatPtr(0.18),
+		RecentChangeAgeSec:     floatPtr(300),
 		EffectiveMinConfidence: 0.65,
 		EffectiveMaxCapitalPct: 0.50,
 		PolicyAdjustmentsJSON:  "[]",
@@ -40,18 +43,22 @@ func TestScalpingTelemetryStore_InsertCycleRecordPersistsSignalQuality(t *testin
 	require.NoError(t, err)
 	require.Equal(t, "cycle-quality", cycleID)
 
-	var spread, imbalance, rangePos, priceChange float64
+	var price, spread, imbalance, rangePos, priceChange, recentChange, recentAge float64
 	err = sqliteDB.DB.QueryRowContext(ctx, `
-		SELECT bid_ask_spread_pct, order_book_imbalance, range_position_24h, price_change_24h_pct
+		SELECT signal_price, bid_ask_spread_pct, order_book_imbalance, range_position_24h,
+			price_change_24h_pct, recent_price_change_pct, recent_change_age_sec
 		FROM scalping_cycle_telemetry
 		WHERE id = ?
-	`, cycleID).Scan(&spread, &imbalance, &rangePos, &priceChange)
+	`, cycleID).Scan(&price, &spread, &imbalance, &rangePos, &priceChange, &recentChange, &recentAge)
 	require.NoError(t, err)
 
+	require.InDelta(t, 42150.5, price, 1e-9)
 	require.InDelta(t, 0.027, spread, 1e-9)
 	require.InDelta(t, 0.46, imbalance, 1e-9)
 	require.InDelta(t, 41.5, rangePos, 1e-9)
 	require.InDelta(t, -0.64, priceChange, 1e-9)
+	require.InDelta(t, 0.18, recentChange, 1e-9)
+	require.InDelta(t, 300, recentAge, 1e-9)
 }
 
 func TestScalpingTelemetryStore_InsertCycleRecordSanitizesNonFiniteSignalQuality(t *testing.T) {
@@ -64,32 +71,39 @@ func TestScalpingTelemetryStore_InsertCycleRecordSanitizesNonFiniteSignalQuality
 	require.NoError(t, store.EnsureSchema(ctx))
 
 	cycleID, err := store.InsertCycleRecord(ctx, CycleRecord{
-		ID:                 "cycle-quality-nonfinite",
-		ChatID:             "chat-1",
-		Exchange:           "bitget",
-		CycleAt:            time.Date(2026, 5, 11, 9, 5, 0, 0, time.UTC),
-		Symbol:             "BTC/USDT",
-		Action:             "buy",
-		BidAskSpreadPct:    floatPtr(math.NaN()),
-		OrderBookImbalance: floatPtr(math.Inf(1)),
-		RangePosition24h:   floatPtr(math.Inf(-1)),
-		PriceChange24hPct:  floatPtr(math.NaN()),
+		ID:                   "cycle-quality-nonfinite",
+		ChatID:               "chat-1",
+		Exchange:             "bitget",
+		CycleAt:              time.Date(2026, 5, 11, 9, 5, 0, 0, time.UTC),
+		Symbol:               "BTC/USDT",
+		Action:               "buy",
+		SignalPrice:          floatPtr(math.Inf(-1)),
+		BidAskSpreadPct:      floatPtr(math.NaN()),
+		OrderBookImbalance:   floatPtr(math.Inf(1)),
+		RangePosition24h:     floatPtr(math.Inf(-1)),
+		PriceChange24hPct:    floatPtr(math.NaN()),
+		RecentPriceChangePct: floatPtr(math.NaN()),
+		RecentChangeAgeSec:   floatPtr(math.Inf(1)),
 	})
 	require.NoError(t, err)
 	require.Equal(t, "cycle-quality-nonfinite", cycleID)
 
-	var spread, imbalance, rangePos, priceChange sql.NullFloat64
+	var price, spread, imbalance, rangePos, priceChange, recentChange, recentAge sql.NullFloat64
 	err = sqliteDB.DB.QueryRowContext(ctx, `
-		SELECT bid_ask_spread_pct, order_book_imbalance, range_position_24h, price_change_24h_pct
+		SELECT signal_price, bid_ask_spread_pct, order_book_imbalance, range_position_24h,
+			price_change_24h_pct, recent_price_change_pct, recent_change_age_sec
 		FROM scalping_cycle_telemetry
 		WHERE id = ?
-	`, cycleID).Scan(&spread, &imbalance, &rangePos, &priceChange)
+	`, cycleID).Scan(&price, &spread, &imbalance, &rangePos, &priceChange, &recentChange, &recentAge)
 	require.NoError(t, err)
 
+	require.False(t, price.Valid)
 	require.False(t, spread.Valid)
 	require.False(t, imbalance.Valid)
 	require.False(t, rangePos.Valid)
 	require.False(t, priceChange.Valid)
+	require.False(t, recentChange.Valid)
+	require.False(t, recentAge.Valid)
 }
 
 func TestScalpingTelemetryStore_EnsureSchemaAddsSignalQualityColumnsToLegacyTable(t *testing.T) {
@@ -133,10 +147,13 @@ func TestScalpingTelemetryStore_EnsureSchemaAddsSignalQualityColumnsToLegacyTabl
 	require.NoError(t, store.EnsureSchema(ctx))
 
 	for _, column := range []string{
+		"signal_price",
 		"bid_ask_spread_pct",
 		"order_book_imbalance",
 		"range_position_24h",
 		"price_change_24h_pct",
+		"recent_price_change_pct",
+		"recent_change_age_sec",
 	} {
 		var count int
 		err = sqliteDB.DB.QueryRowContext(ctx, `

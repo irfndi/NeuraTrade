@@ -17,6 +17,8 @@ import (
 type scalpingAutonomyContextKey struct{}
 type scalpingAutonomyEvalInputKey struct{}
 
+const defaultScalpingLiveTrialProofMaxAge = 24 * time.Hour
+
 // ScalpingAutonomyScope carries per-cycle gate context from quest runtime.
 type ScalpingAutonomyScope struct {
 	ChatID            string
@@ -369,7 +371,7 @@ func (c *ScalpingAutonomyCoordinator) RecordExecutionResult(
 		}
 	}
 
-	metrics := mergeRolloutMetrics(state.Metrics, decision, portfolio, executionErr)
+	metrics := mergeRolloutMetrics(state.Metrics, portfolio, executionErr)
 	if err := c.rollout.UpdateMetrics(ctx, strategyID, metrics); err != nil {
 		return fmt.Errorf("update rollout metrics: %w", err)
 	}
@@ -422,6 +424,11 @@ func (c *ScalpingAutonomyCoordinator) SetStrategyMode(
 			return nil, fmt.Errorf("initialize rollout state: %w", err)
 		}
 	}
+	if targetStage == autonomous.StageLive {
+		if failures := scalpingLiveModeProofFailures(state); len(failures) > 0 {
+			return state, fmt.Errorf("scalping live paper proof not met: %s", strings.Join(failures, ", "))
+		}
+	}
 	for state.CurrentStage != targetStage {
 		switch {
 		case state.CurrentStage == autonomous.StageShadow && targetStage != autonomous.StageShadow:
@@ -444,6 +451,114 @@ func (c *ScalpingAutonomyCoordinator) SetStrategyMode(
 		}
 	}
 	return state, nil
+}
+
+// ValidateStrategyMode checks whether a requested strategy mode transition is
+// allowed without mutating rollout state.
+func (c *ScalpingAutonomyCoordinator) ValidateStrategyMode(
+	ctx context.Context,
+	strategyID string,
+	mode autonomous.StrategyMode,
+) error {
+	if c == nil || c.rollout == nil {
+		return fmt.Errorf("autonomy coordinator is unavailable")
+	}
+	strategyID = strings.TrimSpace(strategyID)
+	if strategyID == "" {
+		return fmt.Errorf("strategy_id is required")
+	}
+	targetStage, err := stageForMode(mode)
+	if err != nil {
+		return err
+	}
+	if targetStage != autonomous.StageLive {
+		return nil
+	}
+	state, err := c.rollout.GetRolloutState(ctx, strategyID)
+	if err != nil {
+		return fmt.Errorf("get rollout state: %w", err)
+	}
+	if failures := scalpingLiveModeProofFailures(state); len(failures) > 0 {
+		return fmt.Errorf("scalping live paper proof not met: %s", strings.Join(failures, ", "))
+	}
+	return nil
+}
+
+func scalpingLiveModeProofFailures(state *autonomous.RolloutState) []string {
+	if state != nil && state.CurrentStage == autonomous.StageLive {
+		return scalpingActiveLiveProofFailures(state)
+	}
+	return scalpingLivePaperProofFailures(state)
+}
+
+func scalpingLivePaperProofFailures(state *autonomous.RolloutState) []string {
+	if state == nil {
+		return []string{"rollout_state_missing"}
+	}
+	failures := make([]string, 0, 8)
+	if state.CurrentStage != autonomous.StagePaper || state.Status != autonomous.StatusActive {
+		failures = append(failures, fmt.Sprintf("strategy_not_active_paper (stage: %s, status: %s)", state.CurrentStage, state.Status))
+	}
+	return append(failures, scalpingLiveProofMetricFailures(state.Metrics)...)
+}
+
+func scalpingActiveLiveProofFailures(state *autonomous.RolloutState) []string {
+	if state == nil {
+		return []string{"rollout_state_missing"}
+	}
+	failures := make([]string, 0, 8)
+	if state.CurrentStage != autonomous.StageLive || state.Status != autonomous.StatusActive {
+		failures = append(failures, fmt.Sprintf("strategy_not_active_live (stage: %s, status: %s)", state.CurrentStage, state.Status))
+	}
+	return append(failures, scalpingLiveProofMetricFailures(state.Metrics)...)
+}
+
+func scalpingLiveProofMetricFailures(metrics autonomous.RolloutMetrics) []string {
+	failures := make([]string, 0, 8)
+	closedOutcomeTrades := metrics.WinningTrades + metrics.LosingTrades
+	closedTrades := metrics.TotalTrades
+	if closedOutcomeTrades > closedTrades {
+		closedTrades = closedOutcomeTrades
+	}
+	if closedTrades < DefaultScalpingLiveTrialMinClosedTrades {
+		failures = append(failures, "closed_trades_below_live_trial_minimum")
+	}
+	if metrics.WinningTrades == 0 {
+		failures = append(failures, "no_winning_trades")
+	}
+	if metrics.LosingTrades == 0 {
+		failures = append(failures, "no_losing_trades")
+	}
+	if !metrics.TotalPnL.GreaterThan(decimal.Zero) {
+		failures = append(failures, "net_pnl_not_positive")
+	}
+	if closedTrades == 0 || !metrics.TotalPnL.Div(decimal.NewFromInt(int64(max(closedTrades, 1)))).GreaterThan(decimal.Zero) {
+		failures = append(failures, "avg_net_pnl_not_positive")
+	}
+	if !metrics.MaxDrawdown.GreaterThan(decimal.Zero) {
+		failures = append(failures, "drawdown_not_observed")
+	}
+	if metrics.WinRate <= 0 {
+		failures = append(failures, "win_rate_not_positive")
+	}
+	if metrics.SignalQualityCoverage.LessThan(decimal.NewFromInt(1)) {
+		failures = append(failures, "signal_quality_incomplete")
+	}
+	if metrics.AIProviderDegradedCycles > 0 {
+		failures = append(failures, "ai_provider_degraded")
+	}
+	if metrics.HoldRatio.GreaterThan(defaultScalpingLiveTrialMaxHoldRatio) {
+		failures = append(failures, "hold_ratio_above_live_trial_maximum")
+	}
+	if metrics.OpenPositions > 0 {
+		failures = append(failures, "open_positions_unclosed")
+	}
+	if metrics.LastUpdated.IsZero() {
+		failures = append(failures, "paper_proof_timestamp_missing")
+	} else if age := time.Since(metrics.LastUpdated); age > defaultScalpingLiveTrialProofMaxAge {
+		failures = append(failures, "paper_proof_stale")
+	}
+	return failures
 }
 
 func stageForMode(mode autonomous.StrategyMode) (autonomous.RolloutStage, error) {
@@ -595,7 +710,6 @@ func estimateDecisionReturnAndRisk(decision *AITradingDecision) (decimal.Decimal
 
 func mergeRolloutMetrics(
 	previous autonomous.RolloutMetrics,
-	decision *AITradingDecision,
 	portfolio TradingPortfolio,
 	executionErr error,
 ) autonomous.RolloutMetrics {
@@ -623,18 +737,13 @@ func mergeRolloutMetrics(
 		metrics.LosingTrades = losingTrades
 	}
 
-	attemptIncrement := 0
-	if decision != nil && !strings.EqualFold(strings.TrimSpace(decision.Action), "hold") {
-		attemptIncrement = 1
-	}
-
 	perfTotal := readIntMetric(perf["total_trades"])
-	prevTotal := metrics.TotalTrades
 	if perfTotal > metrics.TotalTrades {
 		metrics.TotalTrades = perfTotal
 	}
-	if attemptIncrement > 0 && perfTotal <= prevTotal {
-		metrics.TotalTrades = prevTotal + attemptIncrement
+	closedOutcomes := metrics.WinningTrades + metrics.LosingTrades
+	if closedOutcomes > metrics.TotalTrades {
+		metrics.TotalTrades = closedOutcomes
 	}
 
 	if executionErr != nil {

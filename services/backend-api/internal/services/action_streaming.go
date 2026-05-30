@@ -274,6 +274,13 @@ func (as *ActionStreamer) formatActionMessage(action StreamingAction) string {
 	if action.Description != "" {
 		lines = append(lines, "", action.Description)
 	}
+	if action.Type == ActionTypeTrade {
+		lines = append(
+			lines,
+			"",
+			"Mode Safety: Execution follows the current /mode state; LIVE orders require backend proof-gate approval.",
+		)
+	}
 
 	// Add type-specific data
 	if len(action.Data) > 0 {

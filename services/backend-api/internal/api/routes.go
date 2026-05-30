@@ -19,6 +19,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/api/handlers"
 	autonomyruntime "github.com/irfndi/neuratrade/internal/app/autonomy/runtime"
 	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
+	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
@@ -81,6 +82,50 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+func configureLiveReadinessGuard(opModeService *services.OperationalModeService) {
+	if opModeService == nil {
+		return
+	}
+	if liveReadinessGuardDisabled(os.Getenv("NEURATRADE_REQUIRE_LIVE_READINESS_PROOF")) {
+		log.Printf("WARNING: real-money live readiness proof guard disabled by NEURATRADE_REQUIRE_LIVE_READINESS_PROOF")
+		opModeService.SetLiveModeGuard(nil)
+		return
+	}
+
+	requiredStrategies := services.DefaultLiveReadinessStrategies()
+	if raw := strings.TrimSpace(os.Getenv("NEURATRADE_LIVE_READINESS_STRATEGIES")); raw != "" {
+		parsed := strings.Split(raw, ",")
+		filtered := make([]string, 0, len(parsed))
+		for _, s := range parsed {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				filtered = append(filtered, s)
+			}
+		}
+		if len(filtered) > 0 {
+			requiredStrategies = filtered
+		} else {
+			log.Printf("WARNING: NEURATRADE_LIVE_READINESS_STRATEGIES contained only empty/whitespace entries; using defaults")
+		}
+	}
+	manifestPath := strings.TrimSpace(os.Getenv(services.LiveReadinessManifestEnv))
+	opModeService.SetLiveModeGuard(services.ManifestLiveModeGuard(manifestPath, requiredStrategies))
+	if manifestPath != "" {
+		log.Printf("Real-money live readiness proof guard enabled with manifest %s; live mode requires strategy evidence", manifestPath)
+	} else {
+		log.Printf("Real-money live readiness proof guard enabled; live mode requires %s with strategy evidence", services.LiveReadinessManifestEnv)
+	}
+}
+
+func liveReadinessGuardDisabled(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "0", "false", "no", "off", "disabled":
+		return true
+	default:
+		return false
+	}
+}
+
 type llmProviderNodeConfig struct {
 	Provider      string
 	APIKey        string
@@ -104,6 +149,10 @@ var supportedAIProviders = map[string]struct{}{
 	string(llm.ProviderMLX):       {},
 	"deepseek":                    {},
 	"google":                      {},
+	"kimi":                        {},
+	"kimi-for-coding":             {},
+	"moonshotai":                  {},
+	"moonshotai-cn":               {},
 	"minimax":                     {},
 	"zai":                         {},
 	"zai-coding-plan":             {},
@@ -374,6 +423,8 @@ func riskLockSourcePriority(source string) int {
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
+	configureLiveReadinessGuard(opModeService)
+
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -386,7 +437,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			BotToken:    telegramConfig.BotToken,
 		}
 	}
-	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService)
+	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService, nil)
 
 	// Health check endpoints with telemetry
 	healthGroup := router.Group("/")
@@ -920,6 +971,23 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		log.Printf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
 	}
 
+	if opModeService != nil {
+		scalpingLiveProofRequired := aiAPIKey != ""
+		opModeService.SetLiveModeGuard(func(ctx context.Context, chatID string) error {
+			coordinator := integratedHandlers.AutonomyCoordinator()
+			if coordinator == nil {
+				if scalpingLiveProofRequired {
+					return fmt.Errorf("scalping autonomy coordinator unavailable")
+				}
+				return nil
+			}
+			return coordinator.ValidateStrategyMode(ctx, services.ScalpingStrategyID(chatID), autonomous.ModeLive)
+		})
+		for chatID, err := range opModeService.RevalidateLiveModeGuard(context.Background(), "startup_live_mode_guard") {
+			log.Printf("⚠️ Demoted persisted live mode after proof gate revalidation: chat_id=%s err=%v", chatID, err)
+		}
+	}
+
 	// Register quest runtime via app/autonomy entrypoint before scheduler start.
 	if err := autonomyruntime.RegisterQuestRuntime(questEngine, integratedHandlers); err != nil {
 		log.Fatalf("Failed to register quest runtime handlers: %v", err)
@@ -1236,6 +1304,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		risk := v1.Group("/risk")
 		{
 			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
+		}
+
+		// Paper trading readiness endpoints
+		if dbPool, ok := db.(database.DBPool); ok {
+			readinessHandler := handlers.NewReadinessHandler(dbPool)
+			readiness := v1.Group("/readiness")
+			{
+				readiness.GET("/paper-trading", readinessHandler.PaperTradingManifest)
+				readiness.GET("/paper-trading/evidence", readinessHandler.PaperTradingEvidence)
+			}
 		}
 
 		// Agent control plane command and event stream APIs (admin-only).

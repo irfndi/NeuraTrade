@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,12 +26,17 @@ func main() {
 func run() error {
 	var (
 		dbPath                   string
+		outputPath               string
 		exchange                 string
 		chatID                   string
 		orderPrefix              string
 		cycles                   int
 		intervalMS               int
 		timeoutSeconds           int
+		holdPeriodSeconds        int
+		maxPairs                 int
+		maxCandidates            int
+		orderBookPairs           int
 		requireTrades            bool
 		initialCapital           string
 		feeRate                  string
@@ -44,19 +50,28 @@ func run() error {
 		maxDrawdown              string
 		maxDrawdownPct           string
 		maxAIDegradedCycles      string
+		maxPerfectWinTrades      string
 		minBaselineWinRateDelta  string
 		minBaselineNetPnLDelta   string
 		minBaselineAvgPnLDelta   string
+		requireLiveTrialReady    bool
+		recordRolloutProof       bool
+		strategyID               string
 	)
 
 	flags := flag.NewFlagSet("scalping-soak", flag.ExitOnError)
 	flags.StringVar(&dbPath, "db", "", "SQLite database path for persisted soak telemetry")
+	flags.StringVar(&outputPath, "output", "", "optional path for a clean JSON result artifact")
 	flags.StringVar(&exchange, "exchange", "bitget", "public exchange to probe")
 	flags.StringVar(&chatID, "chat-id", envString("NEURATRADE_SCALPING_SOAK_CHAT_ID", "operator-scalping-soak"), "chat id for persisted soak telemetry")
 	flags.StringVar(&orderPrefix, "order-prefix", envString("NEURATRADE_SCALPING_SOAK_ORDER_PREFIX", "operator-scalping-soak"), "order prefix for persisted soak telemetry")
 	flags.IntVar(&cycles, "cycles", services.DefaultScalpingLivePaperSoakCycles, "number of public-data paper soak cycles")
 	flags.IntVar(&intervalMS, "interval-ms", 2000, "delay between cycles in milliseconds")
 	flags.IntVar(&timeoutSeconds, "timeout-seconds", 0, "overall timeout; defaults to cycles and interval")
+	flags.IntVar(&holdPeriodSeconds, "hold-period-seconds", 0, "paper position hold period in seconds; 0 uses the default")
+	flags.IntVar(&maxPairs, "max-pairs", envInt("NEURATRADE_SCALPING_MAX_PAIRS", 0), "maximum pairs to analyze per cycle; 0 uses scalping config default")
+	flags.IntVar(&maxCandidates, "max-candidates", envInt("NEURATRADE_SCALPING_MAX_CANDIDATES", 0), "maximum discovered candidates to score; 0 uses scalping config default")
+	flags.IntVar(&orderBookPairs, "orderbook-pairs", envInt("NEURATRADE_SCALPING_ORDERBOOK_PAIRS", 0), "maximum pairs with orderbook quality per cycle; 0 uses scalping config default")
 	flags.BoolVar(&requireTrades, "require-trades", false, "fail if the paper soak produces zero closed paper trades")
 	flags.StringVar(&initialCapital, "capital", "48", "initial paper capital in USDT")
 	flags.StringVar(&feeRate, "fee-rate", "0.0006", "round-trip fee-rate input used by the paper simulator")
@@ -70,11 +85,18 @@ func run() error {
 	flags.StringVar(&maxDrawdown, "max-drawdown", "", "fail unless max_drawdown is at or below this decimal value")
 	flags.StringVar(&maxDrawdownPct, "max-drawdown-pct", "", "fail unless max_drawdown_pct is at or below this decimal value")
 	flags.StringVar(&maxAIDegradedCycles, "max-ai-provider-degraded-cycles", "", "maximum AI provider degraded cycles allowed; empty disables this gate")
+	flags.StringVar(&maxPerfectWinTrades, "max-perfect-win-trades", "", "maximum closed trades allowed with 100% wins and zero drawdown; empty disables this paper-realism gate")
 	flags.StringVar(&minBaselineWinRateDelta, "min-baseline-win-rate-delta", "", "fail unless win-rate delta versus baseline is at least this decimal value")
 	flags.StringVar(&minBaselineNetPnLDelta, "min-baseline-net-pnl-delta", "", "fail unless net-PnL delta versus baseline is at least this decimal value")
 	flags.StringVar(&minBaselineAvgPnLDelta, "min-baseline-avg-pnl-delta", "", "fail unless avg-PnL-per-trade delta versus baseline is at least this decimal value")
+	flags.BoolVar(&requireLiveTrialReady, "require-live-trial-ready", false, "fail unless paper evidence is ready for a tightly capped live/testnet trial")
+	flags.BoolVar(&recordRolloutProof, "record-rollout-proof", false, "persist live-ready paper proof metrics into the autonomy rollout state")
+	flags.StringVar(&strategyID, "strategy-id", "", "strategy id for --record-rollout-proof; empty uses the chat scalping strategy id")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
+	}
+	if strategyID == "" {
+		strategyID = services.ScalpingStrategyID(chatID)
 	}
 
 	if dbPath == "" {
@@ -96,6 +118,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("parse --fee-rate: %w", err)
 	}
+	if holdPeriodSeconds < 0 {
+		return fmt.Errorf("invalid --hold-period-seconds value %d: must be zero or greater", holdPeriodSeconds)
+	}
+	holdPeriod := time.Duration(holdPeriodSeconds) * time.Second
 
 	interval := time.Duration(intervalMS) * time.Millisecond
 	timeout := services.ScalpingLivePaperSoakTimeout(cycles, interval)
@@ -111,15 +137,19 @@ func run() error {
 		baseline = &value
 	}
 	result, err := services.RunPublicScalpingLivePaperSoak(ctx, db, services.ScalpingLivePaperSoakOptions{
-		Exchange:       exchange,
-		Cycles:         cycles,
-		Interval:       interval,
-		ChatID:         chatID,
-		OrderPrefix:    orderPrefix,
-		RequireTrades:  requireTrades,
-		InitialCapital: capital,
-		FeeRate:        fees,
-		Baseline:       baseline,
+		Exchange:          exchange,
+		Cycles:            cycles,
+		Interval:          interval,
+		ChatID:            chatID,
+		OrderPrefix:       orderPrefix,
+		RequireTrades:     requireTrades,
+		InitialCapital:    capital,
+		FeeRate:           fees,
+		HoldPeriod:        holdPeriod,
+		MaxPairsToAnalyze: maxPairs,
+		MaxCandidatePairs: maxCandidates,
+		OrderBookPairs:    orderBookPairs,
+		Baseline:          baseline,
 	})
 	if err != nil {
 		return err
@@ -134,20 +164,41 @@ func run() error {
 		MaxDrawdown:              maxDrawdown,
 		MaxDrawdownPct:           maxDrawdownPct,
 		MaxAIDegradedCycles:      maxAIDegradedCycles,
+		MaxPerfectWinTrades:      maxPerfectWinTrades,
 		MinBaselineWinRateDelta:  minBaselineWinRateDelta,
 		MinBaselineNetPnLDelta:   minBaselineNetPnLDelta,
 		MinBaselineAvgPnLDelta:   minBaselineAvgPnLDelta,
+		RequireLiveTrialReady:    requireLiveTrialReady,
 	}); err != nil {
-		if encodeErr := writeResultPayload(os.Stdout, dbPath, result); encodeErr != nil {
+		if encodeErr := writeResultPayloads(dbPath, outputPath, result); encodeErr != nil {
 			return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
 		}
 		return err
 	}
 
-	return writeResultPayload(os.Stdout, dbPath, result)
+	if recordRolloutProof {
+		if _, err := services.RecordScalpingLiveTrialProof(ctx, db.DB, strategyID, result); err != nil {
+			if encodeErr := writeResultPayloads(dbPath, outputPath, result); encodeErr != nil {
+				return fmt.Errorf("%w; also failed to write soak result JSON: %v", err, encodeErr)
+			}
+			return err
+		}
+	}
+
+	return writeResultPayloads(dbPath, outputPath, result)
 }
 
-func writeResultPayload(out *os.File, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
+func writeResultPayloads(dbPath, outputPath string, result *services.ScalpingLivePaperSoakResult) error {
+	if err := writeResultPayload(os.Stdout, dbPath, result); err != nil {
+		return err
+	}
+	if outputPath == "" {
+		return nil
+	}
+	return writeResultPayloadFile(outputPath, dbPath, result)
+}
+
+func writeResultPayload(out io.Writer, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
 	payload := struct {
 		DBPath string                                `json:"db_path"`
 		Result *services.ScalpingLivePaperSoakResult `json:"result"`
@@ -160,6 +211,41 @@ func writeResultPayload(out *os.File, dbPath string, result *services.ScalpingLi
 	return encoder.Encode(payload)
 }
 
+func writeResultPayloadFile(outputPath, dbPath string, result *services.ScalpingLivePaperSoakResult) error {
+	if outputPath == "" {
+		return nil
+	}
+	dir := filepath.Dir(outputPath)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("create output directory %s: %w", dir, err)
+		}
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(outputPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create output temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := writeResultPayload(tmp, dbPath, result); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close output temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, outputPath); err != nil {
+		return fmt.Errorf("move output artifact into place: %w", err)
+	}
+	cleanup = false
+	return nil
+}
+
 type acceptanceGateOptions struct {
 	MinTrades                int
 	MinWinRate               string
@@ -170,11 +256,14 @@ type acceptanceGateOptions struct {
 	MaxDrawdown              string
 	MaxDrawdownPct           string
 	MaxAIDegradedCycles      string
+	MaxPerfectWinTrades      string
 	MinBaselineWinRateDelta  string
 	MinBaselineNetPnLDelta   string
 	MinBaselineAvgPnLDelta   string
+	RequireLiveTrialReady    bool
 }
 
+// validateAcceptanceGates applies CLI-configured proof thresholds to a completed scalping soak report.
 func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, options acceptanceGateOptions) error {
 	if result == nil {
 		return fmt.Errorf("acceptance gates require soak result")
@@ -216,8 +305,45 @@ func validateAcceptanceGates(result *services.ScalpingLivePaperSoakResult, optio
 	if err := validateMaxIntGate("max-ai-provider-degraded-cycles", "ai_provider_degraded_cycles", report.AIProviderDegradation.DegradedCycles, options.MaxAIDegradedCycles); err != nil {
 		return err
 	}
+	if err := validatePerfectWinRealismGate(report.TradeSummary, options.MaxPerfectWinTrades); err != nil {
+		return err
+	}
 	if err := validateBaselineDeltaGates(report.BaselineComparison, options); err != nil {
 		return err
+	}
+	if options.RequireLiveTrialReady && !report.LiveTrialReadiness.Ready {
+		return fmt.Errorf("acceptance gate failed: live_trial_readiness.ready=false reasons=%v", report.LiveTrialReadiness.Reasons)
+	}
+	return nil
+}
+
+// validatePerfectWinRealismGate rejects high-sample paper results that report only wins with no drawdown.
+func validatePerfectWinRealismGate(summary services.ScalpingSoakTradeSummary, rawMaximum string) error {
+	if rawMaximum == "" {
+		return nil
+	}
+	maximum, err := strconv.Atoi(rawMaximum)
+	if err != nil {
+		return fmt.Errorf("parse --max-perfect-win-trades value %q: %w", rawMaximum, err)
+	}
+	if maximum < 0 {
+		return fmt.Errorf("invalid --max-perfect-win-trades value %q: must be zero or greater", rawMaximum)
+	}
+	if summary.ClosedTrades <= maximum || summary.ClosedTrades <= 0 {
+		return nil
+	}
+	if summary.Wins == summary.ClosedTrades &&
+		summary.Losses == 0 &&
+		summary.MaxDrawdown.IsZero() &&
+		summary.MaxDrawdownPct.IsZero() {
+		return fmt.Errorf(
+			"paper realism gate failed: closed_trades=%d wins=%d losses=%d max_drawdown_pct=%s exceeds max_perfect_win_trades=%d; perfect paper wins without drawdown are insufficient proof",
+			summary.ClosedTrades,
+			summary.Wins,
+			summary.Losses,
+			summary.MaxDrawdownPct.String(),
+			maximum,
+		)
 	}
 	return nil
 }
@@ -323,4 +449,16 @@ func envString(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

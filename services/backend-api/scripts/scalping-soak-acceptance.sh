@@ -31,11 +31,12 @@ export RUN_HEALTH_PREFLIGHT
 export CHECK_GATEWAY_STATUS
 export SOAK_DB_PATH
 export SOAK_OUTPUT_FILE
-export CYCLES="${CYCLES:-30}"
-export INTERVAL_MS="${INTERVAL_MS:-1000}"
-export TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-120}"
+export CYCLES="${CYCLES:-60}"
+export INTERVAL_MS="${INTERVAL_MS:-15000}"
+export TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
+export HOLD_PERIOD_SECONDS="${HOLD_PERIOD_SECONDS:-300}"
 export CAPITAL="${CAPITAL:-48}"
-export MIN_TRADES="${MIN_TRADES-1}"
+export MIN_TRADES="${MIN_TRADES-20}"
 export MIN_WIN_RATE="${MIN_WIN_RATE-0.123}"
 export MIN_NET_PNL="${MIN_NET_PNL-0}"
 export MIN_AVG_NET_PNL="${MIN_AVG_NET_PNL-0}"
@@ -43,9 +44,13 @@ export MIN_SIGNAL_QUALITY_COVERAGE="${MIN_SIGNAL_QUALITY_COVERAGE-1}"
 export MAX_HOLD_RATIO="${MAX_HOLD_RATIO-0.745}"
 export MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT-0.01}"
 export MAX_AI_PROVIDER_DEGRADED_CYCLES="${MAX_AI_PROVIDER_DEGRADED_CYCLES-0}"
+export MAX_PERFECT_WIN_TRADES="${MAX_PERFECT_WIN_TRADES-20}"
 export MIN_BASELINE_WIN_RATE_DELTA="${MIN_BASELINE_WIN_RATE_DELTA-0}"
 export MIN_BASELINE_NET_PNL_DELTA="${MIN_BASELINE_NET_PNL_DELTA-0}"
 export MIN_BASELINE_AVG_PNL_DELTA="${MIN_BASELINE_AVG_PNL_DELTA-0}"
+export REQUIRE_LIVE_TRIAL_READY="${REQUIRE_LIVE_TRIAL_READY:-true}"
+export RECORD_ROLLOUT_PROOF="${RECORD_ROLLOUT_PROOF:-false}"
+export STRATEGY_ID="${STRATEGY_ID:-}"
 
 usage() {
   cat <<USAGE
@@ -65,6 +70,8 @@ Environment:
   RUN_HEALTH_PREFLIGHT      true/false health preflight (default: ${RUN_HEALTH_PREFLIGHT})
   CHECK_GATEWAY_STATUS      true/false gateway status preflight (default: ${CHECK_GATEWAY_STATUS})
   BACKEND_URL               Backend base URL for /health and /ready (default: ${BACKEND_URL})
+  RECORD_ROLLOUT_PROOF      true/false rollout proof persistence (default: ${RECORD_ROLLOUT_PROOF})
+  STRATEGY_ID               Strategy id for rollout proof persistence (default: ${STRATEGY_ID:-derived})
 
 Gate defaults match SCALPING_SOAK_ACCEPTANCE.md and can be overridden with the
 same environment variables accepted by scalping-soak.sh and verify-scalping-soak-artifact.sh.
@@ -165,6 +172,7 @@ write_manifest() {
       },
       gates: {
         min_trades: env.MIN_TRADES,
+        hold_period_seconds: env.HOLD_PERIOD_SECONDS,
         min_win_rate: env.MIN_WIN_RATE,
         min_net_pnl: env.MIN_NET_PNL,
         min_avg_net_pnl: env.MIN_AVG_NET_PNL,
@@ -172,9 +180,13 @@ write_manifest() {
         max_hold_ratio: env.MAX_HOLD_RATIO,
         max_drawdown_pct: env.MAX_DRAWDOWN_PCT,
         max_ai_provider_degraded_cycles: env.MAX_AI_PROVIDER_DEGRADED_CYCLES,
+        max_perfect_win_trades: env.MAX_PERFECT_WIN_TRADES,
         min_baseline_win_rate_delta: env.MIN_BASELINE_WIN_RATE_DELTA,
         min_baseline_net_pnl_delta: env.MIN_BASELINE_NET_PNL_DELTA,
-        min_baseline_avg_pnl_delta: env.MIN_BASELINE_AVG_PNL_DELTA
+        min_baseline_avg_pnl_delta: env.MIN_BASELINE_AVG_PNL_DELTA,
+        require_live_trial_ready: env.REQUIRE_LIVE_TRIAL_READY,
+        record_rollout_proof: env.RECORD_ROLLOUT_PROOF,
+        strategy_id: env.STRATEGY_ID
       },
       report: {
         total_cycles: $report.total_cycles,
@@ -186,7 +198,8 @@ write_manifest() {
         trade_summary: $report.trade_summary,
         ai_provider_degradation: $report.ai_provider_degradation,
         baseline_comparison: $report.baseline_comparison,
-        insufficient_trade_proof: $report.insufficient_trade_proof
+        insufficient_trade_proof: $report.insufficient_trade_proof,
+        live_trial_readiness: $report.live_trial_readiness
       }
     }' >"$ACCEPTANCE_MANIFEST_FILE"
   log "wrote acceptance manifest to ${ACCEPTANCE_MANIFEST_FILE}"
@@ -197,6 +210,8 @@ run_acceptance() {
   require_file "$SCALPING_SOAK_VERIFIER"
   validate_boolean "RUN_HEALTH_PREFLIGHT" "$RUN_HEALTH_PREFLIGHT"
   validate_boolean "CHECK_GATEWAY_STATUS" "$CHECK_GATEWAY_STATUS"
+  validate_boolean "REQUIRE_LIVE_TRIAL_READY" "$REQUIRE_LIVE_TRIAL_READY"
+  validate_boolean "RECORD_ROLLOUT_PROOF" "$RECORD_ROLLOUT_PROOF"
   mkdir -p "$DATA_DIR" "$LOG_DIR"
 
   log "starting scalping soak acceptance branch=$(git_value unknown rev-parse --abbrev-ref HEAD) commit=$(git_value unknown rev-parse --short HEAD)"

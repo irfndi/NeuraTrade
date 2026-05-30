@@ -164,9 +164,16 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyModeFollowsOperatorMode(t *t
 	}
 
 	ctx := context.Background()
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, "1082762347", ModePaper))
+	state, err := store.GetRolloutState(ctx, ScalpingStrategyID("1082762347"))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	state.Metrics = scalpingLiveProofMetrics()
+	require.NoError(t, store.SaveRolloutState(ctx, state))
+
 	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, "1082762347", OpModeLive))
 
-	state, err := store.GetRolloutState(ctx, ScalpingStrategyID("1082762347"))
+	state, err = store.GetRolloutState(ctx, ScalpingStrategyID("1082762347"))
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Equal(t, autonomous.StageLive, state.CurrentStage)
@@ -214,6 +221,13 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyMode_BlocksNonLiveTransition
 		Exchange:   "bitget",
 	})
 
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, ModePaper))
+	state, err := store.GetRolloutState(ctx, ScalpingStrategyID(chatID))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	state.Metrics = scalpingLiveProofMetrics()
+	require.NoError(t, store.SaveRolloutState(ctx, state))
+
 	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, OpModeLive))
 	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
 		OrderID:    "ord-exposure",
@@ -232,7 +246,7 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyMode_BlocksNonLiveTransition
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot switch scalping:1082762347:default to non-live mode")
 
-	state, err := store.GetRolloutState(ctx, ScalpingStrategyID(chatID))
+	state, err = store.GetRolloutState(ctx, ScalpingStrategyID(chatID))
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	assert.Equal(t, autonomous.StageLive, state.CurrentStage)
@@ -309,6 +323,13 @@ func TestIntegratedQuestHandlersSyncScalpingStrategyMode_DetectsLiveExposureHidd
 		StrategyID: ScalpingStrategyID(chatID),
 		Exchange:   "bitget",
 	})
+
+	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, ModePaper))
+	state, err := store.GetRolloutState(ctx, ScalpingStrategyID(chatID))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	state.Metrics = scalpingLiveProofMetrics()
+	require.NoError(t, store.SaveRolloutState(ctx, state))
 
 	require.NoError(t, handlers.syncScalpingStrategyMode(ctx, chatID, OpModeLive))
 	require.NoError(t, lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
@@ -543,6 +564,7 @@ func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrde
 
 func TestIntegratedQuestHandlersCloseTriggeredPaperScalpingPositions_TakeProfitRecordsPnLAndTelemetry(t *testing.T) {
 	t.Setenv("NEURATRADE_PAPER_SCALPING_TAKER_FEE_RATE", "0.001")
+	t.Setenv("NEURATRADE_PAPER_SCALPING_SLIPPAGE_BPS", "0")
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-scalping-close-tp.db"))
 	require.NoError(t, err)
@@ -635,6 +657,7 @@ func TestIntegratedQuestHandlersCloseTriggeredPaperScalpingPositions_TakeProfitR
 
 func TestIntegratedQuestHandlersCloseTriggeredPaperScalpingPositions_StopLossRecordsLossAfterFees(t *testing.T) {
 	t.Setenv("NEURATRADE_PAPER_SCALPING_TAKER_FEE_RATE", "0.001")
+	t.Setenv("NEURATRADE_PAPER_SCALPING_SLIPPAGE_BPS", "0")
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-scalping-close-sl.db"))
 	require.NoError(t, err)

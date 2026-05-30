@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-05-30T12:33:38.354671+07:00",
+  "continuous_validation_hours": "701.5606539563889",
+  "strategy_count": 4,
+  "closed_trades": 67,
+  "open_positions": 17,
+  "net_pnl": "546.938",
+  "avg_net_pnl": "6.511166666666666",
+  "win_rate": "0.7976190476190476",
+  "risk_limits_enforced": false,
+  "backtest_comparison_verified": true,
+  "diagnostic_only": false,
+  "strategies": [
+    "scalping",
+    "daily_trading",
+    "swing_trading",
+    "arbitrage"
+  ],
+  "evidence_file_path": ""
+}

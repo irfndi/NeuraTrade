@@ -505,6 +505,8 @@ func (h *IntegratedQuestHandlers) ExecuteRoutine(ctx context.Context, quest *Que
 		err = h.handleFundingRateScan(ctx, quest)
 	case "portfolio_health":
 		err = h.handlePortfolioHealthWithRisk(ctx, quest)
+	case "daily_report":
+		err = h.handleDailyPerformanceReport(ctx, quest)
 	case "fund_growth":
 		err = h.handleFundGrowthGoal(ctx, quest)
 	case "scalping_execution":
@@ -521,6 +523,109 @@ func (h *IntegratedQuestHandlers) ExecuteArbitrage(ctx context.Context, quest *Q
 	err := h.handleArbitrageExecution(ctx, quest)
 	h.recordQuestResult(quest, err == nil, decimal.Zero)
 	return err
+}
+
+func (h *IntegratedQuestHandlers) handleDailyPerformanceReport(ctx context.Context, quest *Quest) error {
+	if quest == nil {
+		return fmt.Errorf("quest is nil")
+	}
+	if quest.Checkpoint == nil {
+		quest.Checkpoint = make(map[string]interface{})
+	}
+	if quest.Metadata == nil {
+		quest.Metadata = make(map[string]string)
+	}
+
+	clearDailyPerformanceMetrics := func(cp map[string]interface{}) {
+		if cp == nil {
+			return
+		}
+		delete(cp, "daily_report_closed_trades")
+		delete(cp, "daily_report_wins")
+		delete(cp, "daily_report_losses")
+		delete(cp, "daily_report_breakeven")
+		delete(cp, "daily_report_net_pnl")
+		delete(cp, "daily_report_gross_pnl")
+		delete(cp, "daily_report_fees")
+		delete(cp, "daily_report_avg_net_pnl")
+		delete(cp, "daily_report_win_rate")
+		delete(cp, "daily_report_best_trade")
+		delete(cp, "daily_report_worst_trade")
+	}
+
+	now := time.Now().UTC()
+	since := now.Add(-24 * time.Hour)
+	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+	exchange := strings.TrimSpace(quest.Metadata["exchange"])
+	if exchange == "" {
+		exchange = strings.TrimSpace(scalpingExchangeFromContext(ctx))
+	}
+
+	blockers := []string{
+		"daily_trading_strategy_not_implemented",
+		"daily_report_is_reporting_only",
+	}
+	quest.Checkpoint["daily_report_generated_at"] = now.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_window_start"] = since.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_window_end"] = now.Format(time.RFC3339)
+	quest.Checkpoint["daily_report_chat_id"] = chatID
+	quest.Checkpoint["daily_report_exchange"] = exchange
+
+	if h.lifecycleStore == nil {
+		clearDailyPerformanceMetrics(quest.Checkpoint)
+		blockers = append(blockers, "lifecycle_store_unavailable")
+		writeDailyTradingReadinessCheckpoint(quest, blockers)
+		quest.CurrentCount++
+		return nil
+	}
+
+	writeDailyTradingReadinessCheckpoint(quest, blockers)
+	summary, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, exchange, since)
+	if err != nil {
+		clearDailyPerformanceMetrics(quest.Checkpoint)
+		blockers = append(blockers, "realized_performance_query_failed")
+		writeDailyTradingReadinessCheckpoint(quest, blockers)
+		return fmt.Errorf("daily performance report: realized performance: %w", err)
+	}
+
+	quest.Checkpoint["daily_report_closed_trades"] = summary.Trades
+	quest.Checkpoint["daily_report_wins"] = summary.Wins
+	quest.Checkpoint["daily_report_losses"] = summary.Losses
+	quest.Checkpoint["daily_report_breakeven"] = summary.Breakeven
+	quest.Checkpoint["daily_report_net_pnl"] = summary.RealizedPnL.String()
+	quest.Checkpoint["daily_report_gross_pnl"] = summary.GrossPnL.String()
+	quest.Checkpoint["daily_report_fees"] = summary.Fees.String()
+	quest.Checkpoint["daily_report_avg_net_pnl"] = summary.AvgNetPnL.String()
+	quest.Checkpoint["daily_report_win_rate"] = summary.WinRate.String()
+	quest.Checkpoint["daily_report_best_trade"] = summary.BestTrade.String()
+	quest.Checkpoint["daily_report_worst_trade"] = summary.WorstTrade.String()
+
+	if summary.Trades == 0 {
+		blockers = append(blockers, "no_closed_trades_in_24h")
+	}
+	if summary.Wins == 0 {
+		blockers = append(blockers, "no_winning_trade_observed")
+	}
+	if summary.Losses == 0 {
+		blockers = append(blockers, "no_losing_trade_observed")
+	}
+	if summary.RealizedPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_net_pnl")
+	}
+	if summary.Trades > 0 && summary.AvgNetPnL.LessThanOrEqual(decimal.Zero) {
+		blockers = append(blockers, "non_positive_avg_net_pnl")
+	}
+
+	writeDailyTradingReadinessCheckpoint(quest, blockers)
+	quest.CurrentCount++
+	return nil
+}
+
+func writeDailyTradingReadinessCheckpoint(quest *Quest, blockers []string) {
+	quest.Checkpoint["daily_trading_live_ready"] = false
+	quest.Checkpoint["daily_trading_readiness_status"] = "blocked"
+	quest.Checkpoint["daily_trading_readiness_blockers"] = append([]string(nil), blockers...)
+	quest.Checkpoint["daily_trading_readiness_note"] = "daily trading has no executable strategy path or readiness evidence; keep live-money use blocked"
 }
 
 func (h *IntegratedQuestHandlers) handleVolatilityWatch(ctx context.Context, quest *Quest) error {
@@ -1616,24 +1721,61 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 		if decision.EntryPrice != nil {
 			entryPrice = *decision.EntryPrice
 		}
-		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
-			OrderID:    decision.OrderID,
-			ChatID:     chatID,
-			Exchange:   userExchange,
-			Symbol:     decision.Symbol,
-			Side:       decision.Action,
-			OrderType:  "market",
-			MarketType: "futures",
-			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)).Round(2),
-			EntryPrice: entryPrice,
-			StopLoss:   decimalValueOrZero(decision.StopLoss),
-			TakeProfit: decimalValueOrZero(decision.TakeProfit),
-			Source:     scalpingExecutionLifecycleSource(currentMode),
-			OpenedAt:   time.Now().UTC(),
-		}); err != nil {
-			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+		// Fallback: if AI decision has no entry price, fetch current market price
+		// so that TP/SL triggers and PnL calculation work correctly.
+		if entryPrice.LessThanOrEqual(decimal.Zero) && h.ccxtService != nil {
+			if tickerSource, ok := h.ccxtService.(interface {
+				FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
+			}); ok {
+				if ticker, err := tickerSource.FetchSingleTicker(ctx, userExchange, decision.Symbol); err == nil && ticker != nil && ticker.GetPrice() > 0 {
+					entryPrice = decimal.NewFromFloat(ticker.GetPrice())
+					log.Printf("[SCALPING] Fetched fallback entry price for %s: %s", decision.Symbol, entryPrice.String())
+				}
+			}
+		}
+		if entryPrice.LessThanOrEqual(decimal.Zero) {
+			log.Printf("[SCALPING] SKIPPING lifecycle persistence for %s: entry price is zero (cannot calculate PnL or TP/SL)", decision.Symbol)
 		} else {
-			lifecyclePersisted = true
+			// Auto-derive SL/TP from entry price if AI didn't provide them
+			stopLoss := decimalValueOrZero(decision.StopLoss)
+			takeProfit := decimalValueOrZero(decision.TakeProfit)
+			if stopLoss.LessThanOrEqual(decimal.Zero) {
+				slPct := decimal.NewFromFloat(0.001) // 0.1% default scalping SL
+				if strings.EqualFold(decision.Action, "buy") {
+					stopLoss = entryPrice.Mul(decimal.NewFromInt(1).Sub(slPct))
+				} else {
+					stopLoss = entryPrice.Mul(decimal.NewFromInt(1).Add(slPct))
+				}
+				log.Printf("[SCALPING] Auto-derived stop-loss for %s at %s (entry=%s)", decision.Symbol, stopLoss.String(), entryPrice.String())
+			}
+			if takeProfit.LessThanOrEqual(decimal.Zero) {
+				tpPct := decimal.NewFromFloat(0.002) // 0.2% default scalping TP
+				if strings.EqualFold(decision.Action, "buy") {
+					takeProfit = entryPrice.Mul(decimal.NewFromInt(1).Add(tpPct))
+				} else {
+					takeProfit = entryPrice.Mul(decimal.NewFromInt(1).Sub(tpPct))
+				}
+				log.Printf("[SCALPING] Auto-derived take-profit for %s at %s (entry=%s)", decision.Symbol, takeProfit.String(), entryPrice.String())
+			}
+			if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+				OrderID:    decision.OrderID,
+				ChatID:     chatID,
+				Exchange:   userExchange,
+				Symbol:     decision.Symbol,
+				Side:       decision.Action,
+				OrderType:  "market",
+				MarketType: "futures",
+				Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)).Round(2),
+				EntryPrice: entryPrice,
+				StopLoss:   stopLoss,
+				TakeProfit: takeProfit,
+				Source:     scalpingExecutionLifecycleSource(currentMode),
+				OpenedAt:   time.Now().UTC(),
+			}); err != nil {
+				log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+			} else {
+				lifecyclePersisted = true
+			}
 		}
 	}
 	if currentMode == ModePaper && !lifecyclePersisted {
@@ -2737,10 +2879,13 @@ func applyDecisionSignalQualityToCycleRecord(record *CycleRecord, decision *AITr
 		applyTopCandidateRejectionSignalQualityToCycleRecord(record, decision)
 		return
 	}
+	record.SignalPrice = finiteFloatPointer(decision.SignalPrice)
 	record.BidAskSpreadPct = finiteFloatPointer(decision.SignalBidAskSpreadPct)
 	record.OrderBookImbalance = finiteFloatPointer(decision.SignalOrderBookImbalance)
 	record.RangePosition24h = finiteFloatPointer(decision.SignalRangePosition24h)
 	record.PriceChange24hPct = finiteFloatPointer(decision.SignalPriceChange24hPct)
+	record.RecentPriceChangePct = finiteFloatPointerIf(decision.SignalRecentPriceChangePct, decision.SignalRecentChangeKnown)
+	record.RecentChangeAgeSec = finiteFloatPointerIf(decision.SignalRecentChangeAgeSec, decision.SignalRecentChangeKnown)
 }
 
 func applyTopCandidateRejectionSignalQualityToCycleRecord(record *CycleRecord, decision *AITradingDecision) {
@@ -5733,6 +5878,20 @@ func (h *IntegratedQuestHandlers) reconcileMissingManagedPosition(
 		exitPrice = decimal.Zero
 	}
 
+	// Calculate PnL if we have valid entry and exit prices
+	realizedPnL := decimal.Zero
+	if position.EntryPrice.GreaterThan(decimal.Zero) && exitPrice.GreaterThan(decimal.Zero) {
+		delta := exitPrice.Sub(position.EntryPrice)
+		if strings.EqualFold(position.Side, "sell") {
+			delta = position.EntryPrice.Sub(exitPrice)
+		}
+		baseFilled := position.Size.Abs()
+		if position.EntryPrice.GreaterThan(decimal.Zero) {
+			baseFilled = position.Size.Abs().Div(position.EntryPrice)
+		}
+		realizedPnL = delta.Mul(baseFilled)
+	}
+
 	closeSource := strings.TrimSpace(source)
 	if closeSource == "" {
 		closeSource = "risk_reconcile"
@@ -5751,7 +5910,7 @@ func (h *IntegratedQuestHandlers) reconcileMissingManagedPosition(
 		Filled:      position.Size.Abs(),
 		EntryPrice:  position.EntryPrice,
 		ExitPrice:   exitPrice,
-		RealizedPnL: decimal.Zero,
+		RealizedPnL: realizedPnL,
 		Source:      closeSource,
 		ClosedAt:    time.Now().UTC(),
 	}); err != nil {

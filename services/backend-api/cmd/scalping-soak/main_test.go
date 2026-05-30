@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/irfndi/neuratrade/internal/services"
@@ -16,6 +19,8 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			},
 			TradeSummary: services.ScalpingSoakTradeSummary{
 				ClosedTrades:       12,
+				Wins:               9,
+				Losses:             3,
 				WinRate:            decimal.NewFromFloat(0.75),
 				NetPnL:             decimal.NewFromFloat(0.12),
 				AvgNetPnLPerTrade:  decimal.NewFromFloat(0.01),
@@ -35,6 +40,10 @@ func TestValidateAcceptanceGates(t *testing.T) {
 				DeltaWinRate:        decimal.NewFromFloat(0.627),
 				DeltaNetPnL:         decimal.NewFromFloat(0.30),
 				DeltaAvgPnLPerTrade: decimal.NewFromFloat(0.013),
+			},
+			LiveTrialReadiness: services.ScalpingLiveTrialReadiness{
+				Ready:           true,
+				MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades,
 			},
 		},
 	}
@@ -56,9 +65,11 @@ func TestValidateAcceptanceGates(t *testing.T) {
 				MaxDrawdown:              "0.05",
 				MaxDrawdownPct:           "0.001",
 				MaxAIDegradedCycles:      "1",
+				MaxPerfectWinTrades:      "20",
 				MinBaselineWinRateDelta:  "0.6",
 				MinBaselineNetPnLDelta:   "0.2",
 				MinBaselineAvgPnLDelta:   "0.01",
+				RequireLiveTrialReady:    true,
 			},
 		},
 		{
@@ -122,6 +133,16 @@ func TestValidateAcceptanceGates(t *testing.T) {
 			wantErr: `invalid --max-ai-provider-degraded-cycles value "-1": must be zero or greater`,
 		},
 		{
+			name:    "rejects invalid perfect win threshold",
+			options: acceptanceGateOptions{MaxPerfectWinTrades: "not-an-int"},
+			wantErr: "parse --max-perfect-win-trades",
+		},
+		{
+			name:    "rejects negative perfect win threshold",
+			options: acceptanceGateOptions{MaxPerfectWinTrades: "-1"},
+			wantErr: `invalid --max-perfect-win-trades value "-1": must be zero or greater`,
+		},
+		{
 			name:    "fails baseline win rate delta",
 			options: acceptanceGateOptions{MinBaselineWinRateDelta: "0.7"},
 			wantErr: "baseline.delta_win_rate=0.627 below minimum=0.7",
@@ -165,6 +186,32 @@ func TestValidateAcceptanceGates(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptanceGatesFailsImplausiblePerfectPaperProof(t *testing.T) {
+	result := &services.ScalpingLivePaperSoakResult{
+		Report: services.ScalpingSoakReport{
+			TradeSummary: services.ScalpingSoakTradeSummary{
+				ClosedTrades:   21,
+				Wins:           21,
+				Losses:         0,
+				MaxDrawdown:    decimal.Zero,
+				MaxDrawdownPct: decimal.Zero,
+			},
+		},
+	}
+
+	err := validateAcceptanceGates(result, acceptanceGateOptions{MaxPerfectWinTrades: "20"})
+	require.ErrorContains(t, err, "paper realism gate failed")
+	require.ErrorContains(t, err, "perfect paper wins without drawdown are insufficient proof")
+
+	err = validateAcceptanceGates(result, acceptanceGateOptions{MaxPerfectWinTrades: ""})
+	require.NoError(t, err)
+
+	result.Report.TradeSummary.Losses = 1
+	result.Report.TradeSummary.Wins = 20
+	err = validateAcceptanceGates(result, acceptanceGateOptions{MaxPerfectWinTrades: "20"})
+	require.NoError(t, err)
+}
+
 func TestValidateAcceptanceGatesRequiresResult(t *testing.T) {
 	err := validateAcceptanceGates(nil, acceptanceGateOptions{MinTrades: 1})
 	require.ErrorContains(t, err, "acceptance gates require soak result")
@@ -181,6 +228,25 @@ func TestValidateAcceptanceGatesTreatsMissingHoldSplitAsZeroForMaxHoldRatio(t *t
 
 	err := validateAcceptanceGates(result, acceptanceGateOptions{MaxHoldRatio: "0.745"})
 	require.NoError(t, err)
+}
+
+func TestValidateAcceptanceGatesCanRequireLiveTrialReadiness(t *testing.T) {
+	result := &services.ScalpingLivePaperSoakResult{
+		Report: services.ScalpingSoakReport{
+			LiveTrialReadiness: services.ScalpingLiveTrialReadiness{
+				Ready: false,
+				Reasons: []string{
+					"closed_trades_below_live_trial_minimum",
+					"drawdown_not_observed",
+				},
+				MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades,
+			},
+		},
+	}
+
+	err := validateAcceptanceGates(result, acceptanceGateOptions{RequireLiveTrialReady: true})
+	require.ErrorContains(t, err, "live_trial_readiness.ready=false")
+	require.ErrorContains(t, err, "closed_trades_below_live_trial_minimum")
 }
 
 func TestValidateAcceptanceGatesRequiresBaselineForMaxDrawdownPct(t *testing.T) {
@@ -209,4 +275,55 @@ func TestValidateAcceptanceGatesRequiresBaselineForDeltaGates(t *testing.T) {
 
 	err := validateAcceptanceGates(result, acceptanceGateOptions{MinBaselineNetPnLDelta: "0"})
 	require.ErrorContains(t, err, "baseline delta gates require --baseline=true")
+}
+
+func TestWriteResultPayloadFileCreatesCleanArtifact(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "nested", "soak.json")
+	result := &services.ScalpingLivePaperSoakResult{
+		Exchange:     "bitget",
+		TotalSignals: 8,
+		Report: services.ScalpingSoakReport{
+			TradeSummary: services.ScalpingSoakTradeSummary{
+				ClosedTrades: 1,
+				NetPnL:       decimal.NewFromFloat(0.01),
+			},
+		},
+	}
+
+	err := writeResultPayloadFile(outputPath, "/tmp/soak.db", result)
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	var payload struct {
+		DBPath string                                `json:"db_path"`
+		Result *services.ScalpingLivePaperSoakResult `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	require.Equal(t, "/tmp/soak.db", payload.DBPath)
+	require.NotNil(t, payload.Result)
+	require.Equal(t, "bitget", payload.Result.Exchange)
+	require.Equal(t, 8, payload.Result.TotalSignals)
+	require.Equal(t, 1, payload.Result.Report.TradeSummary.ClosedTrades)
+}
+
+func TestRunRejectsNegativeHoldPeriod(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_SOAK_CHAT_ID", "test")
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+	os.Args = []string{"scalping-soak", "--hold-period-seconds", "-1"}
+
+	err := run()
+	require.ErrorContains(t, err, "invalid --hold-period-seconds value -1")
+}
+
+func TestEnvInt(t *testing.T) {
+	t.Setenv("SCALPING_SOAK_TEST_INT", "17")
+	require.Equal(t, 17, envInt("SCALPING_SOAK_TEST_INT", 3))
+
+	t.Setenv("SCALPING_SOAK_TEST_INT", "not-an-int")
+	require.Equal(t, 3, envInt("SCALPING_SOAK_TEST_INT", 3))
+
+	t.Setenv("SCALPING_SOAK_TEST_INT", "")
+	require.Equal(t, 3, envInt("SCALPING_SOAK_TEST_INT", 3))
 }

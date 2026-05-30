@@ -257,6 +257,7 @@ func TestHealthHandler_TelegramDeliveryHealthyWhenConfiguredServiceResponds(t *t
 		mockCCXTServer.URL,
 		TelegramHealthConfig{ServiceURL: mockTelegramServer.URL, BotToken: "test-token"},
 		mockCacheAnalytics,
+		nil,
 	)
 
 	w := httptest.NewRecorder()
@@ -311,6 +312,7 @@ func TestHealthHandler_TelegramDeliveryOutageDegradesHealth(t *testing.T) {
 		mockCCXTServer.URL,
 		TelegramHealthConfig{ServiceURL: telegramURL, BotToken: "test-token"},
 		mockCacheAnalytics,
+		nil,
 	)
 
 	w := httptest.NewRecorder()

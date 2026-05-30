@@ -50,6 +50,9 @@ type OperationalModeConfig struct {
 	ConfirmationCount   int             `json:"confirmation_count"`
 }
 
+// OperationalLiveModeGuard validates whether a chat may enter live mode.
+type OperationalLiveModeGuard func(ctx context.Context, chatID string) error
+
 // DefaultOperationalModeConfig returns the default operational mode configuration
 func DefaultOperationalModeConfig() OperationalModeConfig {
 	return OperationalModeConfig{
@@ -110,6 +113,7 @@ type OperationalModeService struct {
 	logger logging.Logger
 	mu     sync.RWMutex
 	states map[string]*OperationalModeState // chatID -> state
+	guard  OperationalLiveModeGuard
 }
 
 // NewOperationalModeService creates a new operational mode service
@@ -129,6 +133,51 @@ func NewOperationalModeService(db DBPool, config OperationalModeConfig, logger l
 	s.loadStatesFromDB()
 
 	return s
+}
+
+// SetLiveModeGuard installs an optional proof gate for live mode transitions.
+func (s *OperationalModeService) SetLiveModeGuard(guard OperationalLiveModeGuard) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.guard = guard
+}
+
+// RevalidateLiveModeGuard demotes persisted live states that no longer satisfy
+// the installed proof guard. It is intended for startup after loading state from
+// storage and wiring runtime proof gates.
+func (s *OperationalModeService) RevalidateLiveModeGuard(ctx context.Context, changedBy string) map[string]error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	guard := s.guard
+	liveChatIDs := make([]string, 0)
+	for chatID, state := range s.states {
+		if state != nil && state.Mode == OpModeLive {
+			liveChatIDs = append(liveChatIDs, chatID)
+		}
+	}
+	s.mu.RUnlock()
+	if guard == nil || len(liveChatIDs) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(changedBy) == "" {
+		changedBy = "live_mode_guard_revalidation"
+	}
+
+	failures := make(map[string]error)
+	for _, chatID := range liveChatIDs {
+		if err := guard(ctx, chatID); err != nil {
+			failures[chatID] = err
+			if demoteErr := s.SetMode(ctx, chatID, OpModeDry, changedBy); demoteErr != nil {
+				failures[chatID] = fmt.Errorf("%w; demote to dry failed: %v", err, demoteErr)
+			}
+		}
+	}
+	return failures
 }
 
 func (s *OperationalModeService) ensureStorage() {
@@ -211,6 +260,12 @@ func (s *OperationalModeService) SetMode(ctx context.Context, chatID string, mod
 			}
 		} else {
 			return fmt.Errorf("switching to live mode requires %d confirmations", s.config.ConfirmationCount)
+		}
+	}
+
+	if mode == OpModeLive && s.guard != nil {
+		if err := s.guard(ctx, chatID); err != nil {
+			return fmt.Errorf("live mode proof gate blocked: %w", err)
 		}
 	}
 

@@ -312,8 +312,12 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 //
 // Returns the assembled slice of message lines ready for joining into a notification body.
 func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category string, confidenceKnown bool, maxReasons int) []string {
+	header := "🤖 AI Trading Decision"
+	if reasoning.ReasonCategory == reasonCategoryDeterministicFallback {
+		header = "⚙️ Deterministic Trading Decision"
+	}
 	lines := []string{
-		"🤖 AI Trading Decision",
+		header,
 		"",
 		fmt.Sprintf("Type: %s", reasoning.DecisionType),
 	}

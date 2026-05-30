@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -122,6 +123,7 @@ func (h *IntegratedQuestHandlers) resolvePaperScalpingMarkPrice(
 	ctx context.Context,
 	position ManagedOpenPosition,
 ) (decimal.Decimal, bool) {
+	var rawPrice decimal.Decimal
 	if h != nil {
 		tickerSource, ok := h.ccxtService.(interface {
 			FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
@@ -129,14 +131,31 @@ func (h *IntegratedQuestHandlers) resolvePaperScalpingMarkPrice(
 		if ok {
 			ticker, err := tickerSource.FetchSingleTicker(ctx, position.Exchange, position.Symbol)
 			if err == nil && ticker != nil && ticker.GetPrice() > 0 {
-				return decimal.NewFromFloat(ticker.GetPrice()), true
+				rawPrice = decimal.NewFromFloat(ticker.GetPrice())
 			}
 		}
 	}
-	if position.LastPrice.GreaterThan(decimal.Zero) {
-		return position.LastPrice, true
+	if rawPrice.LessThanOrEqual(decimal.Zero) && position.LastPrice.GreaterThan(decimal.Zero) {
+		rawPrice = position.LastPrice
 	}
-	return decimal.Zero, false
+	if rawPrice.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, false
+	}
+	// Apply realistic slippage simulation (±0.02% to ±0.10% based on position size)
+	// Tests can set NEURATRADE_PAPER_SCALPING_SLIPPAGE_BPS=0 to disable slippage.
+	slipBps := decimal.NewFromFloat(0.0002) // base 2 bps
+	if position.Size.GreaterThan(decimal.NewFromInt(50)) {
+		slipBps = decimal.NewFromFloat(0.0010) // 10 bps for large positions
+	} else if position.Size.GreaterThan(decimal.NewFromInt(10)) {
+		slipBps = decimal.NewFromFloat(0.0005) // 5 bps for medium positions
+	}
+	if v := os.Getenv("NEURATRADE_PAPER_SCALPING_SLIPPAGE_BPS"); v != "" {
+		if parsed, err := decimal.NewFromString(v); err == nil {
+			slipBps = parsed
+		}
+	}
+	slipFactor := decimal.NewFromFloat(1.0 + (rand.Float64()*2.0-1.0)*slipBps.InexactFloat64())
+	return rawPrice.Mul(slipFactor).Round(8), true
 }
 
 func paperScalpingCloseTrigger(position ManagedOpenPosition, exitPrice decimal.Decimal) string {

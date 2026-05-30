@@ -37,7 +37,8 @@ curl -fsS http://127.0.0.1:8080/ready
 
 The soak should pass these gates unless an operator records a deliberate waiver:
 
-- `MIN_TRADES=1`
+- `MIN_TRADES=20` when `REQUIRE_LIVE_TRIAL_READY=true`; otherwise `MIN_TRADES=1`
+- `HOLD_PERIOD_SECONDS=300`
 - `MIN_WIN_RATE=0.123`
 - `MIN_NET_PNL=0`
 - `MIN_AVG_NET_PNL=0`
@@ -45,11 +46,37 @@ The soak should pass these gates unless an operator records a deliberate waiver:
 - `MAX_HOLD_RATIO=0.745`
 - `MAX_DRAWDOWN_PCT=0.01`
 - `MAX_AI_PROVIDER_DEGRADED_CYCLES=0`
+- `MAX_PERFECT_WIN_TRADES=20`
 - `MIN_BASELINE_WIN_RATE_DELTA=0`
 - `MIN_BASELINE_NET_PNL_DELTA=0`
 - `MIN_BASELINE_AVG_PNL_DELTA=0`
+- `REQUIRE_LIVE_TRIAL_READY=false`
 
 The artifact verifier enforces these same defaults.
+
+`MAX_PERFECT_WIN_TRADES` is a paper-realism guard. If a paper soak closes more
+than this many trades with 100% wins and zero drawdown, the evidence is treated
+as insufficient even when PnL is positive. Use `MAX_PERFECT_WIN_TRADES=` only
+for diagnostic runs where an operator explicitly accepts that perfect paper
+results are not proof of production profitability.
+
+`live_trial_readiness` is stricter than paper acceptance. It is only `ready=true`
+when the paper sample has at least 20 closed trades, both wins and losses,
+observed drawdown, complete signal-quality telemetry, no AI provider degradation,
+acceptable hold ratio, and positive net/average PnL after fees. Set
+`REQUIRE_LIVE_TRIAL_READY=true` only when a run is intended to approve a tightly
+capped live/testnet trial; normal paper runs may be profitable but still not
+ready for real-money signaling if the sample is too small or too clean.
+
+For the real LLM no-order path, `services/backend-api/scripts/ai-scalping-probe.sh`
+emits both synthetic proposal PnL and observed-exit paper PnL. Single-cycle
+proposal exits remain `exit_observed=false`; observed paper trades close only
+when a later market snapshot reaches SL/TP or the configured
+`PAPER_HOLD_PERIOD_SECONDS` mark-to-market point. Treat short LLM probes as
+provider/actionability evidence unless `paper_live_trial_readiness.ready=true`
+is backed by `observed_paper_trades` reaching the live-trial minimum. Use
+`REQUIRE_OBSERVED_LIVE_TRIAL_READY=true` when an LLM probe artifact is intended
+to approve any real-money or tightly capped live/testnet signaling.
 
 ## Run
 
@@ -69,11 +96,12 @@ For manual runs, use the same defaults explicitly:
 stamp="$(date +%Y%m%d%H%M%S)"
 export SOAK_DB_PATH="${HOME}/.neuratrade/data/scalping-soak-acceptance-${stamp}.db"
 export SOAK_OUTPUT_FILE="${HOME}/.neuratrade/data/scalping-soak-acceptance-${stamp}.json"
-export CYCLES=30
-export INTERVAL_MS=1000
-export TIMEOUT_SECONDS=120
+export CYCLES=60
+export INTERVAL_MS=15000
+export TIMEOUT_SECONDS=0
+export HOLD_PERIOD_SECONDS=300
 export CAPITAL=48
-export MIN_TRADES=1
+export MIN_TRADES=20
 export MIN_WIN_RATE=0.123
 export MIN_NET_PNL=0
 export MIN_AVG_NET_PNL=0
@@ -81,17 +109,32 @@ export MIN_SIGNAL_QUALITY_COVERAGE=1
 export MAX_HOLD_RATIO=0.745
 export MAX_DRAWDOWN_PCT=0.01
 export MAX_AI_PROVIDER_DEGRADED_CYCLES=0
+export MAX_PERFECT_WIN_TRADES=20
 export MIN_BASELINE_WIN_RATE_DELTA=0
 export MIN_BASELINE_NET_PNL_DELTA=0
 export MIN_BASELINE_AVG_PNL_DELTA=0
+export REQUIRE_LIVE_TRIAL_READY=true
 
 bash services/backend-api/scripts/scalping-soak.sh run
 bash services/backend-api/scripts/verify-scalping-soak-artifact.sh "$SOAK_OUTPUT_FILE"
 ```
 
-`CYCLES=30` intentionally requests more than the binary cap; the current binary
-normalizes to its configured maximum and records the effective cycle count in the
-artifact.
+To seed scalping rollout proof metrics as part of an acceptance run, set
+`RECORD_ROLLOUT_PROOF=true` and point `SOAK_DB_PATH` at the runtime autonomy
+database. The write is refused unless `live_trial_readiness.ready=true`, and the
+stored metrics include closed trades, net PnL, win/loss counts, drawdown,
+signal-quality coverage, AI degradation cycles, hold ratio, and open paper
+positions.
+
+`TIMEOUT_SECONDS=0` lets the soak binary compute a budget from the requested
+cycles and interval. If you need a fixed manual timeout for the defaults above,
+use at least `3000` seconds so slow exchange calls do not expire before the
+binary's computed budget.
+
+`CYCLES=60`, `INTERVAL_MS=15000`, and `HOLD_PERIOD_SECONDS=300` give early
+positions enough later observations to close honestly while still keeping a
+single readiness run bounded. Short smoke soaks are useful for plumbing checks,
+but they must not be used to signal real-money readiness.
 
 ## Evidence To Record
 
@@ -110,7 +153,8 @@ jq -r '
       trade_summary,
       ai_provider_degradation,
       baseline_comparison,
-      insufficient_trade_proof
+      insufficient_trade_proof,
+      live_trial_readiness
     }
 ' "$SOAK_OUTPUT_FILE"
 ```
@@ -129,6 +173,54 @@ select 'negative_realized', count(*) from realized_pnl_journal where realized_pn
 "
 ```
 
+Before encoding a new deterministic entry rule, validate it against separate
+observed soak DBs instead of a single winning window. For example:
+
+```bash
+python3 services/backend-api/scripts/validate-scalping-rule-candidate.py \
+  --train-db /path/to/earlier-scalping-soak.db \
+  --validation-db /path/to/latest-scalping-soak.db \
+  --side buy \
+  --min-imbalance 0.35 \
+  --max-spread 0.06 \
+  --max-range 35 \
+  --min-recent 0.05 \
+  --min-24h 0.02 \
+  --min-drawdown-pct 0.0001 \
+  --min-validation-drawdown-pct 0.0001
+```
+
+To search conservative buy/sell threshold grids before choosing a candidate:
+
+```bash
+python3 services/backend-api/scripts/validate-scalping-rule-candidate.py \
+  --train-db /path/to/earlier-scalping-soak.db \
+  --validation-db /path/to/latest-scalping-soak.db \
+  --search-grid \
+  --side both \
+  --min-trades 20 \
+  --min-validation-trades 5 \
+  --min-drawdown-pct 0.0001 \
+  --min-validation-drawdown-pct 0.0001
+```
+
+For a single retained soak DB, use a chronological validation split instead of
+copying rows into temporary databases:
+
+```bash
+python3 services/backend-api/scripts/validate-scalping-rule-candidate.py \
+  --train-db /path/to/scalping-soak.db \
+  --validation-split-ratio 0.4 \
+  --search-grid \
+  --side both \
+  --hold-seconds 300
+```
+
+Do not promote a rule that fails validation profitability or depends on a single
+outlier trade after removing the best result. A candidate also needs observed
+drawdown in both train and validation slices; perfect/no-drawdown windows are
+not enough evidence for real-money or tiny live/testnet signaling.
+
 ## Pass Criteria
 
 The run can close the final scalping acceptance item only when:
@@ -143,6 +235,8 @@ The run can close the final scalping acceptance item only when:
 - AI provider degradation is zero.
 - The result comes from a merged/deployed paper/testnet/tightly capped live
   runtime.
+- `live_trial_readiness.ready=true` before any real-money or tiny live/testnet
+  approval signal is sent.
 
 If any criterion fails, keep the acceptance issue open and file a concrete
 follow-up with the failed metric, artifact path, database path, and command used.

@@ -173,8 +173,8 @@ features:
   telegram_bot: true
   web_interface: true
   api_v1: true
-  real_trading: true
-  paper_trading: false
+  real_trading: false
+  paper_trading: true
 
 # Wallet configuration (override defaults to allow trading with current account)
 wallet:

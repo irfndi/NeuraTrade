@@ -95,6 +95,9 @@ export const formatActionAlertMessage = (
   lines.push(`Price: ${input.price}`);
   lines.push(`Size: ${input.size}`);
   lines.push(`Strategy: ${input.strategy}`);
+  lines.push(
+    "Mode Safety: Execution follows the current /mode state; LIVE orders require backend proof-gate approval.",
+  );
 
   if (hasValue(input.reasoning)) {
     lines.push("");
