@@ -38,6 +38,7 @@ type HealthHandler struct {
 	ccxtURL        string
 	telegram       TelegramHealthConfig
 	cacheAnalytics CacheAnalyticsInterface
+	reliability    *services.ExchangeReliabilityTracker
 }
 
 // TelegramHealthConfig contains backend-to-Telegram delivery endpoints checked by /health.
@@ -86,17 +87,18 @@ type ServiceStatus struct {
 //
 //	*HealthHandler: Initialized handler.
 func NewHealthHandler(db DatabaseHealthChecker, redis RedisHealthChecker, ccxtURL string, cacheAnalytics CacheAnalyticsInterface) *HealthHandler {
-	return NewHealthHandlerWithTelegram(db, redis, ccxtURL, TelegramHealthConfig{}, cacheAnalytics)
+	return NewHealthHandlerWithTelegram(db, redis, ccxtURL, TelegramHealthConfig{}, cacheAnalytics, nil)
 }
 
 // NewHealthHandlerWithTelegram creates a health handler with Telegram delivery endpoint probing enabled.
-func NewHealthHandlerWithTelegram(db DatabaseHealthChecker, redis RedisHealthChecker, ccxtURL string, telegram TelegramHealthConfig, cacheAnalytics CacheAnalyticsInterface) *HealthHandler {
+func NewHealthHandlerWithTelegram(db DatabaseHealthChecker, redis RedisHealthChecker, ccxtURL string, telegram TelegramHealthConfig, cacheAnalytics CacheAnalyticsInterface, reliability *services.ExchangeReliabilityTracker) *HealthHandler {
 	return &HealthHandler{
 		db:             db,
 		redis:          redis,
 		ccxtURL:        ccxtURL,
 		telegram:       telegram,
 		cacheAnalytics: cacheAnalytics,
+		reliability:    reliability,
 	}
 }
 
@@ -578,14 +580,40 @@ func (h *HealthHandler) GetRiskMetrics(w http.ResponseWriter, r *http.Request) {
 	span.SetTag("http.url", r.URL.String())
 	span.SetTag("handler.name", "GetRiskMetrics")
 
+	activeExchanges := 0
+	failedExchanges := 0
+	avgReliability := 0.0
+
+	if h.reliability != nil {
+		allMetrics := h.reliability.GetAllReliabilityMetrics()
+		activeExchanges = len(allMetrics)
+		avgReliabilitySum := 0.0
+		for _, m := range allMetrics {
+			if m.FailureCount24h > 5 {
+				failedExchanges++
+			}
+			avgReliabilitySum += m.UptimePercent24h.InexactFloat64()
+		}
+		if activeExchanges > 0 {
+			avgReliability = avgReliabilitySum / float64(activeExchanges)
+		}
+	}
+
+	systemRisk := 0
+	if avgReliability < 0.8 {
+		systemRisk = 20
+	} else if avgReliability < 0.95 {
+		systemRisk = 10
+	}
+
 	metrics := RiskMetrics{
-		SystemRisk:      15,
-		ExchangeRisk:    5,
-		LiquidityRisk:   3,
-		VolatilityRisk:  5,
-		OperationalRisk: 2,
-		ActiveExchanges: 6,
-		FailedExchanges: 0,
+		SystemRisk:      systemRisk,
+		ExchangeRisk:    failedExchanges * 10,
+		LiquidityRisk:   0,
+		VolatilityRisk:  0,
+		OperationalRisk: 0,
+		ActiveExchanges: activeExchanges,
+		FailedExchanges: failedExchanges,
 		LastRiskUpdate:  time.Now(),
 	}
 

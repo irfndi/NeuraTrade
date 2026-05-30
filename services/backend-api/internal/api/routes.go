@@ -149,6 +149,10 @@ var supportedAIProviders = map[string]struct{}{
 	string(llm.ProviderMLX):       {},
 	"deepseek":                    {},
 	"google":                      {},
+	"kimi":                        {},
+	"kimi-for-coding":             {},
+	"moonshotai":                  {},
+	"moonshotai-cn":               {},
 	"minimax":                     {},
 	"zai":                         {},
 	"zai-coding-plan":             {},
@@ -433,7 +437,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			BotToken:    telegramConfig.BotToken,
 		}
 	}
-	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService)
+	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService, nil)
 
 	// Health check endpoints with telemetry
 	healthGroup := router.Group("/")
@@ -1300,6 +1304,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		risk := v1.Group("/risk")
 		{
 			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
+		}
+
+		// Paper trading readiness endpoints
+		readinessHandler := handlers.NewReadinessHandler(db.(database.DBPool))
+		readiness := v1.Group("/readiness")
+		{
+			readiness.GET("/paper-trading", readinessHandler.PaperTradingManifest)
+			readiness.GET("/paper-trading/evidence", readinessHandler.PaperTradingEvidence)
 		}
 
 		// Agent control plane command and event stream APIs (admin-only).

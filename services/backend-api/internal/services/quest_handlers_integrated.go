@@ -1721,24 +1721,61 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 		if decision.EntryPrice != nil {
 			entryPrice = *decision.EntryPrice
 		}
-		if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
-			OrderID:    decision.OrderID,
-			ChatID:     chatID,
-			Exchange:   userExchange,
-			Symbol:     decision.Symbol,
-			Side:       decision.Action,
-			OrderType:  "market",
-			MarketType: "futures",
-			Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)).Round(2),
-			EntryPrice: entryPrice,
-			StopLoss:   decimalValueOrZero(decision.StopLoss),
-			TakeProfit: decimalValueOrZero(decision.TakeProfit),
-			Source:     scalpingExecutionLifecycleSource(currentMode),
-			OpenedAt:   time.Now().UTC(),
-		}); err != nil {
-			log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+		// Fallback: if AI decision has no entry price, fetch current market price
+		// so that TP/SL triggers and PnL calculation work correctly.
+		if entryPrice.LessThanOrEqual(decimal.Zero) && h.ccxtService != nil {
+			if tickerSource, ok := h.ccxtService.(interface {
+				FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
+			}); ok {
+				if ticker, err := tickerSource.FetchSingleTicker(ctx, userExchange, decision.Symbol); err == nil && ticker != nil && ticker.GetPrice() > 0 {
+					entryPrice = decimal.NewFromFloat(ticker.GetPrice())
+					log.Printf("[SCALPING] Fetched fallback entry price for %s: %s", decision.Symbol, entryPrice.String())
+				}
+			}
+		}
+		if entryPrice.LessThanOrEqual(decimal.Zero) {
+			log.Printf("[SCALPING] SKIPPING lifecycle persistence for %s: entry price is zero (cannot calculate PnL or TP/SL)", decision.Symbol)
 		} else {
-			lifecyclePersisted = true
+			// Auto-derive SL/TP from entry price if AI didn't provide them
+			stopLoss := decimalValueOrZero(decision.StopLoss)
+			takeProfit := decimalValueOrZero(decision.TakeProfit)
+			if stopLoss.LessThanOrEqual(decimal.Zero) {
+				slPct := decimal.NewFromFloat(0.001) // 0.1% default scalping SL
+				if strings.EqualFold(decision.Action, "buy") {
+					stopLoss = entryPrice.Mul(decimal.NewFromInt(1).Sub(slPct))
+				} else {
+					stopLoss = entryPrice.Mul(decimal.NewFromInt(1).Add(slPct))
+				}
+				log.Printf("[SCALPING] Auto-derived stop-loss for %s at %s (entry=%s)", decision.Symbol, stopLoss.String(), entryPrice.String())
+			}
+			if takeProfit.LessThanOrEqual(decimal.Zero) {
+				tpPct := decimal.NewFromFloat(0.002) // 0.2% default scalping TP
+				if strings.EqualFold(decision.Action, "buy") {
+					takeProfit = entryPrice.Mul(decimal.NewFromInt(1).Add(tpPct))
+				} else {
+					takeProfit = entryPrice.Mul(decimal.NewFromInt(1).Sub(tpPct))
+				}
+				log.Printf("[SCALPING] Auto-derived take-profit for %s at %s (entry=%s)", decision.Symbol, takeProfit.String(), entryPrice.String())
+			}
+			if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
+				OrderID:    decision.OrderID,
+				ChatID:     chatID,
+				Exchange:   userExchange,
+				Symbol:     decision.Symbol,
+				Side:       decision.Action,
+				OrderType:  "market",
+				MarketType: "futures",
+				Amount:     walletBasis(portfolio).Mul(decimal.NewFromFloat(decision.SizePercent)).Div(decimal.NewFromInt(100)).Round(2),
+				EntryPrice: entryPrice,
+				StopLoss:   stopLoss,
+				TakeProfit: takeProfit,
+				Source:     scalpingExecutionLifecycleSource(currentMode),
+				OpenedAt:   time.Now().UTC(),
+			}); err != nil {
+				log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+			} else {
+				lifecyclePersisted = true
+			}
 		}
 	}
 	if currentMode == ModePaper && !lifecyclePersisted {
@@ -5841,6 +5878,20 @@ func (h *IntegratedQuestHandlers) reconcileMissingManagedPosition(
 		exitPrice = decimal.Zero
 	}
 
+	// Calculate PnL if we have valid entry and exit prices
+	realizedPnL := decimal.Zero
+	if position.EntryPrice.GreaterThan(decimal.Zero) && exitPrice.GreaterThan(decimal.Zero) {
+		delta := exitPrice.Sub(position.EntryPrice)
+		if strings.EqualFold(position.Side, "sell") {
+			delta = position.EntryPrice.Sub(exitPrice)
+		}
+		baseFilled := position.Size.Abs()
+		if position.EntryPrice.GreaterThan(decimal.Zero) {
+			baseFilled = position.Size.Abs().Div(position.EntryPrice)
+		}
+		realizedPnL = delta.Mul(baseFilled)
+	}
+
 	closeSource := strings.TrimSpace(source)
 	if closeSource == "" {
 		closeSource = "risk_reconcile"
@@ -5859,7 +5910,7 @@ func (h *IntegratedQuestHandlers) reconcileMissingManagedPosition(
 		Filled:      position.Size.Abs(),
 		EntryPrice:  position.EntryPrice,
 		ExitPrice:   exitPrice,
-		RealizedPnL: decimal.Zero,
+		RealizedPnL: realizedPnL,
 		Source:      closeSource,
 		ClosedAt:    time.Now().UTC(),
 	}); err != nil {

@@ -564,6 +564,7 @@ func TestIntegratedQuestHandlersPersistScalpingExecutionLifecycle_LinksPaperOrde
 
 func TestIntegratedQuestHandlersCloseTriggeredPaperScalpingPositions_TakeProfitRecordsPnLAndTelemetry(t *testing.T) {
 	t.Setenv("NEURATRADE_PAPER_SCALPING_TAKER_FEE_RATE", "0.001")
+	t.Setenv("NEURATRADE_PAPER_SCALPING_SLIPPAGE_BPS", "0")
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-scalping-close-tp.db"))
 	require.NoError(t, err)
@@ -656,6 +657,7 @@ func TestIntegratedQuestHandlersCloseTriggeredPaperScalpingPositions_TakeProfitR
 
 func TestIntegratedQuestHandlersCloseTriggeredPaperScalpingPositions_StopLossRecordsLossAfterFees(t *testing.T) {
 	t.Setenv("NEURATRADE_PAPER_SCALPING_TAKER_FEE_RATE", "0.001")
+	t.Setenv("NEURATRADE_PAPER_SCALPING_SLIPPAGE_BPS", "0")
 	ctx := context.Background()
 	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-scalping-close-sl.db"))
 	require.NoError(t, err)
