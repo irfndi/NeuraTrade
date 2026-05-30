@@ -32,6 +32,30 @@ func TestMustNewAuthMiddleware(t *testing.T) {
 	assert.Equal(t, []byte(secretKey), am.secretKey)
 }
 
+func TestNewAuthMiddleware_Errors(t *testing.T) {
+	t.Run("empty secret", func(t *testing.T) {
+		am, err := NewAuthMiddleware("")
+		assert.Nil(t, am)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "secret key cannot be empty")
+	})
+
+	t.Run("short secret", func(t *testing.T) {
+		am, err := NewAuthMiddleware("short")
+		assert.Nil(t, am)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "at least 32 characters")
+	})
+
+	t.Run("valid secret", func(t *testing.T) {
+		secret := generateTestSecret()
+		am, err := NewAuthMiddleware(secret)
+		assert.NoError(t, err)
+		assert.NotNil(t, am)
+		assert.Equal(t, []byte(secret), am.secretKey)
+	})
+}
+
 func TestAuthMiddleware_GenerateToken(t *testing.T) {
 	// Use dynamically generated secret for security
 	am := MustNewAuthMiddleware(generateTestSecret())

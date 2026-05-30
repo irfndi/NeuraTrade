@@ -84,7 +84,8 @@ func TestAutonomousIntegration(t *testing.T) {
 		Used:      map[string]float64{"USDT": 5000.0, "BTC": 0.0},
 	}, nil)
 
-	api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil)
+	_, err = api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil)
+	require.NoError(t, err)
 
 	testTelegramChatID := fmt.Sprintf("tg_auto_%s", uuid.New().String())
 	testEmail := fmt.Sprintf("test_auto_%s@celebrum.ai", uuid.New().String())
