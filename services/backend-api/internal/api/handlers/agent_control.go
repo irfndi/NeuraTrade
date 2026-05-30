@@ -198,7 +198,7 @@ func (h *AgentControlHandler) DisableSafeMode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "disable_safe_mode"})
 		return
 	}
-	zaplogrus.Warnf("agent_control: safe mode disabled")
+	zaplogrus.Infof("agent_control: safe mode disabled")
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "disable_safe_mode",

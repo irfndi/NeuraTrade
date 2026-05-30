@@ -1440,7 +1440,8 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 	e.mu.RUnlock()
 
 	if !ok {
-		zaplogrus.Infof("No handler registered for quest type: %s", quest.Type)
+		zaplogrus.Warnf("No handler registered for quest type: %s", quest.Type)
+		e.finalizeQuestExecution(quest, fmt.Errorf("no handler registered for quest type: %s", quest.Type))
 		return
 	}
 

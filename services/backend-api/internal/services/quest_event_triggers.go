@@ -99,7 +99,7 @@ func (s *EventDrivenQuestSystem) EmitEvent(event *QuestEvent) {
 	select {
 	case s.events <- event:
 	default:
-		zaplogrus.Infof("Event queue full, dropping event: %s", event.ID)
+		zaplogrus.Warnf("Event queue full, dropping event: %s", event.ID)
 	}
 }
 

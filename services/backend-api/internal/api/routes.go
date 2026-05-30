@@ -977,7 +977,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				}
 			}
 			llmClient = llm.NewFailoverClient(failoverNodes, maxHops)
-			zaplogrus.Warnf("AI provider failover enabled: nodes=%d max_hops=%d", len(failoverNodes), maxHops)
+			zaplogrus.Infof("AI provider failover enabled: nodes=%d max_hops=%d", len(failoverNodes), maxHops)
 		}
 
 		skillRegistry := skill.NewRegistry(filepath.Join(filepath.Dir(""), "skills"))

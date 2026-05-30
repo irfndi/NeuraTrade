@@ -4131,7 +4131,7 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 		decision, parseErr := parseAIDecisionPayload(repaired)
 		if parseErr == nil && isValidDecisionAction(decision.Action) && validateRecoveredDecisionContract(decision) == nil {
 			applySLTPFromOriginal(decision, raw)
-			zaplogrus.Warnf("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
+			zaplogrus.Infof("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
 			return decision, nil
 		}
 		if inferred, inferErr := inferDecisionFromLooseText(repaired); inferErr == nil {

@@ -186,7 +186,7 @@ func (h *ArbitrageHandler) GetArbitrageOpportunities(c *gin.Context) {
 	// Get recent market data from database
 	opportunities, err := h.FindArbitrageOpportunities(c.Request.Context(), minProfit, limit, symbolFilter)
 	if err != nil {
-		zaplogrus.Infof("Error finding arbitrage opportunities: %v", err)
+		zaplogrus.Warnf("Error finding arbitrage opportunities: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to find arbitrage opportunities"})
 		return
 	}
