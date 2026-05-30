@@ -1,12 +1,13 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	"github.com/irfndi/neuratrade/internal/ccxt"

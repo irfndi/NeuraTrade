@@ -1,10 +1,11 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"fmt"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 )
 
 type QuestEventType string

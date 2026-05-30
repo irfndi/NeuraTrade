@@ -1,10 +1,11 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
 	"strings"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/shopspring/decimal"
 )

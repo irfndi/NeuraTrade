@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

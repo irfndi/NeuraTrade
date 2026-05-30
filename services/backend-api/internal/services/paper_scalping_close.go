@@ -1,13 +1,14 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
 	"math/rand"
 	"os"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"

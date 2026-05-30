@@ -1,12 +1,13 @@
 package autonomous
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"

@@ -1,7 +1,6 @@
 package ai
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 )
 
 const learningDataDirEnv = "NEURATRADE_AI_LEARNING_DATA_DIR"

@@ -1,7 +1,6 @@
 package ccxt
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

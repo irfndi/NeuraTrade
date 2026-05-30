@@ -3,7 +3,6 @@
 package execution
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/platform/actor"

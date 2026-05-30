@@ -1,13 +1,14 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/google/uuid"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"

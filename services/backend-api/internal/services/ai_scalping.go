@@ -1,7 +1,6 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +16,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"

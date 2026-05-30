@@ -1,8 +1,9 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"math"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 )
 
 func calculateMeanFloat64(values []float64) float64 {

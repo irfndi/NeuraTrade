@@ -1,7 +1,6 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -11,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/autonomous"
 )

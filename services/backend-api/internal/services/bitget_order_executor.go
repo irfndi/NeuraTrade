@@ -1,7 +1,6 @@
 package services
 
 import (
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/shopspring/decimal"
