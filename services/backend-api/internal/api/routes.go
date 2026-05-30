@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/ai"
 	"github.com/irfndi/neuratrade/internal/ai/llm"
@@ -425,6 +426,24 @@ func riskLockSourcePriority(source string) int {
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
 	configureLiveReadinessGuard(opModeService)
 
+	// Apply CORS middleware globally
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"},
+		ExposeHeaders:    []string{"Content-Length", "Content-Type"},
+		AllowCredentials: false,
+		MaxAge:           12 * time.Hour,
+	}))
+
+	// Initialize rate limiter (Redis-backed if available, otherwise in-memory)
+	var redisClientRaw *redisv9.Client
+	if redis != nil {
+		redisClientRaw = redis.Client
+	}
+	rateLimiter := middleware.NewRateLimiter(middleware.DefaultRateLimitConfig(), redisClientRaw, nil)
+	router.Use(rateLimiter.Middleware())
+
 	// Initialize admin middleware
 	adminMiddleware := middleware.NewAdminMiddleware()
 
@@ -450,11 +469,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	// Initialize user handler early for internal routes
-	var redisClientRaw *redisv9.Client
-	if redis != nil {
-		redisClientRaw = redis.Client
-	}
-
 	userHandler := handlers.NewUserHandler(db, redisClientRaw, authMiddleware)
 
 	// Initialize notification service with Redis caching
