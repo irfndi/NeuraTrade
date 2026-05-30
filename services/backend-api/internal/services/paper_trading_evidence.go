@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -18,7 +19,9 @@ type PaperTradingEvidence struct {
 	StrategyCount              int             `json:"strategy_count"`
 	ClosedTrades               int             `json:"closed_trades"`
 	OpenPositions              int             `json:"open_positions"`
+	Capital                    decimal.Decimal `json:"capital"`
 	NetPnL                     decimal.Decimal `json:"net_pnl"`
+	NormalizedPnL              decimal.Decimal `json:"normalized_pnl"`
 	AvgNetPnL                  decimal.Decimal `json:"avg_net_pnl"`
 	WinRate                    decimal.Decimal `json:"win_rate"`
 	RiskLimitsEnforced         bool            `json:"risk_limits_enforced"`
@@ -52,24 +55,35 @@ func (g *PaperTradingEvidenceGenerator) GenerateEvidence(
 		return nil, fmt.Errorf("database not available")
 	}
 
-	// Query paper trades for the validation window
-	query := `
-		SELECT 
+	// Build query with strategy filter
+	args := []interface{}{startTime, endTime}
+	strategyFilter := ""
+	if len(strategies) > 0 {
+		placeholders := make([]string, len(strategies))
+		for i, s := range strategies {
+			placeholders[i] = fmt.Sprintf("$%d", i+3)
+			args = append(args, s)
+		}
+		strategyFilter = fmt.Sprintf(" AND strategy_id IN (%s)", strings.Join(placeholders, ","))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
 			COUNT(*) as total_trades,
 			COUNT(CASE WHEN pnl > 0 THEN 1 END) as winning_trades,
 			COALESCE(SUM(pnl), 0) as total_pnl,
 			COALESCE(AVG(pnl), 0) as avg_pnl,
 			COUNT(CASE WHEN status = 'closed' THEN 1 END) as closed_trades,
 			COUNT(CASE WHEN status = 'open' THEN 1 END) as open_positions
-		FROM paper_trades 
-		WHERE created_at BETWEEN $1 AND $2
-	`
+		FROM paper_trades
+		WHERE created_at BETWEEN $1 AND $2%s
+	`, strategyFilter)
 
 	var totalTrades, winningTrades, closedTrades, openPositions int
 	var totalPnL, avgPnL decimal.Decimal
 
 	ctx := context.Background()
-	row := g.db.QueryRow(ctx, query, startTime, endTime)
+	row := g.db.QueryRow(ctx, query, args...)
 	err := row.Scan(
 		&totalTrades, &winningTrades, &totalPnL, &avgPnL, &closedTrades, &openPositions,
 	)
@@ -83,8 +97,8 @@ func (g *PaperTradingEvidenceGenerator) GenerateEvidence(
 		winRate = decimal.NewFromInt(int64(winningTrades)).Div(decimal.NewFromInt(int64(totalTrades)))
 	}
 
-	// Calculate continuous validation hours
-	continuousHours := decimal.NewFromFloat(time.Since(startTime).Hours())
+	// Calculate continuous validation hours from the requested window
+	continuousHours := decimal.NewFromFloat(endTime.Sub(startTime).Hours())
 
 	// Check risk limits enforcement
 	riskLimitsEnforced := g.checkRiskLimitsEnforcement(startTime, endTime)
@@ -92,13 +106,21 @@ func (g *PaperTradingEvidenceGenerator) GenerateEvidence(
 	// Check backtest comparison
 	backtestVerified := g.checkBacktestComparison(strategies)
 
+	// Normalize PnL against provided capital
+	normalizedPnL := decimal.Zero
+	if capital.GreaterThan(decimal.Zero) {
+		normalizedPnL = totalPnL.Div(capital)
+	}
+
 	evidence := &PaperTradingEvidence{
 		Timestamp:                  time.Now(),
 		ContinuousValidationHours:  continuousHours,
 		StrategyCount:              len(strategies),
 		ClosedTrades:               closedTrades,
 		OpenPositions:              openPositions,
+		Capital:                    capital,
 		NetPnL:                     totalPnL,
+		NormalizedPnL:              normalizedPnL,
 		AvgNetPnL:                  avgPnL,
 		WinRate:                    winRate,
 		RiskLimitsEnforced:         riskLimitsEnforced,
