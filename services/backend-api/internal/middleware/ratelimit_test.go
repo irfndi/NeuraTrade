@@ -36,11 +36,15 @@ func TestDefaultRateLimitConfig(t *testing.T) {
 	// Test SkipFunc
 	c2, _ := gin.CreateTestContext(w)
 	c2.Request = httptest.NewRequest(http.MethodGet, "/health", nil)
-	assert.True(t, config.SkipFunc(c2))
+	assert.True(t, config.SkipFunc(c2), "health should be skipped")
 
 	c3, _ := gin.CreateTestContext(w)
-	c3.Request = httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	assert.False(t, config.SkipFunc(c3))
+	c3.Request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	assert.True(t, config.SkipFunc(c3), "metrics should be skipped")
+
+	c4, _ := gin.CreateTestContext(w)
+	c4.Request = httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	assert.False(t, config.SkipFunc(c4), "api routes should not be skipped")
 }
 
 func TestNewRateLimiter(t *testing.T) {
