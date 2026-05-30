@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"io"
 	"math"
 	"net/http"

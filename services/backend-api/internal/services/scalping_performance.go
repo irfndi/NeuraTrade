@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"sync"
 	"time"
 

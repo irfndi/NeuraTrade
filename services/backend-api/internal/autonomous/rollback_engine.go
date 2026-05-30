@@ -3,7 +3,6 @@ package autonomous
 import (
 	"context"
 	"fmt"
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"strings"
 	"sync"
 	"time"

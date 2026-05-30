@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"time"
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"strconv"
 	"strings"
 	"time"
