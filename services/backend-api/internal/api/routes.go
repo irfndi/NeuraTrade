@@ -468,6 +468,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		healthGroup.GET("/live", gin.WrapF(healthHandler.LivenessCheck))
 	}
 
+	// Prometheus metrics endpoint
+	metricsHandler := handlers.NewPrometheusMetricsHandler()
+	metricsHandler.RegisterRoutes(healthGroup)
+
 	// Initialize user handler early for internal routes
 	userHandler := handlers.NewUserHandler(db, redisClientRaw, authMiddleware)
 
