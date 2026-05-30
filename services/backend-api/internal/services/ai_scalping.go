@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"math"
 	"os"
 	"path/filepath"

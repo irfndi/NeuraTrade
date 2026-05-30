@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"sync"
 	"sync/atomic"
 	"time"

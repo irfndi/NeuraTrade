@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"os"
 	"strconv"
 	"strings"

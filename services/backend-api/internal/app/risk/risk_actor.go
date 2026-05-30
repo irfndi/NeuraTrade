@@ -4,6 +4,7 @@ package risk
 import (
 	"context"
 	"fmt"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"sync"
 	"time"
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"time"
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
