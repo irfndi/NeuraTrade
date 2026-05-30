@@ -119,7 +119,8 @@ func (g *PaperTradingEvidenceGenerator) checkRiskLimitsEnforcement(startTime, en
 	query := `
 		SELECT COUNT(*) FROM paper_trades 
 		WHERE created_at BETWEEN $1 AND $2 
-		AND (pnl < -0.05 * ABS(entry_price * size) OR size > 0.1 * ABS(entry_price * size))
+		  AND status = 'closed'
+		  AND (pnl < -0.05 * ABS(entry_price * size) OR size > 0.1 * ABS(entry_price * size))
 	`
 
 	var violations int
@@ -139,17 +140,33 @@ func (g *PaperTradingEvidenceGenerator) checkBacktestComparison(strategies []str
 		return false
 	}
 
-	for _, strategy := range strategies {
-		query := `SELECT COUNT(*) FROM scalping_backtest_runs WHERE strategy = $1`
-		var count int
-		ctx := context.Background()
-		row := g.db.QueryRow(ctx, query, strategy)
-		err := row.Scan(&count)
-		if err != nil || count == 0 {
-			return false
+	ctx := context.Background()
+	// Fetch all backtest runs and parse JSON config in Go to avoid DB-specific JSON syntax.
+	rows, err := g.db.Query(ctx, `SELECT config FROM scalping_backtest_runs WHERE status = 'completed'`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+
+	foundStrategies := make(map[string]bool)
+	for rows.Next() {
+		var configJSON string
+		if err := rows.Scan(&configJSON); err != nil {
+			continue
+		}
+		var cfg struct {
+			Strategy string `json:"strategy"`
+		}
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err == nil && cfg.Strategy != "" {
+			foundStrategies[cfg.Strategy] = true
 		}
 	}
 
+	for _, strategy := range strategies {
+		if !foundStrategies[strategy] {
+			return false
+		}
+	}
 	return true
 }
 

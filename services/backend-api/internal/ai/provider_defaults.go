@@ -39,6 +39,30 @@ var providerTransportDefaults = map[string]ProviderTransportDefaults{
 		TransportFormat: ProviderTransportOpenAI,
 		RequiresAPIKey:  true,
 	},
+	"kimi": {
+		BaseURL:         "https://api.kimi.com/coding/v1",
+		DefaultModel:    "k2p6",
+		TransportFormat: ProviderTransportOpenAI,
+		RequiresAPIKey:  true,
+	},
+	"kimi-for-coding": {
+		BaseURL:         "https://api.kimi.com/coding/v1",
+		DefaultModel:    "k2p6",
+		TransportFormat: ProviderTransportOpenAI,
+		RequiresAPIKey:  true,
+	},
+	"moonshotai": {
+		BaseURL:         "https://api.moonshot.ai/v1",
+		DefaultModel:    "kimi-k2.6",
+		TransportFormat: ProviderTransportOpenAI,
+		RequiresAPIKey:  true,
+	},
+	"moonshotai-cn": {
+		BaseURL:         "https://api.moonshot.cn/v1",
+		DefaultModel:    "kimi-k2.6",
+		TransportFormat: ProviderTransportOpenAI,
+		RequiresAPIKey:  true,
+	},
 	"minimax": {
 		BaseURL:         "https://api.minimax.io/anthropic/v1",
 		DefaultModel:    "minimax-m2.5",

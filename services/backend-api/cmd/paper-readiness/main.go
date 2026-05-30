@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -10,30 +11,29 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/services"
-	"github.com/shopspring/decimal"
 )
 
 func main() {
 	if err := run(); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "paper-validation: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "paper-readiness: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func run() error {
 	var (
-		startTimeStr string
-		endTimeStr   string
-		strategies   string
-		capitalStr   string
-		outputPath   string
+		startTimeStr   string
+		endTimeStr     string
+		strategies     string
+		outputPath     string
+		failIfNotReady bool
 	)
 
 	flag.StringVar(&startTimeStr, "start", "", "Start time (RFC3339); defaults to 7 days ago")
 	flag.StringVar(&endTimeStr, "end", "", "End time (RFC3339); defaults to now")
 	flag.StringVar(&strategies, "strategies", "scalping,daily_trading,swing_trading,arbitrage", "Comma-separated strategies")
-	flag.StringVar(&capitalStr, "capital", "100", "Initial capital in USDT")
-	flag.StringVar(&outputPath, "output", "", "Output path for evidence JSON")
+	flag.StringVar(&outputPath, "output", "", "Output path for manifest JSON")
+	flag.BoolVar(&failIfNotReady, "fail-if-not-ready", false, "Exit with non-zero code if manifest is not ready")
 	flag.Parse()
 
 	// Parse times
@@ -56,10 +56,6 @@ func run() error {
 	}
 
 	strategyList := parseStrategies(strategies)
-	capital, err := decimal.NewFromString(capitalStr)
-	if err != nil {
-		return fmt.Errorf("invalid capital: %w", err)
-	}
 
 	// Load config and connect to database
 	cfg, err := config.Load()
@@ -75,22 +71,29 @@ func run() error {
 		_ = db.Close()
 	}()
 
-	// Generate real evidence from database
-	generator := services.NewPaperTradingEvidenceGenerator(db, &simpleLogger{})
-	evidence, err := generator.GenerateEvidence(startTime, endTime, strategyList, capital)
+	// Generate unified readiness manifest
+	ctx := context.Background()
+	generator := services.NewReadinessManifestGenerator(db, &simpleLogger{})
+	manifest, err := generator.GenerateManifest(ctx, startTime, endTime, strategyList)
 	if err != nil {
-		return fmt.Errorf("failed to generate evidence: %w", err)
+		return fmt.Errorf("failed to generate manifest: %w", err)
 	}
 
 	// Print to stdout
-	generator.PrintEvidence(evidence)
+	generator.PrintManifest(manifest)
 
 	// Save to file
 	if outputPath == "" {
-		outputPath = fmt.Sprintf("paper-trading-evidence-%s.json", time.Now().Format("20060102-150405"))
+		outputPath = fmt.Sprintf("paper-trading-readiness-%s.json", time.Now().Format("20060102-150405"))
 	}
-	if err := generator.SaveEvidence(evidence, outputPath); err != nil {
-		return fmt.Errorf("failed to save evidence: %w", err)
+	if err := generator.SaveManifest(manifest, outputPath); err != nil {
+		return fmt.Errorf("failed to save manifest: %w", err)
+	}
+
+	fmt.Printf("\nManifest saved to: %s\n", outputPath)
+
+	if failIfNotReady && !manifest.Acceptance.Ready {
+		return fmt.Errorf("paper trading NOT READY: %s", strings.Join(manifest.Acceptance.Failures, "; "))
 	}
 
 	return nil
