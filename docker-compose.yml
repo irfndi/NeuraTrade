@@ -38,10 +38,12 @@ services:
     env_file:
       - .env
     environment:
+      DATABASE_DRIVER: postgres
       DATABASE_URL: ${DATABASE_URL}
-      REDIS_ADDR: ${REDIS_ADDR}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
       TELEGRAM_SERVICE_URL: ${TELEGRAM_SERVICE_URL}
-      CCXT_SERVICE_URL: ${CCXT_SERVICE_URL}
+      TELEGRAM_GRPC_ADDRESS: ${TELEGRAM_GRPC_ADDRESS}
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,6 +65,9 @@ services:
       - .env
     environment:
       BACKEND_API_URL: ${BACKEND_API_URL}
+      TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      GRPC_BIND_ADDR: ${GRPC_BIND_ADDR}
     depends_on:
       backend-api:
         condition: service_healthy

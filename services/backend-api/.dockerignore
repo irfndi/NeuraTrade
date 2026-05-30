@@ -1,0 +1,34 @@
+# Build artifacts
+bin/
+dist/
+*.db
+*.db-shm
+*.db-wal
+
+# Test artifacts
+*.out
+coverage.out
+*_test.go
+/test/
+/e2e/
+
+# Local dev files
+.env
+.env.local
+*.log
+logs/
+
+# Git
+.git/
+.gitignore
+
+# CI
+.github/
+ci-artifacts/
+
+# Documentation
+*.md
+docs/
+
+# Scripts that aren't needed at runtime
+scripts/
