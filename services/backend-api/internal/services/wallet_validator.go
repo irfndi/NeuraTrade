@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/utils"
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"
@@ -262,7 +264,7 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 		  AND status = 'connected'
 	`, chatID)
 	if err != nil {
-		log.Printf("[WalletValidator] Failed to query exchanges: %v", err)
+		zaplogrus.Warnf("[WalletValidator] Failed to query exchanges: %v", err)
 		return balances, nil // Return empty rather than error for backward compatibility
 	}
 	defer rows.Close()
@@ -277,7 +279,7 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 	}
 
 	if len(exchanges) == 0 {
-		log.Printf("[WalletValidator] No connected exchanges for chat %s", chatID)
+		zaplogrus.Infof("[WalletValidator] No connected exchanges for chat %s", utils.MaskString(chatID, utils.DefaultMaskingConfig))
 		return balances, nil
 	}
 
@@ -286,7 +288,7 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 		for _, exchange := range exchanges {
 			balanceResp, err := wv.ccxtService.FetchBalance(ctx, exchange)
 			if err != nil {
-				log.Printf("[WalletValidator] Failed to fetch balance from %s: %v", exchange, err)
+				zaplogrus.Warnf("[WalletValidator] Failed to fetch balance from %s: %v", exchange, err)
 				continue
 			}
 
@@ -303,9 +305,9 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 			wv.metrics.IncrementChecksByExchange(exchange)
 		}
 
-		log.Printf("[WalletValidator] Fetched balances from %d exchanges: %d assets", len(exchanges), len(balances))
+		zaplogrus.Infof("[WalletValidator] Fetched balances from %d exchanges: %d assets", len(exchanges), len(balances))
 	} else {
-		log.Printf("[WalletValidator] CCXT service not available, returning empty balances")
+		zaplogrus.Infof("[WalletValidator] CCXT service not available, returning empty balances")
 	}
 
 	return balances, nil

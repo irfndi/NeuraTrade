@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -83,7 +84,7 @@ func (c *RedisSymbolCache) Get(exchangeID string) ([]string, bool) {
 		return nil, false
 	}
 	if err != nil {
-		log.Printf("Redis error getting symbols for %s: %v", exchangeID, err)
+		zaplogrus.Infof("Redis error getting symbols for %s: %v", exchangeID, err)
 		c.stats.mu.Lock()
 		c.stats.Misses++
 		c.stats.mu.Unlock()
@@ -93,7 +94,7 @@ func (c *RedisSymbolCache) Get(exchangeID string) ([]string, bool) {
 	// Deserialize cached entry
 	var entry SymbolCacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		log.Printf("Error deserializing cached symbols for %s: %v", exchangeID, err)
+		zaplogrus.Infof("Error deserializing cached symbols for %s: %v", exchangeID, err)
 		c.stats.mu.Lock()
 		c.stats.Misses++
 		c.stats.mu.Unlock()
@@ -104,7 +105,7 @@ func (c *RedisSymbolCache) Get(exchangeID string) ([]string, bool) {
 	if time.Now().After(entry.ExpiresAt) {
 		// Entry expired, but return it anyway to prevent API calls during runtime
 		// This matches the behavior of the original in-memory cache
-		log.Printf("Cached symbols for %s expired but returning to prevent API calls", exchangeID)
+		zaplogrus.Infof("Cached symbols for %s expired but returning to prevent API calls", exchangeID)
 	}
 
 	// Cache hit
@@ -136,14 +137,14 @@ func (c *RedisSymbolCache) Set(exchangeID string, symbols []string) {
 	// Serialize entry
 	data, err := json.Marshal(entry)
 	if err != nil {
-		log.Printf("Error serializing symbols for %s: %v", exchangeID, err)
+		zaplogrus.Infof("Error serializing symbols for %s: %v", exchangeID, err)
 		return
 	}
 
 	// Store in Redis with TTL
 	err = c.redis.Set(ctx, cacheKey, data, c.ttl).Err()
 	if err != nil {
-		log.Printf("Redis error setting symbols for %s: %v", exchangeID, err)
+		zaplogrus.Infof("Redis error setting symbols for %s: %v", exchangeID, err)
 		return
 	}
 
@@ -152,7 +153,7 @@ func (c *RedisSymbolCache) Set(exchangeID string, symbols []string) {
 	c.stats.Sets++
 	c.stats.mu.Unlock()
 
-	log.Printf("Cached %d symbols for %s (TTL: %v)", len(symbols), exchangeID, c.ttl)
+	zaplogrus.Infof("Cached %d symbols for %s (TTL: %v)", len(symbols), exchangeID, c.ttl)
 }
 
 // GetStats returns current cache statistics.
@@ -179,7 +180,7 @@ func (c *RedisSymbolCache) LogStats() {
 		hitRate = float64(stats.Hits) / float64(total) * 100
 	}
 
-	log.Printf("Redis Symbol Cache Stats - Hits: %d, Misses: %d, Sets: %d, Hit Rate: %.2f%%",
+	zaplogrus.Infof("Redis Symbol Cache Stats - Hits: %d, Misses: %d, Sets: %d, Hit Rate: %.2f%%",
 		stats.Hits, stats.Misses, stats.Sets, hitRate)
 }
 
@@ -211,7 +212,7 @@ func (c *RedisSymbolCache) Clear() error {
 		return fmt.Errorf("error clearing cache: %w", err)
 	}
 
-	log.Printf("Cleared %d symbol cache entries", len(keys))
+	zaplogrus.Infof("Cleared %d symbol cache entries", len(keys))
 	return nil
 }
 
@@ -259,26 +260,26 @@ func (c *RedisSymbolCache) GetCachedExchanges() ([]string, error) {
 //
 //	error: An error if warming fails.
 func (c *RedisSymbolCache) WarmCache(exchanges []string, symbolFetcher func(string) ([]string, error)) error {
-	log.Printf("Warming symbol cache for %d exchanges...", len(exchanges))
+	zaplogrus.Infof("Warming symbol cache for %d exchanges...", len(exchanges))
 
 	for _, exchangeID := range exchanges {
 		// Check if already cached
 		if _, exists := c.Get(exchangeID); exists {
-			log.Printf("Symbols for %s already cached, skipping", exchangeID)
+			zaplogrus.Warnf("Symbols for %s already cached, skipping", exchangeID)
 			continue
 		}
 
 		// Fetch and cache symbols
 		symbols, err := symbolFetcher(exchangeID)
 		if err != nil {
-			log.Printf("Warning: Failed to warm cache for %s: %v", exchangeID, err)
+			zaplogrus.Warnf("Warning: Failed to warm cache for %s: %v", exchangeID, err)
 			continue
 		}
 
 		c.Set(exchangeID, symbols)
-		log.Printf("Warmed cache for %s with %d symbols", exchangeID, len(symbols))
+		zaplogrus.Infof("Warmed cache for %s with %d symbols", exchangeID, len(symbols))
 	}
 
-	log.Printf("Symbol cache warming completed")
+	zaplogrus.Infof("Symbol cache warming completed")
 	return nil
 }

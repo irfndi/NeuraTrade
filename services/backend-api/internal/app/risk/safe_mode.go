@@ -4,9 +4,10 @@ package risk
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/ports"
 )
@@ -231,7 +232,7 @@ func (t *AutoSafeModeTrigger) OnDrawdownUpdate(drawdown float64) {
 	if drawdown >= t.drawdownLimit {
 		if err := t.safeMode.EnableWithReason(context.Background(),
 			fmt.Sprintf("auto-triggered: drawdown %.2f%% >= limit %.2f%%", drawdown*100, t.drawdownLimit*100)); err != nil {
-			log.Printf("[risk] %v", fmt.Errorf("enable safe mode auto-trigger: %w", err))
+			zaplogrus.Infof("[risk] %v", fmt.Errorf("enable safe mode auto-trigger: %w", err))
 		}
 	}
 }
@@ -254,7 +255,7 @@ func (t *AutoSafeModeTrigger) OnTradeResult(profitable bool) {
 	if t.currentStreak >= t.lossStreak {
 		if err := t.safeMode.EnableWithReason(context.Background(),
 			fmt.Sprintf("auto-triggered: %d consecutive losses", t.currentStreak)); err != nil {
-			log.Printf("[risk] %v", fmt.Errorf("enable safe mode auto-trigger: %w", err))
+			zaplogrus.Infof("[risk] %v", fmt.Errorf("enable safe mode auto-trigger: %w", err))
 		}
 		t.currentStreak = 0 // Reset after triggering
 	}

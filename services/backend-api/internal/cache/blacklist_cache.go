@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/redis/go-redis/v9"
@@ -136,14 +137,14 @@ func (rbc *RedisBlacklistCache) IsBlacklisted(symbol string) (bool, string) {
 			return false, ""
 		}
 		// Log error but don't fail the check
-		log.Printf("Redis blacklist check error for %s: %v", symbol, err)
+		zaplogrus.Infof("Redis blacklist check error for %s: %v", symbol, err)
 		rbc.stats.Misses++
 		return false, ""
 	}
 
 	var entry BlacklistCacheEntry
 	if err := json.Unmarshal([]byte(val), &entry); err != nil {
-		log.Printf("Failed to unmarshal blacklist entry for %s: %v", symbol, err)
+		zaplogrus.Warnf("Failed to unmarshal blacklist entry for %s: %v", symbol, err)
 		rbc.stats.Misses++
 		return false, ""
 	}
@@ -190,27 +191,27 @@ func (rbc *RedisBlacklistCache) Add(symbol, reason string, ttl time.Duration) {
 		ctx := context.Background()
 		_, err := rbc.repo.AddExchange(ctx, symbol, reason, entry.ExpiresAt)
 		if err != nil {
-			log.Printf("Error persisting to database: %v", err)
+			zaplogrus.Infof("Error persisting to database: %v", err)
 			// Continue with Redis cache even if database fails
 		}
 	}
 
 	data, err := json.Marshal(entry)
 	if err != nil {
-		log.Printf("Failed to marshal blacklist entry for %s: %v", symbol, err)
+		zaplogrus.Warnf("Failed to marshal blacklist entry for %s: %v", symbol, err)
 		return
 	}
 
 	key := rbc.prefix + symbol
 	err = rbc.client.Set(rbc.ctx, key, data, ttl).Err()
 	if err != nil {
-		log.Printf("Failed to set blacklist entry for %s: %v", symbol, err)
+		zaplogrus.Warnf("Failed to set blacklist entry for %s: %v", symbol, err)
 		return
 	}
 
 	rbc.stats.Adds++
 	rbc.stats.TotalEntries++
-	log.Printf("Blacklisted symbol %s for %s (TTL: %v)", symbol, reason, ttl)
+	zaplogrus.Infof("Blacklisted symbol %s for %s (TTL: %v)", symbol, reason, ttl)
 }
 
 // Remove removes a symbol from the blacklist.
@@ -228,7 +229,7 @@ func (rbc *RedisBlacklistCache) Remove(symbol string) {
 		ctx := context.Background()
 		err := rbc.repo.RemoveExchange(ctx, symbol)
 		if err != nil {
-			log.Printf("Error removing from database: %v", err)
+			zaplogrus.Infof("Error removing from database: %v", err)
 			// Continue with Redis cache even if database fails
 		}
 	}
@@ -236,13 +237,13 @@ func (rbc *RedisBlacklistCache) Remove(symbol string) {
 	key := rbc.prefix + symbol
 	result := rbc.client.Del(rbc.ctx, key)
 	if result.Err() != nil {
-		log.Printf("Failed to remove blacklist entry for %s: %v", symbol, result.Err())
+		zaplogrus.Warnf("Failed to remove blacklist entry for %s: %v", symbol, result.Err())
 		return
 	}
 
 	if result.Val() > 0 {
 		rbc.stats.TotalEntries--
-		log.Printf("Removed symbol %s from blacklist", symbol)
+		zaplogrus.Infof("Removed symbol %s from blacklist", symbol)
 	}
 }
 
@@ -260,18 +261,18 @@ func (rbc *RedisBlacklistCache) Clear() {
 		keys = append(keys, iter.Val())
 	}
 	if err := iter.Err(); err != nil {
-		log.Printf("Failed to scan blacklist keys: %v", err)
+		zaplogrus.Warnf("Failed to scan blacklist keys: %v", err)
 		return
 	}
 
 	if len(keys) > 0 {
 		result := rbc.client.Del(rbc.ctx, keys...)
 		if result.Err() != nil {
-			log.Printf("Failed to clear blacklist: %v", result.Err())
+			zaplogrus.Warnf("Failed to clear blacklist: %v", result.Err())
 			return
 		}
 		rbc.stats.TotalEntries = 0
-		log.Printf("Cleared %d blacklisted symbols", result.Val())
+		zaplogrus.Infof("Cleared %d blacklisted symbols", result.Val())
 	}
 }
 
@@ -301,7 +302,7 @@ func (rbc *RedisBlacklistCache) GetStats() BlacklistCacheStats {
 // LogStats logs current cache statistics to the standard logger.
 func (rbc *RedisBlacklistCache) LogStats() {
 	stats := rbc.GetStats()
-	log.Printf("Blacklist Cache Stats - Total: %d, Hits: %d, Misses: %d, Adds: %d, Expired: %d",
+	zaplogrus.Infof("Blacklist Cache Stats - Total: %d, Hits: %d, Misses: %d, Adds: %d, Expired: %d",
 		stats.TotalEntries, stats.Hits, stats.Misses, stats.Adds, stats.ExpiredEntries)
 }
 
@@ -356,7 +357,7 @@ func (rbc *RedisBlacklistCache) LoadFromDatabase(ctx context.Context) error {
 
 		data, err := json.Marshal(cacheEntry)
 		if err != nil {
-			log.Printf("Error marshaling blacklist entry for %s: %v", entry.ExchangeName, err)
+			zaplogrus.Infof("Error marshaling blacklist entry for %s: %v", entry.ExchangeName, err)
 			continue
 		}
 
@@ -373,12 +374,12 @@ func (rbc *RedisBlacklistCache) LoadFromDatabase(ctx context.Context) error {
 
 		err = rbc.client.Set(ctx, key, data, ttl).Err()
 		if err != nil {
-			log.Printf("Error loading blacklist entry to cache for %s: %v", entry.ExchangeName, err)
+			zaplogrus.Infof("Error loading blacklist entry to cache for %s: %v", entry.ExchangeName, err)
 			continue
 		}
 	}
 
-	log.Printf("Loaded %d blacklist entries from database to cache", len(entries))
+	zaplogrus.Infof("Loaded %d blacklist entries from database to cache", len(entries))
 	return nil
 }
 
@@ -445,7 +446,7 @@ func (rbc *RedisBlacklistCache) CleanupExpired() int {
 		keys = append(keys, iter.Val())
 	}
 	if err := iter.Err(); err != nil {
-		log.Printf("Failed to scan blacklist keys for cleanup: %v", err)
+		zaplogrus.Warnf("Failed to scan blacklist keys for cleanup: %v", err)
 		return 0
 	}
 
@@ -472,7 +473,7 @@ func (rbc *RedisBlacklistCache) CleanupExpired() int {
 		rbc.stats.ExpiredEntries += int64(expiredCount)
 		rbc.stats.TotalEntries -= int64(expiredCount)
 		rbc.stats.LastCleanup = time.Now()
-		log.Printf("Cleaned up %d expired blacklist entries", expiredCount)
+		zaplogrus.Infof("Cleaned up %d expired blacklist entries", expiredCount)
 	}
 
 	return expiredCount
@@ -572,7 +573,7 @@ func (ibc *InMemoryBlacklistCache) Add(symbol, reason string, ttl time.Duration)
 	ibc.cache[symbol] = entry
 	ibc.stats.Adds++
 	ibc.stats.TotalEntries++
-	log.Printf("Blacklisted symbol %s for %s (TTL: %v)", symbol, reason, ttl)
+	zaplogrus.Infof("Blacklisted symbol %s for %s (TTL: %v)", symbol, reason, ttl)
 }
 
 // Remove removes a symbol from the blacklist (in-memory implementation).
@@ -587,7 +588,7 @@ func (ibc *InMemoryBlacklistCache) Remove(symbol string) {
 	if _, exists := ibc.cache[symbol]; exists {
 		delete(ibc.cache, symbol)
 		ibc.stats.TotalEntries--
-		log.Printf("Removed symbol %s from blacklist", symbol)
+		zaplogrus.Infof("Removed symbol %s from blacklist", symbol)
 	}
 }
 
@@ -599,7 +600,7 @@ func (ibc *InMemoryBlacklistCache) Clear() {
 	count := len(ibc.cache)
 	ibc.cache = make(map[string]*BlacklistCacheEntry)
 	ibc.stats.TotalEntries = 0
-	log.Printf("Cleared %d blacklisted symbols", count)
+	zaplogrus.Infof("Cleared %d blacklisted symbols", count)
 }
 
 // GetStats returns current cache statistics (in-memory implementation).
@@ -616,7 +617,7 @@ func (ibc *InMemoryBlacklistCache) GetStats() BlacklistCacheStats {
 // LogStats logs current cache statistics (in-memory implementation).
 func (ibc *InMemoryBlacklistCache) LogStats() {
 	stats := ibc.GetStats()
-	log.Printf("Blacklist Cache Stats - Total: %d, Hits: %d, Misses: %d, Adds: %d, Expired: %d",
+	zaplogrus.Infof("Blacklist Cache Stats - Total: %d, Hits: %d, Misses: %d, Adds: %d, Expired: %d",
 		stats.TotalEntries, stats.Hits, stats.Misses, stats.Adds, stats.ExpiredEntries)
 }
 

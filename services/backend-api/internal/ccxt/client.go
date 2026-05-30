@@ -7,13 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -137,7 +138,7 @@ func NewClient(cfg *config.CCXTConfig) *Client {
 	}
 
 	// Log the actual service URL being used
-	log.Printf("CCXT Service URL from config: %s", cfg.ServiceURL)
+	zaplogrus.Infof("CCXT Service URL from config: %s", cfg.ServiceURL)
 
 	client := &Client{
 		HTTPClient: &http.Client{
@@ -158,16 +159,16 @@ func NewClient(cfg *config.CCXTConfig) *Client {
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		)
 		if err != nil {
-			log.Printf("Failed to create CCXT gRPC client at %s: %v (HTTP fallback available)", cfg.GrpcAddress, err)
+			zaplogrus.Warnf("Failed to create CCXT gRPC client at %s: %v (HTTP fallback available)", cfg.GrpcAddress, err)
 		} else {
 			client.grpcClient = pb.NewCcxtServiceClient(conn)
 			client.grpcConn = conn
 			client.grpcEnabled = true
-			log.Printf("Created CCXT gRPC client for %s (connection will be established on first use)", cfg.GrpcAddress)
+			zaplogrus.Infof("Created CCXT gRPC client for %s (connection will be established on first use)", cfg.GrpcAddress)
 		}
 	}
 
-	log.Printf("DEBUG: CCXT Client initialized with BaseURL: %s, gRPC: %v", client.BaseURL(), client.grpcEnabled)
+	zaplogrus.Infof("DEBUG: CCXT Client initialized with BaseURL: %s, gRPC: %v", client.BaseURL(), client.grpcEnabled)
 	return client
 }
 
@@ -180,14 +181,14 @@ func (c *Client) IsGRPCEnabled() bool {
 // This is useful when gRPC is consistently failing.
 func (c *Client) DisableGRPC() {
 	c.grpcEnabled = false
-	log.Printf("CCXT gRPC disabled, using HTTP-only mode")
+	zaplogrus.Warnf("CCXT gRPC disabled, using HTTP-only mode")
 }
 
 // EnableGRPC re-enables gRPC if the client was initialized with gRPC support.
 func (c *Client) EnableGRPC() {
 	if c.IsGRPCEnabled() {
 		c.grpcEnabled = true
-		log.Printf("CCXT gRPC re-enabled")
+		zaplogrus.Infof("CCXT gRPC re-enabled")
 	}
 }
 
@@ -219,9 +220,9 @@ func (c *Client) GetExchanges(ctx context.Context) (*ExchangesResponse, error) {
 			return c.convertGrpcExchangesResponse(resp), nil
 		}
 		if err != nil {
-			log.Printf("Failed to get exchanges via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get exchanges via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -242,9 +243,9 @@ func (c *Client) GetTicker(ctx context.Context, exchange, symbol string) (*Ticke
 			return c.convertGrpcTickerResponse(resp), nil
 		}
 		if err != nil {
-			log.Printf("Failed to get ticker via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get ticker via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -268,9 +269,9 @@ func (c *Client) GetTickers(ctx context.Context, req *TickersRequest) (*TickersR
 			return c.convertGrpcTickersResponse(resp), nil
 		}
 		if err != nil {
-			log.Printf("Failed to get tickers via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get tickers via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -306,9 +307,9 @@ func (c *Client) GetOrderBook(ctx context.Context, exchange, symbol string, limi
 			return c.convertGrpcOrderBookResponse(resp), nil
 		}
 		if err != nil {
-			log.Printf("Failed to get orderbook via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get orderbook via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -337,9 +338,9 @@ func (c *Client) GetTrades(ctx context.Context, exchange, symbol string, limit i
 			return c.convertGrpcTradesResponse(resp), nil
 		}
 		if err != nil {
-			log.Printf("Failed to get trades via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get trades via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -369,9 +370,9 @@ func (c *Client) GetOHLCV(ctx context.Context, exchange, symbol, timeframe strin
 			return c.convertGrpcOHLCVResponse(resp), nil
 		}
 		if err != nil {
-			log.Printf("Failed to get OHLCV via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get OHLCV via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -404,9 +405,9 @@ func (c *Client) GetMarkets(ctx context.Context, exchange string) (*MarketsRespo
 			return c.convertGrpcMarketsResponse(resp), nil
 		}
 		if err != nil {
-			log.Printf("Failed to get markets via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get markets via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -428,9 +429,9 @@ func (c *Client) GetFundingRate(ctx context.Context, exchange, symbol string) (*
 			return c.convertGrpcFundingRate(resp.Rates[0]), nil
 		}
 		if err != nil {
-			log.Printf("Failed to get funding rate via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get funding rate via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -457,9 +458,9 @@ func (c *Client) GetFundingRates(ctx context.Context, exchange string, symbols [
 			return rates, nil
 		}
 		if err != nil {
-			log.Printf("Failed to get funding rates via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get funding rates via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -500,9 +501,9 @@ func (c *Client) GetAllFundingRates(ctx context.Context, exchange string) ([]Fun
 			return rates, nil
 		}
 		if err != nil {
-			log.Printf("Failed to get all funding rates via gRPC: %v, falling back to HTTP", err)
+			zaplogrus.Warnf("Failed to get all funding rates via gRPC: %v, falling back to HTTP", err)
 		} else if resp.Error != "" {
-			log.Printf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
+			zaplogrus.Warnf("CCXT gRPC service returned error: %s, falling back to HTTP", resp.Error)
 		}
 	}
 
@@ -654,7 +655,7 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			log.Printf("Error closing response body: %v", err)
+			zaplogrus.Infof("Error closing response body: %v", err)
 		}
 	}()
 
@@ -807,7 +808,7 @@ func decimalFromString(s string) decimal.Decimal {
 	}
 	d, err := decimal.NewFromString(s)
 	if err != nil {
-		log.Printf("Warning: failed to parse decimal from string '%s': %v", s, err)
+		zaplogrus.Warnf("Warning: failed to parse decimal from string '%s': %v", s, err)
 		return decimal.Zero
 	}
 	return d
@@ -1001,7 +1002,7 @@ func float64FromString(s string) float64 {
 	}
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		log.Printf("Warning: failed to parse float64 from string '%s': %v", s, err)
+		zaplogrus.Warnf("Warning: failed to parse float64 from string '%s': %v", s, err)
 		return 0.0
 	}
 	return f

@@ -2,9 +2,10 @@ package services
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 )
 
 type QuestEventType string
@@ -98,7 +99,7 @@ func (s *EventDrivenQuestSystem) EmitEvent(event *QuestEvent) {
 	select {
 	case s.events <- event:
 	default:
-		log.Printf("Event queue full, dropping event: %s", event.ID)
+		zaplogrus.Warnf("Event queue full, dropping event: %s", event.ID)
 	}
 }
 
@@ -123,7 +124,7 @@ func (s *EventDrivenQuestSystem) Start() {
 	s.mu.Unlock()
 
 	go s.eventLoop()
-	log.Println("Event-driven quest system started")
+	zaplogrus.Info("Event-driven quest system started")
 }
 
 func (s *EventDrivenQuestSystem) Stop() {
@@ -134,7 +135,7 @@ func (s *EventDrivenQuestSystem) Stop() {
 	}
 	close(s.stopCh)
 	s.running = false
-	log.Println("Event-driven quest system stopped")
+	zaplogrus.Info("Event-driven quest system stopped")
 }
 
 func (s *EventDrivenQuestSystem) eventLoop() {
@@ -180,7 +181,7 @@ func (s *EventDrivenQuestSystem) processEvent(event *QuestEvent) {
 
 		quest, err := s.engine.CreateQuest(definitionID, chatID)
 		if err != nil {
-			log.Printf("Failed to create quest from trigger %s: %v", triggerID, err)
+			zaplogrus.Warnf("Failed to create quest from trigger %s: %v", triggerID, err)
 			s.mu.Lock()
 			continue
 		}
@@ -190,7 +191,7 @@ func (s *EventDrivenQuestSystem) processEvent(event *QuestEvent) {
 		quest.Metadata["event_type"] = string(event.Type)
 		quest.Metadata["trigger_id"] = triggerID
 
-		log.Printf("Quest %s triggered by event %s (type: %s)", quest.ID, event.ID, event.Type)
+		zaplogrus.Infof("Quest %s triggered by event %s (type: %s)", quest.ID, event.ID, event.Type)
 
 		s.mu.Lock()
 	}

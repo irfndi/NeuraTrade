@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"log/slog"
 
@@ -287,7 +288,7 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 	// Create risk actor
 	ks, ok := a.KillSwitch.(*risk.KillSwitchImpl)
 	if !ok && a.KillSwitch != nil {
-		log.Printf(
+		zaplogrus.Infof(
 			"[bootstrap] warning: KillSwitch type assertion to *risk.KillSwitchImpl failed for a.KillSwitch (%T); RiskActor and RiskRef will remain nil",
 			a.KillSwitch,
 		)
@@ -300,7 +301,7 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 	if pe, ok := a.Policy.(*risk.Engine); ok {
 		policyEngine = pe
 	} else if a.Policy != nil {
-		log.Printf(
+		zaplogrus.Infof(
 			"[bootstrap] warning: a.Policy (%T) is not *risk.Engine; RiskActorConfig will use nil policyEngine when creating RiskActor",
 			a.Policy,
 		)

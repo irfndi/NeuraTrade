@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -1227,7 +1228,7 @@ func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, ch
 	if err == nil {
 		response.OpenOrders = openOrders
 	} else {
-		log.Printf("Failed to count open orders for chat %s: %v", chatID, err)
+		zaplogrus.Warnf("Failed to count open orders for chat %s: %v", chatID, err)
 	}
 
 	if len(response.Positions) > 0 {
@@ -1236,7 +1237,7 @@ func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, ch
 
 	managed, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, "", 25)
 	if err != nil {
-		log.Printf("Failed to list managed open positions for chat %s: %v", chatID, err)
+		zaplogrus.Warnf("Failed to list managed open positions for chat %s: %v", chatID, err)
 		return false
 	}
 	if len(managed) == 0 {
@@ -1315,7 +1316,7 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 
 	perf, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, "", since)
 	if err != nil {
-		log.Printf("Failed lifecycle performance query for chat %s: %v", chatID, err)
+		zaplogrus.Warnf("Failed lifecycle performance query for chat %s: %v", chatID, err)
 		return PerformanceSummaryResponse{}, false
 	}
 	if perf.Trades == 0 {
@@ -1323,7 +1324,7 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 	}
 	returns, err := h.lifecycleStore.GetNetRealizedReturnSeries(ctx, chatID, "", since)
 	if err != nil {
-		log.Printf("Failed lifecycle return-series query for chat %s: %v", chatID, err)
+		zaplogrus.Warnf("Failed lifecycle return-series query for chat %s: %v", chatID, err)
 		returns = nil
 	}
 	risk := services.ComputeRiskAdjustedMetrics(returns)
@@ -1587,21 +1588,21 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 	configHasBinance := false
 	// nolint:gosec // Fixed config path, not user input
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // Fixed config path, not user input
-	log.Printf("DEBUG: Checking config at %s", configPath)
+	zaplogrus.Infof("DEBUG: Checking config at %s", configPath)
 	// #nosec G304 -- fixed operator config path under $HOME/.neuratrade
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
-			log.Printf("DEBUG: Config loaded, has ccxt: %v", config["ccxt"] != nil)
+			zaplogrus.Infof("DEBUG: Config loaded, has ccxt: %v", config["ccxt"] != nil)
 			// Check new config structure: ccxt.exchanges.binance.api_key
 			if ccxt, ok := config["ccxt"].(map[string]interface{}); ok {
-				log.Printf("DEBUG: Has ccxt section")
+				zaplogrus.Infof("DEBUG: Has ccxt section")
 				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-					log.Printf("DEBUG: Has exchanges section")
+					zaplogrus.Infof("DEBUG: Has exchanges section")
 					if binance, ok := exchanges["binance"].(map[string]interface{}); ok {
-						log.Printf("DEBUG: Has binance section")
+						zaplogrus.Infof("DEBUG: Has binance section")
 						if apiKey, ok := binance["api_key"].(string); ok && apiKey != "" {
-							log.Printf("DEBUG: Binance API key is configured")
+							zaplogrus.Infof("DEBUG: Binance API key is configured")
 							configHasBinance = true
 						}
 					}

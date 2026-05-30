@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/database"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/shopspring/decimal"
 )
 
@@ -168,7 +168,7 @@ func (h *MarketHandler) makeCCXTRequest(ctx context.Context, method, path string
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			log.Printf("Error closing response body: %v", err)
+			zaplogrus.WithError(err).Warn("Error closing response body")
 		}
 	}()
 
@@ -214,7 +214,7 @@ func (h *MarketHandler) checkCCXTHealth(ctx context.Context) bool {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			log.Printf("Error closing response body: %v", err)
+			zaplogrus.WithError(err).Warn("Error closing response body")
 		}
 	}()
 
@@ -284,7 +284,7 @@ func (h *MarketHandler) GetMarketPrices(c *gin.Context) {
 
 	if err := h.makeCCXTRequest(ctx, "GET", path, nil, &ccxtResponse); err != nil {
 		// Log internal error details for debugging
-		log.Printf("[MarketHandler] Failed to fetch tickers: %v", err)
+		zaplogrus.WithError(err).Warn("Failed to fetch tickers")
 		// Return sanitized error to client (don't leak internal details)
 		c.JSON(http.StatusBadGateway, ErrorResponse{
 			Error: "Failed to fetch market data from exchange",

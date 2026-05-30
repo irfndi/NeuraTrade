@@ -9,13 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/models"
@@ -33,7 +34,7 @@ func closeBody(body io.Closer) {
 		return
 	}
 	if err := body.Close(); err != nil {
-		log.Printf("[CCXT Native] failed to close response body: %v", err)
+		zaplogrus.Warnf("[CCXT Native] failed to close response body: %v", err)
 	}
 }
 
@@ -193,7 +194,7 @@ func NewNativeCCXTServiceWithConfig(timeout time.Duration, retryAttempts int, ex
 	for name, creds := range exchangeCreds {
 		baseURL, ok := s.getExchangeBaseURL(name)
 		if !ok {
-			log.Printf("[CCXT Native] Unknown exchange in config: %s", name)
+			zaplogrus.Infof("[CCXT Native] Unknown exchange in config: %s", name)
 			continue
 		}
 		s.exchanges[name] = &ExchangeConnection{
@@ -206,26 +207,26 @@ func NewNativeCCXTServiceWithConfig(timeout time.Duration, retryAttempts int, ex
 			LastUpdate: time.Now(),
 		}
 		s.credentials[name] = creds
-		log.Printf("[CCXT Native] Configured exchange: %s with API key", name)
+		zaplogrus.Infof("[CCXT Native] Configured exchange: %s with API key", name)
 	}
 	return s
 }
 
 // Initialize prepares the service for use
 func (s *NativeCCXTService) Initialize(ctx context.Context) error {
-	log.Println("[CCXT Native] Initializing native exchange connections")
+	zaplogrus.Info("[CCXT Native] Initializing native exchange connections")
 
 	// Initialize default exchanges
 	defaultExchanges := []string{"binance", "bybit", "okx", "bitget"}
 
 	for _, exchange := range defaultExchanges {
 		if err := s.initializeExchange(exchange); err != nil {
-			log.Printf("[CCXT Native] Failed to initialize %s: %v", exchange, err)
+			zaplogrus.Warnf("[CCXT Native] Failed to initialize %s: %v", exchange, err)
 			continue
 		}
 	}
 
-	log.Printf("[CCXT Native] Initialized %d exchanges", len(s.exchanges))
+	zaplogrus.Infof("[CCXT Native] Initialized %d exchanges", len(s.exchanges))
 	return nil
 }
 
@@ -255,9 +256,9 @@ func (s *NativeCCXTService) initializeExchange(exchangeID string) error {
 	s.exchanges[exchangeID] = connection
 
 	if connection.APIKey != "" && connection.Secret != "" {
-		log.Printf("[CCXT Native] Initialized exchange: %s (%s) with configured credentials", exchangeID, baseURL)
+		zaplogrus.Infof("[CCXT Native] Initialized exchange: %s (%s) with configured credentials", exchangeID, baseURL)
 	} else {
-		log.Printf("[CCXT Native] Initialized exchange: %s (%s) without API credentials", exchangeID, baseURL)
+		zaplogrus.Infof("[CCXT Native] Initialized exchange: %s (%s) without API credentials", exchangeID, baseURL)
 	}
 	return nil
 }
@@ -351,7 +352,7 @@ func (s *NativeCCXTService) Close() error {
 	defer s.mu.Unlock()
 
 	s.exchanges = make(map[string]*ExchangeConnection)
-	log.Println("[CCXT Native] Service closed")
+	zaplogrus.Info("[CCXT Native] Service closed")
 	return nil
 }
 
@@ -851,7 +852,7 @@ func (s *NativeCCXTService) processExchange(
 			*allTickers = append(*allTickers, bulkTickers...)
 			return nil
 		}
-		log.Printf("[CCXT Native] Failed bulk ticker fetch for bitget: %v", err)
+		zaplogrus.Warnf("[CCXT Native] Failed bulk ticker fetch for bitget: %v", err)
 	}
 
 	for _, symbol := range symbols {
@@ -865,7 +866,7 @@ func (s *NativeCCXTService) processExchange(
 		ticker, err := s.fetchSymbolWithTimeout(ctx, exchange, symbol, limits.perSymbolTimeout)
 		*fallbackFetches = *fallbackFetches + 1
 		if err != nil {
-			log.Printf("[CCXT Native] Failed to fetch %s:%s: %v", exchange, symbol, err)
+			zaplogrus.Warnf("[CCXT Native] Failed to fetch %s:%s: %v", exchange, symbol, err)
 			continue
 		}
 		*allTickers = append(*allTickers, ticker)
@@ -896,7 +897,7 @@ func (s *NativeCCXTService) checkFallbackLimits(
 ) error {
 	if limits.maxSymbols > 0 && fallbackFetches >= limits.maxSymbols {
 		reason := fmt.Sprintf("fallback ticker fetch budget reached (%d symbols)", limits.maxSymbols)
-		log.Printf("[CCXT Native] %s, returning partial market data", reason)
+		zaplogrus.Infof("[CCXT Native] %s, returning partial market data", reason)
 		return &PartialMarketDataError{
 			Data:   append([]MarketPriceInterface(nil), allTickers...),
 			Reason: reason,
@@ -904,7 +905,7 @@ func (s *NativeCCXTService) checkFallbackLimits(
 	}
 	if limits.cycleBudget > 0 && time.Since(limits.cycleStarted) >= limits.cycleBudget {
 		reason := fmt.Sprintf("fallback cycle budget exceeded (%s)", limits.cycleBudget)
-		log.Printf("[CCXT Native] %s, returning partial market data", reason)
+		zaplogrus.Infof("[CCXT Native] %s, returning partial market data", reason)
 		return &PartialMarketDataError{
 			Data:   append([]MarketPriceInterface(nil), allTickers...),
 			Reason: reason,
@@ -1804,7 +1805,7 @@ func (s *NativeCCXTService) FetchBalance(ctx context.Context, exchange string) (
 
 	// Check if API key is configured
 	if conn.APIKey == "" || conn.Secret == "" {
-		log.Printf("[CCXT Native] No API credentials for %s, returning empty balance", exchange)
+		zaplogrus.Infof("[CCXT Native] No API credentials for %s, returning empty balance", exchange)
 		return &BalanceResponse{
 			Exchange: exchange,
 			Total:    make(map[string]float64),
@@ -1944,10 +1945,6 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 				freeUSDTFromCoinList += free
 				usedUSDTFromCoinList += frozen + locked
 			}
-
-			if total > 0 {
-				log.Printf("[CCXT Native] Bitget balance: %s = %.8f (free: %.8f)", coin.Coin, total, free)
-			}
 		}
 
 		if accountSummaryUSDT > 0 && !accountHasCoinListUSDT {
@@ -1960,7 +1957,7 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 				freeUSDTFromSummary += accountSummaryUSDT
 				result.Free[key] += accountSummaryUSDT
 			}
-			log.Printf("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, accountSummaryUSDT)
+			zaplogrus.Infof("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, accountSummaryUSDT)
 		}
 	}
 	totalUSDT := totalUSDTFromCoinList + totalUSDTFromSummary
@@ -1975,7 +1972,7 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 		clearSummaryOnlyBalanceKey(result, "USDT")
 	}
 
-	log.Printf("[CCXT Native] Bitget balance fetched: %d assets", len(result.Total))
+	zaplogrus.Infof("[CCXT Native] Bitget balance fetched: %d assets", len(result.Total))
 	return result, nil
 }
 
@@ -2076,11 +2073,11 @@ func (s *NativeCCXTService) fetchBinanceBalance(ctx context.Context, conn *Excha
 			result.Total[balance.Asset] = total
 			result.Free[balance.Asset] = free
 			result.Used[balance.Asset] = locked
-			log.Printf("[CCXT Native] Binance balance: %s = %.8f", balance.Asset, total)
+			zaplogrus.Infof("[CCXT Native] Binance balance: %s = %.8f", balance.Asset, total)
 		}
 	}
 
-	log.Printf("[CCXT Native] Binance balance fetched: %d assets", len(result.Total))
+	zaplogrus.Infof("[CCXT Native] Binance balance fetched: %d assets", len(result.Total))
 	return result, nil
 }
 
@@ -2163,12 +2160,12 @@ func (s *NativeCCXTService) fetchBybitBalance(ctx context.Context, conn *Exchang
 				result.Total[coin.Coin] = balance
 				result.Free[coin.Coin] = available
 				result.Used[coin.Coin] = balance - available
-				log.Printf("[CCXT Native] Bybit balance: %s = %.8f", coin.Coin, balance)
+				zaplogrus.Infof("[CCXT Native] Bybit balance: %s = %.8f", coin.Coin, balance)
 			}
 		}
 	}
 
-	log.Printf("[CCXT Native] Bybit balance fetched: %d assets", len(result.Total))
+	zaplogrus.Infof("[CCXT Native] Bybit balance fetched: %d assets", len(result.Total))
 	return result, nil
 }
 
@@ -2251,12 +2248,12 @@ func (s *NativeCCXTService) fetchOKXBalance(ctx context.Context, conn *ExchangeC
 				result.Total[detail.Ccy] = balance
 				result.Free[detail.Ccy] = available
 				result.Used[detail.Ccy] = balance - available
-				log.Printf("[CCXT Native] OKX balance: %s = %.8f", detail.Ccy, balance)
+				zaplogrus.Infof("[CCXT Native] OKX balance: %s = %.8f", detail.Ccy, balance)
 			}
 		}
 	}
 
-	log.Printf("[CCXT Native] OKX balance fetched: %d assets", len(result.Total))
+	zaplogrus.Infof("[CCXT Native] OKX balance fetched: %d assets", len(result.Total))
 	return result, nil
 }
 
@@ -2575,7 +2572,7 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 		rate, err := strconv.ParseFloat(strings.TrimSpace(item.FundingRate), 64)
 		if err != nil {
 			skipped++
-			log.Printf("[CCXT Native] skipping malformed bitget fundingRate row symbol=%s: %v", item.Symbol, err)
+			zaplogrus.Warnf("[CCXT Native] skipping malformed bitget fundingRate row symbol=%s: %v", item.Symbol, err)
 			continue
 		}
 
@@ -2601,7 +2598,7 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 			parsed, err := strconv.ParseFloat(v, 64)
 			if err != nil {
 				skipped++
-				log.Printf("[CCXT Native] skipping malformed bitget markPrice row symbol=%s: %v", item.Symbol, err)
+				zaplogrus.Warnf("[CCXT Native] skipping malformed bitget markPrice row symbol=%s: %v", item.Symbol, err)
 				continue
 			}
 			markPrice = parsed
@@ -2612,7 +2609,7 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 			parsed, err := strconv.ParseFloat(v, 64)
 			if err != nil {
 				skipped++
-				log.Printf("[CCXT Native] skipping malformed bitget indexPrice row symbol=%s: %v", item.Symbol, err)
+				zaplogrus.Warnf("[CCXT Native] skipping malformed bitget indexPrice row symbol=%s: %v", item.Symbol, err)
 				continue
 			}
 			indexPrice = parsed
@@ -2632,7 +2629,7 @@ func (s *NativeCCXTService) parseBitgetFundingRate(body []byte) ([]FundingRate, 
 		return nil, fmt.Errorf("no valid bitget funding rate rows in response")
 	}
 	if skipped > 0 {
-		log.Printf("[CCXT Native] parsed %d bitget funding rate rows, skipped %d malformed row(s)", len(rates), skipped)
+		zaplogrus.Warnf("[CCXT Native] parsed %d bitget funding rate rows, skipped %d malformed row(s)", len(rates), skipped)
 	}
 	return rates, nil
 }

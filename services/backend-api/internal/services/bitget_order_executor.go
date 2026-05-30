@@ -9,13 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/shopspring/decimal"
@@ -1179,7 +1180,7 @@ func (e *BitgetOrderExecutor) SyncPositionProtection(
 		if splitErr != nil {
 			return fmt.Errorf("place replacement TP/SL plan order failed: %w (split fallback failed: %v)", err, splitErr)
 		}
-		log.Printf("[BITGET-ORDER] Combined TP/SL sync rejected, split fallback applied for %s", apiSymbol)
+		zaplogrus.Warnf("[BITGET-ORDER] Combined TP/SL sync rejected, split fallback applied for %s", apiSymbol)
 	}
 	return nil
 }

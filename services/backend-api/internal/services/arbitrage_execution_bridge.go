@@ -3,8 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/models"
 	"github.com/shopspring/decimal"
@@ -47,7 +48,7 @@ func (aeb *ArbitrageExecutionBridge) SetAIEvaluator(evaluator AIEvaluator) {
 type BasicLogger struct{}
 
 func (l *BasicLogger) Info(msg string) {
-	log.Printf("[ArbitrageBridge] %s", msg)
+	zaplogrus.Infof("[ArbitrageBridge] %s", msg)
 }
 
 // Start begins monitoring for arbitrage opportunities and triggering executions
@@ -64,7 +65,7 @@ func (aeb *ArbitrageExecutionBridge) Start(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			if err := aeb.processNewArbitrageOpportunities(ctx); err != nil {
-				log.Printf("Error processing arbitrage opportunities: %v", err)
+				zaplogrus.Infof("Error processing arbitrage opportunities: %v", err)
 			}
 		}
 	}
@@ -80,7 +81,7 @@ func (aeb *ArbitrageExecutionBridge) processNewArbitrageOpportunities(ctx contex
 		return nil
 	}
 
-	log.Printf("Found %d potential arbitrage opportunities", len(opportunities))
+	zaplogrus.Infof("Found %d potential arbitrage opportunities", len(opportunities))
 
 	for _, opportunity := range opportunities {
 		shouldExecute := true //nolint:ineffassign
@@ -95,11 +96,11 @@ func (aeb *ArbitrageExecutionBridge) processNewArbitrageOpportunities(ctx contex
 			var confidence float64
 			shouldExecute, confidence, reasoning, err = aeb.aiEvaluator.EvaluateOpportunity(ctx, &opportunity, contextStr)
 			if err != nil {
-				log.Printf("AI evaluation failed for opportunity %s: %v", opportunity.ID, err)
+				zaplogrus.Warnf("AI evaluation failed for opportunity %s: %v", opportunity.ID, err)
 				continue
 			}
 
-			log.Printf("AI evaluated opportunity %s: execute=%v confidence=%.2f reason=%s",
+			zaplogrus.Infof("AI evaluated opportunity %s: execute=%v confidence=%.2f reason=%s",
 				opportunity.ID, shouldExecute, confidence, reasoning)
 
 			if !shouldExecute {
@@ -108,11 +109,11 @@ func (aeb *ArbitrageExecutionBridge) processNewArbitrageOpportunities(ctx contex
 		}
 
 		if err := aeb.createArbitrageQuest(ctx, opportunity); err != nil {
-			log.Printf("Failed to create arbitrage quest for opportunity %s: %v", opportunity.ID, err)
+			zaplogrus.Warnf("Failed to create arbitrage quest for opportunity %s: %v", opportunity.ID, err)
 			continue
 		}
 
-		log.Printf("Created arbitrage execution quest for opportunity %s", opportunity.ID)
+		zaplogrus.Infof("Created arbitrage execution quest for opportunity %s", opportunity.ID)
 	}
 
 	return nil
