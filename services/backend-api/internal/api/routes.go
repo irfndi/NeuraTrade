@@ -437,7 +437,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			BotToken:    telegramConfig.BotToken,
 		}
 	}
-	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService)
+	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService, nil)
 
 	// Health check endpoints with telemetry
 	healthGroup := router.Group("/")
@@ -1307,7 +1307,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 
 		// Paper trading readiness endpoints
-		readinessHandler := handlers.NewReadinessHandler(db)
+		readinessHandler := handlers.NewReadinessHandler(db.(database.DBPool))
 		readiness := v1.Group("/readiness")
 		{
 			readiness.GET("/paper-trading", readinessHandler.PaperTradingManifest)
