@@ -953,6 +953,10 @@ func TestProviderBaseURL(t *testing.T) {
 }
 
 func TestResolveProviderNodeUsesCentralProviderEnvNames(t *testing.T) {
+	// Prevent external env vars (e.g., ANTHROPIC_MODEL set by the runtime)
+	// from leaking into test assertions for providers we don't explicitly configure.
+	t.Setenv("ANTHROPIC_MODEL", "")
+
 	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_API_KEY", "key")
 	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_BASE_URL", "https://override.example/v1")
 	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_MODEL", "model-override")
