@@ -9,10 +9,10 @@
 package actor
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -370,7 +370,7 @@ func (r *Ref) Run(ctx context.Context) error {
 				if env.Message != nil {
 					msgType = env.Message.MessageType()
 				}
-				log.Printf("actor %s receive error (type=%s): %v", r.id, msgType, err)
+				zaplogrus.Infof("actor %s receive error (type=%s): %v", r.id, msgType, err)
 			}
 
 			// Stop when canceled or when actor reports an unrecoverable fatal error.

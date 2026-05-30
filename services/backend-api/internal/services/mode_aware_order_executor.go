@@ -1,9 +1,9 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/shopspring/decimal"
@@ -64,7 +64,7 @@ func (e *ModeAwareOrderExecutor) resolveMode(ctx context.Context) OperationalMod
 			return normalizeOperationalMode(e.opModeService.GetMode(chatID))
 		}
 	}
-	log.Printf("[ORDER-EXECUTOR] WARNING: no operational mode in context, no mode service available; defaulting to paper mode")
+	zaplogrus.Warnf("[ORDER-EXECUTOR] WARNING: no operational mode in context, no mode service available; defaulting to paper mode")
 	return ModePaper
 }
 

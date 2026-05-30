@@ -1,10 +1,10 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -495,7 +495,7 @@ func (e *QuestEngine) CreateQuest(definitionID string, chatID string, customTarg
 
 	if e.store != nil {
 		if err := e.store.SaveQuest(context.Background(), quest); err != nil {
-			log.Printf("Failed to persist quest %s: %v", quest.ID, err)
+			zaplogrus.Warnf("Failed to persist quest %s: %v", quest.ID, err)
 		}
 	}
 
@@ -507,7 +507,7 @@ func (e *QuestEngine) Start() {
 	e.mu.Lock()
 	if e.running {
 		e.mu.Unlock()
-		log.Println("[QUEST] Start called but already running")
+		zaplogrus.Info("[QUEST] Start called but already running")
 		return
 	}
 	if e.runCancel != nil {
@@ -535,9 +535,9 @@ func (e *QuestEngine) Start() {
 	}
 
 	go e.schedulerLoop(runStopCh)
-	log.Printf("[QUEST] Quest engine started")
-	log.Printf("[QUEST] Initial state: %d quests loaded, running=%v", len(e.quests), e.running)
-	log.Printf(
+	zaplogrus.Infof("[QUEST] Quest engine started")
+	zaplogrus.Infof("[QUEST] Initial state: %d quests loaded, running=%v", len(e.quests), e.running)
+	zaplogrus.Infof(
 		"[QUEST] Runtime budget: scalping_timeout=%s structured_retries=%d derived_floor=%s stale_timeout=%s execution_timeout=%s lock_ttl=%s",
 		e.runtimeBudget.ScalpingTimeout,
 		e.runtimeBudget.StructuredRetries,
@@ -557,7 +557,7 @@ func (e *QuestEngine) loadActiveQuests() {
 	ctx := context.Background()
 	quests, err := e.store.ListQuests(ctx, "", QuestStatusActive)
 	if err != nil {
-		log.Printf("Failed to load active quests: %v", err)
+		zaplogrus.Warnf("Failed to load active quests: %v", err)
 		return
 	}
 
@@ -575,7 +575,7 @@ func (e *QuestEngine) loadActiveQuests() {
 			quest.UpdatedAt = now
 			pausedCount++
 			if err := e.store.SaveQuest(ctx, quest); err != nil {
-				log.Printf("Failed to pause legacy active quest %s: %v", quest.ID, err)
+				zaplogrus.Warnf("Failed to pause legacy active quest %s: %v", quest.ID, err)
 			}
 			continue
 		}
@@ -586,7 +586,7 @@ func (e *QuestEngine) loadActiveQuests() {
 			quest.UpdatedAt = now
 			pausedCount++
 			if err := e.store.SaveQuest(ctx, quest); err != nil {
-				log.Printf("Failed to pause duplicate active quest %s: %v", quest.ID, err)
+				zaplogrus.Warnf("Failed to pause duplicate active quest %s: %v", quest.ID, err)
 			}
 			continue
 		}
@@ -597,9 +597,9 @@ func (e *QuestEngine) loadActiveQuests() {
 	defer e.mu.Unlock()
 	for _, quest := range selectedByChat {
 		e.quests[quest.ID] = quest
-		log.Printf("Loaded active scalping quest: %s (chat: %s)", quest.ID, quest.Metadata["chat_id"])
+		zaplogrus.Infof("Loaded active scalping quest: %s (chat: %s)", quest.ID, quest.Metadata["chat_id"])
 	}
-	log.Printf("Loaded %d active scalping quests, paused %d stale active quests", len(selectedByChat), pausedCount)
+	zaplogrus.Warnf("Loaded %d active scalping quests, paused %d stale active quests", len(selectedByChat), pausedCount)
 }
 
 // Stop stops the quest engine
@@ -621,15 +621,15 @@ func (e *QuestEngine) Stop() {
 	e.mu.Unlock()
 
 	e.clearQuestLockOwnerHeartbeatIfIdle()
-	log.Println("Quest engine stopped")
+	zaplogrus.Info("Quest engine stopped")
 }
 
 // schedulerLoop runs the periodic quest scheduling
 func (e *QuestEngine) schedulerLoop(stopCh <-chan struct{}) {
-	log.Println("[QUEST] Scheduler loop started")
+	zaplogrus.Info("[QUEST] Scheduler loop started")
 	ticker := time.NewTicker(defaultQuestSchedulerPoll)
 	defer ticker.Stop()
-	log.Printf("[QUEST] Scheduler polling interval: %s", defaultQuestSchedulerPoll)
+	zaplogrus.Infof("[QUEST] Scheduler polling interval: %s", defaultQuestSchedulerPoll)
 
 	// Run an immediate check so newly activated quests do not wait for the first interval.
 	e.evaluateAndTick(time.Now().UTC(), true)
@@ -637,7 +637,7 @@ func (e *QuestEngine) schedulerLoop(stopCh <-chan struct{}) {
 	for {
 		select {
 		case <-stopCh:
-			log.Println("[QUEST] Scheduler loop stopped")
+			zaplogrus.Info("[QUEST] Scheduler loop stopped")
 			return
 		case <-ticker.C:
 			e.evaluateAndTick(time.Now().UTC(), false)
@@ -659,7 +659,7 @@ func (e *QuestEngine) shouldRunTick(now time.Time, force bool) bool {
 	mode := e.determineCadenceModeLocked()
 	interval := cadenceIntervalForMode(mode)
 	if mode != e.cadenceMode {
-		log.Printf("[QUEST] Cadence mode changed: %s -> %s (interval=%s)", e.cadenceMode, mode, interval)
+		zaplogrus.Infof("[QUEST] Cadence mode changed: %s -> %s (interval=%s)", e.cadenceMode, mode, interval)
 		e.cadenceMode = mode
 	}
 
@@ -728,7 +728,7 @@ func (e *QuestEngine) tick() {
 				delete(e.executionStaleResetReason, id)
 				delete(e.executionStaleResetAt, id)
 				delete(e.chatIDForQuest, id)
-				log.Printf("[QUEST] Cleaned up old quest: %s (status: %s)", id, quest.Status)
+				zaplogrus.Infof("[QUEST] Cleaned up old quest: %s (status: %s)", id, quest.Status)
 			}
 		}
 	}
@@ -736,12 +736,12 @@ func (e *QuestEngine) tick() {
 
 	// Then, check quests for execution.
 	e.mu.Lock()
-	log.Printf("[QUEST] Tick: checking %d quests for execution", len(e.quests))
+	zaplogrus.Infof("[QUEST] Tick: checking %d quests for execution", len(e.quests))
 	activeCount := 0
 	scheduledCount := 0
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
-			log.Printf("[QUEST] Quest %s (%s) skipped - status: %s", quest.ID, quest.Name, quest.Status)
+			zaplogrus.Warnf("[QUEST] Quest %s (%s) skipped - status: %s", quest.ID, quest.Name, quest.Status)
 			continue
 		}
 		activeCount++
@@ -786,7 +786,7 @@ func (e *QuestEngine) tick() {
 					e.executionLockCheckedAt[quest.ID] = now.UTC()
 					e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_reset_lock_check_failed:%v", lockCheckErr)
 					e.executionStaleResetAt[quest.ID] = now.UTC()
-					log.Printf(
+					zaplogrus.Infof(
 						"[QUEST] Quest %s (%s) stale reset after lock check failure (%v)",
 						quest.ID,
 						quest.Name,
@@ -800,7 +800,7 @@ func (e *QuestEngine) tick() {
 				if lockHeld {
 					e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_detected_but_lock_active(ttl=%s)", lockTTL.Round(time.Second))
 					e.executionStaleResetAt[quest.ID] = now.UTC()
-					log.Printf(
+					zaplogrus.Infof(
 						"[QUEST] Quest %s (%s) stale marker retained because lock is still active (ttl=%s progress_age=%s start_age=%s stage=%s)",
 						quest.ID,
 						quest.Name,
@@ -812,7 +812,7 @@ func (e *QuestEngine) tick() {
 					continue
 				}
 
-				log.Printf(
+				zaplogrus.Infof(
 					"[QUEST] Quest %s (%s) execution stale after progress_age=%s (start_age=%s stage=%s reset_after=%s), resetting in-progress marker",
 					quest.ID,
 					quest.Name,
@@ -828,7 +828,7 @@ func (e *QuestEngine) tick() {
 				e.executionStaleResetReason[quest.ID] = fmt.Sprintf("stale_reset_progress_age=%s", progressAge.Round(time.Second))
 				e.executionStaleResetAt[quest.ID] = now.UTC()
 			} else {
-				log.Printf(
+				zaplogrus.Infof(
 					"[QUEST] Quest %s (%s) skipped - execution already in progress for %s (stage=%s last_progress=%s ago)",
 					quest.ID,
 					quest.Name,
@@ -849,7 +849,7 @@ func (e *QuestEngine) tick() {
 			quest.Checkpoint["runtime_entry_blocked_by_risk_lock"] = true
 			quest.Checkpoint["runtime_entry_blocked_at"] = now.UTC().Format(time.RFC3339)
 			quest.Checkpoint["runtime_entry_gate_reason"] = "risk lock active: drawdown/exposure guardrail blocking new entries"
-			log.Printf("[QUEST] Entry decisions for quest %s are gated by risk lock", quest.ID)
+			zaplogrus.Infof("[QUEST] Entry decisions for quest %s are gated by risk lock", quest.ID)
 		} else if quest.Checkpoint != nil {
 			delete(quest.Checkpoint, "runtime_entry_blocked_by_risk_lock")
 		}
@@ -865,7 +865,7 @@ func (e *QuestEngine) tick() {
 			if strings.TrimSpace(readQuestMetricString(quest.Checkpoint["runtime_entry_gate_reason"])) == "" {
 				quest.Checkpoint["runtime_entry_gate_reason"] = "state drift detected: reconcile/repair pending"
 			}
-			log.Printf("[QUEST] Entry decisions for quest %s are gated by state drift", quest.ID)
+			zaplogrus.Warnf("[QUEST] Entry decisions for quest %s are gated by state drift", quest.ID)
 		} else if quest.Checkpoint != nil {
 			delete(quest.Checkpoint, "runtime_entry_blocked_by_state_drift")
 			if !readQuestMetricBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"]) {
@@ -876,7 +876,7 @@ func (e *QuestEngine) tick() {
 
 		// Check if quest should execute based on cadence
 		if e.shouldExecute(quest, now) {
-			log.Printf("[QUEST] Executing quest: %s (type: %s, def: %s, chat: %s)", quest.ID, quest.Type, quest.Metadata["definition_id"], quest.Metadata["chat_id"])
+			zaplogrus.Infof("[QUEST] Executing quest: %s (type: %s, def: %s, chat: %s)", quest.ID, quest.Type, quest.Metadata["definition_id"], quest.Metadata["chat_id"])
 			e.executing[quest.ID] = true
 			e.executionStarts[quest.ID] = now
 			e.executionLastProgress[quest.ID] = now
@@ -884,10 +884,10 @@ func (e *QuestEngine) tick() {
 			scheduledCount++
 			go e.executeQuest(quest)
 		} else {
-			log.Printf("[QUEST] Quest %s not ready (cadence: %s, last: %v)", quest.ID, quest.Cadence, quest.LastExecutedAt)
+			zaplogrus.Infof("[QUEST] Quest %s not ready (cadence: %s, last: %v)", quest.ID, quest.Cadence, quest.LastExecutedAt)
 		}
 	}
-	log.Printf("[QUEST] Tick complete: %d active quests, %d sent for execution", activeCount, scheduledCount)
+	zaplogrus.Infof("[QUEST] Tick complete: %d active quests, %d sent for execution", activeCount, scheduledCount)
 	e.mu.Unlock()
 }
 
@@ -954,12 +954,12 @@ func cadenceFromEnv(envKey string, fallback time.Duration) time.Duration {
 	}
 	seconds, err := strconv.Atoi(raw)
 	if err != nil || seconds <= 0 {
-		log.Printf("[QUEST] Invalid %s=%q, using default %s", envKey, raw, fallback)
+		zaplogrus.Warnf("[QUEST] Invalid %s=%q, using default %s", envKey, raw, fallback)
 		return fallback
 	}
 	interval := time.Duration(seconds) * time.Second
 	if interval < minQuestCadenceInterval {
-		log.Printf("[QUEST] %s too low (%ds), clamping to %s", envKey, seconds, minQuestCadenceInterval)
+		zaplogrus.Infof("[QUEST] %s too low (%ds), clamping to %s", envKey, seconds, minQuestCadenceInterval)
 		return minQuestCadenceInterval
 	}
 	return interval
@@ -1287,7 +1287,7 @@ func (e *QuestEngine) refreshQuestLockOwnerHeartbeatCycle(runCtx context.Context
 	if !running && executing == 0 {
 		if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
 			if e.shouldLogRedisError() {
-				log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+				zaplogrus.Warnf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
 			}
 		}
 		return true
@@ -1295,7 +1295,7 @@ func (e *QuestEngine) refreshQuestLockOwnerHeartbeatCycle(runCtx context.Context
 
 	if err := redisClient.Set(ctx, questLockOwnerHeartbeatKey(ownerID), time.Now().UTC().Format(time.RFC3339), questLockOwnerHeartbeatTTL).Err(); err != nil {
 		if e.shouldLogRedisError() {
-			log.Printf("[QUEST] Failed to refresh quest lock owner heartbeat: %v", err)
+			zaplogrus.Warnf("[QUEST] Failed to refresh quest lock owner heartbeat: %v", err)
 		}
 	}
 
@@ -1318,7 +1318,7 @@ func (e *QuestEngine) clearQuestLockOwnerHeartbeatIfIdle() {
 	defer cancel()
 	if err := redisClient.Del(ctx, questLockOwnerHeartbeatKey(ownerID)).Err(); err != nil {
 		if e.shouldLogRedisError() {
-			log.Printf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
+			zaplogrus.Warnf("[QUEST] Failed to clear quest lock owner heartbeat: %v", err)
 		}
 	}
 }
@@ -1423,7 +1423,7 @@ func (e *QuestEngine) reclaimStaleLock(ctx context.Context, key string, ttl time
 		return false, err
 	}
 	if replaced == 1 {
-		log.Printf("[QUEST] Reclaimed stale quest lock %s from inactive owner %s", key, currentOwner)
+		zaplogrus.Warnf("[QUEST] Reclaimed stale quest lock %s from inactive owner %s", key, currentOwner)
 		return true, nil
 	}
 	return false, nil
@@ -1439,7 +1439,7 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 	e.mu.RUnlock()
 
 	if !ok {
-		log.Printf("No handler registered for quest type: %s", quest.Type)
+		zaplogrus.Infof("No handler registered for quest type: %s", quest.Type)
 		return
 	}
 
@@ -1456,7 +1456,7 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 		e.executionStaleResetReason[quest.ID] = "lock_acquire_failed_already_owned"
 		e.executionStaleResetAt[quest.ID] = time.Now().UTC()
 		e.mu.Unlock()
-		log.Printf("Quest %s skipped: could not acquire lock (another instance may be running)", quest.ID)
+		zaplogrus.Warnf("Quest %s skipped: could not acquire lock (another instance may be running)", quest.ID)
 		return
 	}
 	e.recordExecutionLockState(quest.ID, true, e.runtimeBudget.LockTTL, time.Now().UTC())
@@ -1472,11 +1472,11 @@ func (e *QuestEngine) executeQuest(quest *Quest) {
 	stopHeartbeat := e.startExecutionHeartbeat(ctx, quest.ID)
 	defer stopHeartbeat()
 	if err := handler(ctx, quest); err != nil {
-		log.Printf("Quest %s (%s) failed: %v", quest.ID, quest.Name, err)
+		zaplogrus.Warnf("Quest %s (%s) failed: %v", quest.ID, quest.Name, err)
 		e.markQuestExecutionProgress(quest.ID, questExecutionStagePersist)
 		e.finalizeQuestExecution(quest, err)
 	} else {
-		log.Printf("Quest %s (%s) completed successfully", quest.ID, quest.Name)
+		zaplogrus.Infof("Quest %s (%s) completed successfully", quest.ID, quest.Name)
 		e.markQuestExecutionProgress(quest.ID, questExecutionStagePersist)
 		e.finalizeQuestExecution(quest, nil)
 	}
@@ -1521,7 +1521,7 @@ func (e *QuestEngine) finalizeQuestExecution(quest *Quest, execErr error) {
 		saveCtx, cancel := context.WithTimeout(context.Background(), defaultQuestStoreWriteTimeout)
 		defer cancel()
 		if err := e.store.SaveQuest(saveCtx, snapshot); err != nil {
-			log.Printf("Failed to persist final quest snapshot %s: %v", quest.ID, err)
+			zaplogrus.Warnf("Failed to persist final quest snapshot %s: %v", quest.ID, err)
 		}
 	}
 }
@@ -1561,13 +1561,13 @@ func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Dura
 	}
 	if err := e.refreshQuestLockOwnerHeartbeat(ctx); err != nil {
 		if e.shouldLogRedisError() {
-			log.Printf("Failed to refresh quest lock owner heartbeat: %v", err)
+			zaplogrus.Warnf("Failed to refresh quest lock owner heartbeat: %v", err)
 		}
 		return false
 	}
 	ok, err := e.redis.SetNX(ctx, key, e.lockOwnerID, ttl).Result()
 	if err != nil {
-		log.Printf("Failed to acquire lock %s: %v", key, err)
+		zaplogrus.Warnf("Failed to acquire lock %s: %v", key, err)
 		return false
 	}
 	if ok {
@@ -1575,7 +1575,7 @@ func (e *QuestEngine) acquireLock(ctx context.Context, key string, ttl time.Dura
 	}
 	reclaimed, err := e.reclaimStaleLock(ctx, key, ttl)
 	if err != nil {
-		log.Printf("Failed to reclaim stale lock %s: %v", key, err)
+		zaplogrus.Warnf("Failed to reclaim stale lock %s: %v", key, err)
 		return false
 	}
 	if reclaimed {
@@ -1602,7 +1602,7 @@ func (e *QuestEngine) releaseLock(ctx context.Context, key string) {
 		return
 	}
 	if _, err := releaseQuestLockIfOwnedScript.Run(ctx, e.redis, []string{key}, e.lockOwnerID).Int(); err != nil && err != redis.Nil {
-		log.Printf("Failed to release lock %s: %v", key, err)
+		zaplogrus.Warnf("Failed to release lock %s: %v", key, err)
 	}
 }
 
@@ -1619,7 +1619,7 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 			q.UpdatedAt = time.Now()
 			if e.store != nil {
 				if err := e.store.SaveQuest(context.Background(), q); err != nil {
-					log.Printf("Failed to persist paused quest %s: %v", q.ID, err)
+					zaplogrus.Warnf("Failed to persist paused quest %s: %v", q.ID, err)
 				}
 			}
 		}
@@ -1637,7 +1637,7 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 	for _, defID := range defaultQuests {
 		quest, err := e.ensureQuestForChatInternal(defID, chatID)
 		if err != nil {
-			log.Printf("Failed to create quest %s: %v", defID, err)
+			zaplogrus.Warnf("Failed to create quest %s: %v", defID, err)
 			continue
 		}
 		currentMode := e.resolveBeginAutonomousMode(chatID, quest)
@@ -1648,7 +1648,7 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 		quest.Metadata["dry_run"] = strconv.FormatBool(isDryRun)
 		quest.Metadata["paper_trading"] = strconv.FormatBool(currentMode == ModePaper)
 		quest.Metadata["execution_mode"] = string(currentMode)
-		log.Printf(
+		zaplogrus.Infof(
 			"[QUEST] Created quest %s with execution_mode=%s dry_run=%t paper_trading=%t",
 			quest.ID,
 			currentMode,
@@ -1660,7 +1660,7 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 		quest.UpdatedAt = time.Now()
 		if e.store != nil {
 			if err := e.store.SaveQuest(context.Background(), quest); err != nil {
-				log.Printf("Failed to persist active quest %s: %v", quest.ID, err)
+				zaplogrus.Warnf("Failed to persist active quest %s: %v", quest.ID, err)
 			}
 		}
 		state.ActiveQuests = append(state.ActiveQuests, quest.ID)
@@ -1670,7 +1670,7 @@ func (e *QuestEngine) BeginAutonomous(chatID string) (*AutonomousState, error) {
 
 	if e.store != nil {
 		if err := e.store.SaveAutonomousState(context.Background(), state); err != nil {
-			log.Printf("Failed to persist autonomous state: %v", err)
+			zaplogrus.Warnf("Failed to persist autonomous state: %v", err)
 		}
 	}
 
@@ -1745,7 +1745,7 @@ func (e *QuestEngine) PauseAutonomous(chatID string) (*AutonomousState, error) {
 
 	if e.store != nil {
 		if err := e.store.SaveAutonomousState(context.Background(), state); err != nil {
-			log.Printf("Failed to persist autonomous state: %v", err)
+			zaplogrus.Warnf("Failed to persist autonomous state: %v", err)
 		}
 	}
 
@@ -2842,7 +2842,7 @@ func (e *QuestEngine) createQuestInternal(definitionID string, chatID string) (*
 
 	if e.store != nil {
 		if err := e.store.SaveQuest(context.Background(), quest); err != nil {
-			log.Printf("Failed to persist quest %s: %v", quest.ID, err)
+			zaplogrus.Warnf("Failed to persist quest %s: %v", quest.ID, err)
 		}
 	}
 
@@ -2875,7 +2875,7 @@ func (e *QuestEngine) UpdateQuestProgress(questID string, current int, checkpoin
 
 	if e.store != nil {
 		if err := e.store.SaveQuest(context.Background(), quest); err != nil {
-			log.Printf("Failed to persist quest %s: %v", quest.ID, err)
+			zaplogrus.Warnf("Failed to persist quest %s: %v", quest.ID, err)
 		}
 	}
 
@@ -2896,7 +2896,7 @@ func (e *QuestEngine) UpdateQuestProgress(questID string, current int, checkpoin
 		}
 		go func() {
 			if err := e.notificationService.NotifyQuestProgress(context.Background(), chatID, progressNotif); err != nil {
-				log.Printf("Failed to send quest progress notification for %s: %v", questID, err)
+				zaplogrus.Warnf("Failed to send quest progress notification for %s: %v", questID, err)
 			}
 		}()
 	}

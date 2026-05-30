@@ -3,13 +3,13 @@
 package execution
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -622,7 +622,7 @@ func (a *ExecutionActor) validateRequest(req *ports.OrderRequest) error {
 // logAuditEvent creates and persists an audit event
 func (a *ExecutionActor) logAuditEvent(ctx context.Context, intentID, eventType, exchange, symbol, reason string, metadata map[string]interface{}) {
 	if a.auditLog == nil {
-		log.Printf("[AUDIT] logger unavailable for intent %s event %s", intentID, eventType)
+		zaplogrus.Warnf("[AUDIT] logger unavailable for intent %s event %s", intentID, eventType)
 		return
 	}
 
@@ -644,7 +644,7 @@ func (a *ExecutionActor) logAuditEvent(ctx context.Context, intentID, eventType,
 			lastEvent := history[len(history)-1]
 			hash, hashErr := calculateHash(lastEvent)
 			if hashErr != nil {
-				log.Printf("[AUDIT] failed to hash previous event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(hashErr))
+				zaplogrus.Warnf("[AUDIT] failed to hash previous event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(hashErr))
 			} else {
 				previousHash = hash
 			}
@@ -666,13 +666,13 @@ func (a *ExecutionActor) logAuditEvent(ctx context.Context, intentID, eventType,
 
 	if err := a.auditLog.LogOrderEvent(ctx, event); err != nil {
 		// Audit logging is best-effort by design.
-		log.Printf("[AUDIT] failed to log event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(err))
+		zaplogrus.Warnf("[AUDIT] failed to log event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(err))
 		return
 	}
 
 	eventHash, err := calculateHash(event)
 	if err != nil {
-		log.Printf("[AUDIT] failed to hash event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(err))
+		zaplogrus.Warnf("[AUDIT] failed to hash event intent=%s type=%s: %s", intentID, eventType, sanitizeExternalError(err))
 		return
 	}
 	a.lastAuditHash[intentID] = eventHash
@@ -708,7 +708,7 @@ func (a *ExecutionActor) publishEvent(ctx context.Context, eventType string, int
 	}
 
 	if err := a.eventBus.Publish(ctx, orderEvent); err != nil {
-		log.Printf("[EVENT] failed to publish intent=%s type=%s: %s", intent.IntentID, eventType, sanitizeExternalError(err))
+		zaplogrus.Warnf("[EVENT] failed to publish intent=%s type=%s: %s", intent.IntentID, eventType, sanitizeExternalError(err))
 	}
 }
 

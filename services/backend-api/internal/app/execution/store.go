@@ -1,12 +1,12 @@
 package execution
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -547,7 +547,7 @@ func parseOrderStatus(s string) ports.OrderStatus {
 	case "rejected":
 		return ports.OrderStatusRejected
 	default:
-		log.Printf("[execution.store] parseOrderStatus: unrecognized status %q, defaulting to pending", s)
+		zaplogrus.Infof("[execution.store] parseOrderStatus: unrecognized status %q, defaulting to pending", s)
 		return ports.OrderStatusPending
 	}
 }
@@ -559,7 +559,7 @@ func parseOrderSide(s string) ports.OrderSide {
 	case "sell":
 		return ports.OrderSideSell
 	default:
-		log.Printf("[execution.store] parseOrderSide: unrecognized side %q, defaulting to buy", s)
+		zaplogrus.Infof("[execution.store] parseOrderSide: unrecognized side %q, defaulting to buy", s)
 		return ports.OrderSideBuy
 	}
 }
@@ -571,7 +571,7 @@ func parseOrderType(s string) ports.OrderType {
 	case "limit":
 		return ports.OrderTypeLimit
 	default:
-		log.Printf("[execution.store] parseOrderType: unrecognized type %q, defaulting to market", s)
+		zaplogrus.Infof("[execution.store] parseOrderType: unrecognized type %q, defaulting to market", s)
 		return ports.OrderTypeMarket
 	}
 }

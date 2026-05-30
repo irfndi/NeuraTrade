@@ -1,9 +1,9 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
-	"log"
 	"math/rand"
 	"os"
 	"strings"
@@ -95,7 +95,7 @@ func (h *IntegratedQuestHandlers) closeTriggeredPaperScalpingPositions(
 
 		h.updatePaperScalpingTelemetryOutcome(ctx, orderID, outcome, netPnL, position.OpenedAt, closedAt)
 		closed++
-		log.Printf(
+		zaplogrus.Infof(
 			"[SCALPING] Paper %s closed by %s at %s (entry=%s gross_pnl=%s fees=%s)",
 			position.Symbol,
 			triggerSource,
@@ -227,7 +227,7 @@ func paperScalpingTakerFeeRateFromEnv() (decimal.Decimal, bool) {
 	}
 	configured, err := decimal.NewFromString(raw)
 	if err != nil || configured.IsNegative() {
-		log.Printf("[SCALPING] Invalid paper scalping taker fee rate %q", raw)
+		zaplogrus.Warnf("[SCALPING] Invalid paper scalping taker fee rate %q", raw)
 		return decimal.Zero, false
 	}
 	return configured, true
@@ -270,6 +270,6 @@ func (h *IntegratedQuestHandlers) updatePaperScalpingTelemetryOutcome(
 	})
 	writeCancel()
 	if err != nil {
-		log.Printf("[TELEMETRY] Failed to update paper outcome for order %s: %v", orderID, err)
+		zaplogrus.Warnf("[TELEMETRY] Failed to update paper outcome for order %s: %v", orderID, err)
 	}
 }

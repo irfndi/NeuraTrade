@@ -1,6 +1,7 @@
 package api
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -88,7 +89,7 @@ func configureLiveReadinessGuard(opModeService *services.OperationalModeService)
 		return
 	}
 	if liveReadinessGuardDisabled(os.Getenv("NEURATRADE_REQUIRE_LIVE_READINESS_PROOF")) {
-		log.Printf("WARNING: real-money live readiness proof guard disabled by NEURATRADE_REQUIRE_LIVE_READINESS_PROOF")
+		zaplogrus.Warnf("WARNING: real-money live readiness proof guard disabled by NEURATRADE_REQUIRE_LIVE_READINESS_PROOF")
 		opModeService.SetLiveModeGuard(nil)
 		return
 	}
@@ -106,15 +107,15 @@ func configureLiveReadinessGuard(opModeService *services.OperationalModeService)
 		if len(filtered) > 0 {
 			requiredStrategies = filtered
 		} else {
-			log.Printf("WARNING: NEURATRADE_LIVE_READINESS_STRATEGIES contained only empty/whitespace entries; using defaults")
+			zaplogrus.Warnf("WARNING: NEURATRADE_LIVE_READINESS_STRATEGIES contained only empty/whitespace entries; using defaults")
 		}
 	}
 	manifestPath := strings.TrimSpace(os.Getenv(services.LiveReadinessManifestEnv))
 	opModeService.SetLiveModeGuard(services.ManifestLiveModeGuard(manifestPath, requiredStrategies))
 	if manifestPath != "" {
-		log.Printf("Real-money live readiness proof guard enabled with manifest %s; live mode requires strategy evidence", manifestPath)
+		zaplogrus.Infof("Real-money live readiness proof guard enabled with manifest %s; live mode requires strategy evidence", manifestPath)
 	} else {
-		log.Printf("Real-money live readiness proof guard enabled; live mode requires %s with strategy evidence", services.LiveReadinessManifestEnv)
+		zaplogrus.Infof("Real-money live readiness proof guard enabled; live mode requires %s with strategy evidence", services.LiveReadinessManifestEnv)
 	}
 }
 
@@ -331,7 +332,7 @@ func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, cha
 
 	var cfg routeRuntimeConfigFile
 	if err := json.Unmarshal(configFile, &cfg); err != nil {
-		log.Printf("WARNING: failed to parse runtime config %s: %v", configPath, err)
+		zaplogrus.Warnf("WARNING: failed to parse runtime config %s: %v", configPath, err)
 		return "", "", "", ""
 	}
 
@@ -481,7 +482,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if telegramConfig != nil {
 		notificationService = services.NewNotificationService(db, redis, telegramConfig.ServiceURL, telegramConfig.GrpcAddress, telegramConfig.AdminAPIKey)
 	} else {
-		log.Printf("[TELEGRAM] WARNING: telegramConfig is nil, notification service will run with default settings")
+		zaplogrus.Warnf("[TELEGRAM] WARNING: telegramConfig is nil, notification service will run with default settings")
 		notificationService = services.NewNotificationService(db, redis, "http://telegram-service:3002", "telegram-service:50052", "")
 	}
 
@@ -541,13 +542,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	dailyBudget, err := decimal.NewFromString(dailyBudgetStr)
 	if err != nil {
-		log.Printf("WARNING: Invalid AI_DAILY_BUDGET value '%s', using default 10.00", dailyBudgetStr)
+		zaplogrus.Warnf("WARNING: Invalid AI_DAILY_BUDGET value '%s', using default 10.00", dailyBudgetStr)
 		dailyBudget = decimal.NewFromFloat(10.00)
 	}
 
 	monthlyBudget, err := decimal.NewFromString(monthlyBudgetStr)
 	if err != nil {
-		log.Printf("WARNING: Invalid AI_MONTHLY_BUDGET value '%s', using default 200.00", monthlyBudgetStr)
+		zaplogrus.Warnf("WARNING: Invalid AI_MONTHLY_BUDGET value '%s', using default 200.00", monthlyBudgetStr)
 		monthlyBudget = decimal.NewFromFloat(200.00)
 	}
 
@@ -563,14 +564,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if db != nil {
 		dbQuestStore := services.NewDBQuestStore(db)
 		if err := dbQuestStore.InitSchema(context.Background()); err != nil {
-			log.Printf("Failed to initialize runtime quest persistence schema, falling back to in-memory store: %v", err)
+			zaplogrus.Warnf("Failed to initialize runtime quest persistence schema, falling back to in-memory store: %v", err)
 		} else {
 			questStore = dbQuestStore
 			questStoreMode = "database"
 		}
 	}
 	questEngine := services.NewQuestEngineWithNotification(questStore, redisClientRaw, notificationService)
-	log.Printf("Quest runtime store initialized in %s mode", questStoreMode)
+	zaplogrus.Infof("Quest runtime store initialized in %s mode", questStoreMode)
 
 	riskConfig := risk.DefaultRiskManagerConfig()
 	riskManager := risk.NewRiskManagerAgent(riskConfig)
@@ -644,13 +645,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			snapshot, snapshotErr := portfolioSafety.GetPortfolioSnapshot(safetyCtx, chatID, exchanges)
 			if snapshotErr != nil {
 				cancelSafety()
-				log.Printf("[QUEST] Risk bridge snapshot check failed for chat %s: %v", chatID, snapshotErr)
+				zaplogrus.Warnf("[QUEST] Risk bridge snapshot check failed for chat %s: %v", chatID, snapshotErr)
 				continue
 			}
 			safety, safetyErr := portfolioSafety.CheckSafety(safetyCtx, chatID, snapshot)
 			cancelSafety()
 			if safetyErr != nil {
-				log.Printf("[QUEST] Risk bridge safety check failed for chat %s: %v", chatID, safetyErr)
+				zaplogrus.Warnf("[QUEST] Risk bridge safety check failed for chat %s: %v", chatID, safetyErr)
 				continue
 			}
 			if !safety.TradingAllowed {
@@ -684,15 +685,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// In scalping-first mode we avoid restoring old active rows without metadata/chat ownership.
 	loadLegacyQuests := os.Getenv("NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS") == "1" ||
 		os.Getenv("NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS") == "true"
-	log.Printf("DEBUG: db is nil: %v", db == nil)
+	zaplogrus.Infof("DEBUG: db is nil: %v", db == nil)
 	if db != nil && loadLegacyQuests {
 		if questStoreMode == "database" {
-			log.Println("Skipping legacy active quest preload to keep runtime tables isolated from legacy quests")
+			zaplogrus.Warn("Skipping legacy active quest preload to keep runtime tables isolated from legacy quests")
 		} else {
-			log.Println("Loading legacy active quests from database into memory...")
+			zaplogrus.Info("Loading legacy active quests from database into memory...")
 			rows, err := db.Query(context.Background(), "SELECT id, type, cadence, status, target_value, checkpoint, created_at FROM quests WHERE status = 'active'")
 			if err != nil {
-				log.Printf("Failed to load quests from database: %v", err)
+				zaplogrus.Warnf("Failed to load quests from database: %v", err)
 			} else {
 				defer rows.Close()
 				loadedCount := 0
@@ -702,7 +703,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 					var checkpoint []byte
 					var createdAt time.Time
 					if err := rows.Scan(&id, &questType, &cadence, &status, &targetValue, &checkpoint, &createdAt); err != nil {
-						log.Printf("Failed to scan quest row: %v", err)
+						zaplogrus.Warnf("Failed to scan quest row: %v", err)
 						continue
 					}
 					quest := &services.Quest{
@@ -721,25 +722,25 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 						}
 					}
 					if err := questStore.SaveQuest(context.Background(), quest); err != nil {
-						log.Printf("Failed to save quest %s: %v", id, err)
+						zaplogrus.Warnf("Failed to save quest %s: %v", id, err)
 					}
-					log.Printf("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
+					zaplogrus.Infof("Loaded quest from DB: %s (type: %s, status: %s)", id, questType, status)
 					loadedCount++
 				}
-				log.Printf("Loaded %d quests from database", loadedCount)
+				zaplogrus.Infof("Loaded %d quests from database", loadedCount)
 			}
 		}
 	} else if db != nil {
-		log.Println("Skipping legacy active quest preload (set NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS=1 to enable)")
+		zaplogrus.Warn("Skipping legacy active quest preload (set NEURATRADE_LOAD_LEGACY_ACTIVE_QUESTS=1 to enable)")
 	}
 
 	// Initialize futures arbitrage handler first (needed for quest handlers)
 	var futuresArbitrageHandler *handlers.FuturesArbitrageHandler
 	if db != nil {
 		futuresArbitrageHandler = handlers.NewFuturesArbitrageHandlerWithQuerier(db)
-		log.Printf("Futures arbitrage handler initialized successfully")
+		zaplogrus.Infof("Futures arbitrage handler initialized successfully")
 	} else {
-		log.Printf("Database not available for futures arbitrage handler initialization")
+		zaplogrus.Infof("Database not available for futures arbitrage handler initialization")
 	}
 
 	// Create autonomous monitoring for tracking quest execution
@@ -752,7 +753,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	case *database.PostgresDB:
 		sqlDB = concreteDB.SQL
 	default:
-		log.Printf("Warning: Unknown database type, AI learning disabled")
+		zaplogrus.Warnf("Warning: Unknown database type, AI learning disabled")
 	}
 
 	runtimeDeps := autonomyruntime.Dependencies{
@@ -768,7 +769,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Create integrated quest runtime handlers through app/autonomy module.
 	integratedHandlers, integratedHandlersErr := autonomyruntime.BuildIntegratedHandlers(runtimeDeps)
 	if integratedHandlersErr != nil {
-		log.Printf("Warning: autonomy runtime rollout store unavailable, using local fallback handlers: %v", integratedHandlersErr)
+		zaplogrus.Warnf("Warning: autonomy runtime rollout store unavailable, using local fallback handlers: %v", integratedHandlersErr)
 		integratedHandlers = autonomyruntime.BuildLocalIntegratedHandlers(runtimeDeps)
 	}
 
@@ -776,13 +777,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if sqlDB != nil {
 		telemetryStore = services.NewScalpingTelemetryStoreFromSQLDB(sqlDB, nil)
 		if telemetryStore == nil {
-			log.Printf("Warning: scalping telemetry store unavailable due to nil SQL database")
+			zaplogrus.Warnf("Warning: scalping telemetry store unavailable due to nil SQL database")
 		} else {
 			schemaCtx, schemaCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			err := telemetryStore.EnsureSchema(schemaCtx)
 			schemaCancel()
 			if err != nil {
-				log.Printf("Warning: failed to initialize scalping telemetry store: %v", err)
+				zaplogrus.Warnf("Warning: failed to initialize scalping telemetry store: %v", err)
 				telemetryStore = nil
 			} else {
 				integratedHandlers.SetTelemetryStore(telemetryStore)
@@ -793,10 +794,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Wire order executor to integrated handlers for scalping execution
 	adminAPIKey := os.Getenv("ADMIN_API_KEY")
 	if adminAPIKey == "" {
-		log.Printf("WARNING: ADMIN_API_KEY is not set; CCXT order executor requests will be unauthenticated")
+		zaplogrus.Warnf("WARNING: ADMIN_API_KEY is not set; CCXT order executor requests will be unauthenticated")
 	}
 
-	log.Printf("Using Bitget Order Executor for real exchange API calls")
+	zaplogrus.Infof("Using Bitget Order Executor for real exchange API calls")
 
 	// Load runtime credentials/chat context from ~/.neuratrade/config.json first.
 	bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID := loadRouteRuntimeConfig()
@@ -816,17 +817,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	if chatID == "" {
-		log.Printf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
+		zaplogrus.Warnf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
 	}
 
 	var orderExecutor services.ScalpingOrderExecutor
 	var liveOrderExecutor services.ScalpingOrderExecutor
 	canUseBitgetCreds := bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase != ""
 	if bitgetAPIKey != "" && bitgetSecret != "" && bitgetPassphrase == "" {
-		log.Printf("⚠️ Bitget API key/secret detected but passphrase is missing; falling back to paper trading")
+		zaplogrus.Warnf("⚠️ Bitget API key/secret detected but passphrase is missing; falling back to paper trading")
 	}
 	if canUseBitgetCreds && chatID != "" && sqlDB != nil && !hasConnectedExchangeWallet(sqlDB, chatID, "bitget") {
-		log.Printf("⚠️ Runtime Bitget credentials do not map to an active Bitget wallet for chat %s; falling back to paper trading", chatID)
+		zaplogrus.Warnf("⚠️ Runtime Bitget credentials do not map to an active Bitget wallet for chat %s; falling back to paper trading", chatID)
 		canUseBitgetCreds = false
 	}
 	if canUseBitgetCreds {
@@ -834,18 +835,18 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		bitgetExec.SetNotificationService(notificationService)
 		bitgetExec.SetChatID(chatID)
 		liveOrderExecutor = bitgetExec
-		log.Printf("✅ Real order execution enabled on Bitget")
+		zaplogrus.Infof("✅ Real order execution enabled on Bitget")
 	}
 	paperOrderExec := services.NewNativeOrderExecutor(ccxtService, bitgetAPIKey, bitgetSecret)
 	paperOrderExec.SetNotificationService(notificationService)
 	paperOrderExec.SetChatID(chatID)
 	if liveOrderExecutor == nil {
-		log.Printf("⚠️ Real order execution unavailable at startup; live mode will be blocked until Bitget credentials and wallet mapping are valid")
+		zaplogrus.Warnf("⚠️ Real order execution unavailable at startup; live mode will be blocked until Bitget credentials and wallet mapping are valid")
 	}
 	orderExecutor = services.NewModeAwareOrderExecutor(liveOrderExecutor, paperOrderExec, opModeService)
 
 	orderExecutor = services.NewSafeOrderExecutor(orderExecutor, portfolioSafety, chatID)
-	log.Printf("Portfolio safety gate enabled for scalping order execution")
+	zaplogrus.Infof("Portfolio safety gate enabled for scalping order execution")
 
 	integratedHandlers.SetDrawdownHalt(drawdownHalt)
 	integratedHandlers.SetOrderExecutor(orderExecutor)
@@ -855,16 +856,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	// Set database for user settings lookup
 	var lifecycleStore *services.TradingLifecycleStore
 	if sqlDB != nil {
-		log.Printf("Database available for integrated handlers")
+		zaplogrus.Infof("Database available for integrated handlers")
 	}
 	if db != nil {
 		var lifecycleErr error
 		lifecycleStore, lifecycleErr = services.NewTradingLifecycleStore(db, log.Default())
 		if lifecycleErr != nil {
-			log.Printf("Warning: failed to initialize trading lifecycle store: %v", lifecycleErr)
+			zaplogrus.Warnf("Warning: failed to initialize trading lifecycle store: %v", lifecycleErr)
 		} else {
 			integratedHandlers.SetLifecycleStore(lifecycleStore)
-			log.Printf("Trading lifecycle store initialized for autonomous execution persistence")
+			zaplogrus.Infof("Trading lifecycle store initialized for autonomous execution persistence")
 		}
 	}
 
@@ -887,10 +888,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			services.ResolveTradeMemoryConfigFromEnv(services.DefaultTradeMemoryConfig()),
 		)
 		if err != nil {
-			log.Printf("Warning: Failed to create trade memory: %v", err)
+			zaplogrus.Warnf("Warning: Failed to create trade memory: %v", err)
 		} else {
 			integratedHandlers.SetTradeMemory(tradeMemory)
-			log.Printf("Trade memory initialized for AI learning")
+			zaplogrus.Infof("Trade memory initialized for AI learning")
 		}
 	}
 
@@ -908,7 +909,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	if aiAPIKey != "" {
-		log.Printf("Initializing AI Scalping with primary provider: %s (base_url: %s)", aiProvider, aiBaseURL)
+		zaplogrus.Infof("Initializing AI Scalping with primary provider: %s (base_url: %s)", aiProvider, aiBaseURL)
 
 		httpTimeout := 300 * time.Second
 		if raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_HTTP_TIMEOUT_SECONDS")); raw != "" {
@@ -925,7 +926,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 		providerChain, chainErr := parseAIProviderChain(aiProvider)
 		if chainErr != nil {
-			log.Printf("AI provider chain invalid; falling back to primary provider only: %v", chainErr)
+			zaplogrus.Warnf("AI provider chain invalid; falling back to primary provider only: %v", chainErr)
 			questEngine.SetAIProviderChainStats(0, 0)
 			providerChain = nil
 			if validateAIProviderName(aiProvider) == nil {
@@ -936,7 +937,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		for _, provider := range providerChain {
 			nodeConfig := resolveProviderNode(aiProvider, aiAPIKey, aiBaseURL, provider)
 			if strings.TrimSpace(nodeConfig.APIKey) == "" && providerRequiresAPIKey(provider) {
-				log.Printf("Skipping AI provider %s in failover chain: missing API key", provider)
+				zaplogrus.Warnf("Skipping AI provider %s in failover chain: missing API key", provider)
 				continue
 			}
 
@@ -951,7 +952,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			if strings.TrimSpace(nodeConfig.ModelOverride) != "" {
 				overrideMsg = nodeConfig.ModelOverride
 			}
-			log.Printf(
+			zaplogrus.Infof(
 				"AI failover node enabled: provider=%s base_url=%s model_override=%s",
 				provider,
 				nodeConfig.BaseURL,
@@ -963,10 +964,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		var llmClient llm.Client
 		switch len(failoverNodes) {
 		case 0:
-			log.Printf("AI provider chain has no usable nodes; AI scalping disabled")
+			zaplogrus.Warnf("AI provider chain has no usable nodes; AI scalping disabled")
 		case 1:
 			llmClient = failoverNodes[0].Client
-			log.Printf("AI provider chain active with single node: %s", failoverNodes[0].Provider)
+			zaplogrus.Warnf("AI provider chain active with single node: %s", failoverNodes[0].Provider)
 		default:
 			maxHops := 1
 			if raw := strings.TrimSpace(os.Getenv("NEURATRADE_AI_FAILOVER_MAX_HOPS")); raw != "" {
@@ -975,19 +976,19 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				}
 			}
 			llmClient = llm.NewFailoverClient(failoverNodes, maxHops)
-			log.Printf("AI provider failover enabled: nodes=%d max_hops=%d", len(failoverNodes), maxHops)
+			zaplogrus.Warnf("AI provider failover enabled: nodes=%d max_hops=%d", len(failoverNodes), maxHops)
 		}
 
 		skillRegistry := skill.NewRegistry(filepath.Join(filepath.Dir(""), "skills"))
 		if err := skillRegistry.LoadAll(); err != nil {
-			log.Printf("Warning: Failed to load skills: %v", err)
+			zaplogrus.Warnf("Warning: Failed to load skills: %v", err)
 		}
 		if llmClient != nil {
 			integratedHandlers.SetAIScalping(llmClient, skillRegistry)
-			log.Printf("AI Scalping service initialized successfully")
+			zaplogrus.Infof("AI Scalping service initialized successfully")
 		}
 	} else {
-		log.Printf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
+		zaplogrus.Warnf("AI API key not configured in ~/.neuratrade/config.json, AI scalping disabled")
 	}
 
 	if opModeService != nil {
@@ -1003,7 +1004,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			return coordinator.ValidateStrategyMode(ctx, services.ScalpingStrategyID(chatID), autonomous.ModeLive)
 		})
 		for chatID, err := range opModeService.RevalidateLiveModeGuard(context.Background(), "startup_live_mode_guard") {
-			log.Printf("⚠️ Demoted persisted live mode after proof gate revalidation: chat_id=%s err=%v", chatID, err)
+			zaplogrus.Infof("⚠️ Demoted persisted live mode after proof gate revalidation: chat_id=%s err=%v", chatID, err)
 		}
 	}
 
@@ -1022,10 +1023,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			services.DefaultReconcilerConfig(),
 			log.Default(),
 		)
-		log.Printf("Exchange position reconciler initialized")
+		zaplogrus.Infof("Exchange position reconciler initialized")
 
 		if gin.Mode() == gin.TestMode {
-			log.Printf("Startup reconciliation skipped in test mode")
+			zaplogrus.Warnf("Startup reconciliation skipped in test mode")
 		} else {
 			// Mandatory startup reconciliation in non-test runtime.
 			// This runs before autonomous chat restore so resumability/protection is refreshed first.
@@ -1033,10 +1034,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			results, err := reconciler.ReconcileAll(ctx, services.ReconciliationStartup, "")
 			cancel()
 			if err != nil {
-				log.Printf("Startup reconciliation error: %v", err)
+				zaplogrus.Warnf("Startup reconciliation error: %v", err)
 			} else {
 				for _, r := range results {
-					log.Printf("Startup reconciliation: %s", reconciler.GetReconciliationSummary(&r))
+					zaplogrus.Infof("Startup reconciliation: %s", reconciler.GetReconciliationSummary(&r))
 				}
 			}
 		}
@@ -1047,18 +1048,18 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		if periodicRaw := strings.TrimSpace(os.Getenv("NEURATRADE_PERIODIC_RECONCILIATION_SECONDS")); periodicRaw != "" {
 			seconds, parseErr := strconv.Atoi(periodicRaw)
 			if parseErr != nil {
-				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, using default %ds", periodicRaw, periodicSeconds)
+				zaplogrus.Warnf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, using default %ds", periodicRaw, periodicSeconds)
 			} else if seconds == 0 {
 				periodicSeconds = 0
 			} else if seconds > 0 {
 				periodicSeconds = seconds
 			} else {
-				log.Printf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, using default %ds", periodicRaw, periodicSeconds)
+				zaplogrus.Warnf("Invalid NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=%q, using default %ds", periodicRaw, periodicSeconds)
 			}
 		}
 		if periodicSeconds > 0 {
 			interval := time.Duration(periodicSeconds) * time.Second
-			log.Printf("Periodic reconciliation enabled (interval=%s)", interval)
+			zaplogrus.Infof("Periodic reconciliation enabled (interval=%s)", interval)
 			go func() {
 				ticker := time.NewTicker(interval)
 				defer ticker.Stop()
@@ -1067,16 +1068,16 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 					results, err := reconciler.ReconcileAll(ctx, services.ReconciliationPeriodic, "")
 					cancel()
 					if err != nil {
-						log.Printf("Periodic reconciliation error: %v", err)
+						zaplogrus.Warnf("Periodic reconciliation error: %v", err)
 						continue
 					}
 					for _, r := range results {
-						log.Printf("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
+						zaplogrus.Infof("Periodic reconciliation: %s", reconciler.GetReconciliationSummary(&r))
 					}
 				}
 			}()
 		} else {
-			log.Printf("Periodic reconciliation disabled (NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=0)")
+			zaplogrus.Warnf("Periodic reconciliation disabled (NEURATRADE_PERIODIC_RECONCILIATION_SECONDS=0)")
 		}
 	}
 
@@ -1094,14 +1095,14 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			query,
 		)
 		if err != nil {
-			log.Printf("Failed to restore autonomous-enabled chats: %v", err)
+			zaplogrus.Warnf("Failed to restore autonomous-enabled chats: %v", err)
 		} else {
 			defer rows.Close()
 			restored := 0
 			for rows.Next() {
 				var chatID string
 				if err := rows.Scan(&chatID); err != nil {
-					log.Printf("Failed to scan autonomous chat row: %v", err)
+					zaplogrus.Warnf("Failed to scan autonomous chat row: %v", err)
 					continue
 				}
 				chatID = strings.TrimSpace(chatID)
@@ -1109,7 +1110,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 					continue
 				}
 				if _, err := questEngine.BeginAutonomous(chatID); err != nil {
-					log.Printf("Failed to restore autonomous mode for chat %s: %v", chatID, err)
+					zaplogrus.Warnf("Failed to restore autonomous mode for chat %s: %v", chatID, err)
 					continue
 				}
 				restored++
@@ -1118,7 +1119,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			if restoreAllChats {
 				mode = "all enabled chats"
 			}
-			log.Printf("Restored autonomous scalping for %d chat(s) from telegram_operator_state (%s)", restored, mode)
+			zaplogrus.Infof("Restored autonomous scalping for %d chat(s) from telegram_operator_state (%s)", restored, mode)
 		}
 	}
 
@@ -1128,12 +1129,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		arbitrageBridge := services.NewArbitrageExecutionBridge(db, questEngine, signalAggregator, nil)
 		go func() {
 			if err := arbitrageBridge.Start(context.Background()); err != nil {
-				log.Printf("Arbitrage execution bridge error: %v", err)
+				zaplogrus.Infof("Arbitrage execution bridge error: %v", err)
 			}
 		}()
-		log.Printf("Arbitrage execution bridge enabled (features.enable_ai_arbitrage=true)")
+		zaplogrus.Infof("Arbitrage execution bridge enabled (features.enable_ai_arbitrage=true)")
 	} else {
-		log.Printf("Arbitrage execution bridge disabled in scalping-first mode")
+		zaplogrus.Warnf("Arbitrage execution bridge disabled in scalping-first mode")
 	}
 	var autonomousHandler *handlers.AutonomousHandler
 	if reconciler != nil {
@@ -1175,9 +1176,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	var opModeHandler *handlers.OperationalModeHandler
 	if opModeService != nil {
 		opModeHandler = handlers.NewOperationalModeHandler(opModeService)
-		log.Printf("Operational mode handler initialized")
+		zaplogrus.Infof("Operational mode handler initialized")
 	} else {
-		log.Printf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
+		zaplogrus.Warnf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
 	sharedKillSwitch := apprisk.NewKillSwitch()
@@ -1231,9 +1232,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				futuresArbitrage.GET("/market-summary", futuresArbitrageHandler.GetFuturesMarketSummary)
 				futuresArbitrage.POST("/position-sizing", futuresArbitrageHandler.GetPositionSizingRecommendation)
 			}
-			log.Printf("Futures arbitrage routes registered successfully")
+			zaplogrus.Infof("Futures arbitrage routes registered successfully")
 		} else {
-			log.Printf("Skipping futures arbitrage routes due to handler initialization failure")
+			zaplogrus.Warnf("Skipping futures arbitrage routes due to handler initialization failure")
 		}
 
 		// Technical analysis routes

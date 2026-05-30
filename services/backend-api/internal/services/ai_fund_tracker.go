@@ -1,10 +1,10 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -129,7 +129,7 @@ func (t *AIFundTracker) Start(ctx context.Context) error {
 	if t.config.EnableAI && t.llmClient != nil {
 		milestones, err := t.generateAIMilestones(ctx, snapshot.TotalValue)
 		if err != nil {
-			log.Printf("[AI-FUND] Failed to generate AI milestones, using defaults: %v", err)
+			zaplogrus.Warnf("[AI-FUND] Failed to generate AI milestones, using defaults: %v", err)
 			t.milestones = t.generateDefaultMilestones(snapshot.TotalValue)
 		} else {
 			t.milestones = milestones
@@ -141,7 +141,7 @@ func (t *AIFundTracker) Start(ctx context.Context) error {
 	t.wg.Add(1)
 	go t.runTrackingLoop()
 
-	log.Printf("[AI-FUND] Started tracking: start_value=%.2f, target=%.2f, milestones=%d",
+	zaplogrus.Infof("[AI-FUND] Started tracking: start_value=%.2f, target=%.2f, milestones=%d",
 		t.startValue, t.config.TargetValue, len(t.milestones))
 	return nil
 }
@@ -151,7 +151,7 @@ func (t *AIFundTracker) Stop() {
 		t.cancel()
 	}
 	t.wg.Wait()
-	log.Printf("[AI-FUND] Stopped")
+	zaplogrus.Infof("[AI-FUND] Stopped")
 }
 
 func (t *AIFundTracker) runTrackingLoop() {
@@ -166,7 +166,7 @@ func (t *AIFundTracker) runTrackingLoop() {
 			return
 		case <-ticker.C:
 			if err := t.updateFundValue(t.ctx); err != nil {
-				log.Printf("[AI-FUND] Update failed: %v", err)
+				zaplogrus.Warnf("[AI-FUND] Update failed: %v", err)
 			}
 		}
 	}
@@ -191,7 +191,7 @@ func (t *AIFundTracker) updateFundValue(ctx context.Context) error {
 		go t.analyzeProgress(ctx, snapshot)
 	}
 
-	log.Printf("[AI-FUND] Updated: value=%.2f, progress=%.1f%%",
+	zaplogrus.Infof("[AI-FUND] Updated: value=%.2f, progress=%.1f%%",
 		snapshot.TotalValue, (snapshot.TotalValue/t.config.TargetValue)*100)
 
 	return nil
@@ -227,7 +227,7 @@ func (t *AIFundTracker) checkMilestones(currentValue float64) {
 			now := time.Now()
 			t.milestones[i].Status = "achieved"
 			t.milestones[i].AchievedAt = &now
-			log.Printf("[AI-FUND] MILESTONE ACHIEVED: %s (%.2f)",
+			zaplogrus.Infof("[AI-FUND] MILESTONE ACHIEVED: %s (%.2f)",
 				t.milestones[i].Description, t.milestones[i].TargetValue)
 		}
 	}
@@ -353,11 +353,11 @@ func (t *AIFundTracker) analyzeProgress(ctx context.Context, snapshot *FundSnaps
 	t.mu.Unlock()
 
 	if performance.DailyReturn < -0.05 {
-		log.Printf("[AI-FUND] WARNING: Daily return %.2f%% below threshold", performance.DailyReturn*100)
+		zaplogrus.Warnf("[AI-FUND] WARNING: Daily return %.2f%% below threshold", performance.DailyReturn*100)
 	}
 
 	if performance.MaxDrawdown > 0.10 {
-		log.Printf("[AI-FUND] ALERT: Max drawdown %.2f%% exceeds 10%% threshold", performance.MaxDrawdown*100)
+		zaplogrus.Warnf("[AI-FUND] ALERT: Max drawdown %.2f%% exceeds 10%% threshold", performance.MaxDrawdown*100)
 	}
 }
 
@@ -446,7 +446,7 @@ func (t *AIFundTracker) AdjustTarget(ctx context.Context, newTarget float64, rea
 		t.milestones = t.generateDefaultMilestones(t.currentValue)
 	}
 
-	log.Printf("[AI-FUND] Target adjusted to %.2f (reason: %s)", newTarget, reason)
+	zaplogrus.Infof("[AI-FUND] Target adjusted to %.2f (reason: %s)", newTarget, reason)
 	return nil
 }
 

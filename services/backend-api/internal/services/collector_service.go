@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -420,7 +419,7 @@ func (c *CollectorService) initializeWorkersAsync() {
 	// Trigger immediate initial data collection to unblock dependent services
 	// Only fetch a few symbols initially to quickly unblock the channel
 	go func() {
-		log.Printf("Triggering immediate initial data collection for %d workers", len(c.workers))
+		zaplogrus.Infof("Triggering immediate initial data collection for %d workers", len(c.workers))
 		for _, worker := range c.workers {
 			// Fetch only first 10 symbols to quickly unblock dependent services
 			initialSymbols := worker.Symbols
@@ -433,9 +432,9 @@ func (c *CollectorService) initializeWorkersAsync() {
 				Symbols:  initialSymbols,
 			}
 			if err := c.collectTickerDataBulk(tempWorker); err != nil {
-				log.Printf("Initial collection failed for %s: %v", worker.Exchange, err)
+				zaplogrus.Warnf("Initial collection failed for %s: %v", worker.Exchange, err)
 			} else {
-				log.Printf("Initial collection succeeded for %s (%d symbols)", worker.Exchange, len(initialSymbols))
+				zaplogrus.Infof("Initial collection succeeded for %s (%d symbols)", worker.Exchange, len(initialSymbols))
 			}
 		}
 	}()

@@ -1,9 +1,9 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"sort"
 	"strings"
@@ -400,7 +400,7 @@ func (e *ScalpingBacktestEngine) loadHistoricalSignals(ctx context.Context, star
 
 	signals, err := e.loadSignalsFromOHLCV(ctx, startTime, endTime, symbolFilter)
 	if err != nil {
-		log.Printf("[BACKTEST] OHLCV signal load failed (falling back to market_data): %v", err)
+		zaplogrus.Warnf("[BACKTEST] OHLCV signal load failed (falling back to market_data): %v", err)
 	}
 	if err == nil && len(signals) > 0 {
 		return signals, nil

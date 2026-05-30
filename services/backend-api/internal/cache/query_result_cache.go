@@ -1,10 +1,10 @@
 package cache
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -60,7 +60,7 @@ func (c *QueryResultCache) Get(ctx context.Context, queryHash, tableName string)
 	}
 	if err != nil {
 		if c.enableLog {
-			log.Printf("QueryResultCache Redis error: %v", err)
+			zaplogrus.Infof("QueryResultCache Redis error: %v", err)
 		}
 		c.stats.mu.Lock()
 		c.stats.Misses++
@@ -71,7 +71,7 @@ func (c *QueryResultCache) Get(ctx context.Context, queryHash, tableName string)
 	var entry QueryResultCacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
 		if c.enableLog {
-			log.Printf("QueryResultCache unmarshal error: %v", err)
+			zaplogrus.Infof("QueryResultCache unmarshal error: %v", err)
 		}
 		c.stats.mu.Lock()
 		c.stats.Misses++
@@ -81,7 +81,7 @@ func (c *QueryResultCache) Get(ctx context.Context, queryHash, tableName string)
 
 	if time.Now().After(entry.ExpiresAt) {
 		if c.enableLog {
-			log.Printf("QueryResultCache entry expired for %s", tableName)
+			zaplogrus.Infof("QueryResultCache entry expired for %s", tableName)
 		}
 		c.stats.mu.Lock()
 		c.stats.Misses++
@@ -127,7 +127,7 @@ func (c *QueryResultCache) Set(ctx context.Context, queryHash, tableName string,
 		if len(hashPreview) > 8 {
 			hashPreview = hashPreview[:8]
 		}
-		log.Printf("Cached query result for %s (hash: %s, rows: %d, TTL: %v)",
+		zaplogrus.Infof("Cached query result for %s (hash: %s, rows: %d, TTL: %v)",
 			tableName, hashPreview, rowCount, c.ttl)
 	}
 
@@ -151,7 +151,7 @@ func (c *QueryResultCache) Invalidate(ctx context.Context, tableName string) err
 			return fmt.Errorf("failed to invalidate cache: %w", err)
 		}
 		if c.enableLog {
-			log.Printf("Invalidated %d cache entries for table %s", len(keys), tableName)
+			zaplogrus.Warnf("Invalidated %d cache entries for table %s", len(keys), tableName)
 		}
 	}
 
@@ -175,7 +175,7 @@ func (c *QueryResultCache) InvalidateByPattern(ctx context.Context, pattern stri
 			return fmt.Errorf("failed to invalidate cache: %w", err)
 		}
 		if c.enableLog {
-			log.Printf("Invalidated %d cache entries matching pattern %s", len(keys), pattern)
+			zaplogrus.Warnf("Invalidated %d cache entries matching pattern %s", len(keys), pattern)
 		}
 	}
 
@@ -217,7 +217,7 @@ func (c *QueryResultCache) Clear(ctx context.Context) error {
 		if err := c.redis.Del(ctx, keys...).Err(); err != nil {
 			return fmt.Errorf("failed to clear cache: %w", err)
 		}
-		log.Printf("Cleared %d query cache entries", len(keys))
+		zaplogrus.Infof("Cleared %d query cache entries", len(keys))
 	}
 
 	return nil

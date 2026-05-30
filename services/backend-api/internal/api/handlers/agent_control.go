@@ -2,10 +2,10 @@
 package handlers
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -113,7 +113,7 @@ func (h *AgentControlHandler) PauseExchange(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "pause_exchange"})
 		return
 	}
-	log.Printf("agent_control: exchange %s collection paused", req.ExchangeID)
+	zaplogrus.Infof("agent_control: exchange %s collection paused", req.ExchangeID)
 	c.JSON(http.StatusOK, gin.H{
 		"status":      "ok",
 		"action":      "pause_exchange",
@@ -148,7 +148,7 @@ func (h *AgentControlHandler) ResumeExchange(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "resume_exchange"})
 		return
 	}
-	log.Printf("agent_control: exchange %s collection resumed", req.ExchangeID)
+	zaplogrus.Infof("agent_control: exchange %s collection resumed", req.ExchangeID)
 	c.JSON(http.StatusOK, gin.H{
 		"status":      "ok",
 		"action":      "resume_exchange",
@@ -173,7 +173,7 @@ func (h *AgentControlHandler) EnableSafeMode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "enable_safe_mode"})
 		return
 	}
-	log.Printf("agent_control: safe mode enabled")
+	zaplogrus.Infof("agent_control: safe mode enabled")
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "enable_safe_mode",
@@ -197,7 +197,7 @@ func (h *AgentControlHandler) DisableSafeMode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "disable_safe_mode"})
 		return
 	}
-	log.Printf("agent_control: safe mode disabled")
+	zaplogrus.Warnf("agent_control: safe mode disabled")
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "disable_safe_mode",
@@ -250,7 +250,7 @@ func (h *AgentControlHandler) EngageKillSwitch(c *gin.Context) {
 	if !engageVal {
 		action = "disengage_kill_switch"
 	}
-	log.Printf("agent_control: kill switch %s", action)
+	zaplogrus.Infof("agent_control: kill switch %s", action)
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "kill_switch",
@@ -289,7 +289,7 @@ func (h *AgentControlHandler) CancelAllOrders(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "action": "cancel_all_orders"})
 		return
 	}
-	log.Printf("agent_control: all orders cancelled (exchange=%s, symbol=%s)", req.ExchangeID, req.Symbol)
+	zaplogrus.Infof("agent_control: all orders cancelled (exchange=%s, symbol=%s)", req.ExchangeID, req.Symbol)
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 		"action": "cancel_all_orders",
@@ -388,7 +388,7 @@ func (h *AgentControlHandler) StreamEvents(c *gin.Context) {
 		case event := <-subscription:
 			payload, err := json.Marshal(event)
 			if err != nil {
-				log.Printf("agent_control: failed to marshal event for stream: %v", err)
+				zaplogrus.Warnf("agent_control: failed to marshal event for stream: %v", err)
 				continue
 			}
 

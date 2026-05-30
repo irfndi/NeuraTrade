@@ -3,10 +3,10 @@
 package execution
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/platform/actor"
@@ -70,7 +70,7 @@ func (s *ExecutionService) Start(ctx context.Context) error {
 	// Start the actor's message processing loop
 	go func() {
 		if err := s.actorRef.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("[execution] actor stopped: %s", sanitizeExternalError(err))
+			zaplogrus.Infof("[execution] actor stopped: %s", sanitizeExternalError(err))
 		}
 	}()
 

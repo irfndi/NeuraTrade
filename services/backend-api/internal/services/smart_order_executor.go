@@ -1,10 +1,10 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"time"
@@ -163,7 +163,7 @@ func (e *SmartOrderExecutor) PlaceOrderSmart(ctx context.Context, req SmartOrder
 }
 
 func (e *SmartOrderExecutor) executeFOK(ctx context.Context, req SmartOrderRequest, startTime time.Time) (*SmartOrderResult, error) {
-	log.Printf("[SMART-EXEC] Executing FOK order: %s %s %s", req.Side, req.Amount.String(), req.Symbol)
+	zaplogrus.Infof("[SMART-EXEC] Executing FOK order: %s %s %s", req.Side, req.Amount.String(), req.Symbol)
 
 	orderID, err := e.config.BaseExecutor.PlaceOrder(ctx, req.Exchange, req.Symbol, req.Side, "limit", req.Amount, req.Price)
 	if err != nil {
@@ -225,7 +225,7 @@ func (e *SmartOrderExecutor) executeFOK(ctx context.Context, req SmartOrderReque
 }
 
 func (e *SmartOrderExecutor) executeIOC(ctx context.Context, req SmartOrderRequest, startTime time.Time) (*SmartOrderResult, error) {
-	log.Printf("[SMART-EXEC] Executing IOC order: %s %s %s", req.Side, req.Amount.String(), req.Symbol)
+	zaplogrus.Infof("[SMART-EXEC] Executing IOC order: %s %s %s", req.Side, req.Amount.String(), req.Symbol)
 
 	orderID, err := e.config.BaseExecutor.PlaceOrder(ctx, req.Exchange, req.Symbol, req.Side, "limit", req.Amount, req.Price)
 	if err != nil {
@@ -315,7 +315,7 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 			}, nil
 		}
 
-		log.Printf("[SMART-EXEC] Attempt %d/%d: %s %s %s", attempt, maxRetries, req.Side, orderAmount.String(), req.Symbol)
+		zaplogrus.Infof("[SMART-EXEC] Attempt %d/%d: %s %s %s", attempt, maxRetries, req.Side, orderAmount.String(), req.Symbol)
 
 		orderType := string(req.OrderType)
 		if orderType == "" {
@@ -326,11 +326,11 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 		if err != nil {
 			lastErr = err
 			lastOrderID = orderID
-			log.Printf("[SMART-EXEC] Attempt %d failed: %v", attempt, err)
+			zaplogrus.Warnf("[SMART-EXEC] Attempt %d failed: %v", attempt, err)
 
 			if attempt < maxRetries && e.isRetryableError(err) {
 				delay := e.calcBackoff(attempt)
-				log.Printf("[SMART-EXEC] Retrying in %v (attempt %d/%d)", delay, attempt+1, maxRetries)
+				zaplogrus.Warnf("[SMART-EXEC] Retrying in %v (attempt %d/%d)", delay, attempt+1, maxRetries)
 
 				select {
 				case <-ctx.Done():
@@ -357,7 +357,7 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 					slippage := e.calcSlippage(req, fillPrice)
 					if slippage > req.MaxSlippage {
 						lastErr = fmt.Errorf("slippage %.2f%% exceeds maximum %.2f%%", slippage, req.MaxSlippage)
-						log.Printf("[SMART-EXEC] Slippage protection triggered: %.2f%% > %.2f%%", slippage, req.MaxSlippage)
+						zaplogrus.Infof("[SMART-EXEC] Slippage protection triggered: %.2f%% > %.2f%%", slippage, req.MaxSlippage)
 
 						if attempt < maxRetries {
 							continue
@@ -404,7 +404,7 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 			fillPercent := filled.Div(orderAmount).Mul(decimal.NewFromInt(100)).InexactFloat64()
 			if fillPercent < 100 && fillPercent < e.config.MinPartialFillPercent {
 				lastErr = fmt.Errorf("partial fill %.1f%% below minimum %.1f%%", fillPercent, e.config.MinPartialFillPercent)
-				log.Printf("[SMART-EXEC] Partial fill below minimum: %.1f%% < %.1f%%", fillPercent, e.config.MinPartialFillPercent)
+				zaplogrus.Infof("[SMART-EXEC] Partial fill below minimum: %.1f%% < %.1f%%", fillPercent, e.config.MinPartialFillPercent)
 
 				if attempt < maxRetries {
 					totalFilled = totalFilled.Add(filled)

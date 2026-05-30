@@ -1,10 +1,10 @@
 package runtime
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/services"
@@ -74,7 +74,7 @@ func RegisterQuestRuntime(engine *services.QuestEngine, handlers *services.Integ
 	engine.RegisterHandler(services.QuestTypeTriggered, handlers.ExecuteRoutine)
 	engine.RegisterHandler(services.QuestTypeGoal, handlers.ExecuteRoutine)
 	engine.RegisterHandler(services.QuestTypeArbitrage, handlers.ExecuteArbitrage)
-	log.Println("[AUTONOMY-RUNTIME] integrated quest runtime registered")
+	zaplogrus.Info("[AUTONOMY-RUNTIME] integrated quest runtime registered")
 	return nil
 }
 

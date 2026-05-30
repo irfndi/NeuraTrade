@@ -1,10 +1,10 @@
 package handlers
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"sort"
@@ -180,17 +180,17 @@ func (h *ArbitrageHandler) GetArbitrageOpportunities(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Finding arbitrage opportunities with min_profit=%.2f, limit=%d, symbol=%s", minProfit, limit, symbolFilter)
+	zaplogrus.Infof("Finding arbitrage opportunities with min_profit=%.2f, limit=%d, symbol=%s", minProfit, limit, symbolFilter)
 
 	// Get recent market data from database
 	opportunities, err := h.FindArbitrageOpportunities(c.Request.Context(), minProfit, limit, symbolFilter)
 	if err != nil {
-		log.Printf("Error finding arbitrage opportunities: %v", err)
+		zaplogrus.Infof("Error finding arbitrage opportunities: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to find arbitrage opportunities"})
 		return
 	}
 
-	log.Printf("Found %d arbitrage opportunities", len(opportunities))
+	zaplogrus.Infof("Found %d arbitrage opportunities", len(opportunities))
 
 	// Send notifications for high-profit opportunities
 	go h.sendArbitrageNotifications(opportunities)
@@ -232,7 +232,7 @@ func (h *ArbitrageHandler) sendArbitrageNotifications(opportunities []ArbitrageO
 	if len(notifiableOpportunities) > 0 {
 		ctx := context.Background()
 		if err := h.notificationService.NotifyMarketOpportunities(ctx, notifiableOpportunities); err != nil {
-			log.Printf("Failed to send market notifications: %v", err)
+			zaplogrus.Warnf("Failed to send market notifications: %v", err)
 		}
 	}
 }
@@ -1171,7 +1171,7 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 		var sym SymbolStats
 		var avgProf float64
 		if err := rows.Scan(&sym.Symbol, &sym.Count, &avgProf); err != nil {
-			log.Printf("Failed to scan symbol stats: %v", err)
+			zaplogrus.Warnf("Failed to scan symbol stats: %v", err)
 			continue
 		}
 		sym.AvgProfit = decimal.NewFromFloat(avgProf)
@@ -1195,7 +1195,7 @@ func (h *ArbitrageHandler) calculateArbitrageStats(ctx context.Context, interval
 		var pair PairStats
 		var avgProf float64
 		if err := rows.Scan(&pair.BuyExchange, &pair.SellExchange, &pair.Count, &avgProf); err != nil {
-			log.Printf("Failed to scan pair stats: %v", err)
+			zaplogrus.Warnf("Failed to scan pair stats: %v", err)
 			continue
 		}
 		pair.AvgProfit = decimal.NewFromFloat(avgProf)

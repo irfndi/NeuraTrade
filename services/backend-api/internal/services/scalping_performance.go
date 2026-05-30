@@ -1,8 +1,8 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
-	"log"
 	"sync"
 	"time"
 
@@ -85,7 +85,7 @@ func (sp *ScalpingPerformance) RecordTrade(record TradeRecord) {
 		sp.history = sp.history[len(sp.history)-100:]
 	}
 
-	log.Printf("Scalping performance: trades=%d, win_rate=%.2f%%, pnl=%s, consecutive=%d/%d",
+	zaplogrus.Infof("Scalping performance: trades=%d, win_rate=%.2f%%, pnl=%s, consecutive=%d/%d",
 		sp.totalTrades, sp.winRate*100, sp.totalPnL.String(), sp.consecutiveWins, sp.consecutiveLosses)
 }
 
@@ -149,14 +149,14 @@ func (sp *ScalpingPerformance) GetAdjustedParameters() ScalpingConfig {
 	if sp.consecutiveLosses >= 3 {
 		adjusted.MinProfitPercent = sp.parameters.MinProfitPercent * 1.5
 		adjusted.MaxCapitalPercent = sp.parameters.MaxCapitalPercent * 0.5
-		log.Printf("Self-learning: Consecutive losses detected - tightening parameters")
+		zaplogrus.Infof("Self-learning: Consecutive losses detected - tightening parameters")
 	} else if sp.consecutiveWins >= 3 {
 		adjusted.MinProfitPercent = sp.parameters.MinProfitPercent * 0.8
 		adjusted.MaxCapitalPercent = sp.parameters.MaxCapitalPercent * 1.2
 		if adjusted.MaxCapitalPercent > 20 {
 			adjusted.MaxCapitalPercent = 20
 		}
-		log.Printf("Self-learning: Consecutive wins detected - loosening parameters")
+		zaplogrus.Infof("Self-learning: Consecutive wins detected - loosening parameters")
 	}
 
 	if sp.winRate < 0.3 && sp.totalTrades >= 20 {
@@ -165,11 +165,11 @@ func (sp *ScalpingPerformance) GetAdjustedParameters() ScalpingConfig {
 		if adjusted.MaxConcurrentPositions < 1 {
 			adjusted.MaxConcurrentPositions = 1
 		}
-		log.Printf("Self-learning: Low win rate (%.1f%%) - dramatically tightening parameters", sp.winRate*100)
+		zaplogrus.Infof("Self-learning: Low win rate (%.1f%%) - dramatically tightening parameters", sp.winRate*100)
 	} else if sp.winRate > 0.6 && sp.totalTrades >= 20 {
 		adjusted.MinProfitPercent = sp.parameters.MinProfitPercent * 0.7
 		adjusted.MaxConcurrentPositions = sp.parameters.MaxConcurrentPositions + 1
-		log.Printf("Self-learning: High win rate (%.1f%%) - more aggressive parameters", sp.winRate*100)
+		zaplogrus.Infof("Self-learning: High win rate (%.1f%%) - more aggressive parameters", sp.winRate*100)
 	}
 
 	sp.parameters = adjusted

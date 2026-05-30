@@ -1,11 +1,11 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -189,7 +189,7 @@ func (tm *TradeMemory) RecordDecision(ctx context.Context, record AITradeRecord)
 		return fmt.Errorf("failed to record trade decision: %w", err)
 	}
 
-	log.Printf("[AI-MEMORY] Recorded decision: %s %s on %s (confidence: %.2f)",
+	zaplogrus.Infof("[AI-MEMORY] Recorded decision: %s %s on %s (confidence: %.2f)",
 		record.Action, record.Symbol, record.Exchange, record.Confidence)
 	return nil
 }
@@ -211,7 +211,7 @@ func (tm *TradeMemory) UpdateOutcome(ctx context.Context, tradeID string, outcom
 		return fmt.Errorf("failed to update trade outcome: %w", err)
 	}
 
-	log.Printf("[AI-MEMORY] Updated trade %s: outcome=%s, pnl=%s", tradeID, outcome, pnl.String())
+	zaplogrus.Infof("[AI-MEMORY] Updated trade %s: outcome=%s, pnl=%s", tradeID, outcome, pnl.String())
 	return nil
 }
 
@@ -243,7 +243,7 @@ func (tm *TradeMemory) GetRecentTrades(ctx context.Context, limit int) ([]AITrad
 			&lessons, &entryPrice, &exitPrice,
 		)
 		if err != nil {
-			log.Printf("[AI-MEMORY] Scan error in GetRecentTrades: %v", err)
+			zaplogrus.Infof("[AI-MEMORY] Scan error in GetRecentTrades: %v", err)
 			continue
 		}
 
@@ -299,7 +299,7 @@ func (tm *TradeMemory) FindSimilarPatterns(ctx context.Context, symbol string, c
 			&lessons, &entryPrice, &exitPrice,
 		)
 		if err != nil {
-			log.Printf("[AI-MEMORY] Scan error in FindSimilarPatterns: %v", err)
+			zaplogrus.Infof("[AI-MEMORY] Scan error in FindSimilarPatterns: %v", err)
 			continue
 		}
 
@@ -858,7 +858,7 @@ func (tm *TradeMemory) RecordRecoveryPattern(ctx context.Context, pattern Recove
 	)
 
 	if err == nil {
-		log.Printf("[AI-MEMORY] Recorded recovery pattern: peak=%.2f%% recovered=%.2f%% duration=%.1fh",
+		zaplogrus.Infof("[AI-MEMORY] Recorded recovery pattern: peak=%.2f%% recovered=%.2f%% duration=%.1fh",
 			pattern.DrawdownPeak*100, pattern.DrawdownRecovered*100, pattern.RecoveryDuration.Hours())
 	}
 	return err
@@ -970,7 +970,7 @@ func (tm *TradeMemory) getLessonsByCategory(ctx context.Context, category string
 		}
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("[AI-MEMORY] failed iterating lessons for category %s: %v", category, err)
+		zaplogrus.Warnf("[AI-MEMORY] failed iterating lessons for category %s: %v", category, err)
 		return ""
 	}
 

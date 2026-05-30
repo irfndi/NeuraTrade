@@ -1,9 +1,9 @@
 package services
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -506,7 +506,7 @@ func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
 	}
 
 	if len(resumed) > 0 {
-		log.Printf("[DRAWDOWN] Force resumed trading for %d account(s): %v", len(resumed), resumed)
+		zaplogrus.Infof("[DRAWDOWN] Force resumed trading for %d account(s): %v", len(resumed), resumed)
 	}
 
 	return resumed
@@ -542,7 +542,7 @@ func ResolveMaxDrawdownConfigFromEnv(base MaxDrawdownConfig) MaxDrawdownConfig {
 		cfg.AutoResumeEnabled = strings.ToLower(v) == "true" || v == "1" || v == "yes"
 	}
 
-	log.Printf("[DRAWDOWN] Config: warning=%.0f%% critical=%.0f%% halt=%.0f%% recovery=%.0f%% auto_resume=%v",
+	zaplogrus.Warnf("[DRAWDOWN] Config: warning=%.0f%% critical=%.0f%% halt=%.0f%% recovery=%.0f%% auto_resume=%v",
 		cfg.WarningThreshold.InexactFloat64()*100,
 		cfg.CriticalThreshold.InexactFloat64()*100,
 		cfg.HaltThreshold.InexactFloat64()*100,

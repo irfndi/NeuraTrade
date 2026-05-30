@@ -2,9 +2,9 @@
 package risk
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -431,7 +431,7 @@ func (a *RiskActor) publishEvent(ctx context.Context, traceID, eventType string,
 	}
 
 	if err := a.eventBus.Publish(publishCtx, event); err != nil {
-		log.Printf("[risk] %v", fmt.Errorf("publish risk event type=%s: %w", eventType, err))
+		zaplogrus.Infof("[risk] %v", fmt.Errorf("publish risk event type=%s: %w", eventType, err))
 	}
 }
 

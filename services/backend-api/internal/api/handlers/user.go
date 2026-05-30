@@ -1,12 +1,12 @@
 package handlers
 
 import (
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -263,7 +263,7 @@ func (h *UserHandler) RegisterUser(c *gin.Context) {
 			return
 		}
 		// Database not available (dev mode) - log warning and continue
-		log.Printf("[WARN] User registration proceeded without database persistence: %v", err2)
+		zaplogrus.Warnf("[WARN] User registration proceeded without database persistence: %v", err2)
 	}
 
 	// Return user response (without password)
@@ -404,7 +404,7 @@ func (h *UserHandler) UpdateUserProfile(c *gin.Context) {
 	// Get the old user data for cache invalidation
 	oldUser, err := h.getUserByID(c.Request.Context(), userID)
 	if err != nil {
-		log.Printf("Warning: Could not get old user data for cache invalidation: %v", err)
+		zaplogrus.Warnf("Warning: Could not get old user data for cache invalidation: %v", err)
 	}
 
 	var execErr error
@@ -470,7 +470,7 @@ func (h *UserHandler) userExists(ctx context.Context, email string) (bool, error
 	query := "SELECT COUNT(*) FROM users WHERE email = $1"
 	err := h.db.QueryRow(ctx, query, email).Scan(&count)
 	if err != nil {
-		log.Printf("[USER] Failed to check existing user by email %q: %v", email, err)
+		zaplogrus.Warnf("[USER] Failed to check existing user by email %q: %v", email, err)
 		return false, err
 	}
 	return count > 0, nil
@@ -554,11 +554,11 @@ func (h *UserHandler) getUserByID(ctx context.Context, userID string) (*models.U
 			if unmarshalErr := json.Unmarshal([]byte(cachedData), &user); unmarshalErr == nil {
 				return &user, nil
 			} else {
-				log.Printf("Failed to unmarshal cached user %s: %v", userID, unmarshalErr)
+				zaplogrus.Warnf("Failed to unmarshal cached user %s: %v", userID, unmarshalErr)
 			}
 		} else if err != redis.Nil {
 			// Log non-cache-miss Redis errors
-			log.Printf("Redis error getting user %s: %v", userID, err)
+			zaplogrus.Infof("Redis error getting user %s: %v", userID, err)
 		}
 	}
 
@@ -589,10 +589,10 @@ func (h *UserHandler) getUserByID(ctx context.Context, userID string) (*models.U
 		userJSON, err := json.Marshal(user)
 		if err == nil {
 			if err := h.redis.Set(ctx, cacheKey, string(userJSON), 5*time.Minute).Err(); err != nil {
-				log.Printf("Failed to cache user %s: %v", userID, err)
+				zaplogrus.Warnf("Failed to cache user %s: %v", userID, err)
 			}
 		} else {
-			log.Printf("Failed to marshal user %s for caching: %v", userID, err)
+			zaplogrus.Warnf("Failed to marshal user %s for caching: %v", userID, err)
 		}
 	}
 
@@ -608,18 +608,18 @@ func (h *UserHandler) invalidateUserCache(ctx context.Context, userID string, ol
 	// Invalidate user ID cache
 	userCacheKey := fmt.Sprintf("user:id:%s", userID)
 	if err := h.redis.Del(ctx, userCacheKey).Err(); err != nil {
-		log.Printf("Failed to invalidate user cache for ID %s: %v", userID, err)
+		zaplogrus.Warnf("Failed to invalidate user cache for ID %s: %v", userID, err)
 	} else {
-		log.Printf("Invalidated user cache for ID %s", userID)
+		zaplogrus.Warnf("Invalidated user cache for ID %s", userID)
 	}
 
 	// Invalidate old telegram chat ID cache if it existed
 	if oldUser != nil && oldUser.TelegramChatID != nil {
 		oldTelegramKey := fmt.Sprintf("user:telegram:%s", *oldUser.TelegramChatID)
 		if err := h.redis.Del(ctx, oldTelegramKey).Err(); err != nil {
-			log.Printf("Failed to invalidate old telegram cache for chat ID %s: %v", *oldUser.TelegramChatID, err)
+			zaplogrus.Warnf("Failed to invalidate old telegram cache for chat ID %s: %v", *oldUser.TelegramChatID, err)
 		} else {
-			log.Printf("Invalidated old telegram cache for chat ID %s", *oldUser.TelegramChatID)
+			zaplogrus.Warnf("Invalidated old telegram cache for chat ID %s", *oldUser.TelegramChatID)
 		}
 	}
 
@@ -627,9 +627,9 @@ func (h *UserHandler) invalidateUserCache(ctx context.Context, userID string, ol
 	if newTelegramChatID != nil {
 		newTelegramKey := fmt.Sprintf("user:telegram:%s", *newTelegramChatID)
 		if err := h.redis.Del(ctx, newTelegramKey).Err(); err != nil {
-			log.Printf("Failed to invalidate new telegram cache for chat ID %s: %v", *newTelegramChatID, err)
+			zaplogrus.Warnf("Failed to invalidate new telegram cache for chat ID %s: %v", *newTelegramChatID, err)
 		} else {
-			log.Printf("Invalidated new telegram cache for chat ID %s", *newTelegramChatID)
+			zaplogrus.Warnf("Invalidated new telegram cache for chat ID %s", *newTelegramChatID)
 		}
 	}
 }
@@ -677,11 +677,11 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 			if unmarshalErr := json.Unmarshal([]byte(cachedData), &user); unmarshalErr == nil {
 				return &user, nil
 			} else {
-				log.Printf("Failed to unmarshal cached user for chat %s: %v", chatID, unmarshalErr)
+				zaplogrus.Warnf("Failed to unmarshal cached user for chat %s: %v", chatID, unmarshalErr)
 			}
 		} else if err != redis.Nil {
 			// Log non-cache-miss Redis errors
-			log.Printf("Redis error getting user for chat %s: %v", chatID, err)
+			zaplogrus.Infof("Redis error getting user for chat %s: %v", chatID, err)
 		}
 	}
 
@@ -717,10 +717,10 @@ func (h *UserHandler) GetUserByTelegramChatID(ctx context.Context, chatID string
 		userJSON, err := json.Marshal(user)
 		if err == nil {
 			if err := h.redis.Set(ctx, cacheKey, string(userJSON), 5*time.Minute).Err(); err != nil {
-				log.Printf("Failed to cache user for chat %s: %v", chatID, err)
+				zaplogrus.Warnf("Failed to cache user for chat %s: %v", chatID, err)
 			}
 		} else {
-			log.Printf("Failed to marshal user for chat %s for caching: %v", chatID, err)
+			zaplogrus.Warnf("Failed to marshal user for chat %s for caching: %v", chatID, err)
 		}
 	}
 
