@@ -543,6 +543,7 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 		"--max-hold-ratio", "0.75",
 		"--cycles", "3",
 		"--interval-ms", "250",
+		"--paper-hold-period-seconds", "120",
 		"--min-actionable-cycles", "1",
 		"--min-paper-trades", "2",
 		"--min-paper-net-pnl", "0",
@@ -551,6 +552,7 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 		"--max-paper-drawdown", "0.25",
 		"--max-paper-drawdown-pct", "0.01",
 		"--max-reasoning-diagnostics", "2",
+		"--require-observed-live-trial-ready",
 		"--allow-degraded",
 		"--allow-invalid-contract",
 	})
@@ -587,6 +589,9 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	if opts.Interval != 250*time.Millisecond {
 		t.Fatalf("expected parsed interval, got %s", opts.Interval)
 	}
+	if opts.PaperHoldPeriod != 120*time.Second {
+		t.Fatalf("expected parsed paper hold period, got %s", opts.PaperHoldPeriod)
+	}
 	if opts.MinPaperTrades != 2 {
 		t.Fatalf("expected parsed min paper trades, got %d", opts.MinPaperTrades)
 	}
@@ -607,6 +612,9 @@ func TestParseAIScalpingDecisionProbeOptionsAllowsDiagnosticRelaxation(t *testin
 	}
 	if !opts.RequireReasoningClean || opts.MaxReasoningDiagnostics != 2 {
 		t.Fatalf("expected parsed reasoning diagnostics gate, enabled=%t max=%d", opts.RequireReasoningClean, opts.MaxReasoningDiagnostics)
+	}
+	if !opts.RequireObservedLiveTrialReady {
+		t.Fatal("expected parsed observed live trial readiness gate")
 	}
 }
 
@@ -635,6 +643,11 @@ func TestParseAIScalpingDecisionProbeOptionsRejectsInvalidPaperGates(t *testing.
 			name:    "negative actionable cycle count",
 			args:    []string{"--min-actionable-cycles", "-1"},
 			wantErr: "--min-actionable-cycles",
+		},
+		{
+			name:    "negative paper hold period",
+			args:    []string{"--paper-hold-period-seconds", "-1"},
+			wantErr: "--paper-hold-period-seconds",
 		},
 		{
 			name:    "actionable cycles above total cycles",
@@ -756,7 +769,7 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 			},
 			SignalQualityCoverage: mustDecimal("1"),
 		},
-	}, 3, mustDecimal("50"))
+	}, 3, mustDecimal("50"), 0)
 
 	if summary.CompletedCycles != 3 {
 		t.Fatalf("expected completed cycles, got %d", summary.CompletedCycles)
@@ -782,8 +795,8 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 	if summary.ActionableCycles != 2 || summary.HoldRatio.String() != "0.3333333333333333" {
 		t.Fatalf("unexpected actionability summary: actionable=%d hold_ratio=%s", summary.ActionableCycles, summary.HoldRatio.String())
 	}
-	if summary.PaperTrades != 2 || summary.PaperWins != 1 || summary.PaperLosses != 1 {
-		t.Fatalf("unexpected paper trade counts: trades=%d wins=%d losses=%d", summary.PaperTrades, summary.PaperWins, summary.PaperLosses)
+	if summary.PaperTrades != 2 || summary.PaperObservedTrades != 0 || summary.PaperWins != 1 || summary.PaperLosses != 1 {
+		t.Fatalf("unexpected paper trade counts: trades=%d observed=%d wins=%d losses=%d", summary.PaperTrades, summary.PaperObservedTrades, summary.PaperWins, summary.PaperLosses)
 	}
 	if summary.PaperNetPnL.String() != "-0.01" || summary.PaperFees.String() != "0.003" || summary.PaperAvgNetPnL.String() != "-0.005" {
 		t.Fatalf("unexpected paper pnl summary: net=%s fees=%s avg=%s", summary.PaperNetPnL.String(), summary.PaperFees.String(), summary.PaperAvgNetPnL.String())
@@ -794,6 +807,219 @@ func TestBuildAIScalpingDecisionProbeSummaryAggregatesCycles(t *testing.T) {
 	if summary.PaperProfitFactorUnbounded {
 		t.Fatal("did not expect bounded win/loss window to be marked unbounded")
 	}
+	if summary.PaperLiveTrialReadiness.Ready {
+		t.Fatalf("expected small lossy paper sample to fail live trial readiness: %+v", summary.PaperLiveTrialReadiness)
+	}
+	if summary.PaperLiveTrialReadiness.MinClosedTrades != services.DefaultScalpingLiveTrialMinClosedTrades {
+		t.Fatalf("unexpected min closed trades: %d", summary.PaperLiveTrialReadiness.MinClosedTrades)
+	}
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "paper_observed_trades_below_live_trial_minimum")
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "synthetic_paper_exits")
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "paper_net_pnl_not_positive")
+}
+
+func TestBuildAIScalpingDecisionProbeSummaryMarksPaperLiveTrialReady(t *testing.T) {
+	results := make([]*services.ScalpingLLMDecisionProbeResult, 0, services.DefaultScalpingLiveTrialMinClosedTrades)
+	for i := 0; i < services.DefaultScalpingLiveTrialMinClosedTrades; i++ {
+		outcome := "win"
+		netPnL := mustDecimal("0.02")
+		if i%5 == 0 {
+			outcome = "loss"
+			netPnL = mustDecimal("-0.01")
+		}
+		results = append(results, &services.ScalpingLLMDecisionProbeResult{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "buy"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:         mustDecimal("0.001"),
+				NetPnL:       netPnL,
+				Outcome:      outcome,
+				ExitObserved: true,
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		})
+	}
+
+	summary := buildAIScalpingDecisionProbeSummary(results, len(results), mustDecimal("50"), 0)
+
+	require.True(t, summary.PaperLiveTrialReadiness.Ready)
+	require.Empty(t, summary.PaperLiveTrialReadiness.Reasons)
+	require.Equal(t, services.DefaultScalpingLiveTrialMinClosedTrades, summary.PaperLiveTrialReadiness.MinClosedTrades)
+	require.Equal(t, 20, summary.PaperTrades)
+	require.Equal(t, 20, summary.PaperObservedTrades)
+	require.Equal(t, 20, summary.ObservedPaperTrades)
+	require.Equal(t, 16, summary.PaperWins)
+	require.Equal(t, 4, summary.PaperLosses)
+	require.Equal(t, 16, summary.ObservedPaperWins)
+	require.Equal(t, 4, summary.ObservedPaperLosses)
+	require.True(t, summary.PaperNetPnL.GreaterThan(decimal.Zero))
+	require.True(t, summary.ObservedPaperNetPnL.GreaterThan(decimal.Zero))
+	require.True(t, summary.PaperMaxDrawdownPct.GreaterThan(decimal.Zero))
+	require.True(t, summary.ObservedPaperMaxDrawdownPct.GreaterThan(decimal.Zero))
+}
+
+func TestBuildAIScalpingDecisionProbeSummaryBlocksLiveReadinessWhenHoldRatioTooHigh(t *testing.T) {
+	results := make([]*services.ScalpingLLMDecisionProbeResult, 0, 80)
+	for i := 0; i < services.DefaultScalpingLiveTrialMinClosedTrades; i++ {
+		outcome := "win"
+		netPnL := mustDecimal("0.02")
+		if i%5 == 0 {
+			outcome = "loss"
+			netPnL = mustDecimal("-0.01")
+		}
+		results = append(results, &services.ScalpingLLMDecisionProbeResult{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "buy"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:         mustDecimal("0.001"),
+				NetPnL:       netPnL,
+				Outcome:      outcome,
+				ExitObserved: true,
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		})
+	}
+	for i := len(results); i < 80; i++ {
+		results = append(results, &services.ScalpingLLMDecisionProbeResult{
+			SignalCount:           8,
+			SignalQualityCount:    8,
+			ContractValid:         true,
+			Provider:              "deepseek",
+			Decision:              &services.AITradingDecision{Action: "hold"},
+			SignalQualityCoverage: mustDecimal("1"),
+			ReasoningDiagnostics:  nil,
+		})
+	}
+
+	summary := buildAIScalpingDecisionProbeSummary(results, len(results), mustDecimal("50"), 0)
+
+	require.Equal(t, "0.75", summary.HoldRatio.String())
+	require.False(t, summary.PaperLiveTrialReadiness.Ready)
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "hold_ratio_above_live_trial_maximum")
+	require.True(t, summary.ObservedPaperNetPnL.GreaterThan(decimal.Zero))
+	require.True(t, summary.ObservedPaperMaxDrawdownPct.GreaterThan(decimal.Zero))
+}
+
+func TestBuildAIScalpingDecisionProbeSummaryClosesObservedPaperExit(t *testing.T) {
+	start := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+	results := []*services.ScalpingLLMDecisionProbeResult{
+		{
+			ObservedAt:         start,
+			SignalCount:        1,
+			SignalQualityCount: 1,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision: &services.AITradingDecision{
+				Action:     "buy",
+				Symbol:     "BTC/USDT",
+				Confidence: 0.8,
+				StopLoss:   mustDecimalPtr("98"),
+				TakeProfit: mustDecimalPtr("105"),
+			},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Symbol:     "BTC/USDT:USDT",
+				Side:       "buy",
+				Notional:   mustDecimal("10"),
+				EntryPrice: mustDecimal("100"),
+			},
+			SignalSnapshots: []services.ScalpingLLMSignalSnapshot{{
+				Symbol:     "BTC/USDT",
+				Price:      mustDecimal("100"),
+				ObservedAt: start,
+			}},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+		{
+			ObservedAt:            start.Add(time.Minute),
+			SignalCount:           1,
+			SignalQualityCount:    1,
+			ContractValid:         true,
+			Provider:              "deepseek",
+			Decision:              &services.AITradingDecision{Action: "hold"},
+			SignalQualityCoverage: mustDecimal("1"),
+			SignalSnapshots: []services.ScalpingLLMSignalSnapshot{{
+				Symbol:     "BTCUSDT",
+				Price:      mustDecimal("101"),
+				ObservedAt: start.Add(time.Minute),
+			}},
+		},
+	}
+
+	summary := buildAIScalpingDecisionProbeSummary(results, len(results), mustDecimal("1000"), 30*time.Second)
+
+	require.Equal(t, 1, summary.ObservedPaperTrades)
+	require.Equal(t, 1, summary.PaperObservedTrades)
+	require.Equal(t, 0, summary.ObservedPaperOpenPositions)
+	require.Equal(t, 1, summary.ObservedPaperWins)
+	require.True(t, summary.ObservedPaperNetPnL.GreaterThan(decimal.Zero))
+	require.Equal(t, 1, summary.PaperWins)
+	require.True(t, summary.PaperNetPnL.GreaterThan(decimal.Zero))
+	require.NotNil(t, results[0].ObservedPaperTrade)
+	require.True(t, results[0].ObservedPaperTrade.ExitObserved)
+	require.Equal(t, "mark_to_market", results[0].ObservedPaperTrade.ExitReason)
+}
+
+func TestBuildAIScalpingDecisionProbeSummarySkipsDuplicateObservedPaperPosition(t *testing.T) {
+	start := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+	results := []*services.ScalpingLLMDecisionProbeResult{
+		{
+			ObservedAt: start,
+			Decision: &services.AITradingDecision{
+				Action: "buy",
+				Symbol: "BTC/USDT",
+			},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Symbol:     "BTC/USDT",
+				Side:       "buy",
+				Notional:   mustDecimal("10"),
+				EntryPrice: mustDecimal("100"),
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+		{
+			ObservedAt: start.Add(time.Minute),
+			Decision: &services.AITradingDecision{
+				Action: "buy",
+				Symbol: "BTC/USDT",
+			},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Symbol:     "BTCUSDT",
+				Side:       "buy",
+				Notional:   mustDecimal("10"),
+				EntryPrice: mustDecimal("100"),
+			},
+			SignalSnapshots: []services.ScalpingLLMSignalSnapshot{{
+				Symbol:     "BTCUSDT",
+				Price:      mustDecimal("100.2"),
+				ObservedAt: start.Add(time.Minute),
+			}},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+		{
+			ObservedAt:            start.Add(6 * time.Minute),
+			Decision:              &services.AITradingDecision{Action: "hold"},
+			SignalQualityCoverage: mustDecimal("1"),
+			SignalSnapshots: []services.ScalpingLLMSignalSnapshot{{
+				Symbol:     "BTC/USDT",
+				Price:      mustDecimal("101"),
+				ObservedAt: start.Add(6 * time.Minute),
+			}},
+		},
+	}
+
+	summary := buildAIScalpingDecisionProbeSummary(results, len(results), mustDecimal("1000"), 5*time.Minute)
+
+	require.Equal(t, 2, summary.PaperTrades)
+	require.Equal(t, 1, summary.ObservedPaperTrades)
+	require.Equal(t, 0, summary.ObservedPaperOpenPositions)
+	require.NotNil(t, results[0].ObservedPaperTrade)
+	require.Nil(t, results[1].ObservedPaperTrade)
 }
 
 func TestBuildAIScalpingDecisionProbeSummaryMarksNoLossProfitFactorUnbounded(t *testing.T) {
@@ -811,7 +1037,7 @@ func TestBuildAIScalpingDecisionProbeSummaryMarksNoLossProfitFactorUnbounded(t *
 			},
 			SignalQualityCoverage: mustDecimal("1"),
 		},
-	}, 1, mustDecimal("50"))
+	}, 1, mustDecimal("50"), 0)
 
 	if !summary.PaperProfitFactorUnbounded {
 		t.Fatal("expected no-loss paper profit factor to be marked unbounded")
@@ -819,6 +1045,49 @@ func TestBuildAIScalpingDecisionProbeSummaryMarksNoLossProfitFactorUnbounded(t *
 	if !summary.PaperProfitFactor.IsZero() {
 		t.Fatalf("expected unbounded paper profit factor numeric field to stay neutral, got %s", summary.PaperProfitFactor.String())
 	}
+}
+
+func TestBuildAIScalpingDecisionProbeSummaryCountsPaperOutcomesByNetPnLSign(t *testing.T) {
+	summary := buildAIScalpingDecisionProbeSummary([]*services.ScalpingLLMDecisionProbeResult{
+		{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "buy"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:         decimal.Zero,
+				NetPnL:       decimal.Zero,
+				Outcome:      "loss",
+				ExitObserved: true,
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+		{
+			SignalCount:        8,
+			SignalQualityCount: 8,
+			ContractValid:      true,
+			Provider:           "deepseek",
+			Decision:           &services.AITradingDecision{Action: "sell"},
+			PaperTrade: &services.ScalpingLLMProbeTrade{
+				Fees:         mustDecimal("0.001"),
+				NetPnL:       mustDecimal("-0.01"),
+				Outcome:      "win",
+				ExitObserved: true,
+			},
+			SignalQualityCoverage: mustDecimal("1"),
+		},
+	}, 2, mustDecimal("50"), 0)
+
+	require.Equal(t, 2, summary.PaperTrades)
+	require.Equal(t, 0, summary.PaperWins)
+	require.Equal(t, 1, summary.PaperLosses)
+	require.Equal(t, 1, summary.PaperBreakevens)
+	require.Equal(t, 2, summary.ObservedPaperTrades)
+	require.Equal(t, 0, summary.ObservedPaperWins)
+	require.Equal(t, 1, summary.ObservedPaperLosses)
+	require.Equal(t, 1, summary.ObservedPaperBreakevens)
+	require.Contains(t, summary.PaperLiveTrialReadiness.Reasons, "no_winning_paper_trades")
 }
 
 func TestValidateAIScalpingDecisionProbeSummaryEnforcesHealthyValidQualityGates(t *testing.T) {
@@ -1037,12 +1306,42 @@ func TestValidateAIScalpingDecisionProbeSummaryEnforcesReasoningDiagnosticGate(t
 	assert.Contains(t, err.Error(), "reasoning_diagnostic_count")
 }
 
+func TestValidateAIScalpingDecisionProbeSummaryCanRequireObservedLiveTrialReadiness(t *testing.T) {
+	summary := aiScalpingDecisionProbeSummary{
+		Cycles:                2,
+		CompletedCycles:       2,
+		ValidContractCycles:   2,
+		SignalQualityCoverage: mustDecimal("1"),
+		PaperLiveTrialReadiness: services.ScalpingLiveTrialReadiness{
+			Ready:           false,
+			Reasons:         []string{"paper_observed_trades_below_live_trial_minimum"},
+			MinClosedTrades: services.DefaultScalpingLiveTrialMinClosedTrades,
+		},
+	}
+
+	err := validateAIScalpingDecisionProbeSummary(summary, aiScalpingDecisionProbeOptions{
+		Cycles:                        2,
+		RequireHealthy:                true,
+		RequireValid:                  true,
+		MinSignalQuality:              mustDecimal("1"),
+		RequireObservedLiveTrialReady: true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "paper_live_trial_readiness.ready=false")
+}
+
 func mustDecimal(value string) decimal.Decimal {
 	parsed, err := decimal.NewFromString(value)
 	if err != nil {
 		panic(err)
 	}
 	return parsed
+}
+
+func mustDecimalPtr(value string) *decimal.Decimal {
+	parsed := mustDecimal(value)
+	return &parsed
 }
 
 type failingWriter struct {

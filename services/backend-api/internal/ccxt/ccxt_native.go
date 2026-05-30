@@ -406,8 +406,11 @@ func (s *NativeCCXTService) FetchSingleTicker(ctx context.Context, exchange, sym
 		return nil, fmt.Errorf("exchange %s not initialized", exchange)
 	}
 
-	// Normalize symbol (remove "/" for API calls)
+	// Normalize symbol for API calls.
 	apiSymbol := strings.ReplaceAll(symbol, "/", "")
+	if exchange == "okx" {
+		apiSymbol = okxSwapInstrumentID(symbol)
+	}
 
 	// Build exchange-specific URL
 	url := s.buildTickerURL(exchange, apiSymbol)
@@ -445,7 +448,7 @@ func (s *NativeCCXTService) buildTickerURL(exchange, symbol string) string {
 	case "bybit":
 		return fmt.Sprintf("https://api.bybit.com/v5/market/tickers?category=linear&symbol=%s", symbol)
 	case "okx":
-		return fmt.Sprintf("https://www.okx.com/api/v5/market/ticker?instId=%s", symbol)
+		return fmt.Sprintf("https://www.okx.com/api/v5/market/ticker?instId=%s", okxSwapInstrumentID(symbol))
 	case "kraken":
 		return fmt.Sprintf("https://api.kraken.com/0/public/Ticker?pair=%s", symbol)
 	case "kucoin":
@@ -461,6 +464,28 @@ func (s *NativeCCXTService) buildTickerURL(exchange, symbol string) string {
 	}
 }
 
+func okxSwapInstrumentID(symbol string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(symbol))
+	if normalized == "" {
+		return ""
+	}
+	if idx := strings.Index(normalized, ":"); idx >= 0 {
+		normalized = normalized[:idx]
+	}
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	normalized = strings.ReplaceAll(normalized, "/", "-")
+	if strings.HasSuffix(normalized, "-SWAP") {
+		return normalized
+	}
+	if strings.HasSuffix(normalized, "USDT") && !strings.Contains(normalized, "-") {
+		normalized = strings.TrimSuffix(normalized, "USDT") + "-USDT"
+	}
+	if strings.HasSuffix(normalized, "-USDT") {
+		return normalized + "-SWAP"
+	}
+	return normalized
+}
+
 // buildOrderBookURL builds the orderbook URL for an exchange
 func (s *NativeCCXTService) buildOrderBookURL(exchange, symbol, apiSymbol, okxSymbol string, limit int) string {
 	switch exchange {
@@ -469,7 +494,7 @@ func (s *NativeCCXTService) buildOrderBookURL(exchange, symbol, apiSymbol, okxSy
 	case "bybit":
 		return fmt.Sprintf("https://api.bybit.com/v5/market/orderbook?category=linear&symbol=%s&limit=%d", apiSymbol, limit)
 	case "okx":
-		return fmt.Sprintf("https://www.okx.com/api/v5/market/books?instId=%s&sz=%d", okxSymbol, limit)
+		return fmt.Sprintf("https://www.okx.com/api/v5/market/books?instId=%s&sz=%d", okxSwapInstrumentID(okxSymbol), limit)
 	case "bitget":
 		return fmt.Sprintf("https://api.bitget.com/api/v2/spot/market/orderbook?symbol=%s&limit=%d", apiSymbol, limit)
 	default:
@@ -660,7 +685,7 @@ func (s *NativeCCXTService) parseOKXTicker(symbol string, body []byte) (*Ticker,
 
 	t := raw.Data[0]
 	return &Ticker{
-		Symbol:     t.InstID,
+		Symbol:     symbol,
 		Last:       parseDecimal(t.Last),
 		Bid:        parseDecimal(t.BidPx),
 		Ask:        parseDecimal(t.AskPx),
@@ -1156,8 +1181,7 @@ func (s *NativeCCXTService) buildOHLCVURL(exchange, symbol, timeframe string, li
 		return fmt.Sprintf("https://api.bybit.com/v5/market/kline?category=linear&symbol=%s&interval=%s&limit=%d", symbol, interval, limit)
 	case "okx":
 		// OKX bar: 1m, 5m, 15m, 30m, 1H, 4H, 1D, 1W, 1M
-		instId := strings.ReplaceAll(symbol, "USDT", "-USDT")
-		return fmt.Sprintf("https://www.okx.com/api/v5/market/candles?instId=%s&bar=%s&limit=%d", instId, timeframe, limit)
+		return fmt.Sprintf("https://www.okx.com/api/v5/market/candles?instId=%s&bar=%s&limit=%d", okxSwapInstrumentID(symbol), timeframe, limit)
 	case "bitget":
 		// Bitget intervals: 1m, 5m, 15m, 30m, 1H, 4H, 1D, 1W, 1M
 		return fmt.Sprintf("https://api.bitget.com/api/v2/spot/market/candles?symbol=%s&granularity=%s&limit=%d", symbol, timeframe, limit)
@@ -1537,10 +1561,12 @@ func (s *NativeCCXTService) parseOKXMarkets(body []byte) ([]string, error) {
 	var raw struct {
 		Code string `json:"code"`
 		Data []struct {
-			InstId   string `json:"instId"`
-			BaseCcy  string `json:"baseCcy"`
-			QuoteCcy string `json:"quoteCcy"`
-			State    string `json:"state"`
+			InstId    string `json:"instId"`
+			BaseCcy   string `json:"baseCcy"`
+			QuoteCcy  string `json:"quoteCcy"`
+			CtValCcy  string `json:"ctValCcy"`
+			SettleCcy string `json:"settleCcy"`
+			State     string `json:"state"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -1551,14 +1577,37 @@ func (s *NativeCCXTService) parseOKXMarkets(body []byte) ([]string, error) {
 	}
 	var symbols []string
 	for _, inst := range raw.Data {
-		if inst.State != "live" || inst.QuoteCcy != "USDT" {
+		instID := strings.ToUpper(strings.TrimSpace(inst.InstId))
+		if inst.State != "live" || !isOKXUSDTInstrument(instID, inst.QuoteCcy, inst.CtValCcy, inst.SettleCcy) {
 			continue
 		}
-		// Convert BTC-USDT format to BTC/USDT format
-		formatted := inst.BaseCcy + "/" + inst.QuoteCcy
+		formatted := okxMarketSymbol(instID, inst.BaseCcy)
+		if formatted == "" {
+			continue
+		}
 		symbols = append(symbols, formatted)
 	}
 	return symbols, nil
+}
+
+func isOKXUSDTInstrument(instID, quoteCcy, ctValCcy, settleCcy string) bool {
+	if strings.HasSuffix(instID, "-USDT-SWAP") {
+		return true
+	}
+	return strings.EqualFold(quoteCcy, "USDT") ||
+		strings.EqualFold(ctValCcy, "USDT") ||
+		strings.EqualFold(settleCcy, "USDT")
+}
+
+func okxMarketSymbol(instID, baseCcy string) string {
+	base := strings.ToUpper(strings.TrimSpace(baseCcy))
+	if base == "" {
+		base = strings.TrimSuffix(instID, "-USDT-SWAP")
+	}
+	if base == "" || base == instID {
+		return ""
+	}
+	return base + "/USDT"
 }
 
 // parseBitgetMarkets parses Bitget markets response
@@ -2352,8 +2401,7 @@ func (s *NativeCCXTService) buildFundingRateURL(exchange string, symbols []strin
 		if len(symbols) == 0 {
 			return "https://www.okx.com/api/v5/public/funding-rate?instType=SWAP"
 		}
-		instId := strings.ReplaceAll(symbols[0], "/", "-")
-		return fmt.Sprintf("https://www.okx.com/api/v5/public/funding-rate?instId=%s", instId)
+		return fmt.Sprintf("https://www.okx.com/api/v5/public/funding-rate?instId=%s", okxSwapInstrumentID(symbols[0]))
 	case "bitget":
 		// Bitget v2: current-fund-rate for single symbol, tickers for all/filtered symbol sets.
 		if len(symbols) == 1 {

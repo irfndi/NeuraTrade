@@ -504,7 +504,7 @@ func TestEvaluateCandidateSignal_AllowsBufferedMidRangeBuy(t *testing.T) {
 	require.Empty(t, rejection.Reason)
 }
 
-func TestEvaluateCandidateSignal_RejectsMisalignedMidRangeSell(t *testing.T) {
+func TestEvaluateCandidateSignal_AllowsControlledBreakdownSell(t *testing.T) {
 	policy := EvaluateScalpingPolicy(ScalpingCycleInput{
 		TotalValue:        decimal.NewFromInt(48),
 		BaseMinConfidence: 0.55,
@@ -524,8 +524,8 @@ func TestEvaluateCandidateSignal_RejectsMisalignedMidRangeSell(t *testing.T) {
 	}, policy)
 
 	require.True(t, ranked)
-	require.False(t, viable)
-	require.Equal(t, CandidateRejectNoDirectionalEdge, rejection.Reason)
+	require.True(t, viable)
+	require.Empty(t, rejection.Reason)
 }
 
 func TestResolvePolicySpreadThreshold_ClampsDirectOverride(t *testing.T) {

@@ -17,7 +17,7 @@ Native operations scripts for starting, testing, monitoring, and webhook control
   - Usage: `./test.sh [test|backend|frontend|health|start|status|cleanup|help]`
 
 - `scalping-soak.sh`
-  - No-order public-data scalping paper soak with baseline acceptance gates
+  - No-order public-data scalping paper soak with baseline and paper-realism acceptance gates
   - Usage: `SOAK_OUTPUT_FILE="$HOME/.neuratrade/data/scalping-soak-latest.json" ./scalping-soak.sh run`
   - Verify artifact: `./verify-scalping-soak-artifact.sh "$HOME/.neuratrade/data/scalping-soak-latest.json"`
   - Final acceptance wrapper: `./scalping-soak-acceptance.sh run`

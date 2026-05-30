@@ -24,18 +24,15 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	result, err := engine.RunSignals(ctx, []HistoricalSignal{
 		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
 		runSignalsTestSignal(now.Add(30*time.Second), "BBB/USDT", 50, -0.45, 65),
-		runSignalsTestSignal(now.Add(60*time.Second), "CCC/USDT", 25, 0.01, 50),
+		runSignalsTestSignal(now.Add(60*time.Second), "AAA/USDT", 102, 0.50, 35),
+		runSignalsTestSignal(now.Add(90*time.Second), "BBB/USDT", 49, -0.45, 65),
+		runSignalsTestSignal(now.Add(120*time.Second), "CCC/USDT", 25, 0.01, 50),
 	})
 	require.NoError(t, err)
 	require.Equal(t, 2, result.Summary.TotalTrades)
 	require.NotEmpty(t, result.Summary.RejectionByReason)
-	var rejectionReason string
-	for reason, count := range result.Summary.RejectionByReason {
-		rejectionReason = reason
-		require.Equal(t, 1, count)
-		break
-	}
-	require.NotEmpty(t, rejectionReason)
+	require.Equal(t, 2, result.Summary.RejectionByReason["entry_without_close_signal"])
+	require.Equal(t, 1, result.Summary.RejectionByReason["no_directional_edge"])
 
 	baseline := BrokenScalpingBaseline()
 	report, err := PersistScalpingPaperBacktestSoakReport(ctx, sqliteDB, result, ScalpingPaperSoakPersistenceOptions{
@@ -57,8 +54,9 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	require.Equal(t, result.Summary.LosingTrades, report.TradeSummary.Losses)
 	require.Equal(t, 1, report.ActionBreakdown["buy"])
 	require.Equal(t, 1, report.ActionBreakdown["sell"])
-	require.Equal(t, 1, report.ActionBreakdown["hold"])
-	require.Equal(t, 1, report.RejectionByReason[rejectionReason])
+	require.Equal(t, 3, report.ActionBreakdown["hold"])
+	require.Equal(t, 2, report.RejectionByReason["entry_without_close_signal"])
+	require.Equal(t, 1, report.RejectionByReason["no_directional_edge"])
 	require.NotContains(t, report.RejectionByReason, "")
 	require.True(t, report.SignalQuality.Coverage.Equal(decimal.NewFromInt(1)))
 	require.True(t, report.TradeSummary.NetPnL.Round(8).Equal(result.Summary.TotalPnL.Round(8)))
@@ -67,6 +65,16 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	require.True(t, report.TradeSummary.ProfitFactorUnbounded)
 	require.False(t, report.InsufficientTradeProof)
 	require.NotNil(t, report.BaselineComparison)
+
+	var minEntryConfidence, minEffectiveConfidence float64
+	err = sqliteDB.QueryRow(ctx, `
+		SELECT MIN(confidence), MIN(effective_min_confidence)
+		FROM scalping_cycle_telemetry
+		WHERE action IN ('buy', 'sell')
+	`).Scan(&minEntryConfidence, &minEffectiveConfidence)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, minEntryConfidence, engine.config.MinConfidence)
+	require.Equal(t, engine.config.MinConfidence, minEffectiveConfidence)
 
 	secondReport, err := PersistScalpingPaperBacktestSoakReport(ctx, sqliteDB, result, ScalpingPaperSoakPersistenceOptions{
 		ChatID:      "paper-soak-chat",

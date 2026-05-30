@@ -60,10 +60,13 @@ type CycleRecord struct {
 	EffectiveMinConfidence float64
 	EffectiveMaxCapitalPct float64
 	PolicyAdjustmentsJSON  string
+	SignalPrice            *float64
 	BidAskSpreadPct        *float64
 	OrderBookImbalance     *float64
 	RangePosition24h       *float64
 	PriceChange24hPct      *float64
+	RecentPriceChangePct   *float64
+	RecentChangeAgeSec     *float64
 }
 
 type ScalpingOutcomeRecord struct {
@@ -153,10 +156,13 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 			effective_min_confidence REAL,
 			effective_max_capital_pct REAL,
 			policy_adjustments TEXT,
+			signal_price REAL,
 			bid_ask_spread_pct REAL,
 			order_book_imbalance REAL,
 			range_position_24h REAL,
 			price_change_24h_pct REAL,
+			recent_price_change_pct REAL,
+			recent_change_age_sec REAL,
 			outcome TEXT,
 			pnl NUMERIC,
 			hold_duration_seconds INT,
@@ -179,10 +185,13 @@ func (s *ScalpingTelemetryStore) EnsureSchema(ctx context.Context) error {
 		name       string
 		definition string
 	}{
+		{name: "signal_price", definition: "REAL"},
 		{name: "bid_ask_spread_pct", definition: "REAL"},
 		{name: "order_book_imbalance", definition: "REAL"},
 		{name: "range_position_24h", definition: "REAL"},
 		{name: "price_change_24h_pct", definition: "REAL"},
+		{name: "recent_price_change_pct", definition: "REAL"},
+		{name: "recent_change_age_sec", definition: "REAL"},
 	} {
 		if err := s.ensureCycleTelemetryColumn(ctx, column.name, column.definition); err != nil {
 			return err
@@ -255,13 +264,14 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 			universe_count, ranked_count, viable_count, rejection_counts, regime,
 			expectancy, expectancy_sample_size, gate_block_code, gate_block_reason,
 			account_tier, effective_min_confidence, effective_max_capital_pct,
-			policy_adjustments, bid_ask_spread_pct, order_book_imbalance,
-			range_position_24h, price_change_24h_pct
+			policy_adjustments, signal_price, bid_ask_spread_pct,
+			order_book_imbalance, range_position_24h, price_change_24h_pct,
+			recent_price_change_pct, recent_change_age_sec
 		) VALUES (
 			?,?,?,?,?,?,?,?,
 			?,?,?,?,?,
 			?,?,?,?,
-			?,?,?,?,?,?,?,?
+			?,?,?,?,?,?,?,?,?,?,?
 		)
 	`),
 		cycleID,
@@ -285,10 +295,13 @@ func (s *ScalpingTelemetryStore) InsertCycleRecord(ctx context.Context, record C
 		record.EffectiveMinConfidence,
 		record.EffectiveMaxCapitalPct,
 		record.PolicyAdjustmentsJSON,
+		nullableFiniteFloat(record.SignalPrice),
 		nullableFiniteFloat(record.BidAskSpreadPct),
 		nullableFiniteFloat(record.OrderBookImbalance),
 		nullableFiniteFloat(record.RangePosition24h),
 		nullableFiniteFloat(record.PriceChange24hPct),
+		nullableFiniteFloat(record.RecentPriceChangePct),
+		nullableFiniteFloat(record.RecentChangeAgeSec),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert cycle telemetry: %w", err)
@@ -331,6 +344,13 @@ func finiteFloatPointer(value float64) *float64 {
 		return nil
 	}
 	return &value
+}
+
+func finiteFloatPointerIf(value float64, ok bool) *float64 {
+	if !ok {
+		return nil
+	}
+	return finiteFloatPointer(value)
 }
 
 func nullableFiniteFloat(value *float64) any {

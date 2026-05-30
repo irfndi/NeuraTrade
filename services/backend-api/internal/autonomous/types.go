@@ -129,6 +129,14 @@ type RolloutMetrics struct {
 	UptimePercent float64 `json:"uptime_percent"`
 	// MaxDrawdown is the maximum drawdown observed.
 	MaxDrawdown decimal.Decimal `json:"max_drawdown"`
+	// SignalQualityCoverage is the fraction of rollout cycles with complete signal-quality telemetry.
+	SignalQualityCoverage decimal.Decimal `json:"signal_quality_coverage"`
+	// AIProviderDegradedCycles is the number of rollout cycles that used degraded AI/fallback behavior.
+	AIProviderDegradedCycles int `json:"ai_provider_degraded_cycles"`
+	// HoldRatio is the fraction of rollout cycles that produced hold decisions.
+	HoldRatio decimal.Decimal `json:"hold_ratio"`
+	// OpenPositions is the number of paper positions still open at the end of the rollout evidence window.
+	OpenPositions int `json:"open_positions"`
 	// SharpeRatio is the Sharpe ratio.
 	SharpeRatio float64 `json:"sharpe_ratio"`
 	// LastUpdated is when metrics were last updated.

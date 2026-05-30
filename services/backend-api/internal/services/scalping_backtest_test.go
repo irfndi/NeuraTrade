@@ -447,14 +447,16 @@ func TestScalpingBacktestEngine_RunSignalsProducesPaperTradeMetrics(t *testing.T
 	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
 		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
 		runSignalsTestSignal(now.Add(30*time.Second), "BBB/USDT", 50, -0.45, 65),
+		runSignalsTestSignal(now.Add(60*time.Second), "AAA/USDT", 102, 0.50, 35),
+		runSignalsTestSignal(now.Add(90*time.Second), "BBB/USDT", 49, -0.45, 65),
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, 2, result.Summary.TotalSignals)
+	require.Equal(t, 4, result.Summary.TotalSignals)
 	require.Equal(t, 2, result.Summary.EligibleSignals)
 	require.Equal(t, 2, result.Summary.TotalTrades)
 	require.Equal(t, 2, result.Summary.WinningTrades)
-	require.Empty(t, result.Summary.RejectionByReason)
+	require.Equal(t, 2, result.Summary.RejectionByReason["entry_without_close_signal"])
 	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
 	require.True(t, result.Summary.ProfitFactor.GreaterThan(decimal.Zero))
 	require.Len(t, result.Trades, 2)
@@ -478,20 +480,222 @@ func TestScalpingBacktestEngine_RunSignalsAllowsMomentumContinuationSell(t *test
 			Volume24h:          1_500_000,
 			BidAskSpread:       0.06,
 			OrderBookImbalance: -0.23,
-			RangePosition24h:   50,
+			RangePosition24h:   80,
 			PriceChange24h:     -0.8,
+			RecentPriceChange:  -0.10,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "WIF/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "WIF/USDT",
+			Price:              1.22,
+			High24h:            1.50,
+			Low24h:             1.00,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.06,
+			OrderBookImbalance: -0.23,
+			RangePosition24h:   80,
+			PriceChange24h:     -0.8,
+			RecentPriceChange:  -0.10,
+			RecentChangeKnown:  true,
 		},
 	}})
 
 	require.NoError(t, err)
-	require.Equal(t, 1, result.Summary.TotalSignals)
+	require.Equal(t, 2, result.Summary.TotalSignals)
 	require.Equal(t, 1, result.Summary.EligibleSignals)
 	require.Equal(t, 1, result.Summary.TotalTrades)
-	require.Empty(t, result.Summary.RejectionByReason)
+	require.Equal(t, 1, result.Summary.RejectionByReason["entry_without_close_signal"])
 	require.Len(t, result.Trades, 1)
 	require.Equal(t, "sell", result.Trades[0].Side)
 	require.Equal(t, "take_profit", result.Trades[0].ExitReason)
 	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
+func TestScalpingBacktestEngine_RunSignalsBlocksRecentMidRangeSellAfterObservedLosses(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 47, 15, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		{
+			Timestamp: now,
+			Symbol:    "AEVOUSDT",
+			Exchange:  "bybit",
+			Signal: MarketSignal{
+				Symbol:             "AEVOUSDT",
+				Price:              0.02562,
+				High24h:            0.03,
+				Low24h:             0.022,
+				Volume24h:          1_500_000,
+				BidAskSpread:       0.03903,
+				OrderBookImbalance: -0.6375,
+				RangePosition24h:   45.24,
+				PriceChange24h:     -1.9517,
+				RecentPriceChange:  -0.078,
+				RecentChangeKnown:  true,
+			},
+		},
+		{
+			Timestamp: now.Add(30 * time.Second),
+			Symbol:    "AEVOUSDT",
+			Exchange:  "bybit",
+			Signal: MarketSignal{
+				Symbol:             "AEVOUSDT",
+				Price:              0.02572,
+				High24h:            0.03,
+				Low24h:             0.022,
+				Volume24h:          1_500_000,
+				BidAskSpread:       0.03903,
+				OrderBookImbalance: -0.6375,
+				RangePosition24h:   45.24,
+				PriceChange24h:     -1.9517,
+				RecentPriceChange:  -0.078,
+				RecentChangeKnown:  true,
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, result.Summary.EligibleSignals)
+	require.Zero(t, result.Summary.TotalTrades)
+}
+
+func TestScalpingBacktestEngine_BuildDecisionBlocksSellWhenBroadTrendIsPositive(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 47, 30, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "ONDO/USDT",
+		Price:              0.3855,
+		High24h:            0.40,
+		Low24h:             0.30,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.05188,
+		OrderBookImbalance: -0.45264,
+		RangePosition24h:   96.32,
+		PriceChange24h:     0.1315,
+		RecentPriceChange:  -0.3103,
+		RecentChangeKnown:  true,
+	})
+
+	require.Nil(t, decision)
+}
+
+func TestScalpingBacktestEngine_BuildDecisionRejectsObservedPullbackBuy(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 47, 45, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "ONDO/USDT",
+		Price:              0.379,
+		High24h:            0.40,
+		Low24h:             0.30,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0264,
+		OrderBookImbalance: -0.4007,
+		RangePosition24h:   75.95,
+		PriceChange24h:     0.1043,
+		RecentPriceChange:  -0.551,
+		RecentChangeKnown:  true,
+	})
+
+	require.Nil(t, decision)
+}
+
+func TestScalpingBacktestEngine_BuildDecisionBlocksCounterTrendBlowoffReversalSell(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 47, 50, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "CHZ/USDT",
+		Price:              0.04983,
+		High24h:            0.05,
+		Low24h:             0.045,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0602,
+		OrderBookImbalance: -0.4513,
+		RangePosition24h:   96.58,
+		PriceChange24h:     0.0774,
+		RecentPriceChange:  0.2817,
+		RecentChangeKnown:  true,
+	})
+
+	require.Nil(t, decision)
+}
+
+func TestScalpingBacktestEngine_BuildDecisionBlocksWeakBlowoffSellPressure(t *testing.T) {
+	now := time.Date(2026, 5, 20, 18, 2, 30, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "DASH/USDT",
+		Price:              123.9,
+		High24h:            124.2,
+		Low24h:             100.0,
+		Volume24h:          1_500_000,
+		BidAskSpread:       0.0423,
+		OrderBookImbalance: -0.2947,
+		RangePosition24h:   95.16,
+		PriceChange24h:     12.0436,
+		RecentPriceChange:  0.5104,
+		RecentChangeKnown:  true,
+	})
+
+	require.Nil(t, decision)
+}
+
+func TestScalpingBacktestEngine_BuildDecisionAllowsValidatedReversalBuy(t *testing.T) {
+	now := time.Date(2026, 5, 21, 2, 25, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "REV/USDT",
+		Price:              100,
+		High24h:            115,
+		Low24h:             95,
+		Volume24h:          5_000_000,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.05,
+		RangePosition24h:   18,
+		PriceChange24h:     -0.10,
+		RecentPriceChange:  -0.20,
+		RecentChangeKnown:  true,
+	})
+
+	require.NotNil(t, decision)
+	require.Equal(t, "buy", decision.Action)
+	require.Equal(t, "REV/USDT", decision.Symbol)
+}
+
+func TestScalpingBacktestEngine_BuildDecisionAllowsValidatedSellWindow(t *testing.T) {
+	now := time.Date(2026, 5, 21, 2, 25, 30, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+	engine.config.MaxBidAskSpreadPct = 0.08
+
+	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+		Symbol:             "SW/USDT",
+		Price:              100,
+		High24h:            115,
+		Low24h:             95,
+		Volume24h:          5_000_000,
+		BidAskSpread:       0.09,
+		OrderBookImbalance: -0.45,
+		RangePosition24h:   55,
+		PriceChange24h:     0.30,
+		RecentPriceChange:  -0.10,
+		RecentChangeKnown:  true,
+	})
+
+	require.NotNil(t, decision)
+	require.Equal(t, "sell", decision.Action)
+	require.Equal(t, "SW/USDT", decision.Symbol)
 }
 
 func TestScalpingBacktestEngine_RunSignalsAllowsBufferedMidRangeBuy(t *testing.T) {
@@ -509,18 +713,535 @@ func TestScalpingBacktestEngine_RunSignalsAllowsBufferedMidRangeBuy(t *testing.T
 			Low24h:             1.00,
 			Volume24h:          1_500_000,
 			BidAskSpread:       0.07,
-			OrderBookImbalance: 0.15,
+			OrderBookImbalance: 0.22,
 			RangePosition24h:   48,
-			PriceChange24h:     -0.8,
+			PriceChange24h:     0.8,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "FARTCOIN/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "FARTCOIN/USDT",
+			Price:              1.28,
+			High24h:            1.50,
+			Low24h:             1.00,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.07,
+			OrderBookImbalance: 0.22,
+			RangePosition24h:   48,
+			PriceChange24h:     0.8,
 		},
 	}})
 
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Summary.EligibleSignals)
 	require.Equal(t, 1, result.Summary.TotalTrades)
+	require.Equal(t, 1, result.Summary.RejectionByReason["entry_without_close_signal"])
 	require.Len(t, result.Trades, 1)
 	require.Equal(t, "buy", result.Trades[0].Side)
 	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
+func TestScalpingBacktestEngine_RunSignalsUsesRecentMomentumForFallback(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 49, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "DOGE/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "DOGE/USDT",
+			Price:              1,
+			High24h:            1.1,
+			Low24h:             0.9,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.035,
+			OrderBookImbalance: 0.60,
+			RangePosition24h:   18,
+			PriceChange24h:     -4.0,
+			RecentPriceChange:  0.15,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "DOGE/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "DOGE/USDT",
+			Price:              1.02,
+			High24h:            1.1,
+			Low24h:             0.9,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.035,
+			OrderBookImbalance: 0.60,
+			RangePosition24h:   18,
+			PriceChange24h:     -4.0,
+			RecentPriceChange:  0.20,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 1, result.Summary.TotalTrades)
+	require.Equal(t, 1, result.Summary.RejectionByReason["entry_without_close_signal"])
+	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
+func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRequiresDefaultImbalance(t *testing.T) {
+	now := time.Date(2026, 5, 19, 8, 18, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "GOAT/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "GOAT/USDT",
+			Price:              0.01944,
+			High24h:            0.022,
+			Low24h:             0.015,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.03544,
+			OrderBookImbalance: 0.25456,
+			RangePosition24h:   38.36,
+			PriceChange24h:     0.05595,
+			RecentPriceChange:  0.41322,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "GOAT/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "GOAT/USDT",
+			Price:              0.01942,
+			High24h:            0.022,
+			Low24h:             0.015,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.03544,
+			OrderBookImbalance: 0.25456,
+			RangePosition24h:   38.0,
+			PriceChange24h:     0.05595,
+			RecentPriceChange:  0.30,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
+func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsNearMaxSpreadBuy(t *testing.T) {
+	now := time.Date(2026, 5, 19, 8, 30, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "PROS/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "PROS/USDT",
+			Price:              0.6286,
+			High24h:            0.75,
+			Low24h:             0.50,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.07954,
+			OrderBookImbalance: 0.63331,
+			RangePosition24h:   24.94,
+			PriceChange24h:     -0.08872,
+			RecentPriceChange:  0.12743,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "PROS/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "PROS/USDT",
+			Price:              0.6290,
+			High24h:            0.75,
+			Low24h:             0.50,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.07954,
+			OrderBookImbalance: 0.63331,
+			RangePosition24h:   25.2,
+			PriceChange24h:     -0.08872,
+			RecentPriceChange:  0.10,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
+func TestScalpingBacktestEngine_RunSignalsRejectsENJRecentBuyLossShape(t *testing.T) {
+	now := time.Date(2026, 5, 20, 18, 8, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "ENJ/USDT",
+		Exchange:  "binance",
+		Signal: MarketSignal{
+			Symbol:             "ENJ/USDT",
+			Price:              0.0875,
+			High24h:            0.09,
+			Low24h:             0.079,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.04410,
+			OrderBookImbalance: 0.4130,
+			RangePosition24h:   22.7160,
+			PriceChange24h:     3.7757,
+			RecentPriceChange:  0.1325,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 1, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
+func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsDowntrendBuy(t *testing.T) {
+	now := time.Date(2026, 5, 19, 8, 41, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "BILL/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "BILL/USDT",
+			Price:              0.118057,
+			High24h:            0.13,
+			Low24h:             0.118,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.03388,
+			OrderBookImbalance: 0.55583,
+			RangePosition24h:   1.96,
+			PriceChange24h:     -0.18599,
+			RecentPriceChange:  0.08817,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "BILL/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "BILL/USDT",
+			Price:              0.11826,
+			High24h:            0.13,
+			Low24h:             0.118,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.03388,
+			OrderBookImbalance: 0.55583,
+			RangePosition24h:   2.5,
+			PriceChange24h:     -0.18599,
+			RecentPriceChange:  0.09,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
+func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsFlatTrendRangeBuy(t *testing.T) {
+	now := time.Date(2026, 5, 19, 9, 31, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "DOGE/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "DOGE/USDT",
+			Price:              0.10404,
+			High24h:            0.12,
+			Low24h:             0.094,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.00961,
+			OrderBookImbalance: 0.81364,
+			RangePosition24h:   38.89,
+			PriceChange24h:     0,
+			RecentPriceChange:  0.16367,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "DOGE/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "DOGE/USDT",
+			Price:              0.10396,
+			High24h:            0.12,
+			Low24h:             0.094,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.00961,
+			OrderBookImbalance: 0.81364,
+			RangePosition24h:   38.4,
+			PriceChange24h:     0,
+			RecentPriceChange:  0.10,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
+func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumAllowsStrongBookBuy(t *testing.T) {
+	now := time.Date(2026, 5, 19, 8, 19, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "GOAT/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "GOAT/USDT",
+			Price:              0.01944,
+			High24h:            0.022,
+			Low24h:             0.015,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.03544,
+			OrderBookImbalance: 0.40572,
+			RangePosition24h:   32.82,
+			PriceChange24h:     0.025,
+			RecentPriceChange:  0.0528,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "GOAT/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "GOAT/USDT",
+			Price:              0.01972,
+			High24h:            0.022,
+			Low24h:             0.015,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.03544,
+			OrderBookImbalance: 0.40572,
+			RangePosition24h:   34.0,
+			PriceChange24h:     0.025,
+			RecentPriceChange:  0.06,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 1, result.Summary.TotalTrades)
+	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
+func TestScalpingBacktestEngine_RunSignalsBlocksControlledBreakdownSellAfterObservedLosses(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 50, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "WIF/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "WIF/USDT",
+			Price:              1.25,
+			High24h:            1.50,
+			Low24h:             1.00,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.06,
+			OrderBookImbalance: -0.24,
+			RangePosition24h:   24,
+			PriceChange24h:     -0.8,
+			RecentPriceChange:  -0.12,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "WIF/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "WIF/USDT",
+			Price:              1.22,
+			High24h:            1.50,
+			Low24h:             1.00,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.06,
+			OrderBookImbalance: -0.24,
+			RangePosition24h:   24,
+			PriceChange24h:     -0.8,
+			RecentPriceChange:  -0.20,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Empty(t, result.Trades)
+}
+
+func TestScalpingBacktestEngine_RunSignalsEntryCutoffPreventsUnclosableEntries(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 51, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.EntryCutoffTime = now.Add(30 * time.Second)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+		runSignalsTestSignal(now.Add(time.Minute), "BBB/USDT", 50, -0.45, 65),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Summary.TotalSignals)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 0, result.Summary.OpenPositions)
+	require.Equal(t, 1, result.Summary.RejectionByReason["entry_without_close_signal"])
+	require.Equal(t, 1, result.Summary.RejectionByReason["entry_cutoff_window"])
+	require.Equal(t, "entry_cutoff", result.Signals[1].FunnelStage)
+}
+
+func TestScalpingBacktestEngine_RunSignalsCanRequireRecentMomentum(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 51, 30, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.MinRecentMomentumPct = 0.05
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
+		Timestamp: now,
+		Symbol:    "AAA/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "AAA/USDT",
+			Price:              100,
+			High24h:            110,
+			Low24h:             90,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.035,
+			OrderBookImbalance: 0.50,
+			RangePosition24h:   35,
+			PriceChange24h:     1.2,
+		},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		Symbol:    "AAA/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "AAA/USDT",
+			Price:              102,
+			High24h:            110,
+			Low24h:             90,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.035,
+			OrderBookImbalance: 0.50,
+			RangePosition24h:   35,
+			PriceChange24h:     1.2,
+			RecentPriceChange:  0.03,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(2 * time.Minute),
+		Symbol:    "AAA/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "AAA/USDT",
+			Price:              104,
+			High24h:            110,
+			Low24h:             90,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.035,
+			OrderBookImbalance: 0.50,
+			RangePosition24h:   35,
+			PriceChange24h:     1.2,
+			RecentPriceChange:  0.08,
+			RecentChangeKnown:  true,
+		},
+	}, {
+		Timestamp: now.Add(3 * time.Minute),
+		Symbol:    "AAA/USDT",
+		Exchange:  "bitget",
+		Signal: MarketSignal{
+			Symbol:             "AAA/USDT",
+			Price:              106,
+			High24h:            110,
+			Low24h:             90,
+			Volume24h:          1_500_000,
+			BidAskSpread:       0.035,
+			OrderBookImbalance: 0.50,
+			RangePosition24h:   35,
+			PriceChange24h:     1.2,
+			RecentPriceChange:  0.08,
+			RecentChangeKnown:  true,
+		},
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Summary.EligibleSignals)
+	require.Equal(t, 1, result.Summary.TotalTrades)
+	require.True(t, result.Summary.TotalPnL.GreaterThan(decimal.Zero))
+}
+
+func TestScalpingBacktestEngine_RunSignalsDoesNotCloseSingleSignalAtSyntheticProfit(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 49, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Summary.TotalSignals)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 0, result.Summary.OpenPositions)
+	require.Equal(t, 1, result.Summary.RejectionByReason["entry_without_close_signal"])
+	require.Empty(t, result.Trades)
+	require.True(t, result.Summary.TotalPnL.IsZero())
+}
+
+func TestScalpingBacktestEngine_RunSignalsDoesNotCloseBeforeHoldPeriod(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 49, 30, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+		runSignalsTestSignal(now.Add(30*time.Second), "AAA/USDT", 103, 0.50, 35),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Summary.TotalSignals)
+	require.Equal(t, 0, result.Summary.EligibleSignals)
+	require.Equal(t, 0, result.Summary.TotalTrades)
+	require.Equal(t, 0, result.Summary.OpenPositions)
+	require.Equal(t, 2, result.Summary.RejectionByReason["entry_without_close_signal"])
+	require.Empty(t, result.Trades)
+	require.True(t, result.Summary.TotalPnL.IsZero())
 }
 
 func TestScalpingBacktestEngine_RunSignalsSortsInputsChronologically(t *testing.T) {
@@ -551,6 +1272,28 @@ func TestScalpingBacktestEngine_RunSignalsRespectsCanceledContext(t *testing.T) 
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestScalpingBacktestEngine_RunSignalsUsesConfiguredFallbackThresholds(t *testing.T) {
+	now := time.Date(2026, 5, 12, 2, 58, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	engine.config.RequireRecentMomentum = true
+	engine.config.DeterministicFallback = DeterministicFallbackConfig{
+		MinImbalance:          0.60,
+		MaxBidAskSpread:       0.08,
+		BuyRangeMax:           45,
+		BuyMinPriceChangePct:  0.05,
+		SellMaxPriceChangePct: -0.05,
+	}.Normalized()
+
+	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+		runSignalsTestSignal(now.Add(30*time.Second), "AAA/USDT", 101, 0.50, 35),
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, result.Summary.TotalTrades)
+	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+}
+
 func newRunSignalsTestEngine(now time.Time) *ScalpingBacktestEngine {
 	return NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
 		StartTime:          now.Add(-time.Minute),
@@ -579,10 +1322,22 @@ func runSignalsTestSignal(timestamp time.Time, symbol string, price, imbalance, 
 			High24h:            price * 1.2,
 			Low24h:             price * 0.8,
 			Volume24h:          1_000_000,
-			BidAskSpread:       0.05,
+			BidAskSpread:       0.035,
 			OrderBookImbalance: imbalance,
 			RangePosition24h:   rangePosition,
-			PriceChange24h:     2.5,
+			PriceChange24h:     runSignalsTestPriceChange(imbalance),
+			RecentPriceChange:  runSignalsTestPriceChange(imbalance),
+			RecentChangeKnown:  true,
 		},
 	}
+}
+
+func runSignalsTestPriceChange(imbalance float64) float64 {
+	if imbalance < 0 {
+		return -2.5
+	}
+	if imbalance == 0 {
+		return 0
+	}
+	return 2.5
 }

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,6 +38,84 @@ func TestOperationalModeService_SQLitePersistence(t *testing.T) {
 
 	reloaded := NewOperationalModeService(sqliteDB, DefaultOperationalModeConfig(), logger)
 	assert.Equal(t, OpModeLive, reloaded.GetMode("chat-1"))
+}
+
+func TestOperationalModeService_BlocksLiveWhenProofGuardFails(t *testing.T) {
+	logger := logging.NewStandardLogger("error", "development")
+	service := NewOperationalModeService(nil, DefaultOperationalModeConfig(), logger)
+	ctx := context.Background()
+
+	confirmations, err := service.AddConfirmation(ctx, "chat-guard", "tester")
+	require.NoError(t, err)
+	require.Equal(t, 1, confirmations)
+	confirmations, err = service.AddConfirmation(ctx, "chat-guard", "tester")
+	require.NoError(t, err)
+	require.Equal(t, 2, confirmations)
+
+	service.SetLiveModeGuard(func(context.Context, string) error {
+		return errors.New("paper proof missing")
+	})
+
+	err = service.SetMode(ctx, "chat-guard", OpModeLive, "tester")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "live mode proof gate blocked")
+	assert.Equal(t, OpModeDry, service.GetMode("chat-guard"))
+	assert.Equal(t, 2, service.GetState("chat-guard").Confirmations)
+}
+
+func TestOperationalModeService_AllowsLiveWhenProofGuardPasses(t *testing.T) {
+	logger := logging.NewStandardLogger("error", "development")
+	service := NewOperationalModeService(nil, DefaultOperationalModeConfig(), logger)
+	ctx := context.Background()
+
+	_, err := service.AddConfirmation(ctx, "chat-guard-pass", "tester")
+	require.NoError(t, err)
+	_, err = service.AddConfirmation(ctx, "chat-guard-pass", "tester")
+	require.NoError(t, err)
+
+	called := false
+	service.SetLiveModeGuard(func(context.Context, string) error {
+		called = true
+		return nil
+	})
+
+	err = service.SetMode(ctx, "chat-guard-pass", OpModeLive, "tester")
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, OpModeLive, service.GetMode("chat-guard-pass"))
+}
+
+func TestOperationalModeService_RevalidateLiveModeGuardDemotesPersistedLive(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "trading-mode.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	logger := logging.NewStandardLogger("error", "development")
+	ctx := context.Background()
+	service := NewOperationalModeService(sqliteDB, DefaultOperationalModeConfig(), logger)
+	_, err = service.AddConfirmation(ctx, "chat-live", "tester")
+	require.NoError(t, err)
+	_, err = service.AddConfirmation(ctx, "chat-live", "tester")
+	require.NoError(t, err)
+	require.NoError(t, service.SetMode(ctx, "chat-live", OpModeLive, "tester"))
+
+	reloaded := NewOperationalModeService(sqliteDB, DefaultOperationalModeConfig(), logger)
+	require.Equal(t, OpModeLive, reloaded.GetMode("chat-live"))
+	reloaded.SetLiveModeGuard(func(context.Context, string) error {
+		return errors.New("paper proof missing")
+	})
+
+	failures := reloaded.RevalidateLiveModeGuard(ctx, "startup_guard")
+
+	require.Contains(t, failures, "chat-live")
+	assert.Contains(t, failures["chat-live"].Error(), "paper proof missing")
+	assert.Equal(t, OpModeDry, reloaded.GetMode("chat-live"))
+	assert.Equal(t, "startup_guard", reloaded.GetState("chat-live").ChangedBy)
+
+	reloadedAgain := NewOperationalModeService(sqliteDB, DefaultOperationalModeConfig(), logger)
+	assert.Equal(t, OpModeDry, reloadedAgain.GetMode("chat-live"))
 }
 
 func TestOperationalModeService_DryAndPaperHelpersRemainDistinct(t *testing.T) {

@@ -28,10 +28,38 @@ cat >"$fake_bin" <<'SH'
 set -euo pipefail
 
 db_path=""
+output_path=""
+saw_max_hold_ratio=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --db)
       db_path="$2"
+      shift 2
+      ;;
+    --output)
+      output_path="$2"
+      shift 2
+      ;;
+    --max-hold-ratio)
+      saw_max_hold_ratio="$2"
+      if [ "${EXPECT_NO_MAX_HOLD_RATIO_ARGS:-false}" = "true" ]; then
+        echo "unexpected max hold ratio arg: $1" >&2
+        exit 3
+      fi
+      shift 2
+      ;;
+    --min-trades | --min-win-rate | --min-net-pnl | --min-avg-net-pnl | --max-drawdown | --max-drawdown-pct | --max-perfect-win-trades)
+      if [ "${EXPECT_NO_TRADE_GATE_ARGS:-false}" = "true" ]; then
+        echo "unexpected trade gate arg: $1" >&2
+        exit 3
+      fi
+      shift 2
+      ;;
+    --min-baseline-win-rate-delta | --min-baseline-net-pnl-delta | --min-baseline-avg-pnl-delta)
+      if [ "${EXPECT_NO_BASELINE_ARGS:-false}" = "true" ]; then
+        echo "unexpected baseline gate arg: $1" >&2
+        exit 3
+      fi
       shift 2
       ;;
     *)
@@ -40,6 +68,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "${EXPECT_DEFAULT_MAX_HOLD_RATIO:-false}" = "true" ] && [ "$saw_max_hold_ratio" != "0.745" ]; then
+  echo "expected default --max-hold-ratio 0.745, got ${saw_max_hold_ratio:-missing}" >&2
+  exit 3
+fi
+
 [ -n "$db_path" ] || {
   echo "missing --db" >&2
   exit 2
@@ -47,7 +80,7 @@ done
 mkdir -p "$(dirname "$db_path")"
 : >"$db_path"
 
-jq -n --arg db_path "$db_path" '{
+payload="$(jq -n --arg db_path "$db_path" '{
   db_path: $db_path,
   result: {
     report: {
@@ -73,10 +106,16 @@ jq -n --arg db_path "$db_path" '{
       insufficient_trade_proof: false
     }
   }
-}'
+}')"
 
-echo 'scalping-soak: acceptance gate failed: action_split.hold="0.7604166666666667" above maximum="0.745"' >&2
-exit 1
+printf '%s\n' "$payload"
+if [ -n "$output_path" ]; then
+  mkdir -p "$(dirname "$output_path")"
+  printf '%s\n' "$payload" >"$output_path"
+fi
+
+echo 'scalping-soak: paper realism gate failed: closed_trades=46 wins=46 losses=0 max_drawdown_pct=0 exceeds max_perfect_win_trades=20; perfect paper wins without drawdown are insufficient proof' >&2
+exit "${FAKE_EXIT_STATUS:-1}"
 SH
 
 chmod +x "$fake_bin"
@@ -86,6 +125,7 @@ if SOAK_BIN="$fake_bin" \
   SOAK_DB_PATH="$db_path" \
   NEURATRADE_HOME="$tmp_dir/home" \
   LOG_DIR="$log_dir" \
+  EXPECT_DEFAULT_MAX_HOLD_RATIO=true \
   CYCLES=30 \
   INTERVAL_MS=1000 \
   bash "$SOAK_SCRIPT" run >"$output_path" 2>&1; then
@@ -107,5 +147,28 @@ jq -e \
   "$artifact_path" >/dev/null
 
 grep -q "retained clean soak result artifact" "$output_path"
+
+telemetry_artifact_path="${tmp_dir}/evidence/telemetry.json"
+telemetry_db_path="${tmp_dir}/evidence/telemetry.db"
+telemetry_output_path="${tmp_dir}/telemetry.out"
+
+EXPECT_NO_BASELINE_ARGS=true \
+  FAKE_EXIT_STATUS=0 \
+  SOAK_BIN="$fake_bin" \
+  SOAK_OUTPUT_FILE="$telemetry_artifact_path" \
+  SOAK_DB_PATH="$telemetry_db_path" \
+  NEURATRADE_HOME="$tmp_dir/home" \
+  LOG_DIR="$log_dir" \
+  REQUIRE_TRADES=false \
+  EXPECT_NO_TRADE_GATE_ARGS=true \
+  EXPECT_NO_MAX_HOLD_RATIO_ARGS=true \
+  CYCLES=3 \
+  INTERVAL_MS=1000 \
+  bash "$SOAK_SCRIPT" run >"$telemetry_output_path" 2>&1
+
+[ -f "$telemetry_artifact_path" ] || {
+  echo "expected telemetry artifact to be written: $telemetry_artifact_path" >&2
+  exit 1
+}
 
 echo "scalping-soak tests passed"

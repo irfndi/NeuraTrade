@@ -57,6 +57,10 @@ type TradingSignal struct {
 	Timestamp time.Time `json:"timestamp"`
 	// Indicators lists the technical indicators used to generate the signal.
 	Indicators []string `json:"indicators_used"`
+	// ExecutionEligible is false for analysis-only signals; live execution remains controlled by mode/proof gates.
+	ExecutionEligible bool `json:"execution_eligible"`
+	// ModeSafety explains that the signal is informational unless live mode and proof gates allow execution.
+	ModeSafety string `json:"mode_safety"`
 }
 
 // IndicatorsResponse is the API response structure for technical indicators.
@@ -77,7 +81,13 @@ type SignalsResponse struct {
 	Count int `json:"count"`
 	// Timestamp is the response generation time.
 	Timestamp time.Time `json:"timestamp"`
+	// ModeSafety explains whether returned signals are execution-ready.
+	ModeSafety string `json:"mode_safety"`
+	// ExecutionEligible is false for this endpoint because signals are analysis-only.
+	ExecutionEligible bool `json:"execution_eligible"`
 }
+
+const analysisSignalModeSafety = "Analysis signals are informational/paper-only unless live mode is active and backend proof gates have passed."
 
 // OHLCV represents a single candlestick data point.
 type OHLCV struct {
@@ -305,9 +315,11 @@ func (h *AnalysisHandler) GetTradingSignals(c *gin.Context) {
 	}
 
 	response := SignalsResponse{
-		Signals:   signals,
-		Count:     len(signals),
-		Timestamp: time.Now(),
+		Signals:           signals,
+		Count:             len(signals),
+		Timestamp:         time.Now(),
+		ModeSafety:        analysisSignalModeSafety,
+		ExecutionEligible: false,
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -675,15 +687,17 @@ func (h *AnalysisHandler) generateTradingSignal(ctx context.Context, symbol, exc
 	}
 
 	signal := &TradingSignal{
-		Symbol:     symbol,
-		Exchange:   exchange,
-		SignalType: signalType,
-		Strength:   strength,
-		Price:      currentPrice,
-		Reason:     reason,
-		Confidence: confidence,
-		Timestamp:  time.Now(),
-		Indicators: usedIndicators,
+		Symbol:            symbol,
+		Exchange:          exchange,
+		SignalType:        signalType,
+		Strength:          strength,
+		Price:             currentPrice,
+		Reason:            reason,
+		Confidence:        confidence,
+		Timestamp:         time.Now(),
+		Indicators:        usedIndicators,
+		ModeSafety:        analysisSignalModeSafety,
+		ExecutionEligible: false,
 	}
 
 	return signal, nil
