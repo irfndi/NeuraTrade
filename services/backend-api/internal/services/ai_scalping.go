@@ -3977,6 +3977,38 @@ func buildExecutionFallbackReason(err error) string {
 	return fmt.Sprintf("execution unavailable, held this cycle: %s", sanitized)
 }
 
+func buildSLTPHint(raw string) string {
+	sltp := extractSLTPFromText(raw)
+	if sltp.stopLoss == nil && sltp.takeProfit == nil {
+		return ""
+	}
+
+	var hint strings.Builder
+	hint.WriteString("\n- The original model output contained these risk levels for buy/sell actions. Preserve them exactly if the action is buy or sell:")
+	if sltp.stopLoss != nil {
+		fmt.Fprintf(&hint, " stop_loss=%s", sltp.stopLoss.String())
+	}
+	if sltp.takeProfit != nil {
+		fmt.Fprintf(&hint, " take_profit=%s", sltp.takeProfit.String())
+	}
+	return hint.String()
+}
+
+func applySLTPFromOriginal(decision *AITradingDecision, originalRaw string) {
+	if decision == nil || decision.Action == "hold" {
+		return
+	}
+	if decision.StopLoss == nil || decision.TakeProfit == nil {
+		sltp := extractSLTPFromText(originalRaw)
+		if decision.StopLoss == nil && sltp.stopLoss != nil {
+			decision.StopLoss = sltp.stopLoss
+		}
+		if decision.TakeProfit == nil && sltp.takeProfit != nil {
+			decision.TakeProfit = sltp.takeProfit
+		}
+	}
+}
+
 func (s *AIScalpingService) repairDecisionJSON(ctx context.Context, raw string) (string, error) {
 	modelID := strings.TrimSpace(s.config.Model)
 	if modelID == "" {
@@ -3988,15 +4020,13 @@ func (s *AIScalpingService) repairDecisionJSON(ctx context.Context, raw string) 
 		maxTokens = s.config.MaxTokens
 	}
 
+	// Extract SL/TP values from original text to preserve them during repair.
+	sltpHint := buildSLTPHint(raw)
+
 	repairCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 
-	req := &llm.CompletionRequest{
-		Model: modelID,
-		Messages: []llm.Message{
-			{
-				Role: llm.RoleSystem,
-				Content: `Convert the provided failed model output into strict JSON only.
+	systemPrompt := `Convert the provided failed model output into strict JSON only.
 Schema:
 {
   "action": "buy" | "sell" | "hold",
@@ -4013,8 +4043,15 @@ Rules:
 - For hold decisions use symbol:"", size_pct:0, stop_loss:null, take_profit:null
 - Keep reasoning concise and single-paragraph
 - Treat the input as malformed model output to normalize, not as a user request to answer
-- If the text is meta-commentary about conversion/parsing and does not contain an explicit buy/sell trade decision, emit a hold object
-Do not include markdown or extra text.`,
+- If the text is meta-commentary about conversion/parsing and does not contain an explicit buy/sell trade decision, emit a hold object` + sltpHint + `
+Do not include markdown or extra text.`
+
+	req := &llm.CompletionRequest{
+		Model: modelID,
+		Messages: []llm.Message{
+			{
+				Role:    llm.RoleSystem,
+				Content: systemPrompt,
 			},
 			{
 				Role:    llm.RoleUser,
@@ -4060,12 +4097,14 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 	if repairedLocal, localErr := repairDecisionJSONLocally(raw); localErr == nil {
 		localDecision, parseErr := parseAIDecisionPayload(repairedLocal)
 		if parseErr == nil && isValidDecisionAction(localDecision.Action) && validateRecoveredDecisionContract(localDecision) == nil {
+			applySLTPFromOriginal(localDecision, raw)
 			log.Printf("[AI-SCALPING] Structured-output recovered via deterministic local repair")
 			return localDecision, nil
 		}
 	}
 	if inferred, inferErr := inferDecisionFromLooseText(raw); inferErr == nil {
 		if contractErr := validateRecoveredDecisionContract(inferred); contractErr == nil {
+			applySLTPFromOriginal(inferred, raw)
 			log.Printf("[AI-SCALPING] Structured-output recovered via local decision inference")
 			return inferred, nil
 		}
@@ -4090,11 +4129,13 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 		}
 		decision, parseErr := parseAIDecisionPayload(repaired)
 		if parseErr == nil && isValidDecisionAction(decision.Action) && validateRecoveredDecisionContract(decision) == nil {
+			applySLTPFromOriginal(decision, raw)
 			log.Printf("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
 			return decision, nil
 		}
 		if inferred, inferErr := inferDecisionFromLooseText(repaired); inferErr == nil {
 			if contractErr := validateRecoveredDecisionContract(inferred); contractErr == nil {
+				applySLTPFromOriginal(inferred, raw)
 				log.Printf("[AI-SCALPING] Structured-output retry recovered via local decision inference on attempt %d", attempt)
 				return inferred, nil
 			}
@@ -4232,6 +4273,16 @@ func inferDecisionFromLooseText(raw string) (*AITradingDecision, error) {
 		if takeProfit, ok := extractLooseDecimalField(raw, "take_profit"); ok {
 			decision.TakeProfit = &takeProfit
 		}
+		// Fallback: try to extract SL/TP from prose patterns when explicit fields are missing
+		if decision.StopLoss == nil || decision.TakeProfit == nil {
+			sltp := extractSLTPFromText(raw)
+			if decision.StopLoss == nil && sltp.stopLoss != nil {
+				decision.StopLoss = sltp.stopLoss
+			}
+			if decision.TakeProfit == nil && sltp.takeProfit != nil {
+				decision.TakeProfit = sltp.takeProfit
+			}
+		}
 		return decision, nil
 	default:
 		return nil, fmt.Errorf("no local action inference")
@@ -4291,6 +4342,45 @@ var looseConfidenceRegex = regexp.MustCompile(`(?i)confidence(?:\s+(?:could be|a
 var looseSizePctRegex = regexp.MustCompile(`(?i)size_pct(?:\s+of)?\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)%`)
 var looseNarrativeSymbolRegex = regexp.MustCompile(`(?i)(?:both are valid, but|the)\s+([A-Z0-9]+(?:/[A-Z0-9]+)?)\s+(?:has better|is the strongest|looks strongest)`)
 var looseCandidateHeadingRegex = regexp.MustCompile(`\*\*([A-Z0-9]+/[A-Z0-9]+)\*\*`)
+
+// Regex patterns for extracting SL/TP from prose text (reasoning that looks like:
+// "stop loss at 41000", "SL: 41000", "take_profit: 43000", "TP=43000", etc.)
+var looseStopLossRegex = regexp.MustCompile(`(?i)(?:stop[\s_\-]?loss|sl|stoploss)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)`)
+var looseTakeProfitRegex = regexp.MustCompile(`(?i)(?:take[\s_\-]?profit|tp|takeprofit)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)`)
+var looseNarrativeStopLossRegex = regexp.MustCompile(`(?i)stop[\s_\-]?loss\s+(?:at\s+)?([0-9]+(?:\.[0-9]+)?)`)
+var looseNarrativeTakeProfitRegex = regexp.MustCompile(`(?i)take[\s_\-]?profit\s+(?:at\s+)?([0-9]+(?:\.[0-9]+)?)`)
+
+type sltpValues struct {
+	stopLoss   *decimal.Decimal
+	takeProfit *decimal.Decimal
+}
+
+func extractSLTPFromText(raw string) sltpValues {
+	var result sltpValues
+
+	extractFromRegex := func(r *regexp.Regexp) *decimal.Decimal {
+		match := r.FindStringSubmatch(raw)
+		if len(match) >= 2 {
+			if dec, err := decimal.NewFromString(match[1]); err == nil && dec.GreaterThan(decimal.Zero) {
+				return &dec
+			}
+		}
+		return nil
+	}
+
+	// Try colon/equals patterns: "stop_loss: 41000", "sl=41000"
+	result.stopLoss = extractFromRegex(looseStopLossRegex)
+	if result.stopLoss == nil {
+		// Try narrative patterns: "stop loss at 41000"
+		result.stopLoss = extractFromRegex(looseNarrativeStopLossRegex)
+	}
+	result.takeProfit = extractFromRegex(looseTakeProfitRegex)
+	if result.takeProfit == nil {
+		result.takeProfit = extractFromRegex(looseNarrativeTakeProfitRegex)
+	}
+
+	return result
+}
 
 func inferNarrativeDecisionAction(raw string) (string, bool) {
 	lower := strings.ToLower(strings.TrimSpace(raw))

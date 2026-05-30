@@ -2302,9 +2302,10 @@ func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.
 	assert.LessOrEqual(t, telegramMessageUnits(message), ns.telegramMaxMessageUnits)
 
 	fallbackReasoning := AIReasoningNotification{
-		DecisionType: "trade_entry",
-		Summary:      strings.Repeat("summary ", 520),
-		Confidence:   0.80,
+		DecisionType:   "trade_entry",
+		Summary:        strings.Repeat("summary ", 520),
+		Confidence:     0.80,
+		ReasonCategory: reasonCategoryDeterministicFallback,
 		Reasons: func() []string {
 			reasons := make([]string, 20)
 			for i := 0; i < 20; i++ {
@@ -2316,7 +2317,7 @@ func TestNotificationService_formatAIReasoningMessage_BoundaryChecks(t *testing.
 	}
 	fallbackMessage := ns.formatAIReasoningMessage(fallbackReasoning)
 	assert.LessOrEqual(t, telegramMessageUnits(fallbackMessage), ns.telegramMaxMessageUnits)
-	assert.Contains(t, fallbackMessage, "AI Trading Decision")
+	assert.Contains(t, fallbackMessage, "Deterministic Trading Decision")
 	assert.Contains(t, fallbackMessage, "Summary:")
 	assert.Contains(t, fallbackMessage, "Recommended Action: Proceed cautiously")
 	assert.Contains(t, fallbackMessage, "...")

@@ -3898,3 +3898,295 @@ func TestAIScalpingService_ExchangeForContextPrefersScopedExchange(t *testing.T)
 	assert.Equal(t, "binance", svc.exchangeForContext(ctx))
 	assert.Equal(t, "bitget", svc.exchangeForContext(context.Background()))
 }
+
+func TestExtractSLTPFromText_ColonPatterns(t *testing.T) {
+	tests := []struct {
+		name   string
+		raw    string
+		wantSL string
+		wantTP string
+	}{
+		{
+			name:   "standard_colon",
+			raw:    `stop_loss: 41000; take_profit: 43000`,
+			wantSL: "41000",
+			wantTP: "43000",
+		},
+		{
+			name:   "equals_sign",
+			raw:    `sl=41000 tp=43000`,
+			wantSL: "41000",
+			wantTP: "43000",
+		},
+		{
+			name:   "mixed_case",
+			raw:    `Stop_Loss: 41000 Take_Profit: 43000`,
+			wantSL: "41000",
+			wantTP: "43000",
+		},
+		{
+			name:   "with_spaces_around_colon",
+			raw:    `stop_loss : 41000 take_profit : 43000`,
+			wantSL: "41000",
+			wantTP: "43000",
+		},
+		{
+			name:   "decimal_prices",
+			raw:    `stop_loss: 0.0935; take_profit: 0.09444`,
+			wantSL: "0.0935",
+			wantTP: "0.09444",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractSLTPFromText(tt.raw)
+			require.NotNil(t, result.stopLoss, "stop_loss should be found")
+			require.NotNil(t, result.takeProfit, "take_profit should be found")
+			assert.Equal(t, tt.wantSL, result.stopLoss.String())
+			assert.Equal(t, tt.wantTP, result.takeProfit.String())
+		})
+	}
+}
+
+func TestExtractSLTPFromText_NarrativePatterns(t *testing.T) {
+	tests := []struct {
+		name   string
+		raw    string
+		wantSL decimal.Decimal
+		wantTP decimal.Decimal
+	}{
+		{
+			name:   "stop_loss_at",
+			raw:    `I would set stop loss at 41000 and take profit at 43000`,
+			wantSL: decimal.NewFromInt(41000),
+			wantTP: decimal.NewFromInt(43000),
+		},
+		{
+			name:   "stop_loss_at_with_price_prefix",
+			raw:    `entry is near the current price, stop loss at 98.50, take profit at 104.20`,
+			wantSL: decimal.RequireFromString("98.50"),
+			wantTP: decimal.RequireFromString("104.20"),
+		},
+		{
+			name:   "sl_tp_in_reasoning",
+			raw:    `Reasoning: The order book shows strong buy pressure. Confidence: 0.75. Action: buy. Symbol: BTC/USDT. Size: 5.0. SL: 41000. TP: 43000.`,
+			wantSL: decimal.NewFromInt(41000),
+			wantTP: decimal.NewFromInt(43000),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractSLTPFromText(tt.raw)
+			require.NotNil(t, result.stopLoss, "stop_loss should be found")
+			require.NotNil(t, result.takeProfit, "take_profit should be found")
+			assert.True(t, result.stopLoss.Equal(tt.wantSL), "stop_loss mismatch: got %s, want %s", result.stopLoss.String(), tt.wantSL.String())
+			assert.True(t, result.takeProfit.Equal(tt.wantTP), "take_profit mismatch: got %s, want %s", result.takeProfit.String(), tt.wantTP.String())
+		})
+	}
+}
+
+func TestExtractSLTPFromText_NoValues(t *testing.T) {
+	result := extractSLTPFromText("This is a reasoning text without any stop loss or take profit values.")
+	assert.Nil(t, result.stopLoss)
+	assert.Nil(t, result.takeProfit)
+
+	result = extractSLTPFromText("")
+	assert.Nil(t, result.stopLoss)
+	assert.Nil(t, result.takeProfit)
+}
+
+func TestExtractSLTPFromText_OnlyOneValue(t *testing.T) {
+	result := extractSLTPFromText("stop_loss: 41000 but no take profit mentioned")
+	require.NotNil(t, result.stopLoss)
+	assert.Equal(t, "41000", result.stopLoss.String())
+	assert.Nil(t, result.takeProfit)
+
+	result = extractSLTPFromText("take_profit: 43000 but no stop loss mentioned")
+	require.NotNil(t, result.takeProfit)
+	assert.Equal(t, "43000", result.takeProfit.String())
+	assert.Nil(t, result.stopLoss)
+}
+
+func TestInferDecisionFromLooseText_PreservesSLTPFromProse(t *testing.T) {
+	raw := `action: buy
+symbol: BTC/USDT
+confidence: 68%
+size_pct: 5.0
+reasoning: Breakout with tight spread
+I would set stop loss at 41000 and take profit at 43000`
+
+	decision, err := inferDecisionFromLooseText(raw)
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+
+	require.NotNil(t, decision.StopLoss)
+	require.NotNil(t, decision.TakeProfit)
+	assert.True(t, decision.StopLoss.Equal(decimal.NewFromInt(41000)))
+	assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+}
+
+func TestInferDecisionFromLooseText_PreservesSLTPFromColonPatterns(t *testing.T) {
+	raw := `action: buy; symbol: BTC/USDT; size_pct: 0.75; confidence: 68%; reasoning: breakout; sl: 41000; tp: 43000`
+
+	decision, err := inferDecisionFromLooseText(raw)
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+
+	require.NotNil(t, decision.StopLoss)
+	require.NotNil(t, decision.TakeProfit)
+	assert.True(t, decision.StopLoss.Equal(decimal.NewFromInt(41000)))
+	assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+}
+
+func TestInferDecisionFromLooseText_PreservesSLTPFromDecimalProse(t *testing.T) {
+	raw := `action: buy; symbol: DOGE/USDT; size_pct: 12.7; confidence: 72%; reasoning: entry; stop loss at 0.09350, take profit at 0.09444`
+
+	decision, err := inferDecisionFromLooseText(raw)
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+
+	require.NotNil(t, decision.StopLoss)
+	require.NotNil(t, decision.TakeProfit)
+	assert.True(t, decision.StopLoss.Equal(decimal.RequireFromString("0.09350")))
+	assert.True(t, decision.TakeProfit.Equal(decimal.RequireFromString("0.09444")))
+}
+
+func TestParseDecisionWithRetries_PreservesSLTPFromOriginalAfterLocalRepair_DecisionMissingSLTP(t *testing.T) {
+	mockLLM := &MockLLMClient{}
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 1,
+		},
+		llmClient: mockLLM,
+	}
+
+	raw := `action: buy; symbol: BTC/USDT; size_pct: 0.75; confidence: 68%; reasoning: breakout; sl: 41000; tp: 43000`
+
+	decision, err := svc.parseDecisionWithRetries(context.Background(), raw)
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+
+	require.NotNil(t, decision.StopLoss)
+	require.NotNil(t, decision.TakeProfit)
+	assert.True(t, decision.StopLoss.Equal(decimal.NewFromInt(41000)))
+	assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+	assert.Equal(t, 0, mockLLM.CallCount)
+}
+
+func TestParseDecisionWithRetries_PreservesSLTPFromOriginalAfterLLMRepair(t *testing.T) {
+	mockLLM := &MockLLMClient{
+		Responses: []*llm.CompletionResponse{
+			{
+				Message: llm.Message{
+					Content: `{"action":"buy","symbol":"BTC/USDT","size_pct":5,"confidence":0.7,"reasoning":"breakout"}`,
+				},
+			},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Model:             "glm-5",
+			MaxTokens:         1200,
+			StructuredRetries: 1,
+		},
+		llmClient: mockLLM,
+	}
+
+	raw := `Let me analyze the market signals and make a trading decision.
+I see strong buy pressure on BTC/USDT with good confidence.
+I recommend a buy with stop_loss at 41000 and take_profit at 43000.`
+
+	decision, err := svc.parseDecisionWithRetries(context.Background(), raw)
+	require.NoError(t, err)
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Equal(t, "BTC/USDT", decision.Symbol)
+	assert.Equal(t, 1, mockLLM.CallCount)
+
+	require.NotNil(t, decision.StopLoss)
+	require.NotNil(t, decision.TakeProfit)
+	assert.True(t, decision.StopLoss.Equal(decimal.NewFromInt(41000)))
+	assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+}
+
+func TestBuildSLTPHint(t *testing.T) {
+	t.Run("both_present", func(t *testing.T) {
+		hint := buildSLTPHint("sl: 41000; tp: 43000")
+		assert.Contains(t, hint, "stop_loss=41000")
+		assert.Contains(t, hint, "take_profit=43000")
+	})
+
+	t.Run("only_sl", func(t *testing.T) {
+		hint := buildSLTPHint("sl: 41000")
+		assert.Contains(t, hint, "stop_loss=41000")
+		assert.NotContains(t, hint, "take_profit")
+	})
+
+	t.Run("none", func(t *testing.T) {
+		hint := buildSLTPHint("no sltp values here")
+		assert.Empty(t, hint)
+	})
+}
+
+func TestApplySLTPFromOriginal(t *testing.T) {
+	t.Run("fills_missing_sltp", func(t *testing.T) {
+		decision := &AITradingDecision{
+			Action:      "buy",
+			Symbol:      "BTC/USDT",
+			SizePercent: 5,
+			Confidence:  0.7,
+			Reasoning:   "test",
+		}
+		applySLTPFromOriginal(decision, "sl: 41000; tp: 43000")
+
+		require.NotNil(t, decision.StopLoss)
+		require.NotNil(t, decision.TakeProfit)
+		assert.True(t, decision.StopLoss.Equal(decimal.NewFromInt(41000)))
+		assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+	})
+
+	t.Run("skips_hold_decision", func(t *testing.T) {
+		decision := &AITradingDecision{
+			Action: "hold",
+		}
+		applySLTPFromOriginal(decision, "sl: 41000; tp: 43000")
+		assert.Nil(t, decision.StopLoss)
+		assert.Nil(t, decision.TakeProfit)
+	})
+
+	t.Run("does_not_overwrite_existing", func(t *testing.T) {
+		existingSL := decimal.NewFromInt(40000)
+		existingTP := decimal.NewFromInt(44000)
+		decision := &AITradingDecision{
+			Action:     "buy",
+			StopLoss:   &existingSL,
+			TakeProfit: &existingTP,
+		}
+		applySLTPFromOriginal(decision, "sl: 41000; tp: 43000")
+		assert.True(t, decision.StopLoss.Equal(existingSL))
+		assert.True(t, decision.TakeProfit.Equal(existingTP))
+	})
+
+	t.Run("fills_partial", func(t *testing.T) {
+		existingSL := decimal.NewFromInt(40000)
+		decision := &AITradingDecision{
+			Action:   "buy",
+			StopLoss: &existingSL,
+		}
+		applySLTPFromOriginal(decision, "sl: 41000; tp: 43000")
+		assert.True(t, decision.StopLoss.Equal(existingSL), "should keep existing SL")
+		require.NotNil(t, decision.TakeProfit, "should fill missing TP")
+		assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+	})
+}
