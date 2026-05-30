@@ -426,7 +426,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	configureLiveReadinessGuard(opModeService)
 
 	// Initialize admin middleware
-	adminMiddleware := middleware.NewAdminMiddleware()
+	adminMiddleware := middleware.MustNewAdminMiddleware()
 
 	// Initialize health handler
 	telegramHealth := handlers.TelegramHealthConfig{}
@@ -990,9 +990,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Register quest runtime via app/autonomy entrypoint before scheduler start.
 	if err := autonomyruntime.RegisterQuestRuntime(questEngine, integratedHandlers); err != nil {
-		log.Fatalf("Failed to register quest runtime handlers: %v", err)
+		log.Printf("ERROR: Failed to register quest runtime handlers: %v", err)
+	} else {
+		questEngine.Start() // Start the quest engine scheduler
 	}
-	questEngine.Start() // Start the quest engine scheduler
 
 	// Initialize exchange reconciler for position/order resumability
 	var reconciler *services.ExchangePositionReconciler

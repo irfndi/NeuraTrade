@@ -74,7 +74,7 @@ func TestTelegramIntegration(t *testing.T) {
 	// ... (We can reuse nil or simple mocks as SetupRoutes handles them)
 	// We need actual user handler functioning, so we need DB.
 
-	authMiddleware := middleware.NewAuthMiddleware(testutil.MustGenerateTestSecret())
+	authMiddleware := middleware.MustNewAuthMiddleware(testutil.MustGenerateTestSecret())
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 

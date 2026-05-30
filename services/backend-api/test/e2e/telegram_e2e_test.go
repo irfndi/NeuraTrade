@@ -94,7 +94,7 @@ func (s *TelegramE2ETestSuite) SetupSuite() {
 	}
 
 	// Create required middlewares
-	authMiddleware := middleware.NewAuthMiddleware(jwtSecret)
+	authMiddleware := middleware.MustNewAuthMiddleware(jwtSecret)
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 	cacheAnalyticsService := services.NewCacheAnalyticsService(nil)

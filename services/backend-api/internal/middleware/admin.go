@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -93,7 +94,7 @@ func getAdminAPIKeyFromConfig() string {
 	return ""
 }
 
-func NewAdminMiddleware() *AdminMiddleware {
+func NewAdminMiddleware() (*AdminMiddleware, error) {
 	// Prefer explicit environment override first for tests/ops, then config.json fallback.
 	apiKey := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
 	if apiKey == "" {
@@ -103,7 +104,7 @@ func NewAdminMiddleware() *AdminMiddleware {
 	// Handle missing API key based on environment
 	if apiKey == "" {
 		if isProductionEnvironment() {
-			log.Fatal("ADMIN_API_KEY must be set in config.json or environment variable in production")
+			return nil, fmt.Errorf("ADMIN_API_KEY must be set in config.json or environment variable in production")
 		}
 		// Generate temporary key for non-production environments
 		apiKey = generateSecureKey(32)
@@ -114,7 +115,7 @@ func NewAdminMiddleware() *AdminMiddleware {
 	// #nosec G101 -- these are explicit denylisted example values, not embedded credentials
 	if apiKey == "admin-dev-key-change-in-production" || apiKey == "admin-secret-key-change-me" {
 		if isProductionEnvironment() {
-			log.Fatal("ADMIN_API_KEY cannot use default/example values in production")
+			return nil, fmt.Errorf("ADMIN_API_KEY cannot use default/example values in production")
 		}
 		log.Printf("WARNING: Using example ADMIN_API_KEY in non-production environment")
 	}
@@ -122,7 +123,7 @@ func NewAdminMiddleware() *AdminMiddleware {
 	// Ensure minimum security requirements
 	if len(apiKey) < 32 {
 		if isProductionEnvironment() {
-			log.Fatal("ADMIN_API_KEY must be at least 32 characters long for security in production")
+			return nil, fmt.Errorf("ADMIN_API_KEY must be at least 32 characters long for security in production")
 		}
 		// Pad short keys in non-production
 		log.Printf("WARNING: ADMIN_API_KEY is shorter than 32 characters in non-production environment")
@@ -130,7 +131,16 @@ func NewAdminMiddleware() *AdminMiddleware {
 
 	return &AdminMiddleware{
 		apiKey: apiKey,
+	}, nil
+}
+
+// MustNewAdminMiddleware is like NewAdminMiddleware but panics on error.
+func MustNewAdminMiddleware() *AdminMiddleware {
+	am, err := NewAdminMiddleware()
+	if err != nil {
+		panic(err)
 	}
+	return am
 }
 
 // RequireAdminAuth middleware validates admin API keys.

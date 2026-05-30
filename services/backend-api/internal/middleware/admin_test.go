@@ -15,7 +15,7 @@ func TestNewAdminMiddleware(t *testing.T) {
 		// Set environment variable with secure 32+ character key
 		t.Setenv("ADMIN_API_KEY", "test-admin-key-32-chars-minimum-length")
 
-		am := NewAdminMiddleware()
+		am := MustNewAdminMiddleware()
 		assert.NotNil(t, am)
 		assert.Equal(t, "test-admin-key-32-chars-minimum-length", am.apiKey)
 	})
@@ -48,7 +48,7 @@ func TestNewAdminMiddleware(t *testing.T) {
 		// Test with exactly 32 characters (minimum allowed)
 		t.Setenv("ADMIN_API_KEY", "12345678901234567890123456789012")
 
-		am := NewAdminMiddleware()
+		am := MustNewAdminMiddleware()
 		assert.NotNil(t, am)
 		assert.Equal(t, "12345678901234567890123456789012", am.apiKey)
 	})
@@ -57,7 +57,7 @@ func TestNewAdminMiddleware(t *testing.T) {
 		// Test with long key (more than 32 characters)
 		t.Setenv("ADMIN_API_KEY", "very-long-admin-key-that-is-much-longer-than-32-characters")
 
-		am := NewAdminMiddleware()
+		am := MustNewAdminMiddleware()
 		assert.NotNil(t, am)
 		assert.Equal(t, "very-long-admin-key-that-is-much-longer-than-32-characters", am.apiKey)
 	})
@@ -67,7 +67,7 @@ func TestAdminMiddleware_RequireAdminAuth(t *testing.T) {
 	// Set up test environment with secure 32+ character key
 	t.Setenv("ADMIN_API_KEY", "test-admin-key-32-chars-minimum-length")
 
-	am := NewAdminMiddleware()
+	am := MustNewAdminMiddleware()
 	gin.SetMode(gin.TestMode)
 
 	// Create test router
@@ -189,7 +189,7 @@ func TestAdminMiddleware_RequireAdminAuth(t *testing.T) {
 func TestAdminMiddleware_ValidateAdminKey(t *testing.T) {
 	t.Setenv("ADMIN_API_KEY", "test-admin-key-32-chars-minimum-length")
 
-	am := NewAdminMiddleware()
+	am := MustNewAdminMiddleware()
 
 	t.Run("valid key", func(t *testing.T) {
 		assert.True(t, am.ValidateAdminKey("test-admin-key-32-chars-minimum-length"))
@@ -212,7 +212,7 @@ func TestNewAdminMiddleware_EnvironmentAware(t *testing.T) {
 		t.Setenv("ENVIRONMENT", "development")
 		t.Setenv("GIN_MODE", "debug")
 
-		am := NewAdminMiddleware()
+		am := MustNewAdminMiddleware()
 		assert.NotNil(t, am)
 		// Key should be auto-generated
 		assert.NotEmpty(t, am.apiKey)
@@ -226,7 +226,7 @@ func TestNewAdminMiddleware_EnvironmentAware(t *testing.T) {
 		t.Setenv("GIN_MODE", "debug")
 
 		// Should not panic/fatal in non-production
-		am := NewAdminMiddleware()
+		am := MustNewAdminMiddleware()
 		assert.NotNil(t, am)
 		assert.Equal(t, "short-key-12345", am.apiKey)
 	})
@@ -237,7 +237,7 @@ func TestNewAdminMiddleware_EnvironmentAware(t *testing.T) {
 		t.Setenv("GIN_MODE", "debug")
 
 		// Should not panic/fatal in non-production
-		am := NewAdminMiddleware()
+		am := MustNewAdminMiddleware()
 		assert.NotNil(t, am)
 	})
 }
@@ -299,7 +299,7 @@ func TestAdminMiddleware_RequireAdminAuth_ErrorCode(t *testing.T) {
 	// Set up test environment with secure 32+ character key
 	t.Setenv("ADMIN_API_KEY", "test-admin-key-32-chars-minimum-length")
 
-	am := NewAdminMiddleware()
+	am := MustNewAdminMiddleware()
 	gin.SetMode(gin.TestMode)
 
 	// Create test router

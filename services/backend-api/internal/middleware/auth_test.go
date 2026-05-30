@@ -23,10 +23,10 @@ func generateTestSecret() string {
 	return hex.EncodeToString(bytes)
 }
 
-func TestNewAuthMiddleware(t *testing.T) {
+func TestMustNewAuthMiddleware(t *testing.T) {
 	// Generate a random secret key for testing to avoid hardcoded secrets
 	secretKey := generateTestSecret()
-	am := NewAuthMiddleware(secretKey)
+	am := MustNewAuthMiddleware(secretKey)
 
 	assert.NotNil(t, am)
 	assert.Equal(t, []byte(secretKey), am.secretKey)
@@ -34,7 +34,7 @@ func TestNewAuthMiddleware(t *testing.T) {
 
 func TestAuthMiddleware_GenerateToken(t *testing.T) {
 	// Use dynamically generated secret for security
-	am := NewAuthMiddleware(generateTestSecret())
+	am := MustNewAuthMiddleware(generateTestSecret())
 	userID := "user123"
 	email := "test@example.com"
 	duration := time.Hour
@@ -54,7 +54,7 @@ func TestAuthMiddleware_GenerateToken(t *testing.T) {
 
 func TestAuthMiddleware_ValidateToken(t *testing.T) {
 	// Use dynamically generated secret for security
-	am := NewAuthMiddleware(generateTestSecret())
+	am := MustNewAuthMiddleware(generateTestSecret())
 
 	t.Run("valid token", func(t *testing.T) {
 		token, err := am.GenerateToken("user123", "test@example.com", time.Hour)
@@ -84,7 +84,7 @@ func TestAuthMiddleware_ValidateToken(t *testing.T) {
 
 	t.Run("token with wrong secret", func(t *testing.T) {
 		// Generate token with different middleware using different secret
-		otherAM := NewAuthMiddleware(generateTestSecret())
+		otherAM := MustNewAuthMiddleware(generateTestSecret())
 		token, err := otherAM.GenerateToken("user123", "test@example.com", time.Hour)
 		require.NoError(t, err)
 
@@ -98,7 +98,7 @@ func TestAuthMiddleware_ValidateToken(t *testing.T) {
 func TestAuthMiddleware_RequireAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	// Use dynamically generated secret for security
-	am := NewAuthMiddleware(generateTestSecret())
+	am := MustNewAuthMiddleware(generateTestSecret())
 
 	// Helper function to create test router
 	createTestRouter := func() *gin.Engine {
@@ -242,7 +242,7 @@ func TestAuthMiddleware_RequireAuth(t *testing.T) {
 func TestAuthMiddleware_OptionalAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	// Use valid 32+ character secret for tests
-	am := NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	am := MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	// Helper function to create test router
 	createTestRouter := func() *gin.Engine {
@@ -344,7 +344,7 @@ func TestAuthMiddleware_OptionalAuth(t *testing.T) {
 
 func TestAuthMiddleware_MiddlewareChain(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	am := NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	am := MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	// Test middleware chain execution order
 	t.Run("middleware chain execution", func(t *testing.T) {

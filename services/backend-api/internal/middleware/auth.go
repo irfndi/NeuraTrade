@@ -38,21 +38,29 @@ type AuthMiddleware struct {
 //
 // Returns:
 //   - *AuthMiddleware: Initialized middleware instance.
-//
-// Panics:
-//   - If secretKey is empty or too short (security requirement).
-func NewAuthMiddleware(secretKey string) *AuthMiddleware {
-	// Validate secret key for security
+//   - error: If secretKey is empty or too short.
+func NewAuthMiddleware(secretKey string) (*AuthMiddleware, error) {
 	if secretKey == "" {
-		panic("JWT secret key cannot be empty. Set JWT_SECRET environment variable.")
+		return nil, fmt.Errorf("JWT secret key cannot be empty; set JWT_SECRET environment variable")
 	}
 	if len(secretKey) < 32 {
-		panic("JWT secret key must be at least 32 characters. Use a secure random value.")
+		return nil, fmt.Errorf("JWT secret key must be at least 32 characters")
 	}
 
 	return &AuthMiddleware{
 		secretKey: []byte(secretKey),
+	}, nil
+}
+
+// MustNewAuthMiddleware is like NewAuthMiddleware but panics on error.
+// It is intended for use in tests and bootstrap code where a invalid
+// configuration is a programmer error.
+func MustNewAuthMiddleware(secretKey string) *AuthMiddleware {
+	am, err := NewAuthMiddleware(secretKey)
+	if err != nil {
+		panic(err)
 	}
+	return am
 }
 
 // RequireAuth middleware validates JWT tokens.

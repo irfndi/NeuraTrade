@@ -213,7 +213,10 @@ func run() error {
 	ccxtService := ccxt.NewService(&cfg.CCXT, getLogger("ccxt_service"), blacklistCache)
 
 	// Initialize JWT authentication middleware
-	authMiddleware := middleware.NewAuthMiddleware(cfg.Auth.JWTSecret)
+	authMiddleware, err := middleware.NewAuthMiddleware(cfg.Auth.JWTSecret)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to initialize auth middleware")
+	}
 
 	// Initialize cache analytics service
 	cacheAnalyticsService := services.NewCacheAnalyticsService(getRedisClient())

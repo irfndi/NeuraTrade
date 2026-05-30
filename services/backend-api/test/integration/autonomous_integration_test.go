@@ -70,7 +70,7 @@ func TestAutonomousIntegration(t *testing.T) {
 		ServiceURL:  "http://telegram-service:3002",
 	}
 
-	authMiddleware := middleware.NewAuthMiddleware(testutil.MustGenerateTestSecret())
+	authMiddleware := middleware.MustNewAuthMiddleware(testutil.MustGenerateTestSecret())
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
